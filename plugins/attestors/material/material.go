@@ -82,11 +82,9 @@ func New(opts ...Option) *Attestor {
 }
 
 func (a *Attestor) Schema() *jsonschema.Schema {
-	// NOTE: This isn't ideal. For some reason the reflect function is return an empty schema when passing in `a`
-	// TODO: Fix this later
-	return jsonschema.Reflect(struct {
-		Materials map[string]cryptoutil.DigestSet
-	}{})
+	// MarshalJSON outputs the materials map directly (not wrapped in a struct),
+	// so the schema must reflect a flat map to match the actual JSON shape.
+	return jsonschema.Reflect(map[string]cryptoutil.DigestSet{})
 }
 
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {

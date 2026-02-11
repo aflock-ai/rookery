@@ -126,11 +126,7 @@ func (a *Attestor) RunType() attestation.RunType {
 }
 
 func (a *Attestor) Schema() *jsonschema.Schema {
-	// NOTE: This isn't ideal. For some reason the reflect function is return an empty schema when passing in `p`
-	// TODO: Fix this later
-	schema := jsonschema.Reflect(&a)
-	schema.Definitions["Attestor"].Properties.Set("jwt", jsonschema.Reflect(&a.JWT))
-	return schema
+	return jsonschema.Reflect(a)
 }
 
 // Attest performs the attestation for the github environment.
