@@ -322,7 +322,10 @@ func findModelFromOpenFilesLinux(pid int) (string, error) {
 		return "", fmt.Errorf("read fd dir: %w", err)
 	}
 
-	homeDir, _ := os.UserHomeDir()
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
 	claudeDir := filepath.Join(homeDir, ".claude", "projects")
 	sessionPattern := regexp.MustCompile(`\.jsonl$`)
 
@@ -365,7 +368,10 @@ func findModelFromOpenFilesMacOS(pid int) (string, error) {
 	}
 
 	// Look for Claude session files (.jsonl in ~/.claude/projects/)
-	homeDir, _ := os.UserHomeDir()
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
+	}
 	claudeDir := filepath.Join(homeDir, ".claude", "projects")
 
 	lines := strings.Split(string(output), "\n")

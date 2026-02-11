@@ -116,7 +116,7 @@ func (e *Evaluator) evaluateFileAccess(toolName string, toolInput json.RawMessag
 
 	var input aflock.FileToolInput
 	if err := json.Unmarshal(toolInput, &input); err != nil {
-		return aflock.DecisionAllow, ""
+		return aflock.DecisionDeny, fmt.Sprintf("failed to parse file tool input: %v", err)
 	}
 
 	filePath := input.FilePath
@@ -165,12 +165,12 @@ func (e *Evaluator) evaluateDomainAccess(toolInput json.RawMessage) (aflock.Perm
 
 	var input aflock.WebFetchToolInput
 	if err := json.Unmarshal(toolInput, &input); err != nil {
-		return aflock.DecisionAllow, ""
+		return aflock.DecisionDeny, fmt.Sprintf("failed to parse network tool input: %v", err)
 	}
 
 	domain := extractDomain(input.URL)
 	if domain == "" {
-		return aflock.DecisionAllow, ""
+		return aflock.DecisionDeny, "empty domain in network request"
 	}
 
 	// Check deny patterns first
