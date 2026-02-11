@@ -1,0 +1,270 @@
+{
+  "version": "1.0",
+  "name": "oscal-control-evaluation",
+  "expires": "2026-06-01T00:00:00Z",
+
+  "identity": {
+    "allowedModels": [
+      "claude-opus-4-5-20251101",
+      "claude-sonnet-4-20250514"
+    ],
+    "allowedEnvironments": [
+      "container:ghcr.io/testifysec/compliance-agent:*",
+      "github-actions:testifysec/judge/*"
+    ],
+    "requiredTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "oscal_search_controls",
+      "oscal_get_control"
+    ]
+  },
+
+  "grants": {
+    "secrets": {
+      "allow": [
+        "vault:secret/data/compliance/readonly/*",
+        "vault:secret/data/oscal/*"
+      ],
+      "deny": [
+        "vault:secret/data/production/*",
+        "vault:secret/data/admin/*"
+      ]
+    },
+    "apis": {
+      "allow": [
+        "https://api.anthropic.com/*",
+        "https://csrc.nist.gov/*",
+        "https://nvd.nist.gov/*"
+      ]
+    },
+    "storage": {
+      "allow": [
+        "s3://compliance-attestations/${RUN_ID}/*",
+        "s3://oscal-catalogs/readonly/*"
+      ],
+      "deny": [
+        "s3://production-*/*"
+      ]
+    }
+  },
+
+  "limits": {
+    "maxSpendUSD": {
+      "value": 25.00,
+      "enforcement": "fail-fast"
+    },
+    "maxTokensIn": {
+      "value": 1000000,
+      "enforcement": "post-hoc"
+    },
+    "maxTokensOut": {
+      "value": 200000,
+      "enforcement": "post-hoc"
+    },
+    "maxTurns": {
+      "value": 100,
+      "enforcement": "post-hoc"
+    },
+    "maxWallTimeSeconds": {
+      "value": 7200,
+      "enforcement": "fail-fast"
+    },
+    "maxToolCalls": {
+      "value": 500,
+      "enforcement": "post-hoc"
+    }
+  },
+
+  "tools": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "Bash",
+      "Task",
+      "oscal_search_controls",
+      "oscal_get_control",
+      "oscal_get_family",
+      "oscal_create_ssp",
+      "oscal_add_control_implementation",
+      "oscal_fedramp_guidance",
+      "oscal_manage_system_inventory",
+      "oscal_manage_control_parameters",
+      "oscal_document_authorization_boundary",
+      "oscal_manage_information_types",
+      "oscal_update_control_remarks",
+      "oscal_update_ssp_metadata"
+    ],
+    "deny": [
+      "Edit",
+      "Write",
+      "NotebookEdit"
+    ],
+    "requireApproval": [
+      "Bash:curl *",
+      "Bash:wget *"
+    ]
+  },
+
+  "files": {
+    "allow": [
+      "oscal/**",
+      "controls/**",
+      "evidence/**",
+      "reports/**"
+    ],
+    "deny": [
+      "**/.env",
+      "**/secrets/**",
+      "**/credentials.*",
+      "**/private/**"
+    ],
+    "readOnly": [
+      "oscal/catalog.json",
+      "oscal/profile.json",
+      "oscal/ssp.json"
+    ]
+  },
+
+  "domains": {
+    "allow": [
+      "github.com",
+      "*.nist.gov",
+      "csrc.nist.gov",
+      "nvd.nist.gov",
+      "docs.aws.amazon.com",
+      "cloud.google.com/security",
+      "docs.microsoft.com/security"
+    ],
+    "deny": [
+      "*"
+    ]
+  },
+
+  "requiredAttestations": [
+    "control-assessment",
+    "evidence-collection",
+    "finding-generation"
+  ],
+
+  "attestationDir": "./attestations/compliance-runs",
+
+  "attestationsFrom": [
+    "turn-*",
+    "control-*"
+  ],
+
+  "materialsFrom": {
+    "session": {
+      "path": "${CLAUDE_SESSION_PATH}",
+      "algorithm": "sha256",
+      "constraints": {
+        "maxTurnDistance": 10,
+        "requireContiguousTurns": true
+      }
+    },
+    "git": {
+      "treeHash": "${GIT_TREE_HASH}",
+      "branch": "main"
+    },
+    "artifacts": [
+      {
+        "name": "oscal-catalog",
+        "digest": { "sha256": "${CATALOG_HASH}" },
+        "uri": "file://./oscal/catalog.json"
+      },
+      {
+        "name": "oscal-ssp",
+        "digest": { "sha256": "${SSP_HASH}" },
+        "uri": "file://./oscal/ssp.json"
+      }
+    ]
+  },
+
+  "evaluators": {
+    "rego": [
+      {
+        "name": "all-controls-assessed",
+        "policy": "package compliance\n\nimport rego.v1\n\n# Collect all assessed control IDs from attestations\nassessed_controls := {c | some t in input.attestationsFrom[\"control-*\"]; c := t.predicate.controlId}\n\n# Expected controls from policy (should be injected at runtime)\nexpected_controls := input.policy.expectedControls\n\n# Find missing controls\nmissing := expected_controls - assessed_controls\n\n# Deny if any controls are missing\ndeny contains msg if {\n    count(missing) > 0\n    msg := sprintf(\"Missing control assessments: %v\", [missing])\n}"
+      },
+      {
+        "name": "cumulative-spend-check",
+        "policy": "package compliance\n\nimport rego.v1\n\n# Access all turn attestations\nturns := [t | some t in input.attestationsFrom[\"turn-*\"]]\n\n# Sum all costs\nsum_spend := sum([t.predicate.metrics.costUSD | some t in turns])\n\n# Check against limit\ndeny contains msg if {\n    sum_spend > input.policy.limits.maxSpendUSD.value\n    msg := sprintf(\"Cumulative spend $%.2f exceeds limit $%.2f\", [sum_spend, input.policy.limits.maxSpendUSD.value])\n}"
+      },
+      {
+        "name": "evidence-references-valid",
+        "policy": "package compliance\n\nimport rego.v1\n\n# Check that all evidence references point to actual evidence\ncontrol_attestations := [t | some t in input.attestationsFrom[\"control-*\"]]\nevidence_attestations := {e.predicate.evidenceId | some e in input.attestationsFrom[\"evidence-*\"]}\n\n# Find controls with missing evidence\nmissing_evidence contains msg if {\n    some t in control_attestations\n    some ref in t.predicate.evidenceRefs\n    not ref in evidence_attestations\n    msg := sprintf(\"Control %s references missing evidence: %s\", [t.predicate.controlId, ref])\n}\n\ndeny contains msg if {\n    some msg in missing_evidence\n}"
+      },
+      {
+        "name": "session-ordering-valid",
+        "policy": "package compliance\n\nimport rego.v1\n\n# Get all turn attestations sorted by turn number\nturns := sort_by([t | some t in input.attestationsFrom[\"turn-*\"]], \"predicate.turn\")\n\n# Verify merkle root matches expected\ndeny contains msg if {\n    some t in turns\n    t.predicate.sessionBinding.merkleRoot != input.materialsFrom.session.merkleRoot\n    msg := sprintf(\"Turn %d merkle root mismatch: expected %s, got %s\", [t.predicate.turn, input.materialsFrom.session.merkleRoot, t.predicate.sessionBinding.merkleRoot])\n}\n\n# Verify contiguous turns (no gaps)\ndeny contains msg if {\n    input.policy.materialsFrom.session.constraints.requireContiguousTurns\n    count(turns) > 1\n    some i in numbers.range(1, count(turns) - 1)\n    current := turns[i]\n    previous := turns[i - 1]\n    distance := current.predicate.turn - previous.predicate.turn\n    distance > 1\n    msg := sprintf(\"Non-contiguous turns: gap of %d between turns %d and %d\", [distance, previous.predicate.turn, current.predicate.turn])\n}\n\n# Verify max turn distance constraint\ndeny contains msg if {\n    count(turns) > 1\n    some i in numbers.range(1, count(turns) - 1)\n    current := turns[i]\n    previous := turns[i - 1]\n    distance := current.predicate.turn - previous.predicate.turn\n    distance > input.policy.materialsFrom.session.constraints.maxTurnDistance\n    msg := sprintf(\"Turn distance %d exceeds max %d between turns %d and %d\", [distance, input.policy.materialsFrom.session.constraints.maxTurnDistance, previous.predicate.turn, current.predicate.turn])\n}"
+      }
+    ],
+    "ai": [
+      {
+        "name": "assessment-quality",
+        "prompt": "You are evaluating compliance control assessments. Review all control assessment attestations and determine if they meet quality standards.\n\nPASS criteria (ALL must be met):\n1. Each control assessment includes a clear pass/fail/partial determination\n2. Each determination is supported by specific evidence references\n3. Failed or partial controls include actionable remediation guidance\n4. Assessment rationale explains WHY the control passed or failed\n5. Evidence is relevant to the specific control being assessed\n\nFAIL if:\n- Any assessment lacks a clear determination\n- Determinations are made without supporting evidence\n- Failed controls have no remediation guidance\n- Assessments are superficial (< 50 words rationale)\n- Evidence references don't match the control requirements\n\nRespond with PASS or FAIL followed by a brief explanation.",
+        "model": "claude-opus-4-5-20251101"
+      },
+      {
+        "name": "finding-completeness",
+        "prompt": "You are evaluating the completeness of a compliance findings report. Review the finding-generation attestation.\n\nPASS criteria (ALL must be met):\n1. Report includes an executive summary\n2. All assessed controls are listed with their status\n3. Failed controls are prioritized by risk/impact\n4. Remediation timeline recommendations are provided\n5. Evidence is traceable to specific controls\n\nFAIL if:\n- Executive summary is missing or superficial\n- Control statuses are not clearly documented\n- Risk prioritization is missing for failures\n- No remediation timeline is suggested\n- Evidence traceability is broken\n\nRespond with PASS or FAIL followed by a brief explanation.",
+        "model": "claude-opus-4-5-20251101"
+      }
+    ]
+  },
+
+  "functionaries": [
+    {
+      "type": "keyless",
+      "issuer": "https://accounts.google.com",
+      "subject": "compliance-agent@testifysec.com"
+    },
+    {
+      "type": "keyless",
+      "issuer": "https://token.actions.githubusercontent.com",
+      "subject": "https://github.com/testifysec/judge/.github/workflows/compliance.yml@refs/heads/main"
+    }
+  ],
+
+  "sublayouts": [
+    {
+      "name": "evidence-collector",
+      "policy": "./policies/evidence-collector.aflock",
+      "policyDigest": { "sha256": "${EVIDENCE_POLICY_HASH}" },
+      "limits": {
+        "maxSpendUSD": { "value": 5.00, "enforcement": "fail-fast" },
+        "maxTurns": { "value": 20, "enforcement": "fail-fast" },
+        "maxToolCalls": { "value": 100, "enforcement": "post-hoc" }
+      },
+      "inherit": ["domains", "functionaries"],
+      "attestationPrefix": "evidence-"
+    },
+    {
+      "name": "control-assessor",
+      "policy": "./policies/control-assessor.aflock",
+      "policyDigest": { "sha256": "${ASSESSOR_POLICY_HASH}" },
+      "limits": {
+        "maxSpendUSD": { "value": 15.00, "enforcement": "fail-fast" },
+        "maxTurns": { "value": 50, "enforcement": "fail-fast" }
+      },
+      "inherit": ["files", "domains", "functionaries"],
+      "attestationPrefix": "control-"
+    },
+    {
+      "name": "report-generator",
+      "policy": "./policies/report-generator.aflock",
+      "policyDigest": { "sha256": "${REPORT_POLICY_HASH}" },
+      "limits": {
+        "maxSpendUSD": { "value": 5.00, "enforcement": "fail-fast" },
+        "maxTurns": { "value": 10, "enforcement": "fail-fast" }
+      },
+      "inherit": ["functionaries"],
+      "attestationPrefix": "report-"
+    }
+  ]
+}

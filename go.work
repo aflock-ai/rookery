@@ -1,0 +1,55 @@
+go 1.25.4
+
+use (
+	// Core
+	./attestation
+
+	// Attestor plugins
+	./plugins/attestors/aws-codebuild
+	./plugins/attestors/aws-iid
+	./plugins/attestors/commandrun
+	./plugins/attestors/docker
+	./plugins/attestors/environment
+	./plugins/attestors/gcp-iit
+	./plugins/attestors/git
+	./plugins/attestors/github
+	./plugins/attestors/gitlab
+	./plugins/attestors/jenkins
+	./plugins/attestors/jwt
+	./plugins/attestors/k8smanifest
+	./plugins/attestors/link
+	./plugins/attestors/lockfiles
+	./plugins/attestors/material
+	./plugins/attestors/maven
+	./plugins/attestors/oci
+	./plugins/attestors/omnitrail
+	./plugins/attestors/product
+	./plugins/attestors/sarif
+	./plugins/attestors/sbom
+	./plugins/attestors/secretscan
+	./plugins/attestors/slsa
+	./plugins/attestors/system-packages
+	./plugins/attestors/vex
+
+	// Signer plugins
+	./plugins/signers/debug-signer
+	./plugins/signers/file
+	./plugins/signers/fulcio
+	./plugins/signers/kms/aws
+	./plugins/signers/kms/azure
+	./plugins/signers/kms/gcp
+	./plugins/signers/spiffe
+	./plugins/signers/vault
+	./plugins/signers/vault-transit
+
+	// Presets
+	./presets/all
+	./presets/cicd
+	./presets/minimal
+
+	// Builder
+	./builder
+
+	// CLI
+	./aflock
+)
