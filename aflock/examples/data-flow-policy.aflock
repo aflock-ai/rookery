@@ -1,0 +1,80 @@
+{
+  "version": "1.0",
+  "name": "data-flow-protection-policy",
+  "description": "Policy that prevents data exfiltration from internal sources to public sinks",
+
+  "identity": {
+    "allowedModels": ["claude-opus-*", "claude-sonnet-*"]
+  },
+
+  "limits": {
+    "maxSpendUSD": { "value": 10.00, "enforcement": "fail-fast" }
+  },
+
+  "tools": {
+    "allow": ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "mcp__*"],
+    "deny": ["Task"]
+  },
+
+  "dataFlow": {
+    "classify": {
+      "internal": [
+        "mcp__internal-db__*",
+        "mcp__internal-api__*",
+        "Read:**/internal/**",
+        "Read:**/private/**"
+      ],
+      "pii": [
+        "mcp__user-data__*",
+        "mcp__customer-db__*",
+        "Read:**/users/**",
+        "Read:**/customers/**"
+      ],
+      "secrets": [
+        "mcp__vault__*",
+        "mcp__secrets__*",
+        "Read:**/.env",
+        "Read:**/secrets/**"
+      ],
+      "public": [
+        "mcp__external-api__*",
+        "mcp__public-api__*",
+        "WebFetch:*",
+        "Bash:curl *",
+        "Write:**/public/**"
+      ]
+    },
+    "flowRules": [
+      {
+        "deny": "internal->public",
+        "message": "Cannot write internal data to public destinations. This would violate data governance policies."
+      },
+      {
+        "deny": "pii->public",
+        "message": "Cannot write PII to public destinations. This would violate GDPR/CCPA regulations."
+      },
+      {
+        "deny": "secrets->public",
+        "message": "Cannot expose secrets to public destinations. This is a critical security violation."
+      },
+      {
+        "deny": "secrets->internal",
+        "message": "Secrets should not be written to internal systems. Use secret references instead."
+      }
+    ]
+  },
+
+  "files": {
+    "allow": ["**/*"],
+    "deny": ["**/.env", "**/secrets/**"]
+  },
+
+  "functionaries": [
+    {
+      "type": "spiffe",
+      "trustDomain": "aflock.ai",
+      "spiffeIdPattern": "spiffe://aflock.ai/agent/claude-*",
+      "modelConstraint": "claude-*"
+    }
+  ]
+}
