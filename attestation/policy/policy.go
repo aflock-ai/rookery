@@ -25,6 +25,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/signer"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
 	"github.com/aflock-ai/rookery/attestation/source"
@@ -33,6 +34,7 @@ import (
 )
 
 const PolicyPredicate = "https://aflock.ai/policy/v0.1"
+const LegacyPolicyPredicate = "https://witness.testifysec.com/policy/v0.1"
 
 // +kubebuilder:object:generate=true
 type Policy struct {
@@ -62,8 +64,10 @@ func (p Policy) PublicKeyVerifiers(ko map[string][]func(signer.SignerProvider) (
 
 	for _, key := range p.PublicKeys {
 		var verifier cryptoutil.Verifier
+		isKMSKey := false
 		for _, prefix := range kms.SupportedProviders() {
 			if strings.HasPrefix(key.KeyID, prefix) {
+				isKMSKey = true
 				ksp := kms.New(kms.WithRef(key.KeyID), kms.WithHash("SHA256"))
 				var vp signer.SignerProvider
 				for _, opt := range ksp.Options {
@@ -86,7 +90,17 @@ func (p Policy) PublicKeyVerifiers(ko map[string][]func(signer.SignerProvider) (
 
 				verifier, err = ksp.Verifier(context.TODO())
 				if err != nil {
-					return nil, fmt.Errorf("failed to create kms verifier: %w", err)
+					// Security: when the KMS provider is unavailable (offline/air-gapped
+					// environments), fall back to the embedded public key if present.
+					// Without this fallback, offline verification is impossible even
+					// when the policy embeds the public key material. (Port of
+					// go-witness PR #649 / Issue #648.)
+					if len(key.Key) > 0 {
+						log.Debugf("KMS verifier unavailable for %s, falling back to embedded key: %v", key.KeyID, err)
+						verifier = nil // clear so we fall through to embedded key path
+					} else {
+						return nil, fmt.Errorf("failed to create kms verifier: %w", err)
+					}
 				}
 
 			}
@@ -104,14 +118,18 @@ func (p Policy) PublicKeyVerifiers(ko map[string][]func(signer.SignerProvider) (
 			return nil, err
 		}
 
-		if keyID != key.KeyID {
+		// Security: when a KMS key has an embedded fallback, the computed key ID
+		// (a hash of the public key bytes) will never match the KMS URI stored in
+		// key.KeyID. We use the policy's key.KeyID directly so functionary matching
+		// works correctly. For non-KMS keys, verify that the computed ID matches.
+		if !isKMSKey && keyID != key.KeyID {
 			return nil, ErrKeyIDMismatch{
 				Expected: key.KeyID,
 				Actual:   keyID,
 			}
 		}
 
-		verifiers[keyID] = verifier
+		verifiers[key.KeyID] = verifier
 	}
 
 	return verifiers, nil
@@ -162,6 +180,7 @@ type verifyOptions struct {
 	verifiedSource source.VerifiedSourcer
 	subjectDigests []string
 	searchDepth    int
+	aiServerURL    string
 }
 
 func WithVerifiedSource(verifiedSource source.VerifiedSourcer) VerifyOption {
@@ -179,6 +198,12 @@ func WithSubjectDigests(subjectDigests []string) VerifyOption {
 func WithSearchDepth(depth int) VerifyOption {
 	return func(vo *verifyOptions) {
 		vo.searchDepth = depth
+	}
+}
+
+func WithAiServerURL(url string) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.aiServerURL = url
 	}
 }
 
@@ -251,7 +276,11 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 
 			// Verify the functionaries
 			functionaryCheckResults := step.checkFunctionaries(collections, trustBundles)
-			stepResult := step.validateAttestations(functionaryCheckResults.Passed)
+			passedCollections := make([]source.CollectionVerificationResult, len(functionaryCheckResults.Passed))
+			for i, pc := range functionaryCheckResults.Passed {
+				passedCollections[i] = pc.Collection
+			}
+			stepResult := step.validateAttestations(passedCollections, vo.aiServerURL)
 			stepResult.Rejected = append(stepResult.Rejected, functionaryCheckResults.Rejected...)
 
 			// We perform many searches against the same step, so we need to merge the relevant fields
@@ -265,7 +294,7 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 				}
 			}
 
-			for _, coll := range stepResult.Passed {
+			for _, coll := range passedCollections {
 				for _, digestSet := range coll.Collection.BackRefs() {
 					for _, digest := range digestSet {
 						vo.subjectDigests = append(vo.subjectDigests, digest)
@@ -282,8 +311,7 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 
 	pass := true
 	for _, result := range resultsByStep {
-		p := result.Analyze()
-		if !p {
+		if !result.Analyze() {
 			pass = false
 		}
 	}
@@ -297,7 +325,7 @@ func (step Step) checkFunctionaries(statements []source.CollectionVerificationRe
 	result := StepResult{Step: step.Name}
 	for i, statement := range statements {
 		// Check that the statement contains a predicate type that we accept
-		if statement.Statement.PredicateType != attestation.CollectionType {
+		if statement.Statement.PredicateType != attestation.CollectionType && statement.Statement.PredicateType != attestation.LegacyCollectionType {
 			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statement, Reason: fmt.Errorf("predicate type %v is not a collection predicate type", statement.Statement.PredicateType)})
 		}
 
@@ -316,7 +344,7 @@ func (step Step) checkFunctionaries(statements []source.CollectionVerificationRe
 			if len(statements[i].ValidFunctionaries) == 0 {
 				result.Rejected = append(result.Rejected, RejectedCollection{Collection: statements[i], Reason: fmt.Errorf("no verifiers matched with allowed functionaries for step %s", step.Name)})
 			} else {
-				result.Passed = append(result.Passed, statements[i])
+				result.Passed = append(result.Passed, PassedCollection{Collection: statements[i]})
 			}
 		} else {
 			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statements[i], Reason: fmt.Errorf("no verifiers present to validate against collection verifiers")})
@@ -344,7 +372,7 @@ func (p Policy) verifyArtifacts(resultsByStep map[string]StepResult) (map[string
 
 		reasons := []error{}
 		for _, collection := range resultsByStep[step.Name].Passed {
-			if err := verifyCollectionArtifacts(step, collection, resultsByStep); err == nil {
+			if err := verifyCollectionArtifacts(step, collection.Collection, resultsByStep); err == nil {
 				accepted = true
 			} else {
 				reasons = append(reasons, err)
@@ -360,7 +388,7 @@ func (p Policy) verifyArtifacts(resultsByStep map[string]StepResult) (map[string
 				}
 
 				result.Rejected = append(result.Rejected, reject)
-				result.Passed = []source.CollectionVerificationResult{}
+				result.Passed = []PassedCollection{}
 				resultsByStep[step.Name] = result
 			}
 		}
@@ -376,13 +404,13 @@ func verifyCollectionArtifacts(step Step, collection source.CollectionVerificati
 	for _, artifactsFrom := range step.ArtifactsFrom {
 		accepted := make([]source.CollectionVerificationResult, 0)
 		for _, testCollection := range collectionsByStep[artifactsFrom].Passed {
-			if err := compareArtifacts(mats, testCollection.Collection.Artifacts()); err != nil {
+			if err := compareArtifacts(mats, testCollection.Collection.Collection.Artifacts()); err != nil {
 				collection.Warnings = append(collection.Warnings, fmt.Sprintf("failed to verify artifacts for step %s: %v", step.Name, err))
 				reasons = append(reasons, err.Error())
 				break
 			}
 
-			accepted = append(accepted, testCollection)
+			accepted = append(accepted, testCollection.Collection)
 		}
 
 		if len(accepted) <= 0 {

@@ -1,8 +1,17 @@
-go 1.25.4
+go 1.26.0
 
 use (
+	// CLIs
+	./aflock
+	./cilock
 	// Core
 	./attestation
+
+	// Builder
+	./builder
+
+	// Compatibility shim
+	./compat/go-witness
 
 	// Attestor plugins
 	./plugins/attestors/aws-codebuild
@@ -13,6 +22,7 @@ use (
 	./plugins/attestors/gcp-iit
 	./plugins/attestors/git
 	./plugins/attestors/github
+	./plugins/attestors/githubwebhook
 	./plugins/attestors/gitlab
 	./plugins/attestors/jenkins
 	./plugins/attestors/jwt
@@ -23,6 +33,7 @@ use (
 	./plugins/attestors/maven
 	./plugins/attestors/oci
 	./plugins/attestors/omnitrail
+	./plugins/attestors/policyverify
 	./plugins/attestors/product
 	./plugins/attestors/sarif
 	./plugins/attestors/sbom
@@ -46,10 +57,4 @@ use (
 	./presets/all
 	./presets/cicd
 	./presets/minimal
-
-	// Builder
-	./builder
-
-	// CLI
-	./aflock
 )

@@ -18,11 +18,23 @@ type Manifest struct {
 	BuildOptions       BuildOptions `yaml:"build_options,omitempty"`
 }
 
-// PluginSpec represents a plugin specification in the manifest
+// PluginSpec represents a plugin in the manifest.
+// Exactly one of Module, Git, or Path should be set.
 type PluginSpec struct {
-	ImportPath string `yaml:"import_path"`
-	Version    string `yaml:"version,omitempty"`
-	LocalPath  string `yaml:"local_path,omitempty"`
+	// Module is a Go module import path (fetched via go get)
+	Module string `yaml:"module,omitempty"`
+	// Version pins the module version (only with Module)
+	Version string `yaml:"version,omitempty"`
+
+	// Git is a git repository URL (cloned and used locally)
+	Git string `yaml:"git,omitempty"`
+	// Ref is a branch, tag, or commit (only with Git, defaults to HEAD)
+	Ref string `yaml:"ref,omitempty"`
+	// Subdir is a subdirectory within the git repo containing the plugin (only with Git)
+	Subdir string `yaml:"subdir,omitempty"`
+
+	// Path is a local filesystem path to a plugin module
+	Path string `yaml:"path,omitempty"`
 }
 
 // BuildOptions represents build configuration options
@@ -60,6 +72,26 @@ func LoadManifest(path string) (*Manifest, error) {
 		absPath, err := filepath.Abs(m.Output)
 		if err == nil {
 			m.Output = absPath
+		}
+	}
+
+	// Validate plugin specs
+	for i, p := range m.Plugins {
+		sources := 0
+		if p.Module != "" {
+			sources++
+		}
+		if p.Git != "" {
+			sources++
+		}
+		if p.Path != "" {
+			sources++
+		}
+		if sources == 0 {
+			return nil, fmt.Errorf("plugin %d: must specify one of module, git, or path", i)
+		}
+		if sources > 1 {
+			return nil, fmt.Errorf("plugin %d: specify only one of module, git, or path", i)
 		}
 	}
 

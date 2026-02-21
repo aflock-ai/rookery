@@ -27,14 +27,7 @@ type ErrVerifyArtifactsFailed struct {
 }
 
 func (e ErrVerifyArtifactsFailed) Error() string {
-	mess := "failed to verify artifacts: \n"
-	for i, r := range e.Reasons {
-		if i == len(e.Reasons)-1 {
-			mess += r + "\n"
-		}
-		mess += r + ", \n"
-	}
-	return fmt.Sprintf("failed to verify artifacts: %v", e.Reasons)
+	return fmt.Sprintf("failed to verify artifacts: %v", strings.Join(e.Reasons, ", "))
 }
 
 type ErrNoCollections struct {

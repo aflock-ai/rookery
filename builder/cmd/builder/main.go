@@ -59,6 +59,7 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/attestors/gcp-iit",
 		"github.com/aflock-ai/rookery/plugins/attestors/git",
 		"github.com/aflock-ai/rookery/plugins/attestors/github",
+		"github.com/aflock-ai/rookery/plugins/attestors/githubwebhook",
 		"github.com/aflock-ai/rookery/plugins/attestors/gitlab",
 		"github.com/aflock-ai/rookery/plugins/attestors/jenkins",
 		"github.com/aflock-ai/rookery/plugins/attestors/jwt",
@@ -69,6 +70,7 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/attestors/maven",
 		"github.com/aflock-ai/rookery/plugins/attestors/oci",
 		"github.com/aflock-ai/rookery/plugins/attestors/omnitrail",
+		"github.com/aflock-ai/rookery/plugins/attestors/policyverify",
 		"github.com/aflock-ai/rookery/plugins/attestors/product",
 		"github.com/aflock-ai/rookery/plugins/attestors/sarif",
 		"github.com/aflock-ai/rookery/plugins/attestors/sbom",
@@ -88,64 +90,45 @@ var presets = map[string][]string{
 	},
 }
 
-type pluginSpec struct {
-	ImportPath string
-	Version    string
-	LocalPath  string
-}
-
-func parseSpecs(args []string) ([]pluginSpec, error) {
-	var specs []pluginSpec
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--with" && i+1 < len(args) {
-			raw := args[i+1]
-			i++
-			// "=<path>" form
-			if strings.Contains(raw, "=") && !strings.HasPrefix(raw, "=") {
-				parts := strings.SplitN(raw, "=", 2)
-				specs = append(specs, pluginSpec{ImportPath: parts[0], LocalPath: parts[1]})
-				continue
-			}
-			// "@<version>" form
-			if at := strings.LastIndex(raw, "@"); at > 0 {
-				specs = append(specs, pluginSpec{ImportPath: raw[:at], Version: raw[at+1:]})
-				continue
-			}
-			// local module path form
-			if strings.HasPrefix(raw, ".") || strings.HasPrefix(raw, "/") {
-				abs, _ := filepath.Abs(raw)
-				importPath := getModulePath(abs)
-				if importPath == "" {
-					importPath = "local-plugin"
-				}
-				specs = append(specs, pluginSpec{ImportPath: importPath, LocalPath: abs})
-			} else {
-				specs = append(specs, pluginSpec{ImportPath: raw})
-			}
-		}
-	}
-	return specs, nil
+// resolvedPlugin is a plugin ready for the build stage.
+type resolvedPlugin struct {
+	importPath string
+	version    string // empty = latest
+	localPath  string // non-empty = use replace directive
 }
 
 func showUsage() {
 	fmt.Printf(`rookery-builder - Build custom attestation binaries with selected plugins
 
 Usage:
-  rookery-builder [flags] [--with <plugin>...]
   rookery-builder --manifest <file>
-  rookery-builder --preset <name>
+  rookery-builder --preset <name> [--local [<root>]]
+  rookery-builder [flags] [--with <plugin>...]
 
 Flags:
   --output <file>       Output binary name (default: aflock-custom)
   --preset <name>       Use a preset plugin set: minimal, cicd, all
   --manifest <file>     Build from manifest file (YAML)
+  --local [<root>]      Use local monorepo paths (auto-detects root if omitted)
   --fips <mode>         Enable FIPS 140-3 mode: "on" or "only"
   --customer <id>       Customer identifier (optional)
   --tenant <id>         Tenant identifier (optional)
   --version, -v         Show version information
   --help, -h            Show this help
 
-Plugin forms:
+Manifest format:
+  name: my-attestor
+  output: ./my-attestor
+  preset: minimal              # optional base preset
+  plugins:
+    - module: github.com/org/plugin           # Go module path
+      version: v1.0.0                         # optional version
+    - git: git@github.com:org/private-plugin  # Git repository
+      ref: main                               # branch/tag/commit
+      subdir: plugins/foo                     # subdirectory (optional)
+    - path: ../local-plugin                   # local filesystem path
+
+CLI plugin forms:
   --with github.com/aflock-ai/rookery/plugins/attestors/git
   --with github.com/org/custom-plugin@v1.0.0
   --with github.com/org/plugin=../path    # local replace
@@ -154,14 +137,12 @@ Plugin forms:
 Presets:
   minimal    commandrun, environment, git, material, product + file signer
   cicd       minimal + github, gitlab, slsa
-  all        all 25 attestors + all 9 signers
+  all        all attestors + all signers
 
 Examples:
-  rookery-builder --preset minimal --output ./my-attestor
-  rookery-builder --with github.com/aflock-ai/rookery/plugins/attestors/aws-iid \
-                  --with github.com/aflock-ai/rookery/plugins/signers/kms/aws
   rookery-builder --manifest build.yaml
-  rookery-builder --fips on --preset cicd
+  rookery-builder --local --preset minimal
+  rookery-builder --preset cicd --with github.com/org/custom-plugin@v1.0.0
 
 Only plugins you select are compiled into the binary.
 No unused dependencies are included.
@@ -181,6 +162,7 @@ func main() {
 	var tenantID string
 	var presetName string
 	var attestationVer string
+	var localRoot string
 
 	// Parse flags
 	args := os.Args[1:]
@@ -227,14 +209,28 @@ func main() {
 				tenantID = args[i+1]
 				i++
 			}
+		case "--local":
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+				localRoot = args[i+1]
+				i++
+			} else {
+				localRoot = findMonorepoRoot()
+				if localRoot == "" {
+					fmt.Fprintln(os.Stderr, "Error: --local: could not find rookery monorepo root (no go.work found)")
+					os.Exit(1)
+				}
+			}
 		}
 	}
 
-	var specs []pluginSpec
-	var err error
+	// Create temp dir for build + git clones
+	tmp, err := os.MkdirTemp("", "rookery-build-*")
+	must(err)
+	defer os.RemoveAll(tmp)
+
+	var plugins []resolvedPlugin
 
 	if manifestPath != "" {
-		// Load from manifest
 		m, err := manifest.LoadManifest(manifestPath)
 		must(err)
 
@@ -259,18 +255,15 @@ func main() {
 		if m.BuildOptions.TenantID != "" {
 			tenantID = m.BuildOptions.TenantID
 		}
-
-		// Manifest can specify a preset
 		if m.Preset != "" {
 			presetName = m.Preset
 		}
 
-		specs = convertManifestPlugins(m.Plugins)
+		plugins = resolveManifestPlugins(m.Plugins, tmp)
 		fmt.Printf("Building from manifest: %s\n", manifestPath)
 	} else {
-		// Parse command line plugins
-		specs, err = parseSpecs(args)
-		must(err)
+		// Parse --with flags from CLI
+		plugins = parseCLIPlugins(args)
 	}
 
 	// Resolve preset if specified
@@ -281,23 +274,23 @@ func main() {
 			os.Exit(1)
 		}
 		for _, p := range presetPlugins {
-			specs = append(specs, pluginSpec{ImportPath: p})
+			plugins = append(plugins, resolvedPlugin{importPath: p})
 		}
 	}
 
-	// Deduplicate specs by import path
+	// Deduplicate by import path (first wins — manifest/CLI overrides preset)
 	seen := make(map[string]bool)
-	deduped := make([]pluginSpec, 0, len(specs))
-	for _, s := range specs {
-		if !seen[s.ImportPath] {
-			seen[s.ImportPath] = true
-			deduped = append(deduped, s)
+	deduped := make([]resolvedPlugin, 0, len(plugins))
+	for _, p := range plugins {
+		if !seen[p.importPath] {
+			seen[p.importPath] = true
+			deduped = append(deduped, p)
 		}
 	}
-	specs = deduped
+	plugins = deduped
 
-	if len(specs) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: no plugins specified. Use --preset, --with, or --manifest.")
+	if len(plugins) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: no plugins specified. Use --manifest, --preset, or --with.")
 		fmt.Fprintln(os.Stderr, "Run rookery-builder --help for usage.")
 		os.Exit(1)
 	}
@@ -311,18 +304,16 @@ func main() {
 	// Collect build metadata
 	buildTime := time.Now().UTC().Format(time.RFC3339)
 	builderVer := version.Version
-	if version.GitCommit != "" {
-		if len(version.GitCommit) > 7 {
-			builderVer += "-" + version.GitCommit[:7]
-		}
+	if version.GitCommit != "" && len(version.GitCommit) > 7 {
+		builderVer += "-" + version.GitCommit[:7]
 	}
 
-	pluginList := make([]string, 0, len(specs))
-	for _, s := range specs {
-		if s.Version != "" {
-			pluginList = append(pluginList, s.ImportPath+"@"+s.Version)
+	pluginList := make([]string, 0, len(plugins))
+	for _, p := range plugins {
+		if p.version != "" {
+			pluginList = append(pluginList, p.importPath+"@"+p.version)
 		} else {
-			pluginList = append(pluginList, s.ImportPath)
+			pluginList = append(pluginList, p.importPath)
 		}
 	}
 	pluginsStr := strings.Join(pluginList, ",")
@@ -332,86 +323,64 @@ func main() {
 		fipsModeStr = fipsMode
 	}
 
-	fmt.Printf("Building custom binary with %d plugin(s)...\n", len(specs))
+	fmt.Printf("Building custom binary with %d plugin(s)...\n", len(plugins))
 
-	tmp, err := os.MkdirTemp("", "rookery-build-*")
-	must(err)
-	defer os.RemoveAll(tmp)
+	// Set up build module
+	buildDir := filepath.Join(tmp, "build")
+	must(os.MkdirAll(buildDir, 0o755))
+	run(buildDir, "go", "mod", "init", "rookery-build")
 
-	// Create minimal module
-	run(tmp, "go", "mod", "init", "rookery-build")
-
-	// Get the attestation core (needed for attestor/signer registry listing)
-	if attestationVer != "" {
-		run(tmp, "go", "get", "github.com/aflock-ai/rookery/attestation@"+attestationVer)
-	} else {
-		run(tmp, "go", "get", "github.com/aflock-ai/rookery/attestation")
-	}
-
-	// Get the signer registry package
-	if attestationVer != "" {
-		run(tmp, "go", "get", "github.com/aflock-ai/rookery/attestation/signer@"+attestationVer)
-	} else {
-		run(tmp, "go", "get", "github.com/aflock-ai/rookery/attestation/signer")
-	}
-
-	// Handle plugin requires / replaces
-	var imports bytes.Buffer
-	for _, s := range specs {
-		switch {
-		case s.LocalPath != "" && s.ImportPath != "":
-			run(tmp, "go", "mod", "edit", "-replace", s.ImportPath+"="+s.LocalPath)
-			run(tmp, "go", "get", s.ImportPath)
-			imports.WriteString(fmt.Sprintf("\t_ %q\n", s.ImportPath))
-		case s.Version != "":
-			run(tmp, "go", "get", s.ImportPath+"@"+s.Version)
-			imports.WriteString(fmt.Sprintf("\t_ %q\n", s.ImportPath))
-		default:
-			run(tmp, "go", "get", s.ImportPath)
-			imports.WriteString(fmt.Sprintf("\t_ %q\n", s.ImportPath))
+	// When --local is set, add replace directives for all monorepo modules
+	if localRoot != "" {
+		absRoot, err := filepath.Abs(localRoot)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: could not resolve --local path %q: %v\n", localRoot, err)
+			os.Exit(1)
 		}
+		localRoot = absRoot
+		fmt.Printf("Using local monorepo: %s\n", localRoot)
+
+		modules := parseGoWorkModules(localRoot)
+		for _, mod := range modules {
+			run(buildDir, "go", "mod", "edit", "-replace", mod.importPath+"="+mod.localPath)
+		}
+		fmt.Printf("Added %d local replace directives\n", len(modules))
+	}
+
+	// Get attestation core
+	if attestationVer != "" {
+		run(buildDir, "go", "get", "github.com/aflock-ai/rookery/attestation@"+attestationVer)
+	} else {
+		run(buildDir, "go", "get", "github.com/aflock-ai/rookery/attestation")
+	}
+
+	// Get signer registry
+	if attestationVer != "" {
+		run(buildDir, "go", "get", "github.com/aflock-ai/rookery/attestation/signer@"+attestationVer)
+	} else {
+		run(buildDir, "go", "get", "github.com/aflock-ai/rookery/attestation/signer")
+	}
+
+	// Resolve each plugin
+	var imports bytes.Buffer
+	for _, p := range plugins {
+		if p.localPath != "" {
+			run(buildDir, "go", "mod", "edit", "-replace", p.importPath+"="+p.localPath)
+			run(buildDir, "go", "get", p.importPath)
+		} else if p.version != "" {
+			run(buildDir, "go", "get", p.importPath+"@"+p.version)
+		} else {
+			run(buildDir, "go", "get", p.importPath)
+		}
+		imports.WriteString(fmt.Sprintf("\t_ %q\n", p.importPath))
 	}
 
 	// Create buildinfo package
-	buildinfoDir := filepath.Join(tmp, "buildinfo")
+	buildinfoDir := filepath.Join(buildDir, "buildinfo")
 	must(os.MkdirAll(buildinfoDir, 0o755))
+	must(os.WriteFile(filepath.Join(buildinfoDir, "buildinfo.go"), []byte(buildInfoSource), 0o644))
 
-	buildInfoGo := `package buildinfo
-
-import (
-	"fmt"
-	"runtime"
-)
-
-// Build metadata injected via ldflags
-var (
-	BuilderVersion = "unknown"
-	BuildTime      = "unknown"
-	Plugins        = "none"
-	FipsMode       = "off"
-	CustomerID     = ""
-	TenantID       = ""
-)
-
-// Info returns formatted build information
-func Info() string {
-	result := fmt.Sprintf("Built with rookery-builder: %s\n", BuilderVersion)
-	result += fmt.Sprintf("Build time: %s\n", BuildTime)
-	result += fmt.Sprintf("Plugins: %s\n", Plugins)
-	result += fmt.Sprintf("FIPS mode: %s\n", FipsMode)
-	if CustomerID != "" {
-		result += fmt.Sprintf("Customer ID: %s\n", CustomerID)
-	}
-	if TenantID != "" {
-		result += fmt.Sprintf("Tenant ID: %s\n", TenantID)
-	}
-	result += fmt.Sprintf("Go version: %s", runtime.Version())
-	return result
-}
-`
-	must(os.WriteFile(filepath.Join(buildinfoDir, "buildinfo.go"), []byte(buildInfoGo), 0o644))
-
-	// Compose main.go — standalone binary with attestor/signer listing
+	// Compose main.go
 	var mainGoPrefix string
 	if fipsMode != "" {
 		mainGoPrefix = fmt.Sprintf("//go:debug fips140=%s\n", fipsMode)
@@ -528,13 +497,12 @@ func showLicense() {
 }
 `, mainGoPrefix, imports.String())
 
-	must(os.WriteFile(filepath.Join(tmp, "main.go"), []byte(mainGo), 0o644))
+	must(os.WriteFile(filepath.Join(buildDir, "main.go"), []byte(mainGo), 0o644))
 
 	// Build
-	run(tmp, "go", "mod", "tidy")
-	tmpBin := filepath.Join(tmp, "rookery-build-output")
+	run(buildDir, "go", "mod", "tidy")
+	tmpBin := filepath.Join(buildDir, "rookery-build-output")
 
-	// Inject build metadata via ldflags
 	metadataFlags := fmt.Sprintf("-X 'rookery-build/buildinfo.BuilderVersion=%s' "+
 		"-X 'rookery-build/buildinfo.BuildTime=%s' "+
 		"-X 'rookery-build/buildinfo.Plugins=%s' "+
@@ -543,7 +511,6 @@ func showLicense() {
 		"-X 'rookery-build/buildinfo.TenantID=%s'",
 		builderVer, buildTime, pluginsStr, fipsModeStr, customerID, tenantID)
 
-	// Combine with user ldflags
 	combinedLdflags := ldflags
 	if combinedLdflags != "" {
 		combinedLdflags += " " + metadataFlags
@@ -557,7 +524,7 @@ func showLicense() {
 	}
 	buildArgs = append(buildArgs, "-ldflags", combinedLdflags, "-o", tmpBin, ".")
 
-	run(tmp, "go", buildArgs...)
+	run(buildDir, "go", buildArgs...)
 
 	// Copy to final location
 	outData, err := os.ReadFile(tmpBin)
@@ -566,6 +533,116 @@ func showLicense() {
 
 	fmt.Printf("Built %s\n", out)
 	fmt.Printf("\nTry: ./%s attestors\n", out)
+}
+
+// resolveManifestPlugins converts manifest plugin specs into resolved plugins,
+// cloning git repos as needed.
+func resolveManifestPlugins(specs []manifest.PluginSpec, tmpDir string) []resolvedPlugin {
+	var plugins []resolvedPlugin
+	cloneIdx := 0
+
+	for _, spec := range specs {
+		switch {
+		case spec.Module != "":
+			plugins = append(plugins, resolvedPlugin{
+				importPath: spec.Module,
+				version:    spec.Version,
+			})
+
+		case spec.Git != "":
+			// Clone the git repo
+			cloneDir := filepath.Join(tmpDir, fmt.Sprintf("git-clone-%d", cloneIdx))
+			cloneIdx++
+
+			cloneArgs := []string{"clone", "--depth=1"}
+			if spec.Ref != "" {
+				cloneArgs = append(cloneArgs, "--branch", spec.Ref)
+			}
+			cloneArgs = append(cloneArgs, spec.Git, cloneDir)
+
+			fmt.Printf("Cloning %s", spec.Git)
+			if spec.Ref != "" {
+				fmt.Printf(" (ref: %s)", spec.Ref)
+			}
+			fmt.Println()
+			run(".", "git", cloneArgs...)
+
+			// Determine plugin directory within the clone
+			pluginDir := cloneDir
+			if spec.Subdir != "" {
+				pluginDir = filepath.Join(cloneDir, spec.Subdir)
+			}
+
+			importPath := getModulePath(pluginDir)
+			if importPath == "" {
+				fmt.Fprintf(os.Stderr, "Error: no go.mod found in cloned repo at %s\n", pluginDir)
+				os.Exit(1)
+			}
+
+			plugins = append(plugins, resolvedPlugin{
+				importPath: importPath,
+				localPath:  pluginDir,
+			})
+
+		case spec.Path != "":
+			absPath, err := filepath.Abs(spec.Path)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: could not resolve path %q: %v\n", spec.Path, err)
+				os.Exit(1)
+			}
+
+			importPath := getModulePath(absPath)
+			if importPath == "" {
+				fmt.Fprintf(os.Stderr, "Error: no go.mod found at %s\n", absPath)
+				os.Exit(1)
+			}
+
+			plugins = append(plugins, resolvedPlugin{
+				importPath: importPath,
+				localPath:  absPath,
+			})
+		}
+	}
+
+	return plugins
+}
+
+// parseCLIPlugins parses --with flags from command line args.
+func parseCLIPlugins(args []string) []resolvedPlugin {
+	var plugins []resolvedPlugin
+	for i := 0; i < len(args); i++ {
+		if args[i] != "--with" || i+1 >= len(args) {
+			continue
+		}
+		raw := args[i+1]
+		i++
+
+		// "importpath=localpath" form
+		if strings.Contains(raw, "=") && !strings.HasPrefix(raw, "=") {
+			parts := strings.SplitN(raw, "=", 2)
+			abs, _ := filepath.Abs(parts[1])
+			plugins = append(plugins, resolvedPlugin{importPath: parts[0], localPath: abs})
+			continue
+		}
+		// "@version" form
+		if at := strings.LastIndex(raw, "@"); at > 0 {
+			plugins = append(plugins, resolvedPlugin{importPath: raw[:at], version: raw[at+1:]})
+			continue
+		}
+		// local path form
+		if strings.HasPrefix(raw, ".") || strings.HasPrefix(raw, "/") {
+			abs, _ := filepath.Abs(raw)
+			importPath := getModulePath(abs)
+			if importPath == "" {
+				fmt.Fprintf(os.Stderr, "Error: no go.mod found at %s\n", abs)
+				os.Exit(1)
+			}
+			plugins = append(plugins, resolvedPlugin{importPath: importPath, localPath: abs})
+		} else {
+			plugins = append(plugins, resolvedPlugin{importPath: raw})
+		}
+	}
+	return plugins
 }
 
 func run(dir string, name string, args ...string) {
@@ -593,28 +670,61 @@ func getModulePath(dir string) string {
 	return ""
 }
 
-func convertManifestPlugins(manifestPlugins []manifest.PluginSpec) []pluginSpec {
-	var specs []pluginSpec
-	for _, p := range manifestPlugins {
-		spec := pluginSpec{
-			ImportPath: p.ImportPath,
-			Version:    p.Version,
-			LocalPath:  p.LocalPath,
-		}
+type localModule struct {
+	importPath string
+	localPath  string
+}
 
-		// Handle local path forms
-		if strings.HasPrefix(p.ImportPath, ".") || strings.HasPrefix(p.ImportPath, "/") {
-			abs, _ := filepath.Abs(p.ImportPath)
-			spec.LocalPath = abs
-			spec.ImportPath = getModulePath(abs)
-			if spec.ImportPath == "" {
-				spec.ImportPath = "local-plugin"
-			}
-		}
-
-		specs = append(specs, spec)
+func parseGoWorkModules(root string) []localModule {
+	goWorkPath := filepath.Join(root, "go.work")
+	data, err := os.ReadFile(goWorkPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not read %s: %v\n", goWorkPath, err)
+		return nil
 	}
-	return specs
+
+	var modules []localModule
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	inUse := false
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "use (" {
+			inUse = true
+			continue
+		}
+		if line == ")" {
+			inUse = false
+			continue
+		}
+		if !inUse || line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		relPath := strings.TrimPrefix(line, "./")
+		absPath := filepath.Join(root, relPath)
+		modPath := getModulePath(absPath)
+		if modPath == "" {
+			continue
+		}
+		modules = append(modules, localModule{importPath: modPath, localPath: absPath})
+	}
+	return modules
+}
+
+func findMonorepoRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 func must(err error) {
@@ -623,3 +733,37 @@ func must(err error) {
 		os.Exit(1)
 	}
 }
+
+const buildInfoSource = `package buildinfo
+
+import (
+	"fmt"
+	"runtime"
+)
+
+// Build metadata injected via ldflags
+var (
+	BuilderVersion = "unknown"
+	BuildTime      = "unknown"
+	Plugins        = "none"
+	FipsMode       = "off"
+	CustomerID     = ""
+	TenantID       = ""
+)
+
+// Info returns formatted build information
+func Info() string {
+	result := fmt.Sprintf("Built with rookery-builder: %s\n", BuilderVersion)
+	result += fmt.Sprintf("Build time: %s\n", BuildTime)
+	result += fmt.Sprintf("Plugins: %s\n", Plugins)
+	result += fmt.Sprintf("FIPS mode: %s\n", FipsMode)
+	if CustomerID != "" {
+		result += fmt.Sprintf("Customer ID: %s\n", CustomerID)
+	}
+	if TenantID != "" {
+		result += fmt.Sprintf("Tenant ID: %s\n", TenantID)
+	}
+	result += fmt.Sprintf("Go version: %s", runtime.Version())
+	return result
+}
+`

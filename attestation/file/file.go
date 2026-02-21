@@ -15,9 +15,11 @@
 package file
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -69,6 +71,23 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 				return nil
 			} else if err != nil {
 				return err
+			}
+
+			// Security: ensure the symlink target is within the basePath boundary.
+			// Without this check, a symlink pointing outside the working directory
+			// (e.g. /etc/shadow) would be followed and its contents hashed into
+			// the attestation, enabling path traversal attacks.
+			absBase, err := filepath.Abs(basePath)
+			if err != nil {
+				return fmt.Errorf("failed to resolve base path: %w", err)
+			}
+			absLinked, err := filepath.Abs(linkedPath)
+			if err != nil {
+				return fmt.Errorf("failed to resolve symlink target: %w", err)
+			}
+			if !strings.HasPrefix(absLinked, absBase+string(os.PathSeparator)) && absLinked != absBase {
+				log.Debugf("(file) symlink %v points outside base path %v, skipping", path, basePath)
+				return nil
 			}
 
 			if _, ok := visitedSymlinks[linkedPath]; ok {

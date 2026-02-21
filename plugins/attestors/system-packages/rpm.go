@@ -16,7 +16,6 @@ package systempackages
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -71,13 +70,14 @@ func (r *RPMBackend) DetermineOSInfo() (string, string, string, error) {
 }
 
 func (r *RPMBackend) GatherPackages() ([]Package, error) {
-	cmd := r.execCommand("rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}\n")
+	// Security: use absolute path to rpm binary to prevent PATH manipulation
+	// attacks where a malicious "rpm" binary in the PATH could be executed
+	// instead of the system package manager.
+	cmd := r.execCommand("/usr/bin/rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}\n")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
-
-	fmt.Println("gather RPM packages:", string(output))
 
 	var packages []Package
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
