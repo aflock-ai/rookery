@@ -11,6 +11,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-iid"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/commandrun"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/configuration"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/docker"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/environment"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/gcp-iit"

@@ -12,6 +12,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/aws-iid => ../plugins/att
 
 replace github.com/aflock-ai/rookery/plugins/attestors/commandrun => ../plugins/attestors/commandrun
 
+replace github.com/aflock-ai/rookery/plugins/attestors/configuration => ../plugins/attestors/configuration
+
 replace github.com/aflock-ai/rookery/plugins/attestors/docker => ../plugins/attestors/docker
 
 replace github.com/aflock-ai/rookery/plugins/attestors/environment => ../plugins/attestors/environment
@@ -84,6 +86,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-iid v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/commandrun v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/configuration v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/docker v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/environment v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gcp-iit v0.0.0-00010101000000-000000000000
