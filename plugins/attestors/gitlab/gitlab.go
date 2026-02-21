@@ -134,7 +134,10 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	a.CIServerUrl = os.Getenv("CI_SERVER_URL")
-	jwksUrl := fmt.Sprintf("%s/oauth/discovery/keys", a.CIServerUrl)
+	jwksUrl := os.Getenv("WITNESS_GITLAB_JWKS_URL")
+	if jwksUrl == "" {
+		jwksUrl = fmt.Sprintf("%s/oauth/discovery/keys", a.CIServerUrl)
+	}
 
 	var jwtString string
 	if a.token != "" {
