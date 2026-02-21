@@ -1,6 +1,6 @@
 module github.com/aflock-ai/rookery/plugins/attestors/link
 
-go 1.25.0
+go 1.26.0
 
 replace github.com/aflock-ai/rookery/attestation => ../../../attestation
 
@@ -32,7 +32,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	go.step.sm/crypto v0.76.0 // indirect
-	golang.org/x/crypto v0.47.0 // indirect
+	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
