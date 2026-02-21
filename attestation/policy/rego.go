@@ -25,7 +25,7 @@ import (
 	"github.com/open-policy-agent/opa/rego"
 )
 
-func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy) error {
+func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, stepContext ...map[string]interface{}) error {
 	if len(policies) == 0 {
 		return nil
 	}
@@ -37,9 +37,21 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy) er
 
 	decoder := json.NewDecoder(bytes.NewReader(attestorJSON))
 	decoder.UseNumber()
-	var input interface{}
-	if err := decoder.Decode(&input); err != nil {
+	var attestorData interface{}
+	if err := decoder.Decode(&attestorData); err != nil {
 		return err
+	}
+
+	// When cross-step context is provided, wrap the input so Rego policies
+	// can access other steps' attestation data via input.steps.<stepName>.
+	var input interface{}
+	if len(stepContext) > 0 && stepContext[0] != nil {
+		input = map[string]interface{}{
+			"attestation": attestorData,
+			"steps":       stepContext[0],
+		}
+	} else {
+		input = attestorData
 	}
 
 	query := ""

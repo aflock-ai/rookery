@@ -44,11 +44,24 @@ type dummyAttestor struct {
 	typeStr string
 }
 
-func (d *dummyAttestor) Name() string                                 { return d.name }
-func (d *dummyAttestor) Type() string                                 { return d.typeStr }
-func (d *dummyAttestor) RunType() attestation.RunType                 { return "test" }
+func (d *dummyAttestor) Name() string                                  { return d.name }
+func (d *dummyAttestor) Type() string                                  { return d.typeStr }
+func (d *dummyAttestor) RunType() attestation.RunType                  { return "test" }
 func (d *dummyAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (d *dummyAttestor) Schema() *jsonschema.Schema                   { return nil }
+func (d *dummyAttestor) Schema() *jsonschema.Schema                    { return nil }
+
+// marshalableAttestor is like dummyAttestor but with exported fields so it
+// produces useful JSON when marshaled (e.g. for Rego input testing).
+type marshalableAttestor struct {
+	AttName string `json:"name"`
+	AttType string `json:"type"`
+}
+
+func (m *marshalableAttestor) Name() string                                  { return m.AttName }
+func (m *marshalableAttestor) Type() string                                  { return m.AttType }
+func (m *marshalableAttestor) RunType() attestation.RunType                  { return "test" }
+func (m *marshalableAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
+func (m *marshalableAttestor) Schema() *jsonschema.Schema                    { return nil }
 
 // generateSelfSignedCert creates a self-signed CA cert and returns the cert, key, and PEM bytes.
 func generateSelfSignedCert(t *testing.T, cn string, orgs []string) (*x509.Certificate, *ecdsa.PrivateKey, []byte) {
@@ -420,7 +433,7 @@ func TestVerify_NoCollections(t *testing.T) {
 
 func TestValidateAttestations_EmptyCollections(t *testing.T) {
 	s := Step{Name: "build"}
-	result := s.validateAttestations(nil, "")
+	result := s.validateAttestations(nil, "", nil)
 	assert.Equal(t, "build", result.Step)
 	assert.Empty(t, result.Passed)
 	assert.Empty(t, result.Rejected)
@@ -451,7 +464,7 @@ func TestValidateAttestations_CollectionWithMatchingAttestations(t *testing.T) {
 		},
 	}
 
-	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "")
+	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
 	assert.Len(t, result.Passed, 1)
 	assert.Empty(t, result.Rejected)
 }
@@ -469,7 +482,7 @@ func TestValidateAttestations_MissingAttestation(t *testing.T) {
 		CollectionEnvelope: source.CollectionEnvelope{Collection: coll},
 	}
 
-	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "")
+	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
 	assert.Empty(t, result.Passed)
 	assert.Len(t, result.Rejected, 1)
 	assert.Contains(t, result.Rejected[0].Reason.Error(), "missing attestation")
@@ -488,7 +501,7 @@ func TestValidateAttestations_CollectionWithErrors(t *testing.T) {
 		Errors: []error{fmt.Errorf("envelope verification failed")},
 	}
 
-	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "")
+	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
 	assert.Empty(t, result.Passed)
 	assert.Len(t, result.Rejected, 1)
 	assert.Contains(t, result.Rejected[0].Reason.Error(), "envelope verification failed")
@@ -506,7 +519,7 @@ func TestValidateAttestations_SkipsDifferentCollectionName(t *testing.T) {
 		},
 	}
 
-	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "")
+	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
 	assert.Empty(t, result.Passed)
 	assert.Empty(t, result.Rejected)
 }
@@ -1218,4 +1231,560 @@ func TestDeepCopy_CertConstraint(t *testing.T) {
 func TestDeepCopy_NilCertConstraint(t *testing.T) {
 	var cc *CertConstraint
 	assert.Nil(t, cc.DeepCopy())
+}
+
+func TestDeepCopy_Step_AttestationsFrom(t *testing.T) {
+	s := &Step{
+		Name:             "deploy",
+		AttestationsFrom: []string{"build", "test"},
+	}
+	cp := s.DeepCopy()
+	require.NotNil(t, cp)
+	assert.Equal(t, []string{"build", "test"}, cp.AttestationsFrom)
+	s.AttestationsFrom[0] = "changed"
+	assert.Equal(t, "build", cp.AttestationsFrom[0])
+}
+
+// ---------------------------------------------------------------------------
+// Policy.Validate — self-reference, unknown step, circular dependency
+// ---------------------------------------------------------------------------
+
+func TestValidate_NoSteps(t *testing.T) {
+	p := Policy{Steps: map[string]Step{}}
+	assert.NoError(t, p.Validate())
+}
+
+func TestValidate_NoDependencies(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"build": {Name: "build"},
+			"test":  {Name: "test"},
+		},
+	}
+	assert.NoError(t, p.Validate())
+}
+
+func TestValidate_ValidLinearChain(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"build":  {Name: "build"},
+			"test":   {Name: "test", AttestationsFrom: []string{"build"}},
+			"deploy": {Name: "deploy", AttestationsFrom: []string{"test"}},
+		},
+	}
+	assert.NoError(t, p.Validate())
+}
+
+func TestValidate_ValidDiamondDAG(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"build":  {Name: "build"},
+			"lint":   {Name: "lint", AttestationsFrom: []string{"build"}},
+			"test":   {Name: "test", AttestationsFrom: []string{"build"}},
+			"deploy": {Name: "deploy", AttestationsFrom: []string{"lint", "test"}},
+		},
+	}
+	assert.NoError(t, p.Validate())
+}
+
+func TestValidate_SelfReference(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"build": {Name: "build", AttestationsFrom: []string{"build"}},
+		},
+	}
+	err := p.Validate()
+	assert.Error(t, err)
+	var selfRef ErrSelfReference
+	assert.ErrorAs(t, err, &selfRef)
+	assert.Equal(t, "build", selfRef.Step)
+}
+
+func TestValidate_UnknownStep(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"build": {Name: "build", AttestationsFrom: []string{"nonexistent"}},
+		},
+	}
+	err := p.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "nonexistent")
+}
+
+func TestValidate_DirectCycle(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"a": {Name: "a", AttestationsFrom: []string{"b"}},
+			"b": {Name: "b", AttestationsFrom: []string{"a"}},
+		},
+	}
+	err := p.Validate()
+	assert.Error(t, err)
+	var cycle ErrCircularDependency
+	assert.ErrorAs(t, err, &cycle)
+}
+
+func TestValidate_IndirectCycle(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"a": {Name: "a", AttestationsFrom: []string{"c"}},
+			"b": {Name: "b", AttestationsFrom: []string{"a"}},
+			"c": {Name: "c", AttestationsFrom: []string{"b"}},
+		},
+	}
+	err := p.Validate()
+	assert.Error(t, err)
+	var cycle ErrCircularDependency
+	assert.ErrorAs(t, err, &cycle)
+	assert.GreaterOrEqual(t, len(cycle.Steps), 3)
+}
+
+// ---------------------------------------------------------------------------
+// topologicalSort
+// ---------------------------------------------------------------------------
+
+func TestTopologicalSort_NoSteps(t *testing.T) {
+	p := Policy{Steps: map[string]Step{}}
+	sorted, err := p.topologicalSort()
+	assert.NoError(t, err)
+	assert.Empty(t, sorted)
+}
+
+func TestTopologicalSort_NoDependencies(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"a": {Name: "a"},
+			"b": {Name: "b"},
+		},
+	}
+	sorted, err := p.topologicalSort()
+	assert.NoError(t, err)
+	assert.Len(t, sorted, 2)
+	assert.ElementsMatch(t, []string{"a", "b"}, sorted)
+}
+
+func TestTopologicalSort_LinearChain(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"build":  {Name: "build"},
+			"test":   {Name: "test", AttestationsFrom: []string{"build"}},
+			"deploy": {Name: "deploy", AttestationsFrom: []string{"test"}},
+		},
+	}
+	sorted, err := p.topologicalSort()
+	assert.NoError(t, err)
+	assert.Len(t, sorted, 3)
+
+	// build must come before test, test must come before deploy
+	indexOf := func(name string) int {
+		for i, s := range sorted {
+			if s == name {
+				return i
+			}
+		}
+		return -1
+	}
+	assert.Less(t, indexOf("build"), indexOf("test"))
+	assert.Less(t, indexOf("test"), indexOf("deploy"))
+}
+
+func TestTopologicalSort_Diamond(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"build":  {Name: "build"},
+			"lint":   {Name: "lint", AttestationsFrom: []string{"build"}},
+			"test":   {Name: "test", AttestationsFrom: []string{"build"}},
+			"deploy": {Name: "deploy", AttestationsFrom: []string{"lint", "test"}},
+		},
+	}
+	sorted, err := p.topologicalSort()
+	assert.NoError(t, err)
+	assert.Len(t, sorted, 4)
+
+	indexOf := func(name string) int {
+		for i, s := range sorted {
+			if s == name {
+				return i
+			}
+		}
+		return -1
+	}
+	assert.Less(t, indexOf("build"), indexOf("lint"))
+	assert.Less(t, indexOf("build"), indexOf("test"))
+	assert.Less(t, indexOf("lint"), indexOf("deploy"))
+	assert.Less(t, indexOf("test"), indexOf("deploy"))
+}
+
+// ---------------------------------------------------------------------------
+// checkDependencies
+// ---------------------------------------------------------------------------
+
+func TestCheckDependencies_AllSatisfied(t *testing.T) {
+	results := map[string]StepResult{
+		"build": {Step: "build", Passed: []PassedCollection{{}}},
+		"test":  {Step: "test", Passed: []PassedCollection{{}}},
+	}
+	err := checkDependencies([]string{"build", "test"}, results)
+	assert.NoError(t, err)
+}
+
+func TestCheckDependencies_Missing(t *testing.T) {
+	results := map[string]StepResult{
+		"build": {Step: "build", Passed: []PassedCollection{{}}},
+	}
+	err := checkDependencies([]string{"build", "test"}, results)
+	assert.Error(t, err)
+	var depErr ErrDependencyNotVerified
+	assert.ErrorAs(t, err, &depErr)
+	assert.Equal(t, "test", depErr.Step)
+}
+
+func TestCheckDependencies_NoPassed(t *testing.T) {
+	results := map[string]StepResult{
+		"build": {Step: "build"},
+	}
+	err := checkDependencies([]string{"build"}, results)
+	assert.Error(t, err)
+	var depErr ErrDependencyNotVerified
+	assert.ErrorAs(t, err, &depErr)
+}
+
+func TestCheckDependencies_Empty(t *testing.T) {
+	err := checkDependencies(nil, nil)
+	assert.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// buildStepContext
+// ---------------------------------------------------------------------------
+
+func TestBuildStepContext_NoDeps(t *testing.T) {
+	ctx := buildStepContext(nil, nil)
+	assert.Nil(t, ctx)
+}
+
+func TestBuildStepContext_WithPassedDep(t *testing.T) {
+	attType := "https://example.com/att/v1"
+	results := map[string]StepResult{
+		"build": {
+			Step: "build",
+			Passed: []PassedCollection{
+				{
+					Collection: source.CollectionVerificationResult{
+						CollectionEnvelope: source.CollectionEnvelope{
+							Collection: attestation.Collection{
+								Name: "build",
+								Attestations: []attestation.CollectionAttestation{
+									{
+										Type:        attType,
+										Attestation: &dummyAttestor{name: "dummy", typeStr: attType},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := buildStepContext([]string{"build"}, results)
+	require.NotNil(t, ctx)
+	buildCtx, ok := ctx["build"]
+	require.True(t, ok)
+	buildMap, ok := buildCtx.(map[string]interface{})
+	require.True(t, ok)
+	_, ok = buildMap[attType]
+	assert.True(t, ok, "should contain the attestation type key")
+}
+
+func TestBuildStepContext_DepNotPassed(t *testing.T) {
+	results := map[string]StepResult{
+		"build": {Step: "build"}, // no passed collections
+	}
+	ctx := buildStepContext([]string{"build"}, results)
+	assert.Nil(t, ctx)
+}
+
+func TestBuildStepContext_DepNotFound(t *testing.T) {
+	ctx := buildStepContext([]string{"nonexistent"}, map[string]StepResult{})
+	assert.Nil(t, ctx)
+}
+
+// ---------------------------------------------------------------------------
+// EvaluateRegoPolicy with stepContext
+// ---------------------------------------------------------------------------
+
+func TestEvaluateRegoPolicy_WithStepContext(t *testing.T) {
+	// Policy that checks input.steps.build exists.
+	module := []byte(`
+package test
+
+deny[msg] {
+	not input.steps.build
+	msg := "build step data missing"
+}
+`)
+	policies := []RegoPolicy{{Module: module, Name: "test.rego"}}
+	stepCtx := map[string]interface{}{
+		"build": map[string]interface{}{
+			"https://example.com/att/v1": map[string]interface{}{
+				"name": "dummy",
+			},
+		},
+	}
+
+	err := EvaluateRegoPolicy(&dummyAttestor{name: "dummy", typeStr: "test"}, policies, stepCtx)
+	assert.NoError(t, err, "should pass when step context contains build data")
+}
+
+func TestEvaluateRegoPolicy_WithStepContext_DenyWhenMissing(t *testing.T) {
+	// Policy that denies when build step is missing.
+	module := []byte(`
+package test
+
+deny[msg] {
+	not input.steps.build
+	msg := "build step data missing"
+}
+`)
+	policies := []RegoPolicy{{Module: module, Name: "test.rego"}}
+
+	// Pass step context WITHOUT the "build" key.
+	stepCtx := map[string]interface{}{
+		"other": map[string]interface{}{},
+	}
+
+	err := EvaluateRegoPolicy(&dummyAttestor{name: "dummy", typeStr: "test"}, policies, stepCtx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "build step data missing")
+}
+
+func TestEvaluateRegoPolicy_WithNilStepContext_BackwardCompat(t *testing.T) {
+	// When no step context is passed, input should be the attestor data directly
+	// (not wrapped in {attestation: ..., steps: ...}).
+	module := []byte(`
+package test
+
+deny[msg] {
+	not input.name
+	msg := "name field missing"
+}
+`)
+	policies := []RegoPolicy{{Module: module, Name: "test.rego"}}
+
+	// Without step context, input is the attestor JSON directly.
+	// Use marshalableAttestor so the "name" field appears in JSON.
+	err := EvaluateRegoPolicy(&marshalableAttestor{AttName: "dummy", AttType: "test"}, policies)
+	assert.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-step attestation new error types
+// ---------------------------------------------------------------------------
+
+func TestErrorTypes_CrossStep(t *testing.T) {
+	t.Run("ErrCircularDependency", func(t *testing.T) {
+		e := ErrCircularDependency{Steps: []string{"a", "b", "c", "a"}}
+		assert.Contains(t, e.Error(), "circular dependency")
+		assert.Contains(t, e.Error(), "a -> b -> c -> a")
+	})
+
+	t.Run("ErrSelfReference", func(t *testing.T) {
+		e := ErrSelfReference{Step: "build"}
+		assert.Contains(t, e.Error(), "build")
+		assert.Contains(t, e.Error(), "cannot depend on itself")
+	})
+
+	t.Run("ErrDependencyNotVerified", func(t *testing.T) {
+		e := ErrDependencyNotVerified{Step: "build"}
+		assert.Contains(t, e.Error(), "build")
+		assert.Contains(t, e.Error(), "not verified")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// validateAttestations with cross-step context
+// ---------------------------------------------------------------------------
+
+func TestValidateAttestations_WithStepContext(t *testing.T) {
+	attType := "https://example.com/attestation/v1"
+	// A rego policy that accesses cross-step data.
+	module := []byte(`
+package test
+
+deny[msg] {
+	not input.steps.build
+	msg := "no build step context"
+}
+`)
+	s := Step{
+		Name:             "test",
+		AttestationsFrom: []string{"build"},
+		Attestations: []Attestation{
+			{
+				Type:         attType,
+				RegoPolicies: []RegoPolicy{{Module: module, Name: "cross-step.rego"}},
+			},
+		},
+	}
+
+	coll := attestation.Collection{
+		Name: "test",
+		Attestations: []attestation.CollectionAttestation{
+			{
+				Type:        attType,
+				Attestation: &dummyAttestor{name: "dummy", typeStr: attType},
+			},
+		},
+	}
+
+	cvr := source.CollectionVerificationResult{
+		CollectionEnvelope: source.CollectionEnvelope{Collection: coll},
+	}
+
+	// With step context containing "build" data — should pass.
+	stepCtx := map[string]interface{}{
+		"build": map[string]interface{}{
+			"some-att": map[string]interface{}{"data": "value"},
+		},
+	}
+	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", stepCtx)
+	assert.Len(t, result.Passed, 1, "should pass when step context provides build data")
+	assert.Empty(t, result.Rejected)
+
+	// Without step context — should fail because policy requires build data.
+	result2 := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
+	assert.Empty(t, result2.Passed)
+	assert.Len(t, result2.Rejected, 1, "should fail when no step context is provided")
+}
+
+// ---------------------------------------------------------------------------
+// Policy.Verify with cross-step attestation (integration)
+// ---------------------------------------------------------------------------
+
+func TestVerify_CrossStepAttestationAccess(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	verifier := cryptoutil.NewECDSAVerifier(&priv.PublicKey, crypto.SHA256)
+	keyID, err := verifier.KeyID()
+	require.NoError(t, err)
+
+	buildAttType := "https://example.com/build-att/v1"
+
+	// Build step collection.
+	buildColl := attestation.Collection{
+		Name: "build",
+		Attestations: []attestation.CollectionAttestation{
+			{
+				Type:        buildAttType,
+				Attestation: &dummyAttestor{name: "build-att", typeStr: buildAttType},
+			},
+		},
+	}
+	buildCVR := source.CollectionVerificationResult{
+		Verifiers: []cryptoutil.Verifier{verifier},
+		CollectionEnvelope: source.CollectionEnvelope{
+			Collection: buildColl,
+			Statement:  intoto.Statement{PredicateType: attestation.CollectionType},
+		},
+	}
+
+	// Deploy step collection — no attestations needed (just functionary check).
+	deployColl := attestation.Collection{Name: "deploy"}
+	deployCVR := source.CollectionVerificationResult{
+		Verifiers: []cryptoutil.Verifier{verifier},
+		CollectionEnvelope: source.CollectionEnvelope{
+			Collection: deployColl,
+			Statement:  intoto.Statement{PredicateType: attestation.CollectionType},
+		},
+	}
+
+	// Return different results based on step name.
+	ms2 := &stepAwareVerifiedSource{
+		byStep: map[string][]source.CollectionVerificationResult{
+			"build":  {buildCVR},
+			"deploy": {deployCVR},
+		},
+	}
+
+	p := Policy{
+		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Steps: map[string]Step{
+			"build": {
+				Name: "build",
+				Functionaries: []Functionary{
+					{PublicKeyID: keyID},
+				},
+				Attestations: []Attestation{
+					{Type: buildAttType},
+				},
+			},
+			"deploy": {
+				Name:             "deploy",
+				AttestationsFrom: []string{"build"},
+				Functionaries: []Functionary{
+					{PublicKeyID: keyID},
+				},
+			},
+		},
+	}
+
+	pass, results, err := p.Verify(context.Background(),
+		WithVerifiedSource(ms2),
+		WithSubjectDigests([]string{"sha256:abc"}),
+	)
+	require.NoError(t, err)
+	assert.True(t, pass)
+	assert.NotNil(t, results)
+	assert.True(t, results["build"].HasPassed())
+	assert.True(t, results["deploy"].HasPassed())
+}
+
+// stepAwareVerifiedSource returns different results per step name.
+type stepAwareVerifiedSource struct {
+	byStep map[string][]source.CollectionVerificationResult
+}
+
+func (s *stepAwareVerifiedSource) Search(_ context.Context, stepName string, _ []string, _ []string) ([]source.CollectionVerificationResult, error) {
+	return s.byStep[stepName], nil
+}
+
+// ---------------------------------------------------------------------------
+// Policy.Verify rejects circular deps
+// ---------------------------------------------------------------------------
+
+func TestVerify_RejectsCircularDependency(t *testing.T) {
+	p := Policy{
+		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Steps: map[string]Step{
+			"a": {Name: "a", AttestationsFrom: []string{"b"}},
+			"b": {Name: "b", AttestationsFrom: []string{"a"}},
+		},
+	}
+	ms := &mockVerifiedSource{}
+	pass, _, err := p.Verify(context.Background(),
+		WithVerifiedSource(ms),
+		WithSubjectDigests([]string{"sha256:abc"}),
+	)
+	assert.False(t, pass)
+	assert.Error(t, err)
+}
+
+func TestVerify_RejectsSelfReference(t *testing.T) {
+	p := Policy{
+		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Steps: map[string]Step{
+			"build": {Name: "build", AttestationsFrom: []string{"build"}},
+		},
+	}
+	ms := &mockVerifiedSource{}
+	pass, _, err := p.Verify(context.Background(),
+		WithVerifiedSource(ms),
+		WithSubjectDigests([]string{"sha256:abc"}),
+	)
+	assert.False(t, pass)
+	assert.Error(t, err)
+	var selfRef ErrSelfReference
+	assert.ErrorAs(t, err, &selfRef)
 }

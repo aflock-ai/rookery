@@ -15,6 +15,7 @@
 package policy
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -27,10 +28,11 @@ import (
 
 // +kubebuilder:object:generate=true
 type Step struct {
-	Name          string        `json:"name"`
-	Functionaries []Functionary `json:"functionaries"`
-	Attestations  []Attestation `json:"attestations"`
-	ArtifactsFrom []string      `json:"artifactsFrom,omitempty"`
+	Name             string        `json:"name"`
+	Functionaries    []Functionary `json:"functionaries"`
+	Attestations     []Attestation `json:"attestations"`
+	ArtifactsFrom    []string      `json:"artifactsFrom,omitempty"`
+	AttestationsFrom []string      `json:"attestationsFrom,omitempty"`
 }
 
 // +kubebuilder:object:generate=true
@@ -183,9 +185,67 @@ func (f Functionary) Validate(verifier cryptoutil.Verifier, trustBundles map[str
 	return nil
 }
 
+// buildStepContext extracts attestation data from already-verified steps referenced
+// by AttestationsFrom. The result is a map[stepName]->map[attestationType]->attestorJSON
+// that gets passed into Rego policy evaluation as input.steps.
+func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepResult) map[string]interface{} {
+	if len(attestationsFrom) == 0 {
+		return nil
+	}
+
+	ctx := make(map[string]interface{})
+	for _, depStep := range attestationsFrom {
+		result, ok := resultsByStep[depStep]
+		if !ok || len(result.Passed) == 0 {
+			continue
+		}
+
+		stepData := make(map[string]interface{})
+		for _, pc := range result.Passed {
+			for _, att := range pc.Collection.Collection.Attestations {
+				// Marshal the attestor to a generic map so Rego can traverse it.
+				b, err := json.Marshal(att.Attestation)
+				if err != nil {
+					log.Debugf("failed to marshal attestation %s from step %s: %v", att.Type, depStep, err)
+					continue
+				}
+				var data interface{}
+				dec := json.NewDecoder(bytes.NewReader(b))
+				dec.UseNumber()
+				if err := dec.Decode(&data); err != nil {
+					log.Debugf("failed to decode attestation %s from step %s: %v", att.Type, depStep, err)
+					continue
+				}
+				stepData[att.Type] = data
+			}
+		}
+		if len(stepData) > 0 {
+			ctx[depStep] = stepData
+		}
+	}
+
+	if len(ctx) == 0 {
+		return nil
+	}
+	return ctx
+}
+
+// checkDependencies verifies that all steps listed in AttestationsFrom have
+// at least one passed collection in the results so far. Returns an error if any
+// dependency has not been verified yet.
+func checkDependencies(attestationsFrom []string, resultsByStep map[string]StepResult) error {
+	for _, dep := range attestationsFrom {
+		result, ok := resultsByStep[dep]
+		if !ok || len(result.Passed) == 0 {
+			return ErrDependencyNotVerified{Step: dep}
+		}
+	}
+	return nil
+}
+
 // validateAttestations will test each collection against to ensure the expected attestations
 // appear in the collection as well as that any rego policies pass for the step.
-func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string) StepResult {
+func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult {
 	result := StepResult{Step: s.Name}
 	if len(collectionResults) <= 0 {
 		return result
@@ -235,7 +295,7 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 				}.Error())
 			}
 
-			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies); err != nil {
+			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies, stepContext); err != nil {
 				passed = false
 				reasons = append(reasons, err.Error())
 			}
