@@ -1,0 +1,9 @@
+# Example: Build from local monorepo during development
+name: aflock-dev
+output: ./aflock-dev
+
+preset: minimal
+
+plugins:
+  # Add sarif from local path
+  - path: ./plugins/attestors/sarif
