@@ -254,6 +254,17 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 		return false, nil, err
 	}
 
+	// Validate that all artifactsFrom references point to steps defined in the policy.
+	// This catches configuration errors early rather than producing confusing
+	// "failed to verify artifacts" errors during the artifact comparison phase.
+	for stepName, step := range p.Steps {
+		for _, ref := range step.ArtifactsFrom {
+			if _, ok := p.Steps[ref]; !ok {
+				return false, nil, fmt.Errorf("step %q references unknown step %q in artifactsFrom", stepName, ref)
+			}
+		}
+	}
+
 	attestationsByStep := make(map[string][]string)
 	for name, step := range p.Steps {
 		for _, attestation := range step.Attestations {
@@ -402,8 +413,19 @@ func verifyCollectionArtifacts(step Step, collection source.CollectionVerificati
 	mats := collection.Collection.Materials()
 	reasons := []string{}
 	for _, artifactsFrom := range step.ArtifactsFrom {
+		refResult, ok := collectionsByStep[artifactsFrom]
+		if !ok {
+			reasons = append(reasons, fmt.Sprintf("step %q referenced in artifactsFrom does not exist in results", artifactsFrom))
+			return ErrVerifyArtifactsFailed{Reasons: reasons}
+		}
+
+		if len(refResult.Passed) == 0 {
+			reasons = append(reasons, fmt.Sprintf("step %q referenced in artifactsFrom has no passed collections", artifactsFrom))
+			return ErrVerifyArtifactsFailed{Reasons: reasons}
+		}
+
 		accepted := make([]source.CollectionVerificationResult, 0)
-		for _, testCollection := range collectionsByStep[artifactsFrom].Passed {
+		for _, testCollection := range refResult.Passed {
 			if err := compareArtifacts(mats, testCollection.Collection.Collection.Artifacts()); err != nil {
 				collection.Warnings = append(collection.Warnings, fmt.Sprintf("failed to verify artifacts for step %s: %v", step.Name, err))
 				reasons = append(reasons, err.Error())

@@ -1034,7 +1034,7 @@ func TestVerifyCollectionArtifacts_NoArtifactsFrom(t *testing.T) {
 	assert.NoError(t, err, "no artifactsFrom means nothing to verify")
 }
 
-func TestVerifyCollectionArtifacts_ArtifactsFromMissing(t *testing.T) {
+func TestVerifyCollectionArtifacts_ArtifactsFromNoPassed(t *testing.T) {
 	step := Step{
 		Name:          "deploy",
 		ArtifactsFrom: []string{"build"},
@@ -1046,7 +1046,7 @@ func TestVerifyCollectionArtifacts_ArtifactsFromMissing(t *testing.T) {
 		},
 	}
 
-	// The "build" step has no passed collections, so verification should fail.
+	// The "build" step exists but has no passed collections.
 	collectionsByStep := map[string]StepResult{
 		"build": {Step: "build"},
 	}
@@ -1055,6 +1055,83 @@ func TestVerifyCollectionArtifacts_ArtifactsFromMissing(t *testing.T) {
 	assert.Error(t, err)
 	var artErr ErrVerifyArtifactsFailed
 	assert.ErrorAs(t, err, &artErr)
+	assert.Contains(t, err.Error(), "no passed collections")
+}
+
+func TestVerifyCollectionArtifacts_ArtifactsFromNotInResults(t *testing.T) {
+	step := Step{
+		Name:          "deploy",
+		ArtifactsFrom: []string{"build"},
+	}
+
+	cvr := source.CollectionVerificationResult{
+		CollectionEnvelope: source.CollectionEnvelope{
+			Collection: attestation.Collection{Name: "deploy"},
+		},
+	}
+
+	// The "build" step is not in collectionsByStep at all.
+	collectionsByStep := map[string]StepResult{}
+
+	err := verifyCollectionArtifacts(step, cvr, collectionsByStep)
+	assert.Error(t, err)
+	var artErr ErrVerifyArtifactsFailed
+	assert.ErrorAs(t, err, &artErr)
+	assert.Contains(t, err.Error(), "does not exist in results")
+}
+
+func TestVerifyCollectionArtifacts_ArtifactsFromWithPassedCollections(t *testing.T) {
+	// When the referenced step has passed collections, artifact comparison runs.
+	// Both collections have empty attestations, so Materials()/Artifacts() return empty maps.
+	// compareArtifacts with empty maps returns nil (no overlap = no error).
+	step := Step{
+		Name:          "deploy",
+		ArtifactsFrom: []string{"build"},
+	}
+
+	deployCVR := source.CollectionVerificationResult{
+		CollectionEnvelope: source.CollectionEnvelope{
+			Collection: attestation.Collection{Name: "deploy"},
+		},
+	}
+
+	buildCVR := source.CollectionVerificationResult{
+		CollectionEnvelope: source.CollectionEnvelope{
+			Collection: attestation.Collection{Name: "build"},
+		},
+	}
+
+	collectionsByStep := map[string]StepResult{
+		"build": {
+			Step:   "build",
+			Passed: []PassedCollection{{Collection: buildCVR}},
+		},
+	}
+
+	err := verifyCollectionArtifacts(step, deployCVR, collectionsByStep)
+	assert.NoError(t, err)
+}
+
+func TestVerify_ArtifactsFromUnknownStep(t *testing.T) {
+	p := Policy{
+		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Steps: map[string]Step{
+			"deploy": {
+				Name:          "deploy",
+				ArtifactsFrom: []string{"nonexistent"},
+			},
+		},
+	}
+
+	ms := &mockVerifiedSource{}
+	pass, _, err := p.Verify(context.Background(),
+		WithVerifiedSource(ms),
+		WithSubjectDigests([]string{"sha256:abc"}),
+	)
+	assert.False(t, pass)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown step")
+	assert.Contains(t, err.Error(), "nonexistent")
 }
 
 // ---------------------------------------------------------------------------
