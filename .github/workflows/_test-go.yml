@@ -1,0 +1,91 @@
+# Reusable workflow for Go testing
+# Called by ci.yml to run Go tests with optional race detection and coverage
+
+name: Go Test
+
+on:
+  workflow_call:
+    inputs:
+      race:
+        description: 'Enable race detector'
+        required: false
+        type: boolean
+        default: false
+      coverage:
+        description: 'Generate coverage profile and check baseline'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  test:
+    name: test${{ inputs.race && ' (race)' || '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Run Go tests
+        run: |
+          TEST_ARGS="-v --failfast -count=1"
+
+          if [ "${{ inputs.race }}" = "true" ]; then
+            TEST_ARGS="$TEST_ARGS -race"
+            echo "Race detector enabled"
+          fi
+
+          if [ "${{ inputs.coverage }}" = "true" ]; then
+            TEST_ARGS="$TEST_ARGS -short -coverprofile=coverage.out"
+            echo "Coverage profiling enabled"
+          fi
+
+          echo "Running: go test $TEST_ARGS ./..."
+          # shellcheck disable=SC2086
+          go test $TEST_ARGS ./...
+
+      - name: Check coverage baseline
+        if: inputs.coverage
+        run: |
+          echo "════════════════════════════════════════════════════════════"
+          echo "                    COVERAGE ANALYSIS                        "
+          echo "════════════════════════════════════════════════════════════"
+
+          COVERAGE=$(go tool cover -func=coverage.out | grep '^total:' | tail -1 | awk '{print $NF}' | sed 's/%//')
+          COVERAGE=$(echo "$COVERAGE" | tr -d '\n')
+          echo "Current coverage: ${COVERAGE}%"
+
+          if [ -f .coverage-baseline.json ]; then
+            BASELINE=$(jq -r '.total // 0' .coverage-baseline.json)
+          else
+            BASELINE=0
+          fi
+
+          echo "Baseline coverage: ${BASELINE}%"
+
+          if (( $(echo "$BASELINE > 0" | bc -l) )); then
+            if (( $(echo "$COVERAGE < $BASELINE" | bc -l) )); then
+              echo "Coverage ${COVERAGE}% regressed from baseline ${BASELINE}%"
+              echo "Coverage can only go up, never down."
+              exit 1
+            fi
+
+            DELTA=$(echo "$COVERAGE - $BASELINE" | bc -l)
+            if (( $(echo "$DELTA > 0" | bc -l) )); then
+              echo "Coverage ${COVERAGE}% (+${DELTA}% from baseline)"
+            else
+              echo "Coverage ${COVERAGE}% (matches baseline)"
+            fi
+          else
+            echo "Coverage ${COVERAGE}% (no baseline set)"
+          fi
+
+          echo ""
+          echo "════════════════════════════════════════════════════════════"
+          echo "                    COVERAGE BY PACKAGE                      "
+          echo "════════════════════════════════════════════════════════════"
+          go tool cover -func=coverage.out | tail -20

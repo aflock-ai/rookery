@@ -1,0 +1,131 @@
+# Rookery golangci-lint configuration (v2 format)
+# Adapted from Judge's comprehensive linting for AI-generated code quality
+#
+# Key focus areas:
+# - Correctness: catch bugs before they reach production
+# - Dead code: AI often generates unused code
+# - Complexity: prevent sprawling AI-generated functions
+# - Security: catch vulnerabilities early
+
+version: "2"
+
+run:
+  timeout: 10m
+
+linters:
+  default: none
+  enable:
+    # === Core Correctness ===
+    - gosec          # Security issues
+    - errcheck       # Unchecked errors
+    - staticcheck    # Bug detection
+    - govet          # Suspicious constructs
+    - ineffassign    # Dead assignments
+
+    # === Dead Code & Unused ===
+    - unused         # Unused code (variables, functions, types)
+    - unparam        # Unused function parameters
+
+    # === Complexity Limits (AI guardrails) ===
+    - gocyclo        # Cyclomatic complexity
+    - gocognit       # Cognitive complexity
+    - funlen         # Function length limit
+    - nestif         # Nested if depth limit
+
+    # === Code Quality ===
+    - dupl           # Duplicate code detection
+    - misspell       # Spelling errors
+    - unconvert      # Unnecessary type conversions
+    - goconst        # Repeated strings that should be constants
+
+    # === Maintainability ===
+    - nakedret       # Naked returns in long functions
+    - prealloc       # Slice preallocation suggestions
+    - bodyclose      # HTTP response body close
+    - nilerr         # Return nil after checking error
+    - copyloopvar    # Loop variable capture
+
+  settings:
+    gocyclo:
+      min-complexity: 15
+
+    gocognit:
+      min-complexity: 20
+
+    funlen:
+      lines: 80
+      statements: 50
+
+    nestif:
+      min-complexity: 4
+
+    dupl:
+      threshold: 100
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+    nakedret:
+      max-func-lines: 10
+
+    gosec:
+      excludes:
+        - G104  # Audit errors not checked (covered by errcheck)
+        - G117  # Struct fields matching secret pattern
+        - G704  # SSRF via taint analysis (false positive for CLI tools)
+      config:
+        global:
+          audit: true
+
+    staticcheck:
+      checks:
+        - "all"
+        - "-SA1019"  # Using deprecated - too noisy during migrations
+        - "-ST1000"  # Package comments
+        - "-ST1003"  # Naming conventions (Url vs URL)
+        - "-ST1016"  # Receiver name consistency
+        - "-ST1020"  # Function comment format
+        - "-ST1021"  # Type comment format
+        - "-ST1022"  # Var/const comment format
+        - "-S1009"   # Nil check before len
+        - "-QF1001"  # De Morgan's law
+        - "-QF1003"  # Tagged switch
+
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+
+  exclusions:
+    paths:
+      - ".*\\.pb\\.go$"
+      - ".*_gen\\.go$"
+      - zz_generated.deepcopy.go
+
+    rules:
+      # Test files have different requirements
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+          - dupl
+          - funlen
+          - gocognit
+          - goconst
+
+      # Builder main.go is a long procedural entry point
+      - path: builder/cmd/builder/main\.go
+        linters:
+          - funlen
+          - gocyclo
+          - gocognit
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+output:
+  formats:
+    text:
+      path: stdout
