@@ -111,14 +111,28 @@ func postRoot(ro *options.RootOptions, logger *logrusLogger) {
 }
 
 func loadOutfile(outFilePath string) (*os.File, error) {
-	var err error
-	out := os.Stdout
-	if outFilePath != "" {
-		out, err = os.Create(outFilePath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create output file: %w", err)
-		}
+	if outFilePath == "" {
+		return os.Stdout, nil
 	}
 
-	return out, err
+	out, err := os.Create(outFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create output file: %w", err)
+	}
+
+	return out, nil
+}
+
+// closeOutfile closes the file if it is not stdout. Callers should use this
+// instead of directly closing the return value of loadOutfile to avoid
+// accidentally closing the process stdout descriptor. (Security: closing
+// stdout can cause subsequent writes to go to a re-opened fd, potentially
+// leaking data to an unrelated file descriptor.)
+func closeOutfile(f *os.File) {
+	if f == nil || f == os.Stdout {
+		return
+	}
+	if err := f.Close(); err != nil {
+		log.Errorf("failed to write result to disk: %v", err)
+	}
 }

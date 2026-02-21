@@ -21,7 +21,6 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
-	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 	"github.com/aflock-ai/rookery/attestation/workflow"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
@@ -73,17 +72,13 @@ func runSign(ctx context.Context, so options.SignOptions, signers ...cryptoutil.
 	if err != nil {
 		return fmt.Errorf("failed to open file to sign: %w", err)
 	}
+	defer inFile.Close()
 
 	outFile, err := loadOutfile(so.OutFilePath)
 	if err != nil {
 		return err
 	}
-
-	defer func() {
-		if err := outFile.Close(); err != nil {
-			log.Errorf("failed to write result to disk: %v", err)
-		}
-	}()
+	defer closeOutfile(outFile)
 
 	return workflow.Sign(inFile, so.DataType, outFile, dsse.SignWithSigners(signers[0]), dsse.SignWithTimestampers(timestampers...))
 }

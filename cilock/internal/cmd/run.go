@@ -180,12 +180,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		if err != nil {
 			return fmt.Errorf("failed to open out file: %w", err)
 		}
-
-		defer func() {
-			if err := out.Close(); err != nil {
-				log.Errorf("failed to write result to disk: %v", err)
-			}
-		}()
+		defer closeOutfile(out)
 
 		if _, err := out.Write(signedBytes); err != nil {
 			return fmt.Errorf("failed to write envelope to out file: %w", err)

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
@@ -173,6 +174,12 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 	}
 
 	for _, subDigest := range vo.AdditionalSubjects {
+		// Security: validate that subject digests look like hex-encoded hashes.
+		// Accepting arbitrary strings could cause false positive or negative
+		// matches against artifact digest sets during policy verification.
+		if !isValidHexDigest(subDigest) {
+			return fmt.Errorf("invalid subject digest %q: must be a hex-encoded hash (e.g. sha256:abc123...)", subDigest)
+		}
 		subjects = append(subjects, cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: subDigest})
 	}
 
@@ -231,4 +238,24 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 		}
 	}
 	return nil
+}
+
+// isValidHexDigest checks whether s looks like a hex-encoded digest, optionally
+// prefixed with an algorithm (e.g. "sha256:abcdef0123456789..."). This is a
+// lenient check—it accepts any even-length hex string of at least 32 characters
+// (128 bits), with or without an algorithm prefix.
+func isValidHexDigest(s string) bool {
+	hex := s
+	if idx := strings.Index(s, ":"); idx != -1 {
+		hex = s[idx+1:]
+	}
+	if len(hex) < 32 || len(hex)%2 != 0 {
+		return false
+	}
+	for _, c := range hex {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }

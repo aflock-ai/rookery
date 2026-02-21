@@ -25,6 +25,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/signer"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
 	"github.com/aflock-ai/rookery/attestation/source"
@@ -63,8 +64,10 @@ func (p Policy) PublicKeyVerifiers(ko map[string][]func(signer.SignerProvider) (
 
 	for _, key := range p.PublicKeys {
 		var verifier cryptoutil.Verifier
+		isKMSKey := false
 		for _, prefix := range kms.SupportedProviders() {
 			if strings.HasPrefix(key.KeyID, prefix) {
+				isKMSKey = true
 				ksp := kms.New(kms.WithRef(key.KeyID), kms.WithHash("SHA256"))
 				var vp signer.SignerProvider
 				for _, opt := range ksp.Options {
@@ -87,7 +90,17 @@ func (p Policy) PublicKeyVerifiers(ko map[string][]func(signer.SignerProvider) (
 
 				verifier, err = ksp.Verifier(context.TODO())
 				if err != nil {
-					return nil, fmt.Errorf("failed to create kms verifier: %w", err)
+					// Security: when the KMS provider is unavailable (offline/air-gapped
+					// environments), fall back to the embedded public key if present.
+					// Without this fallback, offline verification is impossible even
+					// when the policy embeds the public key material. (Port of
+					// go-witness PR #649 / Issue #648.)
+					if len(key.Key) > 0 {
+						log.Debugf("KMS verifier unavailable for %s, falling back to embedded key: %v", key.KeyID, err)
+						verifier = nil // clear so we fall through to embedded key path
+					} else {
+						return nil, fmt.Errorf("failed to create kms verifier: %w", err)
+					}
 				}
 
 			}
@@ -105,14 +118,18 @@ func (p Policy) PublicKeyVerifiers(ko map[string][]func(signer.SignerProvider) (
 			return nil, err
 		}
 
-		if keyID != key.KeyID {
+		// Security: when a KMS key has an embedded fallback, the computed key ID
+		// (a hash of the public key bytes) will never match the KMS URI stored in
+		// key.KeyID. We use the policy's key.KeyID directly so functionary matching
+		// works correctly. For non-KMS keys, verify that the computed ID matches.
+		if !isKMSKey && keyID != key.KeyID {
 			return nil, ErrKeyIDMismatch{
 				Expected: key.KeyID,
 				Actual:   keyID,
 			}
 		}
 
-		verifiers[keyID] = verifier
+		verifiers[key.KeyID] = verifier
 	}
 
 	return verifiers, nil

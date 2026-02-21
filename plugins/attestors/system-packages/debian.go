@@ -41,7 +41,10 @@ func (b *DebianBackend) DetermineOSInfo() (string, string, string, error) {
 }
 
 func (b *DebianBackend) GatherPackages() ([]Package, error) {
-	cmd := b.execCommand("dpkg-query", "-W", "-f", "${Package}\t${Version}\n")
+	// Security: use absolute path to dpkg-query to prevent PATH manipulation
+	// attacks where a malicious binary could be executed instead of the real
+	// package manager.
+	cmd := b.execCommand("/usr/bin/dpkg-query", "-W", "-f", "${Package}\t${Version}\n")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err

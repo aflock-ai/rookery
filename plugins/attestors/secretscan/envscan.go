@@ -27,6 +27,12 @@ import (
 	"github.com/aflock-ai/rookery/attestation/log"
 )
 
+// compiledGlobCache caches compiled glob patterns so they are not recompiled
+// on every call to isEnvironmentVariableSensitive. Glob compilation is O(n) in
+// pattern length and allocates; caching avoids redundant work when the same
+// sensitive-env-var list is checked against many environment variables.
+var compiledGlobCache = make(map[string]glob.Glob)
+
 // isEnvironmentVariableSensitive checks if an environment variable is sensitive
 // according to the sensitive environment variables list
 func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]struct{}) bool {
@@ -35,12 +41,17 @@ func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]stru
 		return true
 	}
 
-	// Check glob patterns
+	// Check glob patterns (compiled patterns are cached to avoid redundant work)
 	for envVarPattern := range sensitiveEnvVars {
 		if strings.Contains(envVarPattern, "*") {
-			g, err := glob.Compile(envVarPattern)
-			if err != nil {
-				continue
+			g, ok := compiledGlobCache[envVarPattern]
+			if !ok {
+				var err error
+				g, err = glob.Compile(envVarPattern)
+				if err != nil {
+					continue
+				}
+				compiledGlobCache[envVarPattern] = g
 			}
 			if g.Match(key) {
 				return true

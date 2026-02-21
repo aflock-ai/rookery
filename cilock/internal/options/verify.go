@@ -53,11 +53,15 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringSliceVarP(&vo.PolicyCARootPaths, "policy-ca-roots", "", []string{}, "Paths to CA root certificates to use for verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVarP(&vo.PolicyCAIntermediatePaths, "policy-ca-intermediates", "", []string{}, "Paths to CA intermediate certificates to use for verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVarP(&vo.PolicyTimestampServers, "policy-timestamp-servers", "", []string{}, "Paths to the CA certificates for Timestamp Authority Servers to use when verifying policy signed with x.509")
-	cmd.Flags().StringVar(&vo.PolicyCommonName, "policy-commonname", "*", "The common name to use when verifying a policy signed with x.509")
-	cmd.Flags().StringSliceVar(&vo.PolicyDNSNames, "policy-dns-names", []string{"*"}, "The DNS names to use when verifying a policy signed with x.509")
-	cmd.Flags().StringSliceVar(&vo.PolicyEmails, "policy-emails", []string{"*"}, "The DNS names to use when verifying a policy signed with x.509")
-	cmd.Flags().StringSliceVar(&vo.PolicyOrganizations, "policy-organizations", []string{"*"}, "The organizations to use when verifying a policy signed with x.509")
-	cmd.Flags().StringSliceVar(&vo.PolicyURIs, "policy-uris", []string{"*"}, "The URIs to use when verifying a policy signed with x.509")
+	// Security: default to empty strings instead of wildcards so that x.509
+	// certificate constraints are enforced by default. Wildcard defaults silently
+	// accept any certificate matching the CA chain, bypassing intended identity
+	// constraints. Users must explicitly opt into wildcards if desired.
+	cmd.Flags().StringVar(&vo.PolicyCommonName, "policy-commonname", "", "The common name to use when verifying a policy signed with x.509")
+	cmd.Flags().StringSliceVar(&vo.PolicyDNSNames, "policy-dns-names", []string{}, "The DNS names to use when verifying a policy signed with x.509")
+	cmd.Flags().StringSliceVar(&vo.PolicyEmails, "policy-emails", []string{}, "The email addresses to use when verifying a policy signed with x.509")
+	cmd.Flags().StringSliceVar(&vo.PolicyOrganizations, "policy-organizations", []string{}, "The organizations to use when verifying a policy signed with x.509")
+	cmd.Flags().StringSliceVar(&vo.PolicyURIs, "policy-uris", []string{}, "The URIs to use when verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVarP(&vo.PolicyCARootPaths, "policy-ca", "", []string{}, "Paths to CA certificates to use for verifying the policy (deprecated: use --policy-ca-roots instead)")
 
 	// Fulcio cert extensions

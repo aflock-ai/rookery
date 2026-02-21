@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/digitorus/pkcs7"
@@ -37,10 +38,30 @@ type TSPTimestamper struct {
 
 type TSPTimestamperOption func(*TSPTimestamper)
 
-func TimestampWithUrl(url string) TSPTimestamperOption {
+// TimestampWithUrl sets the TSA URL. The URL is validated at construction time
+// rather than at request time so that invalid or non-HTTPS URLs fail early.
+// Security: accepting arbitrary URLs without validation could allow SSRF attacks
+// or accidentally send timestamp requests over plaintext HTTP, leaking artifact
+// hashes to a network observer.
+func TimestampWithUrl(rawURL string) TSPTimestamperOption {
 	return func(t *TSPTimestamper) {
-		t.url = url
+		t.url = rawURL
 	}
+}
+
+// validateURL checks that the timestamp authority URL is well-formed and uses HTTPS.
+func validateURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid timestamp authority URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("timestamp authority URL must use HTTPS, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("timestamp authority URL has no host")
+	}
+	return nil
 }
 
 func TimestampWithHash(h crypto.Hash) TSPTimestamperOption {
@@ -69,6 +90,10 @@ func NewTimestamper(opts ...TSPTimestamperOption) TSPTimestamper {
 }
 
 func (t TSPTimestamper) Timestamp(ctx context.Context, r io.Reader) ([]byte, error) {
+	if err := validateURL(t.url); err != nil {
+		return nil, err
+	}
+
 	tsq, err := timestamp.CreateRequest(r, &timestamp.RequestOptions{
 		Hash:         t.hash,
 		Certificates: t.requestCertificate,
