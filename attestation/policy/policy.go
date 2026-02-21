@@ -38,23 +38,23 @@ const LegacyPolicyPredicate = "https://witness.testifysec.com/policy/v0.1"
 
 // +kubebuilder:object:generate=true
 type Policy struct {
-	Expires              metav1.Time          `json:"expires"`
-	Roots                map[string]Root      `json:"roots,omitempty"`
-	TimestampAuthorities map[string]Root      `json:"timestampauthorities,omitempty"`
-	PublicKeys           map[string]PublicKey `json:"publickeys,omitempty"`
-	Steps                map[string]Step      `json:"steps"`
+	Expires              metav1.Time          `json:"expires" jsonschema:"title=Expires,description=Timestamp when this policy expires and should no longer be used for verification"`
+	Roots                map[string]Root      `json:"roots,omitempty" jsonschema:"title=Root Certificates,description=Trusted root certificates keyed by a unique identifier"`
+	TimestampAuthorities map[string]Root      `json:"timestampauthorities,omitempty" jsonschema:"title=Timestamp Authorities,description=Trusted timestamp authority certificates keyed by a unique identifier"`
+	PublicKeys           map[string]PublicKey `json:"publickeys,omitempty" jsonschema:"title=Public Keys,description=Trusted public keys keyed by their key ID"`
+	Steps                map[string]Step      `json:"steps" jsonschema:"title=Steps,description=Verification steps that must be satisfied,required"`
 }
 
 // +kubebuilder:object:generate=true
 type Root struct {
-	Certificate   []byte   `json:"certificate"`
-	Intermediates [][]byte `json:"intermediates,omitempty"`
+	Certificate   []byte   `json:"certificate" jsonschema:"title=Certificate,description=PEM-encoded root certificate"`
+	Intermediates [][]byte `json:"intermediates,omitempty" jsonschema:"title=Intermediates,description=PEM-encoded intermediate certificates in the chain"`
 }
 
 // +kubebuilder:object:generate=true
 type PublicKey struct {
-	KeyID string `json:"keyid"`
-	Key   []byte `json:"key"`
+	KeyID string `json:"keyid" jsonschema:"title=Key ID,description=Unique identifier for this public key (hash of the key material or KMS URI)"`
+	Key   []byte `json:"key" jsonschema:"title=Key,description=PEM-encoded public key material"`
 }
 
 // PublicKeyVerifiers returns verifiers for each of the policy's embedded public keys grouped by the key's ID

@@ -91,9 +91,9 @@ func (e ErrUnsupportedHash) Error() string {
 }
 
 type DigestValue struct {
-	crypto.Hash
-	GitOID  bool
-	DirHash bool
+	crypto.Hash `jsonschema:"title=Hash Algorithm,description=Cryptographic hash function to use for digest calculation"`
+	GitOID      bool `jsonschema:"title=Git OID,description=Whether to calculate Git Object ID format digest,default=false"`
+	DirHash     bool `jsonschema:"title=Directory Hash,description=Whether to calculate directory hash using Go module dirhash format,default=false"`
 }
 
 func (dv DigestValue) New() hash.Hash {

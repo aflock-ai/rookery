@@ -118,10 +118,10 @@ func init() {
 }
 
 type KMSSignerProvider struct {
-	Reference  string
-	KeyVersion string
-	HashFunc   crypto.Hash
-	Options    map[string]KMSClientOptions
+	Reference  string                     `jsonschema:"title=Reference,description=KMS key reference URI identifying the signing key"`
+	KeyVersion string                     `jsonschema:"title=Key Version,description=Specific key version to use for signing operations"`
+	HashFunc   crypto.Hash                `jsonschema:"title=Hash Function,description=Cryptographic hash function for signing,default=SHA256"`
+	Options    map[string]KMSClientOptions `jsonschema:"title=Options,description=Provider-specific KMS client configuration options"`
 }
 
 type KMSClientOptions interface {

@@ -27,37 +27,37 @@ import (
 
 // +kubebuilder:object:generate=true
 type Step struct {
-	Name          string        `json:"name"`
-	Functionaries []Functionary `json:"functionaries"`
-	Attestations  []Attestation `json:"attestations"`
-	ArtifactsFrom []string      `json:"artifactsFrom,omitempty"`
+	Name          string        `json:"name" jsonschema:"title=Name,description=Unique name for this step in the policy"`
+	Functionaries []Functionary `json:"functionaries" jsonschema:"title=Functionaries,description=Authorized signers whose attestations are accepted for this step"`
+	Attestations  []Attestation `json:"attestations" jsonschema:"title=Attestations,description=Required attestation types and their associated policies"`
+	ArtifactsFrom []string      `json:"artifactsFrom,omitempty" jsonschema:"title=Artifacts From,description=Other step names whose products must match this step's materials"`
 }
 
 // +kubebuilder:object:generate=true
 type Functionary struct {
-	Type           string         `json:"type"`
-	CertConstraint CertConstraint `json:"certConstraint,omitempty"`
-	PublicKeyID    string         `json:"publickeyid,omitempty"`
+	Type           string         `json:"type" jsonschema:"title=Type,description=Type of functionary (publickey or root)"`
+	CertConstraint CertConstraint `json:"certConstraint,omitempty" jsonschema:"title=Certificate Constraint,description=X.509 certificate constraints the functionary must satisfy"`
+	PublicKeyID    string         `json:"publickeyid,omitempty" jsonschema:"title=Public Key ID,description=ID of a public key from the policy's publickeys map"`
 }
 
 // +kubebuilder:object:generate=true
 type AiPolicy struct {
-	Name   string `json:"name"`
-	Prompt string `json:"prompt"`
-	Model  string `json:"model,omitempty"`
+	Name   string `json:"name" jsonschema:"title=Name,description=Human-readable name for this AI policy"`
+	Prompt string `json:"prompt" jsonschema:"title=Prompt,description=Prompt text sent to the AI model for evaluation"`
+	Model  string `json:"model,omitempty" jsonschema:"title=Model,description=AI model to use for evaluation"`
 }
 
 // +kubebuilder:object:generate=true
 type Attestation struct {
-	Type         string       `json:"type"`
-	RegoPolicies []RegoPolicy `json:"regopolicies"`
-	AiPolicies   []AiPolicy   `json:"aipolicies"`
+	Type         string       `json:"type" jsonschema:"title=Type,description=Attestation type URI that must be present in the collection"`
+	RegoPolicies []RegoPolicy `json:"regopolicies" jsonschema:"title=Rego Policies,description=Rego policies to evaluate against the attestation data"`
+	AiPolicies   []AiPolicy   `json:"aipolicies" jsonschema:"title=AI Policies,description=AI-based policies to evaluate against the attestation data"`
 }
 
 // +kubebuilder:object:generate=true
 type RegoPolicy struct {
-	Module []byte `json:"module"`
-	Name   string `json:"name"`
+	Module []byte `json:"module" jsonschema:"title=Module,description=Base64-encoded Rego policy module source code"`
+	Name   string `json:"name" jsonschema:"title=Name,description=Human-readable name for this Rego policy"`
 }
 
 // StepResult contains information about the verified collections for each step.

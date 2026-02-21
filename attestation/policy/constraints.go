@@ -32,13 +32,13 @@ const (
 
 // +kubebuilder:object:generate=true
 type CertConstraint struct {
-	CommonName    string                 `json:"commonname"`
-	DNSNames      []string               `json:"dnsnames"`
-	Emails        []string               `json:"emails"`
-	Organizations []string               `json:"organizations"`
-	URIs          []string               `json:"uris"`
-	Roots         []string               `json:"roots"`
-	Extensions    certificate.Extensions `json:"extensions"`
+	CommonName    string                 `json:"commonname" jsonschema:"title=Common Name,description=Expected certificate common name (supports glob patterns with *)"`
+	DNSNames      []string               `json:"dnsnames" jsonschema:"title=DNS Names,description=Expected DNS subject alternative names"`
+	Emails        []string               `json:"emails" jsonschema:"title=Emails,description=Expected email subject alternative names"`
+	Organizations []string               `json:"organizations" jsonschema:"title=Organizations,description=Expected organization names in the certificate subject"`
+	URIs          []string               `json:"uris" jsonschema:"title=URIs,description=Expected URI subject alternative names"`
+	Roots         []string               `json:"roots" jsonschema:"title=Roots,description=IDs of trusted root certificates from the policy's roots map (use * to allow all)"`
+	Extensions    certificate.Extensions `json:"extensions" jsonschema:"title=Extensions,description=Fulcio certificate extension constraints (supports glob patterns)"`
 }
 
 func (cc CertConstraint) Check(verifier *cryptoutil.X509Verifier, trustBundles map[string]TrustBundle) error {
