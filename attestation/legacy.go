@@ -36,6 +36,16 @@ var legacyAliases = map[string]string{
 	"https://witness.dev/attestations/system-packages/v0.1":  "https://aflock.ai/attestations/system-packages/v0.1",
 }
 
+// reverseLegacyAliases maps current aflock.ai URIs back to their witness.dev equivalents.
+var reverseLegacyAliases map[string]string
+
+func init() {
+	reverseLegacyAliases = make(map[string]string, len(legacyAliases))
+	for legacy, current := range legacyAliases {
+		reverseLegacyAliases[current] = legacy
+	}
+}
+
 // ResolveLegacyType returns the current URI for a legacy type, or the
 // original type if no alias exists. This is a pure lookup — no registration needed.
 func ResolveLegacyType(uri string) string {
@@ -43,6 +53,19 @@ func ResolveLegacyType(uri string) string {
 		return current
 	}
 	return uri
+}
+
+// LegacyAlternate returns the "other" form of a type URI. For witness.dev URIs
+// it returns the aflock.ai equivalent, and vice versa. Returns empty string if
+// no alternate exists.
+func LegacyAlternate(uri string) string {
+	if current, ok := legacyAliases[uri]; ok {
+		return current
+	}
+	if legacy, ok := reverseLegacyAliases[uri]; ok {
+		return legacy
+	}
+	return ""
 }
 
 // RegisterLegacyAliases registers all known legacy predicate type URIs as aliases

@@ -209,12 +209,24 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 			}
 		}
 
-		for _, attestation := range collection.Collection.Attestations {
-			found[attestation.Type] = attestation.Attestation
+		for _, att := range collection.Collection.Attestations {
+			found[att.Type] = att.Attestation
+			// Also register under the alternate URI so that policies
+			// written with witness.dev URIs match aflock.ai attestations and
+			// vice versa.
+			if alt := attestation.LegacyAlternate(att.Type); alt != "" {
+				found[alt] = att.Attestation
+			}
 		}
 
 		for _, expected := range s.Attestations {
+			// Try both the original and alternate URI for the expected type.
 			attestor, ok := found[expected.Type]
+			if !ok {
+				if alt := attestation.LegacyAlternate(expected.Type); alt != "" {
+					attestor, ok = found[alt]
+				}
+			}
 			if !ok {
 				passed = false
 				reasons = append(reasons, ErrMissingAttestation{

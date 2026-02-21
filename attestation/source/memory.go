@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 )
 
@@ -96,7 +97,13 @@ func (s *MemorySource) LoadEnvelope(reference string, env dsse.Envelope) error {
 	s.subjectDigestsByReference[reference] = subDigestIndex
 	attestationIndex := make(map[string]struct{})
 	for _, att := range collEnv.Collection.Attestations {
-		attestationIndex[att.Attestation.Type()] = struct{}{}
+		attType := att.Type
+		attestationIndex[attType] = struct{}{}
+		// Also index the alternate URI so that policies using either
+		// witness.dev or aflock.ai URIs can find the attestation.
+		if alt := attestation.LegacyAlternate(attType); alt != "" {
+			attestationIndex[alt] = struct{}{}
+		}
 	}
 
 	s.attestationsByReference[reference] = attestationIndex
