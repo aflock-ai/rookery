@@ -26,10 +26,12 @@ import (
 	"github.com/aflock-ai/rookery/attestation/log"
 )
 
-// recordArtifacts will walk basePath and record the digests of each file with each of the functions in hashes.
+// RecordArtifacts walks basePath and records the digests of each file with each of the functions in hashes.
 // If file already exists in baseArtifacts and the two artifacts are equal the artifact will not be in the
 // returned map of artifacts.
-func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob) (map[string]cryptoutil.DigestSet, error) {
+// includeGlob/excludeGlob filter which files are recorded: exclude is checked first (excluded files are
+// never recorded), then include (only matching files are recorded). Pass nil for either to skip that filter.
+func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob, includeGlob glob.Glob, excludeGlob glob.Glob) (map[string]cryptoutil.DigestSet, error) {
 	artifacts := make(map[string]cryptoutil.DigestSet)
 	err := filepath.Walk(basePath, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
@@ -95,7 +97,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 			}
 
 			visitedSymlinks[linkedPath] = struct{}{}
-			symlinkedArtifacts, err := RecordArtifacts(linkedPath, baseArtifacts, hashes, visitedSymlinks, processWasTraced, openedFiles, dirHashGlob)
+			symlinkedArtifacts, err := RecordArtifacts(linkedPath, baseArtifacts, hashes, visitedSymlinks, processWasTraced, openedFiles, dirHashGlob, includeGlob, excludeGlob)
 			if err != nil {
 				return err
 			}
@@ -103,7 +105,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 			for artifactPath, artifact := range symlinkedArtifacts {
 				// all artifacts in the symlink should be recorded relative to our basepath
 				joinedPath := filepath.Join(relPath, artifactPath)
-				if shouldRecord(joinedPath, artifact, baseArtifacts, processWasTraced, openedFiles) {
+				if shouldRecord(joinedPath, artifact, baseArtifacts, processWasTraced, openedFiles, includeGlob, excludeGlob) {
 					artifacts[filepath.Join(relPath, artifactPath)] = artifact
 				}
 			}
@@ -116,7 +118,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 			return err
 		}
 
-		if shouldRecord(relPath, artifact, baseArtifacts, processWasTraced, openedFiles) {
+		if shouldRecord(relPath, artifact, baseArtifacts, processWasTraced, openedFiles, includeGlob, excludeGlob) {
 			artifacts[relPath] = artifact
 		}
 
@@ -127,10 +129,17 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 }
 
 // shouldRecord determines whether artifact should be recorded.
-// if the process was traced and the artifact was not one of the opened files, return false
-// if the artifact is already in baseArtifacts, check if it's changed
-// if it is not equal to the existing artifact, return true, otherwise return false
-func shouldRecord(path string, artifact cryptoutil.DigestSet, baseArtifacts map[string]cryptoutil.DigestSet, processWasTraced bool, openedFiles map[string]bool) bool {
+// Exclude glob is checked first (excluded files are never recorded), then include glob
+// (only matching files are recorded). After glob filtering, tracing and deduplication
+// checks are applied.
+func shouldRecord(path string, artifact cryptoutil.DigestSet, baseArtifacts map[string]cryptoutil.DigestSet, processWasTraced bool, openedFiles map[string]bool, includeGlob glob.Glob, excludeGlob glob.Glob) bool {
+	normalizedPath := filepath.ToSlash(path)
+	if excludeGlob != nil && excludeGlob.Match(normalizedPath) {
+		return false
+	}
+	if includeGlob != nil && !includeGlob.Match(normalizedPath) {
+		return false
+	}
 	if _, ok := openedFiles[path]; !ok && processWasTraced {
 		return false
 	}

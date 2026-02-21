@@ -206,7 +206,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		}
 	}
 
-	products, err := file.RecordArtifacts(ctx.WorkingDir(), a.baseArtifacts, ctx.Hashes(), map[string]struct{}{}, processWasTraced, openedFileSet, ctx.DirHashGlob())
+	products, err := file.RecordArtifacts(ctx.WorkingDir(), a.baseArtifacts, ctx.Hashes(), map[string]struct{}{}, processWasTraced, openedFileSet, ctx.DirHashGlob(), a.compiledIncludeGlob, a.compiledExcludeGlob)
 	if err != nil {
 		return err
 	}
