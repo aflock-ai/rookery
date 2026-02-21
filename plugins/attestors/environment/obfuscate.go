@@ -21,8 +21,8 @@ import (
 	"github.com/aflock-ai/rookery/attestation/log"
 )
 
-// FilterEnvironmentArray expects an array of strings representing environment variables.  Each element of the array is expected to be in the format of "KEY=VALUE".
-// blockList is the list of elements to filter from variables, and for each element of variables that does not appear in the blockList onAllowed will be called.
+// ObfuscateEnvironmentArray expects an array of strings representing environment variables.  Each element of the array is expected to be in the format of "KEY=VALUE".
+// obfuscateList is the list of elements to obfuscate from variables, and for each element of variables that does not appear in the obfuscateList onAllowed will be called.
 func ObfuscateEnvironmentArray(variables []string, obfuscateList map[string]struct{}, excludeKeys map[string]struct{}, onAllowed func(key, val, orig string)) {
 	obfuscateGlobList := []glob.Glob{}
 

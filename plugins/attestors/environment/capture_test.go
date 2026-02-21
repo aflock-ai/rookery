@@ -17,6 +17,8 @@ package environment
 import (
 	"reflect"
 	"testing"
+
+	"github.com/aflock-ai/rookery/attestation"
 )
 
 func Test_splitVariable(t *testing.T) {
@@ -71,7 +73,7 @@ func TestCapture_Capture(t *testing.T) {
 		{
 			name: "Obfuscate *_TOKEN",
 			fields: fields{
-				sensitiveVarsList:           DefaultSensitiveEnvList(),
+				sensitiveVarsList:           attestation.DefaultSensitiveEnvList(),
 				addSensitiveVarsList:        map[string]struct{}{},
 				excludeSensitiveVarsList:    map[string]struct{}{},
 				filterVarsEnabled:           false,
@@ -91,7 +93,7 @@ func TestCapture_Capture(t *testing.T) {
 		{
 			name: "Filter *_TOKEN",
 			fields: fields{
-				sensitiveVarsList:           DefaultSensitiveEnvList(),
+				sensitiveVarsList:           attestation.DefaultSensitiveEnvList(),
 				addSensitiveVarsList:        map[string]struct{}{},
 				excludeSensitiveVarsList:    map[string]struct{}{},
 				filterVarsEnabled:           true,
@@ -110,7 +112,7 @@ func TestCapture_Capture(t *testing.T) {
 		{
 			name: "Disable sensitive vars",
 			fields: fields{
-				sensitiveVarsList:           DefaultSensitiveEnvList(),
+				sensitiveVarsList:           attestation.DefaultSensitiveEnvList(),
 				addSensitiveVarsList:        map[string]struct{}{},
 				excludeSensitiveVarsList:    map[string]struct{}{},
 				filterVarsEnabled:           true,
@@ -130,7 +132,7 @@ func TestCapture_Capture(t *testing.T) {
 		{
 			name: "Obfuscate custom sensitive vars",
 			fields: fields{
-				sensitiveVarsList: DefaultSensitiveEnvList(),
+				sensitiveVarsList: attestation.DefaultSensitiveEnvList(),
 				addSensitiveVarsList: map[string]struct{}{
 					"*_BLA": {},
 				},
@@ -152,7 +154,7 @@ func TestCapture_Capture(t *testing.T) {
 		{
 			name: "Filter custom sensitive vars",
 			fields: fields{
-				sensitiveVarsList: DefaultSensitiveEnvList(),
+				sensitiveVarsList: attestation.DefaultSensitiveEnvList(),
 				addSensitiveVarsList: map[string]struct{}{
 					"*_BLA": {},
 				},
@@ -193,7 +195,7 @@ func _TestWith() CaptureOption {
 	}
 }
 
-func TestNew(t *testing.T) {
+func TestNewCapturer(t *testing.T) {
 	type args struct {
 		opts []CaptureOption
 	}
@@ -214,8 +216,8 @@ func TestNew(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := New(tt.args.opts...); got.filterVarsEnabled != tt.want.filterVarsEnabled {
-				t.Errorf("New() = %v, want %v", got.filterVarsEnabled, tt.want.filterVarsEnabled)
+			if got := NewCapturer(tt.args.opts...); got.filterVarsEnabled != tt.want.filterVarsEnabled {
+				t.Errorf("NewCapturer() = %v, want %v", got.filterVarsEnabled, tt.want.filterVarsEnabled)
 			}
 		})
 	}

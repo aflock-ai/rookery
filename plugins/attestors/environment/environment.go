@@ -34,8 +34,6 @@ const (
 var (
 	_ attestation.Attestor = &Attestor{}
 	_ EnvironmentAttestor  = &Attestor{}
-	// defaultFilterSensitiveVarsEnabled                       = false
-	// defaultDisableSensitiveVarsDefault                      = false
 )
 
 type EnvironmentAttestor interface {
@@ -109,7 +107,14 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		a.Username = user.Username
 	}
 
-	a.Variables = ctx.EnvironmentCapturer().Capture(a.osEnviron())
+	// Create the capturer from context configuration and set it for other attestors to use
+	capturer := ctx.EnvironmentCapturer()
+	if capturer == nil {
+		capturer = NewCapturerFromContext(ctx)
+		ctx.SetEnvironmentCapturer(capturer)
+	}
+
+	a.Variables = capturer.Capture(a.osEnviron())
 
 	return nil
 }

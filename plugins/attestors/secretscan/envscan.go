@@ -23,7 +23,7 @@ import (
 	"strings"
 
 	"github.com/gobwas/glob"
-	"github.com/aflock-ai/rookery/attestation/environment"
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/log"
 )
 
@@ -55,7 +55,7 @@ func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]stru
 // that respects the user's configuration in the attestation context
 func (a *Attestor) getSensitiveEnvVarsList() map[string]struct{} {
 	// Start with the default list
-	sensitiveEnvVars := environment.DefaultSensitiveEnvList()
+	sensitiveEnvVars := attestation.DefaultSensitiveEnvList()
 
 	// If we have access to the attestation context, use it to respect user configuration
 	if a.ctx != nil && a.ctx.EnvironmentCapturer() != nil {

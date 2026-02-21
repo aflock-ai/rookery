@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package environment
+package attestation
 
 // DefaultSensitiveEnvList return a list of known sensitive environment keys.
 //

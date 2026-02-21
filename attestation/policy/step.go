@@ -15,6 +15,7 @@
 package policy
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -40,9 +41,17 @@ type Functionary struct {
 }
 
 // +kubebuilder:object:generate=true
+type AiPolicy struct {
+	Name   string `json:"name"`
+	Prompt string `json:"prompt"`
+	Model  string `json:"model,omitempty"`
+}
+
+// +kubebuilder:object:generate=true
 type Attestation struct {
 	Type         string       `json:"type"`
 	RegoPolicies []RegoPolicy `json:"regopolicies"`
+	AiPolicies   []AiPolicy   `json:"aipolicies"`
 }
 
 // +kubebuilder:object:generate=true
@@ -56,8 +65,25 @@ type RegoPolicy struct {
 // Rejected contains the rejected collections and the error that caused them to be rejected.
 type StepResult struct {
 	Step     string
-	Passed   []source.CollectionVerificationResult
+	Passed   []PassedCollection
 	Rejected []RejectedCollection
+}
+
+// PassedCollection contains a collection that passed verification along with any AI responses
+type PassedCollection struct {
+	Collection  source.CollectionVerificationResult
+	AiResponses []AiResponse `json:"AiResponses,omitempty"`
+}
+
+// MarshalJSON implements the json.Marshaler interface for PassedCollection
+func (p PassedCollection) MarshalJSON() ([]byte, error) {
+	return json.Marshal(&struct {
+		Collection  source.CollectionVerificationResult `json:"Collection"`
+		AiResponses []AiResponse                        `json:"AiResponses,omitempty"`
+	}{
+		Collection:  p.Collection,
+		AiResponses: p.AiResponses,
+	})
 }
 
 // Analyze inspects the StepResult to determine if the step passed or failed.
@@ -71,17 +97,17 @@ func (r StepResult) Analyze() bool {
 
 	for _, coll := range r.Passed {
 		// we don't fail on warnings so we process these under debug logs
-		if len(coll.Warnings) > 0 {
-			for _, warn := range coll.Warnings {
-				log.Debug("Warning: Step: %s, Collection: %s, Warning: %s", r.Step, coll.Collection.Name, warn)
+		if len(coll.Collection.Warnings) > 0 {
+			for _, warn := range coll.Collection.Warnings {
+				log.Debug("Warning: Step: %s, Collection: %s, Warning: %s", r.Step, coll.Collection.Collection.Name, warn)
 			}
 		}
 
 		// Want to ensure that undiscovered errors aren't lurking in the passed collections
-		if len(coll.Errors) > 0 {
-			for _, err := range coll.Errors {
+		if len(coll.Collection.Errors) > 0 {
+			for _, err := range coll.Collection.Errors {
 				pass = false
-				log.Errorf("Unexpected Error in Passed Collection: Step: %s, Collection: %s, Error: %s", r.Step, coll.Collection.Name, err)
+				log.Errorf("Unexpected Error in Passed Collection: Step: %s, Collection: %s, Error: %s", r.Step, coll.Collection.Collection.Name, err)
 			}
 		}
 	}
@@ -107,8 +133,28 @@ func (r StepResult) Error() string {
 }
 
 type RejectedCollection struct {
-	Collection source.CollectionVerificationResult
-	Reason     error
+	Collection  source.CollectionVerificationResult
+	Reason      error
+	AiResponses []AiResponse `json:"AiResponses,omitempty"`
+}
+
+// MarshalJSON implements the json.Marshaler interface to properly serialize the Reason field
+// which is an error interface that would otherwise serialize to an empty object {}
+func (r RejectedCollection) MarshalJSON() ([]byte, error) {
+	var reasonStr string
+	if r.Reason != nil {
+		reasonStr = r.Reason.Error()
+	}
+
+	return json.Marshal(&struct {
+		Collection  source.CollectionVerificationResult `json:"Collection"`
+		Reason      string                              `json:"Reason"`
+		AiResponses []AiResponse                        `json:"AiResponses,omitempty"`
+	}{
+		Collection:  r.Collection,
+		Reason:      reasonStr,
+		AiResponses: r.AiResponses,
+	})
 }
 
 func (f Functionary) Validate(verifier cryptoutil.Verifier, trustBundles map[string]TrustBundle) error {
@@ -139,7 +185,7 @@ func (f Functionary) Validate(verifier cryptoutil.Verifier, trustBundles map[str
 
 // validateAttestations will test each collection against to ensure the expected attestations
 // appear in the collection as well as that any rego policies pass for the step.
-func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult) StepResult {
+func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string) StepResult {
 	result := StepResult{Step: s.Name}
 	if len(collectionResults) <= 0 {
 		return result
@@ -154,6 +200,8 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 		found := make(map[string]attestation.Attestor)
 		reasons := make([]string, 0)
 		passed := true
+		var allAiResponses []AiResponse
+
 		if len(collection.Errors) > 0 {
 			passed = false
 			for _, err := range collection.Errors {
@@ -179,16 +227,52 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 				passed = false
 				reasons = append(reasons, err.Error())
 			}
+
+			aiResponses, err := EvaluateAIPolicy(attestor, expected.AiPolicies, aiServerURL)
+			if err != nil {
+				passed = false
+				reasons = append(reasons, err.Error())
+			}
+
+			if len(aiResponses) > 0 {
+				allAiResponses = append(allAiResponses, aiResponses...)
+
+				if err == nil {
+					for i, resp := range aiResponses {
+						if resp.Status == "FAIL" {
+							policyName := ""
+							if i < len(expected.AiPolicies) {
+								policyName = expected.AiPolicies[i].Name
+							}
+							if policyName == "" {
+								policyName = fmt.Sprintf("AI Policy %d", i+1)
+							}
+
+							reason := fmt.Sprintf("AI Policy '%s': %s - %s",
+								policyName,
+								resp.Status,
+								resp.Reason)
+
+							passed = false
+							reasons = append(reasons, reason)
+						}
+					}
+				}
+			}
 		}
 
 		if passed {
-			result.Passed = append(result.Passed, collection)
+			result.Passed = append(result.Passed, PassedCollection{
+				Collection:  collection,
+				AiResponses: allAiResponses,
+			})
 		} else {
 			r := strings.Join(reasons, ",\n - ")
 			reason := fmt.Sprintf("collection validation failed:\n - %s", r)
 			result.Rejected = append(result.Rejected, RejectedCollection{
-				Collection: collection,
-				Reason:     fmt.Errorf("%s", reason),
+				Collection:  collection,
+				Reason:      fmt.Errorf("%s", reason),
+				AiResponses: allAiResponses,
 			})
 		}
 	}

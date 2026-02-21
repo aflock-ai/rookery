@@ -16,6 +16,8 @@ package environment
 
 import (
 	"strings"
+
+	"github.com/aflock-ai/rookery/attestation"
 )
 
 type Capture struct {
@@ -61,9 +63,9 @@ func WithDisableDefaultSensitiveList() CaptureOption {
 	}
 }
 
-func New(opts ...CaptureOption) *Capture {
+func NewCapturer(opts ...CaptureOption) *Capture {
 	capture := &Capture{
-		sensitiveVarsList:        DefaultSensitiveEnvList(),
+		sensitiveVarsList:        attestation.DefaultSensitiveEnvList(),
 		addSensitiveVarsList:     map[string]struct{}{},
 		excludeSensitiveVarsList: map[string]struct{}{},
 	}
@@ -112,4 +114,22 @@ func splitVariable(v string) (key, val string) {
 	}
 
 	return
+}
+
+// NewCapturerFromContext creates a Capture configured from the AttestationContext's env settings.
+func NewCapturerFromContext(ctx *attestation.AttestationContext) *Capture {
+	var opts []CaptureOption
+	if ctx.EnvFilterVarsEnabled() {
+		opts = append(opts, WithFilterVarsEnabled())
+	}
+	if keys := ctx.EnvAdditionalKeys(); len(keys) > 0 {
+		opts = append(opts, WithAdditionalKeys(keys))
+	}
+	if keys := ctx.EnvExcludeKeys(); len(keys) > 0 {
+		opts = append(opts, WithExcludeKeys(keys))
+	}
+	if ctx.EnvDisableDefaultSensitiveList() {
+		opts = append(opts, WithDisableDefaultSensitiveList())
+	}
+	return NewCapturer(opts...)
 }
