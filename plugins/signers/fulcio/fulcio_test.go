@@ -25,23 +25,25 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
+	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"math/big"
-
-	"path/filepath"
-
 	fulciopb "github.com/sigstore/fulcio/pkg/generated/protobuf"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.step.sm/crypto/jose"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/go-jose/go-jose/v3/jwt"
 )
@@ -467,4 +469,120 @@ func (s *authErrorCAService) GetTrustBundle(ctx context.Context, in *fulciopb.Ge
 func (s *authErrorCAService) CreateSigningCertificate(ctx context.Context, in *fulciopb.CreateSigningCertificateRequest) (*fulciopb.SigningCertificate, error) {
 	atomic.AddInt32(s.attemptCount, 1)
 	return nil, status.Error(codes.Unauthenticated, "invalid token")
+}
+
+func TestGetCertHTTP(t *testing.T) {
+	t.Run("successful certificate retrieval", func(t *testing.T) {
+		chain := generateCertChain(t)
+		certResp := &fulciopb.SigningCertificate{
+			Certificate: &fulciopb.SigningCertificate_SignedCertificateEmbeddedSct{
+				SignedCertificateEmbeddedSct: &fulciopb.SigningCertificateEmbeddedSCT{
+					Chain: &fulciopb.CertificateChain{
+						Certificates: chain,
+					},
+				},
+			},
+		}
+
+		respJSON, err := protojson.Marshal(certResp)
+		require.NoError(t, err)
+
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/api/v2/signingCert", r.URL.Path)
+			assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(respJSON)
+		}))
+		defer mockServer.Close()
+
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+
+		token := generateTestToken("test@example.com", "")
+		result, err := getCertHTTP(context.Background(), key, mockServer.URL, token)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+	})
+
+	t.Run("HTTP request failure", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"bad request"}`))
+		}))
+		defer mockServer.Close()
+
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+
+		token := generateTestToken("test@example.com", "")
+		_, err = getCertHTTP(context.Background(), key, mockServer.URL, token)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "HTTP request failed with status")
+	})
+
+	t.Run("unmarshaling error", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`not valid protobuf json`))
+		}))
+		defer mockServer.Close()
+
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+
+		token := generateTestToken("test@example.com", "")
+		_, err = getCertHTTP(context.Background(), key, mockServer.URL, token)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to unmarshal response")
+	})
+
+	t.Run("token without email or subject", func(t *testing.T) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+
+		token := generateTestToken("", "")
+		_, err = getCertHTTP(context.Background(), key, "http://unused", token)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no email or subject claim found in token")
+	})
+}
+
+func TestWithUseHTTP(t *testing.T) {
+	fsp := New(WithUseHTTP(true))
+	assert.True(t, fsp.UseHTTP)
+
+	fsp = New(WithUseHTTP(false))
+	assert.False(t, fsp.UseHTTP)
+}
+
+func TestSignerHTTPMode(t *testing.T) {
+	// Create a mock Fulcio HTTP server
+	chain := generateCertChain(t)
+	certResp := &fulciopb.SigningCertificate{
+		Certificate: &fulciopb.SigningCertificate_SignedCertificateEmbeddedSct{
+			SignedCertificateEmbeddedSct: &fulciopb.SigningCertificateEmbeddedSCT{
+				Chain: &fulciopb.CertificateChain{
+					Certificates: chain,
+				},
+			},
+		},
+	}
+
+	respJSON, err := protojson.Marshal(certResp)
+	require.NoError(t, err)
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(respJSON)
+	}))
+	defer mockServer.Close()
+
+	token := generateTestToken("foo@example.com", "")
+	provider := New(WithFulcioURL(mockServer.URL), WithToken(token), WithUseHTTP(true))
+	signer, err := provider.Signer(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, signer)
 }
