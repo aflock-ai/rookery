@@ -1,0 +1,42 @@
+package:
+  name: cilock
+  version: "${CILOCK_VERSION}"
+  epoch: 0
+  description: "Witness-compatible CI attestation CLI with all attestors and signers"
+  copyright:
+    - license: Apache-2.0
+  dependencies:
+    runtime:
+      - ca-certificates-bundle
+
+environment:
+  contents:
+    repositories:
+      - https://packages.wolfi.dev/os
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    packages:
+      - build-base
+      - busybox
+      - ca-certificates-bundle
+      - go-1.26
+
+pipeline:
+  - uses: git-checkout
+    with:
+      repository: https://github.com/aflock-ai/rookery
+      tag: v${{package.version}}
+
+  - runs: |
+      cd cilock
+      GOWORK=off go build \
+        -trimpath \
+        -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/internal/cmd.Version=v${{package.version}}'" \
+        -o "${{targets.destdir}}/usr/bin/cilock" \
+        ./cmd/cilock/
+
+  - uses: strip
+
+test:
+  pipeline:
+    - runs: cilock version

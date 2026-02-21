@@ -1,0 +1,35 @@
+# Minimal container image for CIlock
+# Built with apko from Wolfi packages + locally-built cilock melange package
+#
+# Usage:
+#   docker run ghcr.io/aflock-ai/cilock:latest run --step build ...
+
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+    - '@local ./packages'
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    - ./melange.rsa.pub
+  packages:
+    - cilock@local
+    - ca-certificates-bundle
+    - git
+    - busybox
+
+archs:
+  - x86_64
+  - aarch64
+
+accounts:
+  groups:
+    - groupname: cilock
+      gid: 65532
+  users:
+    - username: cilock
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+entrypoint:
+  command: /usr/bin/cilock
