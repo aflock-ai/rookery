@@ -111,6 +111,12 @@ func RegisterAttestationWithTypes(name string, predicateTypes []string, run RunT
 
 func FactoryByType(uri string) (registry.FactoryFunc[Attestor], bool) {
 	registrationEntry, ok := attestationsByType[uri]
+	if !ok {
+		// Try legacy alias resolution
+		if resolved, hasAlias := legacyAliases[uri]; hasAlias {
+			registrationEntry, ok = attestationsByType[resolved]
+		}
+	}
 	return registrationEntry.Factory, ok
 }
 
@@ -172,4 +178,16 @@ func AttestorOptions(nameOrType string) []registry.Configurer {
 
 func RegistrationEntries() []registry.Entry[Attestor] {
 	return attestorRegistry.AllEntries()
+}
+
+// RegisterLegacyAlias registers an additional predicate type URI that maps to
+// the same factory as an existing type. This allows old attestation JSON using
+// legacy URIs (e.g. witness.dev, witness.testifysec.com) to be deserialized
+// using the current attestor implementation.
+func RegisterLegacyAlias(legacyType, currentType string) {
+	entry, ok := attestationsByType[currentType]
+	if !ok {
+		return
+	}
+	attestationsByType[legacyType] = entry
 }
