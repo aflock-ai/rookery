@@ -228,7 +228,7 @@ func validateRunOpts(ro runOptions) error {
 	}
 
 	if len(ro.signers) == 0 && !ro.insecure {
-		return fmt.Errorf("at lease one signer is required if not in insecure mode")
+		return fmt.Errorf("at least one signer is required if not in insecure mode")
 	}
 
 	return nil
@@ -245,10 +245,10 @@ func createAndSignEnvelope(predicate interface{}, predType string, subjects map[
 		return dsse.Envelope{}, err
 	}
 
-	stmtJson, err := json.Marshal(&stmt)
+	stmtJSON, err := json.Marshal(&stmt)
 	if err != nil {
 		return dsse.Envelope{}, err
 	}
 
-	return dsse.Sign(intoto.PayloadType, bytes.NewReader(stmtJson), opts...)
+	return dsse.Sign(intoto.PayloadType, bytes.NewReader(stmtJSON), opts...)
 }

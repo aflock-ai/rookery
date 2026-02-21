@@ -72,7 +72,7 @@ func New(opts ...Option) SpiffeSignerProvider {
 
 func (ssp SpiffeSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, error) {
 	if len(ssp.SocketPath) == 0 {
-		return nil, fmt.Errorf("socker path cannot be empty")
+		return nil, fmt.Errorf("socket path cannot be empty")
 	}
 
 	svidCtx, err := workloadapi.FetchX509Context(ctx, workloadapi.WithAddr(ssp.SocketPath))

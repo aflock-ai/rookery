@@ -30,12 +30,12 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy) er
 		return nil
 	}
 
-	attestorJson, err := json.Marshal(attestor)
+	attestorJSON, err := json.Marshal(attestor)
 	if err != nil {
 		return err
 	}
 
-	decoder := json.NewDecoder(bytes.NewReader(attestorJson))
+	decoder := json.NewDecoder(bytes.NewReader(attestorJSON))
 	decoder.UseNumber()
 	var input interface{}
 	if err := decoder.Decode(&input); err != nil {
