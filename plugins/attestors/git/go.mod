@@ -1,6 +1,6 @@
 module github.com/aflock-ai/rookery/plugins/attestors/git
 
-go 1.25.0
+go 1.26.0
 
 replace github.com/aflock-ai/rookery/attestation => ../../../attestation
 
@@ -30,18 +30,19 @@ require (
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
+	github.com/onsi/gomega v1.38.2 // indirect
 	github.com/pjbgf/sha1cd v0.3.2 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
+	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	go.step.sm/crypto v0.76.0 // indirect
-	golang.org/x/crypto v0.47.0 // indirect
+	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
-	golang.org/x/net v0.49.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

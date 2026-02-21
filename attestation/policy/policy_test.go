@@ -173,8 +173,8 @@ func TestCheckCertConstraint_ConstraintEmptyStringCertHasValue(t *testing.T) {
 func TestStepResult_Analyze_Passed(t *testing.T) {
 	sr := StepResult{
 		Step: "build",
-		Passed: []source.CollectionVerificationResult{
-			{CollectionEnvelope: source.CollectionEnvelope{Collection: attestation.Collection{Name: "build"}}},
+		Passed: []PassedCollection{
+			{Collection: source.CollectionVerificationResult{CollectionEnvelope: source.CollectionEnvelope{Collection: attestation.Collection{Name: "build"}}}},
 		},
 	}
 	assert.True(t, sr.Analyze())
@@ -194,11 +194,11 @@ func TestStepResult_Analyze_PassedWithErrors(t *testing.T) {
 	// If a passed collection somehow has errors, Analyze should return false.
 	sr := StepResult{
 		Step: "build",
-		Passed: []source.CollectionVerificationResult{
-			{
+		Passed: []PassedCollection{
+			{Collection: source.CollectionVerificationResult{
 				CollectionEnvelope: source.CollectionEnvelope{Collection: attestation.Collection{Name: "build"}},
 				Errors:             []error{fmt.Errorf("surprise")},
-			},
+			}},
 		},
 	}
 	assert.False(t, sr.Analyze())
@@ -211,7 +211,7 @@ func TestStepResult_HasErrors(t *testing.T) {
 }
 
 func TestStepResult_HasPassed(t *testing.T) {
-	sr := StepResult{Passed: []source.CollectionVerificationResult{{}}}
+	sr := StepResult{Passed: []PassedCollection{{}}}
 	assert.True(t, sr.HasPassed())
 	assert.False(t, StepResult{}.HasPassed())
 }
@@ -420,7 +420,7 @@ func TestVerify_NoCollections(t *testing.T) {
 
 func TestValidateAttestations_EmptyCollections(t *testing.T) {
 	s := Step{Name: "build"}
-	result := s.validateAttestations(nil)
+	result := s.validateAttestations(nil, "")
 	assert.Equal(t, "build", result.Step)
 	assert.Empty(t, result.Passed)
 	assert.Empty(t, result.Rejected)
@@ -451,7 +451,7 @@ func TestValidateAttestations_CollectionWithMatchingAttestations(t *testing.T) {
 		},
 	}
 
-	result := s.validateAttestations([]source.CollectionVerificationResult{cvr})
+	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "")
 	assert.Len(t, result.Passed, 1)
 	assert.Empty(t, result.Rejected)
 }
@@ -469,7 +469,7 @@ func TestValidateAttestations_MissingAttestation(t *testing.T) {
 		CollectionEnvelope: source.CollectionEnvelope{Collection: coll},
 	}
 
-	result := s.validateAttestations([]source.CollectionVerificationResult{cvr})
+	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "")
 	assert.Empty(t, result.Passed)
 	assert.Len(t, result.Rejected, 1)
 	assert.Contains(t, result.Rejected[0].Reason.Error(), "missing attestation")
@@ -488,7 +488,7 @@ func TestValidateAttestations_CollectionWithErrors(t *testing.T) {
 		Errors: []error{fmt.Errorf("envelope verification failed")},
 	}
 
-	result := s.validateAttestations([]source.CollectionVerificationResult{cvr})
+	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "")
 	assert.Empty(t, result.Passed)
 	assert.Len(t, result.Rejected, 1)
 	assert.Contains(t, result.Rejected[0].Reason.Error(), "envelope verification failed")
@@ -506,7 +506,7 @@ func TestValidateAttestations_SkipsDifferentCollectionName(t *testing.T) {
 		},
 	}
 
-	result := s.validateAttestations([]source.CollectionVerificationResult{cvr})
+	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "")
 	assert.Empty(t, result.Passed)
 	assert.Empty(t, result.Rejected)
 }

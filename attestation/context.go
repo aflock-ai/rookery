@@ -25,9 +25,14 @@ import (
 
 	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
-	"github.com/aflock-ai/rookery/attestation/environment"
 	"github.com/aflock-ai/rookery/attestation/log"
 )
+
+// EnvironmentCapturer is an interface for capturing and filtering environment variables.
+// Implementations handle sensitive variable obfuscation/filtering.
+type EnvironmentCapturer interface {
+	Capture(env []string) map[string]string
+}
 
 type RunType string
 
@@ -106,21 +111,10 @@ func WithDirHashGlob(dirHashGlob []string) AttestationContextOption {
 	}
 }
 
-// WithEnvCapturer sets the configuration for the environment.Capturer inside the AttestationContext.
-func WithEnvCapturer(additionalKeys []string, excludeKeys []string, disableDefaultSensitiveVars bool, filterVarsEnabled bool) AttestationContextOption {
+// WithEnvironmentCapturer sets the EnvironmentCapturer on the AttestationContext.
+func WithEnvironmentCapturer(c EnvironmentCapturer) AttestationContextOption {
 	return func(ctx *AttestationContext) {
-		opts := []environment.CaptureOption{
-			environment.WithAdditionalKeys(additionalKeys),
-			environment.WithExcludeKeys(excludeKeys),
-		}
-		if disableDefaultSensitiveVars {
-			opts = append(opts, environment.WithDisableDefaultSensitiveList())
-		}
-		if filterVarsEnabled {
-			opts = append(opts, environment.WithFilterVarsEnabled())
-		}
-
-		ctx.environmentCapturer = environment.New(opts...)
+		ctx.environmentCapturer = c
 	}
 }
 
@@ -144,8 +138,14 @@ type AttestationContext struct {
 	materials           map[string]cryptoutil.DigestSet
 	stepName            string
 	mutex               sync.RWMutex
-	environmentCapturer *environment.Capture
+	environmentCapturer EnvironmentCapturer
 	outputWriters       []io.Writer
+
+	// Environment configuration fields used by the environment plugin
+	envFilterVarsEnabled           bool
+	envAdditionalKeys              []string
+	envExcludeKeys                 []string
+	envDisableDefaultSensitiveList bool
 }
 
 type Product struct {
@@ -161,14 +161,13 @@ func NewContext(stepName string, attestors []Attestor, opts ...AttestationContex
 	}
 
 	ctx := &AttestationContext{
-		ctx:                 context.Background(),
-		attestors:           attestors,
-		workingDir:          wd,
-		hashes:              []cryptoutil.DigestValue{{Hash: crypto.SHA256}, {Hash: crypto.SHA256, GitOID: true}, {Hash: crypto.SHA1, GitOID: true}},
-		materials:           make(map[string]cryptoutil.DigestSet),
-		products:            make(map[string]Product),
-		stepName:            stepName,
-		environmentCapturer: environment.New(),
+		ctx:        context.Background(),
+		attestors:  attestors,
+		workingDir: wd,
+		hashes:     []cryptoutil.DigestValue{{Hash: crypto.SHA256}, {Hash: crypto.SHA256, GitOID: true}, {Hash: crypto.SHA1, GitOID: true}},
+		materials:  make(map[string]cryptoutil.DigestSet),
+		products:   make(map[string]Product),
+		stepName:   stepName,
 	}
 
 	for _, opt := range opts {
@@ -310,6 +309,28 @@ func (ctx *AttestationContext) Products() map[string]Product {
 
 func (ctx *AttestationContext) StepName() string {
 	return ctx.stepName
+}
+
+// SetEnvironmentCapturer sets the EnvironmentCapturer on the context.
+// This is typically called by the environment plugin during attestation.
+func (ctx *AttestationContext) SetEnvironmentCapturer(c EnvironmentCapturer) {
+	ctx.environmentCapturer = c
+}
+
+func (ctx *AttestationContext) EnvFilterVarsEnabled() bool {
+	return ctx.envFilterVarsEnabled
+}
+
+func (ctx *AttestationContext) EnvAdditionalKeys() []string {
+	return ctx.envAdditionalKeys
+}
+
+func (ctx *AttestationContext) EnvExcludeKeys() []string {
+	return ctx.envExcludeKeys
+}
+
+func (ctx *AttestationContext) EnvDisableDefaultSensitiveList() bool {
+	return ctx.envDisableDefaultSensitiveList
 }
 
 func (ctx *AttestationContext) addMaterials(materialer Materialer) {

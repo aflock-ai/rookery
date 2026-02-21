@@ -341,7 +341,11 @@ func discoverEnvironment() *EnvironmentIdentity {
 				if strings.Contains(line, "docker") || strings.Contains(line, "containerd") {
 					parts := strings.Split(line, "/")
 					if len(parts) > 0 {
-						env.ContainerID = parts[len(parts)-1][:12] // First 12 chars
+						containerID := parts[len(parts)-1]
+					if len(containerID) > 12 {
+						containerID = containerID[:12]
+					}
+					env.ContainerID = containerID
 						break
 					}
 				}

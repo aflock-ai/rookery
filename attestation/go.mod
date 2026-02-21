@@ -1,6 +1,6 @@
 module github.com/aflock-ai/rookery/attestation
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c
@@ -39,7 +39,7 @@ require (
 	github.com/lestrrat-go/jwx/v3 v3.0.13 // indirect
 	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
-	github.com/miekg/dns v1.1.58 // indirect
+	github.com/miekg/dns v1.1.61 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
@@ -67,11 +67,14 @@ require (
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.47.0 // indirect
-	golang.org/x/net v0.49.0 // indirect
+	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/net v0.50.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/tools v0.42.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260128011058-8636f8732409 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260203192932-546029d2fa20 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.1 // indirect

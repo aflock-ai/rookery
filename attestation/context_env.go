@@ -14,11 +14,7 @@
 
 package attestation
 
-import (
-	env "github.com/aflock-ai/rookery/attestation/environment"
-)
-
-func (ctx *AttestationContext) EnvironmentCapturer() *env.Capture {
+func (ctx *AttestationContext) EnvironmentCapturer() EnvironmentCapturer {
 	return ctx.environmentCapturer
 }
 
@@ -26,27 +22,27 @@ func (ctx *AttestationContext) EnvironmentCapturer() *env.Capture {
 // The default behavior is obfuscation of variables.
 func WithEnvFilterVarsEnabled() AttestationContextOption {
 	return func(a *AttestationContext) {
-		env.WithFilterVarsEnabled()(a.environmentCapturer)
+		a.envFilterVarsEnabled = true
 	}
 }
 
 // WithEnvAdditionalKeys add additional keys to final list that is checked for sensitive variables.
 func WithEnvAdditionalKeys(additionalKeys []string) AttestationContextOption {
 	return func(a *AttestationContext) {
-		env.WithAdditionalKeys(additionalKeys)(a.environmentCapturer)
+		a.envAdditionalKeys = additionalKeys
 	}
 }
 
 // WithEnvExcludeKeys add additional keys to final list that is checked for sensitive variables.
 func WithEnvExcludeKeys(excludeKeys []string) AttestationContextOption {
 	return func(a *AttestationContext) {
-		env.WithExcludeKeys(excludeKeys)(a.environmentCapturer)
+		a.envExcludeKeys = excludeKeys
 	}
 }
 
 // WithEnvDisableDefaultSensitiveList will disable the default list and only use the additional keys.
 func WithEnvDisableDefaultSensitiveList() AttestationContextOption {
 	return func(a *AttestationContext) {
-		env.WithDisableDefaultSensitiveList()(a.environmentCapturer)
+		a.envDisableDefaultSensitiveList = true
 	}
 }

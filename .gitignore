@@ -21,3 +21,9 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Debug logs
+mcp-go-debugger.log
+
+# Compiled check tools
+plugins/attestors/aws-iid/check-certs/check-certs

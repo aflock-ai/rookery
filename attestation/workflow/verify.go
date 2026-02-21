@@ -23,16 +23,34 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
-	"github.com/aflock-ai/rookery/attestation/policyverify"
 	"github.com/aflock-ai/rookery/attestation/dsse"
-	ipolicy "github.com/aflock-ai/rookery/attestation/internal/policy"
 	"github.com/aflock-ai/rookery/attestation/policy"
+	"github.com/aflock-ai/rookery/attestation/policysig"
 	"github.com/aflock-ai/rookery/attestation/signer"
 	"github.com/aflock-ai/rookery/attestation/slsa"
 	"github.com/aflock-ai/rookery/attestation/source"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 	"github.com/sigstore/fulcio/pkg/certificate"
 )
+
+// PolicyVerifyConfigurer is implemented by the policyverify attestor plugin.
+// It allows workflow to configure the attestor without importing it directly.
+type PolicyVerifyConfigurer interface {
+	attestation.Attestor
+	SetPolicyEnvelope(env dsse.Envelope)
+	SetPolicyVerificationOptions(opts *policysig.VerifyPolicySignatureOptions)
+	SetSubjectDigests(digests []cryptoutil.DigestSet)
+	SetCollectionSource(source source.Sourcer)
+	SetAiServerURL(url string)
+	SetKMSProviderOptions(opts map[string][]func(signer.SignerProvider) (signer.SignerProvider, error))
+}
+
+// PolicyVerifyResult is implemented by the policyverify attestor plugin.
+// It allows workflow to extract verification results without importing it directly.
+type PolicyVerifyResult interface {
+	StepResults() map[string]policy.StepResult
+	GetVerificationSummary() slsa.VerificationSummary
+}
 
 func VerifySignature(r io.Reader, verifiers ...cryptoutil.Verifier) (dsse.Envelope, error) {
 	decoder := json.NewDecoder(r)
@@ -46,10 +64,12 @@ func VerifySignature(r io.Reader, verifiers ...cryptoutil.Verifier) (dsse.Envelo
 }
 
 type verifyOptions struct {
-	attestorOptions              []policyverify.Option
-	verifyPolicySignatureOptions []ipolicy.Option
+	verifyPolicySignatureOptions []policysig.Option
 	runOptions                   []RunOption
 	signers                      []cryptoutil.Signer
+	subjectDigests               []cryptoutil.DigestSet
+	collectionSource             source.Sourcer
+	aiServerURL                  string
 	kmsProviderOptions           map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 }
 
@@ -67,7 +87,7 @@ func VerifyWithSigners(signers ...cryptoutil.Signer) VerifyOption {
 // the digest of the software artifact or some other identifying digest.
 func VerifyWithSubjectDigests(subjectDigests []cryptoutil.DigestSet) VerifyOption {
 	return func(vo *verifyOptions) {
-		vo.attestorOptions = append(vo.attestorOptions, policyverify.VerifyWithSubjectDigests(subjectDigests))
+		vo.subjectDigests = subjectDigests
 	}
 }
 
@@ -75,14 +95,7 @@ func VerifyWithSubjectDigests(subjectDigests []cryptoutil.DigestSet) VerifyOptio
 // For example: disk or archivista are two typical sources.
 func VerifyWithCollectionSource(source source.Sourcer) VerifyOption {
 	return func(vo *verifyOptions) {
-		vo.attestorOptions = append(vo.attestorOptions, policyverify.VerifyWithCollectionSource(source))
-	}
-}
-
-// VerifyWithAttestorOptions forwards the provided options to the policyverify attestor.
-func VerifyWithAttestorOptions(opts ...policyverify.Option) VerifyOption {
-	return func(vo *verifyOptions) {
-		vo.attestorOptions = append(vo.attestorOptions, opts...)
+		vo.collectionSource = source
 	}
 }
 
@@ -95,31 +108,37 @@ func VerifyWithRunOptions(opts ...RunOption) VerifyOption {
 
 func VerifyWithPolicyFulcioCertExtensions(extensions certificate.Extensions) VerifyOption {
 	return func(vo *verifyOptions) {
-		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, ipolicy.VerifyWithPolicyFulcioCertExtensions(extensions))
+		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, policysig.VerifyWithPolicyFulcioCertExtensions(extensions))
 	}
 }
 
 func VerifyWithPolicyCertConstraints(commonName string, dnsNames []string, emails []string, organizations []string, uris []string) VerifyOption {
 	return func(vo *verifyOptions) {
-		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, ipolicy.VerifyWithPolicyCertConstraints(commonName, dnsNames, emails, organizations, uris))
+		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, policysig.VerifyWithPolicyCertConstraints(commonName, dnsNames, emails, organizations, uris))
 	}
 }
 
 func VerifyWithPolicyTimestampAuthorities(verifiers []timestamp.TimestampVerifier) VerifyOption {
 	return func(vo *verifyOptions) {
-		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, ipolicy.VerifyWithPolicyTimestampAuthorities(verifiers))
+		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, policysig.VerifyWithPolicyTimestampAuthorities(verifiers))
 	}
 }
 
 func VerifyWithPolicyCARoots(certs []*x509.Certificate) VerifyOption {
 	return func(vo *verifyOptions) {
-		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, ipolicy.VerifyWithPolicyCARoots(certs))
+		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, policysig.VerifyWithPolicyCARoots(certs))
 	}
 }
 
 func VerifyWithPolicyCAIntermediates(certs []*x509.Certificate) VerifyOption {
 	return func(vo *verifyOptions) {
-		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, ipolicy.VerifyWithPolicyCAIntermediates(certs))
+		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, policysig.VerifyWithPolicyCAIntermediates(certs))
+	}
+}
+
+func VerifyWithAiServerURL(url string) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.aiServerURL = url
 	}
 }
 
@@ -144,26 +163,44 @@ func Verify(ctx context.Context, policyEnvelope dsse.Envelope, policyVerifiers [
 		opt(&vo)
 	}
 
-	vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, ipolicy.VerifyWithPolicyVerifiers(policyVerifiers))
-	vo.attestorOptions = append(vo.attestorOptions, policyverify.VerifyWithPolicyEnvelope(policyEnvelope), policyverify.VerifyWithPolicyVerificationOptions(vo.verifyPolicySignatureOptions...))
+	// Build policy signature verification options
+	vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, policysig.VerifyWithPolicyVerifiers(policyVerifiers))
+	policyVerifyOpts := policysig.NewVerifyPolicySignatureOptions(vo.verifyPolicySignatureOptions...)
+
+	// Create the policyverify attestor from the registry
+	factory, ok := attestation.FactoryByName("policyverify")
+	if !ok {
+		return VerifyResult{}, fmt.Errorf("policyverify attestor not registered; import a preset or the policyverify plugin")
+	}
+
+	att := factory()
+	configurer, ok := att.(PolicyVerifyConfigurer)
+	if !ok {
+		return VerifyResult{}, fmt.Errorf("policyverify attestor does not implement PolicyVerifyConfigurer")
+	}
+
+	// Configure the attestor
+	configurer.SetPolicyEnvelope(policyEnvelope)
+	configurer.SetPolicyVerificationOptions(policyVerifyOpts)
+	configurer.SetKMSProviderOptions(vo.kmsProviderOptions)
+	if vo.subjectDigests != nil {
+		configurer.SetSubjectDigests(vo.subjectDigests)
+	}
+	if vo.collectionSource != nil {
+		configurer.SetCollectionSource(vo.collectionSource)
+	}
+	if vo.aiServerURL != "" {
+		configurer.SetAiServerURL(vo.aiServerURL)
+	}
+
 	if len(vo.signers) > 0 {
 		vo.runOptions = append(vo.runOptions, RunWithSigners(vo.signers...))
 	} else {
 		vo.runOptions = append(vo.runOptions, RunWithInsecure(true))
 	}
 
-	// hacky solution to ensure the verification attestor is run through the attestation context
 	vo.runOptions = append(vo.runOptions,
-		RunWithAttestors(
-			[]attestation.Attestor{
-				policyverify.New(
-					append(
-						[]policyverify.Option{policyverify.VerifyWithKMSProviderOptions(vo.kmsProviderOptions)},
-						vo.attestorOptions...,
-					)...,
-				),
-			},
-		),
+		RunWithAttestors([]attestation.Attestor{configurer}),
 	)
 
 	runResult, err := Run("policyverify", vo.runOptions...)
@@ -177,13 +214,13 @@ func Verify(ctx context.Context, policyEnvelope dsse.Envelope, policyVerifiers [
 
 	for _, att := range runResult.Collection.Attestations {
 		if att.Type == slsa.VerificationSummaryPredicate {
-			verificationAttestor, ok := att.Attestation.(*policyverify.Attestor)
+			result, ok := att.Attestation.(PolicyVerifyResult)
 			if !ok {
-				return VerifyResult{}, fmt.Errorf("unknown attestor %T", att.Attestation)
+				return VerifyResult{}, fmt.Errorf("policyverify attestor does not implement PolicyVerifyResult")
 			}
 
-			vr.StepResults = verificationAttestor.StepResults()
-			vr.VerificationSummary = verificationAttestor.VerificationSummary
+			vr.StepResults = result.StepResults()
+			vr.VerificationSummary = result.GetVerificationSummary()
 			break
 		}
 	}

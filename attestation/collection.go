@@ -20,9 +20,11 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/invopop/jsonschema"
 )
 
 const CollectionType = "https://aflock.ai/attestation-collection/v0.1"
+const LegacyCollectionType = "https://witness.testifysec.com/attestation-collection/v0.1"
 
 type Collection struct {
 	Name         string                  `json:"name"`
@@ -36,14 +38,26 @@ type CollectionAttestation struct {
 	EndTime     time.Time `json:"endtime"`
 }
 
+// RawAttestation holds attestation data as raw JSON for types that don't have
+// a registered factory. This allows verification (Rego/AI policy evaluation)
+// to work without importing specific attestor plugins.
+type RawAttestation struct {
+	typeName string
+	data     json.RawMessage
+}
+
+func (r *RawAttestation) Name() string                     { return r.typeName }
+func (r *RawAttestation) Type() string                     { return r.typeName }
+func (r *RawAttestation) RunType() RunType                 { return "" }
+func (r *RawAttestation) Attest(*AttestationContext) error  { return fmt.Errorf("raw attestation cannot attest") }
+func (r *RawAttestation) Schema() *jsonschema.Schema        { return nil }
+func (r *RawAttestation) MarshalJSON() ([]byte, error)      { return r.data, nil }
+
 func NewCollection(name string, attestors []CompletedAttestor) Collection {
 	collection := Collection{
 		Name:         name,
 		Attestations: make([]CollectionAttestation, 0),
 	}
-
-	//move start/stop time to collection
-	//todo: this is a bit of a hack, but it's the easiest way to get the start/stop time
 
 	for _, completed := range attestors {
 		collection.Attestations = append(collection.Attestations, NewCollectionAttestation(completed))
@@ -73,18 +87,25 @@ func (c *CollectionAttestation) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	factory, ok := FactoryByType(proposed.Type)
-	if !ok {
-		return ErrAttestationNotFound(proposed.Type)
-	}
+	// Resolve legacy URIs before factory lookup
+	resolvedType := ResolveLegacyType(proposed.Type)
 
-	newAttest := factory()
-	if err := json.Unmarshal(proposed.Attestation, &newAttest); err != nil {
-		return err
+	factory, ok := FactoryByType(resolvedType)
+	if ok {
+		newAttest := factory()
+		if err := json.Unmarshal(proposed.Attestation, &newAttest); err != nil {
+			return err
+		}
+		c.Attestation = newAttest
+	} else {
+		// No factory registered — preserve raw JSON for policy evaluation
+		c.Attestation = &RawAttestation{
+			typeName: proposed.Type,
+			data:     proposed.Attestation,
+		}
 	}
 
 	c.Type = proposed.Type
-	c.Attestation = newAttest
 	c.StartTime = proposed.StartTime
 	c.EndTime = proposed.EndTime
 	return nil

@@ -27,7 +27,6 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
-	"github.com/aflock-ai/rookery/attestation/environment"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"golang.org/x/sys/unix"
 )
@@ -42,7 +41,7 @@ type ptraceContext struct {
 	processes           map[int]*ProcessInfo
 	exitCode            int
 	hash                []cryptoutil.DigestValue
-	environmentCapturer *environment.Capture
+	environmentCapturer attestation.EnvironmentCapturer
 }
 
 func enableTracing(c *exec.Cmd) {
@@ -198,7 +197,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error {
 		}
 
 		environ, err := os.ReadFile(envinLocation)
-		if err == nil {
+		if err == nil && p.environmentCapturer != nil {
 			allVars := strings.Split(string(environ), "\x00")
 
 			env := make([]string, 0)

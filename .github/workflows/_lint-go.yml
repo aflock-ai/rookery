@@ -1,0 +1,76 @@
+# Reusable workflow for Go linting
+# Called by ci.yml to run comprehensive Go static analysis
+#
+# Tools:
+# - golangci-lint: 20+ linters with AI-code guardrails
+# - deadcode: Find unreachable functions
+# - govulncheck: Vulnerability scanning
+
+name: Go Lint
+
+on:
+  workflow_call:
+
+jobs:
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Install golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1
+          golangci-lint version
+
+      - name: Install analysis tools
+        run: |
+          go install golang.org/x/tools/cmd/deadcode@v0.31.0
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run golangci-lint
+        run: |
+          echo "════════════════════════════════════════════════════════════"
+          echo "                    GOLANGCI-LINT                            "
+          echo "════════════════════════════════════════════════════════════"
+          golangci-lint run ./... --timeout 10m
+
+      - name: Run deadcode analysis
+        continue-on-error: true
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════════════════════"
+          echo "                    DEADCODE ANALYSIS                        "
+          echo "════════════════════════════════════════════════════════════"
+
+          OUTPUT=$(deadcode -test ./... 2>&1) || true
+
+          if [ -n "$OUTPUT" ]; then
+            echo "$OUTPUT"
+            echo ""
+            echo "Unreachable functions found (non-blocking)"
+          else
+            echo "No unreachable functions found"
+          fi
+
+      - name: Run govulncheck
+        continue-on-error: true
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════════════════════"
+          echo "                    VULNERABILITY SCAN                       "
+          echo "════════════════════════════════════════════════════════════"
+
+          if govulncheck ./...; then
+            echo "No vulnerabilities found"
+          else
+            echo ""
+            echo "Vulnerabilities detected (non-blocking)"
+          fi

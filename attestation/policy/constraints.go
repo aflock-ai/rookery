@@ -166,7 +166,7 @@ func checkCertConstraint(attribute string, constraints, values []string) error {
 	}
 
 	if len(unmet) > 0 {
-		return fmt.Errorf("cert with %s(s) %+qDid not pass all constraints %+q", attribute, values, constraints)
+		return fmt.Errorf("cert with %s(s) %+q did not pass all constraints %+q", attribute, values, constraints)
 	}
 
 	return nil
