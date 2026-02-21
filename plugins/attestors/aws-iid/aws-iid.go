@@ -25,6 +25,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -60,12 +62,15 @@ func init() {
 	},
 		registry.StringConfigOption(
 			"region-cert",
-			"A public x509 certificate used to verify the AWS instance identity document signature.",
+			"A public x509 certificate or path to a PEM file used to verify the AWS instance identity document signature.",
 			"",
 			func(a attestation.Attestor, val string) (attestation.Attestor, error) {
 				attestor, ok := a.(*Attestor)
 				if !ok {
 					return a, fmt.Errorf("invalid attestor type: %T", a)
+				}
+				if val == "" {
+					return a, fmt.Errorf("aws-region-cert cannot be empty")
 				}
 				WithAWSRegionCert(val)(attestor)
 				return attestor, nil
@@ -77,6 +82,18 @@ type Option func(*Attestor)
 
 func WithAWSRegionCert(awsCert string) Option {
 	return func(a *Attestor) {
+		// Detect if awsCert is a path to a file
+		if fi, err := os.Stat(awsCert); err == nil && !fi.IsDir() {
+			data, err := os.ReadFile(awsCert)
+			if err != nil {
+				// If we can't read the file, use the value as-is
+				// This maintains backward compatibility
+				a.awsCert = awsCert
+				return
+			}
+			a.awsCert = strings.TrimSpace(string(data))
+			return
+		}
 		a.awsCert = awsCert
 	}
 }
