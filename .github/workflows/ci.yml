@@ -112,6 +112,8 @@ jobs:
             dir: aflock
           - name: builder
             dir: builder
+          - name: cilock
+            dir: cilock
     steps:
       - uses: actions/checkout@v4
 

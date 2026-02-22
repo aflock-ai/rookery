@@ -66,7 +66,7 @@ func runValidatePolicy(ctx context.Context, pvo options.PolicyValidateOptions) e
 
 	var result *policy.ValidationResult
 
-	policyEnvelope, err := policy.LoadPolicy(ctx, pvo.PolicyFilePath)
+	policyEnvelope, err := policy.LoadPolicy(ctx, pvo.PolicyFilePath, nil)
 	if err == nil && len(policyEnvelope.Payload) > 0 {
 		result = policy.ValidatePolicy(ctx, policyEnvelope, verifier)
 	} else {

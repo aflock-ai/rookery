@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/source"
@@ -63,11 +64,20 @@ func VerifyCmd() *cobra.Command {
 }
 
 func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...cryptoutil.Verifier) error {
+	var (
+		collectionSource source.Sourcer
+		archivistaClient *archivista.Client
+	)
 	memSource := source.NewMemorySource()
-	var collectionSource source.Sourcer = memSource
+	collectionSource = memSource
 
 	if vo.ArchivistaOptions.Enable {
-		return fmt.Errorf("archivista integration is not yet supported in cilock; use --attestations flag to provide attestation files directly")
+		var err error
+		archivistaClient, err = vo.ArchivistaOptions.Client()
+		if err != nil {
+			return fmt.Errorf("failed to create archivista client: %w", err)
+		}
+		collectionSource = source.NewMultiSource(collectionSource, source.NewArchivistaSource(archivistaClient))
 	}
 
 	if vo.KeyPath == "" && len(vo.PolicyCARootPaths) == 0 && len(verifiers) == 0 {
@@ -149,7 +159,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 		}
 	}
 
-	policyEnvelope, err := policy.LoadPolicy(ctx, vo.PolicyFilePath)
+	policyEnvelope, err := policy.LoadPolicy(ctx, vo.PolicyFilePath, archivistaClient)
 	if err != nil {
 		return fmt.Errorf("failed to open policy file: %w", err)
 	}

@@ -185,6 +185,19 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		if _, err := out.Write(signedBytes); err != nil {
 			return fmt.Errorf("failed to write envelope to out file: %w", err)
 		}
+
+		if ro.ArchivistaOptions.Enable {
+			archivistaClient, err := ro.ArchivistaOptions.Client()
+			if err != nil {
+				return fmt.Errorf("failed to create archivista client: %w", err)
+			}
+
+			gitoid, err := archivistaClient.Store(ctx, result.SignedEnvelope)
+			if err != nil {
+				return fmt.Errorf("failed to store artifact in archivista: %w", err)
+			}
+			log.Infof("Stored in archivista as %v\n", gitoid)
+		}
 	}
 	return nil
 }

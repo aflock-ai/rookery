@@ -1,5 +1,7 @@
 # Compiled binaries
 builder/bin/
+builder/builder
+cilock/cilock
 *.exe
 *.dll
 *.so

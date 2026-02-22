@@ -110,7 +110,7 @@ Flags:
   --preset <name>       Use a preset plugin set: minimal, cicd, all
   --manifest <file>     Build from manifest file (YAML)
   --local [<root>]      Use local monorepo paths (auto-detects root if omitted)
-  --fips <mode>         Enable FIPS 140-3 mode: "on" or "only"
+  --fips <mode>         FIPS 140-3 mode: "on" (default), "only", or "off"
   --customer <id>       Customer identifier (optional)
   --tenant <id>         Tenant identifier (optional)
   --version, -v         Show version information
@@ -157,7 +157,7 @@ func main() {
 	var manifestPath string
 	var ldflags string
 	var trimpath = true
-	var fipsMode string
+	var fipsMode = "on"
 	var customerID string
 	var tenantID string
 	var presetName string
@@ -296,9 +296,12 @@ func main() {
 	}
 
 	// Validate FIPS mode
-	if fipsMode != "" && fipsMode != "on" && fipsMode != "only" {
-		fmt.Fprintf(os.Stderr, "Error: --fips must be 'on' or 'only' (got %q)\n", fipsMode)
+	if fipsMode != "" && fipsMode != "on" && fipsMode != "only" && fipsMode != "off" {
+		fmt.Fprintf(os.Stderr, "Error: --fips must be 'on', 'only', or 'off' (got %q)\n", fipsMode)
 		os.Exit(1)
+	}
+	if fipsMode == "off" {
+		fipsMode = ""
 	}
 
 	// Collect build metadata
