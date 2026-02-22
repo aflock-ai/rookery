@@ -177,10 +177,11 @@ func trustBundlesFromRoots(roots map[string]Root) (map[string]TrustBundle, error
 type VerifyOption func(*verifyOptions)
 
 type verifyOptions struct {
-	verifiedSource source.VerifiedSourcer
-	subjectDigests []string
-	searchDepth    int
-	aiServerURL    string
+	verifiedSource     source.VerifiedSourcer
+	subjectDigests     []string
+	searchDepth        int
+	aiServerURL        string
+	clockSkewTolerance time.Duration
 }
 
 func WithVerifiedSource(verifiedSource source.VerifiedSourcer) VerifyOption {
@@ -204,6 +205,15 @@ func WithSearchDepth(depth int) VerifyOption {
 func WithAiServerURL(url string) VerifyOption {
 	return func(vo *verifyOptions) {
 		vo.aiServerURL = url
+	}
+}
+
+// WithClockSkewTolerance sets the tolerance for policy expiry checks to
+// accommodate clock differences between the policy author and verifier.
+// A reasonable value is 30s-60s for CI/CD environments.
+func WithClockSkewTolerance(d time.Duration) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.clockSkewTolerance = d
 	}
 }
 
@@ -245,7 +255,7 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 		return false, nil, err
 	}
 
-	if time.Now().After(p.Expires.Time) {
+	if time.Now().After(p.Expires.Time.Add(vo.clockSkewTolerance)) {
 		return false, nil, ErrPolicyExpired(p.Expires.Time)
 	}
 
@@ -262,7 +272,21 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 	}
 
 	resultsByStep := make(map[string]StepResult)
+	// Track all known subject digests to prevent duplicates across depth
+	// iterations. Without de-duplication, the search set can grow
+	// exponentially as back-references are re-discovered each iteration.
+	knownDigests := make(map[string]struct{})
+	for _, d := range vo.subjectDigests {
+		knownDigests[d] = struct{}{}
+	}
+
 	for depth := 0; depth < vo.searchDepth; depth++ {
+		// Collect back-reference digests discovered during this depth
+		// iteration. They will be added to the search set for the NEXT
+		// depth iteration, not the current one, to prevent a single
+		// collection from widening the scope of its own depth.
+		var nextDepthDigests []string
+
 		for stepName, step := range p.Steps {
 			// Use search to get all the attestations that match the supplied step name and subjects
 			collections, err := vo.verifiedSource.Search(ctx, stepName, vo.subjectDigests, attestationsByStep[stepName])
@@ -297,11 +321,17 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 			for _, coll := range passedCollections {
 				for _, digestSet := range coll.Collection.BackRefs() {
 					for _, digest := range digestSet {
-						vo.subjectDigests = append(vo.subjectDigests, digest)
+						if _, seen := knownDigests[digest]; !seen {
+							knownDigests[digest] = struct{}{}
+							nextDepthDigests = append(nextDepthDigests, digest)
+						}
 					}
 				}
 			}
 		}
+
+		// Expand search scope for the next depth iteration only.
+		vo.subjectDigests = append(vo.subjectDigests, nextDepthDigests...)
 	}
 
 	resultsByStep, err = p.verifyArtifacts(resultsByStep)
@@ -411,7 +441,7 @@ func verifyCollectionArtifacts(step Step, collection source.CollectionVerificati
 			if err := compareArtifacts(mats, testCollection.Collection.Collection.Artifacts()); err != nil {
 				collection.Warnings = append(collection.Warnings, fmt.Sprintf("failed to verify artifacts for step %s: %v", step.Name, err))
 				reasons = append(reasons, err.Error())
-				break
+				continue
 			}
 
 			accepted = append(accepted, testCollection.Collection)
@@ -438,6 +468,17 @@ func compareArtifacts(mats map[string]cryptoutil.DigestSet, arts map[string]cryp
 				Material: mat,
 				Path:     path,
 			}
+		}
+	}
+
+	// Warn about artifacts that appear in the producing step but not in the
+	// consuming step's materials. Extra artifacts could indicate supply chain
+	// injection — a file added to a step's output that nobody downstream
+	// checks. We log rather than error to avoid breaking existing deployments,
+	// but this should be reviewed for strict mode enforcement.
+	for path := range arts {
+		if _, ok := mats[path]; !ok {
+			log.Debugf("artifact %q present in producing step but not consumed as material by the verifying step", path)
 		}
 	}
 

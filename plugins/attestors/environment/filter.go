@@ -31,6 +31,7 @@ func FilterEnvironmentArray(variables []string, blockList map[string]struct{}, e
 			filterGlobCompiled, err := glob.Compile(k)
 			if err != nil {
 				log.Errorf("obfuscate glob pattern could not be interpreted: %w", err)
+				continue
 			}
 
 			filterGlobList = append(filterGlobList, filterGlobCompiled)

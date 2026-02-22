@@ -19,6 +19,8 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"io"
+
+	"github.com/aflock-ai/rookery/attestation/log"
 )
 
 type RSASigner struct {
@@ -76,12 +78,22 @@ func (v *RSAVerifier) Verify(data io.Reader, sig []byte) error {
 		Hash:       v.hash,
 	}
 
-	// AWS KMS introduces the chance that attestations get signed by PKCS1v15 instead of PSS
-	if err := rsa.VerifyPSS(v.pub, v.hash, digest, sig, pssOpts); err != nil {
-		return rsa.VerifyPKCS1v15(v.pub, v.hash, digest, sig)
+	pssErr := rsa.VerifyPSS(v.pub, v.hash, digest, sig, pssOpts)
+	if pssErr == nil {
+		return nil
 	}
 
-	return nil
+	// Fallback: AWS KMS may sign with PKCS1v15 instead of PSS.
+	// This is a weaker scheme — log a warning so operators are aware.
+	pkcs1Err := rsa.VerifyPKCS1v15(v.pub, v.hash, digest, sig)
+	if pkcs1Err == nil {
+		log.Warn("RSA signature verified using PKCS1v15 fallback (PSS failed); this may indicate the signer uses AWS KMS or another provider that does not support PSS")
+		return nil
+	}
+
+	// Both failed — return the PSS error as the primary failure since PSS is
+	// the expected scheme.
+	return pssErr
 }
 
 func (v *RSAVerifier) Bytes() ([]byte, error) {
