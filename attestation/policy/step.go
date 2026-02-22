@@ -233,6 +233,10 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 					Step:        s.Name,
 					Attestation: expected.Type,
 				}.Error())
+				// Skip policy evaluation — the attestation is missing so there is
+				// nothing to evaluate. Continuing would pass a nil attestor to the
+				// Rego/AI evaluators.
+				continue
 			}
 
 			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies); err != nil {

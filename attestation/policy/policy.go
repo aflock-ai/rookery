@@ -324,9 +324,13 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 func (step Step) checkFunctionaries(statements []source.CollectionVerificationResult, trustBundles map[string]TrustBundle) StepResult {
 	result := StepResult{Step: step.Name}
 	for i, statement := range statements {
-		// Check that the statement contains a predicate type that we accept
+		// Check that the statement contains a predicate type that we accept.
+		// A statement with the wrong predicate type must be rejected and must
+		// NOT proceed to functionary validation — otherwise it could appear in
+		// both the Passed and Rejected lists.
 		if statement.Statement.PredicateType != attestation.CollectionType && statement.Statement.PredicateType != attestation.LegacyCollectionType {
 			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statement, Reason: fmt.Errorf("predicate type %v is not a collection predicate type", statement.Statement.PredicateType)})
+			continue
 		}
 
 		if len(statement.Verifiers) > 0 {

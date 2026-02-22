@@ -25,9 +25,35 @@ import (
 	"github.com/open-policy-agent/opa/rego"
 )
 
+// disallowedBuiltins lists OPA builtins that must not be available to policy
+// Rego code. http.send allows data exfiltration, net.lookup_ip_addr enables
+// DNS-based exfiltration, and opa.runtime leaks process metadata.
+var disallowedBuiltins = map[string]struct{}{
+	"http.send":          {},
+	"opa.runtime":        {},
+	"net.lookup_ip_addr": {},
+}
+
+// restrictedCapabilities returns OPA capabilities with dangerous builtins removed.
+func restrictedCapabilities() *ast.Capabilities {
+	caps := ast.CapabilitiesForThisVersion()
+	filtered := make([]*ast.Builtin, 0, len(caps.Builtins))
+	for _, b := range caps.Builtins {
+		if _, blocked := disallowedBuiltins[b.Name]; !blocked {
+			filtered = append(filtered, b)
+		}
+	}
+	caps.Builtins = filtered
+	return caps
+}
+
 func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy) error {
 	if len(policies) == 0 {
 		return nil
+	}
+
+	if attestor == nil {
+		return fmt.Errorf("attestor must not be nil")
 	}
 
 	attestorJSON, err := json.Marshal(attestor)
@@ -44,7 +70,11 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy) er
 
 	query := ""
 	denyPaths := map[string]struct{}{}
-	regoOpts := []func(*rego.Rego){rego.Input(input)}
+	regoOpts := []func(*rego.Rego){
+		rego.Input(input),
+		rego.Capabilities(restrictedCapabilities()),
+		rego.StrictBuiltinErrors(true),
+	}
 	for _, policy := range policies {
 		policyString := string(policy.Module)
 		parsedModule, err := ast.ParseModule(policy.Name, policyString)
