@@ -90,12 +90,7 @@ func PublicPemBytes(pub interface{}) ([]byte, error) {
 		return nil, err
 	}
 
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: keyBytes})
-	if err != nil {
-		return nil, err
-	}
-
-	return pemBytes, err
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: keyBytes}), nil
 }
 
 // UnmarshalPEMToPublicKey converts a PEM-encoded byte slice into a crypto.PublicKey

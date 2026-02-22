@@ -30,7 +30,8 @@ func ObfuscateEnvironmentArray(variables []string, obfuscateList map[string]stru
 		if strings.Contains(k, "*") {
 			obfuscateGlobCompiled, err := glob.Compile(k)
 			if err != nil {
-				log.Errorf("obfuscate glob pattern could not be interpreted: %w", err)
+				log.Errorf("obfuscate glob pattern could not be interpreted: %v", err)
+				continue
 			}
 
 			obfuscateGlobList = append(obfuscateGlobList, obfuscateGlobCompiled)

@@ -50,21 +50,23 @@ func DirhHashSha256(files []string, open func(string) (io.ReadCloser, error)) (s
 		if err != nil {
 			return "", err
 		}
-		defer r.Close()
 
 		// In case the opened file was a symlink, check if it points to a directory.
 		// If so, skip it.
 		var abstractedFile interface{} = r
 		osFile, ok := abstractedFile.(*os.File)
 		if !ok {
+			r.Close()
 			return "", errors.New("dirhash: abstracted file is not an *os.File")
 		}
 		if info, err := osFile.Stat(); err == nil && info.IsDir() {
+			r.Close()
 			continue
 		}
 
 		hf := sha256.New()
 		_, err = io.Copy(hf, r)
+		r.Close()
 		if err != nil {
 			return "", err
 		}

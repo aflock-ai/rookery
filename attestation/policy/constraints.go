@@ -115,7 +115,10 @@ func (cc CertConstraint) checkExtensions(ext []pkix.Extension) error {
 		}
 		extensionsField := reflect.ValueOf(extensions).FieldByName(field.Name)
 
-		fieldGlob := glob.MustCompile(constraintField.String())
+		fieldGlob, err := glob.Compile(constraintField.String())
+		if err != nil {
+			return fmt.Errorf("invalid glob pattern for constraint field %s: %w", field.Name, err)
+		}
 		if !fieldGlob.Match(extensionsField.String()) {
 			return fmt.Errorf("cert field %s doesn't match constraint %+q", field.Name, constraintField.String())
 		}

@@ -123,15 +123,43 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	if !a.isWorkloadIdentity {
-		googClaim := a.JWT.Claims["google"].(map[string]interface{})
-		a.ProjectID = googClaim["project_id"].(string)
-		a.ProjectNumber = googClaim["project_number"].(string)
-		a.InstanceZone = googClaim["zone"].(string)
-		a.InstanceID = googClaim["instance_id"].(string)
-		a.InstanceHostname = googClaim["instance_name"].(string)
-		a.InstanceCreationTimestamp = googClaim["instance_creation_timestamp"].(string)
-		a.InstanceConfidentiality = googClaim["instance_confidentiality"].(string)
-		a.LicenceID = googClaim["licence_id"].([]string)
+		googClaim, ok := a.JWT.Claims["google"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type for google claim")
+		}
+
+		if v, ok := googClaim["project_id"].(string); ok {
+			a.ProjectID = v
+		}
+		if v, ok := googClaim["project_number"].(string); ok {
+			a.ProjectNumber = v
+		}
+		if v, ok := googClaim["zone"].(string); ok {
+			a.InstanceZone = v
+		}
+		if v, ok := googClaim["instance_id"].(string); ok {
+			a.InstanceID = v
+		}
+		if v, ok := googClaim["instance_name"].(string); ok {
+			a.InstanceHostname = v
+		}
+		if v, ok := googClaim["instance_creation_timestamp"].(string); ok {
+			a.InstanceCreationTimestamp = v
+		}
+		if v, ok := googClaim["instance_confidentiality"].(string); ok {
+			a.InstanceConfidentiality = v
+		}
+
+		switch v := googClaim["licence_id"].(type) {
+		case []string:
+			a.LicenceID = v
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					a.LicenceID = append(a.LicenceID, s)
+				}
+			}
+		}
 	} else {
 		a.getInstanceData()
 	}
@@ -259,7 +287,10 @@ func parseJWTProjectInfo(jwt *jwt.Attestor) (string, string, error) {
 		return "", "", fmt.Errorf("unable to find email claim")
 	}
 
-	email := jwt.Claims["email"].(string)
+	email, ok := jwt.Claims["email"].(string)
+	if !ok {
+		return "", "", fmt.Errorf("email claim is not a string")
+	}
 
 	stings := strings.Split(email, "@")
 	if len(stings) != 2 {

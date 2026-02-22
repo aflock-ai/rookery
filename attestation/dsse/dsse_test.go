@@ -242,6 +242,28 @@ func TestThreshold(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidThreshold(-10))
 }
 
+func TestDuplicateSignatureDoesNotBypassThreshold(t *testing.T) {
+	signer, verifier, err := createTestKey()
+	require.NoError(t, err)
+
+	env, err := Sign("dummydata", bytes.NewReader([]byte("this is some dummy data")), SignWithSigners(signer))
+	require.NoError(t, err)
+
+	// Duplicate the single signature to simulate an attacker replaying the
+	// same signature multiple times in an attempt to meet a higher threshold.
+	originalSig := env.Signatures[0]
+	env.Signatures = []Signature{originalSig, originalSig, originalSig}
+
+	// With threshold=1, verification should still succeed (one unique key is enough).
+	_, err = env.Verify(VerifyWithVerifiers(verifier), VerifyWithThreshold(1))
+	require.NoError(t, err)
+
+	// With threshold=3, the duplicated signatures from the same key must NOT
+	// satisfy the threshold. Only one unique KeyID actually verified.
+	_, err = env.Verify(VerifyWithVerifiers(verifier), VerifyWithThreshold(3))
+	require.ErrorIs(t, err, ErrThresholdNotMet{Theshold: 3, Actual: 1})
+}
+
 func TestTimestamp(t *testing.T) {
 	root, rootPriv, err := createRoot()
 	require.NoError(t, err)

@@ -188,7 +188,7 @@ func (a *Attestor) getDockerCandidates(ctx *attestation.AttestationContext) ([]B
 	// but the metadata file is completely different depending on how the buildx is executed
 	mets := []BuildInfo{}
 	for path, product := range products {
-		if strings.Contains(jsonMimeType, product.MimeType) {
+		if product.MimeType == jsonMimeType {
 			var met BuildInfo
 			f, err := os.ReadFile(filepath.Join(ctx.WorkingDir(), path))
 			if err != nil {

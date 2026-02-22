@@ -62,6 +62,19 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy) er
 		regoOpts = append(regoOpts, rego.ParsedModule(parsedModule))
 	}
 
+	// Block dangerous OPA builtins that could allow data exfiltration or
+	// network access from within Rego policies.
+	regoOpts = append(regoOpts, rego.UnsafeBuiltins(map[string]struct{}{
+		"http.send":           {},
+		"opa.runtime":         {},
+		"net.lookup_ip_addr":  {},
+		"net.cidr_contains":   {},
+		"net.cidr_intersects": {},
+		"net.cidr_merge":      {},
+		"net.cidr_expand":     {},
+	}))
+	regoOpts = append(regoOpts, rego.StrictBuiltinErrors(true))
+
 	regoOpts = append(regoOpts, rego.Query(query))
 	rego := rego.New(regoOpts...)
 	rs, err := rego.Eval(context.Background())

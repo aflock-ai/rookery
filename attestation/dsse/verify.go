@@ -92,7 +92,8 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 
 	checkedVerifiers := make([]CheckedVerifier, 0)
 	verified := 0
-	for _, sig := range e.Signatures {
+	verifiedKeyIDs := make(map[string]bool)
+	for sigIndex, sig := range e.Signatures {
 		if len(sig.Certificate) > 0 {
 			cert, err := cryptoutil.TryParseCertificate(sig.Certificate)
 			if err != nil {
@@ -112,8 +113,15 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 			sigIntermediates = append(sigIntermediates, options.intermediates...)
 			if len(options.timestampVerifiers) == 0 {
 				if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, time.Now()); err == nil {
+					keyID, keyIDErr := verifier.KeyID()
+					if keyIDErr != nil {
+						keyID = fmt.Sprintf("sig-%d", sigIndex)
+					}
 					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier})
-					verified += 1
+					if !verifiedKeyIDs[keyID] {
+						verifiedKeyIDs[keyID] = true
+						verified++
+					}
 				} else {
 					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier, Error: err})
 					log.Debugf("failed to verify with timestamp verifier: %w", err)
@@ -145,11 +153,18 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 				}
 
 				if len(passedTimestampVerifiers) > 0 {
-					verified += 1
+					keyID, keyIDErr := passedVerifier.KeyID()
+					if keyIDErr != nil {
+						keyID = fmt.Sprintf("sig-%d", sigIndex)
+					}
 					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{
 						Verifier:           passedVerifier,
 						TimestampVerifiers: passedTimestampVerifiers,
 					})
+					if !verifiedKeyIDs[keyID] {
+						verifiedKeyIDs[keyID] = true
+						verified++
+					}
 				} else {
 					for _, v := range failed {
 						checkedVerifiers = append(checkedVerifiers, CheckedVerifier{
@@ -171,8 +186,15 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 				log.Debug("verifying with verifier with KeyID ", kid)
 
 				if err := verifier.Verify(bytes.NewReader(pae), sig.Signature); err == nil {
-					verified += 1
+					keyID, keyIDErr := verifier.KeyID()
+					if keyIDErr != nil {
+						keyID = fmt.Sprintf("sig-%d", sigIndex)
+					}
 					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier})
+					if !verifiedKeyIDs[keyID] {
+						verifiedKeyIDs[keyID] = true
+						verified++
+					}
 				} else {
 					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier, Error: err})
 				}

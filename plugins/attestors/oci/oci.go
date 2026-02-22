@@ -38,6 +38,8 @@ const (
 	RunType = attestation.PostProductRunType
 
 	mimeTypes = "application/x-tar"
+
+	maxTarEntrySize = 256 * 1024 * 1024 // 256 MB
 )
 
 // This is a hacky way to create a compile time error in case the attestor
@@ -103,11 +105,12 @@ func (m *Manifest) getImageID(ctx *attestation.AttestationContext, tarFilePath s
 		}
 
 		if h.Name == m.Config {
-
+			if h.Size < 0 || h.Size > maxTarEntrySize {
+				return nil, fmt.Errorf("config entry has invalid size: %d", h.Size)
+			}
 			b := make([]byte, h.Size)
-			_, err := tarReader.Read(b)
-			if err != nil && err != io.EOF {
-				return nil, err
+			if _, err := io.ReadFull(tarReader, b); err != nil {
+				return nil, fmt.Errorf("failed to read config: %w", err)
 			}
 
 			imageID, err := cryptoutil.CalculateDigestSetFromBytes(b, ctx.Hashes())
@@ -222,10 +225,12 @@ func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
 			continue
 		}
 		if h.Name == "manifest.json" {
+			if h.Size < 0 || h.Size > maxTarEntrySize {
+				return fmt.Errorf("manifest entry has invalid size: %d", h.Size)
+			}
 			a.ManifestRaw = make([]byte, h.Size)
-			_, err = tarReader.Read(a.ManifestRaw)
-			if err != nil || err == io.EOF {
-				break
+			if _, err = io.ReadFull(tarReader, a.ManifestRaw); err != nil {
+				return fmt.Errorf("failed to read manifest: %w", err)
 			}
 			break
 		}
@@ -293,11 +298,12 @@ func (m *Manifest) getLayerDIFFIDs(ctx *attestation.AttestationContext, tarFileP
 		}
 		for _, layerFile := range m.Layers {
 			if h.Name == layerFile {
+				if h.Size < 0 || h.Size > maxTarEntrySize {
+					return nil, fmt.Errorf("layer entry has invalid size: %d", h.Size)
+				}
 				b := make([]byte, h.Size)
-
-				_, err := tarReader.Read(b)
-				if err != nil && err != io.EOF {
-					return nil, err
+				if _, err := io.ReadFull(tarReader, b); err != nil {
+					return nil, fmt.Errorf("failed to read layer: %w", err)
 				}
 
 				contentType := http.DetectContentType(b)
