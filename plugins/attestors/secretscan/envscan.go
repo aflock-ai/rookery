@@ -23,9 +23,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/gobwas/glob"
 )
 
 // compiledGlobCache caches compiled glob patterns so they are not recompiled
@@ -50,11 +50,11 @@ func safeGlobMatch(g glob.Glob, s string) (matched bool, err error) {
 // isEnvironmentVariableSensitive checks if an environment variable is sensitive
 // according to the sensitive environment variables list.
 // Both exact entries and glob patterns are matched case-insensitively (R3-129).
-func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]struct{}) bool {
+func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]struct{}) bool { //nolint:gocognit // env var sensitivity check requires glob and case-insensitive matching
 	upperKey := strings.ToUpper(key)
 
 	for envVarPattern := range sensitiveEnvVars {
-		if strings.Contains(envVarPattern, "*") {
+		if strings.Contains(envVarPattern, "*") { //nolint:nestif // glob pattern matching requires nested logic
 			// Glob pattern — normalize to uppercase for case-insensitive matching.
 			upperPattern := strings.ToUpper(envVarPattern)
 			cached, ok := compiledGlobCache.Load(upperPattern)
@@ -66,7 +66,11 @@ func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]stru
 				compiledGlobCache.Store(upperPattern, compiled)
 				cached = compiled
 			}
-			matched, err := safeGlobMatch(cached.(glob.Glob), upperKey)
+			g, ok := cached.(glob.Glob)
+			if !ok {
+				continue
+			}
+			matched, err := safeGlobMatch(g, upperKey)
 			if err != nil {
 				log.Debugf("glob match error for pattern %q key %q: %v", envVarPattern, key, err)
 				continue
@@ -228,7 +232,7 @@ func (a *Attestor) ScanForEnvVarValues(content, filePath string, sensitiveEnvVar
 
 // checkDecodedContentForSensitiveValues examines decoded content for sensitive environment variable values
 // This helps catch encoded sensitive values even without their variable names present
-func (a *Attestor) checkDecodedContentForSensitiveValues(
+func (a *Attestor) checkDecodedContentForSensitiveValues( //nolint:gocognit,gocyclo,funlen // sensitive value detection requires multiple matching strategies
 	decodedContent string,
 	sourceIdentifier string,
 	encodingType string,
@@ -270,7 +274,7 @@ func (a *Attestor) checkDecodedContentForSensitiveValues(
 		partialMatch := false
 		partialValue := ""
 
-		if len(value) >= minPartialLength {
+		if len(value) >= minPartialLength { //nolint:nestif // partial match logic requires nested checks
 			// First try the most likely case with short tokens - check with newline
 			// This is the most common pattern with echo output: "ghp\n"
 			if strings.Contains(decodedContent, value[:minPartialLength]+"\n") {
@@ -293,7 +297,7 @@ func (a *Attestor) checkDecodedContentForSensitiveValues(
 		}
 
 		// Process the match if we found any kind of match
-		if exactMatch || exactMatchWithNewline || partialMatch {
+		if exactMatch || exactMatchWithNewline || partialMatch { //nolint:nestif // match reporting requires nested type determination
 			// Determine which value to use for reporting
 			matchValue := value
 			isPartial := false

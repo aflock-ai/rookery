@@ -34,9 +34,9 @@ func TestAdversarial_ConcurrentWriteRace_Documented(t *testing.T) {
 	// We CAN'T actually run concurrent writes with -race because it'll
 	// crash the test binary. Instead, we document the issue and test
 	// the architectural problem.
-	t.Logf("BUG [HIGH]: Registry[T].Register() has no synchronization. "+
-		"Concurrent Register() calls on the same Registry will data race. "+
-		"The entriesByName map is written without mutex protection. "+
+	t.Logf("BUG [HIGH]: Registry[T].Register() has no synchronization. " +
+		"Concurrent Register() calls on the same Registry will data race. " +
+		"The entriesByName map is written without mutex protection. " +
 		"File: registry/registry.go:51-59")
 
 	// Demonstrate the issue exists by examining the code structure:
@@ -156,7 +156,7 @@ func TestAdversarial_RegisterSpecialCharNames(t *testing.T) {
 		"name=with=equals",
 		"name\twith\ttabs",
 		"name\nwith\nnewlines",
-		"", // empty
+		"",                         // empty
 		strings.Repeat("x", 10000), // very long
 		"\x00null\x00byte",
 	}

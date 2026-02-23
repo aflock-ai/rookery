@@ -94,7 +94,7 @@ func TestAdversarial_CheckCertConstraint_NoGlobSupportForDNSNames(t *testing.T) 
 	// the same way CommonName glob matching works. But checkCertConstraint
 	// uses exact string matching, not glob matching.
 	err := checkCertConstraint("dns name",
-		[]string{"*.example.com"},  // Policy author thinks this is a glob
+		[]string{"*.example.com"},   // Policy author thinks this is a glob
 		[]string{"foo.example.com"}, // Cert has a matching DNS name
 	)
 	// BUG: This FAILS because "*.example.com" != "foo.example.com" (exact match).
@@ -108,7 +108,7 @@ func TestAdversarial_CheckCertConstraint_NoGlobSupportForDNSNames(t *testing.T) 
 func TestAdversarial_CheckCertConstraint_GlobInEmailConstraint(t *testing.T) {
 	// An email constraint with a glob pattern
 	err := checkCertConstraint("email",
-		[]string{"*@example.com"},  // Policy author thinks this matches any @example.com
+		[]string{"*@example.com"},     // Policy author thinks this matches any @example.com
 		[]string{"alice@example.com"}, // Cert has a matching email
 	)
 	assert.Error(t, err,
@@ -484,16 +484,16 @@ func TestAdversarial_CheckCertConstraint_EmptyStringInMultipleConstraints(t *tes
 	// constraints=["", "real"] -- the empty string is NOT normalized away
 	// because the normalization only fires for single-element slices.
 	err := checkCertConstraint("org",
-		[]string{"", "real"},   // First constraint is ""
-		[]string{"", "real"},   // Cert has both
+		[]string{"", "real"}, // First constraint is ""
+		[]string{"", "real"}, // Cert has both
 	)
 	// This passes because both values match exactly
 	assert.NoError(t, err)
 
 	// But what if the cert doesn't have the empty string?
 	err = checkCertConstraint("org",
-		[]string{"", "real"},  // First constraint is ""
-		[]string{"real"},      // Cert only has "real", not ""
+		[]string{"", "real"}, // First constraint is ""
+		[]string{"real"},     // Cert only has "real", not ""
 	)
 	// This should fail because the "" constraint is unmet
 	assert.Error(t, err,

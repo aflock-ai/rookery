@@ -119,7 +119,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	// Read and process config file if it exists
-	content, err := os.ReadFile(configPath)
+	content, err := os.ReadFile(configPath) //nolint:gosec // G304: config path is user-provided
 	if err == nil {
 		a.ConfigPath = configPath
 

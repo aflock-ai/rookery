@@ -26,10 +26,10 @@ import (
 
 // FuzzVaultTransitKeyVersion exercises the key version parsing logic in
 // LoadSignerVerifier and getPublicKeyBytes.  The production code:
-//   1. Parses KeyVersion with strconv.ParseInt(ksp.KeyVersion, 10, 32)
-//   2. In getPublicKeyBytes, if keyVersion == "0", reads "latest_version"
-//      from the Vault response as json.Number and calls .String()
-//   3. Looks up the version in a keys map
+//  1. Parses KeyVersion with strconv.ParseInt(ksp.KeyVersion, 10, 32)
+//  2. In getPublicKeyBytes, if keyVersion == "0", reads "latest_version"
+//     from the Vault response as json.Number and calls .String()
+//  3. Looks up the version in a keys map
 //
 // This fuzz test ensures that:
 //   - strconv.ParseInt never panics with arbitrary input
@@ -43,10 +43,10 @@ func FuzzVaultTransitKeyVersion(f *testing.F) {
 	f.Add("2")
 	f.Add("-1")
 	f.Add("999999999")
-	f.Add("2147483647")   // int32 max
-	f.Add("2147483648")   // int32 max + 1 (overflow)
-	f.Add("-2147483648")  // int32 min
-	f.Add("-2147483649")  // int32 min - 1 (overflow)
+	f.Add("2147483647")          // int32 max
+	f.Add("2147483648")          // int32 max + 1 (overflow)
+	f.Add("-2147483648")         // int32 min
+	f.Add("-2147483649")         // int32 min - 1 (overflow)
 	f.Add("9999999999999999999") // Exceeds int64 range
 	f.Add("")
 	f.Add("not_a_number")
@@ -63,8 +63,8 @@ func FuzzVaultTransitKeyVersion(f *testing.F) {
 	f.Add("01")
 	f.Add("-0")
 	// Unicode digits
-	f.Add("\u0661")       // Arabic-Indic digit 1
-	f.Add("\u00b2")       // Superscript 2
+	f.Add("\u0661") // Arabic-Indic digit 1
+	f.Add("\u00b2") // Superscript 2
 	// Special characters
 	f.Add("\x00")
 	f.Add("\n")

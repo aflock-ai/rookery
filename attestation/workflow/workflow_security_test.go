@@ -447,14 +447,14 @@ func TestSecurity_R3_234_VerifySignatureReturnsFullEnvelopeOnSigError(t *testing
 	hasSigs := len(env.Signatures) > 0
 
 	if hasPayload && hasPayloadType && hasSigs {
-		t.Logf("SECURITY FINDING R3-234: VerifySignature returned a FULLY POPULATED " +
-			"envelope alongside a verification error. The envelope has: " +
-			"PayloadType=%q, Payload=%d bytes, Signatures=%d. " +
-			"A caller who accesses the envelope before checking the error " +
-			"will see a complete, well-formed object with all fields set. " +
-			"The only indication of failure is the error return. " +
-			"This is more dangerous than the truncated-JSON case (R3-149 adversarial) " +
-			"because the envelope LOOKS completely valid. " +
+		t.Logf("SECURITY FINDING R3-234: VerifySignature returned a FULLY POPULATED "+
+			"envelope alongside a verification error. The envelope has: "+
+			"PayloadType=%q, Payload=%d bytes, Signatures=%d. "+
+			"A caller who accesses the envelope before checking the error "+
+			"will see a complete, well-formed object with all fields set. "+
+			"The only indication of failure is the error return. "+
+			"This is more dangerous than the truncated-JSON case (R3-149 adversarial) "+
+			"because the envelope LOOKS completely valid. "+
 			"The function should return a zero-value Envelope on verification failure.",
 			env.PayloadType, len(env.Payload), len(env.Signatures))
 	}
@@ -539,10 +539,10 @@ func TestSecurity_R3_235_DeprecatedRunDiscardsAllResults(t *testing.T) {
 		t.Fatalf("expected at least 2 results from RunWithExports, got %d", len(results))
 	}
 
-	t.Logf("SECURITY FINDING R3-235: Deprecated Run() discarded %d valid results " +
-		"including signed exporter envelopes. The caller completed attestation " +
-		"work but lost all results. The error message gives no indication of " +
-		"how many results were produced or what they contained. There is no " +
+	t.Logf("SECURITY FINDING R3-235: Deprecated Run() discarded %d valid results "+
+		"including signed exporter envelopes. The caller completed attestation "+
+		"work but lost all results. The error message gives no indication of "+
+		"how many results were produced or what they contained. There is no "+
 		"way to recover the results without switching to RunWithExports().",
 		len(results))
 }
@@ -621,12 +621,12 @@ func TestSecurity_R3_236_VerifyAcceptsExtraAttestorsViaRunOptions(t *testing.T) 
 	}
 
 	if len(ro.attestors) > 0 {
-		t.Logf("SECURITY FINDING R3-236: Verify() accepts arbitrary attestors via " +
-			"VerifyWithRunOptions(RunWithAttestors(...)). After option processing, " +
-			"%d extra attestors are accumulated. When policyverify is registered, " +
-			"these attestors execute in the same AttestationContext as policyverify. " +
-			"An attacker who controls the VerifyOption list can inject attestors " +
-			"that run during verification, potentially observing policy details or " +
+		t.Logf("SECURITY FINDING R3-236: Verify() accepts arbitrary attestors via "+
+			"VerifyWithRunOptions(RunWithAttestors(...)). After option processing, "+
+			"%d extra attestors are accumulated. When policyverify is registered, "+
+			"these attestors execute in the same AttestationContext as policyverify. "+
+			"An attacker who controls the VerifyOption list can inject attestors "+
+			"that run during verification, potentially observing policy details or "+
 			"injecting misleading attestation data into the verification collection.",
 			len(ro.attestors))
 	}
@@ -791,12 +791,12 @@ func TestSecurity_R3_238_CollectionMutableAfterSigning(t *testing.T) {
 
 	// Step 5: Check for divergence
 	if len(liveSubjects) != signedSubjectCount {
-		t.Logf("SECURITY FINDING R3-238: After mutating the attestor's subjects " +
-			"post-signing, the collection object's Subjects() returns %d subjects " +
-			"while the signed envelope contains %d subjects. " +
-			"The collection stores attestor objects by reference (not by value). " +
-			"A consumer who verifies the envelope then reads subjects from " +
-			"collection.Subjects() operates on UNVERIFIED data. " +
+		t.Logf("SECURITY FINDING R3-238: After mutating the attestor's subjects "+
+			"post-signing, the collection object's Subjects() returns %d subjects "+
+			"while the signed envelope contains %d subjects. "+
+			"The collection stores attestor objects by reference (not by value). "+
+			"A consumer who verifies the envelope then reads subjects from "+
+			"collection.Subjects() operates on UNVERIFIED data. "+
 			"This is an integrity violation: the signed data and the live data diverge.",
 			len(liveSubjects), signedSubjectCount)
 	}

@@ -64,10 +64,10 @@ func TestSecurity_R3_240_CaseSensitiveNameLookup(t *testing.T) {
 		t.Errorf("BUG: mixed-case 'gIt' should not match any entry")
 	}
 
-	t.Logf("BUG [MEDIUM]: Registry lookups are case-sensitive. "+
-		"'git', 'Git', and 'GIT' are three distinct entries. "+
-		"No name normalization is performed. An attacker can register "+
-		"a case-variant name to shadow or confuse legitimate attestors. "+
+	t.Logf("BUG [MEDIUM]: Registry lookups are case-sensitive. " +
+		"'git', 'Git', and 'GIT' are three distinct entries. " +
+		"No name normalization is performed. An attacker can register " +
+		"a case-variant name to shadow or confuse legitimate attestors. " +
 		"File: registry.go:51,71")
 }
 
@@ -119,8 +119,8 @@ func TestSecurity_R3_241_NilFactoryDeferredPanic(t *testing.T) {
 	if !panicked {
 		t.Errorf("BUG [HIGH]: expected panic when calling NewEntity with nil factory, but none occurred")
 	} else {
-		t.Logf("BUG [HIGH]: nil factory registration is accepted silently. "+
-			"Panic deferred to NewEntity call site (registry.go:94). "+
+		t.Logf("BUG [HIGH]: nil factory registration is accepted silently. " +
+			"Panic deferred to NewEntity call site (registry.go:94). " +
 			"Register should validate factoryFunc != nil.")
 	}
 }
@@ -196,9 +196,9 @@ func TestSecurity_R3_242_SilentOverwriteDuplicateName(t *testing.T) {
 		t.Errorf("expected option 'opt2' from second registration, got %q", entry.Options[0].Name())
 	}
 
-	t.Logf("BUG [MEDIUM]: Register silently overwrites on duplicate name. "+
-		"First registration's factory AND options are irrecoverably lost. "+
-		"No error, no log. In plugin systems, this makes debugging name "+
+	t.Logf("BUG [MEDIUM]: Register silently overwrites on duplicate name. " +
+		"First registration's factory AND options are irrecoverably lost. " +
+		"No error, no log. In plugin systems, this makes debugging name " +
 		"collisions extremely difficult. File: registry.go:58")
 }
 
@@ -254,9 +254,9 @@ func TestSecurity_R3_243_ConcurrentRegisterSharesMap(t *testing.T) {
 		t.Fatalf("original should see writes from by-value function parameter")
 	}
 
-	t.Logf("BUG [HIGH]: Registry uses value receiver but map is a reference type. "+
-		"All copies of a Registry share the same underlying map. Concurrent "+
-		"Register() calls from any copy will data-race on the map. "+
+	t.Logf("BUG [HIGH]: Registry uses value receiver but map is a reference type. " +
+		"All copies of a Registry share the same underlying map. Concurrent " +
+		"Register() calls from any copy will data-race on the map. " +
 		"File: registry.go:26-28, 51-59")
 }
 
@@ -316,8 +316,8 @@ func TestSecurity_R3_244_LookupMissReturnsNilFactory(t *testing.T) {
 		t.Errorf("zero-value Options should be nil, got %v", opts)
 	}
 
-	t.Logf("BUG [MEDIUM]: Entry() for missing name returns zero-value Entry "+
-		"with nil Factory. Callers that skip the ok check will panic on "+
+	t.Logf("BUG [MEDIUM]: Entry() for missing name returns zero-value Entry " +
+		"with nil Factory. Callers that skip the ok check will panic on " +
 		"Factory(). File: registry.go:71-74")
 }
 
@@ -367,10 +367,10 @@ func TestSecurity_R3_245_EmptyAndWhitespaceNamesAccepted(t *testing.T) {
 		})
 	}
 
-	t.Logf("BUG [LOW]: Register accepts any string as a name with no validation. "+
-		"Empty strings, control characters, null bytes, and unicode homoglyphs "+
-		"are all valid names. This creates opportunities for confusion attacks "+
-		"(e.g., registering 'g\\u0456t' which looks like 'git' but is distinct). "+
+	t.Logf("BUG [LOW]: Register accepts any string as a name with no validation. " +
+		"Empty strings, control characters, null bytes, and unicode homoglyphs " +
+		"are all valid names. This creates opportunities for confusion attacks " +
+		"(e.g., registering 'g\\u0456t' which looks like 'git' but is distinct). " +
 		"File: registry.go:51")
 }
 
@@ -433,9 +433,9 @@ func TestSecurity_R3_246_SetDefaultValsSkipsUnmatchedConfigurer(t *testing.T) {
 		t.Errorf("intOpt should be unchanged at 7, got %d", result2.intOpt)
 	}
 
-	t.Logf("BUG [MEDIUM]: SetDefaultVals silently skips configurers that "+
-		"don't match the type switch. Custom Configurer implementations and "+
-		"ConfigOptions parameterized for wrong entity types are all silently "+
+	t.Logf("BUG [MEDIUM]: SetDefaultVals silently skips configurers that " +
+		"don't match the type switch. Custom Configurer implementations and " +
+		"ConfigOptions parameterized for wrong entity types are all silently " +
 		"ignored. No error, no warning. File: registry.go:116-139")
 }
 
@@ -520,9 +520,9 @@ func TestSecurity_R3_247_PartialStateOnSetterError(t *testing.T) {
 		t.Errorf("strSliceOpt should be nil (fourth setter never ran)")
 	}
 
-	t.Logf("BUG [MEDIUM]: entity returned on error is partially configured. "+
-		"intOpt=42, strOpt='hello' (from successful setters), but boolOpt "+
-		"and strSliceOpt are zero values (failed/skipped). Entity is in an "+
+	t.Logf("BUG [MEDIUM]: entity returned on error is partially configured. " +
+		"intOpt=42, strOpt='hello' (from successful setters), but boolOpt " +
+		"and strSliceOpt are zero values (failed/skipped). Entity is in an " +
 		"inconsistent state. File: registry.go:116-139")
 }
 
@@ -590,8 +590,8 @@ func TestSecurity_R3_248_ConcurrentNewEntitySafe(t *testing.T) {
 		}
 	}
 
-	t.Logf("OK: Concurrent NewEntity on a pre-populated registry is safe "+
-		"(read-only map access). Each call produces an independent entity. "+
+	t.Logf("OK: Concurrent NewEntity on a pre-populated registry is safe " +
+		"(read-only map access). Each call produces an independent entity. " +
 		"However, concurrent Register (writes) would race on the same map.")
 }
 
@@ -615,9 +615,9 @@ func TestSecurity_R3_249_UnicodeHomoglyphNameConfusion(t *testing.T) {
 	reg := New[*testEntity]()
 
 	// Latin "a" (U+0061) vs Cyrillic "а" (U+0430) -- visually identical
-	latinName := "attestor"                         // all Latin
-	cyrillicName := "\u0430ttestor"                 // Cyrillic 'а' + Latin "ttestor"
-	fullwidthName := "\uff47\uff49\uff54"           // fullwidth "git"
+	latinName := "attestor"               // all Latin
+	cyrillicName := "\u0430ttestor"       // Cyrillic 'а' + Latin "ttestor"
+	fullwidthName := "\uff47\uff49\uff54" // fullwidth "git"
 
 	reg.Register(latinName, func() *testEntity { return &testEntity{intOpt: 1} })
 	reg.Register(cyrillicName, func() *testEntity { return &testEntity{intOpt: 2} })
@@ -661,9 +661,9 @@ func TestSecurity_R3_249_UnicodeHomoglyphNameConfusion(t *testing.T) {
 		}
 	}
 
-	t.Logf("BUG [MEDIUM]: Unicode homoglyph names are treated as distinct entries. "+
-		"Latin 'attestor' and Cyrillic-a 'аttestor' are visually identical but "+
-		"byte-different strings. An attacker can register a lookalike name to "+
-		"confuse policy evaluation. No Unicode normalization is applied. "+
+	t.Logf("BUG [MEDIUM]: Unicode homoglyph names are treated as distinct entries. " +
+		"Latin 'attestor' and Cyrillic-a 'аttestor' are visually identical but " +
+		"byte-different strings. An attacker can register a lookalike name to " +
+		"confuse policy evaluation. No Unicode normalization is applied. " +
 		"File: registry.go:51,71")
 }

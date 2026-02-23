@@ -147,11 +147,11 @@ type fakeProducer struct {
 	digest   cryptoutil.DigestSet
 }
 
-func (fp *fakeProducer) Name() string                                      { return "fake-producer" }
-func (fp *fakeProducer) Type() string                                      { return "fake" }
-func (fp *fakeProducer) RunType() attestation.RunType                      { return attestation.ProductRunType }
-func (fp *fakeProducer) Attest(_ *attestation.AttestationContext) error     { return nil }
-func (fp *fakeProducer) Schema() *jsonschema.Schema                        { return nil }
+func (fp *fakeProducer) Name() string                                   { return "fake-producer" }
+func (fp *fakeProducer) Type() string                                   { return "fake" }
+func (fp *fakeProducer) RunType() attestation.RunType                   { return attestation.ProductRunType }
+func (fp *fakeProducer) Attest(_ *attestation.AttestationContext) error { return nil }
+func (fp *fakeProducer) Schema() *jsonschema.Schema                     { return nil }
 
 func (fp *fakeProducer) computeDigest(t *testing.T) {
 	t.Helper()

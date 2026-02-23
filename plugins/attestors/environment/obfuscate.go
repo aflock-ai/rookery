@@ -17,13 +17,13 @@ package environment
 import (
 	"strings"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/gobwas/glob"
 )
 
 // ObfuscateEnvironmentArray expects an array of strings representing environment variables.  Each element of the array is expected to be in the format of "KEY=VALUE".
 // obfuscateList is the list of elements to obfuscate from variables, and for each element of variables that does not appear in the obfuscateList onAllowed will be called.
-func ObfuscateEnvironmentArray(variables []string, obfuscateList map[string]struct{}, excludeKeys map[string]struct{}, onAllowed func(key, val, orig string)) {
+func ObfuscateEnvironmentArray(variables []string, obfuscateList map[string]struct{}, excludeKeys map[string]struct{}, onAllowed func(key, val, orig string)) { //nolint:gocognit // environment obfuscation requires complex matching logic
 	obfuscateGlobList := []glob.Glob{}
 
 	// Build a case-insensitive exact-match set from non-glob entries.

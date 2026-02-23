@@ -331,7 +331,7 @@ func (s *Signer) ExportTrustBundlePEM() ([]byte, error) {
 }
 
 // VerifyEnvelope verifies a DSSE envelope signature.
-func VerifyEnvelope(envelope *Envelope, trustedCerts []*x509.Certificate) error {
+func VerifyEnvelope(envelope *Envelope, trustedCerts []*x509.Certificate) error { //nolint:gocognit // complex signature verification logic
 	if len(envelope.Signatures) == 0 {
 		return fmt.Errorf("no signatures in envelope")
 	}

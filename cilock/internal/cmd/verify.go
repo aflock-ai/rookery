@@ -63,7 +63,7 @@ func VerifyCmd() *cobra.Command {
 	return cmd
 }
 
-func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...cryptoutil.Verifier) error {
+func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...cryptoutil.Verifier) error { //nolint:gocognit,gocyclo,funlen
 	var (
 		collectionSource source.Sourcer
 		archivistaClient *archivista.Client
@@ -111,7 +111,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 	var policyRoots []*x509.Certificate
 	if len(vo.PolicyCARootPaths) > 0 {
 		for _, caPath := range vo.PolicyCARootPaths {
-			caFile, err := os.ReadFile(caPath)
+			caFile, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is from CLI flags
 			if err != nil {
 				return fmt.Errorf("failed to read root CA certificate file: %w", err)
 			}
@@ -128,7 +128,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 	var policyIntermediates []*x509.Certificate
 	if len(vo.PolicyCAIntermediatePaths) > 0 {
 		for _, caPath := range vo.PolicyCAIntermediatePaths {
-			caFile, err := os.ReadFile(caPath)
+			caFile, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is from CLI flags
 			if err != nil {
 				return fmt.Errorf("failed to read intermediate CA certificate file: %w", err)
 			}
@@ -145,7 +145,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 	ptsVerifiers := make([]timestamp.TimestampVerifier, 0)
 	if len(vo.PolicyTimestampServers) > 0 {
 		for _, server := range vo.PolicyTimestampServers {
-			f, err := os.ReadFile(server)
+			f, err := os.ReadFile(server) //nolint:gosec // G304: server path is from CLI flags
 			if err != nil {
 				return fmt.Errorf("failed to open Timestamp Server CA certificate file: %w", err)
 			}
@@ -222,7 +222,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 		workflow.VerifyWithPolicyCertConstraints(vo.PolicyCommonName, vo.PolicyDNSNames, vo.PolicyEmails, vo.PolicyOrganizations, vo.PolicyURIs),
 		workflow.VerifyWithPolicyFulcioCertExtensions(vo.PolicyFulcioCertExtensions),
 	)
-	if err != nil {
+	if err != nil { //nolint:nestif
 		if verifiedEvidence.StepResults != nil {
 			log.Error("Verification failed")
 			log.Error("Evidence:")

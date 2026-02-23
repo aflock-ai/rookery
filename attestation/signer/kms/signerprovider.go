@@ -25,8 +25,8 @@ import (
 	"github.com/aflock-ai/rookery/attestation/signer"
 )
 
-func init() {
-	signer.Register("kms", func() signer.SignerProvider { return New() },
+func init() { //nolint:dupl,funlen
+	signer.Register("kms", func() signer.SignerProvider { return New() }, //nolint:dupl
 		registry.StringConfigOption(
 			"ref",
 			"The KMS Reference URI to use for connecting to the KMS service",
@@ -75,7 +75,7 @@ func init() {
 		),
 	)
 
-	signer.RegisterVerifier("kms", func() signer.VerifierProvider { return New() },
+	signer.RegisterVerifier("kms", func() signer.VerifierProvider { return New() }, //nolint:dupl
 		registry.StringConfigOption(
 			"ref",
 			"The KMS Reference URI to use for connecting to the KMS service",
@@ -126,9 +126,9 @@ func init() {
 }
 
 type KMSSignerProvider struct {
-	Reference  string                     `jsonschema:"title=Reference,description=KMS key reference URI identifying the signing key"`
-	KeyVersion string                     `jsonschema:"title=Key Version,description=Specific key version to use for signing operations"`
-	HashFunc   crypto.Hash                `jsonschema:"title=Hash Function,description=Cryptographic hash function for signing,default=SHA256"`
+	Reference  string                      `jsonschema:"title=Reference,description=KMS key reference URI identifying the signing key"`
+	KeyVersion string                      `jsonschema:"title=Key Version,description=Specific key version to use for signing operations"`
+	HashFunc   crypto.Hash                 `jsonschema:"title=Hash Function,description=Cryptographic hash function for signing,default=SHA256"`
 	Options    map[string]KMSClientOptions `jsonschema:"title=Options,description=Provider-specific KMS client configuration options"`
 }
 

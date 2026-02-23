@@ -113,7 +113,7 @@ func TestSecurity_R3_128_DigestSetEqualHashDowngrade(t *testing.T) {
 		},
 		{
 			name: "empty ds1 → not equal (correct)",
-			ds1: DigestSet{},
+			ds1:  DigestSet{},
 			ds2: DigestSet{
 				sha256Key: "abc123",
 			},
@@ -122,9 +122,9 @@ func TestSecurity_R3_128_DigestSetEqualHashDowngrade(t *testing.T) {
 			description: "empty DigestSet → correctly false",
 		},
 		{
-			name: "both empty → not equal (correct)",
-			ds1: DigestSet{},
-			ds2: DigestSet{},
+			name:        "both empty → not equal (correct)",
+			ds1:         DigestSet{},
+			ds2:         DigestSet{},
 			wantEqual:   false,
 			shouldEqual: false,
 			description: "both empty → no matching digests → false",
@@ -132,7 +132,7 @@ func TestSecurity_R3_128_DigestSetEqualHashDowngrade(t *testing.T) {
 		{
 			name: "DOWNGRADE: gitoid sha1 collision",
 			ds1: DigestSet{
-				sha256Key: "abc123",
+				sha256Key:                         "abc123",
 				{Hash: crypto.SHA1, GitOID: true}: "gitoid:sha1:def456",
 			},
 			ds2: DigestSet{

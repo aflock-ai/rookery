@@ -29,13 +29,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/invopop/jsonschema"
 )
 
@@ -84,7 +84,7 @@ func WithAWSRegionCert(awsCert string) Option {
 	return func(a *Attestor) {
 		// Detect if awsCert is a path to a file
 		if fi, err := os.Stat(awsCert); err == nil && !fi.IsDir() {
-			data, err := os.ReadFile(awsCert)
+			data, err := os.ReadFile(awsCert) //nolint:gosec // G304: path is user-provided AWS cert location
 			if err != nil {
 				// If we can't read the file, use the value as-is
 				// This maintains backward compatibility
@@ -102,6 +102,7 @@ type Attestor struct {
 	imds.InstanceIdentityDocument
 	hashes    []cryptoutil.DigestValue
 	cfg       aws.Config
+	cfgSet    bool // true when cfg has been explicitly provided
 	awsCert   string
 	RawIID    string `json:"rawiid"`
 	RawSig    string `json:"rawsig"`
@@ -136,13 +137,15 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	a.hashes = ctx.Hashes()
 
-	cfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		return fmt.Errorf("failed to load AWS config: %w", err)
+	if !a.cfgSet {
+		cfg, err := config.LoadDefaultConfig(context.TODO())
+		if err != nil {
+			return fmt.Errorf("failed to load AWS config: %w", err)
+		}
+		a.cfg = cfg
 	}
-	a.cfg = cfg
 
-	err = a.getIID()
+	err := a.getIID()
 	if err != nil {
 		return err
 	}
@@ -289,5 +292,9 @@ func getAWSCAPublicKey(awsRegion, awsCert string) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("%s: unexpected public key algorithm: %v", awsRegion, cert.PublicKeyAlgorithm)
 	}
 
-	return cert.PublicKey.(*rsa.PublicKey), nil
+	pubKey, ok := cert.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("%s: public key is not RSA", awsRegion)
+	}
+	return pubKey, nil
 }

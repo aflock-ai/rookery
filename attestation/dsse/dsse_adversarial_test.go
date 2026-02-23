@@ -150,9 +150,9 @@ func TestDeepAdversarial_MultipleUnstableVerifiersSameKey(t *testing.T) {
 	// precomputed KeyID, which is different for each wrapper object.
 	// One compromised key wrapped in N distinct objects meets threshold=N.
 	if err == nil {
-		t.Logf("DESIGN CONCERN: Same key wrapped in 3 distinct unstable-KeyID objects "+
-			"met threshold=3. The dedup map uses precomputed stable IDs per verifier "+
-			"object, not per underlying cryptographic key. An attacker who compromises "+
+		t.Logf("DESIGN CONCERN: Same key wrapped in 3 distinct unstable-KeyID objects " +
+			"met threshold=3. The dedup map uses precomputed stable IDs per verifier " +
+			"object, not per underlying cryptographic key. An attacker who compromises " +
 			"one key can wrap it in N objects to meet any threshold.")
 	}
 }
@@ -235,9 +235,9 @@ func TestDeepAdversarial_CertPlusRawKeyThresholdCounting(t *testing.T) {
 	// This reveals whether the same underlying key can count as 2 verifiers
 	// through the cert path and the raw path.
 	if err == nil {
-		t.Logf("DESIGN NOTE: Cert verifier and raw verifier for the same key are "+
-			"counted as 2 distinct verifiers (different KeyIDs). This means "+
-			"threshold=2 can be met with a single key if both cert and raw "+
+		t.Logf("DESIGN NOTE: Cert verifier and raw verifier for the same key are " +
+			"counted as 2 distinct verifiers (different KeyIDs). This means " +
+			"threshold=2 can be met with a single key if both cert and raw " +
 			"verification paths are available.")
 	} else {
 		t.Logf("Cert and raw verifier for same key treated as 1 verifier: %v", err)

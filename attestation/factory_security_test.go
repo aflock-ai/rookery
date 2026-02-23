@@ -20,10 +20,10 @@ type securityAttestor struct {
 	marker        int // used to distinguish instances
 }
 
-func (a *securityAttestor) Name() string                    { return a.name }
-func (a *securityAttestor) Type() string                    { return a.predicateType }
-func (a *securityAttestor) RunType() RunType                { return a.runType }
-func (a *securityAttestor) Schema() *jsonschema.Schema      { return jsonschema.Reflect(a) }
+func (a *securityAttestor) Name() string                     { return a.name }
+func (a *securityAttestor) Type() string                     { return a.predicateType }
+func (a *securityAttestor) RunType() RunType                 { return a.runType }
+func (a *securityAttestor) Schema() *jsonschema.Schema       { return jsonschema.Reflect(a) }
 func (a *securityAttestor) Attest(*AttestationContext) error { return nil }
 
 // ==========================================================================
@@ -169,9 +169,9 @@ func TestSecurity_R3_301_GetAttestorsOptionsMisroute(t *testing.T) {
 	// RegisterLegacyAlias or duplicate predicateType registration), the wrong
 	// options will be applied to the attestor.
 
-	t.Logf("BUG [MEDIUM]: AttestorOptions uses dual lookup (name registry then type map). "+
-		"When GetAttestors resolves by type, the name registry lookup always misses because "+
-		"it's searching for a type URI in a name-indexed map. The fallback to attestationsByType "+
+	t.Logf("BUG [MEDIUM]: AttestorOptions uses dual lookup (name registry then type map). " +
+		"When GetAttestors resolves by type, the name registry lookup always misses because " +
+		"it's searching for a type URI in a name-indexed map. The fallback to attestationsByType " +
 		"works but is fragile and can diverge from the name registry. File: factory.go:170-177")
 }
 
@@ -212,8 +212,8 @@ func TestSecurity_R3_302_RegisterWithEmptyTypesSlice(t *testing.T) {
 	// The attestor has no predicateType entry in attestationsByType at all
 	// A user trying to look up this attestor by its type will get not-found
 
-	t.Logf("BUG [MEDIUM]: RegisterAttestationWithTypes with empty predicateTypes "+
-		"creates an attestor that is in the name registry but has NO type mapping. "+
+	t.Logf("BUG [MEDIUM]: RegisterAttestationWithTypes with empty predicateTypes " +
+		"creates an attestor that is in the name registry but has NO type mapping. " +
 		"FactoryByType will never find it. No error produced. File: factory.go:104-110")
 }
 
@@ -324,10 +324,10 @@ func TestSecurity_R3_304_InconsistentTripleOverwrite(t *testing.T) {
 			"The type map and name registry are now inconsistent. "+
 			"FactoryByType(typeA) returns A, but FactoryByName(name) returns B.")
 
-	t.Logf("BUG [HIGH]: After two RegisterAttestation calls with same name "+
-		"but different types, the type map retains a STALE entry for the first "+
-		"type. Name lookup returns B, but typeA lookup still returns A. "+
-		"The three maps (name, type, run) have no transactional consistency. "+
+	t.Logf("BUG [HIGH]: After two RegisterAttestation calls with same name " +
+		"but different types, the type map retains a STALE entry for the first " +
+		"type. Name lookup returns B, but typeA lookup still returns A. " +
+		"The three maps (name, type, run) have no transactional consistency. " +
 		"File: factory.go:98-102")
 }
 
@@ -414,9 +414,9 @@ func TestSecurity_R3_306_GetAttestorsPartialOnError(t *testing.T) {
 	assert.Nil(t, attestors2,
 		"no attestors returned when first entry fails")
 
-	t.Logf("BUG [LOW]: GetAttestors returns (nil, error) on any failure in the list. "+
-		"Previously resolved attestors from the same call are discarded. "+
-		"If factories return shared state, those objects are in undefined state. "+
+	t.Logf("BUG [LOW]: GetAttestors returns (nil, error) on any failure in the list. " +
+		"Previously resolved attestors from the same call are discarded. " +
+		"If factories return shared state, those objects are in undefined state. " +
 		"File: factory.go:146-168")
 }
 
@@ -471,8 +471,8 @@ func TestSecurity_R3_307_NilFactoryPropagatesAcrossAllMaps(t *testing.T) {
 		_, _ = GetAttestors([]string{name})
 	}, "BUG [HIGH]: GetAttestors panics when nil factory is in registry")
 
-	t.Logf("BUG [HIGH]: RegisterAttestation with nil factory silently propagates "+
-		"nil to all three maps. Three independent panic sources, all traceable "+
+	t.Logf("BUG [HIGH]: RegisterAttestation with nil factory silently propagates " +
+		"nil to all three maps. Three independent panic sources, all traceable " +
 		"to a single unvalidated registration call. File: factory.go:98-102")
 }
 
@@ -523,8 +523,8 @@ func TestSecurity_R3_308_GetAttestorsDuplicateNames(t *testing.T) {
 			"each duplicate call creates a new instance (instance %d)", i)
 	}
 
-	t.Logf("BUG [LOW]: GetAttestors does not deduplicate input names. "+
-		"Duplicate names create duplicate attestor instances. "+
+	t.Logf("BUG [LOW]: GetAttestors does not deduplicate input names. " +
+		"Duplicate names create duplicate attestor instances. " +
 		"File: factory.go:146-168")
 }
 
@@ -573,8 +573,8 @@ func TestSecurity_R3_309_GetAttestorsNameAndTypeBothResolve(t *testing.T) {
 	assert.Equal(t, name, attestors[0].Name())
 	assert.Equal(t, name, attestors[1].Name())
 
-	t.Logf("BUG [LOW]: GetAttestors resolves both name and type independently. "+
-		"Passing both for the same attestor creates duplicate instances. "+
+	t.Logf("BUG [LOW]: GetAttestors resolves both name and type independently. " +
+		"Passing both for the same attestor creates duplicate instances. " +
 		"File: factory.go:146-168")
 }
 
@@ -627,9 +627,9 @@ func TestSecurity_R3_310_AttestationsByRunSingleSlot(t *testing.T) {
 		assert.True(t, ok, "attestor %s should be in name registry", suffix)
 	}
 
-	t.Logf("BUG [MEDIUM]: attestationsByRun[ProductRunType] stores exactly one entry. "+
-		"Three attestors registered with ProductRunType, only the last survives. "+
-		"This map is structurally incapable of storing multiple attestors per RunType. "+
+	t.Logf("BUG [MEDIUM]: attestationsByRun[ProductRunType] stores exactly one entry. " +
+		"Three attestors registered with ProductRunType, only the last survives. " +
+		"This map is structurally incapable of storing multiple attestors per RunType. " +
 		"File: factory.go:28, 101, 109")
 }
 
@@ -686,7 +686,7 @@ func TestSecurity_R3_311_NamePriorityOverType(t *testing.T) {
 			"the URI, so B (which has the URI as its predicate type) is unreachable "+
 			"via this string. There's no disambiguation.")
 
-	t.Logf("BUG [LOW]: GetAttestors name-first priority means a name that "+
-		"collides with another attestor's predicate type causes the type-based "+
+	t.Logf("BUG [LOW]: GetAttestors name-first priority means a name that " +
+		"collides with another attestor's predicate type causes the type-based " +
 		"attestor to be shadowed. File: factory.go:149-155")
 }

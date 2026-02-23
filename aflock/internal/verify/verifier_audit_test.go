@@ -34,6 +34,7 @@ import (
 // correctly passes paeBytes (raw message) to ed25519.Verify. This means:
 //   - Signer: ed25519.Sign(key, SHA256(PAE))  (via crypto.Signer interface or ecdsa path)
 //   - Verifier: ed25519.Verify(key, PAE, sig)  (raw PAE, not hash)
+//
 // These will NEVER match because the signer signs SHA256(PAE) but verifier checks PAE.
 //
 // The signer code dispatches Ed25519 keys through crypto.Signer which calls
@@ -160,11 +161,11 @@ func TestExpiredCACertStillVerifies(t *testing.T) {
 	}
 
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "Expired CA"},
-		NotBefore:    time.Now().Add(-48 * time.Hour),
-		NotAfter:     time.Now().Add(-24 * time.Hour), // EXPIRED
-		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Expired CA"},
+		NotBefore:             time.Now().Add(-48 * time.Hour),
+		NotAfter:              time.Now().Add(-24 * time.Hour), // EXPIRED
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}
@@ -473,11 +474,11 @@ func generateEd25519CA(t *testing.T) (*x509.Certificate, ed25519.PrivateKey) {
 	}
 
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "Ed25519 Test CA"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Ed25519 Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}

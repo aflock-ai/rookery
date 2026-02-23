@@ -153,12 +153,12 @@ func TestTableValidateRunOpts(t *testing.T) {
 
 func TestTableRunEdgeCases(t *testing.T) {
 	tests := []struct {
-		name          string
-		stepName      string
-		opts          []RunOption
-		wantErr       bool
-		errSubstr     string
-		checkResults  func(t *testing.T, results []RunResult)
+		name         string
+		stepName     string
+		opts         []RunOption
+		wantErr      bool
+		errSubstr    string
+		checkResults func(t *testing.T, results []RunResult)
 	}{
 		{
 			name:      "empty step name",
@@ -755,11 +755,11 @@ func TestTableSign(t *testing.T) {
 
 func TestTableDeprecatedRun(t *testing.T) {
 	tests := []struct {
-		name      string
-		stepName  string
-		opts      []RunOption
-		wantErr   bool
-		errSubstr string
+		name        string
+		stepName    string
+		opts        []RunOption
+		wantErr     bool
+		errSubstr   string
 		checkResult func(t *testing.T, result RunResult)
 	}{
 		{
@@ -1225,8 +1225,8 @@ func TestTableRunStoreVerifyRoundtrip(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:     "no attestors in signed mode succeeds -- empty subjects now allowed",
-			stepName: "empty-step",
+			name:      "no attestors in signed mode succeeds -- empty subjects now allowed",
+			stepName:  "empty-step",
 			attestors: nil,
 			// UPDATE: intoto.NewStatement now allows empty subjects (matching
 			// upstream witness behavior). A collection with no attestors and
@@ -1520,11 +1520,11 @@ func TestTableInsecureModeBehavior(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		insecure       bool
-		signers        []cryptoutil.Signer
-		expectSigned   bool
-		wantErr        bool
+		name         string
+		insecure     bool
+		signers      []cryptoutil.Signer
+		expectSigned bool
+		wantErr      bool
 	}{
 		{
 			name:         "insecure=true, no signers -- no signatures",
@@ -1739,11 +1739,11 @@ func TestTableErrorMessages(t *testing.T) {
 
 func TestTableResultCountInvariants(t *testing.T) {
 	tests := []struct {
-		name           string
-		attestors      []attestation.Attestor
-		expectedMin    int
-		expectedMax    int
-		description    string
+		name        string
+		attestors   []attestation.Attestor
+		expectedMin int
+		expectedMax int
+		description string
 	}{
 		{
 			name:        "no attestors -- exactly 1 result (collection)",

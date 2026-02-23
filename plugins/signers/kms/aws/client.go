@@ -28,15 +28,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	akms "github.com/aws/aws-sdk-go-v2/service/kms"
-	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/attestation/signer"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	akms "github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	ttlcache "github.com/jellydator/ttlcache/v3"
 	"github.com/mitchellh/go-homedir"
 )
@@ -106,11 +106,11 @@ func ParseReference(resourceID string) (endpoint, keyID, alias string, err error
 			if len(v) == 4 {
 				alias = v[3]
 			}
-			return
+			return endpoint, keyID, alias, err
 		}
 	}
 	err = fmt.Errorf("invalid awskms format %q", resourceID)
-	return
+	return endpoint, keyID, alias, err
 }
 
 type awsClient struct {
@@ -132,6 +132,7 @@ type awsClientOptions struct {
 
 type Option func(*awsClientOptions)
 
+//nolint:funlen
 func (a *awsClientOptions) Init() []registry.Configurer {
 	return []registry.Configurer{
 		registry.BoolConfigOption(
@@ -320,7 +321,7 @@ func (a *awsClient) setupClient(ctx context.Context, ksp *kms.KMSSignerProvider)
 		}
 
 		log.Debug("Using file ", f, " as credentials file for AWS KMS provider")
-		if _, err := os.ReadFile(f); err != nil {
+		if _, err := os.ReadFile(f); err != nil { //nolint:gosec // G304: credentials file path is user-configured
 			return fmt.Errorf("error reading credentials file: %w", err)
 		}
 		opts = append(opts, config.WithSharedCredentialsFiles([]string{f}))
@@ -354,7 +355,7 @@ func (a *awsClient) setupClient(ctx context.Context, ksp *kms.KMSSignerProvider)
 		a.client = akms.NewFromConfig(cfg)
 	}
 
-	return
+	return err
 }
 
 func (a *awsClient) fetchCMK(ctx context.Context) (*cmk, error) {
@@ -379,6 +380,7 @@ func (a *awsClient) getHashFunc(ctx context.Context) (crypto.Hash, error) {
 	return cmk.HashFunc(), nil
 }
 
+//nolint:dupl
 func (a *awsClient) getCMK(ctx context.Context) (*cmk, error) {
 	var lerr error
 	loader := ttlcache.LoaderFunc[string, cmk](

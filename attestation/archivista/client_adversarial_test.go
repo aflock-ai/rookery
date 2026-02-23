@@ -193,8 +193,8 @@ func TestSecurity_R3_204_StoreUnboundedResponseBody(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "abc123", gitoid)
-	t.Logf("DESIGN NOTE [MEDIUM]: Store response decoding stops at first JSON "+
-		"object, but the response body is not explicitly limited. Extra data "+
+	t.Logf("DESIGN NOTE [MEDIUM]: Store response decoding stops at first JSON " +
+		"object, but the response body is not explicitly limited. Extra data " +
 		"after the JSON object is ignored but still transmitted. File: client.go:116")
 }
 

@@ -102,11 +102,11 @@ func secCreateIntermediateCA(t *testing.T, parent *x509.Certificate, parentKey *
 }
 
 type secLeafOpts struct {
-	cn           string
-	orgs         []string
-	dnsNames     []string
-	emails       []string
-	uris         []*url.URL
+	cn       string
+	orgs     []string
+	dnsNames []string
+	emails   []string
+	uris     []*url.URL
 }
 
 func secCreateLeafCert(t *testing.T, parent *x509.Certificate, parentKey *rsa.PrivateKey, opts secLeafOpts) (*x509.Certificate, *rsa.PrivateKey) {
@@ -302,11 +302,11 @@ func TestSecurity_R3_262_WildcardInMultiElementSliceNotTreatedAsGlob(t *testing.
 		VerifyWithPolicyCARoots([]*x509.Certificate{root}),
 		VerifyWithPolicyCAIntermediates([]*x509.Certificate{inter}),
 		VerifyWithPolicyCertConstraints(
-			"*",                      // CN wildcard - passes
-			[]string{"*"},            // DNS - passes
-			[]string{"*"},            // emails - passes
+			"*",                       // CN wildcard - passes
+			[]string{"*"},             // DNS - passes
+			[]string{"*"},             // emails - passes
 			[]string{"*", "ExtraOrg"}, // orgs - should fail: cert has ["MyOrg"] not ["*","ExtraOrg"]
-			[]string{"*"},            // URIs - passes
+			[]string{"*"},             // URIs - passes
 		),
 	)
 
@@ -337,7 +337,7 @@ func TestSecurity_R3_263_CertConstraintCNMismatchRejects(t *testing.T) {
 		VerifyWithPolicyCARoots([]*x509.Certificate{root}),
 		VerifyWithPolicyCAIntermediates([]*x509.Certificate{inter}),
 		VerifyWithPolicyCertConstraints(
-			"Wrong CN",    // does not match "Actual Leaf CN"
+			"Wrong CN", // does not match "Actual Leaf CN"
 			[]string{"*"},
 			[]string{"*"},
 			[]string{"*"},

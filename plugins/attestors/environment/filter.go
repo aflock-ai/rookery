@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/gobwas/glob"
 )
 
 // safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob library
@@ -37,7 +37,7 @@ func safeGlobMatch(g glob.Glob, s string) (matched bool, err error) {
 
 // FilterEnvironmentArray expects an array of strings representing environment variables.  Each element of the array is expected to be in the format of "KEY=VALUE".
 // blockList is the list of elements to filter from variables, and for each element of variables that does not appear in the blockList onAllowed will be called.
-func FilterEnvironmentArray(variables []string, blockList map[string]struct{}, excludeKeys map[string]struct{}, onAllowed func(key, val, orig string)) {
+func FilterEnvironmentArray(variables []string, blockList map[string]struct{}, excludeKeys map[string]struct{}, onAllowed func(key, val, orig string)) { //nolint:gocognit // environment filtering requires complex matching logic
 	filterGlobList := []glob.Glob{}
 
 	// Build a case-insensitive exact-match set from non-glob entries.

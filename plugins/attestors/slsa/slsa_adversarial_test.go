@@ -50,9 +50,9 @@ func TestSecurity_R3_220_EnvVarLeakageInInternalParams(t *testing.T) {
 		InternalParameters: map[string]interface{}{
 			"env": map[string]interface{}{
 				"AWS_SECRET_ACCESS_KEY": "AKIAIOSFODNN7EXAMPLE",
-				"GITHUB_TOKEN":         "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-				"DATABASE_PASSWORD":    "hunter2",
-				"PATH":                 "/usr/bin:/bin",
+				"GITHUB_TOKEN":          "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+				"DATABASE_PASSWORD":     "hunter2",
+				"PATH":                  "/usr/bin:/bin",
 			},
 		},
 	}

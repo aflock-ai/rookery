@@ -281,7 +281,7 @@ func TestAudit_V5_NegativeKeyVersionAccepted(t *testing.T) {
 	}{
 		{"valid zero", "0", false},
 		{"valid positive", "5", false},
-		{"negative one", "-1", false},         // BUG: accepted
+		{"negative one", "-1", false},          // BUG: accepted
 		{"negative max", "-2147483648", false}, // BUG: accepted
 	}
 

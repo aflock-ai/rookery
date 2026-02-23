@@ -443,9 +443,9 @@ func TestAdversarial_FetchToken_ResponseWithNullBytes(t *testing.T) {
 func TestAdversarial_FetchToken_InvalidURLScheme(t *testing.T) {
 	// What happens with non-HTTP URL schemes?
 	testCases := []struct {
-		name     string
-		url      string
-		wantErr  bool
+		name    string
+		url     string
+		wantErr bool
 	}{
 		{"ftp scheme", "ftp://example.com/token", true},
 		{"javascript scheme", "javascript:alert(1)", true},
@@ -532,9 +532,9 @@ func TestAdversarial_FetchToken_EmptyResponseOn200(t *testing.T) {
 func TestAdversarial_FetchToken_NonStringTokenValue(t *testing.T) {
 	// BUG PROBE: What if value is a number or nested object instead of a string?
 	testCases := []struct {
-		name     string
-		body     string
-		wantErr  bool
+		name    string
+		body    string
+		wantErr bool
 	}{
 		{"value is number", `{"count":1,"value":12345}`, true},
 		{"value is null", `{"count":1,"value":null}`, true},

@@ -25,8 +25,12 @@ type UbuntuBackend struct {
 }
 
 func NewUbuntuBackend(osReleaseFile string) Backend {
+	debBackend, ok := NewDebianBackend(osReleaseFile).(*DebianBackend)
+	if !ok {
+		return &UbuntuBackend{}
+	}
 	return &UbuntuBackend{
-		DebianBackend: *NewDebianBackend(osReleaseFile).(*DebianBackend),
+		DebianBackend: *debBackend,
 	}
 }
 
@@ -39,8 +43,12 @@ type RedHatBackend struct {
 }
 
 func NewRedHatBackend(osReleaseFile string) Backend {
+	rpmBackend, ok := NewRPMBackend(osReleaseFile).(*RPMBackend)
+	if !ok {
+		return &RedHatBackend{}
+	}
 	return &RedHatBackend{
-		RPMBackend: *NewRPMBackend(osReleaseFile).(*RPMBackend),
+		RPMBackend: *rpmBackend,
 	}
 }
 

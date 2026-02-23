@@ -169,7 +169,7 @@ func TestSecurity_R3_162_ContextWindowLeaksAdjacentSecret(t *testing.T) {
 	a := New()
 
 	// Two different secrets, placed close together.
-	secret1 := "AAAA_FIRST_SECRET_AAAA" // 22 chars
+	secret1 := "AAAA_FIRST_SECRET_AAAA"  // 22 chars
 	secret2 := "BBBB_SECOND_SECRET_BBBB" // 23 chars
 
 	// Separate them by only 3 characters -- well within the 15-char context window.

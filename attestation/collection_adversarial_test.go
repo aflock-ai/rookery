@@ -31,10 +31,10 @@ type collAdversarialAttestor struct {
 	mutableField  string
 }
 
-func (a *collAdversarialAttestor) Name() string                    { return a.name }
-func (a *collAdversarialAttestor) Type() string                    { return a.predicateType }
-func (a *collAdversarialAttestor) RunType() RunType                { return a.runType }
-func (a *collAdversarialAttestor) Schema() *jsonschema.Schema      { return nil }
+func (a *collAdversarialAttestor) Name() string                     { return a.name }
+func (a *collAdversarialAttestor) Type() string                     { return a.predicateType }
+func (a *collAdversarialAttestor) RunType() RunType                 { return a.runType }
+func (a *collAdversarialAttestor) Schema() *jsonschema.Schema       { return nil }
 func (a *collAdversarialAttestor) Attest(*AttestationContext) error { return nil }
 func (a *collAdversarialAttestor) Subjects() map[string]cryptoutil.DigestSet {
 	return a.subjects
@@ -760,10 +760,10 @@ func TestSecurity_R3_209_FactoryGlobalStateRace(t *testing.T) {
 	assert.True(t, okByType,
 		"RegisterAttestation wrote to global attestationsByType (no mutex)")
 
-	t.Logf("BUG [HIGH]: factory.go global maps (attestorRegistry, attestationsByType, "+
-		"attestationsByRun) are unprotected. RegisterAttestation writes to all three "+
-		"without synchronization. FactoryByType/FactoryByName reads without "+
-		"synchronization. This is safe ONLY if all registration completes before "+
-		"any reads begin (i.e., during init()). Lazy or dynamic registration "+
+	t.Logf("BUG [HIGH]: factory.go global maps (attestorRegistry, attestationsByType, " +
+		"attestationsByRun) are unprotected. RegisterAttestation writes to all three " +
+		"without synchronization. FactoryByType/FactoryByName reads without " +
+		"synchronization. This is safe ONLY if all registration completes before " +
+		"any reads begin (i.e., during init()). Lazy or dynamic registration " +
 		"from goroutines would cause data races. File: factory.go:25-28, 98-102")
 }

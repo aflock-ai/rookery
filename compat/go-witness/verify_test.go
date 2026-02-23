@@ -16,7 +16,7 @@ import (
 // No attestor plugins are imported — RawAttestation handles deserialization.
 //
 // Set WITNESS_ATTESTATION and WITNESS_PUBKEY env vars to the paths.
-func TestVerifyWitnessAttestation(t *testing.T) {
+func TestVerifyWitnessAttestation(t *testing.T) { //nolint:gocyclo
 	attestationPath := os.Getenv("WITNESS_ATTESTATION")
 	pubkeyPath := os.Getenv("WITNESS_PUBKEY")
 	if attestationPath == "" || pubkeyPath == "" {

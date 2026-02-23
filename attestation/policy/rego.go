@@ -53,7 +53,7 @@ func restrictedCapabilities() *ast.Capabilities {
 	return caps
 }
 
-func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, stepContext ...map[string]interface{}) error {
+func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, stepContext ...map[string]interface{}) error { //nolint:gocognit,gocyclo,funlen
 	if len(policies) == 0 {
 		return nil
 	}

@@ -33,9 +33,9 @@ type mockVerifier struct {
 	keyID string
 }
 
-func (v *mockVerifier) KeyID() (string, error) { return v.keyID, nil }
+func (v *mockVerifier) KeyID() (string, error)             { return v.keyID, nil }
 func (v *mockVerifier) Verify(_ io.Reader, _ []byte) error { return nil }
-func (v *mockVerifier) Bytes() ([]byte, error) { return []byte("mock-verifier-bytes"), nil }
+func (v *mockVerifier) Bytes() ([]byte, error)             { return []byte("mock-verifier-bytes"), nil }
 
 type mockSigner struct {
 	keyID    string
@@ -133,9 +133,9 @@ func TestWithHash_AllVariants(t *testing.T) {
 		{"SHA256", crypto.SHA256},
 		{"SHA384", crypto.SHA384},
 		{"SHA512", crypto.SHA512},
-		{"sha256", crypto.SHA256},   // lowercase -> default
-		{"md5", crypto.SHA256},      // unknown -> default
-		{"", crypto.SHA256},         // empty -> default
+		{"sha256", crypto.SHA256},     // lowercase -> default
+		{"md5", crypto.SHA256},        // unknown -> default
+		{"", crypto.SHA256},           // empty -> default
 		{"SHA512/256", crypto.SHA256}, // unrecognized variant -> default
 	}
 

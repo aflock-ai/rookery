@@ -55,7 +55,7 @@ import (
 	"gopkg.in/go-jose/go-jose.v2/jwt"
 )
 
-func init() {
+func init() { //nolint:funlen
 	signer.Register("fulcio", func() signer.SignerProvider { return New() },
 		registry.StringConfigOption(
 			"url",
@@ -221,7 +221,7 @@ func New(opts ...Option) FulcioSignerProvider {
 	return fsp
 }
 
-func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, error) {
+func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, error) { //nolint:gocognit,gocyclo,funlen
 	// Parse the Fulcio URL to extract its components
 	u, err := url.Parse(fsp.FulcioURL)
 	if err != nil {
@@ -300,7 +300,7 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 	}
 
 	var certResp *fulciopb.SigningCertificate
-	if fsp.UseHTTP {
+	if fsp.UseHTTP { //nolint:nestif
 		log.Info("Requesting signing certificate from Fulcio using HTTP")
 		certResp, err = getCertHTTP(ctx, key, fsp.FulcioURL, raw)
 		if err != nil {
@@ -374,7 +374,7 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 	return signer, nil
 }
 
-func getCert(ctx context.Context, key *ecdsa.PrivateKey, fc fulciopb.CAClient, token string) (*fulciopb.SigningCertificate, error) {
+func getCert(ctx context.Context, key *ecdsa.PrivateKey, fc fulciopb.CAClient, token string) (*fulciopb.SigningCertificate, error) { //nolint:gocognit,gocyclo,funlen
 	// Validate token format before parsing
 	if token == "" {
 		return nil, errors.New("empty token provided to getCert")
@@ -467,7 +467,7 @@ func getCert(ctx context.Context, key *ecdsa.PrivateKey, fc fulciopb.CAClient, t
 				return nil, ctx.Err()
 			}
 			// Exponential backoff: 1s, 2s, 4s
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second //nolint:gosec // G115: attempt is bounded by maxRetries=3
 			log.Infof("Retrying Fulcio certificate request in %v (attempt %d/%d)", backoff, attempt+1, maxRetries)
 			time.Sleep(backoff)
 		}
@@ -570,7 +570,7 @@ func newClient(fulcioURL string, fulcioPort int, isInsecure bool) (fulciopb.CACl
 
 // getCertHTTP requests a signing certificate from Fulcio using the HTTP/REST API
 // instead of gRPC. This is useful in environments where gRPC is restricted.
-func getCertHTTP(ctx context.Context, key *ecdsa.PrivateKey, fulcioURL string, token string) (*fulciopb.SigningCertificate, error) {
+func getCertHTTP(ctx context.Context, key *ecdsa.PrivateKey, fulcioURL string, token string) (*fulciopb.SigningCertificate, error) { //nolint:funlen
 	t, err := jwt.ParseSigned(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse JWT token: %w", err)
@@ -642,7 +642,7 @@ func getCertHTTP(ctx context.Context, key *ecdsa.PrivateKey, fulcioURL string, t
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Limit response body to 1MB to prevent OOM from malicious servers.
 	// A typical Fulcio certificate response is only a few KB.

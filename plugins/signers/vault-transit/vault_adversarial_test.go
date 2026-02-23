@@ -77,10 +77,10 @@ func TestNoDebugPrintln(t *testing.T) {
 
 func TestParseReferenceAdversarial(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		wantErr   bool
-		wantPath  string
+		name     string
+		input    string
+		wantErr  bool
+		wantPath string
 	}{
 		{"valid simple key", "hashivault://mykey", false, "mykey"},
 		{"valid dotted key", "hashivault://my.key", false, "my.key"},
@@ -212,10 +212,10 @@ func TestSupportedHashes(t *testing.T) {
 
 func TestKeyVersionParsingEdgeCases(t *testing.T) {
 	tests := []struct {
-		name       string
-		input      string
-		wantErr    bool
-		wantInt32  int32
+		name      string
+		input     string
+		wantErr   bool
+		wantInt32 int32
 	}{
 		{"zero", "0", false, 0},
 		{"one", "1", false, 1},
@@ -300,10 +300,10 @@ func TestGetPublicKeyBytesLatestVersionTypeAssertions(t *testing.T) {
 	// The code expects resp.Data["latest_version"] to be json.Number.
 	// Test various types that Vault might return.
 	testCases := []struct {
-		name      string
-		value     interface{}
-		wantOk    bool
-		wantStr   string
+		name    string
+		value   interface{}
+		wantOk  bool
+		wantStr string
 	}{
 		{"json.Number", json.Number("5"), true, "5"},
 		{"json.Number zero", json.Number("0"), true, "0"},

@@ -187,10 +187,10 @@ func TestSecurity_R3_242_AutoAnchorBypassFixed(t *testing.T) {
 // correctly handles colons in URL patterns (e.g., WebFetch:https://example.com:8080).
 func TestSecurity_R3_243_ParseToolPatternColonInURL(t *testing.T) {
 	tests := []struct {
-		pattern     string
-		wantTool    string
-		wantCmd     string
-		wantHasCmd  bool
+		pattern    string
+		wantTool   string
+		wantCmd    string
+		wantHasCmd bool
 	}{
 		{
 			pattern:    "WebFetch:https://example.com:8080/*",
@@ -239,7 +239,7 @@ func TestSecurity_R3_244_GlobCompileFailureSilentDenyBypass(t *testing.T) {
 
 	// Malformed glob patterns that fail to compile
 	badPatterns := []string{
-		"[",   // unclosed character class
+		"[",    // unclosed character class
 		"[z-a", // invalid range
 	}
 
@@ -253,7 +253,7 @@ func TestSecurity_R3_244_GlobCompileFailureSilentDenyBypass(t *testing.T) {
 	// Prove the impact: a deny list with a bad pattern silently allows the tool
 	policy := &aflock.Policy{
 		Tools: &aflock.ToolsPolicy{
-			Deny: []string{"Bash:["},  // malformed deny pattern
+			Deny: []string{"Bash:["}, // malformed deny pattern
 		},
 	}
 
@@ -263,8 +263,8 @@ func TestSecurity_R3_244_GlobCompileFailureSilentDenyBypass(t *testing.T) {
 
 	// The malformed deny pattern silently fails, so the command is allowed
 	if decision == aflock.DecisionAllow {
-		t.Logf("SECURITY FINDING R3-244: Malformed deny pattern 'Bash:[' silently "+
-			"failed to compile, allowing 'rm -rf /'. Glob compilation errors should "+
+		t.Logf("SECURITY FINDING R3-244: Malformed deny pattern 'Bash:[' silently " +
+			"failed to compile, allowing 'rm -rf /'. Glob compilation errors should " +
 			"be logged or cause deny patterns to fail-closed.")
 	}
 }

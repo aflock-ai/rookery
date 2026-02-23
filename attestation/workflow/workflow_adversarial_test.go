@@ -73,12 +73,12 @@ type exporterWithoutSubjects struct {
 	runType  attestation.RunType
 }
 
-func (a *exporterWithoutSubjects) Name() string                                { return a.name }
-func (a *exporterWithoutSubjects) Type() string                                { return a.typeName }
-func (a *exporterWithoutSubjects) RunType() attestation.RunType                { return a.runType }
-func (a *exporterWithoutSubjects) Schema() *jsonschema.Schema                  { return nil }
+func (a *exporterWithoutSubjects) Name() string                                     { return a.name }
+func (a *exporterWithoutSubjects) Type() string                                     { return a.typeName }
+func (a *exporterWithoutSubjects) RunType() attestation.RunType                     { return a.runType }
+func (a *exporterWithoutSubjects) Schema() *jsonschema.Schema                       { return nil }
 func (a *exporterWithoutSubjects) Attest(ctx *attestation.AttestationContext) error { return nil }
-func (a *exporterWithoutSubjects) Export() bool                                { return true }
+func (a *exporterWithoutSubjects) Export() bool                                     { return true }
 
 func advMakeRSASignerVerifier(t *testing.T) (cryptoutil.Signer, cryptoutil.Verifier) {
 	t.Helper()
@@ -88,7 +88,6 @@ func advMakeRSASignerVerifier(t *testing.T) (cryptoutil.Signer, cryptoutil.Verif
 	verifier := cryptoutil.NewRSAVerifier(&privKey.PublicKey, crypto.SHA256)
 	return sgnr, verifier
 }
-
 
 // ==========================================================================
 // FINDING 1: Nil signers bypass validation (MEDIUM)

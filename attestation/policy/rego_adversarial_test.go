@@ -459,15 +459,15 @@ func TestAdversarial_CrossStepContext_JSONNumberType(t *testing.T) {
 	// The attestor has a field with a large integer that could lose precision
 	// if converted to float64.
 	type precisionAttestor struct {
-		AttName  string `json:"name"`
-		AttType  string `json:"type"`
-		BigNumber int64 `json:"bignumber"`
+		AttName   string `json:"name"`
+		AttType   string `json:"type"`
+		BigNumber int64  `json:"bignumber"`
 	}
 
 	attestor := &wrappedAttestor{
 		inner: &precisionAttestor{
-			AttName:  "test",
-			AttType:  "test-type",
+			AttName:   "test",
+			AttType:   "test-type",
 			BigNumber: 9007199254740993, // 2^53 + 1, loses precision in float64
 		},
 	}
@@ -1118,11 +1118,11 @@ type wrappedAttestor struct {
 	inner interface{}
 }
 
-func (w *wrappedAttestor) Name() string                                  { return "wrapped" }
-func (w *wrappedAttestor) Type() string                                  { return "wrapped-type" }
-func (w *wrappedAttestor) RunType() attestation.RunType                  { return "test" }
+func (w *wrappedAttestor) Name() string                                   { return "wrapped" }
+func (w *wrappedAttestor) Type() string                                   { return "wrapped-type" }
+func (w *wrappedAttestor) RunType() attestation.RunType                   { return "test" }
 func (w *wrappedAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (w *wrappedAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (w *wrappedAttestor) Schema() *jsonschema.Schema                     { return nil }
 func (w *wrappedAttestor) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w.inner)
 }

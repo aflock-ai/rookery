@@ -21,9 +21,9 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/gobwas/glob"
 	"github.com/sigstore/fulcio/pkg/certificate"
 )
 
@@ -81,8 +81,8 @@ func (cc CertConstraint) Check(verifier *cryptoutil.X509Verifier, trustBundles m
 	return nil
 }
 
-func (cc CertConstraint) checkTrustBundles(verifier *cryptoutil.X509Verifier, trustBundles map[string]TrustBundle) error {
-	if len(cc.Roots) == 1 && cc.Roots[0] == AllowAllConstraint {
+func (cc CertConstraint) checkTrustBundles(verifier *cryptoutil.X509Verifier, trustBundles map[string]TrustBundle) error { //nolint:gocognit
+	if len(cc.Roots) == 1 && cc.Roots[0] == AllowAllConstraint { //nolint:nestif
 		for _, bundle := range trustBundles {
 			if err := verifier.BelongsToRoot(bundle.Root); err == nil {
 				return nil
@@ -133,7 +133,7 @@ func (cc CertConstraint) checkExtensions(ext []pkix.Extension) error {
 }
 
 func urisToStrings(uris []*url.URL) []string {
-	res := make([]string, 0)
+	res := make([]string, 0, len(uris))
 	for _, uri := range uris {
 		res = append(res, uri.String())
 	}
@@ -173,16 +173,16 @@ func checkCertConstraintGlob(attribute, constraint, value string) error {
 
 func checkCertConstraint(attribute string, constraints, values []string) error {
 	// If our only constraint is the AllowAllConstraint it's a pass
-	if len(constraints) == 1 && constraints[0] == AllowAllConstraint {
+	if len(constraints) == 1 && constraints[0] == AllowAllConstraint { //nolint:gosec // G602: len check guards index
 		return nil
 	}
 
 	// treat a single empty string the same as a constraint on an empty attribute
-	if len(constraints) == 1 && constraints[0] == "" {
+	if len(constraints) == 1 && constraints[0] == "" { //nolint:gosec // G602: len check guards index
 		constraints = []string{}
 	}
 
-	if len(values) == 1 && values[0] == "" {
+	if len(values) == 1 && values[0] == "" { //nolint:gosec // G602: len check guards index
 		values = []string{}
 	}
 

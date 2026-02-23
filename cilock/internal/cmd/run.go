@@ -63,7 +63,7 @@ func RunCmd() *cobra.Command {
 	return cmd
 }
 
-func runRun(ctx context.Context, ro options.RunOptions, args []string, signers ...cryptoutil.Signer) error {
+func runRun(ctx context.Context, ro options.RunOptions, args []string, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
 	if len(signers) > 1 {
 		return fmt.Errorf("only one signer is supported")
 	}

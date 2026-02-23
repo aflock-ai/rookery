@@ -45,11 +45,11 @@ type dummyAttestor struct {
 	typeStr string
 }
 
-func (d *dummyAttestor) Name() string                                  { return d.name }
-func (d *dummyAttestor) Type() string                                  { return d.typeStr }
-func (d *dummyAttestor) RunType() attestation.RunType                  { return "test" }
+func (d *dummyAttestor) Name() string                                   { return d.name }
+func (d *dummyAttestor) Type() string                                   { return d.typeStr }
+func (d *dummyAttestor) RunType() attestation.RunType                   { return "test" }
 func (d *dummyAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (d *dummyAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (d *dummyAttestor) Schema() *jsonschema.Schema                     { return nil }
 
 // marshalableAttestor is like dummyAttestor but with exported fields so it
 // produces useful JSON when marshaled (e.g. for Rego input testing).
@@ -58,11 +58,11 @@ type marshalableAttestor struct {
 	AttType string `json:"type"`
 }
 
-func (m *marshalableAttestor) Name() string                                  { return m.AttName }
-func (m *marshalableAttestor) Type() string                                  { return m.AttType }
-func (m *marshalableAttestor) RunType() attestation.RunType                  { return "test" }
+func (m *marshalableAttestor) Name() string                                   { return m.AttName }
+func (m *marshalableAttestor) Type() string                                   { return m.AttType }
+func (m *marshalableAttestor) RunType() attestation.RunType                   { return "test" }
 func (m *marshalableAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (m *marshalableAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (m *marshalableAttestor) Schema() *jsonschema.Schema                     { return nil }
 
 // generateSelfSignedCert creates a self-signed CA cert and returns the cert, key, and PEM bytes.
 func generateSelfSignedCert(t *testing.T, cn string, orgs []string) (*x509.Certificate, *ecdsa.PrivateKey, []byte) {
@@ -806,12 +806,12 @@ func TestPolicy_TrustBundles_WithIntermediates(t *testing.T) {
 	intPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	intTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(10),
-		Subject:      pkix.Name{CommonName: "IntermediateCA"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageCertSign,
-		IsCA:         true,
+		SerialNumber:          big.NewInt(10),
+		Subject:               pkix.Name{CommonName: "IntermediateCA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 	}
 	intDER, err := x509.CreateCertificate(rand.Reader, intTemplate, ca, &intPriv.PublicKey, caKey)

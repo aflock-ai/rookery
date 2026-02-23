@@ -25,9 +25,9 @@ import (
 	"regexp"
 	"strconv"
 
-	vault "github.com/hashicorp/vault/api"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
+	vault "github.com/hashicorp/vault/api"
 )
 
 func init() {

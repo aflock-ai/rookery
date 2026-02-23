@@ -98,7 +98,7 @@ func lockfilePatterns() []string {
 		"go.sum",            // Go
 		"Podfile.lock",      // iOS/macOS (CocoaPods)
 		"gradle.lockfile",   // Gradle
-		"pnpm-lock.yaml",   // Node.js (pnpm)
+		"pnpm-lock.yaml",    // Node.js (pnpm)
 	}
 }
 
@@ -189,7 +189,7 @@ func (a *Attestor) searchRecursive(root string, patterns []string) error {
 
 // addLockfile reads a lockfile, computes its digest, and appends it to the attestor.
 func (a *Attestor) addLockfile(path string) error {
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(path) //nolint:gosec // G304: lockfile path from attestation context
 	if err != nil {
 		return fmt.Errorf("error reading %s: %w", path, err)
 	}

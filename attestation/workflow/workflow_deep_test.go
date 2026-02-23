@@ -45,12 +45,12 @@ type subjectingAttestor struct {
 	attestFunc func(*attestation.AttestationContext) error
 }
 
-func (a *subjectingAttestor) Name() string                                 { return a.name }
-func (a *subjectingAttestor) Type() string                                 { return a.typeName }
-func (a *subjectingAttestor) RunType() attestation.RunType                 { return a.runType }
-func (a *subjectingAttestor) Schema() *jsonschema.Schema                   { return nil }
-func (a *subjectingAttestor) Export() bool                                 { return a.export }
-func (a *subjectingAttestor) Subjects() map[string]cryptoutil.DigestSet    { return a.subjects }
+func (a *subjectingAttestor) Name() string                              { return a.name }
+func (a *subjectingAttestor) Type() string                              { return a.typeName }
+func (a *subjectingAttestor) RunType() attestation.RunType              { return a.runType }
+func (a *subjectingAttestor) Schema() *jsonschema.Schema                { return nil }
+func (a *subjectingAttestor) Export() bool                              { return a.export }
+func (a *subjectingAttestor) Subjects() map[string]cryptoutil.DigestSet { return a.subjects }
 func (a *subjectingAttestor) Attest(ctx *attestation.AttestationContext) error {
 	if a.attestFunc != nil {
 		return a.attestFunc(ctx)
@@ -116,8 +116,8 @@ func TestDeep_RunWithTimestampers_ReplacesInsteadOfAppends(t *testing.T) {
 
 	// Document the actual behavior.
 	if secondLen < firstLen {
-		t.Logf("DESIGN NOTE: RunWithTimestampers REPLACES (uses `=`) instead of appending. "+
-			"This is inconsistent with RunWithSigners (which uses `append()`). "+
+		t.Logf("DESIGN NOTE: RunWithTimestampers REPLACES (uses `=`) instead of appending. " +
+			"This is inconsistent with RunWithSigners (which uses `append()`). " +
 			"Callers who call RunWithTimestampers twice will lose timestampers from the first call.")
 	}
 }

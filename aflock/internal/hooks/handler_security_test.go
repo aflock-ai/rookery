@@ -35,7 +35,7 @@ func TestSecurity_R3_280_NotebookEditMissingFromHandlerIsFileOperation(t *testin
 	}
 
 	// This means handlePostToolUse will NOT track notebook file writes
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test-notebook"}
 	seedSession(t, h, "session-notebook", pol)
 
@@ -99,7 +99,7 @@ func TestSecurity_R3_280_EvaluatorIncludesNotebookEdit(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_281_NilToolInputBypassesCommandDenyPattern(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-nil-bypass",
 		Tools: &aflock.ToolsPolicy{
@@ -174,7 +174,7 @@ func TestSecurity_R3_282_MaterialsAppendNotMutexProtected(t *testing.T) {
 	// If two goroutines run handlePreToolUse for the same session concurrently,
 	// both can read the same Materials slice and append, causing lost writes.
 
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-race",
 		Tools: &aflock.ToolsPolicy{
@@ -262,7 +262,7 @@ func TestSecurity_R3_282_MaterialsAppendNotMutexProtected(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_283_TurnsIncrementedWithoutLimitCheck(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-turns-limit",
 		Limits: &aflock.LimitsPolicy{
@@ -405,7 +405,7 @@ func TestSecurity_R3_284_TOCTOUToolCallsCount(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_285_MalformedFileInputSilentlySwallowed(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test-swallow"}
 	seedSession(t, h, "session-swallow", pol)
 
@@ -464,7 +464,7 @@ func TestSecurity_R3_285_MalformedFileInputSilentlySwallowed(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_286_CorruptedSessionPolicyFailsOpen(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "strict-policy",
 		Tools: &aflock.ToolsPolicy{
@@ -534,7 +534,7 @@ func TestSecurity_R3_287_MalformedPolicyFileFailsOpen(t *testing.T) {
 		0644,
 	)
 
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 
 	// handleSessionStart tries to load policy from cwd
 	input := &aflock.HookInput{
@@ -595,7 +595,7 @@ func TestSecurity_R3_287_MalformedPolicyFileFailsOpen(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_288_NotebookEditPostToolTrackingGap(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test-nb-track"}
 	seedSession(t, h, "session-nb-track", pol)
 
@@ -642,7 +642,7 @@ func TestSecurity_R3_288_NotebookEditPostToolTrackingGap(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_289_GrepGlobPathFieldMismatch(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test-grep-path"}
 	seedSession(t, h, "session-grep-path", pol)
 
@@ -687,7 +687,7 @@ func TestSecurity_R3_289_GrepGlobPathFieldMismatch(t *testing.T) {
 		t.Skipf("Glob path correctly tracked -- bug is fixed")
 	}
 
-	t.Logf("SECURITY BUG R3-289: Glob/Grep 'path' field mismatched -- "+
+	t.Logf("SECURITY BUG R3-289: Glob/Grep 'path' field mismatched -- " +
 		"handler uses FileToolInput (file_path) but Grep/Glob send 'path'")
 }
 
@@ -703,7 +703,7 @@ func TestSecurity_R3_289_GrepGlobPathFieldMismatch(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_290_PermissionRequestIgnoresPolicy(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "strict-perms",
 		Tools: &aflock.ToolsPolicy{
@@ -733,7 +733,7 @@ func TestSecurity_R3_290_PermissionRequestIgnoresPolicy(t *testing.T) {
 
 	// This means Claude Code will show the permission prompt to the user,
 	// who might approve it, even though policy explicitly denies Bash.
-	t.Logf("SECURITY NOTE R3-290: PermissionRequest for denied tool 'Bash' returns "+
+	t.Logf("SECURITY NOTE R3-290: PermissionRequest for denied tool 'Bash' returns " +
 		"empty (no auto-deny), user can still approve")
 }
 
@@ -746,7 +746,7 @@ func TestSecurity_R3_290_PermissionRequestIgnoresPolicy(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_291_SubagentStopAlwaysAllows(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name:                 "test-subagent",
 		RequiredAttestations: []string{"security-review", "build-check"},
@@ -792,7 +792,7 @@ func TestSecurity_R3_291_SubagentStopAlwaysAllows(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_292_EmptyToolNamePassesThroughChecks(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-empty-tool",
 		Tools: &aflock.ToolsPolicy{
@@ -843,8 +843,8 @@ func TestSecurity_R3_293_IdentityFailureIsNonBlocking(t *testing.T) {
 	// treats as a warning (non-blocking). ExitWithError uses exit code 2 (blocking).
 	// Identity discovery failure should arguably be blocking when policy.Identity
 	// has AllowedModels set.
-	t.Logf("SECURITY NOTE R3-293: Identity discovery failure calls ExitWithWarning "+
-		"(exit code 1, non-blocking). Policy identity constraints are bypassed if "+
+	t.Logf("SECURITY NOTE R3-293: Identity discovery failure calls ExitWithWarning " +
+		"(exit code 1, non-blocking). Policy identity constraints are bypassed if " +
 		"DiscoverAgentIdentity returns an error.")
 }
 
@@ -932,7 +932,7 @@ func TestSecurity_R3_295_ExpiredPolicyNotChecked(t *testing.T) {
 	}
 
 	// Even though the policy is expired, handlePreToolUse still enforces it
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	seedSession(t, h, "session-expired", pol)
 
 	// Note: The question is whether expired policies should be enforced or not.
@@ -959,7 +959,7 @@ func TestSecurity_R3_295_ExpiredPolicyNotChecked(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_296_PathTraversalInSessionID(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 
 	// State manager validates session IDs, so this should fail
 	input := &aflock.HookInput{

@@ -271,12 +271,12 @@ func TestAdversarial_X509Verifier_ExpiredCert(t *testing.T) {
 
 	now := time.Now()
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "Expired Cert"},
-		NotBefore:    now.Add(-48 * time.Hour),
-		NotAfter:     now.Add(-1 * time.Hour), // expired!
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		IsCA:         true,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Expired Cert"},
+		NotBefore:             now.Add(-48 * time.Hour),
+		NotAfter:              now.Add(-1 * time.Hour), // expired!
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 	}
 
@@ -307,12 +307,12 @@ func TestAdversarial_X509Verifier_FutureCert(t *testing.T) {
 
 	now := time.Now()
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "Future Cert"},
-		NotBefore:    now.Add(24 * time.Hour), // not valid yet!
-		NotAfter:     now.Add(48 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		IsCA:         true,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Future Cert"},
+		NotBefore:             now.Add(24 * time.Hour), // not valid yet!
+		NotAfter:              now.Add(48 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 	}
 
@@ -345,12 +345,12 @@ func TestAdversarial_X509Verifier_TrustedTimeOverride(t *testing.T) {
 	pastStart := time.Now().Add(-72 * time.Hour)
 	pastEnd := time.Now().Add(-24 * time.Hour)
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "Was Valid"},
-		NotBefore:    pastStart,
-		NotAfter:     pastEnd,
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		IsCA:         true,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Was Valid"},
+		NotBefore:             pastStart,
+		NotAfter:              pastEnd,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 	}
 
@@ -536,14 +536,14 @@ func TestAdversarial_DigestSetEqual_SelfEquality(t *testing.T) {
 func TestAdversarial_DigestSetEqual_LargeOverlap(t *testing.T) {
 	// Both sets have the same algorithms and values.
 	ds1 := DigestSet{
-		DigestValue{Hash: crypto.SHA256}:                "same256",
-		DigestValue{Hash: crypto.SHA1}:                  "same1",
-		DigestValue{Hash: crypto.SHA256, GitOID: true}:  "samegitoid",
+		DigestValue{Hash: crypto.SHA256}:               "same256",
+		DigestValue{Hash: crypto.SHA1}:                 "same1",
+		DigestValue{Hash: crypto.SHA256, GitOID: true}: "samegitoid",
 	}
 	ds2 := DigestSet{
-		DigestValue{Hash: crypto.SHA256}:                "same256",
-		DigestValue{Hash: crypto.SHA1}:                  "same1",
-		DigestValue{Hash: crypto.SHA256, GitOID: true}:  "samegitoid",
+		DigestValue{Hash: crypto.SHA256}:               "same256",
+		DigestValue{Hash: crypto.SHA1}:                 "same1",
+		DigestValue{Hash: crypto.SHA256, GitOID: true}: "samegitoid",
 	}
 
 	assert.True(t, ds1.Equal(ds2))
@@ -1277,8 +1277,8 @@ func TestAdversarial_X509Signer_FullRoundtrip(t *testing.T) {
 	// Let's see what actually happens:
 	if err != nil {
 		t.Logf("X509Signer.Verifier() round-trip failed: %v", err)
-		t.Logf("FINDING: X509Signer.Verifier() creates X509Verifier with "+
-			"roots from X509Signer but base verifier from inner signer. "+
+		t.Logf("FINDING: X509Signer.Verifier() creates X509Verifier with " +
+			"roots from X509Signer but base verifier from inner signer. " +
 			"The cert chain validation may fail if roots are not propagated correctly.")
 	}
 

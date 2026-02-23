@@ -14,7 +14,7 @@ type Repository struct {
 	Name    string `json:"name"`
 }
 
-func RepositoryFromPayload(payload map[string]any) (Repository, error) {
+func RepositoryFromPayload(payload map[string]any) (Repository, error) { //nolint:dupl // similar structure to HeadFromPullRequest but different fields
 	repo := Repository{}
 	rd, ok := payload["repository"]
 	if !ok {
@@ -112,7 +112,7 @@ func PullRequestFromPayload(payload map[string]any) (PullRequest, error) {
 	return pullRequest, nil
 }
 
-func HeadFromPullRequest(pullRequestData map[string]any) (Head, error) {
+func HeadFromPullRequest(pullRequestData map[string]any) (Head, error) { //nolint:dupl // similar structure to RepositoryFromPayload but different fields
 	head := Head{}
 	hd, ok := pullRequestData["head"]
 	if !ok {

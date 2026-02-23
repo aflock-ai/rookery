@@ -22,8 +22,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/gobwas/glob"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,7 +36,7 @@ func TestDirHash(t *testing.T) {
 	testFile2 := filepath.Join(testDir, "testfile2")
 	require.NoError(t, os.WriteFile(testFile2, []byte("more dummy data"), os.ModePerm))
 
-	dirHashGlobs := make([]glob.Glob, 0)
+	dirHashGlobs := make([]glob.Glob, 0, 1)
 
 	dirHash := "testdir"
 	dirHashGlobItem, _ := glob.Compile(dirHash)
@@ -69,7 +69,7 @@ func TestDirHashWithSymlink(t *testing.T) {
 	symlinkDir := filepath.Join(testDir, "symlinkdir")
 	require.NoError(t, os.Symlink(testDir2, symlinkDir))
 
-	dirHashGlobs := make([]glob.Glob, 0)
+	dirHashGlobs := make([]glob.Glob, 0, 1)
 	dirHash := "testdir"
 	dirHashGlobItem, _ := glob.Compile(dirHash)
 	dirHashGlobs = append(dirHashGlobs, dirHashGlobItem)

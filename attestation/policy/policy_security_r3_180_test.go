@@ -50,11 +50,11 @@ type r3Attestor struct {
 	Extra   map[string]interface{} `json:"extra,omitempty"`
 }
 
-func (a *r3Attestor) Name() string                                  { return a.AttName }
-func (a *r3Attestor) Type() string                                  { return a.AttType }
-func (a *r3Attestor) RunType() attestation.RunType                  { return "test" }
+func (a *r3Attestor) Name() string                                   { return a.AttName }
+func (a *r3Attestor) Type() string                                   { return a.AttType }
+func (a *r3Attestor) RunType() attestation.RunType                   { return "test" }
 func (a *r3Attestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (a *r3Attestor) Schema() *jsonschema.Schema                    { return nil }
+func (a *r3Attestor) Schema() *jsonschema.Schema                     { return nil }
 
 // r3WrappedAttestor wraps any struct with custom JSON marshaling.
 type r3WrappedAttestor struct {
@@ -62,11 +62,11 @@ type r3WrappedAttestor struct {
 	typeName string
 }
 
-func (w *r3WrappedAttestor) Name() string                                  { return "r3-wrapped" }
-func (w *r3WrappedAttestor) Type() string                                  { return w.typeName }
-func (w *r3WrappedAttestor) RunType() attestation.RunType                  { return "test" }
+func (w *r3WrappedAttestor) Name() string                                   { return "r3-wrapped" }
+func (w *r3WrappedAttestor) Type() string                                   { return w.typeName }
+func (w *r3WrappedAttestor) RunType() attestation.RunType                   { return "test" }
 func (w *r3WrappedAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (w *r3WrappedAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (w *r3WrappedAttestor) Schema() *jsonschema.Schema                     { return nil }
 func (w *r3WrappedAttestor) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w.inner)
 }
@@ -235,8 +235,8 @@ func TestSecurity_R3_181_EmptyConstraintMatchesEmptyCertFields(t *testing.T) {
 
 	// Now test: what if cert has completely DIFFERENT DNS names than constraint?
 	err = checkCertConstraint("dns name",
-		[]string{"build.example.com"},   // Require this DNS name
-		[]string{"evil.attacker.com"},   // Cert has a different DNS name
+		[]string{"build.example.com"}, // Require this DNS name
+		[]string{"evil.attacker.com"}, // Cert has a different DNS name
 	)
 	if err == nil {
 		t.Error("SECURITY BUG R3-181: constraint requiring 'build.example.com' " +

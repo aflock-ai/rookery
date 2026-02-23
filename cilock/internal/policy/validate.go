@@ -29,6 +29,7 @@ import (
 const (
 	ExpectedPolicyType       = "https://witness.testifysec.com/policy/v0.1"
 	ExpectedPolicyTypeAflock = "https://aflock.ai/policy/v0.1"
+	functionaryTypePublicKey = "publickey"
 )
 
 type ValidationResult struct {
@@ -196,7 +197,7 @@ func validateExpiration(policy *policyDocument, result *ValidationResult) {
 	}
 }
 
-func validateSteps(policy *policyDocument, result *ValidationResult) {
+func validateSteps(policy *policyDocument, result *ValidationResult) { //nolint:gocognit,gocyclo
 	for stepName, step := range policy.Steps {
 		if step.Name != stepName {
 			result.Errors = append(result.Errors, fmt.Sprintf("Step '%s': name field '%s' does not match key", stepName, step.Name))
@@ -214,12 +215,12 @@ func validateSteps(policy *policyDocument, result *ValidationResult) {
 		}
 
 		for i, functionary := range step.Functionaries {
-			if functionary.Type != "publickey" && functionary.Type != "root" {
+			if functionary.Type != functionaryTypePublicKey && functionary.Type != "root" {
 				result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', functionary %d: invalid type '%s' (must be 'publickey' or 'root')", stepName, i, functionary.Type))
 				result.Valid = false
 			}
 
-			if functionary.Type == "publickey" && functionary.PublicKeyID == "" {
+			if functionary.Type == functionaryTypePublicKey && functionary.PublicKeyID == "" {
 				result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', functionary %d: publickey type must have publickeyid", stepName, i))
 				result.Valid = false
 			}
@@ -293,7 +294,7 @@ func validateRoots(policy *policyDocument, result *ValidationResult) {
 	}
 }
 
-func validateRegoPolicies(policy *policyDocument, result *ValidationResult) {
+func validateRegoPolicies(policy *policyDocument, result *ValidationResult) { //nolint:gocognit
 	for stepName, step := range policy.Steps {
 		for attIdx, att := range step.Attestations {
 			for regoIdx, regoPol := range att.RegoPolicies {
@@ -332,7 +333,7 @@ func validateKeyReferences(policy *policyDocument, result *ValidationResult) {
 
 	for stepName, step := range policy.Steps {
 		for i, functionary := range step.Functionaries {
-			if functionary.Type == "publickey" && functionary.PublicKeyID != "" {
+			if functionary.Type == functionaryTypePublicKey && functionary.PublicKeyID != "" {
 				if !availableKeys[functionary.PublicKeyID] {
 					result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', functionary %d: references undefined public key '%s'", stepName, i, functionary.PublicKeyID))
 					result.Valid = false
@@ -342,7 +343,7 @@ func validateKeyReferences(policy *policyDocument, result *ValidationResult) {
 	}
 }
 
-func validateSignature(ctx context.Context, envelope *dsse.Envelope, verifier cryptoutil.Verifier, result *ValidationResult) {
+func validateSignature(_ context.Context, envelope *dsse.Envelope, verifier cryptoutil.Verifier, result *ValidationResult) {
 	if len(envelope.Signatures) == 0 {
 		result.Errors = append(result.Errors, "Signature verification requested but envelope has no signatures")
 		result.Valid = false

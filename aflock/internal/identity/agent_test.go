@@ -385,8 +385,8 @@ func TestSanitizeSPIFFEPath(t *testing.T) {
 		{"UPPERCASE", "uppercase"},
 		{"a.b.c", "a-b-c"},
 		{"abc123", "abc123"},
-		{"a--b", "a-b"},           // multiple non-alnum collapsed to single dash
-		{"a!!!b", "a-b"},          // multiple non-alnum collapsed to single dash
+		{"a--b", "a-b"},  // multiple non-alnum collapsed to single dash
+		{"a!!!b", "a-b"}, // multiple non-alnum collapsed to single dash
 		{"simple", "simple"},
 		{"", ""},
 	}
@@ -802,9 +802,9 @@ func TestMatchesAnyFunctionary_OneMatches(t *testing.T) {
 	a.ToSPIFFEID("aflock.ai")
 
 	functionaries := []Functionary{
-		{Type: "keyless"},                                               // won't match
-		{Type: "spiffe", ModelConstraint: "claude-sonnet-*"},            // won't match
-		{Type: "spiffe", ModelConstraint: "claude-opus-*"},              // matches
+		{Type: "keyless"}, // won't match
+		{Type: "spiffe", ModelConstraint: "claude-sonnet-*"}, // won't match
+		{Type: "spiffe", ModelConstraint: "claude-opus-*"},   // matches
 	}
 
 	if !a.MatchesAnyFunctionary(functionaries) {

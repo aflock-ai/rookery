@@ -23,9 +23,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/gobwas/glob"
 )
 
 // safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob library
@@ -59,7 +59,7 @@ type fileResult struct {
 // returned map of artifacts.
 // includeGlob/excludeGlob filter which files are recorded: exclude is checked first (excluded files are
 // never recorded), then include (only matching files are recorded). Pass nil for either to skip that filter.
-func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob, includeGlob glob.Glob, excludeGlob glob.Glob) (map[string]cryptoutil.DigestSet, error) {
+func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob, includeGlob glob.Glob, excludeGlob glob.Glob) (map[string]cryptoutil.DigestSet, error) { //nolint:gocognit,gocyclo,funlen
 	artifacts := make(map[string]cryptoutil.DigestSet)
 
 	numWorkers := max(runtime.GOMAXPROCS(0), 1)
@@ -90,7 +90,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 				return err
 			}
 
-			if info.IsDir() {
+			if info.IsDir() { //nolint:nestif
 				dirHashMatch := false
 				for _, globItem := range dirHashGlob {
 					if !dirHashMatch {
@@ -115,7 +115,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 				return nil
 			}
 
-			if info.Mode()&fs.ModeSymlink != 0 {
+			if info.Mode()&fs.ModeSymlink != 0 { //nolint:nestif
 				linkedPath, err := filepath.EvalSymlinks(path)
 				if os.IsNotExist(err) {
 					log.Debugf("(file) broken symlink detected: %v", path)

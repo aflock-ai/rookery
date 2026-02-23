@@ -20,9 +20,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aflock-ai/rookery/attestation/log"
 	vault "github.com/hashicorp/vault/api"
 	k8sAuth "github.com/hashicorp/vault/api/auth/kubernetes"
-	"github.com/aflock-ai/rookery/attestation/log"
 )
 
 type contextDoneErr struct{}

@@ -21,9 +21,9 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/invopop/jsonschema"
 )
 

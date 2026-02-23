@@ -23,8 +23,8 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/plugins/attestors/k8smanifest"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/plugins/attestors/k8smanifest"
 	"github.com/invopop/jsonschema"
 	"github.com/stretchr/testify/require"
 )

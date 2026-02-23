@@ -173,7 +173,7 @@ func NewDigestSet(digestsByName map[string]string) (DigestSet, error) {
 
 func CalculateDigestSet(r io.Reader, digestValues []DigestValue) (DigestSet, error) {
 	digestSet := make(DigestSet)
-	writers := []io.Writer{}
+	writers := make([]io.Writer, 0, len(digestValues))
 	hashfuncs := map[DigestValue]hash.Hash{}
 	for _, digestValue := range digestValues {
 		hashfunc := digestValue.New()
@@ -206,11 +206,11 @@ func CalculateDigestSetFromBytes(data []byte, hashes []DigestValue) (DigestSet, 
 }
 
 func CalculateDigestSetFromFile(path string, hashes []DigestValue) (DigestSet, error) {
-	file, err := os.Open(path)
+	file, err := os.Open(path) //nolint:gosec // G304: path is provided by the caller
 	if err != nil {
 		return DigestSet{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	hashable, err := isHashableFile(file)
 	if err != nil {

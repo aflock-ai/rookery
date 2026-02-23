@@ -118,13 +118,13 @@ func TryParsePEMBlock(block *pem.Block) (interface{}, error) {
 
 // TryParsePEMBlockWithPassword attempts to parse a PEM block, optionally
 // decrypting it using the provided passphrase if the block is encrypted.
-func TryParsePEMBlockWithPassword(block *pem.Block, password []byte) (interface{}, error) {
+func TryParsePEMBlockWithPassword(block *pem.Block, password []byte) (interface{}, error) { //nolint:gocognit,gocyclo
 	if block == nil {
 		return nil, ErrInvalidPemBlock{}
 	}
 
 	// If no password, only attempt unencrypted formats and return.
-	if len(password) == 0 {
+	if len(password) == 0 { //nolint:nestif
 		// Unencrypted formats.
 		if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
 			return key, nil
@@ -149,7 +149,7 @@ func TryParsePEMBlockWithPassword(block *pem.Block, password []byte) (interface{
 	}
 
 	// Password provided: handle legacy-encrypted PEM, otherwise fall back to unencrypted parse.
-	if _, ok := block.Headers["DEK-Info"]; ok {
+	if _, ok := block.Headers["DEK-Info"]; ok { //nolint:nestif
 		decryptedDER, err := x509.DecryptPEMBlock(block, password) //nolint:staticcheck // legacy support
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt legacy encrypted PEM: %w", err)

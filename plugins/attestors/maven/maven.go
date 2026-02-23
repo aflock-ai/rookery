@@ -123,7 +123,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		return err
 	}
 
-	defer pomFile.Close()
+	defer func() { _ = pomFile.Close() }()
 	pomFileBytes, err := io.ReadAll(pomFile)
 	if err != nil {
 		return err

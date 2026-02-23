@@ -668,9 +668,9 @@ func FuzzDigestSetUnmarshalJSON(f *testing.F) {
 func FuzzDigestSetEqual(f *testing.F) {
 	f.Add("sha256-digest-a", "sha256-digest-b", "sha1-digest-a", "sha1-digest-b")
 	f.Add("", "", "", "")
-	f.Add("abc", "abc", "def", "def")   // all matching
-	f.Add("abc", "xyz", "def", "def")   // sha256 differs
-	f.Add("abc", "abc", "def", "xyz")   // sha1 differs
+	f.Add("abc", "abc", "def", "def") // all matching
+	f.Add("abc", "xyz", "def", "def") // sha256 differs
+	f.Add("abc", "abc", "def", "xyz") // sha1 differs
 	f.Add("same", "same", "same", "same")
 	f.Add("\x00", "\x00", "\xff", "\xff")
 
@@ -876,10 +876,10 @@ func FuzzNewVerifierFromReader(f *testing.F) {
 // controlling the hash algorithm field in an attestation envelope can crash
 // the verifier process.
 func FuzzComputeDigest(f *testing.F) {
-	f.Add([]byte("hello"), uint8(5), uint8(4))  // SHA256=5, SHA1=4
-	f.Add([]byte(""), uint8(5), uint8(5))        // SHA256, SHA256
-	f.Add([]byte("test"), uint8(14), uint8(5))   // SHA512=14, SHA256
-	f.Add([]byte("test"), uint8(4), uint8(4))    // SHA1, SHA1
+	f.Add([]byte("hello"), uint8(5), uint8(4)) // SHA256=5, SHA1=4
+	f.Add([]byte(""), uint8(5), uint8(5))      // SHA256, SHA256
+	f.Add([]byte("test"), uint8(14), uint8(5)) // SHA512=14, SHA256
+	f.Add([]byte("test"), uint8(4), uint8(4))  // SHA1, SHA1
 
 	f.Fuzz(func(t *testing.T, data []byte, hashID, supportedID uint8) {
 		// Constrain to *available* hash functions to avoid the known
@@ -1092,11 +1092,11 @@ func FuzzHashAlgorithmConfusion(f *testing.F) {
 	f.Add("sha3-256", "sha256")
 	f.Add("blake2b", "sha256")
 	// Tricky variants
-	f.Add("sha256\x00", "sha256")   // null terminator
-	f.Add(" sha256", "sha256")      // leading space
-	f.Add("sha256 ", "sha256")      // trailing space
-	f.Add("sha256\t", "sha256")     // trailing tab
-	f.Add("sha256\n", "sha256")     // trailing newline
+	f.Add("sha256\x00", "sha256") // null terminator
+	f.Add(" sha256", "sha256")    // leading space
+	f.Add("sha256 ", "sha256")    // trailing space
+	f.Add("sha256\t", "sha256")   // trailing tab
+	f.Add("sha256\n", "sha256")   // trailing newline
 
 	f.Fuzz(func(t *testing.T, candidateName, referenceName string) {
 		// Must not panic
@@ -1173,10 +1173,10 @@ func FuzzHashAlgorithmConfusion(f *testing.F) {
 func FuzzDigestSetJSONRoundTripWithBinaryDigests(f *testing.F) {
 	f.Add("sha256", []byte("abc123"))
 	f.Add("sha256", []byte{0xff, 0xfe, 0xfd})
-	f.Add("sha256", []byte{0xc0, 0xc1})           // invalid UTF-8
-	f.Add("sha1", []byte{0x00, 0x01, 0x02})        // null bytes
+	f.Add("sha256", []byte{0xc0, 0xc1})     // invalid UTF-8
+	f.Add("sha1", []byte{0x00, 0x01, 0x02}) // null bytes
 	f.Add("sha256", []byte("valid-hex-deadbeef"))
-	f.Add("sha256", []byte("\xef\xbb\xbf"))         // BOM
+	f.Add("sha256", []byte("\xef\xbb\xbf")) // BOM
 	f.Add("sha256", bytes.Repeat([]byte{0xAA}, 100))
 	f.Add("gitoid:sha256", []byte("gitoid:blob:sha256:abc123"))
 

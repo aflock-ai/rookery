@@ -657,10 +657,10 @@ func TestSecurityQuoteMetaAlwaysProducesValidRegex(t *testing.T) {
 	testValues := []string{
 		"normal value",
 		"regex.chars+more[stuff]",
-		"\xff\xfe\xfd",        // invalid UTF-8
-		"\x00\x01\x02",        // null bytes
-		string([]byte{0x80}),  // lone continuation byte
-		"$^.*+?()[]{}|\\",     // all regex metacharacters
+		"\xff\xfe\xfd",       // invalid UTF-8
+		"\x00\x01\x02",       // null bytes
+		string([]byte{0x80}), // lone continuation byte
+		"$^.*+?()[]{}|\\",    // all regex metacharacters
 	}
 
 	for _, val := range testValues {

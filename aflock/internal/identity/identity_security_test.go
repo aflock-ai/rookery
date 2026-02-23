@@ -647,12 +647,12 @@ func TestSecurity_R3_312_ProcFilesBypaseSizeCheck(t *testing.T) {
 func TestSecurity_R3_313_ClaudeProcessDetectionSpoofable(t *testing.T) {
 	// Simulate command strings that would incorrectly match as Claude
 	spoofableCommands := []string{
-		"/bin/bash -c echo claude",            // "claude" in argument
-		"/usr/bin/python claude_helper.py",    // "claude" in filename
-		"/home/user/claude-notes/editor",      // "claude" in path component
-		"vi /tmp/claude-session.txt",          // "claude" in argument path
-		"/usr/bin/env CLAUDE_MODE=1 /bin/sh",  // "claude" in env var
-		"/opt/claudelib/helper",               // "claude" in directory name
+		"/bin/bash -c echo claude",           // "claude" in argument
+		"/usr/bin/python claude_helper.py",   // "claude" in filename
+		"/home/user/claude-notes/editor",     // "claude" in path component
+		"vi /tmp/claude-session.txt",         // "claude" in argument path
+		"/usr/bin/env CLAUDE_MODE=1 /bin/sh", // "claude" in env var
+		"/opt/claudelib/helper",              // "claude" in directory name
 	}
 
 	for _, cmd := range spoofableCommands {
@@ -664,9 +664,9 @@ func TestSecurity_R3_313_ClaudeProcessDetectionSpoofable(t *testing.T) {
 
 	// Legitimate Claude commands that should match but might not
 	legitimateCommands := []string{
-		"/usr/local/bin/claude --model opus",         // should match
-		"/home/user/.local/bin/claude code",          // should match
-		"/usr/local/bin/claude-code --version",       // should match
+		"/usr/local/bin/claude --model opus",   // should match
+		"/home/user/.local/bin/claude code",    // should match
+		"/usr/local/bin/claude-code --version", // should match
 	}
 
 	for _, cmd := range legitimateCommands {

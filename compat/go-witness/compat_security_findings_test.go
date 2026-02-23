@@ -15,10 +15,10 @@ import (
 	"reflect"
 	"testing"
 
+	witness "github.com/in-toto/go-witness"
 	compatAttestation "github.com/in-toto/go-witness/attestation"
 	compatPolicy "github.com/in-toto/go-witness/policy"
 	compatSource "github.com/in-toto/go-witness/source"
-	witness "github.com/in-toto/go-witness"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/dsse"
@@ -93,7 +93,7 @@ func TestSecurity_R3_165_MemorySourceDualURIIndexing(t *testing.T) {
 	collJSON, _ := json.Marshal(collection)
 	stmt := map[string]interface{}{
 		"_type": "https://in-toto.io/Statement/v0.1", "predicateType": attestation.CollectionType,
-		"subject": []map[string]interface{}{{"name": "artifact", "digest": map[string]string{"sha256": "abc123"}}},
+		"subject":   []map[string]interface{}{{"name": "artifact", "digest": map[string]string{"sha256": "abc123"}}},
 		"predicate": json.RawMessage(collJSON),
 	}
 	stmtJSON, _ := json.Marshal(stmt)

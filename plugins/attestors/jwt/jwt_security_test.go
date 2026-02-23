@@ -220,8 +220,8 @@ func TestSecurity_R3_202_JWKSNoKeyIDSilentVerificationGap(t *testing.T) {
 		// returns an error here but doesn't provide a clear message about the
 		// key ID mismatch.
 		t.Logf("Attestor returned error (key matching issue): %v", err)
-		t.Logf("SECURITY FINDING R3-202: When token has no KeyID and JWKS keys have "+
-			"KeyIDs, go-jose fails with an opaque error. The attestor doesn't provide "+
+		t.Logf("SECURITY FINDING R3-202: When token has no KeyID and JWKS keys have " +
+			"KeyIDs, go-jose fails with an opaque error. The attestor doesn't provide " +
 			"a clear message about the KeyID mismatch, making debugging difficult.")
 		return
 	}
@@ -234,9 +234,9 @@ func TestSecurity_R3_202_JWKSNoKeyIDSilentVerificationGap(t *testing.T) {
 	// Check if VerifiedBy was populated
 	// jwks.Key("") would look for keys with empty KeyID
 	if attestor.VerifiedBy.JWKSUrl == "" {
-		t.Logf("SECURITY FINDING R3-202: Token was cryptographically verified "+
-			"but VerifiedBy is empty because the token has no KeyID header. "+
-			"jwks.Key(\"\") returns no results since all JWKS keys have explicit KeyIDs. "+
+		t.Logf("SECURITY FINDING R3-202: Token was cryptographically verified " +
+			"but VerifiedBy is empty because the token has no KeyID header. " +
+			"jwks.Key(\"\") returns no results since all JWKS keys have explicit KeyIDs. " +
 			"The attestation appears verified but doesn't record which key did it.")
 	} else {
 		t.Logf("VerifiedBy was populated: %v", attestor.VerifiedBy)

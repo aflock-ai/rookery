@@ -42,9 +42,9 @@ var TestSecrets = struct {
 	JWTToken:     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ",
 	PrivateKey:   "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIB\n-----END RSA PRIVATE KEY-----",
 	AuthURL:      "https://username:password@example.com",
-	Base64Token:  "Z2hwXzAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTA=", // Base64 of GitHub token
-	DoubleB64:    "WjJod1hqQXhNak0wTlRZM09Ea3dNVEl6TkRVMk56ZzVNREV5TXpRMU5qYzRPVEE9", // Double base64 of GitHub token
+	Base64Token:  "Z2hwXzAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTA=",                         // Base64 of GitHub token
+	DoubleB64:    "WjJod1hqQXhNak0wTlRZM09Ea3dNVEl6TkRVMk56ZzVNREV5TXpRMU5qYzRPVEE9",         // Double base64 of GitHub token
 	TripleB64:    "V2pkb2RGaEFNVEl6TkRVMk56ZzVNREV5TXpRMU5qYzRPVEF4TWpNME5UWTNPRGt3UFE9PQ==", // Triple base64
-	URLEncoded:   "ghp%5F012345678901234567890123456789", // URL encoded GitHub token
-	MixedEncoded: "Z2hwJTVGMDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MA==", // URL in base64
+	URLEncoded:   "ghp%5F012345678901234567890123456789",                                     // URL encoded GitHub token
+	MixedEncoded: "Z2hwJTVGMDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MA==",                     // URL in base64
 }

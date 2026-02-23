@@ -43,9 +43,9 @@ func TestAdversarial_Verifier_UnboundedTSRRead(t *testing.T) {
 	// The error will come from timestamp.Parse failing on the data,
 	// but the important thing is that all 10MB was read into memory first.
 	require.Error(t, err)
-	t.Logf("BUG [HIGH]: TSPVerifier.Verify reads entire tsrData into memory "+
-		"without size limit (io.ReadAll at tsp.go:178). A malicious TSR input "+
-		"can cause OOM. The Timestamp method correctly limits to 1MB "+
+	t.Logf("BUG [HIGH]: TSPVerifier.Verify reads entire tsrData into memory " +
+		"without size limit (io.ReadAll at tsp.go:178). A malicious TSR input " +
+		"can cause OOM. The Timestamp method correctly limits to 1MB " +
 		"(maxTSAResponseSize at tsp.go:125), but Verify has no such protection.")
 }
 

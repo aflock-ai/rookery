@@ -119,10 +119,10 @@ func TestCrossStep_Validate_CircularDependencies(t *testing.T) {
 		{
 			name: "cycle_in_subgraph_with_innocent_bystander",
 			steps: map[string]Step{
-				"root":    {Name: "root"},
-				"cycleA":  {Name: "cycleA", AttestationsFrom: []string{"root", "cycleB"}},
-				"cycleB":  {Name: "cycleB", AttestationsFrom: []string{"cycleA"}},
-				"deploy":  {Name: "deploy", AttestationsFrom: []string{"root"}},
+				"root":   {Name: "root"},
+				"cycleA": {Name: "cycleA", AttestationsFrom: []string{"root", "cycleB"}},
+				"cycleB": {Name: "cycleB", AttestationsFrom: []string{"cycleA"}},
+				"deploy": {Name: "deploy", AttestationsFrom: []string{"root"}},
 			},
 			wantCycle:   true,
 			minCycleLen: 2,
@@ -1311,7 +1311,7 @@ func TestCrossStep_TopologicalSort_WideDAG_AllRootsFirst(t *testing.T) {
 			"root1": {Name: "root1"},
 			"root2": {Name: "root2"},
 			"root3": {Name: "root3"},
-			"child":  {Name: "child", AttestationsFrom: []string{"root1", "root2", "root3"}},
+			"child": {Name: "child", AttestationsFrom: []string{"root1", "root2", "root3"}},
 		},
 	}
 
@@ -2303,11 +2303,11 @@ type marshalableAttestorWithExtra struct {
 	BuildStatus string `json:"build_status"`
 }
 
-func (m *marshalableAttestorWithExtra) Name() string                                  { return m.AttName }
-func (m *marshalableAttestorWithExtra) Type() string                                  { return m.AttType }
-func (m *marshalableAttestorWithExtra) RunType() attestation.RunType                  { return "test" }
+func (m *marshalableAttestorWithExtra) Name() string                                   { return m.AttName }
+func (m *marshalableAttestorWithExtra) Type() string                                   { return m.AttType }
+func (m *marshalableAttestorWithExtra) RunType() attestation.RunType                   { return "test" }
 func (m *marshalableAttestorWithExtra) Attest(_ *attestation.AttestationContext) error { return nil }
-func (m *marshalableAttestorWithExtra) Schema() *jsonschema.Schema                    { return nil }
+func (m *marshalableAttestorWithExtra) Schema() *jsonschema.Schema                     { return nil }
 
 // marshalableAttestorArbitrary wraps arbitrary data to implement attestation.Attestor.
 type marshalableAttestorArbitrary struct {
@@ -2315,11 +2315,11 @@ type marshalableAttestorArbitrary struct {
 	data     map[string]interface{}
 }
 
-func (m *marshalableAttestorArbitrary) Name() string                                  { return "arbitrary" }
-func (m *marshalableAttestorArbitrary) Type() string                                  { return m.typeName }
-func (m *marshalableAttestorArbitrary) RunType() attestation.RunType                  { return "test" }
+func (m *marshalableAttestorArbitrary) Name() string                                   { return "arbitrary" }
+func (m *marshalableAttestorArbitrary) Type() string                                   { return m.typeName }
+func (m *marshalableAttestorArbitrary) RunType() attestation.RunType                   { return "test" }
 func (m *marshalableAttestorArbitrary) Attest(_ *attestation.AttestationContext) error { return nil }
-func (m *marshalableAttestorArbitrary) Schema() *jsonschema.Schema                    { return nil }
+func (m *marshalableAttestorArbitrary) Schema() *jsonschema.Schema                     { return nil }
 func (m *marshalableAttestorArbitrary) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m.data)
 }
@@ -2331,11 +2331,11 @@ type materialProductAttestor struct {
 	products  map[string]attestation.Product
 }
 
-func (m *materialProductAttestor) Name() string                                  { return "mat-prod" }
-func (m *materialProductAttestor) Type() string                                  { return m.typeName }
-func (m *materialProductAttestor) RunType() attestation.RunType                  { return "test" }
+func (m *materialProductAttestor) Name() string                                   { return "mat-prod" }
+func (m *materialProductAttestor) Type() string                                   { return m.typeName }
+func (m *materialProductAttestor) RunType() attestation.RunType                   { return "test" }
 func (m *materialProductAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (m *materialProductAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (m *materialProductAttestor) Schema() *jsonschema.Schema                     { return nil }
 func (m *materialProductAttestor) Materials() map[string]cryptoutil.DigestSet     { return m.materials }
 func (m *materialProductAttestor) Products() map[string]attestation.Product       { return m.products }
 

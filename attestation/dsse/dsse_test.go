@@ -359,8 +359,8 @@ func TestTimestamp(t *testing.T) {
 		{T: time.Now().Add(128 * time.Hour)},
 	}
 
-	allTimestampers := make([]timestamp.Timestamper, 0)
-	allTimestampVerifiers := make([]timestamp.TimestampVerifier, 0)
+	allTimestampers := make([]timestamp.Timestamper, 0, len(expectedTimestampers)+len(unexpectedTimestampers))
+	allTimestampVerifiers := make([]timestamp.TimestampVerifier, 0, len(expectedTimestampers)+len(unexpectedTimestampers))
 	for _, expected := range expectedTimestampers {
 		allTimestampers = append(allTimestampers, expected)
 		allTimestampVerifiers = append(allTimestampVerifiers, expected)

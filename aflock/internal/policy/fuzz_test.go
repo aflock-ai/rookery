@@ -423,15 +423,15 @@ func FuzzExtractDomainAdversarial(f *testing.F) {
 		"https\r\n://evil.com",
 		"ht\x00tps://evil.com",
 		// Unicode homoglyphs for scheme letters
-		"h\u200btps://evil.com",          // zero-width space in "https"
-		"https\u200b://evil.com",          // zero-width space before ://
-		"https://evil\u200b.com",          // zero-width space in domain
-		"https://\u0435vil.com",           // Cyrillic 'e' in domain
-		"https://ev\u0456l.com",           // Cyrillic 'i' in domain
-		"https://\xff\xfe://evil.com",     // invalid UTF-8
+		"h\u200btps://evil.com",       // zero-width space in "https"
+		"https\u200b://evil.com",      // zero-width space before ://
+		"https://evil\u200b.com",      // zero-width space in domain
+		"https://\u0435vil.com",       // Cyrillic 'e' in domain
+		"https://ev\u0456l.com",       // Cyrillic 'i' in domain
+		"https://\xff\xfe://evil.com", // invalid UTF-8
 		// IDN / punycode
-		"https://xn--e1afg.com/path",     // punycode
-		"https://\u00e9vil.com/path",      // accented e
+		"https://xn--e1afg.com/path", // punycode
+		"https://\u00e9vil.com/path", // accented e
 		// Extremely long inputs
 		"https://" + strings.Repeat("sub.", 500) + "evil.com",
 		"https://user:" + strings.Repeat("p", 10000) + "@evil.com/path",
@@ -441,10 +441,10 @@ func FuzzExtractDomainAdversarial(f *testing.F) {
 		"HTTPS://evil.com",
 		"hTtP://evil.com",
 		"HtTpS://evil.com",
-		"https:///evil.com",                  // triple slash
-		"https:////evil.com",                 // quadruple slash
-		"https://evil.com:@safe.com",         // colon before @ in userinfo
-		"https://evil.com:80:90/path",        // double port
+		"https:///evil.com",           // triple slash
+		"https:////evil.com",          // quadruple slash
+		"https://evil.com:@safe.com",  // colon before @ in userinfo
+		"https://evil.com:80:90/path", // double port
 		// Query string and fragment as host confusion
 		"https://evil.com?host=safe.com",
 		"https://evil.com#safe.com",
@@ -577,16 +577,16 @@ func FuzzMatchGlobAdversarial(f *testing.F) {
 		{"[!]-]", "a"},
 		{"[\\]-\\]]", "]"},
 		{"[a-z0-9_-]", "-"},
-		{"[z-a]", "m"},           // inverted range
-		{"[", "x"},               // unterminated bracket
-		{"[]", "x"},              // empty bracket
-		{"[!", "x"},              // unterminated negated bracket
-		{"[!]", "x"},             // negated with no chars
-		{"[a-]", "a"},            // trailing dash
-		{"[-a]", "-"},            // leading dash
+		{"[z-a]", "m"}, // inverted range
+		{"[", "x"},     // unterminated bracket
+		{"[]", "x"},    // empty bracket
+		{"[!", "x"},    // unterminated negated bracket
+		{"[!]", "x"},   // negated with no chars
+		{"[a-]", "a"},  // trailing dash
+		{"[-a]", "-"},  // leading dash
 		// Mixed ** with alternation
 		{"**/{a,b,c}/*.go", "src/a/main.go"},
-		{"**/{a,b,c}/*.go", "main.go"},           // fallback path
+		{"**/{a,b,c}/*.go", "main.go"}, // fallback path
 		{"{**/*.go,**/*.ts}", "src/main.go"},
 		// Extremely long patterns
 		{strings.Repeat("?", 1000), strings.Repeat("x", 1000)},
@@ -718,13 +718,13 @@ func FuzzMatchToolPatternAdversarial(f *testing.F) {
 		{"Bash:" + strings.Repeat("*", 500), "Bash", strings.Repeat("x", 1000)},
 		{"Bash:" + strings.Repeat("[a-z]", 200), "Bash", strings.Repeat("a", 200)},
 		// Deny bypass attempts: tool name that partially matches
-		{"Bash:rm -rf /*", "Bash ", "rm -rf /tmp"},   // trailing space in tool name
-		{"Bash:rm -rf /*", " Bash", "rm -rf /tmp"},   // leading space in tool name
-		{"Bash:rm -rf /*", "BASH", "rm -rf /tmp"},    // case difference
-		{"Bash:rm -rf /*", "bash", "rm -rf /tmp"},    // all lowercase
+		{"Bash:rm -rf /*", "Bash ", "rm -rf /tmp"}, // trailing space in tool name
+		{"Bash:rm -rf /*", " Bash", "rm -rf /tmp"}, // leading space in tool name
+		{"Bash:rm -rf /*", "BASH", "rm -rf /tmp"},  // case difference
+		{"Bash:rm -rf /*", "bash", "rm -rf /tmp"},  // all lowercase
 		// Unicode tool names
-		{"B\u200bash:*", "B\u200bash", "anything"},   // zero-width space
-		{"\u0042ash:*", "Bash", "anything"},           // unicode B
+		{"B\u200bash:*", "B\u200bash", "anything"}, // zero-width space
+		{"\u0042ash:*", "Bash", "anything"},        // unicode B
 	}
 
 	for _, s := range seeds {
@@ -778,8 +778,8 @@ func FuzzExtractDomainUserinfo(f *testing.F) {
 		{"user", "evil.com"},
 		{"", "evil.com"},
 		{"user:pass:extra", "evil.com"},
-		{"user@inner", "evil.com"},       // nested @
-		{"user%40inner", "evil.com"},      // percent-encoded @
+		{"user@inner", "evil.com"},   // nested @
+		{"user%40inner", "evil.com"}, // percent-encoded @
 		{strings.Repeat("a", 10000), "evil.com"},
 		{"\x00", "evil.com"},
 		{"user\x00safe.com", "evil.com"},
@@ -882,16 +882,16 @@ func FuzzMatchToolPatternDenyBypass(f *testing.F) {
 	}{
 		{"Bash", "rm -rf /"},
 		{"Bash", "rm -rf /tmp"},
-		{"Bash", " rm -rf /"},         // leading space
-		{"Bash", "\trm -rf /"},        // leading tab
-		{"Bash", "rm  -rf /"},         // double space
-		{"Bash", "rm\t-rf /"},         // tab instead of space
-		{"Bash", "RM -RF /"},          // uppercase
-		{"Bash", "'rm' '-rf' '/'"},    // quoted
-		{"Bash", "r\\m -rf /"},        // backslash escape
-		{"Bash", "rm -r -f /"},        // split flags
+		{"Bash", " rm -rf /"},      // leading space
+		{"Bash", "\trm -rf /"},     // leading tab
+		{"Bash", "rm  -rf /"},      // double space
+		{"Bash", "rm\t-rf /"},      // tab instead of space
+		{"Bash", "RM -RF /"},       // uppercase
+		{"Bash", "'rm' '-rf' '/'"}, // quoted
+		{"Bash", "r\\m -rf /"},     // backslash escape
+		{"Bash", "rm -r -f /"},     // split flags
 		{"Bash", "rm --recursive --force /"},
-		{"Bash", "/bin/rm -rf /"},     // absolute path
+		{"Bash", "/bin/rm -rf /"},    // absolute path
 		{"Bash", "command rm -rf /"}, // command prefix
 		{"Bash", "rm -rf /\x00safe"}, // null byte
 		{"Bash", "rm\x00 -rf /"},

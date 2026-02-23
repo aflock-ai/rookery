@@ -164,7 +164,7 @@ func (a *Attestor) setDockerCandidate(met *BuildInfo) error {
 	}
 
 	log.Debugf("setting image references as '%s'", met.ImageName)
-	imageReferences := []string{}
+	imageReferences := make([]string, 0, 1)
 	imageReferences = append(imageReferences, met.ImageName)
 
 	a.Products[trimmed] = DockerProduct{
@@ -190,7 +190,7 @@ func (a *Attestor) getDockerCandidates(ctx *attestation.AttestationContext) ([]B
 	for path, product := range products {
 		if product.MimeType == jsonMimeType {
 			var met BuildInfo
-			f, err := os.ReadFile(filepath.Join(ctx.WorkingDir(), path))
+			f, err := os.ReadFile(filepath.Join(ctx.WorkingDir(), path)) //nolint:gosec // G304: path from attestation context
 			if err != nil {
 				log.Debugf("(attestation/docker) failed to read file %s: %v", path, err)
 				continue

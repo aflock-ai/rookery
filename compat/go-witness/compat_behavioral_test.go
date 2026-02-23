@@ -22,12 +22,12 @@ import (
 	"testing"
 	"time"
 
+	witness "github.com/in-toto/go-witness"
 	compatAttestation "github.com/in-toto/go-witness/attestation"
 	compatCrypto "github.com/in-toto/go-witness/cryptoutil"
 	compatDSSE "github.com/in-toto/go-witness/dsse"
 	compatPolicy "github.com/in-toto/go-witness/policy"
 	compatSource "github.com/in-toto/go-witness/source"
-	witness "github.com/in-toto/go-witness"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -172,10 +172,10 @@ func TestCompat_PolicyValidate_DetectsSelfReference(t *testing.T) {
 func TestCompat_PolicyValidate_ValidDAG(t *testing.T) {
 	p := compatPolicy.Policy{
 		Steps: map[string]compatPolicy.Step{
-			"source":  {Name: "source"},
-			"build":   {Name: "build", AttestationsFrom: []string{"source"}},
-			"test":    {Name: "test", AttestationsFrom: []string{"build"}},
-			"deploy":  {Name: "deploy", AttestationsFrom: []string{"build", "test"}},
+			"source": {Name: "source"},
+			"build":  {Name: "build", AttestationsFrom: []string{"source"}},
+			"test":   {Name: "test", AttestationsFrom: []string{"build"}},
+			"deploy": {Name: "deploy", AttestationsFrom: []string{"build", "test"}},
 		},
 	}
 
@@ -838,7 +838,7 @@ func TestCompat_EvaluateRegoPolicy_PassingPolicy(t *testing.T) {
 
 	policies := []compatPolicy.RegoPolicy{
 		{
-			Name:   "check-branch",
+			Name: "check-branch",
 			Module: []byte(`package witness.check_branch
 
 deny[msg] {
@@ -866,7 +866,7 @@ func TestCompat_EvaluateRegoPolicy_DenyingPolicy(t *testing.T) {
 
 	policies := []compatPolicy.RegoPolicy{
 		{
-			Name:   "check-branch",
+			Name: "check-branch",
 			Module: []byte(`package witness.check_branch
 
 deny[msg] {
@@ -939,11 +939,13 @@ type behavioralDummyAttestor struct {
 	data map[string]string
 }
 
-func (a *behavioralDummyAttestor) Name() string                                { return a.name }
-func (a *behavioralDummyAttestor) Type() string                                { return a.typ }
-func (a *behavioralDummyAttestor) RunType() attestation.RunType                { return attestation.PreMaterialRunType }
+func (a *behavioralDummyAttestor) Name() string { return a.name }
+func (a *behavioralDummyAttestor) Type() string { return a.typ }
+func (a *behavioralDummyAttestor) RunType() attestation.RunType {
+	return attestation.PreMaterialRunType
+}
 func (a *behavioralDummyAttestor) Attest(*attestation.AttestationContext) error { return nil }
-func (a *behavioralDummyAttestor) Schema() *jsonschema.Schema                  { return nil }
+func (a *behavioralDummyAttestor) Schema() *jsonschema.Schema                   { return nil }
 func (a *behavioralDummyAttestor) MarshalJSON() ([]byte, error) {
 	return json.Marshal(a.data)
 }

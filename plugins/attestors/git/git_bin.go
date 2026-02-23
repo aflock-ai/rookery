@@ -18,9 +18,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/go-git/go-git/v5"
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/go-git/go-git/v5"
 )
 
 // GitExists checks if the git binary is available.
@@ -70,7 +70,7 @@ func GitGetBinHash(ctx *attestation.AttestationContext) (cryptoutil.DigestSet, e
 func GitGetStatus(workDir string) (map[string]Status, error) {
 
 	// Execute the git status --porcelain command
-	cmd := exec.Command("git", "-C", workDir, "status", "--porcelain")
+	cmd := exec.Command("git", "-C", workDir, "status", "--porcelain") //nolint:gosec // G204: workDir comes from attestation context
 	outputBytes, err := cmd.Output()
 	if err != nil {
 		return map[string]Status{}, err

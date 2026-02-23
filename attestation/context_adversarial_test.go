@@ -23,10 +23,10 @@ type slowAttestor struct {
 	err      error
 }
 
-func (a *slowAttestor) Name() string                     { return a.name }
-func (a *slowAttestor) Type() string                     { return "https://test/" + a.name }
-func (a *slowAttestor) RunType() RunType                 { return a.runType }
-func (a *slowAttestor) Schema() *jsonschema.Schema        { return nil }
+func (a *slowAttestor) Name() string               { return a.name }
+func (a *slowAttestor) Type() string               { return "https://test/" + a.name }
+func (a *slowAttestor) RunType() RunType           { return a.runType }
+func (a *slowAttestor) Schema() *jsonschema.Schema { return nil }
 func (a *slowAttestor) Attest(ctx *AttestationContext) error {
 	select {
 	case <-ctx.Context().Done():
@@ -42,10 +42,10 @@ type materialAttestor struct {
 	materials map[string]cryptoutil.DigestSet
 }
 
-func (a *materialAttestor) Name() string                     { return a.name }
-func (a *materialAttestor) Type() string                     { return "https://test/" + a.name }
-func (a *materialAttestor) RunType() RunType                 { return a.runType }
-func (a *materialAttestor) Schema() *jsonschema.Schema        { return nil }
+func (a *materialAttestor) Name() string               { return a.name }
+func (a *materialAttestor) Type() string               { return "https://test/" + a.name }
+func (a *materialAttestor) RunType() RunType           { return a.runType }
+func (a *materialAttestor) Schema() *jsonschema.Schema { return nil }
 func (a *materialAttestor) Attest(ctx *AttestationContext) error {
 	// Simulate some work
 	time.Sleep(time.Millisecond)
@@ -61,10 +61,10 @@ type productAttestor struct {
 	products map[string]Product
 }
 
-func (a *productAttestor) Name() string                     { return a.name }
-func (a *productAttestor) Type() string                     { return "https://test/" + a.name }
-func (a *productAttestor) RunType() RunType                 { return a.runType }
-func (a *productAttestor) Schema() *jsonschema.Schema        { return nil }
+func (a *productAttestor) Name() string                         { return a.name }
+func (a *productAttestor) Type() string                         { return "https://test/" + a.name }
+func (a *productAttestor) RunType() RunType                     { return a.runType }
+func (a *productAttestor) Schema() *jsonschema.Schema           { return nil }
 func (a *productAttestor) Attest(ctx *AttestationContext) error { return nil }
 func (a *productAttestor) Products() map[string]Product {
 	return a.products
@@ -76,20 +76,20 @@ type failingAttestor struct {
 	err     error
 }
 
-func (a *failingAttestor) Name() string                     { return a.name }
-func (a *failingAttestor) Type() string                     { return "https://test/" + a.name }
-func (a *failingAttestor) RunType() RunType                 { return a.runType }
-func (a *failingAttestor) Schema() *jsonschema.Schema        { return nil }
+func (a *failingAttestor) Name() string               { return a.name }
+func (a *failingAttestor) Type() string               { return "https://test/" + a.name }
+func (a *failingAttestor) RunType() RunType           { return a.runType }
+func (a *failingAttestor) Schema() *jsonschema.Schema { return nil }
 func (a *failingAttestor) Attest(ctx *AttestationContext) error {
 	return a.err
 }
 
 type emptyRunTypeAttestor struct{}
 
-func (a *emptyRunTypeAttestor) Name() string                     { return "empty-run-type" }
-func (a *emptyRunTypeAttestor) Type() string                     { return "https://test/empty" }
-func (a *emptyRunTypeAttestor) RunType() RunType                 { return "" }
-func (a *emptyRunTypeAttestor) Schema() *jsonschema.Schema        { return nil }
+func (a *emptyRunTypeAttestor) Name() string                         { return "empty-run-type" }
+func (a *emptyRunTypeAttestor) Type() string                         { return "https://test/empty" }
+func (a *emptyRunTypeAttestor) RunType() RunType                     { return "" }
+func (a *emptyRunTypeAttestor) Schema() *jsonschema.Schema           { return nil }
 func (a *emptyRunTypeAttestor) Attest(ctx *AttestationContext) error { return nil }
 
 // --- Tests ---
@@ -412,8 +412,8 @@ func TestWithDirHashGlob_InvalidPattern(t *testing.T) {
 
 	// The invalid glob position should contain nil because the error was discarded
 	if globs[0] == nil {
-		t.Errorf("BUG: WithDirHashGlob silently stores nil for invalid glob pattern '[invalid'. "+
-			"The compile error is discarded (line 107: dirHashGlobItemCompiled, _ := glob.Compile(...)). "+
+		t.Errorf("BUG: WithDirHashGlob silently stores nil for invalid glob pattern '[invalid'. " +
+			"The compile error is discarded (line 107: dirHashGlobItemCompiled, _ := glob.Compile(...)). " +
 			"Downstream code calling glob.Match on this nil will panic.")
 	} else {
 		t.Logf("OK: invalid glob pattern was handled (unexpectedly compiled successfully)")
@@ -594,10 +594,10 @@ type trackingOrderAttestor struct {
 	order   *[]string
 }
 
-func (a *trackingOrderAttestor) Name() string                     { return a.name }
-func (a *trackingOrderAttestor) Type() string                     { return "https://test/" + a.name }
-func (a *trackingOrderAttestor) RunType() RunType                 { return a.runType }
-func (a *trackingOrderAttestor) Schema() *jsonschema.Schema        { return nil }
+func (a *trackingOrderAttestor) Name() string               { return a.name }
+func (a *trackingOrderAttestor) Type() string               { return "https://test/" + a.name }
+func (a *trackingOrderAttestor) RunType() RunType           { return a.runType }
+func (a *trackingOrderAttestor) Schema() *jsonschema.Schema { return nil }
 func (a *trackingOrderAttestor) Attest(ctx *AttestationContext) error {
 	a.mu.Lock()
 	*a.order = append(*a.order, a.name)

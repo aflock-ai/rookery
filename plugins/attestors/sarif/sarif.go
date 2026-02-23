@@ -82,7 +82,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	return nil
 }
 
-func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
+func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error { //nolint:gocognit // SARIF candidate selection requires complex matching
 	products := ctx.Products()
 
 	if len(products) == 0 {
@@ -115,14 +115,14 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 			continue
 		}
 
-		f, err := os.Open(path)
+		f, err := os.Open(path) //nolint:gosec // G304: path from attestation context products
 		if err != nil {
 			log.Debugf("(attestation/sarif) error opening file %s: %v", path, err)
 			continue
 		}
 
 		reportBytes, err := io.ReadAll(f)
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			log.Debugf("(attestation/sarif) error reading file %s: %v", path, err)
 			continue

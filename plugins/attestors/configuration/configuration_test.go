@@ -243,10 +243,10 @@ func TestParseFlags(t *testing.T) {
 			name: "mixed formats",
 			args: []string{"--step=build", "-a", "config", "--trace", "-o", "out.json"},
 			want: map[string]string{
-				"step": "build",
-				"a":    "config",
+				"step":  "build",
+				"a":     "config",
 				"trace": "true",
-				"o":    "out.json",
+				"o":     "out.json",
 			},
 		},
 		{

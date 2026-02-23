@@ -56,21 +56,21 @@ func DirhHashSha256(files []string, open func(string) (io.ReadCloser, error)) (s
 		var abstractedFile interface{} = r
 		osFile, ok := abstractedFile.(*os.File)
 		if !ok {
-			r.Close()
+			_ = r.Close()
 			return "", errors.New("dirhash: abstracted file is not an *os.File")
 		}
 		if info, err := osFile.Stat(); err == nil && info.IsDir() {
-			r.Close()
+			_ = r.Close()
 			continue
 		}
 
 		hf := sha256.New()
 		_, err = io.Copy(hf, r)
-		r.Close()
+		_ = r.Close()
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(h, "%x  %s\n", hf.Sum(nil), file)
+		_, _ = fmt.Fprintf(h, "%x  %s\n", hf.Sum(nil), file)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

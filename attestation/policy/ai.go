@@ -36,6 +36,11 @@ const (
 	defaultAIServerURL = "http://judge-ollama.judge.svc.cluster.local:11434"
 	defaultAIModel     = "llama3.2"
 	defaultAITimeout   = 120 * time.Second
+
+	// AiStatusPass is the status string for a passing AI policy evaluation.
+	AiStatusPass = "PASS"
+	// AiStatusFail is the status string for a failing AI policy evaluation.
+	AiStatusFail = "FAIL"
 )
 
 // AiResponse represents the result of an AI policy evaluation.
@@ -76,7 +81,7 @@ func generateSchema[T any]() interface{} {
 }
 
 // ExecuteAiPolicy evaluates a single AI policy against an attestor using an Ollama-compatible API.
-func ExecuteAiPolicy(attestor attestation.Attestor, pol AiPolicy, serverURL string) (AiResponse, error) {
+func ExecuteAiPolicy(attestor attestation.Attestor, pol AiPolicy, serverURL string) (AiResponse, error) { //nolint:funlen
 	if attestor == nil {
 		return AiResponse{}, fmt.Errorf("attestor must not be nil")
 	}
@@ -142,7 +147,7 @@ In the response, the Status field MUST be exactly 'PASS' or 'FAIL', and include 
 	if err != nil {
 		return AiResponse{}, fmt.Errorf("failed to execute HTTP request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -163,11 +168,11 @@ In the response, the Status field MUST be exactly 'PASS' or 'FAIL', and include 
 		return AiResponse{}, fmt.Errorf("failed to parse AI response: %w", err)
 	}
 
-	if aiResponse.Status != "PASS" && aiResponse.Status != "FAIL" {
+	if aiResponse.Status != AiStatusPass && aiResponse.Status != AiStatusFail {
 		return AiResponse{}, fmt.Errorf("invalid status in AI response: %s", aiResponse.Status)
 	}
 
-	if aiResponse.Status == "FAIL" {
+	if aiResponse.Status == AiStatusFail {
 		return aiResponse, fmt.Errorf("AI policy evaluation failed: %s", aiResponse.Reason)
 	}
 

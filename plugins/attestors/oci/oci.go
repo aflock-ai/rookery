@@ -84,11 +84,11 @@ type Manifest struct {
 }
 
 func (m *Manifest) getImageID(ctx *attestation.AttestationContext, tarFilePath string) (cryptoutil.DigestSet, error) {
-	tarFile, err := os.Open(tarFilePath)
+	tarFile, err := os.Open(tarFilePath) //nolint:gosec // G304: tar file path from attestation context
 	if err != nil {
 		return nil, err
 	}
-	defer tarFile.Close()
+	defer func() { _ = tarFile.Close() }()
 
 	tarReader := tar.NewReader(tarFile)
 	for {
@@ -214,7 +214,7 @@ func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
 		err = fmt.Errorf("error opening tar file: %w", err)
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	tarReader := tar.NewReader(f)
 	for {
@@ -281,14 +281,14 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subj
 }
 
-func (m *Manifest) getLayerDIFFIDs(ctx *attestation.AttestationContext, tarFilePath string) ([]cryptoutil.DigestSet, error) {
+func (m *Manifest) getLayerDIFFIDs(ctx *attestation.AttestationContext, tarFilePath string) ([]cryptoutil.DigestSet, error) { //nolint:gocognit,gocyclo // OCI layer diffID calculation is inherently complex
 	var layerDiffIDs []cryptoutil.DigestSet
 
-	tarFile, err := os.Open(tarFilePath)
+	tarFile, err := os.Open(tarFilePath) //nolint:gosec // G304: tar file path from attestation context
 	if err != nil {
 		return nil, err
 	}
-	defer tarFile.Close()
+	defer func() { _ = tarFile.Close() }()
 
 	tarReader := tar.NewReader(tarFile)
 	for {
@@ -303,7 +303,7 @@ func (m *Manifest) getLayerDIFFIDs(ctx *attestation.AttestationContext, tarFileP
 			continue
 		}
 		for _, layerFile := range m.Layers {
-			if h.Name == layerFile {
+			if h.Name == layerFile { //nolint:nestif // layer processing requires nested decompression logic
 				if h.Size < 0 || h.Size > maxTarEntrySize {
 					return nil, fmt.Errorf("layer entry has invalid size: %d", h.Size)
 				}
@@ -322,7 +322,7 @@ func (m *Manifest) getLayerDIFFIDs(ctx *attestation.AttestationContext, tarFileP
 					// layer could be orders of magnitude larger than the compressed size.
 					const maxDecompressedSize = maxTarEntrySize
 					c, err := io.ReadAll(io.LimitReader(breader, maxDecompressedSize+1))
-					breader.Close()
+					_ = breader.Close()
 					if err != nil {
 						return nil, err
 					}

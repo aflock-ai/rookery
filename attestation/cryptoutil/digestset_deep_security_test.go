@@ -58,9 +58,9 @@ func TestSecurity_R3_247_CalculateDigestSetFromDirIgnoresHashes(t *testing.T) {
 		t.Fatal("unexpectedly found SHA1 in result — the hashes parameter was ignored")
 	}
 
-	t.Logf("SECURITY BUG R3-247: CalculateDigestSetFromDir(hashes=[SHA1]) returned dirHash:SHA256. "+
-		"The hashes parameter is completely ignored. This causes inconsistency: file artifacts "+
-		"will have SHA1 digests but directory artifacts always have SHA256 dirHash. During policy "+
+	t.Logf("SECURITY BUG R3-247: CalculateDigestSetFromDir(hashes=[SHA1]) returned dirHash:SHA256. " +
+		"The hashes parameter is completely ignored. This causes inconsistency: file artifacts " +
+		"will have SHA1 digests but directory artifacts always have SHA256 dirHash. During policy " +
 		"artifact comparison, directories will fail to match because the hash algorithms don't overlap.")
 }
 
@@ -82,7 +82,7 @@ func TestSecurity_R3_247_DirHashFileHashMismatch(t *testing.T) {
 
 	// This confirms that requesting SHA1 for files but getting SHA256 for dirs
 	// means artifact comparison between file and dir steps will always fail.
-	t.Logf("Confirmed: SHA1 file artifacts and SHA256 dir artifacts have no common "+
+	t.Logf("Confirmed: SHA1 file artifacts and SHA256 dir artifacts have no common " +
 		"hash algorithms and can never be Equal(). This is a consequence of R3-247.")
 }
 
@@ -92,9 +92,9 @@ func TestSecurity_R3_247_DirHashFileHashMismatch(t *testing.T) {
 // partial result.
 func TestSecurity_R3_248_NewDigestSetPartialOnError(t *testing.T) {
 	input := map[string]string{
-		"sha256":         "abc123",
-		"invalid_hash":   "def456",
-		"sha1":           "ghi789",
+		"sha256":       "abc123",
+		"invalid_hash": "def456",
+		"sha1":         "ghi789",
 	}
 
 	ds, err := NewDigestSet(input)
@@ -198,10 +198,10 @@ func TestSecurity_R3_251_IsHashableFileSymlinkDeadCode(t *testing.T) {
 	if stat.Mode()&os.ModeSymlink != 0 {
 		t.Logf("File opened via symlink reports ModeSymlink — symlink branch IS reachable")
 	} else {
-		t.Logf("FINDING R3-251: isHashableFile's symlink check (mode&ModeSymlink) is dead code. "+
-			"os.Open follows symlinks, so Stat() on the opened file returns the target's mode, "+
-			"never ModeSymlink. The symlink branch at line 287 is unreachable through os.Open. "+
-			"Not a security issue per se, but misleading — the function appears to handle "+
+		t.Logf("FINDING R3-251: isHashableFile's symlink check (mode&ModeSymlink) is dead code. " +
+			"os.Open follows symlinks, so Stat() on the opened file returns the target's mode, " +
+			"never ModeSymlink. The symlink branch at line 287 is unreachable through os.Open. " +
+			"Not a security issue per se, but misleading — the function appears to handle " +
 			"symlinks but never actually encounters them.")
 	}
 }
@@ -222,9 +222,9 @@ func TestSecurity_R3_252_DigestSetEqualEmptyString(t *testing.T) {
 	// Empty digest = zero-length file? Or corrupted data?
 	// Either way, empty string "" == "" returns true which is technically correct
 	// but means two files with no content (or corrupted hashing) pass comparison.
-	t.Logf("FINDING R3-252: DigestSet.Equal matches empty digest strings. "+
-		"Two digest sets with empty SHA256 values are considered equal. "+
-		"This could mask hashing failures where the digest was never computed. "+
+	t.Logf("FINDING R3-252: DigestSet.Equal matches empty digest strings. " +
+		"Two digest sets with empty SHA256 values are considered equal. " +
+		"This could mask hashing failures where the digest was never computed. " +
 		"A defensive implementation would reject empty digest values.")
 }
 

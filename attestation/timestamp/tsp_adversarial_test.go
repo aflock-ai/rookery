@@ -183,8 +183,8 @@ func TestSecurity_R3_204_VerifyUnboundedTSRRead(t *testing.T) {
 		bytes.NewReader([]byte("signed-data")))
 
 	require.Error(t, err)
-	t.Logf("BUG [HIGH]: TSPVerifier.Verify reads entire tsrData into memory "+
-		"without size limit (io.ReadAll at tsp.go:178). A malicious TSR input "+
+	t.Logf("BUG [HIGH]: TSPVerifier.Verify reads entire tsrData into memory " +
+		"without size limit (io.ReadAll at tsp.go:178). A malicious TSR input " +
 		"can cause OOM. The Timestamp method limits to 1MB but Verify does not.")
 }
 

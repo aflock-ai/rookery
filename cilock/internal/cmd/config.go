@@ -27,7 +27,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error {
+func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error { //nolint:gocognit
 	v := viper.New()
 	if _, err := os.Stat(rootOptions.Config); errors.Is(err, os.ErrNotExist) {
 		if rootCmd.Flags().Lookup("config").Changed {
@@ -60,7 +60,7 @@ func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error 
 				return
 			}
 			configKey := fmt.Sprintf("%s.%s", cm.Name(), f.Name)
-			if !f.Changed {
+			if !f.Changed { //nolint:nestif
 				if f.Value.Type() == "stringSlice" {
 					configValue := v.GetStringSlice(configKey)
 					if len(configValue) > 0 {

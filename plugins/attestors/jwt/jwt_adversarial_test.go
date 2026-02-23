@@ -71,8 +71,8 @@ func TestSecurity_R3_250_SchemaDoublePointerBug(t *testing.T) {
 		// If they happen to match, the library may have been updated to
 		// handle double-pointers gracefully. Log it but don't fail --
 		// the code is still wrong even if the library compensates.
-		t.Logf("INFO: jsonschema.Reflect currently handles **Attestor the same as *Attestor. "+
-			"The code is still wrong (passes &a where a is *Attestor) and may break "+
+		t.Logf("INFO: jsonschema.Reflect currently handles **Attestor the same as *Attestor. " +
+			"The code is still wrong (passes &a where a is *Attestor) and may break " +
 			"with library updates.")
 		return
 	}
@@ -169,7 +169,7 @@ func TestSecurity_R3_251_ExpiredJWTAccepted(t *testing.T) {
 			"exp/nbf/iat. An attacker with an old token can create valid attestations.",
 			exp)
 	} else {
-		t.Logf("SECURITY FINDING R3-251: JWT with exp claim accepted, but exp not in Claims map. "+
+		t.Logf("SECURITY FINDING R3-251: JWT with exp claim accepted, but exp not in Claims map. " +
 			"The attestor does not validate token temporal claims.")
 	}
 }
@@ -293,18 +293,18 @@ func TestSecurity_R3_253_VerifiedByEmptyOnKeyIDMismatch(t *testing.T) {
 		// go-jose may reject when kid doesn't match; this is actually good
 		// security behavior from the library. Log and continue.
 		t.Logf("go-jose rejected mismatched KeyID (good library behavior): %v", err)
-		t.Logf("FINDING R3-253: The attestor relies on go-jose to reject "+
-			"mismatched KeyIDs. If go-jose ever changes this behavior, "+
+		t.Logf("FINDING R3-253: The attestor relies on go-jose to reject " +
+			"mismatched KeyIDs. If go-jose ever changes this behavior, " +
 			"the attestor has no fallback validation.")
 		return
 	}
 
 	// If we get here, the token was verified despite KeyID mismatch
 	if attestor.VerifiedBy.JWKSUrl == "" {
-		t.Logf("SECURITY FINDING R3-253: Token verified but VerifiedBy is empty. "+
-			"KeyID 'totally-different-key' doesn't match JWKS key 'server-key-1'. "+
-			"jwks.Key() returns empty for the mismatched ID, so no key is recorded "+
-			"as the verifier. Claims are trusted without audit trail of the "+
+		t.Logf("SECURITY FINDING R3-253: Token verified but VerifiedBy is empty. " +
+			"KeyID 'totally-different-key' doesn't match JWKS key 'server-key-1'. " +
+			"jwks.Key() returns empty for the mismatched ID, so no key is recorded " +
+			"as the verifier. Claims are trusted without audit trail of the " +
 			"verifying key.")
 	}
 
@@ -370,10 +370,10 @@ func TestSecurity_R3_254_AlgorithmNotRestricted(t *testing.T) {
 		t.Fatal("expected claims from ES256 token")
 	}
 
-	t.Logf("SECURITY FINDING R3-254: JWT attestor accepts any algorithm "+
-		"supported by go-jose (tested ES256). There is no allow-list of "+
-		"acceptable algorithms. An attacker controlling the JWKS endpoint "+
-		"can serve keys for weaker algorithms. The attestor should provide "+
+	t.Logf("SECURITY FINDING R3-254: JWT attestor accepts any algorithm " +
+		"supported by go-jose (tested ES256). There is no allow-list of " +
+		"acceptable algorithms. An attacker controlling the JWKS endpoint " +
+		"can serve keys for weaker algorithms. The attestor should provide " +
 		"an option to restrict acceptable algorithms.")
 
 	// Verify the attestor doesn't even look at the algorithm
@@ -450,8 +450,8 @@ func TestSecurity_R3_256_NilContextSafe(t *testing.T) {
 		t.Fatalf("nil context caused error: %v", err)
 	}
 
-	t.Logf("FINDING R3-256: Nil AttestationContext is safe because the JWT "+
-		"attestor ignores the context entirely. However, if someone adds "+
+	t.Logf("FINDING R3-256: Nil AttestationContext is safe because the JWT " +
+		"attestor ignores the context entirely. However, if someone adds " +
 		"context usage later, this will panic.")
 }
 

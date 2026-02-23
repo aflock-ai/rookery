@@ -267,7 +267,7 @@ func discoverBinary() *BinaryIdentity {
 		binary.Name = "claude-code"
 
 		// Get version
-		if out, err := exec.Command(binary.Path, "--version").Output(); err == nil {
+		if out, err := exec.Command(binary.Path, "--version").Output(); err == nil { //nolint:gosec // G204: command constructed from config, not user taint
 			versionPattern := regexp.MustCompile(`(\d+\.\d+\.\d+)`)
 			if matches := versionPattern.FindStringSubmatch(string(out)); len(matches) > 1 {
 				binary.Version = matches[1]
@@ -371,11 +371,11 @@ func computeBinaryDigest(path string) string {
 }
 
 // discoverEnvironment discovers the execution environment.
-func discoverEnvironment() *EnvironmentIdentity {
+func discoverEnvironment() *EnvironmentIdentity { //nolint:gocognit,nestif // environment discovery is inherently complex with nested checks
 	env := &EnvironmentIdentity{}
 
 	// Check for container environment
-	if _, err := os.Stat("/.dockerenv"); err == nil {
+	if _, err := os.Stat("/.dockerenv"); err == nil { //nolint:nestif
 		env.Type = "container"
 		// Try to get container ID from cgroup
 		if data, err := os.ReadFile("/proc/self/cgroup"); err == nil {
@@ -385,10 +385,10 @@ func discoverEnvironment() *EnvironmentIdentity {
 					parts := strings.Split(line, "/")
 					if len(parts) > 0 {
 						containerID := parts[len(parts)-1]
-					if len(containerID) > 12 {
-						containerID = containerID[:12]
-					}
-					env.ContainerID = containerID
+						if len(containerID) > 12 {
+							containerID = containerID[:12]
+						}
+						env.ContainerID = containerID
 						break
 					}
 				}
@@ -528,10 +528,10 @@ func compareSemver(a, b string) int {
 	for i := 0; i < 3; i++ {
 		var aval, bval int
 		if i < len(apartsStr) {
-			fmt.Sscanf(apartsStr[i], "%d", &aval)
+			_, _ = fmt.Sscanf(apartsStr[i], "%d", &aval)
 		}
 		if i < len(bpartsStr) {
-			fmt.Sscanf(bpartsStr[i], "%d", &bval)
+			_, _ = fmt.Sscanf(bpartsStr[i], "%d", &bval)
 		}
 		if aval < bval {
 			return -1

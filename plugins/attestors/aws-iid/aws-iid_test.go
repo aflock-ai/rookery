@@ -25,9 +25,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -202,6 +202,7 @@ func TestAttestor_Attest(t *testing.T) {
 				t.Fatalf("failed to load AWS config: %v", err)
 			}
 			a.cfg = cfg
+			a.cfgSet = true
 
 			ctx, err := attestation.NewContext("test", []attestation.Attestor{a})
 			require.NoError(t, err)
@@ -231,6 +232,7 @@ func TestAttestor_Attest_CertFromFile(t *testing.T) {
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEC2IMDSEndpoint(endpoint))
 	require.NoError(t, err)
 	a.cfg = cfg
+	a.cfgSet = true
 
 	ctx, err := attestation.NewContext("test", []attestation.Attestor{a})
 	require.NoError(t, err)
@@ -300,6 +302,7 @@ func TestAttestor_Subjects(t *testing.T) {
 		t.Fatalf("failed to load AWS config: %v", err)
 	}
 	a.cfg = cfg
+	a.cfgSet = true
 
 	ctx, err := attestation.NewContext("test", []attestation.Attestor{a})
 	require.NoError(t, err)

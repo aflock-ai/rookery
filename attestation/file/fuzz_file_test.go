@@ -24,8 +24,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/gobwas/glob"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -63,8 +63,8 @@ func FuzzRecordArtifactsFilenames(f *testing.F) {
 	f.Add(".hidden", []byte("dotfile"))
 	f.Add("file with spaces.txt", []byte("spaces"))
 	f.Add("file\ttab.txt", []byte("tab"))
-	f.Add(strings.Repeat("a", 250)+".txt", []byte("long name"))       // near 255 limit
-	f.Add("deeply/nested/path/file.txt", []byte("nested"))            // will be flattened
+	f.Add(strings.Repeat("a", 250)+".txt", []byte("long name")) // near 255 limit
+	f.Add("deeply/nested/path/file.txt", []byte("nested"))      // will be flattened
 	f.Add("*.go", []byte("glob pattern name"))
 	f.Add("[bracket].txt", []byte("bracket"))
 	f.Add("{brace}.txt", []byte("brace"))
@@ -74,10 +74,10 @@ func FuzzRecordArtifactsFilenames(f *testing.F) {
 	f.Add("file\x01control.txt", []byte("control char"))
 	f.Add(" ", []byte("space only"))
 	f.Add(".", []byte("dot"))
-	f.Add("..", []byte("dotdot"))                                      // path traversal
+	f.Add("..", []byte("dotdot")) // path traversal
 	f.Add("a/../../escape.txt", []byte("traversal"))
-	f.Add("normal", []byte{0x00})                                     // null byte in content
-	f.Add("normal", []byte{0xff, 0xfe, 0xfd})                         // binary content
+	f.Add("normal", []byte{0x00})             // null byte in content
+	f.Add("normal", []byte{0xff, 0xfe, 0xfd}) // binary content
 
 	f.Fuzz(func(t *testing.T, filename string, content []byte) {
 		// Skip filenames with null bytes (OS rejects them)
@@ -156,17 +156,23 @@ func FuzzRecordArtifactsFilenames(f *testing.F) {
 // that the hash computation produces a valid, deterministic result.
 // This tests the CalculateDigestSet code path with arbitrary byte sequences.
 func FuzzRecordArtifactsContent(f *testing.F) {
-	f.Add([]byte(""))                                                  // empty
-	f.Add([]byte("hello world"))                                       // ASCII
-	f.Add([]byte{0x00})                                                // single null
-	f.Add(make([]byte, 4096))                                         // 4KB of zeros
-	f.Add([]byte{0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa})                // high bytes
-	f.Add([]byte(strings.Repeat("A", 1<<16)))                         // 64KB
-	f.Add([]byte("\x89PNG\r\n\x1a\n"))                                 // PNG header
-	f.Add([]byte("GIF89a"))                                            // GIF header
-	f.Add([]byte("%PDF-1.4"))                                          // PDF header
-	f.Add([]byte("\x1f\x8b\x08"))                                     // gzip header
-	f.Add(func() []byte { b := make([]byte, 256); for i := range b { b[i] = byte(i) }; return b }())
+	f.Add([]byte(""))                                 // empty
+	f.Add([]byte("hello world"))                      // ASCII
+	f.Add([]byte{0x00})                               // single null
+	f.Add(make([]byte, 4096))                         // 4KB of zeros
+	f.Add([]byte{0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa}) // high bytes
+	f.Add([]byte(strings.Repeat("A", 1<<16)))         // 64KB
+	f.Add([]byte("\x89PNG\r\n\x1a\n"))                // PNG header
+	f.Add([]byte("GIF89a"))                           // GIF header
+	f.Add([]byte("%PDF-1.4"))                         // PDF header
+	f.Add([]byte("\x1f\x8b\x08"))                     // gzip header
+	f.Add(func() []byte {
+		b := make([]byte, 256)
+		for i := range b {
+			b[i] = byte(i)
+		}
+		return b
+	}())
 
 	f.Fuzz(func(t *testing.T, content []byte) {
 		dir := t.TempDir()
@@ -255,11 +261,11 @@ func FuzzShouldRecordGlobPatterns(f *testing.F) {
 // files and symlinks, verifying that RecordArtifacts terminates without
 // panics, deadlocks, or goroutine leaks.
 func FuzzRecordArtifactsSymlinks(f *testing.F) {
-	f.Add(uint8(5), uint8(3), uint8(1), false) // 5 files, 3 internal links, 1 external, no cycle
+	f.Add(uint8(5), uint8(3), uint8(1), false)  // 5 files, 3 internal links, 1 external, no cycle
 	f.Add(uint8(0), uint8(0), uint8(0), false)  // empty dir
-	f.Add(uint8(1), uint8(10), uint8(0), true)   // 1 file, 10 links, cycle
-	f.Add(uint8(20), uint8(0), uint8(5), false)  // 20 files, 0 internal, 5 external
-	f.Add(uint8(3), uint8(3), uint8(3), true)    // balanced with cycle
+	f.Add(uint8(1), uint8(10), uint8(0), true)  // 1 file, 10 links, cycle
+	f.Add(uint8(20), uint8(0), uint8(5), false) // 20 files, 0 internal, 5 external
+	f.Add(uint8(3), uint8(3), uint8(3), true)   // balanced with cycle
 
 	f.Fuzz(func(t *testing.T, numFiles uint8, numInternalLinks uint8, numExternalLinks uint8, addCycle bool) {
 		// Cap values to keep test fast
@@ -344,11 +350,11 @@ func FuzzRecordArtifactsSymlinks(f *testing.F) {
 func TestSecurity_R3_190_FileHashDeterminism(t *testing.T) {
 	dir := t.TempDir()
 	contents := map[string][]byte{
-		"empty.txt":    {},
-		"binary.bin":   {0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd},
-		"text.txt":     []byte("hello world"),
-		"unicode.txt":  []byte("\u4e16\u754c\U0001F512"),
-		"large.bin":    make([]byte, 1<<16), // 64KB
+		"empty.txt":   {},
+		"binary.bin":  {0x00, 0x01, 0x02, 0xff, 0xfe, 0xfd},
+		"text.txt":    []byte("hello world"),
+		"unicode.txt": []byte("\u4e16\u754c\U0001F512"),
+		"large.bin":   make([]byte, 1<<16), // 64KB
 	}
 
 	for name, content := range contents {

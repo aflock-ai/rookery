@@ -25,11 +25,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,11 +53,11 @@ import (
 
 func TestAdversarial_RemoteURLCredentialLeakage(t *testing.T) {
 	testCases := []struct {
-		name           string
-		remoteURL      string
-		shouldLeak     bool
-		leakedContent  string
-		description    string
+		name          string
+		remoteURL     string
+		shouldLeak    bool
+		leakedContent string
+		description   string
 	}{
 		{
 			name:          "HTTPS with token in username position",
@@ -370,8 +370,8 @@ func TestAdversarial_SHA1CommitDigest(t *testing.T) {
 
 	for dv := range ds {
 		if dv.Hash == crypto.SHA1 {
-			t.Log("NOTE: Commit hash subject uses SHA1. Git's SHA-1 has known "+
-				"collision attacks (SHAttered). Consider adding SHA-256 binding "+
+			t.Log("NOTE: Commit hash subject uses SHA1. Git's SHA-1 has known " +
+				"collision attacks (SHAttered). Consider adding SHA-256 binding " +
 				"via the TreeHash or using gitoid with sha256.")
 		}
 	}
