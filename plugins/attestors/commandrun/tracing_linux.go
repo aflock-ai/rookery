@@ -162,7 +162,7 @@ func (p *ptraceContext) nextSyscall(pid int) error {
 	return nil
 }
 
-func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error {
+func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //nolint:gocognit
 	argArray := getSyscallArgs(regs)
 	syscallId := getSyscallId(regs)
 
@@ -182,7 +182,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error {
 		status := fmt.Sprintf("/proc/%d/status", procInfo.ProcessID)
 
 		// read status file and set attributes on success
-		statusFile, err := os.ReadFile(status)
+		statusFile, err := os.ReadFile(status) //nolint:gosec
 		if err == nil {
 			procInfo.SpecBypassIsVuln = getSpecBypassIsVulnFromStatus(statusFile)
 			ppid, err := getPPIDFromStatus(statusFile)
@@ -191,17 +191,17 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error {
 			}
 		}
 
-		comm, err := os.ReadFile(commLocation)
+		comm, err := os.ReadFile(commLocation) //nolint:gosec
 		if err == nil {
 			procInfo.Comm = cleanString(string(comm))
 		}
 
-		environ, err := os.ReadFile(envinLocation)
+		environ, err := os.ReadFile(envinLocation) //nolint:gosec
 		if err == nil && p.environmentCapturer != nil {
 			allVars := strings.Split(string(environ), "\x00")
 
-			env := make([]string, 0)
 			capturedEnv := p.environmentCapturer.Capture(allVars)
+			env := make([]string, 0, len(capturedEnv))
 			for k, v := range capturedEnv {
 				env = append(env, fmt.Sprintf("%s=%s", k, v))
 			}
@@ -264,7 +264,7 @@ func (ctx *ptraceContext) getProcInfo(pid int) *ProcessInfo {
 }
 
 func (ctx *ptraceContext) procInfoArray() []ProcessInfo {
-	processes := make([]ProcessInfo, 0)
+	processes := make([]ProcessInfo, 0, len(ctx.processes))
 	for _, procInfo := range ctx.processes {
 		processes = append(processes, *procInfo)
 	}
@@ -299,7 +299,7 @@ func (ctx *ptraceContext) readSyscallReg(pid int, addr uintptr, n int) (string, 
 	size := bytes.IndexByte(data, 0)
 	if size < 0 {
 		// No null terminator found; use the full buffer.
-		size = int(numBytes)
+		size = numBytes
 	}
 	return string(data[:size]), nil
 }

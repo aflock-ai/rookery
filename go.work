@@ -3,18 +3,18 @@ go 1.26.0
 use (
 	// CLIs
 	./aflock
-	./cilock
-
-	// Dev tooling
-	./lockctl
 	// Core
 	./attestation
 
 	// Builder
 	./builder
+	./cilock
 
 	// Compatibility shim
 	./compat/go-witness
+
+	// Dev tooling
+	./lockctl
 
 	// Attestor plugins
 	./plugins/attestors/aws-codebuild
