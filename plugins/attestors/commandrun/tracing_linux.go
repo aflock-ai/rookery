@@ -162,7 +162,7 @@ func (p *ptraceContext) nextSyscall(pid int) error {
 	return nil
 }
 
-func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //nolint:gocognit
+func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //nolint:gocognit,gocyclo
 	argArray := getSyscallArgs(regs)
 	syscallId := getSyscallId(regs)
 
@@ -209,7 +209,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			procInfo.Environ = strings.Join(env, " ")
 		}
 
-		cmdline, err := os.ReadFile(cmdlineLocation)
+		cmdline, err := os.ReadFile(cmdlineLocation) //nolint:gosec // G304: reading /proc/<pid>/cmdline
 		if err == nil {
 			procInfo.Cmdline = cleanString(string(cmdline))
 		}
