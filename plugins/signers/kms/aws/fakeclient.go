@@ -22,10 +22,10 @@ import (
 	"crypto/rsa"
 	"time"
 
-	akms "github.com/aws/aws-sdk-go-v2/service/kms"
-	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
+	akms "github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	ttlcache "github.com/jellydator/ttlcache/v3"
 )
 
@@ -96,6 +96,7 @@ func (a *fakeAWSClient) fetchCMK(ctx context.Context) (*cmk, error) {
 	return cmk, nil
 }
 
+//nolint:dupl
 func (a *fakeAWSClient) getCMK(ctx context.Context) (*cmk, error) {
 	var lerr error
 	loader := ttlcache.LoaderFunc[string, cmk](
@@ -152,7 +153,7 @@ func (a *fakeAWSClient) sign(ctx context.Context, digest []byte, _ crypto.Hash) 
 	return s, nil
 }
 
-func (a *fakeAWSClient) fetchPublicKey(ctx context.Context) (crypto.PublicKey, error) {
+func (a *fakeAWSClient) fetchPublicKey(_ context.Context) (crypto.PublicKey, error) {
 	k, p, err := createRsaKey()
 	if err != nil {
 		return nil, err
@@ -162,7 +163,8 @@ func (a *fakeAWSClient) fetchPublicKey(ctx context.Context) (crypto.PublicKey, e
 	return p, nil
 }
 
-func (a *fakeAWSClient) fetchKeyMetadata(ctx context.Context) (*types.KeyMetadata, error) {
+//nolint:unparam // error return required by client interface
+func (a *fakeAWSClient) fetchKeyMetadata(_ context.Context) (*types.KeyMetadata, error) {
 	km := &types.KeyMetadata{
 		KeyId:        &a.keyID,
 		AWSAccountId: &aid,

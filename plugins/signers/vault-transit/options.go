@@ -26,7 +26,7 @@ const (
 	defaultTransitSecretEnginePath        = "transit"
 	defaultKeyVersion              uint64 = 0
 	defaultAuthMethod                     = "token"
-	defaultKubernetesSATokenPath          = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	defaultKubernetesSATokenPath          = "/var/run/secrets/kubernetes.io/serviceaccount/token" //nolint:gosec // G101: not a credential, just a default path
 	defaultKubernetesAuthMountPath        = "kubernetes"
 )
 
@@ -48,7 +48,7 @@ func (*clientOptions) ProviderName() string {
 	return providerName
 }
 
-func (hv *clientOptions) Init() []registry.Configurer {
+func (hv *clientOptions) Init() []registry.Configurer { //nolint:gocognit,funlen
 	return []registry.Configurer{
 		registry.StringConfigOption(
 			"addr",

@@ -106,7 +106,7 @@ func (c *Client) Store(ctx context.Context, env dsse.Envelope) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("archivista store: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("archivista store returned %d: %s", resp.StatusCode, readLimitedErrorBody(resp.Body))
@@ -131,7 +131,7 @@ func (c *Client) Download(ctx context.Context, gitoid string) (dsse.Envelope, er
 	if err != nil {
 		return dsse.Envelope{}, fmt.Errorf("archivista download: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return dsse.Envelope{}, fmt.Errorf("archivista download returned %d: %s", resp.StatusCode, readLimitedErrorBody(resp.Body))
@@ -223,7 +223,7 @@ func (c *Client) graphqlQuery(ctx context.Context, query string, variables any, 
 	if err != nil {
 		return fmt.Errorf("archivista graphql: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("archivista graphql returned %d: %s", resp.StatusCode, readLimitedErrorBody(resp.Body))

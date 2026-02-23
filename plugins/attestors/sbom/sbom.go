@@ -25,10 +25,10 @@ import (
 
 	"github.com/CycloneDX/cyclonedx-go"
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/plugins/attestors/product"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
+	"github.com/aflock-ai/rookery/plugins/attestors/product"
 	"github.com/invopop/jsonschema"
 	"github.com/spdx/tools-golang/spdx"
 )
@@ -145,7 +145,7 @@ func (a *SBOMAttestor) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error {
+func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error { //nolint:gocognit,gocyclo,funlen // SBOM candidate selection requires complex matching
 	products := ctx.Products()
 
 	if len(products) == 0 {
@@ -164,14 +164,14 @@ func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error {
 			continue
 		}
 
-		f, err := os.Open(filepath.Join(ctx.WorkingDir(), path))
+		f, err := os.Open(filepath.Join(ctx.WorkingDir(), path)) //nolint:gosec // G304: path from attestation context products
 		if err != nil {
 			log.Debugf("(attestation/sbom) error opening file %s: %v", path, err)
 			continue
 		}
 
 		sbomBytes, err := io.ReadAll(f)
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			log.Debugf("(attestation/sbom) error reading file %s: %v", path, err)
 			continue

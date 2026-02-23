@@ -88,11 +88,11 @@ func NewSystemPackagesAttestor() *Attestor {
 }
 
 func determineDistribution(osReleaseFile string) (string, string, string, error) {
-	file, err := os.Open(osReleaseFile)
+	file, err := os.Open(osReleaseFile) //nolint:gosec // G304: os-release file path is system-determined
 	if err != nil {
 		return "", "", "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var distribution, version string
 

@@ -127,7 +127,7 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 
 // init registers the attestor with the attestation registry
 // This makes it available to the attestation CLI and API
-func init() {
+func init() { //nolint:funlen // registration requires many options
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor { return New() },
 		// Option: Fail when secrets are detected (default: false)
 		registry.BoolConfigOption(

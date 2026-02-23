@@ -110,7 +110,7 @@ func RunWithExports(stepName string, opts ...RunOption) ([]RunResult, error) {
 	return run(stepName, opts)
 }
 
-func run(stepName string, opts []RunOption) ([]RunResult, error) {
+func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:gocognit,gocyclo,funlen
 	ro := runOptions{
 		stepName:     stepName,
 		insecure:     false,
@@ -137,7 +137,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) {
 
 	errs := make([]error, 0)
 	for _, r := range runCtx.CompletedAttestors() {
-		if r.Error != nil {
+		if r.Error != nil { //nolint:nestif
 			wrappedErr := fmt.Errorf("attestor %s failed: %w", r.Attestor.Name(), r.Error)
 			errs = append(errs, wrappedErr)
 		} else {

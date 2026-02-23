@@ -50,29 +50,29 @@ type dummyCommandRunAttestor struct {
 	Cmd []string `json:"cmd"`
 }
 
-func (a *dummyCommandRunAttestor) Name() string                                { return "command-run" }
-func (a *dummyCommandRunAttestor) Type() string                                { return commandrunType }
-func (a *dummyCommandRunAttestor) RunType() attestation.RunType                { return attestation.ExecuteRunType }
+func (a *dummyCommandRunAttestor) Name() string                                     { return "command-run" }
+func (a *dummyCommandRunAttestor) Type() string                                     { return commandrunType }
+func (a *dummyCommandRunAttestor) RunType() attestation.RunType                     { return attestation.ExecuteRunType }
 func (a *dummyCommandRunAttestor) Attest(ctx *attestation.AttestationContext) error { return nil }
-func (a *dummyCommandRunAttestor) Schema() *jsonschema.Schema                  { return nil }
+func (a *dummyCommandRunAttestor) Schema() *jsonschema.Schema                       { return nil }
 
 // dummyMaterialAttestor simulates material attestor for testing.
 type dummyMaterialAttestor struct{}
 
-func (a *dummyMaterialAttestor) Name() string                                { return "material" }
-func (a *dummyMaterialAttestor) Type() string                                { return "https://aflock.ai/attestations/material/v0.1" }
-func (a *dummyMaterialAttestor) RunType() attestation.RunType                { return attestation.PreMaterialRunType }
+func (a *dummyMaterialAttestor) Name() string                                     { return "material" }
+func (a *dummyMaterialAttestor) Type() string                                     { return "https://aflock.ai/attestations/material/v0.1" }
+func (a *dummyMaterialAttestor) RunType() attestation.RunType                     { return attestation.PreMaterialRunType }
 func (a *dummyMaterialAttestor) Attest(ctx *attestation.AttestationContext) error { return nil }
-func (a *dummyMaterialAttestor) Schema() *jsonschema.Schema                  { return nil }
+func (a *dummyMaterialAttestor) Schema() *jsonschema.Schema                       { return nil }
 
 // dummyProductAttestor simulates product attestor for testing.
 type dummyProductAttestor struct{}
 
-func (a *dummyProductAttestor) Name() string                                { return "product" }
-func (a *dummyProductAttestor) Type() string                                { return "https://aflock.ai/attestations/product/v0.1" }
-func (a *dummyProductAttestor) RunType() attestation.RunType                { return attestation.PostProductRunType }
+func (a *dummyProductAttestor) Name() string                                     { return "product" }
+func (a *dummyProductAttestor) Type() string                                     { return "https://aflock.ai/attestations/product/v0.1" }
+func (a *dummyProductAttestor) RunType() attestation.RunType                     { return attestation.PostProductRunType }
 func (a *dummyProductAttestor) Attest(ctx *attestation.AttestationContext) error { return nil }
-func (a *dummyProductAttestor) Schema() *jsonschema.Schema                  { return nil }
+func (a *dummyProductAttestor) Schema() *jsonschema.Schema                       { return nil }
 func (a *dummyProductAttestor) Subjects() map[string]cryptoutil.DigestSet {
 	return map[string]cryptoutil.DigestSet{}
 }
@@ -354,11 +354,11 @@ type dummySubjectAttestor struct {
 	Data string
 }
 
-func (a *dummySubjectAttestor) Name() string                                { return dummySubjectAttestorName }
-func (a *dummySubjectAttestor) Type() string                                { return dummySubjectAttestorType }
-func (a *dummySubjectAttestor) RunType() attestation.RunType                { return attestation.PreMaterialRunType }
+func (a *dummySubjectAttestor) Name() string                                     { return dummySubjectAttestorName }
+func (a *dummySubjectAttestor) Type() string                                     { return dummySubjectAttestorType }
+func (a *dummySubjectAttestor) RunType() attestation.RunType                     { return attestation.PreMaterialRunType }
 func (a *dummySubjectAttestor) Attest(ctx *attestation.AttestationContext) error { return nil }
-func (a *dummySubjectAttestor) Schema() *jsonschema.Schema                  { return nil }
+func (a *dummySubjectAttestor) Schema() *jsonschema.Schema                       { return nil }
 func (a *dummySubjectAttestor) Subjects() map[string]cryptoutil.DigestSet {
 	return map[string]cryptoutil.DigestSet{
 		matchSubjectName: {
@@ -370,11 +370,11 @@ func (a *dummySubjectAttestor) Subjects() map[string]cryptoutil.DigestSet {
 // dummyBackrefAttestor is a test attestor used to expose a back ref subject.
 type dummyBackrefAttestor struct{}
 
-func (a *dummyBackrefAttestor) Name() string                                { return dummyBackrefAttestorName }
-func (a *dummyBackrefAttestor) Type() string                                { return dummyBackrefAttestorType }
-func (a *dummyBackrefAttestor) RunType() attestation.RunType                { return attestation.PreMaterialRunType }
+func (a *dummyBackrefAttestor) Name() string                                     { return dummyBackrefAttestorName }
+func (a *dummyBackrefAttestor) Type() string                                     { return dummyBackrefAttestorType }
+func (a *dummyBackrefAttestor) RunType() attestation.RunType                     { return attestation.PreMaterialRunType }
 func (a *dummyBackrefAttestor) Attest(ctx *attestation.AttestationContext) error { return nil }
-func (a *dummyBackrefAttestor) Schema() *jsonschema.Schema                  { return nil }
+func (a *dummyBackrefAttestor) Schema() *jsonschema.Schema                       { return nil }
 func (a *dummyBackrefAttestor) BackRefs() map[string]cryptoutil.DigestSet {
 	return map[string]cryptoutil.DigestSet{
 		matchSubjectName: {

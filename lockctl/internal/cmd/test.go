@@ -63,6 +63,12 @@ func init() {
 	testCmd.Flags().String("from", "origin/main", "Base ref for change detection and commitlint")
 }
 
+const (
+	statusPassed  = "passed"
+	statusFailed  = "failed"
+	statusSkipped = "skipped"
+)
+
 type checkResult struct {
 	name     string
 	status   string // passed, failed, skipped
@@ -70,7 +76,7 @@ type checkResult struct {
 	err      error
 }
 
-func runTest(cmd *cobra.Command, _ []string) error {
+func runTest(cmd *cobra.Command, _ []string) error { //nolint:funlen // orchestrates all CI checks with flag handling
 	all, _ := cmd.Flags().GetBool("all")
 	lint, _ := cmd.Flags().GetBool("lint")
 	race, _ := cmd.Flags().GetBool("race")
@@ -110,7 +116,7 @@ func runTest(cmd *cobra.Command, _ []string) error {
 	// Check for preflight failures
 	preflightFailed := false
 	for _, r := range results {
-		if r.status == "failed" {
+		if r.status == statusFailed {
 			preflightFailed = true
 		}
 	}
@@ -199,7 +205,7 @@ func runTest(cmd *cobra.Command, _ []string) error {
 	printSummary(results, start)
 
 	for _, r := range results {
-		if r.status == "failed" {
+		if r.status == statusFailed {
 			return fmt.Errorf("checks failed")
 		}
 	}
@@ -218,7 +224,7 @@ func runGoVersionCheck() checkResult {
 	expected, err := readGoVersion()
 	if err != nil {
 		fmt.Printf("✗ %s: %v\n", name, err)
-		return checkResult{name: name, status: "failed", duration: time.Since(start), err: err}
+		return checkResult{name: name, status: statusFailed, duration: time.Since(start), err: err}
 	}
 
 	var mismatches []string
@@ -238,7 +244,7 @@ func runGoVersionCheck() checkResult {
 	mods, _ := findGoMods()
 	goDirective := regexp.MustCompile(`(?m)^go\s+(\S+)`)
 	for _, mod := range mods {
-		data, err := os.ReadFile(mod)
+		data, err := os.ReadFile(mod) //nolint:gosec // G304: mod paths come from filesystem walk, not user input
 		if err != nil {
 			continue
 		}
@@ -256,11 +262,11 @@ func runGoVersionCheck() checkResult {
 		for _, m := range mismatches {
 			fmt.Printf("    %s\n", m)
 		}
-		return checkResult{name: name, status: "failed", duration: dur, err: fmt.Errorf("%d mismatches", len(mismatches))}
+		return checkResult{name: name, status: statusFailed, duration: dur, err: fmt.Errorf("%d mismatches", len(mismatches))}
 	}
 
 	fmt.Printf("✓ %s (%s)\n", name, dur.Round(time.Millisecond))
-	return checkResult{name: name, status: "passed", duration: dur}
+	return checkResult{name: name, status: statusPassed, duration: dur}
 }
 
 func runCommitLint(from string) checkResult {
@@ -269,16 +275,16 @@ func runCommitLint(from string) checkResult {
 	start := time.Now()
 
 	// Get commits between from and HEAD
-	out, err := exec.Command("git", "rev-list", from+"..HEAD").Output()
+	out, err := exec.Command("git", "rev-list", from+"..HEAD").Output() //nolint:gosec // G204: from is a git ref from CLI flag, not arbitrary input
 	if err != nil {
 		fmt.Printf("✓ %s (no commits to lint)\n", name)
-		return checkResult{name: name, status: "passed", duration: time.Since(start)}
+		return checkResult{name: name, status: statusPassed, duration: time.Since(start)}
 	}
 
 	shas := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(shas) == 1 && shas[0] == "" {
 		fmt.Printf("✓ %s (no commits)\n", name)
-		return checkResult{name: name, status: "passed", duration: time.Since(start)}
+		return checkResult{name: name, status: statusPassed, duration: time.Since(start)}
 	}
 
 	pattern := regexp.MustCompile(`^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?: .+`)
@@ -290,7 +296,7 @@ func runCommitLint(from string) checkResult {
 		if sha == "" {
 			continue
 		}
-		msgOut, _ := exec.Command("git", "log", "-1", "--format=%s", sha).Output()
+		msgOut, _ := exec.Command("git", "log", "-1", "--format=%s", sha).Output() //nolint:gosec // G204: sha comes from git rev-list output
 		msg := strings.TrimSpace(string(msgOut))
 		if !pattern.MatchString(msg) && !mergePattern.MatchString(msg) {
 			violations = append(violations, fmt.Sprintf("%s: %s", sha[:8], msg))
@@ -305,30 +311,30 @@ func runCommitLint(from string) checkResult {
 		}
 		fmt.Println("    Expected: type(scope): description")
 		fmt.Println("    Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert")
-		return checkResult{name: name, status: "failed", duration: dur}
+		return checkResult{name: name, status: statusFailed, duration: dur}
 	}
 
 	fmt.Printf("✓ %s (%d commits, %s)\n", name, len(shas), dur.Round(time.Millisecond))
-	return checkResult{name: name, status: "passed", duration: dur}
+	return checkResult{name: name, status: statusPassed, duration: dur}
 }
 
-func runForbiddenPatterns(from string) checkResult {
+func runForbiddenPatterns(from string) checkResult { //nolint:gocognit,gocyclo // diff parsing with pattern matching requires nested logic
 	name := "forbidden-patterns"
 	fmt.Printf("▶ %s\n", name)
 	start := time.Now()
 
-	diffOut, err := exec.Command("git", "diff", from+"..HEAD", "--", "*.go").Output()
+	diffOut, err := exec.Command("git", "diff", from+"..HEAD", "--", "*.go").Output() //nolint:gosec // G204: from is a git ref from CLI flag, not arbitrary input
 	if err != nil {
 		dur := time.Since(start)
 		fmt.Printf("✓ %s (no diff)\n", name)
-		return checkResult{name: name, status: "passed", duration: dur}
+		return checkResult{name: name, status: statusPassed, duration: dur}
 	}
 
 	diff := string(diffOut)
 	if strings.TrimSpace(diff) == "" {
 		dur := time.Since(start)
 		fmt.Printf("✓ %s (no Go changes)\n", name)
-		return checkResult{name: name, status: "passed", duration: dur}
+		return checkResult{name: name, status: statusPassed, duration: dur}
 	}
 
 	type violation struct {
@@ -387,11 +393,11 @@ func runForbiddenPatterns(from string) checkResult {
 		for _, v := range violations {
 			fmt.Printf("    [%s] %s\n", v.category, v.lines[0])
 		}
-		return checkResult{name: name, status: "failed", duration: dur}
+		return checkResult{name: name, status: statusFailed, duration: dur}
 	}
 
 	fmt.Printf("✓ %s (%s)\n", name, dur.Round(time.Millisecond))
-	return checkResult{name: name, status: "passed", duration: dur}
+	return checkResult{name: name, status: statusPassed, duration: dur}
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -412,13 +418,13 @@ func runVet(module string) checkResult {
 		if err := c.Run(); err != nil {
 			dur := time.Since(start)
 			fmt.Printf("✗ %s: %s failed (%s)\n", name, dir, dur.Round(time.Millisecond))
-			return checkResult{name: name, status: "failed", duration: dur, err: err}
+			return checkResult{name: name, status: statusFailed, duration: dur, err: err}
 		}
 	}
 
 	dur := time.Since(start)
 	fmt.Printf("✓ %s (%d modules, %s)\n", name, len(modules), dur.Round(time.Millisecond))
-	return checkResult{name: name, status: "passed", duration: dur}
+	return checkResult{name: name, status: statusPassed, duration: dur}
 }
 
 func runBuild(module string) checkResult {
@@ -451,13 +457,13 @@ func runBuild(module string) checkResult {
 		if err := c.Run(); err != nil {
 			dur := time.Since(start)
 			fmt.Printf("✗ %s: %s failed (%s)\n", name, t.name, dur.Round(time.Millisecond))
-			return checkResult{name: name, status: "failed", duration: dur, err: err}
+			return checkResult{name: name, status: statusFailed, duration: dur, err: err}
 		}
 	}
 
 	dur := time.Since(start)
 	fmt.Printf("✓ %s (%s)\n", name, dur.Round(time.Millisecond))
-	return checkResult{name: name, status: "passed", duration: dur}
+	return checkResult{name: name, status: statusPassed, duration: dur}
 }
 
 func runGoTests(module string, short, audit, verbose bool) checkResult {
@@ -493,13 +499,13 @@ func runGoTests(module string, short, audit, verbose bool) checkResult {
 		if err := c.Run(); err != nil {
 			dur := time.Since(start)
 			fmt.Printf("✗ %s: %s failed (%s)\n", name, dir, dur.Round(time.Millisecond))
-			return checkResult{name: name, status: "failed", duration: dur, err: err}
+			return checkResult{name: name, status: statusFailed, duration: dur, err: err}
 		}
 	}
 
 	dur := time.Since(start)
 	fmt.Printf("✓ %s (%d modules, %s)\n", name, len(modules), dur.Round(time.Millisecond))
-	return checkResult{name: name, status: "passed", duration: dur}
+	return checkResult{name: name, status: statusPassed, duration: dur}
 }
 
 func runGoTestsRace(module string, verbose bool) checkResult {
@@ -528,13 +534,13 @@ func runGoTestsRace(module string, verbose bool) checkResult {
 		if err := c.Run(); err != nil {
 			dur := time.Since(start)
 			fmt.Printf("✗ %s: %s failed (%s)\n", name, dir, dur.Round(time.Millisecond))
-			return checkResult{name: name, status: "failed", duration: dur, err: err}
+			return checkResult{name: name, status: statusFailed, duration: dur, err: err}
 		}
 	}
 
 	dur := time.Since(start)
 	fmt.Printf("✓ %s (%d modules, %s)\n", name, len(modules), dur.Round(time.Millisecond))
-	return checkResult{name: name, status: "passed", duration: dur}
+	return checkResult{name: name, status: statusPassed, duration: dur}
 }
 
 func runLint(module string, fix, verbose bool) checkResult {
@@ -544,7 +550,7 @@ func runLint(module string, fix, verbose bool) checkResult {
 
 	if err := ensureGolangciLint(); err != nil {
 		fmt.Printf("✗ %s: failed to install golangci-lint: %v\n", name, err)
-		return checkResult{name: name, status: "failed", duration: time.Since(start), err: err}
+		return checkResult{name: name, status: statusFailed, duration: time.Since(start), err: err}
 	}
 
 	modules := workspaceModules(module)
@@ -565,16 +571,16 @@ func runLint(module string, fix, verbose bool) checkResult {
 		if err := c.Run(); err != nil {
 			dur := time.Since(start)
 			fmt.Printf("✗ %s: %s failed (%s)\n", name, dir, dur.Round(time.Millisecond))
-			return checkResult{name: name, status: "failed", duration: dur, err: err}
+			return checkResult{name: name, status: statusFailed, duration: dur, err: err}
 		}
 	}
 
 	dur := time.Since(start)
 	fmt.Printf("✓ %s (%d modules, %s)\n", name, len(modules), dur.Round(time.Millisecond))
-	return checkResult{name: name, status: "passed", duration: dur}
+	return checkResult{name: name, status: statusPassed, duration: dur}
 }
 
-func runVerifyIsolated(module string) checkResult {
+func runVerifyIsolated(module string) checkResult { //nolint:funlen // isolated build verification with concurrency setup
 	name := "verify-isolated"
 	fmt.Printf("▶ %s\n", name)
 	start := time.Now()
@@ -583,7 +589,7 @@ func runVerifyIsolated(module string) checkResult {
 	if err != nil {
 		dur := time.Since(start)
 		fmt.Printf("✗ %s: %v\n", name, err)
-		return checkResult{name: name, status: "failed", duration: dur, err: err}
+		return checkResult{name: name, status: statusFailed, duration: dur, err: err}
 	}
 
 	// If a specific module is requested, only verify that one
@@ -599,7 +605,7 @@ func runVerifyIsolated(module string) checkResult {
 		if !found {
 			dur := time.Since(start)
 			fmt.Printf("✗ %s: module %s not found\n", name, module)
-			return checkResult{name: name, status: "failed", duration: dur}
+			return checkResult{name: name, status: statusFailed, duration: dur}
 		}
 		mods = []string{modPath}
 	}
@@ -650,11 +656,11 @@ func runVerifyIsolated(module string) checkResult {
 		for _, f := range failures {
 			fmt.Printf("    %s\n", f)
 		}
-		return checkResult{name: name, status: "failed", duration: dur, err: fmt.Errorf("%d failures", len(failures))}
+		return checkResult{name: name, status: statusFailed, duration: dur, err: fmt.Errorf("%d failures", len(failures))}
 	}
 
 	fmt.Printf("✓ %s (%d modules, %s)\n", name, len(mods), dur.Round(time.Millisecond))
-	return checkResult{name: name, status: "passed", duration: dur}
+	return checkResult{name: name, status: statusPassed, duration: dur}
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -700,7 +706,7 @@ func findGoMods() ([]string, error) {
 	var mods []string
 	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
 		if info.Name() == "go.mod" && path != "go.mod" && !strings.Contains(path, "vendor") {
 			mods = append(mods, path)
@@ -742,11 +748,11 @@ func printSummary(results []checkResult, overallStart time.Time) {
 	for _, r := range results {
 		label := fmt.Sprintf("%s (%s)", r.name, r.duration.Round(time.Millisecond))
 		switch r.status {
-		case "passed":
+		case statusPassed:
 			passed = append(passed, label)
-		case "failed":
+		case statusFailed:
 			failed = append(failed, label)
-		case "skipped":
+		case statusSkipped:
 			skipped = append(skipped, label)
 		}
 	}

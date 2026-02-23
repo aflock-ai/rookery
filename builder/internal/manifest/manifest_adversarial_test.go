@@ -451,7 +451,9 @@ plugins:
 
 // TestManifest_CustomerIDInjection tests that customer_id and tenant_id values
 // are passed unsanitized to ldflags. These values are embedded via:
-//   -X 'rookery-build/buildinfo.CustomerID=%s'
+//
+//	-X 'rookery-build/buildinfo.CustomerID=%s'
+//
 // If they contain single quotes, they can break out of the -X argument.
 func TestManifest_CustomerTenantIDInjection(t *testing.T) {
 	payloads := []struct {

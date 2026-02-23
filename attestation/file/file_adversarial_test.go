@@ -27,8 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/gobwas/glob"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -410,9 +410,9 @@ func TestAdversarial_GlobWithUnicodeFilenames(t *testing.T) {
 	dir := t.TempDir()
 
 	unicodeFiles := []string{
-		"resume\u0301.txt", // é as e + combining acute
-		"\u00e9lite.txt",   // é as precomposed
-		"\u4f60\u597d.go",  // 你好.go (Chinese)
+		"resume\u0301.txt",      // é as e + combining acute
+		"\u00e9lite.txt",        // é as precomposed
+		"\u4f60\u597d.go",       // 你好.go (Chinese)
 		"\u00fc\u00f6\u00e4.go", // üöä.go (German umlauts)
 		"normal.go",
 	}
@@ -1683,10 +1683,10 @@ func TestAdversarial_FilenamesWithNewlines(t *testing.T) {
 func TestAdversarial_FilenamesWithUnicodeAndEmoji(t *testing.T) {
 	dir := t.TempDir()
 	unicodeFiles := []string{
-		"\u200bzerowidhidden.txt",     // zero-width space prefix
-		"\u202ertl_override.txt",      // right-to-left override (U+202E)
-		"caf\u00e9.txt",              // precomposed e-acute
-		"\xc0\xaf.txt",              // overlong UTF-8 (may be rejected by FS)
+		"\u200bzerowidhidden.txt", // zero-width space prefix
+		"\u202ertl_override.txt",  // right-to-left override (U+202E)
+		"caf\u00e9.txt",           // precomposed e-acute
+		"\xc0\xaf.txt",            // overlong UTF-8 (may be rejected by FS)
 	}
 
 	recorded := 0

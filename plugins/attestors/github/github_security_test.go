@@ -386,11 +386,11 @@ func TestSecurity_R3_219_CIHostNeverPopulated(t *testing.T) {
 
 func TestSecurity_R3_220_EnvVarURLConcatenationInjection(t *testing.T) {
 	testCases := []struct {
-		name        string
-		serverURL   string
-		repository  string
-		runID       string
-		wantCheck   func(a *Attestor) string // returns error description or ""
+		name       string
+		serverURL  string
+		repository string
+		runID      string
+		wantCheck  func(a *Attestor) string // returns error description or ""
 	}{
 		{
 			name:       "CRLF injection in GITHUB_SERVER_URL",

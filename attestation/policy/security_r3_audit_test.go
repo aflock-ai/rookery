@@ -48,11 +48,11 @@ type auditAttestor struct {
 	Data    map[string]interface{} `json:"data,omitempty"`
 }
 
-func (a *auditAttestor) Name() string                                  { return a.AttName }
-func (a *auditAttestor) Type() string                                  { return a.AttType }
-func (a *auditAttestor) RunType() attestation.RunType                  { return "test" }
+func (a *auditAttestor) Name() string                                   { return a.AttName }
+func (a *auditAttestor) Type() string                                   { return a.AttType }
+func (a *auditAttestor) RunType() attestation.RunType                   { return "test" }
 func (a *auditAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (a *auditAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (a *auditAttestor) Schema() *jsonschema.Schema                     { return nil }
 
 // auditWrappedAttestor wraps any value for custom JSON marshaling.
 type auditWrappedAttestor struct {
@@ -60,11 +60,11 @@ type auditWrappedAttestor struct {
 	typeName string
 }
 
-func (w *auditWrappedAttestor) Name() string                                  { return "audit-wrapped" }
-func (w *auditWrappedAttestor) Type() string                                  { return w.typeName }
-func (w *auditWrappedAttestor) RunType() attestation.RunType                  { return "test" }
+func (w *auditWrappedAttestor) Name() string                                   { return "audit-wrapped" }
+func (w *auditWrappedAttestor) Type() string                                   { return w.typeName }
+func (w *auditWrappedAttestor) RunType() attestation.RunType                   { return "test" }
 func (w *auditWrappedAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (w *auditWrappedAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (w *auditWrappedAttestor) Schema() *jsonschema.Schema                     { return nil }
 func (w *auditWrappedAttestor) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w.inner)
 }

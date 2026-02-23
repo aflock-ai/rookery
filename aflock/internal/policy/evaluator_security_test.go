@@ -290,9 +290,9 @@ func TestSecurity_R3_234_CheckLimitsExactValueNotExceeded(t *testing.T) {
 
 	exceeded, limitName, msg := e.CheckLimits(metrics, "fail-fast")
 	if !exceeded {
-		t.Logf("FINDING R3-234: CheckLimits uses '>' not '>='. Hitting exactly the limit "+
-			"(CostUSD=10.0, Turns=50, ToolCalls=100) does NOT trigger exceeded. "+
-			"This means the effective limit is limit+1. Not a critical issue but "+
+		t.Logf("FINDING R3-234: CheckLimits uses '>' not '>='. Hitting exactly the limit " +
+			"(CostUSD=10.0, Turns=50, ToolCalls=100) does NOT trigger exceeded. " +
+			"This means the effective limit is limit+1. Not a critical issue but " +
 			"violates the principle of least surprise.")
 	} else {
 		t.Logf("Limits correctly exceeded at boundary: %s: %s", limitName, msg)
@@ -340,9 +340,9 @@ func TestSecurity_R3_235_DataFlowBashReadBypass(t *testing.T) {
 	}
 
 	if newMaterial == nil {
-		t.Logf("SECURITY FINDING R3-235: Bash 'cat /home/user/.ssh/id_rsa' was NOT classified "+
-			"as reading secret material. Bash is classified as a write-only operation, "+
-			"so data flow classify patterns for Bash reads never trigger. "+
+		t.Logf("SECURITY FINDING R3-235: Bash 'cat /home/user/.ssh/id_rsa' was NOT classified " +
+			"as reading secret material. Bash is classified as a write-only operation, " +
+			"so data flow classify patterns for Bash reads never trigger. " +
 			"An attacker can bypass data flow rules by using 'cat' instead of 'Read'.")
 	} else {
 		t.Logf("FIXED: Bash cat command classified as %q material", newMaterial.Label)
@@ -440,9 +440,9 @@ func TestSecurity_R3_238_NotebookEditNotFileOperation(t *testing.T) {
 		if isFileOperation("NotebookEdit") {
 			t.Log("FIXED: NotebookEdit is now correctly classified as a file operation")
 		} else {
-			t.Logf("SECURITY FINDING R3-238: NotebookEdit is NOT classified as a file operation. "+
-				"File deny and readOnly rules will not apply to notebook edits. "+
-				"isFileOperation(\"NotebookEdit\") = false. "+
+			t.Logf("SECURITY FINDING R3-238: NotebookEdit is NOT classified as a file operation. " +
+				"File deny and readOnly rules will not apply to notebook edits. " +
+				"isFileOperation(\"NotebookEdit\") = false. " +
 				"Policy denying '/etc/**' won't block NotebookEdit on /etc/notebook.ipynb.")
 		}
 	})
@@ -459,8 +459,8 @@ func TestSecurity_R3_238_NotebookEditNotFileOperation(t *testing.T) {
 		decision, _ := e.EvaluatePreToolUse("NotebookEdit", input)
 
 		if decision == aflock.DecisionAllow {
-			t.Logf("SECURITY FINDING R3-238: NotebookEdit on 'secret-analysis.ipynb' allowed "+
-				"despite '**/secret*' deny pattern. NotebookEdit is not a file operation "+
+			t.Logf("SECURITY FINDING R3-238: NotebookEdit on 'secret-analysis.ipynb' allowed " +
+				"despite '**/secret*' deny pattern. NotebookEdit is not a file operation " +
 				"so file deny rules are not checked.")
 		}
 	})

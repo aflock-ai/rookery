@@ -48,12 +48,12 @@ type fakeProducer struct {
 	products map[string]attestation.Product
 }
 
-func (fp *fakeProducer) Name() string                                      { return "fake-producer" }
-func (fp *fakeProducer) Type() string                                      { return "fake" }
-func (fp *fakeProducer) RunType() attestation.RunType                      { return attestation.ProductRunType }
-func (fp *fakeProducer) Attest(_ *attestation.AttestationContext) error     { return nil }
-func (fp *fakeProducer) Schema() *jsonschema.Schema                        { return nil }
-func (fp *fakeProducer) Products() map[string]attestation.Product          { return fp.products }
+func (fp *fakeProducer) Name() string                                   { return "fake-producer" }
+func (fp *fakeProducer) Type() string                                   { return "fake" }
+func (fp *fakeProducer) RunType() attestation.RunType                   { return attestation.ProductRunType }
+func (fp *fakeProducer) Attest(_ *attestation.AttestationContext) error { return nil }
+func (fp *fakeProducer) Schema() *jsonschema.Schema                     { return nil }
+func (fp *fakeProducer) Products() map[string]attestation.Product       { return fp.products }
 
 // writeProductFile writes a JSON file and returns a context with it registered as a product.
 func writeProductFile(t *testing.T, dir, filename string, data []byte, mimeType string) *attestation.AttestationContext {
@@ -184,10 +184,10 @@ func TestMIMETypeEqualityCheck(t *testing.T) {
 
 func TestSetDockerCandidate_DigestPrefixHandling(t *testing.T) {
 	testCases := []struct {
-		name         string
-		digest       string
-		wantProduct  bool
-		wantKey      string
+		name        string
+		digest      string
+		wantProduct bool
+		wantKey     string
 	}{
 		{
 			name:        "valid_sha256",
@@ -604,10 +604,10 @@ func TestSubjects_MaterialEdgeCases(t *testing.T) {
 		{
 			name: "many_architectures",
 			materials: map[string][]Material{
-				"amd64": {{URI: "u1", Digest: cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256}: "a"}}},
-				"arm64": {{URI: "u2", Digest: cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256}: "b"}}},
+				"amd64":  {{URI: "u1", Digest: cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256}: "a"}}},
+				"arm64":  {{URI: "u2", Digest: cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256}: "b"}}},
 				"arm/v7": {{URI: "u3", Digest: cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256}: "c"}}},
-				"s390x": {{URI: "u4", Digest: cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256}: "d"}}},
+				"s390x":  {{URI: "u4", Digest: cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256}: "d"}}},
 			},
 		},
 		{
@@ -706,36 +706,36 @@ func TestAttest_AdversarialMetadata(t *testing.T) {
 			name: "valid_buildinfo",
 			metadata: map[string]interface{}{
 				"containerimage.digest": "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-				"image.name":           "testimage:latest",
+				"image.name":            "testimage:latest",
 			},
 		},
 		{
 			name: "digest_without_prefix",
 			metadata: map[string]interface{}{
 				"containerimage.digest": "abcdef1234567890",
-				"image.name":           "testimage:latest",
+				"image.name":            "testimage:latest",
 			},
 		},
 		{
 			name: "empty_digest",
 			metadata: map[string]interface{}{
 				"containerimage.digest": "",
-				"image.name":           "testimage:latest",
+				"image.name":            "testimage:latest",
 			},
 		},
 		{
 			name: "empty_image_name",
 			metadata: map[string]interface{}{
 				"containerimage.digest": "sha256:abc",
-				"image.name":           "",
+				"image.name":            "",
 			},
 		},
 		{
 			name: "nested_provenance",
 			metadata: map[string]interface{}{
-				"containerimage.digest":         "sha256:abc",
-				"image.name":                    "test:latest",
-				"buildx.build.ref":              "ref-123",
+				"containerimage.digest": "sha256:abc",
+				"image.name":            "test:latest",
+				"buildx.build.ref":      "ref-123",
 				"buildx.build.provenance/amd64": map[string]interface{}{
 					"buildType": "docker",
 					"materials": []interface{}{

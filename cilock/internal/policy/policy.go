@@ -31,7 +31,7 @@ import (
 func LoadPolicy(ctx context.Context, policyPath string, ac *archivista.Client) (dsse.Envelope, error) {
 	policyEnvelope := dsse.Envelope{}
 
-	filePolicy, err := os.Open(policyPath)
+	filePolicy, err := os.Open(policyPath) //nolint:gosec // G304: policyPath is from CLI flags
 	if err != nil {
 		if ac != nil {
 			log.Infof("failed to open policy file, attempting to load from archivista: %v", err)

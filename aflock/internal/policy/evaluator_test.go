@@ -611,7 +611,7 @@ func TestEvaluateDomainAccess(t *testing.T) {
 		{
 			name: "empty domains policy allows all",
 			policy: &aflock.Policy{
-				Tools: &aflock.ToolsPolicy{Allow: []string{"WebFetch"}},
+				Tools:   &aflock.ToolsPolicy{Allow: []string{"WebFetch"}},
 				Domains: &aflock.DomainsPolicy{},
 			},
 			toolName:     "WebFetch",
@@ -1392,8 +1392,8 @@ func TestExtractDomain(t *testing.T) {
 		{"https://user:pass@evil.com/path", "evil.com"},
 		{"https://user@evil.com/path", "evil.com"},
 		{"http://admin:secret@malware.org/c2", "malware.org"},
-		{"https://@evil.com/path", "evil.com"},              // empty userinfo
-		{"https://user:@evil.com/path", "evil.com"},          // empty password
+		{"https://@evil.com/path", "evil.com"},                // empty userinfo
+		{"https://user:@evil.com/path", "evil.com"},           // empty password
 		{"https://user:pass:extra@evil.com/path", "evil.com"}, // malformed userinfo
 		// Edge case: port after host with userinfo
 		{"https://user:pass@evil.com:8443/path", "evil.com"},
@@ -1786,8 +1786,8 @@ func TestSecurity_R3_126_WebSearchDataFlowBypass(t *testing.T) {
 		if isReadOperation("WebSearch") {
 			t.Log("FIXED: WebSearch is now a read operation")
 		} else {
-			t.Errorf("SECURITY BUG R3-126: WebSearch is NOT classified as a read operation. "+
-				"Data accessed via WebSearch will not be tracked as materials for data flow rules. "+
+			t.Errorf("SECURITY BUG R3-126: WebSearch is NOT classified as a read operation. " +
+				"Data accessed via WebSearch will not be tracked as materials for data flow rules. " +
 				"isReadOperation(\"WebSearch\") = false, want true")
 		}
 	})
@@ -1796,8 +1796,8 @@ func TestSecurity_R3_126_WebSearchDataFlowBypass(t *testing.T) {
 		e := NewEvaluator(&aflock.Policy{})
 		got := e.extractInputForMatching("WebSearch", json.RawMessage(`{"query": "sensitive financial data"}`))
 		if got == "" {
-			t.Errorf("SECURITY BUG R3-126: extractInputForMatching(\"WebSearch\", ...) returns empty string. "+
-				"Data flow classify patterns like \"WebSearch:*financial*\" will never match. "+
+			t.Errorf("SECURITY BUG R3-126: extractInputForMatching(\"WebSearch\", ...) returns empty string. " +
+				"Data flow classify patterns like \"WebSearch:*financial*\" will never match. " +
 				"Should extract the query field for pattern matching.")
 		} else {
 			t.Logf("FIXED: extractInputForMatching returns %q for WebSearch", got)
@@ -1825,9 +1825,9 @@ func TestSecurity_R3_126_WebSearchDataFlowBypass(t *testing.T) {
 		}
 
 		if newMaterial == nil {
-			t.Errorf("SECURITY BUG R3-126: WebSearch reading 'confidential documents' was NOT "+
-				"classified as sensitive material. Expected material with label 'sensitive', got nil. "+
-				"This allows data flow bypass: read sensitive data via WebSearch, then exfiltrate "+
+			t.Errorf("SECURITY BUG R3-126: WebSearch reading 'confidential documents' was NOT " +
+				"classified as sensitive material. Expected material with label 'sensitive', got nil. " +
+				"This allows data flow bypass: read sensitive data via WebSearch, then exfiltrate " +
 				"without triggering flow rules.")
 		} else {
 			t.Logf("FIXED: WebSearch classified as %q material", newMaterial.Label)

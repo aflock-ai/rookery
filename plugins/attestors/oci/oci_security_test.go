@@ -147,13 +147,13 @@ func TestSecurity_R3_165_SubjectsEmptyHashOnNonSHA256(t *testing.T) {
 func TestSecurity_R3_166_UnsanitizedRepoTagsInSubjectKeys(t *testing.T) {
 	// Create a valid OCI tar with crafted RepoTags.
 	maliciousTags := []string{
-		"",                               // empty string
-		"normal:latest",                  // legitimate tag
-		"tag\nwith\nnewlines",            // newline injection
-		"tag\x00with\x00nulls",           // null byte injection
-		strings.Repeat("A", 10000),       // oversized tag
+		"",                                   // empty string
+		"normal:latest",                      // legitimate tag
+		"tag\nwith\nnewlines",                // newline injection
+		"tag\x00with\x00nulls",               // null byte injection
+		strings.Repeat("A", 10000),           // oversized tag
 		"imageid:" + strings.Repeat("f", 64), // mimics another subject key prefix
-		"manifestdigest:spoofed",         // attempts to spoof manifest digest subject
+		"manifestdigest:spoofed",             // attempts to spoof manifest digest subject
 	}
 
 	manifest, _ := json.Marshal([]Manifest{

@@ -155,7 +155,7 @@ func (rc *CommandRun) TracingEnabled() bool {
 }
 
 func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
-	c := exec.Command(r.Cmd[0], r.Cmd[1:]...)
+	c := exec.Command(r.Cmd[0], r.Cmd[1:]...) //nolint:gosec // G204: command is user-specified by design
 	c.Dir = ctx.WorkingDir()
 	stdoutBuffer := bytes.Buffer{}
 	stderrBuffer := bytes.Buffer{}

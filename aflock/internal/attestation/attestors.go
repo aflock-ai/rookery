@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	"github.com/aflock-ai/rookery/plugins/attestors/environment"
 	"github.com/aflock-ai/rookery/plugins/attestors/git"
 	"github.com/aflock-ai/rookery/plugins/attestors/material"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
-	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 )
 
 // RunResult contains the result of running attestors around a command.
@@ -236,7 +236,7 @@ func AttestationPath(baseDir, treeHash, stepName string) string {
 // EnsureAttestationDir ensures the attestation directory exists for a given tree hash.
 func EnsureAttestationDir(baseDir, treeHash string) error {
 	dir := filepath.Join(baseDir, treeHash)
-	return os.MkdirAll(dir, 0755)
+	return os.MkdirAll(dir, 0750)
 }
 
 // ListAttestations returns all attestation files for a given tree hash.

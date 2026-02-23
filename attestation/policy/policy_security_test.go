@@ -50,11 +50,11 @@ type secMarshalableAttestor struct {
 	Extra   map[string]interface{} `json:"extra,omitempty"`
 }
 
-func (m *secMarshalableAttestor) Name() string                                  { return m.AttName }
-func (m *secMarshalableAttestor) Type() string                                  { return m.AttType }
-func (m *secMarshalableAttestor) RunType() attestation.RunType                  { return "test" }
+func (m *secMarshalableAttestor) Name() string                                   { return m.AttName }
+func (m *secMarshalableAttestor) Type() string                                   { return m.AttType }
+func (m *secMarshalableAttestor) RunType() attestation.RunType                   { return "test" }
 func (m *secMarshalableAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (m *secMarshalableAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (m *secMarshalableAttestor) Schema() *jsonschema.Schema                     { return nil }
 
 // secWrappedAttestor wraps any struct to implement attestation.Attestor with custom JSON.
 type secWrappedAttestor struct {
@@ -62,11 +62,11 @@ type secWrappedAttestor struct {
 	typeName string
 }
 
-func (w *secWrappedAttestor) Name() string                                  { return "sec-wrapped" }
-func (w *secWrappedAttestor) Type() string                                  { return w.typeName }
-func (w *secWrappedAttestor) RunType() attestation.RunType                  { return "test" }
+func (w *secWrappedAttestor) Name() string                                   { return "sec-wrapped" }
+func (w *secWrappedAttestor) Type() string                                   { return w.typeName }
+func (w *secWrappedAttestor) RunType() attestation.RunType                   { return "test" }
 func (w *secWrappedAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (w *secWrappedAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (w *secWrappedAttestor) Schema() *jsonschema.Schema                     { return nil }
 func (w *secWrappedAttestor) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w.inner)
 }
@@ -111,7 +111,7 @@ func secGenerateSelfSignedCert(t *testing.T, cn string, orgs []string) (*x509.Ce
 	}
 
 	pemBytes := append([]byte("-----BEGIN CERTIFICATE-----\n"), []byte{}...)
-	_ = pemBytes // we'll use the proper encoding
+	_ = pemBytes               // we'll use the proper encoding
 	return cert, priv, certDER // return DER for simplicity; callers can PEM-encode if needed
 }
 
@@ -829,9 +829,9 @@ func TestSecurity_R3_159_RegoDataExfiltrationViaDenyMessage(t *testing.T) {
 	attestor := &secWrappedAttestor{
 		typeName: "secret-type",
 		inner: map[string]interface{}{
-			"name":        "harmless",
-			"type":        "secret-type",
-			"secret_key":  "AKIAIOSFODNN7EXAMPLE",
+			"name":         "harmless",
+			"type":         "secret-type",
+			"secret_key":   "AKIAIOSFODNN7EXAMPLE",
 			"private_data": "ssn-123-45-6789",
 		},
 	}
@@ -1469,8 +1469,8 @@ func TestSecurity_R3_169_StrictBuiltinErrorLeaksData(t *testing.T) {
 	attestor := &secWrappedAttestor{
 		typeName: "leak-type",
 		inner: map[string]interface{}{
-			"name":       "test",
-			"type":       "leak-type",
+			"name":           "test",
+			"type":           "leak-type",
 			"secret_api_key": "sk_live_VERYSECRETKEY123",
 		},
 	}

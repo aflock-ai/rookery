@@ -58,7 +58,7 @@ type PublicKey struct {
 }
 
 // PublicKeyVerifiers returns verifiers for each of the policy's embedded public keys grouped by the key's ID
-func (p Policy) PublicKeyVerifiers(ko map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)) (map[string]cryptoutil.Verifier, error) {
+func (p Policy) PublicKeyVerifiers(ko map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)) (map[string]cryptoutil.Verifier, error) { //nolint:gocognit,gocyclo
 	verifiers := make(map[string]cryptoutil.Verifier)
 	var err error
 
@@ -66,7 +66,7 @@ func (p Policy) PublicKeyVerifiers(ko map[string][]func(signer.SignerProvider) (
 		var verifier cryptoutil.Verifier
 		isKMSKey := false
 		for _, prefix := range kms.SupportedProviders() {
-			if strings.HasPrefix(key.KeyID, prefix) {
+			if strings.HasPrefix(key.KeyID, prefix) { //nolint:nestif
 				isKMSKey = true
 				ksp := kms.New(kms.WithRef(key.KeyID), kms.WithHash("SHA256"))
 				var vp signer.SignerProvider
@@ -246,7 +246,7 @@ func checkVerifyOpts(vo *verifyOptions) error {
 //   - Self-referencing steps (AttestationsFrom contains the step itself)
 //   - References to non-existent steps
 //   - Circular dependencies in AttestationsFrom chains
-func (p Policy) Validate() error {
+func (p Policy) Validate() error { //nolint:gocognit,gocyclo
 	// Check self-references and unknown steps.
 	for name, step := range p.Steps {
 		for _, dep := range step.AttestationsFrom {
@@ -359,7 +359,7 @@ func (p Policy) topologicalSort() ([]string, error) {
 	return sorted, nil
 }
 
-func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[string]StepResult, error) {
+func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[string]StepResult, error) { //nolint:gocognit,gocyclo,funlen
 	vo := &verifyOptions{
 		searchDepth: 3,
 	}
@@ -372,7 +372,7 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 		return false, nil, err
 	}
 
-	if time.Now().After(p.Expires.Time.Add(vo.clockSkewTolerance)) {
+	if time.Now().After(p.Expires.Add(vo.clockSkewTolerance)) {
 		return false, nil, ErrPolicyExpired(p.Expires.Time)
 	}
 
@@ -449,7 +449,7 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 
 			// Build cross-step context from already-verified dependencies.
 			var stepCtx map[string]interface{}
-			if len(step.AttestationsFrom) > 0 {
+			if len(step.AttestationsFrom) > 0 { //nolint:nestif
 				if err := checkDependencies(step.AttestationsFrom, resultsByStep); err != nil {
 					log.Debugf("step %s: dependency not yet verified, providing empty context: %v", stepName, err)
 					// Security: pass a non-nil empty map so that Rego policies
@@ -520,7 +520,7 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 
 // checkFunctionaries checks to make sure the signature on each statement corresponds to a trusted functionary for
 // the step the statement corresponds to
-func (step Step) checkFunctionaries(statements []source.CollectionVerificationResult, trustBundles map[string]TrustBundle) StepResult {
+func (step Step) checkFunctionaries(statements []source.CollectionVerificationResult, trustBundles map[string]TrustBundle) StepResult { //nolint:gocognit
 	result := StepResult{Step: step.Name}
 	for i, statement := range statements {
 		// Check that the statement contains a predicate type that we accept.
@@ -532,7 +532,7 @@ func (step Step) checkFunctionaries(statements []source.CollectionVerificationRe
 			continue
 		}
 
-		if len(statement.Verifiers) > 0 {
+		if len(statement.Verifiers) > 0 { //nolint:nestif
 			for _, verifier := range statement.Verifiers {
 				for _, functionary := range step.Functionaries {
 					if err := functionary.Validate(verifier, trustBundles); err != nil {
@@ -559,7 +559,7 @@ func (step Step) checkFunctionaries(statements []source.CollectionVerificationRe
 
 // verifyArtifacts will check the artifacts (materials+products) of the step referred to by `ArtifactsFrom` against the
 // materials of the original step.  This ensures file integrity between each step.
-func (p Policy) verifyArtifacts(resultsByStep map[string]StepResult) (map[string]StepResult, error) {
+func (p Policy) verifyArtifacts(resultsByStep map[string]StepResult) (map[string]StepResult, error) { //nolint:gocognit
 	for _, step := range p.Steps {
 		accepted := false
 		if len(resultsByStep[step.Name].Passed) == 0 {
@@ -601,7 +601,7 @@ func (p Policy) verifyArtifacts(resultsByStep map[string]StepResult) (map[string
 	return resultsByStep, nil
 }
 
-func verifyCollectionArtifacts(step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error {
+func verifyCollectionArtifacts(step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit
 	mats := collection.Collection.Materials()
 	reasons := []string{}
 	for _, artifactsFrom := range step.ArtifactsFrom {

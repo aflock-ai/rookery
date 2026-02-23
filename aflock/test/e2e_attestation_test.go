@@ -13,6 +13,7 @@ import (
 	"github.com/aflock-ai/rookery/aflock/internal/verify"
 )
 
+//nolint:gocyclo // e2e test is inherently complex
 func TestE2EAttestation(t *testing.T) {
 	// Create a temporary test directory with git
 	testDir := t.TempDir()

@@ -18,8 +18,8 @@ import (
 	"encoding/json"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/attestation/file"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/file"
 	"github.com/invopop/jsonschema"
 )
 

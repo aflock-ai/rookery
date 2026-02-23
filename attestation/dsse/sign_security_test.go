@@ -121,10 +121,10 @@ func TestSecurity_R3_156_SignEmptyPayloadType(t *testing.T) {
 		t.Fatalf("expected empty PayloadType, got %q", env.PayloadType)
 	}
 
-	t.Logf("SECURITY FINDING R3-156: Sign() accepted empty PayloadType. "+
-		"The PAE encoding uses this value, so the signature is valid for an "+
-		"empty type. A verifier must know the expected type to validate. "+
-		"This could lead to type confusion where the same signed payload "+
+	t.Logf("SECURITY FINDING R3-156: Sign() accepted empty PayloadType. " +
+		"The PAE encoding uses this value, so the signature is valid for an " +
+		"empty type. A verifier must know the expected type to validate. " +
+		"This could lead to type confusion where the same signed payload " +
 		"is interpreted differently by consumers expecting different types.")
 }
 
@@ -210,9 +210,9 @@ func TestSecurity_R3_159_SignPayloadTypeInjection(t *testing.T) {
 	}
 
 	maliciousTypes := []string{
-		"application/json\x00evil",                     // null byte injection
-		"application/json\nContent-Type: text/html",    // header injection
-		strings.Repeat("A", 1024*1024),                 // 1MB payload type
+		"application/json\x00evil",                      // null byte injection
+		"application/json\nContent-Type: text/html",     // header injection
+		strings.Repeat("A", 1024*1024),                  // 1MB payload type
 		"application/json; charset=utf-8; drop table x", // SQL-like injection
 	}
 

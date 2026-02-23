@@ -76,12 +76,12 @@ func TestAudit_F1_NoCertChainValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	fakeRootTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "Fake Evil Root CA"},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		IsCA:         true,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Fake Evil Root CA"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 	}
 	fakeRootDER, err := x509.CreateCertificate(rand.Reader, fakeRootTemplate, fakeRootTemplate, &fakeRootKey.PublicKey, fakeRootKey)

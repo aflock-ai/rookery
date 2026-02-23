@@ -135,21 +135,21 @@ func TestMatchRegex(t *testing.T) {
 	}{
 		// Unanchored patterns use full-string matching (R3-127 fix).
 		// Use .* for prefix/suffix matching when needed.
-		{`rm\s+-rf`, "rm -rf", true},          // full match
-		{`rm\s+-rf`, "rm -rf /tmp", false},     // trailing content — need .*
-		{`rm\s+-rf.*`, "rm -rf /tmp", true},    // explicit .* for trailing
+		{`rm\s+-rf`, "rm -rf", true},        // full match
+		{`rm\s+-rf`, "rm -rf /tmp", false},  // trailing content — need .*
+		{`rm\s+-rf.*`, "rm -rf /tmp", true}, // explicit .* for trailing
 		{`rm\s+-rf`, "rm /tmp", false},
-		{`git\s+push`, "git push", true},            // full match
+		{`git\s+push`, "git push", true},              // full match
 		{`git\s+push`, "git push origin main", false}, // trailing — need .*
 		{`git\s+push.*`, "git push origin main", true},
 
 		// Patterns with explicit anchors (^ or $) are used as-is.
 		{`^sudo\s+`, "sudo rm -rf", true},
 		{`^sudo\s+`, "nosudo command", false},
-		{`\d+$`, "abc123", true},  // anchored with $
+		{`\d+$`, "abc123", true}, // anchored with $
 
 		// Unanchored: full-string match only
-		{`\d+`, "123", true},       // whole string is digits
+		{`\d+`, "123", true},        // whole string is digits
 		{`\d+`, "abc123def", false}, // no longer substring match
 
 		{`\d+`, "abcdef", false},

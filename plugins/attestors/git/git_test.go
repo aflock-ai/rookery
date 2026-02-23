@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/aflock-ai/rookery/attestation"
 	"github.com/stretchr/testify/require"
 )
 
@@ -215,7 +215,7 @@ func TestRunWorksWithoutCommits(t *testing.T) {
 }
 
 // Creates an ephemeral repo for your testing
-func createTestRepo(t *testing.T, withCommit bool) (*git.Repository, string, func()) {
+func createTestRepo(t *testing.T, withCommit bool) (*git.Repository, string, func()) { //nolint:unparam // repo return used in some callers
 	// Create a temporary directory for the test repository
 	tmpDir, err := os.MkdirTemp("", "test-repo")
 	require.NoError(t, err)

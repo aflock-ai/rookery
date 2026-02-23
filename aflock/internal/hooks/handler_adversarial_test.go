@@ -25,7 +25,7 @@ import (
 // string matching on the HookEventName type, unknown names fall through
 // to the default error case.
 func TestSecurity_R3_260_HookNameInjection(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 
 	maliciousNames := []string{
 		"../../etc/passwd",
@@ -64,7 +64,7 @@ func TestSecurity_R3_260_HookNameInjection(t *testing.T) {
 
 // TestSecurity_R3_260_StdinSizeLimit proves the 10MB stdin limit is enforced.
 func TestSecurity_R3_260_StdinSizeLimit(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 
 	// Create data slightly over 10MB
 	oversized := make([]byte, 10*1024*1024+100)
@@ -97,7 +97,7 @@ func TestSecurity_R3_260_StdinSizeLimit(t *testing.T) {
 // TestSecurity_R3_260_MaliciousToolInputJSON proves that deeply nested
 // or adversarial JSON tool input does not cause crashes in the handler.
 func TestSecurity_R3_260_MaliciousToolInputJSON(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test",
 		Tools: &aflock.ToolsPolicy{
@@ -142,7 +142,7 @@ func TestSecurity_R3_260_MaliciousToolInputJSON(t *testing.T) {
 // call creates an action record, even for denied operations. This ensures
 // the audit trail cannot be bypassed.
 func TestSecurity_R3_261_ActionRecordAlwaysCreated(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-audit",
 		Tools: &aflock.ToolsPolicy{
@@ -176,7 +176,7 @@ func TestSecurity_R3_261_ActionRecordAlwaysCreated(t *testing.T) {
 // because the second call loads the stale state before the first saves.
 // This is demonstrated sequentially for safety under -race.
 func TestSecurity_R3_261_AuditTrailLoadModifySaveLoss(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-serial-audit",
 		Tools: &aflock.ToolsPolicy{
@@ -223,7 +223,7 @@ func TestSecurity_R3_261_AuditTrailLoadModifySaveLoss(t *testing.T) {
 // policy is modified in the state file between PreToolUse and PostToolUse,
 // the handler picks up the modified policy (no caching).
 func TestSecurity_R3_262_PolicyChangesBetweenPreAndPost(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-toctou",
 		Tools: &aflock.ToolsPolicy{
@@ -446,7 +446,7 @@ func TestSecurity_R3_264_PolicyInjectionViaStateFile(t *testing.T) {
 // (source classification) and Bash (sink) happen in rapid succession, the
 // Bash call may load stale state that lacks the source classification.
 func TestSecurity_R3_265_DataFlowRaceDocumentation(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-df-race",
 		Tools: &aflock.ToolsPolicy{
@@ -501,7 +501,7 @@ func TestSecurity_R3_265_DataFlowRaceDocumentation(t *testing.T) {
 // files checked by handleStop can be deleted after the check passes
 // but before the session actually ends, creating a TOCTOU.
 func TestSecurity_R3_266_StopAllowThenFileDeleted(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name:                 "test-stop-race",
 		RequiredAttestations: []string{"security-review"},
@@ -551,7 +551,7 @@ func TestSecurity_R3_266_StopAllowThenFileDeleted(t *testing.T) {
 // TestSecurity_R3_267_PostToolUsePathTraversalInFilePath proves that
 // adversarial file paths in tool input are tracked as-is in the metrics.
 func TestSecurity_R3_267_PostToolUsePathTraversalInFilePath(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "sess-path-track", pol)
 
@@ -583,7 +583,7 @@ func TestSecurity_R3_267_PostToolUsePathTraversalInFilePath(t *testing.T) {
 // TestSecurity_R3_267_UserPromptSubmitSerialTurns proves sequential turn
 // counting works, and documents the concurrent vulnerability.
 func TestSecurity_R3_267_UserPromptSubmitSerialTurns(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "sess-turns-serial", pol)
 
@@ -616,7 +616,7 @@ func TestSecurity_R3_267_UserPromptSubmitSerialTurns(t *testing.T) {
 // SessionStart is never called, PreToolUse still enforces tool policy
 // by loading policy from cwd, but skips identity verification.
 func TestSecurity_R3_268_PreToolUseWithoutSessionStart(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 
 	// Create a policy file in a temp directory
 	policyDir := t.TempDir()

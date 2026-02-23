@@ -342,9 +342,9 @@ func FuzzCertificateParsing(f *testing.F) {
 	// Seeds: various garbage that might tickle certificate parsing
 	f.Add([]byte("payload"), "app/json", []byte("not-a-cert"), []byte{})
 	f.Add([]byte("p"), "t", []byte("-----BEGIN CERTIFICATE-----\ngarbage\n-----END CERTIFICATE-----"), []byte{})
-	f.Add([]byte(""), "", []byte{0x30, 0x82, 0x01, 0x00}, []byte{})    // ASN.1-ish prefix
-	f.Add([]byte("x"), "y", []byte{0xff, 0xfe, 0xfd}, []byte{0x30})    // random binary
-	f.Add([]byte("z"), "w", make([]byte, 4096), []byte{0x00, 0x01})     // large garbage cert
+	f.Add([]byte(""), "", []byte{0x30, 0x82, 0x01, 0x00}, []byte{}) // ASN.1-ish prefix
+	f.Add([]byte("x"), "y", []byte{0xff, 0xfe, 0xfd}, []byte{0x30}) // random binary
+	f.Add([]byte("z"), "w", make([]byte, 4096), []byte{0x00, 0x01}) // large garbage cert
 	f.Add([]byte("q"), "r", []byte("-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----"), []byte("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----"))
 
 	f.Fuzz(func(t *testing.T, payload []byte, payloadType string, certBytes []byte, intermediateBytes []byte) {
@@ -558,13 +558,13 @@ func FuzzEnvelopeTimestampDataCorruption(f *testing.F) {
 // TestSecurity_R3_133: Unicode/binary content in DSSE payload fields.
 func FuzzEnvelopeUnicodePayload(f *testing.F) {
 	// Various unicode and binary payloads
-	f.Add([]byte("Hello \xe4\xb8\x96\xe7\x95\x8c"), "text/plain", "key-\xe4\xb8\x96")                     // CJK
-	f.Add([]byte("\xf0\x9f\x92\xa9\xf0\x9f\x94\x92"), "application/\xf0\x9f\x94\x91", "emoji-key")        // emoji
-	f.Add([]byte{0x00, 0x01, 0x02, 0xff, 0xfe}, "binary/\x00octet", "null-\x00-key")                       // null bytes
-	f.Add([]byte("\xc0\xc1\xfe\xff"), "type/invalid-utf8", "key-\xc0\xc1")                                  // invalid UTF-8
-	f.Add([]byte("\xef\xbb\xbf" + "BOM-prefixed"), "text/bom", "bom-key")                                   // BOM
-	f.Add(bytes.Repeat([]byte("\xe2\x80\x8b"), 1000), "text/zwsp", "zwsp")                                  // zero-width spaces
-	f.Add([]byte("normal ASCII"), "application/json", "normal-key")                                          // baseline
+	f.Add([]byte("Hello \xe4\xb8\x96\xe7\x95\x8c"), "text/plain", "key-\xe4\xb8\x96")              // CJK
+	f.Add([]byte("\xf0\x9f\x92\xa9\xf0\x9f\x94\x92"), "application/\xf0\x9f\x94\x91", "emoji-key") // emoji
+	f.Add([]byte{0x00, 0x01, 0x02, 0xff, 0xfe}, "binary/\x00octet", "null-\x00-key")               // null bytes
+	f.Add([]byte("\xc0\xc1\xfe\xff"), "type/invalid-utf8", "key-\xc0\xc1")                         // invalid UTF-8
+	f.Add([]byte("\xef\xbb\xbf"+"BOM-prefixed"), "text/bom", "bom-key")                            // BOM
+	f.Add(bytes.Repeat([]byte("\xe2\x80\x8b"), 1000), "text/zwsp", "zwsp")                         // zero-width spaces
+	f.Add([]byte("normal ASCII"), "application/json", "normal-key")                                // baseline
 
 	f.Fuzz(func(t *testing.T, payload []byte, payloadType string, keyID string) {
 		signer, verifier := ed25519KeyPair(t)

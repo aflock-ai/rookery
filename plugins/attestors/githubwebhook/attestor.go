@@ -60,10 +60,10 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	if len(a.receivedSig) == 0 {
-		return fmt.Errorf("recieved signature is required")
+		return fmt.Errorf("received signature is required")
 	}
 
-	if err := validateWebhook(a.body, string(a.receivedSig), a.secret); err != nil {
+	if err := validateWebhook(a.body, a.receivedSig, a.secret); err != nil {
 		return fmt.Errorf("webhook validation failed: %w", err)
 	}
 

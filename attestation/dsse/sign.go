@@ -44,7 +44,7 @@ func SignWithTimestampers(timestampers ...timestamp.Timestamper) SignOption {
 	}
 }
 
-func Sign(bodyType string, body io.Reader, opts ...SignOption) (Envelope, error) {
+func Sign(bodyType string, body io.Reader, opts ...SignOption) (Envelope, error) { //nolint:gocognit,gocyclo
 	so := &signOptions{}
 	env := Envelope{}
 	for _, opt := range opts {

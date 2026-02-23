@@ -82,9 +82,9 @@ func TestAdversarial_DigestSetEqual_PartialOverlapWithMismatch(t *testing.T) {
 func TestAdversarial_DigestSetEqual_PartialOverlapAllMatch(t *testing.T) {
 	// SHA256 is shared and matches. SHA1 and GitOID only exist in one set each.
 	ds1 := DigestSet{
-		DigestValue{Hash: crypto.SHA256}:                      "same-sha256",
-		DigestValue{Hash: crypto.SHA1}:                        "only-in-ds1",
-		DigestValue{Hash: crypto.SHA256, GitOID: true}:        "gitoid-only-in-ds1",
+		DigestValue{Hash: crypto.SHA256}:               "same-sha256",
+		DigestValue{Hash: crypto.SHA1}:                 "only-in-ds1",
+		DigestValue{Hash: crypto.SHA256, GitOID: true}: "gitoid-only-in-ds1",
 	}
 	ds2 := DigestSet{
 		DigestValue{Hash: crypto.SHA256}: "same-sha256",

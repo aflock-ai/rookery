@@ -99,14 +99,14 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 			continue
 		}
 
-		f, err := os.Open(path)
+		f, err := os.Open(path) //nolint:gosec // G304: path from attestation context products
 		if err != nil {
 			log.Debugf("(attestation/vex) error opening file %s: %v", path, err)
 			continue
 		}
 
 		reportBytes, err := io.ReadAll(f)
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			log.Debugf("(attestation/vex) error reading file %s: %v", path, err)
 			continue

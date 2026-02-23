@@ -16,7 +16,6 @@ import (
 //	if fipsMode != "" {
 //	    mainGoPrefix = fmt.Sprintf("//go:debug fips140=%s\n", fipsMode)
 //	}
-//
 func GenerateFipsDirective(fipsMode string) string {
 	if fipsMode == "" {
 		return ""

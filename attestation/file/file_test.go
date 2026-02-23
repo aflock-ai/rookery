@@ -20,8 +20,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/gobwas/glob"
 	"github.com/stretchr/testify/require"
 )
 

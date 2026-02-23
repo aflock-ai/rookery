@@ -46,12 +46,14 @@ type RawAttestation struct {
 	data     json.RawMessage
 }
 
-func (r *RawAttestation) Name() string                     { return r.typeName }
-func (r *RawAttestation) Type() string                     { return r.typeName }
-func (r *RawAttestation) RunType() RunType                 { return "" }
-func (r *RawAttestation) Attest(*AttestationContext) error  { return fmt.Errorf("raw attestation cannot attest") }
-func (r *RawAttestation) Schema() *jsonschema.Schema        { return nil }
-func (r *RawAttestation) MarshalJSON() ([]byte, error)      { return r.data, nil }
+func (r *RawAttestation) Name() string     { return r.typeName }
+func (r *RawAttestation) Type() string     { return r.typeName }
+func (r *RawAttestation) RunType() RunType { return "" }
+func (r *RawAttestation) Attest(*AttestationContext) error {
+	return fmt.Errorf("raw attestation cannot attest")
+}
+func (r *RawAttestation) Schema() *jsonschema.Schema   { return nil }
+func (r *RawAttestation) MarshalJSON() ([]byte, error) { return r.data, nil }
 
 func NewCollection(name string, attestors []CompletedAttestor) Collection {
 	collection := Collection{

@@ -188,7 +188,7 @@ func (f Functionary) Validate(verifier cryptoutil.Verifier, trustBundles map[str
 // buildStepContext extracts attestation data from already-verified steps referenced
 // by AttestationsFrom. The result is a map[stepName]->map[attestationType]->attestorJSON
 // that gets passed into Rego policy evaluation as input.steps.
-func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepResult) map[string]interface{} {
+func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepResult) map[string]interface{} { //nolint:gocognit
 	if len(attestationsFrom) == 0 {
 		return nil
 	}
@@ -245,7 +245,7 @@ func checkDependencies(attestationsFrom []string, resultsByStep map[string]StepR
 
 // validateAttestations will test each collection against to ensure the expected attestations
 // appear in the collection as well as that any rego policies pass for the step.
-func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult {
+func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult { //nolint:gocognit,gocyclo,funlen
 	result := StepResult{Step: s.Name}
 	if len(collectionResults) <= 0 {
 		return result
@@ -310,12 +310,12 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 				reasons = append(reasons, err.Error())
 			}
 
-			if len(aiResponses) > 0 {
+			if len(aiResponses) > 0 { //nolint:nestif
 				allAiResponses = append(allAiResponses, aiResponses...)
 
 				if err == nil {
 					for i, resp := range aiResponses {
-						if resp.Status == "FAIL" {
+						if resp.Status == AiStatusFail {
 							policyName := ""
 							if i < len(expected.AiPolicies) {
 								policyName = expected.AiPolicies[i].Name

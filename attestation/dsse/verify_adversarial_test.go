@@ -181,7 +181,7 @@ func TestAdversarial_ErrorKeyIDFallbackDeduplication(t *testing.T) {
 	)
 
 	if err == nil {
-		t.Errorf("BUG: Error KeyID fallback failed to deduplicate! Threshold=2 should "+
+		t.Errorf("BUG: Error KeyID fallback failed to deduplicate! Threshold=2 should " +
 			"not be met with a single verifier, even when KeyID() returns errors")
 	} else {
 		var threshErr ErrThresholdNotMet
@@ -228,7 +228,7 @@ func TestAdversarial_KeyIDCollisionReducesThreshold(t *testing.T) {
 	// This SHOULD fail because the dedup map sees "colliding-key-id" twice
 	// and only counts it once.
 	if err == nil {
-		t.Errorf("KeyID collision unexpectedly passed threshold=2. Two distinct keys "+
+		t.Errorf("KeyID collision unexpectedly passed threshold=2. Two distinct keys " +
 			"with colliding KeyIDs should still be counted as 1 (by design? or bug?)")
 	} else {
 		// Documenting this as a design concern: if two legitimately different
@@ -263,8 +263,8 @@ func TestAdversarial_AlwaysPassVerifierMeetsThreshold(t *testing.T) {
 
 	// This WILL pass -- documenting the trust model limitation.
 	if err == nil {
-		t.Logf("DESIGN NOTE: 3 always-pass fake verifiers met threshold=3. "+
-			"The DSSE verify loop trusts the Verifier.Verify() return value unconditionally. "+
+		t.Logf("DESIGN NOTE: 3 always-pass fake verifiers met threshold=3. " +
+			"The DSSE verify loop trusts the Verifier.Verify() return value unconditionally. " +
 			"Security depends on the caller providing honest verifier implementations.")
 	}
 }
@@ -293,7 +293,7 @@ func TestAdversarial_SameKeyRegisteredTwiceAsVerifier(t *testing.T) {
 	// verifier[1] also succeeds (same KeyID already in map).
 	// So verifiedKeyIDs should have only 1 entry.
 	if err == nil {
-		t.Errorf("BUG: Same verifier passed twice met threshold=2! "+
+		t.Errorf("BUG: Same verifier passed twice met threshold=2! " +
 			"The dedup map should prevent this.")
 	} else {
 		var threshErr ErrThresholdNotMet
@@ -763,7 +763,9 @@ func TestAdversarial_PayloadTypeTamperedAfterSigning(t *testing.T) {
 
 // TestAdversarial_PAEInjectionViaPayloadType tests whether a specially
 // crafted payloadType string can create a PAE collision. The PAE format is:
-//   "DSSEv1 <len(type)> <type> <len(body)> <body>"
+//
+//	"DSSEv1 <len(type)> <type> <len(body)> <body>"
+//
 // If an attacker can craft a type that includes spaces and length fields,
 // they might be able to make two different (type, body) pairs produce
 // the same PAE. This test verifies that the length-prefix scheme prevents it.
@@ -1102,11 +1104,11 @@ func TestAdversarial_UnicodePayloadType(t *testing.T) {
 	signer, verifier := mustCreateTestKey(t)
 
 	unicodeTypes := []string{
-		"application/\u00e9ncoded",        // accented e
-		"type/\u0000null\u0000embedded",    // null bytes
-		"type/\U0001F4A9",                  // emoji (pile of poo)
-		"type/\xff\xfe",                    // invalid UTF-8
-		"type with\ttabs\nand\nnewlines",   // whitespace
+		"application/\u00e9ncoded",          // accented e
+		"type/\u0000null\u0000embedded",     // null bytes
+		"type/\U0001F4A9",                   // emoji (pile of poo)
+		"type/\xff\xfe",                     // invalid UTF-8
+		"type with\ttabs\nand\nnewlines",    // whitespace
 		"type/with spaces and\t\tmixed\nws", // mixed whitespace
 	}
 
@@ -1231,9 +1233,9 @@ func TestAdversarial_TwoWrappersOfSameKeyDifferentKeyIDs(t *testing.T) {
 	// will count 2 distinct keys. This means a single compromised key can
 	// be wrapped with different KeyIDs to inflate the threshold.
 	if err == nil {
-		t.Logf("DESIGN CONCERN: Two wrappers of the same cryptographic key with "+
-			"different KeyIDs met threshold=2. The dedup is based on KeyID, not on "+
-			"the actual cryptographic key material. A single compromised key can inflate "+
+		t.Logf("DESIGN CONCERN: Two wrappers of the same cryptographic key with " +
+			"different KeyIDs met threshold=2. The dedup is based on KeyID, not on " +
+			"the actual cryptographic key material. A single compromised key can inflate " +
 			"the threshold by using multiple KeyID aliases.")
 	} else {
 		t.Logf("Correctly rejected same-key wrappers with different KeyIDs: %v", err)

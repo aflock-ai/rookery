@@ -60,7 +60,7 @@ func executeCmd(args ...string) error {
 }
 
 // executeCmdOutput runs the command and captures both stdout and stderr.
-func executeCmdOutput(args ...string) (string, string, error) {
+func executeCmdOutput(args ...string) (string, string, error) { //nolint:unparam
 	cmd := New()
 	cmd.SetArgs(args)
 	var stdout, stderr bytes.Buffer
@@ -2653,7 +2653,7 @@ func TestSecurity_R3_310_ConfigFileLargeYAML(t *testing.T) {
 	var builder strings.Builder
 	builder.WriteString("run:\n")
 	for i := 0; i < 10000; i++ {
-		builder.WriteString(fmt.Sprintf("  key-%d: value-%d\n", i, i))
+		fmt.Fprintf(&builder, "  key-%d: value-%d\n", i, i)
 	}
 	writeFile(t, configPath, builder.String())
 
@@ -2686,9 +2686,9 @@ func TestSecurity_R3_310_RunVerifyRequiresVerifiers(t *testing.T) {
 
 	// Call runVerify directly with empty verifiers and empty key/CA paths.
 	vo := options.VerifyOptions{
-		PolicyFilePath:      polFile,
+		PolicyFilePath:       polFile,
 		AttestationFilePaths: []string{attFile},
-		ArtifactFilePath:    "/dev/null",
+		ArtifactFilePath:     "/dev/null",
 	}
 
 	err := runVerify(context.Background(), vo)

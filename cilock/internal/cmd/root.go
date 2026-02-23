@@ -120,7 +120,7 @@ func loadOutfile(outFilePath string) (*os.File, error) {
 		return os.Stdout, nil
 	}
 
-	out, err := os.Create(outFilePath)
+	out, err := os.Create(outFilePath) //nolint:gosec // G304: outFilePath is from CLI flags
 	if err != nil {
 		return nil, fmt.Errorf("failed to create output file: %w", err)
 	}

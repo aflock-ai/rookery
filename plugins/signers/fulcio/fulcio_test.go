@@ -319,7 +319,7 @@ func generateCertChain(t *testing.T) []string {
 	return certs
 }
 
-func setupRetryFulcioTestService(t *testing.T, maxFailures int32) (*retryCAClientService, string) {
+func setupRetryFulcioTestService(t *testing.T, maxFailures int32) (*retryCAClientService, string) { //nolint:unparam
 	service := &retryCAClientService{
 		attemptCount: new(int32),
 		maxFailures:  maxFailures,

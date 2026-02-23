@@ -6,34 +6,34 @@ package attestation
 //
 // NOTE: This must be called AFTER all attestors have registered via their init() functions.
 // It is called from RegisterLegacyAliases() which should be invoked at startup.
-var legacyAliases = map[string]string{
+var legacyAliases = map[string]string{ //nolint:gosec // G101: these are attestation type URIs, not credentials
 	// Collection type
 	"https://witness.testifysec.com/attestation-collection/v0.1": "https://aflock.ai/attestation-collection/v0.1",
 
 	// Attestor predicate types (witness.dev → aflock.ai)
-	"https://witness.dev/attestations/command-run/v0.1":      "https://aflock.ai/attestations/command-run/v0.1",
-	"https://witness.dev/attestations/docker/v0.1":           "https://aflock.ai/attestations/docker/v0.1",
-	"https://witness.dev/attestations/environment/v0.1":      "https://aflock.ai/attestations/environment/v0.1",
-	"https://witness.dev/attestations/git/v0.1":              "https://aflock.ai/attestations/git/v0.1",
-	"https://witness.dev/attestations/github/v0.1":           "https://aflock.ai/attestations/github/v0.1",
-	"https://witness.dev/attestations/githubwebhook/v0.1":    "https://aflock.ai/attestations/githubwebhook/v0.1",
-	"https://witness.dev/attestations/gitlab/v0.1":           "https://aflock.ai/attestations/gitlab/v0.1",
-	"https://witness.dev/attestations/gcp-iit/v0.1":          "https://aflock.ai/attestations/gcp-iit/v0.1",
-	"https://witness.dev/attestations/aws/v0.1":              "https://aflock.ai/attestations/aws/v0.1",
-	"https://witness.dev/attestations/aws-codebuild/v0.1":    "https://aflock.ai/attestations/aws-codebuild/v0.1",
-	"https://witness.dev/attestations/jenkins/v0.1":          "https://aflock.ai/attestations/jenkins/v0.1",
-	"https://witness.dev/attestations/jwt/v0.1":              "https://aflock.ai/attestations/jwt/v0.1",
-	"https://witness.dev/attestations/k8smanifest/v0.2":      "https://aflock.ai/attestations/k8smanifest/v0.2",
-	"https://witness.dev/attestations/lockfiles/v0.1":        "https://aflock.ai/attestations/lockfiles/v0.1",
-	"https://witness.dev/attestations/material/v0.1":         "https://aflock.ai/attestations/material/v0.1",
-	"https://witness.dev/attestations/maven/v0.1":            "https://aflock.ai/attestations/maven/v0.1",
-	"https://witness.dev/attestations/oci/v0.1":              "https://aflock.ai/attestations/oci/v0.1",
-	"https://witness.dev/attestations/omnitrail/v0.1":        "https://aflock.ai/attestations/omnitrail/v0.1",
-	"https://witness.dev/attestations/product/v0.1":          "https://aflock.ai/attestations/product/v0.1",
-	"https://witness.dev/attestations/sarif/v0.1":            "https://aflock.ai/attestations/sarif/v0.1",
-	"https://witness.dev/attestations/sbom/v0.1":             "https://aflock.ai/attestations/sbom/v0.1",
-	"https://witness.dev/attestations/secretscan/v0.1":       "https://aflock.ai/attestations/secretscan/v0.1",
-	"https://witness.dev/attestations/system-packages/v0.1":  "https://aflock.ai/attestations/system-packages/v0.1",
+	"https://witness.dev/attestations/command-run/v0.1":     "https://aflock.ai/attestations/command-run/v0.1",
+	"https://witness.dev/attestations/docker/v0.1":          "https://aflock.ai/attestations/docker/v0.1",
+	"https://witness.dev/attestations/environment/v0.1":     "https://aflock.ai/attestations/environment/v0.1",
+	"https://witness.dev/attestations/git/v0.1":             "https://aflock.ai/attestations/git/v0.1",
+	"https://witness.dev/attestations/github/v0.1":          "https://aflock.ai/attestations/github/v0.1",
+	"https://witness.dev/attestations/githubwebhook/v0.1":   "https://aflock.ai/attestations/githubwebhook/v0.1",
+	"https://witness.dev/attestations/gitlab/v0.1":          "https://aflock.ai/attestations/gitlab/v0.1",
+	"https://witness.dev/attestations/gcp-iit/v0.1":         "https://aflock.ai/attestations/gcp-iit/v0.1",
+	"https://witness.dev/attestations/aws/v0.1":             "https://aflock.ai/attestations/aws/v0.1",
+	"https://witness.dev/attestations/aws-codebuild/v0.1":   "https://aflock.ai/attestations/aws-codebuild/v0.1",
+	"https://witness.dev/attestations/jenkins/v0.1":         "https://aflock.ai/attestations/jenkins/v0.1",
+	"https://witness.dev/attestations/jwt/v0.1":             "https://aflock.ai/attestations/jwt/v0.1",
+	"https://witness.dev/attestations/k8smanifest/v0.2":     "https://aflock.ai/attestations/k8smanifest/v0.2",
+	"https://witness.dev/attestations/lockfiles/v0.1":       "https://aflock.ai/attestations/lockfiles/v0.1",
+	"https://witness.dev/attestations/material/v0.1":        "https://aflock.ai/attestations/material/v0.1",
+	"https://witness.dev/attestations/maven/v0.1":           "https://aflock.ai/attestations/maven/v0.1",
+	"https://witness.dev/attestations/oci/v0.1":             "https://aflock.ai/attestations/oci/v0.1",
+	"https://witness.dev/attestations/omnitrail/v0.1":       "https://aflock.ai/attestations/omnitrail/v0.1",
+	"https://witness.dev/attestations/product/v0.1":         "https://aflock.ai/attestations/product/v0.1",
+	"https://witness.dev/attestations/sarif/v0.1":           "https://aflock.ai/attestations/sarif/v0.1",
+	"https://witness.dev/attestations/sbom/v0.1":            "https://aflock.ai/attestations/sbom/v0.1",
+	"https://witness.dev/attestations/secretscan/v0.1":      "https://aflock.ai/attestations/secretscan/v0.1",
+	"https://witness.dev/attestations/system-packages/v0.1": "https://aflock.ai/attestations/system-packages/v0.1",
 }
 
 // reverseLegacyAliases maps current aflock.ai URIs back to their witness.dev equivalents.

@@ -21,12 +21,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/invopop/jsonschema"
 )
 
@@ -124,7 +124,7 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 	return jsonschema.Reflect(&a)
 }
 
-func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
+func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:gocognit,gocyclo,funlen // git attestation involves multiple data sources
 	repo, err := git.PlainOpenWithOptions(ctx.WorkingDir(), &git.PlainOpenOptions{
 		DetectDotGit: true,
 	})
@@ -236,7 +236,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 	a.TreeHash = commit.TreeHash.String()
 
-	if GitExists() {
+	if GitExists() { //nolint:nestif // git binary detection requires nested checks
 		a.GitTool = "go-git+git-bin"
 
 		a.GitBinPath, err = GitGetBinPath()

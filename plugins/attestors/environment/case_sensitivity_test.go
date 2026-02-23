@@ -172,15 +172,15 @@ func TestSecurity_R3_124_DefaultListMixedCase(t *testing.T) {
 		envVar      string
 		shouldCatch bool
 	}{
-		{"binance_api=key123", true},       // exact match
-		{"BINANCE_API=key123", true},       // uppercase — should be caught
-		{"Binance_Api=key123", true},       // mixed — should be caught
-		{"binance_secret=key123", true},    // exact match
-		{"BINANCE_SECRET=key123", true},    // caught by *SECRET* glob
-		{"square_access_token=tok", true},  // exact match
-		{"SQUARE_ACCESS_TOKEN=tok", true},  // caught by *TOKEN* glob
-		{"square_oauth_secret=sec", true},  // exact match
-		{"SQUARE_OAUTH_SECRET=sec", true},  // caught by *SECRET* glob
+		{"binance_api=key123", true},      // exact match
+		{"BINANCE_API=key123", true},      // uppercase — should be caught
+		{"Binance_Api=key123", true},      // mixed — should be caught
+		{"binance_secret=key123", true},   // exact match
+		{"BINANCE_SECRET=key123", true},   // caught by *SECRET* glob
+		{"square_access_token=tok", true}, // exact match
+		{"SQUARE_ACCESS_TOKEN=tok", true}, // caught by *TOKEN* glob
+		{"square_oauth_secret=sec", true}, // exact match
+		{"SQUARE_OAUTH_SECRET=sec", true}, // caught by *SECRET* glob
 	}
 
 	for _, tt := range tests {

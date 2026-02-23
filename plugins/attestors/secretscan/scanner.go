@@ -25,15 +25,15 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	"github.com/zricethezav/gitleaks/v8/detect"
 )
 
 // scanBytes is the core scanning function that handles both direct and recursive scanning
 // of content for secrets. It can decode encoded content and recursively search
 // through multiple layers of encoding.
-func (a *Attestor) scanBytes(contentBytes []byte, sourceIdentifier string, detector *detect.Detector, processedInThisScan map[string]struct{}, currentDepth int) ([]Finding, error) {
+func (a *Attestor) scanBytes(contentBytes []byte, sourceIdentifier string, detector *detect.Detector, processedInThisScan map[string]struct{}, currentDepth int) ([]Finding, error) { //nolint:gocognit,gocyclo,funlen // multi-layer encoding detection requires complex control flow
 	// Safety check to prevent infinite recursion
 	if currentDepth > maxScanRecursionDepth {
 		return nil, nil
@@ -79,7 +79,7 @@ func (a *Attestor) scanBytes(contentBytes []byte, sourceIdentifier string, detec
 	}
 
 	// Recursive scanning through encoding layers if configured
-	if currentDepth < a.maxDecodeLayers {
+	if currentDepth < a.maxDecodeLayers { //nolint:nestif // recursive decoding requires nested layer checks
 		// Apply each encoding scanner
 		for _, scanner := range defaultEncodingScanners {
 			// Find potential encoded strings
@@ -210,7 +210,7 @@ func (a *Attestor) exceedsMaxFileSize(filePath string) (bool, error) {
 
 // readFileContent reads file content with size limiting
 func (a *Attestor) readFileContent(filePath string) ([]byte, error) {
-	file, err := os.Open(filePath)
+	file, err := os.Open(filePath) //nolint:gosec // G304: file path from attestation context products
 	if err != nil {
 		return nil, fmt.Errorf("error opening file: %w", err)
 	}
@@ -239,7 +239,7 @@ func (a *Attestor) readFileContent(filePath string) ([]byte, error) {
 
 // scanAttestations examines all completed attestors for potential secrets.
 // Each attestor is converted to JSON and scanned with the detector.
-func (a *Attestor) scanAttestations(ctx *attestation.AttestationContext, tempDir string, detector *detect.Detector) error {
+func (a *Attestor) scanAttestations(ctx *attestation.AttestationContext, _ string, detector *detect.Detector) error { //nolint:unparam // error return kept for API consistency
 	// Get all completed attestors
 	completedAttestors := ctx.CompletedAttestors()
 	log.Debugf("(attestation/secretscan) scanning %d completed attestors", len(completedAttestors))
@@ -252,7 +252,7 @@ func (a *Attestor) scanAttestations(ctx *attestation.AttestationContext, tempDir
 		}
 
 		// Scan the attestor for secrets
-		findings, err := a.scanSingleAttestor(completed.Attestor, tempDir, detector)
+		findings, err := a.scanSingleAttestor(completed.Attestor, "", detector)
 		if err != nil {
 			log.Debugf("(attestation/secretscan) error scanning attestor %s: %s", completed.Attestor.Name(), err)
 			continue
@@ -285,7 +285,7 @@ func (a *Attestor) shouldSkipAttestor(attestor attestation.Attestor) bool {
 }
 
 // scanSingleAttestor converts an attestor to JSON and scans it for secrets
-func (a *Attestor) scanSingleAttestor(attestor attestation.Attestor, tempDir string, detector *detect.Detector) ([]Finding, error) {
+func (a *Attestor) scanSingleAttestor(attestor attestation.Attestor, _ string, detector *detect.Detector) ([]Finding, error) {
 	// Check for commandrun attestor specifically to access stdout/stderr
 	if cmdRunAttestor, ok := attestor.(commandrun.CommandRunAttestor); ok {
 		return a.scanCommandRunAttestor(cmdRunAttestor, detector)
@@ -363,7 +363,7 @@ func (a *Attestor) scanCommandRunAttestor(attestor commandrun.CommandRunAttestor
 
 // scanProducts examines all products for potential secrets.
 // Binary files and directories are automatically skipped.
-func (a *Attestor) scanProducts(ctx *attestation.AttestationContext, tempDir string, detector *detect.Detector) error {
+func (a *Attestor) scanProducts(ctx *attestation.AttestationContext, _ string, detector *detect.Detector) error { //nolint:unparam // error return kept for API consistency
 	products := ctx.Products()
 	if len(products) == 0 {
 		log.Debugf("(attestation/secretscan) no products found to scan")

@@ -24,9 +24,9 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/invopop/jsonschema"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -42,7 +42,7 @@ const (
 	identityTokenURLPathTemplate = "/computeMetadata/v1/instance/service-accounts/%s/identity"
 	identityTokenAudience        = "witness-node-attestor" //nolint: gosec // false positive
 	defaultServiceAccount        = "default"
-	TokenUrl                     = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=witness-node-attestor&format=full&licenses=TRUE"
+	TokenUrl                     = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=witness-node-attestor&format=full&licenses=TRUE" //nolint:gosec // G101: not a credential, this is a GCP metadata URL
 	InstanceMetadataUrl          = "http://metadata.google.internal/computeMetadata/v1/instance/"
 	InstanceAttributesUrl        = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/"
 	ProjectMetadataUrl           = "http://metadata.google.internal/computeMetadata/v1/project/"
@@ -104,7 +104,7 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 	return jsonschema.Reflect(a)
 }
 
-func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
+func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:gocognit,gocyclo // GCP attestation involves multiple metadata lookups
 	tokenURL := identityTokenURL(defaultIdentityTokenHost, defaultServiceAccount)
 	identityToken, err := getMetadata(tokenURL)
 	if err != nil {
@@ -127,7 +127,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		a.isWorkloadIdentity = true
 	}
 
-	if !a.isWorkloadIdentity {
+	if !a.isWorkloadIdentity { //nolint:nestif // GCP claim extraction requires nested checks
 		googClaim, ok := a.JWT.Claims["google"].(map[string]interface{})
 		if !ok {
 			return fmt.Errorf("unexpected type for google claim")
@@ -259,7 +259,7 @@ func getMetadata(url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code for route: %d", resp.StatusCode)

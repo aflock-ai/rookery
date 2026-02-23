@@ -26,9 +26,9 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/invopop/jsonschema"
 )
 
@@ -228,7 +228,7 @@ func fetchToken(tokenURL string, bearer string, audience string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("error on request %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("token request failed with status %d", resp.StatusCode)

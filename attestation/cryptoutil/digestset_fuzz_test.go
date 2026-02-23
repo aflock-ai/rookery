@@ -134,8 +134,8 @@ func TestDigestSet_DS002_EmptyAndNilEquality(t *testing.T) {
 	})
 
 	t.Run("empty_value_vs_nil_value", func(t *testing.T) {
-		var nilDs DigestSet        // nil map
-		emptyDs := DigestSet{}     // empty but non-nil map
+		var nilDs DigestSet    // nil map
+		emptyDs := DigestSet{} // empty but non-nil map
 
 		// Both should behave identically with Equal
 		assert.Equal(t,
@@ -325,11 +325,11 @@ func TestDigestSet_DS004_NonConstantTimeComparison(t *testing.T) {
 func TestDigestSet_DS005_JSONSerializationRoundTrip(t *testing.T) {
 	// Build a DigestSet with ALL supported hash algorithms
 	allHashes := DigestSet{
-		DigestValue{Hash: crypto.SHA256}:                       "sha256digest",
-		DigestValue{Hash: crypto.SHA1}:                         "sha1digest",
-		DigestValue{Hash: crypto.SHA256, GitOID: true}:         "gitoid:blob:sha256:abc123",
-		DigestValue{Hash: crypto.SHA1, GitOID: true}:           "gitoid:blob:sha1:def456",
-		DigestValue{Hash: crypto.SHA256, DirHash: true}:        "dirhashdigest",
+		DigestValue{Hash: crypto.SHA256}:                "sha256digest",
+		DigestValue{Hash: crypto.SHA1}:                  "sha1digest",
+		DigestValue{Hash: crypto.SHA256, GitOID: true}:  "gitoid:blob:sha256:abc123",
+		DigestValue{Hash: crypto.SHA1, GitOID: true}:    "gitoid:blob:sha1:def456",
+		DigestValue{Hash: crypto.SHA256, DirHash: true}: "dirhashdigest",
 	}
 
 	// Marshal to JSON
@@ -749,8 +749,8 @@ func TestDigestSet_DS011_GitOIDDigestFormat(t *testing.T) {
 	data := []byte("gitoid format test")
 
 	hashes := []DigestValue{
-		{Hash: crypto.SHA256},                // plain hash
-		{Hash: crypto.SHA256, GitOID: true},  // gitoid
+		{Hash: crypto.SHA256},               // plain hash
+		{Hash: crypto.SHA256, GitOID: true}, // gitoid
 	}
 
 	ds, err := CalculateDigestSetFromBytes(data, hashes)
@@ -931,7 +931,7 @@ func TestDigestSet_DS016_TransitivityViolation(t *testing.T) {
 	sha1Key := DigestValue{Hash: crypto.SHA1}
 
 	dsA := DigestSet{sha256Key: "X", sha1Key: "Y"}
-	dsB := DigestSet{sha256Key: "X"}             // subset of A
+	dsB := DigestSet{sha256Key: "X"}               // subset of A
 	dsC := DigestSet{sha256Key: "X", sha1Key: "Z"} // sha1 differs from A
 
 	ab := dsA.Equal(dsB) // true: sha256 matches, sha1 skipped

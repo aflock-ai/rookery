@@ -128,7 +128,7 @@ func (h *Handler) handleSessionStart(input *aflock.HookInput) error {
 }
 
 // buildPolicyContext creates context string describing the active policy.
-func (h *Handler) buildPolicyContext(pol *aflock.Policy, agentIdentity *identity.AgentIdentity) string {
+func (h *Handler) buildPolicyContext(pol *aflock.Policy, agentIdentity *identity.AgentIdentity) string { //nolint:gocognit // policy context assembly requires many checks
 	ctx := fmt.Sprintf("# aflock Policy Active: %s\n\n", pol.Name)
 
 	if agentIdentity != nil {
@@ -372,7 +372,7 @@ func (h *Handler) handleStop(input *aflock.HookInput) error {
 }
 
 // handleSubagentStop checks sublayout constraints.
-func (h *Handler) handleSubagentStop(input *aflock.HookInput) error {
+func (h *Handler) handleSubagentStop(_ *aflock.HookInput) error {
 	// Similar to Stop, but for subagents
 	return output.Write(output.StopAllow())
 }
@@ -406,13 +406,13 @@ func (h *Handler) handleSessionEnd(input *aflock.HookInput) error {
 }
 
 // handleNotification logs notifications.
-func (h *Handler) handleNotification(input *aflock.HookInput) error {
+func (h *Handler) handleNotification(_ *aflock.HookInput) error {
 	// Just acknowledge
 	return output.WriteEmpty()
 }
 
 // handlePreCompact records compaction event.
-func (h *Handler) handlePreCompact(input *aflock.HookInput) error {
+func (h *Handler) handlePreCompact(_ *aflock.HookInput) error {
 	// Just acknowledge
 	return output.WriteEmpty()
 }
@@ -461,7 +461,7 @@ func isAttestationFile(name string) bool {
 // attestationMatchesName checks if an attestation file's content matches the required name.
 // It looks at the predicate's toolName field in action attestations.
 func attestationMatchesName(path, name string) bool {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: attestation file path from state directory
 	if err != nil {
 		return false
 	}

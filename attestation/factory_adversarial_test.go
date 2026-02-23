@@ -20,8 +20,8 @@ type adversarialAttestor struct {
 func (a *adversarialAttestor) Name() string                     { return a.name }
 func (a *adversarialAttestor) Type() string                     { return a.predicateType }
 func (a *adversarialAttestor) RunType() RunType                 { return a.runType }
-func (a *adversarialAttestor) Schema() *jsonschema.Schema        { return jsonschema.Reflect(a) }
-func (a *adversarialAttestor) Attest(*AttestationContext) error  { return nil }
+func (a *adversarialAttestor) Schema() *jsonschema.Schema       { return jsonschema.Reflect(a) }
+func (a *adversarialAttestor) Attest(*AttestationContext) error { return nil }
 
 // --- Tests ---
 
@@ -129,9 +129,9 @@ func TestRegisterAttestation_SameRunType_LastWins(t *testing.T) {
 		t.Logf("OK: attestationsByRun last-writer-wins (got %q, expected %q)", entry.Name, a2.name)
 	}
 
-	t.Errorf("BUG: attestationsByRun only stores one entry per RunType (last-writer-wins). "+
-		"If two attestors register with the same RunType, the first is silently dropped from attestationsByRun. "+
-		"While FactoryByName still works, attestationsByRun is effectively useless for RunTypes with multiple attestors. "+
+	t.Errorf("BUG: attestationsByRun only stores one entry per RunType (last-writer-wins). " +
+		"If two attestors register with the same RunType, the first is silently dropped from attestationsByRun. " +
+		"While FactoryByName still works, attestationsByRun is effectively useless for RunTypes with multiple attestors. " +
 		"This map is declared but appears to have no consumers -- it may be dead code.")
 }
 
@@ -271,7 +271,7 @@ func TestRegisterAttestation_NilFactory(t *testing.T) {
 	}
 
 	if factory == nil {
-		t.Errorf("BUG: nil factory registered successfully. Calling it will panic. "+
+		t.Errorf("BUG: nil factory registered successfully. Calling it will panic. " +
 			"RegisterAttestation does not validate that the factory function is non-nil.")
 		return
 	}

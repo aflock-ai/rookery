@@ -23,6 +23,7 @@ import (
 	"time"
 
 	// compat layer imports
+	witness "github.com/in-toto/go-witness"
 	compatAttestation "github.com/in-toto/go-witness/attestation"
 	compatCrypto "github.com/in-toto/go-witness/cryptoutil"
 	compatDSSE "github.com/in-toto/go-witness/dsse"
@@ -40,7 +41,6 @@ import (
 	compatSLSA "github.com/in-toto/go-witness/slsa"
 	compatSource "github.com/in-toto/go-witness/source"
 	compatTimestamp "github.com/in-toto/go-witness/timestamp"
-	witness "github.com/in-toto/go-witness"
 
 	// rookery imports
 	"github.com/aflock-ai/rookery/attestation"

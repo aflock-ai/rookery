@@ -46,11 +46,11 @@ type verifyAttestor struct {
 	Value   string `json:"value"`
 }
 
-func (a *verifyAttestor) Name() string                                  { return a.AttName }
-func (a *verifyAttestor) Type() string                                  { return a.AttType }
-func (a *verifyAttestor) RunType() attestation.RunType                  { return "test" }
+func (a *verifyAttestor) Name() string                                   { return a.AttName }
+func (a *verifyAttestor) Type() string                                   { return a.AttType }
+func (a *verifyAttestor) RunType() attestation.RunType                   { return "test" }
 func (a *verifyAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (a *verifyAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (a *verifyAttestor) Schema() *jsonschema.Schema                     { return nil }
 
 // mockVerifiedSrc implements source.VerifiedSourcer for tests that need to
 // control what Search returns per-step.
@@ -442,9 +442,9 @@ func TestVerify_CompareArtifacts_ExtraArtifactsIgnored(t *testing.T) {
 		"legit.bin": {sha256DV: "aaa111"},
 	}
 	arts := map[string]cryptoutil.DigestSet{
-		"legit.bin":   {sha256DV: "aaa111"}, // matches
-		"evil.bin":    {sha256DV: "deadbeef"}, // INJECTED - not in materials
-		"trojan.so":   {sha256DV: "cafebabe"}, // INJECTED - not in materials
+		"legit.bin": {sha256DV: "aaa111"},   // matches
+		"evil.bin":  {sha256DV: "deadbeef"}, // INJECTED - not in materials
+		"trojan.so": {sha256DV: "cafebabe"}, // INJECTED - not in materials
 	}
 
 	err := compareArtifacts(mats, arts)
@@ -1296,8 +1296,8 @@ func FuzzCompareArtifactsMultiHash(f *testing.F) {
 // constraint and value sets to probe set-equality edge cases.
 func FuzzCheckCertConstraintSetOps(f *testing.F) {
 	f.Add("a", "b", "a", "b")
-	f.Add("a", "b", "b", "a")     // reverse order
-	f.Add("a", "a", "a", "")      // duplicate constraint
+	f.Add("a", "b", "b", "a")      // reverse order
+	f.Add("a", "a", "a", "")       // duplicate constraint
 	f.Add("*", "", "anything", "") // wildcard with extra
 	f.Add("", "", "", "")          // all empty
 

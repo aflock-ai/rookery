@@ -23,10 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aflock-ai/rookery/attestation"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/aflock-ai/rookery/attestation"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,27 +58,27 @@ func TestSecurity_R3_210_RemoteURLQueryParamCredentialLeak(t *testing.T) {
 		description string
 	}{
 		{
-			name:       "GitHub PAT in access_token query param",
-			remoteURL:  "https://github.com/org/repo.git?access_token=ghp_1234567890abcdef",
-			credential: "ghp_1234567890abcdef",
+			name:        "GitHub PAT in access_token query param",
+			remoteURL:   "https://github.com/org/repo.git?access_token=ghp_1234567890abcdef",
+			credential:  "ghp_1234567890abcdef",
 			description: "GitHub Personal Access Tokens in query params leak into attestation",
 		},
 		{
-			name:       "GitLab deploy token in private_token query param",
-			remoteURL:  "https://gitlab.com/org/repo.git?private_token=gldt-XXXXXXXXXXXX",
-			credential: "gldt-XXXXXXXXXXXX",
+			name:        "GitLab deploy token in private_token query param",
+			remoteURL:   "https://gitlab.com/org/repo.git?private_token=gldt-XXXXXXXXXXXX",
+			credential:  "gldt-XXXXXXXXXXXX",
 			description: "GitLab deploy tokens in query params leak into attestation",
 		},
 		{
-			name:       "generic token in URL fragment",
-			remoteURL:  "https://github.com/org/repo.git#token=mysecrettoken123",
-			credential: "mysecrettoken123",
+			name:        "generic token in URL fragment",
+			remoteURL:   "https://github.com/org/repo.git#token=mysecrettoken123",
+			credential:  "mysecrettoken123",
 			description: "Tokens in URL fragments leak into attestation",
 		},
 		{
-			name:       "Bitbucket app password in query param",
-			remoteURL:  "https://bitbucket.org/org/repo.git?token=bbp_abcdef123456",
-			credential: "bbp_abcdef123456",
+			name:        "Bitbucket app password in query param",
+			remoteURL:   "https://bitbucket.org/org/repo.git?token=bbp_abcdef123456",
+			credential:  "bbp_abcdef123456",
 			description: "Bitbucket app passwords in query params leak into attestation",
 		},
 	}

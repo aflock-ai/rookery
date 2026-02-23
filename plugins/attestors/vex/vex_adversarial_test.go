@@ -110,7 +110,7 @@ func TestSecurity_R3_226_VEXStatusNotValidated(t *testing.T) {
 		"ignored",
 		"not_vulnerable",
 		"",
-		"FIXED",       // wrong case
+		"FIXED",        // wrong case
 		"not affected", // wrong format (space vs underscore)
 	}
 

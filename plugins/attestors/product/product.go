@@ -21,14 +21,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gabriel-vasile/mimetype"
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
-	"github.com/aflock-ai/rookery/attestation/file"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/file"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
+	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
+	"github.com/gabriel-vasile/mimetype"
+	"github.com/gobwas/glob"
 	"github.com/invopop/jsonschema"
 )
 

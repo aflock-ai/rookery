@@ -177,8 +177,8 @@ func TestSecurity_R3_130_PAE_NullByteInPayload(t *testing.T) {
 
 	// The PAEs MUST differ because the payloads are different lengths.
 	if bytes.Equal(paeWithNull, paeTruncated) {
-		t.Fatalf("SECURITY BUG: PAE with null bytes in body matches truncated body PAE. "+
-			"This means preauthEncode truncates at null bytes, which would allow "+
+		t.Fatalf("SECURITY BUG: PAE with null bytes in body matches truncated body PAE. " +
+			"This means preauthEncode truncates at null bytes, which would allow " +
 			"an attacker to sign 'hello\\x00<malicious>' and have it verify as 'hello'")
 	}
 
@@ -210,7 +210,7 @@ func TestSecurity_R3_130_PAE_NullByteInPayload(t *testing.T) {
 	env.Payload = bodyTruncated
 	_, err = env.Verify(VerifyWithVerifiers(verifier))
 	if err == nil {
-		t.Fatalf("SECURITY BUG: null-truncated payload verified with original signature. "+
+		t.Fatalf("SECURITY BUG: null-truncated payload verified with original signature. " +
 			"An attacker could sign 'hello\\x00<anything>' and it would verify as 'hello'")
 	}
 }
@@ -402,7 +402,7 @@ func TestSecurity_R3_133_AttackerIntermediatesDoNotChainToUnauthorizedRoot(t *te
 		VerifyWithThreshold(1),
 	)
 	if err != nil {
-		t.Logf("Correctly: verification with injected attacker intermediate still works "+
+		t.Logf("Correctly: verification with injected attacker intermediate still works " +
 			"with legitimate root (attacker intermediate is ignored): no error")
 	}
 
@@ -413,9 +413,9 @@ func TestSecurity_R3_133_AttackerIntermediatesDoNotChainToUnauthorizedRoot(t *te
 		VerifyWithThreshold(1),
 	)
 	if err == nil {
-		t.Fatalf("SECURITY BUG: Attacker-injected intermediate allowed verification "+
-			"against attacker root even though the leaf cert was issued by the "+
-			"legitimate CA. The attacker's intermediate in sig.Intermediates created "+
+		t.Fatalf("SECURITY BUG: Attacker-injected intermediate allowed verification " +
+			"against attacker root even though the leaf cert was issued by the " +
+			"legitimate CA. The attacker's intermediate in sig.Intermediates created " +
 			"a cross-chain trust path.")
 	}
 }
@@ -497,10 +497,10 @@ func TestSecurity_R3_135_SameKeyDifferentKeyIDsBypassesThreshold(t *testing.T) {
 	)
 
 	if err == nil {
-		t.Errorf("SECURITY BUG: Single key with 3 different KeyID wrappers met threshold=3. "+
-			"The threshold deduplication is KeyID-based, not cryptographic-key-based. "+
-			"An attacker who compromises one key can wrap it in N verifier objects with "+
-			"distinct KeyIDs to satisfy any threshold. This completely undermines "+
+		t.Errorf("SECURITY BUG: Single key with 3 different KeyID wrappers met threshold=3. " +
+			"The threshold deduplication is KeyID-based, not cryptographic-key-based. " +
+			"An attacker who compromises one key can wrap it in N verifier objects with " +
+			"distinct KeyIDs to satisfy any threshold. This completely undermines " +
 			"multi-party signing guarantees.")
 	}
 }

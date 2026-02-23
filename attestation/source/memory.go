@@ -50,12 +50,12 @@ func NewMemorySource() *MemorySource {
 }
 
 func (s *MemorySource) LoadFile(path string) error {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: path is provided by the caller
 	if err != nil {
 		return err
 	}
 
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return s.LoadReader(path, f)
 }
 

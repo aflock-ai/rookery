@@ -69,7 +69,7 @@ func (m *Manager) Load(sessionID string) (*aflock.SessionState, error) {
 		return nil, err
 	}
 	path := filepath.Join(m.SessionDir(sessionID), "state.json")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: session file path from state directory
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // No existing state

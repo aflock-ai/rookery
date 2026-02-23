@@ -29,6 +29,8 @@ import (
 	"github.com/aflock-ai/rookery/builder/internal/version"
 )
 
+const fipsModeOff = "off"
+
 // Preset plugin sets. Each entry is a full import path.
 var presets = map[string][]string{
 	"minimal": {
@@ -226,11 +228,11 @@ func main() {
 	// Create temp dir for build + git clones
 	tmp, err := os.MkdirTemp("", "rookery-build-*")
 	must(err)
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 
 	var plugins []resolvedPlugin
 
-	if manifestPath != "" {
+	if manifestPath != "" { //nolint:nestif
 		m, err := manifest.LoadManifest(manifestPath)
 		must(err)
 
@@ -270,7 +272,7 @@ func main() {
 	if presetName != "" {
 		presetPlugins, ok := presets[presetName]
 		if !ok {
-			fmt.Fprintf(os.Stderr, "Error: unknown preset %q (available: minimal, cicd, all)\n", presetName)
+			fmt.Fprintf(os.Stderr, "Error: unknown preset %q (available: minimal, cicd, all)\n", presetName) //nolint:gosec // G705: presetName is from CLI flags, not user-controlled web input
 			os.Exit(1)
 		}
 		for _, p := range presetPlugins {
@@ -296,11 +298,11 @@ func main() {
 	}
 
 	// Validate FIPS mode
-	if fipsMode != "" && fipsMode != "on" && fipsMode != "only" && fipsMode != "off" {
-		fmt.Fprintf(os.Stderr, "Error: --fips must be 'on', 'only', or 'off' (got %q)\n", fipsMode)
+	if fipsMode != "" && fipsMode != "on" && fipsMode != "only" && fipsMode != fipsModeOff {
+		fmt.Fprintf(os.Stderr, "Error: --fips must be 'on', 'only', or 'off' (got %q)\n", fipsMode) //nolint:gosec // G705: fipsMode is from CLI flags
 		os.Exit(1)
 	}
-	if fipsMode == "off" {
+	if fipsMode == fipsModeOff {
 		fipsMode = ""
 	}
 
@@ -321,7 +323,7 @@ func main() {
 	}
 	pluginsStr := strings.Join(pluginList, ",")
 
-	fipsModeStr := "off"
+	fipsModeStr := fipsModeOff
 	if fipsMode != "" {
 		fipsModeStr = fipsMode
 	}
@@ -330,14 +332,14 @@ func main() {
 
 	// Set up build module
 	buildDir := filepath.Join(tmp, "build")
-	must(os.MkdirAll(buildDir, 0o755))
+	must(os.MkdirAll(buildDir, 0o755)) //nolint:gosec // G301: build dir in temp, needs to be readable by go toolchain
 	run(buildDir, "go", "mod", "init", "rookery-build")
 
 	// When --local is set, add replace directives for all monorepo modules
 	if localRoot != "" {
 		absRoot, err := filepath.Abs(localRoot)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: could not resolve --local path %q: %v\n", localRoot, err)
+			fmt.Fprintf(os.Stderr, "Error: could not resolve --local path %q: %v\n", localRoot, err) //nolint:gosec // G705: localRoot is from CLI flags
 			os.Exit(1)
 		}
 		localRoot = absRoot
@@ -375,13 +377,13 @@ func main() {
 		} else {
 			run(buildDir, "go", "get", p.importPath)
 		}
-		imports.WriteString(fmt.Sprintf("\t_ %q\n", p.importPath))
+		fmt.Fprintf(&imports, "\t_ %q\n", p.importPath) //nolint:gosec // G705: importPath is from manifest/CLI, not web input
 	}
 
 	// Create buildinfo package
 	buildinfoDir := filepath.Join(buildDir, "buildinfo")
-	must(os.MkdirAll(buildinfoDir, 0o755))
-	must(os.WriteFile(filepath.Join(buildinfoDir, "buildinfo.go"), []byte(buildInfoSource), 0o644))
+	must(os.MkdirAll(buildinfoDir, 0o755))                                                          //nolint:gosec // G301: build dir in temp
+	must(os.WriteFile(filepath.Join(buildinfoDir, "buildinfo.go"), []byte(buildInfoSource), 0o644)) //nolint:gosec // G306: generated source file needs to be readable
 
 	// Compose main.go
 	var mainGoPrefix string
@@ -500,7 +502,7 @@ func showLicense() {
 }
 `, mainGoPrefix, imports.String())
 
-	must(os.WriteFile(filepath.Join(buildDir, "main.go"), []byte(mainGo), 0o644))
+	must(os.WriteFile(filepath.Join(buildDir, "main.go"), []byte(mainGo), 0o644)) //nolint:gosec // G306: generated source file needs to be readable
 
 	// Build
 	run(buildDir, "go", "mod", "tidy")
@@ -530,9 +532,9 @@ func showLicense() {
 	run(buildDir, "go", buildArgs...)
 
 	// Copy to final location
-	outData, err := os.ReadFile(tmpBin)
+	outData, err := os.ReadFile(tmpBin) //nolint:gosec // G304: tmpBin is a path we just built into
 	must(err)
-	must(os.WriteFile(out, outData, 0o755))
+	must(os.WriteFile(out, outData, 0o755)) //nolint:gosec // G306: output binary needs to be executable
 
 	fmt.Printf("Built %s\n", out)
 	fmt.Printf("\nTry: ./%s attestors\n", out)
@@ -578,7 +580,7 @@ func resolveManifestPlugins(specs []manifest.PluginSpec, tmpDir string) []resolv
 
 			importPath := getModulePath(pluginDir)
 			if importPath == "" {
-				fmt.Fprintf(os.Stderr, "Error: no go.mod found in cloned repo at %s\n", pluginDir)
+				fmt.Fprintf(os.Stderr, "Error: no go.mod found in cloned repo at %s\n", pluginDir) //nolint:gosec // G705: pluginDir is from manifest
 				os.Exit(1)
 			}
 
@@ -590,13 +592,13 @@ func resolveManifestPlugins(specs []manifest.PluginSpec, tmpDir string) []resolv
 		case spec.Path != "":
 			absPath, err := filepath.Abs(spec.Path)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: could not resolve path %q: %v\n", spec.Path, err)
+				fmt.Fprintf(os.Stderr, "Error: could not resolve path %q: %v\n", spec.Path, err) //nolint:gosec // G705: spec.Path is from manifest
 				os.Exit(1)
 			}
 
 			importPath := getModulePath(absPath)
 			if importPath == "" {
-				fmt.Fprintf(os.Stderr, "Error: no go.mod found at %s\n", absPath)
+				fmt.Fprintf(os.Stderr, "Error: no go.mod found at %s\n", absPath) //nolint:gosec // G705: absPath is from manifest
 				os.Exit(1)
 			}
 
@@ -637,7 +639,7 @@ func parseCLIPlugins(args []string) []resolvedPlugin {
 			abs, _ := filepath.Abs(raw)
 			importPath := getModulePath(abs)
 			if importPath == "" {
-				fmt.Fprintf(os.Stderr, "Error: no go.mod found at %s\n", abs)
+				fmt.Fprintf(os.Stderr, "Error: no go.mod found at %s\n", abs) //nolint:gosec // G705: abs is from CLI --with flag
 				os.Exit(1)
 			}
 			plugins = append(plugins, resolvedPlugin{importPath: importPath, localPath: abs})
@@ -649,7 +651,7 @@ func parseCLIPlugins(args []string) []resolvedPlugin {
 }
 
 func run(dir string, name string, args ...string) {
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(name, args...) //nolint:gosec // G204: name is always a known tool (go, git)
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	must(cmd.Run())
@@ -657,11 +659,11 @@ func run(dir string, name string, args ...string) {
 
 func getModulePath(dir string) string {
 	goModPath := filepath.Join(dir, "go.mod")
-	f, err := os.Open(goModPath)
+	f, err := os.Open(goModPath) //nolint:gosec // G304: goModPath is constructed from known directory
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -680,9 +682,9 @@ type localModule struct {
 
 func parseGoWorkModules(root string) []localModule {
 	goWorkPath := filepath.Join(root, "go.work")
-	data, err := os.ReadFile(goWorkPath)
+	data, err := os.ReadFile(goWorkPath) //nolint:gosec // G304: goWorkPath constructed from known root
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not read %s: %v\n", goWorkPath, err)
+		fmt.Fprintf(os.Stderr, "Warning: could not read %s: %v\n", goWorkPath, err) //nolint:gosec // G705: goWorkPath is from known root
 		return nil
 	}
 

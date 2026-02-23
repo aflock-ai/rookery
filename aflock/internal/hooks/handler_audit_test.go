@@ -25,10 +25,10 @@ func TestHandle_UnknownHookName(t *testing.T) {
 
 	testCases := []string{
 		"UnknownHook",
-		"../../etc/passwd",                          // Path traversal attempt
-		"<script>alert('xss')</script>",             // XSS attempt
-		"SessionStart\x00EvilPayload",               // Null byte injection
-		"PreToolUse; rm -rf /",                      // Command injection attempt
+		"../../etc/passwd",              // Path traversal attempt
+		"<script>alert('xss')</script>", // XSS attempt
+		"SessionStart\x00EvilPayload",   // Null byte injection
+		"PreToolUse; rm -rf /",          // Command injection attempt
 	}
 
 	for _, hookName := range testCases {
@@ -110,10 +110,10 @@ func TestIsAttestationFile_TooPermissive(t *testing.T) {
 	}{
 		{"build.intoto.json", true},
 		{"build.json", true},
-		{"state.json", true},       // Not an attestation
-		{"config.json", true},      // Not an attestation
-		{"package.json", true},     // Not an attestation
-		{".json", true},            // Edge case
+		{"state.json", true},   // Not an attestation
+		{"config.json", true},  // Not an attestation
+		{"package.json", true}, // Not an attestation
+		{".json", true},        // Edge case
 		{"file.txt", false},
 		{"file.jsonl", false},
 		{"file", false},

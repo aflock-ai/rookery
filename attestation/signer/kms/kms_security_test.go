@@ -202,12 +202,12 @@ func TestSecurity_R3_260_KMS_ConcurrentMapWrite(t *testing.T) {
 
 func TestSecurity_R3_260_KMS_WithHashSilentFallback(t *testing.T) {
 	badHashes := []string{
-		"SHA265",       // typo
-		"SHA-256",      // wrong format
-		"sha1",         // weak hash, should be rejected explicitly
-		"MD5",          // insecure
-		"",             // empty
-		"BLAKE2b-256",  // unsupported
+		"SHA265",      // typo
+		"SHA-256",     // wrong format
+		"sha1",        // weak hash, should be rejected explicitly
+		"MD5",         // insecure
+		"",            // empty
+		"BLAKE2b-256", // unsupported
 	}
 
 	for _, bad := range badHashes {

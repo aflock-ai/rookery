@@ -39,10 +39,10 @@ func FuzzDockerMIMETypeCheck(f *testing.F) {
 	f.Add("application/json", "", "")
 	f.Add("", "sha256:abc", "img")
 	// Edge cases
-	f.Add("application/json", "SHA256:abc123", "img")         // Wrong case
-	f.Add("application/json", " sha256:abc123", "img")        // Leading space
-	f.Add("application/json", "sha256:abc123 ", "img")        // Trailing space
-	f.Add("application/json", "sha256:\x00\x01\x02", "img")  // Binary in digest
+	f.Add("application/json", "SHA256:abc123", "img")                   // Wrong case
+	f.Add("application/json", " sha256:abc123", "img")                  // Leading space
+	f.Add("application/json", "sha256:abc123 ", "img")                  // Trailing space
+	f.Add("application/json", "sha256:\x00\x01\x02", "img")             // Binary in digest
 	f.Add("application/json", "sha256:"+strings.Repeat("a", 64), "img") // Full SHA256 length
 	// Unicode
 	f.Add("application/json", "sha256:\u00e9\u00e8", "img\u00e9")
@@ -74,7 +74,7 @@ func FuzzDockerMIMETypeCheck(f *testing.F) {
 		// Test 3: BuildInfo JSON round-trip must not panic
 		buildInfoJSON := map[string]interface{}{
 			"containerimage.digest": digest,
-			"image.name":           imageName,
+			"image.name":            imageName,
 		}
 		data, err := json.Marshal(buildInfoJSON)
 		if err != nil {
@@ -118,9 +118,9 @@ func FuzzDockerMIMETypeCheck(f *testing.F) {
 
 		// Test 6: Fuzz the full JSON unmarshal with provenance keys
 		fullJSON := map[string]interface{}{
-			"containerimage.digest":       digest,
-			"image.name":                  imageName,
-			"buildx.build.ref":            "ref-123",
+			"containerimage.digest": digest,
+			"image.name":            imageName,
+			"buildx.build.ref":      "ref-123",
 			"buildx.build.provenance/amd64": map[string]interface{}{
 				"buildType": "test",
 				"materials": []interface{}{},

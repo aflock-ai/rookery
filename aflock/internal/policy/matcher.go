@@ -57,7 +57,7 @@ func (m *Matcher) MatchGlob(pattern, value string) bool {
 
 	// Handle **/*.ext patterns - gobwas/glob's ** requires at least one path segment,
 	// so **/*.go doesn't match root-level main.go. We check with the equivalent *.ext pattern.
-	if strings.HasPrefix(pattern, "**/") {
+	if strings.HasPrefix(pattern, "**/") { //nolint:nestif
 		// Convert **/*.go to *.go and try again
 		rootPattern := pattern[3:] // Remove **/ prefix
 		if rootG, ok := m.globs[rootPattern]; ok {

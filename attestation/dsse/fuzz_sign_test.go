@@ -37,15 +37,16 @@ import (
 
 // FuzzPreauthEncodeStructural performs deep structural validation of the PAE
 // encoding output. The DSSE spec defines:
-//   PAE(type, body) = "DSSEv1" + SP + LEN(type) + SP + type + SP + LEN(body) + SP + body
+//
+//	PAE(type, body) = "DSSEv1" + SP + LEN(type) + SP + type + SP + LEN(body) + SP + body
 //
 // where LEN is the decimal ASCII representation of the byte length.
 // This fuzzer verifies that:
-//   1. The prefix is always "DSSEv1 "
-//   2. The length fields are correct decimal representations
-//   3. The body type and body are placed at the exact right offsets
-//   4. No panics regardless of input
-//   5. Encoding is injective (different inputs -> different outputs)
+//  1. The prefix is always "DSSEv1 "
+//  2. The length fields are correct decimal representations
+//  3. The body type and body are placed at the exact right offsets
+//  4. No panics regardless of input
+//  5. Encoding is injective (different inputs -> different outputs)
 func FuzzPreauthEncodeStructural(f *testing.F) {
 	// Seed corpus: security-relevant edge cases
 	f.Add("application/vnd.in-toto+json", []byte(`{"_type":"https://in-toto.io/Statement/v0.1"}`))
@@ -55,17 +56,17 @@ func FuzzPreauthEncodeStructural(f *testing.F) {
 	f.Add("a", []byte("b"))                                     // single chars
 	f.Add(string(make([]byte, 0)), make([]byte, 0))             // zero-length from make
 	f.Add("\x00", []byte{0x00})                                 // null bytes
-	f.Add("\x00\x00\x00", []byte{0, 0, 0})                     // multiple nulls
+	f.Add("\x00\x00\x00", []byte{0, 0, 0})                      // multiple nulls
 	f.Add("type\x00evil", []byte("body\x00evil"))               // null injection in both
 	f.Add("application/json\nInjected: header", []byte("body")) // header injection attempt
 	f.Add("type with spaces", []byte("body with spaces"))
-	f.Add(strings.Repeat("A", 100000), []byte("short body"))                     // huge type
-	f.Add("short type", bytes.Repeat([]byte{0xff}, 100000))                      // huge body
-	f.Add(strings.Repeat("A", 100000), bytes.Repeat([]byte{0xff}, 100000))       // both huge
-	f.Add("text/plain; charset=utf-8", []byte("\xef\xbb\xbf BOM-prefixed"))      // BOM in body
-	f.Add("\u202e\u0041\u0042", []byte("RTL override in type"))                   // RTL override
-	f.Add("5 fake", []byte("injection"))                                          // length confusion
-	f.Add("DSSEv1 0 DSSEv1 0 ", []byte("nested PAE attempt"))                    // PAE-in-type
+	f.Add(strings.Repeat("A", 100000), []byte("short body"))                           // huge type
+	f.Add("short type", bytes.Repeat([]byte{0xff}, 100000))                            // huge body
+	f.Add(strings.Repeat("A", 100000), bytes.Repeat([]byte{0xff}, 100000))             // both huge
+	f.Add("text/plain; charset=utf-8", []byte("\xef\xbb\xbf BOM-prefixed"))            // BOM in body
+	f.Add("\u202e\u0041\u0042", []byte("RTL override in type"))                        // RTL override
+	f.Add("5 fake", []byte("injection"))                                               // length confusion
+	f.Add("DSSEv1 0 DSSEv1 0 ", []byte("nested PAE attempt"))                          // PAE-in-type
 	f.Add("application/json", []byte(strings.Repeat("{", 50)+strings.Repeat("}", 50))) // deep JSON-like
 
 	f.Fuzz(func(t *testing.T, bodyType string, body []byte) {
@@ -171,14 +172,14 @@ func FuzzPreauthEncodeStructural(f *testing.F) {
 // This fuzzer verifies that claim empirically.
 func FuzzPreauthEncodeAmbiguity(f *testing.F) {
 	// Seed pairs that are designed to potentially collide in naive encodings
-	f.Add("a b", []byte("c"), "a", []byte("b c"))                          // space shuffling
-	f.Add("1", []byte("2 3"), "1 2", []byte("3"))                          // length confusion
-	f.Add("", []byte("5 type"), "5 type", []byte(""))                      // empty vs non-empty
-	f.Add("abc", []byte("def"), "abcdef", []byte(""))                      // concat vs split
-	f.Add("abc", []byte(""), "ab", []byte("c"))                            // boundary shift
-	f.Add("type", []byte("3 typ"), "type3 typ", []byte(""))                // length in body
-	f.Add("10 aaaaaaaaaa", []byte("x"), "1", []byte("0 aaaaaaaaaa x"))     // fake length
-	f.Add("DSSEv1", []byte("nested"), "nested", []byte("DSSEv1"))          // protocol name
+	f.Add("a b", []byte("c"), "a", []byte("b c"))                      // space shuffling
+	f.Add("1", []byte("2 3"), "1 2", []byte("3"))                      // length confusion
+	f.Add("", []byte("5 type"), "5 type", []byte(""))                  // empty vs non-empty
+	f.Add("abc", []byte("def"), "abcdef", []byte(""))                  // concat vs split
+	f.Add("abc", []byte(""), "ab", []byte("c"))                        // boundary shift
+	f.Add("type", []byte("3 typ"), "type3 typ", []byte(""))            // length in body
+	f.Add("10 aaaaaaaaaa", []byte("x"), "1", []byte("0 aaaaaaaaaa x")) // fake length
+	f.Add("DSSEv1", []byte("nested"), "nested", []byte("DSSEv1"))      // protocol name
 
 	f.Fuzz(func(t *testing.T, type1 string, body1 []byte, type2 string, body2 []byte) {
 		// Skip if inputs are identical
@@ -201,22 +202,22 @@ func FuzzPreauthEncodeAmbiguity(f *testing.F) {
 
 // FuzzSignWithEdgePayloads exercises dsse.Sign() with fuzzed payloads and
 // payload types, verifying that:
-//   1. Sign never panics
-//   2. If Sign succeeds, the envelope is well-formed
-//   3. A freshly signed envelope can be verified with the corresponding verifier
-//   4. The payload and payloadType in the envelope match the inputs
+//  1. Sign never panics
+//  2. If Sign succeeds, the envelope is well-formed
+//  3. A freshly signed envelope can be verified with the corresponding verifier
+//  4. The payload and payloadType in the envelope match the inputs
 func FuzzSignWithEdgePayloads(f *testing.F) {
 	f.Add("application/vnd.in-toto+json", []byte(`{"_type":"statement"}`))
-	f.Add("", []byte(""))                                   // empty everything
-	f.Add("", []byte(nil))                                  // nil body
-	f.Add("application/json", []byte("{}"))                 // minimal JSON
-	f.Add("\x00", []byte{0x00})                             // null bytes
-	f.Add("a\x00b", []byte("c\x00d"))                      // embedded nulls
-	f.Add(strings.Repeat("X", 1<<16), []byte("short"))     // 64KB type
-	f.Add("short", bytes.Repeat([]byte("Y"), 1<<16))       // 64KB body
-	f.Add("text/plain", []byte("\xff\xfe\xfd\xfc"))        // non-UTF8 body
-	f.Add("\xff\xfe", []byte("body"))                       // non-UTF8 type
-	f.Add("application/json", []byte(`{"key": "` + strings.Repeat("v", 10000) + `"}`))
+	f.Add("", []byte(""))                              // empty everything
+	f.Add("", []byte(nil))                             // nil body
+	f.Add("application/json", []byte("{}"))            // minimal JSON
+	f.Add("\x00", []byte{0x00})                        // null bytes
+	f.Add("a\x00b", []byte("c\x00d"))                  // embedded nulls
+	f.Add(strings.Repeat("X", 1<<16), []byte("short")) // 64KB type
+	f.Add("short", bytes.Repeat([]byte("Y"), 1<<16))   // 64KB body
+	f.Add("text/plain", []byte("\xff\xfe\xfd\xfc"))    // non-UTF8 body
+	f.Add("\xff\xfe", []byte("body"))                  // non-UTF8 type
+	f.Add("application/json", []byte(`{"key": "`+strings.Repeat("v", 10000)+`"}`))
 
 	f.Fuzz(func(t *testing.T, bodyType string, body []byte) {
 		pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -277,12 +278,12 @@ func FuzzSignWithEdgePayloads(f *testing.F) {
 // to specifically test that byte-length (not rune-count) is used.
 func FuzzSignPayloadTypeLengthEncoding(f *testing.F) {
 	// Multi-byte UTF-8 strings where byte length != rune count
-	f.Add("\u4e16\u754c", []byte("world"))              // 2 runes, 6 bytes
-	f.Add("\U0001F512", []byte("lock"))                  // 1 rune, 4 bytes
-	f.Add("cafe\u0301", []byte("latte"))                 // 5 runes, 6 bytes (combining accent)
-	f.Add("\xc0\xaf", []byte("overlong"))                // invalid UTF-8, 2 bytes
-	f.Add("\xed\xa0\x80", []byte("surrogate"))           // surrogate half, 3 bytes
-	f.Add("abc\xffdef", []byte("embedded invalid"))      // invalid byte in valid string
+	f.Add("\u4e16\u754c", []byte("world"))          // 2 runes, 6 bytes
+	f.Add("\U0001F512", []byte("lock"))             // 1 rune, 4 bytes
+	f.Add("cafe\u0301", []byte("latte"))            // 5 runes, 6 bytes (combining accent)
+	f.Add("\xc0\xaf", []byte("overlong"))           // invalid UTF-8, 2 bytes
+	f.Add("\xed\xa0\x80", []byte("surrogate"))      // surrogate half, 3 bytes
+	f.Add("abc\xffdef", []byte("embedded invalid")) // invalid byte in valid string
 
 	f.Fuzz(func(t *testing.T, bodyType string, body []byte) {
 		pae := preauthEncode(bodyType, body)
@@ -417,7 +418,7 @@ func TestSecurity_R3_191_PAEByteVsRuneLength(t *testing.T) {
 	}{
 		{
 			name:      "CJK_characters",
-			bodyType:  "\u4e16\u754c",   // "world" in Chinese
+			bodyType:  "\u4e16\u754c", // "world" in Chinese
 			body:      []byte("hello"),
 			byteLen:   6,
 			runeCount: 2,

@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/gobwas/glob"
 )
 
 // EnvironmentCapturer is an interface for capturing and filtering environment variables.

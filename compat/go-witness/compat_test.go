@@ -1,3 +1,4 @@
+//nolint:staticcheck // explicit type annotations verify cross-package type compatibility
 package witness_test
 
 import (
@@ -7,12 +8,12 @@ import (
 	"testing"
 	"time"
 
+	witness "github.com/in-toto/go-witness"
 	compatAttestation "github.com/in-toto/go-witness/attestation"
 	compatDSSE "github.com/in-toto/go-witness/dsse"
 	compatPolicy "github.com/in-toto/go-witness/policy"
 	compatRegistry "github.com/in-toto/go-witness/registry"
 	compatSource "github.com/in-toto/go-witness/source"
-	witness "github.com/in-toto/go-witness"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -31,8 +32,8 @@ import (
 // ============================================================================
 
 func TestCompatSourceMemorySource(t *testing.T) {
-	var compatMS *compatSource.MemorySource = compatSource.NewMemorySource()
-	var rookeryMS *source.MemorySource = source.NewMemorySource()
+	compatMS := compatSource.NewMemorySource()
+	rookeryMS := source.NewMemorySource()
 
 	if compatMS == nil {
 		t.Fatal("compat NewMemorySource returned nil")
@@ -121,10 +122,10 @@ func TestCompatSourceSearchViaCombinedTypes(t *testing.T) {
 		},
 	}
 
-	var subjectList []struct {
+	subjectList := make([]struct {
 		Name   string            `json:"name"`
 		Digest map[string]string `json:"digest"`
-	}
+	}, 0, len(subjects))
 	for name, ds := range subjects {
 		nameMap, err := ds.ToNameMap()
 		if err != nil {
@@ -652,8 +653,8 @@ type dummyAttestor struct {
 	typ  string
 }
 
-func (a *dummyAttestor) Name() string                                { return a.name }
-func (a *dummyAttestor) Type() string                                { return a.typ }
-func (a *dummyAttestor) RunType() attestation.RunType                { return attestation.PreMaterialRunType }
+func (a *dummyAttestor) Name() string                                 { return a.name }
+func (a *dummyAttestor) Type() string                                 { return a.typ }
+func (a *dummyAttestor) RunType() attestation.RunType                 { return attestation.PreMaterialRunType }
 func (a *dummyAttestor) Attest(*attestation.AttestationContext) error { return nil }
-func (a *dummyAttestor) Schema() *jsonschema.Schema                  { return nil }
+func (a *dummyAttestor) Schema() *jsonschema.Schema                   { return nil }

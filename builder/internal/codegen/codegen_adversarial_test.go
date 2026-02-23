@@ -14,12 +14,14 @@ import (
 // generated source file.
 //
 // Vulnerable code path (main.go line 389):
-//   mainGoPrefix = fmt.Sprintf("//go:debug fips140=%s\n", fipsMode)
+//
+//	mainGoPrefix = fmt.Sprintf("//go:debug fips140=%s\n", fipsMode)
 //
 // Attack: fipsMode = "on\n//go:generate touch /tmp/pwned"
 // Result: Two lines are generated:
-//   //go:debug fips140=on
-//   //go:generate touch /tmp/pwned
+//
+//	//go:debug fips140=on
+//	//go:generate touch /tmp/pwned
 //
 // The //go:generate directive would execute arbitrary commands when
 // `go generate` is run on the generated source.
@@ -79,7 +81,7 @@ func TestFipsDirective_NewlineInjection(t *testing.T) {
 				}
 			}
 
-			if tt.vulnerable {
+			if tt.vulnerable { //nolint:nestif
 				if nonEmpty > 1 {
 					t.Errorf("VULNERABILITY CONFIRMED: FIPS directive injection succeeded.\n"+
 						"Input:  %q\n"+
@@ -240,13 +242,13 @@ func TestImportLine_NoValidation(t *testing.T) {
 	// but they still get embedded in the generated source code without any
 	// pre-generation validation.
 	invalidPaths := []string{
-		"",                              // empty
-		"   ",                           // whitespace only
-		"//go:generate evil",            // looks like a pragma
-		"/absolute/path",                // absolute path
-		"has spaces/in/path",            // spaces
-		"has\ttabs",                     // tabs
-		"github.com/a/b/../../../evil",  // traversal
+		"",                             // empty
+		"   ",                          // whitespace only
+		"//go:generate evil",           // looks like a pragma
+		"/absolute/path",               // absolute path
+		"has spaces/in/path",           // spaces
+		"has\ttabs",                    // tabs
+		"github.com/a/b/../../../evil", // traversal
 	}
 
 	for _, path := range invalidPaths {
@@ -273,7 +275,8 @@ func TestImportLine_NoValidation(t *testing.T) {
 // embedded in ldflags can break out of the single-quoted -X arguments.
 //
 // Vulnerable code path (main.go lines 509-515):
-//   metadataFlags := fmt.Sprintf("-X 'rookery-build/buildinfo.CustomerID=%s' ...", customerID)
+//
+//	metadataFlags := fmt.Sprintf("-X 'rookery-build/buildinfo.CustomerID=%s' ...", customerID)
 //
 // Attack: customerID = "legit' -X 'rookery-build/buildinfo.Plugins=pwned"
 // Result: -X 'rookery-build/buildinfo.CustomerID=legit' -X 'rookery-build/buildinfo.Plugins=pwned'
@@ -340,10 +343,11 @@ func TestLdflags_SingleQuoteBreakout(t *testing.T) {
 // manifest are prepended to the metadata flags without any validation.
 //
 // Vulnerable code path (main.go lines 517-522):
-//   combinedLdflags := ldflags  // from manifest
-//   if combinedLdflags != "" {
-//       combinedLdflags += " " + metadataFlags
-//   }
+//
+//	combinedLdflags := ldflags  // from manifest
+//	if combinedLdflags != "" {
+//	    combinedLdflags += " " + metadataFlags
+//	}
 //
 // If the manifest provides ldflags, they are used AS-IS. This could inject
 // any linker flag including -extld (custom linker), -extldflags, etc.
@@ -671,10 +675,10 @@ func TestAttestationVersion_Injection(t *testing.T) {
 	// there's no validation that it's a valid semver.
 	versions := []string{
 		"v0.0.0-00000000000000-000000000000", // pseudo-version
-		"v0.0.0-20250101000000-aaaaaaaaaaaa",  // fake pseudo-version
-		"latest",                               // not a valid version for go get
-		"",                                     // empty (no-op)
-		"v1.0.0\n",                             // newline
+		"v0.0.0-20250101000000-aaaaaaaaaaaa", // fake pseudo-version
+		"latest",                             // not a valid version for go get
+		"",                                   // empty (no-op)
+		"v1.0.0\n",                           // newline
 	}
 
 	for _, v := range versions {

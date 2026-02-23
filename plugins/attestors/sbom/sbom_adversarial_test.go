@@ -45,12 +45,12 @@ type fakeProducer struct {
 	products map[string]attestation.Product
 }
 
-func (fp *fakeProducer) Name() string                                  { return "fake-producer" }
-func (fp *fakeProducer) Type() string                                  { return "fake" }
-func (fp *fakeProducer) RunType() attestation.RunType                  { return attestation.ProductRunType }
+func (fp *fakeProducer) Name() string                                   { return "fake-producer" }
+func (fp *fakeProducer) Type() string                                   { return "fake" }
+func (fp *fakeProducer) RunType() attestation.RunType                   { return attestation.ProductRunType }
 func (fp *fakeProducer) Attest(_ *attestation.AttestationContext) error { return nil }
-func (fp *fakeProducer) Schema() *jsonschema.Schema                    { return nil }
-func (fp *fakeProducer) Products() map[string]attestation.Product      { return fp.products }
+func (fp *fakeProducer) Schema() *jsonschema.Schema                     { return nil }
+func (fp *fakeProducer) Products() map[string]attestation.Product       { return fp.products }
 
 // ============================================================================
 // R3-230: Path traversal in SBOM file opening

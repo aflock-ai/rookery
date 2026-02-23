@@ -182,13 +182,13 @@ func TestAudit_K3_WithHashSilentFallback(t *testing.T) {
 		input    string
 		expected crypto.Hash
 	}{
-		{"typo SHA265", "SHA265", crypto.SHA256},     // silent fallback
-		{"typo SHA-256", "SHA-256", crypto.SHA256},   // silent fallback
-		{"empty string", "", crypto.SHA256},           // silent fallback
-		{"md5", "MD5", crypto.SHA256},                 // silent fallback - dangerous!
-		{"sha1", "SHA1", crypto.SHA256},               // silent fallback
-		{"valid SHA512", "SHA512", crypto.SHA512},     // correct
-		{"valid SHA256", "SHA256", crypto.SHA256},     // correct
+		{"typo SHA265", "SHA265", crypto.SHA256},   // silent fallback
+		{"typo SHA-256", "SHA-256", crypto.SHA256}, // silent fallback
+		{"empty string", "", crypto.SHA256},        // silent fallback
+		{"md5", "MD5", crypto.SHA256},              // silent fallback - dangerous!
+		{"sha1", "SHA1", crypto.SHA256},            // silent fallback
+		{"valid SHA512", "SHA512", crypto.SHA512},  // correct
+		{"valid SHA256", "SHA256", crypto.SHA256},  // correct
 	}
 
 	for _, tc := range testCases {

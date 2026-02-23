@@ -364,9 +364,9 @@ func TestSecurity_R3_256_SubjectsTypeCastSafety(t *testing.T) {
 	require.NotNil(t, subjects)
 	require.Empty(t, subjects)
 
-	t.Logf("FINDING R3-256: Subjects() uses unchecked type assertions "+
-		"(k.(string) and v.(cryptoutil.DigestSet)) on sync.Map contents. "+
-		"Currently safe because only processDoc writes to the map, but "+
+	t.Logf("FINDING R3-256: Subjects() uses unchecked type assertions " +
+		"(k.(string) and v.(cryptoutil.DigestSet)) on sync.Map contents. " +
+		"Currently safe because only processDoc writes to the map, but " +
 		"defensive programming would use comma-ok assertions.")
 }
 

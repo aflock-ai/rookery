@@ -1038,4 +1038,3 @@ func TestReadFileContentZeroMaxSize(t *testing.T) {
 		t.Logf("Read %d bytes (bug may have been fixed)", len(content))
 	}
 }
-

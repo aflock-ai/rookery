@@ -1044,4 +1044,3 @@ func TestSecurity_R3_258_X509Verifier_CertWithoutDigitalSignatureKeyUsage(t *tes
 		"KeyEncipherment is accepted as a verifier. This could allow " +
 		"verification with inappropriately used certificates.")
 }
-

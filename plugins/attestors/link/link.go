@@ -18,10 +18,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	intotolink "github.com/aflock-ai/rookery/attestation/intoto/link"
-	v1 "github.com/aflock-ai/rookery/attestation/intoto/v1"
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	intotolink "github.com/aflock-ai/rookery/attestation/intoto/link"
+	v1 "github.com/aflock-ai/rookery/attestation/intoto/v1"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	"github.com/aflock-ai/rookery/plugins/attestors/environment"
@@ -102,30 +102,40 @@ func (l *Link) Export() bool {
 	return l.export
 }
 
-func (l *Link) Attest(ctx *attestation.AttestationContext) error {
+func (l *Link) Attest(ctx *attestation.AttestationContext) error { //nolint:gocognit // link attestation processes multiple attestor types
 	l.PbLink.Name = ctx.StepName()
 	for _, attestor := range ctx.CompletedAttestors() {
 		switch name := attestor.Attestor.Name(); name {
 		case commandrun.Name:
-			l.PbLink.Command = attestor.Attestor.(commandrun.CommandRunAttestor).Data().Cmd
+			if cmdAttestor, ok := attestor.Attestor.(commandrun.CommandRunAttestor); ok {
+				l.PbLink.Command = cmdAttestor.Data().Cmd
+			}
 		case material.Name:
-			mats := attestor.Attestor.(material.MaterialAttestor).Materials()
-			for name, digestSet := range mats {
-				digests, _ := digestSet.ToNameMap()
-				l.PbLink.Materials = append(l.PbLink.Materials, &v1.ResourceDescriptor{
-					Name:   name,
-					Digest: digests,
-				})
+			if matAttestor, ok := attestor.Attestor.(material.MaterialAttestor); ok {
+				mats := matAttestor.Materials()
+				for name, digestSet := range mats {
+					digests, _ := digestSet.ToNameMap()
+					l.PbLink.Materials = append(l.PbLink.Materials, &v1.ResourceDescriptor{
+						Name:   name,
+						Digest: digests,
+					})
+				}
 			}
 		case environment.Name:
-			envs := attestor.Attestor.(environment.EnvironmentAttestor).Data().Variables
+			envAttestor, ok := attestor.Attestor.(environment.EnvironmentAttestor)
+			if !ok {
+				continue
+			}
+			envs := envAttestor.Data().Variables
 			pbEnvs := make(map[string]interface{}, len(envs))
 			for name, value := range envs {
 				pbEnvs[name] = value
 			}
 			l.PbLink.Environment = pbEnvs
 		case product.ProductName:
-			l.products = attestor.Attestor.(product.ProductAttestor).Products()
+			if prodAttestor, ok := attestor.Attestor.(product.ProductAttestor); ok {
+				l.products = prodAttestor.Products()
+			}
 		}
 	}
 	return nil

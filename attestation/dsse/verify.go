@@ -87,7 +87,7 @@ type CheckedVerifier struct {
 	Error              error
 }
 
-func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) {
+func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) { //nolint:gocognit,gocyclo,funlen
 	options := &verificationOptions{
 		threshold: 1,
 	}
@@ -122,7 +122,7 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 	}
 
 	for _, sig := range e.Signatures {
-		if len(sig.Certificate) > 0 {
+		if len(sig.Certificate) > 0 { //nolint:nestif
 			cert, err := cryptoutil.TryParseCertificate(sig.Certificate)
 			if err != nil {
 				// Log but don't skip — the raw verifier loop below must still

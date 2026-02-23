@@ -11,6 +11,18 @@ import (
 	"github.com/aflock-ai/rookery/aflock/pkg/aflock"
 )
 
+// Tool name constants to avoid repeated string literals (goconst).
+const (
+	toolWebSearch    = "WebSearch"
+	toolWebFetch     = "WebFetch"
+	toolEdit         = "Edit"
+	toolRead         = "Read"
+	toolWrite        = "Write"
+	toolGrep         = "Grep"
+	toolGlob         = "Glob"
+	toolNotebookEdit = "NotebookEdit"
+)
+
 // Evaluator evaluates policy rules against hook inputs.
 type Evaluator struct {
 	policy  *aflock.Policy
@@ -26,6 +38,8 @@ func NewEvaluator(policy *aflock.Policy) *Evaluator {
 }
 
 // EvaluatePreToolUse evaluates whether a tool call should be allowed.
+//
+//nolint:gocognit,gocyclo // pre-tool-use evaluation checks many conditions
 func (e *Evaluator) EvaluatePreToolUse(toolName string, toolInput json.RawMessage) (aflock.PermissionDecision, string) {
 	// Extract relevant input for pattern matching
 	inputStr := e.extractInputForMatching(toolName, toolInput)
@@ -60,7 +74,7 @@ func (e *Evaluator) EvaluatePreToolUse(toolName string, toolInput json.RawMessag
 	// WebSearch doesn't have a target URL (only a search query), so domain
 	// restrictions don't apply — the search engine itself picks which sites
 	// to query. Only WebFetch has a user-specified URL to check.
-	if isNetworkOperation(toolName) && toolName != "WebSearch" {
+	if isNetworkOperation(toolName) && toolName != toolWebSearch {
 		decision, reason := e.evaluateDomainAccess(toolInput)
 		if decision != aflock.DecisionAllow {
 			return decision, reason
@@ -88,6 +102,8 @@ func (e *Evaluator) EvaluatePreToolUse(toolName string, toolInput json.RawMessag
 }
 
 // extractInputForMatching extracts the relevant string from tool input for pattern matching.
+//
+//nolint:gocyclo // input extraction maps tool types to fields
 func (e *Evaluator) extractInputForMatching(toolName string, toolInput json.RawMessage) string {
 	switch toolName {
 	case "Bash":
@@ -95,22 +111,22 @@ func (e *Evaluator) extractInputForMatching(toolName string, toolInput json.RawM
 		if err := json.Unmarshal(toolInput, &input); err == nil {
 			return input.Command
 		}
-	case "Read", "Write", "Edit":
+	case toolRead, toolWrite, toolEdit:
 		var input aflock.FileToolInput
 		if err := json.Unmarshal(toolInput, &input); err == nil {
 			return input.FilePath
 		}
-	case "Grep":
+	case toolGrep:
 		var input aflock.GrepToolInput
 		if err := json.Unmarshal(toolInput, &input); err == nil {
 			return input.Pattern
 		}
-	case "Glob":
+	case toolGlob:
 		var input aflock.GlobToolInput
 		if err := json.Unmarshal(toolInput, &input); err == nil {
 			return input.Pattern
 		}
-	case "NotebookEdit":
+	case toolNotebookEdit:
 		var input aflock.NotebookEditToolInput
 		if err := json.Unmarshal(toolInput, &input); err == nil {
 			return input.NotebookPath
@@ -120,12 +136,12 @@ func (e *Evaluator) extractInputForMatching(toolName string, toolInput json.RawM
 		if err := json.Unmarshal(toolInput, &input); err == nil {
 			return input.Prompt
 		}
-	case "WebFetch":
+	case toolWebFetch:
 		var input aflock.WebFetchToolInput
 		if err := json.Unmarshal(toolInput, &input); err == nil {
 			return input.URL
 		}
-	case "WebSearch":
+	case toolWebSearch:
 		var input aflock.WebSearchToolInput
 		if err := json.Unmarshal(toolInput, &input); err == nil {
 			return input.Query
@@ -141,19 +157,19 @@ func (e *Evaluator) extractInputForMatching(toolName string, toolInput json.RawM
 //   - NotebookEdit: "notebook_path"
 func extractFilePath(toolName string, toolInput json.RawMessage) (string, error) {
 	switch toolName {
-	case "Grep":
+	case toolGrep:
 		var input aflock.GrepToolInput
 		if err := json.Unmarshal(toolInput, &input); err != nil {
 			return "", err
 		}
 		return input.Path, nil
-	case "Glob":
+	case toolGlob:
 		var input aflock.GlobToolInput
 		if err := json.Unmarshal(toolInput, &input); err != nil {
 			return "", err
 		}
 		return input.Path, nil
-	case "NotebookEdit":
+	case toolNotebookEdit:
 		var input aflock.NotebookEditToolInput
 		if err := json.Unmarshal(toolInput, &input); err != nil {
 			return "", err
@@ -169,6 +185,8 @@ func extractFilePath(toolName string, toolInput json.RawMessage) (string, error)
 }
 
 // evaluateFileAccess checks file access against policy.
+//
+//nolint:gocognit,gocyclo // file access evaluation has complex path logic
 func (e *Evaluator) evaluateFileAccess(toolName string, toolInput json.RawMessage) (aflock.PermissionDecision, string) {
 	if e.policy.Files == nil {
 		return aflock.DecisionAllow, ""
@@ -186,7 +204,7 @@ func (e *Evaluator) evaluateFileAccess(toolName string, toolInput json.RawMessag
 	// We need to also check if files WITHIN the directory would match deny patterns.
 	// e.g., if path is "/etc" and deny pattern is "/etc/**", the glob won't match
 	// "/etc" directly but should deny since the tool will access files under /etc.
-	isDirectoryTool := toolName == "Grep" || toolName == "Glob"
+	isDirectoryTool := toolName == toolGrep || toolName == toolGlob
 
 	// Check deny patterns first
 	for _, pattern := range e.policy.Files.Deny {
@@ -204,7 +222,7 @@ func (e *Evaluator) evaluateFileAccess(toolName string, toolInput json.RawMessag
 	}
 
 	// Check readOnly for write operations
-	if toolName == "Write" || toolName == "Edit" {
+	if toolName == toolWrite || toolName == toolEdit {
 		for _, pattern := range e.policy.Files.ReadOnly {
 			if e.matcher.MatchGlob(pattern, normalizedPath) || e.matcher.MatchGlob(pattern, filepath.Base(filePath)) {
 				return aflock.DecisionDeny, fmt.Sprintf("File '%s' is read-only (matches '%s')", filePath, pattern)
@@ -271,7 +289,7 @@ func (e *Evaluator) evaluateDomainAccess(toolInput json.RawMessage) (aflock.Perm
 
 func isFileOperation(toolName string) bool {
 	switch toolName {
-	case "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit":
+	case toolRead, toolWrite, toolEdit, toolGlob, toolGrep, toolNotebookEdit:
 		return true
 	default:
 		return false
@@ -280,7 +298,7 @@ func isFileOperation(toolName string) bool {
 
 func isNetworkOperation(toolName string) bool {
 	switch toolName {
-	case "WebFetch", "WebSearch":
+	case toolWebFetch, toolWebSearch:
 		return true
 	default:
 		return false
@@ -331,6 +349,8 @@ func extractDomain(rawURL string) string {
 // EvaluateDataFlow checks if an operation violates data flow rules.
 // For source operations (reads), it returns materials to track.
 // For sink operations (writes), it checks materials against rules.
+//
+//nolint:gocognit,gocyclo // data flow evaluation checks many tool x label combos
 func (e *Evaluator) EvaluateDataFlow(toolName string, toolInput json.RawMessage, materials []aflock.MaterialClassification) (aflock.PermissionDecision, string, *aflock.MaterialClassification) {
 	if e.policy.DataFlow == nil {
 		return aflock.DecisionAllow, "", nil
@@ -380,7 +400,7 @@ func (e *Evaluator) EvaluateDataFlow(toolName string, toolInput json.RawMessage,
 	}
 
 	// If this is a write operation, check flow rules
-	if matchedLabel != "" && isWriteOperation(toolName) {
+	if matchedLabel != "" && isWriteOperation(toolName) { //nolint:nestif
 		sinkLabel := matchedLabel
 
 		// Check all flow rules
@@ -409,7 +429,7 @@ func (e *Evaluator) EvaluateDataFlow(toolName string, toolInput json.RawMessage,
 
 func isReadOperation(toolName string) bool {
 	switch toolName {
-	case "Read", "Glob", "Grep", "WebFetch", "WebSearch":
+	case toolRead, toolGlob, toolGrep, toolWebFetch, toolWebSearch:
 		return true
 	default:
 		return strings.HasPrefix(toolName, "mcp__") && !strings.Contains(toolName, "write")
@@ -418,7 +438,7 @@ func isReadOperation(toolName string) bool {
 
 func isWriteOperation(toolName string) bool {
 	switch toolName {
-	case "Write", "Edit", "Bash":
+	case toolWrite, toolEdit, "Bash":
 		return true
 	default:
 		return strings.HasPrefix(toolName, "mcp__") && strings.Contains(toolName, "write")

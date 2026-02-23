@@ -201,11 +201,11 @@ func TestAttestor_Attest_RecursiveSearch(t *testing.T) {
 
 	// Create lockfiles at various depths
 	files := map[string]string{
-		"go.sum":                                       "root go.sum",
-		"frontend/package-lock.json":                   "frontend npm lock",
-		"frontend/packages/ui/yarn.lock":               "ui yarn lock",
-		"backend/requirements.txt":                     "backend requirements",
-		"backend/services/api/Cargo.lock":              "api cargo lock",
+		"go.sum":                          "root go.sum",
+		"frontend/package-lock.json":      "frontend npm lock",
+		"frontend/packages/ui/yarn.lock":  "ui yarn lock",
+		"backend/requirements.txt":        "backend requirements",
+		"backend/services/api/Cargo.lock": "api cargo lock",
 	}
 	for path, content := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(tempDir, path), []byte(content), 0644))

@@ -340,23 +340,23 @@ func TestAdversarial_GetCertHTTP_URLTraversalInFulcioURL(t *testing.T) {
 	token := generateTestToken("test@example.com", "")
 
 	testCases := []struct {
-		name        string
-		fulcioURL   string
+		name         string
+		fulcioURL    string
 		expectedPath string
 	}{
 		{
-			name:        "no trailing slash",
-			fulcioURL:   server.URL,
+			name:         "no trailing slash",
+			fulcioURL:    server.URL,
 			expectedPath: "/api/v2/signingCert",
 		},
 		{
-			name:        "trailing slash",
-			fulcioURL:   server.URL + "/",
+			name:         "trailing slash",
+			fulcioURL:    server.URL + "/",
 			expectedPath: "/api/v2/signingCert", // FIXED: trailing slash normalized
 		},
 		{
-			name:        "with existing path",
-			fulcioURL:   server.URL + "/prefix",
+			name:         "with existing path",
+			fulcioURL:    server.URL + "/prefix",
 			expectedPath: "/prefix/api/v2/signingCert",
 		},
 	}

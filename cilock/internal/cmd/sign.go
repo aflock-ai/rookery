@@ -54,7 +54,7 @@ func SignCmd() *cobra.Command {
 	return cmd
 }
 
-func runSign(ctx context.Context, so options.SignOptions, signers ...cryptoutil.Signer) error {
+func runSign(_ context.Context, so options.SignOptions, signers ...cryptoutil.Signer) error {
 	if len(signers) > 1 {
 		return fmt.Errorf("only one signer is supported")
 	}
@@ -72,7 +72,7 @@ func runSign(ctx context.Context, so options.SignOptions, signers ...cryptoutil.
 	if err != nil {
 		return fmt.Errorf("failed to open file to sign: %w", err)
 	}
-	defer inFile.Close()
+	defer func() { _ = inFile.Close() }()
 
 	outFile, err := loadOutfile(so.OutFilePath)
 	if err != nil {

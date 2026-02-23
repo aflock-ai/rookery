@@ -25,9 +25,9 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/digitorus/pkcs7"
 	"github.com/digitorus/timestamp"
-	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 )
 
 type TSPTimestamper struct {
@@ -113,7 +113,7 @@ func (t TSPTimestamper) Timestamp(ctx context.Context, r io.Reader) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted:

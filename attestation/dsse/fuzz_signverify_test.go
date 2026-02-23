@@ -69,14 +69,14 @@ func FuzzDSSESignVerifyRoundTrip(f *testing.F) {
 	f.Add("application/json\nX-Injected: header", []byte("body"))
 	f.Add(strings.Repeat("A", 65536), []byte("short"))
 	f.Add("short", bytes.Repeat([]byte("B"), 65536))
-	f.Add("\xff\xfe\xfd", []byte("\xff\xfe\xfd"))                                     // invalid UTF-8
-	f.Add("type/\U0001F512", []byte("\U0001F4A9"))                                     // emoji
-	f.Add("\u4e16\u754c", []byte("\u4e16\u754c"))                                       // CJK
-	f.Add("cafe\u0301", []byte("latte\u0301"))                                         // combining accent
-	f.Add("DSSEv1 5 fake 3 pae", []byte("nested PAE attempt"))                        // PAE-in-type
-	f.Add("5 injected", []byte("body"))                                                 // digit-prefix type
-	f.Add(" ", []byte(" "))                                                             // spaces only
-	f.Add("\t\n\r", []byte("\t\n\r"))                                                   // whitespace
+	f.Add("\xff\xfe\xfd", []byte("\xff\xfe\xfd"))              // invalid UTF-8
+	f.Add("type/\U0001F512", []byte("\U0001F4A9"))             // emoji
+	f.Add("\u4e16\u754c", []byte("\u4e16\u754c"))              // CJK
+	f.Add("cafe\u0301", []byte("latte\u0301"))                 // combining accent
+	f.Add("DSSEv1 5 fake 3 pae", []byte("nested PAE attempt")) // PAE-in-type
+	f.Add("5 injected", []byte("body"))                        // digit-prefix type
+	f.Add(" ", []byte(" "))                                    // spaces only
+	f.Add("\t\n\r", []byte("\t\n\r"))                          // whitespace
 
 	f.Fuzz(func(t *testing.T, payloadType string, payload []byte) {
 		signer, verifier := fuzzED25519KeyPair(t)
@@ -733,8 +733,8 @@ func TestSignVerifyEdgeCases_GarbageCertificateDoesNotBlockRawVerifier(t *testin
 		[]byte("not a certificate"),
 		[]byte("-----BEGIN CERTIFICATE-----\ngarbage\n-----END CERTIFICATE-----"),
 		{0x30, 0x82, 0x01, 0x00, 0xff, 0xfe}, // ASN.1-ish prefix
-		make([]byte, 4096),                      // large garbage
-		{0x00},                                  // single null byte
+		make([]byte, 4096),                   // large garbage
+		{0x00},                               // single null byte
 	}
 
 	for i, gc := range garbageCerts {

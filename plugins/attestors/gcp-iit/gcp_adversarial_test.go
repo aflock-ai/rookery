@@ -68,7 +68,7 @@ func TestBug_ParseJWTProjectInfoSwapsIDAndName(t *testing.T) {
 
 	// Now simulate what getInstanceData does:
 	a := New()
-	a.ProjectID = projID     // "123456" -- looks like a number, not an ID
+	a.ProjectID = projID      // "123456" -- looks like a number, not an ID
 	a.ProjectNumber = projNum // "my-project" -- this is a NAME, not a number
 
 	t.Logf("BUG: ProjectID is set to %q (numeric ID extracted from email)", a.ProjectID)
@@ -232,14 +232,14 @@ func TestClaimExtraction_WrongTypesInGoogleClaim(t *testing.T) {
 		{
 			name: "all_ints",
 			googClaim: map[string]interface{}{
-				"project_id":                 42,
-				"project_number":             43,
-				"zone":                       44,
-				"instance_id":                45,
-				"instance_name":              46,
+				"project_id":                  42,
+				"project_number":              43,
+				"zone":                        44,
+				"instance_id":                 45,
+				"instance_name":               46,
 				"instance_creation_timestamp": 47,
-				"instance_confidentiality":   48,
-				"licence_id":                 49,
+				"instance_confidentiality":    48,
+				"licence_id":                  49,
 			},
 			wantFields: map[string]string{
 				"ProjectID": "", "ProjectNumber": "", "InstanceZone": "",
@@ -500,27 +500,27 @@ func TestParseJWTProjectInfo_EdgeCases(t *testing.T) {
 		wantName   string
 	}{
 		{
-			name:    "valid_gcp_email",
-			email:   "sa@my-project-123456.iam.gserviceaccount.com",
-			wantID:  "123456",
+			name:     "valid_gcp_email",
+			email:    "sa@my-project-123456.iam.gserviceaccount.com",
+			wantID:   "123456",
 			wantName: "my-project",
 		},
 		{
-			name:    "single_dash",
-			email:   "sa@project-123.com",
-			wantID:  "123",
+			name:     "single_dash",
+			email:    "sa@project-123.com",
+			wantID:   "123",
 			wantName: "project",
 		},
 		{
-			name:    "many_dashes",
-			email:   "sa@a-b-c-d-e-f.com",
-			wantID:  "f",
+			name:     "many_dashes",
+			email:    "sa@a-b-c-d-e-f.com",
+			wantID:   "f",
 			wantName: "a-b-c-d-e",
 		},
 		{
-			name:    "no_dashes",
-			email:   "sa@projectname.com",
-			wantID:  "projectname",
+			name:     "no_dashes",
+			email:    "sa@projectname.com",
+			wantID:   "projectname",
 			wantName: "",
 		},
 		{
@@ -559,8 +559,8 @@ func TestParseJWTProjectInfo_EdgeCases(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:     "just_at_sign",
-			email:    "@",
+			name:  "just_at_sign",
+			email: "@",
 			// BUG: "@" splits into ["",""] which has len 2, so it passes validation.
 			// The code should reject this as an invalid email.
 			wantErr:  false,
@@ -568,45 +568,45 @@ func TestParseJWTProjectInfo_EdgeCases(t *testing.T) {
 			wantName: "",
 		},
 		{
-			name:    "at_at_start",
-			email:   "@domain.com",
-			wantID:  "domain",
+			name:     "at_at_start",
+			email:    "@domain.com",
+			wantID:   "domain",
 			wantName: "",
 		},
 		{
-			name:    "at_at_end",
-			email:   "user@",
-			wantID:  "",
+			name:     "at_at_end",
+			email:    "user@",
+			wantID:   "",
 			wantName: "",
 		},
 		{
-			name:    "unicode_in_domain",
-			email:   "sa@proj\u00e9ct-123.com",
-			wantID:  "123",
+			name:     "unicode_in_domain",
+			email:    "sa@proj\u00e9ct-123.com",
+			wantID:   "123",
 			wantName: "proj\u00e9ct",
 		},
 		{
-			name:    "dots_in_domain_only",
-			email:   "sa@...com",
-			wantID:  "",
+			name:     "dots_in_domain_only",
+			email:    "sa@...com",
+			wantID:   "",
 			wantName: "",
 		},
 		{
-			name:    "domain_starts_with_dash",
-			email:   "sa@-project-123.com",
-			wantID:  "123",
+			name:     "domain_starts_with_dash",
+			email:    "sa@-project-123.com",
+			wantID:   "123",
 			wantName: "-project",
 		},
 		{
-			name:    "all_dashes_domain",
-			email:   "sa@----.com",
-			wantID:  "",
+			name:     "all_dashes_domain",
+			email:    "sa@----.com",
+			wantID:   "",
 			wantName: "---",
 		},
 		{
-			name:    "numeric_only_domain",
-			email:   "sa@123456789.com",
-			wantID:  "123456789",
+			name:     "numeric_only_domain",
+			email:    "sa@123456789.com",
+			wantID:   "123456789",
 			wantName: "",
 		},
 	}

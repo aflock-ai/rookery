@@ -24,11 +24,11 @@ type fuzzAttestor struct {
 	ExtraField string `json:"extra"`
 }
 
-func (a *fuzzAttestor) Name() string                                  { return a.AttName }
-func (a *fuzzAttestor) Type() string                                  { return a.AttType }
-func (a *fuzzAttestor) RunType() attestation.RunType                  { return "test" }
+func (a *fuzzAttestor) Name() string                                   { return a.AttName }
+func (a *fuzzAttestor) Type() string                                   { return a.AttType }
+func (a *fuzzAttestor) RunType() attestation.RunType                   { return "test" }
 func (a *fuzzAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (a *fuzzAttestor) Schema() *jsonschema.Schema                    { return nil }
+func (a *fuzzAttestor) Schema() *jsonschema.Schema                     { return nil }
 
 // FuzzRegoPolicy fuzzes the Rego policy evaluator with random policy strings
 // and attestation JSON. It verifies:
