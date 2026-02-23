@@ -25,20 +25,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	ro             = &options.RootOptions{}
-	cpuProfileFile *os.File
-)
-
 func New() *cobra.Command {
+	ro := &options.RootOptions{}
+	var cpuProfileFile *os.File
+	logger := newLogger()
+
 	cmd := &cobra.Command{
 		Use:               "cilock",
 		Short:             "Collect and verify attestations about your build environments",
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return preRoot(cmd, ro, logger, &cpuProfileFile)
+		},
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			postRoot(ro, logger, cpuProfileFile)
+		},
 	}
 
-	logger := newLogger()
 	log.SetLogger(logger)
 
 	ro.AddFlags(cmd)
@@ -49,8 +53,6 @@ func New() *cobra.Command {
 	cmd.AddCommand(VersionCmd())
 	cmd.AddCommand(AttestorsCmd())
 	cmd.AddCommand(PolicyCmd())
-	cobra.OnInitialize(func() { preRoot(cmd, ro, logger) })
-	cobra.OnFinalize((func() { postRoot(ro, logger) }))
 	return cmd
 }
 
@@ -61,40 +63,43 @@ func Execute() {
 	}
 }
 
-func preRoot(cmd *cobra.Command, ro *options.RootOptions, logger *logrusLogger) {
+func preRoot(cmd *cobra.Command, ro *options.RootOptions, logger *logrusLogger, cpuProfileFile **os.File) error {
 	if err := logger.SetLevel(ro.LogLevel); err != nil {
-		logger.l.Fatal(err)
+		return fmt.Errorf("invalid log level: %w", err)
 	}
 
 	if err := initConfig(cmd, ro); err != nil {
-		logger.l.Fatal(err)
+		return fmt.Errorf("config error: %w", err)
 	}
 
-	var err error
 	if len(ro.CpuProfileFile) > 0 {
-		cpuProfileFile, err = os.Create(ro.CpuProfileFile)
+		f, err := os.Create(ro.CpuProfileFile)
 		if err != nil {
-			logger.l.Fatalf("could not create CPU profile: %v", err)
+			return fmt.Errorf("could not create CPU profile: %w", err)
 		}
+		*cpuProfileFile = f
 
-		if err = pprof.StartCPUProfile(cpuProfileFile); err != nil {
-			logger.l.Fatalf("could not start CPU profile: %v", err)
+		if err = pprof.StartCPUProfile(f); err != nil {
+			return fmt.Errorf("could not start CPU profile: %w", err)
 		}
 	}
+
+	return nil
 }
 
-func postRoot(ro *options.RootOptions, logger *logrusLogger) {
+func postRoot(ro *options.RootOptions, logger *logrusLogger, cpuProfileFile *os.File) {
 	if cpuProfileFile != nil {
 		pprof.StopCPUProfile()
 		if err := cpuProfileFile.Close(); err != nil {
-			logger.l.Fatalf("could not close cpu profile file: %v", err)
+			logger.l.Errorf("could not close cpu profile file: %v", err)
 		}
 	}
 
 	if len(ro.MemProfileFile) > 0 {
 		memProfileFile, err := os.Create(ro.MemProfileFile)
 		if err != nil {
-			logger.l.Fatalf("could not create memory profile file: %v", err)
+			logger.l.Errorf("could not create memory profile file: %v", err)
+			return
 		}
 
 		defer func() {
@@ -105,7 +110,7 @@ func postRoot(ro *options.RootOptions, logger *logrusLogger) {
 
 		runtime.GC()
 		if err := pprof.WriteHeapProfile(memProfileFile); err != nil {
-			logger.l.Fatalf("could not write memory profile: %v", err)
+			logger.l.Errorf("could not write memory profile: %v", err)
 		}
 	}
 }

@@ -66,7 +66,7 @@ func runValidatePolicy(ctx context.Context, pvo options.PolicyValidateOptions) e
 
 	var result *policy.ValidationResult
 
-	policyEnvelope, err := policy.LoadPolicy(ctx, pvo.PolicyFilePath)
+	policyEnvelope, err := policy.LoadPolicy(ctx, pvo.PolicyFilePath, nil)
 	if err == nil && len(policyEnvelope.Payload) > 0 {
 		result = policy.ValidatePolicy(ctx, policyEnvelope, verifier)
 	} else {
@@ -91,7 +91,7 @@ func outputJSON(result *policy.ValidationResult) error {
 	}
 
 	if !result.Valid {
-		os.Exit(1)
+		return fmt.Errorf("policy validation failed")
 	}
 	return nil
 }
@@ -128,6 +128,5 @@ func outputText(result *policy.ValidationResult) error {
 		}
 	}
 
-	os.Exit(1)
-	return nil
+	return fmt.Errorf("policy validation failed")
 }

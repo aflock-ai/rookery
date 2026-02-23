@@ -524,8 +524,10 @@ func DiscoverFromMCPSocket() (string, *ProcessMetadata, error) {
 		meta.ProcessChain = append(meta.ProcessChain, pinfo)
 	}
 
-	// Collect Claude-related environment variables
+	// Collect Claude-related environment variables (excluding secrets).
+	// Only capture non-sensitive keys; skip any that contain API keys, tokens, or secrets.
 	meta.Environment = make(map[string]string)
+	sensitiveSubstrings := []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"}
 	for _, env := range os.Environ() {
 		if idx := strings.Index(env, "="); idx > 0 {
 			key := env[:idx]
@@ -533,7 +535,18 @@ func DiscoverFromMCPSocket() (string, *ProcessMetadata, error) {
 				strings.HasPrefix(key, "ANTHROPIC_") ||
 				strings.HasPrefix(key, "SPIFFE_") ||
 				key == "USER" || key == "HOME" {
-				meta.Environment[key] = env[idx+1:]
+				// Skip sensitive keys to prevent API key leakage in attestations
+				isSensitive := false
+				upperKey := strings.ToUpper(key)
+				for _, substr := range sensitiveSubstrings {
+					if strings.Contains(upperKey, substr) {
+						isSensitive = true
+						break
+					}
+				}
+				if !isSensitive {
+					meta.Environment[key] = env[idx+1:]
+				}
 			}
 		}
 	}
@@ -687,12 +700,21 @@ func TraceProcessInfo(pid int) map[string]interface{} {
 		}
 	}
 
-	// Get environment variables
+	// Get environment variables (filter out sensitive keys like API keys)
 	if env, err := getProcessEnvironment(pid); err == nil {
 		claudeEnv := make(map[string]string)
 		for k, v := range env {
 			if strings.HasPrefix(k, "CLAUDE_") || strings.HasPrefix(k, "ANTHROPIC_") {
-				claudeEnv[k] = v
+				// Skip keys that likely contain secrets
+				upperK := strings.ToUpper(k)
+				if strings.Contains(upperK, "KEY") ||
+					strings.Contains(upperK, "TOKEN") ||
+					strings.Contains(upperK, "SECRET") ||
+					strings.Contains(upperK, "PASSWORD") {
+					claudeEnv[k] = "[REDACTED]"
+				} else {
+					claudeEnv[k] = v
+				}
 			}
 		}
 		if len(claudeEnv) > 0 {

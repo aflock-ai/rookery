@@ -66,7 +66,7 @@ func RunWithAttestors(attestors []attestation.Attestor) RunOption {
 // creates
 func RunWithAttestationOpts(opts ...attestation.AttestationContextOption) RunOption {
 	return func(ro *runOptions) {
-		ro.attestationOpts = opts
+		ro.attestationOpts = append(ro.attestationOpts, opts...)
 	}
 }
 
@@ -74,7 +74,7 @@ func RunWithAttestationOpts(opts ...attestation.AttestationContextOption) RunOpt
 // timestampers
 func RunWithTimestampers(ts ...timestamp.Timestamper) RunOption {
 	return func(ro *runOptions) {
-		ro.timestampers = ts
+		ro.timestampers = append(ro.timestampers, ts...)
 	}
 }
 
@@ -145,6 +145,14 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) {
 			if multiExporter, ok := r.Attestor.(attestation.MultiExporter); ok {
 				// Create individual attestations for each exported attestor
 				for _, exportedAttestor := range multiExporter.ExportedAttestations() {
+					// Guard against nil entries in ExportedAttestations to prevent
+					// nil pointer panics (R3-233). This code path has no recover(),
+					// so a nil entry would crash the entire process.
+					if exportedAttestor == nil {
+						log.Warnf("MultiExporter %s returned nil attestor in ExportedAttestations(), skipping", r.Attestor.Name())
+						continue
+					}
+
 					var envelope dsse.Envelope
 					var subjects map[string]cryptoutil.DigestSet
 

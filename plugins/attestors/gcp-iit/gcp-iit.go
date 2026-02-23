@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -113,7 +114,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 	it := string(identityToken)
 
-	a.JWT = jwt.New(jwt.WithToken(it), jwt.WithJWKSUrl(jwksUrl))
+	customJWKSURL := os.Getenv("WITNESS_GCP_JWKS_URL")
+	if customJWKSURL == "" {
+		customJWKSURL = jwksUrl
+	}
+	a.JWT = jwt.New(jwt.WithToken(it), jwt.WithJWKSUrl(customJWKSURL))
 	if err := a.JWT.Attest(ctx); err != nil {
 		return err
 	}
@@ -123,15 +128,43 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	if !a.isWorkloadIdentity {
-		googClaim := a.JWT.Claims["google"].(map[string]interface{})
-		a.ProjectID = googClaim["project_id"].(string)
-		a.ProjectNumber = googClaim["project_number"].(string)
-		a.InstanceZone = googClaim["zone"].(string)
-		a.InstanceID = googClaim["instance_id"].(string)
-		a.InstanceHostname = googClaim["instance_name"].(string)
-		a.InstanceCreationTimestamp = googClaim["instance_creation_timestamp"].(string)
-		a.InstanceConfidentiality = googClaim["instance_confidentiality"].(string)
-		a.LicenceID = googClaim["licence_id"].([]string)
+		googClaim, ok := a.JWT.Claims["google"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type for google claim")
+		}
+
+		if v, ok := googClaim["project_id"].(string); ok {
+			a.ProjectID = v
+		}
+		if v, ok := googClaim["project_number"].(string); ok {
+			a.ProjectNumber = v
+		}
+		if v, ok := googClaim["zone"].(string); ok {
+			a.InstanceZone = v
+		}
+		if v, ok := googClaim["instance_id"].(string); ok {
+			a.InstanceID = v
+		}
+		if v, ok := googClaim["instance_name"].(string); ok {
+			a.InstanceHostname = v
+		}
+		if v, ok := googClaim["instance_creation_timestamp"].(string); ok {
+			a.InstanceCreationTimestamp = v
+		}
+		if v, ok := googClaim["instance_confidentiality"].(string); ok {
+			a.InstanceConfidentiality = v
+		}
+
+		switch v := googClaim["licence_id"].(type) {
+		case []string:
+			a.LicenceID = v
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					a.LicenceID = append(a.LicenceID, s)
+				}
+			}
+		}
 	} else {
 		a.getInstanceData()
 	}
@@ -147,8 +180,8 @@ func (a *Attestor) getInstanceData() {
 		"cluster-name":     InstanceMetadataUrl + "attributes/cluster-name",
 		"cluster-uid":      InstanceMetadataUrl + "attributes/cluster-uid",
 		"cluster-location": InstanceMetadataUrl + "attributes/cluster-location",
-		"project-id":       InstanceMetadataUrl + "project/project-id",
-		"project-number":   InstanceMetadataUrl + "project/numeric-project-id",
+		"project-id":       ProjectMetadataUrl + "project-id",
+		"project-number":   ProjectMetadataUrl + "numeric-project-id",
 	}
 
 	metadata := make(map[string]string)
@@ -156,7 +189,7 @@ func (a *Attestor) getInstanceData() {
 	for k, v := range endpoints {
 		data, err := getMetadata(v)
 		if err != nil {
-			log.Warnf("failed to retrieve gcp metadata from %v: %w", v, err)
+			log.Warnf("failed to retrieve gcp metadata from %v: %v", v, err)
 			continue
 		}
 		metadata[k] = string(data)
@@ -171,11 +204,11 @@ func (a *Attestor) getInstanceData() {
 
 	projID, projNum, err := parseJWTProjectInfo(a.JWT)
 	if err != nil {
-		log.Warnf("unable to parse gcp project info from JWT: %w\n", err)
+		log.Warnf("unable to parse gcp project info from JWT: %v\n", err)
+	} else {
+		a.ProjectID = projID
+		a.ProjectNumber = projNum
 	}
-
-	a.ProjectID = projID
-	a.ProjectNumber = projNum
 }
 
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
@@ -184,31 +217,31 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.InstanceID), hashes); err == nil {
 		subjects[fmt.Sprintf("instanceid:%v", a.InstanceID)] = ds
 	} else {
-		log.Debugf("(attestation/gcp) failed to record gcp instanceid subject: %w", err)
+		log.Debugf("(attestation/gcp) failed to record gcp instanceid subject: %v", err)
 	}
 
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.InstanceHostname), hashes); err == nil {
 		subjects[fmt.Sprintf("instancename:%v", a.InstanceHostname)] = ds
 	} else {
-		log.Debugf("(attestation/gcp) failed to record gcp instancename subject: %w", err)
+		log.Debugf("(attestation/gcp) failed to record gcp instancename subject: %v", err)
 	}
 
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ProjectID), hashes); err == nil {
 		subjects[fmt.Sprintf("projectid:%v", a.ProjectID)] = ds
 	} else {
-		log.Debugf("(attestation/gcp) failed to record gcp projectid subject: %w", err)
+		log.Debugf("(attestation/gcp) failed to record gcp projectid subject: %v", err)
 	}
 
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ProjectNumber), hashes); err == nil {
 		subjects[fmt.Sprintf("projectnumber:%v", a.ProjectNumber)] = ds
 	} else {
-		log.Debugf("(attestation/gcp) failed to record gcp projectnumber subject: %w", err)
+		log.Debugf("(attestation/gcp) failed to record gcp projectnumber subject: %v", err)
 	}
 
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ClusterUID), hashes); err == nil {
 		subjects[fmt.Sprintf("clusteruid:%v", a.ClusterUID)] = ds
 	} else {
-		log.Debugf("(attestation/gcp) failed to record gcp clusteruid subject: %w", err)
+		log.Debugf("(attestation/gcp) failed to record gcp clusteruid subject: %v", err)
 	}
 
 	return subjects
@@ -232,11 +265,13 @@ func getMetadata(url string) ([]byte, error) {
 		return nil, fmt.Errorf("unexpected status code for route: %d", resp.StatusCode)
 	}
 
-	bytes, err := io.ReadAll(resp.Body)
+	// Limit response size to prevent OOM from a compromised metadata endpoint.
+	const maxMetadataResponseSize = 1 << 20 // 1MB
+	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataResponseSize))
 	if err != nil {
 		return nil, err
 	}
-	return bytes, nil
+	return respBytes, nil
 }
 
 // identityTokenURL creates the URL to find an instance identity document given the
@@ -259,7 +294,10 @@ func parseJWTProjectInfo(jwt *jwt.Attestor) (string, string, error) {
 		return "", "", fmt.Errorf("unable to find email claim")
 	}
 
-	email := jwt.Claims["email"].(string)
+	email, ok := jwt.Claims["email"].(string)
+	if !ok {
+		return "", "", fmt.Errorf("email claim is not a string")
+	}
 
 	stings := strings.Split(email, "@")
 	if len(stings) != 2 {

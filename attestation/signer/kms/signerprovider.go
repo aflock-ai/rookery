@@ -43,7 +43,7 @@ func init() {
 		),
 		registry.StringConfigOption(
 			"hashType",
-			"The hash type to use for signing",
+			"The hash type to use for signing (SHA224, SHA256, SHA384, SHA512)",
 			"sha256",
 			func(sp signer.SignerProvider, hash string) (signer.SignerProvider, error) {
 				ksp, ok := sp.(*KMSSignerProvider)
@@ -51,7 +51,11 @@ func init() {
 					return sp, fmt.Errorf("provided signer provider is not a kms signer provider")
 				}
 
-				WithHash(hash)(ksp)
+				h, err := ParseHashFunc(hash)
+				if err != nil {
+					return sp, err
+				}
+				ksp.HashFunc = h
 				return ksp, nil
 			},
 		),
@@ -88,7 +92,7 @@ func init() {
 		),
 		registry.StringConfigOption(
 			"hashType",
-			"The hash type used for verifying",
+			"The hash type used for verifying (SHA224, SHA256, SHA384, SHA512)",
 			"sha256",
 			func(sp signer.VerifierProvider, hash string) (signer.VerifierProvider, error) {
 				ksp, ok := sp.(*KMSSignerProvider)
@@ -96,7 +100,11 @@ func init() {
 					return sp, fmt.Errorf("provided verifier provider is not a kms verifier provider")
 				}
 
-				WithHash(hash)(ksp)
+				h, err := ParseHashFunc(hash)
+				if err != nil {
+					return sp, err
+				}
+				ksp.HashFunc = h
 				return ksp, nil
 			},
 		),
@@ -118,10 +126,10 @@ func init() {
 }
 
 type KMSSignerProvider struct {
-	Reference  string
-	KeyVersion string
-	HashFunc   crypto.Hash
-	Options    map[string]KMSClientOptions
+	Reference  string                     `jsonschema:"title=Reference,description=KMS key reference URI identifying the signing key"`
+	KeyVersion string                     `jsonschema:"title=Key Version,description=Specific key version to use for signing operations"`
+	HashFunc   crypto.Hash                `jsonschema:"title=Hash Function,description=Cryptographic hash function for signing,default=SHA256"`
+	Options    map[string]KMSClientOptions `jsonschema:"title=Options,description=Provider-specific KMS client configuration options"`
 }
 
 type KMSClientOptions interface {
@@ -137,20 +145,34 @@ func WithRef(ref string) Option {
 	}
 }
 
+// ParseHashFunc converts a hash name string to a crypto.Hash.
+// Returns an error for unrecognized hash names to prevent silent fallback
+// to a weaker or unexpected algorithm.
+func ParseHashFunc(hash string) (crypto.Hash, error) {
+	switch strings.ToUpper(hash) {
+	case "SHA224":
+		return crypto.SHA224, nil
+	case "SHA256":
+		return crypto.SHA256, nil
+	case "SHA384":
+		return crypto.SHA384, nil
+	case "SHA512":
+		return crypto.SHA512, nil
+	default:
+		return 0, fmt.Errorf("unsupported hash algorithm %q: valid values are SHA224, SHA256, SHA384, SHA512", hash)
+	}
+}
+
 func WithHash(hash string) Option {
-	return func(ksp *KMSSignerProvider) { // case switch to match hash type string and set hashFunc
-		switch hash {
-		case "SHA224":
-			ksp.HashFunc = crypto.SHA224
-		case "SHA256":
+	return func(ksp *KMSSignerProvider) {
+		h, err := ParseHashFunc(hash)
+		if err != nil {
+			// Option pattern can't return errors; default to SHA256 but this
+			// should be caught earlier by the registry config validation.
 			ksp.HashFunc = crypto.SHA256
-		case "SHA384":
-			ksp.HashFunc = crypto.SHA384
-		case "SHA512":
-			ksp.HashFunc = crypto.SHA512
-		default:
-			ksp.HashFunc = crypto.SHA256
+			return
 		}
+		ksp.HashFunc = h
 	}
 }
 

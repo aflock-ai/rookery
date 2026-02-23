@@ -4,6 +4,9 @@ use (
 	// CLIs
 	./aflock
 	./cilock
+
+	// Dev tooling
+	./lockctl
 	// Core
 	./attestation
 
@@ -17,6 +20,7 @@ use (
 	./plugins/attestors/aws-codebuild
 	./plugins/attestors/aws-iid
 	./plugins/attestors/commandrun
+	./plugins/attestors/configuration
 	./plugins/attestors/docker
 	./plugins/attestors/environment
 	./plugins/attestors/gcp-iit

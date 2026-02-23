@@ -27,7 +27,8 @@ import (
 )
 
 const (
-	ExpectedPolicyType = "https://witness.testifysec.com/policy/v0.1"
+	ExpectedPolicyType       = "https://witness.testifysec.com/policy/v0.1"
+	ExpectedPolicyTypeAflock = "https://aflock.ai/policy/v0.1"
 )
 
 type ValidationResult struct {
@@ -45,10 +46,11 @@ type policyDocument struct {
 }
 
 type policyStep struct {
-	Name          string        `json:"name"`
-	Functionaries []functionary `json:"functionaries"`
-	Attestations  []attestation `json:"attestations"`
-	ArtifactsFrom []string      `json:"artifactsfrom,omitempty"`
+	Name             string        `json:"name"`
+	Functionaries    []functionary `json:"functionaries"`
+	Attestations     []attestation `json:"attestations"`
+	ArtifactsFrom    []string      `json:"artifactsFrom,omitempty"`
+	AttestationsFrom []string      `json:"attestationsFrom,omitempty"`
 }
 
 type functionary struct {
@@ -146,8 +148,8 @@ func validatePolicyContent(policy *policyDocument, result *ValidationResult) {
 }
 
 func validateEnvelopeStructure(envelope *dsse.Envelope, result *ValidationResult) {
-	if envelope.PayloadType != ExpectedPolicyType {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Unexpected PayloadType: expected %s, got %s", ExpectedPolicyType, envelope.PayloadType))
+	if envelope.PayloadType != ExpectedPolicyType && envelope.PayloadType != ExpectedPolicyTypeAflock {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Unexpected PayloadType: expected %s or %s, got %s", ExpectedPolicyType, ExpectedPolicyTypeAflock, envelope.PayloadType))
 	}
 
 	if len(envelope.Payload) == 0 {
@@ -229,7 +231,35 @@ func validateSteps(policy *policyDocument, result *ValidationResult) {
 				result.Valid = false
 			}
 		}
+
+		// Validate attestationsFrom references
+		for _, ref := range step.AttestationsFrom {
+			if _, ok := policy.Steps[ref]; !ok {
+				result.Errors = append(result.Errors, fmt.Sprintf("Step '%s': attestationsFrom references undefined step '%s'", stepName, ref))
+				result.Valid = false
+			}
+			if ref == stepName {
+				result.Errors = append(result.Errors, fmt.Sprintf("Step '%s': attestationsFrom cannot reference itself", stepName))
+				result.Valid = false
+			}
+		}
+
+		// Validate artifactsFrom references
+		for _, ref := range step.ArtifactsFrom {
+			if _, ok := policy.Steps[ref]; !ok {
+				result.Errors = append(result.Errors, fmt.Sprintf("Step '%s': artifactsFrom references undefined step '%s'", stepName, ref))
+				result.Valid = false
+			}
+			if ref == stepName {
+				result.Errors = append(result.Errors, fmt.Sprintf("Step '%s': artifactsFrom cannot reference itself", stepName))
+				result.Valid = false
+			}
+		}
 	}
+
+	// Detect circular attestationsFrom dependencies
+	validateNoCircularDeps(policy, result, "attestationsFrom", func(s policyStep) []string { return s.AttestationsFrom })
+	validateNoCircularDeps(policy, result, "artifactsFrom", func(s policyStep) []string { return s.ArtifactsFrom })
 }
 
 func validatePublicKeys(policy *policyDocument, result *ValidationResult) {
@@ -323,6 +353,50 @@ func validateSignature(ctx context.Context, envelope *dsse.Envelope, verifier cr
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("Signature verification failed: %v", err))
 		result.Valid = false
+	}
+}
+
+func validateNoCircularDeps(policy *policyDocument, result *ValidationResult, fieldName string, getRefs func(policyStep) []string) {
+	// DFS cycle detection
+	type color int
+	const (
+		white color = iota // unvisited
+		gray               // in current path
+		black              // fully processed
+	)
+
+	colors := make(map[string]color)
+	for name := range policy.Steps {
+		colors[name] = white
+	}
+
+	var visit func(name string) bool
+	visit = func(name string) bool {
+		colors[name] = gray
+		step, ok := policy.Steps[name]
+		if !ok {
+			return false
+		}
+		for _, ref := range getRefs(step) {
+			if colors[ref] == gray {
+				result.Errors = append(result.Errors, fmt.Sprintf("Circular %s dependency detected involving step '%s'", fieldName, ref))
+				result.Valid = false
+				return true
+			}
+			if colors[ref] == white {
+				if visit(ref) {
+					return true
+				}
+			}
+		}
+		colors[name] = black
+		return false
+	}
+
+	for name := range policy.Steps {
+		if colors[name] == white {
+			visit(name)
+		}
 	}
 }
 

@@ -17,7 +17,9 @@ package jwt
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/invopop/jsonschema"
@@ -101,14 +103,22 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		return fmt.Errorf("error parsing token: %w", err)
 	}
 
-	resp, err := http.Get(a.jwksUrl)
+	jwksClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := jwksClient.Get(a.jwksUrl)
 	if err != nil {
 		return fmt.Errorf("error fetching jwks: %w", err)
 	}
-
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code from JWKS endpoint %s: %d", a.jwksUrl, resp.StatusCode)
+	}
+
+	// Limit JWKS response to 1MB to prevent OOM from a malicious endpoint.
+	const maxJWKSSize = 1 << 20 // 1MB
 	jwks := jose.JSONWebKeySet{}
-	decoder := json.NewDecoder(resp.Body)
+	limitedBody := io.LimitReader(resp.Body, maxJWKSSize)
+	decoder := json.NewDecoder(limitedBody)
 	if err := decoder.Decode(&jwks); err != nil {
 		return fmt.Errorf("error decoding jwks: %w", err)
 	}

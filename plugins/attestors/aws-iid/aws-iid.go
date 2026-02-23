@@ -25,6 +25,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -60,12 +62,15 @@ func init() {
 	},
 		registry.StringConfigOption(
 			"region-cert",
-			"A public x509 certificate used to verify the AWS instance identity document signature.",
+			"A public x509 certificate or path to a PEM file used to verify the AWS instance identity document signature.",
 			"",
 			func(a attestation.Attestor, val string) (attestation.Attestor, error) {
 				attestor, ok := a.(*Attestor)
 				if !ok {
 					return a, fmt.Errorf("invalid attestor type: %T", a)
+				}
+				if val == "" {
+					return a, fmt.Errorf("aws-region-cert cannot be empty")
 				}
 				WithAWSRegionCert(val)(attestor)
 				return attestor, nil
@@ -77,6 +82,18 @@ type Option func(*Attestor)
 
 func WithAWSRegionCert(awsCert string) Option {
 	return func(a *Attestor) {
+		// Detect if awsCert is a path to a file
+		if fi, err := os.Stat(awsCert); err == nil && !fi.IsDir() {
+			data, err := os.ReadFile(awsCert)
+			if err != nil {
+				// If we can't read the file, use the value as-is
+				// This maintains backward compatibility
+				a.awsCert = awsCert
+				return
+			}
+			a.awsCert = strings.TrimSpace(string(data))
+			return
+		}
 		a.awsCert = awsCert
 	}
 }
@@ -96,13 +113,6 @@ func New(opts ...Option) *Attestor {
 	for _, opt := range opts {
 		opt(attestor)
 	}
-
-	cfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		log.Errorf("failed to load AWS config: %v", err)
-		return nil
-	}
-	attestor.cfg = cfg
 
 	return attestor
 }
@@ -126,7 +136,13 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	a.hashes = ctx.Hashes()
 
-	err := a.getIID()
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config: %w", err)
+	}
+	a.cfg = cfg
+
+	err = a.getIID()
 	if err != nil {
 		return err
 	}
@@ -208,7 +224,7 @@ func (a *Attestor) Verify() error {
 
 	err = rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, docHash[:], sigBytes)
 	if err != nil {
-		log.Debugf("(attestation/aws-iid) failed to verify signature: %w", err)
+		log.Debugf("(attestation/aws-iid) failed to verify signature: %v", err)
 		return err
 	}
 
@@ -221,25 +237,25 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.InstanceID), hashes); err == nil {
 		subjects[fmt.Sprintf("instanceid:%s", a.InstanceID)] = ds
 	} else {
-		log.Debugf("(attestation/aws) failed to record aws instanceid subject: %w", err)
+		log.Debugf("(attestation/aws) failed to record aws instanceid subject: %v", err)
 	}
 
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.AccountID), hashes); err == nil {
 		subjects[fmt.Sprintf("accountid:%s", a.AccountID)] = ds
 	} else {
-		log.Debugf("(attestation/aws) failed to record aws accountid subject: %w", err)
+		log.Debugf("(attestation/aws) failed to record aws accountid subject: %v", err)
 	}
 
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ImageID), hashes); err == nil {
 		subjects[fmt.Sprintf("imageid:%s", a.ImageID)] = ds
 	} else {
-		log.Debugf("(attestation/aws) failed to record aws imageid subject: %w", err)
+		log.Debugf("(attestation/aws) failed to record aws imageid subject: %v", err)
 	}
 
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.PrivateIP), hashes); err == nil {
 		subjects[fmt.Sprintf("privateip:%s", a.PrivateIP)] = ds
 	} else {
-		log.Debugf("(attestation/aws) failed to record aws privateip subject: %w", err)
+		log.Debugf("(attestation/aws) failed to record aws privateip subject: %v", err)
 	}
 
 	return subjects
@@ -254,8 +270,8 @@ func getAWSCAPublicKey(awsRegion, awsCert string) (*rsa.PublicKey, error) {
 		}
 	}
 
-	block, rest := pem.Decode([]byte(awsCert))
-	if len(rest) > 0 {
+	block, _ := pem.Decode([]byte(awsCert))
+	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM block containing the public key")
 	}
 

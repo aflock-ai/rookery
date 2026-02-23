@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -267,10 +269,16 @@ func (s *Signer) Sign(ctx context.Context, statement Statement) (*Envelope, erro
 }
 
 // createPAE creates Pre-Authentication Encoding for DSSE.
+// Uses byte slice concatenation instead of fmt.Sprintf to avoid
+// corrupting non-UTF-8 payload bytes via string() conversion.
 func createPAE(payloadType string, payload []byte) []byte {
-	return []byte(fmt.Sprintf("DSSEv1 %d %s %d %s",
+	prefix := fmt.Sprintf("DSSEv1 %d %s %d ",
 		len(payloadType), payloadType,
-		len(payload), string(payload)))
+		len(payload))
+	result := make([]byte, 0, len(prefix)+len(payload))
+	result = append(result, []byte(prefix)...)
+	result = append(result, payload...)
+	return result
 }
 
 // signWithPrivateKey signs data using the provided private key.
@@ -345,14 +353,27 @@ func VerifyEnvelope(envelope *Envelope, trustedCerts []*x509.Certificate) error 
 			return fmt.Errorf("decode signature: %w", err)
 		}
 
-		// Find matching certificate
+		// Find matching certificate — supports ECDSA, RSA, and Ed25519
 		verified := false
 		for _, cert := range trustedCerts {
-			if ecdsaKey, ok := cert.PublicKey.(*ecdsa.PublicKey); ok {
-				if ecdsa.VerifyASN1(ecdsaKey, hash[:], sigBytes) {
+			switch key := cert.PublicKey.(type) {
+			case *ecdsa.PublicKey:
+				if ecdsa.VerifyASN1(key, hash[:], sigBytes) {
 					verified = true
-					break
 				}
+			case *rsa.PublicKey:
+				if rsa.VerifyPKCS1v15(key, crypto.SHA256, hash[:], sigBytes) == nil {
+					verified = true
+				} else if rsa.VerifyPSS(key, crypto.SHA256, hash[:], sigBytes, nil) == nil {
+					verified = true
+				}
+			case ed25519.PublicKey:
+				if ed25519.Verify(key, pae, sigBytes) {
+					verified = true
+				}
+			}
+			if verified {
+				break
 			}
 		}
 

@@ -110,11 +110,7 @@ func loadVerifiers(ctx context.Context, so options.VerifierOptions, ko options.K
 						return nil, fmt.Errorf("provided verifier provider is not a KMS verifier provider")
 					}
 
-					s, err := kspv.Verifier(ctx)
-					if err != nil {
-						return nil, fmt.Errorf("failed to create %v KMS verifier: %w", verifierProvider, err)
-					}
-					verifiers = append(verifiers, s)
+					sp = kspv
 				}
 			}
 		}

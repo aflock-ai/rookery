@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -76,7 +75,7 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	if err := a.getCandidate(ctx); err != nil {
-		log.Debugf("(attestation/sarif) error getting candidate: %w", err)
+		log.Debugf("(attestation/sarif) error getting candidate: %v", err)
 		return err
 	}
 
@@ -91,34 +90,47 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	}
 
 	for path, product := range products {
+		if product.MimeType == "" {
+			continue
+		}
+		mimeMatch := false
 		for _, mimeType := range mimeTypes {
-			if !strings.Contains(mimeType, product.MimeType) {
-				continue
+			if product.MimeType == mimeType {
+				mimeMatch = true
+				break
 			}
+		}
+		if !mimeMatch {
+			continue
 		}
 
 		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
 		if newDigestSet == nil || err != nil {
-			return fmt.Errorf("error calculating digest set from file: %s", path)
+			log.Debugf("(attestation/sarif) error calculating digest set from file %s: %v", path, err)
+			continue
 		}
 
 		if !newDigestSet.Equal(product.Digest) {
-			return fmt.Errorf("integrity error: product digest set does not match candidate digest set")
+			log.Debugf("(attestation/sarif) integrity error for %s: product digest does not match", path)
+			continue
 		}
 
 		f, err := os.Open(path)
 		if err != nil {
-			return fmt.Errorf("error opening file: %s", path)
+			log.Debugf("(attestation/sarif) error opening file %s: %v", path, err)
+			continue
 		}
 
 		reportBytes, err := io.ReadAll(f)
+		f.Close()
 		if err != nil {
-			return fmt.Errorf("error reading file: %s", path)
+			log.Debugf("(attestation/sarif) error reading file %s: %v", path, err)
+			continue
 		}
 
 		//check to see if we can unmarshal into sarif type
 		if err := json.Unmarshal(reportBytes, &a.Report); err != nil {
-			log.Debugf("(attestation/sarif) error unmarshaling report: %w", err)
+			log.Debugf("(attestation/sarif) error unmarshaling report: %v", err)
 			continue
 		}
 

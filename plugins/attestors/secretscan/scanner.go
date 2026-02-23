@@ -220,9 +220,14 @@ func (a *Attestor) readFileContent(filePath string) ([]byte, error) {
 		}
 	}()
 
-	// Apply the size limit for safety
-	maxSizeBytes := int64(a.maxFileSizeMB) * 1024 * 1024
-	reader := io.LimitReader(file, maxSizeBytes)
+	// Apply the size limit for safety (0 means no limit)
+	var reader io.Reader
+	if a.maxFileSizeMB > 0 {
+		maxSizeBytes := int64(a.maxFileSizeMB) * 1024 * 1024
+		reader = io.LimitReader(file, maxSizeBytes)
+	} else {
+		reader = file
+	}
 
 	content, err := io.ReadAll(reader)
 	if err != nil {

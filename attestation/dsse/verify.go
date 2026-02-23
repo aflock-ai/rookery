@@ -17,7 +17,9 @@ package dsse
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -25,6 +27,19 @@ import (
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 )
+
+// verifierKeyID returns a stable identifier for a verifier. If KeyID() fails,
+// it falls back to a SHA-256 hash of the verifier's type and address to ensure
+// the verification still counts toward the threshold.
+func verifierKeyID(v cryptoutil.Verifier) string {
+	if kid, err := v.KeyID(); err == nil {
+		return kid
+	}
+	// Fallback: use a hash of the verifier pointer address formatted as a string.
+	// This ensures each distinct verifier object gets a unique ID even if KeyID() fails.
+	h := sha256.Sum256([]byte(fmt.Sprintf("%p", v)))
+	return "fallback:" + hex.EncodeToString(h[:])
+}
 
 type verificationOptions struct {
 	roots              []*x509.Certificate
@@ -91,87 +106,111 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 	}
 
 	checkedVerifiers := make([]CheckedVerifier, 0)
-	verified := 0
+	// Track distinct verifier KeyIDs that have passed. This prevents an attacker
+	// from duplicating the same valid signature in the envelope to inflate the
+	// verified count and meet the threshold with a single key.
+	verifiedKeyIDs := make(map[string]struct{})
+
+	// Pre-compute stable KeyIDs for each provided verifier so that a verifier
+	// with a non-deterministic KeyID() cannot inflate the threshold count by
+	// producing a different ID on each call.
+	stableKeyIDs := make(map[int]string, len(options.verifiers))
+	for i, v := range options.verifiers {
+		if v != nil {
+			stableKeyIDs[i] = verifierKeyID(v)
+		}
+	}
+
 	for _, sig := range e.Signatures {
 		if len(sig.Certificate) > 0 {
 			cert, err := cryptoutil.TryParseCertificate(sig.Certificate)
 			if err != nil {
-				continue
-			}
-
-			sigIntermediates := make([]*x509.Certificate, 0)
-			for _, int := range sig.Intermediates {
-				intCert, err := cryptoutil.TryParseCertificate(int)
-				if err != nil {
-					continue
-				}
-
-				sigIntermediates = append(sigIntermediates, intCert)
-			}
-
-			sigIntermediates = append(sigIntermediates, options.intermediates...)
-			if len(options.timestampVerifiers) == 0 {
-				if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, time.Now()); err == nil {
-					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier})
-					verified += 1
-				} else {
-					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier, Error: err})
-					log.Debugf("failed to verify with timestamp verifier: %w", err)
-				}
+				// Log but don't skip — the raw verifier loop below must still
+				// run. An attacker could inject unparseable Certificate data to
+				// block raw-key verification if we used 'continue' here.
+				log.Debugf("failed to parse certificate in signature, skipping cert verification: %v", err)
 			} else {
-				var passedVerifier cryptoutil.Verifier
-				failed := []cryptoutil.Verifier{}
-				passedTimestampVerifiers := []timestamp.TimestampVerifier{}
-				failedTimestampVerifiers := []timestamp.TimestampVerifier{}
-
-				for _, timestampVerifier := range options.timestampVerifiers {
-					for _, sigTimestamp := range sig.Timestamps {
-						timestamp, err := timestampVerifier.Verify(context.TODO(), bytes.NewReader(sigTimestamp.Data), bytes.NewReader(sig.Signature))
-						if err != nil {
-							continue
-						}
-
-						if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, timestamp); err == nil {
-							// NOTE: do we not want to save all the passed verifiers?
-							passedVerifier = verifier
-							passedTimestampVerifiers = append(passedTimestampVerifiers, timestampVerifier)
-						} else {
-							failed = append(failed, verifier)
-							failedTimestampVerifiers = append(failedTimestampVerifiers, timestampVerifier)
-							log.Debugf("failed to verify with timestamp verifier: %w", err)
-						}
-
+				sigIntermediates := make([]*x509.Certificate, 0)
+				for _, int := range sig.Intermediates {
+					intCert, err := cryptoutil.TryParseCertificate(int)
+					if err != nil {
+						continue
 					}
+
+					sigIntermediates = append(sigIntermediates, intCert)
 				}
 
-				if len(passedTimestampVerifiers) > 0 {
-					verified += 1
-					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{
-						Verifier:           passedVerifier,
-						TimestampVerifiers: passedTimestampVerifiers,
-					})
+				sigIntermediates = append(sigIntermediates, options.intermediates...)
+				if len(options.timestampVerifiers) == 0 {
+					if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, time.Now()); err == nil {
+						checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier})
+						verifiedKeyIDs[verifierKeyID(verifier)] = struct{}{}
+					} else if verifier != nil {
+						// Verifier was created but signature verification failed
+						checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier, Error: err})
+						log.Debugf("failed to verify signature: %v", err)
+					} else {
+						// Verifier creation failed (e.g., invalid cert chain) — don't
+						// add a nil verifier to checkedVerifiers as it would cause nil
+						// dereferences in consumers that iterate the list.
+						log.Debugf("failed to create x509 verifier: %v", err)
+					}
 				} else {
-					for _, v := range failed {
+					var passedVerifier cryptoutil.Verifier
+					failed := []cryptoutil.Verifier{}
+					passedTimestampVerifiers := []timestamp.TimestampVerifier{}
+					failedTimestampVerifiers := []timestamp.TimestampVerifier{}
+
+					for _, timestampVerifier := range options.timestampVerifiers {
+						for _, sigTimestamp := range sig.Timestamps {
+							timestamp, err := timestampVerifier.Verify(context.TODO(), bytes.NewReader(sigTimestamp.Data), bytes.NewReader(sig.Signature))
+							if err != nil {
+								continue
+							}
+
+							if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, timestamp); err == nil {
+								// NOTE: do we not want to save all the passed verifiers?
+								passedVerifier = verifier
+								passedTimestampVerifiers = append(passedTimestampVerifiers, timestampVerifier)
+							} else {
+								// Only track non-nil verifiers in failed list to prevent
+								// nil dereferences when iterating failed verifiers below.
+								if verifier != nil {
+									failed = append(failed, verifier)
+								}
+								failedTimestampVerifiers = append(failedTimestampVerifiers, timestampVerifier)
+								log.Debugf("failed to verify with timestamp verifier: %v", err)
+							}
+
+						}
+					}
+
+					if len(passedTimestampVerifiers) > 0 && passedVerifier != nil {
+						verifiedKeyIDs[verifierKeyID(passedVerifier)] = struct{}{}
 						checkedVerifiers = append(checkedVerifiers, CheckedVerifier{
-							Verifier:           v,
-							TimestampVerifiers: failedTimestampVerifiers,
-							Error:              fmt.Errorf("no valid timestamps found"),
+							Verifier:           passedVerifier,
+							TimestampVerifiers: passedTimestampVerifiers,
 						})
+					} else {
+						for _, v := range failed {
+							checkedVerifiers = append(checkedVerifiers, CheckedVerifier{
+								Verifier:           v,
+								TimestampVerifiers: failedTimestampVerifiers,
+								Error:              fmt.Errorf("no valid timestamps found"),
+							})
+						}
 					}
 				}
 			}
 		}
 
-		for _, verifier := range options.verifiers {
+		for i, verifier := range options.verifiers {
 			if verifier != nil {
-				kid, err := verifier.KeyID()
-				if err != nil {
-					log.Warn("failed to get key id from verifier: %v", err)
-				}
+				kid := stableKeyIDs[i]
 				log.Debug("verifying with verifier with KeyID ", kid)
 
 				if err := verifier.Verify(bytes.NewReader(pae), sig.Signature); err == nil {
-					verified += 1
+					verifiedKeyIDs[kid] = struct{}{}
 					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier})
 				} else {
 					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier, Error: err})
@@ -180,6 +219,7 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 		}
 	}
 
+	verified := len(verifiedKeyIDs)
 	if verified == 0 {
 		return nil, ErrNoMatchingSigs{Verifiers: checkedVerifiers}
 	} else if verified < options.threshold {

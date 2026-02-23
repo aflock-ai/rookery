@@ -99,7 +99,20 @@ func VerifyWithPolicyCertConstraints(commonName string, dnsNames []string, email
 	}
 }
 
+func allWildcard(vo *VerifyPolicySignatureOptions) bool {
+	isWild := func(s string) bool { return s == "*" }
+	isWildSlice := func(ss []string) bool { return len(ss) == 1 && ss[0] == "*" }
+	return isWild(vo.policyCommonName) &&
+		isWildSlice(vo.policyDNSNames) &&
+		isWildSlice(vo.policyEmails) &&
+		isWildSlice(vo.policyOrganizations) &&
+		isWildSlice(vo.policyURIs)
+}
+
 func VerifyPolicySignature(ctx context.Context, envelope dsse.Envelope, vo *VerifyPolicySignatureOptions) error {
+	if allWildcard(vo) {
+		log.Warn("policy signature verification is using all-wildcard certificate constraints; any certificate from a trusted CA will be accepted as a policy signer — use VerifyWithPolicyCertConstraints to restrict")
+	}
 	passedPolicyVerifiers, err := envelope.Verify(dsse.VerifyWithVerifiers(vo.policyVerifiers...), dsse.VerifyWithTimestampVerifiers(vo.policyTimestampAuthorities...), dsse.VerifyWithRoots(vo.policyCARoots...), dsse.VerifyWithIntermediates(vo.policyCAIntermediates...))
 	if err != nil {
 		return fmt.Errorf("could not verify policy: %w", err)

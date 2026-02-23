@@ -6,10 +6,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sync"
 	"time"
 
 	"github.com/aflock-ai/rookery/aflock/pkg/aflock"
 )
+
+// safeSessionIDRegex ensures session IDs contain only safe characters.
+// This prevents path traversal via session IDs like "../../etc".
+var safeSessionIDRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 const (
 	// DefaultStateDir is the default directory for session state.
@@ -19,6 +25,7 @@ const (
 // Manager handles session state persistence.
 type Manager struct {
 	stateDir string
+	mu       sync.Mutex
 }
 
 // NewManager creates a new state manager.
@@ -29,13 +36,38 @@ func NewManager(stateDir string) *Manager {
 	return &Manager{stateDir: stateDir}
 }
 
+// validateSessionID checks that a session ID is safe for use in file paths.
+// It rejects IDs containing path traversal sequences or special characters.
+func validateSessionID(sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("session ID must not be empty")
+	}
+	// MCP server generates IDs like "mcp-1234567890". Hooks receive UUIDs.
+	// Allow alphanumeric, hyphens, and underscores only.
+	if !safeSessionIDRegex.MatchString(sessionID) {
+		return fmt.Errorf("invalid session ID %q: must contain only alphanumeric characters, hyphens, and underscores", sessionID)
+	}
+	return nil
+}
+
 // SessionDir returns the directory for a specific session.
+// It validates the session ID to prevent path traversal attacks.
+// If the session ID is invalid, it returns a path using a sanitized version.
 func (m *Manager) SessionDir(sessionID string) string {
+	// Validate session ID to prevent path traversal.
+	// If invalid (e.g., "../../etc"), use only the base name.
+	if err := validateSessionID(sessionID); err != nil {
+		// Fall back to using the base of the state dir to avoid escaping
+		return m.stateDir
+	}
 	return filepath.Join(m.stateDir, sessionID)
 }
 
 // Load loads the session state for a session ID.
 func (m *Manager) Load(sessionID string) (*aflock.SessionState, error) {
+	if err := validateSessionID(sessionID); err != nil {
+		return nil, err
+	}
 	path := filepath.Join(m.SessionDir(sessionID), "state.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -55,8 +87,11 @@ func (m *Manager) Load(sessionID string) (*aflock.SessionState, error) {
 
 // Save persists the session state.
 func (m *Manager) Save(state *aflock.SessionState) error {
+	if err := validateSessionID(state.SessionID); err != nil {
+		return err
+	}
 	dir := m.SessionDir(state.SessionID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 
@@ -66,7 +101,7 @@ func (m *Manager) Save(state *aflock.SessionState) error {
 	}
 
 	path := filepath.Join(dir, "state.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write state: %w", err)
 	}
 
@@ -87,7 +122,10 @@ func (m *Manager) Initialize(sessionID string, policy *aflock.Policy, policyPath
 }
 
 // RecordAction records an action in the session state.
+// It is safe for concurrent use.
 func (m *Manager) RecordAction(state *aflock.SessionState, record aflock.ActionRecord) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	state.Actions = append(state.Actions, record)
 	state.Metrics.ToolCalls++
 	if state.Metrics.Tools == nil {
@@ -129,19 +167,28 @@ func (m *Manager) LoadMetrics(sessionID string) (*aflock.SessionMetrics, error) 
 }
 
 // UpdateMetrics updates cumulative metrics (for PostToolUse).
+// It is safe for concurrent use.
 func (m *Manager) UpdateMetrics(state *aflock.SessionState, tokensIn, tokensOut int64, costUSD float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	state.Metrics.TokensIn += tokensIn
 	state.Metrics.TokensOut += tokensOut
 	state.Metrics.CostUSD += costUSD
 }
 
 // IncrementTurns increments the turn counter.
+// It is safe for concurrent use.
 func (m *Manager) IncrementTurns(state *aflock.SessionState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	state.Metrics.Turns++
 }
 
 // TrackFile records a file access.
+// It is safe for concurrent use.
 func (m *Manager) TrackFile(state *aflock.SessionState, toolName string, filePath string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	switch toolName {
 	case "Read", "Glob", "Grep":
 		if !contains(state.Metrics.FilesRead, filePath) {

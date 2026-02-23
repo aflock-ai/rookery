@@ -91,9 +91,9 @@ func (e ErrUnsupportedHash) Error() string {
 }
 
 type DigestValue struct {
-	crypto.Hash
-	GitOID  bool
-	DirHash bool
+	crypto.Hash `jsonschema:"title=Hash Algorithm,description=Cryptographic hash function to use for digest calculation"`
+	GitOID      bool `jsonschema:"title=Git OID,description=Whether to calculate Git Object ID format digest,default=false"`
+	DirHash     bool `jsonschema:"title=Directory Hash,description=Whether to calculate directory hash using Go module dirhash format,default=false"`
 }
 
 func (dv DigestValue) New() hash.Hash {
@@ -210,6 +210,7 @@ func CalculateDigestSetFromFile(path string, hashes []DigestValue) (DigestSet, e
 	if err != nil {
 		return DigestSet{}, err
 	}
+	defer file.Close()
 
 	hashable, err := isHashableFile(file)
 	if err != nil {
@@ -220,7 +221,6 @@ func CalculateDigestSetFromFile(path string, hashes []DigestValue) (DigestSet, e
 		return DigestSet{}, fmt.Errorf("%s is not a hashable file", path)
 	}
 
-	defer file.Close()
 	return CalculateDigestSet(file, hashes)
 }
 
@@ -284,7 +284,7 @@ func isHashableFile(f *os.File) (bool, error) {
 		return true, nil
 	}
 
-	if mode&os.ModeSymlink == 1 {
+	if mode&os.ModeSymlink != 0 {
 		return true, nil
 	}
 

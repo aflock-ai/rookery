@@ -112,12 +112,12 @@ func (p *ptraceContext) runTrace() error {
 		if status.Stopped() && isPtraceTrap {
 			injectedSig = 0
 			if err := p.nextSyscall(pid); err != nil {
-				log.Debugf("(tracing) got error while processing syscall: %w", err)
+				log.Debugf("(tracing) got error while processing syscall: %v", err)
 			}
 		}
 
 		if err := unix.PtraceSyscall(pid, injectedSig); err != nil {
-			log.Debugf("(tracing) got error from ptrace syscall: %w", err)
+			log.Debugf("(tracing) got error from ptrace syscall: %v", err)
 		}
 	}
 }
@@ -297,6 +297,10 @@ func (ctx *ptraceContext) readSyscallReg(pid int, addr uintptr, n int) (string, 
 
 	// don't want to use cgo... look for the first 0 byte for the end of the c string
 	size := bytes.IndexByte(data, 0)
+	if size < 0 {
+		// No null terminator found; use the full buffer.
+		size = int(numBytes)
+	}
 	return string(data[:size]), nil
 }
 
@@ -310,12 +314,15 @@ func getPPIDFromStatus(status []byte) (int, error) {
 	for _, line := range lines {
 		if strings.Contains(line, "PPid:") {
 			parts := strings.Split(line, ":")
+			if len(parts) < 2 {
+				continue
+			}
 			ppid := strings.TrimSpace(parts[1])
 			return strconv.Atoi(ppid)
 		}
 	}
 
-	return 0, nil
+	return 0, fmt.Errorf("PPid not found in status")
 }
 
 func getSpecBypassIsVulnFromStatus(status []byte) bool {
@@ -324,6 +331,9 @@ func getSpecBypassIsVulnFromStatus(status []byte) bool {
 	for _, line := range lines {
 		if strings.Contains(line, "Speculation_Store_Bypass:") {
 			parts := strings.Split(line, ":")
+			if len(parts) < 2 {
+				continue
+			}
 			isVuln := strings.TrimSpace(parts[1])
 			if strings.Contains(isVuln, "vulnerable") {
 				return true

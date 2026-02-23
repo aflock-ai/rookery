@@ -95,7 +95,7 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	mets, err := a.getDockerCandidates(ctx)
 	if err != nil {
-		log.Debugf("(attestation/docker) error getting docker candidate: %w", err)
+		log.Debugf("(attestation/docker) error getting docker candidate: %v", err)
 		return err
 	}
 
@@ -105,7 +105,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 			log.Debugf("(attestation/docker) setting docker candidate for image '%s'", met.ImageName)
 			err := a.setDockerCandidate(&met)
 			if err != nil {
-				log.Debugf("(attestation/docker) error setting docker candidate: %w", err)
+				log.Debugf("(attestation/docker) error setting docker candidate: %v", err)
 				return err
 			}
 		}
@@ -188,16 +188,17 @@ func (a *Attestor) getDockerCandidates(ctx *attestation.AttestationContext) ([]B
 	// but the metadata file is completely different depending on how the buildx is executed
 	mets := []BuildInfo{}
 	for path, product := range products {
-		if strings.Contains(jsonMimeType, product.MimeType) {
+		if product.MimeType == jsonMimeType {
 			var met BuildInfo
 			f, err := os.ReadFile(filepath.Join(ctx.WorkingDir(), path))
 			if err != nil {
-				return nil, fmt.Errorf("failed to read file %s: %w", path, err)
+				log.Debugf("(attestation/docker) failed to read file %s: %v", path, err)
+				continue
 			}
 
 			err = json.Unmarshal(f, &met)
 			if err != nil {
-				log.Debugf("(attestation/docker) error parsing file %s as docker metadata file: %w", path, err)
+				log.Debugf("(attestation/docker) error parsing file %s as docker metadata file: %v", path, err)
 				continue
 			}
 
@@ -218,7 +219,7 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 			if hash, err := cryptoutil.CalculateDigestSetFromBytes([]byte(ir), hashes); err == nil {
 				subj[fmt.Sprintf("imagereference:%s", ir)] = hash
 			} else {
-				log.Debugf("(attestation/docker) failed to record github imagereference subject: %w", err)
+				log.Debugf("(attestation/docker) failed to record github imagereference subject: %v", err)
 			}
 		}
 
@@ -229,18 +230,9 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 				if hash, err := cryptoutil.CalculateDigestSetFromBytes([]byte(m.URI), hashes); err == nil {
 					subj[fmt.Sprintf("materialuri:%s", m.URI)] = hash
 				} else {
-					log.Debugf("(attestation/github) failed to record github materialuri subject: %w", err)
+					log.Debugf("(attestation/docker) failed to record docker materialuri subject: %v", err)
 				}
 			}
-		}
-
-		for _, ref := range p.ImageReferences {
-			hash, err := cryptoutil.CalculateDigestSetFromBytes([]byte(ref), hashes)
-			if err != nil {
-				log.Debugf("(attestation/docker) error calculating image reference: %w", err)
-				continue
-			}
-			subj[fmt.Sprintf("imagereference:%s", ref)] = hash
 		}
 	}
 

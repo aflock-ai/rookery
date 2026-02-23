@@ -15,6 +15,7 @@
 package fulcio
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -22,10 +23,13 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"strconv"
@@ -47,6 +51,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"gopkg.in/go-jose/go-jose.v2/jwt"
 )
 
@@ -136,6 +141,20 @@ func init() {
 				return fsp, nil
 			},
 		),
+		registry.BoolConfigOption(
+			"use-http",
+			"HTTP/REST mode for Fulcio",
+			false,
+			func(sp signer.SignerProvider, useHTTP bool) (signer.SignerProvider, error) {
+				fsp, ok := sp.(FulcioSignerProvider)
+				if !ok {
+					return sp, fmt.Errorf("provided signer provider is not a fulcio signer provider")
+				}
+
+				WithUseHTTP(useHTTP)(&fsp)
+				return fsp, nil
+			},
+		),
 	)
 }
 
@@ -146,6 +165,7 @@ type FulcioSignerProvider struct {
 	Token           string
 	TokenPath       string
 	OidcRedirectUrl string
+	UseHTTP         bool
 }
 
 type Option func(*FulcioSignerProvider)
@@ -183,6 +203,12 @@ func WithOidcRedirectUrl(oidcRedirectUrl string) Option {
 func WithTokenPath(tokenPathOption string) Option {
 	return func(fsp *FulcioSignerProvider) {
 		fsp.TokenPath = tokenPathOption
+	}
+}
+
+func WithUseHTTP(useHTTP bool) Option {
+	return func(fsp *FulcioSignerProvider) {
+		fsp.UseHTTP = useHTTP
 	}
 }
 
@@ -224,12 +250,7 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 	}
 
 	// Make insecure true only if the scheme is HTTP
-	insecure := scheme == "http"
-
-	fClient, err := newClient(scheme+"://"+u.Host, port, insecure)
-	if err != nil {
-		return nil, err
-	}
+	isInsecure := scheme == "http"
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -278,10 +299,23 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 		return nil, errors.New("no token provided")
 	}
 
-	log.Infof("Requesting signing certificate from Fulcio at %s", scheme+"://"+u.Host)
-	certResp, err := getCert(ctx, key, fClient, raw)
-	if err != nil {
-		return nil, fmt.Errorf("failed to obtain certificate from Fulcio: %w", err)
+	var certResp *fulciopb.SigningCertificate
+	if fsp.UseHTTP {
+		log.Info("Requesting signing certificate from Fulcio using HTTP")
+		certResp, err = getCertHTTP(ctx, key, fsp.FulcioURL, raw)
+		if err != nil {
+			return nil, fmt.Errorf("failed to obtain certificate from Fulcio: %w", err)
+		}
+	} else {
+		fClient, err := newClient(scheme+"://"+u.Host, port, isInsecure)
+		if err != nil {
+			return nil, err
+		}
+		log.Infof("Requesting signing certificate from Fulcio at %s", scheme+"://"+u.Host)
+		certResp, err = getCert(ctx, key, fClient, raw)
+		if err != nil {
+			return nil, fmt.Errorf("failed to obtain certificate from Fulcio: %w", err)
+		}
 	}
 	log.Debugf("Successfully received certificate response from Fulcio")
 
@@ -292,6 +326,12 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 		chain = cert.SignedCertificateDetachedSct.GetChain()
 	case *fulciopb.SigningCertificate_SignedCertificateEmbeddedSct:
 		chain = cert.SignedCertificateEmbeddedSct.GetChain()
+	default:
+		return nil, fmt.Errorf("unexpected certificate type in Fulcio response: %T", certResp.Certificate)
+	}
+
+	if chain == nil {
+		return nil, errors.New("no certificate chain in Fulcio response")
 	}
 
 	certs := chain.Certificates
@@ -323,7 +363,7 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 
 	ss := cryptoutil.NewECDSASigner(key, crypto.SHA256)
 	if ss == nil {
-		return nil, errors.New("failed to create RSA signer")
+		return nil, errors.New("failed to create ECDSA signer")
 	}
 
 	signer, err := cryptoutil.NewX509Signer(ss, leafCert, intermediateCerts, nil)
@@ -526,4 +566,104 @@ func newClient(fulcioURL string, fulcioPort int, isInsecure bool) (fulciopb.CACl
 
 	// Create the Fulcio client
 	return fulciopb.NewCAClient(conn), nil
+}
+
+// getCertHTTP requests a signing certificate from Fulcio using the HTTP/REST API
+// instead of gRPC. This is useful in environments where gRPC is restricted.
+func getCertHTTP(ctx context.Context, key *ecdsa.PrivateKey, fulcioURL string, token string) (*fulciopb.SigningCertificate, error) {
+	t, err := jwt.ParseSigned(token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse JWT token: %w", err)
+	}
+
+	var claims struct {
+		jwt.Claims
+		Email   string `json:"email"`
+		Subject string `json:"sub"`
+	}
+	if err := t.UnsafeClaimsWithoutVerification(&claims); err != nil {
+		return nil, fmt.Errorf("failed to extract claims from JWT token: %w", err)
+	}
+
+	subject := claims.Email
+	if subject == "" {
+		subject = claims.Subject
+	}
+	if subject == "" {
+		return nil, errors.New("no email or subject claim found in token")
+	}
+
+	log.Debugf("Signing subject: %s", subject)
+
+	msg := strings.NewReader(subject)
+	signer, err := signature.LoadSigner(key, crypto.SHA256)
+	if err != nil {
+		return nil, err
+	}
+
+	proof, err := signer.SignMessage(msg, sigo.WithCryptoSignerOpts(crypto.SHA256))
+	if err != nil {
+		return nil, err
+	}
+
+	pubBytesPEM, err := cryptoutils.MarshalPublicKeyToPEM(&key.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := map[string]interface{}{
+		"credentials": map[string]string{
+			"oidcIdentityToken": token,
+		},
+		"publicKeyRequest": map[string]interface{}{
+			"publicKey": map[string]string{
+				"content": string(pubBytesPEM),
+			},
+			"proofOfPossession": proof,
+		},
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	// Normalize URL to avoid double-slash when fulcioURL has trailing slash
+	certURL := strings.TrimRight(fulcioURL, "/") + "/api/v2/signingCert"
+	req, err := http.NewRequestWithContext(ctx, "POST", certURL, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Limit response body to 1MB to prevent OOM from malicious servers.
+	// A typical Fulcio certificate response is only a few KB.
+	const maxBodySize = 1 << 20 // 1MB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		bodyStr := string(body)
+		if len(bodyStr) > 500 {
+			bodyStr = bodyStr[:500] + "..."
+		}
+		return nil, fmt.Errorf("HTTP request failed with status: %s, body: %s", resp.Status, bodyStr)
+	}
+
+	var certResp fulciopb.SigningCertificate
+	if err := protojson.Unmarshal(body, &certResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &certResp, nil
 }

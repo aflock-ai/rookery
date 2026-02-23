@@ -11,6 +11,7 @@ require (
 	github.com/open-policy-agent/opa v1.13.1
 	github.com/sigstore/fulcio v1.8.5
 	github.com/stretchr/testify v1.11.1
+	github.com/wk8/go-ordered-map/v2 v2.1.8
 	go.step.sm/crypto v0.76.0
 	golang.org/x/mod v0.33.0
 	k8s.io/apimachinery v0.35.0
@@ -55,7 +56,6 @@ require (
 	github.com/tchap/go-patricia/v2 v2.3.3 // indirect
 	github.com/valyala/fastjson v1.6.7 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.31 // indirect
-	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect

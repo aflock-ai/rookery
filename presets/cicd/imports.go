@@ -18,6 +18,7 @@ package cicd
 import (
 	// attestors
 	_ "github.com/aflock-ai/rookery/plugins/attestors/commandrun"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/configuration"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/environment"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/git"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/github"
