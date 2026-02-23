@@ -114,7 +114,7 @@ func (a *SBOMAttestor) Schema() *jsonschema.Schema {
 
 func (a *SBOMAttestor) Attest(ctx *attestation.AttestationContext) error {
 	if err := a.getCandidate(ctx); err != nil {
-		log.Debugf("(attestation/sbom) error getting candidate: %w", err)
+		log.Debugf("(attestation/sbom) error getting candidate: %v", err)
 		return err
 	}
 
@@ -154,34 +154,37 @@ func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error {
 
 	a.subjects = make(map[string]cryptoutil.DigestSet)
 	for path, product := range products {
+		var predicateType string
 		switch product.MimeType {
 		case SPDXMimeType:
-			a.predicateType = SPDXPredicateType
+			predicateType = SPDXPredicateType
 		case CycloneDxMimeType:
-			a.predicateType = CycloneDxPredicateType
+			predicateType = CycloneDxPredicateType
 		default:
 			continue
 		}
 
-		a.subjects[fmt.Sprintf("file:%v", path)] = product.Digest
-
 		f, err := os.Open(filepath.Join(ctx.WorkingDir(), path))
 		if err != nil {
-			return fmt.Errorf("error opening file: %s", path)
+			log.Debugf("(attestation/sbom) error opening file %s: %v", path, err)
+			continue
 		}
 
 		sbomBytes, err := io.ReadAll(f)
+		f.Close()
 		if err != nil {
-			return fmt.Errorf("error reading file: %s", path)
+			log.Debugf("(attestation/sbom) error reading file %s: %v", path, err)
+			continue
 		}
 
 		subjectsByName := make(map[string]string)
-		switch a.predicateType {
+		switch predicateType {
 		case SPDXPredicateType:
 			var document *spdx.Document
 			err := json.Unmarshal(sbomBytes, &document)
 			if err != nil {
-				return fmt.Errorf("error unmarshaling SPDX document: %w", err)
+				log.Debugf("(attestation/sbom) error unmarshaling SPDX document from %s: %v", path, err)
+				continue
 			}
 
 			if document.DocumentName != "" {
@@ -194,28 +197,36 @@ func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error {
 			decoder := cyclonedx.NewBOMDecoder(bytes.NewReader(sbomBytes), cyclonedx.BOMFileFormatJSON)
 			err := decoder.Decode(bom)
 			if err != nil {
-				return fmt.Errorf("error decoding CycloneDX BOM: %w", err)
+				log.Debugf("(attestation/sbom) error decoding CycloneDX BOM from %s: %v", path, err)
+				continue
 			}
 
-			if bom.Metadata.Component.Name != "" {
-				subjectsByName["name"] = bom.Metadata.Component.Name
-			}
+			if bom.Metadata != nil && bom.Metadata.Component != nil {
+				if bom.Metadata.Component.Name != "" {
+					subjectsByName["name"] = bom.Metadata.Component.Name
+				}
 
-			if bom.Metadata.Component.Version != "" {
-				subjectsByName["version"] = bom.Metadata.Component.Version
+				if bom.Metadata.Component.Version != "" {
+					subjectsByName["version"] = bom.Metadata.Component.Version
+				}
 			}
 
 			a.SBOMDocument = bom
 		default:
-			return fmt.Errorf("unsupported predicate type: %s", a.predicateType)
+			continue
 		}
+
+		// Record subject only after successful parse — recording before
+		// validation would claim the SBOM was observed even on parse failure.
+		a.predicateType = predicateType
+		a.subjects[fmt.Sprintf("file:%v", path)] = product.Digest
 
 		hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 		for k, v := range subjectsByName {
 			if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(v), hashes); err == nil {
 				a.subjects[fmt.Sprintf("%s:%s", k, v)] = ds
 			} else {
-				log.Debugf("(attestation/sbom) failed to record %v subject: %w", k, err)
+				log.Debugf("(attestation/sbom) failed to record %v subject: %v", k, err)
 			}
 		}
 

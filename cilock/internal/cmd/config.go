@@ -47,6 +47,7 @@ func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error 
 		return fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	var configErr error
 	commands := rootCmd.Commands()
 	for _, cm := range commands {
 		if !contains(os.Args, cm.Name()) {
@@ -55,6 +56,9 @@ func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error 
 
 		flags := cm.Flags()
 		flags.VisitAll(func(f *pflag.Flag) {
+			if configErr != nil {
+				return
+			}
 			configKey := fmt.Sprintf("%s.%s", cm.Name(), f.Name)
 			if !f.Changed {
 				if f.Value.Type() == "stringSlice" {
@@ -62,14 +66,14 @@ func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error 
 					if len(configValue) > 0 {
 						configValueStr := strings.Join(configValue, ",")
 						if err := flags.Set(f.Name, configValueStr); err != nil {
-							log.Errorf("failed to set config value: %v", err)
+							configErr = fmt.Errorf("failed to set config value %q from config file: %w", configKey, err)
 						}
 					}
 				} else {
 					configValue := v.GetString(configKey)
 					if configValue != "" {
 						if err := flags.Set(f.Name, configValue); err != nil {
-							log.Errorf("failed to set config value: %v", err)
+							configErr = fmt.Errorf("failed to set config value %q from config file: %w", configKey, err)
 						}
 					}
 				}
@@ -77,7 +81,7 @@ func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error 
 		})
 	}
 
-	return nil
+	return configErr
 }
 
 func contains(s []string, str string) bool {

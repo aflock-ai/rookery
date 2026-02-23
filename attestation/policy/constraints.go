@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"strings"
 
 	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -32,20 +33,20 @@ const (
 
 // +kubebuilder:object:generate=true
 type CertConstraint struct {
-	CommonName    string                 `json:"commonname"`
-	DNSNames      []string               `json:"dnsnames"`
-	Emails        []string               `json:"emails"`
-	Organizations []string               `json:"organizations"`
-	URIs          []string               `json:"uris"`
-	Roots         []string               `json:"roots"`
-	Extensions    certificate.Extensions `json:"extensions"`
+	CommonName    string                 `json:"commonname" jsonschema:"title=Common Name,description=Expected certificate common name (supports glob patterns with *)"`
+	DNSNames      []string               `json:"dnsnames" jsonschema:"title=DNS Names,description=Expected DNS subject alternative names"`
+	Emails        []string               `json:"emails" jsonschema:"title=Emails,description=Expected email subject alternative names"`
+	Organizations []string               `json:"organizations" jsonschema:"title=Organizations,description=Expected organization names in the certificate subject"`
+	URIs          []string               `json:"uris" jsonschema:"title=URIs,description=Expected URI subject alternative names"`
+	Roots         []string               `json:"roots" jsonschema:"title=Roots,description=IDs of trusted root certificates from the policy's roots map (use * to allow all)"`
+	Extensions    certificate.Extensions `json:"extensions" jsonschema:"title=Extensions,description=Fulcio certificate extension constraints (supports glob patterns)"`
 }
 
 func (cc CertConstraint) Check(verifier *cryptoutil.X509Verifier, trustBundles map[string]TrustBundle) error {
 	errs := make([]error, 0)
 	cert := verifier.Certificate()
 
-	if err := checkCertConstraint("common name", []string{cc.CommonName}, []string{cert.Subject.CommonName}); err != nil {
+	if err := checkCertConstraintGlob("common name", cc.CommonName, cert.Subject.CommonName); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -115,8 +116,15 @@ func (cc CertConstraint) checkExtensions(ext []pkix.Extension) error {
 		}
 		extensionsField := reflect.ValueOf(extensions).FieldByName(field.Name)
 
-		fieldGlob := glob.MustCompile(constraintField.String())
-		if !fieldGlob.Match(extensionsField.String()) {
+		fieldGlob, err := glob.Compile(constraintField.String())
+		if err != nil {
+			return fmt.Errorf("invalid glob pattern %+q for cert field %s: %w", constraintField.String(), field.Name, err)
+		}
+		matched, matchErr := safeGlobMatch(fieldGlob, extensionsField.String())
+		if matchErr != nil {
+			return fmt.Errorf("glob match error for cert field %s with pattern %+q: %w", field.Name, constraintField.String(), matchErr)
+		}
+		if !matched {
 			return fmt.Errorf("cert field %s doesn't match constraint %+q", field.Name, constraintField.String())
 		}
 	}
@@ -131,6 +139,36 @@ func urisToStrings(uris []*url.URL) []string {
 	}
 
 	return res
+}
+
+// checkCertConstraintGlob checks a single-value cert attribute against a constraint
+// that may contain glob patterns (e.g., "*.example.com" matches "foo.example.com").
+// An empty constraint allows any value. The AllowAllConstraint ("*") matches everything.
+func checkCertConstraintGlob(attribute, constraint, value string) error {
+	if constraint == "" || constraint == AllowAllConstraint {
+		return nil
+	}
+
+	if strings.Contains(constraint, "*") {
+		g, err := glob.Compile(constraint)
+		if err != nil {
+			return fmt.Errorf("invalid glob pattern %q for cert %s: %w", constraint, attribute, err)
+		}
+		matched, matchErr := safeGlobMatch(g, value)
+		if matchErr != nil {
+			return fmt.Errorf("glob match error for cert %s with pattern %q: %w", attribute, constraint, matchErr)
+		}
+		if !matched {
+			return fmt.Errorf("cert %s %q doesn't match constraint %q", attribute, value, constraint)
+		}
+		return nil
+	}
+
+	// Exact match for non-glob constraints
+	if constraint != value {
+		return fmt.Errorf("cert %s %q doesn't match constraint %q", attribute, value, constraint)
+	}
+	return nil
 }
 
 func checkCertConstraint(attribute string, constraints, values []string) error {
@@ -170,4 +208,17 @@ func checkCertConstraint(attribute string, constraints, values []string) error {
 	}
 
 	return nil
+}
+
+// safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob library
+// can panic on certain patterns that compile successfully but trigger out-of-bounds
+// access during matching (e.g., "0*,{*,"). We treat panics as match failures.
+func safeGlobMatch(g glob.Glob, s string) (matched bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			matched = false
+			err = fmt.Errorf("glob match panicked (likely invalid pattern): %v", r)
+		}
+	}()
+	return g.Match(s), nil
 }

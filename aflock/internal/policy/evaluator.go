@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/aflock/pkg/aflock"
@@ -56,7 +57,10 @@ func (e *Evaluator) EvaluatePreToolUse(toolName string, toolInput json.RawMessag
 	}
 
 	// 4. Check domain access for network tools
-	if isNetworkOperation(toolName) {
+	// WebSearch doesn't have a target URL (only a search query), so domain
+	// restrictions don't apply — the search engine itself picks which sites
+	// to query. Only WebFetch has a user-specified URL to check.
+	if isNetworkOperation(toolName) && toolName != "WebSearch" {
 		decision, reason := e.evaluateDomainAccess(toolInput)
 		if decision != aflock.DecisionAllow {
 			return decision, reason
@@ -64,11 +68,13 @@ func (e *Evaluator) EvaluatePreToolUse(toolName string, toolInput json.RawMessag
 	}
 
 	// 5. Check allow list (if specified, tool must be in it)
+	// Security (R3-230): Use MatchToolPattern to check both tool name AND command
+	// pattern. Previously only the tool name was checked, so Allow: ["Bash:git *"]
+	// would allow ALL Bash commands instead of only git commands.
 	if e.policy.Tools != nil && len(e.policy.Tools.Allow) > 0 {
 		allowed := false
 		for _, pattern := range e.policy.Tools.Allow {
-			patternTool, _, _ := ParseToolPattern(pattern)
-			if e.matcher.MatchGlob(patternTool, toolName) {
+			if e.matcher.MatchToolPattern(pattern, toolName, inputStr) {
 				allowed = true
 				break
 			}
@@ -94,6 +100,21 @@ func (e *Evaluator) extractInputForMatching(toolName string, toolInput json.RawM
 		if err := json.Unmarshal(toolInput, &input); err == nil {
 			return input.FilePath
 		}
+	case "Grep":
+		var input aflock.GrepToolInput
+		if err := json.Unmarshal(toolInput, &input); err == nil {
+			return input.Pattern
+		}
+	case "Glob":
+		var input aflock.GlobToolInput
+		if err := json.Unmarshal(toolInput, &input); err == nil {
+			return input.Pattern
+		}
+	case "NotebookEdit":
+		var input aflock.NotebookEditToolInput
+		if err := json.Unmarshal(toolInput, &input); err == nil {
+			return input.NotebookPath
+		}
 	case "Task":
 		var input aflock.TaskToolInput
 		if err := json.Unmarshal(toolInput, &input); err == nil {
@@ -104,8 +125,47 @@ func (e *Evaluator) extractInputForMatching(toolName string, toolInput json.RawM
 		if err := json.Unmarshal(toolInput, &input); err == nil {
 			return input.URL
 		}
+	case "WebSearch":
+		var input aflock.WebSearchToolInput
+		if err := json.Unmarshal(toolInput, &input); err == nil {
+			return input.Query
+		}
 	}
 	return ""
+}
+
+// extractFilePath extracts the file/directory path from tool input.
+// Different tools use different JSON field names for their path:
+//   - Read/Write/Edit: "file_path"
+//   - Grep/Glob: "path"
+//   - NotebookEdit: "notebook_path"
+func extractFilePath(toolName string, toolInput json.RawMessage) (string, error) {
+	switch toolName {
+	case "Grep":
+		var input aflock.GrepToolInput
+		if err := json.Unmarshal(toolInput, &input); err != nil {
+			return "", err
+		}
+		return input.Path, nil
+	case "Glob":
+		var input aflock.GlobToolInput
+		if err := json.Unmarshal(toolInput, &input); err != nil {
+			return "", err
+		}
+		return input.Path, nil
+	case "NotebookEdit":
+		var input aflock.NotebookEditToolInput
+		if err := json.Unmarshal(toolInput, &input); err != nil {
+			return "", err
+		}
+		return input.NotebookPath, nil
+	default:
+		var input aflock.FileToolInput
+		if err := json.Unmarshal(toolInput, &input); err != nil {
+			return "", err
+		}
+		return input.FilePath, nil
+	}
 }
 
 // evaluateFileAccess checks file access against policy.
@@ -114,20 +174,32 @@ func (e *Evaluator) evaluateFileAccess(toolName string, toolInput json.RawMessag
 		return aflock.DecisionAllow, ""
 	}
 
-	var input aflock.FileToolInput
-	if err := json.Unmarshal(toolInput, &input); err != nil {
+	filePath, err := extractFilePath(toolName, toolInput)
+	if err != nil {
 		return aflock.DecisionDeny, fmt.Sprintf("failed to parse file tool input: %v", err)
 	}
 
-	filePath := input.FilePath
-
 	// Normalize path for matching
 	normalizedPath := filepath.Clean(filePath)
+
+	// For directory-based tools (Grep, Glob), the path is a directory being searched.
+	// We need to also check if files WITHIN the directory would match deny patterns.
+	// e.g., if path is "/etc" and deny pattern is "/etc/**", the glob won't match
+	// "/etc" directly but should deny since the tool will access files under /etc.
+	isDirectoryTool := toolName == "Grep" || toolName == "Glob"
 
 	// Check deny patterns first
 	for _, pattern := range e.policy.Files.Deny {
 		if e.matcher.MatchGlob(pattern, normalizedPath) || e.matcher.MatchGlob(pattern, filePath) {
 			return aflock.DecisionDeny, fmt.Sprintf("File '%s' matches deny pattern '%s'", filePath, pattern)
+		}
+		// For directory tools, also check if a child path would match.
+		// This handles patterns like "/etc/**" when the tool path is "/etc".
+		if isDirectoryTool && normalizedPath != "" {
+			childPath := normalizedPath + "/check"
+			if e.matcher.MatchGlob(pattern, childPath) {
+				return aflock.DecisionDeny, fmt.Sprintf("Directory '%s' matches deny pattern '%s' (contains denied files)", filePath, pattern)
+			}
 		}
 	}
 
@@ -199,7 +271,7 @@ func (e *Evaluator) evaluateDomainAccess(toolInput json.RawMessage) (aflock.Perm
 
 func isFileOperation(toolName string) bool {
 	switch toolName {
-	case "Read", "Write", "Edit", "Glob", "Grep":
+	case "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit":
 		return true
 	default:
 		return false
@@ -211,22 +283,49 @@ func isNetworkOperation(toolName string) bool {
 	case "WebFetch", "WebSearch":
 		return true
 	default:
-		// Check for MCP tools that might access network
-		return strings.HasPrefix(toolName, "mcp__")
+		return false
 	}
 }
 
-func extractDomain(url string) string {
-	// Simple domain extraction
-	url = strings.TrimPrefix(url, "https://")
-	url = strings.TrimPrefix(url, "http://")
-	if idx := strings.Index(url, "/"); idx != -1 {
-		url = url[:idx]
+func extractDomain(rawURL string) string {
+	// Case-insensitive scheme stripping — URLs like HTTPS://evil.com or Http://evil.com
+	// must be handled correctly to prevent domain deny rule bypasses.
+	lower := strings.ToLower(rawURL)
+	if strings.HasPrefix(lower, "https://") {
+		rawURL = rawURL[len("https://"):]
+	} else if strings.HasPrefix(lower, "http://") {
+		rawURL = rawURL[len("http://"):]
 	}
-	if idx := strings.Index(url, ":"); idx != -1 {
-		url = url[:idx]
+
+	// Security (R3-231): Strip protocol-relative URL prefix.
+	// Without this, //evil.com extracts "//evil.com" which won't match
+	// deny patterns like "evil.com".
+	rawURL = strings.TrimLeft(rawURL, "/")
+
+	// Strip path first
+	if idx := strings.Index(rawURL, "/"); idx != -1 {
+		rawURL = rawURL[:idx]
 	}
-	return url
+
+	// Security: strip userinfo (user:pass@) before extracting host.
+	// Without this, https://user:pass@evil.com extracts "user" instead of
+	// "evil.com", allowing domain deny rule bypass (R3-122).
+	if idx := strings.LastIndex(rawURL, "@"); idx != -1 {
+		rawURL = rawURL[idx+1:]
+	}
+
+	// Strip port
+	if idx := strings.Index(rawURL, ":"); idx != -1 {
+		rawURL = rawURL[:idx]
+	}
+
+	// Security (R3-236): Normalize domain to lowercase.
+	// DNS is case-insensitive (RFC 4343), so EVIL.COM and evil.com are
+	// the same domain. Without this, deny rules for "evil.com" wouldn't
+	// block "EVIL.COM".
+	rawURL = strings.ToLower(rawURL)
+
+	return rawURL
 }
 
 // EvaluateDataFlow checks if an operation violates data flow rules.
@@ -246,9 +345,18 @@ func (e *Evaluator) EvaluateDataFlow(toolName string, toolInput json.RawMessage,
 		currentLabels = append(currentLabels, m.Label)
 	}
 
-	// Check classifications to see what label this tool has
+	// Check classifications to see what label this tool has.
+	// Sort labels for deterministic evaluation — Go map iteration is non-deterministic,
+	// so without sorting, the same input could match different labels on different runs.
+	classifyLabels := make([]string, 0, len(e.policy.DataFlow.Classify))
+	for label := range e.policy.DataFlow.Classify {
+		classifyLabels = append(classifyLabels, label)
+	}
+	sort.Strings(classifyLabels)
+
 	var matchedLabel string
-	for label, patterns := range e.policy.DataFlow.Classify {
+	for _, label := range classifyLabels {
+		patterns := e.policy.DataFlow.Classify[label]
 		for _, pattern := range patterns {
 			if e.matcher.MatchToolPattern(pattern, toolName, inputStr) {
 				matchedLabel = label
@@ -301,7 +409,7 @@ func (e *Evaluator) EvaluateDataFlow(toolName string, toolInput json.RawMessage,
 
 func isReadOperation(toolName string) bool {
 	switch toolName {
-	case "Read", "Glob", "Grep", "WebFetch":
+	case "Read", "Glob", "Grep", "WebFetch", "WebSearch":
 		return true
 	default:
 		return strings.HasPrefix(toolName, "mcp__") && !strings.Contains(toolName, "write")

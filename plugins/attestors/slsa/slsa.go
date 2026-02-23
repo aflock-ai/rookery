@@ -129,6 +129,10 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error {
 	internalParameters := make(map[string]interface{})
 
 	for _, attestor := range ctx.CompletedAttestors() {
+		if attestor.Error != nil {
+			continue
+		}
+
 		switch name := attestor.Attestor.Name(); name {
 		// Pre-material Attestors
 		case environment.Name:
@@ -158,29 +162,42 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error {
 			gh := attestor.Attestor.(github.GitHubAttestor)
 			p.PbProvenance.RunDetails.Builder.ID = GHABuilderId
 			p.PbProvenance.RunDetails.Metadata.InvocationID = gh.Data().PipelineUrl
-			digest := make(map[string]string)
 
 			if gh.Data().JWT == nil {
 				log.Warn("No JWT found in GitHub attestor")
 				continue
 			}
 
-			digest["sha1"] = gh.Data().JWT.Claims["sha"].(string)
+			if sha, ok := gh.Data().JWT.Claims["sha"].(string); ok && sha != "" {
+				digest := make(map[string]string)
+				digest["sha1"] = sha
+				p.PbProvenance.BuildDefinition.ResolvedDependencies = append(
+					p.PbProvenance.BuildDefinition.ResolvedDependencies,
+					&v1.ResourceDescriptor{
+						Digest: digest,
+					})
+			} else {
+				log.Warn("No SHA found in GitHub JWT or SHA is not a string")
+			}
 
 		case gitlab.Name:
 			gl := attestor.Attestor.(gitlab.GitLabAttestor)
 			p.PbProvenance.RunDetails.Builder.ID = GLCBuilderId
 			p.PbProvenance.RunDetails.Metadata.InvocationID = gl.Data().PipelineUrl
-			digest := make(map[string]string)
 
 			if gl.Data().JWT == nil {
 				log.Warn("No JWT found in GitLab attestor")
 				continue
 			}
 
-			sha, found := gl.Data().JWT.Claims["sha"]
-			if found {
-				digest["sha1"] = sha.(string)
+			if sha, ok := gl.Data().JWT.Claims["sha"].(string); ok && sha != "" {
+				digest := make(map[string]string)
+				digest["sha1"] = sha
+				p.PbProvenance.BuildDefinition.ResolvedDependencies = append(
+					p.PbProvenance.BuildDefinition.ResolvedDependencies,
+					&v1.ResourceDescriptor{
+						Digest: digest,
+					})
 			} else {
 				log.Warn("No SHA found in GitLab JWT")
 			}
@@ -269,6 +286,13 @@ func (p *Provenance) Subjects() map[string]cryptoutil.DigestSet {
 	subjects := make(map[string]cryptoutil.DigestSet)
 	for productName, product := range p.products {
 		subjects[fmt.Sprintf("file:%v", productName)] = product.Digest
+	}
+
+	// Include subjects from other attestors (e.g. OCI image digests, tags).
+	// Without this, OCI subjects collected during Attest() are silently dropped,
+	// causing provenance to omit container image references.
+	for k, v := range p.subjects {
+		subjects[k] = v
 	}
 
 	return subjects

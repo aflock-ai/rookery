@@ -21,6 +21,8 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -136,12 +138,14 @@ func TestAttestor_RunType(t *testing.T) {
 func TestAttestor_Attest(t *testing.T) {
 	var tests = []struct {
 		name    string
+		cert    string
 		resp    []testresp
 		errNil  bool
 		errText string
 	}{
 		{
 			"Valid IID",
+			testCert,
 			[]testresp{
 				{"/latest/dynamic/instance-identity/document", iid},
 				{"/latest/dynamic/instance-identity/signature", sig},
@@ -152,6 +156,7 @@ func TestAttestor_Attest(t *testing.T) {
 		},
 		{
 			"No Signature",
+			testCert,
 			[]testresp{
 				{"/latest/dynamic/instance-identity/document", iid},
 				{"/latest/dynamic/instance-identity/signature", ""},
@@ -162,6 +167,7 @@ func TestAttestor_Attest(t *testing.T) {
 		},
 		{
 			"Verification Fail",
+			testCert,
 			[]testresp{
 				{"/latest/dynamic/instance-identity/document", iid},
 				{"/latest/dynamic/instance-identity/signature", badsig},
@@ -172,6 +178,7 @@ func TestAttestor_Attest(t *testing.T) {
 		},
 		{
 			"Bad Signature",
+			testCert,
 			[]testresp{
 				{"/latest/dynamic/instance-identity/document", iid},
 				{"/latest/dynamic/instance-identity/signature", "12345"},
@@ -183,7 +190,7 @@ func TestAttestor_Attest(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		a := New(WithAWSRegionCert(testCert))
+		a := New(WithAWSRegionCert(test.cert))
 
 		t.Run(test.name, func(t *testing.T) {
 			server := initTestServer(t, test.resp)
@@ -207,6 +214,60 @@ func TestAttestor_Attest(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAttestor_Attest_CertFromFile(t *testing.T) {
+	// Write the test cert to a temp file
+	certFile := filepath.Join(t.TempDir(), "region-cert.pem")
+	require.NoError(t, os.WriteFile(certFile, []byte(testCert), 0644))
+
+	// Use the file path instead of inline PEM
+	a := New(WithAWSRegionCert(certFile))
+
+	server := initTestServer(t, GetTestResponses())
+	defer server.Close()
+
+	endpoint := server.URL + "/latest"
+	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithEC2IMDSEndpoint(endpoint))
+	require.NoError(t, err)
+	a.cfg = cfg
+
+	ctx, err := attestation.NewContext("test", []attestation.Attestor{a})
+	require.NoError(t, err)
+	require.NoError(t, a.Attest(ctx))
+}
+
+func TestWithAWSRegionCert_FilePath(t *testing.T) {
+	// Test that WithAWSRegionCert reads from file path
+	certFile := filepath.Join(t.TempDir(), "cert.pem")
+	require.NoError(t, os.WriteFile(certFile, []byte(testCert+"\n"), 0644))
+
+	a := &Attestor{}
+	WithAWSRegionCert(certFile)(a)
+	require.Equal(t, testCert, a.awsCert, "should read cert from file and trim whitespace")
+}
+
+func TestWithAWSRegionCert_InlinePEM(t *testing.T) {
+	// Test that inline PEM strings still work
+	a := &Attestor{}
+	WithAWSRegionCert(testCert)(a)
+	require.Equal(t, testCert, a.awsCert, "should use inline PEM as-is")
+}
+
+func TestWithAWSRegionCert_NonexistentPath(t *testing.T) {
+	// Test that a path that doesn't exist is treated as a PEM string
+	fakePath := "/nonexistent/path/cert.pem"
+	a := &Attestor{}
+	WithAWSRegionCert(fakePath)(a)
+	require.Equal(t, fakePath, a.awsCert, "nonexistent path should be used as-is")
+}
+
+func TestWithAWSRegionCert_Directory(t *testing.T) {
+	// Test that a directory path is not treated as a file
+	dir := t.TempDir()
+	a := &Attestor{}
+	WithAWSRegionCert(dir)(a)
+	require.Equal(t, dir, a.awsCert, "directory path should be used as-is")
 }
 
 func TestAttestor_getIID(t *testing.T) {
@@ -273,6 +334,12 @@ func Test_getAWSPublicKey(t *testing.T) {
 	if key != nil {
 		t.Error("Expected key to be nil")
 	}
+}
+
+func Test_getAWSCAPublicKey_UnknownRegion(t *testing.T) {
+	_, err := getAWSCAPublicKey("xx-nonexistent-99", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "xx-nonexistent-99")
 }
 
 func Test_validateRegionalCerts(t *testing.T) {

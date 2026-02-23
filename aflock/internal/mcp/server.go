@@ -48,7 +48,7 @@ func NewServer() *Server {
 
 	s := &Server{
 		stateManager: state.NewManager(""),
-		sessionID:    fmt.Sprintf("mcp-%d", time.Now().UnixNano()),
+		sessionID:    fmt.Sprintf("mcp-%s", uuid.New().String()),
 		attestDir:    attestDir,
 	}
 
@@ -300,12 +300,16 @@ func (s *Server) signAndStoreAttestation(ctx context.Context, record aflock.Acti
 // storeAttestation writes an attestation envelope to the session's attestations directory.
 func (s *Server) storeAttestation(envelope *attestation.Envelope, toolUseID string) error {
 	dir := s.stateManager.AttestationsDir(s.sessionID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create attestations dir: %w", err)
 	}
 
 	// Generate filename with timestamp and tool use ID prefix
-	filename := fmt.Sprintf("%s-%s.intoto.json", time.Now().Format("20060102-150405"), toolUseID[:8])
+	idPrefix := toolUseID
+	if len(idPrefix) > 8 {
+		idPrefix = idPrefix[:8]
+	}
+	filename := fmt.Sprintf("%s-%s.intoto.json", time.Now().Format("20060102-150405"), idPrefix)
 	path := filepath.Join(dir, filename)
 
 	data, err := json.MarshalIndent(envelope, "", "  ")
@@ -313,7 +317,7 @@ func (s *Server) storeAttestation(envelope *attestation.Envelope, toolUseID stri
 		return fmt.Errorf("marshal envelope: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write attestation: %w", err)
 	}
 
@@ -395,6 +399,11 @@ func (s *Server) handleBash(ctx context.Context, request mcp.CallToolRequest) (*
 		return mcp.NewToolResultError("step parameter is required when attest=true"), nil
 	}
 
+	// Validate: step must not contain path separators (prevent path traversal)
+	if strings.ContainsAny(step, "/\\") || strings.Contains(step, "..") {
+		return mcp.NewToolResultError("step name must not contain path separators or '..'"), nil
+	}
+
 	// Generate tool use ID for this invocation
 	toolUseID := uuid.New().String()
 	inputJSON, _ := json.Marshal(map[string]any{
@@ -427,6 +436,18 @@ func (s *Server) handleBash(ctx context.Context, request mcp.CallToolRequest) (*
 		}
 
 		if decision == aflock.DecisionAsk {
+			s.recordAction("Bash", "ask", policyReason)
+			record := aflock.ActionRecord{
+				Timestamp: time.Now(),
+				ToolName:  "Bash",
+				ToolUseID: toolUseID,
+				ToolInput: inputJSON,
+				Decision:  string(aflock.DecisionAsk),
+				Reason:    policyReason,
+			}
+			if err := s.signAndStoreAttestation(ctx, record); err != nil {
+				fmt.Fprintf(os.Stderr, "[aflock] Warning: failed to sign attestation: %v\n", err)
+			}
 			return mcp.NewToolResultError(fmt.Sprintf("Policy requires approval: %s", policyReason)), nil
 		}
 
@@ -511,9 +532,14 @@ func (s *Server) executeCommand(ctx context.Context, command, workdir string, ti
 		fmt.Fprintf(os.Stderr, "[aflock] Warning: failed to sign attestation: %v\n", signErr)
 	}
 
+	exitCode := -1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+
 	result := map[string]any{
 		"output":   strings.TrimSpace(string(output)),
-		"exitCode": cmd.ProcessState.ExitCode(),
+		"exitCode": exitCode,
 	}
 
 	if err != nil {
@@ -588,7 +614,7 @@ func (s *Server) storeStepAttestation(envelope any, treeHash, step string) error
 		return fmt.Errorf("marshal envelope: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write attestation: %w", err)
 	}
 
@@ -629,6 +655,11 @@ func (s *Server) handleReadFile(ctx context.Context, request mcp.CallToolRequest
 				fmt.Fprintf(os.Stderr, "[aflock] Warning: failed to sign attestation: %v\n", err)
 			}
 			return mcp.NewToolResultError(fmt.Sprintf("Policy denied: %s", reason)), nil
+		}
+
+		if decision == aflock.DecisionAsk {
+			s.recordAction("Read", "ask", reason)
+			return mcp.NewToolResultError(fmt.Sprintf("Policy requires approval: %s", reason)), nil
 		}
 
 		// Check dataFlow rules and track materials (protected by mutex for concurrent access)
@@ -712,26 +743,40 @@ func (s *Server) handleWriteFile(ctx context.Context, request mcp.CallToolReques
 			return mcp.NewToolResultError(fmt.Sprintf("Policy denied: %s", reason)), nil
 		}
 
-		// Check dataFlow rules for writes to classified destinations
+		if decision == aflock.DecisionAsk {
+			s.recordAction("Write", "ask", reason)
+			return mcp.NewToolResultError(fmt.Sprintf("Policy requires approval: %s", reason)), nil
+		}
+
+		// Check dataFlow rules for writes to classified destinations (protected by mutex)
+		s.sessionMu.Lock()
 		sessionState, _ := s.stateManager.Load(s.sessionID)
+		var flowBlocked bool
+		var flowReason string
 		if sessionState != nil && len(sessionState.Materials) > 0 {
-			flowDecision, flowReason, _ := evaluator.EvaluateDataFlow("Write", inputJSON, sessionState.Materials)
+			flowDecision, reason, _ := evaluator.EvaluateDataFlow("Write", inputJSON, sessionState.Materials)
 			if flowDecision == aflock.DecisionDeny {
-				record := aflock.ActionRecord{
-					Timestamp: time.Now(),
-					ToolName:  "Write",
-					ToolUseID: toolUseID,
-					ToolInput: inputJSON,
-					Decision:  string(aflock.DecisionDeny),
-					Reason:    flowReason,
-				}
-				s.recordAction("Write", "deny", flowReason)
-				if err := s.signAndStoreAttestation(ctx, record); err != nil {
-					fmt.Fprintf(os.Stderr, "[aflock] Warning: failed to sign attestation: %v\n", err)
-				}
-				fmt.Fprintf(os.Stderr, "[aflock] BLOCKED data exfiltration: %s\n", flowReason)
-				return mcp.NewToolResultError(fmt.Sprintf("DataFlow policy denied: %s", flowReason)), nil
+				flowBlocked = true
+				flowReason = reason
 			}
+		}
+		s.sessionMu.Unlock()
+
+		if flowBlocked {
+			record := aflock.ActionRecord{
+				Timestamp: time.Now(),
+				ToolName:  "Write",
+				ToolUseID: toolUseID,
+				ToolInput: inputJSON,
+				Decision:  string(aflock.DecisionDeny),
+				Reason:    flowReason,
+			}
+			s.recordAction("Write", "deny", flowReason)
+			if err := s.signAndStoreAttestation(ctx, record); err != nil {
+				fmt.Fprintf(os.Stderr, "[aflock] Warning: failed to sign attestation: %v\n", err)
+			}
+			fmt.Fprintf(os.Stderr, "[aflock] BLOCKED data exfiltration: %s\n", flowReason)
+			return mcp.NewToolResultError(fmt.Sprintf("DataFlow policy denied: %s", flowReason)), nil
 		}
 	}
 
@@ -765,22 +810,40 @@ func (s *Server) handleWriteFile(ctx context.Context, request mcp.CallToolReques
 func (s *Server) handleGetSession(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sessionState, err := s.stateManager.Load(s.sessionID)
 	if err != nil || sessionState == nil {
-		return mcp.NewToolResultText(`{"sessionId": "` + s.sessionID + `", "status": "no session data"}`), nil
+		noData := map[string]string{"sessionId": s.sessionID, "status": "no session data"}
+		noDataJSON, _ := json.MarshalIndent(noData, "", "  ")
+		return mcp.NewToolResultText(string(noDataJSON)), nil
+	}
+
+	policyName := ""
+	if sessionState.Policy != nil {
+		policyName = sessionState.Policy.Name
+	}
+
+	metrics := map[string]any{
+		"turns":        0,
+		"toolCalls":    0,
+		"tokensIn":     0,
+		"tokensOut":    0,
+		"costUSD":      0.0,
+		"filesRead":    0,
+		"filesWritten": 0,
+	}
+	if sessionState.Metrics != nil {
+		metrics["turns"] = sessionState.Metrics.Turns
+		metrics["toolCalls"] = sessionState.Metrics.ToolCalls
+		metrics["tokensIn"] = sessionState.Metrics.TokensIn
+		metrics["tokensOut"] = sessionState.Metrics.TokensOut
+		metrics["costUSD"] = sessionState.Metrics.CostUSD
+		metrics["filesRead"] = len(sessionState.Metrics.FilesRead)
+		metrics["filesWritten"] = len(sessionState.Metrics.FilesWritten)
 	}
 
 	result := map[string]any{
-		"sessionId":  s.sessionID,
-		"policyName": sessionState.Policy.Name,
-		"startedAt":  sessionState.StartedAt,
-		"metrics": map[string]any{
-			"turns":        sessionState.Metrics.Turns,
-			"toolCalls":    sessionState.Metrics.ToolCalls,
-			"tokensIn":     sessionState.Metrics.TokensIn,
-			"tokensOut":    sessionState.Metrics.TokensOut,
-			"costUSD":      sessionState.Metrics.CostUSD,
-			"filesRead":    len(sessionState.Metrics.FilesRead),
-			"filesWritten": len(sessionState.Metrics.FilesWritten),
-		},
+		"sessionId":    s.sessionID,
+		"policyName":   policyName,
+		"startedAt":    sessionState.StartedAt,
+		"metrics":      metrics,
 		"actionsCount": len(sessionState.Actions),
 	}
 
@@ -865,10 +928,14 @@ func computePredicateDigest(predicate interface{}) string {
 }
 
 // recordAction records an action in the session state.
+// Must hold sessionMu or be called from a context where session state
+// is not concurrently accessed.
 func (s *Server) recordAction(toolName, decision, reason string) {
 	if s.policy == nil {
 		return
 	}
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
 	sessionState, _ := s.stateManager.Load(s.sessionID)
 	if sessionState == nil {
 		return
@@ -884,10 +951,14 @@ func (s *Server) recordAction(toolName, decision, reason string) {
 }
 
 // trackFile tracks a file access in the session state.
+// Must hold sessionMu or be called from a context where session state
+// is not concurrently accessed.
 func (s *Server) trackFile(toolName, filePath string) {
 	if s.policy == nil {
 		return
 	}
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
 	sessionState, _ := s.stateManager.Load(s.sessionID)
 	if sessionState == nil {
 		return

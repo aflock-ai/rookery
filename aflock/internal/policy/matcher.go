@@ -2,11 +2,25 @@
 package policy
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/gobwas/glob"
 )
+
+// safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob library
+// can panic on certain patterns that compile successfully but trigger out-of-bounds
+// access during matching. We treat panics as non-matches.
+func safeGlobMatch(g glob.Glob, s string) (matched bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			matched = false
+			err = fmt.Errorf("glob match panicked: %v", r)
+		}
+	}()
+	return g.Match(s), nil
+}
 
 // Matcher handles pattern matching for policy rules.
 type Matcher struct {
@@ -34,7 +48,10 @@ func (m *Matcher) MatchGlob(pattern, value string) bool {
 		}
 		m.globs[pattern] = g
 	}
-	if g.Match(value) {
+	if matched, matchErr := safeGlobMatch(g, value); matchErr != nil {
+		// Glob panicked during match — treat as non-match
+		return false
+	} else if matched {
 		return true
 	}
 
@@ -44,12 +61,17 @@ func (m *Matcher) MatchGlob(pattern, value string) bool {
 		// Convert **/*.go to *.go and try again
 		rootPattern := pattern[3:] // Remove **/ prefix
 		if rootG, ok := m.globs[rootPattern]; ok {
-			return rootG.Match(value)
+			if matched, matchErr := safeGlobMatch(rootG, value); matchErr == nil && matched {
+				return true
+			}
+			return false
 		}
 		rootG, err := glob.Compile(rootPattern)
 		if err == nil {
 			m.globs[rootPattern] = rootG
-			return rootG.Match(value)
+			if matched, matchErr := safeGlobMatch(rootG, value); matchErr == nil && matched {
+				return true
+			}
 		}
 	}
 
@@ -57,11 +79,26 @@ func (m *Matcher) MatchGlob(pattern, value string) bool {
 }
 
 // MatchRegex checks if value matches the regex pattern.
+// If the pattern has no leading ^ anchor or trailing $ anchor, it is
+// automatically wrapped with ^(...)$ to enforce full-string matching and
+// prevent unintended substring matches (R3-127).
+//
+// Security (R3-242): Anchor detection uses HasPrefix/HasSuffix instead of
+// Contains. Previously, ^ or $ anywhere in the pattern (including inside
+// character classes like [^x] or [$]) would suppress auto-anchoring,
+// turning the regex into an unintended substring match.
 func (m *Matcher) MatchRegex(pattern, value string) bool {
 	re, ok := m.regexes[pattern]
 	if !ok {
+		anchored := pattern
+		// Auto-anchor patterns that lack leading ^ or trailing $ anchors.
+		// We check prefix/suffix specifically to avoid false positives from
+		// ^ inside character classes (e.g., [^x]) or $ inside classes ([$]).
+		if !strings.HasPrefix(pattern, "^") && !strings.HasSuffix(pattern, "$") {
+			anchored = "^(" + pattern + ")$"
+		}
 		var err error
-		re, err = regexp.Compile(pattern)
+		re, err = regexp.Compile(anchored)
 		if err != nil {
 			return false
 		}
@@ -93,7 +130,14 @@ func ParseToolPattern(pattern string) (string, string, bool) {
 // MatchToolPattern checks if a tool call matches a pattern.
 // Patterns can be:
 // - "ToolName" - matches tool name exactly
-// - "ToolName:pattern" - matches tool name and command/path pattern
+// - "ToolName:pattern" - matches tool name and command/path pattern (glob only)
+//
+// Security (R3-241): Command patterns are matched using glob ONLY, not regex.
+// Previously, patterns that didn't match as glob were retried as regex. This
+// caused characters with different semantics between glob and regex (|, ., +,
+// etc.) to widen matches. For example, "Bash:git log|rm -rf /" intended as
+// a literal glob would match "rm -rf /" through regex alternation. Glob-only
+// matching eliminates this class of bypass.
 func (m *Matcher) MatchToolPattern(pattern string, toolName string, input string) bool {
 	patternTool, patternCmd, hasCmd := ParseToolPattern(pattern)
 
@@ -107,6 +151,6 @@ func (m *Matcher) MatchToolPattern(pattern string, toolName string, input string
 		return true
 	}
 
-	// Match command/path against pattern
-	return m.MatchGlob(patternCmd, input) || m.MatchRegex(patternCmd, input)
+	// Match command/path against glob pattern only.
+	return m.MatchGlob(patternCmd, input)
 }

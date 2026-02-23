@@ -35,6 +35,9 @@ type ErrRegoInvalidData = rookery.ErrRegoInvalidData
 type ErrPolicyDenied = rookery.ErrPolicyDenied
 type ErrConstraintCheckFailed = rookery.ErrConstraintCheckFailed
 type ErrInvalidOption = rookery.ErrInvalidOption
+type ErrCircularDependency = rookery.ErrCircularDependency
+type ErrSelfReference = rookery.ErrSelfReference
+type ErrDependencyNotVerified = rookery.ErrDependencyNotVerified
 
 // Constants
 const (
@@ -48,6 +51,7 @@ var WithVerifiedSource = rookery.WithVerifiedSource
 var WithSubjectDigests = rookery.WithSubjectDigests
 var WithSearchDepth = rookery.WithSearchDepth
 var WithAiServerURL = rookery.WithAiServerURL
+var WithClockSkewTolerance = rookery.WithClockSkewTolerance
 var EvaluateRegoPolicy = rookery.EvaluateRegoPolicy
 var EvaluateAIPolicy = rookery.EvaluateAIPolicy
 var ExecuteAiPolicy = rookery.ExecuteAiPolicy

@@ -1119,7 +1119,7 @@ func TestVerifySignatureWithCert_ECDSA_Valid(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	if !verifySignatureWithCert(caCert, hash[:], sig) {
+	if !verifySignatureWithCert(caCert, data, hash[:], sig) {
 		t.Error("Expected valid ECDSA signature to verify")
 	}
 }
@@ -1136,7 +1136,7 @@ func TestVerifySignatureWithCert_WrongKey(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	if verifySignatureWithCert(otherCert, hash[:], sig) {
+	if verifySignatureWithCert(otherCert, data, hash[:], sig) {
 		t.Error("Expected signature verification to fail with wrong key")
 	}
 }
@@ -1156,7 +1156,7 @@ func TestVerifySignatureWithCert_CorruptedSig(t *testing.T) {
 	copy(corrupted, sig)
 	corrupted[len(corrupted)-1] ^= 0xFF
 
-	if verifySignatureWithCert(caCert, hash[:], corrupted) {
+	if verifySignatureWithCert(caCert, data, hash[:], corrupted) {
 		t.Error("Expected corrupted signature to fail verification")
 	}
 }
@@ -1172,8 +1172,9 @@ func TestVerifySignatureWithCert_WrongHash(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	wrongHash := sha256.Sum256([]byte("wrong message"))
-	if verifySignatureWithCert(caCert, wrongHash[:], sig) {
+	wrongData := []byte("wrong message")
+	wrongHash := sha256.Sum256(wrongData)
+	if verifySignatureWithCert(caCert, wrongData, wrongHash[:], sig) {
 		t.Error("Expected verification to fail with wrong hash")
 	}
 }

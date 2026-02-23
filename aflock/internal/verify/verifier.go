@@ -721,7 +721,7 @@ func verifyDSSESignatures(payloadType string, payload []byte, signatures []struc
 
 		// Verify the signature against each candidate cert
 		for _, cert := range candidates {
-			if !verifySignatureWithCert(cert, hash[:], sigBytes) {
+			if !verifySignatureWithCert(cert, paeBytes, hash[:], sigBytes) {
 				continue
 			}
 
@@ -748,9 +748,10 @@ func verifyDSSESignatures(payloadType string, payload []byte, signatures []struc
 	return fmt.Errorf("no valid signature from an allowed functionary")
 }
 
-// verifySignatureWithCert verifies a hash+signature against a certificate's public key.
-// Supports ECDSA, RSA (PKCS1v15 and PSS), and Ed25519 key types.
-func verifySignatureWithCert(cert *x509.Certificate, hash, sig []byte) bool {
+// verifySignatureWithCert verifies a signature against a certificate's public key.
+// paeBytes is the raw Pre-Authentication Encoding (used by Ed25519 which signs the raw message).
+// hash is SHA256(paeBytes) (used by ECDSA and RSA which sign a digest).
+func verifySignatureWithCert(cert *x509.Certificate, paeBytes, hash, sig []byte) bool {
 	switch key := cert.PublicKey.(type) {
 	case *ecdsa.PublicKey:
 		return ecdsa.VerifyASN1(key, hash, sig)
@@ -761,9 +762,10 @@ func verifySignatureWithCert(cert *x509.Certificate, hash, sig []byte) bool {
 		}
 		return rsa.VerifyPSS(key, crypto.SHA256, hash, sig, nil) == nil
 	case ed25519PublicKey:
-		// Ed25519 uses the raw message, not a hash — but DSSE always hashes first.
-		// In practice, Ed25519 DSSE signatures sign the hash directly.
-		return ed25519Verify(key, hash, sig)
+		// Ed25519 signs the raw message, not a hash. The rookery DSSE signer
+		// calls ed25519.Sign(key, PAE) directly (unlike ECDSA/RSA which hash first),
+		// so verification must use the raw PAE bytes, not SHA256(PAE).
+		return ed25519Verify(key, paeBytes, sig)
 	default:
 		return false
 	}

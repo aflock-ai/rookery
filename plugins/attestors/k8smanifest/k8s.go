@@ -381,6 +381,16 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 			}
 
 			recorded.Data = cleanBytes
+
+			// Compute the digest of the ephemeral-cleaned document and store it
+			// so that Subjects() can return it for policy verification.
+			ds, err := cryptoutil.CalculateDigestSetFromBytes(cleanBytes, ctx.Hashes())
+			if err != nil {
+				log.Debugf("error computing digest for doc in %s: %v", path, err)
+			} else {
+				a.subjectDigests.Store(recorded.SubjectKey, ds)
+			}
+
 			a.RecordedDocs = append(a.RecordedDocs, recorded)
 
 			parsedAnything = true
@@ -421,7 +431,7 @@ func (a *Attestor) processDoc(doc map[string]interface{}, filePath string) ([]by
 	obj, gvk, err := decode(cleanBytes, nil, nil)
 	if err != nil {
 		err := fmt.Errorf("failed to decode file %s. Continuing: %s", filePath, err.Error())
-		log.Debugf("(attestation/k8smanifest) %w", err)
+		log.Debugf("(attestation/k8smanifest) %v", err)
 		return nil, RecordedObject{}, err
 	}
 
@@ -443,7 +453,7 @@ func (a *Attestor) processDoc(doc map[string]interface{}, filePath string) ([]by
 			o, gvk, err := decode(obj.Raw, nil, nil)
 			if err != nil {
 				err := fmt.Errorf("failed to decode file %s. Continuing: %s", filePath, err.Error())
-				log.Debugf("(attestation/k8smanifest) %w", err)
+				log.Debugf("(attestation/k8smanifest) %v", err)
 				return nil, RecordedObject{}, err
 			}
 
@@ -517,12 +527,18 @@ func (a *Attestor) runRecordClusterInfo() error {
 
 	log.Debugf("(attestation/k8smanifest) checking cluster information for context '%s'", cc)
 
-	if cluster, ok := config.Clusters[cc]; ok {
-		a.ClusterInfo.Server = cluster.Server
-		return nil
+	ctxObj, ok := config.Contexts[cc]
+	if !ok {
+		return fmt.Errorf("unable to find context '%s' in kubernetes config at path '%s'", cc, a.KubeconfigPath)
 	}
 
-	return fmt.Errorf("unable to find context '%s' in kubernetes config at path '%s'", cc, a.KubeconfigPath)
+	cluster, ok := config.Clusters[ctxObj.Cluster]
+	if !ok {
+		return fmt.Errorf("context '%s' references unknown cluster '%s' in kubernetes config at path '%s'", cc, ctxObj.Cluster, a.KubeconfigPath)
+	}
+
+	a.ClusterInfo.Server = cluster.Server
+	return nil
 }
 
 // runDryRun executes kubectl apply --dry-run=server -o json -f -
@@ -732,8 +748,10 @@ func newRecordedImage(image string) RecordedImage {
 		} else {
 			log.Debugf("(attestation/k8smanifest) unrecognised structure for digest '%s'", rc.Reference)
 		}
+	} else if err != nil {
+		log.Debugf("(attestation/k8smanifest) failed to get digest for reference %s: %v", rc.Reference, err)
 	} else {
-		log.Debugf("(attestation/k8smanifest) failed to get digest for reference %s: %s", rc.Reference, err.Error())
+		log.Debugf("(attestation/k8smanifest) empty digest for reference %s", rc.Reference)
 	}
 
 	return rc

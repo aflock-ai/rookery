@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/dsse"
@@ -32,6 +33,7 @@ func (e ErrDuplicateReference) Error() string {
 }
 
 type MemorySource struct {
+	mu                         sync.RWMutex
 	envelopesByReference       map[string]CollectionEnvelope
 	referencesByCollectionName map[string][]string
 	subjectDigestsByReference  map[string]map[string]struct{}
@@ -76,6 +78,9 @@ func (s *MemorySource) LoadBytes(reference string, data []byte) error {
 }
 
 func (s *MemorySource) LoadEnvelope(reference string, env dsse.Envelope) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if _, ok := s.envelopesByReference[reference]; ok {
 		return ErrDuplicateReference(reference)
 	}
@@ -111,6 +116,9 @@ func (s *MemorySource) LoadEnvelope(reference string, env dsse.Envelope) error {
 }
 
 func (s *MemorySource) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionEnvelope, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	matches := make([]CollectionEnvelope, 0)
 	for _, potentialMatchReference := range s.referencesByCollectionName[collectionName] {
 		env, ok := s.envelopesByReference[potentialMatchReference]

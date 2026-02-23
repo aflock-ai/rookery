@@ -30,12 +30,21 @@ func NewHandler() *Handler {
 	}
 }
 
+// maxStdinSize is the maximum bytes we'll read from stdin for hook input.
+// Hook inputs are JSON with tool names, inputs, and session metadata. 10 MB
+// is generous for any legitimate hook invocation. This prevents OOM from
+// adversarial stdin (e.g., piped /dev/urandom).
+const maxStdinSize = 10 * 1024 * 1024 // 10 MB
+
 // Handle reads input from stdin and dispatches to the appropriate handler.
 func (h *Handler) Handle(hookName string) error {
-	// Read input from stdin
-	data, err := io.ReadAll(os.Stdin)
+	// Read input from stdin with size limit to prevent OOM
+	data, err := io.ReadAll(io.LimitReader(os.Stdin, maxStdinSize+1))
 	if err != nil {
 		return fmt.Errorf("read stdin: %w", err)
+	}
+	if len(data) > maxStdinSize {
+		return fmt.Errorf("stdin input too large (> %d bytes)", maxStdinSize)
 	}
 
 	var input aflock.HookInput
@@ -128,7 +137,11 @@ func (h *Handler) buildPolicyContext(pol *aflock.Policy, agentIdentity *identity
 		if agentIdentity.Binary != nil {
 			ctx += fmt.Sprintf("- Binary: %s@%s\n", agentIdentity.Binary.Name, agentIdentity.Binary.Version)
 		}
-		ctx += fmt.Sprintf("- Identity Hash: %s\n\n", agentIdentity.IdentityHash[:16])
+		idHash := agentIdentity.IdentityHash
+		if len(idHash) > 16 {
+			idHash = idHash[:16]
+		}
+		ctx += fmt.Sprintf("- Identity Hash: %s\n\n", idHash)
 	}
 
 	if pol.Limits != nil {
@@ -175,11 +188,16 @@ func (h *Handler) buildPolicyContext(pol *aflock.Policy, agentIdentity *identity
 
 // handlePreToolUse evaluates policy before tool execution.
 func (h *Handler) handlePreToolUse(input *aflock.HookInput) error {
-	// Load session state
-	sessionState, err := h.stateManager.Load(input.SessionID)
-	if err != nil {
-		output.ExitWithWarning(fmt.Sprintf("Failed to load session state: %v", err))
-		return nil
+	// Load session state. If session ID is empty or invalid, treat as no
+	// session state and fall through to ephemeral policy loading below.
+	var sessionState *aflock.SessionState
+	if input.SessionID != "" {
+		var err error
+		sessionState, err = h.stateManager.Load(input.SessionID)
+		if err != nil {
+			output.ExitWithWarning(fmt.Sprintf("Failed to load session state: %v", err))
+			return nil
+		}
 	}
 
 	// If no session state, try to load policy directly (for when SessionStart wasn't run)
@@ -243,11 +261,15 @@ func (h *Handler) handlePreToolUse(input *aflock.HookInput) error {
 
 // handlePostToolUse records tool execution and updates metrics.
 func (h *Handler) handlePostToolUse(input *aflock.HookInput) error {
-	// Load session state
-	sessionState, err := h.stateManager.Load(input.SessionID)
-	if err != nil {
-		output.ExitWithWarning(fmt.Sprintf("Failed to load session state: %v", err))
-		return nil
+	// Load session state. Skip loading if no session ID (ephemeral session).
+	var sessionState *aflock.SessionState
+	if input.SessionID != "" {
+		var err error
+		sessionState, err = h.stateManager.Load(input.SessionID)
+		if err != nil {
+			output.ExitWithWarning(fmt.Sprintf("Failed to load session state: %v", err))
+			return nil
+		}
 	}
 
 	if sessionState == nil {
@@ -479,7 +501,7 @@ func attestationMatchesName(path, name string) bool {
 
 func isFileOperation(toolName string) bool {
 	switch toolName {
-	case "Read", "Write", "Edit", "Glob", "Grep":
+	case "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit":
 		return true
 	default:
 		return false

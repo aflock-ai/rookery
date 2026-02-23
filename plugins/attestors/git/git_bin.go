@@ -83,8 +83,12 @@ func GitGetStatus(workDir string) (map[string]Status, error) {
 	// Iterate over the lines and parse the status
 	gitStatuses := make(map[string]Status)
 	for _, line := range lines {
-		// Skip empty lines
-		if len(line) == 0 {
+		// Skip empty or malformed lines.
+		// git status --porcelain format: XY <space> <path>
+		// Valid lines are at least 4 characters (2 status + space + 1 char path).
+		// Lines shorter than 3 characters cannot have both status codes and a path,
+		// so skip them to avoid a panic on index-out-of-range.
+		if len(line) < 3 {
 			continue
 		}
 

@@ -26,6 +26,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/invopop/jsonschema"
 )
 
@@ -313,26 +314,27 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	subjectName = fmt.Sprintf("authoremail:%v", a.AuthorEmail)
 	ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.AuthorEmail), hashes)
 	if err != nil {
-		return nil
+		log.Debugf("(attestation/git) failed to record author email subject: %v", err)
+	} else {
+		subjects[subjectName] = ds
 	}
-
-	subjects[subjectName] = ds
 
 	// add committer email
 	subjectName = fmt.Sprintf("committeremail:%v", a.CommitterEmail)
 	ds, err = cryptoutil.CalculateDigestSetFromBytes([]byte(a.CommitterEmail), hashes)
 	if err != nil {
-		return nil
+		log.Debugf("(attestation/git) failed to record committer email subject: %v", err)
+	} else {
+		subjects[subjectName] = ds
 	}
-
-	subjects[subjectName] = ds
 
 	// add parent hashes
 	for _, parentHash := range a.ParentHashes {
 		subjectName = fmt.Sprintf("parenthash:%v", parentHash)
 		ds, err = cryptoutil.CalculateDigestSetFromBytes([]byte(parentHash), hashes)
 		if err != nil {
-			return nil
+			log.Debugf("(attestation/git) failed to record parent hash subject: %v", err)
+			continue
 		}
 		subjects[subjectName] = ds
 	}
@@ -341,9 +343,10 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	subjectName = fmt.Sprintf("refnameshort:%v", a.RefNameShort)
 	ds, err = cryptoutil.CalculateDigestSetFromBytes([]byte(a.RefNameShort), hashes)
 	if err != nil {
-		return nil
+		log.Debugf("(attestation/git) failed to record refname short subject: %v", err)
+	} else {
+		subjects[subjectName] = ds
 	}
-	subjects[subjectName] = ds
 
 	return subjects
 }

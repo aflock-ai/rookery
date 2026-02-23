@@ -111,5 +111,13 @@ func Sign(bodyType string, body io.Reader, opts ...SignOption) (Envelope, error)
 		env.Signatures = append(env.Signatures, dsseSig)
 	}
 
+	// Security (R3-155): Ensure at least one signature was actually produced.
+	// The len(so.signers) > 0 check above passes for slices of nil signers,
+	// and the loop skips nil entries. Without this check, an envelope with
+	// zero signatures would be returned without error.
+	if len(env.Signatures) == 0 {
+		return env, fmt.Errorf("no signatures produced: all %d signers were nil or failed", len(so.signers))
+	}
+
 	return env, nil
 }

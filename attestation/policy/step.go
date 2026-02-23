@@ -15,6 +15,7 @@
 package policy
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -27,37 +28,38 @@ import (
 
 // +kubebuilder:object:generate=true
 type Step struct {
-	Name          string        `json:"name"`
-	Functionaries []Functionary `json:"functionaries"`
-	Attestations  []Attestation `json:"attestations"`
-	ArtifactsFrom []string      `json:"artifactsFrom,omitempty"`
+	Name             string        `json:"name" jsonschema:"title=Name,description=Unique name for this step in the policy"`
+	Functionaries    []Functionary `json:"functionaries" jsonschema:"title=Functionaries,description=Authorized signers whose attestations are accepted for this step"`
+	Attestations     []Attestation `json:"attestations" jsonschema:"title=Attestations,description=Required attestation types and their associated policies"`
+	ArtifactsFrom    []string      `json:"artifactsFrom,omitempty" jsonschema:"title=Artifacts From,description=Other step names whose products must match this step's materials"`
+	AttestationsFrom []string      `json:"attestationsFrom,omitempty" jsonschema:"title=Attestations From,description=Other step names whose attestation data is accessible during Rego evaluation"`
 }
 
 // +kubebuilder:object:generate=true
 type Functionary struct {
-	Type           string         `json:"type"`
-	CertConstraint CertConstraint `json:"certConstraint,omitempty"`
-	PublicKeyID    string         `json:"publickeyid,omitempty"`
+	Type           string         `json:"type" jsonschema:"title=Type,description=Type of functionary (publickey or root)"`
+	CertConstraint CertConstraint `json:"certConstraint,omitempty" jsonschema:"title=Certificate Constraint,description=X.509 certificate constraints the functionary must satisfy"`
+	PublicKeyID    string         `json:"publickeyid,omitempty" jsonschema:"title=Public Key ID,description=ID of a public key from the policy's publickeys map"`
 }
 
 // +kubebuilder:object:generate=true
 type AiPolicy struct {
-	Name   string `json:"name"`
-	Prompt string `json:"prompt"`
-	Model  string `json:"model,omitempty"`
+	Name   string `json:"name" jsonschema:"title=Name,description=Human-readable name for this AI policy"`
+	Prompt string `json:"prompt" jsonschema:"title=Prompt,description=Prompt text sent to the AI model for evaluation"`
+	Model  string `json:"model,omitempty" jsonschema:"title=Model,description=AI model to use for evaluation"`
 }
 
 // +kubebuilder:object:generate=true
 type Attestation struct {
-	Type         string       `json:"type"`
-	RegoPolicies []RegoPolicy `json:"regopolicies"`
-	AiPolicies   []AiPolicy   `json:"aipolicies"`
+	Type         string       `json:"type" jsonschema:"title=Type,description=Attestation type URI that must be present in the collection"`
+	RegoPolicies []RegoPolicy `json:"regopolicies" jsonschema:"title=Rego Policies,description=Rego policies to evaluate against the attestation data"`
+	AiPolicies   []AiPolicy   `json:"aipolicies" jsonschema:"title=AI Policies,description=AI-based policies to evaluate against the attestation data"`
 }
 
 // +kubebuilder:object:generate=true
 type RegoPolicy struct {
-	Module []byte `json:"module"`
-	Name   string `json:"name"`
+	Module []byte `json:"module" jsonschema:"title=Module,description=Base64-encoded Rego policy module source code"`
+	Name   string `json:"name" jsonschema:"title=Name,description=Human-readable name for this Rego policy"`
 }
 
 // StepResult contains information about the verified collections for each step.
@@ -183,9 +185,67 @@ func (f Functionary) Validate(verifier cryptoutil.Verifier, trustBundles map[str
 	return nil
 }
 
+// buildStepContext extracts attestation data from already-verified steps referenced
+// by AttestationsFrom. The result is a map[stepName]->map[attestationType]->attestorJSON
+// that gets passed into Rego policy evaluation as input.steps.
+func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepResult) map[string]interface{} {
+	if len(attestationsFrom) == 0 {
+		return nil
+	}
+
+	ctx := make(map[string]interface{})
+	for _, depStep := range attestationsFrom {
+		result, ok := resultsByStep[depStep]
+		if !ok || len(result.Passed) == 0 {
+			continue
+		}
+
+		stepData := make(map[string]interface{})
+		for _, pc := range result.Passed {
+			for _, att := range pc.Collection.Collection.Attestations {
+				// Marshal the attestor to a generic map so Rego can traverse it.
+				b, err := json.Marshal(att.Attestation)
+				if err != nil {
+					log.Debugf("failed to marshal attestation %s from step %s: %v", att.Type, depStep, err)
+					continue
+				}
+				var data interface{}
+				dec := json.NewDecoder(bytes.NewReader(b))
+				dec.UseNumber()
+				if err := dec.Decode(&data); err != nil {
+					log.Debugf("failed to decode attestation %s from step %s: %v", att.Type, depStep, err)
+					continue
+				}
+				stepData[att.Type] = data
+			}
+		}
+		if len(stepData) > 0 {
+			ctx[depStep] = stepData
+		}
+	}
+
+	if len(ctx) == 0 {
+		return nil
+	}
+	return ctx
+}
+
+// checkDependencies verifies that all steps listed in AttestationsFrom have
+// at least one passed collection in the results so far. Returns an error if any
+// dependency has not been verified yet.
+func checkDependencies(attestationsFrom []string, resultsByStep map[string]StepResult) error {
+	for _, dep := range attestationsFrom {
+		result, ok := resultsByStep[dep]
+		if !ok || len(result.Passed) == 0 {
+			return ErrDependencyNotVerified{Step: dep}
+		}
+	}
+	return nil
+}
+
 // validateAttestations will test each collection against to ensure the expected attestations
 // appear in the collection as well as that any rego policies pass for the step.
-func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string) StepResult {
+func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult {
 	result := StepResult{Step: s.Name}
 	if len(collectionResults) <= 0 {
 		return result
@@ -233,9 +293,13 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 					Step:        s.Name,
 					Attestation: expected.Type,
 				}.Error())
+				// Skip policy evaluation — the attestation is missing so there is
+				// nothing to evaluate. Continuing would pass a nil attestor to the
+				// Rego/AI evaluators.
+				continue
 			}
 
-			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies); err != nil {
+			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies, stepContext); err != nil {
 				passed = false
 				reasons = append(reasons, err.Error())
 			}

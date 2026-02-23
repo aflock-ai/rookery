@@ -242,6 +242,103 @@ func TestThreshold(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidThreshold(-10))
 }
 
+// TestDuplicateSignatureDoesNotInflateThreshold verifies that duplicating a valid
+// signature in the envelope cannot inflate the verified count to meet a threshold.
+// This prevents an attacker with one key from meeting a threshold of N by including
+// the same signature N times.
+func TestDuplicateSignatureDoesNotInflateThreshold(t *testing.T) {
+	signer, verifier, err := createTestKey()
+	require.NoError(t, err)
+
+	env, err := Sign("dummydata", bytes.NewReader([]byte("this is some dummy data")), SignWithSigners(signer))
+	require.NoError(t, err)
+
+	// Duplicate the single valid signature 5 times.
+	originalSig := env.Signatures[0]
+	env.Signatures = []Signature{originalSig, originalSig, originalSig, originalSig, originalSig}
+
+	// With threshold=1, verification should pass (one distinct key verified).
+	_, err = env.Verify(VerifyWithVerifiers(verifier), VerifyWithThreshold(1))
+	require.NoError(t, err)
+
+	// With threshold=2, verification MUST fail because only one distinct key
+	// signed the envelope, despite 5 copies of that signature.
+	_, err = env.Verify(VerifyWithVerifiers(verifier), VerifyWithThreshold(2))
+	require.Error(t, err)
+	var thresholdErr ErrThresholdNotMet
+	require.ErrorAs(t, err, &thresholdErr)
+	assert.Equal(t, 1, thresholdErr.Actual, "only 1 distinct key should be counted")
+	assert.Equal(t, 2, thresholdErr.Theshold)
+}
+
+// TestDuplicateSignatureDoesNotBypassThreshold is an additional regression test
+// verifying that replayed signatures from the same key cannot meet a threshold.
+func TestDuplicateSignatureDoesNotBypassThreshold(t *testing.T) {
+	signer, verifier, err := createTestKey()
+	require.NoError(t, err)
+
+	env, err := Sign("dummydata", bytes.NewReader([]byte("this is some dummy data")), SignWithSigners(signer))
+	require.NoError(t, err)
+
+	// Duplicate the single signature to simulate an attacker replaying the
+	// same signature multiple times in an attempt to meet a higher threshold.
+	originalSig := env.Signatures[0]
+	env.Signatures = []Signature{originalSig, originalSig, originalSig}
+
+	// With threshold=1, verification should still succeed (one unique key is enough).
+	_, err = env.Verify(VerifyWithVerifiers(verifier), VerifyWithThreshold(1))
+	require.NoError(t, err)
+
+	// With threshold=3, the duplicated signatures from the same key must NOT
+	// satisfy the threshold. Only one unique KeyID actually verified.
+	_, err = env.Verify(VerifyWithVerifiers(verifier), VerifyWithThreshold(3))
+	require.ErrorIs(t, err, ErrThresholdNotMet{Theshold: 3, Actual: 1})
+}
+
+// TestDistinctSignersMeetThreshold verifies that N distinct signers still meet
+// a threshold of N after the deduplication fix.
+func TestDistinctSignersMeetThreshold(t *testing.T) {
+	signers := []cryptoutil.Signer{}
+	verifiers := []cryptoutil.Verifier{}
+	for i := 0; i < 3; i++ {
+		s, v, err := createTestKey()
+		require.NoError(t, err)
+		signers = append(signers, s)
+		verifiers = append(verifiers, v)
+	}
+
+	env, err := Sign("dummydata", bytes.NewReader([]byte("this is some dummy data")), SignWithSigners(signers...))
+	require.NoError(t, err)
+
+	// 3 distinct signers should meet threshold=3.
+	_, err = env.Verify(VerifyWithVerifiers(verifiers...), VerifyWithThreshold(3))
+	require.NoError(t, err, "3 distinct signers should meet threshold of 3")
+}
+
+// TestSingleSignerCannotMeetHighThreshold verifies that a single signer cannot
+// meet a threshold higher than 1, regardless of how many signatures are present.
+// This simulates an attacker who has one valid key and copies the signature many times.
+func TestSingleSignerCannotMeetHighThreshold(t *testing.T) {
+	signer, verifier, err := createTestKey()
+	require.NoError(t, err)
+
+	env, err := Sign("dummydata", bytes.NewReader([]byte("this is some dummy data")), SignWithSigners(signer))
+	require.NoError(t, err)
+	require.Len(t, env.Signatures, 1)
+
+	// Attacker duplicates the single valid signature 10 times.
+	originalSig := env.Signatures[0]
+	env.Signatures = make([]Signature, 10)
+	for i := range env.Signatures {
+		env.Signatures[i] = originalSig
+	}
+	assert.Equal(t, 10, len(env.Signatures), "should have 10 signatures")
+
+	// Despite 10 signatures, only 1 distinct key signed.
+	_, err = env.Verify(VerifyWithVerifiers(verifier), VerifyWithThreshold(2))
+	require.Error(t, err, "single signer cannot meet threshold of 2 regardless of signature count")
+}
+
 func TestTimestamp(t *testing.T) {
 	root, rootPriv, err := createRoot()
 	require.NoError(t, err)

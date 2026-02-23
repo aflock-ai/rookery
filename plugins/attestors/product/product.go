@@ -27,9 +27,23 @@ import (
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	"github.com/aflock-ai/rookery/attestation/file"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/invopop/jsonschema"
 )
+
+// safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob library
+// can panic on certain patterns that compile successfully but trigger out-of-bounds
+// access during matching. We treat panics as non-matches.
+func safeGlobMatch(g glob.Glob, s string) (matched bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			matched = false
+			err = fmt.Errorf("glob match panicked: %v", r)
+		}
+	}()
+	return g.Match(s), nil
+}
 
 const (
 	ProductName    = "product"
@@ -206,7 +220,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		}
 	}
 
-	products, err := file.RecordArtifacts(ctx.WorkingDir(), a.baseArtifacts, ctx.Hashes(), map[string]struct{}{}, processWasTraced, openedFileSet, ctx.DirHashGlob())
+	products, err := file.RecordArtifacts(ctx.WorkingDir(), a.baseArtifacts, ctx.Hashes(), map[string]struct{}{}, processWasTraced, openedFileSet, ctx.DirHashGlob(), a.compiledIncludeGlob, a.compiledExcludeGlob)
 	if err != nil {
 		return err
 	}
@@ -241,12 +255,20 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 		// to match glob patterns which always use forward slashes
 		normalizedPath := filepath.ToSlash(productName)
 
-		if a.compiledExcludeGlob != nil && a.compiledExcludeGlob.Match(normalizedPath) {
-			continue
+		if a.compiledExcludeGlob != nil {
+			if matched, err := safeGlobMatch(a.compiledExcludeGlob, normalizedPath); err != nil {
+				log.Debugf("exclude glob match error for path %q: %v", normalizedPath, err)
+			} else if matched {
+				continue
+			}
 		}
 
-		if a.compiledIncludeGlob != nil && !a.compiledIncludeGlob.Match(normalizedPath) {
-			continue
+		if a.compiledIncludeGlob != nil {
+			if matched, err := safeGlobMatch(a.compiledIncludeGlob, normalizedPath); err != nil {
+				log.Debugf("include glob match error for path %q: %v", normalizedPath, err)
+			} else if !matched {
+				continue
+			}
 		}
 
 		subjectType := "file"
@@ -279,32 +301,30 @@ func IsCycloneDXJson(buf []byte) bool {
 	return bytes.Contains(header, []byte(`"bomFormat":"CycloneDX"`)) || bytes.Contains(header, []byte(`"bomFormat": "CycloneDX"`))
 }
 
-func getFileContentType(fileName string) (string, error) {
-	// Add SPDX JSON detector
+func init() {
+	// Register custom MIME type detectors once at startup, not on every call.
 	mimetype.Lookup("application/json").Extend(func(buf []byte, limit uint32) bool {
 		return IsSPDXJson(buf)
 	}, "application/spdx+json", ".spdx.json")
 
-	// Add CycloneDx JSON detector
 	mimetype.Lookup("application/json").Extend(func(buf []byte, limit uint32) bool {
 		return IsCycloneDXJson(buf)
 	}, "application/vnd.cyclonedx+json", ".cdx.json")
 
-	// Add CycloneDx XML detector
 	mimetype.Lookup("text/xml").Extend(func(buf []byte, limit uint32) bool {
 		return bytes.HasPrefix(buf, []byte(`<?xml version="1.0" encoding="UTF-8"?><bom xmlns="http://cyclonedx.org/schema/bom/`))
 	}, "application/vnd.cyclonedx+xml", ".cdx.xml")
 
-	// Add Vex JSON detector
 	mimetype.Lookup("application/json").Extend(func(buf []byte, limit uint32) bool {
 		return bytes.HasPrefix(buf, []byte(`{"@context":"https://openvex.dev/ns`))
 	}, "application/vex+json", ".vex.json")
 
-	// Add sha256 digest detector
 	mimetype.Lookup("text/plain").Extend(func(buf []byte, limit uint32) bool {
 		return bytes.HasPrefix(buf, []byte(`sha256:`))
 	}, "text/sha256+text", ".sha256")
+}
 
+func getFileContentType(fileName string) (string, error) {
 	contentType, err := mimetype.DetectFile(fileName)
 	if err != nil {
 		return "", err

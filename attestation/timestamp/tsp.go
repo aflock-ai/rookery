@@ -113,15 +113,17 @@ func (t TSPTimestamper) Timestamp(ctx context.Context, r io.Reader) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted:
 	default:
 		return nil, fmt.Errorf("request to timestamp authority failed: %v", resp.Status)
 	}
-
-	defer resp.Body.Close()
-	bodyBytes, err := io.ReadAll(resp.Body)
+	// Limit response size to prevent OOM from a malicious/compromised TSA.
+	// TSP responses are typically a few KB; 1MB is very generous.
+	const maxTSAResponseSize = 1 << 20 // 1MB
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxTSAResponseSize))
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +171,10 @@ func NewVerifier(opts ...TSPVerifierOption) TSPVerifier {
 }
 
 func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) (time.Time, error) {
+	if v.certChain == nil {
+		return time.Time{}, fmt.Errorf("timestamp verification requires certificate chain: use VerifyWithCerts option")
+	}
+
 	tsrBytes, err := io.ReadAll(tsrData)
 	if err != nil {
 		return time.Time{}, err
@@ -179,7 +185,16 @@ func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) 
 		return time.Time{}, err
 	}
 
-	hashedData, err := cryptoutil.Digest(signedData, v.hash)
+	// Use the hash algorithm from the TSP token itself, not the verifier's default.
+	// The TSA hashed the data with whatever algorithm was in the request; we must
+	// re-hash with the same algorithm to get a matching digest. Using v.hash would
+	// silently fail when timestamper and verifier use different algorithms.
+	tokenHash := ts.HashAlgorithm
+	if !tokenHash.Available() {
+		return time.Time{}, fmt.Errorf("timestamp token uses unavailable hash algorithm: %v", tokenHash)
+	}
+
+	hashedData, err := cryptoutil.Digest(signedData, tokenHash)
 	if err != nil {
 		return time.Time{}, err
 	}

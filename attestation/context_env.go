@@ -15,6 +15,8 @@
 package attestation
 
 func (ctx *AttestationContext) EnvironmentCapturer() EnvironmentCapturer {
+	ctx.mutex.RLock()
+	defer ctx.mutex.RUnlock()
 	return ctx.environmentCapturer
 }
 

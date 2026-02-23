@@ -24,7 +24,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -38,6 +37,8 @@ const (
 	RunType = attestation.PostProductRunType
 
 	mimeTypes = "application/x-tar"
+
+	maxTarEntrySize = 256 * 1024 * 1024 // 256 MB
 )
 
 // This is a hacky way to create a compile time error in case the attestor
@@ -103,16 +104,17 @@ func (m *Manifest) getImageID(ctx *attestation.AttestationContext, tarFilePath s
 		}
 
 		if h.Name == m.Config {
-
+			if h.Size < 0 || h.Size > maxTarEntrySize {
+				return nil, fmt.Errorf("config entry has invalid size: %d", h.Size)
+			}
 			b := make([]byte, h.Size)
-			_, err := tarReader.Read(b)
-			if err != nil && err != io.EOF {
-				return nil, err
+			if _, err := io.ReadFull(tarReader, b); err != nil {
+				return nil, fmt.Errorf("failed to read config: %w", err)
 			}
 
 			imageID, err := cryptoutil.CalculateDigestSetFromBytes(b, ctx.Hashes())
 			if err != nil {
-				log.Debugf("(attestation/oci) error calculating image id: %w", err)
+				log.Debugf("(attestation/oci) error calculating image id: %v", err)
 				return nil, err
 			}
 
@@ -144,18 +146,22 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	if err := a.getCandidate(ctx); err != nil {
-		log.Debugf("(attestation/oci) error getting candidate: %w", err)
+		log.Debugf("(attestation/oci) error getting candidate: %v", err)
 		return err
 	}
 
 	if err := a.parseMaifest(ctx); err != nil {
-		log.Debugf("(attestation/oci) error parsing manifest: %w", err)
+		log.Debugf("(attestation/oci) error parsing manifest: %v", err)
 		return err
+	}
+
+	if len(a.Manifest) == 0 {
+		return fmt.Errorf("manifest.json contains no entries")
 	}
 
 	imageID, err := a.Manifest[0].getImageID(ctx, a.tarFilePath)
 	if err != nil {
-		log.Debugf("(attestation/oci) error getting image id: %w", err)
+		log.Debugf("(attestation/oci) error getting image id: %v", err)
 		return err
 	}
 
@@ -179,17 +185,19 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	}
 
 	for path, product := range products {
-		if !strings.Contains(mimeTypes, product.MimeType) {
+		if product.MimeType != mimeTypes {
 			continue
 		}
 
 		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
 		if newDigestSet == nil || err != nil {
-			return fmt.Errorf("error calculating digest set from file: %s", path)
+			log.Debugf("(attestation/oci) error calculating digest set from file %s: %v", path, err)
+			continue
 		}
 
 		if !newDigestSet.Equal(product.Digest) {
-			return fmt.Errorf("integrity error: product digest set does not match candidate digest set")
+			log.Debugf("(attestation/oci) integrity error for %s: product digest does not match candidate", path)
+			continue
 		}
 
 		a.TarDigest = product.Digest
@@ -206,6 +214,7 @@ func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
 		err = fmt.Errorf("error opening tar file: %w", err)
 		return err
 	}
+	defer f.Close()
 
 	tarReader := tar.NewReader(f)
 	for {
@@ -222,10 +231,12 @@ func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
 			continue
 		}
 		if h.Name == "manifest.json" {
+			if h.Size < 0 || h.Size > maxTarEntrySize {
+				return fmt.Errorf("manifest entry has invalid size: %d", h.Size)
+			}
 			a.ManifestRaw = make([]byte, h.Size)
-			_, err = tarReader.Read(a.ManifestRaw)
-			if err != nil || err == io.EOF {
-				break
+			if _, err = io.ReadFull(tarReader, a.ManifestRaw); err != nil {
+				return fmt.Errorf("failed to read manifest: %w", err)
 			}
 			break
 		}
@@ -257,7 +268,7 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	for _, tag := range a.ImageTags {
 		hash, err := cryptoutil.CalculateDigestSetFromBytes([]byte(tag), hashes)
 		if err != nil {
-			log.Debugf("(attestation/oci) error calculating image tag: %w", err)
+			log.Debugf("(attestation/oci) error calculating image tag: %v", err)
 			continue
 		}
 		subj[fmt.Sprintf("imagetag:%s", tag)] = hash
@@ -293,11 +304,12 @@ func (m *Manifest) getLayerDIFFIDs(ctx *attestation.AttestationContext, tarFileP
 		}
 		for _, layerFile := range m.Layers {
 			if h.Name == layerFile {
+				if h.Size < 0 || h.Size > maxTarEntrySize {
+					return nil, fmt.Errorf("layer entry has invalid size: %d", h.Size)
+				}
 				b := make([]byte, h.Size)
-
-				_, err := tarReader.Read(b)
-				if err != nil && err != io.EOF {
-					return nil, err
+				if _, err := io.ReadFull(tarReader, b); err != nil {
+					return nil, fmt.Errorf("failed to read layer: %w", err)
 				}
 
 				contentType := http.DetectContentType(b)
@@ -306,10 +318,16 @@ func (m *Manifest) getLayerDIFFIDs(ctx *attestation.AttestationContext, tarFileP
 					if err != nil {
 						return nil, err
 					}
-					defer breader.Close()
-					c, err := io.ReadAll(breader)
+					// Limit decompressed size to prevent gzip bombs. The decompressed
+					// layer could be orders of magnitude larger than the compressed size.
+					const maxDecompressedSize = maxTarEntrySize
+					c, err := io.ReadAll(io.LimitReader(breader, maxDecompressedSize+1))
+					breader.Close()
 					if err != nil {
 						return nil, err
+					}
+					if int64(len(c)) > maxDecompressedSize {
+						return nil, fmt.Errorf("decompressed layer exceeds maximum size of %d bytes", maxDecompressedSize)
 					}
 					layerDiffID, err := cryptoutil.CalculateDigestSetFromBytes(c, ctx.Hashes())
 					if err != nil {

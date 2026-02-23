@@ -73,7 +73,7 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	if err := a.getCandidate(ctx); err != nil {
-		log.Debugf("(attestation/vex) error getting candidate: %w", err)
+		log.Debugf("(attestation/vex) error getting candidate: %v", err)
 		return err
 	}
 
@@ -90,26 +90,31 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	for path, product := range products {
 		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
 		if newDigestSet == nil || err != nil {
-			return fmt.Errorf("error calculating digest set from file: %s", path)
+			log.Debugf("(attestation/vex) error calculating digest set from file %s: %v", path, err)
+			continue
 		}
 
 		if !newDigestSet.Equal(product.Digest) {
-			return fmt.Errorf("integrity error: product digest set does not match candidate digest set")
+			log.Debugf("(attestation/vex) integrity error for %s: product digest does not match", path)
+			continue
 		}
 
 		f, err := os.Open(path)
 		if err != nil {
-			return fmt.Errorf("error opening file: %s", path)
+			log.Debugf("(attestation/vex) error opening file %s: %v", path, err)
+			continue
 		}
 
 		reportBytes, err := io.ReadAll(f)
+		f.Close()
 		if err != nil {
-			return fmt.Errorf("error reading file: %s", path)
+			log.Debugf("(attestation/vex) error reading file %s: %v", path, err)
+			continue
 		}
 
 		// Check to see if we can unmarshal into VEX type
 		if err := json.Unmarshal(reportBytes, &a.VEXDocument); err != nil {
-			log.Debugf("(attestation/vex) error unmarshaling VEX document: %w", err)
+			log.Debugf("(attestation/vex) error unmarshaling VEX document: %v", err)
 			continue
 		}
 

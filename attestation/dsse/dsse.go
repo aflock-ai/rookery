@@ -34,9 +34,13 @@ func (e ErrNoMatchingSigs) Error() string {
 	mess := "no valid signatures for the provided verifiers found for keyids:\n"
 	for _, v := range e.Verifiers {
 		if v.Error != nil {
-			kid, err := v.Verifier.KeyID()
-			if err != nil {
-				log.Warnf("failed to get key id from verifier: %w", err)
+			kid := "<nil verifier>"
+			if v.Verifier != nil {
+				var err error
+				kid, err = v.Verifier.KeyID()
+				if err != nil {
+					log.Warnf("failed to get key id from verifier: %v", err)
+				}
 			}
 
 			s := fmt.Sprintf("  %s: %v\n", kid, v.Error)
@@ -65,17 +69,17 @@ func (e ErrInvalidThreshold) Error() string {
 const PemTypeCertificate = "CERTIFICATE"
 
 type Envelope struct {
-	Payload     []byte      `json:"payload"`
-	PayloadType string      `json:"payloadType"`
-	Signatures  []Signature `json:"signatures"`
+	Payload     []byte      `json:"payload" jsonschema:"title=Payload,description=Base64-encoded payload data"`
+	PayloadType string      `json:"payloadType" jsonschema:"title=Payload Type,description=Media type describing the payload format"`
+	Signatures  []Signature `json:"signatures" jsonschema:"title=Signatures,description=List of signatures over the payload"`
 }
 
 type Signature struct {
-	KeyID         string               `json:"keyid"`
-	Signature     []byte               `json:"sig"`
-	Certificate   []byte               `json:"certificate,omitempty"`
-	Intermediates [][]byte             `json:"intermediates,omitempty"`
-	Timestamps    []SignatureTimestamp `json:"timestamps,omitempty"`
+	KeyID         string               `json:"keyid" jsonschema:"title=Key ID,description=Identifier of the key used to create this signature"`
+	Signature     []byte               `json:"sig" jsonschema:"title=Signature,description=Base64-encoded signature value"`
+	Certificate   []byte               `json:"certificate,omitempty" jsonschema:"title=Certificate,description=PEM-encoded signing certificate"`
+	Intermediates [][]byte             `json:"intermediates,omitempty" jsonschema:"title=Intermediates,description=PEM-encoded intermediate certificates in the chain"`
+	Timestamps    []SignatureTimestamp `json:"timestamps,omitempty" jsonschema:"title=Timestamps,description=Trusted timestamps for this signature"`
 }
 
 type SignatureTimestampType string
@@ -83,8 +87,8 @@ type SignatureTimestampType string
 const TimestampRFC3161 SignatureTimestampType = "tsp"
 
 type SignatureTimestamp struct {
-	Type SignatureTimestampType `json:"type"`
-	Data []byte                 `json:"data"`
+	Type SignatureTimestampType `json:"type" jsonschema:"title=Type,description=Type of timestamp (tsp for RFC 3161)"`
+	Data []byte                 `json:"data" jsonschema:"title=Data,description=Base64-encoded timestamp data"`
 }
 
 // preauthEncode wraps the data to be signed or verified and it's type in the DSSE protocol's
