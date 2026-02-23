@@ -36,5 +36,5 @@ func getSyscallArgs(regs unix.PtraceRegs) []uintptr {
 }
 
 func getNativeUint(n int) uint64 {
-	return uint64(n)
+	return uint64(n) //nolint:gosec
 }

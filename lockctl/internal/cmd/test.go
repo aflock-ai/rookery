@@ -380,7 +380,7 @@ func runForbiddenPatterns(from string) checkResult { //nolint:gocognit,gocyclo /
 			trimmed := strings.TrimSpace(addedLine)
 			if !strings.HasPrefix(trimmed, "//") && !strings.Contains(trimmed, "func init(") && !strings.Contains(trimmed, `"`) {
 				violations = append(violations, violation{
-					category: "panic() outside init",
+					category: panicCall + ") outside init",
 					lines:    []string{fmt.Sprintf("%s: %s", currentFile, trimmed)},
 				})
 			}
