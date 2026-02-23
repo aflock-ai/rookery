@@ -162,7 +162,7 @@ func (p *ptraceContext) nextSyscall(pid int) error {
 	return nil
 }
 
-func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //nolint:gocognit,gocyclo
+func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //nolint:gocognit,gocyclo,funlen
 	argArray := getSyscallArgs(regs)
 	syscallId := getSyscallId(regs)
 
