@@ -26,6 +26,7 @@ use (
 	./plugins/attestors/gcp-iit
 	./plugins/attestors/git
 	./plugins/attestors/github
+	./plugins/attestors/githubaction
 	./plugins/attestors/githubwebhook
 	./plugins/attestors/gitlab
 	./plugins/attestors/jenkins

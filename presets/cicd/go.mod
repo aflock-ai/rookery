@@ -14,6 +14,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/git => ../../plugins/atte
 
 replace github.com/aflock-ai/rookery/plugins/attestors/github => ../../plugins/attestors/github
 
+replace github.com/aflock-ai/rookery/plugins/attestors/githubaction => ../../plugins/attestors/githubaction
+
 replace github.com/aflock-ai/rookery/plugins/attestors/gitlab => ../../plugins/attestors/gitlab
 
 replace github.com/aflock-ai/rookery/plugins/attestors/jwt => ../../plugins/attestors/jwt
@@ -38,6 +40,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/environment v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/git v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/github v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/githubaction v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gitlab v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/material v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/product v0.0.0-00010101000000-000000000000
