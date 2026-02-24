@@ -48,7 +48,7 @@ type BuildOptions struct {
 
 // LoadManifest loads a manifest from a YAML file
 func LoadManifest(path string) (*Manifest, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is caller-provided manifest path
 	if err != nil {
 		return nil, fmt.Errorf("failed to read manifest file: %w", err)
 	}

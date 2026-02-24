@@ -6,11 +6,15 @@ replace github.com/aflock-ai/rookery/attestation => ../../attestation
 
 replace github.com/aflock-ai/rookery/plugins/attestors/commandrun => ../../plugins/attestors/commandrun
 
+replace github.com/aflock-ai/rookery/plugins/attestors/configuration => ../../plugins/attestors/configuration
+
 replace github.com/aflock-ai/rookery/plugins/attestors/environment => ../../plugins/attestors/environment
 
 replace github.com/aflock-ai/rookery/plugins/attestors/git => ../../plugins/attestors/git
 
 replace github.com/aflock-ai/rookery/plugins/attestors/github => ../../plugins/attestors/github
+
+replace github.com/aflock-ai/rookery/plugins/attestors/githubaction => ../../plugins/attestors/githubaction
 
 replace github.com/aflock-ai/rookery/plugins/attestors/gitlab => ../../plugins/attestors/gitlab
 
@@ -32,9 +36,11 @@ replace github.com/aflock-ai/rookery/plugins/signers/file => ../../plugins/signe
 
 require (
 	github.com/aflock-ai/rookery/plugins/attestors/commandrun v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/configuration v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/environment v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/git v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/github v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/githubaction v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gitlab v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/material v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/product v0.0.0-00010101000000-000000000000

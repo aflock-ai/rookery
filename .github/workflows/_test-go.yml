@@ -44,9 +44,15 @@ jobs:
             echo "Coverage profiling enabled"
           fi
 
-          echo "Running: go test $TEST_ARGS ./..."
-          # shellcheck disable=SC2086
-          go test $TEST_ARGS ./...
+          echo "Running: go test $TEST_ARGS on all workspace modules"
+          # go.work doesn't support ./... from repo root, iterate workspace members
+          for dir in $(grep '^\s*\./' go.work | sed 's/^[[:space:]]*//' | sed 's|^\.\/||'); do
+            echo "════════════════════════════════════════════════════════════"
+            echo "  testing $dir"
+            echo "════════════════════════════════════════════════════════════"
+            # shellcheck disable=SC2086
+            (cd "$dir" && go test $TEST_ARGS ./...) || exit 1
+          done
 
       - name: Check coverage baseline
         if: inputs.coverage

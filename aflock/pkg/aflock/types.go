@@ -68,6 +68,28 @@ type WebFetchToolInput struct {
 	Prompt string `json:"prompt,omitempty"`
 }
 
+// GrepToolInput represents the input for the Grep tool.
+type GrepToolInput struct {
+	Pattern string `json:"pattern"`
+	Path    string `json:"path,omitempty"`
+}
+
+// GlobToolInput represents the input for the Glob tool.
+type GlobToolInput struct {
+	Pattern string `json:"pattern"`
+	Path    string `json:"path,omitempty"`
+}
+
+// WebSearchToolInput represents the input for the WebSearch tool.
+type WebSearchToolInput struct {
+	Query string `json:"query"`
+}
+
+// NotebookEditToolInput represents the input for the NotebookEdit tool.
+type NotebookEditToolInput struct {
+	NotebookPath string `json:"notebook_path"`
+}
+
 // PermissionDecision represents the decision for PreToolUse hooks.
 type PermissionDecision string
 

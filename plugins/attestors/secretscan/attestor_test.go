@@ -30,9 +30,9 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
 	"github.com/aflock-ai/rookery/plugins/attestors/secretscan/testdata"
-	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/zricethezav/gitleaks/v8/detect"
@@ -490,7 +490,7 @@ func TestFailOnDetection(t *testing.T) {
 
 	// Also create a temporary "fake" secret to ensure we have something to find
 	// This is for testing only - it manually adds a finding to the attestor
-	fakeSecretHelper := func(ctx *attestation.AttestationContext, secretscanAttestor *Attestor) {
+	fakeSecretHelper := func(_ *attestation.AttestationContext, secretscanAttestor *Attestor) {
 		// Create a digest set for the fake finding
 		digestSet := make(cryptoutil.DigestSet)
 		digestSet[cryptoutil.DigestValue{Hash: crypto.SHA256}] = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
@@ -995,7 +995,7 @@ func TestSecretFormat(t *testing.T) {
 
 	// Create a detector
 	mockDetector, err := detect.NewDetectorDefaultConfig()
-	if err == nil && mockDetector != nil {
+	if err == nil && mockDetector != nil { //nolint:nestif // test assertion logic
 		findings, err := attestor.ScanFile(testFile, mockDetector)
 		if err == nil && len(findings) > 0 {
 			for _, finding := range findings {

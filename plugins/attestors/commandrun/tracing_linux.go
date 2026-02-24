@@ -112,12 +112,12 @@ func (p *ptraceContext) runTrace() error {
 		if status.Stopped() && isPtraceTrap {
 			injectedSig = 0
 			if err := p.nextSyscall(pid); err != nil {
-				log.Debugf("(tracing) got error while processing syscall: %w", err)
+				log.Debugf("(tracing) got error while processing syscall: %v", err)
 			}
 		}
 
 		if err := unix.PtraceSyscall(pid, injectedSig); err != nil {
-			log.Debugf("(tracing) got error from ptrace syscall: %w", err)
+			log.Debugf("(tracing) got error from ptrace syscall: %v", err)
 		}
 	}
 }
@@ -162,7 +162,7 @@ func (p *ptraceContext) nextSyscall(pid int) error {
 	return nil
 }
 
-func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error {
+func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //nolint:gocognit,gocyclo,funlen
 	argArray := getSyscallArgs(regs)
 	syscallId := getSyscallId(regs)
 
@@ -182,7 +182,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error {
 		status := fmt.Sprintf("/proc/%d/status", procInfo.ProcessID)
 
 		// read status file and set attributes on success
-		statusFile, err := os.ReadFile(status)
+		statusFile, err := os.ReadFile(status) //nolint:gosec
 		if err == nil {
 			procInfo.SpecBypassIsVuln = getSpecBypassIsVulnFromStatus(statusFile)
 			ppid, err := getPPIDFromStatus(statusFile)
@@ -191,17 +191,17 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error {
 			}
 		}
 
-		comm, err := os.ReadFile(commLocation)
+		comm, err := os.ReadFile(commLocation) //nolint:gosec
 		if err == nil {
 			procInfo.Comm = cleanString(string(comm))
 		}
 
-		environ, err := os.ReadFile(envinLocation)
+		environ, err := os.ReadFile(envinLocation) //nolint:gosec
 		if err == nil && p.environmentCapturer != nil {
 			allVars := strings.Split(string(environ), "\x00")
 
-			env := make([]string, 0)
 			capturedEnv := p.environmentCapturer.Capture(allVars)
+			env := make([]string, 0, len(capturedEnv))
 			for k, v := range capturedEnv {
 				env = append(env, fmt.Sprintf("%s=%s", k, v))
 			}
@@ -209,7 +209,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error {
 			procInfo.Environ = strings.Join(env, " ")
 		}
 
-		cmdline, err := os.ReadFile(cmdlineLocation)
+		cmdline, err := os.ReadFile(cmdlineLocation) //nolint:gosec // G304: reading /proc/<pid>/cmdline
 		if err == nil {
 			procInfo.Cmdline = cleanString(string(cmdline))
 		}
@@ -264,7 +264,7 @@ func (ctx *ptraceContext) getProcInfo(pid int) *ProcessInfo {
 }
 
 func (ctx *ptraceContext) procInfoArray() []ProcessInfo {
-	processes := make([]ProcessInfo, 0)
+	processes := make([]ProcessInfo, 0, len(ctx.processes))
 	for _, procInfo := range ctx.processes {
 		processes = append(processes, *procInfo)
 	}
@@ -297,6 +297,10 @@ func (ctx *ptraceContext) readSyscallReg(pid int, addr uintptr, n int) (string, 
 
 	// don't want to use cgo... look for the first 0 byte for the end of the c string
 	size := bytes.IndexByte(data, 0)
+	if size < 0 {
+		// No null terminator found; use the full buffer.
+		size = numBytes
+	}
 	return string(data[:size]), nil
 }
 
@@ -310,12 +314,15 @@ func getPPIDFromStatus(status []byte) (int, error) {
 	for _, line := range lines {
 		if strings.Contains(line, "PPid:") {
 			parts := strings.Split(line, ":")
+			if len(parts) < 2 {
+				continue
+			}
 			ppid := strings.TrimSpace(parts[1])
 			return strconv.Atoi(ppid)
 		}
 	}
 
-	return 0, nil
+	return 0, fmt.Errorf("PPid not found in status")
 }
 
 func getSpecBypassIsVulnFromStatus(status []byte) bool {
@@ -324,6 +331,9 @@ func getSpecBypassIsVulnFromStatus(status []byte) bool {
 	for _, line := range lines {
 		if strings.Contains(line, "Speculation_Store_Bypass:") {
 			parts := strings.Split(line, ":")
+			if len(parts) < 2 {
+				continue
+			}
 			isVuln := strings.TrimSpace(parts[1])
 			if strings.Contains(isVuln, "vulnerable") {
 				return true

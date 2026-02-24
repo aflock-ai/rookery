@@ -17,23 +17,31 @@ package environment
 import (
 	"strings"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/gobwas/glob"
 )
 
 // ObfuscateEnvironmentArray expects an array of strings representing environment variables.  Each element of the array is expected to be in the format of "KEY=VALUE".
 // obfuscateList is the list of elements to obfuscate from variables, and for each element of variables that does not appear in the obfuscateList onAllowed will be called.
-func ObfuscateEnvironmentArray(variables []string, obfuscateList map[string]struct{}, excludeKeys map[string]struct{}, onAllowed func(key, val, orig string)) {
+func ObfuscateEnvironmentArray(variables []string, obfuscateList map[string]struct{}, excludeKeys map[string]struct{}, onAllowed func(key, val, orig string)) { //nolint:gocognit // environment obfuscation requires complex matching logic
 	obfuscateGlobList := []glob.Glob{}
 
+	// Build a case-insensitive exact-match set from non-glob entries.
+	// Without this, exact entries like "AWS_ACCESS_KEY_ID" only match that
+	// exact casing — "aws_access_key_id" would slip through (R3-124).
+	obfuscateListUpper := make(map[string]struct{}, len(obfuscateList))
 	for k := range obfuscateList {
 		if strings.Contains(k, "*") {
-			obfuscateGlobCompiled, err := glob.Compile(k)
+			// Normalize glob patterns to uppercase for case-insensitive matching.
+			obfuscateGlobCompiled, err := glob.Compile(strings.ToUpper(k))
 			if err != nil {
-				log.Errorf("obfuscate glob pattern could not be interpreted: %w", err)
+				log.Errorf("obfuscate glob pattern could not be interpreted: %v", err)
+				continue
 			}
 
 			obfuscateGlobList = append(obfuscateGlobList, obfuscateGlobCompiled)
+		} else {
+			obfuscateListUpper[strings.ToUpper(k)] = struct{}{}
 		}
 	}
 
@@ -41,12 +49,19 @@ func ObfuscateEnvironmentArray(variables []string, obfuscateList map[string]stru
 		key, val := splitVariable(v)
 
 		if _, inExcludKeys := excludeKeys[key]; !inExcludKeys {
-			if _, inObfuscateList := obfuscateList[key]; inObfuscateList {
+			// Case-insensitive exact match for non-glob entries.
+			if _, inObfuscateList := obfuscateListUpper[strings.ToUpper(key)]; inObfuscateList {
 				val = "******"
 			}
 
-			for _, glob := range obfuscateGlobList {
-				if glob.Match(key) {
+			for _, g := range obfuscateGlobList {
+				// Normalize key to uppercase to match the uppercased glob patterns.
+				matched, err := safeGlobMatch(g, strings.ToUpper(key))
+				if err != nil {
+					log.Debugf("glob match error for key %q: %v", key, err)
+					continue
+				}
+				if matched {
 					val = "******"
 				}
 			}

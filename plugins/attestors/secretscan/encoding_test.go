@@ -426,7 +426,7 @@ func TestTripleEncodingPermutations(t *testing.T) {
 	}
 }
 
-func TestTripleEncodingWithFuzzing(t *testing.T) {
+func TestTripleEncodingWithFuzzing(t *testing.T) { //nolint:gocyclo // test exercises many encoding combinations
 	// Skip in short mode as fuzzing can be time-consuming
 	if testing.Short() {
 		t.Skip("Skipping fuzzing test in short mode")

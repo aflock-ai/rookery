@@ -115,28 +115,35 @@ func (a *Attestor) createDefaultGitleaksConfig() (*detect.Detector, error) {
 // mergeAllowlistIntoGitleaksConfig applies the attestor's allowlist settings to the detector
 // This is only used when no custom config file is provided
 func (a *Attestor) mergeAllowlistIntoGitleaksConfig(detector *detect.Detector) error {
-	// Validate and compile the regexes
+	// Validate and compile the content regexes
 	validatedPatterns, err := a.compileRegexes(a.allowList.Regexes)
 	if err != nil {
 		return fmt.Errorf("error validating allowlist regexes: %w", err)
 	}
 
-	// Add regexes to the detector's allowlist description
-	allowList := &config.Allowlist{}
-	for _, pattern := range validatedPatterns {
-		allowList.Description = fmt.Sprintf("%s\nRegex: %s", allowList.Description, pattern)
-		log.Debugf("(attestation/secretscan) added allowlist regex: %s", pattern)
+	allowList := &config.Allowlist{
+		Description: "rookery secretscan allowlist",
 	}
 
-	// Add stop words to the detector's allowlist description
+	// Add compiled regexes to the allowlist
+	for patternStr, compiled := range validatedPatterns {
+		allowList.Regexes = append(allowList.Regexes, compiled)
+		log.Debugf("(attestation/secretscan) added allowlist regex: %s", patternStr)
+	}
+
+	// Add stop words to the allowlist
+	allowList.StopWords = append(allowList.StopWords, a.allowList.StopWords...)
 	for _, stopWord := range a.allowList.StopWords {
-		allowList.Description = fmt.Sprintf("%s\nStop word: %s", allowList.Description, stopWord)
 		log.Debugf("(attestation/secretscan) added allowlist stop word: %s", stopWord)
 	}
 
-	// Add paths to the detector's allowlist description
+	// Compile and add path patterns to the allowlist
 	for _, path := range a.allowList.Paths {
-		allowList.Description = fmt.Sprintf("%s\nPath: %s", allowList.Description, path)
+		compiledPath, err := regexp.Compile(path)
+		if err != nil {
+			return fmt.Errorf("invalid allowlist path pattern %q: %w", path, err)
+		}
+		allowList.Paths = append(allowList.Paths, compiledPath)
 		log.Debugf("(attestation/secretscan) added allowlist path: %s", path)
 	}
 

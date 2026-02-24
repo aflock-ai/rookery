@@ -26,9 +26,9 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/invopop/jsonschema"
 )
 
@@ -103,9 +103,13 @@ type Attestor struct {
 
 // New creates and returns a new github attestor.
 func New() *Attestor {
+	customJWKSURL := os.Getenv("WITNESS_GITHUB_JWKS_URL")
+	if customJWKSURL == "" {
+		customJWKSURL = jwksURL
+	}
 	return &Attestor{
 		aud:      tokenAudience,
-		jwksURL:  jwksURL,
+		jwksURL:  customJWKSURL,
 		tokenURL: os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL"),
 	}
 }
@@ -174,13 +178,13 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	if pipelineSubj, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.PipelineUrl), hashes); err == nil {
 		subjects[fmt.Sprintf("pipelineurl:%v", a.PipelineUrl)] = pipelineSubj
 	} else {
-		log.Debugf("(attestation/github) failed to record github pipelineurl subject: %w", err)
+		log.Debugf("(attestation/github) failed to record github pipelineurl subject: %v", err)
 	}
 
 	if projectSubj, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ProjectUrl), hashes); err == nil {
 		subjects[fmt.Sprintf("projecturl:%v", a.ProjectUrl)] = projectSubj
 	} else {
-		log.Debugf("(attestation/github) failed to record github projecturl subject: %w", err)
+		log.Debugf("(attestation/github) failed to record github projecturl subject: %v", err)
 	}
 
 	return subjects
@@ -224,7 +228,12 @@ func fetchToken(tokenURL string, bearer string, audience string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("error on request %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("token request failed with status %d", resp.StatusCode)
+	}
+
 	body, err := readResponseBody(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("error on reading response body %w", err)
@@ -246,9 +255,12 @@ type GithubTokenResponse struct {
 }
 
 // readResponseBody reads the response body and returns it as a byte slice.
+// Limits read size to prevent OOM from a malicious or compromised server.
+const maxResponseBodySize = 1 << 20 // 1MB
+
 func readResponseBody(body io.Reader) ([]byte, error) {
 	var buf bytes.Buffer
-	_, err := buf.ReadFrom(body)
+	_, err := buf.ReadFrom(io.LimitReader(body, maxResponseBodySize))
 	if err != nil {
 		return nil, err
 	}

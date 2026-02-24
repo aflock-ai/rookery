@@ -21,9 +21,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	kms "github.com/aflock-ai/rookery/attestation/signer/kms"
+	"github.com/aws/aws-sdk-go-v2/service/kms/types"
 )
 
 var awsSupportedAlgorithms = []types.CustomerMasterKeySpec{

@@ -115,7 +115,7 @@ var (
 	_ attestation.Subjecter = &Attestor{}
 )
 
-func init() {
+func init() { //nolint:funlen // registration requires many options
 	attestation.RegisterAttestation(
 		Name,
 		Type,
@@ -284,7 +284,7 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 }
 
 // Attest processes any YAML/JSON products, removes ephemeral fields, etc.
-func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
+func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:gocognit,gocyclo,funlen // k8s manifest processing is inherently complex
 	products := ctx.Products()
 
 	// skip if no products
@@ -319,7 +319,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 			continue
 		}
 		fullPath := filepath.Join(ctx.WorkingDir(), path)
-		content, err := os.ReadFile(fullPath)
+		content, err := os.ReadFile(fullPath) //nolint:gosec // G304: path from attestation context products
 		if err != nil {
 			log.Debugf("failed reading file %s: %v", fullPath, err)
 			continue
@@ -328,7 +328,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		// Decide whether to parse as JSON or split as YAML
 		ext := strings.ToLower(filepath.Ext(path))
 		var docs [][]byte
-		if ext == ".json" {
+		if ext == ".json" { //nolint:nestif // JSON vs YAML parsing requires nested conditional logic
 			// If it's valid JSON, handle it
 			if !json.Valid(content) {
 				log.Debugf("invalid JSON found in %s, skipping", path)
@@ -381,6 +381,16 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 			}
 
 			recorded.Data = cleanBytes
+
+			// Compute the digest of the ephemeral-cleaned document and store it
+			// so that Subjects() can return it for policy verification.
+			ds, err := cryptoutil.CalculateDigestSetFromBytes(cleanBytes, ctx.Hashes())
+			if err != nil {
+				log.Debugf("error computing digest for doc in %s: %v", path, err)
+			} else {
+				a.subjectDigests.Store(recorded.SubjectKey, ds)
+			}
+
 			a.RecordedDocs = append(a.RecordedDocs, recorded)
 
 			parsedAnything = true
@@ -396,7 +406,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 // processDoc strips ephemeral fields, optionally does a server-side dry-run,
 // then returns the cleaned JSON bytes plus a RecordedObject (without final digest).
-func (a *Attestor) processDoc(doc map[string]interface{}, filePath string) ([]byte, RecordedObject, error) {
+func (a *Attestor) processDoc(doc map[string]interface{}, filePath string) ([]byte, RecordedObject, error) { //nolint:gocognit,gocyclo,funlen // k8s object processing is inherently complex
 	finalObj := doc
 	if a.ServerSideDryRun {
 		dryObj, err := a.runDryRun(doc)
@@ -421,7 +431,7 @@ func (a *Attestor) processDoc(doc map[string]interface{}, filePath string) ([]by
 	obj, gvk, err := decode(cleanBytes, nil, nil)
 	if err != nil {
 		err := fmt.Errorf("failed to decode file %s. Continuing: %s", filePath, err.Error())
-		log.Debugf("(attestation/k8smanifest) %w", err)
+		log.Debugf("(attestation/k8smanifest) %v", err)
 		return nil, RecordedObject{}, err
 	}
 
@@ -438,12 +448,12 @@ func (a *Attestor) processDoc(doc map[string]interface{}, filePath string) ([]by
 	}
 
 	recordedImages := []RecordedImage{}
-	if list, ok := obj.(*corev1.List); ok {
+	if list, ok := obj.(*corev1.List); ok { //nolint:nestif // list processing requires nested type switches
 		for _, obj := range list.Items {
 			o, gvk, err := decode(obj.Raw, nil, nil)
 			if err != nil {
 				err := fmt.Errorf("failed to decode file %s. Continuing: %s", filePath, err.Error())
-				log.Debugf("(attestation/k8smanifest) %w", err)
+				log.Debugf("(attestation/k8smanifest) %v", err)
 				return nil, RecordedObject{}, err
 			}
 
@@ -517,12 +527,18 @@ func (a *Attestor) runRecordClusterInfo() error {
 
 	log.Debugf("(attestation/k8smanifest) checking cluster information for context '%s'", cc)
 
-	if cluster, ok := config.Clusters[cc]; ok {
-		a.ClusterInfo.Server = cluster.Server
-		return nil
+	ctxObj, ok := config.Contexts[cc]
+	if !ok {
+		return fmt.Errorf("unable to find context '%s' in kubernetes config at path '%s'", cc, a.KubeconfigPath)
 	}
 
-	return fmt.Errorf("unable to find context '%s' in kubernetes config at path '%s'", cc, a.KubeconfigPath)
+	cluster, ok := config.Clusters[ctxObj.Cluster]
+	if !ok {
+		return fmt.Errorf("context '%s' references unknown cluster '%s' in kubernetes config at path '%s'", cc, ctxObj.Cluster, a.KubeconfigPath)
+	}
+
+	a.ClusterInfo.Server = cluster.Server
+	return nil
 }
 
 // runDryRun executes kubectl apply --dry-run=server -o json -f -
@@ -600,8 +616,14 @@ func isJSONorYAML(path string) bool {
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	out := make(map[string]cryptoutil.DigestSet)
 	a.subjectDigests.Range(func(k, v interface{}) bool {
-		key := k.(string)
-		ds := v.(cryptoutil.DigestSet)
+		key, ok := k.(string)
+		if !ok {
+			return true
+		}
+		ds, ok := v.(cryptoutil.DigestSet)
+		if !ok {
+			return true
+		}
 		out[key] = ds
 		return true
 	})
@@ -610,7 +632,7 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 
 // splitYAMLDocs decodes multiple YAML documents. If none are found, it falls back to raw JSON check.
 // This is copied from the structured data attestor, with minimal changes.
-func splitYAMLDocs(content []byte) ([][]byte, error) {
+func splitYAMLDocs(content []byte) ([][]byte, error) { //nolint:unparam // error return kept for API consistency
 	var out [][]byte
 	dec := yaml.NewDecoder(bytes.NewReader(content))
 	docIndex := 0
@@ -668,7 +690,7 @@ func convertKeys(value interface{}) interface{} {
 	}
 }
 
-func recordNode(obj runtime.Object, gvk *schema.GroupVersionKind) (RecordedNode, error) {
+func recordNode(obj runtime.Object, _ *schema.GroupVersionKind) (RecordedNode, error) {
 	if n, ok := obj.(*corev1.Node); ok {
 		return RecordedNode{
 			Name:     n.Name,
@@ -680,36 +702,50 @@ func recordNode(obj runtime.Object, gvk *schema.GroupVersionKind) (RecordedNode,
 	}
 }
 
-func recordImages(obj runtime.Object, gvk *schema.GroupVersionKind) []RecordedImage {
+func recordImages(obj runtime.Object, gvk *schema.GroupVersionKind) []RecordedImage { //nolint:gocyclo,gocognit // switch over k8s resource types
 	recordedImages := []RecordedImage{}
 	switch gvk.Kind {
 	case "Pod":
-		for _, c := range obj.(*corev1.Pod).Spec.Containers {
-			recordedImages = append(recordedImages, newRecordedImage(c.Image))
+		if pod, ok := obj.(*corev1.Pod); ok {
+			for _, c := range pod.Spec.Containers {
+				recordedImages = append(recordedImages, newRecordedImage(c.Image))
+			}
 		}
 	case "Deployment":
-		for _, c := range obj.(*appsv1.Deployment).Spec.Template.Spec.Containers {
-			recordedImages = append(recordedImages, newRecordedImage(c.Image))
+		if dep, ok := obj.(*appsv1.Deployment); ok {
+			for _, c := range dep.Spec.Template.Spec.Containers {
+				recordedImages = append(recordedImages, newRecordedImage(c.Image))
+			}
 		}
 	case "ReplicaSet":
-		for _, c := range obj.(*appsv1.ReplicaSet).Spec.Template.Spec.Containers {
-			recordedImages = append(recordedImages, newRecordedImage(c.Image))
+		if rs, ok := obj.(*appsv1.ReplicaSet); ok {
+			for _, c := range rs.Spec.Template.Spec.Containers {
+				recordedImages = append(recordedImages, newRecordedImage(c.Image))
+			}
 		}
 	case "StatefulSet":
-		for _, c := range obj.(*appsv1.StatefulSet).Spec.Template.Spec.Containers {
-			recordedImages = append(recordedImages, newRecordedImage(c.Image))
+		if ss, ok := obj.(*appsv1.StatefulSet); ok {
+			for _, c := range ss.Spec.Template.Spec.Containers {
+				recordedImages = append(recordedImages, newRecordedImage(c.Image))
+			}
 		}
 	case "DaemonSet":
-		for _, c := range obj.(*appsv1.DaemonSet).Spec.Template.Spec.Containers {
-			recordedImages = append(recordedImages, newRecordedImage(c.Image))
+		if ds, ok := obj.(*appsv1.DaemonSet); ok {
+			for _, c := range ds.Spec.Template.Spec.Containers {
+				recordedImages = append(recordedImages, newRecordedImage(c.Image))
+			}
 		}
 	case "Job":
-		for _, c := range obj.(*batchv1.Job).Spec.Template.Spec.Containers {
-			recordedImages = append(recordedImages, newRecordedImage(c.Image))
+		if job, ok := obj.(*batchv1.Job); ok {
+			for _, c := range job.Spec.Template.Spec.Containers {
+				recordedImages = append(recordedImages, newRecordedImage(c.Image))
+			}
 		}
 	case "CronJob":
-		for _, c := range obj.(*batchv1.CronJob).Spec.JobTemplate.Spec.Template.Spec.Containers {
-			recordedImages = append(recordedImages, newRecordedImage(c.Image))
+		if cj, ok := obj.(*batchv1.CronJob); ok {
+			for _, c := range cj.Spec.JobTemplate.Spec.Template.Spec.Containers {
+				recordedImages = append(recordedImages, newRecordedImage(c.Image))
+			}
 		}
 		// NOTE: there are likely a bunch of other list types that we should support here
 	default:
@@ -726,14 +762,16 @@ func newRecordedImage(image string) RecordedImage {
 	}
 
 	dig, err := DigestForRef(rc.Reference)
-	if err == nil && dig != "" {
+	if err == nil && dig != "" { //nolint:nestif // digest parsing requires nested checks
 		if spl := strings.Split(dig, ":"); len(spl) == 2 {
 			rc.Digest[spl[0]] = spl[1]
 		} else {
 			log.Debugf("(attestation/k8smanifest) unrecognised structure for digest '%s'", rc.Reference)
 		}
+	} else if err != nil {
+		log.Debugf("(attestation/k8smanifest) failed to get digest for reference %s: %v", rc.Reference, err)
 	} else {
-		log.Debugf("(attestation/k8smanifest) failed to get digest for reference %s: %s", rc.Reference, err.Error())
+		log.Debugf("(attestation/k8smanifest) empty digest for reference %s", rc.Reference)
 	}
 
 	return rc

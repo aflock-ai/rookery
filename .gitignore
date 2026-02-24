@@ -1,5 +1,8 @@
 # Compiled binaries
 builder/bin/
+builder/builder
+cilock/cilock
+lockctl/lockctl
 *.exe
 *.dll
 *.so

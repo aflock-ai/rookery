@@ -176,12 +176,22 @@ func TestIncludeExcludeGlobs(t *testing.T) {
 		assert.ElementsMatch(t, subjectPaths, expected)
 	}
 
+	assertProductsMatch := func(t *testing.T, products map[string]attestation.Product, expected []string) {
+		productPaths := make([]string, 0, len(products))
+		for path := range products {
+			productPaths = append(productPaths, path)
+		}
+		assert.ElementsMatch(t, productPaths, expected)
+	}
+
 	t.Run("default include all", func(t *testing.T) {
 		ctx, err := attestation.NewContext("test", []attestation.Attestor{}, attestation.WithWorkingDir(workingDir))
 		require.NoError(t, err)
 		a := New()
 		require.NoError(t, a.Attest(ctx))
-		assertSubjsMatch(t, a.Subjects(), []string{"test.txt", "test.exe", filepath.Join("subdir", "test.txt"), filepath.Join("subdir", "test.exe")})
+		allFiles := []string{"test.txt", "test.exe", filepath.Join("subdir", "test.txt"), filepath.Join("subdir", "test.exe")}
+		assertSubjsMatch(t, a.Subjects(), allFiles)
+		assertProductsMatch(t, a.Products(), allFiles)
 	})
 
 	for _, test := range tests {
@@ -193,6 +203,8 @@ func TestIncludeExcludeGlobs(t *testing.T) {
 			WithExcludeGlob(test.excludeGlob)(a)
 			require.NoError(t, a.Attest(ctx))
 			assertSubjsMatch(t, a.Subjects(), test.expectedSubjects)
+			// Products map should also be filtered at record time (not just subjects)
+			assertProductsMatch(t, a.Products(), test.expectedSubjects)
 		})
 	}
 }

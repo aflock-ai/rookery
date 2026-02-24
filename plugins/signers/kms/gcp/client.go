@@ -324,6 +324,8 @@ func (g *gcpClient) getHashFunc() (crypto.Hash, error) {
 
 // getCKV gets the latest CryptoKeyVersion from the client's cache, which may trigger an actual
 // call to GCP if the existing entry in the cache has expired.
+//
+//nolint:dupl
 func (g *gcpClient) getCKV() (*cryptoKeyVersion, error) {
 	var lerr error
 	loader := ttlcache.LoaderFunc[string, cryptoKeyVersion](
@@ -404,7 +406,7 @@ func (g *gcpClient) sign(ctx context.Context, digest []byte, alg crypto.Hash, cr
 	return resp.Signature, nil
 }
 
-func (g *gcpClient) public(ctx context.Context) (crypto.PublicKey, error) {
+func (g *gcpClient) public(_ context.Context) (crypto.PublicKey, error) {
 	crv, err := g.getCKV()
 	if err != nil {
 		return nil, fmt.Errorf("transient error getting info from KMS: %w", err)
@@ -413,6 +415,8 @@ func (g *gcpClient) public(ctx context.Context) (crypto.PublicKey, error) {
 }
 
 // Seems like GCP doesn't support any remote verification, so we'll just use the local verifier
+//
+//nolint:dupl
 func (g *gcpClient) verify(message io.Reader, sig []byte) error {
 	crv, err := g.getCKV()
 	if err != nil {

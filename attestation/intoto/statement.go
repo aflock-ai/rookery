@@ -16,6 +16,8 @@ package intoto
 
 import (
 	"encoding/json"
+	"fmt"
+	"sort"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 )
@@ -38,14 +40,28 @@ type Statement struct {
 }
 
 func NewStatement(predicateType string, predicate []byte, subjects map[string]cryptoutil.DigestSet) (Statement, error) {
+	if !json.Valid(predicate) {
+		return Statement{}, fmt.Errorf("predicate must be valid JSON")
+	}
+
 	statement := Statement{
 		Type:          StatementType,
 		PredicateType: predicateType,
-		Subject:       make([]Subject, 0),
+		Subject:       make([]Subject, 0, len(subjects)),
 		Predicate:     predicate,
 	}
 
-	for name, ds := range subjects {
+	// Sort subject names for deterministic output. Go map iteration is
+	// non-deterministic, so without sorting, the same inputs would produce
+	// different JSON payloads and therefore different DSSE signatures.
+	names := make([]string, 0, len(subjects))
+	for name := range subjects {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		ds := subjects[name]
 		subj, err := DigestSetToSubject(name, ds)
 		if err != nil {
 			return statement, err

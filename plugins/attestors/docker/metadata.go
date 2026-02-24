@@ -60,9 +60,9 @@ type Invocation struct {
 }
 
 type Provenance struct {
-	BuildType  string     `json:"buildType"`
+	BuildType  string               `json:"buildType"`
 	Materials  []ProvenanceMaterial `json:"materials"`
-	Invocation Invocation `json:"invocation"`
+	Invocation Invocation           `json:"invocation"`
 }
 
 type Platform struct {
@@ -86,7 +86,7 @@ type BuildInfo struct {
 	ImageName                  string                   `json:"image.name"`
 }
 
-func (b *BuildInfo) UnmarshalJSON(data []byte) error {
+func (b *BuildInfo) UnmarshalJSON(data []byte) error { //nolint:gocognit // complex JSON unmarshaling
 	type Alias BuildInfo
 	aux := &Alias{}
 	if err := json.Unmarshal(data, aux); err != nil {
@@ -104,7 +104,7 @@ func (b *BuildInfo) UnmarshalJSON(data []byte) error {
 	b.Provenance = make(map[string]Provenance)
 
 	for key, value := range raw {
-		if key == "buildx.build.ref" {
+		if key == "buildx.build.ref" { //nolint:nestif // complex JSON parsing logic
 			err := json.Unmarshal(value, &b.BuildRef)
 			if err != nil {
 				return err
