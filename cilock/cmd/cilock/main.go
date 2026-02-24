@@ -17,6 +17,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/gcp-iit"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/git"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/github"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/githubaction"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/githubwebhook"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/gitlab"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/jenkins"
