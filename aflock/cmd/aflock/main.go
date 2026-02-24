@@ -90,7 +90,7 @@ var initCmd = &cobra.Command{
   }
 }
 `
-		if err := os.WriteFile(".aflock", []byte(template), 0644); err != nil {
+		if err := os.WriteFile(".aflock", []byte(template), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to create .aflock: %v\n", err)
 			os.Exit(1)
 		}
@@ -210,7 +210,7 @@ This creates a DSSE-signed policy envelope that cannot be modified by the agent.
 		policyPath := args[0]
 
 		// Read the policy file
-		policyData, err := os.ReadFile(policyPath)
+		policyData, err := os.ReadFile(policyPath) //nolint:gosec // G304: policy file path from CLI arg
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to read policy: %v\n", err)
 			os.Exit(1)
@@ -231,7 +231,7 @@ This creates a DSSE-signed policy envelope that cannot be modified by the agent.
 
 		var privKey *ecdsa.PrivateKey
 		if keyPath != "" {
-			keyData, err := os.ReadFile(keyPath)
+			keyData, err := os.ReadFile(keyPath) //nolint:gosec // G304: key file path from CLI arg
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to read key: %v\n", err)
 				os.Exit(1)
@@ -317,7 +317,7 @@ This creates a DSSE-signed policy envelope that cannot be modified by the agent.
 		if outputPath == "-" {
 			fmt.Println(string(envelopeJSON))
 		} else {
-			if err := os.WriteFile(outputPath, envelopeJSON, 0644); err != nil {
+			if err := os.WriteFile(outputPath, envelopeJSON, 0600); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to write signed policy: %v\n", err)
 				os.Exit(1)
 			}
@@ -329,7 +329,7 @@ This creates a DSSE-signed policy envelope that cannot be modified by the agent.
 // createSignPAE creates a DSSE Pre-Authentication Encoding.
 func createSignPAE(payloadType string, payload []byte) []byte {
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("DSSEv1 %d %s %d ", len(payloadType), payloadType, len(payload)))
+	fmt.Fprintf(&buf, "DSSEv1 %d %s %d ", len(payloadType), payloadType, len(payload))
 	buf.Write(payload)
 	return buf.Bytes()
 }

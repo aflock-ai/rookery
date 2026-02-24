@@ -19,9 +19,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	prov "github.com/aflock-ai/rookery/attestation/intoto/provenance"
 	v1 "github.com/aflock-ai/rookery/attestation/intoto/v1"
-	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/registry"
 	aws_codebuild "github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	"github.com/aflock-ai/rookery/plugins/attestors/environment"
@@ -32,9 +35,6 @@ import (
 	"github.com/aflock-ai/rookery/plugins/attestors/material"
 	"github.com/aflock-ai/rookery/plugins/attestors/oci"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
-	"github.com/aflock-ai/rookery/attestation/cryptoutil"
-	"github.com/aflock-ai/rookery/attestation/log"
-	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/invopop/jsonschema"
 	"golang.org/x/exp/maps"
 )
@@ -117,7 +117,7 @@ func (p *Provenance) Export() bool {
 	return p.export
 }
 
-func (p *Provenance) Attest(ctx *attestation.AttestationContext) error {
+func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolint:gocognit,gocyclo,funlen // SLSA provenance construction requires processing multiple attestor types
 	builder := prov.Builder{}
 	metadata := prov.BuildMetadata{}
 	p.PbProvenance.BuildDefinition = &prov.BuildDefinition{}
@@ -129,10 +129,18 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error {
 	internalParameters := make(map[string]interface{})
 
 	for _, attestor := range ctx.CompletedAttestors() {
+		if attestor.Error != nil {
+			continue
+		}
+
 		switch name := attestor.Attestor.Name(); name {
 		// Pre-material Attestors
 		case environment.Name:
-			envs := attestor.Attestor.(environment.EnvironmentAttestor).Data().Variables
+			envAttestor, ok := attestor.Attestor.(environment.EnvironmentAttestor)
+			if !ok {
+				continue
+			}
+			envs := envAttestor.Data().Variables
 			pbEnvs := make(map[string]interface{}, len(envs))
 			for name, value := range envs {
 				pbEnvs[name] = value
@@ -141,8 +149,12 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error {
 			internalParameters["env"] = pbEnvs
 
 		case git.Name:
-			digestSet := attestor.Attestor.(git.GitAttestor).Data().CommitDigest
-			remotes := attestor.Attestor.(git.GitAttestor).Data().Remotes
+			gitAttestor, ok := attestor.Attestor.(git.GitAttestor)
+			if !ok {
+				continue
+			}
+			digestSet := gitAttestor.Data().CommitDigest
+			remotes := gitAttestor.Data().Remotes
 			digests, _ := digestSet.ToNameMap()
 
 			for _, remote := range remotes {
@@ -154,50 +166,79 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error {
 					})
 			}
 
-		case github.Name:
-			gh := attestor.Attestor.(github.GitHubAttestor)
+		case github.Name: //nolint:dupl // github and gitlab cases are structurally similar but differ in types
+			gh, ok := attestor.Attestor.(github.GitHubAttestor)
+			if !ok {
+				continue
+			}
 			p.PbProvenance.RunDetails.Builder.ID = GHABuilderId
 			p.PbProvenance.RunDetails.Metadata.InvocationID = gh.Data().PipelineUrl
-			digest := make(map[string]string)
 
 			if gh.Data().JWT == nil {
 				log.Warn("No JWT found in GitHub attestor")
 				continue
 			}
 
-			digest["sha1"] = gh.Data().JWT.Claims["sha"].(string)
+			if sha, ok := gh.Data().JWT.Claims["sha"].(string); ok && sha != "" {
+				digest := make(map[string]string)
+				digest["sha1"] = sha
+				p.PbProvenance.BuildDefinition.ResolvedDependencies = append(
+					p.PbProvenance.BuildDefinition.ResolvedDependencies,
+					&v1.ResourceDescriptor{
+						Digest: digest,
+					})
+			} else {
+				log.Warn("No SHA found in GitHub JWT or SHA is not a string")
+			}
 
-		case gitlab.Name:
-			gl := attestor.Attestor.(gitlab.GitLabAttestor)
+		case gitlab.Name: //nolint:dupl // gitlab and github cases are structurally similar but differ in types
+			gl, ok := attestor.Attestor.(gitlab.GitLabAttestor)
+			if !ok {
+				continue
+			}
 			p.PbProvenance.RunDetails.Builder.ID = GLCBuilderId
 			p.PbProvenance.RunDetails.Metadata.InvocationID = gl.Data().PipelineUrl
-			digest := make(map[string]string)
 
 			if gl.Data().JWT == nil {
 				log.Warn("No JWT found in GitLab attestor")
 				continue
 			}
 
-			sha, found := gl.Data().JWT.Claims["sha"]
-			if found {
-				digest["sha1"] = sha.(string)
+			if sha, ok := gl.Data().JWT.Claims["sha"].(string); ok && sha != "" {
+				digest := make(map[string]string)
+				digest["sha1"] = sha
+				p.PbProvenance.BuildDefinition.ResolvedDependencies = append(
+					p.PbProvenance.BuildDefinition.ResolvedDependencies,
+					&v1.ResourceDescriptor{
+						Digest: digest,
+					})
 			} else {
 				log.Warn("No SHA found in GitLab JWT")
 			}
 
 		case jenkins.Name:
-			jks := attestor.Attestor.(jenkins.JenkinsAttestor)
+			jks, ok := attestor.Attestor.(jenkins.JenkinsAttestor)
+			if !ok {
+				continue
+			}
 			p.PbProvenance.RunDetails.Builder.ID = JenkinsBuilderId
 			p.PbProvenance.RunDetails.Metadata.InvocationID = jks.Data().PipelineUrl
 
 		case aws_codebuild.Name:
-			awsCodeBuild := attestor.Attestor.(aws_codebuild.AWSCodeBuildAttestor)
+			awsCodeBuild, ok := attestor.Attestor.(aws_codebuild.AWSCodeBuildAttestor)
+			if !ok {
+				continue
+			}
 			p.PbProvenance.RunDetails.Builder.ID = AWSCodeBuildBuilderId
 			p.PbProvenance.RunDetails.Metadata.InvocationID = awsCodeBuild.Data().BuildInfo.BuildARN
 
 		// Material Attestors
 		case material.Name:
-			mats := attestor.Attestor.(material.MaterialAttestor).Materials()
+			matAttestor, ok := attestor.Attestor.(material.MaterialAttestor)
+			if !ok {
+				continue
+			}
+			mats := matAttestor.Materials()
 			for name, digestSet := range mats {
 				digests, _ := digestSet.ToNameMap()
 				p.PbProvenance.BuildDefinition.ResolvedDependencies = append(
@@ -211,7 +252,11 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error {
 		// CommandRun Attestors
 		case commandrun.Name:
 			ep := make(map[string]interface{})
-			ep["command"] = strings.Join(attestor.Attestor.(commandrun.CommandRunAttestor).Data().Cmd, " ")
+			cmdAttestor, ok := attestor.Attestor.(commandrun.CommandRunAttestor)
+			if !ok {
+				continue
+			}
+			ep["command"] = strings.Join(cmdAttestor.Data().Cmd, " ")
 			p.PbProvenance.BuildDefinition.ExternalParameters = ep
 
 			startedOn := attestor.StartTime
@@ -227,18 +272,22 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error {
 				maps.Copy(p.products, ctx.Products())
 			}
 
-			if p.subjects == nil {
-				p.subjects = attestor.Attestor.(attestation.Subjecter).Subjects()
-			} else {
-				maps.Copy(p.subjects, attestor.Attestor.(attestation.Subjecter).Subjects())
+			if subjecter, ok := attestor.Attestor.(attestation.Subjecter); ok {
+				if p.subjects == nil {
+					p.subjects = subjecter.Subjects()
+				} else {
+					maps.Copy(p.subjects, subjecter.Subjects())
+				}
 			}
 
 		// Post Attestors
 		case oci.Name:
-			if p.subjects == nil {
-				p.subjects = attestor.Attestor.(attestation.Subjecter).Subjects()
-			} else {
-				maps.Copy(p.subjects, attestor.Attestor.(attestation.Subjecter).Subjects())
+			if subjecter, ok := attestor.Attestor.(attestation.Subjecter); ok {
+				if p.subjects == nil {
+					p.subjects = subjecter.Subjects()
+				} else {
+					maps.Copy(p.subjects, subjecter.Subjects())
+				}
 			}
 		}
 	}
@@ -269,6 +318,13 @@ func (p *Provenance) Subjects() map[string]cryptoutil.DigestSet {
 	subjects := make(map[string]cryptoutil.DigestSet)
 	for productName, product := range p.products {
 		subjects[fmt.Sprintf("file:%v", productName)] = product.Digest
+	}
+
+	// Include subjects from other attestors (e.g. OCI image digests, tags).
+	// Without this, OCI subjects collected during Attest() are silently dropped,
+	// causing provenance to omit container image references.
+	for k, v := range p.subjects {
+		subjects[k] = v
 	}
 
 	return subjects

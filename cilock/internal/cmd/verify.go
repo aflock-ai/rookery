@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/source"
@@ -53,7 +54,7 @@ func VerifyCmd() *cobra.Command {
 
 			verifiers, err := loadVerifiers(cmd.Context(), vo.VerifierOptions, vo.KMSVerifierProviderOptions, providersFromFlags("verifier", cmd.Flags()))
 			if err != nil {
-				return fmt.Errorf("failed to load signer: %w", err)
+				return fmt.Errorf("failed to load verifier: %w", err)
 			}
 			return runVerify(cmd.Context(), vo, verifiers...)
 		},
@@ -62,12 +63,21 @@ func VerifyCmd() *cobra.Command {
 	return cmd
 }
 
-func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...cryptoutil.Verifier) error {
+func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...cryptoutil.Verifier) error { //nolint:gocognit,gocyclo,funlen
+	var (
+		collectionSource source.Sourcer
+		archivistaClient *archivista.Client
+	)
 	memSource := source.NewMemorySource()
-	var collectionSource source.Sourcer = memSource
+	collectionSource = memSource
 
 	if vo.ArchivistaOptions.Enable {
-		return fmt.Errorf("archivista integration is not yet supported in cilock; use --attestations flag to provide attestation files directly")
+		var err error
+		archivistaClient, err = vo.ArchivistaOptions.Client()
+		if err != nil {
+			return fmt.Errorf("failed to create archivista client: %w", err)
+		}
+		collectionSource = source.NewMultiSource(collectionSource, source.NewArchivistaSource(archivistaClient))
 	}
 
 	if vo.KeyPath == "" && len(vo.PolicyCARootPaths) == 0 && len(verifiers) == 0 {
@@ -101,7 +111,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 	var policyRoots []*x509.Certificate
 	if len(vo.PolicyCARootPaths) > 0 {
 		for _, caPath := range vo.PolicyCARootPaths {
-			caFile, err := os.ReadFile(caPath)
+			caFile, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is from CLI flags
 			if err != nil {
 				return fmt.Errorf("failed to read root CA certificate file: %w", err)
 			}
@@ -118,7 +128,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 	var policyIntermediates []*x509.Certificate
 	if len(vo.PolicyCAIntermediatePaths) > 0 {
 		for _, caPath := range vo.PolicyCAIntermediatePaths {
-			caFile, err := os.ReadFile(caPath)
+			caFile, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is from CLI flags
 			if err != nil {
 				return fmt.Errorf("failed to read intermediate CA certificate file: %w", err)
 			}
@@ -135,7 +145,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 	ptsVerifiers := make([]timestamp.TimestampVerifier, 0)
 	if len(vo.PolicyTimestampServers) > 0 {
 		for _, server := range vo.PolicyTimestampServers {
-			f, err := os.ReadFile(server)
+			f, err := os.ReadFile(server) //nolint:gosec // G304: server path is from CLI flags
 			if err != nil {
 				return fmt.Errorf("failed to open Timestamp Server CA certificate file: %w", err)
 			}
@@ -149,7 +159,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 		}
 	}
 
-	policyEnvelope, err := policy.LoadPolicy(ctx, vo.PolicyFilePath)
+	policyEnvelope, err := policy.LoadPolicy(ctx, vo.PolicyFilePath, archivistaClient)
 	if err != nil {
 		return fmt.Errorf("failed to open policy file: %w", err)
 	}
@@ -180,7 +190,14 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 		if !isValidHexDigest(subDigest) {
 			return fmt.Errorf("invalid subject digest %q: must be a hex-encoded hash (e.g. sha256:abc123...)", subDigest)
 		}
-		subjects = append(subjects, cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: subDigest})
+		// Strip optional algorithm prefix (e.g. "sha256:") before storing.
+		// The prefix is accepted by isValidHexDigest for convenience, but DigestSet
+		// values must be raw hex to match computed digests from CalculateDigestSet.
+		digestHex := subDigest
+		if idx := strings.Index(subDigest, ":"); idx != -1 {
+			digestHex = subDigest[idx+1:]
+		}
+		subjects = append(subjects, cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: digestHex})
 	}
 
 	if len(subjects) == 0 {
@@ -205,7 +222,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 		workflow.VerifyWithPolicyCertConstraints(vo.PolicyCommonName, vo.PolicyDNSNames, vo.PolicyEmails, vo.PolicyOrganizations, vo.PolicyURIs),
 		workflow.VerifyWithPolicyFulcioCertExtensions(vo.PolicyFulcioCertExtensions),
 	)
-	if err != nil {
+	if err != nil { //nolint:nestif
 		if verifiedEvidence.StepResults != nil {
 			log.Error("Verification failed")
 			log.Error("Evidence:")

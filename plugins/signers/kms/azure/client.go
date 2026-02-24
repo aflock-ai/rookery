@@ -83,7 +83,7 @@ func ParseReference(resourceID string) (vaultURL, keyName, keyVersion string, er
 	matches := azureKMSRegex.FindStringSubmatch(resourceID)
 	if len(matches) < 3 {
 		err = fmt.Errorf("invalid azurekms format %q", resourceID)
-		return
+		return vaultURL, keyName, keyVersion, err
 	}
 
 	vaultURL = fmt.Sprintf("https://%s/", matches[1])
@@ -91,7 +91,7 @@ func ParseReference(resourceID string) (vaultURL, keyName, keyVersion string, er
 	if len(matches) > 3 {
 		keyVersion = matches[3]
 	}
-	return
+	return vaultURL, keyName, keyVersion, err
 }
 
 type azureClient struct {
@@ -426,7 +426,7 @@ func (a *azureClient) verifyRemotely(ctx context.Context, sig []byte, message io
 	}
 
 	// For ECDSA signatures, convert from ASN.1 DER back to raw R||S for Azure's API
-	if ecKey, ok := key.PublicKey.(*ecdsa.PublicKey); ok {
+	if ecKey, ok := key.PublicKey.(*ecdsa.PublicKey); ok { //nolint:nestif
 		var parsed struct{ R, S *big.Int }
 		rest, err := asn1.Unmarshal(sig, &parsed)
 		if err != nil {

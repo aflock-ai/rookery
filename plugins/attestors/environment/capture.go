@@ -80,12 +80,15 @@ func NewCapturer(opts ...CaptureOption) *Capture {
 func (c *Capture) Capture(env []string) map[string]string {
 	variables := make(map[string]string)
 
-	// Prepare sensitive keys list.
-	var finalSensitiveKeysList map[string]struct{}
-	if c.disableSensitiveVarsDefault {
-		c.sensitiveVarsList = map[string]struct{}{}
+	// Build a local copy of the sensitive keys list so that concurrent calls
+	// to Capture() don't race on map iteration/write, and repeated calls
+	// don't destructively mutate c.sensitiveVarsList (R3-125).
+	finalSensitiveKeysList := make(map[string]struct{})
+	if !c.disableSensitiveVarsDefault {
+		for k, v := range c.sensitiveVarsList {
+			finalSensitiveKeysList[k] = v
+		}
 	}
-	finalSensitiveKeysList = c.sensitiveVarsList
 	for k, v := range c.addSensitiveVarsList {
 		finalSensitiveKeysList[k] = v
 	}

@@ -14,13 +14,13 @@ import (
 )
 
 // newTestHandler creates a Handler with state rooted in a temp directory.
-func newTestHandler(t *testing.T) (*Handler, string) {
+func newTestHandler(t *testing.T) *Handler {
 	t.Helper()
 	tmpDir := t.TempDir()
 	h := &Handler{
 		stateManager: state.NewManager(tmpDir),
 	}
-	return h, tmpDir
+	return h
 }
 
 // seedSession initializes a session with the given policy and returns the session state.
@@ -69,7 +69,7 @@ func TestNewHandler(t *testing.T) {
 // ----- Handle dispatch -----
 
 func TestHandle_UnknownHook(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	// We need to provide stdin. Create a minimal valid JSON for the input.
 	input := aflock.HookInput{SessionID: "s1"}
 	data, _ := json.Marshal(input)
@@ -91,7 +91,7 @@ func TestHandle_UnknownHook(t *testing.T) {
 }
 
 func TestHandle_InvalidJSON(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 
 	origStdin := os.Stdin
 	r, w, _ := os.Pipe()
@@ -112,7 +112,7 @@ func TestHandle_InvalidJSON(t *testing.T) {
 // ----- PreToolUse: allow when no session exists and no policy found -----
 
 func TestHandlePreToolUse_NoSession_NoPolicy_Allows(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	// Use a cwd that has no policy file
 	input := &aflock.HookInput{
 		SessionID: "test-session-no-policy",
@@ -142,7 +142,7 @@ func TestHandlePreToolUse_NoSession_NoPolicy_Allows(t *testing.T) {
 // ----- PreToolUse: tool allowed by policy -----
 
 func TestHandlePreToolUse_ToolAllowed(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test",
 		Tools: &aflock.ToolsPolicy{
@@ -193,7 +193,7 @@ func TestHandlePreToolUse_ToolAllowed(t *testing.T) {
 // is recorded in the state before the exit would happen.
 
 func TestHandlePreToolUse_ToolDenied_StateRecorded(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test",
 		Tools: &aflock.ToolsPolicy{
@@ -247,7 +247,7 @@ func TestHandlePreToolUse_ToolDenied_StateRecorded(t *testing.T) {
 // ----- PreToolUse: ask decision -----
 
 func TestHandlePreToolUse_RequireApproval(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test",
 		Tools: &aflock.ToolsPolicy{
@@ -285,7 +285,7 @@ func TestHandlePreToolUse_RequireApproval(t *testing.T) {
 // ----- PreToolUse: tool not in allow list -----
 
 func TestHandlePreToolUse_NotInAllowList(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test",
 		Tools: &aflock.ToolsPolicy{
@@ -314,7 +314,7 @@ func TestHandlePreToolUse_NotInAllowList(t *testing.T) {
 // ----- PreToolUse: file access denied -----
 
 func TestHandlePreToolUse_FileDenied(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test",
 		Tools: &aflock.ToolsPolicy{
@@ -336,7 +336,7 @@ func TestHandlePreToolUse_FileDenied(t *testing.T) {
 // ----- PreToolUse: data flow integration -----
 
 func TestHandlePreToolUse_DataFlowBlocked(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-dataflow",
 		Tools: &aflock.ToolsPolicy{
@@ -354,7 +354,7 @@ func TestHandlePreToolUse_DataFlowBlocked(t *testing.T) {
 	}
 
 	// Step 1: Read internal data - creates material classification
-	ss := seedSession(t, h, "session-dataflow", pol)
+	seedSession(t, h, "session-dataflow", pol)
 
 	// Simulate reading secret file: the handler does PreToolUse which calls EvaluateDataFlow
 	readInput := &aflock.HookInput{
@@ -376,7 +376,7 @@ func TestHandlePreToolUse_DataFlowBlocked(t *testing.T) {
 	}
 
 	// Verify the material was tracked in session state
-	ss, _ = h.stateManager.Load("session-dataflow")
+	ss, _ := h.stateManager.Load("session-dataflow")
 	if len(ss.Materials) != 1 {
 		t.Fatalf("expected 1 material, got %d", len(ss.Materials))
 	}
@@ -393,7 +393,7 @@ func TestHandlePreToolUse_DataFlowBlocked(t *testing.T) {
 // ----- PreToolUse: data flow allows unrelated operations -----
 
 func TestHandlePreToolUse_DataFlowAllowsUnrelated(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-dataflow-ok",
 		Tools: &aflock.ToolsPolicy{
@@ -434,7 +434,7 @@ func TestHandlePreToolUse_DataFlowAllowsUnrelated(t *testing.T) {
 // ----- PostToolUse: no session returns empty -----
 
 func TestHandlePostToolUse_NoSession(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	input := &aflock.HookInput{
 		SessionID: "no-such-session",
 		ToolName:  "Read",
@@ -454,7 +454,7 @@ func TestHandlePostToolUse_NoSession(t *testing.T) {
 // ----- PostToolUse: file tracking - Read -----
 
 func TestHandlePostToolUse_TracksFileRead(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-post-read", pol)
 
@@ -482,7 +482,7 @@ func TestHandlePostToolUse_TracksFileRead(t *testing.T) {
 // ----- PostToolUse: file tracking - Write -----
 
 func TestHandlePostToolUse_TracksFileWrite(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-post-write", pol)
 
@@ -510,7 +510,7 @@ func TestHandlePostToolUse_TracksFileWrite(t *testing.T) {
 // ----- PostToolUse: file tracking - Edit -----
 
 func TestHandlePostToolUse_TracksFileEdit(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-post-edit", pol)
 
@@ -538,7 +538,7 @@ func TestHandlePostToolUse_TracksFileEdit(t *testing.T) {
 // ----- PostToolUse: file tracking - Glob (read) -----
 
 func TestHandlePostToolUse_TracksGlob(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-post-glob", pol)
 
@@ -563,7 +563,7 @@ func TestHandlePostToolUse_TracksGlob(t *testing.T) {
 // ----- PostToolUse: non-file tool is not tracked -----
 
 func TestHandlePostToolUse_NonFileToolNotTracked(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-post-bash", pol)
 
@@ -591,7 +591,7 @@ func TestHandlePostToolUse_NonFileToolNotTracked(t *testing.T) {
 // ----- PostToolUse: duplicate file tracking -----
 
 func TestHandlePostToolUse_DuplicateFileNotDoubleTracked(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-dup", pol)
 
@@ -615,7 +615,7 @@ func TestHandlePostToolUse_DuplicateFileNotDoubleTracked(t *testing.T) {
 // ----- PostToolUse: malformed tool input still succeeds (no file tracked) -----
 
 func TestHandlePostToolUse_MalformedToolInput(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-malformed", pol)
 
@@ -645,7 +645,7 @@ func TestHandlePostToolUse_MalformedToolInput(t *testing.T) {
 // ----- PostToolUse: limit checking -----
 
 func TestHandlePostToolUse_LimitExceeded(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-limits",
 		Limits: &aflock.LimitsPolicy{
@@ -685,7 +685,7 @@ func TestHandlePostToolUse_LimitExceeded(t *testing.T) {
 // ----- PostToolUse: limit not exceeded -----
 
 func TestHandlePostToolUse_LimitNotExceeded(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-limits-ok",
 		Limits: &aflock.LimitsPolicy{
@@ -714,7 +714,7 @@ func TestHandlePostToolUse_LimitNotExceeded(t *testing.T) {
 // ----- PostToolUse: post-hoc limits not checked in fail-fast mode -----
 
 func TestHandlePostToolUse_PostHocLimitIgnoredInFailFast(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-posthoc",
 		Limits: &aflock.LimitsPolicy{
@@ -743,7 +743,7 @@ func TestHandlePostToolUse_PostHocLimitIgnoredInFailFast(t *testing.T) {
 // ----- Stop: no session, no policy -> allow -----
 
 func TestHandleStop_NoSession(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	// A non-existent session (Load returns nil, nil)
 	input := &aflock.HookInput{
 		SessionID: "non-existent",
@@ -766,7 +766,7 @@ func TestHandleStop_NoSession(t *testing.T) {
 // ----- Stop: session with no policy -> allow -----
 
 func TestHandleStop_SessionNilPolicy(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	seedSession(t, h, "session-nil-pol", nil)
 
 	input := &aflock.HookInput{
@@ -787,7 +787,7 @@ func TestHandleStop_SessionNilPolicy(t *testing.T) {
 // ----- Stop: no required attestations -> allow -----
 
 func TestHandleStop_NoRequiredAttestations(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-no-attest", pol)
 
@@ -809,7 +809,7 @@ func TestHandleStop_NoRequiredAttestations(t *testing.T) {
 // ----- Stop: required attestation missing -> block -----
 
 func TestHandleStop_MissingAttestation(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name:                 "test-attest",
 		RequiredAttestations: []string{"security-review"},
@@ -840,7 +840,7 @@ func TestHandleStop_MissingAttestation(t *testing.T) {
 // ----- Stop: required attestation present (exact filename match) -> allow -----
 
 func TestHandleStop_AttestationPresent_ExactFile(t *testing.T) {
-	h, tmpDir := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name:                 "test-attest-ok",
 		RequiredAttestations: []string{"security-review"},
@@ -851,7 +851,6 @@ func TestHandleStop_AttestationPresent_ExactFile(t *testing.T) {
 	attestDir := h.stateManager.AttestationsDir("session-attest-ok")
 	os.MkdirAll(attestDir, 0755)
 	os.WriteFile(filepath.Join(attestDir, "security-review.json"), []byte(`{"signed": true}`), 0644)
-	_ = tmpDir
 
 	input := &aflock.HookInput{
 		SessionID: "session-attest-ok",
@@ -871,7 +870,7 @@ func TestHandleStop_AttestationPresent_ExactFile(t *testing.T) {
 // ----- Stop: required attestation present (.intoto.json match) -> allow -----
 
 func TestHandleStop_AttestationPresent_IntotoFile(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name:                 "test-intoto",
 		RequiredAttestations: []string{"build-step"},
@@ -900,7 +899,7 @@ func TestHandleStop_AttestationPresent_IntotoFile(t *testing.T) {
 // ----- Stop: attestation found by content toolName match -----
 
 func TestHandleStop_AttestationFoundByContent(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name:                 "test-content-match",
 		RequiredAttestations: []string{"Bash"},
@@ -944,7 +943,7 @@ func TestHandleStop_AttestationFoundByContent(t *testing.T) {
 // ----- Stop: attestation found by action field match -----
 
 func TestHandleStop_AttestationFoundByActionField(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name:                 "test-action-match",
 		RequiredAttestations: []string{"deploy"},
@@ -987,7 +986,7 @@ func TestHandleStop_AttestationFoundByActionField(t *testing.T) {
 // ----- Stop: multiple required attestations, one missing -----
 
 func TestHandleStop_MultipleAttestations_OneMissing(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name:                 "test-multi",
 		RequiredAttestations: []string{"build", "test", "deploy"},
@@ -1019,7 +1018,7 @@ func TestHandleStop_MultipleAttestations_OneMissing(t *testing.T) {
 // ----- Stop: all required attestations present -----
 
 func TestHandleStop_AllAttestationsPresent(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name:                 "test-all-ok",
 		RequiredAttestations: []string{"build", "test"},
@@ -1047,7 +1046,7 @@ func TestHandleStop_AllAttestationsPresent(t *testing.T) {
 // ----- PermissionRequest: returns empty -----
 
 func TestHandlePermissionRequest_ReturnsEmpty(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-perm", pol)
 
@@ -1063,7 +1062,7 @@ func TestHandlePermissionRequest_ReturnsEmpty(t *testing.T) {
 }
 
 func TestHandlePermissionRequest_NoSession_ReturnsEmpty(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	input := &aflock.HookInput{SessionID: "no-session"}
 
 	got := captureStdout(t, func() {
@@ -1078,7 +1077,7 @@ func TestHandlePermissionRequest_NoSession_ReturnsEmpty(t *testing.T) {
 // ----- UserPromptSubmit: increments turns -----
 
 func TestHandleUserPromptSubmit_IncrementsTurns(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-turns", pol)
 
@@ -1099,7 +1098,7 @@ func TestHandleUserPromptSubmit_IncrementsTurns(t *testing.T) {
 }
 
 func TestHandleUserPromptSubmit_NoSession_ReturnsEmpty(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	input := &aflock.HookInput{SessionID: "no-session"}
 
 	got := captureStdout(t, func() {
@@ -1114,7 +1113,7 @@ func TestHandleUserPromptSubmit_NoSession_ReturnsEmpty(t *testing.T) {
 // ----- SubagentStop: always allows -----
 
 func TestHandleSubagentStop_Allows(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	input := &aflock.HookInput{SessionID: "any"}
 
 	got := captureStdout(t, func() {
@@ -1131,7 +1130,7 @@ func TestHandleSubagentStop_Allows(t *testing.T) {
 // ----- SessionEnd: returns empty for no session -----
 
 func TestHandleSessionEnd_NoSession(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	input := &aflock.HookInput{SessionID: "no-session"}
 
 	got := captureStdout(t, func() {
@@ -1146,7 +1145,7 @@ func TestHandleSessionEnd_NoSession(t *testing.T) {
 // ----- SessionEnd: with session prints metrics -----
 
 func TestHandleSessionEnd_PrintsMetrics(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	ss := seedSession(t, h, "session-end", pol)
 
@@ -1170,7 +1169,7 @@ func TestHandleSessionEnd_PrintsMetrics(t *testing.T) {
 // ----- Notification: returns empty -----
 
 func TestHandleNotification_ReturnsEmpty(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	input := &aflock.HookInput{SessionID: "any"}
 
 	got := captureStdout(t, func() {
@@ -1185,7 +1184,7 @@ func TestHandleNotification_ReturnsEmpty(t *testing.T) {
 // ----- PreCompact: returns empty -----
 
 func TestHandlePreCompact_ReturnsEmpty(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	input := &aflock.HookInput{SessionID: "any"}
 
 	got := captureStdout(t, func() {
@@ -1366,7 +1365,7 @@ func TestAttestationMatchesName_NonExistentFile(t *testing.T) {
 // ----- buildPolicyContext -----
 
 func TestBuildPolicyContext(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 
 	pol := &aflock.Policy{
 		Name: "production-policy",
@@ -1415,7 +1414,7 @@ func TestBuildPolicyContext(t *testing.T) {
 }
 
 func TestBuildPolicyContext_WithNilSections(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 
 	pol := &aflock.Policy{
 		Name: "minimal-policy",
@@ -1441,7 +1440,7 @@ func TestBuildPolicyContext_WithNilSections(t *testing.T) {
 // ----- PreToolUse with ephemeral session (policy in cwd) -----
 
 func TestHandlePreToolUse_EphemeralSession_PolicyFromCwd(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 
 	// Create a temp dir with a policy file
 	policyDir := t.TempDir()
@@ -1477,7 +1476,7 @@ func TestHandlePreToolUse_EphemeralSession_PolicyFromCwd(t *testing.T) {
 // ----- PreToolUse: multiple actions accumulate in state -----
 
 func TestHandlePreToolUse_ActionsAccumulate(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test",
 		Tools: &aflock.ToolsPolicy{
@@ -1527,7 +1526,7 @@ func TestHandlePreToolUse_ActionsAccumulate(t *testing.T) {
 // ----- PreToolUse: wildcard allow -----
 
 func TestHandlePreToolUse_WildcardAllow(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-wildcard",
 		Tools: &aflock.ToolsPolicy{
@@ -1556,7 +1555,7 @@ func TestHandlePreToolUse_WildcardAllow(t *testing.T) {
 // ----- PreToolUse: nil policy in session -> allow -----
 
 func TestHandlePreToolUse_NilPolicyInSession_FallsThrough(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	// Create a session but with nil policy, and cwd has no policy
 	ss := h.stateManager.Initialize("session-nil-pol", nil, "")
 	h.stateManager.Save(ss)
@@ -1582,7 +1581,7 @@ func TestHandlePreToolUse_NilPolicyInSession_FallsThrough(t *testing.T) {
 // ----- SessionEnd: post-hoc limit logging (doesn't block) -----
 
 func TestHandleSessionEnd_PostHocLimitExceeded_DoesNotBlock(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-posthoc-end",
 		Limits: &aflock.LimitsPolicy{
@@ -1608,7 +1607,7 @@ func TestHandleSessionEnd_PostHocLimitExceeded_DoesNotBlock(t *testing.T) {
 // ----- State persistence round-trip -----
 
 func TestStatePersistence_RoundTrip(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "round-trip-test",
 		Tools: &aflock.ToolsPolicy{
@@ -1658,7 +1657,7 @@ func TestStatePersistence_RoundTrip(t *testing.T) {
 // ----- Edge case: empty session ID -----
 
 func TestHandlePreToolUse_EmptySessionID(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 
 	input := &aflock.HookInput{
 		SessionID: "",
@@ -1685,7 +1684,7 @@ func TestHandlePreToolUse_EmptySessionID(t *testing.T) {
 // ----- Edge case: nil ToolInput -----
 
 func TestHandlePreToolUse_NilToolInput(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "test-nil-input",
 		Tools: &aflock.ToolsPolicy{
@@ -1715,7 +1714,7 @@ func TestHandlePreToolUse_NilToolInput(t *testing.T) {
 // ----- PostToolUse: malformed file_path field still doesn't crash -----
 
 func TestHandlePostToolUse_EmptyFilePath(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-empty-fp", pol)
 
@@ -1744,7 +1743,7 @@ func TestHandlePostToolUse_EmptyFilePath(t *testing.T) {
 // ----- PreToolUse: policy with no tools section -> allow all -----
 
 func TestHandlePreToolUse_PolicyNoToolsSection(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "no-tools",
 		// No Tools section at all
@@ -1772,7 +1771,7 @@ func TestHandlePreToolUse_PolicyNoToolsSection(t *testing.T) {
 // ----- Multiple PostToolUse calls accumulate file tracking correctly -----
 
 func TestHandlePostToolUse_MixedFileOperations(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{Name: "test"}
 	seedSession(t, h, "session-mixed", pol)
 
@@ -1813,7 +1812,7 @@ func TestHandlePostToolUse_MixedFileOperations(t *testing.T) {
 // ----- Integration: full PreToolUse + PostToolUse cycle -----
 
 func TestIntegration_PreAndPostToolUse(t *testing.T) {
-	h, _ := newTestHandler(t)
+	h := newTestHandler(t)
 	pol := &aflock.Policy{
 		Name: "integration-test",
 		Tools: &aflock.ToolsPolicy{

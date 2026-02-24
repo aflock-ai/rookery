@@ -63,7 +63,7 @@ type fakeGCPClient struct {
 	signer     cryptoutil.Signer
 }
 
-func newFakeGCPClient(ctx context.Context, ksp *kms.KMSSignerProvider) (*fakeGCPClient, error) {
+func newFakeGCPClient(_ context.Context, ksp *kms.KMSSignerProvider) (*fakeGCPClient, error) {
 	if err := ValidReference(ksp.Reference); err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func (g *fakeGCPClient) keyVersionName(ctx context.Context) (*cryptoKeyVersion, 
 	return &crv, nil
 }
 
-func (g *fakeGCPClient) fetchPublicKey(ctx context.Context, name string) (crypto.PublicKey, error) {
+func (g *fakeGCPClient) fetchPublicKey(_ context.Context, _ string) (crypto.PublicKey, error) {
 	priv, pub, err := createRsaKey()
 	if err != nil {
 		return nil, err
@@ -186,6 +186,8 @@ func (g *fakeGCPClient) fetchPublicKey(ctx context.Context, name string) (crypto
 
 // getCKV gets the latest CryptoKeyVersion from the client's cache, which may trigger an actual
 // call to GCP if the existing entry in the cache has expired.
+//
+//nolint:dupl
 func (g *fakeGCPClient) getCKV() (*cryptoKeyVersion, error) {
 	var lerr error
 	loader := ttlcache.LoaderFunc[string, cryptoKeyVersion](
@@ -217,7 +219,7 @@ func (g *fakeGCPClient) getCKV() (*cryptoKeyVersion, error) {
 	return nil, lerr
 }
 
-func (g *fakeGCPClient) sign(ctx context.Context, digest []byte, alg crypto.Hash, crc uint32) ([]byte, error) {
+func (g *fakeGCPClient) sign(_ context.Context, digest []byte, _ crypto.Hash, _ uint32) ([]byte, error) {
 	_, err := g.getCKV()
 	if err != nil {
 		return nil, err
@@ -229,6 +231,8 @@ func (g *fakeGCPClient) sign(ctx context.Context, digest []byte, alg crypto.Hash
 }
 
 // Seems like GCP doesn't support any remote verification, so we'll just use the local verifier
+//
+//nolint:dupl
 func (g *fakeGCPClient) verify(message io.Reader, sig []byte) error {
 	crv, err := g.getCKV()
 	if err != nil {

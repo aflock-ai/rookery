@@ -87,7 +87,7 @@ func loadSigners(ctx context.Context, so options.SignerOptions, ko options.KMSSi
 // on any failure rather than silently continuing, preventing verification from proceeding
 // with an incomplete trust set. (Security: silent verifier loading failures could allow
 // artifacts signed by an expected-but-missing verifier to bypass policy checks.)
-func loadVerifiers(ctx context.Context, so options.VerifierOptions, ko options.KMSVerifierProviderOptions, verifierProviders map[string]struct{}) ([]cryptoutil.Verifier, error) {
+func loadVerifiers(ctx context.Context, so options.VerifierOptions, ko options.KMSVerifierProviderOptions, verifierProviders map[string]struct{}) ([]cryptoutil.Verifier, error) { //nolint:gocognit
 	verifiers := make([]cryptoutil.Verifier, 0)
 	for verifierProvider := range verifierProviders {
 		setters := so[verifierProvider]
@@ -110,11 +110,7 @@ func loadVerifiers(ctx context.Context, so options.VerifierOptions, ko options.K
 						return nil, fmt.Errorf("provided verifier provider is not a KMS verifier provider")
 					}
 
-					s, err := kspv.Verifier(ctx)
-					if err != nil {
-						return nil, fmt.Errorf("failed to create %v KMS verifier: %w", verifierProvider, err)
-					}
-					verifiers = append(verifiers, s)
+					sp = kspv
 				}
 			}
 		}

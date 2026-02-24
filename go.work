@@ -3,25 +3,30 @@ go 1.26.0
 use (
 	// CLIs
 	./aflock
-	./cilock
 	// Core
 	./attestation
 
 	// Builder
 	./builder
+	./cilock
 
 	// Compatibility shim
 	./compat/go-witness
+
+	// Dev tooling
+	./lockctl
 
 	// Attestor plugins
 	./plugins/attestors/aws-codebuild
 	./plugins/attestors/aws-iid
 	./plugins/attestors/commandrun
+	./plugins/attestors/configuration
 	./plugins/attestors/docker
 	./plugins/attestors/environment
 	./plugins/attestors/gcp-iit
 	./plugins/attestors/git
 	./plugins/attestors/github
+	./plugins/attestors/githubaction
 	./plugins/attestors/githubwebhook
 	./plugins/attestors/gitlab
 	./plugins/attestors/jenkins

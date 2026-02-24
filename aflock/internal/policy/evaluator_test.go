@@ -193,16 +193,17 @@ func TestEvaluatePreToolUse_AllowList(t *testing.T) {
 			wantReasonPart: "not in allow list",
 		},
 		{
-			name: "allow list with tool:command pattern still matches tool name only",
+			name: "allow list with tool:command pattern checks both tool and command (R3-230 fix)",
 			policy: &aflock.Policy{
 				Tools: &aflock.ToolsPolicy{
 					Allow: []string{"Bash:ls *"},
 				},
 			},
-			// The allow list check only looks at the tool name portion of the pattern
-			toolName:     "Bash",
-			toolInput:    `{"command": "rm -rf /"}`,
-			wantDecision: aflock.DecisionAllow,
+			// R3-230 fix: allow list now checks the full tool:command pattern
+			toolName:       "Bash",
+			toolInput:      `{"command": "rm -rf /"}`,
+			wantDecision:   aflock.DecisionDeny,
+			wantReasonPart: "not in allow list",
 		},
 	}
 
@@ -496,7 +497,19 @@ func TestEvaluateFileAccess(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := NewEvaluator(tt.policy)
-			input := json.RawMessage(`{"file_path": "` + tt.filePath + `"}`)
+			// Use the correct JSON field name per tool type:
+			// Grep/Glob use "path", NotebookEdit uses "notebook_path", others use "file_path"
+			var input json.RawMessage
+			switch tt.toolName {
+			case "Grep":
+				input = json.RawMessage(`{"pattern": "test", "path": "` + tt.filePath + `"}`)
+			case "Glob":
+				input = json.RawMessage(`{"pattern": "*.go", "path": "` + tt.filePath + `"}`)
+			case "NotebookEdit":
+				input = json.RawMessage(`{"notebook_path": "` + tt.filePath + `"}`)
+			default:
+				input = json.RawMessage(`{"file_path": "` + tt.filePath + `"}`)
+			}
 			decision, reason := e.EvaluatePreToolUse(tt.toolName, input)
 
 			if decision != tt.wantDecision {
@@ -598,7 +611,7 @@ func TestEvaluateDomainAccess(t *testing.T) {
 		{
 			name: "empty domains policy allows all",
 			policy: &aflock.Policy{
-				Tools: &aflock.ToolsPolicy{Allow: []string{"WebFetch"}},
+				Tools:   &aflock.ToolsPolicy{Allow: []string{"WebFetch"}},
 				Domains: &aflock.DomainsPolicy{},
 			},
 			toolName:     "WebFetch",
@@ -606,29 +619,32 @@ func TestEvaluateDomainAccess(t *testing.T) {
 			wantDecision: aflock.DecisionAllow,
 		},
 		{
-			name: "WebSearch is a network operation",
+			// R3-271 fix: WebSearch is excluded from domain access checks because
+			// it sends {query: "..."} not {url: "..."}. Domain restrictions only
+			// apply to WebFetch which has a user-specified target URL.
+			name: "WebSearch is excluded from domain access checks (R3-271)",
 			policy: &aflock.Policy{
 				Tools: &aflock.ToolsPolicy{Allow: []string{"WebSearch"}},
 				Domains: &aflock.DomainsPolicy{
 					Deny: []string{"evil.com"},
 				},
 			},
-			toolName:       "WebSearch",
-			url:            "https://evil.com/search",
-			wantDecision:   aflock.DecisionDeny,
-			wantReasonPart: "matches deny pattern",
+			toolName:     "WebSearch",
+			url:          "https://evil.com/search",
+			wantDecision: aflock.DecisionAllow,
 		},
 		{
-			name: "mcp__ prefixed tool is treated as network operation",
+			name: "mcp__ prefixed tool is NOT treated as network operation",
 			policy: &aflock.Policy{
 				Domains: &aflock.DomainsPolicy{
 					Deny: []string{"evil.com"},
 				},
 			},
-			toolName:       "mcp__slack",
-			url:            "https://evil.com/webhook",
-			wantDecision:   aflock.DecisionDeny,
-			wantReasonPart: "matches deny pattern",
+			// MCP tools don't have "url" fields so domain checks don't apply.
+			// Use tool deny/requireApproval patterns like "mcp__*" instead.
+			toolName:     "mcp__slack",
+			url:          "https://evil.com/webhook",
+			wantDecision: aflock.DecisionAllow,
 		},
 		{
 			name: "URL with port",
@@ -1369,13 +1385,26 @@ func TestExtractDomain(t *testing.T) {
 		{"https://localhost:3000", "localhost"},
 		{"", ""},
 		{"https://", ""},
+
+		// SECURITY: URL userinfo bypass tests (R3-122)
+		// An attacker could use userinfo to bypass domain deny rules.
+		// https://user:pass@evil.com/path must extract "evil.com", not "user".
+		{"https://user:pass@evil.com/path", "evil.com"},
+		{"https://user@evil.com/path", "evil.com"},
+		{"http://admin:secret@malware.org/c2", "malware.org"},
+		{"https://@evil.com/path", "evil.com"},                // empty userinfo
+		{"https://user:@evil.com/path", "evil.com"},           // empty password
+		{"https://user:pass:extra@evil.com/path", "evil.com"}, // malformed userinfo
+		// Edge case: port after host with userinfo
+		{"https://user:pass@evil.com:8443/path", "evil.com"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.url, func(t *testing.T) {
 			got := extractDomain(tt.url)
-			if got != tt.domain {
-				t.Errorf("extractDomain(%q) = %q, want %q", tt.url, got, tt.domain)
+			// R3-236: extractDomain now normalizes to lowercase
+			if got != strings.ToLower(tt.domain) {
+				t.Errorf("extractDomain(%q) = %q, want %q", tt.url, got, strings.ToLower(tt.domain))
 			}
 		})
 	}
@@ -1402,14 +1431,18 @@ func TestIsFileOperation(t *testing.T) {
 }
 
 func TestIsNetworkOperation(t *testing.T) {
-	netOps := []string{"WebFetch", "WebSearch", "mcp__slack", "mcp__github_api"}
+	netOps := []string{"WebFetch", "WebSearch"}
 	for _, tool := range netOps {
 		if !isNetworkOperation(tool) {
 			t.Errorf("expected %q to be a network operation", tool)
 		}
 	}
 
-	nonNetOps := []string{"Read", "Write", "Edit", "Bash", "Task", "Glob", "Grep"}
+	// MCP tools are NOT classified as network operations because they don't have
+	// a "url" field in their input. Domain policy would reject them with "empty domain"
+	// if they were classified as network operations. Use tool deny/requireApproval
+	// patterns like "mcp__*" to control MCP tools instead.
+	nonNetOps := []string{"Read", "Write", "Edit", "Bash", "Task", "Glob", "Grep", "mcp__slack", "mcp__github_api"}
 	for _, tool := range nonNetOps {
 		if isNetworkOperation(tool) {
 			t.Errorf("expected %q to NOT be a network operation", tool)
@@ -1559,4 +1592,355 @@ func TestEvaluationOrder(t *testing.T) {
 			t.Errorf("expected file deny reason, got: %s", reason)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// SECURITY: R3-122 — Domain deny bypass via URL userinfo
+// ---------------------------------------------------------------------------
+
+func TestSecurity_R3_122_DomainBypassViaUserinfo(t *testing.T) {
+	// An attacker could craft URLs with userinfo (user:pass@host) to bypass
+	// domain deny rules. The old extractDomain would parse the userinfo as
+	// the domain, allowing connections to denied domains.
+	policy := &aflock.Policy{
+		Tools: &aflock.ToolsPolicy{Allow: []string{"WebFetch"}},
+		Domains: &aflock.DomainsPolicy{
+			Deny: []string{"evil.com", "*.malware.org"},
+		},
+	}
+
+	tests := []struct {
+		name         string
+		url          string
+		wantDecision aflock.PermissionDecision
+	}{
+		{
+			name:         "normal URL denied correctly",
+			url:          "https://evil.com/steal-data",
+			wantDecision: aflock.DecisionDeny,
+		},
+		{
+			name:         "userinfo with password bypasses deny (R3-122)",
+			url:          "https://user:pass@evil.com/steal-data",
+			wantDecision: aflock.DecisionDeny,
+		},
+		{
+			name:         "userinfo without password bypasses deny (R3-122)",
+			url:          "https://user@evil.com/steal-data",
+			wantDecision: aflock.DecisionDeny,
+		},
+		{
+			name:         "userinfo with subdomain wildcard deny (R3-122)",
+			url:          "https://admin:secret@c2.malware.org/beacon",
+			wantDecision: aflock.DecisionDeny,
+		},
+		{
+			name:         "benign URL with userinfo still allowed",
+			url:          "https://user:pass@safe-api.com/data",
+			wantDecision: aflock.DecisionAllow,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := NewEvaluator(policy)
+			input := json.RawMessage(`{"url": "` + tt.url + `"}`)
+			decision, reason := e.EvaluatePreToolUse("WebFetch", input)
+			if decision != tt.wantDecision {
+				t.Errorf("EvaluatePreToolUse(%q) = %v, want %v (reason: %s)", tt.url, decision, tt.wantDecision, reason)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SECURITY: R3-123 — MatchToolPattern regex substring match
+// ---------------------------------------------------------------------------
+
+func TestSecurity_R3_123_MatchToolPatternRegexSubstring(t *testing.T) {
+	// MatchToolPattern uses MatchRegex which does substring matching.
+	// For deny/requireApproval this is MORE restrictive (catches evasion via
+	// command chaining). Document this behavior with tests.
+	m := NewMatcher()
+
+	// Deny pattern "rm *" — attacker tries to chain commands
+	// The regex "rm " (from "rm *" after glob fails) still catches the substring
+	t.Run("deny catches chained commands via regex", func(t *testing.T) {
+		// "echo safe && rm -rf /" — the glob "rm *" won't match because the
+		// string doesn't start with "rm ". But the regex might catch "rm" substring.
+		matched := m.MatchToolPattern("Bash:rm *", "Bash", "echo safe && rm -rf /important")
+		// Glob "rm *" matches "rm -rf /important" only if the input starts with "rm "
+		// The full input "echo safe && rm -rf /important" doesn't start with "rm"
+		// Regex "rm *" = "r followed by 0+ m's" which is a weird regex
+		// Actually "rm *" as regex means "r" then "m*" (zero or more m's) — matches "r" anywhere
+		// This DOES match the substring "rm" in the input
+		if !matched {
+			t.Log("NOTE: MatchToolPattern did not catch chained rm command — glob+regex both missed")
+		}
+	})
+
+	// R3-241: MatchToolPattern uses glob-only, no regex fallback.
+	// Dot in glob matches literal dot, not "any char" like in regex.
+	t.Run("dot in pattern is literal in glob only (R3-241 fix)", func(t *testing.T) {
+		// Pattern "ls /tmp/data.txt" — glob matches literally "ls /tmp/data.txt"
+		// Regex would match "ls /tmp/dataXtxt" (dot = any char), but no regex fallback.
+		globOnly := m.MatchGlob("ls /tmp/data.txt", "ls /tmp/dataXtxt")
+		regexMatches := m.MatchRegex("ls /tmp/data.txt", "ls /tmp/dataXtxt")
+		toolMatches := m.MatchToolPattern("Bash:ls /tmp/data.txt", "Bash", "ls /tmp/dataXtxt")
+
+		if globOnly {
+			t.Error("glob should NOT match ls /tmp/dataXtxt")
+		}
+		if !regexMatches {
+			t.Error("regex SHOULD match ls /tmp/dataXtxt (dot = any char)")
+		}
+		// R3-241: MatchToolPattern is glob-only, so dot is literal
+		if toolMatches {
+			t.Error("R3-241 fix: MatchToolPattern should NOT match via regex fallback")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// SECURITY: R3-125 — WebSearch always denied when domain policy exists
+// ---------------------------------------------------------------------------
+
+func TestSecurity_R3_125_WebSearchAlwaysDeniedWithDomainPolicy(t *testing.T) {
+	// WebSearch sends {"query": "search text"} not {"url": "..."}.
+	// evaluateDomainAccess parses input as WebFetchToolInput which expects "url" field.
+	// Since "query" doesn't map to "url", the URL is empty → empty domain → deny.
+	// This means WebSearch is ALWAYS denied when any domain policy exists,
+	// even with a permissive allow-all policy.
+
+	tests := []struct {
+		name         string
+		policy       *aflock.Policy
+		toolInput    string
+		wantDecision aflock.PermissionDecision
+		description  string
+	}{
+		{
+			name: "WebSearch with allow-all domain policy is denied",
+			policy: &aflock.Policy{
+				Tools: &aflock.ToolsPolicy{Allow: []string{"WebSearch"}},
+				Domains: &aflock.DomainsPolicy{
+					Allow: []string{"*"},
+				},
+			},
+			toolInput:    `{"query": "golang best practices"}`,
+			wantDecision: aflock.DecisionAllow, // SHOULD be allowed, but gets denied
+			description:  "permissive domain policy should allow WebSearch",
+		},
+		{
+			name: "WebSearch with specific deny list is denied for wrong reason",
+			policy: &aflock.Policy{
+				Tools: &aflock.ToolsPolicy{Allow: []string{"WebSearch"}},
+				Domains: &aflock.DomainsPolicy{
+					Deny: []string{"evil.com"},
+				},
+			},
+			toolInput:    `{"query": "safe search query"}`,
+			wantDecision: aflock.DecisionAllow, // SHOULD be allowed (not searching evil.com)
+			description:  "benign WebSearch denied because empty domain != evil.com check fails first",
+		},
+		{
+			name: "WebSearch without domain policy works fine",
+			policy: &aflock.Policy{
+				Tools: &aflock.ToolsPolicy{Allow: []string{"WebSearch"}},
+				// No Domains policy
+			},
+			toolInput:    `{"query": "search query"}`,
+			wantDecision: aflock.DecisionAllow,
+			description:  "without domain policy, WebSearch is allowed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := NewEvaluator(tt.policy)
+			decision, reason := e.EvaluatePreToolUse("WebSearch", json.RawMessage(tt.toolInput))
+
+			if decision != tt.wantDecision {
+				t.Errorf("SECURITY BUG R3-125: %s\n"+
+					"got decision=%v, want=%v\n"+
+					"reason: %s\n"+
+					"WebSearch sends {\"query\":...} but evaluateDomainAccess expects {\"url\":...}",
+					tt.description, decision, tt.wantDecision, reason)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SECURITY: R3-126 — WebSearch not tracked for data flow classification
+// ---------------------------------------------------------------------------
+
+func TestSecurity_R3_126_WebSearchDataFlowBypass(t *testing.T) {
+	// WebSearch is not in isReadOperation() and not handled by
+	// extractInputForMatching(), so:
+	// 1. WebSearch reads are never classified as materials
+	// 2. Data flow classify patterns for WebSearch never match
+	// This means sensitive data found via web search won't be tracked.
+
+	t.Run("WebSearch should be classified as read operation", func(t *testing.T) {
+		if isReadOperation("WebSearch") {
+			t.Log("FIXED: WebSearch is now a read operation")
+		} else {
+			t.Errorf("SECURITY BUG R3-126: WebSearch is NOT classified as a read operation. " +
+				"Data accessed via WebSearch will not be tracked as materials for data flow rules. " +
+				"isReadOperation(\"WebSearch\") = false, want true")
+		}
+	})
+
+	t.Run("extractInputForMatching should handle WebSearch query", func(t *testing.T) {
+		e := NewEvaluator(&aflock.Policy{})
+		got := e.extractInputForMatching("WebSearch", json.RawMessage(`{"query": "sensitive financial data"}`))
+		if got == "" {
+			t.Errorf("SECURITY BUG R3-126: extractInputForMatching(\"WebSearch\", ...) returns empty string. " +
+				"Data flow classify patterns like \"WebSearch:*financial*\" will never match. " +
+				"Should extract the query field for pattern matching.")
+		} else {
+			t.Logf("FIXED: extractInputForMatching returns %q for WebSearch", got)
+		}
+	})
+
+	t.Run("WebSearch data flow classification doesn't work", func(t *testing.T) {
+		policy := &aflock.Policy{
+			DataFlow: &aflock.DataFlowPolicy{
+				Classify: map[string][]string{
+					"sensitive": {"WebSearch:*confidential*"},
+				},
+			},
+		}
+
+		e := NewEvaluator(policy)
+		decision, _, newMaterial := e.EvaluateDataFlow(
+			"WebSearch",
+			json.RawMessage(`{"query": "search for confidential documents"}`),
+			nil,
+		)
+
+		if decision != aflock.DecisionAllow {
+			t.Errorf("unexpected deny: WebSearch should be allowed")
+		}
+
+		if newMaterial == nil {
+			t.Errorf("SECURITY BUG R3-126: WebSearch reading 'confidential documents' was NOT " +
+				"classified as sensitive material. Expected material with label 'sensitive', got nil. " +
+				"This allows data flow bypass: read sensitive data via WebSearch, then exfiltrate " +
+				"without triggering flow rules.")
+		} else {
+			t.Logf("FIXED: WebSearch classified as %q material", newMaterial.Label)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// R3-127: MatchToolPattern regex substring match causes unintended deny/approval
+// ---------------------------------------------------------------------------
+
+// TestSecurity_R3_127_RegexSubstringMatchInToolPattern proves that the
+// MatchToolPattern function uses regexp.MatchString (substring match) as a
+// fallback after glob matching. This means deny patterns like "Bash:rm" will
+// also match commands containing "rm" as a substring, e.g. "format disk" or
+// "echo informational". This creates unpredictable, overly-broad denials.
+//
+// Severity: MEDIUM - Causes usability issues and unpredictable policy behavior.
+// Could also mask security issues if admins assume patterns are precise.
+func TestSecurity_R3_127_RegexSubstringMatchInToolPattern(t *testing.T) {
+	tests := []struct {
+		name         string
+		denyPattern  string
+		command      string
+		wantDecision aflock.PermissionDecision
+		description  string
+	}{
+		{
+			name:         "rm deny should match rm -rf",
+			denyPattern:  "Bash:rm *",
+			command:      "rm -rf /tmp/test",
+			wantDecision: aflock.DecisionDeny,
+			description:  "glob correctly matches rm command",
+		},
+		{
+			name:         "rm deny should NOT match format (but regex finds 'rm' substring)",
+			denyPattern:  "Bash:rm",
+			command:      "format disk",
+			wantDecision: aflock.DecisionAllow, // SHOULD be allow — "format" is not "rm"
+			description:  "regex substring match finds 'rm' in 'format' — false positive",
+		},
+		{
+			name:         "rm deny should NOT match echo informational",
+			denyPattern:  "Bash:rm",
+			command:      "echo informational message",
+			wantDecision: aflock.DecisionAllow, // SHOULD be allow
+			description:  "regex substring match finds 'rm' in 'informational'",
+		},
+		{
+			// R3-241: MatchToolPattern now uses glob-only. ".*" as a glob matches
+			// only strings starting with a literal dot (e.g., ".hidden"), NOT everything.
+			// This is correct behavior — use "*" glob to match all commands.
+			name:         "dotstar glob only matches dotfiles not everything (R3-241 fix)",
+			denyPattern:  "Bash:.*",
+			command:      "echo hello",
+			wantDecision: aflock.DecisionAllow, // glob .* only matches dotfiles, not "echo hello"
+			description:  "R3-241 fix: glob-only means .* doesn't match all commands",
+		},
+		{
+			name:         "ls deny should NOT match false positive",
+			denyPattern:  "Bash:ls",
+			command:      "echo false",
+			wantDecision: aflock.DecisionAllow, // SHOULD be allow
+			description:  "regex 'ls' finds 'ls' in 'false' — false positive",
+		},
+		{
+			name:         "git deny should NOT block legitimate commands",
+			denyPattern:  "Bash:git push",
+			command:      "echo digit pushed",
+			wantDecision: aflock.DecisionAllow, // SHOULD be allow
+			description:  "regex 'git push' finds 'git push' in 'digit pushed'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := &aflock.Policy{
+				Tools: &aflock.ToolsPolicy{
+					Allow: []string{"Bash"},
+					Deny:  []string{tt.denyPattern},
+				},
+			}
+			e := NewEvaluator(policy)
+			input := json.RawMessage(`{"command": "` + tt.command + `"}`)
+			decision, reason := e.EvaluatePreToolUse("Bash", input)
+
+			if decision != tt.wantDecision {
+				t.Errorf("SECURITY BUG R3-127: deny pattern %q against command %q: "+
+					"got %v, want %v (reason: %s) — %s",
+					tt.denyPattern, tt.command, decision, tt.wantDecision, reason, tt.description)
+			}
+		})
+	}
+}
+
+// TestSecurity_R3_128_RequireApprovalRegexSubstring proves the same substring
+// match issue affects requireApproval patterns, not just deny patterns.
+func TestSecurity_R3_128_RequireApprovalRegexSubstring(t *testing.T) {
+	policy := &aflock.Policy{
+		Tools: &aflock.ToolsPolicy{
+			Allow:           []string{"Bash"},
+			RequireApproval: []string{"Bash:sudo"},
+		},
+	}
+	e := NewEvaluator(policy)
+
+	// "pseudo" contains "sudo" as a regex substring
+	input := json.RawMessage(`{"command": "echo pseudo-random"}`)
+	decision, reason := e.EvaluatePreToolUse("Bash", input)
+
+	if decision == aflock.DecisionAsk {
+		t.Errorf("SECURITY BUG R3-128: requireApproval pattern 'Bash:sudo' incorrectly "+
+			"matches command 'echo pseudo-random' via regex substring match "+
+			"(reason: %s). This creates unnecessary approval prompts for benign commands.", reason)
+	}
 }

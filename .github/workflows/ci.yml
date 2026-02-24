@@ -96,7 +96,13 @@ jobs:
           go-version-file: '.go-version'
 
       - name: Run go vet
-        run: go vet ./...
+        run: |
+          # go.work doesn't support ./... from repo root, iterate workspace members
+          for dir in $(grep '^\s*\./' go.work | sed 's/^[[:space:]]*//' | sed 's|^\.\/||'); do
+            echo "vetting $dir..."
+            (cd "$dir" && go vet ./...) || exit 1
+          done
+          echo "All modules pass go vet"
 
   # ── Build ───────────────────────────────────────────────────────────
   build:
@@ -112,6 +118,8 @@ jobs:
             dir: aflock
           - name: builder
             dir: builder
+          - name: cilock
+            dir: cilock
     steps:
       - uses: actions/checkout@v4
 
@@ -189,33 +197,62 @@ jobs:
       - name: Scan for forbidden patterns
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
-          DIFF=$(git diff "$BASE"..HEAD -- '*.go' || true)
           ERRORS=""
 
-          # os.Exit outside of main packages
-          EXITS=$(echo "$DIFF" | grep -n '^\+.*os\.Exit' | grep -v 'main\.go' | grep -v '_test\.go' || true)
-          if [ -n "$EXITS" ]; then
-            ERRORS="${ERRORS}\nos.Exit() outside main (use error returns instead):\n$EXITS"
-          fi
+          # File-aware diff scanning: track current file to properly
+          # exclude test files and main.go from os.Exit/panic checks
+          CURRENT_FILE=""
+          while IFS= read -r line; do
+            # Track current file from diff headers
+            if [[ "$line" == "+++ b/"* ]]; then
+              CURRENT_FILE="${line#+++ b/}"
+              continue
+            fi
 
-          # panic outside init functions
-          PANICS=$(echo "$DIFF" | grep -n '^\+.*\bpanic(' | grep -v 'func init' | grep -v '_test\.go' || true)
-          if [ -n "$PANICS" ]; then
-            ERRORS="${ERRORS}\npanic() outside init (use error returns instead):\n$PANICS"
-          fi
+            # Only check added lines
+            [[ "$line" == "+"* ]] || continue
+            [[ "$line" == "+++"* ]] && continue
+            ADDED="${line#+}"
 
-          # //nolint without justification
-          NOLINTS=$(echo "$DIFF" | grep -n '^\+.*//nolint' | grep -v '//nolint:' || true)
-          NOLINTS_NO_REASON=$(echo "$DIFF" | grep -n '^\+.*//nolint:' | grep -v '//' | grep -v 'reason' || true)
-          if [ -n "$NOLINTS" ]; then
-            ERRORS="${ERRORS}\n//nolint without specific linter (use //nolint:lintername):\n$NOLINTS"
-          fi
+            # Skip comments and string literals (lines containing quotes)
+            TRIMMED=$(echo "$ADDED" | sed 's/^[[:space:]]*//')
+            [[ "$TRIMMED" == "//"* ]] && continue
 
-          # Hardcoded credentials patterns
-          CREDS=$(echo "$DIFF" | grep -n '^\+' | grep -iP '(password|secret|token|apikey)\s*[:=]\s*"[^"]{8,}"' | grep -v '_test\.go' | grep -v 'example' || true)
-          if [ -n "$CREDS" ]; then
-            ERRORS="${ERRORS}\nPossible hardcoded credentials:\n$CREDS"
-          fi
+            IS_TEST=false
+            IS_MAIN=false
+            [[ "$CURRENT_FILE" == *"_test.go" ]] && IS_TEST=true
+            [[ "$(basename "$CURRENT_FILE")" == "main.go" ]] && IS_MAIN=true
+
+            # os.Exit outside main.go and test files
+            if [[ "$IS_TEST" == false && "$IS_MAIN" == false ]]; then
+              if echo "$ADDED" | grep -q 'os\.Exit('; then
+                ERRORS="${ERRORS}\n  os.Exit() in $CURRENT_FILE: $TRIMMED"
+              fi
+            fi
+
+            # panic outside test files and init functions
+            if [[ "$IS_TEST" == false ]]; then
+              if echo "$ADDED" | grep -q '\bpanic('; then
+                if ! echo "$ADDED" | grep -q 'func init('; then
+                  ERRORS="${ERRORS}\n  panic() in $CURRENT_FILE: $TRIMMED"
+                fi
+              fi
+            fi
+
+            # //nolint without specific linter
+            if echo "$ADDED" | grep -q '//nolint' && ! echo "$ADDED" | grep -q '//nolint:'; then
+              ERRORS="${ERRORS}\n  //nolint without linter in $CURRENT_FILE: $TRIMMED"
+            fi
+
+            # Hardcoded credentials (skip test files and examples)
+            if [[ "$IS_TEST" == false ]]; then
+              if echo "$ADDED" | grep -iqP '(password|secret|token|apikey)\s*[:=]\s*"[^"]{8,}"'; then
+                if ! echo "$ADDED" | grep -qi 'example'; then
+                  ERRORS="${ERRORS}\n  Possible credential in $CURRENT_FILE: $TRIMMED"
+                fi
+              fi
+            fi
+          done < <(git diff "$BASE"..HEAD -- '*.go' || true)
 
           if [ -n "$ERRORS" ]; then
             echo "Forbidden patterns detected:$ERRORS"

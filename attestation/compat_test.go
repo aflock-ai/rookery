@@ -21,11 +21,11 @@ type compatTestAttestor struct {
 	Value string `json:"value"`
 }
 
-func (a *compatTestAttestor) Name() string              { return "compat-test" }
-func (a *compatTestAttestor) Type() string              { return "https://aflock.ai/attestations/compat-test/v0.1" }
-func (a *compatTestAttestor) RunType() RunType          { return PreMaterialRunType }
+func (a *compatTestAttestor) Name() string                     { return "compat-test" }
+func (a *compatTestAttestor) Type() string                     { return "https://aflock.ai/attestations/compat-test/v0.1" }
+func (a *compatTestAttestor) RunType() RunType                 { return PreMaterialRunType }
 func (a *compatTestAttestor) Attest(*AttestationContext) error { return nil }
-func (a *compatTestAttestor) Schema() *jsonschema.Schema { return jsonschema.Reflect(a) }
+func (a *compatTestAttestor) Schema() *jsonschema.Schema       { return jsonschema.Reflect(a) }
 
 // TestLegacyAliasRegistration verifies that RegisterLegacyAlias makes old URIs
 // resolve to the same factory as new URIs.

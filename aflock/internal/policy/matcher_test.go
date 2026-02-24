@@ -133,13 +133,28 @@ func TestMatchRegex(t *testing.T) {
 		value   string
 		want    bool
 	}{
-		{`rm\s+-rf`, "rm -rf /tmp", true},
+		// Unanchored patterns use full-string matching (R3-127 fix).
+		// Use .* for prefix/suffix matching when needed.
+		{`rm\s+-rf`, "rm -rf", true},        // full match
+		{`rm\s+-rf`, "rm -rf /tmp", false},  // trailing content — need .*
+		{`rm\s+-rf.*`, "rm -rf /tmp", true}, // explicit .* for trailing
 		{`rm\s+-rf`, "rm /tmp", false},
-		{`git\s+push`, "git push origin main", true},
+		{`git\s+push`, "git push", true},              // full match
+		{`git\s+push`, "git push origin main", false}, // trailing — need .*
+		{`git\s+push.*`, "git push origin main", true},
+
+		// Patterns with explicit anchors (^ or $) are used as-is.
 		{`^sudo\s+`, "sudo rm -rf", true},
 		{`^sudo\s+`, "nosudo command", false},
-		{`\d+`, "abc123def", true},
+		{`\d+$`, "abc123", true}, // anchored with $
+
+		// Unanchored: full-string match only
+		{`\d+`, "123", true},        // whole string is digits
+		{`\d+`, "abc123def", false}, // no longer substring match
+
 		{`\d+`, "abcdef", false},
+
+		// Fully anchored patterns
 		{`^$`, "", true},
 		{`^$`, "notempty", false},
 		{`.*password.*`, "set password=secret", true},
@@ -169,14 +184,15 @@ func TestMatchRegex_InvalidPattern(t *testing.T) {
 func TestMatchRegex_CachesCompiledPattern(t *testing.T) {
 	m := NewMatcher()
 
-	m.MatchRegex(`rm\s+`, "rm -rf")
+	// Use an anchored pattern so the behavior is explicit
+	m.MatchRegex(`^rm\s+`, "rm -rf")
 
-	if _, ok := m.regexes[`rm\s+`]; !ok {
+	if _, ok := m.regexes[`^rm\s+`]; !ok {
 		t.Error("regex pattern should be cached after first use")
 	}
 
 	// Second call should use cache
-	if !m.MatchRegex(`rm\s+`, "rm foo") {
+	if !m.MatchRegex(`^rm\s+`, "rm foo") {
 		t.Error("cached regex should still work")
 	}
 }
@@ -289,9 +305,12 @@ func TestMatchToolPattern(t *testing.T) {
 		{"git pull no match", "Bash:git push*", "Bash", "git pull", false},
 		{"git push force", "Bash:git push --force*", "Bash", "git push --force origin main", true},
 
-		// Regex fallback in command pattern
-		{"regex pattern match", `Bash:rm\s+-rf`, "Bash", "rm -rf /", true},
-		{"regex pattern no match", `Bash:rm\s+-rf`, "Bash", "rm /tmp", false},
+		// R3-241: MatchToolPattern uses glob-only, no regex fallback.
+		// Regex metacharacters are treated as glob literals.
+		{"regex chars as glob literals no match", `Bash:rm\s+-rf`, "Bash", "rm -rf", false},
+		{"regex chars as glob literals no match 2", `Bash:rm\s+-rf`, "Bash", "rm -rf /", false},
+		{"regex chars as glob literals no match 3", `Bash:rm\s+-rf.*`, "Bash", "rm -rf /", false},
+		{"regex chars as glob literal no match 4", `Bash:rm\s+-rf`, "Bash", "rm /tmp", false},
 
 		// Complex tool patterns
 		{"double wildcard in tool", "*", "AnyTool", "", true},
@@ -317,19 +336,25 @@ func TestMatchToolPattern(t *testing.T) {
 	}
 }
 
-func TestMatchToolPattern_GlobAndRegexFallback(t *testing.T) {
+func TestMatchToolPattern_GlobOnlyNoRegexFallback(t *testing.T) {
 	m := NewMatcher()
 
-	// Pattern that is a valid regex but not a valid glob match for the value.
-	// MatchToolPattern tries glob first, then regex.
-	// "rm\s+-rf" as a glob won't match "rm -rf /" (literal \s+ doesn't match),
-	// but as a regex it will.
-	got := m.MatchToolPattern(`Bash:rm\s+-rf`, "Bash", "rm -rf /")
-	if !got {
-		t.Error("MatchToolPattern should fall back to regex when glob doesn't match")
+	// R3-241: MatchToolPattern uses glob-only matching. No regex fallback.
+	// Regex metacharacters (\s, +, etc.) are treated as glob literals.
+
+	// Regex-style pattern does NOT match via glob (no regex fallback)
+	got := m.MatchToolPattern(`Bash:rm\s+-rf.*`, "Bash", "rm -rf /")
+	if got {
+		t.Error("MatchToolPattern should NOT fall back to regex (R3-241 fix)")
 	}
 
-	// A pattern that matches glob but is also valid regex - glob takes precedence
+	// Regex-style pattern does NOT match via glob
+	got = m.MatchToolPattern(`Bash:rm\s+-rf`, "Bash", "rm -rf")
+	if got {
+		t.Error("MatchToolPattern should NOT match regex patterns (R3-241 fix)")
+	}
+
+	// Glob pattern still matches normally
 	got = m.MatchToolPattern("Bash:rm *", "Bash", "rm -rf /tmp")
 	if !got {
 		t.Error("MatchToolPattern should match via glob")
@@ -345,12 +370,12 @@ func TestMatcherCaching(t *testing.T) {
 
 	// First calls compile and cache
 	m.MatchGlob("*.go", "main.go")
-	m.MatchRegex(`rm\s+`, "rm -rf")
+	m.MatchRegex(`^rm\s+`, "rm -rf")
 
 	if _, ok := m.globs["*.go"]; !ok {
 		t.Error("glob pattern should be cached")
 	}
-	if _, ok := m.regexes[`rm\s+`]; !ok {
+	if _, ok := m.regexes[`^rm\s+`]; !ok {
 		t.Error("regex pattern should be cached")
 	}
 
@@ -358,7 +383,7 @@ func TestMatcherCaching(t *testing.T) {
 	if !m.MatchGlob("*.go", "foo.go") {
 		t.Error("cached glob should still work")
 	}
-	if !m.MatchRegex(`rm\s+`, "rm foo") {
+	if !m.MatchRegex(`^rm\s+`, "rm foo") {
 		t.Error("cached regex should still work")
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func createMockServer() *httptest.Server {
@@ -94,6 +95,43 @@ func TestFetchToken(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, testCase.wantToken, gotToken)
 			}
+		})
+	}
+}
+
+func TestJWKSURLOverride(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVal   string
+		expected string
+	}{
+		{
+			name:     "default URL when env not set",
+			envVal:   "",
+			expected: jwksURL,
+		},
+		{
+			name:     "custom URL from env",
+			envVal:   "http://localhost:8080/.well-known/jwks",
+			expected: "http://localhost:8080/.well-known/jwks",
+		},
+		{
+			name:     "custom URL with different port",
+			envVal:   "http://localhost:9999/jwks",
+			expected: "http://localhost:9999/jwks",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envVal != "" {
+				t.Setenv("WITNESS_GITHUB_JWKS_URL", tt.envVal)
+			} else {
+				require.NoError(t, os.Unsetenv("WITNESS_GITHUB_JWKS_URL"))
+			}
+			a := New()
+			require.NotNil(t, a)
+			assert.Equal(t, tt.expected, a.jwksURL)
 		})
 	}
 }

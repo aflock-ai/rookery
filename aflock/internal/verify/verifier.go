@@ -71,6 +71,8 @@ func NewVerifier() *Verifier {
 }
 
 // VerifySession verifies a session's attestations against its policy.
+//
+//nolint:gocognit,gocyclo,funlen // session verification requires many validation steps
 func (v *Verifier) VerifySession(sessionID string) (*Result, error) {
 	result := &Result{
 		SessionID:  sessionID,
@@ -200,7 +202,7 @@ func (v *Verifier) VerifyLatestSession() (*Result, error) {
 			continue
 		}
 		statePath := filepath.Join(stateDir, entry.Name(), "state.json")
-		info, err := os.Stat(statePath)
+		info, err := os.Stat(statePath) //nolint:gosec // G703: path from attestation directory
 		if err != nil {
 			continue
 		}
@@ -219,7 +221,7 @@ func (v *Verifier) VerifyLatestSession() (*Result, error) {
 
 // VerifyAttestation verifies a single attestation envelope.
 func (v *Verifier) VerifyAttestation(envelopePath string, pol *aflock.Policy) error {
-	data, err := os.ReadFile(envelopePath)
+	data, err := os.ReadFile(envelopePath) //nolint:gosec // G304: envelope path from attestation directory
 	if err != nil {
 		return fmt.Errorf("read envelope: %w", err)
 	}
@@ -399,6 +401,8 @@ type StepsResult struct {
 // VerifySteps verifies attestations for all required steps in a policy.
 // attestDir is the base directory (e.g., ~/.aflock/attestations)
 // treeHash is the git tree hash to verify attestations for
+//
+//nolint:gocognit // step verification is inherently complex
 func (v *Verifier) VerifySteps(pol *aflock.Policy, attestDir, treeHash string) (*StepsResult, error) {
 	result := &StepsResult{
 		Success:    true,
@@ -434,7 +438,7 @@ func (v *Verifier) VerifySteps(pol *aflock.Policy, attestDir, treeHash string) (
 
 		// Look for attestation file
 		attestPath := filepath.Join(attestDir, treeHash, stepName+".intoto.json")
-		if _, err := os.Stat(attestPath); os.IsNotExist(err) {
+		if _, err := os.Stat(attestPath); os.IsNotExist(err) { //nolint:nestif
 			stepResult.Found = false
 			stepResult.Errors = append(stepResult.Errors, fmt.Sprintf("Attestation not found: %s", attestPath))
 			result.Success = false
@@ -457,7 +461,7 @@ func (v *Verifier) VerifySteps(pol *aflock.Policy, attestDir, treeHash string) (
 		}
 
 		// Check artifact chain from previous steps
-		if len(step.ArtifactsFrom) > 0 {
+		if len(step.ArtifactsFrom) > 0 { //nolint:nestif
 			for _, fromStep := range step.ArtifactsFrom {
 				if fromResult, exists := result.Steps[fromStep]; exists && fromResult.Found {
 					if err := v.compareArtifacts(fromResult.AttestationPath, attestPath); err != nil {
@@ -533,7 +537,7 @@ func (v *Verifier) compareArtifacts(fromPath, toPath string) error {
 // extractDigests extracts artifact digests from an attestation envelope.
 // artifactType should be "products" or "materials".
 func extractDigests(attestPath, artifactType string) (map[string]map[string]string, error) {
-	data, err := os.ReadFile(attestPath)
+	data, err := os.ReadFile(attestPath) //nolint:gosec // G304: attestation path from state directory
 	if err != nil {
 		return nil, err
 	}
@@ -598,8 +602,10 @@ func extractDigests(attestPath, artifactType string) (map[string]map[string]stri
 }
 
 // verifyStepAttestation verifies a single step's attestation against policy.
+//
+//nolint:gocyclo,funlen // step attestation verification has many validation paths
 func (v *Verifier) verifyStepAttestation(attestPath string, step *aflock.Step, pol *aflock.Policy) error {
-	data, err := os.ReadFile(attestPath)
+	data, err := os.ReadFile(attestPath) //nolint:gosec // G304: attestation path from state directory
 	if err != nil {
 		return fmt.Errorf("read attestation: %w", err)
 	}
@@ -721,7 +727,7 @@ func verifyDSSESignatures(payloadType string, payload []byte, signatures []struc
 
 		// Verify the signature against each candidate cert
 		for _, cert := range candidates {
-			if !verifySignatureWithCert(cert, hash[:], sigBytes) {
+			if !verifySignatureWithCert(cert, paeBytes, hash[:], sigBytes) {
 				continue
 			}
 
@@ -748,9 +754,10 @@ func verifyDSSESignatures(payloadType string, payload []byte, signatures []struc
 	return fmt.Errorf("no valid signature from an allowed functionary")
 }
 
-// verifySignatureWithCert verifies a hash+signature against a certificate's public key.
-// Supports ECDSA, RSA (PKCS1v15 and PSS), and Ed25519 key types.
-func verifySignatureWithCert(cert *x509.Certificate, hash, sig []byte) bool {
+// verifySignatureWithCert verifies a signature against a certificate's public key.
+// paeBytes is the raw Pre-Authentication Encoding (used by Ed25519 which signs the raw message).
+// hash is SHA256(paeBytes) (used by ECDSA and RSA which sign a digest).
+func verifySignatureWithCert(cert *x509.Certificate, paeBytes, hash, sig []byte) bool {
 	switch key := cert.PublicKey.(type) {
 	case *ecdsa.PublicKey:
 		return ecdsa.VerifyASN1(key, hash, sig)
@@ -761,9 +768,10 @@ func verifySignatureWithCert(cert *x509.Certificate, hash, sig []byte) bool {
 		}
 		return rsa.VerifyPSS(key, crypto.SHA256, hash, sig, nil) == nil
 	case ed25519PublicKey:
-		// Ed25519 uses the raw message, not a hash — but DSSE always hashes first.
-		// In practice, Ed25519 DSSE signatures sign the hash directly.
-		return ed25519Verify(key, hash, sig)
+		// Ed25519 signs the raw message, not a hash. The rookery DSSE signer
+		// calls ed25519.Sign(key, PAE) directly (unlike ECDSA/RSA which hash first),
+		// so verification must use the raw PAE bytes, not SHA256(PAE).
+		return ed25519Verify(key, paeBytes, sig)
 	default:
 		return false
 	}
@@ -840,6 +848,8 @@ func matchSPIFFEPattern(pattern, spiffeID string) bool {
 // topoSortSteps returns step names in topological order based on ArtifactsFrom dependencies.
 // Steps with no dependencies come first. If there are cycles, the remaining steps are
 // appended in sorted order (alphabetical) to ensure deterministic output.
+//
+//nolint:gocognit // topological sort is inherently complex
 func topoSortSteps(steps map[string]aflock.Step) []string {
 	// Build in-degree map and adjacency list
 	inDegree := make(map[string]int)

@@ -154,7 +154,7 @@ func (c *SpireClient) IsAvailable() bool {
 	if err := c.Connect(ctx); err != nil {
 		return false
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	_, err := c.FetchX509SVID(ctx)
 	return err == nil
@@ -175,4 +175,3 @@ func IsTrustedModel(modelName string) bool {
 	_, ok := TrustedModels[modelName]
 	return ok
 }
-

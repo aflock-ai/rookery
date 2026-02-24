@@ -21,39 +21,68 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/gobwas/glob"
 )
 
 // compiledGlobCache caches compiled glob patterns so they are not recompiled
 // on every call to isEnvironmentVariableSensitive. Glob compilation is O(n) in
 // pattern length and allocates; caching avoids redundant work when the same
 // sensitive-env-var list is checked against many environment variables.
-var compiledGlobCache = make(map[string]glob.Glob)
+var compiledGlobCache sync.Map
+
+// safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob library
+// can panic on certain patterns that compile successfully but trigger out-of-bounds
+// access during matching. We treat panics as non-matches.
+func safeGlobMatch(g glob.Glob, s string) (matched bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			matched = false
+			err = fmt.Errorf("glob match panicked: %v", r)
+		}
+	}()
+	return g.Match(s), nil
+}
 
 // isEnvironmentVariableSensitive checks if an environment variable is sensitive
-// according to the sensitive environment variables list
-func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]struct{}) bool {
-	// Direct match
-	if _, exists := sensitiveEnvVars[key]; exists {
-		return true
-	}
+// according to the sensitive environment variables list.
+// Both exact entries and glob patterns are matched case-insensitively (R3-129).
+func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]struct{}) bool { //nolint:gocognit // env var sensitivity check requires glob and case-insensitive matching
+	upperKey := strings.ToUpper(key)
 
-	// Check glob patterns (compiled patterns are cached to avoid redundant work)
 	for envVarPattern := range sensitiveEnvVars {
-		if strings.Contains(envVarPattern, "*") {
-			g, ok := compiledGlobCache[envVarPattern]
+		if strings.Contains(envVarPattern, "*") { //nolint:nestif // glob pattern matching requires nested logic
+			// Glob pattern — normalize to uppercase for case-insensitive matching.
+			upperPattern := strings.ToUpper(envVarPattern)
+			cached, ok := compiledGlobCache.Load(upperPattern)
 			if !ok {
-				var err error
-				g, err = glob.Compile(envVarPattern)
+				compiled, err := glob.Compile(upperPattern)
 				if err != nil {
 					continue
 				}
-				compiledGlobCache[envVarPattern] = g
+				compiledGlobCache.Store(upperPattern, compiled)
+				cached = compiled
 			}
-			if g.Match(key) {
+			g, ok := cached.(glob.Glob)
+			if !ok {
+				continue
+			}
+			matched, err := safeGlobMatch(g, upperKey)
+			if err != nil {
+				log.Debugf("glob match error for pattern %q key %q: %v", envVarPattern, key, err)
+				continue
+			}
+			if matched {
+				return true
+			}
+		} else {
+			// Exact entry — case-insensitive comparison (R3-129).
+			// Without this, entries like AWS_ACCESS_KEY_ID would not match
+			// aws_access_key_id since the map lookup is case-sensitive.
+			if strings.ToUpper(envVarPattern) == upperKey {
 				return true
 			}
 		}
@@ -203,7 +232,7 @@ func (a *Attestor) ScanForEnvVarValues(content, filePath string, sensitiveEnvVar
 
 // checkDecodedContentForSensitiveValues examines decoded content for sensitive environment variable values
 // This helps catch encoded sensitive values even without their variable names present
-func (a *Attestor) checkDecodedContentForSensitiveValues(
+func (a *Attestor) checkDecodedContentForSensitiveValues( //nolint:gocognit,gocyclo,funlen // sensitive value detection requires multiple matching strategies
 	decodedContent string,
 	sourceIdentifier string,
 	encodingType string,
@@ -245,14 +274,14 @@ func (a *Attestor) checkDecodedContentForSensitiveValues(
 		partialMatch := false
 		partialValue := ""
 
-		if len(value) >= minPartialLength {
+		if len(value) >= minPartialLength { //nolint:nestif // partial match logic requires nested checks
 			// First try the most likely case with short tokens - check with newline
 			// This is the most common pattern with echo output: "ghp\n"
 			if strings.Contains(decodedContent, value[:minPartialLength]+"\n") {
 				partialMatch = true
 				partialValue = value[:minPartialLength] + "\n"
-				log.Debugf("(attestation/secretscan) found partial match with newline: %q in %q",
-					value[:minPartialLength]+"\n", decodedContent)
+				// Do NOT log secret values — even partial prefixes can aid brute-force attacks
+				log.Debugf("(attestation/secretscan) found partial match with newline for env var %s", key)
 			} else {
 				// Check different lengths of the prefix, starting from longer to shorter
 				for prefixLen := len(value) - 1; prefixLen >= minPartialLength; prefixLen-- {
@@ -260,7 +289,7 @@ func (a *Attestor) checkDecodedContentForSensitiveValues(
 					if strings.Contains(decodedContent, prefix) {
 						partialMatch = true
 						partialValue = prefix
-						log.Debugf("(attestation/secretscan) found partial match: %s in %s", prefix, decodedContent)
+						log.Debugf("(attestation/secretscan) found partial match for env var %s (prefix length %d)", key, prefixLen)
 						break
 					}
 				}
@@ -268,7 +297,7 @@ func (a *Attestor) checkDecodedContentForSensitiveValues(
 		}
 
 		// Process the match if we found any kind of match
-		if exactMatch || exactMatchWithNewline || partialMatch {
+		if exactMatch || exactMatchWithNewline || partialMatch { //nolint:nestif // match reporting requires nested type determination
 			// Determine which value to use for reporting
 			matchValue := value
 			isPartial := false
@@ -300,13 +329,13 @@ func (a *Attestor) checkDecodedContentForSensitiveValues(
 					lineNumber = i + 1
 					// Create a redacted/truncated version of the context
 					if len(line) < 40 {
-						match = strings.Replace(line, matchValue, "[REDACTED]", 1)
+						match = strings.ReplaceAll(line, matchValue, "[REDACTED]")
 					} else {
 						valueIndex := strings.Index(line, matchValue)
 						startIndex := max(0, valueIndex-10)
 						endIndex := min(len(line), valueIndex+len(matchValue)+10)
 						context := line[startIndex:endIndex]
-						match = strings.Replace(context, matchValue, "[REDACTED]", 1)
+						match = strings.ReplaceAll(context, matchValue, "[REDACTED]")
 					}
 					break
 				}

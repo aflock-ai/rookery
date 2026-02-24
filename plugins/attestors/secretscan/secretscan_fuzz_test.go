@@ -168,7 +168,7 @@ func FuzzEncodingCombinations(f *testing.F) {
 }
 
 // FuzzDetectionWithEnvVars tests detection of environment variable values with various encodings
-func FuzzDetectionWithEnvVars(f *testing.F) {
+func FuzzDetectionWithEnvVars(f *testing.F) { //nolint:gocyclo // fuzz test exercises many encoding combinations
 	// Add seeds
 	f.Add("GITHUB_TOKEN", testdata.TestSecrets.GitHubToken, "base64")
 	f.Add("AWS_SECRET", testdata.TestSecrets.AWSKey, "hex,base64")

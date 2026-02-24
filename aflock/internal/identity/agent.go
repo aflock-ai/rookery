@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
@@ -59,6 +60,11 @@ type AgentIdentity struct {
 
 	// SPIFFEID is the SPIFFE ID derived from this identity
 	SPIFFEID spiffeid.ID `json:"-"`
+
+	// mu protects mutable derived fields (IdentityHash, SPIFFEID) from
+	// concurrent access. Methods that compute or read these fields must
+	// hold the appropriate lock.
+	mu sync.RWMutex `json:"-"`
 }
 
 // BinaryIdentity describes the agent binary.
@@ -105,6 +111,14 @@ type EnvironmentIdentity struct {
 //
 //	SHA256(model || binary || environment || sorted(tools) || policyDigest || parentIdentity)
 func (a *AgentIdentity) DeriveIdentity() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return a.deriveIdentityLocked()
+}
+
+// deriveIdentityLocked computes the identity hash. Caller must hold a.mu.
+func (a *AgentIdentity) deriveIdentityLocked() string {
 	// Build canonical representation
 	components := []string{
 		fmt.Sprintf("model:%s@%s", a.Model, a.ModelVersion),
@@ -152,8 +166,11 @@ func (a *AgentIdentity) DeriveIdentity() string {
 // ToSPIFFEID converts the agent identity to a SPIFFE ID.
 // Format: spiffe://<trust-domain>/agent/<model>/<version>/<identity-hash>
 func (a *AgentIdentity) ToSPIFFEID(trustDomain string) (spiffeid.ID, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.IdentityHash == "" {
-		a.DeriveIdentity()
+		a.deriveIdentityLocked()
 	}
 
 	// Build path components
@@ -250,7 +267,7 @@ func discoverBinary() *BinaryIdentity {
 		binary.Name = "claude-code"
 
 		// Get version
-		if out, err := exec.Command(binary.Path, "--version").Output(); err == nil {
+		if out, err := exec.Command(binary.Path, "--version").Output(); err == nil { //nolint:gosec // G204: command constructed from config, not user taint
 			versionPattern := regexp.MustCompile(`(\d+\.\d+\.\d+)`)
 			if matches := versionPattern.FindStringSubmatch(string(out)); len(matches) > 1 {
 				binary.Version = matches[1]
@@ -271,10 +288,37 @@ func discoverBinary() *BinaryIdentity {
 
 // resolveActualBinary follows symlinks and shell script wrappers to find the actual binary.
 func resolveActualBinary(path string) string {
+	return resolveActualBinaryDepth(path, 0, nil)
+}
+
+// resolveActualBinaryDepth follows exec chains with depth limit and cycle detection.
+const maxResolveDepth = 10
+const maxScriptSize = 1 << 20 // 1 MiB — shell wrappers should be small
+
+func resolveActualBinaryDepth(path string, depth int, seen map[string]bool) string {
+	if depth >= maxResolveDepth {
+		return path
+	}
+	if seen == nil {
+		seen = make(map[string]bool)
+	}
+
 	// First resolve symlinks
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		resolved = path
+	}
+
+	// Cycle detection
+	if seen[resolved] {
+		return resolved
+	}
+	seen[resolved] = true
+
+	// Check file size before reading to avoid OOM on large or special files
+	info, err := os.Stat(resolved)
+	if err != nil || info.Size() > maxScriptSize || info.IsDir() {
+		return resolved
 	}
 
 	// Check if it's a shell script wrapper
@@ -293,8 +337,7 @@ func resolveActualBinary(path string) string {
 			if len(parts) >= 2 {
 				target := strings.Trim(parts[1], "\"'")
 				if strings.HasPrefix(target, "/") {
-					// Recursively resolve the target
-					return resolveActualBinary(target)
+					return resolveActualBinaryDepth(target, depth+1, seen)
 				}
 			}
 		}
@@ -328,11 +371,11 @@ func computeBinaryDigest(path string) string {
 }
 
 // discoverEnvironment discovers the execution environment.
-func discoverEnvironment() *EnvironmentIdentity {
+func discoverEnvironment() *EnvironmentIdentity { //nolint:gocognit,nestif // environment discovery is inherently complex with nested checks
 	env := &EnvironmentIdentity{}
 
 	// Check for container environment
-	if _, err := os.Stat("/.dockerenv"); err == nil {
+	if _, err := os.Stat("/.dockerenv"); err == nil { //nolint:nestif
 		env.Type = "container"
 		// Try to get container ID from cgroup
 		if data, err := os.ReadFile("/proc/self/cgroup"); err == nil {
@@ -342,10 +385,10 @@ func discoverEnvironment() *EnvironmentIdentity {
 					parts := strings.Split(line, "/")
 					if len(parts) > 0 {
 						containerID := parts[len(parts)-1]
-					if len(containerID) > 12 {
-						containerID = containerID[:12]
-					}
-					env.ContainerID = containerID
+						if len(containerID) > 12 {
+							containerID = containerID[:12]
+						}
+						env.ContainerID = containerID
 						break
 					}
 				}
@@ -380,6 +423,9 @@ func sanitizeSPIFFEPath(s string) string {
 
 // MarshalJSON implements custom JSON marshaling.
 func (a *AgentIdentity) MarshalJSON() ([]byte, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	type Alias AgentIdentity
 	return json.Marshal(&struct {
 		SPIFFEID string `json:"spiffeId,omitempty"`
@@ -392,8 +438,11 @@ func (a *AgentIdentity) MarshalJSON() ([]byte, error) {
 
 // String returns a human-readable representation of the identity.
 func (a *AgentIdentity) String() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.IdentityHash == "" {
-		a.DeriveIdentity()
+		a.deriveIdentityLocked()
 	}
 	return fmt.Sprintf("agent:%s@%s#%s", a.Model, a.ModelVersion, a.IdentityHash[:16])
 }
@@ -479,10 +528,10 @@ func compareSemver(a, b string) int {
 	for i := 0; i < 3; i++ {
 		var aval, bval int
 		if i < len(apartsStr) {
-			fmt.Sscanf(apartsStr[i], "%d", &aval)
+			_, _ = fmt.Sscanf(apartsStr[i], "%d", &aval)
 		}
 		if i < len(bpartsStr) {
-			fmt.Sscanf(bpartsStr[i], "%d", &bval)
+			_, _ = fmt.Sscanf(bpartsStr[i], "%d", &bval)
 		}
 		if aval < bval {
 			return -1
@@ -574,15 +623,31 @@ func (a *AgentIdentity) MatchesAnyFunctionary(functionaries []Functionary) bool 
 
 // ToFunctionary creates a Functionary from this agent identity for policy use.
 func (a *AgentIdentity) ToFunctionary(trustDomain string) Functionary {
+	a.mu.Lock()
 	if a.SPIFFEID.IsZero() {
-		a.ToSPIFFEID(trustDomain)
+		// Derive identity if needed, then compute SPIFFE ID, all under lock.
+		if a.IdentityHash == "" {
+			a.deriveIdentityLocked()
+		}
+		modelPath := sanitizeSPIFFEPath(a.Model)
+		versionPath := sanitizeSPIFFEPath(a.ModelVersion)
+		hashPrefix := a.IdentityHash[:16]
+		path := fmt.Sprintf("/agent/%s/%s/%s", modelPath, versionPath, hashPrefix)
+		id, err := spiffeid.FromSegments(spiffeid.RequireTrustDomainFromString(trustDomain), strings.Split(path, "/")[1:]...)
+		if err == nil {
+			a.SPIFFEID = id
+		}
 	}
+	spiffeIDStr := a.SPIFFEID.String()
+	model := a.Model
+	modelVersion := a.ModelVersion
+	a.mu.Unlock()
 
 	return Functionary{
 		Type:              "spiffe",
-		SPIFFEID:          a.SPIFFEID.String(),
+		SPIFFEID:          spiffeIDStr,
 		TrustDomain:       trustDomain,
-		ModelConstraint:   a.Model,
-		VersionConstraint: fmt.Sprintf(">=%s", a.ModelVersion),
+		ModelConstraint:   model,
+		VersionConstraint: fmt.Sprintf(">=%s", modelVersion),
 	}
 }

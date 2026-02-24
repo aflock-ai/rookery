@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package options
+package options //nolint:dupl // structurally similar to signers.go by design
 
 import (
 	"github.com/aflock-ai/rookery/attestation/signer"

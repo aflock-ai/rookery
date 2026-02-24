@@ -604,14 +604,9 @@ func TestFindModelFromWorkingDir_WithSessionsIndex(t *testing.T) {
 	workDir := filepath.Join(tmpDir, "proj", "myproject")
 	os.MkdirAll(workDir, 0755)
 
-	// Create a project slug matching what the code would compute
-	// The code does: strings.ReplaceAll(workDir, "/", "-")
-	projectSlug := filepath.Join(workDir)
-	projectSlug = projectSlug[1:] // remove leading /
-	// Actually the code replaces "/" with "-" directly from the workDir
-	// but it uses os.UserHomeDir() to find the base dir. We can't easily
-	// override that. Let's test findModelFromMostRecentSession directly instead,
-	// which is the fallback path.
+	// The code computes a project slug via strings.ReplaceAll(workDir, "/", "-")
+	// but uses os.UserHomeDir() to find the base dir. We can't easily override
+	// that, so we test findModelFromMostRecentSession directly instead.
 
 	// Create a project dir with session files
 	projectDir := filepath.Join(tmpDir, "sessions")

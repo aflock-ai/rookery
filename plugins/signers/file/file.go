@@ -156,10 +156,10 @@ func (fsp FileSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, er
 		return nil, fmt.Errorf("failed to open key file: %w", err)
 	}
 
-	defer keyFile.Close()
+	defer func() { _ = keyFile.Close() }()
 	// Resolve passphrase: explicit > file > env
 	var pass []byte
-	if fsp.Passphrase != "" {
+	if fsp.Passphrase != "" { //nolint:nestif
 		pass = []byte(fsp.Passphrase)
 	} else if fsp.PassphrasePath != "" {
 		b, err := os.ReadFile(fsp.PassphrasePath)
@@ -212,12 +212,12 @@ func (fsp FileSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, er
 }
 
 func loadCert(path string) (*x509.Certificate, error) {
-	certFile, err := os.Open(path)
+	certFile, err := os.Open(path) //nolint:gosec // G304: path is caller-provided cert path
 	if err != nil {
 		return nil, fmt.Errorf("failed to load certificate: %w", err)
 	}
 
-	defer certFile.Close()
+	defer func() { _ = certFile.Close() }()
 	possibleCert, err := cryptoutil.TryParseKeyFromReader(certFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse certificate")

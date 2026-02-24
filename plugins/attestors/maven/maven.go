@@ -123,7 +123,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		return err
 	}
 
-	defer pomFile.Close()
+	defer func() { _ = pomFile.Close() }()
 	pomFileBytes, err := io.ReadAll(pomFile)
 	if err != nil {
 		return err
@@ -143,14 +143,15 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(projectSubject), hashes); err == nil {
 		subjects[projectSubject] = ds
 	} else {
-		log.Debugf("(attestation/maven) failed to record %v subject: %w", projectSubject, err)
+		log.Debugf("(attestation/maven) failed to record %v subject: %v", projectSubject, err)
 	}
 
 	for _, dep := range a.Dependencies {
 		depSubject := fmt.Sprintf("dependency:%v/%v@%v", dep.GroupId, dep.ArtifactId, dep.Version)
 		depDigest, err := cryptoutil.CalculateDigestSetFromBytes([]byte(depSubject), hashes)
 		if err != nil {
-			log.Debugf("(attestation/maven) failed to record %v subject: %w", depSubject, err)
+			log.Debugf("(attestation/maven) failed to record %v subject: %v", depSubject, err)
+			continue
 		}
 
 		subjects[depSubject] = depDigest

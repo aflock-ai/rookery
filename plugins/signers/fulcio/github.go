@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var githubHTTPClient = &http.Client{
@@ -34,7 +35,7 @@ var githubHTTPClient = &http.Client{
 	},
 }
 
-func fetchToken(tokenURL string, bearer string, audience string) (string, error) {
+func fetchToken(tokenURL string, bearer string, audience string) (string, error) { //nolint:gocognit,gocyclo,funlen
 	if tokenURL == "" || bearer == "" || audience == "" {
 		return "", fmt.Errorf("tokenURL, bearer, and audience cannot be empty")
 	}
@@ -54,7 +55,7 @@ func fetchToken(tokenURL string, bearer string, audience string) (string, error)
 		return "", fmt.Errorf("api error: tokenURL already has an audience, %s, and it does not match the audience, %s", q.Get("audience"), audience)
 	}
 
-	q.Add("audience", audience)
+	q.Set("audience", audience)
 	u.RawQuery = q.Encode()
 
 	reqURL := u.String()
@@ -66,7 +67,7 @@ func fetchToken(tokenURL string, bearer string, audience string) (string, error)
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s, 4s
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second //nolint:gosec // G115: attempt is bounded by maxRetries=3
 			time.Sleep(backoff)
 		}
 
@@ -80,14 +81,14 @@ func fetchToken(tokenURL string, bearer string, audience string) (string, error)
 		if err != nil {
 			// Check for HTTP/2 connection issues and fallback to HTTP/1.1
 			if strings.Contains(err.Error(), "HTTP_1_1_REQUIRED") {
-				http1transport := githubHTTPClient.Transport.(*http.Transport).Clone()
+				http1transport := githubHTTPClient.Transport.(*http.Transport).Clone() //nolint:errcheck
 				http1transport.ForceAttemptHTTP2 = false
 				client = &http.Client{
 					Transport: http1transport,
 					Timeout:   30 * time.Second,
 				}
 				// Retry immediately with HTTP/1.1
-				resp, err = client.Do(req)
+				resp, err = client.Do(req) //nolint:bodyclose // body is closed on line below via resp.Body.Close()
 			}
 
 			if err != nil {
@@ -96,10 +97,12 @@ func fetchToken(tokenURL string, bearer string, audience string) (string, error)
 			}
 		}
 
-		defer resp.Body.Close()
-
-		// Read the body into a buffer so we can inspect it if parsing fails
-		bodyBytes, err := io.ReadAll(resp.Body)
+		// Read the body and close immediately rather than using defer inside
+		// the retry loop (deferred closes stack up, leaking connections).
+		// Limit read to 1MB to prevent OOM from a compromised token endpoint.
+		const maxTokenResponseSize = 1 << 20 // 1MB
+		bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxTokenResponseSize))
+		_ = resp.Body.Close()
 		if err != nil {
 			lastErr = fmt.Errorf("failed to read response body (attempt %d/%d): %w", attempt+1, maxRetries, err)
 			continue
@@ -109,7 +112,11 @@ func fetchToken(tokenURL string, bearer string, audience string) (string, error)
 		if resp.StatusCode != http.StatusOK {
 			bodyStr := string(bodyBytes)
 			if len(bodyStr) > 500 {
-				bodyStr = bodyStr[:500] + "..."
+				end := 500
+				for end > 0 && !utf8.RuneStart(bodyStr[end]) {
+					end--
+				}
+				bodyStr = bodyStr[:end] + "..."
 			}
 			lastErr = fmt.Errorf("unexpected status code %d from GitHub Actions API (attempt %d/%d), body: %s",
 				resp.StatusCode, attempt+1, maxRetries, bodyStr)
@@ -128,7 +135,11 @@ func fetchToken(tokenURL string, bearer string, audience string) (string, error)
 
 			// Truncate very long responses for logging
 			if len(bodyStr) > 500 {
-				bodyStr = bodyStr[:500] + "..."
+				end := 500
+				for end > 0 && !utf8.RuneStart(bodyStr[end]) {
+					end--
+				}
+				bodyStr = bodyStr[:end] + "..."
 			}
 
 			// Check if the response looks like HTML (common error response)

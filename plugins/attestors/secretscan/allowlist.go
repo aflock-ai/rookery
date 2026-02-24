@@ -93,7 +93,7 @@ func isMatchAllowlisted(match string, allowList *AllowList) bool {
 // 2. A manual allowlist has been configured
 //
 // Returns true if the content should be allowlisted (ignored)
-func (a *Attestor) isFileContentAllowListed(content, filePath string) bool {
+func (a *Attestor) isFileContentAllowListed(content, filePath string) bool { //nolint:unparam // filePath used for future file-specific allowlisting
 	// Only apply manual allowList checks if no config file was provided
 	if a.configPath == "" && a.allowList != nil {
 		if isContentAllowListed(content, a.allowList) {

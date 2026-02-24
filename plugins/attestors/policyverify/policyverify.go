@@ -144,7 +144,7 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subjects
 }
 
-func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
+func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:funlen // policy verification requires extensive setup
 	if err := policysig.VerifyPolicySignature(ctx.Context(), a.policyEnvelope, a.VerifyPolicySignatureOptions); err != nil {
 		return fmt.Errorf("failed to verify policy signature: %w", err)
 	}
@@ -185,7 +185,8 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 	timestampVerifiers := make([]timestamp.TimestampVerifier, 0)
 	for _, timestampAuthority := range timestampAuthoritiesById {
-		certs := []*x509.Certificate{timestampAuthority.Root}
+		certs := make([]*x509.Certificate, 0, 1+len(timestampAuthority.Intermediates))
+		certs = append(certs, timestampAuthority.Root)
 		certs = append(certs, timestampAuthority.Intermediates...)
 		timestampVerifiers = append(timestampVerifiers, timestamp.NewVerifier(timestamp.VerifyWithCerts(certs)))
 	}

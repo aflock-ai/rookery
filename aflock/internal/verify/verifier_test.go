@@ -66,7 +66,7 @@ func generateTestLeafCert(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.P
 		t.Fatalf("generate leaf key: %v", err)
 	}
 
-	var parsedURIs []*url.URL
+	parsedURIs := make([]*url.URL, 0, len(uris))
 	for _, u := range uris {
 		parsed, err := url.Parse(u)
 		if err != nil {
@@ -147,7 +147,7 @@ func signDSSE(t *testing.T, payloadType string, payload []byte, key *ecdsa.Priva
 func makeCollectionPayload(t *testing.T, stepName string, attestationTypes []string) []byte {
 	t.Helper()
 
-	var attestations []map[string]interface{}
+	attestations := make([]map[string]interface{}, 0, len(attestationTypes))
 	for _, at := range attestationTypes {
 		attestations = append(attestations, map[string]interface{}{
 			"type":        at,
@@ -254,6 +254,7 @@ func TestNewVerifier(t *testing.T) {
 	}
 }
 
+//nolint:gocyclo // comprehensive verification test
 func TestVerifySession_ValidSession(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -983,12 +984,10 @@ func TestTopoSortSteps_PartialCycle(t *testing.T) {
 	if indexOf["A"] > indexOf["D"] {
 		t.Error("A should come before D")
 	}
-	// B and C are in cycle, appended after normal sort
-	if indexOf["A"] > indexOf["B"] || indexOf["A"] > indexOf["C"] {
-		// A and D should be sorted first, then B and C appended
-		// Actually A comes first, D depends on A so D comes second
-		// Then B,C are remaining (cycle) appended alphabetically
-	}
+	// B and C are in cycle, appended after normal sort.
+	// A and D should be sorted first, then B and C appended.
+	// A comes first, D depends on A so D comes second,
+	// then B,C are remaining (cycle) appended alphabetically.
 }
 
 // ---- loadRootCertificates tests ----
@@ -1119,7 +1118,7 @@ func TestVerifySignatureWithCert_ECDSA_Valid(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	if !verifySignatureWithCert(caCert, hash[:], sig) {
+	if !verifySignatureWithCert(caCert, data, hash[:], sig) {
 		t.Error("Expected valid ECDSA signature to verify")
 	}
 }
@@ -1136,7 +1135,7 @@ func TestVerifySignatureWithCert_WrongKey(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	if verifySignatureWithCert(otherCert, hash[:], sig) {
+	if verifySignatureWithCert(otherCert, data, hash[:], sig) {
 		t.Error("Expected signature verification to fail with wrong key")
 	}
 }
@@ -1156,7 +1155,7 @@ func TestVerifySignatureWithCert_CorruptedSig(t *testing.T) {
 	copy(corrupted, sig)
 	corrupted[len(corrupted)-1] ^= 0xFF
 
-	if verifySignatureWithCert(caCert, hash[:], corrupted) {
+	if verifySignatureWithCert(caCert, data, hash[:], corrupted) {
 		t.Error("Expected corrupted signature to fail verification")
 	}
 }
@@ -1172,8 +1171,9 @@ func TestVerifySignatureWithCert_WrongHash(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 
-	wrongHash := sha256.Sum256([]byte("wrong message"))
-	if verifySignatureWithCert(caCert, wrongHash[:], sig) {
+	wrongData := []byte("wrong message")
+	wrongHash := sha256.Sum256(wrongData)
+	if verifySignatureWithCert(caCert, wrongData, wrongHash[:], sig) {
 		t.Error("Expected verification to fail with wrong hash")
 	}
 }

@@ -25,9 +25,9 @@ import (
 	"regexp"
 	"strconv"
 
-	vault "github.com/hashicorp/vault/api"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
+	vault "github.com/hashicorp/vault/api"
 )
 
 func init() {
@@ -67,7 +67,27 @@ type client struct {
 	role                    string
 }
 
+// transitPathRegex validates the transit secrets engine path. Only allows
+// alphanumeric characters, hyphens, underscores, and single forward slashes
+// (for nested mounts like "transit/production"). Rejects path traversal
+// sequences (".."), leading/trailing slashes, and empty segments ("//").
+var transitPathRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$`)
+
 func newClient(ctx context.Context, opts *clientOptions) (*client, error) {
+	// Security: validate transitSecretsEnginePath to prevent path traversal.
+	// This value is interpolated directly into Vault API paths like
+	// "/<path>/sign/<key>/<hash>". Without validation, a value like
+	// "../../secret/data" could access arbitrary Vault endpoints.
+	if !transitPathRegex.MatchString(opts.transitSecretEnginePath) {
+		return nil, fmt.Errorf("invalid transit secrets engine path %q: must match %s", opts.transitSecretEnginePath, transitPathRegex.String())
+	}
+
+	// Security: reject negative key versions. Vault expects non-negative
+	// versions; negative values indicate misconfiguration.
+	if opts.keyVersion < 0 {
+		return nil, fmt.Errorf("invalid key version %d: must be non-negative", opts.keyVersion)
+	}
+
 	vaultConf := vault.DefaultConfig()
 	if len(opts.addr) > 0 {
 		vaultConf.Address = opts.addr
@@ -109,7 +129,6 @@ func (c *client) sign(ctx context.Context, digest []byte, hashFunc crypto.Hash) 
 	}
 
 	path := fmt.Sprintf("/%v/sign/%v/%v", c.transitSecretsEnginePath, c.keyPath, hashStr)
-	fmt.Println(path)
 	resp, err := c.client.Logical().WriteWithContext(
 		ctx,
 		path,
@@ -124,9 +143,13 @@ func (c *client) sign(ctx context.Context, digest []byte, hashFunc crypto.Hash) 
 		return nil, fmt.Errorf("could not sign: %w", err)
 	}
 
+	if resp == nil || resp.Data == nil {
+		return nil, fmt.Errorf("empty response from vault sign")
+	}
+
 	signature, ok := resp.Data["signature"]
 	if !ok {
-		return nil, fmt.Errorf("no signature in response: %w", err)
+		return nil, fmt.Errorf("no signature in response")
 	}
 
 	sigStr, ok := signature.(string)
@@ -163,6 +186,10 @@ func (c *client) verify(ctx context.Context, r io.Reader, sig []byte, hashFunc c
 		return fmt.Errorf("could not verify: %w", err)
 	}
 
+	if resp == nil || resp.Data == nil {
+		return fmt.Errorf("empty response from vault verify")
+	}
+
 	valid, ok := resp.Data["valid"]
 	if !ok {
 		return fmt.Errorf("invalid response")
@@ -190,9 +217,13 @@ func (c *client) getPublicKeyBytes(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("could not read key: %w", err)
 	}
 
+	if resp == nil || resp.Data == nil {
+		return nil, fmt.Errorf("empty response from vault keys read")
+	}
+
 	keyVersion := strconv.FormatInt(int64(c.keyVersion), 10)
 	if keyVersion == "0" {
-		latestVersion, ok := resp.Data["lastest_version"]
+		latestVersion, ok := resp.Data["latest_version"]
 		if !ok {
 			return nil, fmt.Errorf("latest key version not in response")
 		}

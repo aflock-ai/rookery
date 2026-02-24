@@ -14,6 +14,8 @@ import (
 	"strings"
 )
 
+const osLinux = "linux"
+
 // DiscoverModelFromPID discovers the AI model by tracing the parent process.
 // It finds the Claude process, gets its working directory, and reads the active session file.
 func DiscoverModelFromPID() (string, error) {
@@ -68,7 +70,7 @@ func DiscoverModelFromPID() (string, error) {
 
 // getProcessWorkingDir gets the current working directory of a process.
 func getProcessWorkingDir(pid int) (string, error) {
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == osLinux {
 		return getProcessWorkingDirLinux(pid)
 	}
 	return getProcessWorkingDirMacOS(pid)
@@ -82,7 +84,7 @@ func getProcessWorkingDirLinux(pid int) (string, error) {
 
 // getProcessWorkingDirMacOS uses lsof to get working directory
 func getProcessWorkingDirMacOS(pid int) (string, error) {
-	cmd := exec.Command("lsof", "-p", strconv.Itoa(pid), "-Fn")
+	cmd := exec.Command("lsof", "-p", strconv.Itoa(pid), "-Fn") //nolint:gosec // G204: subprocess from discovered process path, not user taint
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -134,7 +136,7 @@ func findModelFromWorkingDir(workDir string) (string, error) {
 	fmt.Fprintf(os.Stderr, "[aflock] Reading sessions index: %s\n", indexPath)
 
 	// Read and parse sessions-index.json
-	indexData, err := os.ReadFile(indexPath)
+	indexData, err := os.ReadFile(indexPath) //nolint:gosec // G304: reading process info files
 	if err != nil {
 		// Fall back to most recent file if index doesn't exist
 		return findModelFromMostRecentSession(projectDir)
@@ -253,7 +255,7 @@ func getProcessChain(startPID int) []int {
 // getParentPID gets the parent PID of a process.
 // Uses /proc on Linux, ps command on macOS.
 func getParentPID(pid int) (int, error) {
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == osLinux {
 		return getParentPIDLinux(pid)
 	}
 	return getParentPIDMacOS(pid)
@@ -262,7 +264,7 @@ func getParentPID(pid int) (int, error) {
 // getParentPIDLinux reads parent PID from /proc/<pid>/stat
 func getParentPIDLinux(pid int) (int, error) {
 	statPath := fmt.Sprintf("/proc/%d/stat", pid)
-	data, err := os.ReadFile(statPath)
+	data, err := os.ReadFile(statPath) //nolint:gosec // G304: reading process stat file
 	if err != nil {
 		return 0, err
 	}
@@ -291,7 +293,7 @@ func getParentPIDLinux(pid int) (int, error) {
 
 // getParentPIDMacOS uses ps command to get parent PID
 func getParentPIDMacOS(pid int) (int, error) {
-	cmd := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid))
+	cmd := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)) //nolint:gosec // G204: subprocess from known tool paths
 	output, err := cmd.Output()
 	if err != nil {
 		return 0, err
@@ -308,7 +310,7 @@ func getParentPIDMacOS(pid int) (int, error) {
 // findModelFromOpenFiles finds the Claude model from open session files.
 // Uses /proc/pid/fd on Linux, lsof on macOS.
 func findModelFromOpenFiles(pid int) (string, error) {
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == osLinux {
 		return findModelFromOpenFilesLinux(pid)
 	}
 	return findModelFromOpenFilesMacOS(pid)
@@ -361,7 +363,7 @@ func findModelFromOpenFilesLinux(pid int) (string, error) {
 // findModelFromOpenFilesMacOS uses lsof to find open files
 func findModelFromOpenFilesMacOS(pid int) (string, error) {
 	// Use lsof to find open files
-	cmd := exec.Command("lsof", "-p", strconv.Itoa(pid))
+	cmd := exec.Command("lsof", "-p", strconv.Itoa(pid)) //nolint:gosec // G204: subprocess from known tool path
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("lsof failed: %w", err)
@@ -410,11 +412,11 @@ func findModelFromOpenFilesMacOS(pid int) (string, error) {
 // extractModelFromSession extracts the model name from a Claude session file.
 // Session files are JSONL with message objects containing a "model" field.
 func extractModelFromSession(sessionPath string) (string, error) {
-	file, err := os.Open(sessionPath)
+	file, err := os.Open(sessionPath) //nolint:gosec // G304: session file path from discovery
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	// Increase buffer for long lines
@@ -483,6 +485,8 @@ type ProcessInfo struct {
 // DiscoverFromMCPSocket discovers model and collects comprehensive process metadata.
 // This is called when aflock is started as an MCP server.
 // No fallback to environment variables - proper attestation requires PID-based discovery.
+//
+//nolint:gocognit,gocyclo // MCP socket discovery requires complex process parsing
 func DiscoverFromMCPSocket() (string, *ProcessMetadata, error) {
 	meta := &ProcessMetadata{
 		AflockPID: os.Getpid(),
@@ -524,16 +528,30 @@ func DiscoverFromMCPSocket() (string, *ProcessMetadata, error) {
 		meta.ProcessChain = append(meta.ProcessChain, pinfo)
 	}
 
-	// Collect Claude-related environment variables
+	// Collect Claude-related environment variables (excluding secrets).
+	// Only capture non-sensitive keys; skip any that contain API keys, tokens, or secrets.
 	meta.Environment = make(map[string]string)
+	sensitiveSubstrings := []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"}
 	for _, env := range os.Environ() {
-		if idx := strings.Index(env, "="); idx > 0 {
+		if idx := strings.Index(env, "="); idx > 0 { //nolint:nestif
+
 			key := env[:idx]
 			if strings.HasPrefix(key, "CLAUDE_") ||
 				strings.HasPrefix(key, "ANTHROPIC_") ||
 				strings.HasPrefix(key, "SPIFFE_") ||
 				key == "USER" || key == "HOME" {
-				meta.Environment[key] = env[idx+1:]
+				// Skip sensitive keys to prevent API key leakage in attestations
+				isSensitive := false
+				upperKey := strings.ToUpper(key)
+				for _, substr := range sensitiveSubstrings {
+					if strings.Contains(upperKey, substr) {
+						isSensitive = true
+						break
+					}
+				}
+				if !isSensitive {
+					meta.Environment[key] = env[idx+1:]
+				}
 			}
 		}
 	}
@@ -577,7 +595,7 @@ func DiscoverModelWithSession() (model, sessionID, sessionPath string, err error
 		// Find session from working directory
 		model, sessionID, sessionPath, err = findModelAndSessionFromWorkingDir(workDir)
 		if err == nil {
-			return
+			return model, sessionID, sessionPath, nil
 		}
 	}
 
@@ -595,7 +613,7 @@ func findModelAndSessionFromWorkingDir(workDir string) (model, sessionID, sessio
 	projectDir := filepath.Join(homeDir, ".claude", "projects", projectSlug)
 	indexPath := filepath.Join(projectDir, "sessions-index.json")
 
-	indexData, err := os.ReadFile(indexPath)
+	indexData, err := os.ReadFile(indexPath) //nolint:gosec // G304: reading session index file
 	if err != nil {
 		return "", "", "", err
 	}
@@ -641,7 +659,7 @@ func findModelAndSessionFromWorkingDir(workDir string) (model, sessionID, sessio
 
 // getProcessCommand gets the command line for a process.
 func getProcessCommand(pid int) (string, error) {
-	cmd := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid))
+	cmd := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)) //nolint:gosec // G204: subprocess from known tool path
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -650,6 +668,8 @@ func getProcessCommand(pid int) (string, error) {
 }
 
 // TraceProcessInfo returns detailed information about a process and its ancestry.
+//
+//nolint:gocognit,gocyclo // process tracing requires complex system checks
 func TraceProcessInfo(pid int) map[string]interface{} {
 	info := make(map[string]interface{})
 	info["pid"] = pid
@@ -665,7 +685,7 @@ func TraceProcessInfo(pid int) map[string]interface{} {
 	}
 
 	// Get open files count
-	if files, err := getOpenFiles(pid); err == nil {
+	if files, err := getOpenFiles(pid); err == nil { //nolint:nestif
 		info["open_files_count"] = len(files)
 
 		// Filter for interesting files
@@ -687,12 +707,21 @@ func TraceProcessInfo(pid int) map[string]interface{} {
 		}
 	}
 
-	// Get environment variables
-	if env, err := getProcessEnvironment(pid); err == nil {
+	// Get environment variables (filter out sensitive keys like API keys)
+	if env, err := getProcessEnvironment(pid); err == nil { //nolint:nestif
 		claudeEnv := make(map[string]string)
 		for k, v := range env {
 			if strings.HasPrefix(k, "CLAUDE_") || strings.HasPrefix(k, "ANTHROPIC_") {
-				claudeEnv[k] = v
+				// Skip keys that likely contain secrets
+				upperK := strings.ToUpper(k)
+				if strings.Contains(upperK, "KEY") ||
+					strings.Contains(upperK, "TOKEN") ||
+					strings.Contains(upperK, "SECRET") ||
+					strings.Contains(upperK, "PASSWORD") {
+					claudeEnv[k] = "[REDACTED]"
+				} else {
+					claudeEnv[k] = v
+				}
 			}
 		}
 		if len(claudeEnv) > 0 {
@@ -705,7 +734,7 @@ func TraceProcessInfo(pid int) map[string]interface{} {
 
 // getOpenFiles returns a list of open file paths for a process.
 func getOpenFiles(pid int) ([]string, error) {
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == osLinux {
 		return getOpenFilesLinux(pid)
 	}
 	return getOpenFilesMacOS(pid)
@@ -732,7 +761,7 @@ func getOpenFilesLinux(pid int) ([]string, error) {
 
 // getOpenFilesMacOS uses lsof
 func getOpenFilesMacOS(pid int) ([]string, error) {
-	cmd := exec.Command("lsof", "-p", strconv.Itoa(pid), "-Fn")
+	cmd := exec.Command("lsof", "-p", strconv.Itoa(pid), "-Fn") //nolint:gosec // G204: subprocess from known tool path
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -750,7 +779,7 @@ func getOpenFilesMacOS(pid int) ([]string, error) {
 
 // getProcessEnvironment gets environment variables for a process.
 func getProcessEnvironment(pid int) (map[string]string, error) {
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == osLinux {
 		return getProcessEnvironmentLinux(pid)
 	}
 	return getProcessEnvironmentMacOS(pid)
@@ -759,7 +788,7 @@ func getProcessEnvironment(pid int) (map[string]string, error) {
 // getProcessEnvironmentLinux reads from /proc/<pid>/environ
 func getProcessEnvironmentLinux(pid int) (map[string]string, error) {
 	environPath := fmt.Sprintf("/proc/%d/environ", pid)
-	data, err := os.ReadFile(environPath)
+	data, err := os.ReadFile(environPath) //nolint:gosec // G304: reading process environ file
 	if err != nil {
 		return nil, err
 	}
@@ -780,7 +809,7 @@ func getProcessEnvironmentLinux(pid int) (map[string]string, error) {
 // getProcessEnvironmentMacOS uses ps command (limited access)
 func getProcessEnvironmentMacOS(pid int) (map[string]string, error) {
 	// macOS: use ps to get environment (limited)
-	cmd := exec.Command("ps", "-E", "-p", strconv.Itoa(pid), "-o", "command=")
+	cmd := exec.Command("ps", "-E", "-p", strconv.Itoa(pid), "-o", "command=") //nolint:gosec // G204: subprocess from known tool path
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err

@@ -659,6 +659,7 @@ func TestVerifyEnvelope_MultipleSignatures(t *testing.T) {
 
 // --- CreateActionAttestation Tests ---
 
+//nolint:gocyclo // comprehensive integration test
 func TestCreateActionAttestation_BasicAction(t *testing.T) {
 	signer, id, _ := newSignerWithIdentity(t)
 
@@ -1246,12 +1247,12 @@ func TestListAttestations_WithFiles(t *testing.T) {
 
 	// Create some attestation files and non-attestation files
 	testFiles := map[string]bool{
-		"build.intoto.json":    true,
-		"test.intoto.json":     true,
-		"deploy.intoto.json":   true,
-		"readme.md":            false,
-		"config.json":          false,
-		"notintoto.json":       false,
+		"build.intoto.json":  true,
+		"test.intoto.json":   true,
+		"deploy.intoto.json": true,
+		"readme.md":          false,
+		"config.json":        false,
+		"notintoto.json":     false,
 	}
 
 	for name := range testFiles {

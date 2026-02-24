@@ -294,7 +294,7 @@ func TestSearch(t *testing.T) {
 				// Load the dsse.Envelope into the MemorySource
 				err := s.LoadEnvelope("ref"+fmt.Sprint(i), dsseEnv)
 				if err != nil {
-					t.Fatalf("invalid intoto statment, err = %v", err)
+					t.Fatalf("invalid intoto statement, err = %v", err)
 				}
 
 				if _, ok := tt.wantReferences["ref"+fmt.Sprint(i)]; ok {

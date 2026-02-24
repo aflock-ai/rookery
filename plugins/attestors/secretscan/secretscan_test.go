@@ -34,7 +34,7 @@ import (
 )
 
 // TestEncodingDetection tests the multi-layer encoding detection functionality
-func TestEncodingDetection(t *testing.T) {
+func TestEncodingDetection(t *testing.T) { //nolint:gocyclo // test exercises many encoding combinations
 	// Create a temporary directory for test files
 	tempDir := t.TempDir()
 
@@ -100,7 +100,7 @@ func TestEncodingDetection(t *testing.T) {
 				// If secret should be found given the max layers
 				shouldFind := tc.secretFound && maxLayers >= len(tc.encodings)
 
-				if shouldFind {
+				if shouldFind { //nolint:nestif // test assertion logic requires nested checks
 					// Check if we found any findings with the expected encoding path
 					foundWithEncoding := false
 					for _, finding := range findings {
@@ -143,7 +143,7 @@ func TestEncodingDetection(t *testing.T) {
 }
 
 // Helper function to check if encoding paths match
-func assertEncodingPathMatches(t *testing.T, expected, actual []string) bool {
+func assertEncodingPathMatches(_ *testing.T, expected, actual []string) bool { //nolint:unparam // t kept for test helper signature convention
 	if len(expected) != len(actual) {
 		return false
 	}
@@ -299,7 +299,7 @@ func TestDoubleEncodedEnvironmentVariable(t *testing.T) {
 
 // TestMultiEncodingCombinations tests that our scanner can detect secrets in various
 // encoding combinations, including multiple different encoding types in sequence
-func TestMultiEncodingCombinations(t *testing.T) {
+func TestMultiEncodingCombinations(t *testing.T) { //nolint:gocyclo // test exercises many encoding combinations
 	// Create a temporary directory for test files
 	tempDir := t.TempDir()
 
@@ -334,7 +334,7 @@ func TestMultiEncodingCombinations(t *testing.T) {
 	}
 
 	// Create a slice to track created files for cleanup
-	var testFilePaths []string
+	testFilePaths := make([]string, 0, len(encodingChains))
 
 	// Create test files with each encoding chain
 	for _, chain := range encodingChains {
@@ -386,7 +386,7 @@ func TestMultiEncodingCombinations(t *testing.T) {
 				foundAny = true
 
 				// Look for GitHub tokens in the finding
-				if strings.Contains(strings.ToLower(finding.RuleID), "github") ||
+				if strings.Contains(strings.ToLower(finding.RuleID), "github") || //nolint:nestif // test assertion logic
 					strings.Contains(strings.ToLower(finding.RuleID), "token") ||
 					strings.Contains(strings.ToLower(finding.Description), "github") ||
 					strings.Contains(strings.ToLower(finding.Description), "token") {
@@ -640,7 +640,7 @@ func TestFuzzSecretDetection(t *testing.T) {
 
 					// Slack tokens and private keys might be challenging to detect consistently
 					// due to their format, so we don't strictly assert they must be found
-					if keyFormat.name == "slack_token" || keyFormat.name == "private_key" {
+					if keyFormat.name == "slack_token" || keyFormat.name == "private_key" { //nolint:nestif // test assertion logic
 						if foundSecret {
 							t.Logf("Successfully detected %s with %s encoding", keyFormat.name, encName)
 						} else {

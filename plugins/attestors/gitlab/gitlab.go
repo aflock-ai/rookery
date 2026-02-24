@@ -21,9 +21,9 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/invopop/jsonschema"
 )
 
@@ -134,7 +134,10 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	a.CIServerUrl = os.Getenv("CI_SERVER_URL")
-	jwksUrl := fmt.Sprintf("%s/oauth/discovery/keys", a.CIServerUrl)
+	jwksUrl := os.Getenv("WITNESS_GITLAB_JWKS_URL")
+	if jwksUrl == "" {
+		jwksUrl = fmt.Sprintf("%s/oauth/discovery/keys", a.CIServerUrl)
+	}
 
 	var jwtString string
 	if a.token != "" {
@@ -181,19 +184,19 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.PipelineUrl), hashes); err == nil {
 		subjects[fmt.Sprintf("pipelineurl:%v", a.PipelineUrl)] = ds
 	} else {
-		log.Debugf("(attestation/gitlab) failed to record gitlab pipelineurl subject: %w", err)
+		log.Debugf("(attestation/gitlab) failed to record gitlab pipelineurl subject: %v", err)
 	}
 
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.JobUrl), hashes); err == nil {
 		subjects[fmt.Sprintf("joburl:%v", a.JobUrl)] = ds
 	} else {
-		log.Debugf("(attestation/gitlab) failed to record gitlab joburl subject: %w", err)
+		log.Debugf("(attestation/gitlab) failed to record gitlab joburl subject: %v", err)
 	}
 
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ProjectUrl), hashes); err == nil {
 		subjects[fmt.Sprintf("projecturl:%v", a.ProjectUrl)] = ds
 	} else {
-		log.Debugf("(attestation/gitlab) failed to record gitlab projecturl subject: %w", err)
+		log.Debugf("(attestation/gitlab) failed to record gitlab projecturl subject: %v", err)
 	}
 
 	return subjects

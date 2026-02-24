@@ -70,9 +70,9 @@ func SchemaCmd() *cobra.Command {
 	return cmd
 }
 
-func runList(ctx context.Context) error {
-	items := [][]string{}
+func runList(_ context.Context) error {
 	entries := attestation.RegistrationEntries()
+	items := make([][]string, 0, len(entries))
 	for _, entry := range entries {
 		name := entry.Factory().Name()
 
@@ -106,7 +106,7 @@ func runList(ctx context.Context) error {
 	return nil
 }
 
-func runSchema(ctx context.Context, args []string) error {
+func runSchema(_ context.Context, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("you must specify an attestor to view the schema of. Use 'cilock attestors list' for a list of available attestors")
 	} else if len(args) > 1 {
