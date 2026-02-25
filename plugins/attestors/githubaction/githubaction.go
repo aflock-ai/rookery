@@ -180,8 +180,10 @@ func New(opts ...Option) *Attestor {
 	return a
 }
 
-func (a *Attestor) Name() string              { return Name }
-func (a *Attestor) Type() string              { return Type }
+func (a *Attestor) Name() string { return Name }
+
+func (a *Attestor) Type() string { return Type }
+
 func (a *Attestor) RunType() attestation.RunType { return RunType }
 
 func (a *Attestor) Schema() *jsonschema.Schema {
