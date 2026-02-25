@@ -44,7 +44,7 @@ jobs:
           - "0.9.0"
           - "0.9.1"
           - "0.9.2"
-          - "0.10.0"
+          # v0.10.0 excluded: release has no binary assets
           - "0.10.1"
           - "0.10.2"
     steps:
@@ -65,7 +65,7 @@ jobs:
           VERSION="${{ matrix.witness-version }}"
           URL="https://github.com/in-toto/witness/releases/download/v${VERSION}/witness_${VERSION}_linux_amd64.tar.gz"
           echo "Downloading witness v${VERSION} from ${URL}"
-          curl -sSL "${URL}" -o /tmp/witness.tar.gz
+          curl -fsSL "${URL}" -o /tmp/witness.tar.gz
           tar -xzf /tmp/witness.tar.gz -C /tmp witness
           chmod +x /tmp/witness
           /tmp/witness version
@@ -76,11 +76,12 @@ jobs:
           openssl pkey -in /tmp/test.pem -pubout -out /tmp/test.pub 2>/dev/null
 
       # ── Test 1: witness run → cilock verify ────────────────────────────
+      - name: Create test workdir
+        run: mkdir -p ${{ runner.temp }}/workdir
+
       - name: "Test: witness run produces attestation"
         working-directory: ${{ runner.temp }}/workdir
         run: |
-          mkdir -p ${{ runner.temp }}/workdir
-          cd ${{ runner.temp }}/workdir
           git init && git add . && git commit --allow-empty -m "init" 2>/dev/null || true
 
           /tmp/witness run \
