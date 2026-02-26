@@ -1,8 +1,6 @@
 go 1.26.0
 
 use (
-	// CLIs
-	./aflock
 	// Core
 	./attestation
 
