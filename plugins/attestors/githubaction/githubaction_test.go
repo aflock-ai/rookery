@@ -78,6 +78,11 @@ func TestAttest(t *testing.T) {
 }
 
 func TestAttestNoEnv(t *testing.T) {
+	// Explicitly clear GitHub env vars that are set on Actions runners
+	t.Setenv("GITHUB_RUN_ID", "")
+	t.Setenv("GITHUB_WORKFLOW", "")
+	t.Setenv("GITHUB_JOB", "")
+
 	a := New(WithActionRef("actions/checkout@v4"))
 	err := a.Attest(newTestContext(t))
 	require.NoError(t, err)
