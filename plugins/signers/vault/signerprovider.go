@@ -30,7 +30,7 @@ const (
 	defaultPkiSecretsEnginePath = "pki"
 )
 
-func init() {
+func init() { //nolint:funlen
 	signer.Register("vault", func() signer.SignerProvider { return New() },
 		registry.StringConfigOption(
 			"url",

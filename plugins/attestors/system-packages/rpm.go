@@ -40,7 +40,7 @@ func (r *RPMBackend) DetermineOSInfo() (string, string, string, error) {
 	if err != nil {
 		return "", "", "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var distribution, version string
 

@@ -155,7 +155,7 @@ func (rc *CommandRun) TracingEnabled() bool {
 }
 
 func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
-	c := exec.Command(r.Cmd[0], r.Cmd[1:]...)
+	c := exec.Command(r.Cmd[0], r.Cmd[1:]...) //nolint:gosec // G204: command is user-specified by design
 	c.Dir = ctx.WorkingDir()
 	stdoutBuffer := bytes.Buffer{}
 	stderrBuffer := bytes.Buffer{}
@@ -186,6 +186,10 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	var err error
 	if r.enableTracing {
 		r.Processes, err = r.trace(c, ctx)
+		// Wait for I/O copying goroutines to complete before reading buffers.
+		// trace() uses ptrace to detect process exit, but exec's I/O goroutines
+		// may still be flushing pipe data into stdoutBuffer/stderrBuffer.
+		_ = c.Wait() //nolint:errcheck // exit status already captured by trace
 	} else {
 		err = c.Wait()
 		if exitErr, ok := err.(*exec.ExitError); ok {

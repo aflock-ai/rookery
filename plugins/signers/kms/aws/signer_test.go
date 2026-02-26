@@ -254,6 +254,7 @@ func TestSign(t *testing.T) {
 	}
 }
 
+//nolint:gocyclo
 func TestVerify(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -332,7 +333,7 @@ func TestVerify(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			sig, err := c.sign(ctx, []byte(dig), crypto.SHA256)
+			sig, err := c.sign(ctx, dig, crypto.SHA256)
 			if tt.wantErr && err != nil {
 				errFound = true
 				assert.ErrorAs(t, err, &tt.expectedErr)
@@ -341,7 +342,7 @@ func TestVerify(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			bsig, err := bs.Sign(bytes.NewReader([]byte(dig)))
+			bsig, err := bs.Sign(bytes.NewReader(dig))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -360,7 +361,7 @@ func TestVerify(t *testing.T) {
 				t.Fatal("expected verification to fail")
 			}
 
-			err = bv.Verify(bytes.NewReader([]byte(dig)), sig)
+			err = bv.Verify(bytes.NewReader(dig), sig)
 			if err == nil {
 				t.Fatal("expected verification to fail")
 			}

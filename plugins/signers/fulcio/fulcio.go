@@ -55,7 +55,7 @@ import (
 	"gopkg.in/go-jose/go-jose.v2/jwt"
 )
 
-func init() {
+func init() { //nolint:funlen
 	signer.Register("fulcio", func() signer.SignerProvider { return New() },
 		registry.StringConfigOption(
 			"url",
@@ -221,7 +221,7 @@ func New(opts ...Option) FulcioSignerProvider {
 	return fsp
 }
 
-func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, error) {
+func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, error) { //nolint:gocognit,gocyclo,funlen
 	// Parse the Fulcio URL to extract its components
 	u, err := url.Parse(fsp.FulcioURL)
 	if err != nil {
@@ -300,7 +300,7 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 	}
 
 	var certResp *fulciopb.SigningCertificate
-	if fsp.UseHTTP {
+	if fsp.UseHTTP { //nolint:nestif
 		log.Info("Requesting signing certificate from Fulcio using HTTP")
 		certResp, err = getCertHTTP(ctx, key, fsp.FulcioURL, raw)
 		if err != nil {
@@ -326,6 +326,12 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 		chain = cert.SignedCertificateDetachedSct.GetChain()
 	case *fulciopb.SigningCertificate_SignedCertificateEmbeddedSct:
 		chain = cert.SignedCertificateEmbeddedSct.GetChain()
+	default:
+		return nil, fmt.Errorf("unexpected certificate type in Fulcio response: %T", certResp.Certificate)
+	}
+
+	if chain == nil {
+		return nil, errors.New("no certificate chain in Fulcio response")
 	}
 
 	certs := chain.Certificates
@@ -357,7 +363,7 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 
 	ss := cryptoutil.NewECDSASigner(key, crypto.SHA256)
 	if ss == nil {
-		return nil, errors.New("failed to create RSA signer")
+		return nil, errors.New("failed to create ECDSA signer")
 	}
 
 	signer, err := cryptoutil.NewX509Signer(ss, leafCert, intermediateCerts, nil)
@@ -368,7 +374,7 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 	return signer, nil
 }
 
-func getCert(ctx context.Context, key *ecdsa.PrivateKey, fc fulciopb.CAClient, token string) (*fulciopb.SigningCertificate, error) {
+func getCert(ctx context.Context, key *ecdsa.PrivateKey, fc fulciopb.CAClient, token string) (*fulciopb.SigningCertificate, error) { //nolint:gocognit,gocyclo,funlen
 	// Validate token format before parsing
 	if token == "" {
 		return nil, errors.New("empty token provided to getCert")
@@ -461,7 +467,7 @@ func getCert(ctx context.Context, key *ecdsa.PrivateKey, fc fulciopb.CAClient, t
 				return nil, ctx.Err()
 			}
 			// Exponential backoff: 1s, 2s, 4s
-			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second //nolint:gosec // G115: attempt is bounded by maxRetries=3
 			log.Infof("Retrying Fulcio certificate request in %v (attempt %d/%d)", backoff, attempt+1, maxRetries)
 			time.Sleep(backoff)
 		}
@@ -564,7 +570,7 @@ func newClient(fulcioURL string, fulcioPort int, isInsecure bool) (fulciopb.CACl
 
 // getCertHTTP requests a signing certificate from Fulcio using the HTTP/REST API
 // instead of gRPC. This is useful in environments where gRPC is restricted.
-func getCertHTTP(ctx context.Context, key *ecdsa.PrivateKey, fulcioURL string, token string) (*fulciopb.SigningCertificate, error) {
+func getCertHTTP(ctx context.Context, key *ecdsa.PrivateKey, fulcioURL string, token string) (*fulciopb.SigningCertificate, error) { //nolint:funlen
 	t, err := jwt.ParseSigned(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse JWT token: %w", err)
@@ -622,28 +628,36 @@ func getCertHTTP(ctx context.Context, key *ecdsa.PrivateKey, fulcioURL string, t
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", fulcioURL+"/api/v2/signingCert", bytes.NewBuffer(jsonPayload))
+	// Normalize URL to avoid double-slash when fulcioURL has trailing slash
+	certURL := strings.TrimRight(fulcioURL, "/") + "/api/v2/signingCert"
+	req, err := http.NewRequestWithContext(ctx, "POST", certURL, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	// Limit response body to 1MB to prevent OOM from malicious servers.
+	// A typical Fulcio certificate response is only a few KB.
+	const maxBodySize = 1 << 20 // 1MB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Debugf("HTTP request failed with status: %s, full body: %s", resp.Status, string(body))
-		return nil, fmt.Errorf("HTTP request failed with status: %s, body: %s", resp.Status, string(body))
+		bodyStr := string(body)
+		if len(bodyStr) > 500 {
+			bodyStr = bodyStr[:500] + "..."
+		}
+		return nil, fmt.Errorf("HTTP request failed with status: %s, body: %s", resp.Status, bodyStr)
 	}
 
 	var certResp fulciopb.SigningCertificate

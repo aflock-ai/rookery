@@ -22,9 +22,9 @@ import (
 
 // Link is the in-toto Link predicate (v0.3).
 type Link struct {
-	Name        string                  `json:"name,omitempty"`
-	Command     []string                `json:"command,omitempty"`
+	Name        string                   `json:"name,omitempty"`
+	Command     []string                 `json:"command,omitempty"`
 	Materials   []*v1.ResourceDescriptor `json:"materials,omitempty"`
-	Byproducts  map[string]interface{}  `json:"byproducts,omitempty"`
-	Environment map[string]interface{}  `json:"environment,omitempty"`
+	Byproducts  map[string]interface{}   `json:"byproducts,omitempty"`
+	Environment map[string]interface{}   `json:"environment,omitempty"`
 }

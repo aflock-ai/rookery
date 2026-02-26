@@ -85,7 +85,7 @@ func (vsp *VaultSignerProvider) requestCertificate(ctx context.Context) (issueRe
 		return issueResponse{}, err
 	}
 
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return issueResponse{}, err

@@ -17,7 +17,7 @@ package attestation
 // DefaultSensitiveEnvList return a list of known sensitive environment keys.
 //
 // Explicit list sourced from https://github.com/Puliczek/awesome-list-of-secrets-in-environment-variables/blob/main/raw_list.txt
-func DefaultSensitiveEnvList() map[string]struct{} {
+func DefaultSensitiveEnvList() map[string]struct{} { //nolint:funlen
 	return map[string]struct{}{
 
 		// Glob pattern list

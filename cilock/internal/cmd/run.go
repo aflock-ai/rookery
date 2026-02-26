@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -62,7 +63,7 @@ func RunCmd() *cobra.Command {
 	return cmd
 }
 
-func runRun(ctx context.Context, ro options.RunOptions, args []string, signers ...cryptoutil.Signer) error {
+func runRun(ctx context.Context, ro options.RunOptions, args []string, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
 	if len(signers) > 1 {
 		return fmt.Errorf("only one signer is supported")
 	}
@@ -76,7 +77,9 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		timestampers = append(timestampers, timestamp.NewTimestamper(timestamp.TimestampWithUrl(url)))
 	}
 
-	attestors := alwaysRunAttestors
+	// Create fresh attestor instances each time to avoid leaking state
+	// from prior invocations (alwaysRunAttestors holds shared singletons).
+	attestors := []attestation.Attestor{product.New(), material.New()}
 	if len(args) > 0 {
 		attestors = append(attestors, commandrun.New(commandrun.WithCommand(args), commandrun.WithTracing(ro.Tracing)))
 	}
@@ -106,16 +109,17 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		}
 	}
 
-	for _, attestor := range attestors {
+	for i, attestor := range attestors {
 		setters, ok := ro.AttestorOptSetters[attestor.Name()]
 		if !ok {
 			continue
 		}
 
-		attestor, err := registry.SetOptions(attestor, setters...)
+		updated, err := registry.SetOptions(attestor, setters...)
 		if err != nil {
 			return fmt.Errorf("failed to set attestor option for %v: %w", attestor.Type(), err)
 		}
+		attestors[i] = updated
 	}
 
 	var roHashes []cryptoutil.DigestValue
@@ -165,6 +169,20 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		return err
 	}
 
+	// When multiple results are produced (e.g. MultiExporter attestors), an output
+	// file path is required — otherwise exported attestors would create files named
+	// "-<name>.json" in the current directory instead of writing to stdout.
+	hasExported := false
+	for _, result := range results {
+		if result.AttestorName != "" {
+			hasExported = true
+			break
+		}
+	}
+	if hasExported && ro.OutFilePath == "" {
+		return fmt.Errorf("--outfile is required when attestors export multiple attestations")
+	}
+
 	for _, result := range results {
 		signedBytes, err := json.Marshal(&result.SignedEnvelope)
 		if err != nil {
@@ -173,17 +191,34 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 
 		outfile := ro.OutFilePath
 		if result.AttestorName != "" {
-			outfile += "-" + result.AttestorName + ".json"
+			// Sanitize attestor name: MultiExporter uses "parent/child" format
+			// which would create unintended subdirectories in the output path.
+			safeName := strings.ReplaceAll(result.AttestorName, "/", "-")
+			outfile += "-" + safeName + ".json"
 		}
 
 		out, err := loadOutfile(outfile)
 		if err != nil {
 			return fmt.Errorf("failed to open out file: %w", err)
 		}
-		defer closeOutfile(out)
 
-		if _, err := out.Write(signedBytes); err != nil {
-			return fmt.Errorf("failed to write envelope to out file: %w", err)
+		_, writeErr := out.Write(signedBytes)
+		closeOutfile(out)
+		if writeErr != nil {
+			return fmt.Errorf("failed to write envelope to out file: %w", writeErr)
+		}
+
+		if ro.ArchivistaOptions.Enable {
+			archivistaClient, err := ro.ArchivistaOptions.Client()
+			if err != nil {
+				return fmt.Errorf("failed to create archivista client: %w", err)
+			}
+
+			gitoid, err := archivistaClient.Store(ctx, result.SignedEnvelope)
+			if err != nil {
+				return fmt.Errorf("failed to store artifact in archivista: %w", err)
+			}
+			log.Infof("Stored in archivista as %v\n", gitoid)
 		}
 	}
 	return nil

@@ -63,7 +63,10 @@ func setupFulcioTestService(t *testing.T) (*dummyCAClientService, string) {
 	service.client = client
 	go func() {
 		if err := service.server.Serve(lis); err != nil {
-			log.Fatalf("failed to serve: %v", err)
+			// Don't use log.Fatalf in goroutines — it calls os.Exit and kills
+			// the test runner. The "server has been stopped" error is expected
+			// when Stop() is called.
+			log.Printf("gRPC server stopped: %v", err)
 		}
 	}()
 	return service, fmt.Sprintf("localhost:%d", lis.Addr().(*net.TCPAddr).Port)
@@ -175,6 +178,7 @@ func generateTestToken(email string, subject string) string {
 
 func TestGetCert(t *testing.T) {
 	service, _ := setupFulcioTestService(t)
+	defer service.server.Stop()
 
 	ctx := context.Background()
 
@@ -315,7 +319,7 @@ func generateCertChain(t *testing.T) []string {
 	return certs
 }
 
-func setupRetryFulcioTestService(t *testing.T, maxFailures int32) (*retryCAClientService, string) {
+func setupRetryFulcioTestService(t *testing.T, maxFailures int32) (*retryCAClientService, string) { //nolint:unparam
 	service := &retryCAClientService{
 		attemptCount: new(int32),
 		maxFailures:  maxFailures,
@@ -333,7 +337,7 @@ func setupRetryFulcioTestService(t *testing.T, maxFailures int32) (*retryCAClien
 	service.client = client
 	go func() {
 		if err := service.server.Serve(lis); err != nil {
-			log.Fatalf("failed to serve: %v", err)
+			log.Printf("gRPC retry server stopped: %v", err)
 		}
 	}()
 	return service, fmt.Sprintf("localhost:%d", lis.Addr().(*net.TCPAddr).Port)
@@ -435,7 +439,7 @@ func TestGetCertNonRetryableErrors(t *testing.T) {
 
 		go func() {
 			if err := service.server.Serve(lis); err != nil {
-				log.Fatalf("failed to serve: %v", err)
+				log.Printf("gRPC auth-error server stopped: %v", err)
 			}
 		}()
 		defer service.server.Stop()

@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gobwas/glob"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/gobwas/glob"
 )
 
 // EnvironmentCapturer is an interface for capturing and filtering environment variables.
@@ -102,10 +102,14 @@ func WithDirHashGlob(dirHashGlob []string) AttestationContextOption {
 		if len(dirHashGlob) > 0 {
 			ctx.dirHashGlob = dirHashGlob
 
-			ctx.dirHashGlobCompiled = make([]glob.Glob, len(ctx.dirHashGlob))
-			for i, dirHashGlobItem := range dirHashGlob {
-				dirHashGlobItemCompiled, _ := glob.Compile(dirHashGlobItem)
-				ctx.dirHashGlobCompiled[i] = dirHashGlobItemCompiled
+			ctx.dirHashGlobCompiled = make([]glob.Glob, 0, len(ctx.dirHashGlob))
+			for _, dirHashGlobItem := range dirHashGlob {
+				dirHashGlobItemCompiled, err := glob.Compile(dirHashGlobItem)
+				if err != nil {
+					log.Debugf("invalid dir hash glob pattern %q: %v", dirHashGlobItem, err)
+					continue
+				}
+				ctx.dirHashGlobCompiled = append(ctx.dirHashGlobCompiled, dirHashGlobItemCompiled)
 			}
 		}
 	}
@@ -220,7 +224,15 @@ func (ctx *AttestationContext) runAttestor(attestor Attestor) {
 	log.Infof("Starting %v attestor...", attestor.Name())
 
 	startTime := time.Now()
-	if err := attestor.Attest(ctx); err != nil {
+	err := func() (retErr error) {
+		defer func() {
+			if r := recover(); r != nil {
+				retErr = fmt.Errorf("attestor %s panicked: %v", attestor.Name(), r)
+			}
+		}()
+		return attestor.Attest(ctx)
+	}()
+	if err != nil {
 		ctx.mutex.Lock()
 		ctx.completedAttestors = append(ctx.completedAttestors, CompletedAttestor{
 			Attestor:  attestor,
@@ -314,7 +326,9 @@ func (ctx *AttestationContext) StepName() string {
 // SetEnvironmentCapturer sets the EnvironmentCapturer on the context.
 // This is typically called by the environment plugin during attestation.
 func (ctx *AttestationContext) SetEnvironmentCapturer(c EnvironmentCapturer) {
+	ctx.mutex.Lock()
 	ctx.environmentCapturer = c
+	ctx.mutex.Unlock()
 }
 
 func (ctx *AttestationContext) EnvFilterVarsEnabled() bool {

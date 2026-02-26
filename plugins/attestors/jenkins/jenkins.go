@@ -130,13 +130,13 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.PipelineUrl), hashes); err == nil {
 		subjects[fmt.Sprintf("pipelineurl:%v", a.PipelineUrl)] = ds
 	} else {
-		log.Debugf("(attestation/jenkins) failed to record jenkins pipelineurl subject: %w", err)
+		log.Debugf("(attestation/jenkins) failed to record jenkins pipelineurl subject: %v", err)
 	}
 
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.JenkinsUrl), hashes); err == nil {
 		subjects[fmt.Sprintf("jenkinsurl:%v", a.JenkinsUrl)] = ds
 	} else {
-		log.Debugf("(attestation/jenkins) failed to record jenkins jenkinsurl subject: %w", err)
+		log.Debugf("(attestation/jenkins) failed to record jenkins jenkinsurl subject: %v", err)
 	}
 
 	return subjects

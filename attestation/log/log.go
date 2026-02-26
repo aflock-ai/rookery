@@ -16,9 +16,27 @@ package log
 
 import (
 	"fmt"
+	"sync"
 )
 
-var log Logger = SilentLogger{}
+// logMu protects the global log variable so that concurrent reads (from
+// attestor goroutines) and writes (from SetLogger) are safe.  Without this
+// synchronization, a data race on the Logger interface value can cause panics
+// because Go interface values are two machine words (type + data pointer) and
+// a torn read of a half-updated interface triggers nil-pointer dereferences.
+var (
+	logMu sync.RWMutex
+	log   Logger = SilentLogger{}
+)
+
+// logger returns the currently active Logger. All package-level log functions
+// must call this instead of reading the bare global variable directly.
+func logger() Logger {
+	logMu.RLock()
+	l := log
+	logMu.RUnlock()
+	return l
+}
 
 // Logger is used by attestation library code to print out relevant information at runtime.
 type Logger interface {
@@ -34,61 +52,66 @@ type Logger interface {
 
 // SetLogger will set the Logger instance that all attestation library code will use as logging output.
 // The default is a SilentLogger that will output nothing.
+// SetLogger is safe for concurrent use.
 func SetLogger(l Logger) {
+	logMu.Lock()
 	log = l
+	logMu.Unlock()
 }
 
 // GetLogger returns the Logger instance currently being used by attestation library code.
 func GetLogger() Logger {
-	return log
+	return logger()
 }
 
 func Errorf(format string, args ...interface{}) {
 	err := fmt.Errorf(format, args...)
-	log.Error(err)
+	logger().Error(err)
 }
 
 func Error(args ...interface{}) {
-	log.Error(args...)
+	logger().Error(args...)
 }
 
 func Warnf(format string, args ...interface{}) {
+	l := logger()
 	// We want to wrap the error if there is one.
 	for _, a := range args {
 		if _, ok := a.(error); ok {
 			err := fmt.Errorf(format, args...)
-			log.Warn(err)
+			l.Warn(err)
 			return
 		}
 	}
 
-	log.Warnf(format, args...)
+	l.Warnf(format, args...)
 }
 
 func Warn(args ...interface{}) {
-	log.Warn(args...)
+	logger().Warn(args...)
 }
 
 func Debugf(format string, args ...interface{}) {
+	l := logger()
 	for _, a := range args {
 		if _, ok := a.(error); ok {
 			err := fmt.Errorf(format, args...)
-			log.Debug(err)
+			l.Debug(err)
 			return
 		}
 	}
 
-	log.Debugf(format, args...)
+	l.Debugf(format, args...)
 }
 
 func Debug(args ...interface{}) {
-	log.Debug(args...)
+	logger().Debug(args...)
 }
 
 func Infof(format string, args ...interface{}) {
-	log.Infof(format, args...)
+	logger().Infof(format, args...)
 }
 
 func Info(args ...interface{}) {
-	log.Info(args...)
+	logger().Info(args...)
 }

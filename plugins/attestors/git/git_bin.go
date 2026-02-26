@@ -18,9 +18,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/go-git/go-git/v5"
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/go-git/go-git/v5"
 )
 
 // GitExists checks if the git binary is available.
@@ -70,7 +70,7 @@ func GitGetBinHash(ctx *attestation.AttestationContext) (cryptoutil.DigestSet, e
 func GitGetStatus(workDir string) (map[string]Status, error) {
 
 	// Execute the git status --porcelain command
-	cmd := exec.Command("git", "-C", workDir, "status", "--porcelain")
+	cmd := exec.Command("git", "-C", workDir, "status", "--porcelain") //nolint:gosec // G204: workDir comes from attestation context
 	outputBytes, err := cmd.Output()
 	if err != nil {
 		return map[string]Status{}, err
@@ -83,8 +83,12 @@ func GitGetStatus(workDir string) (map[string]Status, error) {
 	// Iterate over the lines and parse the status
 	gitStatuses := make(map[string]Status)
 	for _, line := range lines {
-		// Skip empty lines
-		if len(line) == 0 {
+		// Skip empty or malformed lines.
+		// git status --porcelain format: XY <space> <path>
+		// Valid lines are at least 4 characters (2 status + space + 1 char path).
+		// Lines shorter than 3 characters cannot have both status codes and a path,
+		// so skip them to avoid a panic on index-out-of-range.
+		if len(line) < 3 {
 			continue
 		}
 
