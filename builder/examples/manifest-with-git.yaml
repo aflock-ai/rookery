@@ -1,0 +1,25 @@
+# Example: Build with a mix of rookery plugins and a private git plugin
+name: custom-attestor
+output: ./custom-attestor
+
+preset: minimal
+
+plugins:
+  # Additional rookery plugin by module path
+  - module: github.com/aflock-ai/rookery/plugins/attestors/sarif
+
+  # Private plugin from a git repo (SSH)
+  # - git: git@github.com:acme-corp/custom-attestor.git
+  #   ref: v1.0.0
+
+  # Private plugin from a git repo (HTTPS)
+  # - git: https://github.com/acme-corp/custom-attestor.git
+  #   ref: main
+  #   subdir: plugins/compliance
+
+  # Local plugin during development
+  # - path: ../my-local-plugin
+
+build_options:
+  fips_mode: "on"
+  customer_id: "acme-corp"

@@ -1,0 +1,357 @@
+// Copyright 2022 The Witness Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package policy
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/source"
+)
+
+// +kubebuilder:object:generate=true
+type Step struct {
+	Name             string        `json:"name" jsonschema:"title=Name,description=Unique name for this step in the policy"`
+	Functionaries    []Functionary `json:"functionaries" jsonschema:"title=Functionaries,description=Authorized signers whose attestations are accepted for this step"`
+	Attestations     []Attestation `json:"attestations" jsonschema:"title=Attestations,description=Required attestation types and their associated policies"`
+	ArtifactsFrom    []string      `json:"artifactsFrom,omitempty" jsonschema:"title=Artifacts From,description=Other step names whose products must match this step's materials"`
+	AttestationsFrom []string      `json:"attestationsFrom,omitempty" jsonschema:"title=Attestations From,description=Other step names whose attestation data is accessible during Rego evaluation"`
+}
+
+// +kubebuilder:object:generate=true
+type Functionary struct {
+	Type           string         `json:"type" jsonschema:"title=Type,description=Type of functionary (publickey or root)"`
+	CertConstraint CertConstraint `json:"certConstraint,omitempty" jsonschema:"title=Certificate Constraint,description=X.509 certificate constraints the functionary must satisfy"`
+	PublicKeyID    string         `json:"publickeyid,omitempty" jsonschema:"title=Public Key ID,description=ID of a public key from the policy's publickeys map"`
+}
+
+// +kubebuilder:object:generate=true
+type AiPolicy struct {
+	Name   string `json:"name" jsonschema:"title=Name,description=Human-readable name for this AI policy"`
+	Prompt string `json:"prompt" jsonschema:"title=Prompt,description=Prompt text sent to the AI model for evaluation"`
+	Model  string `json:"model,omitempty" jsonschema:"title=Model,description=AI model to use for evaluation"`
+}
+
+// +kubebuilder:object:generate=true
+type Attestation struct {
+	Type         string       `json:"type" jsonschema:"title=Type,description=Attestation type URI that must be present in the collection"`
+	RegoPolicies []RegoPolicy `json:"regopolicies" jsonschema:"title=Rego Policies,description=Rego policies to evaluate against the attestation data"`
+	AiPolicies   []AiPolicy   `json:"aipolicies" jsonschema:"title=AI Policies,description=AI-based policies to evaluate against the attestation data"`
+}
+
+// +kubebuilder:object:generate=true
+type RegoPolicy struct {
+	Module []byte `json:"module" jsonschema:"title=Module,description=Base64-encoded Rego policy module source code"`
+	Name   string `json:"name" jsonschema:"title=Name,description=Human-readable name for this Rego policy"`
+}
+
+// StepResult contains information about the verified collections for each step.
+// Passed contains the collections that passed any rego policies and all expected attestations exist.
+// Rejected contains the rejected collections and the error that caused them to be rejected.
+type StepResult struct {
+	Step     string
+	Passed   []PassedCollection
+	Rejected []RejectedCollection
+}
+
+// PassedCollection contains a collection that passed verification along with any AI responses
+type PassedCollection struct {
+	Collection  source.CollectionVerificationResult
+	AiResponses []AiResponse `json:"AiResponses,omitempty"`
+}
+
+// MarshalJSON implements the json.Marshaler interface for PassedCollection
+func (p PassedCollection) MarshalJSON() ([]byte, error) {
+	return json.Marshal(&struct {
+		Collection  source.CollectionVerificationResult `json:"Collection"`
+		AiResponses []AiResponse                        `json:"AiResponses,omitempty"`
+	}{
+		Collection:  p.Collection,
+		AiResponses: p.AiResponses,
+	})
+}
+
+// Analyze inspects the StepResult to determine if the step passed or failed.
+// We do this rather than failing at the first point of failure in the verification flow
+// in order to save the failure reasons so we can present them all at the end of the verification process.
+func (r StepResult) Analyze() bool {
+	var pass bool
+	if len(r.Passed) > 0 {
+		pass = true
+	}
+
+	for _, coll := range r.Passed {
+		// we don't fail on warnings so we process these under debug logs
+		if len(coll.Collection.Warnings) > 0 {
+			for _, warn := range coll.Collection.Warnings {
+				log.Debug("Warning: Step: %s, Collection: %s, Warning: %s", r.Step, coll.Collection.Collection.Name, warn)
+			}
+		}
+
+		// Want to ensure that undiscovered errors aren't lurking in the passed collections
+		if len(coll.Collection.Errors) > 0 {
+			for _, err := range coll.Collection.Errors {
+				pass = false
+				log.Errorf("Unexpected Error in Passed Collection: Step: %s, Collection: %s, Error: %s", r.Step, coll.Collection.Collection.Name, err)
+			}
+		}
+	}
+
+	return pass
+}
+
+func (r StepResult) HasErrors() bool {
+	return len(r.Rejected) > 0
+}
+
+func (r StepResult) HasPassed() bool {
+	return len(r.Passed) > 0
+}
+
+func (r StepResult) Error() string {
+	errs := make([]string, len(r.Rejected))
+	for i, reject := range r.Rejected {
+		errs[i] = reject.Reason.Error()
+	}
+
+	return fmt.Sprintf("attestations for step %v could not be used due to:\n%v", r.Step, strings.Join(errs, "\n"))
+}
+
+type RejectedCollection struct {
+	Collection  source.CollectionVerificationResult
+	Reason      error
+	AiResponses []AiResponse `json:"AiResponses,omitempty"`
+}
+
+// MarshalJSON implements the json.Marshaler interface to properly serialize the Reason field
+// which is an error interface that would otherwise serialize to an empty object {}
+func (r RejectedCollection) MarshalJSON() ([]byte, error) {
+	var reasonStr string
+	if r.Reason != nil {
+		reasonStr = r.Reason.Error()
+	}
+
+	return json.Marshal(&struct {
+		Collection  source.CollectionVerificationResult `json:"Collection"`
+		Reason      string                              `json:"Reason"`
+		AiResponses []AiResponse                        `json:"AiResponses,omitempty"`
+	}{
+		Collection:  r.Collection,
+		Reason:      reasonStr,
+		AiResponses: r.AiResponses,
+	})
+}
+
+func (f Functionary) Validate(verifier cryptoutil.Verifier, trustBundles map[string]TrustBundle) error {
+	verifierID, err := verifier.KeyID()
+	if err != nil {
+		return fmt.Errorf("could not get key id: %w", err)
+	}
+
+	if f.PublicKeyID != "" && f.PublicKeyID == verifierID {
+		return nil
+	}
+
+	x509Verifier, ok := verifier.(*cryptoutil.X509Verifier)
+	if !ok {
+		return fmt.Errorf("verifier with ID %v is not a public key verifier or a x509 verifier", verifierID)
+	}
+
+	if len(f.CertConstraint.Roots) == 0 {
+		return fmt.Errorf("verifier with ID %v is an x509 verifier, but no trusted roots provided in functionary", verifierID)
+	}
+
+	if err := f.CertConstraint.Check(x509Verifier, trustBundles); err != nil {
+		return fmt.Errorf("verifier with ID %v doesn't meet certificate constraint: %w", verifierID, err)
+	}
+
+	return nil
+}
+
+// buildStepContext extracts attestation data from already-verified steps referenced
+// by AttestationsFrom. The result is a map[stepName]->map[attestationType]->attestorJSON
+// that gets passed into Rego policy evaluation as input.steps.
+func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepResult) map[string]interface{} { //nolint:gocognit
+	if len(attestationsFrom) == 0 {
+		return nil
+	}
+
+	ctx := make(map[string]interface{})
+	for _, depStep := range attestationsFrom {
+		result, ok := resultsByStep[depStep]
+		if !ok || len(result.Passed) == 0 {
+			continue
+		}
+
+		stepData := make(map[string]interface{})
+		for _, pc := range result.Passed {
+			for _, att := range pc.Collection.Collection.Attestations {
+				// Marshal the attestor to a generic map so Rego can traverse it.
+				b, err := json.Marshal(att.Attestation)
+				if err != nil {
+					log.Debugf("failed to marshal attestation %s from step %s: %v", att.Type, depStep, err)
+					continue
+				}
+				var data interface{}
+				dec := json.NewDecoder(bytes.NewReader(b))
+				dec.UseNumber()
+				if err := dec.Decode(&data); err != nil {
+					log.Debugf("failed to decode attestation %s from step %s: %v", att.Type, depStep, err)
+					continue
+				}
+				stepData[att.Type] = data
+			}
+		}
+		if len(stepData) > 0 {
+			ctx[depStep] = stepData
+		}
+	}
+
+	if len(ctx) == 0 {
+		return nil
+	}
+	return ctx
+}
+
+// checkDependencies verifies that all steps listed in AttestationsFrom have
+// at least one passed collection in the results so far. Returns an error if any
+// dependency has not been verified yet.
+func checkDependencies(attestationsFrom []string, resultsByStep map[string]StepResult) error {
+	for _, dep := range attestationsFrom {
+		result, ok := resultsByStep[dep]
+		if !ok || len(result.Passed) == 0 {
+			return ErrDependencyNotVerified{Step: dep}
+		}
+	}
+	return nil
+}
+
+// validateAttestations will test each collection against to ensure the expected attestations
+// appear in the collection as well as that any rego policies pass for the step.
+func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult { //nolint:gocognit,gocyclo,funlen
+	result := StepResult{Step: s.Name}
+	if len(collectionResults) <= 0 {
+		return result
+	}
+
+	for _, collection := range collectionResults {
+		if collection.Collection.Name != s.Name && collection.Collection.Name != "" {
+			log.Debugf("Skipping collection %s as it is not for step %s", collection.Collection.Name, s.Name)
+			continue
+		}
+
+		found := make(map[string]attestation.Attestor)
+		reasons := make([]string, 0)
+		passed := true
+		var allAiResponses []AiResponse
+
+		if len(collection.Errors) > 0 {
+			passed = false
+			for _, err := range collection.Errors {
+				reasons = append(reasons, fmt.Sprintf("collection verification failed: %s", err.Error()))
+			}
+		}
+
+		for _, att := range collection.Collection.Attestations {
+			found[att.Type] = att.Attestation
+			// Also register under the alternate URI so that policies
+			// written with witness.dev URIs match aflock.ai attestations and
+			// vice versa.
+			if alt := attestation.LegacyAlternate(att.Type); alt != "" {
+				found[alt] = att.Attestation
+			}
+		}
+
+		for _, expected := range s.Attestations {
+			// Try both the original and alternate URI for the expected type.
+			attestor, ok := found[expected.Type]
+			if !ok {
+				if alt := attestation.LegacyAlternate(expected.Type); alt != "" {
+					attestor, ok = found[alt]
+				}
+			}
+			if !ok {
+				passed = false
+				reasons = append(reasons, ErrMissingAttestation{
+					Step:        s.Name,
+					Attestation: expected.Type,
+				}.Error())
+				// Skip policy evaluation — the attestation is missing so there is
+				// nothing to evaluate. Continuing would pass a nil attestor to the
+				// Rego/AI evaluators.
+				continue
+			}
+
+			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies, stepContext); err != nil {
+				passed = false
+				reasons = append(reasons, err.Error())
+			}
+
+			aiResponses, err := EvaluateAIPolicy(attestor, expected.AiPolicies, aiServerURL)
+			if err != nil {
+				passed = false
+				reasons = append(reasons, err.Error())
+			}
+
+			if len(aiResponses) > 0 { //nolint:nestif
+				allAiResponses = append(allAiResponses, aiResponses...)
+
+				if err == nil {
+					for i, resp := range aiResponses {
+						if resp.Status == AiStatusFail {
+							policyName := ""
+							if i < len(expected.AiPolicies) {
+								policyName = expected.AiPolicies[i].Name
+							}
+							if policyName == "" {
+								policyName = fmt.Sprintf("AI Policy %d", i+1)
+							}
+
+							reason := fmt.Sprintf("AI Policy '%s': %s - %s",
+								policyName,
+								resp.Status,
+								resp.Reason)
+
+							passed = false
+							reasons = append(reasons, reason)
+						}
+					}
+				}
+			}
+		}
+
+		if passed {
+			result.Passed = append(result.Passed, PassedCollection{
+				Collection:  collection,
+				AiResponses: allAiResponses,
+			})
+		} else {
+			r := strings.Join(reasons, ",\n - ")
+			reason := fmt.Sprintf("collection validation failed:\n - %s", r)
+			result.Rejected = append(result.Rejected, RejectedCollection{
+				Collection:  collection,
+				Reason:      fmt.Errorf("%s", reason),
+				AiResponses: allAiResponses,
+			})
+		}
+	}
+
+	return result
+}

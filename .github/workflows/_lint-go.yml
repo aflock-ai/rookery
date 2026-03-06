@@ -1,0 +1,75 @@
+# Reusable workflow for Go linting
+# Called by ci.yml to run comprehensive Go static analysis
+#
+# Tools:
+# - golangci-lint: 20+ linters with AI-code guardrails
+# - deadcode: Find unreachable functions
+# - govulncheck: Vulnerability scanning
+
+name: Go Lint
+
+on:
+  workflow_call:
+
+jobs:
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Install golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1
+          golangci-lint version
+
+      - name: Install analysis tools
+        run: |
+          go install golang.org/x/tools/cmd/deadcode@v0.31.0
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run golangci-lint
+        run: |
+          echo "════════════════════════════════════════════════════════════"
+          echo "                    GOLANGCI-LINT                            "
+          echo "════════════════════════════════════════════════════════════"
+          # go.work doesn't support ./... from repo root, iterate workspace members
+          for dir in $(grep '^\s*\./' go.work | sed 's/^[[:space:]]*//' | sed 's|^\.\/||'); do
+            echo "linting $dir..."
+            (cd "$dir" && golangci-lint run ./... --timeout 10m) || exit 1
+          done
+
+      - name: Run deadcode analysis
+        continue-on-error: true
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════════════════════"
+          echo "                    DEADCODE ANALYSIS                        "
+          echo "════════════════════════════════════════════════════════════"
+
+          for dir in $(grep '^\s*\./' go.work | sed 's/^[[:space:]]*//' | sed 's|^\.\/||'); do
+            OUTPUT=$(cd "$dir" && deadcode -test ./... 2>&1) || true
+            if [ -n "$OUTPUT" ]; then
+              echo "$dir: $OUTPUT"
+            fi
+          done
+
+      - name: Run govulncheck
+        continue-on-error: true
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════════════════════"
+          echo "                    VULNERABILITY SCAN                       "
+          echo "════════════════════════════════════════════════════════════"
+
+          for dir in $(grep '^\s*\./' go.work | sed 's/^[[:space:]]*//' | sed 's|^\.\/||'); do
+            echo "checking $dir..."
+            (cd "$dir" && govulncheck ./...) || echo "$dir: vulnerabilities detected (non-blocking)"
+          done

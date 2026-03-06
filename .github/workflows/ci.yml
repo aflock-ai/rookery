@@ -1,0 +1,297 @@
+# Rookery CI Pipeline
+# Adapted from Judge's comprehensive CI with patterns for Go monorepo
+#
+# Jobs:
+# - go-version-check: Validate .go-version consistency
+# - lint-go: golangci-lint + deadcode + govulncheck
+# - test-go: Go tests with coverage
+# - test-go-race: Go tests with race detector
+# - vet: go vet across all modules
+# - build: Build all binaries (cilock, aflock, builder)
+# - verify-isolated: Verify each module builds outside workspace
+# - commitlint: Conventional commit validation
+# - forbidden-patterns: Scan for dangerous code patterns
+# - ci-success: Aggregate status gate
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Go Version Consistency ──────────────────────────────────────────
+  go-version-check:
+    name: go version check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Go version consistency
+        run: |
+          EXPECTED=$(cat .go-version | tr -d '[:space:]')
+          echo "Expected Go version: $EXPECTED"
+
+          # Check go.work
+          WORK_VER=$(head -1 go.work | grep -oP '\d+\.\d+\.\d+' || true)
+          if [ -n "$WORK_VER" ] && [ "$WORK_VER" != "$EXPECTED" ]; then
+            echo "go.work has $WORK_VER, expected $EXPECTED"
+            exit 1
+          fi
+
+          # Check all go.mod files
+          ERRORS=""
+          for mod in $(find . -name 'go.mod' -not -path '*/vendor/*'); do
+            MOD_VER=$(grep '^go ' "$mod" | grep -oP '\d+\.\d+\.\d+' || true)
+            if [ -n "$MOD_VER" ] && [ "$MOD_VER" != "$EXPECTED" ]; then
+              ERRORS="${ERRORS}\n  $mod has $MOD_VER"
+            fi
+          done
+
+          if [ -n "$ERRORS" ]; then
+            echo "Go version mismatch (expected $EXPECTED):$ERRORS"
+            exit 1
+          fi
+
+          echo "All Go versions consistent: $EXPECTED"
+
+  # ── Linting ─────────────────────────────────────────────────────────
+  lint-go:
+    name: lint
+    uses: ./.github/workflows/_lint-go.yml
+
+  # ── Testing ─────────────────────────────────────────────────────────
+  test-go:
+    name: test
+    uses: ./.github/workflows/_test-go.yml
+    with:
+      race: false
+      coverage: true
+
+  test-go-race:
+    name: test (race)
+    uses: ./.github/workflows/_test-go.yml
+    with:
+      race: true
+
+  # ── Static Analysis ─────────────────────────────────────────────────
+  vet:
+    name: go vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Run go vet
+        run: |
+          # go.work doesn't support ./... from repo root, iterate workspace members
+          for dir in $(grep '^\s*\./' go.work | sed 's/^[[:space:]]*//' | sed 's|^\.\/||'); do
+            echo "vetting $dir..."
+            (cd "$dir" && go vet ./...) || exit 1
+          done
+          echo "All modules pass go vet"
+
+  # ── Build ───────────────────────────────────────────────────────────
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: attestation
+            dir: attestation
+          - name: aflock
+            dir: aflock
+          - name: builder
+            dir: builder
+          - name: cilock
+            dir: cilock
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Build ${{ matrix.target.name }}
+        working-directory: ${{ matrix.target.dir }}
+        run: go build ./...
+
+  # ── Isolated Module Builds ──────────────────────────────────────────
+  verify-isolated:
+    name: verify isolated builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Verify each module builds in isolation
+        run: make verify-isolated
+
+  # ── Conventional Commits ────────────────────────────────────────────
+  commitlint:
+    name: commitlint
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+
+          # Conventional commit pattern: type(scope): description
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?: .+'
+          ERRORS=""
+
+          for COMMIT in $(git rev-list "$BASE".."$HEAD"); do
+            MSG=$(git log -1 --format='%s' "$COMMIT")
+            if ! echo "$MSG" | grep -qP "$PATTERN"; then
+              # Allow merge commits and Co-Authored-By
+              if ! echo "$MSG" | grep -qP '^Merge '; then
+                ERRORS="${ERRORS}\n  ${COMMIT:0:8}: $MSG"
+              fi
+            fi
+          done
+
+          if [ -n "$ERRORS" ]; then
+            echo "Non-conventional commits found:$ERRORS"
+            echo ""
+            echo "Expected format: type(scope): description"
+            echo "Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+            exit 1
+          fi
+
+          echo "All commits follow conventional format"
+
+  # ── Forbidden Patterns ──────────────────────────────────────────────
+  forbidden-patterns:
+    name: forbidden patterns
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for forbidden patterns
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          ERRORS=""
+
+          # File-aware diff scanning: track current file to properly
+          # exclude test files and main.go from os.Exit/panic checks
+          CURRENT_FILE=""
+          while IFS= read -r line; do
+            # Track current file from diff headers
+            if [[ "$line" == "+++ b/"* ]]; then
+              CURRENT_FILE="${line#+++ b/}"
+              continue
+            fi
+
+            # Only check added lines
+            [[ "$line" == "+"* ]] || continue
+            [[ "$line" == "+++"* ]] && continue
+            ADDED="${line#+}"
+
+            # Skip comments and string literals (lines containing quotes)
+            TRIMMED=$(echo "$ADDED" | sed 's/^[[:space:]]*//')
+            [[ "$TRIMMED" == "//"* ]] && continue
+
+            IS_TEST=false
+            IS_MAIN=false
+            [[ "$CURRENT_FILE" == *"_test.go" ]] && IS_TEST=true
+            [[ "$(basename "$CURRENT_FILE")" == "main.go" ]] && IS_MAIN=true
+
+            # os.Exit outside main.go and test files
+            if [[ "$IS_TEST" == false && "$IS_MAIN" == false ]]; then
+              if echo "$ADDED" | grep -q 'os\.Exit('; then
+                ERRORS="${ERRORS}\n  os.Exit() in $CURRENT_FILE: $TRIMMED"
+              fi
+            fi
+
+            # panic outside test files and init functions
+            if [[ "$IS_TEST" == false ]]; then
+              if echo "$ADDED" | grep -q '\bpanic('; then
+                if ! echo "$ADDED" | grep -q 'func init('; then
+                  ERRORS="${ERRORS}\n  panic() in $CURRENT_FILE: $TRIMMED"
+                fi
+              fi
+            fi
+
+            # //nolint without specific linter
+            if echo "$ADDED" | grep -q '//nolint' && ! echo "$ADDED" | grep -q '//nolint:'; then
+              ERRORS="${ERRORS}\n  //nolint without linter in $CURRENT_FILE: $TRIMMED"
+            fi
+
+            # Hardcoded credentials (skip test files and examples)
+            if [[ "$IS_TEST" == false ]]; then
+              if echo "$ADDED" | grep -iqP '(password|secret|token|apikey)\s*[:=]\s*"[^"]{8,}"'; then
+                if ! echo "$ADDED" | grep -qi 'example'; then
+                  ERRORS="${ERRORS}\n  Possible credential in $CURRENT_FILE: $TRIMMED"
+                fi
+              fi
+            fi
+          done < <(git diff "$BASE"..HEAD -- '*.go' || true)
+
+          if [ -n "$ERRORS" ]; then
+            echo "Forbidden patterns detected:$ERRORS"
+            exit 1
+          fi
+
+          echo "No forbidden patterns found"
+
+  # ── CI Success Gate ─────────────────────────────────────────────────
+  ci-success:
+    name: ci success
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - go-version-check
+      - lint-go
+      - test-go
+      - test-go-race
+      - vet
+      - build
+      - verify-isolated
+      - commitlint
+      - forbidden-patterns
+    steps:
+      - name: Check all jobs
+        run: |
+          RESULTS='${{ toJson(needs) }}'
+          echo "Job results:"
+          echo "$RESULTS" | jq -r 'to_entries[] | "  \(.key): \(.value.result)"'
+
+          # Check for failures (skip skipped jobs like commitlint on push)
+          FAILED=$(echo "$RESULTS" | jq -r 'to_entries[] | select(.value.result == "failure") | .key')
+
+          if [ -n "$FAILED" ]; then
+            echo ""
+            echo "Failed jobs:"
+            echo "$FAILED"
+            exit 1
+          fi
+
+          echo ""
+          echo "All required checks passed"

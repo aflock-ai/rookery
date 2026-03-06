@@ -1,0 +1,315 @@
+// Copyright 2021 The Witness Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package gcpiit
+
+import (
+	"crypto"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+
+	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
+	"github.com/invopop/jsonschema"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+const (
+	Name    = "gcp-iit"
+	Type    = "https://aflock.ai/attestations/gcp-iit/v0.1"
+	RunType = attestation.PreMaterialRunType
+
+	jwksUrl                      = "https://www.googleapis.com/oauth2/v3/certs"
+	defaultIdentityTokenHost     = "metadata.google.internal"
+	identityTokenURLPathTemplate = "/computeMetadata/v1/instance/service-accounts/%s/identity"
+	identityTokenAudience        = "witness-node-attestor" //nolint: gosec // false positive
+	defaultServiceAccount        = "default"
+	TokenUrl                     = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=witness-node-attestor&format=full&licenses=TRUE" //nolint:gosec // G101: not a credential, this is a GCP metadata URL
+	InstanceMetadataUrl          = "http://metadata.google.internal/computeMetadata/v1/instance/"
+	InstanceAttributesUrl        = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/"
+	ProjectMetadataUrl           = "http://metadata.google.internal/computeMetadata/v1/project/"
+)
+
+// This is a hacky way to create a compile time error in case the attestor
+// doesn't implement the expected interfaces.
+var (
+	_ attestation.Attestor  = &Attestor{}
+	_ attestation.Subjecter = &Attestor{}
+)
+
+func init() {
+	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
+		return New()
+	})
+}
+
+type ErrNotGCPIIT struct{}
+
+func (e ErrNotGCPIIT) Error() string {
+	return "not a GCP IIT JWT"
+}
+
+type Attestor struct {
+	JWT                       *jwt.Attestor `json:"jwt"`
+	ProjectID                 string        `json:"project_id"`
+	ProjectNumber             string        `json:"project_number"`
+	InstanceZone              string        `json:"zone"`
+	InstanceID                string        `json:"instance_id"`
+	InstanceHostname          string        `json:"instance_hostname"`
+	InstanceCreationTimestamp string        `json:"instance_creation_timestamp"`
+	InstanceConfidentiality   string        `json:"instance_confidentiality"`
+	LicenceID                 []string      `json:"licence_id"`
+	ClusterName               string        `json:"cluster_name"`
+	ClusterUID                string        `json:"cluster_uid"`
+	ClusterLocation           string        `json:"cluster_location"`
+
+	isWorkloadIdentity bool
+}
+
+func New() *Attestor {
+	return &Attestor{}
+}
+
+func (a *Attestor) Name() string {
+	return Name
+}
+
+func (a *Attestor) Type() string {
+	return Type
+}
+
+func (a *Attestor) RunType() attestation.RunType {
+	return RunType
+}
+
+func (a *Attestor) Schema() *jsonschema.Schema {
+	return jsonschema.Reflect(a)
+}
+
+func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:gocognit,gocyclo // GCP attestation involves multiple metadata lookups
+	tokenURL := identityTokenURL(defaultIdentityTokenHost, defaultServiceAccount)
+	identityToken, err := getMetadata(tokenURL)
+	if err != nil {
+		// status.Errorf does not support %w directive
+		return status.Errorf(codes.Internal, "unable to retrieve valid identity token: %v", err)
+	}
+
+	it := string(identityToken)
+
+	customJWKSURL := os.Getenv("WITNESS_GCP_JWKS_URL")
+	if customJWKSURL == "" {
+		customJWKSURL = jwksUrl
+	}
+	a.JWT = jwt.New(jwt.WithToken(it), jwt.WithJWKSUrl(customJWKSURL))
+	if err := a.JWT.Attest(ctx); err != nil {
+		return err
+	}
+
+	if a.JWT.Claims["google"] == nil {
+		a.isWorkloadIdentity = true
+	}
+
+	if !a.isWorkloadIdentity { //nolint:nestif // GCP claim extraction requires nested checks
+		googClaim, ok := a.JWT.Claims["google"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type for google claim")
+		}
+
+		if v, ok := googClaim["project_id"].(string); ok {
+			a.ProjectID = v
+		}
+		if v, ok := googClaim["project_number"].(string); ok {
+			a.ProjectNumber = v
+		}
+		if v, ok := googClaim["zone"].(string); ok {
+			a.InstanceZone = v
+		}
+		if v, ok := googClaim["instance_id"].(string); ok {
+			a.InstanceID = v
+		}
+		if v, ok := googClaim["instance_name"].(string); ok {
+			a.InstanceHostname = v
+		}
+		if v, ok := googClaim["instance_creation_timestamp"].(string); ok {
+			a.InstanceCreationTimestamp = v
+		}
+		if v, ok := googClaim["instance_confidentiality"].(string); ok {
+			a.InstanceConfidentiality = v
+		}
+
+		switch v := googClaim["licence_id"].(type) {
+		case []string:
+			a.LicenceID = v
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					a.LicenceID = append(a.LicenceID, s)
+				}
+			}
+		}
+	} else {
+		a.getInstanceData()
+	}
+
+	return nil
+}
+
+func (a *Attestor) getInstanceData() {
+	endpoints := map[string]string{
+		"hostname":         InstanceMetadataUrl + "hostname",
+		"id":               InstanceMetadataUrl + "id",
+		"zone":             InstanceMetadataUrl + "zone",
+		"cluster-name":     InstanceMetadataUrl + "attributes/cluster-name",
+		"cluster-uid":      InstanceMetadataUrl + "attributes/cluster-uid",
+		"cluster-location": InstanceMetadataUrl + "attributes/cluster-location",
+		"project-id":       ProjectMetadataUrl + "project-id",
+		"project-number":   ProjectMetadataUrl + "numeric-project-id",
+	}
+
+	metadata := make(map[string]string)
+
+	for k, v := range endpoints {
+		data, err := getMetadata(v)
+		if err != nil {
+			log.Warnf("failed to retrieve gcp metadata from %v: %v", v, err)
+			continue
+		}
+		metadata[k] = string(data)
+	}
+
+	a.ClusterName = metadata["cluster-name"]
+	a.ClusterUID = metadata["cluster-uid"]
+	a.ClusterLocation = metadata["cluster-location"]
+	a.InstanceHostname = metadata["hostname"]
+	a.InstanceID = metadata["id"]
+	a.InstanceZone = metadata["zone"]
+
+	projID, projNum, err := parseJWTProjectInfo(a.JWT)
+	if err != nil {
+		log.Warnf("unable to parse gcp project info from JWT: %v\n", err)
+	} else {
+		a.ProjectID = projID
+		a.ProjectNumber = projNum
+	}
+}
+
+func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
+	subjects := make(map[string]cryptoutil.DigestSet)
+	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
+	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.InstanceID), hashes); err == nil {
+		subjects[fmt.Sprintf("instanceid:%v", a.InstanceID)] = ds
+	} else {
+		log.Debugf("(attestation/gcp) failed to record gcp instanceid subject: %v", err)
+	}
+
+	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.InstanceHostname), hashes); err == nil {
+		subjects[fmt.Sprintf("instancename:%v", a.InstanceHostname)] = ds
+	} else {
+		log.Debugf("(attestation/gcp) failed to record gcp instancename subject: %v", err)
+	}
+
+	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ProjectID), hashes); err == nil {
+		subjects[fmt.Sprintf("projectid:%v", a.ProjectID)] = ds
+	} else {
+		log.Debugf("(attestation/gcp) failed to record gcp projectid subject: %v", err)
+	}
+
+	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ProjectNumber), hashes); err == nil {
+		subjects[fmt.Sprintf("projectnumber:%v", a.ProjectNumber)] = ds
+	} else {
+		log.Debugf("(attestation/gcp) failed to record gcp projectnumber subject: %v", err)
+	}
+
+	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ClusterUID), hashes); err == nil {
+		subjects[fmt.Sprintf("clusteruid:%v", a.ClusterUID)] = ds
+	} else {
+		log.Debugf("(attestation/gcp) failed to record gcp clusteruid subject: %v", err)
+	}
+
+	return subjects
+}
+
+func getMetadata(url string) ([]byte, error) {
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Metadata-Flavor", "Google")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code for route: %d", resp.StatusCode)
+	}
+
+	// Limit response size to prevent OOM from a compromised metadata endpoint.
+	const maxMetadataResponseSize = 1 << 20 // 1MB
+	respBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataResponseSize))
+	if err != nil {
+		return nil, err
+	}
+	return respBytes, nil
+}
+
+// identityTokenURL creates the URL to find an instance identity document given the
+// host of the GCP metadata server and the service account the instance is running as.
+func identityTokenURL(host, serviceAccount string) string {
+	query := url.Values{}
+	query.Set("audience", identityTokenAudience)
+	query.Set("format", "full")
+	url := &url.URL{
+		Scheme:   "http",
+		Host:     host,
+		Path:     fmt.Sprintf(identityTokenURLPathTemplate, serviceAccount),
+		RawQuery: query.Encode(),
+	}
+	return url.String()
+}
+
+func parseJWTProjectInfo(jwt *jwt.Attestor) (string, string, error) {
+	if jwt.Claims["email"] == nil {
+		return "", "", fmt.Errorf("unable to find email claim")
+	}
+
+	email, ok := jwt.Claims["email"].(string)
+	if !ok {
+		return "", "", fmt.Errorf("email claim is not a string")
+	}
+
+	stings := strings.Split(email, "@")
+	if len(stings) != 2 {
+		return "", "", fmt.Errorf("unable to parse email: %s", email)
+	}
+
+	domain := stings[1]
+
+	projectInfo := strings.Split(domain, ".")[0]
+	projectInfoSplit := strings.Split(projectInfo, "-")
+	projectID := projectInfoSplit[len(projectInfoSplit)-1]
+	projectName := strings.Join(projectInfoSplit[:len(projectInfoSplit)-1], "-")
+
+	return projectID, projectName, nil
+}
