@@ -50,13 +50,17 @@ func TimestampWithUrl(rawURL string) TSPTimestamperOption {
 }
 
 // validateURL checks that the timestamp authority URL is well-formed and uses HTTPS.
+// HTTP is permitted for localhost/127.0.0.1 to support local development.
 func validateURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid timestamp authority URL: %w", err)
 	}
 	if u.Scheme != "https" {
-		return fmt.Errorf("timestamp authority URL must use HTTPS, got %q", u.Scheme)
+		host := u.Hostname()
+		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+			return fmt.Errorf("timestamp authority URL must use HTTPS, got %q", u.Scheme)
+		}
 	}
 	if u.Host == "" {
 		return fmt.Errorf("timestamp authority URL has no host")
