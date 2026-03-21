@@ -350,6 +350,17 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 		subjects[subjectName] = ds
 	}
 
+	// add remote URLs — enables discovery of attestations by repository URL
+	for _, remote := range a.Remotes {
+		subjectName = fmt.Sprintf("remote:%v", remote)
+		ds, err = cryptoutil.CalculateDigestSetFromBytes([]byte(remote), hashes)
+		if err != nil {
+			log.Debugf("(attestation/git) failed to record remote subject: %v", err)
+			continue
+		}
+		subjects[subjectName] = ds
+	}
+
 	return subjects
 }
 

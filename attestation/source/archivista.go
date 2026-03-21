@@ -70,7 +70,11 @@ func (s *ArchivistaSource) Search(ctx context.Context, collectionName string, su
 
 		collectionEnv, err := envelopeToCollectionEnvelope(gitoid, env)
 		if err != nil {
-			return nil, err
+			// Skip non-collection envelopes (e.g. policy envelopes, SSP documents)
+			// rather than failing the entire search. Only attestation collections
+			// are relevant for policy verification.
+			processedGitoids = append(processedGitoids, gitoid)
+			continue
 		}
 
 		processedGitoids = append(processedGitoids, gitoid)
