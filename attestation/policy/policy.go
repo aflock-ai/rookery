@@ -437,7 +437,10 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 			}
 
 			if len(collections) == 0 {
-				collections = append(collections, source.CollectionVerificationResult{Errors: []error{ErrNoCollections{Step: stepName}}})
+				collections = append(collections, source.CollectionVerificationResult{Errors: []error{ErrNoCollections{
+					Step:           stepName,
+					SubjectDigests: vo.subjectDigests,
+				}}})
 			}
 
 			// Verify the functionaries
@@ -528,7 +531,11 @@ func (step Step) checkFunctionaries(statements []source.CollectionVerificationRe
 		// NOT proceed to functionary validation — otherwise it could appear in
 		// both the Passed and Rejected lists.
 		if statement.Statement.PredicateType != attestation.CollectionType && statement.Statement.PredicateType != attestation.LegacyCollectionType {
-			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statement, Reason: fmt.Errorf("predicate type %v is not a collection predicate type", statement.Statement.PredicateType)})
+			reason := fmt.Errorf("predicate type %q is not a collection predicate type", statement.Statement.PredicateType)
+			if statement.Statement.PredicateType == "" {
+				reason = fmt.Errorf("empty predicate type — this usually means no matching attestation was found for step %q. Check that your attestation file contains a collection with this step name and matching subject digests. If your attestation has empty subjects, add --attestations git to your cilock run to include commit hash subjects", step.Name)
+			}
+			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statement, Reason: reason})
 			continue
 		}
 

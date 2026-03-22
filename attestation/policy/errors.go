@@ -31,11 +31,25 @@ func (e ErrVerifyArtifactsFailed) Error() string {
 }
 
 type ErrNoCollections struct {
-	Step string
+	Step            string
+	SubjectDigests  []string
+	CollectionNames []string
 }
 
 func (e ErrNoCollections) Error() string {
-	return fmt.Sprintf("no collections found for step %v", e.Step)
+	msg := fmt.Sprintf("no matching collections found for step %q", e.Step)
+	if len(e.SubjectDigests) == 0 {
+		msg += " (no subject digests provided — use -s or -f to specify the artifact being verified)"
+	} else {
+		msg += fmt.Sprintf(" with subject digests %v", e.SubjectDigests)
+	}
+	if len(e.CollectionNames) > 0 {
+		msg += fmt.Sprintf(". Found %d collection(s) named %q but none matched the subject digests", len(e.CollectionNames), e.Step)
+		msg += ". Hint: if your attestation has empty subjects, ensure your cilock run includes --attestations git to produce commit hash subjects"
+	} else {
+		msg += fmt.Sprintf(". No collections with name %q were found in the provided attestation files", e.Step)
+	}
+	return msg
 }
 
 type ErrMissingAttestation struct {

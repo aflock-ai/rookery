@@ -26,6 +26,8 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/gitlab"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/material"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/product"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/sarif"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/secretscan"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/slsa"
 
 	// signer providers

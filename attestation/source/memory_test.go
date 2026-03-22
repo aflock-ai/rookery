@@ -63,6 +63,7 @@ func TestLoadEnvelope(t *testing.T) {
 			intotoStatment:      intoto.Statement{},
 			mSource:             NewMemorySource(),
 			attCol:              attestation.Collection{},
+			wantLoadEnvelopeErr: true, // empty predicateType is now rejected
 			wantPredicateErr:    true,
 			wantMemorySourceErr: true,
 		},
@@ -243,6 +244,24 @@ func TestSearch(t *testing.T) {
 				attestations:   []string{},
 			},
 			wantReferences: map[string]struct{}{"ref0": {}, "ref1": {}, "ref2": {}},
+			wantErr:        false,
+		},
+		{
+			name: "subjectless collection does not match — subjects required for security binding",
+			statements: []intoto.Statement{
+				{
+					Type:          "1",
+					Subject:       []intoto.Subject{}, // No subjects — cannot be matched
+					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
+					Predicate:     json.RawMessage(validPredicate),
+				},
+			},
+			searchQuery: args{
+				collectionName: "t",
+				subDigest:      []string{"anydigest"},
+				attestations:   []string{},
+			},
+			wantReferences: map[string]struct{}{}, // Empty — no match because collection has no subjects
 			wantErr:        false,
 		},
 		{
