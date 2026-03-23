@@ -191,9 +191,13 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 			}
 		}
 	}
+	// Build and sign the collection even when attestors failed. This ensures
+	// forensic data (e.g. secretscan findings) is captured in the attestation
+	// file so it can be used for post-incident analysis and policy verification.
+	var attestorErr error
 	if !ro.ignoreErrors && len(errs) > 0 {
 		errs := append([]error{errors.New("attestors failed with error messages")}, errs...)
-		return result, errors.Join(errs...)
+		attestorErr = errors.Join(errs...)
 	}
 
 	// Filter attestors for collection - exclude those that are exported separately
@@ -227,7 +231,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	}
 	result = append(result, collectionResult)
 
-	return result, nil
+	return result, attestorErr
 }
 
 func validateRunOpts(ro runOptions) error {
