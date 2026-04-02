@@ -16,6 +16,7 @@ use (
 
 	// Attestor plugins
 	./plugins/attestors/aws-codebuild
+	./plugins/attestors/aws-config
 	./plugins/attestors/aws-iid
 	./plugins/attestors/commandrun
 	./plugins/attestors/configuration
@@ -34,10 +35,17 @@ use (
 	./plugins/attestors/lockfiles
 	./plugins/attestors/material
 	./plugins/attestors/maven
+	./plugins/attestors/inspec
+	./plugins/attestors/nessus
+	./plugins/attestors/oscap
 	./plugins/attestors/oci
 	./plugins/attestors/omnitrail
+	./plugins/attestors/asff
+	./plugins/attestors/prowler
 	./plugins/attestors/policyverify
 	./plugins/attestors/product
+	./plugins/attestors/docker-bench
+	./plugins/attestors/kube-bench
 	./plugins/attestors/sarif
 	./plugins/attestors/sbom
 	./plugins/attestors/secretscan
