@@ -89,6 +89,82 @@ func New(opts ...Option) *CommandRun {
 	return cr
 }
 
+// SocketInfo records a socket creation syscall.
+type SocketInfo struct {
+	Family   string `json:"family"`   // AF_INET, AF_INET6, AF_UNIX, etc.
+	Type     string `json:"type"`     // SOCK_STREAM, SOCK_DGRAM, etc.
+	Protocol int    `json:"protocol"` // 0 = default, 6 = TCP, 17 = UDP
+	FD       int    `json:"fd"`       // file descriptor returned
+}
+
+// NetworkConnection records a connect or bind syscall.
+type NetworkConnection struct {
+	Syscall   string `json:"syscall"`             // "connect" or "bind"
+	Family    string `json:"family"`              // AF_INET, AF_INET6, AF_UNIX
+	Address   string `json:"address"`             // IP address or Unix socket path
+	Port      int    `json:"port,omitempty"`      // TCP/UDP port (0 for AF_UNIX)
+	FD        int    `json:"fd"`                  // socket file descriptor
+	Timestamp string `json:"timestamp,omitempty"` // when the syscall was observed
+}
+
+// DNSLookup records a detected DNS resolution (heuristic: connect to port 53).
+type DNSLookup struct {
+	ServerAddress string `json:"serverAddress"`
+	ServerPort    int    `json:"serverPort"`
+}
+
+// NetworkActivity aggregates all network operations for a process.
+type NetworkActivity struct {
+	Sockets     []SocketInfo        `json:"sockets,omitempty"`
+	Connections []NetworkConnection `json:"connections,omitempty"`
+	DNSLookups  []DNSLookup         `json:"dnsLookups,omitempty"`
+}
+
+// FileWrite records a write to a file descriptor. We track the path
+// (resolved from the fd via /proc/pid/fd/N) and bytes written.
+type FileWrite struct {
+	Path      string `json:"path"`
+	Bytes     int    `json:"bytes"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// FileRename records a rename/move operation.
+type FileRename struct {
+	OldPath   string `json:"oldPath"`
+	NewPath   string `json:"newPath"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// FileDelete records an unlink operation.
+type FileDelete struct {
+	Path      string `json:"path"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// FilePermChange records a chmod operation.
+type FilePermChange struct {
+	Path      string `json:"path"`
+	Mode      uint32 `json:"mode"`      // new permission bits
+	SetExec   bool   `json:"setExec"`   // true if executable bit was set
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// SyscallEvent records a notable syscall that doesn't fit other categories.
+type SyscallEvent struct {
+	Syscall   string `json:"syscall"`             // "memfd_create", "ptrace", "mount", "clone"
+	Detail    string `json:"detail,omitempty"`     // human-readable detail
+	Args      []int  `json:"args,omitempty"`       // raw syscall arguments
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// FileActivity aggregates all file mutation operations for a process.
+type FileActivity struct {
+	Writes      []FileWrite      `json:"writes,omitempty"`
+	Renames     []FileRename     `json:"renames,omitempty"`
+	Deletes     []FileDelete     `json:"deletes,omitempty"`
+	PermChanges []FilePermChange `json:"permChanges,omitempty"`
+}
+
 type ProcessInfo struct {
 	Program          string                          `json:"program,omitempty"`
 	ProcessID        int                             `json:"processid"`
@@ -100,6 +176,9 @@ type ProcessInfo struct {
 	OpenedFiles      map[string]cryptoutil.DigestSet `json:"openedfiles,omitempty"`
 	Environ          string                          `json:"environ,omitempty"`
 	SpecBypassIsVuln bool                            `json:"specbypassisvuln,omitempty"`
+	Network          *NetworkActivity                `json:"network,omitempty"`
+	FileOps          *FileActivity                   `json:"fileOps,omitempty"`
+	SyscallEvents    []SyscallEvent                  `json:"syscallEvents,omitempty"`
 }
 
 type CommandRun struct {
