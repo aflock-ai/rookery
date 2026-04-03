@@ -148,18 +148,21 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	allDenyReasons := []string{}
 	for _, expression := range rs {
 		for _, value := range expression.Expressions {
-			denyReasons, ok := value.Value.([]interface{})
-			if !ok {
-				return ErrRegoInvalidData{Path: value.Text, Expected: "[]interface{}", Actual: value.Value}
-			}
-
-			for _, reason := range denyReasons {
-				reasonStr, ok := reason.(string)
-				if !ok {
-					return ErrRegoInvalidData{Path: value.Text, Expected: "string", Actual: value.Value}
+			switch v := value.Value.(type) {
+			case []interface{}:
+				// OPA returns deny as a list: ["reason1", "reason2"]
+				for _, reason := range v {
+					if reasonStr, ok := reason.(string); ok {
+						allDenyReasons = append(allDenyReasons, reasonStr)
+					}
 				}
-
-				allDenyReasons = append(allDenyReasons, reasonStr)
+			case map[string]interface{}:
+				// OPA returns deny[msg] as a set: {"reason1": true, "reason2": true}
+				for reason := range v {
+					allDenyReasons = append(allDenyReasons, reason)
+				}
+			default:
+				return ErrRegoInvalidData{Path: value.Text, Expected: "[]interface{} or map[string]interface{}", Actual: value.Value}
 			}
 		}
 	}
