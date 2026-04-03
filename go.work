@@ -52,6 +52,7 @@ use (
 	./plugins/attestors/slsa
 	./plugins/attestors/system-packages
 	./plugins/attestors/vex
+	./plugins/attestors/pip-install
 
 	// Signer plugins
 	./plugins/signers/debug-signer
