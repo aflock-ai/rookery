@@ -85,3 +85,67 @@ func Test_getSpecBypassIsVulnFromStatus(t *testing.T) {
 	}
 
 }
+
+func Test_socketFamilyName(t *testing.T) {
+	tests := []struct {
+		input int
+		want  string
+	}{
+		{2, "AF_INET"},   // unix.AF_INET
+		{10, "AF_INET6"}, // unix.AF_INET6
+		{1, "AF_UNIX"},   // unix.AF_UNIX
+		{16, "AF_NETLINK"},
+		{99, "AF_99"},
+	}
+	for _, tt := range tests {
+		got := socketFamilyName(tt.input)
+		if got != tt.want {
+			t.Errorf("socketFamilyName(%d) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func Test_socketTypeName(t *testing.T) {
+	tests := []struct {
+		input int
+		want  string
+	}{
+		{1, "SOCK_STREAM"},
+		{2, "SOCK_DGRAM"},
+		{3, "SOCK_RAW"},
+		// SOCK_STREAM | SOCK_NONBLOCK (0x800)
+		{1 | 0x800, "SOCK_STREAM"},
+		// SOCK_DGRAM | SOCK_CLOEXEC (0x80000)
+		{2 | 0x80000, "SOCK_DGRAM"},
+		{99, "SOCK_3"}, // 99 & 0xf = 3 = SOCK_RAW
+	}
+	for _, tt := range tests {
+		got := socketTypeName(tt.input)
+		if got != tt.want {
+			t.Errorf("socketTypeName(%d) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func Test_ensureNetwork(t *testing.T) {
+	pctx := &ptraceContext{
+		processes: make(map[int]*ProcessInfo),
+	}
+	procInfo := pctx.getProcInfo(1)
+
+	if procInfo.Network != nil {
+		t.Error("Network should be nil initially")
+	}
+
+	pctx.ensureNetwork(procInfo)
+	if procInfo.Network == nil {
+		t.Error("Network should not be nil after ensureNetwork")
+	}
+
+	// Calling again should not replace the existing struct
+	procInfo.Network.Sockets = append(procInfo.Network.Sockets, SocketInfo{Family: "AF_INET"})
+	pctx.ensureNetwork(procInfo)
+	if len(procInfo.Network.Sockets) != 1 {
+		t.Error("ensureNetwork should not reset existing NetworkActivity")
+	}
+}

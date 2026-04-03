@@ -18,12 +18,15 @@ package commandrun
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -244,9 +247,417 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		}
 
 		procInfo.OpenedFiles[file] = digestSet
+
+	case unix.SYS_SOCKET:
+		procInfo := p.getProcInfo(pid)
+		p.ensureNetwork(procInfo)
+
+		domain := int(argArray[0])
+		sockType := int(argArray[1])
+		protocol := int(argArray[2])
+
+		procInfo.Network.Sockets = append(procInfo.Network.Sockets, SocketInfo{
+			Family:   socketFamilyName(domain),
+			Type:     socketTypeName(sockType),
+			Protocol: protocol,
+			FD:       -1, // fd not available at syscall entry
+		})
+
+	case unix.SYS_CONNECT:
+		procInfo := p.getProcInfo(pid)
+		p.ensureNetwork(procInfo)
+
+		conn, err := p.parseSockaddr(pid, argArray[1], argArray[2], "connect")
+		if err != nil {
+			log.Debugf("(tracing) failed to parse connect sockaddr: %v", err)
+			return nil // non-fatal
+		}
+		conn.FD = int(argArray[0])
+		procInfo.Network.Connections = append(procInfo.Network.Connections, *conn)
+
+		// Heuristic: connect to port 53 is likely DNS
+		if conn.Port == 53 {
+			procInfo.Network.DNSLookups = append(procInfo.Network.DNSLookups, DNSLookup{
+				ServerAddress: conn.Address,
+				ServerPort:    conn.Port,
+			})
+		}
+
+	case unix.SYS_BIND:
+		procInfo := p.getProcInfo(pid)
+		p.ensureNetwork(procInfo)
+
+		conn, err := p.parseSockaddr(pid, argArray[1], argArray[2], "bind")
+		if err != nil {
+			log.Debugf("(tracing) failed to parse bind sockaddr: %v", err)
+			return nil
+		}
+		conn.FD = int(argArray[0])
+		procInfo.Network.Connections = append(procInfo.Network.Connections, *conn)
+
+	case unix.SYS_SENDTO:
+		// sendto(fd, buf, len, flags, dest_addr, addrlen)
+		// Only record if dest_addr is non-null (UDP sends with explicit destination)
+		if argArray[4] != 0 {
+			procInfo := p.getProcInfo(pid)
+			p.ensureNetwork(procInfo)
+
+			conn, err := p.parseSockaddr(pid, argArray[4], argArray[5], "sendto")
+			if err != nil {
+				log.Debugf("(tracing) failed to parse sendto sockaddr: %v", err)
+				return nil
+			}
+			conn.FD = int(argArray[0])
+			procInfo.Network.Connections = append(procInfo.Network.Connections, *conn)
+		}
+
+	case unix.SYS_SENDMSG:
+		procInfo := p.getProcInfo(pid)
+		p.ensureNetwork(procInfo)
+		log.Debugf("(tracing) pid %d called sendmsg on fd %d", pid, int(argArray[0]))
+
+	// --- File mutation syscalls ---
+
+	case unix.SYS_WRITE, 18: // 18 = SYS_PWRITE64 on amd64
+		// Track writes by resolving fd to path via /proc/pid/fd/N
+		fd := int(argArray[0])
+		byteCount := int(argArray[2])
+		// Only track writes to real files (skip stdout/stderr/pipes: fd 0,1,2)
+		if fd > 2 && byteCount > 0 {
+			path := p.resolveFD(pid, fd)
+			if path != "" && !strings.HasPrefix(path, "pipe:") && !strings.HasPrefix(path, "socket:") && !strings.HasPrefix(path, "anon_inode:") {
+				procInfo := p.getProcInfo(pid)
+				p.ensureFileOps(procInfo)
+				procInfo.FileOps.Writes = append(procInfo.FileOps.Writes, FileWrite{
+					Path:      path,
+					Bytes:     byteCount,
+					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				})
+			}
+		}
+
+	case unix.SYS_RENAMEAT2:
+		// renameat2(olddirfd, oldpath, newdirfd, newpath, flags)
+		oldPath, err1 := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
+		newPath, err2 := p.readSyscallReg(pid, argArray[3], MAX_PATH_LEN)
+		if err1 == nil && err2 == nil {
+			procInfo := p.getProcInfo(pid)
+			p.ensureFileOps(procInfo)
+			procInfo.FileOps.Renames = append(procInfo.FileOps.Renames, FileRename{
+				OldPath:   oldPath,
+				NewPath:   newPath,
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	case unix.SYS_UNLINKAT:
+		// unlinkat(dirfd, pathname, flags)
+		path, err := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
+		if err == nil {
+			procInfo := p.getProcInfo(pid)
+			p.ensureFileOps(procInfo)
+			procInfo.FileOps.Deletes = append(procInfo.FileOps.Deletes, FileDelete{
+				Path:      path,
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	case unix.SYS_FCHMODAT:
+		// fchmodat(dirfd, pathname, mode, flags)
+		path, err := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
+		if err == nil {
+			mode := uint32(argArray[2])
+			procInfo := p.getProcInfo(pid)
+			p.ensureFileOps(procInfo)
+			procInfo.FileOps.PermChanges = append(procInfo.FileOps.PermChanges, FilePermChange{
+				Path:      path,
+				Mode:      mode,
+				SetExec:   mode&0111 != 0, // any execute bit set
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	// --- Security-sensitive syscalls ---
+
+	case unix.SYS_MEMFD_CREATE:
+		// memfd_create(name, flags) — fileless execution: creates anonymous executable memory
+		name, _ := p.readSyscallReg(pid, argArray[0], 256)
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "memfd_create",
+			Detail:    fmt.Sprintf("anonymous memory file: %s (flags: %d) — used for fileless code execution", name, int(argArray[1])),
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_PTRACE:
+		// If the traced process itself calls ptrace — anti-debugging or process injection
+		request := int(argArray[0])
+		targetPid := int(argArray[1])
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "ptrace",
+			Detail:    fmt.Sprintf("ptrace request=%d target_pid=%d — anti-debugging or process injection", request, targetPid),
+			Args:      []int{request, targetPid},
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_MOUNT:
+		// mount(source, target, filesystemtype, mountflags, data)
+		source, _ := p.readSyscallReg(pid, argArray[0], MAX_PATH_LEN)
+		target, _ := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
+		fstype, _ := p.readSyscallReg(pid, argArray[2], 256)
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "mount",
+			Detail:    fmt.Sprintf("mount %s on %s (type: %s) — potential container escape", source, target, fstype),
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_CLONE, unix.SYS_CLONE3:
+		// Track clone flags for namespace manipulation detection
+		flags := int(argArray[0])
+		suspicious := false
+		var flagNames []string
+		if flags&unix.CLONE_NEWNS != 0 {
+			flagNames = append(flagNames, "CLONE_NEWNS")
+			suspicious = true
+		}
+		if flags&unix.CLONE_NEWPID != 0 {
+			flagNames = append(flagNames, "CLONE_NEWPID")
+			suspicious = true
+		}
+		if flags&unix.CLONE_NEWNET != 0 {
+			flagNames = append(flagNames, "CLONE_NEWNET")
+			suspicious = true
+		}
+		if flags&unix.CLONE_NEWUSER != 0 {
+			flagNames = append(flagNames, "CLONE_NEWUSER")
+			suspicious = true
+		}
+		if suspicious {
+			procInfo := p.getProcInfo(pid)
+			procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+				Syscall:   "clone",
+				Detail:    fmt.Sprintf("clone with namespace flags: %s — potential container escape or sandbox evasion", strings.Join(flagNames, "|")),
+				Args:      []int{flags},
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	// --- Tier 1 additions from security research ---
+
+	case unix.SYS_DUP3, 33: // 33 = SYS_DUP2 on amd64 (not defined on arm64)
+		// dup2(oldfd, newfd) — critical for reverse shell detection
+		// Pattern: socket→connect→dup2(sockfd,0)→dup2(sockfd,1)→dup2(sockfd,2)→execve("/bin/sh")
+		oldFD := int(argArray[0])
+		newFD := int(argArray[1])
+		// Only record when redirecting to stdin/stdout/stderr (fd 0,1,2)
+		if newFD <= 2 {
+			oldPath := p.resolveFD(pid, oldFD)
+			procInfo := p.getProcInfo(pid)
+			target := []string{"stdin", "stdout", "stderr"}[newFD]
+			procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+				Syscall:   "dup2",
+				Detail:    fmt.Sprintf("redirected fd %d (%s) to %s — reverse shell indicator if fd is a socket", oldFD, oldPath, target),
+				Args:      []int{oldFD, newFD},
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	case unix.SYS_MPROTECT:
+		// mprotect(addr, len, prot) — making memory executable
+		// Pattern: mmap(RW)→write(shellcode)→mprotect(RX) = fileless payload
+		prot := int(argArray[2])
+		if prot&unix.PROT_EXEC != 0 {
+			procInfo := p.getProcInfo(pid)
+			procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+				Syscall:   "mprotect",
+				Detail:    fmt.Sprintf("made memory executable (addr=%#x len=%d prot=%d) — fileless payload indicator", argArray[0], int(argArray[1]), prot),
+				Args:      []int{int(argArray[0]), int(argArray[1]), prot},
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	case unix.SYS_PRCTL:
+		// prctl(option, ...) — process self-modification
+		option := int(argArray[0])
+		procInfo := p.getProcInfo(pid)
+		var detail string
+		switch option {
+		case 15: // PR_SET_NAME
+			name, _ := p.readSyscallReg(pid, argArray[1], 16)
+			detail = fmt.Sprintf("PR_SET_NAME: renamed process to '%s' — hiding malicious process identity", name)
+		case 4: // PR_SET_DUMPABLE
+			detail = fmt.Sprintf("PR_SET_DUMPABLE=%d — may prevent forensic core dumps", int(argArray[1]))
+		case 38: // PR_SET_NO_NEW_PRIVS
+			detail = fmt.Sprintf("PR_SET_NO_NEW_PRIVS=%d — seccomp setup", int(argArray[1]))
+		default:
+			// Only log notable prctl options
+			return nil
+		}
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "prctl",
+			Detail:    detail,
+			Args:      []int{option, int(argArray[1])},
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_SETSID:
+		// setsid() — create new session, detach from terminal
+		// Used to daemonize malicious processes
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "setsid",
+			Detail:    "created new session — daemonizing to detach from install process tree",
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_SETNS:
+		// setns(fd, nstype) — join existing namespace
+		nstype := int(argArray[1])
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "setns",
+			Detail:    fmt.Sprintf("joined namespace (fd=%d type=%d) — container escape or sandbox evasion", int(argArray[0]), nstype),
+			Args:      []int{int(argArray[0]), nstype},
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_INIT_MODULE, unix.SYS_FINIT_MODULE:
+		// Kernel module loading — rootkit installation
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "init_module",
+			Detail:    "attempted to load kernel module — rootkit installation",
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
 	}
 
 	return nil
+}
+
+// ensureNetwork initializes the NetworkActivity struct if nil.
+func (p *ptraceContext) ensureNetwork(procInfo *ProcessInfo) {
+	if procInfo.Network == nil {
+		procInfo.Network = &NetworkActivity{}
+	}
+}
+
+// ensureFileOps initializes the FileActivity struct if nil.
+func (p *ptraceContext) ensureFileOps(procInfo *ProcessInfo) {
+	if procInfo.FileOps == nil {
+		procInfo.FileOps = &FileActivity{}
+	}
+}
+
+// resolveFD resolves a file descriptor to a path via /proc/pid/fd/N.
+func (p *ptraceContext) resolveFD(pid, fd int) string {
+	link := fmt.Sprintf("/proc/%d/fd/%d", pid, fd)
+	target, err := os.Readlink(link)
+	if err != nil {
+		return ""
+	}
+	return target
+}
+
+// parseSockaddr reads a sockaddr struct from the traced process memory and
+// extracts the address family, IP/path, and port.
+func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr, syscallName string) (*NetworkConnection, error) {
+	size := int(addrLen)
+	if size < 2 || size > 128 {
+		return nil, fmt.Errorf("sockaddr size %d out of range", size)
+	}
+
+	data := make([]byte, size)
+	localIov := unix.Iovec{
+		Base: &data[0],
+		Len:  getNativeUint(size),
+	}
+	remoteIov := unix.RemoteIovec{
+		Base: addrPtr,
+		Len:  size,
+	}
+
+	_, err := unix.ProcessVMReadv(pid, []unix.Iovec{localIov}, []unix.RemoteIovec{remoteIov}, 0)
+	if err != nil {
+		return nil, fmt.Errorf("ProcessVMReadv for sockaddr: %w", err)
+	}
+
+	family := binary.LittleEndian.Uint16(data[0:2])
+
+	conn := &NetworkConnection{
+		Syscall:   syscallName,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+
+	switch family {
+	case unix.AF_INET:
+		if size < 8 {
+			return nil, fmt.Errorf("AF_INET sockaddr too short: %d", size)
+		}
+		port := binary.BigEndian.Uint16(data[2:4])
+		ip := net.IPv4(data[4], data[5], data[6], data[7])
+		conn.Family = "AF_INET"
+		conn.Address = ip.String()
+		conn.Port = int(port)
+
+	case unix.AF_INET6:
+		if size < 28 {
+			return nil, fmt.Errorf("AF_INET6 sockaddr too short: %d", size)
+		}
+		port := binary.BigEndian.Uint16(data[2:4])
+		ip := net.IP(data[8:24])
+		conn.Family = "AF_INET6"
+		conn.Address = ip.String()
+		conn.Port = int(port)
+
+	case unix.AF_UNIX:
+		// Path starts at offset 2, null-terminated
+		pathEnd := bytes.IndexByte(data[2:], 0)
+		if pathEnd < 0 {
+			pathEnd = len(data) - 2
+		}
+		conn.Family = "AF_UNIX"
+		conn.Address = string(data[2 : 2+pathEnd])
+
+	default:
+		conn.Family = fmt.Sprintf("AF_%d", family)
+		conn.Address = fmt.Sprintf("raw:%x", data)
+	}
+
+	return conn, nil
+}
+
+func socketFamilyName(family int) string {
+	switch family {
+	case unix.AF_INET:
+		return "AF_INET"
+	case unix.AF_INET6:
+		return "AF_INET6"
+	case unix.AF_UNIX:
+		return "AF_UNIX"
+	case unix.AF_NETLINK:
+		return "AF_NETLINK"
+	default:
+		return fmt.Sprintf("AF_%d", family)
+	}
+}
+
+func socketTypeName(sockType int) string {
+	// Mask off SOCK_NONBLOCK and SOCK_CLOEXEC flags
+	base := sockType & 0xf
+	switch base {
+	case unix.SOCK_STREAM:
+		return "SOCK_STREAM"
+	case unix.SOCK_DGRAM:
+		return "SOCK_DGRAM"
+	case unix.SOCK_RAW:
+		return "SOCK_RAW"
+	case unix.SOCK_SEQPACKET:
+		return "SOCK_SEQPACKET"
+	default:
+		return fmt.Sprintf("SOCK_%d", base)
+	}
 }
 
 func (ctx *ptraceContext) getProcInfo(pid int) *ProcessInfo {
