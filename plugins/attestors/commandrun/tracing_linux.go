@@ -45,6 +45,10 @@ type ptraceContext struct {
 	exitCode            int
 	hash                []cryptoutil.DigestValue
 	environmentCapturer attestation.EnvironmentCapturer
+	// tlsPendingFDs tracks file descriptors that connected to port 443
+	// so we can extract TLS SNI from the first write on that fd.
+	// Key: "pid:fd", Value: index into the process's Connections slice.
+	tlsPendingFDs map[string]int
 }
 
 func enableTracing(c *exec.Cmd) {
@@ -60,6 +64,7 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		processes:           make(map[int]*ProcessInfo),
 		hash:                actx.Hashes(),
 		environmentCapturer: actx.EnvironmentCapturer(),
+		tlsPendingFDs:       make(map[string]int),
 	}
 
 	if err := pctx.runTrace(); err != nil {
@@ -275,6 +280,12 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		conn.FD = int(argArray[0])
 		procInfo.Network.Connections = append(procInfo.Network.Connections, *conn)
 
+		// Track TLS connections for SNI extraction on next write
+		if conn.Port == 443 && (conn.Family == "AF_INET" || conn.Family == "AF_INET6") {
+			key := fmt.Sprintf("%d:%d", pid, conn.FD)
+			p.tlsPendingFDs[key] = len(procInfo.Network.Connections) - 1
+		}
+
 		// Heuristic: connect to port 53 is likely DNS
 		if conn.Port == 53 {
 			procInfo.Network.DNSLookups = append(procInfo.Network.DNSLookups, DNSLookup{
@@ -319,9 +330,26 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 	// --- File mutation syscalls ---
 
 	case unix.SYS_WRITE, 18: // 18 = SYS_PWRITE64 on amd64
-		// Track writes by resolving fd to path via /proc/pid/fd/N
 		fd := int(argArray[0])
 		byteCount := int(argArray[2])
+
+		// TLS SNI extraction: if this fd has a pending TLS connect, peek at
+		// the write buffer for a ClientHello and extract the SNI hostname.
+		if byteCount > 11 && byteCount < 16384 {
+			key := fmt.Sprintf("%d:%d", pid, fd)
+			if connIdx, ok := p.tlsPendingFDs[key]; ok {
+				delete(p.tlsPendingFDs, key) // only try once per fd
+				if hostname := p.extractTLSSNI(pid, argArray[1], byteCount); hostname != "" {
+					procInfo := p.getProcInfo(pid)
+					if procInfo.Network != nil && connIdx < len(procInfo.Network.Connections) {
+						procInfo.Network.Connections[connIdx].Hostname = hostname
+						log.Debugf("(tracing) TLS SNI: pid %d fd %d → %s", pid, fd, hostname)
+					}
+				}
+			}
+		}
+
+		// Track writes by resolving fd to path via /proc/pid/fd/N
 		// Only track writes to real files (skip stdout/stderr/pipes: fd 0,1,2)
 		if fd > 2 && byteCount > 0 {
 			path := p.resolveFD(pid, fd)
@@ -451,17 +479,20 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		// Pattern: socket→connect→dup2(sockfd,0)→dup2(sockfd,1)→dup2(sockfd,2)→execve("/bin/sh")
 		oldFD := int(argArray[0])
 		newFD := int(argArray[1])
-		// Only record when redirecting to stdin/stdout/stderr (fd 0,1,2)
+		// Only record when redirecting a SOCKET to stdin/stdout/stderr
+		// Pipe redirects (pip subprocess I/O) are normal and noisy
 		if newFD <= 2 {
 			oldPath := p.resolveFD(pid, oldFD)
-			procInfo := p.getProcInfo(pid)
-			target := []string{"stdin", "stdout", "stderr"}[newFD]
-			procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
-				Syscall:   "dup2",
-				Detail:    fmt.Sprintf("redirected fd %d (%s) to %s — reverse shell indicator if fd is a socket", oldFD, oldPath, target),
-				Args:      []int{oldFD, newFD},
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-			})
+			if strings.HasPrefix(oldPath, "socket:") {
+				procInfo := p.getProcInfo(pid)
+				target := []string{"stdin", "stdout", "stderr"}[newFD]
+				procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+					Syscall:   "dup2",
+					Detail:    fmt.Sprintf("redirected SOCKET fd %d (%s) to %s — reverse shell pattern", oldFD, oldPath, target),
+					Args:      []int{oldFD, newFD},
+					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				})
+			}
 		}
 
 	case unix.SYS_MPROTECT:
@@ -753,4 +784,124 @@ func getSpecBypassIsVulnFromStatus(status []byte) bool {
 	}
 
 	return false
+}
+
+// extractTLSSNI reads the write buffer from the traced process and parses
+// the TLS ClientHello to extract the Server Name Indication (SNI) hostname.
+// The SNI is plaintext in the ClientHello — no decryption needed.
+//
+// TLS record layout:
+//   [0]     ContentType (0x16 = Handshake)
+//   [1:3]   Version
+//   [3:5]   Length
+//   [5]     HandshakeType (0x01 = ClientHello)
+//   [6:9]   Handshake length
+//   [9:11]  ClientHello version
+//   [11:43] Random (32 bytes)
+//   [43]    SessionID length → skip SessionID
+//   ...     CipherSuites length → skip
+//   ...     Compression length → skip
+//   ...     Extensions length
+//   ...     Extensions: look for type 0x0000 (SNI)
+func (p *ptraceContext) extractTLSSNI(pid int, bufPtr uintptr, bufLen int) string {
+	// Read up to 512 bytes — SNI is always in the first few hundred bytes
+	readLen := bufLen
+	if readLen > 512 {
+		readLen = 512
+	}
+	if readLen < 43 {
+		return "" // too short for a ClientHello
+	}
+
+	data := make([]byte, readLen)
+	localIov := unix.Iovec{Base: &data[0], Len: getNativeUint(readLen)}
+	remoteIov := unix.RemoteIovec{Base: bufPtr, Len: readLen}
+
+	_, err := unix.ProcessVMReadv(pid, []unix.Iovec{localIov}, []unix.RemoteIovec{remoteIov}, 0)
+	if err != nil {
+		return ""
+	}
+
+	// Verify TLS record header
+	if data[0] != 0x16 { // not a Handshake record
+		return ""
+	}
+	// recordLen := int(binary.BigEndian.Uint16(data[3:5]))
+
+	// Verify ClientHello
+	if len(data) < 6 || data[5] != 0x01 {
+		return ""
+	}
+
+	// Skip: handshake header (4 bytes) + client version (2) + random (32) = offset 43
+	pos := 43
+	if pos >= readLen {
+		return ""
+	}
+
+	// Session ID
+	sessionIDLen := int(data[pos])
+	pos += 1 + sessionIDLen
+	if pos+2 > readLen {
+		return ""
+	}
+
+	// Cipher suites
+	cipherSuitesLen := int(binary.BigEndian.Uint16(data[pos : pos+2]))
+	pos += 2 + cipherSuitesLen
+	if pos+1 > readLen {
+		return ""
+	}
+
+	// Compression methods
+	compressionLen := int(data[pos])
+	pos += 1 + compressionLen
+	if pos+2 > readLen {
+		return ""
+	}
+
+	// Extensions
+	extensionsLen := int(binary.BigEndian.Uint16(data[pos : pos+2]))
+	pos += 2
+	extensionsEnd := pos + extensionsLen
+	if extensionsEnd > readLen {
+		extensionsEnd = readLen
+	}
+
+	// Walk extensions looking for SNI (type 0x0000)
+	for pos+4 <= extensionsEnd {
+		extType := binary.BigEndian.Uint16(data[pos : pos+2])
+		extLen := int(binary.BigEndian.Uint16(data[pos+2 : pos+4]))
+		pos += 4
+
+		if extType == 0x0000 && extLen > 5 && pos+extLen <= extensionsEnd {
+			// SNI extension: list length (2) + type (1) + name length (2) + name
+			sniListLen := int(binary.BigEndian.Uint16(data[pos : pos+2]))
+			if sniListLen > extLen-2 {
+				break
+			}
+			nameType := data[pos+2]
+			if nameType != 0 { // 0 = host_name
+				break
+			}
+			nameLen := int(binary.BigEndian.Uint16(data[pos+3 : pos+5]))
+			nameStart := pos + 5
+			nameEnd := nameStart + nameLen
+			if nameEnd > extensionsEnd || nameLen == 0 || nameLen > 255 {
+				break
+			}
+			hostname := string(data[nameStart:nameEnd])
+			// Basic validation: hostname should be printable ASCII
+			for _, c := range hostname {
+				if c < 0x20 || c > 0x7e {
+					return ""
+				}
+			}
+			return hostname
+		}
+
+		pos += extLen
+	}
+
+	return ""
 }

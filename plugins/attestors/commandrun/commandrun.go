@@ -105,6 +105,7 @@ type NetworkConnection struct {
 	Port      int    `json:"port,omitempty"`      // TCP/UDP port (0 for AF_UNIX)
 	FD        int    `json:"fd"`                  // socket file descriptor
 	Timestamp string `json:"timestamp,omitempty"` // when the syscall was observed
+	Hostname  string `json:"hostname,omitempty"`  // TLS SNI hostname (extracted from ClientHello)
 }
 
 // DNSLookup records a detected DNS resolution (heuristic: connect to port 53).
