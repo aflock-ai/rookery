@@ -45,6 +45,7 @@ use (
 	./plugins/attestors/system-packages
 	./plugins/attestors/vex
 	./plugins/attestors/pip-install
+	./plugins/attestors/sinkhole-flows
 
 	// Signer plugins
 	./plugins/signers/debug-signer
