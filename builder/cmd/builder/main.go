@@ -162,6 +162,7 @@ func main() {
 	var fipsMode = "on"
 	var customerID string
 	var tenantID string
+	var platformURL string
 	var presetName string
 	var attestationVer string
 	var localRoot string
@@ -256,6 +257,9 @@ func main() {
 		}
 		if m.BuildOptions.TenantID != "" {
 			tenantID = m.BuildOptions.TenantID
+		}
+		if m.BuildOptions.PlatformURL != "" {
+			platformURL = m.BuildOptions.PlatformURL
 		}
 		if m.Preset != "" {
 			presetName = m.Preset
@@ -513,8 +517,13 @@ func showLicense() {
 		"-X 'rookery-build/buildinfo.Plugins=%s' "+
 		"-X 'rookery-build/buildinfo.FipsMode=%s' "+
 		"-X 'rookery-build/buildinfo.CustomerID=%s' "+
-		"-X 'rookery-build/buildinfo.TenantID=%s'",
-		builderVer, buildTime, pluginsStr, fipsModeStr, customerID, tenantID)
+		"-X 'rookery-build/buildinfo.TenantID=%s' "+
+		"-X 'rookery-build/buildinfo.PlatformURL=%s'",
+		builderVer, buildTime, pluginsStr, fipsModeStr, customerID, tenantID, platformURL)
+	// Also bake PlatformURL into the cilock config package default
+	if platformURL != "" {
+		metadataFlags += fmt.Sprintf(" -X 'github.com/aflock-ai/rookery/cilock/internal/config.DefaultPlatformURL=%s'", platformURL)
+	}
 
 	combinedLdflags := ldflags
 	if combinedLdflags != "" {
@@ -754,6 +763,7 @@ var (
 	FipsMode       = "off"
 	CustomerID     = ""
 	TenantID       = ""
+	PlatformURL    = ""
 )
 
 // Info returns formatted build information
@@ -767,6 +777,9 @@ func Info() string {
 	}
 	if TenantID != "" {
 		result += fmt.Sprintf("Tenant ID: %s\n", TenantID)
+	}
+	if PlatformURL != "" {
+		result += fmt.Sprintf("Platform URL: %s\n", PlatformURL)
 	}
 	result += fmt.Sprintf("Go version: %s", runtime.Version())
 	return result

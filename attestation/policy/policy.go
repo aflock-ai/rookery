@@ -528,6 +528,8 @@ func (step Step) checkFunctionaries(statements []source.CollectionVerificationRe
 		// NOT proceed to functionary validation — otherwise it could appear in
 		// both the Passed and Rejected lists.
 		if statement.Statement.PredicateType != attestation.CollectionType && statement.Statement.PredicateType != attestation.LegacyCollectionType {
+			log.Debugf("policy: rejecting collection ref=%s: predicateType=%q (expected %q or %q), payload len=%d, errors=%v",
+				statement.Reference, statement.Statement.PredicateType, attestation.CollectionType, attestation.LegacyCollectionType, len(statement.Envelope.Payload), statement.Errors)
 			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statement, Reason: fmt.Errorf("predicate type %v is not a collection predicate type", statement.Statement.PredicateType)})
 			continue
 		}

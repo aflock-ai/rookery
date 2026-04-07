@@ -17,6 +17,7 @@ package source
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/dsse"
@@ -35,14 +36,23 @@ type Sourcer interface {
 }
 
 func envelopeToCollectionEnvelope(reference string, env dsse.Envelope) (CollectionEnvelope, error) {
+	if len(env.Payload) == 0 {
+		return CollectionEnvelope{}, fmt.Errorf("envelope %s has empty payload", reference)
+	}
+
 	statement := intoto.Statement{}
 	if err := json.Unmarshal(env.Payload, &statement); err != nil {
-		return CollectionEnvelope{}, err
+		return CollectionEnvelope{}, fmt.Errorf("envelope %s: failed to unmarshal statement (payload length %d, first 50 bytes: %q): %w",
+			reference, len(env.Payload), truncate(env.Payload, 50), err)
+	}
+
+	if statement.PredicateType == "" {
+		return CollectionEnvelope{}, fmt.Errorf("envelope %s: statement has empty predicateType (payload length %d)", reference, len(env.Payload))
 	}
 
 	collection := attestation.Collection{}
 	if err := json.Unmarshal(statement.Predicate, &collection); err != nil {
-		return CollectionEnvelope{}, err
+		return CollectionEnvelope{}, fmt.Errorf("envelope %s: failed to unmarshal collection: %w", reference, err)
 	}
 
 	return CollectionEnvelope{
@@ -51,4 +61,11 @@ func envelopeToCollectionEnvelope(reference string, env dsse.Envelope) (Collecti
 		Statement:  statement,
 		Collection: collection,
 	}, nil
+}
+
+func truncate(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	return b[:n]
 }

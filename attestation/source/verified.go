@@ -17,6 +17,7 @@ package source
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
@@ -50,9 +51,11 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 	}
 
 	results := make([]CollectionVerificationResult, 0)
+	fmt.Fprintf(os.Stderr, "[verified-source] processing %d unverified envelopes for collection %q\n", len(unverified), collectionName)
 	for _, toVerify := range unverified {
 		envelopeVerifiers, err := toVerify.Envelope.Verify(s.verifyOpts...)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s verify FAILED: %v\n", toVerify.Reference, err)
 			results = append(results,
 				CollectionVerificationResult{
 					Errors:             []error{fmt.Errorf("failed to verify envelope: %w", err)},
@@ -60,6 +63,17 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 				},
 			)
 			continue
+		}
+
+		// Log each checked verifier
+		for _, cv := range envelopeVerifiers {
+			kid := "unknown"
+			if cv.Verifier != nil {
+				if k, err := cv.Verifier.KeyID(); err == nil {
+					kid = k[:12]
+				}
+			}
+			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s verifier kid=%s error=%v\n", toVerify.Reference[:12], kid, cv.Error)
 		}
 
 		passedVerifiers := make([]cryptoutil.Verifier, 0)
