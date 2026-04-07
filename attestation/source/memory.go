@@ -120,42 +120,17 @@ func (s *MemorySource) Search(ctx context.Context, collectionName string, subjec
 	defer s.mu.RUnlock()
 
 	matches := make([]CollectionEnvelope, 0)
-	for _, potentialMatchReference := range s.referencesByCollectionName[collectionName] {
-		env, ok := s.envelopesByReference[potentialMatchReference]
+	for _, ref := range s.referencesByCollectionName[collectionName] {
+		env, ok := s.envelopesByReference[ref]
 		if !ok {
 			continue
 		}
 
-		// make sure at least one of the subjects digests exists on the potential matches.
-		// If the collection has no subjects (e.g. trace attestations without
-		// material/product subjects), skip the subject check and match on
-		// step name + attestation types alone.
-		indexSubjects := s.subjectDigestsByReference[potentialMatchReference]
-		if len(indexSubjects) > 0 {
-			subjectMatchFound := false
-			for _, checkDigest := range subjectDigests {
-				if _, ok := indexSubjects[checkDigest]; ok {
-					subjectMatchFound = true
-					break
-				}
-			}
-
-			if !subjectMatchFound {
-				continue
-			}
+		if !s.matchesSubjects(ref, subjectDigests) {
+			continue
 		}
 
-		// make sure all the expected attestations appear in the collection
-		attestationsMatched := true
-		indexAttestations := s.attestationsByReference[potentialMatchReference]
-		for _, checkAttestation := range attestations {
-			if _, ok := indexAttestations[checkAttestation]; !ok {
-				attestationsMatched = false
-				break
-			}
-		}
-
-		if !attestationsMatched {
+		if !s.matchesAttestations(ref, attestations) {
 			continue
 		}
 
@@ -163,4 +138,30 @@ func (s *MemorySource) Search(ctx context.Context, collectionName string, subjec
 	}
 
 	return matches, nil
+}
+
+// matchesSubjects checks if at least one subject digest matches the reference.
+// Returns true if the reference has no subjects (subjectless collections).
+func (s *MemorySource) matchesSubjects(ref string, subjectDigests []string) bool {
+	indexSubjects := s.subjectDigestsByReference[ref]
+	if len(indexSubjects) == 0 {
+		return true
+	}
+	for _, digest := range subjectDigests {
+		if _, ok := indexSubjects[digest]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesAttestations checks if all expected attestations appear in the reference.
+func (s *MemorySource) matchesAttestations(ref string, attestations []string) bool {
+	indexAttestations := s.attestationsByReference[ref]
+	for _, att := range attestations {
+		if _, ok := indexAttestations[att]; !ok {
+			return false
+		}
+	}
+	return true
 }
