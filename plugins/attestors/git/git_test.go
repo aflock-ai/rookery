@@ -214,6 +214,47 @@ func TestRunWorksWithoutCommits(t *testing.T) {
 	require.Empty(t, attestor.ParentHashes, "Expected the parent hashes to be set")
 }
 
+func TestEmptyCommitHashOmitsSubject(t *testing.T) {
+	attestor := &Attestor{
+		CommitHash:     "",
+		AuthorEmail:    "test@example.com",
+		CommitterEmail: "committer@example.com",
+	}
+
+	subjects := attestor.Subjects()
+	for name := range subjects {
+		require.NotContains(t, name, "commithash:", "Empty commit hash should not produce a commithash subject")
+	}
+
+	backrefs := attestor.BackRefs()
+	require.Empty(t, backrefs, "Empty commit hash should produce no back refs")
+}
+
+func TestNonEmptyCommitHashIncludesSubject(t *testing.T) {
+	attestor := &Attestor{
+		CommitHash:     "abc123def456",
+		AuthorEmail:    "test@example.com",
+		CommitterEmail: "committer@example.com",
+	}
+
+	subjects := attestor.Subjects()
+	found := false
+	for name, ds := range subjects {
+		if name == "commithash:abc123def456" {
+			found = true
+			for dv, val := range ds {
+				if dv.Hash == crypto.SHA1 {
+					require.Equal(t, "abc123def456", val)
+				}
+			}
+		}
+	}
+	require.True(t, found, "Non-empty commit hash should produce a commithash subject")
+
+	backrefs := attestor.BackRefs()
+	require.Len(t, backrefs, 1, "Non-empty commit hash should produce one back ref")
+}
+
 // Creates an ephemeral repo for your testing
 func createTestRepo(t *testing.T, withCommit bool) (*git.Repository, string, func()) { //nolint:unparam // repo return used in some callers
 	// Create a temporary directory for the test repository

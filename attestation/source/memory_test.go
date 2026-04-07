@@ -63,6 +63,7 @@ func TestLoadEnvelope(t *testing.T) {
 			intotoStatment:      intoto.Statement{},
 			mSource:             NewMemorySource(),
 			attCol:              attestation.Collection{},
+			wantLoadEnvelopeErr: true, // empty predicateType is now rejected
 			wantPredicateErr:    true,
 			wantMemorySourceErr: true,
 		},
