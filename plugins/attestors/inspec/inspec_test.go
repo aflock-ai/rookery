@@ -20,9 +20,9 @@ import (
 
 func TestControlOutcome(t *testing.T) {
 	tests := []struct {
-		name    string
-		ctrl    inspecControl
-		want    string
+		name string
+		ctrl inspecControl
+		want string
 	}{
 		{
 			name: "no results → skipped",
