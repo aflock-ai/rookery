@@ -302,16 +302,18 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	subjects := make(map[string]cryptoutil.DigestSet)
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 
-	subjectName := fmt.Sprintf("commithash:%v", a.CommitHash)
-	subjects[subjectName] = cryptoutil.DigestSet{
-		{
-			Hash:   crypto.SHA1,
-			GitOID: false,
-		}: a.CommitHash,
+	if a.CommitHash != "" {
+		subjectName := fmt.Sprintf("commithash:%v", a.CommitHash)
+		subjects[subjectName] = cryptoutil.DigestSet{
+			{
+				Hash:   crypto.SHA1,
+				GitOID: false,
+			}: a.CommitHash,
+		}
 	}
 
 	// add author email
-	subjectName = fmt.Sprintf("authoremail:%v", a.AuthorEmail)
+	subjectName := fmt.Sprintf("authoremail:%v", a.AuthorEmail)
 	ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.AuthorEmail), hashes)
 	if err != nil {
 		log.Debugf("(attestation/git) failed to record author email subject: %v", err)
@@ -348,17 +350,30 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 		subjects[subjectName] = ds
 	}
 
+	// add remote URLs — enables discovery of attestations by repository URL
+	for _, remote := range a.Remotes {
+		subjectName = fmt.Sprintf("remote:%v", remote)
+		ds, err = cryptoutil.CalculateDigestSetFromBytes([]byte(remote), hashes)
+		if err != nil {
+			log.Debugf("(attestation/git) failed to record remote subject: %v", err)
+			continue
+		}
+		subjects[subjectName] = ds
+	}
+
 	return subjects
 }
 
 func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
 	backrefs := make(map[string]cryptoutil.DigestSet)
-	subjectName := fmt.Sprintf("commithash:%v", a.CommitHash)
-	backrefs[subjectName] = cryptoutil.DigestSet{
-		{
-			Hash:   crypto.SHA1,
-			GitOID: false,
-		}: a.CommitHash,
+	if a.CommitHash != "" {
+		subjectName := fmt.Sprintf("commithash:%v", a.CommitHash)
+		backrefs[subjectName] = cryptoutil.DigestSet{
+			{
+				Hash:   crypto.SHA1,
+				GitOID: false,
+			}: a.CommitHash,
+		}
 	}
 	return backrefs
 }

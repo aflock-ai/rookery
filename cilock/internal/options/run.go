@@ -15,13 +15,18 @@
 package options
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/log"
+	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -31,6 +36,7 @@ type RunOptions struct {
 	SignerOptions            SignerOptions
 	KMSSignerProviderOptions KMSSignerProviderOptions
 	ArchivistaOptions        ArchivistaOptions
+	PlatformURL              string // TestifySec platform URL — derives archivista, fulcio, tsa URLs
 	WorkingDir               string
 	Attestations             []string
 	DirHashGlobs             []string
@@ -50,9 +56,35 @@ var RequiredRunFlags = []string{
 	"step",
 }
 
+// ResolvePlatformDefaults applies platform-derived defaults to any options
+// that weren't explicitly set. Call this after flag parsing but before use.
+func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
+	pc := platformconfig.Derive(ro.PlatformURL)
+
+	// Archivista URL: use platform default if not explicitly overridden
+	if !cmd.Flags().Changed("archivista-server") && !cmd.Flags().Changed("archivist-server") {
+		ro.ArchivistaOptions.Url = pc.Archivista
+	}
+
+	// OIDC audience: derive from platform if not set
+	if ro.ArchivistaOptions.Audience == "" {
+		ro.ArchivistaOptions.Audience = pc.OIDCAudience
+	}
+
+	// Timestamp servers: add platform TSA if none explicitly configured
+	if len(ro.TimestampServers) == 0 {
+		ro.TimestampServers = []string{pc.TSA}
+	}
+
+	// NOTE: We intentionally do NOT force enable-archivista here.
+	// The flag defaults to false and users/configs may rely on that.
+	// Archivista is enabled explicitly via --enable-archivista or config.
+}
+
 func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	ro.SignerOptions.AddFlags(cmd)
 	ro.ArchivistaOptions.AddFlags(cmd)
+	cmd.Flags().StringVar(&ro.PlatformURL, "platform-url", platformconfig.DefaultPlatformURL, "TestifySec platform URL (derives archivista, fulcio, and TSA URLs)")
 	cmd.Flags().StringVarP(&ro.WorkingDir, "workingdir", "d", "", "Directory from which commands will run")
 	cmd.Flags().StringSliceVarP(&ro.Attestations, "attestations", "a", DefaultAttestors, "Attestations to record ('product' and 'material' are always recorded)")
 	cmd.Flags().StringSliceVar(&ro.DirHashGlobs, "dirhash-glob", []string{}, "Dirhash glob can be used to collapse material and product hashes on matching directory matches.")
@@ -76,9 +108,11 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 }
 
 type ArchivistaOptions struct {
-	Enable  bool
-	Url     string
-	Headers []string
+	Enable   bool
+	Url      string
+	Headers  []string
+	OIDC     bool   // Enable OIDC auth — fetch GitHub Actions OIDC token as Bearer
+	Audience string // OIDC audience (defaults to archivista server URL)
 }
 
 func (o *ArchivistaOptions) AddFlags(cmd *cobra.Command) {
@@ -88,13 +122,16 @@ func (o *ArchivistaOptions) AddFlags(cmd *cobra.Command) {
 		log.Errorf("failed to hide enable-archivist flag: %v", err)
 	}
 
-	cmd.Flags().StringVar(&o.Url, "archivista-server", "https://archivista.testifysec.io", "URL of the Archivista server to store or retrieve attestations")
-	cmd.Flags().StringVar(&o.Url, "archivist-server", "https://archivista.testifysec.io", "URL of the Archivista server to store or retrieve attestations (deprecated)")
+	defaultArchivista := platformconfig.Derive("").Archivista
+	cmd.Flags().StringVar(&o.Url, "archivista-server", defaultArchivista, "URL of the Archivista server (derived from --platform-url if not set)")
+	cmd.Flags().StringVar(&o.Url, "archivist-server", defaultArchivista, "URL of the Archivista server (deprecated)")
 	if err := cmd.Flags().MarkHidden("archivist-server"); err != nil {
 		log.Debugf("failed to hide archivist-server flag: %v", err)
 	}
 
 	cmd.Flags().StringArrayVar(&o.Headers, "archivista-headers", []string{}, "Headers to provide to the Archivista client when making requests")
+	cmd.Flags().BoolVar(&o.OIDC, "archivista-oidc", os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "", "Use GitHub Actions OIDC token for Archivista auth (auto-enabled in GitHub Actions)")
+	cmd.Flags().StringVar(&o.Audience, "archivista-audience", "", "OIDC audience for Archivista token (defaults to archivista server URL)")
 }
 
 // Client creates an Archivista client from the current options.
@@ -105,6 +142,24 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 	}
 
 	headers := http.Header{}
+
+	// OIDC auth: fetch a GitHub Actions OIDC token for Archivista uploads.
+	// Same pattern as Fulcio signing — requests a token from the GitHub Actions
+	// OIDC endpoint with a custom audience scoped to Archivista.
+	if o.OIDC {
+		audience := o.Audience
+		if audience == "" {
+			audience = o.Url
+		}
+		token, err := fetchGitHubOIDCToken(audience)
+		if err != nil {
+			return nil, fmt.Errorf("archivista OIDC auth: %w", err)
+		}
+		headers.Set("Authorization", "Bearer "+token)
+		log.Infof("Using GitHub Actions OIDC token for Archivista (audience: %s)", audience)
+	}
+
+	// Static headers (can override OIDC if both set — explicit headers win)
 	for _, hString := range o.Headers {
 		hParts := strings.SplitN(hString, ":", 2)
 		if len(hParts) != 2 {
@@ -119,4 +174,55 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 	}
 
 	return archivista.New(o.Url, opts...), nil
+}
+
+// fetchGitHubOIDCToken requests an OIDC token from GitHub Actions with the
+// given audience. Reuses the same ACTIONS_ID_TOKEN_REQUEST_URL mechanism
+// that Fulcio uses for signing certs.
+func fetchGitHubOIDCToken(audience string) (string, error) {
+	tokenURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
+	if tokenURL == "" {
+		return "", fmt.Errorf("ACTIONS_ID_TOKEN_REQUEST_URL not set (not in GitHub Actions, or missing id-token: write permission)")
+	}
+	bearerToken := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+	if bearerToken == "" {
+		return "", fmt.Errorf("ACTIONS_ID_TOKEN_REQUEST_TOKEN not set")
+	}
+
+	u, err := url.Parse(tokenURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse token URL: %w", err)
+	}
+	q := u.Query()
+	q.Set("audience", audience)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "bearer "+bearerToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("OIDC token request failed: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("OIDC token request returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tokenResp); err != nil {
+		return "", fmt.Errorf("failed to decode OIDC token response: %w", err)
+	}
+	if tokenResp.Value == "" {
+		return "", fmt.Errorf("empty OIDC token in response")
+	}
+
+	return tokenResp.Value, nil
 }

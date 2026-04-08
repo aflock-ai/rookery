@@ -49,6 +49,10 @@ func RunCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Apply platform-derived defaults (archivista, TSA URLs) for any
+			// flags not explicitly set by the user or config file.
+			o.ResolvePlatformDefaults(cmd)
+
 			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, providersFromFlags("signer", cmd.Flags()))
 			if err != nil {
 				return fmt.Errorf("failed to load signers: %w", err)
@@ -158,15 +162,19 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		attestationOpts = append(attestationOpts, attestation.WithEnvExcludeKeys(ro.EnvAllowSensitiveKeys))
 	}
 
-	results, err := workflow.RunWithExports(
+	results, runErr := workflow.RunWithExports(
 		ro.StepName,
 		workflow.RunWithSigners(signers...),
 		workflow.RunWithAttestors(attestors),
 		workflow.RunWithAttestationOpts(attestationOpts...),
 		workflow.RunWithTimestampers(timestampers...),
 	)
-	if err != nil {
-		return err
+	// Don't return immediately on error — write whatever results were
+	// produced first (e.g. secretscan findings), then return the error.
+	// This ensures attestation files are always written for forensic
+	// analysis even when an attestor fails (e.g. --attestor-secretscan-fail-on-detection).
+	if runErr != nil && len(results) == 0 {
+		return runErr
 	}
 
 	// When multiple results are produced (e.g. MultiExporter attestors), an output
@@ -220,6 +228,12 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 			}
 			log.Infof("Stored in archivista as %v\n", gitoid)
 		}
+	}
+
+	// Return the deferred attestor error (e.g. secretscan fail-on-detection)
+	// after writing all output files.
+	if runErr != nil {
+		return runErr
 	}
 	return nil
 }

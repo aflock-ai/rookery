@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -100,6 +101,9 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 		return nil, ErrInvalidThreshold(options.threshold)
 	}
 
+	fmt.Fprintf(os.Stderr, "[dsse-verify] roots=%d intermediates=%d verifiers=%d timestampVerifiers=%d sigs=%d\n",
+		len(options.roots), len(options.intermediates), len(options.verifiers), len(options.timestampVerifiers), len(e.Signatures))
+
 	pae := preauthEncode(e.PayloadType, e.Payload)
 	if len(e.Signatures) == 0 {
 		return nil, ErrNoSignatures{}
@@ -161,14 +165,18 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 					passedTimestampVerifiers := []timestamp.TimestampVerifier{}
 					failedTimestampVerifiers := []timestamp.TimestampVerifier{}
 
+					fmt.Fprintf(os.Stderr, "[dsse-verify] cert subject=%q issuer=%q notAfter=%s sigTimestamps=%d\n",
+						cert.Subject.CommonName, cert.Issuer.CommonName, cert.NotAfter.Format(time.RFC3339), len(sig.Timestamps))
 					for _, timestampVerifier := range options.timestampVerifiers {
 						for _, sigTimestamp := range sig.Timestamps {
-							timestamp, err := timestampVerifier.Verify(context.TODO(), bytes.NewReader(sigTimestamp.Data), bytes.NewReader(sig.Signature))
+							tsTime, err := timestampVerifier.Verify(context.TODO(), bytes.NewReader(sigTimestamp.Data), bytes.NewReader(sig.Signature))
 							if err != nil {
+								fmt.Fprintf(os.Stderr, "[dsse-verify] TSA verify FAILED: %v\n", err)
 								continue
 							}
+							fmt.Fprintf(os.Stderr, "[dsse-verify] TSA verified, timestamp=%s\n", tsTime.Format(time.RFC3339))
 
-							if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, timestamp); err == nil {
+							if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, tsTime); err == nil {
 								// NOTE: do we not want to save all the passed verifiers?
 								passedVerifier = verifier
 								passedTimestampVerifiers = append(passedTimestampVerifiers, timestampVerifier)
