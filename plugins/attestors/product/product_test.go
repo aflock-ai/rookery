@@ -20,7 +20,6 @@ import (
 	"crypto"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -152,34 +151,53 @@ func TestIncludeExcludeGlobs(t *testing.T) {
 		require.NoError(t, f.Close())
 	}
 
+	// Use forward slashes here because Subjects() normalizes product paths
+	// to forward slashes before merkle hashing. Test expectations live in
+	// the same coordinate space the attestor produces.
 	tests := []struct {
-		name             string
-		includeGlob      string
-		excludeGlob      string
-		expectedSubjects []string
+		name                string
+		includeGlob         string
+		excludeGlob         string
+		expectedProductKeys []string // keys that should be in the predicate (after normalization)
+		expectTreeSubject   bool     // whether Subjects() should emit the single tree subject
 	}{
-		{"match all", "*", "", []string{"test.txt", "test.exe", filepath.Join("subdir", "test.txt"), filepath.Join("subdir", "test.exe")}},
-		{"include only exes", "*.exe", "", []string{"test.exe", filepath.Join("subdir", "test.exe")}},
-		{"exclude exes", "*", "*.exe", []string{"test.txt", filepath.Join("subdir", "test.txt")}},
-		{"include only files in subdir", "subdir/*", "", []string{filepath.Join("subdir", "test.txt"), filepath.Join("subdir", "test.exe")}},
-		{"exclude files in subdir", "*", "subdir/*", []string{"test.txt", "test.exe"}},
-		{"include nothing", "", "", []string{}},
-		{"exclude everything", "", "*", []string{}},
+		{"match all", "*", "", []string{"test.txt", "test.exe", "subdir/test.txt", "subdir/test.exe"}, true},
+		{"include only exes", "*.exe", "", []string{"test.exe", "subdir/test.exe"}, true},
+		{"exclude exes", "*", "*.exe", []string{"test.txt", "subdir/test.txt"}, true},
+		{"include only files in subdir", "subdir/*", "", []string{"subdir/test.txt", "subdir/test.exe"}, true},
+		{"exclude files in subdir", "*", "subdir/*", []string{"test.txt", "test.exe"}, true},
+		{"include nothing", "", "", []string{}, false},
+		{"exclude everything", "", "*", []string{}, false},
 	}
 
-	assertSubjsMatch := func(t *testing.T, subjects map[string]cryptoutil.DigestSet, expected []string) {
-		subjectPaths := make([]string, 0, len(subjects))
-		for path := range subjects {
-			subjectPaths = append(subjectPaths, strings.TrimPrefix(path, "file:"))
+	// assertTreeSubject asserts that Subjects() emits the single
+	// `tree:products` subject (or no subjects if no products were included).
+	// It also verifies the merkle root is deterministic by recomputing it
+	// from the included product set.
+	assertTreeSubject := func(t *testing.T, a *Attestor, expected []string, expectTree bool) {
+		t.Helper()
+		subjects := a.Subjects()
+		if !expectTree {
+			assert.Empty(t, subjects, "no included products should produce no subjects")
+			return
 		}
+		require.Len(t, subjects, 1, "exactly one tree subject expected")
+		root, ok := subjects[TreeSubjectName]
+		require.True(t, ok, "subject must be named %q", TreeSubjectName)
+		require.NotEmpty(t, root, "merkle root digest set must not be empty")
 
-		assert.ElementsMatch(t, subjectPaths, expected)
+		// Recompute the merkle root over the expected file set using the
+		// products map and confirm it matches what Subjects() returned.
+		// This catches any future regression that breaks merkle determinism.
+		recomputed := computeExpectedMerkleRoot(t, a, expected)
+		assert.True(t, recomputed.Equal(root), "merkle root must match recomputation: got %v expected %v", root, recomputed)
 	}
 
 	assertProductsMatch := func(t *testing.T, products map[string]attestation.Product, expected []string) {
+		t.Helper()
 		productPaths := make([]string, 0, len(products))
 		for path := range products {
-			productPaths = append(productPaths, path)
+			productPaths = append(productPaths, filepath.ToSlash(path))
 		}
 		assert.ElementsMatch(t, productPaths, expected)
 	}
@@ -189,8 +207,8 @@ func TestIncludeExcludeGlobs(t *testing.T) {
 		require.NoError(t, err)
 		a := New()
 		require.NoError(t, a.Attest(ctx))
-		allFiles := []string{"test.txt", "test.exe", filepath.Join("subdir", "test.txt"), filepath.Join("subdir", "test.exe")}
-		assertSubjsMatch(t, a.Subjects(), allFiles)
+		allFiles := []string{"test.txt", "test.exe", "subdir/test.txt", "subdir/test.exe"}
+		assertTreeSubject(t, a, allFiles, true)
 		assertProductsMatch(t, a.Products(), allFiles)
 	})
 
@@ -202,10 +220,69 @@ func TestIncludeExcludeGlobs(t *testing.T) {
 			WithIncludeGlob(test.includeGlob)(a)
 			WithExcludeGlob(test.excludeGlob)(a)
 			require.NoError(t, a.Attest(ctx))
-			assertSubjsMatch(t, a.Subjects(), test.expectedSubjects)
-			// Products map should also be filtered at record time (not just subjects)
-			assertProductsMatch(t, a.Products(), test.expectedSubjects)
+			assertTreeSubject(t, a, test.expectedProductKeys, test.expectTreeSubject)
+			// Products map should still contain everything that was filtered at
+			// record time (the include/exclude semantics there are unchanged).
+			assertProductsMatch(t, a.Products(), test.expectedProductKeys)
 		})
+	}
+}
+
+// computeExpectedMerkleRoot is a test helper that recomputes the same merkle
+// root the production code emits, so the test verifies the *value* of the
+// root rather than just its presence. If the production hashing logic ever
+// drifts from this helper, the test will fail loudly.
+func computeExpectedMerkleRoot(t *testing.T, a *Attestor, expectedFiles []string) cryptoutil.DigestSet {
+	t.Helper()
+
+	// Mirror Subjects()'s sort order — forward-slash normalized, then
+	// lexically sorted.
+	normalized := make([]string, 0, len(expectedFiles))
+	for _, f := range expectedFiles {
+		normalized = append(normalized, filepath.ToSlash(f))
+	}
+	// Local copy to avoid mutating the caller's slice.
+	files := append([]string(nil), normalized...)
+	sortStrings(files)
+
+	// Walk one product to discover the algorithm set.
+	algos := map[cryptoutil.DigestValue]struct{}{}
+	for _, name := range files {
+		// products map is keyed by OS path, but Subjects() works in
+		// forward-slash space. Look up the product in either form.
+		p, ok := a.products[name]
+		if !ok {
+			p, ok = a.products[filepath.FromSlash(name)]
+		}
+		require.True(t, ok, "test setup: product %q not in attestor.products", name)
+		for dv := range p.Digest {
+			algos[dv] = struct{}{}
+		}
+	}
+
+	root := make(cryptoutil.DigestSet, len(algos))
+	for dv := range algos {
+		h := dv.New()
+		for _, name := range files {
+			p, ok := a.products[name]
+			if !ok {
+				p = a.products[filepath.FromSlash(name)]
+			}
+			digest := p.Digest[dv]
+			writeMerkleEntry(h, name, digest)
+		}
+		root[dv] = encodeRoot(h, dv)
+	}
+	return root
+}
+
+// sortStrings is a tiny indirection so the test file does not need an
+// extra "sort" import alongside the production code.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
 	}
 }
 
