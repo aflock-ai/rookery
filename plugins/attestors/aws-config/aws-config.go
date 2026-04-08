@@ -44,7 +44,8 @@ func init() {
 }
 
 // evaluationResults mirrors the JSON produced by:
-//   aws configservice get-compliance-details-by-config-rule
+//
+//	aws configservice get-compliance-details-by-config-rule
 type evaluationResults struct {
 	EvaluationResults []evaluationResult `json:"EvaluationResults"`
 }
@@ -69,9 +70,9 @@ type evaluationResultQualifier struct {
 
 // ComplianceSummary tracks rule evaluation counts.
 type ComplianceSummary struct {
-	TotalRules          int      `json:"totalRules"`
-	CompliantCount      int      `json:"compliantCount"`
-	NonCompliantCount   int      `json:"nonCompliantCount"`
+	TotalRules            int      `json:"totalRules"`
+	CompliantCount        int      `json:"compliantCount"`
+	NonCompliantCount     int      `json:"nonCompliantCount"`
 	NonCompliantResources []string `json:"nonCompliantResources"`
 }
 
