@@ -143,8 +143,8 @@ func init() { //nolint:funlen
 		),
 		registry.BoolConfigOption(
 			"use-http",
-			"HTTP/REST mode for Fulcio",
-			false,
+			"Use HTTP/REST API for Fulcio (default: true, works behind any reverse proxy)",
+			true,
 			func(sp signer.SignerProvider, useHTTP bool) (signer.SignerProvider, error) {
 				fsp, ok := sp.(FulcioSignerProvider)
 				if !ok {
