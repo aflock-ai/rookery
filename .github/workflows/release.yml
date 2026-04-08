@@ -38,8 +38,7 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
-          - goos: windows
-            goarch: amd64
+          # Windows excluded — omnitrail attestor has linux/darwin-only build constraints
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -109,14 +108,20 @@ jobs:
         run: |
           MELANGE_VERSION=$(curl -sS https://api.github.com/repos/chainguard-dev/melange/releases/latest | jq -r .tag_name | sed 's/^v//')
           curl -sSLo /tmp/melange.tar.gz "https://github.com/chainguard-dev/melange/releases/download/v${MELANGE_VERSION}/melange_${MELANGE_VERSION}_linux_amd64.tar.gz"
-          sudo tar -xzf /tmp/melange.tar.gz --strip-components=1 -C /usr/local/bin melange
+          mkdir -p /tmp/melange-extract
+          tar -xzf /tmp/melange.tar.gz -C /tmp/melange-extract
+          sudo cp "$(find /tmp/melange-extract -name melange -type f | head -1)" /usr/local/bin/melange
+          sudo chmod +x /usr/local/bin/melange
           melange version
 
       - name: Install apko
         run: |
           APKO_VERSION=$(curl -sS https://api.github.com/repos/chainguard-dev/apko/releases/latest | jq -r .tag_name | sed 's/^v//')
           curl -sSLo /tmp/apko.tar.gz "https://github.com/chainguard-dev/apko/releases/download/v${APKO_VERSION}/apko_${APKO_VERSION}_linux_amd64.tar.gz"
-          sudo tar -xzf /tmp/apko.tar.gz --strip-components=1 -C /usr/local/bin apko
+          mkdir -p /tmp/apko-extract
+          tar -xzf /tmp/apko.tar.gz -C /tmp/apko-extract
+          sudo cp "$(find /tmp/apko-extract -name apko -type f | head -1)" /usr/local/bin/apko
+          sudo chmod +x /usr/local/bin/apko
           apko version
 
       - name: Install QEMU for multi-arch
