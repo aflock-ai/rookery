@@ -13,7 +13,7 @@ require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/edwarnicke/gitoid v0.0.0-20220710194850-1be5bfda1f9d // indirect
-	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	go.step.sm/crypto v0.76.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
