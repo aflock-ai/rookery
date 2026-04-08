@@ -11,10 +11,10 @@ var DefaultPlatformURL = "https://platform.testifysec.com"
 
 // PlatformConfig holds derived service URLs from a single platform URL.
 type PlatformConfig struct {
-	PlatformURL string
-	Archivista  string
-	Fulcio      string
-	TSA         string
+	PlatformURL  string
+	Archivista   string
+	Fulcio       string
+	TSA          string
 	OIDCAudience string
 	OIDCIssuer   string
 	OIDCClientID string
