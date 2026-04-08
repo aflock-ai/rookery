@@ -49,6 +49,10 @@ func RunCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Apply platform-derived defaults (archivista, TSA URLs) for any
+			// flags not explicitly set by the user or config file.
+			o.ResolvePlatformDefaults(cmd)
+
 			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, providersFromFlags("signer", cmd.Flags()))
 			if err != nil {
 				return fmt.Errorf("failed to load signers: %w", err)

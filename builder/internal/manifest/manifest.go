@@ -39,11 +39,12 @@ type PluginSpec struct {
 
 // BuildOptions represents build configuration options
 type BuildOptions struct {
-	LdFlags    string `yaml:"ldflags,omitempty"`
-	Trimpath   *bool  `yaml:"trimpath,omitempty"`
-	FipsMode   string `yaml:"fips_mode,omitempty"`   // "on", "only", or "" for off
-	CustomerID string `yaml:"customer_id,omitempty"` // Optional customer identifier
-	TenantID   string `yaml:"tenant_id,omitempty"`   // Optional tenant identifier
+	LdFlags     string `yaml:"ldflags,omitempty"`
+	Trimpath    *bool  `yaml:"trimpath,omitempty"`
+	FipsMode    string `yaml:"fips_mode,omitempty"`    // "on", "only", or "" for off
+	CustomerID  string `yaml:"customer_id,omitempty"`  // Optional customer identifier
+	TenantID    string `yaml:"tenant_id,omitempty"`    // Optional tenant identifier
+	PlatformURL string `yaml:"platform_url,omitempty"` // TestifySec platform URL (baked into binary)
 }
 
 // LoadManifest loads a manifest from a YAML file
