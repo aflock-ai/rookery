@@ -60,9 +60,9 @@ type inspecProfile struct {
 }
 
 type inspecControl struct {
-	ID      string          `json:"id"`
-	Title   string          `json:"title"`
-	Results []inspecResult  `json:"results"`
+	ID      string         `json:"id"`
+	Title   string         `json:"title"`
+	Results []inspecResult `json:"results"`
 }
 
 type inspecResult struct {
@@ -83,13 +83,13 @@ type FailedControl struct {
 
 // Summary is the structured summary stored in the attestation.
 type Summary struct {
-	ProfileName    string          `json:"profileName"`
-	Platform       string          `json:"platform"`
-	TotalControls  int             `json:"totalControls"`
-	PassedControls int             `json:"passedControls"`
-	FailedControls int             `json:"failedControls"`
-	SkippedControls int            `json:"skippedControls"`
-	FailedDetails  []FailedControl `json:"failedDetails"`
+	ProfileName     string          `json:"profileName"`
+	Platform        string          `json:"platform"`
+	TotalControls   int             `json:"totalControls"`
+	PassedControls  int             `json:"passedControls"`
+	FailedControls  int             `json:"failedControls"`
+	SkippedControls int             `json:"skippedControls"`
+	FailedDetails   []FailedControl `json:"failedDetails"`
 }
 
 // Attestor reads an InSpec JSON report and attests to the scan results.
@@ -145,57 +145,13 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 		return fmt.Errorf("no products to attest")
 	}
 
-	mimeTypes := []string{"text/plain", "application/json"}
-
 	for path, product := range products {
-		if product.MimeType == "" {
-			continue
-		}
-		mimeMatch := false
-		for _, mt := range mimeTypes {
-			if product.MimeType == mt {
-				mimeMatch = true
-				break
-			}
-		}
-		if !mimeMatch {
+		if !isAcceptedMimeType(product.MimeType) {
 			continue
 		}
 
-		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
-		if newDigestSet == nil || err != nil {
-			log.Debugf("(attestation/inspec) error calculating digest set from file %s: %v", path, err)
-			continue
-		}
-
-		if !newDigestSet.Equal(product.Digest) {
-			log.Debugf("(attestation/inspec) integrity error for %s: product digest does not match", path)
-			continue
-		}
-
-		f, err := os.Open(path) //nolint:gosec // G304: path from attestation context products
+		parsed, err := a.tryParseReport(ctx, path, product)
 		if err != nil {
-			log.Debugf("(attestation/inspec) error opening file %s: %v", path, err)
-			continue
-		}
-
-		reportBytes, err := io.ReadAll(f)
-		_ = f.Close()
-		if err != nil {
-			log.Debugf("(attestation/inspec) error reading file %s: %v", path, err)
-			continue
-		}
-
-		var parsed inspecReport
-		if err := json.Unmarshal(reportBytes, &parsed); err != nil {
-			log.Debugf("(attestation/inspec) error parsing JSON from %s: %v", path, err)
-			continue
-		}
-
-		// Validate this is actually an InSpec report: it must have a non-empty
-		// profiles array and each profile must have a controls array (even if empty).
-		if !isInSpecReport(parsed) {
-			log.Debugf("(attestation/inspec) %s does not appear to be an InSpec JSON report", path)
 			continue
 		}
 
@@ -206,6 +162,49 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	}
 
 	return fmt.Errorf("no InSpec JSON report found in products")
+}
+
+func isAcceptedMimeType(mime string) bool {
+	return mime == "text/plain" || mime == "application/json"
+}
+
+func (a *Attestor) tryParseReport(ctx *attestation.AttestationContext, path string, product attestation.Product) (inspecReport, error) {
+	newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
+	if newDigestSet == nil || err != nil {
+		log.Debugf("(attestation/inspec) error calculating digest set from file %s: %v", path, err)
+		return inspecReport{}, err
+	}
+
+	if !newDigestSet.Equal(product.Digest) {
+		log.Debugf("(attestation/inspec) integrity error for %s: product digest does not match", path)
+		return inspecReport{}, fmt.Errorf("digest mismatch")
+	}
+
+	f, err := os.Open(path) //nolint:gosec // G304: path from attestation context products
+	if err != nil {
+		log.Debugf("(attestation/inspec) error opening file %s: %v", path, err)
+		return inspecReport{}, err
+	}
+
+	reportBytes, err := io.ReadAll(f)
+	_ = f.Close()
+	if err != nil {
+		log.Debugf("(attestation/inspec) error reading file %s: %v", path, err)
+		return inspecReport{}, err
+	}
+
+	var parsed inspecReport
+	if err := json.Unmarshal(reportBytes, &parsed); err != nil {
+		log.Debugf("(attestation/inspec) error parsing JSON from %s: %v", path, err)
+		return inspecReport{}, err
+	}
+
+	if !isInSpecReport(parsed) {
+		log.Debugf("(attestation/inspec) %s does not appear to be an InSpec JSON report", path)
+		return inspecReport{}, fmt.Errorf("not an InSpec report")
+	}
+
+	return parsed, nil
 }
 
 // isInSpecReport returns true when the parsed document looks like InSpec JSON output.
@@ -220,67 +219,35 @@ func isInSpecReport(r inspecReport) bool {
 	return true
 }
 
+const (
+	statusPassed  = "passed"
+	statusFailed  = "failed"
+	statusSkipped = "skipped"
+)
+
 func (a *Attestor) buildSummaryAndSubjects(parsed inspecReport) {
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 	subjects := make(map[string]cryptoutil.DigestSet)
 
-	platformStr := parsed.Platform.Name
-	if parsed.Platform.Release != "" {
-		platformStr = parsed.Platform.Name + "-" + parsed.Platform.Release
-	}
-
-	// platform subject
-	if platformStr != "" {
-		key := fmt.Sprintf("platform:%s", platformStr)
-		if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(platformStr), hashes); err == nil {
-			subjects[key] = ds
-		} else {
-			log.Debugf("(attestation/inspec) failed to hash platform subject %s: %v", platformStr, err)
-		}
-	}
+	platformStr := buildPlatformString(parsed.Platform)
+	addSubject(subjects, "platform", platformStr, hashes)
 
 	var totalControls, passed, failed, skipped int
 	var failedDetails []FailedControl
 
-	// Use the first profile for the top-level summary name; emit subjects for all.
 	summaryProfileName := ""
 	for i, profile := range parsed.Profiles {
 		if i == 0 {
 			summaryProfileName = profile.Name
 		}
+		addSubject(subjects, "profile", profile.Name, hashes)
 
-		// profile subject
-		key := fmt.Sprintf("profile:%s", profile.Name)
-		if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(profile.Name), hashes); err == nil {
-			subjects[key] = ds
-		} else {
-			log.Debugf("(attestation/inspec) failed to hash profile subject %s: %v", profile.Name, err)
-		}
-
-		for _, ctrl := range profile.Controls {
-			totalControls++
-			controlStatus := controlOutcome(ctrl)
-			switch controlStatus {
-			case "passed":
-				passed++
-			case "failed":
-				failed++
-				failedDetails = append(failedDetails, FailedControl{
-					ID:      ctrl.ID,
-					Title:   ctrl.Title,
-					Profile: profile.Name,
-				})
-				// failed control subject
-				ctrlKey := fmt.Sprintf("inspec:control:%s", ctrl.ID)
-				if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(ctrl.ID), hashes); err == nil {
-					subjects[ctrlKey] = ds
-				} else {
-					log.Debugf("(attestation/inspec) failed to hash control subject %s: %v", ctrl.ID, err)
-				}
-			default:
-				skipped++
-			}
-		}
+		p, f, s, details := processControls(profile, subjects, hashes)
+		passed += p
+		failed += f
+		skipped += s
+		totalControls += p + f + s
+		failedDetails = append(failedDetails, details...)
 	}
 
 	a.ScanSummary = Summary{
@@ -295,24 +262,55 @@ func (a *Attestor) buildSummaryAndSubjects(parsed inspecReport) {
 	a.subjects = subjects
 }
 
+func buildPlatformString(p inspecPlatform) string {
+	if p.Release != "" {
+		return p.Name + "-" + p.Release
+	}
+	return p.Name
+}
+
+func addSubject(subjects map[string]cryptoutil.DigestSet, prefix, value string, hashes []cryptoutil.DigestValue) {
+	if value == "" {
+		return
+	}
+	key := fmt.Sprintf("%s:%s", prefix, value)
+	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(value), hashes); err == nil {
+		subjects[key] = ds
+	}
+}
+
+func processControls(profile inspecProfile, subjects map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue) (passed, failed, skipped int, details []FailedControl) {
+	for _, ctrl := range profile.Controls {
+		switch controlOutcome(ctrl) {
+		case statusPassed:
+			passed++
+		case statusFailed:
+			failed++
+			details = append(details, FailedControl{ID: ctrl.ID, Title: ctrl.Title, Profile: profile.Name})
+			addSubject(subjects, "inspec:control", ctrl.ID, hashes)
+		default:
+			skipped++
+		}
+	}
+	return
+}
+
 // controlOutcome determines the aggregate outcome of a control based on its results.
-// A control is "failed" if any result is "failed", "skipped" if all remaining results
-// are "skipped", and "passed" otherwise.
 func controlOutcome(ctrl inspecControl) string {
 	if len(ctrl.Results) == 0 {
-		return "skipped"
+		return statusSkipped
 	}
 	allSkipped := true
 	for _, r := range ctrl.Results {
-		if r.Status == "failed" {
-			return "failed"
+		if r.Status == statusFailed {
+			return statusFailed
 		}
-		if r.Status != "skipped" {
+		if r.Status != statusSkipped {
 			allSkipped = false
 		}
 	}
 	if allSkipped {
-		return "skipped"
+		return statusSkipped
 	}
-	return "passed"
+	return statusPassed
 }
