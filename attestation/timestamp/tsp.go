@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -50,18 +51,37 @@ func TimestampWithUrl(rawURL string) TSPTimestamperOption {
 }
 
 // validateURL checks that the timestamp authority URL is well-formed and uses HTTPS.
+// HTTP is permitted for localhost, loopback, and private network addresses (RFC 1918)
+// to support local development and Docker-based CI simulation.
 func validateURL(rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid timestamp authority URL: %w", err)
 	}
 	if u.Scheme != "https" {
-		return fmt.Errorf("timestamp authority URL must use HTTPS, got %q", u.Scheme)
+		host := u.Hostname()
+		if !isLocalOrPrivate(host) {
+			return fmt.Errorf("timestamp authority URL must use HTTPS, got %q", u.Scheme)
+		}
 	}
 	if u.Host == "" {
 		return fmt.Errorf("timestamp authority URL has no host")
 	}
 	return nil
+}
+
+// isLocalOrPrivate returns true if the host is localhost, loopback, or a private network address.
+func isLocalOrPrivate(host string) bool {
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	// RFC 1918 private ranges: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+	// Also loopback 127.0.0.0/8 and link-local 169.254.0.0/16
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 func TimestampWithHash(h crypto.Hash) TSPTimestamperOption {

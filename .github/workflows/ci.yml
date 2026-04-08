@@ -7,7 +7,7 @@
 # - test-go: Go tests with coverage
 # - test-go-race: Go tests with race detector
 # - vet: go vet across all modules
-# - build: Build all binaries (cilock, aflock, builder)
+# - build: Build all binaries (cilock, builder)
 # - verify-isolated: Verify each module builds outside workspace
 # - commitlint: Conventional commit validation
 # - forbidden-patterns: Scan for dangerous code patterns
@@ -114,8 +114,6 @@ jobs:
         target:
           - name: attestation
             dir: attestation
-          - name: aflock
-            dir: aflock
           - name: builder
             dir: builder
           - name: cilock

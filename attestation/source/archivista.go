@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/aflock-ai/rookery/attestation/archivista"
+	log "github.com/sirupsen/logrus"
 )
 
 // ArchivistaSource implements Sourcer backed by an Archivista server.
@@ -65,12 +66,18 @@ func (s *ArchivistaSource) Search(ctx context.Context, collectionName string, su
 	for _, gitoid := range gitoids {
 		env, err := s.client.Download(ctx, gitoid)
 		if err != nil {
-			return nil, err
+			// Skip envelopes that can't be downloaded (may be non-collection DSSEs)
+			log.Debugf("archivista source: skipping gitoid %s: download failed: %v", gitoid, err)
+			processedGitoids = append(processedGitoids, gitoid) // still mark as seen to avoid retrying
+			continue
 		}
 
 		collectionEnv, err := envelopeToCollectionEnvelope(gitoid, env)
 		if err != nil {
-			return nil, err
+			// Skip non-collection envelopes (policy DSSEs, VSAs, etc.)
+			log.Debugf("archivista source: skipping gitoid %s: %v", gitoid, err)
+			processedGitoids = append(processedGitoids, gitoid)
+			continue
 		}
 
 		processedGitoids = append(processedGitoids, gitoid)
