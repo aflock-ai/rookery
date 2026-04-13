@@ -16,34 +16,34 @@ linters:
   default: none
   enable:
     # === Core Correctness ===
-    - gosec          # Security issues
-    - errcheck       # Unchecked errors
-    - staticcheck    # Bug detection
-    - govet          # Suspicious constructs
-    - ineffassign    # Dead assignments
+    - gosec # Security issues
+    - errcheck # Unchecked errors
+    - staticcheck # Bug detection
+    - govet # Suspicious constructs
+    - ineffassign # Dead assignments
 
     # === Dead Code & Unused ===
-    - unused         # Unused code (variables, functions, types)
-    - unparam        # Unused function parameters
+    - unused # Unused code (variables, functions, types)
+    - unparam # Unused function parameters
 
     # === Complexity Limits (AI guardrails) ===
-    - gocyclo        # Cyclomatic complexity
-    - gocognit       # Cognitive complexity
-    - funlen         # Function length limit
-    - nestif         # Nested if depth limit
+    - gocyclo # Cyclomatic complexity
+    - gocognit # Cognitive complexity
+    - funlen # Function length limit
+    - nestif # Nested if depth limit
 
     # === Code Quality ===
-    - dupl           # Duplicate code detection
-    - misspell       # Spelling errors
-    - unconvert      # Unnecessary type conversions
-    - goconst        # Repeated strings that should be constants
+    - dupl # Duplicate code detection
+    - misspell # Spelling errors
+    - unconvert # Unnecessary type conversions
+    - goconst # Repeated strings that should be constants
 
     # === Maintainability ===
-    - nakedret       # Naked returns in long functions
-    - prealloc       # Slice preallocation suggestions
-    - bodyclose      # HTTP response body close
-    - nilerr         # Return nil after checking error
-    - copyloopvar    # Loop variable capture
+    - nakedret # Naked returns in long functions
+    - prealloc # Slice preallocation suggestions
+    - bodyclose # HTTP response body close
+    - nilerr # Return nil after checking error
+    - copyloopvar # Loop variable capture
 
   settings:
     gocyclo:
@@ -71,9 +71,9 @@ linters:
 
     gosec:
       excludes:
-        - G104  # Audit errors not checked (covered by errcheck)
-        - G117  # Struct fields matching secret pattern
-        - G704  # SSRF via taint analysis (false positive for CLI tools)
+        - G104 # Audit errors not checked (covered by errcheck)
+        - G117 # Struct fields matching secret pattern
+        - G704 # SSRF via taint analysis (false positive for CLI tools)
       config:
         global:
           audit: true
@@ -81,16 +81,16 @@ linters:
     staticcheck:
       checks:
         - "all"
-        - "-SA1019"  # Using deprecated - too noisy during migrations
-        - "-ST1000"  # Package comments
-        - "-ST1003"  # Naming conventions (Url vs URL)
-        - "-ST1016"  # Receiver name consistency
-        - "-ST1020"  # Function comment format
-        - "-ST1021"  # Type comment format
-        - "-ST1022"  # Var/const comment format
-        - "-S1009"   # Nil check before len
-        - "-QF1001"  # De Morgan's law
-        - "-QF1003"  # Tagged switch
+        - "-SA1019" # Using deprecated - too noisy during migrations
+        - "-ST1000" # Package comments
+        - "-ST1003" # Naming conventions (Url vs URL)
+        - "-ST1016" # Receiver name consistency
+        - "-ST1020" # Function comment format
+        - "-ST1021" # Type comment format
+        - "-ST1022" # Var/const comment format
+        - "-S1009" # Nil check before len
+        - "-QF1001" # De Morgan's law
+        - "-QF1003" # Tagged switch
 
     errcheck:
       check-type-assertions: true

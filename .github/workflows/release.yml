@@ -14,12 +14,12 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
   packages: write
-  id-token: write  # For cosign OIDC keyless signing
+  id-token: write # For cosign OIDC keyless signing
 
 jobs:
   # ── Build static binaries for all platforms ─────────────────────────
@@ -47,7 +47,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: '.go-version'
+          go-version-file: ".go-version"
 
       - name: Extract version
         id: version
@@ -99,7 +99,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: '.go-version'
+          go-version-file: ".go-version"
 
       - name: Extract version
         id: version

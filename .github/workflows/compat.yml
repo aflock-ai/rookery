@@ -10,17 +10,17 @@ on:
   push:
     branches: [main]
     paths:
-      - 'attestation/**'
-      - 'cilock/**'
-      - 'compat/**'
-      - '.github/workflows/compat.yml'
+      - "attestation/**"
+      - "cilock/**"
+      - "compat/**"
+      - ".github/workflows/compat.yml"
   pull_request:
     branches: [main]
     paths:
-      - 'attestation/**'
-      - 'cilock/**'
-      - 'compat/**'
-      - '.github/workflows/compat.yml'
+      - "attestation/**"
+      - "cilock/**"
+      - "compat/**"
+      - ".github/workflows/compat.yml"
 
 permissions:
   contents: read
@@ -54,7 +54,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: '.go-version'
+          go-version-file: ".go-version"
 
       - name: Build cilock
         working-directory: cilock
@@ -244,7 +244,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: '.go-version'
+          go-version-file: ".go-version"
 
       - name: Run compat tests
         working-directory: compat/go-witness

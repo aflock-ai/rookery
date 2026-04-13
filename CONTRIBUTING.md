@@ -7,12 +7,14 @@
 All commits to `main` must be signed. Configure Git signing before contributing:
 
 **GPG signing:**
+
 ```bash
 git config --global commit.gpgsign true
 git config --global user.signingkey <YOUR_KEY_ID>
 ```
 
 **SSH signing (Git 2.34+):**
+
 ```bash
 git config --global gpg.format ssh
 git config --global user.signingkey ~/.ssh/id_ed25519.pub
@@ -34,6 +36,7 @@ type(scope): description
 Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
 
 Examples:
+
 ```
 feat(attestor): add new OCI attestor plugin
 fix(policy): correct error message formatting in constraints

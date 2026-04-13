@@ -93,7 +93,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: '.go-version'
+          go-version-file: ".go-version"
 
       - name: Run go vet
         run: |
@@ -125,7 +125,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: '.go-version'
+          go-version-file: ".go-version"
 
       - name: Build ${{ matrix.target.name }}
         working-directory: ${{ matrix.target.dir }}
@@ -140,7 +140,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: '.go-version'
+          go-version-file: ".go-version"
 
       - name: Verify each module builds in isolation
         run: make verify-isolated
