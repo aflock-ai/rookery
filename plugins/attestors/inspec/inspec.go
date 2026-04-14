@@ -170,9 +170,13 @@ func isAcceptedMimeType(mime string) bool {
 
 func (a *Attestor) tryParseReport(ctx *attestation.AttestationContext, path string, product attestation.Product) (inspecReport, error) {
 	newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
-	if newDigestSet == nil || err != nil {
+	if err != nil {
 		log.Debugf("(attestation/inspec) error calculating digest set from file %s: %v", path, err)
 		return inspecReport{}, err
+	}
+	if newDigestSet == nil {
+		log.Debugf("(attestation/inspec) nil digest set for file %s", path)
+		return inspecReport{}, fmt.Errorf("nil digest set for file %s", path)
 	}
 
 	if !newDigestSet.Equal(product.Digest) {
@@ -185,9 +189,9 @@ func (a *Attestor) tryParseReport(ctx *attestation.AttestationContext, path stri
 		log.Debugf("(attestation/inspec) error opening file %s: %v", path, err)
 		return inspecReport{}, err
 	}
+	defer func() { _ = f.Close() }()
 
 	reportBytes, err := io.ReadAll(f)
-	_ = f.Close()
 	if err != nil {
 		log.Debugf("(attestation/inspec) error reading file %s: %v", path, err)
 		return inspecReport{}, err
