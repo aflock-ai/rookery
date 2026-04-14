@@ -207,7 +207,7 @@ func fetchGitHubOIDCToken(audience string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("OIDC token request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

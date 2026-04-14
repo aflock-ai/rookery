@@ -7,12 +7,12 @@ on:
   workflow_call:
     inputs:
       race:
-        description: "Enable race detector"
+        description: 'Enable race detector'
         required: false
         type: boolean
         default: false
       coverage:
-        description: "Generate coverage profile and check baseline"
+        description: 'Generate coverage profile and check baseline'
         required: false
         type: boolean
         default: false
@@ -28,7 +28,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: ".go-version"
+          go-version-file: '.go-version'
 
       - name: Run Go tests
         run: |

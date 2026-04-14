@@ -33,17 +33,17 @@ sequenceDiagram
     participant Scanner
     participant EnvScanner
     participant Decoder
-
+    
     User->>Aflock: Run with secretscan attestor
     Aflock->>SecretScan: Initialize attestor
     SecretScan->>SecretScan: Load configuration
     Note over SecretScan: Configure allowlists, file limits, etc.
-
+    
     Aflock->>SecretScan: Run attestation
-
+    
     SecretScan->>Detector: Initialize with patterns
     Note over Detector: Gitleaks pattern matching
-
+    
     par Scan Products
         SecretScan->>Scanner: Scan product files
         Scanner->>Detector: Match patterns
@@ -69,10 +69,10 @@ sequenceDiagram
         end
         EnvScanner-->>SecretScan: Return findings with encoding paths
     end
-
+    
     SecretScan->>SecretScan: Process all findings
     Note over SecretScan: Create DigestSet for each secret
-
+    
     alt Fail on Detection (--secretscan-fail-on-detection=true)
         SecretScan->>Aflock: Return error with secret count
         Aflock->>User: Exit with non-zero code
@@ -89,7 +89,6 @@ The attestor enhances Gitleaks' default rule set with custom rules based on the 
 **Important:** The environment variable scanning specifically looks for the **values** of sensitive environment variables that might have leaked into files, attestations, or other content. This differs from traditional secret scanning, which typically looks for patterns that match known secret formats. By examining actual environment variable values, the attestor can detect real secrets that have leaked from your environment, whether in plain text form or through various encoding methods.
 
 The scanning process examines:
-
 1. **All product files** - Source code, config files, build artifacts, etc.
 2. **Attestation data** - JSON representations of attestor results
 3. **Command outputs** - Stdout/stderr from command run attestors
@@ -99,14 +98,14 @@ For each location, it searches for the actual values of sensitive environment va
 
 ## Configuration Options
 
-| Option               | Default | Description                                                                |
-| -------------------- | ------- | -------------------------------------------------------------------------- |
-| `fail-on-detection`  | `false` | If true, the attestation process will fail if secrets are detected         |
-| `max-file-size-mb`   | `10`    | Maximum file size in MB to scan (prevents resource exhaustion)             |
-| `config-path`        | `""`    | Path to custom Gitleaks configuration file in TOML format                  |
-| `allowlist-regex`    | `""`    | Regex pattern for content to ignore (can be specified multiple times)      |
-| `allowlist-stopword` | `""`    | Specific string to ignore (can be specified multiple times)                |
-| `max-decode-layers`  | `3`     | Maximum number of encoding layers to decode (prevents resource exhaustion) |
+| Option | Default | Description |
+|--------|---------|-------------|
+| `fail-on-detection` | `false` | If true, the attestation process will fail if secrets are detected |
+| `max-file-size-mb` | `10` | Maximum file size in MB to scan (prevents resource exhaustion) |
+| `config-path` | `""` | Path to custom Gitleaks configuration file in TOML format |
+| `allowlist-regex` | `""` | Regex pattern for content to ignore (can be specified multiple times) |
+| `allowlist-stopword` | `""` | Specific string to ignore (can be specified multiple times) |
+| `max-decode-layers` | `3` | Maximum number of encoding layers to decode (prevents resource exhaustion) |
 
 > **Important Note on Allowlists**: When `config-path` is provided, the `allowlist-regex` and `allowlist-stopword` options are ignored. All allowlisting must be defined within the Gitleaks TOML configuration file. The `max-file-size-mb` setting still applies and will override any value in the TOML configuration.
 
@@ -198,7 +197,7 @@ The attestor has a powerful capability to detect sensitive environment variable 
    - For each layer of decoded content, it searches for sensitive environment variable values
 
 2. **Encoding Path Tracking:**
-   - When an encoded secret is found, the attestor records the exact "encoding path"
+   - When an encoded secret is found, the attestor records the exact "encoding path" 
    - For example, if a secret was base64-encoded and then hex-encoded, the path would be `["hex", "base64"]`
    - This helps identify how secrets were obfuscated
 
@@ -316,7 +315,6 @@ Encoded token: Z2hwXzAxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OQ==
 ```
 
 The attestor will:
-
 1. Detect the base64-encoded content
 2. Decode it to `ghp_012345678901234567890123456789`
 3. Recognize this as the value of the sensitive `GITHUB_TOKEN` environment variable
@@ -340,7 +338,7 @@ The attestor will:
 For multi-layer encoded environment variables like a double base64-encoded GitHub token:
 
 ```
-# This is deeply hidden
+# This is deeply hidden 
 WjJod1h6QXhNak0wTlRZM09Ea3dNVEl6TkRVMk56ZzVNREV5TXpRMU5qYzRPUT09
 ```
 
@@ -350,7 +348,7 @@ The attestor will recursively decode and detect it:
 {
   "ruleId": "witness-encoded-env-value-GITHUB-TOKEN",
   "description": "Encoded sensitive environment variable value detected: GITHUB_TOKEN",
-  "location": "product:/path/to/file.txt",
+  "location": "product:/path/to/file.txt", 
   "startLine": 2,
   "secret": {
     "SHA-256": "5d0b11a2c18800ccab20d01a60a9e58c535cc7da7f4cf582ace05aca9c8757dd"
@@ -382,7 +380,9 @@ The attestor will detect and decode it:
   },
   "match": "GITHUB_T...23456789",
   "entropy": 3.6889665,
-  "encodingPath": ["base64"],
+  "encodingPath": [
+    "base64"
+  ],
   "locationApproximate": true
 }
 ```
@@ -407,7 +407,10 @@ The attestor will recursively decode and detect it:
     "SHA-256": "5d0b11a2c18800ccab20d01a60a9e58c535cc7da7f4cf582ace05aca9c8757dd"
   },
   "match": "HUB_TOKEN=[REDACTED]",
-  "encodingPath": ["base64", "base64"],
+  "encodingPath": [
+    "base64",
+    "base64"
+  ],
   "locationApproximate": true
 }
 ```
@@ -428,20 +431,19 @@ The secretscan attestor includes these key features:
 
 The attestor produces findings with the following fields:
 
-| Field                 | Description                                                   |
-| --------------------- | ------------------------------------------------------------- |
-| `ruleId`              | Identifier of the rule that triggered the finding             |
-| `description`         | Human-readable description of the secret type                 |
-| `location`            | Where the secret was found (product path or attestation name) |
-| `startLine`           | Line number where the secret was found (if available)         |
-| `secret`              | DigestSet containing cryptographic hashes of the secret       |
-| `match`               | Redacted context around the detected secret                   |
-| `entropy`             | Entropy score of the secret (if calculated)                   |
-| `encodingPath`        | Array listing all encoding layers detected (if encoded)       |
-| `locationApproximate` | Boolean flag indicating if the location is approximate        |
+| Field | Description |
+|-------|-------------|
+| `ruleId` | Identifier of the rule that triggered the finding |
+| `description` | Human-readable description of the secret type |
+| `location` | Where the secret was found (product path or attestation name) |
+| `startLine` | Line number where the secret was found (if available) |
+| `secret` | DigestSet containing cryptographic hashes of the secret |
+| `match` | Redacted context around the detected secret |
+| `entropy` | Entropy score of the secret (if calculated) |
+| `encodingPath` | Array listing all encoding layers detected (if encoded) |
+| `locationApproximate` | Boolean flag indicating if the location is approximate |
 
 The `location` field clearly identifies where the secret was found:
-
 - `product:/path/to/file.txt` - For secrets found in products
 - `attestation:attestor-name` - For secrets found in attestations
 

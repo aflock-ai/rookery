@@ -27,7 +27,6 @@ cd plugins/attestors/git && GOWORK=off go test ./...
 ## Versioning
 
 Path-prefixed tags (standard Go multi-module convention):
-
 ```
 attestation/v0.1.0
 plugins/attestors/git/v0.1.0

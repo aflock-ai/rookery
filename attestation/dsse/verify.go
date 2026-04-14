@@ -166,8 +166,8 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 					failedTimestampVerifiers := []timestamp.TimestampVerifier{}
 
 					fmt.Fprintf(os.Stderr, "[dsse-verify] cert subject=%q issuer=%q notAfter=%s sigTimestamps=%d\n",
-					cert.Subject.CommonName, cert.Issuer.CommonName, cert.NotAfter.Format(time.RFC3339), len(sig.Timestamps))
-				for _, timestampVerifier := range options.timestampVerifiers {
+						cert.Subject.CommonName, cert.Issuer.CommonName, cert.NotAfter.Format(time.RFC3339), len(sig.Timestamps))
+					for _, timestampVerifier := range options.timestampVerifiers {
 						for _, sigTimestamp := range sig.Timestamps {
 							tsTime, err := timestampVerifier.Verify(context.TODO(), bytes.NewReader(sigTimestamp.Data), bytes.NewReader(sig.Signature))
 							if err != nil {
