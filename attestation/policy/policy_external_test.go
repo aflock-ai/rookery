@@ -60,9 +60,13 @@ func newECDSAVerifier(t *testing.T) (cryptoutil.Verifier, string) {
 // mkExternalEnvelope builds a StatementEnvelope with a RawAttestation
 // wrapping the predicate JSON. The envelope has the provided Verifiers
 // pre-populated — tests feed this directly into mockVerifiedSource so the
-// DSSE signature verification step is bypassed.
-func mkExternalEnvelope(t *testing.T, predicateType string, subjectDigest string, predicate json.RawMessage, verifiers ...cryptoutil.Verifier) source.StatementEnvelope {
+// DSSE signature verification step is bypassed. The subject digest is
+// hardcoded because every caller uses the same canonical value (the
+// policy is seeded with it). Callers that need multi-subject envelopes
+// construct the Statement inline (see test 16).
+func mkExternalEnvelope(t *testing.T, predicateType string, predicate json.RawMessage, verifiers ...cryptoutil.Verifier) source.StatementEnvelope {
 	t.Helper()
+	const subjectDigest = "sha256:artifact"
 	stmt := intoto.Statement{
 		Type:          intoto.StatementType,
 		PredicateType: predicateType,
@@ -74,13 +78,12 @@ func mkExternalEnvelope(t *testing.T, predicateType string, subjectDigest string
 	payload, err := json.Marshal(stmt)
 	require.NoError(t, err)
 
-	ref := predicateType + "-" + subjectDigest
 	return source.StatementEnvelope{
 		Envelope:  dsse.Envelope{Payload: payload, PayloadType: intoto.PayloadType},
 		Statement: stmt,
 		Attestor:  attestation.NewRawAttestation(predicateType, predicate),
 		Verifiers: verifiers,
-		Reference: ref,
+		Reference: predicateType + "-" + subjectDigest,
 	}
 }
 
@@ -151,26 +154,13 @@ var failingVSAPredicate = json.RawMessage(`{
     "verificationResult": "FAILED"
 }`)
 
-// newExternalAwareMockSource wires both step and predicate-based results
-// into a single mock so verifyExternalAttestations + verifySteps coexist.
-func newExternalAwareMockSource(stepResults []source.CollectionVerificationResult, externalByPred map[string][]source.StatementEnvelope) *stepAwareVerifiedSource {
-	byStep := map[string][]source.CollectionVerificationResult{}
-	if len(stepResults) > 0 {
-		byStep["__any__"] = stepResults
-	}
-	return &stepAwareVerifiedSource{
-		byStep:      byStep,
-		byPredicate: externalByPred,
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Test 1: SLSA provenance external, rego accepts → pass
 // ---------------------------------------------------------------------------
 
 func TestExternal_01_SLSAProvenanceAccepted(t *testing.T) {
 	verifier, keyID := newECDSAVerifier(t)
-	envelope := mkExternalEnvelope(t, slsaProvenanceV1PredicateType, "sha256:artifact", passingSLSAPredicate, verifier)
+	envelope := mkExternalEnvelope(t, slsaProvenanceV1PredicateType, passingSLSAPredicate, verifier)
 
 	p := Policy{
 		Expires: futureExpiry(),
@@ -298,7 +288,7 @@ func TestExternal_03_OptionalNoMatchPasses(t *testing.T) {
 
 func TestExternal_04_VSAPassed(t *testing.T) {
 	verifier, keyID := newECDSAVerifier(t)
-	envelope := mkExternalEnvelope(t, vsaPredicateType, "sha256:artifact", passingVSAPredicate, verifier)
+	envelope := mkExternalEnvelope(t, vsaPredicateType, passingVSAPredicate, verifier)
 
 	p := Policy{
 		Expires: futureExpiry(),
@@ -341,7 +331,7 @@ func TestExternal_04_VSAPassed(t *testing.T) {
 
 func TestExternal_05_VSAFailedRegoDenies(t *testing.T) {
 	verifier, keyID := newECDSAVerifier(t)
-	envelope := mkExternalEnvelope(t, vsaPredicateType, "sha256:artifact", failingVSAPredicate, verifier)
+	envelope := mkExternalEnvelope(t, vsaPredicateType, failingVSAPredicate, verifier)
 
 	p := Policy{
 		Expires: futureExpiry(),
@@ -382,7 +372,7 @@ func TestExternal_06_WrongFunctionary(t *testing.T) {
 	signingVerifier, _ := newECDSAVerifier(t)
 	_, otherKeyID := newECDSAVerifier(t)
 
-	envelope := mkExternalEnvelope(t, slsaProvenanceV1PredicateType, "sha256:artifact", passingSLSAPredicate, signingVerifier)
+	envelope := mkExternalEnvelope(t, slsaProvenanceV1PredicateType, passingSLSAPredicate, signingVerifier)
 
 	p := Policy{
 		Expires: futureExpiry(),
@@ -489,7 +479,7 @@ func TestExternal_07_SubjectMismatch(t *testing.T) {
 
 func TestExternal_08_BothStepsAndExternalsPass(t *testing.T) {
 	verifier, keyID := newECDSAVerifier(t)
-	envelope := mkExternalEnvelope(t, slsaProvenanceV1PredicateType, "sha256:artifact", passingSLSAPredicate, verifier)
+	envelope := mkExternalEnvelope(t, slsaProvenanceV1PredicateType, passingSLSAPredicate, verifier)
 
 	buildAttType := "https://example.com/build-att/v1"
 	buildColl := attestation.Collection{
@@ -547,7 +537,7 @@ func TestExternal_08_BothStepsAndExternalsPass(t *testing.T) {
 
 func TestExternal_09_TwoExternalsSamePredicateDifferentRego(t *testing.T) {
 	verifier, keyID := newECDSAVerifier(t)
-	envelope := mkExternalEnvelope(t, slsaProvenanceV1PredicateType, "sha256:artifact", passingSLSAPredicate, verifier)
+	envelope := mkExternalEnvelope(t, slsaProvenanceV1PredicateType, passingSLSAPredicate, verifier)
 
 	// First rego accepts; second rego always denies.
 	regoAlwaysDeny := []byte(`
@@ -615,7 +605,7 @@ deny[msg] { msg := "always" }
 
 func TestExternal_10_TimestampAuthorityEnvelope(t *testing.T) {
 	verifier, keyID := newECDSAVerifier(t)
-	envelope := mkExternalEnvelope(t, slsaProvenanceV1PredicateType, "sha256:artifact", passingSLSAPredicate, verifier)
+	envelope := mkExternalEnvelope(t, slsaProvenanceV1PredicateType, passingSLSAPredicate, verifier)
 
 	p := Policy{
 		Expires: futureExpiry(),
@@ -653,7 +643,7 @@ func TestExternal_10_TimestampAuthorityEnvelope(t *testing.T) {
 
 func TestExternal_11_StepReadsExternalContext(t *testing.T) {
 	verifier, keyID := newECDSAVerifier(t)
-	envelope := mkExternalEnvelope(t, vsaPredicateType, "sha256:artifact", passingVSAPredicate, verifier)
+	envelope := mkExternalEnvelope(t, vsaPredicateType, passingVSAPredicate, verifier)
 
 	buildAttType := "https://example.com/build-att/v1"
 	buildColl := attestation.Collection{
@@ -746,7 +736,7 @@ func TestExternal_13_RawAttestationFallback(t *testing.T) {
 	verifier, keyID := newECDSAVerifier(t)
 	const unknownPred = "https://example.com/custom-unregistered/v1"
 	predicate := json.RawMessage(`{"hello":"world","n":42}`)
-	envelope := mkExternalEnvelope(t, unknownPred, "sha256:artifact", predicate, verifier)
+	envelope := mkExternalEnvelope(t, unknownPred, predicate, verifier)
 
 	regoAcceptIfHello := []byte(`
 package test
@@ -870,7 +860,7 @@ func TestExternal_15_ExternalVerifiedBeforeReferencingStep(t *testing.T) {
 	// using a rego that asserts input.external is always populated by the
 	// time the step's rego fires.
 	verifier, keyID := newECDSAVerifier(t)
-	envelope := mkExternalEnvelope(t, vsaPredicateType, "sha256:artifact", passingVSAPredicate, verifier)
+	envelope := mkExternalEnvelope(t, vsaPredicateType, passingVSAPredicate, verifier)
 
 	buildAttType := "https://example.com/build-att/v1"
 	buildColl := attestation.Collection{
@@ -1101,17 +1091,3 @@ func (a *concreteTypedAttestor) MarshalJSON() ([]byte, error) {
 		RunDetails:      a.RunDetails,
 	})
 }
-
-// typedExternalAttestor is a helper attestor for test 14.
-type typedExternalAttestor struct {
-	predicateType string
-	data          interface{}
-}
-
-func (a *typedExternalAttestor) Name() string                                   { return "typed-external-test" }
-func (a *typedExternalAttestor) Type() string                                   { return a.predicateType }
-func (a *typedExternalAttestor) RunType() attestation.RunType                   { return attestation.VerifyRunType }
-func (a *typedExternalAttestor) Attest(_ *attestation.AttestationContext) error { return nil }
-func (a *typedExternalAttestor) Schema() *jsonschema.Schema                     { return nil }
-func (a *typedExternalAttestor) UnmarshalJSON(b []byte) error                   { return json.Unmarshal(b, &a.data) }
-func (a *typedExternalAttestor) MarshalJSON() ([]byte, error)                   { return json.Marshal(a.data) }

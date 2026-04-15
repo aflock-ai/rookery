@@ -2217,7 +2217,11 @@ func (s *stepAwareVerifiedSource) Search(_ context.Context, stepName string, _ [
 }
 
 func (s *stepAwareVerifiedSource) SearchByPredicateType(_ context.Context, predicateTypes []string, _ []string) ([]source.StatementEnvelope, error) {
-	out := []source.StatementEnvelope{}
+	total := 0
+	for _, pt := range predicateTypes {
+		total += len(s.byPredicate[pt])
+	}
+	out := make([]source.StatementEnvelope, 0, total)
 	for _, pt := range predicateTypes {
 		out = append(out, s.byPredicate[pt]...)
 	}

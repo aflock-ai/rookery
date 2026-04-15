@@ -354,38 +354,8 @@ func buildStepRegoContext(step Step, resultsByStep map[string]StepResult, extern
 		}
 	}
 
-	if len(step.ExternalFrom) > 0 {
-		external := make(map[string]interface{})
-		for _, name := range step.ExternalFrom {
-			er, ok := externalResults[name]
-			if !ok || len(er.Passed) == 0 {
-				// Skipped externals or externals with no passed envelopes
-				// are omitted so Rego `not input.external.<name>` fires.
-				continue
-			}
-			// Serialize the first passed envelope's attestor to JSON and
-			// decode as generic JSON so Rego can traverse it.
-			first := er.Passed[0]
-			if first.Envelope.Attestor == nil {
-				continue
-			}
-			b, err := json.Marshal(first.Envelope.Attestor)
-			if err != nil {
-				log.Debugf("step %s: failed to marshal external attestor %q: %v", step.Name, name, err)
-				continue
-			}
-			var data interface{}
-			dec := json.NewDecoder(bytes.NewReader(b))
-			dec.UseNumber()
-			if err := dec.Decode(&data); err != nil {
-				log.Debugf("step %s: failed to decode external attestor %q: %v", step.Name, name, err)
-				continue
-			}
-			external[name] = data
-		}
-		if len(external) > 0 {
-			ctx[externalAttestationsContextKey] = external
-		}
+	if external := collectExternalRegoContext(step, externalResults); len(external) > 0 {
+		ctx[externalAttestationsContextKey] = external
 	}
 
 	if len(ctx) == 0 {
@@ -394,6 +364,53 @@ func buildStepRegoContext(step Step, resultsByStep map[string]StepResult, extern
 		return map[string]interface{}{}
 	}
 	return ctx
+}
+
+// collectExternalRegoContext resolves each step.ExternalFrom entry to a
+// JSON-decoded map suitable for inclusion under input.external.<name>.
+// Missing/empty/error entries are silently skipped so Rego's
+// `not input.external.<name>` fires as designed.
+func collectExternalRegoContext(step Step, externalResults map[string]ExternalResult) map[string]interface{} {
+	if len(step.ExternalFrom) == 0 {
+		return nil
+	}
+	external := make(map[string]interface{}, len(step.ExternalFrom))
+	for _, name := range step.ExternalFrom {
+		data, ok := externalAttestorAsJSON(step, name, externalResults)
+		if !ok {
+			continue
+		}
+		external[name] = data
+	}
+	return external
+}
+
+// externalAttestorAsJSON returns the JSON-decoded form of the first passed
+// envelope's attestor for the named external. Returns ok=false when the
+// external is missing, has no passes, has a nil attestor, or fails to
+// marshal/decode.
+func externalAttestorAsJSON(step Step, name string, externalResults map[string]ExternalResult) (interface{}, bool) {
+	er, ok := externalResults[name]
+	if !ok || len(er.Passed) == 0 {
+		return nil, false
+	}
+	first := er.Passed[0]
+	if first.Envelope.Attestor == nil {
+		return nil, false
+	}
+	b, err := json.Marshal(first.Envelope.Attestor)
+	if err != nil {
+		log.Debugf("step %s: failed to marshal external attestor %q: %v", step.Name, name, err)
+		return nil, false
+	}
+	var data interface{}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	if err := dec.Decode(&data); err != nil {
+		log.Debugf("step %s: failed to decode external attestor %q: %v", step.Name, name, err)
+		return nil, false
+	}
+	return data, true
 }
 
 // externalAttestationsContextKey is a reserved map key used to carry the
