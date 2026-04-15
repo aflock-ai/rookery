@@ -16,10 +16,13 @@ package source
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"fmt"
 	"sync"
 
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/archivista"
+	"github.com/aflock-ai/rookery/attestation/intoto"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -95,14 +98,84 @@ func (s *ArchivistaSource) Search(ctx context.Context, collectionName string, su
 	return envelopes, nil
 }
 
-// SearchByPredicateType is a scaffold stub — the real implementation is a
-// follow-up PR that will issue an Archivista GraphQL query of the form
-// hasStatementWith.predicateIn:[...] + hasSubjectsWith.valueIn:[...]
-// (see go-witness issue #595). Returning an explicit error here keeps the
-// Sourcer interface contract honest until the query + download plumbing
-// lands.
+// SearchByPredicateType queries Archivista for DSSE envelopes whose statement
+// predicateType is in predicateTypes AND whose subjects intersect
+// subjectDigests. Each matched envelope is downloaded, parsed into an
+// intoto.Statement, and wrapped in a StatementEnvelope with either a typed
+// attestor (from the registered factory) or a RawAttestation fallback.
 //
-// TODO(#39): implement external-attestation search against Archivista.
-func (s *ArchivistaSource) SearchByPredicateType(_ context.Context, _ []string, _ []string) ([]StatementEnvelope, error) {
-	return nil, errors.New("ArchivistaSource.SearchByPredicateType: not implemented")
+// No DSSE signature verification happens here — verification is the caller's
+// responsibility via Functionary.Validate on StatementEnvelope.Verifiers.
+// This implementation returns an empty Verifiers slice; the policy engine's
+// external-attestation flow performs its own verification.
+//
+// See issue #39.
+func (s *ArchivistaSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
+	s.mu.Lock()
+	excludeGitoids := make([]string, len(s.seenGitoids))
+	copy(excludeGitoids, s.seenGitoids)
+	s.mu.Unlock()
+
+	gitoids, err := s.client.SearchGitoidsByPredicate(ctx, archivista.SearchGitoidByPredicateVariables{
+		PredicateTypes: predicateTypes,
+		SubjectDigests: subjectDigests,
+		ExcludeGitoids: excludeGitoids,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	envelopes := make([]StatementEnvelope, 0, len(gitoids))
+	processedGitoids := make([]string, 0, len(gitoids))
+	for _, gitoid := range gitoids {
+		env, err := s.client.Download(ctx, gitoid)
+		if err != nil {
+			log.Debugf("archivista source: SearchByPredicateType skipping gitoid %s: download failed: %v", gitoid, err)
+			processedGitoids = append(processedGitoids, gitoid)
+			continue
+		}
+
+		se := StatementEnvelope{
+			Envelope:  env,
+			Reference: gitoid,
+		}
+
+		if len(env.Payload) == 0 {
+			se.Errors = append(se.Errors, fmt.Errorf("envelope %s has empty payload", gitoid))
+			envelopes = append(envelopes, se)
+			processedGitoids = append(processedGitoids, gitoid)
+			continue
+		}
+
+		stmt := intoto.Statement{}
+		if err := json.Unmarshal(env.Payload, &stmt); err != nil {
+			se.Errors = append(se.Errors, fmt.Errorf("envelope %s: failed to unmarshal statement: %w", gitoid, err))
+			envelopes = append(envelopes, se)
+			processedGitoids = append(processedGitoids, gitoid)
+			continue
+		}
+
+		se.Statement = stmt
+
+		if factory, ok := attestation.FactoryByType(stmt.PredicateType); ok {
+			typed := factory()
+			if err := json.Unmarshal(stmt.Predicate, typed); err != nil {
+				se.Errors = append(se.Errors, fmt.Errorf("typed factory unmarshal failed for %s, falling back to raw: %w", stmt.PredicateType, err))
+				se.Attestor = attestation.NewRawAttestation(stmt.PredicateType, stmt.Predicate)
+			} else {
+				se.Attestor = typed
+			}
+		} else {
+			se.Attestor = attestation.NewRawAttestation(stmt.PredicateType, stmt.Predicate)
+		}
+
+		envelopes = append(envelopes, se)
+		processedGitoids = append(processedGitoids, gitoid)
+	}
+
+	s.mu.Lock()
+	s.seenGitoids = append(s.seenGitoids, processedGitoids...)
+	s.mu.Unlock()
+
+	return envelopes, nil
 }
