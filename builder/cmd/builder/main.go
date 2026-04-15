@@ -80,6 +80,7 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/attestors/slsa",
 		"github.com/aflock-ai/rookery/plugins/attestors/system-packages",
 		"github.com/aflock-ai/rookery/plugins/attestors/vex",
+		"github.com/aflock-ai/rookery/plugins/attestors/vsa",
 		"github.com/aflock-ai/rookery/plugins/signers/debug-signer",
 		"github.com/aflock-ai/rookery/plugins/signers/file",
 		"github.com/aflock-ai/rookery/plugins/signers/fulcio",

@@ -82,3 +82,59 @@ func (s *MultiSource) Search(ctx context.Context, collectionName string, subject
 	// Return the combined results from all sources
 	return results, nil
 }
+
+// SearchByPredicateType concurrently fans out to every sub-source and merges
+// their results. An error from any sub-source aborts the combined search;
+// this matches the conservative behavior of Search above. Sub-sources that
+// have not yet implemented SearchByPredicateType (e.g. ArchivistaSource in
+// the scaffold PR) will propagate their "not implemented" error — callers
+// wiring MultiSource into external-attestation verification should be aware
+// of that until the follow-up PRs land.
+func (s *MultiSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) { //nolint:gocognit // mirrors Search's channels + WaitGroup fan-out; flattening loses parity with the existing pattern
+	results := []StatementEnvelope{}
+	errs := []error{}
+
+	errCh := make(chan error)
+	resCh := make(chan []StatementEnvelope)
+	errDone := make(chan bool)
+	resDone := make(chan bool)
+
+	go func() {
+		for item := range resCh {
+			results = append(results, item...)
+		}
+		resDone <- true
+	}()
+
+	go func() {
+		for err := range errCh {
+			errs = append(errs, err)
+		}
+		errDone <- true
+	}()
+
+	var wg sync.WaitGroup
+	for _, src := range s.sources {
+		wg.Add(1)
+		go func(src Sourcer) {
+			defer wg.Done()
+			res, err := src.SearchByPredicateType(ctx, predicateTypes, subjectDigests)
+			if err != nil {
+				errCh <- err
+			} else {
+				resCh <- res
+			}
+		}(src)
+	}
+	wg.Wait()
+	close(resCh)
+	close(errCh)
+
+	<-errDone
+	<-resDone
+
+	if len(errs) > 0 {
+		return nil, errs[0]
+	}
+	return results, nil
+}

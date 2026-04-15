@@ -52,6 +52,7 @@ use (
 	./plugins/attestors/slsa
 	./plugins/attestors/system-packages
 	./plugins/attestors/vex
+	./plugins/attestors/vsa
 	./plugins/attestors/pip-install
 	./plugins/attestors/sinkhole-flows
 

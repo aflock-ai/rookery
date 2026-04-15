@@ -33,6 +33,25 @@ type Step struct {
 	Attestations     []Attestation `json:"attestations" jsonschema:"title=Attestations,description=Required attestation types and their associated policies"`
 	ArtifactsFrom    []string      `json:"artifactsFrom,omitempty" jsonschema:"title=Artifacts From,description=Other step names whose products must match this step's materials"`
 	AttestationsFrom []string      `json:"attestationsFrom,omitempty" jsonschema:"title=Attestations From,description=Other step names whose attestation data is accessible during Rego evaluation"`
+	ExternalFrom     []string      `json:"externalFrom,omitempty" jsonschema:"title=External From,description=Names of external attestations (from Policy.ExternalAttestations) whose predicates are accessible during Rego evaluation as input.external.<name>"`
+}
+
+// ExternalAttestation describes a bare-predicate DSSE envelope (non-Collection)
+// that the policy engine verifies as first-class evidence alongside step
+// collections. External attestations are matched by predicate type + policy
+// seed subjects, validated against their own Functionaries and RegoPolicies,
+// and do NOT participate in the Collection subject-graph / BackRef traversal.
+//
+// See issue #39 for the full design.
+//
+// +kubebuilder:object:generate=true
+type ExternalAttestation struct {
+	Name          string        `json:"name" jsonschema:"title=Name,description=Unique name for this external attestation; referenced by Step.ExternalFrom"`
+	PredicateType string        `json:"predicateType" jsonschema:"title=Predicate Type,description=Statement predicateType URI to match (e.g. https://slsa.dev/provenance/v1)"`
+	Functionaries []Functionary `json:"functionaries" jsonschema:"title=Functionaries,description=Authorized signers for this external attestation"`
+	RegoPolicies  []RegoPolicy  `json:"regopolicies,omitempty" jsonschema:"title=Rego Policies,description=Rego policies evaluated against the bare predicate (input is the predicate itself)"`
+	AiPolicies    []AiPolicy    `json:"aipolicies,omitempty" jsonschema:"title=AI Policies,description=AI policies evaluated against the bare predicate"`
+	Required      bool          `json:"required" jsonschema:"title=Required,description=When true (default), verification fails if no envelope matches; when false, absence is tolerated"`
 }
 
 // +kubebuilder:object:generate=true
@@ -140,6 +159,77 @@ type RejectedCollection struct {
 	AiResponses []AiResponse `json:"AiResponses,omitempty"`
 }
 
+// ExternalResult contains information about verified external attestations
+// for a single Policy.ExternalAttestations entry. Mirrors StepResult but
+// carries StatementEnvelopes (bare predicate DSSEs) instead of Collections.
+//
+// Passed contains envelopes whose functionary matched and whose Rego/AI
+// policies all succeeded. Rejected captures mismatches with the reason.
+// Skipped is true when the external attestation was not required and no
+// matching envelope was found — a legitimate "pass" that nevertheless
+// contributes nothing to downstream Rego input.
+type ExternalResult struct {
+	Name     string
+	Passed   []PassedExternal
+	Rejected []RejectedExternal
+	Skipped  bool
+}
+
+// PassedExternal holds an external attestation envelope that passed
+// functionary and rego/AI policy evaluation.
+type PassedExternal struct {
+	Envelope    source.StatementEnvelope
+	AiResponses []AiResponse `json:"AiResponses,omitempty"`
+}
+
+// MarshalJSON implements json.Marshaler for PassedExternal.
+func (p PassedExternal) MarshalJSON() ([]byte, error) {
+	return json.Marshal(&struct {
+		Envelope    source.StatementEnvelope `json:"Envelope"`
+		AiResponses []AiResponse             `json:"AiResponses,omitempty"`
+	}{
+		Envelope:    p.Envelope,
+		AiResponses: p.AiResponses,
+	})
+}
+
+// RejectedExternal holds an external attestation envelope that failed
+// verification along with the reason.
+type RejectedExternal struct {
+	Envelope    source.StatementEnvelope
+	Reason      error
+	AiResponses []AiResponse `json:"AiResponses,omitempty"`
+}
+
+// MarshalJSON implements json.Marshaler for RejectedExternal so that the
+// Reason field (an error interface) serializes to a useful string instead
+// of `{}`.
+func (r RejectedExternal) MarshalJSON() ([]byte, error) {
+	var reasonStr string
+	if r.Reason != nil {
+		reasonStr = r.Reason.Error()
+	}
+	return json.Marshal(&struct {
+		Envelope    source.StatementEnvelope `json:"Envelope"`
+		Reason      string                   `json:"Reason"`
+		AiResponses []AiResponse             `json:"AiResponses,omitempty"`
+	}{
+		Envelope:    r.Envelope,
+		Reason:      reasonStr,
+		AiResponses: r.AiResponses,
+	})
+}
+
+// Analyze returns true iff the external attestation is considered satisfied.
+// A Skipped (not-required, not-found) external passes. An external with at
+// least one Passed envelope passes. Anything else fails.
+func (r ExternalResult) Analyze() bool {
+	if r.Skipped {
+		return true
+	}
+	return len(r.Passed) > 0
+}
+
 // MarshalJSON implements the json.Marshaler interface to properly serialize the Reason field
 // which is an error interface that would otherwise serialize to an empty object {}
 func (r RejectedCollection) MarshalJSON() ([]byte, error) {
@@ -229,6 +319,105 @@ func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepRe
 	}
 	return ctx
 }
+
+// buildStepRegoContext combines buildStepContext (for AttestationsFrom) and
+// an external-attestation context (for ExternalFrom) into the shape the
+// policy engine hands to Rego. When neither *From list is set this returns
+// nil so that backward-compatible input = raw attestor JSON applies.
+//
+// When any *From list is non-empty, the returned map is the union of:
+//   - cross-step context under the map itself (consumed by EvaluateRegoPolicy
+//     which wraps it under input.steps.<name>.<type>)
+//   - external-attestation entries under the magic key
+//     externalAttestationsContextKey so EvaluateRegoPolicy can lift them to
+//     input.external.<name>.
+//
+// The external value for a given name is the first Passed envelope's
+// attestor marshaled to JSON. When the external was Skipped or has no
+// Passed envelope, its entry is omitted so Rego `not input.external.x`
+// works as expected.
+func buildStepRegoContext(step Step, resultsByStep map[string]StepResult, externalResults map[string]ExternalResult) map[string]interface{} {
+	if len(step.AttestationsFrom) == 0 && len(step.ExternalFrom) == 0 {
+		return nil
+	}
+
+	ctx := make(map[string]interface{})
+
+	if len(step.AttestationsFrom) > 0 {
+		if err := checkDependencies(step.AttestationsFrom, resultsByStep); err != nil {
+			log.Debugf("step %s: dependency not yet verified: %v", step.Name, err)
+		} else {
+			stepCtx := buildStepContext(step.AttestationsFrom, resultsByStep)
+			for k, v := range stepCtx {
+				ctx[k] = v
+			}
+		}
+	}
+
+	if external := collectExternalRegoContext(step, externalResults); len(external) > 0 {
+		ctx[externalAttestationsContextKey] = external
+	}
+
+	if len(ctx) == 0 {
+		// Non-nil empty context so Rego cross-step rules still fire (same
+		// reasoning as verifySteps' empty stepCtx fallback).
+		return map[string]interface{}{}
+	}
+	return ctx
+}
+
+// collectExternalRegoContext resolves each step.ExternalFrom entry to a
+// JSON-decoded map suitable for inclusion under input.external.<name>.
+// Missing/empty/error entries are silently skipped so Rego's
+// `not input.external.<name>` fires as designed.
+func collectExternalRegoContext(step Step, externalResults map[string]ExternalResult) map[string]interface{} {
+	if len(step.ExternalFrom) == 0 {
+		return nil
+	}
+	external := make(map[string]interface{}, len(step.ExternalFrom))
+	for _, name := range step.ExternalFrom {
+		data, ok := externalAttestorAsJSON(step, name, externalResults)
+		if !ok {
+			continue
+		}
+		external[name] = data
+	}
+	return external
+}
+
+// externalAttestorAsJSON returns the JSON-decoded form of the first passed
+// envelope's attestor for the named external. Returns ok=false when the
+// external is missing, has no passes, has a nil attestor, or fails to
+// marshal/decode.
+func externalAttestorAsJSON(step Step, name string, externalResults map[string]ExternalResult) (interface{}, bool) {
+	er, ok := externalResults[name]
+	if !ok || len(er.Passed) == 0 {
+		return nil, false
+	}
+	first := er.Passed[0]
+	if first.Envelope.Attestor == nil {
+		return nil, false
+	}
+	b, err := json.Marshal(first.Envelope.Attestor)
+	if err != nil {
+		log.Debugf("step %s: failed to marshal external attestor %q: %v", step.Name, name, err)
+		return nil, false
+	}
+	var data interface{}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	if err := dec.Decode(&data); err != nil {
+		log.Debugf("step %s: failed to decode external attestor %q: %v", step.Name, name, err)
+		return nil, false
+	}
+	return data, true
+}
+
+// externalAttestationsContextKey is a reserved map key used to carry the
+// external-attestation context from buildStepRegoContext to
+// EvaluateRegoPolicy. It is not a valid step name (contains characters not
+// allowed in step names per the schema) so it cannot collide.
+const externalAttestationsContextKey = "__external__"
 
 // checkDependencies verifies that all steps listed in AttestationsFrom have
 // at least one passed collection in the results so far. Returns an error if any
