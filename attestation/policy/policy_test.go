@@ -543,6 +543,34 @@ func TestCheckFunctionaries_NoVerifiers(t *testing.T) {
 	assert.Contains(t, result.Rejected[0].Reason.Error(), "no verifiers present")
 }
 
+// TestCheckFunctionaries_NoCollectionsPlaceholder asserts that when Verify
+// forwards a placeholder CollectionVerificationResult carrying ErrNoCollections
+// (produced when the source returns zero matches for a step), checkFunctionaries
+// surfaces the underlying ErrNoCollections directly rather than the misleading
+// "predicate type  is not a collection predicate type" error the empty
+// statement would otherwise trigger. See aflock-ai/rookery#32.
+func TestCheckFunctionaries_NoCollectionsPlaceholder(t *testing.T) {
+	s := Step{Name: "build"}
+	cvr := source.CollectionVerificationResult{
+		Errors: []error{ErrNoCollections{Step: "build"}},
+	}
+
+	result := s.checkFunctionaries([]source.CollectionVerificationResult{cvr}, nil)
+	assert.Empty(t, result.Passed)
+	require.Len(t, result.Rejected, 1)
+
+	msg := result.Rejected[0].Reason.Error()
+	assert.Contains(t, msg, "no collections")
+	assert.Contains(t, msg, "build")
+	assert.NotContains(t, msg, "predicate type", "must not surface the misleading predicate-type error for the no-collections placeholder")
+
+	// The original typed error must still be retrievable for callers that
+	// errors.As() on the rejection reason.
+	var noColl ErrNoCollections
+	assert.True(t, errors.As(result.Rejected[0].Reason, &noColl), "Reason should wrap ErrNoCollections")
+	assert.Equal(t, "build", noColl.Step)
+}
+
 func TestCheckFunctionaries_WrongPredicateType(t *testing.T) {
 	s := Step{Name: "build"}
 	cvr := source.CollectionVerificationResult{

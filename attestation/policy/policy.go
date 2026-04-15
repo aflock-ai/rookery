@@ -523,6 +523,18 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 func (step Step) checkFunctionaries(statements []source.CollectionVerificationResult, trustBundles map[string]TrustBundle) StepResult { //nolint:gocognit
 	result := StepResult{Step: step.Name}
 	for i, statement := range statements {
+		// If the caller supplied a placeholder result carrying an authoritative
+		// error (e.g. ErrNoCollections when the source returned zero matches),
+		// surface that error directly instead of misclassifying the empty
+		// statement as a bad predicate type. The predicate-type check below
+		// would otherwise swallow the real reason and produce a misleading
+		// "predicate type  is not a collection predicate type" error.
+		if len(statement.Errors) > 0 && len(statement.Verifiers) == 0 && len(statement.Envelope.Payload) == 0 && statement.Statement.PredicateType == "" {
+			reason := errors.Join(statement.Errors...)
+			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statement, Reason: reason})
+			continue
+		}
+
 		// Check that the statement contains a predicate type that we accept.
 		// A statement with the wrong predicate type must be rejected and must
 		// NOT proceed to functionary validation — otherwise it could appear in
