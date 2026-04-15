@@ -252,7 +252,81 @@ func TestNonEmptyCommitHashIncludesSubject(t *testing.T) {
 	require.True(t, found, "Non-empty commit hash should produce a commithash subject")
 
 	backrefs := attestor.BackRefs()
-	require.Len(t, backrefs, 1, "Non-empty commit hash should produce one back ref")
+	require.Len(t, backrefs, 1, "Non-empty commit hash with no parents should produce exactly one back ref")
+}
+
+// TestParentHashSubjectUsesSha1 asserts that parenthash subjects are emitted
+// with the same sha1=<raw-commit-sha> encoding as commithash. Without this,
+// cilock subject-graph traversal cannot link a downstream collection's
+// parenthash to an upstream collection's commithash for the same commit.
+// Regression test for https://github.com/aflock-ai/rookery/issues/34.
+func TestParentHashSubjectUsesSha1(t *testing.T) {
+	parentSHA := "0123456789abcdef0123456789abcdef01234567"
+	attestor := &Attestor{
+		CommitHash:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ParentHashes: []string{parentSHA},
+	}
+
+	subjects := attestor.Subjects()
+	subjectName := fmt.Sprintf("parenthash:%v", parentSHA)
+	ds, ok := subjects[subjectName]
+	require.True(t, ok, "Expected parenthash subject to exist")
+	require.Len(t, ds, 1, "Expected exactly one digest for parenthash subject")
+
+	var sha1Found bool
+	for dv, val := range ds {
+		require.Equal(t, crypto.SHA1, dv.Hash, "parenthash digest must use SHA1, not SHA256")
+		require.False(t, dv.GitOID, "parenthash digest must not use GitOID encoding")
+		require.Equal(t, parentSHA, val, "parenthash digest value must be the raw parent commit SHA")
+		sha1Found = true
+	}
+	require.True(t, sha1Found, "Expected a SHA1 digest for the parenthash subject")
+}
+
+// TestCommitHashAndParentHashShareDigest is the core regression test for
+// issue #34: two collections referencing the same commit — one as its own
+// HEAD (commithash) and the other as its parent (parenthash) — MUST produce
+// byte-for-byte identical subject digests, otherwise cilock's subject-graph
+// traversal cannot connect them.
+func TestCommitHashAndParentHashShareDigest(t *testing.T) {
+	sharedCommit := "feedfacefeedfacefeedfacefeedfacefeedface"
+
+	upstream := &Attestor{
+		CommitHash: sharedCommit,
+	}
+	downstream := &Attestor{
+		CommitHash:   "cafebabecafebabecafebabecafebabecafebabe",
+		ParentHashes: []string{sharedCommit},
+	}
+
+	upstreamSubjects := upstream.Subjects()
+	downstreamSubjects := downstream.Subjects()
+
+	upstreamDigest, ok := upstreamSubjects[fmt.Sprintf("commithash:%v", sharedCommit)]
+	require.True(t, ok, "Expected upstream commithash subject to exist")
+
+	downstreamDigest, ok := downstreamSubjects[fmt.Sprintf("parenthash:%v", sharedCommit)]
+	require.True(t, ok, "Expected downstream parenthash subject to exist")
+
+	// The digest sets must be equal: same algorithm, same GitOID flag, same value.
+	require.Equal(
+		t,
+		upstreamDigest,
+		downstreamDigest,
+		"commithash and parenthash for the same commit must produce identical digest sets",
+	)
+
+	// BackRefs on the downstream collection must expose the parenthash too,
+	// so reverse-lookup from the downstream side finds the upstream.
+	downstreamBackRefs := downstream.BackRefs()
+	parentBackRef, ok := downstreamBackRefs[fmt.Sprintf("parenthash:%v", sharedCommit)]
+	require.True(t, ok, "Expected downstream BackRefs to include the parenthash entry")
+	require.Equal(
+		t,
+		upstreamDigest,
+		parentBackRef,
+		"downstream parenthash BackRef must match upstream commithash subject digest",
+	)
 }
 
 // Creates an ephemeral repo for your testing

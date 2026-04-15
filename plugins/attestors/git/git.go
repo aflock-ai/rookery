@@ -331,14 +331,22 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	}
 
 	// add parent hashes
+	// Use sha1=<raw parent commit SHA> — mirrors commithash encoding so that a
+	// downstream collection's parenthash subject digest matches the upstream
+	// collection's commithash subject digest for the same commit, enabling
+	// subject-graph traversal across the parent-commit linkage.
+	// See https://github.com/aflock-ai/rookery/issues/34.
 	for _, parentHash := range a.ParentHashes {
-		subjectName = fmt.Sprintf("parenthash:%v", parentHash)
-		ds, err = cryptoutil.CalculateDigestSetFromBytes([]byte(parentHash), hashes)
-		if err != nil {
-			log.Debugf("(attestation/git) failed to record parent hash subject: %v", err)
+		if parentHash == "" {
 			continue
 		}
-		subjects[subjectName] = ds
+		subjectName = fmt.Sprintf("parenthash:%v", parentHash)
+		subjects[subjectName] = cryptoutil.DigestSet{
+			{
+				Hash:   crypto.SHA1,
+				GitOID: false,
+			}: parentHash,
+		}
 	}
 
 	// add refname short
@@ -373,6 +381,23 @@ func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
 				Hash:   crypto.SHA1,
 				GitOID: false,
 			}: a.CommitHash,
+		}
+	}
+	// Include parenthash BackRefs with the same sha1 encoding as commithash.
+	// This way, given a downstream collection, the reverse-lookup surface
+	// exposes both "I am this commit" and "my parent is that commit" — so an
+	// upstream collection whose commithash matches any of our parenthashes is
+	// discoverable from the downstream side during BackRef expansion.
+	for _, parentHash := range a.ParentHashes {
+		if parentHash == "" {
+			continue
+		}
+		subjectName := fmt.Sprintf("parenthash:%v", parentHash)
+		backrefs[subjectName] = cryptoutil.DigestSet{
+			{
+				Hash:   crypto.SHA1,
+				GitOID: false,
+			}: parentHash,
 		}
 	}
 	return backrefs
