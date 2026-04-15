@@ -36,6 +36,9 @@ import (
 
 const (
 	MAX_PATH_LEN = 4096
+
+	afInet  = "AF_INET"
+	afInet6 = "AF_INET6"
 )
 
 type ptraceContext struct {
@@ -281,7 +284,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		procInfo.Network.Connections = append(procInfo.Network.Connections, *conn)
 
 		// Track TLS connections for SNI extraction on next write
-		if conn.Port == 443 && (conn.Family == "AF_INET" || conn.Family == "AF_INET6") {
+		if conn.Port == 443 && (conn.Family == afInet || conn.Family == afInet6) {
 			key := fmt.Sprintf("%d:%d", pid, conn.FD)
 			p.tlsPendingFDs[key] = len(procInfo.Network.Connections) - 1
 		}
@@ -335,6 +338,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 
 		// TLS SNI extraction: if this fd has a pending TLS connect, peek at
 		// the write buffer for a ClientHello and extract the SNI hostname.
+		//nolint:nestif // three-level nesting is the shape of the SNI lookup
 		if byteCount > 11 && byteCount < 16384 {
 			key := fmt.Sprintf("%d:%d", pid, fd)
 			if connIdx, ok := p.tlsPendingFDs[key]; ok {
@@ -594,7 +598,7 @@ func (p *ptraceContext) resolveFD(pid, fd int) string {
 // parseSockaddr reads a sockaddr struct from the traced process memory and
 // extracts the address family, IP/path, and port.
 func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr, syscallName string) (*NetworkConnection, error) {
-	size := int(addrLen)
+	size := int(addrLen) //nolint:gosec // kernel sockaddr length, bounded by the check below
 	if size < 2 || size > 128 {
 		return nil, fmt.Errorf("sockaddr size %d out of range", size)
 	}
@@ -628,7 +632,7 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 		}
 		port := binary.BigEndian.Uint16(data[2:4])
 		ip := net.IPv4(data[4], data[5], data[6], data[7])
-		conn.Family = "AF_INET"
+		conn.Family = afInet
 		conn.Address = ip.String()
 		conn.Port = int(port)
 
@@ -638,7 +642,7 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 		}
 		port := binary.BigEndian.Uint16(data[2:4])
 		ip := net.IP(data[8:24])
-		conn.Family = "AF_INET6"
+		conn.Family = afInet6
 		conn.Address = ip.String()
 		conn.Port = int(port)
 
@@ -662,9 +666,9 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 func socketFamilyName(family int) string {
 	switch family {
 	case unix.AF_INET:
-		return "AF_INET"
+		return afInet
 	case unix.AF_INET6:
-		return "AF_INET6"
+		return afInet6
 	case unix.AF_UNIX:
 		return "AF_UNIX"
 	case unix.AF_NETLINK:
@@ -791,18 +795,21 @@ func getSpecBypassIsVulnFromStatus(status []byte) bool {
 // The SNI is plaintext in the ClientHello — no decryption needed.
 //
 // TLS record layout:
-//   [0]     ContentType (0x16 = Handshake)
-//   [1:3]   Version
-//   [3:5]   Length
-//   [5]     HandshakeType (0x01 = ClientHello)
-//   [6:9]   Handshake length
-//   [9:11]  ClientHello version
-//   [11:43] Random (32 bytes)
-//   [43]    SessionID length → skip SessionID
-//   ...     CipherSuites length → skip
-//   ...     Compression length → skip
-//   ...     Extensions length
-//   ...     Extensions: look for type 0x0000 (SNI)
+//
+//	[0]     ContentType (0x16 = Handshake)
+//	[1:3]   Version
+//	[3:5]   Length
+//	[5]     HandshakeType (0x01 = ClientHello)
+//	[6:9]   Handshake length
+//	[9:11]  ClientHello version
+//	[11:43] Random (32 bytes)
+//	[43]    SessionID length → skip SessionID
+//	...     CipherSuites length → skip
+//	...     Compression length → skip
+//	...     Extensions length
+//	...     Extensions: look for type 0x0000 (SNI)
+//
+//nolint:gocognit,gocyclo,funlen // byte-level TLS ClientHello parse with bounds checks at every step
 func (p *ptraceContext) extractTLSSNI(pid int, bufPtr uintptr, bufLen int) string {
 	// Read up to 512 bytes — SNI is always in the first few hundred bytes
 	readLen := bufLen
@@ -874,6 +881,7 @@ func (p *ptraceContext) extractTLSSNI(pid int, bufPtr uintptr, bufLen int) strin
 		extLen := int(binary.BigEndian.Uint16(data[pos+2 : pos+4]))
 		pos += 4
 
+		//nolint:nestif // SNI-in-extensions parse — bounds checks dominate nesting
 		if extType == 0x0000 && extLen > 5 && pos+extLen <= extensionsEnd {
 			// SNI extension: list length (2) + type (1) + name length (2) + name
 			sniListLen := int(binary.BigEndian.Uint16(data[pos : pos+2]))
