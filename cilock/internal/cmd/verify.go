@@ -331,7 +331,7 @@ func writeVSAOutfile(path string, evidence workflow.VerifyResult, signers []cryp
 		if sErr != nil {
 			return fmt.Errorf("failed to marshal unsigned VSA statement: %w", sErr)
 		}
-		if wErr := os.WriteFile(path, stmtBytes, 0o600); wErr != nil {
+		if wErr := os.WriteFile(path, stmtBytes, 0o600); wErr != nil { //nolint:gosec // G304/G703: path is from --vsa-outfile CLI flag
 			return fmt.Errorf("failed to write VSA outfile: %w", wErr)
 		}
 		return nil
@@ -361,7 +361,7 @@ func writeVSAOutfile(path string, evidence workflow.VerifyResult, signers []cryp
 	if err != nil {
 		return fmt.Errorf("failed to marshal VSA envelope: %w", err)
 	}
-	if err := os.WriteFile(path, envBytes, 0o600); err != nil {
+	if err := os.WriteFile(path, envBytes, 0o600); err != nil { //nolint:gosec // G304/G703: path is from --vsa-outfile CLI flag
 		return fmt.Errorf("failed to write VSA outfile: %w", err)
 	}
 	return nil
