@@ -1091,3 +1091,57 @@ func (a *concreteTypedAttestor) MarshalJSON() ([]byte, error) {
 		RunDetails:      a.RunDetails,
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Regression: a policy with ONLY externalAttestations (no steps) is valid and
+// verifies cleanly. Pre-fix, the `policy has no steps to verify` guard fired
+// before aggregation because it only inspected resultsByStep — external
+// attestations were verified but the policy was still rejected.
+// Common shape: standalone VSA-chain gates that don't run any workflow step.
+// ---------------------------------------------------------------------------
+
+func TestExternal_17_ExternalOnlyPolicyNoStepsValid(t *testing.T) {
+	verifier, keyID := newECDSAVerifier(t)
+	envelope := mkExternalEnvelope(t, vsaPredicateType, passingVSAPredicate, verifier)
+
+	p := Policy{
+		Expires: futureExpiry(),
+		// NO Steps — this is the case the pre-fix guard rejected.
+		ExternalAttestations: map[string]ExternalAttestation{
+			"vsa": {
+				Name:          "vsa",
+				PredicateType: vsaPredicateType,
+				Required:      true,
+				Functionaries: []Functionary{{PublicKeyID: keyID}},
+				RegoPolicies:  []RegoPolicy{{Module: regoVsaPassedOnly, Name: "vsa.rego"}},
+			},
+		},
+	}
+
+	ms := &stepAwareVerifiedSource{
+		byPredicate: map[string][]source.StatementEnvelope{vsaPredicateType: {envelope}},
+	}
+
+	pass, _, extResults, err := p.VerifyWithExternals(context.Background(),
+		WithVerifiedSource(ms),
+		WithSubjectDigests([]string{"sha256:artifact"}),
+	)
+	require.NoError(t, err)
+	assert.True(t, pass, "external-only policy with passing VSA must verify")
+	assert.Len(t, extResults["vsa"].Passed, 1)
+}
+
+// Policies that declare NEITHER steps NOR externalAttestations remain
+// invalid — the aggregation guard must still catch that shape.
+func TestExternal_18_EmptyPolicyStillRejected(t *testing.T) {
+	p := Policy{Expires: futureExpiry()}
+
+	ms := &stepAwareVerifiedSource{}
+	pass, _, _, err := p.VerifyWithExternals(context.Background(),
+		WithVerifiedSource(ms),
+		WithSubjectDigests([]string{"sha256:artifact"}),
+	)
+	require.Error(t, err, "empty policy must be rejected")
+	assert.Contains(t, err.Error(), "no steps or external attestations")
+	assert.False(t, pass)
+}

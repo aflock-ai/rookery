@@ -552,9 +552,12 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 		return nil, fmt.Errorf("failed to verify artifacts: %w", err)
 	}
 
-	// A policy with no steps is invalid — it would vacuously pass any verification.
-	if len(resultsByStep) == 0 {
-		return nil, fmt.Errorf("policy has no steps to verify")
+	// A policy is invalid when it declares nothing to verify — no steps AND no
+	// external attestations. External-attestations-only policies (e.g. VSA-chain
+	// gates) are valid after #39; they're verified in verifyExternalAttestations
+	// which runs before this function returns control.
+	if len(resultsByStep) == 0 && len(p.ExternalAttestations) == 0 {
+		return nil, fmt.Errorf("policy has no steps or external attestations to verify")
 	}
 
 	return resultsByStep, nil
