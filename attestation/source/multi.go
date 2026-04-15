@@ -90,7 +90,7 @@ func (s *MultiSource) Search(ctx context.Context, collectionName string, subject
 // the scaffold PR) will propagate their "not implemented" error — callers
 // wiring MultiSource into external-attestation verification should be aware
 // of that until the follow-up PRs land.
-func (s *MultiSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) { //nolint:gocognit
+func (s *MultiSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) { //nolint:gocognit // mirrors Search's channels + WaitGroup fan-out; flattening loses parity with the existing pattern
 	results := []StatementEnvelope{}
 	errs := []error{}
 

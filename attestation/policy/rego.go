@@ -75,13 +75,37 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	}
 
 	// When cross-step context is provided, wrap the input so Rego policies
-	// can access other steps' attestation data via input.steps.<stepName>.
+	// can access other steps' attestation data via input.steps.<stepName>
+	// and external attestations via input.external.<name>.
+	//
+	// The external-attestation context travels through the same map as
+	// steps context under the reserved key externalAttestationsContextKey
+	// (so callers only pass one map). We lift it out here.
 	var input interface{}
 	if len(stepContext) > 0 && stepContext[0] != nil {
-		input = map[string]interface{}{
-			"attestation": attestorData,
-			"steps":       stepContext[0],
+		ctxMap := stepContext[0]
+
+		// Split steps vs external entries.
+		stepsData := make(map[string]interface{}, len(ctxMap))
+		var externalData map[string]interface{}
+		for k, v := range ctxMap {
+			if k == externalAttestationsContextKey {
+				if em, ok := v.(map[string]interface{}); ok {
+					externalData = em
+				}
+				continue
+			}
+			stepsData[k] = v
 		}
+
+		wrapped := map[string]interface{}{
+			"attestation": attestorData,
+			"steps":       stepsData,
+		}
+		if externalData != nil {
+			wrapped["external"] = externalData
+		}
+		input = wrapped
 	} else {
 		input = attestorData
 	}

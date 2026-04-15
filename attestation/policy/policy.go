@@ -370,7 +370,10 @@ func (p Policy) topologicalSort() ([]string, error) {
 	return sorted, nil
 }
 
-func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[string]StepResult, error) { //nolint:gocognit,gocyclo,funlen
+// VerifyWithExternals is the richer entry point that returns external
+// attestation results alongside step results. Policy.Verify is preserved for
+// backward compatibility and internally delegates to VerifyWithExternals.
+func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (bool, map[string]StepResult, map[string]ExternalResult, error) { //nolint:gocognit,gocyclo,funlen // canonical top-level verification entry point; linear flow (opts → validate → externals → steps → aggregate) benefits from locality
 	vo := &verifyOptions{
 		searchDepth: 3,
 	}
@@ -380,30 +383,75 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 	}
 
 	if err := checkVerifyOpts(vo); err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
 
 	if time.Now().After(p.Expires.Add(vo.clockSkewTolerance)) {
-		return false, nil, ErrPolicyExpired(p.Expires.Time)
+		return false, nil, nil, ErrPolicyExpired(p.Expires.Time)
 	}
 
 	// Validate the policy structure (self-references, unknown steps, cycles).
 	if err := p.Validate(); err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
 
 	trustBundles, err := p.TrustBundles()
 	if err != nil {
-		return false, nil, err
+		return false, nil, nil, err
 	}
 
+	// Verify external attestations BEFORE step verification so their results
+	// are available when building Rego input.external for steps that
+	// reference them via Step.ExternalFrom.
+	//
+	// Subject-graph isolation: we pass vo.subjectDigests as-is and do NOT
+	// feed the externals' additional subjects back into the policy's
+	// running seed set. This keeps Collection-graph semantics independent
+	// from external-verification semantics (see issue #39 non-goals).
+	externalResults, err := p.verifyExternalAttestations(ctx, vo, trustBundles)
+	if err != nil {
+		return false, nil, externalResults, err
+	}
+
+	stepResults, err := p.verifySteps(ctx, vo, trustBundles, externalResults)
+	if err != nil {
+		return false, stepResults, externalResults, err
+	}
+
+	pass := true
+	for _, result := range stepResults {
+		if !result.Analyze() {
+			pass = false
+		}
+	}
+	for _, er := range externalResults {
+		if !er.Analyze() {
+			pass = false
+		}
+	}
+
+	return pass, stepResults, externalResults, nil
+}
+
+// Verify is the backward-compatible entry point; it discards the external
+// result map. Callers that need external attestation details should use
+// VerifyWithExternals.
+func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[string]StepResult, error) {
+	pass, stepResults, _, err := p.VerifyWithExternals(ctx, opts...)
+	return pass, stepResults, err
+}
+
+// verifySteps runs the step-verification loop. Extracted from the old
+// Policy.Verify body to make room for external-attestation verification
+// ordering without ballooning the single function.
+func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles map[string]TrustBundle, externalResults map[string]ExternalResult) (map[string]StepResult, error) { //nolint:gocognit,gocyclo,funlen // loop body mixes search / functionary / context-build / backref-expansion on shared per-iteration state; splitting would require threading state through extra parameters
 	// Validate that all artifactsFrom references point to steps defined in the policy.
 	// This catches configuration errors early rather than producing confusing
 	// "failed to verify artifacts" errors during the artifact comparison phase.
 	for stepName, step := range p.Steps {
 		for _, ref := range step.ArtifactsFrom {
 			if _, ok := p.Steps[ref]; !ok {
-				return false, nil, fmt.Errorf("step %q references unknown step %q in artifactsFrom", stepName, ref)
+				return nil, fmt.Errorf("step %q references unknown step %q in artifactsFrom", stepName, ref)
 			}
 		}
 	}
@@ -419,7 +467,7 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 	// AttestationsFrom dependencies, enabling cross-step context.
 	stepOrder, err := p.topologicalSort()
 	if err != nil {
-		return false, nil, err
+		return nil, err
 	}
 
 	resultsByStep := make(map[string]StepResult)
@@ -444,7 +492,7 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 			// Use search to get all the attestations that match the supplied step name and subjects
 			collections, err := vo.verifiedSource.Search(ctx, stepName, vo.subjectDigests, attestationsByStep[stepName])
 			if err != nil {
-				return false, nil, err
+				return nil, err
 			}
 
 			if len(collections) == 0 {
@@ -458,26 +506,12 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 				passedCollections[i] = pc.Collection
 			}
 
-			// Build cross-step context from already-verified dependencies.
-			var stepCtx map[string]interface{}
-			if len(step.AttestationsFrom) > 0 { //nolint:nestif
-				if err := checkDependencies(step.AttestationsFrom, resultsByStep); err != nil {
-					log.Debugf("step %s: dependency not yet verified, providing empty context: %v", stepName, err)
-					// Security: pass a non-nil empty map so that Rego policies
-					// using input.steps wrapping can detect missing dependencies
-					// via `not input.steps.xxx`. A nil stepCtx would trigger the
-					// backward-compat path where input is the attestor directly,
-					// causing cross-step-aware Rego rules to silently pass.
-					stepCtx = map[string]interface{}{}
-				} else {
-					stepCtx = buildStepContext(step.AttestationsFrom, resultsByStep)
-					// buildStepContext returns nil when deps have no attestation data.
-					// Same reasoning: ensure Rego cross-step rules can fire.
-					if stepCtx == nil {
-						stepCtx = map[string]interface{}{}
-					}
-				}
-			}
+			// Build cross-step context from already-verified dependencies
+			// AND external-attestation context (input.external.<name>) from
+			// this step's ExternalFrom list. When either AttestationsFrom or
+			// ExternalFrom is non-empty, Rego input is wrapped; otherwise
+			// input is the raw attestor JSON (backward compat).
+			stepCtx := buildStepRegoContext(step, resultsByStep, externalResults)
 
 			stepResult := step.validateAttestations(passedCollections, vo.aiServerURL, stepCtx)
 			stepResult.Rejected = append(stepResult.Rejected, functionaryCheckResults.Rejected...)
@@ -506,27 +540,159 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 		}
 
 		// Expand search scope for the next depth iteration only.
+		//
+		// Subject-graph isolation rule (issue #39): external-attestation
+		// subjects are NOT added here. Only Collection BackRefs expand the
+		// seed set. This preserves Collection-graph semantics.
 		vo.subjectDigests = append(vo.subjectDigests, nextDepthDigests...)
 	}
 
 	resultsByStep, err = p.verifyArtifacts(resultsByStep)
 	if err != nil {
-		return false, nil, fmt.Errorf("failed to verify artifacts: %w", err)
+		return nil, fmt.Errorf("failed to verify artifacts: %w", err)
 	}
 
 	// A policy with no steps is invalid — it would vacuously pass any verification.
 	if len(resultsByStep) == 0 {
-		return false, nil, fmt.Errorf("policy has no steps to verify")
+		return nil, fmt.Errorf("policy has no steps to verify")
 	}
 
-	pass := true
-	for _, result := range resultsByStep {
-		if !result.Analyze() {
-			pass = false
+	return resultsByStep, nil
+}
+
+// verifyExternalAttestations runs the external-attestation verification
+// pass BEFORE step verification (see issue #39). For each declared external,
+// it searches the source by predicate type + policy seed subjects,
+// validates the envelope's verifiers against the external's Functionaries,
+// and evaluates any RegoPolicies / AiPolicies against the attestor.
+//
+// A required external with zero matches yields ErrMissingExternalAttestation.
+// A non-required external with zero matches is marked Skipped and passes.
+// Individual envelope failures are recorded in Rejected; the external as a
+// whole passes iff at least one Passed envelope is accumulated (or Skipped).
+func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOptions, trustBundles map[string]TrustBundle) (map[string]ExternalResult, error) { //nolint:gocognit,gocyclo // per-envelope verification has irreducible branching (functionary match / rego / ai / success); each branch produces a distinct rejection path
+	results := make(map[string]ExternalResult, len(p.ExternalAttestations))
+	if len(p.ExternalAttestations) == 0 {
+		return results, nil
+	}
+
+	for name, ext := range p.ExternalAttestations {
+		er := ExternalResult{Name: name}
+
+		envelopes, err := vo.verifiedSource.SearchByPredicateType(ctx, []string{ext.PredicateType}, vo.subjectDigests)
+		if err != nil {
+			return results, fmt.Errorf("failed to search external attestation %q: %w", name, err)
 		}
+
+		if len(envelopes) == 0 {
+			if ext.Required {
+				results[name] = er
+				return results, ErrMissingExternalAttestation{Name: name, PredicateType: ext.PredicateType}
+			}
+			er.Skipped = true
+			results[name] = er
+			continue
+		}
+
+		for _, env := range envelopes {
+			// If the source reported envelope-level errors (e.g. signature
+			// verification failure), surface them as a rejection.
+			if len(env.Errors) > 0 && len(env.Verifiers) == 0 {
+				er.Rejected = append(er.Rejected, RejectedExternal{
+					Envelope: env,
+					Reason:   errors.Join(env.Errors...),
+				})
+				continue
+			}
+
+			// Functionary validation — at least one verifier must match at
+			// least one functionary.
+			var validFunctionaries []cryptoutil.Verifier
+			var functionaryErrs []error
+			for _, verifier := range env.Verifiers {
+				for _, functionary := range ext.Functionaries {
+					if err := functionary.Validate(verifier, trustBundles); err != nil {
+						functionaryErrs = append(functionaryErrs, err)
+						continue
+					}
+					validFunctionaries = append(validFunctionaries, verifier)
+				}
+			}
+
+			if len(validFunctionaries) == 0 {
+				reason := fmt.Errorf("no verifiers matched with allowed functionaries for external attestation %q", name)
+				if len(functionaryErrs) > 0 {
+					reason = fmt.Errorf("%w: %w", reason, errors.Join(functionaryErrs...))
+				}
+				er.Rejected = append(er.Rejected, RejectedExternal{Envelope: env, Reason: reason})
+				continue
+			}
+
+			// Policy evaluation. External attestations are standalone —
+			// their Rego input is the bare predicate (same shape as when a
+			// step has no AttestationsFrom/ExternalFrom). Pass nil stepCtx.
+			if env.Attestor == nil {
+				er.Rejected = append(er.Rejected, RejectedExternal{
+					Envelope: env,
+					Reason:   fmt.Errorf("external attestation %q: envelope has no attestor", name),
+				})
+				continue
+			}
+
+			if err := EvaluateRegoPolicy(env.Attestor, ext.RegoPolicies, nil); err != nil {
+				er.Rejected = append(er.Rejected, RejectedExternal{Envelope: env, Reason: err})
+				continue
+			}
+
+			aiResponses, err := EvaluateAIPolicy(env.Attestor, ext.AiPolicies, vo.aiServerURL)
+			if err != nil {
+				er.Rejected = append(er.Rejected, RejectedExternal{
+					Envelope:    env,
+					Reason:      err,
+					AiResponses: aiResponses,
+				})
+				continue
+			}
+
+			aiFailed := false
+			for i, resp := range aiResponses {
+				if resp.Status == AiStatusFail {
+					policyName := ""
+					if i < len(ext.AiPolicies) {
+						policyName = ext.AiPolicies[i].Name
+					}
+					if policyName == "" {
+						policyName = fmt.Sprintf("AI Policy %d", i+1)
+					}
+					er.Rejected = append(er.Rejected, RejectedExternal{
+						Envelope:    env,
+						Reason:      fmt.Errorf("external attestation %q: AI policy %q failed: %s", name, policyName, resp.Reason),
+						AiResponses: aiResponses,
+					})
+					aiFailed = true
+					break
+				}
+			}
+			if aiFailed {
+				continue
+			}
+
+			er.Passed = append(er.Passed, PassedExternal{
+				Envelope:    env,
+				AiResponses: aiResponses,
+			})
+		}
+
+		// Passed count = 0 AND required → hard failure.
+		if len(er.Passed) == 0 && ext.Required {
+			results[name] = er
+			return results, ErrMissingExternalAttestation{Name: name, PredicateType: ext.PredicateType}
+		}
+
+		results[name] = er
 	}
 
-	return pass, resultsByStep, nil
+	return results, nil
 }
 
 // checkFunctionaries checks to make sure the signature on each statement corresponds to a trusted functionary for

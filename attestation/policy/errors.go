@@ -154,3 +154,15 @@ type ErrUnknownExternalAttestation struct {
 func (e ErrUnknownExternalAttestation) Error() string {
 	return fmt.Sprintf("step '%v' references unknown external attestation '%v' in externalFrom", e.Step, e.Name)
 }
+
+// ErrMissingExternalAttestation is returned when an external attestation is
+// declared as Required but no DSSE envelope matching the predicate type +
+// policy seed subjects could be found.
+type ErrMissingExternalAttestation struct {
+	Name          string
+	PredicateType string
+}
+
+func (e ErrMissingExternalAttestation) Error() string {
+	return fmt.Sprintf("required external attestation %q (predicateType=%v) not found", e.Name, e.PredicateType)
+}

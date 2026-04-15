@@ -31,12 +31,17 @@ import (
 
 // mockVerifiedSource implements source.VerifiedSourcer for testing
 type mockVerifiedSource struct {
-	results []source.CollectionVerificationResult
-	err     error
+	results         []source.CollectionVerificationResult
+	externalResults []source.StatementEnvelope
+	err             error
 }
 
 func (m *mockVerifiedSource) Search(_ context.Context, _ string, _ []string, _ []string) ([]source.CollectionVerificationResult, error) {
 	return m.results, m.err
+}
+
+func (m *mockVerifiedSource) SearchByPredicateType(_ context.Context, _ []string, _ []string) ([]source.StatementEnvelope, error) {
+	return m.externalResults, m.err
 }
 
 // dummyAttestor satisfies attestation.Attestor for rego and validation tests.
@@ -2203,11 +2208,20 @@ func TestVerify_CrossStepAttestationAccess(t *testing.T) {
 
 // stepAwareVerifiedSource returns different results per step name.
 type stepAwareVerifiedSource struct {
-	byStep map[string][]source.CollectionVerificationResult
+	byStep      map[string][]source.CollectionVerificationResult
+	byPredicate map[string][]source.StatementEnvelope
 }
 
 func (s *stepAwareVerifiedSource) Search(_ context.Context, stepName string, _ []string, _ []string) ([]source.CollectionVerificationResult, error) {
 	return s.byStep[stepName], nil
+}
+
+func (s *stepAwareVerifiedSource) SearchByPredicateType(_ context.Context, predicateTypes []string, _ []string) ([]source.StatementEnvelope, error) {
+	out := []source.StatementEnvelope{}
+	for _, pt := range predicateTypes {
+		out = append(out, s.byPredicate[pt]...)
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------
