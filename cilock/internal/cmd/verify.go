@@ -15,9 +15,11 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -25,7 +27,10 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/slsa"
 	"github.com/aflock-ai/rookery/attestation/source"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 	"github.com/aflock-ai/rookery/attestation/workflow"
@@ -39,6 +44,8 @@ func VerifyCmd() *cobra.Command {
 		ArchivistaOptions:          options.ArchivistaOptions{},
 		KMSVerifierProviderOptions: options.KMSVerifierProviderOptions{},
 		VerifierOptions:            options.VerifierOptions{},
+		SignerOptions:              options.SignerOptions{},
+		KMSSignerProviderOptions:   options.KMSSignerProviderOptions{},
 	}
 	cmd := &cobra.Command{
 		Use:               "verify",
@@ -56,14 +63,28 @@ func VerifyCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to load verifier: %w", err)
 			}
-			return runVerify(cmd.Context(), vo, verifiers...)
+
+			// Signers are optional on `verify` — they are only used to sign the
+			// VSA emitted via --vsa-outfile. If no --signer-* flags were set we
+			// skip loading entirely and the VSA (if requested) will be written
+			// as an unsigned in-toto Statement.
+			var signers []cryptoutil.Signer
+			signerProviders := providersFromFlags("signer", cmd.Flags())
+			if len(signerProviders) > 0 {
+				signers, err = loadSigners(cmd.Context(), vo.SignerOptions, vo.KMSSignerProviderOptions, signerProviders)
+				if err != nil {
+					return fmt.Errorf("failed to load signer: %w", err)
+				}
+			}
+
+			return runVerify(cmd.Context(), vo, verifiers, signers)
 		},
 	}
 	vo.AddFlags(cmd)
 	return cmd
 }
 
-func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...cryptoutil.Verifier) error { //nolint:gocognit,gocyclo,funlen
+func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []cryptoutil.Verifier, signers []cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
 	var (
 		collectionSource source.Sourcer
 		archivistaClient *archivista.Client
@@ -210,10 +231,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 		}
 	}
 
-	verifiedEvidence, err := workflow.Verify(
-		ctx,
-		policyEnvelope,
-		verifiers,
+	verifyOpts := []workflow.VerifyOption{
 		workflow.VerifyWithSubjectDigests(subjects),
 		workflow.VerifyWithCollectionSource(collectionSource),
 		workflow.VerifyWithPolicyTimestampAuthorities(ptsVerifiers),
@@ -221,8 +239,29 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 		workflow.VerifyWithPolicyCAIntermediates(policyIntermediates),
 		workflow.VerifyWithPolicyCertConstraints(vo.PolicyCommonName, vo.PolicyDNSNames, vo.PolicyEmails, vo.PolicyOrganizations, vo.PolicyURIs),
 		workflow.VerifyWithPolicyFulcioCertExtensions(vo.PolicyFulcioCertExtensions),
-	)
-	if err != nil { //nolint:nestif
+	}
+	if len(signers) > 0 {
+		verifyOpts = append(verifyOpts, workflow.VerifyWithSigners(signers...))
+	}
+
+	verifiedEvidence, verifyErr := workflow.Verify(ctx, policyEnvelope, verifiers, verifyOpts...)
+
+	// Write the VSA to disk BEFORE returning — on both pass and fail. A failed
+	// VSA is still valuable diagnostic evidence and can legitimately be the
+	// input to a downstream policy that must know the previous stage failed.
+	if vo.VSAOutFilePath != "" {
+		if writeErr := writeVSAOutfile(vo.VSAOutFilePath, verifiedEvidence, signers, vo.VSATimestampServers); writeErr != nil {
+			// Prefer reporting the verification failure (the more important
+			// signal) but always surface the write failure as well so it is
+			// never silently swallowed.
+			if verifyErr != nil {
+				return fmt.Errorf("failed to verify policy: %w (additionally, failed to write VSA outfile: %v)", verifyErr, writeErr)
+			}
+			return fmt.Errorf("failed to write VSA outfile: %w", writeErr)
+		}
+	}
+
+	if verifyErr != nil { //nolint:nestif
 		if verifiedEvidence.StepResults != nil {
 			log.Error("Verification failed")
 			log.Error("Evidence:")
@@ -241,7 +280,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 				}
 			}
 		}
-		return fmt.Errorf("failed to verify policy: %w", err)
+		return fmt.Errorf("failed to verify policy: %w", verifyErr)
 	}
 
 	log.Info("Verification succeeded")
@@ -253,6 +292,77 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers ...crypt
 			log.Info(fmt.Sprintf("%d: %s", num, p.Collection.Reference))
 			num++
 		}
+	}
+	return nil
+}
+
+// writeVSAOutfile writes the Verification Summary Attestation to disk.
+//
+// When signers are supplied, it signs the VSA as a DSSE envelope (same format
+// stored in Archivista). Without signers, it emits an unsigned in-toto
+// Statement JSON — still consumable by downstream policies that don't require
+// a functionary-signed VSA, but logged with a warning so users know chaining
+// policies that require signatures will reject it.
+//
+// A failed VSA is legitimately useful — policies may want to inspect that a
+// previous verification FAILED — so this function writes regardless of
+// verification outcome.
+func writeVSAOutfile(path string, evidence workflow.VerifyResult, signers []cryptoutil.Signer, timestampServers []string) error {
+	subjects := map[string]cryptoutil.DigestSet{}
+	for _, sub := range evidence.VerificationSummary.InputAttestations {
+		if sub.URI == "" || len(sub.Digest) == 0 {
+			continue
+		}
+		subjects[sub.URI] = sub.Digest
+	}
+
+	predicateBytes, err := json.Marshal(evidence.VerificationSummary)
+	if err != nil {
+		return fmt.Errorf("failed to marshal VSA predicate: %w", err)
+	}
+
+	if len(signers) == 0 {
+		log.Warn("VSA written without a signer — downstream policies that require a functionary-signed VSA will reject this file. Pass --signer-* flags to produce a signed DSSE envelope.")
+		stmt, sErr := intoto.NewStatement(slsa.VerificationSummaryPredicate, predicateBytes, subjects)
+		if sErr != nil {
+			return fmt.Errorf("failed to build unsigned VSA statement: %w", sErr)
+		}
+		stmtBytes, sErr := json.Marshal(stmt)
+		if sErr != nil {
+			return fmt.Errorf("failed to marshal unsigned VSA statement: %w", sErr)
+		}
+		if wErr := os.WriteFile(path, stmtBytes, 0o600); wErr != nil { //nolint:gosec // G304/G703: path is from --vsa-outfile CLI flag
+			return fmt.Errorf("failed to write VSA outfile: %w", wErr)
+		}
+		return nil
+	}
+
+	timestampers := make([]timestamp.Timestamper, 0, len(timestampServers))
+	for _, url := range timestampServers {
+		timestampers = append(timestampers, timestamp.NewTimestamper(timestamp.TimestampWithUrl(url)))
+	}
+
+	stmt, err := intoto.NewStatement(slsa.VerificationSummaryPredicate, predicateBytes, subjects)
+	if err != nil {
+		return fmt.Errorf("failed to build VSA statement: %w", err)
+	}
+	stmtBytes, err := json.Marshal(stmt)
+	if err != nil {
+		return fmt.Errorf("failed to marshal VSA statement: %w", err)
+	}
+	envelope, err := dsse.Sign(intoto.PayloadType, bytes.NewReader(stmtBytes),
+		dsse.SignWithSigners(signers...),
+		dsse.SignWithTimestampers(timestampers...),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to sign VSA envelope: %w", err)
+	}
+	envBytes, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("failed to marshal VSA envelope: %w", err)
+	}
+	if err := os.WriteFile(path, envBytes, 0o600); err != nil { //nolint:gosec // G304/G703: path is from --vsa-outfile CLI flag
+		return fmt.Errorf("failed to write VSA outfile: %w", err)
 	}
 	return nil
 }

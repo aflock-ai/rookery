@@ -41,9 +41,14 @@ func addFlags[T any](prefix string, regName string, options []registry.Configure
 
 		case *registry.ConfigOption[T, string]:
 			{
-				// Maintain backward compatibility with the old "-k" flag
+				// Maintain backward compatibility with the old "-k" flag for
+				// signer-file-key-path ONLY if -k is not already taken by a
+				// command-specific flag (e.g. verify's --publickey also uses
+				// -k, and panics on re-register). Fall back to the long form
+				// when the shorthand is unavailable — the long flag is always
+				// registered and still functions.
 				var val *string
-				if name == "signer-file-key-path" {
+				if name == "signer-file-key-path" && cmd.Flags().ShorthandLookup("k") == nil {
 					val = cmd.Flags().StringP(name, "k", optT.DefaultVal(), optT.Description())
 				} else {
 					val = cmd.Flags().String(name, optT.DefaultVal(), opt.Description())
