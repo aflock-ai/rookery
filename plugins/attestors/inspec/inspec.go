@@ -237,7 +237,7 @@ func (a *Attestor) buildSummaryAndSubjects(parsed inspecReport) {
 	addSubject(subjects, "platform", platformStr, hashes)
 
 	var totalControls, passed, failed, skipped int
-	var failedDetails []FailedControl
+	failedDetails := make([]FailedControl, 0, len(parsed.Profiles))
 
 	summaryProfileName := ""
 	for i, profile := range parsed.Profiles {
@@ -296,7 +296,7 @@ func processControls(profile inspecProfile, subjects map[string]cryptoutil.Diges
 			skipped++
 		}
 	}
-	return
+	return passed, failed, skipped, details
 }
 
 // controlOutcome determines the aggregate outcome of a control based on its results.

@@ -145,16 +145,16 @@ type FileDelete struct {
 // FilePermChange records a chmod operation.
 type FilePermChange struct {
 	Path      string `json:"path"`
-	Mode      uint32 `json:"mode"`      // new permission bits
-	SetExec   bool   `json:"setExec"`   // true if executable bit was set
+	Mode      uint32 `json:"mode"`    // new permission bits
+	SetExec   bool   `json:"setExec"` // true if executable bit was set
 	Timestamp string `json:"timestamp,omitempty"`
 }
 
 // SyscallEvent records a notable syscall that doesn't fit other categories.
 type SyscallEvent struct {
-	Syscall   string `json:"syscall"`             // "memfd_create", "ptrace", "mount", "clone"
-	Detail    string `json:"detail,omitempty"`     // human-readable detail
-	Args      []int  `json:"args,omitempty"`       // raw syscall arguments
+	Syscall   string `json:"syscall"`          // "memfd_create", "ptrace", "mount", "clone"
+	Detail    string `json:"detail,omitempty"` // human-readable detail
+	Args      []int  `json:"args,omitempty"`   // raw syscall arguments
 	Timestamp string `json:"timestamp,omitempty"`
 }
 

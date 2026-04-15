@@ -112,16 +112,16 @@ type Flow struct {
 // Summary gives policies a cheap set of fields to match against without
 // iterating every raw flow entry.
 type Summary struct {
-	ScanID         string         `json:"scanId"`
-	TotalFlows     int            `json:"totalFlows"`
-	UniqueHosts    []string       `json:"uniqueHosts"`
-	UniqueSNIs     []string       `json:"uniqueSnis"`
-	SchemeCounts   map[string]int `json:"schemeCounts"`
-	StatusCounts   map[int]int    `json:"statusCounts,omitempty"`
-	TotalBytesOut  int            `json:"totalBytesOut"`
-	TotalBytesIn   int            `json:"totalBytesIn"`
-	FlowsPath      string         `json:"flowsPath"`
-	FlowsFileSHA256 string        `json:"flowsFileSha256,omitempty"`
+	ScanID          string         `json:"scanId"`
+	TotalFlows      int            `json:"totalFlows"`
+	UniqueHosts     []string       `json:"uniqueHosts"`
+	UniqueSNIs      []string       `json:"uniqueSnis"`
+	SchemeCounts    map[string]int `json:"schemeCounts"`
+	StatusCounts    map[int]int    `json:"statusCounts,omitempty"`
+	TotalBytesOut   int            `json:"totalBytesOut"`
+	TotalBytesIn    int            `json:"totalBytesIn"`
+	FlowsPath       string         `json:"flowsPath"`
+	FlowsFileSHA256 string         `json:"flowsFileSha256,omitempty"`
 }
 
 // Attestor is the concrete attestor implementation whose fields become
@@ -143,6 +143,7 @@ func (a *Attestor) Type() string                 { return Type }
 func (a *Attestor) RunType() attestation.RunType { return RunType }
 func (a *Attestor) Schema() *jsonschema.Schema   { return jsonschema.Reflect(a) }
 
+//nolint:gocognit,gocyclo,funlen // sequential ingest: env → open → hash → decode → aggregate
 func (a *Attestor) Attest(_ *attestation.AttestationContext) error {
 	scanID := strings.TrimSpace(os.Getenv(ScanIDEnv))
 	a.ScanID = scanID
@@ -167,7 +168,7 @@ func (a *Attestor) Attest(_ *attestation.AttestationContext) error {
 		}
 		return fmt.Errorf("opening %s: %w", FlowsPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Also hash the raw file so the attestation references the exact bytes
 	// the sidecar produced.
@@ -332,11 +333,11 @@ func decodeFlow(line []byte, flow *Flow) error {
 }
 
 func hashFile(path string) (string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path is FlowsPath constant or derived from it
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err

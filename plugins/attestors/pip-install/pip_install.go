@@ -86,16 +86,16 @@ type SetupPyAnalysis struct {
 // executing it. Dangerous opcodes (REDUCE, GLOBAL, INST) indicate the
 // pickle will execute arbitrary code when loaded.
 type PickleAnalysis struct {
-	Path           string   `json:"path"`
-	Size           int64    `json:"size"`
-	HasReduce      bool     `json:"hasReduce"`      // REDUCE opcode = calls a callable
-	HasGlobal      bool     `json:"hasGlobal"`       // GLOBAL opcode = imports a module
-	HasInst        bool     `json:"hasInst"`         // INST opcode = creates an instance
-	HasStack       bool     `json:"hasStack"`        // STACK_GLOBAL = Python 3 module import
-	DangerousOps   []string `json:"dangerousOps,omitempty"`   // list of dangerous opcodes found
-	GlobalRefs     []string `json:"globalRefs,omitempty"`     // what modules/functions are referenced
-	IsSafe         bool     `json:"isSafe"`          // true if no code execution opcodes
-	Error          string   `json:"error,omitempty"` // if analysis failed
+	Path         string   `json:"path"`
+	Size         int64    `json:"size"`
+	HasReduce    bool     `json:"hasReduce"`              // REDUCE opcode = calls a callable
+	HasGlobal    bool     `json:"hasGlobal"`              // GLOBAL opcode = imports a module
+	HasInst      bool     `json:"hasInst"`                // INST opcode = creates an instance
+	HasStack     bool     `json:"hasStack"`               // STACK_GLOBAL = Python 3 module import
+	DangerousOps []string `json:"dangerousOps,omitempty"` // list of dangerous opcodes found
+	GlobalRefs   []string `json:"globalRefs,omitempty"`   // what modules/functions are referenced
+	IsSafe       bool     `json:"isSafe"`                 // true if no code execution opcodes
+	Error        string   `json:"error,omitempty"`        // if analysis failed
 }
 
 // InstalledFileAnalysis contains static analysis results for installed .py files.
@@ -111,35 +111,35 @@ type InstalledFileAnalysis struct {
 
 // PyprojectAnalysis contains build backend analysis from pyproject.toml files.
 type PyprojectAnalysis struct {
-	BuildBackend  string   `json:"buildBackend,omitempty"`
-	BuildRequires []string `json:"buildRequires,omitempty"`
-	IsCustomBackend bool   `json:"isCustomBackend,omitempty"`
+	BuildBackend    string   `json:"buildBackend,omitempty"`
+	BuildRequires   []string `json:"buildRequires,omitempty"`
+	IsCustomBackend bool     `json:"isCustomBackend,omitempty"`
 }
 
 // PEP740Status records whether a package has a PEP 740 attestation on PyPI.
 type PEP740Status struct {
-	Package         string `json:"package"`
-	Version         string `json:"version"`
-	HasAttestation  bool   `json:"hasAttestation"`
-	AttestationURL  string `json:"attestationUrl,omitempty"`
+	Package        string `json:"package"`
+	Version        string `json:"version"`
+	HasAttestation bool   `json:"hasAttestation"`
+	AttestationURL string `json:"attestationUrl,omitempty"`
 	// Signer identity from Sigstore certificate / Trusted Publisher
-	PublisherKind   string `json:"publisherKind,omitempty"`   // "GitHub", "GitLab", etc.
-	Repository      string `json:"repository,omitempty"`      // e.g. "psf/requests"
-	Workflow        string `json:"workflow,omitempty"`         // e.g. "publish.yml"
-	Environment     string `json:"environment,omitempty"`     // e.g. "publish"
-	SignerIdentity  string `json:"signerIdentity,omitempty"`  // full workflow URL
+	PublisherKind  string `json:"publisherKind,omitempty"`  // "GitHub", "GitLab", etc.
+	Repository     string `json:"repository,omitempty"`     // e.g. "psf/requests"
+	Workflow       string `json:"workflow,omitempty"`       // e.g. "publish.yml"
+	Environment    string `json:"environment,omitempty"`    // e.g. "publish"
+	SignerIdentity string `json:"signerIdentity,omitempty"` // full workflow URL
 }
 
 // Attestor captures pip install metadata.
 type Attestor struct {
-	PipVersion      string            `json:"pipVersion"`
-	PythonVersion   string            `json:"pythonVersion"`
-	Packages        []PackageInfo     `json:"packages"`
-	SetupPyAnalysis      []SetupPyAnalysis    `json:"setupPyAnalysis,omitempty"`
-	TotalInstalled       int                  `json:"totalInstalled"`
+	PipVersion            string                 `json:"pipVersion"`
+	PythonVersion         string                 `json:"pythonVersion"`
+	Packages              []PackageInfo          `json:"packages"`
+	SetupPyAnalysis       []SetupPyAnalysis      `json:"setupPyAnalysis,omitempty"`
+	TotalInstalled        int                    `json:"totalInstalled"`
 	InstalledFileAnalysis *InstalledFileAnalysis `json:"installedFileAnalysis,omitempty"`
-	PyprojectAnalysis    []PyprojectAnalysis  `json:"pyprojectAnalysis,omitempty"`
-	PEP740Verification   []PEP740Status       `json:"pep740Verification,omitempty"`
+	PyprojectAnalysis     []PyprojectAnalysis    `json:"pyprojectAnalysis,omitempty"`
+	PEP740Verification    []PEP740Status         `json:"pep740Verification,omitempty"`
 
 	// unexported: target package to focus analysis on
 	targetPackage string
@@ -161,8 +161,8 @@ func New(opts ...Option) *Attestor {
 	return a
 }
 
-func (a *Attestor) Name() string                { return Name }
-func (a *Attestor) Type() string                { return Type }
+func (a *Attestor) Name() string                 { return Name }
+func (a *Attestor) Type() string                 { return Type }
 func (a *Attestor) RunType() attestation.RunType { return RunType }
 func (a *Attestor) Data() *Attestor              { return a }
 func (a *Attestor) Schema() *jsonschema.Schema   { return jsonschema.Reflect(a) }
@@ -295,7 +295,7 @@ func findAndAnalyzeSetupPy(workDir string) []SetupPyAnalysis {
 	for _, dir := range searchDirs {
 		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				return nil
+				return nil //nolint:nilerr // skip unreadable entries, keep walking
 			}
 			if info.Name() == "setup.py" {
 				analysis := analyzeSetupPy(path)
@@ -360,10 +360,11 @@ func analyzeSetupPy(path string) *SetupPyAnalysis {
 // to identify dangerous opcodes WITHOUT executing the pickle.
 //
 // Dangerous opcodes:
-//   REDUCE  — calls a callable (e.g., os.system)
-//   GLOBAL  — imports a module by name (e.g., "os" "system")
-//   INST    — creates an instance of a class
-//   STACK_GLOBAL — Python 3 version of GLOBAL
+//
+//	REDUCE  — calls a callable (e.g., os.system)
+//	GLOBAL  — imports a module by name (e.g., "os" "system")
+//	INST    — creates an instance of a class
+//	STACK_GLOBAL — Python 3 version of GLOBAL
 //
 // Safe pickles (numpy arrays, pandas DataFrames) only use data opcodes
 // like BINPUT, BINGET, FRAME, SHORT_BINUNICODE, etc.
@@ -479,7 +480,7 @@ func analyzeInstalledFiles() *InstalledFileAnalysis {
 
 	_ = filepath.Walk(siteDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
-			return nil
+			return nil //nolint:nilerr // skip unreadable entries, keep walking
 		}
 
 		name := info.Name()
@@ -524,7 +525,7 @@ func scanInitFile(path string, suspiciousPatterns, subprocessPatterns, networkPa
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -559,18 +560,18 @@ func findAndAnalyzePyproject() []PyprojectAnalysis {
 	}
 
 	knownBackends := map[string]bool{
-		"setuptools.build_meta":      true,
-		"flit_core.buildapi":         true,
-		"hatchling.build":            true,
-		"pdm.backend":               true,
-		"maturin":                   true,
-		"poetry.core.masonry.api":    true,
+		"setuptools.build_meta":   true,
+		"flit_core.buildapi":      true,
+		"hatchling.build":         true,
+		"pdm.backend":             true,
+		"maturin":                 true,
+		"poetry.core.masonry.api": true,
 	}
 
 	for _, dir := range searchDirs {
 		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() {
-				return nil
+				return nil //nolint:nilerr // skip unreadable entries, keep walking
 			}
 			if info.Name() == "pyproject.toml" {
 				if pa := parsePyprojectTOML(path, knownBackends); pa != nil {
@@ -587,6 +588,8 @@ func findAndAnalyzePyproject() []PyprojectAnalysis {
 // parsePyprojectTOML does a simple line-based parse of pyproject.toml to
 // extract [build-system] fields. We avoid pulling in a full TOML parser
 // to keep dependencies minimal.
+//
+//nolint:gocognit // line-based parser with inline section/field handling
 func parsePyprojectTOML(path string, knownBackends map[string]bool) *PyprojectAnalysis {
 	content, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {
@@ -652,6 +655,8 @@ func parsePyprojectTOML(path string, knownBackends map[string]bool) *PyprojectAn
 // checkPEP740Attestations checks PyPI for PEP 740 provenance attestations
 // for each installed package. Uses a 2s timeout per request and never fails
 // the overall attestation if a check errors.
+//
+//nolint:gocognit,gocyclo,funlen // sequential HTTP + JSON pipeline with per-stage skip handling
 func checkPEP740Attestations(packages []PackageInfo) []PEP740Status {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -669,13 +674,8 @@ func checkPEP740Attestations(packages []PackageInfo) []PEP740Status {
 			Version: pkg.Version,
 		}
 
-		// The PyPI integrity API returns provenance with publisher identity.
-		// We need to construct the filename — try wheel first (most common).
-		// The actual filename isn't easily known, so we use the simple API.
-		provenanceURL := fmt.Sprintf("https://pypi.org/integrity/%s/%s/provenance",
-			pkg.Name, pkg.Version)
-
-		// Try the simple JSON API to get the actual filename
+		// The PyPI integrity API needs the exact filename to fetch provenance.
+		// Fetch the simple JSON API first to discover wheel/sdist filenames.
 		simpleURL := fmt.Sprintf("https://pypi.org/pypi/%s/%s/json", pkg.Name, pkg.Version)
 		resp, err := client.Get(simpleURL) //nolint:gosec,noctx
 		if err != nil {
@@ -717,7 +717,7 @@ func checkPEP740Attestations(packages []PackageInfo) []PEP740Status {
 		}
 
 		// Now fetch the provenance for this specific file
-		provenanceURL = fmt.Sprintf("https://pypi.org/integrity/%s/%s/%s/provenance",
+		provenanceURL := fmt.Sprintf("https://pypi.org/integrity/%s/%s/%s/provenance",
 			pkg.Name, pkg.Version, filename)
 		resp, err = client.Get(provenanceURL) //nolint:gosec,noctx
 		if err != nil {

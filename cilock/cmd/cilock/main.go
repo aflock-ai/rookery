@@ -29,6 +29,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/maven"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/oci"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/omnitrail"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/pip-install"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/policyverify"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/product"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/sarif"
@@ -37,7 +38,6 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/slsa"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/system-packages"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/vex"
-	_ "github.com/aflock-ai/rookery/plugins/attestors/pip-install"
 
 	// All signer plugins
 	_ "github.com/aflock-ai/rookery/plugins/signers/debug-signer"
