@@ -23,12 +23,16 @@ type VerifyOptions struct {
 	ArchivistaOptions          ArchivistaOptions
 	VerifierOptions            VerifierOptions
 	KMSVerifierProviderOptions KMSVerifierProviderOptions
+	SignerOptions              SignerOptions
+	KMSSignerProviderOptions   KMSSignerProviderOptions
 	KeyPath                    string
 	AttestationFilePaths       []string
 	PolicyFilePath             string
 	ArtifactFilePath           string
 	ArtifactDirectoryPath      string
 	AdditionalSubjects         []string
+	VSAOutFilePath             string
+	VSATimestampServers        []string
 	PolicyFulcioCertExtensions certificate.Extensions
 	PolicyCARootPaths          []string
 	PolicyCAIntermediatePaths  []string
@@ -44,7 +48,23 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	vo.VerifierOptions.AddFlags(cmd)
 	vo.ArchivistaOptions.AddFlags(cmd)
 	vo.KMSVerifierProviderOptions.AddFlags(cmd)
+	// Register --publickey BEFORE signer flags so it claims the -k shorthand.
+	// The signer registry adds --signer-file-key-path and, for backward compat
+	// with `cilock sign`/`cilock run`, wants to bind -k — but here on verify,
+	// -k has meant --publickey for the policy signer long before VSA signing
+	// was added. addFlags() detects the collision and falls back to the long
+	// form (--signer-file-key-path) when -k is already taken.
 	cmd.Flags().StringVarP(&vo.KeyPath, "publickey", "k", "", "Path to the policy signer's public key")
+	// Signer flags (mirroring cilock sign / cilock run) so the emitted VSA
+	// can be signed via the same --signer-* providers (file, fulcio, kms, etc.)
+	// when --vsa-outfile is set. Without a signer, the VSA is written as an
+	// unsigned in-toto Statement JSON.
+	vo.SignerOptions.AddFlags(cmd)
+	vo.KMSSignerProviderOptions.AddFlags(cmd)
+	cmd.Flags().StringVar(&vo.VSAOutFilePath, "vsa-outfile", "",
+		"Write the Verification Summary Attestation (VSA) DSSE envelope to this path. Written on both pass and fail — downstream policies can still inspect a FAILED VSA. Requires signer flags for a signed DSSE; without a signer, emits the unsigned in-toto Statement JSON.")
+	cmd.Flags().StringSliceVar(&vo.VSATimestampServers, "vsa-timestamp-servers", []string{},
+		"Timestamp Authority Servers to use when signing the VSA envelope emitted via --vsa-outfile")
 	cmd.Flags().StringSliceVarP(&vo.AttestationFilePaths, "attestations", "a", []string{}, "Attestation files to test against the policy")
 	cmd.Flags().StringVarP(&vo.PolicyFilePath, "policy", "p", "", "Path to the policy to verify")
 	cmd.Flags().StringVarP(&vo.ArtifactFilePath, "artifactfile", "f", "", "Path to the artifact subject to verify")
