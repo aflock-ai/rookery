@@ -205,11 +205,21 @@ func TestVerify(t *testing.T) {
 	})
 }
 
+// TestBackRefs exercises the policy engine's BackRef subject-expansion path:
+// the verifier starts with a "seed" subject that matches nothing directly, but
+// step02's collection has no subject index (so it matches any search) and
+// exposes a BackRef digest that covers step01's subject. After the first depth
+// iteration, the BackRef from step02 expands the search set, step01 is then
+// found, and both steps end up with passed collections.
+//
+// The test drives policy.Verify() directly (rather than workflow.Verify) to
+// avoid a circular module dependency with the policyverify plugin — the
+// attestation module is a leaf module and cannot import its own plugins.
 func TestBackRefs(t *testing.T) {
-	t.Skip("requires real attestor plugins; run integration tests instead")
 	registerDummyAttestors()
 	testPolicy, functionarySigner := makePolicyWithPublicKeyFunctionary(t)
-	policyEnvelope, _, policyVerifier := signPolicyRSA(t, testPolicy)
+	functionaryVerifier, err := functionarySigner.Verifier()
+	require.NoError(t, err)
 
 	step1Result, err := Run(
 		"step01",
@@ -239,19 +249,45 @@ func TestBackRefs(t *testing.T) {
 	require.NoError(t, memorySource.LoadEnvelope("step01", step1Result.SignedEnvelope))
 	require.NoError(t, memorySource.LoadEnvelope("step02", step2Result.SignedEnvelope))
 
-	results, err := Verify(
-		context.Background(),
-		policyEnvelope,
-		[]cryptoutil.Verifier{policyVerifier},
-		VerifyWithCollectionSource(memorySource),
-		VerifyWithSubjectDigests([]cryptoutil.DigestSet{
-			{
-				{Hash: crypto.SHA256}: "dummydigestfortest",
-			},
-		}),
+	// Wrap the raw memory source with the DSSE-verifying source that
+	// policy.Verify expects. The functionary signer is also the envelope
+	// signer for these synthetic collections.
+	verifiedSource := source.NewVerifiedSource(
+		memorySource,
+		dsse.VerifyWithVerifiers(functionaryVerifier),
 	)
 
-	require.NoError(t, err, fmt.Sprintf("failed with results: %+v", results))
+	pass, stepResults, err := testPolicy.Verify(
+		context.Background(),
+		policy.WithVerifiedSource(verifiedSource),
+		// Seed digest that no collection directly advertises as a subject.
+		// Without BackRef expansion, step01 (which has subject "abcde")
+		// would never be located.
+		policy.WithSubjectDigests([]string{"dummydigestfortest"}),
+	)
+	require.NoError(t, err, fmt.Sprintf("policy.Verify returned error: results=%+v", stepResults))
+	require.True(t, pass, fmt.Sprintf("policy did not pass: results=%+v", stepResults))
+
+	// Assert BOTH steps surfaced passed collections. step02 passes directly
+	// on depth 0 (empty subject index matches any search). step01 passes
+	// only after the BackRef digest "abcde" — published by step02's
+	// dummyBackrefAttestor — is added to the search set for the next
+	// depth iteration. Without BackRef expansion, step01.Passed would be
+	// empty and this assertion would fail.
+	step1ResultEntry, ok := stepResults["step01"]
+	require.True(t, ok, "step01 missing from results")
+	require.NotEmpty(t, step1ResultEntry.Passed, "step01 must have passed collections — proves BackRef expansion found it via step02's back-reference digest")
+
+	step2ResultEntry, ok := stepResults["step02"]
+	require.True(t, ok, "step02 missing from results")
+	require.NotEmpty(t, step2ResultEntry.Passed, "step02 must have passed collections")
+
+	// Also assert that step02's collection actually emits the BackRef we
+	// rely on — protects against the test silently turning into a no-op if
+	// the BackReffer interface is renamed or the attestor stops being
+	// registered.
+	backRefs := step2ResultEntry.Passed[0].Collection.Collection.BackRefs()
+	require.NotEmpty(t, backRefs, "step02 collection must expose BackRefs for subject expansion to be exercised")
 }
 
 func makePolicy(functionary policy.Functionary, publicKey policy.PublicKey, roots map[string]policy.Root) policy.Policy {

@@ -44,6 +44,16 @@ func NewVerifiedSource(source Sourcer, verifyOpts ...dsse.VerificationOption) *V
 	return &VerifiedSource{source, verifyOpts}
 }
 
+// truncLogField returns s truncated to n bytes for log-field display. It is
+// panic-safe for strings shorter than n (e.g. short collection references like
+// "step01" in tests).
+func truncLogField(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionVerificationResult, error) {
 	unverified, err := s.source.Search(ctx, collectionName, subjectDigests, attestations)
 	if err != nil {
@@ -70,10 +80,10 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 			kid := "unknown"
 			if cv.Verifier != nil {
 				if k, err := cv.Verifier.KeyID(); err == nil {
-					kid = k[:12]
+					kid = truncLogField(k, 12)
 				}
 			}
-			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s verifier kid=%s error=%v\n", toVerify.Reference[:12], kid, cv.Error)
+			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s verifier kid=%s error=%v\n", truncLogField(toVerify.Reference, 12), kid, cv.Error)
 		}
 
 		passedVerifiers := make([]cryptoutil.Verifier, 0)
