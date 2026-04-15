@@ -117,7 +117,7 @@ func Test_socketTypeName(t *testing.T) {
 		{1 | 0x800, "SOCK_STREAM"},
 		// SOCK_DGRAM | SOCK_CLOEXEC (0x80000)
 		{2 | 0x80000, "SOCK_DGRAM"},
-		{99, "SOCK_3"}, // 99 & 0xf = 3 = SOCK_RAW
+		{100, "SOCK_4"}, // 100 & 0xf = 4 (SOCK_RDM, not in switch → default format)
 	}
 	for _, tt := range tests {
 		got := socketTypeName(tt.input)
