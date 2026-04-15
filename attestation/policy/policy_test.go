@@ -1763,6 +1763,42 @@ func TestValidate_IndirectCycle(t *testing.T) {
 	assert.GreaterOrEqual(t, len(cycle.Steps), 3)
 }
 
+// TestValidate_UnknownExternalAttestation is the scaffold test for issue #39:
+// a Step.ExternalFrom entry that does not correspond to a key in
+// Policy.ExternalAttestations must produce ErrUnknownExternalAttestation. The
+// full matrix (required vs optional, functionary cross-references, etc.) is
+// deferred to the follow-up PR that wires external attestations into Verify.
+func TestValidate_UnknownExternalAttestation(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"build": {
+				Name:         "build",
+				ExternalFrom: []string{"missing-vsa"},
+			},
+		},
+		// Declare a different external so the map is non-nil but lacks the
+		// referenced name — this guards against "nil map means skip" regressions.
+		ExternalAttestations: map[string]ExternalAttestation{
+			"unrelated": {Name: "unrelated", PredicateType: "https://example.com/other/v1"},
+		},
+	}
+
+	err := p.Validate()
+	require.Error(t, err)
+
+	var unknown ErrUnknownExternalAttestation
+	require.ErrorAs(t, err, &unknown)
+	assert.Equal(t, "build", unknown.Step)
+	assert.Equal(t, "missing-vsa", unknown.Name)
+
+	// And the happy path: declaring the external resolves the reference.
+	p.ExternalAttestations["missing-vsa"] = ExternalAttestation{
+		Name:          "missing-vsa",
+		PredicateType: "https://slsa.dev/verification_summary/v1",
+	}
+	assert.NoError(t, p.Validate())
+}
+
 // ---------------------------------------------------------------------------
 // topologicalSort
 // ---------------------------------------------------------------------------

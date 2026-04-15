@@ -142,3 +142,15 @@ type ErrDependencyNotVerified struct {
 func (e ErrDependencyNotVerified) Error() string {
 	return fmt.Sprintf("dependency '%v' not verified - cannot evaluate dependent step", e.Step)
 }
+
+// ErrUnknownExternalAttestation is returned by Policy.Validate when a step's
+// ExternalFrom references an external-attestation name that is not declared
+// in Policy.ExternalAttestations.
+type ErrUnknownExternalAttestation struct {
+	Step string
+	Name string
+}
+
+func (e ErrUnknownExternalAttestation) Error() string {
+	return fmt.Sprintf("step '%v' references unknown external attestation '%v' in externalFrom", e.Step, e.Name)
+}

@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 )
@@ -31,8 +32,33 @@ type CollectionEnvelope struct {
 	Reference  string
 }
 
+// StatementEnvelope carries a non-Collection DSSE envelope (bare predicate)
+// returned by Sourcer.SearchByPredicateType. Attestor is either a typed
+// attestor produced by the registered factory for Statement.PredicateType,
+// or an *attestation.RawAttestation wrapping the raw predicate JSON when no
+// factory is registered. See issue #39.
+type StatementEnvelope struct {
+	Envelope  dsse.Envelope
+	Statement intoto.Statement
+	Attestor  attestation.Attestor
+	Verifiers []cryptoutil.Verifier
+	Reference string
+	Errors    []error
+}
+
+// Sourcer fetches DSSE envelopes from a backing store.
+//
+// Search returns attestation Collections (existing behavior).
+//
+// SearchByPredicateType returns bare-predicate statements (e.g. SLSA
+// provenance, VSA, cosign attestations) whose predicateType is in
+// predicateTypes AND whose statement subjects intersect subjectDigests.
+// Implementations MUST NOT add those additional subjects to the policy's
+// running subject-digest set — external attestations are verified without
+// participating in Collection subject-graph traversal.
 type Sourcer interface {
 	Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionEnvelope, error)
+	SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error)
 }
 
 func envelopeToCollectionEnvelope(reference string, env dsse.Envelope) (CollectionEnvelope, error) {

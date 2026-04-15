@@ -16,6 +16,7 @@ package source
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/aflock-ai/rookery/attestation/archivista"
@@ -92,4 +93,16 @@ func (s *ArchivistaSource) Search(ctx context.Context, collectionName string, su
 	s.mu.Unlock()
 
 	return envelopes, nil
+}
+
+// SearchByPredicateType is a scaffold stub — the real implementation is a
+// follow-up PR that will issue an Archivista GraphQL query of the form
+// hasStatementWith.predicateIn:[...] + hasSubjectsWith.valueIn:[...]
+// (see go-witness issue #595). Returning an explicit error here keeps the
+// Sourcer interface contract honest until the query + download plumbing
+// lands.
+//
+// TODO(#39): implement external-attestation search against Archivista.
+func (s *ArchivistaSource) SearchByPredicateType(_ context.Context, _ []string, _ []string) ([]StatementEnvelope, error) {
+	return nil, errors.New("ArchivistaSource.SearchByPredicateType: not implemented")
 }

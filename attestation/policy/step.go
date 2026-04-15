@@ -33,6 +33,25 @@ type Step struct {
 	Attestations     []Attestation `json:"attestations" jsonschema:"title=Attestations,description=Required attestation types and their associated policies"`
 	ArtifactsFrom    []string      `json:"artifactsFrom,omitempty" jsonschema:"title=Artifacts From,description=Other step names whose products must match this step's materials"`
 	AttestationsFrom []string      `json:"attestationsFrom,omitempty" jsonschema:"title=Attestations From,description=Other step names whose attestation data is accessible during Rego evaluation"`
+	ExternalFrom     []string      `json:"externalFrom,omitempty" jsonschema:"title=External From,description=Names of external attestations (from Policy.ExternalAttestations) whose predicates are accessible during Rego evaluation as input.external.<name>"`
+}
+
+// ExternalAttestation describes a bare-predicate DSSE envelope (non-Collection)
+// that the policy engine verifies as first-class evidence alongside step
+// collections. External attestations are matched by predicate type + policy
+// seed subjects, validated against their own Functionaries and RegoPolicies,
+// and do NOT participate in the Collection subject-graph / BackRef traversal.
+//
+// See issue #39 for the full design.
+//
+// +kubebuilder:object:generate=true
+type ExternalAttestation struct {
+	Name          string        `json:"name" jsonschema:"title=Name,description=Unique name for this external attestation; referenced by Step.ExternalFrom"`
+	PredicateType string        `json:"predicateType" jsonschema:"title=Predicate Type,description=Statement predicateType URI to match (e.g. https://slsa.dev/provenance/v1)"`
+	Functionaries []Functionary `json:"functionaries" jsonschema:"title=Functionaries,description=Authorized signers for this external attestation"`
+	RegoPolicies  []RegoPolicy  `json:"regopolicies,omitempty" jsonschema:"title=Rego Policies,description=Rego policies evaluated against the bare predicate (input is the predicate itself)"`
+	AiPolicies    []AiPolicy    `json:"aipolicies,omitempty" jsonschema:"title=AI Policies,description=AI policies evaluated against the bare predicate"`
+	Required      bool          `json:"required" jsonschema:"title=Required,description=When true (default), verification fails if no envelope matches; when false, absence is tolerated"`
 }
 
 // +kubebuilder:object:generate=true

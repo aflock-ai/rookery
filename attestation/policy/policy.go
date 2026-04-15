@@ -38,11 +38,12 @@ const LegacyPolicyPredicate = "https://witness.testifysec.com/policy/v0.1"
 
 // +kubebuilder:object:generate=true
 type Policy struct {
-	Expires              metav1.Time          `json:"expires" jsonschema:"title=Expires,description=Timestamp when this policy expires and should no longer be used for verification"`
-	Roots                map[string]Root      `json:"roots,omitempty" jsonschema:"title=Root Certificates,description=Trusted root certificates keyed by a unique identifier"`
-	TimestampAuthorities map[string]Root      `json:"timestampauthorities,omitempty" jsonschema:"title=Timestamp Authorities,description=Trusted timestamp authority certificates keyed by a unique identifier"`
-	PublicKeys           map[string]PublicKey `json:"publickeys,omitempty" jsonschema:"title=Public Keys,description=Trusted public keys keyed by their key ID"`
-	Steps                map[string]Step      `json:"steps" jsonschema:"title=Steps,description=Verification steps that must be satisfied,required"`
+	Expires              metav1.Time                    `json:"expires" jsonschema:"title=Expires,description=Timestamp when this policy expires and should no longer be used for verification"`
+	Roots                map[string]Root                `json:"roots,omitempty" jsonschema:"title=Root Certificates,description=Trusted root certificates keyed by a unique identifier"`
+	TimestampAuthorities map[string]Root                `json:"timestampauthorities,omitempty" jsonschema:"title=Timestamp Authorities,description=Trusted timestamp authority certificates keyed by a unique identifier"`
+	PublicKeys           map[string]PublicKey           `json:"publickeys,omitempty" jsonschema:"title=Public Keys,description=Trusted public keys keyed by their key ID"`
+	Steps                map[string]Step                `json:"steps" jsonschema:"title=Steps,description=Verification steps that must be satisfied,required"`
+	ExternalAttestations map[string]ExternalAttestation `json:"externalAttestations,omitempty" jsonschema:"title=External Attestations,description=Bare predicate DSSE envelopes (SLSA provenance, VSAs, cosign attestations) verified as first-class policy evidence"`
 }
 
 // +kubebuilder:object:generate=true
@@ -246,6 +247,7 @@ func checkVerifyOpts(vo *verifyOptions) error {
 //   - Self-referencing steps (AttestationsFrom contains the step itself)
 //   - References to non-existent steps
 //   - Circular dependencies in AttestationsFrom chains
+//   - Step.ExternalFrom entries referencing undefined external attestations
 func (p Policy) Validate() error { //nolint:gocognit,gocyclo
 	// Check self-references and unknown steps.
 	for name, step := range p.Steps {
@@ -255,6 +257,15 @@ func (p Policy) Validate() error { //nolint:gocognit,gocyclo
 			}
 			if _, ok := p.Steps[dep]; !ok {
 				return fmt.Errorf("step %q references unknown step %q in attestationsFrom", name, dep)
+			}
+		}
+
+		// Flat existence check for external-attestation references. External
+		// attestations cannot reference each other (Collection-graph semantics
+		// do not apply to them), so no cycle/DFS logic is needed here.
+		for _, extName := range step.ExternalFrom {
+			if _, ok := p.ExternalAttestations[extName]; !ok {
+				return ErrUnknownExternalAttestation{Step: name, Name: extName}
 			}
 		}
 	}
