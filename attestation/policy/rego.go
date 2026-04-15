@@ -75,16 +75,9 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	}
 
 	// When cross-step context is provided, wrap the input so Rego policies
-	// can access other steps' attestation data via input.steps.<stepName>.
-	var input interface{}
-	if len(stepContext) > 0 && stepContext[0] != nil {
-		input = map[string]interface{}{
-			"attestation": attestorData,
-			"steps":       stepContext[0],
-		}
-	} else {
-		input = attestorData
-	}
+	// can access other steps' attestation data via input.steps.<stepName>
+	// and external attestations via input.external.<name>.
+	input := buildRegoInput(attestorData, stepContext)
 
 	query := ""
 	denyPaths := map[string]struct{}{}
@@ -172,4 +165,48 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	}
 
 	return nil
+}
+
+// buildRegoInput assembles the Rego input value for an attestor.
+//
+// When no stepContext is provided, input is the raw attestor JSON
+// (backward-compatible shape).
+//
+// When stepContext is provided, input is wrapped with:
+//   - input.attestation — the attestor JSON
+//   - input.steps       — cross-step context from AttestationsFrom
+//   - input.external    — external-attestation context (only when present)
+//
+// The external-attestation context travels through the same map as steps
+// context under the reserved key externalAttestationsContextKey so callers
+// only pass one map; this helper lifts it out.
+func buildRegoInput(attestorData interface{}, stepContext []map[string]interface{}) interface{} {
+	if len(stepContext) == 0 || stepContext[0] == nil {
+		return attestorData
+	}
+	stepsData, externalData := splitStepAndExternalContext(stepContext[0])
+	wrapped := map[string]interface{}{
+		"attestation": attestorData,
+		"steps":       stepsData,
+	}
+	if externalData != nil {
+		wrapped["external"] = externalData
+	}
+	return wrapped
+}
+
+// splitStepAndExternalContext separates the cross-step entries from the
+// external-attestation entry (stored under externalAttestationsContextKey).
+func splitStepAndExternalContext(ctx map[string]interface{}) (stepsData, externalData map[string]interface{}) {
+	stepsData = make(map[string]interface{}, len(ctx))
+	for k, v := range ctx {
+		if k == externalAttestationsContextKey {
+			if em, ok := v.(map[string]interface{}); ok {
+				externalData = em
+			}
+			continue
+		}
+		stepsData[k] = v
+	}
+	return stepsData, externalData
 }

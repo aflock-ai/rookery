@@ -46,6 +46,15 @@ type RawAttestation struct {
 	data     json.RawMessage
 }
 
+// NewRawAttestation returns a RawAttestation with the given predicate type URI
+// and raw JSON payload. This is the escape hatch used by callers (e.g. the
+// external-attestations source path) that need to wrap a bare predicate when
+// no typed factory is registered for the predicate type. Rego still sees the
+// raw predicate JSON via MarshalJSON.
+func NewRawAttestation(predicateType string, data json.RawMessage) *RawAttestation {
+	return &RawAttestation{typeName: predicateType, data: data}
+}
+
 func (r *RawAttestation) Name() string     { return r.typeName }
 func (r *RawAttestation) Type() string     { return r.typeName }
 func (r *RawAttestation) RunType() RunType { return "" }

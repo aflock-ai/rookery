@@ -165,3 +165,60 @@ func (s *MemorySource) matchesAttestations(ref string, attestations []string) bo
 	}
 	return true
 }
+
+// SearchByPredicateType returns loaded envelopes whose statement predicateType
+// is in predicateTypes AND whose subject digests intersect subjectDigests.
+// Used by the policy engine for external-attestation verification — see
+// issue #39.
+//
+// For each match, SearchByPredicateType looks up a typed factory via
+// attestation.FactoryByType(predicateType); when none is registered it falls
+// back to attestation.NewRawAttestation wrapping the raw predicate JSON so
+// Rego evaluation still has structured input.
+//
+// This path does NOT verify the envelope — verification happens later in the
+// VerifiedSource path (or in the policy engine via external-attestation
+// flow). No Verifiers are populated by this implementation.
+func (s *MemorySource) SearchByPredicateType(_ context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	predicateSet := make(map[string]struct{}, len(predicateTypes))
+	for _, pt := range predicateTypes {
+		predicateSet[pt] = struct{}{}
+	}
+
+	matches := make([]StatementEnvelope, 0)
+	for ref, env := range s.envelopesByReference {
+		if _, ok := predicateSet[env.Statement.PredicateType]; !ok {
+			continue
+		}
+		if !s.matchesSubjects(ref, subjectDigests) {
+			continue
+		}
+
+		se := StatementEnvelope{
+			Envelope:  env.Envelope,
+			Statement: env.Statement,
+			Reference: ref,
+		}
+
+		if factory, ok := attestation.FactoryByType(env.Statement.PredicateType); ok {
+			typed := factory()
+			if err := json.Unmarshal(env.Statement.Predicate, typed); err != nil {
+				// Fall back to RawAttestation on unmarshal error — the rego
+				// layer can still evaluate against the raw predicate JSON.
+				se.Errors = append(se.Errors, fmt.Errorf("typed factory unmarshal failed, falling back to raw: %w", err))
+				se.Attestor = attestation.NewRawAttestation(env.Statement.PredicateType, env.Statement.Predicate)
+			} else {
+				se.Attestor = typed
+			}
+		} else {
+			se.Attestor = attestation.NewRawAttestation(env.Statement.PredicateType, env.Statement.Predicate)
+		}
+
+		matches = append(matches, se)
+	}
+
+	return matches, nil
+}

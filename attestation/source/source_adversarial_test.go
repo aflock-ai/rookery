@@ -59,6 +59,10 @@ func (s *errSourcer) Search(ctx context.Context, collectionName string, subjectD
 	return nil, s.err
 }
 
+func (s *errSourcer) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
+	return nil, s.err
+}
+
 // delaySourcer is a source that blocks until its channel is closed, then returns results.
 type delaySourcer struct {
 	gate    chan struct{}
@@ -68,6 +72,11 @@ type delaySourcer struct {
 func (s *delaySourcer) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionEnvelope, error) {
 	<-s.gate
 	return s.results, nil
+}
+
+func (s *delaySourcer) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
+	<-s.gate
+	return nil, nil
 }
 
 // --- MemorySource adversarial tests ---

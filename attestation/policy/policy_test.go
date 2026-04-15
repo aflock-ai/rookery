@@ -31,12 +31,17 @@ import (
 
 // mockVerifiedSource implements source.VerifiedSourcer for testing
 type mockVerifiedSource struct {
-	results []source.CollectionVerificationResult
-	err     error
+	results         []source.CollectionVerificationResult
+	externalResults []source.StatementEnvelope
+	err             error
 }
 
 func (m *mockVerifiedSource) Search(_ context.Context, _ string, _ []string, _ []string) ([]source.CollectionVerificationResult, error) {
 	return m.results, m.err
+}
+
+func (m *mockVerifiedSource) SearchByPredicateType(_ context.Context, _ []string, _ []string) ([]source.StatementEnvelope, error) {
+	return m.externalResults, m.err
 }
 
 // dummyAttestor satisfies attestation.Attestor for rego and validation tests.
@@ -1763,6 +1768,42 @@ func TestValidate_IndirectCycle(t *testing.T) {
 	assert.GreaterOrEqual(t, len(cycle.Steps), 3)
 }
 
+// TestValidate_UnknownExternalAttestation is the scaffold test for issue #39:
+// a Step.ExternalFrom entry that does not correspond to a key in
+// Policy.ExternalAttestations must produce ErrUnknownExternalAttestation. The
+// full matrix (required vs optional, functionary cross-references, etc.) is
+// deferred to the follow-up PR that wires external attestations into Verify.
+func TestValidate_UnknownExternalAttestation(t *testing.T) {
+	p := Policy{
+		Steps: map[string]Step{
+			"build": {
+				Name:         "build",
+				ExternalFrom: []string{"missing-vsa"},
+			},
+		},
+		// Declare a different external so the map is non-nil but lacks the
+		// referenced name — this guards against "nil map means skip" regressions.
+		ExternalAttestations: map[string]ExternalAttestation{
+			"unrelated": {Name: "unrelated", PredicateType: "https://example.com/other/v1"},
+		},
+	}
+
+	err := p.Validate()
+	require.Error(t, err)
+
+	var unknown ErrUnknownExternalAttestation
+	require.ErrorAs(t, err, &unknown)
+	assert.Equal(t, "build", unknown.Step)
+	assert.Equal(t, "missing-vsa", unknown.Name)
+
+	// And the happy path: declaring the external resolves the reference.
+	p.ExternalAttestations["missing-vsa"] = ExternalAttestation{
+		Name:          "missing-vsa",
+		PredicateType: "https://slsa.dev/verification_summary/v1",
+	}
+	assert.NoError(t, p.Validate())
+}
+
 // ---------------------------------------------------------------------------
 // topologicalSort
 // ---------------------------------------------------------------------------
@@ -2167,11 +2208,24 @@ func TestVerify_CrossStepAttestationAccess(t *testing.T) {
 
 // stepAwareVerifiedSource returns different results per step name.
 type stepAwareVerifiedSource struct {
-	byStep map[string][]source.CollectionVerificationResult
+	byStep      map[string][]source.CollectionVerificationResult
+	byPredicate map[string][]source.StatementEnvelope
 }
 
 func (s *stepAwareVerifiedSource) Search(_ context.Context, stepName string, _ []string, _ []string) ([]source.CollectionVerificationResult, error) {
 	return s.byStep[stepName], nil
+}
+
+func (s *stepAwareVerifiedSource) SearchByPredicateType(_ context.Context, predicateTypes []string, _ []string) ([]source.StatementEnvelope, error) {
+	total := 0
+	for _, pt := range predicateTypes {
+		total += len(s.byPredicate[pt])
+	}
+	out := make([]source.StatementEnvelope, 0, total)
+	for _, pt := range predicateTypes {
+		out = append(out, s.byPredicate[pt]...)
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------------------

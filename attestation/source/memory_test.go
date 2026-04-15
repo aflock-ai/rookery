@@ -316,3 +316,84 @@ func TestSearch(t *testing.T) {
 		})
 	}
 }
+
+// TestSearchByPredicateType_HappyPath is the scaffold test for issue #39: a
+// synthetic SLSA-v1 envelope loaded into MemorySource must be returned by
+// SearchByPredicateType when the predicate type AND a subject digest match.
+// The full 16-case matrix described in the issue is intentionally deferred
+// to the follow-up PR once the verification flow is wired in.
+func TestSearchByPredicateType_HappyPath(t *testing.T) {
+	const (
+		slsaV1PredicateType = "https://slsa.dev/provenance/v1"
+		matchingDigest      = "deadbeefcafebabe"
+	)
+
+	// Synthetic SLSA provenance v1 predicate — just enough shape for the
+	// statement parser; the scaffold does not exercise typed SLSA decoding.
+	predicate := json.RawMessage(`{
+        "buildDefinition": {"buildType": "https://example.com/build/v1"},
+        "runDetails": {"builder": {"id": "https://example.com/builder"}}
+    }`)
+
+	stmt := intoto.Statement{
+		Type:          intoto.StatementType,
+		PredicateType: slsaV1PredicateType,
+		Subject: []intoto.Subject{
+			{Name: "pkg:example/artifact", Digest: map[string]string{"sha256": matchingDigest}},
+		},
+		Predicate: predicate,
+	}
+
+	payload, err := json.Marshal(stmt)
+	if err != nil {
+		t.Fatalf("marshal statement: %v", err)
+	}
+
+	env := dsse.Envelope{Payload: payload, PayloadType: "application/vnd.in-toto+json"}
+
+	s := NewMemorySource()
+	if err := s.LoadEnvelope("ref-slsa-v1", env); err != nil {
+		t.Fatalf("LoadEnvelope: %v", err)
+	}
+
+	// Also load a non-matching envelope (wrong predicate type) to confirm
+	// filtering actually happens instead of returning everything.
+	otherStmt := stmt
+	otherStmt.PredicateType = "https://example.com/other/v1"
+	otherPayload, err := json.Marshal(otherStmt)
+	if err != nil {
+		t.Fatalf("marshal other statement: %v", err)
+	}
+	if err := s.LoadEnvelope("ref-other", dsse.Envelope{Payload: otherPayload, PayloadType: "application/vnd.in-toto+json"}); err != nil {
+		t.Fatalf("LoadEnvelope other: %v", err)
+	}
+
+	got, err := s.SearchByPredicateType(context.Background(), []string{slsaV1PredicateType}, []string{matchingDigest})
+	if err != nil {
+		t.Fatalf("SearchByPredicateType: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(got))
+	}
+	if got[0].Reference != "ref-slsa-v1" {
+		t.Errorf("Reference = %q, want %q", got[0].Reference, "ref-slsa-v1")
+	}
+	if got[0].Statement.PredicateType != slsaV1PredicateType {
+		t.Errorf("PredicateType = %q, want %q", got[0].Statement.PredicateType, slsaV1PredicateType)
+	}
+	if got[0].Attestor == nil {
+		t.Fatal("Attestor should be non-nil (RawAttestation fallback when no factory is registered)")
+	}
+	if got[0].Attestor.Type() != slsaV1PredicateType {
+		t.Errorf("Attestor.Type() = %q, want %q", got[0].Attestor.Type(), slsaV1PredicateType)
+	}
+
+	// Subject digest must not match → zero results.
+	got, err = s.SearchByPredicateType(context.Background(), []string{slsaV1PredicateType}, []string{"notamatch"})
+	if err != nil {
+		t.Fatalf("SearchByPredicateType (no-match subject): %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 matches for non-matching subject digest, got %d", len(got))
+	}
+}
