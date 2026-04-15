@@ -112,9 +112,9 @@ func sampleReport() DockerBenchReport {
 				Result: "PASS",
 			},
 			{
-				ID:     "5.1",
-				Desc:   "Ensure that, if applicable, an AppArmor Profile is enabled",
-				Result: "WARN",
+				ID:      "5.1",
+				Desc:    "Ensure that, if applicable, an AppArmor Profile is enabled",
+				Result:  "WARN",
 				Details: "abc123def456 xyz789abc012",
 			},
 		},

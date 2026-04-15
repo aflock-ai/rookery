@@ -89,15 +89,15 @@ type SeverityCounts struct {
 
 // Summary is the attestation predicate stored in the signed envelope.
 type Summary struct {
-	AccountId      string                    `json:"accountId"`
-	Provider       string                    `json:"provider"`
-	TotalChecks    int                       `json:"totalChecks"`
-	PassCount      int                       `json:"passCount"`
-	FailCount      int                       `json:"failCount"`
-	BySeverity     map[string]SeverityCounts `json:"bySeverity"`
-	FailedChecks   []FailedCheck             `json:"failedChecks"`
-	ReportFile     string                    `json:"reportFile"`
-	ReportDigest   cryptoutil.DigestSet      `json:"reportDigest"`
+	AccountId    string                    `json:"accountId"`
+	Provider     string                    `json:"provider"`
+	TotalChecks  int                       `json:"totalChecks"`
+	PassCount    int                       `json:"passCount"`
+	FailCount    int                       `json:"failCount"`
+	BySeverity   map[string]SeverityCounts `json:"bySeverity"`
+	FailedChecks []FailedCheck             `json:"failedChecks"`
+	ReportFile   string                    `json:"reportFile"`
+	ReportDigest cryptoutil.DigestSet      `json:"reportDigest"`
 }
 
 // Attestor reads prowler JSON output and produces a signed summary attestation.
@@ -178,6 +178,7 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subjects
 }
 
+//nolint:gocognit // sequential candidate scan: iterate products → open → decode → validate
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
 	if len(products) == 0 {

@@ -107,6 +107,7 @@ func TestParseXCCDF(t *testing.T) {
 	}
 }
 
+//nolint:gocyclo // table-driven test with per-case branch assertions
 func TestBuildSummaryAndSubjects(t *testing.T) {
 	a := New()
 
