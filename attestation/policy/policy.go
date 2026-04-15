@@ -686,10 +686,25 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 			})
 		}
 
-		// Passed count = 0 AND required → hard failure.
+		// Passed count = 0 AND required → hard failure. Two sub-cases:
+		// (a) no envelopes were ever found (already handled at line ~593
+		//     where we return ErrMissingExternalAttestation before the
+		//     envelope loop). If we're here, len(envelopes) > 0.
+		// (b) envelopes were found but every one was rejected (functionary
+		//     mismatch, rego deny, ai deny). Returning
+		//     ErrMissingExternalAttestation here would mask the real deny
+		//     reason. Surface the rejection reasons instead.
 		if len(er.Passed) == 0 && ext.Required {
 			results[name] = er
-			return results, ErrMissingExternalAttestation{Name: name, PredicateType: ext.PredicateType}
+			reasons := make([]error, 0, len(er.Rejected))
+			for _, r := range er.Rejected {
+				reasons = append(reasons, r.Reason)
+			}
+			return results, ErrExternalAttestationRejected{
+				Name:          name,
+				PredicateType: ext.PredicateType,
+				Rejections:    reasons,
+			}
 		}
 
 		results[name] = er

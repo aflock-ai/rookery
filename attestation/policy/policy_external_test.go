@@ -355,9 +355,16 @@ func TestExternal_05_VSAFailedRegoDenies(t *testing.T) {
 		WithVerifiedSource(ms),
 		WithSubjectDigests([]string{"sha256:artifact"}),
 	)
-	require.Error(t, err, "failing VSA with required=true + no passes should surface ErrMissingExternalAttestation")
+	require.Error(t, err, "failing VSA with required=true + no passes should surface rejection reasons")
 	assert.False(t, pass)
-	// All envelopes rejected, none passed → Required triggers missing error.
+	// All envelopes rejected, none passed → Required triggers rejected-error (NOT missing).
+	// The distinction matters: 'missing' vs 'rejected' carry different diagnostic info
+	// for the operator — this test case is "we found one but it failed rego", so we
+	// expect ErrExternalAttestationRejected with the rego deny reason embedded.
+	var rejErr ErrExternalAttestationRejected
+	require.ErrorAs(t, err, &rejErr, "expected ErrExternalAttestationRejected, got %T: %v", err, err)
+	assert.Equal(t, "vsa", rejErr.Name)
+	assert.NotEmpty(t, rejErr.Rejections, "rejection reasons must be surfaced")
 	if _, ok := extResults["vsa"]; ok {
 		assert.Empty(t, extResults["vsa"].Passed)
 		assert.NotEmpty(t, extResults["vsa"].Rejected)
