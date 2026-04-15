@@ -570,7 +570,7 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 // A non-required external with zero matches is marked Skipped and passes.
 // Individual envelope failures are recorded in Rejected; the external as a
 // whole passes iff at least one Passed envelope is accumulated (or Skipped).
-func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOptions, trustBundles map[string]TrustBundle) (map[string]ExternalResult, error) { //nolint:gocognit,gocyclo // per-envelope verification has irreducible branching (functionary match / rego / ai / success); each branch produces a distinct rejection path
+func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOptions, trustBundles map[string]TrustBundle) (map[string]ExternalResult, error) { //nolint:gocognit,gocyclo,funlen // per-envelope verification has irreducible branching (functionary match / rego / ai / success); each branch produces a distinct rejection path
 	results := make(map[string]ExternalResult, len(p.ExternalAttestations))
 	if len(p.ExternalAttestations) == 0 {
 		return results, nil
