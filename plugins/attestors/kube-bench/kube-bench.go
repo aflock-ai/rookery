@@ -51,11 +51,11 @@ func init() {
 
 // ControlResult represents a single test result from kube-bench.
 type ControlResult struct {
-	TestNumber  string `json:"test_number"`
-	TestDesc    string `json:"test_desc"`
-	Status      string `json:"status"`
-	Scored      bool   `json:"scored"`
-	ActualValue string `json:"actual_value,omitempty"`
+	TestNumber     string `json:"test_number"`
+	TestDesc       string `json:"test_desc"`
+	Status         string `json:"status"`
+	Scored         bool   `json:"scored"`
+	ActualValue    string `json:"actual_value,omitempty"`
 	ExpectedResult string `json:"expected_result,omitempty"`
 }
 
@@ -156,6 +156,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	return a.getCandidate(ctx)
 }
 
+//nolint:gocognit // sequential candidate scan: iterate products → open → decode → validate
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
 	if len(products) == 0 {

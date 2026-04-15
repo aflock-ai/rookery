@@ -64,6 +64,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/system-packages => ../plu
 
 replace github.com/aflock-ai/rookery/plugins/attestors/vex => ../plugins/attestors/vex
 
+replace github.com/aflock-ai/rookery/plugins/attestors/pip-install => ../plugins/attestors/pip-install
+
 // Signer plugins
 replace github.com/aflock-ai/rookery/plugins/signers/debug-signer => ../plugins/signers/debug-signer
 
@@ -114,6 +116,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/slsa v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/system-packages v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/vex v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/pip-install v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/debug-signer v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/file v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/fulcio v0.0.0-00010101000000-000000000000

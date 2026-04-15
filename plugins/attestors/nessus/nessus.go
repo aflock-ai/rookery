@@ -50,19 +50,19 @@ type nessusXML struct {
 }
 
 type reportXML struct {
-	Name  string         `xml:"name,attr"`
+	Name  string          `xml:"name,attr"`
 	Hosts []reportHostXML `xml:"ReportHost"`
 }
 
 type reportHostXML struct {
-	Name  string           `xml:"name,attr"`
-	Items []reportItemXML  `xml:"ReportItem"`
+	Name  string          `xml:"name,attr"`
+	Items []reportItemXML `xml:"ReportItem"`
 }
 
 type reportItemXML struct {
-	PluginID   string `xml:"pluginID,attr"`
-	Severity   int    `xml:"severity,attr"`
-	PluginName string `xml:"pluginName,attr"`
+	PluginID   string   `xml:"pluginID,attr"`
+	Severity   int      `xml:"severity,attr"`
+	PluginName string   `xml:"pluginName,attr"`
 	CVEs       []string `xml:"cve"`
 }
 
@@ -86,9 +86,9 @@ type SeverityCounts struct {
 
 // Summary is the human-readable summary stored in the attestation.
 type Summary struct {
-	TotalHosts     int            `json:"totalHosts"`
+	TotalHosts      int            `json:"totalHosts"`
 	Vulnerabilities SeverityCounts `json:"vulnerabilities"`
-	TopCVEs        []string       `json:"topCVEs"`
+	TopCVEs         []string       `json:"topCVEs"`
 }
 
 // Attestor reads a .nessus XML file produced by Tenable Nessus and attests
@@ -188,6 +188,7 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	return fmt.Errorf("no .nessus file found in products")
 }
 
+//nolint:gocognit // nested XML walk: reports → hosts → items → severity aggregation
 func (a *Attestor) buildSummaryAndSubjects(parsed nessusXML) {
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 	subjects := make(map[string]cryptoutil.DigestSet)

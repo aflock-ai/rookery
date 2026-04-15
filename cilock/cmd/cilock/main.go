@@ -29,6 +29,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/maven"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/oci"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/omnitrail"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/pip-install"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/policyverify"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/product"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/sarif"
