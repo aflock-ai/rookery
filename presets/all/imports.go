@@ -44,6 +44,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/slsa"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/system-packages"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/vex"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/vsa"
 
 	// signer providers
 	_ "github.com/aflock-ai/rookery/plugins/signers/debug-signer"

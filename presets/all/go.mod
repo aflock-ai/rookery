@@ -60,6 +60,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/system-packages => ../../
 
 replace github.com/aflock-ai/rookery/plugins/attestors/vex => ../../plugins/attestors/vex
 
+replace github.com/aflock-ai/rookery/plugins/attestors/vsa => ../../plugins/attestors/vsa
+
 // Signer plugins
 replace github.com/aflock-ai/rookery/plugins/signers/debug-signer => ../../plugins/signers/debug-signer
 
@@ -107,6 +109,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/slsa v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/system-packages v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/vex v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/vsa v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/debug-signer v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/file v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/fulcio v0.0.0-00010101000000-000000000000
