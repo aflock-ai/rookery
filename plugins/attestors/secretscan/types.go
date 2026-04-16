@@ -74,6 +74,13 @@ type Attestor struct {
 	Findings []Finding                       `json:"findings"` // List of detected secrets
 	subjects map[string]cryptoutil.DigestSet // Products that were scanned
 
+	// scanErrors accumulates per-file / per-attestor scan failures that
+	// would otherwise be silently swallowed. When failOnDetection is set,
+	// the attestor must fail closed if ANY scan errored — otherwise a
+	// crash in gitleaks or an unreadable product lets a malicious release
+	// pass the guard with an empty findings list.
+	scanErrors []error
+
 	// Context for the attestation
 	ctx *attestation.AttestationContext // Reference to attestation context
 }
