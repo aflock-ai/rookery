@@ -239,6 +239,10 @@ func (a *Attestor) readFileContent(filePath string) ([]byte, error) {
 
 // scanAttestations examines all completed attestors for potential secrets.
 // Each attestor is converted to JSON and scanned with the detector.
+// Per-attestor scan errors are recorded on the Attestor so that Attest()
+// can fail closed when failOnDetection is set — without that, a crash
+// in the detector on one attestor would silently return zero findings
+// and bypass the protective guard.
 func (a *Attestor) scanAttestations(ctx *attestation.AttestationContext, _ string, detector *detect.Detector) error { //nolint:unparam // error return kept for API consistency
 	// Get all completed attestors
 	completedAttestors := ctx.CompletedAttestors()
@@ -255,6 +259,7 @@ func (a *Attestor) scanAttestations(ctx *attestation.AttestationContext, _ strin
 		findings, err := a.scanSingleAttestor(completed.Attestor, "", detector)
 		if err != nil {
 			log.Debugf("(attestation/secretscan) error scanning attestor %s: %s", completed.Attestor.Name(), err)
+			a.scanErrors = append(a.scanErrors, fmt.Errorf("scanning attestor %s: %w", completed.Attestor.Name(), err))
 			continue
 		}
 
@@ -385,6 +390,7 @@ func (a *Attestor) scanProducts(ctx *attestation.AttestationContext, _ string, d
 		findings, err := a.ScanFile(absPath, detector)
 		if err != nil {
 			log.Debugf("(attestation/secretscan) error scanning file %s: %s", path, err)
+			a.scanErrors = append(a.scanErrors, fmt.Errorf("scanning product %s: %w", path, err))
 			continue
 		}
 
@@ -433,7 +439,14 @@ func (a *Attestor) getAbsolutePath(path, workingDir string) string {
 }
 
 // Attest scans attestations and products for potential secrets.
-// The attestor will fail if configured with failOnDetection=true and secrets are found.
+//
+// When failOnDetection is true, the attestor fails closed: it returns an
+// error not only when secrets are found, but ALSO when any per-file or
+// per-attestor scan errored. Previously, scan errors were silently
+// swallowed (logged at Debug level), which meant an attacker who could
+// induce a scanner crash could bypass this protective guard with an
+// empty findings list — the caller had no way to tell a clean scan
+// apart from a failed one.
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	// Store the attestation context for later use
 	a.ctx = ctx
@@ -465,9 +478,18 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		log.Debugf("(attestation/secretscan) error scanning products: %s", err)
 	}
 
-	// Fail if configured and secrets are found
-	if a.failOnDetection && len(a.Findings) > 0 {
-		return fmt.Errorf("secret scanning failed: found %d secrets", len(a.Findings))
+	if a.failOnDetection {
+		// Fail closed on scan errors — an empty findings list after a
+		// crashed scan is indistinguishable from a clean scan, and we
+		// must not let that pass when the caller opted into the guard.
+		if len(a.scanErrors) > 0 {
+			return fmt.Errorf("secret scanning failed: %d scan error(s), first: %w",
+				len(a.scanErrors), a.scanErrors[0])
+		}
+
+		if len(a.Findings) > 0 {
+			return fmt.Errorf("secret scanning failed: found %d secrets", len(a.Findings))
+		}
 	}
 
 	return nil

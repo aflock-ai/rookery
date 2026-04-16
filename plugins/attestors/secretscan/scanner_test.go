@@ -19,6 +19,8 @@ package secretscan
 
 import (
 	"crypto"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -309,4 +311,69 @@ connection:
 			t.Logf("Successfully detected GITHUB_TOKEN environment variable name")
 		}
 	}
+}
+
+// TestAttest_FailOnDetection_FailsClosedOnScanError is the regression test
+// for the protective-guard bypass fixed alongside this test. Previously,
+// scan errors were silently swallowed (logged at Debug level) — so a
+// crashed scanner would return empty findings and failOnDetection would
+// pass. We now track scan errors and fail closed when the guard is set.
+func TestAttest_FailOnDetection_FailsClosedOnScanError(t *testing.T) {
+	att := New(WithFailOnDetection(true))
+
+	// Seed a scan error as if scanAttestations / scanProducts had hit a
+	// crashed gitleaks detector, an unreadable product, or an
+	// unreachable encoded layer. We don't go through the real scan
+	// path because we want to isolate the fail-closed decision.
+	att.scanErrors = append(att.scanErrors, errors.New("simulated gitleaks crash on product X"))
+
+	ctx := &attestation.AttestationContext{}
+	err := att.Attest(ctx)
+
+	require.Error(t, err, "Attest must fail closed when failOnDetection=true and any scan errored")
+	assert.Contains(t, err.Error(), "scan error", "error must surface that a scan failed")
+	assert.Contains(t, err.Error(), "gitleaks crash", "error must wrap the underlying scan error for diagnostics")
+	assert.Empty(t, att.Findings, "guard should fire even when findings are empty — that's the bug being fixed")
+}
+
+// TestAttest_FailOnDetection_PassesOnCleanScan confirms the happy path:
+// no findings, no scan errors, failOnDetection=true → no error.
+func TestAttest_FailOnDetection_PassesOnCleanScan(t *testing.T) {
+	att := New(WithFailOnDetection(true))
+
+	ctx := &attestation.AttestationContext{}
+	err := att.Attest(ctx)
+	assert.NoError(t, err, "clean scan with no errors must pass even with failOnDetection=true")
+}
+
+// TestAttest_ScanError_WithoutFailOnDetection_StillPasses preserves the
+// existing best-effort behavior when the caller did NOT opt into the
+// guard. Scan errors are still recorded on the attestor (useful for
+// telemetry) but do not cause Attest to fail.
+func TestAttest_ScanError_WithoutFailOnDetection_StillPasses(t *testing.T) {
+	att := New() // defaultFailOnDetection = false
+
+	att.scanErrors = append(att.scanErrors, errors.New("simulated product read failure"))
+
+	ctx := &attestation.AttestationContext{}
+	err := att.Attest(ctx)
+	assert.NoError(t, err, "scan errors must not fail Attest when failOnDetection=false (best-effort mode)")
+	assert.NotEmpty(t, att.scanErrors, "scan errors should still be tracked for telemetry")
+}
+
+// TestNew_FindingsSerializesAsEmptyArrayNotNull is the regression test
+// for the findings:null-vs-[] serialization defect. Downstream
+// JSON-Schema consumers expect an array; Go's default nil-slice
+// marshaling otherwise produces `"findings": null`.
+func TestNew_FindingsSerializesAsEmptyArrayNotNull(t *testing.T) {
+	att := New()
+
+	out, err := json.Marshal(att)
+	require.NoError(t, err)
+
+	// The marshaled JSON must contain "findings":[] — never "findings":null.
+	assert.Contains(t, string(out), `"findings":[]`,
+		"empty attestor must marshal findings as []; got %s", string(out))
+	assert.NotContains(t, string(out), `"findings":null`,
+		"findings must never marshal as null; got %s", string(out))
 }
