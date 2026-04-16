@@ -90,6 +90,11 @@ func New(opts ...Option) *Attestor {
 		configPath:      defaultConfigPath,
 		maxDecodeLayers: defaultMaxDecodeLayers,
 		subjects:        make(map[string]cryptoutil.DigestSet),
+		// Initialize Findings so empty scans marshal as "findings": []
+		// rather than "findings": null — downstream JSON-Schema consumers
+		// (and Go's encoding/json default for nil slices) otherwise see
+		// a type-mismatched null where an array is expected.
+		Findings: make([]Finding, 0),
 	}
 
 	for _, opt := range opts {
