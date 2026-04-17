@@ -16,6 +16,7 @@ package k8smanifest
 
 import (
 	"bytes"
+	"crypto"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -612,7 +613,20 @@ func isJSONorYAML(path string) bool {
 	return ext == ".json" || ext == ".yaml" || ext == ".yml"
 }
 
-// Subjects returns computed subject digests
+// Subjects returns computed subject digests.
+//
+// In addition to the per-object digests stored on subjectDigests (one per
+// Kubernetes Kind:Name recorded), it also emits one subject per container
+// image referenced by the recorded objects. This lets downstream verifiers
+// join a deployment observation to the build-side attestation that produced
+// the image (via the image digest) without having to walk the attestation
+// body. Two subject forms are emitted per image:
+//
+//   - image:<sha256hex>      when the image has a resolvable sha256 digest
+//     (from DigestForRef or an explicit @sha256:… in the manifest).
+//   - imageref:<reference>   always — the raw image string as it appears in
+//     the manifest (e.g. "registry.example.com/app:v1"). Useful when the
+//     digest wasn't resolvable at scan time.
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	out := make(map[string]cryptoutil.DigestSet)
 	a.subjectDigests.Range(func(k, v interface{}) bool {
@@ -627,6 +641,41 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 		out[key] = ds
 		return true
 	})
+
+	// Emit per-image subjects so subject-digest matching joins "build
+	// produced image X" with "cluster is running image X" across DSSEs.
+	// Deduped by subject key: the same image pulled by many pods produces
+	// one subject, not N.
+	sha256Hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
+	for _, doc := range a.RecordedDocs {
+		for _, img := range doc.RecordedImages {
+			if hex := strings.TrimPrefix(strings.ToLower(img.Digest["sha256"]), "sha256:"); hex != "" {
+				key := "image:" + hex
+				if _, seen := out[key]; !seen {
+					out[key] = cryptoutil.DigestSet{
+						cryptoutil.DigestValue{Hash: crypto.SHA256}: hex,
+					}
+				}
+			}
+			if img.Reference != "" {
+				key := "imageref:" + img.Reference
+				if _, seen := out[key]; !seen {
+					// Reference-only subjects don't have an inherent digest;
+					// hash the reference string so the DigestSet isn't empty
+					// (in-toto spec requires subjects to carry at least one
+					// digest). Collision resistance is fine here — the hash
+					// is a key, not a claim about the image contents.
+					ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(img.Reference), sha256Hashes)
+					if err != nil {
+						log.Debugf("error hashing image reference %q: %v", img.Reference, err)
+						continue
+					}
+					out[key] = ds
+				}
+			}
+		}
+	}
+
 	return out
 }
 

@@ -580,3 +580,71 @@ func TestK8smanifest_MultiDocJson(t *testing.T) {
 
 	require.Len(t, km.RecordedDocs, 2)
 }
+
+// TestK8smanifest_SubjectsEmitsImageRefs verifies the image-digest join key
+// that lets downstream verifiers correlate "build produced image X" with
+// "cluster is running image X" without walking the attestation body. A
+// Deployment with two containers — one pinned by digest, one by tag — must
+// produce one `image:<hex>` subject for the digest-pinned container and two
+// `imageref:<reference>` subjects (one per container).
+func TestK8smanifest_SubjectsEmitsImageRefs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	data := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: two-container-app
+spec:
+  template:
+    spec:
+      containers:
+      - name: pinned
+        image: registry.example.com/app@sha256:aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff
+      - name: tagged
+        image: registry.example.com/sidecar:v1
+`
+	f := filepath.Join(tmpDir, "deploy.yaml")
+	require.NoError(t, os.WriteFile(f, []byte(data), 0o600))
+
+	dig, err := cryptoutil.CalculateDigestSetFromFile(f, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
+	require.NoError(t, err)
+
+	prod := producter{
+		name:    "dummy",
+		runType: attestation.ProductRunType,
+		products: map[string]attestation.Product{
+			"deploy.yaml": {MimeType: "text/yaml", Digest: dig},
+		},
+	}
+
+	km := k8smanifest.New()
+	ctx, err := attestation.NewContext("k8s-image-subjects", []attestation.Attestor{prod, km},
+		attestation.WithHashes([]cryptoutil.DigestValue{{Hash: crypto.SHA256}}),
+		attestation.WithWorkingDir(tmpDir),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, ctx.RunAttestors())
+
+	subjects := km.Subjects()
+
+	// Digest-pinned container should produce an image:<hex> subject keyed on
+	// the lowercased sha256 hex without the `sha256:` prefix.
+	const pinnedHex = "aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
+	imageKey := "image:" + pinnedHex
+	ds, ok := subjects[imageKey]
+	require.Truef(t, ok, "expected subject %q in %v", imageKey, subjects)
+	require.Equal(t, pinnedHex, ds[cryptoutil.DigestValue{Hash: crypto.SHA256}])
+
+	// Both containers should emit an imageref:<reference> subject, regardless
+	// of whether the digest was resolvable.
+	var imageRefKeys []string
+	for k := range subjects {
+		if strings.HasPrefix(k, "imageref:") {
+			imageRefKeys = append(imageRefKeys, k)
+		}
+	}
+	require.Contains(t, imageRefKeys,
+		"imageref:registry.example.com/app@sha256:aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff")
+	require.Contains(t, imageRefKeys, "imageref:registry.example.com/sidecar:v1")
+}

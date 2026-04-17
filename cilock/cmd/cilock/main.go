@@ -9,6 +9,7 @@ import (
 
 	// All attestor plugins
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-config"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-iid"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/configuration"

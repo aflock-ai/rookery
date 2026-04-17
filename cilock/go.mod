@@ -159,6 +159,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
+	github.com/aflock-ai/rookery/plugins/attestors/aws-config v0.0.0
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/anchore/go-struct-converter v0.1.0 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
@@ -418,3 +419,5 @@ require (
 )
 
 replace github.com/buger/jsonparser => ../../../security-patches/buger-jsonparser
+
+replace github.com/aflock-ai/rookery/plugins/attestors/aws-config => ../plugins/attestors/aws-config
