@@ -6,7 +6,7 @@ replace github.com/aflock-ai/rookery/attestation => ../../../attestation
 
 require (
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
-	github.com/go-git/go-git/v5 v5.17.1
+	github.com/go-git/go-git/v5 v5.18.0
 	github.com/invopop/jsonschema v0.13.0
 	github.com/stretchr/testify v1.11.1
 )
