@@ -29,13 +29,14 @@ import (
 )
 
 type runOptions struct {
-	stepName        string
-	signers         []cryptoutil.Signer
-	attestors       []attestation.Attestor
-	attestationOpts []attestation.AttestationContextOption
-	timestampers    []timestamp.Timestamper
-	insecure        bool
-	ignoreErrors    bool
+	stepName           string
+	signers            []cryptoutil.Signer
+	attestors          []attestation.Attestor
+	attestationOpts    []attestation.AttestationContextOption
+	timestampers       []timestamp.Timestamper
+	additionalSubjects map[string]cryptoutil.DigestSet
+	insecure           bool
+	ignoreErrors       bool
 }
 
 type RunOption func(ro *runOptions)
@@ -86,12 +87,38 @@ func RunWithSigners(signers ...cryptoutil.Signer) RunOption {
 	}
 }
 
+// RunWithAdditionalSubjects merges user-supplied subjects into the in-toto statement
+// generated for the attestation collection. These subjects are additive to whatever
+// attestors discover — if a key collides with an attestor-produced subject, the
+// user-supplied entry wins. Only the collection-level statement is augmented; per-
+// attestor exported statements are left untouched.
+func RunWithAdditionalSubjects(subjects map[string]cryptoutil.DigestSet) RunOption {
+	return func(ro *runOptions) {
+		if len(subjects) == 0 {
+			return
+		}
+		if ro.additionalSubjects == nil {
+			ro.additionalSubjects = make(map[string]cryptoutil.DigestSet, len(subjects))
+		}
+		for name, digest := range subjects {
+			ro.additionalSubjects[name] = digest
+		}
+	}
+}
+
 // RunResult contains the generated attestation collection as well as the signed DSSE envelope, if one was
 // created.
+//
+// CollectionSubjects is the post-merge subject set for the collection-level statement —
+// i.e. attestor-discovered subjects plus any entries supplied via RunWithAdditionalSubjects.
+// It is populated for the collection RunResult regardless of whether the run was signed
+// or insecure, so unsigned-envelope callers can reproduce the same subject set the signed
+// path would have used. It is nil for per-attestor exported RunResults.
 type RunResult struct {
-	Collection     attestation.Collection
-	SignedEnvelope dsse.Envelope
-	AttestorName   string
+	Collection         attestation.Collection
+	SignedEnvelope     dsse.Envelope
+	AttestorName       string
+	CollectionSubjects map[string]cryptoutil.DigestSet
 }
 
 // Deprecated: Use RunWithExports instead
@@ -223,8 +250,14 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 
 	var collectionResult RunResult
 	collectionResult.Collection = attestation.NewCollection(ro.stepName, attestorsForCollection)
+	// Merge user-supplied subjects into the collection's in-toto subject set.
+	// User entries take precedence on key collision so an explicit override is
+	// honoured deterministically. The merge runs for both signed and insecure
+	// paths so downstream consumers that build unsigned envelopes from
+	// CollectionSubjects see the same set the signed path would have used.
+	collectionResult.CollectionSubjects = mergeCollectionSubjects(collectionResult.Collection.Subjects(), ro.additionalSubjects)
 	if !ro.insecure {
-		collectionResult.SignedEnvelope, err = createAndSignEnvelope(collectionResult.Collection, attestation.CollectionType, collectionResult.Collection.Subjects(), dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+		collectionResult.SignedEnvelope, err = createAndSignEnvelope(collectionResult.Collection, attestation.CollectionType, collectionResult.CollectionSubjects, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 		if err != nil {
 			return result, fmt.Errorf("failed to sign collection: %w", err)
 		}
@@ -232,6 +265,24 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	result = append(result, collectionResult)
 
 	return result, attestorErr
+}
+
+// mergeCollectionSubjects returns the union of attestor-discovered subjects
+// (base) and user-supplied additional subjects. On key collision the user
+// entry wins. Returns nil if both inputs are empty so callers can distinguish
+// "no subjects" from "empty map". Safe to call with either argument nil.
+func mergeCollectionSubjects(base, additional map[string]cryptoutil.DigestSet) map[string]cryptoutil.DigestSet {
+	if len(base) == 0 && len(additional) == 0 {
+		return nil
+	}
+	merged := make(map[string]cryptoutil.DigestSet, len(base)+len(additional))
+	for name, digest := range base {
+		merged[name] = digest
+	}
+	for name, digest := range additional {
+		merged[name] = digest
+	}
+	return merged
 }
 
 func validateRunOpts(ro runOptions) error {
