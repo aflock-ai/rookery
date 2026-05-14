@@ -1,6 +1,6 @@
 module github.com/aflock-ai/rookery/attestation
 
-go 1.26.0
+go 1.26.3
 
 require (
 	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c
