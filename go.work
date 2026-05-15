@@ -55,6 +55,8 @@ use (
 	./plugins/attestors/vsa
 	./plugins/attestors/pip-install
 	./plugins/attestors/sinkhole-flows
+	./plugins/attestors/steampipe
+	./plugins/attestors/structured-data
 
 	// Signer plugins
 	./plugins/signers/debug-signer
