@@ -50,11 +50,7 @@ func writeValue(buf *bytes.Buffer, v any) error {
 		buf.WriteString("null")
 		return nil
 	case bool:
-		if x {
-			buf.WriteString("true")
-		} else {
-			buf.WriteString("false")
-		}
+		writeBool(buf, x)
 		return nil
 	case float64:
 		return writeNumber(buf, x)
@@ -62,39 +58,60 @@ func writeValue(buf *bytes.Buffer, v any) error {
 		writeString(buf, x)
 		return nil
 	case []any:
-		buf.WriteByte('[')
-		for i, item := range x {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			if err := writeValue(buf, item); err != nil {
-				return err
-			}
-		}
-		buf.WriteByte(']')
-		return nil
+		return writeArray(buf, x)
 	case map[string]any:
-		buf.WriteByte('{')
-		keys := make([]string, 0, len(x))
-		for k := range x {
-			keys = append(keys, k)
-		}
-		sort.Slice(keys, func(i, j int) bool { return utf16Less(keys[i], keys[j]) })
-		for i, k := range keys {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			writeString(buf, k)
-			buf.WriteByte(':')
-			if err := writeValue(buf, x[k]); err != nil {
-				return err
-			}
-		}
-		buf.WriteByte('}')
-		return nil
+		return writeObject(buf, x)
 	default:
 		return fmt.Errorf("canonical: unsupported type %T", v)
 	}
+}
+
+// writeBool emits "true" or "false" verbatim per RFC 8785.
+func writeBool(buf *bytes.Buffer, b bool) {
+	if b {
+		buf.WriteString("true")
+	} else {
+		buf.WriteString("false")
+	}
+}
+
+// writeArray emits a JSON array with comma-separated, recursively-canonicalized
+// elements. Empty arrays render as "[]".
+func writeArray(buf *bytes.Buffer, items []any) error {
+	buf.WriteByte('[')
+	for i, item := range items {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		if err := writeValue(buf, item); err != nil {
+			return err
+		}
+	}
+	buf.WriteByte(']')
+	return nil
+}
+
+// writeObject emits a JSON object with keys sorted by their UTF-16 code unit
+// sequence (RFC 8785 §3.2.3) and recursively-canonicalized values.
+func writeObject(buf *bytes.Buffer, obj map[string]any) error {
+	buf.WriteByte('{')
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return utf16Less(keys[i], keys[j]) })
+	for i, k := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		writeString(buf, k)
+		buf.WriteByte(':')
+		if err := writeValue(buf, obj[k]); err != nil {
+			return err
+		}
+	}
+	buf.WriteByte('}')
+	return nil
 }
 
 // writeNumber follows ECMAScript-262's ToString abstract operation for
