@@ -156,86 +156,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 	var results []QueryResult
 	for path, p := range products {
-		if !strings.Contains(p.MimeType, "json") && !strings.HasSuffix(path, ".json") {
-			continue
-		}
-		newDigest, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
-		if err != nil {
-			log.Debugf("(attestation/steampipe) digest %s: %v", path, err)
-			continue
-		}
-		if !newDigest.Equal(p.Digest) {
-			log.Debugf("(attestation/steampipe) digest mismatch for %s — concurrent write?", path)
-			continue
-		}
-		f, err := os.Open(path) //nolint:gosec // G304: path from attestation context products
-		if err != nil {
-			log.Debugf("(attestation/steampipe) open %s: %v", path, err)
-			continue
-		}
-		body, err := io.ReadAll(f)
-		_ = f.Close()
-		if err != nil {
-			log.Debugf("(attestation/steampipe) read %s: %v", path, err)
-			continue
-		}
-
-		qr, ok := parseSteampipeOutput(body)
+		result, ok := a.processProduct(ctx, path, p, hashes)
 		if !ok {
 			continue
 		}
-
-		// Capture the source file as a material so verifiers can re-derive
-		// the captured bytes from the original JSON output.
-		a.materials[path] = newDigest
-
-		// Subjects: fan-out per row per identity axis, keyed by convention
-		// from the plugin name in the recipe frontmatter. Each subject
-		// digest is sha256(identity_string) — matching prowler / aws-config
-		// / asff so cross-attestation graph traversal joins on the same
-		// digests. Per-attestation framework wraps these with
-		// `steampipe/<key>` at the collection level (see
-		// rookery/attestation/collection.go), so no within-graph collision
-		// with other attestors using the same prefix shapes.
-		//
-		// Map semantics dedupe automatically: 4 IAM users sharing an
-		// account_id collapse to one `aws:account:<id>` subject.
-		for _, row := range qr.parsedRows {
-			for _, ext := range extract(a.frontmatter.Plugin, row) {
-				ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(ext.Value), hashes)
-				if err != nil {
-					log.Debugf("(attestation/steampipe) hash subject %s: %v", ext.Key, err)
-					continue
-				}
-				a.subjects[ext.Key] = ds
-			}
-		}
-
-		// Keep the envelope-level result digest for the predicate
-		// (auditors compare against the source-file Material's digest to
-		// confirm the bytes that fed the attestor). It's NOT emitted as a
-		// subject — no existing attestor does an envelope-level subject;
-		// the DSSE envelope's own gitoid in Archivista is the envelope
-		// identity, and recipe-id-level pivots happen via
-		// Frontmatter.ID inside the predicate (indexable by Archivista).
-		envDigest := sha256.Sum256(body)
-
-		// Build the per-result frontmatter. The recipe-driver-injected
-		// one (a.frontmatter) wins when set; we fall back to the steampipe
-		// output's intrinsic id (or "anonymous").
-		fm := a.frontmatter
-		if fm.ID == "" {
-			fm.ID = qr.id
-		}
-
-		results = append(results, QueryResult{
-			Frontmatter: fm,
-			SQL:         a.sql,
-			RanAt:       time.Now().UTC(),
-			RowCount:    len(qr.parsedRows),
-			ResultHash:  hex.EncodeToString(envDigest[:]),
-			Rows:        body,
-		})
+		results = append(results, result)
 	}
 
 	if len(results) == 0 {
@@ -247,6 +172,125 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		Results:     results,
 	}
 	return nil
+}
+
+// processProduct handles a single product entry from the attestation context.
+// It returns the parsed QueryResult and ok=true if the product was a valid
+// steampipe JSON output; ok=false indicates the product was skipped (wrong
+// mime type, digest mismatch, read error, or unparseable body) and the caller
+// should move on.
+func (a *Attestor) processProduct(
+	ctx *attestation.AttestationContext,
+	path string,
+	p attestation.Product,
+	hashes []cryptoutil.DigestValue,
+) (QueryResult, bool) {
+	if !strings.Contains(p.MimeType, "json") && !strings.HasSuffix(path, ".json") {
+		return QueryResult{}, false
+	}
+
+	newDigest, body, ok := readVerifiedProduct(ctx, path, p)
+	if !ok {
+		return QueryResult{}, false
+	}
+
+	qr, ok := parseSteampipeOutput(body)
+	if !ok {
+		return QueryResult{}, false
+	}
+
+	// Capture the source file as a material so verifiers can re-derive
+	// the captured bytes from the original JSON output.
+	a.materials[path] = newDigest
+
+	// Subjects: fan-out per row per identity axis, keyed by convention
+	// from the plugin name in the recipe frontmatter. Each subject
+	// digest is sha256(identity_string) — matching prowler / aws-config
+	// / asff so cross-attestation graph traversal joins on the same
+	// digests. Per-attestation framework wraps these with
+	// `steampipe/<key>` at the collection level (see
+	// rookery/attestation/collection.go), so no within-graph collision
+	// with other attestors using the same prefix shapes.
+	//
+	// Map semantics dedupe automatically: 4 IAM users sharing an
+	// account_id collapse to one `aws:account:<id>` subject.
+	a.accumulateSubjects(qr.parsedRows, hashes)
+
+	// Keep the envelope-level result digest for the predicate
+	// (auditors compare against the source-file Material's digest to
+	// confirm the bytes that fed the attestor). It's NOT emitted as a
+	// subject — no existing attestor does an envelope-level subject;
+	// the DSSE envelope's own gitoid in Archivista is the envelope
+	// identity, and recipe-id-level pivots happen via
+	// Frontmatter.ID inside the predicate (indexable by Archivista).
+	envDigest := sha256.Sum256(body)
+
+	return QueryResult{
+		Frontmatter: a.resolveFrontmatter(qr.id),
+		SQL:         a.sql,
+		RanAt:       time.Now().UTC(),
+		RowCount:    len(qr.parsedRows),
+		ResultHash:  hex.EncodeToString(envDigest[:]),
+		Rows:        body,
+	}, true
+}
+
+// readVerifiedProduct re-hashes the product file and reads its body if the
+// recomputed digest still matches what the attestation context recorded.
+// Returns ok=false on any verification or I/O failure (logged at debug).
+func readVerifiedProduct(
+	ctx *attestation.AttestationContext,
+	path string,
+	p attestation.Product,
+) (cryptoutil.DigestSet, []byte, bool) {
+	newDigest, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
+	if err != nil {
+		log.Debugf("(attestation/steampipe) digest %s: %v", path, err)
+		return nil, nil, false
+	}
+	if !newDigest.Equal(p.Digest) {
+		log.Debugf("(attestation/steampipe) digest mismatch for %s — concurrent write?", path)
+		return nil, nil, false
+	}
+	f, err := os.Open(path) //nolint:gosec // G304: path from attestation context products
+	if err != nil {
+		log.Debugf("(attestation/steampipe) open %s: %v", path, err)
+		return nil, nil, false
+	}
+	body, err := io.ReadAll(f)
+	_ = f.Close()
+	if err != nil {
+		log.Debugf("(attestation/steampipe) read %s: %v", path, err)
+		return nil, nil, false
+	}
+	return newDigest, body, true
+}
+
+// accumulateSubjects extracts identity axes from each row via the
+// plugin-specific convention and writes their sha256 digests into a.subjects.
+// Map semantics dedupe duplicates automatically.
+func (a *Attestor) accumulateSubjects(rows []map[string]any, hashes []cryptoutil.DigestValue) {
+	for _, row := range rows {
+		for _, ext := range extract(a.frontmatter.Plugin, row) {
+			ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(ext.Value), hashes)
+			if err != nil {
+				log.Debugf("(attestation/steampipe) hash subject %s: %v", ext.Key, err)
+				continue
+			}
+			a.subjects[ext.Key] = ds
+		}
+	}
+}
+
+// resolveFrontmatter returns the per-result frontmatter, preferring the
+// recipe-driver-injected one and falling back to the steampipe output's
+// intrinsic id (already defaulted to "anonymous" by parseSteampipeOutput).
+func (a *Attestor) resolveFrontmatter(fallbackID string) QueryFrontmatter {
+	fm := a.frontmatter
+	if fm.ID == "" {
+		fm.ID = fallbackID
+	}
+	return fm
 }
 
 // parsedQuery is the intermediate result of decoding one JSON file. We accept
