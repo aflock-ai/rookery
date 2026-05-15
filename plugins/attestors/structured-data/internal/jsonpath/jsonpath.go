@@ -88,49 +88,24 @@ func parse(query string) ([]step, error) {
 		// After `..` we accept an identifier, wildcard, or `[`-selector
 		// directly — no intervening `.`. Handle that case before the
 		// dispatch switch so the parser can land on `author` in `$..author`.
-		if recurseNext && len(src) > 0 && (isIdentStart(src[0]) || src[0] == '*') {
-			if src[0] == '*' {
-				steps = append(steps, step{kind: stepWildcard, recursive: true})
-				recurseNext = false
-				src = src[1:]
-				continue
-			}
-			name, rest, err := consumeIdent(src)
+		if recurseNext && (isIdentStart(src[0]) || src[0] == '*') {
+			s, rest, err := consumeRecursiveHead(src)
 			if err != nil {
 				return nil, err
 			}
-			steps = append(steps, step{kind: stepName, name: name, recursive: true})
+			steps = append(steps, s)
 			recurseNext = false
 			src = rest
 			continue
 		}
 		switch src[0] {
 		case '.':
-			// `..` is recursive descent; `.` is plain child.
-			if len(src) > 1 && src[1] == '.' {
-				recurseNext = true
-				src = src[2:]
-				// `..` must be followed by an identifier, wildcard, or `[`
-				// — the recurseNext-prefix block above (or the `[` case
-				// below) consumes whichever comes next on the next loop.
-				continue
-			}
-			src = src[1:]
-			if len(src) == 0 {
-				return nil, errors.New("jsonpath: trailing '.'")
-			}
-			if src[0] == '*' {
-				steps = append(steps, step{kind: stepWildcard, recursive: recurseNext})
-				recurseNext = false
-				src = src[1:]
-				continue
-			}
-			name, rest, err := consumeIdent(src)
+			newSteps, rest, nextRecurse, err := consumeDot(src, recurseNext)
 			if err != nil {
 				return nil, err
 			}
-			steps = append(steps, step{kind: stepName, name: name, recursive: recurseNext})
-			recurseNext = false
+			steps = append(steps, newSteps...)
+			recurseNext = nextRecurse
 			src = rest
 		case '[':
 			s, rest, err := consumeBracket(src)
@@ -149,6 +124,43 @@ func parse(query string) ([]step, error) {
 		return nil, errors.New("jsonpath: trailing '..'")
 	}
 	return steps, nil
+}
+
+// consumeRecursiveHead handles the token immediately after `..` when it is an
+// identifier or wildcard (the `[`-selector case is handled by the normal
+// bracket path on the next iteration with recurseNext still set).
+func consumeRecursiveHead(src string) (step, string, error) {
+	if src[0] == '*' {
+		return step{kind: stepWildcard, recursive: true}, src[1:], nil
+	}
+	name, rest, err := consumeIdent(src)
+	if err != nil {
+		return step{}, src, err
+	}
+	return step{kind: stepName, name: name, recursive: true}, rest, nil
+}
+
+// consumeDot handles a leading `.` token: either recursive descent (`..`),
+// plain child (`.name`), or plain wildcard (`.*`). It returns the steps it
+// produced (zero for `..`, one otherwise), the remaining source, and whether
+// recurseNext should be set for the next iteration.
+func consumeDot(src string, recurseNext bool) ([]step, string, bool, error) {
+	// `..` is recursive descent; mark recurseNext and emit no step.
+	if len(src) > 1 && src[1] == '.' {
+		return nil, src[2:], true, nil
+	}
+	src = src[1:]
+	if len(src) == 0 {
+		return nil, src, false, errors.New("jsonpath: trailing '.'")
+	}
+	if src[0] == '*' {
+		return []step{{kind: stepWildcard, recursive: recurseNext}}, src[1:], false, nil
+	}
+	name, rest, err := consumeIdent(src)
+	if err != nil {
+		return nil, src, false, err
+	}
+	return []step{{kind: stepName, name: name, recursive: recurseNext}}, rest, false, nil
 }
 
 // consumeIdent reads a bare identifier in the [A-Za-z_][A-Za-z0-9_]* shape.
