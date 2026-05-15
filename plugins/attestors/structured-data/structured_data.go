@@ -256,7 +256,7 @@ func readAndDigest(path string, ctx *attestation.AttestationContext) ([]byte, cr
 	if err != nil {
 		return nil, nil, fmt.Errorf("structured-data: open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	bytesIn, err := io.ReadAll(f)
 	if err != nil {
 		return nil, nil, fmt.Errorf("structured-data: read %s: %w", path, err)
