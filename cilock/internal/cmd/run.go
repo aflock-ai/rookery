@@ -162,13 +162,22 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		attestationOpts = append(attestationOpts, attestation.WithEnvExcludeKeys(ro.EnvAllowSensitiveKeys))
 	}
 
-	results, runErr := workflow.RunWithExports(
-		ro.StepName,
+	additionalSubjects, err := parseSubjectFlags(ro.Subjects)
+	if err != nil {
+		return fmt.Errorf("failed to parse --subjects: %w", err)
+	}
+
+	runOpts := []workflow.RunOption{
 		workflow.RunWithSigners(signers...),
 		workflow.RunWithAttestors(attestors),
 		workflow.RunWithAttestationOpts(attestationOpts...),
 		workflow.RunWithTimestampers(timestampers...),
-	)
+	}
+	if len(additionalSubjects) > 0 {
+		runOpts = append(runOpts, workflow.RunWithAdditionalSubjects(additionalSubjects))
+	}
+
+	results, runErr := workflow.RunWithExports(ro.StepName, runOpts...)
 	// Don't return immediately on error — write whatever results were
 	// produced first (e.g. secretscan findings), then return the error.
 	// This ensures attestation files are always written for forensic

@@ -45,11 +45,17 @@ type RunOptions struct {
 	StepName                 string
 	Tracing                  bool
 	TimestampServers         []string
-	AttestorOptSetters       map[string][]func(attestation.Attestor) (attestation.Attestor, error)
-	EnvFilterSensitiveVars   bool
-	EnvDisableSensitiveVars  bool
-	EnvAddSensitiveKeys      []string
-	EnvAllowSensitiveKeys    []string
+	// Subjects holds raw --subjects flag values. Each entry is either a bare
+	// subject name (e.g. "product:<uuid>") — in which case a sha256 digest of
+	// the name is synthesised — or a "name=<alg>:<hex>" form that supplies an
+	// explicit digest. Values are injected into the in-toto statement of the
+	// attestation collection in addition to whatever attestors discover.
+	Subjects                []string
+	AttestorOptSetters      map[string][]func(attestation.Attestor) (attestation.Attestor, error)
+	EnvFilterSensitiveVars  bool
+	EnvDisableSensitiveVars bool
+	EnvAddSensitiveKeys     []string
+	EnvAllowSensitiveKeys   []string
 }
 
 var RequiredRunFlags = []string{
@@ -93,6 +99,12 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&ro.StepName, "step", "s", "", "Name of the step being run")
 	cmd.Flags().BoolVarP(&ro.Tracing, "trace", "r", false, "Enable tracing for the command")
 	cmd.Flags().StringSliceVarP(&ro.TimestampServers, "timestamp-servers", "t", []string{}, "Timestamp Authority Servers to use when signing envelope")
+
+	cmd.Flags().StringArrayVar(&ro.Subjects, "subjects", []string{},
+		"Additional in-toto subject to inject into the attestation collection. Repeat the flag to add multiple. "+
+			"Each value is either a bare name (e.g. 'product:<uuid>') in which case a sha256 digest of the name is synthesised, "+
+			"or 'name=<alg>:<hex>' to supply an explicit digest (e.g. 'binary=sha256:abc...'). "+
+			"User subjects are additive; on key collision the explicit entry wins.")
 
 	cmd.Flags().BoolVarP(&ro.EnvFilterSensitiveVars, "env-filter-sensitive-vars", "", false, "Switch from obfuscate to filtering variables which removes them from the output completely.")
 	cmd.Flags().BoolVarP(&ro.EnvDisableSensitiveVars, "env-disable-default-sensitive-vars", "", false, "Disable the default list of sensitive vars and only use the items mentioned by --add-sensitive-key.")
