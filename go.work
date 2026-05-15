@@ -42,6 +42,8 @@ use (
 	./plugins/attestors/omnitrail
 	./plugins/attestors/asff
 	./plugins/attestors/prowler
+	./plugins/attestors/steampipe
+	./plugins/attestors/structured-data
 	./plugins/attestors/policyverify
 	./plugins/attestors/product
 	./plugins/attestors/docker-bench
