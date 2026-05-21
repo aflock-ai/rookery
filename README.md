@@ -11,6 +11,10 @@ Modular attestation monorepo with plugins separated into individual Go modules.
 - `builder/` — Binary builder (generates custom binaries with selected plugins)
 - `aflock/` — AI attestation CLI
 
+## Attestor catalog
+
+[`docs/attestor-catalog.md`](docs/attestor-catalog.md) lists every registered attestor's Name, import path, and predicate type, grouped by run phase. The Name in column 1 is what you pass to `--attestations` (or cilock-action's `attestations:` input) — it is not always the directory name (e.g. `commandrun` registers as `command-run`).
+
 ## Development
 
 ```bash

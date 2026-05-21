@@ -1,6 +1,6 @@
 module github.com/aflock-ai/rookery/presets/all
 
-go 1.26.0
+go 1.26.3
 
 // Core
 replace github.com/aflock-ai/rookery/attestation => ../../attestation

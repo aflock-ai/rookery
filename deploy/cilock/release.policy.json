@@ -1,0 +1,55 @@
+{
+  "_comment": "Release verification policy for cilock binaries. The policy itself is committed unsigned here so reviewers can read it; the release workflow signs it (DSSE) at publish time and ships the signed copy as release-v1.policy.json. Users verify cilock binaries against the signed copy hosted at https://cilock.aflock.ai/policy/release-v1.policy.json.",
+  "expires": "2027-12-31T23:59:59Z",
+  "name": "cilock-release-v1",
+  "roots": {
+    "sigstore-fulcio": {
+      "_comment": "Public Sigstore Fulcio root, used to verify the keyless cosign signature on the binary tarball, .sig, and .cert that ship with every release.",
+      "certConstraint": {
+        "commonName": "https://fulcio.sigstore.dev"
+      }
+    }
+  },
+  "publickeys": {},
+  "steps": {
+    "release-build": {
+      "name": "release-build",
+      "_comment": "Built and signed in .github/workflows/release.yml. Identity is the GH Actions OIDC workflow identity, which Fulcio binds to the cosign cert.",
+      "attestations": [
+        {
+          "type": "https://witness.dev/attestations/git/v0.1",
+          "regopolicies": []
+        },
+        {
+          "type": "https://witness.dev/attestations/github/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-from-aflock-ai-rookery",
+              "module": "cGFja2FnZSByZWxlYXNlX2Zyb21fYWZsb2NrX2FpX3Jvb2tlcnkKCmRlbnlbbXNnXSB7CglpbnB1dC5yZXBvc2l0b3J5ICE9ICJhZmxvY2stYWkvcm9va2VyeSIKCW1zZyA6PSBzcHJpbnRmKCJhdHRlc3RhdGlvbiBub3QgZnJvbSBhZmxvY2stYWkvcm9va2VyeTogJXMiLCBbaW5wdXQucmVwb3NpdG9yeV0pCn0KCmRlbnlbbXNnXSB7Cglub3Qgc3RhcnRzd2l0aChpbnB1dC5yZWZ0eXBlLCAidGFnIikKCW1zZyA6PSBzcHJpbnRmKCJyZWxlYXNlcyBtdXN0IGJlIHRhZ2dlZCwgZ290OiAlcyIsIFtpbnB1dC5yZWZ0eXBlXSkKfQ=="
+            }
+          ]
+        },
+        {
+          "type": "https://witness.dev/attestations/commandrun/v0.1",
+          "regopolicies": []
+        },
+        {
+          "type": "https://witness.dev/attestations/product/v0.1",
+          "regopolicies": []
+        }
+      ],
+      "functionaries": [
+        {
+          "type": "root",
+          "certConstraint": {
+            "commonName": "https://fulcio.sigstore.dev",
+            "extensions": {
+              "buildConfigURI": "https://github.com/aflock-ai/rookery/.github/workflows/release.yml",
+              "issuer": "https://token.actions.githubusercontent.com"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
