@@ -20,7 +20,7 @@ import (
 	"regexp"
 
 	"github.com/aflock-ai/rookery/attestation/log"
-	"github.com/spf13/viper"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/zricethezav/gitleaks/v8/config"
 	"github.com/zricethezav/gitleaks/v8/detect"
 )
@@ -55,21 +55,21 @@ func (a *Attestor) initGitleaksDetector() (*detect.Detector, error) {
 func (a *Attestor) loadCustomGitleaksConfig() (*detect.Detector, error) {
 	log.Debugf("(attestation/secretscan) loading gitleaks configuration from: %s", a.configPath)
 
-	// Create a new Viper instance to avoid interfering with global state
-	v := viper.New()
-	v.SetConfigFile(a.configPath)
-
-	// Attempt to read the config file
-	if err := v.ReadInConfig(); err != nil {
+	// gitleaks's config.ViperConfig is just a TOML-tagged struct — the
+	// "Viper" name is historical. Decode it directly with pelletier/go-toml/v2
+	// to avoid pulling viper (+ fsnotify + afero + mapstructure + locafero
+	// + cast + pflag, ~16 transitive packages) for a single Unmarshal call.
+	data, err := os.ReadFile(a.configPath) //nolint:gosec // G304: path is operator-supplied secretscan config
+	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("gitleaks config file not found at %s: %w", a.configPath, err)
 		}
 		return nil, fmt.Errorf("error reading gitleaks config file %s: %w", a.configPath, err)
 	}
 
-	// Parse the configuration into ViperConfig struct
+	// Parse the configuration into ViperConfig struct.
 	var viperConfig config.ViperConfig
-	if err := v.Unmarshal(&viperConfig); err != nil {
+	if err := toml.Unmarshal(data, &viperConfig); err != nil {
 		return nil, fmt.Errorf("error unmarshaling gitleaks config from %s: %w", a.configPath, err)
 	}
 
