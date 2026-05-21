@@ -95,8 +95,7 @@ func TestResolveDigest_BearerAuth(t *testing.T) {
 
 	// Registry: first call → 401 with WWW-Authenticate. Second call (with
 	// Authorization: Bearer MY-BEARER) → 200 with digest.
-	var registrySrv *httptest.Server
-	registrySrv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	registrySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "" {
 			challenge := fmt.Sprintf(`Bearer realm="%s",service="registry.example",scope="repository:foo/bar:pull"`, tokenSrv.URL)
 			w.Header().Set("WWW-Authenticate", challenge)
