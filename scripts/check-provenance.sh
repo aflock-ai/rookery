@@ -109,12 +109,19 @@ else
       err "$entry: local file SHA mismatch — file=$SHA_LOCAL_ACTUAL recorded=$SHA_LOCAL_RECORDED. Did you edit '$LOCAL_PATH' without updating the entry?"
     fi
 
-    # Re-fetch upstream and verify its SHA256 still matches.
-    if ! UPSTREAM_BODY=$(curl -fsSL --max-time 30 "$UPSTREAM_URL" 2>&1); then
-      err "$entry: failed to fetch upstream '$UPSTREAM_URL' — $UPSTREAM_BODY"
+    # Re-fetch upstream and verify its SHA256 still matches. Pipe
+    # directly to the hasher — putting the body through a bash variable
+    # would strip the trailing newline (variable assignment normalises
+    # command-substitution output), producing a different SHA than the
+    # one we recorded with `curl | sha256sum`.
+    UPSTREAM_TMP=$(mktemp)
+    if ! curl -fsSL --max-time 30 "$UPSTREAM_URL" -o "$UPSTREAM_TMP" 2>/dev/null; then
+      err "$entry: failed to fetch upstream '$UPSTREAM_URL'"
+      rm -f "$UPSTREAM_TMP"
       continue
     fi
-    SHA_UPSTREAM_ACTUAL=$(echo -n "$UPSTREAM_BODY" | sha256_of_stdin)
+    SHA_UPSTREAM_ACTUAL=$(sha256_of_file "$UPSTREAM_TMP")
+    rm -f "$UPSTREAM_TMP"
     if [ "$SHA_UPSTREAM_ACTUAL" != "$SHA_UPSTREAM_RECORDED" ]; then
       err "$entry: upstream SHA mismatch — upstream now=$SHA_UPSTREAM_ACTUAL recorded=$SHA_UPSTREAM_RECORDED. Upstream may have rewritten history at the recorded commit; investigate."
     fi
