@@ -39,16 +39,13 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/system-packages"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/vex"
 
-	// All signer plugins
+	// Default signer plugins (lightweight set).
+	// KMS, Vault, and SPIFFE signers are opt-in via rookery-builder
+	// using `presets/all` (or by selecting individual signer modules).
+	// See docs/signers.md for details.
 	_ "github.com/aflock-ai/rookery/plugins/signers/debug-signer"
 	_ "github.com/aflock-ai/rookery/plugins/signers/file"
 	_ "github.com/aflock-ai/rookery/plugins/signers/fulcio"
-	_ "github.com/aflock-ai/rookery/plugins/signers/kms/aws"
-	_ "github.com/aflock-ai/rookery/plugins/signers/kms/azure"
-	_ "github.com/aflock-ai/rookery/plugins/signers/kms/gcp"
-	_ "github.com/aflock-ai/rookery/plugins/signers/spiffe"
-	_ "github.com/aflock-ai/rookery/plugins/signers/vault"
-	_ "github.com/aflock-ai/rookery/plugins/signers/vault-transit"
 )
 
 func main() {
