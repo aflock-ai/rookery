@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
-	vex "github.com/openvex/go-vex/pkg/vex"
+	"github.com/aflock-ai/rookery/plugins/attestors/vex/internal/openvex"
 )
 
 // NOTE(nick): examples https://github.com/openvex/vexctl/tree/main/examples/openvex
@@ -59,19 +59,19 @@ func TestAttest(t *testing.T) {
 	vexAttestor.VEXDocument.Version = 1
 	time := time.Date(1970, 1, 1, 0, 0, 0, 0, time.Now().UTC().Location())
 	vexAttestor.VEXDocument.Timestamp = &time
-	vexAttestor.VEXDocument.Statements = []vex.Statement{
+	vexAttestor.VEXDocument.Statements = []openvex.Statement{
 		{
-			Vulnerability: vex.Vulnerability{
+			Vulnerability: openvex.Vulnerability{
 				Name: "CVE-1234-5678",
 			},
-			Products: []vex.Product{
+			Products: []openvex.Product{
 				{
-					Component: vex.Component{
+					Component: openvex.Component{
 						ID: "pkg:apk/wolfi/bash@1.0.0",
 					},
 				},
 			},
-			Status: vex.StatusFixed,
+			Status: openvex.StatusFixed,
 		},
 	}
 

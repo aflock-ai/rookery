@@ -23,8 +23,8 @@ import (
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/plugins/attestors/vex/internal/openvex"
 	"github.com/invopop/jsonschema"
-	vex "github.com/openvex/go-vex/pkg/vex"
 )
 
 const (
@@ -46,7 +46,7 @@ func init() {
 }
 
 type Attestor struct {
-	VEXDocument     vex.VEX              `json:"vexDocument"`
+	VEXDocument     openvex.VEX          `json:"vexDocument"`
 	ReportFile      string               `json:"reportFileName,omitempty"`
 	ReportDigestSet cryptoutil.DigestSet `json:"reportDigestSet,omitempty"`
 }
