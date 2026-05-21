@@ -110,8 +110,10 @@ func TestInitGitleaksDetector_InvalidConfig(t *testing.T) {
 	_, err = attestor.initGitleaksDetector()
 
 	require.Error(t, err, "Expected an error when config file has invalid syntax")
-	// Error message format might vary, just check for basic indicators of TOML parsing error
-	assert.Contains(t, err.Error(), "error reading gitleaks config", "Error message should indicate a config reading error")
+	// Decoder error from pelletier/go-toml/v2 is surfaced via the
+	// "error unmarshaling gitleaks config" wrapper; the embedded
+	// upstream error mentions "toml".
+	assert.Contains(t, err.Error(), "error unmarshaling gitleaks config", "Error message should indicate a config parsing error")
 	assert.Contains(t, err.Error(), "toml", "Error message should mention TOML format")
 }
 
