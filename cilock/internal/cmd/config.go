@@ -18,33 +18,148 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
-func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error { //nolint:gocognit
-	v := viper.New()
+// cilockConfig is the parsed shape of a .cilock.yaml / .witness.yaml file.
+// The outer map is keyed by cobra command name; the inner map is keyed by
+// flag name. Values are raw YAML scalars/sequences/mappings preserved as
+// any so that getStringFromConfig / getStringSliceFromConfig can coerce
+// them with the same semantics viper used to apply.
+type cilockConfig map[string]map[string]any
+
+// loadCilockConfig reads and parses a cilock/witness config file. The file
+// format is YAML with a top-level mapping of command name -> (flag name ->
+// value). Returns an empty config if path does not exist; the caller is
+// responsible for deciding whether a missing file is a fatal error.
+func loadCilockConfig(path string) (cilockConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Parse into a generic map so we can preserve native types
+	// (string, bool, int, []any) the same way viper did.
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	cfg := make(cilockConfig, len(raw))
+	for cmdName, sub := range raw {
+		inner, ok := sub.(map[string]any)
+		if !ok {
+			// Top-level scalar / non-mapping under a command name has no
+			// flags to apply; skip it silently to match viper's behavior
+			// of returning empty string / empty slice for unknown keys.
+			continue
+		}
+		cfg[cmdName] = inner
+	}
+	return cfg, nil
+}
+
+// getStringFromConfig returns the value for cmdName.flagName as a string,
+// matching viper.GetString's coercion: bool -> "true"/"false",
+// numbers -> decimal string, string -> string, others -> "" if absent.
+func getStringFromConfig(cfg cilockConfig, cmdName, flagName string) string {
+	cmdCfg, ok := cfg[cmdName]
+	if !ok {
+		return ""
+	}
+	v, ok := cmdCfg[flagName]
+	if !ok || v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case bool:
+		return strconv.FormatBool(t)
+	case int:
+		return strconv.FormatInt(int64(t), 10)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case uint64:
+		return strconv.FormatUint(t, 10)
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// getStringSliceFromConfig returns the value for cmdName.flagName as a
+// slice of strings, matching viper.GetStringSlice's behavior: a YAML
+// sequence becomes []string with each element coerced; a single scalar
+// becomes a one-element slice; absent / nil becomes nil.
+func getStringSliceFromConfig(cfg cilockConfig, cmdName, flagName string) []string {
+	cmdCfg, ok := cfg[cmdName]
+	if !ok {
+		return nil
+	}
+	v, ok := cmdCfg[flagName]
+	if !ok || v == nil {
+		return nil
+	}
+	switch t := v.(type) {
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			out = append(out, coerceScalarString(item))
+		}
+		return out
+	case []string:
+		return t
+	default:
+		// Single scalar in a slice flag -> one-element slice, matching
+		// viper's GetStringSlice on a non-sequence value.
+		return []string{coerceScalarString(v)}
+	}
+}
+
+func coerceScalarString(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case bool:
+		return strconv.FormatBool(t)
+	case int:
+		return strconv.FormatInt(int64(t), 10)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case uint64:
+		return strconv.FormatUint(t, 10)
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error {
 	if _, err := os.Stat(rootOptions.Config); errors.Is(err, os.ErrNotExist) {
 		if rootCmd.Flags().Lookup("config").Changed {
 			return fmt.Errorf("config file %s does not exist", rootOptions.Config)
-		} else {
-			log.Debugf("%s does not exist, using command line arguments", rootOptions.Config)
-			return nil
 		}
+		log.Debugf("%s does not exist, using command line arguments", rootOptions.Config)
+		return nil
 	}
 
-	v.SetConfigFile(rootOptions.Config)
-	if v.ConfigFileUsed() != "" {
-		log.Infof("Using config file: %v", v.ConfigFileUsed())
-	}
+	log.Infof("Using config file: %v", rootOptions.Config)
 
-	if err := v.ReadInConfig(); err != nil {
-		return fmt.Errorf("failed to read config file: %w", err)
+	cfg, err := loadCilockConfig(rootOptions.Config)
+	if err != nil {
+		return err
 	}
 
 	var configErr error
@@ -59,23 +174,23 @@ func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error 
 			if configErr != nil {
 				return
 			}
-			configKey := fmt.Sprintf("%s.%s", cm.Name(), f.Name)
-			if !f.Changed { //nolint:nestif
-				if f.Value.Type() == "stringSlice" {
-					configValue := v.GetStringSlice(configKey)
-					if len(configValue) > 0 {
-						configValueStr := strings.Join(configValue, ",")
-						if err := flags.Set(f.Name, configValueStr); err != nil {
-							configErr = fmt.Errorf("failed to set config value %q from config file: %w", configKey, err)
-						}
+			if f.Changed {
+				return
+			}
+			if f.Value.Type() == "stringSlice" {
+				configValue := getStringSliceFromConfig(cfg, cm.Name(), f.Name)
+				if len(configValue) > 0 {
+					configValueStr := strings.Join(configValue, ",")
+					if err := flags.Set(f.Name, configValueStr); err != nil {
+						configErr = fmt.Errorf("failed to set config value %q from config file: %w", fmt.Sprintf("%s.%s", cm.Name(), f.Name), err)
 					}
-				} else {
-					configValue := v.GetString(configKey)
-					if configValue != "" {
-						if err := flags.Set(f.Name, configValue); err != nil {
-							configErr = fmt.Errorf("failed to set config value %q from config file: %w", configKey, err)
-						}
-					}
+				}
+				return
+			}
+			configValue := getStringFromConfig(cfg, cm.Name(), f.Name)
+			if configValue != "" {
+				if err := flags.Set(f.Name, configValue); err != nil {
+					configErr = fmt.Errorf("failed to set config value %q from config file: %w", fmt.Sprintf("%s.%s", cm.Name(), f.Name), err)
 				}
 			}
 		})

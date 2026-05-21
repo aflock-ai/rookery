@@ -34,7 +34,6 @@ import (
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -2055,20 +2054,19 @@ func TestSecurity_R3_310_ConfigFileOverridesRunFlags(t *testing.T) {
 	require.NotNil(t, stepFlag)
 	assert.Equal(t, "", stepFlag.DefValue, "step default should be empty")
 
-	// Use viper directly to prove the config file values are readable
+	// Load the config file directly to prove the values are readable
 	// and would be applied by initConfig when os.Args contains "run".
-	v := viper.New()
-	v.SetConfigFile(configPath)
-	require.NoError(t, v.ReadInConfig())
+	cfg, err := loadCilockConfig(configPath)
+	require.NoError(t, err)
 
 	// Verify the config file contains attacker-controlled values.
-	assert.Equal(t, "attacker-controlled-step", v.GetString("run.step"),
+	assert.Equal(t, "attacker-controlled-step", getStringFromConfig(cfg, "run", "step"),
 		"config file should contain attacker-controlled step name")
-	assert.Equal(t, "http://evil.attacker.com", v.GetString("run.archivista-server"),
+	assert.Equal(t, "http://evil.attacker.com", getStringFromConfig(cfg, "run", "archivista-server"),
 		"config file should contain attacker-controlled archivista server")
-	assert.Equal(t, "true", v.GetString("run.enable-archivista"),
+	assert.Equal(t, "true", getStringFromConfig(cfg, "run", "enable-archivista"),
 		"config file should be able to enable archivista")
-	assert.Equal(t, "/tmp/attacker-output.json", v.GetString("run.outfile"),
+	assert.Equal(t, "/tmp/attacker-output.json", getStringFromConfig(cfg, "run", "outfile"),
 		"config file should contain attacker-controlled output path")
 
 	t.Log("FINDING R3_310_01: Config file can override any run flag including " +
@@ -2305,11 +2303,10 @@ func TestSecurity_R3_310_ConfigFileKeyPathInjection(t *testing.T) {
   step: innocent-step
 `)
 
-	v := viper.New()
-	v.SetConfigFile(configPath)
-	require.NoError(t, v.ReadInConfig())
+	cfg, err := loadCilockConfig(configPath)
+	require.NoError(t, err)
 
-	keyPath := v.GetString("run.signer-file-key-path")
+	keyPath := getStringFromConfig(cfg, "run", "signer-file-key-path")
 	assert.Equal(t, "/etc/hosts", keyPath,
 		"config file can set arbitrary key paths")
 
@@ -2480,18 +2477,17 @@ func TestSecurity_R3_310_ConfigFileOverridesVerifyFlags(t *testing.T) {
   enable-archivista: "true"
 `)
 
-	v := viper.New()
-	v.SetConfigFile(configPath)
-	require.NoError(t, v.ReadInConfig())
+	cfg, err := loadCilockConfig(configPath)
+	require.NoError(t, err)
 
 	// Verify all attacker-controlled values are readable from config.
-	assert.Equal(t, "/tmp/attacker-policy.json", v.GetString("verify.policy"))
-	assert.Equal(t, "/tmp/attacker-key.pub", v.GetString("verify.publickey"))
-	assert.Equal(t, "http://evil.attacker.com:8080", v.GetString("verify.archivista-server"))
-	assert.Equal(t, "true", v.GetString("verify.enable-archivista"))
+	assert.Equal(t, "/tmp/attacker-policy.json", getStringFromConfig(cfg, "verify", "policy"))
+	assert.Equal(t, "/tmp/attacker-key.pub", getStringFromConfig(cfg, "verify", "publickey"))
+	assert.Equal(t, "http://evil.attacker.com:8080", getStringFromConfig(cfg, "verify", "archivista-server"))
+	assert.Equal(t, "true", getStringFromConfig(cfg, "verify", "enable-archivista"))
 
 	// CA roots is a string slice.
-	caRoots := v.GetStringSlice("verify.policy-ca-roots")
+	caRoots := getStringSliceFromConfig(cfg, "verify", "policy-ca-roots")
 	assert.Contains(t, caRoots, "/tmp/attacker-ca.pem")
 
 	t.Log("FINDING R3_310_10: Config file can override all verify command " +
@@ -2657,11 +2653,9 @@ func TestSecurity_R3_310_ConfigFileLargeYAML(t *testing.T) {
 	}
 	writeFile(t, configPath, builder.String())
 
-	// Viper should handle this without OOM or panic.
-	v := viper.New()
-	v.SetConfigFile(configPath)
+	// The inline YAML loader should handle this without OOM or panic.
 	assert.NotPanics(t, func() {
-		_ = v.ReadInConfig()
+		_, _ = loadCilockConfig(configPath)
 	})
 }
 
@@ -2898,9 +2892,8 @@ func TestSecurity_R3_310_ArchivistaHeaderInjectionViaConfig(t *testing.T) {
   archivista-server: "http://evil.attacker.com"
 `)
 
-	v := viper.New()
-	v.SetConfigFile(configPath)
-	require.NoError(t, v.ReadInConfig())
+	_, err := loadCilockConfig(configPath)
+	require.NoError(t, err)
 
 	// archivista-headers is a stringSlice, harder to inject via YAML
 	// but the direct --archivista-headers flag accepts anything.
