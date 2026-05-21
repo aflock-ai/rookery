@@ -63,7 +63,12 @@ jobs:
       #   cilock verify --policy release-v1.policy.json <attestation.json>
       # which checks the Fulcio cert chain + workflow identity in the policy.
       - name: Attest release-build with cilock-action
-        uses: aflock-ai/cilock-action@1785817ce72739e4c79cae918358a72b9ade672b # v1.0.1
+        # NOTE: cilock-action ref must be a tag, not a SHA. The action's
+        # binary download URL is constructed from the ref as
+        #   /releases/download/v<ref>/cilock-action_linux_amd64.tar.gz
+        # so SHA pinning 404s. Verified live in
+        # aflock-ai/supply-chain-attacks#1. Pin to a specific tag instead.
+        uses: aflock-ai/cilock-action@v1.0.1
         with:
           step: release-build-${{ matrix.goos }}-${{ matrix.goarch }}
           attestations: "environment git github commandrun product sbom"
