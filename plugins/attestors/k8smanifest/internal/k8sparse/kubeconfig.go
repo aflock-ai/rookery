@@ -33,9 +33,9 @@ import (
 // read here — k8smanifest only needs the cluster server URL for the
 // attestation's ClusterInfo.Server field.
 type Kubeconfig struct {
-	CurrentContext string             `yaml:"current-context"`
-	Contexts       []NamedContext     `yaml:"contexts"`
-	Clusters       []NamedCluster     `yaml:"clusters"`
+	CurrentContext string         `yaml:"current-context"`
+	Contexts       []NamedContext `yaml:"contexts"`
+	Clusters       []NamedCluster `yaml:"clusters"`
 }
 
 // NamedContext mirrors a kubeconfig contexts[] entry.

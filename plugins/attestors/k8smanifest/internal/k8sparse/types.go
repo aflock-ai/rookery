@@ -20,7 +20,8 @@
 //
 // The types here are hand-written from the published Kubernetes API
 // reference documentation, not copied from any Go library:
-//   https://kubernetes.io/docs/reference/kubernetes-api/
+//
+//	https://kubernetes.io/docs/reference/kubernetes-api/
 //
 // The JSON tags are byte-compatible with what k8s.io/api emits, so
 // attestation wire-format is unchanged.

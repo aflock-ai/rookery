@@ -34,9 +34,11 @@ func ExtractImages(kind string, doc map[string]interface{}) []string {
 	if podSpec == nil {
 		return nil
 	}
-	var images []string
-	images = append(images, imagesFromContainerArray(podSpec, "containers")...)
-	images = append(images, imagesFromContainerArray(podSpec, "initContainers")...)
+	containers := imagesFromContainerArray(podSpec, "containers")
+	initContainers := imagesFromContainerArray(podSpec, "initContainers")
+	images := make([]string, 0, len(containers)+len(initContainers))
+	images = append(images, containers...)
+	images = append(images, initContainers...)
 	return images
 }
 
