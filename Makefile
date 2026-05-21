@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-coverage tidy verify-isolated lint lint-fix vet vulncheck deadcode help
+.PHONY: build test test-race test-coverage tidy verify-isolated lint lint-fix vet vulncheck deadcode docs help
 
 # Workspace members (parsed from go.work, excluding comments)
 MODULES = $(shell grep '^\s*\./' go.work | sed 's/^[[:space:]]*//' | sed 's|^\.\/||')
@@ -46,6 +46,10 @@ verify-isolated: ## Verify each module builds outside workspace
 		(cd $$dir && GOWORK=off go build ./...) || exit 1; \
 	done
 	@echo "All modules build in isolation"
+
+# ── Docs ─────────────────────────────────────────────────────────────
+docs: ## Regenerate docs from source (currently: attestor-catalog.md)
+	@./scripts/gen-attestor-catalog.sh
 
 # ── Help ─────────────────────────────────────────────────────────────
 help: ## Show this help

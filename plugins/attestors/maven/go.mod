@@ -1,6 +1,6 @@
 module github.com/aflock-ai/rookery/plugins/attestors/maven
 
-go 1.26.0
+go 1.26.3
 
 replace github.com/aflock-ai/rookery/attestation => ../../../attestation
 

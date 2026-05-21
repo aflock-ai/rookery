@@ -52,24 +52,51 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build binary
-        working-directory: cilock
-        env:
-          CGO_ENABLED: "0"
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          GOWORK: "off"
-        run: |
-          BINARY="cilock"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY="cilock.exe"
-          fi
-
-          go build \
-            -trimpath \
-            -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/internal/cmd.Version=${{ steps.version.outputs.version }}'" \
-            -o "../dist/${BINARY}" \
-            ./cmd/cilock/
+      # Dogfood: every release-build step is wrapped by cilock-action.
+      # Records signed attestations (environment/git/github/commandrun/product/sbom)
+      # for the go build, signs them keyless via public Sigstore Fulcio with the
+      # workflow's GitHub Actions OIDC identity, and timestamps via the public
+      # Sigstore TSA. No platform / Archivista dependency — the attestation
+      # bundle is written to a file and shipped with the GitHub Release.
+      #
+      # End users verify by:
+      #   cilock verify --policy release-v1.policy.json <attestation.json>
+      # which checks the Fulcio cert chain + workflow identity in the policy.
+      - name: Attest release-build with cilock-action
+        # NOTE: cilock-action ref must be a tag, not a SHA. The action's
+        # binary download URL is constructed from the ref as
+        #   /releases/download/v<ref>/cilock-action_linux_amd64.tar.gz
+        # so SHA pinning 404s. Verified live in
+        # aflock-ai/supply-chain-attacks#1. Pin to a specific tag instead.
+        uses: aflock-ai/cilock-action@v1.0.1
+        with:
+          step: release-build-${{ matrix.goos }}-${{ matrix.goarch }}
+          # Note: registered attestor name is `command-run` (hyphen), not
+          # `commandrun`. cilock-action's `trace` input handles command
+          # capture; `product` + `sbom` cover the artifact + SBOM evidence.
+          attestations: "environment git github product sbom"
+          outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
+          enable-sigstore: "true"
+          enable-archivista: "false"
+          fulcio-url: "https://fulcio.sigstore.dev"
+          fulcio-oidc-client-id: "sigstore"
+          fulcio-oidc-issuer: "https://token.actions.githubusercontent.com"
+          timestamp-servers: "https://timestamp.sigstore.dev/api/v1/timestamp"
+          # Hash the output binary as the product subject so verification can
+          # match the attestation to the artifact downloaded by end users.
+          hashes: "sha256"
+          workingdir: cilock
+          command: |
+            BINARY="cilock"
+            if [ "${{ matrix.goos }}" = "windows" ]; then
+              BINARY="cilock.exe"
+            fi
+            CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
+              go build \
+                -trimpath \
+                -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/internal/cmd.Version=${{ steps.version.outputs.version }}'" \
+                -o "../dist/${BINARY}" \
+                ./cmd/cilock/
 
       - name: Create archive
         run: |
@@ -85,7 +112,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cilock-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/cilock-*
+          path: |
+            dist/cilock-*
+            dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
 
   # ── Build container image with melange + apko ───────────────────────
   # NOTE: The melange signing key is ephemeral — generated fresh each run.
@@ -229,6 +258,43 @@ jobs:
         run: |
           syft dir:. --output spdx-json=dist/cilock-${{ steps.version.outputs.version }}-sbom.spdx.json
 
+      # Verify each platform binary against the published release policy and
+      # produce a Verification Summary Attestation (VSA) per artifact. VSAs
+      # ship with the release so downstream consumers can rely on TestifySec's
+      # verification result without re-running the full policy check.
+      - name: Download bootstrap cilock for VSA generation
+        run: |
+          # Use the just-built linux-amd64 binary as the bootstrap cilock for
+          # this release's own verification. Same source as the artifacts it
+          # verifies.
+          tar -xzf dist/cilock-${{ steps.version.outputs.version }}-linux-amd64.tar.gz -C /tmp/
+          chmod +x /tmp/cilock
+          /tmp/cilock --version
+
+      - name: Generate VSA for each platform
+        working-directory: dist
+        run: |
+          for archive in cilock-*-linux-amd64.tar.gz cilock-*-linux-arm64.tar.gz \
+                         cilock-*-darwin-amd64.tar.gz cilock-*-darwin-arm64.tar.gz; do
+            [ -f "$archive" ] || continue
+            stem="${archive%.tar.gz}"
+            /tmp/cilock verify \
+              --policy ../deploy/cilock/release.policy.json \
+              --artifactfile "$archive" \
+              --vsa-out "${stem}.vsa.json" \
+              || { echo "VSA generation failed for $archive"; exit 1; }
+          done
+
+      - name: Publish install script + signed release policy
+        run: |
+          cp ../deploy/cilock/install.sh dist/install.sh
+          # Sign install.sh with the same OIDC identity end users will check.
+          cosign sign-blob --yes \
+            --output-signature dist/install.sh.sig \
+            --output-certificate dist/install.sh.cert \
+            dist/install.sh
+          cp ../deploy/cilock/release.policy.json dist/release-v1.policy.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -242,5 +308,11 @@ jobs:
             dist/checksums-sha256.txt.sig
             dist/checksums-sha256.txt.pem
             dist/cilock-*-sbom.spdx.json
+            dist/*.attestation.json
+            dist/cilock-*.vsa.json
+            dist/install.sh
+            dist/install.sh.sig
+            dist/install.sh.cert
+            dist/release-v1.policy.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
