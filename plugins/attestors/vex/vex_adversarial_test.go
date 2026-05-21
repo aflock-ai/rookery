@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/invopop/jsonschema"
-	vexlib "github.com/openvex/go-vex/pkg/vex"
+	"github.com/aflock-ai/rookery/plugins/attestors/vex/internal/openvex"
 )
 
 // ============================================================================
@@ -97,11 +97,11 @@ func TestSecurity_R3_225_SchemaDoublePointerReflection(t *testing.T) {
 // "ignored", "approved") into VEX documents. Downstream consumers may
 // misinterpret these as valid assessments.
 func TestSecurity_R3_226_VEXStatusNotValidated(t *testing.T) {
-	validStatuses := []vexlib.Status{
-		vexlib.StatusNotAffected,
-		vexlib.StatusAffected,
-		vexlib.StatusFixed,
-		vexlib.StatusUnderInvestigation,
+	validStatuses := []openvex.Status{
+		openvex.StatusNotAffected,
+		openvex.StatusAffected,
+		openvex.StatusFixed,
+		openvex.StatusUnderInvestigation,
 	}
 
 	invalidStatuses := []string{
@@ -125,13 +125,13 @@ func TestSecurity_R3_226_VEXStatusNotValidated(t *testing.T) {
 	for _, invalidStatus := range invalidStatuses {
 		t.Run(fmt.Sprintf("status_%s", invalidStatus), func(t *testing.T) {
 			a := New()
-			a.VEXDocument.Statements = []vexlib.Statement{
+			a.VEXDocument.Statements = []openvex.Statement{
 				{
-					Vulnerability: vexlib.Vulnerability{Name: "CVE-2024-0001"},
-					Products: []vexlib.Product{
-						{Component: vexlib.Component{ID: "pkg:test/foo@1.0"}},
+					Vulnerability: openvex.Vulnerability{Name: "CVE-2024-0001"},
+					Products: []openvex.Product{
+						{Component: openvex.Component{ID: "pkg:test/foo@1.0"}},
 					},
-					Status: vexlib.Status(invalidStatus),
+					Status: openvex.Status(invalidStatus),
 				},
 			}
 
@@ -181,16 +181,16 @@ func TestSecurity_R3_227_UnboundedVEXDocumentSize(t *testing.T) {
 	a.VEXDocument.ID = "https://example.com/large-vex"
 	a.VEXDocument.Author = "test"
 	a.VEXDocument.Version = 1
-	statements := make([]vexlib.Statement, 10000)
+	statements := make([]openvex.Statement, 10000)
 	for i := range statements {
-		statements[i] = vexlib.Statement{
-			Vulnerability: vexlib.Vulnerability{
-				Name: vexlib.VulnerabilityID(fmt.Sprintf("CVE-2024-%04d", i)),
+		statements[i] = openvex.Statement{
+			Vulnerability: openvex.Vulnerability{
+				Name: openvex.VulnerabilityID(fmt.Sprintf("CVE-2024-%04d", i)),
 			},
-			Products: []vexlib.Product{
-				{Component: vexlib.Component{ID: fmt.Sprintf("pkg:test/pkg%d@1.0", i)}},
+			Products: []openvex.Product{
+				{Component: openvex.Component{ID: fmt.Sprintf("pkg:test/pkg%d@1.0", i)}},
 			},
-			Status: vexlib.StatusFixed,
+			Status: openvex.StatusFixed,
 		}
 	}
 	a.VEXDocument.Statements = statements
@@ -247,13 +247,13 @@ func TestSecurity_R3_228_VEXContextNotValidated(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			a := New()
 			a.VEXDocument.Context = tt.context
-			a.VEXDocument.Statements = []vexlib.Statement{
+			a.VEXDocument.Statements = []openvex.Statement{
 				{
-					Vulnerability: vexlib.Vulnerability{Name: "CVE-2024-0001"},
-					Products: []vexlib.Product{
-						{Component: vexlib.Component{ID: "pkg:test/foo@1.0"}},
+					Vulnerability: openvex.Vulnerability{Name: "CVE-2024-0001"},
+					Products: []openvex.Product{
+						{Component: openvex.Component{ID: "pkg:test/foo@1.0"}},
 					},
-					Status: vexlib.StatusFixed,
+					Status: openvex.StatusFixed,
 				},
 			}
 
