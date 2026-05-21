@@ -1,0 +1,21 @@
+# Dependency budget for the default cilock binary.
+#
+# CI fails any PR that grows transitive_pkgs OR go_sum_bytes beyond the
+# values below. To raise a ceiling, edit this file in the same PR that
+# adds the dep — that surfaces the cost in review.
+#
+# Budgets are intentionally tight: they're set at the current state plus a
+# small headroom. The point is to make any new dep a conscious decision,
+# not to leave generous slack.
+#
+# Regenerate the "current" measurements with:
+#   ./scripts/check-dep-budget.sh --print
+#
+# Tracking issue: https://github.com/aflock-ai/rookery/issues/70
+
+cilock:
+  # Output of `go list -m all` from cilock/, excluding rookery's own modules.
+  # See scripts/check-dep-budget.sh for the exact computation.
+  transitive_pkgs: 1180
+  # Byte size of cilock/go.sum.
+  go_sum_bytes: 101716

@@ -11,6 +11,7 @@
 # - verify-isolated: Verify each module builds outside workspace
 # - commitlint: Conventional commit validation
 # - forbidden-patterns: Scan for dangerous code patterns
+# - dep-budget: Block cilock transitive-dep growth beyond .dep-budget.yaml
 # - ci-success: Aggregate status gate
 
 name: CI
@@ -259,6 +260,26 @@ jobs:
 
           echo "No forbidden patterns found"
 
+  # ── Dependency Budget Guardrail ─────────────────────────────────────
+  # Fails the PR if the default cilock binary's transitive dep count or
+  # go.sum byte size grows beyond .dep-budget.yaml. To raise a ceiling,
+  # update the same file in the same PR — that surfaces the new deps in
+  # review instead of letting them silently accumulate.
+  #
+  # Tracking issue: https://github.com/aflock-ai/rookery/issues/70
+  dep-budget:
+    name: dep budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Check cilock dep budget
+        run: ./scripts/check-dep-budget.sh
+
   # ── CI Success Gate ─────────────────────────────────────────────────
   ci-success:
     name: ci success
@@ -274,6 +295,7 @@ jobs:
       - verify-isolated
       - commitlint
       - forbidden-patterns
+      - dep-budget
     steps:
       - name: Check all jobs
         run: |
