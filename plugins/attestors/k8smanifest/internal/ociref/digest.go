@@ -94,7 +94,7 @@ func (r *Resolver) Resolve(reference string) (string, error) {
 			return "", err
 		}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("registry returned %d for %s", resp.StatusCode, reference)
@@ -119,7 +119,9 @@ func (r *Resolver) head(client *http.Client, url, auth string) (*http.Response, 
 }
 
 // fetchToken parses a WWW-Authenticate challenge of the form
-//   Bearer realm="https://auth.example/token",service="registry",scope="repository:foo:pull"
+//
+//	Bearer realm="https://auth.example/token",service="registry",scope="repository:foo:pull"
+//
 // and fetches a bearer token from the realm endpoint.
 func (r *Resolver) fetchToken(client *http.Client, challenge string) (string, error) {
 	scheme, params, err := parseChallenge(challenge)
@@ -131,7 +133,7 @@ func (r *Resolver) fetchToken(client *http.Client, challenge string) (string, er
 	}
 	realm := params["realm"]
 	if realm == "" {
-		return "", errors.New("Bearer challenge missing realm")
+		return "", errors.New("bearer challenge missing realm")
 	}
 
 	tokenURL := realm
@@ -157,7 +159,7 @@ func (r *Resolver) fetchToken(client *http.Client, challenge string) (string, er
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		return "", fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, body)

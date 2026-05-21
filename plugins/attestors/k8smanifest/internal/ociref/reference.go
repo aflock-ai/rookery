@@ -34,9 +34,9 @@ const DefaultRegistry = "registry-1.docker.io"
 // defaultRegistryAliases are the unqualified-name → DefaultRegistry hosts that
 // users sometimes type explicitly. They behave the same as a bare reference.
 var defaultRegistryAliases = map[string]bool{
-	"docker.io":            true,
-	"index.docker.io":      true,
-	DefaultRegistry:        true,
+	"docker.io":       true,
+	"index.docker.io": true,
+	DefaultRegistry:   true,
 }
 
 // Reference is a parsed OCI image reference: registry host, repository path,
@@ -65,57 +65,25 @@ func Parse(input string) (Reference, error) {
 		return Reference{}, errors.New("empty reference")
 	}
 
-	// Pull off the digest first if present — it dominates any tag.
-	var dgst string
-	if i := strings.Index(input, "@"); i >= 0 {
-		if i == 0 {
-			return Reference{}, errors.New("reference starts with '@'")
-		}
-		dgst = input[i+1:]
-		input = input[:i]
-		if err := validateDigest(dgst); err != nil {
-			return Reference{}, err
-		}
+	input, dgst, err := splitDigest(input)
+	if err != nil {
+		return Reference{}, err
 	}
 
-	// Split host vs path. The first segment is the host iff it contains a
-	// '.' or ':' OR is "localhost". Everything else inherits DefaultRegistry.
-	host := DefaultRegistry
-	path := input
-	if first, rest, ok := strings.Cut(input, "/"); ok {
-		if strings.ContainsAny(first, ".:") || first == "localhost" {
-			host = first
-			path = rest
-		}
-	}
-	if defaultRegistryAliases[host] {
-		host = DefaultRegistry
-	}
+	host, path := splitHostAndPath(input)
 
-	// Pull off the tag from the LAST path segment. The colon-before-last-slash
-	// is the registry port and was already consumed in the host split.
-	tag := ""
-	if last := strings.LastIndex(path, ":"); last >= 0 {
-		// Reject `repo:` and `:tag` shapes.
-		tag = path[last+1:]
-		path = path[:last]
-		if tag == "" {
-			return Reference{}, errors.New("empty tag after ':'")
-		}
-		if path == "" {
-			return Reference{}, errors.New("empty repository before ':'")
-		}
+	path, tag, err := splitTag(path)
+	if err != nil {
+		return Reference{}, err
 	}
 
 	// Docker-hub-style: single-segment repos default to library/<name>.
 	if host == DefaultRegistry && !strings.Contains(path, "/") {
 		path = "library/" + path
 	}
-
 	if path == "" {
 		return Reference{}, errors.New("empty repository")
 	}
-
 	// Tag defaults to "latest" only when there's no digest. The convention
 	// matches docker pull.
 	if tag == "" && dgst == "" {
@@ -128,6 +96,61 @@ func Parse(input string) (Reference, error) {
 		Tag:    tag,
 		Digest: dgst,
 	}, nil
+}
+
+// splitDigest pulls a trailing `@sha256:...` off the input. Returns the
+// remaining left side, the validated digest string, and a parse error if
+// the digest is malformed or the input starts with '@'.
+func splitDigest(input string) (string, string, error) {
+	i := strings.Index(input, "@")
+	if i < 0 {
+		return input, "", nil
+	}
+	if i == 0 {
+		return "", "", errors.New("reference starts with '@'")
+	}
+	dgst := input[i+1:]
+	if err := validateDigest(dgst); err != nil {
+		return "", "", err
+	}
+	return input[:i], dgst, nil
+}
+
+// splitHostAndPath separates the registry host from the repository path. The
+// first segment is treated as a host iff it contains '.' or ':' or is the
+// literal "localhost". Otherwise the entire input is the repo path and the
+// host defaults to DefaultRegistry.
+func splitHostAndPath(input string) (string, string) {
+	host, path := DefaultRegistry, input
+	if first, rest, ok := strings.Cut(input, "/"); ok {
+		if strings.ContainsAny(first, ".:") || first == "localhost" {
+			host = first
+			path = rest
+		}
+	}
+	if defaultRegistryAliases[host] {
+		host = DefaultRegistry
+	}
+	return host, path
+}
+
+// splitTag pulls a trailing `:tag` off the repository path. The registry
+// port (`host:port`) is consumed earlier by splitHostAndPath, so any ':' we
+// find here belongs to the tag.
+func splitTag(path string) (string, string, error) {
+	i := strings.LastIndex(path, ":")
+	if i < 0 {
+		return path, "", nil
+	}
+	tag := path[i+1:]
+	path = path[:i]
+	if tag == "" {
+		return "", "", errors.New("empty tag after ':'")
+	}
+	if path == "" {
+		return "", "", errors.New("empty repository before ':'")
+	}
+	return path, tag, nil
 }
 
 // validateDigest enforces the rough shape of an OCI content digest. We don't
