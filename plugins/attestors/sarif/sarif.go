@@ -19,12 +19,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/invopop/jsonschema"
-	"github.com/owenrumney/go-sarif/sarif"
 )
 
 const (
@@ -47,8 +47,17 @@ func init() {
 	})
 }
 
+// Attestor stores a SARIF report alongside its source path and digest. The
+// report is preserved as json.RawMessage so the attestation predicate is
+// byte-identical to the input file — the previous implementation deserialized
+// into a typed struct from owenrumney/go-sarif and re-encoded, which dragged
+// the whole library plus its jsonschema validation tree.
+//
+// The SARIF 2.1.0 wire format is defined by the OASIS SARIF TC spec
+// (https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html); the
+// attestor doesn't need a typed view to record the report's bytes.
 type Attestor struct {
-	sarif.Report    `json:"report"`
+	Report          json.RawMessage      `json:"report"`
 	ReportFile      string               `json:"reportFileName"`
 	ReportDigestSet cryptoutil.DigestSet `json:"reportDigestSet"`
 }
@@ -104,9 +113,15 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error { //n
 			continue
 		}
 
-		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
+		// Join the attestation context's working directory so the file
+		// lookup matches what sbom does. The previous implementation
+		// opened `path` directly, which silently failed any time the
+		// context's WorkingDir was not the test/process cwd.
+		fullPath := filepath.Join(ctx.WorkingDir(), path)
+
+		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(fullPath, ctx.Hashes())
 		if newDigestSet == nil || err != nil {
-			log.Debugf("(attestation/sarif) error calculating digest set from file %s: %v", path, err)
+			log.Debugf("(attestation/sarif) error calculating digest set from file %s: %v", fullPath, err)
 			continue
 		}
 
@@ -115,25 +130,28 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error { //n
 			continue
 		}
 
-		f, err := os.Open(path) //nolint:gosec // G304: path from attestation context products
+		f, err := os.Open(fullPath) //nolint:gosec // G304: path from attestation context products
 		if err != nil {
-			log.Debugf("(attestation/sarif) error opening file %s: %v", path, err)
+			log.Debugf("(attestation/sarif) error opening file %s: %v", fullPath, err)
 			continue
 		}
 
 		reportBytes, err := io.ReadAll(f)
 		_ = f.Close()
 		if err != nil {
-			log.Debugf("(attestation/sarif) error reading file %s: %v", path, err)
+			log.Debugf("(attestation/sarif) error reading file %s: %v", fullPath, err)
 			continue
 		}
 
-		//check to see if we can unmarshal into sarif type
-		if err := json.Unmarshal(reportBytes, &a.Report); err != nil {
-			log.Debugf("(attestation/sarif) error unmarshaling report: %v", err)
+		// Validate that the bytes are JSON — a SARIF report is a JSON
+		// document by definition. Anything else is the wrong product even
+		// if the mime sniffer guessed application/json.
+		if !json.Valid(reportBytes) {
+			log.Debugf("(attestation/sarif) %s is not valid JSON", path)
 			continue
 		}
 
+		a.Report = json.RawMessage(reportBytes)
 		a.ReportFile = path
 		a.ReportDigestSet = product.Digest
 
