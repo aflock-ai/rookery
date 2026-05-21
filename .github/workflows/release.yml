@@ -71,7 +71,10 @@ jobs:
         uses: aflock-ai/cilock-action@v1.0.1
         with:
           step: release-build-${{ matrix.goos }}-${{ matrix.goarch }}
-          attestations: "environment git github commandrun product sbom"
+          # Note: registered attestor name is `command-run` (hyphen), not
+          # `commandrun`. cilock-action's `trace` input handles command
+          # capture; `product` + `sbom` cover the artifact + SBOM evidence.
+          attestations: "environment git github product sbom"
           outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
           enable-sigstore: "true"
           enable-archivista: "false"
