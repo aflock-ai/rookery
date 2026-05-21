@@ -43,9 +43,9 @@ import (
 // =============================================================================
 
 // makeProductAttestor builds an Attestor pre-populated with the given files
-// (path → content) under a temp dir, runs Attest, and returns the attestor +
-// the temp dir. The compiled globs default to "include all".
-func makeProductAttestor(t *testing.T, files map[string]string, opts ...Option) (*Attestor, string) {
+// (path → content) under a temp dir, runs Attest, and returns the attestor.
+// The compiled globs default to "include all".
+func makeProductAttestor(t *testing.T, files map[string]string, opts ...Option) *Attestor {
 	t.Helper()
 	dir := t.TempDir()
 	for relPath, content := range files {
@@ -58,7 +58,7 @@ func makeProductAttestor(t *testing.T, files map[string]string, opts ...Option) 
 	ctx, err := attestation.NewContext("test", []attestation.Attestor{}, attestation.WithWorkingDir(dir))
 	require.NoError(t, err)
 	require.NoError(t, a.Attest(ctx))
-	return a, dir
+	return a
 }
 
 // expectedSha256MerkleRoot recomputes the v0.2 merkle root the same way the
@@ -104,7 +104,7 @@ func expectedSha256MerkleRoot(t *testing.T, products map[string]attestation.Prod
 // =============================================================================
 
 func TestV02_001_DefaultModeEmitsSingleTreeSubject(t *testing.T) {
-	a, _ := makeProductAttestor(t, map[string]string{
+	a := makeProductAttestor(t, map[string]string{
 		"a.txt":           "alpha",
 		"b.txt":           "bravo",
 		"sub/c.txt":       "charlie",
@@ -134,7 +134,7 @@ func TestV02_001_DefaultModeEmitsSingleTreeSubject(t *testing.T) {
 // =============================================================================
 
 func TestV02_002_MerkleRootMatchesIndependentRecomputation(t *testing.T) {
-	a, _ := makeProductAttestor(t, map[string]string{
+	a := makeProductAttestor(t, map[string]string{
 		"a":     "1",
 		"b":     "2",
 		"sub/c": "3",
@@ -189,7 +189,7 @@ func TestV02_003_MerkleRootIsOrderIndependent(t *testing.T) {
 // root hex digest of its tree subject.
 func rootHexFor(t *testing.T, files map[string]string) string {
 	t.Helper()
-	a, _ := makeProductAttestor(t, files)
+	a := makeProductAttestor(t, files)
 	subjects := a.Subjects()
 	root := subjects[TreeSubjectName]
 	for dv, d := range root {
@@ -251,7 +251,7 @@ func TestV02_007_EmptyWorkdirProducesNoSubjects(t *testing.T) {
 // =============================================================================
 
 func TestV02_008_ExcludeEverythingProducesNoSubjects(t *testing.T) {
-	a, _ := makeProductAttestor(t,
+	a := makeProductAttestor(t,
 		map[string]string{"a.txt": "1", "b.txt": "2"},
 		WithExcludeGlob("*"),
 	)
@@ -283,7 +283,7 @@ func TestV02_009_NilGlobsDoNotPanic(t *testing.T) {
 // =============================================================================
 
 func TestV02_010_TreeSubjectSerializesAsValidIntotoSubject(t *testing.T) {
-	a, _ := makeProductAttestor(t, map[string]string{"a": "1", "b": "2"})
+	a := makeProductAttestor(t, map[string]string{"a": "1", "b": "2"})
 
 	// Marshal predicate (the products map) and verify roundtrip preserves it.
 	predicateBytes, err := json.Marshal(a)
@@ -305,7 +305,7 @@ func TestV02_010_TreeSubjectSerializesAsValidIntotoSubject(t *testing.T) {
 // =============================================================================
 
 func TestV02_011_RoundtrippedPredicateRecomputesSameRoot(t *testing.T) {
-	a, _ := makeProductAttestor(t, map[string]string{
+	a := makeProductAttestor(t, map[string]string{
 		"a":     "alpha",
 		"b":     "bravo",
 		"sub/c": "charlie",
@@ -331,7 +331,7 @@ func TestV02_011_RoundtrippedPredicateRecomputesSameRoot(t *testing.T) {
 // =============================================================================
 
 func TestV02_012_LegacyModeEmitsPerFileSubjects(t *testing.T) {
-	a, _ := makeProductAttestor(t,
+	a := makeProductAttestor(t,
 		map[string]string{"a.txt": "1", "b.txt": "2", "sub/c.txt": "3"},
 		WithLegacyMode(),
 	)
@@ -354,7 +354,7 @@ func TestV02_012_LegacyModeEmitsPerFileSubjects(t *testing.T) {
 // =============================================================================
 
 func TestV02_013_LegacySubjectDigestsMatchProducts(t *testing.T) {
-	a, _ := makeProductAttestor(t,
+	a := makeProductAttestor(t,
 		map[string]string{"a.txt": "hello"},
 		WithLegacyMode(),
 	)
@@ -438,7 +438,7 @@ func TestV02_017_BigTreeProducesSingleSubject(t *testing.T) {
 		files[fmt.Sprintf("dir%03d/file%04d.txt", i/100, i)] = fmt.Sprintf("content-%d", i)
 	}
 
-	a, _ := makeProductAttestor(t, files)
+	a := makeProductAttestor(t, files)
 	subjects := a.Subjects()
 	require.Len(t, subjects, 1, "5000 files must collapse to exactly one tree subject")
 	require.NotEmpty(t, subjects[TreeSubjectName])
@@ -477,7 +477,7 @@ func TestV02_018_PathNormalizationIsPortable(t *testing.T) {
 // =============================================================================
 
 func TestV02_019_LegacyModeRespectsIncludeExcludeGlobs(t *testing.T) {
-	a, _ := makeProductAttestor(t,
+	a := makeProductAttestor(t,
 		map[string]string{
 			"keep.txt":  "1",
 			"drop.exe":  "2",
