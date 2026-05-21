@@ -22,7 +22,7 @@ cilock:
   # actually links into the artifact, which is the real bloat + supply-
   # chain attack surface. See scripts/check-dep-budget.sh for the exact
   # computation.
-  transitive_pkgs: 173
+  transitive_pkgs: 174
   # Byte size of cilock/go.sum. Still useful as a secondary signal: it
   # tracks declared deps including ones only pulled in by `go mod tidy`,
   # which catches dep churn the binary metric can miss.
