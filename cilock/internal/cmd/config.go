@@ -40,7 +40,7 @@ type cilockConfig map[string]map[string]any
 // value). Returns an empty config if path does not exist; the caller is
 // responsible for deciding whether a missing file is a fatal error.
 func loadCilockConfig(path string) (cilockConfig, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is operator-supplied via --config flag
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -162,41 +162,54 @@ func initConfig(rootCmd *cobra.Command, rootOptions *options.RootOptions) error 
 		return err
 	}
 
-	var configErr error
-	commands := rootCmd.Commands()
-	for _, cm := range commands {
+	for _, cm := range rootCmd.Commands() {
 		if !contains(os.Args, cm.Name()) {
 			continue
 		}
-
-		flags := cm.Flags()
-		flags.VisitAll(func(f *pflag.Flag) {
-			if configErr != nil {
-				return
-			}
-			if f.Changed {
-				return
-			}
-			if f.Value.Type() == "stringSlice" {
-				configValue := getStringSliceFromConfig(cfg, cm.Name(), f.Name)
-				if len(configValue) > 0 {
-					configValueStr := strings.Join(configValue, ",")
-					if err := flags.Set(f.Name, configValueStr); err != nil {
-						configErr = fmt.Errorf("failed to set config value %q from config file: %w", fmt.Sprintf("%s.%s", cm.Name(), f.Name), err)
-					}
-				}
-				return
-			}
-			configValue := getStringFromConfig(cfg, cm.Name(), f.Name)
-			if configValue != "" {
-				if err := flags.Set(f.Name, configValue); err != nil {
-					configErr = fmt.Errorf("failed to set config value %q from config file: %w", fmt.Sprintf("%s.%s", cm.Name(), f.Name), err)
-				}
-			}
-		})
+		if err := applyConfigToCommand(cm, cfg); err != nil {
+			return err
+		}
 	}
+	return nil
+}
 
+// applyConfigToCommand walks the command's flags and sets any not already
+// supplied on the CLI from the loaded config map.
+func applyConfigToCommand(cm *cobra.Command, cfg cilockConfig) error {
+	var configErr error
+	cm.Flags().VisitAll(func(f *pflag.Flag) {
+		if configErr != nil || f.Changed {
+			return
+		}
+		if err := applyConfigValue(cm, cfg, f); err != nil {
+			configErr = err
+		}
+	})
 	return configErr
+}
+
+// applyConfigValue resolves the config value for one flag and sets it on the
+// command, returning a wrapped error if pflag rejects the value.
+func applyConfigValue(cm *cobra.Command, cfg cilockConfig, f *pflag.Flag) error {
+	flags := cm.Flags()
+	if f.Value.Type() == "stringSlice" {
+		v := getStringSliceFromConfig(cfg, cm.Name(), f.Name)
+		if len(v) == 0 {
+			return nil
+		}
+		if err := flags.Set(f.Name, strings.Join(v, ",")); err != nil {
+			return fmt.Errorf("failed to set config value %q from config file: %w", cm.Name()+"."+f.Name, err)
+		}
+		return nil
+	}
+	v := getStringFromConfig(cfg, cm.Name(), f.Name)
+	if v == "" {
+		return nil
+	}
+	if err := flags.Set(f.Name, v); err != nil {
+		return fmt.Errorf("failed to set config value %q from config file: %w", cm.Name()+"."+f.Name, err)
+	}
+	return nil
 }
 
 func contains(s []string, str string) bool {
