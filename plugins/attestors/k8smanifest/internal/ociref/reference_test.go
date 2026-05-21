@@ -153,7 +153,7 @@ func TestParse_RejectsObviouslyMalformed(t *testing.T) {
 		"@",
 		"foo:",
 		"foo@",
-		"foo@sha256:short",         // digest is the right shape but too short
+		"foo@sha256:short",          // digest is the right shape but too short
 		"foo@nosuchalgo:abcdef0123", // unknown digest algorithm
 	} {
 		t.Run(in, func(t *testing.T) {
