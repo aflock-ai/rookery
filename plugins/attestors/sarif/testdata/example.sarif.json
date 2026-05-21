@@ -1,0 +1,36 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "rookery-test-scanner",
+          "version": "0.0.1",
+          "informationUri": "https://example.test/scanner"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "TEST-001",
+          "level": "warning",
+          "message": {
+            "text": "synthetic finding for sarif attestor tests"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/example.go"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

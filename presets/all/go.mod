@@ -146,7 +146,6 @@ require (
 	github.com/STARRY-S/zip v0.2.3 // indirect
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
-	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.1 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.32.7 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.7 // indirect
@@ -257,7 +256,6 @@ require (
 	github.com/nwaples/rardecode/v2 v2.2.0 // indirect
 	github.com/omnibor/omnibor-go v0.0.0-20230521145532-a77de61a16cd // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/owenrumney/go-sarif v1.1.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/pjbgf/sha1cd v0.3.2 // indirect
@@ -289,7 +287,6 @@ require (
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
-	github.com/zclconf/go-cty v1.14.4 // indirect
 	github.com/zricethezav/gitleaks/v8 v8.30.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.63.0 // indirect
