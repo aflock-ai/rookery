@@ -1,0 +1,12 @@
+{
+  "upstream_repo": "https://github.com/openvex/go-vex",
+  "upstream_commit": "3185a64ed27703fc3fe4af8cd5e1ce0ed2fa2569",
+  "upstream_url": "https://raw.githubusercontent.com/openvex/go-vex/3185a64ed27703fc3fe4af8cd5e1ce0ed2fa2569/pkg/vex/component.go",
+  "license_spdx": "Apache-2.0",
+  "license_url": "https://github.com/openvex/go-vex/blob/3185a64ed27703fc3fe4af8cd5e1ce0ed2fa2569/LICENSE",
+  "local_path": "plugins/attestors/vex/internal/openvex/types.go",
+  "sha256_of_inlined_content": "4c5b24f71a27d488d947ffaa6c04045d50e743720c727c5969a40653ccce02a5",
+  "sha256_of_upstream_content": "24733f2eee722a9ebb8e6cca2fb7438d78236177ca7ba30506f130bccfa7030a",
+  "kind": "inlined-source",
+  "notes": "Type definitions and constants from pkg/vex/component.go derived into a single consolidated file at the local_path. Upstream methods (Validate, Builder, Matches, etc.) intentionally not ported — the rookery attestor doesn't call them. MarshalJSON on VEX is ported verbatim to preserve OpenVEX wire format (UTC-Zulu timestamp normalization after statements array)."
+}
