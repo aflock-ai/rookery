@@ -1,4 +1,5 @@
 // Copyright 2025 The Witness Contributors
+// Copyright 2025 The Aflock Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,20 +16,15 @@
 package k8smanifest
 
 import (
-	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/sigstore/cosign/v2/pkg/oci/remote"
+	"github.com/aflock-ai/rookery/plugins/attestors/k8smanifest/internal/ociref"
 )
 
+// defaultResolver is shared so callers don't pay the cost of constructing one
+// per Reference. The zero value uses http.DefaultClient.
+var defaultResolver = &ociref.Resolver{}
+
+// DigestForRef parses an OCI image reference and resolves it to its content
+// digest via the registry's /v2 manifest endpoint.
 func DigestForRef(reference string) (string, error) {
-	ref, err := name.ParseReference(reference)
-	if err != nil {
-		return "", err
-	}
-
-	nref, err := remote.ResolveDigest(ref)
-	if err != nil {
-		return "", err
-	}
-
-	return nref.DigestStr(), nil
+	return defaultResolver.Resolve(reference)
 }
