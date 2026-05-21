@@ -8,6 +8,16 @@
 #
 # Tracking issue: https://github.com/aflock-ai/rookery/issues/70
 #
+# Why binary introspection, not `go list -m all`:
+#   The earlier version of this script counted `go list -m all` from cilock/,
+#   which returns the MVS (Minimal Version Selection) resolved module graph
+#   — every module reachable from the workspace, including ones that nothing
+#   actually imports. In rookery's case that's ~1180 modules. The cilock
+#   binary itself, however, only links ~233 modules. MVS over-reports the
+#   real bloat by 5x. The metric that matters for binary size and supply-
+#   chain attack surface is what `go build` actually pulls in, which we read
+#   back out of the built binary via `go version -m`. See issue #70.
+#
 # Usage:
 #   ./scripts/check-dep-budget.sh           # check against budget; exit non-zero on overage
 #   ./scripts/check-dep-budget.sh --print   # just print current measurements
@@ -17,19 +27,26 @@ set -e
 cd "$(dirname "$0")/.."
 
 # ── Measure current ───────────────────────────────────────────────────
+# Build cilock and read its linked module list from the binary itself.
+# `go version -m <binary>` prints lines like:
+#   dep    github.com/foo/bar    v1.2.3    h1:...
+#   =>     github.com/foo/bar    v1.2.3-replace    h1:...   (for replace directives)
+# We sum unique paths from both, excluding rookery's own modules (they're
+# the source tree, not external deps).
+build_and_list_linked_modules() {
+  local tmpbin
+  tmpbin=$(mktemp)
+  (cd cilock && go build -o "$tmpbin" ./cmd/cilock/) >/dev/null
+  go version -m "$tmpbin" 2>/dev/null \
+    | awk '$1 == "dep" || $1 == "=>" {print $2}' \
+    | grep -v '^github.com/aflock-ai/rookery' \
+    | grep -v '^$' \
+    | sort -u
+  rm -f "$tmpbin"
+}
+
 current_transitive_pkgs() {
-  # `go list -m all` lists the module itself plus every transitive dep, one per
-  # line. Exclude rookery's own modules — we don't ship those to consumers as
-  # external deps, they're the source tree.
-  (
-    cd cilock
-    go list -m -f '{{.Path}}' all 2>/dev/null \
-      | grep -v '^github.com/aflock-ai/rookery' \
-      | grep -v '^$' \
-      | sort -u \
-      | wc -l \
-      | tr -d ' '
-  )
+  build_and_list_linked_modules | wc -l | tr -d ' '
 }
 
 current_go_sum_bytes() {
@@ -65,7 +82,7 @@ fi
 
 # ── Compare ────────────────────────────────────────────────────────────
 echo "cilock dep budget:"
-echo "  transitive_pkgs: current=$PKGS  budget=$BUDGET_PKGS"
+echo "  transitive_pkgs: current=$PKGS  budget=$BUDGET_PKGS  (binary-linked modules)"
 echo "  go_sum_bytes:    current=$BYTES  budget=$BUDGET_BYTES"
 echo
 
@@ -75,12 +92,8 @@ if [ "$PKGS" -gt "$BUDGET_PKGS" ]; then
   OVER=$((PKGS - BUDGET_PKGS))
   echo "::error::cilock transitive_pkgs over budget by $OVER ($PKGS > $BUDGET_PKGS)"
   echo "  → If this growth is intentional, raise .dep-budget.yaml in the same PR."
-  echo "  → Top 20 module paths in the new tree:"
-  ( cd cilock && go list -m -f '{{.Path}}' all 2>/dev/null \
-      | grep -v '^github.com/aflock-ai/rookery' \
-      | grep -v '^$' \
-      | sort -u \
-      | head -20 ) | sed 's/^/    /'
+  echo "  → First 20 linked module paths in the binary:"
+  build_and_list_linked_modules | head -20 | sed 's/^/    /'
   FAIL=1
 fi
 
