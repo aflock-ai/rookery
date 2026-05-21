@@ -12,6 +12,7 @@
 # - commitlint: Conventional commit validation
 # - forbidden-patterns: Scan for dangerous code patterns
 # - dep-budget: Block cilock transitive-dep growth beyond .dep-budget.yaml
+# - provenance-check: Verify .provenance/ inlined-upstream records
 # - ci-success: Aggregate status gate
 
 name: CI
@@ -280,6 +281,22 @@ jobs:
       - name: Check cilock dep budget
         run: ./scripts/check-dep-budget.sh
 
+  # ── Provenance / License Audit ──────────────────────────────────────
+  # Verifies every .provenance/*.json entry: local file matches recorded
+  # SHA256, upstream content (re-fetched at the recorded commit) still
+  # matches, license is on the NOTICE.md allowlist, and any "// inlined
+  # from" comments in Go files are covered by an entry.
+  #
+  # Tracking issue: https://github.com/aflock-ai/rookery/issues/72
+  provenance-check:
+    name: provenance check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify .provenance/ entries
+        run: ./scripts/check-provenance.sh
+
   # ── CI Success Gate ─────────────────────────────────────────────────
   ci-success:
     name: ci success
@@ -296,6 +313,7 @@ jobs:
       - commitlint
       - forbidden-patterns
       - dep-budget
+      - provenance-check
     steps:
       - name: Check all jobs
         run: |
