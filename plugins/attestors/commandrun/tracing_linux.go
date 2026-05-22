@@ -83,7 +83,7 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 	return pctx.procInfoArray(), nil
 }
 
-func (p *ptraceContext) runTrace() error {
+func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loop has many distinct event branches that read clearer inline
 	defer p.retryOpenedFiles()
 
 	runtime.LockOSThread()
