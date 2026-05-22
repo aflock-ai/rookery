@@ -36,6 +36,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/githubwebhook => ../../pl
 
 replace github.com/aflock-ai/rookery/plugins/attestors/gitlab => ../../plugins/attestors/gitlab
 
+replace github.com/aflock-ai/rookery/plugins/attestors/govulncheck => ../../plugins/attestors/govulncheck
+
 replace github.com/aflock-ai/rookery/plugins/attestors/inspec => ../../plugins/attestors/inspec
 
 replace github.com/aflock-ai/rookery/plugins/attestors/jenkins => ../../plugins/attestors/jenkins
@@ -125,6 +127,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/githubaction v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/githubwebhook v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gitlab v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/govulncheck v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/inspec v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/jenkins v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/jwt v0.0.0-00010101000000-000000000000

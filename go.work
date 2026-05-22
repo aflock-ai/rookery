@@ -28,6 +28,7 @@ use (
 	./plugins/attestors/githubaction
 	./plugins/attestors/githubwebhook
 	./plugins/attestors/gitlab
+	./plugins/attestors/govulncheck
 	./plugins/attestors/jenkins
 	./plugins/attestors/jwt
 	./plugins/attestors/k8smanifest
