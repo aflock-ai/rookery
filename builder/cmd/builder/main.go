@@ -474,36 +474,31 @@ func listSigners() {
 }
 
 func showLicense() {
-	fmt.Println("PROPRIETARY SOFTWARE LICENSE")
+	fmt.Println("Apache License 2.0")
 	fmt.Println("========================================")
 	fmt.Println("")
+	fmt.Println("Copyright 2025 The Aflock Authors")
+	fmt.Println("")
+	fmt.Println("Licensed under the Apache License, Version 2.0 (the \"License\");")
+	fmt.Println("you may not use this file except in compliance with the License.")
+	fmt.Println("You may obtain a copy of the License at")
+	fmt.Println("")
+	fmt.Println("    http://www.apache.org/licenses/LICENSE-2.0")
+	fmt.Println("")
+	fmt.Println("Unless required by applicable law or agreed to in writing, software")
+	fmt.Println("distributed under the License is distributed on an \"AS IS\" BASIS,")
+	fmt.Println("WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.")
+	fmt.Println("See the License for the specific language governing permissions and")
+	fmt.Println("limitations under the License.")
+	fmt.Println("")
+	fmt.Println("Source: https://github.com/aflock-ai/rookery")
 	if buildinfo.CustomerID != "" {
-		fmt.Printf("This software is owned by Aflock, Inc. and\nbuilt exclusively for %%s\n", buildinfo.CustomerID)
-	} else {
-		fmt.Println("This software is owned by Aflock, Inc.")
-	}
-	fmt.Println("")
-	fmt.Println("Copyright (c) 2025 Aflock, Inc.")
-	fmt.Println("All rights reserved.")
-	fmt.Println("")
-	fmt.Println("LICENSE RESTRICTIONS:")
-	fmt.Println("  - This software is licensed for internal use only")
-	fmt.Println("  - Redistribution is strictly prohibited")
-	fmt.Println("  - Reverse engineering is strictly prohibited")
-	fmt.Println("  - Modification is strictly prohibited")
-	fmt.Println("  - Sublicensing is strictly prohibited")
-	fmt.Println("")
-	fmt.Println("Unauthorized copying, distribution, modification, reverse")
-	fmt.Println("engineering, or use of this software is a violation of this")
-	fmt.Println("license agreement and may result in severe civil and criminal")
-	fmt.Println("penalties, including but not limited to injunctive relief,")
-	fmt.Println("damages, and criminal prosecution.")
-	fmt.Println("")
-	if buildinfo.TenantID != "" {
-		fmt.Printf("Tenant: %%s\n", buildinfo.TenantID)
 		fmt.Println("")
+		fmt.Printf("Built for: %%s\n", buildinfo.CustomerID)
 	}
-	fmt.Println("For licensing inquiries: license@aflock.ai")
+	if buildinfo.TenantID != "" {
+		fmt.Printf("Tenant:    %%s\n", buildinfo.TenantID)
+	}
 }
 `, mainGoPrefix, imports.String())
 
