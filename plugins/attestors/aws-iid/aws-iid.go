@@ -70,7 +70,9 @@ func init() {
 					return a, fmt.Errorf("invalid attestor type: %T", a)
 				}
 				if val == "" {
-					return a, fmt.Errorf("aws-region-cert cannot be empty")
+					// No override; let the attestor fall back to its embedded
+					// regional cert lookup in awsRegionCerts at Attest time.
+					return attestor, nil
 				}
 				WithAWSRegionCert(val)(attestor)
 				return attestor, nil
