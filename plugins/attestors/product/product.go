@@ -58,7 +58,6 @@ package product
 import (
 	"bytes"
 	"crypto"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -74,6 +73,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/merkle"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
+	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/gobwas/glob"
 	"github.com/invopop/jsonschema"
@@ -344,15 +344,14 @@ func (a *Attestor) buildTree() error {
 			// tree that silently omits files.
 			return fmt.Errorf("product %q has no sha256 digest; v0.3 requires sha256", p.normalized)
 		}
-		digestBytes, err := hex.DecodeString(digestHex)
+		// LeafHash is the single canonical leaf encoder for v0.3 product
+		// and material attestors. Defined once in plugins/attestors/inclusion-proof
+		// so the producer (product/material) and the verifier (inclusion-proof)
+		// can never drift apart byte-for-byte.
+		leafPreHash, err := inclusionproof.LeafHash(p.normalized, digestHex)
 		if err != nil {
-			return fmt.Errorf("product %q has malformed sha256 hex digest: %w", p.normalized, err)
+			return fmt.Errorf("product %q: %w", p.normalized, err)
 		}
-		if len(digestBytes) != sha256.Size {
-			return fmt.Errorf("product %q sha256 digest has length %d, want %d", p.normalized, len(digestBytes), sha256.Size)
-		}
-
-		leafPreHash := leafDigest(p.normalized, digestBytes)
 		leaves = append(leaves, ProductLeaf{
 			Path:       p.normalized,
 			FileDigest: digestHex,
@@ -374,21 +373,6 @@ func (a *Attestor) buildTree() error {
 	a.HashAlgorithmField = HashAlgorithm
 	a.ConstructionField = Construction
 	return nil
-}
-
-// leafDigest returns the path-bound pre-hash that the Merkle tree
-// commits to (after applying its own 0x00 RFC 6962 leaf prefix).
-//
-// leafDigest = sha256(path || 0x00 || file-digest-raw)
-//
-// path is the forward-slash-normalized UTF-8 file path; fileDigest is the
-// raw 32-byte SHA-256 of the file content.
-func leafDigest(path string, fileDigest []byte) []byte {
-	h := sha256.New()
-	_, _ = h.Write([]byte(path))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write(fileDigest)
-	return h.Sum(nil)
 }
 
 // Products returns the per-file product map for in-process consumers
