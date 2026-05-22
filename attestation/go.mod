@@ -12,6 +12,7 @@ require (
 	github.com/sigstore/fulcio v1.8.5
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.11.1
+	github.com/transparency-dev/merkle v0.0.2
 	github.com/wk8/go-ordered-map/v2 v2.1.8
 	go.step.sm/crypto v0.76.0
 	golang.org/x/mod v0.33.0
