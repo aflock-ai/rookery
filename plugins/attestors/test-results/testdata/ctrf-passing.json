@@ -1,0 +1,79 @@
+{
+  "reportFormat": "CTRF",
+  "specVersion": "0.0.0",
+  "reportId": "0020b0d9-9a3d-41e0-a88d-ebec52e6c77d",
+  "timestamp": "2026-05-22T13:44:10.684Z",
+  "generatedBy": "jest-ctrf-json-reporter",
+  "results": {
+    "tool": {
+      "name": "jest"
+    },
+    "summary": {
+      "tests": 5,
+      "passed": 5,
+      "failed": 0,
+      "pending": 0,
+      "skipped": 0,
+      "other": 0,
+      "start": 1779457450685,
+      "stop": 1779457450745
+    },
+    "tests": [
+      {
+        "name": "math adds 1 + 2 to equal 3",
+        "duration": 1,
+        "status": "passed",
+        "rawStatus": "passed",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/passing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "passing.test.js > math"
+      },
+      {
+        "name": "math multiplies 2 * 3",
+        "duration": 1,
+        "status": "passed",
+        "rawStatus": "passed",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/passing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "passing.test.js > math"
+      },
+      {
+        "name": "strings uppercase",
+        "duration": 0,
+        "status": "passed",
+        "rawStatus": "passed",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/passing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "passing.test.js > strings"
+      },
+      {
+        "name": "strings length",
+        "duration": 0,
+        "status": "passed",
+        "rawStatus": "passed",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/passing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "passing.test.js > strings"
+      },
+      {
+        "name": "arrays includes",
+        "duration": 0,
+        "status": "passed",
+        "rawStatus": "passed",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/passing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "passing.test.js > arrays"
+      }
+    ]
+  }
+}

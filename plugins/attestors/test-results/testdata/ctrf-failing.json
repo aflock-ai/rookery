@@ -1,0 +1,96 @@
+{
+  "reportFormat": "CTRF",
+  "specVersion": "0.0.0",
+  "reportId": "0d3bf0dd-00b8-4d93-8189-790087499d4f",
+  "timestamp": "2026-05-22T13:43:57.495Z",
+  "generatedBy": "jest-ctrf-json-reporter",
+  "results": {
+    "tool": {
+      "name": "jest"
+    },
+    "summary": {
+      "tests": 6,
+      "passed": 2,
+      "failed": 3,
+      "pending": 1,
+      "skipped": 0,
+      "other": 0,
+      "start": 1779457437496,
+      "stop": 1779457437604
+    },
+    "tests": [
+      {
+        "name": "arithmetic adds correctly",
+        "duration": 1,
+        "status": "passed",
+        "rawStatus": "passed",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/failing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "failing.test.js > arithmetic"
+      },
+      {
+        "name": "arithmetic addition broken",
+        "duration": 1,
+        "status": "failed",
+        "message": "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 3\nReceived: 2\n",
+        "trace": "at Object.toBe (/private/tmp/gen-ctrf/__tests__/failing.test.js:7:19)\nat Promise.finally.completed (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\nat new Promise (<anonymous>)\nat callAsyncCircusFn (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\nat _callCircusTest (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\nat processTicksAndRejections (node:internal/process/task_queues:105:5)\nat _runTest (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\nat /private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:853:7\nat _runTestsForDescribeBlock (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\nat _runTestsForDescribeBlock (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:861:11)\nat run (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\nat runAndTransformResultsToJestFormat (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\nat jestAdapter (/private/tmp/gen-ctrf/node_modules/jest-circus/build/runner.js:111:19)\nat runTestInternal (/private/tmp/gen-ctrf/node_modules/jest-runner/build/index.js:276:16)\nat runTest (/private/tmp/gen-ctrf/node_modules/jest-runner/build/index.js:344:7)\n\n[object Object]",
+        "rawStatus": "failed",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/failing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "failing.test.js > arithmetic"
+      },
+      {
+        "name": "strings upper works",
+        "duration": 0,
+        "status": "passed",
+        "rawStatus": "passed",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/failing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "failing.test.js > strings"
+      },
+      {
+        "name": "strings compare fails",
+        "duration": 1,
+        "status": "failed",
+        "message": "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: \"world\"\nReceived: \"hello\"\n",
+        "trace": "at Object.toBe (/private/tmp/gen-ctrf/__tests__/failing.test.js:17:21)\nat Promise.finally.completed (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\nat new Promise (<anonymous>)\nat callAsyncCircusFn (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\nat _callCircusTest (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\nat processTicksAndRejections (node:internal/process/task_queues:105:5)\nat _runTest (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\nat /private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:853:7\nat _runTestsForDescribeBlock (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\nat _runTestsForDescribeBlock (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:861:11)\nat run (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\nat runAndTransformResultsToJestFormat (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\nat jestAdapter (/private/tmp/gen-ctrf/node_modules/jest-circus/build/runner.js:111:19)\nat runTestInternal (/private/tmp/gen-ctrf/node_modules/jest-runner/build/index.js:276:16)\nat runTest (/private/tmp/gen-ctrf/node_modules/jest-runner/build/index.js:344:7)\n\n[object Object]",
+        "rawStatus": "failed",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/failing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "failing.test.js > strings"
+      },
+      {
+        "name": "math div by zero throws",
+        "duration": 1,
+        "status": "failed",
+        "message": "Error: division by zero\n",
+        "trace": "at Object.<anonymous> (/private/tmp/gen-ctrf/__tests__/failing.test.js:23:11)\nat Promise.finally.completed (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\nat new Promise (<anonymous>)\nat callAsyncCircusFn (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\nat _callCircusTest (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\nat processTicksAndRejections (node:internal/process/task_queues:105:5)\nat _runTest (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\nat /private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:853:7\nat _runTestsForDescribeBlock (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\nat _runTestsForDescribeBlock (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:861:11)\nat run (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\nat runAndTransformResultsToJestFormat (/private/tmp/gen-ctrf/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\nat jestAdapter (/private/tmp/gen-ctrf/node_modules/jest-circus/build/runner.js:111:19)\nat runTestInternal (/private/tmp/gen-ctrf/node_modules/jest-runner/build/index.js:276:16)\nat runTest (/private/tmp/gen-ctrf/node_modules/jest-runner/build/index.js:344:7)\n\n[object Object]",
+        "rawStatus": "failed",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/failing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "failing.test.js > math"
+      },
+      {
+        "name": "math not ready",
+        "duration": 0,
+        "status": "pending",
+        "rawStatus": "pending",
+        "type": "unit",
+        "filePath": "/private/tmp/gen-ctrf/__tests__/failing.test.js",
+        "retries": 0,
+        "flaky": false,
+        "suite": "failing.test.js > math"
+      }
+    ]
+  }
+}
