@@ -30,6 +30,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/githubwebhook => ../plugi
 
 replace github.com/aflock-ai/rookery/plugins/attestors/gitlab => ../plugins/attestors/gitlab
 
+replace github.com/aflock-ai/rookery/plugins/attestors/govulncheck => ../plugins/attestors/govulncheck
+
 replace github.com/aflock-ai/rookery/plugins/attestors/jenkins => ../plugins/attestors/jenkins
 
 replace github.com/aflock-ai/rookery/plugins/attestors/jwt => ../plugins/attestors/jwt
@@ -101,6 +103,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/githubaction v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/githubwebhook v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gitlab v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/govulncheck v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/jenkins v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/jwt v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/k8smanifest v0.0.0-00010101000000-000000000000
@@ -136,7 +139,7 @@ require (
 
 require (
 	dario.cat/mergo v1.0.1 // indirect
-	filippo.io/edwards25519 v1.1.0 // indirect
+	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/BobuSumisu/aho-corasick v1.0.3 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
