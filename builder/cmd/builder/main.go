@@ -371,6 +371,15 @@ func main() {
 		run(buildDir, "go", "get", "github.com/aflock-ai/rookery/attestation/signer")
 	}
 
+	// Get cilock/cli — the cobra command tree the generated main calls.
+	// This is what turns the output into a real cilock binary rather than
+	// a registry-inspector stub.
+	if attestationVer != "" {
+		run(buildDir, "go", "get", "github.com/aflock-ai/rookery/cilock/cli@"+attestationVer)
+	} else {
+		run(buildDir, "go", "get", "github.com/aflock-ai/rookery/cilock/cli")
+	}
+
 	// Resolve each plugin
 	var imports bytes.Buffer
 	for _, p := range plugins {
@@ -396,114 +405,25 @@ func main() {
 		mainGoPrefix = fmt.Sprintf("//go:debug fips140=%s\n", fipsMode)
 	}
 
+	// Generated binary is a real cilock: it pulls in the cobra command
+	// tree from cilock/cli and registers legacy witness.dev type aliases
+	// at startup. The blank-imports below register the manifest's
+	// attestor/signer plugins against the global attestation registry,
+	// which cilock/cli's run/verify/sign subcommands resolve.
 	mainGo := fmt.Sprintf(`%spackage main
 
 import (
-	"fmt"
-	"os"
-	"sort"
-
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/attestation/signer"
+	"github.com/aflock-ai/rookery/cilock/cli"
 
-	"rookery-build/buildinfo"
+	_ "rookery-build/buildinfo" // build metadata via -ldflags -X
 
 	// plugins
 %s)
 
 func main() {
-	if len(os.Args) < 2 {
-		showHelp()
-		os.Exit(0)
-	}
-
-	switch os.Args[1] {
-	case "attestors":
-		listAttestors()
-	case "signers":
-		listSigners()
-	case "buildinfo", "version":
-		fmt.Println(buildinfo.Info())
-	case "license":
-		showLicense()
-	case "help", "--help", "-h":
-		showHelp()
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %%s\n", os.Args[1])
-		showHelp()
-		os.Exit(1)
-	}
-}
-
-func showHelp() {
-	fmt.Println("Usage: <binary> <command>")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  attestors   List registered attestors")
-	fmt.Println("  signers     List registered signers")
-	fmt.Println("  buildinfo   Show build information")
-	fmt.Println("  version     Show version information")
-	fmt.Println("  license     Show license information")
-	fmt.Println("  help        Show this help")
-}
-
-func listAttestors() {
-	entries := attestation.RegistrationEntries()
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name)
-	}
-	sort.Strings(names)
-	fmt.Printf("Registered attestors (%%d):\n", len(names))
-	for _, name := range names {
-		fmt.Printf("  - %%s\n", name)
-	}
-}
-
-func listSigners() {
-	entries := signer.RegistryEntries()
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name)
-	}
-	sort.Strings(names)
-	fmt.Printf("Registered signers (%%d):\n", len(names))
-	for _, name := range names {
-		fmt.Printf("  - %%s\n", name)
-	}
-}
-
-func showLicense() {
-	fmt.Println("PROPRIETARY SOFTWARE LICENSE")
-	fmt.Println("========================================")
-	fmt.Println("")
-	if buildinfo.CustomerID != "" {
-		fmt.Printf("This software is owned by Aflock, Inc. and\nbuilt exclusively for %%s\n", buildinfo.CustomerID)
-	} else {
-		fmt.Println("This software is owned by Aflock, Inc.")
-	}
-	fmt.Println("")
-	fmt.Println("Copyright (c) 2025 Aflock, Inc.")
-	fmt.Println("All rights reserved.")
-	fmt.Println("")
-	fmt.Println("LICENSE RESTRICTIONS:")
-	fmt.Println("  - This software is licensed for internal use only")
-	fmt.Println("  - Redistribution is strictly prohibited")
-	fmt.Println("  - Reverse engineering is strictly prohibited")
-	fmt.Println("  - Modification is strictly prohibited")
-	fmt.Println("  - Sublicensing is strictly prohibited")
-	fmt.Println("")
-	fmt.Println("Unauthorized copying, distribution, modification, reverse")
-	fmt.Println("engineering, or use of this software is a violation of this")
-	fmt.Println("license agreement and may result in severe civil and criminal")
-	fmt.Println("penalties, including but not limited to injunctive relief,")
-	fmt.Println("damages, and criminal prosecution.")
-	fmt.Println("")
-	if buildinfo.TenantID != "" {
-		fmt.Printf("Tenant: %%s\n", buildinfo.TenantID)
-		fmt.Println("")
-	}
-	fmt.Println("For licensing inquiries: license@aflock.ai")
+	attestation.RegisterLegacyAliases()
+	cli.Execute()
 }
 `, mainGoPrefix, imports.String())
 
