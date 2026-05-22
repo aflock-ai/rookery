@@ -47,7 +47,7 @@ Regenerate after adding or renaming an attestor:
 
 | Name | Import path | Predicate type |
 |---|---|---|
-| `product` | `plugins/attestors/product` | `https://aflock.ai/attestations/product/v0.2` |
+| `product` | `plugins/attestors/product` | `https://aflock.ai/attestations/product/v0.3` |
 
 ## Post-product (analysis of outputs)
 
@@ -58,6 +58,7 @@ Regenerate after adding or renaming an attestor:
 | `docker-bench` | `plugins/attestors/docker-bench` | `https://aflock.ai/attestations/docker-bench/v0.1` |
 | `docker` | `plugins/attestors/docker` | `https://aflock.ai/attestations/docker/v0.1` |
 | `githubwebhook` | `plugins/attestors/githubwebhook` | `https://aflock.ai/attestations/githubwebhook/v0.1` |
+| `govulncheck` | `plugins/attestors/govulncheck` | `https://aflock.ai/attestations/govulncheck/v0.1` |
 | `inspec` | `plugins/attestors/inspec` | `https://aflock.ai/attestations/inspec/v0.1` |
 | `k8smanifest` | `plugins/attestors/k8smanifest` | — |
 | `kube-bench` | `plugins/attestors/kube-bench` | `https://aflock.ai/attestations/kube-bench/v0.1` |
@@ -75,6 +76,7 @@ Regenerate after adding or renaming an attestor:
 | `steampipe` | `plugins/attestors/steampipe` | `https://aflock.ai/attestations/steampipe/v0.1` |
 | `structured-data` | `plugins/attestors/structured-data` | `https://aflock.ai/attestations/structured-data/v0.1` |
 | `test-results` | `plugins/attestors/test-results` | `https://aflock.ai/attestations/test-results/v0.1` |
+| `trivy` | `plugins/attestors/trivy` | `https://aflock.ai/attestations/trivy/v0.1` |
 | `vex` | `plugins/attestors/vex` | `https://openvex.dev/ns` |
 
 ## Verify (policy-time)

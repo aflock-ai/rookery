@@ -26,4 +26,4 @@ cilock:
   # Byte size of cilock/go.sum. Still useful as a secondary signal: it
   # tracks declared deps including ones only pulled in by `go mod tidy`,
   # which catches dep churn the binary metric can miss.
-  go_sum_bytes: 71175
+  go_sum_bytes: 71400
