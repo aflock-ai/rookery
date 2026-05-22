@@ -24,6 +24,8 @@ import (
 	"io"
 	"regexp"
 	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
@@ -65,6 +67,13 @@ type client struct {
 	kubernetesAuthMountPath string
 	kubernetesSaTokenPath   string
 	role                    string
+
+	// keyType is the Vault Transit key type (e.g. "rsa-2048", "ecdsa-p256",
+	// "ed25519"). It is discovered lazily from the Vault server on first
+	// sign/verify so we can pick the right signature_algorithm parameter.
+	keyTypeOnce sync.Once
+	keyType     string
+	keyTypeErr  error
 }
 
 // transitPathRegex validates the transit secrets engine path. Only allows
@@ -122,22 +131,77 @@ func newClient(ctx context.Context, opts *clientOptions) (*client, error) {
 	return c, err
 }
 
+// discoverKeyType reads the key metadata from Vault Transit to determine the
+// key type (rsa-*, ecdsa-*, ed25519, ...). The result is cached on the client
+// so we only make one extra round-trip per process. Used to pick the correct
+// signature_algorithm parameter for sign/verify.
+func (c *client) discoverKeyType(ctx context.Context) (string, error) {
+	c.keyTypeOnce.Do(func() {
+		resp, err := c.client.Logical().ReadWithContext(
+			ctx,
+			fmt.Sprintf("/%v/keys/%v", c.transitSecretsEnginePath, c.keyPath),
+		)
+		if err != nil {
+			c.keyTypeErr = fmt.Errorf("could not read key type: %w", err)
+			return
+		}
+		if resp == nil || resp.Data == nil {
+			c.keyTypeErr = fmt.Errorf("empty response from vault keys read")
+			return
+		}
+		t, ok := resp.Data["type"]
+		if !ok {
+			c.keyTypeErr = fmt.Errorf("no type in key response")
+			return
+		}
+		ts, ok := t.(string)
+		if !ok {
+			c.keyTypeErr = fmt.Errorf("unexpected type value in key response: %T", t)
+			return
+		}
+		c.keyType = ts
+	})
+	return c.keyType, c.keyTypeErr
+}
+
+// signatureAlgorithmFor returns the Vault Transit signature_algorithm value
+// appropriate for the given key type, and whether to send it at all. For
+// ECDSA and Ed25519 keys, Vault picks the algorithm automatically and
+// rejects requests that pass signature_algorithm=pkcs1v15.
+func signatureAlgorithmFor(keyType string) (algo string, send bool) {
+	switch {
+	case strings.HasPrefix(keyType, "rsa-"):
+		// Back-compat: Vault Transit RSA keys default to pkcs1v15 padding.
+		return "pkcs1v15", true
+	default:
+		// ecdsa-p256/p384/p521, ed25519, and anything else we don't know
+		// about: let Vault decide.
+		return "", false
+	}
+}
+
 func (c *client) sign(ctx context.Context, digest []byte, hashFunc crypto.Hash) ([]byte, error) {
 	hashStr, ok := supportedHashesToString[hashFunc]
 	if !ok {
 		return nil, fmt.Errorf("unsupported hash algorithm: %v", hashFunc.String())
 	}
 
+	keyType, err := c.discoverKeyType(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := map[string]interface{}{
+		"input":       base64.StdEncoding.Strict().EncodeToString(digest),
+		"prehashed":   true,
+		"key_version": c.keyVersion,
+	}
+	if algo, send := signatureAlgorithmFor(keyType); send {
+		payload["signature_algorithm"] = algo
+	}
+
 	path := fmt.Sprintf("/%v/sign/%v/%v", c.transitSecretsEnginePath, c.keyPath, hashStr)
-	resp, err := c.client.Logical().WriteWithContext(
-		ctx,
-		path,
-		map[string]interface{}{
-			"input":               base64.StdEncoding.Strict().EncodeToString(digest),
-			"prehashed":           true,
-			"key_version":         c.keyVersion,
-			"signature_algorithm": "pkcs1v15",
-		})
+	resp, err := c.client.Logical().WriteWithContext(ctx, path, payload)
 
 	if err != nil {
 		return nil, fmt.Errorf("could not sign: %w", err)
@@ -171,15 +235,24 @@ func (c *client) verify(ctx context.Context, r io.Reader, sig []byte, hashFunc c
 		return fmt.Errorf("could not calculate digest: %w", err)
 	}
 
+	keyType, err := c.discoverKeyType(ctx)
+	if err != nil {
+		return err
+	}
+
+	payload := map[string]interface{}{
+		"input":     base64.StdEncoding.Strict().EncodeToString(digest),
+		"signature": string(sig),
+		"prehashed": true,
+	}
+	if algo, send := signatureAlgorithmFor(keyType); send {
+		payload["signature_algorithm"] = algo
+	}
+
 	resp, err := c.client.Logical().WriteWithContext(
 		ctx,
 		fmt.Sprintf("/%v/verify/%v/%v", c.transitSecretsEnginePath, c.keyPath, hashStr),
-		map[string]interface{}{
-			"signature_algorithm": "pkcs1v15",
-			"input":               base64.StdEncoding.Strict().EncodeToString(digest),
-			"signature":           string(sig),
-			"prehashed":           true,
-		},
+		payload,
 	)
 
 	if err != nil {
