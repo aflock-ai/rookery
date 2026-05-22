@@ -180,6 +180,14 @@ type ProcessInfo struct {
 	Network          *NetworkActivity                `json:"network,omitempty"`
 	FileOps          *FileActivity                   `json:"fileOps,omitempty"`
 	SyscallEvents    []SyscallEvent                  `json:"syscallEvents,omitempty"`
+
+	// ExitCode is the wait status of the traced process. For cleanly-
+	// exited processes it is the literal exit status. For signal-
+	// terminated processes it follows shell convention: 128 + signal
+	// number. Zero (omitted from JSON) means "still running when trace
+	// ended" or "exit code unknown" — verifiers must not infer
+	// successful exit from a missing/zero value.
+	ExitCode int `json:"exitcode,omitempty"`
 }
 
 type CommandRun struct {

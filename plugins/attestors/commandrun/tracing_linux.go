@@ -109,9 +109,29 @@ func (p *ptraceContext) runTrace() error {
 		if err != nil {
 			return err
 		}
-		if pid == p.parentPid && status.Exited() {
-			p.exitCode = status.ExitStatus()
-			return nil
+		// Record per-process exit code on the matching ProcessInfo so
+		// downstream policy can see which traced child exited with what.
+		// Issue #47: previously only the parent's exit was captured at
+		// the CommandRun-struct level; per-child exits were silently
+		// dropped along with the subsequent (failing) PtraceSyscall.
+		if status.Exited() {
+			pInfo := p.getProcInfo(pid)
+			pInfo.ExitCode = status.ExitStatus()
+			if pid == p.parentPid {
+				p.exitCode = status.ExitStatus()
+				return nil
+			}
+			continue
+		}
+		if status.Signaled() {
+			pInfo := p.getProcInfo(pid)
+			// shell convention: 128 + signal number for signal-killed
+			pInfo.ExitCode = 128 + int(status.Signal())
+			if pid == p.parentPid {
+				p.exitCode = 128 + int(status.Signal())
+				return nil
+			}
+			continue
 		}
 
 		sig := status.StopSignal()

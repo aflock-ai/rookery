@@ -179,6 +179,10 @@ func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error {
 		case CycloneDxMimeType:
 			predicateType = CycloneDxPredicateType
 		default:
+			// Issue #48: silently skipping unexpected MIME types means
+			// users debugging "why isn't my SBOM attached?" have no
+			// signal. Surface the skip at Debug.
+			log.Debugf("(attestation/sbom) skipping %s: MIME %q not in accepted list [%s %s]", path, product.MimeType, SPDXMimeType, CycloneDxMimeType)
 			continue
 		}
 

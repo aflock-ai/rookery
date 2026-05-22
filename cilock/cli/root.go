@@ -53,6 +53,7 @@ func New() *cobra.Command {
 	cmd.AddCommand(VersionCmd())
 	cmd.AddCommand(AttestorsCmd())
 	cmd.AddCommand(PolicyCmd())
+	cmd.AddCommand(LicenseCmd())
 	return cmd
 }
 
