@@ -433,14 +433,19 @@ func main() {
 	run(buildDir, "go", "mod", "tidy")
 	tmpBin := filepath.Join(buildDir, "rookery-build-output")
 
+	// Branded-distribution metadata: CustomerID/TenantID land in
+	// cilock/cli vars directly so `cilock license` surfaces them at
+	// runtime. The remaining buildinfo vars (BuilderVersion, BuildTime,
+	// Plugins, FipsMode) stay in the generated rookery-build/buildinfo
+	// package — they describe the builder invocation itself and aren't
+	// part of cilock's public surface.
 	metadataFlags := fmt.Sprintf("-X 'rookery-build/buildinfo.BuilderVersion=%s' "+
 		"-X 'rookery-build/buildinfo.BuildTime=%s' "+
 		"-X 'rookery-build/buildinfo.Plugins=%s' "+
 		"-X 'rookery-build/buildinfo.FipsMode=%s' "+
-		"-X 'rookery-build/buildinfo.CustomerID=%s' "+
-		"-X 'rookery-build/buildinfo.TenantID=%s' "+
-		"-X 'rookery-build/buildinfo.PlatformURL=%s'",
-		builderVer, buildTime, pluginsStr, fipsModeStr, customerID, tenantID, platformURL)
+		"-X 'github.com/aflock-ai/rookery/cilock/cli.CustomerID=%s' "+
+		"-X 'github.com/aflock-ai/rookery/cilock/cli.TenantID=%s'",
+		builderVer, buildTime, pluginsStr, fipsModeStr, customerID, tenantID)
 	// Also bake PlatformURL into the cilock config package default
 	if platformURL != "" {
 		metadataFlags += fmt.Sprintf(" -X 'github.com/aflock-ai/rookery/cilock/internal/config.DefaultPlatformURL=%s'", platformURL)
