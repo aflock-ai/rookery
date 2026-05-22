@@ -61,7 +61,13 @@ type Backend interface {
 }
 
 func NewSystemPackagesAttestor() *Attestor {
-	osReleaseFile := "/etc/os-release"
+	return newSystemPackagesAttestorWithPath("/etc/os-release")
+}
+
+// newSystemPackagesAttestorWithPath is the internal constructor used by
+// NewSystemPackagesAttestor and exposed to tests so they can supply a
+// fixture os-release file rather than the host's /etc/os-release.
+func newSystemPackagesAttestorWithPath(osReleaseFile string) *Attestor {
 	_, distribution, _, err := determineDistribution(osReleaseFile)
 	if err != nil {
 		// Default to Debian-based system if we can't determine the distribution
@@ -71,7 +77,7 @@ func NewSystemPackagesAttestor() *Attestor {
 	}
 
 	switch distribution {
-	case "fedora", "rhel", "centos", "rocky", "alma", "oracle", "suse", "opensuse", "amazon":
+	case "fedora", "rhel", "centos", "rocky", "alma", "oracle", "suse", "opensuse", "amazon", "amzn":
 		return &Attestor{
 			backend: NewRPMBackend(osReleaseFile),
 		}
