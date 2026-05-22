@@ -16,6 +16,7 @@ package cli
 
 import (
 	"context"
+	"crypto"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -239,10 +240,73 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		}
 	}
 
+	// Emit v0.3 product/material tree sidecars adjacent to the signed
+	// attestation file. These sidecars carry the full leaf set the
+	// Merkle root commits to and are consumed by `cilock prove` to
+	// generate per-leaf inclusion proofs. They are NOT signed —
+	// integrity comes from the fact that the reconstructed Merkle
+	// root must match the root in the signed collection attestation.
+	//
+	// If --outfile was empty (stdout), no sidecars are written: there
+	// is no on-disk anchor to derive the sidecar path from.
+	if ro.OutFilePath != "" {
+		if err := emitRunSidecars(ro.OutFilePath, attestors); err != nil {
+			// Don't fail the whole run on a sidecar write error: the
+			// signed attestation is already on disk and is the real
+			// artifact. Surface as a warning so operators can detect
+			// the failure without breaking the build.
+			log.Warnf("failed to write tree sidecars: %v", err)
+		}
+	}
+
 	// Return the deferred attestor error (e.g. secretscan fail-on-detection)
 	// after writing all output files.
 	if runErr != nil {
 		return runErr
 	}
 	return nil
+}
+
+// emitRunSidecars walks the attestor list looking for product and
+// material attestors, extracts their (path -> sha256-hex) maps, and
+// hands them to writeSidecarsForRun. Decoupled into its own function
+// so the sidecar logic doesn't dominate runRun.
+func emitRunSidecars(outfile string, attestors []attestation.Attestor) error {
+	products := map[string]string{}
+	materials := map[string]string{}
+	sha256DV := cryptoutil.DigestValue{Hash: crypto.SHA256}
+
+	for _, att := range attestors {
+		if p, ok := att.(attestation.Producer); ok {
+			for path, prod := range p.Products() {
+				digest, hasSHA := prod.Digest[sha256DV]
+				if !hasSHA {
+					// A product without a sha256 digest cannot
+					// participate in the v0.3 tree. Skip silently —
+					// the v0.3 attestor will emit the same skip.
+					continue
+				}
+				products[portablePath(path)] = digest
+			}
+		}
+		if m, ok := att.(attestation.Materialer); ok {
+			for path, ds := range m.Materials() {
+				digest, hasSHA := ds[sha256DV]
+				if !hasSHA {
+					continue
+				}
+				materials[portablePath(path)] = digest
+			}
+		}
+	}
+
+	return writeSidecarsForRun(outfile, products, materials)
+}
+
+// portablePath rewrites a path into the canonical (forward-slash)
+// form the v0.3 attestor and sidecar both use. Mirrors the helper
+// in plugins/attestors/product/product.go — kept independent so this
+// file doesn't need to import product just for one string op.
+func portablePath(p string) string {
+	return strings.ReplaceAll(p, "\\", "/")
 }

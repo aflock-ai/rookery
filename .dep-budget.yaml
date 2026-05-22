@@ -26,4 +26,11 @@ cilock:
   # Byte size of cilock/go.sum. Still useful as a secondary signal: it
   # tracks declared deps including ones only pulled in by `go mod tidy`,
   # which catches dep churn the binary metric can miss.
-  go_sum_bytes: 71175
+  #
+  # 2026-05: +90 bytes for plugins/attestors/inclusion-proof — adds the
+  # new attestor module + the local replace directive to cilock/go.mod,
+  # which `go mod tidy` records in go.sum. The new module itself adds
+  # zero external transitive deps (it only links to attestation/merkle,
+  # invopop/jsonschema, and stretchr/testify, all of which cilock
+  # already used). The binary-linked module count is unchanged.
+  go_sum_bytes: 71265

@@ -49,6 +49,7 @@ func New() *cobra.Command {
 	cmd.AddCommand(SignCmd())
 	cmd.AddCommand(VerifyCmd())
 	cmd.AddCommand(RunCmd())
+	cmd.AddCommand(ProveCmd())
 	cmd.AddCommand(CompletionCmd())
 	cmd.AddCommand(VersionCmd())
 	cmd.AddCommand(AttestorsCmd())
