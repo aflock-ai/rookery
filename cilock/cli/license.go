@@ -16,6 +16,8 @@ package cli
 
 import (
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -35,6 +37,44 @@ var (
 	TenantID   string
 )
 
+const licenseText = `Apache License 2.0
+========================================
+
+Copyright 2025 The Aflock Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+Source: https://github.com/aflock-ai/rookery
+`
+
+// renderLicense assembles the static license text plus the optional
+// ldflag-injected CustomerID/TenantID branding into a single string.
+// Centralizing the build here gives the RunE callback a single
+// error-returning io.WriteString call instead of N unchecked fmt.Fprintln
+// returns (errcheck linter fail).
+func renderLicense() string {
+	var b strings.Builder
+	b.WriteString(licenseText)
+	if CustomerID != "" {
+		b.WriteByte('\n')
+		_, _ = fmt.Fprintf(&b, "Built for: %s\n", CustomerID)
+	}
+	if TenantID != "" {
+		_, _ = fmt.Fprintf(&b, "Tenant:    %s\n", TenantID)
+	}
+	return b.String()
+}
+
 func LicenseCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:           "license",
@@ -42,34 +82,9 @@ func LicenseCmd() *cobra.Command {
 		Long:          `Show the Apache 2.0 license under which cilock is distributed, plus any customer / tenant branding metadata baked in at build time.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			out := cmd.OutOrStdout()
-			fmt.Fprintln(out, "Apache License 2.0")
-			fmt.Fprintln(out, "========================================")
-			fmt.Fprintln(out)
-			fmt.Fprintln(out, "Copyright 2025 The Aflock Authors")
-			fmt.Fprintln(out)
-			fmt.Fprintln(out, "Licensed under the Apache License, Version 2.0 (the \"License\");")
-			fmt.Fprintln(out, "you may not use this file except in compliance with the License.")
-			fmt.Fprintln(out, "You may obtain a copy of the License at")
-			fmt.Fprintln(out)
-			fmt.Fprintln(out, "    http://www.apache.org/licenses/LICENSE-2.0")
-			fmt.Fprintln(out)
-			fmt.Fprintln(out, "Unless required by applicable law or agreed to in writing, software")
-			fmt.Fprintln(out, "distributed under the License is distributed on an \"AS IS\" BASIS,")
-			fmt.Fprintln(out, "WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.")
-			fmt.Fprintln(out, "See the License for the specific language governing permissions and")
-			fmt.Fprintln(out, "limitations under the License.")
-			fmt.Fprintln(out)
-			fmt.Fprintln(out, "Source: https://github.com/aflock-ai/rookery")
-			if CustomerID != "" {
-				fmt.Fprintln(out)
-				fmt.Fprintf(out, "Built for: %s\n", CustomerID)
-			}
-			if TenantID != "" {
-				fmt.Fprintf(out, "Tenant:    %s\n", TenantID)
-			}
-			return nil
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, err := io.WriteString(cmd.OutOrStdout(), renderLicense())
+			return err
 		},
 	}
 }
