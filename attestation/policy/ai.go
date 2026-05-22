@@ -33,9 +33,13 @@ func validateAIServerURL(serverURL string) error {
 }
 
 const (
-	defaultAIServerURL = "http://judge-ollama.judge.svc.cluster.local:11434"
-	defaultAIModel     = "llama3.2"
-	defaultAITimeout   = 120 * time.Second
+	// defaultAITimeout bounds a single AI server round-trip. It is a
+	// transport-level HTTP timeout, not a platform-specific value, so it
+	// stays as a constant. The AI server URL and model name have no
+	// defaults — the open-source policy engine refuses to dial a bundled
+	// platform service, so the operator must supply both via
+	// `--ai-server-url` and the policy's `aipolicy.model` field.
+	defaultAITimeout = 120 * time.Second
 
 	// AiStatusPass is the status string for a passing AI policy evaluation.
 	AiStatusPass = "PASS"
@@ -92,7 +96,7 @@ func ExecuteAiPolicy(attestor attestation.Attestor, pol AiPolicy, serverURL stri
 	}
 
 	if serverURL == "" {
-		serverURL = defaultAIServerURL
+		return AiResponse{}, fmt.Errorf("AI policy requires --ai-server-url to be set; the open-source policy engine does not ship a default")
 	}
 
 	if err := validateAIServerURL(serverURL); err != nil {
@@ -117,7 +121,7 @@ In the response, the Status field MUST be exactly 'PASS' or 'FAIL', and include 
 
 	model := pol.Model
 	if model == "" {
-		model = defaultAIModel
+		return AiResponse{}, fmt.Errorf("AI policy %q must specify a model; the open-source policy engine does not ship a default", pol.Name)
 	}
 
 	reqBody := map[string]interface{}{
