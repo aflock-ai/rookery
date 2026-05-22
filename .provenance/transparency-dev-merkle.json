@@ -1,0 +1,12 @@
+{
+  "upstream_repo": "https://github.com/transparency-dev/merkle",
+  "upstream_commit": "036047b5d2f7faf3b1ee643d391e60fe5b1defcf",
+  "upstream_url": "https://raw.githubusercontent.com/transparency-dev/merkle/036047b5d2f7faf3b1ee643d391e60fe5b1defcf/testonly/tree.go",
+  "license_spdx": "Apache-2.0",
+  "license_url": "https://github.com/transparency-dev/merkle/blob/036047b5d2f7faf3b1ee643d391e60fe5b1defcf/LICENSE",
+  "local_path": "attestation/merkle/merkle.go",
+  "sha256_of_inlined_content": "a350a07fbc449c007a65713bfba2c0658b73089621b9822170c91b5eec717827",
+  "sha256_of_upstream_content": "a0e2d3b979d232cd4ca5b8f068fd2b6cf8f3155fc5093dca90220401928efbe7",
+  "kind": "validator-port",
+  "notes": "Consumed as a Go module dependency (github.com/transparency-dev/merkle@v0.0.2). attestation/merkle/ is a thin wrapper that exposes RFC 6962 §2.1 Merkle tree primitives and inclusion-proof verification for the v0.3 product attestor (issue aflock-ai/rookery#135). The wrapper's row-by-row tree construction (appendLeaf/getNodes/Root) follows the pattern in upstream testonly/tree.go (the reference implementation in the same module); recorded here for cross-reference rather than as inlined source. The actual RFC 6962 algorithms (proof.Inclusion, proof.RootFromInclusionProof, rfc6962.HashLeaf/HashChildren) are delegated to the upstream module — never reimplemented. Same code is already pulled transitively via Sigstore Rekor/Cosign clients in the broader ecosystem, so it has been independently audited. License Apache-2.0, compatible with rookery's Apache-2.0."
+}
