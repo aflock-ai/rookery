@@ -145,6 +145,27 @@ jobs:
       - name: Verify each module builds in isolation
         run: make verify-isolated
 
+  # ── Builder Smoke ───────────────────────────────────────────────────
+  # Runs the integration suite at builder/integration_test.go: builds
+  # both stock cilock and a builder-generated cilock, asserts they
+  # produce equivalent DSSE envelopes (same payloadType, same key ID
+  # for the same RSA key, matching preset attestor set). Guards against
+  # regressions in the builder's codegen or in cilock/cli's exported
+  # surface — either side breaking would break the manifest-driven
+  # custom-binary use case.
+  builder-smoke:
+    name: builder smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Run builder integration tests
+        run: go test -v -tags=integration -timeout 5m ./builder/...
+
   # ── Conventional Commits ────────────────────────────────────────────
   commitlint:
     name: commitlint
@@ -310,6 +331,7 @@ jobs:
       - vet
       - build
       - verify-isolated
+      - builder-smoke
       - commitlint
       - forbidden-patterns
       - dep-budget

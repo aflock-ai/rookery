@@ -5,7 +5,7 @@ package main
 
 import (
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/cilock/internal/cmd"
+	"github.com/aflock-ai/rookery/cilock/cli"
 
 	// All attestor plugins
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild"
@@ -52,5 +52,5 @@ func main() {
 	// Register legacy witness.dev type aliases so cilock can consume
 	// attestations produced by witness (and vice versa).
 	attestation.RegisterLegacyAliases()
-	cmd.Execute()
+	cli.Execute()
 }
