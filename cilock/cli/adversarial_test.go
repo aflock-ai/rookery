@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
@@ -1158,11 +1159,25 @@ func TestRunTracingFlag(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := generateTestKey(t, dir)
 
-	// --trace flag should be accepted.
-	assert.NotPanics(t, func() {
-		_ = executeCmd("run", "--step", "test", "--signer-file-key-path", keyPath,
-			"--trace", "--", "echo", "hello")
-	})
+	// --trace flag should be accepted. Fence with a 30s deadline so that
+	// a ptrace-related goroutine leak (the runTrace loop blocks on Wait4
+	// if ptrace permissions aren't available on the runner) doesn't burn
+	// the full 10-min test timeout. The point of the test is "the flag
+	// parses and the command exits"; if the trace path hangs we want a
+	// loud failure, not a silent timeout.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		assert.NotPanics(t, func() {
+			_ = executeCmd("run", "--step", "test", "--signer-file-key-path", keyPath,
+				"--trace", "--", "echo", "hello")
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("TestRunTracingFlag: executeCmd did not return within 30s — ptrace loop likely hung; investigate plugins/attestors/commandrun/tracing_linux.go runTrace")
+	}
 }
 
 // ==========================================================================
