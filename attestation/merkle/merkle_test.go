@@ -65,37 +65,117 @@ func refRoot(leafHashes [][]byte) []byte {
 	return tdmrfc.DefaultHasher.HashChildren(left, right)
 }
 
+// pureStdlibRoot is an INDEPENDENT RFC 6962 §2.1 implementation that uses
+// only crypto/sha256 — no transparency-dev/merkle, no rfc6962 package. Used
+// to cross-validate root vectors so the wrapper's agreement with itself is
+// not the only signal.
+//
+// Takes raw leaves (the wrapper's input shape) and applies the 0x00 leaf
+// prefix internally, matching what NewTree does.
+func pureStdlibRoot(leaves [][]byte) []byte {
+	n := len(leaves)
+	if n == 0 {
+		h := sha256.Sum256(nil)
+		return h[:]
+	}
+	if n == 1 {
+		h := sha256.New()
+		h.Write([]byte{0x00})
+		h.Write(leaves[0])
+		return h.Sum(nil)
+	}
+	k := 1
+	for k<<1 < n {
+		k <<= 1
+	}
+	left := pureStdlibRoot(leaves[:k])
+	right := pureStdlibRoot(leaves[k:])
+	h := sha256.New()
+	h.Write([]byte{0x01})
+	h.Write(left)
+	h.Write(right)
+	return h.Sum(nil)
+}
+
+// bitcoinStyleRoot reproduces Bitcoin's pre-fix Merkle algorithm: at any
+// level with an odd node count, the last node is duplicated to pad to even.
+// This is the vulnerable construction that CVE-2012-2459 documented.
+//
+// It uses the SAME byte-level hashing (RFC 6962-style 0x00 leaf prefix,
+// 0x01 interior prefix) as our wrapper, so any root difference is
+// attributable to the duplication rule alone, not to a different hash.
+func bitcoinStyleRoot(leaves [][]byte) []byte {
+	if len(leaves) == 0 {
+		h := sha256.Sum256(nil)
+		return h[:]
+	}
+	level := make([][]byte, len(leaves))
+	for i, l := range leaves {
+		h := sha256.New()
+		h.Write([]byte{0x00})
+		h.Write(l)
+		level[i] = h.Sum(nil)
+	}
+	for len(level) > 1 {
+		if len(level)%2 == 1 {
+			level = append(level, level[len(level)-1])
+		}
+		next := make([][]byte, len(level)/2)
+		for i := 0; i < len(level); i += 2 {
+			h := sha256.New()
+			h.Write([]byte{0x01})
+			h.Write(level[i])
+			h.Write(level[i+1])
+			next[i/2] = h.Sum(nil)
+		}
+		level = next
+	}
+	return level[0]
+}
+
 // ----------------------------------------------------------------------------
 // CVE-2012-2459: Bitcoin Merkle tree odd-leaf duplication.
 //
-// In Bitcoin's pre-fix construction, an odd-numbered row had its last leaf
-// duplicated to pad to an even count. Attackers could supply a tree whose
-// final two siblings were both equal to that duplicated leaf and produce a
-// DIFFERENT transaction set with the SAME root. RFC 6962 §2.1 avoids this
-// by splitting at the largest power of two ≤ n rather than padding — odd
-// rows leave the last subtree as-is. This test demonstrates that two
-// distinct leaf sets that would collide under Bitcoin's rule produce
-// different roots under our construction.
+// Bitcoin's pre-fix construction duplicated the last node at any level with
+// an odd count. The CVE: a 5-leaf tree (L0..L4) and a 6-leaf tree
+// (L0..L4, L4) produce the SAME root under that rule, so an attacker can
+// substitute one for the other while preserving the published root.
+//
+// RFC 6962 §2.1 splits at the largest power of two ≤ n instead of padding.
+// Odd rows leave the last subtree as-is. This breaks the collision.
+//
+// The test demonstrates both ends of the comparison:
+//
+//  1. Under Bitcoin's algorithm, the 5-leaf and 5-leaf-plus-dup trees
+//     genuinely produce the same root — confirming the bug exists in that
+//     construction.
+//  2. Under our RFC 6962 wrapper, the same two leaf sets produce different
+//     roots — confirming we are NOT vulnerable to the same attack.
+//
 // ----------------------------------------------------------------------------
 func TestCVE_2012_2459_OddLeafDuplication(t *testing.T) {
-	leaves := [][]byte{leafD(0), leafD(1), leafD(2), leafD(3), leafD(4)}
+	leaves5 := [][]byte{leafD(0), leafD(1), leafD(2), leafD(3), leafD(4)}
+	leaves5PlusDup := append(append([][]byte{}, leaves5...), leaves5[4])
 
-	// A "padded" tree that duplicates the last leaf — what Bitcoin used to
-	// accept. Build it manually with the upstream hasher so we can compare.
-	padded := append([][]byte{}, leaves...)
-	padded = append(padded, leaves[4]) // duplicate last leaf
+	// (1) Bitcoin's algorithm DOES collide on these two leaf sets — proving
+	// the CVE class actually exists in that construction.
+	bitcoinRoot5 := bitcoinStyleRoot(leaves5)
+	bitcoinRoot5Dup := bitcoinStyleRoot(leaves5PlusDup)
+	require.Equal(t, bitcoinRoot5, bitcoinRoot5Dup,
+		"Bitcoin's pre-fix algorithm must produce the same root for L0..L4 and L0..L4,L4 — this is the CVE-2012-2459 collision we are defending against")
 
-	original, err := NewTree(leaves)
+	// (2) Our wrapper's RFC 6962 construction does NOT collide on these
+	// same leaf sets — proving we are not vulnerable.
+	ours5, err := NewTree(leaves5)
 	require.NoError(t, err)
-	dup, err := NewTree(padded)
+	ours5Dup, err := NewTree(leaves5PlusDup)
 	require.NoError(t, err)
+	require.NotEqual(t, ours5.Root(), ours5Dup.Root(),
+		"RFC 6962 wrapper must produce DIFFERENT roots for the leaf sets that collide under Bitcoin's rule (CVE-2012-2459 defense)")
 
-	require.NotEqual(t, original.Root(), dup.Root(),
-		"odd-leaf duplication MUST produce a different root than the original 5-leaf tree (CVE-2012-2459)")
-
-	// And the original 5-leaf root must equal the reference RFC 6962 root —
-	// i.e., we are NOT duplicating internally.
-	require.Equal(t, referenceRoot(t, 5), original.Root())
+	// Belt-and-braces: the 5-leaf RFC 6962 root must equal the reference
+	// recursive computation, confirming we are not internally duplicating.
+	require.Equal(t, referenceRoot(t, 5), ours5.Root())
 }
 
 // ----------------------------------------------------------------------------
@@ -128,12 +208,23 @@ func TestCVE_2017_12842_64ByteSecondPreimage(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// Domain separation: a leaf hash that is itself the SHA-256 of
-// 0x01||L||R (a valid interior node value) must NOT be accepted as a leaf.
+// Domain separation: an interior-node value from the SAME tree being
+// attacked must NOT be accepted as a leaf.
 //
-// We deliberately fabricate such a value and present it through the API.
-// The 0x00 prefix our wrapper applies makes the recomputed root diverge from
-// any legitimate root, so verification fails.
+// This is the precise shape of the CVE-2017-12842 second-preimage attack: an
+// attacker takes an interior node H(0x01 || left || right) from a legitimate
+// tree and tries to convince a verifier the bytes represent a leaf. Our
+// wrapper defeats this by (a) the HashSize check rejecting any value not
+// exactly 32 bytes (an interior node's PRE-image is 64 bytes — but the
+// node's HASH is 32 bytes and could pass the size gate), and (b) the 0x00
+// leaf prefix making the recomputed root mismatch when the attacker
+// substitutes a real interior-node hash for a leaf hash.
+//
+// The test constructs a real interior node from leaves of the tree under
+// attack — the strongest formulation, since the attacker has full knowledge
+// of the tree's internal nodes — and asserts verification fails with a root
+// mismatch (NOT a size-validation rejection, since the interior-node hash
+// IS exactly 32 bytes).
 // ----------------------------------------------------------------------------
 func TestDomainSeparation_InteriorNodeAsLeaf(t *testing.T) {
 	tree := mustTree(t, 4)
@@ -141,14 +232,23 @@ func TestDomainSeparation_InteriorNodeAsLeaf(t *testing.T) {
 	proofPath, err := tree.InclusionProof(0)
 	require.NoError(t, err)
 
-	// Build an interior-node value: H(0x01 || L || R).
-	l := leafD(10)
-	r := leafD(11)
-	interior := tdmrfc.DefaultHasher.HashChildren(l, r)
-	require.Len(t, interior, HashSize)
+	// Construct an interior-node value from the ACTUAL leaves of this tree.
+	// At level 1, the leftmost interior node is H(0x01 || HashLeaf(L0) || HashLeaf(L1)).
+	// This is precisely what an attacker with knowledge of the tree's internal
+	// structure would attempt to substitute as a leaf hash.
+	l0Hashed := tdmrfc.DefaultHasher.HashLeaf(leafD(0))
+	l1Hashed := tdmrfc.DefaultHasher.HashLeaf(leafD(1))
+	realInteriorNode := tdmrfc.DefaultHasher.HashChildren(l0Hashed, l1Hashed)
+	require.Len(t, realInteriorNode, HashSize,
+		"sanity: an interior-node hash is exactly HashSize bytes — so the size gate alone does NOT defend against this attack")
 
-	err = VerifyInclusion(tree.Size(), 0, interior, proofPath, root)
-	require.Error(t, err, "an interior-node hash MUST NOT verify as a leaf")
+	err = VerifyInclusion(tree.Size(), 0, realInteriorNode, proofPath, root)
+	require.Error(t, err, "a real interior-node hash MUST NOT verify as a leaf (CVE-2017-12842 class)")
+	// Assert the failure mode is the root mismatch, NOT some earlier shape
+	// check. The interior node passes the size gate, so the only thing
+	// defending us here is the 0x00 leaf prefix the wrapper applies.
+	require.Contains(t, err.Error(), "calculated root does not match expected root",
+		"the failure must come from the 0x00 leaf prefix making the recomputed root diverge; any other error mode means the test isn't exercising the actual CVE defense")
 }
 
 // ----------------------------------------------------------------------------
@@ -216,17 +316,17 @@ func TestOffByOneProofLength(t *testing.T) {
 	leaf := leafD(3)
 	proofPath, err := tr.InclusionProof(3)
 	require.NoError(t, err)
-	require.NoError(t, VerifyInclusionStrict(8, 3, leaf, proofPath, root))
+	require.NoError(t, VerifyInclusion(8, 3, leaf, proofPath, root))
 
 	// Append a junk hash.
 	junk := make([]byte, HashSize)
 	withExtra := append(append([][]byte{}, proofPath...), junk)
-	require.Error(t, VerifyInclusionStrict(8, 3, leaf, withExtra, root),
+	require.Error(t, VerifyInclusion(8, 3, leaf, withExtra, root),
 		"extra audit-path hash must be rejected")
 
 	// Remove the last hash.
 	withMissing := proofPath[:len(proofPath)-1]
-	require.Error(t, VerifyInclusionStrict(8, 3, leaf, withMissing, root),
+	require.Error(t, VerifyInclusion(8, 3, leaf, withMissing, root),
 		"truncated audit path must be rejected")
 }
 
@@ -302,26 +402,43 @@ func TestBitFlipRejection(t *testing.T) {
 // RFC 9162 §2.1.5 worked example: 7 leaves with d_i = byte(i), i in [0,6].
 //
 // The root value pinned here is the deterministic output of the canonical
-// RFC 6962 §2.1 algorithm for those inputs (cross-validated against
-// transparency-dev/merkle's hasher). It serves as a stable regression
+// RFC 6962 §2.1 algorithm for those inputs. It serves as a stable regression
 // vector: any future refactor that changes the byte-level layout of leaves
 // or interior nodes — the exact failure mode that has produced multiple
 // historical Merkle CVEs — will flip this hash and fail this test loudly.
+//
+// Cross-validated against TWO independent paths:
+//
+//  1. The wrapper's Root() (via transparency-dev/merkle).
+//  2. pureStdlibRoot — a hand-coded recursive implementation that uses only
+//     crypto/sha256 and the RFC 6962 byte construction.
+//
+// Both must agree with the pinned hash. If either disagrees, the test fails
+// loudly so we know which path drifted.
 // ----------------------------------------------------------------------------
 func TestRFC9162_SevenLeafVector(t *testing.T) {
 	const expectedHex = "bee2275db16667589a4515f63e0d053a2fa602c1d9f9703e98920a5bdad59baf"
 	want, _ := hex.DecodeString(expectedHex)
 
-	// d0..d6 are single-byte values 0..6; the leaves we hand to NewTree are
-	// the SHA-256 digests of those values (the standard "object digest" shape
-	// callers pass through the API).
 	leaves := make([][]byte, 7)
 	for i := 0; i < 7; i++ {
 		leaves[i] = leafD(byte(i))
 	}
+
 	tr, err := NewTree(leaves)
 	require.NoError(t, err)
-	require.Equal(t, want, tr.Root(), "RFC 9162 §2.1.5 root vector for d0..d6 changed — investigate immediately")
+
+	// Path 1: the wrapper's tree root.
+	require.Equal(t, want, tr.Root(),
+		"wrapper's Root() drifted from pinned RFC 9162 §2.1.5 vector — investigate immediately")
+
+	// Path 2: independent pure-stdlib recursive computation. If both paths
+	// agree with `want`, drift in either is caught.
+	stdlibRoot := pureStdlibRoot(leaves)
+	require.Equal(t, want, stdlibRoot,
+		"pure-stdlib RFC 6962 recursive root drifted from pinned vector — investigate immediately")
+	require.Equal(t, tr.Root(), stdlibRoot,
+		"wrapper and pure-stdlib computations disagree — one of them violates RFC 6962 §2.1")
 }
 
 // ----------------------------------------------------------------------------

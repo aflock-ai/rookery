@@ -152,21 +152,11 @@ func (t *Tree) getNodes(ids []compact.NodeID) [][]byte {
 //
 // Returns nil on success and a descriptive error on failure. Error messages
 // distinguish digest size, tree-size sentinel, index range, proof element
-// length, and root mismatch so callers can log usefully.
+// length, and root mismatch so callers can log usefully. The upstream
+// proof.RootFromInclusionProof enforces exact audit-path length for
+// (treeSize, leafIndex), so a too-short or too-long path is rejected at the
+// crypto layer before the root comparison.
 func VerifyInclusion(treeSize, leafIndex uint64, leafHash []byte, proofPath [][]byte, root []byte) error {
-	return verifyInclusion(treeSize, leafIndex, leafHash, proofPath, root, false)
-}
-
-// VerifyInclusionStrict additionally rejects proofs whose length does not
-// exactly match the value RFC 6962 prescribes for (treeSize, leafIndex).
-// The upstream RootFromInclusionProof already checks this, so this entry
-// point is a defence-in-depth alias that documents intent at the call site.
-// New callers in cilock SHOULD prefer this.
-func VerifyInclusionStrict(treeSize, leafIndex uint64, leafHash []byte, proofPath [][]byte, root []byte) error {
-	return verifyInclusion(treeSize, leafIndex, leafHash, proofPath, root, true)
-}
-
-func verifyInclusion(treeSize, leafIndex uint64, leafHash []byte, proofPath [][]byte, root []byte, strict bool) error {
 	if treeSize == 0 {
 		return errors.New("merkle: cannot verify inclusion against an empty tree")
 	}
@@ -191,10 +181,6 @@ func verifyInclusion(treeSize, leafIndex uint64, leafHash []byte, proofPath [][]
 	if subtle.ConstantTimeCompare(calc, root) != 1 {
 		return errors.New("merkle: calculated root does not match expected root")
 	}
-	// Strict mode is implicit in proof.RootFromInclusionProof's length check;
-	// the explicit boolean exists for forward compatibility if we ever wrap a
-	// looser primitive.
-	_ = strict
 	return nil
 }
 

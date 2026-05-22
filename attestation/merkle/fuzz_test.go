@@ -1,5 +1,3 @@
-//go:build audit
-
 package merkle
 
 import (
@@ -116,7 +114,6 @@ func FuzzProofGeneration(f *testing.F) {
 		proofPath, err := tr.InclusionProof(index)
 		require.NoError(t, err)
 		require.NoError(t, VerifyInclusion(tr.Size(), index, leaf, proofPath, tr.Root()))
-		require.NoError(t, VerifyInclusionStrict(tr.Size(), index, leaf, proofPath, tr.Root()))
 	})
 }
 
