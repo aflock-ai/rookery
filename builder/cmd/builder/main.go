@@ -42,42 +42,77 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/signers/file",
 	},
 	"cicd": {
+		// Mirrors presets/cicd/imports.go. CI-pipeline-relevant subset:
+		// foundations, CI identity (github/gitlab/jwt), container build
+		// (docker/oci), k8s deploys (k8smanifest), and the standard
+		// security scanners (sbom/sarif/secretscan/vex/slsa).
 		"github.com/aflock-ai/rookery/plugins/attestors/commandrun",
-		"github.com/aflock-ai/rookery/plugins/attestors/environment",
-		"github.com/aflock-ai/rookery/plugins/attestors/git",
-		"github.com/aflock-ai/rookery/plugins/attestors/github",
-		"github.com/aflock-ai/rookery/plugins/attestors/gitlab",
-		"github.com/aflock-ai/rookery/plugins/attestors/material",
-		"github.com/aflock-ai/rookery/plugins/attestors/product",
-		"github.com/aflock-ai/rookery/plugins/attestors/slsa",
-		"github.com/aflock-ai/rookery/plugins/signers/file",
-	},
-	"all": {
-		"github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild",
-		"github.com/aflock-ai/rookery/plugins/attestors/aws-iid",
-		"github.com/aflock-ai/rookery/plugins/attestors/commandrun",
+		"github.com/aflock-ai/rookery/plugins/attestors/configuration",
 		"github.com/aflock-ai/rookery/plugins/attestors/docker",
 		"github.com/aflock-ai/rookery/plugins/attestors/environment",
-		"github.com/aflock-ai/rookery/plugins/attestors/gcp-iit",
 		"github.com/aflock-ai/rookery/plugins/attestors/git",
 		"github.com/aflock-ai/rookery/plugins/attestors/github",
-		"github.com/aflock-ai/rookery/plugins/attestors/githubwebhook",
+		"github.com/aflock-ai/rookery/plugins/attestors/githubaction",
 		"github.com/aflock-ai/rookery/plugins/attestors/gitlab",
-		"github.com/aflock-ai/rookery/plugins/attestors/jenkins",
 		"github.com/aflock-ai/rookery/plugins/attestors/jwt",
 		"github.com/aflock-ai/rookery/plugins/attestors/k8smanifest",
-		"github.com/aflock-ai/rookery/plugins/attestors/link",
 		"github.com/aflock-ai/rookery/plugins/attestors/lockfiles",
 		"github.com/aflock-ai/rookery/plugins/attestors/material",
-		"github.com/aflock-ai/rookery/plugins/attestors/maven",
 		"github.com/aflock-ai/rookery/plugins/attestors/oci",
-		"github.com/aflock-ai/rookery/plugins/attestors/omnitrail",
 		"github.com/aflock-ai/rookery/plugins/attestors/policyverify",
 		"github.com/aflock-ai/rookery/plugins/attestors/product",
 		"github.com/aflock-ai/rookery/plugins/attestors/sarif",
 		"github.com/aflock-ai/rookery/plugins/attestors/sbom",
 		"github.com/aflock-ai/rookery/plugins/attestors/secretscan",
 		"github.com/aflock-ai/rookery/plugins/attestors/slsa",
+		"github.com/aflock-ai/rookery/plugins/attestors/system-packages",
+		"github.com/aflock-ai/rookery/plugins/attestors/vex",
+		"github.com/aflock-ai/rookery/plugins/signers/file",
+	},
+	"all": {
+		// Keep alphabetised; this list MUST stay in sync with the on-disk
+		// directories under plugins/attestors/ and plugins/signers/ in
+		// the rookery monorepo. The presets/all/imports.go module
+		// blank-imports the same set.
+		"github.com/aflock-ai/rookery/plugins/attestors/asff",
+		"github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild",
+		"github.com/aflock-ai/rookery/plugins/attestors/aws-config",
+		"github.com/aflock-ai/rookery/plugins/attestors/aws-iid",
+		"github.com/aflock-ai/rookery/plugins/attestors/commandrun",
+		"github.com/aflock-ai/rookery/plugins/attestors/configuration",
+		"github.com/aflock-ai/rookery/plugins/attestors/docker",
+		"github.com/aflock-ai/rookery/plugins/attestors/docker-bench",
+		"github.com/aflock-ai/rookery/plugins/attestors/environment",
+		"github.com/aflock-ai/rookery/plugins/attestors/gcp-iit",
+		"github.com/aflock-ai/rookery/plugins/attestors/git",
+		"github.com/aflock-ai/rookery/plugins/attestors/github",
+		"github.com/aflock-ai/rookery/plugins/attestors/githubaction",
+		"github.com/aflock-ai/rookery/plugins/attestors/githubwebhook",
+		"github.com/aflock-ai/rookery/plugins/attestors/gitlab",
+		"github.com/aflock-ai/rookery/plugins/attestors/inspec",
+		"github.com/aflock-ai/rookery/plugins/attestors/jenkins",
+		"github.com/aflock-ai/rookery/plugins/attestors/jwt",
+		"github.com/aflock-ai/rookery/plugins/attestors/k8smanifest",
+		"github.com/aflock-ai/rookery/plugins/attestors/kube-bench",
+		"github.com/aflock-ai/rookery/plugins/attestors/link",
+		"github.com/aflock-ai/rookery/plugins/attestors/lockfiles",
+		"github.com/aflock-ai/rookery/plugins/attestors/material",
+		"github.com/aflock-ai/rookery/plugins/attestors/maven",
+		"github.com/aflock-ai/rookery/plugins/attestors/nessus",
+		"github.com/aflock-ai/rookery/plugins/attestors/oci",
+		"github.com/aflock-ai/rookery/plugins/attestors/omnitrail",
+		"github.com/aflock-ai/rookery/plugins/attestors/oscap",
+		"github.com/aflock-ai/rookery/plugins/attestors/pip-install",
+		"github.com/aflock-ai/rookery/plugins/attestors/policyverify",
+		"github.com/aflock-ai/rookery/plugins/attestors/product",
+		"github.com/aflock-ai/rookery/plugins/attestors/prowler",
+		"github.com/aflock-ai/rookery/plugins/attestors/sarif",
+		"github.com/aflock-ai/rookery/plugins/attestors/sbom",
+		"github.com/aflock-ai/rookery/plugins/attestors/secretscan",
+		"github.com/aflock-ai/rookery/plugins/attestors/sinkhole-flows",
+		"github.com/aflock-ai/rookery/plugins/attestors/slsa",
+		"github.com/aflock-ai/rookery/plugins/attestors/steampipe",
+		"github.com/aflock-ai/rookery/plugins/attestors/structured-data",
 		"github.com/aflock-ai/rookery/plugins/attestors/system-packages",
 		"github.com/aflock-ai/rookery/plugins/attestors/vex",
 		"github.com/aflock-ai/rookery/plugins/attestors/vsa",
@@ -139,8 +174,11 @@ CLI plugin forms:
 
 Presets:
   minimal    commandrun, environment, git, material, product + file signer
-  cicd       minimal + github, gitlab, slsa
-  all        all attestors + all signers
+  cicd       minimal + configuration, docker, github, githubaction, gitlab,
+             jwt, k8smanifest, lockfiles, oci, policyverify, sarif, sbom,
+             secretscan, slsa, system-packages, vex
+  all        every attestor in plugins/attestors/ + every signer in
+             plugins/signers/ (42 attestors, 9 signers as of this build)
 
 Examples:
   rookery-builder --manifest build.yaml
