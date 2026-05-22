@@ -22,7 +22,10 @@ cilock:
   # actually links into the artifact, which is the real bloat + supply-
   # chain attack surface. See scripts/check-dep-budget.sh for the exact
   # computation.
-  transitive_pkgs: 174
+  # 2026-05-22: 175 on linux/amd64 CI builds, 174 on darwin local — the
+  # linker pulls one extra platform-specific module on Linux. CI is the
+  # canonical artifact, so the budget tracks the larger number.
+  transitive_pkgs: 175
   # Byte size of cilock/go.sum. Still useful as a secondary signal: it
   # tracks declared deps including ones only pulled in by `go mod tidy`,
   # which catches dep churn the binary metric can miss.
