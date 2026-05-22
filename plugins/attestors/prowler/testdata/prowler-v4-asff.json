@@ -1,0 +1,134 @@
+[
+  {
+    "SchemaVersion": "2018-10-08",
+    "Id": "prowler-iam_root_mfa_enabled-123456789012-us-east-1-root",
+    "ProductArn": "arn:aws:securityhub:us-east-1::product/prowler/prowler",
+    "GeneratorId": "prowler-aws/iam_root_mfa_enabled",
+    "AwsAccountId": "123456789012",
+    "Title": "Ensure MFA is enabled for the root user",
+    "Description": "Root account has MFA enabled.",
+    "Severity": {
+      "Label": "CRITICAL"
+    },
+    "Resources": [
+      {
+        "Id": "arn:aws:iam::123456789012:root",
+        "Type": "AwsIamUser",
+        "Region": "us-east-1"
+      }
+    ],
+    "Compliance": {
+      "Status": "PASSED"
+    }
+  },
+  {
+    "SchemaVersion": "2018-10-08",
+    "Id": "prowler-iam_check_saml_providers_sts-123456789012-us-east-1-alice",
+    "ProductArn": "arn:aws:securityhub:us-east-1::product/prowler/prowler",
+    "GeneratorId": "prowler-aws/iam_check_saml_providers_sts",
+    "AwsAccountId": "123456789012",
+    "Title": "Ensure SAML providers are configured for STS",
+    "Description": "User alice has no SAML provider.",
+    "Severity": {
+      "Label": "CRITICAL"
+    },
+    "Resources": [
+      {
+        "Id": "arn:aws:iam::123456789012:user/alice",
+        "Type": "AwsIamUser",
+        "Region": "us-east-1"
+      }
+    ],
+    "Compliance": {
+      "Status": "FAILED"
+    }
+  },
+  {
+    "SchemaVersion": "2018-10-08",
+    "Id": "prowler-s3_bucket_public_access-123456789012-us-east-1-my-bucket",
+    "ProductArn": "arn:aws:securityhub:us-east-1::product/prowler/prowler",
+    "GeneratorId": "prowler-aws/s3_bucket_public_access",
+    "AwsAccountId": "123456789012",
+    "Title": "S3 bucket should not be public",
+    "Description": "Bucket my-bucket is publicly readable.",
+    "Severity": {
+      "Label": "HIGH"
+    },
+    "Resources": [
+      {
+        "Id": "arn:aws:s3:::my-bucket",
+        "Type": "AwsS3Bucket",
+        "Region": "us-east-1"
+      }
+    ],
+    "Compliance": {
+      "Status": "FAILED"
+    }
+  },
+  {
+    "SchemaVersion": "2018-10-08",
+    "Id": "prowler-ec2_securitygroup_allow_ingress_from_internet_to_port_22-123456789012-us-west-2-sg-123",
+    "ProductArn": "arn:aws:securityhub:us-east-1::product/prowler/prowler",
+    "GeneratorId": "prowler-aws/ec2_securitygroup_allow_ingress_from_internet_to_port_22",
+    "AwsAccountId": "123456789012",
+    "Title": "Security group should not allow 0.0.0.0/0 to port 22",
+    "Description": "Security group sg-123 allows 0.0.0.0/0 on port 22.",
+    "Severity": {
+      "Label": "MEDIUM"
+    },
+    "Resources": [
+      {
+        "Id": "arn:aws:ec2:us-west-2:123456789012:security-group/sg-123",
+        "Type": "AwsEc2SecurityGroup",
+        "Region": "us-west-2"
+      }
+    ],
+    "Compliance": {
+      "Status": "FAILED"
+    }
+  },
+  {
+    "SchemaVersion": "2018-10-08",
+    "Id": "prowler-cloudtrail_multi_region_enabled-123456789012-us-east-1-trail-main",
+    "ProductArn": "arn:aws:securityhub:us-east-1::product/prowler/prowler",
+    "GeneratorId": "prowler-aws/cloudtrail_multi_region_enabled",
+    "AwsAccountId": "123456789012",
+    "Title": "Enable CloudTrail multi-region",
+    "Description": "Trail trail-main is multi-region.",
+    "Severity": {
+      "Label": "LOW"
+    },
+    "Resources": [
+      {
+        "Id": "arn:aws:cloudtrail:us-east-1:123456789012:trail/trail-main",
+        "Type": "AwsCloudTrailTrail",
+        "Region": "us-east-1"
+      }
+    ],
+    "Compliance": {
+      "Status": "PASSED"
+    }
+  },
+  {
+    "SchemaVersion": "2018-10-08",
+    "Id": "prowler-kms_cmk_rotation_enabled-123456789012-us-east-1-key-xyz",
+    "ProductArn": "arn:aws:securityhub:us-east-1::product/prowler/prowler",
+    "GeneratorId": "prowler-aws/kms_cmk_rotation_enabled",
+    "AwsAccountId": "123456789012",
+    "Title": "KMS CMK rotation should be enabled",
+    "Description": "Key key-xyz does not rotate.",
+    "Severity": {
+      "Label": "LOW"
+    },
+    "Resources": [
+      {
+        "Id": "arn:aws:kms:us-east-1:123456789012:key/key-xyz",
+        "Type": "AwsKmsKey",
+        "Region": "us-east-1"
+      }
+    ],
+    "Compliance": {
+      "Status": "FAILED"
+    }
+  }
+]
