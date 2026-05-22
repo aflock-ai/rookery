@@ -166,7 +166,13 @@ func (a *SBOMAttestor) MarshalJSON() ([]byte, error) {
 	if err := json.Unmarshal(doc, &m); err != nil {
 		// Document doesn't parse as a JSON object (rare — could be an
 		// array or scalar). Pass through unchanged rather than panic.
-		return doc, nil
+		// The original doc bytes are still valid JSON (json.Marshal
+		// just emitted them), so callers get a lossless predicate
+		// without a discriminator. Suppress the linter's "nilerr"
+		// warning: returning the error would break Marshal callers
+		// that expect doc to be valid bytes here.
+		_ = err
+		return doc, nil //nolint:nilerr // intentional: lossless pass-through for non-object SBOMs
 	}
 	m["_sbomFormat"] = format
 	return json.Marshal(m)
