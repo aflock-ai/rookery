@@ -59,6 +59,7 @@ use (
 	./plugins/attestors/steampipe
 	./plugins/attestors/structured-data
 	./plugins/attestors/test-results
+	./plugins/attestors/trivy
 
 	// Signer plugins
 	./plugins/signers/debug-signer
