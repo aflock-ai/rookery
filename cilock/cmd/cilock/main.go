@@ -37,6 +37,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/secretscan"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/slsa"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/system-packages"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/test-results"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/vex"
 
 	// Default signer plugins (lightweight set).

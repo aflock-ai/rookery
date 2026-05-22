@@ -47,7 +47,7 @@ Regenerate after adding or renaming an attestor:
 
 | Name | Import path | Predicate type |
 |---|---|---|
-| `product` | `plugins/attestors/product` | `https://aflock.ai/attestations/product/v0.1` |
+| `product` | `plugins/attestors/product` | `https://aflock.ai/attestations/product/v0.2` |
 
 ## Post-product (analysis of outputs)
 
@@ -72,6 +72,9 @@ Regenerate after adding or renaming an attestor:
 | `secretscan` | `plugins/attestors/secretscan` | `https://aflock.ai/attestations/secretscan/v0.1` |
 | `sinkhole-flows` | `plugins/attestors/sinkhole-flows` | `https://aflock.ai/attestations/sinkhole-flows/v0.1` |
 | `slsa` | `plugins/attestors/slsa` | `https://slsa.dev/provenance/v1` |
+| `steampipe` | `plugins/attestors/steampipe` | `https://aflock.ai/attestations/steampipe/v0.1` |
+| `structured-data` | `plugins/attestors/structured-data` | `https://aflock.ai/attestations/structured-data/v0.1` |
+| `test-results` | `plugins/attestors/test-results` | `https://aflock.ai/attestations/test-results/v0.1` |
 | `vex` | `plugins/attestors/vex` | `https://openvex.dev/ns` |
 
 ## Verify (policy-time)
