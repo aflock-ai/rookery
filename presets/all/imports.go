@@ -59,6 +59,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/structured-data"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/system-packages"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/test-results"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/trivy"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/vex"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/vsa"
 
