@@ -194,6 +194,52 @@ func (c *Client) SearchGitoids(ctx context.Context, vars SearchGitoidVariables) 
 	return gitoids, nil
 }
 
+// SearchGitoidsBySubjects queries Archivista's GraphQL API for envelope
+// gitoids whose statement subjects intersect subjectDigests, regardless of
+// predicate type or collection name. Used by bundle subject-graph walking
+// where the caller wants everything reachable from a starting subject.
+func (c *Client) SearchGitoidsBySubjects(ctx context.Context, subjectDigests, excludeGitoids []string) ([]string, error) {
+	const query = `query ($subjectDigests: [String!], $excludeGitoids: [String!]) {
+  dsses(
+    where: {
+      gitoidSha256NotIn: $excludeGitoids,
+      hasStatementWith: {
+        hasSubjectsWith: {
+          hasSubjectDigestsWith: {
+            valueIn: $subjectDigests
+          }
+        }
+      }
+    }
+  ) {
+    edges {
+      node {
+        gitoidSha256
+      }
+    }
+  }
+}`
+
+	vars := struct {
+		SubjectDigests []string `json:"subjectDigests"`
+		ExcludeGitoids []string `json:"excludeGitoids"`
+	}{
+		SubjectDigests: subjectDigests,
+		ExcludeGitoids: excludeGitoids,
+	}
+
+	var response searchGitoidResponse
+	if err := c.graphqlQuery(ctx, query, vars, &response); err != nil {
+		return nil, err
+	}
+
+	gitoids := make([]string, 0, len(response.Dsses.Edges))
+	for _, edge := range response.Dsses.Edges {
+		gitoids = append(gitoids, edge.Node.Gitoid)
+	}
+	return gitoids, nil
+}
+
 // SearchGitoidByPredicateVariables are the parameters for a gitoid search
 // that filters by predicate type rather than by collection name/attestations.
 // Used for the external-attestation flow where bare DSSE envelopes (SLSA
