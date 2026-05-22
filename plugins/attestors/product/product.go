@@ -64,7 +64,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -84,11 +83,12 @@ const (
 	// registry. The CLI flag `--attestations product` references this.
 	Name = "product"
 
-	// Type is the v0.3 predicate type URI. v0.3 is a HARD CUT from v0.2:
-	// the predicate shape is different (root + size + algo, no per-file
-	// map), and v0.1 / v0.2 are no longer registered. Historical
-	// attestations stored under v0.1 / v0.2 type URIs will fail to
-	// deserialize and must be re-issued.
+	// Type is the v0.3 predicate type URI. v0.3 is a HARD CUT for
+	// production: the predicate shape is different (root + size + algo,
+	// no per-file map) and v0.3 is the only producer registered under
+	// the canonical "product" name. Historical v0.1 / v0.2 attestations
+	// remain verify-only via the LegacyDecoder in legacy.go, registered
+	// under the distinct names "product-v0.1" and "product-v0.2".
 	Type = "https://aflock.ai/attestations/product/v0.3"
 
 	// RunType places the attestor in the post-product phase, identical to
@@ -147,8 +147,9 @@ var (
 // ConstructionField) are what get marshalled into the in-toto Statement's
 // predicate. The lowercase fields are run-time state used to build the
 // tree, including the per-file leaf data that the sidecar writer consumes.
-// leaves is intentionally not in the predicate — clients must use
-// WriteSidecar to capture the full tree contents.
+// leaves is intentionally not in the predicate — clients call BuildSidecar
+// (which returns the canonical inclusionproof.Sidecar) to capture the
+// full tree contents.
 type Attestor struct {
 	// Predicate fields. These are the bytes any verifier needs to refuse
 	// or accept the attestation; nothing else from this struct ends up in
@@ -160,8 +161,8 @@ type Attestor struct {
 
 	// Internal state — NOT part of the predicate. The `json:"-"` tags
 	// keep them out of MarshalJSON so the signed Statement never carries
-	// per-file data. WriteSidecar reads `leaves` to emit the sidecar
-	// alongside the (signed) envelope.
+	// per-file data. BuildSidecar reads `leaves` to construct the
+	// canonical inclusion-proof sidecar alongside the signed envelope.
 	products            map[string]attestation.Product `json:"-"`
 	baseArtifacts       map[string]cryptoutil.DigestSet
 	leaves              []ProductLeaf `json:"-"`
@@ -243,9 +244,11 @@ func configOptions() []registry.Configurer {
 }
 
 func init() {
-	// v0.3 is a HARD CUT. v0.1 (LegacyProductType) and v0.2 (the old
-	// ProductType) are NOT registered. Verifiers that need to read
-	// historical attestations must use an older cilock build.
+	// v0.3 is the only producer. v0.1 and v0.2 historical attestations
+	// remain *verifiable* via the LegacyDecoder registered in legacy.go
+	// — that file uses distinct registry names (product-v0.1, product-v0.2)
+	// so `cilock run --attestations product` always picks the v0.3
+	// producer below, never a legacy decoder.
 	attestation.RegisterAttestation(
 		Name,
 		Type,
@@ -406,7 +409,7 @@ func (a *Attestor) rootDigestSet() cryptoutil.DigestSet {
 }
 
 // MarshalJSON publishes only the predicate fields. The leaves slice is
-// kept out of the signed Statement; sidecar consumers use WriteSidecar.
+// kept out of the signed Statement; sidecar consumers use BuildSidecar.
 func (a *Attestor) MarshalJSON() ([]byte, error) {
 	type predicate struct {
 		MerkleRoot    string `json:"merkleRoot"`
@@ -444,63 +447,22 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// SidecarSchemaVersion is the schema URI emitted at the top of every
-// product-tree sidecar file.
-const SidecarSchemaVersion = "https://aflock.ai/product-tree-sidecar/v0.1"
-
-// Sidecar is the JSON shape of the side-channel tree file. It is NOT
-// signed and NOT part of the attestation envelope — producers may discard
-// it. The inclusion-proof attestor (cilock prove) consumes it to emit
-// per-file proofs against the published Merkle root.
-type Sidecar struct {
-	SchemaVersion string        `json:"schemaVersion"`
-	MerkleRoot    string        `json:"merkleRoot"`
-	TreeSize      uint64        `json:"treeSize"`
-	HashAlgorithm string        `json:"hashAlgorithm"`
-	Construction  string        `json:"construction"`
-	Leaves        []ProductLeaf `json:"leaves"`
-}
-
-// WriteSidecar serializes the full tree contents (root, size, algo, and
-// every per-file leaf) to path. The sidecar is NOT signed and NOT part of
-// the attestation envelope — producers MAY discard it. cilock prove uses
-// it to generate inclusion proofs for individual files after the fact.
+// BuildSidecar returns the canonical inclusion-proof sidecar for this
+// attestor's leaf set. The sidecar is the SAME shape `cilock run` writes
+// adjacent to the signed attestation (rookery.inclusion-proof.sidecar/v0.1)
+// and the SAME shape `cilock prove` consumes — no parallel format exists.
+// Library consumers holding an *Attestor directly use this when they need
+// the sidecar bytes without going through the CLI.
 //
-// The MerkleRoot and FileDigest fields are emitted with a "sha256:"
-// prefix so the sidecar self-describes the algorithm. Callers reading the
-// sidecar should strip the prefix before decoding.
-func (a *Attestor) WriteSidecar(path string) error {
-	sidecar := a.Sidecar()
-	data, err := json.MarshalIndent(sidecar, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshalling product tree sidecar: %w", err)
+// The sidecar is NOT signed and NOT part of the attestation envelope —
+// integrity comes from the fact that the reconstructed Merkle root must
+// match the root in the signed predicate.
+func (a *Attestor) BuildSidecar() (inclusionproof.Sidecar, error) {
+	digests := make(map[string]string, len(a.leaves))
+	for _, l := range a.leaves {
+		digests[l.Path] = l.FileDigest
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("writing product tree sidecar: %w", err)
-	}
-	return nil
-}
-
-// Sidecar builds the side-channel tree record from the attestor's
-// in-memory state. Exposed separately from WriteSidecar so callers can
-// embed the sidecar in their own envelope formats.
-func (a *Attestor) Sidecar() Sidecar {
-	leaves := make([]ProductLeaf, len(a.leaves))
-	for i, l := range a.leaves {
-		leaves[i] = ProductLeaf{
-			Path:       l.Path,
-			FileDigest: "sha256:" + l.FileDigest,
-			LeafHash:   "sha256:" + l.LeafHash,
-		}
-	}
-	return Sidecar{
-		SchemaVersion: SidecarSchemaVersion,
-		MerkleRoot:    "sha256:" + a.MerkleRoot,
-		TreeSize:      a.TreeSize,
-		HashAlgorithm: a.HashAlgorithmField,
-		Construction:  a.ConstructionField,
-		Leaves:        leaves,
-	}
+	return inclusionproof.BuildSidecar("product", digests)
 }
 
 // Leaves returns the raw (unprefixed) per-file leaf records used to build
@@ -525,17 +487,6 @@ func (a *Attestor) RootBytes() []byte {
 // Internal helpers
 // =====================================================================
 
-// portableNormalize rewrites a relative path to its canonical form.
-// Backslashes are unconditionally replaced with forward slashes — we do
-// NOT use filepath.ToSlash because that helper is OS-aware (it leaves
-// backslashes alone on non-Windows hosts), which would make a
-// Windows-recorded attestation produce a different Merkle root when
-// re-hashed on Linux. The Merkle root must be a function of the
-// predicate alone, regardless of host OS.
-func portableNormalize(p string) string {
-	return strings.ReplaceAll(p, "\\", "/")
-}
-
 // safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob
 // library can panic on certain patterns that compile successfully but
 // trigger out-of-bounds access during matching. We treat panics as
@@ -558,7 +509,7 @@ type productPair struct {
 func (a *Attestor) includedProductPairs() []productPair {
 	pairs := make([]productPair, 0, len(a.products))
 	for name := range a.products {
-		normalized := portableNormalize(name)
+		normalized := inclusionproof.NormalizePath(name)
 		if a.compiledExcludeGlob != nil {
 			if matched, err := safeGlobMatch(a.compiledExcludeGlob, normalized); err != nil {
 				log.Debugf("exclude glob match error for path %q: %v", normalized, err)

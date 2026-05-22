@@ -91,7 +91,8 @@ func (c *Client) FetchAllForSubject(ctx context.Context, seedSubjects []string, 
 	frontier := append([]string(nil), seedSubjects...)
 	envelopes := make([]dsse.Envelope, 0)
 
-	for depth := 0; depth < cfg.maxDepth && len(frontier) > 0; depth++ {
+	var depth int
+	for depth = 0; depth < cfg.maxDepth && len(frontier) > 0; depth++ {
 		excludeList := mapKeys(seenGitoids)
 		sort.Strings(excludeList)
 
@@ -126,6 +127,14 @@ func (c *Client) FetchAllForSubject(ctx context.Context, seedSubjects []string, 
 		}
 
 		frontier = nextFrontier
+	}
+
+	// Loop exited with a non-empty frontier ⇒ we hit maxDepth before
+	// exhausting the subject graph. Return what we have plus an error so
+	// operators are forced to acknowledge the truncation (silent partial
+	// results hide blind spots in verify-time evidence collection).
+	if depth >= cfg.maxDepth && len(frontier) > 0 {
+		return envelopes, fmt.Errorf("archivista fetch exceeded max depth (%d) with %d unexplored subject(s) — pass WithMaxDepth to raise", cfg.maxDepth, len(frontier))
 	}
 
 	return envelopes, nil

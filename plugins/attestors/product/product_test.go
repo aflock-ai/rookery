@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -285,38 +286,46 @@ func TestSidecarRoundTrip(t *testing.T) {
 	}
 	a := makeAttestor(t, files)
 
-	sidecarPath := filepath.Join(t.TempDir(), "tree.sidecar.json")
-	require.NoError(t, a.WriteSidecar(sidecarPath))
-
-	data, err := os.ReadFile(sidecarPath)
+	// BuildSidecar produces the canonical inclusion-proof sidecar shape.
+	// This is the SAME shape `cilock run` writes adjacent to the signed
+	// attestation and the SAME shape `cilock prove` reads. No parallel
+	// sidecar format exists.
+	side, err := a.BuildSidecar()
 	require.NoError(t, err)
 
-	var roundTripped Sidecar
-	require.NoError(t, json.Unmarshal(data, &roundTripped))
+	require.Equal(t, inclusionproof.SidecarSchemaVersion, side.SchemaVersion)
+	require.Equal(t, "product", side.Source)
+	require.Equal(t, a.MerkleRoot, side.MerkleRoot,
+		"sidecar merkleRoot must equal the signed predicate's root")
+	require.Equal(t, a.TreeSize, side.TreeSize)
+	require.Equal(t, HashAlgorithm, side.HashAlgorithm)
+	require.Equal(t, Construction, side.Construction)
+	require.Len(t, side.Leaves, len(files))
 
-	require.Equal(t, SidecarSchemaVersion, roundTripped.SchemaVersion)
-	require.Equal(t, "sha256:"+a.MerkleRoot, roundTripped.MerkleRoot)
-	require.Equal(t, a.TreeSize, roundTripped.TreeSize)
-	require.Equal(t, HashAlgorithm, roundTripped.HashAlgorithm)
-	require.Equal(t, Construction, roundTripped.Construction)
-	require.Len(t, roundTripped.Leaves, len(files))
+	// Round-trip through JSON and reconstruct the tree to verify the
+	// sidecar is sufficient to reproduce the signed root. This is the
+	// real verifiability handshake.
+	buf, err := json.Marshal(side)
+	require.NoError(t, err)
+	var roundTripped inclusionproof.Sidecar
+	require.NoError(t, json.Unmarshal(buf, &roundTripped))
 
-	// Build a map keyed by path so the order-independence of this
-	// check is explicit (the leaves are sorted, so we *expect* a
-	// stable order, but the round-trip contract is that every leaf
-	// makes it through with the same digest values).
-	got := make(map[string]ProductLeaf, len(roundTripped.Leaves))
+	tree, _, err := roundTripped.Reconstruct()
+	require.NoError(t, err, "reconstruct must succeed against the canonical sidecar")
+	require.Equal(t, a.MerkleRoot, hex.EncodeToString(tree.Root()),
+		"reconstructed root from sidecar must match signed root")
+
+	// Each input file must be present as a leaf with its unprefixed
+	// hex sha256.
+	got := make(map[string]inclusionproof.SidecarLeaf, len(roundTripped.Leaves))
 	for _, l := range roundTripped.Leaves {
 		got[l.Path] = l
 	}
 	for path, content := range files {
 		l, ok := got[path]
 		require.True(t, ok, "sidecar must contain leaf for %q", path)
-
-		expectedFileDigest := sha256Hex(t, content)
-		require.Equal(t, "sha256:"+expectedFileDigest, l.FileDigest, "fileDigest mismatch for %q", path)
-		require.True(t, strings.HasPrefix(l.LeafHash, "sha256:"),
-			"leafHash must be sha256-prefixed; got %q", l.LeafHash)
+		require.Equal(t, sha256Hex(t, content), l.FileDigest,
+			"fileDigest mismatch for %q", path)
 	}
 }
 

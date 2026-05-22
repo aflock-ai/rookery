@@ -37,7 +37,6 @@ package product
 //    path fails loudly. Only the v0.3 Attestor produces.
 
 import (
-	"crypto"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -179,6 +178,3 @@ func (a *LegacyDecoder) Products() map[string]attestation.Product {
 	return a.products
 }
 
-// shaDV is the SHA-256 digest-set key used by extractSha256-style helpers.
-// Kept private to avoid leaking into the v0.3 attestor's API surface.
-var legacyShaDV = cryptoutil.DigestValue{Hash: crypto.SHA256} //nolint:unused // referenced by future per-version helpers

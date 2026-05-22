@@ -239,50 +239,35 @@ func TestV03_007_BackRefsOnlyTreeMaterials(t *testing.T) {
 }
 
 // =============================================================================
-// V03_008: Sidecar round-trip preserves leaves and root
+// V03_008: In-memory leaves reconstruct the signed root
 // =============================================================================
 
-// V03_008 is the verifiability handshake. A verifier with only the
-// signed predicate (root + size + constants) and the sidecar (leaves)
-// MUST be able to reconstruct the root and check inclusion. If the
-// sidecar can't round-trip cleanly, v0.3 verification is broken.
-func TestV03_008_SidecarRoundTrip(t *testing.T) {
+// V03_008 is the verifiability handshake. The canonical sidecar format
+// lives in plugins/attestors/inclusion-proof (single source of truth);
+// this test checks the in-memory invariant the material attestor must
+// uphold: the LeafHash hex values returned by Leaves() must reconstruct
+// to the same Merkle root the attestor signed. If that breaks,
+// inclusion-proof verification breaks.
+func TestV03_008_LeavesReconstructRoot(t *testing.T) {
 	a := makeMaterialAttestor(t, map[string]string{
 		"a.txt":     "alpha",
 		"b.txt":     "bravo",
 		"sub/c.txt": "charlie",
 	})
 
-	sidecarPath := filepath.Join(t.TempDir(), "tree.json")
-	require.NoError(t, a.WriteSidecar(sidecarPath))
+	leaves := a.Leaves()
+	require.Len(t, leaves, 3, "all 3 leaves must be available in memory")
 
-	body, err := os.ReadFile(sidecarPath)
-	require.NoError(t, err)
-
-	var doc materialTreeSidecar
-	require.NoError(t, json.Unmarshal(body, &doc))
-
-	assert.Equal(t, SidecarSchemaVersion, doc.SchemaVersion)
-	assert.Equal(t, Type, doc.PredicateType)
-	assert.Equal(t, TreeSubjectName, doc.SubjectName)
-	assert.Equal(t, a.MerkleRoot, doc.MerkleRoot)
-	assert.Equal(t, a.TreeSize, doc.TreeSize)
-	assert.Equal(t, HashAlgorithm, doc.HashAlgorithm)
-	assert.Equal(t, Construction, doc.Construction)
-	require.Len(t, doc.Leaves, 3, "all 3 leaves must be in the sidecar")
-
-	// Now the real check: reconstruct the merkle tree from the
-	// sidecar leaves and confirm the root matches the signed root.
-	leaves := make([][]byte, len(doc.Leaves))
-	for i, l := range doc.Leaves {
+	leafBytes := make([][]byte, len(leaves))
+	for i, l := range leaves {
 		raw, err := hex.DecodeString(l.LeafHash)
 		require.NoError(t, err)
-		leaves[i] = raw
+		leafBytes[i] = raw
 	}
-	tree, err := merkle.NewTree(leaves)
+	tree, err := merkle.NewTree(leafBytes)
 	require.NoError(t, err)
 	assert.Equal(t, a.MerkleRoot, hex.EncodeToString(tree.Root()),
-		"recomputed root from sidecar must match signed root")
+		"recomputed root from in-memory leaves must match signed root")
 }
 
 // =============================================================================
@@ -394,7 +379,6 @@ func TestV03_011_VersionConstants(t *testing.T) {
 	assert.Equal(t, "sha256", HashAlgorithm)
 	assert.Equal(t, "RFC6962", Construction)
 	assert.Equal(t, "tree:materials", TreeSubjectName)
-	assert.Equal(t, "https://aflock.ai/material-tree-sidecar/v0.1", SidecarSchemaVersion)
 }
 
 // =============================================================================

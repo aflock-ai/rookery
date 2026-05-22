@@ -13,10 +13,14 @@ attestors which all walk the product set.
 |----------------------------------------------------|------------|------------------------------------------------|
 | `https://aflock.ai/attestations/product/v0.3`      | **Current**| One `tree:products` subject (Merkle root)      |
 
-v0.3 is a **HARD CUT** from v0.1 and v0.2. Neither older predicate type is
-registered any more. Historical attestations stored under
-`https://aflock.ai/attestations/product/v0.1` or `v0.2` will not deserialize
-against this build; verifiers needing to read those must use an older cilock.
+v0.3 is a **HARD CUT for production**: only v0.3 is emitted by `cilock run`.
+Historical v0.1 and v0.2 attestations remain **verifiable** — a
+verify-only `LegacyDecoder` (see `legacy.go`) is registered for both older
+predicate type URIs so `cilock verify` can still consume attestations
+produced before the cutover. The legacy decoders use distinct registry
+names (`product-v0.1`, `product-v0.2`) so they cannot be selected as
+producers by `cilock run --attestations product` — that always picks
+the v0.3 producer.
 
 ## Why v0.3 (briefly)
 
@@ -34,8 +38,9 @@ build.
 v0.3 publishes the Merkle root of an **RFC 6962** tree over the product set.
 The per-file leaves live in a side-channel sidecar; verifiers (or future
 auditors) can produce per-file inclusion proofs without re-walking the build.
-Compatibility-mode reading of old v0.1/v0.2 statements is intentionally
-dropped — the wire format changed.
+Verify-only support for v0.1/v0.2 wire format is retained via
+`LegacyDecoder` (see above) so old envelopes still flow through
+`cilock verify`. New attestations always use v0.3.
 
 ## Leaf encoding
 
@@ -84,28 +89,14 @@ carry it.
 
 ## Side-channel tree sidecar
 
-Producers can stash the full leaf set in a side-channel file so
-`cilock prove` can generate inclusion proofs after the fact:
-
-```go
-a.WriteSidecar("./tree.sidecar.json")
-```
-
-Schema (`https://aflock.ai/product-tree-sidecar/v0.1`):
-
-```json
-{
-  "schemaVersion":  "https://aflock.ai/product-tree-sidecar/v0.1",
-  "merkleRoot":     "sha256:9c6f...d3a1",
-  "treeSize":       30142,
-  "hashAlgorithm":  "sha256",
-  "construction":   "RFC6962",
-  "leaves": [
-    { "path": "dist/binary", "fileDigest": "sha256:def...", "leafHash": "sha256:ghi..." },
-    ...
-  ]
-}
-```
+`cilock run` writes a side-channel sidecar adjacent to the signed
+attestation file so `cilock prove` can generate inclusion proofs after
+the fact. The sidecar format is defined once in
+`plugins/attestors/inclusion-proof` and used uniformly for product and
+material trees — see that package's `Sidecar` type and the
+`rookery.inclusion-proof.sidecar/v0.1` schema. Library consumers
+holding an `*Attestor` can call `BuildSidecar()` to produce the same
+shape without going through the CLI.
 
 The sidecar is **NOT signed** and **NOT** part of the attestation envelope.
 Producers may discard it. Verifiers may demand it from the producer for

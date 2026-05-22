@@ -14,16 +14,21 @@
 
 // Package material implements the v0.3 material attestor.
 //
-// v0.3 is a HARD CUT from v0.1. There is no compatibility shim and no legacy
-// mode. The predicate type is bumped to
-// "https://aflock.ai/attestations/material/v0.3" and the per-file subjects
-// emitted by v0.1 are replaced with a single deterministic RFC 6962 Merkle
-// root over the input file set. The per-file (path, digest) pairs are no
-// longer embedded in the signed predicate — they are written to a separate
-// tree sidecar file alongside the attestation. The predicate carries only
-// the Merkle root, the tree size, and the two pinned algorithm constants
-// ("sha256" / "RFC6962"). Verifiers reconstruct the leaves from the sidecar
-// and recompute the root to check inclusion.
+// v0.3 is a HARD CUT for production: the v0.3 attestor is the ONLY producer
+// registered for the canonical "material" attestor name. The predicate type
+// is bumped to "https://aflock.ai/attestations/material/v0.3" and the
+// per-file subjects emitted by v0.1 are replaced with a single deterministic
+// RFC 6962 Merkle root over the input file set. The per-file (path, digest)
+// pairs are no longer embedded in the signed predicate — they are written
+// to a separate tree sidecar file alongside the attestation. The predicate
+// carries only the Merkle root, the tree size, and the two pinned algorithm
+// constants ("sha256" / "RFC6962"). Verifiers reconstruct the leaves from
+// the sidecar and recompute the root to check inclusion.
+//
+// Historical v0.1 attestations remain verify-only via the LegacyDecoder
+// (see legacy.go), registered under the distinct attestor name
+// "material-v0.1" and predicate URI .../material/v0.1. The decoder refuses
+// Attest() so it cannot be invoked as a producer.
 //
 // # Leaf encoding
 //
@@ -64,9 +69,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
-	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -90,8 +93,9 @@ const (
 
 	// Type is the v0.3 predicate type URI. The bump from v0.1 signals a
 	// breaking change in BOTH subject semantics (per-file → tree) AND
-	// predicate shape (per-file map → merkle root + constants). There is
-	// no compatibility shim for v0.1: this is a hard cut.
+	// predicate shape (per-file map → merkle root + constants). v0.3 is
+	// the only producer registered under the "material" name; v0.1 is
+	// supported verify-only via the LegacyDecoder in legacy.go.
 	Type = "https://aflock.ai/attestations/material/v0.3"
 
 	// RunType is unchanged from v0.1: the attestor still records the
@@ -115,11 +119,6 @@ const (
 	// consumers can pattern-match on a stable prefix.
 	TreeSubjectName = "tree:materials"
 
-	// SidecarSchemaVersion is the schemaVersion string written into the
-	// tree sidecar JSON. Bumped independently from the predicate type
-	// version so the sidecar format can evolve without forcing a
-	// predicate-type bump.
-	SidecarSchemaVersion = "https://aflock.ai/material-tree-sidecar/v0.1"
 )
 
 // Compile-time interface checks. Any drift here is a build break, not a
@@ -151,10 +150,10 @@ type MaterialAttestor interface {
 }
 
 func init() {
-	// v0.3 is a hard cut — register ONLY the v0.3 predicate type. No v0.1
-	// shim. Verifiers reading historical v0.1 attestations from
-	// Archivista will need a separate path; that is out of scope for this
-	// attestor.
+	// v0.3 is a hard cut for production: only the v0.3 attestor is
+	// registered under the canonical "material" name. The verify-only
+	// v0.1 decoder lives in legacy.go and registers separately under
+	// the "material-v0.1" name + .../material/v0.1 predicate URI.
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return New()
 	})
@@ -312,7 +311,7 @@ func buildLeaves(mats map[string]cryptoutil.DigestSet) ([]MaterialLeaf, error) {
 	out := make([]MaterialLeaf, 0, len(mats))
 	for path, ds := range mats {
 		digest := extractSha256(ds)
-		normalized := portableNormalize(path)
+		normalized := inclusionproof.NormalizePath(path)
 		// inclusionproof.LeafHash is the single canonical leaf encoder
 		// shared with the product attestor. It validates that the
 		// fileDigestHex is a real 32-byte sha256 — material rejects
@@ -334,16 +333,6 @@ func buildLeaves(mats map[string]cryptoutil.DigestSet) ([]MaterialLeaf, error) {
 		return out[i].Path < out[j].Path
 	})
 	return out, nil
-}
-
-// portableNormalize rewrites backslashes to forward slashes
-// unconditionally. We deliberately do NOT use filepath.ToSlash here
-// because that helper is OS-aware (it leaves backslashes alone on
-// non-Windows hosts), which would cause a Windows-produced attestation
-// to fail to verify on a Linux verifier. The merkle root must be a
-// function of the predicate alone, independent of OS.
-func portableNormalize(p string) string {
-	return strings.ReplaceAll(p, "\\", "/")
 }
 
 // extractSha256 returns the hex sha256 from a DigestSet, or "" if there
@@ -472,56 +461,12 @@ func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
 	return a.Subjects()
 }
 
-// WriteSidecar serializes the per-leaf tree data to a file. The sidecar
-// is what makes v0.3 verifiable: it carries the (path, file-digest)
-// pairs that produced the Merkle root, so an offline verifier can
-// recompute the root and check inclusion proofs without re-walking the
-// build host's filesystem.
-//
-// The file is written 0o644. Callers are responsible for choosing the
-// path and (typically) co-locating it with the signed attestation
-// bundle.
-func (a *Attestor) WriteSidecar(path string) error {
-	doc := materialTreeSidecar{
-		SchemaVersion: SidecarSchemaVersion,
-		PredicateType: Type,
-		SubjectName:   TreeSubjectName,
-		MerkleRoot:    a.MerkleRoot,
-		TreeSize:      a.TreeSize,
-		HashAlgorithm: HashAlgorithm,
-		Construction:  Construction,
-		Leaves:        a.leaves,
-	}
-	body, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return fmt.Errorf("material attestor: marshal sidecar: %w", err)
-	}
-	// #nosec G306 — sidecar is meant to be co-distributed with the
-	// signed attestation; world-readable matches the bundle.
-	if err := os.WriteFile(path, body, 0o644); err != nil {
-		return fmt.Errorf("material attestor: write sidecar %q: %w", path, err)
-	}
-	return nil
-}
-
-// materialTreeSidecar is the JSON shape of the on-disk sidecar. It is
-// intentionally NOT the Attestor struct: keeping them separate lets
-// the predicate type version (v0.3) and the sidecar schema version
-// evolve independently.
-type materialTreeSidecar struct {
-	SchemaVersion string         `json:"schemaVersion"`
-	PredicateType string         `json:"predicateType"`
-	SubjectName   string         `json:"subjectName"`
-	MerkleRoot    string         `json:"merkleRoot"`
-	TreeSize      uint64         `json:"treeSize"`
-	HashAlgorithm string         `json:"hashAlgorithm"`
-	Construction  string         `json:"construction"`
-	Leaves        []MaterialLeaf `json:"leaves"`
-}
-
-// Leaves returns the in-memory leaf list. Exported so the cilock prove
-// subcommand (Agent D) can build inclusion proofs without re-reading
-// the sidecar off disk during a single run.
+// Leaves returns the in-memory leaf list. Exported so the cilock run
+// sidecar hook (and downstream consumers of the in-process attestor
+// state) can build the canonical inclusion-proof sidecar without
+// re-reading any on-disk form. The single sidecar format is defined
+// in plugins/attestors/inclusion-proof; this attestor does not
+// duplicate that schema.
 func (a *Attestor) Leaves() []MaterialLeaf {
 	return a.leaves
 }

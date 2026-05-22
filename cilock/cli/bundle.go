@@ -107,7 +107,15 @@ func runBundleCreate(ctx context.Context, o bundleCreateOptions) error {
 		archivista.WithMaxDepth(o.MaxDepth),
 	)
 	if err != nil {
-		return fmt.Errorf("fetch from archivista: %w", err)
+		// FetchAllForSubject returns partial envelopes alongside a
+		// cap-exceeded error (depth or envelope count). Surface the
+		// warning so the operator knows the bundle is incomplete, but
+		// keep writing what was collected — a partial bundle is more
+		// useful than no bundle for offline debugging.
+		if len(envelopes) == 0 {
+			return fmt.Errorf("fetch from archivista: %w", err)
+		}
+		log.Warnf("archivista fetch returned partial results: %v", err)
 	}
 	log.Infof("fetched %d envelopes; writing %s", len(envelopes), o.Output)
 

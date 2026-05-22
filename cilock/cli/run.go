@@ -19,6 +19,7 @@ import (
 	"crypto"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -29,6 +30,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/workflow"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
+	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	"github.com/aflock-ai/rookery/plugins/attestors/material"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
 	"github.com/gobwas/glob"
@@ -253,9 +255,13 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		if err := emitRunSidecars(ro.OutFilePath, attestors); err != nil {
 			// Don't fail the whole run on a sidecar write error: the
 			// signed attestation is already on disk and is the real
-			// artifact. Surface as a warning so operators can detect
-			// the failure without breaking the build.
-			log.Warnf("failed to write tree sidecars: %v", err)
+			// artifact. But the sidecar IS required for `cilock prove`,
+			// so emit an unambiguous error-tagged line to stderr too so
+			// CI log scrapers don't miss it — a missing sidecar surfaces
+			// later as a confusing "no such file" from `prove`, which is
+			// a known operator footgun.
+			log.Errorf("tree sidecar write failed; `cilock prove` will not work against this attestation until the sidecar is regenerated: %v", err)
+			fmt.Fprintf(os.Stderr, "error: tree sidecar write failed: %v\n", err)
 		}
 	}
 
@@ -286,7 +292,7 @@ func emitRunSidecars(outfile string, attestors []attestation.Attestor) error {
 					// the v0.3 attestor will emit the same skip.
 					continue
 				}
-				products[portablePath(path)] = digest
+				products[inclusionproof.NormalizePath(path)] = digest
 			}
 		}
 		if m, ok := att.(attestation.Materialer); ok {
@@ -295,18 +301,10 @@ func emitRunSidecars(outfile string, attestors []attestation.Attestor) error {
 				if !hasSHA {
 					continue
 				}
-				materials[portablePath(path)] = digest
+				materials[inclusionproof.NormalizePath(path)] = digest
 			}
 		}
 	}
 
 	return writeSidecarsForRun(outfile, products, materials)
-}
-
-// portablePath rewrites a path into the canonical (forward-slash)
-// form the v0.3 attestor and sidecar both use. Mirrors the helper
-// in plugins/attestors/product/product.go — kept independent so this
-// file doesn't need to import product just for one string op.
-func portablePath(p string) string {
-	return strings.ReplaceAll(p, "\\", "/")
 }

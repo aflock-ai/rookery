@@ -75,6 +75,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -274,12 +275,30 @@ func (a *Attestor) Verify(treeSize uint64, merkleRoot []byte) error {
 		if decErr != nil {
 			return fmt.Errorf("inclusion-proof: predicate treeRoot is not hex: %w", decErr)
 		}
-		if len(claimedRoot) != len(merkleRoot) || !constantTimeEqual(claimedRoot, merkleRoot) {
+		if len(claimedRoot) != len(merkleRoot) || !subtleEqual(claimedRoot, merkleRoot) {
 			return errors.New("inclusion-proof: predicate's claimed treeRoot does not match expected root")
 		}
 	}
 
 	return merkle.VerifyInclusion(treeSize, a.LeafIndex, leafHash, path, merkleRoot)
+}
+
+// NormalizePath returns the canonical, portable form of a path used by
+// every v0.3 leaf encoder in this codebase: backslashes are rewritten to
+// forward slashes. Pre-cutover code had three independent copies of this
+// helper in product, material, and cilock/cli/run.go; consolidating here
+// guarantees that any future tightening (case-folding, ".." resolution,
+// Unicode normalisation) lands at exactly one site and cannot drift
+// between the producer side and the rerun-sidecar side. Drift would
+// silently break verification — leaves with the same logical path would
+// hash to different bytes.
+//
+// We deliberately do NOT use filepath.ToSlash here because that helper
+// is OS-aware (it leaves backslashes alone on non-Windows hosts), which
+// would cause a Windows-produced attestation to fail to verify on a
+// Linux verifier.
+func NormalizePath(p string) string {
+	return strings.ReplaceAll(p, "\\", "/")
 }
 
 // LeafHash returns the v0.3 pre-hash for a (path, fileDigest) pair —
@@ -332,9 +351,3 @@ func decodeAuditPath(in []string) ([][]byte, error) {
 	return out, nil
 }
 
-// constantTimeEqual is a thin wrapper around crypto/subtle.ConstantTimeCompare
-// kept here so callers don't need to know we're using the constant-time
-// primitive — the call site reads naturally and the choice is documented.
-func constantTimeEqual(a, b []byte) bool {
-	return subtleEqual(a, b)
-}
