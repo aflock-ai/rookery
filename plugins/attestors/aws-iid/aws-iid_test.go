@@ -135,6 +135,17 @@ func TestAttestor_RunType(t *testing.T) {
 
 }
 
+// TestGetAttestor_NoOptions verifies that GetAttestor("aws") succeeds with no
+// options set. Regression test for rookery#109: previously the empty default
+// for --attestor-aws-region-cert was rejected by the setter during
+// SetDefaultVals, so the attestor could never be instantiated without the flag.
+func TestGetAttestor_NoOptions(t *testing.T) {
+	a, err := attestation.GetAttestor("aws")
+	require.NoError(t, err, "GetAttestor(\"aws\") should succeed without any options set")
+	require.NotNil(t, a)
+	require.Equal(t, Name, a.Name())
+}
+
 func TestAttestor_Attest(t *testing.T) {
 	var tests = []struct {
 		name    string
