@@ -62,6 +62,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/slsa => ../plugins/attest
 
 replace github.com/aflock-ai/rookery/plugins/attestors/system-packages => ../plugins/attestors/system-packages
 
+replace github.com/aflock-ai/rookery/plugins/attestors/test-results => ../plugins/attestors/test-results
+
 replace github.com/aflock-ai/rookery/plugins/attestors/vex => ../plugins/attestors/vex
 
 replace github.com/aflock-ai/rookery/plugins/attestors/pip-install => ../plugins/attestors/pip-install
@@ -116,6 +118,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/secretscan v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/slsa v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/system-packages v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/test-results v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/vex v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/debug-signer v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/file v0.0.0-00010101000000-000000000000

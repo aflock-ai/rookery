@@ -57,6 +57,7 @@ use (
 	./plugins/attestors/sinkhole-flows
 	./plugins/attestors/steampipe
 	./plugins/attestors/structured-data
+	./plugins/attestors/test-results
 
 	// Signer plugins
 	./plugins/signers/debug-signer

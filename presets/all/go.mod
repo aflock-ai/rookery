@@ -86,6 +86,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/structured-data => ../../
 
 replace github.com/aflock-ai/rookery/plugins/attestors/system-packages => ../../plugins/attestors/system-packages
 
+replace github.com/aflock-ai/rookery/plugins/attestors/test-results => ../../plugins/attestors/test-results
+
 replace github.com/aflock-ai/rookery/plugins/attestors/vex => ../../plugins/attestors/vex
 
 replace github.com/aflock-ai/rookery/plugins/attestors/vsa => ../../plugins/attestors/vsa
@@ -150,6 +152,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/steampipe v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/structured-data v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/system-packages v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/test-results v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/vex v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/vsa v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/debug-signer v0.0.0-00010101000000-000000000000
