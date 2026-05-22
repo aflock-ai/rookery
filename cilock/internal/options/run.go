@@ -64,7 +64,24 @@ var RequiredRunFlags = []string{
 
 // ResolvePlatformDefaults applies platform-derived defaults to any options
 // that weren't explicitly set. Call this after flag parsing but before use.
+//
+// To run cilock fully offline (no platform integration), users pass
+// `--platform-url ""`. That sets ro.PlatformURL to the empty string AND
+// marks the flag as user-changed, so we know NOT to fall back to the
+// compiled-in DefaultPlatformURL. In that mode no TSA is added (signing
+// continues with the configured signer only — no third-party
+// timestamp) and the archivista URL stays whatever the user set.
 func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
+	// Detect the explicit-disable case. If the user did NOT change
+	// --platform-url, ro.PlatformURL holds the compiled-in default.
+	// If the user passed --platform-url "" (or any empty value), we
+	// treat that as "no platform" and skip all derivation.
+	platformExplicitlyDisabled := cmd.Flags().Changed("platform-url") && ro.PlatformURL == ""
+	if platformExplicitlyDisabled {
+		// User opted out of the platform. Don't derive anything.
+		return
+	}
+
 	pc := platformconfig.Derive(ro.PlatformURL)
 
 	// Archivista URL: use platform default if not explicitly overridden
