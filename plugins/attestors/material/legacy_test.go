@@ -17,6 +17,8 @@ package material
 import (
 	"crypto"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -72,6 +74,37 @@ func TestLegacyMaterial_FactoryRegistered(t *testing.T) {
 	v03 := v03Factory()
 	_, isLegacy = v03.(*LegacyDecoder)
 	require.False(t, isLegacy, "v0.3 factory must return the v0.3 Attestor, not LegacyDecoder")
+}
+
+// TestLegacyMaterial_V01CapturedFixture decodes a real captured v0.1
+// material predicate body. Catches any drift between what production
+// wrote pre-cutover and what the decoder accepts — e.g., a future
+// cryptoutil.DigestSet.UnmarshalJSON change that silently broke
+// historical envelopes.
+func TestLegacyMaterial_V01CapturedFixture(t *testing.T) {
+	fixturePath := filepath.Join("testdata", "legacy_v01_material_predicate.json")
+	body, err := os.ReadFile(fixturePath)
+	require.NoError(t, err, "v0.1 fixture must exist at %s", fixturePath)
+
+	dec := newLegacyDecoder()
+	require.NoError(t, dec.UnmarshalJSON(body),
+		"captured v0.1 material predicate must decode cleanly")
+
+	mats := dec.Materials()
+	require.NotEmpty(t, mats, "fixture must contain at least one material")
+
+	subs := dec.Subjects()
+	require.NotEmpty(t, subs)
+	for path, ds := range subs {
+		require.NotEmpty(t, ds, "subject %q must carry a non-empty digest set", path)
+	}
+
+	// Round-trip stability.
+	out, err := dec.MarshalJSON()
+	require.NoError(t, err)
+	var back map[string]cryptoutil.DigestSet
+	require.NoError(t, json.Unmarshal(out, &back))
+	require.Equal(t, mats, back)
 }
 
 func TestLegacyMaterial_SubjectsSkipsNilDigest(t *testing.T) {

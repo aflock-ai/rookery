@@ -350,4 +350,3 @@ func decodeAuditPath(in []string) ([][]byte, error) {
 	}
 	return out, nil
 }
-

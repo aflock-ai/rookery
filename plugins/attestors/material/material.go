@@ -118,7 +118,6 @@ const (
 	// v0.3 attestor. Mirrors the product attestor's "tree:products" so
 	// consumers can pattern-match on a stable prefix.
 	TreeSubjectName = "tree:materials"
-
 )
 
 // Compile-time interface checks. Any drift here is a build break, not a

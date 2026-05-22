@@ -32,8 +32,8 @@
 //  1. Per file, compute the path-prefixed pre-hash
 //     leafPreHash = sha256(path-bytes || 0x00 || file-digest-bytes-raw32)
 //     The path is the UTF-8 file path (forward slashes, see
-//     portableNormalize); 0x00 is a single NUL delimiter; the file digest is
-//     the raw 32-byte SHA-256 of the file content.
+//     inclusionproof.NormalizePath); 0x00 is a single NUL delimiter; the
+//     file digest is the raw 32-byte SHA-256 of the file content.
 //
 //  2. Pass leafPreHash (32 bytes) into merkle.NewTree([][]byte). The wrapper
 //     applies its own 0x00 leaf domain prefix per RFC 6962 §2.1, so the

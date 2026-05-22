@@ -48,7 +48,7 @@ type proveOptions struct {
 // product/material tree sidecar, reconstructs the Merkle tree, and
 // emits one signed inclusion-proof DSSE envelope per requested file.
 //
-// The sidecar itself is produced by `cilock run` (see runWriteSidecars)
+// The sidecar itself is produced by `cilock run` (see writeSidecarsForRun)
 // and is NOT signed: the integrity check that matters is that the
 // reconstructed Merkle root matches the root claimed in the sidecar,
 // AND that root is bound (via the signed product/material attestation)
