@@ -45,9 +45,9 @@ type mockVault struct {
 	keysCalls   int
 }
 
-func newMockVault(t *testing.T, keyType, signature string) *mockVault {
+func newMockVault(t *testing.T, keyType string) *mockVault {
 	t.Helper()
-	m := &mockVault{keyType: keyType, signature: signature}
+	m := &mockVault{keyType: keyType, signature: "vault:v1:fakesig"}
 
 	mux := http.NewServeMux()
 
@@ -133,7 +133,7 @@ func TestSign_ECDSA_OmitsSignatureAlgorithm(t *testing.T) {
 	ecdsaTypes := []string{"ecdsa-p256", "ecdsa-p384", "ecdsa-p521"}
 	for _, kt := range ecdsaTypes {
 		t.Run(kt, func(t *testing.T) {
-			m := newMockVault(t, kt, "vault:v1:fakesig")
+			m := newMockVault(t, kt)
 			c := newTestClient(t, m)
 
 			sig, err := c.sign(context.Background(), []byte("12345678901234567890123456789012"), crypto.SHA256)
@@ -156,7 +156,7 @@ func TestSign_ECDSA_OmitsSignatureAlgorithm(t *testing.T) {
 
 // TestSign_Ed25519_OmitsSignatureAlgorithm covers the ed25519 path.
 func TestSign_Ed25519_OmitsSignatureAlgorithm(t *testing.T) {
-	m := newMockVault(t, "ed25519", "vault:v1:fakesig")
+	m := newMockVault(t, "ed25519")
 	c := newTestClient(t, m)
 
 	if _, err := c.sign(context.Background(), []byte("12345678901234567890123456789012"), crypto.SHA256); err != nil {
@@ -173,7 +173,7 @@ func TestSign_RSA_KeepsPKCS1v15(t *testing.T) {
 	rsaTypes := []string{"rsa-2048", "rsa-3072", "rsa-4096"}
 	for _, kt := range rsaTypes {
 		t.Run(kt, func(t *testing.T) {
-			m := newMockVault(t, kt, "vault:v1:fakesig")
+			m := newMockVault(t, kt)
 			c := newTestClient(t, m)
 
 			if _, err := c.sign(context.Background(), []byte("12345678901234567890123456789012"), crypto.SHA256); err != nil {
@@ -190,7 +190,7 @@ func TestSign_RSA_KeepsPKCS1v15(t *testing.T) {
 // TestVerify_ECDSA_OmitsSignatureAlgorithm mirrors the sign-side test for the
 // verify path.
 func TestVerify_ECDSA_OmitsSignatureAlgorithm(t *testing.T) {
-	m := newMockVault(t, "ecdsa-p256", "vault:v1:fakesig")
+	m := newMockVault(t, "ecdsa-p256")
 	c := newTestClient(t, m)
 
 	if err := c.verify(context.Background(), bytes.NewReader([]byte("hello")), []byte("vault:v1:fakesig"), crypto.SHA256); err != nil {
@@ -204,7 +204,7 @@ func TestVerify_ECDSA_OmitsSignatureAlgorithm(t *testing.T) {
 // TestVerify_RSA_KeepsPKCS1v15 ensures the verify path still sends pkcs1v15
 // for RSA keys (back-compat).
 func TestVerify_RSA_KeepsPKCS1v15(t *testing.T) {
-	m := newMockVault(t, "rsa-2048", "vault:v1:fakesig")
+	m := newMockVault(t, "rsa-2048")
 	c := newTestClient(t, m)
 
 	if err := c.verify(context.Background(), bytes.NewReader([]byte("hello")), []byte("vault:v1:fakesig"), crypto.SHA256); err != nil {
@@ -220,7 +220,7 @@ func TestVerify_RSA_KeepsPKCS1v15(t *testing.T) {
 // happens once and is cached for subsequent sign/verify calls. The Vault
 // keys endpoint is more expensive than sign/verify so caching matters.
 func TestDiscoverKeyType_CachedAcrossCalls(t *testing.T) {
-	m := newMockVault(t, "ecdsa-p256", "vault:v1:fakesig")
+	m := newMockVault(t, "ecdsa-p256")
 	c := newTestClient(t, m)
 
 	for i := 0; i < 3; i++ {
