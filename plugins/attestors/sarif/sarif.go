@@ -100,6 +100,7 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error { //n
 
 	for path, product := range products {
 		if product.MimeType == "" {
+			log.Debugf("(attestation/sarif) skipping %s: empty MIME type (run product attestor first or write a recognized format)", path)
 			continue
 		}
 		mimeMatch := false
@@ -110,6 +111,11 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error { //n
 			}
 		}
 		if !mimeMatch {
+			// Issue #48: if no candidate emits, the caller gets the
+			// terminal "no sarif file found" error with no clue why.
+			// Log every skipped product at Debug with detected MIME so
+			// `--log-level=debug` makes the mismatch visible.
+			log.Debugf("(attestation/sarif) skipping %s: MIME %q not in accepted list %v", path, product.MimeType, mimeTypes)
 			continue
 		}
 

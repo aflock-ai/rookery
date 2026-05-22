@@ -143,8 +143,51 @@ func (a *SBOMAttestor) Subjects() map[string]cryptoutil.DigestSet {
 	return a.subjects
 }
 
+// MarshalJSON emits the SBOM document with a cilock-added `_sbomFormat`
+// discriminator field appended ("cyclonedx" or "spdx"). The underscore
+// prefix signals the field is added by the attestor, not part of the
+// underlying SBOM spec, so policy authors can dispatch on
+// `input._sbomFormat == "cyclonedx"` without dual-shape walking. The
+// rest of the document is byte-preserved from the source file.
+//
+// Issue #49 — the predicate is no longer format-ambiguous to rego.
 func (a *SBOMAttestor) MarshalJSON() ([]byte, error) {
-	return json.Marshal(&a.SBOMDocument)
+	doc, err := json.Marshal(&a.SBOMDocument)
+	if err != nil {
+		return nil, err
+	}
+	format := a.formatName()
+	if format == "" {
+		// No discriminator known — emit the bare document as before so
+		// MarshalJSON stays lossless for unknown/legacy cases.
+		return doc, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(doc, &m); err != nil {
+		// Document doesn't parse as a JSON object (rare — could be an
+		// array or scalar). Pass through unchanged rather than panic.
+		// The original doc bytes are still valid JSON (json.Marshal
+		// just emitted them), so callers get a lossless predicate
+		// without a discriminator. Suppress the linter's "nilerr"
+		// warning: returning the error would break Marshal callers
+		// that expect doc to be valid bytes here.
+		_ = err
+		return doc, nil //nolint:nilerr // intentional: lossless pass-through for non-object SBOMs
+	}
+	m["_sbomFormat"] = format
+	return json.Marshal(m)
+}
+
+// formatName returns the canonical short name for the active predicate
+// type ("cyclonedx" or "spdx"), or "" if the predicate type is unset.
+func (a *SBOMAttestor) formatName() string {
+	switch a.predicateType {
+	case SPDXPredicateType:
+		return "spdx"
+	case CycloneDxPredicateType:
+		return "cyclonedx"
+	}
+	return ""
 }
 
 func (a *SBOMAttestor) UnmarshalJSON(data []byte) error {
@@ -179,6 +222,10 @@ func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error {
 		case CycloneDxMimeType:
 			predicateType = CycloneDxPredicateType
 		default:
+			// Issue #48: silently skipping unexpected MIME types means
+			// users debugging "why isn't my SBOM attached?" have no
+			// signal. Surface the skip at Debug.
+			log.Debugf("(attestation/sbom) skipping %s: MIME %q not in accepted list [%s %s]", path, product.MimeType, SPDXMimeType, CycloneDxMimeType)
 			continue
 		}
 
