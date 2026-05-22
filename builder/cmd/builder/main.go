@@ -95,6 +95,7 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/attestors/structured-data",
 		"github.com/aflock-ai/rookery/plugins/attestors/system-packages",
 		"github.com/aflock-ai/rookery/plugins/attestors/test-results",
+		"github.com/aflock-ai/rookery/plugins/attestors/trivy",
 		"github.com/aflock-ai/rookery/plugins/attestors/vex",
 		"github.com/aflock-ai/rookery/plugins/attestors/vsa",
 		"github.com/aflock-ai/rookery/plugins/signers/debug-signer",
