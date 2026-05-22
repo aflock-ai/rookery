@@ -1,0 +1,189 @@
+[
+  {
+    "class_uid": 2003,
+    "status_id": 1,
+    "status_code": "PASS",
+    "status_detail": "Root account has MFA enabled.",
+    "message": "Root account has MFA enabled.",
+    "severity": "Critical",
+    "finding": {
+      "uid": "iam_root_mfa_enabled",
+      "title": "Ensure MFA is enabled for the root user",
+      "desc": "Root account requires MFA."
+    },
+    "cloud": {
+      "region": "us-east-1",
+      "provider": "AWS",
+      "account": {
+        "uid": "123456789012",
+        "name": "testifysec-demo"
+      }
+    },
+    "resources": [
+      {
+        "uid": "arn:aws:iam::123456789012:root",
+        "name": "<root_account>",
+        "type": "AwsIamUser",
+        "region": "us-east-1",
+        "group": {
+          "name": "iam"
+        }
+      }
+    ]
+  },
+  {
+    "class_uid": 2003,
+    "status_id": 2,
+    "status_code": "FAIL",
+    "status_detail": "User alice has no SAML provider.",
+    "severity": "Critical",
+    "finding": {
+      "uid": "iam_check_saml_providers_sts",
+      "title": "Ensure SAML providers are configured for STS",
+      "desc": "SAML providers should be configured."
+    },
+    "cloud": {
+      "region": "us-east-1",
+      "provider": "AWS",
+      "account": {
+        "uid": "123456789012",
+        "name": "testifysec-demo"
+      }
+    },
+    "resources": [
+      {
+        "uid": "arn:aws:iam::123456789012:user/alice",
+        "name": "alice",
+        "type": "AwsIamUser",
+        "region": "us-east-1",
+        "group": {
+          "name": "iam"
+        }
+      }
+    ]
+  },
+  {
+    "class_uid": 2003,
+    "status_id": 2,
+    "status_code": "FAIL",
+    "status_detail": "Bucket my-bucket is publicly readable.",
+    "severity": "High",
+    "finding": {
+      "uid": "s3_bucket_public_access",
+      "title": "S3 bucket should not be public",
+      "desc": "S3 buckets must restrict public access."
+    },
+    "cloud": {
+      "region": "us-east-1",
+      "provider": "AWS",
+      "account": {
+        "uid": "123456789012",
+        "name": "testifysec-demo"
+      }
+    },
+    "resources": [
+      {
+        "uid": "arn:aws:s3:::my-bucket",
+        "name": "my-bucket",
+        "type": "AwsS3Bucket",
+        "region": "us-east-1",
+        "group": {
+          "name": "s3"
+        }
+      }
+    ]
+  },
+  {
+    "class_uid": 2003,
+    "status_id": 2,
+    "status_code": "FAIL",
+    "status_detail": "Security group sg-123 allows 0.0.0.0/0 on port 22.",
+    "severity": "Medium",
+    "finding": {
+      "uid": "ec2_securitygroup_allow_ingress_from_internet_to_port_22",
+      "title": "Security group should not allow 0.0.0.0/0 to port 22",
+      "desc": "Restrict SSH ingress."
+    },
+    "cloud": {
+      "region": "us-west-2",
+      "provider": "AWS",
+      "account": {
+        "uid": "123456789012",
+        "name": "testifysec-demo"
+      }
+    },
+    "resources": [
+      {
+        "uid": "arn:aws:ec2:us-west-2:123456789012:security-group/sg-123",
+        "name": "sg-123",
+        "type": "AwsEc2SecurityGroup",
+        "region": "us-west-2",
+        "group": {
+          "name": "ec2"
+        }
+      }
+    ]
+  },
+  {
+    "class_uid": 2003,
+    "status_id": 1,
+    "status_code": "PASS",
+    "status_detail": "Trail trail-main is multi-region.",
+    "severity": "Low",
+    "finding": {
+      "uid": "cloudtrail_multi_region_enabled",
+      "title": "Enable CloudTrail multi-region",
+      "desc": "CloudTrail must be multi-region."
+    },
+    "cloud": {
+      "region": "us-east-1",
+      "provider": "AWS",
+      "account": {
+        "uid": "123456789012",
+        "name": "testifysec-demo"
+      }
+    },
+    "resources": [
+      {
+        "uid": "arn:aws:cloudtrail:us-east-1:123456789012:trail/trail-main",
+        "name": "trail-main",
+        "type": "AwsCloudTrailTrail",
+        "region": "us-east-1",
+        "group": {
+          "name": "cloudtrail"
+        }
+      }
+    ]
+  },
+  {
+    "class_uid": 2003,
+    "status_id": 2,
+    "status_code": "FAIL",
+    "status_detail": "Key key-xyz does not rotate.",
+    "severity": "Low",
+    "finding": {
+      "uid": "kms_cmk_rotation_enabled",
+      "title": "KMS CMK rotation should be enabled",
+      "desc": "Enable annual rotation."
+    },
+    "cloud": {
+      "region": "us-east-1",
+      "provider": "AWS",
+      "account": {
+        "uid": "123456789012",
+        "name": "testifysec-demo"
+      }
+    },
+    "resources": [
+      {
+        "uid": "arn:aws:kms:us-east-1:123456789012:key/key-xyz",
+        "name": "key-xyz",
+        "type": "AwsKmsKey",
+        "region": "us-east-1",
+        "group": {
+          "name": "kms"
+        }
+      }
+    ]
+  }
+]
