@@ -26,4 +26,10 @@ cilock:
   # Byte size of cilock/go.sum. Still useful as a secondary signal: it
   # tracks declared deps including ones only pulled in by `go mod tidy`,
   # which catches dep churn the binary metric can miss.
-  go_sum_bytes: 71400
+  #
+  # 2026-05: raised cumulatively for the v0.3 cutover (#135). Merkle
+  # foundation, product/v0.3 (Agent B), and inclusion-proof + cilock
+  # prove (Agent D) each contributed bytes to go.sum. Actual final
+  # value is set after `go mod tidy` runs against the integrated
+  # branch — the value below is the headroom we accept.
+  go_sum_bytes: 71500

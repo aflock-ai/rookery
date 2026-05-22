@@ -25,6 +25,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/github"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/githubaction"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/gitlab"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/k8smanifest"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/lockfiles"
