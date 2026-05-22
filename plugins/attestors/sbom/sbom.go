@@ -143,8 +143,45 @@ func (a *SBOMAttestor) Subjects() map[string]cryptoutil.DigestSet {
 	return a.subjects
 }
 
+// MarshalJSON emits the SBOM document with a cilock-added `_sbomFormat`
+// discriminator field appended ("cyclonedx" or "spdx"). The underscore
+// prefix signals the field is added by the attestor, not part of the
+// underlying SBOM spec, so policy authors can dispatch on
+// `input._sbomFormat == "cyclonedx"` without dual-shape walking. The
+// rest of the document is byte-preserved from the source file.
+//
+// Issue #49 — the predicate is no longer format-ambiguous to rego.
 func (a *SBOMAttestor) MarshalJSON() ([]byte, error) {
-	return json.Marshal(&a.SBOMDocument)
+	doc, err := json.Marshal(&a.SBOMDocument)
+	if err != nil {
+		return nil, err
+	}
+	format := a.formatName()
+	if format == "" {
+		// No discriminator known — emit the bare document as before so
+		// MarshalJSON stays lossless for unknown/legacy cases.
+		return doc, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(doc, &m); err != nil {
+		// Document doesn't parse as a JSON object (rare — could be an
+		// array or scalar). Pass through unchanged rather than panic.
+		return doc, nil
+	}
+	m["_sbomFormat"] = format
+	return json.Marshal(m)
+}
+
+// formatName returns the canonical short name for the active predicate
+// type ("cyclonedx" or "spdx"), or "" if the predicate type is unset.
+func (a *SBOMAttestor) formatName() string {
+	switch a.predicateType {
+	case SPDXPredicateType:
+		return "spdx"
+	case CycloneDxPredicateType:
+		return "cyclonedx"
+	}
+	return ""
 }
 
 func (a *SBOMAttestor) UnmarshalJSON(data []byte) error {
