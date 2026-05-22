@@ -419,14 +419,19 @@ func TestV03_012_MaterialerInterfaceUnchanged(t *testing.T) {
 }
 
 // =============================================================================
-// V03_013: Registry registration wires v0.3 ONLY (no v0.1 shim)
+// V03_013: Registry wires v0.3 producer AND v0.1 verify-only decoder
 // =============================================================================
 
-// V03_013 enforces the "hard cut" half of the brief. There must be NO
-// v0.1 registration. A factory lookup by the v0.1 type URI must miss.
+// V03_013 enforces the "creation hard-cut, verification multi-version" rule.
+// v0.3 is the only producer; v0.1 must be registered as a verify-only
+// decoder so cilock verify can still consume historical attestations.
+// See plugins/attestors/material/legacy.go.
 func TestV03_013_NoV01Registration(t *testing.T) {
-	_, ok := attestation.FactoryByType("https://aflock.ai/attestations/material/v0.1")
-	assert.False(t, ok, "v0.1 must NOT be registered — this is a hard cut")
+	// v0.1 IS registered, but only as the verify-only LegacyDecoder.
+	v01Factory, ok := attestation.FactoryByType("https://aflock.ai/attestations/material/v0.1")
+	require.True(t, ok, "v0.1 must be registered as a verify-only decoder")
+	_, isLegacy := v01Factory().(*LegacyDecoder)
+	assert.True(t, isLegacy, "v0.1 factory must return *LegacyDecoder, not the v0.3 producer")
 
 	_, ok = attestation.FactoryByType(Type)
 	assert.True(t, ok, "v0.3 predicate type must be registered")
