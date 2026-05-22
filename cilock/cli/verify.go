@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/archivista"
+	"github.com/aflock-ai/rookery/attestation/bundle"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/intoto"
@@ -88,6 +89,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	var (
 		collectionSource source.Sourcer
 		archivistaClient *archivista.Client
+		archivistaRec    *source.RecordingSource
 	)
 	memSource := source.NewMemorySource()
 	collectionSource = memSource
@@ -98,15 +100,21 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		if err != nil {
 			return fmt.Errorf("failed to create archivista client: %w", err)
 		}
-		collectionSource = source.NewMultiSource(collectionSource, source.NewArchivistaSource(archivistaClient))
+		archivistaSrc := source.NewArchivistaSource(archivistaClient)
+		if vo.OutputBundlePath != "" {
+			archivistaRec = source.NewRecordingSource(archivistaSrc)
+			collectionSource = source.NewMultiSource(collectionSource, archivistaRec)
+		} else {
+			collectionSource = source.NewMultiSource(collectionSource, archivistaSrc)
+		}
 	}
 
 	if vo.KeyPath == "" && len(vo.PolicyCARootPaths) == 0 && len(verifiers) == 0 {
 		return fmt.Errorf("must supply either a public key, CA certificates or a verifier")
 	}
 
-	if !vo.ArchivistaOptions.Enable && len(vo.AttestationFilePaths) == 0 {
-		return fmt.Errorf("must either specify attestation file paths or enable archivista as an attestation source")
+	if !vo.ArchivistaOptions.Enable && len(vo.AttestationFilePaths) == 0 && len(vo.BundlePaths) == 0 {
+		return fmt.Errorf("must specify attestation file paths, attestation bundles, or enable archivista as an attestation source")
 	}
 
 	if vo.KeyPath != "" {
@@ -225,10 +233,28 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		return errors.New("at least one subject is required, provide an artifact file or subject")
 	}
 
+	// Track every envelope we explicitly load so --output-bundle can emit a
+	// portable replay artifact at the end. Archivista-fetched envelopes are
+	// captured separately via the RecordingSource wrapper above.
+	var loadedEnvelopes []dsse.Envelope
+
 	for _, path := range vo.AttestationFilePaths {
-		if err := memSource.LoadFile(path); err != nil {
+		env, err := loadEnvelopeFromFile(path)
+		if err != nil {
 			return fmt.Errorf("failed to load attestation file: %w", err)
 		}
+		if err := memSource.LoadEnvelope(path, env); err != nil {
+			return fmt.Errorf("failed to load attestation file: %w", err)
+		}
+		loadedEnvelopes = append(loadedEnvelopes, env)
+	}
+
+	for _, path := range vo.BundlePaths {
+		envs, err := loadEnvelopesFromBundle(path, memSource)
+		if err != nil {
+			return fmt.Errorf("failed to load bundle %q: %w", path, err)
+		}
+		loadedEnvelopes = append(loadedEnvelopes, envs...)
 	}
 
 	verifyOpts := []workflow.VerifyOption{
@@ -245,6 +271,17 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	verifiedEvidence, verifyErr := workflow.Verify(ctx, policyEnvelope, verifiers, verifyOpts...)
+
+	// Write the bundle BEFORE the VSA so a single verify can emit both even on
+	// failure. Like the VSA, a bundle is useful on a FAILED verify — it lets
+	// an operator replay the exact evidence set offline to triage why the
+	// policy rejected it.
+	if writeErr := maybeWriteOutputBundle(vo, subjects, loadedEnvelopes, archivistaRec); writeErr != nil {
+		if verifyErr != nil {
+			return fmt.Errorf("failed to verify policy: %w (additionally, failed to write output bundle: %v)", verifyErr, writeErr)
+		}
+		return fmt.Errorf("failed to write output bundle: %w", writeErr)
+	}
 
 	// Write the VSA to disk BEFORE returning — on both pass and fail. A failed
 	// VSA is still valuable diagnostic evidence and can legitimately be the
@@ -365,6 +402,114 @@ func writeVSAOutfile(path string, evidence workflow.VerifyResult, signers []cryp
 		return fmt.Errorf("failed to write VSA outfile: %w", err)
 	}
 	return nil
+}
+
+// maybeWriteOutputBundle materialises --output-bundle when set, combining
+// explicitly loaded envelopes with anything the Archivista RecordingSource
+// captured during verify. Returns nil when --output-bundle is empty.
+func maybeWriteOutputBundle(vo options.VerifyOptions, subjects []cryptoutil.DigestSet, loaded []dsse.Envelope, rec *source.RecordingSource) error {
+	if vo.OutputBundlePath == "" {
+		return nil
+	}
+	bundleSubjects := make([]string, 0, len(subjects))
+	for _, ds := range subjects {
+		for _, digest := range ds {
+			bundleSubjects = append(bundleSubjects, digest)
+		}
+	}
+	var archivistaEnvs []dsse.Envelope
+	if rec != nil {
+		archivistaEnvs = rec.Envelopes()
+	}
+	bundleSource := bundle.SourceFile
+	if vo.ArchivistaOptions.Enable {
+		bundleSource = bundle.SourceVerifyExport
+	}
+	return writeOutputBundle(vo.OutputBundlePath, bundleSubjects, bundleSource, vo.ArchivistaOptions.Url, loaded, archivistaEnvs)
+}
+
+// loadEnvelopeFromFile reads a DSSE envelope from path. Used by verify in
+// preference to source.MemorySource.LoadFile when we also need the raw
+// envelope (for --output-bundle accounting).
+func loadEnvelopeFromFile(path string) (dsse.Envelope, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is from --attestations CLI flag
+	if err != nil {
+		return dsse.Envelope{}, err
+	}
+	var env dsse.Envelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return dsse.Envelope{}, fmt.Errorf("decode envelope: %w", err)
+	}
+	return env, nil
+}
+
+// loadEnvelopesFromBundle decompresses a cilock bundle from path, loads every
+// envelope into memSource using a synthetic reference, and returns the slice
+// for --output-bundle accounting.
+func loadEnvelopesFromBundle(path string, memSource *source.MemorySource) ([]dsse.Envelope, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: path is from --bundle CLI flag
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	r, err := bundle.Read(f)
+	if err != nil {
+		return nil, err
+	}
+	envs, err := r.Envelopes()
+	if err != nil {
+		return nil, err
+	}
+
+	for i, env := range envs {
+		ref := fmt.Sprintf("%s#%d", path, i)
+		if err := memSource.LoadEnvelope(ref, env); err != nil {
+			if _, dup := err.(source.ErrDuplicateReference); dup {
+				continue
+			}
+			// A bundle may contain non-collection envelopes (raw VSA,
+			// SLSA provenance, inclusion-proof) that envelopeToCollectionEnvelope
+			// rejects. Skip — the policy engine picks them up via
+			// SearchByPredicateType.
+			log.Debugf("bundle %s: skipping envelope %d: %v", path, i, err)
+			continue
+		}
+	}
+	return envs, nil
+}
+
+// writeOutputBundle assembles the loaded explicit + Archivista-fetched
+// envelopes into a single tar.gz bundle at path. Source/sourceURL are
+// recorded in the manifest for downstream forensics.
+func writeOutputBundle(path string, subjects []string, sourceKind, sourceURL string, loaded, archivistaFetched []dsse.Envelope) error {
+	f, err := os.Create(path) //nolint:gosec // G304: path is from --output-bundle CLI flag
+	if err != nil {
+		return fmt.Errorf("create bundle file: %w", err)
+	}
+
+	w := bundle.NewWriter(f)
+	w.SetSource(sourceKind, sourceURL)
+	w.SetSubjects(subjects)
+
+	for _, env := range loaded {
+		if err := w.Add(env); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("add loaded envelope: %w", err)
+		}
+	}
+	for _, env := range archivistaFetched {
+		if err := w.Add(env); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("add archivista envelope: %w", err)
+		}
+	}
+
+	if err := w.Close(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("close bundle: %w", err)
+	}
+	return f.Close()
 }
 
 // isValidHexDigest checks whether s looks like a hex-encoded digest, optionally

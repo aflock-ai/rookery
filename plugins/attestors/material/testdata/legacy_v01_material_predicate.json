@@ -1,0 +1,14 @@
+{
+  "go.mod": {
+    "sha256": "a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447"
+  },
+  "go.sum": {
+    "sha256": "f7846f55cf23e14eebeab5b4e1550cad5b509e3348fbc4efa3a1413a393cb413"
+  },
+  "main.go": {
+    "sha256": "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752"
+  },
+  "vendor/modules.txt": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

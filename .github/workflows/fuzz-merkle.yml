@@ -1,0 +1,58 @@
+name: fuzz-merkle
+
+# Short fuzz campaigns for the attestation/merkle/ package on every PR that
+# touches Merkle code. Per #135's testing plan, fuzzers must run from day one
+# rather than being deferred to a later audit pass. Each harness runs for 60s
+# — long enough to flush the existing seed corpus through the engine and
+# catch trivial new regressions, short enough to keep the PR cycle fast.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'attestation/merkle/**'
+      - 'attestation/go.mod'
+      - 'attestation/go.sum'
+      - '.github/workflows/fuzz-merkle.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'attestation/merkle/**'
+      - 'attestation/go.mod'
+      - 'attestation/go.sum'
+      - '.github/workflows/fuzz-merkle.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-merkle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzInclusionProofVerify
+          - FuzzProofGeneration
+          - FuzzPredicateRoundTrip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+      - name: Run fuzz ${{ matrix.target }} (60s)
+        working-directory: attestation
+        run: |
+          go test -run='^$' -fuzz='^${{ matrix.target }}$' -fuzztime=60s ./merkle/...
+      - name: Upload fuzz crashers (if any)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: attestation/merkle/testdata/fuzz/${{ matrix.target }}/
+          retention-days: 14

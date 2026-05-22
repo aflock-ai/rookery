@@ -27,6 +27,8 @@ type VerifyOptions struct {
 	KMSSignerProviderOptions   KMSSignerProviderOptions
 	KeyPath                    string
 	AttestationFilePaths       []string
+	BundlePaths                []string
+	OutputBundlePath           string
 	PolicyFilePath             string
 	ArtifactFilePath           string
 	ArtifactDirectoryPath      string
@@ -66,6 +68,10 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringSliceVar(&vo.VSATimestampServers, "vsa-timestamp-servers", []string{},
 		"Timestamp Authority Servers to use when signing the VSA envelope emitted via --vsa-outfile")
 	cmd.Flags().StringSliceVarP(&vo.AttestationFilePaths, "attestations", "a", []string{}, "Attestation files to test against the policy")
+	cmd.Flags().StringSliceVar(&vo.BundlePaths, "bundle", []string{},
+		"Attestation bundle file(s) to load envelopes from (tar.gz format produced by `cilock bundle create` or `--output-bundle`). Combines additively with --attestations and Archivista lookups.")
+	cmd.Flags().StringVar(&vo.OutputBundlePath, "output-bundle", "",
+		"After verify, write every envelope that was loaded (--attestations + --bundle + Archivista) to this path as a tar.gz bundle. Produces a portable evidence package for offline re-verify.")
 	cmd.Flags().StringVarP(&vo.PolicyFilePath, "policy", "p", "", "Path to the policy to verify")
 	cmd.Flags().StringVarP(&vo.ArtifactFilePath, "artifactfile", "f", "", "Path to the artifact subject to verify")
 	cmd.Flags().StringVarP(&vo.ArtifactDirectoryPath, "directory-path", "", "", "Path to the directory subject to verify")

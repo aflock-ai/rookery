@@ -1,0 +1,5 @@
+go test fuzz v1
+string("bee2275db16667589a4515f63e0d053a2fa602c1d9f9703e98920a5bdad59baf")
+uint64(7)
+string("sha256")
+string("RFC6962")
