@@ -42,7 +42,7 @@ func TestLegacy_RoundTrip(t *testing.T) {
 	payload, err := json.Marshal(predicate)
 	require.NoError(t, err)
 
-	dec := newLegacyDecoder()
+	dec := newLegacyDecoder(LegacyV01Type)
 	require.NoError(t, dec.UnmarshalJSON(payload))
 
 	// Subjects emit per-file entries with the file:<path> name convention.
@@ -65,6 +65,30 @@ func TestLegacy_RoundTrip(t *testing.T) {
 	require.Equal(t, predicate, back)
 }
 
+// TestLegacy_V01AndV02SharePredicateShape proves the design assertion:
+// v0.1 and v0.2 predicates share the same byte shape (a flat per-file
+// map). Both URIs MUST decode identically through the same LegacyDecoder.
+func TestLegacy_V01AndV02SharePredicateShape(t *testing.T) {
+	predicate := map[string]attestation.Product{
+		"a.go": {Digest: cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256}: "aa"}},
+	}
+	payload, err := json.Marshal(predicate)
+	require.NoError(t, err)
+
+	v01 := newLegacyDecoder(LegacyV01Type)
+	require.NoError(t, v01.UnmarshalJSON(payload))
+
+	v02 := newLegacyDecoder(LegacyV02Type)
+	require.NoError(t, v02.UnmarshalJSON(payload))
+
+	assert.Equal(t, v01.Subjects(), v02.Subjects(),
+		"v0.1 and v0.2 must yield identical Subjects from the same predicate body")
+	assert.Equal(t, LegacyV01Type, v01.Type())
+	assert.Equal(t, LegacyV02Type, v02.Type())
+	assert.Equal(t, "product-v0.1", v01.Name())
+	assert.Equal(t, "product-v0.2", v02.Name())
+}
+
 // TestLegacy_V01CapturedFixture decodes a real captured-from-Archivista
 // v0.1 product predicate body. The fixture is the byte-exact predicate
 // payload an old `cilock run` emitted before the v0.3 cutover, so this
@@ -76,7 +100,7 @@ func TestLegacy_V01CapturedFixture(t *testing.T) {
 	body, err := os.ReadFile(fixturePath)
 	require.NoError(t, err, "v0.1 fixture must exist at %s", fixturePath)
 
-	dec := newLegacyDecoder()
+	dec := newLegacyDecoder(LegacyV01Type)
 	require.NoError(t, dec.UnmarshalJSON(body),
 		"captured v0.1 predicate must decode cleanly — drift in DigestSet.MarshalJSON would surface here")
 
@@ -97,25 +121,37 @@ func TestLegacy_V01CapturedFixture(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out, &back))
 	require.Equal(t, prods, back,
 		"re-marshalled v0.1 fixture must round-trip to the same in-memory shape")
+
+	// The same fixture must decode through the v0.2 factory too — the
+	// predicate body is identical between v0.1 and v0.2.
+	v02 := newLegacyDecoder(LegacyV02Type)
+	require.NoError(t, v02.UnmarshalJSON(body),
+		"v0.2 decoder must accept a v0.1-shape fixture (the two share predicate body)")
+	assert.Equal(t, prods, v02.Products())
 }
 
 func TestLegacy_AttestRefuses(t *testing.T) {
-	dec := newLegacyDecoder()
+	dec := newLegacyDecoder(LegacyV01Type)
 	err := dec.Attest(nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errLegacyDecodeOnly,
 		"legacy decoder must refuse producer-mode invocation")
 }
 
-func TestLegacy_V01FactoryRegistered(t *testing.T) {
-	// The v0.1 type must be findable through the attestation registry
-	// so the policy verify path can instantiate it by predicate URI.
+func TestLegacy_FactoriesRegistered(t *testing.T) {
+	// Both v0.1 and v0.2 types must be findable through the registry, and
+	// each must return a *LegacyDecoder typed with its own predicate URI.
 	v01Factory, ok := attestation.FactoryByType(LegacyV01Type)
 	require.True(t, ok, "v0.1 product factory must be registered")
-
-	v01 := v01Factory()
-	_, isLegacy := v01.(*LegacyDecoder)
+	v01, isLegacy := v01Factory().(*LegacyDecoder)
 	require.True(t, isLegacy, "v0.1 factory must return *LegacyDecoder, not the v0.3 producer")
+	require.Equal(t, LegacyV01Type, v01.Type())
+
+	v02Factory, ok := attestation.FactoryByType(LegacyV02Type)
+	require.True(t, ok, "v0.2 product factory must be registered")
+	v02, isLegacy := v02Factory().(*LegacyDecoder)
+	require.True(t, isLegacy, "v0.2 factory must return *LegacyDecoder")
+	require.Equal(t, LegacyV02Type, v02.Type())
 
 	// v0.3 factory must NOT be a LegacyDecoder.
 	v03Factory, ok := attestation.FactoryByType(Type)
@@ -125,45 +161,11 @@ func TestLegacy_V01FactoryRegistered(t *testing.T) {
 	require.False(t, isLegacy, "v0.3 factory must return the producer Attestor, not LegacyDecoder")
 }
 
-// TestV02_UnsupportedFactoryReturnsErrorStub ensures the v0.2 predicate
-// URI is registered but resolves to a stub that errors on every method,
-// so operators encountering a v0.2 envelope get a clear "unsupported"
-// diagnostic instead of a registry miss.
-func TestV02_UnsupportedFactoryReturnsErrorStub(t *testing.T) {
-	v02Factory, ok := attestation.FactoryByType(UnsupportedV02Type)
-	require.True(t, ok, "v0.2 product factory must be registered as an error stub")
-
-	stub := v02Factory()
-	v02, isStub := stub.(*V02Unsupported)
-	require.True(t, isStub, "v0.2 factory must return *V02Unsupported, not a decoder")
-
-	require.Equal(t, UnsupportedV02Type, v02.Type())
-	require.Equal(t, "product-v0.2", v02.Name())
-
-	// Attest must surface the unsupported-version error.
-	err := v02.Attest(nil)
-	require.ErrorIs(t, err, ErrV02Unsupported)
-
-	// UnmarshalJSON must refuse with the same error so any verify path
-	// that tries to decode a v0.2 envelope sees an actionable message.
-	err = v02.UnmarshalJSON([]byte(`{}`))
-	require.ErrorIs(t, err, ErrV02Unsupported)
-
-	// MarshalJSON also surfaces the error.
-	_, err = v02.MarshalJSON()
-	require.ErrorIs(t, err, ErrV02Unsupported)
-
-	// Subjects / BackRefs return empty maps so a misuse can't crash a
-	// downstream BFS that iterates them.
-	require.Empty(t, v02.Subjects())
-	require.Empty(t, v02.BackRefs())
-}
-
 func TestLegacy_SubjectsSkipsNilDigest(t *testing.T) {
 	// Defense-in-depth: a malformed historical predicate with a nil Digest
 	// must not panic and must not produce a nil-digest subject (which the
 	// policy engine would not handle).
-	dec := newLegacyDecoder()
+	dec := newLegacyDecoder(LegacyV01Type)
 	dec.products = map[string]attestation.Product{
 		"bad/file":  {}, // Digest is nil
 		"good/file": {Digest: cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256}: "ff"}},
