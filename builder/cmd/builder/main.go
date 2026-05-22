@@ -68,6 +68,7 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/attestors/githubaction",
 		"github.com/aflock-ai/rookery/plugins/attestors/githubwebhook",
 		"github.com/aflock-ai/rookery/plugins/attestors/gitlab",
+		"github.com/aflock-ai/rookery/plugins/attestors/govulncheck",
 		"github.com/aflock-ai/rookery/plugins/attestors/inspec",
 		"github.com/aflock-ai/rookery/plugins/attestors/jenkins",
 		"github.com/aflock-ai/rookery/plugins/attestors/jwt",
