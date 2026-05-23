@@ -90,12 +90,20 @@ jobs:
           # Hash the output binary as the product subject so verification can
           # match the attestation to the artifact downloaded by end users.
           hashes: "sha256"
-          workingdir: cilock
+          # IMPORTANT: workingdir must contain the build output path so the
+          # product attestor can discover the binary. Earlier versions used
+          # `workingdir: cilock` with `-o ../dist/...` — the binary landed
+          # outside the scanned dir and the sbom attestor failed with
+          # "no products to attest". Using the repo root + writing to
+          # ./dist/ keeps the output inside the attested working tree.
+          workingdir: .
           command: |
             BINARY="cilock"
             if [ "${{ matrix.goos }}" = "windows" ]; then
               BINARY="cilock.exe"
             fi
+            mkdir -p dist
+            cd cilock
             CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
               go build \
                 -trimpath \
