@@ -58,6 +58,12 @@ jobs:
         # BEFORE cilock-action runs so the wrapped command can invoke it.
         uses: anchore/sbom-action/download-syft@v0
 
+      - name: Prepare dist/
+        # cilock-action's `outfile: dist/...` is resolved literally before
+        # the wrapped command runs, so the directory has to exist when
+        # cilock-action tries to write the attestation envelope.
+        run: mkdir -p dist
+
       # Dogfood: every release-build step is wrapped by cilock-action.
       # Records signed attestations (environment/git/github/commandrun/product/sbom)
       # for the go build, signs them keyless via public Sigstore Fulcio with the
