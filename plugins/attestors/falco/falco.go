@@ -85,14 +85,14 @@ func init() {
 // canonical key set is `time, rule, priority, source, hostname, output,
 // output_fields, tags`.
 type Event struct {
-	Time         string            `json:"time,omitempty"`
-	Rule         string            `json:"rule,omitempty"`
-	Priority     string            `json:"priority,omitempty"`
-	Source       string            `json:"source,omitempty"`
-	Hostname     string            `json:"hostname,omitempty"`
-	Output       string            `json:"output,omitempty"`
-	OutputFields map[string]any    `json:"output_fields,omitempty"`
-	Tags         []string          `json:"tags,omitempty"`
+	Time         string         `json:"time,omitempty"`
+	Rule         string         `json:"rule,omitempty"`
+	Priority     string         `json:"priority,omitempty"`
+	Source       string         `json:"source,omitempty"`
+	Hostname     string         `json:"hostname,omitempty"`
+	Output       string         `json:"output,omitempty"`
+	OutputFields map[string]any `json:"output_fields,omitempty"`
+	Tags         []string       `json:"tags,omitempty"`
 	// K8s carries the convenience accessor for kubernetes pod/ns/container
 	// metadata if the operator enabled `json_include_output_property` for
 	// the K8s fields. Always nil when running outside a K8s cluster.
@@ -102,10 +102,10 @@ type Event struct {
 // K8sContext is the subset of Kubernetes metadata Falco attaches to events
 // when running inside a cluster with the k8s metadata source enabled.
 type K8sContext struct {
-	PodName       string `json:"pod_name,omitempty"`
-	Namespace     string `json:"namespace,omitempty"`
-	ContainerID   string `json:"container_id,omitempty"`
-	ContainerName string `json:"container_name,omitempty"`
+	PodName        string `json:"pod_name,omitempty"`
+	Namespace      string `json:"namespace,omitempty"`
+	ContainerID    string `json:"container_id,omitempty"`
+	ContainerName  string `json:"container_name,omitempty"`
 	ContainerImage string `json:"container_image,omitempty"`
 }
 
@@ -142,13 +142,13 @@ type RuleHit struct {
 
 // Summary is the roll-up the attestor publishes alongside the raw events.
 type Summary struct {
-	TotalEvents    int            `json:"total_events"`
-	Priorities     PriorityCounts `json:"priorities"`
-	RuleHits       []RuleHit      `json:"rule_hits,omitempty"`
-	DistinctRules  int            `json:"distinct_rules,omitempty"`
-	DistinctHosts  int            `json:"distinct_hosts,omitempty"`
-	WindowStart    string         `json:"window_start,omitempty"`
-	WindowEnd      string         `json:"window_end,omitempty"`
+	TotalEvents   int            `json:"total_events"`
+	Priorities    PriorityCounts `json:"priorities"`
+	RuleHits      []RuleHit      `json:"rule_hits,omitempty"`
+	DistinctRules int            `json:"distinct_rules,omitempty"`
+	DistinctHosts int            `json:"distinct_hosts,omitempty"`
+	WindowStart   string         `json:"window_start,omitempty"`
+	WindowEnd     string         `json:"window_end,omitempty"`
 }
 
 // Attestor captures Falco runtime-security events from the product set.
@@ -180,10 +180,10 @@ func New() *Attestor {
 	}
 }
 
-func (a *Attestor) Name() string                   { return Name }
-func (a *Attestor) Type() string                   { return Type }
-func (a *Attestor) RunType() attestation.RunType   { return RunType }
-func (a *Attestor) Schema() *jsonschema.Schema     { return jsonschema.Reflect(a) }
+func (a *Attestor) Name() string                 { return Name }
+func (a *Attestor) Type() string                 { return Type }
+func (a *Attestor) RunType() attestation.RunType { return RunType }
+func (a *Attestor) Schema() *jsonschema.Schema   { return jsonschema.Reflect(a) }
 
 // Attest scans the attestation context products for a Falco line-delimited
 // JSON event file, parses it, and populates the attestor fields.
@@ -357,6 +357,36 @@ func priorityRank(priority string) int {
 	return 0
 }
 
+// upsertRuleHit increments the count for ev.Rule in ruleHits, creating
+// the entry on first sight and bumping HighestPriority when the new
+// event is more severe than what we've seen for this rule before.
+func upsertRuleHit(ruleHits map[string]*RuleHit, ev Event) {
+	hit, ok := ruleHits[ev.Rule]
+	if !ok {
+		ruleHits[ev.Rule] = &RuleHit{Rule: ev.Rule, Count: 1, HighestPriority: ev.Priority}
+		return
+	}
+	hit.Count++
+	if priorityRank(ev.Priority) > priorityRank(hit.HighestPriority) {
+		hit.HighestPriority = ev.Priority
+	}
+}
+
+// updateTimeWindow widens earliest/latest to cover ev.Time. Returns the
+// new bounds; the caller threads them through the loop.
+func updateTimeWindow(earliest, latest, t string) (string, string) {
+	if t == "" {
+		return earliest, latest
+	}
+	if earliest == "" || t < earliest {
+		earliest = t
+	}
+	if latest == "" || t > latest {
+		latest = t
+	}
+	return earliest, latest
+}
+
 // populateSummary fills in the Summary fields from a.Events.
 func (a *Attestor) populateSummary() {
 	a.Summary.TotalEvents = len(a.Events)
@@ -376,27 +406,9 @@ func (a *Attestor) populateSummary() {
 			hostSeen[ev.Hostname] = struct{}{}
 		}
 		if ev.Rule != "" {
-			if hit, ok := ruleHits[ev.Rule]; ok {
-				hit.Count++
-				if priorityRank(ev.Priority) > priorityRank(hit.HighestPriority) {
-					hit.HighestPriority = ev.Priority
-				}
-			} else {
-				ruleHits[ev.Rule] = &RuleHit{
-					Rule:            ev.Rule,
-					Count:           1,
-					HighestPriority: ev.Priority,
-				}
-			}
+			upsertRuleHit(ruleHits, ev)
 		}
-		if ev.Time != "" {
-			if earliest == "" || ev.Time < earliest {
-				earliest = ev.Time
-			}
-			if latest == "" || ev.Time > latest {
-				latest = ev.Time
-			}
-		}
+		earliest, latest = updateTimeWindow(earliest, latest, ev.Time)
 	}
 
 	a.Summary.DistinctHosts = len(hostSeen)
