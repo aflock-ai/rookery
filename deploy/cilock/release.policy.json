@@ -14,7 +14,7 @@
   "steps": {
     "release-build": {
       "name": "release-build",
-      "_comment": "Built and signed in .github/workflows/release.yml. Identity is the GH Actions OIDC workflow identity, which Fulcio binds to the cosign cert. The cosign sign step in release.yml runs AFTER the verifier produces VSAs (this policy) — so a cosign signature on a published binary transitively proves the binary passed every Rego layer below.",
+      "_comment": "Built and signed in .github/workflows/release.yml. Identity is the GH Actions OIDC workflow identity, which Fulcio binds to the cosign cert. The cosign sign step in release.yml runs AFTER the verifier produces VSAs (this policy) \u2014 so a cosign signature on a published binary transitively proves the binary passed every Rego layer below.",
       "attestations": [
         {
           "type": "https://aflock.ai/attestations/git/v0.1",
@@ -41,7 +41,7 @@
           "regopolicies": [
             {
               "name": "release-build-env-hardening",
-              "_comment": "Decoded plain-text in deploy/cilock/release-rego-environment.txt. (1) Denies if CGO_ENABLED != 0 — CGO links system libc and breaks 'static, no surprise deps'. (2) Denies if GOFIPS140 unset/empty/off — without it, the Go FIPS 140-3 Cryptographic Module is not compiled in, so crypto/fips140.Enabled() returns false even with //go:debug fips140=on. Required for FedRAMP 20x, CMMC, NIST 800-204D.",
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-environment.txt. (1) Denies if CGO_ENABLED != 0 \u2014 CGO links system libc and breaks 'static, no surprise deps'. (2) Denies if GOFIPS140 unset/empty/off \u2014 without it, the Go FIPS 140-3 Cryptographic Module is not compiled in, so crypto/fips140.Enabled() returns false even with //go:debug fips140=on. Required for FedRAMP 20x, CMMC, NIST 800-204D.",
               "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX2Vudmlyb25tZW50CgojIENHT19FTkFCTEVEPTAgaXMgcmVxdWlyZWQgZm9yIHJlbGVhc2UgYnVpbGRzLiBDR08gbGlua2luZyBwdWxscyBpbgojIHRoZSBzeXN0ZW0gQyBjb21waWxlci9sb2FkZXIgYW5kIGR5bmFtaWNhbGx5IGxpbmtzIGFnYWluc3Qgc3lzdGVtCiMgbGlicmFyaWVzIOKAlCB0aGF0IGJyZWFrcyB0aGUgInN0YXRpYywgbm8gc3VycHJpc2UgZGVwZW5kZW5jaWVzIgojIGd1YXJhbnRlZSBlbmQgdXNlcnMgcmVseSBvbi4gUHVyZS1HbyBiaW5hcmllcyBhbHNvIGRvZGdlIHRoZSBlbnRpcmUKIyBjbGFzcyBvZiBnbGliYy12ZXJzaW9uIGNvbXBhdGliaWxpdHkgZm9vdGd1bnMuCgpkZW55W21zZ10gewogIGlucHV0LnZhcmlhYmxlcy5DR09fRU5BQkxFRCAhPSAiMCIKICBtc2cgOj0gc3ByaW50ZigiQ0dPX0VOQUJMRUQgbXVzdCBiZSAwIGluIHJlbGVhc2UgYnVpbGRzLCBnb3Q6ICVzIiwgW2lucHV0LnZhcmlhYmxlcy5DR09fRU5BQkxFRF0pCn0KCiMgR09GSVBTMTQwIHNlbGVjdHMgdGhlIEZJUFMgMTQwLTMgR28gQ3J5cHRvZ3JhcGhpYyBNb2R1bGUgdmVyc2lvbiB0bwojIGNvbXBpbGUgaW4gKEdvIDEuMjQrKS4gV2l0aG91dCB0aGlzIHNldCwgdGhlIGJpbmFyeSBjYW5ub3Qgb3BlcmF0ZSBpbgojIEZJUFMgbW9kZSBhdCBydW50aW1lIGV2ZW4gd2l0aCAvL2dvOmRlYnVnIGZpcHMxNDA9b24g4oCUIHRoZSBGSVBTCiMgbW9kdWxlIHNpbXBseSBpc24ndCBwcmVzZW50LiBXZSByZXF1aXJlIGEgbm9uLWVtcHR5LCBub24tIm9mZiIgdmFsdWUuCiMgRmVkUkFNUCAyMHggYW5kIE5JU1QgODAwLTIwNEQgcmF0ZXBheWVycyB3aWxsIGNoZWNrIHRoaXMuCgpkZW55W21zZ10gewogIG5vdCBpbnB1dC52YXJpYWJsZXMuR09GSVBTMTQwCiAgbXNnIDo9ICJHT0ZJUFMxNDAgdW5zZXQg4oCUIEZJUFMgMTQwLTMgR28gQ3J5cHRvZ3JhcGhpYyBNb2R1bGUgbm90IGNvbXBpbGVkIGludG8gcmVsZWFzZSBidWlsZCIKfQoKZGVueVttc2ddIHsKICBpbnB1dC52YXJpYWJsZXMuR09GSVBTMTQwID09ICIiCiAgbXNnIDo9ICJHT0ZJUFMxNDAgZW1wdHkg4oCUIEZJUFMgMTQwLTMgR28gQ3J5cHRvZ3JhcGhpYyBNb2R1bGUgbm90IGNvbXBpbGVkIGludG8gcmVsZWFzZSBidWlsZCIKfQoKZGVueVttc2ddIHsKICBpbnB1dC52YXJpYWJsZXMuR09GSVBTMTQwID09ICJvZmYiCiAgbXNnIDo9ICJHT0ZJUFMxNDA9b2ZmIOKAlCBGSVBTIDE0MC0zIEdvIENyeXB0b2dyYXBoaWMgTW9kdWxlIGV4cGxpY2l0bHkgZGlzYWJsZWQgaW4gcmVsZWFzZSBidWlsZCIKfQo="
             }
           ]
@@ -59,7 +59,7 @@
         {
           "type": "https://aflock.ai/attestations/product/v0.1",
           "regopolicies": [],
-          "_comment": "Product attestor's predicate is merkle-summary only (MerkleRoot, TreeSize, etc.) — the per-file product list is in the statement SUBJECTS, not the predicate input that Rego sees. We rely on the source.Search subject-digest filter (collection matches only when one of its subjects is the artifact's hash) to enforce 'a cilock binary was produced'. A surviving collection at this point IS the proof."
+          "_comment": "Product attestor's predicate is merkle-summary only (MerkleRoot, TreeSize, etc.) \u2014 the per-file product list is in the statement SUBJECTS, not the predicate input that Rego sees. We rely on the source.Search subject-digest filter (collection matches only when one of its subjects is the artifact's hash) to enforce 'a cilock binary was produced'. A surviving collection at this point IS the proof."
         },
         {
           "type": "https://spdx.dev/Document",
@@ -71,8 +71,8 @@
           "regopolicies": [
             {
               "name": "release-build-no-secrets",
-              "_comment": "Decoded plain-text in deploy/cilock/release-rego-secretscan.txt. Denies if secretscan (gitleaks) finds ANY secret in the product set or prior attestation envelopes. Secrets are stored as SHA-256 digests only; a non-empty findings array means we almost shipped a credential.",
-              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX3NlY3JldHNjYW4KCiMgVGhlIHNlY3JldHNjYW4gYXR0ZXN0b3IgKGdpdGxlYWtzIHVuZGVyIHRoZSBob29kKSBzY2FucyB0aGUgZW50aXJlCiMgcHJvZHVjdCBzZXQgKyBldmVyeSBwcmlvciBhdHRlc3RhdGlvbiBlbnZlbG9wZSBmb3IgbWF0Y2hpbmcgc2VjcmV0CiMgcGF0dGVybnMsIHdpdGggbXVsdGktbGF5ZXIgYmFzZTY0L2hleC9VUkwgZGVjb2RlIHBhc3Nlcy4gV2hlbiBpdAojIGZpbmRzIHNvbWV0aGluZyBpdCByZXBsYWNlcyB0aGUgYWN0dWFsIHZhbHVlIHdpdGggYSBTSEEtMjU2IGRpZ2VzdAojIG9mIHRoZSBzZWNyZXQsIHNvIHRoZSBwcmVkaWNhdGUgY2FuIGJlIHNhZmVseSBzdG9yZWQg4oCUIGJ1dCBhCiMgbm9uLWVtcHR5IGZpbmRpbmdzIGFycmF5IG1lYW5zIHdlIHNoaXBwZWQgcG90ZW50aWFsIGNyZWRlbnRpYWxzCiMgaW50byBhIHB1YmxpY2x5LXJlbGVhc2VkIGFydGlmYWN0LCB3aGljaCBpcyB0aGUgaGlnaGVzdC1zZXZlcml0eQojIHJlbGVhc2UgZGVmZWN0IHdlIGNhbiBoYXZlLgojCiMgWmVybyB0b2xlcmFuY2U6IEFOWSBmaW5kaW5nIGZhaWxzIHRoZSByZWxlYXNlLgoKZGVueVttc2ddIHsKICBjb3VudChpbnB1dC5maW5kaW5ncykgPiAwCiAgbiA6PSBjb3VudChpbnB1dC5maW5kaW5ncykKICBtc2cgOj0gc3ByaW50Zigic2VjcmV0c2NhbiBmb3VuZCAlZCBwb3RlbnRpYWwgc2VjcmV0KHMpIOKAlCByZWxlYXNlIGJsb2NrZWQiLCBbbl0pCn0K"
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-secretscan.txt. Denies on any secretscan finding EXCEPT known false positives: sourcegraph-access-token matches against SBOM file commit-SHA module references (Go module pseudo-versions look like access tokens to gitleaks). Real binary-level findings still trip the gate.",
+              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX3NlY3JldHNjYW4KCiMgVGhlIHNlY3JldHNjYW4gYXR0ZXN0b3IgKGdpdGxlYWtzIHVuZGVyIHRoZSBob29kKSBzY2FucyB0aGUgZW50aXJlCiMgcHJvZHVjdCBzZXQgKyBldmVyeSBwcmlvciBhdHRlc3RhdGlvbiBlbnZlbG9wZSBmb3IgbWF0Y2hpbmcgc2VjcmV0CiMgcGF0dGVybnMsIHdpdGggbXVsdGktbGF5ZXIgYmFzZTY0L2hleC9VUkwgZGVjb2RlIHBhc3Nlcy4gV2hlbiBpdAojIGZpbmRzIHNvbWV0aGluZyBpdCByZXBsYWNlcyB0aGUgYWN0dWFsIHZhbHVlIHdpdGggYSBTSEEtMjU2IGRpZ2VzdAojIG9mIHRoZSBzZWNyZXQsIHNvIHRoZSBwcmVkaWNhdGUgY2FuIGJlIHNhZmVseSBzdG9yZWQuCiMKIyBGaWx0ZXJpbmc6IFNCT00gZmlsZXMgKC5zcGR4Lmpzb24sIC5jeWNsb25lZHguanNvbikgbGVnaXRpbWF0ZWx5CiMgY29udGFpbiBsb25nIGhleCBzdHJpbmdzIOKAlCBHbyBtb2R1bGUgY29tbWl0IFNIQXMsIGZpbGUgZGlnZXN0cywKIyBsaWNlbnNlIElEcyDigJQgdGhhdCBtYXRjaCBzZXZlcmFsIGdpdGxlYWtzIHRva2VuIHJlZ2V4ZXMgKG5vdGFibHkKIyBzb3VyY2VncmFwaC1hY2Nlc3MtdG9rZW4sIHdoaWNoIGlzICJhbnl0aGluZyA0MCBoZXggY2hhcnMiKS4gVGhlc2UKIyBhcmUgTk9UIHNlY3JldHM7IHRoZXkncmUgcHVibGljIGlkZW50aWZpZXJzLiBBbGxvd2xpc3QgdGhlbSBieQojIChydWxlSWQsIGxvY2F0aW9uKSBwYWlyIHNvIGEgcmVhbCBoaWdoLWVudHJvcHkgZmluZGluZyBpbiB0aGUKIyBiaW5hcnkgaXRzZWxmIHN0aWxsIHRyaXBzIHRoZSBnYXRlLgojCiMgQW55IGZpbmRpbmcgdGhhdCBpcyBOT1QgYSBrbm93bi1mYWxzZS1wb3NpdGl2ZSBjbGFzcyBmYWlscyB0aGUKIyByZWxlYXNlLiBUaGUgYWxsb3dsaXN0IGlzIGludGVudGlvbmFsbHkgbmFycm93IOKAlCBgaXNfa25vd25fZnBgCiMgb25seSBtYXRjaGVzIHBhdHRlcm5zIHdlJ3ZlIGF1ZGl0ZWQ7IGV2ZXJ5dGhpbmcgZWxzZSBpcyB0cmVhdGVkCiMgYXMgYSByZWFsIGZpbmRpbmcuCgppc19rbm93bl9mcChmKSB7CiAgZW5kc3dpdGgoZi5sb2NhdGlvbiwgIi5zcGR4Lmpzb24iKQogIGYucnVsZUlkID09ICJzb3VyY2VncmFwaC1hY2Nlc3MtdG9rZW4iCn0KCmlzX2tub3duX2ZwKGYpIHsKICBlbmRzd2l0aChmLmxvY2F0aW9uLCAiLmN5Y2xvbmVkeC5qc29uIikKICBmLnJ1bGVJZCA9PSAic291cmNlZ3JhcGgtYWNjZXNzLXRva2VuIgp9CgpyZWFsX2ZpbmRpbmdzIDo9IFtmIHwKICBmIDo9IGlucHV0LmZpbmRpbmdzW19dCiAgbm90IGlzX2tub3duX2ZwKGYpCl0KCmRlbnlbbXNnXSB7CiAgY291bnQocmVhbF9maW5kaW5ncykgPiAwCiAgbiA6PSBjb3VudChyZWFsX2ZpbmRpbmdzKQogIG1zZyA6PSBzcHJpbnRmKCJzZWNyZXRzY2FuOiAlZCBnZW51aW5lIGZpbmRpbmcocykgYWZ0ZXIgRlAgZmlsdGVyIOKAlCByZWxlYXNlIGJsb2NrZWQiLCBbbl0pCn0K"
             }
           ]
         }
@@ -80,10 +80,14 @@
       "functionaries": [
         {
           "type": "root",
-          "_comment": "Fulcio leaf certs have empty Subject CN — identity is in SAN URI + Fulcio v1.x cert extensions. We constrain on the issuer OID (1.3.6.1.4.1.57264.1.8) for the GitHub Actions OIDC provider, and on BuildSignerURI (OID .1.9) to bind the signer to this repo's release.yml workflow at any v* tag. Glob wildcards are honored by witness checkExtensions. Extension JSON keys are PascalCase because sigstore/fulcio's Extensions struct uses Go field names as JSON tags.",
+          "_comment": "Fulcio leaf certs have empty Subject CN \u2014 identity is in SAN URI + Fulcio v1.x cert extensions. We constrain on the issuer OID (1.3.6.1.4.1.57264.1.8) for the GitHub Actions OIDC provider, and on BuildSignerURI (OID .1.9) to bind the signer to this repo's release.yml workflow at any v* tag. Glob wildcards are honored by witness checkExtensions. Extension JSON keys are PascalCase because sigstore/fulcio's Extensions struct uses Go field names as JSON tags.",
           "certConstraint": {
-            "roots": ["sigstore-fulcio"],
-            "uris": ["*"],
+            "roots": [
+              "sigstore-fulcio"
+            ],
+            "uris": [
+              "*"
+            ],
             "extensions": {
               "Issuer": "https://token.actions.githubusercontent.com",
               "BuildSignerURI": "https://github.com/aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v*",
