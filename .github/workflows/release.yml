@@ -346,8 +346,8 @@ jobs:
           ROOT=""
           INTERMEDIATE=""
           for c in /tmp/fulcio-cert*.pem; do
-            subj=$(openssl x509 -in "$c" -noout -subject)
-            iss=$(openssl x509 -in "$c" -noout -issuer)
+            subj=$(openssl x509 -in "$c" -noout -subject | sed 's/^subject=//')
+            iss=$(openssl x509 -in "$c" -noout -issuer | sed 's/^issuer=//')
             if [ "$subj" = "$iss" ]; then
               ROOT="$c"
             else
