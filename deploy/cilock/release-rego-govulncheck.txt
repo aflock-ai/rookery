@@ -1,0 +1,34 @@
+package release_build_govulncheck
+
+# govulncheck runs source-mode against the cilock module and reports OSV
+# findings whose vulnerable SYMBOLS are reachable from main(). The attestor
+# parses govulncheck's streaming-JSON wire format into a typed Summary
+# predicate. We gate on:
+#
+#   summary.reachableCount  — OSV findings reachable from main()
+#   summary.bySeverity      — severity buckets (critical/high/medium/low/unknown)
+#
+# Reachable findings are the actionable ones: govulncheck has already proven
+# the vulnerable function is in the binary's call graph. We deny on ANY
+# reachable finding regardless of severity (Go vuln DB entries don't carry
+# CVSS yet, so almost everything lands in the "unknown" bucket — gating on
+# bySeverity alone would be a no-op for most CVEs).
+#
+# Belt-and-suspenders: also deny on any critical/high finding even if
+# unreachable, because "unreachable today" can become "reachable tomorrow"
+# with a refactor. Better to surface it now and decide explicitly.
+
+deny[msg] {
+  input.summary.reachableCount > 0
+  msg := sprintf("govulncheck: %d reachable vulnerability finding(s) — release blocked", [input.summary.reachableCount])
+}
+
+deny[msg] {
+  input.summary.bySeverity.critical > 0
+  msg := sprintf("govulncheck: %d CRITICAL severity finding(s) — release blocked", [input.summary.bySeverity.critical])
+}
+
+deny[msg] {
+  input.summary.bySeverity.high > 0
+  msg := sprintf("govulncheck: %d HIGH severity finding(s) — release blocked", [input.summary.bySeverity.high])
+}

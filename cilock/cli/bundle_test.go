@@ -229,6 +229,59 @@ func TestBundleCreate_RequiresFlags(t *testing.T) {
 	}
 }
 
+// TestBundleCreate_FromAttestationFiles covers the offline path: caller
+// supplies one or more local DSSE envelope files via --attestation; the
+// command packages them verbatim with no Archivista round trip. This is
+// the path the release workflow uses to build the offline-replay bundle
+// shipped with every GitHub Release.
+func TestBundleCreate_FromAttestationFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write two DSSE envelopes to disk in the same shape cilock-action
+	// emits (`*.attestation.json`).
+	envA := envelopeWithSubjectDigests(t, []string{"a-1"})
+	envB := envelopeWithSubjectDigests(t, []string{"b-1"})
+
+	pathA := filepath.Join(dir, "a.attestation.json")
+	pathB := filepath.Join(dir, "b.attestation.json")
+	for path, env := range map[string]dsse.Envelope{pathA: envA, pathB: envB} {
+		raw, err := json.Marshal(env)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, raw, 0o600))
+	}
+
+	outPath := filepath.Join(dir, "out.bundle.tar.gz")
+
+	err := runBundleCreate(context.Background(), bundleCreateOptions{
+		Attestations: []string{pathA, pathB},
+		Output:       outPath,
+	})
+	require.NoError(t, err)
+
+	f, err := os.Open(outPath)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	r, err := bundle.Read(f)
+	require.NoError(t, err)
+	envs, err := r.Envelopes()
+	require.NoError(t, err)
+	assert.Len(t, envs, 2, "both supplied envelopes must end up in the bundle")
+	assert.Equal(t, bundle.SourceFile, r.Manifest().Source,
+		"source should record local file origin, not archivista")
+}
+
+// TestBundleCreate_RequiresEitherAttestationsOrArchivista verifies the
+// CLI rejects a call with neither input source.
+func TestBundleCreate_RequiresEitherAttestationsOrArchivista(t *testing.T) {
+	err := runBundleCreate(context.Background(), bundleCreateOptions{
+		Output: filepath.Join(t.TempDir(), "out.tar.gz"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--attestation",
+		"error should mention the file input flag")
+}
+
 func envelopeWithSubjectDigests(t *testing.T, digests []string) dsse.Envelope {
 	t.Helper()
 	subjects := make([]intoto.Subject, 0, len(digests))

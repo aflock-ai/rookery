@@ -58,6 +58,15 @@ jobs:
         # BEFORE cilock-action runs so the wrapped command can invoke it.
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
+      - name: Install govulncheck
+        # Source-mode govulncheck scans the linked module graph from
+        # go.sum and flags CVEs whose vulnerable SYMBOLS are reachable
+        # from the main module — low FP rate. The govulncheck attestor
+        # in cilock-action v1.0.2+ reads its JSON output from the
+        # workingdir products. Pin to a specific version so a compromise
+        # of golang.org/x/vuln cannot bypass the gate by changing
+        # scanner behavior.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
       - name: Prepare dist/
         # cilock-action's `outfile: dist/...` is resolved literally before
@@ -87,7 +96,7 @@ jobs:
           # the `go build` command below for visibility in the
           # command-run predicate. Both predicates are gated by Rego.
           GOFIPS140: v1.0.0
-        uses: aflock-ai/cilock-action@v1.0.1
+        uses: aflock-ai/cilock-action@v1.0.2
         with:
           # Step name must match the policy step name (release-build) for
           # all platforms — verify is called once per (platform, attestation)
@@ -103,13 +112,17 @@ jobs:
           # product attestor captures it, then the sbom attestor parses
           # it into an sbom/v0.1 predicate that lives in the same
           # signed envelope as the rest of the build evidence.
-          # govulncheck deferred: cilock-action v1.0.1's bundled cilock binary
-          # predates the govulncheck attestor (added to rookery after v1.0.1
-          # cut). Re-enable once cilock-action ships a build that includes
-          # both PR #153 (traced rename capture) and the govulncheck attestor.
-          # SLSA + inclusion-proof are additional postproduct attestors that
-          # emit SLSA v1.0 provenance + Rekor entries in the same envelope.
-          attestations: "environment git github product sbom secretscan slsa"
+          # All postproduct attestors enabled. Order doesn't matter for
+          # cilock-action (it sorts by RunType phase), but listed in
+          # rough evaluation order for human readability:
+          #   - environment, git, github, material: pre-build context
+          #   - product: capture build outputs (subject + digest)
+          #   - sbom: parse syft-generated SPDX into a predicate
+          #   - secretscan: gitleaks against products + envelopes
+          #   - govulncheck: Go vuln scanner against the linked module graph
+          #   - slsa: SLSA v1.0 provenance predicate
+          #   - inclusion-proof: Rekor transparency-log inclusion proof
+          attestations: "environment git github product sbom secretscan govulncheck slsa inclusion-proof"
           outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
           enable-sigstore: "true"
           enable-archivista: "false"
@@ -160,9 +173,10 @@ jobs:
             syft "${BINARY}" -o spdx-json="${BINARY}.sbom.spdx.json"
             # govulncheck source-mode against the cilock module. Output
             # is the streaming-JSON wire format the govulncheck attestor
-            # parses. We deliberately don't `|| true` — if govulncheck
-            # exits non-zero on findings, we surface that early; the
-            # Rego layer in the policy is the authoritative gate.
+            # parses. `|| true` because govulncheck exits non-zero when
+            # it finds vulns; the Rego layer in the policy is the
+            # authoritative gate.
+            (cd cilock && GOWORK=off govulncheck -json ./...) > "${BINARY}.govulncheck.json" || true
 
       - name: Create archive
         run: |
@@ -235,6 +249,8 @@ jobs:
       - name: Install syft
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
       - name: Prepare dist/
         run: mkdir -p dist
@@ -242,16 +258,20 @@ jobs:
       - name: Attest release-build with cilock-action (witness)
         env:
           GOFIPS140: v1.0.0
-        uses: aflock-ai/cilock-action@v1.0.1
+        uses: aflock-ai/cilock-action@v1.0.2
         with:
           step: release-build
-          # govulncheck deferred: cilock-action v1.0.1's bundled cilock binary
-          # predates the govulncheck attestor (added to rookery after v1.0.1
-          # cut). Re-enable once cilock-action ships a build that includes
-          # both PR #153 (traced rename capture) and the govulncheck attestor.
-          # SLSA + inclusion-proof are additional postproduct attestors that
-          # emit SLSA v1.0 provenance + Rekor entries in the same envelope.
-          attestations: "environment git github product sbom secretscan slsa"
+          # All postproduct attestors enabled. Order doesn't matter for
+          # cilock-action (it sorts by RunType phase), but listed in
+          # rough evaluation order for human readability:
+          #   - environment, git, github, material: pre-build context
+          #   - product: capture build outputs (subject + digest)
+          #   - sbom: parse syft-generated SPDX into a predicate
+          #   - secretscan: gitleaks against products + envelopes
+          #   - govulncheck: Go vuln scanner against the linked module graph
+          #   - slsa: SLSA v1.0 provenance predicate
+          #   - inclusion-proof: Rekor transparency-log inclusion proof
+          attestations: "environment git github product sbom secretscan govulncheck slsa inclusion-proof"
           # Witness outfile is namespaced so it can't collide with the
           # primary build's attestation in the same dist/ directory after
           # download-artifact merge.
@@ -275,6 +295,7 @@ jobs:
                 ./cmd/cilock/
             cd ..
             syft "${BINARY}" -o spdx-json="${BINARY}.sbom.spdx.json"
+            (cd cilock && GOWORK=off govulncheck -json ./...) > "${BINARY}.govulncheck.json" || true
 
       - name: Upload witness attestation
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -617,6 +638,32 @@ jobs:
               "$f"
           done
 
+      # Offline-replay evidence bundle. Packages every signed envelope
+      # (primary + witness for each platform) into one tar.gz so an
+      # air-gapped verifier can run `cilock bundle inspect` / `cilock
+      # verify --bundle` against a single artifact. Bundle is then
+      # cosign-signed itself so its contents are tied to this run's
+      # Fulcio identity.
+      - name: Create offline-replay evidence bundle
+        working-directory: dist
+        run: |
+          BUNDLE="cilock-${{ steps.version.outputs.version }}-evidence-bundle.tar.gz"
+          /tmp/cilock bundle create \
+            --attestation linux-amd64.attestation.json \
+            --attestation linux-arm64.attestation.json \
+            --attestation darwin-amd64.attestation.json \
+            --attestation darwin-arm64.attestation.json \
+            --attestation linux-amd64.witness.attestation.json \
+            --attestation linux-arm64.witness.attestation.json \
+            --attestation darwin-amd64.witness.attestation.json \
+            --attestation darwin-arm64.witness.attestation.json \
+            --output "${BUNDLE}"
+          /tmp/cilock bundle inspect "${BUNDLE}" | head -30
+          cosign sign-blob --yes \
+            --output-signature "${BUNDLE}.sig" \
+            --output-certificate "${BUNDLE}.pem" \
+            "${BUNDLE}"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
@@ -641,5 +688,8 @@ jobs:
             dist/cilock-policy.pub
             dist/cilock-policy.pub.sig
             dist/cilock-policy.pub.pem
+            dist/cilock-*-evidence-bundle.tar.gz
+            dist/cilock-*-evidence-bundle.tar.gz.sig
+            dist/cilock-*-evidence-bundle.tar.gz.pem
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
