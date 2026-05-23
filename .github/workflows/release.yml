@@ -382,17 +382,25 @@ jobs:
       - name: Verify policy + generate VSA for each platform
         working-directory: dist
         run: |
+          # Attestations are bound to the *binary* bytes (the product the
+          # cilock-action saw), not to the tarball wrapper. Extract the
+          # binary from each archive and verify against that. The tarball
+          # is just a transport layer; checksums-sha256.txt + cosign
+          # signature on the tarball cover transport-level integrity.
+          mkdir -p verify
           for plat in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
             archive="cilock-${{ steps.version.outputs.version }}-${plat}.tar.gz"
             attest="${plat}.attestation.json"
             [ -f "$archive" ] || continue
             [ -f "$attest" ] || { echo "missing attestation $attest"; exit 1; }
             stem="${archive%.tar.gz}"
+            tar -xzf "$archive" -C "verify/" cilock
+            mv "verify/cilock" "verify/cilock-${plat}"
             /tmp/cilock verify \
               --policy release-v1.policy.json \
               --publickey cilock-policy.pub \
               --attestations "$attest" \
-              --artifactfile "$archive" \
+              --artifactfile "verify/cilock-${plat}" \
               --vsa-outfile "${stem}.vsa.json" \
               || { echo "POLICY FAILED for $archive — aborting release before cosign signature"; exit 1; }
           done

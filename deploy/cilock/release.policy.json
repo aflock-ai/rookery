@@ -17,7 +17,7 @@
       "_comment": "Built and signed in .github/workflows/release.yml. Identity is the GH Actions OIDC workflow identity, which Fulcio binds to the cosign cert. The cosign sign step in release.yml runs AFTER the verifier produces VSAs (this policy) — so a cosign signature on a published binary transitively proves the binary passed every Rego layer below.",
       "attestations": [
         {
-          "type": "https://witness.dev/attestations/git/v0.1",
+          "type": "https://aflock.ai/attestations/git/v0.1",
           "regopolicies": [
             {
               "name": "release-source-integrity",
@@ -27,7 +27,7 @@
           ]
         },
         {
-          "type": "https://witness.dev/attestations/github/v0.1",
+          "type": "https://aflock.ai/attestations/github/v0.1",
           "regopolicies": [
             {
               "name": "release-from-aflock-ai-rookery",
@@ -37,7 +37,7 @@
           ]
         },
         {
-          "type": "https://witness.dev/attestations/commandrun/v0.1",
+          "type": "https://aflock.ai/attestations/command-run/v0.1",
           "regopolicies": [
             {
               "name": "release-build-hygiene",
@@ -47,7 +47,7 @@
           ]
         },
         {
-          "type": "https://witness.dev/attestations/product/v0.1",
+          "type": "https://aflock.ai/attestations/product/v0.1",
           "regopolicies": [
             {
               "name": "release-produced-cilock-binary",
@@ -57,7 +57,7 @@
           ]
         },
         {
-          "type": "https://witness.dev/attestations/sbom/v0.1",
+          "type": "https://aflock.ai/attestations/sbom/v0.1",
           "regopolicies": [],
           "_comment": "SBOM presence is required. syft runs inside the wrapped build command (see release.yml) and writes the SPDX file into the workingdir; cilock-action's product attestor captures it, then the sbom attestor parses it into this predicate."
         }
