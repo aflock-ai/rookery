@@ -57,7 +57,7 @@
           ]
         },
         {
-          "type": "https://aflock.ai/attestations/product/v0.1",
+          "type": "https://aflock.ai/attestations/product/v0.3",
           "regopolicies": [],
           "_comment": "Product attestor's predicate is merkle-summary only (MerkleRoot, TreeSize, etc.) \u2014 the per-file product list is in the statement SUBJECTS, not the predicate input that Rego sees. We rely on the source.Search subject-digest filter (collection matches only when one of its subjects is the artifact's hash) to enforce 'a cilock binary was produced'. A surviving collection at this point IS the proof."
         },

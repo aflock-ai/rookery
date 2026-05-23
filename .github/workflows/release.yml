@@ -21,6 +21,13 @@ permissions:
   packages: write
   id-token: write  # For cosign OIDC keyless signing
 
+# Opt every JS-based action into the Node.js 24 runtime. GitHub forces
+# Node 24 by default on 2026-06-02; opting in now removes the deprecation
+# warnings every action emits and gets us off the EOL Node 20 runtime
+# proactively. Affects every action that runs in this workflow.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   # ── Build static binaries for all platforms ─────────────────────────
   build-binaries:
@@ -638,13 +645,22 @@ jobs:
               "$f"
           done
 
-      # Offline-replay evidence bundle. Packages every signed envelope
-      # (primary + witness for each platform) into one tar.gz so an
-      # air-gapped verifier can run `cilock bundle inspect` / `cilock
-      # verify --bundle` against a single artifact. Bundle is then
-      # cosign-signed itself so its contents are tied to this run's
-      # Fulcio identity.
-      - name: Create offline-replay evidence bundle
+      # Two layered artifacts for offline verification:
+      #
+      # (1) cilock bundle (DSSE-envelope JSONL inside a tar.gz). This is
+      #     the canonical input for `cilock verify --bundle`. Each
+      #     envelope already contains the FULL collection — sbom,
+      #     secretscan findings, govulncheck summary, slsa provenance,
+      #     inclusion-proof — as inlined sub-attestations of the
+      #     attestation-collection predicate. So "is the SBOM in the
+      #     bundle?" — yes, it's inside every envelope.
+      #
+      # (2) release-evidence-kit (plain tar.gz). Self-contained audit
+      #     pack: bundle (1) + signed policy + pubkey + raw SBOM file +
+      #     all VSAs + a verify README. A human can untar this and have
+      #     every artifact needed to re-verify the release without ever
+      #     touching the GitHub Release page. Cosign-signed too.
+      - name: Create cilock bundle (envelopes)
         working-directory: dist
         run: |
           BUNDLE="cilock-${{ steps.version.outputs.version }}-evidence-bundle.tar.gz"
@@ -663,6 +679,78 @@ jobs:
             --output-signature "${BUNDLE}.sig" \
             --output-certificate "${BUNDLE}.pem" \
             "${BUNDLE}"
+
+      - name: Create release-evidence-kit (bundle + policy + pubkey + VSAs + SBOM + README)
+        working-directory: dist
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          KIT="cilock-${VERSION}-release-evidence-kit.tar.gz"
+          KITDIR="kit-${VERSION}"
+          mkdir -p "${KITDIR}"
+          # Cilock bundle (envelopes, the verify-ready artifact)
+          cp "cilock-${VERSION}-evidence-bundle.tar.gz"     "${KITDIR}/"
+          cp "cilock-${VERSION}-evidence-bundle.tar.gz.sig" "${KITDIR}/"
+          cp "cilock-${VERSION}-evidence-bundle.tar.gz.pem" "${KITDIR}/"
+          # Signed policy + pubkey (the verify-time trust roots)
+          cp release-v1.policy.json{,.sig,.pem}             "${KITDIR}/"
+          cp cilock-policy.pub{,.sig,.pem}                  "${KITDIR}/"
+          # VSAs (per-platform Verification Summary Attestations)
+          cp cilock-*.vsa.json                              "${KITDIR}/" 2>/dev/null || true
+          # Raw SBOM (redundant with inlined predicate, but auditors expect a standalone file)
+          cp cilock-${VERSION}-sbom.spdx.json               "${KITDIR}/" 2>/dev/null || true
+          # Verify README
+          cat > "${KITDIR}/VERIFY.md" <<'README'
+          # Offline verification
+
+          ## 1. Verify the cilock bundle's cosign signature
+          ```
+          cosign verify-blob \
+            --signature cilock-VERSION-evidence-bundle.tar.gz.sig \
+            --certificate cilock-VERSION-evidence-bundle.tar.gz.pem \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp '^https://github.com/aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v.*' \
+            cilock-VERSION-evidence-bundle.tar.gz
+          ```
+
+          ## 2. Verify the signed policy
+          ```
+          cosign verify-blob \
+            --signature release-v1.policy.json.sig \
+            --certificate release-v1.policy.json.pem \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp '^https://github.com/aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v.*' \
+            release-v1.policy.json
+          ```
+
+          ## 3. Verify a binary against the bundle + signed policy
+          ```
+          # Extract a platform binary (downloaded separately)
+          tar -xzf cilock-VERSION-linux-amd64.tar.gz
+
+          # Verify against the bundle (contains all envelopes)
+          cilock verify \
+            --policy release-v1.policy.json \
+            --publickey cilock-policy.pub \
+            --bundle cilock-VERSION-evidence-bundle.tar.gz \
+            --artifactfile ./cilock
+          ```
+
+          ## What's in each artifact
+          - `cilock-VERSION-evidence-bundle.tar.gz` — 8 DSSE envelopes (4 primary + 4 witness). Each envelope contains the full attestation-collection predicate: environment, git, github, material, command-run, product, sbom (SPDX inlined), secretscan, govulncheck, slsa, inclusion-proof.
+          - `release-v1.policy.json` — Rego-gated verification policy (signed via ephemeral ed25519 + cosign-anchored).
+          - `cilock-policy.pub` — public key for the policy's DSSE signature.
+          - `cilock-*.vsa.json` — per-platform Verification Summary Attestation emitted by `cilock verify`.
+          - `cilock-VERSION-sbom.spdx.json` — raw SPDX SBOM (duplicate of the predicate inside the envelope, kept for tooling that expects a standalone file).
+          README
+          # Substitute VERSION in README
+          sed -i "s/VERSION/${VERSION}/g" "${KITDIR}/VERIFY.md"
+          tar czf "${KIT}" "${KITDIR}/"
+          rm -rf "${KITDIR}"
+          ls -lh "${KIT}"
+          cosign sign-blob --yes \
+            --output-signature "${KIT}.sig" \
+            --output-certificate "${KIT}.pem" \
+            "${KIT}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -691,5 +779,8 @@ jobs:
             dist/cilock-*-evidence-bundle.tar.gz
             dist/cilock-*-evidence-bundle.tar.gz.sig
             dist/cilock-*-evidence-bundle.tar.gz.pem
+            dist/cilock-*-release-evidence-kit.tar.gz
+            dist/cilock-*-release-evidence-kit.tar.gz.sig
+            dist/cilock-*-release-evidence-kit.tar.gz.pem
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
