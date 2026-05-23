@@ -71,18 +71,21 @@ jobs:
         uses: aflock-ai/cilock-action@v1.0.1
         with:
           step: release-build-${{ matrix.goos }}-${{ matrix.goarch }}
-          # Note: registered attestor name is `command-run` (hyphen), not
-          # `commandrun`. We INTENTIONALLY do not enable --trace here.
-          # When tracing is on, the product attestor only captures files
-          # the traced process opened via open()-family syscalls
-          # (attestation/file/file.go shouldRecord line 237). Go's build
-          # writes its output to a .tmp file then renames it — the final
-          # binary path is never open()'d, so it would never enter the
-          # product set. Tracking issue: rookery#TBD (ship a trace-aware
-          # rename path or a different capture strategy). The release
-          # policy's hermeticity Rego is also disabled until --trace
-          # works correctly with go build's atomic-rename pattern.
-          attestations: "environment git github product sbom"
+          # Note: registered attestor name is `command-run` (hyphen),
+          # not `commandrun`.
+          #
+          # --trace is OFF until rookery#152 / PR #153 lands. When
+          # tracing is on, the product attestor only captures files the
+          # traced process opened via open()-family syscalls
+          # (attestation/file/file.go:237). `go build` writes its output
+          # via atomic rename (.tmp then rename), so the final binary
+          # path is never open()'d and the trace filter drops it.
+          #
+          # `sbom` attestor is OFF here because it parses a pre-existing
+          # SBOM file in the product set; it doesn't generate one. syft
+          # runs as a separate step in the release job and the SBOM
+          # ships as its own release artifact.
+          attestations: "environment git github product"
           outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
           enable-sigstore: "true"
           enable-archivista: "false"
