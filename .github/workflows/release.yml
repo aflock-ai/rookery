@@ -331,14 +331,50 @@ jobs:
           openssl pkey -in policy-signing.key -pubout -out cilock-policy.pub
           chmod 600 policy-signing.key
 
+      # The committed policy declares a Fulcio functionary but doesn't
+      # ship the Fulcio root cert (cilock needs PEM bytes in
+      # roots.<id>.certificate to validate the cert chain on the
+      # build-time signature). Fetch the live Fulcio chain, split into
+      # root + intermediate, base64-encode, and inject into the policy
+      # before signing. Auto-tracks Fulcio key rotation; the embedded
+      # bytes are then bound into the DSSE-signed policy below.
+      - name: Embed Fulcio trust bundle into policy
+        working-directory: dist
+        run: |
+          curl -sSf https://fulcio.sigstore.dev/api/v1/rootCert > /tmp/fulcio-chain.pem
+          awk 'BEGIN{n=0} /-----BEGIN CERTIFICATE-----/{n++; out=sprintf("/tmp/fulcio-cert%d.pem", n)} {print > out}' /tmp/fulcio-chain.pem
+          ROOT=""
+          INTERMEDIATE=""
+          for c in /tmp/fulcio-cert*.pem; do
+            subj=$(openssl x509 -in "$c" -noout -subject)
+            iss=$(openssl x509 -in "$c" -noout -issuer)
+            if [ "$subj" = "$iss" ]; then
+              ROOT="$c"
+            else
+              INTERMEDIATE="$c"
+            fi
+          done
+          [ -n "$ROOT" ] || { echo "no self-signed root in Fulcio chain"; exit 1; }
+          ROOT_B64=$(base64 -w0 < "$ROOT")
+          if [ -n "$INTERMEDIATE" ]; then
+            INT_B64=$(base64 -w0 < "$INTERMEDIATE")
+            jq --arg root "$ROOT_B64" --arg int "$INT_B64" \
+              '.roots["sigstore-fulcio"].certificate = $root | .roots["sigstore-fulcio"].intermediates = [$int]' \
+              ../deploy/cilock/release.policy.json > release.policy.expanded.json
+          else
+            jq --arg root "$ROOT_B64" \
+              '.roots["sigstore-fulcio"].certificate = $root' \
+              ../deploy/cilock/release.policy.json > release.policy.expanded.json
+          fi
+
       - name: Sign release policy (DSSE, ephemeral ed25519)
         working-directory: dist
         run: |
           /tmp/cilock sign \
             --signer-file-key-path policy-signing.key \
-            --infile ../deploy/cilock/release.policy.json \
+            --infile release.policy.expanded.json \
             --outfile release-v1.policy.json
-          rm -f policy-signing.key
+          rm -f policy-signing.key release.policy.expanded.json
 
       - name: Verify policy + generate VSA for each platform
         working-directory: dist
