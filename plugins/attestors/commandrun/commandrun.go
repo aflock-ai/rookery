@@ -289,7 +289,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	}
 
 	var err error
-	if r.enableTracing {
+	if r.enableTracing { //nolint:nestif // sequential exit-handling: trace vs Wait, ExitError type assert, ignore-exit-code branch — each shallow check, refactor would obscure ordering
 		r.Processes, err = r.trace(c, ctx)
 		// Wait for I/O copying goroutines to complete before reading buffers.
 		// trace() uses ptrace to detect process exit, but exec's I/O goroutines
