@@ -90,29 +90,40 @@ jobs:
           # Hash the output binary as the product subject so verification can
           # match the attestation to the artifact downloaded by end users.
           hashes: "sha256"
-          # IMPORTANT: workingdir must contain the build output path so the
-          # product attestor can discover the binary. Earlier versions used
-          # `workingdir: cilock` with `-o ../dist/...` — the binary landed
-          # outside the scanned dir and the sbom attestor failed with
-          # "no products to attest". Using the repo root + writing to
-          # ./dist/ keeps the output inside the attested working tree.
+          # IMPORTANT for the product attestor:
+          #   1. workingdir must contain the output binary (so the attestor
+          #      sees it after the command runs)
+          #   2. cilock-action's default product-include-glob is `*` which
+          #      ONLY matches root-level filenames in workingdir, not paths
+          #      with slashes. Writing to ./dist/cilock would be invisible
+          #      to product capture even with workingdir=.
+          # Solution: workingdir at repo root + binary output at repo root,
+          # then a follow-up step moves it to dist/ for archival.
           workingdir: .
           command: |
             BINARY="cilock"
             if [ "${{ matrix.goos }}" = "windows" ]; then
               BINARY="cilock.exe"
             fi
-            mkdir -p dist
             cd cilock
             CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
               go build \
                 -trimpath \
                 -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
-                -o "../dist/${BINARY}" \
+                -o "../${BINARY}" \
                 ./cmd/cilock/
 
       - name: Create archive
         run: |
+          # Move binary from repo root (where cilock-action's product
+          # attestor captured it via product-include-glob: *) into dist/
+          # for archival + artifact upload.
+          mkdir -p dist
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            mv cilock.exe dist/cilock.exe
+          else
+            mv cilock dist/cilock
+          fi
           cd dist
           ARCHIVE="cilock-${{ steps.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
