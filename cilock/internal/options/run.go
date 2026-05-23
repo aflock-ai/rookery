@@ -44,7 +44,17 @@ type RunOptions struct {
 	OutFilePath              string
 	StepName                 string
 	Tracing                  bool
-	TimestampServers         []string
+	// IgnoreCommandExitCode tells cilock to record the wrapped command's
+	// exit code in `command-run/v0.1.exitcode` but NOT abort the cilock run
+	// when the command exits non-zero. Without this flag, every postproduct
+	// attestor (sarif/sbom/vex/etc.) is skipped on non-zero exit, which
+	// breaks integration with tools that exit non-zero on findings
+	// (semgrep, gosec, hadolint, checkov, trivy `--exit-code`, prowler v3,
+	// govulncheck) unless each tool's own soft-fail flag is known and used.
+	// Policy Rego still has access to the recorded exit code via
+	// `input.attestation.exitcode` if a deny rule wants to gate on it.
+	IgnoreCommandExitCode bool
+	TimestampServers      []string
 	// Subjects holds raw --subjects flag values. Each entry is either a bare
 	// subject name (e.g. "product:<uuid>") — in which case a sha256 digest of
 	// the name is synthesised — or a "name=<alg>:<hex>" form that supplies an
@@ -115,6 +125,12 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&ro.OutFilePath, "outfile", "o", "", "File to write signed data to")
 	cmd.Flags().StringVarP(&ro.StepName, "step", "s", "", "Name of the step being run")
 	cmd.Flags().BoolVarP(&ro.Tracing, "trace", "r", false, "Enable tracing for the command")
+	cmd.Flags().BoolVar(&ro.IgnoreCommandExitCode, "ignore-command-exit-code", false,
+		"Record the wrapped command's exit code in command-run/v0.1 but do NOT abort the cilock run "+
+			"on non-zero exit. Use with tools that exit non-zero on findings (semgrep, gosec, hadolint, "+
+			"checkov, trivy --exit-code, prowler v3, govulncheck) so postproduct attestors still fire and "+
+			"the SARIF/JSON output is captured. Policy Rego retains access to the real exit code via "+
+			"input.attestation.exitcode for gating.")
 	cmd.Flags().StringSliceVarP(&ro.TimestampServers, "timestamp-servers", "t", []string{}, "Timestamp Authority Servers to use when signing envelope")
 
 	cmd.Flags().StringArrayVar(&ro.Subjects, "subjects", []string{},
