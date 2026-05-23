@@ -486,19 +486,19 @@ func TestIsCycloneDXJson(t *testing.T) {
 // Processes intact — no fork/exec, no ptrace, cross-platform.
 
 // attestWithTracedCommandRun is a helper that:
-//   1. builds a temp working dir and writes `out` to it
-//   2. constructs a CommandRun with WithTracing(true), no Cmd, and the
-//      caller-supplied ProcessInfo
-//   3. runs the commandrun attestor through RunAttestors so it ends up in
-//      ctx.CompletedAttestors() (Attest returns an empty-Cmd error, which
-//      is appended along with the attestor)
-//   4. runs the product attestor directly against the populated context
-//   5. returns the product attestor and the working dir
+//  1. builds a temp working dir and writes `out` to it
+//  2. constructs a CommandRun with WithTracing(true), no Cmd, and the
+//     caller-supplied ProcessInfo
+//  3. runs the commandrun attestor through RunAttestors so it ends up in
+//     ctx.CompletedAttestors() (Attest returns an empty-Cmd error, which
+//     is appended along with the attestor)
+//  4. runs the product attestor directly against the populated context
+//  5. returns the product attestor (working dir is t.TempDir, auto-cleaned)
 //
 // The CommandRun's Processes field is set BEFORE RunAttestors. The empty-
 // Cmd Attest path does not touch Processes, so our synthetic data survives
 // through to product.Attest -> CompletedAttestors() lookup.
-func attestWithTracedCommandRun(t *testing.T, proc commandrun.ProcessInfo) (*Attestor, string) {
+func attestWithTracedCommandRun(t *testing.T, proc commandrun.ProcessInfo) *Attestor {
 	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "out"), []byte("simulated go build output"), 0o600))
@@ -521,7 +521,7 @@ func attestWithTracedCommandRun(t *testing.T, proc commandrun.ProcessInfo) (*Att
 
 	prod := New()
 	require.NoError(t, prod.Attest(ctx))
-	return prod, dir
+	return prod
 }
 
 // TestAttest_TracedRenamedFile_StillCaptured is the regression test for
@@ -530,7 +530,7 @@ func attestWithTracedCommandRun(t *testing.T, proc commandrun.ProcessInfo) (*Att
 // --trace is on. The destination `out` is in FileOps.Renames[0].NewPath
 // but NOT in OpenedFiles — exactly the shape `go build` produces.
 func TestAttest_TracedRenamedFile_StillCaptured(t *testing.T) {
-	prod, _ := attestWithTracedCommandRun(t, commandrun.ProcessInfo{
+	prod := attestWithTracedCommandRun(t, commandrun.ProcessInfo{
 		OpenedFiles: map[string]cryptoutil.DigestSet{
 			"out.tmp": nil, // only the temp file was open()'d
 		},
@@ -553,7 +553,7 @@ func TestAttest_TracedRenamedFile_StillCaptured(t *testing.T) {
 // (no rename). The destination shows up in FileOps.Writes[].Path. This
 // is the simpler branch of the same fix.
 func TestAttest_TracedDirectlyWrittenFile_StillCaptured(t *testing.T) {
-	prod, _ := attestWithTracedCommandRun(t, commandrun.ProcessInfo{
+	prod := attestWithTracedCommandRun(t, commandrun.ProcessInfo{
 		OpenedFiles: map[string]cryptoutil.DigestSet{},
 		FileOps: &commandrun.FileActivity{
 			Writes: []commandrun.FileWrite{
