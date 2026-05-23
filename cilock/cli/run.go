@@ -164,6 +164,9 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 	if len(ro.EnvAllowSensitiveKeys) > 0 {
 		attestationOpts = append(attestationOpts, attestation.WithEnvExcludeKeys(ro.EnvAllowSensitiveKeys))
 	}
+	if len(ro.EnvCaptureAllowlist) > 0 {
+		attestationOpts = append(attestationOpts, attestation.WithEnvCaptureAllowlist(ro.EnvCaptureAllowlist))
+	}
 
 	additionalSubjects, err := parseSubjectFlags(ro.Subjects)
 	if err != nil {

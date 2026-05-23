@@ -56,6 +56,14 @@ type RunOptions struct {
 	EnvDisableSensitiveVars bool
 	EnvAddSensitiveKeys     []string
 	EnvAllowSensitiveKeys   []string
+	// EnvCaptureAllowlist switches the environment attestor into positive-
+	// allowlist mode: only env keys matching one of the supplied patterns
+	// (exact key or glob) are captured. Use when committing captured
+	// envelopes to a public repo — the default denylist still records
+	// host-identifying state (PATH-with-homebrew-prefix, USER, SHELL,
+	// validator-installed CLIs) that's fine in production but noisy in
+	// committed validation artifacts. See rookery#142.
+	EnvCaptureAllowlist []string
 }
 
 var RequiredRunFlags = []string{
@@ -127,6 +135,11 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVarP(&ro.EnvDisableSensitiveVars, "env-disable-default-sensitive-vars", "", false, "Disable the default list of sensitive vars and only use the items mentioned by --add-sensitive-key.")
 	cmd.Flags().StringSliceVar(&ro.EnvAddSensitiveKeys, "env-add-sensitive-key", []string{}, "Add keys or globs (e.g. '*TEXT') to the list of sensitive environment keys.")
 	cmd.Flags().StringSliceVar(&ro.EnvAllowSensitiveKeys, "env-allow-sensitive-key", []string{}, "Allow specific keys from the list of sensitive environment keys. Note: This does not support globs.")
+	cmd.Flags().StringSliceVar(&ro.EnvCaptureAllowlist, "env-capture-allowlist", []string{},
+		"Positive allowlist for environment capture. When set, only env keys matching one of the patterns "+
+			"(exact key like PATH, or glob like GITHUB_*) are captured. Everything else is dropped — not obfuscated, not recorded. "+
+			"Use when committing captured envelopes to a public repo to avoid leaking validator-workstation state. "+
+			"Defense-in-depth: the sensitive-keys obfuscate/filter pipeline still runs on top of the allowlist.")
 
 	cmd.MarkFlagsRequiredTogether(RequiredRunFlags...)
 
