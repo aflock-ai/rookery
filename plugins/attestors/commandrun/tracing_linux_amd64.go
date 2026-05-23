@@ -78,7 +78,7 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, args 
 		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
 			Syscall:   name,
 			Detail:    name + " — kernel replacement attempt inside build",
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case amd64SysOpen, amd64SysCreat:
@@ -105,7 +105,7 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, args 
 			p.ensureFileOps(procInfo)
 			procInfo.FileOps.Deletes = append(procInfo.FileOps.Deletes, FileDelete{
 				Path:      path,
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -119,7 +119,7 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, args 
 			procInfo.FileOps.Renames = append(procInfo.FileOps.Renames, FileRename{
 				OldPath:   oldPath,
 				NewPath:   newPath,
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -134,7 +134,7 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, args 
 				Path:      path,
 				Mode:      mode,
 				SetExec:   mode&0111 != 0,
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -150,7 +150,7 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, args 
 				Path:      path,
 				Mode:      mode,
 				SetExec:   mode&0111 != 0,
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -165,7 +165,7 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, args 
 				SourcePath: oldPath,
 				LinkPath:   newPath,
 				IsSymlink:  false,
-				Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp:  time.Now().UTC(),
 			})
 		}
 
@@ -180,7 +180,7 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, args 
 				SourcePath: target,
 				LinkPath:   linkPath,
 				IsSymlink:  true,
-				Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp:  time.Now().UTC(),
 			})
 		}
 
@@ -194,7 +194,7 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, args 
 				Path:      path,
 				Op:        "mkdir",
 				Mode:      uint32(args[1]),
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -207,7 +207,7 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, args 
 			procInfo.FileOps.DirOps = append(procInfo.FileOps.DirOps, DirOp{
 				Path:      path,
 				Op:        "rmdir",
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 	}

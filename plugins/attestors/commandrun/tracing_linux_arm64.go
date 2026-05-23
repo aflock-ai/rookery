@@ -57,7 +57,7 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, _ []u
 		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
 			Syscall:   name,
 			Detail:    name + " — kernel replacement attempt inside build",
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 	}
 	return nil

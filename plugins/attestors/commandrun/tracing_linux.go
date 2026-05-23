@@ -385,7 +385,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 				procInfo.FileOps.Writes = append(procInfo.FileOps.Writes, FileWrite{
 					Path:      path,
 					Bytes:     byteCount,
-					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+					Timestamp: time.Now().UTC(),
 				})
 			}
 		}
@@ -402,7 +402,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			procInfo.FileOps.Renames = append(procInfo.FileOps.Renames, FileRename{
 				OldPath:   oldPath,
 				NewPath:   newPath,
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -414,7 +414,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			p.ensureFileOps(procInfo)
 			procInfo.FileOps.Deletes = append(procInfo.FileOps.Deletes, FileDelete{
 				Path:      path,
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -429,7 +429,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 				Path:      path,
 				Mode:      mode,
 				SetExec:   mode&0111 != 0, // any execute bit set
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -442,7 +442,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
 			Syscall:   "memfd_create",
 			Detail:    fmt.Sprintf("anonymous memory file: %s (flags: %d) — used for fileless code execution", name, int(argArray[1])),
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_PTRACE:
@@ -454,7 +454,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			Syscall:   "ptrace",
 			Detail:    fmt.Sprintf("ptrace request=%d target_pid=%d — anti-debugging or process injection", request, targetPid),
 			Args:      []int{request, targetPid},
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_MOUNT:
@@ -466,7 +466,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
 			Syscall:   "mount",
 			Detail:    fmt.Sprintf("mount %s on %s (type: %s) — potential container escape", source, target, fstype),
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_CLONE, unix.SYS_CLONE3:
@@ -496,7 +496,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 				Syscall:   "clone",
 				Detail:    fmt.Sprintf("clone with namespace flags: %s — potential container escape or sandbox evasion", strings.Join(flagNames, "|")),
 				Args:      []int{flags},
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -518,7 +518,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 					Syscall:   "dup2",
 					Detail:    fmt.Sprintf("redirected SOCKET fd %d (%s) to %s — reverse shell pattern", oldFD, oldPath, target),
 					Args:      []int{oldFD, newFD},
-					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+					Timestamp: time.Now().UTC(),
 				})
 			}
 		}
@@ -533,7 +533,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 				Syscall:   "mprotect",
 				Detail:    fmt.Sprintf("made memory executable (addr=%#x len=%d prot=%d) — fileless payload indicator", argArray[0], int(argArray[1]), prot),
 				Args:      []int{int(argArray[0]), int(argArray[1]), prot},
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -558,7 +558,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			Syscall:   "prctl",
 			Detail:    detail,
 			Args:      []int{option, int(argArray[1])},
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_SETSID:
@@ -568,7 +568,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
 			Syscall:   "setsid",
 			Detail:    "created new session — daemonizing to detach from install process tree",
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_SETNS:
@@ -579,7 +579,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			Syscall:   "setns",
 			Detail:    fmt.Sprintf("joined namespace (fd=%d type=%d) — container escape or sandbox evasion", int(argArray[0]), nstype),
 			Args:      []int{int(argArray[0]), nstype},
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_INIT_MODULE, unix.SYS_FINIT_MODULE:
@@ -588,7 +588,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
 			Syscall:   "init_module",
 			Detail:    "attempted to load kernel module — rootkit installation",
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	// --- Modern variant: execveat (execve relative to an fd) ---
@@ -606,7 +606,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			Syscall:   "execveat",
 			Detail:    fmt.Sprintf("execveat(dirfd=%d, pathname=%q) — exec relative to fd, may be from memfd", int(argArray[0]), program),
 			Args:      []int{int(argArray[0])},
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	// --- File mutation: links, truncate, directory ops ---
@@ -624,7 +624,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 				SourcePath: oldPath,
 				LinkPath:   newPath,
 				IsSymlink:  false,
-				Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp:  time.Now().UTC(),
 			})
 		}
 
@@ -639,7 +639,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 				SourcePath: target,
 				LinkPath:   linkPath,
 				IsSymlink:  true,
-				Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp:  time.Now().UTC(),
 			})
 		}
 
@@ -652,7 +652,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			procInfo.FileOps.Truncates = append(procInfo.FileOps.Truncates, FileTruncate{
 				Path:      path,
 				NewSize:   int64(argArray[1]),
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -666,7 +666,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			procInfo.FileOps.Truncates = append(procInfo.FileOps.Truncates, FileTruncate{
 				Path:      path,
 				NewSize:   int64(argArray[1]),
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -680,7 +680,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 				Path:      path,
 				Op:        "mkdir",
 				Mode:      uint32(argArray[2]),
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Timestamp: time.Now().UTC(),
 			})
 		}
 
@@ -693,7 +693,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
 			Syscall:   "chroot",
 			Detail:    fmt.Sprintf("chroot(%q) — filesystem root change inside build", path),
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_PIVOT_ROOT:
@@ -704,7 +704,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
 			Syscall:   "pivot_root",
 			Detail:    fmt.Sprintf("pivot_root(new=%q, putOld=%q) — container primitive, sandbox-escape signal", newRoot, putOld),
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_SETUID, unix.SYS_SETGID, unix.SYS_SETRESUID, unix.SYS_SETRESGID:
@@ -725,7 +725,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			Syscall:   name,
 			Detail:    fmt.Sprintf("%s(%d, %d, %d) — privilege change inside build", name, int(argArray[0]), int(argArray[1]), int(argArray[2])),
 			Args:      []int{int(argArray[0]), int(argArray[1]), int(argArray[2])},
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_UNSHARE:
@@ -749,7 +749,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			Syscall:   "unshare",
 			Detail:    fmt.Sprintf("unshare(flags=%s) — namespace creation, container-escape primitive", strings.Join(flagNames, "|")),
 			Args:      []int{flags},
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_CAPSET:
@@ -758,7 +758,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
 			Syscall:   "capset",
 			Detail:    "capability set modification inside build",
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	// --- Anti-tamper signals ---
@@ -773,7 +773,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			Syscall:   "bpf",
 			Detail:    fmt.Sprintf("bpf(cmd=%d) — BPF program load, may attempt to install competing filter", cmd),
 			Args:      []int{cmd},
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	case unix.SYS_SECCOMP:
@@ -786,7 +786,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			Syscall:   "seccomp",
 			Detail:    fmt.Sprintf("seccomp(op=%d) — installing seccomp filter (potentially to hide further syscalls)", op),
 			Args:      []int{op},
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	// kexec_load / kexec_file_load are handled per-arch in
@@ -802,7 +802,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			Syscall:   "process_vm_writev",
 			Detail:    fmt.Sprintf("process_vm_writev(target_pid=%d) — writing into another process's memory", target),
 			Args:      []int{target},
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Timestamp: time.Now().UTC(),
 		})
 
 	default:
@@ -865,7 +865,7 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 
 	conn := &NetworkConnection{
 		Syscall:   syscallName,
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Timestamp: time.Now().UTC(),
 	}
 
 	switch family {

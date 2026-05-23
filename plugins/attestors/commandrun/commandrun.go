@@ -16,9 +16,11 @@ package commandrun
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -114,14 +116,19 @@ type SocketInfo struct {
 }
 
 // NetworkConnection records a connect or bind syscall.
+//
+// Timestamp is held as a time.Time so the hot path (event capture) avoids
+// the ~500ns/~42-byte allocation of formatting a string. The wire format
+// is preserved by a custom MarshalJSON below that emits RFC3339Nano (or
+// omits the field entirely when zero).
 type NetworkConnection struct {
-	Syscall   string `json:"syscall"`             // "connect" or "bind"
-	Family    string `json:"family"`              // AF_INET, AF_INET6, AF_UNIX
-	Address   string `json:"address"`             // IP address or Unix socket path
-	Port      int    `json:"port,omitempty"`      // TCP/UDP port (0 for AF_UNIX)
-	FD        int    `json:"fd"`                  // socket file descriptor
-	Timestamp string `json:"timestamp,omitempty"` // when the syscall was observed
-	Hostname  string `json:"hostname,omitempty"`  // TLS SNI hostname (extracted from ClientHello)
+	Syscall   string    `json:"syscall"`             // "connect" or "bind"
+	Family    string    `json:"family"`              // AF_INET, AF_INET6, AF_UNIX
+	Address   string    `json:"address"`             // IP address or Unix socket path
+	Port      int       `json:"port,omitempty"`      // TCP/UDP port (0 for AF_UNIX)
+	FD        int       `json:"fd"`                  // socket file descriptor
+	Timestamp time.Time `json:"timestamp,omitempty"` // when the syscall was observed
+	Hostname  string    `json:"hostname,omitempty"`  // TLS SNI hostname (extracted from ClientHello)
 }
 
 // DNSLookup records a detected DNS resolution (heuristic: connect to port 53).
@@ -140,65 +147,219 @@ type NetworkActivity struct {
 // FileWrite records a write to a file descriptor. We track the path
 // (resolved from the fd via /proc/pid/fd/N) and bytes written.
 type FileWrite struct {
-	Path      string `json:"path"`
-	Bytes     int    `json:"bytes"`
-	Timestamp string `json:"timestamp,omitempty"`
+	Path      string    `json:"path"`
+	Bytes     int       `json:"bytes"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
 // FileRename records a rename/move operation.
 type FileRename struct {
-	OldPath   string `json:"oldPath"`
-	NewPath   string `json:"newPath"`
-	Timestamp string `json:"timestamp,omitempty"`
+	OldPath   string    `json:"oldPath"`
+	NewPath   string    `json:"newPath"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
 // FileDelete records an unlink operation.
 type FileDelete struct {
-	Path      string `json:"path"`
-	Timestamp string `json:"timestamp,omitempty"`
+	Path      string    `json:"path"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
 // FilePermChange records a chmod operation.
 type FilePermChange struct {
-	Path      string `json:"path"`
-	Mode      uint32 `json:"mode"`    // new permission bits
-	SetExec   bool   `json:"setExec"` // true if executable bit was set
-	Timestamp string `json:"timestamp,omitempty"`
+	Path      string    `json:"path"`
+	Mode      uint32    `json:"mode"`    // new permission bits
+	SetExec   bool      `json:"setExec"` // true if executable bit was set
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
 // SyscallEvent records a notable syscall that doesn't fit other categories.
 type SyscallEvent struct {
-	Syscall   string `json:"syscall"`          // "memfd_create", "ptrace", "mount", "clone"
-	Detail    string `json:"detail,omitempty"` // human-readable detail
-	Args      []int  `json:"args,omitempty"`   // raw syscall arguments
-	Timestamp string `json:"timestamp,omitempty"`
+	Syscall   string    `json:"syscall"`          // "memfd_create", "ptrace", "mount", "clone"
+	Detail    string    `json:"detail,omitempty"` // human-readable detail
+	Args      []int     `json:"args,omitempty"`   // raw syscall arguments
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
 // FileLink records a hardlink or symlink creation. A build that swaps a
 // file via link() never calls write() — so without capturing link ops,
 // content substitution is invisible to the attestor.
 type FileLink struct {
-	SourcePath string `json:"sourcePath"`
-	LinkPath   string `json:"linkPath"`
-	IsSymlink  bool   `json:"isSymlink"`
-	Timestamp  string `json:"timestamp,omitempty"`
+	SourcePath string    `json:"sourcePath"`
+	LinkPath   string    `json:"linkPath"`
+	IsSymlink  bool      `json:"isSymlink"`
+	Timestamp  time.Time `json:"timestamp,omitempty"`
 }
 
 // FileTruncate records a truncate/ftruncate operation. Truncate can clear
 // a file's contents without ever calling write — same invisibility risk
 // as link().
 type FileTruncate struct {
-	Path      string `json:"path"`
-	NewSize   int64  `json:"newSize"`
-	Timestamp string `json:"timestamp,omitempty"`
+	Path      string    `json:"path"`
+	NewSize   int64     `json:"newSize"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
 // DirOp records a directory creation or removal.
 type DirOp struct {
-	Path      string `json:"path"`
-	Op        string `json:"op"` // "mkdir" or "rmdir"
-	Mode      uint32 `json:"mode,omitempty"`
-	Timestamp string `json:"timestamp,omitempty"`
+	Path      string    `json:"path"`
+	Op        string    `json:"op"` // "mkdir" or "rmdir"
+	Mode      uint32    `json:"mode,omitempty"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
+}
+
+// --- JSON wire-format preservation --------------------------------------
+//
+// Default time.Time MarshalJSON emits RFC3339Nano — which matches the prior
+// string-based wire format exactly. The reason these per-struct MarshalJSON
+// methods exist is omitempty: encoding/json's omitempty does NOT consider
+// time.Time{} (the zero value) empty, so without an override an unset
+// Timestamp would serialize as "0001-01-01T00:00:00Z" — breaking the
+// existing contract that an unset timestamp is dropped from the JSON.
+//
+// We use shadow types (separate struct definitions to avoid recursing into
+// MarshalJSON) so the custom marshalers only intercept the omit-on-zero
+// behavior; field order, names, and value formatting are otherwise the
+// default encoding/json output.
+
+type fileWriteJSON struct {
+	Path      string     `json:"path"`
+	Bytes     int        `json:"bytes"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+}
+
+func (f FileWrite) MarshalJSON() ([]byte, error) {
+	out := fileWriteJSON{Path: f.Path, Bytes: f.Bytes}
+	if !f.Timestamp.IsZero() {
+		out.Timestamp = &f.Timestamp
+	}
+	return json.Marshal(out)
+}
+
+type fileRenameJSON struct {
+	OldPath   string     `json:"oldPath"`
+	NewPath   string     `json:"newPath"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+}
+
+func (f FileRename) MarshalJSON() ([]byte, error) {
+	out := fileRenameJSON{OldPath: f.OldPath, NewPath: f.NewPath}
+	if !f.Timestamp.IsZero() {
+		out.Timestamp = &f.Timestamp
+	}
+	return json.Marshal(out)
+}
+
+type fileDeleteJSON struct {
+	Path      string     `json:"path"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+}
+
+func (f FileDelete) MarshalJSON() ([]byte, error) {
+	out := fileDeleteJSON{Path: f.Path}
+	if !f.Timestamp.IsZero() {
+		out.Timestamp = &f.Timestamp
+	}
+	return json.Marshal(out)
+}
+
+type filePermChangeJSON struct {
+	Path      string     `json:"path"`
+	Mode      uint32     `json:"mode"`
+	SetExec   bool       `json:"setExec"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+}
+
+func (f FilePermChange) MarshalJSON() ([]byte, error) {
+	out := filePermChangeJSON{Path: f.Path, Mode: f.Mode, SetExec: f.SetExec}
+	if !f.Timestamp.IsZero() {
+		out.Timestamp = &f.Timestamp
+	}
+	return json.Marshal(out)
+}
+
+type syscallEventJSON struct {
+	Syscall   string     `json:"syscall"`
+	Detail    string     `json:"detail,omitempty"`
+	Args      []int      `json:"args,omitempty"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+}
+
+func (s SyscallEvent) MarshalJSON() ([]byte, error) {
+	out := syscallEventJSON{Syscall: s.Syscall, Detail: s.Detail, Args: s.Args}
+	if !s.Timestamp.IsZero() {
+		out.Timestamp = &s.Timestamp
+	}
+	return json.Marshal(out)
+}
+
+type fileLinkJSON struct {
+	SourcePath string     `json:"sourcePath"`
+	LinkPath   string     `json:"linkPath"`
+	IsSymlink  bool       `json:"isSymlink"`
+	Timestamp  *time.Time `json:"timestamp,omitempty"`
+}
+
+func (f FileLink) MarshalJSON() ([]byte, error) {
+	out := fileLinkJSON{SourcePath: f.SourcePath, LinkPath: f.LinkPath, IsSymlink: f.IsSymlink}
+	if !f.Timestamp.IsZero() {
+		out.Timestamp = &f.Timestamp
+	}
+	return json.Marshal(out)
+}
+
+type fileTruncateJSON struct {
+	Path      string     `json:"path"`
+	NewSize   int64      `json:"newSize"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+}
+
+func (f FileTruncate) MarshalJSON() ([]byte, error) {
+	out := fileTruncateJSON{Path: f.Path, NewSize: f.NewSize}
+	if !f.Timestamp.IsZero() {
+		out.Timestamp = &f.Timestamp
+	}
+	return json.Marshal(out)
+}
+
+type dirOpJSON struct {
+	Path      string     `json:"path"`
+	Op        string     `json:"op"`
+	Mode      uint32     `json:"mode,omitempty"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+}
+
+func (d DirOp) MarshalJSON() ([]byte, error) {
+	out := dirOpJSON{Path: d.Path, Op: d.Op, Mode: d.Mode}
+	if !d.Timestamp.IsZero() {
+		out.Timestamp = &d.Timestamp
+	}
+	return json.Marshal(out)
+}
+
+type networkConnectionJSON struct {
+	Syscall   string     `json:"syscall"`
+	Family    string     `json:"family"`
+	Address   string     `json:"address"`
+	Port      int        `json:"port,omitempty"`
+	FD        int        `json:"fd"`
+	Timestamp *time.Time `json:"timestamp,omitempty"`
+	Hostname  string     `json:"hostname,omitempty"`
+}
+
+func (n NetworkConnection) MarshalJSON() ([]byte, error) {
+	out := networkConnectionJSON{
+		Syscall:  n.Syscall,
+		Family:   n.Family,
+		Address:  n.Address,
+		Port:     n.Port,
+		FD:       n.FD,
+		Hostname: n.Hostname,
+	}
+	if !n.Timestamp.IsZero() {
+		out.Timestamp = &n.Timestamp
+	}
+	return json.Marshal(out)
 }
 
 // FileActivity aggregates all file mutation operations for a process.

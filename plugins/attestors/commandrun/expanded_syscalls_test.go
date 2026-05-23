@@ -30,11 +30,12 @@ import (
 // exercise the ptrace event loop — that's in the integration tests.
 
 func TestFileLink_JSON_Hardlink(t *testing.T) {
+	ts := mustParseRFC3339Nano(t, "2026-05-23T12:00:00Z")
 	link := FileLink{
 		SourcePath: "/etc/passwd",
 		LinkPath:   "/tmp/copy",
 		IsSymlink:  false,
-		Timestamp:  "2026-05-23T12:00:00Z",
+		Timestamp:  ts,
 	}
 	b, err := json.Marshal(link)
 	require.NoError(t, err)
@@ -44,6 +45,16 @@ func TestFileLink_JSON_Hardlink(t *testing.T) {
 		"isSymlink": false,
 		"timestamp": "2026-05-23T12:00:00Z"
 	}`, string(b))
+}
+
+// mustParseRFC3339Nano parses a literal RFC3339Nano timestamp or fails
+// the calling test. Lets tests keep human-readable timestamp literals
+// after the Timestamp field type moved from string to time.Time.
+func mustParseRFC3339Nano(t *testing.T, s string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339Nano, s)
+	require.NoError(t, err)
+	return parsed
 }
 
 func TestFileLink_JSON_Symlink(t *testing.T) {
@@ -116,7 +127,7 @@ func TestFileActivity_RoundTrip_AllFields(t *testing.T) {
 	// A ProcessInfo populated with every new field type round-trips
 	// through JSON without loss. This catches stale json:"omitempty"
 	// tags or rename mismatches.
-	ts := "2026-05-23T12:00:00Z"
+	ts := mustParseRFC3339Nano(t, "2026-05-23T12:00:00Z")
 	fa := FileActivity{
 		Writes:      []FileWrite{{Path: "/a", Bytes: 10, Timestamp: ts}},
 		Renames:     []FileRename{{OldPath: "/a", NewPath: "/b", Timestamp: ts}},
