@@ -24,6 +24,7 @@ use (
 	./plugins/attestors/docker
 	./plugins/attestors/docker-bench
 	./plugins/attestors/environment
+	./plugins/attestors/falco
 	./plugins/attestors/gcp-iit
 	./plugins/attestors/git
 	./plugins/attestors/github

@@ -26,6 +26,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/docker"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/docker-bench"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/environment"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/falco"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/gcp-iit"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/git"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/github"
