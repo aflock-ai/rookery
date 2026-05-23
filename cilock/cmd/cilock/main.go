@@ -52,7 +52,6 @@ import (
 	// KMS, Vault, and SPIFFE signers are opt-in via rookery-builder
 	// using `presets/all` (or by selecting individual signer modules).
 	// See docs/signers.md for details.
-	_ "github.com/aflock-ai/rookery/plugins/signers/debug-signer"
 	_ "github.com/aflock-ai/rookery/plugins/signers/file"
 	_ "github.com/aflock-ai/rookery/plugins/signers/fulcio"
 )
