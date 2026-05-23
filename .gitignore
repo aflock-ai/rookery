@@ -8,6 +8,11 @@ lockctl/lockctl
 *.so
 *.dylib
 
+# Release pipeline output directory.
+# Populated at CI time by the release workflow (cilock-action envelopes,
+# binary tarballs, signed policy, etc.). Never committed.
+dist/
+
 # Test binaries
 *.test
 
