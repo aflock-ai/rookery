@@ -109,7 +109,7 @@ jobs:
           # both PR #153 (traced rename capture) and the govulncheck attestor.
           # SLSA + inclusion-proof are additional postproduct attestors that
           # emit SLSA v1.0 provenance + Rekor entries in the same envelope.
-          attestations: "environment git github product sbom secretscan slsa inclusion-proof"
+          attestations: "environment git github product sbom secretscan slsa"
           outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
           enable-sigstore: "true"
           enable-archivista: "false"
@@ -251,7 +251,7 @@ jobs:
           # both PR #153 (traced rename capture) and the govulncheck attestor.
           # SLSA + inclusion-proof are additional postproduct attestors that
           # emit SLSA v1.0 provenance + Rekor entries in the same envelope.
-          attestations: "environment git github product sbom secretscan slsa inclusion-proof"
+          attestations: "environment git github product sbom secretscan slsa"
           # Witness outfile is namespaced so it can't collide with the
           # primary build's attestation in the same dist/ directory after
           # download-artifact merge.
