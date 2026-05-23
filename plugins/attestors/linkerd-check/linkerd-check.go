@@ -212,7 +212,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	return a.getCandidates(ctx)
 }
 
-//nolint:gocognit // sequential candidate scan: iterate products → open → decode → validate
+//nolint:gocognit,gocyclo // sequential candidate scan: iterate products → mime filter → digest integrity → try-check-then-try-edges; each branch is one shallow check, refactor would obscure the per-product flow
 func (a *Attestor) getCandidates(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
 	if len(products) == 0 {
