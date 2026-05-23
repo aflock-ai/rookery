@@ -304,6 +304,20 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 			for fname := range process.OpenedFiles {
 				openedFileSet[fname] = true
 			}
+			// Atomic-rename builds (e.g. `go build`) write to a temp file
+			// and then rename it to the final destination — the dest is
+			// never open()'d directly, so OpenedFiles misses it. Treat
+			// rename destinations and direct-write targets as part of the
+			// traced capture set so the final artifact survives the
+			// --trace filter in shouldRecord. (closes #152)
+			if process.FileOps != nil {
+				for _, r := range process.FileOps.Renames {
+					openedFileSet[r.NewPath] = true
+				}
+				for _, w := range process.FileOps.Writes {
+					openedFileSet[w.Path] = true
+				}
+			}
 		}
 	}
 
