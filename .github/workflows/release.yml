@@ -316,15 +316,43 @@ jobs:
           chmod +x /tmp/cilock
           /tmp/cilock version
 
+      # cilock verify requires a *signed* policy. We generate an ephemeral
+      # ed25519 keypair, sign the in-tree policy JSON, and ship both the
+      # public key and the signed policy as release assets. The private
+      # key is discarded immediately after signing. The higher-level
+      # trust anchor remains the cosign keyless signature on the same
+      # release assets (Fulcio identity = this workflow's GitHub OIDC) —
+      # users trust the ephemeral key transitively via the cosign
+      # signature on cilock-policy.pub and release-v1.policy.json.
+      - name: Generate ephemeral policy signing key
+        working-directory: dist
+        run: |
+          openssl genpkey -algorithm ed25519 -out policy-signing.key
+          openssl pkey -in policy-signing.key -pubout -out cilock-policy.pub
+          chmod 600 policy-signing.key
+
+      - name: Sign release policy (DSSE, ephemeral ed25519)
+        working-directory: dist
+        run: |
+          /tmp/cilock sign \
+            --signer-file-key-path policy-signing.key \
+            --infile ../deploy/cilock/release.policy.json \
+            --outfile release-v1.policy.json
+          rm -f policy-signing.key
+
       - name: Verify policy + generate VSA for each platform
         working-directory: dist
         run: |
-          for archive in cilock-*-linux-amd64.tar.gz cilock-*-linux-arm64.tar.gz \
-                         cilock-*-darwin-amd64.tar.gz cilock-*-darwin-arm64.tar.gz; do
+          for plat in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            archive="cilock-${{ steps.version.outputs.version }}-${plat}.tar.gz"
+            attest="${plat}.attestation.json"
             [ -f "$archive" ] || continue
+            [ -f "$attest" ] || { echo "missing attestation $attest"; exit 1; }
             stem="${archive%.tar.gz}"
             /tmp/cilock verify \
-              --policy ../deploy/cilock/release.policy.json \
+              --policy release-v1.policy.json \
+              --publickey cilock-policy.pub \
+              --attestations "$attest" \
               --artifactfile "$archive" \
               --vsa-outfile "${stem}.vsa.json" \
               || { echo "POLICY FAILED for $archive — aborting release before cosign signature"; exit 1; }
@@ -346,7 +374,7 @@ jobs:
               "$artifact"
           done
 
-      - name: Publish install script + signed release policy
+      - name: Publish install script
         run: |
           cp ../deploy/cilock/install.sh dist/install.sh
           # Sign install.sh with the same OIDC identity end users will check.
@@ -354,7 +382,19 @@ jobs:
             --output-signature dist/install.sh.sig \
             --output-certificate dist/install.sh.cert \
             dist/install.sh
-          cp ../deploy/cilock/release.policy.json dist/release-v1.policy.json
+
+      # Cosign-sign the signed policy + pubkey so the trust chain anchors
+      # them in this workflow's Fulcio identity (same identity that
+      # cosign-signed the binary tarballs above).
+      - name: Cosign-sign release policy + pubkey
+        working-directory: dist
+        run: |
+          for f in release-v1.policy.json cilock-policy.pub; do
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "$f"
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -375,5 +415,10 @@ jobs:
             dist/install.sh.sig
             dist/install.sh.cert
             dist/release-v1.policy.json
+            dist/release-v1.policy.json.sig
+            dist/release-v1.policy.json.pem
+            dist/cilock-policy.pub
+            dist/cilock-policy.pub.sig
+            dist/cilock-policy.pub.pem
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
