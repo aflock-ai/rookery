@@ -101,10 +101,11 @@ jobs:
           # then a follow-up step moves it to dist/ for archival.
           workingdir: .
           command: |
-            BINARY="cilock"
-            if [ "${{ matrix.goos }}" = "windows" ]; then
-              BINARY="cilock.exe"
-            fi
+            # Write the binary to a name that DOESN'T collide with the
+            # existing cilock/ source directory. Using a per-platform
+            # filename also avoids name reuse across matrix legs if
+            # cilock-action ever runs them in shared workspace.
+            BINARY="cilock-bin-${{ matrix.goos }}-${{ matrix.goarch }}"
             cd cilock
             CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
               go build \
@@ -115,14 +116,16 @@ jobs:
 
       - name: Create archive
         run: |
-          # Move binary from repo root (where cilock-action's product
-          # attestor captured it via product-include-glob: *) into dist/
-          # for archival + artifact upload.
+          # Rename the platform-unique binary (used to dodge the cilock/
+          # directory collision during cilock-action's product capture)
+          # back to plain 'cilock' / 'cilock.exe' for the archive that
+          # end users download.
           mkdir -p dist
+          SRC="cilock-bin-${{ matrix.goos }}-${{ matrix.goarch }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            mv cilock.exe dist/cilock.exe
+            mv "${SRC}" dist/cilock.exe
           else
-            mv cilock dist/cilock
+            mv "${SRC}" dist/cilock
           fi
           cd dist
           ARCHIVE="cilock-${{ steps.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}"
