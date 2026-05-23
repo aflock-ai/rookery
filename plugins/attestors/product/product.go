@@ -274,6 +274,39 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 	return jsonschema.Reflect(&Attestor{})
 }
 
+// collectTracedFileSet inspects completed attestors for any traced
+// CommandRun and returns (a) whether tracing was active, and (b) the
+// set of paths whose contents should survive the --trace filter in
+// shouldRecord. open()'d files are obvious; rename destinations and
+// direct-write targets are required because atomic-rename builds (e.g.
+// `go build`) never open() the final artifact directly. (closes #152)
+func collectTracedFileSet(ctx *attestation.AttestationContext) (bool, map[string]bool) {
+	traced := false
+	set := map[string]bool{}
+	for _, completed := range ctx.CompletedAttestors() {
+		cmd, ok := completed.Attestor.(*commandrun.CommandRun)
+		if !ok || !cmd.TracingEnabled() {
+			continue
+		}
+		traced = true
+		for _, process := range cmd.Processes {
+			for fname := range process.OpenedFiles {
+				set[fname] = true
+			}
+			if process.FileOps == nil {
+				continue
+			}
+			for _, r := range process.FileOps.Renames {
+				set[r.NewPath] = true
+			}
+			for _, w := range process.FileOps.Writes {
+				set[w.Path] = true
+			}
+		}
+	}
+	return traced, set
+}
+
 // Attest walks the product set, computes the per-file pre-hashes, sorts
 // them deterministically, and builds the Merkle tree. The signed
 // predicate's MerkleRoot is the resulting tree root in hex.
@@ -292,34 +325,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 	a.baseArtifacts = ctx.Materials()
 
-	processWasTraced := false
-	openedFileSet := map[string]bool{}
-	for _, completed := range ctx.CompletedAttestors() {
-		cmd, ok := completed.Attestor.(*commandrun.CommandRun)
-		if !ok || !cmd.TracingEnabled() {
-			continue
-		}
-		processWasTraced = true
-		for _, process := range cmd.Processes {
-			for fname := range process.OpenedFiles {
-				openedFileSet[fname] = true
-			}
-			// Atomic-rename builds (e.g. `go build`) write to a temp file
-			// and then rename it to the final destination — the dest is
-			// never open()'d directly, so OpenedFiles misses it. Treat
-			// rename destinations and direct-write targets as part of the
-			// traced capture set so the final artifact survives the
-			// --trace filter in shouldRecord. (closes #152)
-			if process.FileOps != nil {
-				for _, r := range process.FileOps.Renames {
-					openedFileSet[r.NewPath] = true
-				}
-				for _, w := range process.FileOps.Writes {
-					openedFileSet[w.Path] = true
-				}
-			}
-		}
-	}
+	processWasTraced, openedFileSet := collectTracedFileSet(ctx)
 
 	digestMap, err := file.RecordArtifacts(
 		ctx.WorkingDir(),
