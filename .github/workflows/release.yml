@@ -75,6 +75,23 @@ jobs:
         # scanner behavior.
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
+      - name: Vendor cilock deps (pre-build, OUTSIDE the traced step)
+        # Hermetic-build prep. `go mod vendor` walks the dep graph from
+        # cilock/go.mod, fetches every module from proxy.golang.org,
+        # verifies hashes against go.sum + GOSUMDB, and writes the bytes
+        # to cilock/vendor/. This is the trust-on-first-use boundary:
+        # every byte the compiler later reads is now local.
+        #
+        # We deliberately do NOT commit vendor/ to git (79MB diff per
+        # release). Instead we vendor at CI time and let the hermetic
+        # Rego gate the TRACED build phase below — by then `go build
+        # -mod=vendor` reads only local files and makes no network
+        # calls. The vendor step happens BEFORE cilock-action wraps
+        # anything, so its proxy.golang.org calls are not in the
+        # traced syscall set.
+        working-directory: cilock
+        run: GOWORK=off go mod vendor
+
       - name: Prepare dist/
         # cilock-action's `outfile: dist/...` is resolved literally before
         # the wrapped command runs, so the directory has to exist when
@@ -267,6 +284,10 @@ jobs:
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Vendor cilock deps (pre-build, OUTSIDE the traced step)
+        working-directory: cilock
+        run: GOWORK=off go mod vendor
 
       - name: Prepare dist/
         run: mkdir -p dist
