@@ -150,38 +150,20 @@ func FuzzCleanString(f *testing.F) {
 	})
 }
 
-// FuzzFilePathRoundTrip — paths extracted from the tracee end up in
-// JSON. The current behaviour: invalid-UTF-8 bytes are replaced with
-// U+FFFD by encoding/json. This is documented as a known limitation
-// (issue #164) — the fuzz target asserts only the WEAKER invariant
-// (encode and decode succeed, decoded value is valid UTF-8) until
-// #164 lands a lossless encoding. Once it does, restore the
-// stronger `back.SourcePath == path` assertion.
+// FuzzFilePathRoundTrip — issue #164 is fixed by sanitizePath /
+// unsanitizePath. This target asserts the STRONG invariant: arbitrary
+// raw kernel bytes → sanitizePath → FileLink JSON encode → decode →
+// unsanitizePath → byte-for-byte equal to the original.
 func FuzzFilePathRoundTrip(f *testing.F) {
 	f.Add([]byte("/normal/path\x00ignored"), 12)
 	f.Add([]byte{0xFF, 0xFE, 0xFD, 0x00}, 4)
 	f.Add(bytes.Repeat([]byte("x"), MAX_PATH_LEN), MAX_PATH_LEN)
+	f.Add([]byte("/path/with/back\\slash"), 21)
+	f.Add([]byte{0xFF, '\\', 0xFE, '\\', 'x'}, 5)
 
 	f.Fuzz(func(t *testing.T, buf []byte, numBytes int) {
-		path := extractCString(buf, numBytes)
-		link := FileLink{SourcePath: path, LinkPath: path}
-		b, err := json.Marshal(link)
-		if err != nil {
-			t.Fatalf("FileLink JSON encode failed for path %q: %v", path, err)
-		}
-		var back FileLink
-		if err := json.Unmarshal(b, &back); err != nil {
-			t.Fatalf("FileLink JSON decode failed for %q (encoded %q): %v",
-				path, b, err)
-		}
-		// The decoded SourcePath must always be valid UTF-8 even if
-		// the input was not; encoding/json's replacement guarantees this.
-		if !utf8.ValidString(back.SourcePath) {
-			t.Fatalf("decoded SourcePath is not valid UTF-8: %q", back.SourcePath)
-		}
-		// If input was already valid UTF-8, round-trip must be lossless.
-		// Clamp numBytes to a safe slicing range — the fuzzer can hand
-		// us negative values to probe panic paths.
+		// Match the production extraction: NUL-terminate at first 0
+		// byte, clamp to numBytes.
 		end := numBytes
 		if end < 0 {
 			end = 0
@@ -189,11 +171,56 @@ func FuzzFilePathRoundTrip(f *testing.F) {
 		if end > len(buf) {
 			end = len(buf)
 		}
-		if utf8.Valid(buf[:end]) {
-			if utf8.ValidString(path) && back.SourcePath != path {
-				t.Fatalf("valid-UTF-8 path mutated through JSON: in=%q out=%q",
-					path, back.SourcePath)
-			}
+		cut := bytes.IndexByte(buf[:end], 0)
+		if cut < 0 {
+			cut = end
+		}
+		raw := buf[:cut]
+
+		s := sanitizePath(raw)
+		if !utf8.ValidString(s) {
+			t.Fatalf("sanitizePath produced invalid UTF-8: %q (raw=%v)", s, raw)
+		}
+		link := FileLink{SourcePath: s, LinkPath: s}
+		b, err := json.Marshal(link)
+		if err != nil {
+			t.Fatalf("FileLink JSON encode failed: %v (raw=%v)", err, raw)
+		}
+		var back FileLink
+		if err := json.Unmarshal(b, &back); err != nil {
+			t.Fatalf("FileLink JSON decode failed: %v (raw=%v)", err, raw)
+		}
+		if back.SourcePath != s {
+			t.Fatalf("sanitized path mutated through JSON: in=%q out=%q",
+				s, back.SourcePath)
+		}
+		recovered := unsanitizePath(back.SourcePath)
+		if !bytes.Equal(recovered, raw) {
+			t.Fatalf("round-trip lost bytes: in=%v out=%v (sanitized=%q)",
+				raw, recovered, s)
+		}
+	})
+}
+
+// FuzzSanitizeUnsanitize — sanitize/unsanitize are mutual inverses
+// for every input, independent of JSON.
+func FuzzSanitizeUnsanitize(f *testing.F) {
+	f.Add([]byte("/etc/passwd"))
+	f.Add([]byte{0xFF, 0xFE, 0xFD})
+	f.Add([]byte("a\\b\xFFc"))
+	f.Add([]byte("/path/with/back\\slash"))
+	f.Add([]byte(""))
+	f.Add(bytes.Repeat([]byte{0xFF}, 100))
+
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		s := sanitizePath(raw)
+		if !utf8.ValidString(s) {
+			t.Fatalf("sanitizePath produced invalid UTF-8: %q (raw=%v)", s, raw)
+		}
+		back := unsanitizePath(s)
+		if !bytes.Equal(back, raw) {
+			t.Fatalf("sanitize/unsanitize not inverse: in=%v out=%v sanitized=%q",
+				raw, back, s)
 		}
 	})
 }
