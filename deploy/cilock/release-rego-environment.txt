@@ -1,0 +1,15 @@
+package release_build_environment
+
+# CGO_ENABLED=0 is required for release builds. CGO linking pulls in
+# the system C compiler/loader and dynamically links against system
+# libraries — that breaks the "static, no surprise dependencies"
+# guarantee end users rely on. Pure-Go binaries also dodge the entire
+# class of glibc-version compatibility footguns.
+#
+# The environment attestor stores Variables as map[string]string, so
+# the lookup is a single index expression — no iteration needed.
+
+deny[msg] {
+  input.variables.CGO_ENABLED != "0"
+  msg := sprintf("CGO_ENABLED must be 0 in release builds, got: %s", [input.variables.CGO_ENABLED])
+}

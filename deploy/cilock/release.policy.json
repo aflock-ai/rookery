@@ -1,5 +1,5 @@
 {
-  "_comment": "Release verification policy for cilock binaries. Four layers of Rego stacked across the release-build step (hermeticity Rego held out pending fix for --trace + go build atomic-rename incompatibility): github (source+ref), git (source integrity), commandrun (build hygiene), product (binary present); plus sbom presence required. The policy itself is committed unsigned for reviewer transparency; the release workflow signs it (DSSE) and ships the signed copy as release-v1.policy.json with every release. Plain-text Rego sources are in deploy/cilock/release-rego-*.txt.",
+  "_comment": "Release verification policy for cilock binaries. Rego layers stacked per predicate against the release-build step: git (source integrity), github (source repo+ref), environment (CGO_ENABLED=0), command-run (build hygiene: -trimpath + ldflags Version embed); product evidence comes from subject-digest matching, SBOM presence is required (spdx.dev/Document predicate). Hermeticity Rego held out pending --trace + atomic-rename incompatibility fix (PR #153). The committed policy is unsigned for reviewer transparency; the release workflow injects the live Fulcio root chain, signs the policy with an ephemeral ed25519 key, and ships both the signed policy and pubkey as release assets. Plain-text Rego sources are in deploy/cilock/release-rego-*.txt.",
   "expires": "2027-12-31T23:59:59Z",
   "name": "cilock-release-v1",
   "roots": {
@@ -37,24 +37,29 @@
           ]
         },
         {
+          "type": "https://aflock.ai/attestations/environment/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-build-cgo-disabled",
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-environment.txt. Denies if CGO_ENABLED != 0. CGO links system libc and breaks the 'static, no surprise deps' guarantee.",
+              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX2Vudmlyb25tZW50CgojIENHT19FTkFCTEVEPTAgaXMgcmVxdWlyZWQgZm9yIHJlbGVhc2UgYnVpbGRzLiBDR08gbGlua2luZyBwdWxscyBpbgojIHRoZSBzeXN0ZW0gQyBjb21waWxlci9sb2FkZXIgYW5kIGR5bmFtaWNhbGx5IGxpbmtzIGFnYWluc3Qgc3lzdGVtCiMgbGlicmFyaWVzIOKAlCB0aGF0IGJyZWFrcyB0aGUgInN0YXRpYywgbm8gc3VycHJpc2UgZGVwZW5kZW5jaWVzIgojIGd1YXJhbnRlZSBlbmQgdXNlcnMgcmVseSBvbi4gUHVyZS1HbyBiaW5hcmllcyBhbHNvIGRvZGdlIHRoZSBlbnRpcmUKIyBjbGFzcyBvZiBnbGliYy12ZXJzaW9uIGNvbXBhdGliaWxpdHkgZm9vdGd1bnMuCiMKIyBUaGUgZW52aXJvbm1lbnQgYXR0ZXN0b3Igc3RvcmVzIFZhcmlhYmxlcyBhcyBtYXBbc3RyaW5nXXN0cmluZywgc28KIyB0aGUgbG9va3VwIGlzIGEgc2luZ2xlIGluZGV4IGV4cHJlc3Npb24g4oCUIG5vIGl0ZXJhdGlvbiBuZWVkZWQuCgpkZW55W21zZ10gewogIGlucHV0LnZhcmlhYmxlcy5DR09fRU5BQkxFRCAhPSAiMCIKICBtc2cgOj0gc3ByaW50ZigiQ0dPX0VOQUJMRUQgbXVzdCBiZSAwIGluIHJlbGVhc2UgYnVpbGRzLCBnb3Q6ICVzIiwgW2lucHV0LnZhcmlhYmxlcy5DR09fRU5BQkxFRF0pCn0K"
+            }
+          ]
+        },
+        {
           "type": "https://aflock.ai/attestations/command-run/v0.1",
           "regopolicies": [
             {
               "name": "release-build-hygiene",
-              "_comment": "Decoded plain-text in deploy/cilock/release-rego-commandrun.txt. Denies on: missing -trimpath, missing cli.Version ldflags, CGO_ENABLED != 0. The hermeticity Rego was removed pending a fix for --trace incompatibility with go build's atomic-rename output pattern.",
-              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX2NvbW1hbmRydW4KCiMgVGhlIHJlbGVhc2UgYnVpbGQgbXVzdCB1c2UgdGhlIGNhbm9uaWNhbCBoYXJkZW5pbmcgZmxhZ3M6CiMgICAtIENHT19FTkFCTEVEPTAgKG5vIEMgY29tcGlsZXIgbGlua2luZyDigJQgZWxpbWluYXRlcyBkeW5hbWljIGxpYnJhcnkgaW5qZWN0aW9uKQojICAgLSAtdHJpbXBhdGggICAgICAoc3RyaXBzIGxvY2FsIHBhdGhzIGZyb20gYmluYXJ5OyByZXByb2R1Y2libGUpCiMgICAtIC1sZGZsYWdzIC4uLiBjbGkuVmVyc2lvbj12Li4uICAodmVyc2lvbiBpcyBlbWJlZGRlZCwgbm90ICJkZXYiKQojCiMgV2l0aG91dCB0aGVzZSB0aGUgYmluYXJ5IGRvZXNuJ3QgbWF0Y2ggd2hhdCBpbnN0YWxsIGRvY3MgcHJvbWlzZSBhbmQKIyBhdWRpdG9ycyBjYW4ndCB2ZXJpZnkgdGhlIGJ1aWxkIGlzIHJlcHJvZHVjaWJsZSBmcm9tIHNvdXJjZS4KCmNtZCA6PSBjb25jYXQoIiAiLCBpbnB1dC5jbWQpCgpkZW55W21zZ10gewogIG5vdCBjb250YWlucyhjbWQsICItdHJpbXBhdGgiKQogIG1zZyA6PSAicmVsZWFzZSBidWlsZCBtaXNzaW5nIC10cmltcGF0aCBmbGFnIgp9CgpkZW55W21zZ10gewogIG5vdCBjb250YWlucyhjbWQsICJjbGkuVmVyc2lvbj0iKQogIG1zZyA6PSAicmVsZWFzZSBidWlsZCBtaXNzaW5nIC1sZGZsYWdzIFZlcnNpb24gZW1iZWQiCn0KCmRlbnlbbXNnXSB7CiAgc29tZSBlbnYgaW4gaW5wdXQuZW52aXJvbm1lbnQudmFyaWFibGVzCiAgZW52Lm5hbWUgPT0gIkNHT19FTkFCTEVEIgogIGVudi52YWx1ZSAhPSAiMCIKICBtc2cgOj0gc3ByaW50ZigiQ0dPX0VOQUJMRUQgbXVzdCBiZSAwIGluIHJlbGVhc2UgYnVpbGRzLCBnb3Q6ICVzIiwgW2Vudi52YWx1ZV0pCn0K"
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-commandrun.txt. Denies on: missing -trimpath, missing cli.Version ldflags. CGO check moved to release-build-cgo-disabled (env predicate).",
+              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX2NvbW1hbmRydW4KCiMgVGhlIHJlbGVhc2UgYnVpbGQgbXVzdCB1c2UgdGhlIGNhbm9uaWNhbCBoYXJkZW5pbmcgZmxhZ3M6CiMgICAtIC10cmltcGF0aCAgICAgIChzdHJpcHMgbG9jYWwgcGF0aHMgZnJvbSBiaW5hcnk7IHJlcHJvZHVjaWJsZSkKIyAgIC0gLWxkZmxhZ3MgLi4uIGNsaS5WZXJzaW9uPXYuLi4gICh2ZXJzaW9uIGlzIGVtYmVkZGVkLCBub3QgImRldiIpCiMKIyBDR09fRU5BQkxFRD0wIGVuZm9yY2VtZW50IGxpdmVzIGluIHJlbGVhc2UtcmVnby1lbnZpcm9ubWVudC50eHQgYWdhaW5zdAojIHRoZSBlbnZpcm9ubWVudCBhdHRlc3RvciBwcmVkaWNhdGUgKHdoaWNoIGhvbGRzIHRoZSBhY3R1YWwgZW52IHZhcnMpLgojIFNwbGl0dGluZyBwZXItcHJlZGljYXRlIG1hdGNoZXMgaG93IGNpbG9jayBldmFsdWF0ZXMgUmVnbzogaW5wdXQgaXMgdGhlCiMgYXR0ZXN0b3Itc3BlY2lmaWMgcGF5bG9hZCwgbmV2ZXIgYSBjcm9zcy1hdHRlc3RvciB2aWV3LgoKY21kIDo9IGNvbmNhdCgiICIsIGlucHV0LmNtZCkKCmRlbnlbbXNnXSB7CiAgbm90IGNvbnRhaW5zKGNtZCwgIi10cmltcGF0aCIpCiAgbXNnIDo9ICJyZWxlYXNlIGJ1aWxkIG1pc3NpbmcgLXRyaW1wYXRoIGZsYWciCn0KCmRlbnlbbXNnXSB7CiAgbm90IGNvbnRhaW5zKGNtZCwgImNsaS5WZXJzaW9uPSIpCiAgbXNnIDo9ICJyZWxlYXNlIGJ1aWxkIG1pc3NpbmcgLWxkZmxhZ3MgVmVyc2lvbiBlbWJlZCIKfQo="
             }
           ]
         },
         {
           "type": "https://aflock.ai/attestations/product/v0.1",
-          "regopolicies": [
-            {
-              "name": "release-produced-cilock-binary",
-              "_comment": "Decoded plain-text in deploy/cilock/release-rego-product.txt. Denies if the product set contains no file named 'cilock' or 'cilock.exe'.",
-              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX3Byb2R1Y3QKCiMgVGhlIHJlbGVhc2UgYnVpbGQgbXVzdCBwcm9kdWNlIGEgY2lsb2NrIGJpbmFyeSAob3IgY2lsb2NrLmV4ZSBvbiBXaW5kb3dzKS4KIyBDYXRjaGVzIHRoZSBjbGFzcyBvZiBidWcgd2hlcmUgdGhlIGJ1aWxkIHN0ZXAgc3VjY2VlZGVkIGJ1dCB0aGUgYmluYXJ5IHdhcwojIG5ldmVyIHdyaXR0ZW4gdG8gZGlzdC8g4oCUIHdpdGhvdXQgdGhpcywgdGhlIHJlbGVhc2Ugd291bGQgc2hpcCBhIHBsYWNlaG9sZGVyLgoKY2lsb2NrX3Byb2R1Y3RzIDo9IFtuYW1lIHwKICBzb21lIG5hbWUsIF8gaW4gaW5wdXQucHJvZHVjdHMKICBiYXNlIDo9IHNwbGl0KG5hbWUsICIvIilbY291bnQoc3BsaXQobmFtZSwgIi8iKSkgLSAxXQogIGJhc2UgPT0gImNpbG9jayIgb3IgYmFzZSA9PSAiY2lsb2NrLmV4ZSIKXQoKZGVueVttc2ddIHsKICBjb3VudChjaWxvY2tfcHJvZHVjdHMpID09IDAKICBtc2cgOj0gInJlbGVhc2UgYnVpbGQgcHJvZHVjZWQgbm8gY2lsb2NrIGJpbmFyeSBpbiBwcm9kdWN0cyIKfQo="
-            }
-          ]
+          "regopolicies": [],
+          "_comment": "Product attestor's predicate is merkle-summary only (MerkleRoot, TreeSize, etc.) — the per-file product list is in the statement SUBJECTS, not the predicate input that Rego sees. We rely on the source.Search subject-digest filter (collection matches only when one of its subjects is the artifact's hash) to enforce 'a cilock binary was produced'. A surviving collection at this point IS the proof."
         },
         {
           "type": "https://spdx.dev/Document",

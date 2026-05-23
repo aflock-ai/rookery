@@ -1,12 +1,13 @@
 package release_build_commandrun
 
 # The release build must use the canonical hardening flags:
-#   - CGO_ENABLED=0 (no C compiler linking — eliminates dynamic library injection)
 #   - -trimpath      (strips local paths from binary; reproducible)
 #   - -ldflags ... cli.Version=v...  (version is embedded, not "dev")
 #
-# Without these the binary doesn't match what install docs promise and
-# auditors can't verify the build is reproducible from source.
+# CGO_ENABLED=0 enforcement lives in release-rego-environment.txt against
+# the environment attestor predicate (which holds the actual env vars).
+# Splitting per-predicate matches how cilock evaluates Rego: input is the
+# attestor-specific payload, never a cross-attestor view.
 
 cmd := concat(" ", input.cmd)
 
@@ -18,11 +19,4 @@ deny[msg] {
 deny[msg] {
   not contains(cmd, "cli.Version=")
   msg := "release build missing -ldflags Version embed"
-}
-
-deny[msg] {
-  some env in input.environment.variables
-  env.name == "CGO_ENABLED"
-  env.value != "0"
-  msg := sprintf("CGO_ENABLED must be 0 in release builds, got: %s", [env.value])
 }
