@@ -27,7 +27,7 @@ jobs:
       - name: Build probe
         run: |
           cd .github/probes/trace-capability-probe
-          go build -o /tmp/probe .
+          GOWORK=off go build -o /tmp/probe .
       - name: Run probe (as runner user)
         run: /tmp/probe | tee report-hosted-default.json
       - name: Run probe (via sudo)
@@ -59,7 +59,7 @@ jobs:
       - name: Build probe
         run: |
           cd .github/probes/trace-capability-probe
-          go build -o /tmp/probe .
+          GOWORK=off go build -o /tmp/probe .
       - name: Run probe (container default user — likely root)
         run: /tmp/probe | tee report-container-default.json
       - name: Show
@@ -68,19 +68,6 @@ jobs:
         with:
           name: container-default-report
           path: report-container-default.json
-
-  hosted-container-no-caps:
-    name: Hosted ubuntu-latest (Docker container with --cap-drop=ALL)
-    runs-on: ubuntu-latest
-    container:
-      image: ubuntu:24.04
-      options: --cap-drop=ALL --user 1000:1000
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Go (need root for apt — pre-built probe instead)
-        # Can't install go without caps; use a pre-built static probe
-        run: |
-          echo "skipping — would need pre-built static binary; demonstrates the constraint"
 
   hosted-container-with-bpf-cap:
     name: Hosted ubuntu-latest (Docker container with --cap-add=BPF,PERFMON)
@@ -96,7 +83,7 @@ jobs:
       - name: Build probe
         run: |
           cd .github/probes/trace-capability-probe
-          go build -o /tmp/probe .
+          GOWORK=off go build -o /tmp/probe .
       - name: Run probe
         run: /tmp/probe | tee report-container-bpf.json
       - name: Show
@@ -109,6 +96,8 @@ jobs:
   summary:
     name: Summary
     needs: [hosted-default, hosted-container-default, hosted-container-with-bpf-cap]
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     if: always()
     steps:
