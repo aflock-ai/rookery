@@ -102,7 +102,7 @@ jobs:
           # product attestor captures it, then the sbom attestor parses
           # it into an sbom/v0.1 predicate that lives in the same
           # signed envelope as the rest of the build evidence.
-          attestations: "environment git github product sbom"
+          attestations: "environment git github product sbom secretscan"
           outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
           enable-sigstore: "true"
           enable-archivista: "false"
@@ -232,7 +232,7 @@ jobs:
         uses: aflock-ai/cilock-action@v1.0.1
         with:
           step: release-build
-          attestations: "environment git github product sbom"
+          attestations: "environment git github product sbom secretscan"
           # Witness outfile is namespaced so it can't collide with the
           # primary build's attestation in the same dist/ directory after
           # download-artifact merge.

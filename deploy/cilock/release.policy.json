@@ -65,6 +65,16 @@
           "type": "https://spdx.dev/Document",
           "regopolicies": [],
           "_comment": "SBOM presence is required. syft runs inside the wrapped build command (see release.yml) and writes the SPDX file into the workingdir; cilock-action's product attestor captures it, then the sbom attestor parses it into this predicate."
+        },
+        {
+          "type": "https://aflock.ai/attestations/secretscan/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-build-no-secrets",
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-secretscan.txt. Denies if secretscan (gitleaks) finds ANY secret in the product set or prior attestation envelopes. Secrets are stored as SHA-256 digests only; a non-empty findings array means we almost shipped a credential.",
+              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX3NlY3JldHNjYW4KCiMgVGhlIHNlY3JldHNjYW4gYXR0ZXN0b3IgKGdpdGxlYWtzIHVuZGVyIHRoZSBob29kKSBzY2FucyB0aGUgZW50aXJlCiMgcHJvZHVjdCBzZXQgKyBldmVyeSBwcmlvciBhdHRlc3RhdGlvbiBlbnZlbG9wZSBmb3IgbWF0Y2hpbmcgc2VjcmV0CiMgcGF0dGVybnMsIHdpdGggbXVsdGktbGF5ZXIgYmFzZTY0L2hleC9VUkwgZGVjb2RlIHBhc3Nlcy4gV2hlbiBpdAojIGZpbmRzIHNvbWV0aGluZyBpdCByZXBsYWNlcyB0aGUgYWN0dWFsIHZhbHVlIHdpdGggYSBTSEEtMjU2IGRpZ2VzdAojIG9mIHRoZSBzZWNyZXQsIHNvIHRoZSBwcmVkaWNhdGUgY2FuIGJlIHNhZmVseSBzdG9yZWQg4oCUIGJ1dCBhCiMgbm9uLWVtcHR5IGZpbmRpbmdzIGFycmF5IG1lYW5zIHdlIHNoaXBwZWQgcG90ZW50aWFsIGNyZWRlbnRpYWxzCiMgaW50byBhIHB1YmxpY2x5LXJlbGVhc2VkIGFydGlmYWN0LCB3aGljaCBpcyB0aGUgaGlnaGVzdC1zZXZlcml0eQojIHJlbGVhc2UgZGVmZWN0IHdlIGNhbiBoYXZlLgojCiMgWmVybyB0b2xlcmFuY2U6IEFOWSBmaW5kaW5nIGZhaWxzIHRoZSByZWxlYXNlLgoKZGVueVttc2ddIHsKICBjb3VudChpbnB1dC5maW5kaW5ncykgPiAwCiAgbiA6PSBjb3VudChpbnB1dC5maW5kaW5ncykKICBtc2cgOj0gc3ByaW50Zigic2VjcmV0c2NhbiBmb3VuZCAlZCBwb3RlbnRpYWwgc2VjcmV0KHMpIOKAlCByZWxlYXNlIGJsb2NrZWQiLCBbbl0pCn0K"
+            }
+          ]
         }
       ],
       "functionaries": [
