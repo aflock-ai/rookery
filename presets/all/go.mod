@@ -54,6 +54,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/kube-bench => ../../plugi
 
 replace github.com/aflock-ai/rookery/plugins/attestors/link => ../../plugins/attestors/link
 
+replace github.com/aflock-ai/rookery/plugins/attestors/linkerd-check => ../../plugins/attestors/linkerd-check
+
 replace github.com/aflock-ai/rookery/plugins/attestors/lockfiles => ../../plugins/attestors/lockfiles
 
 replace github.com/aflock-ai/rookery/plugins/attestors/material => ../../plugins/attestors/material
@@ -144,6 +146,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/k8smanifest v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/kube-bench v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/link v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/linkerd-check v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/lockfiles v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/material v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/maven v0.0.0-00010101000000-000000000000

@@ -1,0 +1,284 @@
+{
+  "success": true,
+  "categories": [
+    {
+      "categoryName": "kubernetes-api",
+      "checks": [
+        {
+          "description": "can initialize the client",
+          "result": "success"
+        },
+        {
+          "description": "can query the Kubernetes API",
+          "result": "success"
+        }
+      ]
+    },
+    {
+      "categoryName": "kubernetes-version",
+      "checks": [
+        {
+          "description": "is running the minimum Kubernetes API version",
+          "result": "success"
+        }
+      ]
+    },
+    {
+      "categoryName": "linkerd-existence",
+      "checks": [
+        {
+          "description": "'linkerd-config' config map exists",
+          "result": "success"
+        },
+        {
+          "description": "heartbeat ServiceAccount exist",
+          "result": "success"
+        },
+        {
+          "description": "control plane replica sets are ready",
+          "result": "success"
+        },
+        {
+          "description": "no unschedulable pods",
+          "result": "success"
+        },
+        {
+          "description": "control plane pods are ready",
+          "result": "success"
+        },
+        {
+          "description": "cluster networks contains all pods",
+          "result": "success"
+        },
+        {
+          "description": "cluster networks contains all services",
+          "result": "success"
+        }
+      ]
+    },
+    {
+      "categoryName": "linkerd-config",
+      "checks": [
+        {
+          "description": "control plane Namespace exists",
+          "result": "success"
+        },
+        {
+          "description": "control plane ClusterRoles exist",
+          "result": "success"
+        },
+        {
+          "description": "control plane ClusterRoleBindings exist",
+          "result": "success"
+        },
+        {
+          "description": "control plane ServiceAccounts exist",
+          "result": "success"
+        },
+        {
+          "description": "control plane CustomResourceDefinitions exist",
+          "result": "success"
+        },
+        {
+          "description": "control plane MutatingWebhookConfigurations exist",
+          "result": "success"
+        },
+        {
+          "description": "control plane ValidatingWebhookConfigurations exist",
+          "result": "success"
+        },
+        {
+          "description": "proxy-init container runs as root user if docker container runtime is used",
+          "result": "success"
+        }
+      ]
+    },
+    {
+      "categoryName": "linkerd-identity",
+      "checks": [
+        {
+          "description": "certificate config is valid",
+          "result": "success"
+        },
+        {
+          "description": "trust anchors are using supported crypto algorithm",
+          "result": "success"
+        },
+        {
+          "description": "trust anchors are within their validity period",
+          "result": "success"
+        },
+        {
+          "description": "trust anchors are valid for at least 60 days",
+          "result": "success"
+        },
+        {
+          "description": "issuer cert is using supported crypto algorithm",
+          "result": "success"
+        },
+        {
+          "description": "issuer cert is within its validity period",
+          "result": "success"
+        },
+        {
+          "description": "issuer cert is valid for at least 60 days",
+          "result": "success"
+        },
+        {
+          "description": "issuer cert is issued by the trust anchor",
+          "result": "success"
+        }
+      ]
+    },
+    {
+      "categoryName": "linkerd-webhooks-and-apisvc-tls",
+      "checks": [
+        {
+          "description": "proxy-injector webhook has valid cert",
+          "result": "success"
+        },
+        {
+          "description": "proxy-injector cert is valid for at least 60 days",
+          "result": "success"
+        },
+        {
+          "description": "sp-validator webhook has valid cert",
+          "result": "success"
+        },
+        {
+          "description": "sp-validator cert is valid for at least 60 days",
+          "result": "success"
+        },
+        {
+          "description": "policy-validator webhook has valid cert",
+          "result": "success"
+        },
+        {
+          "description": "policy-validator cert is valid for at least 60 days",
+          "result": "success"
+        }
+      ]
+    },
+    {
+      "categoryName": "linkerd-version",
+      "checks": [
+        {
+          "description": "can determine the latest version",
+          "result": "success"
+        },
+        {
+          "description": "cli is up-to-date",
+          "hint": "https://linkerd.io/2.14/checks/#l5d-version-cli",
+          "error": "unsupported version channel: stable-2.14.10",
+          "result": "warning"
+        }
+      ]
+    },
+    {
+      "categoryName": "control-plane-version",
+      "checks": [
+        {
+          "description": "can retrieve the control plane version",
+          "result": "success"
+        },
+        {
+          "description": "control plane is up-to-date",
+          "hint": "https://linkerd.io/2.14/checks/#l5d-version-control",
+          "error": "unsupported version channel: stable-2.14.10",
+          "result": "warning"
+        },
+        {
+          "description": "control plane and cli versions match",
+          "result": "success"
+        }
+      ]
+    },
+    {
+      "categoryName": "linkerd-control-plane-proxy",
+      "checks": [
+        {
+          "description": "control plane proxies are healthy",
+          "result": "success"
+        },
+        {
+          "description": "control plane proxies are up-to-date",
+          "hint": "https://linkerd.io/2.14/checks/#l5d-cp-proxy-version",
+          "error": "some proxies are not running the current version:\n\t* linkerd-destination-c5dcf99c9-kz7ll (stable-2.14.10)\n\t* linkerd-identity-95fdf9dc8-nx9j6 (stable-2.14.10)\n\t* linkerd-proxy-injector-7dc8f75bdb-tq7fn (stable-2.14.10)",
+          "result": "warning"
+        },
+        {
+          "description": "control plane proxies and cli versions match",
+          "result": "success"
+        }
+      ]
+    }
+  ]
+}
+{
+  "success": true,
+  "categories": [
+    {
+      "categoryName": "linkerd-viz",
+      "checks": [
+        {
+          "description": "linkerd-viz Namespace exists",
+          "result": "success"
+        },
+        {
+          "description": "can initialize the client",
+          "result": "success"
+        },
+        {
+          "description": "linkerd-viz ClusterRoles exist",
+          "result": "success"
+        },
+        {
+          "description": "linkerd-viz ClusterRoleBindings exist",
+          "result": "success"
+        },
+        {
+          "description": "tap API server has valid cert",
+          "result": "success"
+        },
+        {
+          "description": "tap API server cert is valid for at least 60 days",
+          "result": "success"
+        },
+        {
+          "description": "tap API service is running",
+          "result": "success"
+        },
+        {
+          "description": "linkerd-viz pods are injected",
+          "result": "success"
+        },
+        {
+          "description": "viz extension pods are running",
+          "result": "success"
+        },
+        {
+          "description": "viz extension proxies are healthy",
+          "result": "success"
+        },
+        {
+          "description": "viz extension proxies are up-to-date",
+          "hint": "https://linkerd.io/2.14/checks/#l5d-viz-proxy-cp-version",
+          "error": "some proxies are not running the current version:\n\t* metrics-api-596bb97b6f-n4sk7 (stable-2.14.10)\n\t* prometheus-85f6b7445d-4962w (stable-2.14.10)\n\t* tap-69bc6cbf4c-ql9z8 (stable-2.14.10)\n\t* tap-injector-84c9846d4b-m9smw (stable-2.14.10)\n\t* web-66b5ccb569-zkx8t (stable-2.14.10)",
+          "result": "warning"
+        },
+        {
+          "description": "viz extension proxies and cli versions match",
+          "result": "success"
+        },
+        {
+          "description": "prometheus is installed and configured correctly",
+          "result": "success"
+        },
+        {
+          "description": "viz extension self-check",
+          "result": "success"
+        }
+      ]
+    }
+  ]
+}
