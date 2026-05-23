@@ -314,7 +314,7 @@ jobs:
           # verifies.
           tar -xzf dist/cilock-${{ steps.version.outputs.version }}-linux-amd64.tar.gz -C /tmp/
           chmod +x /tmp/cilock
-          /tmp/cilock --version
+          /tmp/cilock version
 
       - name: Verify policy + generate VSA for each platform
         working-directory: dist
