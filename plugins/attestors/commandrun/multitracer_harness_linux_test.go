@@ -110,6 +110,10 @@ func tableOfScenarios() []scenario {
 		{"par8_50_linkat", 8, 50, "linkat"},
 		{"par8_25_mkdir", 8, 25, "mkdir"},
 		{"par16_25_mixed", 16, 25, "mixed"},
+		// Larger workloads where per-handoff overhead amortizes out.
+		// These are the ones the multi-tracer architecture targets.
+		{"par8_500_openat", 8, 500, "openat"},
+		{"par16_250_mixed", 16, 250, "mixed"},
 	}
 }
 
@@ -328,6 +332,49 @@ func BenchmarkMultiTracer_Workload(b *testing.B) {
 					b.Fatalf("workload error: %v", err)
 				}
 			}
+		})
+	}
+}
+
+// TestMultiTracer_SerialVsMulti runs each scenario in both modes
+// back-to-back and reports the ratio. Useful as a one-shot dev tool
+// (skipped under -short and unless RUN_COMPARE=1).
+func TestMultiTracer_SerialVsMulti(t *testing.T) {
+	if testing.Short() {
+		t.Skip("comparison test")
+	}
+	if os.Getenv("RUN_COMPARE") != "1" {
+		t.Skip("set RUN_COMPARE=1 to run serial-vs-multi comparison")
+	}
+	const repeats = 3
+	for _, sc := range tableOfScenarios() {
+		sc := sc
+		t.Run(sc.name, func(t *testing.T) {
+			// Serial baseline
+			_ = os.Unsetenv("CILOCK_TRACE_MULTI")
+			var serialTotal time.Duration
+			for i := 0; i < repeats; i++ {
+				_, dur, _, err := runWorkloadUnderTrace(t, sc)
+				if err != nil {
+					t.Fatalf("serial run %d: %v", i, err)
+				}
+				serialTotal += dur
+			}
+			// Multi-tracer
+			t.Setenv("CILOCK_TRACE_MULTI", "1")
+			var multiTotal time.Duration
+			for i := 0; i < repeats; i++ {
+				_, dur, _, err := runWorkloadUnderTrace(t, sc)
+				if err != nil {
+					t.Fatalf("multi run %d: %v", i, err)
+				}
+				multiTotal += dur
+			}
+			serialAvg := serialTotal / repeats
+			multiAvg := multiTotal / repeats
+			ratio := float64(serialAvg) / float64(multiAvg)
+			t.Logf("scenario=%s serial_avg=%v multi_avg=%v ratio=%.2fx",
+				sc.name, serialAvg, multiAvg, ratio)
 		})
 	}
 }
