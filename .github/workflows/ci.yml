@@ -12,6 +12,7 @@
 # - commitlint: Conventional commit validation
 # - forbidden-patterns: Scan for dangerous code patterns
 # - dep-budget: Block cilock transitive-dep growth beyond .dep-budget.yaml
+# - canonical-attestor-audit: Block silent drift between presets/all and the canonical cilock binary
 # - provenance-check: Verify .provenance/ inlined-upstream records
 # - ci-success: Aggregate status gate
 
@@ -302,6 +303,22 @@ jobs:
       - name: Check cilock dep budget
         run: ./scripts/check-dep-budget.sh
 
+  # ── Canonical-vs-preset attestor drift ──────────────────────────────
+  # Fails if presets/all/imports.go declares an attestor that the
+  # canonical cilock binary doesn't blank-import, unless the attestor is
+  # on the documented EXCLUDED list in the script. Forces every drift
+  # to be a conscious decision.
+  #
+  # Tracking issue: https://github.com/aflock-ai/rookery/issues/146
+  canonical-attestor-audit:
+    name: canonical attestor audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify canonical cilock blank-imports cover presets/all
+        run: ./scripts/check-canonical-attestors.sh
+
   # ── Provenance / License Audit ──────────────────────────────────────
   # Verifies every .provenance/*.json entry: local file matches recorded
   # SHA256, upstream content (re-fetched at the recorded commit) still
@@ -335,6 +352,7 @@ jobs:
       - commitlint
       - forbidden-patterns
       - dep-budget
+      - canonical-attestor-audit
       - provenance-check
     steps:
       - name: Check all jobs
