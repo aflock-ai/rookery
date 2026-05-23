@@ -1,0 +1,137 @@
+[
+  {
+    "src": "vote-bot",
+    "src_namespace": "emojivoto",
+    "dst": "web",
+    "dst_namespace": "emojivoto",
+    "client_id": "default.emojivoto",
+    "server_id": "web.emojivoto",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "web",
+    "src_namespace": "emojivoto",
+    "dst": "emoji",
+    "dst_namespace": "emojivoto",
+    "client_id": "web.emojivoto",
+    "server_id": "emoji.emojivoto",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "web",
+    "src_namespace": "emojivoto",
+    "dst": "voting",
+    "dst_namespace": "emojivoto",
+    "client_id": "web.emojivoto",
+    "server_id": "voting.emojivoto",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "emoji",
+    "dst_namespace": "emojivoto",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "emoji.emojivoto",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "vote-bot",
+    "dst_namespace": "emojivoto",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "default.emojivoto",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "voting",
+    "dst_namespace": "emojivoto",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "voting.emojivoto",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "web",
+    "dst_namespace": "emojivoto",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "web.emojivoto",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "metrics-api",
+    "src_namespace": "linkerd-viz",
+    "dst": "prometheus",
+    "dst_namespace": "linkerd-viz",
+    "client_id": "metrics-api.linkerd-viz",
+    "server_id": "prometheus.linkerd-viz",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "metrics-api",
+    "dst_namespace": "linkerd-viz",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "metrics-api.linkerd-viz",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "tap",
+    "dst_namespace": "linkerd-viz",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "tap.linkerd-viz",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "tap-injector",
+    "dst_namespace": "linkerd-viz",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "tap-injector.linkerd-viz",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "web",
+    "dst_namespace": "linkerd-viz",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "web.linkerd-viz",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "linkerd-destination",
+    "dst_namespace": "linkerd",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "linkerd-destination.linkerd",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "linkerd-identity",
+    "dst_namespace": "linkerd",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "linkerd-identity.linkerd",
+    "no_tls_reason": ""
+  },
+  {
+    "src": "prometheus",
+    "src_namespace": "linkerd-viz",
+    "dst": "linkerd-proxy-injector",
+    "dst_namespace": "linkerd",
+    "client_id": "prometheus.linkerd-viz",
+    "server_id": "linkerd-proxy-injector.linkerd",
+    "no_tls_reason": ""
+  }
+]
