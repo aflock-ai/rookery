@@ -149,3 +149,86 @@ func Test_ensureNetwork(t *testing.T) {
 		t.Error("ensureNetwork should not reset existing NetworkActivity")
 	}
 }
+
+// Test_inheritFromParent_PopulatesNewChild verifies the perf-inherit-proc
+// path: at clone time, the child's ProcessInfo gets ParentPID populated
+// directly without any /proc/<pid>/status read. This is the optimization's
+// invariant — if this test fails, the win at execve time disappears too.
+func Test_inheritFromParent_PopulatesNewChild(t *testing.T) {
+	pctx := &ptraceContext{
+		processes: make(map[int]*ProcessInfo),
+	}
+	pctx.getProcInfo(100) // parent
+
+	pctx.inheritFromParent(100, 200)
+
+	child, ok := pctx.processes[200]
+	if !ok {
+		t.Fatal("child ProcessInfo was not created")
+	}
+	if child.ParentPID != 100 {
+		t.Errorf("ParentPID = %d, want 100", child.ParentPID)
+	}
+}
+
+// Test_inheritFromParent_PreservesExistingParentPID guards against
+// clobbering: if a child's ParentPID was already populated (prior clone
+// event, or a /proc read that raced ahead), a second clone event must
+// not overwrite it.
+func Test_inheritFromParent_PreservesExistingParentPID(t *testing.T) {
+	pctx := &ptraceContext{
+		processes: make(map[int]*ProcessInfo),
+	}
+	pctx.getProcInfo(100)
+	child := pctx.getProcInfo(200)
+	child.ParentPID = 50 // pre-seeded
+
+	pctx.inheritFromParent(100, 200)
+
+	if child.ParentPID != 50 {
+		t.Errorf("ParentPID was clobbered: got %d, want 50", child.ParentPID)
+	}
+}
+
+// Test_inheritFromParent_InheritsSpecBypassFromParent verifies that the
+// SpecBypassIsVuln flag propagates from parent to child at clone time,
+// matching kernel-level inheritance semantics across fork/clone.
+func Test_inheritFromParent_InheritsSpecBypassFromParent(t *testing.T) {
+	pctx := &ptraceContext{
+		processes: make(map[int]*ProcessInfo),
+	}
+	parent := pctx.getProcInfo(100)
+	parent.SpecBypassIsVuln = true
+
+	pctx.inheritFromParent(100, 200)
+
+	child := pctx.processes[200]
+	if !child.SpecBypassIsVuln {
+		t.Error("SpecBypassIsVuln did not inherit from parent")
+	}
+}
+
+// Test_inheritFromParent_NoParentInfo handles the edge case where the
+// parent's /proc/<pid>/status read failed earlier (parent gone before
+// we got to read it). The child must still get ParentPID populated
+// from the clone event itself — that PID is provided directly by the
+// kernel via PtraceGetEventMsg, not by reading /proc.
+func Test_inheritFromParent_NoParentInfo(t *testing.T) {
+	pctx := &ptraceContext{
+		processes: make(map[int]*ProcessInfo),
+	}
+	// Parent has never been seen — no entry in pctx.processes.
+
+	pctx.inheritFromParent(999, 200)
+
+	child, ok := pctx.processes[200]
+	if !ok {
+		t.Fatal("child ProcessInfo was not created")
+	}
+	if child.ParentPID != 999 {
+		t.Errorf("ParentPID = %d, want 999 (from clone event, not /proc read)", child.ParentPID)
+	}
+	if child.SpecBypassIsVuln {
+		t.Error("SpecBypassIsVuln should default to false when parent unknown")
+	}
+}

@@ -52,6 +52,14 @@ type ptraceContext struct {
 	// so we can extract TLS SNI from the first write on that fd.
 	// Key: "pid:fd", Value: index into the process's Connections slice.
 	tlsPendingFDs map[string]int
+
+	// statusReadsTotal counts how many times the SYS_EXECVE handler
+	// considered reading /proc/<pid>/status. statusReadsSkipped counts
+	// how many of those were skipped thanks to clone-time inheritance
+	// of ParentPID. Exposed for the perf-inherit-proc benchmark — these
+	// counters are not on the JSON wire format.
+	statusReadsTotal   int
+	statusReadsSkipped int
 }
 
 func enableTracing(c *exec.Cmd) {
@@ -61,6 +69,17 @@ func enableTracing(c *exec.Cmd) {
 }
 
 func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([]ProcessInfo, error) {
+	pctx, err := r.traceWithContext(c, actx)
+	if err != nil {
+		return pctx.procInfoArray(), err
+	}
+	return pctx.procInfoArray(), nil
+}
+
+// traceWithContext runs the trace and returns the populated
+// ptraceContext alongside any error. Exposed (package-private) for
+// tests that need to inspect internal counters like statusReadsSkipped.
+func (r *CommandRun) traceWithContext(c *exec.Cmd, actx *attestation.AttestationContext) (*ptraceContext, error) {
 	pctx := &ptraceContext{
 		parentPid:           c.Process.Pid,
 		mainProgram:         c.Path,
@@ -71,19 +90,19 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 	}
 
 	if err := pctx.runTrace(); err != nil {
-		return nil, err
+		return pctx, err
 	}
 
 	r.ExitCode = pctx.exitCode
 
 	if pctx.exitCode != 0 {
-		return pctx.procInfoArray(), fmt.Errorf("exit status %v", pctx.exitCode)
+		return pctx, fmt.Errorf("exit status %v", pctx.exitCode)
 	}
 
-	return pctx.procInfoArray(), nil
+	return pctx, nil
 }
 
-func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loop has many distinct event branches that read clearer inline
+func (p *ptraceContext) runTrace() error { //nolint:gocognit,gocyclo // ptrace event loop has many distinct event branches that read clearer inline
 	defer p.retryOpenedFiles()
 
 	runtime.LockOSThread()
@@ -147,9 +166,90 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 			}
 		}
 
+		// PTRACE_EVENT_FORK / VFORK / CLONE: the parent stops just
+		// after the kernel created the child. PtraceGetEventMsg(parent)
+		// returns the new child PID. We pre-populate the child's
+		// ParentPID directly so the child's SYS_EXECVE handler can skip
+		// reading /proc/<child>/status — a meaningful win for builds
+		// that spawn many short-lived tools (gcc/ld/sh fork+exec chains).
+		// See perf-inherit-proc PR notes.
+		if status.Stopped() && sig == unix.SIGTRAP {
+			switch status.TrapCause() {
+			case unix.PTRACE_EVENT_FORK, unix.PTRACE_EVENT_VFORK, unix.PTRACE_EVENT_CLONE:
+				p.handleCloneEvent(pid)
+				injectedSig = 0
+			}
+		}
+
 		if err := unix.PtraceSyscall(pid, injectedSig); err != nil {
 			log.Debugf("(tracing) got error from ptrace syscall: %v", err)
 		}
+	}
+}
+
+// handleCloneEvent fires when the kernel reports PTRACE_EVENT_FORK,
+// PTRACE_EVENT_VFORK, or PTRACE_EVENT_CLONE on the parent. We use the
+// event message (the child PID) to pre-populate the child's
+// ProcessInfo with state inherited from the parent.
+//
+// On builds that fork+exec many short-lived tools this avoids one open
+// + readall per child — a ~3KB read each. Benchmarks in the PR body.
+func (p *ptraceContext) handleCloneEvent(parentPid int) {
+	childPid, err := unix.PtraceGetEventMsg(parentPid)
+	if err != nil {
+		log.Debugf("(tracing) PtraceGetEventMsg on clone-event for pid %d: %v", parentPid, err)
+		return
+	}
+	if childPid == 0 {
+		return
+	}
+	// Kernel returns the child PID as an unsigned value via the event
+	// message. Linux PIDs are constrained to int32-positive (pid_max
+	// caps well below INT_MAX), so the cast is bounded — silence the
+	// gosec G115 false positive.
+	p.inheritFromParent(parentPid, int(childPid)) //nolint:gosec // G115: kernel PID fits in int by construction
+}
+
+// inheritFromParent copies inheritable /proc state from a parent's
+// ProcessInfo into the child's ProcessInfo. Split out from
+// handleCloneEvent so unit tests can exercise the inheritance rules
+// without needing a live ptrace target.
+//
+// Inherited fields:
+//   - ParentPID: by definition equal to the cloning parent's PID
+//   - SpecBypassIsVuln: the speculation-store-bypass flag is set by
+//     prctl(PR_SET_SPECULATION_CTRL) and is preserved across fork/clone.
+//     The vast majority of children never call that prctl, so this is
+//     the same value /proc/<child>/status would have reported.
+func (p *ptraceContext) inheritFromParent(parentPid, childPid int) {
+	childInfo := p.getProcInfo(childPid)
+	if childInfo.ParentPID == 0 {
+		childInfo.ParentPID = parentPid
+	}
+	if parentInfo, ok := p.processes[parentPid]; ok && parentInfo.SpecBypassIsVuln {
+		childInfo.SpecBypassIsVuln = true
+	}
+}
+
+// maybeReadStatus reads /proc/<pid>/status iff the optimization path
+// (clone-time inheritance) hasn't already populated ParentPID. When
+// ParentPID is already known we skip the open + ~3KB read entirely —
+// that's the perf-inherit-proc win.
+func (p *ptraceContext) maybeReadStatus(procInfo *ProcessInfo) {
+	p.statusReadsTotal++
+	if procInfo.ParentPID != 0 {
+		p.statusReadsSkipped++
+		return
+	}
+	status := fmt.Sprintf("/proc/%d/status", procInfo.ProcessID)
+	statusFile, err := os.ReadFile(status) //nolint:gosec // G304: reading /proc/<pid>/status
+	if err != nil {
+		return
+	}
+	procInfo.SpecBypassIsVuln = getSpecBypassIsVulnFromStatus(statusFile)
+	ppid, err := getPPIDFromStatus(statusFile)
+	if err == nil {
+		procInfo.ParentPID = ppid
 	}
 }
 
@@ -210,17 +310,8 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		commLocation := fmt.Sprintf("/proc/%d/comm", procInfo.ProcessID)
 		envinLocation := fmt.Sprintf("/proc/%d/environ", procInfo.ProcessID)
 		cmdlineLocation := fmt.Sprintf("/proc/%d/cmdline", procInfo.ProcessID)
-		status := fmt.Sprintf("/proc/%d/status", procInfo.ProcessID)
 
-		// read status file and set attributes on success
-		statusFile, err := os.ReadFile(status) //nolint:gosec
-		if err == nil {
-			procInfo.SpecBypassIsVuln = getSpecBypassIsVulnFromStatus(statusFile)
-			ppid, err := getPPIDFromStatus(statusFile)
-			if err == nil {
-				procInfo.ParentPID = ppid
-			}
-		}
+		p.maybeReadStatus(procInfo)
 
 		comm, err := os.ReadFile(commLocation) //nolint:gosec
 		if err == nil {
