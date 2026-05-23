@@ -83,6 +83,10 @@ replace github.com/aflock-ai/rookery/plugins/attestors/vex => ../plugins/attesto
 replace github.com/aflock-ai/rookery/plugins/attestors/pip-install => ../plugins/attestors/pip-install
 
 // Signer plugins
+// debug-signer is intentionally NOT in the canonical cilock binary (see
+// cmd/cilock/main.go). It remains in go.mod because cilock/cli's adversarial
+// test suite blank-imports it to exercise --signer-debug-* flag handling
+// at test time. Release builds (GOWORK=off) do not include it.
 replace github.com/aflock-ai/rookery/plugins/signers/debug-signer => ../plugins/signers/debug-signer
 
 replace github.com/aflock-ai/rookery/plugins/signers/file => ../plugins/signers/file
