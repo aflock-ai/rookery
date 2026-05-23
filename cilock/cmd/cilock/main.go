@@ -26,6 +26,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/k8smanifest"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/link"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/linkerd-check"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/lockfiles"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/material"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/maven"

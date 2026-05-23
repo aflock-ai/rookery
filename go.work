@@ -38,6 +38,7 @@ use (
 	./plugins/attestors/k8smanifest
 	./plugins/attestors/kube-bench
 	./plugins/attestors/link
+	./plugins/attestors/linkerd-check
 	./plugins/attestors/lockfiles
 	./plugins/attestors/material
 	./plugins/attestors/maven
