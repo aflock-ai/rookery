@@ -65,11 +65,13 @@
       "functionaries": [
         {
           "type": "root",
+          "_comment": "Fulcio leaf certs have empty Subject CN — identity is in SAN URI + Fulcio v1.x cert extensions. We constrain on the issuer OID (1.3.6.1.4.1.57264.1.8) for the GitHub Actions OIDC provider, and on BuildSignerURI (OID .1.9) to bind the signer to this repo's release.yml workflow at any v* tag. Glob wildcards are honored by witness checkExtensions. Extension JSON keys are PascalCase because sigstore/fulcio's Extensions struct uses Go field names as JSON tags.",
           "certConstraint": {
-            "commonName": "https://fulcio.sigstore.dev",
+            "roots": ["sigstore-fulcio"],
             "extensions": {
-              "buildConfigURI": "https://github.com/aflock-ai/rookery/.github/workflows/release.yml",
-              "issuer": "https://token.actions.githubusercontent.com"
+              "Issuer": "https://token.actions.githubusercontent.com",
+              "BuildSignerURI": "https://github.com/aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v*",
+              "SourceRepositoryURI": "https://github.com/aflock-ai/rookery"
             }
           }
         }
