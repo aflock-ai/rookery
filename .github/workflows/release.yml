@@ -52,6 +52,12 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      - name: Install syft
+        # syft generates the SPDX SBOM that the cilock-action sbom attestor
+        # parses into the in-envelope sbom/v0.1 predicate. Must be installed
+        # BEFORE cilock-action runs so the wrapped command can invoke it.
+        uses: anchore/sbom-action/download-syft@v0
+
       # Dogfood: every release-build step is wrapped by cilock-action.
       # Records signed attestations (environment/git/github/commandrun/product/sbom)
       # for the go build, signs them keyless via public Sigstore Fulcio with the
@@ -72,20 +78,16 @@ jobs:
         with:
           step: release-build-${{ matrix.goos }}-${{ matrix.goarch }}
           # Note: registered attestor name is `command-run` (hyphen),
-          # not `commandrun`.
+          # not `commandrun`. --trace is OFF until rookery#152 / PR
+          # #153 lands (the product attestor's trace filter drops
+          # atomic-rename outputs like `go build`'s binary).
           #
-          # --trace is OFF until rookery#152 / PR #153 lands. When
-          # tracing is on, the product attestor only captures files the
-          # traced process opened via open()-family syscalls
-          # (attestation/file/file.go:237). `go build` writes its output
-          # via atomic rename (.tmp then rename), so the final binary
-          # path is never open()'d and the trace filter drops it.
-          #
-          # `sbom` attestor is OFF here because it parses a pre-existing
-          # SBOM file in the product set; it doesn't generate one. syft
-          # runs as a separate step in the release job and the SBOM
-          # ships as its own release artifact.
-          attestations: "environment git github product"
+          # `sbom` is ON: the wrapped command (below) invokes syft to
+          # write an SPDX file into the workingdir; cilock-action's
+          # product attestor captures it, then the sbom attestor parses
+          # it into an sbom/v0.1 predicate that lives in the same
+          # signed envelope as the rest of the build evidence.
+          attestations: "environment git github product sbom"
           outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
           enable-sigstore: "true"
           enable-archivista: "false"
@@ -119,6 +121,13 @@ jobs:
                 -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
                 -o "../${BINARY}" \
                 ./cmd/cilock/
+            cd ..
+            # Generate an SBOM from the built Go binary — captures the
+            # actual modules linked into the artifact (the wire-truth),
+            # not just whatever's in the source tree. Lands at workingdir
+            # root so cilock-action's product attestor + sbom attestor
+            # pick it up into the signed envelope.
+            syft "${BINARY}" -o spdx-json="${BINARY}.sbom.spdx.json"
 
       - name: Create archive
         run: |
