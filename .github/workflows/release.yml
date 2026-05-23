@@ -337,12 +337,14 @@ jobs:
           #   - slsa: SLSA v1.0 provenance predicate
           #   - inclusion-proof: Rekor transparency-log inclusion proof
           attestations: "environment git github product sbom secretscan govulncheck slsa inclusion-proof command-run"
-          # trace: false on the witness leg. The witness build exists ONLY
-          # to validate reproducibility (its product subject digest must
-          # match the primary's) — its envelopes are not consumed by the
-          # policy chain verifier. Skipping trace saves ~5 minutes per
-          # platform and dodges the intermittent ptrace-setup hang we've
-          # seen in rc40/rc43 on shared runners.
+          # Enable ptrace-based syscall capture so the command-run
+          # predicate carries `processes[].networking.connections[]`.
+          # The hermetic Rego in deploy/cilock/release.policy.json gates
+          # on this: any TCP/TLS connection to a host outside the small
+          # allowlist (vuln.go.dev + storage.googleapis.com) fails the
+          # release. Requires PR rookery#153 (atomic-rename trace capture
+          # fix, in cilock-action v1.0.3+).
+          trace: "true"
           # Witness outfile is namespaced so it can't collide with the
           # primary build's attestation in the same dist/ directory after
           # download-artifact merge.
