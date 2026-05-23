@@ -1,6 +1,9 @@
 package:
   name: cilock
-  version: "${CILOCK_VERSION}"
+  # APK-format version (underscore-prefixed prereleases). melange v0.31+
+  # rejects hyphenated suffixes like 1.1.0-rc41. CI substitutes via envsubst
+  # before invoking `melange build`.
+  version: "${CILOCK_APK_VERSION}"
   epoch: 0
   description: "Witness-compatible CI attestation CLI with all attestors and signers"
   copyright:
@@ -25,13 +28,17 @@ pipeline:
   - uses: git-checkout
     with:
       repository: https://github.com/aflock-ai/rookery
-      tag: v${{package.version}}
+      # Git tag form (semver with hyphen, e.g. v1.1.0-rc41). DIFFERENT from
+      # package.version above because git tags use hyphens for prereleases
+      # and we want the tag to match what users see on the rookery Releases
+      # page. envsubst handles the substitution before melange parses.
+      tag: v${CILOCK_GIT_TAG}
 
   - runs: |
       cd cilock
       GOWORK=off go build \
         -trimpath \
-        -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=v${{package.version}}'" \
+        -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=v${CILOCK_GIT_TAG}'" \
         -o "${{targets.destdir}}/usr/bin/cilock" \
         ./cmd/cilock/
 
