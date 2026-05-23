@@ -169,13 +169,18 @@ jobs:
       - name: Build melange package
         working-directory: deploy/cilock
         run: |
-          sudo melange build melange.yaml \
+          # Recent melange dropped the --substitution flag (was deprecated in
+          # favor of --vars-file). For a single substitution like the package
+          # version, the simplest fix is to envsubst the YAML before invoking
+          # melange so the resulting file is fully resolved.
+          export CILOCK_VERSION="${{ steps.version.outputs.version }}"
+          envsubst < melange.yaml > melange-resolved.yaml
+          sudo melange build melange-resolved.yaml \
             --arch x86_64,aarch64 \
             --signing-key melange.rsa \
             --out-dir ./packages \
             --env-file "" \
-            --source-dir ../../ \
-            --substitution "CILOCK_VERSION=${{ steps.version.outputs.version }}"
+            --source-dir ../../
 
       - name: Build apko image
         working-directory: deploy/cilock
