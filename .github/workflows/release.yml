@@ -72,8 +72,13 @@ jobs:
         with:
           step: release-build-${{ matrix.goos }}-${{ matrix.goarch }}
           # Note: registered attestor name is `command-run` (hyphen), not
-          # `commandrun`. cilock-action's `trace` input handles command
-          # capture; `product` + `sbom` cover the artifact + SBOM evidence.
+          # `commandrun`. cilock-action's `trace` input enables ptrace-based
+          # syscall capture (Linux only): every connect/sendto/bind syscall
+          # plus DNS lookups + TLS SNI lands in the command-run/v0.1
+          # predicate as `processes[].network`. The hermeticity Rego in
+          # release.policy.json gates on the captured destinations to
+          # prove no unexpected network egress during the build.
+          trace: "true"
           attestations: "environment git github product sbom"
           outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
           enable-sigstore: "true"
@@ -94,7 +99,7 @@ jobs:
             CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
               go build \
                 -trimpath \
-                -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/internal/cmd.Version=${{ steps.version.outputs.version }}'" \
+                -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
                 -o "../dist/${BINARY}" \
                 ./cmd/cilock/
 
@@ -243,25 +248,17 @@ jobs:
           sha256sum cilock-* > checksums-sha256.txt
           cat checksums-sha256.txt
 
-      - name: Sign all artifacts with cosign
-        working-directory: dist
-        run: |
-          for artifact in cilock-*.tar.gz cilock-*.zip checksums-sha256.txt; do
-            [ -f "$artifact" ] || continue
-            cosign sign-blob --yes \
-              --output-signature "${artifact}.sig" \
-              --output-certificate "${artifact}.pem" \
-              "$artifact"
-          done
-
       - name: Generate SBOM
         run: |
           syft dir:. --output spdx-json=dist/cilock-${{ steps.version.outputs.version }}-sbom.spdx.json
 
-      # Verify each platform binary against the published release policy and
-      # produce a Verification Summary Attestation (VSA) per artifact. VSAs
-      # ship with the release so downstream consumers can rely on TestifySec's
-      # verification result without re-running the full policy check.
+      # ── Policy gate ────────────────────────────────────────────────────
+      # Verify each platform binary against the release policy BEFORE any
+      # cosign signature is produced. Cosign signatures are the public-
+      # facing trust anchor users actually check; they should be a
+      # *consequence* of policy success, not parallel to it. If policy
+      # fails for any platform, the whole job exits and no signed
+      # artifacts are published.
       - name: Download bootstrap cilock for VSA generation
         run: |
           # Use the just-built linux-amd64 binary as the bootstrap cilock for
@@ -271,7 +268,7 @@ jobs:
           chmod +x /tmp/cilock
           /tmp/cilock --version
 
-      - name: Generate VSA for each platform
+      - name: Verify policy + generate VSA for each platform
         working-directory: dist
         run: |
           for archive in cilock-*-linux-amd64.tar.gz cilock-*-linux-arm64.tar.gz \
@@ -282,7 +279,23 @@ jobs:
               --policy ../deploy/cilock/release.policy.json \
               --artifactfile "$archive" \
               --vsa-out "${stem}.vsa.json" \
-              || { echo "VSA generation failed for $archive"; exit 1; }
+              || { echo "POLICY FAILED for $archive — aborting release before cosign signature"; exit 1; }
+          done
+          echo "✔ All platforms passed release policy. Proceeding to cosign signature."
+
+      # ── Cosign signing (gated on policy pass above) ─────────────────────
+      # Only runs after every platform's VSA generation succeeded. Public
+      # users that subsequently `cosign verify-blob` against these archives
+      # are transitively trusting the policy result, not just bytes-on-disk.
+      - name: Sign all artifacts with cosign (policy-gated)
+        working-directory: dist
+        run: |
+          for artifact in cilock-*.tar.gz cilock-*.zip checksums-sha256.txt; do
+            [ -f "$artifact" ] || continue
+            cosign sign-blob --yes \
+              --output-signature "${artifact}.sig" \
+              --output-certificate "${artifact}.pem" \
+              "$artifact"
           done
 
       - name: Publish install script + signed release policy

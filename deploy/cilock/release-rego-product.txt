@@ -1,0 +1,16 @@
+package release_build_product
+
+# The release build must produce a cilock binary (or cilock.exe on Windows).
+# Catches the class of bug where the build step succeeded but the binary was
+# never written to dist/ — without this, the release would ship a placeholder.
+
+cilock_products := [name |
+  some name, _ in input.products
+  base := split(name, "/")[count(split(name, "/")) - 1]
+  base == "cilock" or base == "cilock.exe"
+]
+
+deny[msg] {
+  count(cilock_products) == 0
+  msg := "release build produced no cilock binary in products"
+}

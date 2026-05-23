@@ -1,0 +1,36 @@
+package release_build_hermetic
+
+# Hermeticity: the release build is only allowed to talk to a small set of
+# expected hosts. Anything outside this set is suspicious — could be a
+# malicious dependency proxy, an exfil channel, or a tool with unexpected
+# telemetry calling home.
+#
+# Captured by the `--trace` flag on cilock-action: every connect / sendto /
+# bind syscall lands in input.processes[].network.connections[], with the
+# TLS SNI hostname extracted from the ClientHello. We gate on hostname
+# rather than IP because IPs change but SNI is stable.
+
+allowed_hosts := {
+  "proxy.golang.org",
+  "sum.golang.org",
+  "github.com",
+  "objects.githubusercontent.com",
+  "raw.githubusercontent.com",
+  "api.github.com",
+  "fulcio.sigstore.dev",
+  "rekor.sigstore.dev",
+  "timestamp.sigstore.dev",
+  "tuf-repo-cdn.sigstore.dev",
+}
+
+# Deny on any connection whose SNI hostname isn't on the allowlist.
+# Skip connections with empty hostname (UDP, pre-TLS, AF_UNIX) — they
+# don't represent network egress beyond the local subnet by themselves.
+deny[msg] {
+  some proc in input.processes
+  some conn in proc.network.connections
+  conn.hostname != ""
+  not allowed_hosts[conn.hostname]
+  msg := sprintf("build connected to non-allowlisted host: %s (port %d, syscall %s) — hermetic build policy fails",
+                 [conn.hostname, conn.port, conn.syscall])
+}
