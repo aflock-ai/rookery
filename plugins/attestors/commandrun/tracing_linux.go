@@ -52,6 +52,12 @@ type ptraceContext struct {
 	// so we can extract TLS SNI from the first write on that fd.
 	// Key: "pid:fd", Value: index into the process's Connections slice.
 	tlsPendingFDs map[string]int
+
+	// multi is non-nil when the multi-tracer-thread event loop is active
+	// (#167). When set, it owns synchronization for the shared maps. In
+	// serial mode (multi == nil), the maps are accessed from a single
+	// goroutine so no locking is required.
+	multi *multiTracerState
 }
 
 func enableTracing(c *exec.Cmd) {
@@ -84,6 +90,15 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 }
 
 func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loop has many distinct event branches that read clearer inline
+	// Multi-tracer opt-in: runTraceMulti owns its own retryOpenedFiles
+	// + LockOSThread lifecycle, so we dispatch BEFORE any of that setup.
+	if multiTracerEnabled() {
+		p.multi = &multiTracerState{
+			sharder: newPIDSharder(multiTracerWorkerCount()),
+		}
+		return p.runTraceMulti()
+	}
+
 	defer p.retryOpenedFiles()
 
 	runtime.LockOSThread()
@@ -939,13 +954,37 @@ func socketTypeName(sockType int) string {
 }
 
 func (ctx *ptraceContext) getProcInfo(pid int) *ProcessInfo {
+	// In multi-tracer mode, the map is accessed from multiple goroutines
+	// and must be guarded. In serial mode the lock is uncontended and
+	// essentially free (≤ a few ns per call).
+	if ctx.multi != nil {
+		ctx.multi.processesMu.RLock()
+		if pi, ok := ctx.processes[pid]; ok {
+			ctx.multi.processesMu.RUnlock()
+			return pi
+		}
+		ctx.multi.processesMu.RUnlock()
+
+		ctx.multi.processesMu.Lock()
+		defer ctx.multi.processesMu.Unlock()
+		if pi, ok := ctx.processes[pid]; ok {
+			return pi
+		}
+		pi := &ProcessInfo{
+			ProcessID:   pid,
+			OpenedFiles: make(map[string]cryptoutil.DigestSet),
+		}
+		ctx.processes[pid] = pi
+		return pi
+	}
+
+	// Serial path (default): no locking needed.
 	procInfo, ok := ctx.processes[pid]
 	if !ok {
 		procInfo = &ProcessInfo{
 			ProcessID:   pid,
 			OpenedFiles: make(map[string]cryptoutil.DigestSet),
 		}
-
 		ctx.processes[pid] = procInfo
 	}
 
