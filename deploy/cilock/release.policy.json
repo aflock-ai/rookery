@@ -67,6 +67,11 @@
           "_comment": "SBOM presence is required. syft runs inside the wrapped build command (see release.yml) and writes the SPDX file into the workingdir; cilock-action's product attestor captures it, then the sbom attestor parses it into this predicate."
         },
         {
+          "type": "https://slsa.dev/provenance/v1.0",
+          "regopolicies": [],
+          "_comment": "SLSA v1.0 provenance presence is required. The cilock-action slsa attestor emits this predicate alongside the in-toto collection so downstream SLSA-verifiers (slsa-verifier, GitHub Attestation viewer) can consume our releases without parsing the aflock-ai-specific shape. No Rego gating \u2014 presence requirement alone means a release without a SLSA predicate fails to find a matching collection."
+        },
+        {
           "type": "https://aflock.ai/attestations/secretscan/v0.1",
           "regopolicies": [
             {
