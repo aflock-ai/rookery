@@ -82,7 +82,10 @@ jobs:
         # aflock-ai/supply-chain-attacks#1. Pin to a specific tag instead.
         uses: aflock-ai/cilock-action@v1.0.1
         with:
-          step: release-build-${{ matrix.goos }}-${{ matrix.goarch }}
+          # Step name must match the policy step name (release-build) for
+          # all platforms — verify is called once per (platform, attestation)
+          # pair, so a single step entry in the policy covers all of them.
+          step: release-build
           # Note: registered attestor name is `command-run` (hyphen),
           # not `commandrun`. --trace is OFF until rookery#152 / PR
           # #153 lands (the product attestor's trace filter drops
