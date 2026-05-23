@@ -58,14 +58,6 @@ jobs:
         # BEFORE cilock-action runs so the wrapped command can invoke it.
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
-      - name: Install govulncheck
-        # Source-mode govulncheck scans the linked module graph from
-        # go.sum and flags CVEs whose vulnerable SYMBOLS are reachable
-        # from the main module — low FP rate. The govulncheck attestor
-        # reads its JSON output from the workingdir products. Pin to a
-        # specific version so a compromise of golang.org/x/vuln cannot
-        # bypass the gate by changing the scanner behavior.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
       - name: Prepare dist/
         # cilock-action's `outfile: dist/...` is resolved literally before
@@ -111,7 +103,11 @@ jobs:
           # product attestor captures it, then the sbom attestor parses
           # it into an sbom/v0.1 predicate that lives in the same
           # signed envelope as the rest of the build evidence.
-          attestations: "environment git github product sbom secretscan govulncheck"
+          # govulncheck deferred: cilock-action v1.0.1's bundled cilock binary
+          # predates the govulncheck attestor (added to rookery after v1.0.1
+          # cut). Re-enable once cilock-action ships a build that includes
+          # both PR #153 (traced rename capture) and the govulncheck attestor.
+          attestations: "environment git github product sbom secretscan"
           outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
           enable-sigstore: "true"
           enable-archivista: "false"
@@ -165,7 +161,6 @@ jobs:
             # parses. We deliberately don't `|| true` — if govulncheck
             # exits non-zero on findings, we surface that early; the
             # Rego layer in the policy is the authoritative gate.
-            (cd cilock && GOWORK=off govulncheck -json ./...) > "${BINARY}.govulncheck.json" || true
 
       - name: Create archive
         run: |
@@ -238,8 +233,6 @@ jobs:
       - name: Install syft
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
       - name: Prepare dist/
         run: mkdir -p dist
@@ -250,7 +243,11 @@ jobs:
         uses: aflock-ai/cilock-action@v1.0.1
         with:
           step: release-build
-          attestations: "environment git github product sbom secretscan govulncheck"
+          # govulncheck deferred: cilock-action v1.0.1's bundled cilock binary
+          # predates the govulncheck attestor (added to rookery after v1.0.1
+          # cut). Re-enable once cilock-action ships a build that includes
+          # both PR #153 (traced rename capture) and the govulncheck attestor.
+          attestations: "environment git github product sbom secretscan"
           # Witness outfile is namespaced so it can't collide with the
           # primary build's attestation in the same dist/ directory after
           # download-artifact merge.
@@ -274,7 +271,6 @@ jobs:
                 ./cmd/cilock/
             cd ..
             syft "${BINARY}" -o spdx-json="${BINARY}.sbom.spdx.json"
-            (cd cilock && GOWORK=off govulncheck -json ./...) > "${BINARY}.govulncheck.json" || true
 
       - name: Upload witness attestation
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
