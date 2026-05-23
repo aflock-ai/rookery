@@ -107,7 +107,9 @@ jobs:
           # predates the govulncheck attestor (added to rookery after v1.0.1
           # cut). Re-enable once cilock-action ships a build that includes
           # both PR #153 (traced rename capture) and the govulncheck attestor.
-          attestations: "environment git github product sbom secretscan"
+          # SLSA + inclusion-proof are additional postproduct attestors that
+          # emit SLSA v1.0 provenance + Rekor entries in the same envelope.
+          attestations: "environment git github product sbom secretscan slsa inclusion-proof"
           outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
           enable-sigstore: "true"
           enable-archivista: "false"
@@ -247,7 +249,9 @@ jobs:
           # predates the govulncheck attestor (added to rookery after v1.0.1
           # cut). Re-enable once cilock-action ships a build that includes
           # both PR #153 (traced rename capture) and the govulncheck attestor.
-          attestations: "environment git github product sbom secretscan"
+          # SLSA + inclusion-proof are additional postproduct attestors that
+          # emit SLSA v1.0 provenance + Rekor entries in the same envelope.
+          attestations: "environment git github product sbom secretscan slsa inclusion-proof"
           # Witness outfile is namespaced so it can't collide with the
           # primary build's attestation in the same dist/ directory after
           # download-artifact merge.
