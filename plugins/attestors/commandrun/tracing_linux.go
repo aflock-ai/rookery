@@ -821,10 +821,13 @@ func (p *ptraceContext) ensureNetwork(procInfo *ProcessInfo) {
 	}
 }
 
-// ensureFileOps initializes the FileActivity struct if nil.
+// ensureFileOps initializes the FileActivity struct if nil. The struct is
+// pre-grown via newFileActivity so the highest-frequency append target
+// (Writes) doesn't pay the per-grow cost on a write-heavy build. See
+// tracing_pool_linux.go for the slab-capacity rationale.
 func (p *ptraceContext) ensureFileOps(procInfo *ProcessInfo) {
 	if procInfo.FileOps == nil {
-		procInfo.FileOps = &FileActivity{}
+		procInfo.FileOps = newFileActivity()
 	}
 }
 
@@ -846,7 +849,10 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 		return nil, fmt.Errorf("sockaddr size %d out of range", size)
 	}
 
-	data := make([]byte, size)
+	// sockaddrs are at most 128 bytes — well under MAX_PATH_LEN — so the
+	// pooled MAX_PATH_LEN buffer is sized comfortably for this caller.
+	data := acquireReadBuf(size)
+	defer releaseReadBuf(data)
 	localIov := unix.Iovec{
 		Base: &data[0],
 		Len:  getNativeUint(size),
@@ -890,17 +896,23 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 		conn.Port = int(port)
 
 	case unix.AF_UNIX:
-		// Path starts at offset 2, null-terminated
-		pathEnd := bytes.IndexByte(data[2:], 0)
+		// Path starts at offset 2, null-terminated.
+		// IMPORTANT: data is pooled — bound the IndexByte search to the
+		// kernel-written `size` bytes, not len(data) which is the full
+		// pooled capacity.
+		pathEnd := bytes.IndexByte(data[2:size], 0)
 		if pathEnd < 0 {
-			pathEnd = len(data) - 2
+			pathEnd = size - 2
 		}
 		conn.Family = "AF_UNIX"
+		// string(...) copies the bytes — safe after releaseReadBuf.
 		conn.Address = string(data[2 : 2+pathEnd])
 
 	default:
 		conn.Family = fmt.Sprintf("AF_%d", family)
-		conn.Address = fmt.Sprintf("raw:%x", data)
+		// Bound the %x format to the kernel-written prefix; otherwise we'd
+		// dump stale pool bytes into the attestation.
+		conn.Address = fmt.Sprintf("raw:%x", data[:size])
 	}
 
 	return conn, nil
@@ -962,7 +974,15 @@ func (ctx *ptraceContext) procInfoArray() []ProcessInfo {
 }
 
 func (ctx *ptraceContext) readSyscallReg(pid int, addr uintptr, n int) (string, error) {
-	data := make([]byte, n)
+	// Scratch buffer for the tracee memory read. Pulled from the
+	// sync.Pool in tracing_pool_linux.go: this is the highest-frequency
+	// allocation in the trace event loop (every path-bearing syscall
+	// hits this function). The buffer is released BEFORE the function
+	// returns — sanitizePath copies the bytes into a new string, so the
+	// pooled buffer is not referenced after release.
+	data := acquireReadBuf(n)
+	defer releaseReadBuf(data)
+
 	localIov := unix.Iovec{
 		Base: &data[0],
 		Len:  getNativeUint(n),
@@ -985,16 +1005,20 @@ func (ctx *ptraceContext) readSyscallReg(pid int, addr uintptr, n int) (string, 
 	}
 
 	// don't want to use cgo... look for the first 0 byte for the end of the c string
-	size := bytes.IndexByte(data, 0)
+	// IMPORTANT: the buffer is pooled and may contain stale bytes from a
+	// previous user past `numBytes`. Bound the IndexByte search to the
+	// region the kernel actually wrote.
+	size := bytes.IndexByte(data[:numBytes], 0)
 	if size < 0 {
-		// No null terminator found; use the full buffer.
+		// No null terminator found; use the kernel-written prefix.
 		size = numBytes
 	}
 	// sanitizePath ensures the returned string round-trips losslessly
 	// through JSON even when the kernel handed us non-UTF-8 path bytes.
 	// Valid-UTF-8 paths (the 99.99% case) are returned unchanged, so the
 	// wire format is unchanged for normal builds. See path_encoding.go
-	// and issue #164.
+	// and issue #164. sanitizePath copies its input — safe to release
+	// the pooled buffer on return.
 	return sanitizePath(data[:size]), nil
 }
 
@@ -1068,7 +1092,11 @@ func (p *ptraceContext) extractTLSSNI(pid int, bufPtr uintptr, bufLen int) strin
 		return "" // too short for a ClientHello
 	}
 
-	data := make([]byte, readLen)
+	// TLS ClientHello fits comfortably in MAX_PATH_LEN; pool reuse here
+	// is high-value because TLS handshakes happen on every HTTPS connect
+	// in a build (apt-get, pip install, go module download, etc.).
+	data := acquireReadBuf(readLen)
+	defer releaseReadBuf(data)
 	localIov := unix.Iovec{Base: &data[0], Len: getNativeUint(readLen)}
 	remoteIov := unix.RemoteIovec{Base: bufPtr, Len: readLen}
 
