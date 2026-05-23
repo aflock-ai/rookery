@@ -1,0 +1,16 @@
+package release_vendor_command
+
+# The vendor step must literally run `go mod vendor`. We assert this on
+# the command-run predicate so a tampered workflow that invokes some
+# other command (e.g. `cp /tmp/poison-vendor cilock/vendor`) is caught
+# even when the resulting product set looks superficially right.
+#
+# We don't gate on -mod=vendor here — that's enforced separately on the
+# release-build step's command-run predicate (release-build-hygiene).
+
+cmd := concat(" ", input.cmd)
+
+deny[msg] {
+  not contains(cmd, "go mod vendor")
+  msg := sprintf("vendor step must invoke `go mod vendor`, got: %s", [cmd])
+}

@@ -75,28 +75,42 @@ jobs:
         # scanner behavior.
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
-      - name: Vendor cilock deps (pre-build, OUTSIDE the traced step)
-        # Hermetic-build prep. `go mod vendor` walks the dep graph from
-        # cilock/go.mod, fetches every module from proxy.golang.org,
-        # verifies hashes against go.sum + GOSUMDB, and writes the bytes
-        # to cilock/vendor/. This is the trust-on-first-use boundary:
-        # every byte the compiler later reads is now local.
-        #
-        # We deliberately do NOT commit vendor/ to git (79MB diff per
-        # release). Instead we vendor at CI time and let the hermetic
-        # Rego gate the TRACED build phase below — by then `go build
-        # -mod=vendor` reads only local files and makes no network
-        # calls. The vendor step happens BEFORE cilock-action wraps
-        # anything, so its proxy.golang.org calls are not in the
-        # traced syscall set.
-        working-directory: cilock
-        run: GOWORK=off go mod vendor
-
       - name: Prepare dist/
         # cilock-action's `outfile: dist/...` is resolved literally before
         # the wrapped command runs, so the directory has to exist when
         # cilock-action tries to write the attestation envelope.
         run: mkdir -p dist
+
+      # ── Vendor step: separately attested supply-chain link ──────────
+      # Wraps `go mod vendor` in its own cilock-action invocation so the
+      # vendored dep set gets its own signed envelope. This is the
+      # source→artifact chain root: the vendor envelope's products are
+      # checked against the build envelope's materials in the policy
+      # (via release-build.artifactsFrom = ["vendor-cilock-deps"]). If
+      # something tampers with cilock/vendor/* between this step and the
+      # build step, the digests diverge and the policy denies.
+      #
+      # Trace is OFF here intentionally — vendor needs to talk to
+      # proxy.golang.org (that's the whole point), so this is the
+      # trust-on-first-use boundary. go.sum + GOSUMDB still bound what
+      # bytes are accepted. Build step's `go build -mod=vendor` reads
+      # only what this step produced.
+      - name: Attest vendor with cilock-action
+        uses: aflock-ai/cilock-action@v1.0.3
+        with:
+          step: vendor-cilock-deps
+          attestations: "environment git github product command-run"
+          outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.vendor.attestation.json
+          enable-sigstore: "true"
+          enable-archivista: "false"
+          fulcio-url: "https://fulcio.sigstore.dev"
+          fulcio-oidc-client-id: "sigstore"
+          fulcio-oidc-issuer: "https://token.actions.githubusercontent.com"
+          timestamp-servers: "https://timestamp.sigstore.dev/api/v1/timestamp"
+          hashes: "sha256"
+          workingdir: cilock
+          command: |
+            GOWORK=off go mod vendor
 
       # Dogfood: every release-build step is wrapped by cilock-action.
       # Records signed attestations (environment/git/github/commandrun/product/sbom)
@@ -239,6 +253,7 @@ jobs:
           path: |
             dist/cilock-*
             dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
+            dist/${{ matrix.goos }}-${{ matrix.goarch }}.vendor.attestation.json
 
   # ── Reproducible-build witness ──────────────────────────────────────
   # Independent second build per platform on a *different* runner image.
@@ -285,12 +300,25 @@ jobs:
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
-      - name: Vendor cilock deps (pre-build, OUTSIDE the traced step)
-        working-directory: cilock
-        run: GOWORK=off go mod vendor
-
       - name: Prepare dist/
         run: mkdir -p dist
+
+      - name: Attest vendor with cilock-action (witness)
+        uses: aflock-ai/cilock-action@v1.0.3
+        with:
+          step: vendor-cilock-deps
+          attestations: "environment git github product command-run"
+          outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.vendor.witness.attestation.json
+          enable-sigstore: "true"
+          enable-archivista: "false"
+          fulcio-url: "https://fulcio.sigstore.dev"
+          fulcio-oidc-client-id: "sigstore"
+          fulcio-oidc-issuer: "https://token.actions.githubusercontent.com"
+          timestamp-servers: "https://timestamp.sigstore.dev/api/v1/timestamp"
+          hashes: "sha256"
+          workingdir: cilock
+          command: |
+            GOWORK=off go mod vendor
 
       - name: Attest release-build with cilock-action (witness)
         env:
@@ -347,7 +375,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cilock-witness-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/${{ matrix.goos }}-${{ matrix.goarch }}.witness.attestation.json
+          path: |
+            dist/${{ matrix.goos }}-${{ matrix.goarch }}.witness.attestation.json
+            dist/${{ matrix.goos }}-${{ matrix.goarch }}.vendor.witness.attestation.json
 
   # ── Verify reproducibility ──────────────────────────────────────────
   # Compares the product subject digest from each platform's primary
@@ -628,24 +658,33 @@ jobs:
           # binary from each archive and verify against that. The tarball
           # is just a transport layer; checksums-sha256.txt + cosign
           # signature on the tarball cover transport-level integrity.
+          #
+          # We pass BOTH envelopes per platform — the vendor envelope
+          # AND the release-build envelope — so cilock can walk the
+          # source→vendor→build chain. Policy's
+          # release-build.artifactsFrom=[vendor-cilock-deps] requires
+          # both to be present and their digests to match.
           mkdir -p verify
           for plat in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
             archive="cilock-${{ steps.version.outputs.version }}-${plat}.tar.gz"
             attest="${plat}.attestation.json"
+            vendor_attest="${plat}.vendor.attestation.json"
             [ -f "$archive" ] || continue
             [ -f "$attest" ] || { echo "missing attestation $attest"; exit 1; }
+            [ -f "$vendor_attest" ] || { echo "missing vendor attestation $vendor_attest"; exit 1; }
             stem="${archive%.tar.gz}"
             tar -xzf "$archive" -C "verify/" cilock
             mv "verify/cilock" "verify/cilock-${plat}"
             /tmp/cilock verify \
               --policy release-v1.policy.json \
               --publickey cilock-policy.pub \
+              --attestations "$vendor_attest" \
               --attestations "$attest" \
               --artifactfile "verify/cilock-${plat}" \
               --vsa-outfile "${stem}.vsa.json" \
               || { echo "POLICY FAILED for $archive — aborting release before cosign signature"; exit 1; }
           done
-          echo "✔ All platforms passed release policy. Proceeding to cosign signature."
+          echo "✔ All platforms passed release policy (incl. source→vendor→build chain). Proceeding to cosign signature."
 
       # ── Cosign signing (gated on policy pass above) ─────────────────────
       # Only runs after every platform's VSA generation succeeded. Public
@@ -704,10 +743,18 @@ jobs:
         run: |
           BUNDLE="cilock-${{ steps.version.outputs.version }}-evidence-bundle.tar.gz"
           /tmp/cilock bundle create \
+            --attestation linux-amd64.vendor.attestation.json \
+            --attestation linux-arm64.vendor.attestation.json \
+            --attestation darwin-amd64.vendor.attestation.json \
+            --attestation darwin-arm64.vendor.attestation.json \
             --attestation linux-amd64.attestation.json \
             --attestation linux-arm64.attestation.json \
             --attestation darwin-amd64.attestation.json \
             --attestation darwin-arm64.attestation.json \
+            --attestation linux-amd64.vendor.witness.attestation.json \
+            --attestation linux-arm64.vendor.witness.attestation.json \
+            --attestation darwin-amd64.vendor.witness.attestation.json \
+            --attestation darwin-arm64.vendor.witness.attestation.json \
             --attestation linux-amd64.witness.attestation.json \
             --attestation linux-arm64.witness.attestation.json \
             --attestation darwin-amd64.witness.attestation.json \

@@ -12,6 +12,66 @@
   },
   "publickeys": {},
   "steps": {
+    "vendor-cilock-deps": {
+      "name": "vendor-cilock-deps",
+      "_comment": "Wraps `go mod vendor` in its own cilock-action invocation. Produces the vendored module tree as products. The release-build step declares artifactsFrom=[vendor-cilock-deps], so cilock verify enforces that the build's materials match this step's products byte-for-byte. Any tampering between vendor and build is caught.",
+      "attestations": [
+        {
+          "type": "https://aflock.ai/attestations/git/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-source-integrity",
+              "_comment": "Decoded plain-text: deploy/cilock/release-rego-source-integrity.txt. Denies on dirty working tree or missing commit hash.",
+              "module": "cGFja2FnZSByZWxlYXNlX3NvdXJjZV9pbnRlZ3JpdHkKCiMgU291cmNlIG11c3QgYmUgaW4gYSBjbGVhbiwgaWRlbnRpZmlhYmxlIHN0YXRlLiBJZiB0aGUgd29ya2luZyB0cmVlIGhhcwojIGFueSBtb2RpZmllZCwgc3RhZ2VkLCBvciB1bnRyYWNrZWQgZmlsZXMgYXQgYnVpbGQgdGltZSwgdGhlIGFydGlmYWN0CiMgdGhlIGJ1aWxkIHByb2R1Y2VkIGRvZXMgbm90IGNvcnJlc3BvbmQgdG8gYSBrbm93biBnaXQgY29tbWl0IOKAlCBjb3VsZAojIGJlIGEgYnVpbGQgc2NyaXB0IHRoYXQgd3JvdGUgaW50byB0aGUgc291cmNlIHRyZWUsIGEgcG9zdC1jbG9uZQojIHBhdGNoLCBvciBhIGNvZGUtaW5qZWN0aW9uIHN0ZXAuCgpkZW55W21zZ10gewogIGNvdW50KGlucHV0LnN0YXR1cykgPiAwCiAgY2hhbmdlZCA6PSBbcGF0aCB8IGlucHV0LnN0YXR1c1twYXRoXV0KICBtc2cgOj0gc3ByaW50Zigic291cmNlIHRyZWUgZGlydHkgYXQgYnVpbGQgdGltZSDigJQgJWQgZmlsZShzKSBoYWQgY2hhbmdlczogJXYiLCBbY291bnQoaW5wdXQuc3RhdHVzKSwgY2hhbmdlZF0pCn0KCiMgVGhlIGNvbW1pdCBoYXNoIG11c3QgYmUgcHJlc2VudCBhbmQgbm9uLWVtcHR5LiBBIG1pc3NpbmcgY29tbWl0IGhhc2gKIyBtZWFucyBnaXQgY291bGRuJ3QgYmUgcXVlcmllZCDigJQgZWl0aGVyIG5vdCBhIHJlcG8sIGRldGFjaGVkIEhFQUQsIG9yCiMgdGhlIC5naXQgZGlyZWN0b3J5IHdhcyBzdHJpcHBlZCBiZWZvcmUgdGhlIGJ1aWxkLiBSZWZ1c2UgdG8gZ2F0ZSBvbgojIGFuIHVucm9vdGVkIHNvdXJjZSB0cmVlLgpkZW55W21zZ10gewogIG5vdCBpbnB1dC5jb21taXRoYXNoCiAgbXNnIDo9ICJnaXQgY29tbWl0IGhhc2ggbWlzc2luZyDigJQgc291cmNlIHN0YXRlIGNhbm5vdCBiZSB2ZXJpZmllZCIKfQoKZGVueVttc2ddIHsKICBpbnB1dC5jb21taXRoYXNoID09ICIiCiAgbXNnIDo9ICJnaXQgY29tbWl0IGhhc2ggaXMgZW1wdHkiCn0K"
+            }
+          ]
+        },
+        {
+          "type": "https://aflock.ai/attestations/github/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-from-aflock-ai-rookery",
+              "_comment": "Decoded: deny if input.repository != 'aflock-ai/rookery'; deny if input.reftype != 'tag'.",
+              "module": "cGFja2FnZSByZWxlYXNlX2Zyb21fYWZsb2NrX2FpX3Jvb2tlcnkKCmRlbnlbbXNnXSB7CglpbnB1dC5yZXBvc2l0b3J5ICE9ICJhZmxvY2stYWkvcm9va2VyeSIKCW1zZyA6PSBzcHJpbnRmKCJhdHRlc3RhdGlvbiBub3QgZnJvbSBhZmxvY2stYWkvcm9va2VyeTogJXMiLCBbaW5wdXQucmVwb3NpdG9yeV0pCn0KCmRlbnlbbXNnXSB7Cglub3Qgc3RhcnRzd2l0aChpbnB1dC5yZWZ0eXBlLCAidGFnIikKCW1zZyA6PSBzcHJpbnRmKCJyZWxlYXNlcyBtdXN0IGJlIHRhZ2dlZCwgZ290OiAlcyIsIFtpbnB1dC5yZWZ0eXBlXSkKfQ=="
+            }
+          ]
+        },
+        {
+          "type": "https://aflock.ai/attestations/product/v0.3",
+          "regopolicies": [],
+          "_comment": "Product subjects are checked against release-build materials via artifactsFrom \u2014 Rego not needed here."
+        },
+        {
+          "type": "https://aflock.ai/attestations/command-run/v0.1",
+          "regopolicies": [
+            {
+              "name": "vendor-command-is-go-mod-vendor",
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-vendor-command.txt. Denies if the vendor step ran anything other than `go mod vendor`.",
+              "module": "cGFja2FnZSByZWxlYXNlX3ZlbmRvcl9jb21tYW5kCgojIFRoZSB2ZW5kb3Igc3RlcCBtdXN0IGxpdGVyYWxseSBydW4gYGdvIG1vZCB2ZW5kb3JgLiBXZSBhc3NlcnQgdGhpcyBvbgojIHRoZSBjb21tYW5kLXJ1biBwcmVkaWNhdGUgc28gYSB0YW1wZXJlZCB3b3JrZmxvdyB0aGF0IGludm9rZXMgc29tZQojIG90aGVyIGNvbW1hbmQgKGUuZy4gYGNwIC90bXAvcG9pc29uLXZlbmRvciBjaWxvY2svdmVuZG9yYCkgaXMgY2F1Z2h0CiMgZXZlbiB3aGVuIHRoZSByZXN1bHRpbmcgcHJvZHVjdCBzZXQgbG9va3Mgc3VwZXJmaWNpYWxseSByaWdodC4KIwojIFdlIGRvbid0IGdhdGUgb24gLW1vZD12ZW5kb3IgaGVyZSDigJQgdGhhdCdzIGVuZm9yY2VkIHNlcGFyYXRlbHkgb24gdGhlCiMgcmVsZWFzZS1idWlsZCBzdGVwJ3MgY29tbWFuZC1ydW4gcHJlZGljYXRlIChyZWxlYXNlLWJ1aWxkLWh5Z2llbmUpLgoKY21kIDo9IGNvbmNhdCgiICIsIGlucHV0LmNtZCkKCmRlbnlbbXNnXSB7CiAgbm90IGNvbnRhaW5zKGNtZCwgImdvIG1vZCB2ZW5kb3IiKQogIG1zZyA6PSBzcHJpbnRmKCJ2ZW5kb3Igc3RlcCBtdXN0IGludm9rZSBgZ28gbW9kIHZlbmRvcmAsIGdvdDogJXMiLCBbY21kXSkKfQo="
+            }
+          ]
+        }
+      ],
+      "functionaries": [
+        {
+          "type": "root",
+          "_comment": "Fulcio leaf certs have empty Subject CN \u2014 identity is in SAN URI + Fulcio v1.x cert extensions. We constrain on the issuer OID (1.3.6.1.4.1.57264.1.8) for the GitHub Actions OIDC provider, and on BuildSignerURI (OID .1.9) to bind the signer to this repo's release.yml workflow at any v* tag. Glob wildcards are honored by witness checkExtensions. Extension JSON keys are PascalCase because sigstore/fulcio's Extensions struct uses Go field names as JSON tags.",
+          "certConstraint": {
+            "roots": [
+              "sigstore-fulcio"
+            ],
+            "uris": [
+              "*"
+            ],
+            "extensions": {
+              "Issuer": "https://token.actions.githubusercontent.com",
+              "BuildSignerURI": "https://github.com/aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v*",
+              "SourceRepositoryURI": "https://github.com/aflock-ai/rookery"
+            }
+          }
+        }
+      ]
+    },
     "release-build": {
       "name": "release-build",
       "_comment": "Built and signed in .github/workflows/release.yml. Identity is the GH Actions OIDC workflow identity, which Fulcio binds to the cosign cert. The cosign sign step in release.yml runs AFTER the verifier produces VSAs (this policy) \u2014 so a cosign signature on a published binary transitively proves the binary passed every Rego layer below.",
@@ -120,6 +180,9 @@
             }
           }
         }
+      ],
+      "artifactsFrom": [
+        "vendor-cilock-deps"
       ]
     }
   }
