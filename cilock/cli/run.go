@@ -88,7 +88,11 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 	// from prior invocations (alwaysRunAttestors holds shared singletons).
 	attestors := []attestation.Attestor{product.New(), material.New()}
 	if len(args) > 0 {
-		attestors = append(attestors, commandrun.New(commandrun.WithCommand(args), commandrun.WithTracing(ro.Tracing)))
+		attestors = append(attestors, commandrun.New(
+			commandrun.WithCommand(args),
+			commandrun.WithTracing(ro.Tracing),
+			commandrun.WithIgnoreExitCode(ro.IgnoreCommandExitCode),
+		))
 	}
 
 	for _, a := range ro.Attestations {
