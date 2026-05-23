@@ -501,9 +501,9 @@ jobs:
           # suffixes for package.version (it wants 1.1.0_rc41) but the git
           # checkout step inside melange's pipeline needs the actual git
           # tag (v1.1.0-rc41 with hyphen). envsubst handles both before
-          # melange parses the YAML — melange's own ${{...}} templating
-          # is preserved because envsubst only touches ${VAR} / ${...}
-          # without doubled braces.
+          # melange parses the YAML; melange's own doubled-brace template
+          # syntax is preserved because envsubst only touches plain
+          # dollar-brace forms without doubled braces.
           export CILOCK_APK_VERSION="${{ steps.version.outputs.apk_version }}"
           export CILOCK_GIT_TAG="${{ steps.version.outputs.version }}"
           envsubst < melange.yaml > melange-resolved.yaml
