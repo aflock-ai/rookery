@@ -326,7 +326,7 @@ jobs:
             /tmp/cilock verify \
               --policy ../deploy/cilock/release.policy.json \
               --artifactfile "$archive" \
-              --vsa-out "${stem}.vsa.json" \
+              --vsa-outfile "${stem}.vsa.json" \
               || { echo "POLICY FAILED for $archive — aborting release before cosign signature"; exit 1; }
           done
           echo "✔ All platforms passed release policy. Proceeding to cosign signature."
