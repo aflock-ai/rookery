@@ -34,6 +34,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/pip-install"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/policyverify"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/product"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/prowler"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/sarif"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/sbom"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/secretscan"
