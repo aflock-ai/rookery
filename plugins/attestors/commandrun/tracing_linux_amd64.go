@@ -29,6 +29,15 @@ func getSyscallId(regs unix.PtraceRegs) uint64 {
 	return regs.Orig_rax
 }
 
+// getSyscallRetVal returns the syscall return value at a syscall-exit stop.
+// On amd64 the kernel places the return value in rax. orig_rax retains the
+// syscall number for the duration of the syscall (the value used at entry).
+// A negative value (interpreted as int64) is the negated errno per the
+// syscall ABI; callers must check for that before treating it as a fd.
+func getSyscallRetVal(regs unix.PtraceRegs) int64 {
+	return int64(regs.Rax) //nolint:gosec // signed interpretation required by the syscall ABI
+}
+
 func getSyscallArgs(regs unix.PtraceRegs) []uintptr {
 	return []uintptr{
 		uintptr(regs.Rdi),
@@ -86,6 +95,14 @@ func (p *ptraceContext) handleArchLegacySyscall(pid int, syscallId uint64, args 
 		file, err := p.readSyscallReg(pid, args[0], MAX_PATH_LEN)
 		if err != nil {
 			return nil //nolint:nilerr // matches openat's path-error tolerance
+		}
+		// Register exit pairing for the fd→path cache. The exit handler
+		// reuses the SYS_OPENAT branch by reading the syscall ID we pass
+		// here — for legacy open/creat we tag it as openat so the same
+		// "store fd→path on success" logic applies.
+		p.pendingSyscalls[pid] = &pendingSyscall{
+			syscallID: unix.SYS_OPENAT,
+			path:      file,
 		}
 		procInfo := p.getProcInfo(pid)
 		digestSet, derr := cryptoutil.CalculateDigestSetFromFile(file, p.hash)

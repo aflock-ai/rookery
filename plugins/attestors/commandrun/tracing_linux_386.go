@@ -24,6 +24,14 @@ func getSyscallId(regs unix.PtraceRegs) int32 {
 	return regs.Orig_eax
 }
 
+// getSyscallRetVal returns the syscall return value at a syscall-exit stop.
+// On 386 the return value lives in eax (orig_eax holds the syscall number).
+// Returned as int64 to match the cross-arch handler signature; 386's eax
+// is only 32 bits so the upper word is sign-extended.
+func getSyscallRetVal(regs unix.PtraceRegs) int64 {
+	return int64(int32(regs.Eax)) //nolint:gosec // signed interpretation required by the syscall ABI
+}
+
 func getSyscallArgs(regs unix.PtraceRegs) []uintptr {
 	return []uintptr{
 		uintptr(regs.Ebx),

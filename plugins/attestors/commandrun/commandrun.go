@@ -234,6 +234,24 @@ type ProcessInfo struct {
 	// ended" or "exit code unknown" — verifiers must not infer
 	// successful exit from a missing/zero value.
 	ExitCode int `json:"exitcode,omitempty"`
+
+	// openedFDs maps fd → path for currently-open file descriptors.
+	// Populated at openat-return; evicted at close. Lookup is O(1) and
+	// saves a /proc/<pid>/fd/<fd> readlink per fd-resolution — a major
+	// win on write-heavy workloads (Go linker emitting object files,
+	// log writers, dd-style memdumps) where every SYS_WRITE/SYS_PWRITE64
+	// previously triggered a readlink.
+	//
+	// Lowercase identifier (unexported) keeps this field out of the JSON
+	// wire format — encoding/json skips unexported fields entirely. The
+	// field is only meaningful during tracing and has no value to the
+	// downstream attestation consumer.
+	//
+	// Cache correctness rests on close-event tracking (fds can be
+	// reused: open(/tmp/a)→close→open(/tmp/b) on the same fd number) and
+	// on dup2/dup3 cache-copy. See tracing_linux.go's syscall exit
+	// handler.
+	openedFDs map[int]string
 }
 
 type CommandRun struct {

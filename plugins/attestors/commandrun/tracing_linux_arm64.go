@@ -26,6 +26,15 @@ func getSyscallId(regs unix.PtraceRegs) uint64 {
 	return regs.Regs[8]
 }
 
+// getSyscallRetVal returns the syscall return value at a syscall-exit stop.
+// On arm64 the kernel places the return value in x0 (Regs[0]); the syscall
+// number stays in x8 across the call. A negative value (interpreted as
+// int64) is the negated errno per the syscall ABI; callers must check for
+// that before treating it as a fd.
+func getSyscallRetVal(regs unix.PtraceRegs) int64 {
+	return int64(regs.Regs[0]) //nolint:gosec // signed interpretation required by the syscall ABI
+}
+
 func getSyscallArgs(regs unix.PtraceRegs) []uintptr {
 	return []uintptr{
 		uintptr(regs.Regs[0]),

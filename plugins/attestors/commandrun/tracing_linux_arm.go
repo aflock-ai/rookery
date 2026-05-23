@@ -25,6 +25,14 @@ func getSyscallId(regs unix.PtraceRegs) uint32 {
 	return regs.Uregs[7]
 }
 
+// getSyscallRetVal returns the syscall return value at a syscall-exit stop.
+// On arm the return value sits in r0 (Uregs[0]); the syscall number lives in
+// r7. Returned as int64 for cross-arch signature parity — arm r0 is only
+// 32 bits so the upper word is sign-extended.
+func getSyscallRetVal(regs unix.PtraceRegs) int64 {
+	return int64(int32(regs.Uregs[0])) //nolint:gosec // signed interpretation required by the syscall ABI
+}
+
 func getSyscallArgs(regs unix.PtraceRegs) []uintptr {
 	return []uintptr{
 		uintptr(regs.Uregs[0]),

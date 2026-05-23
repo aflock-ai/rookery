@@ -52,6 +52,35 @@ type ptraceContext struct {
 	// so we can extract TLS SNI from the first write on that fd.
 	// Key: "pid:fd", Value: index into the process's Connections slice.
 	tlsPendingFDs map[string]int
+
+	// pendingSyscalls tracks per-pid syscall state across the entry→exit
+	// stop pair. A pid lands here at syscall entry when we need the return
+	// value (the new fd from openat/openat2/dup/dup2/dup3, or the success
+	// status of close) and is removed at syscall exit. Without this we
+	// cannot populate the fd→path cache: openat returns the fd in its
+	// return register, which is only readable at the exit stop.
+	pendingSyscalls map[int]*pendingSyscall
+}
+
+// pendingSyscall remembers the entry-time context for a syscall whose exit
+// we want to observe. The pid+syscallID pair is implied by the map key and
+// the pid's last entry stop.
+type pendingSyscall struct {
+	// syscallID is the syscall number captured at entry; we re-verify at
+	// exit by reading orig_rax (preserved across the syscall). Used to
+	// dispatch exit handlers.
+	syscallID uint64
+	// path is the pathname argument for openat/openat2, captured at entry
+	// because the userspace string may have been munged or freed by the
+	// time the exit stop fires (process_vm_readv on a stale pointer can
+	// fail or return garbage).
+	path string
+	// oldFD is the source fd for dup/dup2/dup3, captured at entry so we
+	// can copy the cache entry once the return-value confirms success.
+	oldFD int
+	// newFD is the requested target fd for dup2/dup3 (caller-specified).
+	// dup() has no caller-specified newFD — that field stays zero.
+	newFD int
 }
 
 func enableTracing(c *exec.Cmd) {
@@ -68,6 +97,7 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		hash:                actx.Hashes(),
 		environmentCapturer: actx.EnvironmentCapturer(),
 		tlsPendingFDs:       make(map[string]int),
+		pendingSyscalls:     make(map[int]*pendingSyscall),
 	}
 
 	if err := pctx.runTrace(); err != nil {
@@ -117,6 +147,10 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 		if status.Exited() {
 			pInfo := p.getProcInfo(pid)
 			pInfo.ExitCode = status.ExitStatus()
+			// Process is gone — drop any pending syscall state for it so
+			// the map doesn't leak across long-running traces with many
+			// short-lived children.
+			delete(p.pendingSyscalls, pid)
 			if pid == p.parentPid {
 				p.exitCode = status.ExitStatus()
 				return nil
@@ -127,6 +161,7 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 			pInfo := p.getProcInfo(pid)
 			// shell convention: 128 + signal number for signal-killed
 			pInfo.ExitCode = 128 + int(status.Signal())
+			delete(p.pendingSyscalls, pid)
 			if pid == p.parentPid {
 				p.exitCode = 128 + int(status.Signal())
 				return nil
@@ -184,10 +219,23 @@ func (p *ptraceContext) nextSyscall(pid int) error {
 		return err
 	}
 
-	if msg == unix.PTRACE_EVENTMSG_SYSCALL_ENTRY {
+	// PTRACE_GETEVENTMSG returns the entry/exit marker for syscall stops on
+	// Linux 5.3+ (the same kernel feature that backs PTRACE_GET_SYSCALL_INFO).
+	// The existing handler ran only at ENTRY; we now also wire EXIT for the
+	// handful of syscalls whose return value we need to populate the fd→path
+	// cache (openat, dup, dup2, dup3) or evict from it (close).
+	//
+	// On older kernels where PTRACE_GETEVENTMSG returns the last-set ptrace
+	// message instead of the entry/exit constant, neither branch fires and
+	// we degrade gracefully: the cache stays empty and resolveFD falls back
+	// to the readlink path, exactly as it did before this optimization.
+	switch msg {
+	case unix.PTRACE_EVENTMSG_SYSCALL_ENTRY:
 		if err := p.handleSyscall(pid, regs); err != nil {
 			return err
 		}
+	case unix.PTRACE_EVENTMSG_SYSCALL_EXIT:
+		p.handleSyscallExit(pid, regs)
 	}
 
 	return nil
@@ -200,6 +248,15 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 	switch syscallId {
 	case unix.SYS_EXECVE:
 		procInfo := p.getProcInfo(pid)
+
+		// execve replaces the process image and silently closes any fd
+		// marked O_CLOEXEC. We don't observe these closes, so any stale
+		// pre-exec cache entries would now point at the wrong file (or
+		// nothing). Conservative fix: clear the cache on execve. The
+		// post-exec process will re-populate via the openat hook.
+		for k := range procInfo.openedFDs {
+			delete(procInfo.openedFDs, k)
+		}
 
 		program, err := p.readSyscallReg(pid, argArray[0], MAX_PATH_LEN)
 		if err == nil {
@@ -264,6 +321,17 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		file, err := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
 		if err != nil {
 			return err
+		}
+
+		// Register the open so the syscall-exit handler can pair the
+		// returned fd with this path and populate the fd→path cache.
+		// Done unconditionally (before digest calculation): if the open
+		// succeeds but the digest fails (e.g. O_CREAT on a not-yet-existing
+		// file, or we can't open it for read), the fd is still real in the
+		// tracee and subsequent writes need correct attribution.
+		p.pendingSyscalls[pid] = &pendingSyscall{
+			syscallID: uint64(syscallId),
+			path:      file,
 		}
 
 		procInfo := p.getProcInfo(pid)
@@ -521,6 +589,37 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 				})
 			}
+		}
+		// Register exit pairing so the fd→path cache can copy the entry
+		// from oldFD to newFD once the kernel confirms the dup succeeded.
+		// dup2 may legitimately close an existing entry at newFD (kernel
+		// closes the previous fd silently) so we also evict the old newFD
+		// entry on success.
+		p.pendingSyscalls[pid] = &pendingSyscall{
+			syscallID: uint64(syscallId),
+			oldFD:     oldFD,
+			newFD:     newFD,
+		}
+
+	case unix.SYS_DUP:
+		// dup(oldfd) — returns the lowest-numbered unused fd, both pointing
+		// at the same file. Needs exit pairing because the returned fd is
+		// kernel-assigned (not caller-specified like dup2/dup3).
+		oldFD := int(argArray[0])
+		p.pendingSyscalls[pid] = &pendingSyscall{
+			syscallID: uint64(syscallId),
+			oldFD:     oldFD,
+		}
+
+	case unix.SYS_CLOSE:
+		// close(fd) — only evict on success. Defer to the exit handler
+		// because close can fail (EBADF, EINTR) and a failed close leaves
+		// the fd open. Evicting at entry would corrupt the cache in that
+		// (rare) case.
+		fd := int(argArray[0])
+		p.pendingSyscalls[pid] = &pendingSyscall{
+			syscallID: uint64(syscallId),
+			oldFD:     fd,
 		}
 
 	case unix.SYS_MPROTECT:
@@ -814,6 +913,74 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 	return nil
 }
 
+// handleSyscallExit is the syscall-exit counterpart to handleSyscall. It
+// fires on the syscall-exit ptrace stop for syscalls whose return value
+// we need to observe — specifically, the fd→path cache machinery:
+//
+//   - openat/openat2: return value is the new fd → populate cache with
+//     the path recorded at entry.
+//   - dup: return value is the new fd → copy oldFD's cache entry.
+//   - dup2/dup3: return value is the new fd (== newFD on success) → copy
+//     oldFD's entry, evicting any prior entry at newFD.
+//   - close: return value is 0 on success → evict the fd from the cache.
+//
+// Skipping syscalls we did not register at entry is essential: every
+// syscall produces an exit stop and walking the full switch on every one
+// would defeat the optimization. A nil pendingSyscalls[pid] is the early
+// exit.
+//
+// Errors are silently absorbed; an exit-stop register read failure means
+// the tracee is in an unusual state and the worst-case outcome is a stale
+// or missing cache entry, which the readlink fallback handles. We never
+// return an error here to avoid stalling the trace loop.
+func (p *ptraceContext) handleSyscallExit(pid int, regs unix.PtraceRegs) {
+	pending, ok := p.pendingSyscalls[pid]
+	if !ok {
+		return
+	}
+	delete(p.pendingSyscalls, pid)
+
+	retVal := getSyscallRetVal(regs)
+	procInfo := p.getProcInfo(pid)
+
+	switch pending.syscallID {
+	case unix.SYS_OPENAT, unix.SYS_OPENAT2:
+		// A negative return value is -errno (e.g. -ENOENT). Don't cache a
+		// failed open.
+		if retVal < 0 {
+			return
+		}
+		// retVal fits in int because Linux caps fds to INT_MAX.
+		procInfo.openedFDs[int(retVal)] = pending.path
+
+	case unix.SYS_DUP:
+		if retVal < 0 {
+			return
+		}
+		if path, hit := procInfo.openedFDs[pending.oldFD]; hit {
+			procInfo.openedFDs[int(retVal)] = path
+		}
+
+	case unix.SYS_DUP3, 33: // 33 = SYS_DUP2 on amd64
+		if retVal < 0 {
+			return
+		}
+		// dup2/dup3 silently closes any prior file at newFD before
+		// installing the duplicate. Mirror that in the cache.
+		delete(procInfo.openedFDs, pending.newFD)
+		if path, hit := procInfo.openedFDs[pending.oldFD]; hit {
+			procInfo.openedFDs[int(retVal)] = path
+		}
+
+	case unix.SYS_CLOSE:
+		// Only evict on success. A failed close (EBADF, EINTR) leaves the
+		// fd in the same state — keep the cache entry.
+		if retVal == 0 {
+			delete(procInfo.openedFDs, pending.oldFD)
+		}
+	}
+}
+
 // ensureNetwork initializes the NetworkActivity struct if nil.
 func (p *ptraceContext) ensureNetwork(procInfo *ProcessInfo) {
 	if procInfo.Network == nil {
@@ -828,8 +995,35 @@ func (p *ptraceContext) ensureFileOps(procInfo *ProcessInfo) {
 	}
 }
 
-// resolveFD resolves a file descriptor to a path via /proc/pid/fd/N.
+// bypassFDCacheForBench, when true, forces resolveFD to always go
+// through readlink. Only flipped on by benchmarks measuring the
+// pre-optimization codepath; production code never sets it. Keeping
+// the bypass as a package var (rather than a method param) avoids
+// touching every call site for what is exclusively a benchmark-time
+// concern.
+var bypassFDCacheForBench bool
+
+// resolveFD resolves a file descriptor to a path. Cache lookup is O(1)
+// and avoids /proc/<pid>/fd/<fd> readlink calls in the SYS_WRITE hot path
+// for fds that we observed openat for. A cache miss (e.g., fd inherited
+// from before tracing started, or fd opened via a syscall we don't track)
+// falls back to the readlink — preserving the previous behavior.
+//
+// Correctness: the cache is populated at openat-exit and evicted at
+// close-exit. dup2/dup3 propagate entries. A stale cache entry would only
+// arise if a fd was closed without our observing the close (which the
+// kernel does not do for ordinary userspace) or if exec() implicitly
+// closes CLOEXEC-marked fds. The latter is mitigated by resetting the
+// per-pid cache on execve in handleSyscall, since the post-exec address
+// space + fd table differ from the pre-exec snapshot.
 func (p *ptraceContext) resolveFD(pid, fd int) string {
+	if !bypassFDCacheForBench {
+		if procInfo, ok := p.processes[pid]; ok && procInfo.openedFDs != nil {
+			if path, hit := procInfo.openedFDs[fd]; hit {
+				return path
+			}
+		}
+	}
 	link := fmt.Sprintf("/proc/%d/fd/%d", pid, fd)
 	target, err := os.Readlink(link)
 	if err != nil {
@@ -944,6 +1138,7 @@ func (ctx *ptraceContext) getProcInfo(pid int) *ProcessInfo {
 		procInfo = &ProcessInfo{
 			ProcessID:   pid,
 			OpenedFiles: make(map[string]cryptoutil.DigestSet),
+			openedFDs:   make(map[int]string),
 		}
 
 		ctx.processes[pid] = procInfo
