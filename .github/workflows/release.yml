@@ -96,7 +96,7 @@ jobs:
           # the `go build` command below for visibility in the
           # command-run predicate. Both predicates are gated by Rego.
           GOFIPS140: v1.0.0
-        uses: aflock-ai/cilock-action@v1.0.2
+        uses: aflock-ai/cilock-action@v1.0.3
         with:
           # Step name must match the policy step name (release-build) for
           # all platforms — verify is called once per (platform, attestation)
@@ -258,7 +258,7 @@ jobs:
       - name: Attest release-build with cilock-action (witness)
         env:
           GOFIPS140: v1.0.0
-        uses: aflock-ai/cilock-action@v1.0.2
+        uses: aflock-ai/cilock-action@v1.0.3
         with:
           step: release-build
           # All postproduct attestors enabled. Order doesn't matter for
