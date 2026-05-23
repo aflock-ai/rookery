@@ -80,6 +80,12 @@ jobs:
         #   /releases/download/v<ref>/cilock-action_linux_amd64.tar.gz
         # so SHA pinning 404s. Verified live in
         # aflock-ai/supply-chain-attacks#1. Pin to a specific tag instead.
+        env:
+          # Step-level so the environment attestor (runs first, captures
+          # os.Environ at startup) sees it. Also redundantly inlined on
+          # the `go build` command below for visibility in the
+          # command-run predicate. Both predicates are gated by Rego.
+          GOFIPS140: v1.0.0
         uses: aflock-ai/cilock-action@v1.0.1
         with:
           # Step name must match the policy step name (release-build) for
@@ -122,9 +128,17 @@ jobs:
             # existing cilock/ source directory. Using a per-platform
             # filename also avoids name reuse across matrix legs if
             # cilock-action ever runs them in shared workspace.
+            #
+            # GOFIPS140=v1.0.0 compiles in the FIPS 140-3 Go Cryptographic
+            # Module (Go 1.24+). Combined with the //go:debug fips140=on
+            # directive in cilock/cmd/cilock/main.go, this makes
+            # crypto/fips140.Enabled() return true at runtime by default —
+            # FedRAMP 20x, CMMC, and NIST 800-204D-aligned. The build env
+            # is captured by the environment attestor and gated by Rego
+            # in release.policy.json (release-build-fips-enabled).
             BINARY="cilock-bin-${{ matrix.goos }}-${{ matrix.goarch }}"
             cd cilock
-            CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
+            GOFIPS140=v1.0.0 CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
               go build \
                 -trimpath \
                 -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
