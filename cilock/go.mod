@@ -34,11 +34,15 @@ replace github.com/aflock-ai/rookery/plugins/attestors/govulncheck => ../plugins
 
 replace github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof => ../plugins/attestors/inclusion-proof
 
+replace github.com/aflock-ai/rookery/plugins/attestors/inspec => ../plugins/attestors/inspec
+
 replace github.com/aflock-ai/rookery/plugins/attestors/jenkins => ../plugins/attestors/jenkins
 
 replace github.com/aflock-ai/rookery/plugins/attestors/jwt => ../plugins/attestors/jwt
 
 replace github.com/aflock-ai/rookery/plugins/attestors/k8smanifest => ../plugins/attestors/k8smanifest
+
+replace github.com/aflock-ai/rookery/plugins/attestors/kube-bench => ../plugins/attestors/kube-bench
 
 replace github.com/aflock-ai/rookery/plugins/attestors/link => ../plugins/attestors/link
 
@@ -52,6 +56,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/oci => ../plugins/attesto
 
 replace github.com/aflock-ai/rookery/plugins/attestors/omnitrail => ../plugins/attestors/omnitrail
 
+replace github.com/aflock-ai/rookery/plugins/attestors/oscap => ../plugins/attestors/oscap
+
 replace github.com/aflock-ai/rookery/plugins/attestors/policyverify => ../plugins/attestors/policyverify
 
 replace github.com/aflock-ai/rookery/plugins/attestors/product => ../plugins/attestors/product
@@ -63,6 +69,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/sbom => ../plugins/attest
 replace github.com/aflock-ai/rookery/plugins/attestors/secretscan => ../plugins/attestors/secretscan
 
 replace github.com/aflock-ai/rookery/plugins/attestors/slsa => ../plugins/attestors/slsa
+
+replace github.com/aflock-ai/rookery/plugins/attestors/steampipe => ../plugins/attestors/steampipe
 
 replace github.com/aflock-ai/rookery/plugins/attestors/system-packages => ../plugins/attestors/system-packages
 
@@ -107,15 +115,18 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/gitlab v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/govulncheck v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/inspec v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/jenkins v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/jwt v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/k8smanifest v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/kube-bench v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/link v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/lockfiles v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/material v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/maven v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/oci v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/omnitrail v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/oscap v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/pip-install v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/policyverify v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/product v0.0.0-00010101000000-000000000000
@@ -124,6 +135,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/sbom v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/secretscan v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/slsa v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/steampipe v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/system-packages v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/test-results v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/vex v0.0.0-00010101000000-000000000000
