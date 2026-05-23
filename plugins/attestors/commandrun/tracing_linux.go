@@ -98,8 +98,14 @@ func (p *ptraceContext) cachedDigest(path string) (cryptoutil.DigestSet, bool) {
 }
 
 func enableTracing(c *exec.Cmd) {
-	c.SysProcAttr = &unix.SysProcAttr{
-		Ptrace: true,
+	// Only set Ptrace=true if the user explicitly opted into ptrace
+	// mode. eBPF mode (the default) tracks the child via in-kernel
+	// kprobes and does NOT ptrace it.
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVarTraceMode)))
+	if mode == "ptrace" {
+		c.SysProcAttr = &unix.SysProcAttr{
+			Ptrace: true,
+		}
 	}
 }
 
@@ -112,6 +118,30 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		environmentCapturer: actx.EnvironmentCapturer(),
 		tlsPendingFDs:       make(map[string]int),
 		digestCache:         make(map[string]cryptoutil.DigestSet, 8192),
+	}
+
+	// Resolve the tracing backend. selectTraceMode() returns a
+	// human-readable error with remediation instructions if eBPF
+	// was requested (default) but unavailable. The caller (cilock
+	// CLI) prints the error and exits.
+	mode, modeErr := selectTraceMode()
+	if modeErr != nil {
+		// Kill the spawned tracee before propagating the error —
+		// otherwise it would run to completion unobserved.
+		if c.Process != nil {
+			_ = c.Process.Kill()
+			_ = c.Wait()
+		}
+		return nil, modeErr
+	}
+	requested := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVarTraceMode)))
+	logTraceModeStartup(mode, requested)
+
+	switch mode {
+	case traceModeEBPF:
+		return r.runEBPFTrace(c, actx, pctx)
+	case traceModePtrace:
+		// Fall through to the existing ptrace path.
 	}
 
 	if err := pctx.runTrace(); err != nil {

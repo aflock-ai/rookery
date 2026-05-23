@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -204,6 +205,12 @@ type ProcessInfo struct {
 	// ended" or "exit code unknown" — verifiers must not infer
 	// successful exit from a missing/zero value.
 	ExitCode int `json:"exitcode,omitempty"`
+
+	// mu guards mutable fields against concurrent updates from the
+	// eBPF tracing path (hash workers updating from different
+	// goroutines) and any future multi-tracer mode. Uncontended in
+	// the serial ptrace path. Excluded from JSON via the lowercase.
+	mu sync.Mutex `json:"-"`
 }
 
 type CommandRun struct {
