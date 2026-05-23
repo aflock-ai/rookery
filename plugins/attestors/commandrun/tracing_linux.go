@@ -94,7 +94,9 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 	// + LockOSThread lifecycle, so we dispatch BEFORE any of that setup.
 	if multiTracerEnabled() {
 		p.multi = &multiTracerState{
-			sharder: newPIDSharder(multiTracerWorkerCount()),
+			sharder:      newPIDSharder(multiTracerWorkerCount()),
+			shutdown:     make(chan struct{}),
+			statsEnabled: multiTracerStatsEnabled(),
 		}
 		return p.runTraceMulti()
 	}

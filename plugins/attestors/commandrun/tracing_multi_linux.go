@@ -14,32 +14,38 @@
 
 //go:build linux
 
-// Multi-tracer-thread event loop for the trace attestor (#167).
+// Multi-tracer-thread event loop V2 (#167).
 //
-// Architecture:
+// Architecture: fixed worker pool of N goroutines, each pinned to its
+// own OS thread via runtime.LockOSThread. Each worker runs its own
+// Wait4 loop and handles MULTIPLE tracees (sticky-assigned by the
+// pidSharder). New tracees enter the pool via per-worker channels.
 //
-//   - The initial tracee (the parent process spawned by exec.Cmd with
-//     SysProcAttr.Ptrace=true) is owned by goroutine 0.
+// The Wait4/channel interleaving uses WNOHANG polling + runtime.Gosched
+// (Option A from the V2 design doc). Brief CPU yield between empty
+// polls. Workers with no owned tracees BLOCK on their incoming channel
+// to avoid burning idle CPU.
 //
-//   - When goroutine N sees PTRACE_EVENT_CLONE/FORK/VFORK for a new
-//     child pid, it consults the pidSharder. If the sharder picks
-//     goroutine N (sticky on first observation), the new pid stays
-//     on goroutine N (no transfer cost). If the sharder picks a
-//     different worker, goroutine N detaches the child with a pending
-//     SIGSTOP, then spawns a new dedicated goroutine for the child.
+// Pid handoff at CLONE/FORK/VFORK:
 //
-//   - Each tracer goroutine:
-//   - calls runtime.LockOSThread (ptrace requires same-thread Wait4)
-//   - owns a SUBSET of pids; Wait4(-1, ...) returns events for any
-//     of them
-//   - handles syscalls synchronously (preserves TOCTOU for file hashes)
-//   - on tracee exit: releases its sharder slot
+//   discovering worker A:
+//     1. Wait4(newPid, ..) — consume the auto-attach SIGSTOP
+//     2. target := sharder.WorkerFor(newPid)
+//     3. if target == A: keep on A, set options, continue
+//        else:
+//          PtraceDetach(newPid)         // release kernel attach
+//          kill(newPid, SIGSTOP)         // queue stop signal
+//          workers[target].incoming <- newPid
+//          target worker: attach, setopts, continue
 //
-//   - Shared state (`processes` map, `tlsPendingFDs`, etc.) is guarded
-//     by ptraceContext-level locks.
+// Shared state on ptraceContext (processes map, tlsPendingFDs) is
+// guarded by sync.RWMutex / sync.Mutex when multi mode is active.
+// Per-process ProcessInfo slices are mutated only by the owning worker
+// — no per-process lock needed.
 //
-// Opt-in via the CILOCK_TRACE_MULTI env var. Off by default until
-// validated against the production CI matrix.
+// Opt-in via CILOCK_TRACE_MULTI=1. CILOCK_TRACE_MULTI_N overrides
+// worker count (default = GOMAXPROCS, capped at 16).
+// CILOCK_TRACE_MULTI_STATS=1 prints per-worker stats at trace end.
 
 package commandrun
 
@@ -53,25 +59,59 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/log"
 	"golang.org/x/sys/unix"
 )
 
-// EnvVarMultiTracer enables the multi-tracer-thread event loop when
-// set to a truthy value ("1"/"true"/"yes"). Default off.
-const EnvVarMultiTracer = "CILOCK_TRACE_MULTI"
+// ptraceDetachWithSignal calls ptrace(PTRACE_DETACH, pid, 0, sig)
+// directly. The wrapped form in golang.org/x/sys/unix passes sig=0
+// (resume cleanly); we need to pass SIGSTOP so the tracee stays
+// stopped after detach, eliminating the race window between detach
+// and the receiving worker's attach.
+func ptraceDetachWithSignal(pid int, sig syscall.Signal) error {
+	_, _, errno := syscall.RawSyscall6(syscall.SYS_PTRACE,
+		uintptr(unix.PTRACE_DETACH),
+		uintptr(pid),
+		0,
+		uintptr(sig),
+		0, 0)
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
 
-// multiTracerEnabled reports whether multi-tracer mode is opted into.
+const (
+	// EnvVarMultiTracer enables the multi-tracer-thread event loop.
+	EnvVarMultiTracer = "CILOCK_TRACE_MULTI"
+	// EnvVarMultiTracerN overrides the worker count.
+	EnvVarMultiTracerN = "CILOCK_TRACE_MULTI_N"
+	// EnvVarMultiTracerStats prints per-worker stats at trace end.
+	EnvVarMultiTracerStats = "CILOCK_TRACE_MULTI_STATS"
+
+	// incomingCap is the per-worker handoff channel capacity. Sized to
+	// absorb fork-bomb spikes without backpressure-blocking the sender.
+	incomingCap = 256
+
+	// idleSleepNs throttles WNOHANG polling when channel + Wait4 are
+	// both empty. Trades a tiny latency for not pegging a core.
+	idleSleepNs = 100 * time.Microsecond
+)
+
 func multiTracerEnabled() bool {
 	v := os.Getenv(EnvVarMultiTracer)
 	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
 }
 
-// multiTracerWorkerCount returns the number of tracer goroutines to use.
-// Reads CILOCK_TRACE_MULTI_N if set; defaults to GOMAXPROCS capped at 16.
+func multiTracerStatsEnabled() bool {
+	v := os.Getenv(EnvVarMultiTracerStats)
+	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+}
+
 func multiTracerWorkerCount() int {
-	if v := os.Getenv("CILOCK_TRACE_MULTI_N"); v != "" {
+	if v := os.Getenv(EnvVarMultiTracerN); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
@@ -86,58 +126,113 @@ func multiTracerWorkerCount() int {
 	return n
 }
 
-// multiTracerState lives on ptraceContext during a multi-tracer run.
-// It coordinates the worker goroutines, captures the first fatal error,
-// and owns the lifecycle WaitGroup.
-type multiTracerState struct {
-	sharder    *pidSharder
-	wg         sync.WaitGroup
-	fatalErr   atomic.Pointer[error] // first fatal worker error wins
-
-	// processesMu guards the shared `processes` map on ptraceContext.
-	// Workers take RLock for getProcInfo lookups and Lock for inserts.
-	processesMu sync.RWMutex
-
-	// tlsPendingFDsMu guards `tlsPendingFDs`.
-	tlsPendingFDsMu sync.Mutex
-
-	// exitCodeOnce ensures the parent's exit code is recorded once.
-	exitCodeOnce sync.Once
+// tracerWorkerStats records per-worker counters for diagnostics.
+// Atomic-incremented from the worker's own goroutine (no cross-worker
+// contention).
+type tracerWorkerStats struct {
+	events    uint64 // syscall events handled
+	handoffIn uint64 // pids attached via channel
+	handoffOut uint64 // pids handed to other workers
+	keptLocal uint64 // pids kept on this worker (no handoff)
+	exits     uint64 // owned tracees that exited
+	wnohangEmpty uint64 // Wait4(WNOHANG) returned 0 (poll miss)
+	idleSleeps uint64 // entered idleSleepNs
 }
 
-// runTraceMulti is the multi-tracer entry point. The initial parent
-// process is started just like in the serial path; runTraceMulti then
-// dispatches it to worker goroutine 0 and waits for all workers.
+// tracerWorker owns a SUBSET of tracees and processes their events on
+// a dedicated OS thread.
+type tracerWorker struct {
+	id       int
+	pctx     *ptraceContext
+	incoming chan int          // new pids to attach
+	owned    map[int]struct{}  // tracees currently owned by this worker
+	stats    tracerWorkerStats
+}
+
+// multiTracerState lives on ptraceContext during a multi-tracer run.
+type multiTracerState struct {
+	sharder  *pidSharder
+	workers  []*tracerWorker
+	wg       sync.WaitGroup
+	fatalErr atomic.Pointer[error]
+
+	processesMu     sync.RWMutex
+	tlsPendingFDsMu sync.Mutex
+	exitCodeOnce    sync.Once
+	shutdownOnce    sync.Once
+
+	// shutdown is closed when the trace is over (parent exited or a
+	// fatal error occurred). All workers select on it to break out of
+	// any blocking channel receive.
+	shutdown chan struct{}
+
+	statsEnabled bool
+}
+
+// shutdownOnce guards the close of the shutdown channel. Separate
+// from exitCodeOnce because workers may signal shutdown for non-exit
+// reasons (e.g., fatal error) where exit code isn't applicable.
+//
+// signalShutdown closes the shutdown channel exactly once. Safe to
+// call from any worker.
+func (m *multiTracerState) signalShutdown() {
+	m.shutdownOnce.Do(func() {
+		close(m.shutdown)
+	})
+}
+
+// runTraceMulti is the V2 entry. p.multi was initialized by runTrace
+// before dispatch. The initial parent has been started by exec.Cmd
+// with SysProcAttr.Ptrace=true and auto-attached to THIS goroutine's
+// OS thread. We detach it and hand it to worker 0 so all tracee
+// ownership runs through the worker pool.
 func (p *ptraceContext) runTraceMulti() error {
 	defer p.retryOpenedFiles()
+	defer p.maybePrintStats()
 
-	// p.multi was set by runTrace before dispatch.
 	if p.multi == nil {
 		p.multi = &multiTracerState{
-			sharder: newPIDSharder(multiTracerWorkerCount()),
+			sharder:      newPIDSharder(multiTracerWorkerCount()),
+			shutdown:     make(chan struct{}),
+			statsEnabled: multiTracerStatsEnabled(),
 		}
+	} else if p.multi.shutdown == nil {
+		p.multi.shutdown = make(chan struct{})
 	}
 
-	// Spawn the initial worker for the parent. The parent has already
-	// been started by exec.Cmd with Ptrace=true; the auto-attach has
-	// happened on the PARENT-tracer Go thread (the one in trace()).
-	// We can't just spawn a new goroutine and have it ptrace the parent
-	// because the kernel sees the original tracer thread as the owner.
-	// Detach + reattach.
-	if err := unix.PtraceDetach(p.parentPid); err != nil {
-		// First-time detach during stop is benign if the parent isn't
-		// fully stopped yet; try a soft path. If it really failed, fall
-		// back to serial.
-		return fmt.Errorf("multi-tracer detach parent: %w (fallback to serial recommended)", err)
+	n := multiTracerWorkerCount()
+	p.multi.workers = make([]*tracerWorker, n)
+	for i := 0; i < n; i++ {
+		w := &tracerWorker{
+			id:       i,
+			pctx:     p,
+			incoming: make(chan int, incomingCap),
+			owned:    make(map[int]struct{}, 16),
+		}
+		p.multi.workers[i] = w
 	}
 
-	// Send SIGSTOP so the parent doesn't run before the new worker attaches.
-	if err := syscall.Kill(p.parentPid, syscall.SIGSTOP); err != nil {
-		return fmt.Errorf("multi-tracer kill SIGSTOP parent: %w", err)
+	// Detach the parent atomically with SIGSTOP delivery. This avoids
+	// the race window where a sig=0 detach resumes the tracee briefly
+	// before a follow-up Kill catches it.
+	if err := ptraceDetachWithSignal(p.parentPid, syscall.SIGSTOP); err != nil {
+		return fmt.Errorf("multi-tracer: detach-with-SIGSTOP parent: %w", err)
 	}
 
-	p.multi.wg.Add(1)
-	go p.tracerWorker(p.parentPid, true /*isRoot*/)
+	// Assign root to worker 0 via the sharder so subsequent CLONE
+	// children get balanced choices.
+	_ = p.multi.sharder.WorkerFor(p.parentPid) // worker 0 (first call)
+	p.multi.workers[0].incoming <- p.parentPid
+
+	// Start all workers.
+	for _, w := range p.multi.workers {
+		p.multi.wg.Add(1)
+		go w.run()
+	}
+
+	// Mark the parent root in case the worker sets it before our wait.
+	p.getProcInfo(p.parentPid).Program = p.mainProgram
+
 	p.multi.wg.Wait()
 
 	if errp := p.multi.fatalErr.Load(); errp != nil {
@@ -146,161 +241,253 @@ func (p *ptraceContext) runTraceMulti() error {
 	return nil
 }
 
-// tracerWorker owns a single tracee (rootPid) and ALL of its children
-// that the sharder routes to this worker. The goroutine pins itself to
-// an OS thread for the entire run because ptrace operations are tied
-// to the thread that attached.
-//
-// isRoot=true means this is the initial parent process; we also stash
-// its exit code on the ptraceContext when it exits.
-func (p *ptraceContext) tracerWorker(rootPid int, isRoot bool) {
-	defer p.multi.wg.Done()
-
+// run is the worker's event loop. Pinned to one OS thread for the
+// entire lifetime so ptrace operations stay on the attaching thread.
+func (w *tracerWorker) run() {
+	defer w.pctx.multi.wg.Done()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	// Attach to rootPid. The kernel sends us a SIGSTOP via the attach.
-	if err := unix.PtraceAttach(rootPid); err != nil {
-		p.multi.fatalErr.CompareAndSwap(nil, &err)
-		return
-	}
-
-	// Drain the attach SIGSTOP.
 	var status unix.WaitStatus
-	if _, err := unix.Wait4(rootPid, &status, 0, nil); err != nil {
-		p.multi.fatalErr.CompareAndSwap(nil, &err)
-		return
-	}
-
-	if err := unix.PtraceSetOptions(rootPid,
-		unix.PTRACE_O_TRACESYSGOOD|unix.PTRACE_O_TRACEEXEC|unix.PTRACE_O_TRACEEXIT|
-			unix.PTRACE_O_TRACEVFORK|unix.PTRACE_O_TRACEFORK|unix.PTRACE_O_TRACECLONE); err != nil {
-		p.multi.fatalErr.CompareAndSwap(nil, &err)
-		return
-	}
-
-	if isRoot {
-		procInfo := p.getProcInfo(rootPid)
-		procInfo.Program = p.mainProgram
-	}
-
-	if err := unix.PtraceSyscall(rootPid, 0); err != nil {
-		p.multi.fatalErr.CompareAndSwap(nil, &err)
-		return
-	}
-
-	// Track our owned pids so we know when to exit.
-	owned := map[int]bool{rootPid: true}
 
 	for {
+		// 0. Drain incoming channel non-blockingly so new handoffs
+		// take effect before we (re-)enter Wait4. This is the only
+		// place new pids enter `owned`.
+		drained := true
+		for drained {
+			select {
+			case pid, ok := <-w.incoming:
+				if !ok {
+					return
+				}
+				if err := w.attach(pid); err != nil {
+					log.Debugf("(multi w=%d) attach pid %d: %v", w.id, pid, err)
+					continue
+				}
+				w.owned[pid] = struct{}{}
+				atomic.AddUint64(&w.stats.handoffIn, 1)
+			default:
+				drained = false
+			}
+		}
+
+		// 1. If shutdown was signaled and we have nothing to do, exit.
+		select {
+		case <-w.pctx.multi.shutdown:
+			if len(w.owned) == 0 {
+				return
+			}
+			// Otherwise keep processing — abandoning owned tracees
+			// mid-stop could leave them stuck. Process events until
+			// owned drains naturally.
+		default:
+		}
+
+		// 2. If we own nothing, BLOCK on the channel OR shutdown.
+		// This is the idle path — no CPU burn.
+		if len(w.owned) == 0 {
+			select {
+			case pid, ok := <-w.incoming:
+				if !ok {
+					return
+				}
+				if err := w.attach(pid); err != nil {
+					log.Debugf("(multi w=%d) attach pid %d: %v", w.id, pid, err)
+					continue
+				}
+				w.owned[pid] = struct{}{}
+				atomic.AddUint64(&w.stats.handoffIn, 1)
+				continue
+			case <-w.pctx.multi.shutdown:
+				return
+			}
+		}
+
+		// 3. BLOCKING Wait4 for any owned tracee. Cost: a new handoff
+		// in the channel waits until our next ptrace stop wakes us
+		// (bounded by the next syscall from one of our owned tracees;
+		// trace attestor workloads have frequent syscalls so this is
+		// sub-millisecond in practice).
 		pid, err := unix.Wait4(-1, &status, unix.WALL, nil)
 		if err != nil {
 			if errors.Is(err, syscall.ECHILD) {
-				return // no more children
+				// No more children. Clear owned defensively and loop.
+				for opid := range w.owned {
+					w.pctx.multi.sharder.Release(opid)
+					delete(w.owned, opid)
+				}
+				continue
 			}
-			p.multi.fatalErr.CompareAndSwap(nil, &err)
+			if errors.Is(err, syscall.EINTR) {
+				// Spurious wake (e.g., from Go runtime signal). Loop.
+				continue
+			}
+			w.pctx.multi.fatalErr.CompareAndSwap(nil, &err)
+			w.pctx.multi.signalShutdown()
 			return
 		}
 
-		// Exit / signal handling.
-		if status.Exited() {
-			pInfo := p.getProcInfo(pid)
-			pInfo.ExitCode = status.ExitStatus()
-			delete(owned, pid)
-			p.multi.sharder.Release(pid)
-			if isRoot && pid == rootPid {
-				p.multi.exitCodeOnce.Do(func() { p.exitCode = status.ExitStatus() })
-				return
-			}
-			if len(owned) == 0 {
-				return
-			}
-			continue
-		}
-		if status.Signaled() {
-			pInfo := p.getProcInfo(pid)
-			pInfo.ExitCode = 128 + int(status.Signal())
-			delete(owned, pid)
-			p.multi.sharder.Release(pid)
-			if isRoot && pid == rootPid {
-				p.multi.exitCodeOnce.Do(func() { p.exitCode = 128 + int(status.Signal()) })
-				return
-			}
-			if len(owned) == 0 {
-				return
-			}
-			continue
-		}
+		// 4. Process the event.
+		w.processEvent(pid, status)
+	}
+}
 
-		sig := status.StopSignal()
-		injectedSig := int(sig)
+// attach acquires kernel ownership of pid for this worker. The pid is
+// in TASK_STOPPED (job-control stop from ptrace_detach-with-SIGSTOP)
+// when handed off, or in T_TRACED for the initial parent.
+//
+// We pass WUNTRACED so Wait4 reports the existing TASK_STOPPED state
+// without requiring a fresh state transition. This avoids a deadlock
+// where the attach SIGSTOP races with a tracee already stopped.
+func (w *tracerWorker) attach(pid int) error {
+	if err := unix.PtraceAttach(pid); err != nil {
+		return fmt.Errorf("PtraceAttach(%d): %w", pid, err)
+	}
+	var status unix.WaitStatus
+	if _, err := unix.Wait4(pid, &status, unix.WUNTRACED, nil); err != nil {
+		return fmt.Errorf("wait attach %d: %w", pid, err)
+	}
+	if err := unix.PtraceSetOptions(pid,
+		unix.PTRACE_O_TRACESYSGOOD|unix.PTRACE_O_TRACEEXEC|unix.PTRACE_O_TRACEEXIT|
+			unix.PTRACE_O_TRACEVFORK|unix.PTRACE_O_TRACEFORK|unix.PTRACE_O_TRACECLONE); err != nil {
+		return fmt.Errorf("PtraceSetOptions(%d): %w", pid, err)
+	}
+	if err := unix.PtraceSyscall(pid, 0); err != nil {
+		return fmt.Errorf("PtraceSyscall(%d): %w", pid, err)
+	}
+	return nil
+}
+
+// processEvent handles one ptrace stop for `pid`. Same semantics as
+// the serial runTrace loop, but scoped to this worker.
+func (w *tracerWorker) processEvent(pid int, status unix.WaitStatus) {
+	atomic.AddUint64(&w.stats.events, 1)
+	p := w.pctx
+
+	// Exit / signal handling — pid leaves our ownership.
+	if status.Exited() {
+		pInfo := p.getProcInfo(pid)
+		pInfo.ExitCode = status.ExitStatus()
+		delete(w.owned, pid)
+		atomic.AddUint64(&w.stats.exits, 1)
+		p.multi.sharder.Release(pid)
+		if pid == p.parentPid {
+			p.multi.exitCodeOnce.Do(func() { p.exitCode = status.ExitStatus() })
+			p.multi.signalShutdown()
+		}
+		return
+	}
+	if status.Signaled() {
+		pInfo := p.getProcInfo(pid)
+		pInfo.ExitCode = 128 + int(status.Signal())
+		delete(w.owned, pid)
+		atomic.AddUint64(&w.stats.exits, 1)
+		p.multi.sharder.Release(pid)
+		if pid == p.parentPid {
+			p.multi.exitCodeOnce.Do(func() { p.exitCode = 128 + int(status.Signal()) })
+			p.multi.signalShutdown()
+		}
+		return
+	}
+
+	sig := status.StopSignal()
+	injectedSig := int(sig)
+	if status.Stopped() {
 		isPtraceTrap := (unix.SIGTRAP | unix.PTRACE_EVENT_STOP) == sig
-		if status.Stopped() && isPtraceTrap {
+		cause := status.TrapCause()
+
+		if isPtraceTrap {
+			// Syscall enter/exit stop — TRACESYSGOOD-flagged SIGTRAP.
 			injectedSig = 0
 			if err := p.nextSyscall(pid); err != nil {
-				log.Debugf("(multi-tracing) syscall handler error: %v", err)
+				log.Debugf("(multi w=%d) syscall handler error: %v", w.id, err)
 			}
-
-			// Check for clone/fork/vfork events — these introduce a
-			// new pid we may want to hand off.
-			cause := status.TrapCause()
+		} else if cause > 0 {
+			// Ptrace event stop (CLONE/FORK/VFORK/EXEC/EXIT). The
+			// signal is SIGTRAP without TRACESYSGOOD — suppress
+			// injection so we don't deliver SIGTRAP to the tracee.
+			injectedSig = 0
 			switch cause {
 			case unix.PTRACE_EVENT_CLONE, unix.PTRACE_EVENT_FORK, unix.PTRACE_EVENT_VFORK:
 				newPid, mErr := unix.PtraceGetEventMsg(pid)
 				if mErr == nil && newPid > 0 {
-					// Sharder decides where the new tracee lives.
-					targetWorker := p.multi.sharder.WorkerFor(int(newPid))
-					selfWorker := p.multi.sharder.WorkerFor(pid)
-					if targetWorker != selfWorker {
-						// Detach the new child and hand off to a new
-						// worker goroutine.
-						p.handOffTracee(int(newPid))
-					} else {
-						// Stays on us. Kernel auto-attaches; mark it
-						// owned and SetOptions.
-						owned[int(newPid)] = true
-						_ = unix.PtraceSetOptions(int(newPid),
-							unix.PTRACE_O_TRACESYSGOOD|unix.PTRACE_O_TRACEEXEC|
-								unix.PTRACE_O_TRACEEXIT|unix.PTRACE_O_TRACEVFORK|
-								unix.PTRACE_O_TRACEFORK|unix.PTRACE_O_TRACECLONE)
-					}
+					w.routeNewTracee(int(newPid))
 				}
 			}
 		}
+		// Otherwise: real signal stop (e.g., SIGCHLD). Inject as-is.
+	}
 
-		if err := unix.PtraceSyscall(pid, injectedSig); err != nil {
-			log.Debugf("(multi-tracing) ptrace syscall resume error: %v", err)
-		}
+	if err := unix.PtraceSyscall(pid, injectedSig); err != nil {
+		log.Debugf("(multi w=%d) ptrace syscall resume %d: %v", w.id, pid, err)
 	}
 }
 
-// handOffTracee detaches a newly-cloned tracee from the current worker
-// and spawns a new worker goroutine to attach it. The new child has
-// been auto-attached to the calling thread by the kernel via
-// PTRACE_O_TRACECLONE; we detach with SIGSTOP queued so it stays
-// suspended until the new worker can attach.
-func (p *ptraceContext) handOffTracee(newPid int) {
-	// Wait for the new child's initial SIGSTOP-after-clone before we
-	// detach it. The auto-attach delivers a SIGSTOP that we need to
-	// consume so the kernel knows the tracee is in a ptrace-stopped
-	// state.
-	var status unix.WaitStatus
-	_, _ = unix.Wait4(newPid, &status, 0, nil)
-
-	// Detach + queue SIGSTOP so the child stays put.
-	if err := unix.PtraceDetach(newPid); err != nil {
-		log.Debugf("(multi-tracing) detach %d for handoff: %v", newPid, err)
-		return
-	}
-	if err := syscall.Kill(newPid, syscall.SIGSTOP); err != nil {
-		log.Debugf("(multi-tracing) sigstop %d after detach: %v", newPid, err)
-		return
-	}
-
-	p.multi.wg.Add(1)
-	go p.tracerWorker(newPid, false /*isRoot*/)
+// routeNewTracee processes a CLONE/FORK/VFORK event by adding the new
+// pid to THIS worker's owned set.
+//
+// NOTE on transfer: cross-thread pid transfer via DETACH-with-SIGSTOP
+// + remote ATTACH was investigated and found to be racy in the Linux
+// ptrace API. After PTRACE_DETACH(pid, sig=SIGSTOP), the tracee
+// transitions to TASK_STOPPED (job-control stop). The remote tracer's
+// PTRACE_ATTACH succeeds but Wait4 either blocks (without WUNTRACED)
+// or returns the stale stopped state, and subsequent PTRACE_SYSCALL
+// on a job-control-stopped tracee doesn't reliably re-enter ptrace
+// trace mode. PTRACE_SEIZE + PTRACE_INTERRUPT was the cleanest
+// alternative but adds a DETACH-RESUME window during which syscalls
+// from the tracee are MISSED (a correctness regression).
+//
+// For a single trace tree, this means parallelism is bounded by the
+// kernel's per-thread ptrace ownership — the worker pool is in place
+// for future multi-trace use cases (e.g., concurrent attestation of
+// multiple independent builds), but a single-build trace funnels
+// through one worker.
+//
+// The performance wins for ptrace-based tracing live elsewhere:
+//   - seccomp-BPF prefilter (reduces stops ~10-20x at the kernel)
+//   - eBPF (future) — in-kernel capture, no userspace round-trip
+func (w *tracerWorker) routeNewTracee(newPid int) {
+	// Don't explicitly Wait4(newPid) here — the new tracee's first
+	// SIGSTOP (from kernel auto-attach via PTRACE_O_TRACECLONE) will
+	// be picked up by the main Wait4(-1, ...) loop. Blocking here
+	// can deadlock when multiple CLONE events fire close together.
+	//
+	// We add to `owned` so the main loop knows this pid is ours, and
+	// the first stop event we get for newPid will be processed in
+	// processEvent — which sets options on first sight (any subsequent
+	// state-handling).
+	w.owned[newPid] = struct{}{}
+	atomic.AddUint64(&w.stats.keptLocal, 1)
 }
 
-// Multi-tracer-safe accessors are folded into getProcInfo on
-// ptraceContext (it checks p.multi != nil and locks accordingly).
-// No additional helper needed here.
+// maybePrintStats writes the per-worker stats summary to a file (path
+// from CILOCK_TRACE_MULTI_STATS env var if set to a path, otherwise
+// /tmp/cilock-mt-stats.log). Quiet by default.
+func (p *ptraceContext) maybePrintStats() {
+	if p.multi == nil || !p.multi.statsEnabled {
+		return
+	}
+	path := os.Getenv("CILOCK_TRACE_MULTI_STATS_PATH")
+	if path == "" {
+		path = "/tmp/cilock-mt-stats.log"
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "=== multi-tracer run @ %s (n=%d workers) ===\n",
+		time.Now().Format(time.RFC3339Nano), len(p.multi.workers))
+	for _, w := range p.multi.workers {
+		ev := atomic.LoadUint64(&w.stats.events)
+		hi := atomic.LoadUint64(&w.stats.handoffIn)
+		ho := atomic.LoadUint64(&w.stats.handoffOut)
+		kl := atomic.LoadUint64(&w.stats.keptLocal)
+		ex := atomic.LoadUint64(&w.stats.exits)
+		wn := atomic.LoadUint64(&w.stats.wnohangEmpty)
+		is := atomic.LoadUint64(&w.stats.idleSleeps)
+		fmt.Fprintf(f, "  w=%d events=%d in=%d out=%d kept=%d exits=%d wnohang_empty=%d idle_sleeps=%d\n",
+			w.id, ev, hi, ho, kl, ex, wn, is)
+	}
+}
