@@ -423,7 +423,7 @@ jobs:
 
       - name: Publish install script
         run: |
-          cp ../deploy/cilock/install.sh dist/install.sh
+          cp deploy/cilock/install.sh dist/install.sh
           # Sign install.sh with the same OIDC identity end users will check.
           cosign sign-blob --yes \
             --output-signature dist/install.sh.sig \
