@@ -39,3 +39,10 @@ func getSyscallArgs(regs unix.PtraceRegs) []uintptr {
 func getNativeUint(n int) uint32 {
 	return uint32(n)
 }
+
+// handleArchLegacySyscall is currently a no-op on arm. arm has legacy
+// non-*at variants but cilock release artifacts do not target arm32 —
+// stub exists so the shared tracing_linux.go compiles for this arch.
+func (p *ptraceContext) handleArchLegacySyscall(_ int, _ uint32, _ []uintptr) error {
+	return nil
+}

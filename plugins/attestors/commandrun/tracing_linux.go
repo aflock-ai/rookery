@@ -258,7 +258,9 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 
 		}
 
-	case unix.SYS_OPENAT:
+	case unix.SYS_OPENAT, unix.SYS_OPENAT2:
+		// openat2(dirfd, pathname, *how, size) takes pathname at arg 1
+		// just like openat(dirfd, pathname, flags, mode) — same handler.
 		file, err := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
 		if err != nil {
 			return err
@@ -388,8 +390,10 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			}
 		}
 
-	case unix.SYS_RENAMEAT2:
-		// renameat2(olddirfd, oldpath, newdirfd, newpath, flags)
+	case unix.SYS_RENAMEAT2, unix.SYS_RENAMEAT:
+		// renameat2(olddirfd, oldpath, newdirfd, newpath, flags) and
+		// renameat(olddirfd, oldpath, newdirfd, newpath) share the same
+		// arg-1/arg-3 path layout — single handler covers both.
 		oldPath, err1 := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
 		newPath, err2 := p.readSyscallReg(pid, argArray[3], MAX_PATH_LEN)
 		if err1 == nil && err2 == nil {
@@ -586,6 +590,225 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			Detail:    "attempted to load kernel module — rootkit installation",
 			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		})
+
+	// --- Modern variant: execveat (execve relative to an fd) ---
+
+	case unix.SYS_EXECVEAT:
+		// execveat(dirfd, pathname, argv, envp, flags) — pathname at arg 1.
+		// A malicious step can memfd_create + execveat to exec from anonymous
+		// memory, bypassing the SYS_EXECVE hook entirely.
+		procInfo := p.getProcInfo(pid)
+		program, err := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
+		if err == nil {
+			procInfo.Program = program
+		}
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "execveat",
+			Detail:    fmt.Sprintf("execveat(dirfd=%d, pathname=%q) — exec relative to fd, may be from memfd", int(argArray[0]), program),
+			Args:      []int{int(argArray[0])},
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	// --- File mutation: links, truncate, directory ops ---
+
+	case unix.SYS_LINKAT:
+		// linkat(olddirfd, oldpath, newdirfd, newpath, flags) — hardlink.
+		// A build can replace a file content via link() without ever calling
+		// write() — invisible without this hook.
+		oldPath, err1 := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
+		newPath, err2 := p.readSyscallReg(pid, argArray[3], MAX_PATH_LEN)
+		if err1 == nil && err2 == nil {
+			procInfo := p.getProcInfo(pid)
+			p.ensureFileOps(procInfo)
+			procInfo.FileOps.Links = append(procInfo.FileOps.Links, FileLink{
+				SourcePath: oldPath,
+				LinkPath:   newPath,
+				IsSymlink:  false,
+				Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	case unix.SYS_SYMLINKAT:
+		// symlinkat(target, newdirfd, linkpath) — args: 0=target, 2=linkpath.
+		target, err1 := p.readSyscallReg(pid, argArray[0], MAX_PATH_LEN)
+		linkPath, err2 := p.readSyscallReg(pid, argArray[2], MAX_PATH_LEN)
+		if err1 == nil && err2 == nil {
+			procInfo := p.getProcInfo(pid)
+			p.ensureFileOps(procInfo)
+			procInfo.FileOps.Links = append(procInfo.FileOps.Links, FileLink{
+				SourcePath: target,
+				LinkPath:   linkPath,
+				IsSymlink:  true,
+				Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	case unix.SYS_TRUNCATE:
+		// truncate(path, length) — clear or shrink a file by path.
+		path, err := p.readSyscallReg(pid, argArray[0], MAX_PATH_LEN)
+		if err == nil {
+			procInfo := p.getProcInfo(pid)
+			p.ensureFileOps(procInfo)
+			procInfo.FileOps.Truncates = append(procInfo.FileOps.Truncates, FileTruncate{
+				Path:      path,
+				NewSize:   int64(argArray[1]),
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	case unix.SYS_FTRUNCATE:
+		// ftruncate(fd, length) — fd-based truncate. Resolve fd to path.
+		fd := int(argArray[0])
+		path := p.resolveFD(pid, fd)
+		if path != "" && !strings.HasPrefix(path, "pipe:") && !strings.HasPrefix(path, "socket:") && !strings.HasPrefix(path, "anon_inode:") {
+			procInfo := p.getProcInfo(pid)
+			p.ensureFileOps(procInfo)
+			procInfo.FileOps.Truncates = append(procInfo.FileOps.Truncates, FileTruncate{
+				Path:      path,
+				NewSize:   int64(argArray[1]),
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	case unix.SYS_MKDIRAT:
+		// mkdirat(dirfd, pathname, mode)
+		path, err := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
+		if err == nil {
+			procInfo := p.getProcInfo(pid)
+			p.ensureFileOps(procInfo)
+			procInfo.FileOps.DirOps = append(procInfo.FileOps.DirOps, DirOp{
+				Path:      path,
+				Op:        "mkdir",
+				Mode:      uint32(argArray[2]),
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+	// --- Privilege / sandbox-relevant ---
+
+	case unix.SYS_CHROOT:
+		// chroot(path) — change root directory. Very unusual inside a build.
+		path, _ := p.readSyscallReg(pid, argArray[0], MAX_PATH_LEN)
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "chroot",
+			Detail:    fmt.Sprintf("chroot(%q) — filesystem root change inside build", path),
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_PIVOT_ROOT:
+		// pivot_root(new_root, put_old) — stronger root change than chroot.
+		newRoot, _ := p.readSyscallReg(pid, argArray[0], MAX_PATH_LEN)
+		putOld, _ := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "pivot_root",
+			Detail:    fmt.Sprintf("pivot_root(new=%q, putOld=%q) — container primitive, sandbox-escape signal", newRoot, putOld),
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_SETUID, unix.SYS_SETGID, unix.SYS_SETRESUID, unix.SYS_SETRESGID:
+		// Privilege change — builds should not be doing this.
+		var name string
+		switch syscallId {
+		case unix.SYS_SETUID:
+			name = "setuid"
+		case unix.SYS_SETGID:
+			name = "setgid"
+		case unix.SYS_SETRESUID:
+			name = "setresuid"
+		case unix.SYS_SETRESGID:
+			name = "setresgid"
+		}
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   name,
+			Detail:    fmt.Sprintf("%s(%d, %d, %d) — privilege change inside build", name, int(argArray[0]), int(argArray[1]), int(argArray[2])),
+			Args:      []int{int(argArray[0]), int(argArray[1]), int(argArray[2])},
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_UNSHARE:
+		// unshare(flags) — create new namespace. Same flag set as clone.
+		flags := int(argArray[0])
+		var flagNames []string
+		if flags&unix.CLONE_NEWNS != 0 {
+			flagNames = append(flagNames, "CLONE_NEWNS")
+		}
+		if flags&unix.CLONE_NEWPID != 0 {
+			flagNames = append(flagNames, "CLONE_NEWPID")
+		}
+		if flags&unix.CLONE_NEWNET != 0 {
+			flagNames = append(flagNames, "CLONE_NEWNET")
+		}
+		if flags&unix.CLONE_NEWUSER != 0 {
+			flagNames = append(flagNames, "CLONE_NEWUSER")
+		}
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "unshare",
+			Detail:    fmt.Sprintf("unshare(flags=%s) — namespace creation, container-escape primitive", strings.Join(flagNames, "|")),
+			Args:      []int{flags},
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_CAPSET:
+		// capset — capability change (separate from PRCTL cap ops).
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "capset",
+			Detail:    "capability set modification inside build",
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	// --- Anti-tamper signals ---
+
+	case unix.SYS_BPF:
+		// bpf(cmd, attr, size) — loading a BPF program. Particularly
+		// notable because BPF_PROG_LOAD with BPF_PROG_TYPE_LSM or a
+		// competing seccomp filter could blind us.
+		cmd := int(argArray[0])
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "bpf",
+			Detail:    fmt.Sprintf("bpf(cmd=%d) — BPF program load, may attempt to install competing filter", cmd),
+			Args:      []int{cmd},
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	case unix.SYS_SECCOMP:
+		// seccomp(op, flags, args) — the bare syscall variant (libseccomp's
+		// preferred path). prctl(PR_SET_SECCOMP) is already covered via
+		// SYS_PRCTL. This catches the alternate install path.
+		op := int(argArray[0])
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "seccomp",
+			Detail:    fmt.Sprintf("seccomp(op=%d) — installing seccomp filter (potentially to hide further syscalls)", op),
+			Args:      []int{op},
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	// kexec_load / kexec_file_load are handled per-arch in
+	// handleArchLegacySyscall because SYS_KEXEC_FILE_LOAD is not defined
+	// on every Linux arch (e.g. 386). amd64 + arm64 both have it.
+
+	case unix.SYS_PROCESS_VM_WRITEV:
+		// process_vm_writev(pid, ...) — write to another process's memory.
+		// Used for process injection.
+		target := int(argArray[0])
+		procInfo := p.getProcInfo(pid)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "process_vm_writev",
+			Detail:    fmt.Sprintf("process_vm_writev(target_pid=%d) — writing into another process's memory", target),
+			Args:      []int{target},
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+
+	default:
+		// Per-arch handler picks up amd64-only legacy variants (chmod,
+		// rename, unlink, mkdir, etc. that arm64 never had).
+		return p.handleArchLegacySyscall(pid, syscallId, argArray)
 	}
 
 	return nil

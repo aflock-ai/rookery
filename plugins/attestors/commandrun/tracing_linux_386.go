@@ -38,3 +38,9 @@ func getSyscallArgs(regs unix.PtraceRegs) []uintptr {
 func getNativeUint(n int) uint32 {
 	return uint32(n)
 }
+
+// handleArchLegacySyscall is a stub on 386. cilock does not release 386
+// builds; the stub exists so the shared tracing_linux.go compiles.
+func (p *ptraceContext) handleArchLegacySyscall(_ int, _ int32, _ []uintptr) error {
+	return nil
+}

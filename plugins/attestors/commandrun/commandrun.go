@@ -174,12 +174,42 @@ type SyscallEvent struct {
 	Timestamp string `json:"timestamp,omitempty"`
 }
 
+// FileLink records a hardlink or symlink creation. A build that swaps a
+// file via link() never calls write() — so without capturing link ops,
+// content substitution is invisible to the attestor.
+type FileLink struct {
+	SourcePath string `json:"sourcePath"`
+	LinkPath   string `json:"linkPath"`
+	IsSymlink  bool   `json:"isSymlink"`
+	Timestamp  string `json:"timestamp,omitempty"`
+}
+
+// FileTruncate records a truncate/ftruncate operation. Truncate can clear
+// a file's contents without ever calling write — same invisibility risk
+// as link().
+type FileTruncate struct {
+	Path      string `json:"path"`
+	NewSize   int64  `json:"newSize"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// DirOp records a directory creation or removal.
+type DirOp struct {
+	Path      string `json:"path"`
+	Op        string `json:"op"` // "mkdir" or "rmdir"
+	Mode      uint32 `json:"mode,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
 // FileActivity aggregates all file mutation operations for a process.
 type FileActivity struct {
 	Writes      []FileWrite      `json:"writes,omitempty"`
 	Renames     []FileRename     `json:"renames,omitempty"`
 	Deletes     []FileDelete     `json:"deletes,omitempty"`
 	PermChanges []FilePermChange `json:"permChanges,omitempty"`
+	Links       []FileLink       `json:"links,omitempty"`
+	Truncates   []FileTruncate   `json:"truncates,omitempty"`
+	DirOps      []DirOp          `json:"dirOps,omitempty"`
 }
 
 type ProcessInfo struct {
