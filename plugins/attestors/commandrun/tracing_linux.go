@@ -393,10 +393,10 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 	case unix.SYS_RENAMEAT2, unix.SYS_RENAMEAT:
 		// renameat2(olddirfd, oldpath, newdirfd, newpath, flags) and
 		// renameat(olddirfd, oldpath, newdirfd, newpath) share the same
-		// arg-1/arg-3 path layout — single handler covers both.
-		oldPath, err1 := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
-		newPath, err2 := p.readSyscallReg(pid, argArray[3], MAX_PATH_LEN)
-		if err1 == nil && err2 == nil {
+		// arg-1/arg-3 path layout — single handler covers both. Both paths
+		// are read in one process_vm_readv to halve the kernel transitions.
+		oldPath, newPath, err := p.readSyscallReg2(pid, argArray[1], argArray[3], MAX_PATH_LEN)
+		if err == nil {
 			procInfo := p.getProcInfo(pid)
 			p.ensureFileOps(procInfo)
 			procInfo.FileOps.Renames = append(procInfo.FileOps.Renames, FileRename{
@@ -614,10 +614,10 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 	case unix.SYS_LINKAT:
 		// linkat(olddirfd, oldpath, newdirfd, newpath, flags) — hardlink.
 		// A build can replace a file content via link() without ever calling
-		// write() — invisible without this hook.
-		oldPath, err1 := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
-		newPath, err2 := p.readSyscallReg(pid, argArray[3], MAX_PATH_LEN)
-		if err1 == nil && err2 == nil {
+		// write() — invisible without this hook. Both paths fetched in one
+		// process_vm_readv via readSyscallReg2.
+		oldPath, newPath, err := p.readSyscallReg2(pid, argArray[1], argArray[3], MAX_PATH_LEN)
+		if err == nil {
 			procInfo := p.getProcInfo(pid)
 			p.ensureFileOps(procInfo)
 			procInfo.FileOps.Links = append(procInfo.FileOps.Links, FileLink{
@@ -630,9 +630,9 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 
 	case unix.SYS_SYMLINKAT:
 		// symlinkat(target, newdirfd, linkpath) — args: 0=target, 2=linkpath.
-		target, err1 := p.readSyscallReg(pid, argArray[0], MAX_PATH_LEN)
-		linkPath, err2 := p.readSyscallReg(pid, argArray[2], MAX_PATH_LEN)
-		if err1 == nil && err2 == nil {
+		// Both paths fetched in one process_vm_readv via readSyscallReg2.
+		target, linkPath, err := p.readSyscallReg2(pid, argArray[0], argArray[2], MAX_PATH_LEN)
+		if err == nil {
 			procInfo := p.getProcInfo(pid)
 			p.ensureFileOps(procInfo)
 			procInfo.FileOps.Links = append(procInfo.FileOps.Links, FileLink{
@@ -996,6 +996,128 @@ func (ctx *ptraceContext) readSyscallReg(pid int, addr uintptr, n int) (string, 
 	// wire format is unchanged for normal builds. See path_encoding.go
 	// and issue #164.
 	return sanitizePath(data[:size]), nil
+}
+
+// readSyscallReg2 reads two NUL-terminated path strings from the tracee in
+// a single process_vm_readv(2) call. Several syscalls (renameat2, renameat,
+// linkat, symlinkat) take two paths in distinct argument registers; reading
+// them sequentially costs two kernel transitions. process_vm_readv supports
+// vectorised remote reads natively, so we bundle both paths into one syscall.
+//
+// Behaviour and error semantics mirror the single-path readSyscallReg: each
+// buffer is NUL-trimmed, then run through sanitizePath for lossless JSON
+// encoding of non-UTF-8 path bytes (issue #164). A returned error means
+// neither path is usable — callers should treat it as failure for the whole
+// syscall, exactly as the prior two-call pattern did.
+//
+// Page-aligned sizing: process_vm_readv(2) stops on the first remote iovec
+// that hits unmapped memory and skips every subsequent iovec — even if it
+// would have succeeded on its own. In practice short path strings often
+// sit near the tail of a page, so a naive 4 KiB read on iov[0] partially
+// succeeds and silently zeroes iov[1]. The kernel guarantees the rest of
+// the *current* page is mapped if the start address is mapped, so we cap
+// each remote iov at the distance to the next page boundary. That keeps
+// the read inside one page and lets iov[1] always run. n is still the
+// caller's upper bound (MAX_PATH_LEN); a path longer than the remaining
+// page would be unusual and is handled by the partial-read fallback.
+//
+// Partial-read fallback: if despite the page-cap we still see fewer bytes
+// than the first iov requested, iov[1] is suspect — we re-issue it on its
+// own. The kernel handles single-iov short reads independently, so this
+// always succeeds. The hot path stays one syscall; the slow path is the
+// same two syscalls the original code did.
+func (p *ptraceContext) readSyscallReg2(pid int, addr1, addr2 uintptr, n int) (string, string, error) {
+	const pageSize = 4096 // every Linux arch cilock ships on uses 4 KiB pages
+
+	// Cap each remote iov to "addr → next page boundary" so iov[0] never
+	// trips on unmapped memory mid-read. The remote process may have a
+	// longer path than this — extremely uncommon in real builds — and the
+	// fallback below picks that case up.
+	len1 := int(pageSize - (uintptr(addr1) % pageSize))
+	if len1 > n {
+		len1 = n
+	}
+	len2 := int(pageSize - (uintptr(addr2) % pageSize))
+	if len2 > n {
+		len2 = n
+	}
+
+	// One contiguous local buffer split in two halves keeps the bookkeeping
+	// simple and trims us down to a single allocation. We always allocate
+	// the full 2*n; only the iovec lengths are clipped.
+	data := make([]byte, 2*n)
+	localIovs := []unix.Iovec{
+		{Base: &data[0], Len: getNativeUint(len1)},
+		{Base: &data[n], Len: getNativeUint(len2)},
+	}
+	remoteIovs := []unix.RemoteIovec{
+		{Base: addr1, Len: len1},
+		{Base: addr2, Len: len2},
+	}
+
+	numBytes, err := unix.ProcessVMReadv(pid, localIovs, remoteIovs, 0)
+	if err != nil {
+		return "", "", err
+	}
+
+	// If iov[0] short-read inside the page-capped window, the kernel
+	// skipped iov[1]. Fall back to a stand-alone read for the second path.
+	// "Short" here means "did not satisfy iov[0]'s len1 request" — anything
+	// short of that means iov[1] was never attempted.
+	if numBytes <= len1 {
+		first, firstHasNul := extractPath(data[:len1])
+		if !firstHasNul {
+			// First path overflows the page window (rare): re-read it on
+			// its own with the kernel's tolerant short-read semantics.
+			var err3 error
+			first, err3 = p.readSyscallReg(pid, addr1, n)
+			if err3 != nil {
+				return "", "", err3
+			}
+		}
+		second, err2 := p.readSyscallReg(pid, addr2, n)
+		if err2 != nil {
+			return "", "", err2
+		}
+		return first, second, nil
+	}
+
+	// Both iovs ran. extractPath also reports whether it actually found a
+	// NUL — if it did not, the real path is longer than the page window
+	// and we must re-read the slow way to avoid truncating it.
+	first, firstHasNul := extractPath(data[:len1])
+	second, secondHasNul := extractPath(data[n : n+len2])
+	if !firstHasNul {
+		var err3 error
+		first, err3 = p.readSyscallReg(pid, addr1, n)
+		if err3 != nil {
+			return "", "", err3
+		}
+	}
+	if !secondHasNul {
+		var err3 error
+		second, err3 = p.readSyscallReg(pid, addr2, n)
+		if err3 != nil {
+			return "", "", err3
+		}
+	}
+	return first, second, nil
+}
+
+// extractPath locates the NUL terminator in a buffer freshly populated by
+// process_vm_readv and returns the sanitized path string and whether a NUL
+// was actually found. The "found" return is what callers should use to
+// decide if they need a longer re-read — len(string) is unreliable because
+// sanitizePath can expand bytes during non-UTF-8 escape (issue #164).
+// Extracted so the two-path helper applies the same trimming +
+// lossless-encoding policy as readSyscallReg.
+func extractPath(buf []byte) (string, bool) {
+	size := bytes.IndexByte(buf, 0)
+	nulFound := size >= 0
+	if !nulFound {
+		size = len(buf)
+	}
+	return sanitizePath(buf[:size]), nulFound
 }
 
 func cleanString(s string) string {
