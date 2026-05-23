@@ -150,6 +150,7 @@ type AttestationContext struct {
 	envAdditionalKeys              []string
 	envExcludeKeys                 []string
 	envDisableDefaultSensitiveList bool
+	envCaptureAllowlist            []string
 }
 
 type Product struct {
@@ -345,6 +346,14 @@ func (ctx *AttestationContext) EnvExcludeKeys() []string {
 
 func (ctx *AttestationContext) EnvDisableDefaultSensitiveList() bool {
 	return ctx.envDisableDefaultSensitiveList
+}
+
+// EnvCaptureAllowlist returns the positive allowlist of env-key patterns
+// configured for capture (exact keys or globs). When non-empty, the
+// environment attestor captures ONLY matching keys. When empty, all
+// non-sensitive keys are captured (legacy behaviour).
+func (ctx *AttestationContext) EnvCaptureAllowlist() []string {
+	return ctx.envCaptureAllowlist
 }
 
 func (ctx *AttestationContext) addMaterials(materialer Materialer) {
