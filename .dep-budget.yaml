@@ -35,4 +35,7 @@ cilock:
   # prove (Agent D) each contributed bytes to go.sum. Actual final
   # value is set after `go mod tidy` runs against the integrated
   # branch — the value below is the headroom we accept.
-  go_sum_bytes: 71500
+  # 2026-05-23: +145 bytes for registering prowler attestor in canonical
+  # main (rookery#140). prowler's transitive deps don't add to the
+  # binary-linked set (transitive_pkgs unchanged), only to declared deps.
+  go_sum_bytes: 71800
