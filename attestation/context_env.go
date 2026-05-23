@@ -48,3 +48,14 @@ func WithEnvDisableDefaultSensitiveList() AttestationContextOption {
 		a.envDisableDefaultSensitiveList = true
 	}
 }
+
+// WithEnvCaptureAllowlist switches the environment attestor into positive
+// allowlist mode: only env keys matching one of the patterns (exact key or
+// glob) are captured. Everything else is dropped — not obfuscated, not
+// recorded. Use when committing captured envelopes to a public repo to
+// avoid leaking validator-workstation state (PATH, USER, SHELL, etc.).
+func WithEnvCaptureAllowlist(patterns []string) AttestationContextOption {
+	return func(a *AttestationContext) {
+		a.envCaptureAllowlist = patterns
+	}
+}
