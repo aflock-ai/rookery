@@ -79,6 +79,22 @@ func WithSilent(silent bool) Option {
 	}
 }
 
+// WithIgnoreExitCode tells the attestor to record the wrapped command's
+// exit code in the predicate but NOT propagate the exit-error up to the
+// cilock run pipeline. Use when the wrapped tool exits non-zero on
+// findings (semgrep, gosec, hadolint, checkov, trivy --exit-code, prowler
+// v3, govulncheck) — without this option, the postproduct stage skips
+// every downstream attestor (sarif/sbom/vex/etc.) and the tool's output
+// never gets parsed into the envelope.
+//
+// Policy Rego still has access to the real exit code via
+// `input.attestation.exitcode` and can deny on it.
+func WithIgnoreExitCode(ignore bool) Option {
+	return func(cr *CommandRun) {
+		cr.ignoreExitCode = ignore
+	}
+}
+
 func New(opts ...Option) *CommandRun {
 	cr := &CommandRun{}
 
@@ -197,9 +213,10 @@ type CommandRun struct {
 	ExitCode  int           `json:"exitcode"`
 	Processes []ProcessInfo `json:"processes,omitempty"`
 
-	silent        bool
-	materials     map[string]cryptoutil.DigestSet
-	enableTracing bool
+	silent         bool
+	materials      map[string]cryptoutil.DigestSet
+	enableTracing  bool
+	ignoreExitCode bool
 }
 
 func (a *CommandRun) Schema() *jsonschema.Schema {
@@ -272,7 +289,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	}
 
 	var err error
-	if r.enableTracing {
+	if r.enableTracing { //nolint:nestif // sequential exit-handling: trace vs Wait, ExitError type assert, ignore-exit-code branch — each shallow check, refactor would obscure ordering
 		r.Processes, err = r.trace(c, ctx)
 		// Wait for I/O copying goroutines to complete before reading buffers.
 		// trace() uses ptrace to detect process exit, but exec's I/O goroutines
@@ -282,6 +299,12 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		err = c.Wait()
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			r.ExitCode = exitErr.ExitCode()
+			if r.ignoreExitCode {
+				// Record the exit code in the predicate but don't propagate
+				// the error. This lets postproduct attestors (sarif/sbom/vex/
+				// etc.) still fire for tools that exit non-zero on findings.
+				err = nil
+			}
 		}
 	}
 
