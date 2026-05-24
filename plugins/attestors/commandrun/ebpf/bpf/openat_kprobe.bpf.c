@@ -291,12 +291,75 @@ struct {
 } scratch SEC(".maps");
 
 // Watched-PID map (see header doc-comment).
+//
+// V2 Phase 8 (canonical-pattern migration, stage 1): the kernel-side
+// authoritative watched-bit moves to task_storage below. watched_pids
+// remains as the bootstrap channel — userspace registers the root tgid
+// here at startup; emit_filter populates task_storage on the first
+// match so subsequent lookups are constant-time and auto-GC on task
+// exit (no LRU sizing concerns).
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 10240);
     __type(key, __u32);
     __type(value, __u8);
 } watched_pids SEC(".maps");
+
+// task_state — per-task storage carrying the canonical watched-bit.
+// Auto-GC'd when the task exits (kernel releases the storage). This
+// is the fast path for all hot syscalls (read/openat/close) — a
+// task_storage_get is constant-time and doesn't touch the global
+// watched_pids hash. Populated on fork (wake_up_new_task) and on
+// emit_filter's first descent match.
+struct task_state {
+    __u8 watched;
+    __u8 _pad[7];
+};
+struct {
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, int);
+    __type(value, struct task_state);
+} task_storage SEC(".maps");
+
+// task_is_watched returns 1 if the current task is in the watched set.
+// Fast path: task_storage lookup is constant-time. Slow path
+// (bootstrap before task_storage is populated for this task): fall
+// back to watched_pids and cache the result.
+static __always_inline int
+task_is_watched(__u32 pid, __u32 tgid)
+{
+    struct task_struct *t = bpf_get_current_task_btf();
+    if (t) {
+        struct task_state *ts = bpf_task_storage_get(&task_storage, t, NULL, 0);
+        if (ts && ts->watched) return 1;
+    }
+    // Bootstrap: not yet in task_storage but may be in watched_pids
+    // (root tgid registered by userspace).
+    if (bpf_map_lookup_elem(&watched_pids, &pid)) goto cache;
+    if (bpf_map_lookup_elem(&watched_pids, &tgid)) goto cache;
+    return 0;
+cache:
+    if (t) {
+        struct task_state init = {.watched = 1};
+        bpf_task_storage_get(&task_storage, t, &init,
+            BPF_LOCAL_STORAGE_GET_F_CREATE);
+    }
+    return 1;
+}
+
+// task_set_watched marks the current task as watched in task_storage.
+// Used on descent matches in emit_filter.
+static __always_inline void
+task_set_watched(void)
+{
+    struct task_struct *t = bpf_get_current_task_btf();
+    if (!t) return;
+    struct task_state init = {.watched = 1};
+    bpf_task_storage_get(&task_storage, t, &init,
+        BPF_LOCAL_STORAGE_GET_F_CREATE);
+}
+
 
 // Filter enabled toggle.
 struct {
@@ -341,23 +404,38 @@ emit_filter(__u32 *out_pid, __u32 *out_tgid, __u32 *out_ppid)
             cur_ppid = BPF_CORE_READ(parent, tgid);
     }
 
+    // Fast path: task_storage lookup. Populated on fork by
+    // wake_up_new_task and by descent matches below; subsequent
+    // syscalls from this task hit this branch and return immediately.
+    if (task_is_watched(cur_pid, cur_tgid)) {
+        *out_pid  = cur_pid;
+        *out_tgid = cur_tgid;
+        *out_ppid = cur_ppid;
+        return 1;
+    }
+
+    // Slow path: descent check via the parent's watched-bit. Required
+    // when wake_up_new_task missed a fork (race or kprobe pool
+    // exhaustion). Two sources for the parent's status: task_storage
+    // is cleaner but we can't query it for an arbitrary pid; the
+    // watched_pids map is keyed by pid so we use it for parent
+    // lookups. Once matched, propagate via task_storage so future
+    // syscalls hit the fast path.
     int matched_by_descent = 0;
-    if (!bpf_map_lookup_elem(&watched_pids, &cur_pid) &&
-        !bpf_map_lookup_elem(&watched_pids, &cur_tgid)) {
-        if (bpf_map_lookup_elem(&watched_pids, &cur_ppid)) {
+    if (bpf_map_lookup_elem(&watched_pids, &cur_ppid)) {
+        matched_by_descent = 1;
+    } else {
+        __u32 *root = bpf_map_lookup_elem(&root_parent_tgid, &zero);
+        if (root && cur_ppid == *root && *root != 0) {
             matched_by_descent = 1;
         } else {
-            __u32 *root = bpf_map_lookup_elem(&root_parent_tgid, &zero);
-            if (root && cur_ppid == *root && *root != 0) {
-                matched_by_descent = 1;
-            } else {
-                return 0;
-            }
+            return 0;
         }
     }
     if (matched_by_descent) {
         __u8 one = 1;
         bpf_map_update_elem(&watched_pids, &cur_pid, &one, BPF_ANY);
+        task_set_watched();
     }
 
     *out_pid  = cur_pid;
@@ -1238,16 +1316,35 @@ int BPF_KPROBE(kprobe_wake_up_new_task, struct task_struct *p)
     __u32 child_tgid = BPF_CORE_READ(p, tgid);
     if (child_pid == 0) return 0;
 
-    // Match parent in watched set. Either: already in watched_pids,
-    // or matches root_parent_tgid (bootstrap case).
-    if (!bpf_map_lookup_elem(&watched_pids, &parent_pid) &&
-        !bpf_map_lookup_elem(&watched_pids, &parent_tgid)) {
-        __u32 *root = bpf_map_lookup_elem(&root_parent_tgid, &zero);
-        if (!root || parent_tgid != *root || *root == 0) {
-            return 0;
+    // Match parent in watched set. Check parent's task_storage first
+    // (canonical fast path — current=parent in this hook), fall back
+    // to watched_pids (bootstrap channel until stage 2).
+    int parent_watched = 0;
+    {
+        struct task_state *pts = bpf_task_storage_get(&task_storage,
+            bpf_get_current_task_btf(), NULL, 0);
+        if (pts && pts->watched) parent_watched = 1;
+    }
+    if (!parent_watched) {
+        if (bpf_map_lookup_elem(&watched_pids, &parent_pid) ||
+            bpf_map_lookup_elem(&watched_pids, &parent_tgid)) {
+            parent_watched = 1;
+        } else {
+            __u32 *root = bpf_map_lookup_elem(&root_parent_tgid, &zero);
+            if (root && parent_tgid == *root && *root != 0) {
+                parent_watched = 1;
+            }
         }
     }
+    if (!parent_watched) return 0;
 
+    // Mark child via watched_pids only. The child's task_storage is
+    // populated LAZILY by emit_filter's descent path on the child's
+    // first syscall — `p` is a kprobe argument (untrusted pointer)
+    // and bpf_task_storage_get rejects it; we'd need fentry for
+    // direct child task_storage access. Lazy propagation costs one
+    // extra map lookup on the child's first syscall, then constant
+    // time after that.
     __u8 one = 1;
     bpf_map_update_elem(&watched_pids, &child_pid, &one, BPF_ANY);
     if (child_pid != child_tgid) {
