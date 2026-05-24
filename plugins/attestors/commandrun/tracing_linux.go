@@ -162,6 +162,18 @@ func (r *CommandRun) preStartTracingSetup() error {
 		_ = consumer.Close()
 		return fmt.Errorf("eBPF filter enable: %w", err)
 	}
+	// V1.4 read-tap. Off by default (current race-prone but fast
+	// behavior). Opt-in via env until we have benchmark data to
+	// flip the default. The BPF kprobes are always attached but
+	// no-op when this flag is 0 — flipping it on costs nothing
+	// beyond the per-syscall map lookup.
+	if os.Getenv("CILOCK_HASH_RACE_FREE") == "1" {
+		if err := consumer.EnableReadTap(); err != nil {
+			log.Debugf("(ebpf) read-tap unavailable (%v); falling back to path hash", err)
+		} else {
+			log.Debugf("(ebpf) CILOCK_HASH_RACE_FREE=1 — read-tap enabled")
+		}
+	}
 	r.ebpfConsumer = consumer
 	return nil
 }

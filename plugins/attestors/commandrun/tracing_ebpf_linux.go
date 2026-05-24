@@ -40,6 +40,7 @@ package commandrun
 import (
 	"errors"
 	"fmt"
+	"hash"
 	"net"
 	"os"
 	"os/exec"
@@ -94,6 +95,16 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 
 	stopCh := make(chan struct{})
 
+	// V1.4 read-tap state. Single-goroutine — no synchronization
+	// needed for these maps; pctx.mu still guards the attestation.
+	type pidFdKey struct {
+		PID uint32
+		FD  int32
+	}
+	openPaths := make(map[pidFdKey]string)
+	streamHashes := make(map[pidFdKey]map[cryptoutil.DigestValue]hash.Hash)
+	var readTapBytes, readTapClosures atomic.Uint64
+
 	var readTotal, matchedTotal, otherTotal atomic.Uint64
 
 	var consumerWG sync.WaitGroup
@@ -126,6 +137,15 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					continue
 				}
 				matchedTotal.Add(1)
+				// V1.4 read-tap: remember (pid, fd) → path so the
+				// later EVT_CLOSE can record the streaming-hash
+				// digest against the right path. fd<0 means the
+				// kernel returned an error from openat; skip.
+				if ev.Openat.FD >= 0 &&
+					!ev.Openat.IsWriteOnly() &&
+					!ev.Openat.IsPathOnly() {
+					openPaths[pidFdKey{PID: ev.Openat.PID, FD: ev.Openat.FD}] = ev.Openat.Path
+				}
 				select {
 				case openatCh <- ev.Openat:
 				case <-stopCh:
@@ -161,6 +181,36 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				}
 				otherTotal.Add(1)
 				recordEBPFNet(pctx, ev.Net)
+			case ev.ReadChunk != nil:
+				if !watched.match(ev.ReadChunk.PID, ev.ReadChunk.TGID, ev.ReadChunk.PPID) {
+					continue
+				}
+				k := pidFdKey{PID: ev.ReadChunk.PID, FD: ev.ReadChunk.FD}
+				hs := streamHashes[k]
+				if hs == nil {
+					hs = make(map[cryptoutil.DigestValue]hash.Hash, len(pctx.hash))
+					for _, dv := range pctx.hash {
+						hs[dv] = dv.New()
+					}
+					streamHashes[k] = hs
+				}
+				for _, h := range hs {
+					h.Write(ev.ReadChunk.Data)
+				}
+				readTapBytes.Add(uint64(ev.ReadChunk.ChunkLen))
+			case ev.Close != nil:
+				if !watched.match(ev.Close.PID, ev.Close.TGID, ev.Close.PPID) {
+					continue
+				}
+				k := pidFdKey{PID: ev.Close.PID, FD: ev.Close.FD}
+				hs, hadData := streamHashes[k]
+				path := openPaths[k]
+				delete(streamHashes, k)
+				delete(openPaths, k)
+				if hadData && path != "" {
+					finalizeReadTap(pctx, ev.Close.PID, path, hs)
+					readTapClosures.Add(1)
+				}
 			}
 		}
 	}()
@@ -333,6 +383,44 @@ func recordEBPFOpenatNoHash(pctx *ptraceContext, ev *ebpf.OpenatEvent) {
 	if procInfo.ParentPID == 0 {
 		procInfo.ParentPID = int(ev.PPID)
 	}
+}
+
+// finalizeReadTap turns a per-(pid, fd) streaming-hash state into a
+// DigestSet and records it on the ProcessInfo against the captured
+// path. Called from the consumer goroutine on each EVT_CLOSE that
+// had any read bytes streamed. The hashes were maintained by the
+// dispatcher; here we just Sum + persist.
+//
+// The streaming digest is authoritative when read-tap is enabled:
+// it reflects the exact bytes the tracee actually consumed,
+// race-free against the calling thread (kernel-context capture).
+// It overwrites any earlier path-hash entry for the same file —
+// the path-hash entry can be racey, the streaming hash isn't.
+func finalizeReadTap(
+	pctx *ptraceContext, pid uint32, path string,
+	hashes map[cryptoutil.DigestValue]hash.Hash,
+) {
+	if len(hashes) == 0 || path == "" {
+		return
+	}
+	ds := make(cryptoutil.DigestSet, len(hashes))
+	for dv, h := range hashes {
+		if dv.GitOID {
+			ds[dv] = string(h.Sum(nil))
+			continue
+		}
+		ds[dv] = string(cryptoutil.HexEncode(h.Sum(nil)))
+	}
+
+	pctx.mu.Lock()
+	defer pctx.mu.Unlock()
+	procInfo := pctx.getProcInfo(int(pid))
+	if procInfo.OpenedFiles == nil {
+		procInfo.OpenedFiles = make(map[string]cryptoutil.DigestSet)
+	}
+	// Read-tap digest is authoritative — overwrite path-hash (which
+	// may have come from the racey async hasher pool).
+	procInfo.OpenedFiles[path] = ds
 }
 
 // recordEBPFExecve handles an EVT_EXECVE event from the BPF kprobe.
