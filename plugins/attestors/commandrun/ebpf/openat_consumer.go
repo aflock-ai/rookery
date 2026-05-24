@@ -327,6 +327,26 @@ func Open() (*Consumer, error) {
 	// kernels may lack some syscalls (e.g., clone3 < 5.3). We require
 	// AT LEAST one openat-family kprobe — without that the tracer is
 	// useless. Everything else is optional.
+	// V2 Phase 8 stage 4: try fentry/security_file_open. When this
+	// attaches, every emit_filter-passing open gets the canonical
+	// absolute path stashed in d_path_stash; the openat kretprobe
+	// picks it up and replaces the raw user-passed pathname. This
+	// eliminates userspace cwd resolution entirely for openats. If
+	// fentry isn't supported (older kernel, no BTF, bpf_d_path not
+	// allowlisted on this kernel's security_file_open), the openat
+	// path falls back to bpf_probe_read_user_str + 4-tier cwd
+	// resolution as before — no functional regression.
+	if sfoProg, ok := coll.Programs["fentry_security_file_open"]; ok {
+		l, err := link.AttachTracing(link.TracingOptions{Program: sfoProg})
+		if err == nil {
+			c.links = append(c.links, l)
+		} else {
+			fmt.Fprintf(os.Stderr,
+				"cilock-ebpf: fentry/security_file_open attach failed (%v) — falling back to userspace cwd resolution\n",
+				err)
+		}
+	}
+
 	// V2 Phase 8 stage 3: try fentry/wake_up_new_task first. fentry
 	// has BTF-typed trusted-pointer args, so the child task_struct
 	// can be passed directly to bpf_task_storage_get and the

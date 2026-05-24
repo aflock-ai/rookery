@@ -461,6 +461,36 @@ fd_table_drop(__s32 fd)
     bpf_map_delete_elem(&fd_table, &k);
 }
 
+// V2 Phase 8 stage 4: d_path_stash carries the canonical absolute
+// path from fentry/security_file_open to the matching openat
+// kretprobe. Keyed by (task, file*). LRU-bounded to handle the
+// rare case where security_file_open fires but the matching
+// openat kretprobe never does (failed open, etc.).
+struct dpath_key {
+    __u64 task;
+    __u64 file;
+};
+struct dpath_value {
+    __u32 path_len;
+    __u32 _pad;
+    char  path[CLOSE_PATH_LEN];
+};
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 8192);
+    __type(key, struct dpath_key);
+    __type(value, struct dpath_value);
+} d_path_stash SEC(".maps");
+
+// Per-CPU scratch for bpf_d_path output (~256 bytes — bigger than
+// the BPF stack limit on most kernels).
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct dpath_value);
+} dpath_scratch SEC(".maps");
+
 
 // Filter enabled toggle.
 struct {
@@ -636,6 +666,39 @@ emit_openat_ret(long ret)
                         // resolution moved to userspace: the dispatcher
                         // reads /proc/<pid>/cwd to make relative paths
                         // absolute before hashing.
+                    }
+                }
+            }
+        }
+    }
+
+    // V2 Phase 8 stage 4: if fentry/security_file_open stashed a
+    // canonical absolute path for this (task, file) tuple, replace
+    // the raw bpf_probe_read_user_str path with it. The canonical
+    // path eliminates userspace cwd resolution entirely.
+    if ((int)ret >= 0) {
+        struct task_struct *task = bpf_get_current_task_btf();
+        if (task) {
+            struct files_struct *files = BPF_CORE_READ(task, files);
+            if (files) {
+                struct fdtable *fdt = BPF_CORE_READ(files, fdt);
+                __u32 max_fds2 = 0;
+                if (fdt) max_fds2 = BPF_CORE_READ(fdt, max_fds);
+                if (fdt && (__u32)ret < max_fds2) {
+                    struct file **fd_array = BPF_CORE_READ(fdt, fd);
+                    struct file *file = NULL;
+                    if (fd_array) bpf_probe_read_kernel(&file, sizeof(file), &fd_array[(int)ret]);
+                    if (file) {
+                        struct dpath_key k = {
+                            .task = (__u64)task,
+                            .file = (__u64)file,
+                        };
+                        struct dpath_value *v = bpf_map_lookup_elem(&d_path_stash, &k);
+                        if (v && v->path_len > 0 && v->path_len <= CLOSE_PATH_LEN) {
+                            __builtin_memcpy(ev->path, v->path, CLOSE_PATH_LEN);
+                            ev->path_len = v->path_len;
+                            bpf_map_delete_elem(&d_path_stash, &k);
+                        }
                     }
                 }
             }
@@ -1427,6 +1490,51 @@ int BPF_KPROBE(kprobe_close_x64, struct pt_regs *regs)
 // We KEEP raw_tp/sched_process_fork (below) as a fallback on
 // kernels where wake_up_new_task isn't kprobeable. The kprobe is
 // the primary; raw_tp is the safety net.
+
+// V2 Phase 8 stage 4: fentry/security_file_open + bpf_d_path. The
+// security_file_open hook fires inside the kernel's open path with
+// a fully-resolved struct file *. bpf_d_path on file->f_path returns
+// the kernel-canonical absolute path — no userspace cwd resolution
+// needed, no /proc readlinks, no fast-fork-and-exit cascade race.
+//
+// Behavior: when the fentry probe attaches, every emit_filter-passing
+// open writes the absolute path into a per-task stash keyed by
+// (task, file*). The openat kretprobe (which still owns fd discovery)
+// looks up the stash and uses the bpf_d_path path INSTEAD of the
+// raw bpf_probe_read_user_str path. If fentry doesn't attach (older
+// kernel, missing BTF, bpf_d_path not allowlisted on this kernel's
+// security_file_open), we fall back to the user-provided pathname
+// + userspace cwd resolution as before.
+
+SEC("fentry/security_file_open")
+int BPF_PROG(fentry_security_file_open, struct file *file)
+{
+    if (!file) return 0;
+
+    __u32 zero = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&filter_enabled, &zero);
+    if (!enabled || *enabled == 0) return 0;
+
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 cur_pid  = (__u32)(pid_tgid & 0xFFFFFFFF);
+    __u32 cur_tgid = (__u32)(pid_tgid >> 32);
+    if (!task_is_watched(cur_pid, cur_tgid)) return 0;
+
+    struct dpath_value *v = bpf_map_lookup_elem(&dpath_scratch, &zero);
+    if (!v) return 0;
+    __builtin_memset(v, 0, sizeof(*v));
+
+    long n = bpf_d_path(&file->f_path, v->path, CLOSE_PATH_LEN);
+    if (n <= 0 || n > CLOSE_PATH_LEN) return 0;
+    v->path_len = (__u32)n;
+
+    struct dpath_key k = {
+        .task = (__u64)bpf_get_current_task_btf(),
+        .file = (__u64)file,
+    };
+    bpf_map_update_elem(&d_path_stash, &k, v, BPF_ANY);
+    return 0;
+}
 
 // V2 Phase 8 stage 3: fentry/wake_up_new_task. Same semantics as the
 // kprobe below, but fentry args are BTF-typed trusted pointers — so
