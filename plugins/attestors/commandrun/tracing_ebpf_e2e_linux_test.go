@@ -245,6 +245,66 @@ func TestEBPF_E2E_MultipleFiles(t *testing.T) {
 	}
 }
 
+// TestEBPF_E2E_ReadTapDigestMatchesContent enables V1.4 read-tap
+// via CILOCK_HASH_RACE_FREE=1 and asserts the resulting OpenedFiles
+// digest matches the content the tracee actually read. Uses a
+// >64 KB file so the BPF multi-chunk emission path is exercised
+// (cat issues 64 KB reads → 4 chunks of 16 KB each per read).
+func TestEBPF_E2E_ReadTapDigestMatchesContent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
+	t.Setenv(EnvVarTraceMode, "ebpf")
+	t.Setenv("CILOCK_HASH_RACE_FREE", "1")
+	skipIfNoEBPFCaps(t)
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "rt-sentinel.bin")
+	// ~80 KB — straddles a single 64 KB read + a second smaller read,
+	// so we hit both multi-chunk-per-syscall AND multi-syscall paths.
+	content := []byte(strings.Repeat("read-tap-V1.4-multichunk-sentinel-block-29bytes\n", 1700))
+	if err := os.WriteFile(target, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if len(content) < 65536 {
+		t.Fatalf("test content %d bytes — too small to exercise multi-chunk; fix the test", len(content))
+	}
+
+	procs := runUnderEBPF(t, []string{"/bin/cat", target})
+
+	var found *ProcessInfo
+	for i := range procs {
+		if _, ok := procs[i].OpenedFiles[target]; ok {
+			found = &procs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("no ProcessInfo captured sentinel openat under read-tap. procs=%d files:\n%s",
+			len(procs), summarizeOpenedFiles(procs))
+	}
+
+	digest := found.OpenedFiles[target]
+	if digest == nil {
+		t.Fatalf("sentinel digest nil under CILOCK_HASH_RACE_FREE=1 (should be streaming-hash). Process: %+v", found)
+	}
+
+	expected, err := cryptoutil.CalculateDigestSetFromBytes(content, defaultHashes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for hashType, want := range expected {
+		got, ok := digest[hashType]
+		if !ok {
+			t.Errorf("read-tap digest missing %v (have %v)", hashType, digest)
+			continue
+		}
+		if got != want {
+			t.Errorf("read-tap digest mismatch for %v: got %s want %s", hashType, got, want)
+		}
+	}
+}
+
 // runUnderEBPF builds + runs a CommandRun with the given argv under
 // the eBPF tracer, returns the captured ProcessInfo.
 func runUnderEBPF(t *testing.T, argv []string) []ProcessInfo {

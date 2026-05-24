@@ -916,6 +916,13 @@ stash_read(int fd, __u64 buf, __u64 count)
     bpf_map_update_elem(&read_stash_map, &key, &s, BPF_ANY);
 }
 
+// MAX_READ_CHUNKS bounds the per-syscall chunk count for verifier
+// loop-bound safety. 8 * READ_CHUNK_BYTES = 128 KB per syscall.
+// `cat` issues 64 KB reads, gcc/Go typically <= 32 KB; this covers
+// real-world build workloads. Reads > 128 KB get truncated with a
+// last-chunk marker (chunk_len < requested) so userspace knows.
+#define MAX_READ_CHUNKS 8
+
 static __always_inline void
 emit_read_chunk(long ret)
 {
@@ -931,22 +938,36 @@ emit_read_chunk(long ret)
     struct read_chunk_event *ev = bpf_map_lookup_elem(&read_chunk_scratch, &z);
     if (!ev) goto done;
 
-    fill_hdr(&ev->hdr, EVT_READ_CHUNK, cur_pid, cur_tgid, cur_ppid);
-    bpf_get_current_comm(ev->comm, sizeof(ev->comm));
-    ev->fd  = s->fd;
-    ev->seq = 0;
-    ev->_pad = 0;
+    __u64 want_total = (__u64)ret;
+    __u64 done_bytes = 0;
+    __u32 seq = 0;
 
-    // Bound the copy size — verifier-friendly: explicit cap, then
-    // explicit narrow type. Reads > READ_CHUNK_BYTES are truncated
-    // for V1 (multi-chunk emission is a V2 enhancement).
-    __u64 want = (ret > (long)READ_CHUNK_BYTES) ? (__u64)READ_CHUNK_BYTES
-                                                : (__u64)ret;
-    __u32 n = (__u32)want;
-    ev->chunk_len = n;
-    if (n == 0 || n > READ_CHUNK_BYTES) goto done;
-    (void)bpf_probe_read_user(ev->data, n, (const void *)s->user_buf);
-    bpf_ringbuf_output(&events, ev, sizeof(*ev), 0);
+    // Unrolled bounded loop — verifier loves these. Each iteration
+    // emits one chunk via ringbuf_output (which copies the data),
+    // so reusing the per-CPU scratch is safe.
+    #pragma unroll
+    for (int i = 0; i < MAX_READ_CHUNKS; i++) {
+        if (done_bytes >= want_total) break;
+        __u64 remaining = want_total - done_bytes;
+        __u32 n = (remaining > (__u64)READ_CHUNK_BYTES)
+                  ? (__u32)READ_CHUNK_BYTES
+                  : (__u32)remaining;
+        if (n == 0 || n > READ_CHUNK_BYTES) break;
+
+        fill_hdr(&ev->hdr, EVT_READ_CHUNK, cur_pid, cur_tgid, cur_ppid);
+        bpf_get_current_comm(ev->comm, sizeof(ev->comm));
+        ev->fd       = s->fd;
+        ev->seq      = seq;
+        ev->chunk_len = n;
+        ev->_pad     = 0;
+
+        (void)bpf_probe_read_user(ev->data, n,
+            (const void *)(s->user_buf + done_bytes));
+        bpf_ringbuf_output(&events, ev, sizeof(*ev), 0);
+
+        done_bytes += n;
+        seq++;
+    }
 
 done:
     bpf_map_delete_elem(&read_stash_map, &key);
