@@ -31,7 +31,6 @@ import (
 	"github.com/invopop/jsonschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ---------------------------------------------------------------------------
@@ -70,13 +69,13 @@ func (m *mockVerifiedSrc) Search(_ context.Context, collectionName string, _ []s
 }
 
 // futureExpiry returns an Expires time 1 year from now.
-func futureExpiry() metav1.Time {
-	return metav1.Time{Time: time.Now().Add(365 * 24 * time.Hour)}
+func futureExpiry() Time {
+	return Time{Time: time.Now().Add(365 * 24 * time.Hour)}
 }
 
 // pastExpiry returns an Expires time 1 year in the past.
-func pastExpiry() metav1.Time {
-	return metav1.Time{Time: time.Now().Add(-365 * 24 * time.Hour)}
+func pastExpiry() Time {
+	return Time{Time: time.Now().Add(-365 * 24 * time.Hour)}
 }
 
 // sha256DV is a convenience DigestValue for SHA256.
@@ -964,7 +963,7 @@ func TestVerify_ClockSkewTolerance(t *testing.T) {
 
 	// Policy expired 30 seconds ago
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(-30 * time.Second)},
+		Expires: Time{Time: time.Now().Add(-30 * time.Second)},
 		Steps: map[string]Step{
 			"build": {Name: "build"},
 		},

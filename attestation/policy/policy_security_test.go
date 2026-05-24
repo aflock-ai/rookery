@@ -36,7 +36,6 @@ import (
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/source"
 	"github.com/invopop/jsonschema"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ===========================================================================
@@ -251,7 +250,7 @@ deny[msg] {
 	}
 
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps:   steps,
 	}
 
@@ -337,7 +336,7 @@ func TestSecurity_R3_151_EmptyCollectionNameMatchesAllSteps(t *testing.T) {
 	}
 
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"build": {
 				Name:          "build",
@@ -680,7 +679,7 @@ func TestSecurity_R3_155_AllowAllConstraintWithEmptyFieldsBypassesAllChecks(t *t
 func TestSecurity_R3_156_UnboundedClockSkewTolerance(t *testing.T) {
 	// Policy that expired 10 years ago.
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(-10 * 365 * 24 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(-10 * 365 * 24 * time.Hour)},
 		Steps: map[string]Step{
 			"build": {Name: "build"},
 		},
@@ -992,7 +991,7 @@ func TestSecurity_R3_161_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 	}
 
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			stepName: {
 				Name:          stepName,
@@ -1278,7 +1277,7 @@ func TestSecurity_R3_166_StepNameMismatchMapKey(t *testing.T) {
 
 	// Step stored under key "deploy" but with Name="build".
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"deploy": {
 				Name:          "build", // Name doesn't match key!

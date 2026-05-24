@@ -32,7 +32,6 @@ import (
 	"github.com/aflock-ai/rookery/attestation/source"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // TestArchivistaIntegration_SearchByPredicateTypeE2E validates the full
@@ -119,7 +118,7 @@ func TestArchivistaIntegration_SearchByPredicateTypeE2E(t *testing.T) {
 	// assert: verifyExternalAttestations runs to completion and reports
 	// the envelope in either Passed or Rejected (never silent drop).
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		// Wildcard roots so any Fulcio-issued cert is accepted on the
 		// constraint side (signature-level verification is still performed
 		// by the DSSE layer, which this test does not gate on).

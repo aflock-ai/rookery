@@ -35,7 +35,6 @@ import (
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/source"
 	"github.com/invopop/jsonschema"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ===========================================================================
@@ -545,7 +544,7 @@ func TestSecurity_R3_184_PublicKeyIDMatchBypassesCertConstraint(t *testing.T) {
 
 func TestSecurity_R3_185_ValidateAcceptsEmptyStepName(t *testing.T) {
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"build": {
 				Name: "", // Empty step name!
@@ -676,7 +675,7 @@ func TestSecurity_R3_187_StepNameVsMapKeyBreaksArtifactVerification(t *testing.T
 
 	// Step stored under key "step-a" with Name="wrong-name"
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"step-a": {
 				Name:          "wrong-name", // Doesn't match map key!
@@ -858,7 +857,7 @@ deny[val] {
 func TestSecurity_R3_189_NegativeClockSkewTolerance(t *testing.T) {
 	// Policy that expires 1 hour from now -- should be valid.
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"build": {
 				Name:          "build",
@@ -897,7 +896,7 @@ func TestSecurity_R3_189_NegativeClockSkewTolerance(t *testing.T) {
 	// future can be used immediately because there's no NotBefore field.
 	// This is a design limitation, not a bug, but worth documenting.
 	futurePolicy := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(100 * 365 * 24 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(100 * 365 * 24 * time.Hour)},
 		Steps: map[string]Step{
 			"build": {Name: "build"},
 		},
@@ -918,7 +917,7 @@ func TestSecurity_R3_189_NegativeClockSkewTolerance(t *testing.T) {
 // Unused import guard
 // ===========================================================================
 var (
-	_ = metav1.Time{}
+	_ = Time{}
 	_ = big.NewInt
 	_ = pkix.Name{}
 	_ = x509.Certificate{}

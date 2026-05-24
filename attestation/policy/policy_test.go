@@ -22,7 +22,6 @@ import (
 	"github.com/invopop/jsonschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ---------------------------------------------------------------------------
@@ -362,7 +361,7 @@ func TestWithSearchDepth(t *testing.T) {
 
 func TestVerify_PolicyExpired(t *testing.T) {
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(-1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(-1 * time.Hour)},
 		Steps:   map[string]Step{},
 	}
 	ms := &mockVerifiedSource{}
@@ -378,7 +377,7 @@ func TestVerify_PolicyExpired(t *testing.T) {
 
 func TestVerify_MissingOptions(t *testing.T) {
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps:   map[string]Step{},
 	}
 	// No verified source — should fail option validation before anything else.
@@ -396,7 +395,7 @@ func TestVerify_MissingOptions(t *testing.T) {
 
 func TestVerify_SearchError(t *testing.T) {
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"build": {Name: "build"},
 		},
@@ -417,7 +416,7 @@ func TestVerify_SearchError(t *testing.T) {
 
 func TestVerify_NoCollections(t *testing.T) {
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"build": {Name: "build"},
 		},
@@ -1162,7 +1161,7 @@ func TestVerifyCollectionArtifacts_ArtifactsFromWithPassedCollections(t *testing
 
 func TestVerify_ArtifactsFromUnknownStep(t *testing.T) {
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"deploy": {
 				Name:          "deploy",
@@ -1207,7 +1206,7 @@ func TestVerify_FullPassWithPublicKeyFunctionary(t *testing.T) {
 	ms := &mockVerifiedSource{results: []source.CollectionVerificationResult{cvr}}
 
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			stepName: {
 				Name: stepName,
@@ -1251,7 +1250,7 @@ func TestVerify_FailWhenFunctionaryDoesNotMatch(t *testing.T) {
 	ms := &mockVerifiedSource{results: []source.CollectionVerificationResult{cvr}}
 
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			stepName: {
 				Name: stepName,
@@ -1286,7 +1285,7 @@ func TestUrisToStrings(t *testing.T) {
 
 func TestDeepCopy_Policy(t *testing.T) {
 	p := &Policy{
-		Expires: metav1.Time{Time: time.Now()},
+		Expires: Time{Time: time.Now()},
 		Roots: map[string]Root{
 			"r": {Certificate: []byte("cert")},
 		},
@@ -1627,7 +1626,7 @@ func TestAIPolicy_NilAttestor(t *testing.T) {
 func TestClockSkewTolerance(t *testing.T) {
 	// Create a policy that expired 10 seconds ago
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(-10 * time.Second)},
+		Expires: Time{Time: time.Now().Add(-10 * time.Second)},
 		Steps: map[string]Step{
 			"build": {Name: "build"},
 		},
@@ -2174,7 +2173,7 @@ func TestVerify_CrossStepAttestationAccess(t *testing.T) {
 	}
 
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"build": {
 				Name: "build",
@@ -2234,7 +2233,7 @@ func (s *stepAwareVerifiedSource) SearchByPredicateType(_ context.Context, predi
 
 func TestVerify_RejectsCircularDependency(t *testing.T) {
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"a": {Name: "a", AttestationsFrom: []string{"b"}},
 			"b": {Name: "b", AttestationsFrom: []string{"a"}},
@@ -2251,7 +2250,7 @@ func TestVerify_RejectsCircularDependency(t *testing.T) {
 
 func TestVerify_RejectsSelfReference(t *testing.T) {
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			"build": {Name: "build", AttestationsFrom: []string{"build"}},
 		},

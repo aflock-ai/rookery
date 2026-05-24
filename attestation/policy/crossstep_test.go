@@ -35,7 +35,6 @@ import (
 	"github.com/invopop/jsonschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ---------------------------------------------------------------------------
@@ -73,7 +72,7 @@ func makeCVR(stepName string, verifier cryptoutil.Verifier, attestations ...atte
 // futurePolicy returns a Policy with Expires one hour from now and the given steps.
 func futurePolicy(steps map[string]Step) Policy {
 	return Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps:   steps,
 	}
 }

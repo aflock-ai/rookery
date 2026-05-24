@@ -32,7 +32,6 @@ import (
 	"github.com/invopop/jsonschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ---------------------------------------------------------------------------
@@ -126,8 +125,8 @@ deny[msg] {
 `)
 
 // futureExpiry returns a policy expiry 1 hour in the future.
-func futureExpiry() metav1.Time {
-	return metav1.Time{Time: time.Now().Add(1 * time.Hour)}
+func futureExpiry() Time {
+	return Time{Time: time.Now().Add(1 * time.Hour)}
 }
 
 // passingSLSAPredicate is a minimal but valid SLSA v1 provenance body.
