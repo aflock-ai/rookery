@@ -397,28 +397,40 @@ func mapKeys(m map[string]string) []string {
 
 // TestCrossLang_C_SingleFile drives `cc -O0 -o hello hello.c` directly.
 //
-// KNOWN FLAKY (~20% pass on aarch64 / linux 6.8): the read-tap path
-// races the openat dispatcher. cc1 opens hello.c then reads it within
-// the same syscall window the dispatcher is still processing the
-// openat — if read-chunk events arrive for fd 3 before the openat
-// creates the streamHash slot, the chunks are dropped and hello.c
-// ends up with a nil digest. Fix is dispatcher-level event ordering
-// (buffer read-chunks until the corresponding openat is processed),
-// tracked separately. For now this test is marked Skip until that
-// land — running it flakily masks the real signal from other tests.
+// Previously skipped due to a dispatcher race that's now fixed: the
+// userspace watchedSet was being populated at hasher-time, but the
+// dispatcher's filter check ran first, so descendants of fast-fork
+// chains had their events rejected. Now uses matchAndAdd which adds
+// pid to the watched set at dispatch time. See the commit for
+// `dispatcher watched-set race — root cause of deep-fork-chain flake`.
 func TestCrossLang_C_SingleFile(t *testing.T) {
-	t.Skip("read-tap event-ordering race; tracked as Phase 2 follow-up")
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
+	requireToolchain(t, "cc")
+
+	dir := freshWorkspace(t, "c-single")
+	src := []byte(`#include <stdio.h>
+int main(void) { puts("hello"); return 0; }
+`)
+	if err := os.WriteFile(filepath.Join(dir, "hello.c"), src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cap := runCrossLang(t, dir, []string{"cc", "-O0", "-o", "hello", "hello.c"}, nil)
+	if cap.requireMaterial("hello.c") == "" {
+		cap.dumpAll(t)
+	}
+	cap.requireWritten("hello")
+	cap.verifyMaterialDigest("hello.c", src)
+	cap.requireNoDrops()
+	t.Logf("OK: %s", cap.summarize())
 }
 
 // TestCrossLang_C_MultiFile drives a 2-source-file build (main.c +
-// add.c → prog) via make.
-//
-// KNOWN FLAKY (~40% pass on aarch64 / linux 6.8): same dispatcher
-// event-ordering race that affects C_SingleFile. The 3 cc invocations
-// (main.c→main.o, add.c→add.o, link to prog) are each fast enough
-// that read-chunk events race the openat. See C_SingleFile note.
+// add.c → prog) via make. Previously skipped due to the dispatcher
+// watched-set race (see C_SingleFile note); fixed by matchAndAdd.
 func TestCrossLang_C_MultiFile(t *testing.T) {
-	t.Skip("read-tap event-ordering race; tracked as Phase 2 follow-up")
 	if testing.Short() {
 		t.Skip("e2e test")
 	}

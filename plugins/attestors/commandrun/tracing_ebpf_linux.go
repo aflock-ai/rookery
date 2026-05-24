@@ -174,6 +174,15 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	}
 	openPaths := make(map[pidFdKey]*openInfo)
 	streamHashes := make(map[pidFdKey]map[cryptoutil.DigestValue]hash.Hash)
+	// streamCounts tracks bytes-streamed per (pid, fd) independently of
+	// openPaths. Ringbuf can deliver read-chunk events BEFORE the
+	// matching openat (different-CPU submission ordering), in which
+	// case openPaths[k] is nil at chunk arrival and we'd lose the
+	// running-total. Keying off pidFdKey alone — same as streamHashes —
+	// makes the count survive arrival reorder. openInfo.Streamed is
+	// kept in sync as a convenience for the end-of-trace sweep, but
+	// the close handler reads from streamCounts.
+	streamCounts := make(map[pidFdKey]uint64)
 	// pendingCloses: ringbuf event reordering can deliver a CLOSE
 	// event for (pid, fd) BEFORE the OPENAT event for the same key.
 	// This happens when the tracee opens, reads, and closes in
@@ -184,6 +193,11 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	var readTapBytes, readTapClosures atomic.Uint64
 
 	var readTotal, matchedTotal, otherTotal atomic.Uint64
+	// V2 diagnostic: read-chunk traffic counters. Lets us distinguish
+	// "BPF kprobe never fired for the tracee" from "kprobe fired but
+	// our matchAndAdd rejected it" when files end up with digest=nil.
+	// Surfaced into Summary.Diagnostics at trace end.
+	var readChunkSeen, readChunkRejected atomic.Uint64
 
 	// V1.4 backpressure watchdog: when the BPF ringbuf is filling up,
 	// broadcast SIGSTOP across the tracee tree so the kernel stops
@@ -228,6 +242,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 			for k, oi := range openPaths {
 				hs := streamHashes[k]
 				delete(streamHashes, k)
+				delete(streamCounts, k)
 				delete(openPaths, k)
 				if oi == nil || oi.Path == "" || oi.EV == nil {
 					continue
@@ -317,6 +332,11 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				if ev.Openat.Path != "" && !filepath.IsAbs(ev.Openat.Path) {
 					if resolved := resolveOpenatPath(ev.Openat); resolved != "" {
 						ev.Openat.Path = resolved
+					} else if cwd := watched.cwdFor(ev.Openat.PID); cwd != "" && ev.Openat.Dirfd == atFDCWD {
+						// /proc/<pid>/cwd gone (tracee exited) — fall
+						// back to the cached cwd snapshot we took
+						// when this pid was first seen.
+						ev.Openat.Path = filepath.Join(cwd, ev.Openat.Path)
 					}
 				}
 				// V1.4 read-tap: remember (pid, fd) → path so the
@@ -353,29 +373,54 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 							default:
 							}
 						}
+						// fd reuse: clear stale stream counter so the
+						// new openInfo starts fresh.
+						delete(streamCounts, k)
 					}
 					openPaths[k] = &openInfo{
-						Path: ev.Openat.Path,
-						EV:   ev.Openat,
+						Path:     ev.Openat.Path,
+						EV:       ev.Openat,
+						Streamed: streamCounts[k],
 					}
 					// Replay an out-of-order close that arrived before
 					// this openat — finalize now that we know the path.
+					//
+					// CRITICAL: only replay if the stashed close happened
+					// AFTER this openat in kernel time. A close stashed
+					// with TimestampNs < openat.TimestampNs was for a
+					// PRIOR file at the same (pid, fd) — e.g., cc1
+					// inherits fd 3 from gcc and closes it on startup,
+					// leaving a pendingClose that would otherwise
+					// incorrectly "finalize" every subsequent openat at
+					// fd 3 (deleting the freshly-set openInfo and
+					// orphaning the real close event).
 					if pendingClose, ok := pendingCloses[k]; ok {
+						// Always clear — either replay or discard as stale.
 						delete(pendingCloses, k)
-						hs, hadData := streamHashes[k]
-						oi := openPaths[k]
-						delete(streamHashes, k)
-						delete(openPaths, k)
-						if oi != nil && oi.Path != "" {
-							fullRead := oi.EV != nil && oi.EV.SizeAtOpen > 0 && oi.Streamed >= oi.EV.SizeAtOpen
-							if hadData && fullRead {
-								finalizeReadTap(pctx, pendingClose.PID, oi.Path, hs)
-								readTapClosures.Add(1)
-							} else if oi.EV != nil && !oi.EV.IsWriteOnly() && !oi.EV.IsPathOnly() && hadData {
-								select {
-								case fallbackCh <- oi.EV:
-								case <-stopCh:
-									return
+						// Replay only when the close happened AFTER the
+						// openat in kernel time. Stale closes (T_close <=
+						// T_openat) belonged to a prior open of the same
+						// (pid, fd) — e.g., cc1 inherits fd 3 from gcc
+						// and closes it on startup; without this guard
+						// every subsequent openat at fd 3 gets
+						// incorrectly finalized against that stale close.
+						if pendingClose.TimestampNs > ev.Openat.TimestampNs {
+							hs, hadData := streamHashes[k]
+							oi := openPaths[k]
+							delete(streamHashes, k)
+							delete(streamCounts, k)
+							delete(openPaths, k)
+							if oi != nil && oi.Path != "" {
+								fullRead := oi.EV != nil && oi.EV.SizeAtOpen > 0 && oi.Streamed >= oi.EV.SizeAtOpen
+								if hadData && fullRead {
+									finalizeReadTap(pctx, pendingClose.PID, oi.Path, hs)
+									readTapClosures.Add(1)
+								} else if oi.EV != nil && !oi.EV.IsWriteOnly() && !oi.EV.IsPathOnly() && hadData {
+									select {
+									case fallbackCh <- oi.EV:
+									case <-stopCh:
+										return
+									}
 								}
 							}
 						}
@@ -443,7 +488,9 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				otherTotal.Add(1)
 				recordEBPFNet(pctx, ev.Net)
 			case ev.ReadChunk != nil:
+				readChunkSeen.Add(1)
 				if !watched.matchAndAdd(ev.ReadChunk.PID, ev.ReadChunk.TGID, ev.ReadChunk.PPID) {
+					readChunkRejected.Add(1)
 					continue
 				}
 				k := pidFdKey{PID: ev.ReadChunk.PID, FD: ev.ReadChunk.FD}
@@ -458,8 +505,9 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				for _, h := range hs {
 					h.Write(ev.ReadChunk.Data)
 				}
+				streamCounts[k] += uint64(ev.ReadChunk.ChunkLen)
 				if oi := openPaths[k]; oi != nil {
-					oi.Streamed += uint64(ev.ReadChunk.ChunkLen)
+					oi.Streamed = streamCounts[k]
 				}
 				readTapBytes.Add(uint64(ev.ReadChunk.ChunkLen))
 			case ev.Close != nil:
@@ -479,6 +527,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				hs, hadData := streamHashes[k]
 				oi := openPaths[k]
 				delete(streamHashes, k)
+				delete(streamCounts, k)
 				delete(openPaths, k)
 				if oi == nil || oi.Path == "" {
 					continue
@@ -663,9 +712,12 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load())
 	if v := os.Getenv("CILOCK_EBPF_DEBUG"); v == "1" {
 		fmt.Fprintf(os.Stderr,
-			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d\n",
+			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d "+
+				"readChunkSeen=%d readChunkRejected=%d readTapBytes=%d readTapClosures=%d\n",
 			pctx.parentPid, readTotal.Load(), matchedTotal.Load(), otherTotal.Load(),
-			hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load())
+			hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load(),
+			readChunkSeen.Load(), readChunkRejected.Load(),
+			readTapBytes.Load(), readTapClosures.Load())
 	}
 
 	if pctx.exitCode != 0 {
@@ -1293,10 +1345,19 @@ func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
 type watchedSet struct {
 	mu  sync.RWMutex
 	pid map[uint32]bool
+	// cwd caches the resolved cwd per-pid, captured at matchAndAdd
+	// time (when we KNOW the pid is alive — it just fired an event).
+	// Later openat events with relative paths use this cache to
+	// resolve without re-reading /proc/<pid>/cwd, which may be gone
+	// by event-dispatch time for fast-exiting processes (cc1, etc.).
+	cwd map[uint32]string
 }
 
 func newWatchedSet(root int) *watchedSet {
-	return &watchedSet{pid: map[uint32]bool{uint32(root): true}} //nolint:gosec // G115: pid fits in u32 by Linux convention
+	return &watchedSet{
+		pid: map[uint32]bool{uint32(root): true}, //nolint:gosec // G115: pid fits in u32 by Linux convention
+		cwd: map[uint32]string{},
+	}
 }
 
 func (w *watchedSet) match(pid, tgid, ppid uint32) bool {
@@ -1334,10 +1395,30 @@ func (w *watchedSet) matchAndAdd(pid, tgid, ppid uint32) bool {
 	if !descent {
 		return false
 	}
+	// New descendant — snapshot /proc/<pid>/cwd while it's still alive.
+	// Fast-exit processes (cc1, ld, etc.) take their /proc entry with
+	// them; reading cwd later returns ENOENT. Captured here so relative
+	// openat paths resolve correctly even after the tracee dies.
+	var cwd string
+	if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil {
+		cwd = link
+	}
 	w.mu.Lock()
 	w.pid[pid] = true
+	if cwd != "" {
+		w.cwd[pid] = cwd
+	}
 	w.mu.Unlock()
 	return true
+}
+
+// cwdFor returns the cached cwd for pid (snapshotted at first-seen
+// time), or "" if we don't have it. Lookups are reads — fine under
+// contention; matchAndAdd is the only writer.
+func (w *watchedSet) cwdFor(pid uint32) string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.cwd[pid]
 }
 
 // snapshot returns a copy of the current pid set. Used by the
