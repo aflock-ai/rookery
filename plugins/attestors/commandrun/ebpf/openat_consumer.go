@@ -341,6 +341,19 @@ func Open() (*Consumer, error) {
 			openatAttached++
 		}
 	}
+	// Attach the sched_process_fork tracepoint. This adds child pids
+	// to watched_pids the moment they're forked from a watched parent,
+	// closing the race where a fast-exiting child's first openat
+	// fired before userspace could add its pid to the watched set.
+	if forkProg, ok := coll.Programs["tp_sched_process_fork"]; ok {
+		tpLink, tpErr := link.Tracepoint("sched", "sched_process_fork", forkProg, nil)
+		if tpErr == nil {
+			c.links = append(c.links, tpLink)
+		}
+		// Non-fatal: the openat-PPID-bootstrap path still catches
+		// children, just with a one-syscall delay.
+	}
+
 	if openatAttached == 0 {
 		_ = c.Close()
 		return nil, fmt.Errorf("no openat-family kprobes attached for arch=%s (attempted %d, failed %d)",

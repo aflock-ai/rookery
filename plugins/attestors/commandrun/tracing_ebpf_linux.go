@@ -205,9 +205,16 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				// later EVT_CLOSE can record the streaming-hash
 				// digest against the right path. fd<0 means the
 				// kernel returned an error from openat; skip.
-				if ev.Openat.FD >= 0 &&
-					!ev.Openat.IsWriteOnly() &&
-					!ev.Openat.IsPathOnly() {
+				//
+				// Track ALL opens (including O_WRONLY and O_PATH)
+				// so write events and close events can resolve
+				// fd → path even when the writing process exits
+				// fast and /proc/<pid>/fd/<fd> is gone by event-
+				// dispatch time. The streamHashes path still
+				// short-circuits via IsWriteOnly/IsPathOnly checks
+				// at chunk time, so we don't waste cycles streaming
+				// non-read fds.
+				if ev.Openat.FD >= 0 {
 					k := pidFdKey{PID: ev.Openat.PID, FD: ev.Openat.FD}
 					// Clear any stale state from an earlier open
 					// of the same (pid, fd) whose close we missed
@@ -262,7 +269,19 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					continue
 				}
 				otherTotal.Add(1)
-				recordEBPFWrite(pctx, ev.Write)
+				// Resolve fd → path from openPaths (the in-flight
+				// (pid, fd) → openat info table). Falls back to
+				// /proc/<pid>/fd/<fd> readlink ONLY if openPaths
+				// doesn't have it (e.g., a short-lived process
+				// that wrote before we saw its openat event).
+				// Without this lookup, fast-exiting writers like
+				// gcc lose their writes because /proc/<pid> is gone
+				// by the time we resolve.
+				var writePath string
+				if oi := openPaths[pidFdKey{PID: ev.Write.PID, FD: ev.Write.FD}]; oi != nil {
+					writePath = oi.Path
+				}
+				recordEBPFWrite(pctx, ev.Write, writePath)
 			case ev.Net != nil:
 				if !watched.match(ev.Net.PID, ev.Net.TGID, ev.Net.PPID) {
 					continue
@@ -551,6 +570,47 @@ func recordEBPFOpenatNoHash(pctx *ptraceContext, ev *ebpf.OpenatEvent) {
 	if procInfo.ParentPID == 0 {
 		procInfo.ParentPID = int(ev.PPID)
 	}
+
+	// Write-intent: an openat with O_WRONLY/O_RDWR + O_CREAT/O_TRUNC
+	// is a strong signal the tracee will write to this fd. The sys_write
+	// kprobe may not fire for the actual write (gcc/ld + many other
+	// tools mmap the output and write via memory stores, never going
+	// through write(2)), so record the OPEN as a synthetic write event
+	// here. Without this, products written via mmap disappear from the
+	// trace.
+	if ev.IsWriteOnly() || isCreateOrTrunc(ev.Flags) {
+		if procInfo.FileOps == nil {
+			procInfo.FileOps = &FileActivity{}
+		}
+		// Dedup against any sys_write events for the same path that
+		// might have fired before/after.
+		alreadyRecorded := false
+		for _, w := range procInfo.FileOps.Writes {
+			if w.Path == ev.Path {
+				alreadyRecorded = true
+				break
+			}
+		}
+		if !alreadyRecorded {
+			procInfo.FileOps.Writes = append(procInfo.FileOps.Writes, FileWrite{
+				Path:      ev.Path,
+				Bytes:     0, // unknown at open time; mmap writers never tell us
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+	}
+}
+
+// isCreateOrTrunc returns true for openat flags that imply the tracee
+// is creating, truncating, or appending to a file — i.e., a write
+// intent even when the access mode is RDWR rather than WRONLY.
+func isCreateOrTrunc(flags uint32) bool {
+	const (
+		oCreat  = 0o100
+		oTrunc  = 0o1000
+		oAppend = 0o2000
+	)
+	return flags&(oCreat|oTrunc|oAppend) != 0
 }
 
 // finalizeReadTap turns a per-(pid, fd) streaming-hash state into a
@@ -831,13 +891,23 @@ func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent) SyscallEvent {
 }
 
 // recordEBPFWrite handles EVT_WRITE events. Mirrors the SYS_WRITE/
-// SYS_PWRITE64 ptrace handler: resolve fd → path via /proc, skip
-// stdio + pipes + sockets, record (path, bytes) to fileOps.writes.
-func recordEBPFWrite(pctx *ptraceContext, ev *ebpf.WriteEvent) {
+// SYS_PWRITE64 ptrace handler: resolve fd → path, skip stdio +
+// pipes + sockets, record (path, bytes) to fileOps.writes.
+//
+// preResolvedPath is the path the dispatcher looked up from its
+// (pid, fd) → openat info map. Empty if the dispatcher couldn't
+// resolve — we fall back to /proc/<pid>/fd/<fd> readlink. The
+// caller's lookup is preferred because /proc disappears when the
+// process exits, which is common for fast writers (gcc, javac, etc.)
+// that complete before our async event handler runs.
+func recordEBPFWrite(pctx *ptraceContext, ev *ebpf.WriteEvent, preResolvedPath string) {
 	if ev.FD <= 2 || ev.Bytes == 0 {
 		return // stdio writes are noise; zero-byte writes are no-ops
 	}
-	path := resolveProcFD(int(ev.PID), int(ev.FD))
+	path := preResolvedPath
+	if path == "" {
+		path = resolveProcFD(int(ev.PID), int(ev.FD))
+	}
 	if path == "" {
 		return
 	}

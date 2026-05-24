@@ -1165,4 +1165,56 @@ int BPF_KPROBE(kprobe_close_x64, struct pt_regs *regs)
     return 0;
 }
 
+// ───── sched_process_fork — early child-pid registration ─────────
+//
+// The watched_pids set is the gate: kprobes only emit events for
+// pids in this set. Until now we relied on the "first openat from
+// the child fires emit_filter, which sees its parent in watched
+// and auto-adds the child" mechanism. That has a race: a child
+// process that exec's a fast-exit tool (gcc → cc1 → as → ld) can
+// open and close files in MICROSECONDS. If the kernel-side ringbuf
+// drains slowly, by the time userspace processes those events the
+// process has exited; worse, the FIRST openat may have been dropped
+// because the child's pid wasn't yet in watched.
+//
+// The fix: hook sched_process_fork. When the kernel forks a watched
+// parent, immediately add the child pid to watched_pids — before
+// the child has executed a single instruction. The child's first
+// openat is now guaranteed to pass emit_filter.
+//
+// Tracepoint args (from
+// /sys/kernel/debug/tracing/events/sched/sched_process_fork/format):
+//
+//   char parent_comm[16]; offset 8
+//   pid_t parent_pid;     offset 24
+//   char child_comm[16];  offset 28
+//   pid_t child_pid;      offset 44
+//
+// Reading via raw offsets is portable across kernels (the tracepoint
+// format is stable in a way kprobes aren't). bpf_probe_read_kernel
+// pulls the fields safely.
+
+struct sched_process_fork_args {
+    __u64 _common;          // 8 bytes: type/flags/preempt/pid
+    char  parent_comm[16];
+    __u32 parent_pid;
+    char  child_comm[16];
+    __u32 child_pid;
+};
+
+SEC("tracepoint/sched/sched_process_fork")
+int tp_sched_process_fork(struct sched_process_fork_args *ctx)
+{
+    __u32 parent_pid = ctx->parent_pid;
+    __u32 child_pid  = ctx->child_pid;
+
+    // Only propagate watched-ness; don't auto-watch unrelated forks.
+    if (!bpf_map_lookup_elem(&watched_pids, &parent_pid)) {
+        return 0;
+    }
+    __u8 one = 1;
+    bpf_map_update_elem(&watched_pids, &child_pid, &one, BPF_ANY);
+    return 0;
+}
+
 char LICENSE[] SEC("license") = "GPL";
