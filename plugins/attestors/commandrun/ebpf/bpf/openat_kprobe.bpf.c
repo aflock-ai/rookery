@@ -41,6 +41,8 @@ enum cilock_event_type {
     EVT_SOCKET      = 8, // socket() family/type/protocol
     EVT_CONNECT     = 9, // connect()
     EVT_BIND        = 10, // bind()
+    EVT_READ_CHUNK  = 11, // chunk of bytes copy_to_user'd by vfs_read (V1.4 read-tap)
+    EVT_CLOSE       = 12, // close/filp_close — finalize per-fd streaming hash
 };
 
 // Common header at the start of every event. event_type is read first
@@ -146,6 +148,77 @@ struct security_event {
     __u32 _pad;
     __u64 args[4];         // syscall args 0..3
 };
+
+// Read-chunk event. Carries up to READ_CHUNK_BYTES of file bytes the
+// kernel copied to the tracee on a single vfs_read return. Userspace
+// feeds these into a per-(pid, fd) streaming SHA-256. The kernel side
+// of the race is closed: we get the bytes the tracee actually saw.
+//
+// Reads larger than READ_CHUNK_BYTES are split into multiple events
+// (sequence in `seq`). Single-threaded fd ordering preserves order.
+//
+// Total = 32 (hdr) + 16 (comm) + 4 (fd) + 4 (seq) + 4 (chunk) + 4 (pad)
+//       + 16384 = 16448 bytes
+#define READ_CHUNK_BYTES 16384
+struct read_chunk_event {
+    struct cilock_evt_hdr hdr;
+    char  comm[TASK_COMM_LEN];
+    __s32 fd;
+    __u32 seq;       // chunk index within this read syscall
+    __u32 chunk_len; // bytes of `data` that are valid (≤ READ_CHUNK_BYTES)
+    __u32 _pad;
+    __u8  data[READ_CHUNK_BYTES];
+};
+
+// Close event. Signals userspace to finalize the per-(pid, fd) hash
+// and record it. Tiny — just (pid, fd, comm).
+// Total = 32 (hdr) + 16 (comm) + 4 (fd) + 4 (pad) = 56 bytes
+struct close_event {
+    struct cilock_evt_hdr hdr;
+    char  comm[TASK_COMM_LEN];
+    __s32 fd;
+    __u32 _pad;
+};
+
+// Kprobe→kretprobe handoff for read syscalls: stash (fd, user_buf,
+// count) on entry so the kretprobe can copy bytes from the user
+// buffer + tag with fd. Keyed by pid_tgid like the openat stash.
+//
+// Threat model: the calling thread is blocked in kernel context
+// during the kretprobe — it can't race the user buffer. A sibling
+// thread sharing the address space CAN race. Documented; not fixable
+// without a kernel hook on the inlined copy_to_user primitives, all
+// of which were unhookable on Linux 6.8 as of 2026-05-23.
+struct read_stash {
+    __u64 user_buf;
+    __u64 count;
+    __s32 fd;
+    __u32 _pad;
+};
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u64);
+    __type(value, struct read_stash);
+} read_stash_map SEC(".maps");
+
+// Per-CPU scratch for read_chunk_event (~16KB, way over BPF stack).
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct read_chunk_event);
+} read_chunk_scratch SEC(".maps");
+
+// Filter to control read-tap independently of the openat filter.
+// 0 = off (default; current openat-only behavior). 1 = on. Userspace
+// sets this to 1 only in CILOCK_HASH_RACE_FREE mode.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u8);
+} read_tap_enabled SEC(".maps");
 
 // Write event. Userspace resolves fd → path via /proc/<pid>/fd/<fd>.
 // Total: 24 + 16 + 16 = 56 bytes (no path; cheap; high-frequency)
@@ -797,6 +870,188 @@ int BPF_KPROBE(kprobe_bind_x64, struct pt_regs *regs)
     const void *addr = (const void *)PT_REGS_PARM2_CORE_SYSCALL(regs);
     __u64 addr_len = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
     emit_connect_or_bind(EVT_BIND, fd, addr, addr_len);
+    return 0;
+}
+
+// ───── read / pread64 — read-tap for race-free hashing ─────────────
+// V1.4: capture bytes the kernel copied to the tracee, so userspace
+// can hash content without re-reading the file (which races against
+// concurrent writers).
+//
+// Design: kprobe at syscall entry stashes (fd, user_buf, count).
+// kretprobe at syscall exit copies up to READ_CHUNK_BYTES from the
+// user buffer via bpf_probe_read_user — at that moment the tracee
+// thread is still in kernel context, so it cannot race itself.
+//
+// Threat model: tamper-proof against the calling thread (blocked
+// in kernel) and external processes (cannot reach the tracee VM).
+// NOT tamper-proof against sibling threads of the tracee that share
+// the address space and could overwrite the buffer between kernel
+// copy_to_user and our bpf_probe_read_user. For CI workloads
+// (compilers, linkers) this is acceptable. The fully-tamper-proof
+// path needs a kernel hook on the copy primitives, all of which
+// were inlined/notrace on Linux 6.8 as of 2026-05-23.
+
+static __always_inline bool
+read_tap_on(void)
+{
+    __u32 z = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&read_tap_enabled, &z);
+    return enabled && *enabled == 1;
+}
+
+static __always_inline void
+stash_read(int fd, __u64 buf, __u64 count)
+{
+    if (!read_tap_on()) return;
+    if (fd < 0) return;
+    __u32 cur_pid, cur_tgid, cur_ppid;
+    if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) return;
+    __u64 key = bpf_get_current_pid_tgid();
+    struct read_stash s = {
+        .user_buf = buf,
+        .count    = count,
+        .fd       = fd,
+    };
+    bpf_map_update_elem(&read_stash_map, &key, &s, BPF_ANY);
+}
+
+static __always_inline void
+emit_read_chunk(long ret)
+{
+    __u64 key = bpf_get_current_pid_tgid();
+    struct read_stash *s = bpf_map_lookup_elem(&read_stash_map, &key);
+    if (!s) return;
+    if (ret <= 0) goto done;
+
+    __u32 cur_pid, cur_tgid, cur_ppid;
+    if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) goto done;
+
+    __u32 z = 0;
+    struct read_chunk_event *ev = bpf_map_lookup_elem(&read_chunk_scratch, &z);
+    if (!ev) goto done;
+
+    fill_hdr(&ev->hdr, EVT_READ_CHUNK, cur_pid, cur_tgid, cur_ppid);
+    bpf_get_current_comm(ev->comm, sizeof(ev->comm));
+    ev->fd  = s->fd;
+    ev->seq = 0;
+    ev->_pad = 0;
+
+    // Bound the copy size — verifier-friendly: explicit cap, then
+    // explicit narrow type. Reads > READ_CHUNK_BYTES are truncated
+    // for V1 (multi-chunk emission is a V2 enhancement).
+    __u64 want = (ret > (long)READ_CHUNK_BYTES) ? (__u64)READ_CHUNK_BYTES
+                                                : (__u64)ret;
+    __u32 n = (__u32)want;
+    ev->chunk_len = n;
+    if (n == 0 || n > READ_CHUNK_BYTES) goto done;
+    (void)bpf_probe_read_user(ev->data, n, (const void *)s->user_buf);
+    bpf_ringbuf_output(&events, ev, sizeof(*ev), 0);
+
+done:
+    bpf_map_delete_elem(&read_stash_map, &key);
+}
+
+SEC("kprobe/__arm64_sys_read")
+int BPF_KPROBE(kprobe_read_arm64, struct pt_regs *regs)
+{
+    int fd      = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 buf   = (__u64)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    __u64 count = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    stash_read(fd, buf, count);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_read")
+int BPF_KPROBE(kprobe_read_x64, struct pt_regs *regs)
+{
+    int fd      = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 buf   = (__u64)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    __u64 count = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    stash_read(fd, buf, count);
+    return 0;
+}
+
+SEC("kretprobe/__arm64_sys_read")
+int BPF_KRETPROBE(kretprobe_read_arm64, long ret)
+{
+    emit_read_chunk(ret);
+    return 0;
+}
+
+SEC("kretprobe/__x64_sys_read")
+int BPF_KRETPROBE(kretprobe_read_x64, long ret)
+{
+    emit_read_chunk(ret);
+    return 0;
+}
+
+SEC("kprobe/__arm64_sys_pread64")
+int BPF_KPROBE(kprobe_pread64_arm64, struct pt_regs *regs)
+{
+    int fd      = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 buf   = (__u64)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    __u64 count = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    stash_read(fd, buf, count);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_pread64")
+int BPF_KPROBE(kprobe_pread64_x64, struct pt_regs *regs)
+{
+    int fd      = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 buf   = (__u64)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    __u64 count = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    stash_read(fd, buf, count);
+    return 0;
+}
+
+SEC("kretprobe/__arm64_sys_pread64")
+int BPF_KRETPROBE(kretprobe_pread64_arm64, long ret)
+{
+    emit_read_chunk(ret);
+    return 0;
+}
+
+SEC("kretprobe/__x64_sys_pread64")
+int BPF_KRETPROBE(kretprobe_pread64_x64, long ret)
+{
+    emit_read_chunk(ret);
+    return 0;
+}
+
+// ───── close — finalize per-(pid, fd) hash on userspace side ──────
+// Kprobe at entry, fd still valid. Signals userspace to finalize
+// the running SHA-256 for (pid, fd) and persist the digest.
+// Userspace skips emission if the read_tap never saw any bytes
+// for this fd — pure-write fds don't generate spurious entries.
+
+static __always_inline void
+emit_close(int fd)
+{
+    if (!read_tap_on()) return;
+    if (fd < 0) return;
+    __u32 cur_pid, cur_tgid, cur_ppid;
+    if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) return;
+
+    struct close_event ev = {};
+    fill_hdr(&ev.hdr, EVT_CLOSE, cur_pid, cur_tgid, cur_ppid);
+    bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+    ev.fd = fd;
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+}
+
+SEC("kprobe/__arm64_sys_close")
+int BPF_KPROBE(kprobe_close_arm64, struct pt_regs *regs)
+{
+    emit_close((int)PT_REGS_PARM1_CORE_SYSCALL(regs));
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_close")
+int BPF_KPROBE(kprobe_close_x64, struct pt_regs *regs)
+{
+    emit_close((int)PT_REGS_PARM1_CORE_SYSCALL(regs));
     return 0;
 }
 

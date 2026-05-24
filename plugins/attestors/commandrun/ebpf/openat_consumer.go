@@ -51,16 +51,18 @@ import (
 // the low bits of timestamp_ns, which can never equal 0 in practice
 // for a running system, so it'll never collide with a small enum tag.
 const (
-	EVT_OPENAT   = 1
-	EVT_EXECVE   = 2
-	EVT_UNLINKAT = 3
-	EVT_RENAMEAT = 4
-	EVT_FCHMODAT = 5
-	EVT_SECURITY = 6
-	EVT_WRITE    = 7
-	EVT_SOCKET   = 8
-	EVT_CONNECT  = 9
-	EVT_BIND     = 10
+	EVT_OPENAT     = 1
+	EVT_EXECVE     = 2
+	EVT_UNLINKAT   = 3
+	EVT_RENAMEAT   = 4
+	EVT_FCHMODAT   = 5
+	EVT_SECURITY   = 6
+	EVT_WRITE      = 7
+	EVT_SOCKET     = 8
+	EVT_CONNECT    = 9
+	EVT_BIND       = 10
+	EVT_READ_CHUNK = 11 // V1.4 read-tap: chunk of bytes the kernel returned
+	EVT_CLOSE      = 12 // V1.4 read-tap: finalize streaming hash for fd
 )
 
 // Event sizes — must match the C structs in openat_kprobe.bpf.c. All
@@ -620,6 +622,12 @@ func decodeEvent(raw []byte) (*Event, error) {
 			return nil, err
 		}
 		return &Event{Type: evtType, Net: n}, nil
+	case EVT_READ_CHUNK, EVT_CLOSE:
+		// V1.4 read-tap events. Userspace decoder + streaming-hash
+		// integration land in a follow-up commit. For now, accept
+		// silently so we don't spam errors if read_tap_enabled gets
+		// flipped on by an old binary against new BPF or vice versa.
+		return &Event{Type: evtType}, nil
 	default:
 		return nil, fmt.Errorf("unknown event_type=%d (raw len=%d)", evtType, len(raw))
 	}
