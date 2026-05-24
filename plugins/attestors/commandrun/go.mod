@@ -1,17 +1,17 @@
 module github.com/aflock-ai/rookery/plugins/attestors/commandrun
 
-go 1.26.0
+go 1.26.3
 
 replace github.com/aflock-ai/rookery/attestation => ../../../attestation
 
 require (
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
 	github.com/invopop/jsonschema v0.13.0
-	golang.org/x/sys v0.42.0
+	golang.org/x/sys v0.41.0
 )
 
 require (
-	filippo.io/edwards25519 v1.2.0 // indirect
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/edwarnicke/gitoid v0.0.0-20220710194850-1be5bfda1f9d // indirect
@@ -27,5 +27,3 @@ require (
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/buger/jsonparser => ../../../../../security-patches/buger-jsonparser

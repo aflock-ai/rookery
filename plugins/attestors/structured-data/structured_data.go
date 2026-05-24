@@ -29,6 +29,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/invopop/jsonschema"
 
 	"github.com/aflock-ai/rookery/plugins/attestors/structured-data/internal/canonical"
@@ -50,9 +51,88 @@ var (
 )
 
 func init() {
-	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
-		return New()
-	})
+	attestation.RegisterAttestation(Name, Type, RunType,
+		func() attestation.Attestor { return New() },
+		registry.StringConfigOption(
+			"data-file",
+			"Path of the JSON product to attest over. If empty, the first JSON product in the attestation context is selected.",
+			"",
+			func(a attestation.Attestor, val string) (attestation.Attestor, error) {
+				attestor, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("invalid attestor type: %T", a)
+				}
+				if val == "" {
+					return attestor, nil
+				}
+				WithDataFile(val)(attestor)
+				return attestor, nil
+			},
+		),
+		registry.StringConfigOption(
+			"subject-query",
+			"RFC 9535 JSONPath subset selecting subject identity values from the data. Required at Attest time.",
+			"",
+			func(a attestation.Attestor, val string) (attestation.Attestor, error) {
+				attestor, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("invalid attestor type: %T", a)
+				}
+				if val == "" {
+					// Empty default is OK at SetDefaultVals time; Attest will
+					// reject it with the required-flag error.
+					return attestor, nil
+				}
+				WithSubjectQuery(val)(attestor)
+				return attestor, nil
+			},
+		),
+		registry.StringConfigOption(
+			"subject-prefix",
+			"Optional string prepended to each in-toto subject key (e.g. \"kratos:identity:\").",
+			"",
+			func(a attestation.Attestor, val string) (attestation.Attestor, error) {
+				attestor, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("invalid attestor type: %T", a)
+				}
+				if val == "" {
+					return attestor, nil
+				}
+				WithSubjectPrefix(val)(attestor)
+				return attestor, nil
+			},
+		),
+		registry.StringConfigOption(
+			"data-type",
+			"Free-form label describing the data source, copied into the predicate's dataType field.",
+			"",
+			func(a attestation.Attestor, val string) (attestation.Attestor, error) {
+				attestor, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("invalid attestor type: %T", a)
+				}
+				if val == "" {
+					return attestor, nil
+				}
+				WithDataType(val)(attestor)
+				return attestor, nil
+			},
+		),
+		registry.BoolConfigOption(
+			"embed-data",
+			"Embed the canonicalized JSON data in the predicate. Defaults to false; verifiers typically only need the digest.",
+			false,
+			func(a attestation.Attestor, val bool) (attestation.Attestor, error) {
+				attestor, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("invalid attestor type: %T", a)
+				}
+				WithEmbedData(val)(attestor)
+				return attestor, nil
+			},
+		),
+	)
 }
 
 // Predicate is the structured-data attestor's signed payload.
@@ -256,7 +336,7 @@ func readAndDigest(path string, ctx *attestation.AttestationContext) ([]byte, cr
 	if err != nil {
 		return nil, nil, fmt.Errorf("structured-data: open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	bytesIn, err := io.ReadAll(f)
 	if err != nil {
 		return nil, nil, fmt.Errorf("structured-data: read %s: %w", path, err)

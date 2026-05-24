@@ -54,7 +54,7 @@ func init() {
 type CheckResult struct {
 	ID      string `json:"id"`
 	Desc    string `json:"desc"`
-	Result  string `json:"result"`  // PASS | WARN | INFO | NOTE
+	Result  string `json:"result"` // PASS | WARN | INFO | NOTE
 	Details string `json:"details,omitempty"`
 }
 
@@ -132,6 +132,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	return a.getCandidate(ctx)
 }
 
+//nolint:gocognit // sequential candidate scan: iterate products → open → decode → validate
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
 	if len(products) == 0 {

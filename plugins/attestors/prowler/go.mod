@@ -1,6 +1,6 @@
 module github.com/aflock-ai/rookery/plugins/attestors/prowler
 
-go 1.26.0
+go 1.26.3
 
 replace github.com/aflock-ai/rookery/attestation => ../../../attestation
 
@@ -27,5 +27,3 @@ require (
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/buger/jsonparser => ../../../../../security-patches/buger-jsonparser

@@ -44,7 +44,17 @@ type RunOptions struct {
 	OutFilePath              string
 	StepName                 string
 	Tracing                  bool
-	TimestampServers         []string
+	// IgnoreCommandExitCode tells cilock to record the wrapped command's
+	// exit code in `command-run/v0.1.exitcode` but NOT abort the cilock run
+	// when the command exits non-zero. Without this flag, every postproduct
+	// attestor (sarif/sbom/vex/etc.) is skipped on non-zero exit, which
+	// breaks integration with tools that exit non-zero on findings
+	// (semgrep, gosec, hadolint, checkov, trivy `--exit-code`, prowler v3,
+	// govulncheck) unless each tool's own soft-fail flag is known and used.
+	// Policy Rego still has access to the recorded exit code via
+	// `input.attestation.exitcode` if a deny rule wants to gate on it.
+	IgnoreCommandExitCode bool
+	TimestampServers      []string
 	// Subjects holds raw --subjects flag values. Each entry is either a bare
 	// subject name (e.g. "product:<uuid>") — in which case a sha256 digest of
 	// the name is synthesised — or a "name=<alg>:<hex>" form that supplies an
@@ -56,6 +66,14 @@ type RunOptions struct {
 	EnvDisableSensitiveVars bool
 	EnvAddSensitiveKeys     []string
 	EnvAllowSensitiveKeys   []string
+	// EnvCaptureAllowlist switches the environment attestor into positive-
+	// allowlist mode: only env keys matching one of the supplied patterns
+	// (exact key or glob) are captured. Use when committing captured
+	// envelopes to a public repo — the default denylist still records
+	// host-identifying state (PATH-with-homebrew-prefix, USER, SHELL,
+	// validator-installed CLIs) that's fine in production but noisy in
+	// committed validation artifacts. See rookery#142.
+	EnvCaptureAllowlist []string
 }
 
 var RequiredRunFlags = []string{
@@ -64,7 +82,24 @@ var RequiredRunFlags = []string{
 
 // ResolvePlatformDefaults applies platform-derived defaults to any options
 // that weren't explicitly set. Call this after flag parsing but before use.
+//
+// To run cilock fully offline (no platform integration), users pass
+// `--platform-url ""`. That sets ro.PlatformURL to the empty string AND
+// marks the flag as user-changed, so we know NOT to fall back to the
+// compiled-in DefaultPlatformURL. In that mode no TSA is added (signing
+// continues with the configured signer only — no third-party
+// timestamp) and the archivista URL stays whatever the user set.
 func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
+	// Detect the explicit-disable case. If the user did NOT change
+	// --platform-url, ro.PlatformURL holds the compiled-in default.
+	// If the user passed --platform-url "" (or any empty value), we
+	// treat that as "no platform" and skip all derivation.
+	platformExplicitlyDisabled := cmd.Flags().Changed("platform-url") && ro.PlatformURL == ""
+	if platformExplicitlyDisabled {
+		// User opted out of the platform. Don't derive anything.
+		return
+	}
+
 	pc := platformconfig.Derive(ro.PlatformURL)
 
 	// Archivista URL: use platform default if not explicitly overridden
@@ -98,6 +133,12 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&ro.OutFilePath, "outfile", "o", "", "File to write signed data to")
 	cmd.Flags().StringVarP(&ro.StepName, "step", "s", "", "Name of the step being run")
 	cmd.Flags().BoolVarP(&ro.Tracing, "trace", "r", false, "Enable tracing for the command")
+	cmd.Flags().BoolVar(&ro.IgnoreCommandExitCode, "ignore-command-exit-code", false,
+		"Record the wrapped command's exit code in command-run/v0.1 but do NOT abort the cilock run "+
+			"on non-zero exit. Use with tools that exit non-zero on findings (semgrep, gosec, hadolint, "+
+			"checkov, trivy --exit-code, prowler v3, govulncheck) so postproduct attestors still fire and "+
+			"the SARIF/JSON output is captured. Policy Rego retains access to the real exit code via "+
+			"input.attestation.exitcode for gating.")
 	cmd.Flags().StringSliceVarP(&ro.TimestampServers, "timestamp-servers", "t", []string{}, "Timestamp Authority Servers to use when signing envelope")
 
 	cmd.Flags().StringArrayVar(&ro.Subjects, "subjects", []string{},
@@ -110,6 +151,11 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVarP(&ro.EnvDisableSensitiveVars, "env-disable-default-sensitive-vars", "", false, "Disable the default list of sensitive vars and only use the items mentioned by --add-sensitive-key.")
 	cmd.Flags().StringSliceVar(&ro.EnvAddSensitiveKeys, "env-add-sensitive-key", []string{}, "Add keys or globs (e.g. '*TEXT') to the list of sensitive environment keys.")
 	cmd.Flags().StringSliceVar(&ro.EnvAllowSensitiveKeys, "env-allow-sensitive-key", []string{}, "Allow specific keys from the list of sensitive environment keys. Note: This does not support globs.")
+	cmd.Flags().StringSliceVar(&ro.EnvCaptureAllowlist, "env-capture-allowlist", []string{},
+		"Positive allowlist for environment capture. When set, only env keys matching one of the patterns "+
+			"(exact key like PATH, or glob like GITHUB_*) are captured. Everything else is dropped — not obfuscated, not recorded. "+
+			"Use when committing captured envelopes to a public repo to avoid leaking validator-workstation state. "+
+			"Defense-in-depth: the sensitive-keys obfuscate/filter pipeline still runs on top of the allowlist.")
 
 	cmd.MarkFlagsRequiredTogether(RequiredRunFlags...)
 

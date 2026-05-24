@@ -1,6 +1,6 @@
 module github.com/in-toto/go-witness
 
-go 1.26.0
+go 1.26.3
 
 replace github.com/aflock-ai/rookery/attestation => ../../attestation
 
@@ -11,7 +11,7 @@ require (
 )
 
 require (
-	filippo.io/edwards25519 v1.2.0 // indirect
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -83,5 +83,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-replace github.com/buger/jsonparser => ../../../../security-patches/buger-jsonparser

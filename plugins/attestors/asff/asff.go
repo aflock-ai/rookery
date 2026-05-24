@@ -53,13 +53,13 @@ type asffResponse struct {
 // Finding represents a single AWS Security Finding Format record.
 type Finding struct {
 	// Id is the ARN of the finding, e.g. "arn:aws:securityhub:us-east-1:123456789012:subscription/..."
-	Id         string      `json:"Id"`
-	Title      string      `json:"Title"`
-	ProductArn string      `json:"ProductArn"`
-	AwsAccountId string    `json:"AwsAccountId"`
-	Severity   Severity    `json:"Severity"`
-	Compliance Compliance  `json:"Compliance"`
-	Resources  []Resource  `json:"Resources"`
+	Id           string     `json:"Id"`
+	Title        string     `json:"Title"`
+	ProductArn   string     `json:"ProductArn"`
+	AwsAccountId string     `json:"AwsAccountId"`
+	Severity     Severity   `json:"Severity"`
+	Compliance   Compliance `json:"Compliance"`
+	Resources    []Resource `json:"Resources"`
 }
 
 // Severity holds the finding severity information from ASFF.
@@ -84,12 +84,12 @@ type Resource struct {
 
 // FailedFinding is a condensed record for findings with FAILED compliance status.
 type FailedFinding struct {
-	FindingArn    string     `json:"findingArn"`
-	Title         string     `json:"title"`
-	Severity      string     `json:"severity"`
-	ProductArn    string     `json:"productArn"`
-	AwsAccountId  string     `json:"awsAccountId"`
-	Resources     []Resource `json:"resources"`
+	FindingArn   string     `json:"findingArn"`
+	Title        string     `json:"title"`
+	Severity     string     `json:"severity"`
+	ProductArn   string     `json:"productArn"`
+	AwsAccountId string     `json:"awsAccountId"`
+	Resources    []Resource `json:"resources"`
 }
 
 // ComplianceStatusCounts holds per-severity breakdowns across compliance statuses.
@@ -208,6 +208,7 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subjects
 }
 
+//nolint:gocognit // sequential candidate scan: iterate products → open → decode → validate
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
 	if len(products) == 0 {

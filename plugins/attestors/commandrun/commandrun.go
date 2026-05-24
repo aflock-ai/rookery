@@ -79,6 +79,22 @@ func WithSilent(silent bool) Option {
 	}
 }
 
+// WithIgnoreExitCode tells the attestor to record the wrapped command's
+// exit code in the predicate but NOT propagate the exit-error up to the
+// cilock run pipeline. Use when the wrapped tool exits non-zero on
+// findings (semgrep, gosec, hadolint, checkov, trivy --exit-code, prowler
+// v3, govulncheck) — without this option, the postproduct stage skips
+// every downstream attestor (sarif/sbom/vex/etc.) and the tool's output
+// never gets parsed into the envelope.
+//
+// Policy Rego still has access to the real exit code via
+// `input.attestation.exitcode` and can deny on it.
+func WithIgnoreExitCode(ignore bool) Option {
+	return func(cr *CommandRun) {
+		cr.ignoreExitCode = ignore
+	}
+}
+
 func New(opts ...Option) *CommandRun {
 	cr := &CommandRun{}
 
@@ -87,6 +103,83 @@ func New(opts ...Option) *CommandRun {
 	}
 
 	return cr
+}
+
+// SocketInfo records a socket creation syscall.
+type SocketInfo struct {
+	Family   string `json:"family"`   // AF_INET, AF_INET6, AF_UNIX, etc.
+	Type     string `json:"type"`     // SOCK_STREAM, SOCK_DGRAM, etc.
+	Protocol int    `json:"protocol"` // 0 = default, 6 = TCP, 17 = UDP
+	FD       int    `json:"fd"`       // file descriptor returned
+}
+
+// NetworkConnection records a connect or bind syscall.
+type NetworkConnection struct {
+	Syscall   string `json:"syscall"`             // "connect" or "bind"
+	Family    string `json:"family"`              // AF_INET, AF_INET6, AF_UNIX
+	Address   string `json:"address"`             // IP address or Unix socket path
+	Port      int    `json:"port,omitempty"`      // TCP/UDP port (0 for AF_UNIX)
+	FD        int    `json:"fd"`                  // socket file descriptor
+	Timestamp string `json:"timestamp,omitempty"` // when the syscall was observed
+	Hostname  string `json:"hostname,omitempty"`  // TLS SNI hostname (extracted from ClientHello)
+}
+
+// DNSLookup records a detected DNS resolution (heuristic: connect to port 53).
+type DNSLookup struct {
+	ServerAddress string `json:"serverAddress"`
+	ServerPort    int    `json:"serverPort"`
+}
+
+// NetworkActivity aggregates all network operations for a process.
+type NetworkActivity struct {
+	Sockets     []SocketInfo        `json:"sockets,omitempty"`
+	Connections []NetworkConnection `json:"connections,omitempty"`
+	DNSLookups  []DNSLookup         `json:"dnsLookups,omitempty"`
+}
+
+// FileWrite records a write to a file descriptor. We track the path
+// (resolved from the fd via /proc/pid/fd/N) and bytes written.
+type FileWrite struct {
+	Path      string `json:"path"`
+	Bytes     int    `json:"bytes"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// FileRename records a rename/move operation.
+type FileRename struct {
+	OldPath   string `json:"oldPath"`
+	NewPath   string `json:"newPath"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// FileDelete records an unlink operation.
+type FileDelete struct {
+	Path      string `json:"path"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// FilePermChange records a chmod operation.
+type FilePermChange struct {
+	Path      string `json:"path"`
+	Mode      uint32 `json:"mode"`    // new permission bits
+	SetExec   bool   `json:"setExec"` // true if executable bit was set
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// SyscallEvent records a notable syscall that doesn't fit other categories.
+type SyscallEvent struct {
+	Syscall   string `json:"syscall"`          // "memfd_create", "ptrace", "mount", "clone"
+	Detail    string `json:"detail,omitempty"` // human-readable detail
+	Args      []int  `json:"args,omitempty"`   // raw syscall arguments
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// FileActivity aggregates all file mutation operations for a process.
+type FileActivity struct {
+	Writes      []FileWrite      `json:"writes,omitempty"`
+	Renames     []FileRename     `json:"renames,omitempty"`
+	Deletes     []FileDelete     `json:"deletes,omitempty"`
+	PermChanges []FilePermChange `json:"permChanges,omitempty"`
 }
 
 type ProcessInfo struct {
@@ -100,6 +193,17 @@ type ProcessInfo struct {
 	OpenedFiles      map[string]cryptoutil.DigestSet `json:"openedfiles,omitempty"`
 	Environ          string                          `json:"environ,omitempty"`
 	SpecBypassIsVuln bool                            `json:"specbypassisvuln,omitempty"`
+	Network          *NetworkActivity                `json:"network,omitempty"`
+	FileOps          *FileActivity                   `json:"fileOps,omitempty"`
+	SyscallEvents    []SyscallEvent                  `json:"syscallEvents,omitempty"`
+
+	// ExitCode is the wait status of the traced process. For cleanly-
+	// exited processes it is the literal exit status. For signal-
+	// terminated processes it follows shell convention: 128 + signal
+	// number. Zero (omitted from JSON) means "still running when trace
+	// ended" or "exit code unknown" — verifiers must not infer
+	// successful exit from a missing/zero value.
+	ExitCode int `json:"exitcode,omitempty"`
 }
 
 type CommandRun struct {
@@ -109,9 +213,10 @@ type CommandRun struct {
 	ExitCode  int           `json:"exitcode"`
 	Processes []ProcessInfo `json:"processes,omitempty"`
 
-	silent        bool
-	materials     map[string]cryptoutil.DigestSet
-	enableTracing bool
+	silent         bool
+	materials      map[string]cryptoutil.DigestSet
+	enableTracing  bool
+	ignoreExitCode bool
 }
 
 func (a *CommandRun) Schema() *jsonschema.Schema {
@@ -184,7 +289,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	}
 
 	var err error
-	if r.enableTracing {
+	if r.enableTracing { //nolint:nestif // sequential exit-handling: trace vs Wait, ExitError type assert, ignore-exit-code branch — each shallow check, refactor would obscure ordering
 		r.Processes, err = r.trace(c, ctx)
 		// Wait for I/O copying goroutines to complete before reading buffers.
 		// trace() uses ptrace to detect process exit, but exec's I/O goroutines
@@ -194,6 +299,12 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		err = c.Wait()
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			r.ExitCode = exitErr.ExitCode()
+			if r.ignoreExitCode {
+				// Record the exit code in the predicate but don't propagate
+				// the error. This lets postproduct attestors (sarif/sbom/vex/
+				// etc.) still fire for tools that exit non-zero on findings.
+				err = nil
+			}
 		}
 	}
 

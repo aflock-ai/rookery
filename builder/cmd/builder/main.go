@@ -53,33 +53,52 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/signers/file",
 	},
 	"all": {
+		"github.com/aflock-ai/rookery/plugins/attestors/asff",
 		"github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild",
+		"github.com/aflock-ai/rookery/plugins/attestors/aws-config",
 		"github.com/aflock-ai/rookery/plugins/attestors/aws-iid",
 		"github.com/aflock-ai/rookery/plugins/attestors/commandrun",
+		"github.com/aflock-ai/rookery/plugins/attestors/configuration",
 		"github.com/aflock-ai/rookery/plugins/attestors/docker",
+		"github.com/aflock-ai/rookery/plugins/attestors/docker-bench",
 		"github.com/aflock-ai/rookery/plugins/attestors/environment",
 		"github.com/aflock-ai/rookery/plugins/attestors/gcp-iit",
 		"github.com/aflock-ai/rookery/plugins/attestors/git",
 		"github.com/aflock-ai/rookery/plugins/attestors/github",
+		"github.com/aflock-ai/rookery/plugins/attestors/githubaction",
 		"github.com/aflock-ai/rookery/plugins/attestors/githubwebhook",
 		"github.com/aflock-ai/rookery/plugins/attestors/gitlab",
+		"github.com/aflock-ai/rookery/plugins/attestors/govulncheck",
+		"github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof",
+		"github.com/aflock-ai/rookery/plugins/attestors/inspec",
 		"github.com/aflock-ai/rookery/plugins/attestors/jenkins",
 		"github.com/aflock-ai/rookery/plugins/attestors/jwt",
 		"github.com/aflock-ai/rookery/plugins/attestors/k8smanifest",
+		"github.com/aflock-ai/rookery/plugins/attestors/kube-bench",
 		"github.com/aflock-ai/rookery/plugins/attestors/link",
 		"github.com/aflock-ai/rookery/plugins/attestors/lockfiles",
 		"github.com/aflock-ai/rookery/plugins/attestors/material",
 		"github.com/aflock-ai/rookery/plugins/attestors/maven",
+		"github.com/aflock-ai/rookery/plugins/attestors/nessus",
 		"github.com/aflock-ai/rookery/plugins/attestors/oci",
 		"github.com/aflock-ai/rookery/plugins/attestors/omnitrail",
+		"github.com/aflock-ai/rookery/plugins/attestors/oscap",
+		"github.com/aflock-ai/rookery/plugins/attestors/pip-install",
 		"github.com/aflock-ai/rookery/plugins/attestors/policyverify",
 		"github.com/aflock-ai/rookery/plugins/attestors/product",
+		"github.com/aflock-ai/rookery/plugins/attestors/prowler",
 		"github.com/aflock-ai/rookery/plugins/attestors/sarif",
 		"github.com/aflock-ai/rookery/plugins/attestors/sbom",
 		"github.com/aflock-ai/rookery/plugins/attestors/secretscan",
+		"github.com/aflock-ai/rookery/plugins/attestors/sinkhole-flows",
 		"github.com/aflock-ai/rookery/plugins/attestors/slsa",
+		"github.com/aflock-ai/rookery/plugins/attestors/steampipe",
+		"github.com/aflock-ai/rookery/plugins/attestors/structured-data",
 		"github.com/aflock-ai/rookery/plugins/attestors/system-packages",
+		"github.com/aflock-ai/rookery/plugins/attestors/test-results",
+		"github.com/aflock-ai/rookery/plugins/attestors/trivy",
 		"github.com/aflock-ai/rookery/plugins/attestors/vex",
+		"github.com/aflock-ai/rookery/plugins/attestors/vsa",
 		"github.com/aflock-ai/rookery/plugins/signers/debug-signer",
 		"github.com/aflock-ai/rookery/plugins/signers/file",
 		"github.com/aflock-ai/rookery/plugins/signers/fulcio",
@@ -370,6 +389,15 @@ func main() {
 		run(buildDir, "go", "get", "github.com/aflock-ai/rookery/attestation/signer")
 	}
 
+	// Get cilock/cli — the cobra command tree the generated main calls.
+	// This is what turns the output into a real cilock binary rather than
+	// a registry-inspector stub.
+	if attestationVer != "" {
+		run(buildDir, "go", "get", "github.com/aflock-ai/rookery/cilock/cli@"+attestationVer)
+	} else {
+		run(buildDir, "go", "get", "github.com/aflock-ai/rookery/cilock/cli")
+	}
+
 	// Resolve each plugin
 	var imports bytes.Buffer
 	for _, p := range plugins {
@@ -395,114 +423,25 @@ func main() {
 		mainGoPrefix = fmt.Sprintf("//go:debug fips140=%s\n", fipsMode)
 	}
 
+	// Generated binary is a real cilock: it pulls in the cobra command
+	// tree from cilock/cli and registers legacy witness.dev type aliases
+	// at startup. The blank-imports below register the manifest's
+	// attestor/signer plugins against the global attestation registry,
+	// which cilock/cli's run/verify/sign subcommands resolve.
 	mainGo := fmt.Sprintf(`%spackage main
 
 import (
-	"fmt"
-	"os"
-	"sort"
-
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/attestation/signer"
+	"github.com/aflock-ai/rookery/cilock/cli"
 
-	"rookery-build/buildinfo"
+	_ "rookery-build/buildinfo" // build metadata via -ldflags -X
 
 	// plugins
 %s)
 
 func main() {
-	if len(os.Args) < 2 {
-		showHelp()
-		os.Exit(0)
-	}
-
-	switch os.Args[1] {
-	case "attestors":
-		listAttestors()
-	case "signers":
-		listSigners()
-	case "buildinfo", "version":
-		fmt.Println(buildinfo.Info())
-	case "license":
-		showLicense()
-	case "help", "--help", "-h":
-		showHelp()
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %%s\n", os.Args[1])
-		showHelp()
-		os.Exit(1)
-	}
-}
-
-func showHelp() {
-	fmt.Println("Usage: <binary> <command>")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  attestors   List registered attestors")
-	fmt.Println("  signers     List registered signers")
-	fmt.Println("  buildinfo   Show build information")
-	fmt.Println("  version     Show version information")
-	fmt.Println("  license     Show license information")
-	fmt.Println("  help        Show this help")
-}
-
-func listAttestors() {
-	entries := attestation.RegistrationEntries()
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name)
-	}
-	sort.Strings(names)
-	fmt.Printf("Registered attestors (%%d):\n", len(names))
-	for _, name := range names {
-		fmt.Printf("  - %%s\n", name)
-	}
-}
-
-func listSigners() {
-	entries := signer.RegistryEntries()
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name)
-	}
-	sort.Strings(names)
-	fmt.Printf("Registered signers (%%d):\n", len(names))
-	for _, name := range names {
-		fmt.Printf("  - %%s\n", name)
-	}
-}
-
-func showLicense() {
-	fmt.Println("PROPRIETARY SOFTWARE LICENSE")
-	fmt.Println("========================================")
-	fmt.Println("")
-	if buildinfo.CustomerID != "" {
-		fmt.Printf("This software is owned by Aflock, Inc. and\nbuilt exclusively for %%s\n", buildinfo.CustomerID)
-	} else {
-		fmt.Println("This software is owned by Aflock, Inc.")
-	}
-	fmt.Println("")
-	fmt.Println("Copyright (c) 2025 Aflock, Inc.")
-	fmt.Println("All rights reserved.")
-	fmt.Println("")
-	fmt.Println("LICENSE RESTRICTIONS:")
-	fmt.Println("  - This software is licensed for internal use only")
-	fmt.Println("  - Redistribution is strictly prohibited")
-	fmt.Println("  - Reverse engineering is strictly prohibited")
-	fmt.Println("  - Modification is strictly prohibited")
-	fmt.Println("  - Sublicensing is strictly prohibited")
-	fmt.Println("")
-	fmt.Println("Unauthorized copying, distribution, modification, reverse")
-	fmt.Println("engineering, or use of this software is a violation of this")
-	fmt.Println("license agreement and may result in severe civil and criminal")
-	fmt.Println("penalties, including but not limited to injunctive relief,")
-	fmt.Println("damages, and criminal prosecution.")
-	fmt.Println("")
-	if buildinfo.TenantID != "" {
-		fmt.Printf("Tenant: %%s\n", buildinfo.TenantID)
-		fmt.Println("")
-	}
-	fmt.Println("For licensing inquiries: license@aflock.ai")
+	attestation.RegisterLegacyAliases()
+	cli.Execute()
 }
 `, mainGoPrefix, imports.String())
 
@@ -512,14 +451,19 @@ func showLicense() {
 	run(buildDir, "go", "mod", "tidy")
 	tmpBin := filepath.Join(buildDir, "rookery-build-output")
 
+	// Branded-distribution metadata: CustomerID/TenantID land in
+	// cilock/cli vars directly so `cilock license` surfaces them at
+	// runtime. The remaining buildinfo vars (BuilderVersion, BuildTime,
+	// Plugins, FipsMode) stay in the generated rookery-build/buildinfo
+	// package — they describe the builder invocation itself and aren't
+	// part of cilock's public surface.
 	metadataFlags := fmt.Sprintf("-X 'rookery-build/buildinfo.BuilderVersion=%s' "+
 		"-X 'rookery-build/buildinfo.BuildTime=%s' "+
 		"-X 'rookery-build/buildinfo.Plugins=%s' "+
 		"-X 'rookery-build/buildinfo.FipsMode=%s' "+
-		"-X 'rookery-build/buildinfo.CustomerID=%s' "+
-		"-X 'rookery-build/buildinfo.TenantID=%s' "+
-		"-X 'rookery-build/buildinfo.PlatformURL=%s'",
-		builderVer, buildTime, pluginsStr, fipsModeStr, customerID, tenantID, platformURL)
+		"-X 'github.com/aflock-ai/rookery/cilock/cli.CustomerID=%s' "+
+		"-X 'github.com/aflock-ai/rookery/cilock/cli.TenantID=%s'",
+		builderVer, buildTime, pluginsStr, fipsModeStr, customerID, tenantID)
 	// Also bake PlatformURL into the cilock config package default
 	if platformURL != "" {
 		metadataFlags += fmt.Sprintf(" -X 'github.com/aflock-ai/rookery/cilock/internal/config.DefaultPlatformURL=%s'", platformURL)

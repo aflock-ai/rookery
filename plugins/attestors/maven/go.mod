@@ -1,6 +1,6 @@
 module github.com/aflock-ai/rookery/plugins/attestors/maven
 
-go 1.26.0
+go 1.26.3
 
 replace github.com/aflock-ai/rookery/attestation => ../../../attestation
 
@@ -11,7 +11,7 @@ require (
 )
 
 require (
-	filippo.io/edwards25519 v1.2.0 // indirect
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
@@ -26,9 +26,7 @@ require (
 	go.step.sm/crypto v0.76.0 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/buger/jsonparser => ../../../../../security-patches/buger-jsonparser

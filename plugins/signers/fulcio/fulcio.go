@@ -40,7 +40,6 @@ import (
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/attestation/signer"
-	"github.com/mattn/go-isatty"
 	fulciopb "github.com/sigstore/fulcio/pkg/generated/protobuf"
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/sigstore/sigstore/pkg/oauthflow"
@@ -289,14 +288,20 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 		}
 
 		raw = string(f)
-	case fsp.Token == "" && isatty.IsTerminal(os.Stdin.Fd()):
+	case fsp.Token == "" && fsp.OidcIssuer != "":
+		// Interactive OIDC: opens a browser and listens on a localhost
+		// callback. The trigger is an explicit --signer-fulcio-oidc-issuer
+		// flag, not stdin's TTY-ness — agentic flows where an agent
+		// launches cilock and a human completes browser auth in their
+		// own session need this to work even when stdin isn't a terminal.
+		log.Infof("Starting interactive OIDC flow (issuer=%s, client=%s) — a browser window will open for human approval", fsp.OidcIssuer, fsp.OidcClientID)
 		tok, err := oauthflow.OIDConnect(fsp.OidcIssuer, fsp.OidcClientID, "", fsp.OidcRedirectUrl, oauthflow.DefaultIDTokenGetter)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("interactive OIDC flow failed: %w", err)
 		}
 		raw = tok.RawString
 	default:
-		return nil, errors.New("no token provided")
+		return nil, errors.New("no token provided: set --signer-fulcio-token, --signer-fulcio-token-path, or --signer-fulcio-oidc-issuer (interactive)")
 	}
 
 	var certResp *fulciopb.SigningCertificate

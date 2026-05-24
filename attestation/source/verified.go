@@ -33,6 +33,11 @@ type CollectionVerificationResult struct {
 
 type VerifiedSourcer interface {
 	Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionVerificationResult, error)
+	// SearchByPredicateType returns bare-predicate statements (non-Collection
+	// DSSE envelopes) whose predicateType + subject digest match, with each
+	// envelope's verifiers populated by DSSE signature verification. Used by
+	// the policy engine's external-attestation flow (issue #39).
+	SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error)
 }
 
 type VerifiedSource struct {
@@ -42,6 +47,16 @@ type VerifiedSource struct {
 
 func NewVerifiedSource(source Sourcer, verifyOpts ...dsse.VerificationOption) *VerifiedSource {
 	return &VerifiedSource{source, verifyOpts}
+}
+
+// truncLogField returns s truncated to n bytes for log-field display. It is
+// panic-safe for strings shorter than n (e.g. short collection references like
+// "step01" in tests).
+func truncLogField(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionVerificationResult, error) {
@@ -70,10 +85,10 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 			kid := "unknown"
 			if cv.Verifier != nil {
 				if k, err := cv.Verifier.KeyID(); err == nil {
-					kid = k[:12]
+					kid = truncLogField(k, 12)
 				}
 			}
-			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s verifier kid=%s error=%v\n", toVerify.Reference[:12], kid, cv.Error)
+			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s verifier kid=%s error=%v\n", truncLogField(toVerify.Reference, 12), kid, cv.Error)
 		}
 
 		passedVerifiers := make([]cryptoutil.Verifier, 0)
@@ -95,5 +110,42 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 		})
 	}
 
+	return results, nil
+}
+
+// SearchByPredicateType delegates to the underlying Sourcer and then runs
+// DSSE signature verification on every returned envelope, populating
+// StatementEnvelope.Verifiers with successfully-verified verifiers.
+// Envelopes whose signatures cannot be verified are still returned (with an
+// empty Verifiers slice + an error in Errors) so that callers can surface
+// the rejection reason rather than silently dropping them.
+func (s *VerifiedSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
+	unverified, err := s.source.SearchByPredicateType(ctx, predicateTypes, subjectDigests)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]StatementEnvelope, 0, len(unverified))
+	for _, toVerify := range unverified {
+		envelopeVerifiers, err := toVerify.Envelope.Verify(s.verifyOpts...)
+		if err != nil {
+			toVerify.Errors = append(toVerify.Errors, fmt.Errorf("failed to verify envelope: %w", err))
+			results = append(results, toVerify)
+			continue
+		}
+
+		passed := make([]cryptoutil.Verifier, 0, len(envelopeVerifiers))
+		for _, v := range envelopeVerifiers {
+			if v.Error == nil {
+				passed = append(passed, v.Verifier)
+			}
+		}
+
+		if len(passed) == 0 {
+			toVerify.Errors = append(toVerify.Errors, fmt.Errorf("no verifiers passed"))
+		}
+		toVerify.Verifiers = passed
+		results = append(results, toVerify)
+	}
 	return results, nil
 }

@@ -1,0 +1,22 @@
+package release_build_commandrun
+
+# The release build must use the canonical hardening flags:
+#   - -trimpath      (strips local paths from binary; reproducible)
+#   - -ldflags ... cli.Version=v...  (version is embedded, not "dev")
+#
+# CGO_ENABLED=0 enforcement lives in release-rego-environment.txt against
+# the environment attestor predicate (which holds the actual env vars).
+# Splitting per-predicate matches how cilock evaluates Rego: input is the
+# attestor-specific payload, never a cross-attestor view.
+
+cmd := concat(" ", input.cmd)
+
+deny[msg] {
+  not contains(cmd, "-trimpath")
+  msg := "release build missing -trimpath flag"
+}
+
+deny[msg] {
+  not contains(cmd, "cli.Version=")
+  msg := "release build missing -ldflags Version embed"
+}

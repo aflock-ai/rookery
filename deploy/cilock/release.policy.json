@@ -1,0 +1,189 @@
+{
+  "_comment": "Release verification policy for cilock binaries. Rego layers stacked per predicate against the release-build step: git (source integrity), github (source repo+ref), environment (CGO_ENABLED=0), command-run (build hygiene: -trimpath + ldflags Version embed); product evidence comes from subject-digest matching, SBOM presence is required (spdx.dev/Document predicate). Hermeticity Rego held out pending --trace + atomic-rename incompatibility fix (PR #153). The committed policy is unsigned for reviewer transparency; the release workflow injects the live Fulcio root chain, signs the policy with an ephemeral ed25519 key, and ships both the signed policy and pubkey as release assets. Plain-text Rego sources are in deploy/cilock/release-rego-*.txt.",
+  "expires": "2027-12-31T23:59:59Z",
+  "name": "cilock-release-v1",
+  "roots": {
+    "sigstore-fulcio": {
+      "_comment": "Public Sigstore Fulcio root, used to verify the keyless cosign signature on the binary tarball, .sig, and .cert that ship with every release.",
+      "certConstraint": {
+        "commonName": "https://fulcio.sigstore.dev"
+      }
+    }
+  },
+  "publickeys": {},
+  "steps": {
+    "vendor-cilock-deps": {
+      "name": "vendor-cilock-deps",
+      "_comment": "Wraps `go mod vendor` in its own cilock-action invocation. Produces the vendored module tree as products. The release-build step declares artifactsFrom=[vendor-cilock-deps], so cilock verify enforces that the build's materials match this step's products byte-for-byte. Any tampering between vendor and build is caught.",
+      "attestations": [
+        {
+          "type": "https://aflock.ai/attestations/git/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-source-integrity",
+              "_comment": "Decoded plain-text: deploy/cilock/release-rego-source-integrity.txt. Denies on dirty working tree or missing commit hash.",
+              "module": "cGFja2FnZSByZWxlYXNlX3NvdXJjZV9pbnRlZ3JpdHkKCiMgU291cmNlIG11c3QgYmUgaW4gYSBjbGVhbiwgaWRlbnRpZmlhYmxlIHN0YXRlLiBJZiB0aGUgd29ya2luZyB0cmVlIGhhcwojIGFueSBtb2RpZmllZCwgc3RhZ2VkLCBvciB1bnRyYWNrZWQgZmlsZXMgYXQgYnVpbGQgdGltZSwgdGhlIGFydGlmYWN0CiMgdGhlIGJ1aWxkIHByb2R1Y2VkIGRvZXMgbm90IGNvcnJlc3BvbmQgdG8gYSBrbm93biBnaXQgY29tbWl0IOKAlCBjb3VsZAojIGJlIGEgYnVpbGQgc2NyaXB0IHRoYXQgd3JvdGUgaW50byB0aGUgc291cmNlIHRyZWUsIGEgcG9zdC1jbG9uZQojIHBhdGNoLCBvciBhIGNvZGUtaW5qZWN0aW9uIHN0ZXAuCgpkZW55W21zZ10gewogIGNvdW50KGlucHV0LnN0YXR1cykgPiAwCiAgY2hhbmdlZCA6PSBbcGF0aCB8IGlucHV0LnN0YXR1c1twYXRoXV0KICBtc2cgOj0gc3ByaW50Zigic291cmNlIHRyZWUgZGlydHkgYXQgYnVpbGQgdGltZSDigJQgJWQgZmlsZShzKSBoYWQgY2hhbmdlczogJXYiLCBbY291bnQoaW5wdXQuc3RhdHVzKSwgY2hhbmdlZF0pCn0KCiMgVGhlIGNvbW1pdCBoYXNoIG11c3QgYmUgcHJlc2VudCBhbmQgbm9uLWVtcHR5LiBBIG1pc3NpbmcgY29tbWl0IGhhc2gKIyBtZWFucyBnaXQgY291bGRuJ3QgYmUgcXVlcmllZCDigJQgZWl0aGVyIG5vdCBhIHJlcG8sIGRldGFjaGVkIEhFQUQsIG9yCiMgdGhlIC5naXQgZGlyZWN0b3J5IHdhcyBzdHJpcHBlZCBiZWZvcmUgdGhlIGJ1aWxkLiBSZWZ1c2UgdG8gZ2F0ZSBvbgojIGFuIHVucm9vdGVkIHNvdXJjZSB0cmVlLgpkZW55W21zZ10gewogIG5vdCBpbnB1dC5jb21taXRoYXNoCiAgbXNnIDo9ICJnaXQgY29tbWl0IGhhc2ggbWlzc2luZyDigJQgc291cmNlIHN0YXRlIGNhbm5vdCBiZSB2ZXJpZmllZCIKfQoKZGVueVttc2ddIHsKICBpbnB1dC5jb21taXRoYXNoID09ICIiCiAgbXNnIDo9ICJnaXQgY29tbWl0IGhhc2ggaXMgZW1wdHkiCn0K"
+            }
+          ]
+        },
+        {
+          "type": "https://aflock.ai/attestations/github/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-from-aflock-ai-rookery",
+              "_comment": "Decoded: deny if input.repository != 'aflock-ai/rookery'; deny if input.reftype != 'tag'.",
+              "module": "cGFja2FnZSByZWxlYXNlX2Zyb21fYWZsb2NrX2FpX3Jvb2tlcnkKCmRlbnlbbXNnXSB7CglpbnB1dC5yZXBvc2l0b3J5ICE9ICJhZmxvY2stYWkvcm9va2VyeSIKCW1zZyA6PSBzcHJpbnRmKCJhdHRlc3RhdGlvbiBub3QgZnJvbSBhZmxvY2stYWkvcm9va2VyeTogJXMiLCBbaW5wdXQucmVwb3NpdG9yeV0pCn0KCmRlbnlbbXNnXSB7Cglub3Qgc3RhcnRzd2l0aChpbnB1dC5yZWZ0eXBlLCAidGFnIikKCW1zZyA6PSBzcHJpbnRmKCJyZWxlYXNlcyBtdXN0IGJlIHRhZ2dlZCwgZ290OiAlcyIsIFtpbnB1dC5yZWZ0eXBlXSkKfQ=="
+            }
+          ]
+        },
+        {
+          "type": "https://aflock.ai/attestations/product/v0.3",
+          "regopolicies": [],
+          "_comment": "Product subjects are checked against release-build materials via artifactsFrom \u2014 Rego not needed here."
+        },
+        {
+          "type": "https://aflock.ai/attestations/command-run/v0.1",
+          "regopolicies": [
+            {
+              "name": "vendor-command-is-go-mod-vendor",
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-vendor-command.txt. Denies if the vendor step ran anything other than `go mod vendor`.",
+              "module": "cGFja2FnZSByZWxlYXNlX3ZlbmRvcl9jb21tYW5kCgojIFRoZSB2ZW5kb3Igc3RlcCBtdXN0IGxpdGVyYWxseSBydW4gYGdvIG1vZCB2ZW5kb3JgLiBXZSBhc3NlcnQgdGhpcyBvbgojIHRoZSBjb21tYW5kLXJ1biBwcmVkaWNhdGUgc28gYSB0YW1wZXJlZCB3b3JrZmxvdyB0aGF0IGludm9rZXMgc29tZQojIG90aGVyIGNvbW1hbmQgKGUuZy4gYGNwIC90bXAvcG9pc29uLXZlbmRvciBjaWxvY2svdmVuZG9yYCkgaXMgY2F1Z2h0CiMgZXZlbiB3aGVuIHRoZSByZXN1bHRpbmcgcHJvZHVjdCBzZXQgbG9va3Mgc3VwZXJmaWNpYWxseSByaWdodC4KIwojIFdlIGRvbid0IGdhdGUgb24gLW1vZD12ZW5kb3IgaGVyZSDigJQgdGhhdCdzIGVuZm9yY2VkIHNlcGFyYXRlbHkgb24gdGhlCiMgcmVsZWFzZS1idWlsZCBzdGVwJ3MgY29tbWFuZC1ydW4gcHJlZGljYXRlIChyZWxlYXNlLWJ1aWxkLWh5Z2llbmUpLgoKY21kIDo9IGNvbmNhdCgiICIsIGlucHV0LmNtZCkKCmRlbnlbbXNnXSB7CiAgbm90IGNvbnRhaW5zKGNtZCwgImdvIG1vZCB2ZW5kb3IiKQogIG1zZyA6PSBzcHJpbnRmKCJ2ZW5kb3Igc3RlcCBtdXN0IGludm9rZSBgZ28gbW9kIHZlbmRvcmAsIGdvdDogJXMiLCBbY21kXSkKfQo="
+            }
+          ]
+        }
+      ],
+      "functionaries": [
+        {
+          "type": "root",
+          "_comment": "Fulcio leaf certs have empty Subject CN \u2014 identity is in SAN URI + Fulcio v1.x cert extensions. We constrain on the issuer OID (1.3.6.1.4.1.57264.1.8) for the GitHub Actions OIDC provider, and on BuildSignerURI (OID .1.9) to bind the signer to this repo's release.yml workflow at any v* tag. Glob wildcards are honored by witness checkExtensions. Extension JSON keys are PascalCase because sigstore/fulcio's Extensions struct uses Go field names as JSON tags.",
+          "certConstraint": {
+            "roots": [
+              "sigstore-fulcio"
+            ],
+            "uris": [
+              "*"
+            ],
+            "extensions": {
+              "Issuer": "https://token.actions.githubusercontent.com",
+              "BuildSignerURI": "https://github.com/aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v*",
+              "SourceRepositoryURI": "https://github.com/aflock-ai/rookery"
+            }
+          }
+        }
+      ]
+    },
+    "release-build": {
+      "name": "release-build",
+      "_comment": "Built and signed in .github/workflows/release.yml. Identity is the GH Actions OIDC workflow identity, which Fulcio binds to the cosign cert. The cosign sign step in release.yml runs AFTER the verifier produces VSAs (this policy) \u2014 so a cosign signature on a published binary transitively proves the binary passed every Rego layer below.",
+      "attestations": [
+        {
+          "type": "https://aflock.ai/attestations/git/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-source-integrity",
+              "_comment": "Decoded plain-text: deploy/cilock/release-rego-source-integrity.txt. Denies on dirty working tree or missing commit hash.",
+              "module": "cGFja2FnZSByZWxlYXNlX3NvdXJjZV9pbnRlZ3JpdHkKCiMgU291cmNlIG11c3QgYmUgaW4gYSBjbGVhbiwgaWRlbnRpZmlhYmxlIHN0YXRlLiBJZiB0aGUgd29ya2luZyB0cmVlIGhhcwojIGFueSBtb2RpZmllZCwgc3RhZ2VkLCBvciB1bnRyYWNrZWQgZmlsZXMgYXQgYnVpbGQgdGltZSwgdGhlIGFydGlmYWN0CiMgdGhlIGJ1aWxkIHByb2R1Y2VkIGRvZXMgbm90IGNvcnJlc3BvbmQgdG8gYSBrbm93biBnaXQgY29tbWl0IOKAlCBjb3VsZAojIGJlIGEgYnVpbGQgc2NyaXB0IHRoYXQgd3JvdGUgaW50byB0aGUgc291cmNlIHRyZWUsIGEgcG9zdC1jbG9uZQojIHBhdGNoLCBvciBhIGNvZGUtaW5qZWN0aW9uIHN0ZXAuCgpkZW55W21zZ10gewogIGNvdW50KGlucHV0LnN0YXR1cykgPiAwCiAgY2hhbmdlZCA6PSBbcGF0aCB8IGlucHV0LnN0YXR1c1twYXRoXV0KICBtc2cgOj0gc3ByaW50Zigic291cmNlIHRyZWUgZGlydHkgYXQgYnVpbGQgdGltZSDigJQgJWQgZmlsZShzKSBoYWQgY2hhbmdlczogJXYiLCBbY291bnQoaW5wdXQuc3RhdHVzKSwgY2hhbmdlZF0pCn0KCiMgVGhlIGNvbW1pdCBoYXNoIG11c3QgYmUgcHJlc2VudCBhbmQgbm9uLWVtcHR5LiBBIG1pc3NpbmcgY29tbWl0IGhhc2gKIyBtZWFucyBnaXQgY291bGRuJ3QgYmUgcXVlcmllZCDigJQgZWl0aGVyIG5vdCBhIHJlcG8sIGRldGFjaGVkIEhFQUQsIG9yCiMgdGhlIC5naXQgZGlyZWN0b3J5IHdhcyBzdHJpcHBlZCBiZWZvcmUgdGhlIGJ1aWxkLiBSZWZ1c2UgdG8gZ2F0ZSBvbgojIGFuIHVucm9vdGVkIHNvdXJjZSB0cmVlLgpkZW55W21zZ10gewogIG5vdCBpbnB1dC5jb21taXRoYXNoCiAgbXNnIDo9ICJnaXQgY29tbWl0IGhhc2ggbWlzc2luZyDigJQgc291cmNlIHN0YXRlIGNhbm5vdCBiZSB2ZXJpZmllZCIKfQoKZGVueVttc2ddIHsKICBpbnB1dC5jb21taXRoYXNoID09ICIiCiAgbXNnIDo9ICJnaXQgY29tbWl0IGhhc2ggaXMgZW1wdHkiCn0K"
+            }
+          ]
+        },
+        {
+          "type": "https://aflock.ai/attestations/github/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-from-aflock-ai-rookery",
+              "_comment": "Decoded: deny if input.repository != 'aflock-ai/rookery'; deny if input.reftype != 'tag'.",
+              "module": "cGFja2FnZSByZWxlYXNlX2Zyb21fYWZsb2NrX2FpX3Jvb2tlcnkKCmRlbnlbbXNnXSB7CglpbnB1dC5yZXBvc2l0b3J5ICE9ICJhZmxvY2stYWkvcm9va2VyeSIKCW1zZyA6PSBzcHJpbnRmKCJhdHRlc3RhdGlvbiBub3QgZnJvbSBhZmxvY2stYWkvcm9va2VyeTogJXMiLCBbaW5wdXQucmVwb3NpdG9yeV0pCn0KCmRlbnlbbXNnXSB7Cglub3Qgc3RhcnRzd2l0aChpbnB1dC5yZWZ0eXBlLCAidGFnIikKCW1zZyA6PSBzcHJpbnRmKCJyZWxlYXNlcyBtdXN0IGJlIHRhZ2dlZCwgZ290OiAlcyIsIFtpbnB1dC5yZWZ0eXBlXSkKfQ=="
+            }
+          ]
+        },
+        {
+          "type": "https://aflock.ai/attestations/environment/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-build-env-hardening",
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-environment.txt. (1) Denies if CGO_ENABLED != 0 \u2014 CGO links system libc and breaks 'static, no surprise deps'. (2) Denies if GOFIPS140 unset/empty/off \u2014 without it, the Go FIPS 140-3 Cryptographic Module is not compiled in, so crypto/fips140.Enabled() returns false even with //go:debug fips140=on. Required for FedRAMP 20x, CMMC, NIST 800-204D.",
+              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX2Vudmlyb25tZW50CgojIENHT19FTkFCTEVEPTAgaXMgcmVxdWlyZWQgZm9yIHJlbGVhc2UgYnVpbGRzLiBDR08gbGlua2luZyBwdWxscyBpbgojIHRoZSBzeXN0ZW0gQyBjb21waWxlci9sb2FkZXIgYW5kIGR5bmFtaWNhbGx5IGxpbmtzIGFnYWluc3Qgc3lzdGVtCiMgbGlicmFyaWVzIOKAlCB0aGF0IGJyZWFrcyB0aGUgInN0YXRpYywgbm8gc3VycHJpc2UgZGVwZW5kZW5jaWVzIgojIGd1YXJhbnRlZSBlbmQgdXNlcnMgcmVseSBvbi4gUHVyZS1HbyBiaW5hcmllcyBhbHNvIGRvZGdlIHRoZSBlbnRpcmUKIyBjbGFzcyBvZiBnbGliYy12ZXJzaW9uIGNvbXBhdGliaWxpdHkgZm9vdGd1bnMuCgpkZW55W21zZ10gewogIGlucHV0LnZhcmlhYmxlcy5DR09fRU5BQkxFRCAhPSAiMCIKICBtc2cgOj0gc3ByaW50ZigiQ0dPX0VOQUJMRUQgbXVzdCBiZSAwIGluIHJlbGVhc2UgYnVpbGRzLCBnb3Q6ICVzIiwgW2lucHV0LnZhcmlhYmxlcy5DR09fRU5BQkxFRF0pCn0KCiMgR09GSVBTMTQwIHNlbGVjdHMgdGhlIEZJUFMgMTQwLTMgR28gQ3J5cHRvZ3JhcGhpYyBNb2R1bGUgdmVyc2lvbiB0bwojIGNvbXBpbGUgaW4gKEdvIDEuMjQrKS4gV2l0aG91dCB0aGlzIHNldCwgdGhlIGJpbmFyeSBjYW5ub3Qgb3BlcmF0ZSBpbgojIEZJUFMgbW9kZSBhdCBydW50aW1lIGV2ZW4gd2l0aCAvL2dvOmRlYnVnIGZpcHMxNDA9b24g4oCUIHRoZSBGSVBTCiMgbW9kdWxlIHNpbXBseSBpc24ndCBwcmVzZW50LiBXZSByZXF1aXJlIGEgbm9uLWVtcHR5LCBub24tIm9mZiIgdmFsdWUuCiMgRmVkUkFNUCAyMHggYW5kIE5JU1QgODAwLTIwNEQgcmF0ZXBheWVycyB3aWxsIGNoZWNrIHRoaXMuCgpkZW55W21zZ10gewogIG5vdCBpbnB1dC52YXJpYWJsZXMuR09GSVBTMTQwCiAgbXNnIDo9ICJHT0ZJUFMxNDAgdW5zZXQg4oCUIEZJUFMgMTQwLTMgR28gQ3J5cHRvZ3JhcGhpYyBNb2R1bGUgbm90IGNvbXBpbGVkIGludG8gcmVsZWFzZSBidWlsZCIKfQoKZGVueVttc2ddIHsKICBpbnB1dC52YXJpYWJsZXMuR09GSVBTMTQwID09ICIiCiAgbXNnIDo9ICJHT0ZJUFMxNDAgZW1wdHkg4oCUIEZJUFMgMTQwLTMgR28gQ3J5cHRvZ3JhcGhpYyBNb2R1bGUgbm90IGNvbXBpbGVkIGludG8gcmVsZWFzZSBidWlsZCIKfQoKZGVueVttc2ddIHsKICBpbnB1dC52YXJpYWJsZXMuR09GSVBTMTQwID09ICJvZmYiCiAgbXNnIDo9ICJHT0ZJUFMxNDA9b2ZmIOKAlCBGSVBTIDE0MC0zIEdvIENyeXB0b2dyYXBoaWMgTW9kdWxlIGV4cGxpY2l0bHkgZGlzYWJsZWQgaW4gcmVsZWFzZSBidWlsZCIKfQo="
+            }
+          ]
+        },
+        {
+          "type": "https://aflock.ai/attestations/command-run/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-build-hygiene",
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-commandrun.txt. Denies on: missing -trimpath, missing cli.Version ldflags. CGO check moved to release-build-cgo-disabled (env predicate).",
+              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX2NvbW1hbmRydW4KCiMgVGhlIHJlbGVhc2UgYnVpbGQgbXVzdCB1c2UgdGhlIGNhbm9uaWNhbCBoYXJkZW5pbmcgZmxhZ3M6CiMgICAtIC10cmltcGF0aCAgICAgIChzdHJpcHMgbG9jYWwgcGF0aHMgZnJvbSBiaW5hcnk7IHJlcHJvZHVjaWJsZSkKIyAgIC0gLWxkZmxhZ3MgLi4uIGNsaS5WZXJzaW9uPXYuLi4gICh2ZXJzaW9uIGlzIGVtYmVkZGVkLCBub3QgImRldiIpCiMKIyBDR09fRU5BQkxFRD0wIGVuZm9yY2VtZW50IGxpdmVzIGluIHJlbGVhc2UtcmVnby1lbnZpcm9ubWVudC50eHQgYWdhaW5zdAojIHRoZSBlbnZpcm9ubWVudCBhdHRlc3RvciBwcmVkaWNhdGUgKHdoaWNoIGhvbGRzIHRoZSBhY3R1YWwgZW52IHZhcnMpLgojIFNwbGl0dGluZyBwZXItcHJlZGljYXRlIG1hdGNoZXMgaG93IGNpbG9jayBldmFsdWF0ZXMgUmVnbzogaW5wdXQgaXMgdGhlCiMgYXR0ZXN0b3Itc3BlY2lmaWMgcGF5bG9hZCwgbmV2ZXIgYSBjcm9zcy1hdHRlc3RvciB2aWV3LgoKY21kIDo9IGNvbmNhdCgiICIsIGlucHV0LmNtZCkKCmRlbnlbbXNnXSB7CiAgbm90IGNvbnRhaW5zKGNtZCwgIi10cmltcGF0aCIpCiAgbXNnIDo9ICJyZWxlYXNlIGJ1aWxkIG1pc3NpbmcgLXRyaW1wYXRoIGZsYWciCn0KCmRlbnlbbXNnXSB7CiAgbm90IGNvbnRhaW5zKGNtZCwgImNsaS5WZXJzaW9uPSIpCiAgbXNnIDo9ICJyZWxlYXNlIGJ1aWxkIG1pc3NpbmcgLWxkZmxhZ3MgVmVyc2lvbiBlbWJlZCIKfQo="
+            },
+            {
+              "name": "release-build-hermetic",
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-hermetic.txt. Denies if the traced build process opened any TCP/TLS connection to a host outside the allowlist (vuln.go.dev + storage.googleapis.com only \u2014 for govulncheck's vuln DB fetch). Requires cilock-action's trace:true input AND  so the build doesn't need proxy.golang.org.",
+              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX2hlcm1ldGljCgppbXBvcnQgZnV0dXJlLmtleXdvcmRzLmluCgojIEhlcm1ldGljaXR5OiB0aGUgcmVsZWFzZSBidWlsZCBpcyBvbmx5IGFsbG93ZWQgdG8gdGFsayB0byBhIHNtYWxsIHNldAojIG9mIGV4cGVjdGVkIGhvc3RzLiBBbnl0aGluZyBvdXRzaWRlIHRoaXMgc2V0IGlzIHN1c3BpY2lvdXMg4oCUIGNvdWxkIGJlCiMgYSBtYWxpY2lvdXMgZGVwZW5kZW5jeSBwcm94eSwgYW4gZXhmaWwgY2hhbm5lbCwgb3IgYSB0b29sIHdpdGgKIyB1bmV4cGVjdGVkIHRlbGVtZXRyeSBjYWxsaW5nIGhvbWUuCiMKIyBDYXB0dXJlZCBieSB0aGUgYC0tdHJhY2VgIGZsYWcgb24gY2lsb2NrLWFjdGlvbjogZXZlcnkgY29ubmVjdCAvCiMgc2VuZHRvIC8gYmluZCBzeXNjYWxsIGxhbmRzIGluIGlucHV0LnByb2Nlc3Nlc1tdLm5ldHdvcmtpbmcuY29ubmVjdGlvbnNbXSwKIyB3aXRoIHRoZSBUTFMgU05JIGhvc3RuYW1lIGV4dHJhY3RlZCBmcm9tIHRoZSBDbGllbnRIZWxsby4gV2UgZ2F0ZSBvbgojIGhvc3RuYW1lIHJhdGhlciB0aGFuIElQIGJlY2F1c2UgSVBzIGNoYW5nZSBidXQgU05JIGlzIHN0YWJsZS4KIwojIFdpdGggY2lsb2NrL3ZlbmRvci8gY29tbWl0dGVkIGFuZCBgLW1vZD12ZW5kb3JgIG9uIHRoZSBidWlsZCBjb21tYW5kLAojIGBnbyBidWlsZGAgbm8gbG9uZ2VyIG5lZWRzIHByb3h5LmdvbGFuZy5vcmcgb3Igc3VtLmdvbGFuZy5vcmcuIFRoZQojIG9ubHkgbGVnaXRpbWF0ZSBvdXRib3VuZCBkdXJpbmcgdGhlIHdyYXBwZWQgY29tbWFuZCBpcyBnb3Z1bG5jaGVjawojIGZldGNoaW5nIHRoZSBHbyB2dWxuZXJhYmlsaXR5IGRhdGFiYXNlIGZyb20gdnVsbi5nby5kZXYgKHNlcnZlZCBmcm9tCiMgc3RvcmFnZS5nb29nbGVhcGlzLmNvbSkuCgphbGxvd2VkX2hvc3RzIDo9IHsKICAidnVsbi5nby5kZXYiLAogICJzdG9yYWdlLmdvb2dsZWFwaXMuY29tIiwKfQoKIyBEZW55IG9uIGFueSBjb25uZWN0aW9uIHdob3NlIFNOSSBob3N0bmFtZSBpc24ndCBvbiB0aGUgYWxsb3dsaXN0LgojIFNraXAgY29ubmVjdGlvbnMgd2l0aCBlbXB0eSBob3N0bmFtZSAoVURQLCBwcmUtVExTLCBBRl9VTklYKSDigJQgdGhleQojIGRvbid0IHJlcHJlc2VudCBuZXR3b3JrIGVncmVzcyBiZXlvbmQgdGhlIGxvY2FsIHN1Ym5ldCBieSB0aGVtc2VsdmVzLgpkZW55W21zZ10gewogIHNvbWUgcHJvYyBpbiBpbnB1dC5wcm9jZXNzZXMKICBzb21lIGNvbm4gaW4gcHJvYy5uZXR3b3JraW5nLmNvbm5lY3Rpb25zCiAgY29ubi5ob3N0bmFtZSAhPSAiIgogIG5vdCBhbGxvd2VkX2hvc3RzW2Nvbm4uaG9zdG5hbWVdCiAgbXNnIDo9IHNwcmludGYoImJ1aWxkIGNvbm5lY3RlZCB0byBub24tYWxsb3dsaXN0ZWQgaG9zdDogJXMgKHBvcnQgJWQsIHN5c2NhbGwgJXMpIOKAlCBoZXJtZXRpYyBidWlsZCBwb2xpY3kgZmFpbHMiLAogICAgICAgICAgICAgICAgIFtjb25uLmhvc3RuYW1lLCBjb25uLnBvcnQsIGNvbm4uc3lzY2FsbF0pCn0K"
+            }
+          ]
+        },
+        {
+          "type": "https://aflock.ai/attestations/product/v0.3",
+          "regopolicies": [],
+          "_comment": "Product attestor's predicate is merkle-summary only (MerkleRoot, TreeSize, etc.) \u2014 the per-file product list is in the statement SUBJECTS, not the predicate input that Rego sees. We rely on the source.Search subject-digest filter (collection matches only when one of its subjects is the artifact's hash) to enforce 'a cilock binary was produced'. A surviving collection at this point IS the proof."
+        },
+        {
+          "type": "https://spdx.dev/Document",
+          "regopolicies": [],
+          "_comment": "SBOM presence is required. syft runs inside the wrapped build command (see release.yml) and writes the SPDX file into the workingdir; cilock-action's product attestor captures it, then the sbom attestor parses it into this predicate."
+        },
+        {
+          "type": "https://slsa.dev/provenance/v1.0",
+          "regopolicies": [],
+          "_comment": "SLSA v1.0 provenance presence is required. The cilock-action slsa attestor emits this predicate alongside the in-toto collection so downstream SLSA-verifiers (slsa-verifier, GitHub Attestation viewer) can consume our releases without parsing the aflock-ai-specific shape. No Rego gating \u2014 presence requirement alone means a release without a SLSA predicate fails to find a matching collection."
+        },
+        {
+          "type": "https://aflock.ai/attestations/secretscan/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-build-no-secrets",
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-secretscan.txt. Denies on any secretscan finding EXCEPT known false positives: sourcegraph-access-token matches against SBOM file commit-SHA module references (Go module pseudo-versions look like access tokens to gitleaks). Real binary-level findings still trip the gate.",
+              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX3NlY3JldHNjYW4KCiMgVGhlIHNlY3JldHNjYW4gYXR0ZXN0b3IgKGdpdGxlYWtzIHVuZGVyIHRoZSBob29kKSBzY2FucyB0aGUgZW50aXJlCiMgcHJvZHVjdCBzZXQgKyBldmVyeSBwcmlvciBhdHRlc3RhdGlvbiBlbnZlbG9wZSBmb3IgbWF0Y2hpbmcgc2VjcmV0CiMgcGF0dGVybnMsIHdpdGggbXVsdGktbGF5ZXIgYmFzZTY0L2hleC9VUkwgZGVjb2RlIHBhc3Nlcy4gV2hlbiBpdAojIGZpbmRzIHNvbWV0aGluZyBpdCByZXBsYWNlcyB0aGUgYWN0dWFsIHZhbHVlIHdpdGggYSBTSEEtMjU2IGRpZ2VzdAojIG9mIHRoZSBzZWNyZXQsIHNvIHRoZSBwcmVkaWNhdGUgY2FuIGJlIHNhZmVseSBzdG9yZWQuCiMKIyBGaWx0ZXJpbmc6IFNCT00gZmlsZXMgKC5zcGR4Lmpzb24sIC5jeWNsb25lZHguanNvbikgbGVnaXRpbWF0ZWx5CiMgY29udGFpbiBsb25nIGhleCBzdHJpbmdzIOKAlCBHbyBtb2R1bGUgY29tbWl0IFNIQXMsIGZpbGUgZGlnZXN0cywKIyBsaWNlbnNlIElEcyDigJQgdGhhdCBtYXRjaCBzZXZlcmFsIGdpdGxlYWtzIHRva2VuIHJlZ2V4ZXMgKG5vdGFibHkKIyBzb3VyY2VncmFwaC1hY2Nlc3MtdG9rZW4sIHdoaWNoIGlzICJhbnl0aGluZyA0MCBoZXggY2hhcnMiKS4gVGhlc2UKIyBhcmUgTk9UIHNlY3JldHM7IHRoZXkncmUgcHVibGljIGlkZW50aWZpZXJzLiBBbGxvd2xpc3QgdGhlbSBieQojIChydWxlSWQsIGxvY2F0aW9uKSBwYWlyIHNvIGEgcmVhbCBoaWdoLWVudHJvcHkgZmluZGluZyBpbiB0aGUKIyBiaW5hcnkgaXRzZWxmIHN0aWxsIHRyaXBzIHRoZSBnYXRlLgojCiMgQW55IGZpbmRpbmcgdGhhdCBpcyBOT1QgYSBrbm93bi1mYWxzZS1wb3NpdGl2ZSBjbGFzcyBmYWlscyB0aGUKIyByZWxlYXNlLiBUaGUgYWxsb3dsaXN0IGlzIGludGVudGlvbmFsbHkgbmFycm93IOKAlCBgaXNfa25vd25fZnBgCiMgb25seSBtYXRjaGVzIHBhdHRlcm5zIHdlJ3ZlIGF1ZGl0ZWQ7IGV2ZXJ5dGhpbmcgZWxzZSBpcyB0cmVhdGVkCiMgYXMgYSByZWFsIGZpbmRpbmcuCgppc19rbm93bl9mcChmKSB7CiAgZW5kc3dpdGgoZi5sb2NhdGlvbiwgIi5zcGR4Lmpzb24iKQogIGYucnVsZUlkID09ICJzb3VyY2VncmFwaC1hY2Nlc3MtdG9rZW4iCn0KCmlzX2tub3duX2ZwKGYpIHsKICBlbmRzd2l0aChmLmxvY2F0aW9uLCAiLmN5Y2xvbmVkeC5qc29uIikKICBmLnJ1bGVJZCA9PSAic291cmNlZ3JhcGgtYWNjZXNzLXRva2VuIgp9CgojIGdvdnVsbmNoZWNrIEpTT04gb3V0cHV0IGNhcnJpZXMgdGhlIHNhbWUgc2hhcGUgb2YgcHNldWRvLXZlcnNpb24KIyBjb21taXQgU0hBcyB0aGF0IHRoZSBTQk9NIGRvZXMuIFNhbWUgZ2l0bGVha3MgcnVsZSwgc2FtZSBGUCBjbGFzcy4KaXNfa25vd25fZnAoZikgewogIGVuZHN3aXRoKGYubG9jYXRpb24sICIuZ292dWxuY2hlY2suanNvbiIpCiAgZi5ydWxlSWQgPT0gInNvdXJjZWdyYXBoLWFjY2Vzcy10b2tlbiIKfQoKIyBHaXRsZWFrcydzIGBzb3VyY2VncmFwaC1hY2Nlc3MtdG9rZW5gIHJ1bGUgaXMgYFxiW2EtZjAtOV17NDB9XGJgIOKAlCBpdAojIG1hdGNoZXMgQU5ZIDQwLWNoYXIgaGV4IHN0cmluZy4gVGhlIGdpdCBhdHRlc3RvcidzIHByZWRpY2F0ZQojIGxlZ2l0aW1hdGVseSBjYXJyaWVzIG11bHRpcGxlIDQwLWNoYXIgU0hBcyAoY29tbWl0aGFzaCwgcGFyZW50aGFzaGVzLAojIHRyZWVoYXNoKSB0aGF0IGFsbCBtYXRjaC4gTm9uZSBvZiB0aGVzZSBhcmUgc2VjcmV0cyDigJQgdGhleSdyZSBwdWJsaWMKIyBnaXQgaWRlbnRpZmllcnMuIFN1cHByZXNzIGZvciB0aGUgZW50aXJlIGBhdHRlc3RhdGlvbjpnaXQqYCBsb2NhdGlvbgojIHByZWZpeC4KaXNfa25vd25fZnAoZikgewogIHN0YXJ0c3dpdGgoZi5sb2NhdGlvbiwgImF0dGVzdGF0aW9uOmdpdCIpCiAgZi5ydWxlSWQgPT0gInNvdXJjZWdyYXBoLWFjY2Vzcy10b2tlbiIKfQoKIyBTYW1lIHNoYXBlIHJpc2sgaW4gdGhlIGdpdGh1YiBhdHRlc3RvciAod29ya2Zsb3cgVVJMcyBjb250YWluIFNIQXMKIyBpbiBzb21lIGNhc2VzKSBhbmQgbWF0ZXJpYWwgYXR0ZXN0b3IgKGZpbGUgZGlnZXN0cykuCmlzX2tub3duX2ZwKGYpIHsKICBzdGFydHN3aXRoKGYubG9jYXRpb24sICJhdHRlc3RhdGlvbjpnaXRodWIiKQogIGYucnVsZUlkID09ICJzb3VyY2VncmFwaC1hY2Nlc3MtdG9rZW4iCn0KCmlzX2tub3duX2ZwKGYpIHsKICBzdGFydHN3aXRoKGYubG9jYXRpb24sICJhdHRlc3RhdGlvbjptYXRlcmlhbCIpCiAgZi5ydWxlSWQgPT0gInNvdXJjZWdyYXBoLWFjY2Vzcy10b2tlbiIKfQoKcmVhbF9maW5kaW5ncyA6PSBbZiB8CiAgZiA6PSBpbnB1dC5maW5kaW5nc1tfXQogIG5vdCBpc19rbm93bl9mcChmKQpdCgpkZW55W21zZ10gewogIGNvdW50KHJlYWxfZmluZGluZ3MpID4gMAogIG4gOj0gY291bnQocmVhbF9maW5kaW5ncykKICBtc2cgOj0gc3ByaW50Zigic2VjcmV0c2NhbjogJWQgZ2VudWluZSBmaW5kaW5nKHMpIGFmdGVyIEZQIGZpbHRlciDigJQgcmVsZWFzZSBibG9ja2VkIiwgW25dKQp9Cg=="
+            }
+          ]
+        },
+        {
+          "type": "https://aflock.ai/attestations/govulncheck/v0.1",
+          "regopolicies": [
+            {
+              "name": "release-build-no-reachable-vulns",
+              "_comment": "Decoded plain-text in deploy/cilock/release-rego-govulncheck.txt. Denies on (1) any reachable vulnerability OR (2) any critical/high severity finding regardless of reachability. Source-mode scan over cilock module; same finding set applies to all cross-compiled platforms since the linked symbol set is identical.",
+              "module": "cGFja2FnZSByZWxlYXNlX2J1aWxkX2dvdnVsbmNoZWNrCgojIGdvdnVsbmNoZWNrIHJ1bnMgc291cmNlLW1vZGUgYWdhaW5zdCB0aGUgY2lsb2NrIG1vZHVsZSBhbmQgcmVwb3J0cyBPU1YKIyBmaW5kaW5ncyB3aG9zZSB2dWxuZXJhYmxlIFNZTUJPTFMgYXJlIHJlYWNoYWJsZSBmcm9tIG1haW4oKS4gVGhlIGF0dGVzdG9yCiMgcGFyc2VzIGdvdnVsbmNoZWNrJ3Mgc3RyZWFtaW5nLUpTT04gd2lyZSBmb3JtYXQgaW50byBhIHR5cGVkIFN1bW1hcnkKIyBwcmVkaWNhdGUuIFdlIGdhdGUgb246CiMKIyAgIHN1bW1hcnkucmVhY2hhYmxlQ291bnQgIOKAlCBPU1YgZmluZGluZ3MgcmVhY2hhYmxlIGZyb20gbWFpbigpCiMgICBzdW1tYXJ5LmJ5U2V2ZXJpdHkgICAgICDigJQgc2V2ZXJpdHkgYnVja2V0cyAoY3JpdGljYWwvaGlnaC9tZWRpdW0vbG93L3Vua25vd24pCiMKIyBSZWFjaGFibGUgZmluZGluZ3MgYXJlIHRoZSBhY3Rpb25hYmxlIG9uZXM6IGdvdnVsbmNoZWNrIGhhcyBhbHJlYWR5IHByb3ZlbgojIHRoZSB2dWxuZXJhYmxlIGZ1bmN0aW9uIGlzIGluIHRoZSBiaW5hcnkncyBjYWxsIGdyYXBoLiBXZSBkZW55IG9uIEFOWQojIHJlYWNoYWJsZSBmaW5kaW5nIHJlZ2FyZGxlc3Mgb2Ygc2V2ZXJpdHkgKEdvIHZ1bG4gREIgZW50cmllcyBkb24ndCBjYXJyeQojIENWU1MgeWV0LCBzbyBhbG1vc3QgZXZlcnl0aGluZyBsYW5kcyBpbiB0aGUgInVua25vd24iIGJ1Y2tldCDigJQgZ2F0aW5nIG9uCiMgYnlTZXZlcml0eSBhbG9uZSB3b3VsZCBiZSBhIG5vLW9wIGZvciBtb3N0IENWRXMpLgojCiMgQmVsdC1hbmQtc3VzcGVuZGVyczogYWxzbyBkZW55IG9uIGFueSBjcml0aWNhbC9oaWdoIGZpbmRpbmcgZXZlbiBpZgojIHVucmVhY2hhYmxlLCBiZWNhdXNlICJ1bnJlYWNoYWJsZSB0b2RheSIgY2FuIGJlY29tZSAicmVhY2hhYmxlIHRvbW9ycm93IgojIHdpdGggYSByZWZhY3Rvci4gQmV0dGVyIHRvIHN1cmZhY2UgaXQgbm93IGFuZCBkZWNpZGUgZXhwbGljaXRseS4KCmRlbnlbbXNnXSB7CiAgaW5wdXQuc3VtbWFyeS5yZWFjaGFibGVDb3VudCA+IDAKICBtc2cgOj0gc3ByaW50ZigiZ292dWxuY2hlY2s6ICVkIHJlYWNoYWJsZSB2dWxuZXJhYmlsaXR5IGZpbmRpbmcocykg4oCUIHJlbGVhc2UgYmxvY2tlZCIsIFtpbnB1dC5zdW1tYXJ5LnJlYWNoYWJsZUNvdW50XSkKfQoKZGVueVttc2ddIHsKICBpbnB1dC5zdW1tYXJ5LmJ5U2V2ZXJpdHkuY3JpdGljYWwgPiAwCiAgbXNnIDo9IHNwcmludGYoImdvdnVsbmNoZWNrOiAlZCBDUklUSUNBTCBzZXZlcml0eSBmaW5kaW5nKHMpIOKAlCByZWxlYXNlIGJsb2NrZWQiLCBbaW5wdXQuc3VtbWFyeS5ieVNldmVyaXR5LmNyaXRpY2FsXSkKfQoKZGVueVttc2ddIHsKICBpbnB1dC5zdW1tYXJ5LmJ5U2V2ZXJpdHkuaGlnaCA+IDAKICBtc2cgOj0gc3ByaW50ZigiZ292dWxuY2hlY2s6ICVkIEhJR0ggc2V2ZXJpdHkgZmluZGluZyhzKSDigJQgcmVsZWFzZSBibG9ja2VkIiwgW2lucHV0LnN1bW1hcnkuYnlTZXZlcml0eS5oaWdoXSkKfQo="
+            }
+          ]
+        },
+        {
+          "type": "https://aflock.ai/attestations/inclusion-proof/v0.1",
+          "regopolicies": [],
+          "_comment": "Rekor transparency log inclusion-proof predicate. Captures the Merkle inclusion proof for every cosign keyless signature emitted in this run, so downstream verifiers can prove the signature was published to Rekor without querying it live at verify time. Required-presence-only \u2014 the proof's existence in the signed envelope IS the gate."
+        }
+      ],
+      "functionaries": [
+        {
+          "type": "root",
+          "_comment": "Fulcio leaf certs have empty Subject CN \u2014 identity is in SAN URI + Fulcio v1.x cert extensions. We constrain on the issuer OID (1.3.6.1.4.1.57264.1.8) for the GitHub Actions OIDC provider, and on BuildSignerURI (OID .1.9) to bind the signer to this repo's release.yml workflow at any v* tag. Glob wildcards are honored by witness checkExtensions. Extension JSON keys are PascalCase because sigstore/fulcio's Extensions struct uses Go field names as JSON tags.",
+          "certConstraint": {
+            "roots": [
+              "sigstore-fulcio"
+            ],
+            "uris": [
+              "*"
+            ],
+            "extensions": {
+              "Issuer": "https://token.actions.githubusercontent.com",
+              "BuildSignerURI": "https://github.com/aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v*",
+              "SourceRepositoryURI": "https://github.com/aflock-ai/rookery"
+            }
+          }
+        }
+      ],
+      "artifactsFrom": [
+        "vendor-cilock-deps"
+      ]
+    }
+  }
+}

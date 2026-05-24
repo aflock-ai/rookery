@@ -142,3 +142,53 @@ type ErrDependencyNotVerified struct {
 func (e ErrDependencyNotVerified) Error() string {
 	return fmt.Sprintf("dependency '%v' not verified - cannot evaluate dependent step", e.Step)
 }
+
+// ErrUnknownExternalAttestation is returned by Policy.Validate when a step's
+// ExternalFrom references an external-attestation name that is not declared
+// in Policy.ExternalAttestations.
+type ErrUnknownExternalAttestation struct {
+	Step string
+	Name string
+}
+
+func (e ErrUnknownExternalAttestation) Error() string {
+	return fmt.Sprintf("step '%v' references unknown external attestation '%v' in externalFrom", e.Step, e.Name)
+}
+
+// ErrMissingExternalAttestation is returned when an external attestation is
+// declared as Required but no DSSE envelope matching the predicate type +
+// policy seed subjects could be found in the attestation source.
+type ErrMissingExternalAttestation struct {
+	Name          string
+	PredicateType string
+}
+
+func (e ErrMissingExternalAttestation) Error() string {
+	return fmt.Sprintf("required external attestation %q (predicateType=%v) not found", e.Name, e.PredicateType)
+}
+
+// ErrExternalAttestationRejected is returned when an external attestation is
+// declared as Required and DSSE envelopes matching the predicate type were
+// found, but ALL of them were rejected — typically by a rego deny rule, or
+// by functionary / signature validation failure. The Rejections slice carries
+// the per-envelope reasons so callers can surface the real deny message
+// instead of a misleading "not found" error.
+type ErrExternalAttestationRejected struct {
+	Name          string
+	PredicateType string
+	Rejections    []error
+}
+
+func (e ErrExternalAttestationRejected) Error() string {
+	if len(e.Rejections) == 0 {
+		return fmt.Sprintf("required external attestation %q (predicateType=%v) was rejected", e.Name, e.PredicateType)
+	}
+	msgs := make([]string, 0, len(e.Rejections))
+	for _, r := range e.Rejections {
+		msgs = append(msgs, r.Error())
+	}
+	return fmt.Sprintf("required external attestation %q (predicateType=%v) rejected by all %d matching envelopes: %s",
+		e.Name, e.PredicateType, len(e.Rejections), strings.Join(msgs, "; "))
+}
+
+func (e ErrExternalAttestationRejected) Unwrap() []error { return e.Rejections }

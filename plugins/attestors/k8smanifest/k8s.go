@@ -16,7 +16,6 @@ package k8smanifest
 
 import (
 	"bytes"
-	"crypto"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -29,15 +28,9 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
+	"github.com/aflock-ai/rookery/plugins/attestors/k8smanifest/internal/k8sparse"
 	"github.com/invopop/jsonschema"
 	"gopkg.in/yaml.v3"
-	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 // Name is the identifier for this attestor.
@@ -85,9 +78,9 @@ type ClusterInfo struct {
 }
 
 type RecordedNode struct {
-	Name     string                `json:"name"`
-	Labels   map[string]string     `json:"labels"`
-	NodeInfo corev1.NodeSystemInfo `json:"nodeInfo"`
+	Name     string                  `json:"name"`
+	Labels   map[string]string       `json:"labels"`
+	NodeInfo k8sparse.NodeSystemInfo `json:"nodeInfo"`
 }
 
 // Recorded image stores the details of images found in kubernetes manifests
@@ -140,7 +133,7 @@ func init() { //nolint:funlen // registration requires many options
 		registry.StringConfigOption(
 			"kubeconfig",
 			"Path to the kubeconfig file (used during server-side dry-run)",
-			clientcmd.RecommendedHomeFile,
+			k8sparse.DefaultPath(),
 			func(a attestation.Attestor, val string) (attestation.Attestor, error) {
 				km, ok := a.(*Attestor)
 				if !ok {
@@ -427,44 +420,29 @@ func (a *Attestor) processDoc(doc map[string]interface{}, filePath string) ([]by
 		return nil, RecordedObject{}, fmt.Errorf("marshal error: %w", err)
 	}
 
-	decode := scheme.Codecs.UniversalDeserializer().Decode
-
-	obj, gvk, err := decode(cleanBytes, nil, nil)
-	if err != nil {
-		err := fmt.Errorf("failed to decode file %s. Continuing: %s", filePath, err.Error())
-		log.Debugf("(attestation/k8smanifest) %v", err)
-		return nil, RecordedObject{}, err
-	}
-
+	// Identify kind + name via path access on the already-decoded map.
+	// The earlier implementation went back to a typed k8s.io decode here;
+	// we don't need to because the recorded fields are top-level and
+	// already in the doc.
 	kindVal := "UnknownKind"
-	if len(gvk.Kind) > 0 {
-		kindVal = gvk.Kind
+	if k := k8sparse.ExtractKind(finalObj); k != "" {
+		kindVal = k
 	}
 
 	nameVal := "unknown"
-	if md, ok := finalObj["metadata"].(map[string]interface{}); ok && md != nil {
-		if nm, ok := md["name"].(string); ok && nm != "" {
-			nameVal = nm
-		}
+	if nm := k8sparse.ExtractName(finalObj); nm != "" {
+		nameVal = nm
 	}
 
 	recordedImages := []RecordedImage{}
-	if list, ok := obj.(*corev1.List); ok { //nolint:nestif // list processing requires nested type switches
-		for _, obj := range list.Items {
-			o, gvk, err := decode(obj.Raw, nil, nil)
-			if err != nil {
-				err := fmt.Errorf("failed to decode file %s. Continuing: %s", filePath, err.Error())
-				log.Debugf("(attestation/k8smanifest) %v", err)
-				return nil, RecordedObject{}, err
+	if items, ok := k8sparse.IsList(finalObj); ok { //nolint:nestif // list processing requires nested type switches
+		for _, item := range items {
+			itemKind := k8sparse.ExtractKind(item)
+			for _, img := range k8sparse.ExtractImages(itemKind, item) {
+				recordedImages = append(recordedImages, newRecordedImage(img))
 			}
-
-			recordedImages = append(recordedImages, recordImages(o, gvk)...)
-			if gvk.Kind == "Node" && a.RecordClusterInfo {
-				n, err := recordNode(o, gvk)
-				if err != nil {
-					return nil, RecordedObject{}, fmt.Errorf("failed to record node info: '%w'", err)
-				}
-
+			if itemKind == "Node" && a.RecordClusterInfo {
+				n := buildRecordedNode(item)
 				if a.ClusterInfo.RecordedNodes == nil {
 					a.ClusterInfo.RecordedNodes = make(map[string]RecordedNode)
 				}
@@ -472,13 +450,11 @@ func (a *Attestor) processDoc(doc map[string]interface{}, filePath string) ([]by
 			}
 		}
 	} else {
-		recordedImages = recordImages(obj, gvk)
-		if gvk.Kind == "Node" && a.RecordClusterInfo {
-			n, err := recordNode(obj, gvk)
-			if err != nil {
-				return nil, RecordedObject{}, fmt.Errorf("failed to record node info: '%w'", err)
-			}
-
+		for _, img := range k8sparse.ExtractImages(kindVal, finalObj) {
+			recordedImages = append(recordedImages, newRecordedImage(img))
+		}
+		if kindVal == "Node" && a.RecordClusterInfo {
+			n := buildRecordedNode(finalObj)
 			if a.ClusterInfo.RecordedNodes == nil {
 				a.ClusterInfo.RecordedNodes = make(map[string]RecordedNode)
 			}
@@ -512,7 +488,7 @@ func (a *Attestor) processDoc(doc map[string]interface{}, filePath string) ([]by
 
 func (a *Attestor) runRecordClusterInfo() error {
 	log.Info("(attestation/k8smanifest) recording cluster information")
-	config, err := clientcmd.LoadFromFile(a.KubeconfigPath)
+	config, err := k8sparse.LoadKubeconfig(a.KubeconfigPath)
 	if err != nil {
 		return err
 	}
@@ -528,13 +504,13 @@ func (a *Attestor) runRecordClusterInfo() error {
 
 	log.Debugf("(attestation/k8smanifest) checking cluster information for context '%s'", cc)
 
-	ctxObj, ok := config.Contexts[cc]
-	if !ok {
+	ctxObj := config.ContextByName(cc)
+	if ctxObj == nil {
 		return fmt.Errorf("unable to find context '%s' in kubernetes config at path '%s'", cc, a.KubeconfigPath)
 	}
 
-	cluster, ok := config.Clusters[ctxObj.Cluster]
-	if !ok {
+	cluster := config.ClusterByName(ctxObj.Cluster)
+	if cluster == nil {
 		return fmt.Errorf("context '%s' references unknown cluster '%s' in kubernetes config at path '%s'", cc, ctxObj.Cluster, a.KubeconfigPath)
 	}
 
@@ -613,20 +589,7 @@ func isJSONorYAML(path string) bool {
 	return ext == ".json" || ext == ".yaml" || ext == ".yml"
 }
 
-// Subjects returns computed subject digests.
-//
-// In addition to the per-object digests stored on subjectDigests (one per
-// Kubernetes Kind:Name recorded), it also emits one subject per container
-// image referenced by the recorded objects. This lets downstream verifiers
-// join a deployment observation to the build-side attestation that produced
-// the image (via the image digest) without having to walk the attestation
-// body. Two subject forms are emitted per image:
-//
-//   - image:<sha256hex>      when the image has a resolvable sha256 digest
-//     (from DigestForRef or an explicit @sha256:… in the manifest).
-//   - imageref:<reference>   always — the raw image string as it appears in
-//     the manifest (e.g. "registry.example.com/app:v1"). Useful when the
-//     digest wasn't resolvable at scan time.
+// Subjects returns computed subject digests
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	out := make(map[string]cryptoutil.DigestSet)
 	a.subjectDigests.Range(func(k, v interface{}) bool {
@@ -641,41 +604,6 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 		out[key] = ds
 		return true
 	})
-
-	// Emit per-image subjects so subject-digest matching joins "build
-	// produced image X" with "cluster is running image X" across DSSEs.
-	// Deduped by subject key: the same image pulled by many pods produces
-	// one subject, not N.
-	sha256Hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
-	for _, doc := range a.RecordedDocs {
-		for _, img := range doc.RecordedImages {
-			if hex := strings.TrimPrefix(strings.ToLower(img.Digest["sha256"]), "sha256:"); hex != "" {
-				key := "image:" + hex
-				if _, seen := out[key]; !seen {
-					out[key] = cryptoutil.DigestSet{
-						cryptoutil.DigestValue{Hash: crypto.SHA256}: hex,
-					}
-				}
-			}
-			if img.Reference != "" {
-				key := "imageref:" + img.Reference
-				if _, seen := out[key]; !seen {
-					// Reference-only subjects don't have an inherent digest;
-					// hash the reference string so the DigestSet isn't empty
-					// (in-toto spec requires subjects to carry at least one
-					// digest). Collision resistance is fine here — the hash
-					// is a key, not a claim about the image contents.
-					ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(img.Reference), sha256Hashes)
-					if err != nil {
-						log.Debugf("error hashing image reference %q: %v", img.Reference, err)
-						continue
-					}
-					out[key] = ds
-				}
-			}
-		}
-	}
-
 	return out
 }
 
@@ -739,69 +667,15 @@ func convertKeys(value interface{}) interface{} {
 	}
 }
 
-func recordNode(obj runtime.Object, _ *schema.GroupVersionKind) (RecordedNode, error) {
-	if n, ok := obj.(*corev1.Node); ok {
-		return RecordedNode{
-			Name:     n.Name,
-			Labels:   n.Labels,
-			NodeInfo: n.Status.NodeInfo,
-		}, nil
-	} else {
-		return RecordedNode{}, fmt.Errorf("failed to type cast object of type '%T' to type '%T'", obj, &corev1.Node{})
+// buildRecordedNode pulls Name, Labels, and NodeSystemInfo off a Node
+// manifest using k8sparse's spec-driven extractors. Replaces the old
+// recordNode + corev1.Node typed cast.
+func buildRecordedNode(doc map[string]interface{}) RecordedNode {
+	return RecordedNode{
+		Name:     k8sparse.ExtractName(doc),
+		Labels:   k8sparse.ExtractNodeLabels(doc),
+		NodeInfo: k8sparse.ExtractNodeSystemInfo(doc),
 	}
-}
-
-func recordImages(obj runtime.Object, gvk *schema.GroupVersionKind) []RecordedImage { //nolint:gocyclo,gocognit // switch over k8s resource types
-	recordedImages := []RecordedImage{}
-	switch gvk.Kind {
-	case "Pod":
-		if pod, ok := obj.(*corev1.Pod); ok {
-			for _, c := range pod.Spec.Containers {
-				recordedImages = append(recordedImages, newRecordedImage(c.Image))
-			}
-		}
-	case "Deployment":
-		if dep, ok := obj.(*appsv1.Deployment); ok {
-			for _, c := range dep.Spec.Template.Spec.Containers {
-				recordedImages = append(recordedImages, newRecordedImage(c.Image))
-			}
-		}
-	case "ReplicaSet":
-		if rs, ok := obj.(*appsv1.ReplicaSet); ok {
-			for _, c := range rs.Spec.Template.Spec.Containers {
-				recordedImages = append(recordedImages, newRecordedImage(c.Image))
-			}
-		}
-	case "StatefulSet":
-		if ss, ok := obj.(*appsv1.StatefulSet); ok {
-			for _, c := range ss.Spec.Template.Spec.Containers {
-				recordedImages = append(recordedImages, newRecordedImage(c.Image))
-			}
-		}
-	case "DaemonSet":
-		if ds, ok := obj.(*appsv1.DaemonSet); ok {
-			for _, c := range ds.Spec.Template.Spec.Containers {
-				recordedImages = append(recordedImages, newRecordedImage(c.Image))
-			}
-		}
-	case "Job":
-		if job, ok := obj.(*batchv1.Job); ok {
-			for _, c := range job.Spec.Template.Spec.Containers {
-				recordedImages = append(recordedImages, newRecordedImage(c.Image))
-			}
-		}
-	case "CronJob":
-		if cj, ok := obj.(*batchv1.CronJob); ok {
-			for _, c := range cj.Spec.JobTemplate.Spec.Template.Spec.Containers {
-				recordedImages = append(recordedImages, newRecordedImage(c.Image))
-			}
-		}
-		// NOTE: there are likely a bunch of other list types that we should support here
-	default:
-		log.Debugf("(attestation/k8smanifest) Manifest of kind %s cannot be parsed to find images", gvk.Kind)
-	}
-
-	return recordedImages
 }
 
 func newRecordedImage(image string) RecordedImage {

@@ -11,6 +11,9 @@
 # - verify-isolated: Verify each module builds outside workspace
 # - commitlint: Conventional commit validation
 # - forbidden-patterns: Scan for dangerous code patterns
+# - dep-budget: Block cilock transitive-dep growth beyond .dep-budget.yaml
+# - canonical-attestor-audit: Block silent drift between presets/all and the canonical cilock binary
+# - provenance-check: Verify .provenance/ inlined-upstream records
 # - ci-success: Aggregate status gate
 
 name: CI
@@ -143,6 +146,27 @@ jobs:
       - name: Verify each module builds in isolation
         run: make verify-isolated
 
+  # ── Builder Smoke ───────────────────────────────────────────────────
+  # Runs the integration suite at builder/integration_test.go: builds
+  # both stock cilock and a builder-generated cilock, asserts they
+  # produce equivalent DSSE envelopes (same payloadType, same key ID
+  # for the same RSA key, matching preset attestor set). Guards against
+  # regressions in the builder's codegen or in cilock/cli's exported
+  # surface — either side breaking would break the manifest-driven
+  # custom-binary use case.
+  builder-smoke:
+    name: builder smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Run builder integration tests
+        run: go test -v -tags=integration -timeout 5m ./builder/...
+
   # ── Conventional Commits ────────────────────────────────────────────
   commitlint:
     name: commitlint
@@ -259,6 +283,58 @@ jobs:
 
           echo "No forbidden patterns found"
 
+  # ── Dependency Budget Guardrail ─────────────────────────────────────
+  # Fails the PR if the default cilock binary's transitive dep count or
+  # go.sum byte size grows beyond .dep-budget.yaml. To raise a ceiling,
+  # update the same file in the same PR — that surfaces the new deps in
+  # review instead of letting them silently accumulate.
+  #
+  # Tracking issue: https://github.com/aflock-ai/rookery/issues/70
+  dep-budget:
+    name: dep budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Check cilock dep budget
+        run: ./scripts/check-dep-budget.sh
+
+  # ── Canonical-vs-preset attestor drift ──────────────────────────────
+  # Fails if presets/all/imports.go declares an attestor that the
+  # canonical cilock binary doesn't blank-import, unless the attestor is
+  # on the documented EXCLUDED list in the script. Forces every drift
+  # to be a conscious decision.
+  #
+  # Tracking issue: https://github.com/aflock-ai/rookery/issues/146
+  canonical-attestor-audit:
+    name: canonical attestor audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify canonical cilock blank-imports cover presets/all
+        run: ./scripts/check-canonical-attestors.sh
+
+  # ── Provenance / License Audit ──────────────────────────────────────
+  # Verifies every .provenance/*.json entry: local file matches recorded
+  # SHA256, upstream content (re-fetched at the recorded commit) still
+  # matches, license is on the NOTICE.md allowlist, and any "// inlined
+  # from" comments in Go files are covered by an entry.
+  #
+  # Tracking issue: https://github.com/aflock-ai/rookery/issues/72
+  provenance-check:
+    name: provenance check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify .provenance/ entries
+        run: ./scripts/check-provenance.sh
+
   # ── CI Success Gate ─────────────────────────────────────────────────
   ci-success:
     name: ci success
@@ -272,8 +348,12 @@ jobs:
       - vet
       - build
       - verify-isolated
+      - builder-smoke
       - commitlint
       - forbidden-patterns
+      - dep-budget
+      - canonical-attestor-audit
+      - provenance-check
     steps:
       - name: Check all jobs
         run: |

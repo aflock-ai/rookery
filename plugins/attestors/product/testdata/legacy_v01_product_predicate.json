@@ -1,0 +1,20 @@
+{
+  "dist/cilock": {
+    "mime_type": "application/octet-stream",
+    "digest": {
+      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    }
+  },
+  "LICENSE": {
+    "mime_type": "text/plain",
+    "digest": {
+      "sha256": "d6e9a86d28d765e9e21c1c4d3a52f9dc6bdbf5b6e7e7e6c3d8c4d8c8b8a8c8d8"
+    }
+  },
+  "README.md": {
+    "mime_type": "text/markdown",
+    "digest": {
+      "sha256": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+    }
+  }
+}

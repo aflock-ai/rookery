@@ -1,0 +1,2085 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.69.3"
+  },
+  "ReportID": "019e4feb-f052-7841-b959-87122e36aa85",
+  "CreatedAt": "2026-05-22T08:42:03.090542-05:00",
+  "ArtifactName": ".",
+  "ArtifactType": "filesystem",
+  "Results": [
+    {
+      "Target": "package-lock.json",
+      "Class": "lang-pkgs",
+      "Type": "npm",
+      "Packages": [
+        {
+          "ID": "axios@0.21.0",
+          "Name": "axios",
+          "Identifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "Version": "0.21.0",
+          "DependsOn": [
+            "follow-redirects@1.10.0"
+          ],
+          "Locations": [
+            {
+              "StartLine": 12,
+              "EndLine": 19
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "follow-redirects@1.10.0",
+          "Name": "follow-redirects",
+          "Identifier": {
+            "PURL": "pkg:npm/follow-redirects@1.10.0",
+            "UID": "4b87442c1e459d5b"
+          },
+          "Version": "1.10.0",
+          "Locations": [
+            {
+              "StartLine": 20,
+              "EndLine": 24
+            }
+          ],
+          "AnalyzedBy": "npm"
+        },
+        {
+          "ID": "lodash@4.17.4",
+          "Name": "lodash",
+          "Identifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "Version": "4.17.4",
+          "Locations": [
+            {
+              "StartLine": 7,
+              "EndLine": 11
+            }
+          ],
+          "AnalyzedBy": "npm"
+        }
+      ],
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2021-3749",
+          "VendorIDs": [
+            "GHSA-cph5-m8f7-6c5x"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "0.21.2",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2021-3749",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:e0c3bbf92eac6cdcbcc3fa42d8c6f3997d0ac11bd854e67cad73f288c999fd55",
+          "Title": "nodejs-axios: Regular expression denial of service in trim function",
+          "Description": "axios is vulnerable to Inefficient Regular Expression Complexity",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-1333",
+            "CWE-400"
+          ],
+          "VendorSeverity": {
+            "ghsa": 3,
+            "nvd": 3,
+            "redhat": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+              "V3Score": 7.5
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:N/I:N/A:C",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+              "V2Score": 7.8,
+              "V3Score": 7.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+              "V3Score": 7.5
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2021-3749",
+            "https://cert-portal.siemens.com/productcert/pdf/ssa-637483.pdf",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/commit/5b457116e31db0e88fede6c428e969e87f290929",
+            "https://github.com/axios/axios/pull/3980",
+            "https://huntr.dev/bounties/1e8f07fc-c384-4ff9-8498-0690de2e8c31",
+            "https://huntr.dev/bounties/1e8f07fc-c384-4ff9-8498-0690de2e8c31/",
+            "https://lists.apache.org/thread.html/r075d464dce95cd13c03ff9384658edcccd5ab2983b82bfc72b62bb10%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r075d464dce95cd13c03ff9384658edcccd5ab2983b82bfc72b62bb10@%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r216f0fd0a3833856d6a6a1fada488cadba45f447d87010024328ccf2%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r216f0fd0a3833856d6a6a1fada488cadba45f447d87010024328ccf2@%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r3ae6d2654f92c5851bdb73b35e96b0e4e3da39f28ac7a1b15ae3aab8%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r3ae6d2654f92c5851bdb73b35e96b0e4e3da39f28ac7a1b15ae3aab8@%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r4bf1b32983f50be00f9752214c1b53738b621be1c2b0dbd68c7f2391%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r4bf1b32983f50be00f9752214c1b53738b621be1c2b0dbd68c7f2391@%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r7324ecc35b8027a51cb6ed629490fcd3b2d7cf01c424746ed5744bf1%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r7324ecc35b8027a51cb6ed629490fcd3b2d7cf01c424746ed5744bf1@%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r74d0b359408fff31f87445261f0ee13bdfcac7d66f6b8e846face321%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r74d0b359408fff31f87445261f0ee13bdfcac7d66f6b8e846face321@%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/ra15d63c54dc6474b29f72ae4324bcb03038758545b3ab800845de7a1%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/ra15d63c54dc6474b29f72ae4324bcb03038758545b3ab800845de7a1@%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/rc263bfc5b53afcb7e849605478d73f5556eb0c00d1f912084e407289%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/rc263bfc5b53afcb7e849605478d73f5556eb0c00d1f912084e407289@%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/rfa094029c959da0f7c8cd7dc9c4e59d21b03457bf0cedf6c93e1bb0a%40%3Cdev.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/rfa094029c959da0f7c8cd7dc9c4e59d21b03457bf0cedf6c93e1bb0a@%3Cdev.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/rfc5c478053ff808671aef170f3d9fc9d05cc1fab8fb64431edc66103%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/rfc5c478053ff808671aef170f3d9fc9d05cc1fab8fb64431edc66103@%3Ccommits.druid.apache.org%3E",
+            "https://nvd.nist.gov/vuln/detail/CVE-2021-3749",
+            "https://www.cve.org/CVERecord?id=CVE-2021-3749",
+            "https://www.npmjs.com/package/axios",
+            "https://www.oracle.com/security-alerts/cpujul2022.html"
+          ],
+          "PublishedDate": "2021-08-31T11:15:07.89Z",
+          "LastModifiedDate": "2024-11-21T06:22:19.837Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-27152",
+          "VendorIDs": [
+            "GHSA-jr5f-v2jv-69x6"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.8.2, 0.30.0",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-27152",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:f10dd535e60ca703d4a05857fad983cd255b3dddabf307f29050e023fd81ab2e",
+          "Title": "axios: Possible SSRF and Credential Leakage via Absolute URL in axios Requests",
+          "Description": "axios is a promise based HTTP client for the browser and node.js. The issue occurs when passing absolute URLs rather than protocol-relative URLs to axios. Even if ⁠baseURL is set, axios sends the request to the specified absolute URL, potentially causing SSRF and credential leakage. This issue impacts both server-side and client-side usage of axios. This issue is fixed in 1.8.2.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-918"
+          ],
+          "VendorSeverity": {
+            "ghsa": 3,
+            "nvd": 2,
+            "redhat": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V40Vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N/E:P",
+              "V40Score": 7.7
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+              "V3Score": 5.3
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2025-27152",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/commit/02c3c69ced0f8fd86407c23203835892313d7fde",
+            "https://github.com/axios/axios/commit/fb8eec214ce7744b5ca787f2c3b8339b2f54b00f",
+            "https://github.com/axios/axios/issues/6463",
+            "https://github.com/axios/axios/pull/6829",
+            "https://github.com/axios/axios/releases/tag/v1.8.2",
+            "https://github.com/axios/axios/security/advisories/GHSA-jr5f-v2jv-69x6",
+            "https://nvd.nist.gov/vuln/detail/CVE-2025-27152",
+            "https://www.cve.org/CVERecord?id=CVE-2025-27152"
+          ],
+          "PublishedDate": "2025-03-07T16:15:38.773Z",
+          "LastModifiedDate": "2025-11-25T17:58:17.213Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-25639",
+          "VendorIDs": [
+            "GHSA-43fc-jf86-j433"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.13.5, 0.30.3",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-25639",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:8b7360e4889cc0b049189722590c6ff73499710dd1b5604c4327e4c80f9e4fbb",
+          "Title": "axios: Axios affected by Denial of Service via __proto__ Key in mergeConfig",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to versions 0.30.3 and 1.13.5, the mergeConfig function in axios crashes with a TypeError when processing configuration objects containing __proto__ as an own property. An attacker can trigger this by providing a malicious configuration object created via JSON.parse(), causing complete denial of service. This vulnerability is fixed in versions 0.30.3 and 1.13.5.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-754"
+          ],
+          "VendorSeverity": {
+            "ghsa": 3,
+            "redhat": 3
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+              "V3Score": 7.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+              "V3Score": 7.5
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-25639",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/commit/28c721588c7a77e7503d0a434e016f852c597b57",
+            "https://github.com/axios/axios/commit/d7ff1409c68168d3057fc3891f911b2b92616f9e",
+            "https://github.com/axios/axios/pull/7369",
+            "https://github.com/axios/axios/pull/7388",
+            "https://github.com/axios/axios/releases/tag/v0.30.3",
+            "https://github.com/axios/axios/releases/tag/v1.13.5",
+            "https://github.com/axios/axios/security/advisories/GHSA-43fc-jf86-j433",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-25639",
+            "https://www.cve.org/CVERecord?id=CVE-2026-25639"
+          ],
+          "PublishedDate": "2026-02-09T21:15:49.01Z",
+          "LastModifiedDate": "2026-05-21T20:13:01.91Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42033",
+          "VendorIDs": [
+            "GHSA-pf86-5x62-jrwf"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.1, 0.31.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-42033",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:81c763555005eabccf3dfc895c889af7ce2d258bd110a87bc5a93341608af503",
+          "Title": "axios: Axios: HTTP Transport Hijacking via Prototype Pollution",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.1 and 0.31.1, when Object.prototype has been polluted by any co-dependency with keys that axios reads without a hasOwnProperty guard, an attacker can (a) silently intercept and modify every JSON response before the application sees it, or (b) fully hijack the underlying HTTP transport, gaining access to request credentials, headers, and body. The precondition is prototype pollution from a separate source in the same process. This vulnerability is fixed in 1.15.1 and 0.31.1.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-1321"
+          ],
+          "VendorSeverity": {
+            "ghsa": 3,
+            "redhat": 3
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N",
+              "V3Score": 7.4
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N",
+              "V3Score": 7.4
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-42033",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/security/advisories/GHSA-pf86-5x62-jrwf",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-42033",
+            "https://www.cve.org/CVERecord?id=CVE-2026-42033"
+          ],
+          "PublishedDate": "2026-04-24T18:16:29.993Z",
+          "LastModifiedDate": "2026-04-27T20:02:44.417Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42035",
+          "VendorIDs": [
+            "GHSA-6chq-wfr3-2hj9"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.1, 0.31.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-42035",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:b2a8bf581a7ea5f09bd2eef50c6ab3803d4ecc8b2fbb81524563e607190823a3",
+          "Title": "axios: Axios: Arbitrary HTTP header injection via prototype pollution",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.1 and 0.31.1, a prototype pollution gadget exists in the Axios HTTP adapter (lib/adapters/http.js) that allows an attacker to inject arbitrary HTTP headers into outgoing requests. The vulnerability exploits duck-type checking of the data payload, where if Object.prototype is polluted with getHeaders, append, pipe, on, once, and Symbol.toStringTag, Axios misidentifies any plain object payload as a FormData instance and calls the attacker-controlled getHeaders() function, merging the returned headers into the outgoing request. The vulnerable code resides exclusively in lib/adapters/http.js. The prototype pollution source does not need to originate from Axios itself — any prototype pollution primitive in any dependency in the application's dependency tree is sufficient to trigger this gadget. This vulnerability is fixed in 1.15.1 and 0.31.1.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-113",
+            "CWE-1321"
+          ],
+          "VendorSeverity": {
+            "ghsa": 3,
+            "redhat": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N",
+              "V3Score": 7.4
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N",
+              "V3Score": 7.4
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-42035",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/security/advisories/GHSA-6chq-wfr3-2hj9",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-42035",
+            "https://www.cve.org/CVERecord?id=CVE-2026-42035"
+          ],
+          "PublishedDate": "2026-04-24T18:16:30.273Z",
+          "LastModifiedDate": "2026-04-27T19:58:39.227Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42043",
+          "VendorIDs": [
+            "GHSA-pmwg-cvhr-8vh7"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.1, 0.31.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-42043",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:90b2a535f08ec5bb8cbd57b95d94f8c898918298bce16fa8860dbca7480576ee",
+          "Title": "axios: Axios: NO_PROXY bypass via crafted URL",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.1 and 0.31.1, an attacker who can influence the target URL of an Axios request can use any address in the 127.0.0.0/8 range (other than 127.0.0.1) to completely bypass the NO_PROXY protection. This vulnerability is due to an incomplete for CVE-2025-62718, This vulnerability is fixed in 1.15.1 and 0.31.1.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-183",
+            "CWE-441",
+            "CWE-918"
+          ],
+          "VendorSeverity": {
+            "ghsa": 3,
+            "nvd": 4,
+            "redhat": 3
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:N",
+              "V3Score": 7.2
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:N",
+              "V3Score": 10
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:N",
+              "V3Score": 7.2
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-42043",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/security/advisories/GHSA-pmwg-cvhr-8vh7",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-42043",
+            "https://www.cve.org/CVERecord?id=CVE-2026-42043"
+          ],
+          "PublishedDate": "2026-04-24T18:16:31.457Z",
+          "LastModifiedDate": "2026-04-27T20:05:04.37Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2020-28168",
+          "VendorIDs": [
+            "GHSA-4w2v-q235-vp99"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "0.21.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2020-28168",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:705ebf1b4e632e716a17b21dedb205df03ae92df7087d3dcb8c61868bbb26a69",
+          "Title": "nodejs-axios: allows an attacker to bypass a proxy by providing a URL that responds with a redirect to a restricted host or IP address",
+          "Description": "Axios NPM package 0.21.0 contains a Server-Side Request Forgery (SSRF) vulnerability where an attacker is able to bypass a proxy by providing a URL that responds with a redirect to a restricted host or IP address.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-918"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 2,
+            "redhat": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 5.9
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:M/Au:N/C:P/I:N/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "V2Score": 4.3,
+              "V3Score": 5.9
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 5.9
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2020-28168",
+            "https://cert-portal.siemens.com/productcert/pdf/ssa-637483.pdf",
+            "https://github.com/axios/axios/commit/c7329fefc890050edd51e40e469a154d0117fc55",
+            "https://github.com/axios/axios/issues/3369",
+            "https://lists.apache.org/thread.html/r25d53acd06f29244b8a103781b0339c5e7efee9099a4d52f0c230e4a%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r25d53acd06f29244b8a103781b0339c5e7efee9099a4d52f0c230e4a@%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r954d80fd18e9dafef6e813963eb7e08c228151c2b6268ecd63b35d1f%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/r954d80fd18e9dafef6e813963eb7e08c228151c2b6268ecd63b35d1f@%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/rdfd2901b8b697a3f6e2c9c6ecc688fd90d7f881937affb5144d61d6e%40%3Ccommits.druid.apache.org%3E",
+            "https://lists.apache.org/thread.html/rdfd2901b8b697a3f6e2c9c6ecc688fd90d7f881937affb5144d61d6e@%3Ccommits.druid.apache.org%3E",
+            "https://nvd.nist.gov/vuln/detail/CVE-2020-28168",
+            "https://snyk.io/vuln/SNYK-JS-AXIOS-1038255",
+            "https://www.cve.org/CVERecord?id=CVE-2020-28168",
+            "https://www.npmjs.com/advisories/1594",
+            "https://www.npmjs.com/package/axios"
+          ],
+          "PublishedDate": "2020-11-06T20:15:13.163Z",
+          "LastModifiedDate": "2024-11-21T05:22:25.573Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-45857",
+          "VendorIDs": [
+            "GHSA-wf5p-g6vw-rhxx"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.6.0, 0.28.0",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2023-45857",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:82d3182e5482d07fd5e4f5820156df333a96297b3ae4fe89382ac5581a63415a",
+          "Title": "axios: exposure of confidential data stored in cookies",
+          "Description": "An issue discovered in Axios 1.5.1 inadvertently reveals the confidential XSRF-TOKEN stored in cookies by including it in the HTTP header X-XSRF-TOKEN for every request made to any host allowing attackers to view sensitive information.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-352"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 2,
+            "redhat": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N",
+              "V3Score": 6.5
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N",
+              "V3Score": 6.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N",
+              "V3Score": 6.5
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2023-45857",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/commit/2755df562b9c194fba6d8b609a383443f6a6e967",
+            "https://github.com/axios/axios/commit/96ee232bd3ee4de2e657333d4d2191cd389e14d0",
+            "https://github.com/axios/axios/issues/6006",
+            "https://github.com/axios/axios/issues/6022",
+            "https://github.com/axios/axios/pull/6028",
+            "https://github.com/axios/axios/pull/6091",
+            "https://github.com/axios/axios/releases/tag/v0.28.0",
+            "https://github.com/axios/axios/releases/tag/v1.6.0",
+            "https://nvd.nist.gov/vuln/detail/CVE-2023-45857",
+            "https://security.netapp.com/advisory/ntap-20240621-0006",
+            "https://security.netapp.com/advisory/ntap-20240621-0006/",
+            "https://security.snyk.io/vuln/SNYK-JS-AXIOS-6032459",
+            "https://www.cve.org/CVERecord?id=CVE-2023-45857"
+          ],
+          "PublishedDate": "2023-11-08T21:15:08.55Z",
+          "LastModifiedDate": "2024-11-21T08:27:30.04Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-62718",
+          "VendorIDs": [
+            "GHSA-3p68-rc4w-qgx5"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.0, 0.31.0",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-62718",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:22ab35c82e0340483567233ba353532800e510e2218dbd8335aac80a5d2a05fb",
+          "Title": "axios: Axios: Server-Side Request Forgery and proxy bypass due to improper hostname normalization",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.0 and 0.31.0, Axios does not correctly handle hostname normalization when checking NO_PROXY rules. Requests to loopback addresses like localhost. (with a trailing dot) or [::1] (IPv6 literal) skip NO_PROXY matching and go through the configured proxy. This goes against what developers expect and lets attackers force requests through a proxy, even if NO_PROXY is set up to protect loopback or internal services. This issue leads to the possibility of proxy bypass and SSRF vulnerabilities allowing attackers to reach sensitive loopback or internal services despite the configured protections. This vulnerability is fixed in 1.15.0 and 0.31.0.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-441",
+            "CWE-918"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 4,
+            "redhat": 3
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V40Vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:L/VA:N/SC:L/SI:L/SA:N",
+              "V3Score": 4.8,
+              "V40Score": 6.3
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:L/A:L",
+              "V3Score": 9.9
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:L",
+              "V3Score": 7
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2025-62718",
+            "https://datatracker.ietf.org/doc/html/rfc1034#section-3.1",
+            "https://datatracker.ietf.org/doc/html/rfc3986#section-3.2.2",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/commit/03cdfc99e8db32a390e12128208b6778492cee9c",
+            "https://github.com/axios/axios/commit/fb3befb6daac6cad26b2e54094d0f2d9e47f24df",
+            "https://github.com/axios/axios/pull/10661",
+            "https://github.com/axios/axios/pull/10688",
+            "https://github.com/axios/axios/releases/tag/v0.31.0",
+            "https://github.com/axios/axios/releases/tag/v1.15.0",
+            "https://github.com/axios/axios/security/advisories/GHSA-3p68-rc4w-qgx5",
+            "https://nvd.nist.gov/vuln/detail/CVE-2025-62718",
+            "https://www.cve.org/CVERecord?id=CVE-2025-62718"
+          ],
+          "PublishedDate": "2026-04-09T15:16:08.65Z",
+          "LastModifiedDate": "2026-05-21T20:38:54.387Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-40175",
+          "VendorIDs": [
+            "GHSA-fvcv-3m26-pcqx"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.0, 0.31.0",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-40175",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:de9032cd8b49cfc972f12e0d79059b3c611dd5f7656b2a1d72bf18f5e69b9ee2",
+          "Title": "axios: Axios: Remote Code Execution via Prototype Pollution escalation",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Versions prior to 1.15.0 and 0.3.1 are vulnerable to a specific gadget-style attack chain in which prototype pollution in a third-party dependency may be leveraged to inject unsanitized header values into outbound requests. This vulnerability is fixed in 1.15.0 and 0.3.1.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-113",
+            "CWE-444",
+            "CWE-918"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 2,
+            "redhat": 3
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 4.8
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 4.8
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:H/I:H/A:H",
+              "V3Score": 9
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-40175",
+            "https://cert-portal.siemens.com/productcert/html/ssa-876049.html",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/commit/03cdfc99e8db32a390e12128208b6778492cee9c",
+            "https://github.com/axios/axios/commit/363185461b90b1b78845dc8a99a1f103d9b122a1",
+            "https://github.com/axios/axios/pull/10660",
+            "https://github.com/axios/axios/pull/10660#issuecomment-4224168081",
+            "https://github.com/axios/axios/pull/10688",
+            "https://github.com/axios/axios/releases/tag/v0.31.0",
+            "https://github.com/axios/axios/releases/tag/v1.15.0",
+            "https://github.com/axios/axios/security/advisories/GHSA-fvcv-3m26-pcqx",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-40175",
+            "https://www.cve.org/CVERecord?id=CVE-2026-40175"
+          ],
+          "PublishedDate": "2026-04-10T20:16:22.8Z",
+          "LastModifiedDate": "2026-05-20T02:16:35.73Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42034",
+          "VendorIDs": [
+            "GHSA-5c9x-8gcm-mpgx"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.1, 0.31.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-42034",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:4025e43558928499a5e7cc278a23fa0acfb7fb571f0dccfdebefaa84a76f0cfb",
+          "Title": "axios: Axios: Denial of Service via oversized streamed uploads bypassing body limits",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.1 and 0.31.1, for stream request bodies, maxBodyLength is bypassed when maxRedirects is set to 0 (native http/https transport path). Oversized streamed uploads are sent fully even when the caller sets strict body limits. This vulnerability is fixed in 1.15.1 and 0.31.1.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-770"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "redhat": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L",
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L",
+              "V3Score": 5.3
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-42034",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/security/advisories/GHSA-5c9x-8gcm-mpgx",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-42034",
+            "https://www.cve.org/CVERecord?id=CVE-2026-42034"
+          ],
+          "PublishedDate": "2026-04-24T18:16:30.14Z",
+          "LastModifiedDate": "2026-04-27T19:59:18.437Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42036",
+          "VendorIDs": [
+            "GHSA-vf2m-468p-8v99"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.1, 0.31.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-42036",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:9de26b77d1327fdb72fcfa14bd0afef659afbc6e3d3c9df2bae2cacc41b26591",
+          "Title": "axios: Axios: Denial of Service via unbounded stream consumption when 'responseType: 'stream'' is used",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.1 and 0.31.1, when responseType: 'stream' is used, Axios returns the response stream without enforcing maxContentLength. This bypasses configured response-size limits and allows unbounded downstream consumption. This vulnerability is fixed in 1.15.1 and 0.31.1.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-770"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "redhat": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L",
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L",
+              "V3Score": 5.3
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-42036",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/security/advisories/GHSA-vf2m-468p-8v99",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-42036",
+            "https://www.cve.org/CVERecord?id=CVE-2026-42036"
+          ],
+          "PublishedDate": "2026-04-24T18:16:30.41Z",
+          "LastModifiedDate": "2026-04-27T19:57:11.67Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42038",
+          "VendorIDs": [
+            "GHSA-m7pr-hjqh-92cm"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.1, 0.31.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-42038",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:e4527baae40ed66b9d042dbe65d6d06a771e10f8ea3b6345a34ecfbfa143937b",
+          "Title": "axios: Axios: Information disclosure due to `no_proxy` bypass",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.1 and 0.31.1, he fix for no_proxy hostname normalization bypass is incomplete. When no_proxy=localhost is set, requests to 127.0.0.1 and [::1] still route through the proxy instead of bypassing it. The shouldBypassProxy() function does pure string matching — it does not resolve IP aliases or loopback equivalents. This vulnerability is fixed in 1.15.1 and 0.31.1.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-918"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 3,
+            "redhat": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:H/I:N/A:N",
+              "V3Score": 6.8
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 7.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:H/I:N/A:N",
+              "V3Score": 6.8
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-42038",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/security/advisories/GHSA-m7pr-hjqh-92cm",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-42038",
+            "https://www.cve.org/CVERecord?id=CVE-2026-42038"
+          ],
+          "PublishedDate": "2026-04-24T18:16:30.68Z",
+          "LastModifiedDate": "2026-04-27T19:52:16.52Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42039",
+          "VendorIDs": [
+            "GHSA-62hf-57xw-28j9"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.1, 0.31.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-42039",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:db44a026839ba45bdab474cb50505b335b12d9738e15a78484caf13aa283a56a",
+          "Title": "axios: Node.js: Axios: Denial of Service via unbounded recursion in toFormData with deeply nested request data",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.1 and 0.31.1, toFormData recursively walks nested objects with no depth limit, so a deeply nested value passed as request data crashes the Node.js process with a RangeError. This vulnerability is fixed in 1.15.1 and 0.31.1.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-674"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 3,
+            "redhat": 3
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+              "V40Vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N",
+              "V3Score": 7.5,
+              "V40Score": 6.9
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+              "V3Score": 7.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+              "V3Score": 7.5
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-42039",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/security/advisories/GHSA-62hf-57xw-28j9",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-42039",
+            "https://www.cve.org/CVERecord?id=CVE-2026-42039"
+          ],
+          "PublishedDate": "2026-04-24T18:16:30.827Z",
+          "LastModifiedDate": "2026-04-27T19:50:46.32Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42041",
+          "VendorIDs": [
+            "GHSA-w9j2-pvgh-6h63"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.1, 0.31.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-42041",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:d419fed4c803e1b20ede2181f7c68a8dd8b44649d12dec4445a64a9296f0115e",
+          "Title": "axios: Axios: Authentication bypass due to prototype pollution of HTTP error handling",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.1 and 0.31.1, the Axios library is vulnerable to a Prototype Pollution \"Gadget\" attack that allows any Object.prototype pollution to silently suppress all HTTP error responses (401, 403, 500, etc.), causing them to be treated as successful responses. This completely bypasses application-level authentication and error handling. The root cause is that validateStatus is the only config property using the mergeDirectKeys merge strategy, which uses JavaScript's in operator — an operator that inherently traverses the prototype chain. When Object.prototype.validateStatus is polluted with () =\u003e true, all HTTP status codes are accepted as success. This vulnerability is fixed in 1.15.1 and 0.31.1.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-287",
+            "CWE-1321"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 2,
+            "redhat": 3
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 4.8
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
+              "V3Score": 6.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:N",
+              "V3Score": 8.2
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-42041",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/security/advisories/GHSA-w9j2-pvgh-6h63",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-42041",
+            "https://www.cve.org/CVERecord?id=CVE-2026-42041"
+          ],
+          "PublishedDate": "2026-04-24T18:16:31.133Z",
+          "LastModifiedDate": "2026-04-27T20:07:58.037Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42042",
+          "VendorIDs": [
+            "GHSA-xx6v-rp6x-q39c"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.1, 0.31.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-42042",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:44a0f10ad28567cc1626357a44b7ad70de04949f6c89803d54681b4aabf09c6c",
+          "Title": "axios: Axios: XSRF token bypass leading to information disclosure",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.1 and 0.31.1, the Axios library's XSRF token protection logic uses JavaScript truthy/falsy semantics instead of strict boolean comparison for the withXSRFToken config property. When this property is set to any truthy non-boolean value (via prototype pollution or misconfiguration), the same-origin check (isURLSameOrigin) is short-circuited, causing XSRF tokens to be sent to all request targets including cross-origin servers controlled by an attacker. This vulnerability is fixed in 1.15.1 and 0.31.1.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-183",
+            "CWE-201"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "redhat": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N",
+              "V3Score": 5.4
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+              "V3Score": 6.1
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-42042",
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/security/advisories/GHSA-xx6v-rp6x-q39c",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-42042",
+            "https://www.cve.org/CVERecord?id=CVE-2026-42042"
+          ],
+          "PublishedDate": "2026-04-24T18:16:31.293Z",
+          "LastModifiedDate": "2026-04-27T20:05:27.5Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-42040",
+          "VendorIDs": [
+            "GHSA-xhjh-pmcv-23jw"
+          ],
+          "PkgID": "axios@0.21.0",
+          "PkgName": "axios",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/axios@0.21.0",
+            "UID": "5d73bf8827373a24"
+          },
+          "InstalledVersion": "0.21.0",
+          "FixedVersion": "1.15.1, 0.31.1",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-42040",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:378d4a80f5004965ff774548d216b766b958e652a089fc4afdb87a0c23914ae1",
+          "Title": "Axios is a promise based HTTP client for the browser and Node.js. Prio ...",
+          "Description": "Axios is a promise based HTTP client for the browser and Node.js. Prior to 1.15.1 and 0.31.1, the encode() function in lib/helpers/AxiosURLSearchParams.js contains a character mapping (charMap) at line 21 that reverses the safe percent-encoding of null bytes. After encodeURIComponent('\\x00') correctly produces the safe sequence %00, the charMap entry '%00': '\\x00' converts it back to a raw null byte. Primary impact is limited because the standard axios request flow is not affected. This vulnerability is fixed in 1.15.1 and 0.31.1.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-116",
+            "CWE-626"
+          ],
+          "VendorSeverity": {
+            "ghsa": 1
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
+              "V3Score": 3.7
+            }
+          },
+          "References": [
+            "https://github.com/axios/axios",
+            "https://github.com/axios/axios/security/advisories/GHSA-xhjh-pmcv-23jw",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-42040"
+          ],
+          "PublishedDate": "2026-04-24T18:16:30.96Z",
+          "LastModifiedDate": "2026-04-27T20:09:07.257Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2022-0155",
+          "VendorIDs": [
+            "GHSA-74fj-2j2h-c42q"
+          ],
+          "PkgID": "follow-redirects@1.10.0",
+          "PkgName": "follow-redirects",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/follow-redirects@1.10.0",
+            "UID": "4b87442c1e459d5b"
+          },
+          "InstalledVersion": "1.10.0",
+          "FixedVersion": "1.14.7",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2022-0155",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:92121eb5124e7bfa3e4c2ec422ecf73246634802b14fb3477e3841528d506a89",
+          "Title": "follow-redirects: Exposure of Private Personal Information to an Unauthorized Actor",
+          "Description": "follow-redirects is vulnerable to Exposure of Private Personal Information to an Unauthorized Actor",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-359"
+          ],
+          "VendorSeverity": {
+            "ghsa": 3,
+            "nvd": 2,
+            "redhat": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.0/AV:N/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:H",
+              "V3Score": 8
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:M/Au:N/C:P/I:N/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N",
+              "V2Score": 4.3,
+              "V3Score": 6.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N",
+              "V3Score": 6.5
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2022-0155",
+            "https://cert-portal.siemens.com/productcert/pdf/ssa-637483.pdf",
+            "https://github.com/follow-redirects/follow-redirects",
+            "https://github.com/follow-redirects/follow-redirects/commit/8b347cbcef7c7b72a6e9be20f5710c17d6163c22",
+            "https://github.com/follow-redirects/follow-redirects/commit/8b347cbcef7c7b72a6e9be20f5710c17d6163c22 (v1.14.7)",
+            "https://github.com/follow-redirects/follow-redirects/issues/183",
+            "https://huntr.dev/bounties/fc524e4b-ebb6-427d-ab67-a64181020406",
+            "https://huntr.dev/bounties/fc524e4b-ebb6-427d-ab67-a64181020406/",
+            "https://nvd.nist.gov/vuln/detail/CVE-2022-0155",
+            "https://ubuntu.com/security/notices/USN-8217-1",
+            "https://www.cve.org/CVERecord?id=CVE-2022-0155"
+          ],
+          "PublishedDate": "2022-01-10T20:15:08.177Z",
+          "LastModifiedDate": "2024-11-21T06:38:01.143Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2022-0536",
+          "VendorIDs": [
+            "GHSA-pw2r-vq6v-hr8c"
+          ],
+          "PkgID": "follow-redirects@1.10.0",
+          "PkgName": "follow-redirects",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/follow-redirects@1.10.0",
+            "UID": "4b87442c1e459d5b"
+          },
+          "InstalledVersion": "1.10.0",
+          "FixedVersion": "1.14.8",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2022-0536",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:cfe688e4be35ac6267f2d6e30c14566fedd970deb741d03a18df88abdd6f868c",
+          "Title": "follow-redirects: Exposure of Sensitive Information via Authorization Header leak",
+          "Description": "Improper Removal of Sensitive Information Before Storage or Transfer in NPM follow-redirects prior to 1.14.8.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-212"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 2,
+            "redhat": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 5.9
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:M/Au:N/C:P/I:N/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "V2Score": 4.3,
+              "V3Score": 5.9
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 5.9
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2022-0536",
+            "https://github.com/follow-redirects/follow-redirects",
+            "https://github.com/follow-redirects/follow-redirects/commit/62e546a99c07c3ee5e4e0718c84a6ca127c5c445",
+            "https://huntr.dev/bounties/7cf2bf90-52da-4d59-8028-a73b132de0db",
+            "https://nvd.nist.gov/vuln/detail/CVE-2022-0536",
+            "https://ubuntu.com/security/notices/USN-8217-1",
+            "https://www.cve.org/CVERecord?id=CVE-2022-0536"
+          ],
+          "PublishedDate": "2022-02-09T11:15:08.647Z",
+          "LastModifiedDate": "2026-02-24T19:20:51.187Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-26159",
+          "VendorIDs": [
+            "GHSA-jchw-25xp-jwwc"
+          ],
+          "PkgID": "follow-redirects@1.10.0",
+          "PkgName": "follow-redirects",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/follow-redirects@1.10.0",
+            "UID": "4b87442c1e459d5b"
+          },
+          "InstalledVersion": "1.10.0",
+          "FixedVersion": "1.15.4",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2023-26159",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:5349828660d634214f2e200db149e2b03e5fcfbdfd41eb5046c502b24a4df2b6",
+          "Title": "follow-redirects: Improper Input Validation due to the improper handling of URLs by the url.parse()",
+          "Description": "Versions of the package follow-redirects before 1.15.4 are vulnerable to Improper Input Validation due to the improper handling of URLs by the url.parse() function. When new URL() throws an error, it can be manipulated to misinterpret the hostname. An attacker could exploit this weakness to redirect traffic to a malicious site, potentially leading to information disclosure, phishing attacks, or other security breaches.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-20",
+            "CWE-601"
+          ],
+          "VendorSeverity": {
+            "azure": 2,
+            "cbl-mariner": 2,
+            "ghsa": 2,
+            "nvd": 2,
+            "redhat": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+              "V3Score": 6.1
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+              "V3Score": 6.1
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+              "V3Score": 6.1
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2023-26159",
+            "https://github.com/follow-redirects/follow-redirects",
+            "https://github.com/follow-redirects/follow-redirects/commit/7a6567e16dfa9ad18a70bfe91784c28653fbf19d",
+            "https://github.com/follow-redirects/follow-redirects/issues/235",
+            "https://github.com/follow-redirects/follow-redirects/pull/236",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/ZZ425BFKNBQ6AK7I5SAM56TWON5OF2XM",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/ZZ425BFKNBQ6AK7I5SAM56TWON5OF2XM/",
+            "https://nvd.nist.gov/vuln/detail/CVE-2023-26159",
+            "https://security.netapp.com/advisory/ntap-20241108-0002",
+            "https://security.netapp.com/advisory/ntap-20241108-0002/",
+            "https://security.snyk.io/vuln/SNYK-JS-FOLLOWREDIRECTS-6141137",
+            "https://ubuntu.com/security/notices/USN-8217-1",
+            "https://www.cve.org/CVERecord?id=CVE-2023-26159"
+          ],
+          "PublishedDate": "2024-01-02T05:15:08.63Z",
+          "LastModifiedDate": "2025-11-03T22:16:05.953Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-28849",
+          "VendorIDs": [
+            "GHSA-cxjh-pqwp-8mfp"
+          ],
+          "PkgID": "follow-redirects@1.10.0",
+          "PkgName": "follow-redirects",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/follow-redirects@1.10.0",
+            "UID": "4b87442c1e459d5b"
+          },
+          "InstalledVersion": "1.10.0",
+          "FixedVersion": "1.15.6",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2024-28849",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:6e3ecc3c48cc97e5a75f61e47292a6fbf73dbd94bc770cc3d64de3e2ee03d635",
+          "Title": "follow-redirects: Possible credential leak",
+          "Description": "follow-redirects is an open source, drop-in replacement for Node's `http` and `https` modules that automatically follows redirects. In affected versions follow-redirects only clears authorization header during cross-domain redirect, but keep the proxy-authentication header which contains credentials too. This vulnerability may lead to credentials leak, but has been addressed in version 1.15.6. Users are advised to upgrade. There are no known workarounds for this vulnerability.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-200"
+          ],
+          "VendorSeverity": {
+            "cbl-mariner": 2,
+            "ghsa": 2,
+            "redhat": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 6.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N",
+              "V3Score": 6.5
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2024-28849",
+            "https://fetch.spec.whatwg.org/#authentication-entries",
+            "https://github.com/follow-redirects/follow-redirects",
+            "https://github.com/follow-redirects/follow-redirects/commit/c4f847f85176991f95ab9c88af63b1294de8649b",
+            "https://github.com/follow-redirects/follow-redirects/commit/c4f847f85176991f95ab9c88af63b1294de8649b (v1.15.6)",
+            "https://github.com/follow-redirects/follow-redirects/security/advisories/GHSA-cxjh-pqwp-8mfp",
+            "https://github.com/psf/requests/issues/1885",
+            "https://hackerone.com/reports/2390009",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/VOIF4EPQUCKDBEVTGRQDZ3CGTYQHPO7Z",
+            "https://lists.fedoraproject.org/archives/list/package-announce@lists.fedoraproject.org/message/VOIF4EPQUCKDBEVTGRQDZ3CGTYQHPO7Z/",
+            "https://nvd.nist.gov/vuln/detail/CVE-2024-28849",
+            "https://ubuntu.com/security/notices/USN-8217-1",
+            "https://www.cve.org/CVERecord?id=CVE-2024-28849"
+          ],
+          "PublishedDate": "2024-03-14T17:15:52.097Z",
+          "LastModifiedDate": "2025-12-05T15:45:52.483Z"
+        },
+        {
+          "VulnerabilityID": "GHSA-r4q5-vmmm-2653",
+          "PkgID": "follow-redirects@1.10.0",
+          "PkgName": "follow-redirects",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/follow-redirects@1.10.0",
+            "UID": "4b87442c1e459d5b"
+          },
+          "InstalledVersion": "1.10.0",
+          "FixedVersion": "1.16.0",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://github.com/advisories/GHSA-r4q5-vmmm-2653",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:669bb40959440b15f0cf90e183122e7ebffff8405f2343a7a69e5e3c13257465",
+          "Title": "follow-redirects leaks Custom Authentication Headers to Cross-Domain Redirect Targets",
+          "Description": "## Summary\n\nWhen an HTTP request follows a cross-domain redirect (301/302/307/308), `follow-redirects` only strips `authorization`, `proxy-authorization`, and `cookie` headers (matched by regex at index.js:469-476). Any custom authentication header (e.g., `X-API-Key`, `X-Auth-Token`, `Api-Key`, `Token`) is forwarded verbatim to the redirect target.\n\nSince `follow-redirects` is the redirect-handling dependency for **axios** (105K+ stars), this vulnerability affects the entire axios ecosystem.\n\n## Affected Code\n\n`index.js`, lines 469-476:\n\n```javascript\nif (redirectUrl.protocol !== currentUrlParts.protocol \u0026\u0026\n   redirectUrl.protocol !== \"https:\" ||\n   redirectUrl.host !== currentHost \u0026\u0026\n   !isSubdomain(redirectUrl.host, currentHost)) {\n  removeMatchingHeaders(/^(?:(?:proxy-)?authorization|cookie)$/i, this._options.headers);\n}\n```\n\nThe regex only matches `authorization`, `proxy-authorization`, and `cookie`. Custom headers like `X-API-Key` are not matched.\n\n## Attack Scenario\n\n1. App uses axios with custom auth header: `headers: { 'X-API-Key': 'sk-live-secret123' }`\n2. Server returns `302 Location: https://evil.com/steal`\n3. follow-redirects sends `X-API-Key: sk-live-secret123` to `evil.com`\n4. Attacker captures the API key\n\n## Impact\n\nAny custom auth header set via axios leaks on cross-domain redirect. Extremely common pattern. Affects all axios users in Node.js.\n\n## Suggested Fix\n\nAdd a `sensitiveHeaders` option that users can extend, or strip ALL non-standard headers on cross-domain redirect.\n\n## Disclosure\n\nSource code review, manually verified. Found 2026-03-20.",
+          "Severity": "MEDIUM",
+          "VendorSeverity": {
+            "ghsa": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V40Vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+              "V40Score": 6.9
+            }
+          },
+          "References": [
+            "https://github.com/follow-redirects/follow-redirects",
+            "https://github.com/follow-redirects/follow-redirects/commit/844c4d302ac963d29bdb5dc1754ec7df3d70d7f9",
+            "https://github.com/follow-redirects/follow-redirects/security/advisories/GHSA-r4q5-vmmm-2653"
+          ],
+          "PublishedDate": "2026-04-14T01:11:11Z",
+          "LastModifiedDate": "2026-04-14T01:11:11Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2019-10744",
+          "VendorIDs": [
+            "GHSA-jf85-cpcp-j695"
+          ],
+          "PkgID": "lodash@4.17.4",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "InstalledVersion": "4.17.4",
+          "FixedVersion": "4.17.12",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2019-10744",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:f0d3b6a121c7a31a24631cf50dfe1e442b3f26199e76d6fa04231e0430e11838",
+          "Title": "nodejs-lodash: prototype pollution in defaultsDeep function leading to modifying properties",
+          "Description": "Versions of lodash lower than 4.17.12 are vulnerable to Prototype Pollution. The function defaultsDeep could be tricked into adding or modifying properties of Object.prototype using a constructor payload.",
+          "Severity": "CRITICAL",
+          "CweIDs": [
+            "CWE-1321"
+          ],
+          "VendorSeverity": {
+            "ghsa": 4,
+            "nvd": 4,
+            "redhat": 3,
+            "ruby-advisory-db": 4
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H",
+              "V3Score": 9.1
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:N/I:P/A:P",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H",
+              "V2Score": 6.4,
+              "V3Score": 9.1
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H",
+              "V3Score": 9.1
+            }
+          },
+          "References": [
+            "https://access.redhat.com/errata/RHSA-2019:3024",
+            "https://access.redhat.com/security/cve/CVE-2019-10744",
+            "https://github.com/advisories/GHSA-jf85-cpcp-j695",
+            "https://github.com/lodash/lodash/pull/4336",
+            "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2019-10744.yml",
+            "https://nvd.nist.gov/vuln/detail/CVE-2019-10744",
+            "https://security.netapp.com/advisory/ntap-20191004-0005",
+            "https://security.netapp.com/advisory/ntap-20191004-0005/",
+            "https://snyk.io/vuln/SNYK-JS-LODASH-450202",
+            "https://support.f5.com/csp/article/K47105354",
+            "https://support.f5.com/csp/article/K47105354?utm_source=f5support\u0026amp%3Butm_medium=RSS",
+            "https://support.f5.com/csp/article/K47105354?utm_source=f5support\u0026amp;utm_medium=RSS",
+            "https://www.cve.org/CVERecord?id=CVE-2019-10744",
+            "https://www.npmjs.com/advisories/1065",
+            "https://www.oracle.com/security-alerts/cpujan2021.html",
+            "https://www.oracle.com/security-alerts/cpuoct2020.html"
+          ],
+          "PublishedDate": "2019-07-26T00:15:11.217Z",
+          "LastModifiedDate": "2024-11-21T04:19:50.123Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2018-16487",
+          "PkgID": "lodash@4.17.4",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "InstalledVersion": "4.17.4",
+          "FixedVersion": "\u003e=4.17.11",
+          "Status": "fixed",
+          "SeveritySource": "nodejs-security-wg",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2018-16487",
+          "DataSource": {
+            "ID": "nodejs-security-wg",
+            "Name": "Node.js Ecosystem Security Working Group",
+            "URL": "https://github.com/nodejs/security-wg"
+          },
+          "Fingerprint": "sha256:f02b6672f85bc3fefbfca8b238486d589b29491fded1c87678fa2bad2e017f82",
+          "Title": "lodash: Prototype pollution in utilities function",
+          "Description": "A prototype pollution vulnerability was found in lodash \u003c4.17.11 where the functions merge, mergeWith, and defaultsDeep can be tricked into adding or modifying properties of Object.prototype.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-400"
+          ],
+          "VendorSeverity": {
+            "ghsa": 3,
+            "nodejs-security-wg": 3,
+            "nvd": 2,
+            "redhat": 2,
+            "ruby-advisory-db": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "nvd": {
+              "V2Vector": "AV:N/AC:M/Au:N/C:P/I:P/A:P",
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
+              "V2Score": 6.8,
+              "V3Score": 5.6
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
+              "V3Score": 5.6
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2018-16487",
+            "https://github.com/advisories/GHSA-4xc9-xhrj-v574",
+            "https://github.com/lodash/lodash/commit/90e6199a161b6445b01454517b40ef65ebecd2ad",
+            "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2018-16487.yml",
+            "https://hackerone.com/reports/380873",
+            "https://nvd.nist.gov/vuln/detail/CVE-2018-16487",
+            "https://security.netapp.com/advisory/ntap-20190919-0004",
+            "https://security.netapp.com/advisory/ntap-20190919-0004/",
+            "https://www.cve.org/CVERecord?id=CVE-2018-16487",
+            "https://www.npmjs.com/advisories/782"
+          ],
+          "PublishedDate": "2019-02-01T18:29:00.943Z",
+          "LastModifiedDate": "2024-11-21T03:52:51.17Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2020-8203",
+          "VendorIDs": [
+            "GHSA-p6mc-m468-83gw"
+          ],
+          "PkgID": "lodash@4.17.4",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "InstalledVersion": "4.17.4",
+          "FixedVersion": "4.17.19",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2020-8203",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:2091e5e2002bf4f2024488687a88bcef5c3d644b1432f53cb686983f59d7b95c",
+          "Title": "nodejs-lodash: prototype pollution in zipObjectDeep function",
+          "Description": "Prototype pollution attack when using _.zipObjectDeep in lodash before 4.17.20.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-770",
+            "CWE-1321"
+          ],
+          "VendorSeverity": {
+            "ghsa": 3,
+            "nvd": 3,
+            "redhat": 2,
+            "ruby-advisory-db": 3
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:H",
+              "V3Score": 7.4
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:M/Au:N/C:N/I:P/A:P",
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:H",
+              "V2Score": 5.8,
+              "V3Score": 7.4
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:H",
+              "V3Score": 7.4
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2020-8203",
+            "https://github.com/advisories/GHSA-p6mc-m468-83gw",
+            "https://github.com/github/advisory-database/pull/2884",
+            "https://github.com/lodash/lodash",
+            "https://github.com/lodash/lodash/commit/c84fe82760fb2d3e03a63379b297a1cc1a2fce12",
+            "https://github.com/lodash/lodash/issues/4744",
+            "https://github.com/lodash/lodash/issues/4874",
+            "https://github.com/lodash/lodash/wiki/Changelog#v41719",
+            "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2020-8203.yml",
+            "https://hackerone.com/reports/712065",
+            "https://hackerone.com/reports/864701",
+            "https://nvd.nist.gov/vuln/detail/CVE-2020-8203",
+            "https://security.netapp.com/advisory/ntap-20200724-0006",
+            "https://security.netapp.com/advisory/ntap-20200724-0006/",
+            "https://web.archive.org/web/20210914001339/https://github.com/lodash/lodash/issues/4744",
+            "https://www.cve.org/CVERecord?id=CVE-2020-8203",
+            "https://www.npmjs.com/advisories/1523",
+            "https://www.oracle.com//security-alerts/cpujul2021.html",
+            "https://www.oracle.com/security-alerts/cpuApr2021.html",
+            "https://www.oracle.com/security-alerts/cpuapr2022.html",
+            "https://www.oracle.com/security-alerts/cpujan2022.html",
+            "https://www.oracle.com/security-alerts/cpuoct2021.html"
+          ],
+          "PublishedDate": "2020-07-15T17:15:11.797Z",
+          "LastModifiedDate": "2024-11-21T05:38:29.79Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2021-23337",
+          "VendorIDs": [
+            "GHSA-35jh-r3h4-6jhm"
+          ],
+          "PkgID": "lodash@4.17.4",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "InstalledVersion": "4.17.4",
+          "FixedVersion": "4.17.21",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2021-23337",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:c6a7e874cbe1de253bbe201c3deefa83a96d329993af397b03ffcd91532a8f04",
+          "Title": "nodejs-lodash: command injection via template",
+          "Description": "Lodash versions prior to 4.17.21 are vulnerable to Command Injection via the template function.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-94"
+          ],
+          "VendorSeverity": {
+            "ghsa": 3,
+            "nvd": 3,
+            "redhat": 2,
+            "ruby-advisory-db": 3,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
+              "V3Score": 7.2
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:S/C:P/I:P/A:P",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
+              "V2Score": 6.5,
+              "V3Score": 7.2
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
+              "V3Score": 7.2
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2021-23337",
+            "https://cert-portal.siemens.com/productcert/pdf/ssa-637483.pdf",
+            "https://github.com/advisories/GHSA-35jh-r3h4-6jhm",
+            "https://github.com/lodash/lodash",
+            "https://github.com/lodash/lodash/blob/ddfd9b11a0126db2302cb70ec9973b66baec0975/lodash.js",
+            "https://github.com/lodash/lodash/blob/ddfd9b11a0126db2302cb70ec9973b66baec0975/lodash.js#L14851",
+            "https://github.com/lodash/lodash/blob/ddfd9b11a0126db2302cb70ec9973b66baec0975/lodash.js%23L14851",
+            "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
+            "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2021-23337.yml",
+            "https://nvd.nist.gov/vuln/detail/CVE-2021-23337",
+            "https://security.netapp.com/advisory/ntap-20210312-0006",
+            "https://security.netapp.com/advisory/ntap-20210312-0006/",
+            "https://snyk.io/vuln/SNYK-JAVA-ORGFUJIONWEBJARS-1074932",
+            "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARS-1074930",
+            "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARSBOWER-1074928",
+            "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARSBOWERGITHUBLODASH-1074931",
+            "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARSNPM-1074929",
+            "https://snyk.io/vuln/SNYK-JS-LODASH-1040724",
+            "https://www.cve.org/CVERecord?id=CVE-2021-23337",
+            "https://www.oracle.com//security-alerts/cpujul2021.html",
+            "https://www.oracle.com/security-alerts/cpujan2022.html",
+            "https://www.oracle.com/security-alerts/cpujul2022.html",
+            "https://www.oracle.com/security-alerts/cpuoct2021.html"
+          ],
+          "PublishedDate": "2021-02-15T13:15:12.56Z",
+          "LastModifiedDate": "2024-11-21T05:51:31.643Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-4800",
+          "VendorIDs": [
+            "GHSA-r5fr-rjxr-66jc"
+          ],
+          "PkgID": "lodash@4.17.4",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "InstalledVersion": "4.17.4",
+          "FixedVersion": "4.18.0",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-4800",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:4190873d9904e8c421dcd55c3e5580abc421e9ad8064edf9c4a81f2d80141760",
+          "Title": "lodash: lodash: Arbitrary code execution via untrusted input in template imports",
+          "Description": "Impact:\n\nThe fix for CVE-2021-23337 (https://github.com/advisories/GHSA-35jh-r3h4-6jhm) added validation for the variable option in _.template but did not apply the same validation to options.imports key names. Both paths flow into the same Function() constructor sink.\n\nWhen an application passes untrusted input as options.imports key names, an attacker can inject default-parameter expressions that execute arbitrary code at template compilation time.\n\nAdditionally, _.template uses assignInWith to merge imports, which enumerates inherited properties via for..in. If Object.prototype has been polluted by any other vector, the polluted keys are copied into the imports object and passed to Function().\n\nPatches:\n\nUsers should upgrade to version 4.18.0.\n\nWorkarounds:\n\nDo not pass untrusted input as key names in options.imports. Only use developer-controlled, static key names.",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-94"
+          ],
+          "VendorSeverity": {
+            "alma": 3,
+            "ghsa": 3,
+            "nvd": 4,
+            "oracle-oval": 3,
+            "redhat": 3
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
+              "V3Score": 8.1
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+              "V3Score": 9.8
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
+              "V3Score": 8.1
+            }
+          },
+          "References": [
+            "https://access.redhat.com/errata/RHSA-2026:10713",
+            "https://access.redhat.com/security/cve/CVE-2026-4800",
+            "https://bugzilla.redhat.com/2453496",
+            "https://cna.openjsf.org/security-advisories.html",
+            "https://errata.almalinux.org/10/ALSA-2026-10713.html",
+            "https://github.com/advisories/GHSA-35jh-r3h4-6jhm",
+            "https://github.com/lodash/lodash",
+            "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
+            "https://github.com/lodash/lodash/security/advisories/GHSA-r5fr-rjxr-66jc",
+            "https://linux.oracle.com/cve/CVE-2026-4800.html",
+            "https://linux.oracle.com/errata/ELSA-2026-10713.html",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-4800",
+            "https://www.cve.org/CVERecord?id=CVE-2026-4800"
+          ],
+          "PublishedDate": "2026-03-31T20:16:29.66Z",
+          "LastModifiedDate": "2026-05-01T18:09:13.047Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2019-1010266",
+          "VendorIDs": [
+            "GHSA-x5rq-j2xg-h7qm"
+          ],
+          "PkgID": "lodash@4.17.4",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "InstalledVersion": "4.17.4",
+          "FixedVersion": "4.17.11",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2019-1010266",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:9d02ee45a08e43baf47aa17b4c990e27e83fb50a4a0c2d3279e018aa8832edc8",
+          "Title": "lodash: uncontrolled resource consumption in Data handler causing denial of service",
+          "Description": "lodash prior to 4.17.11 is affected by: CWE-400: Uncontrolled Resource Consumption. The impact is: Denial of service. The component is: Date handler. The attack vector is: Attacker provides very long strings, which the library attempts to match using a regular expression. The fixed version is: 4.17.11.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-400",
+            "CWE-770"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 2,
+            "redhat": 1,
+            "ruby-advisory-db": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H",
+              "V3Score": 6.5
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:S/C:N/I:N/A:P",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H",
+              "V2Score": 4,
+              "V3Score": 6.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.0/AV:N/AC:H/PR:H/UI:N/S:U/C:N/I:N/A:H",
+              "V3Score": 4.4
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2019-1010266",
+            "https://github.com/advisories/GHSA-x5rq-j2xg-h7qm",
+            "https://github.com/github/advisory-database/pull/6138",
+            "https://github.com/lodash/lodash",
+            "https://github.com/lodash/lodash/commit/5c08f18d365b64063bfbfa686cbb97cdd6267347",
+            "https://github.com/lodash/lodash/issues/3359",
+            "https://github.com/lodash/lodash/wiki/Changelog",
+            "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2019-1010266.yml",
+            "https://nvd.nist.gov/vuln/detail/CVE-2019-1010266",
+            "https://security.netapp.com/advisory/ntap-20190919-0004",
+            "https://security.netapp.com/advisory/ntap-20190919-0004/",
+            "https://snyk.io/vuln/SNYK-JS-LODASH-73639",
+            "https://www.cve.org/CVERecord?id=CVE-2019-1010266"
+          ],
+          "PublishedDate": "2019-07-17T21:15:10.873Z",
+          "LastModifiedDate": "2024-11-21T04:18:06.797Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2020-28500",
+          "VendorIDs": [
+            "GHSA-29mw-wpgm-hmr9"
+          ],
+          "PkgID": "lodash@4.17.4",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "InstalledVersion": "4.17.4",
+          "FixedVersion": "4.17.21",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2020-28500",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:59a15fd7b11c1b7d0a1bfc9c416ae961e0e66693d6e38bfb0c927667b7c54e0e",
+          "Title": "nodejs-lodash: ReDoS via the toNumber, trim and trimEnd functions",
+          "Description": "Lodash versions prior to 4.17.21 are vulnerable to Regular Expression Denial of Service (ReDoS) via the toNumber, trim and trimEnd functions.",
+          "Severity": "MEDIUM",
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 2,
+            "redhat": 2,
+            "ruby-advisory-db": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L",
+              "V3Score": 5.3
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:N/C:N/I:N/A:P",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L",
+              "V2Score": 5,
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L",
+              "V3Score": 5.3
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2020-28500",
+            "https://cert-portal.siemens.com/productcert/pdf/ssa-637483.pdf",
+            "https://github.com/advisories/GHSA-29mw-wpgm-hmr9",
+            "https://github.com/github/advisory-database/pull/6139",
+            "https://github.com/lodash/lodash",
+            "https://github.com/lodash/lodash/blob/npm/trimEnd.js",
+            "https://github.com/lodash/lodash/blob/npm/trimEnd.js#L8",
+            "https://github.com/lodash/lodash/blob/npm/trimEnd.js%23L8",
+            "https://github.com/lodash/lodash/commit/c4847ebe7d14540bb28a8b932a9ce1b9ecbfee1a",
+            "https://github.com/lodash/lodash/pull/5065",
+            "https://github.com/lodash/lodash/pull/5065/commits/02906b8191d3c100c193fe6f7b27d1c40f200bb7",
+            "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2020-28500.yml",
+            "https://nvd.nist.gov/vuln/detail/CVE-2020-28500",
+            "https://security.netapp.com/advisory/ntap-20210312-0006",
+            "https://security.netapp.com/advisory/ntap-20210312-0006/",
+            "https://snyk.io/vuln/SNYK-JAVA-ORGFUJIONWEBJARS-1074896",
+            "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARS-1074894",
+            "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARSBOWER-1074892",
+            "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARSBOWERGITHUBLODASH-1074895",
+            "https://snyk.io/vuln/SNYK-JAVA-ORGWEBJARSNPM-1074893",
+            "https://snyk.io/vuln/SNYK-JS-LODASH-1018905",
+            "https://www.cve.org/CVERecord?id=CVE-2020-28500",
+            "https://www.oracle.com//security-alerts/cpujul2021.html",
+            "https://www.oracle.com/security-alerts/cpujan2022.html",
+            "https://www.oracle.com/security-alerts/cpujul2022.html",
+            "https://www.oracle.com/security-alerts/cpuoct2021.html"
+          ],
+          "PublishedDate": "2021-02-15T11:15:12.397Z",
+          "LastModifiedDate": "2024-11-21T05:22:55.053Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-13465",
+          "VendorIDs": [
+            "GHSA-xxjr-mmjv-4gpg"
+          ],
+          "PkgID": "lodash@4.17.4",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "InstalledVersion": "4.17.4",
+          "FixedVersion": "4.17.23",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-13465",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:07c682cca29992852c0591988dc1204f01fb1e3ad4d4829c63b8908619920f5a",
+          "Title": "lodash: prototype pollution in _.unset and _.omit functions",
+          "Description": "Lodash versions 4.0.0 through 4.17.22 are vulnerable to prototype pollution in the _.unset and _.omit functions. An attacker can pass crafted paths which cause Lodash to delete methods from global prototypes.\n\nThe issue permits deletion of properties but does not allow overwriting their original behavior.\n\nThis issue is patched on 4.17.23",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-1321"
+          ],
+          "VendorSeverity": {
+            "alma": 3,
+            "ghsa": 2,
+            "nvd": 2,
+            "oracle-oval": 3,
+            "redhat": 3
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L",
+              "V40Vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:L/SC:H/SI:H/SA:H/E:P",
+              "V3Score": 6.5,
+              "V40Score": 6.9
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:H",
+              "V3Score": 8.2
+            }
+          },
+          "References": [
+            "https://access.redhat.com/errata/RHSA-2026:2438",
+            "https://access.redhat.com/security/cve/CVE-2025-13465",
+            "https://bugzilla.redhat.com/2431740",
+            "https://errata.almalinux.org/10/ALSA-2026-2438.html",
+            "https://github.com/lodash/lodash",
+            "https://github.com/lodash/lodash/commit/edadd452146f7e4bad4ea684e955708931d84d81",
+            "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
+            "https://linux.oracle.com/cve/CVE-2025-13465.html",
+            "https://linux.oracle.com/errata/ELSA-2026-2452.html",
+            "https://nvd.nist.gov/vuln/detail/CVE-2025-13465",
+            "https://www.cve.org/CVERecord?id=CVE-2025-13465"
+          ],
+          "PublishedDate": "2026-01-21T20:16:05.25Z",
+          "LastModifiedDate": "2026-02-17T17:10:07.52Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-2950",
+          "VendorIDs": [
+            "GHSA-f23m-r3pf-42rh"
+          ],
+          "PkgID": "lodash@4.17.4",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "InstalledVersion": "4.17.4",
+          "FixedVersion": "4.18.0",
+          "Status": "fixed",
+          "SeveritySource": "ghsa",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-2950",
+          "DataSource": {
+            "ID": "ghsa",
+            "Name": "GitHub Security Advisory npm",
+            "URL": "https://github.com/advisories?query=type%3Areviewed+ecosystem%3Anpm"
+          },
+          "Fingerprint": "sha256:19935e3e85983a3851f31dac8d4c8b1150c319baed070bb21f89de2c5f41ca54",
+          "Title": "lodash: Lodash: Prototype pollution allows deletion of built-in prototype properties via array path bypass",
+          "Description": "Impact:\n\nLodash versions 4.17.23 and earlier are vulnerable to prototype pollution in the _.unset and _.omit functions. The fix for (CVE-2025-13465: https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg) only guards against string key members, so an attacker can bypass the check by passing array-wrapped path segments. This allows deletion of properties from built-in prototypes such as Object.prototype, Number.prototype, and String.prototype.\n\nThe issue permits deletion of prototype properties but does not allow overwriting their original behavior.\n\nPatches:\n\nThis issue is patched in 4.18.0.\n\nWorkarounds:\n\nNone. Upgrade to the patched version.",
+          "Severity": "MEDIUM",
+          "CweIDs": [
+            "CWE-1321"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nvd": 2,
+            "redhat": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L",
+              "V3Score": 6.5
+            },
+            "nvd": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+              "V3Score": 5.3
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H",
+              "V3Score": 6.5
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2026-2950",
+            "https://github.com/lodash/lodash",
+            "https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh",
+            "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-2950",
+            "https://www.cve.org/CVERecord?id=CVE-2026-2950"
+          ],
+          "PublishedDate": "2026-03-31T20:16:26.207Z",
+          "LastModifiedDate": "2026-04-07T16:12:25.97Z"
+        },
+        {
+          "VulnerabilityID": "CVE-2018-3721",
+          "PkgID": "lodash@4.17.4",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.4",
+            "UID": "f974e06fe93af1c4"
+          },
+          "InstalledVersion": "4.17.4",
+          "FixedVersion": "\u003e=4.17.5",
+          "Status": "fixed",
+          "SeveritySource": "nodejs-security-wg",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2018-3721",
+          "DataSource": {
+            "ID": "nodejs-security-wg",
+            "Name": "Node.js Ecosystem Security Working Group",
+            "URL": "https://github.com/nodejs/security-wg"
+          },
+          "Fingerprint": "sha256:828185ea1ce67d201caf15543be1d1c8eecdece7a61b59252c460fb9ca2db36b",
+          "Title": "lodash: Prototype pollution in utilities function",
+          "Description": "lodash node module before 4.17.5 suffers from a Modification of Assumed-Immutable Data (MAID) vulnerability via defaultsDeep, merge, and mergeWith functions, which allows a malicious user to modify the prototype of \"Object\" via __proto__, causing the addition or modification of an existing property that will exist on all objects.",
+          "Severity": "LOW",
+          "CweIDs": [
+            "CWE-471",
+            "CWE-1321"
+          ],
+          "VendorSeverity": {
+            "ghsa": 2,
+            "nodejs-security-wg": 1,
+            "nvd": 2,
+            "redhat": 1,
+            "ruby-advisory-db": 2,
+            "ubuntu": 2
+          },
+          "CVSS": {
+            "ghsa": {
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N",
+              "V3Score": 6.5
+            },
+            "nvd": {
+              "V2Vector": "AV:N/AC:L/Au:S/C:N/I:P/A:N",
+              "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N",
+              "V2Score": 4,
+              "V3Score": 6.5
+            },
+            "redhat": {
+              "V3Vector": "CVSS:3.0/AV:L/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L",
+              "V3Score": 2.9
+            }
+          },
+          "References": [
+            "https://access.redhat.com/security/cve/CVE-2018-3721",
+            "https://github.com/advisories/GHSA-fvqr-27wr-82fm",
+            "https://github.com/lodash/lodash/commit/d8e069cc3410082e44eb18fcf8e7f3d08ebe1d4a",
+            "https://github.com/rubysec/ruby-advisory-db/blob/master/gems/lodash-rails/CVE-2018-3721.yml",
+            "https://hackerone.com/reports/310443",
+            "https://nvd.nist.gov/vuln/detail/CVE-2018-3721",
+            "https://security.netapp.com/advisory/ntap-20190919-0004",
+            "https://security.netapp.com/advisory/ntap-20190919-0004/",
+            "https://snyk.io/vuln/npm:lodash:20180130",
+            "https://www.cve.org/CVERecord?id=CVE-2018-3721",
+            "https://www.npmjs.com/advisories/577"
+          ],
+          "PublishedDate": "2018-06-07T02:29:08.317Z",
+          "LastModifiedDate": "2024-11-21T04:05:56.943Z"
+        }
+      ]
+    }
+  ]
+}

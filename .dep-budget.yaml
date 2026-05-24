@@ -1,0 +1,41 @@
+# Dependency budget for the default cilock binary.
+#
+# CI fails any PR that grows transitive_pkgs OR go_sum_bytes beyond the
+# values below. To raise a ceiling, edit this file in the same PR that
+# adds the dep — that surfaces the cost in review.
+#
+# Budgets are intentionally tight: they're set at the current state plus a
+# small headroom. The point is to make any new dep a conscious decision,
+# not to leave generous slack.
+#
+# Regenerate the "current" measurements with:
+#   ./scripts/check-dep-budget.sh --print
+#
+# Tracking issue: https://github.com/aflock-ai/rookery/issues/70
+
+cilock:
+  # Count of unique non-rookery modules linked into the built cilock binary,
+  # measured via `go version -m` (the binary's own embedded module list).
+  # This is NOT the MVS-resolved graph (`go list -m all`) — that over-counts
+  # by ~5x because it includes everything reachable in the workspace, even
+  # modules nothing actually imports. We care about what `go build`
+  # actually links into the artifact, which is the real bloat + supply-
+  # chain attack surface. See scripts/check-dep-budget.sh for the exact
+  # computation.
+  # 2026-05-22: 175 on linux/amd64 CI builds, 174 on darwin local — the
+  # linker pulls one extra platform-specific module on Linux. CI is the
+  # canonical artifact, so the budget tracks the larger number.
+  transitive_pkgs: 175
+  # Byte size of cilock/go.sum. Still useful as a secondary signal: it
+  # tracks declared deps including ones only pulled in by `go mod tidy`,
+  # which catches dep churn the binary metric can miss.
+  #
+  # 2026-05: raised cumulatively for the v0.3 cutover (#135). Merkle
+  # foundation, product/v0.3 (Agent B), and inclusion-proof + cilock
+  # prove (Agent D) each contributed bytes to go.sum. Actual final
+  # value is set after `go mod tidy` runs against the integrated
+  # branch — the value below is the headroom we accept.
+  # 2026-05-23: +145 bytes for registering prowler attestor in canonical
+  # main (rookery#140). prowler's transitive deps don't add to the
+  # binary-linked set (transitive_pkgs unchanged), only to declared deps.
+  go_sum_bytes: 71800

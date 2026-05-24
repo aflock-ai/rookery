@@ -15,45 +15,54 @@ use (
 	./lockctl
 
 	// Attestor plugins
+	./plugins/attestors/asff
 	./plugins/attestors/aws-codebuild
 	./plugins/attestors/aws-config
 	./plugins/attestors/aws-iid
 	./plugins/attestors/commandrun
 	./plugins/attestors/configuration
 	./plugins/attestors/docker
+	./plugins/attestors/docker-bench
 	./plugins/attestors/environment
+	./plugins/attestors/falco
 	./plugins/attestors/gcp-iit
 	./plugins/attestors/git
 	./plugins/attestors/github
 	./plugins/attestors/githubaction
 	./plugins/attestors/githubwebhook
 	./plugins/attestors/gitlab
+	./plugins/attestors/govulncheck
+	./plugins/attestors/inclusion-proof
+	./plugins/attestors/inspec
 	./plugins/attestors/jenkins
 	./plugins/attestors/jwt
 	./plugins/attestors/k8smanifest
+	./plugins/attestors/kube-bench
 	./plugins/attestors/link
+	./plugins/attestors/linkerd-check
 	./plugins/attestors/lockfiles
 	./plugins/attestors/material
 	./plugins/attestors/maven
-	./plugins/attestors/inspec
 	./plugins/attestors/nessus
-	./plugins/attestors/oscap
 	./plugins/attestors/oci
 	./plugins/attestors/omnitrail
-	./plugins/attestors/asff
-	./plugins/attestors/prowler
-	./plugins/attestors/steampipe
-	./plugins/attestors/structured-data
+	./plugins/attestors/oscap
+	./plugins/attestors/pip-install
 	./plugins/attestors/policyverify
 	./plugins/attestors/product
-	./plugins/attestors/docker-bench
-	./plugins/attestors/kube-bench
+	./plugins/attestors/prowler
 	./plugins/attestors/sarif
 	./plugins/attestors/sbom
 	./plugins/attestors/secretscan
+	./plugins/attestors/sinkhole-flows
 	./plugins/attestors/slsa
+	./plugins/attestors/steampipe
+	./plugins/attestors/structured-data
 	./plugins/attestors/system-packages
+	./plugins/attestors/test-results
+	./plugins/attestors/trivy
 	./plugins/attestors/vex
+	./plugins/attestors/vsa
 
 	// Signer plugins
 	./plugins/signers/debug-signer
