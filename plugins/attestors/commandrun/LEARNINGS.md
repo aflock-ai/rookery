@@ -4,6 +4,40 @@ Working log of what we've learned building cilock's eBPF read-tap +
 capture-mode V2 + 4-way file classification. Updated as we test
 against more languages, build systems, and edge cases.
 
+## TL;DR — current state
+
+What's working:
+- eBPF read-tap captures file content race-free against the calling
+  thread on Linux 5.13+
+- Zero ringbuf drops on a 28s parallel Go build with 256 MB ringbuf
+- Zero digest mismatches on a 200-path random sample
+- 1.47× overhead vs raw `go build`; 2.17× faster than ptrace
+- 4-way classification (materials / intermediates / products /
+  cacheArtifacts) populated from a single trace
+- 66 default cache patterns covering Go, Python, Node, Rust,
+  Java/Gradle, C/C++, Docker, Bazel, OS temp
+- Env-var-driven cache discovery (XDG_CACHE_HOME, GOCACHE,
+  CARGO_HOME, NPM_CONFIG_CACHE, ...)
+- CLI: --capture-mode (auto/walk/trace), --cache-add-pattern,
+  --cache-allow-pattern, --cache-disable-defaults,
+  --cache-disable-env-probe
+- Material attestor populated from trace via Finalize phase
+- Backwards-compatible: walk mode reproduces v0.1 exactly
+
+What's open:
+- Process-tree visibility: deep linker chains (`gcc → collect2 → ld`,
+  `cargo → rustc → ld`) don't fully propagate watched-ness; final
+  output binaries sometimes missing from product set. See V1
+  limitations section.
+- JVM workloads (javac, java -jar): event volume from classpath
+  scanning can stall the dispatcher on small ringbuf configurations
+- mmap'd reads not captured (only opens)
+- splice/sendfile/copy_file_range zero-copy paths not captured
+- IMA / fs-verity integration: CaptureProbe slots exist but not yet
+  wired
+- Schema evolution (v0.2 with events array + digestTable + per-entry
+  timestamps): documented in plan; deferred to a separate PR
+
 ## Architecture decisions
 
 ### Read-tap over path-hash
