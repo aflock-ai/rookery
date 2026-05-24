@@ -19,7 +19,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sync"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -205,12 +204,6 @@ type ProcessInfo struct {
 	// ended" or "exit code unknown" — verifiers must not infer
 	// successful exit from a missing/zero value.
 	ExitCode int `json:"exitcode,omitempty"`
-
-	// mu guards mutable fields against concurrent updates from the
-	// eBPF tracing path (hash workers updating from different
-	// goroutines) and any future multi-tracer mode. Uncontended in
-	// the serial ptrace path. Excluded from JSON via the lowercase.
-	mu sync.Mutex `json:"-"`
 }
 
 type CommandRun struct {
@@ -224,6 +217,23 @@ type CommandRun struct {
 	materials      map[string]cryptoutil.DigestSet
 	enableTracing  bool
 	ignoreExitCode bool
+
+	// ebpfConsumer holds an open eBPF consumer when the eBPF tracing
+	// path is active. Opened BEFORE the child process starts so
+	// kprobes are attached when the child fires its first openat.
+	// The trace path picks it up and closes it on completion.
+	//
+	// Typed as interface{} here to avoid pulling the ebpf submodule
+	// into the public type surface; the linux build tags use the
+	// real *ebpf.Consumer.
+	ebpfConsumer ebpfConsumerIface
+}
+
+// ebpfConsumerIface is the subset of *ebpf.Consumer that CommandRun
+// needs to hold a reference to. Defined here so the windows/macOS
+// builds don't have to import the ebpf submodule.
+type ebpfConsumerIface interface {
+	Close() error
 }
 
 func (a *CommandRun) Schema() *jsonschema.Schema {
@@ -289,9 +299,23 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	c.Stderr = stderrWriter
 	if r.enableTracing {
 		enableTracing(c)
+		// For the eBPF mode we MUST attach kprobes before the child
+		// runs, otherwise we race the child's first openat. This
+		// helper opens the consumer (attaching kprobes) when eBPF
+		// mode is selected, or returns the trace-mode error with
+		// remediation instructions when eBPF was requested but
+		// unavailable. ptrace mode is a no-op.
+		if err := r.preStartTracingSetup(); err != nil {
+			return err
+		}
 	}
 
 	if err := c.Start(); err != nil {
+		// If eBPF was pre-opened but Start failed, release the consumer.
+		if r.ebpfConsumer != nil {
+			_ = r.ebpfConsumer.Close()
+			r.ebpfConsumer = nil
+		}
 		return err
 	}
 

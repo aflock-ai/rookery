@@ -57,18 +57,30 @@ import (
 // process tree via BPF events and hash files openat-by-openat.
 //
 // On entry: c.Process is the running tracee; p.parentPid is its pid.
+// r.ebpfConsumer must be non-nil — opened before c.Start() in runCmd
+// so kprobes attach before any child syscall fires.
 func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationContext, pctx *ptraceContext) ([]ProcessInfo, error) {
-	consumer, err := ebpf.Open()
-	if err != nil {
-		return nil, fmt.Errorf("eBPF tracing requested but unavailable: %w", err)
+	raw := r.ebpfConsumer
+	if raw == nil {
+		return nil, fmt.Errorf("internal: eBPF mode selected but consumer was not pre-opened before c.Start()")
 	}
-	defer consumer.Close()
+	consumer, ok := raw.(*ebpf.Consumer)
+	if !ok {
+		return nil, fmt.Errorf("internal: ebpfConsumer is %T, want *ebpf.Consumer", raw)
+	}
+	defer func() {
+		_ = consumer.Close()
+		r.ebpfConsumer = nil
+	}()
 
-	// Watched-pids set starts with the parent. The BPF program emits
-	// events for all openat-family syscalls globally — userspace
-	// filters by walking parentage. V1 limitation: a tracee that
-	// changes its tgid (via setsid into a new pgrp) might escape the
-	// filter. This is acceptable for V1.
+	// The BPF filter has already been enabled in preStartTracingSetup
+	// with our pid set as root_parent_tgid, so the child's first
+	// openat fires the kprobe via ppid match. The kprobe also adds
+	// the child's pid to watched_pids in-kernel for follow-up events.
+	//
+	// Userspace mirrors the watched set so userspace-side filtering
+	// remains exact and so the cleanup AddWatchedPID calls keep the
+	// in-kernel map in sync as new descendants are observed.
 	watched := newWatchedSet(c.Process.Pid)
 
 	// Channel for events the consumer goroutine emits to the hasher.
@@ -76,6 +88,9 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 
 	// Stop signal — closed when the tracee exits.
 	stopCh := make(chan struct{})
+
+	// Counters for diagnostics.
+	var readTotal, matchedTotal atomic.Uint64
 
 	// Consumer goroutine: reads BPF ring buffer, filters by watched
 	// set, forwards to evCh.
@@ -100,9 +115,11 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				log.Debugf("(ebpf) consumer read: %v", err)
 				return
 			}
+			readTotal.Add(1)
 			if !watched.match(ev.PID, ev.TGID, ev.PPID) {
 				continue
 			}
+			matchedTotal.Add(1)
 			select {
 			case evCh <- ev:
 			case <-stopCh:
@@ -120,7 +137,12 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		go func() {
 			defer hasherWG.Done()
 			for ev := range evCh {
-				watched.add(ev.PID, ev.PPID) // track descendants
+				// Track descendants in both userspace + BPF maps.
+				// Userspace add() is a no-op if already present; we
+				// only push to BPF on transition to avoid map churn.
+				if watched.addAndReturnNew(ev.PID, ev.PPID) {
+					_ = consumer.AddWatchedPID(ev.PID)
+				}
 				res := ebpf.HashOpenatEvent(ev, pctx.hash)
 				hashedTotal.Add(1)
 				switch res.Status {
@@ -134,12 +156,27 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		}()
 	}
 
-	// Wait for the tracee to exit, then signal stop.
+	// Wait for the tracee to exit, then drain the ring buffer before
+	// closing. The drain step is critical: cat-class tracees finish
+	// in <100ms and the kernel queues openat events into the ring
+	// buffer faster than we pull them. If we close immediately on
+	// c.Wait() return, we drop every event queued but not yet read.
+	//
+	// Flush() is the cilium/ebpf-idiomatic shutdown signal: it
+	// unblocks the in-flight Read via the underlying poller (without
+	// the lock-contention issue SetReadDeadline has), then Read
+	// returns ringbuf.ErrFlushed once the buffer is drained. The
+	// consumer goroutine exits on that sentinel.
 	waitErr := c.Wait()
-	close(stopCh)
-	_ = consumer.Close()
+	// Disable the kernel-side filter first so no new events are
+	// generated. The kernel side stops adding to the ring; userspace
+	// drains what's left.
+	_ = consumer.DisableFilter()
+	_ = consumer.Flush()
 	consumerWG.Wait()
+	close(stopCh) // unblock any inflight evCh send (defensive)
 	hasherWG.Wait()
+	_ = consumer.Close()
 
 	if waitErr != nil {
 		var exitErr *exec.ExitError
@@ -156,8 +193,15 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	}
 	pctx.exitCode = r.ExitCode
 
-	log.Debugf("(ebpf) trace complete: hashed=%d toctou-suspect=%d errors=%d",
+	log.Debugf("(ebpf) trace complete: read=%d matched=%d hashed=%d toctou-suspect=%d errors=%d",
+		readTotal.Load(), matchedTotal.Load(),
 		hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load())
+	if v := os.Getenv("CILOCK_EBPF_DEBUG"); v == "1" {
+		fmt.Fprintf(os.Stderr,
+			"cilock-ebpf: parentPid=%d read=%d matched=%d hashed=%d suspect=%d errors=%d\n",
+			pctx.parentPid, readTotal.Load(), matchedTotal.Load(),
+			hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load())
+	}
 
 	if pctx.exitCode != 0 {
 		return pctx.procInfoArray(), fmt.Errorf("exit status %v", pctx.exitCode)
@@ -166,14 +210,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 }
 
 // recordEBPFOpenat records one openat event + its hash result into
-// the appropriate ProcessInfo. Concurrent-safe: protected by the
-// processes-map lock (multi-tracer state) when present, else by the
-// per-process lock added for V3.
+// the appropriate ProcessInfo. Concurrent-safe via pctx.mu, which
+// guards both the processes-map and the ProcessInfo entries within.
 func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashResult) {
-	procInfo := pctx.getProcInfo(int(ev.PID))
+	pctx.mu.Lock()
+	defer pctx.mu.Unlock()
 
-	procInfo.mu.Lock()
-	defer procInfo.mu.Unlock()
+	procInfo := pctx.getProcInfo(int(ev.PID))
 
 	if procInfo.OpenedFiles == nil {
 		procInfo.OpenedFiles = make(map[string]cryptoutil.DigestSet)
@@ -231,17 +274,37 @@ func (w *watchedSet) match(pid, tgid, ppid uint32) bool {
 }
 
 func (w *watchedSet) add(pid, ppid uint32) {
+	w.addAndReturnNew(pid, ppid)
+}
+
+// addAndReturnNew is add() that returns true if pid was newly added.
+// Callers use this to push only new pids into the BPF watched-pids
+// map (avoiding repeated map updates for already-watched pids).
+func (w *watchedSet) addAndReturnNew(pid, ppid uint32) bool {
 	w.mu.RLock()
 	if w.pid[pid] {
 		w.mu.RUnlock()
-		return
+		return false
 	}
 	w.mu.RUnlock()
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.pid[pid] {
+		return false
+	}
 	if w.pid[ppid] {
 		w.pid[pid] = true
+		return true
 	}
+	return false
+}
+
+// openEBPFConsumer opens the consumer (which attaches kprobes
+// globally). Exposed as a separate function so preStartTracingSetup
+// in tracing_linux.go can call into the ebpf submodule without
+// importing it directly.
+func openEBPFConsumer() (*ebpf.Consumer, error) {
+	return ebpf.Open()
 }
 
 // envInt is a small helper so callers can override hash worker count

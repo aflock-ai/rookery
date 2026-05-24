@@ -30,8 +30,10 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"runtime"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -77,9 +79,12 @@ var bpfObjBytes []byte
 
 // Consumer owns a loaded BPF program + attached kprobe + ringbuf reader.
 type Consumer struct {
-	coll    *ebpf.Collection
-	links   []link.Link
-	reader  *ringbuf.Reader
+	coll           *ebpf.Collection
+	links          []link.Link
+	reader         *ringbuf.Reader
+	watchedPids    *ebpf.Map // BPF_MAP_TYPE_HASH: pid -> 1
+	filterFlag     *ebpf.Map // BPF_MAP_TYPE_ARRAY[1]: byte
+	rootParentTgid *ebpf.Map // BPF_MAP_TYPE_ARRAY[1]: u32
 }
 
 // Open loads the embedded BPF object, attaches kprobes for the
@@ -135,7 +140,96 @@ func Open() (*Consumer, error) {
 		return nil, fmt.Errorf("ringbuf reader: %w", err)
 	}
 	c.reader = r
+
+	watched, ok := coll.Maps["watched_pids"]
+	if !ok {
+		_ = c.Close()
+		return nil, fmt.Errorf("watched_pids map not found in BPF object")
+	}
+	c.watchedPids = watched
+
+	flag, ok := coll.Maps["filter_enabled"]
+	if !ok {
+		_ = c.Close()
+		return nil, fmt.Errorf("filter_enabled map not found in BPF object")
+	}
+	c.filterFlag = flag
+
+	root, ok := coll.Maps["root_parent_tgid"]
+	if !ok {
+		_ = c.Close()
+		return nil, fmt.Errorf("root_parent_tgid map not found in BPF object")
+	}
+	c.rootParentTgid = root
+
 	return c, nil
+}
+
+// SetRootParentTgid tells the kprobe which parent tgid to expect.
+// When a process whose ppid matches this value fires an openat, the
+// kprobe emits the event AND adds the process's pid to the watched
+// set. This is the bootstrap signal — call it BEFORE exec.Cmd.Start()
+// with os.Getpid() (the cilock process's own tgid) so that the
+// to-be-spawned tracee matches the moment its dynamic linker fires.
+func (c *Consumer) SetRootParentTgid(tgid uint32) error {
+	if c == nil || c.rootParentTgid == nil {
+		return fmt.Errorf("consumer not initialized")
+	}
+	zero := uint32(0)
+	return c.rootParentTgid.Update(&zero, &tgid, ebpf.UpdateAny)
+}
+
+// AddWatchedPID adds a pid to the in-kernel watched set. The kprobe
+// drops events whose pid, tgid, AND ppid are all absent from this
+// set, so adding the tracee's root pid enables capture for it and
+// (via the ppid check) its immediate children. Userspace should
+// continue to call AddWatchedPID as it observes new descendants.
+//
+// Safe to call concurrently.
+func (c *Consumer) AddWatchedPID(pid uint32) error {
+	if c == nil || c.watchedPids == nil {
+		return fmt.Errorf("consumer not initialized")
+	}
+	one := uint8(1)
+	if err := c.watchedPids.Update(&pid, &one, ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("add watched pid %d: %w", pid, err)
+	}
+	return nil
+}
+
+// RemoveWatchedPID drops a pid from the in-kernel watched set, e.g.
+// when a child exits. Missing keys are not an error.
+func (c *Consumer) RemoveWatchedPID(pid uint32) error {
+	if c == nil || c.watchedPids == nil {
+		return nil
+	}
+	_ = c.watchedPids.Delete(&pid)
+	return nil
+}
+
+// EnableFilter flips the filter-enabled flag so the kprobe starts
+// emitting events. Call AFTER seeding the watched set with the root
+// tracee pid — between consumer load and this call, the program
+// drops every event, eliminating any startup race.
+func (c *Consumer) EnableFilter() error {
+	if c == nil || c.filterFlag == nil {
+		return fmt.Errorf("consumer not initialized")
+	}
+	zero := uint32(0)
+	one := uint8(1)
+	return c.filterFlag.Update(&zero, &one, ebpf.UpdateAny)
+}
+
+// DisableFilter flips the filter off (kprobe drops every event).
+// Used during shutdown to stop new events from entering the ring
+// buffer while we drain.
+func (c *Consumer) DisableFilter() error {
+	if c == nil || c.filterFlag == nil {
+		return nil
+	}
+	zero := uint32(0)
+	off := uint8(0)
+	return c.filterFlag.Update(&zero, &off, ebpf.UpdateAny)
 }
 
 // archKprobeNames returns (BPF program names, kernel symbols) to
@@ -156,12 +250,49 @@ func archKprobeNames() ([]string, []string) {
 
 // Read blocks until the next event is available, then decodes and
 // returns it. Returns io.EOF-equivalent when the consumer is closed.
+//
+// If SetReadDeadline was set, returns os.ErrDeadlineExceeded once no
+// new event arrives by the deadline. This is how the caller signals
+// "drain pending events then stop" — set a small deadline (a few
+// hundred ms) after the tracee exits.
 func (c *Consumer) Read() (*OpenatEvent, error) {
 	rec, err := c.reader.Read()
 	if err != nil {
 		return nil, err
 	}
 	return decodeOpenatEvent(rec.RawSample)
+}
+
+// SetReadDeadline applies a deadline to the underlying ringbuf reader.
+// A zero time clears the deadline.
+//
+// WARNING: cilium/ebpf's Reader.SetDeadline acquires the same mutex
+// Read holds during its blocking poll. Calling SetDeadline while
+// Read is blocked deadlocks. Prefer Flush() for shutdown — it
+// unblocks Read via the poller without taking the read mutex.
+func (c *Consumer) SetReadDeadline(t time.Time) error {
+	if c == nil || c.reader == nil {
+		return nil
+	}
+	c.reader.SetDeadline(t)
+	return nil
+}
+
+// Flush unblocks any in-flight Read so it returns pending records
+// followed by ringbuf.ErrFlushed. Use this during shutdown: after
+// c.Wait() returns, call Flush() so the consumer goroutine drains
+// queued events and then exits cleanly.
+func (c *Consumer) Flush() error {
+	if c == nil || c.reader == nil {
+		return nil
+	}
+	return c.reader.Flush()
+}
+
+// IsFlushedError reports whether err is the sentinel returned by
+// Read() after Flush() completes the drain.
+func IsFlushedError(err error) bool {
+	return errors.Is(err, ringbuf.ErrFlushed)
 }
 
 // Close detaches kprobes and frees BPF resources. Safe to call

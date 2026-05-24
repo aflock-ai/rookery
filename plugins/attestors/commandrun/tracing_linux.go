@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -52,6 +53,7 @@ type ptraceContext struct {
 	// so we can extract TLS SNI from the first write on that fd.
 	// Key: "pid:fd", Value: index into the process's Connections slice.
 	tlsPendingFDs map[string]int
+
 	// digestCache memoizes per-file sha digests across the trace. Without
 	// it, a `go build` of any non-trivial project re-hashes the same
 	// stdlib + dep .go files thousands of times — each SYS_OPENAT and
@@ -64,6 +66,12 @@ type ptraceContext struct {
 	// reduction on a tiny build (92% hit rate) and substantially more
 	// on larger builds.
 	digestCache map[string]cryptoutil.DigestSet
+
+	// mu guards the processes map and the ProcessInfo entries within
+	// it. Required for the eBPF tracing path, where multiple hash
+	// workers update process state concurrently. Uncontended in the
+	// serial ptrace path.
+	mu sync.Mutex
 }
 
 // digestCacheKey returns a (path,size,mtime)-based cache key for the
@@ -109,6 +117,49 @@ func enableTracing(c *exec.Cmd) {
 	}
 }
 
+// preStartTracingSetup is invoked from runCmd BEFORE c.Start(). For
+// eBPF mode this opens the consumer (attaching kprobes globally) so
+// that the moment the child runs its first openat, the kernel-side
+// probe is already in place. Without this pre-open the test race
+// where the child finishes before kprobes attach is real and easy
+// to hit on small programs like /bin/cat.
+//
+// Returns the human-readable trace-mode error if eBPF was requested
+// but unavailable so runCmd can short-circuit before forking the
+// child.
+func (r *CommandRun) preStartTracingSetup() error {
+	mode, err := selectTraceMode()
+	if err != nil {
+		return err
+	}
+	if mode != traceModeEBPF {
+		return nil
+	}
+	if r.ebpfConsumer != nil {
+		return nil // already open (test re-entry)
+	}
+	consumer, err := openEBPFConsumer()
+	if err != nil {
+		return fmt.Errorf("eBPF tracing requested but failed to attach kprobes: %w", err)
+	}
+	// Seed the in-kernel bootstrap signal: we (cilock, os.Getpid())
+	// are about to fork a child that should be traced. The kprobe
+	// matches openats whose ppid == our tgid, emits them, and adds
+	// the child's pid to the watched set so subsequent descendants
+	// follow. Enable the filter NOW (before c.Start) so the child's
+	// first openat (typically /lib/ld-linux.so) is captured.
+	if err := consumer.SetRootParentTgid(uint32(os.Getpid())); err != nil {
+		_ = consumer.Close()
+		return fmt.Errorf("eBPF filter setup: %w", err)
+	}
+	if err := consumer.EnableFilter(); err != nil {
+		_ = consumer.Close()
+		return fmt.Errorf("eBPF filter enable: %w", err)
+	}
+	r.ebpfConsumer = consumer
+	return nil
+}
+
 func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([]ProcessInfo, error) {
 	pctx := &ptraceContext{
 		parentPid:           c.Process.Pid,
@@ -120,14 +171,12 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		digestCache:         make(map[string]cryptoutil.DigestSet, 8192),
 	}
 
-	// Resolve the tracing backend. selectTraceMode() returns a
-	// human-readable error with remediation instructions if eBPF
-	// was requested (default) but unavailable. The caller (cilock
-	// CLI) prints the error and exits.
+	// Resolve the tracing backend. preStartTracingSetup() (called
+	// before c.Start()) already validated this and short-circuited
+	// on error, so by this point eBPF requested-and-available is
+	// known good — but we re-resolve to dispatch.
 	mode, modeErr := selectTraceMode()
 	if modeErr != nil {
-		// Kill the spawned tracee before propagating the error —
-		// otherwise it would run to completion unobserved.
 		if c.Process != nil {
 			_ = c.Process.Kill()
 			_ = c.Wait()

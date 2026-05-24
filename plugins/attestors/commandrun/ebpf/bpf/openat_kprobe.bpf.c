@@ -56,12 +56,104 @@ struct {
     __type(value, struct openat_event);
 } scratch SEC(".maps");
 
+// Watched-PID map: userspace adds the tracee root pid + any
+// descendant pids it observes. The kprobe drops events whose pid,
+// tgid, AND ppid are all absent from this map — this keeps the
+// in-kernel work bounded to the tracee tree rather than capturing
+// every openat() system-wide.
+//
+// max_entries is sized for tracee trees that fork heavily (10k is
+// well past any realistic CI workload). Userspace tracks the same
+// set; this map is the in-kernel mirror.
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 10240);
+    __type(key, __u32);   // pid
+    __type(value, __u8);  // sentinel (1)
+} watched_pids SEC(".maps");
+
+// Filter toggle. Userspace sets this to 1 once it has populated the
+// watched_pids map with the root pid. While 0 the program drops every
+// event — this prevents racing during startup, where kprobes are
+// attached but no pids are watched yet.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u8);
+} filter_enabled SEC(".maps");
+
+// root_parent_tgid is the tgid (== pid for the main thread) of the
+// PARENT process that will spawn the tracee. Tracees are matched by
+// ppid == root_parent_tgid. This is the bootstrap signal — once a
+// tracee's first event fires (because its ppid matches), the kprobe
+// adds the tracee's pid to watched_pids and subsequent events match
+// via the pid check. Subsequent descendants of the tracee are
+// likewise added on first event because their ppid is in watched_pids.
+//
+// Critically: we do NOT match on tgid == root_parent_tgid. That
+// would also capture the cilock process's own openats. Only ppid
+// matches the bootstrap.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u32);
+} root_parent_tgid SEC(".maps");
+
 // Common emit function. dirfd of -100 (AT_FDCWD) means cwd-relative.
 static __always_inline void
 emit_openat(int dirfd, const char *pathname)
 {
     if (!pathname)
         return;
+
+    // Pre-flight filter: only emit if this tracee's pid, tgid, or
+    // ppid is in the watched set AND the filter is enabled.
+    __u32 zero = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&filter_enabled, &zero);
+    if (!enabled || *enabled == 0)
+        return;
+
+    __u64 pid_tgid_pre = bpf_get_current_pid_tgid();
+    __u32 cur_pid  = (__u32)(pid_tgid_pre & 0xffffffff);
+    __u32 cur_tgid = (__u32)(pid_tgid_pre >> 32);
+
+    __u32 cur_ppid = 0;
+    struct task_struct *cur_task = (struct task_struct *)bpf_get_current_task();
+    if (cur_task) {
+        struct task_struct *parent = BPF_CORE_READ(cur_task, real_parent);
+        if (parent)
+            cur_ppid = BPF_CORE_READ(parent, tgid);
+    }
+
+    // Match path. We accept the event if any of:
+    //   (a) cur_pid is already in watched_pids (descendant we've seen)
+    //   (b) cur_tgid is in watched_pids (same-tgid thread of a watched proc)
+    //   (c) cur_ppid is in watched_pids (newly forked child of a watched)
+    //   (d) cur_ppid == root_parent_tgid (newly forked tracee root)
+    //
+    // For (c) and (d) we also bpf_map_update on watched_pids so that
+    // the next event for this pid hits the fast (a) path. This keeps
+    // the tree-following logic in-kernel.
+    int matched_by_descent = 0;
+    if (!bpf_map_lookup_elem(&watched_pids, &cur_pid) &&
+        !bpf_map_lookup_elem(&watched_pids, &cur_tgid)) {
+        if (bpf_map_lookup_elem(&watched_pids, &cur_ppid)) {
+            matched_by_descent = 1;
+        } else {
+            __u32 *root = bpf_map_lookup_elem(&root_parent_tgid, &zero);
+            if (root && cur_ppid == *root && *root != 0) {
+                matched_by_descent = 1;
+            } else {
+                return;
+            }
+        }
+    }
+    if (matched_by_descent) {
+        __u8 one = 1;
+        bpf_map_update_elem(&watched_pids, &cur_pid, &one, BPF_ANY);
+    }
 
     __u32 z = 0;
     struct openat_event *ev = bpf_map_lookup_elem(&scratch, &z);
@@ -73,17 +165,10 @@ emit_openat(int dirfd, const char *pathname)
     __builtin_memset(ev, 0, offsetof(struct openat_event, comm));
 
     ev->timestamp_ns = bpf_ktime_get_ns();
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
-    ev->pid  = (__u32)(pid_tgid & 0xffffffff);
-    ev->tgid = (__u32)(pid_tgid >> 32);
+    ev->pid  = cur_pid;
+    ev->tgid = cur_tgid;
+    ev->ppid = cur_ppid;
     ev->dirfd = dirfd;
-
-    struct task_struct *t = (struct task_struct *)bpf_get_current_task();
-    if (t) {
-        struct task_struct *parent = BPF_CORE_READ(t, real_parent);
-        if (parent)
-            ev->ppid = BPF_CORE_READ(parent, tgid);
-    }
 
     bpf_get_current_comm(ev->comm, sizeof(ev->comm));
 
