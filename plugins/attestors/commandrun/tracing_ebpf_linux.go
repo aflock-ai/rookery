@@ -170,9 +170,25 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				}
 				if fullRead && hs != nil {
 					finalizeReadTap(pctx, oi.EV.PID, oi.Path, hs)
-				} else {
-					fallbackCh <- oi.EV
+					continue
 				}
+				// Sweep fallback: only path-hash files the tracee
+				// actually read (hs != nil OR data was streamed).
+				// Write-only opens are output paths; treating them
+				// as reads in path-hash would put them in
+				// OpenedFiles with a content digest, which then
+				// causes TraceOutputs to filter them out as
+				// "intermediates." Skip those — they'll appear in
+				// FileOps.Writes via the synthesized-write path.
+				if oi.EV.IsWriteOnly() || oi.EV.IsPathOnly() {
+					continue
+				}
+				if hs == nil {
+					// Tracee opened the fd but never read it (e.g.,
+					// pure O_RDWR for stat-only access). Skip.
+					continue
+				}
+				fallbackCh <- oi.EV
 			}
 		}()
 
@@ -335,8 +351,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				if hadData && fullRead {
 					finalizeReadTap(pctx, ev.Close.PID, oi.Path, hs)
 					readTapClosures.Add(1)
-				} else if oi.EV != nil {
+				} else if oi.EV != nil && !oi.EV.IsWriteOnly() && !oi.EV.IsPathOnly() && hadData {
 					// Path-hash fallback — queue to hasher pool.
+					// Only fall back when the tracee actually READ
+					// the file (hadData=true means we saw read
+					// chunks). Write-only opens don't get hashed
+					// as reads — they're outputs, classified later
+					// via the product/cacheArtifact path.
 					// Blocking send: dropping would create nil
 					// entries we'd never recover. Pool is large
 					// enough (65K buffer) that this rarely blocks

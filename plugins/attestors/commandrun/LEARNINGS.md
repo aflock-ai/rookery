@@ -131,6 +131,118 @@ Action items:
 - PHP — to test
 - Go — already covered in detail above
 
+## CI / release environments
+
+How the trace + classification system interacts with common CI
+runtimes and release tooling.
+
+### GitHub Actions
+
+- **eBPF availability**: hosted runners (Linux x64/arm64) ship
+  kernel 6.x and support BPF programs with `CAP_BPF +
+  CAP_PERFMON` granted via setcap. The cilock-action wrapper
+  handles the setcap step. eBPF works on hosted Linux runners.
+- **macOS/Windows runners**: no eBPF. Falls back to ptrace mode
+  (Linux) or walk mode (macOS/Windows).
+- **Self-hosted runners**: same as workstation; whatever kernel
+  the host runs.
+- **Memory**: hosted runners are 7 GB. Our 256 MB ringbuf is
+  fine; the read-tap streaming hash data flow shouldn't exhaust
+  it for typical CI builds.
+- **CapBPF gotchas**:
+  - The runner's `/sys/fs/cgroup` interactions sometimes trip
+    BPF program load on older kernels. Our 5.13+ minimum
+    covers all current hosted runners.
+  - GH Actions sets `GITHUB_*` environment variables that should
+    NOT be classified as cache — they're build state. Our
+    cache patterns don't touch them.
+- **Artifact upload integration**: cilock's product attestation
+  could feed directly into the `actions/upload-artifact` step's
+  attestation predicates. The path-set is already filtered to
+  user-facing outputs.
+
+### GitLab CI
+
+- Similar story to GitHub Actions. Runners use Docker by default
+  (which our `--cache-disable-env-probe` flag exists for —
+  don't let the host's env vars leak into a containerized
+  build's classification).
+- `CI_PROJECT_DIR` / `CI_BUILDS_DIR` set the working dir. Our
+  workingdir option honors `-d`.
+- Shared runners often have `/cache/` mounted from S3 or similar
+  — that path may not match our default patterns. Operators
+  should add `--cache-add-pattern=/cache/**` per project.
+
+### Bazel
+
+- Hermetic by design: Bazel runs every action inside a sandbox
+  (Linux: `linux-sandbox`, basically a private mount namespace
+  + tmpfs overlays). Inside the sandbox, all paths look like
+  `/tmp/bazel-out/...` or similar.
+- Our trace sees the OUTSIDE view: the bazel-server process forks
+  a sandboxed worker, the worker's syscalls happen against
+  paths like `/tmp/bazel-sandbox/12345/external/...` — those
+  resolve to absolute paths the kernel sees.
+- **Cache pattern needed**: `**/bazel-out/**`, `**/bazel-bin/**`,
+  `**/bazel-testlogs/**`, and `~/.cache/bazel/**`. Already in
+  default patterns.
+- Bazel's REMOTE cache (gRPC) doesn't write to disk locally —
+  no file capture needed.
+- Bazel + cilock + read-tap should "just work" for monorepo
+  builds; the trace sees the full action graph naturally.
+
+### Buck / Buck2
+
+- Similar to Bazel but Meta-developed. Not yet in default
+  patterns; add `**/.buck/**`, `**/buck-out/**` if testing.
+
+### GoReleaser
+
+- GoReleaser orchestrates `go build` × N (per GOOS/GOARCH),
+  archives, signs, releases. Each `go build` step is what we'd
+  trace; goreleaser itself is the parent.
+- Best integration:
+  ```bash
+  cilock run --trace --capture-mode=trace \
+    -- goreleaser release --clean
+  ```
+- The single attestation captures EVERY child `go build` plus
+  the archive/upload steps. Products will include the final
+  release binaries + the archive tarballs + checksums files.
+- Caveat: goreleaser uploads to GitHub Releases via HTTP. Our
+  trace sees the HTTP traffic as `connect()` + `write()` to a
+  socket fd. The product set still cleanly excludes socket
+  writes (we filter `socket:` and `pipe:` paths in
+  recordEBPFWrite).
+
+### CircleCI / Buildkite / Drone / Jenkins
+
+- All Linux-runtime; same eBPF story as GitHub Actions self-hosted.
+- Jenkins agents that run inside Docker need
+  `--cache-disable-env-probe` to avoid the host's env vars
+  influencing the container's cache classification.
+
+### Nix builds
+
+- Nix builds are heavily sandboxed (per-derivation chroot).
+  The cilock process would need to wrap `nix-build` invocations
+  at the top level; tracing inside the sandbox is restricted.
+- Output paths are `/nix/store/<hash>-<name>/` — interesting
+  category: products that are CONTENT-ADDRESSED by Nix itself.
+  Could classify `/nix/store/**` as a special "nix-store"
+  bucket distinct from products/cache.
+
+### Containerized builds (BuildKit / docker buildx / kaniko)
+
+- BuildKit runs each Dockerfile layer as a sandboxed exec.
+- For attestation, the cilock invocation lives OUTSIDE the
+  container build context. Tracing the `docker buildx build`
+  command sees BuildKit's daemon activity but not the
+  per-layer container internals (those are PID-namespaced).
+- Provenance-style attestations live INSIDE BuildKit's own
+  attestation mechanism (`provenance` plugin). Our trace would
+  be complementary, not a replacement.
+
 ## Build systems (pending exploration)
 
 - **Bazel**: hermetic builds with sandbox; the trace would see Bazel's
@@ -177,6 +289,76 @@ Action items:
    detection across a single build (same path read twice with
    different digests), we'd want a temporal event log. Schema impact
    makes this a v0.2 candidate.
+
+## Cross-language test results (preliminary)
+
+Tested in colima Ubuntu 24.04 / kernel 6.8 against each language's
+trivial build. Each row is one `cilock run --capture-mode=trace`
+invocation. Counts come from the summary block.
+
+| language | wall (ms) | processes | uniquePaths | materials | intermediates | products | cacheArtifacts | notes |
+|---|---|---|---|---|---|---|---|---|
+| Python (script) | 1448 | 1 | 47 | 32 | 0 | 0 | 0 | no build step; stdlib read only |
+| Ruby (script) | 1477 | 1 | 293 | 137 | 0 | 0 | 0 | Ruby loads a LOT of stdlib at startup |
+| Node (inline) | 1525 | 6 | 34 | 29 | 0 | 0 | 0 | V8 reads few files at startup |
+| PHP (eval) | 1472 | 1 | 129 | 105 | 0 | 0 | 0 | |
+| C single-file (make) | ~2000 | 5 | 124 | 50 | 2 | 0 | 1 | `hello` binary written via mmap; openat captured but missing in product set due to fork-tracepoint gap (see below) |
+| C multi-file (make) | ~2500 | 9 | 123 | 40 | 4 | 0 | 1 | same gap — `prog` written by `ld` (collect2's child), not in watched set |
+| Rust (cargo) | 1500 | 2 | 63 | 57 | 3 | 0 | 0 | cargo handled the build cache offline; the `target/debug/hello` binary not captured because of similar fork chain issue |
+| Java (javac+jar) | (timeout 90s) | — | — | — | — | — | — | JVM event volume overwhelmed dispatcher; ringbuf drained but build hung. Needs investigation. |
+| Go (cilock build, fully tested elsewhere) | 28100 | 4374 | 38162 | 26003 | 1371 | 1 | 455 | clean baseline; trace works end-to-end |
+
+### Known issue: process tree visibility (V1 limitation)
+
+For builds that spawn deep process trees (`gcc → collect2 → ld`,
+`cargo → rustc → ld`, `javac → javac forked workers`), the final
+linker / writer often isn't in the watched set when its openat
+fires. Symptoms:
+
+  - Final output binary missing from products
+  - Build summary shows materials/intermediates correctly but
+    products = 0 for compiled-language single-target builds
+
+Root cause: the `sched_process_fork` tracepoint we added attaches
+cleanly but doesn't always propagate watched-ness all the way down.
+Possible issues:
+
+  - Tracepoint args struct offsets need BTF-aware reading on some
+    kernels (CO-RE relocation) — currently relying on hardcoded
+    offsets that match Linux 6.8 but may shift
+  - Some forks use `clone3` with flags that route through different
+    paths in the scheduler — the tracepoint may not fire for all
+    of them
+  - Process exec'd via posix_spawn (a wrapper around vfork+exec)
+    might not trigger sched_process_fork the same way
+
+Workaround for V1: the synthesized-write-on-openat path captures
+output paths when the OPENING process IS in the watched set
+(intermediate compiled object files, all of which are produced by
+compile workers that ARE captured). The FINAL link step often
+misses because the linker is too deep in the process tree.
+
+Follow-up actions:
+  - Switch to `tp_btf/sched_process_fork` for BTF-aware reading
+  - Add explicit `clone` / `clone3` kretprobes that grab the
+    return value (= child pid) and add to watched_pids
+  - Verify with `bpf_trace_printk` debugging which fork paths
+    fire and which don't on our test workloads
+
+### Pattern: simple scripts vs build pipelines
+
+For pure script execution (Python, Ruby, Node, PHP one-liners):
+the trace correctly captures stdlib reads as materials. No writes
+because scripts produce stdout, not files. This is the EASY case
+and works perfectly.
+
+For builds with intermediate stages (C, Rust, Go):
+- intermediates split is detected correctly when the compile
+  worker IS in the watched set (we see .o written-and-read)
+- products only show up reliably for tools whose top-level
+  process writes the output directly (Go's `go build` writes the
+  final binary in the linker subprocess, which IS captured;
+  gcc's `collect2 → ld` writes outside the captured set)
 
 ## V1 limitations to document for users
 
