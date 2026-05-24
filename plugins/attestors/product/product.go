@@ -64,6 +64,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -181,6 +182,70 @@ type ProductLeaf struct {
 	Path       string `json:"path"`
 	FileDigest string `json:"fileDigest"`
 	LeafHash   string `json:"leafHash"`
+	// Kind hints what KIND of file this product is, by filename suffix.
+	// Empty when the file's kind isn't one of the well-known
+	// attestation/SBOM formats. omitempty so v0.3 attestations from
+	// before this field landed continue to round-trip byte-identically.
+	//
+	// Used by sandbox-boundary linking (V2 plan Phase 10): when a
+	// build emits its own inner attestation (Bazel SLSA provenance,
+	// BuildKit provenance, etc.), the OUTER trace catches the file
+	// in its products set. Tagging the kind here lets verifiers
+	// pick up the inner attestation by `kind` without re-parsing
+	// every product file.
+	//
+	// Recognized kinds (extend as needed; keep the set small to avoid
+	// scope creep — only formats that actually chain into the
+	// attestation graph belong here):
+	//   - "intoto"          — in-toto Statement envelope (.intoto.json/.jsonl)
+	//   - "intoto-dsse"     — DSSE-wrapped in-toto (.dsse, .intoto.dsse)
+	//   - "slsa-provenance" — SLSA provenance (.slsa-provenance.json)
+	//   - "spdx"            — SPDX SBOM (.spdx.json, .spdx.yaml)
+	//   - "cyclonedx"       — CycloneDX SBOM (.cdx.json, .cdx.xml, bom.json)
+	//   - "sarif"           — Static Analysis Results Interchange Format
+	//                          (.sarif, .sarif.json)
+	//   - "vex"             — OpenVEX / CSAF VEX (.vex.json, .csaf.json)
+	Kind string `json:"kind,omitempty"`
+}
+
+// detectProductKind inspects a filename for well-known attestation /
+// SBOM / scan-result format suffixes. Returns "" when the suffix
+// doesn't match a recognized kind. Pure function; no I/O.
+//
+// Conservative on purpose: filename-suffix only. We don't open files
+// to magic-byte sniff because (a) the product attestor runs at the
+// end of a build, files may be huge, (b) any reader-side validation
+// of the kind hint can re-verify by parsing. The hint is advisory.
+func detectProductKind(path string) string {
+	// Lower-case match. Most attestation tooling emits lowercase
+	// suffixes anyway, but normalize defensively.
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(lower, ".slsa-provenance.json"):
+		return "slsa-provenance"
+	case strings.HasSuffix(lower, ".intoto.jsonl"),
+		strings.HasSuffix(lower, ".intoto.json"):
+		return "intoto"
+	case strings.HasSuffix(lower, ".intoto.dsse"),
+		strings.HasSuffix(lower, ".dsse"):
+		return "intoto-dsse"
+	case strings.HasSuffix(lower, ".spdx.json"),
+		strings.HasSuffix(lower, ".spdx.yaml"),
+		strings.HasSuffix(lower, ".spdx.yml"):
+		return "spdx"
+	case strings.HasSuffix(lower, ".cdx.json"),
+		strings.HasSuffix(lower, ".cdx.xml"),
+		strings.HasSuffix(lower, "/bom.json"),
+		lower == "bom.json":
+		return "cyclonedx"
+	case strings.HasSuffix(lower, ".sarif.json"),
+		strings.HasSuffix(lower, ".sarif"):
+		return "sarif"
+	case strings.HasSuffix(lower, ".vex.json"),
+		strings.HasSuffix(lower, ".csaf.json"):
+		return "vex"
+	}
+	return ""
 }
 
 // Option configures a new Attestor.
@@ -453,6 +518,7 @@ func (a *Attestor) buildTree() error {
 			Path:       p.normalized,
 			FileDigest: digestHex,
 			LeafHash:   hex.EncodeToString(leafPreHash),
+			Kind:       detectProductKind(p.normalized),
 		})
 		preHashes = append(preHashes, leafPreHash)
 	}
