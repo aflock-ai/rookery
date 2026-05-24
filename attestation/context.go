@@ -224,7 +224,36 @@ func (ctx *AttestationContext) RunAttestors() error {
 		log.Infof("Completed %s attestors stage...", k.String())
 	}
 
+	// Finalize phase: attestors that implement Finalizer get a second
+	// pass AFTER every other attestor has completed. The intent is to
+	// let early-running attestors (e.g., material attestor in trace
+	// mode) augment themselves with data produced by later attestors
+	// (e.g., the command-run trace). Material attestor short-circuits
+	// its pre-execute walk in trace mode, then Finalize pulls the
+	// captured input set from command-run and builds the merkle tree.
+	for _, completed := range ctx.completedAttestors {
+		f, ok := completed.Attestor.(Finalizer)
+		if !ok {
+			continue
+		}
+		log.Infof("Finalizing %v attestor...", completed.Attestor.Name())
+		ftStart := time.Now()
+		if err := f.Finalize(ctx); err != nil {
+			log.Errorf("Finalize %v: %v", completed.Attestor.Name(), err)
+		}
+		log.Infof("Finished finalize %v... (%s)", completed.Attestor.Name(), time.Since(ftStart))
+	}
+
 	return nil
+}
+
+// Finalizer is an optional interface attestors can implement to run
+// a second pass AFTER all other attestors have completed. Use for
+// data dependencies that flow backwards in time relative to the
+// declared RunType ordering — e.g., material attestor in trace
+// mode pulling its inputs from command-run's captured trace.
+type Finalizer interface {
+	Finalize(ctx *AttestationContext) error
 }
 
 func (ctx *AttestationContext) runAttestor(attestor Attestor) {

@@ -341,6 +341,63 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	return nil
 }
 
+// Finalize implements attestation.Finalizer. In trace mode the
+// pre-execute walk was skipped (TreeSize=0 placeholder) because the
+// canonical input set lives on the command-run trace which hadn't
+// run yet. Now that every attestor has completed, fetch the trace
+// inputs and build the real materials tree. This makes the
+// material/v0.3 attestation self-contained: a verifier reading just
+// the material section gets the full input digest set, derived from
+// the kernel-mediated read-tap rather than a racy walk.
+func (a *Attestor) Finalize(ctx *attestation.AttestationContext) error {
+	// Resolve auto-mode → trace if any completed attestor can supply.
+	// Don't gate on raw ctx.CaptureMode() — auto resolves dynamically.
+	resolved, probe, err := attestation.ResolveCaptureMode(
+		ctx.CaptureMode(), ctx.CompletedAttestors(), ctx.RegisteredAttestors())
+	if err != nil || resolved != attestation.CaptureTrace || probe == nil {
+		// Walk mode or no provider — Attest already populated the tree
+		// (or left it empty if trace was supposed to provide).
+		return nil
+	}
+	if a.TreeSize != 0 {
+		// Walk path also ran (unusual). Don't overwrite its tree.
+		return nil
+	}
+
+	entries := probe.TraceInputs()
+	if len(entries) == 0 {
+		return nil
+	}
+
+	mats := make(map[string]cryptoutil.DigestSet, len(entries))
+	for path, e := range entries {
+		ds, err := cryptoutil.NewDigestSet(e.Digest)
+		if err != nil {
+			continue
+		}
+		mats[path] = ds
+	}
+	a.materials = mats
+
+	leaves, err := buildLeaves(mats)
+	if err != nil {
+		return fmt.Errorf("material attestor finalize: build leaves: %w", err)
+	}
+	a.leaves = leaves
+
+	leafDigests, err := decodeLeafHashes(a.leaves)
+	if err != nil {
+		return fmt.Errorf("material attestor finalize: decode leaves: %w", err)
+	}
+	tree, err := merkle.NewTree(leafDigests)
+	if err != nil {
+		return fmt.Errorf("material attestor finalize: build tree: %w", err)
+	}
+	a.MerkleRoot = hex.EncodeToString(tree.Root())
+	a.TreeSize = tree.Size()
+	return nil
+}
+
 // buildLeaves turns the walker output into the canonical sorted leaf
 // list. The sort key is the FORWARD-SLASH-NORMALIZED path so the merkle
 // root is portable across operating systems — without this step a
