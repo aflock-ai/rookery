@@ -61,6 +61,9 @@ import (
 // On entry: c.Process is the running tracee; p.parentPid is its pid.
 // r.ebpfConsumer must be non-nil — opened before c.Start() in runCmd
 // so kprobes attach before any child syscall fires.
+// arm into a helper just hides the goroutine/lifecycle interaction.
+//
+//nolint:gocognit // event-loop dispatch on a 4-variant union; pulling each
 func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationContext, pctx *ptraceContext) ([]ProcessInfo, error) {
 	raw := r.ebpfConsumer
 	if raw == nil {
@@ -312,6 +315,9 @@ func recordEBPFExecve(pctx *ptraceContext, ev *ebpf.ExecveEvent) {
 	}
 
 	// Hash the file the syscall caller named.
+	//nolint:nestif // four-level nest mirrors a deliberate fallback chain
+	// (digest cache → ProgramDigest → ExeDigest). Unrolling would scatter
+	// related decisions across helpers and obscure the intent.
 	if ev.Filename != "" {
 		procInfo.Program = ev.Filename
 		if d, ok := pctx.cachedDigest(ev.Filename); ok {
@@ -401,22 +407,24 @@ func recordEBPFSecurity(pctx *ptraceContext, ev *ebpf.SecurityEvent) {
 // with empty Syscall when the event isn't worth surfacing (matches
 // ptrace's filtering, e.g. only mprotect with PROT_EXEC, only certain
 // prctl options).
+//
+//nolint:gocyclo // per-syscall classifier, one short case per syscall — splitting hides the parity with the ptrace path.
 func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent) SyscallEvent {
 	// IDs must match CILOCK_SEC_* in openat_kprobe.bpf.c.
 	const (
-		secPtrace       = 100
-		secMemfdCreate  = 101
-		secMount        = 102
-		secMprotect     = 103
-		secPrctl        = 104
-		secSetsid       = 105
-		secSetns        = 106
-		secInitModule   = 107
-		secFinitModule  = 108
-		secClone        = 109
-		secClone3       = 110
-		secDup2         = 111
-		secDup3         = 112
+		secPtrace      = 100
+		secMemfdCreate = 101
+		secMount       = 102
+		secMprotect    = 103
+		secPrctl       = 104
+		secSetsid      = 105
+		secSetns       = 106
+		secInitModule  = 107
+		secFinitModule = 108
+		secClone       = 109
+		secClone3      = 110
+		secDup2        = 111
+		secDup3        = 112
 	)
 	nr := ev.SyscallNr
 	switch nr {
@@ -558,7 +566,7 @@ func recordEBPFWrite(pctx *ptraceContext, ev *ebpf.WriteEvent) {
 	}
 	procInfo.FileOps.Writes = append(procInfo.FileOps.Writes, FileWrite{
 		Path:      path,
-		Bytes:     int(ev.Bytes),
+		Bytes:     int(ev.Bytes), //nolint:gosec // G115: write() count is bounded by SSIZE_MAX
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
@@ -640,7 +648,7 @@ func parseSockaddrEBPF(family uint32, raw []byte, syscall string) *NetworkConnec
 			conn.Address = net.IP(raw[8:24]).String()
 		}
 	case 1: // AF_UNIX — sockaddr_un: family(2) + path(...)
-		conn.Family = "AF_UNIX"
+		conn.Family = afUnix
 		end := 2
 		for end < len(raw) && raw[end] != 0 {
 			end++
@@ -657,6 +665,10 @@ func parseSockaddrEBPF(family uint32, raw []byte, syscall string) *NetworkConnec
 // each read is independent and failures are silent.
 //
 // Must be called with pctx.mu held (it mutates procInfo).
+// short-circuits; the linear shape matches the ptrace handler so the
+// two stay obviously equivalent.
+//
+//nolint:gocognit // /proc reads are sequential best-effort with per-field
 func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
 	pid := procInfo.ProcessID
 	if pid == 0 {
@@ -666,7 +678,7 @@ func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
 	procDir := fmt.Sprintf("/proc/%d", pid)
 
 	// /proc/<pid>/status: spec_store_bypass mitigation + ppid sanity.
-	if data, err := os.ReadFile(procDir + "/status"); err == nil {
+	if data, err := os.ReadFile(procDir + "/status"); err == nil { //nolint:gosec // G304: reading /proc by traced pid, mirroring ptrace path
 		procInfo.SpecBypassIsVuln = getSpecBypassIsVulnFromStatus(data)
 		if procInfo.ParentPID == 0 {
 			if ppid, err := getPPIDFromStatus(data); err == nil {
@@ -678,14 +690,14 @@ func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
 	// /proc/<pid>/comm: kernel-side comm is authoritative (matches
 	// the BPF event but covers /proc reads if BPF comm is empty).
 	if procInfo.Comm == "" {
-		if data, err := os.ReadFile(procDir + "/comm"); err == nil {
+		if data, err := os.ReadFile(procDir + "/comm"); err == nil { //nolint:gosec // G304: see above
 			procInfo.Comm = cleanString(string(data))
 		}
 	}
 
 	// /proc/<pid>/cmdline: argv joined by NULs.
 	if procInfo.Cmdline == "" {
-		if data, err := os.ReadFile(procDir + "/cmdline"); err == nil {
+		if data, err := os.ReadFile(procDir + "/cmdline"); err == nil { //nolint:gosec // G304: see above
 			procInfo.Cmdline = cleanString(string(data))
 		}
 	}
@@ -693,7 +705,7 @@ func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
 	// /proc/<pid>/environ: sensitive — pass through the attestation
 	// context's environment capturer (which honors --env-* flags).
 	if procInfo.Environ == "" && pctx.environmentCapturer != nil {
-		if data, err := os.ReadFile(procDir + "/environ"); err == nil {
+		if data, err := os.ReadFile(procDir + "/environ"); err == nil { //nolint:gosec // G304: see above
 			allVars := strings.Split(string(data), "\x00")
 			captured := pctx.environmentCapturer.Capture(allVars)
 			env := make([]string, 0, len(captured))
@@ -739,7 +751,7 @@ type watchedSet struct {
 }
 
 func newWatchedSet(root int) *watchedSet {
-	return &watchedSet{pid: map[uint32]bool{uint32(root): true}}
+	return &watchedSet{pid: map[uint32]bool{uint32(root): true}} //nolint:gosec // G115: pid fits in u32 by Linux convention
 }
 
 func (w *watchedSet) match(pid, tgid, ppid uint32) bool {

@@ -40,6 +40,7 @@ const (
 
 	afInet  = "AF_INET"
 	afInet6 = "AF_INET6"
+	afUnix  = "AF_UNIX"
 )
 
 type ptraceContext struct {
@@ -105,12 +106,17 @@ func (p *ptraceContext) cachedDigest(path string) (cryptoutil.DigestSet, bool) {
 	return d, true
 }
 
+// traceModeNamePtrace is the CILOCK_TRACE_MODE value selecting ptrace.
+// Used in three places (enableTracing, the trace-mode test, the
+// startup log) — promote to a const to satisfy goconst.
+const traceModeNamePtrace = "ptrace"
+
 func enableTracing(c *exec.Cmd) {
 	// Only set Ptrace=true if the user explicitly opted into ptrace
 	// mode. eBPF mode (the default) tracks the child via in-kernel
 	// kprobes and does NOT ptrace it.
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVarTraceMode)))
-	if mode == "ptrace" {
+	if mode == traceModeNamePtrace {
 		c.SysProcAttr = &unix.SysProcAttr{
 			Ptrace: true,
 		}
@@ -148,7 +154,7 @@ func (r *CommandRun) preStartTracingSetup() error {
 	// the child's pid to the watched set so subsequent descendants
 	// follow. Enable the filter NOW (before c.Start) so the child's
 	// first openat (typically /lib/ld-linux.so) is captured.
-	if err := consumer.SetRootParentTgid(uint32(os.Getpid())); err != nil {
+	if err := consumer.SetRootParentTgid(uint32(os.Getpid())); err != nil { //nolint:gosec // G115: pid fits in u32 by Linux convention
 		_ = consumer.Close()
 		return fmt.Errorf("eBPF filter setup: %w", err)
 	}
@@ -809,7 +815,7 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 		if pathEnd < 0 {
 			pathEnd = len(data) - 2
 		}
-		conn.Family = "AF_UNIX"
+		conn.Family = afUnix
 		conn.Address = string(data[2 : 2+pathEnd])
 
 	default:
@@ -827,7 +833,7 @@ func socketFamilyName(family int) string {
 	case unix.AF_INET6:
 		return afInet6
 	case unix.AF_UNIX:
-		return "AF_UNIX"
+		return afUnix
 	case unix.AF_NETLINK:
 		return "AF_NETLINK"
 	default:

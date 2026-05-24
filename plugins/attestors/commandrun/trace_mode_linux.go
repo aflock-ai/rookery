@@ -81,7 +81,7 @@ func selectTraceMode() (traceMode, error) {
 	requested := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVarTraceMode)))
 
 	switch requested {
-	case "ptrace":
+	case traceModeNamePtrace:
 		// Explicit opt-in: skip detection.
 		return traceModePtrace, nil
 
@@ -116,6 +116,9 @@ type ebpfProbeResult struct {
 // (currently: BPF_MAP_CREATE + BPF_PROG_LOAD with PROG_TYPE_KPROBE).
 // Returns success if both work; the result struct records why for
 // the error message.
+// MAP_CREATE + PROG_LOAD; pulling it apart would lose the audit trail.
+//
+//nolint:funlen // raw bpf(2) probe: minimum syscall sequence to test
 func probeEBPFAvailable() ebpfProbeResult {
 	var r ebpfProbeResult
 	r.euid = os.Geteuid()
@@ -155,7 +158,7 @@ func probeEBPFAvailable() ebpfProbeResult {
 		MaxEntries: 16,
 	}
 	mapFd, _, errno := syscall.Syscall(sysBpf, bpfMapCreate,
-		uintptr(unsafe.Pointer(&mapAttr)), unsafe.Sizeof(mapAttr))
+		uintptr(unsafe.Pointer(&mapAttr)), unsafe.Sizeof(mapAttr)) //nolint:gosec // G103: bpf(2) requires an unsafe pointer to the attr struct by syscall contract
 	if errno != 0 {
 		if errors.Is(errno, unix.ENOSYS) {
 			r.bpfSyscallExists = false
@@ -167,7 +170,7 @@ func probeEBPFAvailable() ebpfProbeResult {
 		return r
 	}
 	r.bpfSyscallExists = true
-	_ = syscall.Close(int(mapFd))
+	_ = syscall.Close(int(mapFd)) //nolint:gosec // G115: kernel fd values fit in int
 
 	// 2. BPF_PROG_LOAD — trivial kprobe program: r0=0; exit.
 	type bpfInsn struct {
@@ -194,17 +197,17 @@ func probeEBPFAvailable() ebpfProbeResult {
 	license := []byte("GPL\x00")
 	progAttr := bpfProgAttr{
 		ProgType: bpfProgTypeKprobe,
-		InsnCnt:  uint32(len(insns)),
-		Insns:    uint64(uintptr(unsafe.Pointer(&insns[0]))),
-		License:  uint64(uintptr(unsafe.Pointer(&license[0]))),
+		InsnCnt:  uint32(len(insns)),                           //nolint:gosec // G115: insn count for a 2-element slice always fits
+		Insns:    uint64(uintptr(unsafe.Pointer(&insns[0]))),   //nolint:gosec // G103: bpf attr expects userspace pointer as u64
+		License:  uint64(uintptr(unsafe.Pointer(&license[0]))), //nolint:gosec // G103: same
 	}
 	progFd, _, errno := syscall.Syscall(sysBpf, bpfProgLoad,
-		uintptr(unsafe.Pointer(&progAttr)), unsafe.Sizeof(progAttr))
+		uintptr(unsafe.Pointer(&progAttr)), unsafe.Sizeof(progAttr)) //nolint:gosec // G103: see above
 	if errno != 0 {
 		r.progLoadError = errno.Error()
 		return r
 	}
-	_ = syscall.Close(int(progFd))
+	_ = syscall.Close(int(progFd)) //nolint:gosec // G115: same
 
 	r.available = true
 	return r
@@ -269,7 +272,7 @@ func logTraceModeStartup(mode traceMode, requested string) {
 	case traceModeEBPF:
 		fmt.Fprintf(os.Stderr, "cilock: tracing mode = eBPF (kernel-side capture)\n")
 	case traceModePtrace:
-		if requested == "ptrace" {
+		if requested == traceModeNamePtrace {
 			fmt.Fprintf(os.Stderr, "cilock: tracing mode = ptrace+seccomp (explicitly requested via CILOCK_TRACE_MODE=ptrace)\n")
 			fmt.Fprintf(os.Stderr, "cilock: note: eBPF mode is significantly faster — see https://docs.cilock.dev/tracing#ebpf if your environment supports it\n")
 		} else {
