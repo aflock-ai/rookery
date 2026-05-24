@@ -332,11 +332,30 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				if ev.Openat.Path != "" && !filepath.IsAbs(ev.Openat.Path) {
 					if resolved := resolveOpenatPath(ev.Openat); resolved != "" {
 						ev.Openat.Path = resolved
-					} else if cwd := watched.cwdFor(ev.Openat.PID); cwd != "" && ev.Openat.Dirfd == atFDCWD {
-						// /proc/<pid>/cwd gone (tracee exited) — fall
-						// back to the cached cwd snapshot we took
-						// when this pid was first seen.
-						ev.Openat.Path = filepath.Join(cwd, ev.Openat.Path)
+					} else if ev.Openat.Dirfd == atFDCWD {
+						// /proc/<pid>/cwd gone (tracee exited) — fall back
+						// to the cached cwd snapshot. Try the tracee's own
+						// cwd first; if that's missing (fast-exec'd process
+						// like `as` that we never got to readlink), try the
+						// parent's cwd. Children inherit cwd from parent at
+						// fork time, so the parent's cached snapshot is a
+						// correct stand-in. If the parent's cache is also
+						// empty (e.g. parent's matchAndAdd hadn't fired
+						// yet), try reading the parent's /proc/<ppid>/cwd
+						// live — the parent process tree is more durable
+						// than its short-lived children.
+						cwd := watched.cwdFor(ev.Openat.PID)
+						if cwd == "" {
+							cwd = watched.cwdFor(ev.Openat.PPID)
+						}
+						if cwd == "" && ev.Openat.PPID != 0 {
+							if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", ev.Openat.PPID)); err == nil {
+								cwd = link
+							}
+						}
+						if cwd != "" {
+							ev.Openat.Path = filepath.Join(cwd, ev.Openat.Path)
+						}
 					}
 				}
 				// V1.4 read-tap: remember (pid, fd) → path so the
@@ -1399,9 +1418,19 @@ func (w *watchedSet) matchAndAdd(pid, tgid, ppid uint32) bool {
 	// Fast-exit processes (cc1, ld, etc.) take their /proc entry with
 	// them; reading cwd later returns ENOENT. Captured here so relative
 	// openat paths resolve correctly even after the tracee dies.
+	//
+	// Fallback: when /proc/<pid>/cwd is already gone (sub-millisecond
+	// exec+exit, e.g. gcc's `as` invocation), inherit cwd from the
+	// parent's cached snapshot. Children inherit cwd from their parent
+	// on fork; the parent's cached cwd is a correct stand-in.
 	var cwd string
 	if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil {
 		cwd = link
+	}
+	if cwd == "" {
+		w.mu.RLock()
+		cwd = w.cwd[ppid]
+		w.mu.RUnlock()
 	}
 	w.mu.Lock()
 	w.pid[pid] = true
