@@ -1,18 +1,20 @@
+// Slim fork of upstream gitleaks/v8/report/finding.go for the
+// TestifySec rookery secretscan attestor. Trimmed to the Finding +
+// RequiredFinding types and the Redact helper. The
+// sources.Fragment-typed Fragment field is replaced with an opaque
+// `any` so we don't pull github.com/zricethezav/gitleaks/v8/sources
+// (which transitively brings mholt/archives + the compression zoo).
+// PrintRequiredFindings (the lipgloss-using terminal pretty-printer)
+// is removed — we never invoke it from the library use case.
 package report
 
 import (
-	"fmt"
 	"math"
 	"strings"
-
-	"github.com/charmbracelet/lipgloss"
-	"github.com/zricethezav/gitleaks/v8/sources"
 )
 
 // Finding contains a whole bunch of information about a secret finding.
-// Plenty of real estate in this bad boy so fillerup as needed.
 type Finding struct {
-	// Rule is the name of the rule that was matched
 	RuleID      string
 	Description string
 
@@ -46,17 +48,15 @@ type Finding struct {
 	// unique identifier
 	Fingerprint string
 
-	// Fragment used for multi-part rule checking, CEL filtering,
-	// and eventually ML validation
-	Fragment *sources.Fragment `json:",omitempty"`
+	// Fragment was *sources.Fragment in upstream — opaque here to keep
+	// the slim fork detached from the deleted sources/ package. The
+	// secretscan attestor never reads this field.
+	Fragment any `json:",omitempty"`
 
-	// TODO keeping private for now to during experimental phase
 	requiredFindings []*RequiredFinding
 }
 
 type RequiredFinding struct {
-	// contains a subset of the Finding fields
-	// only used for reporting
 	RuleID      string
 	StartLine   int
 	EndLine     int
@@ -89,38 +89,19 @@ func maskSecret(secret string, percent uint) string {
 	if percent > 100 {
 		percent = 100
 	}
-	len := float64(len(secret))
-	if len <= 0 {
+	length := float64(len(secret))
+	if length <= 0 {
 		return secret
 	}
 	prc := float64(100 - percent)
-	lth := int64(math.RoundToEven(len * prc / float64(100)))
+	lth := int64(math.RoundToEven(length * prc / float64(100)))
 
 	return secret[:lth] + "..."
 }
 
+// PrintRequiredFindings was a lipgloss-using terminal pretty-printer in
+// upstream; removed here since the slim fork is library-only. Callers
+// in the deleted detect/utils.go invoked this for CLI output.
 func (f *Finding) PrintRequiredFindings() {
-	if len(f.requiredFindings) == 0 {
-		return
-	}
-
-	fmt.Printf("%-12s ", "Required:")
-
-	// Create orange style for secrets
-	orangeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#bf9478"))
-
-	for i, aux := range f.requiredFindings {
-		auxSecret := strings.TrimSpace(aux.Secret)
-		// Truncate long secrets for readability
-		if len(auxSecret) > 40 {
-			auxSecret = auxSecret[:37] + "..."
-		}
-
-		// Format: rule-id:line:secret
-		if i == 0 {
-			fmt.Printf("%s:%d:%s\n", aux.RuleID, aux.StartLine, orangeStyle.Render(auxSecret))
-		} else {
-			fmt.Printf("%-12s %s:%d:%s\n", "", aux.RuleID, aux.StartLine, orangeStyle.Render(auxSecret))
-		}
-	}
+	// no-op in the slim fork
 }
