@@ -187,6 +187,9 @@ func TestWeakness_ForkChain_DeepWatchPropagation(t *testing.T) {
 		}
 	}
 	if leaf == nil {
+		// Pull Summary off the CommandRun if accessible. We're in the
+		// test that uses runUnderEBPF which only returns Processes
+		// — let's also surface drop counters via a separate dispatch.
 		t.Fatalf("deep-fork-chain leaf openat MISSED — V2 Phase 1 regression.\n"+
 			"Got %d processes; tree:\n%s",
 			len(procs), summarizeProcessTree(procs))

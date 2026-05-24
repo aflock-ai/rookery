@@ -268,13 +268,31 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 			}
 			ev, err := consumer.Read()
 			if err != nil {
+				// V2 Phase 8 fix: don't exit on TRANSIENT errors —
+				// decode errors from one malformed event would kill
+				// the whole dispatcher and lose every subsequent
+				// event. This was the actual cause of the ~50% deep-
+				// fork-chain flake: under high event volume, an
+				// occasional ringbuf record with unexpected layout
+				// triggered decodeEvent failure → dispatcher exit →
+				// every event after that lost.
+				//
+				// ONLY exit on ErrFlushed (intentional shutdown) and
+				// ringbuf-closed sentinels.
 				select {
 				case <-stopCh:
 					return
 				default:
 				}
-				log.Debugf("(ebpf) consumer read: %v", err)
-				return
+				if ebpf.IsFlushedError(err) {
+					return
+				}
+				if errors.Is(err, os.ErrClosed) {
+					return
+				}
+				// Anything else: skip this event, keep going.
+				log.Debugf("(ebpf) consumer read transient error (skipping): %v", err)
+				continue
 			}
 			readTotal.Add(1)
 
