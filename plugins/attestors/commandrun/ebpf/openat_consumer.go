@@ -147,6 +147,7 @@ type OpenatEvent struct {
 	TGID        uint32
 	PPID        uint32
 	Dirfd       int32
+	FD          int32  // kernel-returned fd (>=0 ok, <0 errno) — V1.3
 	PathLen     uint32
 	Flags       uint32 // openat() flags: O_RDONLY/O_WRONLY/O_CREAT/...
 	SizeAtOpen  uint64
@@ -286,11 +287,18 @@ func Open() (*Consumer, error) {
 		if !ok {
 			continue // program not in this build
 		}
-		l, err := link.Kprobe(kprobeSyms[i], prog, nil)
+		// kretprobe_* programs attach as kretprobes; everything else
+		// is a kprobe on entry.
+		var l link.Link
+		var err error
+		if strings.HasPrefix(progName, "kretprobe_") {
+			l, err = link.Kretprobe(kprobeSyms[i], prog, nil)
+		} else {
+			l, err = link.Kprobe(kprobeSyms[i], prog, nil)
+		}
 		if err != nil {
 			attachFailed++
-			// Don't return — non-essential syscall absent on this kernel.
-			continue
+			continue // non-essential syscall absent on this kernel
 		}
 		c.links = append(c.links, l)
 		if strings.Contains(kprobeSyms[i], "_openat") {
@@ -486,8 +494,9 @@ func archKprobeNames() ([]string, []string) {
 	switch runtime.GOARCH {
 	case "amd64":
 		return []string{
-				// openat family
-				"kprobe_openat_x64", "kprobe_openat2_x64",
+				// openat family — kprobe stashes args, kretprobe emits w/ fd
+				"kprobe_openat_x64", "kretprobe_openat_x64",
+				"kprobe_openat2_x64", "kretprobe_openat2_x64",
 				// execve
 				"kprobe_execve_x64",
 				// file mutations
@@ -505,7 +514,8 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_dup2_x64", "kprobe_dup3_x64",
 			},
 			[]string{
-				"__x64_sys_openat", "__x64_sys_openat2",
+				"__x64_sys_openat", "__x64_sys_openat",
+				"__x64_sys_openat2", "__x64_sys_openat2",
 				"__x64_sys_execve",
 				"__x64_sys_unlinkat", "__x64_sys_renameat2", "__x64_sys_fchmodat",
 				"__x64_sys_write", "__x64_sys_pwrite64",
@@ -519,7 +529,8 @@ func archKprobeNames() ([]string, []string) {
 			}
 	case "arm64":
 		return []string{
-				"kprobe_openat_arm64", "kprobe_openat2_arm64",
+				"kprobe_openat_arm64", "kretprobe_openat_arm64",
+				"kprobe_openat2_arm64", "kretprobe_openat2_arm64",
 				"kprobe_execve_arm64",
 				"kprobe_unlinkat_arm64", "kprobe_renameat2_arm64", "kprobe_fchmodat_arm64",
 				"kprobe_write_arm64", "kprobe_pwrite_arm64",
@@ -532,7 +543,8 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_dup3_arm64",
 			},
 			[]string{
-				"__arm64_sys_openat", "__arm64_sys_openat2",
+				"__arm64_sys_openat", "__arm64_sys_openat",
+				"__arm64_sys_openat2", "__arm64_sys_openat2",
 				"__arm64_sys_execve",
 				"__arm64_sys_unlinkat", "__arm64_sys_renameat2", "__arm64_sys_fchmodat",
 				"__arm64_sys_write", "__arm64_sys_pwrite64",
@@ -798,12 +810,13 @@ func decodeOpenatEvent(raw []byte) (*OpenatEvent, error) {
 		return nil, fmt.Errorf("event too short: %d < %d", len(raw), openatEventSize)
 	}
 	h := decodeEventHeader(raw)
-	// After hdr (32 bytes): dirfd(4) path_len(4) flags(4) pad(4)
+	// After hdr (32 bytes): dirfd(4) fd(4) path_len(4) flags(4)
 	// size_at_open(8) mtime_ns(8) comm(16) path(4096).
 	const dirfdOff = cilockHdrSize        // 32
-	const pathLenOff = dirfdOff + 4       // 36
-	const flagsOff = pathLenOff + 4       // 40
-	const sizeOff = flagsOff + 4 + 4      // 48 (4 flags + 4 pad)
+	const fdOff = dirfdOff + 4            // 36
+	const pathLenOff = fdOff + 4          // 40
+	const flagsOff = pathLenOff + 4       // 44
+	const sizeOff = flagsOff + 4          // 48
 	const mtimeOff = sizeOff + 8          // 56
 	const commOff = mtimeOff + 8          // 64
 	const pathOff = commOff + taskCommLen // 80
@@ -813,6 +826,7 @@ func decodeOpenatEvent(raw []byte) (*OpenatEvent, error) {
 		TGID:        h.TGID,
 		PPID:        h.PPID,
 		Dirfd:       int32(binary.LittleEndian.Uint32(raw[dirfdOff:])),
+		FD:          int32(binary.LittleEndian.Uint32(raw[fdOff:])),
 		PathLen:     binary.LittleEndian.Uint32(raw[pathLenOff:]),
 		Flags:       binary.LittleEndian.Uint32(raw[flagsOff:]),
 		SizeAtOpen:  binary.LittleEndian.Uint64(raw[sizeOff:]),

@@ -70,26 +70,98 @@ type HashResult struct {
 	Reason string // populated for non-stable statuses
 }
 
-// HashOpenatEvent stats + opens + hashes the path referenced by an
+// HashOpenatEvent stats + opens + hashes the file referenced by an
 // openat event, and classifies the result by TOCTOU stability.
 //
-// The TOCTOU window in this V1 design:
+// V1.3 — prefer /proc/<pid>/fd/<fd> over the path. When the BPF
+// kretprobe reported a valid fd, opening /proc/<pid>/fd/<fd> gives us
+// the SAME open-file-description the tracee has. The kernel keeps
+// that file alive (refcount via the tracee's fd table) even if the
+// path is later unlinked or replaced via atomic rename. Race window
+// shrinks to "between kretprobe and our open" instead of "between
+// kprobe and our open" + we're robust to path replacement.
 //
-//  1. BPF kprobe fires (tracee enters openat).
-//  2. Tracee continues (V1 doesn't gate on userspace).
-//  3. Userspace receives event, stats path → got stat_before.
-//  4. Userspace opens + reads + hashes file.
-//  5. Userspace stats path again → got stat_after.
-//  6. If stat_before == stat_after: TOCTOU-stable. Otherwise suspect.
-//
-// This catches the common case where a tracee modifies the file
-// between its open and our hash. It cannot prevent the race — only
-// detect it. For true prevention, see issue #174 (IMA integration)
-// or fanotify-pre-access which requires CAP_SYS_ADMIN.
+// Fallback: if fd is invalid (negative, meaning openat failed in the
+// tracee) or /proc/<pid>/fd/<fd> isn't readable, fall back to the
+// path. That preserves V1.2 behavior for openat2 + failed-open cases.
 func HashOpenatEvent(ev *OpenatEvent, hashFuncs []cryptoutil.DigestValue) HashResult {
-	r := HashResult{Path: ev.Path}
+	// Try the fd-based path first.
+	if ev.FD >= 0 {
+		fdPath := fmt.Sprintf("/proc/%d/fd/%d", ev.PID, ev.FD)
+		if res, ok := hashViaProcFD(fdPath, ev.Path, hashFuncs); ok {
+			return res
+		}
+		// Fall through to the path-based fallback if /proc/<pid>/fd/<fd>
+		// is unreadable (process exited, fd closed, etc.).
+	}
 
-	statBefore, err := os.Stat(ev.Path)
+	return hashViaPath(ev.Path, hashFuncs)
+}
+
+// hashViaProcFD opens /proc/<pid>/fd/<fd> (the tracee's actual file
+// description). Returns (result, true) if the procfs entry was
+// readable; (zero, false) if not — caller falls back to path-based.
+//
+// Critically, we still do the stat-before/stat-after comparison
+// against the path (not the procfs entry, which returns the dynamic
+// fd's stat). This catches the case where the tracee writes to its
+// own fd while we hash — kernel page cache changes, our hash sees
+// inconsistent state.
+func hashViaProcFD(fdPath, origPath string, hashFuncs []cryptoutil.DigestValue) (HashResult, bool) {
+	r := HashResult{Path: origPath}
+
+	// stat-before via the original path (for TOCTOU comparison).
+	statBefore, err := os.Stat(origPath)
+	if err != nil {
+		// Path gone but fd might still resolve — try anyway.
+		statBefore = nil
+	}
+
+	f, err := os.Open(fdPath) //nolint:gosec // G304: /proc/<pid>/fd/<fd>, by-design read
+	if err != nil {
+		return HashResult{}, false
+	}
+	digest, hashErr := cryptoutil.CalculateDigestSet(f, hashFuncs)
+	_ = f.Close()
+	if hashErr != nil {
+		r.Status = TOCTOUError
+		r.Reason = "hash via fd: " + hashErr.Error()
+		return r, true
+	}
+
+	if statBefore == nil {
+		// File was already unlinked at hash time; the fd content is
+		// still authoritative. Stable.
+		r.Digest = digest
+		r.Status = TOCTOUStable
+		return r, true
+	}
+	statAfter, err := os.Stat(origPath)
+	if err != nil {
+		r.Digest = digest
+		r.Status = TOCTOUSuspect
+		r.Reason = "file removed during hash (read via fd succeeded)"
+		return r, true
+	}
+	if !sameStat(statBefore, statAfter) {
+		r.Digest = digest
+		r.Status = TOCTOUSuspect
+		r.Reason = fmt.Sprintf("file modified during hash via fd: size %d->%d",
+			statBefore.Size(), statAfter.Size())
+		return r, true
+	}
+
+	r.Digest = digest
+	r.Status = TOCTOUStable
+	return r, true
+}
+
+// hashViaPath is the original V1 path: stat-before, open path,
+// hash, stat-after. Used when fd-based access isn't available.
+func hashViaPath(path string, hashFuncs []cryptoutil.DigestValue) HashResult {
+	r := HashResult{Path: path}
+
+	statBefore, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			r.Status = TOCTOUMissing
@@ -101,8 +173,7 @@ func HashOpenatEvent(ev *OpenatEvent, hashFuncs []cryptoutil.DigestValue) HashRe
 		return r
 	}
 
-	// Open the file and hash its content.
-	f, err := os.Open(ev.Path) //nolint:gosec
+	f, err := os.Open(path) //nolint:gosec
 	if err != nil {
 		r.Status = TOCTOUError
 		r.Reason = "open: " + err.Error()
@@ -116,11 +187,8 @@ func HashOpenatEvent(ev *OpenatEvent, hashFuncs []cryptoutil.DigestValue) HashRe
 		return r
 	}
 
-	// Stat again post-hash to detect mid-hash mutations.
-	statAfter, err := os.Stat(ev.Path)
+	statAfter, err := os.Stat(path)
 	if err != nil {
-		// If the file disappeared during hashing, our digest is of
-		// the pre-unlink content. Flag suspect.
 		r.Digest = digest
 		r.Status = TOCTOUSuspect
 		r.Reason = "file removed during hash"

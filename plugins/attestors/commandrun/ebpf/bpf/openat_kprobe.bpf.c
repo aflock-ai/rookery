@@ -66,25 +66,50 @@ struct cilock_evt_hdr {
 
 // openat event. Header layout matches every other event for uniform
 // userspace dispatch on event_type.
-// Total: 32 (hdr) + 4 + 4 + 4 + 4 + 8 + 8 + 16 + 4096 = 4176 bytes
+// Total: 32 (hdr) + 4 (dirfd) + 4 (fd) + 4 (path_len) + 4 (flags)
+//      + 8 (size_at_open) + 8 (mtime_ns) + 16 (comm) + 4096 (path) = 4176
 //
 // `flags` captures the openat() flags arg (O_RDONLY/O_WRONLY/O_CREAT/...).
-// V1.2: userspace skips hashing on O_WRONLY/O_CREAT-only opens, which
-// are the tracee's OWN writes — hashing them is racy by construction
-// (the tracee is mid-write while we read) and the resulting "TOCTOU-
-// suspect" events are artifacts of our async pipeline, not real
-// integrity violations.
+// `fd` is the kernel-returned file descriptor (>=0 on success, -errno
+// on failure). V1.3: emitted from a kretprobe so userspace can read
+// via /proc/<pid>/fd/<fd> while the tracee's fd is still open — that
+// gives the same open-file-description the tracee will read from,
+// without race on the path.
 struct openat_event {
     struct cilock_evt_hdr hdr;
     __s32 dirfd;
+    __s32 fd;
     __u32 path_len;
     __u32 flags;
-    __u32 _pad_flags;
     __u64 size_at_open;
     __u64 mtime_ns;
     char  comm[TASK_COMM_LEN];
     char  path[MAX_PATH];
 };
+
+// Kprobe→kretprobe stash. Reuses the openat_event layout so the
+// kretprobe just patches in the fd and submits — no large memcpy
+// (which BPF rejects).
+//
+// Sized at 1024 — concurrent in-flight openat()s by any single trace
+// tree are bounded by the number of runnable tasks, well under 1024
+// even for hyper-forking CI workloads.
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u64);
+    __type(value, struct openat_event);
+} openat_stash_map SEC(".maps");
+
+// Per-CPU scratch for assembling the openat_event before HASH-map
+// update. The event struct is ~4KB which exceeds BPF's 512-byte stack
+// limit; per-CPU array keeps it off-stack like the event scratch.
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct openat_event);
+} openat_stash_scratch SEC(".maps");
 
 // execve event. argv[0] is what the syscall caller passed as the
 // program path; userspace hashes that + /proc/<pid>/exe (current
@@ -253,38 +278,53 @@ fill_hdr(struct cilock_evt_hdr *h, __u32 evt, __u32 pid, __u32 tgid, __u32 ppid)
     h->_pad1        = 0;
 }
 
-// ───── openat / openat2 ─────────────────────────────────────────────
+// ───── openat / openat2 (kprobe+kretprobe pair) ─────────────────────
+// kprobe stashes (pathname, flags) at syscall entry; kretprobe reads
+// the stash + the return-value fd and emits the event. This gives us
+// the actual fd the tracee got, so userspace can read via
+// /proc/<pid>/fd/<fd> — same open-file-description, race-narrowed.
 
 static __always_inline void
-emit_openat(int dirfd, const char *pathname, __u32 flags)
+stash_openat_args(int dirfd, const char *pathname, __u32 flags)
 {
     if (!pathname) return;
     __u32 cur_pid, cur_tgid, cur_ppid;
     if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) return;
 
     __u32 z = 0;
-    struct file_mutation_event *scratch_ev = bpf_map_lookup_elem(&scratch, &z);
-    if (!scratch_ev) return;
-    struct openat_event *ev = (struct openat_event *)scratch_ev;
+    struct openat_event *s = bpf_map_lookup_elem(&openat_stash_scratch, &z);
+    if (!s) return;
 
-    __builtin_memset(ev, 0, offsetof(struct openat_event, comm));
-    fill_hdr(&ev->hdr, EVT_OPENAT, cur_pid, cur_tgid, cur_ppid);
-    ev->dirfd        = dirfd;
-    ev->flags        = flags;
-    ev->size_at_open = 0;
-    ev->mtime_ns     = 0;
+    // Populate the event as much as we can at entry. The fd field is
+    // filled in by the kretprobe; everything else is final.
+    __builtin_memset(s, 0, offsetof(struct openat_event, comm));
+    fill_hdr(&s->hdr, EVT_OPENAT, cur_pid, cur_tgid, cur_ppid);
+    s->dirfd        = dirfd;
+    s->fd           = 0; // placeholder; kretprobe fills in
+    s->flags        = flags;
+    s->size_at_open = 0;
+    s->mtime_ns     = 0;
+    bpf_get_current_comm(s->comm, sizeof(s->comm));
+    long n = bpf_probe_read_user_str(s->path, MAX_PATH, pathname);
+    if (n > 0) s->path_len = (__u32)n;
 
-    bpf_get_current_comm(ev->comm, sizeof(ev->comm));
+    __u64 key = bpf_get_current_pid_tgid();
+    bpf_map_update_elem(&openat_stash_map, &key, s, BPF_ANY);
+}
 
-    long n = bpf_probe_read_user_str(ev->path, MAX_PATH, pathname);
-    if (n < 0) {
-        ev->path_len = 0;
-        ev->path[0] = '\0';
-    } else {
-        ev->path_len = (__u32)n;
-    }
+static __always_inline void
+emit_openat_ret(long ret)
+{
+    __u64 key = bpf_get_current_pid_tgid();
+    struct openat_event *ev = bpf_map_lookup_elem(&openat_stash_map, &key);
+    if (!ev) return;
 
+    // Patch in the fd from the syscall return value and submit.
+    // ev was fully populated at kprobe time except fd; just update
+    // the one field in-place and emit.
+    ev->fd = (int)ret;
     bpf_ringbuf_output(&events, ev, sizeof(struct openat_event), 0);
+    bpf_map_delete_elem(&openat_stash_map, &key);
 }
 
 SEC("kprobe/__arm64_sys_openat")
@@ -293,7 +333,14 @@ int BPF_KPROBE(kprobe_openat_arm64, struct pt_regs *regs)
     int dirfd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
     const char *pathname = (const char *)PT_REGS_PARM2_CORE_SYSCALL(regs);
     __u32 flags = (__u32)PT_REGS_PARM3_CORE_SYSCALL(regs);
-    emit_openat(dirfd, pathname, flags);
+    stash_openat_args(dirfd, pathname, flags);
+    return 0;
+}
+
+SEC("kretprobe/__arm64_sys_openat")
+int BPF_KRETPROBE(kretprobe_openat_arm64, long ret)
+{
+    emit_openat_ret(ret);
     return 0;
 }
 
@@ -303,18 +350,32 @@ int BPF_KPROBE(kprobe_openat_x64, struct pt_regs *regs)
     int dirfd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
     const char *pathname = (const char *)PT_REGS_PARM2_CORE_SYSCALL(regs);
     __u32 flags = (__u32)PT_REGS_PARM3_CORE_SYSCALL(regs);
-    emit_openat(dirfd, pathname, flags);
+    stash_openat_args(dirfd, pathname, flags);
     return 0;
 }
 
-// openat2 uses struct open_how* (PARM3) which carries flags inside.
-// For V1.2 we use 0 — userspace will hash these (rare in practice).
+SEC("kretprobe/__x64_sys_openat")
+int BPF_KRETPROBE(kretprobe_openat_x64, long ret)
+{
+    emit_openat_ret(ret);
+    return 0;
+}
+
+// openat2 uses struct open_how* (PARM3) — we use 0 for flags; for V1.3
+// we don't differentiate openat2 (rare).
 SEC("kprobe/__arm64_sys_openat2")
 int BPF_KPROBE(kprobe_openat2_arm64, struct pt_regs *regs)
 {
     int dirfd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
     const char *pathname = (const char *)PT_REGS_PARM2_CORE_SYSCALL(regs);
-    emit_openat(dirfd, pathname, 0);
+    stash_openat_args(dirfd, pathname, 0);
+    return 0;
+}
+
+SEC("kretprobe/__arm64_sys_openat2")
+int BPF_KRETPROBE(kretprobe_openat2_arm64, long ret)
+{
+    emit_openat_ret(ret);
     return 0;
 }
 
@@ -323,7 +384,14 @@ int BPF_KPROBE(kprobe_openat2_x64, struct pt_regs *regs)
 {
     int dirfd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
     const char *pathname = (const char *)PT_REGS_PARM2_CORE_SYSCALL(regs);
-    emit_openat(dirfd, pathname, 0);
+    stash_openat_args(dirfd, pathname, 0);
+    return 0;
+}
+
+SEC("kretprobe/__x64_sys_openat2")
+int BPF_KRETPROBE(kretprobe_openat2_x64, long ret)
+{
+    emit_openat_ret(ret);
     return 0;
 }
 
