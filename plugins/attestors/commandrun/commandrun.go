@@ -445,10 +445,13 @@ func (rc *CommandRun) TraceInputs() map[string]attestation.CaptureEntry {
 	return out
 }
 
-// TraceOutputs implements attestation.CaptureProbe. Returns one entry
-// per unique file path the tracee WROTE during execution — the union
-// of FileOps.Writes paths and FileOps.Renames new-paths across all
-// captured processes.
+// TraceOutputs implements attestation.CaptureProbe. Returns ONE entry
+// per file path the tracee wrote and then NEVER read back — the true
+// "products" of the build. Files the tracee wrote AND later read are
+// intermediates (e.g., Go's _pkg_.a build cache entries that compile
+// workers produce and the linker consumes); those flow into
+// TraceInputs() instead, since semantically they're inputs the linker
+// stage consumed.
 //
 // Path-hashing happens here lazily: outputs aren't streamed during the
 // trace (the tracee owns those bytes and writes them; the read-tap
@@ -459,7 +462,23 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 	if rc == nil {
 		return nil
 	}
-	paths := make(map[string]bool, 256)
+	// Collect every path the tracee actually CONSUMED content from.
+	// OpenedFiles is a superset — it includes O_WRONLY/O_CREAT opens
+	// recorded with nil digests for inventory purposes. Those aren't
+	// "reads" semantically; the tracee opened them to write. Filter
+	// to entries that have a real digest, which proves content was
+	// read (or path-hashed) for this path.
+	readPaths := make(map[string]bool, 4096)
+	for i := range rc.Processes {
+		for path, ds := range rc.Processes[i].OpenedFiles {
+			if path == "" || ds == nil {
+				continue
+			}
+			readPaths[path] = true
+		}
+	}
+
+	writePaths := make(map[string]bool, 256)
 	for i := range rc.Processes {
 		fo := rc.Processes[i].FileOps
 		if fo == nil {
@@ -467,25 +486,90 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 		}
 		for _, w := range fo.Writes {
 			if w.Path != "" {
-				paths[w.Path] = true
+				writePaths[w.Path] = true
 			}
 		}
 		for _, r := range fo.Renames {
 			if r.NewPath != "" {
-				paths[r.NewPath] = true
+				writePaths[r.NewPath] = true
 			}
 		}
 	}
-	out := make(map[string]attestation.CaptureEntry, len(paths))
-	for p := range paths {
-		// Hashing outputs synchronously here is fine — the tracee has
-		// exited, files are stable, and there are typically far fewer
-		// outputs than inputs on a build. For a Go build of cilock
-		// this is the final binary + a handful of intermediates.
+
+	out := make(map[string]attestation.CaptureEntry, len(writePaths))
+	for p := range writePaths {
+		if readPaths[p] {
+			continue // intermediate — belongs to materials, not products
+		}
 		digest := pathHashIfExists(p, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
 		out[p] = attestation.CaptureEntry{
 			Digest: digest,
 			Source: "trace-pathhash",
+		}
+	}
+	return out
+}
+
+// TraceIntermediates returns the files the tracee wrote AND read —
+// build-cache entries, compile worker outputs the linker consumes,
+// generated source code that gets compiled in the same run, etc.
+// Semantically these are *intermediate materials*: produced and
+// consumed within the same build. They're already covered by
+// TraceInputs (as reads); this method exists so callers can
+// explicitly surface the "produced-then-consumed" subset for
+// auditing or for a separate intermediate/v0.1 attestation type.
+func (rc *CommandRun) TraceIntermediates() map[string]attestation.CaptureEntry {
+	if rc == nil {
+		return nil
+	}
+	readPaths := make(map[string]bool, 4096)
+	for i := range rc.Processes {
+		for path, ds := range rc.Processes[i].OpenedFiles {
+			if path == "" || ds == nil {
+				continue
+			}
+			readPaths[path] = true
+		}
+	}
+
+	out := make(map[string]attestation.CaptureEntry, 256)
+	for i := range rc.Processes {
+		fo := rc.Processes[i].FileOps
+		if fo == nil {
+			continue
+		}
+		add := func(path string) {
+			if path == "" || !readPaths[path] {
+				return
+			}
+			if _, dup := out[path]; dup {
+				return
+			}
+			// Prefer the read-tap digest already in OpenedFiles —
+			// it's what the linker actually consumed. Fall back to
+			// path-hash if read-tap captured nil (partial read).
+			for j := range rc.Processes {
+				if ds, ok := rc.Processes[j].OpenedFiles[path]; ok && ds != nil {
+					if nm, err := ds.ToNameMap(); err == nil {
+						out[path] = attestation.CaptureEntry{
+							Digest: nm,
+							Source: "trace-readtap",
+						}
+						return
+					}
+				}
+			}
+			digest := pathHashIfExists(path, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
+			out[path] = attestation.CaptureEntry{
+				Digest: digest,
+				Source: "trace-pathhash",
+			}
+		}
+		for _, w := range fo.Writes {
+			add(w.Path)
+		}
+		for _, r := range fo.Renames {
+			add(r.NewPath)
 		}
 	}
 	return out
