@@ -664,8 +664,19 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_init_module_x64", "kprobe_finit_module_x64",
 				"kprobe_clone_x64", "kprobe_clone3_x64",
 				"kprobe_dup2_x64", "kprobe_dup3_x64",
-				// V2 fork-watch belt (defense-in-depth alongside
-				// raw_tp/sched_process_fork):
+				// V2 Phase 8 primary fork hook (Tetragon pattern):
+				// kprobe/wake_up_new_task fires when child task_struct
+				// is fully set up but before the child runs. Hereditary
+				// insertion. Verified to fire for every fork via trace_pipe.
+				// NOTE: empirically does NOT fix the deep-fork-chain
+				// flake on its own. The remaining race is a userspace
+				// dispatcher / ringbuf-event-loss issue documented in
+				// memory/ebpf-canonical-patterns.md (TASK_STORAGE + fentry
+				// migration). Keeping wake_up_new_task attached anyway —
+				// it's the canonical fork hook + costs nothing when
+				// attached but unhelpful.
+				"kprobe_wake_up_new_task",
+				// V2 fork-watch belt (defense-in-depth):
 				"kretprobe_clone_x64", "kretprobe_clone3_x64",
 				"kretprobe_vfork_x64", "kretprobe_fork_x64",
 				// V1.4 read-tap (gated by read_tap_enabled map; cheap when off)
@@ -686,6 +697,7 @@ func archKprobeNames() ([]string, []string) {
 				"__x64_sys_init_module", "__x64_sys_finit_module",
 				"__x64_sys_clone", "__x64_sys_clone3",
 				"__x64_sys_dup2", "__x64_sys_dup3",
+				"wake_up_new_task",
 				"__x64_sys_clone", "__x64_sys_clone3",
 				"__x64_sys_vfork", "__x64_sys_fork",
 				"__x64_sys_read", "__x64_sys_read",
@@ -706,9 +718,9 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_init_module_arm64", "kprobe_finit_module_arm64",
 				"kprobe_clone_arm64", "kprobe_clone3_arm64",
 				"kprobe_dup3_arm64",
-				// V2 fork-watch belt (arm64 doesn't have separate
-				// fork/vfork syscalls — both are libc-side wrappers
-				// around clone — so only clone/clone3 kretprobes).
+				// V2 Phase 8 primary fork hook (kernel-internal, arch-neutral).
+				"kprobe_wake_up_new_task",
+				// V2 fork-watch belt:
 				"kretprobe_clone_arm64", "kretprobe_clone3_arm64",
 				"kprobe_read_arm64", "kretprobe_read_arm64",
 				"kprobe_pread64_arm64", "kretprobe_pread64_arm64",
@@ -727,6 +739,7 @@ func archKprobeNames() ([]string, []string) {
 				"__arm64_sys_init_module", "__arm64_sys_finit_module",
 				"__arm64_sys_clone", "__arm64_sys_clone3",
 				"__arm64_sys_dup3",
+				"wake_up_new_task",
 				"__arm64_sys_clone", "__arm64_sys_clone3",
 				"__arm64_sys_read", "__arm64_sys_read",
 				"__arm64_sys_pread64", "__arm64_sys_pread64",
