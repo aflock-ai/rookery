@@ -349,6 +349,14 @@ type CommandRun struct {
 	ringbufDropOpenat  uint64
 	ringbufDropReadTap uint64
 
+	// partialReadFallbacks / fallbackHashFailures stash the dispatcher's
+	// per-trace counters: how many openat events fell back to path-hash
+	// because read-tap saw only a prefix, and how many of those
+	// path-hashes themselves errored. Surface into Summary.Diagnostics
+	// so an attestation alone tells you whether read-tap was effective.
+	partialReadFallbacks uint64
+	fallbackHashFailures uint64
+
 	// resolvedCaptureMode records which capture-mode the framework
 	// selected for this run ("trace", "walk", "ima"). Populated by
 	// the framework at Attest time so buildTraceSummary can surface
@@ -960,6 +968,8 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		if r.Summary != nil {
 			r.Summary.Diagnostics.RingbufOpenatDrops = r.ringbufDropOpenat
 			r.Summary.Diagnostics.RingbufReadTapDrops = r.ringbufDropReadTap
+			r.Summary.Diagnostics.PartialReadFallbacks = r.partialReadFallbacks
+			r.Summary.Diagnostics.FallbackHashFailures = r.fallbackHashFailures
 			if r.resolvedCaptureMode != "" {
 				r.Summary.CaptureMode = r.resolvedCaptureMode
 				// TraceModeDetail differentiates the backend within

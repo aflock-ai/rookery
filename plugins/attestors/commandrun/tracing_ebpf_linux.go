@@ -256,6 +256,10 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// A high inlinePath ratio confirms stage 2 is doing its job and
 	// the openPaths userspace map can be safely removed.
 	var closeWithInlinePath, closeWithoutInlinePath atomic.Uint64
+	// Phase 5 diagnostics: surface partial-read fallback rates so the
+	// stored attestation alone tells you whether read-tap was
+	// effective for this trace.
+	var partialFallbacks, fallbackFailures atomic.Uint64
 
 	// V1.4 backpressure watchdog: when the BPF ringbuf is filling up,
 	// broadcast SIGSTOP across the tracee tree so the kernel stops
@@ -710,6 +714,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					// closed the fd, and a different file may have
 					// been assigned that fd. /proc/<pid>/fd/<fd>
 					// would hash the wrong file.
+					partialFallbacks.Add(1)
 					res := ebpf.HashOpenatEventWithMode(ev, pctx.hash, true /* pathOnly */)
 					hashedTotal.Add(1)
 					switch res.Status {
@@ -717,6 +722,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 						suspectTotal.Add(1)
 					case ebpf.TOCTOUError, ebpf.TOCTOUMissing:
 						errorTotal.Add(1)
+						fallbackFailures.Add(1)
 					}
 					recordEBPFOpenat(pctx, ev, res)
 				}
@@ -764,6 +770,8 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		// write here would be clobbered.
 		r.ringbufDropOpenat = oDrops
 		r.ringbufDropReadTap = rDrops
+		r.partialReadFallbacks = partialFallbacks.Load()
+		r.fallbackHashFailures = fallbackFailures.Load()
 		if oDrops > 0 || rDrops > 0 {
 			log.Errorf("(ebpf) RINGBUF DROPS — attestation has gaps: openat=%d read_tap=%d  "+
 				"bump ringbuf size or reduce build parallelism",
