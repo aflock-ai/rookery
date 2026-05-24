@@ -575,16 +575,36 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 		if rc.cacheMatcher != nil && rc.cacheMatcher.Matches(p) {
 			continue // cache/temp — surfaced via TraceCacheArtifacts
 		}
-		// Skip non-regular files (directories, sockets, pipes, gone)
-		// — they can't be path-hashed. openat on a directory still
-		// records a write event; that's not a product.
-		info, err := os.Stat(p)
-		if err != nil || !info.Mode().IsRegular() {
+		info, statErr := os.Stat(p)
+		switch {
+		case statErr != nil:
+			// File is gone (unlinked between trace and attest) or
+			// path is relative-to-a-different-cwd. We KNOW the trace
+			// observed a write to this path — emit a witness entry
+			// without a digest. Downstream consumers (policies,
+			// inclusion-proof) skip entries lacking a digest, but
+			// the path survives in the products list for inventory.
+			// Without this, V2 phase 2's atomic-rename + fast-exit
+			// pattern produces silent product drops (issue #152).
+			out[p] = attestation.CaptureEntry{
+				Digest: nil,
+				Source: "trace-write-only",
+			}
+			continue
+		case !info.Mode().IsRegular():
+			// Directories, sockets, pipes — can't be path-hashed,
+			// not products. Drop silently.
 			continue
 		}
 		digest := pathHashIfExists(p, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
 		if digest == nil {
-			continue // hash failed; don't emit a placeholder
+			// File existed at stat time but disappeared (or was
+			// unreadable) at hash time. Same handling as missing.
+			out[p] = attestation.CaptureEntry{
+				Digest: nil,
+				Source: "trace-write-only",
+			}
+			continue
 		}
 		out[p] = attestation.CaptureEntry{
 			Digest: digest,

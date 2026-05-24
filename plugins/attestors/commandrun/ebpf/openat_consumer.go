@@ -664,11 +664,8 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_init_module_x64", "kprobe_finit_module_x64",
 				"kprobe_clone_x64", "kprobe_clone3_x64",
 				"kprobe_dup2_x64", "kprobe_dup3_x64",
-				// V2 fork-watch belt: kretprobes propagate watched-ness
-				// from parent to returned child pid alongside
-				// raw_tp/sched_process_fork. Empirically necessary on
-				// 6.8 (removing them halves ForkChain reliability).
-				// Pool exhaustion mitigated by maxactive bump at attach.
+				// V2 fork-watch belt (defense-in-depth alongside
+				// raw_tp/sched_process_fork):
 				"kretprobe_clone_x64", "kretprobe_clone3_x64",
 				"kretprobe_vfork_x64", "kretprobe_fork_x64",
 				// V1.4 read-tap (gated by read_tap_enabled map; cheap when off)

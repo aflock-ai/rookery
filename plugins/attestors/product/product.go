@@ -461,13 +461,6 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 func fromCaptureEntries(entries map[string]attestation.CaptureEntry) map[string]attestation.Product {
 	out := make(map[string]attestation.Product, len(entries))
 	for path, entry := range entries {
-		if entry.Digest == nil {
-			continue
-		}
-		ds, err := cryptoutil.NewDigestSet(entry.Digest)
-		if err != nil {
-			continue
-		}
 		mimeType := "unknown"
 		if mt, mtErr := getFileContentType(path); mtErr == nil {
 			mimeType = mt
@@ -476,6 +469,33 @@ func fromCaptureEntries(entries map[string]attestation.CaptureEntry) map[string]
 			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
 				mimeType = "text/directory"
 			}
+		}
+
+		// V2 fix for issue #152: when the trace observed a write but
+		// we couldn't compute a digest (file gone before attest,
+		// fast-exit + relative-path race, etc.), emit a witness-only
+		// product entry. The path stays in the inventory; downstream
+		// (inclusion-proof tree, policy materialsFrom) skips entries
+		// lacking a digest. Without this, atomic-rename and fast-exit
+		// patterns silently drop products.
+		if entry.Digest == nil {
+			out[path] = attestation.Product{
+				MimeType: mimeType,
+				Digest:   nil,
+			}
+			continue
+		}
+
+		ds, err := cryptoutil.NewDigestSet(entry.Digest)
+		if err != nil {
+			// Same fallback path — bad digest data on the trace
+			// side; record the path without a digest rather than
+			// dropping it silently.
+			out[path] = attestation.Product{
+				MimeType: mimeType,
+				Digest:   nil,
+			}
+			continue
 		}
 		out[path] = attestation.Product{
 			MimeType: mimeType,
@@ -497,6 +517,16 @@ func (a *Attestor) buildTree() error {
 	for _, p := range pairs {
 		prod, ok := a.products[p.originalKey]
 		if !ok {
+			continue
+		}
+		// Trace mode now emits witness-only entries with nil Digest
+		// when a write was observed but the file couldn't be hashed
+		// (gone before attest, fast-exit race, etc.). Those entries
+		// stay in the product map for inventory but DON'T enter the
+		// Merkle tree — a tree leaf needs a content digest. Skip
+		// silently here; downstream consumers (link, slsa) still see
+		// the path via Products().
+		if prod.Digest == nil {
 			continue
 		}
 		digestHex, ok := prod.Digest[cryptoutil.DigestValue{Hash: crypto.SHA256}]

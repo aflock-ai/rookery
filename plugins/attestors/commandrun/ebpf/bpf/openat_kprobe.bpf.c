@@ -1196,7 +1196,67 @@ int BPF_KPROBE(kprobe_close_x64, struct pt_regs *regs)
     return 0;
 }
 
-// ───── raw_tp/sched_process_fork — early child-pid registration ──
+// ───── kprobe/wake_up_new_task — canonical fork hook ────────────
+//
+// Tetragon-pattern primary fork-watch (V2 Phase 8). Hooked at the
+// kernel function that wakes a freshly-cloned task for the first
+// time. By the time wake_up_new_task runs:
+//   - The child task_struct is fully initialized (pid, tgid, mm, fs)
+//   - The child has NOT yet executed its first instruction
+//   - We're in the parent's kernel context (bpf_get_current_*
+//     returns the parent)
+//
+// This is the canonical fork hook used by Tetragon (cilium/tetragon
+// `bpf_fork.c`). It's strictly better than raw_tp/sched_process_fork
+// for our use because:
+//   1. Fires LATER in the fork sequence, when the child's data is
+//      stable (vs raw_tp which fires earlier with partial init)
+//   2. No kretprobe slot pressure (unlike __x64_sys_clone kretprobe)
+//   3. Single hook covers fork, vfork, clone, clone3 — they all
+//      route through wake_up_new_task
+//
+// We KEEP raw_tp/sched_process_fork (below) as a fallback on
+// kernels where wake_up_new_task isn't kprobeable. The kprobe is
+// the primary; raw_tp is the safety net.
+
+SEC("kprobe/wake_up_new_task")
+int BPF_KPROBE(kprobe_wake_up_new_task, struct task_struct *p)
+{
+    if (!p) return 0;
+
+    __u32 zero = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&filter_enabled, &zero);
+    if (!enabled || *enabled == 0) return 0;
+
+    // bpf_get_current_pid_tgid returns the PARENT's pid+tgid because
+    // wake_up_new_task runs in the parent's kernel context.
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 parent_pid  = (__u32)(pid_tgid & 0xFFFFFFFF);
+    __u32 parent_tgid = (__u32)(pid_tgid >> 32);
+
+    __u32 child_pid  = BPF_CORE_READ(p, pid);
+    __u32 child_tgid = BPF_CORE_READ(p, tgid);
+    if (child_pid == 0) return 0;
+
+    // Match parent in watched set. Either: already in watched_pids,
+    // or matches root_parent_tgid (bootstrap case).
+    if (!bpf_map_lookup_elem(&watched_pids, &parent_pid) &&
+        !bpf_map_lookup_elem(&watched_pids, &parent_tgid)) {
+        __u32 *root = bpf_map_lookup_elem(&root_parent_tgid, &zero);
+        if (!root || parent_tgid != *root || *root == 0) {
+            return 0;
+        }
+    }
+
+    __u8 one = 1;
+    bpf_map_update_elem(&watched_pids, &child_pid, &one, BPF_ANY);
+    if (child_pid != child_tgid) {
+        bpf_map_update_elem(&watched_pids, &child_tgid, &one, BPF_ANY);
+    }
+    return 0;
+}
+
+// ───── raw_tp/sched_process_fork — fallback (early child-pid registration) ──
 //
 // The watched_pids set is the gate: kprobes only emit events for
 // pids in this set. Until now we relied on the "first openat from
