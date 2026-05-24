@@ -84,7 +84,38 @@ attestations' merkle trees. The v0.2 schema is shaped for that without
 reshape: digests are already their own top-level section, and no digest
 *data* appears in per-process records (only ids).
 
-### 4. Backwards compat
+### 4. Locked design decision — no consolidation (2026-05-24)
+
+command-run v0.2 **does NOT** include top-level `materials[]` /
+`products[]` / `intermediates[]` / `cacheArtifacts[]` sections. The
+material and product attestors remain the canonical, policy-actionable
+surface in the attestation Collection. command-run carries data the
+aggregated views can't: per-process granularity, timestamps, TOCTOU
+divergence (same path, different digests across processes).
+
+Why this decision:
+- Adding those sections to command-run would duplicate the path→digest
+  data that material/product attestors already store in the Collection.
+- Material/product attestors are TINY today — they're aggregated subject
+  views, not redundant trace data. No consolidation size win to capture.
+- Every existing cilock policy with `materialsFrom: ["material"]` and
+  `artifactsFrom: ["product"]` keeps working unchanged.
+
+What about intermediates and cacheArtifacts? They stay command-run-only
+as event-stream-derived metadata. Informational, not policy-actionable.
+Policies that want to gate on cache writes need a new attestor type —
+deferred until a specific use case demands it.
+
+The decision is pinned by `v2_policy_compat_test.go`:
+- `TestPolicyCompat_MaterialerInterface_StaysIntact` fires if anyone
+  makes `*CommandRun` implement `attestation.Materialer` (the
+  consolidation route). The test message includes a migration checklist
+  that must run BEFORE the consolidation lands.
+- `TestPolicyCompat_V01V02_ProduceIdenticalMaterialsView` verifies the
+  policy data invariant: regardless of which command-run wire format
+  is used, the material attestor's `Materials()` returns the same data.
+
+### 5. Backwards compat
 
 Every v0.1 attestation already in production keeps validating:
 
