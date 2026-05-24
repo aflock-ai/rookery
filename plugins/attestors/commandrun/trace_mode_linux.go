@@ -104,12 +104,12 @@ func selectTraceMode() (traceMode, error) {
 // ebpfProbeResult records why eBPF was or was not available, so the
 // error message can be specific.
 type ebpfProbeResult struct {
-	available          bool
-	bpfSyscallExists   bool
-	mapCreateError     string // empty if succeeded
-	progLoadError      string // empty if succeeded
-	capEffective       string
-	euid               int
+	available        bool
+	bpfSyscallExists bool
+	mapCreateError   string // empty if succeeded
+	progLoadError    string // empty if succeeded
+	capEffective     string
+	euid             int
 }
 
 // probeEBPFAvailable tries the minimum bpf(2) operations cilock needs
@@ -130,9 +130,9 @@ func probeEBPFAvailable() ebpfProbeResult {
 	}
 
 	const (
-		bpfMapCreate     = 0
-		bpfProgLoad      = 5
-		bpfMapTypeHash   = 1
+		bpfMapCreate      = 0
+		bpfProgLoad       = 5
+		bpfMapTypeHash    = 1
 		bpfProgTypeKprobe = 2
 	)
 	sysBpf := uintptr(321) // amd64 default
@@ -178,7 +178,7 @@ func probeEBPFAvailable() ebpfProbeResult {
 	}
 	insns := []bpfInsn{
 		{Code: 0xb7, Imm: 0}, // BPF_MOV64_IMM(BPF_REG_0, 0)
-		{Code: 0x95},          // BPF_EXIT_INSN
+		{Code: 0x95},         // BPF_EXIT_INSN
 	}
 	type bpfProgAttr struct {
 		ProgType    uint32

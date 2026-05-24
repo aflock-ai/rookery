@@ -273,13 +273,10 @@ func (w *watchedSet) match(pid, tgid, ppid uint32) bool {
 	return w.pid[pid] || w.pid[tgid] || w.pid[ppid]
 }
 
-func (w *watchedSet) add(pid, ppid uint32) {
-	w.addAndReturnNew(pid, ppid)
-}
-
-// addAndReturnNew is add() that returns true if pid was newly added.
-// Callers use this to push only new pids into the BPF watched-pids
-// map (avoiding repeated map updates for already-watched pids).
+// addAndReturnNew adds (pid, ppid) to the watched set and returns
+// true if pid was newly added. Callers use the return value to push
+// only NEW pids into the BPF watched_pids map, avoiding repeated map
+// updates for already-watched pids.
 func (w *watchedSet) addAndReturnNew(pid, ppid uint32) bool {
 	w.mu.RLock()
 	if w.pid[pid] {

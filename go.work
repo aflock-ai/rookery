@@ -20,6 +20,7 @@ use (
 	./plugins/attestors/aws-config
 	./plugins/attestors/aws-iid
 	./plugins/attestors/commandrun
+	./plugins/attestors/commandrun/ebpf
 	./plugins/attestors/configuration
 	./plugins/attestors/docker
 	./plugins/attestors/docker-bench
