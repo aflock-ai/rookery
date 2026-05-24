@@ -330,7 +330,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	// otherwise walk). Non-auto modes fail loudly when their source
 	// isn't available — see ResolveCaptureMode for the contract.
 	resolved, probe, err := attestation.ResolveCaptureMode(
-		ctx.CaptureMode(), ctx.CompletedAttestors())
+		ctx.CaptureMode(), ctx.CompletedAttestors(), ctx.RegisteredAttestors())
 	if err != nil {
 		return fmt.Errorf("product attestor: %w", err)
 	}

@@ -264,7 +264,20 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	// remains empty; downstream attestors that consume ctx.Materials()
 	// (slsa, link) should be explicitly enabled with --capture-mode=walk
 	// when their data is needed.
-	if ctx.CaptureMode() == attestation.CaptureTrace {
+	// Resolve capture mode. Material runs in MaterialRunType, BEFORE
+	// command-run completes, so ResolveCaptureMode's `completed` list
+	// has no CaptureProbe yet. The `registered` list does (command-run
+	// is in there with tracing intent), which is enough for the auto-
+	// or trace-mode short-circuit. We don't need the probe handle —
+	// data lands on command-run's processes[] later and product picks
+	// it up. We just skip the expensive walk here.
+	resolved, _, err := attestation.ResolveCaptureMode(
+		ctx.CaptureMode(), ctx.CompletedAttestors(), ctx.RegisteredAttestors())
+	if err != nil {
+		return fmt.Errorf("material attestor: %w", err)
+	}
+
+	if resolved == attestation.CaptureTrace {
 		// Emit an empty Merkle tree (RFC 6962 §2.1: empty input → sha256
 		// of empty string) so verifiers expecting the attestation type
 		// still find a well-formed structure.

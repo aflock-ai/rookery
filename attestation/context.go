@@ -334,6 +334,17 @@ func (ctx *AttestationContext) CaptureMode() CaptureMode {
 	return ctx.captureMode.Normalize()
 }
 
+// RegisteredAttestors returns the full list of attestors registered
+// with this context, regardless of whether they've completed. Used by
+// attestors that run early (e.g., material) and need to know whether
+// a later-running attestor (e.g., command-run with tracing) intends to
+// supply data this attestor would otherwise have to compute itself.
+// CompletedAttestors() is the right method for "what's already run";
+// this method is for "what's planned to run."
+func (ctx *AttestationContext) RegisteredAttestors() []Attestor {
+	return ctx.attestors
+}
+
 func (ctx *AttestationContext) StepName() string {
 	return ctx.stepName
 }

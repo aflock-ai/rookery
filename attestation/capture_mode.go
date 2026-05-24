@@ -139,13 +139,23 @@ type CaptureEntry struct {
 
 // ResolveCaptureMode picks a concrete data source for an auto-mode
 // AttestationContext. Called by material/product attestors at run
-// time. Returns the first attestor in `completed` that can supply
-// the resolved mode, or nil if none can.
+// time. Walks two attestor lists: `completed` (attestors that have
+// already run, exposing live data) and `registered` (everything
+// registered with the context, including not-yet-run attestors).
 //
 // Resolution order for CaptureAuto:
-//  1. trace (any completed attestor that CanProvide(CaptureTrace))
+//  1. trace (any attestor that CanProvide(CaptureTrace) — either
+//     completed or merely registered with the intent to provide)
 //  2. walk (always available; nil provider; caller falls back to
 //     its existing directory-walk path)
+//
+// The two-list design lets early-running attestors (material runs
+// before command-run) honor an "auto" choice that resolves to trace
+// even though the trace data isn't captured yet. The caller still
+// gets a non-nil provider when one exists in `completed` and a nil
+// provider (with non-nil resolved mode) when only `registered` is
+// available — material attestor short-circuits its walk in either
+// case; product attestor (running later) gets the live data.
 //
 // For non-auto modes, ResolveCaptureMode requires an exact match
 // and returns an error rather than silently falling back. That is
@@ -154,10 +164,11 @@ type CaptureEntry struct {
 func ResolveCaptureMode(
 	requested CaptureMode,
 	completed []CompletedAttestor,
+	registered []Attestor,
 ) (resolved CaptureMode, provider CaptureProbe, err error) {
 	requested = requested.Normalize()
 
-	findProvider := func(mode CaptureMode) CaptureProbe {
+	findCompletedProvider := func(mode CaptureMode) CaptureProbe {
 		for _, c := range completed {
 			if c.Attestor == nil {
 				continue
@@ -173,28 +184,48 @@ func ResolveCaptureMode(
 		return nil
 	}
 
+	findRegisteredProvider := func(mode CaptureMode) bool {
+		for _, a := range registered {
+			probe, ok := a.(CaptureProbe)
+			if !ok {
+				continue
+			}
+			if probe.CanProvide(mode) {
+				return true
+			}
+		}
+		return false
+	}
+
 	switch requested {
 	case CaptureWalk:
 		return CaptureWalk, nil, nil
 	case CaptureTrace:
-		p := findProvider(CaptureTrace)
-		if p == nil {
-			return "", nil, fmt.Errorf(
-				"capture-mode=trace requested but no completed attestor can provide trace data " +
-					"(is the command-run attestor configured with --trace?)")
-		}
-		return CaptureTrace, p, nil
-	case CaptureIMA:
-		p := findProvider(CaptureIMA)
-		if p == nil {
-			return "", nil, fmt.Errorf(
-				"capture-mode=ima requested but no completed attestor can provide IMA data " +
-					"(is IMA enabled in the kernel with an active measurement policy?)")
-		}
-		return CaptureIMA, p, nil
-	case CaptureAuto:
-		if p := findProvider(CaptureTrace); p != nil {
+		if p := findCompletedProvider(CaptureTrace); p != nil {
 			return CaptureTrace, p, nil
+		}
+		if findRegisteredProvider(CaptureTrace) {
+			return CaptureTrace, nil, nil
+		}
+		return "", nil, fmt.Errorf(
+			"capture-mode=trace requested but no attestor can provide trace data " +
+				"(is the command-run attestor configured with --trace?)")
+	case CaptureIMA:
+		if p := findCompletedProvider(CaptureIMA); p != nil {
+			return CaptureIMA, p, nil
+		}
+		if findRegisteredProvider(CaptureIMA) {
+			return CaptureIMA, nil, nil
+		}
+		return "", nil, fmt.Errorf(
+			"capture-mode=ima requested but no attestor can provide IMA data " +
+				"(is IMA enabled in the kernel with an active measurement policy?)")
+	case CaptureAuto:
+		if p := findCompletedProvider(CaptureTrace); p != nil {
+			return CaptureTrace, p, nil
+		}
+		if findRegisteredProvider(CaptureTrace) {
+			return CaptureTrace, nil, nil
 		}
 		return CaptureWalk, nil, nil
 	}

@@ -381,11 +381,18 @@ func (rc *CommandRun) RunType() attestation.RunType {
 	return RunType
 }
 
-// CanProvide implements attestation.CaptureProbe. The command-run
-// attestor can supply trace-derived materials + products whenever
-// tracing was enabled AND it actually captured process data. When
-// the tracee crashed before producing any process records, callers
-// should NOT use trace data — fall back to walk for correctness.
+// CanProvide implements attestation.CaptureProbe. Returns true when
+// the command-run attestor INTENDS to provide trace data — tracing
+// is enabled in the config. The actual data may not be available
+// yet (this method is called by material attestor BEFORE the trace
+// runs), but the intent is enough for capture-mode resolution.
+//
+// At call time TraceInputs/TraceOutputs returns whatever's actually
+// captured — empty if the tracee crashed before producing records,
+// or if this is called before command-run's Attest finishes. Material
+// attestor accepts this contract: it short-circuits its walk and
+// trusts the trace to populate later. If the trace fails entirely
+// the materials map is empty by design (the "fail loudly" contract).
 //
 // IMA support arrives in a follow-up; for now CaptureIMA always
 // returns false here even when an IMA log is available, until the
@@ -394,10 +401,10 @@ func (rc *CommandRun) CanProvide(mode attestation.CaptureMode) bool {
 	if mode != attestation.CaptureTrace {
 		return false
 	}
-	if rc == nil || !rc.enableTracing {
+	if rc == nil {
 		return false
 	}
-	return len(rc.Processes) > 0
+	return rc.enableTracing
 }
 
 // TraceInputs implements attestation.CaptureProbe. Returns one entry
