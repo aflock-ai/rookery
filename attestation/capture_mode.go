@@ -96,6 +96,17 @@ func WithCaptureMode(m CaptureMode) AttestationContextOption {
 	}
 }
 
+// WithCachePatternOptions sets the cache classification pattern
+// options on the context. Operators control this via CLI flags
+// (--cache-add-pattern, --cache-allow-pattern,
+// --cache-disable-defaults, --cache-disable-system-query) which
+// the cilock CLI translates into a CachePatternOptions value.
+func WithCachePatternOptions(o CachePatternOptions) AttestationContextOption {
+	return func(ctx *AttestationContext) {
+		ctx.cachePatternOpts = o
+	}
+}
+
 // CaptureProbe is implemented by attestors that can produce
 // trace-derived materials/products. The framework asks each completed
 // attestor whether it can supply the requested mode; the first to say

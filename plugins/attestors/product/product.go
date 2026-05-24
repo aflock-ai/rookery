@@ -336,6 +336,25 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	if resolved == attestation.CaptureTrace && probe != nil {
+		// Build the cache/temp classifier from the configured
+		// pattern options (defaults + env-discovered + user-added,
+		// less user-allowed) and install it on the trace probe so
+		// TraceOutputs filters cache/temp paths into a separate
+		// bucket (TraceCacheArtifacts) rather than the products set.
+		patterns := attestation.ResolveCachePatterns(ctx.CachePatterns())
+		matcher, perrs := attestation.NewCachePathMatcher(patterns)
+		for _, perr := range perrs {
+			// Soft failure: a bad pattern doesn't block attestation,
+			// just gets logged. Operator sees it and fixes.
+			//nolint:errcheck // best-effort logging
+			_ = perr
+		}
+		if installer, ok := probe.(interface {
+			SetCacheMatcher(*attestation.CachePathMatcher)
+		}); ok {
+			installer.SetCacheMatcher(matcher)
+		}
+
 		// Trace mode: consume the digests the read-tap / path-hash
 		// already computed during the trace. Skip the workdir walk
 		// entirely — the trace knows exactly what files the tracee

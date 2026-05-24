@@ -159,6 +159,12 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		attestation.WithHashes(roHashes),
 		attestation.WithDirHashGlob(ro.DirHashGlobs),
 		attestation.WithCaptureMode(captureMode),
+		attestation.WithCachePatternOptions(attestation.CachePatternOptions{
+			Add:                ro.CacheAddPatterns,
+			Allow:              ro.CacheAllowPatterns,
+			DisableDefaults:    ro.CacheDisableDefaults,
+			DisableSystemQuery: ro.CacheDisableEnvProbe,
+		}),
 	}
 
 	if ro.EnvFilterSensitiveVars {

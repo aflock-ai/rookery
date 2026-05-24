@@ -151,6 +151,12 @@ type AttestationContext struct {
 	// See attestation/capture_mode.go for the full semantics.
 	captureMode CaptureMode
 
+	// Cache pattern options control how the framework classifies a
+	// tracee-written file as cache/temp vs product. See
+	// CachePatternOptions for the full semantics. Default values
+	// (zero struct) mean "use built-in defaults + env query."
+	cachePatternOpts CachePatternOptions
+
 	// Environment configuration fields used by the environment plugin
 	envFilterVarsEnabled           bool
 	envAdditionalKeys              []string
@@ -361,6 +367,14 @@ func (ctx *AttestationContext) Products() map[string]Product {
 // trace-mode operators see "trace"; etc.
 func (ctx *AttestationContext) CaptureMode() CaptureMode {
 	return ctx.captureMode.Normalize()
+}
+
+// CachePatterns returns the configured pattern options. Attestors
+// pass these to ResolveCachePatterns + NewCachePathMatcher to build
+// the classifier. Default (zero-valued) options resolve to "use
+// DefaultCachePatterns + SystemCachePathsFromEnv."
+func (ctx *AttestationContext) CachePatterns() CachePatternOptions {
+	return ctx.cachePatternOpts
 }
 
 // RegisteredAttestors returns the full list of attestors registered

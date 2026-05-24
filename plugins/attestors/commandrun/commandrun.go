@@ -256,14 +256,22 @@ type TraceSummary struct {
 
 // TraceTotals is the scalar count summary.
 type TraceTotals struct {
-	Processes   int `json:"processes,omitempty"`
-	UniquePaths int `json:"uniquePaths,omitempty"`
-	Reads       int `json:"reads,omitempty"`
-	Writes      int `json:"writes,omitempty"`
-	Renames     int `json:"renames,omitempty"`
-	Deletes     int `json:"deletes,omitempty"`
-	Execs       int `json:"execs,omitempty"`
-	NetEvents   int `json:"netEvents,omitempty"`
+	Processes        int `json:"processes,omitempty"`
+	UniquePaths      int `json:"uniquePaths,omitempty"`
+	Reads            int `json:"reads,omitempty"`
+	Writes           int `json:"writes,omitempty"`
+	Renames          int `json:"renames,omitempty"`
+	Deletes          int `json:"deletes,omitempty"`
+	Execs            int `json:"execs,omitempty"`
+	NetEvents        int `json:"netEvents,omitempty"`
+	// Classification breakdown — populated when CaptureProbe path
+	// runs (capture-mode=trace). Lets the AI agent see at-a-glance
+	// what kind of files the tracee touched without loading the
+	// per-process arrays.
+	Materials      int `json:"materials,omitempty"`     // distinct files read
+	Intermediates  int `json:"intermediates,omitempty"` // files both written + read
+	Products       int `json:"products,omitempty"`      // user-facing outputs
+	CacheArtifacts int `json:"cacheArtifacts,omitempty"`// written into cache/temp
 }
 
 // TraceOutliers flags noteworthy artifacts. Most are file-event
@@ -326,6 +334,12 @@ type CommandRun struct {
 	materials      map[string]cryptoutil.DigestSet
 	enableTracing  bool
 	ignoreExitCode bool
+
+	// cacheMatcher classifies tracee-written paths as cache/temp
+	// (excluded from products) vs user-facing outputs. Installed by
+	// the product attestor at Attest time via SetCacheMatcher; nil
+	// in walk-mode runs (where TraceOutputs isn't called).
+	cacheMatcher *attestation.CachePathMatcher
 
 	// ebpfConsumer holds an open eBPF consumer when the eBPF tracing
 	// path is active. Opened BEFORE the child process starts so
@@ -445,13 +459,56 @@ func (rc *CommandRun) TraceInputs() map[string]attestation.CaptureEntry {
 	return out
 }
 
+// SetCacheMatcher installs a compiled cache classifier on the
+// command-run attestor. Called by the product attestor (via
+// ConfigureFromCtx) before invoking TraceOutputs / TraceCacheArtifacts
+// so the classifier reflects the context's CachePatternOptions.
+func (rc *CommandRun) SetCacheMatcher(m *attestation.CachePathMatcher) {
+	if rc != nil {
+		rc.cacheMatcher = m
+	}
+}
+
+// Finalize implements attestation.Finalizer. Runs after every other
+// attestor has completed — at that point the product attestor has
+// installed the cache matcher on this CommandRun and the trace's
+// per-process data is stable. We populate the Summary's classification
+// counters (materials / intermediates / products / cacheArtifacts)
+// so AI agents reading the summary block see the breakdown without
+// loading per-attestation merkle trees.
+//
+// Tiny cost: O(N) over the captured paths once, where N is the total
+// unique paths (a few × 10K on a Go build). Sub-millisecond.
+func (rc *CommandRun) Finalize(ctx *attestation.AttestationContext) error {
+	if rc == nil || rc.Summary == nil {
+		return nil
+	}
+	// Materials = unique paths from reads (deduped across processes).
+	mats := rc.TraceInputs()
+	inters := rc.TraceIntermediates()
+	prods := rc.TraceOutputs()
+	cache := rc.TraceCacheArtifacts()
+	rc.Summary.Totals.Materials = len(mats)
+	rc.Summary.Totals.Intermediates = len(inters)
+	rc.Summary.Totals.Products = len(prods)
+	rc.Summary.Totals.CacheArtifacts = len(cache)
+	return nil
+}
+
 // TraceOutputs implements attestation.CaptureProbe. Returns ONE entry
-// per file path the tracee wrote and then NEVER read back — the true
-// "products" of the build. Files the tracee wrote AND later read are
-// intermediates (e.g., Go's _pkg_.a build cache entries that compile
-// workers produce and the linker consumes); those flow into
-// TraceInputs() instead, since semantically they're inputs the linker
-// stage consumed.
+// per file path the tracee wrote and then NEVER read back, EXCLUDING
+// build-internal storage (caches, temp dirs). These are the true
+// user-facing "products" of the build — the final compiled binary,
+// generated source files in the working directory, etc.
+//
+// Files the tracee wrote AND later read are intermediates (e.g.,
+// Go's _pkg_.a build cache entries that compile workers produce and
+// the linker consumes); those flow into TraceInputs() instead, since
+// semantically they're inputs the linker stage consumed.
+//
+// Files written to /tmp, ~/.cache, /var/tmp etc. are cache/temp
+// artifacts — surfaced via TraceCacheArtifacts() for inventory but
+// not counted as products.
 //
 // Path-hashing happens here lazily: outputs aren't streamed during the
 // trace (the tracee owns those bytes and writes them; the read-tap
@@ -501,10 +558,81 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 		if readPaths[p] {
 			continue // intermediate — belongs to materials, not products
 		}
+		if rc.cacheMatcher != nil && rc.cacheMatcher.Matches(p) {
+			continue // cache/temp — surfaced via TraceCacheArtifacts
+		}
+		// Skip non-regular files (directories, sockets, pipes, gone)
+		// — they can't be path-hashed. openat on a directory still
+		// records a write event; that's not a product.
+		info, err := os.Stat(p)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
 		digest := pathHashIfExists(p, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
+		if digest == nil {
+			continue // hash failed; don't emit a placeholder
+		}
 		out[p] = attestation.CaptureEntry{
 			Digest: digest,
 			Source: "trace-pathhash",
+		}
+	}
+	return out
+}
+
+// TraceCacheArtifacts returns the files the tracee wrote into
+// well-known cache or temp paths (matched by the installed
+// CachePathMatcher). Semantically these are build-internal storage,
+// not user-facing products. Surfaced separately so downstream
+// auditors can inventory them without conflating them with products.
+//
+// Same filtering as TraceOutputs: excludes intermediates (write+read)
+// so each path lands in at most ONE bucket:
+//   - read-only path     → material
+//   - written+read path  → intermediate (within materials)
+//   - written + matches  → cache artifact (this method)
+//   - written, not read,
+//     no cache match     → product (TraceOutputs)
+func (rc *CommandRun) TraceCacheArtifacts() map[string]attestation.CaptureEntry {
+	if rc == nil || rc.cacheMatcher == nil {
+		return nil
+	}
+	readPaths := make(map[string]bool, 4096)
+	for i := range rc.Processes {
+		for path, ds := range rc.Processes[i].OpenedFiles {
+			if path == "" || ds == nil {
+				continue
+			}
+			readPaths[path] = true
+		}
+	}
+	out := make(map[string]attestation.CaptureEntry, 256)
+	add := func(path string) {
+		if path == "" || readPaths[path] {
+			return
+		}
+		if !rc.cacheMatcher.Matches(path) {
+			return
+		}
+		if _, dup := out[path]; dup {
+			return
+		}
+		digest := pathHashIfExists(path, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
+		out[path] = attestation.CaptureEntry{
+			Digest: digest,
+			Source: "trace-pathhash",
+		}
+	}
+	for i := range rc.Processes {
+		fo := rc.Processes[i].FileOps
+		if fo == nil {
+			continue
+		}
+		for _, w := range fo.Writes {
+			add(w.Path)
+		}
+		for _, r := range fo.Renames {
+			add(r.NewPath)
 		}
 	}
 	return out
