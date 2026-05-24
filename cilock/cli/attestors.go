@@ -20,10 +20,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"text/tabwriter"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
-	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 )
 
@@ -93,17 +93,15 @@ func runList(_ context.Context) error {
 		items = append(items, item)
 	}
 
-	table := tablewriter.NewWriter(os.Stdout)
-	table.Header([]string{"Name", "Type", "RunType"})
-	if err := table.Bulk(items); err != nil {
-		return fmt.Errorf("error adding items to table: %w", err)
+	// Render with stdlib text/tabwriter — keeps the column-aligned
+	// output of the previous olekukonko/tablewriter implementation
+	// without the ~6-module dep chain (mattn/go-runewidth + transitives).
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tTYPE\tRUNTYPE")
+	for _, item := range items {
+		fmt.Fprintf(w, "%s\t%s\t%s\n", item[0], item[1], item[2])
 	}
-
-	if err := table.Render(); err != nil {
-		return fmt.Errorf("error rendering table: %w", err)
-	}
-
-	return nil
+	return w.Flush()
 }
 
 func runSchema(_ context.Context, args []string) error {
