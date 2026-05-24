@@ -255,9 +255,36 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 // walk uses the same RecordArtifacts call the v0.1 attestor used — only
 // the post-processing changed.
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
-	// Same walk semantics as v0.1: no include/exclude globs (material
-	// attestor captures the entire workdir pre-build), no tracing
-	// overlay (tracing data only matters for products).
+	// Trace-mode short-circuit: the material attestor runs in the
+	// MaterialRunType phase, BEFORE the command-run trace executes.
+	// In trace mode the canonical inputs come from the trace
+	// (processes[].openedfiles, exposed via CaptureProbe.TraceInputs).
+	// Walking the working dir here would do ~1.2 s of disk I/O whose
+	// results are about to be superseded — skip it. Materials map
+	// remains empty; downstream attestors that consume ctx.Materials()
+	// (slsa, link) should be explicitly enabled with --capture-mode=walk
+	// when their data is needed.
+	if ctx.CaptureMode() == attestation.CaptureTrace {
+		// Emit an empty Merkle tree (RFC 6962 §2.1: empty input → sha256
+		// of empty string) so verifiers expecting the attestation type
+		// still find a well-formed structure.
+		a.materials = map[string]cryptoutil.DigestSet{}
+		a.leaves = nil
+		emptyTree, treeErr := merkle.NewTree(nil)
+		if treeErr != nil {
+			return fmt.Errorf("material attestor: empty tree: %w", treeErr)
+		}
+		a.MerkleRoot = hex.EncodeToString(emptyTree.Root())
+		a.TreeSize = emptyTree.Size()
+		a.HashAlgorithmField = HashAlgorithm
+		a.ConstructionField = Construction
+		return nil
+	}
+
+	// Walk mode (default + auto-when-trace-unavailable). Same walk
+	// semantics as v0.1: no include/exclude globs (material attestor
+	// captures the entire workdir pre-build), no tracing overlay
+	// (tracing data only matters for products).
 	mats, err := file.RecordArtifacts(
 		ctx.WorkingDir(),
 		nil,
