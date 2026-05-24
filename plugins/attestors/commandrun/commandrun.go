@@ -20,6 +20,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -207,11 +210,116 @@ type ProcessInfo struct {
 	ExitCode int `json:"exitcode,omitempty"`
 }
 
+// TraceSummary is the AI-agent and operator-friendly index of a
+// trace. Designed so a reader scanning the first ~5 KB of the
+// attestation has enough info to decide what to drill into.
+//
+// All fields are best-effort and omitempty — a non-traced run
+// or a trace that produced no events still serializes cleanly
+// (Summary itself is omitempty on CommandRun).
+type TraceSummary struct {
+	// CaptureMode records which data source produced the trace —
+	// "ebpf-readtap", "ptrace", or unset for non-traced runs.
+	// Verifiers + agents use this to understand trust level.
+	CaptureMode string `json:"captureMode,omitempty"`
+
+	// TraceModeDetail is a human-readable hint for the operator,
+	// e.g. "eBPF kprobes + read-tap" or "ptrace+seccomp". Optional.
+	TraceModeDetail string `json:"traceModeDetail,omitempty"`
+
+	// DurationNs is how long the tracee ran, end-to-end, in
+	// nanoseconds. Lets agents triage by elapsed time without
+	// computing it from start/end fields elsewhere.
+	DurationNs int64 `json:"durationNs,omitempty"`
+
+	// Totals are scalar counts useful for at-a-glance triage.
+	Totals TraceTotals `json:"totals"`
+
+	// Outliers flags interesting events worth investigating — the
+	// largest file read, the most-frequently-opened path, any
+	// security-sensitive syscalls (ptrace, mount, memfd_create).
+	// A clean build has all-zero counts here.
+	Outliers TraceOutliers `json:"outliers,omitempty"`
+
+	// Diagnostics records data-quality info the operator needs to
+	// see immediately — ringbuf drops, partial reads that triggered
+	// path-hash fallback, etc. Non-zero values mean the attestation
+	// may be incomplete.
+	Diagnostics TraceDiagnostics `json:"diagnostics,omitempty"`
+
+	// InterestingPaths is a short list of paths an agent should
+	// look at first — anything outside the "normal" build paths
+	// (/etc/passwd, /proc/self/environ, etc.) or anything in the
+	// security-events list. Capped to ~32 entries.
+	InterestingPaths []string `json:"interestingPaths,omitempty"`
+}
+
+// TraceTotals is the scalar count summary.
+type TraceTotals struct {
+	Processes   int `json:"processes,omitempty"`
+	UniquePaths int `json:"uniquePaths,omitempty"`
+	Reads       int `json:"reads,omitempty"`
+	Writes      int `json:"writes,omitempty"`
+	Renames     int `json:"renames,omitempty"`
+	Deletes     int `json:"deletes,omitempty"`
+	Execs       int `json:"execs,omitempty"`
+	NetEvents   int `json:"netEvents,omitempty"`
+}
+
+// TraceOutliers flags noteworthy artifacts. Most are file-event
+// outliers; SuspiciousOps is a tally of security-sensitive syscalls
+// (ptrace, mount, etc.) that any reader should examine.
+type TraceOutliers struct {
+	LargestRead   *TraceFileRef     `json:"largestRead,omitempty"`
+	MostOpened    *TraceFileRef     `json:"mostOpened,omitempty"`
+	SuspiciousOps map[string]int    `json:"suspiciousOps,omitempty"`
+}
+
+// TraceFileRef points at a specific file mentioned in the trace,
+// with the metric that made it interesting.
+type TraceFileRef struct {
+	Path  string `json:"path"`
+	Bytes int64  `json:"bytes,omitempty"`
+	Count int    `json:"count,omitempty"`
+}
+
+// TraceDiagnostics records data-quality info. Non-zero values mean
+// the attestation has known gaps.
+type TraceDiagnostics struct {
+	// RingbufOpenatDrops is the count of openat events the BPF
+	// ringbuf dropped under pressure. Non-zero means the
+	// attestation is missing some opens.
+	RingbufOpenatDrops uint64 `json:"ringbufOpenatDrops,omitempty"`
+
+	// RingbufReadTapDrops is the same for read-tap content events.
+	RingbufReadTapDrops uint64 `json:"ringbufReadTapDrops,omitempty"`
+
+	// PartialReadFallbacks is the count of files where the tracee
+	// did a partial read (closed before reading the full file) and
+	// the framework fell back to path-hash. Informational only.
+	PartialReadFallbacks uint64 `json:"partialReadFallbacks,omitempty"`
+
+	// FallbackHashFailures is the count of partial-read fallbacks
+	// where the path-hash itself couldn't read the file (e.g.,
+	// file was deleted before fallback ran). Non-zero means some
+	// paths in the attestation have nil digests by design.
+	FallbackHashFailures uint64 `json:"fallbackHashFailures,omitempty"`
+}
+
 type CommandRun struct {
-	Cmd       []string      `json:"cmd"`
+	Cmd      []string `json:"cmd"`
+	ExitCode int      `json:"exitcode"`
+
+	// Summary is a top-level scannable view of the trace. Designed
+	// for AI agents and operators who need to triage a build without
+	// loading the full processes[] array (which can be 20+ MB on a
+	// large parallel build). Populated by the trace path; empty in
+	// non-traced runs. Serialized BEFORE the heavy fields so a
+	// streaming JSON reader hits the summary in the first few KB.
+	Summary *TraceSummary `json:"summary,omitempty"`
+
 	Stdout    string        `json:"stdout,omitempty"`
 	Stderr    string        `json:"stderr,omitempty"`
-	ExitCode  int           `json:"exitcode"`
 	Processes []ProcessInfo `json:"processes,omitempty"`
 
 	silent         bool
@@ -376,6 +484,142 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 	return out
 }
 
+// buildTraceSummary produces the AI-agent / operator scannable view
+// of a finished trace. Computed in a single pass over Processes.
+// Cost is O(N) over the captured opens + file-ops, which is tiny
+// compared to the trace itself.
+func buildTraceSummary(processes []ProcessInfo, duration time.Duration) *TraceSummary {
+	s := &TraceSummary{
+		DurationNs: duration.Nanoseconds(),
+	}
+
+	pathOpens := make(map[string]int, 4096)
+	uniquePaths := make(map[string]bool, 4096)
+	interesting := make(map[string]bool, 16)
+
+	for i := range processes {
+		p := &processes[i]
+		s.Totals.Processes++
+
+		for path := range p.OpenedFiles {
+			if path == "" {
+				continue // defensive: shouldn't happen, but skip if it does
+			}
+			uniquePaths[path] = true
+			pathOpens[path]++
+			s.Totals.Reads++
+			if isInterestingPath(path) {
+				interesting[path] = true
+			}
+		}
+
+		if p.FileOps != nil {
+			s.Totals.Writes += len(p.FileOps.Writes)
+			s.Totals.Renames += len(p.FileOps.Renames)
+			s.Totals.Deletes += len(p.FileOps.Deletes)
+		}
+
+		if p.Program != "" {
+			s.Totals.Execs++
+		}
+		if p.Network != nil {
+			s.Totals.NetEvents++
+		}
+
+		for _, ev := range p.SyscallEvents {
+			if !isSecuritySensitiveSyscall(ev.Syscall) {
+				continue // TOCTOU markers etc. aren't security signals
+			}
+			if s.Outliers.SuspiciousOps == nil {
+				s.Outliers.SuspiciousOps = make(map[string]int, 8)
+			}
+			s.Outliers.SuspiciousOps[ev.Syscall]++
+		}
+	}
+	s.Totals.UniquePaths = len(uniquePaths)
+
+	// Most-opened path: pick the highest count.
+	var mostPath string
+	var mostCount int
+	for path, count := range pathOpens {
+		if count > mostCount {
+			mostCount = count
+			mostPath = path
+		}
+	}
+	if mostCount > 1 {
+		s.Outliers.MostOpened = &TraceFileRef{Path: mostPath, Count: mostCount}
+	}
+
+	// InterestingPaths: sort + cap at 32 entries so an agent can
+	// scan them quickly.
+	if len(interesting) > 0 {
+		paths := make([]string, 0, len(interesting))
+		for p := range interesting {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		if len(paths) > 32 {
+			paths = paths[:32]
+		}
+		s.InterestingPaths = paths
+	}
+
+	return s
+}
+
+// isSecuritySensitiveSyscall identifies syscalls that, on their own,
+// warrant an agent's attention regardless of count. Excludes
+// high-frequency normal ops (dup2 fires constantly during shell
+// pipelines and isn't itself a red flag) and operational markers
+// the trace records into SyscallEvents (TOCTOU-suspect openats are
+// data-quality signals, not security ones).
+func isSecuritySensitiveSyscall(name string) bool {
+	switch name {
+	case "ptrace", "mount", "memfd_create", "prctl",
+		"setsid", "setns", "init_module", "finit_module",
+		"clone", "clone3", "mprotect", "kexec_load":
+		return true
+	}
+	return false
+}
+
+// isInterestingPath returns true for paths an AI agent or operator
+// auditor should look at first — anything outside the normal build
+// + system path tree. Conservative: errs on the side of inclusion.
+func isInterestingPath(p string) bool {
+	// Paths that commonly carry secrets or environment state.
+	suspect := []string{
+		"/etc/passwd",
+		"/etc/shadow",
+		"/etc/sudoers",
+		"/etc/ssh/",
+		"/etc/kubernetes/",
+		"/.ssh/",
+		"/.aws/",
+		"/.docker/",
+		"/.kube/",
+		"/.gnupg/",
+		"/proc/self/environ",
+		"/proc/self/maps",
+		"/proc/self/mem",
+		"/proc/1/",
+		"/dev/kvm",
+		"/dev/mem",
+		"/dev/kmsg",
+		"/sys/kernel/security/",
+		"/var/run/docker.sock",
+		"/run/docker.sock",
+		"/var/run/secrets/",
+	}
+	for _, s := range suspect {
+		if strings.Contains(p, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // pathHashIfExists returns a name-map digest for the file at path, or
 // nil if the file doesn't exist / can't be read. Errors are swallowed
 // here because outputs may legitimately disappear (the tracee writes
@@ -442,11 +686,19 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 
 	var err error
 	if r.enableTracing { //nolint:nestif // sequential exit-handling: trace vs Wait, ExitError type assert, ignore-exit-code branch — each shallow check, refactor would obscure ordering
+		traceStart := time.Now()
 		r.Processes, err = r.trace(c, ctx)
+		traceDuration := time.Since(traceStart)
 		// Wait for I/O copying goroutines to complete before reading buffers.
 		// trace() uses ptrace to detect process exit, but exec's I/O goroutines
 		// may still be flushing pipe data into stdoutBuffer/stderrBuffer.
 		_ = c.Wait() //nolint:errcheck // exit status already captured by trace
+
+		// Build the AI-agent-friendly summary from the captured
+		// Processes data. Runs once, after the trace completes.
+		// Tiny CPU cost (one pass over the slice) for a big UX win
+		// — readers can triage the build in <5 KB instead of 20 MB.
+		r.Summary = buildTraceSummary(r.Processes, traceDuration)
 	} else {
 		err = c.Wait()
 		if exitErr, ok := err.(*exec.ExitError); ok {
