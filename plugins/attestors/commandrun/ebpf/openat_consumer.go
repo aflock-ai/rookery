@@ -98,8 +98,12 @@ const (
 	readChunkBytes     = 16384
 	readChunkEventSize = cilockHdrSize + taskCommLen + 4 + 4 + 4 + 4 + readChunkBytes
 
-	// close_event: hdr(32) + comm(16) + fd(4) + pad(4) = 56
-	closeEventSize = cilockHdrSize + taskCommLen + 4 + 4
+	// close_event: hdr(32) + comm(16) + fd(4) + path_len(4)
+	//            + size_at_open(8) + path(256) = 320
+	// V2 Phase 8 stage 2: carries the path INLINE so userspace
+	// dispatcher doesn't need a parallel openPaths cache.
+	closeEventSize = cilockHdrSize + taskCommLen + 4 + 4 + 8 + closePathLen
+	closePathLen   = 256
 
 	maxPath     = 4096
 	taskCommLen = 16
@@ -134,12 +138,19 @@ type ReadChunkEvent struct {
 }
 
 // CloseEvent signals userspace to finalize the streaming hash for
-// (PID, FD). Userspace pairs this with the openat event that
-// produced FD to record the digest against the file's path.
+// (PID, FD).
+//
+// V2 Phase 8 stage 2: the close event carries the resolved path +
+// size_at_open INLINE, populated from the kernel-side fd_table.
+// Path is empty when the close fires on an fd we never saw opened
+// (inherited fd, LRU-evicted entry); the dispatcher then falls back
+// to its in-flight state if any.
 type CloseEvent struct {
 	EventHeader
-	Comm string
-	FD   int32
+	Comm        string
+	FD          int32
+	Path        string // resolved absolute path from BPF; "" if no fd_table entry
+	SizeAtOpen  uint64
 }
 
 // WriteEvent carries (fd, bytes) from a write/pwrite kprobe.
@@ -976,10 +987,25 @@ func decodeCloseEvent(raw []byte) (*CloseEvent, error) {
 	h := decodeEventHeader(raw)
 	const commOff = cilockHdrSize
 	const fdOff = commOff + taskCommLen
+	const pathLenOff = fdOff + 4
+	const sizeAtOpenOff = pathLenOff + 4
+	const pathOff = sizeAtOpenOff + 8
+	pathLen := binary.LittleEndian.Uint32(raw[pathLenOff:])
+	if pathLen > closePathLen {
+		pathLen = closePathLen
+	}
+	var path string
+	if pathLen > 0 {
+		// path field is NUL-terminated by bpf_probe_read_kernel — use
+		// readCStr which strips at the first NUL.
+		path = readCStr(raw[pathOff : pathOff+int(pathLen)])
+	}
 	return &CloseEvent{
 		EventHeader: h,
 		Comm:        readCStr(raw[commOff : commOff+taskCommLen]),
 		FD:          int32(binary.LittleEndian.Uint32(raw[fdOff:])),
+		Path:        path,
+		SizeAtOpen:  binary.LittleEndian.Uint64(raw[sizeAtOpenOff:]),
 	}, nil
 }
 

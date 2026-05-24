@@ -171,13 +171,30 @@ struct read_chunk_event {
 };
 
 // Close event. Signals userspace to finalize the per-(pid, fd) hash
-// and record it. Tiny — just (pid, fd, comm).
-// Total = 32 (hdr) + 16 (comm) + 4 (fd) + 4 (pad) = 56 bytes
+// and record it.
+//
+// V2 Phase 8 stage 2: carries the resolved path + size_at_open
+// INLINE, populated from the kernel-side fd_table (set by the
+// matching openat kretprobe). Userspace no longer needs to maintain
+// a (pid, fd) → openInfo map — the close event is self-describing.
+// Eliminates the entire openPaths/pendingCloses dance + the close-
+// before-openat reorder window + the fd-reuse staleness bugs that
+// the timestamp-gated pendingClose patch worked around.
+//
+// `path_len` is the strictly-positive byte length of `path[]`.
+// When 0, no fd_table entry existed (close on a non-tracked fd —
+// e.g. fd inherited from before tracing began, or already evicted
+// by LRU). Userspace falls back to its in-flight state if any.
+//
+// Total = 32 (hdr) + 16 (comm) + 4 (fd) + 4 (path_len) + 8 (size_at_open) + 256 (path) = 320 bytes
+#define CLOSE_PATH_LEN 256
 struct close_event {
     struct cilock_evt_hdr hdr;
     char  comm[TASK_COMM_LEN];
     __s32 fd;
-    __u32 _pad;
+    __u32 path_len;
+    __u64 size_at_open;
+    char  path[CLOSE_PATH_LEN];
 };
 
 // Kprobe→kretprobe handoff for read syscalls: stash (fd, user_buf,
@@ -358,6 +375,90 @@ task_set_watched(void)
     struct task_state init = {.watched = 1};
     bpf_task_storage_get(&task_storage, t, &init,
         BPF_LOCAL_STORAGE_GET_F_CREATE);
+}
+
+// ───── fd_table — per-(task, fd) open metadata (V2 Phase 8 stage 2) ────
+//
+// Keyed by (task_struct pointer, fd). Populated by the openat
+// kretprobe; consumed (and deleted) by the close kprobe. Carries
+// the resolved path + size_at_open inline so the close event is
+// self-describing and userspace doesn't need to maintain a parallel
+// (pid, fd) → openInfo map.
+//
+// Why a global LRU_HASH instead of task_storage-with-inner-map: the
+// inner-map pattern requires either (a) a fixed-size per-task array
+// indexed by fd (MAX_FDS × sizeof(fd_entry) = wasteful for sparse
+// fds) or (b) HASH_OF_MAPS with one inner map per task (high alloc
+// churn on fork-heavy workloads). LRU_HASH with composite key is
+// simpler and the LRU policy handles cleanup if a task exits without
+// our close kprobe firing (e.g., abrupt termination, sandbox kill).
+//
+// 65536 entries × 280B ≈ 18MB max ringbuf-side. Plenty of headroom
+// for kernel-compile-class workloads (max ~10K concurrent open fds).
+struct fd_key {
+    __u64 task;    // task_struct pointer (stable for task's lifetime)
+    __s32 fd;
+    __u32 _pad;
+};
+struct fd_entry {
+    __u64 size_at_open;
+    __u32 path_len;
+    __u32 _pad;
+    char  path[CLOSE_PATH_LEN];
+};
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 65536);
+    __type(key, struct fd_key);
+    __type(value, struct fd_entry);
+} fd_table SEC(".maps");
+
+// fd_table_set inserts an entry for the current task's fd. Path
+// argument MUST already be NUL-terminated by the caller (we copy
+// the strlen-bounded path verbatim).
+static __always_inline void
+fd_table_set(__s32 fd, const char *path, __u32 path_len, __u64 size_at_open)
+{
+    if (fd < 0) return;
+    if (path_len == 0 || path_len > CLOSE_PATH_LEN) return;
+    struct task_struct *t = bpf_get_current_task_btf();
+    if (!t) return;
+    struct fd_key k = { .task = (__u64)t, .fd = fd };
+    struct fd_entry e = {};
+    e.size_at_open = size_at_open;
+    e.path_len = path_len;
+    // bpf_probe_read_kernel_str would handle null-termination, but
+    // path here lives in the kernel-side openat_stash already bounded
+    // by stash_openat_args. Direct memcpy is safe + verifier-friendly.
+    bpf_probe_read_kernel(e.path, CLOSE_PATH_LEN, path);
+    bpf_map_update_elem(&fd_table, &k, &e, BPF_ANY);
+}
+
+// fd_table_take fetches and DELETES an fd_table entry. Caller copies
+// out path + size_at_open before issuing the close event.
+static __always_inline struct fd_entry *
+fd_table_take(__s32 fd)
+{
+    if (fd < 0) return NULL;
+    struct task_struct *t = bpf_get_current_task_btf();
+    if (!t) return NULL;
+    struct fd_key k = { .task = (__u64)t, .fd = fd };
+    struct fd_entry *e = bpf_map_lookup_elem(&fd_table, &k);
+    if (!e) return NULL;
+    // The lookup returns a pointer into the map; deletion invalidates
+    // it. We MUST NOT delete here — emit_close copies fields out first,
+    // then deletes via fd_table_drop().
+    return e;
+}
+
+static __always_inline void
+fd_table_drop(__s32 fd)
+{
+    if (fd < 0) return;
+    struct task_struct *t = bpf_get_current_task_btf();
+    if (!t) return;
+    struct fd_key k = { .task = (__u64)t, .fd = fd };
+    bpf_map_delete_elem(&fd_table, &k);
 }
 
 
@@ -543,6 +644,19 @@ emit_openat_ret(long ret)
 
     if (bpf_ringbuf_output(&events, ev, sizeof(struct openat_event), 0) < 0)
         bump_drop(DROP_BUCKET_OPENAT);
+
+    // V2 Phase 8 stage 2: stash (path, size_at_open) keyed by
+    // (current_task, fd) so the close kprobe can emit the path
+    // INLINE. Only on success (fd >= 0) and only for path lengths
+    // that fit in CLOSE_PATH_LEN. Paths longer than 256 bytes are
+    // rare in build workloads (PATH_MAX=4096 but actual paths are
+    // ~64-80 bytes typical) — those skip the fd_table population
+    // and the close event surfaces path_len=0 to userspace, which
+    // continues to work via the legacy openPaths cache.
+    if (ev->fd >= 0 && ev->path_len > 0 && ev->path_len <= CLOSE_PATH_LEN) {
+        fd_table_set(ev->fd, ev->path, ev->path_len, ev->size_at_open);
+    }
+
     bpf_map_delete_elem(&openat_stash_map, &key);
 }
 
@@ -1256,8 +1370,25 @@ emit_close(int fd)
     fill_hdr(&ev.hdr, EVT_CLOSE, cur_pid, cur_tgid, cur_ppid);
     bpf_get_current_comm(ev.comm, sizeof(ev.comm));
     ev.fd = fd;
+
+    // V2 Phase 8 stage 2: pull path + size_at_open from the
+    // kernel-side fd_table. The matching openat kretprobe populated
+    // it; we copy out then drop. If no entry (close on an inherited
+    // fd, or LRU-evicted), path_len stays 0 and userspace falls
+    // back to its in-flight state.
+    struct fd_entry *e = fd_table_take(fd);
+    if (e) {
+        ev.path_len = e->path_len;
+        ev.size_at_open = e->size_at_open;
+        if (e->path_len <= CLOSE_PATH_LEN) {
+            __builtin_memcpy(ev.path, e->path, CLOSE_PATH_LEN);
+        }
+    }
+
     if (bpf_ringbuf_output(&events, &ev, sizeof(ev), 0) < 0)
         bump_drop(DROP_BUCKET_READTAP);
+
+    if (e) fd_table_drop(fd);
 }
 
 SEC("kprobe/__arm64_sys_close")

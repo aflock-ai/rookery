@@ -113,6 +113,42 @@ func resolveRelative(pid int, path string) string {
 	return filepath.Join(link, path)
 }
 
+// resolveCwdRelative resolves a relative path against the tracee's
+// cwd, with a four-tier fallback chain:
+//  1. The tracee's own cached cwd (set at matchAndAdd time).
+//  2. The parent's cached cwd (children inherit cwd from parent at
+//     fork — the parent's snapshot is a correct stand-in).
+//  3. /proc/<ppid>/cwd live readlink (parent process is more
+//     durable than its short-lived child like `as`).
+//  4. rootCwd — cilock's own cwd snapshotted at trace start. Tracees
+//     inherit this from cilock at fork-exec; correct unless they
+//     explicitly chdir. Last resort when a fast-fork-and-exit
+//     cascade tore down /proc entries for the entire ancestor
+//     chain before our readlinks landed.
+// Returns the resolved absolute path, or path unchanged if already
+// absolute or all four tiers fail.
+func resolveCwdRelative(watched *watchedSet, pid, ppid uint32, path, rootCwd string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	cwd := watched.cwdFor(pid)
+	if cwd == "" {
+		cwd = watched.cwdFor(ppid)
+	}
+	if cwd == "" && ppid != 0 {
+		if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", ppid)); err == nil {
+			cwd = link
+		}
+	}
+	if cwd == "" {
+		cwd = rootCwd
+	}
+	if cwd == "" {
+		return path
+	}
+	return filepath.Join(cwd, path)
+}
+
 // runEBPFTrace is the eBPF entry point. The child command has already
 // been started by exec.Cmd (no SysProcAttr.Ptrace). We watch its
 // process tree via BPF events and hash files openat-by-openat.
@@ -142,6 +178,22 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// openat fires the kprobe via ppid match. The kprobe also adds
 	// the child's pid to watched_pids in-kernel for follow-up events.
 	//
+	// Capture the TRACEE's working directory as the root cwd fallback.
+	// All descendants of the root tracee inherit this cwd unless they
+	// chdir; used as the LAST tier of openat path resolution when
+	// /proc/<pid>/cwd is gone for both the tracee AND its parent
+	// (fast-fork-and-exit cascade — `as`-class one-shot processes
+	// can outpace our matchAndAdd readlinks for the whole ancestor
+	// chain). c.Dir is set by commandrun.go to the AttestationContext
+	// WorkingDir, which is the directory the user wants traced.
+	rootCwd := c.Dir
+	if rootCwd == "" {
+		// c.Dir empty means inherit cilock's own cwd.
+		if link, err := os.Readlink("/proc/self/cwd"); err == nil {
+			rootCwd = link
+		}
+	}
+
 	// Userspace mirrors the watched set so userspace-side filtering
 	// remains exact and so the cleanup AddWatchedPID calls keep the
 	// in-kernel map in sync as new descendants are observed.
@@ -198,6 +250,12 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// our matchAndAdd rejected it" when files end up with digest=nil.
 	// Surfaced into Summary.Diagnostics at trace end.
 	var readChunkSeen, readChunkRejected atomic.Uint64
+	// V2 Phase 8 stage 2 diagnostic: count how often the kernel-side
+	// fd_table carried the path inline on the close event vs how
+	// often we had to fall back to the userspace openPaths cache.
+	// A high inlinePath ratio confirms stage 2 is doing its job and
+	// the openPaths userspace map can be safely removed.
+	var closeWithInlinePath, closeWithoutInlinePath atomic.Uint64
 
 	// V1.4 backpressure watchdog: when the BPF ringbuf is filling up,
 	// broadcast SIGSTOP across the tracee tree so the kernel stops
@@ -333,29 +391,8 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					if resolved := resolveOpenatPath(ev.Openat); resolved != "" {
 						ev.Openat.Path = resolved
 					} else if ev.Openat.Dirfd == atFDCWD {
-						// /proc/<pid>/cwd gone (tracee exited) — fall back
-						// to the cached cwd snapshot. Try the tracee's own
-						// cwd first; if that's missing (fast-exec'd process
-						// like `as` that we never got to readlink), try the
-						// parent's cwd. Children inherit cwd from parent at
-						// fork time, so the parent's cached snapshot is a
-						// correct stand-in. If the parent's cache is also
-						// empty (e.g. parent's matchAndAdd hadn't fired
-						// yet), try reading the parent's /proc/<ppid>/cwd
-						// live — the parent process tree is more durable
-						// than its short-lived children.
-						cwd := watched.cwdFor(ev.Openat.PID)
-						if cwd == "" {
-							cwd = watched.cwdFor(ev.Openat.PPID)
-						}
-						if cwd == "" && ev.Openat.PPID != 0 {
-							if link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", ev.Openat.PPID)); err == nil {
-								cwd = link
-							}
-						}
-						if cwd != "" {
-							ev.Openat.Path = filepath.Join(cwd, ev.Openat.Path)
-						}
+						ev.Openat.Path = resolveCwdRelative(watched,
+							ev.Openat.PID, ev.Openat.PPID, ev.Openat.Path, rootCwd)
 					}
 				}
 				// V1.4 read-tap: remember (pid, fd) → path so the
@@ -534,21 +571,55 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					continue
 				}
 				k := pidFdKey{PID: ev.Close.PID, FD: ev.Close.FD}
-				if openPaths[k] == nil {
+
+				// V2 Phase 8 stage 2: the close event may carry the
+				// path INLINE (populated by BPF fd_table on openat).
+				// When present, it's authoritative — kernel-side
+				// state is race-free against the userspace ringbuf
+				// dispatch order. When absent (path_len=0), fall
+				// back to the openPaths cache (e.g., inherited fd,
+				// LRU-evicted entry, or relative path > 256 bytes).
+				inlinePath := ev.Close.Path
+				inlineSize := ev.Close.SizeAtOpen
+				if inlinePath != "" {
+					closeWithInlinePath.Add(1)
+				} else {
+					closeWithoutInlinePath.Add(1)
+				}
+
+				// Inline path may be relative (raw openat string from
+				// BPF kprobe). Use the same three-tier cwd resolver
+				// as the openat handler.
+				inlinePath = resolveCwdRelative(watched,
+					ev.Close.PID, ev.Close.PPID, inlinePath, rootCwd)
+
+				oi := openPaths[k]
+				if oi == nil && inlinePath == "" {
 					// Out-of-order delivery: openat for this fd
-					// hasn't been processed yet. Buffer the close —
-					// the openat handler will replay it. Don't
-					// touch streamHashes; read-chunks accumulate
-					// into them lazily.
+					// hasn't been processed yet AND BPF didn't
+					// carry path inline. Buffer the close — the
+					// openat handler will replay it. Don't touch
+					// streamHashes; read-chunks accumulate lazily.
 					pendingCloses[k] = ev.Close
 					continue
 				}
 				hs, hadData := streamHashes[k]
-				oi := openPaths[k]
 				delete(streamHashes, k)
 				delete(streamCounts, k)
 				delete(openPaths, k)
-				if oi == nil || oi.Path == "" {
+
+				// Choose the authoritative path. Prefer inline
+				// (kernel-side fd_table, race-free); fall back to
+				// openPaths if inline absent.
+				path := inlinePath
+				sizeAtOpen := inlineSize
+				if path == "" && oi != nil {
+					path = oi.Path
+					if oi.EV != nil {
+						sizeAtOpen = oi.EV.SizeAtOpen
+					}
+				}
+				if path == "" {
 					continue
 				}
 				// Full-read check: if the tracee read every byte of
@@ -557,26 +628,22 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				// peek, magic-number sniff, partial parse), the
 				// streaming digest would be wrong; fall back to a
 				// path-hash of the now-closed file.
-				// SizeAtOpen comes from BPF (kernel fd → inode → i_size),
-				// so no syscall on the dispatcher hot path.
 				fullRead := false
-				if oi.EV != nil && oi.EV.SizeAtOpen > 0 && oi.Streamed >= oi.EV.SizeAtOpen {
+				if sizeAtOpen > 0 && streamCounts[k] >= sizeAtOpen {
+					fullRead = true
+				} else if oi != nil && oi.EV != nil && oi.EV.SizeAtOpen > 0 && oi.Streamed >= oi.EV.SizeAtOpen {
 					fullRead = true
 				}
 				if hadData && fullRead {
-					finalizeReadTap(pctx, ev.Close.PID, oi.Path, hs)
+					finalizeReadTap(pctx, ev.Close.PID, path, hs)
 					readTapClosures.Add(1)
-				} else if oi.EV != nil && !oi.EV.IsWriteOnly() && !oi.EV.IsPathOnly() && hadData {
+				} else if hadData && oi != nil && oi.EV != nil && !oi.EV.IsWriteOnly() && !oi.EV.IsPathOnly() {
 					// Path-hash fallback — queue to hasher pool.
 					// Only fall back when the tracee actually READ
 					// the file (hadData=true means we saw read
 					// chunks). Write-only opens don't get hashed
 					// as reads — they're outputs, classified later
 					// via the product/cacheArtifact path.
-					// Blocking send: dropping would create nil
-					// entries we'd never recover. Pool is large
-					// enough (65K buffer) that this rarely blocks
-					// in practice.
 					fallbackCh <- oi.EV
 				}
 			}
@@ -732,11 +799,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	if v := os.Getenv("CILOCK_EBPF_DEBUG"); v == "1" {
 		fmt.Fprintf(os.Stderr,
 			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d "+
-				"readChunkSeen=%d readChunkRejected=%d readTapBytes=%d readTapClosures=%d\n",
+				"readChunkSeen=%d readChunkRejected=%d readTapBytes=%d readTapClosures=%d "+
+				"closeInlinePath=%d closeFallbackPath=%d\n",
 			pctx.parentPid, readTotal.Load(), matchedTotal.Load(), otherTotal.Load(),
 			hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load(),
 			readChunkSeen.Load(), readChunkRejected.Load(),
-			readTapBytes.Load(), readTapClosures.Load())
+			readTapBytes.Load(), readTapClosures.Load(),
+			closeWithInlinePath.Load(), closeWithoutInlinePath.Load())
 	}
 
 	if pctx.exitCode != 0 {
