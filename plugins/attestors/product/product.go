@@ -325,6 +325,29 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 	a.baseArtifacts = ctx.Materials()
 
+	// Resolve capture mode at attestor-run time. CaptureAuto picks the
+	// fastest available source (trace if a CaptureProbe was registered;
+	// otherwise walk). Non-auto modes fail loudly when their source
+	// isn't available — see ResolveCaptureMode for the contract.
+	resolved, probe, err := attestation.ResolveCaptureMode(
+		ctx.CaptureMode(), ctx.CompletedAttestors())
+	if err != nil {
+		return fmt.Errorf("product attestor: %w", err)
+	}
+
+	if resolved == attestation.CaptureTrace && probe != nil {
+		// Trace mode: consume the digests the read-tap / path-hash
+		// already computed during the trace. Skip the workdir walk
+		// entirely — the trace knows exactly what files the tracee
+		// wrote, and path-hashing happened post-tracee-exit when the
+		// files are stable. No re-read on the hot path.
+		a.products = fromCaptureEntries(probe.TraceOutputs())
+		return a.buildTree()
+	}
+
+	// Walk mode (legacy default). Walk the workdir, optionally
+	// filtered to files the tracee touched (collectTracedFileSet),
+	// hash each. This is the v0.1 behavior preserved bit-for-bit.
 	processWasTraced, openedFileSet := collectTracedFileSet(ctx)
 
 	digestMap, err := file.RecordArtifacts(
@@ -344,6 +367,38 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 	a.products = fromDigestMap(ctx.WorkingDir(), digestMap)
 	return a.buildTree()
+}
+
+// fromCaptureEntries converts the trace probe's per-path digest map
+// into the attestation.Product type. Mime-type detection is best-
+// effort here — outputs sometimes get deleted between the trace and
+// this attestor running. nil digests get skipped (a path the tracee
+// touched but we couldn't hash).
+func fromCaptureEntries(entries map[string]attestation.CaptureEntry) map[string]attestation.Product {
+	out := make(map[string]attestation.Product, len(entries))
+	for path, entry := range entries {
+		if entry.Digest == nil {
+			continue
+		}
+		ds, err := cryptoutil.NewDigestSet(entry.Digest)
+		if err != nil {
+			continue
+		}
+		mimeType := "unknown"
+		if mt, mtErr := getFileContentType(path); mtErr == nil {
+			mimeType = mt
+		}
+		if mimeType == "application/octet-stream" {
+			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+				mimeType = "text/directory"
+			}
+		}
+		out[path] = attestation.Product{
+			MimeType: mimeType,
+			Digest:   ds,
+		}
+	}
+	return out
 }
 
 // buildTree filters the product set through the include / exclude globs,

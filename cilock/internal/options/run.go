@@ -44,6 +44,13 @@ type RunOptions struct {
 	OutFilePath              string
 	StepName                 string
 	Tracing                  bool
+	// CaptureMode controls where the material + product attestors get
+	// their digests. "auto" (default) picks the fastest available source
+	// — trace events when --trace is on, otherwise directory walk.
+	// "walk" forces the legacy walk path. "trace" requires --trace and
+	// errors if no trace data is available. "ima" requires CONFIG_IMA.
+	// Empty string is equivalent to "auto".
+	CaptureMode string
 	// IgnoreCommandExitCode tells cilock to record the wrapped command's
 	// exit code in `command-run/v0.1.exitcode` but NOT abort the cilock run
 	// when the command exits non-zero. Without this flag, every postproduct
@@ -133,6 +140,12 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&ro.OutFilePath, "outfile", "o", "", "File to write signed data to")
 	cmd.Flags().StringVarP(&ro.StepName, "step", "s", "", "Name of the step being run")
 	cmd.Flags().BoolVarP(&ro.Tracing, "trace", "r", false, "Enable tracing for the command")
+	cmd.Flags().StringVar(&ro.CaptureMode, "capture-mode", "auto",
+		"Where material + product attestors get their digests. "+
+			"'auto' (default) picks the fastest available — trace data when --trace is set, "+
+			"otherwise walks the working directory. 'walk' forces the legacy directory walk "+
+			"(slower; race-prone with concurrent writers). 'trace' requires --trace and fails "+
+			"if no trace data is available. 'ima' requires kernel IMA (not yet implemented).")
 	cmd.Flags().BoolVar(&ro.IgnoreCommandExitCode, "ignore-command-exit-code", false,
 		"Record the wrapped command's exit code in command-run/v0.1 but do NOT abort the cilock run "+
 			"on non-zero exit. Use with tools that exit non-zero on findings (semgrep, gosec, hadolint, "+

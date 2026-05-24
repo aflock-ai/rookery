@@ -16,6 +16,7 @@ package commandrun
 
 import (
 	"bytes"
+	"crypto"
 	"io"
 	"os"
 	"os/exec"
@@ -270,6 +271,126 @@ func (rc *CommandRun) Type() string {
 
 func (rc *CommandRun) RunType() attestation.RunType {
 	return RunType
+}
+
+// CanProvide implements attestation.CaptureProbe. The command-run
+// attestor can supply trace-derived materials + products whenever
+// tracing was enabled AND it actually captured process data. When
+// the tracee crashed before producing any process records, callers
+// should NOT use trace data — fall back to walk for correctness.
+//
+// IMA support arrives in a follow-up; for now CaptureIMA always
+// returns false here even when an IMA log is available, until the
+// IMA reader plugin is wired through this same probe interface.
+func (rc *CommandRun) CanProvide(mode attestation.CaptureMode) bool {
+	if mode != attestation.CaptureTrace {
+		return false
+	}
+	if rc == nil || !rc.enableTracing {
+		return false
+	}
+	return len(rc.Processes) > 0
+}
+
+// TraceInputs implements attestation.CaptureProbe. Returns one entry
+// per unique file path the tracee opened with read intent, keyed by
+// absolute path. The digest comes from the read-tap streaming hash
+// (or the path-hash fallback when the tracee did a partial read).
+// Entries with nil digests are omitted — caller already knows the
+// path was touched via the process records; materials should only
+// list files the framework can attest with a content hash.
+//
+// When the same path is opened by N processes, the last non-nil
+// digest wins. They should all match for stable files; verifiers
+// who care about per-process granularity walk Processes[].OpenedFiles
+// directly.
+func (rc *CommandRun) TraceInputs() map[string]attestation.CaptureEntry {
+	if rc == nil {
+		return nil
+	}
+	out := make(map[string]attestation.CaptureEntry, 1024)
+	for i := range rc.Processes {
+		for path, ds := range rc.Processes[i].OpenedFiles {
+			if ds == nil {
+				// Skip nil-digest entries — the path was opened but
+				// the trace didn't capture content (write-only,
+				// O_PATH, etc.). Material attestor needs digests.
+				continue
+			}
+			digest, err := ds.ToNameMap()
+			if err != nil {
+				continue
+			}
+			out[path] = attestation.CaptureEntry{
+				Digest: digest,
+				Source: "trace-readtap",
+			}
+		}
+	}
+	return out
+}
+
+// TraceOutputs implements attestation.CaptureProbe. Returns one entry
+// per unique file path the tracee WROTE during execution — the union
+// of FileOps.Writes paths and FileOps.Renames new-paths across all
+// captured processes.
+//
+// Path-hashing happens here lazily: outputs aren't streamed during the
+// trace (the tracee owns those bytes and writes them; the read-tap
+// only sees content for files the tracee READ). At this point the
+// tracee has exited, files are stable on disk, and a path-hash is
+// race-free.
+func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
+	if rc == nil {
+		return nil
+	}
+	paths := make(map[string]bool, 256)
+	for i := range rc.Processes {
+		fo := rc.Processes[i].FileOps
+		if fo == nil {
+			continue
+		}
+		for _, w := range fo.Writes {
+			if w.Path != "" {
+				paths[w.Path] = true
+			}
+		}
+		for _, r := range fo.Renames {
+			if r.NewPath != "" {
+				paths[r.NewPath] = true
+			}
+		}
+	}
+	out := make(map[string]attestation.CaptureEntry, len(paths))
+	for p := range paths {
+		// Hashing outputs synchronously here is fine — the tracee has
+		// exited, files are stable, and there are typically far fewer
+		// outputs than inputs on a build. For a Go build of cilock
+		// this is the final binary + a handful of intermediates.
+		digest := pathHashIfExists(p, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
+		out[p] = attestation.CaptureEntry{
+			Digest: digest,
+			Source: "trace-pathhash",
+		}
+	}
+	return out
+}
+
+// pathHashIfExists returns a name-map digest for the file at path, or
+// nil if the file doesn't exist / can't be read. Errors are swallowed
+// here because outputs may legitimately disappear (the tracee writes
+// then deletes a temp file). The caller decides whether nil should
+// land in the attestation.
+func pathHashIfExists(path string, hashes []cryptoutil.DigestValue) map[string]string {
+	ds, err := cryptoutil.CalculateDigestSetFromFile(path, hashes)
+	if err != nil {
+		return nil
+	}
+	nameMap, err := ds.ToNameMap()
+	if err != nil {
+		return nil
+	}
+	return nameMap
 }
 
 func (rc *CommandRun) TracingEnabled() bool {

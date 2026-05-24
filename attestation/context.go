@@ -145,6 +145,12 @@ type AttestationContext struct {
 	environmentCapturer EnvironmentCapturer
 	outputWriters       []io.Writer
 
+	// Capture mode selects where the material + product attestors get
+	// their data: walk (legacy), trace (derive from command-run trace
+	// events), ima (kernel measurements), or auto (default — pick best).
+	// See attestation/capture_mode.go for the full semantics.
+	captureMode CaptureMode
+
 	// Environment configuration fields used by the environment plugin
 	envFilterVarsEnabled           bool
 	envAdditionalKeys              []string
@@ -318,6 +324,14 @@ func (ctx *AttestationContext) Products() map[string]Product {
 	}
 	ctx.mutex.RUnlock()
 	return out
+}
+
+// CaptureMode returns the configured capture mode after normalization.
+// An unset / "auto" value means "let the attestor pick the best
+// available source at run time." Walk-mode operators see "walk";
+// trace-mode operators see "trace"; etc.
+func (ctx *AttestationContext) CaptureMode() CaptureMode {
+	return ctx.captureMode.Normalize()
 }
 
 func (ctx *AttestationContext) StepName() string {
