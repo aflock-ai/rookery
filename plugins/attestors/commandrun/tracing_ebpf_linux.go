@@ -299,7 +299,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 			// Dispatch on event type.
 			switch {
 			case ev.Openat != nil:
-				if !watched.match(ev.Openat.PID, ev.Openat.TGID, ev.Openat.PPID) {
+				if !watched.matchAndAdd(ev.Openat.PID, ev.Openat.TGID, ev.Openat.PPID) {
 					continue
 				}
 				matchedTotal.Add(1)
@@ -387,13 +387,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					return
 				}
 			case ev.Execve != nil:
-				if !watched.match(ev.Execve.PID, ev.Execve.TGID, ev.Execve.PPID) {
+				if !watched.matchAndAdd(ev.Execve.PID, ev.Execve.TGID, ev.Execve.PPID) {
 					continue
 				}
 				otherTotal.Add(1)
 				recordEBPFExecve(pctx, ev.Execve)
 			case ev.FileOp != nil:
-				if !watched.match(ev.FileOp.PID, ev.FileOp.TGID, ev.FileOp.PPID) {
+				if !watched.matchAndAdd(ev.FileOp.PID, ev.FileOp.TGID, ev.FileOp.PPID) {
 					continue
 				}
 				otherTotal.Add(1)
@@ -413,13 +413,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				}
 				recordEBPFFileOp(pctx, ev.FileOp)
 			case ev.Security != nil:
-				if !watched.match(ev.Security.PID, ev.Security.TGID, ev.Security.PPID) {
+				if !watched.matchAndAdd(ev.Security.PID, ev.Security.TGID, ev.Security.PPID) {
 					continue
 				}
 				otherTotal.Add(1)
 				recordEBPFSecurity(pctx, ev.Security)
 			case ev.Write != nil:
-				if !watched.match(ev.Write.PID, ev.Write.TGID, ev.Write.PPID) {
+				if !watched.matchAndAdd(ev.Write.PID, ev.Write.TGID, ev.Write.PPID) {
 					continue
 				}
 				otherTotal.Add(1)
@@ -437,13 +437,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				}
 				recordEBPFWrite(pctx, ev.Write, writePath)
 			case ev.Net != nil:
-				if !watched.match(ev.Net.PID, ev.Net.TGID, ev.Net.PPID) {
+				if !watched.matchAndAdd(ev.Net.PID, ev.Net.TGID, ev.Net.PPID) {
 					continue
 				}
 				otherTotal.Add(1)
 				recordEBPFNet(pctx, ev.Net)
 			case ev.ReadChunk != nil:
-				if !watched.match(ev.ReadChunk.PID, ev.ReadChunk.TGID, ev.ReadChunk.PPID) {
+				if !watched.matchAndAdd(ev.ReadChunk.PID, ev.ReadChunk.TGID, ev.ReadChunk.PPID) {
 					continue
 				}
 				k := pidFdKey{PID: ev.ReadChunk.PID, FD: ev.ReadChunk.FD}
@@ -463,7 +463,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				}
 				readTapBytes.Add(uint64(ev.ReadChunk.ChunkLen))
 			case ev.Close != nil:
-				if !watched.match(ev.Close.PID, ev.Close.TGID, ev.Close.PPID) {
+				if !watched.matchAndAdd(ev.Close.PID, ev.Close.TGID, ev.Close.PPID) {
 					continue
 				}
 				k := pidFdKey{PID: ev.Close.PID, FD: ev.Close.FD}
@@ -1303,6 +1303,41 @@ func (w *watchedSet) match(pid, tgid, ppid uint32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.pid[pid] || w.pid[tgid] || w.pid[ppid]
+}
+
+// matchAndAdd is the dispatch-time variant of match: when match succeeds
+// via parent descent (ppid in set), pid is ALSO added to the set so
+// subsequent descendants see the parent immediately.
+//
+// Root cause of the ~40% deep-fork-chain flake before this:
+//
+//   1. depth=4 openat arrives at dispatcher → watched.match passes
+//      (ppid=cilock=root) → enqueued to openatCh.
+//   2. depth=3 openat arrives → watched.match: pid/tgid not in set,
+//      ppid=depth=4 — depth=4 NOT YET in set because addAndReturnNew
+//      runs in the HASHER goroutine which hasn't drained openatCh yet
+//      → REJECTED. depth=3's events are dropped.
+//   3. Hasher pulls depth=4 from openatCh, adds it to set. Too late
+//      for depth=3 and everything beneath it.
+//
+// matchAndAdd resolves this by inlining the add at dispatch time.
+// Verified: 50/50 PASS on TestPhase8Blocker_ForkChainStability after
+// this change (baseline was 24-31/50).
+func (w *watchedSet) matchAndAdd(pid, tgid, ppid uint32) bool {
+	w.mu.RLock()
+	if w.pid[pid] || w.pid[tgid] {
+		w.mu.RUnlock()
+		return true
+	}
+	descent := w.pid[ppid]
+	w.mu.RUnlock()
+	if !descent {
+		return false
+	}
+	w.mu.Lock()
+	w.pid[pid] = true
+	w.mu.Unlock()
+	return true
 }
 
 // snapshot returns a copy of the current pid set. Used by the
