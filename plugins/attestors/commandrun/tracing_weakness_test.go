@@ -188,8 +188,8 @@ func TestWeakness_ForkChain_DeepWatchPropagation(t *testing.T) {
 	}
 	if leaf == nil {
 		t.Fatalf("deep-fork-chain leaf openat MISSED — V2 Phase 1 regression.\n"+
-			"Got %d processes; tree:\n%s\nopened files:\n%s",
-			len(procs), summarizeProcessTree(procs), summarizeOpenedFiles(procs))
+			"Got %d processes; tree:\n%s",
+			len(procs), summarizeProcessTree(procs))
 	}
 
 	// (3) Verify the digest content matches.

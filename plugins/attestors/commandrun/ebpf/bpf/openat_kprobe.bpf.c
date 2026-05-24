@@ -1249,16 +1249,20 @@ int raw_tp_sched_process_fork(struct bpf_raw_tracepoint_args *ctx)
 
 // ───── clone-family kretprobes — defense-in-depth fork watch ─────
 //
-// Defense in depth alongside raw_tp/sched_process_fork. The raw_tp
-// fires inside the kernel fork path before the child runs; these
-// kretprobes fire when the syscall returns to the PARENT with the
-// child pid in the return register. Two independent signals make
-// the "deep linker chain misses a process" failure mode unreachable.
+// Defense in depth alongside raw_tp/sched_process_fork. raw_tp is the
+// canonical primary hook (per Tetragon/Trail of Bits research), but
+// empirically — on Linux 6.8 / aarch64 / colima — removing these
+// kretprobes regressed the ForkChain test pass rate from ~80% to ~50%.
+// They ARE providing real redundancy.
 //
-// Each kretprobe runs in the calling (parent) task context, so
-// bpf_get_current_pid_tgid() yields the parent's (pid, tgid). The
-// return value is the child's pid (positive) — negative is a syscall
-// error and we ignore it.
+// Scale risk: kernel default kretprobe pool is 4096 slots. Under
+// hyper-forking workloads (kernel compile, parallel cargo) the pool
+// can exhaust and kretprobes silently miss. We mitigate by setting
+// `KprobeOptions.RetprobeMaxActive=65536` at attach time in the
+// userspace consumer (see openat_consumer.go).
+//
+// Each kretprobe runs in the parent task context — bpf_get_current_pid_tgid()
+// yields the parent's (pid, tgid). The return value is the child's pid.
 
 static __always_inline void
 emit_fork_ret(long ret)

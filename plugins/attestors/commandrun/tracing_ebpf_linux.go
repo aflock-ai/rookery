@@ -193,8 +193,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// consumer falls behind; for most workloads the 256 MB ringbuf
 	// alone is sufficient.
 	var watchdogWG sync.WaitGroup
-	if os.Getenv("CILOCK_HASH_RACE_FREE") == "1" &&
-		os.Getenv("CILOCK_HASH_BACKPRESSURE") == "1" {
+	// Backpressure watchdog kept as opt-in via CILOCK_HASH_BACKPRESSURE=1.
+	// V2 Phase 8 tried making it on-by-default; the SIGSTOP/SIGCONT cycle
+	// disrupts deep fork chains (forks-in-flight either complete with the
+	// wrong parent state or fail with EINTR), measurably hurting test
+	// reliability. The right default is "off for normal builds, on only
+	// for explicit high-volume workloads."
+	if os.Getenv("CILOCK_HASH_BACKPRESSURE") == "1" {
 		watchdogWG.Add(1)
 		go func() {
 			defer watchdogWG.Done()

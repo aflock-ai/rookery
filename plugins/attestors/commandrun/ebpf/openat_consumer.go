@@ -32,6 +32,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -356,11 +357,17 @@ func Open() (*Consumer, error) {
 		})
 		if tpErr == nil {
 			c.links = append(c.links, tpLink)
+		} else {
+			// Surface loud: without this the fork-chain watch
+			// propagation falls back to the clone-kretprobe + the
+			// ancestor-walk in emit_filter, which has measurable
+			// flake on deep fork trees (~20% of ForkChain tests).
+			// Operators should see this in logs.
+			fmt.Fprintf(os.Stderr,
+				"cilock-ebpf: WARNING: raw_tracepoint/sched_process_fork attach failed: %v\n"+
+					"  fork-chain watched-ness propagation will degrade; deep build chains may miss events\n",
+				tpErr)
 		}
-		// Non-fatal: clone-family kretprobes (below) and the
-		// openat-PPID-bootstrap path still catch children, just
-		// with extra latency. We surface this only if every
-		// fork-watch channel fails — see attachFailed handling.
 	}
 
 	if openatAttached == 0 {
@@ -658,8 +665,10 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_clone_x64", "kprobe_clone3_x64",
 				"kprobe_dup2_x64", "kprobe_dup3_x64",
 				// V2 fork-watch belt: kretprobes propagate watched-ness
-				// from parent to returned child pid as a defense-in-depth
-				// signal alongside raw_tp/sched_process_fork.
+				// from parent to returned child pid alongside
+				// raw_tp/sched_process_fork. Empirically necessary on
+				// 6.8 (removing them halves ForkChain reliability).
+				// Pool exhaustion mitigated by maxactive bump at attach.
 				"kretprobe_clone_x64", "kretprobe_clone3_x64",
 				"kretprobe_vfork_x64", "kretprobe_fork_x64",
 				// V1.4 read-tap (gated by read_tap_enabled map; cheap when off)
@@ -700,9 +709,9 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_init_module_arm64", "kprobe_finit_module_arm64",
 				"kprobe_clone_arm64", "kprobe_clone3_arm64",
 				"kprobe_dup3_arm64",
-				// V2 fork-watch belt (arm64 doesn't have separate fork/vfork
-				// syscalls — both are libc-side wrappers around clone — so
-				// only clone/clone3 kretprobes are attached here).
+				// V2 fork-watch belt (arm64 doesn't have separate
+				// fork/vfork syscalls — both are libc-side wrappers
+				// around clone — so only clone/clone3 kretprobes).
 				"kretprobe_clone_arm64", "kretprobe_clone3_arm64",
 				"kprobe_read_arm64", "kretprobe_read_arm64",
 				"kprobe_pread64_arm64", "kretprobe_pread64_arm64",
