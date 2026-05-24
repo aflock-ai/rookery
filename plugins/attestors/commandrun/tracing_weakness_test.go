@@ -229,6 +229,312 @@ func TestWeakness_ForkChain_DeepWatchPropagation(t *testing.T) {
 	t.Logf("captured leaf pid=%d ppid=%d; tree=%d pids", leaf.ProcessID, leaf.ParentPID, len(uniquePids))
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Adversarial tracee programs. These bypass libc, issue raw syscalls,
+// or exercise specifically attacker-like behavior. The point isn't to
+// test the happy path — it's to confirm the kernel-boundary kprobes
+// catch syscalls regardless of how the caller got there.
+// ═══════════════════════════════════════════════════════════════════
+
+// directSyscallCSource issues `openat` and `read` via inline assembly
+// — no libc syscall wrapper, no glibc's __syscall_cancel helper. An
+// attacker writes raw `svc #0` (aarch64) or `syscall` (x86_64) to
+// bypass any LD_PRELOAD'd libc-level interception. Our kprobes are at
+// the kernel syscall entry, so they MUST still fire — confirming the
+// trace boundary is the kernel, not libc.
+//
+// Argv: <self> <sentinel-path>
+//
+// The program issues:
+//   1. openat(AT_FDCWD, sentinel-path, O_RDONLY)  via raw syscall
+//   2. read(fd, buf, 4096)                        via raw syscall
+//   3. close(fd)                                  via raw syscall
+//   4. exit_group(0)                              via raw syscall
+//
+// No libc functions called between main() and exit. printf/puts only
+// used for failure logging via the libc startup-time-loaded helpers,
+// guaranteed not to be in any syscall path we depend on.
+const directSyscallCSource = `
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+
+#define AT_FDCWD_VAL -100
+
+#if defined(__aarch64__)
+// aarch64 syscall numbers (per unistd.h): openat=56, read=63,
+// close=57, exit_group=94.
+static long sys_openat_raw(int dirfd, const char *path, int flags) {
+    register long x0 asm("x0") = (long)dirfd;
+    register long x1 asm("x1") = (long)(void *)path;
+    register long x2 asm("x2") = (long)flags;
+    register long x8 asm("x8") = 56;
+    asm volatile("svc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
+    return x0;
+}
+static long sys_read_raw(int fd, void *buf, long count) {
+    register long x0 asm("x0") = (long)fd;
+    register long x1 asm("x1") = (long)buf;
+    register long x2 asm("x2") = (long)count;
+    register long x8 asm("x8") = 63;
+    asm volatile("svc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
+    return x0;
+}
+static long sys_close_raw(int fd) {
+    register long x0 asm("x0") = (long)fd;
+    register long x8 asm("x8") = 57;
+    asm volatile("svc #0" : "+r"(x0) : "r"(x8) : "memory");
+    return x0;
+}
+#elif defined(__x86_64__)
+// x86_64 syscall numbers: openat=257, read=0, close=3, exit_group=231.
+static long sys_openat_raw(int dirfd, const char *path, int flags) {
+    long ret;
+    asm volatile(
+        "syscall"
+        : "=a"(ret)
+        : "0"(257L), "D"((long)dirfd), "S"((long)(void *)path), "d"((long)flags)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+static long sys_read_raw(int fd, void *buf, long count) {
+    long ret;
+    asm volatile(
+        "syscall"
+        : "=a"(ret)
+        : "0"(0L), "D"((long)fd), "S"((long)buf), "d"(count)
+        : "rcx", "r11", "memory"
+    );
+    return ret;
+}
+static long sys_close_raw(int fd) {
+    long ret;
+    asm volatile("syscall" : "=a"(ret) : "0"(3L), "D"((long)fd) : "rcx", "r11", "memory");
+    return ret;
+}
+#else
+#error "unsupported arch — add raw syscall stubs for this CPU"
+#endif
+
+int main(int argc, char **argv) {
+    if (argc < 2) {
+        fprintf(stderr, "usage: %s <sentinel>\n", argv[0]);
+        return 2;
+    }
+    long fd = sys_openat_raw(AT_FDCWD_VAL, argv[1], 0 /* O_RDONLY */);
+    if (fd < 0) {
+        fprintf(stderr, "raw openat failed: %ld\n", fd);
+        return 3;
+    }
+    char buf[4096];
+    long n = sys_read_raw((int)fd, buf, sizeof(buf));
+    if (n < 0) {
+        fprintf(stderr, "raw read failed: %ld\n", n);
+        return 4;
+    }
+    sys_close_raw((int)fd);
+    fprintf(stderr, "ADVERSARIAL pid=%d read %ld bytes\n", (int)getpid(), n);
+    return 0;
+}
+`
+
+// TestWeakness_DirectSyscall_Bypass confirms the trace catches openat
+// even when issued via inline assembly — proving the kprobe is at the
+// kernel boundary, not at libc. An LD_PRELOAD-style userspace hook
+// (or a stripped-down attacker payload with no libc dep) would slip
+// past everything BUT a kernel kprobe.
+func TestWeakness_DirectSyscall_Bypass(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
+	t.Setenv(EnvVarTraceMode, "ebpf")
+	skipIfNoEBPFCaps(t)
+
+	dir := t.TempDir()
+	bin := compileC(t, dir, "raw_syscall", directSyscallCSource)
+
+	sentinel := filepath.Join(dir, "raw-syscall-witness.bin")
+	content := []byte("V2-adversarial-direct-syscall-bypass-libc\n")
+	if err := os.WriteFile(sentinel, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	procs := runUnderEBPF(t, []string{bin, sentinel})
+
+	// Find the tracee process — should have an openat for the sentinel.
+	var hit *ProcessInfo
+	for i := range procs {
+		if _, ok := procs[i].OpenedFiles[sentinel]; ok {
+			hit = &procs[i]
+			break
+		}
+	}
+	if hit == nil {
+		t.Fatalf("raw-syscall openat MISSED — kprobe is not catching libc-bypassed syscalls.\n"+
+			"Got %d procs:\n%s", len(procs), summarizeProcessTree(procs))
+	}
+	digest := hit.OpenedFiles[sentinel]
+	if digest == nil {
+		t.Fatalf("raw-syscall openat captured but digest is nil — read-tap path missed the read")
+	}
+
+	want, err := cryptoutil.CalculateDigestSetFromBytes(content, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for h, w := range want {
+		got, ok := digest[h]
+		if !ok {
+			t.Errorf("missing hash type %v in raw-syscall capture", h)
+			continue
+		}
+		if got != w {
+			t.Errorf("raw-syscall digest mismatch for %v: got %s want %s", h, got, w)
+		}
+	}
+}
+
+// writeOnlyCSource opens a file O_WRONLY|O_CREAT|O_TRUNC, writes, then
+// closes. V1 had a bug where write-only fds got path-hashed as if they
+// were reads, causing the file to land in materials (with the content
+// the writer wrote — wrong semantics; that should be a product).
+//
+// This test pins that fix. The output file must:
+//   - appear in products (not materials)
+//   - have a digest matching the bytes we wrote
+const writeOnlyCSource = `
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+int main(int argc, char **argv) {
+    if (argc < 3) {
+        fprintf(stderr, "usage: %s <out-path> <content>\n", argv[0]);
+        return 2;
+    }
+    int fd = open(argv[1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) { perror("open"); return 3; }
+    size_t n = strlen(argv[2]);
+    if (write(fd, argv[2], n) != (ssize_t)n) { perror("write"); return 4; }
+    close(fd);
+    return 0;
+}
+`
+
+// TestWeakness_WriteOnlyFd_NotHashedAsRead pins V1's fix that wrote-only
+// fds don't end up in materials with a synthetic read-digest. Bug
+// description: opening O_WRONLY|O_CREAT|O_TRUNC then closing would
+// have the path-hash fallback re-read the file (which by then
+// contained the writer's bytes), producing a material entry whose
+// digest matched what the WRITER produced, not what any reader had
+// seen — completely wrong attribution.
+func TestWeakness_WriteOnlyFd_NotHashedAsRead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
+	t.Setenv(EnvVarTraceMode, "ebpf")
+	skipIfNoEBPFCaps(t)
+
+	dir := t.TempDir()
+	bin := compileC(t, dir, "writeonly", writeOnlyCSource)
+
+	out := filepath.Join(dir, "wo-output.bin")
+	content := "V2-writeonly-fd-witness-payload"
+	procs := runUnderEBPF(t, []string{bin, out, content})
+
+	// Assertion: out path should NOT be in any process's OpenedFiles
+	// with a non-nil digest. It SHOULD be in FileOps.Writes.
+	for _, p := range procs {
+		if d, ok := p.OpenedFiles[out]; ok && d != nil {
+			t.Errorf("write-only fd %s leaked into OpenedFiles with digest %v — V1 fix regressed", out, d)
+		}
+	}
+
+	// Confirm the write was captured.
+	wroteIt := false
+	for _, p := range procs {
+		if p.FileOps == nil {
+			continue
+		}
+		for _, w := range p.FileOps.Writes {
+			if w.Path == out {
+				wroteIt = true
+				break
+			}
+		}
+	}
+	if !wroteIt {
+		t.Errorf("write event for %s missed entirely.\nprocs:\n%s", out, summarizeProcessTree(procs))
+	}
+}
+
+// ptraceAttemptCSource: tracee tries to attach a ptrace to its own
+// parent (the test harness). The BPF security event handler should
+// fire CILOCK_SEC_PTRACE. Without that, an attacker could debug-
+// inspect the build orchestrator (steal secrets from cilock's memory)
+// and we'd never know.
+const ptraceAttemptCSource = `
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/ptrace.h>
+#include <errno.h>
+
+int main(int argc, char **argv) {
+    // Try PTRACE_ATTACH on a guaranteed-nonexistent pid. The syscall
+    // ENTERS — our kprobe fires on entry — then fails fast with ESRCH.
+    // CRITICAL: do NOT attach to the real parent. PTRACE_ATTACH sends
+    // SIGSTOP to the TARGET process; if we attached to the cilock
+    // tracer process, the tracer would stop and the trace would
+    // deadlock (no userspace consumer to drain the ringbuf).
+    long rc = ptrace(PTRACE_ATTACH, (pid_t)999999, 0, 0);
+    fprintf(stderr, "ADVERSARIAL ptrace-attach rc=%ld errno=%d\n", rc, errno);
+    return 0;
+}
+`
+
+// TestWeakness_PtraceAttempt_Captured pins the SECURITY-event hook for
+// ptrace. Even if the syscall fails, the ATTEMPT is what matters for
+// detection — a malicious tracee testing for debugger-inhibition or
+// trying to escape sandboxing leaves the same ptrace fingerprint.
+func TestWeakness_PtraceAttempt_Captured(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
+	t.Setenv(EnvVarTraceMode, "ebpf")
+	skipIfNoEBPFCaps(t)
+
+	dir := t.TempDir()
+	bin := compileC(t, dir, "ptrace_attempt", ptraceAttemptCSource)
+
+	procs := runUnderEBPF(t, []string{bin})
+
+	// Look for a SyscallEvent recording the ptrace attempt.
+	gotPtrace := false
+	for _, p := range procs {
+		for _, ev := range p.SyscallEvents {
+			if strings.Contains(strings.ToLower(ev.Syscall), "ptrace") ||
+				strings.Contains(strings.ToLower(ev.Detail), "ptrace") {
+				gotPtrace = true
+				break
+			}
+		}
+	}
+	if !gotPtrace {
+		t.Errorf("ptrace attempt NOT captured as security event — attacker debugging would go silent.\nprocs:\n%s",
+			summarizeProcessTree(procs))
+	}
+}
+
 // summarizeProcessTree pretty-prints (pid, ppid, comm, openedFiles)
 // for diagnostics on assertion failures.
 func summarizeProcessTree(procs []ProcessInfo) string {

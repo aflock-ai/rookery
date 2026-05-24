@@ -174,6 +174,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	}
 	openPaths := make(map[pidFdKey]*openInfo)
 	streamHashes := make(map[pidFdKey]map[cryptoutil.DigestValue]hash.Hash)
+	// pendingCloses: ringbuf event reordering can deliver a CLOSE
+	// event for (pid, fd) BEFORE the OPENAT event for the same key.
+	// This happens when the tracee opens, reads, and closes in
+	// microseconds and the events from different CPUs arrive at
+	// the userspace ringbuf reader out-of-order. Buffer close events
+	// until the matching openat arrives; the openat handler replays.
+	pendingCloses := make(map[pidFdKey]*ebpf.CloseEvent)
 	var readTapBytes, readTapClosures atomic.Uint64
 
 	var readTotal, matchedTotal, otherTotal atomic.Uint64
@@ -328,6 +335,28 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 						Path: ev.Openat.Path,
 						EV:   ev.Openat,
 					}
+					// Replay an out-of-order close that arrived before
+					// this openat — finalize now that we know the path.
+					if pendingClose, ok := pendingCloses[k]; ok {
+						delete(pendingCloses, k)
+						hs, hadData := streamHashes[k]
+						oi := openPaths[k]
+						delete(streamHashes, k)
+						delete(openPaths, k)
+						if oi != nil && oi.Path != "" {
+							fullRead := oi.EV != nil && oi.EV.SizeAtOpen > 0 && oi.Streamed >= oi.EV.SizeAtOpen
+							if hadData && fullRead {
+								finalizeReadTap(pctx, pendingClose.PID, oi.Path, hs)
+								readTapClosures.Add(1)
+							} else if oi.EV != nil && !oi.EV.IsWriteOnly() && !oi.EV.IsPathOnly() && hadData {
+								select {
+								case fallbackCh <- oi.EV:
+								case <-stopCh:
+									return
+								}
+							}
+						}
+					}
 				}
 				select {
 				case openatCh <- ev.Openat:
@@ -415,6 +444,15 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					continue
 				}
 				k := pidFdKey{PID: ev.Close.PID, FD: ev.Close.FD}
+				if openPaths[k] == nil {
+					// Out-of-order delivery: openat for this fd
+					// hasn't been processed yet. Buffer the close —
+					// the openat handler will replay it. Don't
+					// touch streamHashes; read-chunks accumulate
+					// into them lazily.
+					pendingCloses[k] = ev.Close
+					continue
+				}
 				hs, hadData := streamHashes[k]
 				oi := openPaths[k]
 				delete(streamHashes, k)
