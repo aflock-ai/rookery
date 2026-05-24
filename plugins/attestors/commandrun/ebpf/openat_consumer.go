@@ -327,10 +327,37 @@ func Open() (*Consumer, error) {
 	// kernels may lack some syscalls (e.g., clone3 < 5.3). We require
 	// AT LEAST one openat-family kprobe — without that the tracer is
 	// useless. Everything else is optional.
+	// V2 Phase 8 stage 3: try fentry/wake_up_new_task first. fentry
+	// has BTF-typed trusted-pointer args, so the child task_struct
+	// can be passed directly to bpf_task_storage_get and the
+	// watched-bit is set at FORK TIME (no lazy promotion on the
+	// child's first syscall). If fentry attach succeeds, we skip
+	// the kprobe attach below to avoid double-firing. If fentry
+	// fails (older kernel without fentry support, missing BTF),
+	// we fall back to the kprobe.
+	fentryAttached := false
+	if fentryProg, ok := coll.Programs["fentry_wake_up_new_task"]; ok {
+		l, err := link.AttachTracing(link.TracingOptions{Program: fentryProg})
+		if err == nil {
+			c.links = append(c.links, l)
+			fentryAttached = true
+		} else {
+			fmt.Fprintf(os.Stderr,
+				"cilock-ebpf: fentry/wake_up_new_task attach failed (%v) — falling back to kprobe\n",
+				err)
+		}
+	}
+
 	progNames, kprobeSyms := archKprobeNames()
 	attachFailed := 0
 	openatAttached := 0
 	for i, progName := range progNames {
+		// Skip kprobe_wake_up_new_task when the fentry version already
+		// attached — both firing would double-set the watched-bit and
+		// double-emit any propagation side effects.
+		if fentryAttached && progName == "kprobe_wake_up_new_task" {
+			continue
+		}
 		prog, ok := coll.Programs[progName]
 		if !ok {
 			continue // program not in this build

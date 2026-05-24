@@ -1428,6 +1428,72 @@ int BPF_KPROBE(kprobe_close_x64, struct pt_regs *regs)
 // kernels where wake_up_new_task isn't kprobeable. The kprobe is
 // the primary; raw_tp is the safety net.
 
+// V2 Phase 8 stage 3: fentry/wake_up_new_task. Same semantics as the
+// kprobe below, but fentry args are BTF-typed trusted pointers — so
+// we can pass the child task_struct directly to bpf_task_storage_get
+// and set the watched-bit on the child's per-task storage AT FORK
+// TIME (eliminates the lazy-promotion-on-first-syscall hop).
+//
+// Userspace prefers this program over the kprobe (attaches fentry
+// first; falls back to kprobe on kernels without CONFIG_FENTRY or
+// when the BTF info for wake_up_new_task isn't available). Only one
+// is attached at a time — both firing would double-write.
+SEC("fentry/wake_up_new_task")
+int BPF_PROG(fentry_wake_up_new_task, struct task_struct *p)
+{
+    if (!p) return 0;
+
+    __u32 zero = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&filter_enabled, &zero);
+    if (!enabled || *enabled == 0) return 0;
+
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 parent_pid  = (__u32)(pid_tgid & 0xFFFFFFFF);
+    __u32 parent_tgid = (__u32)(pid_tgid >> 32);
+
+    __u32 child_pid  = BPF_CORE_READ(p, pid);
+    __u32 child_tgid = BPF_CORE_READ(p, tgid);
+    if (child_pid == 0) return 0;
+
+    int parent_watched = 0;
+    {
+        struct task_state *pts = bpf_task_storage_get(&task_storage,
+            bpf_get_current_task_btf(), NULL, 0);
+        if (pts && pts->watched) parent_watched = 1;
+    }
+    if (!parent_watched) {
+        if (bpf_map_lookup_elem(&watched_pids, &parent_pid) ||
+            bpf_map_lookup_elem(&watched_pids, &parent_tgid)) {
+            parent_watched = 1;
+        } else {
+            __u32 *root = bpf_map_lookup_elem(&root_parent_tgid, &zero);
+            if (root && parent_tgid == *root && *root != 0) {
+                parent_watched = 1;
+            }
+        }
+    }
+    if (!parent_watched) return 0;
+
+    // fentry advantage: p is a trusted BTF pointer (verified by the
+    // kernel from the function's BTF), so bpf_task_storage_get
+    // accepts it directly. Set the child's watched-bit kernel-side
+    // — no lazy promotion needed; the child's first syscall hits
+    // task_storage immediately.
+    struct task_state init = {.watched = 1};
+    bpf_task_storage_get(&task_storage, p, &init,
+        BPF_LOCAL_STORAGE_GET_F_CREATE);
+
+    // Also maintain watched_pids for the other fork hooks (raw_tp,
+    // clone-kretprobes) that still consult it. Removable once those
+    // also migrate or are dropped.
+    __u8 one = 1;
+    bpf_map_update_elem(&watched_pids, &child_pid, &one, BPF_ANY);
+    if (child_pid != child_tgid) {
+        bpf_map_update_elem(&watched_pids, &child_tgid, &one, BPF_ANY);
+    }
+    return 0;
+}
+
 SEC("kprobe/wake_up_new_task")
 int BPF_KPROBE(kprobe_wake_up_new_task, struct task_struct *p)
 {
