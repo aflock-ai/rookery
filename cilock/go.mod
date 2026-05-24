@@ -150,7 +150,6 @@ require (
 	github.com/aflock-ai/rookery/plugins/signers/file v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/fulcio v0.0.0-00010101000000-000000000000
 	github.com/gobwas/glob v0.2.3
-	github.com/olekukonko/tablewriter v1.1.0
 	github.com/open-policy-agent/opa v1.13.1
 	github.com/sigstore/fulcio v1.8.5
 	github.com/sirupsen/logrus v1.9.4
@@ -206,7 +205,6 @@ require (
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
 	github.com/edwarnicke/gitoid v0.0.0-20220710194850-1be5bfda1f9d // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
-	github.com/fatih/color v1.18.0 // indirect
 	github.com/fatih/semgroup v1.2.0 // indirect
 	github.com/fkautz/omnitrail-go v0.0.0-20240613153526-999f2e7d0fc9 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
@@ -259,8 +257,6 @@ require (
 	github.com/muesli/termenv v0.15.1 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nwaples/rardecode/v2 v2.2.0 // indirect
-	github.com/olekukonko/errors v1.1.0 // indirect
-	github.com/olekukonko/ll v0.0.9 // indirect
 	github.com/omnibor/omnibor-go v0.0.0-20230521145532-a77de61a16cd // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
