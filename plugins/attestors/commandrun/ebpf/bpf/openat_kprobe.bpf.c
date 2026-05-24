@@ -1165,7 +1165,7 @@ int BPF_KPROBE(kprobe_close_x64, struct pt_regs *regs)
     return 0;
 }
 
-// ───── sched_process_fork — early child-pid registration ─────────
+// ───── raw_tp/sched_process_fork — early child-pid registration ──
 //
 // The watched_pids set is the gate: kprobes only emit events for
 // pids in this set. Until now we relied on the "first openat from
@@ -1177,43 +1177,120 @@ int BPF_KPROBE(kprobe_close_x64, struct pt_regs *regs)
 // process has exited; worse, the FIRST openat may have been dropped
 // because the child's pid wasn't yet in watched.
 //
-// The fix: hook sched_process_fork. When the kernel forks a watched
-// parent, immediately add the child pid to watched_pids — before
-// the child has executed a single instruction. The child's first
-// openat is now guaranteed to pass emit_filter.
+// V1 hooked the trace event via `tracepoint/sched/sched_process_fork`
+// with a hand-rolled args struct. Field offsets in that struct went
+// stale on some 5.x+ kernels (the `tgid` companion fields were
+// added/reordered), so `child_pid` would silently read partial
+// garbage and the propagation would no-op. The fix is to switch to
+// the raw tracepoint: args are the kernel `task_struct *` pointers
+// themselves, and we read `tgid`/`pid` via BPF_CORE_READ — relocated
+// by libbpf against the host BTF.
 //
-// Tracepoint args (from
-// /sys/kernel/debug/tracing/events/sched/sched_process_fork/format):
-//
-//   char parent_comm[16]; offset 8
-//   pid_t parent_pid;     offset 24
-//   char child_comm[16];  offset 28
-//   pid_t child_pid;      offset 44
-//
-// Reading via raw offsets is portable across kernels (the tracepoint
-// format is stable in a way kprobes aren't). bpf_probe_read_kernel
-// pulls the fields safely.
+// Belt + braces: the clone-family kretprobes below give a second
+// signal in case raw_tp ever misses (e.g., on a host without
+// BPF_PROG_TYPE_RAW_TRACEPOINT support).
 
-struct sched_process_fork_args {
-    __u64 _common;          // 8 bytes: type/flags/preempt/pid
-    char  parent_comm[16];
-    __u32 parent_pid;
-    char  child_comm[16];
-    __u32 child_pid;
-};
-
-SEC("tracepoint/sched/sched_process_fork")
-int tp_sched_process_fork(struct sched_process_fork_args *ctx)
+SEC("raw_tracepoint/sched_process_fork")
+int raw_tp_sched_process_fork(struct bpf_raw_tracepoint_args *ctx)
 {
-    __u32 parent_pid = ctx->parent_pid;
-    __u32 child_pid  = ctx->child_pid;
+    struct task_struct *parent = (struct task_struct *)ctx->args[0];
+    struct task_struct *child  = (struct task_struct *)ctx->args[1];
+    if (!parent || !child) return 0;
 
-    // Only propagate watched-ness; don't auto-watch unrelated forks.
-    if (!bpf_map_lookup_elem(&watched_pids, &parent_pid)) {
+    __u32 parent_pid  = BPF_CORE_READ(parent, pid);
+    __u32 parent_tgid = BPF_CORE_READ(parent, tgid);
+    __u32 child_pid   = BPF_CORE_READ(child, pid);
+    __u32 child_tgid  = BPF_CORE_READ(child, tgid);
+
+    // Match by either pid (LWP, what emit_filter writes) or tgid
+    // (process leader, what the userspace bootstrap registers).
+    if (!bpf_map_lookup_elem(&watched_pids, &parent_pid) &&
+        !bpf_map_lookup_elem(&watched_pids, &parent_tgid)) {
         return 0;
     }
+
     __u8 one = 1;
     bpf_map_update_elem(&watched_pids, &child_pid, &one, BPF_ANY);
+    if (child_pid != child_tgid)
+        bpf_map_update_elem(&watched_pids, &child_tgid, &one, BPF_ANY);
+    return 0;
+}
+
+// ───── clone-family kretprobes — defense-in-depth fork watch ─────
+//
+// Defense in depth alongside raw_tp/sched_process_fork. The raw_tp
+// fires inside the kernel fork path before the child runs; these
+// kretprobes fire when the syscall returns to the PARENT with the
+// child pid in the return register. Two independent signals make
+// the "deep linker chain misses a process" failure mode unreachable.
+//
+// Each kretprobe runs in the calling (parent) task context, so
+// bpf_get_current_pid_tgid() yields the parent's (pid, tgid). The
+// return value is the child's pid (positive) — negative is a syscall
+// error and we ignore it.
+
+static __always_inline void
+emit_fork_ret(long ret)
+{
+    if (ret <= 0) return;
+
+    __u32 zero = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&filter_enabled, &zero);
+    if (!enabled || *enabled == 0) return;
+
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 cur_pid  = (__u32)(pid_tgid & 0xFFFFFFFF);
+    __u32 cur_tgid = (__u32)(pid_tgid >> 32);
+
+    if (!bpf_map_lookup_elem(&watched_pids, &cur_pid) &&
+        !bpf_map_lookup_elem(&watched_pids, &cur_tgid)) {
+        return;
+    }
+
+    __u32 child_pid = (__u32)ret;
+    __u8 one = 1;
+    bpf_map_update_elem(&watched_pids, &child_pid, &one, BPF_ANY);
+}
+
+SEC("kretprobe/__x64_sys_clone")
+int BPF_KRETPROBE(kretprobe_clone_x64, long ret)
+{
+    emit_fork_ret(ret);
+    return 0;
+}
+
+SEC("kretprobe/__x64_sys_clone3")
+int BPF_KRETPROBE(kretprobe_clone3_x64, long ret)
+{
+    emit_fork_ret(ret);
+    return 0;
+}
+
+SEC("kretprobe/__x64_sys_vfork")
+int BPF_KRETPROBE(kretprobe_vfork_x64, long ret)
+{
+    emit_fork_ret(ret);
+    return 0;
+}
+
+SEC("kretprobe/__x64_sys_fork")
+int BPF_KRETPROBE(kretprobe_fork_x64, long ret)
+{
+    emit_fork_ret(ret);
+    return 0;
+}
+
+SEC("kretprobe/__arm64_sys_clone")
+int BPF_KRETPROBE(kretprobe_clone_arm64, long ret)
+{
+    emit_fork_ret(ret);
+    return 0;
+}
+
+SEC("kretprobe/__arm64_sys_clone3")
+int BPF_KRETPROBE(kretprobe_clone3_arm64, long ret)
+{
+    emit_fork_ret(ret);
     return 0;
 }
 

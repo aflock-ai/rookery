@@ -341,17 +341,26 @@ func Open() (*Consumer, error) {
 			openatAttached++
 		}
 	}
-	// Attach the sched_process_fork tracepoint. This adds child pids
-	// to watched_pids the moment they're forked from a watched parent,
-	// closing the race where a fast-exiting child's first openat
-	// fired before userspace could add its pid to the watched set.
-	if forkProg, ok := coll.Programs["tp_sched_process_fork"]; ok {
-		tpLink, tpErr := link.Tracepoint("sched", "sched_process_fork", forkProg, nil)
+	// Attach the sched_process_fork raw tracepoint. This adds child
+	// pids to watched_pids the moment they're forked from a watched
+	// parent, closing the race where a fast-exiting child's first
+	// openat fired before userspace could add its pid to the watched
+	// set. V2 switched from `tracepoint/sched/sched_process_fork`
+	// (hand-rolled args struct, offsets went stale on 5.x+ kernels)
+	// to `raw_tracepoint/sched_process_fork` which reads tgid/pid
+	// directly from the kernel task_struct via BPF_CORE_READ.
+	if forkProg, ok := coll.Programs["raw_tp_sched_process_fork"]; ok {
+		tpLink, tpErr := link.AttachRawTracepoint(link.RawTracepointOptions{
+			Name:    "sched_process_fork",
+			Program: forkProg,
+		})
 		if tpErr == nil {
 			c.links = append(c.links, tpLink)
 		}
-		// Non-fatal: the openat-PPID-bootstrap path still catches
-		// children, just with a one-syscall delay.
+		// Non-fatal: clone-family kretprobes (below) and the
+		// openat-PPID-bootstrap path still catch children, just
+		// with extra latency. We surface this only if every
+		// fork-watch channel fails — see attachFailed handling.
 	}
 
 	if openatAttached == 0 {
@@ -648,6 +657,11 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_init_module_x64", "kprobe_finit_module_x64",
 				"kprobe_clone_x64", "kprobe_clone3_x64",
 				"kprobe_dup2_x64", "kprobe_dup3_x64",
+				// V2 fork-watch belt: kretprobes propagate watched-ness
+				// from parent to returned child pid as a defense-in-depth
+				// signal alongside raw_tp/sched_process_fork.
+				"kretprobe_clone_x64", "kretprobe_clone3_x64",
+				"kretprobe_vfork_x64", "kretprobe_fork_x64",
 				// V1.4 read-tap (gated by read_tap_enabled map; cheap when off)
 				"kprobe_read_x64", "kretprobe_read_x64",
 				"kprobe_pread64_x64", "kretprobe_pread64_x64",
@@ -666,6 +680,8 @@ func archKprobeNames() ([]string, []string) {
 				"__x64_sys_init_module", "__x64_sys_finit_module",
 				"__x64_sys_clone", "__x64_sys_clone3",
 				"__x64_sys_dup2", "__x64_sys_dup3",
+				"__x64_sys_clone", "__x64_sys_clone3",
+				"__x64_sys_vfork", "__x64_sys_fork",
 				"__x64_sys_read", "__x64_sys_read",
 				"__x64_sys_pread64", "__x64_sys_pread64",
 				"__x64_sys_close",
@@ -684,6 +700,10 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_init_module_arm64", "kprobe_finit_module_arm64",
 				"kprobe_clone_arm64", "kprobe_clone3_arm64",
 				"kprobe_dup3_arm64",
+				// V2 fork-watch belt (arm64 doesn't have separate fork/vfork
+				// syscalls — both are libc-side wrappers around clone — so
+				// only clone/clone3 kretprobes are attached here).
+				"kretprobe_clone_arm64", "kretprobe_clone3_arm64",
 				"kprobe_read_arm64", "kretprobe_read_arm64",
 				"kprobe_pread64_arm64", "kretprobe_pread64_arm64",
 				"kprobe_close_arm64",
@@ -701,6 +721,7 @@ func archKprobeNames() ([]string, []string) {
 				"__arm64_sys_init_module", "__arm64_sys_finit_module",
 				"__arm64_sys_clone", "__arm64_sys_clone3",
 				"__arm64_sys_dup3",
+				"__arm64_sys_clone", "__arm64_sys_clone3",
 				"__arm64_sys_read", "__arm64_sys_read",
 				"__arm64_sys_pread64", "__arm64_sys_pread64",
 				"__arm64_sys_close",
