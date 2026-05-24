@@ -68,9 +68,9 @@ const (
 const (
 	cilockHdrSize = 32
 
-	// openat_event: hdr(32) + dirfd(4) + path_len(4) + size_at_open(8)
-	//             + mtime_ns(8) + comm(16) + path(4096) = 4168
-	openatEventSize = cilockHdrSize + 4 + 4 + 8 + 8 + taskCommLen + maxPath
+	// openat_event: hdr(32) + dirfd(4) + path_len(4) + flags(4) + pad(4)
+	//             + size_at_open(8) + mtime_ns(8) + comm(16) + path(4096) = 4176
+	openatEventSize = cilockHdrSize + 4 + 4 + 4 + 4 + 8 + 8 + taskCommLen + maxPath
 
 	// execve_event: hdr(32) + comm(16) + filename(4096) = 4144
 	execveEventSize = cilockHdrSize + taskCommLen + maxPath
@@ -148,10 +148,39 @@ type OpenatEvent struct {
 	PPID        uint32
 	Dirfd       int32
 	PathLen     uint32
+	Flags       uint32 // openat() flags: O_RDONLY/O_WRONLY/O_CREAT/...
 	SizeAtOpen  uint64
 	MtimeNs     uint64
 	Comm        string
 	Path        string
+}
+
+// O_* flag constants matching <fcntl.h>. Mode bits in the openat flags
+// argument; userspace uses these to decide whether to hash the file.
+const (
+	O_RDONLY = 0o0
+	O_WRONLY = 0o1
+	O_RDWR   = 0o2
+	O_ACCMODE = 0o3
+	O_CREAT  = 0o100
+	O_TRUNC  = 0o1000
+	O_APPEND = 0o2000
+	O_PATH   = 0o10000000 // 010000000 — symlink-only / metadata-only open
+)
+
+// IsWriteOnly returns true if the openat was opened with O_WRONLY (no
+// read intent). These are the tracee's own writes; hashing them races
+// with the tracee's writes and produces meaningless TOCTOU-suspect
+// noise. Skip them.
+func (ev *OpenatEvent) IsWriteOnly() bool {
+	return (ev.Flags & O_ACCMODE) == O_WRONLY
+}
+
+// IsPathOnly returns true if the open was O_PATH (no content read at all).
+// O_PATH opens don't actually read the file content — they're just for
+// symlink resolution / fd-as-handle. Skip hashing.
+func (ev *OpenatEvent) IsPathOnly() bool {
+	return (ev.Flags & O_PATH) != 0
 }
 
 // ExecveEvent corresponds to one observed SYS_EXECVE entry. Filename
@@ -769,14 +798,15 @@ func decodeOpenatEvent(raw []byte) (*OpenatEvent, error) {
 		return nil, fmt.Errorf("event too short: %d < %d", len(raw), openatEventSize)
 	}
 	h := decodeEventHeader(raw)
-	// After hdr (32 bytes): dirfd(4) path_len(4) size_at_open(8)
-	// mtime_ns(8) comm(16) path(4096).
-	const dirfdOff = cilockHdrSize          // 32
-	const pathLenOff = dirfdOff + 4         // 36
-	const sizeOff = pathLenOff + 4          // 40
-	const mtimeOff = sizeOff + 8            // 48
-	const commOff = mtimeOff + 8            // 56
-	const pathOff = commOff + taskCommLen   // 72
+	// After hdr (32 bytes): dirfd(4) path_len(4) flags(4) pad(4)
+	// size_at_open(8) mtime_ns(8) comm(16) path(4096).
+	const dirfdOff = cilockHdrSize        // 32
+	const pathLenOff = dirfdOff + 4       // 36
+	const flagsOff = pathLenOff + 4       // 40
+	const sizeOff = flagsOff + 4 + 4      // 48 (4 flags + 4 pad)
+	const mtimeOff = sizeOff + 8          // 56
+	const commOff = mtimeOff + 8          // 64
+	const pathOff = commOff + taskCommLen // 80
 	ev := &OpenatEvent{
 		TimestampNs: h.TimestampNs,
 		PID:         h.PID,
@@ -784,6 +814,7 @@ func decodeOpenatEvent(raw []byte) (*OpenatEvent, error) {
 		PPID:        h.PPID,
 		Dirfd:       int32(binary.LittleEndian.Uint32(raw[dirfdOff:])),
 		PathLen:     binary.LittleEndian.Uint32(raw[pathLenOff:]),
+		Flags:       binary.LittleEndian.Uint32(raw[flagsOff:]),
 		SizeAtOpen:  binary.LittleEndian.Uint64(raw[sizeOff:]),
 		MtimeNs:     binary.LittleEndian.Uint64(raw[mtimeOff:]),
 		Comm:        readCStr(raw[commOff : commOff+taskCommLen]),

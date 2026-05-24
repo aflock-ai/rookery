@@ -177,6 +177,17 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				if watched.addAndReturnNew(ev.PID, ev.PPID) {
 					_ = consumer.AddWatchedPID(ev.PID)
 				}
+				// Skip hashing for opens we know can't have meaningful
+				// content at hash-time:
+				//   - O_WRONLY: tracee's own writes; racing the writer.
+				//   - O_PATH:   no content read at all (symlink resolve).
+				// Still record the path in OpenedFiles (without digest) so
+				// policy can see the open occurred — but no hash means no
+				// false-positive TOCTOU-suspect noise.
+				if ev.IsWriteOnly() || ev.IsPathOnly() {
+					recordEBPFOpenatNoHash(pctx, ev)
+					continue
+				}
 				res := ebpf.HashOpenatEvent(ev, pctx.hash)
 				hashedTotal.Add(1)
 				switch res.Status {
@@ -296,6 +307,31 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 
 	if needsEnrichment {
 		enrichFromProc(pctx, procInfo)
+	}
+}
+
+// recordEBPFOpenatNoHash records an openat we deliberately skipped
+// hashing (O_WRONLY / O_PATH). The path goes into OpenedFiles with a
+// nil digest so policy can still see WHAT was opened, but we don't
+// emit a TOCTOU-suspect that would be a false positive (we know the
+// race exists by construction — no point flagging it).
+func recordEBPFOpenatNoHash(pctx *ptraceContext, ev *ebpf.OpenatEvent) {
+	pctx.mu.Lock()
+	defer pctx.mu.Unlock()
+	procInfo := pctx.getProcInfo(int(ev.PID))
+	if procInfo.OpenedFiles == nil {
+		procInfo.OpenedFiles = make(map[string]cryptoutil.DigestSet)
+	}
+	// Only set to nil if we don't already have a digest from a prior
+	// (read) open of the same path.
+	if _, ok := procInfo.OpenedFiles[ev.Path]; !ok {
+		procInfo.OpenedFiles[ev.Path] = nil
+	}
+	if procInfo.Comm == "" {
+		procInfo.Comm = ev.Comm
+	}
+	if procInfo.ParentPID == 0 {
+		procInfo.ParentPID = int(ev.PPID)
 	}
 }
 

@@ -66,11 +66,20 @@ struct cilock_evt_hdr {
 
 // openat event. Header layout matches every other event for uniform
 // userspace dispatch on event_type.
-// Total: 24 (hdr) + 4 + 4 + 8 + 8 + 16 + 4096 = 4160 bytes
+// Total: 32 (hdr) + 4 + 4 + 4 + 4 + 8 + 8 + 16 + 4096 = 4176 bytes
+//
+// `flags` captures the openat() flags arg (O_RDONLY/O_WRONLY/O_CREAT/...).
+// V1.2: userspace skips hashing on O_WRONLY/O_CREAT-only opens, which
+// are the tracee's OWN writes — hashing them is racy by construction
+// (the tracee is mid-write while we read) and the resulting "TOCTOU-
+// suspect" events are artifacts of our async pipeline, not real
+// integrity violations.
 struct openat_event {
     struct cilock_evt_hdr hdr;
     __s32 dirfd;
     __u32 path_len;
+    __u32 flags;
+    __u32 _pad_flags;
     __u64 size_at_open;
     __u64 mtime_ns;
     char  comm[TASK_COMM_LEN];
@@ -247,7 +256,7 @@ fill_hdr(struct cilock_evt_hdr *h, __u32 evt, __u32 pid, __u32 tgid, __u32 ppid)
 // ───── openat / openat2 ─────────────────────────────────────────────
 
 static __always_inline void
-emit_openat(int dirfd, const char *pathname)
+emit_openat(int dirfd, const char *pathname, __u32 flags)
 {
     if (!pathname) return;
     __u32 cur_pid, cur_tgid, cur_ppid;
@@ -261,6 +270,7 @@ emit_openat(int dirfd, const char *pathname)
     __builtin_memset(ev, 0, offsetof(struct openat_event, comm));
     fill_hdr(&ev->hdr, EVT_OPENAT, cur_pid, cur_tgid, cur_ppid);
     ev->dirfd        = dirfd;
+    ev->flags        = flags;
     ev->size_at_open = 0;
     ev->mtime_ns     = 0;
 
@@ -282,7 +292,8 @@ int BPF_KPROBE(kprobe_openat_arm64, struct pt_regs *regs)
 {
     int dirfd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
     const char *pathname = (const char *)PT_REGS_PARM2_CORE_SYSCALL(regs);
-    emit_openat(dirfd, pathname);
+    __u32 flags = (__u32)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_openat(dirfd, pathname, flags);
     return 0;
 }
 
@@ -291,16 +302,19 @@ int BPF_KPROBE(kprobe_openat_x64, struct pt_regs *regs)
 {
     int dirfd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
     const char *pathname = (const char *)PT_REGS_PARM2_CORE_SYSCALL(regs);
-    emit_openat(dirfd, pathname);
+    __u32 flags = (__u32)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_openat(dirfd, pathname, flags);
     return 0;
 }
 
+// openat2 uses struct open_how* (PARM3) which carries flags inside.
+// For V1.2 we use 0 — userspace will hash these (rare in practice).
 SEC("kprobe/__arm64_sys_openat2")
 int BPF_KPROBE(kprobe_openat2_arm64, struct pt_regs *regs)
 {
     int dirfd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
     const char *pathname = (const char *)PT_REGS_PARM2_CORE_SYSCALL(regs);
-    emit_openat(dirfd, pathname);
+    emit_openat(dirfd, pathname, 0);
     return 0;
 }
 
@@ -309,7 +323,7 @@ int BPF_KPROBE(kprobe_openat2_x64, struct pt_regs *regs)
 {
     int dirfd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
     const char *pathname = (const char *)PT_REGS_PARM2_CORE_SYSCALL(regs);
-    emit_openat(dirfd, pathname);
+    emit_openat(dirfd, pathname, 0);
     return 0;
 }
 
