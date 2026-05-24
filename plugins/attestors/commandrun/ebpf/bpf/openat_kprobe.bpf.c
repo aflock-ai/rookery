@@ -37,6 +37,10 @@ enum cilock_event_type {
     EVT_RENAMEAT    = 4,
     EVT_FCHMODAT    = 5,
     EVT_SECURITY    = 6, // catch-all for ptrace/mount/memfd_create/etc.
+    EVT_WRITE       = 7, // write/pwrite — userspace resolves fd→path
+    EVT_SOCKET      = 8, // socket() family/type/protocol
+    EVT_CONNECT     = 9, // connect()
+    EVT_BIND        = 10, // bind()
 };
 
 // Common header at the start of every event. event_type is read first
@@ -107,6 +111,30 @@ struct security_event {
     __u32 syscall_nr;      // SYS_PTRACE, SYS_MOUNT, SYS_MPROTECT, etc.
     __u32 _pad;
     __u64 args[4];         // syscall args 0..3
+};
+
+// Write event. Userspace resolves fd → path via /proc/<pid>/fd/<fd>.
+// Total: 24 + 16 + 16 = 56 bytes (no path; cheap; high-frequency)
+struct write_event {
+    struct cilock_evt_hdr hdr;
+    char  comm[TASK_COMM_LEN];
+    __s32 fd;
+    __u32 _pad;
+    __u64 bytes;
+};
+
+// Socket/connect/bind event. Sockaddr captured as raw bytes (max
+// commonly used: 28 bytes for sockaddr_in6). Userspace parses
+// AF_INET / AF_INET6 / AF_UNIX based on family field.
+// Total: 24 + 16 + 8 + 8 + 32 = 88 bytes
+struct net_event {
+    struct cilock_evt_hdr hdr;
+    char  comm[TASK_COMM_LEN];
+    __s32 fd;              // socket(): returned fd; connect/bind: fd
+    __u32 family;          // AF_INET / AF_INET6 / AF_UNIX (socket only)
+    __u32 type;            // SOCK_STREAM / SOCK_DGRAM (socket only)
+    __s32 protocol;        // socket only (0 default, 6 TCP, 17 UDP)
+    char  addr[32];        // sockaddr_in/in6/un (connect/bind)
 };
 
 // Ring buffer for ALL event types. 16 MB is generous; an overflow
@@ -533,5 +561,161 @@ DEFINE_SECURITY_KPROBE(clone_x64,        "__x64_sys_clone",        CILOCK_SEC_CL
 DEFINE_SECURITY_KPROBE(clone3_x64,       "__x64_sys_clone3",       CILOCK_SEC_CLONE3)
 DEFINE_SECURITY_KPROBE(dup2_x64,         "__x64_sys_dup2",         CILOCK_SEC_DUP2)
 DEFINE_SECURITY_KPROBE(dup3_x64,         "__x64_sys_dup3",         CILOCK_SEC_DUP3)
+
+// ───── write / pwrite64 ────────────────────────────────────────────
+// write(fd, buf, count) — emit (fd, bytes). High-volume; userspace
+// resolves the path via /proc/<pid>/fd/<fd>.
+
+static __always_inline void
+emit_write(int fd, __u64 bytes)
+{
+    // Drop stdio writes (fd 0/1/2) — Go's compile/asm/link spam
+    // these and ptrace also reports them, but the volume hurts more
+    // here. Keep all other fds for parity.
+    if (fd < 0 || fd > 1024 * 1024) return; // sanity
+
+    __u32 cur_pid, cur_tgid, cur_ppid;
+    if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) return;
+
+    struct write_event ev = {};
+    fill_hdr(&ev.hdr, EVT_WRITE, cur_pid, cur_tgid, cur_ppid);
+    bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+    ev.fd = fd;
+    ev.bytes = bytes;
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+}
+
+SEC("kprobe/__arm64_sys_write")
+int BPF_KPROBE(kprobe_write_arm64, struct pt_regs *regs)
+{
+    int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 bytes = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_write(fd, bytes);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_write")
+int BPF_KPROBE(kprobe_write_x64, struct pt_regs *regs)
+{
+    int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 bytes = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_write(fd, bytes);
+    return 0;
+}
+
+SEC("kprobe/__arm64_sys_pwrite64")
+int BPF_KPROBE(kprobe_pwrite_arm64, struct pt_regs *regs)
+{
+    int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 bytes = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_write(fd, bytes);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_pwrite64")
+int BPF_KPROBE(kprobe_pwrite_x64, struct pt_regs *regs)
+{
+    int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 bytes = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_write(fd, bytes);
+    return 0;
+}
+
+// ───── socket / connect / bind ─────────────────────────────────────
+
+static __always_inline void
+emit_socket(int family, int type, int protocol)
+{
+    __u32 cur_pid, cur_tgid, cur_ppid;
+    if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) return;
+
+    struct net_event ev = {};
+    fill_hdr(&ev.hdr, EVT_SOCKET, cur_pid, cur_tgid, cur_ppid);
+    bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+    ev.fd = -1; // socket() return value is in kretprobe; not captured here
+    ev.family = family;
+    ev.type = type;
+    ev.protocol = protocol;
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+}
+
+static __always_inline void
+emit_connect_or_bind(__u32 evt, int fd, const void *addr_user, __u64 addr_len)
+{
+    __u32 cur_pid, cur_tgid, cur_ppid;
+    if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) return;
+
+    struct net_event ev = {};
+    fill_hdr(&ev.hdr, evt, cur_pid, cur_tgid, cur_ppid);
+    bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+    ev.fd = fd;
+    if (addr_user && addr_len > 0) {
+        __u64 n = addr_len > sizeof(ev.addr) ? sizeof(ev.addr) : addr_len;
+        (void)bpf_probe_read_user(ev.addr, n, addr_user);
+        // First 2 bytes of sockaddr are sa_family (sa_family_t = u16).
+        ev.family = ((__u32)(__u8)ev.addr[0]) | (((__u32)(__u8)ev.addr[1]) << 8);
+    }
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+}
+
+SEC("kprobe/__arm64_sys_socket")
+int BPF_KPROBE(kprobe_socket_arm64, struct pt_regs *regs)
+{
+    int family = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    int type = (int)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    int protocol = (int)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_socket(family, type, protocol);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_socket")
+int BPF_KPROBE(kprobe_socket_x64, struct pt_regs *regs)
+{
+    int family = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    int type = (int)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    int protocol = (int)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_socket(family, type, protocol);
+    return 0;
+}
+
+SEC("kprobe/__arm64_sys_connect")
+int BPF_KPROBE(kprobe_connect_arm64, struct pt_regs *regs)
+{
+    int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    const void *addr = (const void *)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    __u64 addr_len = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_connect_or_bind(EVT_CONNECT, fd, addr, addr_len);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_connect")
+int BPF_KPROBE(kprobe_connect_x64, struct pt_regs *regs)
+{
+    int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    const void *addr = (const void *)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    __u64 addr_len = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_connect_or_bind(EVT_CONNECT, fd, addr, addr_len);
+    return 0;
+}
+
+SEC("kprobe/__arm64_sys_bind")
+int BPF_KPROBE(kprobe_bind_arm64, struct pt_regs *regs)
+{
+    int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    const void *addr = (const void *)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    __u64 addr_len = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_connect_or_bind(EVT_BIND, fd, addr, addr_len);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_bind")
+int BPF_KPROBE(kprobe_bind_x64, struct pt_regs *regs)
+{
+    int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    const void *addr = (const void *)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    __u64 addr_len = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    emit_connect_or_bind(EVT_BIND, fd, addr, addr_len);
+    return 0;
+}
 
 char LICENSE[] SEC("license") = "GPL";

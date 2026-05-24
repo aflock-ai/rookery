@@ -51,12 +51,16 @@ import (
 // the low bits of timestamp_ns, which can never equal 0 in practice
 // for a running system, so it'll never collide with a small enum tag.
 const (
-	EVT_OPENAT    = 1
-	EVT_EXECVE    = 2
-	EVT_UNLINKAT  = 3
-	EVT_RENAMEAT  = 4
-	EVT_FCHMODAT  = 5
-	EVT_SECURITY  = 6
+	EVT_OPENAT   = 1
+	EVT_EXECVE   = 2
+	EVT_UNLINKAT = 3
+	EVT_RENAMEAT = 4
+	EVT_FCHMODAT = 5
+	EVT_SECURITY = 6
+	EVT_WRITE    = 7
+	EVT_SOCKET   = 8
+	EVT_CONNECT  = 9
+	EVT_BIND     = 10
 )
 
 // Event sizes — must match the C structs in openat_kprobe.bpf.c. All
@@ -79,6 +83,13 @@ const (
 	//               + args[4*8] = 88
 	securityEventSize = cilockHdrSize + taskCommLen + 4 + 4 + 32
 
+	// write_event: hdr(32) + comm(16) + fd(4) + pad(4) + bytes(8) = 64
+	writeEventSize = cilockHdrSize + taskCommLen + 4 + 4 + 8
+
+	// net_event: hdr(32) + comm(16) + fd(4) + family(4) + type(4)
+	//          + protocol(4) + addr(32) = 96
+	netEventSize = cilockHdrSize + taskCommLen + 4 + 4 + 4 + 4 + 32
+
 	maxPath     = 4096
 	taskCommLen = 16
 )
@@ -93,6 +104,31 @@ type Event struct {
 	Execve   *ExecveEvent   // EVT_EXECVE
 	FileOp   *FileOpEvent   // EVT_UNLINKAT / EVT_RENAMEAT / EVT_FCHMODAT
 	Security *SecurityEvent // EVT_SECURITY
+	Write    *WriteEvent    // EVT_WRITE
+	Net      *NetEvent      // EVT_SOCKET / EVT_CONNECT / EVT_BIND
+}
+
+// WriteEvent carries (fd, bytes) from a write/pwrite kprobe.
+// Userspace resolves fd → path via /proc/<pid>/fd/<fd>.
+type WriteEvent struct {
+	EventHeader
+	Comm  string
+	FD    int32
+	Bytes uint64
+}
+
+// NetEvent covers socket/connect/bind. Family/type/protocol fields
+// are populated for EVT_SOCKET; Addr is populated for connect/bind
+// (32 bytes raw — userspace parses sockaddr_in/in6/un by Family).
+type NetEvent struct {
+	EventHeader
+	Op       uint32 // EVT_SOCKET | EVT_CONNECT | EVT_BIND
+	Comm     string
+	FD       int32
+	Family   uint32
+	Type     uint32
+	Protocol int32
+	Addr     [32]byte
 }
 
 // EventHeader is the common 24-byte preamble on every BPF event.
@@ -427,6 +463,10 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_execve_x64",
 				// file mutations
 				"kprobe_unlinkat_x64", "kprobe_renameat2_x64", "kprobe_fchmodat_x64",
+				// write
+				"kprobe_write_x64", "kprobe_pwrite_x64",
+				// network
+				"kprobe_socket_x64", "kprobe_connect_x64", "kprobe_bind_x64",
 				// security syscalls
 				"kprobe_ptrace_x64", "kprobe_memfd_create_x64",
 				"kprobe_mount_x64", "kprobe_mprotect_x64",
@@ -439,6 +479,8 @@ func archKprobeNames() ([]string, []string) {
 				"__x64_sys_openat", "__x64_sys_openat2",
 				"__x64_sys_execve",
 				"__x64_sys_unlinkat", "__x64_sys_renameat2", "__x64_sys_fchmodat",
+				"__x64_sys_write", "__x64_sys_pwrite64",
+				"__x64_sys_socket", "__x64_sys_connect", "__x64_sys_bind",
 				"__x64_sys_ptrace", "__x64_sys_memfd_create",
 				"__x64_sys_mount", "__x64_sys_mprotect",
 				"__x64_sys_prctl", "__x64_sys_setsid", "__x64_sys_setns",
@@ -451,17 +493,21 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_openat_arm64", "kprobe_openat2_arm64",
 				"kprobe_execve_arm64",
 				"kprobe_unlinkat_arm64", "kprobe_renameat2_arm64", "kprobe_fchmodat_arm64",
+				"kprobe_write_arm64", "kprobe_pwrite_arm64",
+				"kprobe_socket_arm64", "kprobe_connect_arm64", "kprobe_bind_arm64",
 				"kprobe_ptrace_arm64", "kprobe_memfd_create_arm64",
 				"kprobe_mount_arm64", "kprobe_mprotect_arm64",
 				"kprobe_prctl_arm64", "kprobe_setsid_arm64", "kprobe_setns_arm64",
 				"kprobe_init_module_arm64", "kprobe_finit_module_arm64",
 				"kprobe_clone_arm64", "kprobe_clone3_arm64",
-				"kprobe_dup3_arm64", // arm64 has no dup2
+				"kprobe_dup3_arm64",
 			},
 			[]string{
 				"__arm64_sys_openat", "__arm64_sys_openat2",
 				"__arm64_sys_execve",
 				"__arm64_sys_unlinkat", "__arm64_sys_renameat2", "__arm64_sys_fchmodat",
+				"__arm64_sys_write", "__arm64_sys_pwrite64",
+				"__arm64_sys_socket", "__arm64_sys_connect", "__arm64_sys_bind",
 				"__arm64_sys_ptrace", "__arm64_sys_memfd_create",
 				"__arm64_sys_mount", "__arm64_sys_mprotect",
 				"__arm64_sys_prctl", "__arm64_sys_setsid", "__arm64_sys_setns",
@@ -521,6 +567,18 @@ func decodeEvent(raw []byte) (*Event, error) {
 			return nil, err
 		}
 		return &Event{Type: evtType, Security: s}, nil
+	case EVT_WRITE:
+		w, err := decodeWriteEvent(raw)
+		if err != nil {
+			return nil, err
+		}
+		return &Event{Type: evtType, Write: w}, nil
+	case EVT_SOCKET, EVT_CONNECT, EVT_BIND:
+		n, err := decodeNetEvent(raw)
+		if err != nil {
+			return nil, err
+		}
+		return &Event{Type: evtType, Net: n}, nil
 	default:
 		return nil, fmt.Errorf("unknown event_type=%d (raw len=%d)", evtType, len(raw))
 	}
@@ -591,6 +649,46 @@ func decodeSecurityEvent(raw []byte) (*SecurityEvent, error) {
 	for i := 0; i < 4; i++ {
 		ev.Args[i] = binary.LittleEndian.Uint64(raw[argsOff+i*8:])
 	}
+	return ev, nil
+}
+
+func decodeWriteEvent(raw []byte) (*WriteEvent, error) {
+	if len(raw) < writeEventSize {
+		return nil, fmt.Errorf("write event too short: %d < %d", len(raw), writeEventSize)
+	}
+	h := decodeEventHeader(raw)
+	const commOff = cilockHdrSize          // 32
+	const fdOff = commOff + taskCommLen    // 48
+	const bytesOff = fdOff + 4 + 4         // 56 (fd + pad)
+	return &WriteEvent{
+		EventHeader: h,
+		Comm:        readCStr(raw[commOff : commOff+taskCommLen]),
+		FD:          int32(binary.LittleEndian.Uint32(raw[fdOff:])),
+		Bytes:       binary.LittleEndian.Uint64(raw[bytesOff:]),
+	}, nil
+}
+
+func decodeNetEvent(raw []byte) (*NetEvent, error) {
+	if len(raw) < netEventSize {
+		return nil, fmt.Errorf("net event too short: %d < %d", len(raw), netEventSize)
+	}
+	h := decodeEventHeader(raw)
+	const commOff = cilockHdrSize
+	const fdOff = commOff + taskCommLen
+	const familyOff = fdOff + 4
+	const typeOff = familyOff + 4
+	const protoOff = typeOff + 4
+	const addrOff = protoOff + 4
+	ev := &NetEvent{
+		EventHeader: h,
+		Op:          h.EventType,
+		Comm:        readCStr(raw[commOff : commOff+taskCommLen]),
+		FD:          int32(binary.LittleEndian.Uint32(raw[fdOff:])),
+		Family:      binary.LittleEndian.Uint32(raw[familyOff:]),
+		Type:        binary.LittleEndian.Uint32(raw[typeOff:]),
+		Protocol:    int32(binary.LittleEndian.Uint32(raw[protoOff:])),
+	}
+	copy(ev.Addr[:], raw[addrOff:addrOff+32])
 	return ev, nil
 }
 

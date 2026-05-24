@@ -40,6 +40,7 @@ package commandrun
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -145,6 +146,18 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				}
 				otherTotal.Add(1)
 				recordEBPFSecurity(pctx, ev.Security)
+			case ev.Write != nil:
+				if !watched.match(ev.Write.PID, ev.Write.TGID, ev.Write.PPID) {
+					continue
+				}
+				otherTotal.Add(1)
+				recordEBPFWrite(pctx, ev.Write)
+			case ev.Net != nil:
+				if !watched.match(ev.Net.PID, ev.Net.TGID, ev.Net.PPID) {
+					continue
+				}
+				otherTotal.Add(1)
+				recordEBPFNet(pctx, ev.Net)
 			}
 		}
 	}()
@@ -515,6 +528,126 @@ func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent) SyscallEvent {
 		}
 	}
 	return SyscallEvent{}
+}
+
+// recordEBPFWrite handles EVT_WRITE events. Mirrors the SYS_WRITE/
+// SYS_PWRITE64 ptrace handler: resolve fd → path via /proc, skip
+// stdio + pipes + sockets, record (path, bytes) to fileOps.writes.
+func recordEBPFWrite(pctx *ptraceContext, ev *ebpf.WriteEvent) {
+	if ev.FD <= 2 || ev.Bytes == 0 {
+		return // stdio writes are noise; zero-byte writes are no-ops
+	}
+	path := resolveProcFD(int(ev.PID), int(ev.FD))
+	if path == "" {
+		return
+	}
+	if strings.HasPrefix(path, "pipe:") ||
+		strings.HasPrefix(path, "socket:") ||
+		strings.HasPrefix(path, "anon_inode:") {
+		return
+	}
+
+	pctx.mu.Lock()
+	defer pctx.mu.Unlock()
+	procInfo := pctx.getProcInfo(int(ev.PID))
+	if procInfo.Comm == "" {
+		procInfo.Comm = ev.Comm
+	}
+	if procInfo.FileOps == nil {
+		procInfo.FileOps = &FileActivity{}
+	}
+	procInfo.FileOps.Writes = append(procInfo.FileOps.Writes, FileWrite{
+		Path:      path,
+		Bytes:     int(ev.Bytes),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+}
+
+// resolveProcFD reads /proc/<pid>/fd/<fd> symlink to resolve the fd
+// to a filesystem path. Returns "" if /proc is gone or the fd is
+// closed.
+func resolveProcFD(pid, fd int) string {
+	target, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", pid, fd))
+	if err != nil {
+		return ""
+	}
+	return target
+}
+
+// recordEBPFNet handles EVT_SOCKET, EVT_CONNECT, EVT_BIND. Mirrors
+// the ptrace SYS_SOCKET/CONNECT/BIND handlers.
+func recordEBPFNet(pctx *ptraceContext, ev *ebpf.NetEvent) {
+	pctx.mu.Lock()
+	defer pctx.mu.Unlock()
+	procInfo := pctx.getProcInfo(int(ev.PID))
+	if procInfo.Comm == "" {
+		procInfo.Comm = ev.Comm
+	}
+	if procInfo.Network == nil {
+		procInfo.Network = &NetworkActivity{}
+	}
+
+	switch ev.Op {
+	case ebpf.EVT_SOCKET:
+		procInfo.Network.Sockets = append(procInfo.Network.Sockets, SocketInfo{
+			Family:   socketFamilyName(int(ev.Family)),
+			Type:     socketTypeName(int(ev.Type)),
+			Protocol: int(ev.Protocol),
+			FD:       int(ev.FD),
+		})
+	case ebpf.EVT_CONNECT, ebpf.EVT_BIND:
+		conn := parseSockaddrEBPF(ev.Family, ev.Addr[:], opName(ev.Op))
+		conn.FD = int(ev.FD)
+		conn.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+		procInfo.Network.Connections = append(procInfo.Network.Connections, *conn)
+		// DNS heuristic: any connect to port 53.
+		if ev.Op == ebpf.EVT_CONNECT && conn.Port == 53 {
+			procInfo.Network.DNSLookups = append(procInfo.Network.DNSLookups, DNSLookup{
+				ServerAddress: conn.Address,
+				ServerPort:    conn.Port,
+			})
+		}
+	}
+}
+
+func opName(op uint32) string {
+	switch op {
+	case ebpf.EVT_CONNECT:
+		return "connect"
+	case ebpf.EVT_BIND:
+		return "bind"
+	}
+	return "unknown"
+}
+
+// parseSockaddrEBPF parses 32 bytes of raw sockaddr into a
+// NetworkConnection. Returns a connection with zero Address/Port
+// when the family is unsupported (e.g., AF_NETLINK), still appending
+// to the predicate so the syscall is observable.
+func parseSockaddrEBPF(family uint32, raw []byte, syscall string) *NetworkConnection {
+	conn := &NetworkConnection{Syscall: syscall}
+	switch family {
+	case 2: // AF_INET — sockaddr_in: family(2) + port(2 big-endian) + addr(4) + pad
+		if len(raw) >= 8 {
+			conn.Family = afInet
+			conn.Port = int(uint16(raw[2])<<8 | uint16(raw[3]))
+			conn.Address = net.IP(raw[4:8]).String()
+		}
+	case 10: // AF_INET6 — sockaddr_in6: family(2) + port(2) + flowinfo(4) + addr(16) + scope(4)
+		if len(raw) >= 28 {
+			conn.Family = afInet6
+			conn.Port = int(uint16(raw[2])<<8 | uint16(raw[3]))
+			conn.Address = net.IP(raw[8:24]).String()
+		}
+	case 1: // AF_UNIX — sockaddr_un: family(2) + path(...)
+		conn.Family = "AF_UNIX"
+		end := 2
+		for end < len(raw) && raw[end] != 0 {
+			end++
+		}
+		conn.Address = string(raw[2:end])
+	}
+	return conn
 }
 
 // enrichFromProc reads /proc/<pid>/{exe, cmdline, environ, status}
