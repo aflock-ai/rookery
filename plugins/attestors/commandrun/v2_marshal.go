@@ -47,6 +47,10 @@
 package commandrun
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 )
 
@@ -58,11 +62,20 @@ const V02PredicateType = "https://aflock.ai/attestations/command-run/v0.2"
 // V02Meta is the leading metadata block of a v0.2 attestation. AI
 // agents and operators read this first to learn the document's shape
 // before consuming the rest.
+//
+// Sections is the byte-offset section index — only populated when the
+// document is emitted via MarshalV02WithSections (the two-pass
+// encoder). Maps section name → [startByte, endByte] inclusive,
+// relative to the predicate body's first byte. Agents reading the
+// first ~8 KB can seek directly to any section without scanning the
+// whole document. Empty when the document is emitted via plain
+// json.Marshal (e.g., during construction tests).
 type V02Meta struct {
-	Version       string         `json:"version"`           // "v0.2"
-	CaptureMode   string         `json:"captureMode,omitempty"`
-	TraceBackend  string         `json:"traceBackend,omitempty"`
-	Counts        V02MetaCounts  `json:"counts"`
+	Version      string                `json:"version"`           // "v0.2"
+	CaptureMode  string                `json:"captureMode,omitempty"`
+	TraceBackend string                `json:"traceBackend,omitempty"`
+	Counts       V02MetaCounts         `json:"counts"`
+	Sections     map[string][2]int64   `json:"sections,omitempty"`
 }
 
 // V02MetaCounts surfaces the cardinality of each interned table so
@@ -266,6 +279,154 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 	}
 
 	return v02
+}
+
+// MarshalV02WithSections emits the v0.2 predicate body with `_meta.sections`
+// populated to exact byte offsets [start, end] for each top-level
+// section. The offsets are relative to the predicate body's first byte
+// (i.e., the opening `{`).
+//
+// Why two-pass: the offsets in _meta change the byte length of _meta
+// itself (more digits = longer meta = shifts every later offset).
+// Iterating to a fixpoint is the only way to converge without
+// distortion-via-padding tricks. Typical convergence: 2 passes.
+//
+// Returns the byte stream + the populated *V02Predicate (with
+// Meta.Sections set) so callers can introspect the offsets directly
+// rather than re-parsing the output.
+func MarshalV02WithSections(p *V02Predicate) ([]byte, *V02Predicate, error) {
+	if p == nil {
+		return nil, nil, fmt.Errorf("nil predicate")
+	}
+
+	// Pre-marshal each section to its own buffer. These bytes are
+	// stable across passes — only _meta's length varies.
+	type section struct {
+		name string
+		body []byte
+	}
+	mkSection := func(name string, v interface{}) (section, error) {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return section{}, fmt.Errorf("marshal %s: %w", name, err)
+		}
+		return section{name: name, body: b}, nil
+	}
+	type sectionSpec struct {
+		name string
+		val  interface{}
+		// included signals whether this section appears in the output.
+		// omitempty fields are skipped when their value is empty.
+		included bool
+	}
+	specs := []sectionSpec{
+		{"summary", p.Summary, p.Summary != nil},
+		{"digests", p.Digests, true},
+		{"paths", p.Paths, true},
+		{"comms", p.Comms, true},
+		{"processes", p.Processes, true},
+		{"cmd", p.Cmd, len(p.Cmd) > 0},
+	}
+	sections := make([]section, 0, len(specs))
+	for _, s := range specs {
+		if !s.included {
+			continue
+		}
+		sec, err := mkSection(s.name, s.val)
+		if err != nil {
+			return nil, nil, err
+		}
+		sections = append(sections, sec)
+	}
+
+	// Iterate to fixpoint. Each pass: assume _meta byte length L_meta;
+	// compute section offsets; marshal _meta with those offsets; check
+	// if its real length matches L_meta; if not, redo.
+	//
+	// Initial guess: marshal _meta with all-zero offsets to seed L_meta.
+	const maxIter = 8
+	prevMetaLen := -1
+	var metaBytes []byte
+	var offsets map[string][2]int64
+
+	for iter := 0; iter < maxIter; iter++ {
+		// (a) compute section offsets assuming _meta is prevMetaLen.
+		// If prevMetaLen is -1 (first iteration), use a low guess so
+		// the offsets are some valid placeholder.
+		guess := prevMetaLen
+		if guess < 0 {
+			// Crude lower bound: just marshal _meta with empty sections
+			// to get a starting size.
+			p.Meta.Sections = nil
+			tmp, err := json.Marshal(p.Meta)
+			if err != nil {
+				return nil, nil, fmt.Errorf("seed marshal _meta: %w", err)
+			}
+			guess = len(tmp)
+		}
+
+		// Layout: {"_meta":<meta>,"<sec1>":<sec1Body>,...}
+		// _meta starts at byte offset 9 (`{"_meta":`).
+		// Each section is preceded by `,"<name>":` of length 4 + name + 1 = name+5
+		offsets = make(map[string][2]int64, len(sections))
+		cursor := int64(len(`{"_meta":`)) + int64(guess) // end of meta
+		for _, s := range sections {
+			// `,"name":`
+			cursor += int64(len(s.name)) + 4 // ,"":
+			start := cursor
+			cursor += int64(len(s.body))
+			end := cursor - 1
+			offsets[s.name] = [2]int64{start, end}
+		}
+
+		// (b) marshal _meta with the computed offsets. If its length
+		// matches the guess, we've converged.
+		p.Meta.Sections = offsets
+		mb, err := json.Marshal(p.Meta)
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal _meta with offsets: %w", err)
+		}
+		if len(mb) == guess {
+			metaBytes = mb
+			break
+		}
+		prevMetaLen = len(mb)
+	}
+	if metaBytes == nil {
+		return nil, nil, fmt.Errorf("two-pass encoder failed to converge after %d iterations", maxIter)
+	}
+
+	// (c) assemble the document.
+	total := len(metaBytes) + 32
+	for _, s := range sections {
+		total += len(s.name) + len(s.body) + 5
+	}
+	var out bytes.Buffer
+	out.Grow(total)
+	out.WriteString(`{"_meta":`)
+	out.Write(metaBytes)
+	for _, s := range sections {
+		out.WriteString(`,"`)
+		out.WriteString(s.name)
+		out.WriteString(`":`)
+		out.Write(s.body)
+	}
+	out.WriteByte('}')
+
+	// (d) sanity-check: each section's offsets must point at exactly
+	// the bytes we wrote. Off-by-one or off-by-cursor here means the
+	// agent's seek-to-section would return garbage.
+	final := out.Bytes()
+	for _, s := range sections {
+		off := offsets[s.name]
+		got := final[off[0] : off[1]+1]
+		if !bytes.Equal(got, s.body) {
+			return nil, nil, fmt.Errorf("internal: section %s offsets %v don't point at the section body "+
+				"(got %d bytes, want %d)", s.name, off, len(got), len(s.body))
+		}
+	}
+
+	return final, p, nil
 }
 
 // hashName returns the canonical string name of a hash type from a
