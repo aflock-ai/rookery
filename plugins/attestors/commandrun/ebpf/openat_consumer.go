@@ -33,12 +33,15 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -102,6 +105,23 @@ func Open() (*Consumer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load BPF spec: %w", err)
 	}
+
+	// Pre-set KernelVersion on every kprobe program so cilium/ebpf
+	// skips its built-in detection path, which reads /proc/self/mem.
+	// /proc/self/mem requires CAP_SYS_PTRACE on hardened kernels
+	// (notably GitHub-hosted Actions runners), so without this hop
+	// users with only CAP_BPF + CAP_PERFMON fail at NewCollection
+	// with "detecting kernel version: opening mem: ...permission
+	// denied". uname(2) is unprivileged on every Linux that runs BPF.
+	kver, kverErr := unameKernelVersionCode()
+	if kverErr == nil {
+		for _, ps := range spec.Programs {
+			if ps.Type == ebpf.Kprobe {
+				ps.KernelVersion = kver
+			}
+		}
+	}
+
 	coll, err := ebpf.NewCollection(spec)
 	if err != nil {
 		return nil, fmt.Errorf("instantiate BPF: %w", err)
@@ -230,6 +250,67 @@ func (c *Consumer) DisableFilter() error {
 	zero := uint32(0)
 	off := uint8(0)
 	return c.filterFlag.Update(&zero, &off, ebpf.UpdateAny)
+}
+
+// unameKernelVersionCode returns the running kernel version encoded
+// as KERNEL_VERSION(major, minor, patch) = (major<<16) | (minor<<8) | patch.
+// Uses uname(2), which is unprivileged. Returns 0 (and an error) if
+// the release string can't be parsed — the caller should leave
+// KernelVersion unset and let cilium/ebpf fall back to its own
+// detection in that case.
+//
+// The exact value only matters for kernels < 5.0 (which actually
+// validate prog_load's kern_version field for kprobe-type programs).
+// On modern kernels the value is ignored, so any non-zero non-magic
+// value works. We still parse properly for correctness.
+func unameKernelVersionCode() (uint32, error) {
+	var u unix.Utsname
+	if err := unix.Uname(&u); err != nil {
+		return 0, fmt.Errorf("uname: %w", err)
+	}
+	rel := unix.ByteSliceToString(u.Release[:])
+	// Release looks like "6.8.0-100-generic" or "5.15.17-1-lts".
+	// Strip the post-patch suffix at the first '-'.
+	base := rel
+	if i := strings.IndexByte(base, '-'); i >= 0 {
+		base = base[:i]
+	}
+	parts := strings.SplitN(base, ".", 3)
+	if len(parts) < 2 {
+		return 0, fmt.Errorf("kernel release %q has no dotted version", rel)
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, fmt.Errorf("parse major from %q: %w", rel, err)
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, fmt.Errorf("parse minor from %q: %w", rel, err)
+	}
+	patch := 0
+	if len(parts) == 3 {
+		// patch may be "0" or "0+something"; take the leading digits.
+		p := parts[2]
+		end := 0
+		for end < len(p) && p[end] >= '0' && p[end] <= '9' {
+			end++
+		}
+		if end > 0 {
+			patch, _ = strconv.Atoi(p[:end])
+		}
+	}
+	// Clamp each field to 8 bits except major which gets 16. Standard
+	// KERNEL_VERSION encoding.
+	if major < 0 || major > 0xFFFF {
+		major = 0
+	}
+	if minor < 0 || minor > 0xFF {
+		minor = 0
+	}
+	if patch < 0 || patch > 0xFF {
+		patch = 0
+	}
+	return uint32(major)<<16 | uint32(minor)<<8 | uint32(patch), nil
 }
 
 // archKprobeNames returns (BPF program names, kernel symbols) to
