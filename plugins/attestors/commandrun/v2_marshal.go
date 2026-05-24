@@ -86,6 +86,7 @@ type V02MetaCounts struct {
 	UniquePaths    int `json:"uniquePaths"`
 	UniqueDigests  int `json:"uniqueDigests"`
 	UniqueComms    int `json:"uniqueComms"`
+	UniqueCmdlines int `json:"uniqueCmdlines,omitempty"`
 	Materials      int `json:"materials,omitempty"`
 	Intermediates  int `json:"intermediates,omitempty"`
 	Products       int `json:"products,omitempty"`
@@ -112,18 +113,23 @@ type V02OpenedFile struct {
 	DigestID int `json:"digestId"`
 }
 
-// V02Process is the slim per-process record. Path-strings, comms, and
-// cmdlines that v0.1 stored inline are replaced by indices into the
-// interned top-level tables.
+// V02Process is the slim per-process record. Path-strings, comms,
+// and cmdlines that v0.1 stored inline are replaced by indices into
+// the interned top-level tables.
+//
+// CmdlineID indexes into V02Predicate.Cmdlines; -1 (or omitted) when
+// the process has no cmdline. This intern saves substantially on
+// kernel-builds and parallel-compile workloads where compile workers
+// share long, near-identical cmdlines.
 type V02Process struct {
-	ProcessID   int                `json:"processid"`
-	ParentPID   int                `json:"parentpid"`
-	CommID      int                `json:"commId,omitempty"`
-	ExecPathID  int                `json:"execPathId,omitempty"`
-	Cmdline     string             `json:"cmdline,omitempty"` // TODO: intern in follow-up
-	OpenedFiles []V02OpenedFile    `json:"openedFiles,omitempty"`
-	FileOps     *FileActivity      `json:"fileOps,omitempty"`
-	Syscalls    []SyscallEvent     `json:"syscalls,omitempty"`
+	ProcessID   int             `json:"processid"`
+	ParentPID   int             `json:"parentpid"`
+	CommID      int             `json:"commId,omitempty"`
+	ExecPathID  int             `json:"execPathId,omitempty"`
+	CmdlineID   int             `json:"cmdlineId,omitempty"`
+	OpenedFiles []V02OpenedFile `json:"openedFiles,omitempty"`
+	FileOps     *FileActivity   `json:"fileOps,omitempty"`
+	Syscalls    []SyscallEvent  `json:"syscalls,omitempty"`
 }
 
 // V02Predicate is the top-level v0.2 attestation body. Field order
@@ -135,6 +141,7 @@ type V02Predicate struct {
 	Digests   []V02DigestEntry `json:"digests"`
 	Paths     []string         `json:"paths"`
 	Comms     []string         `json:"comms"`
+	Cmdlines  []string         `json:"cmdlines,omitempty"`
 	Processes []V02Process     `json:"processes"`
 	Cmd       []string         `json:"cmd,omitempty"`
 	ExitCode  int              `json:"exitcode,omitempty"`
@@ -172,6 +179,7 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 	pathIDs := make(map[string]int)
 	digestIDs := make(map[string]int) // key = sha256 hex
 	commIDs := make(map[string]int)
+	cmdlineIDs := make(map[string]int)
 
 	internPath := func(p string) int {
 		if p == "" {
@@ -195,6 +203,18 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 		id := len(v02.Comms)
 		commIDs[c] = id
 		v02.Comms = append(v02.Comms, c)
+		return id
+	}
+	internCmdline := func(c string) int {
+		if c == "" {
+			return -1
+		}
+		if id, ok := cmdlineIDs[c]; ok {
+			return id
+		}
+		id := len(v02.Cmdlines)
+		cmdlineIDs[c] = id
+		v02.Cmdlines = append(v02.Cmdlines, c)
 		return id
 	}
 	internDigest := func(ds cryptoutil.DigestSet) int {
@@ -241,9 +261,11 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 		vp := V02Process{
 			ProcessID: p.ProcessID,
 			ParentPID: p.ParentPID,
-			Cmdline:   p.Cmdline,
 			FileOps:   p.FileOps,
 			Syscalls:  p.SyscallEvents,
+		}
+		if p.Cmdline != "" {
+			vp.CmdlineID = internCmdline(p.Cmdline)
 		}
 		if p.Comm != "" {
 			vp.CommID = internComm(p.Comm)
@@ -271,6 +293,7 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 	v02.Meta.Counts.UniquePaths = len(v02.Paths)
 	v02.Meta.Counts.UniqueDigests = len(v02.Digests)
 	v02.Meta.Counts.UniqueComms = len(v02.Comms)
+	v02.Meta.Counts.UniqueCmdlines = len(v02.Cmdlines)
 	if rc.Summary != nil {
 		v02.Meta.Counts.Materials = rc.Summary.Totals.Materials
 		v02.Meta.Counts.Intermediates = rc.Summary.Totals.Intermediates
@@ -324,6 +347,7 @@ func MarshalV02WithSections(p *V02Predicate) ([]byte, *V02Predicate, error) {
 		{"digests", p.Digests, true},
 		{"paths", p.Paths, true},
 		{"comms", p.Comms, true},
+		{"cmdlines", p.Cmdlines, len(p.Cmdlines) > 0},
 		{"processes", p.Processes, true},
 		{"cmd", p.Cmd, len(p.Cmd) > 0},
 	}

@@ -266,6 +266,8 @@ func TestV02_SectionOffsets_RoundTripExact(t *testing.T) {
 			want, werr = json.Marshal(v02.Paths)
 		case "comms":
 			want, werr = json.Marshal(v02.Comms)
+		case "cmdlines":
+			want, werr = json.Marshal(v02.Cmdlines)
 		case "processes":
 			want, werr = json.Marshal(v02.Processes)
 		case "cmd":

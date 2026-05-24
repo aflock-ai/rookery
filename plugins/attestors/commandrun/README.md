@@ -28,8 +28,10 @@ glibc headers produced ~50 KB of duplicate path strings.
 v0.2 promotes paths, digests, and comms to top-level interned arrays;
 per-process records hold integer ids.
 
-**Measured: 66.5% size reduction on a 100-process synthetic workload**
-(see `TestV02_SmallerThan_V01`). Plan target was ≥50%.
+**Measured: 76.8% size reduction on a 100-process synthetic workload**
+(see `TestV02_SmallerThan_V01`). Plan target was ≥50%. The interning
+includes paths, digests, comms, and cmdlines — the four most-redundant
+strings on real builds where compile workers share long argument lists.
 
 ```jsonc
 {
@@ -41,10 +43,12 @@ per-process records hold integer ids.
   ],
   "paths": ["/usr/include/stdio.h", "/home/user/main.c"],
   "comms": ["gcc", "cc1", "ld"],
+  "cmdlines": ["gcc -O0 -o hello hello.c"],
   "processes": [
     {
       "processid": 1234,
       "commId": 1,
+      "cmdlineId": 0,
       "openedFiles": [{ "pathId": 0, "digestId": 0 }]
     }
   ]
