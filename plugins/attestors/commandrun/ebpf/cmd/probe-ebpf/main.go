@@ -68,8 +68,24 @@ func main() {
 			fmt.Fprintf(os.Stderr, "read: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("[%d] pid=%d tgid=%d ppid=%d comm=%-16s dirfd=%-5d size=%-8d mtime_ns=%-20d path=%s\n",
-			ev.TimestampNs, ev.PID, ev.TGID, ev.PPID, ev.Comm, ev.Dirfd, ev.SizeAtOpen, ev.MtimeNs, ev.Path)
+		switch {
+		case ev.Openat != nil:
+			o := ev.Openat
+			fmt.Printf("[%d] OPENAT     pid=%d tgid=%d ppid=%d comm=%-16s dirfd=%-5d path=%s\n",
+				o.TimestampNs, o.PID, o.TGID, o.PPID, o.Comm, o.Dirfd, o.Path)
+		case ev.Execve != nil:
+			e := ev.Execve
+			fmt.Printf("[%d] EXECVE     pid=%d tgid=%d ppid=%d comm=%-16s filename=%s\n",
+				e.TimestampNs, e.PID, e.TGID, e.PPID, e.Comm, e.Filename)
+		case ev.FileOp != nil:
+			f := ev.FileOp
+			fmt.Printf("[%d] FILEOP/%d  pid=%d comm=%-16s mode=0%o flags=%#x path=%s path2=%s\n",
+				f.TimestampNs, f.Op, f.PID, f.Comm, f.Mode, f.Flags, f.Path, f.Path2)
+		case ev.Security != nil:
+			s := ev.Security
+			fmt.Printf("[%d] SECURITY   pid=%d comm=%-16s syscall_nr=%d args=[%#x,%#x,%#x,%#x]\n",
+				s.TimestampNs, s.PID, s.Comm, s.SyscallNr, s.Args[0], s.Args[1], s.Args[2], s.Args[3])
+		}
 		count++
 		if *n > 0 && count >= *n {
 			return

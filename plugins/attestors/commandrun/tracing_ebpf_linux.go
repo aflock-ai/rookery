@@ -42,6 +42,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,22 +84,19 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// in-kernel map in sync as new descendants are observed.
 	watched := newWatchedSet(c.Process.Pid)
 
-	// Channel for events the consumer goroutine emits to the hasher.
-	evCh := make(chan *ebpf.OpenatEvent, 4096)
+	// openatCh feeds the hasher pool. Non-openat events (execve, fileOps,
+	// security) go straight through recordEBPF<type> which is cheap.
+	openatCh := make(chan *ebpf.OpenatEvent, 4096)
 
-	// Stop signal — closed when the tracee exits.
 	stopCh := make(chan struct{})
 
-	// Counters for diagnostics.
-	var readTotal, matchedTotal atomic.Uint64
+	var readTotal, matchedTotal, otherTotal atomic.Uint64
 
-	// Consumer goroutine: reads BPF ring buffer, filters by watched
-	// set, forwards to evCh.
 	var consumerWG sync.WaitGroup
 	consumerWG.Add(1)
 	go func() {
 		defer consumerWG.Done()
-		defer close(evCh)
+		defer close(openatCh)
 		for {
 			select {
 			case <-stopCh:
@@ -116,14 +114,37 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				return
 			}
 			readTotal.Add(1)
-			if !watched.match(ev.PID, ev.TGID, ev.PPID) {
-				continue
-			}
-			matchedTotal.Add(1)
-			select {
-			case evCh <- ev:
-			case <-stopCh:
-				return
+
+			// Dispatch on event type.
+			switch {
+			case ev.Openat != nil:
+				if !watched.match(ev.Openat.PID, ev.Openat.TGID, ev.Openat.PPID) {
+					continue
+				}
+				matchedTotal.Add(1)
+				select {
+				case openatCh <- ev.Openat:
+				case <-stopCh:
+					return
+				}
+			case ev.Execve != nil:
+				if !watched.match(ev.Execve.PID, ev.Execve.TGID, ev.Execve.PPID) {
+					continue
+				}
+				otherTotal.Add(1)
+				recordEBPFExecve(pctx, ev.Execve)
+			case ev.FileOp != nil:
+				if !watched.match(ev.FileOp.PID, ev.FileOp.TGID, ev.FileOp.PPID) {
+					continue
+				}
+				otherTotal.Add(1)
+				recordEBPFFileOp(pctx, ev.FileOp)
+			case ev.Security != nil:
+				if !watched.match(ev.Security.PID, ev.Security.TGID, ev.Security.PPID) {
+					continue
+				}
+				otherTotal.Add(1)
+				recordEBPFSecurity(pctx, ev.Security)
 			}
 		}
 	}()
@@ -131,15 +152,12 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// Hasher pool: parallel hashing of files referenced by openat events.
 	var hashedTotal, suspectTotal, errorTotal atomic.Uint64
 	var hasherWG sync.WaitGroup
-	const hashWorkers = 4 // matches typical CI core count
+	const hashWorkers = 4
 	for i := 0; i < hashWorkers; i++ {
 		hasherWG.Add(1)
 		go func() {
 			defer hasherWG.Done()
-			for ev := range evCh {
-				// Track descendants in both userspace + BPF maps.
-				// Userspace add() is a no-op if already present; we
-				// only push to BPF on transition to avoid map churn.
+			for ev := range openatCh {
 				if watched.addAndReturnNew(ev.PID, ev.PPID) {
 					_ = consumer.AddWatchedPID(ev.PID)
 				}
@@ -193,13 +211,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	}
 	pctx.exitCode = r.ExitCode
 
-	log.Debugf("(ebpf) trace complete: read=%d matched=%d hashed=%d toctou-suspect=%d errors=%d",
-		readTotal.Load(), matchedTotal.Load(),
+	log.Debugf("(ebpf) trace complete: read=%d matched=%d other=%d hashed=%d toctou-suspect=%d errors=%d",
+		readTotal.Load(), matchedTotal.Load(), otherTotal.Load(),
 		hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load())
 	if v := os.Getenv("CILOCK_EBPF_DEBUG"); v == "1" {
 		fmt.Fprintf(os.Stderr,
-			"cilock-ebpf: parentPid=%d read=%d matched=%d hashed=%d suspect=%d errors=%d\n",
-			pctx.parentPid, readTotal.Load(), matchedTotal.Load(),
+			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d\n",
+			pctx.parentPid, readTotal.Load(), matchedTotal.Load(), otherTotal.Load(),
 			hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load())
 	}
 
@@ -217,6 +235,17 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 	defer pctx.mu.Unlock()
 
 	procInfo := pctx.getProcInfo(int(ev.PID))
+	// Retry /proc enrichment if any of {Environ, Cmdline, ExeDigest}
+	// is still empty. Execve kprobe fires BEFORE kernel completes
+	// the exec, so /proc is stale at execve-event-time for short
+	// programs. By the time the first openat fires, the dynamic
+	// linker has been running for >microseconds — /proc has the
+	// post-exec state. Cheap to retry: the inner enrichFromProc
+	// short-circuits per field if already populated.
+	needsEnrichment := procInfo.Comm == "" ||
+		procInfo.Environ == "" ||
+		procInfo.Cmdline == "" ||
+		procInfo.ExeDigest == nil
 
 	if procInfo.OpenedFiles == nil {
 		procInfo.OpenedFiles = make(map[string]cryptoutil.DigestSet)
@@ -247,6 +276,319 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 	}
 	if procInfo.ParentPID == 0 {
 		procInfo.ParentPID = int(ev.PPID)
+	}
+
+	if needsEnrichment {
+		enrichFromProc(pctx, procInfo)
+	}
+}
+
+// recordEBPFExecve handles an EVT_EXECVE event from the BPF kprobe.
+// Same semantics as the ptrace SYS_EXECVE handler: stat+digest the
+// new program, snapshot /proc/<pid>/{cmdline,environ,status,exe}.
+// Userspace reads /proc as quickly as it can after the BPF event
+// fires; very-short-lived processes may still have exited.
+func recordEBPFExecve(pctx *ptraceContext, ev *ebpf.ExecveEvent) {
+	pctx.mu.Lock()
+	defer pctx.mu.Unlock()
+
+	procInfo := pctx.getProcInfo(int(ev.PID))
+	procInfo.ParentPID = int(ev.PPID)
+	if procInfo.Comm == "" {
+		procInfo.Comm = ev.Comm
+	}
+
+	// Hash the file the syscall caller named.
+	if ev.Filename != "" {
+		procInfo.Program = ev.Filename
+		if d, ok := pctx.cachedDigest(ev.Filename); ok {
+			if procInfo.ProgramDigest == nil {
+				procInfo.ProgramDigest = d
+			}
+			// Fallback for ExeDigest: argv[0] hash. For 99% of execvees
+			// argv[0] resolves to the same binary that /proc/<pid>/exe
+			// would symlink to. enrichFromProc below will overwrite
+			// with the /proc-resolved digest when the process is still
+			// alive — but for sub-millisecond processes (Go's
+			// compile/asm subprocs) /proc may already be gone, and
+			// argv[0] is the only ExeDigest we'll get.
+			if procInfo.ExeDigest == nil {
+				procInfo.ExeDigest = d
+			}
+		}
+	}
+
+	// /proc enrichment for the actually-loaded binary + environ + cmdline.
+	// Best-effort; the fallback above keeps ExeDigest populated when /proc
+	// is gone.
+	enrichFromProc(pctx, procInfo)
+}
+
+// recordEBPFFileOp handles EVT_UNLINKAT, EVT_RENAMEAT, EVT_FCHMODAT.
+// Mirrors the ptrace handlers in tracing_linux.go.
+func recordEBPFFileOp(pctx *ptraceContext, ev *ebpf.FileOpEvent) {
+	pctx.mu.Lock()
+	defer pctx.mu.Unlock()
+
+	procInfo := pctx.getProcInfo(int(ev.PID))
+	if procInfo.Comm == "" {
+		procInfo.Comm = ev.Comm
+	}
+	if procInfo.FileOps == nil {
+		procInfo.FileOps = &FileActivity{}
+	}
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	switch ev.Op {
+	case ebpf.EVT_UNLINKAT:
+		procInfo.FileOps.Deletes = append(procInfo.FileOps.Deletes, FileDelete{
+			Path:      ev.Path,
+			Timestamp: ts,
+		})
+	case ebpf.EVT_RENAMEAT:
+		procInfo.FileOps.Renames = append(procInfo.FileOps.Renames, FileRename{
+			OldPath:   ev.Path,
+			NewPath:   ev.Path2,
+			Timestamp: ts,
+		})
+	case ebpf.EVT_FCHMODAT:
+		mode := ev.Mode
+		procInfo.FileOps.PermChanges = append(procInfo.FileOps.PermChanges, FilePermChange{
+			Path:      ev.Path,
+			Mode:      mode,
+			SetExec:   mode&0o111 != 0,
+			Timestamp: ts,
+		})
+	}
+}
+
+// recordEBPFSecurity handles EVT_SECURITY events for the long-tail
+// syscalls the ptrace path captures as syscallEvents[]. Formats the
+// human-readable Detail string per syscall_nr; numbers come from the
+// CILOCK_SYS_*_X64/ARM64 macros in openat_kprobe.bpf.c.
+func recordEBPFSecurity(pctx *ptraceContext, ev *ebpf.SecurityEvent) {
+	pctx.mu.Lock()
+	defer pctx.mu.Unlock()
+
+	procInfo := pctx.getProcInfo(int(ev.PID))
+	if procInfo.Comm == "" {
+		procInfo.Comm = ev.Comm
+	}
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+
+	se := classifyEBPFSecurityEvent(ev)
+	if se.Syscall == "" {
+		return // filtered out (uninteresting prctl, mprotect without PROT_EXEC, etc.)
+	}
+	se.Timestamp = ts
+	procInfo.SyscallEvents = append(procInfo.SyscallEvents, se)
+}
+
+// classifyEBPFSecurityEvent decodes a SecurityEvent into the
+// SyscallEvent fields cilock's predicate uses. Returns SyscallEvent
+// with empty Syscall when the event isn't worth surfacing (matches
+// ptrace's filtering, e.g. only mprotect with PROT_EXEC, only certain
+// prctl options).
+func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent) SyscallEvent {
+	// IDs must match CILOCK_SEC_* in openat_kprobe.bpf.c.
+	const (
+		secPtrace       = 100
+		secMemfdCreate  = 101
+		secMount        = 102
+		secMprotect     = 103
+		secPrctl        = 104
+		secSetsid       = 105
+		secSetns        = 106
+		secInitModule   = 107
+		secFinitModule  = 108
+		secClone        = 109
+		secClone3       = 110
+		secDup2         = 111
+		secDup3         = 112
+	)
+	nr := ev.SyscallNr
+	switch nr {
+	case secPtrace:
+		return SyscallEvent{
+			Syscall: "ptrace",
+			Detail:  fmt.Sprintf("ptrace request=%d target_pid=%d — anti-debugging or process injection", ev.Args[0], ev.Args[1]),
+			Args:    []int{int(ev.Args[0]), int(ev.Args[1])},
+		}
+	case secMemfdCreate:
+		return SyscallEvent{
+			Syscall: "memfd_create",
+			Detail:  fmt.Sprintf("anonymous memory file (flags: %d) — used for fileless code execution", ev.Args[1]),
+		}
+	case secMount:
+		return SyscallEvent{
+			Syscall: "mount",
+			Detail:  "mount syscall observed — potential container escape",
+		}
+	case secMprotect:
+		prot := ev.Args[2]
+		if prot&0x04 == 0 { // PROT_EXEC = 0x04
+			return SyscallEvent{}
+		}
+		return SyscallEvent{
+			Syscall: "mprotect",
+			Detail:  fmt.Sprintf("made memory executable (addr=%#x len=%d prot=%d) — fileless payload indicator", ev.Args[0], ev.Args[1], prot),
+			Args:    []int{int(ev.Args[0]), int(ev.Args[1]), int(prot)},
+		}
+	case secPrctl:
+		option := ev.Args[0]
+		switch option {
+		case 15:
+			return SyscallEvent{
+				Syscall: "prctl",
+				Detail:  fmt.Sprintf("PR_SET_NAME (arg=%#x) — hiding process identity", ev.Args[1]),
+				Args:    []int{int(option), int(ev.Args[1])},
+			}
+		case 4:
+			return SyscallEvent{
+				Syscall: "prctl",
+				Detail:  fmt.Sprintf("PR_SET_DUMPABLE=%d — may prevent forensic core dumps", ev.Args[1]),
+				Args:    []int{int(option), int(ev.Args[1])},
+			}
+		case 38:
+			return SyscallEvent{
+				Syscall: "prctl",
+				Detail:  fmt.Sprintf("PR_SET_NO_NEW_PRIVS=%d — seccomp setup", ev.Args[1]),
+				Args:    []int{int(option), int(ev.Args[1])},
+			}
+		}
+		return SyscallEvent{}
+	case secSetsid:
+		return SyscallEvent{
+			Syscall: "setsid",
+			Detail:  "created new session — daemonizing to detach from install process tree",
+		}
+	case secSetns:
+		return SyscallEvent{
+			Syscall: "setns",
+			Detail:  fmt.Sprintf("joined namespace (fd=%d type=%d) — container escape or sandbox evasion", ev.Args[0], ev.Args[1]),
+			Args:    []int{int(ev.Args[0]), int(ev.Args[1])},
+		}
+	case secInitModule, secFinitModule:
+		return SyscallEvent{
+			Syscall: "init_module",
+			Detail:  "attempted to load kernel module — rootkit installation",
+		}
+	case secClone, secClone3:
+		flags := ev.Args[0]
+		// CLONE_NEW* flags. Definitions from <sched.h>:
+		// CLONE_NEWNS=0x20000, CLONE_NEWUTS=0x4000000, CLONE_NEWIPC=0x8000000,
+		// CLONE_NEWUSER=0x10000000, CLONE_NEWPID=0x20000000, CLONE_NEWNET=0x40000000.
+		var names []string
+		if flags&0x20000 != 0 {
+			names = append(names, "CLONE_NEWNS")
+		}
+		if flags&0x20000000 != 0 {
+			names = append(names, "CLONE_NEWPID")
+		}
+		if flags&0x40000000 != 0 {
+			names = append(names, "CLONE_NEWNET")
+		}
+		if flags&0x10000000 != 0 {
+			names = append(names, "CLONE_NEWUSER")
+		}
+		if len(names) == 0 {
+			return SyscallEvent{}
+		}
+		return SyscallEvent{
+			Syscall: "clone",
+			Detail:  fmt.Sprintf("clone with namespace flags: %s — potential container escape or sandbox evasion", strings.Join(names, "|")),
+			Args:    []int{int(flags)},
+		}
+	case secDup2, secDup3:
+		oldFD := int(ev.Args[0])
+		newFD := int(ev.Args[1])
+		if newFD > 2 {
+			return SyscallEvent{}
+		}
+		// Without the ptrace fd-table inspection we can't tell socket
+		// from pipe here. Surface unconditionally with a hint and let
+		// policy interpret.
+		target := []string{"stdin", "stdout", "stderr"}[newFD]
+		return SyscallEvent{
+			Syscall: "dup2",
+			Detail:  fmt.Sprintf("redirected fd %d to %s — possible reverse-shell pattern (verify fd source)", oldFD, target),
+			Args:    []int{oldFD, newFD},
+		}
+	}
+	return SyscallEvent{}
+}
+
+// enrichFromProc reads /proc/<pid>/{exe, cmdline, environ, status}
+// for the just-seen pid and populates ProcessInfo fields that match
+// what the ptrace path captures from the SYS_EXECVE handler. Best-
+// effort: process may have exited or have restricted /proc access;
+// each read is independent and failures are silent.
+//
+// Must be called with pctx.mu held (it mutates procInfo).
+func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
+	pid := procInfo.ProcessID
+	if pid == 0 {
+		return
+	}
+
+	procDir := fmt.Sprintf("/proc/%d", pid)
+
+	// /proc/<pid>/status: spec_store_bypass mitigation + ppid sanity.
+	if data, err := os.ReadFile(procDir + "/status"); err == nil {
+		procInfo.SpecBypassIsVuln = getSpecBypassIsVulnFromStatus(data)
+		if procInfo.ParentPID == 0 {
+			if ppid, err := getPPIDFromStatus(data); err == nil {
+				procInfo.ParentPID = ppid
+			}
+		}
+	}
+
+	// /proc/<pid>/comm: kernel-side comm is authoritative (matches
+	// the BPF event but covers /proc reads if BPF comm is empty).
+	if procInfo.Comm == "" {
+		if data, err := os.ReadFile(procDir + "/comm"); err == nil {
+			procInfo.Comm = cleanString(string(data))
+		}
+	}
+
+	// /proc/<pid>/cmdline: argv joined by NULs.
+	if procInfo.Cmdline == "" {
+		if data, err := os.ReadFile(procDir + "/cmdline"); err == nil {
+			procInfo.Cmdline = cleanString(string(data))
+		}
+	}
+
+	// /proc/<pid>/environ: sensitive — pass through the attestation
+	// context's environment capturer (which honors --env-* flags).
+	if procInfo.Environ == "" && pctx.environmentCapturer != nil {
+		if data, err := os.ReadFile(procDir + "/environ"); err == nil {
+			allVars := strings.Split(string(data), "\x00")
+			captured := pctx.environmentCapturer.Capture(allVars)
+			env := make([]string, 0, len(captured))
+			for k, v := range captured {
+				env = append(env, fmt.Sprintf("%s=%s", k, v))
+			}
+			procInfo.Environ = strings.Join(env, " ")
+		}
+	}
+
+	// /proc/<pid>/exe is a symlink to the current binary. Resolve +
+	// hash via the trace's digest cache for the same per-trace
+	// dedup that the ptrace path gets.
+	exePath := procDir + "/exe"
+	if procInfo.ExeDigest == nil {
+		if d, ok := pctx.cachedDigest(exePath); ok {
+			procInfo.ExeDigest = d
+		}
+		// Resolve the symlink so Program can be set to the actual
+		// path, mirroring ptrace's argv[0] field.
+		if resolved, err := os.Readlink(exePath); err == nil {
+			procInfo.Program = resolved
+			if procInfo.ProgramDigest == nil {
+				if d, ok := pctx.cachedDigest(resolved); ok {
+					procInfo.ProgramDigest = d
+				}
+			}
+		}
 	}
 }
 
