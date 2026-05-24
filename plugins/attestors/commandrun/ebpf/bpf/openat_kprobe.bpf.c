@@ -244,12 +244,41 @@ struct net_event {
     char  addr[32];        // sockaddr_in/in6/un (connect/bind)
 };
 
-// Ring buffer for ALL event types. 16 MB is generous; an overflow
-// shows up as ringbuf-full errors in userspace consumer.
+// Ring buffer for ALL event types. 256 MB — sized to absorb the
+// peak burst from a 4-core parallel Go build with read-tap on
+// (~200 MB/sec ingress for short windows). At 64 MB we still saw
+// ~12K drops; 256 MB + proactive userspace backpressure should
+// drive that to zero.
+//
+// memlock rlimit is removed at consumer Open() via cilium/ebpf's
+// rlimit.RemoveMemlock helper — 256 MB allocation succeeds on any
+// host with CAP_BPF.
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 16 * 1024 * 1024);
+    __uint(max_entries, 256 * 1024 * 1024);
 } events SEC(".maps");
+
+// Drop counters — every bpf_ringbuf_output that returns < 0 is
+// counted here. Userspace can read this to surface drop rates.
+// Index 0 = openat-class drops (small), Index 1 = read_chunk
+// drops (large 16KB records). Separating them tells us whether
+// to bump ringbuf size or split the producer/consumer.
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 2);
+    __type(key, __u32);
+    __type(value, __u64);
+} ringbuf_drops SEC(".maps");
+
+#define DROP_BUCKET_OPENAT 0
+#define DROP_BUCKET_READTAP 1
+
+static __always_inline void
+bump_drop(__u32 bucket)
+{
+    __u64 *cnt = bpf_map_lookup_elem(&ringbuf_drops, &bucket);
+    if (cnt) (*cnt)++;
+}
 
 // Per-CPU scratch storage for the largest event (file_mutation_event,
 // ~8KB). MAX_PATH exceeds BPF's 512-byte stack limit; scratch keeps
@@ -396,7 +425,39 @@ emit_openat_ret(long ret)
     // ev was fully populated at kprobe time except fd; just update
     // the one field in-place and emit.
     ev->fd = (int)ret;
-    bpf_ringbuf_output(&events, ev, sizeof(struct openat_event), 0);
+
+    // Walk fd → struct file → inode → i_size for V1.4 read-tap
+    // full-read detection. Done in kernel here so userspace doesn't
+    // need to stat(2). Best-effort: a failure leaves size_at_open=0
+    // and userspace falls back to path-hash.
+    if ((int)ret >= 0) {
+        struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+        if (task) {
+            struct files_struct *files = BPF_CORE_READ(task, files);
+            if (files) {
+                struct fdtable *fdt = BPF_CORE_READ(files, fdt);
+                __u32 max_fds = 0;
+                if (fdt) max_fds = BPF_CORE_READ(fdt, max_fds);
+                if (fdt && (__u32)ret < max_fds) {
+                    struct file **fd_array = BPF_CORE_READ(fdt, fd);
+                    struct file *file = NULL;
+                    if (fd_array) bpf_probe_read_kernel(&file, sizeof(file), &fd_array[(int)ret]);
+                    if (file) {
+                        struct inode *inode = BPF_CORE_READ(file, f_inode);
+                        if (inode) {
+                            ev->size_at_open = (__u64)BPF_CORE_READ(inode, i_size);
+                            // mtime layout varies across kernels; skip
+                            // for V1.4 — userspace doesn't need it yet
+                            // (full-read check uses size only).
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (bpf_ringbuf_output(&events, ev, sizeof(struct openat_event), 0) < 0)
+        bump_drop(DROP_BUCKET_OPENAT);
     bpf_map_delete_elem(&openat_stash_map, &key);
 }
 
@@ -931,20 +992,32 @@ emit_read_chunk(long ret)
     if (!s) return;
     if (ret <= 0) goto done;
 
-    __u32 cur_pid, cur_tgid, cur_ppid;
-    if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) goto done;
-
-    __u32 z = 0;
-    struct read_chunk_event *ev = bpf_map_lookup_elem(&read_chunk_scratch, &z);
-    if (!ev) goto done;
+    // Filter was checked at kprobe entry — the same task is
+    // returning to user mode now, so we can re-derive (pid, tgid,
+    // ppid) from current without re-running the 3-hash-lookup
+    // emit_filter(). Saves ~150ns per syscall.
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 cur_pid  = (__u32)(pid_tgid & 0xFFFFFFFF);
+    __u32 cur_tgid = (__u32)(pid_tgid >> 32);
+    __u32 cur_ppid = 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    if (task) {
+        struct task_struct *p = BPF_CORE_READ(task, real_parent);
+        if (p) cur_ppid = BPF_CORE_READ(p, tgid);
+    }
 
     __u64 want_total = (__u64)ret;
     __u64 done_bytes = 0;
     __u32 seq = 0;
 
-    // Unrolled bounded loop — verifier loves these. Each iteration
-    // emits one chunk via ringbuf_output (which copies the data),
-    // so reusing the per-CPU scratch is safe.
+    // Cache comm once per syscall — same value across all chunks.
+    char comm_cache[TASK_COMM_LEN];
+    bpf_get_current_comm(comm_cache, sizeof(comm_cache));
+
+    // Reserve directly in the ringbuf — zero-copy from user buffer
+    // to ringbuf memory. Saves one 16KB memcpy vs the older
+    // bpf_ringbuf_output (which copies from local scratch). Each
+    // chunk is its own ringbuf record; we just call reserve N times.
     #pragma unroll
     for (int i = 0; i < MAX_READ_CHUNKS; i++) {
         if (done_bytes >= want_total) break;
@@ -954,16 +1027,31 @@ emit_read_chunk(long ret)
                   : (__u32)remaining;
         if (n == 0 || n > READ_CHUNK_BYTES) break;
 
-        fill_hdr(&ev->hdr, EVT_READ_CHUNK, cur_pid, cur_tgid, cur_ppid);
-        bpf_get_current_comm(ev->comm, sizeof(ev->comm));
-        ev->fd       = s->fd;
-        ev->seq      = seq;
-        ev->chunk_len = n;
-        ev->_pad     = 0;
+        struct read_chunk_event *ev =
+            bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
+        if (!ev) {
+            bump_drop(DROP_BUCKET_READTAP);
+            break; // ringbuf full; partial digest in userspace
+        }
 
-        (void)bpf_probe_read_user(ev->data, n,
+        fill_hdr(&ev->hdr, EVT_READ_CHUNK, cur_pid, cur_tgid, cur_ppid);
+        __builtin_memcpy(ev->comm, comm_cache, TASK_COMM_LEN);
+        ev->fd        = s->fd;
+        ev->seq       = seq;
+        ev->chunk_len = n;
+        ev->_pad      = 0;
+
+        // Direct user→ringbuf copy. No intermediate buffer.
+        long rc = bpf_probe_read_user(ev->data, n,
             (const void *)(s->user_buf + done_bytes));
-        bpf_ringbuf_output(&events, ev, sizeof(*ev), 0);
+        if (rc < 0) {
+            // Failed read — discard rather than submit garbage.
+            // bump a drop so userspace knows attestation has gaps.
+            bpf_ringbuf_discard(ev, 0);
+            bump_drop(DROP_BUCKET_READTAP);
+            break;
+        }
+        bpf_ringbuf_submit(ev, 0);
 
         done_bytes += n;
         seq++;
@@ -1059,7 +1147,8 @@ emit_close(int fd)
     fill_hdr(&ev.hdr, EVT_CLOSE, cur_pid, cur_tgid, cur_ppid);
     bpf_get_current_comm(ev.comm, sizeof(ev.comm));
     ev.fd = fd;
-    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+    if (bpf_ringbuf_output(&events, &ev, sizeof(ev), 0) < 0)
+        bump_drop(DROP_BUCKET_READTAP);
 }
 
 SEC("kprobe/__arm64_sys_close")

@@ -85,16 +85,22 @@ type HashResult struct {
 // tracee) or /proc/<pid>/fd/<fd> isn't readable, fall back to the
 // path. That preserves V1.2 behavior for openat2 + failed-open cases.
 func HashOpenatEvent(ev *OpenatEvent, hashFuncs []cryptoutil.DigestValue) HashResult {
-	// Try the fd-based path first.
-	if ev.FD >= 0 {
+	return HashOpenatEventWithMode(ev, hashFuncs, false)
+}
+
+// HashOpenatEventWithMode lets the caller force path-only hashing.
+// pathOnly=true skips the /proc/<pid>/fd/<fd> path entirely — used
+// by the V1.4 read-tap partial-read fallback, which may run after
+// the tracee has closed the fd (and a different file may have been
+// assigned that fd in the meantime — fd reuse races would otherwise
+// produce wrong-file digests).
+func HashOpenatEventWithMode(ev *OpenatEvent, hashFuncs []cryptoutil.DigestValue, pathOnly bool) HashResult {
+	if !pathOnly && ev.FD >= 0 {
 		fdPath := fmt.Sprintf("/proc/%d/fd/%d", ev.PID, ev.FD)
 		if res, ok := hashViaProcFD(fdPath, ev.Path, hashFuncs); ok {
 			return res
 		}
-		// Fall through to the path-based fallback if /proc/<pid>/fd/<fd>
-		// is unreadable (process exited, fd closed, etc.).
 	}
-
 	return hashViaPath(ev.Path, hashFuncs)
 }
 

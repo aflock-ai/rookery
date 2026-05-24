@@ -263,10 +263,12 @@ type Consumer struct {
 	coll           *ebpf.Collection
 	links          []link.Link
 	reader         *ringbuf.Reader
-	watchedPids    *ebpf.Map // BPF_MAP_TYPE_HASH: pid -> 1
-	filterFlag     *ebpf.Map // BPF_MAP_TYPE_ARRAY[1]: byte
-	rootParentTgid *ebpf.Map // BPF_MAP_TYPE_ARRAY[1]: u32
-	readTapFlag    *ebpf.Map // BPF_MAP_TYPE_ARRAY[1]: byte (V1.4 read-tap)
+	readRec        ringbuf.Record // reused across Read() calls (single consumer)
+	watchedPids    *ebpf.Map      // BPF_MAP_TYPE_HASH: pid -> 1
+	filterFlag     *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte
+	rootParentTgid *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: u32
+	readTapFlag    *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte (V1.4 read-tap)
+	ringbufDrops   *ebpf.Map      // BPF_MAP_TYPE_PERCPU_ARRAY[2]: u64 drop counters
 }
 
 // Open loads the embedded BPF object, attaches kprobes for the
@@ -384,8 +386,61 @@ func Open() (*Consumer, error) {
 	if rt, ok := coll.Maps["read_tap_enabled"]; ok {
 		c.readTapFlag = rt
 	}
+	if drops, ok := coll.Maps["ringbuf_drops"]; ok {
+		c.ringbufDrops = drops
+	}
 
 	return c, nil
+}
+
+// RingbufAvailableBytes returns the number of bytes waiting to be
+// drained from the kernel ringbuf. The watchdog uses this for
+// proactive backpressure — pause the tracee when usage climbs
+// before drops actually happen.
+func (c *Consumer) RingbufAvailableBytes() int {
+	if c == nil || c.reader == nil {
+		return 0
+	}
+	return c.reader.AvailableBytes()
+}
+
+// RingbufCapacityBytes returns the kernel-side ringbuf capacity.
+// Used together with RingbufAvailableBytes to compute fill ratio.
+func (c *Consumer) RingbufCapacityBytes() int {
+	if c == nil || c.reader == nil {
+		return 0
+	}
+	return c.reader.BufferSize()
+}
+
+// RingbufDrops returns (openat_drops, read_tap_drops) summed across
+// all CPUs since program load. Non-zero values mean the ring buffer
+// filled and events were lost — userspace can use this to surface
+// "your attestation is incomplete" warnings to the operator.
+func (c *Consumer) RingbufDrops() (openatDrops, readTapDrops uint64, err error) {
+	if c == nil || c.ringbufDrops == nil {
+		return 0, 0, nil
+	}
+	ncpu, err := ebpf.PossibleCPU()
+	if err != nil {
+		return 0, 0, fmt.Errorf("possible cpu: %w", err)
+	}
+	per := make([]uint64, ncpu)
+	var k uint32 = 0
+	if err := c.ringbufDrops.Lookup(&k, &per); err != nil {
+		return 0, 0, fmt.Errorf("lookup drops[openat]: %w", err)
+	}
+	for _, v := range per {
+		openatDrops += v
+	}
+	k = 1
+	if err := c.ringbufDrops.Lookup(&k, &per); err != nil {
+		return 0, 0, fmt.Errorf("lookup drops[readtap]: %w", err)
+	}
+	for _, v := range per {
+		readTapDrops += v
+	}
+	return openatDrops, readTapDrops, nil
 }
 
 // SetRootParentTgid tells the kprobe which parent tgid to expect.
@@ -650,11 +705,16 @@ func archKprobeNames() ([]string, []string) {
 // Exactly one of (*Event).Openat, .Execve, .FileOp, .Security is
 // non-nil on a successful return.
 func (c *Consumer) Read() (*Event, error) {
-	rec, err := c.reader.Read()
-	if err != nil {
+	// Reuse the same Record struct + RawSample backing buffer across
+	// calls — cilium/ebpf's ReadInto fills the existing slice rather
+	// than allocating fresh. Single-consumer guarantee (one dispatcher
+	// goroutine) makes this safe; the caller MUST consume the returned
+	// Event before the next Read() because ReadChunkEvent.Data points
+	// into the reused buffer.
+	if err := c.reader.ReadInto(&c.readRec); err != nil {
 		return nil, err
 	}
-	return decodeEvent(rec.RawSample)
+	return decodeEvent(c.readRec.RawSample)
 }
 
 // decodeEvent dispatches a raw ring-buffer record on its leading
@@ -840,6 +900,10 @@ func decodeReadChunkEvent(raw []byte) (*ReadChunkEvent, error) {
 	if chunkLen > readChunkBytes {
 		return nil, fmt.Errorf("read_chunk len %d > max %d", chunkLen, readChunkBytes)
 	}
+	// Copy Data so it survives the next ringbuf.ReadInto which
+	// reuses the underlying buffer. The pool-of-bytes pattern below
+	// avoids GC pressure: pull from a sync.Pool, fill, return when
+	// the dispatcher's done with it (caller's responsibility).
 	ev := &ReadChunkEvent{
 		EventHeader: h,
 		Comm:        readCStr(raw[commOff : commOff+taskCommLen]),
@@ -847,8 +911,6 @@ func decodeReadChunkEvent(raw []byte) (*ReadChunkEvent, error) {
 		Seq:         binary.LittleEndian.Uint32(raw[seqOff:]),
 		ChunkLen:    chunkLen,
 	}
-	// Copy the valid prefix only — the BPF event always carries a
-	// full READ_CHUNK_BYTES buffer but only ChunkLen of it is real.
 	ev.Data = make([]byte, chunkLen)
 	copy(ev.Data, raw[dataOff:dataOff+int(chunkLen)])
 	return ev, nil
