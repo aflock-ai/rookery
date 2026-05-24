@@ -341,6 +341,20 @@ type CommandRun struct {
 	// in walk-mode runs (where TraceOutputs isn't called).
 	cacheMatcher *attestation.CachePathMatcher
 
+	// ringbufDropOpenat / ringbufDropReadTap stash the BPF ringbuf
+	// drop counters read at trace teardown. buildTraceSummary reads
+	// these into Summary.Diagnostics when it builds the summary
+	// AFTER trace() returns. Set unconditionally on the eBPF path;
+	// zero on the ptrace path (no ringbuf).
+	ringbufDropOpenat  uint64
+	ringbufDropReadTap uint64
+
+	// resolvedCaptureMode records which capture-mode the framework
+	// selected for this run ("trace", "walk", "ima"). Populated by
+	// the framework at Attest time so buildTraceSummary can surface
+	// it; otherwise blank.
+	resolvedCaptureMode string
+
 	// ebpfConsumer holds an open eBPF consumer when the eBPF tracing
 	// path is active. Opened BEFORE the child process starts so
 	// kprobes are attached when the child fires its first openat.
@@ -918,6 +932,29 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		// Tiny CPU cost (one pass over the slice) for a big UX win
 		// — readers can triage the build in <5 KB instead of 20 MB.
 		r.Summary = buildTraceSummary(r.Processes, traceDuration)
+		// V2 Phase 5: surface the diagnostics that were stashed
+		// during the trace into the Summary so they survive in the
+		// signed attestation. Without this, operators can only see
+		// ringbuf drops in the log output at trace time — they're
+		// invisible to anyone verifying the stored attestation later.
+		if r.Summary != nil {
+			r.Summary.Diagnostics.RingbufOpenatDrops = r.ringbufDropOpenat
+			r.Summary.Diagnostics.RingbufReadTapDrops = r.ringbufDropReadTap
+			if r.resolvedCaptureMode != "" {
+				r.Summary.CaptureMode = r.resolvedCaptureMode
+				// TraceModeDetail differentiates the backend within
+				// a mode — "ebpf" vs "ptrace" for trace, "fs-verity"
+				// vs "streaming-hash" for walk, etc. For now we map
+				// trace → backend; future phases (IMA, fentry) will
+				// expand this.
+				switch r.resolvedCaptureMode {
+				case "trace":
+					if traceMode := os.Getenv(EnvVarTraceMode); traceMode != "" {
+						r.Summary.TraceModeDetail = traceMode
+					}
+				}
+			}
+		}
 	} else {
 		err = c.Wait()
 		if exitErr, ok := err.(*exec.ExitError); ok {

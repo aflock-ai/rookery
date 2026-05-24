@@ -598,7 +598,19 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// (Close releases the underlying maps). A non-zero drop count
 	// means the attestation has gaps — log loud so operators can
 	// see they need to bump ringbuf size or reduce concurrency.
+	//
+	// V2 Phase 5: ALSO record into TraceSummary.Diagnostics so the
+	// counters survive in the attestation itself. Operators verifying
+	// a stored attestation can read these without re-running the
+	// build; AI agents can flag "incomplete" attestations from a
+	// summary read alone.
 	if oDrops, rDrops, dErr := consumer.RingbufDrops(); dErr == nil {
+		// Stash on CommandRun for buildTraceSummary to consume after
+		// the trace returns. Direct r.Summary assignment doesn't work
+		// here because Summary is built AFTER trace() returns; any
+		// write here would be clobbered.
+		r.ringbufDropOpenat = oDrops
+		r.ringbufDropReadTap = rDrops
 		if oDrops > 0 || rDrops > 0 {
 			log.Errorf("(ebpf) RINGBUF DROPS — attestation has gaps: openat=%d read_tap=%d  "+
 				"bump ringbuf size or reduce build parallelism",
