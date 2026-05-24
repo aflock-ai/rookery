@@ -92,6 +92,14 @@ const (
 	//          + protocol(4) + addr(32) = 96
 	netEventSize = cilockHdrSize + taskCommLen + 4 + 4 + 4 + 4 + 32
 
+	// read_chunk_event: hdr(32) + comm(16) + fd(4) + seq(4)
+	//                 + chunk_len(4) + pad(4) + data(16384) = 16448
+	readChunkBytes     = 16384
+	readChunkEventSize = cilockHdrSize + taskCommLen + 4 + 4 + 4 + 4 + readChunkBytes
+
+	// close_event: hdr(32) + comm(16) + fd(4) + pad(4) = 56
+	closeEventSize = cilockHdrSize + taskCommLen + 4 + 4
+
 	maxPath     = 4096
 	taskCommLen = 16
 )
@@ -101,13 +109,36 @@ const (
 // in order. Type discrimination is via the leading event_type field
 // in the ring-buffer record.
 type Event struct {
-	Type     uint32         // EVT_OPENAT / EVT_EXECVE / ...
-	Openat   *OpenatEvent   // EVT_OPENAT
-	Execve   *ExecveEvent   // EVT_EXECVE
-	FileOp   *FileOpEvent   // EVT_UNLINKAT / EVT_RENAMEAT / EVT_FCHMODAT
-	Security *SecurityEvent // EVT_SECURITY
-	Write    *WriteEvent    // EVT_WRITE
-	Net      *NetEvent      // EVT_SOCKET / EVT_CONNECT / EVT_BIND
+	Type      uint32          // EVT_OPENAT / EVT_EXECVE / ...
+	Openat    *OpenatEvent    // EVT_OPENAT
+	Execve    *ExecveEvent    // EVT_EXECVE
+	FileOp    *FileOpEvent    // EVT_UNLINKAT / EVT_RENAMEAT / EVT_FCHMODAT
+	Security  *SecurityEvent  // EVT_SECURITY
+	Write     *WriteEvent     // EVT_WRITE
+	Net       *NetEvent       // EVT_SOCKET / EVT_CONNECT / EVT_BIND
+	ReadChunk *ReadChunkEvent // EVT_READ_CHUNK
+	Close     *CloseEvent     // EVT_CLOSE
+}
+
+// ReadChunkEvent carries a slice of bytes the kernel returned to the
+// tracee on one read syscall. Userspace feeds Data[:ChunkLen] into
+// the streaming SHA-256 keyed by (PID, FD).
+type ReadChunkEvent struct {
+	EventHeader
+	Comm     string
+	FD       int32
+	Seq      uint32
+	ChunkLen uint32
+	Data     []byte // ChunkLen valid bytes; len(Data) == int(ChunkLen)
+}
+
+// CloseEvent signals userspace to finalize the streaming hash for
+// (PID, FD). Userspace pairs this with the openat event that
+// produced FD to record the digest against the file's path.
+type CloseEvent struct {
+	EventHeader
+	Comm string
+	FD   int32
 }
 
 // WriteEvent carries (fd, bytes) from a write/pwrite kprobe.
@@ -235,6 +266,7 @@ type Consumer struct {
 	watchedPids    *ebpf.Map // BPF_MAP_TYPE_HASH: pid -> 1
 	filterFlag     *ebpf.Map // BPF_MAP_TYPE_ARRAY[1]: byte
 	rootParentTgid *ebpf.Map // BPF_MAP_TYPE_ARRAY[1]: u32
+	readTapFlag    *ebpf.Map // BPF_MAP_TYPE_ARRAY[1]: byte (V1.4 read-tap)
 }
 
 // Open loads the embedded BPF object, attaches kprobes for the
@@ -346,6 +378,13 @@ func Open() (*Consumer, error) {
 	}
 	c.rootParentTgid = root
 
+	// V1.4 read-tap toggle map. Optional — older .bpf.o without
+	// read-tap programs won't expose this map, in which case
+	// EnableReadTap returns an error and the caller falls back.
+	if rt, ok := coll.Maps["read_tap_enabled"]; ok {
+		c.readTapFlag = rt
+	}
+
 	return c, nil
 }
 
@@ -414,6 +453,33 @@ func (c *Consumer) DisableFilter() error {
 	zero := uint32(0)
 	off := uint8(0)
 	return c.filterFlag.Update(&zero, &off, ebpf.UpdateAny)
+}
+
+// EnableReadTap turns on the V1.4 read-tap. With it enabled, the
+// read/pread64 kprobes copy up to 16 KB from the user buffer per
+// syscall and emit EVT_READ_CHUNK / EVT_CLOSE events the caller
+// streams into a per-(pid, fd) SHA-256. See bpf source for the
+// threat model — tamper-proof vs the calling thread and external
+// procs, NOT vs sibling threads sharing the address space.
+func (c *Consumer) EnableReadTap() error {
+	if c == nil || c.readTapFlag == nil {
+		return fmt.Errorf("read-tap not available (BPF object too old?)")
+	}
+	zero := uint32(0)
+	on := uint8(1)
+	return c.readTapFlag.Update(&zero, &on, ebpf.UpdateAny)
+}
+
+// DisableReadTap turns the read-tap off. Existing in-flight stash
+// entries get cleared by the kretprobe on syscall exit; no draining
+// needed on the caller side.
+func (c *Consumer) DisableReadTap() error {
+	if c == nil || c.readTapFlag == nil {
+		return nil
+	}
+	zero := uint32(0)
+	off := uint8(0)
+	return c.readTapFlag.Update(&zero, &off, ebpf.UpdateAny)
 }
 
 // unameKernelVersionCode returns the running kernel version encoded
@@ -514,6 +580,10 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_init_module_x64", "kprobe_finit_module_x64",
 				"kprobe_clone_x64", "kprobe_clone3_x64",
 				"kprobe_dup2_x64", "kprobe_dup3_x64",
+				// V1.4 read-tap (gated by read_tap_enabled map; cheap when off)
+				"kprobe_read_x64", "kretprobe_read_x64",
+				"kprobe_pread64_x64", "kretprobe_pread64_x64",
+				"kprobe_close_x64",
 			},
 			[]string{
 				"__x64_sys_openat", "__x64_sys_openat",
@@ -528,6 +598,9 @@ func archKprobeNames() ([]string, []string) {
 				"__x64_sys_init_module", "__x64_sys_finit_module",
 				"__x64_sys_clone", "__x64_sys_clone3",
 				"__x64_sys_dup2", "__x64_sys_dup3",
+				"__x64_sys_read", "__x64_sys_read",
+				"__x64_sys_pread64", "__x64_sys_pread64",
+				"__x64_sys_close",
 			}
 	case "arm64":
 		return []string{
@@ -543,6 +616,9 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_init_module_arm64", "kprobe_finit_module_arm64",
 				"kprobe_clone_arm64", "kprobe_clone3_arm64",
 				"kprobe_dup3_arm64",
+				"kprobe_read_arm64", "kretprobe_read_arm64",
+				"kprobe_pread64_arm64", "kretprobe_pread64_arm64",
+				"kprobe_close_arm64",
 			},
 			[]string{
 				"__arm64_sys_openat", "__arm64_sys_openat",
@@ -557,6 +633,9 @@ func archKprobeNames() ([]string, []string) {
 				"__arm64_sys_init_module", "__arm64_sys_finit_module",
 				"__arm64_sys_clone", "__arm64_sys_clone3",
 				"__arm64_sys_dup3",
+				"__arm64_sys_read", "__arm64_sys_read",
+				"__arm64_sys_pread64", "__arm64_sys_pread64",
+				"__arm64_sys_close",
 			}
 	default:
 		return nil, nil
@@ -622,12 +701,18 @@ func decodeEvent(raw []byte) (*Event, error) {
 			return nil, err
 		}
 		return &Event{Type: evtType, Net: n}, nil
-	case EVT_READ_CHUNK, EVT_CLOSE:
-		// V1.4 read-tap events. Userspace decoder + streaming-hash
-		// integration land in a follow-up commit. For now, accept
-		// silently so we don't spam errors if read_tap_enabled gets
-		// flipped on by an old binary against new BPF or vice versa.
-		return &Event{Type: evtType}, nil
+	case EVT_READ_CHUNK:
+		rc, err := decodeReadChunkEvent(raw)
+		if err != nil {
+			return nil, err
+		}
+		return &Event{Type: evtType, ReadChunk: rc}, nil
+	case EVT_CLOSE:
+		cl, err := decodeCloseEvent(raw)
+		if err != nil {
+			return nil, err
+		}
+		return &Event{Type: evtType, Close: cl}, nil
 	default:
 		return nil, fmt.Errorf("unknown event_type=%d (raw len=%d)", evtType, len(raw))
 	}
@@ -739,6 +824,48 @@ func decodeNetEvent(raw []byte) (*NetEvent, error) {
 	}
 	copy(ev.Addr[:], raw[addrOff:addrOff+32])
 	return ev, nil
+}
+
+func decodeReadChunkEvent(raw []byte) (*ReadChunkEvent, error) {
+	if len(raw) < readChunkEventSize {
+		return nil, fmt.Errorf("read_chunk event too short: %d < %d", len(raw), readChunkEventSize)
+	}
+	h := decodeEventHeader(raw)
+	const commOff = cilockHdrSize       // 32
+	const fdOff = commOff + taskCommLen // 48
+	const seqOff = fdOff + 4            // 52
+	const lenOff = seqOff + 4           // 56
+	const dataOff = lenOff + 4 + 4      // 64 (chunk_len + pad)
+	chunkLen := binary.LittleEndian.Uint32(raw[lenOff:])
+	if chunkLen > readChunkBytes {
+		return nil, fmt.Errorf("read_chunk len %d > max %d", chunkLen, readChunkBytes)
+	}
+	ev := &ReadChunkEvent{
+		EventHeader: h,
+		Comm:        readCStr(raw[commOff : commOff+taskCommLen]),
+		FD:          int32(binary.LittleEndian.Uint32(raw[fdOff:])),
+		Seq:         binary.LittleEndian.Uint32(raw[seqOff:]),
+		ChunkLen:    chunkLen,
+	}
+	// Copy the valid prefix only — the BPF event always carries a
+	// full READ_CHUNK_BYTES buffer but only ChunkLen of it is real.
+	ev.Data = make([]byte, chunkLen)
+	copy(ev.Data, raw[dataOff:dataOff+int(chunkLen)])
+	return ev, nil
+}
+
+func decodeCloseEvent(raw []byte) (*CloseEvent, error) {
+	if len(raw) < closeEventSize {
+		return nil, fmt.Errorf("close event too short: %d < %d", len(raw), closeEventSize)
+	}
+	h := decodeEventHeader(raw)
+	const commOff = cilockHdrSize
+	const fdOff = commOff + taskCommLen
+	return &CloseEvent{
+		EventHeader: h,
+		Comm:        readCStr(raw[commOff : commOff+taskCommLen]),
+		FD:          int32(binary.LittleEndian.Uint32(raw[fdOff:])),
+	}, nil
 }
 
 // readCStr returns the bytes up to (but not including) the first NUL.
