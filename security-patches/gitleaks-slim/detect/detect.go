@@ -15,14 +15,57 @@ import (
 	"github.com/zricethezav/gitleaks/v8/logging"
 	"github.com/zricethezav/gitleaks/v8/regexp"
 	"github.com/zricethezav/gitleaks/v8/report"
-	"github.com/zricethezav/gitleaks/v8/sources"
 
 	ahocorasick "github.com/BobuSumisu/aho-corasick"
 	"github.com/fatih/semgroup"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog"
-	"github.com/spf13/viper"
 	"golang.org/x/exp/maps"
 )
+
+// Fragment is the unit of work that the detector inspects. Upstream
+// gitleaks defines this in github.com/zricethezav/gitleaks/v8/sources;
+// the slim fork inlines it here so the sources package (and its
+// archive-reader / git-scan / mholt-archives transitive cluster) can be
+// dropped from the linked binary.
+//
+// Only Raw + Bytes are set on the DetectBytes / DetectString path used
+// by secretscan; the other fields exist to keep the struct's shape
+// compatible with upstream so rule predicates that reference e.g.
+// fragment.FilePath continue to compile.
+type Fragment struct {
+	Raw             string
+	Bytes           []byte
+	FilePath        string
+	SymlinkFile     string
+	WindowsFilePath string `json:"-"`
+	CommitSHA       string
+	StartLine       int
+	CommitInfo      *CommitInfo
+	// InheritedFromFinding marks a fragment produced by a previous
+	// rule match (used for multi-step / required-finding rules).
+	InheritedFromFinding bool
+}
+
+// CommitInfo captures additional information about the git commit when
+// the fragment originated from a git source. The slim fork's
+// DetectBytes path never populates this; kept for upstream shape parity.
+type CommitInfo struct {
+	AuthorEmail string
+	AuthorName  string
+	Date        string
+	Message     string
+	Remote      *RemoteInfo
+	SHA         string
+}
+
+// RemoteInfo describes a git remote — used by upstream gitleaks to
+// build SCM links on findings. The slim fork's createScmLink stub
+// always returns "", so this struct is opaque shape.
+type RemoteInfo struct {
+	Platform any
+	Url      string
+}
 
 const (
 	gitleaksAllowSignature = "gitleaks:allow"
@@ -99,17 +142,14 @@ type Detector struct {
 	// Sema (https://github.com/fatih/semgroup) controls the concurrency
 	Sema *semgroup.Group
 
-	// report-related settings.
+	// report-related settings. The Reporter field upstream was a
+	// report.Reporter interface for streaming findings to CSV/SARIF/JSON
+	// emitters; the slim fork has no Reporter (CLI emit paths deleted),
+	// so callers just read d.Findings() at the end.
 	ReportPath string
-	Reporter   report.Reporter
 
 	TotalBytes atomic.Uint64
 }
-
-// Fragment is an alias for sources.Fragment for backwards compatibility
-//
-// Deprecated: This will be replaced with sources.Fragment in v9
-type Fragment sources.Fragment
 
 // NewDetector creates a new detector with the given config
 func NewDetector(cfg config.Config) *Detector {
@@ -131,17 +171,16 @@ func NewDetectorContext(ctx context.Context, cfg config.Config) *Detector {
 	}
 }
 
-// NewDetectorDefaultConfig creates a new detector with the default config
+// NewDetectorDefaultConfig creates a new detector with the default config.
+//
+// Upstream parsed config.DefaultConfig via spf13/viper; the slim fork
+// uses pelletier/go-toml/v2 (already in the shared judge/rookery trust
+// set) to avoid pulling viper + fsnotify + afero + mapstructure +
+// locafero + cast + pflag (~16 transitive modules).
 func NewDetectorDefaultConfig() (*Detector, error) {
-	viper.SetConfigType("toml")
-	err := viper.ReadConfig(strings.NewReader(config.DefaultConfig))
-	if err != nil {
-		return nil, err
-	}
 	var vc config.ViperConfig
-	err = viper.Unmarshal(&vc)
-	if err != nil {
-		return nil, err
+	if err := toml.Unmarshal([]byte(config.DefaultConfig), &vc); err != nil {
+		return nil, fmt.Errorf("decode default gitleaks config: %w", err)
 	}
 	cfg, err := vc.Translate()
 	if err != nil {
@@ -204,67 +243,9 @@ func (d *Detector) DetectString(content string) []report.Finding {
 	})
 }
 
-// DetectSource scans the given source and returns a list of findings
-func (d *Detector) DetectSource(ctx context.Context, source sources.Source) ([]report.Finding, error) {
-	err := source.Fragments(ctx, func(fragment sources.Fragment, err error) error {
-		logContext := logging.With()
-
-		if len(fragment.FilePath) > 0 {
-			logContext = logContext.Str("path", fragment.FilePath)
-		}
-
-		if len(fragment.CommitSHA) > 6 {
-			logContext = logContext.Str("commit", fragment.CommitSHA[:7])
-			d.addCommit(fragment.CommitSHA)
-		} else if len(fragment.CommitSHA) > 0 {
-			logContext = logContext.Str("commit", fragment.CommitSHA)
-			d.addCommit(fragment.CommitSHA)
-			logger := logContext.Logger()
-			logger.Warn().Msg("commit SHAs should be >= 7 characters long")
-		}
-
-		logger := logContext.Logger()
-
-		if err != nil {
-			// Log the error and move on to the next fragment
-			logger.Error().Err(err).Send()
-			return nil
-		}
-
-		// both the fragment's content and path should be empty for it to be
-		// considered empty at this point because of path based matches
-		if len(fragment.Raw) == 0 && len(fragment.FilePath) == 0 {
-			logger.Trace().Msg("skipping empty fragment")
-			return nil
-		}
-
-		var timer *time.Timer
-		// Only start the timer in debug mode
-		if logger.GetLevel() <= zerolog.DebugLevel {
-			timer = time.AfterFunc(SlowWarningThreshold, func() {
-				logger.Debug().Msgf("Taking longer than %s to inspect fragment", SlowWarningThreshold.String())
-			})
-		}
-
-		for _, finding := range d.DetectContext(ctx, Fragment(fragment)) {
-			d.AddFinding(finding)
-		}
-
-		// Stop the timer if it was created
-		if timer != nil {
-			timer.Stop()
-		}
-
-		return nil
-	})
-
-	if _, isGit := source.(*sources.Git); isGit {
-		logging.Info().Msgf("%d commits scanned.", len(d.commitMap))
-		logging.Debug().Msg("Note: this number might be smaller than expected due to commits with no additions")
-	}
-
-	return d.Findings(), err
-}
+// DetectSource was the upstream entry point for scanning git/file
+// sources via the sources package. The slim fork deletes it along with
+// sources/. secretscan uses the DetectBytes / DetectString path.
 
 // Detect scans the given fragment and returns a list of findings
 func (d *Detector) Detect(fragment Fragment) []report.Finding {

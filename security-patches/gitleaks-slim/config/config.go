@@ -4,11 +4,12 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
 	gv "github.com/hashicorp/go-version"
-	"github.com/spf13/viper"
+	"github.com/pelletier/go-toml/v2"
 
 	"github.com/zricethezav/gitleaks/v8/logging"
 	"github.com/zricethezav/gitleaks/v8/regexp"
@@ -209,8 +210,9 @@ func (vc *ViperConfig) Translate() (Config, error) {
 		// since if extendDepth > 0 we are operating an extended config.
 		c.Path = vc.configPath
 	} else {
-		// I don't love this
-		c.Path = viper.ConfigFileUsed()
+		// In the slim fork the configPath is the loaded path (viper's
+		// ConfigFileUsed() became unreachable when we dropped viper).
+		c.Path = vc.configPath
 	}
 
 	if err := validateMinVersion(c.MinVersion, c.Path); err != nil {
@@ -374,18 +376,13 @@ func (c *Config) GetOrderedRules() []Rule {
 
 func (c *Config) extendDefault(parent *ViperConfig) error {
 	extendDepth++
-	viper.SetConfigType("toml")
-	if err := viper.ReadConfig(strings.NewReader(DefaultConfig)); err != nil {
-		return fmt.Errorf("failed to load extended default config, err: %w", err)
-	}
 	defaultViperConfig := ViperConfig{}
-	if err := viper.Unmarshal(&defaultViperConfig); err != nil {
+	if err := toml.Unmarshal([]byte(DefaultConfig), &defaultViperConfig); err != nil {
 		return fmt.Errorf("failed to load extended default config, err: %w", err)
 	}
 	cfg, err := defaultViperConfig.Translate()
 	if err != nil {
 		return fmt.Errorf("failed to load extended default config, err: %w", err)
-
 	}
 	logging.Debug().Msg("extending config with default config")
 	c.extend(cfg)
@@ -394,12 +391,12 @@ func (c *Config) extendDefault(parent *ViperConfig) error {
 
 func (c *Config) extendPath(parent *ViperConfig) error {
 	extendDepth++
-	viper.SetConfigFile(c.Extend.Path)
-	if err := viper.ReadInConfig(); err != nil {
+	data, err := os.ReadFile(c.Extend.Path) //nolint:gosec // caller-supplied config path
+	if err != nil {
 		return fmt.Errorf("failed to load extended config, err: %w", err)
 	}
 	extensionViperConfig := ViperConfig{}
-	if err := viper.Unmarshal(&extensionViperConfig); err != nil {
+	if err := toml.Unmarshal(data, &extensionViperConfig); err != nil {
 		return fmt.Errorf("failed to load extended config, err: %w", err)
 	}
 

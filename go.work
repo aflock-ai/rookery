@@ -80,3 +80,11 @@ use (
 	./presets/cicd
 	./presets/minimal
 )
+
+// TestifySec-maintained slim fork of github.com/zricethezav/gitleaks/v8.
+// Drops cmd/, sources/, report emitters (CSV/SARIF/JSON/JUnit/template),
+// and exposes the secretscan attestor's exact surface (DetectBytes +
+// config.Config + report.Finding). Removes the charmbracelet/lipgloss,
+// spf13/viper, mholt/archives, Masterminds/sprig clusters — ~46 modules
+// from the linked binary. See security-patches/gitleaks-slim/README.md.
+replace github.com/zricethezav/gitleaks/v8 => ./security-patches/gitleaks-slim
