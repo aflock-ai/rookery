@@ -80,3 +80,11 @@ use (
 	./presets/cicd
 	./presets/minimal
 )
+
+// TestifySec-maintained rewrite of github.com/wk8/go-ordered-map/v2 that
+// drops github.com/buger/jsonparser (unfixed GHSA-6g7g-w4f8-9c9x Delete()
+// DoS) and github.com/mailru/easyjson from the linked binary by
+// reimplementing wk8's MarshalJSON / UnmarshalJSON on top of stdlib
+// encoding/json. Public API and on-wire JSON format unchanged. See
+// security-patches/wk8-orderedmap/README.md for the rationale.
+replace github.com/wk8/go-ordered-map/v2 => ./security-patches/wk8-orderedmap/v2
