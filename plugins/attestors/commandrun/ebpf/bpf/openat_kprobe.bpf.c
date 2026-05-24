@@ -450,6 +450,13 @@ emit_openat_ret(long ret)
                             // for V1.4 — userspace doesn't need it yet
                             // (full-read check uses size only).
                         }
+                        // Absolute-path resolution via bpf_d_path()
+                        // was tried in a V2 draft but the helper is
+                        // restricted from kprobes on most kernels
+                        // (returns "unknown func bpf_d_path"). Path
+                        // resolution moved to userspace: the dispatcher
+                        // reads /proc/<pid>/cwd to make relative paths
+                        // absolute before hashing.
                     }
                 }
             }
@@ -652,6 +659,30 @@ int BPF_KPROBE(kprobe_renameat2_x64, struct pt_regs *regs)
     const char *newpath = (const char *)PT_REGS_PARM4_CORE_SYSCALL(regs);
     __u32 flags = (__u32)PT_REGS_PARM5_CORE_SYSCALL(regs);
     emit_renameat2(oldpath, newpath, flags);
+    return 0;
+}
+
+// renameat (the older 4-arg syscall). Go's runtime uses SYS_RENAMEAT
+// directly via syscall.Renameat — not the libc wrapper that routes
+// through renameat2. Without this hook, every Go-built binary went
+// silent because `go build` writes to /tmp/go-build*/b001/exe/a.out
+// then renameat()-moves it to the final output path; the rename was
+// invisible and the binary never landed in products.
+SEC("kprobe/__arm64_sys_renameat")
+int BPF_KPROBE(kprobe_renameat_arm64, struct pt_regs *regs)
+{
+    const char *oldpath = (const char *)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    const char *newpath = (const char *)PT_REGS_PARM4_CORE_SYSCALL(regs);
+    emit_renameat2(oldpath, newpath, 0);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_renameat")
+int BPF_KPROBE(kprobe_renameat_x64, struct pt_regs *regs)
+{
+    const char *oldpath = (const char *)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    const char *newpath = (const char *)PT_REGS_PARM4_CORE_SYSCALL(regs);
+    emit_renameat2(oldpath, newpath, 0);
     return 0;
 }
 

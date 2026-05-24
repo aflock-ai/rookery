@@ -44,6 +44,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -56,6 +57,61 @@ import (
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf"
 )
+
+// AT_FDCWD is the dirfd value for "current working directory" as used
+// by openat(2). Defined here to avoid importing `syscall` (deprecated)
+// or `golang.org/x/sys/unix.AT_FDCWD` everywhere.
+const atFDCWD = -100
+
+// resolveOpenatPath converts a relative openat path to absolute by
+// reading /proc/<pid>/cwd (for dirfd=AT_FDCWD) or /proc/<pid>/fd/<dirfd>
+// (for *at-relative paths). Called at event-arrival time while the
+// tracee is still mid-syscall — the procfs entries are race-narrow
+// reliable. Returns "" when resolution fails; caller leaves the path
+// as-stashed.
+func resolveOpenatPath(ev *ebpf.OpenatEvent) string {
+	if ev == nil || ev.Path == "" {
+		return ""
+	}
+	if filepath.IsAbs(ev.Path) {
+		return ev.Path
+	}
+	var base string
+	if ev.Dirfd == atFDCWD {
+		// AT_FDCWD — resolve against the tracee's cwd.
+		link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", ev.PID))
+		if err != nil {
+			return ""
+		}
+		base = link
+	} else if ev.Dirfd >= 0 {
+		// *at-style: resolve against the open dirfd.
+		link, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%d", ev.PID, ev.Dirfd))
+		if err != nil {
+			return ""
+		}
+		base = link
+	} else {
+		return ""
+	}
+	return filepath.Join(base, ev.Path)
+}
+
+// resolveRelative is the lightweight variant used by event types that
+// only carry a path (no dirfd). Resolves relative paths against
+// /proc/<pid>/cwd. Returns "" when the input is already absolute,
+// empty, or readlink fails — caller leaves the path as-stashed in
+// the empty case.
+func resolveRelative(pid int, path string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return ""
+	}
+	link, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(link, path)
+}
 
 // runEBPFTrace is the eBPF entry point. The child command has already
 // been started by exec.Cmd (no SysProcAttr.Ptrace). We watch its
@@ -217,6 +273,22 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					continue
 				}
 				matchedTotal.Add(1)
+				// Resolve relative paths to absolute via /proc/<pid>/cwd
+				// while the tracee is still alive. cc1/javac/many tools
+				// call openat(AT_FDCWD, "hello.c", ...) with the path as
+				// a relative string. After the tracee closes the fd or
+				// exits, /proc/<pid>/fd/<fd> is gone; the path-hash
+				// fallback then opens "hello.c" from cilock's cwd —
+				// which is wrong — and the digest ends up nil. Reading
+				// /proc/<pid>/cwd at event arrival time, while the
+				// tracee is in the middle of the open syscall, is
+				// race-narrow enough to be reliable. We also do it for
+				// dirfd != AT_FDCWD by reading /proc/<pid>/fd/<dirfd>.
+				if ev.Openat.Path != "" && !filepath.IsAbs(ev.Openat.Path) {
+					if resolved := resolveOpenatPath(ev.Openat); resolved != "" {
+						ev.Openat.Path = resolved
+					}
+				}
 				// V1.4 read-tap: remember (pid, fd) → path so the
 				// later EVT_CLOSE can record the streaming-hash
 				// digest against the right path. fd<0 means the
@@ -273,6 +345,20 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					continue
 				}
 				otherTotal.Add(1)
+				// Resolve relative Path/Path2 to absolute via the
+				// tracee's cwd. Go's linker uses an atomic-rename
+				// pattern: write "prog-go-tmp-umask", then
+				// renameat2("prog-go-tmp-umask", "prog"). Both legs
+				// arrive as relative paths and would otherwise be
+				// keyed by the bare basename, causing classification
+				// to fail on Stat from cilock's cwd. fchmodat,
+				// unlinkat, and renameat2 all use the same struct.
+				if p := resolveRelative(int(ev.FileOp.PID), ev.FileOp.Path); p != "" {
+					ev.FileOp.Path = p
+				}
+				if p := resolveRelative(int(ev.FileOp.PID), ev.FileOp.Path2); p != "" {
+					ev.FileOp.Path2 = p
+				}
 				recordEBPFFileOp(pctx, ev.FileOp)
 			case ev.Security != nil:
 				if !watched.match(ev.Security.PID, ev.Security.TGID, ev.Security.PPID) {
@@ -373,7 +459,10 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// streaming-hash provides the digest, and competing with the build
 	// for /proc/<pid>/fd/<fd> reads is wasted work + extra ringbuf
 	// pressure from the openat-induced reads.
-	readTapOn := os.Getenv("CILOCK_HASH_RACE_FREE") == "1"
+	//
+	// V2: read-tap is ON BY DEFAULT (see tracing_linux.go preStartTracingSetup).
+	// CILOCK_HASH_RACE_FREE=0 opts out (diagnostic only).
+	readTapOn := os.Getenv("CILOCK_HASH_RACE_FREE") != "0"
 	var hashedTotal, suspectTotal, errorTotal atomic.Uint64
 	var hasherWG sync.WaitGroup
 	const hashWorkers = 4

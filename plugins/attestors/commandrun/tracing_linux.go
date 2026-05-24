@@ -162,16 +162,25 @@ func (r *CommandRun) preStartTracingSetup() error {
 		_ = consumer.Close()
 		return fmt.Errorf("eBPF filter enable: %w", err)
 	}
-	// V1.4 read-tap. Off by default (current race-prone but fast
-	// behavior). Opt-in via env until we have benchmark data to
-	// flip the default. The BPF kprobes are always attached but
-	// no-op when this flag is 0 — flipping it on costs nothing
-	// beyond the per-syscall map lookup.
-	if os.Getenv("CILOCK_HASH_RACE_FREE") == "1" {
+	// V2: read-tap is ON BY DEFAULT in trace mode. It's the only mode
+	// that produces correct digests for short-lived processes opening
+	// relative paths (cc1/javac/many compilers). The pre-V2 path-hash
+	// fallback re-opens the file from cilock's cwd after the syscall —
+	// which is wrong for any tracee with a different cwd, and silently
+	// drops the digest when the fd is closed before userspace can read
+	// /proc/<pid>/fd/<fd>. Read-tap streams content from kernel ringbuf
+	// as the tracee reads, so digests are authoritative regardless of
+	// process lifetime or path resolution.
+	//
+	// Path-hash is preserved as the OUT-OF-BAND path used by the IMA
+	// reader (which can't intercept reads at all and must read files
+	// after-the-fact). For trace mode, opt-out via CILOCK_HASH_RACE_FREE=0
+	// if you need the old behavior for diagnostics.
+	if os.Getenv("CILOCK_HASH_RACE_FREE") != "0" {
 		if err := consumer.EnableReadTap(); err != nil {
 			log.Debugf("(ebpf) read-tap unavailable (%v); falling back to path hash", err)
 		} else {
-			log.Debugf("(ebpf) CILOCK_HASH_RACE_FREE=1 — read-tap enabled")
+			log.Debugf("(ebpf) read-tap enabled (V2 default)")
 		}
 	}
 	r.ebpfConsumer = consumer

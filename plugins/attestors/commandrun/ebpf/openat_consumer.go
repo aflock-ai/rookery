@@ -645,7 +645,7 @@ func archKprobeNames() ([]string, []string) {
 				// execve
 				"kprobe_execve_x64",
 				// file mutations
-				"kprobe_unlinkat_x64", "kprobe_renameat2_x64", "kprobe_fchmodat_x64",
+				"kprobe_unlinkat_x64", "kprobe_renameat2_x64", "kprobe_renameat_x64", "kprobe_fchmodat_x64",
 				// write
 				"kprobe_write_x64", "kprobe_pwrite_x64",
 				// network
@@ -671,7 +671,7 @@ func archKprobeNames() ([]string, []string) {
 				"__x64_sys_openat", "__x64_sys_openat",
 				"__x64_sys_openat2", "__x64_sys_openat2",
 				"__x64_sys_execve",
-				"__x64_sys_unlinkat", "__x64_sys_renameat2", "__x64_sys_fchmodat",
+				"__x64_sys_unlinkat", "__x64_sys_renameat2", "__x64_sys_renameat", "__x64_sys_fchmodat",
 				"__x64_sys_write", "__x64_sys_pwrite64",
 				"__x64_sys_socket", "__x64_sys_connect", "__x64_sys_bind",
 				"__x64_sys_ptrace", "__x64_sys_memfd_create",
@@ -691,7 +691,7 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_openat_arm64", "kretprobe_openat_arm64",
 				"kprobe_openat2_arm64", "kretprobe_openat2_arm64",
 				"kprobe_execve_arm64",
-				"kprobe_unlinkat_arm64", "kprobe_renameat2_arm64", "kprobe_fchmodat_arm64",
+				"kprobe_unlinkat_arm64", "kprobe_renameat2_arm64", "kprobe_renameat_arm64", "kprobe_fchmodat_arm64",
 				"kprobe_write_arm64", "kprobe_pwrite_arm64",
 				"kprobe_socket_arm64", "kprobe_connect_arm64", "kprobe_bind_arm64",
 				"kprobe_ptrace_arm64", "kprobe_memfd_create_arm64",
@@ -712,7 +712,7 @@ func archKprobeNames() ([]string, []string) {
 				"__arm64_sys_openat", "__arm64_sys_openat",
 				"__arm64_sys_openat2", "__arm64_sys_openat2",
 				"__arm64_sys_execve",
-				"__arm64_sys_unlinkat", "__arm64_sys_renameat2", "__arm64_sys_fchmodat",
+				"__arm64_sys_unlinkat", "__arm64_sys_renameat2", "__arm64_sys_renameat", "__arm64_sys_fchmodat",
 				"__arm64_sys_write", "__arm64_sys_pwrite64",
 				"__arm64_sys_socket", "__arm64_sys_connect", "__arm64_sys_bind",
 				"__arm64_sys_ptrace", "__arm64_sys_memfd_create",
