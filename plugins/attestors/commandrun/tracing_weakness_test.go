@@ -538,6 +538,135 @@ func TestWeakness_PtraceAttempt_Captured(t *testing.T) {
 	}
 }
 
+// pthreadOpenCSource — N pthreads, each opens + reads a distinct file.
+// All threads share the process tgid; their LWPs differ. Pins stage 1
+// of the canonical refactor (TASK_STORAGE for watched-bit) — each
+// thread must independently get task_storage populated via the
+// bootstrap path so its syscalls aren't dropped.
+//
+// Argv: <self> <dir>
+//
+// Each thread opens file_<i>.txt under dir, reads the content, and
+// closes. The driver waits for all threads, then exits. The bootstrap
+// channel registers the leader thread's tgid; emit_filter on each
+// worker's first openat must walk: task_storage miss → watched_pids
+// lookup of LWP (miss) → watched_pids lookup of tgid (HIT) → cache
+// into worker's task_storage. If any of those steps fails, the
+// worker's open is dropped.
+const pthreadOpenCSource = `
+#define _GNU_SOURCE
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+#define NTHREADS 4
+static char dir[256];
+
+static void *worker(void *arg) {
+    long id = (long)arg;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/file_%ld.txt", dir, id);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { perror("open"); return (void *)1; }
+    char buf[64];
+    ssize_t n = read(fd, buf, sizeof(buf));
+    (void)n;
+    close(fd);
+    return NULL;
+}
+
+int main(int argc, char **argv) {
+    if (argc < 2) return 2;
+    snprintf(dir, sizeof(dir), "%s", argv[1]);
+    pthread_t threads[NTHREADS];
+    for (long i = 0; i < NTHREADS; i++) {
+        if (pthread_create(&threads[i], NULL, worker, (void *)i) != 0) {
+            perror("pthread_create");
+            return 3;
+        }
+    }
+    for (int i = 0; i < NTHREADS; i++) pthread_join(threads[i], NULL);
+    return 0;
+}
+`
+
+// TestWeakness_PthreadTaskStorage pins V2 Phase 8 stage 1's
+// TASK_STORAGE migration. A multi-threaded tracee with N worker
+// threads each opening a distinct file. Each thread is a separate
+// LWP sharing the process tgid. The watched-bit propagation from
+// the leader's bootstrap entry must reach EACH worker's task_storage
+// — if any worker's promotion path is broken, its open is silently
+// dropped from the capture.
+//
+// Asserts: every file_<i>.txt opened by a worker thread appears in
+// some process's OpenedFiles with a non-nil digest.
+//
+// This test would have failed if task_is_watched's bootstrap-cache
+// path was wrong, or if bpf_get_current_task_btf returned the wrong
+// task in a worker thread context.
+func TestWeakness_PthreadTaskStorage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
+	t.Setenv(EnvVarTraceMode, "ebpf")
+	skipIfNoEBPFCaps(t)
+
+	dir := t.TempDir()
+	bin := compileC(t, dir, "pthread_open", pthreadOpenCSource)
+	// Add -lpthread for the compile step — compileC's stock invocation
+	// might not link pthread. Easiest: drop a tiny wrapper that calls
+	// it via gcc directly with the flag.
+	bin = compileCWithFlags(t, dir, "pthread_open_v2", pthreadOpenCSource, []string{"-pthread"})
+
+	const ntreads = 4
+	for i := 0; i < ntreads; i++ {
+		content := []byte(fmt.Sprintf("file %d content\n", i))
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("file_%d.txt", i)), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	procs := runUnderEBPF(t, []string{bin, dir})
+
+	// For each file_<i>.txt, find a process that has it in OpenedFiles.
+	for i := 0; i < ntreads; i++ {
+		target := filepath.Join(dir, fmt.Sprintf("file_%d.txt", i))
+		found := false
+		for _, p := range procs {
+			if d, ok := p.OpenedFiles[target]; ok && d != nil {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("file_%d.txt not captured — worker thread's task_storage promotion broke.\nProcesses:\n%s",
+				i, summarizeProcessTree(procs))
+		}
+	}
+}
+
+// compileCWithFlags is compileC but accepts extra compiler flags
+// (e.g. -pthread). Kept separate from compileC so the existing
+// callers don't need to grow an argument.
+func compileCWithFlags(t *testing.T, srcDir, name, source string, extraFlags []string) string {
+	t.Helper()
+	srcPath := filepath.Join(srcDir, name+".c")
+	if err := os.WriteFile(srcPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binPath := filepath.Join(srcDir, name)
+	args := append([]string{"-O0", "-o", binPath, srcPath}, extraFlags...)
+	cmd := exec.Command("cc", args...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("compile %s: %v", name, err)
+	}
+	return binPath
+}
+
 // summarizeProcessTree pretty-prints (pid, ppid, comm, openedFiles)
 // for diagnostics on assertion failures.
 func summarizeProcessTree(procs []ProcessInfo) string {
