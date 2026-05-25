@@ -629,10 +629,12 @@ path = "src/main.rs"
 		t.Fatal(err)
 	}
 
-	env := append(os.Environ(),
-		"CARGO_TARGET_DIR="+filepath.Join(dir, "target"),
-		"CARGO_HOME="+filepath.Join(dir, ".cargo"),
-	)
+	// runCrossLang takes alternating key/value (uses t.Setenv which
+	// already inherits os.Environ).
+	env := []string{
+		"CARGO_TARGET_DIR", filepath.Join(dir, "target"),
+		"CARGO_HOME", filepath.Join(dir, ".cargo"),
+	}
 	cap := runCrossLang(t, dir, []string{"cargo", "build", "--offline"}, env)
 	// Cargo writes the binary to target/debug/<name>; that's not under
 	// a cache pattern (target/* IS a cache pattern in our defaults but
@@ -657,11 +659,11 @@ func TestCrossLang_Python_PipInstall(t *testing.T) {
 	requireToolchain(t, "python3", "pip3")
 
 	dir := freshWorkspace(t, "py")
-	env := append(os.Environ(),
-		"PIP_CACHE_DIR="+filepath.Join(dir, ".pipcache"),
-		"PIP_DISABLE_PIP_VERSION_CHECK=1",
-		"PIP_NO_INPUT=1",
-	)
+	env := []string{
+		"PIP_CACHE_DIR", filepath.Join(dir, ".pipcache"),
+		"PIP_DISABLE_PIP_VERSION_CHECK", "1",
+		"PIP_NO_INPUT", "1",
+	}
 	cap := runCrossLang(t, dir,
 		[]string{"pip3", "install", "--target", filepath.Join(dir, "vendor"),
 			"--no-deps", "--no-build-isolation",
@@ -698,11 +700,11 @@ func TestCrossLang_Node_NpmInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := append(os.Environ(),
-		"NPM_CONFIG_CACHE="+filepath.Join(dir, ".npmcache"),
-		"NPM_CONFIG_FUND=false",
-		"NPM_CONFIG_AUDIT=false",
-	)
+	env := []string{
+		"NPM_CONFIG_CACHE", filepath.Join(dir, ".npmcache"),
+		"NPM_CONFIG_FUND", "false",
+		"NPM_CONFIG_AUDIT", "false",
+	}
 	cap := runCrossLang(t, dir,
 		[]string{"npm", "install", "--no-package-lock", "--no-save", "lodash"},
 		env,
