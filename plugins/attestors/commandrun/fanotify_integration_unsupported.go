@@ -23,6 +23,6 @@ func (s *fanotifySession) stop() (map[string][32]byte, fanotifyStatsStub) {
 
 type fanotifyStatsStub struct{}
 
-func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) int {
-	return 0
+func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (int, map[string]string) {
+	return 0, nil
 }

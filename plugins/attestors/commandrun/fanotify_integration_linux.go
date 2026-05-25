@@ -120,25 +120,35 @@ func (s *fanotifySession) stop() (map[string][32]byte, fanotify.Stats) {
 // mergeFanotifyDigests folds fanotify-captured (path → SHA-256) into
 // every process's OpenedFiles map. Fanotify digests are authoritative
 // (kernel-synchronous, race-free) so they OVERWRITE any prior digest
-// for the same path. Paths the BPF path saw but fanotify didn't are
-// left untouched.
+// for the same path. Returns:
+//   - touched: count of OpenedFiles entries upgraded
+//   - fanotifyOnly: paths fanotify hashed that NO process recorded
+//     an open for. These represent BPF-missed opens (dropped event,
+//     fast-exiting process, watched-set miss) but the kernel-rooted
+//     digest is still authoritative. The caller surfaces these as
+//     Summary.FanotifyOnlyDigests so no observed open is silently lost.
 //
 // The model: fanotify digests are GLOBAL (whole-mount), not per-pid;
 // but ProcessInfo.OpenedFiles is per-pid. We fold the same fanotify
 // digest into every process that recorded an open for the path,
 // providing per-pid attribution alongside the kernel-rooted digest.
-func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (touched int) {
+func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (touched int, fanotifyOnly map[string]string) {
 	if len(fanDigests) == 0 {
-		return 0
+		return 0, nil
 	}
 	// Pre-convert to cryptoutil.DigestSet once per path.
 	dsCache := make(map[string]cryptoutil.DigestSet, len(fanDigests))
+	hexCache := make(map[string]string, len(fanDigests))
 	for path, raw := range fanDigests {
+		h := hex.EncodeToString(raw[:])
 		ds := cryptoutil.DigestSet{
-			cryptoutil.DigestValue{Hash: crypto.SHA256}: hex.EncodeToString(raw[:]),
+			cryptoutil.DigestValue{Hash: crypto.SHA256}: h,
 		}
 		dsCache[path] = ds
+		hexCache[path] = h
 	}
+	// Track which paths were claimed by at least one process.
+	claimed := make(map[string]bool, len(fanDigests))
 	for i := range processes {
 		if processes[i].OpenedFiles == nil {
 			continue
@@ -146,11 +156,21 @@ func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byt
 		for path := range processes[i].OpenedFiles {
 			if ds, ok := dsCache[path]; ok {
 				processes[i].OpenedFiles[path] = ds
+				claimed[path] = true
 				touched++
 			}
 		}
 	}
-	return touched
+	// Anything fanotify saw that no process claimed → fanotify-only.
+	for path, h := range hexCache {
+		if !claimed[path] {
+			if fanotifyOnly == nil {
+				fanotifyOnly = make(map[string]string)
+			}
+			fanotifyOnly[path] = h
+		}
+	}
+	return touched, fanotifyOnly
 }
 
 type fanotifyUnavailableError struct {

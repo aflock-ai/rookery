@@ -125,6 +125,7 @@ type ZeroDropsError struct {
 	RingbufReadTapDrops    uint64
 	FanotifyTimeouts       uint64
 	FanotifyQueueOverflows uint64
+	FanotifyDigestsCapHit  uint64
 	UnhashedOpensTotal     uint64
 	FallbackHashFailures   uint64
 	FsVeritySealFailures   uint64
@@ -134,10 +135,10 @@ func (e *ZeroDropsError) Error() string {
 	return fmt.Sprintf(
 		"attestation rejected (--require-zero-drops): "+
 			"bpf-openat-drops=%d bpf-readtap-drops=%d "+
-			"fanotify-timeouts=%d fanotify-queue-overflows=%d "+
+			"fanotify-timeouts=%d fanotify-queue-overflows=%d fanotify-cap-hit=%d "+
 			"unhashed-opens=%d fallback-hash-failures=%d fsverity-failures=%d",
 		e.RingbufOpenatDrops, e.RingbufReadTapDrops,
-		e.FanotifyTimeouts, e.FanotifyQueueOverflows,
+		e.FanotifyTimeouts, e.FanotifyQueueOverflows, e.FanotifyDigestsCapHit,
 		e.UnhashedOpensTotal, e.FallbackHashFailures, e.FsVeritySealFailures,
 	)
 }
@@ -166,6 +167,7 @@ func (r *CommandRun) zeroDropsGate() error {
 	d := r.Summary.Diagnostics
 	if d.RingbufOpenatDrops > 0 || d.RingbufReadTapDrops > 0 ||
 		d.FanotifyTimeouts > 0 || d.FanotifyQueueOverflows > 0 ||
+		d.FanotifyDigestsCapHit > 0 ||
 		d.UnhashedOpensTotal > 0 ||
 		d.FallbackHashFailures > 0 || d.FsVeritySealFailures > 0 {
 		return &ZeroDropsError{
@@ -173,6 +175,7 @@ func (r *CommandRun) zeroDropsGate() error {
 			RingbufReadTapDrops:    d.RingbufReadTapDrops,
 			FanotifyTimeouts:       d.FanotifyTimeouts,
 			FanotifyQueueOverflows: d.FanotifyQueueOverflows,
+			FanotifyDigestsCapHit:  d.FanotifyDigestsCapHit,
 			UnhashedOpensTotal:     d.UnhashedOpensTotal,
 			FallbackHashFailures:   d.FallbackHashFailures,
 			FsVeritySealFailures:   d.FsVeritySealFailures,
@@ -375,6 +378,16 @@ type TraceSummary struct {
 	// may be incomplete.
 	Diagnostics TraceDiagnostics `json:"diagnostics,omitempty"`
 
+	// FanotifyOnlyDigests holds paths fanotify hashed but no process
+	// recorded an open for. This happens when BPF dropped the openat
+	// event OR the open occurred outside the watched_pids set OR a
+	// process that opened the file exited before BPF could record it.
+	// The kernel-rooted digest is still authoritative even though we
+	// can't attribute it to a specific tracee process. Verifiers
+	// SHOULD treat these as "observed in the workspace" without
+	// process-tree provenance. Hex-encoded SHA-256.
+	FanotifyOnlyDigests map[string]string `json:"fanotifyOnlyDigests,omitempty"`
+
 	// InterestingPaths is a short list of paths an agent should
 	// look at first — anything outside the "normal" build paths
 	// (/etc/passwd, /proc/self/environ, etc.) or anything in the
@@ -500,6 +513,16 @@ type TraceDiagnostics struct {
 	// promise was violated; the attestation has unknown gaps.
 	FanotifyQueueOverflows uint64 `json:"fanotifyQueueOverflows,omitempty"`
 
+	// FanotifyDigestsCapHit counts paths the fanotify handler
+	// hashed but couldn't store because the per-trace cap was
+	// reached (default 200_000 paths). The hash WAS computed and
+	// the tracee was allowed, but the path isn't in the attestation.
+	// Non-zero means a pathological workload outran our memory
+	// budget; verifiers should treat such attestations as
+	// incomplete (the cap-hit count documents how many entries
+	// are missing).
+	FanotifyDigestsCapHit uint64 `json:"fanotifyDigestsCapHit,omitempty"`
+
 	// FsVerityAvailable reports whether fs-verity sealing was active
 	// for this trace's workspace FS. true = the kernel computed and
 	// stored Merkle roots over product files; false = streaming
@@ -564,10 +587,16 @@ type CommandRun struct {
 	// kernel-synchronous vs path-hash-based.
 	fanotifyDigestsMerged uint64
 	// fanotifyEventsHashed / fanotifyTimeouts / fanotifyQueueOverflows
-	// surface per-trace fanotify operational stats.
+	// / fanotifyDigestsCapHit surface per-trace fanotify operational
+	// stats.
 	fanotifyEventsHashed   uint64
 	fanotifyTimeouts       uint64
 	fanotifyQueueOverflows uint64
+	fanotifyDigestsCapHit  uint64
+	// fanotifyOnlyDigests holds paths fanotify hashed that no
+	// process recorded an open for. Surfaced at end-of-trace to
+	// Summary.FanotifyOnlyDigests so no kernel-observed open is lost.
+	fanotifyOnlyDigests map[string]string
 	// fsVerityState holds opportunistic fs-verity sealing state.
 	// Probed at trace start; per-product seal calls during finalize
 	// consult Available to skip the ioctl on unsupported FS.
@@ -1220,10 +1249,13 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		if r.fanotifySession != nil {
 			fanDigests, fanStats := r.fanotifySession.stop()
 			r.fanotifySession = nil
-			r.fanotifyDigestsMerged = uint64(mergeFanotifyDigests(r.Processes, fanDigests))
+			merged, only := mergeFanotifyDigests(r.Processes, fanDigests)
+			r.fanotifyDigestsMerged = uint64(merged)
+			r.fanotifyOnlyDigests = only
 			r.fanotifyEventsHashed = fanStats.EventsHashed
 			r.fanotifyTimeouts = fanStats.HandlerTimeouts
 			r.fanotifyQueueOverflows = fanStats.QueueOverflows
+			r.fanotifyDigestsCapHit = fanStats.DigestsCapHit
 		}
 
 		// Build the AI-agent-friendly summary from the captured
@@ -1264,6 +1296,10 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 				r.Summary.Diagnostics.FanotifyDigestsMerged = r.fanotifyDigestsMerged
 				r.Summary.Diagnostics.FanotifyTimeouts = r.fanotifyTimeouts
 				r.Summary.Diagnostics.FanotifyQueueOverflows = r.fanotifyQueueOverflows
+				r.Summary.Diagnostics.FanotifyDigestsCapHit = r.fanotifyDigestsCapHit
+			}
+			if len(r.fanotifyOnlyDigests) > 0 {
+				r.Summary.FanotifyOnlyDigests = r.fanotifyOnlyDigests
 			}
 			// fs-verity sealing stats. Surfaced even when count is 0
 			// so the JSON can convey "this trace had fs-verity active

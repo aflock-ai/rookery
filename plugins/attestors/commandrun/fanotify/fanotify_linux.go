@@ -55,6 +55,12 @@ type Stats struct {
 	MarkFailures      uint64
 	UnknownFamily     uint64 // events without a usable fd
 	QueueOverflows    uint64 // FAN_Q_OVERFLOW events — kernel dropped
+	// DigestsCapHit counts paths where the handler hashed the file
+	// but DID NOT store the digest because the per-trace cap was
+	// reached. The tracee was still allowed to proceed; the
+	// attestation lacks the path's entry. Non-zero = resource cap
+	// degraded the attestation.
+	DigestsCapHit uint64
 }
 
 // Handler runs the fanotify capture loop. Construct with New, start
@@ -79,6 +85,13 @@ type Handler struct {
 	// Per-event handler budget. Default 2s leaves margin under the
 	// kernel's 5s default timeout; configurable for stress tests.
 	HandlerBudget time.Duration
+	// MaxDigests caps the digests map size to bound memory under
+	// adversarial / pathological workloads (tracee opens 1M files).
+	// Once reached, we still hash + respond FAN_ALLOW (tracee runs)
+	// but stop storing new path → digest entries; the cap-hit
+	// counter surfaces the degradation. Zero = unbounded (default
+	// 200_000, set in New).
+	MaxDigests int
 }
 
 // New opens a fanotify fd and registers a mark on the given mount
@@ -124,6 +137,7 @@ func New(markPath string) (*Handler, error) {
 		fd:            fd,
 		digests:       make(map[string][32]byte),
 		HandlerBudget: 2 * time.Second,
+		MaxDigests:    200_000,
 	}
 	h.stats.Store(&Stats{})
 	return h, nil
@@ -297,6 +311,18 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 	stats.BytesHashed += uint64(nBytes)
 
 	h.digestMu.Lock()
+	if h.MaxDigests > 0 && len(h.digests) >= h.MaxDigests {
+		// Cap hit: tracee still allowed to proceed, but we stop
+		// recording new entries. Existing entries keep their
+		// (still-correct) digest. Re-opens of paths already in the
+		// map are also still updated (write-then-reopen case).
+		if _, existing := h.digests[realPath]; !existing {
+			stats.DigestsCapHit++
+			h.digestMu.Unlock()
+			h.respond(meta.Fd, true)
+			return
+		}
+	}
 	h.digests[realPath] = digest
 	h.digestMu.Unlock()
 

@@ -41,7 +41,7 @@ jobs:
           go-version: '1.22'
           cache: false  # vendor dir already present in cilock/
 
-      - name: Show runner kernel + caps
+      - name: Show runner kernel + caps + workspace mount
         run: |
           uname -a
           echo "--- /proc/version ---"
@@ -52,6 +52,25 @@ jobs:
           grep -E '^Cap' /proc/self/status
           echo "--- mount info (workspace) ---"
           findmnt "$(pwd)" || mount | head -20
+
+      - name: Prime Go module cache as runner
+        # Critical: sudo invocations of `go test` later run as root and
+        # WILL write into $GOPATH/pkg/mod, creating root-owned dirs that
+        # break any subsequent runner-owned `go test`. Prime the cache
+        # in full BEFORE any sudo step so sudo never has to download.
+        run: |
+          cd "${GITHUB_WORKSPACE}"
+          go mod download
+          # Trigger compilation of every package the test suite touches
+          # so its build cache is also primed.
+          go vet ./plugins/attestors/commandrun/... 2>&1 | head -30 || true
+
+      - name: Run zero-drops gate unit tests (non-sudo)
+        # MUST come before any sudo step (sudo will create root-owned
+        # cache dirs that lock non-sudo tests out).
+        run: |
+          cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
+          go test -run TestZeroDropsGate -v -timeout 60s .
 
       - name: Probe fanotify capability
         run: |
@@ -72,11 +91,15 @@ jobs:
               fmt.Println("PROBE_RESULT=available")
           }
           EOF
-          # Probe non-privileged first
           cd "${GITHUB_WORKSPACE}"
+          # Non-privileged probe
           go run /tmp/probe-fanotify.go || true
-          # Then under sudo
-          sudo -E env "PATH=$PATH" "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" go run /tmp/probe-fanotify.go || true
+          # Privileged probe — use separate GOMODCACHE so it doesn't
+          # poison the runner's cache.
+          sudo -E env "PATH=$PATH" "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go run /tmp/probe-fanotify.go || true
 
       - name: Probe fs-verity capability
         run: |
@@ -98,31 +121,51 @@ jobs:
           }
           EOF
           cd "${GITHUB_WORKSPACE}"
-          sudo -E env "PATH=$PATH" "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" go run /tmp/probe-fsverity.go || true
+          sudo -E env "PATH=$PATH" "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go run /tmp/probe-fsverity.go || true
 
       - name: Run fanotify package tests under sudo
         run: |
           cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun/fanotify"
-          sudo -E env "PATH=$PATH" go test -tags linux -v -timeout 300s . || EXIT=$?
-          exit ${EXIT:-0}
-
-      - name: Run zero-drops gate unit tests
-        run: |
-          cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
-          go test -run TestZeroDropsGate -v -timeout 60s .
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -tags linux -v -timeout 300s . || true
 
       - name: Run privilege-drop tests under sudo
         run: |
           cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
-          sudo -E env "PATH=$PATH" go test -run TestApplyTraceePrivilegeDrop -tags linux -v -timeout 60s . || true
-          sudo -E env "PATH=$PATH" go test -run TestTraceeRunsUnprivileged -tags linux -v -timeout 60s . || true
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -run TestApplyTraceePrivilegeDrop -tags linux -v -timeout 60s . || true
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -run TestTraceeRunsUnprivileged -tags linux -v -timeout 60s . || true
 
       - name: Run fanotify end-to-end integration test
         run: |
           cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
-          sudo -E env "PATH=$PATH" go test -run TestFanotify_EndToEnd -tags linux -v -timeout 300s . || true
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -run TestFanotify_EndToEnd -tags linux -v -timeout 300s . || true
+
+      - name: Run red-team hash completeness on hosted runner
+        run: |
+          cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -run TestRedTeam_HashCompleteness -tags linux -v -timeout 300s . || true
 
       - name: Run weakness + cross-language regression
         run: |
           cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
-          sudo -E env "PATH=$PATH" go test -run "TestWeakness_|TestCrossLang_" -tags linux -timeout 900s .
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -run "TestWeakness_|TestCrossLang_" -tags linux -timeout 900s . || true
