@@ -472,30 +472,44 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 }
 
 // fromCaptureEntries converts the trace probe's per-path digest map
-// into the attestation.Product type. Mime-type detection is best-
-// effort here — outputs sometimes get deleted between the trace and
-// this attestor running. nil digests get skipped (a path the tracee
-// touched but we couldn't hash).
+// into the attestation.Product type. A "product" must satisfy:
+//   - written by the tracee (the probe wouldn't include it otherwise)
+//   - matches the include-glob (caller already filtered)
+//   - **exists at the moment we attest** (this function's check)
+//   - has a content hash
+//
+// The exists-at-exit rule turns "product = anything the build wrote"
+// (which on a Go build was 9000+ scratch files) into "product = the
+// surviving deliverables". Files the build wrote then cleaned up are
+// no longer products — they're routed to ScratchWrites in the trace
+// summary so a verifier can still see "the build created N temp
+// files and removed them" as forensic evidence.
+//
+// Mime-type detection is best-effort.
 func fromCaptureEntries(entries map[string]attestation.CaptureEntry) map[string]attestation.Product {
 	out := make(map[string]attestation.Product, len(entries))
 	for path, entry := range entries {
+		// Exists-at-exit gate. If the file the tracee wrote is gone
+		// at this moment, it's not a deliverable — it was a
+		// scratch/intermediate that the build cleaned up. Don't
+		// emit it as a product.
+		fi, statErr := os.Stat(path)
+		if statErr != nil {
+			continue
+		}
+
 		mimeType := "unknown"
 		if mt, mtErr := getFileContentType(path); mtErr == nil {
 			mimeType = mt
 		}
-		if mimeType == "application/octet-stream" {
-			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
-				mimeType = "text/directory"
-			}
+		if mimeType == "application/octet-stream" && fi.IsDir() {
+			mimeType = "text/directory"
 		}
 
-		// V2 fix for issue #152: when the trace observed a write but
-		// we couldn't compute a digest (file gone before attest,
-		// fast-exit + relative-path race, etc.), emit a witness-only
-		// product entry. The path stays in the inventory; downstream
-		// (inclusion-proof tree, policy materialsFrom) skips entries
-		// lacking a digest. Without this, atomic-rename and fast-exit
-		// patterns silently drop products.
+		// Path exists but we couldn't hash it (trace race, transient
+		// permission). Keep as witness-only product entry — the
+		// existence-at-exit invariant tells us this IS a real
+		// deliverable, just one whose content we couldn't capture.
 		if entry.Digest == nil {
 			out[path] = attestation.Product{
 				MimeType: mimeType,
