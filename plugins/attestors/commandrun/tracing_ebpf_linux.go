@@ -1023,6 +1023,17 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 			outcome = recordOutcomeSilentByDigest
 			break
 		}
+		// Directory opens are not content gaps — there's nothing to
+		// hash, and the verifier's "what files did this build read"
+		// view should not be cluttered with locale dirs, /etc/ssl
+		// directory entries, /proc subdirs, etc. Drop them. If a
+		// future policy needs "what directories did the build scan,"
+		// we can add a dedicated field; today the cost-benefit
+		// strongly favors suppression.
+		if strings.HasPrefix(res.Reason, "directory open") {
+			outcome = recordOutcomeSilentByDedup // bookkeeping: not a real gap
+			break
+		}
 		// Avoid recording the same (path, reason) twice — gcc opens
 		// /tmp/cc.s many times from many processes; one UnhashedOpen
 		// per path per process is enough signal.

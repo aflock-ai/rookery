@@ -151,6 +151,29 @@ func HashCapturedFile(path string, f *os.File, statBefore os.FileInfo, hashFuncs
 	return r
 }
 
+// nonRegularReason categorizes a non-regular file mode into a
+// human-readable reason string. Distinguishing directories from
+// pipes/sockets matters for verifier triage: directory accesses are
+// expected (every gcc invocation opens locale + include dirs), while
+// pipe/socket accesses are rare and worth flagging.
+func nonRegularReason(m os.FileMode) string {
+	switch {
+	case m.IsDir():
+		return "directory open (no content to hash)"
+	case m&os.ModeSymlink != 0:
+		return "symlink (kernel resolves; nothing to hash here)"
+	case m&os.ModeNamedPipe != 0:
+		return "named pipe (skipped to avoid draining tracee IO)"
+	case m&os.ModeSocket != 0:
+		return "socket (skipped to avoid draining tracee IO)"
+	case m&os.ModeDevice != 0:
+		return "device file (skipped to avoid driver-side side effects)"
+	case m&os.ModeCharDevice != 0:
+		return "char device (skipped to avoid driver-side side effects)"
+	}
+	return "non-regular file (skipped)"
+}
+
 // sameStatBasic compares size only (mtime check via os.FileInfo is
 // unreliable for the captured-fd path since we can't compare against
 // the disk dirent post-unlink). For CI / build workloads, size
@@ -231,7 +254,7 @@ func hashViaProcFD(fdPath, origPath string, hashFuncs []cryptoutil.DigestValue) 
 	// a clear reason, recorded into UnhashedOpens.
 	if statBefore != nil && !statBefore.Mode().IsRegular() {
 		r.Status = TOCTOUError
-		r.Reason = "non-regular file (pipe/socket/fifo/device); skipped to avoid draining tracee IO"
+		r.Reason = nonRegularReason(statBefore.Mode())
 		return r, true
 	}
 
