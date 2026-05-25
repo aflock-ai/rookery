@@ -300,6 +300,17 @@ type ProcessInfo struct {
 	// AND read it; classification rules use this split to put outputs
 	// in products and inputs in materials without conflation.
 	WrittenDigests   map[string]cryptoutil.DigestSet `json:"writtenDigests,omitempty"`
+	// FsVerityDigests holds kernel-rooted Merkle root digests for
+	// product files where the kernel computed and stored a
+	// fs-verity hash. Keyed by absolute path, value is the
+	// algorithm + hex digest (e.g. "sha256:abc...def"). The kernel
+	// REFUSES to read corrupted blocks on these files, so a
+	// verifier can re-read the file with fs-verity enabled and
+	// trust the kernel's bit-exact verification.
+	// Distinct from WrittenDigests because the Merkle root is NOT
+	// the same as a plain SHA-256 over the file content (it's a
+	// hash of a Merkle tree over fixed-size blocks).
+	FsVerityDigests  map[string]string               `json:"fsverityDigests,omitempty"`
 	// UnhashedOpens carries opens we saw the kernel event for but
 	// could NOT hash — typically because the file was unlinked or
 	// the process exited between the kernel event and our hash

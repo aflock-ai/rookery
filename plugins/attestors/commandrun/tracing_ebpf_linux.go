@@ -1439,11 +1439,19 @@ func finalizeWriteTap(
 	// non-trivial time on large files. The streaming SHA-256 digest
 	// is already recorded; fs-verity provides an ADDITIONAL kernel-
 	// rooted Merkle root the kernel will refuse to bypass on later
-	// reads. For now we just count successful seals (diagnostic);
-	// the Merkle root itself awaits a DigestSet source-tag refactor
-	// to coexist with plain SHA-256 in the same entry.
+	// reads. Store the Merkle root in ProcessInfo.FsVerityDigests
+	// so verifiers can re-verify by re-reading the file with the
+	// verity feature active.
 	if fsvState != nil {
-		_ = fsvState.sealProduct(path)
+		if merkleHex := fsvState.sealProduct(path); merkleHex != "" {
+			pctx.mu.Lock()
+			procInfo := pctx.getProcInfo(int(pid))
+			if procInfo.FsVerityDigests == nil {
+				procInfo.FsVerityDigests = make(map[string]string)
+			}
+			procInfo.FsVerityDigests[path] = "sha256:" + merkleHex
+			pctx.mu.Unlock()
+		}
 	}
 }
 
