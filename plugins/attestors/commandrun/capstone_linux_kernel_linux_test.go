@@ -59,6 +59,23 @@ const capstoneLinuxSrcEnv = "CILOCK_CAPSTONE_LINUX_SRC"
 //   - The build itself succeeds (cilock didn't break the kernel
 //     build via overhead or syscall interference).
 func TestCapstone_LinuxKernel_TinyConfig(t *testing.T) {
+	runLinuxKernelCapstone(t, "tinyconfig", 5)
+}
+
+// TestCapstone_LinuxKernel_DefConfig is the heavyweight kernel
+// capstone — a full architecture defconfig (vs the minimal
+// tinyconfig). Hundreds of object files, dozens of compile workers
+// in parallel, deep fork chains, ~25-45 minutes on a 4-core VM.
+//
+// Same pass criteria as TinyConfig — but at ~100× the file count,
+// ~10× the wall-clock, and full kbuild parallelism. This is the
+// "real kernel" gate: if a kernel compiler can ship under cilock
+// without holes, every other compiled workload should too.
+func TestCapstone_LinuxKernel_DefConfig(t *testing.T) {
+	runLinuxKernelCapstone(t, "defconfig", 10)
+}
+
+func runLinuxKernelCapstone(t *testing.T, configTarget string, minDiskGB int) {
 	if testing.Short() {
 		t.Skip("capstone test — skip in -short mode")
 	}
@@ -69,8 +86,8 @@ func TestCapstone_LinuxKernel_TinyConfig(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(srcDir, "Kconfig")); err != nil {
 		t.Skipf("kernel source not found at %s: %v", srcDir, err)
 	}
-	if !diskHasGB(t, srcDir, 5) {
-		t.Skipf("need ≥5 GB free at %s for tinyconfig build", srcDir)
+	if !diskHasGB(t, srcDir, minDiskGB) {
+		t.Skipf("need ≥%d GB free at %s for %s build", minDiskGB, srcDir, configTarget)
 	}
 	t.Setenv(EnvVarTraceMode, "ebpf")
 	skipIfNoEBPFCaps(t)
@@ -78,11 +95,10 @@ func TestCapstone_LinuxKernel_TinyConfig(t *testing.T) {
 	// Clean any prior partial build so the test is reproducible.
 	mustRun(t, srcDir, "make", "mrproper")
 
-	// Configure to the smallest possible kernel — exercises every
-	// stage in the build pipeline (cc, ld, modpost) without spending
-	// hours on it. tinyconfig produces a vmlinux ELF as the final
-	// product.
-	mustRun(t, srcDir, "make", "tinyconfig")
+	// Configure with the requested target (tinyconfig for the small
+	// gate, defconfig for the full architecture build). All variants
+	// produce a vmlinux ELF as the final product.
+	mustRun(t, srcDir, "make", configTarget)
 
 	// Time the compile. We don't enforce a hard limit here (kernel
 	// compiles vary); the test timeout (-timeout 30m) is the cap.
