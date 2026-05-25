@@ -411,6 +411,23 @@ type TraceDiagnostics struct {
 	// means the kernel defaulted to FAN_ALLOW (no hash captured);
 	// non-zero is a degradation signal.
 	FanotifyTimeouts uint64 `json:"fanotifyTimeouts,omitempty"`
+
+	// FsVerityAvailable reports whether fs-verity sealing was active
+	// for this trace's workspace FS. true = the kernel computed and
+	// stored Merkle roots over product files; false = streaming
+	// SHA-256 only.
+	FsVerityAvailable bool `json:"fsVerityAvailable,omitempty"`
+
+	// FsVerityFilesSealed counts files where fs-verity sealing
+	// succeeded. Each represents a product whose digest is now
+	// Merkle-rooted and the kernel will refuse to read corrupted
+	// blocks downstream — tamper-evident.
+	FsVerityFilesSealed uint64 `json:"fsVerityFilesSealed,omitempty"`
+
+	// FsVeritySealFailures counts attempted seals that failed for
+	// reasons other than "FS doesn't support" (which is the probe
+	// path). Non-zero suggests a real issue worth investigating.
+	FsVeritySealFailures uint64 `json:"fsVeritySealFailures,omitempty"`
 }
 
 type CommandRun struct {
@@ -461,6 +478,10 @@ type CommandRun struct {
 	// fanotify operational stats.
 	fanotifyEventsHashed uint64
 	fanotifyTimeouts     uint64
+	// fsVerityState holds opportunistic fs-verity sealing state.
+	// Probed at trace start; per-product seal calls during finalize
+	// consult Available to skip the ioctl on unsupported FS.
+	fsVerityState *fsVerityState
 
 	// partialReadFallbacks / fallbackHashFailures stash the dispatcher's
 	// per-trace counters: how many openat events fell back to path-hash
@@ -1065,6 +1086,15 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			return err
 		}
 		r.fanotifySession = fanSession
+		// Optional fs-verity sealing of products. When the FS
+		// supports it, every write-only file gets Merkle-rooted at
+		// close time and the kernel refuses to read corrupted blocks
+		// downstream. Auto mode silently skips on unsupported FS.
+		fsvState, err := probeFsVerity(c.Dir)
+		if err != nil {
+			return err
+		}
+		r.fsVerityState = fsvState
 	}
 	// Downgrade the tracee's uid/gid back to the invoker when cilock
 	// is running under sudo (for BPF / fanotify caps). Otherwise the
@@ -1142,6 +1172,14 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 				r.Summary.Diagnostics.FanotifyEventsHashed = r.fanotifyEventsHashed
 				r.Summary.Diagnostics.FanotifyDigestsMerged = r.fanotifyDigestsMerged
 				r.Summary.Diagnostics.FanotifyTimeouts = r.fanotifyTimeouts
+			}
+			// fs-verity sealing stats. Surfaced even when count is 0
+			// so the JSON can convey "this trace had fs-verity active
+			// but no products were sealed" (e.g. read-only workload).
+			if r.fsVerityState != nil {
+				r.Summary.Diagnostics.FsVerityAvailable = r.fsVerityState.Available
+				r.Summary.Diagnostics.FsVerityFilesSealed = r.fsVerityState.Sealed.Load()
+				r.Summary.Diagnostics.FsVeritySealFailures = r.fsVerityState.SealFailures.Load()
 			}
 			if r.resolvedCaptureMode != "" {
 				r.Summary.CaptureMode = r.resolvedCaptureMode

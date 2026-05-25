@@ -1403,6 +1403,13 @@ func finalizeReadTap(
 // hash accumulated from sys_write kretprobe chunks IS the digest of the
 // bytes the tracee emitted to the file — captured race-free in kernel
 // context, immune to post-close mutation by another process.
+//
+// After recording the streaming digest, opportunistically seal the
+// file with fs-verity (kernel-rooted Merkle digest). On success the
+// kernel becomes the source of truth for this file's content — any
+// later corruption is rejected at read time. fs-verity sealing is
+// purely additive: streaming digest always set, fs-verity attempted
+// if available.
 func finalizeWriteTap(
 	pctx *ptraceContext, pid uint32, path string,
 	hashes map[cryptoutil.DigestValue]hash.Hash,
@@ -1420,12 +1427,24 @@ func finalizeWriteTap(
 	}
 
 	pctx.mu.Lock()
-	defer pctx.mu.Unlock()
 	procInfo := pctx.getProcInfo(int(pid))
 	if procInfo.WrittenDigests == nil {
 		procInfo.WrittenDigests = make(map[string]cryptoutil.DigestSet)
 	}
 	procInfo.WrittenDigests[path] = ds
+	fsvState := pctx.fsVerityState
+	pctx.mu.Unlock()
+
+	// fs-verity seal happens OUTSIDE the lock — the ioctl can take
+	// non-trivial time on large files. The streaming SHA-256 digest
+	// is already recorded; fs-verity provides an ADDITIONAL kernel-
+	// rooted Merkle root the kernel will refuse to bypass on later
+	// reads. For now we just count successful seals (diagnostic);
+	// the Merkle root itself awaits a DigestSet source-tag refactor
+	// to coexist with plain SHA-256 in the same entry.
+	if fsvState != nil {
+		_ = fsvState.sealProduct(path)
+	}
 }
 
 // recordEBPFExecve handles an EVT_EXECVE event from the BPF kprobe.

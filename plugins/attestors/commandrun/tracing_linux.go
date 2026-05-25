@@ -56,6 +56,11 @@ type ptraceContext struct {
 	// Key: "pid:fd", Value: index into the process's Connections slice.
 	tlsPendingFDs map[string]int
 
+	// fsVerityState is the opportunistic fs-verity sealing state for
+	// the trace. Set by runCmd before tracing starts when
+	// CILOCK_FSVERITY enables it. nil when disabled.
+	fsVerityState *fsVerityState
+
 	// digestCache memoizes per-file sha digests across the trace. Without
 	// it, a `go build` of any non-trivial project re-hashes the same
 	// stdlib + dep .go files thousands of times — each SYS_OPENAT and
@@ -309,6 +314,7 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		hash:                actx.Hashes(),
 		environmentCapturer: actx.EnvironmentCapturer(),
 		tlsPendingFDs:       make(map[string]int),
+		fsVerityState:       r.fsVerityState,
 		digestCache:         make(map[string]cryptoutil.DigestSet, 8192),
 	}
 
