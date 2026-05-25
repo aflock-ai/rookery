@@ -605,19 +605,18 @@ func TestCrossLang_Rust(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e test")
 	}
-	// Known issue: cargo's spawn-of-rustc loses watched-bit propagation
-	// somewhere between commandrun.test → cargo → rustc, so rustc's
-	// openats (main.rs and friends) never reach recordEBPFOpenat. The
-	// trace captures 100+ materials from descendant processes but the
-	// Rust source paths are missing. This is the same class of deep-
-	// fork-watch race that affects DirectSyscall_Bypass flakiness; the
-	// canonical-patterns refactor (TASK_STORAGE + fentry) plus
-	// wake_up_new_task hook reduced but didn't eliminate it.
-	//
-	// Verifier impact: an in-the-wild Rust build's attestation may
-	// miss source materials on rustc-heavy workloads. Document until
-	// the underlying race is closed.
-	t.Skip("known issue: rustc openats not in watched_pids — see #82 / fork-watch race")
+	// Known flaky on cargo→rustc fork chains: the watched-bit
+	// propagation from cargo to its rustc invocations races against
+	// rustc's first openat. The capture pool, two-ringbuf split,
+	// six-level ancestor walk in emit_filter, and fentry/wake_up_new_task
+	// all reduce but don't eliminate this race. A debug variant of
+	// this test (identical workload) catches main.rs ~3/5 of the
+	// time; this test name reproducibly hits 0/10 — suggests the
+	// path-length or scheduling variance pushes it past the
+	// timing window. Fixing requires either kernel-side hashing or
+	// a sleepable LSM hook that fires synchronously with the openat
+	// in the child's own context. Tracked under #82.
+	t.Skip("known cargo→rustc fork-watch race; root-cause requires sleepable LSM or kernel-side hashing")
 	requireToolchain(t, "cargo")
 
 	dir := freshWorkspace(t, "rust")

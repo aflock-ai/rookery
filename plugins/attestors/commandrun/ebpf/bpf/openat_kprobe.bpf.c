@@ -564,29 +564,58 @@ emit_filter(__u32 *out_pid, __u32 *out_tgid, __u32 *out_ppid)
         return 1;
     }
 
-    // Slow path: descent check via the parent's watched-bit. Required
-    // when wake_up_new_task missed a fork (race or kprobe pool
-    // exhaustion). Two sources for the parent's status: task_storage
-    // is cleaner but we can't query it for an arbitrary pid; the
-    // watched_pids map is keyed by pid so we use it for parent
-    // lookups. Once matched, propagate via task_storage so future
-    // syscalls hit the fast path.
+    // Slow path: walk the ancestor chain via task_struct->real_parent,
+    // checking each ancestor's TGID against watched_pids AND
+    // root_parent_tgid. This closes the race where wake_up_new_task
+    // didn't propagate the watched-bit for an INTERMEDIATE ancestor
+    // (e.g. cargo's worker thread that then spawns rustc — if the
+    // worker's task_storage wasn't set in time, the immediate-parent
+    // descent check misses rustc, but the grandparent — cargo or
+    // cargo's coordinator — is still in watched_pids).
+    //
+    // BPF verifier limitation: only bpf_get_current_task_btf() returns
+    // a trusted pointer accepted by bpf_task_storage_get. Ancestor
+    // pointers obtained via BPF_CORE_READ are "scalar" from the
+    // verifier's view — we can READ from them (tgid) but can't pass
+    // them to task_storage_get. So we check watched_pids[ancestor.tgid]
+    // and the root_parent_tgid bootstrap match. wake_up_new_task
+    // always writes BOTH task_storage AND watched_pids, so this is
+    // sufficient — any propagation that set task_storage also set
+    // watched_pids.
+    //
+    // Walk depth 6: covers commandrun.test → go.runtime → cargo →
+    // cargo.coordinator → cargo.worker → rustc with one to spare.
     int matched_by_descent = 0;
+    __u32 *root = bpf_map_lookup_elem(&root_parent_tgid, &zero);
     if (bpf_map_lookup_elem(&watched_pids, &cur_ppid)) {
         matched_by_descent = 1;
-    } else {
-        __u32 *root = bpf_map_lookup_elem(&root_parent_tgid, &zero);
-        if (root && cur_ppid == *root && *root != 0) {
-            matched_by_descent = 1;
-        } else {
-            return 0;
+    } else if (root && cur_ppid == *root && *root != 0) {
+        matched_by_descent = 1;
+    } else if (t) {
+        struct task_struct *ancestor = BPF_CORE_READ(t, real_parent);
+        #pragma unroll
+        for (int i = 0; i < 6; i++) {
+            if (!ancestor) break;
+            __u32 atgid = BPF_CORE_READ(ancestor, tgid);
+            if (atgid != 0) {
+                if (bpf_map_lookup_elem(&watched_pids, &atgid)) {
+                    matched_by_descent = 1;
+                    break;
+                }
+                if (root && atgid == *root && *root != 0) {
+                    matched_by_descent = 1;
+                    break;
+                }
+            }
+            ancestor = BPF_CORE_READ(ancestor, real_parent);
         }
     }
-    if (matched_by_descent) {
-        __u8 one = 1;
-        bpf_map_update_elem(&watched_pids, &cur_pid, &one, BPF_ANY);
-        task_set_watched();
+    if (!matched_by_descent) {
+        return 0;
     }
+    __u8 one = 1;
+    bpf_map_update_elem(&watched_pids, &cur_pid, &one, BPF_ANY);
+    task_set_watched();
 
     *out_pid  = cur_pid;
     *out_tgid = cur_tgid;
