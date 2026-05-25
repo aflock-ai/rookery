@@ -108,6 +108,17 @@ jobs:
               ;;
           esac
 
+      # cilock requires a signer — there is no observability-only mode
+      # in rc49. For the matrix we generate an ephemeral ECDSA key so
+      # we exercise the signing path realistically without depending
+      # on sigstore network reachability for every cell.
+      - name: Generate ephemeral signing key
+        if: matrix.cilock_mode != 'off'
+        run: |
+          openssl ecparam -name prime256v1 -genkey -noout -out /tmp/cilock-key.pem
+          sudo chmod 0644 /tmp/cilock-key.pem  # sudo'd cilock needs to read it
+          echo "SIGNER_KEY=/tmp/cilock-key.pem" >> "$GITHUB_ENV"
+
       # ────────────────────── Workload setup ──────────────────────
 
       - name: Prepare workload — go-build-small
@@ -132,11 +143,9 @@ jobs:
         run: |
           mkdir -p /tmp/workload && cd /tmp/workload
           cargo init --bin --name workload-test .
-          # Add a dependency to make the build non-trivial.
-          cat >>Cargo.toml <<'EOF'
-          [dependencies]
-          regex = "1.10"
-          EOF
+          # `cargo add` is the supported way — appending [dependencies]
+          # by hand creates a duplicate section, which cargo rejects.
+          cargo add regex@1.10
           # Pre-fetch deps so timing measures the build.
           cargo fetch
 
@@ -191,7 +200,7 @@ jobs:
           START=$(date +%s.%N)
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --outfile /tmp/attest.json -- go build .
+              cilock run --trace --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- go build .
           else
             go build .
           fi
@@ -204,7 +213,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH:$HOME/.cargo/bin" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --outfile /tmp/attest.json -- cargo build --release
+              cilock run --trace --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- cargo build --release
           else
             cargo build --release
           fi
@@ -215,7 +224,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --outfile /tmp/attest.json -- npm install --no-fund --no-audit
+              cilock run --trace --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- npm install --no-fund --no-audit
           else
             npm install --no-fund --no-audit
           fi
@@ -226,7 +235,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --outfile /tmp/attest.json -- python3 -m pip install --target ./vendor -r requirements.txt
+              cilock run --trace --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- python3 -m pip install --target ./vendor -r requirements.txt
           else
             python3 -m pip install --target ./vendor -r requirements.txt
           fi
@@ -239,8 +248,8 @@ jobs:
           # 10+ minutes even on tinyconfig. `prepare` exercises
           # genuine open/read/write of generated headers.
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
-            sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --outfile /tmp/attest.json -- make -j$(nproc) prepare
+            sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" "SIGNER_KEY=$SIGNER_KEY" \
+              cilock run --trace --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- make -j$(nproc) prepare
           else
             make -j$(nproc) prepare
           fi
