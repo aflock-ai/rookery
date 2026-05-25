@@ -174,11 +174,32 @@ func (r *CommandRun) zeroDropsGate() error {
 		return nil
 	}
 	d := r.Summary.Diagnostics
+	// When fanotify is active and healthy, it's the kernel-synchronous
+	// integrity floor — every observed open gets a hash before the
+	// syscall returns. The BPF/userspace fallback path runs in
+	// parallel; its FallbackHashFailures counter can be non-zero
+	// from racy fd-closes that fanotify ALREADY rescued. Treat
+	// FallbackHashFailures as informational when fanotify covered
+	// the gap (UnhashedOpensTotal post-reconciliation == 0 and
+	// fanotify itself is clean).
+	fanotifyHealthy := d.FanotifyAvailable &&
+		d.FanotifyTimeouts == 0 &&
+		d.FanotifyQueueOverflows == 0 &&
+		d.FanotifyDigestsCapHit == 0
+	fallbackFailuresAreGap := d.FallbackHashFailures > 0
+	if fanotifyHealthy && d.UnhashedOpensTotal == 0 {
+		// mergeFanotifyDigests already removed every UnhashedOpens
+		// entry whose path fanotify hashed. With zero UnhashedOpens
+		// left, the FallbackHashFailures counter is by definition
+		// covered by fanotify rescues; not a real gap.
+		fallbackFailuresAreGap = false
+	}
+
 	if d.RingbufOpenatDrops > 0 || d.RingbufReadTapDrops > 0 ||
 		d.FanotifyTimeouts > 0 || d.FanotifyQueueOverflows > 0 ||
 		d.FanotifyDigestsCapHit > 0 ||
 		d.UnhashedOpensTotal > 0 ||
-		d.FallbackHashFailures > 0 || d.FsVeritySealFailures > 0 {
+		fallbackFailuresAreGap || d.FsVeritySealFailures > 0 {
 		return &ZeroDropsError{
 			RingbufOpenatDrops:     d.RingbufOpenatDrops,
 			RingbufReadTapDrops:    d.RingbufReadTapDrops,

@@ -150,15 +150,39 @@ func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byt
 	// Track which paths were claimed by at least one process.
 	claimed := make(map[string]bool, len(fanDigests))
 	for i := range processes {
-		if processes[i].OpenedFiles == nil {
-			continue
-		}
-		for path := range processes[i].OpenedFiles {
-			if ds, ok := dsCache[path]; ok {
-				processes[i].OpenedFiles[path] = ds
-				claimed[path] = true
-				touched++
+		// (1) Upgrade existing OpenedFiles entries to the fanotify
+		//     digest — fanotify is kernel-synchronous, race-free, so
+		//     it overwrites any BPF-time digest for the same path.
+		if processes[i].OpenedFiles != nil {
+			for path := range processes[i].OpenedFiles {
+				if ds, ok := dsCache[path]; ok {
+					processes[i].OpenedFiles[path] = ds
+					claimed[path] = true
+					touched++
+				}
 			}
+		}
+		// (2) Reconcile UnhashedOpens against fanotify. Any entry
+		//     whose path fanotify successfully hashed is no longer
+		//     "unhashed" — promote it back to OpenedFiles with the
+		//     fanotify digest and drop the UnhashedOpens entry.
+		//     Without this, --require-zero-drops fails on files
+		//     that fanotify already rescued (smoke run 26421280285).
+		if len(processes[i].UnhashedOpens) > 0 {
+			kept := processes[i].UnhashedOpens[:0]
+			for _, u := range processes[i].UnhashedOpens {
+				if ds, ok := dsCache[u.Path]; ok {
+					if processes[i].OpenedFiles == nil {
+						processes[i].OpenedFiles = make(map[string]cryptoutil.DigestSet)
+					}
+					processes[i].OpenedFiles[u.Path] = ds
+					claimed[u.Path] = true
+					touched++
+					continue
+				}
+				kept = append(kept, u)
+			}
+			processes[i].UnhashedOpens = kept
 		}
 	}
 	// Anything fanotify saw that no process claimed → fanotify-only.
