@@ -334,14 +334,15 @@ jobs:
           done
 
       - name: Publish install script + signed release policy
+        working-directory: dist
         run: |
-          cp ../deploy/cilock/install.sh dist/install.sh
+          cp ../deploy/cilock/install.sh install.sh
           # Sign install.sh with the same OIDC identity end users will check.
           cosign sign-blob --yes \
-            --output-signature dist/install.sh.sig \
-            --output-certificate dist/install.sh.cert \
-            dist/install.sh
-          cp ../deploy/cilock/release.policy.json dist/release-v1.policy.json
+            --output-signature install.sh.sig \
+            --output-certificate install.sh.cert \
+            install.sh
+          cp ../deploy/cilock/release.policy.json release-v1.policy.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
