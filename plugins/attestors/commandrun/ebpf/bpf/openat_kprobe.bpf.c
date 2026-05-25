@@ -1128,6 +1128,33 @@ DEFINE_SECURITY_KPROBE(sendfile64_arm64,   "__arm64_sys_sendfile64",   CILOCK_SE
 #define MAP_ANONYMOUS_FLAG 0x20
 #define PROT_READ_FLAG     0x1
 
+// Per-(pid, fd) dedup so JVM-class workloads (which mmap each JAR
+// multiple times for code/data/rodata sections) don't flood the
+// events ringbuf with duplicate "fd X is mmapped" flags. One
+// SyscallEvent per (pid, fd) is enough diagnostic signal for the
+// verifier.
+struct mmap_dedup_key {
+    __u32 pid;
+    __s32 fd;
+};
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 8192);
+    __type(key, struct mmap_dedup_key);
+    __type(value, __u8);
+} mmap_seen SEC(".maps");
+
+static __always_inline void
+emit_mmap_once(__u64 prot, __u64 flags, __u64 fd)
+{
+    __u32 pid = (__u32)(bpf_get_current_pid_tgid() & 0xffffffff);
+    struct mmap_dedup_key k = {.pid = pid, .fd = (__s32)fd};
+    if (bpf_map_lookup_elem(&mmap_seen, &k)) return;
+    __u8 one = 1;
+    bpf_map_update_elem(&mmap_seen, &k, &one, BPF_ANY);
+    emit_security(CILOCK_SEC_MMAP, prot, flags, fd, 0);
+}
+
 SEC("kprobe/__arm64_sys_mmap")
 int BPF_KPROBE(kprobe_mmap_arm64, struct pt_regs *regs)
 {
@@ -1137,7 +1164,7 @@ int BPF_KPROBE(kprobe_mmap_arm64, struct pt_regs *regs)
     if ((flags & MAP_ANONYMOUS_FLAG) != 0) return 0;
     if ((prot & PROT_READ_FLAG) == 0) return 0;
     if ((__s64)fd < 0) return 0;
-    emit_security(CILOCK_SEC_MMAP, prot, flags, fd, 0);
+    emit_mmap_once(prot, flags, fd);
     return 0;
 }
 
@@ -1150,7 +1177,7 @@ int BPF_KPROBE(kprobe_mmap_x64, struct pt_regs *regs)
     if ((flags & MAP_ANONYMOUS_FLAG) != 0) return 0;
     if ((prot & PROT_READ_FLAG) == 0) return 0;
     if ((__s64)fd < 0) return 0;
-    emit_security(CILOCK_SEC_MMAP, prot, flags, fd, 0);
+    emit_mmap_once(prot, flags, fd);
     return 0;
 }
 

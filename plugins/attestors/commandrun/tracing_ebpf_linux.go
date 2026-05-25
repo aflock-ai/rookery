@@ -311,9 +311,15 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// evCh, so it sees a single merged event stream while neither
 	// reader can starve the other.
 	//
-	// Buffer size: large enough to absorb a burst from either reader
-	// without blocking them. 64K events × ~280B = ~18 MB worst-case.
-	evCh := make(chan *ebpf.Event, 64*1024)
+	// Buffer size: must absorb the burst from BOTH readers when the
+	// dispatcher hits a slow event (e.g. recordEBPFOpenat doing
+	// /proc enrichment). JVM-class workloads emit 100k+ read-tap
+	// events in a few seconds — under-sized evCh makes readers block,
+	// which makes the BPF ringbuf fill, which causes drops. 1M slots
+	// × 8B pointer = 8MB channel + ~280B/event × peak-in-flight ≈
+	// 280MB worst case (most events are short-lived, peak in-flight
+	// is much smaller).
+	evCh := make(chan *ebpf.Event, 1024*1024)
 
 	var readerWG sync.WaitGroup
 	// Main events reader: openat / execve / fileOps / security /
