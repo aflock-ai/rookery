@@ -270,6 +270,18 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		PID  uint32
 	}
 	pendingWriteFinalize := make(map[pidFdKey]pendingWrite)
+	// pendingReadFinalize is the read-side counterpart to
+	// pendingWriteFinalize: when close fires for a read open with no
+	// chunks yet (cross-ringbuf race), stash here so end-of-trace
+	// can finalize fullRead upgrades against late-arriving chunks.
+	// Same shape as pendingWrite but carries sizeAtOpen so we can
+	// decide fullRead at flush time.
+	type pendingRead struct {
+		Path       string
+		PID        uint32
+		SizeAtOpen uint64
+	}
+	pendingReadFinalize := make(map[pidFdKey]pendingRead)
 	// openTS records the kernel timestamp of the latest openat for
 	// each (pid, fd). Used as a fence against stale chunks delivered
 	// out-of-order across the events / read_tap_events ringbufs —
@@ -452,6 +464,21 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				finalizeWriteTap(pctx, pw.PID, pw.Path, hs)
 				readTapClosures.Add(1)
 			}
+			// Flush any pending read closes that may have had late
+			// chunks arrive — only finalize fullRead, since partial
+			// reads would produce a wrong digest (prefix vs. file).
+			for k, pr := range pendingReadFinalize {
+				hs := streamHashes[k]
+				cnt := streamCounts[k]
+				delete(streamHashes, k)
+				delete(streamCounts, k)
+				delete(pendingReadFinalize, k)
+				if hs == nil || pr.SizeAtOpen == 0 || cnt < pr.SizeAtOpen {
+					continue
+				}
+				finalizeReadTap(pctx, pr.PID, pr.Path, hs)
+				readTapClosures.Add(1)
+			}
 		}()
 
 		for ev := range evCh {
@@ -498,6 +525,29 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				// non-read fds.
 				if ev.Openat.FD >= 0 {
 					k := pidFdKey{PID: ev.Openat.PID, FD: ev.Openat.FD}
+					// A pending finalize from a CLOSED prior open at the
+					// same (pid, fd) means streamHashes[k] holds bytes
+					// for the prior file. Finalize it now against the
+					// stashed path before the new open clobbers state.
+					if pw, ok := pendingWriteFinalize[k]; ok {
+						if hs := streamHashes[k]; hs != nil {
+							finalizeWriteTap(pctx, pw.PID, pw.Path, hs)
+							readTapClosures.Add(1)
+						}
+						delete(streamHashes, k)
+						delete(streamCounts, k)
+						delete(pendingWriteFinalize, k)
+					}
+					if pr, ok := pendingReadFinalize[k]; ok {
+						if hs := streamHashes[k]; hs != nil &&
+							pr.SizeAtOpen > 0 && streamCounts[k] >= pr.SizeAtOpen {
+							finalizeReadTap(pctx, pr.PID, pr.Path, hs)
+							readTapClosures.Add(1)
+						}
+						delete(streamHashes, k)
+						delete(streamCounts, k)
+						delete(pendingReadFinalize, k)
+					}
 					// Clear any stale state from an earlier open
 					// of the same (pid, fd) whose close we missed
 					// (process exit, dropped event, etc.). Without
@@ -787,6 +837,16 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					// openat-time path-hash; upgrade.
 					finalizeReadTap(pctx, ev.Close.PID, path, hs)
 					readTapClosures.Add(1)
+				} else if !hadData && !wroteOnly && sizeAtOpen > 0 {
+					// Symmetric to write-tap: close fired before
+					// chunks arrived. Stash for end-of-trace flush
+					// so late read chunks can still promote to
+					// streaming-hash if they complete a full read.
+					pendingReadFinalize[k] = pendingRead{
+						Path:       path,
+						PID:        ev.Close.PID,
+						SizeAtOpen: sizeAtOpen,
+					}
 				} else if hadData {
 					// Read-tap saw read activity but not enough bytes
 					// to cover the full file — common for mmap'd
