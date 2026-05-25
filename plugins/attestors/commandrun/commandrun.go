@@ -195,6 +195,16 @@ type ProcessInfo struct {
 	Cmdline          string                          `json:"cmdline,omitempty"`
 	ExeDigest        cryptoutil.DigestSet            `json:"exedigest,omitempty"`
 	OpenedFiles      map[string]cryptoutil.DigestSet `json:"openedfiles,omitempty"`
+	// WrittenDigests carries content digests for files the tracee
+	// WROTE during the trace, captured via the BPF write-tap (kretprobe
+	// on sys_write / pwrite64 returns the bytes the kernel actually
+	// transferred). Keyed by absolute path, value is a digest of the
+	// bytes the tracee emitted — independent of any other writer or
+	// post-close mutation. Distinct from OpenedFiles (which tracks
+	// READ digests). A path may appear in both if the tracee wrote
+	// AND read it; classification rules use this split to put outputs
+	// in products and inputs in materials without conflation.
+	WrittenDigests   map[string]cryptoutil.DigestSet `json:"writtenDigests,omitempty"`
 	// UnhashedOpens carries opens we saw the kernel event for but
 	// could NOT hash — typically because the file was unlinked or
 	// the process exited between the kernel event and our hash

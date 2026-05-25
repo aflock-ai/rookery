@@ -259,6 +259,23 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	}
 	openPaths := make(map[pidFdKey]*openInfo)
 	streamHashes := make(map[pidFdKey]map[cryptoutil.DigestValue]hash.Hash)
+	// pendingWriteFinalize tracks write-only close events that arrived
+	// BEFORE all sys_write kretprobe chunks reached us — the close
+	// flows on the `events` ringbuf while write-chunks flow on the
+	// `read_tap_events` ringbuf; cross-ringbuf delivery is unordered.
+	// We stash {path, pid} here and finalize once chunks catch up
+	// (or at end-of-trace, whichever comes first).
+	type pendingWrite struct {
+		Path string
+		PID  uint32
+	}
+	pendingWriteFinalize := make(map[pidFdKey]pendingWrite)
+	// openTS records the kernel timestamp of the latest openat for
+	// each (pid, fd). Used as a fence against stale chunks delivered
+	// out-of-order across the events / read_tap_events ringbufs —
+	// a chunk with TimestampNs older than the current openTS[k] is
+	// data from a prior fd-use whose close already drained state.
+	openTS := make(map[pidFdKey]uint64)
 	// streamCounts tracks bytes-streamed per (pid, fd) independently of
 	// openPaths. Ringbuf can deliver read-chunk events BEFORE the
 	// matching openat (different-CPU submission ordering), in which
@@ -276,6 +293,9 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// until the matching openat arrives; the openat handler replays.
 	pendingCloses := make(map[pidFdKey]*ebpf.CloseEvent)
 	var readTapBytes, readTapClosures atomic.Uint64
+	// Write-tap counters: bytes the BPF kretprobe captured from sys_write.
+	// Symmetric to readTapBytes — surfaced as diagnostic in the trace summary.
+	var writeTapBytes, writeChunkSeen atomic.Uint64
 
 	var readTotal, matchedTotal, otherTotal atomic.Uint64
 	// V2 diagnostic: read-chunk traffic counters. Lets us distinguish
@@ -417,6 +437,21 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				}
 				finalizeReadTap(pctx, oi.EV.PID, oi.Path, hs)
 			}
+			// Flush any pending write-only closes whose chunks
+			// finally arrived AFTER the close (cross-ringbuf race).
+			// The streamHashes entry holds the accumulated digest;
+			// pendingWriteFinalize carries the {path, pid}.
+			for k, pw := range pendingWriteFinalize {
+				hs := streamHashes[k]
+				delete(streamHashes, k)
+				delete(streamCounts, k)
+				delete(pendingWriteFinalize, k)
+				if hs == nil {
+					continue
+				}
+				finalizeWriteTap(pctx, pw.PID, pw.Path, hs)
+				readTapClosures.Add(1)
+			}
 		}()
 
 		for ev := range evCh {
@@ -491,6 +526,15 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 						Path:     ev.Openat.Path,
 						EV:       ev.Openat,
 						Streamed: streamCounts[k],
+					}
+					// Fence: chunks older than this openat must be
+					// discarded as belonging to a prior fd-use whose
+					// close already drained streamHashes. Take max
+					// in case openat events arrive out of order in
+					// userspace (a later kernel-TS openat may be
+					// dispatched first if delivered on a faster CPU).
+					if ev.Openat.TimestampNs > openTS[k] {
+						openTS[k] = ev.Openat.TimestampNs
 					}
 					// Replay an out-of-order close that arrived before
 					// this openat — finalize now that we know the path.
@@ -598,12 +642,32 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				otherTotal.Add(1)
 				recordEBPFNet(pctx, ev.Net)
 			case ev.ReadChunk != nil:
-				readChunkSeen.Add(1)
+				isWrite := ev.Type == ebpf.EVT_WRITE_CHUNK
+				if isWrite {
+					writeChunkSeen.Add(1)
+				} else {
+					readChunkSeen.Add(1)
+				}
 				if !watched.matchAndAdd(ev.ReadChunk.PID, ev.ReadChunk.TGID, ev.ReadChunk.PPID) {
-					readChunkRejected.Add(1)
+					if !isWrite {
+						readChunkRejected.Add(1)
+					}
 					continue
 				}
 				k := pidFdKey{PID: ev.ReadChunk.PID, FD: ev.ReadChunk.FD}
+				// Fence: drop chunks delivered older than the latest
+				// openat for this (pid, fd). They're from a prior
+				// fd-use whose close already drained state and would
+				// corrupt the current open's digest.
+				if ts, ok := openTS[k]; ok && ev.ReadChunk.TimestampNs < ts {
+					continue
+				}
+				// If a write-only close is pending for (pid, fd),
+				// any non-write chunk is stale from a prior open of
+				// this fd whose read chunks were delayed. Discard it.
+				if _, ok := pendingWriteFinalize[k]; ok && !isWrite {
+					continue
+				}
 				hs := streamHashes[k]
 				if hs == nil {
 					hs = make(map[cryptoutil.DigestValue]hash.Hash, len(pctx.hash))
@@ -619,7 +683,11 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				if oi := openPaths[k]; oi != nil {
 					oi.Streamed = streamCounts[k]
 				}
-				readTapBytes.Add(uint64(ev.ReadChunk.ChunkLen))
+				if isWrite {
+					writeTapBytes.Add(uint64(ev.ReadChunk.ChunkLen))
+				} else {
+					readTapBytes.Add(uint64(ev.ReadChunk.ChunkLen))
+				}
 			case ev.Close != nil:
 				if !watched.matchAndAdd(ev.Close.PID, ev.Close.TGID, ev.Close.PPID) {
 					continue
@@ -676,6 +744,18 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				if path == "" {
 					continue
 				}
+				// Write-tap: if the open was write-only (or had
+				// O_TRUNC effectively), the streaming hash IS the
+				// file content the tracee emitted — independent of
+				// sizeAtOpen (which is 0 for newly-created files).
+				// Finalize into WrittenDigests, separate from read
+				// digests, so classifiers don't conflate inputs and
+				// outputs.
+				wroteOnly := false
+				if oi != nil && oi.EV != nil &&
+					(oi.EV.IsWriteOnly() || isCreateOrTrunc(oi.EV.Flags)) {
+					wroteOnly = true
+				}
 				// Full-read check: if the tracee read every byte of
 				// the file, the streaming digest IS the file digest.
 				// If it read only a prefix (very common — bufio
@@ -688,7 +768,21 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				} else if oi != nil && oi.EV != nil && oi.EV.SizeAtOpen > 0 && oi.Streamed >= oi.EV.SizeAtOpen {
 					fullRead = true
 				}
-				if hadData && fullRead {
+				if wroteOnly && !hadData {
+					// Close arrived before write-chunks (cross-ringbuf
+					// delivery race). Stash for late finalization;
+					// chunk handler will pick it up. Also clear any
+					// stream state for this key — any later READ chunk
+					// arriving against (pid, fd) is stale from a prior
+					// open and must not bleed into the write digest.
+					delete(streamHashes, k)
+					delete(streamCounts, k)
+					pendingWriteFinalize[k] = pendingWrite{Path: path, PID: ev.Close.PID}
+				}
+				if hadData && wroteOnly {
+					finalizeWriteTap(pctx, ev.Close.PID, path, hs)
+					readTapClosures.Add(1)
+				} else if hadData && fullRead {
 					// Streaming hash is more race-tight than the
 					// openat-time path-hash; upgrade.
 					finalizeReadTap(pctx, ev.Close.PID, path, hs)
@@ -945,11 +1039,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		fmt.Fprintf(os.Stderr,
 			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d "+
 				"readChunkSeen=%d readChunkRejected=%d readTapBytes=%d readTapClosures=%d "+
+				"writeChunkSeen=%d writeTapBytes=%d "+
 				"closeInlinePath=%d closeFallbackPath=%d\n",
 			pctx.parentPid, readTotal.Load(), matchedTotal.Load(), otherTotal.Load(),
 			hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load(),
 			readChunkSeen.Load(), readChunkRejected.Load(),
 			readTapBytes.Load(), readTapClosures.Load(),
+			writeChunkSeen.Load(), writeTapBytes.Load(),
 			closeWithInlinePath.Load(), closeWithoutInlinePath.Load())
 	}
 
@@ -1227,6 +1323,35 @@ func finalizeReadTap(
 	// Read-tap digest is authoritative — overwrite path-hash (which
 	// may have come from the racey async hasher pool).
 	procInfo.OpenedFiles[path] = ds
+}
+
+// finalizeWriteTap is the write-tap symmetric counterpart. The streaming
+// hash accumulated from sys_write kretprobe chunks IS the digest of the
+// bytes the tracee emitted to the file — captured race-free in kernel
+// context, immune to post-close mutation by another process.
+func finalizeWriteTap(
+	pctx *ptraceContext, pid uint32, path string,
+	hashes map[cryptoutil.DigestValue]hash.Hash,
+) {
+	if len(hashes) == 0 || path == "" {
+		return
+	}
+	ds := make(cryptoutil.DigestSet, len(hashes))
+	for dv, h := range hashes {
+		if dv.GitOID {
+			ds[dv] = string(h.Sum(nil))
+			continue
+		}
+		ds[dv] = string(cryptoutil.HexEncode(h.Sum(nil)))
+	}
+
+	pctx.mu.Lock()
+	defer pctx.mu.Unlock()
+	procInfo := pctx.getProcInfo(int(pid))
+	if procInfo.WrittenDigests == nil {
+		procInfo.WrittenDigests = make(map[string]cryptoutil.DigestSet)
+	}
+	procInfo.WrittenDigests[path] = ds
 }
 
 // recordEBPFExecve handles an EVT_EXECVE event from the BPF kprobe.

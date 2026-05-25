@@ -66,6 +66,7 @@ const (
 	EVT_CLOSE       = 12 // V1.4 read-tap: finalize streaming hash for fd
 	EVT_CONNECT_RET = 13 // connect() return code (success/failure) via kretprobe
 	EVT_DNS_QUERY   = 14 // UDP send to port 53/5353 — DNS query destination
+	EVT_WRITE_CHUNK = 15 // chunk of bytes from sys_write — symmetric to EVT_READ_CHUNK
 )
 
 // Event sizes — must match the C structs in openat_kprobe.bpf.c. All
@@ -760,8 +761,9 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_execve_x64",
 				// file mutations
 				"kprobe_unlinkat_x64", "kprobe_renameat2_x64", "kprobe_renameat_x64", "kprobe_fchmodat_x64",
-				// write
-				"kprobe_write_x64", "kprobe_pwrite_x64",
+				// write — kprobe stashes args, kretprobe emits chunk(s) on success
+				"kprobe_write_x64", "kretprobe_write_x64",
+				"kprobe_pwrite_x64", "kretprobe_pwrite_x64",
 				// network
 				"kprobe_socket_x64", "kprobe_connect_x64", "kprobe_bind_x64",
 				"kretprobe_connect_x64",
@@ -801,7 +803,8 @@ func archKprobeNames() ([]string, []string) {
 				"__x64_sys_openat2", "__x64_sys_openat2",
 				"__x64_sys_execve",
 				"__x64_sys_unlinkat", "__x64_sys_renameat2", "__x64_sys_renameat", "__x64_sys_fchmodat",
-				"__x64_sys_write", "__x64_sys_pwrite64",
+				"__x64_sys_write", "__x64_sys_write",
+				"__x64_sys_pwrite64", "__x64_sys_pwrite64",
 				"__x64_sys_socket", "__x64_sys_connect", "__x64_sys_bind",
 				"__x64_sys_connect",
 				"udp_sendmsg",
@@ -827,7 +830,8 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_openat2_arm64", "kretprobe_openat2_arm64",
 				"kprobe_execve_arm64",
 				"kprobe_unlinkat_arm64", "kprobe_renameat2_arm64", "kprobe_renameat_arm64", "kprobe_fchmodat_arm64",
-				"kprobe_write_arm64", "kprobe_pwrite_arm64",
+				"kprobe_write_arm64", "kretprobe_write_arm64",
+				"kprobe_pwrite_arm64", "kretprobe_pwrite_arm64",
 				"kprobe_socket_arm64", "kprobe_connect_arm64", "kprobe_bind_arm64",
 				"kretprobe_connect_arm64",
 				"kprobe_udp_sendmsg",
@@ -853,7 +857,8 @@ func archKprobeNames() ([]string, []string) {
 				"__arm64_sys_openat2", "__arm64_sys_openat2",
 				"__arm64_sys_execve",
 				"__arm64_sys_unlinkat", "__arm64_sys_renameat2", "__arm64_sys_renameat", "__arm64_sys_fchmodat",
-				"__arm64_sys_write", "__arm64_sys_pwrite64",
+				"__arm64_sys_write", "__arm64_sys_write",
+				"__arm64_sys_pwrite64", "__arm64_sys_pwrite64",
 				"__arm64_sys_socket", "__arm64_sys_connect", "__arm64_sys_bind",
 				"__arm64_sys_connect",
 				"udp_sendmsg",
@@ -975,7 +980,8 @@ func decodeEvent(raw []byte) (*Event, error) {
 			return nil, err
 		}
 		return &Event{Type: evtType, Net: n}, nil
-	case EVT_READ_CHUNK:
+	case EVT_READ_CHUNK, EVT_WRITE_CHUNK:
+		// Identical struct layout — discriminated by Type at consumer.
 		rc, err := decodeReadChunkEvent(raw)
 		if err != nil {
 			return nil, err

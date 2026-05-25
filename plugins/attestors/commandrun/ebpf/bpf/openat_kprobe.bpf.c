@@ -45,6 +45,7 @@ enum cilock_event_type {
     EVT_CLOSE       = 12, // close/filp_close — finalize per-fd streaming hash
     EVT_CONNECT_RET = 13, // connect() return code via kretprobe — success/failure
     EVT_DNS_QUERY   = 14, // UDP send to port 53 — DNS query (destination only; QNAME parse TBD)
+    EVT_WRITE_CHUNK = 15, // chunk of bytes copied from user buffer on write — symmetric to EVT_READ_CHUNK
 };
 
 // Common header at the start of every event. event_type is read first
@@ -220,6 +221,16 @@ struct {
     __type(key, __u64);
     __type(value, struct read_stash);
 } read_stash_map SEC(".maps");
+
+// Symmetric stash for write syscalls. Identical layout, distinct map
+// — same task can have both a read and a write in flight (e.g. when
+// the tracee uses sendmsg with iovecs from one fd to another).
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u64);
+    __type(value, struct read_stash);
+} write_stash_map SEC(".maps");
 
 // Per-CPU scratch for read_chunk_event (~16KB, way over BPF stack).
 struct {
@@ -1223,12 +1234,126 @@ emit_write(int fd, __u64 bytes)
     bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 }
 
+// ───── write-tap — symmetric to read-tap ─────────────────────────
+//
+// Closes the fast-exit content gap. gcc/cc1 writes /tmp/cc*.s, closes,
+// exits; as opens it, reads (caught by read-tap), then unlinks. If
+// read-tap drops or read isn't complete, we lose the content. Write-
+// tap captures cc1's writes DURING the syscall — before close, exit,
+// or unlink — so the digest is recorded regardless of what happens
+// to the file afterward.
+//
+// Tracee canonical pattern (pkg/ebpf/c/tracee.bpf.c:3251-3431):
+// stash (fd, user_buf, count) at kprobe entry; in kretprobe, read
+// bytes via bpf_probe_read_user if rc > 0; emit chunks via the same
+// read_tap_events ringbuf the read side uses. Userspace streamHashes
+// are keyed by (pid, fd); both read and write chunks accumulate into
+// the same per-(pid, fd) streaming SHA. For pure-read or pure-write
+// fds the result is correct; mixed read+write on the same fd in
+// the same process is an edge case that produces a corrupted hash —
+// documented limitation, vanishingly rare in build workloads.
+
+// Forward decl — read_tap_on defined below where the read-tap stash
+// machinery lives. We use the same map (read_tap_enabled) as the
+// shared on/off gate for both directions.
+static __always_inline bool read_tap_on(void);
+
+static __always_inline void
+stash_write(int fd, __u64 buf, __u64 count)
+{
+    if (!read_tap_on()) return;  // same gate as read-tap
+    if (fd < 0 || fd > 1024 * 1024) return;
+    // Drop stdio writes — Go's compile/asm/link spam these and the
+    // bytes aren't useful for attestation.
+    if (fd >= 0 && fd <= 2) return;
+    __u32 cur_pid, cur_tgid, cur_ppid;
+    if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) return;
+    __u64 key = bpf_get_current_pid_tgid();
+    struct read_stash s = {
+        .user_buf = buf,
+        .count    = count,
+        .fd       = fd,
+    };
+    bpf_map_update_elem(&write_stash_map, &key, &s, BPF_ANY);
+}
+
+static __always_inline void
+emit_write_chunk(long ret)
+{
+    __u64 key = bpf_get_current_pid_tgid();
+    struct read_stash *s = bpf_map_lookup_elem(&write_stash_map, &key);
+    if (!s) return;
+    if (ret <= 0) goto done;
+
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 cur_pid  = (__u32)(pid_tgid & 0xFFFFFFFF);
+    __u32 cur_tgid = (__u32)(pid_tgid >> 32);
+    __u32 cur_ppid = 0;
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    if (task) {
+        struct task_struct *p = BPF_CORE_READ(task, real_parent);
+        if (p) cur_ppid = BPF_CORE_READ(p, tgid);
+    }
+
+    __u64 want_total = (__u64)ret;
+    __u64 done_bytes = 0;
+    __u32 seq = 0;
+
+    char comm_cache[TASK_COMM_LEN];
+    bpf_get_current_comm(comm_cache, sizeof(comm_cache));
+
+    // MAX_READ_CHUNKS is defined below near read-tap; use the
+    // same compile-time constant (8) here to bound the loop.
+    #pragma unroll
+    for (int i = 0; i < 8; i++) {
+        if (done_bytes >= want_total) break;
+        __u64 remaining = want_total - done_bytes;
+        __u32 n = (remaining > (__u64)READ_CHUNK_BYTES)
+                  ? (__u32)READ_CHUNK_BYTES
+                  : (__u32)remaining;
+        if (n == 0 || n > READ_CHUNK_BYTES) break;
+
+        struct read_chunk_event *ev =
+            bpf_ringbuf_reserve(&read_tap_events, sizeof(*ev), 0);
+        if (!ev) {
+            bump_drop(DROP_BUCKET_READTAP);
+            break;
+        }
+
+        // Distinguish from read chunks via EVT_WRITE_CHUNK; struct layout
+        // is identical (fd, seq, chunk_len, data) so we reuse read_chunk_event.
+        fill_hdr(&ev->hdr, EVT_WRITE_CHUNK, cur_pid, cur_tgid, cur_ppid);
+        __builtin_memcpy(ev->comm, comm_cache, TASK_COMM_LEN);
+        ev->fd        = s->fd;
+        ev->seq       = seq;
+        ev->chunk_len = n;
+        ev->_pad      = 0;
+
+        long rc = bpf_probe_read_user(ev->data, n,
+            (const void *)(s->user_buf + done_bytes));
+        if (rc < 0) {
+            bpf_ringbuf_discard(ev, 0);
+            bump_drop(DROP_BUCKET_READTAP);
+            break;
+        }
+        bpf_ringbuf_submit(ev, 0);
+
+        done_bytes += n;
+        seq++;
+    }
+
+done:
+    bpf_map_delete_elem(&write_stash_map, &key);
+}
+
 SEC("kprobe/__arm64_sys_write")
 int BPF_KPROBE(kprobe_write_arm64, struct pt_regs *regs)
 {
     int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 buf = (__u64)PT_REGS_PARM2_CORE_SYSCALL(regs);
     __u64 bytes = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
     emit_write(fd, bytes);
+    stash_write(fd, buf, bytes);
     return 0;
 }
 
@@ -1236,8 +1361,10 @@ SEC("kprobe/__x64_sys_write")
 int BPF_KPROBE(kprobe_write_x64, struct pt_regs *regs)
 {
     int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 buf = (__u64)PT_REGS_PARM2_CORE_SYSCALL(regs);
     __u64 bytes = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
     emit_write(fd, bytes);
+    stash_write(fd, buf, bytes);
     return 0;
 }
 
@@ -1245,8 +1372,10 @@ SEC("kprobe/__arm64_sys_pwrite64")
 int BPF_KPROBE(kprobe_pwrite_arm64, struct pt_regs *regs)
 {
     int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 buf = (__u64)PT_REGS_PARM2_CORE_SYSCALL(regs);
     __u64 bytes = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
     emit_write(fd, bytes);
+    stash_write(fd, buf, bytes);
     return 0;
 }
 
@@ -1254,8 +1383,38 @@ SEC("kprobe/__x64_sys_pwrite64")
 int BPF_KPROBE(kprobe_pwrite_x64, struct pt_regs *regs)
 {
     int fd = (int)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 buf = (__u64)PT_REGS_PARM2_CORE_SYSCALL(regs);
     __u64 bytes = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
     emit_write(fd, bytes);
+    stash_write(fd, buf, bytes);
+    return 0;
+}
+
+SEC("kretprobe/__arm64_sys_write")
+int BPF_KRETPROBE(kretprobe_write_arm64, long ret)
+{
+    emit_write_chunk(ret);
+    return 0;
+}
+
+SEC("kretprobe/__x64_sys_write")
+int BPF_KRETPROBE(kretprobe_write_x64, long ret)
+{
+    emit_write_chunk(ret);
+    return 0;
+}
+
+SEC("kretprobe/__arm64_sys_pwrite64")
+int BPF_KRETPROBE(kretprobe_pwrite_arm64, long ret)
+{
+    emit_write_chunk(ret);
+    return 0;
+}
+
+SEC("kretprobe/__x64_sys_pwrite64")
+int BPF_KRETPROBE(kretprobe_pwrite_x64, long ret)
+{
+    emit_write_chunk(ret);
     return 0;
 }
 

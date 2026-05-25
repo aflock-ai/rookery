@@ -930,3 +930,78 @@ func TestWeakness_DNSQuery_Surfaced(t *testing.T) {
 			summarizeProcessTree(procs))
 	}
 }
+
+// writeTapCSource: tracee creates a fresh file write-only, writes a
+// known payload via sys_write, and closes. Tests the symmetric write-
+// tap path — kretprobe captures the bytes the kernel returned for
+// the write, computes the SHA-256, and surfaces it under
+// ProcessInfo.WrittenDigests. The digest is independent of any
+// post-close mutation by another process.
+const writeTapCSource = `
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+int main(int argc, char **argv) {
+    if (argc < 3) {
+        fprintf(stderr, "usage: %s <out-path> <content>\n", argv[0]);
+        return 2;
+    }
+    int fd = open(argv[1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) { perror("open"); return 3; }
+    size_t n = strlen(argv[2]);
+    ssize_t w = write(fd, argv[2], n);
+    if (w != (ssize_t)n) { perror("write"); return 4; }
+    if (close(fd) != 0) { perror("close"); return 5; }
+    return 0;
+}
+`
+
+// TestWeakness_WriteTap_CapturesContent asserts that bytes a tracee
+// writes via sys_write are captured in WrittenDigests, with a digest
+// that matches the actual payload. This is the build-output side of
+// the read-tap symmetry: if the verifier needs to know "exactly which
+// bytes did the linker emit," read-tap covers read-back (when the
+// writer re-reads its own output), and write-tap covers the direct
+// emission path.
+func TestWeakness_WriteTap_CapturesContent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
+	t.Setenv(EnvVarTraceMode, "ebpf")
+	skipIfNoEBPFCaps(t)
+
+	dir := t.TempDir()
+	bin := compileC(t, dir, "writetap", writeTapCSource)
+
+	out := filepath.Join(dir, "writetap-output.bin")
+	content := "V1.5-writetap-symmetric-payload-1234567890"
+	procs := runUnderEBPF(t, []string{bin, out, content})
+
+	wantDigest, err := cryptoutil.CalculateDigestSetFromBytes(
+		[]byte(content), []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
+	if err != nil {
+		t.Fatalf("compute expected digest: %v", err)
+	}
+
+	var got cryptoutil.DigestSet
+	for _, p := range procs {
+		if ds, ok := p.WrittenDigests[out]; ok {
+			got = ds
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("write-tap did NOT record %s in WrittenDigests — kretprobe missed the write or close didn't finalize.\nprocs:\n%s",
+			out, summarizeProcessTree(procs))
+	}
+	for dv, want := range wantDigest {
+		if got[dv] != want {
+			t.Errorf("write-tap digest mismatch for %s: got=%x want=%x",
+				out, got[dv], want)
+		}
+	}
+}
