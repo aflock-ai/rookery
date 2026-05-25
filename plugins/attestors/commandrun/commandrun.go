@@ -897,8 +897,22 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 		return filepath.Join(cwd, p)
 	}
 
+	// Build a global "path → bytes-as-written digest" map from every
+	// process's WrittenDigests. The kernel write-tap streams the SHA
+	// over each write at the moment bytes leave the tracee, so this
+	// digest is race-free against post-build deletes, renames, and
+	// cwd changes — UNLIKE post-hoc os.Stat + pathHashIfExists.
+	writtenDigests := make(map[string]cryptoutil.DigestSet, 256)
 	writePaths := make(map[string]bool, 256)
 	for i := range rc.Processes {
+		for path, ds := range rc.Processes[i].WrittenDigests {
+			if path == "" {
+				continue
+			}
+			p := resolvePath(path)
+			writtenDigests[p] = ds
+			writePaths[p] = true
+		}
 		fo := rc.Processes[i].FileOps
 		if fo == nil {
 			continue
@@ -908,9 +922,22 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 				writePaths[resolvePath(w.Path)] = true
 			}
 		}
+		// Renames: the new path's content IS the old path's last-write
+		// digest (rename moves bytes unchanged). Carry the in-kernel
+		// digest across the rename so atomic-rename builds (Go, Cargo,
+		// GCC -o) get a real digest on the final product path instead
+		// of a witness-only entry.
 		for _, r := range fo.Renames {
-			if r.NewPath != "" {
-				writePaths[resolvePath(r.NewPath)] = true
+			if r.NewPath == "" {
+				continue
+			}
+			newP := resolvePath(r.NewPath)
+			writePaths[newP] = true
+			if r.OldPath != "" {
+				oldP := resolvePath(r.OldPath)
+				if ds, ok := writtenDigests[oldP]; ok {
+					writtenDigests[newP] = ds
+				}
 			}
 		}
 	}
@@ -923,31 +950,36 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 		if rc.cacheMatcher != nil && rc.cacheMatcher.Matches(p) {
 			continue // cache/temp — surfaced via TraceCacheArtifacts
 		}
+
+		// Primary path: in-kernel write-tap digest. Race-free.
+		if ds, ok := writtenDigests[p]; ok {
+			if dm, err := ds.ToNameMap(); err == nil && dm != nil {
+				out[p] = attestation.CaptureEntry{
+					Digest: dm,
+					Source: "trace-write-tap",
+				}
+				continue
+			}
+		}
+
+		// Fallback: the trace observed a write but no write-tap digest
+		// (kernel buffer overflow, syscall pattern we don't tap like
+		// mmap+msync, or the write-tap simply didn't run). Stat +
+		// pathhash for forensic completeness; produces witness-only
+		// entries when the file is gone.
 		info, statErr := os.Stat(p)
-		switch {
-		case statErr != nil:
-			// File is gone (unlinked between trace and attest) or
-			// path is relative-to-a-different-cwd. We KNOW the trace
-			// observed a write to this path — emit a witness entry
-			// without a digest. Downstream consumers (policies,
-			// inclusion-proof) skip entries lacking a digest, but
-			// the path survives in the products list for inventory.
-			// Without this, V2 phase 2's atomic-rename + fast-exit
-			// pattern produces silent product drops (issue #152).
+		if statErr != nil {
 			out[p] = attestation.CaptureEntry{
 				Digest: nil,
 				Source: "trace-write-only",
 			}
 			continue
-		case !info.Mode().IsRegular():
-			// Directories, sockets, pipes — can't be path-hashed,
-			// not products. Drop silently.
+		}
+		if !info.Mode().IsRegular() {
 			continue
 		}
 		digest := pathHashIfExists(p, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
 		if digest == nil {
-			// File existed at stat time but disappeared (or was
-			// unreadable) at hash time. Same handling as missing.
 			out[p] = attestation.CaptureEntry{
 				Digest: nil,
 				Source: "trace-write-only",
