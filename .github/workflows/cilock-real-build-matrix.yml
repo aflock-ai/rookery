@@ -18,11 +18,11 @@ name: cilock real-build matrix (rc49+)
 on:
   workflow_dispatch:
     inputs:
-      cilock_version:
-        description: 'cilock release tag (default: v1.1.0-rc49)'
+      use_release:
+        description: 'cilock release tag (empty = build from current ref)'
         type: string
         required: false
-        default: 'v1.1.0-rc49'
+        default: ''
   push:
     paths:
       - '.github/workflows/cilock-real-build-matrix.yml'
@@ -31,6 +31,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write  # required for sigstore keyless signing via GHA OIDC
 
 jobs:
   build-matrix:
@@ -62,9 +63,29 @@ jobs:
           echo "--- workspace mount ---"
           findmnt "$(pwd)" || mount | head -10
 
-      - name: Download cilock ${{ inputs.cilock_version || 'v1.1.0-rc49' }}
+      # Build cilock from this checkout by default. The released rc49
+      # tarball's compiled BPF programs fail CO-RE relocation on the
+      # GHA ubuntu-24.04 kernel (limitation #4 from the first matrix
+      # run: "invalid func unknown#195896080"). Building from source
+      # against the current kernel's BTF avoids that.
+      - name: Setup Go
+        if: inputs.use_release == ''
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      - name: Build cilock from source
+        if: inputs.use_release == ''
         run: |
-          VERSION="${{ inputs.cilock_version || 'v1.1.0-rc49' }}"
+          cd cilock
+          go build -o /tmp/cilock-bin ./
+          sudo install -m 0755 /tmp/cilock-bin /usr/local/bin/cilock
+          cilock version
+
+      - name: Download cilock release
+        if: inputs.use_release != ''
+        run: |
+          VERSION="${{ inputs.use_release }}"
           NUM_VERSION="${VERSION#v}"
           ARCH=$(uname -m)
           case "$ARCH" in
@@ -109,18 +130,21 @@ jobs:
           esac
 
       # cilock requires a signer — there is no observability-only mode
-      # in rc49. For the matrix we generate an ephemeral ECDSA key so
-      # we exercise the signing path realistically without depending
-      # on sigstore network reachability for every cell.
-      - name: Generate ephemeral signing key
+      # in rc49. We use sigstore keyless via GHA OIDC: cilock auto-
+      # detects GITHUB_ACTIONS=true + ACTIONS_ID_TOKEN_REQUEST_* env
+      # vars and exchanges the OIDC token for a short-lived Fulcio cert.
+      # This exercises the realistic CI-attestation path. Requires
+      # id-token: write permission (set at job level above).
+      - name: Compute Fulcio URL
         if: matrix.cilock_mode != 'off'
         run: |
-          openssl ecparam -name prime256v1 -genkey -noout -out /tmp/cilock-key.pem
-          sudo chmod 0644 /tmp/cilock-key.pem  # sudo'd cilock needs to read it
-          echo "SIGNER_KEY=/tmp/cilock-key.pem" >> "$GITHUB_ENV"
+          echo "FULCIO_URL=https://fulcio.sigstore.dev" >> "$GITHUB_ENV"
 
       # ────────────────────── Workload setup ──────────────────────
 
+      # Default attestor set includes git; cilock errors if the
+      # workdir isn't a repo. Each workload's setup git-inits the
+      # /tmp/workload dir at the end so the git attestor doesn't fail.
       - name: Prepare workload — go-build-small
         if: matrix.workload == 'go-build-small'
         run: |
@@ -190,6 +214,25 @@ jobs:
           cd linux
           make tinyconfig
 
+      # cilock's default attestor set includes 'git', which errors
+      # when the workdir isn't a repo. Initialise an empty repo so
+      # the matrix tests the realistic CI path (checkout-then-build).
+      - name: Initialise workload as git repo
+        run: |
+          # kernel workload lives under /tmp/workload/linux; others
+          # directly under /tmp/workload.
+          if [ "${{ matrix.workload }}" = "make-kernel-tiny" ]; then
+            WORK=/tmp/workload/linux
+          else
+            WORK=/tmp/workload
+          fi
+          cd "$WORK"
+          git init -q -b main
+          git config user.email "matrix@cilock.test"
+          git config user.name "Matrix Runner"
+          git add -A
+          git commit -q -m "matrix workload baseline" || true
+
       # ──────────────────────  Run the build ──────────────────────
 
       - name: Run go-build-small
@@ -200,7 +243,10 @@ jobs:
           START=$(date +%s.%N)
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --step matrix --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- go build .
+                "GITHUB_ACTIONS=true" \
+                "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- go build .
           else
             go build .
           fi
@@ -213,7 +259,10 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH:$HOME/.cargo/bin" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --step matrix --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- cargo build --release
+                "GITHUB_ACTIONS=true" \
+                "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- cargo build --release
           else
             cargo build --release
           fi
@@ -224,7 +273,10 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --step matrix --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- npm install --no-fund --no-audit
+                "GITHUB_ACTIONS=true" \
+                "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- npm install --no-fund --no-audit
           else
             npm install --no-fund --no-audit
           fi
@@ -235,7 +287,10 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --step matrix --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- python3 -m pip install --target ./vendor -r requirements.txt
+                "GITHUB_ACTIONS=true" \
+                "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- python3 -m pip install --target ./vendor -r requirements.txt
           else
             python3 -m pip install --target ./vendor -r requirements.txt
           fi
@@ -248,8 +303,11 @@ jobs:
           # 10+ minutes even on tinyconfig. `prepare` exercises
           # genuine open/read/write of generated headers.
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
-            sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" "SIGNER_KEY=$SIGNER_KEY" \
-              cilock run --trace --step matrix --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- make -j$(nproc) prepare
+            sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                "GITHUB_ACTIONS=true" \
+                "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- make -j$(nproc) prepare
           else
             make -j$(nproc) prepare
           fi
