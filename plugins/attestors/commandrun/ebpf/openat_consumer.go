@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -347,6 +348,34 @@ func Open() (*Consumer, error) {
 				fmt.Fprintf(os.Stderr,
 					"cilock-ebpf: skipping program %q per CILOCK_BPF_SKIP_PROGRAMS\n",
 					name)
+			}
+		}
+	}
+
+	// Diagnostic mode: try loading each program individually so we
+	// can identify which specific program(s) fail CO-RE relocation
+	// on the current kernel. cilium/ebpf's NewCollection error
+	// doesn't name the failing program; this does. Set
+	// CILOCK_BPF_DIAGNOSE=1 to enable.
+	if os.Getenv("CILOCK_BPF_DIAGNOSE") != "" {
+		fmt.Fprintln(os.Stderr, "cilock-ebpf: BPF_DIAGNOSE — testing each program individually")
+		names := make([]string, 0, len(spec.Programs))
+		for n := range spec.Programs {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			mini := spec.Copy()
+			for n := range mini.Programs {
+				if n != name {
+					delete(mini.Programs, n)
+				}
+			}
+			_, perr := ebpf.NewCollection(mini)
+			if perr != nil {
+				fmt.Fprintf(os.Stderr, "cilock-ebpf: DIAGNOSE FAIL %s: %s\n", name, verboseErr(perr))
+			} else {
+				fmt.Fprintf(os.Stderr, "cilock-ebpf: DIAGNOSE OK   %s\n", name)
 			}
 		}
 	}

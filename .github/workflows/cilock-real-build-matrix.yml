@@ -243,6 +243,7 @@ jobs:
           START=$(date +%s.%N)
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                "CILOCK_BPF_DIAGNOSE=1" \
                 "CILOCK_BPF_SKIP_PROGRAMS=fentry_security_file_open" \
                 "GITHUB_ACTIONS=true" \
                 "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
@@ -260,6 +261,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH:$HOME/.cargo/bin" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                "CILOCK_BPF_DIAGNOSE=1" \
                 "CILOCK_BPF_SKIP_PROGRAMS=fentry_security_file_open" \
                 "GITHUB_ACTIONS=true" \
                 "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
@@ -275,6 +277,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                "CILOCK_BPF_DIAGNOSE=1" \
                 "CILOCK_BPF_SKIP_PROGRAMS=fentry_security_file_open" \
                 "GITHUB_ACTIONS=true" \
                 "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
@@ -290,6 +293,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                "CILOCK_BPF_DIAGNOSE=1" \
                 "CILOCK_BPF_SKIP_PROGRAMS=fentry_security_file_open" \
                 "GITHUB_ACTIONS=true" \
                 "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
@@ -308,6 +312,7 @@ jobs:
           # genuine open/read/write of generated headers.
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                "CILOCK_BPF_DIAGNOSE=1" \
                 "CILOCK_BPF_SKIP_PROGRAMS=fentry_security_file_open" \
                 "GITHUB_ACTIONS=true" \
                 "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
