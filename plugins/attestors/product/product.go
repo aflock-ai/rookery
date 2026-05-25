@@ -467,14 +467,28 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		// has one (the gh binary).
 		raw := probe.TraceOutputs()
 		filtered := make(map[string]attestation.CaptureEntry, len(raw))
+		workdir := ctx.WorkingDir()
 		for path, entry := range raw {
-			if a.compiledIncludeGlob != nil && !a.compiledIncludeGlob.Match(path) {
+			// Trace records mix absolute and relative paths. atomic-
+			// rename builds (Go, Cargo, GCC -o) write to a temp
+			// absolute path then RENAME(2) to the final target —
+			// the rename target is recorded relative to the tracee's
+			// cwd. Resolve relative trace paths against workdir so
+			// the include-glob (always absolute when set from
+			// cilock-action) matches the right surface.
+			resolved := path
+			if workdir != "" && !filepath.IsAbs(resolved) {
+				resolved = filepath.Join(workdir, resolved)
+			}
+			if a.compiledIncludeGlob != nil && !a.compiledIncludeGlob.Match(resolved) {
 				continue
 			}
-			if a.compiledExcludeGlob != nil && a.compiledExcludeGlob.Match(path) {
+			if a.compiledExcludeGlob != nil && a.compiledExcludeGlob.Match(resolved) {
 				continue
 			}
-			filtered[path] = entry
+			// Use resolved as the map key so downstream (mime detect,
+			// digest hash, exists-at-exit stat) sees the real path.
+			filtered[resolved] = entry
 		}
 		a.products = fromCaptureEntries(filtered, a.requireExistsAtExit)
 		return a.buildTree()
