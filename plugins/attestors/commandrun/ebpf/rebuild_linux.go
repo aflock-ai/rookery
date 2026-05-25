@@ -90,14 +90,18 @@ func rebuildBPFAgainstHostKernel() ([]byte, error) {
 		return nil, fmt.Errorf("write vmlinux.h: %w", werr)
 	}
 
-	// Pick the target-arch define from the Go arch (not uname -m so
-	// cross-arch QEMU runs do the right thing).
-	var archDef string
+	// Pick the target-arch define and multi-arch include from the Go
+	// arch (not uname -m so cross-arch QEMU runs do the right thing).
+	// The multi-arch include matters because libbpf-dev installs
+	// bpf/bpf_helpers.h under /usr/include/<triple>-linux-gnu/.
+	var archDef, multiarchInc string
 	switch runtime.GOARCH {
 	case "amd64":
 		archDef = "-D__TARGET_ARCH_x86"
+		multiarchInc = "/usr/include/x86_64-linux-gnu"
 	case "arm64":
 		archDef = "-D__TARGET_ARCH_arm64"
+		multiarchInc = "/usr/include/aarch64-linux-gnu"
 	default:
 		return nil, fmt.Errorf("unsupported GOARCH %q for BPF rebuild", runtime.GOARCH)
 	}
@@ -108,6 +112,7 @@ func rebuildBPFAgainstHostKernel() ([]byte, error) {
 		"-target", "bpf",
 		archDef,
 		"-I", dir,
+		"-I", multiarchInc,
 		"-c", srcPath,
 		"-o", objPath,
 	)
