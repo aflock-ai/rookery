@@ -223,19 +223,20 @@ func (r *CommandRun) preStartTracingSetup() error {
 	//
 	// V2 attestation-correctness pivot: read-tap is OFF by default.
 	//
-	// Read-tap stays disabled until openat and read-tap events live in
-	// separate ringbufs. On a shared 1 GB ringbuf the kernel-compile
-	// capstone produced ~11M read-tap events that evicted ~9M openat
-	// events — including the linker's open of vmlinux. Less correct
-	// attestation overall, not more.
-	//
-	// The race-tight dispatcher-side fd capture above gives us the
-	// stronger correctness today: we hold the inode via /proc/<pid>/fd/<fd>
-	// at openat time, so the bytes we hash are the bytes the kernel
-	// will hand the tracee on read. The remaining gap is concurrent
-	// mutation by a separate writer between our hash and the tracee's
-	// read — narrow, and adversarial-workload-only. Closing it via
-	// read-tap requires separate ringbufs first.
+	// Read-tap is enabled by default now that classification-critical
+	// events (openat, execve, fileOps) live in their own ringbuf — the
+	// high-volume read-tap chunks can no longer evict them. Read-tap
+	// gives us the strictly stronger correctness: we hash exactly the
+	// bytes the kernel returned to the tracee on read(), not the
+	// bytes that happened to be on disk at openat-event-time. The
+	// openat-time path-hash (via the capture pool) remains as the
+	// fallback for files where read-tap didn't complete the full read
+	// before the tracee exited.
+	if err := consumer.EnableReadTap(); err != nil {
+		log.Debugf("(ebpf) read-tap unavailable (%v); falling back to openat-time path hash", err)
+	} else {
+		log.Debugf("(ebpf) read-tap enabled (default)")
+	}
 	r.ebpfConsumer = consumer
 	return nil
 }

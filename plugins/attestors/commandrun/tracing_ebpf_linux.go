@@ -303,6 +303,80 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// fallbackFailures total can be honestly explained, not handwaved.
 	var hashSilentByDigest, hashSilentByDedup atomic.Uint64
 
+	// V2 Phase 6/8: two-ringbuf architecture. The BPF program emits
+	// classification-critical events (openat, execve, fileOps, etc.)
+	// to the `events` ringbuf, and high-volume read-tap chunks to a
+	// separate `read_tap_events` ringbuf. Each ringbuf is drained by
+	// its OWN goroutine into evCh; the dispatcher reads only from
+	// evCh, so it sees a single merged event stream while neither
+	// reader can starve the other.
+	//
+	// Buffer size: large enough to absorb a burst from either reader
+	// without blocking them. 64K events × ~280B = ~18 MB worst-case.
+	evCh := make(chan *ebpf.Event, 64*1024)
+
+	var readerWG sync.WaitGroup
+	// Main events reader: openat / execve / fileOps / security /
+	// write / network / close. NEVER allowed to starve.
+	readerWG.Add(1)
+	go func() {
+		defer readerWG.Done()
+		for {
+			ev, err := consumer.Read()
+			if err != nil {
+				if ebpf.IsFlushedError(err) || errors.Is(err, os.ErrClosed) {
+					return
+				}
+				select {
+				case <-stopCh:
+					return
+				default:
+				}
+				log.Debugf("(ebpf) events-ringbuf read transient error (skipping): %v", err)
+				continue
+			}
+			select {
+			case evCh <- ev:
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+	// Read-tap reader: ONLY runs if the BPF object exported the
+	// read_tap_events map. Older builds may not have it.
+	if consumer.HasReadTap() {
+		readerWG.Add(1)
+		go func() {
+			defer readerWG.Done()
+			for {
+				ev, err := consumer.ReadReadTap()
+				if err != nil {
+					if ebpf.IsFlushedError(err) || errors.Is(err, os.ErrClosed) {
+						return
+					}
+					select {
+					case <-stopCh:
+						return
+					default:
+					}
+					log.Debugf("(ebpf) read_tap-ringbuf read transient error (skipping): %v", err)
+					continue
+				}
+				select {
+				case evCh <- ev:
+				case <-stopCh:
+					return
+				}
+			}
+		}()
+	}
+	// Closer goroutine: once both readers exit (Flush or stopCh),
+	// close evCh so the dispatcher's for-range terminates.
+	go func() {
+		readerWG.Wait()
+		close(evCh)
+	}()
+
 	var consumerWG sync.WaitGroup
 	consumerWG.Add(1)
 	go func() {
@@ -339,40 +413,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 			}
 		}()
 
-		for {
-			select {
-			case <-stopCh:
-				return
-			default:
-			}
-			ev, err := consumer.Read()
-			if err != nil {
-				// V2 Phase 8 fix: don't exit on TRANSIENT errors —
-				// decode errors from one malformed event would kill
-				// the whole dispatcher and lose every subsequent
-				// event. This was the actual cause of the ~50% deep-
-				// fork-chain flake: under high event volume, an
-				// occasional ringbuf record with unexpected layout
-				// triggered decodeEvent failure → dispatcher exit →
-				// every event after that lost.
-				//
-				// ONLY exit on ErrFlushed (intentional shutdown) and
-				// ringbuf-closed sentinels.
-				select {
-				case <-stopCh:
-					return
-				default:
-				}
-				if ebpf.IsFlushedError(err) {
-					return
-				}
-				if errors.Is(err, os.ErrClosed) {
-					return
-				}
-				// Anything else: skip this event, keep going.
-				log.Debugf("(ebpf) consumer read transient error (skipping): %v", err)
-				continue
-			}
+		for ev := range evCh {
 			readTotal.Add(1)
 
 			// Dispatch on event type.

@@ -270,17 +270,30 @@ type SecurityEvent struct {
 //go:embed bpf/openat_kprobe.bpf.o
 var bpfObjBytes []byte
 
-// Consumer owns a loaded BPF program + attached kprobe + ringbuf reader.
+// Consumer owns a loaded BPF program + attached kprobe + ringbuf readers.
+//
+// Two ringbufs:
+//   - reader (the `events` ringbuf): classification-critical events.
+//     openat / execve / fileOps / security / write / network / close.
+//     Caller drains via Read(); single-consumer guarantee.
+//   - readTapReader (the `read_tap_events` ringbuf): V1.4 read-tap
+//     chunk records. High-volume; isolated so it can't evict
+//     classification events under load.
+//
+// Caller drains both in parallel goroutines (each ringbuf has its
+// own Read method) and multiplexes Events into a single dispatcher.
 type Consumer struct {
-	coll           *ebpf.Collection
-	links          []link.Link
-	reader         *ringbuf.Reader
-	readRec        ringbuf.Record // reused across Read() calls (single consumer)
-	watchedPids    *ebpf.Map      // BPF_MAP_TYPE_HASH: pid -> 1
-	filterFlag     *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte
-	rootParentTgid *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: u32
-	readTapFlag    *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte (V1.4 read-tap)
-	ringbufDrops   *ebpf.Map      // BPF_MAP_TYPE_PERCPU_ARRAY[2]: u64 drop counters
+	coll              *ebpf.Collection
+	links             []link.Link
+	reader            *ringbuf.Reader
+	readRec           ringbuf.Record // reused across Read() calls (single consumer)
+	readTapReader     *ringbuf.Reader
+	readTapRec        ringbuf.Record // reused across ReadReadTap() calls
+	watchedPids       *ebpf.Map      // BPF_MAP_TYPE_HASH: pid -> 1
+	filterFlag        *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte
+	rootParentTgid    *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: u32
+	readTapFlag       *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte (V1.4 read-tap)
+	ringbufDrops      *ebpf.Map      // BPF_MAP_TYPE_PERCPU_ARRAY[2]: u64 drop counters
 }
 
 // Open loads the embedded BPF object, attaches kprobes for the
@@ -445,6 +458,17 @@ func Open() (*Consumer, error) {
 		return nil, fmt.Errorf("ringbuf reader: %w", err)
 	}
 	c.reader = r
+
+	// read_tap_events ringbuf: only present when the BPF object
+	// includes V1.4 read-tap. Older builds may not export it.
+	if rtMap, ok := coll.Maps["read_tap_events"]; ok {
+		rt, err := ringbuf.NewReader(rtMap)
+		if err != nil {
+			_ = c.Close()
+			return nil, fmt.Errorf("read_tap_events ringbuf reader: %w", err)
+		}
+		c.readTapReader = rt
+	}
 
 	watched, ok := coll.Maps["watched_pids"]
 	if !ok {
@@ -828,6 +852,40 @@ func (c *Consumer) Read() (*Event, error) {
 	return decodeEvent(c.readRec.RawSample)
 }
 
+// ReadReadTap blocks until the next read-tap chunk event is
+// available on the read_tap_events ringbuf, then decodes it.
+// Returns the same errors as Read() (os.ErrDeadlineExceeded after a
+// SetReadDeadline; ringbuf.ErrFlushed after Flush()).
+//
+// Single-consumer guarantee per ringbuf: callers must drain
+// read_tap_events from a SEPARATE goroutine than the one draining
+// `events` via Read(). The returned Event.ReadChunk.Data points into
+// readTapRec's reusable backing buffer; consume before the next call.
+//
+// Returns (nil, ErrReadTapUnavailable) if the BPF object didn't
+// export read_tap_events (e.g. older builds without V1.4).
+func (c *Consumer) ReadReadTap() (*Event, error) {
+	if c.readTapReader == nil {
+		return nil, ErrReadTapUnavailable
+	}
+	if err := c.readTapReader.ReadInto(&c.readTapRec); err != nil {
+		return nil, err
+	}
+	return decodeEvent(c.readTapRec.RawSample)
+}
+
+// HasReadTap reports whether the BPF object exposed the
+// read_tap_events ringbuf. Callers gate their second consumer
+// goroutine on this.
+func (c *Consumer) HasReadTap() bool {
+	return c != nil && c.readTapReader != nil
+}
+
+// ErrReadTapUnavailable is returned by ReadReadTap when the BPF
+// object did not include the read_tap_events ringbuf map. Callers
+// should not spawn the second consumer goroutine in this case.
+var ErrReadTapUnavailable = fmt.Errorf("read_tap_events ringbuf not present in BPF object")
+
 // decodeEvent dispatches a raw ring-buffer record on its leading
 // event_type field (first 4 bytes, little-endian).
 func decodeEvent(raw []byte) (*Event, error) {
@@ -1091,12 +1149,23 @@ func (c *Consumer) SetReadDeadline(t time.Time) error {
 // Flush unblocks any in-flight Read so it returns pending records
 // followed by ringbuf.ErrFlushed. Use this during shutdown: after
 // c.Wait() returns, call Flush() so the consumer goroutine drains
-// queued events and then exits cleanly.
+// queued events and then exits cleanly. Flushes BOTH ringbufs.
 func (c *Consumer) Flush() error {
-	if c == nil || c.reader == nil {
+	if c == nil {
 		return nil
 	}
-	return c.reader.Flush()
+	var firstErr error
+	if c.reader != nil {
+		if err := c.reader.Flush(); err != nil {
+			firstErr = err
+		}
+	}
+	if c.readTapReader != nil {
+		if err := c.readTapReader.Flush(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // IsFlushedError reports whether err is the sentinel returned by
@@ -1118,6 +1187,10 @@ func (c *Consumer) Close() error {
 	if c.reader != nil {
 		_ = c.reader.Close()
 		c.reader = nil
+	}
+	if c.readTapReader != nil {
+		_ = c.readTapReader.Close()
+		c.readTapReader = nil
 	}
 	if c.coll != nil {
 		c.coll.Close()

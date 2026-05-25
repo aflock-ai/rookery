@@ -261,26 +261,38 @@ struct net_event {
     char  addr[32];        // sockaddr_in/in6/un (connect/bind)
 };
 
-// Ring buffer for ALL event types. 256 MB — sized to absorb the
-// peak burst from a 4-core parallel Go build with read-tap on
-// (~200 MB/sec ingress for short windows). At 64 MB we still saw
-// ~12K drops; 256 MB + proactive userspace backpressure should
-// drive that to zero.
+// `events` ringbuf — classification-critical events (openat,
+// execve, fileOps, security syscalls). 256 MB. This stream is
+// small per-event and low-rate, so 256 MB is plenty even on
+// parallel kernel builds; defconfig measured peak fill <30 MB.
 //
-// memlock rlimit is removed at consumer Open() via cilium/ebpf's
-// rlimit.RemoveMemlock helper — 256 MB allocation succeeds on any
-// host with CAP_BPF.
+// CRITICAL: this ringbuf must stay drainable at all times — drops
+// here mean we lose openat/execve events, which means missing
+// files in OpenedFiles. To guarantee that, the high-volume
+// read-tap chunk events live in their OWN ringbuf below.
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    // 1 GB ringbuf. Linux kernel tinyconfig builds emit ~330MB of
-    // read-chunk events in a 35-second window (~10 MB/s avg, with
-    // peaks much higher); 256 MB was insufficient and dropped
-    // ~21k events. 1 GB absorbs the peak burst without drops. The
-    // memlock rlimit is uncapped at consumer Open() via
-    // rlimit.RemoveMemlock — the allocation succeeds on any
-    // CAP_BPF-capable host with reasonable free RAM.
-    __uint(max_entries, 1024 * 1024 * 1024);
+    __uint(max_entries, 256 * 1024 * 1024);
 } events SEC(".maps");
+
+// `read_tap_events` ringbuf — V1.4 read-tap chunk events ONLY.
+// 1 GB. Read-tap emits one event per read() syscall (16 KB chunks),
+// so heavy workloads (kernel compile) emit ~10M events / hundreds
+// of MB. Splitting these into their own ringbuf means:
+//   - classification events in `events` can never be evicted by
+//     read-tap volume
+//   - userspace can choose to enable/disable read-tap based on
+//     workload character without affecting `events` sizing
+//   - either ringbuf can be drained by its own goroutine
+//     (userspace dispatcher reads both in parallel)
+//
+// memlock rlimit is removed at consumer Open() via cilium/ebpf's
+// rlimit.RemoveMemlock helper — 1 GB allocation succeeds on any
+// host with CAP_BPF and reasonable free RAM.
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 1024 * 1024 * 1024);
+} read_tap_events SEC(".maps");
 
 // Drop counters — every bpf_ringbuf_output that returns < 0 is
 // counted here. Userspace can read this to surface drop rates.
@@ -1321,10 +1333,11 @@ emit_read_chunk(long ret)
         if (n == 0 || n > READ_CHUNK_BYTES) break;
 
         struct read_chunk_event *ev =
-            bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
+            bpf_ringbuf_reserve(&read_tap_events, sizeof(*ev), 0);
         if (!ev) {
             bump_drop(DROP_BUCKET_READTAP);
-            break; // ringbuf full; partial digest in userspace
+            break; // read-tap ringbuf full; partial digest in userspace.
+                   // `events` ringbuf is unaffected — classification stays intact.
         }
 
         fill_hdr(&ev->hdr, EVT_READ_CHUNK, cur_pid, cur_tgid, cur_ppid);
