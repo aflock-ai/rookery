@@ -68,14 +68,22 @@ func rebuildBPFAgainstHostKernel() ([]byte, error) {
 
 	// vmlinux.h matched to the running kernel.
 	vmlinuxPath := filepath.Join(dir, "vmlinux.h")
-	out, err := exec.Command("sudo", bpftool, "btf", "dump", "file",
-		"/sys/kernel/btf/vmlinux", "format", "c").Output()
+	fmt.Fprintf(os.Stderr, "cilock-ebpf: using bpftool at %s\n", bpftool)
+	dumpStderr := &strings.Builder{}
+	dumpCmd := exec.Command("sudo", bpftool, "btf", "dump", "file",
+		"/sys/kernel/btf/vmlinux", "format", "c")
+	dumpCmd.Stderr = dumpStderr
+	out, err := dumpCmd.Output()
 	if err != nil {
 		// Try without sudo (when already root or btf is world-readable).
-		out, err = exec.Command(bpftool, "btf", "dump", "file",
-			"/sys/kernel/btf/vmlinux", "format", "c").Output()
+		dumpStderr2 := &strings.Builder{}
+		dumpCmd2 := exec.Command(bpftool, "btf", "dump", "file",
+			"/sys/kernel/btf/vmlinux", "format", "c")
+		dumpCmd2.Stderr = dumpStderr2
+		out, err = dumpCmd2.Output()
 		if err != nil {
-			return nil, fmt.Errorf("bpftool btf dump: %w", err)
+			return nil, fmt.Errorf("bpftool (%s) btf dump: %w; sudo-stderr: %q; nosudo-stderr: %q",
+				bpftool, err, dumpStderr.String(), dumpStderr2.String())
 		}
 	}
 	if werr := os.WriteFile(vmlinuxPath, out, 0o644); werr != nil {
@@ -111,16 +119,16 @@ func rebuildBPFAgainstHostKernel() ([]byte, error) {
 }
 
 // findBpftool returns a usable bpftool path. /usr/sbin/bpftool on
-// Ubuntu is a wrapper that demands a kernel-version-matched
-// linux-tools-*-azure package which isn't always installed; prefer
-// the standalone bpftool package or the explicit /usr/lib/linux-tools
-// candidates.
+// Ubuntu is a STUB wrapper that demands a kernel-version-matched
+// linux-tools-*-azure package — it exits 2 with "WARNING: bpftool
+// not found for kernel ..." when that package isn't installed,
+// which is the common case on Microsoft Azure-flavored hosted
+// runners. Prefer the explicit /usr/lib/linux-tools/*/bpftool
+// binaries (shipped by linux-tools-generic) and the snap install
+// over the PATH lookup.
 func findBpftool() (string, error) {
 	candidates := []string{}
-	if p, err := exec.LookPath("bpftool"); err == nil {
-		candidates = append(candidates, p)
-	}
-	// Glob common standalone install locations.
+	// Try real bpftool binaries first.
 	for _, pat := range []string{
 		"/usr/lib/linux-tools/*/bpftool",
 		"/usr/lib/linux-tools-*/bpftool",
@@ -129,10 +137,14 @@ func findBpftool() (string, error) {
 		matches, _ := filepath.Glob(pat)
 		candidates = append(candidates, matches...)
 	}
+	// PATH last (might point to the kernel-version-checking wrapper).
+	if p, err := exec.LookPath("bpftool"); err == nil {
+		candidates = append(candidates, p)
+	}
 	for _, c := range candidates {
 		if fi, err := os.Stat(c); err == nil && fi.Mode().IsRegular() {
 			return c, nil
 		}
 	}
-	return "", fmt.Errorf("bpftool not found on PATH or in /usr/lib/linux-tools (install: apt install -y bpftool linux-tools-generic)")
+	return "", fmt.Errorf("bpftool not found in /usr/lib/linux-tools or on PATH (install: apt install -y linux-tools-generic)")
 }
