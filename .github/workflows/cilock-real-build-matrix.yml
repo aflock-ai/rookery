@@ -74,37 +74,16 @@ jobs:
         with:
           go-version: '1.26'
 
-      # The checked-in .bpf.o was built on arm64 (vmlinux.h is arm64,
-      # so every PT_REGS_PARM_CORE_SYSCALL in the x64 programs emits
-      # arm64 register access — fails CO-RE on x86_64 kernels). Rebuild
-      # against the runner's actual kernel BTF before embedding.
-      - name: Rebuild BPF object for runner arch + kernel
+      # rookery now auto-rebuilds the .bpf.o at runtime when the
+      # embedded one fails CO-RE (rebuild_linux.go in
+      # plugins/attestors/commandrun/ebpf/). We just need clang +
+      # bpftool + libbpf-dev installed on the runner — rookery handles
+      # the rest. This is what end users get via cilock-action.
+      - name: Install BPF build deps (clang/bpftool/libbpf-dev)
         if: inputs.use_release == ''
         run: |
-          set -euxo pipefail
           sudo apt-get update -qq
-          # `bpftool` (standalone) is in Ubuntu 22.04+ and doesn't need
-          # the kernel-version-matched linux-tools-* package. The
-          # /usr/sbin/bpftool wrapper requires a matching kernel pkg
-          # which Microsoft's azure-flavored runners don't always have.
-          sudo apt-get install -y -qq clang llvm bpftool libbpf-dev || \
-            sudo apt-get install -y -qq clang llvm linux-tools-generic libbpf-dev
-          BPFTOOL=$(command -v bpftool)
-          # The wrapper at /usr/sbin/bpftool prints "WARNING ... not
-          # found for kernel". If we got the wrapper, prefer the
-          # snap/dpkg-installed real binary.
-          for cand in /usr/lib/linux-tools/*/bpftool /usr/lib/linux-tools-*/bpftool /snap/bin/bpftool; do
-            if [ -x "$cand" ]; then BPFTOOL="$cand"; break; fi
-          done
-          echo "bpftool=$BPFTOOL"
-          "$BPFTOOL" version || true
-          cd plugins/attestors/commandrun/ebpf/bpf
-          sudo "$BPFTOOL" btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
-          echo "first 5 lines of regenerated vmlinux.h:"
-          head -5 vmlinux.h
-          grep -E "^struct pt_regs \{" -A4 vmlinux.h | head -6
-          make clean && make
-          file openat_kprobe.bpf.o
+          sudo apt-get install -y -qq clang llvm bpftool libbpf-dev
 
       - name: Build cilock from source
         if: inputs.use_release == ''
@@ -275,9 +254,7 @@ jobs:
           START=$(date +%s.%N)
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-                "CILOCK_BPF_DIAGNOSE=1" \
-                "CILOCK_BPF_SKIP_PROGRAMS=fentry_security_file_open" \
-                "GITHUB_ACTIONS=true" \
+                                "GITHUB_ACTIONS=true" \
                 "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
                 "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- go build .
@@ -293,9 +270,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH:$HOME/.cargo/bin" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-                "CILOCK_BPF_DIAGNOSE=1" \
-                "CILOCK_BPF_SKIP_PROGRAMS=fentry_security_file_open" \
-                "GITHUB_ACTIONS=true" \
+                                "GITHUB_ACTIONS=true" \
                 "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
                 "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- cargo build --release
@@ -309,9 +284,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-                "CILOCK_BPF_DIAGNOSE=1" \
-                "CILOCK_BPF_SKIP_PROGRAMS=fentry_security_file_open" \
-                "GITHUB_ACTIONS=true" \
+                                "GITHUB_ACTIONS=true" \
                 "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
                 "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- npm install --no-fund --no-audit
@@ -325,9 +298,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-                "CILOCK_BPF_DIAGNOSE=1" \
-                "CILOCK_BPF_SKIP_PROGRAMS=fentry_security_file_open" \
-                "GITHUB_ACTIONS=true" \
+                                "GITHUB_ACTIONS=true" \
                 "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
                 "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- python3 -m pip install --target ./vendor -r requirements.txt
@@ -344,9 +315,7 @@ jobs:
           # genuine open/read/write of generated headers.
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-                "CILOCK_BPF_DIAGNOSE=1" \
-                "CILOCK_BPF_SKIP_PROGRAMS=fentry_security_file_open" \
-                "GITHUB_ACTIONS=true" \
+                                "GITHUB_ACTIONS=true" \
                 "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
                 "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- make -j$(nproc) prepare

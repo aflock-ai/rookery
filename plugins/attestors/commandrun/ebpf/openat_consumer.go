@@ -290,6 +290,16 @@ type SecurityEvent struct {
 //go:embed bpf/openat_kprobe.bpf.o
 var bpfObjBytes []byte
 
+// Embed the BPF source too so we can rebuild on the target kernel if
+// the pre-built .bpf.o fails CO-RE. The checked-in .bpf.o is built
+// against whatever vmlinux.h the maintainer had locally (typically
+// macOS-arm64 via colima), which fails on x86_64 GHA hosted runners.
+// The rebuild path needs clang + bpftool + libbpf-dev on PATH;
+// cilock-action's shim installs them on first run.
+//
+//go:embed bpf/openat_kprobe.bpf.c
+var bpfSrcBytes []byte
+
 // Consumer owns a loaded BPF program + attached kprobe + ringbuf readers.
 //
 // Two ringbufs:
@@ -332,16 +342,14 @@ func Open() (*Consumer, error) {
 	// in our release was built against whichever vmlinux.h the maintainer
 	// had locally, so it can fail CO-RE relocation on a kernel with
 	// different struct/field layouts (notably the Azure-flavored
-	// hosted-runner kernels). cilock-action installs clang+bpftool on
-	// the runner, regenerates vmlinux.h from /sys/kernel/btf/vmlinux,
-	// rebuilds the .bpf.o, and points us at it via this env var.
+	// hosted-runner kernels).
 	bpfBytes := bpfObjBytes
 	if p := os.Getenv("CILOCK_BPF_OBJECT_PATH"); p != "" {
 		b, rerr := os.ReadFile(p)
 		if rerr != nil {
 			return nil, fmt.Errorf("read CILOCK_BPF_OBJECT_PATH=%s: %w", p, rerr)
 		}
-		fmt.Fprintf(os.Stderr, "cilock-ebpf: using runtime-built BPF object from %s (%d bytes)\n", p, len(b))
+		fmt.Fprintf(os.Stderr, "cilock-ebpf: using BPF object from %s (%d bytes)\n", p, len(b))
 		bpfBytes = b
 	}
 
@@ -349,6 +357,13 @@ func Open() (*Consumer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load BPF spec: %w", err)
 	}
+
+	// Rebuild-on-CO-RE-failure: try the embedded .bpf.o first; if it
+	// poisons (kernel BTF mismatch), rebuild from the embedded source
+	// against /sys/kernel/btf/vmlinux. Auto-on unless explicitly off
+	// via CILOCK_BPF_REBUILD=off. Requires clang + bpftool + libbpf
+	// headers on the runner — cilock-action's shim installs them.
+	tryRebuild := os.Getenv("CILOCK_BPF_REBUILD") != "off" && os.Getenv("CILOCK_BPF_OBJECT_PATH") == ""
 
 	// Programs that depend on kernel features which may not exist /
 	// not be allowlisted on every kernel. We attempt-attach them
@@ -415,6 +430,34 @@ func Open() (*Consumer, error) {
 	}
 
 	coll, err := ebpf.NewCollection(spec)
+	if err != nil && tryRebuild && looksLikeCOREFailure(err) {
+		// First attempt failed with the CO-RE poison pattern (typically:
+		// shipped .bpf.o was built for a different arch / against a
+		// different kernel BTF than the runner has). Try rebuilding from
+		// the embedded source against /sys/kernel/btf/vmlinux.
+		fmt.Fprintf(os.Stderr,
+			"cilock-ebpf: embedded BPF object failed CO-RE — attempting to rebuild from embedded source\n")
+		rebuilt, rerr := rebuildBPFAgainstHostKernel()
+		if rerr != nil {
+			return nil, fmt.Errorf("instantiate BPF: %s\nalso failed to rebuild from source: %v",
+				verboseErr(err), rerr)
+		}
+		spec2, srerr := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(rebuilt))
+		if srerr != nil {
+			return nil, fmt.Errorf("rebuilt BPF object failed to load: %w", srerr)
+		}
+		if kverErr == nil {
+			for _, ps := range spec2.Programs {
+				if ps.Type == ebpf.Kprobe {
+					ps.KernelVersion = kver
+				}
+			}
+		}
+		coll, err = ebpf.NewCollection(spec2)
+		if err == nil {
+			fmt.Fprintln(os.Stderr, "cilock-ebpf: rebuilt BPF object loaded successfully")
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("instantiate BPF: %s", verboseErr(err))
 	}
