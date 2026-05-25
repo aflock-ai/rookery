@@ -1039,6 +1039,18 @@ emit_security(__u32 syscall_nr,
 #define CILOCK_SEC_CLONE3        110
 #define CILOCK_SEC_DUP2          111
 #define CILOCK_SEC_DUP3          112
+// Zero-copy / mmap content-bypass syscalls. These transfer file
+// bytes without firing our read kprobe (which means read-tap can't
+// see the bytes). Flag them via SECURITY events so the verifier
+// knows the attestation may have content gaps for files touched
+// via these paths. Full content capture requires hooks at the
+// vfs_copy_file_range / do_splice / filemap_map_pages level —
+// tracked separately. These syscall-entry hooks are the minimum
+// adversarial coverage so the gap is at least VISIBLE.
+#define CILOCK_SEC_COPY_FILE_RANGE 113
+#define CILOCK_SEC_SPLICE          114
+#define CILOCK_SEC_SENDFILE        115
+#define CILOCK_SEC_MMAP            116
 
 // Note: PT_REGS_PARMn_CORE_SYSCALL reads syscall args 1-based; the
 // emit_security helper takes arg0..arg3 in 0-based order.
@@ -1067,6 +1079,10 @@ DEFINE_SECURITY_KPROBE(finit_module_arm64, "__arm64_sys_finit_module", CILOCK_SE
 DEFINE_SECURITY_KPROBE(clone_arm64,        "__arm64_sys_clone",        CILOCK_SEC_CLONE)
 DEFINE_SECURITY_KPROBE(clone3_arm64,       "__arm64_sys_clone3",       CILOCK_SEC_CLONE3)
 DEFINE_SECURITY_KPROBE(dup3_arm64,         "__arm64_sys_dup3",         CILOCK_SEC_DUP3)
+DEFINE_SECURITY_KPROBE(copy_file_range_arm64, "__arm64_sys_copy_file_range", CILOCK_SEC_COPY_FILE_RANGE)
+DEFINE_SECURITY_KPROBE(splice_arm64,       "__arm64_sys_splice",       CILOCK_SEC_SPLICE)
+DEFINE_SECURITY_KPROBE(sendfile_arm64,     "__arm64_sys_sendfile",     CILOCK_SEC_SENDFILE)
+DEFINE_SECURITY_KPROBE(sendfile64_arm64,   "__arm64_sys_sendfile64",   CILOCK_SEC_SENDFILE)
 
 // x64 set
 DEFINE_SECURITY_KPROBE(ptrace_x64,       "__x64_sys_ptrace",       CILOCK_SEC_PTRACE)
@@ -1082,6 +1098,10 @@ DEFINE_SECURITY_KPROBE(clone_x64,        "__x64_sys_clone",        CILOCK_SEC_CL
 DEFINE_SECURITY_KPROBE(clone3_x64,       "__x64_sys_clone3",       CILOCK_SEC_CLONE3)
 DEFINE_SECURITY_KPROBE(dup2_x64,         "__x64_sys_dup2",         CILOCK_SEC_DUP2)
 DEFINE_SECURITY_KPROBE(dup3_x64,         "__x64_sys_dup3",         CILOCK_SEC_DUP3)
+DEFINE_SECURITY_KPROBE(copy_file_range_x64, "__x64_sys_copy_file_range", CILOCK_SEC_COPY_FILE_RANGE)
+DEFINE_SECURITY_KPROBE(splice_x64,       "__x64_sys_splice",       CILOCK_SEC_SPLICE)
+DEFINE_SECURITY_KPROBE(sendfile_x64,     "__x64_sys_sendfile",     CILOCK_SEC_SENDFILE)
+DEFINE_SECURITY_KPROBE(sendfile64_x64,   "__x64_sys_sendfile64",   CILOCK_SEC_SENDFILE)
 
 // ───── write / pwrite64 ────────────────────────────────────────────
 // write(fd, buf, count) — emit (fd, bytes). High-volume; userspace

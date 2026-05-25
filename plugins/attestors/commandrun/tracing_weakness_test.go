@@ -677,3 +677,100 @@ func summarizeProcessTree(procs []ProcessInfo) string {
 	}
 	return b.String()
 }
+
+// zeroCopyCSource — a C program that uses copy_file_range(2) to move
+// bytes from input to output without firing read/write kprobes. If
+// the BPF kprobes on __ARCH_sys_copy_file_range fire, a SyscallEvent
+// surfaces in the captured trace.
+const zeroCopyCSource = `
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/sendfile.h>
+#include <sys/syscall.h>
+#include <errno.h>
+
+int main(int argc, char **argv) {
+    if (argc != 3) { fprintf(stderr, "usage: %s <src> <dst>\n", argv[0]); return 1; }
+    int in_fd = open(argv[1], O_RDONLY);
+    if (in_fd < 0) { perror("open in"); return 1; }
+    int out_fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out_fd < 0) { perror("open out"); return 1; }
+    // Use copy_file_range explicitly via the syscall to make sure we
+    // exercise the kprobe — glibc may translate user-facing calls
+    // through different paths.
+    off_t off_in = 0, off_out = 0;
+    ssize_t n = syscall(SYS_copy_file_range, in_fd, &off_in, out_fd, &off_out, (size_t)1024*1024, 0u);
+    if (n < 0) {
+        // Fall back to sendfile if copy_file_range isn't supported.
+        off_in = 0;
+        n = sendfile(out_fd, in_fd, &off_in, 1024*1024);
+        if (n < 0) { perror("sendfile"); close(in_fd); close(out_fd); return 1; }
+        fprintf(stderr, "used sendfile (n=%zd)\n", n);
+    } else {
+        fprintf(stderr, "used copy_file_range (n=%zd)\n", n);
+    }
+    close(in_fd);
+    close(out_fd);
+    return 0;
+}
+`
+
+// TestWeakness_ZeroCopySyscall_Surfaced asserts that a tracee using
+// copy_file_range (or sendfile fallback) is flagged in the
+// attestation via a SyscallEvent. The content of the copied bytes
+// won't be in read-tap (no read syscall fires), so the attestation
+// MUST tell the verifier "this build moved bytes via zero-copy IO;
+// product digests for that path come from openat-time hash only."
+func TestWeakness_ZeroCopySyscall_Surfaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
+	t.Setenv(EnvVarTraceMode, "ebpf")
+	skipIfNoEBPFCaps(t)
+
+	dir := t.TempDir()
+	bin := compileC(t, dir, "zero_copy", zeroCopyCSource)
+
+	// Create source content for the copy.
+	src := filepath.Join(dir, "src.bin")
+	dst := filepath.Join(dir, "dst.bin")
+	payload := []byte("ZERO-COPY-WITNESS-PAYLOAD-NOT-VIA-READ-WRITE\n")
+	for len(payload) < 16384 {
+		payload = append(payload, payload...) // grow to exercise the syscall
+	}
+	if err := os.WriteFile(src, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	procs := runUnderEBPF(t, []string{bin, src, dst})
+
+	// Look for a SyscallEvent flagging the zero-copy syscall.
+	wantSyscalls := []string{"copy_file_range", "splice", "sendfile"}
+	hit := ""
+	for _, p := range procs {
+		for _, ev := range p.SyscallEvents {
+			for _, w := range wantSyscalls {
+				if strings.Contains(strings.ToLower(ev.Syscall), w) {
+					hit = w
+					break
+				}
+			}
+			if hit != "" {
+				break
+			}
+		}
+		if hit != "" {
+			break
+		}
+	}
+	if hit == "" {
+		t.Errorf("zero-copy syscall NOT captured as SyscallEvent — content-bypass attestation gap is invisible.\nprocs:\n%s",
+			summarizeProcessTree(procs))
+	} else {
+		t.Logf("zero-copy syscall captured: %s", hit)
+	}
+}

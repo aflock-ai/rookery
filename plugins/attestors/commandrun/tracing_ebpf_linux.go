@@ -1347,8 +1347,12 @@ func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent) SyscallEvent {
 		secFinitModule = 108
 		secClone       = 109
 		secClone3      = 110
-		secDup2        = 111
-		secDup3        = 112
+		secDup2            = 111
+		secDup3            = 112
+		secCopyFileRange   = 113
+		secSplice          = 114
+		secSendfile        = 115
+		secMmap            = 116
 	)
 	nr := ev.SyscallNr
 	switch nr {
@@ -1457,6 +1461,46 @@ func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent) SyscallEvent {
 			Syscall: "dup2",
 			Detail:  fmt.Sprintf("redirected fd %d to %s — possible reverse-shell pattern (verify fd source)", oldFD, target),
 			Args:    []int{oldFD, newFD},
+		}
+	case secCopyFileRange:
+		// copy_file_range(fd_in, off_in, fd_out, off_out, len, flags).
+		// Zero-copy intra-FS copy — bytes move kernel-side without
+		// firing our read kprobe. Read-tap can't see them. Surface so
+		// the verifier knows: any output file produced via this call
+		// has its CONTENT digest derived from the openat-time hash
+		// or read-tap on OTHER reads, NOT from the bytes moved here.
+		// Args[0..3] are fd_in, off_in, fd_out, off_out; len + flags
+		// are beyond the 4-arg SecurityEvent capture window.
+		return SyscallEvent{
+			Syscall: "copy_file_range",
+			Detail:  fmt.Sprintf("zero-copy file range fd_in=%d → fd_out=%d — content bypasses read-tap; verify product digest via openat-time hash", ev.Args[0], ev.Args[2]),
+			Args:    []int{int(ev.Args[0]), int(ev.Args[2])},
+		}
+	case secSplice:
+		// splice(fd_in, off_in, fd_out, off_out, len, flags). Used by
+		// `tar`, `cat`-with-pipes, modern HTTP servers. Same content-
+		// bypass risk as copy_file_range.
+		return SyscallEvent{
+			Syscall: "splice",
+			Detail:  fmt.Sprintf("zero-copy splice fd_in=%d → fd_out=%d — content bypasses read-tap", ev.Args[0], ev.Args[2]),
+			Args:    []int{int(ev.Args[0]), int(ev.Args[2])},
+		}
+	case secSendfile:
+		// sendfile(out_fd, in_fd, offset, count). HTTP servers,
+		// `cp --reflink=auto`, in-kernel data movement.
+		return SyscallEvent{
+			Syscall: "sendfile",
+			Detail:  fmt.Sprintf("zero-copy sendfile in_fd=%d → out_fd=%d count=%d — content bypasses read-tap", ev.Args[1], ev.Args[0], ev.Args[3]),
+			Args:    []int{int(ev.Args[1]), int(ev.Args[0]), int(ev.Args[3])},
+		}
+	case secMmap:
+		// mmap with MAP_SHARED and PROT_READ on a file fd — reads
+		// happen via page faults, no read syscall. Not yet hooked
+		// at BPF level (planned via security_file_open sleepable LSM).
+		// Placeholder for when that lands.
+		return SyscallEvent{
+			Syscall: "mmap",
+			Detail:  "file mmap — read bypass not yet covered by read-tap",
 		}
 	}
 	return SyscallEvent{}
