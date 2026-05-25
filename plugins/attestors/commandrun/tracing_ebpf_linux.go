@@ -1494,13 +1494,26 @@ func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent) SyscallEvent {
 			Args:    []int{int(ev.Args[1]), int(ev.Args[0]), int(ev.Args[3])},
 		}
 	case secMmap:
-		// mmap with MAP_SHARED and PROT_READ on a file fd — reads
-		// happen via page faults, no read syscall. Not yet hooked
-		// at BPF level (planned via security_file_open sleepable LSM).
-		// Placeholder for when that lands.
+		// File-backed mmap with PROT_READ: tracee can read bytes via
+		// page faults without firing our read kprobe. The openat-time
+		// path-hash IS recorded but a TOCTOU window exists between
+		// openat and the page fault. Surface so the verifier can
+		// treat the digest for this file as TOCTOU-suspect.
+		//
+		// Args layout: a0=prot, a1=flags, a2=fd, a3=0.
+		prot := ev.Args[0]
+		flags := ev.Args[1]
+		fd := int(ev.Args[2])
+		shared := (flags & 0x1) != 0 // MAP_SHARED
+		mapping := "MAP_PRIVATE"
+		if shared {
+			mapping = "MAP_SHARED"
+		}
 		return SyscallEvent{
 			Syscall: "mmap",
-			Detail:  "file mmap — read bypass not yet covered by read-tap",
+			Detail: fmt.Sprintf("file mmap fd=%d prot=0x%x %s — reads bypass read-tap; openat-time hash digests this file with TOCTOU window",
+				fd, prot, mapping),
+			Args: []int{fd, int(prot), int(flags)},
 		}
 	}
 	return SyscallEvent{}

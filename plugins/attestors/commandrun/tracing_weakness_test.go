@@ -774,3 +774,79 @@ func TestWeakness_ZeroCopySyscall_Surfaced(t *testing.T) {
 		t.Logf("zero-copy syscall captured: %s", hit)
 	}
 }
+
+// mmapReadCSource — opens a regular file with O_RDONLY, mmaps it
+// with PROT_READ + MAP_PRIVATE, reads bytes via the mapping (no
+// read() syscall). The BPF kprobe on __ARCH_sys_mmap should fire
+// with prot=PROT_READ + a real fd and surface as a SyscallEvent.
+const mmapReadCSource = `
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+
+int main(int argc, char **argv) {
+    if (argc != 2) { fprintf(stderr, "usage: %s <path>\n", argv[0]); return 1; }
+    int fd = open(argv[1], O_RDONLY);
+    if (fd < 0) { perror("open"); return 1; }
+    struct stat st;
+    if (fstat(fd, &st) < 0) { perror("fstat"); close(fd); return 1; }
+    void *p = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (p == MAP_FAILED) { perror("mmap"); close(fd); return 1; }
+    // Force a page-fault read by touching the first and last byte.
+    volatile char first = ((char*)p)[0];
+    volatile char last  = ((char*)p)[st.st_size - 1];
+    (void)first; (void)last;
+    munmap(p, st.st_size);
+    close(fd);
+    return 0;
+}
+`
+
+// TestWeakness_MmapRead_Surfaced asserts a tracee that uses mmap to
+// read a file (no read() syscall) gets flagged via SyscallEvent so
+// verifiers know read-tap didn't see the bytes — the openat-time
+// hash is the authoritative digest, with a TOCTOU window.
+func TestWeakness_MmapRead_Surfaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
+	t.Setenv(EnvVarTraceMode, "ebpf")
+	skipIfNoEBPFCaps(t)
+
+	dir := t.TempDir()
+	bin := compileC(t, dir, "mmap_read", mmapReadCSource)
+
+	target := filepath.Join(dir, "mmap-witness.bin")
+	content := []byte("MMAP-READ-WITNESS-PAYLOAD-DOES-NOT-FIRE-READ-SYSCALL\n")
+	for len(content) < 4096 {
+		content = append(content, content...)
+	}
+	if err := os.WriteFile(target, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	procs := runUnderEBPF(t, []string{bin, target})
+
+	hit := false
+	for _, p := range procs {
+		for _, ev := range p.SyscallEvents {
+			if strings.ToLower(ev.Syscall) == "mmap" {
+				hit = true
+				t.Logf("mmap captured: %s", ev.Detail)
+				break
+			}
+		}
+		if hit {
+			break
+		}
+	}
+	if !hit {
+		t.Errorf("mmap-read NOT captured as SyscallEvent — page-fault content bypass invisible.\nprocs:\n%s",
+			summarizeProcessTree(procs))
+	}
+}

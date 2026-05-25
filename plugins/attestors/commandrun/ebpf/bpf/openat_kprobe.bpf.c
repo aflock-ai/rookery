@@ -1114,6 +1114,45 @@ DEFINE_SECURITY_KPROBE(splice_arm64,       "__arm64_sys_splice",       CILOCK_SE
 DEFINE_SECURITY_KPROBE(sendfile_arm64,     "__arm64_sys_sendfile",     CILOCK_SEC_SENDFILE)
 DEFINE_SECURITY_KPROBE(sendfile64_arm64,   "__arm64_sys_sendfile64",   CILOCK_SEC_SENDFILE)
 
+// mmap(addr, length, prot, flags, fd, offset) — 6 args, the macro
+// only reads 4 PARM slots so we hand-roll. Only flag file-backed
+// read mappings (fd >= 0, !MAP_ANONYMOUS) — anonymous mmaps don't
+// touch file content and are irrelevant for the read-tap gap.
+//
+// On a file-backed mmap with PROT_READ the tracee can read bytes
+// via page faults WITHOUT firing our read kprobe. The openat-time
+// path-hash is the authoritative digest, but with a TOCTOU window:
+// the file may change on disk between openat and the mmap fault.
+// Surface so verifiers know to treat the digest as TOCTOU-suspect.
+#define MAP_ANONYMOUS_FLAG 0x20
+#define PROT_READ_FLAG     0x1
+
+SEC("kprobe/__arm64_sys_mmap")
+int BPF_KPROBE(kprobe_mmap_arm64, struct pt_regs *regs)
+{
+    __u64 prot  = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    __u64 flags = (__u64)PT_REGS_PARM4_CORE_SYSCALL(regs);
+    __u64 fd    = (__u64)PT_REGS_PARM5_CORE_SYSCALL(regs);
+    if ((flags & MAP_ANONYMOUS_FLAG) != 0) return 0;
+    if ((prot & PROT_READ_FLAG) == 0) return 0;
+    if ((__s64)fd < 0) return 0;
+    emit_security(CILOCK_SEC_MMAP, prot, flags, fd, 0);
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_mmap")
+int BPF_KPROBE(kprobe_mmap_x64, struct pt_regs *regs)
+{
+    __u64 prot  = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    __u64 flags = (__u64)PT_REGS_PARM4_CORE_SYSCALL(regs);
+    __u64 fd    = (__u64)PT_REGS_PARM5_CORE_SYSCALL(regs);
+    if ((flags & MAP_ANONYMOUS_FLAG) != 0) return 0;
+    if ((prot & PROT_READ_FLAG) == 0) return 0;
+    if ((__s64)fd < 0) return 0;
+    emit_security(CILOCK_SEC_MMAP, prot, flags, fd, 0);
+    return 0;
+}
+
 // x64 set
 DEFINE_SECURITY_KPROBE(ptrace_x64,       "__x64_sys_ptrace",       CILOCK_SEC_PTRACE)
 DEFINE_SECURITY_KPROBE(memfd_create_x64, "__x64_sys_memfd_create", CILOCK_SEC_MEMFD_CREATE)

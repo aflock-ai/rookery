@@ -773,6 +773,7 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_dup2_x64", "kprobe_dup3_x64",
 				"kprobe_copy_file_range_x64", "kprobe_splice_x64",
 				"kprobe_sendfile_x64", "kprobe_sendfile64_x64",
+				"kprobe_mmap_x64",
 				// V2 Phase 8 primary fork hook (Tetragon pattern):
 				// kprobe/wake_up_new_task fires when child task_struct
 				// is fully set up but before the child runs. Hereditary
@@ -809,6 +810,7 @@ func archKprobeNames() ([]string, []string) {
 				"__x64_sys_dup2", "__x64_sys_dup3",
 				"__x64_sys_copy_file_range", "__x64_sys_splice",
 				"__x64_sys_sendfile", "__x64_sys_sendfile64",
+				"__x64_sys_mmap",
 				"wake_up_new_task",
 				"__x64_sys_clone", "__x64_sys_clone3",
 				"__x64_sys_vfork", "__x64_sys_fork",
@@ -833,6 +835,7 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_dup3_arm64",
 				"kprobe_copy_file_range_arm64", "kprobe_splice_arm64",
 				"kprobe_sendfile_arm64", "kprobe_sendfile64_arm64",
+				"kprobe_mmap_arm64",
 				// V2 Phase 8 primary fork hook (kernel-internal, arch-neutral).
 				"kprobe_wake_up_new_task",
 				// V2 fork-watch belt:
@@ -857,6 +860,7 @@ func archKprobeNames() ([]string, []string) {
 				"__arm64_sys_dup3",
 				"__arm64_sys_copy_file_range", "__arm64_sys_splice",
 				"__arm64_sys_sendfile", "__arm64_sys_sendfile64",
+				"__arm64_sys_mmap",
 				"wake_up_new_task",
 				"__arm64_sys_clone", "__arm64_sys_clone3",
 				"__arm64_sys_read", "__arm64_sys_read",
