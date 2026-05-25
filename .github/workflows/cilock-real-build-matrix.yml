@@ -87,8 +87,8 @@ jobs:
           # the kernel-version-matched linux-tools-* package. The
           # /usr/sbin/bpftool wrapper requires a matching kernel pkg
           # which Microsoft's azure-flavored runners don't always have.
-          sudo apt-get install -y -qq clang llvm bpftool || \
-            sudo apt-get install -y -qq clang llvm linux-tools-generic
+          sudo apt-get install -y -qq clang llvm bpftool libbpf-dev || \
+            sudo apt-get install -y -qq clang llvm linux-tools-generic libbpf-dev
           BPFTOOL=$(command -v bpftool)
           # The wrapper at /usr/sbin/bpftool prints "WARNING ... not
           # found for kernel". If we got the wrapper, prefer the
