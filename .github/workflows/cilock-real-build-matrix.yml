@@ -78,7 +78,7 @@ jobs:
         if: inputs.use_release == ''
         run: |
           cd cilock
-          go build -o /tmp/cilock-bin ./
+          go build -o /tmp/cilock-bin ./cmd/cilock
           sudo install -m 0755 /tmp/cilock-bin /usr/local/bin/cilock
           cilock version
 
