@@ -111,6 +111,19 @@ func DefaultCachePatterns() map[string]struct{} {
 		"**/cmake-build-*/**":    {},
 		"**/.deps/**":            {}, // automake dependency tracking
 
+		// ─── Kbuild (Linux kernel build) ───
+		// .cmd files are Kbuild's per-object dependency tracking
+		// (one per .o); a defconfig produces ~25,000 of them, all
+		// write-once-never-read in a clean build. Currently the
+		// dominant source of misclassified "products" — without
+		// this rule defconfig reports ~5,700 products, of which
+		// ~5,000+ are these .cmd files.
+		"**/.*.cmd":      {}, // .foo.o.cmd, .built-in.a.cmd, .modules.order.cmd, ...
+		"**/.tmp_*/**":   {}, // Kbuild per-link-stage temp dirs (modpost, vmlinux.tmp)
+		"**/.tmp_*.[oa]": {}, // Kbuild temp .o / .a (e.g. .tmp_kallsyms1.o)
+		"**/.*.d":        {}, // gcc -MD per-file dependency files (raw form)
+		"**/.config.old": {}, // Kbuild's previous-config backup
+
 		// ─── Container / Docker / Bazel ───
 		"**/.docker/buildx/cache/**": {},
 		"**/bazel-out/**":            {},

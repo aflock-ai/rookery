@@ -198,24 +198,43 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// in-kernel map in sync as new descendants are observed.
 	watched := newWatchedSet(c.Process.Pid)
 
-	// openatCh feeds the hasher pool. Non-openat events (execve, fileOps,
-	// security) go straight through recordEBPF<type> which is cheap.
-	// openatCh queues (ev, capturedFile) pairs for the hasher pool.
-	// Sized big enough to absorb a full kernel-compile burst so the
-	// dispatcher never blocks on send — blocking the dispatcher =
-	// blocking the ringbuf reader = ringbuf drops.
+	// Two-stage pipeline between the BPF ringbuf consumer and the
+	// hasher pool: the consumer enqueues events to captureCh; the
+	// capture pool opens /proc/<pid>/fd/<fd> in parallel (the time-
+	// critical step that must happen before the tracee exits); the
+	// hasher pool then computes the digest from the captured file.
 	//
-	// V2 race-tight capture: the dispatcher CAPTURES /proc/<pid>/fd/<fd>
-	// on event arrival (microseconds after the tracee's openat returns),
-	// holding the inode alive via the captured os.File. The worker
-	// then hashes from the captured file at its leisure — even if the
-	// tracee unlinks the file or exits, the inode lives until we close.
+	// Why two pools, not one: os.Open on /proc/<pid>/fd/<fd> is fast
+	// (microseconds) but must happen as soon as possible after the
+	// tracee's openat — otherwise the fd is gone. Hashing is slow
+	// (milliseconds, bandwidth-bound). Mixing them in one pool means
+	// either (a) too few workers → openat-time backlog → tracee exits
+	// before capture, or (b) too many workers → contention everywhere.
+	// Splitting them lets each pool size for its own bottleneck.
+	//
+	// Why not inline capture in the dispatcher: tried, dropped 9M
+	// openat events on defconfig. The single ringbuf consumer can't
+	// drain at the kernel's emit rate while doing os.Open per event.
+	//
+	// captureCh and openatCh are deeply buffered (1M each) so neither
+	// pool's slow moments can backpressure the dispatcher.
 	type pendingHash struct {
 		ev   *ebpf.OpenatEvent
-		file *os.File // captured /proc/<pid>/fd/<fd>; nil = capture skipped (write-only/path-only)
+		file *os.File // captured /proc/<pid>/fd/<fd>; nil = capture skipped (write-only/path-only) or failed
 		stat os.FileInfo
 	}
-	openatCh := make(chan *pendingHash, 1024*1024)
+	// captureCh items carry zero held resources (just the event), so
+	// it's safe to buffer deeply — absorbs dispatcher burst without
+	// blocking the ringbuf consumer.
+	captureCh := make(chan *pendingHash, 1024*1024)
+	// openatCh items each hold ONE open file descriptor (the captured
+	// /proc/<pid>/fd/<fd>). Bounded conservatively so the queue alone
+	// can't push the process past its fd ulimit when the hasher pool
+	// runs slower than the capturer pool. 512 + ~32 in-flight capturers
+	// + baseline cilock fds (~150) leaves headroom under the typical
+	// 1024 soft limit. Capturers block on send when full; consumer
+	// stays unblocked because captureCh has its own 1M buffer.
+	openatCh := make(chan *pendingHash, 512)
 
 	// V2: there is no per-close "fallback" channel. The hasher pool
 	// runs HashOpenatEvent at openat-time for every read-capable
@@ -288,7 +307,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	consumerWG.Add(1)
 	go func() {
 		defer consumerWG.Done()
-		defer close(openatCh)
+		defer close(captureCh)
 
 		// End-of-trace finalize: any (pid, fd) state we still hold
 		// represents tracees that exited with fds open. The hasher
@@ -466,23 +485,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 						}
 					}
 				}
-				// Dispatcher MUST stay microsecond-per-event to drain the
-				// ringbuf at the kernel's emit rate. Inline fd capture
-				// (open /proc/<pid>/fd/<fd>) added milliseconds per
-				// event and dropped 9M openat events on a defconfig
-				// kernel build. The capture happens later in the hasher
-				// pool — which loses the race against fast-exiting
-				// toolchain processes — until the parallel capture
-				// pool (task #116) lands. That pool will sit between
-				// dispatcher and hasher, doing the os.Open in parallel
-				// before the tracee exits without blocking the consumer.
+				// Hand off to the parallel capture pool. Consumer stays
+				// microsecond-per-event; capturers do os.Open in
+				// parallel before the tracee can exit.
 				ph := &pendingHash{ev: ev.Openat}
 				select {
-				case openatCh <- ph:
+				case captureCh <- ph:
 				case <-stopCh:
-					if ph.file != nil {
-						_ = ph.file.Close()
-					}
 					return
 				}
 			case ev.Execve != nil:
@@ -652,6 +661,60 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				// tracee read.
 			}
 		}
+	}()
+
+	// Capture pool: pulls events from captureCh and opens
+	// /proc/<pid>/fd/<fd> in parallel before the tracee can close
+	// the fd. The captured *os.File holds the inode alive; the
+	// hasher pool can then read at its own pace even if the tracee
+	// has unlinked the file or exited.
+	//
+	// Sized generously (NumCPU*8) because each capturer is I/O-
+	// bound on a fast kernel path — most of its wall time is the
+	// open syscall and a Stat. Higher parallelism shrinks the
+	// queue-latency window between BPF emit and our open.
+	captureWorkers := runtime.NumCPU() * 8
+	if captureWorkers < 16 {
+		captureWorkers = 16
+	}
+	var captureWG sync.WaitGroup
+	var captureAttempts, captureSucceeded atomic.Uint64
+	for i := 0; i < captureWorkers; i++ {
+		captureWG.Add(1)
+		go func() {
+			defer captureWG.Done()
+			for ph := range captureCh {
+				ev := ph.ev
+				// Only capture for read-capable opens with a valid
+				// fd. Failed openats (fd<0), write-only, and O_PATH
+				// pass through with file=nil — the hasher handles
+				// those without needing a held fd.
+				if ev.FD >= 0 && !ev.IsWriteOnly() && !ev.IsPathOnly() {
+					captureAttempts.Add(1)
+					if f, err := ebpf.CaptureFileForLaterHash(ev.PID, ev.FD); err == nil && f != nil {
+						ph.file = f
+						if st, ferr := f.Stat(); ferr == nil {
+							ph.stat = st
+						}
+						captureSucceeded.Add(1)
+					}
+				}
+				select {
+				case openatCh <- ph:
+				case <-stopCh:
+					if ph.file != nil {
+						_ = ph.file.Close()
+					}
+					return
+				}
+			}
+		}()
+	}
+	// Close openatCh once the capture pool drains (after captureCh
+	// is closed by the consumer's defer).
+	go func() {
+		captureWG.Wait()
+		close(openatCh)
 	}()
 
 	// Hasher pool: parallel hashing of files referenced by openat
@@ -827,9 +890,10 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	}
 	pctx.exitCode = r.ExitCode
 
-	log.Debugf("(ebpf) trace complete: read=%d matched=%d other=%d hashed=%d toctou-suspect=%d errors=%d",
+	log.Debugf("(ebpf) trace complete: read=%d matched=%d other=%d hashed=%d toctou-suspect=%d errors=%d capture-attempts=%d capture-succeeded=%d",
 		readTotal.Load(), matchedTotal.Load(), otherTotal.Load(),
-		hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load())
+		hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load(),
+		captureAttempts.Load(), captureSucceeded.Load())
 	if v := os.Getenv("CILOCK_EBPF_DEBUG"); v == "1" {
 		fmt.Fprintf(os.Stderr,
 			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d "+
@@ -846,6 +910,23 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		return pctx.procInfoArray(), fmt.Errorf("exit status %v", pctx.exitCode)
 	}
 	return pctx.procInfoArray(), nil
+}
+
+// digestSetsEqual returns true when two DigestSets carry the same
+// (algorithm, digest) pairs. Used to detect mid-build file mutation:
+// the same path opened twice in the same process producing different
+// digests signals an adversarial or build-script-driven content
+// change between the opens.
+func digestSetsEqual(a, b cryptoutil.DigestSet) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, va := range a {
+		if vb, ok := b[k]; !ok || vb != va {
+			return false
+		}
+	}
+	return true
 }
 
 // RecordOutcome reports how recordEBPFOpenat dispositioned a hash
@@ -886,8 +967,15 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 	}
 
 	// Digest write rules:
-	//   - TOCTOUStable: we have a verified digest; store it (overwrites
-	//     any prior entry).
+	//   - TOCTOUStable: we have a verified digest. Store it on first
+	//     observation. On subsequent observations, if the digest
+	//     matches the stored one, no-op. If it DIFFERS, the file was
+	//     mutated between the two opens — keep the FIRST digest (the
+	//     bytes the tracee saw earlier are what we attest) and surface
+	//     a SyscallEvent so verifiers can find the divergence.
+	//     Silently overwriting would lose the signal that the file
+	//     changed during the build, which is exactly the adversarial
+	//     case attestation must catch.
 	//   - TOCTOUSuspect: stat mismatched during hash but we have bytes;
 	//     store the suspect digest ONLY if no prior stable digest
 	//     exists. A transient suspect read shouldn't clobber a clean
@@ -906,6 +994,20 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 	//     fork tree, etc.) still reflects that something happened.
 	switch res.Status {
 	case ebpf.TOCTOUStable:
+		if existing, ok := procInfo.OpenedFiles[res.Path]; ok && existing != nil {
+			if !digestSetsEqual(existing, res.Digest) {
+				// MID-BUILD MUTATION: same path produced two different
+				// stable digests in the same process. Surface to the
+				// verifier via SyscallEvents; keep the first digest.
+				procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+					Syscall:   "openat",
+					Detail:    fmt.Sprintf("TOCTOU-mutation: same path, different digest on second open (path=%s)", res.Path),
+					Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				})
+			}
+			// Either equal (no-op) or different (kept first). Do not overwrite.
+			break
+		}
 		procInfo.OpenedFiles[res.Path] = res.Digest
 	case ebpf.TOCTOUSuspect:
 		if existing := procInfo.OpenedFiles[res.Path]; existing == nil {

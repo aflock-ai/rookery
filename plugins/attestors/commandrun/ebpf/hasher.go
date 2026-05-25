@@ -87,12 +87,36 @@ type HashResult struct {
 // the caller can short-circuit without an attestation entry.
 // Returns (file, nil) on success; caller MUST close the file.
 // Returns (nil, err) on real errors (process gone, permission).
+//
+// Refuses to return a handle to a non-regular file. /proc/<pid>/fd/<fd>
+// can resolve to a pipe, socket, fifo, character device, or block
+// device, especially if the tracee's openat referenced a path like
+// /dev/stdin (→ inherited pipe) or if there's an fd-reuse race with
+// the tracee swapping the fd to a pipe after openat. Reading such a
+// captured handle would drain bytes the tracee was waiting for —
+// exactly what broke the kernel-build syncconfig earlier. We stat
+// the just-opened fd and abort if it's not a regular file. The
+// caller treats `(nil, nil)` here as "no capture; let the slow path
+// produce an UnhashedOpens entry with a reason."
 func CaptureFileForLaterHash(pid uint32, fd int32) (*os.File, error) {
 	if fd < 0 {
 		return nil, nil
 	}
 	fdPath := fmt.Sprintf("/proc/%d/fd/%d", pid, fd)
-	return os.Open(fdPath) //nolint:gosec // G304: /proc/<pid>/fd/<fd>, by-design read
+	f, err := os.Open(fdPath) //nolint:gosec // G304: /proc/<pid>/fd/<fd>, by-design read
+	if err != nil {
+		return nil, err
+	}
+	st, ferr := f.Stat()
+	if ferr != nil {
+		_ = f.Close()
+		return nil, ferr
+	}
+	if !st.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil
+	}
+	return f, nil
 }
 
 // HashCapturedFile hashes a previously-captured os.File (from
