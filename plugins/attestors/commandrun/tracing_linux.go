@@ -231,10 +231,31 @@ func applyTraceePrivilegeDrop(c *exec.Cmd) {
 	}
 	// AmbientCaps left at the zero value — child will not inherit
 	// any of cilock's elevated capabilities through the ambient set.
-	// The bounding set is unchanged (child could re-raise via setuid
-	// to a cap-set binary), but the no-new-privs follow-up will close
-	// that vector once Go exposes PR_SET_NO_NEW_PRIVS in SysProcAttr.
 	c.SysProcAttr.AmbientCaps = nil
+
+	// PR_SET_NO_NEW_PRIVS via setpriv(1) prefix. setpriv is part of
+	// util-linux and present on every modern Linux distro. Calling
+	// prctl(PR_SET_NO_NEW_PRIVS, 1) before exec makes a setuid /
+	// file-capability binary fail to elevate. Closes the
+	// "compromised toolchain re-escalates via setuid /bin/su" vector.
+	//
+	// We wrap the original command rather than re-exec'ing cilock
+	// because (a) Go stdlib doesn't expose PR_SET_NO_NEW_PRIVS in
+	// SysProcAttr, (b) setpriv is well-tested + battle-hardened,
+	// (c) wrapping is more transparent to the verifier (the
+	// argv shows what was wrapped).
+	//
+	// Skipped (with log) when setpriv isn't on PATH — older /
+	// minimal images.
+	if setpriv, err := exec.LookPath("setpriv"); err == nil {
+		newArgs := make([]string, 0, len(c.Args)+3)
+		newArgs = append(newArgs, setpriv, "--no-new-privs", "--")
+		newArgs = append(newArgs, c.Args...)
+		c.Path = setpriv
+		c.Args = newArgs
+	} else {
+		log.Debugf("(tracee-priv-drop) setpriv not in PATH; PR_SET_NO_NEW_PRIVS not applied")
+	}
 }
 
 // preStartTracingSetup is invoked from runCmd BEFORE c.Start(). For

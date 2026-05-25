@@ -301,7 +301,7 @@ jobs:
           # verifies.
           tar -xzf dist/cilock-${{ steps.version.outputs.version }}-linux-amd64.tar.gz -C /tmp/
           chmod +x /tmp/cilock
-          /tmp/cilock --version
+          /tmp/cilock version
 
       - name: Generate VSA for each platform
         # VSA depends on per-platform .attestation.json. When the

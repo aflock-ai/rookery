@@ -118,7 +118,7 @@ func TestTraceeRunsUnprivileged(t *testing.T) {
 		t.Fatalf("parse SUDO_UID: %v", err)
 	}
 
-	c := exec.Command("/bin/sh", "-c", `id -u && grep '^CapEff:' /proc/self/status`)
+	c := exec.Command("/bin/sh", "-c", `id -u && grep -E '^(CapEff|NoNewPrivs):' /proc/self/status`)
 	var out bytes.Buffer
 	c.Stdout = &out
 	c.Stderr = &out
@@ -128,7 +128,7 @@ func TestTraceeRunsUnprivileged(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if len(lines) < 2 {
-		t.Fatalf("expected 2 lines of output (uid, CapEff), got %q", out.String())
+		t.Fatalf("expected at least 2 lines of output (uid, CapEff/NoNewPrivs), got %q", out.String())
 	}
 	gotUid, err := strconv.ParseUint(strings.TrimSpace(lines[0]), 10, 32)
 	if err != nil {
@@ -137,20 +137,39 @@ func TestTraceeRunsUnprivileged(t *testing.T) {
 	if gotUid != wantUid {
 		t.Errorf("tracee uid: got %d, want %d (SUDO_UID); parent did not downgrade", gotUid, wantUid)
 	}
-	// CapEff: 0000000000000000 means no effective caps. Anything
-	// non-zero means the tracee can perform privileged ops.
-	capLine := strings.TrimSpace(lines[1])
-	const prefix = "CapEff:"
-	if !strings.HasPrefix(capLine, prefix) {
-		t.Fatalf("expected CapEff line, got %q", capLine)
+	// Walk remaining lines for CapEff + NoNewPrivs.
+	var capVal uint64
+	var nnp int
+	sawCap := false
+	sawNNP := false
+	for _, ln := range lines[1:] {
+		ln = strings.TrimSpace(ln)
+		switch {
+		case strings.HasPrefix(ln, "CapEff:"):
+			sawCap = true
+			capHex := strings.TrimSpace(strings.TrimPrefix(ln, "CapEff:"))
+			capVal, err = strconv.ParseUint(capHex, 16, 64)
+			if err != nil {
+				t.Fatalf("parse CapEff %q: %v", capHex, err)
+			}
+		case strings.HasPrefix(ln, "NoNewPrivs:"):
+			sawNNP = true
+			v := strings.TrimSpace(strings.TrimPrefix(ln, "NoNewPrivs:"))
+			nnp, _ = strconv.Atoi(v)
+		}
 	}
-	capHex := strings.TrimSpace(strings.TrimPrefix(capLine, prefix))
-	capVal, err := strconv.ParseUint(capHex, 16, 64)
-	if err != nil {
-		t.Fatalf("parse CapEff %q: %v", capHex, err)
+	if !sawCap {
+		t.Errorf("expected CapEff line in output: %q", out.String())
 	}
 	if capVal != 0 {
 		t.Errorf("tracee CapEff = 0x%x, want 0 — parent's caps leaked into child via ambient/inheritable set", capVal)
 	}
-	fmt.Println("tracee priv-drop OK; uid:", gotUid, "CapEff: 0x0")
+	if !sawNNP {
+		t.Logf("NoNewPrivs line absent (older kernel?); skipping NNP assertion")
+	} else if nnp != 1 {
+		// Soft fail — log only. Without setpriv on PATH the wrapper
+		// is skipped (documented in applyTraceePrivilegeDrop).
+		t.Logf("NoNewPrivs=%d (expected 1 when setpriv is on PATH and applied)", nnp)
+	}
+	fmt.Println("tracee priv-drop OK; uid:", gotUid, "CapEff: 0x0 NoNewPrivs:", nnp)
 }
