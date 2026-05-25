@@ -16,6 +16,7 @@ package lockfiles
 
 import (
 	"crypto"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +26,11 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 const (
 	Name    = "lockfiles"
@@ -57,6 +62,7 @@ func init() {
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return NewLockfilesAttestor()
 	})
+	detection.Register(Name, detectorYAML)
 }
 
 func NewLockfilesAttestor() attestation.Attestor {

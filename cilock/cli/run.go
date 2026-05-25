@@ -24,6 +24,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
@@ -270,6 +271,15 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 			log.Errorf("tree sidecar write failed; `cilock prove` will not work against this attestation until the sidecar is regenerated: %v", err)
 			fmt.Fprintf(os.Stderr, "error: tree sidecar write failed: %v\n", err)
 		}
+		// Shadow-mode detection: emit <outfile>.detection.json with the
+		// pre-gate plan. This is informational only — it does NOT change
+		// which attestors fired in this run. Verifiers may inspect the
+		// sidecar to see what cilock *would* have auto-selected. Errors
+		// are non-fatal for the same reason as above: the signed
+		// attestation is the real artifact.
+		if err := emitDetectionSidecar(ro.OutFilePath, args); err != nil {
+			log.Debugf("detection sidecar emit failed (non-fatal): %v", err)
+		}
 	}
 
 	// Return the deferred attestor error (e.g. secretscan fail-on-detection)
@@ -278,6 +288,64 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 		return runErr
 	}
 	return nil
+}
+
+// emitDetectionSidecar computes the pre-gate detection plan against
+// the wrapped command's argv + current process env + working dir, and
+// writes it as <outfile>.detection.json. The sidecar is informational
+// only — it documents what cilock's auto-detection *would* have fired
+// for this invocation, independent of which attestors actually ran in
+// this run.
+//
+// Shadow-mode by design: the sidecar adds zero behavioral change to
+// the existing run. Verifiers and LLM consumers can read it; ignore-
+// it-completely is also fine. Once cilock run --auto lands, the
+// same plan will drive which attestors actually fire.
+func emitDetectionSidecar(outfile string, args []string) error {
+	if len(args) == 0 {
+		// Plan-without-command is meaningless; nothing to evaluate.
+		return nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get cwd: %w", err)
+	}
+	env := make(map[string]string, 64)
+	for _, kv := range os.Environ() {
+		eq := indexByte(kv, '=')
+		if eq < 0 {
+			continue
+		}
+		env[kv[:eq]] = kv[eq+1:]
+	}
+	plan := detection.RunPrePlan(detection.PrePlan{
+		Argv: args,
+		Env:  env,
+		Cwd:  cwd,
+	})
+	rec := detection.RecommendTrace(detection.Default(), plan)
+	envelope := map[string]any{
+		"schema_version":       "cilock.detection/v0.1-shadow",
+		"plan":                 plan,
+		"trace_recommendation": rec,
+	}
+	bytes, err := json.MarshalIndent(envelope, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := outfile + ".detection.json"
+	return os.WriteFile(path, bytes, 0o600)
+}
+
+// indexByte is a tiny stdlib-free helper so we don't pull strings.IndexByte
+// in just for this. Kept inline because it's clearer than fanning out.
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
 }
 
 // emitRunSidecars walks the attestor list looking for product and

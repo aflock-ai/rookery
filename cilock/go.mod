@@ -24,6 +24,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/git => ../plugins/attesto
 
 replace github.com/aflock-ai/rookery/plugins/attestors/github => ../plugins/attestors/github
 
+replace github.com/aflock-ai/rookery/plugins/attestors/github-review => ../plugins/attestors/github-review
+
 replace github.com/aflock-ai/rookery/plugins/attestors/githubaction => ../plugins/attestors/githubaction
 
 replace github.com/aflock-ai/rookery/plugins/attestors/githubwebhook => ../plugins/attestors/githubwebhook

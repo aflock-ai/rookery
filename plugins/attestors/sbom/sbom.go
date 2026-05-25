@@ -16,6 +16,7 @@ package sbom
 
 import (
 	"crypto"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,11 +25,15 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
 	"github.com/invopop/jsonschema"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 // sbomSubjectExtractor parses the minimal field surface (per the SPDX 2.3 and
 // CycloneDX 1.6 public specs) needed to derive subject names. These structs
@@ -87,6 +92,7 @@ func init() {
 			},
 		),
 	)
+	detection.Register(Name, detectorYAML)
 }
 
 type Option func(*SBOMAttestor)

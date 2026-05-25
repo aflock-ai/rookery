@@ -1,0 +1,24 @@
+apiVersion: cilock.detection/v0.1
+name: test-results
+description: "Captures JUnit XML test reports and CTRF JSON reports produced by test runners (go test -junit, pytest, jest, gradle, surefire, etc.)."
+
+category: [artifact-scan]
+
+upstream:
+  name: JUnit XML + CTRF JSON
+  source: "https://github.com/testmoapp/junitxml  +  https://ctrf.io"
+  license: OASIS / community
+  vendor: JUnit / CTRF community
+  format_only: true
+
+recommended_trace: "off"
+
+post:
+  match:
+    any_of:
+      - product_glob: ["junit*.xml", "**/junit*.xml", "JUnit*.xml", "**/JUnit*.xml"]
+      - product_glob: ["TEST-*.xml", "**/TEST-*.xml"]
+      - product_glob: ["ctrf-report.json", "**/ctrf-report.json", "ctrf.json", "**/ctrf.json"]
+
+llm_hints:
+  on_match: "Test results captured. Suite/case counts and pass/fail/skip outcomes preserved."
