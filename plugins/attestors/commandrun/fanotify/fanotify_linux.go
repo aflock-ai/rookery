@@ -131,6 +131,19 @@ type Handler struct {
 //
 // CAP_SYS_ADMIN is required; without it FanotifyInit returns EPERM
 // and the caller must cope.
+//
+// markPath is the primary path (typically the build workingdir).
+// Additional paths whose filesystems the build is likely to read
+// from — system libs, the Go/Rust/Python toolchains under
+// /opt/hostedtoolcache on GHA, the user's $HOME, /usr, /lib — are
+// marked automatically. Without these extra marks fanotify only
+// sees opens on the workingdir's filesystem (tmpfs in our typical
+// smoke), and any /opt/hostedtoolcache read counts as an unhashed
+// open. Smoke run 26421741975 hit this on hello-go: 10 unhashed
+// opens, all in /opt/hostedtoolcache/go/.../bin/go and friends.
+//
+// FAN_MARK_FILESYSTEM dedupes per-filesystem — marking 5 paths
+// that all live on / is a single in-kernel filesystem-mark.
 func New(markPath string) (*Handler, error) {
 	if markPath == "" {
 		return nil, errors.New("fanotify: empty markPath")
@@ -144,25 +157,35 @@ func New(markPath string) (*Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("FanotifyInit: %w", err)
 	}
-	// FAN_MARK_FILESYSTEM covers the entire filesystem the mark point
-	// belongs to. Cheaper than per-file marks; ideal for a build
-	// workspace that lives on one mount.
-	markFlags := uint(unix.FAN_MARK_ADD | unix.FAN_MARK_FILESYSTEM)
 	mask := uint64(unix.FAN_OPEN_PERM)
-	if err := unix.FanotifyMark(fd, markFlags, mask, unix.AT_FDCWD, markPath); err != nil {
-		_ = unix.Close(fd)
-		// Fall back to MOUNT mark if FILESYSTEM isn't supported on
-		// this kernel/FS combination (e.g., virtiofs).
-		fd2, err2 := unix.FanotifyInit(fanFlags, eventFlags)
-		if err2 != nil {
-			return nil, fmt.Errorf("FanotifyInit retry: %w (original: %v)", err2, err)
-		}
-		if err3 := unix.FanotifyMark(fd2, uint(unix.FAN_MARK_ADD|unix.FAN_MARK_MOUNT), mask, unix.AT_FDCWD, markPath); err3 != nil {
-			_ = unix.Close(fd2)
-			return nil, fmt.Errorf("FanotifyMark (both FILESYSTEM and MOUNT failed): mount-err=%v fs-err=%v", err3, err)
-		}
-		fd = fd2
+
+	// Coverage paths. The first one must succeed (it's the build's
+	// own workspace — if we can't watch that, the whole layer is
+	// useless). Subsequent paths are best-effort; a missing path
+	// (e.g., /opt/hostedtoolcache on non-GHA) is fine to skip.
+	primary := []string{markPath}
+	extra := []string{
+		"/",
+		"/usr",
+		"/opt",
+		"/home",
+		"/tmp",
 	}
+
+	if err := markFilesystemOrMount(fd, mask, primary[0]); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("fanotify primary mark on %q: %w", primary[0], err)
+	}
+	for _, p := range extra {
+		if p == markPath {
+			continue
+		}
+		if _, statErr := unix.Stat(p, &unix.Stat_t{}); statErr != nil {
+			continue // path doesn't exist on this system
+		}
+		_ = markFilesystemOrMount(fd, mask, p) // best-effort
+	}
+
 	h := &Handler{
 		fd:            fd,
 		digests:       make(map[string][32]byte),
@@ -170,6 +193,23 @@ func New(markPath string) (*Handler, error) {
 		MaxDigests:    200_000,
 	}
 	return h, nil
+}
+
+// markFilesystemOrMount tries FAN_MARK_FILESYSTEM first (covers the
+// whole filesystem the path lives on — single in-kernel mark covers
+// every file regardless of where the build wanders), falls back to
+// FAN_MARK_MOUNT if FILESYSTEM isn't accepted on this kernel/FS
+// combination (e.g. virtiofs, some overlayfs configurations).
+func markFilesystemOrMount(fd int, mask uint64, path string) error {
+	fsFlags := uint(unix.FAN_MARK_ADD | unix.FAN_MARK_FILESYSTEM)
+	if err := unix.FanotifyMark(fd, fsFlags, mask, unix.AT_FDCWD, path); err == nil {
+		return nil
+	}
+	mntFlags := uint(unix.FAN_MARK_ADD | unix.FAN_MARK_MOUNT)
+	if err := unix.FanotifyMark(fd, mntFlags, mask, unix.AT_FDCWD, path); err != nil {
+		return fmt.Errorf("FanotifyMark on %q: %w", path, err)
+	}
+	return nil
 }
 
 // Probe returns nil if fanotify with FAN_OPEN_PERM is available for
