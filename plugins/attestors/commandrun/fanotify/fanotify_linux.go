@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -43,8 +44,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Stats are the diagnostic counters the dispatcher folds into
-// summary.diagnostics at end-of-trace. Honesty over silent loss.
+// Stats is the snapshot type returned by GetStats. The Handler
+// stores atomic counters internally (statsAtomic) so workers can
+// increment concurrently; GetStats reads them with atomic.Load.
 type Stats struct {
 	EventsReceived    uint64
 	EventsHashed      uint64
@@ -63,6 +65,34 @@ type Stats struct {
 	DigestsCapHit uint64
 }
 
+// statsAtomic holds the live counters mutated by worker goroutines.
+// Snapshot via toStats() (Atomic.Load). All adds use atomic.AddUint64.
+type statsAtomic struct {
+	EventsReceived  atomic.Uint64
+	EventsHashed    atomic.Uint64
+	HashErrors      atomic.Uint64
+	HandlerTimeouts atomic.Uint64
+	BytesHashed     atomic.Uint64
+	MarkFailures    atomic.Uint64
+	UnknownFamily   atomic.Uint64
+	QueueOverflows  atomic.Uint64
+	DigestsCapHit   atomic.Uint64
+}
+
+func (s *statsAtomic) toStats() Stats {
+	return Stats{
+		EventsReceived:  s.EventsReceived.Load(),
+		EventsHashed:    s.EventsHashed.Load(),
+		HashErrors:      s.HashErrors.Load(),
+		HandlerTimeouts: s.HandlerTimeouts.Load(),
+		BytesHashed:     s.BytesHashed.Load(),
+		MarkFailures:    s.MarkFailures.Load(),
+		UnknownFamily:   s.UnknownFamily.Load(),
+		QueueOverflows:  s.QueueOverflows.Load(),
+		DigestsCapHit:   s.DigestsCapHit.Load(),
+	}
+}
+
 // Handler runs the fanotify capture loop. Construct with New, start
 // with Run, query digests via Digests, close via Close.
 //
@@ -79,7 +109,7 @@ type Stats struct {
 type Handler struct {
 	fd       int
 	closed   atomic.Bool
-	stats    atomic.Pointer[Stats]
+	stats    statsAtomic
 	digestMu sync.Mutex
 	digests  map[string][32]byte
 	// Per-event handler budget. Default 2s leaves margin under the
@@ -139,7 +169,6 @@ func New(markPath string) (*Handler, error) {
 		HandlerBudget: 2 * time.Second,
 		MaxDigests:    200_000,
 	}
-	h.stats.Store(&Stats{})
 	return h, nil
 }
 
@@ -168,13 +197,45 @@ func Probe(markPath string) error {
 // Run is the handler loop. It returns when ctx is cancelled or the
 // fanotify fd is closed. Blocking call — caller spawns in a goroutine.
 //
-// Each iteration:
-//  1. Poll for events (with ctx-cancel responsiveness).
-//  2. Read up to 4 KB of events from fd (one read may yield multiple).
-//  3. For each event: open ourselves a fresh fd via dup() to the
-//     event's fd, hash the file, write FAN_ALLOW response.
-//  4. Close the kernel-provided fd.
+// Architecture: one reader goroutine pulls events from the fanotify
+// fd and feeds N worker goroutines via an unbuffered channel. Each
+// worker hashes the file and writes its FAN_ALLOW response. The
+// kernel only requires that EACH response includes the matching
+// event fd — out-of-order responses are valid. Parallelism caps at
+// runtime.NumCPU (min 2, max 16) to bound contention on the
+// response write (sequential under a mutex) and the digests map.
+//
+// Per-event flow:
+//  1. Reader: poll → read events → parse → forward each via chan.
+//  2. Worker: read user's path via /proc/self/fd readlink → fstat
+//     to filter non-regular files → SHA-256 the fd → write
+//     FAN_ALLOW response → close the event fd.
 func (h *Handler) Run(ctx context.Context) error {
+	const workerChanBuffer = 1024
+	workerCount := runtime.NumCPU()
+	if workerCount < 2 {
+		workerCount = 2
+	}
+	if workerCount > 16 {
+		workerCount = 16
+	}
+	work := make(chan unix.FanotifyEventMetadata, workerChanBuffer)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for m := range work {
+				h.handleOne(&m)
+			}
+		}()
+	}
+	defer func() {
+		close(work)
+		wg.Wait()
+	}()
+
 	buf := make([]byte, 4096)
 	pollFds := []unix.PollFd{{Fd: int32(h.fd), Events: unix.POLLIN}}
 	for {
@@ -210,14 +271,16 @@ func (h *Handler) Run(ctx context.Context) error {
 			}
 			return fmt.Errorf("fanotify read: %w", err)
 		}
-		h.processBatch(buf[:n])
+		// Parse + dispatch events to worker pool. Reader stays fast;
+		// workers do the hashing in parallel.
+		h.processBatchToWorkers(buf[:n], work)
 	}
 }
 
-// processBatch walks one read() worth of events. Each event is a
-// FanotifyEventMetadata header followed by (in FID mode) info
-// records. We're in fd mode so each event is exactly Event_len bytes.
-func (h *Handler) processBatch(data []byte) {
+// processBatchToWorkers parses one read()'s worth of events and
+// forwards each to the worker pool. Same parsing as processBatch
+// but writes to a channel instead of handling inline.
+func (h *Handler) processBatchToWorkers(data []byte, work chan<- unix.FanotifyEventMetadata) {
 	const metadataSize = 24
 	for len(data) >= metadataSize {
 		var meta unix.FanotifyEventMetadata
@@ -232,25 +295,25 @@ func (h *Handler) processBatch(data []byte) {
 		if meta.Event_len < metadataSize || int(meta.Event_len) > len(data) {
 			break
 		}
-		h.handleOne(&meta)
+		work <- meta
 		data = data[meta.Event_len:]
 	}
 }
 
 // handleOne processes a single fanotify event and writes the
-// response. Always responds FAN_ALLOW even on hash failure — we're
-// here for attestation, not access control. Closing the event fd
-// is REQUIRED; without it we leak fds and the kernel eventually
-// stalls.
+// response. Thread-safe via atomic counters + digestMu — N workers
+// can call concurrently from the Run loop.
+//
+// Always responds FAN_ALLOW even on hash failure — we're here for
+// attestation, not access control. Closing the event fd is REQUIRED;
+// without it we leak fds and the kernel eventually stalls.
 func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
-	stats := h.loadStats()
-	stats.EventsReceived++
-	defer h.storeStats(stats)
+	h.stats.EventsReceived.Add(1)
 
 	start := time.Now()
 	defer func() {
 		if elapsed := time.Since(start); elapsed > h.HandlerBudget {
-			stats.HandlerTimeouts++
+			h.stats.HandlerTimeouts.Add(1)
 		}
 	}()
 
@@ -259,7 +322,7 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 	// signal that fanotify lost data. The kernel emits this synthetic
 	// event with Fd == FAN_NOFD (a fanotify-specific sentinel = -1).
 	if meta.Mask&unix.FAN_Q_OVERFLOW != 0 {
-		stats.QueueOverflows++
+		h.stats.QueueOverflows.Add(1)
 		// No fd to close, no response to write.
 		return
 	}
@@ -268,7 +331,7 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 	// inode). Allow anyway — we can't hash but the tracee shouldn't
 	// be blocked.
 	if meta.Fd < 0 {
-		stats.UnknownFamily++
+		h.stats.UnknownFamily.Add(1)
 		h.respond(meta.Fd, true)
 		return
 	}
@@ -285,7 +348,7 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 	procPath := fmt.Sprintf("/proc/self/fd/%d", meta.Fd)
 	realPath, lerr := os.Readlink(procPath)
 	if lerr != nil {
-		stats.HashErrors++
+		h.stats.HashErrors.Add(1)
 		h.respond(meta.Fd, true)
 		return
 	}
@@ -303,12 +366,12 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 
 	digest, nBytes, err := hashFD(int(meta.Fd))
 	if err != nil {
-		stats.HashErrors++
+		h.stats.HashErrors.Add(1)
 		h.respond(meta.Fd, true)
 		return
 	}
-	stats.EventsHashed++
-	stats.BytesHashed += uint64(nBytes)
+	h.stats.EventsHashed.Add(1)
+	h.stats.BytesHashed.Add(uint64(nBytes))
 
 	h.digestMu.Lock()
 	if h.MaxDigests > 0 && len(h.digests) >= h.MaxDigests {
@@ -317,7 +380,7 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 		// (still-correct) digest. Re-opens of paths already in the
 		// map are also still updated (write-then-reopen case).
 		if _, existing := h.digests[realPath]; !existing {
-			stats.DigestsCapHit++
+			h.stats.DigestsCapHit.Add(1)
 			h.digestMu.Unlock()
 			h.respond(meta.Fd, true)
 			return
@@ -397,20 +460,9 @@ func (h *Handler) Digests() map[string][32]byte {
 	return out
 }
 
-// Stats returns a snapshot of operational counters.
+// GetStats returns a snapshot of operational counters.
 func (h *Handler) GetStats() Stats {
-	s := h.loadStats()
-	return *s
-}
-
-func (h *Handler) loadStats() *Stats {
-	cur := h.stats.Load()
-	cp := *cur
-	return &cp
-}
-
-func (h *Handler) storeStats(s *Stats) {
-	h.stats.Store(s)
+	return h.stats.toStats()
 }
 
 // Close drops the fanotify mark and closes the fd. Subsequent
