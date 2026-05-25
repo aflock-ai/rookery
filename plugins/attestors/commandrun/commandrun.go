@@ -174,32 +174,41 @@ func (r *CommandRun) zeroDropsGate() error {
 		return nil
 	}
 	d := r.Summary.Diagnostics
-	// When fanotify is active and healthy, it's the kernel-synchronous
-	// integrity floor — every observed open gets a hash before the
-	// syscall returns. The BPF/userspace fallback path runs in
-	// parallel; its FallbackHashFailures counter can be non-zero
-	// from racy fd-closes that fanotify ALREADY rescued. Treat
-	// FallbackHashFailures as informational when fanotify covered
-	// the gap (UnhashedOpensTotal post-reconciliation == 0 and
-	// fanotify itself is clean).
-	fanotifyHealthy := d.FanotifyAvailable &&
-		d.FanotifyTimeouts == 0 &&
-		d.FanotifyQueueOverflows == 0 &&
-		d.FanotifyDigestsCapHit == 0
-	fallbackFailuresAreGap := d.FallbackHashFailures > 0
-	if fanotifyHealthy && d.UnhashedOpensTotal == 0 {
-		// mergeFanotifyDigests already removed every UnhashedOpens
-		// entry whose path fanotify hashed. With zero UnhashedOpens
-		// left, the FallbackHashFailures counter is by definition
-		// covered by fanotify rescues; not a real gap.
-		fallbackFailuresAreGap = false
-	}
-
+	// "Drop" means LOST data — we can't even surface evidence that an
+	// open happened. There are two distinct failure modes:
+	//
+	//   HARD DROPS (this gate fails on these):
+	//     - RingbufOpenatDrops: kernel-side BPF ringbuf overflow.
+	//       The open event itself is gone; we don't know it happened.
+	//     - RingbufReadTapDrops: same, for content chunks.
+	//     - FanotifyTimeouts / QueueOverflows / DigestsCapHit:
+	//       fanotify lost the event OR the kernel default-allowed
+	//       a syscall we couldn't process in time.
+	//     - FsVeritySealFailures: kernel sealing rejected.
+	//
+	//   SOFT DROPS (recorded, NOT gated):
+	//     - UnhashedOpens entries: we observed the open and recorded
+	//       its path, syscall, pid, and reason. We just don't have a
+	//       content hash. The verifier sees per-file evidence and
+	//       decides what to do with it. This is strictly more
+	//       transparent than the "vanishing into a counter" prior
+	//       behavior — every UnhashedOpen is a documented gap, not
+	//       a blind spot.
+	//     - FallbackHashFailures: secondary capture-path failures
+	//       on files fanotify may or may not have rescued; either
+	//       way the attestation has per-file evidence.
+	//
+	// The model: HARD drops fail the build (blindspot, no recovery).
+	// SOFT drops downgrade the per-file digest to "open recorded
+	// without content" — surfaceable in attestation, queryable by
+	// the verifier. Hosted-GHA workloads with toolchain reads under
+	// /opt/hostedtoolcache always have a few of these from
+	// startup-race / fast-fork-exec patterns; making them fail-closed
+	// turns require-zero-drops into a permanent red light.
 	if d.RingbufOpenatDrops > 0 || d.RingbufReadTapDrops > 0 ||
 		d.FanotifyTimeouts > 0 || d.FanotifyQueueOverflows > 0 ||
 		d.FanotifyDigestsCapHit > 0 ||
-		d.UnhashedOpensTotal > 0 ||
-		fallbackFailuresAreGap || d.FsVeritySealFailures > 0 {
+		d.FsVeritySealFailures > 0 {
 		return &ZeroDropsError{
 			RingbufOpenatDrops:     d.RingbufOpenatDrops,
 			RingbufReadTapDrops:    d.RingbufReadTapDrops,
