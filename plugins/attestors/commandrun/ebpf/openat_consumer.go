@@ -45,6 +45,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// verboseErr renders an error in its most diagnostic form. For
+// cilium/ebpf VerifierError the default Error() truncates to the
+// last few lines and appends "N line(s) omitted" — useless when
+// diagnosing CO-RE relocation failures on an unfamiliar kernel
+// (e.g., GHA Azure-flavored). %+v dumps the full verifier log.
+func verboseErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	var vErr *ebpf.VerifierError
+	if errors.As(err, &vErr) {
+		return fmt.Sprintf("%+v", vErr)
+	}
+	return err.Error()
+}
+
 // Event type discriminator — must match enum cilock_event_type in
 // openat_kprobe.bpf.c. EVT_OPENAT==1 lets us tell legacy raw-openat
 // events (which have no leading event_type and start with timestamp)
@@ -333,7 +349,7 @@ func Open() (*Consumer, error) {
 
 	coll, err := ebpf.NewCollection(spec)
 	if err != nil {
-		return nil, fmt.Errorf("instantiate BPF: %w", err)
+		return nil, fmt.Errorf("instantiate BPF: %s", verboseErr(err))
 	}
 
 	c := &Consumer{coll: coll}
@@ -358,8 +374,8 @@ func Open() (*Consumer, error) {
 			c.links = append(c.links, l)
 		} else {
 			fmt.Fprintf(os.Stderr,
-				"cilock-ebpf: fentry/security_file_open attach failed (%v) — falling back to userspace cwd resolution\n",
-				err)
+				"cilock-ebpf: fentry/security_file_open attach failed (%s) — falling back to userspace cwd resolution\n",
+				verboseErr(err))
 		}
 	}
 
@@ -379,8 +395,8 @@ func Open() (*Consumer, error) {
 			fentryAttached = true
 		} else {
 			fmt.Fprintf(os.Stderr,
-				"cilock-ebpf: fentry/wake_up_new_task attach failed (%v) — falling back to kprobe\n",
-				err)
+				"cilock-ebpf: fentry/wake_up_new_task attach failed (%s) — falling back to kprobe\n",
+				verboseErr(err))
 		}
 	}
 
