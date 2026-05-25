@@ -331,6 +331,26 @@ func Open() (*Consumer, error) {
 		return nil, fmt.Errorf("load BPF spec: %w", err)
 	}
 
+	// Programs that depend on kernel features which may not exist /
+	// not be allowlisted on every kernel. We attempt-attach them
+	// best-effort after load; but if they FAIL CO-RE relocation at
+	// load time (e.g., on GHA Azure kernels where bpf_d_path isn't
+	// allowlisted for fentry/security_file_open), the whole
+	// collection load aborts. Allow operators to skip them via env
+	// so the collection can still load. The userspace fallback paths
+	// already handle the missing-program case at attach time.
+	if optional := os.Getenv("CILOCK_BPF_SKIP_PROGRAMS"); optional != "" {
+		for _, name := range strings.Split(optional, ",") {
+			name = strings.TrimSpace(name)
+			if _, ok := spec.Programs[name]; ok {
+				delete(spec.Programs, name)
+				fmt.Fprintf(os.Stderr,
+					"cilock-ebpf: skipping program %q per CILOCK_BPF_SKIP_PROGRAMS\n",
+					name)
+			}
+		}
+	}
+
 	// Pre-set KernelVersion on every kprobe program so cilium/ebpf
 	// skips its built-in detection path, which reads /proc/self/mem.
 	// /proc/self/mem requires CAP_SYS_PTRACE on hardened kernels
