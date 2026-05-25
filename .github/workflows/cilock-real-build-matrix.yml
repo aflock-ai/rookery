@@ -83,7 +83,13 @@ jobs:
         if: inputs.use_release == ''
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang llvm bpftool libbpf-dev
+          # `bpftool` standalone isn't in every Ubuntu image's universe
+          # repo. Fall back to linux-tools-generic which ships a
+          # /usr/lib/linux-tools/<kernel>/bpftool binary. rebuild_linux.go
+          # globs both locations.
+          sudo apt-get install -y -qq clang llvm libbpf-dev
+          sudo apt-get install -y -qq bpftool || \
+            sudo apt-get install -y -qq linux-tools-generic
 
       - name: Build cilock from source
         if: inputs.use_release == ''
