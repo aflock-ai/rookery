@@ -81,17 +81,28 @@ jobs:
       - name: Rebuild BPF object for runner arch + kernel
         if: inputs.use_release == ''
         run: |
+          set -euxo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq clang llvm linux-tools-common "linux-tools-$(uname -r)" || \
+          # `bpftool` (standalone) is in Ubuntu 22.04+ and doesn't need
+          # the kernel-version-matched linux-tools-* package. The
+          # /usr/sbin/bpftool wrapper requires a matching kernel pkg
+          # which Microsoft's azure-flavored runners don't always have.
+          sudo apt-get install -y -qq clang llvm bpftool || \
             sudo apt-get install -y -qq clang llvm linux-tools-generic
-          # bpftool may live under linux-tools or as /usr/sbin/bpftool
-          BPFTOOL=$(command -v bpftool || ls /usr/lib/linux-tools/*/bpftool 2>/dev/null | head -1)
+          BPFTOOL=$(command -v bpftool)
+          # The wrapper at /usr/sbin/bpftool prints "WARNING ... not
+          # found for kernel". If we got the wrapper, prefer the
+          # snap/dpkg-installed real binary.
+          for cand in /usr/lib/linux-tools/*/bpftool /usr/lib/linux-tools-*/bpftool /snap/bin/bpftool; do
+            if [ -x "$cand" ]; then BPFTOOL="$cand"; break; fi
+          done
           echo "bpftool=$BPFTOOL"
+          "$BPFTOOL" version || true
           cd plugins/attestors/commandrun/ebpf/bpf
-          # Regenerate vmlinux.h from the runner kernel's BTF
           sudo "$BPFTOOL" btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+          echo "first 5 lines of regenerated vmlinux.h:"
           head -5 vmlinux.h
-          # Build the .bpf.o against this kernel's BTF
+          grep -E "^struct pt_regs \{" -A4 vmlinux.h | head -6
           make clean && make
           file openat_kprobe.bpf.o
 
