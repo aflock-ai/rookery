@@ -387,6 +387,30 @@ type TraceDiagnostics struct {
 	// know about. Near-zero silent drops with non-zero
 	// FallbackHashFailures means each failure became a verifiable gap.
 	HashFailureSilentDrops uint64 `json:"hashFailureSilentDrops,omitempty"`
+
+	// FanotifyAvailable reports whether the fanotify integrity gate
+	// was active for this trace. true = every open under the workspace
+	// mount was synchronously hashed by the kernel-blocking handler;
+	// false = BPF-only with potential drops.
+	FanotifyAvailable bool `json:"fanotifyAvailable,omitempty"`
+
+	// FanotifyEventsHashed is the count of synchronous open events
+	// the fanotify handler hashed during this trace. A non-zero
+	// value alongside zero RingbufReadTapDrops means content capture
+	// was strictly zero-loss.
+	FanotifyEventsHashed uint64 `json:"fanotifyEventsHashed,omitempty"`
+
+	// FanotifyDigestsMerged is the count of OpenedFiles entries
+	// upgraded from BPF-sourced digests to fanotify-sourced ones.
+	// Verifiers can use this as a confidence indicator: high merged
+	// count = most digests are kernel-synchronous.
+	FanotifyDigestsMerged uint64 `json:"fanotifyDigestsMerged,omitempty"`
+
+	// FanotifyTimeouts is the count of fanotify events where the
+	// userspace handler took longer than its budget. Each timeout
+	// means the kernel defaulted to FAN_ALLOW (no hash captured);
+	// non-zero is a degradation signal.
+	FanotifyTimeouts uint64 `json:"fanotifyTimeouts,omitempty"`
 }
 
 type CommandRun struct {
@@ -423,6 +447,20 @@ type CommandRun struct {
 	// zero on the ptrace path (no ringbuf).
 	ringbufDropOpenat  uint64
 	ringbufDropReadTap uint64
+
+	// fanotifySession holds the active fanotify integrity-gate
+	// handler when CILOCK_FANOTIFY enables it. nil on the BPF-only
+	// path. Started before c.Start(); stopped + merged at trace end.
+	fanotifySession *fanotifySession
+	// fanotifyDigestsMerged is the count of OpenedFiles entries
+	// updated with fanotify-sourced digests. Surfaced in Diagnostics
+	// so verifiers know how much of the attestation is
+	// kernel-synchronous vs path-hash-based.
+	fanotifyDigestsMerged uint64
+	// fanotifyEventsHashed / fanotifyTimeouts surface per-trace
+	// fanotify operational stats.
+	fanotifyEventsHashed uint64
+	fanotifyTimeouts     uint64
 
 	// partialReadFallbacks / fallbackHashFailures stash the dispatcher's
 	// per-trace counters: how many openat events fell back to path-hash
@@ -1017,6 +1055,16 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		if err := r.preStartTracingSetup(); err != nil {
 			return err
 		}
+		// Optional fanotify integrity gate. When enabled, EVERY
+		// open() of a file under the workspace mount is synchronously
+		// hashed by the kernel-blocking fanotify handler — zero drops
+		// by construction. Falls back to BPF-only if the env var
+		// requests auto-mode and fanotify is unavailable.
+		fanSession, err := maybeStartFanotify(c.Dir)
+		if err != nil {
+			return err
+		}
+		r.fanotifySession = fanSession
 	}
 	// Downgrade the tracee's uid/gid back to the invoker when cilock
 	// is running under sudo (for BPF / fanotify caps). Otherwise the
@@ -1030,6 +1078,10 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			_ = r.ebpfConsumer.Close()
 			r.ebpfConsumer = nil
 		}
+		if r.fanotifySession != nil {
+			_, _ = r.fanotifySession.stop()
+			r.fanotifySession = nil
+		}
 		return err
 	}
 
@@ -1042,6 +1094,16 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		// trace() uses ptrace to detect process exit, but exec's I/O goroutines
 		// may still be flushing pipe data into stdoutBuffer/stderrBuffer.
 		_ = c.Wait() //nolint:errcheck // exit status already captured by trace
+
+		// Drain + merge fanotify digests (if enabled). Done BEFORE
+		// summary build so Diagnostics see the merged count.
+		if r.fanotifySession != nil {
+			fanDigests, fanStats := r.fanotifySession.stop()
+			r.fanotifySession = nil
+			r.fanotifyDigestsMerged = uint64(mergeFanotifyDigests(r.Processes, fanDigests))
+			r.fanotifyEventsHashed = fanStats.EventsHashed
+			r.fanotifyTimeouts = fanStats.HandlerTimeouts
+		}
 
 		// Build the AI-agent-friendly summary from the captured
 		// Processes data. Runs once, after the trace completes.
@@ -1071,6 +1133,16 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			}
 			r.Summary.Diagnostics.UnhashedOpensTotal = unhashedTotal
 			r.Summary.Diagnostics.HashFailureSilentDrops = r.hashSilentByDigest + r.hashSilentByDedup
+			// Fanotify integrity-gate stats. FanotifyAvailable is
+			// true iff any events were hashed (the handler was active);
+			// merged-count tells verifiers how many BPF digests got
+			// upgraded to kernel-synchronous fanotify digests.
+			if r.fanotifyEventsHashed > 0 || r.fanotifyDigestsMerged > 0 {
+				r.Summary.Diagnostics.FanotifyAvailable = true
+				r.Summary.Diagnostics.FanotifyEventsHashed = r.fanotifyEventsHashed
+				r.Summary.Diagnostics.FanotifyDigestsMerged = r.fanotifyDigestsMerged
+				r.Summary.Diagnostics.FanotifyTimeouts = r.fanotifyTimeouts
+			}
 			if r.resolvedCaptureMode != "" {
 				r.Summary.CaptureMode = r.resolvedCaptureMode
 				// TraceModeDetail differentiates the backend within
