@@ -467,7 +467,16 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		// has one (the gh binary).
 		raw := probe.TraceOutputs()
 		filtered := make(map[string]attestation.CaptureEntry, len(raw))
+		// Resolve relative trace paths against workingDir. ctx.WorkingDir()
+		// may be empty when the caller didn't pass one explicitly (common
+		// from cilock-action with no `workingdir:` input); fall back to
+		// the process cwd, which is what the tracee inherited.
 		workdir := ctx.WorkingDir()
+		if workdir == "" {
+			if cwd, err := os.Getwd(); err == nil {
+				workdir = cwd
+			}
+		}
 		for path, entry := range raw {
 			// Trace records mix absolute and relative paths. atomic-
 			// rename builds (Go, Cargo, GCC -o) write to a temp
