@@ -172,6 +172,16 @@ type Attestor struct {
 	compiledIncludeGlob glob.Glob
 	excludeGlob         string
 	compiledExcludeGlob glob.Glob
+
+	// requireExistsAtExit (default true) is the "product = surviving
+	// deliverable" gate. When true, files the tracee wrote but that
+	// no longer exist when the attestor runs are NOT recorded as
+	// products. When false, they're emitted as witness-only entries
+	// (path with nil digest) for forensic completeness — useful when
+	// investigating builds that produce-then-clean scratch artifacts
+	// you want named in the signed record. Set via
+	// WithRequireExistsAtExit(false) or `--product-allow-removed`.
+	requireExistsAtExit bool
 }
 
 // ProductLeaf describes one entry of the input tree. The Merkle leaf
@@ -263,13 +273,23 @@ func WithExcludeGlob(g string) Option {
 	return func(a *Attestor) { a.excludeGlob = g }
 }
 
+// WithRequireExistsAtExit toggles the "product must still exist when
+// the attestor runs" gate. Default is true (the strict, intent-matching
+// behavior). Set to false to keep witness-only entries (path with nil
+// digest) for files the tracee wrote then cleaned up — useful for
+// forensic builds where you want every transient artifact named.
+func WithRequireExistsAtExit(require bool) Option {
+	return func(a *Attestor) { a.requireExistsAtExit = require }
+}
+
 // New constructs an Attestor with default globs (include="*", exclude="").
 func New(opts ...Option) *Attestor {
 	a := &Attestor{
-		includeGlob:        defaultIncludeGlob,
-		excludeGlob:        defaultExcludeGlob,
-		HashAlgorithmField: HashAlgorithm,
-		ConstructionField:  Construction,
+		includeGlob:         defaultIncludeGlob,
+		excludeGlob:         defaultExcludeGlob,
+		requireExistsAtExit: true, // strict by default; explicit opt-out
+		HashAlgorithmField:  HashAlgorithm,
+		ConstructionField:   Construction,
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -302,6 +322,19 @@ func configOptions() []registry.Configurer {
 					return a, fmt.Errorf("unexpected attestor type: %T is not a product attestor", a)
 				}
 				WithExcludeGlob(excludeGlob)(prod)
+				return prod, nil
+			},
+		),
+		registry.BoolConfigOption(
+			"require-exists-at-exit",
+			"When true (default), a file the build wrote must still exist at attestation time to be recorded as a product. Files the build wrote then removed are treated as scratch and dropped. Set false to keep witness-only entries (path with nil digest) for forensic completeness.",
+			true,
+			func(a attestation.Attestor, v bool) (attestation.Attestor, error) {
+				prod, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("unexpected attestor type: %T is not a product attestor", a)
+				}
+				WithRequireExistsAtExit(v)(prod)
 				return prod, nil
 			},
 		),
@@ -443,7 +476,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 			}
 			filtered[path] = entry
 		}
-		a.products = fromCaptureEntries(filtered)
+		a.products = fromCaptureEntries(filtered, a.requireExistsAtExit)
 		return a.buildTree()
 	}
 
@@ -486,15 +519,20 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 // files and removed them" as forensic evidence.
 //
 // Mime-type detection is best-effort.
-func fromCaptureEntries(entries map[string]attestation.CaptureEntry) map[string]attestation.Product {
+func fromCaptureEntries(entries map[string]attestation.CaptureEntry, requireExistsAtExit bool) map[string]attestation.Product {
 	out := make(map[string]attestation.Product, len(entries))
 	for path, entry := range entries {
-		// Exists-at-exit gate. If the file the tracee wrote is gone
-		// at this moment, it's not a deliverable — it was a
-		// scratch/intermediate that the build cleaned up. Don't
-		// emit it as a product.
+		// Exists-at-exit gate. Default-on; callers can opt out via
+		// WithRequireExistsAtExit(false) when they want forensic
+		// completeness over deliverable-only semantics.
 		fi, statErr := os.Stat(path)
 		if statErr != nil {
+			if requireExistsAtExit {
+				continue
+			}
+			// Path is gone — emit witness-only entry (nil digest,
+			// unknown mime).
+			out[path] = attestation.Product{MimeType: "unknown", Digest: nil}
 			continue
 		}
 
