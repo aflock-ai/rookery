@@ -34,6 +34,15 @@ const (
 	Name    = "command-run"
 	Type    = "https://aflock.ai/attestations/command-run/v0.1"
 	RunType = attestation.ExecuteRunType
+
+	// EnvVarTraceMode selects the tracing backend. Hoisted to the
+	// cross-platform file so commandrun.go can read it for trace-mode
+	// detail on non-Linux builds without forcing platform-specific
+	// imports.
+	//
+	//	(unset) | "ebpf" — eBPF (default on Linux). Hard-fail if not available.
+	//	"ptrace"        — ptrace+seccomp. Explicit opt-in; no fallback errors.
+	EnvVarTraceMode = "CILOCK_TRACE_MODE"
 )
 
 // This is a hacky way to create a compile time error in case the attestor

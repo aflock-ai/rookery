@@ -7,9 +7,9 @@
 
 package commandrun
 
-const EnvVarFsVerity = "CILOCK_FSVERITY"
-
 import "sync/atomic"
+
+const EnvVarFsVerity = "CILOCK_FSVERITY"
 
 type fsVerityState struct {
 	Available    bool

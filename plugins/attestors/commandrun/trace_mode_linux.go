@@ -44,12 +44,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// EnvVarTraceMode selects the tracing backend.
-//
-//	(unset) | "ebpf" — eBPF (default). Hard-fail if not available.
-//	"ptrace"        — ptrace+seccomp. Explicit opt-in; no fallback errors.
-const EnvVarTraceMode = "CILOCK_TRACE_MODE"
-
 // traceMode is the resolved backend choice for this run.
 type traceMode int
 

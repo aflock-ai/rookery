@@ -17,11 +17,18 @@ func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
 	return nil, nil
 }
 
+// fanotifyStatsStub mirrors fanotify.Stats fields the Linux integration
+// reads; on non-Linux all values are zero.
+type fanotifyStatsStub struct {
+	EventsHashed    uint64
+	HandlerTimeouts uint64
+	QueueOverflows  uint64
+	DigestsCapHit   uint64
+}
+
 func (s *fanotifySession) stop() (map[string][32]byte, fanotifyStatsStub) {
 	return nil, fanotifyStatsStub{}
 }
-
-type fanotifyStatsStub struct{}
 
 func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (int, map[string]string) {
 	return 0, nil
