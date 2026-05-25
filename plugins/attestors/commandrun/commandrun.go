@@ -121,20 +121,23 @@ func WithRequireZeroDrops(require bool) Option {
 // (and any tooling parsing stderr) can see WHICH counters were
 // non-zero.
 type ZeroDropsError struct {
-	RingbufOpenatDrops    uint64
-	RingbufReadTapDrops   uint64
-	FanotifyTimeouts      uint64
-	UnhashedOpensTotal    uint64
-	FallbackHashFailures  uint64
-	FsVeritySealFailures  uint64
+	RingbufOpenatDrops     uint64
+	RingbufReadTapDrops    uint64
+	FanotifyTimeouts       uint64
+	FanotifyQueueOverflows uint64
+	UnhashedOpensTotal     uint64
+	FallbackHashFailures   uint64
+	FsVeritySealFailures   uint64
 }
 
 func (e *ZeroDropsError) Error() string {
 	return fmt.Sprintf(
 		"attestation rejected (--require-zero-drops): "+
-			"bpf-openat-drops=%d bpf-readtap-drops=%d fanotify-timeouts=%d "+
+			"bpf-openat-drops=%d bpf-readtap-drops=%d "+
+			"fanotify-timeouts=%d fanotify-queue-overflows=%d "+
 			"unhashed-opens=%d fallback-hash-failures=%d fsverity-failures=%d",
-		e.RingbufOpenatDrops, e.RingbufReadTapDrops, e.FanotifyTimeouts,
+		e.RingbufOpenatDrops, e.RingbufReadTapDrops,
+		e.FanotifyTimeouts, e.FanotifyQueueOverflows,
 		e.UnhashedOpensTotal, e.FallbackHashFailures, e.FsVeritySealFailures,
 	)
 }
@@ -162,15 +165,17 @@ func (r *CommandRun) zeroDropsGate() error {
 	}
 	d := r.Summary.Diagnostics
 	if d.RingbufOpenatDrops > 0 || d.RingbufReadTapDrops > 0 ||
-		d.FanotifyTimeouts > 0 || d.UnhashedOpensTotal > 0 ||
+		d.FanotifyTimeouts > 0 || d.FanotifyQueueOverflows > 0 ||
+		d.UnhashedOpensTotal > 0 ||
 		d.FallbackHashFailures > 0 || d.FsVeritySealFailures > 0 {
 		return &ZeroDropsError{
-			RingbufOpenatDrops:   d.RingbufOpenatDrops,
-			RingbufReadTapDrops:  d.RingbufReadTapDrops,
-			FanotifyTimeouts:     d.FanotifyTimeouts,
-			UnhashedOpensTotal:   d.UnhashedOpensTotal,
-			FallbackHashFailures: d.FallbackHashFailures,
-			FsVeritySealFailures: d.FsVeritySealFailures,
+			RingbufOpenatDrops:     d.RingbufOpenatDrops,
+			RingbufReadTapDrops:    d.RingbufReadTapDrops,
+			FanotifyTimeouts:       d.FanotifyTimeouts,
+			FanotifyQueueOverflows: d.FanotifyQueueOverflows,
+			UnhashedOpensTotal:     d.UnhashedOpensTotal,
+			FallbackHashFailures:   d.FallbackHashFailures,
+			FsVeritySealFailures:   d.FsVeritySealFailures,
 		}
 	}
 	return nil
@@ -489,6 +494,12 @@ type TraceDiagnostics struct {
 	// non-zero is a degradation signal.
 	FanotifyTimeouts uint64 `json:"fanotifyTimeouts,omitempty"`
 
+	// FanotifyQueueOverflows counts FAN_Q_OVERFLOW events the kernel
+	// emitted to signal it dropped fanotify events because our
+	// handler fell behind. NON-ZERO = the synchronous-zero-drop
+	// promise was violated; the attestation has unknown gaps.
+	FanotifyQueueOverflows uint64 `json:"fanotifyQueueOverflows,omitempty"`
+
 	// FsVerityAvailable reports whether fs-verity sealing was active
 	// for this trace's workspace FS. true = the kernel computed and
 	// stored Merkle roots over product files; false = streaming
@@ -552,10 +563,11 @@ type CommandRun struct {
 	// so verifiers know how much of the attestation is
 	// kernel-synchronous vs path-hash-based.
 	fanotifyDigestsMerged uint64
-	// fanotifyEventsHashed / fanotifyTimeouts surface per-trace
-	// fanotify operational stats.
-	fanotifyEventsHashed uint64
-	fanotifyTimeouts     uint64
+	// fanotifyEventsHashed / fanotifyTimeouts / fanotifyQueueOverflows
+	// surface per-trace fanotify operational stats.
+	fanotifyEventsHashed   uint64
+	fanotifyTimeouts       uint64
+	fanotifyQueueOverflows uint64
 	// fsVerityState holds opportunistic fs-verity sealing state.
 	// Probed at trace start; per-product seal calls during finalize
 	// consult Available to skip the ioctl on unsupported FS.
@@ -1211,6 +1223,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			r.fanotifyDigestsMerged = uint64(mergeFanotifyDigests(r.Processes, fanDigests))
 			r.fanotifyEventsHashed = fanStats.EventsHashed
 			r.fanotifyTimeouts = fanStats.HandlerTimeouts
+			r.fanotifyQueueOverflows = fanStats.QueueOverflows
 		}
 
 		// Build the AI-agent-friendly summary from the captured
@@ -1250,6 +1263,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 				r.Summary.Diagnostics.FanotifyEventsHashed = r.fanotifyEventsHashed
 				r.Summary.Diagnostics.FanotifyDigestsMerged = r.fanotifyDigestsMerged
 				r.Summary.Diagnostics.FanotifyTimeouts = r.fanotifyTimeouts
+				r.Summary.Diagnostics.FanotifyQueueOverflows = r.fanotifyQueueOverflows
 			}
 			// fs-verity sealing stats. Surfaced even when count is 0
 			// so the JSON can convey "this trace had fs-verity active

@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
@@ -81,12 +82,23 @@ func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &fanotifySession{h: h, cancel: cancel}
 	s.wg.Add(1)
+	ready := make(chan struct{})
 	go func() {
 		defer s.wg.Done()
+		close(ready) // signal we entered the goroutine
 		if err := h.Run(ctx); err != nil {
 			log.Debugf("(fanotify) Run returned: %v", err)
 		}
 	}()
+	// Wait for the handler goroutine to actually start polling.
+	// Without this, the kernel mark IS armed (set in fanotify.New)
+	// but events queue in the kernel buffer until userspace polls.
+	// Under cold-start burst workloads we'd see the queue overflow
+	// before the goroutine drained the first event. A short settling
+	// period gives the goroutine its first poll cycle before c.Start()
+	// races to fork the tracee.
+	<-ready
+	time.Sleep(50 * time.Millisecond)
 	log.Debugf("(fanotify) integrity gate active on %s", workingDir)
 	return s, nil
 }

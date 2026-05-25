@@ -54,6 +54,7 @@ type Stats struct {
 	BytesHashed       uint64
 	MarkFailures      uint64
 	UnknownFamily     uint64 // events without a usable fd
+	QueueOverflows    uint64 // FAN_Q_OVERFLOW events — kernel dropped
 }
 
 // Handler runs the fanotify capture loop. Construct with New, start
@@ -238,6 +239,16 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 			stats.HandlerTimeouts++
 		}
 	}()
+
+	// FAN_Q_OVERFLOW: the kernel dropped events because our handler
+	// fell behind. Count these explicitly — they're the canonical
+	// signal that fanotify lost data. The kernel emits this synthetic
+	// event with Fd == FAN_NOFD (a fanotify-specific sentinel = -1).
+	if meta.Mask&unix.FAN_Q_OVERFLOW != 0 {
+		stats.QueueOverflows++
+		// No fd to close, no response to write.
+		return
+	}
 
 	// fd<0 means kernel had no fd to give us (rare; OOM, anonymous
 	// inode). Allow anyway — we can't hash but the tracee shouldn't
