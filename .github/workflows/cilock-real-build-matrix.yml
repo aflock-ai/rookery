@@ -74,6 +74,27 @@ jobs:
         with:
           go-version: '1.26'
 
+      # The checked-in .bpf.o was built on arm64 (vmlinux.h is arm64,
+      # so every PT_REGS_PARM_CORE_SYSCALL in the x64 programs emits
+      # arm64 register access — fails CO-RE on x86_64 kernels). Rebuild
+      # against the runner's actual kernel BTF before embedding.
+      - name: Rebuild BPF object for runner arch + kernel
+        if: inputs.use_release == ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang llvm linux-tools-common "linux-tools-$(uname -r)" || \
+            sudo apt-get install -y -qq clang llvm linux-tools-generic
+          # bpftool may live under linux-tools or as /usr/sbin/bpftool
+          BPFTOOL=$(command -v bpftool || ls /usr/lib/linux-tools/*/bpftool 2>/dev/null | head -1)
+          echo "bpftool=$BPFTOOL"
+          cd plugins/attestors/commandrun/ebpf/bpf
+          # Regenerate vmlinux.h from the runner kernel's BTF
+          sudo "$BPFTOOL" btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+          head -5 vmlinux.h
+          # Build the .bpf.o against this kernel's BTF
+          make clean && make
+          file openat_kprobe.bpf.o
+
       - name: Build cilock from source
         if: inputs.use_release == ''
         run: |
