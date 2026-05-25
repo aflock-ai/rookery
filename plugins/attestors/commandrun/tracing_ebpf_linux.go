@@ -51,8 +51,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
@@ -280,28 +278,11 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// entries land in OpenedFiles with a nil digest, which is the
 	// honest stance: a hole in the attestation.
 	var partialFallbacks, fallbackFailures atomic.Uint64
-
-	// V1.4 backpressure watchdog: when the BPF ringbuf is filling up,
-	// broadcast SIGSTOP across the tracee tree so the kernel stops
-	// producing events while userspace drains. SIGCONT once drains
-	// stabilize. Opt-in via CILOCK_HASH_BACKPRESSURE=1 — proactive
-	// pause is aggressive enough to deadlock the build if the
-	// consumer falls behind; for most workloads the 256 MB ringbuf
-	// alone is sufficient.
-	var watchdogWG sync.WaitGroup
-	// Backpressure watchdog kept as opt-in via CILOCK_HASH_BACKPRESSURE=1.
-	// V2 Phase 8 tried making it on-by-default; the SIGSTOP/SIGCONT cycle
-	// disrupts deep fork chains (forks-in-flight either complete with the
-	// wrong parent state or fail with EINTR), measurably hurting test
-	// reliability. The right default is "off for normal builds, on only
-	// for explicit high-volume workloads."
-	if os.Getenv("CILOCK_HASH_BACKPRESSURE") == "1" {
-		watchdogWG.Add(1)
-		go func() {
-			defer watchdogWG.Done()
-			runBackpressureWatchdog(stopCh, consumer, watched)
-		}()
-	}
+	// Per-bucket counters for hash-failure outcomes. Surfaces the
+	// difference between "we caught it elsewhere" (silentByDigest)
+	// and "we already recorded this gap" (silentByDedup) so the
+	// fallbackFailures total can be honestly explained, not handwaved.
+	var hashSilentByDigest, hashSilentByDedup atomic.Uint64
 
 	var consumerWG sync.WaitGroup
 	consumerWG.Add(1)
@@ -485,21 +466,17 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 						}
 					}
 				}
-				// DIAGNOSTIC: dispatcher-side capture is disabled by
-				// default while we bisect the make-syncconfig hang.
-				// Hashing falls back to worker-pool /proc/<pid>/fd/<fd>
-				// which is racy for fast-unlinked files but doesn't
-				// touch fd state during dispatch.
+				// Dispatcher MUST stay microsecond-per-event to drain the
+				// ringbuf at the kernel's emit rate. Inline fd capture
+				// (open /proc/<pid>/fd/<fd>) added milliseconds per
+				// event and dropped 9M openat events on a defconfig
+				// kernel build. The capture happens later in the hasher
+				// pool — which loses the race against fast-exiting
+				// toolchain processes — until the parallel capture
+				// pool (task #116) lands. That pool will sit between
+				// dispatcher and hasher, doing the os.Open in parallel
+				// before the tracee exits without blocking the consumer.
 				ph := &pendingHash{ev: ev.Openat}
-				if os.Getenv("CILOCK_DISPATCHER_CAPTURE") == "1" &&
-					ev.Openat.FD >= 0 && !ev.Openat.IsWriteOnly() && !ev.Openat.IsPathOnly() {
-					if f, err := ebpf.CaptureFileForLaterHash(ev.Openat.PID, ev.Openat.FD); err == nil && f != nil {
-						ph.file = f
-						if st, ferr := f.Stat(); ferr == nil {
-							ph.stat = st
-						}
-					}
-				}
 				select {
 				case openatCh <- ph:
 				case <-stopCh:
@@ -723,16 +700,6 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					}
 					continue
 				}
-				// DIAGNOSTIC: disable HashOpenatEvent entirely to bisect
-				// the syncconfig failure. If syncconfig passes with
-				// CILOCK_SKIP_HASH=1, the bug is in our hashing path.
-				if os.Getenv("CILOCK_SKIP_HASH") == "1" {
-					recordEBPFOpenatNoHash(pctx, ev)
-					if ph.file != nil {
-						_ = ph.file.Close()
-					}
-					continue
-				}
 				// Per-trace digest cache: most files in a build are
 				// opened many times. Cache by (path, size, mtime);
 				// hit means the same bytes are on disk → same digest.
@@ -765,10 +732,6 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					res = ebpf.HashOpenatEvent(ev, pctx.hash)
 				}
 				hashedTotal.Add(1)
-				if os.Getenv("CILOCK_DEBUG_HASH_FAILS") == "1" && (res.Status == ebpf.TOCTOUError || res.Status == ebpf.TOCTOUMissing) {
-					fmt.Fprintf(os.Stderr, "DEBUG: hash fail path=%q pid=%d fd=%d status=%v reason=%q\n",
-						ev.Path, ev.PID, ev.FD, res.Status, res.Reason)
-				}
 				switch res.Status {
 				case ebpf.TOCTOUStable:
 					if res.Digest != nil {
@@ -783,7 +746,12 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					}
 					fallbackFailures.Add(1)
 				}
-				recordEBPFOpenat(pctx, ev, res)
+				switch recordEBPFOpenat(pctx, ev, res) {
+				case recordOutcomeSilentByDigest:
+					hashSilentByDigest.Add(1)
+				case recordOutcomeSilentByDedup:
+					hashSilentByDedup.Add(1)
+				}
 			}
 		}()
 	}
@@ -808,7 +776,6 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	consumerWG.Wait()
 	close(stopCh) // unblock any inflight evCh send (defensive)
 	hasherWG.Wait()
-	watchdogWG.Wait()
 
 	// Surface ringbuf drop counters BEFORE closing the consumer
 	// (Close releases the underlying maps). A non-zero drop count
@@ -829,6 +796,8 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		r.ringbufDropReadTap = rDrops
 		r.partialReadFallbacks = partialFallbacks.Load()
 		r.fallbackHashFailures = fallbackFailures.Load()
+		r.hashSilentByDigest = hashSilentByDigest.Load()
+		r.hashSilentByDedup = hashSilentByDedup.Load()
 		if oDrops > 0 || rDrops > 0 {
 			log.Errorf("(ebpf) RINGBUF DROPS — attestation has gaps: openat=%d read_tap=%d  "+
 				"bump ringbuf size or reduce build parallelism",
@@ -879,12 +848,25 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	return pctx.procInfoArray(), nil
 }
 
+// RecordOutcome reports how recordEBPFOpenat dispositioned a hash
+// result, so the caller can tally per-bucket counters without
+// re-implementing the dispatch logic.
+type recordOutcome int
+
+const (
+	recordOutcomeNone           recordOutcome = iota // success path (Stable/Suspect)
+	recordOutcomeSilentByDigest                      // failure: OpenedFiles already had a digest
+	recordOutcomeSilentByDedup                       // failure: UnhashedOpens already had an entry
+	recordOutcomeUnhashedAdded                       // failure: new UnhashedOpens entry
+)
+
 // recordEBPFOpenat records one openat event + its hash result into
 // the appropriate ProcessInfo. Concurrent-safe via pctx.mu, which
 // guards both the processes-map and the ProcessInfo entries within.
-func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashResult) {
+func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashResult) recordOutcome {
 	pctx.mu.Lock()
 	defer pctx.mu.Unlock()
+	outcome := recordOutcomeNone
 
 	procInfo := pctx.getProcInfo(int(ev.PID))
 	// Retry /proc enrichment if any of {Environ, Cmdline, ExeDigest}
@@ -936,6 +918,7 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 		// don't also pollute UnhashedOpens with a duplicate of a
 		// path we successfully captured.
 		if _, hashed := procInfo.OpenedFiles[res.Path]; hashed {
+			outcome = recordOutcomeSilentByDigest
 			break
 		}
 		// Avoid recording the same (path, reason) twice — gcc opens
@@ -948,11 +931,14 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 				break
 			}
 		}
-		if !alreadyRecorded {
+		if alreadyRecorded {
+			outcome = recordOutcomeSilentByDedup
+		} else {
 			procInfo.UnhashedOpens = append(procInfo.UnhashedOpens, UnhashedOpen{
 				Path:   res.Path,
 				Reason: res.Reason,
 			})
+			outcome = recordOutcomeUnhashedAdded
 		}
 	}
 
@@ -978,6 +964,7 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 	if needsEnrichment {
 		enrichFromProc(pctx, procInfo)
 	}
+	return outcome
 }
 
 // recordEBPFOpenatNoHash records an openat we deliberately skipped
@@ -1625,101 +1612,6 @@ func (w *watchedSet) cwdFor(pid uint32) string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.cwd[pid]
-}
-
-// snapshot returns a copy of the current pid set. Used by the
-// backpressure watchdog to broadcast SIGSTOP/SIGCONT across the
-// tracee process tree.
-func (w *watchedSet) snapshot() []int {
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-	out := make([]int, 0, len(w.pid))
-	for pid := range w.pid {
-		out = append(out, int(pid))
-	}
-	return out
-}
-
-// runBackpressureWatchdog polls the ringbuf fill ratio every 10 ms
-// and broadcasts SIGSTOP across the watched pid set when the ring
-// climbs past the HIGH_WATER mark — *before* drops actually happen.
-// SIGCONT once the consumer drains us back below LOW_WATER. Net
-// effect: tracee speed matches consumer drain rate, no silent
-// event loss.
-//
-// Why depth-based (proactive) rather than drop-based (reactive):
-// at peak burst (parallel compile, 4 CPUs), the ringbuf can fill
-// from 0 to overflow in <10 ms. A drop-based watchdog only learns
-// about overflow AFTER events were already lost. Depth-based
-// catches the fill as it happens.
-//
-// SIGSTOP freezes tracee threads at syscall boundaries — in-flight
-// syscalls complete and emit their events, then no new syscall
-// entry until SIGCONT. Safe.
-const (
-	backpressureHighWater = 60 // % of ringbuf capacity → SIGSTOP
-	backpressureLowWater  = 20 // % of ringbuf capacity → SIGCONT
-	backpressureTick      = 10 * time.Millisecond
-)
-
-func runBackpressureWatchdog(
-	stopCh <-chan struct{},
-	consumer *ebpf.Consumer,
-	watched *watchedSet,
-) {
-	ticker := time.NewTicker(backpressureTick)
-	defer ticker.Stop()
-
-	cap := consumer.RingbufCapacityBytes()
-	if cap <= 0 {
-		return // can't measure depth — bail (don't crash the trace)
-	}
-	highMark := cap * backpressureHighWater / 100
-	lowMark := cap * backpressureLowWater / 100
-
-	stopped := false
-	totalPauses, totalPausedNs := 0, int64(0)
-	var pauseStart time.Time
-
-	defer func() {
-		if stopped {
-			for _, pid := range watched.snapshot() {
-				_ = unix.Kill(pid, unix.SIGCONT)
-			}
-			totalPausedNs += time.Since(pauseStart).Nanoseconds()
-		}
-		if totalPauses > 0 {
-			log.Debugf("(ebpf) backpressure: %d pause cycles, ~%d ms total stop time, ringbuf cap=%d MB",
-				totalPauses, totalPausedNs/int64(time.Millisecond), cap/(1024*1024))
-		}
-	}()
-
-	for {
-		select {
-		case <-stopCh:
-			return
-		case <-ticker.C:
-		}
-
-		depth := consumer.RingbufAvailableBytes()
-
-		if !stopped && depth > highMark {
-			// Pre-emptively pause the tracee tree.
-			for _, pid := range watched.snapshot() {
-				_ = unix.Kill(pid, unix.SIGSTOP)
-			}
-			stopped = true
-			pauseStart = time.Now()
-			totalPauses++
-		} else if stopped && depth < lowMark {
-			// Drained enough — let the tracee run again.
-			for _, pid := range watched.snapshot() {
-				_ = unix.Kill(pid, unix.SIGCONT)
-			}
-			stopped = false
-			totalPausedNs += time.Since(pauseStart).Nanoseconds()
-		}
-	}
 }
 
 // addAndReturnNew adds (pid, ppid) to the watched set and returns

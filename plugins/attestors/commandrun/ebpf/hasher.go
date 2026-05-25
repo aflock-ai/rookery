@@ -211,12 +211,6 @@ func hashViaProcFD(fdPath, origPath string, hashFuncs []cryptoutil.DigestValue) 
 		return r, true
 	}
 
-	// DIAGNOSTIC bisect: skip the actual file open/read if env says so.
-	if os.Getenv("CILOCK_HASH_VIA_FDPATH_NOOP") == "1" {
-		r.Digest = nil
-		r.Status = TOCTOUStable
-		return r, true
-	}
 	f, err := os.Open(fdPath) //nolint:gosec // G304: /proc/<pid>/fd/<fd>, by-design read
 	if err != nil {
 		return HashResult{}, false

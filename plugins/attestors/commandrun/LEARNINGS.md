@@ -110,9 +110,12 @@ Disable knobs:
 | wall vs ptrace mode | n/a | 2.17× faster |
 
 The 256 MB ringbuf + zero-copy `bpf_ringbuf_reserve` path was
-sufficient — no need for the SIGSTOP/SIGCONT backpressure watchdog
-(left in as opt-in `CILOCK_HASH_BACKPRESSURE=1` for adversarial
-producer workloads).
+sufficient for these workloads. The SIGSTOP/SIGCONT backpressure
+watchdog was removed in the golden-path commit — it disrupted
+deep fork chains (forks-in-flight completed with the wrong parent
+state) and the right fix for ringbuf pressure on heavier workloads
+is separate ringbufs for openat vs read-tap, not pausing the
+tracee.
 
 ## Per-language findings
 
@@ -151,10 +154,12 @@ openat event (~4KB) + read-tap events (~16KB each). Easy to push
 through 100 MB of ringbuf traffic.
 
 Action items:
-- Run with `--no-trace` to skip read-tap and just count opens —
-  isolate which phase is slow.
-- Try enabling `CILOCK_HASH_BACKPRESSURE=1` to prevent ringbuf overflow.
+- Run with `--no-trace` to skip event capture entirely and just
+  measure baseline build time — isolate which phase is slow.
 - Add JVM cache patterns to defaults (`~/.cache/jdk/`, etc.).
+- Long-term mitigation for JVM-class openat volume: separate
+  ringbufs (task #115) so read-tap volume can't evict openat
+  events.
 
 ### Other languages (pending)
 

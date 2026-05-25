@@ -333,20 +333,40 @@ type TraceDiagnostics struct {
 	// the framework fell back to path-hash. Informational only.
 	PartialReadFallbacks uint64 `json:"partialReadFallbacks,omitempty"`
 
-	// FallbackHashFailures is the count of partial-read fallbacks
-	// where the path-hash itself couldn't read the file (e.g.,
-	// file was deleted before fallback ran). Non-zero means there
-	// are paths in the attestation with nil digests — gaps that
-	// a verifier should treat as untrustworthy.
+	// FallbackHashFailures is the count of INDIVIDUAL openat events
+	// where hashing failed (TOCTOUError / TOCTOUMissing). Each such
+	// failure is dispatched by recordEBPFOpenat to one of two places:
 	//
-	// Design note: we DELIBERATELY do not run a post-trace
-	// "recover any nil digest by reading the file off disk later"
-	// sweep. That would be a TOCTOU lie — the bytes on disk after
-	// the build are not provably the bytes the tracee processed.
-	// A nil digest stays nil. The fix for a non-zero value is to
-	// prevent the drop at its source (bigger ringbuf, sharded
-	// consumer, kernel-side hashing) — NOT to paper over it.
+	//   - If the same path was already cleanly hashed in the same
+	//     process: silent drop. The successful capture stands, the
+	//     failure is invisible to the verifier. See HashFailureSilentDrops.
+	//
+	//   - Else: an UnhashedOpens entry with a Reason on the process.
+	//     Visible to verifiers — explicit gap with explanation. See
+	//     UnhashedOpensTotal.
+	//
+	// FallbackHashFailures = HashFailureSilentDrops + UnhashedOpensTotal
+	// (approximately; the sets aren't perfectly disjoint across procs).
 	FallbackHashFailures uint64 `json:"fallbackHashFailures,omitempty"`
+
+	// UnhashedOpensTotal is the total count of UnhashedOpens entries
+	// across all per-process records. Each entry has an explicit
+	// Reason so verifiers can judge whether a gap is benign (e.g.
+	// "file removed before hash" on a temp file) or worth investigating.
+	UnhashedOpensTotal uint64 `json:"unhashedOpensTotal,omitempty"`
+
+	// HashFailureSilentDrops counts hash failures that did NOT
+	// produce an UnhashedOpens entry. Two sub-cases (both counted):
+	//   - same path was already cleanly hashed in the same process
+	//     (the "caught it elsewhere" case — failure is harmless)
+	//   - same path already had an UnhashedOpens entry (the dedup
+	//     case — the gap is already recorded; this failure adds no
+	//     new information)
+	// A high silent-drop count alongside a high FallbackHashFailures
+	// total means most failures were retries of paths we already
+	// know about. Near-zero silent drops with non-zero
+	// FallbackHashFailures means each failure became a verifiable gap.
+	HashFailureSilentDrops uint64 `json:"hashFailureSilentDrops,omitempty"`
 }
 
 type CommandRun struct {
@@ -391,6 +411,12 @@ type CommandRun struct {
 	// so an attestation alone tells you whether read-tap was effective.
 	partialReadFallbacks uint64
 	fallbackHashFailures uint64
+	// hashSilentByDigest / hashSilentByDedup decompose fallbackHashFailures
+	// into "we already had a clean digest for this path" vs "we already
+	// recorded this gap." Together they tell verifiers whether the
+	// failure count masks real holes or harmless retries.
+	hashSilentByDigest uint64
+	hashSilentByDedup  uint64
 
 
 	// resolvedCaptureMode records which capture-mode the framework
@@ -1007,6 +1033,19 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			r.Summary.Diagnostics.RingbufReadTapDrops = r.ringbufDropReadTap
 			r.Summary.Diagnostics.PartialReadFallbacks = r.partialReadFallbacks
 			r.Summary.Diagnostics.FallbackHashFailures = r.fallbackHashFailures
+			// Walk processes to count UnhashedOpens entries — explicit
+			// per-process gaps with reasons, visible to verifiers.
+			// HashFailureSilentDrops counts at the dispatch source:
+			// the failure was dropped because the same path was
+			// already cleanly hashed in the same process. Sum of
+			// (silentByDigest + silentByDedup) is the residual after
+			// counting newly-added UnhashedOpens entries.
+			var unhashedTotal uint64
+			for i := range r.Processes {
+				unhashedTotal += uint64(len(r.Processes[i].UnhashedOpens))
+			}
+			r.Summary.Diagnostics.UnhashedOpensTotal = unhashedTotal
+			r.Summary.Diagnostics.HashFailureSilentDrops = r.hashSilentByDigest + r.hashSilentByDedup
 			if r.resolvedCaptureMode != "" {
 				r.Summary.CaptureMode = r.resolvedCaptureMode
 				// TraceModeDetail differentiates the backend within

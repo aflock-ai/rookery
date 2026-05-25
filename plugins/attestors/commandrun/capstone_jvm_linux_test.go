@@ -159,9 +159,10 @@ func TestCapstone_JVM_SpringPetClinic(t *testing.T) {
 	if cap.rc.Summary != nil {
 		d := cap.rc.Summary.Diagnostics
 		totalFiles := uint64(len(cap.Materials) + len(cap.Intermediates) + len(cap.Products) + len(cap.CacheArtifacts))
-		t.Logf("coverage: %d files captured, %d nil-digest entries, %d transient hash failures; "+
-			"event drops openat=%d readTap=%d",
-			totalFiles, nilDigests, d.FallbackHashFailures,
+		t.Logf("coverage: %d files captured, %d nil-digest entries; "+
+			"hash failures=%d (UnhashedOpens=%d, silent-drops=%d); event drops openat=%d readTap=%d",
+			totalFiles, nilDigests,
+			d.FallbackHashFailures, d.UnhashedOpensTotal, d.HashFailureSilentDrops,
 			d.RingbufOpenatDrops, d.RingbufReadTapDrops)
 	}
 

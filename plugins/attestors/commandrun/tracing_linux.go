@@ -223,30 +223,19 @@ func (r *CommandRun) preStartTracingSetup() error {
 	//
 	// V2 attestation-correctness pivot: read-tap is OFF by default.
 	//
-	// Rationale: the hasher pool now runs HashOpenatEvent at openat-
-	// time for every read-capable open, hashing via /proc/<pid>/fd/<fd>
-	// — that's the SAME open-file-description the tracee will read
-	// from, so the digest matches the bytes the tracee gets. Race-
-	// tight against external writers, no TOCTOU window.
+	// Read-tap stays disabled until openat and read-tap events live in
+	// separate ringbufs. On a shared 1 GB ringbuf the kernel-compile
+	// capstone produced ~11M read-tap events that evicted ~9M openat
+	// events — including the linker's open of vmlinux. Less correct
+	// attestation overall, not more.
 	//
-	// Read-tap was an additional layer that captured bytes IN
-	// KERNEL CONTEXT for tighter race-freedom against the calling
-	// thread, but it generates a massive volume of ringbuf events
-	// (millions for a kernel compile) which saturates the buffer
-	// and causes classification-critical openat events to be
-	// dropped. Net effect: less correct attestation overall.
-	//
-	// Opt IN via CILOCK_HASH_RACE_FREE=1 only when:
-	//  - Workload volume is small enough to fit in the 1 GB ringbuf
-	//  - You specifically want the stronger same-thread race-freedom
-	//    (rare — most builds are single-threaded per worker process)
-	if os.Getenv("CILOCK_HASH_RACE_FREE") == "1" {
-		if err := consumer.EnableReadTap(); err != nil {
-			log.Debugf("(ebpf) read-tap unavailable (%v); falling back to path hash", err)
-		} else {
-			log.Debugf("(ebpf) read-tap enabled (opt-in)")
-		}
-	}
+	// The race-tight dispatcher-side fd capture above gives us the
+	// stronger correctness today: we hold the inode via /proc/<pid>/fd/<fd>
+	// at openat time, so the bytes we hash are the bytes the kernel
+	// will hand the tracee on read. The remaining gap is concurrent
+	// mutation by a separate writer between our hash and the tracee's
+	// read — narrow, and adversarial-workload-only. Closing it via
+	// read-tap requires separate ringbufs first.
 	r.ebpfConsumer = consumer
 	return nil
 }

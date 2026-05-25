@@ -146,11 +146,16 @@ significant capability:
 
 ### eBPF tracer (V1.4 + V2)
 
-- **Read-tap streaming SHA**: digests file content as the tracee reads
-  it, race-free against the calling thread. Replaces the path-hash
-  fallback that lost digests when fds closed before userspace could
-  re-read. **Default-on in trace mode** (opt-out via
-  `CILOCK_HASH_RACE_FREE=0`).
+- **Openat-time path-hash**: the hasher pool opens
+  `/proc/<pid>/fd/<fd>` and hashes the bytes. On fast-exiting
+  toolchain processes the tracee can close the fd before the
+  hasher gets there — those failures land in `UnhashedOpens` with
+  a reason rather than as nil-digest holes. Two improvements are
+  staged to close that race without breaking ringbuf throughput:
+  a parallel fd-capture pool between dispatcher and hasher (so
+  capture happens before the tracee exits), and separate ringbufs
+  for openat and read-tap events (so the streaming SHA can come
+  back as the default).
 - **4-way file classification**: materials (read), intermediates
   (read + written), products (written, not read), cacheArtifacts
   (written to a known cache path) — populated from a single trace,

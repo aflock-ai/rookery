@@ -181,9 +181,11 @@ func runLinuxKernelCapstone(t *testing.T, configTarget string, minDiskGB int) {
 				"NONE are acceptable — every one is a hole an attacker could exploit.\nSamples: %v",
 				nilDigests, nilSamples)
 		}
-		t.Logf("coverage: %d files captured, %d per-proc nil-digest entries, %d transient hash failures (path retried successfully elsewhere); "+
+		t.Logf("coverage: %d files captured, %d per-proc nil-digest entries; "+
+			"hash failures=%d (visible-to-verifier UnhashedOpens=%d, silent-drops-because-same-path-hashed-cleanly=%d); "+
 			"event drops openat=%d readTap=%d; partialReadUpgrades skipped=%d",
-			totalFiles, nilDigests, d.FallbackHashFailures,
+			totalFiles, nilDigests,
+			d.FallbackHashFailures, d.UnhashedOpensTotal, d.HashFailureSilentDrops,
 			d.RingbufOpenatDrops, d.RingbufReadTapDrops, d.PartialReadFallbacks)
 	}
 

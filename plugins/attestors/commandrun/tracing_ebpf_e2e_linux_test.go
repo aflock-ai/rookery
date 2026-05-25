@@ -245,17 +245,17 @@ func TestEBPF_E2E_MultipleFiles(t *testing.T) {
 	}
 }
 
-// TestEBPF_E2E_ReadTapDigestMatchesContent enables V1.4 read-tap
-// via CILOCK_HASH_RACE_FREE=1 and asserts the resulting OpenedFiles
-// digest matches the content the tracee actually read. Uses a
-// >64 KB file so the BPF multi-chunk emission path is exercised
-// (cat issues 64 KB reads → 4 chunks of 16 KB each per read).
+// TestEBPF_E2E_DigestMatchesContent asserts that the openat-time
+// path-hash via dispatcher-side fd capture (the golden-path mode)
+// produces a digest in OpenedFiles that matches the content the
+// tracee read. Uses a >64 KB file to cover multi-chunk-sized reads;
+// when read-tap returns as the default (after separate-ringbuf
+// work), this same test exercises the streaming-hash path instead.
 func TestEBPF_E2E_ReadTapDigestMatchesContent(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e test")
 	}
 	t.Setenv(EnvVarTraceMode, "ebpf")
-	t.Setenv("CILOCK_HASH_RACE_FREE", "1")
 	skipIfNoEBPFCaps(t)
 
 	dir := t.TempDir()
@@ -286,7 +286,7 @@ func TestEBPF_E2E_ReadTapDigestMatchesContent(t *testing.T) {
 
 	digest := found.OpenedFiles[target]
 	if digest == nil {
-		t.Fatalf("sentinel digest nil under CILOCK_HASH_RACE_FREE=1 (should be streaming-hash). Process: %+v", found)
+		t.Fatalf("sentinel digest nil — openat-time path-hash should have captured it. Process: %+v", found)
 	}
 
 	expected, err := cryptoutil.CalculateDigestSetFromBytes(content, defaultHashes())
