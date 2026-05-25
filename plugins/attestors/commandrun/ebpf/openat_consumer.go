@@ -59,11 +59,12 @@ const (
 	EVT_FCHMODAT   = 5
 	EVT_SECURITY   = 6
 	EVT_WRITE      = 7
-	EVT_SOCKET     = 8
-	EVT_CONNECT    = 9
-	EVT_BIND       = 10
-	EVT_READ_CHUNK = 11 // V1.4 read-tap: chunk of bytes the kernel returned
-	EVT_CLOSE      = 12 // V1.4 read-tap: finalize streaming hash for fd
+	EVT_SOCKET      = 8
+	EVT_CONNECT     = 9
+	EVT_BIND        = 10
+	EVT_READ_CHUNK  = 11 // V1.4 read-tap: chunk of bytes the kernel returned
+	EVT_CLOSE       = 12 // V1.4 read-tap: finalize streaming hash for fd
+	EVT_CONNECT_RET = 13 // connect() return code (success/failure) via kretprobe
 )
 
 // Event sizes — must match the C structs in openat_kprobe.bpf.c. All
@@ -739,6 +740,7 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_write_x64", "kprobe_pwrite_x64",
 				// network
 				"kprobe_socket_x64", "kprobe_connect_x64", "kprobe_bind_x64",
+				"kretprobe_connect_x64",
 				// security syscalls
 				"kprobe_ptrace_x64", "kprobe_memfd_create_x64",
 				"kprobe_mount_x64", "kprobe_mprotect_x64",
@@ -775,6 +777,7 @@ func archKprobeNames() ([]string, []string) {
 				"__x64_sys_unlinkat", "__x64_sys_renameat2", "__x64_sys_renameat", "__x64_sys_fchmodat",
 				"__x64_sys_write", "__x64_sys_pwrite64",
 				"__x64_sys_socket", "__x64_sys_connect", "__x64_sys_bind",
+				"__x64_sys_connect",
 				"__x64_sys_ptrace", "__x64_sys_memfd_create",
 				"__x64_sys_mount", "__x64_sys_mprotect",
 				"__x64_sys_prctl", "__x64_sys_setsid", "__x64_sys_setns",
@@ -798,6 +801,7 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_unlinkat_arm64", "kprobe_renameat2_arm64", "kprobe_renameat_arm64", "kprobe_fchmodat_arm64",
 				"kprobe_write_arm64", "kprobe_pwrite_arm64",
 				"kprobe_socket_arm64", "kprobe_connect_arm64", "kprobe_bind_arm64",
+				"kretprobe_connect_arm64",
 				"kprobe_ptrace_arm64", "kprobe_memfd_create_arm64",
 				"kprobe_mount_arm64", "kprobe_mprotect_arm64",
 				"kprobe_prctl_arm64", "kprobe_setsid_arm64", "kprobe_setns_arm64",
@@ -821,6 +825,7 @@ func archKprobeNames() ([]string, []string) {
 				"__arm64_sys_unlinkat", "__arm64_sys_renameat2", "__arm64_sys_renameat", "__arm64_sys_fchmodat",
 				"__arm64_sys_write", "__arm64_sys_pwrite64",
 				"__arm64_sys_socket", "__arm64_sys_connect", "__arm64_sys_bind",
+				"__arm64_sys_connect",
 				"__arm64_sys_ptrace", "__arm64_sys_memfd_create",
 				"__arm64_sys_mount", "__arm64_sys_mprotect",
 				"__arm64_sys_prctl", "__arm64_sys_setsid", "__arm64_sys_setns",
@@ -932,7 +937,7 @@ func decodeEvent(raw []byte) (*Event, error) {
 			return nil, err
 		}
 		return &Event{Type: evtType, Write: w}, nil
-	case EVT_SOCKET, EVT_CONNECT, EVT_BIND:
+	case EVT_SOCKET, EVT_CONNECT, EVT_BIND, EVT_CONNECT_RET:
 		n, err := decodeNetEvent(raw)
 		if err != nil {
 			return nil, err

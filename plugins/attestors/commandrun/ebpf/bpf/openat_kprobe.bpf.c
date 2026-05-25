@@ -43,6 +43,7 @@ enum cilock_event_type {
     EVT_BIND        = 10, // bind()
     EVT_READ_CHUNK  = 11, // chunk of bytes copy_to_user'd by vfs_read (V1.4 read-tap)
     EVT_CLOSE       = 12, // close/filp_close — finalize per-fd streaming hash
+    EVT_CONNECT_RET = 13, // connect() return code via kretprobe — success/failure
 };
 
 // Common header at the start of every event. event_type is read first
@@ -1285,6 +1286,55 @@ int BPF_KPROBE(kprobe_bind_x64, struct pt_regs *regs)
     const void *addr = (const void *)PT_REGS_PARM2_CORE_SYSCALL(regs);
     __u64 addr_len = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
     emit_connect_or_bind(EVT_BIND, fd, addr, addr_len);
+    return 0;
+}
+
+// ───── connect kretprobes — capture connection success/failure ─────
+//
+// The kprobe records the destination address; the kretprobe records
+// the return code. Userspace correlates by (pid, fd, recency) to
+// produce a "did this build successfully connect to host X" signal
+// for verifier policies.
+//
+// connect(2) return semantics:
+//   0       — connection established (TCP) or address bound (UDP)
+//   -EINPROGRESS (-115) — non-blocking, still pending
+//   -ECONNREFUSED, -ETIMEDOUT, etc. — failed
+//
+// Reuses net_event struct; only hdr + comm + fd + family (repurposed
+// to carry the return code) are populated. Userspace decoder
+// dispatches on EVT_CONNECT_RET to interpret family as result.
+static __always_inline void
+emit_connect_ret(int fd, long ret)
+{
+    __u32 cur_pid, cur_tgid, cur_ppid;
+    if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) return;
+
+    struct net_event ev = {};
+    fill_hdr(&ev.hdr, EVT_CONNECT_RET, cur_pid, cur_tgid, cur_ppid);
+    bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+    ev.fd = fd;
+    // Carry return code in `family` slot. Negative values are errno;
+    // 0 is success; positive is non-standard but recorded literally.
+    ev.family = (__u32)(__s32)ret;
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+}
+
+SEC("kretprobe/__arm64_sys_connect")
+int BPF_KRETPROBE(kretprobe_connect_arm64, long ret)
+{
+    // fd argument is preserved in the calling frame; the kretprobe
+    // doesn't get the args directly. We rely on userspace correlating
+    // this with the most recent kprobe_connect event for the same pid.
+    // fd = -1 signals "look up the recent EVT_CONNECT for this pid".
+    emit_connect_ret(-1, ret);
+    return 0;
+}
+
+SEC("kretprobe/__x64_sys_connect")
+int BPF_KRETPROBE(kretprobe_connect_x64, long ret)
+{
+    emit_connect_ret(-1, ret);
     return 0;
 }
 
