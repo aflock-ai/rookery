@@ -271,6 +271,19 @@ type SyscallEvent struct {
 	// (copy_file_range, splice, sendfile). Unused for single-fd
 	// syscalls.
 	TargetPath string `json:"targetPath,omitempty"`
+	// DigestSource tells the verifier where the digest for Path
+	// came from, when one exists in OpenedFiles. Possible values:
+	//   - "fanotify-open-time" — kernel-synchronous hash at open;
+	//     TRUSTED at open time, may differ from bytes-the-tracee-
+	//     actually-read for mmap-read files mutated post-open.
+	//   - "bpf-streaming"      — accumulated via read-tap kretprobe;
+	//     IS what the tracee saw.
+	//   - "openat-path-hash"   — hashed via /proc/<pid>/fd/<fd> at
+	//     openat time; race window between openat and our hasher.
+	//   - "" (empty)           — no digest captured (mmap-read with
+	//     no prior fanotify hash; zero-copy syscall).
+	// Verifiers use this to set their trust threshold per syscall.
+	DigestSource string `json:"digestSource,omitempty"`
 }
 
 // FileActivity aggregates all file mutation operations for a process.
@@ -1016,6 +1029,61 @@ func (rc *CommandRun) TraceIntermediates() map[string]attestation.CaptureEntry {
 	return out
 }
 
+// annotateDigestSources walks all SyscallEvents in the trace's
+// processes and tags each one's DigestSource based on what's known
+// about how its Path's digest was captured. Runs ONCE post-trace
+// so the per-event source is correct without per-event bookkeeping
+// during the hot path.
+//
+// fanotifyOnlyDigests is the set of paths fanotify hashed but no
+// process opened — used to disambiguate the "fanotify-on-time"
+// label from the openat-time path-hash case.
+func annotateDigestSources(processes []ProcessInfo, fanotifyAvailable bool, fanotifyOnly map[string]string) {
+	if !fanotifyAvailable && len(fanotifyOnly) == 0 {
+		// No fanotify ran; every digest is BPF-sourced.
+		for i := range processes {
+			for j := range processes[i].SyscallEvents {
+				ev := &processes[i].SyscallEvents[j]
+				if ev.Path == "" {
+					continue
+				}
+				if _, has := processes[i].OpenedFiles[ev.Path]; has {
+					ev.DigestSource = "openat-path-hash"
+				}
+			}
+		}
+		return
+	}
+	for i := range processes {
+		for j := range processes[i].SyscallEvents {
+			ev := &processes[i].SyscallEvents[j]
+			if ev.Path == "" {
+				continue
+			}
+			_, hasOpened := processes[i].OpenedFiles[ev.Path]
+			_, hasFanOnly := fanotifyOnly[ev.Path]
+			switch {
+			case hasOpened && fanotifyAvailable:
+				// Fanotify was active; mergeFanotifyDigests overwrote
+				// OpenedFiles[Path] with the kernel-synchronous hash.
+				ev.DigestSource = "fanotify-open-time"
+			case hasOpened:
+				// BPF-only path captured this.
+				ev.DigestSource = "openat-path-hash"
+			case hasFanOnly:
+				// Fanotify caught it but BPF didn't — verifier should
+				// look in Summary.FanotifyOnlyDigests.
+				ev.DigestSource = "fanotify-only"
+			default:
+				// No digest available. Common for mmap-read where the
+				// tracee opened a file that fanotify wasn't watching
+				// (off-mount), or zero-copy syscalls.
+				ev.DigestSource = ""
+			}
+		}
+	}
+}
+
 // buildTraceSummary produces the AI-agent / operator scannable view
 // of a finished trace. Computed in a single pass over Processes.
 // Cost is O(N) over the captured opens + file-ops, which is tiny
@@ -1312,6 +1380,13 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			if len(r.fanotifyOnlyDigests) > 0 {
 				r.Summary.FanotifyOnlyDigests = r.fanotifyOnlyDigests
 			}
+			// Annotate mmap / zero-copy syscall events with their
+			// digest source so verifiers can trust-tier per event.
+			// fanotify-on-time digest is strongest (kernel-synchronous);
+			// openat-path-hash is weaker (race window between openat
+			// and our hash). Empty source means no digest captured
+			// (e.g., mmap without prior fanotify, or zero-copy syscall).
+			annotateDigestSources(r.Processes, r.Summary.Diagnostics.FanotifyAvailable, r.fanotifyOnlyDigests)
 			// fs-verity sealing stats. Surfaced even when count is 0
 			// so the JSON can convey "this trace had fs-verity active
 			// but no products were sealed" (e.g. read-only workload).
