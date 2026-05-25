@@ -180,7 +180,8 @@ func New(markPath string) (*Handler, error) {
 		if p == markPath {
 			continue
 		}
-		if _, statErr := unix.Stat(p, &unix.Stat_t{}); statErr != nil {
+		var st unix.Stat_t
+		if statErr := unix.Stat(p, &st); statErr != nil {
 			continue // path doesn't exist on this system
 		}
 		_ = markFilesystemOrMount(fd, mask, p) // best-effort
