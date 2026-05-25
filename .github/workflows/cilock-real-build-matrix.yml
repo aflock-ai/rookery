@@ -200,7 +200,7 @@ jobs:
           START=$(date +%s.%N)
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- go build .
+              cilock run --trace --step matrix --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- go build .
           else
             go build .
           fi
@@ -213,7 +213,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH:$HOME/.cargo/bin" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- cargo build --release
+              cilock run --trace --step matrix --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- cargo build --release
           else
             cargo build --release
           fi
@@ -224,7 +224,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- npm install --no-fund --no-audit
+              cilock run --trace --step matrix --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- npm install --no-fund --no-audit
           else
             npm install --no-fund --no-audit
           fi
@@ -235,7 +235,7 @@ jobs:
           cd /tmp/workload
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
-              cilock run --trace --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- python3 -m pip install --target ./vendor -r requirements.txt
+              cilock run --trace --step matrix --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- python3 -m pip install --target ./vendor -r requirements.txt
           else
             python3 -m pip install --target ./vendor -r requirements.txt
           fi
@@ -249,7 +249,7 @@ jobs:
           # genuine open/read/write of generated headers.
           if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
             sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" "SIGNER_KEY=$SIGNER_KEY" \
-              cilock run --trace --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- make -j$(nproc) prepare
+              cilock run --trace --step matrix --signer-file-key-path "$SIGNER_KEY" --outfile /tmp/attest.json -- make -j$(nproc) prepare
           else
             make -j$(nproc) prepare
           fi
