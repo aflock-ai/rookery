@@ -425,7 +425,25 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		// entirely — the trace knows exactly what files the tracee
 		// wrote, and path-hashing happened post-tracee-exit when the
 		// files are stable. No re-read on the hot path.
-		a.products = fromCaptureEntries(probe.TraceOutputs())
+		//
+		// Apply include/exclude globs to the trace outputs so the
+		// product set reflects the operator's intent rather than
+		// "every file the build wrote" (which on a typical Go build
+		// is thousands of compiler intermediates). Without this, the
+		// gh CLI smoke produced 9281 "products"; the user really only
+		// has one (the gh binary).
+		raw := probe.TraceOutputs()
+		filtered := make(map[string]attestation.CaptureEntry, len(raw))
+		for path, entry := range raw {
+			if a.compiledIncludeGlob != nil && !a.compiledIncludeGlob.Match(path) {
+				continue
+			}
+			if a.compiledExcludeGlob != nil && a.compiledExcludeGlob.Match(path) {
+				continue
+			}
+			filtered[path] = entry
+		}
+		a.products = fromCaptureEntries(filtered)
 		return a.buildTree()
 	}
 
