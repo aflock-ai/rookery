@@ -327,7 +327,25 @@ func Open() (*Consumer, error) {
 		return nil, fmt.Errorf("remove memlock: %w", err)
 	}
 
-	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(bpfObjBytes))
+	// CILOCK_BPF_OBJECT_PATH overrides the embedded .bpf.o. This is
+	// the GHA-on-hosted-runner escape hatch: the checked-in BPF object
+	// in our release was built against whichever vmlinux.h the maintainer
+	// had locally, so it can fail CO-RE relocation on a kernel with
+	// different struct/field layouts (notably the Azure-flavored
+	// hosted-runner kernels). cilock-action installs clang+bpftool on
+	// the runner, regenerates vmlinux.h from /sys/kernel/btf/vmlinux,
+	// rebuilds the .bpf.o, and points us at it via this env var.
+	bpfBytes := bpfObjBytes
+	if p := os.Getenv("CILOCK_BPF_OBJECT_PATH"); p != "" {
+		b, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return nil, fmt.Errorf("read CILOCK_BPF_OBJECT_PATH=%s: %w", p, rerr)
+		}
+		fmt.Fprintf(os.Stderr, "cilock-ebpf: using runtime-built BPF object from %s (%d bytes)\n", p, len(b))
+		bpfBytes = b
+	}
+
+	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(bpfBytes))
 	if err != nil {
 		return nil, fmt.Errorf("load BPF spec: %w", err)
 	}
