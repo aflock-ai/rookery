@@ -65,6 +65,7 @@ const (
 	EVT_READ_CHUNK  = 11 // V1.4 read-tap: chunk of bytes the kernel returned
 	EVT_CLOSE       = 12 // V1.4 read-tap: finalize streaming hash for fd
 	EVT_CONNECT_RET = 13 // connect() return code (success/failure) via kretprobe
+	EVT_DNS_QUERY   = 14 // UDP send to port 53/5353 — DNS query destination
 )
 
 // Event sizes — must match the C structs in openat_kprobe.bpf.c. All
@@ -764,6 +765,7 @@ func archKprobeNames() ([]string, []string) {
 				// network
 				"kprobe_socket_x64", "kprobe_connect_x64", "kprobe_bind_x64",
 				"kretprobe_connect_x64",
+				"kprobe_udp_sendmsg",
 				// security syscalls
 				"kprobe_ptrace_x64", "kprobe_memfd_create_x64",
 				"kprobe_mount_x64", "kprobe_mprotect_x64",
@@ -802,6 +804,7 @@ func archKprobeNames() ([]string, []string) {
 				"__x64_sys_write", "__x64_sys_pwrite64",
 				"__x64_sys_socket", "__x64_sys_connect", "__x64_sys_bind",
 				"__x64_sys_connect",
+				"udp_sendmsg",
 				"__x64_sys_ptrace", "__x64_sys_memfd_create",
 				"__x64_sys_mount", "__x64_sys_mprotect",
 				"__x64_sys_prctl", "__x64_sys_setsid", "__x64_sys_setns",
@@ -827,6 +830,7 @@ func archKprobeNames() ([]string, []string) {
 				"kprobe_write_arm64", "kprobe_pwrite_arm64",
 				"kprobe_socket_arm64", "kprobe_connect_arm64", "kprobe_bind_arm64",
 				"kretprobe_connect_arm64",
+				"kprobe_udp_sendmsg",
 				"kprobe_ptrace_arm64", "kprobe_memfd_create_arm64",
 				"kprobe_mount_arm64", "kprobe_mprotect_arm64",
 				"kprobe_prctl_arm64", "kprobe_setsid_arm64", "kprobe_setns_arm64",
@@ -852,6 +856,7 @@ func archKprobeNames() ([]string, []string) {
 				"__arm64_sys_write", "__arm64_sys_pwrite64",
 				"__arm64_sys_socket", "__arm64_sys_connect", "__arm64_sys_bind",
 				"__arm64_sys_connect",
+				"udp_sendmsg",
 				"__arm64_sys_ptrace", "__arm64_sys_memfd_create",
 				"__arm64_sys_mount", "__arm64_sys_mprotect",
 				"__arm64_sys_prctl", "__arm64_sys_setsid", "__arm64_sys_setns",
@@ -964,7 +969,7 @@ func decodeEvent(raw []byte) (*Event, error) {
 			return nil, err
 		}
 		return &Event{Type: evtType, Write: w}, nil
-	case EVT_SOCKET, EVT_CONNECT, EVT_BIND, EVT_CONNECT_RET:
+	case EVT_SOCKET, EVT_CONNECT, EVT_BIND, EVT_CONNECT_RET, EVT_DNS_QUERY:
 		n, err := decodeNetEvent(raw)
 		if err != nil {
 			return nil, err

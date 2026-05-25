@@ -44,6 +44,7 @@ enum cilock_event_type {
     EVT_READ_CHUNK  = 11, // chunk of bytes copy_to_user'd by vfs_read (V1.4 read-tap)
     EVT_CLOSE       = 12, // close/filp_close — finalize per-fd streaming hash
     EVT_CONNECT_RET = 13, // connect() return code via kretprobe — success/failure
+    EVT_DNS_QUERY   = 14, // UDP send to port 53 — DNS query (destination only; QNAME parse TBD)
 };
 
 // Common header at the start of every event. event_type is read first
@@ -1374,6 +1375,82 @@ SEC("kretprobe/__x64_sys_connect")
 int BPF_KRETPROBE(kretprobe_connect_x64, long ret)
 {
     emit_connect_ret(-1, ret);
+    return 0;
+}
+
+// ───── DNS query capture via udp_sendmsg ─────────────────────────
+//
+// DNS over UDP traffic flows through the kernel's udp_sendmsg.
+// Hooking the kernel function (rather than the sendto/sendmsg
+// syscalls) catches both connected and unconnected UDP sends.
+//
+// Filter: only emit when destination port is 53 (DNS) or 5353
+// (mDNS). For connected sockets, dport lives in sk->__sk_common.
+// For unconnected sends, the dest is in msg->msg_name (sockaddr_in).
+// We check both.
+//
+// Emits a net_event with the destination IP in addr[] (sockaddr_in
+// layout) and EVT_DNS_QUERY discriminator. Userspace records as a
+// SyscallEvent. QNAME parsing from the payload is a future
+// enhancement — for now flagging that DNS happened + to whom is
+// already useful for "did this build query non-allowlisted DNS"
+// verifier policies.
+static __always_inline void
+emit_dns_query(struct sock *sk, struct msghdr *msg)
+{
+    if (!sk) return;
+
+    __u32 cur_pid, cur_tgid, cur_ppid;
+    if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) return;
+
+    // Connected UDP: skc_dport (network byte order).
+    __u16 dport_be = BPF_CORE_READ(sk, __sk_common.skc_dport);
+    __u16 dport = (__u16)((dport_be >> 8) | (dport_be << 8));
+    __u32 daddr = BPF_CORE_READ(sk, __sk_common.skc_daddr);
+
+    int is_dns = (dport == 53 || dport == 5353);
+    char addr_buf[16] = {};
+    __u32 family_out = 2; // AF_INET sentinel
+
+    if (!is_dns && msg) {
+        // Unconnected: check msg->msg_name.
+        void *name = BPF_CORE_READ(msg, msg_name);
+        if (name) {
+            // sa_family (2) + sin_port (2) + sin_addr (4)
+            __u16 sin_family = 0;
+            __u16 sin_port_be = 0;
+            __u32 sin_addr = 0;
+            bpf_probe_read_kernel(&sin_family, sizeof(sin_family), name);
+            bpf_probe_read_kernel(&sin_port_be, sizeof(sin_port_be), (char *)name + 2);
+            bpf_probe_read_kernel(&sin_addr,    sizeof(sin_addr),    (char *)name + 4);
+            __u16 mport = (__u16)((sin_port_be >> 8) | (sin_port_be << 8));
+            if (sin_family == 2 /*AF_INET*/ && (mport == 53 || mport == 5353)) {
+                is_dns = 1;
+                dport = mport;
+                daddr = sin_addr;
+            }
+        }
+    }
+    if (!is_dns) return;
+
+    struct net_event ev = {};
+    fill_hdr(&ev.hdr, EVT_DNS_QUERY, cur_pid, cur_tgid, cur_ppid);
+    bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+    ev.fd = -1; // socket fd not directly available from sock*
+    ev.family = family_out;
+    // Pack sockaddr_in into addr buf: family(2) port(2) addr(4)
+    addr_buf[0] = 2; addr_buf[1] = 0; // AF_INET
+    addr_buf[2] = (char)((dport >> 8) & 0xff);
+    addr_buf[3] = (char)(dport & 0xff);
+    __builtin_memcpy(addr_buf + 4, &daddr, 4);
+    __builtin_memcpy(ev.addr, addr_buf, sizeof(addr_buf));
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+}
+
+SEC("kprobe/udp_sendmsg")
+int BPF_KPROBE(kprobe_udp_sendmsg, struct sock *sk, struct msghdr *msg, size_t len)
+{
+    emit_dns_query(sk, msg);
     return 0;
 }
 

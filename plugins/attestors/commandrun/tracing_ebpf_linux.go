@@ -1606,7 +1606,47 @@ func recordEBPFNet(pctx *ptraceContext, ev *ebpf.NetEvent) {
 				ServerPort:    conn.Port,
 			})
 		}
+	case ebpf.EVT_DNS_QUERY:
+		// udp_sendmsg to port 53/5353. Authoritative DNS signal —
+		// catches both connected and unconnected UDP sends, where the
+		// connect-based heuristic above misses unconnected sendto/
+		// sendmsg patterns (which is how glibc's resolver actually
+		// queries).
+		conn := parseSockaddrEBPF(ev.Family, ev.Addr[:], "dns_query")
+		procInfo.Network.DNSLookups = append(procInfo.Network.DNSLookups, DNSLookup{
+			ServerAddress: conn.Address,
+			ServerPort:    conn.Port,
+		})
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "dns_query",
+			Detail:    fmt.Sprintf("UDP DNS to %s:%d — query payload not parsed (QNAME capture is V2 phase 6 follow-on)", conn.Address, conn.Port),
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+	case ebpf.EVT_CONNECT_RET:
+		// Return code lives in the family field (see emit_connect_ret).
+		// Treat 0 as success, negative as errno.
+		rc := int32(ev.Family)
+		procInfo.SyscallEvents = append(procInfo.SyscallEvents, SyscallEvent{
+			Syscall:   "connect_result",
+			Detail:    fmt.Sprintf("connect returned %d (%s)", rc, connectResultLabel(rc)),
+			Args:      []int{int(rc)},
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		})
 	}
+}
+
+// connectResultLabel turns a connect(2) return code into a short
+// human-readable verdict for SyscallEvent.Detail.
+func connectResultLabel(rc int32) string {
+	switch {
+	case rc == 0:
+		return "success"
+	case rc == -115:
+		return "EINPROGRESS (non-blocking)"
+	case rc < 0:
+		return fmt.Sprintf("failed (errno=%d)", -rc)
+	}
+	return "unknown"
 }
 
 func opName(op uint32) string {

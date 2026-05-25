@@ -850,3 +850,83 @@ func TestWeakness_MmapRead_Surfaced(t *testing.T) {
 			summarizeProcessTree(procs))
 	}
 }
+
+// dnsQueryCSource — a C program that sends a minimal DNS query
+// payload to a localhost UDP socket on port 53. We don't need a
+// real DNS server to fire — the kprobe on udp_sendmsg fires
+// regardless of whether the destination port is listening, as
+// long as the SEND succeeds. Localhost destination avoids needing
+// network egress (CI runners often have no real DNS resolver).
+const dnsQueryCSource = `
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+int main(void) {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) { perror("socket"); return 1; }
+
+    struct sockaddr_in dst = {0};
+    dst.sin_family = AF_INET;
+    dst.sin_port   = htons(53);
+    inet_aton("127.0.0.1", &dst.sin_addr);
+
+    // Minimal DNS query header (12 bytes) + question for example.com A
+    unsigned char query[] = {
+        0xab, 0xcd, // id
+        0x01, 0x00, // flags: standard query, RD=1
+        0x00, 0x01, // qdcount=1
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // counts
+        // QNAME: 7example3com0
+        0x07, 'e','x','a','m','p','l','e',
+        0x03, 'c','o','m',
+        0x00,
+        0x00, 0x01, // QTYPE=A
+        0x00, 0x01, // QCLASS=IN
+    };
+    sendto(fd, query, sizeof(query), 0, (struct sockaddr*)&dst, sizeof(dst));
+    close(fd);
+    return 0;
+}
+`
+
+// TestWeakness_DNSQuery_Surfaced asserts a tracee that does a UDP
+// send to port 53 gets flagged via SyscallEvent. Catches the
+// content-bypass case where a build resolves a hostname (e.g. for
+// a curl, git clone, npm install) and the verifier needs to know
+// "this build talked to a DNS server."
+func TestWeakness_DNSQuery_Surfaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e test")
+	}
+	t.Setenv(EnvVarTraceMode, "ebpf")
+	skipIfNoEBPFCaps(t)
+
+	dir := t.TempDir()
+	bin := compileC(t, dir, "dns_query", dnsQueryCSource)
+
+	procs := runUnderEBPF(t, []string{bin})
+
+	hit := false
+	for _, p := range procs {
+		for _, ev := range p.SyscallEvents {
+			if strings.ToLower(ev.Syscall) == "dns_query" {
+				hit = true
+				t.Logf("DNS captured: %s", ev.Detail)
+				break
+			}
+		}
+		if hit {
+			break
+		}
+	}
+	if !hit {
+		t.Errorf("DNS UDP send NOT captured as SyscallEvent — udp_sendmsg kprobe missed port-53 destination.\nprocs:\n%s",
+			summarizeProcessTree(procs))
+	}
+}
