@@ -110,6 +110,12 @@ func runCrossLang(t *testing.T, workingDir string, argv []string, envKV []string
 		t.Setenv(envKV[i], envKV[i+1])
 	}
 
+	// Phase 0 privilege-drop downgrades the tracee to SUDO_UID;
+	// fix up workspace ownership so the unprivileged tracee can
+	// read sources and write outputs. Matches production semantics
+	// where the build user owns the workspace.
+	makeTraceeWorkspaceAccessible(filepath.Join(workingDir, "_unused"))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

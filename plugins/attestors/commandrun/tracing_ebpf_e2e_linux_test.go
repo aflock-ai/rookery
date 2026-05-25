@@ -305,10 +305,59 @@ func TestEBPF_E2E_ReadTapDigestMatchesContent(t *testing.T) {
 	}
 }
 
+// makeTraceeWorkspaceAccessible makes the tracee's working area
+// accessible after Phase 0 privilege-drop. Walks parents of binPath
+// making them world-traversable; chowns the leaf directory to
+// SUDO_UID and chmods leaf-dir contents to 0666 (files) / 0777
+// (subdirs) so the unprivileged tracee can read + write its workspace.
+// This mirrors the production case where the build user owns the
+// workspace; here we have to fix up after the test harness creates
+// dirs as root.
+func makeTraceeWorkspaceAccessible(binPath string) {
+	leafDir := filepath.Dir(binPath)
+	for cur := leafDir; cur != "" && cur != "/tmp" && cur != "/" && cur != "."; cur = filepath.Dir(cur) {
+		_ = os.Chmod(cur, 0o755)
+	}
+	sudoUidStr := os.Getenv("SUDO_UID")
+	sudoGidStr := os.Getenv("SUDO_GID")
+	if sudoUidStr == "" || sudoGidStr == "" {
+		return
+	}
+	uid, e1 := strconv.Atoi(sudoUidStr)
+	gid, e2 := strconv.Atoi(sudoGidStr)
+	if e1 != nil || e2 != nil {
+		return
+	}
+	_ = filepath.Walk(leafDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		_ = os.Chown(path, uid, gid)
+		if info.IsDir() {
+			_ = os.Chmod(path, 0o777)
+		} else {
+			_ = os.Chmod(path, 0o666)
+			if info.Mode()&0o111 != 0 {
+				_ = os.Chmod(path, 0o777)
+			}
+		}
+		return nil
+	})
+}
+
 // runUnderEBPF builds + runs a CommandRun with the given argv under
 // the eBPF tracer, returns the captured ProcessInfo.
 func runUnderEBPF(t *testing.T, argv []string) []ProcessInfo {
 	t.Helper()
+	// When running under sudo (required for BPF caps), Phase 0
+	// privilege-drop downgrades the tracee to SUDO_UID. If argv[0]
+	// lives in a directory the tracee can't traverse, exec fails
+	// with EACCES. Walk parents of argv[0] making them world-
+	// traversable; chown the leaf directory + any test fixtures to
+	// SUDO_UID so the tracee can read/write them.
+	if len(argv) > 0 {
+		makeTraceeWorkspaceAccessible(argv[0])
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	actx, err := attestation.NewContext("ebpf-e2e",

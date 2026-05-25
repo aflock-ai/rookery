@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -166,10 +167,69 @@ func enableTracing(c *exec.Cmd) {
 	// kprobes and does NOT ptrace it.
 	mode := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVarTraceMode)))
 	if mode == traceModeNamePtrace {
-		c.SysProcAttr = &unix.SysProcAttr{
-			Ptrace: true,
+		if c.SysProcAttr == nil {
+			c.SysProcAttr = &unix.SysProcAttr{}
 		}
+		c.SysProcAttr.Ptrace = true
 	}
+}
+
+// applyTraceePrivilegeDrop ensures the traced child runs with the
+// invoker's real (un-elevated) uid/gid when cilock was started via
+// sudo. Without this, a tracee inherits the root + caps that cilock
+// needs for BPF / fanotify, defeating the purpose of attestation
+// (the tracee could escalate via its inherited caps). The cilock
+// PARENT keeps its caps; only the forked child is downgraded.
+//
+// No-op when:
+//   - SUDO_UID/SUDO_GID env vars are absent (running native, not
+//     via sudo) — the parent's uid IS the user's uid.
+//   - cilock isn't running as root (no elevation to drop FROM).
+//   - The Credential field is already set (caller explicitly chose).
+//
+// Errors during env parsing are non-fatal: log + skip the drop and
+// surface a diagnostic. The build proceeds with parent's uid, but
+// honesty requires the operator know we couldn't downgrade.
+func applyTraceePrivilegeDrop(c *exec.Cmd) {
+	if os.Getuid() != 0 {
+		return
+	}
+	if c.SysProcAttr == nil {
+		c.SysProcAttr = &unix.SysProcAttr{}
+	}
+	if c.SysProcAttr.Credential != nil {
+		return
+	}
+	sudoUidStr := os.Getenv("SUDO_UID")
+	sudoGidStr := os.Getenv("SUDO_GID")
+	if sudoUidStr == "" || sudoGidStr == "" {
+		return
+	}
+	sudoUid, err := strconv.ParseUint(sudoUidStr, 10, 32)
+	if err != nil {
+		log.Debugf("(tracee-priv-drop) invalid SUDO_UID=%q: %v", sudoUidStr, err)
+		return
+	}
+	sudoGid, err := strconv.ParseUint(sudoGidStr, 10, 32)
+	if err != nil {
+		log.Debugf("(tracee-priv-drop) invalid SUDO_GID=%q: %v", sudoGidStr, err)
+		return
+	}
+	if sudoUid == 0 {
+		// Sudo run as root user; nothing to downgrade to.
+		return
+	}
+	c.SysProcAttr.Credential = &syscall.Credential{
+		Uid:         uint32(sudoUid),
+		Gid:         uint32(sudoGid),
+		NoSetGroups: true,
+	}
+	// AmbientCaps left at the zero value — child will not inherit
+	// any of cilock's elevated capabilities through the ambient set.
+	// The bounding set is unchanged (child could re-raise via setuid
+	// to a cap-set binary), but the no-new-privs follow-up will close
+	// that vector once Go exposes PR_SET_NO_NEW_PRIVS in SysProcAttr.
+	c.SysProcAttr.AmbientCaps = nil
 }
 
 // preStartTracingSetup is invoked from runCmd BEFORE c.Start(). For

@@ -1018,6 +1018,11 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			return err
 		}
 	}
+	// Downgrade the tracee's uid/gid back to the invoker when cilock
+	// is running under sudo (for BPF / fanotify caps). Otherwise the
+	// build inherits root + caps and can escalate trivially. No-op
+	// when not running as root or SUDO_UID isn't set.
+	applyTraceePrivilegeDrop(c)
 
 	if err := c.Start(); err != nil {
 		// If eBPF was pre-opened but Start failed, release the consumer.

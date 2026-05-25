@@ -39,6 +39,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -134,7 +135,41 @@ func compileC(t *testing.T, srcDir, name, source string) string {
 	if err != nil {
 		t.Fatalf("compile %s.c: %v\n%s", name, err, out)
 	}
+	// Tests often run under sudo so cilock can attach BPF probes,
+	// but Phase 0 privilege-drop downgrades the tracee to SUDO_UID.
+	// t.TempDir() creates root-owned mode-0700 dirs which the
+	// downgraded child can't traverse → permission denied at exec.
+	// Walk up the dir chain making everything world-traversable so
+	// the unprivileged tracee can reach the binary. Production builds
+	// don't hit this — build artifacts are already user-owned.
+	makeChainTraversable(srcDir)
+	_ = os.Chmod(binPath, 0o755)
 	return binPath
+}
+
+// makeChainTraversable walks up from p toward /tmp making each
+// directory world-executable (traversable). The leaf gets 0777 so the
+// downgraded tracee can also write into it. If SUDO_UID is set we
+// chown the leaf to that uid so the tracee fully owns its workspace
+// (matching production semantics where the build user owns the dir).
+// Stops walking at /tmp or above.
+func makeChainTraversable(p string) {
+	if p == "" {
+		return
+	}
+	_ = os.Chmod(p, 0o777)
+	if sudoUidStr := os.Getenv("SUDO_UID"); sudoUidStr != "" {
+		if sudoGidStr := os.Getenv("SUDO_GID"); sudoGidStr != "" {
+			uid, e1 := strconv.Atoi(sudoUidStr)
+			gid, e2 := strconv.Atoi(sudoGidStr)
+			if e1 == nil && e2 == nil {
+				_ = os.Chown(p, uid, gid)
+			}
+		}
+	}
+	for cur := filepath.Dir(p); cur != "" && cur != "/tmp" && cur != "/" && cur != "."; cur = filepath.Dir(cur) {
+		_ = os.Chmod(cur, 0o755)
+	}
 }
 
 // TestWeakness_ForkChain_DeepWatchPropagation pins V2 Phase 1's fix.
