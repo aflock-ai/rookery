@@ -195,6 +195,24 @@ type ProcessInfo struct {
 	Cmdline          string                          `json:"cmdline,omitempty"`
 	ExeDigest        cryptoutil.DigestSet            `json:"exedigest,omitempty"`
 	OpenedFiles      map[string]cryptoutil.DigestSet `json:"openedfiles,omitempty"`
+	// UnhashedOpens carries opens we saw the kernel event for but
+	// could NOT hash — typically because the file was unlinked or
+	// the process exited between the kernel event and our hash
+	// attempt. For each entry the attestation records WHAT path
+	// was opened and WHY we couldn't hash it.
+	//
+	// SECURITY: these entries ARE suspicious. An attacker could race
+	// to delete a file after a tracee reads it, leaving an
+	// "unhashable" hole the attestation can't audit. Verifiers
+	// MUST decide policy on these — they're not silently dropped.
+	// Common benign cases:
+	//  - gcc unlinking /tmp/cc*.s temp files after use
+	//  - Short-lived helper processes that exit before our hasher
+	//    pool reaches the event
+	// Common adversarial cases:
+	//  - Tracee deliberately racing to delete sensitive files
+	//  - A read-then-unlink that "launders" content from view
+	UnhashedOpens    []UnhashedOpen                  `json:"unhashedOpens,omitempty"`
 	Environ          string                          `json:"environ,omitempty"`
 	SpecBypassIsVuln bool                            `json:"specbypassisvuln,omitempty"`
 	Network          *NetworkActivity                `json:"network,omitempty"`
@@ -208,6 +226,14 @@ type ProcessInfo struct {
 	// ended" or "exit code unknown" — verifiers must not infer
 	// successful exit from a missing/zero value.
 	ExitCode int `json:"exitcode,omitempty"`
+}
+
+// UnhashedOpen records an openat where we observed the kernel event
+// but could not produce a digest. Always paired with a Reason so a
+// verifier can judge whether the gap is benign or suspicious.
+type UnhashedOpen struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"` // e.g. "file removed before hash", "process exited"
 }
 
 // TraceSummary is the AI-agent and operator-friendly index of a
@@ -309,8 +335,17 @@ type TraceDiagnostics struct {
 
 	// FallbackHashFailures is the count of partial-read fallbacks
 	// where the path-hash itself couldn't read the file (e.g.,
-	// file was deleted before fallback ran). Non-zero means some
-	// paths in the attestation have nil digests by design.
+	// file was deleted before fallback ran). Non-zero means there
+	// are paths in the attestation with nil digests — gaps that
+	// a verifier should treat as untrustworthy.
+	//
+	// Design note: we DELIBERATELY do not run a post-trace
+	// "recover any nil digest by reading the file off disk later"
+	// sweep. That would be a TOCTOU lie — the bytes on disk after
+	// the build are not provably the bytes the tracee processed.
+	// A nil digest stays nil. The fix for a non-zero value is to
+	// prevent the drop at its source (bigger ringbuf, sharded
+	// consumer, kernel-side hashing) — NOT to paper over it.
 	FallbackHashFailures uint64 `json:"fallbackHashFailures,omitempty"`
 }
 
@@ -356,6 +391,7 @@ type CommandRun struct {
 	// so an attestation alone tells you whether read-tap was effective.
 	partialReadFallbacks uint64
 	fallbackHashFailures uint64
+
 
 	// resolvedCaptureMode records which capture-mode the framework
 	// selected for this run ("trace", "walk", "ima"). Populated by
@@ -897,6 +933,7 @@ func pathHashIfExists(path string, hashes []cryptoutil.DigestValue) map[string]s
 	}
 	return nameMap
 }
+
 
 func (rc *CommandRun) TracingEnabled() bool {
 	return rc.enableTracing

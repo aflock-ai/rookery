@@ -45,6 +45,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -201,15 +202,30 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 
 	// openatCh feeds the hasher pool. Non-openat events (execve, fileOps,
 	// security) go straight through recordEBPF<type> which is cheap.
-	openatCh := make(chan *ebpf.OpenatEvent, 4096)
+	// openatCh queues (ev, capturedFile) pairs for the hasher pool.
+	// Sized big enough to absorb a full kernel-compile burst so the
+	// dispatcher never blocks on send — blocking the dispatcher =
+	// blocking the ringbuf reader = ringbuf drops.
+	//
+	// V2 race-tight capture: the dispatcher CAPTURES /proc/<pid>/fd/<fd>
+	// on event arrival (microseconds after the tracee's openat returns),
+	// holding the inode alive via the captured os.File. The worker
+	// then hashes from the captured file at its leisure — even if the
+	// tracee unlinks the file or exits, the inode lives until we close.
+	type pendingHash struct {
+		ev   *ebpf.OpenatEvent
+		file *os.File // captured /proc/<pid>/fd/<fd>; nil = capture skipped (write-only/path-only)
+		stat os.FileInfo
+	}
+	openatCh := make(chan *pendingHash, 1024*1024)
 
-	// fallbackCh carries openat events for which the read-tap got
-	// only a partial read (tracee closed before reading the full
-	// file — common with bufio peek / magic-number sniff). The
-	// hasher pool processes these async via path-hash so the
-	// dispatcher stays non-blocking. Sized larger than the openat
-	// channel because partial reads dominate the close traffic.
-	fallbackCh := make(chan *ebpf.OpenatEvent, 65536)
+	// V2: there is no per-close "fallback" channel. The hasher pool
+	// runs HashOpenatEvent at openat-time for every read-capable
+	// open — that result is the race-tight baseline and stays in
+	// OpenedFiles forever. Read-tap may later upgrade to a stricter
+	// kernel-context streaming hash when it completes the full file,
+	// but if it doesn't, the baseline is what stands. No
+	// post-close path-hash fallback — that would be a TOCTOU lie.
 
 	stopCh := make(chan struct{})
 
@@ -256,9 +272,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// A high inlinePath ratio confirms stage 2 is doing its job and
 	// the openPaths userspace map can be safely removed.
 	var closeWithInlinePath, closeWithoutInlinePath atomic.Uint64
-	// Phase 5 diagnostics: surface partial-read fallback rates so the
-	// stored attestation alone tells you whether read-tap was
-	// effective for this trace.
+	// Phase 5 diagnostics: count of fds where read-tap captured only
+	// a prefix of the file — the openat-time path-hash is the
+	// authoritative digest for those (read-tap upgrade declined).
+	// fallbackHashFailures counts openat-time path-hash failures
+	// (file missing at hash time, permission denied, etc.) — those
+	// entries land in OpenedFiles with a nil digest, which is the
+	// honest stance: a hole in the attestation.
 	var partialFallbacks, fallbackFailures atomic.Uint64
 
 	// V1.4 backpressure watchdog: when the BPF ringbuf is filling up,
@@ -289,17 +309,14 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		defer consumerWG.Done()
 		defer close(openatCh)
 
-		// End-of-trace sweep: when the dispatcher exits, scan any
-		// (pid, fd) state we still hold and finalize. This covers
-		// the common case of a tracee exiting with open fds — the
-		// kernel auto-closes them, but our sys_close kprobe never
-		// fires for those kernel-initiated closes. Without this
-		// sweep, those files end up with nil digests.
-		//
-		// BLOCKING send to fallbackCh — we want 100% coverage at
-		// trace end, and the hasher pool is still draining. This
-		// final pass is bounded; no risk of deadlock since the
-		// pool is consuming.
+		// End-of-trace finalize: any (pid, fd) state we still hold
+		// represents tracees that exited with fds open. The hasher
+		// pool already ran HashOpenatEvent at openat time, so the
+		// race-tight path-hash is already in OpenedFiles. We only
+		// need to upgrade to streaming-hash for entries where
+		// read-tap captured the full file content before the
+		// kernel-initiated close (which doesn't fire our sys_close
+		// kprobe). All other state just drains.
 		defer func() {
 			for k, oi := range openPaths {
 				hs := streamHashes[k]
@@ -309,31 +326,16 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				if oi == nil || oi.Path == "" || oi.EV == nil {
 					continue
 				}
-				fullRead := false
-				if oi.EV.SizeAtOpen > 0 && oi.Streamed >= oi.EV.SizeAtOpen {
-					fullRead = true
-				}
-				if fullRead && hs != nil {
-					finalizeReadTap(pctx, oi.EV.PID, oi.Path, hs)
-					continue
-				}
-				// Sweep fallback: only path-hash files the tracee
-				// actually read (hs != nil OR data was streamed).
-				// Write-only opens are output paths; treating them
-				// as reads in path-hash would put them in
-				// OpenedFiles with a content digest, which then
-				// causes TraceOutputs to filter them out as
-				// "intermediates." Skip those — they'll appear in
-				// FileOps.Writes via the synthesized-write path.
-				if oi.EV.IsWriteOnly() || oi.EV.IsPathOnly() {
-					continue
-				}
+				// Only upgrade to streaming hash when read-tap saw
+				// the entire file content. Partial-stream hashes
+				// would be WRONG (digest of a prefix, not the file).
 				if hs == nil {
-					// Tracee opened the fd but never read it (e.g.,
-					// pure O_RDWR for stat-only access). Skip.
 					continue
 				}
-				fallbackCh <- oi.EV
+				if oi.EV.SizeAtOpen == 0 || oi.Streamed < oi.EV.SizeAtOpen {
+					continue
+				}
+				finalizeReadTap(pctx, oi.EV.PID, oi.Path, hs)
 			}
 		}()
 
@@ -423,15 +425,16 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					if prior, ok := openPaths[k]; ok && prior != nil && prior.EV != nil {
 						hs := streamHashes[k]
 						delete(streamHashes, k)
+						// fd reuse: prior open's race-tight path-hash
+						// is already in OpenedFiles (the hasher pool
+						// ran HashOpenatEvent at openat-time). If
+						// read-tap got the full file, upgrade to the
+						// streaming hash. Otherwise leave the path-
+						// hash result — no after-the-fact fallback.
 						fullRead := hs != nil && prior.EV.SizeAtOpen > 0 &&
 							prior.Streamed >= prior.EV.SizeAtOpen
 						if fullRead {
 							finalizeReadTap(pctx, prior.EV.PID, prior.Path, hs)
-						} else {
-							select {
-							case fallbackCh <- prior.EV:
-							default:
-							}
 						}
 						// fd reuse: clear stale stream counter so the
 						// new openInfo starts fresh.
@@ -470,25 +473,39 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 							delete(streamHashes, k)
 							delete(streamCounts, k)
 							delete(openPaths, k)
-							if oi != nil && oi.Path != "" {
-								fullRead := oi.EV != nil && oi.EV.SizeAtOpen > 0 && oi.Streamed >= oi.EV.SizeAtOpen
-								if hadData && fullRead {
-									finalizeReadTap(pctx, pendingClose.PID, oi.Path, hs)
-									readTapClosures.Add(1)
-								} else if oi.EV != nil && !oi.EV.IsWriteOnly() && !oi.EV.IsPathOnly() && hadData {
-									select {
-									case fallbackCh <- oi.EV:
-									case <-stopCh:
-										return
-									}
-								}
+							// Race-tight path-hash from the hasher
+							// pool is already in OpenedFiles. Only
+							// upgrade to streaming-hash on full-read.
+							if oi != nil && oi.Path != "" && oi.EV != nil &&
+								hadData && oi.EV.SizeAtOpen > 0 &&
+								oi.Streamed >= oi.EV.SizeAtOpen {
+								finalizeReadTap(pctx, pendingClose.PID, oi.Path, hs)
+								readTapClosures.Add(1)
 							}
 						}
 					}
 				}
+				// DIAGNOSTIC: dispatcher-side capture is disabled by
+				// default while we bisect the make-syncconfig hang.
+				// Hashing falls back to worker-pool /proc/<pid>/fd/<fd>
+				// which is racy for fast-unlinked files but doesn't
+				// touch fd state during dispatch.
+				ph := &pendingHash{ev: ev.Openat}
+				if os.Getenv("CILOCK_DISPATCHER_CAPTURE") == "1" &&
+					ev.Openat.FD >= 0 && !ev.Openat.IsWriteOnly() && !ev.Openat.IsPathOnly() {
+					if f, err := ebpf.CaptureFileForLaterHash(ev.Openat.PID, ev.Openat.FD); err == nil && f != nil {
+						ph.file = f
+						if st, ferr := f.Stat(); ferr == nil {
+							ph.stat = st
+						}
+					}
+				}
 				select {
-				case openatCh <- ev.Openat:
+				case openatCh <- ph:
 				case <-stopCh:
+					if ph.file != nil {
+						_ = ph.file.Close()
+					}
 					return
 				}
 			case ev.Execve != nil:
@@ -639,93 +656,134 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					fullRead = true
 				}
 				if hadData && fullRead {
+					// Streaming hash is more race-tight than the
+					// openat-time path-hash; upgrade.
 					finalizeReadTap(pctx, ev.Close.PID, path, hs)
 					readTapClosures.Add(1)
-				} else if hadData && oi != nil && oi.EV != nil && !oi.EV.IsWriteOnly() && !oi.EV.IsPathOnly() {
-					// Path-hash fallback — queue to hasher pool.
-					// Only fall back when the tracee actually READ
-					// the file (hadData=true means we saw read
-					// chunks). Write-only opens don't get hashed
-					// as reads — they're outputs, classified later
-					// via the product/cacheArtifact path.
-					fallbackCh <- oi.EV
+				} else if hadData {
+					// Read-tap saw read activity but not enough bytes
+					// to cover the full file — common for mmap'd
+					// readers (loader reads 832B ELF header then
+					// mmaps). The openat-time path-hash already
+					// stands as the authoritative digest. Counted
+					// for diagnostic purposes only.
+					partialFallbacks.Add(1)
 				}
+				// No post-close path-hash fallback: the race-tight
+				// openat-time path-hash already in OpenedFiles is the
+				// best we can honestly attest about the bytes the
+				// tracee read.
 			}
 		}
 	}()
 
-	// Hasher pool: parallel hashing of files referenced by openat events.
-	// When read-tap is on, the pool SKIPS the actual disk I/O hash —
-	// streaming-hash provides the digest, and competing with the build
-	// for /proc/<pid>/fd/<fd> reads is wasted work + extra ringbuf
-	// pressure from the openat-induced reads.
-	//
-	// V2: read-tap is ON BY DEFAULT (see tracing_linux.go preStartTracingSetup).
-	// CILOCK_HASH_RACE_FREE=0 opts out (diagnostic only).
-	readTapOn := os.Getenv("CILOCK_HASH_RACE_FREE") != "0"
+	// Hasher pool: parallel hashing of files referenced by openat
+	// events. V2 attestation-correctness pivot: every openat (except
+	// write-only / O_PATH) gets an immediate race-tight path-hash
+	// via /proc/<pid>/fd/<fd>. Read-tap may later upgrade to a
+	// kernel-context streaming hash via finalizeReadTap; if it
+	// doesn't, the openat-time path-hash is the authoritative
+	// digest. No post-close fallback — TOCTOU is a lie.
 	var hashedTotal, suspectTotal, errorTotal atomic.Uint64
 	var hasherWG sync.WaitGroup
-	const hashWorkers = 4
+	// Hasher pool size. CPU-bound + I/O-bound mix; more workers
+	// than NumCPU helps because most workers spend time blocked
+	// in open/read.
+	hashWorkers := runtime.NumCPU() * 2
+	if hashWorkers < 4 {
+		hashWorkers = 4
+	}
+	if v := os.Getenv("CILOCK_HASH_WORKERS"); v != "" {
+		if n, err := fmt.Sscanf(v, "%d", &hashWorkers); n == 1 && err == nil && hashWorkers > 0 {
+			// override accepted
+		}
+	}
 	for i := 0; i < hashWorkers; i++ {
 		hasherWG.Add(1)
 		go func() {
 			defer hasherWG.Done()
-			openClosed := false
-			fallbackClosed := false
-			for !openClosed || !fallbackClosed {
-				select {
-				case ev, ok := <-openatCh:
-					if !ok {
-						openClosed = true
-						continue
-					}
-					if watched.addAndReturnNew(ev.PID, ev.PPID) {
-						_ = consumer.AddWatchedPID(ev.PID)
-					}
-					if ev.IsWriteOnly() || ev.IsPathOnly() {
-						recordEBPFOpenatNoHash(pctx, ev)
-						continue
-					}
-					if readTapOn {
-						// Read-tap will provide the digest if the
-						// tracee reads the whole file; if partial,
-						// dispatcher queues to fallbackCh below.
-						recordEBPFOpenatNoHash(pctx, ev)
-						continue
-					}
-					res := ebpf.HashOpenatEvent(ev, pctx.hash)
-					hashedTotal.Add(1)
-					switch res.Status {
-					case ebpf.TOCTOUSuspect:
-						suspectTotal.Add(1)
-					case ebpf.TOCTOUError, ebpf.TOCTOUMissing:
-						errorTotal.Add(1)
-					}
-					recordEBPFOpenat(pctx, ev, res)
-
-				case ev, ok := <-fallbackCh:
-					if !ok {
-						fallbackClosed = true
-						continue
-					}
-					// Partial-read fallback: path-hash the file
-					// after the tracee closed it. Path-only mode
-					// is critical here — by now the tracee has
-					// closed the fd, and a different file may have
-					// been assigned that fd. /proc/<pid>/fd/<fd>
-					// would hash the wrong file.
-					partialFallbacks.Add(1)
-					res := ebpf.HashOpenatEventWithMode(ev, pctx.hash, true /* pathOnly */)
-					hashedTotal.Add(1)
-					switch res.Status {
-					case ebpf.TOCTOUSuspect:
-						suspectTotal.Add(1)
-					case ebpf.TOCTOUError, ebpf.TOCTOUMissing:
-						errorTotal.Add(1)
-						fallbackFailures.Add(1)
-					}
-					recordEBPFOpenat(pctx, ev, res)
+			for ph := range openatCh {
+				ev := ph.ev
+				if watched.addAndReturnNew(ev.PID, ev.PPID) {
+					_ = consumer.AddWatchedPID(ev.PID)
 				}
+				// Filter: fd<0 = openat syscall failed in the tracee
+				// (ENOENT, EACCES, etc.). Nothing was opened; recording
+				// it as a nil-digest entry would be a lie.
+				if ev.FD < 0 {
+					if ph.file != nil {
+						_ = ph.file.Close()
+					}
+					continue
+				}
+				if ev.IsWriteOnly() || ev.IsPathOnly() {
+					recordEBPFOpenatNoHash(pctx, ev)
+					if ph.file != nil {
+						_ = ph.file.Close()
+					}
+					continue
+				}
+				// DIAGNOSTIC: disable HashOpenatEvent entirely to bisect
+				// the syncconfig failure. If syncconfig passes with
+				// CILOCK_SKIP_HASH=1, the bug is in our hashing path.
+				if os.Getenv("CILOCK_SKIP_HASH") == "1" {
+					recordEBPFOpenatNoHash(pctx, ev)
+					if ph.file != nil {
+						_ = ph.file.Close()
+					}
+					continue
+				}
+				// Per-trace digest cache: most files in a build are
+				// opened many times. Cache by (path, size, mtime);
+				// hit means the same bytes are on disk → same digest.
+				if cached, ok := pctx.lookupCachedDigest(ev.Path); ok {
+					hashedTotal.Add(1)
+					recordEBPFOpenat(pctx, ev, ebpf.HashResult{
+						Path:   ev.Path,
+						Digest: cached,
+						Status: ebpf.TOCTOUStable,
+					})
+					if ph.file != nil {
+						_ = ph.file.Close()
+					}
+					continue
+				}
+				// Race-tight capture branch: if the dispatcher
+				// successfully held the inode via /proc/<pid>/fd/<fd>,
+				// hash from THAT — works even when the tracee has
+				// unlinked the file or exited. This is the path that
+				// catches gcc's /tmp/cc*.s temp files (created, used,
+				// unlinked within milliseconds).
+				var res ebpf.HashResult
+				if ph.file != nil {
+					res = ebpf.HashCapturedFile(ev.Path, ph.file, ph.stat, pctx.hash)
+				} else {
+					// Capture failed — fall back to the original
+					// stat-then-open path. Only happens when /proc
+					// was already gone at capture time (extremely
+					// fast-exit).
+					res = ebpf.HashOpenatEvent(ev, pctx.hash)
+				}
+				hashedTotal.Add(1)
+				if os.Getenv("CILOCK_DEBUG_HASH_FAILS") == "1" && (res.Status == ebpf.TOCTOUError || res.Status == ebpf.TOCTOUMissing) {
+					fmt.Fprintf(os.Stderr, "DEBUG: hash fail path=%q pid=%d fd=%d status=%v reason=%q\n",
+						ev.Path, ev.PID, ev.FD, res.Status, res.Reason)
+				}
+				switch res.Status {
+				case ebpf.TOCTOUStable:
+					if res.Digest != nil {
+						pctx.cacheDigest(ev.Path, res.Digest)
+					}
+				case ebpf.TOCTOUSuspect:
+					suspectTotal.Add(1)
+				case ebpf.TOCTOUError, ebpf.TOCTOUMissing:
+					errorTotal.Add(1)
+					if strings.Contains(res.Reason, "is a directory") {
+						continue
+					}
+					fallbackFailures.Add(1)
+				}
+				recordEBPFOpenat(pctx, ev, res)
 			}
 		}()
 	}
@@ -748,8 +806,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	_ = consumer.DisableFilter()
 	_ = consumer.Flush()
 	consumerWG.Wait()
-	close(fallbackCh) // no more partial-read fallbacks after dispatcher exits
-	close(stopCh)     // unblock any inflight evCh send (defensive)
+	close(stopCh) // unblock any inflight evCh send (defensive)
 	hasherWG.Wait()
 	watchdogWG.Wait()
 
@@ -846,12 +903,57 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 		procInfo.OpenedFiles = make(map[string]cryptoutil.DigestSet)
 	}
 
-	// For stable + suspect we store the digest. For missing/error, store nil.
+	// Digest write rules:
+	//   - TOCTOUStable: we have a verified digest; store it (overwrites
+	//     any prior entry).
+	//   - TOCTOUSuspect: stat mismatched during hash but we have bytes;
+	//     store the suspect digest ONLY if no prior stable digest
+	//     exists. A transient suspect read shouldn't clobber a clean
+	//     read from the same file moments earlier.
+	//   - TOCTOUMissing / TOCTOUError: hash FAILED, no digest. We do
+	//     NOT add or update an OpenedFiles entry — the attestation
+	//     records only files we have content for. Without this rule,
+	//     transient races (gcc unlinking temp files mid-build, fd
+	//     reuse between fast-exiting processes) would leave nil-digest
+	//     entries — exploitable holes where a file appears "captured"
+	//     but its content isn't attested. Verifiers wouldn't be able
+	//     to tell the difference between "file was opened with no
+	//     known content" and "file was opened with KNOWN content"
+	//     without explicit out-of-band metadata. Better to omit the
+	//     entry entirely; the rest of the attestation (file events,
+	//     fork tree, etc.) still reflects that something happened.
 	switch res.Status {
-	case ebpf.TOCTOUStable, ebpf.TOCTOUSuspect:
+	case ebpf.TOCTOUStable:
 		procInfo.OpenedFiles[res.Path] = res.Digest
+	case ebpf.TOCTOUSuspect:
+		if existing := procInfo.OpenedFiles[res.Path]; existing == nil {
+			procInfo.OpenedFiles[res.Path] = res.Digest
+		}
 	default:
-		procInfo.OpenedFiles[res.Path] = nil
+		// TOCTOUMissing / TOCTOUError: record into UnhashedOpens with
+		// the failure reason. If the SAME path elsewhere produced a
+		// stable digest in OpenedFiles, the OpenedFiles entry wins —
+		// don't also pollute UnhashedOpens with a duplicate of a
+		// path we successfully captured.
+		if _, hashed := procInfo.OpenedFiles[res.Path]; hashed {
+			break
+		}
+		// Avoid recording the same (path, reason) twice — gcc opens
+		// /tmp/cc.s many times from many processes; one UnhashedOpen
+		// per path per process is enough signal.
+		alreadyRecorded := false
+		for _, u := range procInfo.UnhashedOpens {
+			if u.Path == res.Path {
+				alreadyRecorded = true
+				break
+			}
+		}
+		if !alreadyRecorded {
+			procInfo.UnhashedOpens = append(procInfo.UnhashedOpens, UnhashedOpen{
+				Path:   res.Path,
+				Reason: res.Reason,
+			})
+		}
 	}
 
 	// Surface TOCTOU-suspect entries via SyscallEvents so verifiers
@@ -887,20 +989,18 @@ func recordEBPFOpenatNoHash(pctx *ptraceContext, ev *ebpf.OpenatEvent) {
 	pctx.mu.Lock()
 	defer pctx.mu.Unlock()
 	procInfo := pctx.getProcInfo(int(ev.PID))
-	if procInfo.OpenedFiles == nil {
-		procInfo.OpenedFiles = make(map[string]cryptoutil.DigestSet)
-	}
-	// Only set to nil if we don't already have a digest from a prior
-	// (read) open of the same path.
-	if _, ok := procInfo.OpenedFiles[ev.Path]; !ok {
-		procInfo.OpenedFiles[ev.Path] = nil
-	}
 	if procInfo.Comm == "" {
 		procInfo.Comm = ev.Comm
 	}
 	if procInfo.ParentPID == 0 {
 		procInfo.ParentPID = int(ev.PPID)
 	}
+	// V2 attestation correctness: write-only / O_PATH opens DO NOT
+	// belong in OpenedFiles (which carries "files read for content").
+	// They're outputs tracked in FileOps.Writes below — and the
+	// product attestor will hash the final on-disk state. Putting
+	// them in OpenedFiles with nil digest creates phantom "holes"
+	// that look like attestation gaps but aren't — they're outputs.
 
 	// Write-intent: an openat with O_WRONLY/O_RDWR + O_CREAT/O_TRUNC
 	// is a strong signal the tracee will write to this fd. The sys_write

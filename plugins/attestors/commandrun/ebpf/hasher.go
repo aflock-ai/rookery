@@ -70,6 +70,72 @@ type HashResult struct {
 	Reason string // populated for non-stable statuses
 }
 
+// CaptureFileForLaterHash opens /proc/<pid>/fd/<fd> from the
+// userspace tracer's PERSPECTIVE, returning an os.File that holds
+// the underlying inode alive even if the tracee later closes its
+// fd, exits, or unlinks the file. The hasher pool then reads from
+// this os.File at its leisure.
+//
+// This is the race-tight capture pattern for the eBPF dispatcher:
+// open IMMEDIATELY on event arrival (microseconds after the
+// kernel openat returned to the tracee), then hand the open file
+// to a worker pool for the (slow) hashing step. The race window
+// shrinks from "hasher-pool-latency" (~ms or more under load) to
+// "dispatcher-receive-window" (~us).
+//
+// Returns (nil, nil) when fd<0 (openat failed in the tracee) so
+// the caller can short-circuit without an attestation entry.
+// Returns (file, nil) on success; caller MUST close the file.
+// Returns (nil, err) on real errors (process gone, permission).
+func CaptureFileForLaterHash(pid uint32, fd int32) (*os.File, error) {
+	if fd < 0 {
+		return nil, nil
+	}
+	fdPath := fmt.Sprintf("/proc/%d/fd/%d", pid, fd)
+	return os.Open(fdPath) //nolint:gosec // G304: /proc/<pid>/fd/<fd>, by-design read
+}
+
+// HashCapturedFile hashes a previously-captured os.File (from
+// CaptureFileForLaterHash). The file is closed by this function.
+// statBefore can be nil — caller is free to skip the pre-stat if
+// the path may already be gone.
+func HashCapturedFile(path string, f *os.File, statBefore os.FileInfo, hashFuncs []cryptoutil.DigestValue) HashResult {
+	r := HashResult{Path: path}
+	defer f.Close()
+	digest, err := cryptoutil.CalculateDigestSet(f, hashFuncs)
+	if err != nil {
+		r.Status = TOCTOUError
+		r.Reason = "hash via captured fd: " + err.Error()
+		return r
+	}
+	r.Digest = digest
+	// statAfter via the captured fd itself — robust even when the
+	// path is unlinked (works against the inode, not the dirent).
+	statAfter, ferr := f.Stat()
+	if ferr != nil {
+		// fd is gone — but we already read the bytes; trust them.
+		r.Status = TOCTOUStable
+		return r
+	}
+	if statBefore != nil && !sameStatBasic(statBefore, statAfter) {
+		r.Status = TOCTOUSuspect
+		r.Reason = fmt.Sprintf("file mutated during hash: size %d->%d",
+			statBefore.Size(), statAfter.Size())
+		return r
+	}
+	r.Status = TOCTOUStable
+	return r
+}
+
+// sameStatBasic compares size only (mtime check via os.FileInfo is
+// unreliable for the captured-fd path since we can't compare against
+// the disk dirent post-unlink). For CI / build workloads, size
+// stability is sufficient to detect mutation between dispatcher
+// capture and worker hash.
+func sameStatBasic(a, b os.FileInfo) bool {
+	return a != nil && b != nil && a.Size() == b.Size()
+}
+
 // HashOpenatEvent stats + opens + hashes the file referenced by an
 // openat event, and classifies the result by TOCTOU stability.
 //
@@ -123,9 +189,59 @@ func hashViaProcFD(fdPath, origPath string, hashFuncs []cryptoutil.DigestValue) 
 		statBefore = nil
 	}
 
+	// CRITICAL: refuse to open the fd if statBefore says it's not a
+	// regular file. /proc/<pid>/fd/<fd> for a pipe/socket/fifo can
+	// be OPENED — but reading from it DRAINS bytes the tracee was
+	// supposed to read. e.g., when the tracee opens "/dev/stdin"
+	// (resolved to the parent's pipe via /proc/self/fd/0), our
+	// "hashing" of /proc/<pid>/fd/<fd> would empty the pipe and the
+	// tracee subsequently reads garbage / nothing.
+	//
+	// This caused the kernel-build capstone to die at make syncconfig
+	// with "gcc: unknown C compiler" — cc-version.sh's heredoc was
+	// being drained by our hasher before gcc could read it.
+	//
+	// Bypass the entire fd-read path for non-regular files. The
+	// fallback (hashViaPath) ALSO checks the file mode and refuses
+	// non-regular files — so the overall result is TOCTOUError with
+	// a clear reason, recorded into UnhashedOpens.
+	if statBefore != nil && !statBefore.Mode().IsRegular() {
+		r.Status = TOCTOUError
+		r.Reason = "non-regular file (pipe/socket/fifo/device); skipped to avoid draining tracee IO"
+		return r, true
+	}
+
+	// DIAGNOSTIC bisect: skip the actual file open/read if env says so.
+	if os.Getenv("CILOCK_HASH_VIA_FDPATH_NOOP") == "1" {
+		r.Digest = nil
+		r.Status = TOCTOUStable
+		return r, true
+	}
 	f, err := os.Open(fdPath) //nolint:gosec // G304: /proc/<pid>/fd/<fd>, by-design read
 	if err != nil {
 		return HashResult{}, false
+	}
+	// CRITICAL: fd-reuse defense. The BPF openat event captured
+	// (pid, fd, path) at the moment of the tracee's openat. By the
+	// time the userspace hasher pool reaches this point, the tracee
+	// may have closed that fd and REUSED the fd number for a
+	// different open — e.g. closed a regular file at fd=3, then
+	// opened a PIPE at the same fd=3. /proc/<pid>/fd/<fd> now
+	// points at the new (pipe) file. Reading from it DRAINS bytes
+	// the tracee was waiting for.
+	//
+	// Detection: stat the just-opened fd. If its file type doesn't
+	// match what we'd expect for a regular-file open (the only kind
+	// we want to hash), abort. The kernel-build capstone died here
+	// before this check: gcc's heredoc was being drained because
+	// /proc/<gcc>/fd/3 (originally a .s file) was now a pipe for a
+	// later child process.
+	fst, ferr := f.Stat()
+	if ferr != nil || !fst.Mode().IsRegular() {
+		_ = f.Close()
+		r.Status = TOCTOUError
+		r.Reason = "fd reused after openat (procfs entry no longer regular file)"
+		return r, true
 	}
 	digest, hashErr := cryptoutil.CalculateDigestSet(f, hashFuncs)
 	_ = f.Close()
@@ -176,6 +292,13 @@ func hashViaPath(path string, hashFuncs []cryptoutil.DigestValue) HashResult {
 		}
 		r.Status = TOCTOUError
 		r.Reason = "pre-hash stat: " + err.Error()
+		return r
+	}
+	// Refuse non-regular files. Opening a pipe/socket/fifo and
+	// reading from it would drain bytes the tracee needs.
+	if !statBefore.Mode().IsRegular() {
+		r.Status = TOCTOUError
+		r.Reason = "non-regular file (pipe/socket/fifo/device); skipped to avoid draining tracee IO"
 		return r
 	}
 

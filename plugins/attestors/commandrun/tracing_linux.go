@@ -68,10 +68,17 @@ type ptraceContext struct {
 	// on larger builds.
 	digestCache map[string]cryptoutil.DigestSet
 
+	// digestCacheMu guards digestCache. SEPARATE from mu so the
+	// dispatcher's recordEBPF* helpers (which hold mu) can safely
+	// call cachedDigest without recursive-lock deadlock — sync.Mutex
+	// is not reentrant in Go.
+	digestCacheMu sync.Mutex
+
 	// mu guards the processes map and the ProcessInfo entries within
 	// it. Required for the eBPF tracing path, where multiple hash
 	// workers update process state concurrently. Uncontended in the
-	// serial ptrace path.
+	// serial ptrace path. NOT used to guard digestCache — see
+	// digestCacheMu above.
 	mu sync.Mutex
 }
 
@@ -90,19 +97,61 @@ func digestCacheKey(path string) (string, bool) {
 // cachedDigest returns the digest set for `path`, hashing it on cache
 // miss and remembering the result keyed by (path,size,mtime). Returns
 // (nil, false) if the file is missing, unreadable, or a directory.
+//
+// Concurrent access (eBPF path): the hasher pool calls this from
+// multiple worker goroutines. pctx.mu serializes both the cache
+// lookup and the (rare) cache fill on miss.
 func (p *ptraceContext) cachedDigest(path string) (cryptoutil.DigestSet, bool) {
 	key, ok := digestCacheKey(path)
 	if !ok {
 		return nil, false
 	}
-	if d, ok := p.digestCache[key]; ok {
+	p.digestCacheMu.Lock()
+	d, hit := p.digestCache[key]
+	p.digestCacheMu.Unlock()
+	if hit {
 		return d, true
 	}
 	d, err := cryptoutil.CalculateDigestSetFromFile(path, p.hash)
 	if err != nil {
 		return nil, false
 	}
+	p.digestCacheMu.Lock()
 	p.digestCache[key] = d
+	p.digestCacheMu.Unlock()
+	return d, true
+}
+
+// cacheDigest stores a digest under (path, size, mtime) for future
+// lookups. Used by the eBPF hasher pool to record HashOpenatEvent
+// results so subsequent opens of the same unchanged file hit the
+// cache instead of re-reading.
+func (p *ptraceContext) cacheDigest(path string, d cryptoutil.DigestSet) {
+	key, ok := digestCacheKey(path)
+	if !ok {
+		return
+	}
+	p.digestCacheMu.Lock()
+	p.digestCache[key] = d
+	p.digestCacheMu.Unlock()
+}
+
+// lookupCachedDigest is the LOOKUP-ONLY variant of cachedDigest —
+// returns (digest, true) on hit, (nil, false) on miss. Does NOT
+// compute on miss. Used by the eBPF hasher pool to short-circuit
+// before calling HashOpenatEvent (which is the canonical race-
+// tight compute path).
+func (p *ptraceContext) lookupCachedDigest(path string) (cryptoutil.DigestSet, bool) {
+	key, ok := digestCacheKey(path)
+	if !ok {
+		return nil, false
+	}
+	p.digestCacheMu.Lock()
+	d, hit := p.digestCache[key]
+	p.digestCacheMu.Unlock()
+	if !hit {
+		return nil, false
+	}
 	return d, true
 }
 
@@ -172,15 +221,30 @@ func (r *CommandRun) preStartTracingSetup() error {
 	// as the tracee reads, so digests are authoritative regardless of
 	// process lifetime or path resolution.
 	//
-	// Path-hash is preserved as the OUT-OF-BAND path used by the IMA
-	// reader (which can't intercept reads at all and must read files
-	// after-the-fact). For trace mode, opt-out via CILOCK_HASH_RACE_FREE=0
-	// if you need the old behavior for diagnostics.
-	if os.Getenv("CILOCK_HASH_RACE_FREE") != "0" {
+	// V2 attestation-correctness pivot: read-tap is OFF by default.
+	//
+	// Rationale: the hasher pool now runs HashOpenatEvent at openat-
+	// time for every read-capable open, hashing via /proc/<pid>/fd/<fd>
+	// — that's the SAME open-file-description the tracee will read
+	// from, so the digest matches the bytes the tracee gets. Race-
+	// tight against external writers, no TOCTOU window.
+	//
+	// Read-tap was an additional layer that captured bytes IN
+	// KERNEL CONTEXT for tighter race-freedom against the calling
+	// thread, but it generates a massive volume of ringbuf events
+	// (millions for a kernel compile) which saturates the buffer
+	// and causes classification-critical openat events to be
+	// dropped. Net effect: less correct attestation overall.
+	//
+	// Opt IN via CILOCK_HASH_RACE_FREE=1 only when:
+	//  - Workload volume is small enough to fit in the 1 GB ringbuf
+	//  - You specifically want the stronger same-thread race-freedom
+	//    (rare — most builds are single-threaded per worker process)
+	if os.Getenv("CILOCK_HASH_RACE_FREE") == "1" {
 		if err := consumer.EnableReadTap(); err != nil {
 			log.Debugf("(ebpf) read-tap unavailable (%v); falling back to path hash", err)
 		} else {
-			log.Debugf("(ebpf) read-tap enabled (V2 default)")
+			log.Debugf("(ebpf) read-tap enabled (opt-in)")
 		}
 	}
 	r.ebpfConsumer = consumer

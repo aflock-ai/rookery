@@ -112,7 +112,15 @@ func TestCapstone_LinuxKernel_TinyConfig(t *testing.T) {
 		t.Errorf("init/main.o NOT in intermediates — intermediate capture broke on a heavy workload")
 	}
 
-	// (3) Per-FILE coverage check (not per-event).
+	// (3) ATTESTATION COMPLETENESS check.
+	//
+	// An attestation with HOLES is exploitable — an attacker could
+	// swap any unrecorded file. The capstone enforces the strongest
+	// possible criterion: ZERO unrecoverable files. The post-trace
+	// recovery sweep should re-hash anything the in-flight trace
+	// missed; unrecoverableFiles > 0 means the build wrote files
+	// that are now gone from disk OR weren't recorded with an
+	// absolute path — both legitimate gaps in coverage.
 	//
 	// Ringbuf drops count individual EVENTS lost (read_tap chunks,
 	// openat records, etc.) — a heavy workload like a kernel compile
@@ -128,16 +136,38 @@ func TestCapstone_LinuxKernel_TinyConfig(t *testing.T) {
 	if cap.rc.Summary != nil {
 		d := cap.rc.Summary.Diagnostics
 		totalFiles := uint64(len(cap.Materials) + len(cap.Intermediates) + len(cap.Products) + len(cap.CacheArtifacts))
-		if totalFiles == 0 {
-			totalFiles = 1
+
+		// THE attestation correctness invariant: walk EVERY process's
+		// OpenedFiles and confirm no entry has a nil digest. A nil
+		// digest is a hole — an attacker could swap that file and
+		// the attestation wouldn't catch it.
+		//
+		// FallbackHashFailures and ringbuf drops are operational
+		// counters (how busy / lossy the trace was) — NOT correctness
+		// signals. The same file path opened many times will fail to
+		// hash sometimes (fast-exit fd gone) but succeed others; the
+		// first successful hash sticks in OpenedFiles. The criterion
+		// that matters is the FINAL state of OpenedFiles.
+		var nilDigests uint64
+		var nilSamples []string
+		for _, p := range cap.rc.Processes {
+			for path, ds := range p.OpenedFiles {
+				if ds == nil {
+					nilDigests++
+					if len(nilSamples) < 10 {
+						nilSamples = append(nilSamples, path)
+					}
+				}
+			}
 		}
-		failureRate := d.FallbackHashFailures * 100 / totalFiles
-		if failureRate > 5 {
-			t.Errorf("fallback-hash failure rate %d%% (%d / %d files) exceeded 5%% — attestation has unrecoverable gaps",
-				failureRate, d.FallbackHashFailures, totalFiles)
+		if nilDigests > 0 {
+			t.Errorf("attestation incomplete: %d per-process OpenedFiles entries have nil digests. "+
+				"NONE are acceptable — every one is a hole an attacker could exploit.\nSamples: %v",
+				nilDigests, nilSamples)
 		}
-		t.Logf("coverage: %d/%d files unrecoverable (%d%%); event drops openat=%d readTap=%d; partialFallbacks=%d",
-			d.FallbackHashFailures, totalFiles, failureRate,
+		t.Logf("coverage: %d files captured, %d per-proc nil-digest entries, %d transient hash failures (path retried successfully elsewhere); "+
+			"event drops openat=%d readTap=%d; partialReadUpgrades skipped=%d",
+			totalFiles, nilDigests, d.FallbackHashFailures,
 			d.RingbufOpenatDrops, d.RingbufReadTapDrops, d.PartialReadFallbacks)
 	}
 

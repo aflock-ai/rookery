@@ -123,10 +123,14 @@ func runCrossLang(t *testing.T, workingDir string, argv []string, envKV []string
 		t.Fatalf("attestation ctx: %v", err)
 	}
 
+	silent := true
+	if os.Getenv("CILOCK_TEST_SHOW_TRACEE_OUTPUT") == "1" {
+		silent = false
+	}
 	rc := New(
 		WithCommand(argv),
 		WithTracing(true),
-		WithSilent(true),
+		WithSilent(silent),
 	)
 
 	// Cache matcher: install the V1 default-pattern set so the

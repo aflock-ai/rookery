@@ -272,7 +272,14 @@ struct net_event {
 // host with CAP_BPF.
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 256 * 1024 * 1024);
+    // 1 GB ringbuf. Linux kernel tinyconfig builds emit ~330MB of
+    // read-chunk events in a 35-second window (~10 MB/s avg, with
+    // peaks much higher); 256 MB was insufficient and dropped
+    // ~21k events. 1 GB absorbs the peak burst without drops. The
+    // memlock rlimit is uncapped at consumer Open() via
+    // rlimit.RemoveMemlock — the allocation succeeds on any
+    // CAP_BPF-capable host with reasonable free RAM.
+    __uint(max_entries, 1024 * 1024 * 1024);
 } events SEC(".maps");
 
 // Drop counters — every bpf_ringbuf_output that returns < 0 is
