@@ -176,6 +176,16 @@ type SyscallEvent struct {
 	Detail    string `json:"detail,omitempty"` // human-readable detail
 	Args      []int  `json:"args,omitempty"`   // raw syscall arguments
 	Timestamp string `json:"timestamp,omitempty"`
+	// Path is the resolved path the syscall acted on, when known.
+	// For mmap, this is the mapped file. For two-fd transfers
+	// (copy_file_range, splice, sendfile) this is the SOURCE.
+	// Empty when fd → path resolution failed (open event missed,
+	// fd inherited from before trace start, etc.).
+	Path string `json:"path,omitempty"`
+	// TargetPath is the destination side for two-fd transfers
+	// (copy_file_range, splice, sendfile). Unused for single-fd
+	// syscalls.
+	TargetPath string `json:"targetPath,omitempty"`
 }
 
 // FileActivity aggregates all file mutation operations for a process.

@@ -666,7 +666,21 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					continue
 				}
 				otherTotal.Add(1)
-				recordEBPFSecurity(pctx, ev.Security)
+				// Resolve any fd-bearing syscalls' paths from the
+				// in-flight openPaths table so SyscallEvent.Path /
+				// Detail can carry the human-meaningful target.
+				secEv := ev.Security
+				resolvedPaths := resolveSecurityFds(secEv, func(fd int32) string {
+					if fd < 0 {
+						return ""
+					}
+					oi, ok := openPaths[pidFdKey{PID: secEv.PID, FD: fd}]
+					if !ok || oi == nil {
+						return ""
+					}
+					return oi.Path
+				})
+				recordEBPFSecurity(pctx, secEv, resolvedPaths)
 			case ev.Write != nil:
 				if !watched.matchAndAdd(ev.Write.PID, ev.Write.TGID, ev.Write.PPID) {
 					continue
@@ -1499,7 +1513,70 @@ func recordEBPFFileOp(pctx *ptraceContext, ev *ebpf.FileOpEvent) {
 // syscalls the ptrace path captures as syscallEvents[]. Formats the
 // human-readable Detail string per syscall_nr; numbers come from the
 // CILOCK_SYS_*_X64/ARM64 macros in openat_kprobe.bpf.c.
-func recordEBPFSecurity(pctx *ptraceContext, ev *ebpf.SecurityEvent) {
+// fdResolvedPaths holds path lookups for syscalls that carry file
+// descriptors in their args. Index is positional in ev.Args; value
+// is the resolved path (empty when openPaths had no entry).
+type fdResolvedPaths struct {
+	// Primary is the "main" file the syscall acts on (the mmap target,
+	// the read source for sendfile/copy_file_range/splice).
+	Primary string
+	// Secondary is the destination side for two-fd transfers
+	// (sendfile in→out, copy_file_range src→dst, splice in→out).
+	Secondary string
+}
+
+// resolveSecurityFds looks up the file paths the security event's fd
+// args reference. The lookup closure is supplied by the dispatcher
+// (which holds openPaths in scope); done at dispatch time because
+// the fd may be closed by the time recordEBPFSecurity runs.
+func resolveSecurityFds(
+	ev *ebpf.SecurityEvent,
+	lookup func(fd int32) string,
+) fdResolvedPaths {
+	if ev == nil || lookup == nil {
+		return fdResolvedPaths{}
+	}
+	const (
+		secCopyFileRange = 113
+		secSplice        = 114
+		secSendfile      = 115
+		secMmap          = 116
+	)
+	switch ev.SyscallNr {
+	case secMmap:
+		// Args layout: a0=prot, a1=flags, a2=fd
+		if len(ev.Args) >= 3 {
+			return fdResolvedPaths{Primary: lookup(int32(ev.Args[2]))}
+		}
+	case secCopyFileRange:
+		// Args: a0=fd_in, a1=fd_out
+		if len(ev.Args) >= 2 {
+			return fdResolvedPaths{
+				Primary:   lookup(int32(ev.Args[0])),
+				Secondary: lookup(int32(ev.Args[1])),
+			}
+		}
+	case secSplice:
+		// Args: a0=fd_in, a2=fd_out
+		if len(ev.Args) >= 3 {
+			return fdResolvedPaths{
+				Primary:   lookup(int32(ev.Args[0])),
+				Secondary: lookup(int32(ev.Args[2])),
+			}
+		}
+	case secSendfile:
+		// Args: a0=out_fd, a1=in_fd (kernel API order)
+		if len(ev.Args) >= 2 {
+			return fdResolvedPaths{
+				Primary:   lookup(int32(ev.Args[1])), // source (in_fd)
+				Secondary: lookup(int32(ev.Args[0])), // destination (out_fd)
+			}
+		}
+	}
+	return fdResolvedPaths{}
+}
+
+func recordEBPFSecurity(pctx *ptraceContext, ev *ebpf.SecurityEvent, paths fdResolvedPaths) {
 	pctx.mu.Lock()
 	defer pctx.mu.Unlock()
 
@@ -1509,7 +1586,7 @@ func recordEBPFSecurity(pctx *ptraceContext, ev *ebpf.SecurityEvent) {
 	}
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 
-	se := classifyEBPFSecurityEvent(ev)
+	se := classifyEBPFSecurityEvent(ev, paths)
 	if se.Syscall == "" {
 		return // filtered out (uninteresting prctl, mprotect without PROT_EXEC, etc.)
 	}
@@ -1524,7 +1601,7 @@ func recordEBPFSecurity(pctx *ptraceContext, ev *ebpf.SecurityEvent) {
 // prctl options).
 //
 //nolint:gocyclo // per-syscall classifier, one short case per syscall — splitting hides the parity with the ptrace path.
-func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent) SyscallEvent {
+func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent, paths fdResolvedPaths) SyscallEvent {
 	// IDs must match CILOCK_SEC_* in openat_kprobe.bpf.c.
 	const (
 		secPtrace      = 100
@@ -1662,49 +1739,40 @@ func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent) SyscallEvent {
 		// or read-tap on OTHER reads, NOT from the bytes moved here.
 		// Args[0..3] are fd_in, off_in, fd_out, off_out; len + flags
 		// are beyond the 4-arg SecurityEvent capture window.
+		// Zero-copy intra-FS copy. Bytes-not-captured is a property of
+		// the syscall itself (documented once in commandrun docs); no
+		// need to spell it out per event. Args + Path identify what
+		// the kernel moved; verifier reasons from the syscall name.
 		return SyscallEvent{
-			Syscall: "copy_file_range",
-			Detail:  fmt.Sprintf("zero-copy file range fd_in=%d → fd_out=%d — content bypasses read-tap; verify product digest via openat-time hash", ev.Args[0], ev.Args[2]),
-			Args:    []int{int(ev.Args[0]), int(ev.Args[2])},
+			Syscall:    "copy_file_range",
+			Args:       []int{int(ev.Args[0]), int(ev.Args[2])},
+			Path:       paths.Primary,
+			TargetPath: paths.Secondary,
 		}
 	case secSplice:
-		// splice(fd_in, off_in, fd_out, off_out, len, flags). Used by
-		// `tar`, `cat`-with-pipes, modern HTTP servers. Same content-
-		// bypass risk as copy_file_range.
 		return SyscallEvent{
-			Syscall: "splice",
-			Detail:  fmt.Sprintf("zero-copy splice fd_in=%d → fd_out=%d — content bypasses read-tap", ev.Args[0], ev.Args[2]),
-			Args:    []int{int(ev.Args[0]), int(ev.Args[2])},
+			Syscall:    "splice",
+			Args:       []int{int(ev.Args[0]), int(ev.Args[2])},
+			Path:       paths.Primary,
+			TargetPath: paths.Secondary,
 		}
 	case secSendfile:
-		// sendfile(out_fd, in_fd, offset, count). HTTP servers,
-		// `cp --reflink=auto`, in-kernel data movement.
+		// sendfile(out_fd, in_fd, offset, count). Source is in_fd.
 		return SyscallEvent{
-			Syscall: "sendfile",
-			Detail:  fmt.Sprintf("zero-copy sendfile in_fd=%d → out_fd=%d count=%d — content bypasses read-tap", ev.Args[1], ev.Args[0], ev.Args[3]),
-			Args:    []int{int(ev.Args[1]), int(ev.Args[0]), int(ev.Args[3])},
+			Syscall:    "sendfile",
+			Args:       []int{int(ev.Args[1]), int(ev.Args[0]), int(ev.Args[3])},
+			Path:       paths.Primary,
+			TargetPath: paths.Secondary,
 		}
 	case secMmap:
-		// File-backed mmap with PROT_READ: tracee can read bytes via
-		// page faults without firing our read kprobe. The openat-time
-		// path-hash IS recorded but a TOCTOU window exists between
-		// openat and the page fault. Surface so the verifier can
-		// treat the digest for this file as TOCTOU-suspect.
-		//
-		// Args layout: a0=prot, a1=flags, a2=fd, a3=0.
-		prot := ev.Args[0]
-		flags := ev.Args[1]
-		fd := int(ev.Args[2])
-		shared := (flags & 0x1) != 0 // MAP_SHARED
-		mapping := "MAP_PRIVATE"
-		if shared {
-			mapping = "MAP_SHARED"
-		}
+		// File-backed mmap with PROT_READ. Args layout: a0=prot,
+		// a1=flags, a2=fd. The fact that mmap-reads bypass read-tap
+		// is a property of mmap itself, documented in the schema —
+		// not repeated per event.
 		return SyscallEvent{
 			Syscall: "mmap",
-			Detail: fmt.Sprintf("file mmap fd=%d prot=0x%x %s — reads bypass read-tap; openat-time hash digests this file with TOCTOU window",
-				fd, prot, mapping),
-			Args: []int{fd, int(prot), int(flags)},
+			Args:    []int{int(ev.Args[2]), int(ev.Args[0]), int(ev.Args[1])},
+			Path:    paths.Primary,
 		}
 	}
 	return SyscallEvent{}

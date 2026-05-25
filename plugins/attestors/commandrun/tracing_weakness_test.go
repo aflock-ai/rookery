@@ -833,11 +833,13 @@ func TestWeakness_MmapRead_Surfaced(t *testing.T) {
 	procs := runUnderEBPF(t, []string{bin, target})
 
 	hit := false
+	var hitPath string
 	for _, p := range procs {
 		for _, ev := range p.SyscallEvents {
-			if strings.ToLower(ev.Syscall) == "mmap" {
+			if strings.ToLower(ev.Syscall) == "mmap" && ev.Path == target {
 				hit = true
-				t.Logf("mmap captured: %s", ev.Detail)
+				hitPath = ev.Path
+				t.Logf("mmap captured: path=%s args=%v", ev.Path, ev.Args)
 				break
 			}
 		}
@@ -846,9 +848,10 @@ func TestWeakness_MmapRead_Surfaced(t *testing.T) {
 		}
 	}
 	if !hit {
-		t.Errorf("mmap-read NOT captured as SyscallEvent — page-fault content bypass invisible.\nprocs:\n%s",
-			summarizeProcessTree(procs))
+		t.Errorf("mmap-read of %s NOT captured as SyscallEvent with resolved Path — page-fault content bypass invisible OR fd→path resolution failed.\nprocs:\n%s",
+			target, summarizeProcessTree(procs))
 	}
+	_ = hitPath
 }
 
 // dnsQueryCSource — a C program that sends a minimal DNS query

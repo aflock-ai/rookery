@@ -1850,6 +1850,13 @@ emit_close(int fd)
     __u32 cur_pid, cur_tgid, cur_ppid;
     if (!emit_filter(&cur_pid, &cur_tgid, &cur_ppid)) return;
 
+    // Clear mmap_seen dedup entry for this (pid, fd). Without this,
+    // fd reuse after close would silently skip emit_mmap_once for
+    // the next file at the same fd — verifiers would miss the mmap
+    // event entirely.
+    struct mmap_dedup_key mk = {.pid = cur_pid, .fd = fd};
+    bpf_map_delete_elem(&mmap_seen, &mk);
+
     struct close_event ev = {};
     fill_hdr(&ev.hdr, EVT_CLOSE, cur_pid, cur_tgid, cur_ppid);
     bpf_get_current_comm(ev.comm, sizeof(ev.comm));
