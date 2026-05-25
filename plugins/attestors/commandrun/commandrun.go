@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -880,6 +881,22 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 		}
 	}
 
+	// Atomic-rename builds (Go, Cargo, GCC -o) write to an absolute
+	// temp path then RENAME(2) to a relative target (e.g. "bin/gh"
+	// when the tracee's cwd is the workspace). The kernel records
+	// the rename target as-given — relative. Resolve any relative
+	// trace path against the cilock process cwd (which the tracee
+	// inherited) so downstream os.Stat / pathHashIfExists actually
+	// find the file. Without this, atomic-rename builds get
+	// nil-digest witness-only entries instead of real digests.
+	cwd, cwdErr := os.Getwd()
+	resolvePath := func(p string) string {
+		if p == "" || filepath.IsAbs(p) || cwdErr != nil {
+			return p
+		}
+		return filepath.Join(cwd, p)
+	}
+
 	writePaths := make(map[string]bool, 256)
 	for i := range rc.Processes {
 		fo := rc.Processes[i].FileOps
@@ -888,12 +905,12 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 		}
 		for _, w := range fo.Writes {
 			if w.Path != "" {
-				writePaths[w.Path] = true
+				writePaths[resolvePath(w.Path)] = true
 			}
 		}
 		for _, r := range fo.Renames {
 			if r.NewPath != "" {
-				writePaths[r.NewPath] = true
+				writePaths[resolvePath(r.NewPath)] = true
 			}
 		}
 	}
