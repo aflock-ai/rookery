@@ -17,6 +17,7 @@ package commandrun
 import (
 	"bytes"
 	"crypto"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -97,6 +98,82 @@ func WithIgnoreExitCode(ignore bool) Option {
 	return func(cr *CommandRun) {
 		cr.ignoreExitCode = ignore
 	}
+}
+
+// WithRequireZeroDrops enables the fail-closed attestation gate. If
+// the trace observed ANY BPF ringbuf drops, fanotify handler
+// timeouts, or other data-loss signals at the end of the trace, the
+// attestor returns an error instead of emitting a known-incomplete
+// attestation. For high-stakes release builds where "we missed some
+// events" is unacceptable.
+//
+// Default off — most builds tolerate the few-percent drop rate on
+// JVM-class workloads in exchange for not interrupting CI. Opt in
+// via --require-zero-drops or the API.
+func WithRequireZeroDrops(require bool) Option {
+	return func(cr *CommandRun) {
+		cr.requireZeroDrops = require
+	}
+}
+
+// ZeroDropsError signals that --require-zero-drops was set and the
+// trace observed loss. Wraps a structured breakdown so the operator
+// (and any tooling parsing stderr) can see WHICH counters were
+// non-zero.
+type ZeroDropsError struct {
+	RingbufOpenatDrops    uint64
+	RingbufReadTapDrops   uint64
+	FanotifyTimeouts      uint64
+	UnhashedOpensTotal    uint64
+	FallbackHashFailures  uint64
+	FsVeritySealFailures  uint64
+}
+
+func (e *ZeroDropsError) Error() string {
+	return fmt.Sprintf(
+		"attestation rejected (--require-zero-drops): "+
+			"bpf-openat-drops=%d bpf-readtap-drops=%d fanotify-timeouts=%d "+
+			"unhashed-opens=%d fallback-hash-failures=%d fsverity-failures=%d",
+		e.RingbufOpenatDrops, e.RingbufReadTapDrops, e.FanotifyTimeouts,
+		e.UnhashedOpensTotal, e.FallbackHashFailures, e.FsVeritySealFailures,
+	)
+}
+
+// zeroDropsGate inspects the trace diagnostics and returns a
+// ZeroDropsError when ANY data-loss counter is non-zero. Called
+// from runCmd when WithRequireZeroDrops is set.
+//
+// What counts as a drop:
+//   - RingbufOpenatDrops > 0: openat events the BPF kernel side lost
+//   - RingbufReadTapDrops > 0: content chunks lost
+//   - FanotifyTimeouts > 0: handler too slow → kernel default-allow
+//   - UnhashedOpensTotal > 0: files we observed opening but couldn't hash
+//   - FallbackHashFailures > 0: aggregate hash failures (silent + recorded)
+//   - FsVeritySealFailures > 0: kernel sealing returned an error
+//
+// Note: PartialReadFallbacks is NOT a drop — partial reads are a
+// CORRECT behavior (we fall back to the openat-time digest which
+// is still authoritative). Don't fail on those.
+func (r *CommandRun) zeroDropsGate() error {
+	if r.Summary == nil {
+		// Trace produced no summary — that's itself a degradation
+		// signal, but for now we don't treat it as a drop.
+		return nil
+	}
+	d := r.Summary.Diagnostics
+	if d.RingbufOpenatDrops > 0 || d.RingbufReadTapDrops > 0 ||
+		d.FanotifyTimeouts > 0 || d.UnhashedOpensTotal > 0 ||
+		d.FallbackHashFailures > 0 || d.FsVeritySealFailures > 0 {
+		return &ZeroDropsError{
+			RingbufOpenatDrops:   d.RingbufOpenatDrops,
+			RingbufReadTapDrops:  d.RingbufReadTapDrops,
+			FanotifyTimeouts:     d.FanotifyTimeouts,
+			UnhashedOpensTotal:   d.UnhashedOpensTotal,
+			FallbackHashFailures: d.FallbackHashFailures,
+			FsVeritySealFailures: d.FsVeritySealFailures,
+		}
+	}
+	return nil
 }
 
 func New(opts ...Option) *CommandRun {
@@ -446,10 +523,11 @@ type CommandRun struct {
 	Stderr    string        `json:"stderr,omitempty"`
 	Processes []ProcessInfo `json:"processes,omitempty"`
 
-	silent         bool
-	materials      map[string]cryptoutil.DigestSet
-	enableTracing  bool
-	ignoreExitCode bool
+	silent           bool
+	materials        map[string]cryptoutil.DigestSet
+	enableTracing    bool
+	ignoreExitCode   bool
+	requireZeroDrops bool
 
 	// cacheMatcher classifies tracee-written paths as cache/temp
 	// (excluded from products) vs user-facing outputs. Installed by
@@ -1194,6 +1272,15 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 						r.Summary.TraceModeDetail = traceMode
 					}
 				}
+			}
+		}
+		// Fail-closed gate. If the operator requested strict
+		// attestation honesty, reject the attestation when any
+		// drop / loss / timeout occurred. Surfaces a verifier-
+		// actionable error rather than a silently-incomplete record.
+		if r.requireZeroDrops {
+			if gateErr := r.zeroDropsGate(); gateErr != nil {
+				return gateErr
 			}
 		}
 	} else {
