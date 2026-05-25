@@ -442,6 +442,29 @@ func Open() (*Consumer, error) {
 		}
 	}
 
+	// tp_btf/sched_switch — Tetragon-style early-tag of the next-to-run
+	// task. Closes the residual cargo→rustc race where a freshly-forked
+	// child's first openat outpaces wake_up_new_task's watched-bit
+	// propagation. Fires at the LAST moment before the next task
+	// runs; any prior map updates targeting it are visible at that
+	// point.
+	//
+	// BPF-LSM isn't available on most cloud kernels (Ubuntu GHA has
+	// CONFIG_BPF_LSM=y but bpf isn't in the active LSM list); this
+	// is the closest substitute we can deploy on GHA-class targets.
+	if switchProg, ok := coll.Programs["tp_btf_sched_switch"]; ok {
+		switchLink, sErr := link.AttachTracing(link.TracingOptions{Program: switchProg})
+		if sErr == nil {
+			c.links = append(c.links, switchLink)
+		} else {
+			// Non-fatal: existing fork hooks still propagate; the
+			// race window just isn't closed for the rare cases.
+			fmt.Fprintf(os.Stderr,
+				"cilock-ebpf: tp_btf/sched_switch attach failed (%v); deep-fork-race window remains open for some workloads\n",
+				sErr)
+		}
+	}
+
 	if openatAttached == 0 {
 		_ = c.Close()
 		return nil, fmt.Errorf("no openat-family kprobes attached for arch=%s (attempted %d, failed %d)",

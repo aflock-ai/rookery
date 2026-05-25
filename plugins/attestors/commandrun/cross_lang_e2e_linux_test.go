@@ -605,18 +605,6 @@ func TestCrossLang_Rust(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e test")
 	}
-	// Known flaky on cargo→rustc fork chains: the watched-bit
-	// propagation from cargo to its rustc invocations races against
-	// rustc's first openat. The capture pool, two-ringbuf split,
-	// six-level ancestor walk in emit_filter, and fentry/wake_up_new_task
-	// all reduce but don't eliminate this race. A debug variant of
-	// this test (identical workload) catches main.rs ~3/5 of the
-	// time; this test name reproducibly hits 0/10 — suggests the
-	// path-length or scheduling variance pushes it past the
-	// timing window. Fixing requires either kernel-side hashing or
-	// a sleepable LSM hook that fires synchronously with the openat
-	// in the child's own context. Tracked under #82.
-	t.Skip("known cargo→rustc fork-watch race; root-cause requires sleepable LSM or kernel-side hashing")
 	requireToolchain(t, "cargo")
 
 	dir := freshWorkspace(t, "rust")
@@ -648,15 +636,31 @@ path = "src/main.rs"
 		"CARGO_HOME", filepath.Join(dir, ".cargo"),
 	}
 	cap := runCrossLang(t, dir, []string{"cargo", "build", "--offline"}, env)
-	// Cargo writes the binary to target/debug/<name>; that's not under
-	// a cache pattern (target/* IS a cache pattern in our defaults but
-	// target/debug/<binary> with no extension is the user-facing
-	// output). Assert: at least one product or the binary ends up
-	// somewhere reachable.
-	if got := cap.requireProduct("xlang-test"); got == "" {
-		t.Logf("rust products did not include the binary — check target/ classification")
-	}
+	// Assert main.rs was attested as a material (rustc read it).
 	cap.requireMaterial("main.rs")
+	// Assert SOMETHING in target/debug got attested — either the
+	// final binary or one of the per-crate deps artifacts. cargo
+	// hard-links target/debug/deps/xlang_test-<hash> to
+	// target/debug/xlang-test; depending on which path the linker
+	// touched first, either may end up in products or intermediates.
+	written := false
+	for path := range cap.Products {
+		if strings.Contains(path, "/target/debug/") {
+			written = true
+			break
+		}
+	}
+	if !written {
+		for path := range cap.Intermediates {
+			if strings.Contains(path, "/target/debug/") {
+				written = true
+				break
+			}
+		}
+	}
+	if !written {
+		t.Errorf("no cargo build output (target/debug/*) in products or intermediates. summary:\n%s", cap.summarize())
+	}
 	t.Logf("OK: %s", cap.summarize())
 }
 

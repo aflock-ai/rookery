@@ -279,10 +279,17 @@ func hashViaProcFD(fdPath, origPath string, hashFuncs []cryptoutil.DigestValue) 
 	// later child process.
 	fst, ferr := f.Stat()
 	if ferr != nil || !fst.Mode().IsRegular() {
+		// fd was reused for a non-regular file after the tracee's
+		// openat — DON'T read from this fd (it'd drain the tracee's
+		// pipe/socket). Return (zero, false) so the caller falls
+		// back to hashViaPath, which opens the ORIGINAL path by name.
+		// If the original path is still a regular file on disk
+		// (common case: gcc/rustc opens main.rs, closes fd, fd gets
+		// reused for a pipe — main.rs itself still exists), we can
+		// safely read it by name. hashViaPath does its own IsRegular
+		// check so we don't risk reading a pipe-by-name either.
 		_ = f.Close()
-		r.Status = TOCTOUError
-		r.Reason = "fd reused after openat (procfs entry no longer regular file)"
-		return r, true
+		return HashResult{}, false
 	}
 	digest, hashErr := cryptoutil.CalculateDigestSet(f, hashFuncs)
 	_ = f.Close()

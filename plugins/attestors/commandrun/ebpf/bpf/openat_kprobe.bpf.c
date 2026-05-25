@@ -1802,6 +1802,97 @@ int BPF_KPROBE(kprobe_wake_up_new_task, struct task_struct *p)
 // signal in case raw_tp ever misses (e.g., on a host without
 // BPF_PROG_TYPE_RAW_TRACEPOINT support).
 
+// ───── tp_btf/sched_switch — early-tag the next-to-run task ─────
+//
+// Closes the gap between wake_up_new_task (fires at fork time, in the
+// parent's context) and the child's first syscall. wake_up_new_task
+// has already written to watched_pids + child's task_storage IF the
+// parent was watched. But for fast cargo→rustc fork+execve chains we
+// were seeing rustc's first openat() race the propagation — somehow
+// the openat-time emit_filter check missed the freshly-set
+// task_storage / watched_pids entries on the child's CPU.
+//
+// sched_switch fires the LAST moment before `next` actually runs.
+// At this point any prior map updates targeting `next` are visible
+// (the kernel issued a context switch barrier). We re-verify the
+// ancestor chain and re-tag if needed. The fast path returns
+// immediately for tasks that already have task_storage.watched=1.
+//
+// Tetragon uses a similar pattern in bpf/process/bpf_fork.c. With
+// BPF-LSM unavailable on most cloud kernels (Ubuntu GHA, etc.),
+// sched_switch is the right substitute.
+//
+// Cost: sched_switch fires on every context switch. The fast path
+// (task_storage_get → check watched → return) is constant time.
+// Real cost is the FIRST time each new task is scheduled.
+SEC("tp_btf/sched_switch")
+int BPF_PROG(tp_btf_sched_switch, bool preempt,
+             struct task_struct *prev, struct task_struct *next)
+{
+    if (!next) return 0;
+
+    __u32 zero = 0;
+    __u8 *enabled = bpf_map_lookup_elem(&filter_enabled, &zero);
+    if (!enabled || *enabled == 0) return 0;
+
+    // Fast path: next is already tagged.
+    struct task_state *ts = bpf_task_storage_get(&task_storage, next, NULL, 0);
+    if (ts && ts->watched) return 0;
+
+    __u32 next_pid  = BPF_CORE_READ(next, pid);
+    __u32 next_tgid = BPF_CORE_READ(next, tgid);
+    if (next_pid == 0) return 0; // swapper/idle
+
+    // Check next's own pid in watched_pids (wake_up_new_task may have
+    // written it but the child's task_storage didn't get set for some
+    // reason — e.g. earlier propagation went through kprobe variant
+    // which doesn't set task_storage for the child).
+    int matched = 0;
+    if (bpf_map_lookup_elem(&watched_pids, &next_pid) ||
+        bpf_map_lookup_elem(&watched_pids, &next_tgid)) {
+        matched = 1;
+    }
+
+    // Ancestor walk via real_parent. trusted `next` lets us BPF_CORE_READ
+    // up the chain — but bpf_task_storage_get on ancestors fails verifier
+    // (only `next` itself is "trusted ptr from BTF"). Use watched_pids
+    // for ancestor checks, identical to emit_filter's descent path.
+    if (!matched) {
+        struct task_struct *parent = BPF_CORE_READ(next, real_parent);
+        __u32 *root = bpf_map_lookup_elem(&root_parent_tgid, &zero);
+        #pragma unroll
+        for (int i = 0; i < 6; i++) {
+            if (!parent) break;
+            __u32 ptgid = BPF_CORE_READ(parent, tgid);
+            if (ptgid != 0) {
+                if (bpf_map_lookup_elem(&watched_pids, &ptgid)) {
+                    matched = 1;
+                    break;
+                }
+                if (root && ptgid == *root && *root != 0) {
+                    matched = 1;
+                    break;
+                }
+            }
+            parent = BPF_CORE_READ(parent, real_parent);
+        }
+    }
+    if (!matched) return 0;
+
+    // Tag next via task_storage (trusted-ptr-safe since next is from
+    // tp_btf) AND watched_pids (so kprobe/uprobe-only consumers also
+    // see it). This is the canonical "no missed event" propagation.
+    struct task_state init = {.watched = 1};
+    bpf_task_storage_get(&task_storage, next, &init,
+        BPF_LOCAL_STORAGE_GET_F_CREATE);
+    __u8 one = 1;
+    bpf_map_update_elem(&watched_pids, &next_pid, &one, BPF_ANY);
+    if (next_tgid != next_pid) {
+        bpf_map_update_elem(&watched_pids, &next_tgid, &one, BPF_ANY);
+    }
+    return 0;
+}
+
 SEC("raw_tracepoint/sched_process_fork")
 int raw_tp_sched_process_fork(struct bpf_raw_tracepoint_args *ctx)
 {

@@ -85,12 +85,23 @@ func DefaultCachePatterns() map[string]struct{} {
 		"**/.vite/**":               {},
 
 		// ─── Rust / Cargo ───
-		"**/target/debug/**":          {}, // cargo build output (intermediates)
-		"**/target/release/**":        {},
-		"**/target/incremental/**":    {},
-		"**/.cargo/registry/cache/**": {},
-		"**/.cargo/registry/src/**":   {},
-		"**/.cargo/git/checkouts/**":  {},
+		// target/debug/<binary> (no extension, in the debug/ root) is the
+		// user-facing OUTPUT for `cargo build`. Treat target/debug/{deps,
+		// build, .fingerprint, incremental} as cache; let the actual
+		// binary in target/debug/ fall through to product classification.
+		"**/target/debug/deps/**":        {}, // intermediate .rlib + .o
+		"**/target/debug/build/**":       {}, // build-script artifacts
+		"**/target/debug/.fingerprint/**": {}, // cargo's fingerprint markers
+		"**/target/debug/incremental/**": {}, // incremental compile state
+		"**/target/release/deps/**":      {},
+		"**/target/release/build/**":     {},
+		"**/target/release/.fingerprint/**": {},
+		"**/target/release/incremental/**": {},
+		"**/target/.rustc_info.json":    {}, // cargo's rustc-version cache
+		"**/target/CACHEDIR.TAG":        {}, // cargo's cache marker
+		"**/.cargo/registry/cache/**":   {},
+		"**/.cargo/registry/src/**":     {},
+		"**/.cargo/git/checkouts/**":    {},
 
 		// ─── Java / Maven / Gradle ───
 		// .m2/repository is INPUTS not cache — Maven local repo is a
