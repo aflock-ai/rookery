@@ -6,6 +6,8 @@ replace github.com/aflock-ai/rookery/attestation => ../../../attestation
 
 replace github.com/aflock-ai/rookery/plugins/attestors/commandrun => ../commandrun
 
+replace github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf => ../commandrun/ebpf
+
 replace github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof => ../inclusion-proof
 
 require (
@@ -20,11 +22,12 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.1 // indirect
+	github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf v0.0.0-00010101000000-000000000000 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
+	github.com/cilium/ebpf v0.18.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/edwarnicke/gitoid v0.0.0-20220710194850-1be5bfda1f9d // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect

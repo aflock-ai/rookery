@@ -1,0 +1,31 @@
+apiVersion: cilock.detection/v0.1
+name: docker-bench
+description: "Captures Docker Bench for Security CIS benchmark results."
+
+category: [compliance-scan]
+
+upstream:
+  name: Docker Bench for Security
+  source: "https://github.com/docker/docker-bench-security"
+  license: Apache-2.0
+  vendor: Docker, Inc.
+
+recommended_trace: "off"
+
+pre:
+  match:
+    any_of:
+      - argv_prefix: ["docker-bench-security"]
+      - argv_prefix: ["docker-bench-security.sh"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["docker-bench-security"]
+      - exec_observed:
+          argv_prefix: ["docker-bench-security.sh"]
+      - product_glob: ["docker-bench*.json", "**/docker-bench*.json", "docker-bench*.log", "**/docker-bench*.log"]
+
+llm_hints:
+  on_match: "Docker Bench results captured. CIS Docker benchmark outcomes preserved."

@@ -1,0 +1,39 @@
+apiVersion: cilock.detection/v0.1
+name: sbom
+description: "Captures SPDX or CycloneDX SBOM documents produced by syft, cdxgen, or similar tools."
+
+category: [sbom-generate]
+
+upstream:
+  name: SPDX + CycloneDX
+  source: "https://spdx.dev/  +  https://cyclonedx.org/"
+  license: CC-BY-3.0 / Apache-2.0
+  vendor: Linux Foundation / OWASP
+  format_only: true
+
+# Threat model: the SBOM tool inspects the workspace and emits a
+# JSON document we sign verbatim. We trust the SBOM tool to enumerate
+# components correctly; we don't need eBPF to second-guess it.
+# (Future: light trace if we ever want to cross-check the SBOM
+# against what syft actually opened.)
+recommended_trace: "off"
+
+pre:
+  match:
+    any_of:
+      - argv_prefix: ["syft"]
+      - argv_prefix: ["cdxgen"]
+
+post:
+  match:
+    any_of:
+      - product_glob: ["*.spdx.json", "**/*.spdx.json", "*.spdx", "**/*.spdx"]
+      - product_glob: ["*.cyclonedx.json", "**/*.cyclonedx.json", "*.cdx.json", "**/*.cdx.json"]
+      - product_glob: ["sbom.json", "**/sbom.json", "bom.json", "**/bom.json"]
+      - exec_observed:
+          argv_prefix: ["syft"]
+      - exec_observed:
+          argv_prefix: ["cdxgen"]
+
+llm_hints:
+  on_match: "SBOM captured (SPDX or CycloneDX). Components, licenses, and supplier metadata preserved."

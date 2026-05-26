@@ -1,0 +1,27 @@
+apiVersion: cilock.detection/v0.1
+name: asff
+description: "Captures AWS Security Finding Format (ASFF) reports from AWS Security Hub (typically the output of `aws securityhub get-findings`)."
+
+category: [compliance-scan]
+
+upstream:
+  name: AWS Security Finding Format (ASFF)
+  source: "https://docs.aws.amazon.com/securityhub/latest/userguide/securityhub-findings-format.html"
+  license: proprietary
+  vendor: Amazon Web Services
+
+recommended_trace: "off"
+
+pre:
+  match:
+    argv_prefix: ["aws", "securityhub", "get-findings"]
+
+post:
+  match:
+    any_of:
+      - product_glob: ["*.asff.json", "**/*.asff.json", "asff*.json", "**/asff*.json"]
+      - exec_observed:
+          argv_prefix: ["aws", "securityhub", "get-findings"]
+
+llm_hints:
+  on_match: "ASFF findings captured. AWS Security Hub posture preserved."

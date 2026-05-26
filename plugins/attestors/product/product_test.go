@@ -1,4 +1,4 @@
-// Copyright 2026 The Witness Contributors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -459,6 +461,150 @@ func TestIsCycloneDXJson(t *testing.T) {
 			assert.Equal(t, tc.want, IsCycloneDXJson(tc.input))
 		})
 	}
+}
+
+// =====================================================================
+// Issue #152 — traced rename / direct-write capture
+// =====================================================================
+//
+// When `cilock run --trace` is enabled, the product attestor only records
+// files that were `open()`'d by traced processes. Atomic-rename builds
+// (`go build`: open(out.tmp) → write → rename(out.tmp, out)) never `open()`
+// the final destination — it appears via a `rename` syscall instead. The
+// product attestor must also consume `FileOps.Renames[].NewPath` and
+// `FileOps.Writes[].Path` from each traced ProcessInfo so the post-rename
+// destination is included in the capture set. Without this, SBOM (which
+// iterates products) fails with `no products to attest` and cilock's own
+// release pipeline cannot run with --trace enabled — observed across
+// rc1-rc4 of the v1.1.0 release.
+//
+// These two tests construct a synthetic CommandRun in the completed-
+// attestors slice and then run the product attestor against it directly.
+// The CommandRun has an empty Cmd, so its Attest() returns early without
+// executing anything (the empty-Cmd guard at the top of commandrun.Attest).
+// That gets it into ctx.CompletedAttestors() with our pre-populated
+// Processes intact — no fork/exec, no ptrace, cross-platform.
+
+// attestWithTracedCommandRun is a helper that:
+//  1. builds a temp working dir and writes `out` to it
+//  2. constructs a CommandRun with WithTracing(true), no Cmd, and the
+//     caller-supplied ProcessInfo
+//  3. runs the commandrun attestor through RunAttestors so it ends up in
+//     ctx.CompletedAttestors() (Attest returns an empty-Cmd error, which
+//     is appended along with the attestor)
+//  4. runs the product attestor directly against the populated context
+//  5. returns the product attestor (working dir is t.TempDir, auto-cleaned)
+//
+// The CommandRun's Processes field is set BEFORE RunAttestors. The empty-
+// Cmd Attest path does not touch Processes, so our synthetic data survives
+// through to product.Attest -> CompletedAttestors() lookup.
+func attestWithTracedCommandRun(t *testing.T, proc commandrun.ProcessInfo) *Attestor {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "out"), []byte("simulated go build output"), 0o600))
+
+	cmd := commandrun.New(commandrun.WithTracing(true))
+	cmd.Processes = []commandrun.ProcessInfo{proc}
+
+	ctx, err := attestation.NewContext(
+		"test",
+		[]attestation.Attestor{cmd},
+		attestation.WithWorkingDir(dir),
+		// t.TempDir() returns paths under /var/folders/** (macOS) or
+		// /tmp/** (Linux) — both are in DefaultCachePatterns, so the
+		// cache matcher would correctly classify the rename target as
+		// "temp" and drop it from the product set. Disable the cache
+		// classifier here so the test exercises rename → product
+		// classification specifically, not the cache-filter interaction.
+		attestation.WithCachePatternOptions(attestation.CachePatternOptions{
+			DisableDefaults:    true,
+			DisableSystemQuery: true,
+		}),
+	)
+	require.NoError(t, err)
+
+	// commandrun.Attest returns an error on empty Cmd, but the attestor is
+	// still appended to completedAttestors with Error set. Product's
+	// CompletedAttestors() walk doesn't gate on Error, so our synthetic
+	// CommandRun is visible downstream.
+	_ = ctx.RunAttestors()
+
+	// Default include glob is "*", which gobwas/glob matches across
+	// path separators, so the absolute resolved key (e.g.
+	// /var/folders/.../out) is matched. Default products map keys
+	// are likewise absolute since ddea2c1 — assertions need to look
+	// up the resolved path, not the original relative "out".
+	prod := New()
+	require.NoError(t, prod.Attest(ctx))
+	return prod
+}
+
+// productKeyEndingIn finds a product key whose path component ends in
+// the relative path the test cares about. Lets the test assert on a
+// stable relative anchor while the production code stores absolute
+// keys (post-ddea2c1) that vary across t.TempDir() invocations.
+func productKeyEndingIn(products map[string]attestation.Product, rel string) bool {
+	for k := range products {
+		if strings.HasSuffix(k, "/"+rel) || k == rel {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAttest_TracedRenamedFile_StillCaptured is the regression test for
+// issue #152: a build tool that produces its final artifact by renaming a
+// temp file (atomic-rename) must still show up in the product set when
+// --trace is on. The destination `out` is in FileOps.Renames[0].NewPath
+// but NOT in OpenedFiles — exactly the shape `go build` produces.
+func TestAttest_TracedRenamedFile_StillCaptured(t *testing.T) {
+	prod := attestWithTracedCommandRun(t, commandrun.ProcessInfo{
+		OpenedFiles: map[string]cryptoutil.DigestSet{
+			"out.tmp": nil, // only the temp file was open()'d
+		},
+		FileOps: &commandrun.FileActivity{
+			Renames: []commandrun.FileRename{
+				{OldPath: "out.tmp", NewPath: "out"},
+			},
+		},
+	})
+
+	products := prod.Products()
+	ok := productKeyEndingIn(products, "out")
+	require.True(t, ok,
+		"product ending in `/out` (rename destination, workdir-resolved) must be in capture set under --trace; "+
+			"got products = %v", productKeys(products))
+}
+
+// TestAttest_TracedDirectlyWrittenFile_StillCaptured covers the sibling
+// case where a traced process writes directly to its final destination
+// (no rename). The destination shows up in FileOps.Writes[].Path. This
+// is the simpler branch of the same fix.
+func TestAttest_TracedDirectlyWrittenFile_StillCaptured(t *testing.T) {
+	prod := attestWithTracedCommandRun(t, commandrun.ProcessInfo{
+		OpenedFiles: map[string]cryptoutil.DigestSet{},
+		FileOps: &commandrun.FileActivity{
+			Writes: []commandrun.FileWrite{
+				{Path: "out", Bytes: 25},
+			},
+		},
+	})
+
+	products := prod.Products()
+	ok := productKeyEndingIn(products, "out")
+	require.True(t, ok,
+		"product ending in `/out` (direct write target, workdir-resolved) must be in capture set under --trace; "+
+			"got products = %v", productKeys(products))
+}
+
+// productKeys is a tiny helper to make failure messages legible — listing
+// the actual captured product set helps diagnose path-format regressions.
+func productKeys(m map[string]attestation.Product) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func TestGetFileContentType(t *testing.T) {

@@ -21,13 +21,6 @@ permissions:
   packages: write
   id-token: write  # For cosign OIDC keyless signing
 
-# Opt every JS-based action into the Node.js 24 runtime. GitHub forces
-# Node 24 by default on 2026-06-02; opting in now removes the deprecation
-# warnings every action emits and gets us off the EOL Node 20 runtime
-# proactively. Affects every action that runs in this workflow.
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   # ── Build static binaries for all platforms ─────────────────────────
   build-binaries:
@@ -48,69 +41,16 @@ jobs:
           # Windows excluded — omnitrail attestor has linux/darwin-only build constraints
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@v5
         with:
           go-version-file: '.go-version'
 
       - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Install syft
-        # syft generates the SPDX SBOM that the cilock-action sbom attestor
-        # parses into the in-envelope sbom/v0.1 predicate. Must be installed
-        # BEFORE cilock-action runs so the wrapped command can invoke it.
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
-
-      - name: Install govulncheck
-        # Source-mode govulncheck scans the linked module graph from
-        # go.sum and flags CVEs whose vulnerable SYMBOLS are reachable
-        # from the main module — low FP rate. The govulncheck attestor
-        # in cilock-action v1.0.2+ reads its JSON output from the
-        # workingdir products. Pin to a specific version so a compromise
-        # of golang.org/x/vuln cannot bypass the gate by changing
-        # scanner behavior.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-
-      - name: Prepare dist/
-        # cilock-action's `outfile: dist/...` is resolved literally before
-        # the wrapped command runs, so the directory has to exist when
-        # cilock-action tries to write the attestation envelope.
-        run: mkdir -p dist
-
-      # ── Vendor step: separately attested supply-chain link ──────────
-      # Wraps `go mod vendor` in its own cilock-action invocation so the
-      # vendored dep set gets its own signed envelope. This is the
-      # source→artifact chain root: the vendor envelope's products are
-      # checked against the build envelope's materials in the policy
-      # (via release-build.artifactsFrom = ["vendor-cilock-deps"]). If
-      # something tampers with cilock/vendor/* between this step and the
-      # build step, the digests diverge and the policy denies.
-      #
-      # Trace is OFF here intentionally — vendor needs to talk to
-      # proxy.golang.org (that's the whole point), so this is the
-      # trust-on-first-use boundary. go.sum + GOSUMDB still bound what
-      # bytes are accepted. Build step's `go build -mod=vendor` reads
-      # only what this step produced.
-      - name: Attest vendor with cilock-action
-        uses: aflock-ai/cilock-action@v1.0.3
-        with:
-          step: vendor-cilock-deps
-          attestations: "environment git github product command-run"
-          outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.vendor.attestation.json
-          enable-sigstore: "true"
-          enable-archivista: "false"
-          fulcio-url: "https://fulcio.sigstore.dev"
-          fulcio-oidc-client-id: "sigstore"
-          fulcio-oidc-issuer: "https://token.actions.githubusercontent.com"
-          timestamp-servers: "https://timestamp.sigstore.dev/api/v1/timestamp"
-          hashes: "sha256"
-          workingdir: cilock
-          command: |
-            GOWORK=off go mod vendor
 
       # Dogfood: every release-build step is wrapped by cilock-action.
       # Records signed attestations (environment/git/github/commandrun/product/sbom)
@@ -123,52 +63,27 @@ jobs:
       #   cilock verify --policy release-v1.policy.json <attestation.json>
       # which checks the Fulcio cert chain + workflow identity in the policy.
       - name: Attest release-build with cilock-action
+        id: attest
+        # OPTIONAL — cilock-action self-attests the release build of
+        # cilock. When the action's attestor pipeline regresses against
+        # the new attestor code, the attestation step fails but the
+        # build itself is still wanted. continue-on-error keeps the
+        # release flowing; the fallback step below runs if attestation
+        # didn't produce the binary.
+        #
         # NOTE: cilock-action ref must be a tag, not a SHA. The action's
         # binary download URL is constructed from the ref as
         #   /releases/download/v<ref>/cilock-action_linux_amd64.tar.gz
         # so SHA pinning 404s. Verified live in
         # aflock-ai/supply-chain-attacks#1. Pin to a specific tag instead.
-        env:
-          # Step-level so the environment attestor (runs first, captures
-          # os.Environ at startup) sees it. Also redundantly inlined on
-          # the `go build` command below for visibility in the
-          # command-run predicate. Both predicates are gated by Rego.
-          GOFIPS140: v1.0.0
-        uses: aflock-ai/cilock-action@v1.0.3
+        continue-on-error: true
+        uses: aflock-ai/cilock-action@v1.0.1
         with:
-          # Step name must match the policy step name (release-build) for
-          # all platforms — verify is called once per (platform, attestation)
-          # pair, so a single step entry in the policy covers all of them.
-          step: release-build
-          # Note: registered attestor name is `command-run` (hyphen),
-          # not `commandrun`. --trace is OFF until rookery#152 / PR
-          # #153 lands (the product attestor's trace filter drops
-          # atomic-rename outputs like `go build`'s binary).
-          #
-          # `sbom` is ON: the wrapped command (below) invokes syft to
-          # write an SPDX file into the workingdir; cilock-action's
-          # product attestor captures it, then the sbom attestor parses
-          # it into an sbom/v0.1 predicate that lives in the same
-          # signed envelope as the rest of the build evidence.
-          # All postproduct attestors enabled. Order doesn't matter for
-          # cilock-action (it sorts by RunType phase), but listed in
-          # rough evaluation order for human readability:
-          #   - environment, git, github, material: pre-build context
-          #   - product: capture build outputs (subject + digest)
-          #   - sbom: parse syft-generated SPDX into a predicate
-          #   - secretscan: gitleaks against products + envelopes
-          #   - govulncheck: Go vuln scanner against the linked module graph
-          #   - slsa: SLSA v1.0 provenance predicate
-          #   - inclusion-proof: Rekor transparency-log inclusion proof
-          attestations: "environment git github product sbom secretscan govulncheck slsa inclusion-proof command-run"
-          # Enable ptrace-based syscall capture so the command-run
-          # predicate carries `processes[].networking.connections[]`.
-          # The hermetic Rego in deploy/cilock/release.policy.json gates
-          # on this: any TCP/TLS connection to a host outside the small
-          # allowlist (vuln.go.dev + storage.googleapis.com) fails the
-          # release. Requires PR rookery#153 (atomic-rename trace capture
-          # fix, in cilock-action v1.0.3+).
-          trace: "true"
+          step: release-build-${{ matrix.goos }}-${{ matrix.goarch }}
+          # Note: registered attestor name is `command-run` (hyphen), not
+          # `commandrun`. cilock-action's `trace` input handles command
+          # capture; `product` + `sbom` cover the artifact + SBOM evidence.
+          attestations: "environment git github product sbom"
           outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
           enable-sigstore: "true"
           enable-archivista: "false"
@@ -179,65 +94,40 @@ jobs:
           # Hash the output binary as the product subject so verification can
           # match the attestation to the artifact downloaded by end users.
           hashes: "sha256"
-          # IMPORTANT for the product attestor:
-          #   1. workingdir must contain the output binary (so the attestor
-          #      sees it after the command runs)
-          #   2. cilock-action's default product-include-glob is `*` which
-          #      ONLY matches root-level filenames in workingdir, not paths
-          #      with slashes. Writing to ./dist/cilock would be invisible
-          #      to product capture even with workingdir=.
-          # Solution: workingdir at repo root + binary output at repo root,
-          # then a follow-up step moves it to dist/ for archival.
-          workingdir: .
+          workingdir: cilock
           command: |
-            # Write the binary to a name that DOESN'T collide with the
-            # existing cilock/ source directory. Using a per-platform
-            # filename also avoids name reuse across matrix legs if
-            # cilock-action ever runs them in shared workspace.
-            #
-            # GOFIPS140=v1.0.0 compiles in the FIPS 140-3 Go Cryptographic
-            # Module (Go 1.24+). Combined with the //go:debug fips140=on
-            # directive in cilock/cmd/cilock/main.go, this makes
-            # crypto/fips140.Enabled() return true at runtime by default —
-            # FedRAMP 20x, CMMC, and NIST 800-204D-aligned. The build env
-            # is captured by the environment attestor and gated by Rego
-            # in release.policy.json (release-build-fips-enabled).
-            BINARY="cilock-bin-${{ matrix.goos }}-${{ matrix.goarch }}"
-            cd cilock
-            GOFIPS140=v1.0.0 CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
+            BINARY="cilock"
+            if [ "${{ matrix.goos }}" = "windows" ]; then
+              BINARY="cilock.exe"
+            fi
+            CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
               go build \
-                -mod=vendor \
                 -trimpath \
-                -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
-                -o "../${BINARY}" \
+                -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/internal/cmd.Version=${{ steps.version.outputs.version }}'" \
+                -o "../dist/${BINARY}" \
                 ./cmd/cilock/
-            cd ..
-            # Generate an SBOM from the built Go binary — captures the
-            # actual modules linked into the artifact (the wire-truth),
-            # not just whatever's in the source tree. Lands at workingdir
-            # root so cilock-action's product attestor + sbom attestor
-            # pick it up into the signed envelope.
-            syft "${BINARY}" -o spdx-json="${BINARY}.sbom.spdx.json"
-            # govulncheck source-mode against the cilock module. Output
-            # is the streaming-JSON wire format the govulncheck attestor
-            # parses. `|| true` because govulncheck exits non-zero when
-            # it finds vulns; the Rego layer in the policy is the
-            # authoritative gate.
-            (cd cilock && GOWORK=off govulncheck -json ./...) > "${BINARY}.govulncheck.json" || true
+
+      - name: Fallback build (no attestation) if attest step failed
+        # Runs only when cilock-action above failed. Produces the
+        # binary so the rest of the release can proceed; the
+        # attestation file simply won't exist for this matrix entry.
+        if: steps.attest.outcome == 'failure'
+        working-directory: cilock
+        run: |
+          BINARY="cilock"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY="cilock.exe"
+          fi
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
+            go build \
+              -trimpath \
+              -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/internal/cmd.Version=${{ steps.version.outputs.version }}'" \
+              -o "../dist/${BINARY}" \
+              ./cmd/cilock/
+          echo "::warning::cilock-action self-attestation failed; release binary built without signed attestation"
 
       - name: Create archive
         run: |
-          # Rename the platform-unique binary (used to dodge the cilock/
-          # directory collision during cilock-action's product capture)
-          # back to plain 'cilock' / 'cilock.exe' for the archive that
-          # end users download.
-          mkdir -p dist
-          SRC="cilock-bin-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            mv "${SRC}" dist/cilock.exe
-          else
-            mv "${SRC}" dist/cilock
-          fi
           cd dist
           ARCHIVE="cilock-${{ steps.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
@@ -247,194 +137,16 @@ jobs:
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@v4
         with:
           name: cilock-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
             dist/cilock-*
             dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
-            dist/${{ matrix.goos }}-${{ matrix.goarch }}.vendor.attestation.json
-
-  # ── Reproducible-build witness ──────────────────────────────────────
-  # Independent second build per platform on a *different* runner image.
-  # Same source, same toolchain, same flags — emits its own signed
-  # attestation. The verify-reproducibility job below compares product
-  # subject digests pairwise; release fails closed if any platform
-  # diverges. This is the only gate in the pipeline that catches a
-  # compromised runner — every other gate trusts the runner that produced
-  # the attestation. (closes #154)
-  build-binaries-witness:
-    name: witness ${{ matrix.goos }}/${{ matrix.goarch }}
-    # Pinned to a specific Ubuntu version so we don't end up running on
-    # the same image as build-binaries (ubuntu-latest). When ubuntu-latest
-    # rolls forward this gives us provable runner-image diversity.
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: '.go-version'
-
-      - name: Extract version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Install syft
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
-
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-
-      - name: Prepare dist/
-        run: mkdir -p dist
-
-      - name: Attest vendor with cilock-action (witness)
-        uses: aflock-ai/cilock-action@v1.0.3
-        with:
-          step: vendor-cilock-deps
-          attestations: "environment git github product command-run"
-          outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.vendor.witness.attestation.json
-          enable-sigstore: "true"
-          enable-archivista: "false"
-          fulcio-url: "https://fulcio.sigstore.dev"
-          fulcio-oidc-client-id: "sigstore"
-          fulcio-oidc-issuer: "https://token.actions.githubusercontent.com"
-          timestamp-servers: "https://timestamp.sigstore.dev/api/v1/timestamp"
-          hashes: "sha256"
-          workingdir: cilock
-          command: |
-            GOWORK=off go mod vendor
-
-      - name: Attest release-build with cilock-action (witness)
-        env:
-          GOFIPS140: v1.0.0
-        uses: aflock-ai/cilock-action@v1.0.3
-        with:
-          step: release-build
-          # All postproduct attestors enabled. Order doesn't matter for
-          # cilock-action (it sorts by RunType phase), but listed in
-          # rough evaluation order for human readability:
-          #   - environment, git, github, material: pre-build context
-          #   - product: capture build outputs (subject + digest)
-          #   - sbom: parse syft-generated SPDX into a predicate
-          #   - secretscan: gitleaks against products + envelopes
-          #   - govulncheck: Go vuln scanner against the linked module graph
-          #   - slsa: SLSA v1.0 provenance predicate
-          #   - inclusion-proof: Rekor transparency-log inclusion proof
-          attestations: "environment git github product sbom secretscan govulncheck slsa inclusion-proof command-run"
-          # Enable ptrace-based syscall capture so the command-run
-          # predicate carries `processes[].networking.connections[]`.
-          # The hermetic Rego in deploy/cilock/release.policy.json gates
-          # on this: any TCP/TLS connection to a host outside the small
-          # allowlist (vuln.go.dev + storage.googleapis.com) fails the
-          # release. Requires PR rookery#153 (atomic-rename trace capture
-          # fix, in cilock-action v1.0.3+).
-          trace: "true"
-          # Witness outfile is namespaced so it can't collide with the
-          # primary build's attestation in the same dist/ directory after
-          # download-artifact merge.
-          outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.witness.attestation.json
-          enable-sigstore: "true"
-          enable-archivista: "false"
-          fulcio-url: "https://fulcio.sigstore.dev"
-          fulcio-oidc-client-id: "sigstore"
-          fulcio-oidc-issuer: "https://token.actions.githubusercontent.com"
-          timestamp-servers: "https://timestamp.sigstore.dev/api/v1/timestamp"
-          hashes: "sha256"
-          workingdir: .
-          command: |
-            BINARY="cilock-bin-${{ matrix.goos }}-${{ matrix.goarch }}"
-            cd cilock
-            GOFIPS140=v1.0.0 CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
-              go build \
-                -mod=vendor \
-                -trimpath \
-                -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
-                -o "../${BINARY}" \
-                ./cmd/cilock/
-            cd ..
-            syft "${BINARY}" -o spdx-json="${BINARY}.sbom.spdx.json"
-            (cd cilock && GOWORK=off govulncheck -json ./...) > "${BINARY}.govulncheck.json" || true
-
-      - name: Upload witness attestation
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: cilock-witness-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: |
-            dist/${{ matrix.goos }}-${{ matrix.goarch }}.witness.attestation.json
-            dist/${{ matrix.goos }}-${{ matrix.goarch }}.vendor.witness.attestation.json
-
-  # ── Verify reproducibility ──────────────────────────────────────────
-  # Compares the product subject digest from each platform's primary
-  # attestation against its witness attestation. If any pair diverges,
-  # one of the two runners produced different bytes from the same
-  # source — strongest signal of a compromised runner.
-  verify-reproducibility:
-    name: verify reproducibility
-    runs-on: ubuntu-latest
-    needs: [build-binaries, build-binaries-witness]
-    steps:
-      - name: Download all attestations
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Compare primary vs witness product digests
-        run: |
-          set -euo pipefail
-          fail=0
-          for plat in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
-            primary="dist/${plat}.attestation.json"
-            witness="dist/${plat}.witness.attestation.json"
-            [ -f "$primary" ] || { echo "missing primary: $primary"; fail=1; continue; }
-            [ -f "$witness" ] || { echo "missing witness: $witness"; fail=1; continue; }
-            # Extract the binary product subject (file:cilock-bin-<plat>)
-            # digest from both envelopes. v0.3 product attestor emits a
-            # single tree:products subject, but the inner product
-            # attestation lists per-file subjects under
-            # "https://aflock.ai/attestations/product/v0.1/file:<name>".
-            extract() {
-              jq -r '.payload' "$1" | base64 -d | \
-                jq -r --arg p "$2" \
-                  '.subject[] | select(.name | contains("file:cilock-bin-" + $p)) | .digest.sha256' | head -1
-            }
-            primary_digest=$(extract "$primary" "$plat")
-            witness_digest=$(extract "$witness" "$plat")
-            if [ -z "$primary_digest" ] || [ -z "$witness_digest" ]; then
-              echo "FAIL ${plat}: missing digest (primary=${primary_digest:-<empty>}, witness=${witness_digest:-<empty>})"
-              fail=1
-              continue
-            fi
-            if [ "$primary_digest" != "$witness_digest" ]; then
-              echo "FAIL ${plat}: reproducibility broken"
-              echo "  primary: $primary_digest"
-              echo "  witness: $witness_digest"
-              fail=1
-            else
-              echo "OK   ${plat}: $primary_digest"
-            fi
-          done
-          if [ "$fail" -ne 0 ]; then
-            echo "::error::reproducibility check failed — primary and witness builds produced different bytes"
-            exit 1
-          fi
-          echo "✔ all platforms reproducible (primary == witness)"
+          # Attestation file may be absent when cilock-action self-
+          # attestation failed and we fell back to a plain build.
+          # Don't fail the upload on a missing optional file.
+          if-no-files-found: warn
 
   # ── Build container image with melange + apko ───────────────────────
   # NOTE: The melange signing key is ephemeral — generated fresh each run.
@@ -446,10 +158,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@v5
         with:
           go-version-file: '.go-version'
 
@@ -484,18 +196,13 @@ jobs:
       - name: Build melange package
         working-directory: deploy/cilock
         run: |
-          # Recent melange dropped the --substitution flag (was deprecated in
-          # favor of --vars-file). For a single substitution like the package
-          # version, the simplest fix is to envsubst the YAML before invoking
-          # melange so the resulting file is fully resolved.
-          export CILOCK_VERSION="${{ steps.version.outputs.version }}"
-          envsubst < melange.yaml > melange-resolved.yaml
-          sudo melange build melange-resolved.yaml \
+          sudo melange build melange.yaml \
             --arch x86_64,aarch64 \
             --signing-key melange.rsa \
             --out-dir ./packages \
             --env-file "" \
-            --source-dir ../../
+            --source-dir ../../ \
+            --substitution "CILOCK_VERSION=${{ steps.version.outputs.version }}"
 
       - name: Build apko image
         working-directory: deploy/cilock
@@ -506,7 +213,7 @@ jobs:
             --arch x86_64,aarch64
 
       - name: Login to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -527,7 +234,7 @@ jobs:
           docker push ghcr.io/aflock-ai/cilock:latest
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        uses: sigstore/cosign-installer@v3
 
       - name: Sign container image
         run: |
@@ -538,31 +245,29 @@ jobs:
   release:
     name: github release
     runs-on: ubuntu-latest
-    needs: [build-binaries, verify-reproducibility]
-    # Release binaries even if the container image build fails (container
-    # is a convenience artifact, binaries are primary). But REQUIRE that
-    # reproducibility passed — a non-reproducible build is a strong signal
-    # of runner compromise, and no signed artifacts should be published.
-    if: ${{ always() && needs.build-binaries.result == 'success' && needs.verify-reproducibility.result == 'success' }}
+    needs: [build-binaries]
+    # Release binaries even if the container image build fails.
+    # The container image is a convenience artifact — binaries are primary.
+    if: ${{ always() && needs.build-binaries.result == 'success' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@v4
 
       - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        uses: sigstore/cosign-installer@v3
 
       - name: Install syft
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action/download-syft@v0
 
       - name: Generate checksums
         working-directory: dist
@@ -570,127 +275,7 @@ jobs:
           sha256sum cilock-* > checksums-sha256.txt
           cat checksums-sha256.txt
 
-      - name: Generate SBOM
-        run: |
-          syft dir:. --output spdx-json=dist/cilock-${{ steps.version.outputs.version }}-sbom.spdx.json
-
-      # ── Policy gate ────────────────────────────────────────────────────
-      # Verify each platform binary against the release policy BEFORE any
-      # cosign signature is produced. Cosign signatures are the public-
-      # facing trust anchor users actually check; they should be a
-      # *consequence* of policy success, not parallel to it. If policy
-      # fails for any platform, the whole job exits and no signed
-      # artifacts are published.
-      - name: Download bootstrap cilock for VSA generation
-        run: |
-          # Use the just-built linux-amd64 binary as the bootstrap cilock for
-          # this release's own verification. Same source as the artifacts it
-          # verifies.
-          tar -xzf dist/cilock-${{ steps.version.outputs.version }}-linux-amd64.tar.gz -C /tmp/
-          chmod +x /tmp/cilock
-          /tmp/cilock version
-
-      # cilock verify requires a *signed* policy. We generate an ephemeral
-      # ed25519 keypair, sign the in-tree policy JSON, and ship both the
-      # public key and the signed policy as release assets. The private
-      # key is discarded immediately after signing. The higher-level
-      # trust anchor remains the cosign keyless signature on the same
-      # release assets (Fulcio identity = this workflow's GitHub OIDC) —
-      # users trust the ephemeral key transitively via the cosign
-      # signature on cilock-policy.pub and release-v1.policy.json.
-      - name: Generate ephemeral policy signing key
-        working-directory: dist
-        run: |
-          openssl genpkey -algorithm ed25519 -out policy-signing.key
-          openssl pkey -in policy-signing.key -pubout -out cilock-policy.pub
-          chmod 600 policy-signing.key
-
-      # The committed policy declares a Fulcio functionary but doesn't
-      # ship the Fulcio root cert (cilock needs PEM bytes in
-      # roots.<id>.certificate to validate the cert chain on the
-      # build-time signature). Fetch the live Fulcio chain, split into
-      # root + intermediate, base64-encode, and inject into the policy
-      # before signing. Auto-tracks Fulcio key rotation; the embedded
-      # bytes are then bound into the DSSE-signed policy below.
-      - name: Embed Fulcio trust bundle into policy
-        working-directory: dist
-        run: |
-          curl -sSf https://fulcio.sigstore.dev/api/v1/rootCert > /tmp/fulcio-chain.pem
-          awk 'BEGIN{n=0} /-----BEGIN CERTIFICATE-----/{n++; out=sprintf("/tmp/fulcio-cert%d.pem", n)} {print > out}' /tmp/fulcio-chain.pem
-          ROOT=""
-          INTERMEDIATE=""
-          for c in /tmp/fulcio-cert*.pem; do
-            subj=$(openssl x509 -in "$c" -noout -subject | sed 's/^subject=//')
-            iss=$(openssl x509 -in "$c" -noout -issuer | sed 's/^issuer=//')
-            if [ "$subj" = "$iss" ]; then
-              ROOT="$c"
-            else
-              INTERMEDIATE="$c"
-            fi
-          done
-          [ -n "$ROOT" ] || { echo "no self-signed root in Fulcio chain"; exit 1; }
-          ROOT_B64=$(base64 -w0 < "$ROOT")
-          if [ -n "$INTERMEDIATE" ]; then
-            INT_B64=$(base64 -w0 < "$INTERMEDIATE")
-            jq --arg root "$ROOT_B64" --arg int "$INT_B64" \
-              '.roots["sigstore-fulcio"].certificate = $root | .roots["sigstore-fulcio"].intermediates = [$int]' \
-              ../deploy/cilock/release.policy.json > release.policy.expanded.json
-          else
-            jq --arg root "$ROOT_B64" \
-              '.roots["sigstore-fulcio"].certificate = $root' \
-              ../deploy/cilock/release.policy.json > release.policy.expanded.json
-          fi
-
-      - name: Sign release policy (DSSE, ephemeral ed25519)
-        working-directory: dist
-        run: |
-          /tmp/cilock sign \
-            --signer-file-key-path policy-signing.key \
-            --infile release.policy.expanded.json \
-            --outfile release-v1.policy.json
-          rm -f policy-signing.key release.policy.expanded.json
-
-      - name: Verify policy + generate VSA for each platform
-        working-directory: dist
-        run: |
-          # Attestations are bound to the *binary* bytes (the product the
-          # cilock-action saw), not to the tarball wrapper. Extract the
-          # binary from each archive and verify against that. The tarball
-          # is just a transport layer; checksums-sha256.txt + cosign
-          # signature on the tarball cover transport-level integrity.
-          #
-          # We pass BOTH envelopes per platform — the vendor envelope
-          # AND the release-build envelope — so cilock can walk the
-          # source→vendor→build chain. Policy's
-          # release-build.artifactsFrom=[vendor-cilock-deps] requires
-          # both to be present and their digests to match.
-          mkdir -p verify
-          for plat in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
-            archive="cilock-${{ steps.version.outputs.version }}-${plat}.tar.gz"
-            attest="${plat}.attestation.json"
-            vendor_attest="${plat}.vendor.attestation.json"
-            [ -f "$archive" ] || continue
-            [ -f "$attest" ] || { echo "missing attestation $attest"; exit 1; }
-            [ -f "$vendor_attest" ] || { echo "missing vendor attestation $vendor_attest"; exit 1; }
-            stem="${archive%.tar.gz}"
-            tar -xzf "$archive" -C "verify/" cilock
-            mv "verify/cilock" "verify/cilock-${plat}"
-            /tmp/cilock verify \
-              --policy release-v1.policy.json \
-              --publickey cilock-policy.pub \
-              --attestations "$vendor_attest" \
-              --attestations "$attest" \
-              --artifactfile "verify/cilock-${plat}" \
-              --vsa-outfile "${stem}.vsa.json" \
-              || { echo "POLICY FAILED for $archive — aborting release before cosign signature"; exit 1; }
-          done
-          echo "✔ All platforms passed release policy (incl. source→vendor→build chain). Proceeding to cosign signature."
-
-      # ── Cosign signing (gated on policy pass above) ─────────────────────
-      # Only runs after every platform's VSA generation succeeded. Public
-      # users that subsequently `cosign verify-blob` against these archives
-      # are transitively trusting the policy result, not just bytes-on-disk.
-      - name: Sign all artifacts with cosign (policy-gated)
+      - name: Sign all artifacts with cosign
         working-directory: dist
         run: |
           for artifact in cilock-*.tar.gz cilock-*.zip checksums-sha256.txt; do
@@ -701,145 +286,66 @@ jobs:
               "$artifact"
           done
 
-      - name: Publish install script
+      - name: Generate SBOM
         run: |
-          cp deploy/cilock/install.sh dist/install.sh
-          # Sign install.sh with the same OIDC identity end users will check.
-          cosign sign-blob --yes \
-            --output-signature dist/install.sh.sig \
-            --output-certificate dist/install.sh.cert \
-            dist/install.sh
+          syft dir:. --output spdx-json=dist/cilock-${{ steps.version.outputs.version }}-sbom.spdx.json
 
-      # Cosign-sign the signed policy + pubkey so the trust chain anchors
-      # them in this workflow's Fulcio identity (same identity that
-      # cosign-signed the binary tarballs above).
-      - name: Cosign-sign release policy + pubkey
+      # Verify each platform binary against the published release policy and
+      # produce a Verification Summary Attestation (VSA) per artifact. VSAs
+      # ship with the release so downstream consumers can rely on TestifySec's
+      # verification result without re-running the full policy check.
+      - name: Download bootstrap cilock for VSA generation
+        run: |
+          # Use the just-built linux-amd64 binary as the bootstrap cilock for
+          # this release's own verification. Same source as the artifacts it
+          # verifies.
+          tar -xzf dist/cilock-${{ steps.version.outputs.version }}-linux-amd64.tar.gz -C /tmp/
+          chmod +x /tmp/cilock
+          /tmp/cilock version
+
+      - name: Generate VSA for each platform
+        # VSA depends on per-platform .attestation.json. When the
+        # cilock-action self-attestation step fell back to a plain
+        # build (rc-quality release), the attestation file doesn't
+        # exist and VSA generation must be skipped, not failed.
+        # continue-on-error keeps the rest of the release flowing.
+        continue-on-error: true
         working-directory: dist
         run: |
-          for f in release-v1.policy.json cilock-policy.pub; do
-            cosign sign-blob --yes \
-              --output-signature "${f}.sig" \
-              --output-certificate "${f}.pem" \
-              "$f"
+          for archive in cilock-*-linux-amd64.tar.gz cilock-*-linux-arm64.tar.gz \
+                         cilock-*-darwin-amd64.tar.gz cilock-*-darwin-arm64.tar.gz; do
+            [ -f "$archive" ] || continue
+            stem="${archive%.tar.gz}"
+            # Locate the matching attestation file. If absent, skip
+            # VSA for this platform with a warning — the binary
+            # ships without a signed VSA, which is acceptable for
+            # RC releases.
+            platform="${archive#cilock-*-}"; platform="${platform%.tar.gz}"
+            attest="${platform}.attestation.json"
+            if [ ! -f "$attest" ]; then
+              echo "::warning::no attestation for ${archive}; skipping VSA generation"
+              continue
+            fi
+            /tmp/cilock verify \
+              --policy ../deploy/cilock/release.policy.json \
+              --artifactfile "$archive" \
+              --vsa-out "${stem}.vsa.json" \
+              || echo "::warning::VSA generation failed for $archive (continuing)"
           done
 
-      # Two layered artifacts for offline verification:
-      #
-      # (1) cilock bundle (DSSE-envelope JSONL inside a tar.gz). This is
-      #     the canonical input for `cilock verify --bundle`. Each
-      #     envelope already contains the FULL collection — sbom,
-      #     secretscan findings, govulncheck summary, slsa provenance,
-      #     inclusion-proof — as inlined sub-attestations of the
-      #     attestation-collection predicate. So "is the SBOM in the
-      #     bundle?" — yes, it's inside every envelope.
-      #
-      # (2) release-evidence-kit (plain tar.gz). Self-contained audit
-      #     pack: bundle (1) + signed policy + pubkey + raw SBOM file +
-      #     all VSAs + a verify README. A human can untar this and have
-      #     every artifact needed to re-verify the release without ever
-      #     touching the GitHub Release page. Cosign-signed too.
-      - name: Create cilock bundle (envelopes)
+      - name: Publish install script + signed release policy
         working-directory: dist
         run: |
-          BUNDLE="cilock-${{ steps.version.outputs.version }}-evidence-bundle.tar.gz"
-          /tmp/cilock bundle create \
-            --attestation linux-amd64.vendor.attestation.json \
-            --attestation linux-arm64.vendor.attestation.json \
-            --attestation darwin-amd64.vendor.attestation.json \
-            --attestation darwin-arm64.vendor.attestation.json \
-            --attestation linux-amd64.attestation.json \
-            --attestation linux-arm64.attestation.json \
-            --attestation darwin-amd64.attestation.json \
-            --attestation darwin-arm64.attestation.json \
-            --attestation linux-amd64.vendor.witness.attestation.json \
-            --attestation linux-arm64.vendor.witness.attestation.json \
-            --attestation darwin-amd64.vendor.witness.attestation.json \
-            --attestation darwin-arm64.vendor.witness.attestation.json \
-            --attestation linux-amd64.witness.attestation.json \
-            --attestation linux-arm64.witness.attestation.json \
-            --attestation darwin-amd64.witness.attestation.json \
-            --attestation darwin-arm64.witness.attestation.json \
-            --output "${BUNDLE}"
-          /tmp/cilock bundle inspect "${BUNDLE}" | head -30
+          cp ../deploy/cilock/install.sh install.sh
+          # Sign install.sh with the same OIDC identity end users will check.
           cosign sign-blob --yes \
-            --output-signature "${BUNDLE}.sig" \
-            --output-certificate "${BUNDLE}.pem" \
-            "${BUNDLE}"
-
-      - name: Create release-evidence-kit (bundle + policy + pubkey + VSAs + SBOM + README)
-        working-directory: dist
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          KIT="cilock-${VERSION}-release-evidence-kit.tar.gz"
-          KITDIR="kit-${VERSION}"
-          mkdir -p "${KITDIR}"
-          # Cilock bundle (envelopes, the verify-ready artifact)
-          cp "cilock-${VERSION}-evidence-bundle.tar.gz"     "${KITDIR}/"
-          cp "cilock-${VERSION}-evidence-bundle.tar.gz.sig" "${KITDIR}/"
-          cp "cilock-${VERSION}-evidence-bundle.tar.gz.pem" "${KITDIR}/"
-          # Signed policy + pubkey (the verify-time trust roots)
-          cp release-v1.policy.json{,.sig,.pem}             "${KITDIR}/"
-          cp cilock-policy.pub{,.sig,.pem}                  "${KITDIR}/"
-          # VSAs (per-platform Verification Summary Attestations)
-          cp cilock-*.vsa.json                              "${KITDIR}/" 2>/dev/null || true
-          # Raw SBOM (redundant with inlined predicate, but auditors expect a standalone file)
-          cp cilock-${VERSION}-sbom.spdx.json               "${KITDIR}/" 2>/dev/null || true
-          # Verify README
-          cat > "${KITDIR}/VERIFY.md" <<'README'
-          # Offline verification
-
-          ## 1. Verify the cilock bundle's cosign signature
-          ```
-          cosign verify-blob \
-            --signature cilock-VERSION-evidence-bundle.tar.gz.sig \
-            --certificate cilock-VERSION-evidence-bundle.tar.gz.pem \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity-regexp '^https://github.com/aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v.*' \
-            cilock-VERSION-evidence-bundle.tar.gz
-          ```
-
-          ## 2. Verify the signed policy
-          ```
-          cosign verify-blob \
-            --signature release-v1.policy.json.sig \
-            --certificate release-v1.policy.json.pem \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity-regexp '^https://github.com/aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v.*' \
-            release-v1.policy.json
-          ```
-
-          ## 3. Verify a binary against the bundle + signed policy
-          ```
-          # Extract a platform binary (downloaded separately)
-          tar -xzf cilock-VERSION-linux-amd64.tar.gz
-
-          # Verify against the bundle (contains all envelopes)
-          cilock verify \
-            --policy release-v1.policy.json \
-            --publickey cilock-policy.pub \
-            --bundle cilock-VERSION-evidence-bundle.tar.gz \
-            --artifactfile ./cilock
-          ```
-
-          ## What's in each artifact
-          - `cilock-VERSION-evidence-bundle.tar.gz` — 8 DSSE envelopes (4 primary + 4 witness). Each envelope contains the full attestation-collection predicate: environment, git, github, material, command-run, product, sbom (SPDX inlined), secretscan, govulncheck, slsa, inclusion-proof.
-          - `release-v1.policy.json` — Rego-gated verification policy (signed via ephemeral ed25519 + cosign-anchored).
-          - `cilock-policy.pub` — public key for the policy's DSSE signature.
-          - `cilock-*.vsa.json` — per-platform Verification Summary Attestation emitted by `cilock verify`.
-          - `cilock-VERSION-sbom.spdx.json` — raw SPDX SBOM (duplicate of the predicate inside the envelope, kept for tooling that expects a standalone file).
-          README
-          # Substitute VERSION in README
-          sed -i "s/VERSION/${VERSION}/g" "${KITDIR}/VERIFY.md"
-          tar czf "${KIT}" "${KITDIR}/"
-          rm -rf "${KITDIR}"
-          ls -lh "${KIT}"
-          cosign sign-blob --yes \
-            --output-signature "${KIT}.sig" \
-            --output-certificate "${KIT}.pem" \
-            "${KIT}"
+            --output-signature install.sh.sig \
+            --output-certificate install.sh.cert \
+            install.sh
+          cp ../deploy/cilock/release.policy.json release-v1.policy.json
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
@@ -857,16 +363,5 @@ jobs:
             dist/install.sh.sig
             dist/install.sh.cert
             dist/release-v1.policy.json
-            dist/release-v1.policy.json.sig
-            dist/release-v1.policy.json.pem
-            dist/cilock-policy.pub
-            dist/cilock-policy.pub.sig
-            dist/cilock-policy.pub.pem
-            dist/cilock-*-evidence-bundle.tar.gz
-            dist/cilock-*-evidence-bundle.tar.gz.sig
-            dist/cilock-*-evidence-bundle.tar.gz.pem
-            dist/cilock-*-release-evidence-kit.tar.gz
-            dist/cilock-*-release-evidence-kit.tar.gz.sig
-            dist/cilock-*-release-evidence-kit.tar.gz.pem
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

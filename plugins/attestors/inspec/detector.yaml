@@ -1,0 +1,27 @@
+apiVersion: cilock.detection/v0.1
+name: inspec
+description: "Captures Chef InSpec compliance scan results."
+
+category: [compliance-scan]
+
+upstream:
+  name: Chef InSpec
+  source: "https://github.com/inspec/inspec"
+  license: Apache-2.0
+  vendor: Progress Chef
+
+recommended_trace: "off"
+
+pre:
+  match:
+    argv_prefix: ["inspec"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["inspec"]
+      - product_glob: ["inspec*.json", "**/inspec*.json"]
+
+llm_hints:
+  on_match: "InSpec results captured. Compliance profile outcomes preserved."

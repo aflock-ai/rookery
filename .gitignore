@@ -2,16 +2,22 @@
 builder/bin/
 builder/builder
 cilock/cilock
+cilock/cilock-all
+cilock-binary
+cilock-optimized
 lockctl/lockctl
 *.exe
 *.dll
 *.so
 *.dylib
 
-# Release pipeline output directory.
-# Populated at CI time by the release workflow (cilock-action envelopes,
-# binary tarballs, signed policy, etc.). Never committed.
-dist/
+# Catalog-test workdir: ephemeral key + bundles + fixtures + per-tool logs.
+# Re-creatable by running scripts/test-catalog-tools.py.
+.catalog-test/
+
+# Local-only agent state and ad-hoc notes
+.claude/
+MORNING_REPORT.md
 
 # Test binaries
 *.test

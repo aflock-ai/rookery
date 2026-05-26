@@ -1,0 +1,31 @@
+apiVersion: cilock.detection/v0.1
+name: falco
+description: "Captures runtime security events from Falco (Cloud Native Computing Foundation runtime threat detection)."
+
+category: [runtime-event]
+
+upstream:
+  name: Falco
+  source: "https://github.com/falcosecurity/falco"
+  license: Apache-2.0
+  vendor: The Falco Authors (CNCF)
+
+recommended_trace: "off"
+
+pre:
+  match:
+    any_of:
+      - argv_prefix: ["falco"]
+      - argv_prefix: ["falcoctl"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["falco"]
+      - exec_observed:
+          argv_prefix: ["falcoctl"]
+      - product_glob: ["falco*.json", "**/falco*.json", "falco-events.log", "**/falco-events.log"]
+
+llm_hints:
+  on_match: "Falco runtime events captured."

@@ -1,4 +1,4 @@
-// Copyright 2026 The Aflock Authors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -48,29 +48,20 @@ func BundleCmd() *cobra.Command {
 }
 
 type bundleCreateOptions struct {
-	// Attestations lists local DSSE envelope file paths to package
-	// directly. When set, the command skips the Archivista round trip
-	// and writes the envelopes verbatim. This is the offline-replay
-	// path used by release pipelines that already have signed
-	// envelopes on disk.
-	Attestations []string
-
-	// Archivista-flow inputs. Used only when Attestations is empty.
 	Subjects       []string
 	ArchivistaURL  string
 	ArchivistaHdrs []string
-
-	Output       string
-	MaxEnvelopes int
-	MaxDepth     int
+	Output         string
+	MaxEnvelopes   int
+	MaxDepth       int
 }
 
 func bundleCreateCmd() *cobra.Command {
 	o := bundleCreateOptions{}
 	cmd := &cobra.Command{
 		Use:               "create",
-		Short:             "Build a bundle from local DSSE envelopes or by walking an Archivista subject graph",
-		Long:              "Builds a tar.gz bundle of DSSE envelopes. Two input modes: (a) local files via repeated --attestation paths, (b) Archivista graph walk seeded by --subject digests. Local mode is offline; Archivista mode requires --archivista-url. The two modes are mutually exclusive — pick one per invocation.",
+		Short:             "Build a bundle by walking an Archivista subject graph",
+		Long:              "Pulls every DSSE envelope reachable from the given subject digest(s) via Archivista's subject graph and packs them into a tar.gz bundle.",
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,
 		SilenceUsage:      true,
@@ -78,93 +69,25 @@ func bundleCreateCmd() *cobra.Command {
 			if o.Output == "" {
 				return fmt.Errorf("--output is required")
 			}
-			hasFiles := len(o.Attestations) > 0
-			hasArchivista := o.ArchivistaURL != "" || len(o.Subjects) > 0
-			if !hasFiles && !hasArchivista {
-				return fmt.Errorf("provide either --attestation <path> (local files) or --subject + --archivista-url (graph walk)")
+			if len(o.Subjects) == 0 {
+				return fmt.Errorf("at least one --subject is required")
 			}
-			if hasFiles && hasArchivista {
-				return fmt.Errorf("--attestation and --subject/--archivista-url are mutually exclusive")
-			}
-			if hasArchivista {
-				if len(o.Subjects) == 0 {
-					return fmt.Errorf("at least one --subject is required")
-				}
-				if o.ArchivistaURL == "" {
-					return fmt.Errorf("--archivista-url is required")
-				}
+			if o.ArchivistaURL == "" {
+				return fmt.Errorf("--archivista-url is required")
 			}
 			return runBundleCreate(cmd.Context(), o)
 		},
 	}
-	cmd.Flags().StringSliceVarP(&o.Attestations, "attestation", "a", nil, "Path to a local DSSE envelope file (typically *.attestation.json). Repeatable. Mutually exclusive with --subject/--archivista-url.")
-	cmd.Flags().StringSliceVarP(&o.Subjects, "subject", "s", nil, "Subject digest(s) to seed the graph walk (e.g. sha256:abc...). Repeatable. Requires --archivista-url.")
-	cmd.Flags().StringVar(&o.ArchivistaURL, "archivista-url", "", "Archivista server URL (mutually exclusive with --attestation)")
+	cmd.Flags().StringSliceVarP(&o.Subjects, "subject", "s", nil, "Subject digest(s) to seed the graph walk (e.g. sha256:abc...). Repeatable.")
+	cmd.Flags().StringVar(&o.ArchivistaURL, "archivista-url", "", "Archivista server URL")
 	cmd.Flags().StringArrayVar(&o.ArchivistaHdrs, "archivista-headers", nil, "Headers to send with each Archivista request (e.g. Authorization: Bearer ...)")
 	cmd.Flags().StringVarP(&o.Output, "output", "o", "", "Path to write the bundle (tar.gz)")
-	cmd.Flags().IntVar(&o.MaxEnvelopes, "max-envelopes", 10000, "Maximum envelopes to fetch before aborting (Archivista mode only)")
-	cmd.Flags().IntVar(&o.MaxDepth, "max-depth", 5, "Maximum subject-graph traversal depth (Archivista mode only)")
+	cmd.Flags().IntVar(&o.MaxEnvelopes, "max-envelopes", 10000, "Maximum envelopes to fetch before aborting")
+	cmd.Flags().IntVar(&o.MaxDepth, "max-depth", 5, "Maximum subject-graph traversal depth")
 	return cmd
 }
 
 func runBundleCreate(ctx context.Context, o bundleCreateOptions) error {
-	if o.Output == "" {
-		return fmt.Errorf("--output is required")
-	}
-	hasFiles := len(o.Attestations) > 0
-	hasArchivista := o.ArchivistaURL != "" || len(o.Subjects) > 0
-	if !hasFiles && !hasArchivista {
-		return fmt.Errorf("provide either --attestation <path> (local files) or --subject + --archivista-url (graph walk)")
-	}
-	if hasFiles && hasArchivista {
-		return fmt.Errorf("--attestation and --subject/--archivista-url are mutually exclusive")
-	}
-	if hasFiles {
-		return runBundleCreateFromFiles(o)
-	}
-	return runBundleCreateFromArchivista(ctx, o)
-}
-
-// runBundleCreateFromFiles packages the supplied DSSE envelope files into
-// a bundle verbatim. Each file is parsed as a dsse.Envelope JSON, added
-// to the writer, and the resulting bundle is tagged with source=file so
-// downstream `bundle inspect` shows the local origin.
-func runBundleCreateFromFiles(o bundleCreateOptions) error {
-	envelopes := make([]dsse.Envelope, 0, len(o.Attestations))
-	for _, path := range o.Attestations {
-		raw, err := os.ReadFile(path) //nolint:gosec // G304: CLI-provided path
-		if err != nil {
-			return fmt.Errorf("read attestation %q: %w", path, err)
-		}
-		var env dsse.Envelope
-		if err := json.Unmarshal(raw, &env); err != nil {
-			return fmt.Errorf("parse attestation %q: %w", path, err)
-		}
-		envelopes = append(envelopes, env)
-	}
-	log.Infof("loaded %d envelopes from %d file(s); writing %s", len(envelopes), len(o.Attestations), o.Output)
-
-	f, err := os.Create(o.Output) //nolint:gosec // G304: --output is a CLI-provided path
-	if err != nil {
-		return fmt.Errorf("create output file: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	w := bundle.NewWriter(f)
-	w.SetSource(bundle.SourceFile, "")
-	for _, env := range envelopes {
-		if err := w.Add(env); err != nil {
-			return fmt.Errorf("add envelope: %w", err)
-		}
-	}
-	if err := w.Close(); err != nil {
-		return fmt.Errorf("close bundle: %w", err)
-	}
-	log.Infof("wrote bundle with %d envelopes", w.Count())
-	return nil
-}
-
-func runBundleCreateFromArchivista(ctx context.Context, o bundleCreateOptions) error {
 	headers := http.Header{}
 	for _, h := range o.ArchivistaHdrs {
 		idx := strings.Index(h, ":")
@@ -222,6 +145,7 @@ func bundleInspectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "inspect <bundle.tar.gz>",
 		Short:             "Print a bundle's manifest and a per-envelope summary",
+		Example:           "  # Print a bundle's manifest and per-envelope summary\n  cilock bundle inspect evidence.tar.gz",
 		Args:              cobra.ExactArgs(1),
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,

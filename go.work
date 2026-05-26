@@ -20,6 +20,7 @@ use (
 	./plugins/attestors/aws-config
 	./plugins/attestors/aws-iid
 	./plugins/attestors/commandrun
+	./plugins/attestors/commandrun/ebpf
 	./plugins/attestors/configuration
 	./plugins/attestors/docker
 	./plugins/attestors/docker-bench
@@ -28,9 +29,11 @@ use (
 	./plugins/attestors/gcp-iit
 	./plugins/attestors/git
 	./plugins/attestors/github
+	./plugins/attestors/github-review
 	./plugins/attestors/githubaction
 	./plugins/attestors/githubwebhook
 	./plugins/attestors/gitlab
+	./plugins/attestors/go-build
 	./plugins/attestors/govulncheck
 	./plugins/attestors/inclusion-proof
 	./plugins/attestors/inspec
@@ -80,3 +83,18 @@ use (
 	./presets/cicd
 	./presets/minimal
 )
+
+// TestifySec-maintained rewrite of github.com/wk8/go-ordered-map/v2 that
+// drops github.com/buger/jsonparser (unfixed GHSA-6g7g-w4f8-9c9x Delete()
+// DoS) and github.com/mailru/easyjson from the linked binary by
+// reimplementing wk8's MarshalJSON / UnmarshalJSON on top of stdlib
+// encoding/json. Public API and on-wire JSON format unchanged. See
+// security-patches/wk8-orderedmap/README.md for the rationale.
+replace github.com/wk8/go-ordered-map/v2 => ./security-patches/wk8-orderedmap/v2
+// TestifySec-maintained slim fork of github.com/zricethezav/gitleaks/v8.
+// Drops cmd/, sources/, report emitters (CSV/SARIF/JSON/JUnit/template),
+// and exposes the secretscan attestor's exact surface (DetectBytes +
+// config.Config + report.Finding). Removes the charmbracelet/lipgloss,
+// spf13/viper, mholt/archives, Masterminds/sprig clusters — ~46 modules
+// from the linked binary. See security-patches/gitleaks-slim/README.md.
+replace github.com/zricethezav/gitleaks/v8 => ./security-patches/gitleaks-slim

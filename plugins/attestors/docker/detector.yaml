@@ -1,0 +1,58 @@
+apiVersion: cilock.detection/v0.1
+name: docker
+description: "Captures docker build provenance, image references, and layer materials."
+
+category: [image-build]
+
+upstream:
+  name: Docker
+  source: "https://github.com/moby/moby"
+  license: Apache-2.0
+  vendor: Docker, Inc. / Moby
+
+# Threat model: the attestation covers what went *into* the image —
+# base layers, COPY'd files, network fetches during RUN steps. Full
+# eBPF tracing is the only way to defensibly claim those materials.
+recommended_trace: full
+
+pre:
+  match:
+    any_of:
+      - argv_prefix: ["docker", "build"]
+      - argv_prefix: ["docker", "buildx", "build"]
+      - argv_prefix: ["buildah", "build"]
+  warn_unless:
+    argv_contains: "--provenance=true"
+  warnings:
+    - code: DOCKER_NO_PROVENANCE
+      severity: warn
+      message: "docker build invoked without --provenance=true"
+      summary: "Captured attestation will lack SLSA build provenance. Note: --provenance=true requires the buildx builder; the legacy docker driver does not support it. The suggested command rewrites `docker build` to `docker buildx build` so the flag works."
+      suggested_fix:
+        # First upgrade `docker build` → `docker buildx build` so the
+        # provenance flag is accepted. The replace_argv runs before
+        # insert_arg in the renderer, so insert_arg's after_subcommand
+        # anchor finds the new "build" position correctly.
+        replace_argv:
+          from: ["docker", "build"]
+          to: ["docker", "buildx", "build"]
+        insert_arg:
+          value: "--provenance=true"
+          after_subcommand: ["build"]
+      doc_anchor: docker#provenance
+      llm_hint: "User invoked docker build without --provenance=true. The legacy `docker build` driver rejects --provenance, so the suggested_command rewrites it to `docker buildx build --provenance=true`. Re-run with that exact command."
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["docker", "build"]
+      - exec_observed:
+          argv_prefix: ["docker", "buildx", "build"]
+      - exec_observed:
+          argv_prefix: ["buildah", "build"]
+
+llm_hints:
+  on_match: "Docker build captured. Attestation includes image digest, layer materials, and image references."
+  on_warn: "User ran docker build without --provenance=true. Re-run with the suggested_command from the warning to capture full SLSA build provenance."
+  on_observed_but_not_invoked: "docker build ran inside the step (likely via make/script). Post-gate captured it via exec_observed."

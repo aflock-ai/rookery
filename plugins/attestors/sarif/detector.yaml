@@ -1,0 +1,24 @@
+apiVersion: cilock.detection/v0.1
+name: sarif
+description: "Captures SARIF (Static Analysis Results Interchange Format) reports produced by scanners (CodeQL, Semgrep, Brakeman, etc.)."
+
+# No category: SARIF is a format wrapper used by many scanner kinds
+# (SAST, DAST, IaC scan, secret scan, code review). Step intent comes
+# from the tool that emitted the file, not the format. See
+# docs/lexicon-v1.md composition rule 6.
+
+upstream:
+  name: SARIF (Static Analysis Results Interchange Format)
+  source: "https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html"
+  license: OASIS
+  vendor: OASIS / OASIS SARIF TC
+  format_only: true
+
+recommended_trace: "off"
+
+post:
+  match:
+    product_glob: ["*.sarif", "**/*.sarif", "*.sarif.json", "**/*.sarif.json"]
+
+llm_hints:
+  on_match: "SARIF report captured. Scanner findings preserved verbatim for downstream policy evaluation."

@@ -17,6 +17,7 @@ package attestation
 import (
 	"context"
 	"crypto"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -65,6 +66,51 @@ type ErrAttestor struct {
 
 func (e ErrAttestor) Error() string {
 	return fmt.Sprintf("error returned for attestor %s of run type %s: %s", e.Name, e.RunType, e.Reason)
+}
+
+// SoftError marks an attestor error as a "nothing to do" outcome rather than a
+// contract violation. The CLI layer demotes wrapped errors to warnings and
+// keeps the exit code at zero. Use this when an attestor ran successfully but
+// the project didn't produce the kind of evidence the attestor wraps (e.g.
+// sbom found no SBOM file, go-build saw no Go binary). Do NOT use it for
+// signer failures, tracing-unsupported, key parse errors, or any other case
+// where the attestor's contract was violated — those must surface as fatal
+// (exit code 1) so CI can gate on cilock's exit code.
+//
+// Fixes finding #221 (exit-code inconsistency between attestor failure
+// classes).
+type SoftError struct {
+	// Reason is the underlying short message the attestor would have
+	// logged. Kept as a string so callers don't have to wrap a typed
+	// error just to be classified as soft.
+	Reason string
+}
+
+// Error implements error. The "soft:" prefix is purely for log readers; the
+// classification itself is by type, not string match.
+func (e SoftError) Error() string {
+	if e.Reason == "" {
+		return "soft: attestor had nothing to do"
+	}
+	return "soft: " + e.Reason
+}
+
+// NewSoftError returns a SoftError wrapping the given reason string. Helper
+// so attestors don't have to import the SoftError struct literal directly
+// everywhere they classify a "nothing to do" outcome.
+func NewSoftError(reason string) error {
+	return SoftError{Reason: reason}
+}
+
+// IsSoftError reports whether err (or any error in its unwrap chain) is a
+// SoftError. Use on individual joined-error legs to decide whether to treat
+// the leg as a warning or a fatal failure.
+func IsSoftError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var s SoftError
+	return errors.As(err, &s)
 }
 
 type AttestationContextOption func(ctx *AttestationContext)
@@ -145,6 +191,18 @@ type AttestationContext struct {
 	environmentCapturer EnvironmentCapturer
 	outputWriters       []io.Writer
 
+	// Capture mode selects where the material + product attestors get
+	// their data: walk (legacy), trace (derive from command-run trace
+	// events), ima (kernel measurements), or auto (default — pick best).
+	// See attestation/capture_mode.go for the full semantics.
+	captureMode CaptureMode
+
+	// Cache pattern options control how the framework classifies a
+	// tracee-written file as cache/temp vs product. See
+	// CachePatternOptions for the full semantics. Default values
+	// (zero struct) mean "use built-in defaults + env query."
+	cachePatternOpts CachePatternOptions
+
 	// Environment configuration fields used by the environment plugin
 	envFilterVarsEnabled           bool
 	envAdditionalKeys              []string
@@ -218,7 +276,36 @@ func (ctx *AttestationContext) RunAttestors() error {
 		log.Infof("Completed %s attestors stage...", k.String())
 	}
 
+	// Finalize phase: attestors that implement Finalizer get a second
+	// pass AFTER every other attestor has completed. The intent is to
+	// let early-running attestors (e.g., material attestor in trace
+	// mode) augment themselves with data produced by later attestors
+	// (e.g., the command-run trace). Material attestor short-circuits
+	// its pre-execute walk in trace mode, then Finalize pulls the
+	// captured input set from command-run and builds the merkle tree.
+	for _, completed := range ctx.completedAttestors {
+		f, ok := completed.Attestor.(Finalizer)
+		if !ok {
+			continue
+		}
+		log.Infof("Finalizing %v attestor...", completed.Attestor.Name())
+		ftStart := time.Now()
+		if err := f.Finalize(ctx); err != nil {
+			log.Errorf("Finalize %v: %v", completed.Attestor.Name(), err)
+		}
+		log.Infof("Finished finalize %v... (%s)", completed.Attestor.Name(), time.Since(ftStart))
+	}
+
 	return nil
+}
+
+// Finalizer is an optional interface attestors can implement to run
+// a second pass AFTER all other attestors have completed. Use for
+// data dependencies that flow backwards in time relative to the
+// declared RunType ordering — e.g., material attestor in trace
+// mode pulling its inputs from command-run's captured trace.
+type Finalizer interface {
+	Finalize(ctx *AttestationContext) error
 }
 
 func (ctx *AttestationContext) runAttestor(attestor Attestor) {
@@ -318,6 +405,33 @@ func (ctx *AttestationContext) Products() map[string]Product {
 	}
 	ctx.mutex.RUnlock()
 	return out
+}
+
+// CaptureMode returns the configured capture mode after normalization.
+// An unset / "auto" value means "let the attestor pick the best
+// available source at run time." Walk-mode operators see "walk";
+// trace-mode operators see "trace"; etc.
+func (ctx *AttestationContext) CaptureMode() CaptureMode {
+	return ctx.captureMode.Normalize()
+}
+
+// CachePatterns returns the configured pattern options. Attestors
+// pass these to ResolveCachePatterns + NewCachePathMatcher to build
+// the classifier. Default (zero-valued) options resolve to "use
+// DefaultCachePatterns + SystemCachePathsFromEnv."
+func (ctx *AttestationContext) CachePatterns() CachePatternOptions {
+	return ctx.cachePatternOpts
+}
+
+// RegisteredAttestors returns the full list of attestors registered
+// with this context, regardless of whether they've completed. Used by
+// attestors that run early (e.g., material) and need to know whether
+// a later-running attestor (e.g., command-run with tracing) intends to
+// supply data this attestor would otherwise have to compute itself.
+// CompletedAttestors() is the right method for "what's already run";
+// this method is for "what's planned to run."
+func (ctx *AttestationContext) RegisteredAttestors() []Attestor {
+	return ctx.attestors
 }
 
 func (ctx *AttestationContext) StepName() string {

@@ -1,0 +1,361 @@
+name: cilock real-build matrix (rc49+)
+
+# Empirical limits-finding workflow. Runs cilock rc49+ against real
+# toolchains × cilock-mode configurations and captures the diagnostics
+# so we can SEE the limitations rather than guess at them.
+#
+# Per matrix cell, we record:
+#   - Wall-clock time (vs baseline if available)
+#   - summary.diagnostics.* counters (drops, timeouts, queueOverflows, ...)
+#   - FanotifyAvailable, FsVerityAvailable flags
+#   - Attestation file size
+#   - Exit code (build success/fail)
+#
+# Triggers: workflow_dispatch only (it's expensive — JVM + kernel
+# builds take minutes each); push on workflow file change is for
+# iteration on the workflow itself.
+
+on:
+  workflow_dispatch:
+    inputs:
+      use_release:
+        description: 'cilock release tag (empty = build from current ref)'
+        type: string
+        required: false
+        default: ''
+  push:
+    paths:
+      - '.github/workflows/cilock-real-build-matrix.yml'
+    branches:
+      - nk/ci-trace-mode-probe
+
+permissions:
+  contents: read
+  id-token: write  # required for sigstore keyless signing via GHA OIDC
+
+jobs:
+  build-matrix:
+    name: ${{ matrix.workload }} × ${{ matrix.cilock_mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cilock_mode:
+          - off                # baseline, no tracing
+          - bpf-only           # CILOCK_FANOTIFY=off, trace=ebpf
+          - bpf+fanotify-auto  # CILOCK_FANOTIFY=auto
+          - bpf+fanotify-on    # CILOCK_FANOTIFY=1
+        workload:
+          - go-build-small      # `go build ./...` of a small repo
+          - rust-cargo-build    # `cargo build --release` of a small crate
+          - npm-install-medium  # `npm install` of a typical package.json
+          - python-pip-install  # `pip install --target ./vendor numpy`
+          - make-kernel-tiny    # tiny kernel objects (limits stress)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show runner info
+        run: |
+          uname -a
+          echo "--- /proc/version ---"
+          cat /proc/version
+          echo "--- workspace mount ---"
+          findmnt "$(pwd)" || mount | head -10
+
+      # Build cilock from this checkout by default. The released rc49
+      # tarball's compiled BPF programs fail CO-RE relocation on the
+      # GHA ubuntu-24.04 kernel (limitation #4 from the first matrix
+      # run: "invalid func unknown#195896080"). Building from source
+      # against the current kernel's BTF avoids that.
+      - name: Setup Go
+        if: inputs.use_release == ''
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      # rookery now auto-rebuilds the .bpf.o at runtime when the
+      # embedded one fails CO-RE (rebuild_linux.go in
+      # plugins/attestors/commandrun/ebpf/). We just need clang +
+      # bpftool + libbpf-dev installed on the runner — rookery handles
+      # the rest. This is what end users get via cilock-action.
+      - name: Install BPF build deps (clang/bpftool/libbpf-dev)
+        if: inputs.use_release == ''
+        run: |
+          sudo apt-get update -qq
+          # `bpftool` standalone isn't in every Ubuntu image's universe
+          # repo. Fall back to linux-tools-generic which ships a
+          # /usr/lib/linux-tools/<kernel>/bpftool binary. rebuild_linux.go
+          # globs both locations.
+          sudo apt-get install -y -qq clang llvm libbpf-dev
+          sudo apt-get install -y -qq bpftool || \
+            sudo apt-get install -y -qq linux-tools-generic
+
+      - name: Build cilock from source
+        if: inputs.use_release == ''
+        run: |
+          cd cilock
+          go build -o /tmp/cilock-bin ./cmd/cilock
+          sudo install -m 0755 /tmp/cilock-bin /usr/local/bin/cilock
+          cilock version
+
+      - name: Download cilock release
+        if: inputs.use_release != ''
+        run: |
+          VERSION="${{ inputs.use_release }}"
+          NUM_VERSION="${VERSION#v}"
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64) GO_ARCH=amd64 ;;
+            aarch64) GO_ARCH=arm64 ;;
+            *) echo "unsupported arch: $ARCH"; exit 1 ;;
+          esac
+          URL="https://github.com/aflock-ai/rookery/releases/download/${VERSION}/cilock-${NUM_VERSION}-linux-${GO_ARCH}.tar.gz"
+          echo "downloading: $URL"
+          curl -fsL "$URL" -o /tmp/cilock.tar.gz
+          mkdir -p /tmp/cilock-bin
+          tar -xzf /tmp/cilock.tar.gz -C /tmp/cilock-bin
+          sudo cp /tmp/cilock-bin/cilock /usr/local/bin/cilock
+          sudo chmod +x /usr/local/bin/cilock
+          cilock version
+
+      - name: Configure cilock mode
+        id: mode
+        run: |
+          MODE="${{ matrix.cilock_mode }}"
+          case "$MODE" in
+            off)
+              echo "TRACE_FLAG=" >> "$GITHUB_OUTPUT"
+              echo "CILOCK_TRACE_MODE=" >> "$GITHUB_ENV"
+              echo "CILOCK_FANOTIFY=" >> "$GITHUB_ENV"
+              ;;
+            bpf-only)
+              echo "TRACE_FLAG=--trace" >> "$GITHUB_OUTPUT"
+              echo "CILOCK_TRACE_MODE=ebpf" >> "$GITHUB_ENV"
+              echo "CILOCK_FANOTIFY=off" >> "$GITHUB_ENV"
+              ;;
+            bpf+fanotify-auto)
+              echo "TRACE_FLAG=--trace" >> "$GITHUB_OUTPUT"
+              echo "CILOCK_TRACE_MODE=ebpf" >> "$GITHUB_ENV"
+              echo "CILOCK_FANOTIFY=auto" >> "$GITHUB_ENV"
+              ;;
+            bpf+fanotify-on)
+              echo "TRACE_FLAG=--trace" >> "$GITHUB_OUTPUT"
+              echo "CILOCK_TRACE_MODE=ebpf" >> "$GITHUB_ENV"
+              echo "CILOCK_FANOTIFY=1" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      # cilock requires a signer — there is no observability-only mode
+      # in rc49. We use sigstore keyless via GHA OIDC: cilock auto-
+      # detects GITHUB_ACTIONS=true + ACTIONS_ID_TOKEN_REQUEST_* env
+      # vars and exchanges the OIDC token for a short-lived Fulcio cert.
+      # This exercises the realistic CI-attestation path. Requires
+      # id-token: write permission (set at job level above).
+      - name: Compute Fulcio URL
+        if: matrix.cilock_mode != 'off'
+        run: |
+          echo "FULCIO_URL=https://fulcio.sigstore.dev" >> "$GITHUB_ENV"
+
+      # ────────────────────── Workload setup ──────────────────────
+
+      # Default attestor set includes git; cilock errors if the
+      # workdir isn't a repo. Each workload's setup git-inits the
+      # /tmp/workload dir at the end so the git attestor doesn't fail.
+      - name: Prepare workload — go-build-small
+        if: matrix.workload == 'go-build-small'
+        run: |
+          mkdir -p /tmp/workload && cd /tmp/workload
+          cat >main.go <<'EOF'
+          package main
+          import "fmt"
+          func main() { fmt.Println("hello") }
+          EOF
+          cat >go.mod <<'EOF'
+          module example.com/test
+          go 1.22
+          EOF
+          # Pre-prime go cache so the timed step measures only the build.
+          go build .
+          rm -f test
+
+      - name: Prepare workload — rust-cargo-build
+        if: matrix.workload == 'rust-cargo-build'
+        run: |
+          mkdir -p /tmp/workload && cd /tmp/workload
+          cargo init --bin --name workload-test .
+          # `cargo add` is the supported way — appending [dependencies]
+          # by hand creates a duplicate section, which cargo rejects.
+          cargo add regex@1.10
+          # Pre-fetch deps so timing measures the build.
+          cargo fetch
+
+      - name: Prepare workload — npm-install-medium
+        if: matrix.workload == 'npm-install-medium'
+        run: |
+          mkdir -p /tmp/workload && cd /tmp/workload
+          cat >package.json <<'EOF'
+          {
+            "name": "workload-test",
+            "version": "1.0.0",
+            "dependencies": {
+              "express": "^4.19.0",
+              "lodash": "^4.17.21",
+              "axios": "^1.7.0"
+            }
+          }
+          EOF
+
+      - name: Prepare workload — python-pip-install
+        if: matrix.workload == 'python-pip-install'
+        run: |
+          mkdir -p /tmp/workload && cd /tmp/workload
+          cat >requirements.txt <<'EOF'
+          requests==2.31.0
+          urllib3==2.0.7
+          charset-normalizer==3.3.2
+          EOF
+
+      - name: Prepare workload — make-kernel-tiny
+        if: matrix.workload == 'make-kernel-tiny'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libelf-dev bison flex bc libssl-dev
+          mkdir -p /tmp/workload && cd /tmp/workload
+          # Use a recent stable kernel tinyconfig — small enough to
+          # finish in a few minutes but exercises real build complexity.
+          curl -fsL https://git.kernel.org/torvalds/t/linux-6.13.tar.gz -o linux.tar.gz || \
+            curl -fsL https://github.com/torvalds/linux/archive/refs/tags/v6.13.tar.gz -o linux.tar.gz
+          tar xzf linux.tar.gz
+          mv linux-* linux
+          cd linux
+          make tinyconfig
+
+      # cilock's default attestor set includes 'git', which errors
+      # when the workdir isn't a repo. Initialise an empty repo so
+      # the matrix tests the realistic CI path (checkout-then-build).
+      - name: Initialise workload as git repo
+        run: |
+          # kernel workload lives under /tmp/workload/linux; others
+          # directly under /tmp/workload.
+          if [ "${{ matrix.workload }}" = "make-kernel-tiny" ]; then
+            WORK=/tmp/workload/linux
+          else
+            WORK=/tmp/workload
+          fi
+          cd "$WORK"
+          git init -q -b main
+          git config user.email "matrix@cilock.test"
+          git config user.name "Matrix Runner"
+          git add -A
+          git commit -q -m "matrix workload baseline" || true
+
+      # ──────────────────────  Run the build ──────────────────────
+
+      - name: Run go-build-small
+        if: matrix.workload == 'go-build-small'
+        id: run_go
+        run: |
+          cd /tmp/workload
+          START=$(date +%s.%N)
+          if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
+            sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                                "GITHUB_ACTIONS=true" \
+                "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- go build .
+          else
+            go build .
+          fi
+          END=$(date +%s.%N)
+          echo "duration=$(awk "BEGIN{print $END - $START}")" >> "$GITHUB_OUTPUT"
+
+      - name: Run rust-cargo-build
+        if: matrix.workload == 'rust-cargo-build'
+        run: |
+          cd /tmp/workload
+          if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
+            sudo -E env "PATH=$PATH:$HOME/.cargo/bin" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                                "GITHUB_ACTIONS=true" \
+                "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- cargo build --release
+          else
+            cargo build --release
+          fi
+
+      - name: Run npm-install-medium
+        if: matrix.workload == 'npm-install-medium'
+        run: |
+          cd /tmp/workload
+          if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
+            sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                                "GITHUB_ACTIONS=true" \
+                "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- npm install --no-fund --no-audit
+          else
+            npm install --no-fund --no-audit
+          fi
+
+      - name: Run python-pip-install
+        if: matrix.workload == 'python-pip-install'
+        run: |
+          cd /tmp/workload
+          if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
+            sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                                "GITHUB_ACTIONS=true" \
+                "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- python3 -m pip install --target ./vendor -r requirements.txt
+          else
+            python3 -m pip install --target ./vendor -r requirements.txt
+          fi
+
+      - name: Run make-kernel-tiny
+        if: matrix.workload == 'make-kernel-tiny'
+        run: |
+          cd /tmp/workload/linux
+          # Just build the early-stage targets — full vmlinux takes
+          # 10+ minutes even on tinyconfig. `prepare` exercises
+          # genuine open/read/write of generated headers.
+          if [ -n "${{ steps.mode.outputs.TRACE_FLAG }}" ]; then
+            sudo -E env "PATH=$PATH" "CILOCK_TRACE_MODE=${CILOCK_TRACE_MODE}" "CILOCK_FANOTIFY=${CILOCK_FANOTIFY}" \
+                                "GITHUB_ACTIONS=true" \
+                "ACTIONS_ID_TOKEN_REQUEST_URL=${ACTIONS_ID_TOKEN_REQUEST_URL}" \
+                "ACTIONS_ID_TOKEN_REQUEST_TOKEN=${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              cilock run --trace --step matrix --signer-fulcio-url "$FULCIO_URL" --outfile /tmp/attest.json -- make -j$(nproc) prepare
+          else
+            make -j$(nproc) prepare
+          fi
+
+      # ──────────────────── Parse + report ────────────────────
+
+      - name: Parse attestation diagnostics
+        if: matrix.cilock_mode != 'off'
+        run: |
+          if [ ! -f /tmp/attest.json ]; then
+            echo "::warning::no attestation file produced"
+            exit 0
+          fi
+          # Find the command-run attestation (envelope can wrap many).
+          # cilock outfile is DSSE — base64-decode the payload.
+          jq -r '.payload' /tmp/attest.json | base64 -d > /tmp/attest-payload.json
+          echo "=== Attestation size ==="
+          wc -c /tmp/attest.json /tmp/attest-payload.json
+          echo "=== Diagnostics (predicate.summary.diagnostics) ==="
+          jq '.predicate.summary.diagnostics // .predicate.attestations[]?.attestation.summary.diagnostics // "no-diagnostics-found"' /tmp/attest-payload.json || true
+          echo "=== Capture mode + trace mode detail ==="
+          jq '.predicate.summary.captureMode, .predicate.summary.traceModeDetail' /tmp/attest-payload.json || true
+          echo "=== Process count + first 3 procs OpenedFiles count ==="
+          jq '.predicate.processes | length' /tmp/attest-payload.json || true
+          jq '[.predicate.processes[]? | {pid: .processid, openedFiles: (.openedfiles | length // 0)}] | .[:3]' /tmp/attest-payload.json || true
+
+      - name: Upload attestation
+        if: matrix.cilock_mode != 'off' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: attest-${{ matrix.workload }}-${{ matrix.cilock_mode }}
+          path: |
+            /tmp/attest.json
+          if-no-files-found: warn

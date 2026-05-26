@@ -25,7 +25,9 @@ cilock:
   # 2026-05-22: 175 on linux/amd64 CI builds, 174 on darwin local — the
   # linker pulls one extra platform-specific module on Linux. CI is the
   # canonical artifact, so the budget tracks the larger number.
-  transitive_pkgs: 175
+  # 2026-05-23: +2 for the eBPF tracer (#167): cilium/ebpf and its
+  # commandrun/ebpf submodule are now linked into cilock.
+  transitive_pkgs: 177
   # Byte size of cilock/go.sum. Still useful as a secondary signal: it
   # tracks declared deps including ones only pulled in by `go mod tidy`,
   # which catches dep churn the binary metric can miss.
@@ -38,4 +40,14 @@ cilock:
   # 2026-05-23: +145 bytes for registering prowler attestor in canonical
   # main (rookery#140). prowler's transitive deps don't add to the
   # binary-linked set (transitive_pkgs unchanged), only to declared deps.
-  go_sum_bytes: 71800
+  # 2026-05-23: +20 bytes for cilium/ebpf v0.18.0 (eBPF tracer, #167).
+  # The pure-Go cilium/ebpf is linked into cilock for the kprobe path;
+  # 4 small declared-dep additions (cilium/ebpf, golang.org/x/* indirect
+  # bumps) showed up in go.sum after `go mod tidy`. transitive_pkgs
+  # bumped by 1 in the same PR (see above).
+  # 2026-05-26: +1180 bytes for the golang.org/x/* security bump
+  # (#238). Pure indirect/declared-dep churn from `go mod tidy` after
+  # bumping x/crypto, x/net, x/sys, etc. to patched versions;
+  # transitive_pkgs unchanged (137 < 177) — nothing new linked into the
+  # binary, this is go.sum-only growth.
+  go_sum_bytes: 73000

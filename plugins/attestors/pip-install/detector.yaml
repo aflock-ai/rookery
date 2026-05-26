@@ -1,0 +1,33 @@
+apiVersion: cilock.detection/v0.1
+name: pip-install
+description: "Captures Python package installation provenance (package name, version, resolved wheel) when `pip install` is invoked."
+
+category: [dependency-resolve]
+
+upstream:
+  name: pip
+  source: "https://github.com/pypa/pip"
+  license: MIT
+  vendor: Python Packaging Authority
+
+# Threat model: pip install fetches packages over the network and writes
+# them to site-packages. We want to capture which URLs were resolved,
+# which wheel digests landed on disk. Full trace.
+recommended_trace: full
+
+pre:
+  match:
+    any_of:
+      - argv_prefix: ["pip", "install"]
+      - argv_prefix: ["pip3", "install"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["pip", "install"]
+      - exec_observed:
+          argv_prefix: ["pip3", "install"]
+
+llm_hints:
+  on_match: "pip install captured. Package coordinates, version pins, and wheel digests preserved."

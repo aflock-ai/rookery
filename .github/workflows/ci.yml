@@ -183,7 +183,14 @@ jobs:
           HEAD="${{ github.event.pull_request.head.sha }}"
 
           # Conventional commit pattern: type(scope): description
-          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?: .+'
+          # Repo-specific type extensions (not in classic CC spec):
+          #   security = audit findings, privilege drops, hardening
+          #   diag     = telemetry / verifier-log / instrumentation
+          #   scripts  = repo helper scripts (matrix runners, etc.)
+          # Compound types via '+' (e.g. `security+ci:`) are accepted
+          # for commits that legitimately touch two distinct categories.
+          TYPES='(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|security|diag|scripts)'
+          PATTERN="^${TYPES}([+]${TYPES})?(\(.+\))?: .+"
           ERRORS=""
 
           for COMMIT in $(git rev-list "$BASE".."$HEAD"); do
@@ -230,6 +237,15 @@ jobs:
               CURRENT_FILE="${line#+++ b/}"
               continue
             fi
+
+            # Skip vendored / security-patched upstream code — the
+            # scan targets first-party patterns, not upstream API
+            # decisions (e.g. wk8 ordered-map's invalidOption panic, or
+            # omnibor-go's panic(err)). Attestor-specific vendored libs
+            # live under <attestor>/internal/vendored/.
+            case "$CURRENT_FILE" in
+              security-patches/*|vendor/*|*/internal/vendored/*) continue ;;
+            esac
 
             # Only check added lines
             [[ "$line" == "+"* ]] || continue
