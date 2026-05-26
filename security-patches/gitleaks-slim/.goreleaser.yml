@@ -1,0 +1,31 @@
+project_name: gitleaks
+
+builds:
+  - main: main.go
+    binary: gitleaks
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - "386"
+      - arm
+      - arm64
+    goarm:
+      - "6"
+      - "7"
+    tags:
+      - gore2regex
+    ldflags:
+      - -s -w -X=github.com/zricethezav/gitleaks/v8/version.Version={{.Version}}
+archives:
+  - builds: [gitleaks]
+    format_overrides:
+      - goos: windows
+        format: zip
+    replacements:
+      amd64: x64
+      386: x32
+release:
+  prerelease: true
