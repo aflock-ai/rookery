@@ -116,3 +116,86 @@ func keys(m map[string]attestation.CaptureEntry) []string {
 	}
 	return out
 }
+
+// TestTraceOutputs_AtomicRenameProducesProduct_WriteTapMissed reproduces
+// the EXACT production failure observed in
+// github.com/colek42/cli@nk/cilock-smoke run 26425328748:
+//
+//   - sys_write/pwrite64 write-tap recorded a 83-byte write for
+//     '/tmp/go-build…/exe/a.out' (likely the gotoolchain shim), but the
+//     LINKER's full-binary write went through writev/mmap and was not
+//     captured by write-tap.
+//   - WrittenDigests for that path is EMPTY.
+//   - FileOps.Renames carries the rename to 'bin/gh' (relative).
+//   - The product file ('bin/gh') exists on disk under the tracee's
+//     workdir at exit.
+//
+// Expected behaviour: TraceOutputs still returns an entry for
+// 'bin/gh' (absolute, resolved against traceeWorkdir), but with
+// Source="trace-write-only" and a digest from the os.Stat +
+// pathHashIfExists fallback path. This is the kernel-rooted-write
+// missed-it but file-exists-on-disk pattern; we must NOT silently
+// drop the product.
+func TestTraceOutputs_AtomicRenameProducesProduct_WriteTapMissed(t *testing.T) {
+	workdir := t.TempDir()
+	binDir := filepath.Join(workdir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	productPath := filepath.Join(binDir, "gh")
+	// Use realistic binary-like content; we'll verify the fallback
+	// hash matches sha256 of this exact byte sequence.
+	productBytes := []byte("\x7fELF\x02\x01\x01" + string(make([]byte, 4096)))
+	if err := os.WriteFile(productPath, productBytes, 0o755); err != nil {
+		t.Fatalf("write product: %v", err)
+	}
+	wantSHA := sha256.Sum256(productBytes)
+	wantHex := hex.EncodeToString(wantSHA[:])
+
+	rc := &CommandRun{
+		Processes: []ProcessInfo{
+			{
+				ProcessID: 1234,
+				Program:   "/usr/bin/go",
+				// CRITICAL: NO WrittenDigests entry for the linker
+				// output. Write-tap missed it (writev/mmap path).
+				WrittenDigests: map[string]cryptoutil.DigestSet{},
+				FileOps: &FileActivity{
+					Writes: []FileWrite{
+						// Trace recorded the write but write-tap
+						// didn't hash it (e.g. 0-byte truncate write
+						// then the actual content via writev).
+						{Path: "/tmp/go-buildXXX/exe/a.out", Bytes: 0},
+					},
+					Renames: []FileRename{
+						{OldPath: "/tmp/go-buildXXX/exe/a.out", NewPath: "bin/gh"},
+					},
+				},
+			},
+		},
+		traceeWorkdir: workdir,
+	}
+
+	out := rc.TraceOutputs()
+	t.Logf("TraceOutputs returned %d entries", len(out))
+	for p, e := range out {
+		t.Logf("  %s  src=%s digest=%v", p, e.Source, e.Digest)
+	}
+
+	got, ok := out[productPath]
+	if !ok {
+		t.Fatalf("expected product at %q in TraceOutputs map; got keys = %v",
+			productPath, keys(out))
+	}
+	if got.Digest == nil {
+		t.Fatalf("product %q has nil digest — stat+pathHash fallback didn't fire", productPath)
+	}
+	if sha, ok := got.Digest["sha256"]; !ok || sha != wantHex {
+		t.Fatalf("product digest mismatch: got %v want sha256=%s", got.Digest, wantHex)
+	}
+	// When write-tap missed, the fallback labels the source so verifiers
+	// know it's a post-exit stat-hash, not a kernel-streamed digest.
+	if got.Source != "trace-pathhash" {
+		t.Errorf("unexpected Source %q (want trace-pathhash from stat+pathHash fallback)", got.Source)
+	}
+}
