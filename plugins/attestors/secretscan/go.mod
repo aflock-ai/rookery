@@ -6,6 +6,8 @@ replace github.com/aflock-ai/rookery/attestation => ../../../attestation
 
 replace github.com/aflock-ai/rookery/plugins/attestors/commandrun => ../commandrun
 
+replace github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf => ../commandrun/ebpf
+
 replace github.com/aflock-ai/rookery/plugins/attestors/product => ../product
 
 replace github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof => ../inclusion-proof
@@ -29,6 +31,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
+	github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf v0.0.0-00010101000000-000000000000 // indirect
 	github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof v0.0.0-00010101000000-000000000000 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
@@ -38,6 +41,7 @@ require (
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/charmbracelet/lipgloss v0.5.0 // indirect
+	github.com/cilium/ebpf v0.18.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
 	github.com/edwarnicke/gitoid v0.0.0-20220710194850-1be5bfda1f9d // indirect

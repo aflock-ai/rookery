@@ -269,6 +269,12 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	if len(signers) > 0 {
 		verifyOpts = append(verifyOpts, workflow.VerifyWithSigners(signers...))
 	}
+	if chainSrc := buildChainSidecarSource(vo); chainSrc != nil {
+		verifyOpts = append(verifyOpts, workflow.VerifyWithChainSidecarSource(chainSrc))
+	}
+	if vo.RequireSidecar {
+		verifyOpts = append(verifyOpts, workflow.VerifyWithRequireSidecar(true))
+	}
 
 	verifiedEvidence, verifyErr := workflow.Verify(ctx, policyEnvelope, verifiers, verifyOpts...)
 

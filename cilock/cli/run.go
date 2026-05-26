@@ -151,10 +151,21 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 	}
 
 	// Build attestation context options
+	captureMode := attestation.CaptureMode(ro.CaptureMode)
+	if err := captureMode.Validate(); err != nil {
+		return fmt.Errorf("--capture-mode: %w", err)
+	}
 	attestationOpts := []attestation.AttestationContextOption{
 		attestation.WithWorkingDir(ro.WorkingDir),
 		attestation.WithHashes(roHashes),
 		attestation.WithDirHashGlob(ro.DirHashGlobs),
+		attestation.WithCaptureMode(captureMode),
+		attestation.WithCachePatternOptions(attestation.CachePatternOptions{
+			Add:                ro.CacheAddPatterns,
+			Allow:              ro.CacheAllowPatterns,
+			DisableDefaults:    ro.CacheDisableDefaults,
+			DisableSystemQuery: ro.CacheDisableEnvProbe,
+		}),
 	}
 
 	if ro.EnvFilterSensitiveVars {

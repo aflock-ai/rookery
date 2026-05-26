@@ -34,6 +34,24 @@ type Step struct {
 	ArtifactsFrom    []string      `json:"artifactsFrom,omitempty" jsonschema:"title=Artifacts From,description=Other step names whose products must match this step's materials"`
 	AttestationsFrom []string      `json:"attestationsFrom,omitempty" jsonschema:"title=Attestations From,description=Other step names whose attestation data is accessible during Rego evaluation"`
 	ExternalFrom     []string      `json:"externalFrom,omitempty" jsonschema:"title=External From,description=Names of external attestations (from Policy.ExternalAttestations) whose predicates are accessible during Rego evaluation as input.external.<name>"`
+
+	// AllowedUntracked declares material paths that may appear in this
+	// step's collection WITHOUT a chain-of-custody proof binding them
+	// to an upstream step. Each entry is a gobwas/glob pattern matched
+	// against the material's absolute path. Use sparingly: every entry
+	// is a hole in the chain-of-custody guarantee.
+	//
+	// Typical use: build toolchain reads under '/usr/lib/**',
+	// '/opt/hostedtoolcache/**', or '/etc/**' that the policy does not
+	// model as separate steps. Without this allow-list, the verifier
+	// would refuse to confirm provenance for any consumed system file
+	// — accurate for hermetic builds but operationally painful for
+	// real CI runs.
+	//
+	// Empty (the default) means strict mode: every material the step
+	// claims to have consumed MUST be covered either by an ArtifactsFrom
+	// edge + chain sidecar, or by the legacy compareArtifacts fallback.
+	AllowedUntracked []string `json:"allowedUntracked,omitempty" jsonschema:"title=Allowed Untracked,description=Glob patterns for material paths permitted without a chain-of-custody proof (e.g. '/usr/lib/**' for build toolchain). Each entry weakens chain integrity; use sparingly."`
 }
 
 // ExternalAttestation describes a bare-predicate DSSE envelope (non-Collection)

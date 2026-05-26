@@ -26,6 +26,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -39,6 +41,7 @@ const (
 
 	afInet  = "AF_INET"
 	afInet6 = "AF_INET6"
+	afUnix  = "AF_UNIX"
 )
 
 type ptraceContext struct {
@@ -52,6 +55,12 @@ type ptraceContext struct {
 	// so we can extract TLS SNI from the first write on that fd.
 	// Key: "pid:fd", Value: index into the process's Connections slice.
 	tlsPendingFDs map[string]int
+
+	// fsVerityState is the opportunistic fs-verity sealing state for
+	// the trace. Set by runCmd before tracing starts when
+	// CILOCK_FSVERITY enables it. nil when disabled.
+	fsVerityState *fsVerityState
+
 	// digestCache memoizes per-file sha digests across the trace. Without
 	// it, a `go build` of any non-trivial project re-hashes the same
 	// stdlib + dep .go files thousands of times — each SYS_OPENAT and
@@ -64,6 +73,19 @@ type ptraceContext struct {
 	// reduction on a tiny build (92% hit rate) and substantially more
 	// on larger builds.
 	digestCache map[string]cryptoutil.DigestSet
+
+	// digestCacheMu guards digestCache. SEPARATE from mu so the
+	// dispatcher's recordEBPF* helpers (which hold mu) can safely
+	// call cachedDigest without recursive-lock deadlock — sync.Mutex
+	// is not reentrant in Go.
+	digestCacheMu sync.Mutex
+
+	// mu guards the processes map and the ProcessInfo entries within
+	// it. Required for the eBPF tracing path, where multiple hash
+	// workers update process state concurrently. Uncontended in the
+	// serial ptrace path. NOT used to guard digestCache — see
+	// digestCacheMu above.
+	mu sync.Mutex
 }
 
 // digestCacheKey returns a (path,size,mtime)-based cache key for the
@@ -81,26 +103,228 @@ func digestCacheKey(path string) (string, bool) {
 // cachedDigest returns the digest set for `path`, hashing it on cache
 // miss and remembering the result keyed by (path,size,mtime). Returns
 // (nil, false) if the file is missing, unreadable, or a directory.
+//
+// Concurrent access (eBPF path): the hasher pool calls this from
+// multiple worker goroutines. pctx.mu serializes both the cache
+// lookup and the (rare) cache fill on miss.
 func (p *ptraceContext) cachedDigest(path string) (cryptoutil.DigestSet, bool) {
 	key, ok := digestCacheKey(path)
 	if !ok {
 		return nil, false
 	}
-	if d, ok := p.digestCache[key]; ok {
+	p.digestCacheMu.Lock()
+	d, hit := p.digestCache[key]
+	p.digestCacheMu.Unlock()
+	if hit {
 		return d, true
 	}
 	d, err := cryptoutil.CalculateDigestSetFromFile(path, p.hash)
 	if err != nil {
 		return nil, false
 	}
+	p.digestCacheMu.Lock()
 	p.digestCache[key] = d
+	p.digestCacheMu.Unlock()
 	return d, true
 }
 
-func enableTracing(c *exec.Cmd) {
-	c.SysProcAttr = &unix.SysProcAttr{
-		Ptrace: true,
+// cacheDigest stores a digest under (path, size, mtime) for future
+// lookups. Used by the eBPF hasher pool to record HashOpenatEvent
+// results so subsequent opens of the same unchanged file hit the
+// cache instead of re-reading.
+func (p *ptraceContext) cacheDigest(path string, d cryptoutil.DigestSet) {
+	key, ok := digestCacheKey(path)
+	if !ok {
+		return
 	}
+	p.digestCacheMu.Lock()
+	p.digestCache[key] = d
+	p.digestCacheMu.Unlock()
+}
+
+// lookupCachedDigest is the LOOKUP-ONLY variant of cachedDigest —
+// returns (digest, true) on hit, (nil, false) on miss. Does NOT
+// compute on miss. Used by the eBPF hasher pool to short-circuit
+// before calling HashOpenatEvent (which is the canonical race-
+// tight compute path).
+func (p *ptraceContext) lookupCachedDigest(path string) (cryptoutil.DigestSet, bool) {
+	key, ok := digestCacheKey(path)
+	if !ok {
+		return nil, false
+	}
+	p.digestCacheMu.Lock()
+	d, hit := p.digestCache[key]
+	p.digestCacheMu.Unlock()
+	if !hit {
+		return nil, false
+	}
+	return d, true
+}
+
+// traceModeNamePtrace is the CILOCK_TRACE_MODE value selecting ptrace.
+// Used in three places (enableTracing, the trace-mode test, the
+// startup log) — promote to a const to satisfy goconst.
+const traceModeNamePtrace = "ptrace"
+
+func enableTracing(c *exec.Cmd) {
+	// Only set Ptrace=true if the user explicitly opted into ptrace
+	// mode. eBPF mode (the default) tracks the child via in-kernel
+	// kprobes and does NOT ptrace it.
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVarTraceMode)))
+	if mode == traceModeNamePtrace {
+		if c.SysProcAttr == nil {
+			c.SysProcAttr = &unix.SysProcAttr{}
+		}
+		c.SysProcAttr.Ptrace = true
+	}
+}
+
+// applyTraceePrivilegeDrop ensures the traced child runs with the
+// invoker's real (un-elevated) uid/gid when cilock was started via
+// sudo. Without this, a tracee inherits the root + caps that cilock
+// needs for BPF / fanotify, defeating the purpose of attestation
+// (the tracee could escalate via its inherited caps). The cilock
+// PARENT keeps its caps; only the forked child is downgraded.
+//
+// No-op when:
+//   - SUDO_UID/SUDO_GID env vars are absent (running native, not
+//     via sudo) — the parent's uid IS the user's uid.
+//   - cilock isn't running as root (no elevation to drop FROM).
+//   - The Credential field is already set (caller explicitly chose).
+//
+// Errors during env parsing are non-fatal: log + skip the drop and
+// surface a diagnostic. The build proceeds with parent's uid, but
+// honesty requires the operator know we couldn't downgrade.
+func applyTraceePrivilegeDrop(c *exec.Cmd) {
+	if os.Getuid() != 0 {
+		return
+	}
+	if c.SysProcAttr == nil {
+		c.SysProcAttr = &unix.SysProcAttr{}
+	}
+	if c.SysProcAttr.Credential != nil {
+		return
+	}
+	sudoUidStr := os.Getenv("SUDO_UID")
+	sudoGidStr := os.Getenv("SUDO_GID")
+	if sudoUidStr == "" || sudoGidStr == "" {
+		return
+	}
+	sudoUid, err := strconv.ParseUint(sudoUidStr, 10, 32)
+	if err != nil {
+		log.Debugf("(tracee-priv-drop) invalid SUDO_UID=%q: %v", sudoUidStr, err)
+		return
+	}
+	sudoGid, err := strconv.ParseUint(sudoGidStr, 10, 32)
+	if err != nil {
+		log.Debugf("(tracee-priv-drop) invalid SUDO_GID=%q: %v", sudoGidStr, err)
+		return
+	}
+	if sudoUid == 0 {
+		// Sudo run as root user; nothing to downgrade to.
+		return
+	}
+	c.SysProcAttr.Credential = &syscall.Credential{
+		Uid:         uint32(sudoUid),
+		Gid:         uint32(sudoGid),
+		NoSetGroups: true,
+	}
+	// AmbientCaps left at the zero value — child will not inherit
+	// any of cilock's elevated capabilities through the ambient set.
+	c.SysProcAttr.AmbientCaps = nil
+
+	// PR_SET_NO_NEW_PRIVS via setpriv(1) prefix. setpriv is part of
+	// util-linux and present on every modern Linux distro. Calling
+	// prctl(PR_SET_NO_NEW_PRIVS, 1) before exec makes a setuid /
+	// file-capability binary fail to elevate. Closes the
+	// "compromised toolchain re-escalates via setuid /bin/su" vector.
+	//
+	// We wrap the original command rather than re-exec'ing cilock
+	// because (a) Go stdlib doesn't expose PR_SET_NO_NEW_PRIVS in
+	// SysProcAttr, (b) setpriv is well-tested + battle-hardened,
+	// (c) wrapping is more transparent to the verifier (the
+	// argv shows what was wrapped).
+	//
+	// Skipped (with log) when setpriv isn't on PATH — older /
+	// minimal images.
+	if setpriv, err := exec.LookPath("setpriv"); err == nil {
+		newArgs := make([]string, 0, len(c.Args)+3)
+		newArgs = append(newArgs, setpriv, "--no-new-privs", "--")
+		newArgs = append(newArgs, c.Args...)
+		c.Path = setpriv
+		c.Args = newArgs
+	} else {
+		log.Debugf("(tracee-priv-drop) setpriv not in PATH; PR_SET_NO_NEW_PRIVS not applied")
+	}
+}
+
+// preStartTracingSetup is invoked from runCmd BEFORE c.Start(). For
+// eBPF mode this opens the consumer (attaching kprobes globally) so
+// that the moment the child runs its first openat, the kernel-side
+// probe is already in place. Without this pre-open the test race
+// where the child finishes before kprobes attach is real and easy
+// to hit on small programs like /bin/cat.
+//
+// Returns the human-readable trace-mode error if eBPF was requested
+// but unavailable so runCmd can short-circuit before forking the
+// child.
+func (r *CommandRun) preStartTracingSetup() error {
+	mode, err := selectTraceMode()
+	if err != nil {
+		return err
+	}
+	if mode != traceModeEBPF {
+		return nil
+	}
+	if r.ebpfConsumer != nil {
+		return nil // already open (test re-entry)
+	}
+	consumer, err := openEBPFConsumer()
+	if err != nil {
+		return fmt.Errorf("eBPF tracing requested but failed to attach kprobes: %w", err)
+	}
+	// Seed the in-kernel bootstrap signal: we (cilock, os.Getpid())
+	// are about to fork a child that should be traced. The kprobe
+	// matches openats whose ppid == our tgid, emits them, and adds
+	// the child's pid to the watched set so subsequent descendants
+	// follow. Enable the filter NOW (before c.Start) so the child's
+	// first openat (typically /lib/ld-linux.so) is captured.
+	if err := consumer.SetRootParentTgid(uint32(os.Getpid())); err != nil { //nolint:gosec // G115: pid fits in u32 by Linux convention
+		_ = consumer.Close()
+		return fmt.Errorf("eBPF filter setup: %w", err)
+	}
+	if err := consumer.EnableFilter(); err != nil {
+		_ = consumer.Close()
+		return fmt.Errorf("eBPF filter enable: %w", err)
+	}
+	// V2: read-tap is ON BY DEFAULT in trace mode. It's the only mode
+	// that produces correct digests for short-lived processes opening
+	// relative paths (cc1/javac/many compilers). The pre-V2 path-hash
+	// fallback re-opens the file from cilock's cwd after the syscall —
+	// which is wrong for any tracee with a different cwd, and silently
+	// drops the digest when the fd is closed before userspace can read
+	// /proc/<pid>/fd/<fd>. Read-tap streams content from kernel ringbuf
+	// as the tracee reads, so digests are authoritative regardless of
+	// process lifetime or path resolution.
+	//
+	// V2 attestation-correctness pivot: read-tap is OFF by default.
+	//
+	// Read-tap is enabled by default now that classification-critical
+	// events (openat, execve, fileOps) live in their own ringbuf — the
+	// high-volume read-tap chunks can no longer evict them. Read-tap
+	// gives us the strictly stronger correctness: we hash exactly the
+	// bytes the kernel returned to the tracee on read(), not the
+	// bytes that happened to be on disk at openat-event-time. The
+	// openat-time path-hash (via the capture pool) remains as the
+	// fallback for files where read-tap didn't complete the full read
+	// before the tracee exited.
+	if err := consumer.EnableReadTap(); err != nil {
+		log.Debugf("(ebpf) read-tap unavailable (%v); falling back to openat-time path hash", err)
+	} else {
+		log.Debugf("(ebpf) read-tap enabled (default)")
+	}
+	r.ebpfConsumer = consumer
+	return nil
 }
 
 func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([]ProcessInfo, error) {
@@ -111,7 +335,30 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		hash:                actx.Hashes(),
 		environmentCapturer: actx.EnvironmentCapturer(),
 		tlsPendingFDs:       make(map[string]int),
+		fsVerityState:       r.fsVerityState,
 		digestCache:         make(map[string]cryptoutil.DigestSet, 8192),
+	}
+
+	// Resolve the tracing backend. preStartTracingSetup() (called
+	// before c.Start()) already validated this and short-circuited
+	// on error, so by this point eBPF requested-and-available is
+	// known good — but we re-resolve to dispatch.
+	mode, modeErr := selectTraceMode()
+	if modeErr != nil {
+		if c.Process != nil {
+			_ = c.Process.Kill()
+			_ = c.Wait()
+		}
+		return nil, modeErr
+	}
+	requested := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVarTraceMode)))
+	logTraceModeStartup(mode, requested)
+
+	switch mode {
+	case traceModeEBPF:
+		return r.runEBPFTrace(c, actx, pctx)
+	case traceModePtrace:
+		// Fall through to the existing ptrace path.
 	}
 
 	if err := pctx.runTrace(); err != nil {
@@ -730,7 +977,7 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 		if pathEnd < 0 {
 			pathEnd = len(data) - 2
 		}
-		conn.Family = "AF_UNIX"
+		conn.Family = afUnix
 		conn.Address = string(data[2 : 2+pathEnd])
 
 	default:
@@ -748,7 +995,7 @@ func socketFamilyName(family int) string {
 	case unix.AF_INET6:
 		return afInet6
 	case unix.AF_UNIX:
-		return "AF_UNIX"
+		return afUnix
 	case unix.AF_NETLINK:
 		return "AF_NETLINK"
 	default:
