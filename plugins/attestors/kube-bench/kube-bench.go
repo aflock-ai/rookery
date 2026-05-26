@@ -163,7 +163,6 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	return a.getCandidate(ctx)
 }
 
-//nolint:gocognit // sequential candidate scan: iterate products → open → decode → validate
 // resolveProductPath turns a product path (recorded relative to the attestation
 // working directory) into a path that can be opened from the current process,
 // which may have a different CWD than the working directory. Absolute paths are
@@ -178,6 +177,7 @@ func resolveProductPath(ctx *attestation.AttestationContext, path string) string
 	return path
 }
 
+//nolint:gocognit // sequential candidate scan: iterate products → open → decode → validate
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
 	if len(products) == 0 {
