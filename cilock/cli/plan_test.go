@@ -39,7 +39,14 @@ func TestPlanHelpLong_DoesNotReferenceAutoFlag(t *testing.T) {
 		"long help should point users at the working `-a` form")
 }
 
-func TestWritePlanHuman_TraceRecommendation_DoesNotEmitFakeFlag(t *testing.T) {
+// TestWritePlanHuman_NoTraceRecommendationLine pins the fix-3 behaviour:
+// the disclaimer-laden "recommended tracing: <mode> (informational only)"
+// line was more confusing than helpful and was dropped entirely. Fix-5 now
+// surfaces tracing intent inline in the "to run (with tracing):" hint.
+//
+// Restore the standalone line only when `cilock run --trace=<mode>` (#220)
+// actually lands and the line can advertise a runnable flag.
+func TestWritePlanHuman_NoTraceRecommendationLine(t *testing.T) {
 	env := planEnvelope{
 		Plan: detection.PlanResult{
 			Fire: []detection.FireDecision{
@@ -59,20 +66,18 @@ func TestWritePlanHuman_TraceRecommendation_DoesNotEmitFakeFlag(t *testing.T) {
 	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
-	// The fake --tracing=<mode> flag must not appear anywhere in the
-	// recommendation line. `cilock run` only has a boolean --trace.
+	// Whole "recommended tracing" block must be gone — both the string
+	// itself and the "informational only" disclaimer that came with it.
+	assert.NotContains(t, out, "recommended tracing",
+		"recommended tracing line is dropped until --trace=<mode> lands (#220)")
+	assert.NotContains(t, out, "informational only",
+		"the disclaimer that came with the dropped line must also be gone")
+
+	// Old footguns still excluded.
 	assert.NotContains(t, out, "--tracing=",
 		"output must not advertise a non-existent --tracing=<mode> flag (#220)")
 	assert.NotContains(t, out, "--auto",
 		"output must not advertise a non-existent --auto flag (#220)")
-
-	// The recommendation should still be visible, just labeled as
-	// informational rather than as a copy-pasteable flag.
-	assert.Contains(t, out, "recommended tracing: light",
-		"the trace tier should still be surfaced for situational awareness")
-	assert.Contains(t, out, "informational only",
-		"output should make clear the recommendation is not a runnable flag")
-	assert.Contains(t, out, "driven by: docker")
 }
 
 func TestWritePlanHuman_FireSet_EmitsRunnableCilockRunCommand(t *testing.T) {
