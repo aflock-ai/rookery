@@ -174,6 +174,21 @@ func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope,
 		sort.Strings(fired)
 		fmt.Fprintf(&b, "  to run: cilock run -a %s -- %s\n",
 			strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
+
+		// Fix F7: when tracing would benefit at least one of the fired
+		// attestors (per detector's recommended_trace field), also emit
+		// the --trace variant so operators don't paste the plain "to
+		// run:" line and silently miss tracing's value.
+		//
+		// The recommendation is non-empty + non-Off iff at least one
+		// matched detector's recommended_trace fed into RecommendTrace
+		// — i.e. tracing would actually help. We don't double-check
+		// against the fired list because RecommendTrace already only
+		// reports modes for matched detectors.
+		if env.TraceRecommendation.Mode != "" && env.TraceRecommendation.Mode != detection.TraceOff {
+			fmt.Fprintf(&b, "  to run (with tracing): cilock run --trace -a %s -- %s\n",
+				strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
+		}
 	}
 
 	// TODO(#220): when 'cilock run --trace=<mode>' lands, re-emit a
