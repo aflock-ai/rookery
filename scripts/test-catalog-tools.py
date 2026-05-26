@@ -101,6 +101,10 @@ class Recipe:
     # Use for plugin-specific overrides like
     # --attestor-github-review-pr 153.
     cilock_flags: list[str] = field(default_factory=list)
+    # use_attest=True invokes `cilock attest` (no wrapped command)
+    # instead of `cilock run -- argv`. argv from invoke() is ignored.
+    # Use for consultative attestors that snapshot at-rest state.
+    use_attest: bool = False
 
 
 @dataclass
@@ -733,6 +737,18 @@ RECIPES: list[Recipe] = [
                "--attestor-github-review-pr",   "139232",
            ],
            invoke=args_only(["true"])),
+    # Same flow, but invoked via `cilock attest` (the new subcommand
+    # introduced in this PR). Validates that the sugar wrapper produces
+    # an equivalent bundle without a wrapped command in argv.
+    Recipe(name="github-review-via-attest", need="gh", category="statement",
+           expect_uris=[URI_COMMANDRUN, URI_GHREVIEW],
+           attestors=["github-review"],
+           use_attest=True,
+           cilock_flags=[
+               "--attestor-github-review-repo", "kubernetes/kubernetes",
+               "--attestor-github-review-pr",   "139232",
+           ],
+           invoke=args_only([])),
 
     Recipe(name="huggingface-hub", need="hf", category="statement",
            expect_uris=[URI_COMMANDRUN],
@@ -876,8 +892,9 @@ def run_recipe(r: Recipe) -> Result:
 
     argv, env_overrides, cwd = r.invoke(fix)
     bundle = BUNDLES / f"{r.name}.bundle.json"
+    subcommand = "attest" if r.use_attest else "run"
     cilock_argv = [
-        CILOCK, "run",
+        CILOCK, subcommand,
         "-s", f"cat-{r.name}",
         "-k", str(KEY),
         "-o", str(bundle),
@@ -885,10 +902,13 @@ def run_recipe(r: Recipe) -> Result:
     for a in r.attestors:
         cilock_argv.extend(["-a", a])
     cilock_argv.extend(r.cilock_flags)
-    if r.allow_nonzero:
-        cilock_argv.append("--ignore-command-exit-code")
-    cilock_argv.append("--")
-    cilock_argv.extend(argv)
+    # cilock attest takes no positional args and ignores allow_nonzero
+    # (there's no wrapped command whose exit code to honor).
+    if not r.use_attest:
+        if r.allow_nonzero:
+            cilock_argv.append("--ignore-command-exit-code")
+        cilock_argv.append("--")
+        cilock_argv.extend(argv)
 
     env = os.environ.copy()
     env.update(env_overrides)
