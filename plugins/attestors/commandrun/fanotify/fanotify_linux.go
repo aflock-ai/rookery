@@ -36,6 +36,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -191,9 +192,46 @@ func New(markPath string) (*Handler, error) {
 		fd:            fd,
 		digests:       make(map[string][32]byte),
 		HandlerBudget: 2 * time.Second,
-		MaxDigests:    200_000,
+		MaxDigests:    defaultMaxDigestsFromEnv(),
 	}
 	return h, nil
+}
+
+// DefaultMaxDigests is the compiled-in cap on the digests map size,
+// applied when CILOCK_FANOTIFY_MAX_DIGESTS is unset or unparseable.
+// Operators tune via the env var; exposed for the override-audit
+// regression test.
+const DefaultMaxDigests = 200_000
+
+// EnvVarFanotifyMaxDigests is the env-var name operators set to
+// override the fanotify digests-map cap. Advanced knob — there is
+// no CLI flag because tuning it is uncommon and the env-var surface
+// keeps `cilock run --help` from drowning in resource-tuning flags.
+const EnvVarFanotifyMaxDigests = "CILOCK_FANOTIFY_MAX_DIGESTS"
+
+// defaultMaxDigestsFromEnv returns the effective MaxDigests for a
+// new Handler. Resolves CILOCK_FANOTIFY_MAX_DIGESTS if set to a
+// positive integer; otherwise falls back to DefaultMaxDigests.
+// A non-positive or unparseable value is logged and ignored — the
+// fail-safe is the default, not a silent zero (which would mean
+// "unbounded" and could OOM on adversarial workloads).
+func defaultMaxDigestsFromEnv() int {
+	v := os.Getenv(EnvVarFanotifyMaxDigests)
+	if v == "" {
+		return DefaultMaxDigests
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		// Don't import the project log package here — fanotify is
+		// already loaded very early; just write to stderr. Operators
+		// running with a typo'd env var get one visible warning
+		// instead of a silent fall-through.
+		fmt.Fprintf(os.Stderr,
+			"cilock: ignoring invalid %s=%q (want positive integer); using default %d\n",
+			EnvVarFanotifyMaxDigests, v, DefaultMaxDigests)
+		return DefaultMaxDigests
+	}
+	return n
 }
 
 // markFilesystemOrMount tries FAN_MARK_FILESYSTEM first (covers the
