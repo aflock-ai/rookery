@@ -284,10 +284,10 @@ func TestWeakness_ForkChain_DeepWatchPropagation(t *testing.T) {
 // Argv: <self> <sentinel-path>
 //
 // The program issues:
-//   1. openat(AT_FDCWD, sentinel-path, O_RDONLY)  via raw syscall
-//   2. read(fd, buf, 4096)                        via raw syscall
-//   3. close(fd)                                  via raw syscall
-//   4. exit_group(0)                              via raw syscall
+//  1. openat(AT_FDCWD, sentinel-path, O_RDONLY)  via raw syscall
+//  2. read(fd, buf, 4096)                        via raw syscall
+//  3. close(fd)                                  via raw syscall
+//  4. exit_group(0)                              via raw syscall
 //
 // No libc functions called between main() and exit. printf/puts only
 // used for failure logging via the libc startup-time-loaded helpers,

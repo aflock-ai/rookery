@@ -84,7 +84,7 @@ func TestPolicyCompat_V01V02_ProduceIdenticalMaterialsView(t *testing.T) {
 			ProcessID: 101,
 			Comm:      "compile",
 			OpenedFiles: map[string]cryptoutil.DigestSet{
-				"/usr/include/stdio.h": fakeDigest("aaa"), // shared
+				"/usr/include/stdio.h":  fakeDigest("aaa"), // shared
 				"/usr/include/stdlib.h": fakeDigest("ccc"),
 			},
 		},
@@ -169,8 +169,8 @@ func TestPolicyCompat_TraceInputs_IdempotentAcrossSerialization(t *testing.T) {
 		{
 			ProcessID: 200,
 			OpenedFiles: map[string]cryptoutil.DigestSet{
-				"/lib/libc.so.6":        fakeDigest("ddd"),
-				"/usr/include/stdio.h":  fakeDigest("eee"),
+				"/lib/libc.so.6":       fakeDigest("ddd"),
+				"/usr/include/stdio.h": fakeDigest("eee"),
 			},
 		},
 	}

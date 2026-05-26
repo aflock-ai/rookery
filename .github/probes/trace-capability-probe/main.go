@@ -43,13 +43,13 @@ import (
 
 type probeReport struct {
 	Runner struct {
-		Kernel   string `json:"kernel"`
-		Arch     string `json:"arch"`
-		Distro   string `json:"distro,omitempty"`
-		UID      int    `json:"uid"`
-		EUID     int    `json:"euid"`
-		IsRoot   bool   `json:"isRoot"`
-		PIDNSID  string `json:"pidNSId,omitempty"`
+		Kernel  string `json:"kernel"`
+		Arch    string `json:"arch"`
+		Distro  string `json:"distro,omitempty"`
+		UID     int    `json:"uid"`
+		EUID    int    `json:"euid"`
+		IsRoot  bool   `json:"isRoot"`
+		PIDNSID string `json:"pidNSId,omitempty"`
 	} `json:"runner"`
 	Capabilities struct {
 		CapPermitted string `json:"capPermitted"`
@@ -60,9 +60,9 @@ type probeReport struct {
 		HasSysAdmin  bool   `json:"capSysAdmin"`
 	} `json:"capabilities"`
 	Ptrace struct {
-		AttachWorks  bool   `json:"attachWorks"`
-		Detail       string `json:"detail,omitempty"`
-		Error        string `json:"error,omitempty"`
+		AttachWorks bool   `json:"attachWorks"`
+		Detail      string `json:"detail,omitempty"`
+		Error       string `json:"error,omitempty"`
 	} `json:"ptrace"`
 	SeccompBPF struct {
 		FilterInstallWorks bool   `json:"filterInstallWorks"`
@@ -295,9 +295,9 @@ func installSeccompAndExit() {
 func probeEBPF(r *probeReport) {
 	// Constants from <linux/bpf.h>
 	const (
-		BPF_MAP_CREATE     = 0
-		BPF_PROG_LOAD      = 5
-		BPF_MAP_TYPE_HASH  = 1
+		BPF_MAP_CREATE       = 0
+		BPF_PROG_LOAD        = 5
+		BPF_MAP_TYPE_HASH    = 1
 		BPF_PROG_TYPE_KPROBE = 2
 	)
 	const SYS_BPF = 321 // amd64; arm64 is 280

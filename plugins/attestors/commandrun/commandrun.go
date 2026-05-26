@@ -335,14 +335,14 @@ type FileActivity struct {
 }
 
 type ProcessInfo struct {
-	Program          string                          `json:"program,omitempty"`
-	ProcessID        int                             `json:"processid"`
-	ParentPID        int                             `json:"parentpid"`
-	ProgramDigest    cryptoutil.DigestSet            `json:"programdigest,omitempty"`
-	Comm             string                          `json:"comm,omitempty"`
-	Cmdline          string                          `json:"cmdline,omitempty"`
-	ExeDigest        cryptoutil.DigestSet            `json:"exedigest,omitempty"`
-	OpenedFiles      map[string]cryptoutil.DigestSet `json:"openedfiles,omitempty"`
+	Program       string                          `json:"program,omitempty"`
+	ProcessID     int                             `json:"processid"`
+	ParentPID     int                             `json:"parentpid"`
+	ProgramDigest cryptoutil.DigestSet            `json:"programdigest,omitempty"`
+	Comm          string                          `json:"comm,omitempty"`
+	Cmdline       string                          `json:"cmdline,omitempty"`
+	ExeDigest     cryptoutil.DigestSet            `json:"exedigest,omitempty"`
+	OpenedFiles   map[string]cryptoutil.DigestSet `json:"openedfiles,omitempty"`
 	// WrittenDigests carries content digests for files the tracee
 	// WROTE during the trace, captured via the BPF write-tap (kretprobe
 	// on sys_write / pwrite64 returns the bytes the kernel actually
@@ -352,7 +352,7 @@ type ProcessInfo struct {
 	// READ digests). A path may appear in both if the tracee wrote
 	// AND read it; classification rules use this split to put outputs
 	// in products and inputs in materials without conflation.
-	WrittenDigests   map[string]cryptoutil.DigestSet `json:"writtenDigests,omitempty"`
+	WrittenDigests map[string]cryptoutil.DigestSet `json:"writtenDigests,omitempty"`
 	// FsVerityDigests holds kernel-rooted Merkle root digests for
 	// product files where the kernel computed and stored a
 	// fs-verity hash. Keyed by absolute path, value is the
@@ -363,7 +363,7 @@ type ProcessInfo struct {
 	// Distinct from WrittenDigests because the Merkle root is NOT
 	// the same as a plain SHA-256 over the file content (it's a
 	// hash of a Merkle tree over fixed-size blocks).
-	FsVerityDigests  map[string]string               `json:"fsverityDigests,omitempty"`
+	FsVerityDigests map[string]string `json:"fsverityDigests,omitempty"`
 	// UnhashedOpens carries opens we saw the kernel event for but
 	// could NOT hash — typically because the file was unlinked or
 	// the process exited between the kernel event and our hash
@@ -381,12 +381,12 @@ type ProcessInfo struct {
 	// Common adversarial cases:
 	//  - Tracee deliberately racing to delete sensitive files
 	//  - A read-then-unlink that "launders" content from view
-	UnhashedOpens    []UnhashedOpen                  `json:"unhashedOpens,omitempty"`
-	Environ          string                          `json:"environ,omitempty"`
-	SpecBypassIsVuln bool                            `json:"specbypassisvuln,omitempty"`
-	Network          *NetworkActivity                `json:"network,omitempty"`
-	FileOps          *FileActivity                   `json:"fileOps,omitempty"`
-	SyscallEvents    []SyscallEvent                  `json:"syscallEvents,omitempty"`
+	UnhashedOpens    []UnhashedOpen   `json:"unhashedOpens,omitempty"`
+	Environ          string           `json:"environ,omitempty"`
+	SpecBypassIsVuln bool             `json:"specbypassisvuln,omitempty"`
+	Network          *NetworkActivity `json:"network,omitempty"`
+	FileOps          *FileActivity    `json:"fileOps,omitempty"`
+	SyscallEvents    []SyscallEvent   `json:"syscallEvents,omitempty"`
 
 	// ExitCode is the wait status of the traced process. For cleanly-
 	// exited processes it is the literal exit status. For signal-
@@ -461,31 +461,31 @@ type TraceSummary struct {
 
 // TraceTotals is the scalar count summary.
 type TraceTotals struct {
-	Processes        int `json:"processes,omitempty"`
-	UniquePaths      int `json:"uniquePaths,omitempty"`
-	Reads            int `json:"reads,omitempty"`
-	Writes           int `json:"writes,omitempty"`
-	Renames          int `json:"renames,omitempty"`
-	Deletes          int `json:"deletes,omitempty"`
-	Execs            int `json:"execs,omitempty"`
-	NetEvents        int `json:"netEvents,omitempty"`
+	Processes   int `json:"processes,omitempty"`
+	UniquePaths int `json:"uniquePaths,omitempty"`
+	Reads       int `json:"reads,omitempty"`
+	Writes      int `json:"writes,omitempty"`
+	Renames     int `json:"renames,omitempty"`
+	Deletes     int `json:"deletes,omitempty"`
+	Execs       int `json:"execs,omitempty"`
+	NetEvents   int `json:"netEvents,omitempty"`
 	// Classification breakdown — populated when CaptureProbe path
 	// runs (capture-mode=trace). Lets the AI agent see at-a-glance
 	// what kind of files the tracee touched without loading the
 	// per-process arrays.
-	Materials      int `json:"materials,omitempty"`     // distinct files read
-	Intermediates  int `json:"intermediates,omitempty"` // files both written + read
-	Products       int `json:"products,omitempty"`      // user-facing outputs
-	CacheArtifacts int `json:"cacheArtifacts,omitempty"`// written into cache/temp
+	Materials      int `json:"materials,omitempty"`      // distinct files read
+	Intermediates  int `json:"intermediates,omitempty"`  // files both written + read
+	Products       int `json:"products,omitempty"`       // user-facing outputs
+	CacheArtifacts int `json:"cacheArtifacts,omitempty"` // written into cache/temp
 }
 
 // TraceOutliers flags noteworthy artifacts. Most are file-event
 // outliers; SuspiciousOps is a tally of security-sensitive syscalls
 // (ptrace, mount, etc.) that any reader should examine.
 type TraceOutliers struct {
-	LargestRead   *TraceFileRef     `json:"largestRead,omitempty"`
-	MostOpened    *TraceFileRef     `json:"mostOpened,omitempty"`
-	SuspiciousOps map[string]int    `json:"suspiciousOps,omitempty"`
+	LargestRead   *TraceFileRef  `json:"largestRead,omitempty"`
+	MostOpened    *TraceFileRef  `json:"mostOpened,omitempty"`
+	SuspiciousOps map[string]int `json:"suspiciousOps,omitempty"`
 }
 
 // TraceFileRef points at a specific file mentioned in the trace,
@@ -621,9 +621,9 @@ type CommandRun struct {
 	Stderr    string        `json:"stderr,omitempty"`
 	Processes []ProcessInfo `json:"processes,omitempty"`
 
-	silent           bool
-	materials        map[string]cryptoutil.DigestSet
-	enableTracing    bool
+	silent        bool
+	materials     map[string]cryptoutil.DigestSet
+	enableTracing bool
 
 	// traceeWorkdir is the working directory the tracee actually ran
 	// with — populated by runCmd just before exec.Command starts.
@@ -634,7 +634,6 @@ type CommandRun struct {
 	// summary build, and ctx.WorkingDir() may be empty when the
 	// caller didn't pass one explicitly.
 	traceeWorkdir string
-
 
 	// traceStartTime is the wall-clock time captured just before
 	// exec.Command starts. The stat-fallback in TraceOutputs uses it
@@ -652,7 +651,7 @@ type CommandRun struct {
 	// prior attestation) from (b) clean creations during the trace
 	// (Source: trace-pathhash). The mtime check handles the
 	// untouched-skip case; this set handles the overwrite tag.
-	prePaths map[string]struct{}
+	prePaths         map[string]struct{}
 	ignoreExitCode   bool
 	requireZeroDrops bool
 
@@ -708,7 +707,6 @@ type CommandRun struct {
 	// failure count masks real holes or harmless retries.
 	hashSilentByDigest uint64
 	hashSilentByDedup  uint64
-
 
 	// resolvedCaptureMode records which capture-mode the framework
 	// selected for this run ("trace", "walk", "ima"). Populated by
@@ -1441,7 +1439,6 @@ func pathHashIfExists(path string, hashes []cryptoutil.DigestValue) map[string]s
 	}
 	return nameMap
 }
-
 
 func (rc *CommandRun) TracingEnabled() bool {
 	return rc.enableTracing
