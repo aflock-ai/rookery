@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -108,49 +109,90 @@ func detectWorkloadAttestors(workdir string) []string {
 	return detected
 }
 
-// attestorExternalGenerators returns the external generators / tools
-// whose output an attestor records. cilock NEVER invokes these — they
-// must already be on PATH (or have been invoked by the user's command).
-// Empty slice = self-contained attestor (reads workspace files directly,
-// no external tool needed).
+// attestorExternalGenerators returns the external tool binaries whose
+// output the named attestor records. cilock NEVER invokes these — the
+// user's build command must run them; we only check PATH to warn the
+// operator when an attestor will come out empty.
 //
-// Used by the pre-flight check to warn the operator at startup if an
-// auto-enabled attestor's expected generator isn't available, so they
-// can either install it or drop the attestor before the build runs
-// and the attestation comes out empty.
+// The list is sourced entirely from the detection registry (the
+// attestor's own detector.yaml plus the embedded catalog), so adding a
+// tool is a YAML edit, not a code change. Two contributions are unioned:
 //
-// Known: any of the listed generators on PATH counts as satisfied —
-// operators are free to use whichever they prefer.
+//  1. Format attestors. The "sbom" attestor signs whatever syft / cdxgen /
+//     bom produce; those catalog entries declare emits_formats: [sbom].
+//     We collect the argv head of every registry entry that emits this
+//     attestor's name as a format.
+//  2. Tool-wrapper attestors. "trivy" wraps trivy, "go-build" wraps go,
+//     "oci" recognizes docker save / skopeo copy / crane. We collect the
+//     argv head from the attestor's own pre/post predicates.
+//
+// Empty result = self-contained attestor (git reads .git/, environment
+// reads env vars — no external generator, so no PATH warning).
+//
+// Pre-flight intentionally trusts the registry over a hand-curated list:
+// a generator cilock can't recognize at runtime is one whose absence is
+// not worth warning about, since its output wouldn't be detected anyway.
 func attestorExternalGenerators(name string) []string {
-	switch name {
-	case "sbom":
-		return []string{"cyclonedx-npm", "cyclonedx-cli", "cyclonedx-gomod", "syft", "cdxgen", "spdx-sbom-generator"}
-	case "govulncheck":
-		return []string{"govulncheck"}
-	case "go-build":
-		return []string{"go"}
-	case "trivy":
-		return []string{"trivy"}
-	case "oscap":
-		return []string{"oscap"}
-	case "kube-bench":
-		return []string{"kube-bench"}
-	case "docker-bench":
-		return []string{"docker-bench-security"}
-	case "inspec":
-		return []string{"inspec"}
-	case "steampipe":
-		return []string{"steampipe"}
-	case "nessus":
-		return []string{"nessuscli"}
-	case "prowler":
-		return []string{"prowler"}
-	case "linkerd-check":
-		return []string{"linkerd"}
-	case "falco":
-		return []string{"falco"}
+	reg := detection.Default()
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(bin string) {
+		if bin == "" {
+			return
+		}
+		if _, dup := seen[bin]; dup {
+			return
+		}
+		seen[bin] = struct{}{}
+		out = append(out, bin)
 	}
-	return nil
+
+	// (1) Every registry entry that emits this attestor's name as a format.
+	all, _ := reg.LookupAll()
+	for _, d := range all {
+		for _, f := range d.EmitsFormats {
+			if f == name {
+				collectArgvHeads(d, add)
+				break
+			}
+		}
+	}
+	// (2) The attestor's own detector predicates.
+	if d, ok, err := reg.Lookup(name); err == nil && ok && d != nil {
+		collectArgvHeads(d, add)
+	}
+
+	sort.Strings(out) // deterministic ordering for output + tests
+	return out
+}
+
+// collectArgvHeads walks a detector's pre/post predicate trees and feeds
+// the first token of every argv_prefix to add. The head token is the
+// invoked binary (e.g. ["docker", "save"] -> "docker"); that is what
+// pre-flight looks up on PATH.
+func collectArgvHeads(d *detection.DetectorYAML, add func(string)) {
+	var visit func(p *detection.Predicate)
+	visit = func(p *detection.Predicate) {
+		if p == nil {
+			return
+		}
+		if len(p.ArgvPrefix) > 0 {
+			add(p.ArgvPrefix[0])
+		}
+		for i := range p.AnyOf {
+			visit(&p.AnyOf[i])
+		}
+		for i := range p.AllOf {
+			visit(&p.AllOf[i])
+		}
+		visit(p.Not)
+		visit(p.ExecObserved)
+	}
+	for _, g := range []*detection.GateBlock{d.Pre, d.Post} {
+		if g != nil {
+			visit(g.Match)
+		}
+	}
 }
 
 // attestorWorkspacePrereq reports the workspace file/dir path an
@@ -173,9 +215,10 @@ func attestorWorkspacePrereq(name string) string {
 //
 // Two checks per attestor:
 //
-//  1. External generator on PATH (sbom needs cyclonedx-npm/syft/etc.,
-//     govulncheck needs govulncheck, ...). cilock never invokes the
-//     generator; the user's build command must produce its output.
+//  1. External generator on PATH (sbom needs syft/cdxgen/bom,
+//     govulncheck needs govulncheck, ...). The candidate list comes from
+//     the detection registry; cilock never invokes the generator, the
+//     user's build command must produce its output.
 //  2. Workspace prereq present (git needs .git/, etc.).
 //
 // Warnings are non-fatal — the attestor itself decides whether the

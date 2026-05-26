@@ -18,6 +18,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	// Registered for their detector.yaml side effects: attestorExternalGenerators
+	// reads the detection registry, so the tool-wrapper attestors it asserts on
+	// must be linked into the test binary. The "sbom" format case is covered by
+	// the embedded catalog (syft/cdxgen/bom) and needs no plugin import.
+	_ "github.com/aflock-ai/rookery/plugins/attestors/go-build"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/govulncheck"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/oci"
 )
 
 func TestSplitCaptureModeSuffix(t *testing.T) {
@@ -204,18 +212,31 @@ func TestValidateUserCommand_NotFound(t *testing.T) {
 
 func TestAttestorExternalGenerators_Known(t *testing.T) {
 	// Phase 4 follow-up: pre-flight needs to know which generators
-	// each attestor records. Verify the contract for the attestors
-	// the black-box test exercised.
-	assert.Contains(t, attestorExternalGenerators("sbom"), "cyclonedx-npm")
-	assert.Contains(t, attestorExternalGenerators("sbom"), "syft")
+	// each attestor records. The set is now sourced from the detection
+	// registry — for "sbom" that's every catalog entry emitting the sbom
+	// format (syft, cdxgen, bom), not a hand-curated list.
+	sbom := attestorExternalGenerators("sbom")
+	assert.Contains(t, sbom, "syft")
+	assert.Contains(t, sbom, "cdxgen")
 	assert.Equal(t, []string{"govulncheck"}, attestorExternalGenerators("govulncheck"))
 	assert.Equal(t, []string{"go"}, attestorExternalGenerators("go-build"))
+}
+
+func TestAttestorExternalGenerators_OCI_ToolWrapper(t *testing.T) {
+	// oci recognizes the tools that PRODUCE an image (docker save, skopeo
+	// copy, crane) via its own detector predicates — argv heads only.
+	gens := attestorExternalGenerators("oci")
+	assert.Contains(t, gens, "docker")
+	assert.Contains(t, gens, "skopeo")
+	assert.Contains(t, gens, "crane")
 }
 
 func TestAttestorExternalGenerators_SelfContained(t *testing.T) {
 	// These attestors read workspace files / state directly; no
 	// external tool is involved. Pre-flight must not warn about them.
-	for _, name := range []string{"git", "environment", "lockfiles", "oci", "secretscan"} {
+	// (oci is NOT here — its detector recognizes docker/skopeo/crane,
+	// the tools that produce an image; see the _OCI_ToolWrapper test.)
+	for _, name := range []string{"git", "environment", "lockfiles", "secretscan"} {
 		assert.Empty(t, attestorExternalGenerators(name),
 			"attestor %q reads workspace state directly; should not have external generators", name)
 	}
