@@ -20,7 +20,6 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -59,6 +58,12 @@ func VerifyCmd() *cobra.Command {
 			if cmd.Flags().Lookup("policy-ca").Changed {
 				log.Warn("The flag `--policy-ca` is deprecated and will be removed in a future release. Please use `--policy-ca-root` and `--policy-ca-intermediate` instead.")
 			}
+
+			// Resolve platform-derived defaults the same way `cilock run`
+			// does so verify-side endpoint defaults match the run-side
+			// of the workflow. `--platform-url ""` opts out for fully
+			// offline verify.
+			vo.ResolvePlatformDefaults(cmd)
 
 			verifiers, err := loadVerifiers(cmd.Context(), vo.VerifierOptions, vo.KMSVerifierProviderOptions, providersFromFlags("verifier", cmd.Flags()))
 			if err != nil {
@@ -230,7 +235,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	if len(subjects) == 0 {
-		return errors.New("at least one subject is required, provide an artifact file or subject")
+		return buildNoSubjectError(vo)
 	}
 
 	// Track every envelope we explicitly load so --output-bundle can emit a
@@ -432,6 +437,114 @@ func maybeWriteOutputBundle(vo options.VerifyOptions, subjects []cryptoutil.Dige
 		bundleSource = bundle.SourceVerifyExport
 	}
 	return writeOutputBundle(vo.OutputBundlePath, bundleSubjects, bundleSource, vo.ArchivistaOptions.Url, loaded, archivistaEnvs)
+}
+
+// buildNoSubjectError returns the operator-facing error when verify is
+// invoked without --artifactfile / --directory-path / --subjects. It
+// best-effort scans any supplied --attestations / --bundle files for
+// in-toto subjects and pastes the first few sha256 digests into the
+// error message so the operator can copy them straight into --subjects
+// without cracking the DSSE payload with jq.
+//
+// Black-box UX test follow-up: cobra's MarkFlagsOneRequired was firing
+// before this code could run, so the helpful candidate-listing was
+// invisible. The flag-group constraint has been removed in favour of
+// this custom error.
+func buildNoSubjectError(vo options.VerifyOptions) error {
+	const baseMsg = "at least one subject is required (cilock verifies an attestation AGAINST an artifact — " +
+		"the subject is the entry point into the attestation graph).\n" +
+		"  Provide one of:\n" +
+		"    --artifactfile <path>     hash the file you're verifying\n" +
+		"    --directory-path <dir>    hash the directory you're verifying\n" +
+		"    --subjects <sha256:hex>   pass a digest directly (repeatable)"
+
+	candidates := candidateSubjectsFromEnvelopes(append([]string(nil), append(vo.AttestationFilePaths, vo.BundlePaths...)...))
+	if len(candidates) == 0 {
+		return fmt.Errorf("%s", baseMsg)
+	}
+	return fmt.Errorf("%s\n  Candidates found in the supplied envelope(s):\n    --subjects %s",
+		baseMsg, strings.Join(candidates, "\n    --subjects "))
+}
+
+// candidateSubjectsFromEnvelopes scans the supplied attestation/bundle
+// paths and returns up to 5 unique sha256 subject digests, prefixed
+// with "sha256:" so they can be pasted directly into --subjects.
+// Best-effort: unreadable paths are silently skipped (the caller falls
+// back to the no-candidates error variant).
+func candidateSubjectsFromEnvelopes(paths []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, path := range paths {
+		envs, err := loadEnvelopesBestEffort(path)
+		if err != nil {
+			continue
+		}
+		for _, env := range envs {
+			for s := range extractSubjectDigests(env) {
+				key := "sha256:" + s
+				if _, dup := seen[key]; dup {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, key)
+				if len(out) >= 5 {
+					return out
+				}
+			}
+		}
+	}
+	return out
+}
+
+// loadEnvelopesBestEffort attempts to read DSSE envelopes from a path,
+// trying first as a bundle (tar.gz) and falling back to a single
+// envelope JSON. Returns nil + no error if neither shape parses —
+// callers use this for hint-extraction and shouldn't treat unreadable
+// inputs as fatal. Used by the no-subjects error path to surface
+// candidate subjects to the operator without requiring jq surgery.
+func loadEnvelopesBestEffort(path string) ([]dsse.Envelope, error) {
+	if env, err := loadEnvelopeFromFile(path); err == nil && len(env.Payload) > 0 {
+		return []dsse.Envelope{env}, nil
+	}
+	f, err := os.Open(path) //nolint:gosec // G304: path is from --attestations / --bundle CLI flag
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	r, err := bundle.Read(f)
+	if err != nil {
+		return nil, err
+	}
+	envs, err := r.Envelopes()
+	if err != nil {
+		return nil, err
+	}
+	return envs, nil
+}
+
+// extractSubjectDigests pulls the set of sha256 subject digests from
+// an envelope's in-toto payload. Returns an empty map if the payload
+// isn't a Statement (e.g. raw VSA, predicate-only envelope) — same
+// best-effort contract as loadEnvelopesBestEffort.
+func extractSubjectDigests(env dsse.Envelope) map[string]struct{} {
+	out := map[string]struct{}{}
+	if len(env.Payload) == 0 {
+		return out
+	}
+	var stmt struct {
+		Subject []struct {
+			Digest map[string]string `json:"digest"`
+		} `json:"subject"`
+	}
+	if err := json.Unmarshal(env.Payload, &stmt); err != nil {
+		return out
+	}
+	for _, s := range stmt.Subject {
+		if h, ok := s.Digest["sha256"]; ok && h != "" {
+			out[h] = struct{}{}
+		}
+	}
+	return out
 }
 
 // loadEnvelopeFromFile reads a DSSE envelope from path. Used by verify in

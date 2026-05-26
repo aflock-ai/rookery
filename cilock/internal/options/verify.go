@@ -17,6 +17,7 @@ package options
 import (
 	"time"
 
+	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/sigstore/fulcio/pkg/certificate"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +28,12 @@ type VerifyOptions struct {
 	KMSVerifierProviderOptions KMSVerifierProviderOptions
 	SignerOptions              SignerOptions
 	KMSSignerProviderOptions   KMSSignerProviderOptions
+	// PlatformURL derives archivista + TSA URLs the same way `cilock
+	// run` does, so the verify-side of a cilock workflow uses the
+	// same endpoint defaults the run-side wrote to. Pass `--platform-url ""`
+	// to opt out (fully offline verification — no archivista lookup,
+	// no platform-derived TSA verifier).
+	PlatformURL                string
 	KeyPath                    string
 	AttestationFilePaths       []string
 	BundlePaths                []string
@@ -91,10 +98,38 @@ type VerifyOptions struct {
 	ChainSidecarHTTPMaxBytes int64
 }
 
+// ResolvePlatformDefaults derives the Archivista URL from the
+// configured --platform-url, mirroring RunOptions's behavior for
+// `cilock run`. Pass --platform-url "" to opt out (operator marks
+// the flag explicitly empty → no defaults derived). Call after flag
+// parsing, before any verify logic runs.
+//
+// Note: unlike `cilock run`, we do NOT auto-populate
+// PolicyTimestampServers — verify's PolicyTimestampServers expects
+// file paths to CA cert bundles, not URLs. Operators who want
+// TSA-rooted trust for the policy still pass --policy-timestamp-servers
+// explicitly with the cert path.
+func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
+	platformExplicitlyDisabled := cmd.Flags().Changed("platform-url") && vo.PlatformURL == ""
+	if platformExplicitlyDisabled {
+		return
+	}
+	pc := platformconfig.Derive(vo.PlatformURL)
+	// Archivista URL: use platform default if not explicitly overridden.
+	if !cmd.Flags().Changed("archivista-server") && !cmd.Flags().Changed("archivist-server") {
+		vo.ArchivistaOptions.Url = pc.Archivista
+	}
+}
+
+//nolint:funlen // each verify flag carries its own multi-line help text; splitting the registration loses readability
 func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	vo.VerifierOptions.AddFlags(cmd)
 	vo.ArchivistaOptions.AddFlags(cmd)
 	vo.KMSVerifierProviderOptions.AddFlags(cmd)
+	cmd.Flags().StringVar(&vo.PlatformURL, "platform-url", platformconfig.DefaultPlatformURL,
+		"TestifySec platform URL (derives archivista + TSA URLs the same way `cilock run` does). "+
+			"Pass --platform-url \"\" to opt out (fully offline verify — no archivista lookup, "+
+			"no platform-derived TSA verifier).")
 	// Register --publickey BEFORE signer flags so it claims the -k shorthand.
 	// The signer registry adds --signer-file-key-path and, for backward compat
 	// with `cilock sign`/`cilock run`, wants to bind -k — but here on verify,
@@ -167,5 +202,9 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 
 	cmd.MarkFlagsRequiredTogether("policy")
 	cmd.MarkFlagsOneRequired("publickey", "policy-ca", "policy-ca-roots", "policy-ca-intermediates", "verifier-kms-ref")
-	cmd.MarkFlagsOneRequired("artifactfile", "subjects")
+	// Note: we deliberately do NOT MarkFlagsOneRequired here. The
+	// custom check in runVerify gives a much better error — it lists
+	// candidate sha256 digests pulled from any supplied --attestations
+	// / --bundle files so the operator can paste one into --subjects.
+	// cobra's group-required error fires too early to see those.
 }

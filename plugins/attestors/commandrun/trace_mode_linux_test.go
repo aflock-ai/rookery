@@ -33,37 +33,25 @@ func TestSelectTraceMode_ExplicitPtrace(t *testing.T) {
 	}
 }
 
-func TestSelectTraceMode_DefaultFallsToError_WhenCapsAbsent(t *testing.T) {
-	// In CI / test env without CAP_BPF, default should error with the
-	// remediation message. We verify the message content, not the
-	// exact errno (kernel-dependent).
+func TestSelectTraceMode_DefaultFallsBackToPtrace_WhenCapsAbsent(t *testing.T) {
+	// Phase 2 of #234: default / auto now falls back to ptrace
+	// silently when eBPF is unavailable, instead of hard-failing.
+	// Closes the long-pending task #79.
 	t.Setenv(EnvVarTraceMode, "")
 
 	// Skip if running as root or with CAP_BPF (eBPF would succeed,
-	// invalidating the test premise).
+	// invalidating the test premise — we'd get traceModeEBPF, not
+	// the fallback path).
 	if probeEBPFAvailable().available {
-		t.Skip("eBPF available in this environment; default-mode error test requires unprivileged env")
+		t.Skip("eBPF available in this environment; fallback test requires unprivileged env")
 	}
 
-	_, err := selectTraceMode()
-	if err == nil {
-		t.Fatal("expected default mode to fail when CAP_BPF unavailable")
+	mode, err := selectTraceMode()
+	if err != nil {
+		t.Fatalf("expected default mode to silently fall back to ptrace, got error: %v", err)
 	}
-	msg := err.Error()
-
-	wantSubstrings := []string{
-		"eBPF tracing is unavailable",
-		"setcap cap_bpf,cap_perfmon+ep",
-		"sudo cilock run",
-		"--cap-add=BPF",
-		"options: --cap-add=BPF --cap-add=PERFMON",
-		"CILOCK_TRACE_MODE=ptrace",
-		"slower",
-	}
-	for _, want := range wantSubstrings {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error message missing %q\n--- full message ---\n%s", want, msg)
-		}
+	if mode != traceModePtrace {
+		t.Fatalf("expected default mode to fall back to traceModePtrace, got %v", mode)
 	}
 }
 

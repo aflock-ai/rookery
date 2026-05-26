@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -49,6 +51,363 @@ var defaultAttestorNames = []string{product.Name, material.Name}
 
 // applyNoDefaultAttestors filters out always-on attestors named in
 // the operator's --no-default-attestor flags. Hard-fails when the
+// detectWorkloadAttestors probes the working directory for indicators
+// of common build systems and returns the names of attestors that
+// should run on top of whatever the operator already configured.
+// Cheap stat-based detection — no recursive walks, no file content
+// reading. The probe runs once at startup, before any attestor fires.
+//
+// Detection rules:
+//
+//   - go.mod                          → go-build, govulncheck
+//   - package.json or package-lock    → sbom, lockfiles
+//   - Cargo.toml                      → lockfiles
+//   - Dockerfile / Containerfile      → oci
+//   - .git/                           → git
+//
+// Names returned are merged with --attestations by the caller via
+// dedupe; an operator's explicit choice is never silently dropped.
+// Phase 4 of #234.
+func detectWorkloadAttestors(workdir string) []string {
+	if workdir == "" {
+		var err error
+		workdir, err = os.Getwd()
+		if err != nil {
+			return nil
+		}
+	}
+	var detected []string
+	add := func(name string) {
+		for _, d := range detected {
+			if d == name {
+				return
+			}
+		}
+		detected = append(detected, name)
+	}
+	exists := func(name string) bool {
+		_, err := os.Stat(workdir + "/" + name)
+		return err == nil
+	}
+	if exists("go.mod") {
+		add("go-build")
+		add("govulncheck")
+	}
+	if exists("package.json") || exists("package-lock.json") {
+		add("sbom")
+		add("lockfiles")
+	}
+	if exists("Cargo.toml") {
+		add("lockfiles")
+	}
+	if exists("Dockerfile") || exists("Containerfile") {
+		add("oci")
+	}
+	if exists(".git") {
+		add("git")
+	}
+	return detected
+}
+
+// attestorExternalGenerators returns the external tool binaries whose
+// output the named attestor records. cilock NEVER invokes these — the
+// user's build command must run them; we only check PATH to warn the
+// operator when an attestor will come out empty.
+//
+// The list is sourced entirely from the detection registry (the
+// attestor's own detector.yaml plus the embedded catalog), so adding a
+// tool is a YAML edit, not a code change. Two contributions are unioned:
+//
+//  1. Format attestors. The "sbom" attestor signs whatever syft / cdxgen /
+//     bom produce; those catalog entries declare emits_formats: [sbom].
+//     We collect the argv head of every registry entry that emits this
+//     attestor's name as a format.
+//  2. Tool-wrapper attestors. "trivy" wraps trivy, "go-build" wraps go,
+//     "oci" recognizes docker save / skopeo copy / crane. We collect the
+//     argv head from the attestor's own pre/post predicates.
+//
+// Empty result = self-contained attestor (git reads .git/, environment
+// reads env vars — no external generator, so no PATH warning).
+//
+// Pre-flight intentionally trusts the registry over a hand-curated list:
+// a generator cilock can't recognize at runtime is one whose absence is
+// not worth warning about, since its output wouldn't be detected anyway.
+func attestorExternalGenerators(name string) []string {
+	reg := detection.Default()
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(bin string) {
+		if bin == "" {
+			return
+		}
+		if _, dup := seen[bin]; dup {
+			return
+		}
+		seen[bin] = struct{}{}
+		out = append(out, bin)
+	}
+
+	// (1) Every registry entry that emits this attestor's name as a format.
+	all, _ := reg.LookupAll()
+	for _, d := range all {
+		for _, f := range d.EmitsFormats {
+			if f == name {
+				collectArgvHeads(d, add)
+				break
+			}
+		}
+	}
+	// (2) The attestor's own detector predicates.
+	if d, ok, err := reg.Lookup(name); err == nil && ok && d != nil {
+		collectArgvHeads(d, add)
+	}
+
+	sort.Strings(out) // deterministic ordering for output + tests
+	return out
+}
+
+// collectArgvHeads walks a detector's pre/post predicate trees and feeds
+// the first token of every argv_prefix to add. The head token is the
+// invoked binary (e.g. ["docker", "save"] -> "docker"); that is what
+// pre-flight looks up on PATH.
+func collectArgvHeads(d *detection.DetectorYAML, add func(string)) {
+	var visit func(p *detection.Predicate)
+	visit = func(p *detection.Predicate) {
+		if p == nil {
+			return
+		}
+		if len(p.ArgvPrefix) > 0 {
+			add(p.ArgvPrefix[0])
+		}
+		for i := range p.AnyOf {
+			visit(&p.AnyOf[i])
+		}
+		for i := range p.AllOf {
+			visit(&p.AllOf[i])
+		}
+		visit(p.Not)
+		visit(p.ExecObserved)
+	}
+	for _, g := range []*detection.GateBlock{d.Pre, d.Post} {
+		if g != nil {
+			visit(g.Match)
+		}
+	}
+}
+
+// attestorWorkspacePrereq reports the workspace file/dir path an
+// attestor needs present in the workdir to produce any output. Empty
+// = no workspace prerequisite. Pre-flight surfaces missing prereqs
+// as warnings so operators don't wait for the build to complete
+// before learning their attestor will fail.
+func attestorWorkspacePrereq(name string) string {
+	switch name {
+	case "git":
+		return ".git"
+	}
+	return ""
+}
+
+// preflightAttestorTooling inspects every attestor in the active set
+// and emits one-line warnings for prerequisites the operator hasn't
+// satisfied. Returns true if any warning was emitted — callers may
+// surface the count in --validate-only output.
+//
+// Two checks per attestor:
+//
+//  1. External generator on PATH (sbom needs syft/cdxgen/bom,
+//     govulncheck needs govulncheck, ...). The candidate list comes from
+//     the detection registry; cilock never invokes the generator, the
+//     user's build command must produce its output.
+//  2. Workspace prereq present (git needs .git/, etc.).
+//
+// Warnings are non-fatal — the attestor itself decides whether the
+// missing prereq is a soft-error (sbom) or a hard-error (git) at
+// run time. Pre-flight just gives operators a heads-up so they can
+// fix the gap before the build runs.
+func preflightAttestorTooling(workdir string, attestors []string) (warned bool) {
+	if workdir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			workdir = cwd
+		}
+	}
+	for _, name := range attestors {
+		// Workspace prereq check.
+		if prereq := attestorWorkspacePrereq(name); prereq != "" {
+			path := workdir + "/" + prereq
+			if _, err := os.Stat(path); err != nil {
+				log.Warnf("attestor %q will fail: workspace is missing %q (the attestor reads from it)", name, prereq)
+				warned = true
+			}
+		}
+		// External-generator check: if any candidate generator is on
+		// PATH, the attestor has a chance of seeing its output.
+		gens := attestorExternalGenerators(name)
+		if len(gens) == 0 {
+			continue
+		}
+		found := false
+		var available []string
+		for _, g := range gens {
+			if _, err := execLookPath(g); err == nil {
+				found = true
+				available = append(available, g)
+				break
+			}
+		}
+		if !found {
+			// Render the generator list once, comma-joined, to avoid the
+			// double-bracketed `[[a b c]]` cosmetic bug the round-4 UX
+			// test caught when %v stringified an already-formatted slice.
+			gensList := strings.Join(gens, ", ")
+			log.Warnf("attestor %q will produce no output: no generator found on PATH (looked for [%s]) — "+
+				"this attestor RECORDS the output of an external tool; cilock does NOT invoke the generator. "+
+				"Install one of those or drop the attestor from --attestations.",
+				name, gensList)
+			warned = true
+			continue
+		}
+		_ = available
+	}
+	return warned
+}
+
+// mergeAttestorNames adds detected names into the operator's list,
+// dropping duplicates while preserving the operator-supplied order
+// first. Returns the merged list and a slice of names actually added
+// (for the --validate-only report).
+func mergeAttestorNames(operatorList, detected []string) (merged, added []string) {
+	seen := make(map[string]struct{}, len(operatorList)+len(detected))
+	for _, name := range operatorList {
+		merged = append(merged, name)
+		seen[name] = struct{}{}
+	}
+	for _, name := range detected {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		merged = append(merged, name)
+		added = append(added, name)
+		seen[name] = struct{}{}
+	}
+	return merged, added
+}
+
+// validateUserCommand checks that args[0] resolves on PATH (or as an
+// absolute path). Returns a non-nil error if the resolution fails;
+// the run.go caller decides whether to treat that as fatal or just
+// a warning depending on --validate-only.
+func validateUserCommand(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	cmd := args[0]
+	// LookPath handles both bare names (resolves on PATH) and paths
+	// (verifies existence + executable bit). No special-case needed.
+	if _, err := execLookPath(cmd); err != nil {
+		return fmt.Errorf("user command %q: %w", cmd, err)
+	}
+	return nil
+}
+
+// execLookPath is a tiny wrapper so the lookup can be mocked in tests.
+// Kept as a var so tests can swap it.
+var execLookPath = exec.LookPath
+
+// applyHardeningProfile sets per-feature env defaults based on the
+// named --hardening profile, leaving explicit operator env vars
+// untouched. Recognised profiles:
+//
+//   - "off"      — fanotify off, fs-verity off, no require-zero-drops
+//   - "standard" — fanotify on,  fs-verity opportunistic, drops surfaced
+//   - "strict"   — fanotify required, fs-verity required, drops fail
+//
+// requireZeroDrops is updated only when the operator didn't explicitly
+// pass --require-zero-drops on the command line (changed=false).
+// Operators can still pin individual env vars; the profile only seeds
+// defaults via setEnvIfUnset.
+//
+// Phase 3 of #234.
+func applyHardeningProfile(profile string, requireZeroDrops *bool, requireZeroDropsExplicit bool) error {
+	switch profile {
+	case "", "standard":
+		setEnvIfUnset("CILOCK_FANOTIFY", "1")
+		setEnvIfUnset("CILOCK_FSVERITY", "auto")
+		// standard: drops surfaced but not fatal (no override).
+	case "off":
+		setEnvIfUnset("CILOCK_FANOTIFY", "off")
+		setEnvIfUnset("CILOCK_FSVERITY", "off")
+		// off: drops are non-fatal (no override).
+	case "strict":
+		setEnvIfUnset("CILOCK_FANOTIFY", "1")
+		setEnvIfUnset("CILOCK_FSVERITY", "1")
+		if !requireZeroDropsExplicit {
+			*requireZeroDrops = true
+		}
+	default:
+		return fmt.Errorf("--hardening: unknown profile %q (valid: off, standard, strict)", profile)
+	}
+	return nil
+}
+
+// setEnvIfUnset sets an env var only when no value is already present.
+// Used by applyHardeningProfile so explicit operator env vars take
+// precedence over profile defaults.
+func setEnvIfUnset(key, value string) {
+	if _, present := os.LookupEnv(key); !present {
+		_ = os.Setenv(key, value)
+	}
+}
+
+// splitCaptureModeSuffix parses an optional `:backend` suffix from the
+// --capture-mode value. Recognised: `trace:ebpf`, `trace:ptrace`,
+// `trace:auto`, or `auto:ebpf|ptrace|auto` (auto mode can also pin the
+// tracer backend explicitly). Empty backend means "no suffix supplied;
+// commandrun chooses based on CILOCK_TRACE_MODE / its own default".
+//
+// Phase 2 of #234 — replaces CILOCK_TRACE_MODE as the canonical knob
+// for the tracer backend; the env var still works but is now derived
+// from --capture-mode.
+func splitCaptureModeSuffix(s string) (mode, backend string) {
+	idx := strings.IndexByte(s, ':')
+	if idx < 0 {
+		return s, ""
+	}
+	return s[:idx], s[idx+1:]
+}
+
+// warnLegacyDiagnosticEnv prints a one-line migration message for each
+// legacy diagnostic env var the operator still has set in their CI YAML.
+// The new world is a single --diagnose flag (or CILOCK_DIAGNOSE=1 for
+// equivalent effect from env). The renamed CILOCK_DEV_BPF_* vars keep
+// the same behavior as their unprefixed predecessors; they're flagged
+// as "dev-only" so operators understand they're not part of the supported
+// surface.
+func warnLegacyDiagnosticEnv() {
+	// Logging vars folded into --diagnose / CILOCK_DIAGNOSE.
+	for _, v := range []string{"CILOCK_EBPF_DEBUG", "CILOCK_BPF_DIAGNOSE"} {
+		if os.Getenv(v) != "" {
+			log.Warnf("%s is no longer recognized; use --diagnose (or CILOCK_DIAGNOSE=1) instead", v)
+		}
+	}
+	// Dev-only tuning vars renamed with CILOCK_DEV_ prefix to signal
+	// "not for production use". Auto-translate if both old + new are
+	// unset — preserves operator workflows that haven't migrated yet,
+	// surfaces the warning so the migration happens.
+	for _, m := range []struct{ old, new string }{
+		{"CILOCK_BPF_OBJECT_PATH", "CILOCK_DEV_BPF_OBJECT_PATH"},
+		{"CILOCK_BPF_REBUILD", "CILOCK_DEV_BPF_REBUILD"},
+		{"CILOCK_BPF_SKIP_PROGRAMS", "CILOCK_DEV_BPF_SKIP_PROGRAMS"},
+	} {
+		if v := os.Getenv(m.old); v != "" {
+			log.Warnf("%s is deprecated; rename to %s (dev-only knob; not part of the supported surface)", m.old, m.new)
+			if os.Getenv(m.new) == "" {
+				_ = os.Setenv(m.new, v)
+			}
+		}
+	}
+}
+
 // user disables every default attestor — the attestation collection
 // would have no body to attest.
 func applyNoDefaultAttestors(base []attestation.Attestor, disabled []string) ([]attestation.Attestor, error) {
@@ -91,6 +450,7 @@ func applyNoDefaultAttestors(base []attestation.Attestor, disabled []string) ([]
 	return out, nil
 }
 
+//nolint:funlen,gocognit // RunCmd composes flag registration + pre-flight gates inline; refactoring would split closely-related code
 func RunCmd() *cobra.Command {
 	o := options.RunOptions{
 		AttestorOptSetters:       make(map[string][]func(attestation.Attestor) (attestation.Attestor, error)),
@@ -126,6 +486,71 @@ Exit-code policy (finding #221):
 			// Apply platform-derived defaults (archivista, TSA URLs) for any
 			// flags not explicitly set by the user or config file.
 			o.ResolvePlatformDefaults(cmd)
+
+			// Warn loudly if operators are still using legacy diagnostic env
+			// vars; tell them how to migrate. Then translate --diagnose into
+			// the single CILOCK_DIAGNOSE env var that downstream subpackages
+			// read.
+			warnLegacyDiagnosticEnv()
+			if o.Diagnose {
+				_ = os.Setenv("CILOCK_DIAGNOSE", "1")
+			}
+
+			// Apply --hardening profile defaults BEFORE any attestor runs.
+			// Per-feature env vars still win — applyHardeningProfile only
+			// sets defaults via setEnvIfUnset. Profile also seeds the
+			// --require-zero-drops gate when --hardening=strict.
+			if err := applyHardeningProfile(o.Hardening, &o.RequireZeroDrops, cmd.Flags().Changed("require-zero-drops")); err != nil {
+				return err
+			}
+
+			// Workload auto-detection: probe the workspace for build-system
+			// indicators (go.mod, package.json, .git, etc.) and merge the
+			// matched attestors into the operator's --attestations list.
+			// Phase 4 of #234. Skip when --workload=manual.
+			var detectedNames []string
+			if o.Workload != "manual" {
+				probed := detectWorkloadAttestors(o.WorkingDir)
+				var merged []string
+				merged, detectedNames = mergeAttestorNames(o.Attestations, probed)
+				o.Attestations = merged
+			}
+
+			// Validate the user command resolves before doing the real run.
+			// Soft warning when --validate-only is off; hard exit when on.
+			cmdErr := validateUserCommand(args)
+
+			// Pre-flight: warn the operator about attestors whose
+			// prerequisites aren't satisfied (no .git/ for git; no SBOM
+			// generator on PATH for sbom; no govulncheck binary on PATH;
+			// etc.). cilock never invokes these tools — the warnings let
+			// operators install them OR drop the attestor before the
+			// build runs and produces an empty attestation.
+			preflightWarned := preflightAttestorTooling(o.WorkingDir, o.Attestations)
+
+			if o.ValidateOnly {
+				fmt.Fprintln(os.Stderr, "cilock pre-flight:")
+				fmt.Fprintf(os.Stderr, "  attestations (operator + detected): %v\n", o.Attestations)
+				if len(detectedNames) > 0 {
+					fmt.Fprintf(os.Stderr, "  workload auto-added: %v\n", detectedNames)
+				}
+				fmt.Fprintf(os.Stderr, "  hardening: %s\n", o.Hardening)
+				fmt.Fprintf(os.Stderr, "  capture-mode: %s\n", o.CaptureMode)
+				if cmdErr != nil {
+					fmt.Fprintf(os.Stderr, "  WARN: %v\n", cmdErr)
+				}
+				if preflightWarned {
+					fmt.Fprintln(os.Stderr, "  (see WARN lines above — at least one attestor's prerequisite is missing)")
+				}
+				fmt.Fprintln(os.Stderr, "  (--validate-only — exiting without running the command)")
+				return nil
+			}
+			if cmdErr != nil {
+				// Non-fatal in normal mode — the user command may be a
+				// shell builtin, a wrapper, or come from a PATH the
+				// subprocess will set up. Print and continue.
+				log.Warnf("%v", cmdErr)
+			}
 
 			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, providersFromFlags("signer", cmd.Flags()))
 			if err != nil {
@@ -181,6 +606,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 			commandrun.WithIgnoreExitCode(ro.IgnoreCommandExitCode),
 			commandrun.WithPrewalkSkipDirs(ro.PrewalkSkipDirs),
 			commandrun.WithPrewalkIncludeDirs(ro.PrewalkIncludeDirs),
+			commandrun.WithRequireZeroDrops(ro.RequireZeroDrops),
 		))
 	}
 
@@ -255,10 +681,23 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		}
 	}
 
-	// Build attestation context options
-	captureMode := attestation.CaptureMode(ro.CaptureMode)
+	// Build attestation context options.
+	//
+	// Phase 2: --capture-mode accepts an optional tracer-backend suffix
+	// `:ebpf|:ptrace|:auto` (e.g. `trace:ebpf`). The suffix selects the
+	// commandrun tracer backend by setting CILOCK_TRACE_MODE before any
+	// attestor runs. Without a suffix, behavior is the same as before
+	// (commandrun's own auto-fallback applies).
+	baseCaptureMode, traceBackend := splitCaptureModeSuffix(ro.CaptureMode)
+	captureMode := attestation.CaptureMode(baseCaptureMode)
 	if err := captureMode.Validate(); err != nil {
 		return fmt.Errorf("--capture-mode: %w", err)
+	}
+	if traceBackend != "" {
+		if captureMode != attestation.CaptureTrace && captureMode != attestation.CaptureAuto {
+			return fmt.Errorf("--capture-mode: backend suffix %q is only meaningful with capture-mode=trace or =auto, not %q", traceBackend, baseCaptureMode)
+		}
+		_ = os.Setenv("CILOCK_TRACE_MODE", traceBackend)
 	}
 	attestationOpts := []attestation.AttestationContextOption{
 		attestation.WithWorkingDir(ro.WorkingDir),
