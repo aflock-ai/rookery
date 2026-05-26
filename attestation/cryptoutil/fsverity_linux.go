@@ -59,7 +59,7 @@ func EnableVerity(path string, hashAlg uint32) error {
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	arg := fsverityEnableArg{
 		Version:       1,
 		HashAlgorithm: hashAlg,
@@ -89,7 +89,7 @@ func MeasureVerity(path string) ([]byte, uint16, error) {
 	if err != nil {
 		return nil, 0, fmt.Errorf("open: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	d := fsverityDigest{DigestSize: 64}
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL,
 		f.Fd(),
@@ -139,13 +139,13 @@ func VeritySupported(workspaceDir string) error {
 		return fmt.Errorf("create probe: %w", err)
 	}
 	probePath := probe.Name()
-	defer os.Remove(probePath)
+	defer func() { _ = os.Remove(probePath) }()
 	// Write something — fs-verity refuses empty files on some FS.
 	if _, err := probe.Write([]byte("probe")); err != nil {
-		probe.Close()
+		_ = probe.Close()
 		return fmt.Errorf("write probe: %w", err)
 	}
-	probe.Close()
+	_ = probe.Close()
 	if err := EnableVerity(probePath, unix.FS_VERITY_HASH_ALG_SHA256); err != nil {
 		return err
 	}
