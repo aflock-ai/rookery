@@ -20,13 +20,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func writeSidecarFile(t *testing.T, dir, step string, sc chain.ChainSidecar) string {
+func writeSidecarFile(t *testing.T, dir, step string, sc chain.ChainSidecar) {
 	t.Helper()
 	body, err := json.Marshal(sc)
 	require.NoError(t, err)
 	p := filepath.Join(dir, step+".chain.json")
 	require.NoError(t, os.WriteFile(p, body, 0o600))
-	return p
 }
 
 func TestFilesystemChainSidecarSource_HappyPath(t *testing.T) {

@@ -55,7 +55,7 @@ func EnableVerity(path string, hashAlg uint32) error {
 	if hashAlg == 0 {
 		hashAlg = unix.FS_VERITY_HASH_ALG_SHA256
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY, 0) //nolint:gosec // caller-supplied path; fs-verity ioctl on the resulting fd is the whole point
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
@@ -68,7 +68,7 @@ func EnableVerity(path string, hashAlg uint32) error {
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL,
 		f.Fd(),
 		uintptr(unix.FS_IOC_ENABLE_VERITY),
-		uintptr(unsafe.Pointer(&arg)),
+		uintptr(unsafe.Pointer(&arg)), //nolint:gosec // ioctl requires unsafe.Pointer
 	)
 	if errno != 0 {
 		return verityErrno(errno)
@@ -85,7 +85,7 @@ func EnableVerity(path string, hashAlg uint32) error {
 // filesystem doesn't support fs-verity (or it isn't enabled at
 // mkfs time). Both are signals to fall back to streaming SHA.
 func MeasureVerity(path string) ([]byte, uint16, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY, 0) //nolint:gosec // caller-supplied path; fs-verity ioctl on the resulting fd is the whole point
 	if err != nil {
 		return nil, 0, fmt.Errorf("open: %w", err)
 	}
@@ -94,7 +94,7 @@ func MeasureVerity(path string) ([]byte, uint16, error) {
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL,
 		f.Fd(),
 		uintptr(unix.FS_IOC_MEASURE_VERITY),
-		uintptr(unsafe.Pointer(&d)),
+		uintptr(unsafe.Pointer(&d)), //nolint:gosec // ioctl requires unsafe.Pointer
 	)
 	if errno != 0 {
 		return nil, 0, verityErrno(errno)

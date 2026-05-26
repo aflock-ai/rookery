@@ -23,9 +23,9 @@ import "os"
 // may persist between builds but is NOT a user-facing product).
 //
 // Patterns use shell-style globs:
-//   *  matches any sequence except /
-//   ** matches any sequence including /
-//   ?  matches a single character
+//   - matches any sequence except /
+//     ** matches any sequence including /
+//     ?  matches a single character
 //
 // Operators can:
 //   - ADD entries via CILOCK_CACHE_ADD_PATTERN env / --cache-add-pattern
@@ -44,16 +44,16 @@ import "os"
 func DefaultCachePatterns() map[string]struct{} {
 	return map[string]struct{}{
 		// ─── Generic OS temp + cache roots ───
-		"/tmp/**":          {}, // Linux/BSD scratch
-		"/var/tmp/**":      {}, // Linux long-lived temp
-		"/var/folders/**":  {}, // macOS TMPDIR root (per-user)
-		"**/.cache/**":     {}, // XDG cache spec (~/.cache, project-local .cache)
-		"**/Library/Caches/**": {}, // macOS user caches
+		"/tmp/**":                  {}, // Linux/BSD scratch
+		"/var/tmp/**":              {}, // Linux long-lived temp
+		"/var/folders/**":          {}, // macOS TMPDIR root (per-user)
+		"**/.cache/**":             {}, // XDG cache spec (~/.cache, project-local .cache)
+		"**/Library/Caches/**":     {}, // macOS user caches
 		"**/AppData/Local/Temp/**": {}, // Windows TEMP
 		"**/AppData/Local/Microsoft/Windows/INetCache/**": {}, // IE/Edge
 
 		// ─── Go ───
-		"**/go-build*/**":       {}, // GOCACHE (default ~/.cache/go-build; also /tmp/go-build*)
+		"**/go-build*/**":        {}, // GOCACHE (default ~/.cache/go-build; also /tmp/go-build*)
 		"**/go/pkg/mod/cache/**": {}, // module download cache
 		"**/go/pkg/sumdb/**":     {}, // checksum database cache
 
@@ -89,38 +89,38 @@ func DefaultCachePatterns() map[string]struct{} {
 		// user-facing OUTPUT for `cargo build`. Treat target/debug/{deps,
 		// build, .fingerprint, incremental} as cache; let the actual
 		// binary in target/debug/ fall through to product classification.
-		"**/target/debug/deps/**":        {}, // intermediate .rlib + .o
-		"**/target/debug/build/**":       {}, // build-script artifacts
-		"**/target/debug/.fingerprint/**": {}, // cargo's fingerprint markers
-		"**/target/debug/incremental/**": {}, // incremental compile state
-		"**/target/release/deps/**":      {},
-		"**/target/release/build/**":     {},
+		"**/target/debug/deps/**":           {}, // intermediate .rlib + .o
+		"**/target/debug/build/**":          {}, // build-script artifacts
+		"**/target/debug/.fingerprint/**":   {}, // cargo's fingerprint markers
+		"**/target/debug/incremental/**":    {}, // incremental compile state
+		"**/target/release/deps/**":         {},
+		"**/target/release/build/**":        {},
 		"**/target/release/.fingerprint/**": {},
-		"**/target/release/incremental/**": {},
-		"**/target/.rustc_info.json":    {}, // cargo's rustc-version cache
-		"**/target/CACHEDIR.TAG":        {}, // cargo's cache marker
-		"**/.cargo/registry/cache/**":   {},
-		"**/.cargo/registry/src/**":     {},
-		"**/.cargo/git/checkouts/**":    {},
+		"**/target/release/incremental/**":  {},
+		"**/target/.rustc_info.json":        {}, // cargo's rustc-version cache
+		"**/target/CACHEDIR.TAG":            {}, // cargo's cache marker
+		"**/.cargo/registry/cache/**":       {},
+		"**/.cargo/registry/src/**":         {},
+		"**/.cargo/git/checkouts/**":        {},
 
 		// ─── Java / Maven / Gradle ───
 		// .m2/repository is INPUTS not cache — Maven local repo is a
 		// dependency source; we deliberately don't classify it here.
-		"**/.gradle/caches/**":  {},
-		"**/.gradle/daemon/**":  {},
-		"**/.gradle/native/**":  {},
-		"**/build/tmp/**":       {}, // Gradle build temp
-		"**/.idea/caches/**":    {}, // IntelliJ caches
-		"**/.idea/shelf/**":     {},
+		"**/.gradle/caches/**":          {},
+		"**/.gradle/daemon/**":          {},
+		"**/.gradle/native/**":          {},
+		"**/build/tmp/**":               {}, // Gradle build temp
+		"**/.idea/caches/**":            {}, // IntelliJ caches
+		"**/.idea/shelf/**":             {},
 		"**/.idea/usage.statistics.xml": {},
 
 		// ─── C / C++ / Make / CMake / ccache ───
-		"**/.ccache/**":          {},
-		"**/ccache/**":           {},
-		"**/CMakeFiles/**":       {},
-		"**/CMakeCache.txt":      {},
-		"**/cmake-build-*/**":    {},
-		"**/.deps/**":            {}, // automake dependency tracking
+		"**/.ccache/**":       {},
+		"**/ccache/**":        {},
+		"**/CMakeFiles/**":    {},
+		"**/CMakeCache.txt":   {},
+		"**/cmake-build-*/**": {},
+		"**/.deps/**":         {}, // automake dependency tracking
 
 		// ─── Kbuild (Linux kernel build) ───
 		// .cmd files are Kbuild's per-object dependency tracking
@@ -142,8 +142,8 @@ func DefaultCachePatterns() map[string]struct{} {
 		"**/bazel-testlogs/**":       {},
 
 		// ─── Git working state (not source) ───
-		"**/.git/index":           {},
-		"**/.git/HEAD.lock":       {},
+		"**/.git/index":               {},
+		"**/.git/HEAD.lock":           {},
 		"**/.git/objects/pack/.tmp-*": {},
 
 		// ─── Editor / IDE volatile state ───
@@ -153,8 +153,8 @@ func DefaultCachePatterns() map[string]struct{} {
 		"**/*.swp":                   {},
 
 		// ─── Misc lock + state files ───
-		"**/*.lock-info":     {},
-		"**/.DS_Store":       {}, // macOS finder metadata
+		"**/*.lock-info": {},
+		"**/.DS_Store":   {}, // macOS finder metadata
 	}
 }
 
@@ -166,13 +166,13 @@ func DefaultCachePatterns() map[string]struct{} {
 //
 // Why query the environment:
 //
-//   The hardcoded defaults catch common LOCATIONS (~/.cache/...,
-//   /tmp/...), but operators routinely point their toolchains at
-//   custom roots via env vars — e.g., GOCACHE=/mnt/fast/go-build on
-//   build farms, CARGO_HOME on shared NFS, PIP_CACHE_DIR for
-//   container builds. Without env-driven discovery a build that
-//   moves its cache to /opt/build/cache would have those entries
-//   show up as products. This function closes that gap.
+//	The hardcoded defaults catch common LOCATIONS (~/.cache/...,
+//	/tmp/...), but operators routinely point their toolchains at
+//	custom roots via env vars — e.g., GOCACHE=/mnt/fast/go-build on
+//	build farms, CARGO_HOME on shared NFS, PIP_CACHE_DIR for
+//	container builds. Without env-driven discovery a build that
+//	moves its cache to /opt/build/cache would have those entries
+//	show up as products. This function closes that gap.
 //
 // Returns absolute-path globs (one /** per env entry). Skips vars
 // that are unset, empty, or "/" (which would match everything).
@@ -258,4 +258,3 @@ func SystemCachePathsFromEnv() []string {
 //
 //nolint:gochecknoglobals // intentional indirection for test stubbing
 var getEnvForCachePath = os.Getenv
-

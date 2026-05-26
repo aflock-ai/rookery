@@ -26,11 +26,11 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/chain"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/signer"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
-	"github.com/aflock-ai/rookery/attestation/chain"
 	"github.com/aflock-ai/rookery/attestation/source"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -862,7 +862,7 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 			// the source has no sidecar for this pair) we fall back
 			// to the legacy compareArtifacts path that operates on
 			// the in-process Materials() / Artifacts() maps.
-			if vo != nil && vo.chainSidecarSource != nil {
+			if vo != nil && vo.chainSidecarSource != nil { //nolint:nestif // chain-proof verification needs all bindings checked in-line; refactoring obscures the failure-reason trail
 				upstreamEnvDigest := envelopePayloadDigest(testCollection.Collection)
 				sidecar, lookupErr := vo.chainSidecarSource.LookupChainSidecar(ctx, step.Name, artifactsFrom, upstreamEnvDigest)
 				if lookupErr != nil {
@@ -937,7 +937,7 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 // identifier independent of signature material that may vary
 // between re-signings of the same content.
 func envelopePayloadDigest(c source.CollectionVerificationResult) string {
-	sum := sha256.Sum256(c.CollectionEnvelope.Envelope.Payload)
+	sum := sha256.Sum256(c.Envelope.Payload)
 	return hex.EncodeToString(sum[:])
 }
 

@@ -20,8 +20,8 @@ import "fmt"
 // data. The default ("auto") detects what's available on the host and
 // picks the fastest + most accurate option:
 //
-//	1. trace (when CILOCK_TRACE_MODE=ebpf can attach kprobes)
-//	2. walk  (always available; legacy v0.1 behavior)
+//  1. trace (when CILOCK_TRACE_MODE=ebpf can attach kprobes)
+//  2. walk  (always available; legacy v0.1 behavior)
 //
 // Future modes:
 //   - "ima"   — read /sys/kernel/security/ima/ascii_runtime_measurements
@@ -172,6 +172,7 @@ type CaptureEntry struct {
 // and returns an error rather than silently falling back. That is
 // the "fail loudly" contract — operators who asked for IMA shouldn't
 // quietly get a walk-based attestation.
+//nolint:gocognit // capture-mode resolution is a single linear decision tree by design
 func ResolveCaptureMode(
 	requested CaptureMode,
 	completed []CompletedAttestor,
@@ -242,4 +243,3 @@ func ResolveCaptureMode(
 	}
 	return "", nil, fmt.Errorf("unknown capture mode %q", string(requested))
 }
-
