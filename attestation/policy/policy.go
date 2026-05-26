@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -507,7 +508,14 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 			}
 
 			if len(collections) == 0 {
-				collections = append(collections, source.CollectionVerificationResult{Errors: []error{ErrNoCollections{Step: stepName}}})
+				// Distinguish "no envelope loaded for this step" from
+				// "envelope IS loaded but operator's artifact digest
+				// isn't a subject of it." Without this the operator
+				// chases a phantom 'did I load my attestation?' issue
+				// when the real problem is digest mismatch / scoping.
+				// (Fixes blind Linux UX test Bug 2.)
+				diag := diagnoseEmptyCollectionResult(ctx, vo.verifiedSource, stepName, vo.subjectDigests, attestationsByStep[stepName])
+				collections = append(collections, source.CollectionVerificationResult{Errors: []error{diag}})
 			}
 
 			// Verify the functionaries
@@ -939,6 +947,75 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 func envelopePayloadDigest(c source.CollectionVerificationResult) string {
 	sum := sha256.Sum256(c.Envelope.Payload)
 	return hex.EncodeToString(sum[:])
+}
+
+// diagnoseEmptyCollectionResult is called when the subject-filtered Search
+// for (stepName, subjectDigests) returns zero collections. It re-probes the
+// source with an empty subject filter to figure out whether the step has
+// ANY loaded collections at all:
+//
+//   - 0 collections after the empty-subject probe   → ErrNoCollections.
+//     The step legitimately has no envelope loaded — the operator forgot
+//     to pass --attestations, the file didn't load, etc.
+//   - >0 collections after the empty-subject probe → ErrSubjectDigestMismatch.
+//     The envelope IS loaded; the operator's --artifactfile / --subjects
+//     digest just doesn't match anything in the collection. Surface the
+//     observed subjects so the operator can see what they ARE asked to
+//     verify against.
+//
+// The probe is unverified-search-aware: it performs the SAME signature
+// verification the original Search did (via the same VerifiedSourcer), so
+// envelopes with bad signatures don't fool the diagnostic into reporting a
+// digest mismatch on something that wouldn't have verified anyway.
+//
+// Errors from the probe itself collapse back to ErrNoCollections — we don't
+// want a diagnostic helper to surface a different error class than the
+// original failure mode.
+func diagnoseEmptyCollectionResult(ctx context.Context, src source.VerifiedSourcer, stepName string, suppliedDigests, attestations []string) error {
+	allForStep, err := src.Search(ctx, stepName, nil, attestations)
+	if err != nil || len(allForStep) == 0 {
+		return ErrNoCollections{Step: stepName}
+	}
+
+	// Collection loaded but subject set doesn't intersect supplied digests.
+	// Render the observed subjects as a stable, sorted, deduplicated list
+	// so the error message is reproducible across runs.
+	observed := observedCollectionSubjects(allForStep)
+	return ErrSubjectDigestMismatch{
+		Step:             stepName,
+		SuppliedDigests:  append([]string(nil), suppliedDigests...),
+		ObservedSubjects: observed,
+	}
+}
+
+// observedCollectionSubjects walks a list of CollectionVerificationResults
+// and returns the union of subject entries (rendered as "<name>"). The
+// in-toto statement's Subject slice is the authoritative source — that's
+// what subject-digest matching runs against in source.Search. Each subject
+// is rendered with its first available digest so the operator sees both
+// the symbolic name (e.g. "file:dist/argocd") AND the digest they would
+// need to match against. Sorted + deduped for stable output.
+func observedCollectionSubjects(results []source.CollectionVerificationResult) []string {
+	seen := make(map[string]struct{})
+	for _, r := range results {
+		// Statement.Subject is the canonical list source.Search filters on.
+		for _, subj := range r.Statement.Subject {
+			repr := subj.Name
+			// Include the first digest pair so operators can see what they
+			// would need to pass via --artifactfile / --subjects to match.
+			for algo, dig := range subj.Digest {
+				repr = fmt.Sprintf("%s (%s:%s)", subj.Name, algo, dig)
+				break
+			}
+			seen[repr] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func compareArtifacts(mats map[string]cryptoutil.DigestSet, arts map[string]cryptoutil.DigestSet) error {
