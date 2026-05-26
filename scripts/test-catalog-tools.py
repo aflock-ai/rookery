@@ -301,10 +301,22 @@ RECIPES: list[Recipe] = [
 
     # --- Vuln / dep scanners ---
     Recipe(name="osv-scanner", need="osv-scanner", category="artifact-scan",
-           fixture=make_go_mod, expect_uris=[URI_COMMANDRUN, URI_SARIF],
+           # osv-scanner v2 dropped auto-detection of lockfiles via
+           # plain dir scan; it now wants explicit -L pointers. The
+           # synthesized package-lock.json is a real npm lockfile shape
+           # that osv recognizes as a "source" once you point at it.
+           fixture=lambda fix: (
+               make_npm_pkg(fix),
+               subprocess.run(["npm", "install", "--package-lock-only",
+                               "--no-audit", "--no-fund",
+                               "--ignore-scripts"], cwd=fix, check=False),
+           ),
+           expect_uris=[URI_COMMANDRUN, URI_SARIF],
            allow_nonzero=True, attestors=["sarif"],
-           invoke=args_only(["osv-scanner", "scan", "--format=sarif",
-                             "--output=osv.sarif", "."])),
+           invoke=args_only(["osv-scanner", "scan", "source",
+                             "-L", "package-lock.json",
+                             "--format=sarif",
+                             "--output-file=osv.sarif"])),
 
     # --- IaC scanners ---
     Recipe(name="checkov", need="checkov", category="artifact-scan",
