@@ -369,7 +369,11 @@ func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
 
 	if len(products) == 0 {
-		return fmt.Errorf("no products to attest")
+		// Soft opt-out: sbom ran but the upstream product set was empty.
+		// The attestor's contract was satisfied (it ran); there just was
+		// no SBOM-candidate input to wrap. CI shouldn't fail on this.
+		// See finding #221.
+		return attestation.NewSoftError("no products to attest")
 	}
 
 	a.subjects = make(map[string]cryptoutil.DigestSet)
@@ -451,5 +455,9 @@ func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error {
 		return nil
 	}
 
-	return fmt.Errorf("no SBOM file found")
+	// Soft opt-out: the upstream product set contained no SBOM-shaped
+	// file. The attestor's contract was satisfied; there was nothing to
+	// attest. CI shouldn't fail on a project that doesn't ship an SBOM.
+	// See finding #221.
+	return attestation.NewSoftError("no SBOM file found")
 }

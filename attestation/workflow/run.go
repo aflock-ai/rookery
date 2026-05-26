@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -106,6 +107,108 @@ func RunWithAdditionalSubjects(subjects map[string]cryptoutil.DigestSet) RunOpti
 	}
 }
 
+// AttestorRunErrors is the structured aggregate returned by Run /
+// RunWithExports when one or more attestors reported a non-nil error.
+//
+// Callers (specifically `cilock run`) split the legs into two classes to set
+// the process exit code correctly (finding #221):
+//
+//   - Fatal: the attestor's contract was violated (signer failure, tracing
+//     requested on a platform that doesn't support it, output path
+//     inaccessible, command exited non-zero). Exit 1.
+//   - Soft:  the attestor ran successfully but the project didn't ship the
+//     evidence the attestor wraps (sbom: no SBOM file; go-build: no Go
+//     binary). Exit 0; surfaced as a Warnings: line, not Errors:.
+//
+// SoftLegs() and FatalLegs() walk the captured per-attestor errors so the
+// CLI doesn't have to re-do the errors.As dispatch itself.
+type AttestorRunErrors struct {
+	// Legs is the per-attestor error list, in completion order. Each
+	// entry already wraps the underlying error with the
+	// "attestor X failed: ..." prefix the legacy code path used.
+	Legs []AttestorErrorLeg
+}
+
+// AttestorErrorLeg pairs an attestor name with the error it returned. The
+// Err field still wraps any SoftError or other typed error returned by the
+// attestor, so callers can errors.As(leg.Err, &target) freely.
+type AttestorErrorLeg struct {
+	Attestor string
+	Err      error
+}
+
+// Error implements error. Preserves the legacy "attestors failed with error
+// messages: ..." shape so existing string-matching consumers don't break.
+func (e *AttestorRunErrors) Error() string {
+	if e == nil || len(e.Legs) == 0 {
+		return "attestors failed with error messages"
+	}
+	parts := make([]string, 0, len(e.Legs)+1)
+	parts = append(parts, "attestors failed with error messages")
+	for _, leg := range e.Legs {
+		parts = append(parts, leg.Err.Error())
+	}
+	return strings.Join(parts, "\n")
+}
+
+// Unwrap returns the slice of per-attestor errors. errors.As / errors.Is
+// traverse this slice so callers can interrogate any individual leg.
+func (e *AttestorRunErrors) Unwrap() []error {
+	if e == nil {
+		return nil
+	}
+	out := make([]error, 0, len(e.Legs))
+	for _, leg := range e.Legs {
+		out = append(out, leg.Err)
+	}
+	return out
+}
+
+// SoftLegs returns the legs whose error wraps an attestation.SoftError —
+// i.e. "attestor ran but had nothing to do" cases. CLI demotes these to
+// warnings and keeps the exit code at zero.
+func (e *AttestorRunErrors) SoftLegs() []AttestorErrorLeg {
+	if e == nil {
+		return nil
+	}
+	var out []AttestorErrorLeg
+	for _, leg := range e.Legs {
+		if attestation.IsSoftError(leg.Err) {
+			out = append(out, leg)
+		}
+	}
+	return out
+}
+
+// FatalLegs returns the legs that are NOT SoftErrors — contract violations
+// that should propagate to a non-zero process exit code.
+func (e *AttestorRunErrors) FatalLegs() []AttestorErrorLeg {
+	if e == nil {
+		return nil
+	}
+	var out []AttestorErrorLeg
+	for _, leg := range e.Legs {
+		if !attestation.IsSoftError(leg.Err) {
+			out = append(out, leg)
+		}
+	}
+	return out
+}
+
+// HasFatal reports whether any leg is fatal. Convenience over FatalLegs()
+// for callers that only need a boolean.
+func (e *AttestorRunErrors) HasFatal() bool {
+	if e == nil {
+		return false
+	}
+	for _, leg := range e.Legs {
+		if !attestation.IsSoftError(leg.Err) {
+			return true
+		}
+	}
+	return false
+}
+
 // RunResult contains the generated attestation collection as well as the signed DSSE envelope, if one was
 // created.
 //
@@ -178,11 +281,11 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	// from-bundles` sidecar discovery, PR #186).
 	parentSubjects := collectParentSubjects(runCtx, ro.additionalSubjects)
 
-	errs := make([]error, 0)
+	legs := make([]AttestorErrorLeg, 0)
 	for _, r := range runCtx.CompletedAttestors() {
 		if r.Error != nil { //nolint:nestif
 			wrappedErr := fmt.Errorf("attestor %s failed: %w", r.Attestor.Name(), r.Error)
-			errs = append(errs, wrappedErr)
+			legs = append(legs, AttestorErrorLeg{Attestor: r.Attestor.Name(), Err: wrappedErr})
 		} else {
 			// Check if this is a MultiExporter first
 			if multiExporter, ok := r.Attestor.(attestation.MultiExporter); ok {
@@ -237,10 +340,13 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	// Build and sign the collection even when attestors failed. This ensures
 	// forensic data (e.g. secretscan findings) is captured in the attestation
 	// file so it can be used for post-incident analysis and policy verification.
+	//
+	// Errors are returned as a typed AttestorRunErrors so callers (the
+	// `cilock run` CLI) can split soft errors (attestor had nothing to do)
+	// from fatal ones (contract violation). See finding #221.
 	var attestorErr error
-	if !ro.ignoreErrors && len(errs) > 0 {
-		errs := append([]error{errors.New("attestors failed with error messages")}, errs...)
-		attestorErr = errors.Join(errs...)
+	if !ro.ignoreErrors && len(legs) > 0 {
+		attestorErr = &AttestorRunErrors{Legs: legs}
 	}
 
 	// Filter attestors for collection - exclude those that are exported separately
