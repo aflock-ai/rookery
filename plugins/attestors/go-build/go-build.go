@@ -42,11 +42,13 @@
 // through whatever release pipeline ships the artifacts.
 //
 // Subjects:
-//   - One subject per Go binary we processed, keyed `go-build:<path>`
-//     with the digest of the JSON sidecar (not the binary). This lets
-//     verify chain from the binary subject (which the product attestor
-//     already records) to the provenance sidecar via this attestor's
-//     predicate.
+//   - One subject per Go binary keyed `binary:<path>` with the digest
+//     of the binary file content. This is the natural "verify the
+//     released artifact" subject: users will point `cilock verify
+//     --artifactfile` at the binary and this is what matches.
+//   - One subject per Go binary keyed `go-build-sidecar:<path>` with
+//     the digest of the JSON sidecar. This lets a verifier re-read
+//     the JSON from disk and confirm it matches what was signed.
 package gobuild
 
 import (
@@ -166,13 +168,13 @@ func (a *Attestor) Type() string                 { return Type }
 func (a *Attestor) RunType() attestation.RunType { return RunType }
 func (a *Attestor) Schema() *jsonschema.Schema   { return jsonschema.Reflect(a) }
 
-// Subjects returns one entry per binary the attestor successfully
-// processed, keyed `go-build:<binary-path>` and digested over the
-// sidecar JSON file. The sidecar's digest — not the binary's — is
-// the right thing to anchor verify on: the binary's digest is
-// already a subject of the product attestor, so duplicating it here
-// would say nothing new. Anchoring on the sidecar lets a verifier
-// re-read the JSON from disk and confirm it matches what was signed.
+// Subjects returns two entries per binary the attestor successfully
+// processed:
+//   - `binary:<binary-path>` digested over the binary file content,
+//     so `cilock verify --artifactfile <binary>` resolves naturally.
+//   - `go-build-sidecar:<binary-path>` digested over the sidecar JSON,
+//     so a verifier can re-read the on-disk JSON and confirm it
+//     matches what was signed.
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return a.subjects
 }
@@ -210,6 +212,16 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		}
 		info.Path = path
 
+		// Record the binary's own digest under `binary:<path>`. This
+		// is the subject `cilock verify --artifactfile <binary>`
+		// resolves against — without it, the natural verify flow
+		// fails with a cryptic "no collections found." See #219.
+		if d, derr := digestFile(abs, ctx.Hashes()); derr == nil {
+			a.subjects["binary:"+path] = d
+		} else {
+			log.Debugf("(attestation/go-build) digesting binary %s: %v", path, derr)
+		}
+
 		sidecarPath := path + SidecarExt
 		sidecarAbs := absPathIn(workingDir, sidecarPath)
 		if err := writeSidecar(sidecarAbs, info); err != nil {
@@ -219,8 +231,8 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 			log.Warnf("(attestation/go-build) sidecar write failed for %s: %v", path, err)
 		} else {
 			info.SidecarPath = sidecarPath
-			if d, derr := digestSidecar(sidecarAbs, ctx.Hashes()); derr == nil {
-				a.subjects["go-build:"+path] = d
+			if d, derr := digestFile(sidecarAbs, ctx.Hashes()); derr == nil {
+				a.subjects["go-build-sidecar:"+path] = d
 			} else {
 				log.Debugf("(attestation/go-build) digesting %s: %v", sidecarPath, derr)
 			}
@@ -322,12 +334,13 @@ func writeSidecar(abs string, info BinaryInfo) error {
 	return nil
 }
 
-// digestSidecar hashes the freshly written sidecar with the same
-// hash algorithms the attestation context is configured for. This
-// keeps the subject digest consistent with every other digest in
-// the bundle without hardcoding sha256 here.
-func digestSidecar(abs string, hashes []cryptoutil.DigestValue) (cryptoutil.DigestSet, error) {
-	f, err := os.Open(abs) //nolint:gosec // G304: path comes from products+SidecarExt, both trusted
+// digestFile hashes the file at abs with the same hash algorithms
+// the attestation context is configured for. Used for both the
+// binary file and its sidecar JSON — keeps the subject digests
+// consistent with every other digest in the bundle without
+// hardcoding sha256 here.
+func digestFile(abs string, hashes []cryptoutil.DigestValue) (cryptoutil.DigestSet, error) {
+	f, err := os.Open(abs) //nolint:gosec // G304: path comes from products (trusted) or products+SidecarExt
 	if err != nil {
 		return nil, err
 	}
