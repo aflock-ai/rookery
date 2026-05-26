@@ -386,6 +386,24 @@ func collectTracedFileSet(ctx *attestation.AttestationContext) (bool, map[string
 		if !ok || !cmd.TracingEnabled() {
 			continue
 		}
+		// Tracing was REQUESTED (config flag set) — but check that it
+		// actually produced data. On macOS / Windows / any platform
+		// where tracing_unsupported.go is built, trace() returns an
+		// error and cmd.Processes stays empty. Returning traced=true
+		// here with an empty openedFiles set would tell walk-mode
+		// "trust the trace" — which combined with the empty set
+		// causes shouldRecord() in file.RecordArtifacts to reject
+		// EVERY product (file.go:237 — "not in openedFiles AND
+		// processWasTraced → drop"). Result: silent product loss,
+		// no sbom / no go-build / no envelope despite the build
+		// having succeeded.
+		//
+		// If tracing failed to produce processes, fall back to an
+		// unfiltered walk so downstream attestors see the actual
+		// build outputs.
+		if len(cmd.Processes) == 0 {
+			continue
+		}
 		traced = true
 		for _, process := range cmd.Processes {
 			for fname := range process.OpenedFiles {
