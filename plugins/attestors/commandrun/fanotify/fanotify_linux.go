@@ -223,7 +223,7 @@ func Probe(markPath string) error {
 	if err != nil {
 		return fmt.Errorf("FanotifyInit: %w (CAP_SYS_ADMIN required)", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	// Try the mark to ensure the mount supports it. FILESYSTEM is
 	// the desired mode; if that fails, try MOUNT.
 	mask := uint64(unix.FAN_OPEN_PERM)
@@ -376,7 +376,7 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 		h.respond(meta.Fd, true)
 		return
 	}
-	defer unix.Close(int(meta.Fd))
+	defer func() { _ = unix.Close(int(meta.Fd)) }()
 
 	if meta.Mask&unix.FAN_OPEN_PERM == 0 {
 		h.respond(meta.Fd, true)

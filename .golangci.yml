@@ -111,6 +111,7 @@ linters:
           - dupl
           - funlen
           - gocognit
+          - gocyclo
           - goconst
 
       # Builder main.go is a long procedural entry point
@@ -119,6 +120,18 @@ linters:
           - funlen
           - gocyclo
           - gocognit
+
+      # commandrun is an eBPF telemetry attestor — tracing,
+      # marshaling, and event-classification paths are
+      # intentionally large decision trees over kernel events.
+      # They don't refactor cleanly without obscuring the
+      # source-by-source provenance logic.
+      - path: plugins/attestors/commandrun/.*
+        linters:
+          - funlen
+          - gocyclo
+          - gocognit
+          - goconst
 
 formatters:
   enable:
