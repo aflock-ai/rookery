@@ -7,7 +7,7 @@ detection_only: true
 
 description: notation (Notary v2) — OCI artifact signing.
 
-category: [statement]
+category: [sign]
 
 upstream:
   name: notation

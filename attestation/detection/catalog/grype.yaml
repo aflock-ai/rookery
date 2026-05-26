@@ -7,7 +7,7 @@ detection_only: true
 
 description: Anchore Grype — vulnerability scanner for SBOMs and container images.
 
-category: [artifact-scan]
+category: [vulnerability-scan]
 
 upstream:
   name: Grype

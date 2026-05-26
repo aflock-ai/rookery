@@ -43,16 +43,26 @@ type DetectorYAML struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description,omitempty"`
 
-	// Category labels what role this detector's evidence serves in the
-	// supply chain. Closed enum (see categories.go); list because some
-	// detectors serve multiple lifecycle contexts (e.g. trivy can run
-	// in CI as artifact-scan or against production registries as
-	// posture-scan). Required for new detector.yamls.
+	// Category labels what kind of supply-chain step this detector's
+	// evidence represents. Closed enum (see categories.go); list because
+	// a detector can legitimately serve more than one role (e.g. trivy
+	// runs in CI as vulnerability-scan, and the same CLI rescans a
+	// production registry as runtime-vulnerability-detect). Required
+	// for new detector.yamls; format-only adapters (sarif, vex,
+	// test-results) omit the field because the step intent depends on
+	// the tool that produced the file, not the format itself.
 	//
 	// The agent uploading evidence to the platform reads category to
-	// route the upload. The platform's compliance mapping consumes
-	// (category, predicate URI, optional provides) to produce verdicts.
+	// route the upload. cilock run uses the matched detector's primary
+	// category to auto-default --step when the producer omits it.
 	Category []Category `yaml:"category,omitempty"`
+
+	// PrimaryCategory selects which entry in Category is used to
+	// auto-default --step. Required when len(Category) > 1. Must appear
+	// in Category. When len(Category) == 1, this field is optional and
+	// defaults to that single entry. When Category is empty, this field
+	// must also be empty.
+	PrimaryCategory Category `yaml:"primary_category,omitempty"`
 
 	// Upstream describes the third-party tool whose output this
 	// detector captures. Optional but recommended — surfaces in
@@ -270,7 +280,7 @@ func validateDetectorYAML(d *DetectorYAML) error {
 	default:
 		return fmt.Errorf("detector.yaml recommended_trace %q must be one of off|light|full (default: off)", d.RecommendedTrace)
 	}
-	if err := validateCategories(d.Category); err != nil {
+	if err := validateCategories(d.Category, d.PrimaryCategory); err != nil {
 		return err
 	}
 	if err := validateUpstream(d.Upstream); err != nil {
@@ -407,13 +417,20 @@ func validateTaggedPredicate(p *Predicate, tag string, gate Gate, path string) e
 	return nil
 }
 
-// validateCategories enforces the closed enum + dedup + non-empty.
-// Categories are optional for now (older detector.yamls may predate the
-// field) but if present must validate. New detectors should always
-// declare at least one category.
-func validateCategories(cats []Category) error {
+// validateCategories enforces the closed enum, dedup, and the
+// primary_category invariants:
+//   - empty category list is allowed (format-only adapters);
+//     primary_category must also be empty in that case.
+//   - len(category) == 1: primary_category optional; if set, must equal
+//     the sole entry.
+//   - len(category) >= 2: primary_category required and must appear in
+//     the category list.
+func validateCategories(cats []Category, primary Category) error {
 	if len(cats) == 0 {
-		return nil // optional for now; drift-guard test enforces non-empty for new yamls
+		if primary != "" {
+			return fmt.Errorf("detector.yaml primary_category %q set without any category entries", primary)
+		}
+		return nil
 	}
 	seen := make(map[Category]bool, len(cats))
 	for _, c := range cats {
@@ -424,6 +441,19 @@ func validateCategories(cats []Category) error {
 			return fmt.Errorf("detector.yaml category %q duplicated", c)
 		}
 		seen[c] = true
+	}
+	switch len(cats) {
+	case 1:
+		if primary != "" && primary != cats[0] {
+			return fmt.Errorf("detector.yaml primary_category %q must equal the sole category %q (or be omitted)", primary, cats[0])
+		}
+	default:
+		if primary == "" {
+			return fmt.Errorf("detector.yaml primary_category is required when category has multiple entries (%v)", cats)
+		}
+		if !seen[primary] {
+			return fmt.Errorf("detector.yaml primary_category %q must appear in category %v", primary, cats)
+		}
 	}
 	return nil
 }

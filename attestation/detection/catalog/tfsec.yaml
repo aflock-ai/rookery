@@ -7,7 +7,8 @@ detection_only: true
 
 description: tfsec — Terraform-specific static analysis (Aqua Security).
 
-category: [artifact-scan]
+category: [vulnerability-scan, compliance-scan]
+primary_category: vulnerability-scan
 
 upstream:
   name: tfsec

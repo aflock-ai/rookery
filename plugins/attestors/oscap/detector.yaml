@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: oscap
 description: "Captures OpenSCAP compliance / vulnerability scan results."
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: OpenSCAP

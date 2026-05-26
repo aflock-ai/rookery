@@ -7,7 +7,7 @@ detection_only: true
 
 description: Gitleaks — secret detection in git history and source.
 
-category: [artifact-scan]
+category: [secret-scan]
 
 upstream:
   name: Gitleaks

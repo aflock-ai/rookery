@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: trivy
 description: "Captures Trivy vulnerability and misconfiguration scan results."
 
-category: [artifact-scan, posture-scan]
+category: [vulnerability-scan]
 
 upstream:
   name: Trivy

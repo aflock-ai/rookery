@@ -7,7 +7,7 @@ detection_only: true
 
 description: HashiCorp Vault CLI — secret distribution / dynamic credentials.
 
-category: [runtime]
+category: [key-ceremony]
 
 upstream:
   name: HashiCorp Vault

@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: git
 description: "Captures git repository state (commit, status, tags, signatures) when run inside a git checkout."
 
-category: [build]
+category: [source-checkout]
 
 upstream:
   name: Git

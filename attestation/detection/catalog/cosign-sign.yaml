@@ -7,7 +7,7 @@ detection_only: true
 
 description: Sigstore cosign — container/artifact signing (validated via cosign sign-blob with a local ED25519 key).
 
-category: [statement]
+category: [sign]
 
 upstream:
   name: cosign

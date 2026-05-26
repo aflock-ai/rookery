@@ -114,7 +114,7 @@ func toolsListCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&format, "format", "table", "Output format: table (default) or json")
 	cmd.Flags().StringVar(&source, "source", "", "Filter: attestor-backed | catalog-only")
-	cmd.Flags().StringVar(&category, "category", "", "Filter: build | artifact-scan | statement | posture-scan | runtime")
+	cmd.Flags().StringVar(&category, "category", "", "Filter by lexicon category (see docs/lexicon-v1.md). Examples: build, vulnerability-scan, ci-context, code-review, sbom-generate, image-build")
 	return cmd
 }
 

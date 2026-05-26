@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: sinkhole-flows
 description: "Captures HTTP(S) flows collected by the pip-witness sinkhole proxy (intended for pip install observability)."
 
-category: [build]
+category: [dependency-verify]
 
 upstream:
   name: pip-witness sinkhole

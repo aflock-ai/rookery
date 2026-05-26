@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: oci
 description: "Captures OCI image / artifact provenance from docker save, skopeo copy, or OCI image layouts."
 
-category: [build]
+category: [image-build]
 
 upstream:
   name: OCI Image Specification

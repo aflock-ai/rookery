@@ -7,7 +7,7 @@ detection_only: true
 
 description: kustomize build — declarative K8s manifest customization.
 
-category: [build, posture-scan]
+category: [manifest-validate]
 
 upstream:
   name: Kustomize

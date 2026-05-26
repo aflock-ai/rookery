@@ -7,7 +7,7 @@ detection_only: true
 
 description: Semgrep — open-source static analysis with SARIF / JSON output.
 
-category: [artifact-scan]
+category: [vulnerability-scan]
 
 upstream:
   name: Semgrep

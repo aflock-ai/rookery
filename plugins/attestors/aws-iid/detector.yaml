@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: aws
 description: "Captures the AWS Instance Identity Document when running on EC2 (or any host that can reach the EC2 IMDS endpoint)."
 
-category: [build]
+category: [ci-context]
 
 upstream:
   name: AWS Instance Metadata Service

@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: falco
 description: "Captures runtime security events from Falco (Cloud Native Computing Foundation runtime threat detection)."
 
-category: [runtime]
+category: [runtime-event]
 
 upstream:
   name: Falco

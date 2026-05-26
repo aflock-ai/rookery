@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: govulncheck
 description: "Captures Go call-graph-aware vulnerability scan results from `govulncheck`."
 
-category: [artifact-scan]
+category: [vulnerability-scan]
 
 upstream:
   name: govulncheck

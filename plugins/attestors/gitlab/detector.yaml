@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: gitlab
 description: "Captures GitLab CI runner context (job, pipeline, project, runner, optional JWT) when running inside a GitLab CI job."
 
-category: [build]
+category: [ci-context]
 
 upstream:
   name: GitLab CI/CD
