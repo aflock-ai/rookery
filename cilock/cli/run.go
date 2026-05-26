@@ -62,7 +62,19 @@ func RunCmd() *cobra.Command {
 				return fmt.Errorf("failed to load signers: %w", err)
 			}
 
-			return runRun(cmd.Context(), o, args, signers...)
+			// Capture which registry-derived flags the operator
+			// explicitly set on the command line. The product
+			// attestor's precedence table treats a user-set
+			// --attestor-product-include-glob as a rescue signal
+			// that overrides default cache classification; without
+			// the Changed() bit we can't distinguish "user typed *"
+			// from "default *". cobra is the only layer that has
+			// this signal.
+			userSetFlags := map[string]bool{
+				"attestor-product-include-glob": cmd.Flags().Changed("attestor-product-include-glob"),
+			}
+
+			return runRun(cmd.Context(), o, args, userSetFlags, signers...)
 		},
 		Args: cobra.ArbitraryArgs,
 	}
@@ -71,7 +83,7 @@ func RunCmd() *cobra.Command {
 	return cmd
 }
 
-func runRun(ctx context.Context, ro options.RunOptions, args []string, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
+func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFlags map[string]bool, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
 	if len(signers) > 1 {
 		return fmt.Errorf("only one signer is supported")
 	}
@@ -132,6 +144,23 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 			return fmt.Errorf("failed to set attestor option for %v: %w", attestor.Type(), err)
 		}
 		attestors[i] = updated
+	}
+
+	// Stamp user-intent flags on the product attestor AFTER the
+	// registry option setters have run. The registry layer only sees
+	// flag values, not whether the value came from the operator or
+	// the default. The precedence table in product.Attest needs the
+	// Changed() bit to decide whether to treat the include-glob as a
+	// rescue signal (operator intent) or just a filter (default).
+	if userSetFlags["attestor-product-include-glob"] {
+		for i, attestor := range attestors {
+			prod, ok := attestor.(*product.Attestor)
+			if !ok {
+				continue
+			}
+			product.WithIncludeGlobUserIntent(true)(prod)
+			attestors[i] = prod
+		}
 	}
 
 	var roHashes []cryptoutil.DigestValue
@@ -207,6 +236,17 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, signers .
 	if runErr != nil && len(results) == 0 {
 		return runErr
 	}
+
+	// Empty-bundle warning. After the run completes, if the operator
+	// wrapped a successful command but every traced write was filtered
+	// out by cache classification or product globs, the signed
+	// envelope will contain no binary subject. That's almost always a
+	// misconfiguration — typical case: build output landed under
+	// /tmp/** (a default cache pattern) and the operator didn't pass
+	// --cache-allow-pattern or --attestor-product-include-glob to
+	// rescue it. Surfacing this before sign-and-write turns a silent
+	// failure into a loud one. (Fixes blind Linux UX test Bug 1.)
+	warnEmptyProductBundle(attestors)
 
 	// When multiple results are produced (e.g. MultiExporter attestors), an output
 	// file path is required — otherwise exported attestors would create files named
@@ -357,6 +397,55 @@ func indexByte(s string, c byte) int {
 		}
 	}
 	return -1
+}
+
+// warnEmptyProductBundle logs a triple-line warning when:
+//
+//   - cilock wrapped a command (commandrun attestor present)
+//   - the command exited 0 (or ignore-exit-code is in play, but even
+//     then the build "succeeded" enough to reach product attestation)
+//   - the product set is empty
+//   - the trace observed >0 writes — i.e., something WAS dropped
+//     during classification rather than the build genuinely emitting
+//     nothing
+//
+// Conditions chosen so the warning fires on the silent-failure case
+// (cache pattern ate everything) but stays quiet when the user
+// genuinely ran a no-op or non-build command. The warning prints
+// before the bundle is written, on stderr; the run still completes
+// (the attestation is the real artifact, even if empty).
+func warnEmptyProductBundle(attestors []attestation.Attestor) {
+	var prod *product.Attestor
+	var cmd *commandrun.CommandRun
+	for _, a := range attestors {
+		if p, ok := a.(*product.Attestor); ok {
+			prod = p
+		}
+		if c, ok := a.(*commandrun.CommandRun); ok {
+			cmd = c
+		}
+	}
+	// Required state: a command ran, it exited 0, and we have a
+	// product attestor we can interrogate.
+	if prod == nil || cmd == nil {
+		return
+	}
+	if cmd.ExitCode != 0 {
+		return
+	}
+	if len(prod.Products()) > 0 {
+		return
+	}
+	dropped := prod.DroppedByClassification()
+	if dropped == 0 {
+		// Trace observed no writes — this isn't the silent-drop
+		// failure; the operator simply ran a command that didn't
+		// produce files. Stay quiet.
+		return
+	}
+	log.Warnf("command exited 0 and traced %d file write(s), but all were classified as cache or filtered out.", dropped)
+	log.Warnf("products set is empty — the signed envelope will NOT include any binary subject.")
+	log.Warnf("Check: build output path vs --workingdir, --attestor-product-include-glob, --cache-allow-pattern <pattern>")
 }
 
 // emitRunSidecars walks the attestor list looking for product and
