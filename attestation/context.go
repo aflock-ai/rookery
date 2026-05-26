@@ -17,6 +17,7 @@ package attestation
 import (
 	"context"
 	"crypto"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -65,6 +66,51 @@ type ErrAttestor struct {
 
 func (e ErrAttestor) Error() string {
 	return fmt.Sprintf("error returned for attestor %s of run type %s: %s", e.Name, e.RunType, e.Reason)
+}
+
+// SoftError marks an attestor error as a "nothing to do" outcome rather than a
+// contract violation. The CLI layer demotes wrapped errors to warnings and
+// keeps the exit code at zero. Use this when an attestor ran successfully but
+// the project didn't produce the kind of evidence the attestor wraps (e.g.
+// sbom found no SBOM file, go-build saw no Go binary). Do NOT use it for
+// signer failures, tracing-unsupported, key parse errors, or any other case
+// where the attestor's contract was violated — those must surface as fatal
+// (exit code 1) so CI can gate on cilock's exit code.
+//
+// Fixes finding #221 (exit-code inconsistency between attestor failure
+// classes).
+type SoftError struct {
+	// Reason is the underlying short message the attestor would have
+	// logged. Kept as a string so callers don't have to wrap a typed
+	// error just to be classified as soft.
+	Reason string
+}
+
+// Error implements error. The "soft:" prefix is purely for log readers; the
+// classification itself is by type, not string match.
+func (e SoftError) Error() string {
+	if e.Reason == "" {
+		return "soft: attestor had nothing to do"
+	}
+	return "soft: " + e.Reason
+}
+
+// NewSoftError returns a SoftError wrapping the given reason string. Helper
+// so attestors don't have to import the SoftError struct literal directly
+// everywhere they classify a "nothing to do" outcome.
+func NewSoftError(reason string) error {
+	return SoftError{Reason: reason}
+}
+
+// IsSoftError reports whether err (or any error in its unwrap chain) is a
+// SoftError. Use on individual joined-error legs to decide whether to treat
+// the leg as a warning or a fatal failure.
+func IsSoftError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var s SoftError
+	return errors.As(err, &s)
 }
 
 type AttestationContextOption func(ctx *AttestationContext)
