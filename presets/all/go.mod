@@ -18,6 +18,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/aws-iid => ../../plugins/
 
 replace github.com/aflock-ai/rookery/plugins/attestors/commandrun => ../../plugins/attestors/commandrun
 
+replace github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf => ../../plugins/attestors/commandrun/ebpf
+
 replace github.com/aflock-ai/rookery/plugins/attestors/configuration => ../../plugins/attestors/configuration
 
 replace github.com/aflock-ai/rookery/plugins/attestors/docker => ../../plugins/attestors/docker
@@ -34,15 +36,11 @@ replace github.com/aflock-ai/rookery/plugins/attestors/git => ../../plugins/atte
 
 replace github.com/aflock-ai/rookery/plugins/attestors/github => ../../plugins/attestors/github
 
-replace github.com/aflock-ai/rookery/plugins/attestors/github-review => ../../plugins/attestors/github-review
-
 replace github.com/aflock-ai/rookery/plugins/attestors/githubaction => ../../plugins/attestors/githubaction
 
 replace github.com/aflock-ai/rookery/plugins/attestors/githubwebhook => ../../plugins/attestors/githubwebhook
 
 replace github.com/aflock-ai/rookery/plugins/attestors/gitlab => ../../plugins/attestors/gitlab
-
-replace github.com/aflock-ai/rookery/plugins/attestors/go-build => ../../plugins/attestors/go-build
 
 replace github.com/aflock-ai/rookery/plugins/attestors/govulncheck => ../../plugins/attestors/govulncheck
 
@@ -127,7 +125,7 @@ replace github.com/aflock-ai/rookery/plugins/signers/vault-transit => ../../plug
 
 require (
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
-	github.com/aflock-ai/rookery/cilock v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/cilock v0.0.0-20260526030653-bb247c9ce799
 	github.com/aflock-ai/rookery/plugins/attestors/asff v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-config v0.0.0-00010101000000-000000000000
@@ -141,11 +139,11 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/gcp-iit v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/git v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/github v0.0.0-00010101000000-000000000000
-	github.com/aflock-ai/rookery/plugins/attestors/github-review v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/github-review v0.0.0-20260526031329-c5a7d8b6c1d3
 	github.com/aflock-ai/rookery/plugins/attestors/githubaction v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/githubwebhook v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gitlab v0.0.0-00010101000000-000000000000
-	github.com/aflock-ai/rookery/plugins/attestors/go-build v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/go-build v0.0.0-20260526031329-c5a7d8b6c1d3
 	github.com/aflock-ai/rookery/plugins/attestors/govulncheck v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/inspec v0.0.0-00010101000000-000000000000
@@ -212,6 +210,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
+	github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf v0.0.0-00010101000000-000000000000 // indirect
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.1 // indirect
@@ -240,6 +239,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/lipgloss v0.5.0 // indirect
+	github.com/cilium/ebpf v0.18.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/coreos/go-oidc/v3 v3.17.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.4.1 // indirect
@@ -417,6 +417,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-// For cmd/cilock-all dev target — pulls in cilock/cli.
-replace github.com/aflock-ai/rookery/cilock => ../../cilock

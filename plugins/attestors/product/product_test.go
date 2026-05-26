@@ -510,6 +510,16 @@ func attestWithTracedCommandRun(t *testing.T, proc commandrun.ProcessInfo) *Atte
 		"test",
 		[]attestation.Attestor{cmd},
 		attestation.WithWorkingDir(dir),
+		// t.TempDir() returns paths under /var/folders/** (macOS) or
+		// /tmp/** (Linux) — both are in DefaultCachePatterns, so the
+		// cache matcher would correctly classify the rename target as
+		// "temp" and drop it from the product set. Disable the cache
+		// classifier here so the test exercises rename → product
+		// classification specifically, not the cache-filter interaction.
+		attestation.WithCachePatternOptions(attestation.CachePatternOptions{
+			DisableDefaults:    true,
+			DisableSystemQuery: true,
+		}),
 	)
 	require.NoError(t, err)
 
@@ -519,9 +529,27 @@ func attestWithTracedCommandRun(t *testing.T, proc commandrun.ProcessInfo) *Atte
 	// CommandRun is visible downstream.
 	_ = ctx.RunAttestors()
 
+	// Default include glob is "*", which gobwas/glob matches across
+	// path separators, so the absolute resolved key (e.g.
+	// /var/folders/.../out) is matched. Default products map keys
+	// are likewise absolute since ddea2c1 — assertions need to look
+	// up the resolved path, not the original relative "out".
 	prod := New()
 	require.NoError(t, prod.Attest(ctx))
 	return prod
+}
+
+// productKeyEndingIn finds a product key whose path component ends in
+// the relative path the test cares about. Lets the test assert on a
+// stable relative anchor while the production code stores absolute
+// keys (post-ddea2c1) that vary across t.TempDir() invocations.
+func productKeyEndingIn(products map[string]attestation.Product, rel string) bool {
+	for k := range products {
+		if strings.HasSuffix(k, "/"+rel) || k == rel {
+			return true
+		}
+	}
+	return false
 }
 
 // TestAttest_TracedRenamedFile_StillCaptured is the regression test for
@@ -542,9 +570,9 @@ func TestAttest_TracedRenamedFile_StillCaptured(t *testing.T) {
 	})
 
 	products := prod.Products()
-	_, ok := products["out"]
+	ok := productKeyEndingIn(products, "out")
 	require.True(t, ok,
-		"product `out` (rename destination) must be in capture set under --trace; "+
+		"product ending in `/out` (rename destination, workdir-resolved) must be in capture set under --trace; "+
 			"got products = %v", productKeys(products))
 }
 
@@ -563,9 +591,9 @@ func TestAttest_TracedDirectlyWrittenFile_StillCaptured(t *testing.T) {
 	})
 
 	products := prod.Products()
-	_, ok := products["out"]
+	ok := productKeyEndingIn(products, "out")
 	require.True(t, ok,
-		"product `out` (direct write target) must be in capture set under --trace; "+
+		"product ending in `/out` (direct write target, workdir-resolved) must be in capture set under --trace; "+
 			"got products = %v", productKeys(products))
 }
 

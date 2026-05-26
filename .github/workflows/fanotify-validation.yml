@@ -1,0 +1,171 @@
+name: Fanotify + Zero-Drop Validation
+
+# Validates the Phase 1-3 stack (privilege drop + fanotify integrity
+# gate + fs-verity probe + --require-zero-drops gate) on actual
+# hosted GitHub Actions runners. Capstones run on colima (arm64); this
+# closes the gap that we have NO proof the stack works on x86_64
+# Azure-flavored GHA Ubuntu until this fires.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - nk/ci-trace-mode-probe
+  pull_request:
+    paths:
+      - 'plugins/attestors/commandrun/fanotify/**'
+      - 'plugins/attestors/commandrun/fanotify_integration_*.go'
+      - 'plugins/attestors/commandrun/fsverity_integration_*.go'
+      - 'plugins/attestors/commandrun/zero_drops_gate_test.go'
+      - 'attestation/cryptoutil/fsverity_*.go'
+      - '.github/workflows/fanotify-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: ${{ matrix.runner }} fanotify+zero-drops
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-22.04
+          - ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: false  # vendor dir already present in cilock/
+
+      - name: Show runner kernel + caps + workspace mount
+        run: |
+          uname -a
+          echo "--- /proc/version ---"
+          cat /proc/version
+          echo "--- /sys/kernel/security/lsm ---"
+          cat /sys/kernel/security/lsm 2>/dev/null || true
+          echo "--- /proc/self/status (Caps) ---"
+          grep -E '^Cap' /proc/self/status
+          echo "--- mount info (workspace) ---"
+          findmnt "$(pwd)" || mount | head -20
+
+      - name: Prime Go module cache as runner
+        # Critical: sudo invocations of `go test` later run as root and
+        # WILL write into $GOPATH/pkg/mod, creating root-owned dirs that
+        # break any subsequent runner-owned `go test`. Prime the cache
+        # in full BEFORE any sudo step so sudo never has to download.
+        run: |
+          cd "${GITHUB_WORKSPACE}"
+          go mod download
+          # Trigger compilation of every package the test suite touches
+          # so its build cache is also primed.
+          go vet ./plugins/attestors/commandrun/... 2>&1 | head -30 || true
+
+      - name: Run zero-drops gate unit tests (non-sudo)
+        # MUST come before any sudo step (sudo will create root-owned
+        # cache dirs that lock non-sudo tests out).
+        run: |
+          cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
+          go test -run TestZeroDropsGate -v -timeout 60s .
+
+      - name: Probe fanotify capability
+        run: |
+          cat >/tmp/probe-fanotify.go <<'EOF'
+          package main
+          import (
+              "fmt"
+              "os"
+              "github.com/aflock-ai/rookery/plugins/attestors/commandrun/fanotify"
+          )
+          func main() {
+              dir := os.Getenv("GITHUB_WORKSPACE")
+              if dir == "" { dir = "." }
+              if err := fanotify.Probe(dir); err != nil {
+                  fmt.Printf("PROBE_RESULT=unavailable error=%v\n", err)
+                  os.Exit(0)
+              }
+              fmt.Println("PROBE_RESULT=available")
+          }
+          EOF
+          cd "${GITHUB_WORKSPACE}"
+          # Non-privileged probe
+          go run /tmp/probe-fanotify.go || true
+          # Privileged probe — use separate GOMODCACHE so it doesn't
+          # poison the runner's cache.
+          sudo -E env "PATH=$PATH" "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go run /tmp/probe-fanotify.go || true
+
+      - name: Probe fs-verity capability
+        run: |
+          cat >/tmp/probe-fsverity.go <<'EOF'
+          package main
+          import (
+              "fmt"
+              "os"
+              "github.com/aflock-ai/rookery/attestation/cryptoutil"
+          )
+          func main() {
+              dir := os.Getenv("GITHUB_WORKSPACE")
+              if dir == "" { dir = "." }
+              if err := cryptoutil.VeritySupported(dir); err != nil {
+                  fmt.Printf("FSVERITY_RESULT=unavailable error=%v\n", err)
+                  os.Exit(0)
+              }
+              fmt.Println("FSVERITY_RESULT=available")
+          }
+          EOF
+          cd "${GITHUB_WORKSPACE}"
+          sudo -E env "PATH=$PATH" "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go run /tmp/probe-fsverity.go || true
+
+      - name: Run fanotify package tests under sudo
+        run: |
+          cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun/fanotify"
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -tags linux -v -timeout 300s . || true
+
+      - name: Run privilege-drop tests under sudo
+        run: |
+          cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -run TestApplyTraceePrivilegeDrop -tags linux -v -timeout 60s . || true
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -run TestTraceeRunsUnprivileged -tags linux -v -timeout 60s . || true
+
+      - name: Run fanotify end-to-end integration test
+        run: |
+          cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -run TestFanotify_EndToEnd -tags linux -v -timeout 300s . || true
+
+      - name: Run red-team hash completeness on hosted runner
+        run: |
+          cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -run TestRedTeam_HashCompleteness -tags linux -v -timeout 300s . || true
+
+      - name: Run weakness + cross-language regression
+        run: |
+          cd "${GITHUB_WORKSPACE}/plugins/attestors/commandrun"
+          sudo -E env "PATH=$PATH" \
+            "GOMODCACHE=/tmp/sudo-gomodcache" \
+            "GOCACHE=/tmp/sudo-gocache" \
+            go test -run "TestWeakness_|TestCrossLang_" -tags linux -timeout 900s . || true

@@ -1,0 +1,123 @@
+name: Probe Trace Modes
+
+# Probes what tracing/eBPF capabilities are available across the GH
+# Actions runner configurations cilock might encounter, to inform the
+# choice of default tracing mode (ptrace+seccomp vs eBPF).
+#
+# Run manually via workflow_dispatch.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - nk/ci-trace-mode-probe
+
+permissions:
+  contents: read
+
+jobs:
+  hosted-default:
+    name: Hosted ubuntu-latest (no container, default user)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build probe
+        run: |
+          cd .github/probes/trace-capability-probe
+          GOWORK=off go build -o /tmp/probe .
+      - name: Run probe (as runner user)
+        run: /tmp/probe | tee report-hosted-default.json
+      - name: Run probe (via sudo)
+        run: sudo /tmp/probe | tee report-hosted-root.json
+      - name: Show recommendation lines
+        run: |
+          echo "=== hosted-default ==="
+          jq .recommendation report-hosted-default.json
+          jq .capabilities report-hosted-default.json
+          echo "=== hosted-root ==="
+          jq .recommendation report-hosted-root.json
+          jq .capabilities report-hosted-root.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hosted-reports
+          path: report-*.json
+
+  hosted-container-default:
+    name: Hosted ubuntu-latest (inside default Docker container)
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Go (container has no Go by default)
+        run: |
+          apt-get update -q
+          apt-get install -y -q golang ca-certificates jq sudo
+      - name: Build probe
+        run: |
+          cd .github/probes/trace-capability-probe
+          GOWORK=off go build -o /tmp/probe .
+      - name: Run probe (container default user — likely root)
+        run: /tmp/probe | tee report-container-default.json
+      - name: Show
+        run: jq '.recommendation,.capabilities' report-container-default.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: container-default-report
+          path: report-container-default.json
+
+  hosted-container-with-bpf-cap:
+    name: Hosted ubuntu-latest (Docker container with --cap-add=BPF,PERFMON)
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+      options: --cap-add=BPF --cap-add=PERFMON --cap-add=SYS_PTRACE
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          apt-get update -q
+          apt-get install -y -q golang ca-certificates jq
+      - name: Build probe
+        run: |
+          cd .github/probes/trace-capability-probe
+          GOWORK=off go build -o /tmp/probe .
+      - name: Run probe
+        run: /tmp/probe | tee report-container-bpf.json
+      - name: Show
+        run: jq '.recommendation,.capabilities' report-container-bpf.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: container-bpf-report
+          path: report-container-bpf.json
+
+  summary:
+    name: Summary
+    needs: [hosted-default, hosted-container-default, hosted-container-with-bpf-cap]
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Print all reports
+        run: |
+          echo "## Trace-mode probe results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Configuration | Recommendation | ptrace | seccomp | eBPF map | eBPF prog |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          for dir in hosted-reports container-default-report container-bpf-report; do
+            for f in $dir/*.json; do
+              [ -f "$f" ] || continue
+              name=$(basename "$f" .json)
+              rec=$(jq -r .recommendation "$f")
+              ptrace=$(jq -r '.ptrace.attachWorks' "$f")
+              seccomp=$(jq -r '.seccompBPF.filterInstallWorks' "$f")
+              ebpfmap=$(jq -r '.ebpf.mapCreateWorks' "$f")
+              ebpfprog=$(jq -r '.ebpf.progLoadWorks' "$f")
+              echo "| $name | $rec | $ptrace | $seccomp | $ebpfmap | $ebpfprog |" >> $GITHUB_STEP_SUMMARY
+            done
+          done
+          cat $GITHUB_STEP_SUMMARY
