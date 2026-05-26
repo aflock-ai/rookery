@@ -15,8 +15,8 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -164,8 +164,9 @@ func keyidForFile(path string) (string, error) {
 		return "", fmt.Errorf("read %s: %w", path, err)
 	}
 
-	// Try as private key first.
-	if signer, sErr := cryptoutil.NewSignerFromReader(byteReader(raw)); sErr == nil {
+	// Try as private key first. Each parse consumes its reader so we
+	// hand a fresh bytes.Reader to each attempt.
+	if signer, sErr := cryptoutil.NewSignerFromReader(bytes.NewReader(raw)); sErr == nil {
 		kid, kErr := signer.KeyID()
 		if kErr == nil {
 			return kid, nil
@@ -174,39 +175,13 @@ func keyidForFile(path string) (string, error) {
 	}
 
 	// Fall back to public key.
-	verifier, vErr := cryptoutil.NewVerifierFromReader(byteReader(raw))
+	verifier, vErr := cryptoutil.NewVerifierFromReader(bytes.NewReader(raw))
 	if vErr != nil {
-		return "", fmt.Errorf("file %s is not a recognized public or private PEM key (private: %w; public: %w)",
-			path, errParsePriv, vErr)
+		return "", fmt.Errorf("file %s is not a recognized public or private PEM key: %w", path, vErr)
 	}
 	kid, kErr := verifier.KeyID()
 	if kErr != nil {
 		return "", fmt.Errorf("derive keyid from public key %s: %w", path, kErr)
 	}
 	return kid, nil
-}
-
-// errParsePriv is a sentinel used inside keyidForFile's wrapped error
-// for the private-key parse leg. Keeping it as a package var keeps the
-// error message structure stable for tests.
-var errParsePriv = errors.New("not a private key")
-
-// byteReader is a tiny io.Reader factory; we need a fresh reader for
-// each parse attempt because Signer/Verifier readers consume the input.
-func byteReader(b []byte) io.Reader {
-	return &readerOnce{b: b}
-}
-
-type readerOnce struct {
-	b []byte
-	o int
-}
-
-func (r *readerOnce) Read(p []byte) (int, error) {
-	if r.o >= len(r.b) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.o:])
-	r.o += n
-	return n, nil
 }
