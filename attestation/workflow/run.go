@@ -162,6 +162,22 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 		return result, fmt.Errorf("failed to run attestors: %w", err)
 	}
 
+	// Compute the parent-subject pool ONCE: the union of subjects from
+	// every non-exported attestor (git, material, product, …) plus the
+	// user-supplied additional subjects. This is the same anchor set the
+	// wrapping collection envelope's subjects[] will carry.
+	//
+	// Each exported sidecar envelope (sbom, slsa, link, vex, …) is then
+	// signed with `parentSubjects ∪ exporter.Subjects()`. Without this,
+	// the sidecar only carries its own internal subjects (file digests
+	// of the predicate body), which don't overlap with the seed subjects
+	// users pass to `cilock verify -s <commit>` — verify's
+	// ExternalAttestation lookup returns 0 envelopes even though the
+	// sidecar is on disk and signed by a trusted functionary. Bug
+	// surfaced by the prometheus blind-test (cf. `cilock policy
+	// from-bundles` sidecar discovery, PR #186).
+	parentSubjects := collectParentSubjects(runCtx, ro.additionalSubjects)
+
 	errs := make([]error, 0)
 	for _, r := range runCtx.CompletedAttestors() {
 		if r.Error != nil { //nolint:nestif
@@ -181,15 +197,15 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 					}
 
 					var envelope dsse.Envelope
-					var subjects map[string]cryptoutil.DigestSet
+					var ownSubjects map[string]cryptoutil.DigestSet
 
 					// Get subjects if the exported attestor implements Subjecter
 					if subjecter, ok := exportedAttestor.(attestation.Subjecter); ok {
-						subjects = subjecter.Subjects()
+						ownSubjects = subjecter.Subjects()
 					}
 
 					if !ro.insecure {
-						envelope, err = createAndSignEnvelope(exportedAttestor, exportedAttestor.Type(), subjects, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						envelope, err = createAndSignEnvelope(exportedAttestor, exportedAttestor.Type(), mergeCollectionSubjects(parentSubjects, ownSubjects), dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 						if err != nil {
 							return result, fmt.Errorf("failed to sign envelope for %s: %w", exportedAttestor.Name(), err)
 						}
@@ -208,7 +224,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 				if subjecter, ok := r.Attestor.(attestation.Subjecter); ok {
 					var envelope dsse.Envelope
 					if !ro.insecure {
-						envelope, err = createAndSignEnvelope(r.Attestor, r.Attestor.Type(), subjecter.Subjects(), dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						envelope, err = createAndSignEnvelope(r.Attestor, r.Attestor.Type(), mergeCollectionSubjects(parentSubjects, subjecter.Subjects()), dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 						if err != nil {
 							return result, fmt.Errorf("failed to sign envelope: %w", err)
 						}
@@ -265,6 +281,49 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	result = append(result, collectionResult)
 
 	return result, attestorErr
+}
+
+// collectParentSubjects walks the completed attestors and assembles
+// the subject pool that the wrapping collection envelope will carry.
+// Subjects from any attestor opting OUT of the collection (i.e.,
+// implementing Exporter with Export()==true, or MultiExporter) are
+// excluded — those attestors carry their own subjects in their
+// sidecar envelopes, and inheriting them here would create a
+// circular subject graph (sidecar carrying its own digest as a
+// subject to itself).
+//
+// User-supplied additional subjects are merged on top with precedence
+// matching mergeCollectionSubjects.
+//
+// This pool is then unioned with each exported attestor's own
+// subjects when signing its sidecar — see the export loop in run().
+// Without it, a sidecar's subjects don't overlap with the seed
+// subjects users pass to `cilock verify -s <commit>`, and
+// ExternalAttestation lookups fail with "not found" even though the
+// envelope is loaded and trusted.
+func collectParentSubjects(runCtx *attestation.AttestationContext, additional map[string]cryptoutil.DigestSet) map[string]cryptoutil.DigestSet {
+	pool := make(map[string]cryptoutil.DigestSet)
+	for _, completed := range runCtx.CompletedAttestors() {
+		if completed.Error != nil {
+			continue
+		}
+		// Skip attestors that emit their own sidecar — we're computing
+		// the *non-sidecar* subject pool.
+		if _, ok := completed.Attestor.(attestation.MultiExporter); ok {
+			continue
+		}
+		if exp, ok := completed.Attestor.(attestation.Exporter); ok && exp.Export() {
+			continue
+		}
+		subjecter, ok := completed.Attestor.(attestation.Subjecter)
+		if !ok {
+			continue
+		}
+		for name, digest := range subjecter.Subjects() {
+			pool[name] = digest
+		}
+	}
+	return mergeCollectionSubjects(pool, additional)
 }
 
 // mergeCollectionSubjects returns the union of attestor-discovered subjects
