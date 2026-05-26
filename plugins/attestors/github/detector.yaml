@@ -1,0 +1,20 @@
+apiVersion: cilock.detection/v0.1
+name: github
+description: "Captures GitHub Actions runner context (workflow, job, run ID, repository, OIDC token claims) when running inside a GitHub Actions job."
+
+category: [build]
+
+upstream:
+  name: GitHub Actions
+  source: "https://docs.github.com/en/actions"
+  license: proprietary
+  vendor: GitHub, Inc.
+
+pre:
+  match:
+    env_equals:
+      var: GITHUB_ACTIONS
+      value: "true"
+
+llm_hints:
+  on_match: "GitHub Actions runner context captured (workflow, job, run id, repository)."

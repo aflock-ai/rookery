@@ -1,0 +1,18 @@
+apiVersion: cilock.detection/v0.1
+name: aws-codebuild
+description: "Captures AWS CodeBuild context (project name, build ID, batch build ID, region) when running inside an AWS CodeBuild job."
+
+category: [build]
+
+upstream:
+  name: AWS CodeBuild
+  source: "https://aws.amazon.com/codebuild/"
+  license: proprietary
+  vendor: Amazon Web Services
+
+pre:
+  match:
+    env_set: CODEBUILD_PROJECT_NAME
+
+llm_hints:
+  on_match: "AWS CodeBuild context captured (project, build id, batch id, region)."

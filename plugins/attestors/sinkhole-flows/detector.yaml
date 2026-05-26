@@ -1,0 +1,18 @@
+apiVersion: cilock.detection/v0.1
+name: sinkhole-flows
+description: "Captures HTTP(S) flows collected by the pip-witness sinkhole proxy (intended for pip install observability)."
+
+category: [build]
+
+upstream:
+  name: pip-witness sinkhole
+  source: "https://github.com/testifysec/pip-witness"
+  license: Apache-2.0
+  vendor: TestifySec
+
+pre:
+  match:
+    env_set: PIPW_PACKAGE_NAME
+
+llm_hints:
+  on_match: "Sinkhole flows captured. Inbound/outbound HTTPS request/response bodies preserved for the named pip package."

@@ -1,0 +1,37 @@
+apiVersion: cilock.detection/v0.1
+name: trivy
+description: "Captures Trivy vulnerability and misconfiguration scan results."
+
+category: [artifact-scan, posture-scan]
+
+upstream:
+  name: Trivy
+  source: "https://github.com/aquasecurity/trivy"
+  license: Apache-2.0
+  vendor: Aqua Security
+
+# Trivy output is what we sign; we trust trivy to enumerate findings.
+recommended_trace: "off"
+
+# Pre-gate match: user invoked trivy directly (cilock plan -- trivy image foo).
+# This is a hint that trivy will fire — the actual attestation happens
+# post-execute when the scan output is on disk.
+pre:
+  match:
+    argv_prefix: ["trivy"]
+
+post:
+  # Trivy's output filename is user-chosen (trivy's own --help shows
+  # `--output result.json` as the example). product_glob can't reliably
+  # detect arbitrary user-chosen names, so we trust exec_observed as
+  # the primary signal — if the user invoked trivy, the attestation
+  # captures it. The product_glob fallback only covers the conventional
+  # names users sometimes pick.
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["trivy"]
+      - product_glob: ["trivy-results.json", "**/trivy-results.json", "trivy-report.json", "**/trivy-report.json", "trivy.json", "**/trivy.json"]
+
+llm_hints:
+  on_match: "Trivy scan captured. Vulnerabilities, misconfigurations, and secrets findings preserved."

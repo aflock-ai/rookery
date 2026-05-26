@@ -16,6 +16,7 @@ package gcpiit
 
 import (
 	"crypto"
+	_ "embed"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,12 +26,16 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/invopop/jsonschema"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 const (
 	Name    = "gcp-iit"
@@ -59,6 +64,7 @@ func init() {
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return New()
 	})
+	detection.Register(Name, detectorYAML)
 }
 
 type ErrNotGCPIIT struct{}
