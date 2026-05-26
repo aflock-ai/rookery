@@ -15,6 +15,9 @@
 package gobuild
 
 import (
+	"crypto"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -24,6 +27,7 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -129,15 +133,46 @@ func TestAttest_GoBinary_WritesSidecar(t *testing.T) {
 	assert.Equal(t, bi.GoVersion, roundtrip.GoVersion)
 	assert.Equal(t, bi.MainPath, roundtrip.MainPath)
 
-	// Subject must point at the sidecar (not the binary). The
-	// binary's digest is already a product subject; subject-ing the
-	// sidecar lets a verifier prove the on-disk JSON matches what
-	// was signed.
+	// We record TWO subjects per binary:
+	//
+	//   - `binary:<path>` over the binary file content. This is the
+	//     subject `cilock verify --artifactfile <binary>` resolves
+	//     against — without it, the natural verify flow fails with
+	//     "no collections found." See #219.
+	//   - `go-build-sidecar:<path>` over the sidecar JSON content,
+	//     so a verifier can prove the on-disk JSON matches what was
+	//     signed.
 	subjects := a.Subjects()
-	require.Contains(t, subjects, "go-build:"+binName,
-		"expected subject keyed by relative binary path")
-	require.NotEmpty(t, subjects["go-build:"+binName],
-		"subject must have at least one digest")
+	binarySubjectKey := "binary:" + binName
+	sidecarSubjectKey := "go-build-sidecar:" + binName
+
+	require.Contains(t, subjects, binarySubjectKey,
+		"expected subject keyed `binary:<path>` so verify --artifactfile resolves")
+	require.Contains(t, subjects, sidecarSubjectKey,
+		"expected subject keyed `go-build-sidecar:<path>` over sidecar JSON")
+
+	sha256DV := cryptoutil.DigestValue{Hash: crypto.SHA256}
+
+	// `binary:<path>` digest must match sha256(<binary file>).
+	binBytes, err := os.ReadFile(binAbs) //nolint:gosec // test-only path
+	require.NoError(t, err)
+	wantBinSum := sha256.Sum256(binBytes)
+	gotBinDigest, ok := subjects[binarySubjectKey][sha256DV]
+	require.True(t, ok, "binary subject must carry a sha256 digest")
+	assert.Equal(t, hex.EncodeToString(wantBinSum[:]), gotBinDigest,
+		"binary:<path> digest must match sha256(<binary file bytes>)")
+
+	// `go-build-sidecar:<path>` digest must match sha256(<sidecar bytes>).
+	wantSidecarSum := sha256.Sum256(body)
+	gotSidecarDigest, ok := subjects[sidecarSubjectKey][sha256DV]
+	require.True(t, ok, "sidecar subject must carry a sha256 digest")
+	assert.Equal(t, hex.EncodeToString(wantSidecarSum[:]), gotSidecarDigest,
+		"go-build-sidecar:<path> digest must match sha256(<sidecar JSON bytes>)")
+
+	// Sanity: the two digests must differ — a binary and its sidecar
+	// have no business hashing to the same thing.
+	assert.NotEqual(t, gotBinDigest, gotSidecarDigest,
+		"binary and sidecar digests must differ")
 }
 
 // TestAttest_SkipsNonGoFiles guards the negative path: non-Go
