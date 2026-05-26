@@ -104,6 +104,8 @@ type ConsumedMaterial struct {
 //  2. Rebuilds the Merkle tree from sourceLeaves to extract audit paths.
 //  3. Emits a MaterialProof per consumed item, sorted by path for
 //     deterministic ordering.
+//
+//nolint:gocyclo,gocognit // linear validate → rebuild → sort → emit; splitting obscures the producer-side bail-outs
 func BuildChainSidecar(source SourceStepRef, sourceLeaves []SidecarLeaf, consumed []ConsumedMaterial) (ChainSidecar, error) {
 	if source.EnvelopeDigest == "" {
 		return ChainSidecar{}, errors.New("BuildChainSidecar: source.EnvelopeDigest must be set (binds chain to specific source attestation, not just root)")
@@ -122,8 +124,8 @@ func BuildChainSidecar(source SourceStepRef, sourceLeaves []SidecarLeaf, consume
 	// invariant would silently shift indices.
 	idxByPath := make(map[string]int, len(sourceLeaves))
 	for i, l := range sourceLeaves {
-		if i > 0 && sourceLeaves[i-1].Path >= sourceLeaves[i].Path {
-			return ChainSidecar{}, fmt.Errorf("BuildChainSidecar: sourceLeaves not sorted by path (leaf %d=%q >= leaf %d=%q)", i-1, sourceLeaves[i-1].Path, i, sourceLeaves[i].Path)
+		if i > 0 && sourceLeaves[i-1].Path >= sourceLeaves[i].Path { //nolint:gosec // i>0 guard makes [i-1] and [i] safe; gosec misses the guard
+			return ChainSidecar{}, fmt.Errorf("BuildChainSidecar: sourceLeaves not sorted by path (leaf %d=%q >= leaf %d=%q)", i-1, sourceLeaves[i-1].Path, i, sourceLeaves[i].Path) //nolint:gosec // same i>0 guard
 		}
 		idxByPath[l.Path] = i
 	}
