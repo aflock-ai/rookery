@@ -31,9 +31,14 @@ func PolicyValidateCmd() *cobra.Command {
 	pvo := options.PolicyValidateOptions{}
 
 	cmd := &cobra.Command{
-		Use:           "validate",
-		Short:         "Validate a Witness policy file",
-		Long:          "Validates a Witness policy file for correct schema, structure, and optionally verifies signatures",
+		Use:   "validate",
+		Short: "Validate a Witness policy file",
+		Long:  "Validates a Witness policy file for correct schema, structure, and optionally verifies signatures",
+		Example: `  # Validate a policy's schema and structure
+  cilock policy validate -p policy.json
+
+  # Also verify the policy signature against a public key, as JSON
+  cilock policy validate -p policy.json -k policy-pub.pem -o json`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {

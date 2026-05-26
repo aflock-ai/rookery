@@ -70,10 +70,8 @@ matching sha256sum's shape so it pipes cleanly into other tools. Use
 Keys may be supplied either as positional args or via -k/--key (consistent
 with 'cilock run', 'sign', 'verify', and 'policy from-bundles'). -k accepts
 a single key file; mixing -k with positional args is an error. (Fixes
-blind Linux finding F5.)
-
-Examples:
-  cilock keyid show signer.pub
+blind Linux finding F5.)`,
+		Example: `  cilock keyid show signer.pub
   cilock keyid show -k signer.pub
   cilock keyid show signer.key signer.pub other.pem
   cilock keyid show --format=json signer.key | jq .`,

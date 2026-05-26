@@ -92,6 +92,11 @@ func toolsListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List every detector cilock knows how to auto-fire",
+		Example: `  # List every detector, as a table
+  cilock tools list
+
+  # Filter to one lexicon category, machine-readable
+  cilock tools list --category vulnerability-scan --format json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			entries := buildToolEntries()
 			if source != "" {
