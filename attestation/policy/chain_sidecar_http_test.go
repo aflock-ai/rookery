@@ -86,21 +86,23 @@ func TestHTTPChainSidecarSource_HeadersForwarded(t *testing.T) {
 
 	src := NewHTTPChainSidecarSource(srv.URL + "/x/{envelopeDigest}")
 	src.Headers = map[string]string{"Authorization": "Bearer xyz"}
-	_, err := src.LookupChainSidecar(context.Background(), "build", "source", "abc")
+	_, err := src.LookupChainSidecar(context.Background(), "build", "source", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	require.NoError(t, err)
 }
 
 func TestHTTPChainSidecarSource_WrongEnvelopeBinding(t *testing.T) {
+	const sidecarDigest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const policyDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(chain.ChainSidecar{
 			SchemaVersion: chain.ChainSidecarSchemaVersion,
-			SourceStep:    chain.SourceStepRef{StepName: "source", EnvelopeDigest: "aaa"},
+			SourceStep:    chain.SourceStepRef{StepName: "source", EnvelopeDigest: sidecarDigest},
 		})
 	}))
 	defer srv.Close()
 
 	src := NewHTTPChainSidecarSource(srv.URL + "/x/{envelopeDigest}")
-	_, err := src.LookupChainSidecar(context.Background(), "build", "source", "bbb")
+	_, err := src.LookupChainSidecar(context.Background(), "build", "source", policyDigest)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "binds to envelope")
 }
@@ -111,7 +113,7 @@ func TestMultiChainSidecarSource_FirstNonNilWins(t *testing.T) {
 	// Second source serves the sidecar.
 	want := chain.ChainSidecar{
 		SchemaVersion: chain.ChainSidecarSchemaVersion,
-		SourceStep:    chain.SourceStepRef{StepName: "source", EnvelopeDigest: "abc"},
+		SourceStep:    chain.SourceStepRef{StepName: "source", EnvelopeDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(want)
@@ -120,10 +122,10 @@ func TestMultiChainSidecarSource_FirstNonNilWins(t *testing.T) {
 	second := NewHTTPChainSidecarSource(srv.URL + "/{envelopeDigest}")
 
 	multi := NewMultiChainSidecarSource(first, second)
-	got, err := multi.LookupChainSidecar(context.Background(), "build", "source", "abc")
+	got, err := multi.LookupChainSidecar(context.Background(), "build", "source", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, "abc", got.SourceStep.EnvelopeDigest)
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", got.SourceStep.EnvelopeDigest)
 }
 
 func TestMultiChainSidecarSource_ErrorAbortsChain(t *testing.T) {
@@ -135,7 +137,8 @@ func TestMultiChainSidecarSource_ErrorAbortsChain(t *testing.T) {
 	second := NewFilesystemChainSidecarSource(t.TempDir()) // never reached
 
 	multi := NewMultiChainSidecarSource(first, second)
-	_, err := multi.LookupChainSidecar(context.Background(), "build", "source", "x")
+	const validDigest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	_, err := multi.LookupChainSidecar(context.Background(), "build", "source", validDigest)
 	require.Error(t, err, "first-source error must abort, not silently fall through to second")
 	assert.True(t, strings.Contains(err.Error(), "500") || strings.Contains(err.Error(), "broken"))
 }
