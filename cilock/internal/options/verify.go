@@ -44,6 +44,35 @@ type VerifyOptions struct {
 	PolicyEmails               []string
 	PolicyOrganizations        []string
 	PolicyURIs                 []string
+
+	// ChainSidecarDir is a local directory containing chain-of-custody
+	// sidecars (one per downstream step, named <step>.chain.json). When
+	// set, the verifier installs a FilesystemChainSidecarSource and
+	// prefers per-material RFC 6962 inclusion-proof verification over
+	// the legacy path-by-path artifact comparison for any
+	// ArtifactsFrom edge that has a matching sidecar. Empty disables.
+	ChainSidecarDir string
+
+	// ChainSidecarURL is an HTTP(S) URL template used to fetch chain
+	// sidecars by upstream envelope digest. Placeholders:
+	// {envelopeDigest}, {downstreamStep}, {upstreamStep}. When both
+	// ChainSidecarDir and ChainSidecarURL are set, the filesystem
+	// source is tried first; HTTP is the fallback.
+	ChainSidecarURL string
+
+	// RequireSidecar fails verification if a chain edge has an
+	// upstream step but no matching chain sidecar is available. The
+	// CLI flag defaults to TRUE for v0.4 — closing the vacuous-pass
+	// attack surface where v0.3 attestations return empty
+	// Materials() and the legacy compareArtifacts fallback trivially
+	// passes. Users verifying legacy v0.1 chains can opt out via
+	// `--require-sidecar=false`.
+	//
+	// Note: the Go struct's zero value is false; the flag default
+	// in AddFlags is true. Callers constructing VerifyOptions
+	// directly (without going through the CLI flag layer) must set
+	// this explicitly if strict mode is desired.
+	RequireSidecar bool
 }
 
 func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
@@ -103,6 +132,14 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 		"Immutable identifier for the source repository the workflow was based upon.")
 	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.SourceRepositoryRef, "policy-fulcio-source-repository-ref", "",
 		"Source Repository Ref that the build run was based upon.")
+
+	// v0.3 chain-of-custody verification.
+	cmd.Flags().StringVar(&vo.ChainSidecarDir, "chain-sidecar-dir", "",
+		"Directory containing chain-of-custody sidecars (one per downstream step, named <step>.chain.json). When set, the verifier validates ArtifactsFrom edges via per-material RFC 6962 inclusion proofs against the upstream step's signed Merkle root instead of the legacy path-by-path comparison.")
+	cmd.Flags().StringVar(&vo.ChainSidecarURL, "chain-sidecar-url", "",
+		"HTTP(S) URL template for fetching chain sidecars by upstream envelope digest. Placeholders: {envelopeDigest}, {downstreamStep}, {upstreamStep}. When both --chain-sidecar-dir and --chain-sidecar-url are set, the filesystem source is tried first.")
+	cmd.Flags().BoolVar(&vo.RequireSidecar, "require-sidecar", true,
+		"Strict-chain mode: fail verification if a chain edge has no matching chain sidecar (closes the v0.3 vacuous-pass attack surface). DEFAULT TRUE in v0.4. Pass --require-sidecar=false to verify legacy v0.1 chains without sidecars.")
 
 	cmd.MarkFlagsRequiredTogether("policy")
 	cmd.MarkFlagsOneRequired("publickey", "policy-ca", "policy-ca-roots", "policy-ca-intermediates", "verifier-kms-ref")

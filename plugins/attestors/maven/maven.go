@@ -16,6 +16,7 @@ package maven
 
 import (
 	"crypto"
+	_ "embed"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -23,10 +24,14 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/invopop/jsonschema"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 const (
 	Name           = "maven"
@@ -61,6 +66,7 @@ func init() {
 			},
 		),
 	)
+	detection.Register(Name, detectorYAML)
 }
 
 type Attestor struct {

@@ -44,6 +44,22 @@ type RunOptions struct {
 	OutFilePath              string
 	StepName                 string
 	Tracing                  bool
+	// CaptureMode controls where the material + product attestors get
+	// their digests. "auto" (default) picks the fastest available source
+	// — trace events when --trace is on, otherwise directory walk.
+	// "walk" forces the legacy walk path. "trace" requires --trace and
+	// errors if no trace data is available. "ima" requires CONFIG_IMA.
+	// Empty string is equivalent to "auto".
+	CaptureMode string
+
+	// Cache classification controls. The framework ships defaults that
+	// cover common build caches across languages (Go, Rust, Python,
+	// Node, etc.) — see attestation.DefaultCachePatterns. These flags
+	// let the operator tune that list per build.
+	CacheAddPatterns     []string // additive glob patterns
+	CacheAllowPatterns   []string // patterns to remove from the effective set
+	CacheDisableDefaults bool     // drop DefaultCachePatterns entirely
+	CacheDisableEnvProbe bool     // skip SystemCachePathsFromEnv discovery
 	// IgnoreCommandExitCode tells cilock to record the wrapped command's
 	// exit code in `command-run/v0.1.exitcode` but NOT abort the cilock run
 	// when the command exits non-zero. Without this flag, every postproduct
@@ -133,6 +149,27 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&ro.OutFilePath, "outfile", "o", "", "File to write signed data to")
 	cmd.Flags().StringVarP(&ro.StepName, "step", "s", "", "Name of the step being run")
 	cmd.Flags().BoolVarP(&ro.Tracing, "trace", "r", false, "Enable tracing for the command")
+	cmd.Flags().StringVar(&ro.CaptureMode, "capture-mode", "auto",
+		"Where material + product attestors get their digests. "+
+			"'auto' (default) picks the fastest available — trace data when --trace is set, "+
+			"otherwise walks the working directory. 'walk' forces the legacy directory walk "+
+			"(slower; race-prone with concurrent writers). 'trace' requires --trace and fails "+
+			"if no trace data is available. 'ima' requires kernel IMA (not yet implemented).")
+	cmd.Flags().StringSliceVar(&ro.CacheAddPatterns, "cache-add-pattern", nil,
+		"Add a glob pattern to the cache/temp classifier. Files written by the tracee "+
+			"matching any cache pattern are surfaced as cache artifacts, not products. "+
+			"Repeatable. Globs use gobwas/glob syntax (* matches non-/; ** matches any).")
+	cmd.Flags().StringSliceVar(&ro.CacheAllowPatterns, "cache-allow-pattern", nil,
+		"Remove a pattern from the cache/temp classifier. Matches against the configured "+
+			"pattern strings (defaults + user adds), not against file paths. Use to keep a "+
+			"specific path as a product when a default classifies it as cache (e.g., "+
+			"--cache-allow-pattern='**/target/release/**' to treat Rust release binaries as products).")
+	cmd.Flags().BoolVar(&ro.CacheDisableDefaults, "cache-disable-defaults", false,
+		"Drop the built-in DefaultCachePatterns set entirely. Operator must explicitly add "+
+			"any cache patterns via --cache-add-pattern. Useful for sealed-environment compliance builds.")
+	cmd.Flags().BoolVar(&ro.CacheDisableEnvProbe, "cache-disable-env-probe", false,
+		"Skip env-var discovery of cache paths (XDG_CACHE_HOME, GOCACHE, CARGO_HOME, etc.). "+
+			"Use in containerized builds where host env vars should not influence classification.")
 	cmd.Flags().BoolVar(&ro.IgnoreCommandExitCode, "ignore-command-exit-code", false,
 		"Record the wrapped command's exit code in command-run/v0.1 but do NOT abort the cilock run "+
 			"on non-zero exit. Use with tools that exit non-zero on findings (semgrep, gosec, hadolint, "+

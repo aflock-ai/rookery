@@ -1060,7 +1060,7 @@ func TestVerifyArtifacts_NoPassedCollections(t *testing.T) {
 		"build": {Step: "build"},
 	}
 
-	result, err := p.verifyArtifacts(resultsByStep)
+	result, err := p.verifyArtifacts(context.Background(), &verifyOptions{}, resultsByStep)
 	require.NoError(t, err)
 	assert.True(t, result["build"].HasErrors())
 	assert.Contains(t, result["build"].Rejected[0].Reason.Error(), "no passed collections present")
@@ -1077,7 +1077,7 @@ func TestVerifyCollectionArtifacts_NoArtifactsFrom(t *testing.T) {
 			Collection: attestation.Collection{Name: "build"},
 		},
 	}
-	err := verifyCollectionArtifacts(step, cvr, nil)
+	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, cvr, nil)
 	assert.NoError(t, err, "no artifactsFrom means nothing to verify")
 }
 
@@ -1098,7 +1098,7 @@ func TestVerifyCollectionArtifacts_ArtifactsFromNoPassed(t *testing.T) {
 		"build": {Step: "build"},
 	}
 
-	err := verifyCollectionArtifacts(step, cvr, collectionsByStep)
+	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, cvr, collectionsByStep)
 	assert.Error(t, err)
 	var artErr ErrVerifyArtifactsFailed
 	assert.ErrorAs(t, err, &artErr)
@@ -1120,7 +1120,7 @@ func TestVerifyCollectionArtifacts_ArtifactsFromNotInResults(t *testing.T) {
 	// The "build" step is not in collectionsByStep at all.
 	collectionsByStep := map[string]StepResult{}
 
-	err := verifyCollectionArtifacts(step, cvr, collectionsByStep)
+	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, cvr, collectionsByStep)
 	assert.Error(t, err)
 	var artErr ErrVerifyArtifactsFailed
 	assert.ErrorAs(t, err, &artErr)
@@ -1155,7 +1155,7 @@ func TestVerifyCollectionArtifacts_ArtifactsFromWithPassedCollections(t *testing
 		},
 	}
 
-	err := verifyCollectionArtifacts(step, deployCVR, collectionsByStep)
+	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, deployCVR, collectionsByStep)
 	assert.NoError(t, err)
 }
 
@@ -1568,7 +1568,7 @@ func TestVerifyCollectionArtifacts_ContinuesAfterMismatch(t *testing.T) {
 	}
 
 	// With the continue fix, this should pass (at least one collection matches)
-	err := verifyCollectionArtifacts(step, collection, collectionsByStep)
+	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, collection, collectionsByStep)
 	assert.NoError(t, err, "should pass when at least one source collection matches")
 }
 

@@ -1,0 +1,22 @@
+apiVersion: cilock.detection/v0.1
+name: gcp-iit
+description: "Captures the GCP Instance Identity Token / metadata server context when running on a GCE VM, GKE node, or other GCP-resident runner."
+
+category: [build]
+
+upstream:
+  name: GCP Metadata Server / Instance Identity Token
+  source: "https://cloud.google.com/compute/docs/instances/verifying-instance-identity"
+  license: proprietary
+  vendor: Google Cloud
+
+# Probes a metadata endpoint; the attestor itself reads identity data.
+# No tracing required.
+recommended_trace: "off"
+
+pre:
+  match:
+    gcp_metadata_reachable: true
+
+llm_hints:
+  on_match: "GCP instance identity captured (project, zone, instance id, signed identity token)."
