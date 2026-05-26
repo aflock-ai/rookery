@@ -624,6 +624,16 @@ type CommandRun struct {
 	silent           bool
 	materials        map[string]cryptoutil.DigestSet
 	enableTracing    bool
+
+	// traceeWorkdir is the working directory the tracee actually ran
+	// with — populated by runCmd just before exec.Command starts.
+	// TraceOutputs uses it to resolve relative paths in fileOps.Writes /
+	// Renames (e.g. atomic-rename target "bin/gh") to absolute paths
+	// the verifier can match. os.Getwd() at attestation time isn't
+	// reliable: cilock may chdir between runCmd and the post-trace
+	// summary build, and ctx.WorkingDir() may be empty when the
+	// caller didn't pass one explicitly.
+	traceeWorkdir string
 	ignoreExitCode   bool
 	requireZeroDrops bool
 
@@ -884,17 +894,21 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 	// Atomic-rename builds (Go, Cargo, GCC -o) write to an absolute
 	// temp path then RENAME(2) to a relative target (e.g. "bin/gh"
 	// when the tracee's cwd is the workspace). The kernel records
-	// the rename target as-given — relative. Resolve any relative
-	// trace path against the cilock process cwd (which the tracee
-	// inherited) so downstream os.Stat / pathHashIfExists actually
-	// find the file. Without this, atomic-rename builds get
-	// nil-digest witness-only entries instead of real digests.
-	cwd, cwdErr := os.Getwd()
+	// the rename target as-given — relative. Resolve against the
+	// tracee's working dir (snapshotted in runCmd) so verifier-side
+	// paths are absolute. Falls back to current cilock cwd if the
+	// tracee was created outside runCmd (unit tests, library use).
+	base := rc.traceeWorkdir
+	if base == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			base = cwd
+		}
+	}
 	resolvePath := func(p string) string {
-		if p == "" || filepath.IsAbs(p) || cwdErr != nil {
+		if p == "" || filepath.IsAbs(p) || base == "" {
 			return p
 		}
-		return filepath.Join(cwd, p)
+		return filepath.Join(base, p)
 	}
 
 	// Build a global "path → bytes-as-written digest" map from every
@@ -1333,6 +1347,15 @@ func (rc *CommandRun) TracingEnabled() bool {
 func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	c := exec.Command(r.Cmd[0], r.Cmd[1:]...) //nolint:gosec // G204: command is user-specified by design
 	c.Dir = ctx.WorkingDir()
+	// Snapshot the dir the tracee will actually run in, before any
+	// post-exec cwd changes happen on the parent. Used by TraceOutputs
+	// to resolve relative paths in fileOps.Writes / Renames.
+	if c.Dir != "" {
+		r.traceeWorkdir = c.Dir
+	} else if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+		// exec.Command inherits parent cwd when Dir is empty.
+		r.traceeWorkdir = cwd
+	}
 	stdoutBuffer := bytes.Buffer{}
 	stderrBuffer := bytes.Buffer{}
 	stdoutWriters := []io.Writer{&stdoutBuffer}
