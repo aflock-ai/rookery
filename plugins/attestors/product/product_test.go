@@ -543,13 +543,13 @@ func attestWithTracedCommandRun(t *testing.T, proc commandrun.ProcessInfo) *Atte
 // the relative path the test cares about. Lets the test assert on a
 // stable relative anchor while the production code stores absolute
 // keys (post-ddea2c1) that vary across t.TempDir() invocations.
-func productKeyEndingIn(products map[string]attestation.Product, rel string) (string, bool) {
+func productKeyEndingIn(products map[string]attestation.Product, rel string) bool {
 	for k := range products {
 		if strings.HasSuffix(k, "/"+rel) || k == rel {
-			return k, true
+			return true
 		}
 	}
-	return "", false
+	return false
 }
 
 // TestAttest_TracedRenamedFile_StillCaptured is the regression test for
@@ -570,7 +570,7 @@ func TestAttest_TracedRenamedFile_StillCaptured(t *testing.T) {
 	})
 
 	products := prod.Products()
-	_, ok := productKeyEndingIn(products, "out")
+	ok := productKeyEndingIn(products, "out")
 	require.True(t, ok,
 		"product ending in `/out` (rename destination, workdir-resolved) must be in capture set under --trace; "+
 			"got products = %v", productKeys(products))
@@ -591,7 +591,7 @@ func TestAttest_TracedDirectlyWrittenFile_StillCaptured(t *testing.T) {
 	})
 
 	products := prod.Products()
-	_, ok := productKeyEndingIn(products, "out")
+	ok := productKeyEndingIn(products, "out")
 	require.True(t, ok,
 		"product ending in `/out` (direct write target, workdir-resolved) must be in capture set under --trace; "+
 			"got products = %v", productKeys(products))

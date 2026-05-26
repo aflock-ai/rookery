@@ -357,7 +357,7 @@ func (a *Attestor) Finalize(ctx *attestation.AttestationContext) error {
 	if err != nil || resolved != attestation.CaptureTrace || probe == nil {
 		// Walk mode or no provider — Attest already populated the tree
 		// (or left it empty if trace was supposed to provide).
-		return nil
+		return nil //nolint:nilerr // resolve-failure is non-fatal here; Finalize is best-effort upgrade from walk to trace
 	}
 	if a.TreeSize != 0 {
 		// Walk path also ran (unusual). Don't overwrite its tree.

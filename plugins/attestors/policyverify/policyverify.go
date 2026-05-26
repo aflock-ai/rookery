@@ -163,7 +163,7 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subjects
 }
 
-func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:funlen // policy verification requires extensive setup
+func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:funlen,gocyclo // policy verification requires extensive setup
 	if err := policysig.VerifyPolicySignature(ctx.Context(), a.policyEnvelope, a.VerifyPolicySignatureOptions); err != nil {
 		return fmt.Errorf("failed to verify policy signature: %w", err)
 	}

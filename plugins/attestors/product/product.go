@@ -408,6 +408,8 @@ func collectTracedFileSet(ctx *attestation.AttestationContext) (bool, map[string
 // Attest walks the product set, computes the per-file pre-hashes, sorts
 // them deterministically, and builds the Merkle tree. The signed
 // predicate's MerkleRoot is the resulting tree root in hex.
+//
+//nolint:gocyclo,gocognit // glob compile → mode resolve → trace integrate → walk fallback; refactoring obscures the mode-dispatch logic
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	compiledIncludeGlob, err := glob.Compile(a.includeGlob)
 	if err != nil {
@@ -433,7 +435,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		return fmt.Errorf("product attestor: %w", err)
 	}
 
-	if resolved == attestation.CaptureTrace && probe != nil {
+	if resolved == attestation.CaptureTrace && probe != nil { //nolint:nestif // trace-integration block has inherent nesting over probe outputs
 		// Build the cache/temp classifier from the configured
 		// pattern options (defaults + env-discovered + user-added,
 		// less user-allowed) and install it on the trace probe so
