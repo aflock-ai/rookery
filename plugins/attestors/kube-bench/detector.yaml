@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: kube-bench
 description: "Captures kube-bench Kubernetes CIS benchmark results."
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: kube-bench

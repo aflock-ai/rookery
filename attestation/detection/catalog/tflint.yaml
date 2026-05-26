@@ -7,7 +7,7 @@ detection_only: true
 
 description: TFLint — Terraform linter for syntax + provider correctness.
 
-category: [artifact-scan]
+category: [lint]
 
 upstream:
   name: TFLint

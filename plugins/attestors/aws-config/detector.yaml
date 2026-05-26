@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: aws-config
 description: "Captures AWS Config compliance state for resources (output of `aws configservice get-compliance-details-by-config-rule` and related calls)."
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: AWS Config

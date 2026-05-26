@@ -7,7 +7,7 @@ detection_only: true
 
 description: "Nancy — Sonatype's OSS Index vulnerability scanner for Go modules."
 
-category: [artifact-scan]
+category: [vulnerability-scan]
 
 upstream:
   name: Nancy

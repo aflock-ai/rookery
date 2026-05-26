@@ -7,7 +7,7 @@ detection_only: true
 
 description: yarn install — Yarn package manager install.
 
-category: [build]
+category: [dependency-resolve]
 
 upstream:
   name: Yarn

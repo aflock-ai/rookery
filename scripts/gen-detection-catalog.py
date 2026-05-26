@@ -43,7 +43,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== SBOM TOOLS (validated) =====
     ("syft", dict(
         desc="Anchore Syft — SBOM generator for containers, filesystems, archives.",
-        categories=["artifact-scan"],
+        categories=["sbom-generate"],
         upstream=dict(name="Syft", source="https://github.com/anchore/syft",
                       license="Apache-2.0", vendor="Anchore"),
         emits_formats=["sbom"],
@@ -52,7 +52,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("cdxgen", dict(
         desc="CycloneDX SBOM generator (cdxgen) — multi-language SBOM tool from OWASP.",
-        categories=["artifact-scan"],
+        categories=["sbom-generate"],
         upstream=dict(name="cdxgen", source="https://github.com/CycloneDX/cdxgen",
                       license="Apache-2.0", vendor="OWASP Foundation / CycloneDX"),
         emits_formats=["sbom"],
@@ -61,7 +61,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("grype", dict(
         desc="Anchore Grype — vulnerability scanner for SBOMs and container images.",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="Grype", source="https://github.com/anchore/grype",
                       license="Apache-2.0", vendor="Anchore"),
         emits_formats=["sarif"],
@@ -70,7 +70,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("bom", dict(
         desc="Kubernetes SIGs `bom` — SBOM tool for Kubernetes releases (SPDX).",
-        categories=["artifact-scan"],
+        categories=["sbom-generate"],
         upstream=dict(name="bom (sigs.k8s.io)", source="https://github.com/kubernetes-sigs/bom",
                       license="Apache-2.0", vendor="Kubernetes SIG Release Engineering"),
         emits_formats=["sbom"],
@@ -81,7 +81,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== SAST (validated) =====
     ("semgrep", dict(
         desc="Semgrep — open-source static analysis with SARIF / JSON output.",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="Semgrep", source="https://github.com/semgrep/semgrep",
                       license="LGPL-2.1-only", vendor="Semgrep Inc."),
         emits_formats=["sarif"],
@@ -90,7 +90,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("bandit", dict(
         desc="Bandit — Python static security analyzer (PyCQA).",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="Bandit", source="https://github.com/PyCQA/bandit",
                       license="Apache-2.0", vendor="PyCQA"),
         # Native bandit emits json/txt; SARIF requires an external converter.
@@ -100,7 +100,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("staticcheck", dict(
         desc="staticcheck — Go static analyzer (Honnef.co/go/tools).",
-        categories=["artifact-scan"],
+        categories=["lint"],
         upstream=dict(name="staticcheck", source="https://github.com/dominikh/go-tools",
                       license="MIT", vendor="Dominik Honnef"),
         emits_formats=["sarif"],
@@ -111,7 +111,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== VULN SCANNERS (validated) =====
     ("osv-scanner", dict(
         desc="osv-scanner — Google's open-source vulnerability scanner (OSV.dev).",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="osv-scanner", source="https://github.com/google/osv-scanner",
                       license="Apache-2.0", vendor="Google / OSV"),
         emits_formats=["sarif"],
@@ -120,7 +120,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("pip-audit", dict(
         desc="pip-audit — Python dependency vulnerability scanner from PyPA.",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="pip-audit", source="https://github.com/pypa/pip-audit",
                       license="Apache-2.0", vendor="PyPA"),
         match=dict(argv_prefix=["pip-audit"]),
@@ -128,7 +128,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("safety", dict(
         desc="Safety — Python dependency vulnerability scanner (PyUp).",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="Safety", source="https://github.com/pyupio/safety",
                       license="MIT", vendor="PyUp.io / Safety Cybersecurity"),
         match=dict(argv_prefix=["safety"]),
@@ -136,7 +136,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("nancy", dict(
         desc="Nancy — Sonatype's OSS Index vulnerability scanner for Go modules.",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="Nancy", source="https://github.com/sonatype-nexus-community/nancy",
                       license="Apache-2.0", vendor="Sonatype"),
         match=dict(argv_prefix=["nancy"]),
@@ -144,7 +144,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("cargo-audit", dict(
         desc="cargo-audit — Rust dependency vulnerability scanner.",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="cargo-audit", source="https://github.com/rustsec/rustsec",
                       license="Apache-2.0 OR MIT", vendor="RustSec / Rust Foundation"),
         match=dict(argv_prefix=["cargo-audit"]),
@@ -152,7 +152,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("npm-audit", dict(
         desc="npm audit — Node.js dependency vulnerability scanner.",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="npm audit", source="https://docs.npmjs.com/cli/v10/commands/npm-audit",
                       license="Artistic-2.0", vendor="OpenJS Foundation / npm Inc."),
         match=dict(argv_prefix=["npm", "audit"]),
@@ -160,7 +160,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("yarn-audit", dict(
         desc="yarn audit — Yarn dependency vulnerability scanner.",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="yarn audit", source="https://yarnpkg.com/cli/audit",
                       license="BSD-2-Clause", vendor="Yarn / Meta"),
         match=dict(argv_prefix=["yarn", "audit"]),
@@ -168,7 +168,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("retire-js", dict(
         desc="RetireJS — JavaScript library vulnerability scanner.",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="RetireJS", source="https://github.com/RetireJS/retire.js",
                       license="Apache-2.0", vendor="RetireJS contributors"),
         match=dict(argv_prefix=["retire"]),
@@ -176,7 +176,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("gosec", dict(
         desc="gosec — Go security checker (golang/security/gosec).",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="gosec", source="https://github.com/securego/gosec",
                       license="Apache-2.0", vendor="securego"),
         emits_formats=["sarif"],
@@ -187,7 +187,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== IaC SCANNERS (validated) =====
     ("checkov", dict(
         desc="Checkov — Bridgecrew's IaC scanner (Terraform/CloudFormation/K8s/etc.).",
-        categories=["artifact-scan", "posture-scan"],
+        categories=["compliance-scan"],
         upstream=dict(name="Checkov", source="https://github.com/bridgecrewio/checkov",
                       license="Apache-2.0", vendor="Bridgecrew / Prisma Cloud (Palo Alto)"),
         emits_formats=["sarif"],
@@ -196,7 +196,8 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("tfsec", dict(
         desc="tfsec — Terraform-specific static analysis (Aqua Security).",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan", "compliance-scan"],
+        primary="vulnerability-scan",
         upstream=dict(name="tfsec", source="https://github.com/aquasecurity/tfsec",
                       license="MIT", vendor="Aqua Security"),
         emits_formats=["sarif"],
@@ -205,7 +206,8 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("terrascan", dict(
         desc="Terrascan — multi-IaC scanner (Terraform/K8s/Helm/ARM).",
-        categories=["artifact-scan", "posture-scan"],
+        categories=["vulnerability-scan", "compliance-scan"],
+        primary="vulnerability-scan",
         upstream=dict(name="Terrascan", source="https://github.com/tenable/terrascan",
                       license="Apache-2.0", vendor="Tenable"),
         emits_formats=["sarif"],
@@ -214,7 +216,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("tflint", dict(
         desc="TFLint — Terraform linter for syntax + provider correctness.",
-        categories=["artifact-scan"],
+        categories=["lint"],
         upstream=dict(name="TFLint", source="https://github.com/terraform-linters/tflint",
                       license="MPL-2.0", vendor="terraform-linters community"),
         emits_formats=["sarif"],
@@ -223,7 +225,8 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("kics", dict(
         desc="KICS — Checkmarx IaC security scanner.",
-        categories=["artifact-scan"],
+        categories=["vulnerability-scan", "compliance-scan"],
+        primary="vulnerability-scan",
         upstream=dict(name="KICS", source="https://github.com/Checkmarx/kics",
                       license="Apache-2.0", vendor="Checkmarx"),
         emits_formats=["sarif"],
@@ -234,7 +237,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== SECRET SCANNERS (validated) =====
     ("gitleaks", dict(
         desc="Gitleaks — secret detection in git history and source.",
-        categories=["artifact-scan"],
+        categories=["secret-scan"],
         upstream=dict(name="Gitleaks", source="https://github.com/gitleaks/gitleaks",
                       license="MIT", vendor="Gitleaks community"),
         emits_formats=["sarif"],
@@ -243,7 +246,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("trufflehog", dict(
         desc="TruffleHog — secret + credential scanner (Truffle Security).",
-        categories=["artifact-scan"],
+        categories=["secret-scan"],
         upstream=dict(name="TruffleHog", source="https://github.com/trufflesecurity/trufflehog",
                       license="AGPL-3.0-only", vendor="Truffle Security"),
         emits_formats=[],
@@ -252,7 +255,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("detect-secrets", dict(
         desc="detect-secrets — Yelp's pre-commit secret scanner.",
-        categories=["artifact-scan"],
+        categories=["secret-scan"],
         upstream=dict(name="detect-secrets", source="https://github.com/Yelp/detect-secrets",
                       license="Apache-2.0", vendor="Yelp"),
         match=dict(argv_prefix=["detect-secrets"]),
@@ -262,7 +265,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== K8s POSTURE (validated) =====
     ("kubescape", dict(
         desc="Kubescape — open-source K8s + image security posture scanner (CNCF).",
-        categories=["posture-scan"],
+        categories=["compliance-scan"],
         upstream=dict(name="Kubescape", source="https://github.com/kubescape/kubescape",
                       license="Apache-2.0", vendor="CNCF / ARMO"),
         emits_formats=["sarif"],
@@ -271,7 +274,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("polaris", dict(
         desc="Polaris — Fairwinds Kubernetes best-practices validator.",
-        categories=["posture-scan"],
+        categories=["compliance-scan"],
         upstream=dict(name="Polaris", source="https://github.com/FairwindsOps/polaris",
                       license="Apache-2.0", vendor="Fairwinds"),
         emits_formats=[],
@@ -280,7 +283,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("kyverno", dict(
         desc="Kyverno — Kubernetes policy management (CNCF).",
-        categories=["posture-scan"],
+        categories=["policy-eval"],
         upstream=dict(name="Kyverno", source="https://github.com/kyverno/kyverno",
                       license="Apache-2.0", vendor="Nirmata / CNCF"),
         emits_formats=[],
@@ -289,7 +292,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("kubeaudit", dict(
         desc="kubeaudit — K8s security auditor (Shopify).",
-        categories=["posture-scan"],
+        categories=["compliance-scan"],
         upstream=dict(name="kubeaudit", source="https://github.com/Shopify/kubeaudit",
                       license="MIT", vendor="Shopify"),
         emits_formats=[],
@@ -298,7 +301,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("conftest", dict(
         desc="Conftest — Rego/OPA policy testing for structured config.",
-        categories=["posture-scan"],
+        categories=["policy-eval"],
         upstream=dict(name="Conftest", source="https://github.com/open-policy-agent/conftest",
                       license="Apache-2.0", vendor="OPA / CNCF"),
         emits_formats=["sarif"],
@@ -318,7 +321,8 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("maven-build", dict(
         desc="Apache Maven `mvn` — JVM dependency + build orchestrator (catalog-only; the maven attestor plugin emits the actual SLSA-style record).",
-        categories=["build"],
+        categories=["build", "dependency-resolve"],
+        primary="build",
         upstream=dict(name="Apache Maven", source="https://github.com/apache/maven",
                       license="Apache-2.0", vendor="Apache Software Foundation"),
         match=dict(argv_prefix=["mvn"]),
@@ -327,7 +331,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("npm-install", dict(
         desc="npm install / npm ci — Node.js dependency resolution + install.",
-        categories=["build"],
+        categories=["dependency-resolve"],
         upstream=dict(name="npm", source="https://github.com/npm/cli",
                       license="Artistic-2.0", vendor="OpenJS Foundation / npm Inc."),
         # `npm ci` and `npm install` both resolve + install dependencies. The
@@ -344,7 +348,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("yarn-install", dict(
         desc="yarn install — Yarn package manager install.",
-        categories=["build"],
+        categories=["dependency-resolve"],
         upstream=dict(name="Yarn", source="https://github.com/yarnpkg/berry",
                       license="BSD-2-Clause", vendor="Yarn / Meta"),
         match=dict(argv_prefix=["yarn", "install"]),
@@ -353,7 +357,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("pnpm-install", dict(
         desc="pnpm install — fast disk-efficient Node.js package manager.",
-        categories=["build"],
+        categories=["dependency-resolve"],
         upstream=dict(name="pnpm", source="https://github.com/pnpm/pnpm",
                       license="MIT", vendor="pnpm"),
         match=dict(argv_prefix=["pnpm", "install"]),
@@ -371,7 +375,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("helm-install", dict(
         desc="helm install / upgrade — Kubernetes chart deployment.",
-        categories=["build", "posture-scan"],
+        categories=["deploy"],
         upstream=dict(name="Helm", source="https://github.com/helm/helm",
                       license="Apache-2.0", vendor="CNCF / Helm"),
         match=dict(argv_prefix=["helm"]),
@@ -380,7 +384,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("kustomize-build", dict(
         desc="kustomize build — declarative K8s manifest customization.",
-        categories=["build", "posture-scan"],
+        categories=["manifest-validate"],
         upstream=dict(name="Kustomize", source="https://github.com/kubernetes-sigs/kustomize",
                       license="Apache-2.0", vendor="Kubernetes SIG CLI"),
         match=dict(argv_prefix=["kustomize", "build"]),
@@ -391,7 +395,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== CI/CD SYSTEMS (validated via env fixture) =====
     ("azure-devops", dict(
         desc="Azure DevOps Pipelines — Microsoft CI/CD context.",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="Azure Pipelines", source="https://learn.microsoft.com/azure/devops/pipelines/",
                       license="commercial", vendor="Microsoft"),
         match=dict(env_set="TF_BUILD"),
@@ -399,7 +403,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("circleci", dict(
         desc="CircleCI CI/CD context.",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="CircleCI", source="https://circleci.com/docs/",
                       license="commercial", vendor="Circle Internet Services"),
         match=dict(env_set="CIRCLECI"),
@@ -407,7 +411,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("bitbucket-pipelines", dict(
         desc="Bitbucket Pipelines — Atlassian CI/CD context.",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="Bitbucket Pipelines", source="https://support.atlassian.com/bitbucket-cloud/docs/get-started-with-bitbucket-pipelines/",
                       license="commercial", vendor="Atlassian"),
         match=dict(env_set="BITBUCKET_BUILD_NUMBER"),
@@ -415,7 +419,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("buildkite", dict(
         desc="Buildkite CI/CD context.",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="Buildkite", source="https://buildkite.com/docs",
                       license="commercial", vendor="Buildkite"),
         match=dict(env_set="BUILDKITE"),
@@ -423,7 +427,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("drone-ci", dict(
         desc="Drone — open-source container-native CI.",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="Drone", source="https://github.com/harness/drone",
                       license="Apache-2.0 / commercial (Harness)", vendor="Harness, Inc."),
         match=dict(env_set="DRONE"),
@@ -431,7 +435,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("travis-ci", dict(
         desc="Travis CI context.",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="Travis CI", source="https://docs.travis-ci.com/",
                       license="commercial", vendor="Travis CI GmbH / Idera"),
         match=dict(env_set="TRAVIS"),
@@ -439,7 +443,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("teamcity", dict(
         desc="JetBrains TeamCity CI/CD context.",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="TeamCity", source="https://www.jetbrains.com/teamcity/",
                       license="commercial / freemium", vendor="JetBrains"),
         match=dict(env_set="TEAMCITY_VERSION"),
@@ -447,7 +451,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("argo-workflows", dict(
         desc="Argo Workflows — Kubernetes-native workflow engine (CNCF).",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="Argo Workflows", source="https://github.com/argoproj/argo-workflows",
                       license="Apache-2.0", vendor="CNCF / Argoproj"),
         match=dict(env_set="ARGO_TEMPLATE"),
@@ -455,7 +459,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("tekton-pipelines", dict(
         desc="Tekton Pipelines — Kubernetes-native CI/CD (CDF).",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="Tekton", source="https://github.com/tektoncd/pipeline",
                       license="Apache-2.0", vendor="CD Foundation / Tekton"),
         match=dict(env_set="TEKTON_RESOURCES"),
@@ -463,7 +467,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("cloudbuild-gcp", dict(
         desc="Google Cloud Build — GCP managed CI.",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="Cloud Build", source="https://cloud.google.com/build/docs",
                       license="commercial", vendor="Google Cloud"),
         match=dict(env_set="BUILD_ID"),
@@ -471,7 +475,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("codebuild-aws", dict(
         desc="AWS CodeBuild context.",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="AWS CodeBuild", source="https://docs.aws.amazon.com/codebuild/",
                       license="commercial", vendor="Amazon Web Services"),
         match=dict(env_set="CODEBUILD_BUILD_ID"),
@@ -481,7 +485,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== CLOUD IDENTITY (pending big-cloud validation round) =====
     ("azure-iid", dict(
         desc="Azure VM IMDS — instance metadata + attested identity document.",
-        categories=["build"],
+        categories=["ci-context"],
         upstream=dict(name="Azure Instance Metadata Service", source="https://learn.microsoft.com/azure/virtual-machines/instance-metadata-service",
                       license="commercial", vendor="Microsoft Azure"),
         match=dict(azure_metadata_reachable=True),
@@ -491,7 +495,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== SIGNING & VERIFICATION (validated) =====
     ("cosign-sign", dict(
         desc="Sigstore cosign — container/artifact signing (validated via cosign sign-blob with a local ED25519 key).",
-        categories=["statement"],
+        categories=["sign"],
         upstream=dict(name="cosign", source="https://github.com/sigstore/cosign",
                       license="Apache-2.0", vendor="Sigstore / Linux Foundation"),
         match=dict(argv_prefix=["cosign", "sign"]),
@@ -499,7 +503,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("cosign-verify", dict(
         desc="Sigstore cosign verification.",
-        categories=["statement"],
+        categories=["dependency-verify"],
         upstream=dict(name="cosign", source="https://github.com/sigstore/cosign",
                       license="Apache-2.0", vendor="Sigstore / Linux Foundation"),
         match=dict(argv_prefix=["cosign", "verify"]),
@@ -507,7 +511,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("notary-v2", dict(
         desc="notation (Notary v2) — OCI artifact signing.",
-        categories=["statement"],
+        categories=["sign"],
         upstream=dict(name="notation", source="https://github.com/notaryproject/notation",
                       license="Apache-2.0", vendor="CNCF / Notary Project"),
         match=dict(argv_prefix=["notation"]),
@@ -515,7 +519,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("gpg-sign", dict(
         desc="GnuPG signing — long-form artifact signature.",
-        categories=["statement"],
+        categories=["sign"],
         upstream=dict(name="GnuPG", source="https://gnupg.org/",
                       license="GPL-3.0-or-later", vendor="Free Software Foundation"),
         match=dict(argv_prefix=["gpg", "--sign"]),
@@ -523,7 +527,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("vexctl", dict(
         desc="vexctl — OpenVEX statement generation.",
-        categories=["statement"],
+        categories=["vex-consume"],
         upstream=dict(name="vexctl", source="https://github.com/openvex/vexctl",
                       license="Apache-2.0", vendor="OpenVEX / Chainguard"),
         emits_formats=["vex"],
@@ -532,7 +536,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("huggingface-hub", dict(
         desc="HuggingFace Hub CLI (`hf`) — model card + repo management. Validated by generating a HuggingFace-standard ModelCard README.md and attesting it as a material.",
-        categories=["statement", "build"],
+        categories=["dataset-snapshot"],
         upstream=dict(name="huggingface_hub", source="https://github.com/huggingface/huggingface_hub",
                       license="Apache-2.0", vendor="Hugging Face"),
         match=dict(argv_prefix=["hf"]),
@@ -542,7 +546,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== SECRETS DISTRIBUTION (validated) =====
     ("vault-cli", dict(
         desc="HashiCorp Vault CLI — secret distribution / dynamic credentials.",
-        categories=["runtime"],
+        categories=["key-ceremony"],
         upstream=dict(name="HashiCorp Vault", source="https://github.com/hashicorp/vault",
                       license="BUSL-1.1 (since 2023) / MPL-2.0 (pre-1.14)", vendor="HashiCorp / IBM"),
         match=dict(argv_prefix=["vault"]),
@@ -550,7 +554,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("aws-secrets-manager", dict(
         desc="AWS Secrets Manager via aws-cli.",
-        categories=["runtime"],
+        categories=["asset-inventory"],
         upstream=dict(name="AWS Secrets Manager", source="https://docs.aws.amazon.com/secretsmanager/",
                       license="commercial", vendor="Amazon Web Services"),
         match=dict(argv_prefix=["aws", "secretsmanager"]),
@@ -560,7 +564,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== AUDIT LOG SOURCES (validated; cloud-auth round will exercise the data plane) =====
     ("cloudtrail", dict(
         desc="AWS CloudTrail — AWS account audit log.",
-        categories=["posture-scan"],
+        categories=["runtime-event"],
         upstream=dict(name="AWS CloudTrail", source="https://docs.aws.amazon.com/awscloudtrail/",
                       license="commercial", vendor="Amazon Web Services"),
         match=dict(argv_prefix=["aws", "cloudtrail"]),
@@ -568,7 +572,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("gcp-audit-log", dict(
         desc="Google Cloud Audit Logs (Cloud Logging).",
-        categories=["posture-scan"],
+        categories=["runtime-event"],
         upstream=dict(name="Cloud Logging", source="https://cloud.google.com/logging/docs",
                       license="commercial", vendor="Google Cloud"),
         match=dict(argv_prefix=["gcloud", "logging"]),
@@ -576,7 +580,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("azure-activity-log", dict(
         desc="Azure Activity Log / Monitor logs.",
-        categories=["posture-scan"],
+        categories=["runtime-event"],
         upstream=dict(name="Azure Monitor", source="https://learn.microsoft.com/azure/azure-monitor/",
                       license="commercial", vendor="Microsoft Azure"),
         match=dict(argv_prefix=["az", "monitor"]),
@@ -584,7 +588,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("kubectl-audit", dict(
         desc="kubectl get audit/events — Kubernetes API audit access.",
-        categories=["posture-scan"],
+        categories=["runtime-event"],
         upstream=dict(name="kubectl", source="https://github.com/kubernetes/kubectl",
                       license="Apache-2.0", vendor="Kubernetes / CNCF"),
         match=dict(argv_prefix=["kubectl", "get", "events"]),
@@ -594,7 +598,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== AWS security services (data-plane validated; need IAM read perms) =====
     ("aws-security-hub", dict(
         desc="AWS Security Hub — central security findings aggregator across AWS services.",
-        categories=["posture-scan"],
+        categories=["compliance-scan"],
         upstream=dict(name="AWS Security Hub", source="https://docs.aws.amazon.com/securityhub/",
                       license="commercial", vendor="Amazon Web Services"),
         match=dict(argv_prefix=["aws", "securityhub"]),
@@ -602,7 +606,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("aws-inspector", dict(
         desc="AWS Inspector v2 — vulnerability + network reachability findings for EC2/ECR/Lambda.",
-        categories=["artifact-scan", "posture-scan"],
+        categories=["vulnerability-scan"],
         upstream=dict(name="AWS Inspector", source="https://docs.aws.amazon.com/inspector/",
                       license="commercial", vendor="Amazon Web Services"),
         match=dict(argv_prefix=["aws", "inspector2"]),
@@ -610,7 +614,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("aws-guardduty", dict(
         desc="AWS GuardDuty — threat detection findings (CloudTrail/VPC/DNS log analysis).",
-        categories=["posture-scan", "runtime"],
+        categories=["runtime-event"],
         upstream=dict(name="AWS GuardDuty", source="https://docs.aws.amazon.com/guardduty/",
                       license="commercial", vendor="Amazon Web Services"),
         match=dict(argv_prefix=["aws", "guardduty"]),
@@ -618,7 +622,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("aws-macie", dict(
         desc="AWS Macie — automated S3 sensitive-data discovery.",
-        categories=["posture-scan"],
+        categories=["secret-scan"],
         upstream=dict(name="AWS Macie", source="https://docs.aws.amazon.com/macie/",
                       license="commercial", vendor="Amazon Web Services"),
         match=dict(argv_prefix=["aws", "macie2"]),
@@ -626,7 +630,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("aws-iam-credential-report", dict(
         desc="AWS IAM credential report — per-user MFA + key-rotation + password-age posture.",
-        categories=["posture-scan"],
+        categories=["asset-inventory"],
         upstream=dict(name="AWS IAM", source="https://docs.aws.amazon.com/iam/",
                       license="commercial", vendor="Amazon Web Services"),
         match=dict(argv_prefix=["aws", "iam", "get-credential-report"]),
@@ -636,7 +640,7 @@ ENTRIES: list[tuple[str, dict]] = [
     # ===== TEST RUNNERS (validated) =====
     ("pytest", dict(
         desc="pytest — Python test runner.",
-        categories=["artifact-scan"],
+        categories=["unit-test"],
         upstream=dict(name="pytest", source="https://github.com/pytest-dev/pytest",
                       license="MIT", vendor="pytest-dev"),
         emits_formats=["test-results"],
@@ -645,7 +649,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("go-test", dict(
         desc="go test — Go test runner.",
-        categories=["artifact-scan"],
+        categories=["unit-test"],
         upstream=dict(name="go test", source="https://pkg.go.dev/cmd/go",
                       license="BSD-3-Clause", vendor="Google / Go Authors"),
         emits_formats=["test-results"],
@@ -684,7 +688,7 @@ ENTRIES: list[tuple[str, dict]] = [
     )),
     ("jest", dict(
         desc="Jest — JavaScript test runner (Meta).",
-        categories=["artifact-scan"],
+        categories=["unit-test"],
         upstream=dict(name="Jest", source="https://github.com/jestjs/jest",
                       license="MIT", vendor="OpenJS Foundation / Meta"),
         emits_formats=["test-results"],
@@ -762,6 +766,8 @@ def render_entry(name: str, args: dict) -> str:
     out.append(f"description: {render_value(args['desc'])}")
     out.append("")
     out.append("category: " + render_value(args["categories"]))
+    if args.get("primary"):
+        out.append(f"primary_category: {render_value(args['primary'])}")
     out.append("")
     out.append("upstream:")
     up = args["upstream"]

@@ -2,7 +2,8 @@ apiVersion: cilock.detection/v0.1
 name: nessus
 description: "Captures Nessus vulnerability scan reports (.nessus XML)."
 
-category: [posture-scan]
+category: [vulnerability-scan, compliance-scan]
+primary_category: vulnerability-scan
 
 upstream:
   name: Nessus

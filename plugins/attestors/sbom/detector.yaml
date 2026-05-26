@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: sbom
 description: "Captures SPDX or CycloneDX SBOM documents produced by syft, cdxgen, or similar tools."
 
-category: [artifact-scan, posture-scan]
+category: [sbom-generate]
 
 upstream:
   name: SPDX + CycloneDX

@@ -7,7 +7,7 @@ detection_only: true
 
 description: Drone — open-source container-native CI.
 
-category: [build]
+category: [ci-context]
 
 upstream:
   name: Drone

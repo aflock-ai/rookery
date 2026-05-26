@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: docker
 description: "Captures docker build provenance, image references, and layer materials."
 
-category: [build]
+category: [image-build]
 
 upstream:
   name: Docker

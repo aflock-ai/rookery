@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: pip-install
 description: "Captures Python package installation provenance (package name, version, resolved wheel) when `pip install` is invoked."
 
-category: [build]
+category: [dependency-resolve]
 
 upstream:
   name: pip

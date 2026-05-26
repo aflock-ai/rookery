@@ -7,7 +7,7 @@ detection_only: true
 
 description: "HuggingFace Hub CLI (`hf`) — model card + repo management. Validated by generating a HuggingFace-standard ModelCard README.md and attesting it as a material."
 
-category: [statement, build]
+category: [dataset-snapshot]
 
 upstream:
   name: huggingface_hub

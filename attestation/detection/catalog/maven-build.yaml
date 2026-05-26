@@ -7,7 +7,8 @@ detection_only: true
 
 description: "Apache Maven `mvn` — JVM dependency + build orchestrator (catalog-only; the maven attestor plugin emits the actual SLSA-style record)."
 
-category: [build]
+category: [build, dependency-resolve]
+primary_category: build
 
 upstream:
   name: Apache Maven
