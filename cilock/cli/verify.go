@@ -48,9 +48,17 @@ func VerifyCmd() *cobra.Command {
 		KMSSignerProviderOptions:   options.KMSSignerProviderOptions{},
 	}
 	cmd := &cobra.Command{
-		Use:               "verify",
-		Short:             "Verifies a witness policy",
-		Long:              "Verifies a policy provided key source and exits with code 0 if verification succeeds",
+		Use:   "verify",
+		Short: "Verifies a witness policy",
+		Long:  "Verifies a policy provided key source and exits with code 0 if verification succeeds",
+		Example: `  # Verify a policy against local attestation files
+  cilock verify -p policy.json -k policy-pub.pem -a build.att.json -a test.att.json
+
+  # Verify a subject artifact, pulling evidence from Archivista
+  cilock verify -p policy.json -k policy-pub.pem -f ./dist/app.tar.gz --enable-archivista
+
+  # Fully offline verify from a bundle (no platform lookup)
+  cilock verify -p policy.json -k policy-pub.pem --bundle evidence.tar.gz --platform-url ""`,
 		SilenceErrors:     true,
 		SilenceUsage:      true,
 		DisableAutoGenTag: true,

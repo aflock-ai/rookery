@@ -57,20 +57,15 @@ aws-iid (EC2 identity), or any plugin that fires during the prematerial
 stage and doesn't depend on a wrapped command's outputs.
 
 Behind the scenes this is sugar for ` + "`cilock run -- true`" + ` — every
-flag accepted by ` + "`cilock run`" + ` works identically here.
-
-Examples:
-  # Snapshot PR review state for HEAD in the current repo.
+flag accepted by ` + "`cilock run`" + ` works identically here.`,
+		Example: `  # Snapshot PR review state for HEAD in the current repo
   cilock attest -a github-review -k key.pem -o review.bundle.json -s review-head
 
-  # Snapshot EC2 instance identity (when on an EC2 host).
+  # Snapshot EC2 instance identity (when on an EC2 host)
   cilock attest -a aws-iid -k key.pem -o iid.bundle.json -s iid
 
-  # Snapshot a specific PR's review state from any working dir.
-  cilock attest -a github-review \
-    --attestor-github-review-repo aflock-ai/rookery \
-    --attestor-github-review-pr 153 \
-    -k key.pem -o review-pr153.bundle.json -s review-pr153`,
+  # Snapshot a specific PR's review state from any working dir
+  cilock attest -a github-review --attestor-github-review-repo aflock-ai/rookery --attestor-github-review-pr 153 -k key.pem -o review-pr153.bundle.json -s review-pr153`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          cobra.NoArgs,

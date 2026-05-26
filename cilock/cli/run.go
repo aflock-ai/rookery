@@ -480,6 +480,14 @@ Exit-code policy (finding #221):
 
   CI should gate on cilock's exit code — only a fatal class produces
   a non-zero exit.`,
+		Example: `  # Wrap a build, sign with a local key, capture Go build provenance
+  cilock run --step build -k cosign.key --workload manual -a environment,git,go-build -o build.att.json -- go build ./...
+
+  # Wrap any command, signing it with just the environment attestor
+  cilock run --step unit-test -k cosign.key --workload manual -a environment -o test.att.json -- go test ./...
+
+  # On Linux, add -r/--trace to capture file + network materials via eBPF
+  # (falls back to ptrace). --enable-archivista stores the result remotely.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {

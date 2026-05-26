@@ -36,6 +36,13 @@ func New() *cobra.Command {
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// `<cmd> --help-advanced` (without -h) parses normally and would
+			// otherwise fall through to RunE. Intercept it here and render
+			// the full help instead of running the command.
+			if changed, _ := cmd.Flags().GetBool(helpAdvancedFlag); changed {
+				_ = cmd.Help()
+				os.Exit(0)
+			}
 			return preRoot(cmd, ro, logger, &cpuProfileFile)
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
@@ -46,6 +53,9 @@ func New() *cobra.Command {
 	log.SetLogger(logger)
 
 	ro.AddFlags(cmd)
+	cmd.PersistentFlags().Bool(helpAdvancedFlag, false, "Show the full flag listing, including advanced/rarely-used flags")
+	_ = cmd.PersistentFlags().MarkHidden(helpAdvancedFlag)
+	cmd.SetHelpFunc(conciseHelpFunc)
 	cmd.AddCommand(SignCmd())
 	cmd.AddCommand(VerifyCmd())
 	cmd.AddCommand(RunCmd())
