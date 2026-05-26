@@ -238,6 +238,13 @@ jobs:
               continue
             fi
 
+            # Skip vendored / security-patched upstream code — the
+            # scan targets first-party patterns, not upstream API
+            # decisions (e.g. wk8 ordered-map's invalidOption panic).
+            case "$CURRENT_FILE" in
+              security-patches/*|vendor/*) continue ;;
+            esac
+
             # Only check added lines
             [[ "$line" == "+"* ]] || continue
             [[ "$line" == "+++"* ]] && continue

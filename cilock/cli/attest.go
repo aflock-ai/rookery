@@ -90,7 +90,10 @@ Examples:
 			// Windows powershell users can run `cilock attest` and the
 			// runRun path will exec the local `true` if available, or
 			// fall back to whatever the shell resolves.
-			return runRun(cmd.Context(), o, []string{"true"}, signers...)
+			userSetFlags := map[string]bool{
+				"attestor-product-include-glob": cmd.Flags().Changed("attestor-product-include-glob"),
+			}
+			return runRun(cmd.Context(), o, []string{"true"}, userSetFlags, signers...)
 		},
 	}
 
