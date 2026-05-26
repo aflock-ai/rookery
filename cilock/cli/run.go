@@ -51,6 +51,19 @@ var defaultAttestorNames = []string{product.Name, material.Name}
 
 // applyNoDefaultAttestors filters out always-on attestors named in
 // the operator's --no-default-attestor flags. Hard-fails when the
+// shouldAutoDetect decides whether workload auto-detection runs for a run.
+//
+// Default behavior: auto-detect ONLY when the operator didn't specify
+// attestors (`-a`). If they passed -a, that's their exact set and we don't
+// add to it. An explicit `--workload` overrides the default — "auto" forces
+// detection even alongside -a, "manual" disables it.
+func shouldAutoDetect(attestationsSet, workloadSet bool, workload string) bool {
+	if workloadSet {
+		return workload != "manual"
+	}
+	return !attestationsSet
+}
+
 // detectWorkloadAttestors probes the working directory for indicators
 // of common build systems and returns the names of attestors that
 // should run on top of whatever the operator already configured.
@@ -514,10 +527,20 @@ Exit-code policy (finding #221):
 
 			// Workload auto-detection: probe the workspace for build-system
 			// indicators (go.mod, package.json, .git, etc.) and merge the
-			// matched attestors into the operator's --attestations list.
-			// Phase 4 of #234. Skip when --workload=manual.
+			// matched attestors into the --attestations list.
+			//
+			// Default: auto-detect ONLY when the operator didn't specify
+			// attestors. If they passed -a, that's their exact set — we
+			// don't second-guess it. An explicit --workload always wins
+			// over this default (--workload=auto forces detection even
+			// alongside -a; --workload=manual disables it). Phase 4 of #234.
+			autoDetect := shouldAutoDetect(
+				cmd.Flags().Changed("attestations"),
+				cmd.Flags().Changed("workload"),
+				o.Workload,
+			)
 			var detectedNames []string
-			if o.Workload != "manual" {
+			if autoDetect {
 				probed := detectWorkloadAttestors(o.WorkingDir)
 				var merged []string
 				merged, detectedNames = mergeAttestorNames(o.Attestations, probed)
