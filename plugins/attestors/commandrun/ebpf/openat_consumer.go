@@ -338,17 +338,18 @@ func Open() (*Consumer, error) {
 		return nil, fmt.Errorf("remove memlock: %w", err)
 	}
 
-	// CILOCK_BPF_OBJECT_PATH overrides the embedded .bpf.o. This is
+	// CILOCK_DEV_BPF_OBJECT_PATH overrides the embedded .bpf.o. This is
 	// the GHA-on-hosted-runner escape hatch: the checked-in BPF object
 	// in our release was built against whichever vmlinux.h the maintainer
 	// had locally, so it can fail CO-RE relocation on a kernel with
 	// different struct/field layouts (notably the Azure-flavored
-	// hosted-runner kernels).
+	// hosted-runner kernels). Dev-only — not part of the supported
+	// operator surface.
 	bpfBytes := bpfObjBytes
-	if p := os.Getenv("CILOCK_BPF_OBJECT_PATH"); p != "" {
-		b, rerr := os.ReadFile(p)
+	if p := os.Getenv("CILOCK_DEV_BPF_OBJECT_PATH"); p != "" {
+		b, rerr := os.ReadFile(p) //nolint:gosec // dev-only knob: path is supplied by the operator running cilock locally
 		if rerr != nil {
-			return nil, fmt.Errorf("read CILOCK_BPF_OBJECT_PATH=%s: %w", p, rerr)
+			return nil, fmt.Errorf("read CILOCK_DEV_BPF_OBJECT_PATH=%s: %w", p, rerr)
 		}
 		fmt.Fprintf(os.Stderr, "cilock-ebpf: using BPF object from %s (%d bytes)\n", p, len(b))
 		bpfBytes = b
@@ -362,9 +363,9 @@ func Open() (*Consumer, error) {
 	// Rebuild-on-CO-RE-failure: try the embedded .bpf.o first; if it
 	// poisons (kernel BTF mismatch), rebuild from the embedded source
 	// against /sys/kernel/btf/vmlinux. Auto-on unless explicitly off
-	// via CILOCK_BPF_REBUILD=off. Requires clang + bpftool + libbpf
+	// via CILOCK_DEV_BPF_REBUILD=off. Requires clang + bpftool + libbpf
 	// headers on the runner — cilock-action's shim installs them.
-	tryRebuild := os.Getenv("CILOCK_BPF_REBUILD") != "off" && os.Getenv("CILOCK_BPF_OBJECT_PATH") == ""
+	tryRebuild := os.Getenv("CILOCK_DEV_BPF_REBUILD") != "off" && os.Getenv("CILOCK_DEV_BPF_OBJECT_PATH") == ""
 
 	// Programs that depend on kernel features which may not exist /
 	// not be allowlisted on every kernel. We attempt-attach them
@@ -374,13 +375,13 @@ func Open() (*Consumer, error) {
 	// collection load aborts. Allow operators to skip them via env
 	// so the collection can still load. The userspace fallback paths
 	// already handle the missing-program case at attach time.
-	if optional := os.Getenv("CILOCK_BPF_SKIP_PROGRAMS"); optional != "" {
+	if optional := os.Getenv("CILOCK_DEV_BPF_SKIP_PROGRAMS"); optional != "" {
 		for _, name := range strings.Split(optional, ",") {
 			name = strings.TrimSpace(name)
 			if _, ok := spec.Programs[name]; ok {
 				delete(spec.Programs, name)
 				fmt.Fprintf(os.Stderr,
-					"cilock-ebpf: skipping program %q per CILOCK_BPF_SKIP_PROGRAMS\n",
+					"cilock-ebpf: skipping program %q per CILOCK_DEV_BPF_SKIP_PROGRAMS\n",
 					name)
 			}
 		}
@@ -389,9 +390,9 @@ func Open() (*Consumer, error) {
 	// Diagnostic mode: try loading each program individually so we
 	// can identify which specific program(s) fail CO-RE relocation
 	// on the current kernel. cilium/ebpf's NewCollection error
-	// doesn't name the failing program; this does. Set
-	// CILOCK_BPF_DIAGNOSE=1 to enable.
-	if os.Getenv("CILOCK_BPF_DIAGNOSE") != "" {
+	// doesn't name the failing program; this does. Gated on the
+	// single CILOCK_DIAGNOSE knob (set by `cilock run --diagnose`).
+	if os.Getenv("CILOCK_DIAGNOSE") != "" {
 		fmt.Fprintln(os.Stderr, "cilock-ebpf: BPF_DIAGNOSE — testing each program individually")
 		names := make([]string, 0, len(spec.Programs))
 		for n := range spec.Programs {

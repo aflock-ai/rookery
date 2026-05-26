@@ -49,6 +49,38 @@ var defaultAttestorNames = []string{product.Name, material.Name}
 
 // applyNoDefaultAttestors filters out always-on attestors named in
 // the operator's --no-default-attestor flags. Hard-fails when the
+// warnLegacyDiagnosticEnv prints a one-line migration message for each
+// legacy diagnostic env var the operator still has set in their CI YAML.
+// The new world is a single --diagnose flag (or CILOCK_DIAGNOSE=1 for
+// equivalent effect from env). The renamed CILOCK_DEV_BPF_* vars keep
+// the same behavior as their unprefixed predecessors; they're flagged
+// as "dev-only" so operators understand they're not part of the supported
+// surface.
+func warnLegacyDiagnosticEnv() {
+	// Logging vars folded into --diagnose / CILOCK_DIAGNOSE.
+	for _, v := range []string{"CILOCK_EBPF_DEBUG", "CILOCK_BPF_DIAGNOSE"} {
+		if os.Getenv(v) != "" {
+			log.Warnf("%s is no longer recognized; use --diagnose (or CILOCK_DIAGNOSE=1) instead", v)
+		}
+	}
+	// Dev-only tuning vars renamed with CILOCK_DEV_ prefix to signal
+	// "not for production use". Auto-translate if both old + new are
+	// unset — preserves operator workflows that haven't migrated yet,
+	// surfaces the warning so the migration happens.
+	for _, m := range []struct{ old, new string }{
+		{"CILOCK_BPF_OBJECT_PATH", "CILOCK_DEV_BPF_OBJECT_PATH"},
+		{"CILOCK_BPF_REBUILD", "CILOCK_DEV_BPF_REBUILD"},
+		{"CILOCK_BPF_SKIP_PROGRAMS", "CILOCK_DEV_BPF_SKIP_PROGRAMS"},
+	} {
+		if v := os.Getenv(m.old); v != "" {
+			log.Warnf("%s is deprecated; rename to %s (dev-only knob; not part of the supported surface)", m.old, m.new)
+			if os.Getenv(m.new) == "" {
+				_ = os.Setenv(m.new, v)
+			}
+		}
+	}
+}
+
 // user disables every default attestor — the attestation collection
 // would have no body to attest.
 func applyNoDefaultAttestors(base []attestation.Attestor, disabled []string) ([]attestation.Attestor, error) {
@@ -126,6 +158,15 @@ Exit-code policy (finding #221):
 			// Apply platform-derived defaults (archivista, TSA URLs) for any
 			// flags not explicitly set by the user or config file.
 			o.ResolvePlatformDefaults(cmd)
+
+			// Warn loudly if operators are still using legacy diagnostic env
+			// vars; tell them how to migrate. Then translate --diagnose into
+			// the single CILOCK_DIAGNOSE env var that downstream subpackages
+			// read.
+			warnLegacyDiagnosticEnv()
+			if o.Diagnose {
+				_ = os.Setenv("CILOCK_DIAGNOSE", "1")
+			}
 
 			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, providersFromFlags("signer", cmd.Flags()))
 			if err != nil {

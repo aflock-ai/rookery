@@ -1110,7 +1110,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		readTotal.Load(), matchedTotal.Load(), otherTotal.Load(),
 		hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load(),
 		captureAttempts.Load(), captureSucceeded.Load())
-	if v := os.Getenv("CILOCK_EBPF_DEBUG"); v == "1" {
+	if v := os.Getenv("CILOCK_DIAGNOSE"); v == "1" {
 		fmt.Fprintf(os.Stderr,
 			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d "+
 				"readChunkSeen=%d readChunkRejected=%d readTapBytes=%d readTapClosures=%d "+

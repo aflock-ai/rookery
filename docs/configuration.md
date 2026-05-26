@@ -42,7 +42,10 @@ For the full set, run `cilock run --help` and `cilock verify --help`.
 | `CILOCK_TRACE_MODE` | — | `auto` | Selects `ebpf` (default) vs `ptrace` tracing. |
 | `CILOCK_HASH_WORKERS` | — | auto | Number of hashing goroutines in the eBPF consumer. |
 | `CILOCK_FSVERITY` | — | off | Opt-in fs-verity sealing of trace outputs. |
-| `CILOCK_EBPF_DEBUG` | — | off | Verbose eBPF program logging. |
+| `CILOCK_DIAGNOSE` | `--diagnose` | off | Verbose internal logging across cilock subsystems (eBPF program loading, BPF CO-RE probe results, ringbuf drop reports). Replaces the per-feature `CILOCK_EBPF_DEBUG` / `CILOCK_BPF_DIAGNOSE` env vars. |
+| `CILOCK_DEV_BPF_OBJECT_PATH` | — | — | **Dev-only**. Path to a prebuilt BPF object file; skips the embedded-object load. Not part of the supported operator surface. (Was: `CILOCK_BPF_OBJECT_PATH`.) |
+| `CILOCK_DEV_BPF_REBUILD` | — | `on` | **Dev-only**. Set to `off` to disable the rebuild-on-CO-RE-failure path. (Was: `CILOCK_BPF_REBUILD`.) |
+| `CILOCK_DEV_BPF_SKIP_PROGRAMS` | — | — | **Dev-only**. Comma-separated BPF program names to skip during load. Used to isolate CO-RE failures. (Was: `CILOCK_BPF_SKIP_PROGRAMS`.) |
 | `ACTIONS_ID_TOKEN_REQUEST_URL` | `--archivista-oidc` (auto-enables when set) | — | Triggers GitHub Actions OIDC token fetch for Archivista auth. |
 
 ## Worked example: changing the product include-glob across three layers

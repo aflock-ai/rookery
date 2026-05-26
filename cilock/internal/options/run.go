@@ -70,6 +70,17 @@ type RunOptions struct {
 	// Policy Rego still has access to the recorded exit code via
 	// `input.attestation.exitcode` if a deny rule wants to gate on it.
 	IgnoreCommandExitCode bool
+
+	// Diagnose enables verbose internal logging across cilock subsystems:
+	// eBPF program loading, fanotify event traces, ringbuf drop reporting,
+	// fs-verity probe results, etc. Off by default — the normal run is
+	// already loud enough for typical operators. Turn on when filing a
+	// bug or debugging a CI flake.
+	//
+	// Internally sets CILOCK_DIAGNOSE=1 for downstream subprocess /
+	// subpackage consumers. Replaces (and consolidates) the per-feature
+	// env vars: CILOCK_EBPF_DEBUG, CILOCK_BPF_DIAGNOSE.
+	Diagnose bool
 	TimestampServers      []string
 	// Subjects holds raw --subjects flag values. Each entry is either a bare
 	// subject name (e.g. "product:<uuid>") — in which case a sha256 digest of
@@ -195,6 +206,10 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 			"checkov, trivy --exit-code, prowler v3, govulncheck) so postproduct attestors still fire and "+
 			"the SARIF/JSON output is captured. Policy Rego retains access to the real exit code via "+
 			"input.attestation.exitcode for gating.")
+	cmd.Flags().BoolVar(&ro.Diagnose, "diagnose", false,
+		"Enable verbose internal logging across cilock subsystems (eBPF program loading, "+
+			"fanotify event traces, ringbuf drop reporting, fs-verity probe results). "+
+			"Off by default. Replaces the per-feature CILOCK_EBPF_DEBUG / CILOCK_BPF_DIAGNOSE env vars.")
 	cmd.Flags().StringSliceVarP(&ro.TimestampServers, "timestamp-servers", "t", []string{}, "Timestamp Authority Servers to use when signing envelope")
 
 	cmd.Flags().StringArrayVar(&ro.Subjects, "subjects", []string{},
