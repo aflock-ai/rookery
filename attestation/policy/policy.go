@@ -870,6 +870,22 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 						reasons = append(reasons, err.Error())
 						continue
 					}
+					// Materials covered by the chain sidecar are
+					// cryptographically proven against the upstream
+					// root. Any REMAINING material in this step's
+					// collection that the sidecar doesn't claim must
+					// either be allowed by Step.AllowedUntracked (the
+					// policy-declared escape hatch for build-toolchain
+					// reads under e.g. /usr/lib/**) or fail the step.
+					proven := make(map[string]struct{}, len(sidecar.MaterialProofs))
+					for _, p := range sidecar.MaterialProofs {
+						proven[p.Path] = struct{}{}
+					}
+					if uncoveredErr := untrackedMaterialsAllowed(step, mats, proven); uncoveredErr != nil {
+						collection.Warnings = append(collection.Warnings, fmt.Sprintf("step %s ← %s: %v", step.Name, artifactsFrom, uncoveredErr))
+						reasons = append(reasons, uncoveredErr.Error())
+						continue
+					}
 					accepted = append(accepted, testCollection.Collection)
 					continue
 				}
