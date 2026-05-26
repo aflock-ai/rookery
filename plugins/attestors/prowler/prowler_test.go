@@ -19,7 +19,32 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+
+	"github.com/aflock-ai/rookery/attestation"
 )
+
+// TestResolveProductPath guards the regression where product paths (recorded
+// relative to the attestation working directory) were opened relative to the
+// process CWD instead. That broke discovery whenever cilock was invoked with
+// --workingdir/-d pointing somewhere other than the CWD.
+func TestResolveProductPath(t *testing.T) {
+	wd := t.TempDir()
+	ctx, err := attestation.NewContext("test", []attestation.Attestor{}, attestation.WithWorkingDir(wd))
+	if err != nil {
+		t.Fatalf("NewContext: %v", err)
+	}
+
+	// A relative product path must resolve against the working dir.
+	if got, want := resolveProductPath(ctx, "prowler-output-eks.json"), filepath.Join(wd, "prowler-output-eks.json"); got != want {
+		t.Errorf("relative path: got %q, want %q", got, want)
+	}
+
+	// Absolute paths pass through unchanged.
+	abs := filepath.Join(wd, "abs.json")
+	if got := resolveProductPath(ctx, abs); got != abs {
+		t.Errorf("absolute path: got %q, want %q", got, abs)
+	}
+}
 
 // expectedSummary describes the canonical Summary the three fixtures should
 // all aggregate into. Each fixture encodes the same six logical findings
