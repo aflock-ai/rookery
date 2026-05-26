@@ -65,6 +65,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -449,6 +450,23 @@ func collectTracedFileSet(ctx *attestation.AttestationContext) (bool, map[string
 	return traced, set
 }
 
+// commandStartTime returns the wall-clock instant the wrapped command began,
+// read from a completed CommandRun attestor. The walk path passes it to
+// file.RecordArtifacts so a same-digest file the build rewrote during its run
+// (mtime >= start) is still recorded as a product. Returns the zero time when
+// no command ran (e.g. `cilock attest` with no wrapped command), which makes
+// RecordArtifacts fall back to the legacy digest-only dedup.
+func commandStartTime(ctx *attestation.AttestationContext) time.Time {
+	for _, completed := range ctx.CompletedAttestors() {
+		if cmd, ok := completed.Attestor.(*commandrun.CommandRun); ok {
+			if started := cmd.StartedAt(); !started.IsZero() {
+				return started
+			}
+		}
+	}
+	return time.Time{}
+}
+
 // Attest walks the product set, computes the per-file pre-hashes, sorts
 // them deterministically, and builds the Merkle tree. The signed
 // predicate's MerkleRoot is the resulting tree root in hex.
@@ -596,6 +614,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		ctx.DirHashGlob(),
 		a.compiledIncludeGlob,
 		a.compiledExcludeGlob,
+		// Command-start time so RecordArtifacts can rescue same-digest
+		// files the build rewrote during its run (deterministic rebuilds).
+		// Without a syscall view, mtime >= start is the only signal walk
+		// mode has that a byte-identical file is actually a fresh product.
+		commandStartTime(ctx),
 	)
 	if err != nil {
 		return err

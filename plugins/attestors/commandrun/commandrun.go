@@ -1520,6 +1520,15 @@ func (rc *CommandRun) TracingEnabled() bool {
 	return rc.enableTracing
 }
 
+// StartedAt returns the wall-clock instant captured immediately before the
+// command's exec.Start, on every run (traced or not). The product attestor's
+// walk path uses it to decide whether a same-digest file was rewritten during
+// the command window (mtime >= StartedAt → product). Zero if the command never
+// started.
+func (rc *CommandRun) StartedAt() time.Time {
+	return rc.traceStartTime
+}
+
 func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	c := exec.Command(r.Cmd[0], r.Cmd[1:]...) //nolint:gosec // G204: command is user-specified by design
 	c.Dir = ctx.WorkingDir()

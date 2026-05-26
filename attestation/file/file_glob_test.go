@@ -15,6 +15,7 @@
 package file
 
 import (
+	"time"
 	"crypto"
 	"os"
 	"path/filepath"
@@ -172,17 +173,17 @@ func TestShouldRecord_IncludeGlobFiltering(t *testing.T) {
 	includeGlob, err := glob.Compile("*.go")
 	require.NoError(t, err)
 
-	assert.True(t, shouldRecord("main.go", nil, nil, false, nil, includeGlob, nil))
-	assert.False(t, shouldRecord("readme.md", nil, nil, false, nil, includeGlob, nil))
-	assert.False(t, shouldRecord("build.log", nil, nil, false, nil, includeGlob, nil))
+	assert.True(t, shouldRecord("main.go", nil, nil, false, nil, includeGlob, nil, time.Time{}, time.Time{}))
+	assert.False(t, shouldRecord("readme.md", nil, nil, false, nil, includeGlob, nil, time.Time{}, time.Time{}))
+	assert.False(t, shouldRecord("build.log", nil, nil, false, nil, includeGlob, nil, time.Time{}, time.Time{}))
 }
 
 func TestShouldRecord_ExcludeGlobFiltering(t *testing.T) {
 	excludeGlob, err := glob.Compile("*.log")
 	require.NoError(t, err)
 
-	assert.True(t, shouldRecord("main.go", nil, nil, false, nil, nil, excludeGlob))
-	assert.False(t, shouldRecord("build.log", nil, nil, false, nil, nil, excludeGlob))
+	assert.True(t, shouldRecord("main.go", nil, nil, false, nil, nil, excludeGlob, time.Time{}, time.Time{}))
+	assert.False(t, shouldRecord("build.log", nil, nil, false, nil, nil, excludeGlob, time.Time{}, time.Time{}))
 }
 
 func TestShouldRecord_BothGlobs(t *testing.T) {
@@ -191,21 +192,21 @@ func TestShouldRecord_BothGlobs(t *testing.T) {
 	excludeGlob, err := glob.Compile("*_test.go")
 	require.NoError(t, err)
 
-	assert.True(t, shouldRecord("main.go", nil, nil, false, nil, includeGlob, excludeGlob))
-	assert.False(t, shouldRecord("main_test.go", nil, nil, false, nil, includeGlob, excludeGlob))
-	assert.False(t, shouldRecord("readme.md", nil, nil, false, nil, includeGlob, excludeGlob))
+	assert.True(t, shouldRecord("main.go", nil, nil, false, nil, includeGlob, excludeGlob, time.Time{}, time.Time{}))
+	assert.False(t, shouldRecord("main_test.go", nil, nil, false, nil, includeGlob, excludeGlob, time.Time{}, time.Time{}))
+	assert.False(t, shouldRecord("readme.md", nil, nil, false, nil, includeGlob, excludeGlob, time.Time{}, time.Time{}))
 }
 
 func TestShouldRecord_NilGlobsPassThrough(t *testing.T) {
 	// nil globs should not filter anything
-	assert.True(t, shouldRecord("anything.txt", nil, nil, false, nil, nil, nil))
+	assert.True(t, shouldRecord("anything.txt", nil, nil, false, nil, nil, nil, time.Time{}, time.Time{}))
 }
 
 func TestShouldRecord_TracingStillApplied(t *testing.T) {
 	// Even with nil globs, tracing-based filtering should still work
 	openedFiles := map[string]bool{"main.go": true}
-	assert.True(t, shouldRecord("main.go", nil, nil, true, openedFiles, nil, nil))
-	assert.False(t, shouldRecord("other.go", nil, nil, true, openedFiles, nil, nil))
+	assert.True(t, shouldRecord("main.go", nil, nil, true, openedFiles, nil, nil, time.Time{}, time.Time{}))
+	assert.False(t, shouldRecord("other.go", nil, nil, true, openedFiles, nil, nil, time.Time{}, time.Time{}))
 }
 
 func TestShouldRecord_BaseArtifactDedup(t *testing.T) {
@@ -213,9 +214,9 @@ func TestShouldRecord_BaseArtifactDedup(t *testing.T) {
 	baseArtifacts := map[string]cryptoutil.DigestSet{"main.go": ds}
 
 	// Same digest should not be recorded
-	assert.False(t, shouldRecord("main.go", ds, baseArtifacts, false, nil, nil, nil))
+	assert.False(t, shouldRecord("main.go", ds, baseArtifacts, false, nil, nil, nil, time.Time{}, time.Time{}))
 	// Different path should be recorded
-	assert.True(t, shouldRecord("other.go", ds, baseArtifacts, false, nil, nil, nil))
+	assert.True(t, shouldRecord("other.go", ds, baseArtifacts, false, nil, nil, nil, time.Time{}, time.Time{}))
 }
 
 func TestRecordArtifacts_GlobWithSubdirPattern(t *testing.T) {
