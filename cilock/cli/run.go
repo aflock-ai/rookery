@@ -213,10 +213,14 @@ func preflightAttestorTooling(workdir string, attestors []string) (warned bool) 
 			}
 		}
 		if !found {
-			log.Warnf("attestor %q will produce no output: no generator found on PATH (looked for %v) — "+
+			// Render the generator list once, comma-joined, to avoid the
+			// double-bracketed `[[a b c]]` cosmetic bug the round-4 UX
+			// test caught when %v stringified an already-formatted slice.
+			gensList := strings.Join(gens, ", ")
+			log.Warnf("attestor %q will produce no output: no generator found on PATH (looked for [%s]) — "+
 				"this attestor RECORDS the output of an external tool; cilock does NOT invoke the generator. "+
-				"Install one of [%v] or drop the attestor from --attestations.",
-				name, gens, gens)
+				"Install one of those or drop the attestor from --attestations.",
+				name, gensList)
 			warned = true
 			continue
 		}
@@ -403,7 +407,7 @@ func applyNoDefaultAttestors(base []attestation.Attestor, disabled []string) ([]
 	return out, nil
 }
 
-//nolint:funlen // RunCmd composes flag registration + pre-flight gates inline; refactoring would split closely-related code
+//nolint:funlen,gocognit // RunCmd composes flag registration + pre-flight gates inline; refactoring would split closely-related code
 func RunCmd() *cobra.Command {
 	o := options.RunOptions{
 		AttestorOptSetters:       make(map[string][]func(attestation.Attestor) (attestation.Attestor, error)),
