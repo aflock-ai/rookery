@@ -1072,7 +1072,12 @@ func (ctx *ptraceContext) readSyscallReg(pid int, addr uintptr, n int) (string, 
 		// No null terminator found; use the full buffer.
 		size = numBytes
 	}
-	return string(data[:size]), nil
+	// sanitizePath ensures the returned string round-trips losslessly
+	// through JSON even when the kernel handed us non-UTF-8 path bytes.
+	// Valid-UTF-8 paths (the 99.99% case) are returned unchanged, so the
+	// wire format is unchanged for normal builds. See path_encoding.go
+	// and issue #164.
+	return sanitizePath(data[:size]), nil
 }
 
 func cleanString(s string) string {
