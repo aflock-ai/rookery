@@ -330,9 +330,17 @@ ENTRIES: list[tuple[str, dict]] = [
         categories=["build"],
         upstream=dict(name="npm", source="https://github.com/npm/cli",
                       license="Artistic-2.0", vendor="OpenJS Foundation / npm Inc."),
-        match=dict(argv_prefix=["npm", "ci"]),
+        # `npm ci` and `npm install` both resolve + install dependencies. The
+        # previous catalog only matched `npm ci`; the blind-UX test on an Argo
+        # CD-style frontend hit `npm install` and saw 0 fires. Both forms must
+        # match or the detector misses the common case.
+        match=dict(any_of=[
+            dict(argv_prefix=["npm", "install"]),
+            dict(argv_prefix=["npm", "ci"]),
+            dict(argv_prefix=["npm", "i"]),
+        ]),
         recommended_trace="light",
-        on_match="npm ci observed. lockfiles attestor captures package-lock.json; commandrun captures fetches."
+        on_match="npm install/ci observed. lockfiles attestor captures package-lock.json; commandrun captures fetches."
     )),
     ("yarn-install", dict(
         desc="yarn install — Yarn package manager install.",
@@ -644,6 +652,36 @@ ENTRIES: list[tuple[str, dict]] = [
         match=dict(argv_prefix=["go", "test"]),
         on_match="go test invocation observed. With -json + a converter (e.g., gotestsum), JUnit XML captured by test-results."
     )),
+    ("go-build", dict(
+        desc="go build — Go compiler. Output binaries carry BuildInfo (module + VCS metadata) which the go-build attestor extracts and writes as a JSON sidecar so the evidence survives strip(1).",
+        categories=["build"],
+        upstream=dict(name="go build", source="https://pkg.go.dev/cmd/go",
+                      license="BSD-3-Clause", vendor="Google / Go Authors"),
+        # `go build` and `go install` both produce binaries with embedded
+        # BuildInfo. `go run` is intentionally out of scope — it doesn't
+        # persist a binary worth attesting.
+        match=dict(any_of=[
+            dict(argv_prefix=["go", "build"]),
+            dict(argv_prefix=["go", "install"]),
+        ]),
+        recommended_trace="light",
+        on_match="go build/install observed. The go-build attestor captures BuildInfo (module graph + vcs.revision + build settings) and persists a .gobuild.json sidecar next to each binary so the evidence survives strip(1)."
+    )),
+    ("protoc", dict(
+        desc="Protocol Buffers compiler — generates Go/Java/Python/JS bindings from .proto files. Common in monorepos with API codegen pipelines.",
+        categories=["build"],
+        upstream=dict(name="Protocol Buffers", source="https://github.com/protocolbuffers/protobuf",
+                      license="BSD-3-Clause", vendor="Google / Protocol Buffers Authors"),
+        # `protoc` is the C++ compiler; `buf generate` is the modern wrapper.
+        # Both should fire — the resulting generated files appear as products
+        # and feed downstream attestors (go-build, etc.).
+        match=dict(any_of=[
+            dict(argv_prefix=["protoc"]),
+            dict(argv_prefix=["buf", "generate"]),
+        ]),
+        recommended_trace="light",
+        on_match="protoc / buf generate observed. Generated source files appear as products; downstream attestors (go-build, sbom) pick up the binaries/SBOMs that result."
+    )),
     ("jest", dict(
         desc="Jest — JavaScript test runner (Meta).",
         categories=["artifact-scan"],
@@ -672,23 +710,44 @@ def render_value(v):
     return s
 
 
-def render_match(match: dict) -> str:
-    """Render the `match:` block — pre-gate predicate."""
+def render_leaf(match: dict, indent: str) -> str:
+    """Render a single leaf predicate at the given indent prefix."""
     if "argv_prefix" in match:
-        return "    argv_prefix: " + render_value(match["argv_prefix"])
+        return indent + "argv_prefix: " + render_value(match["argv_prefix"])
     if "file_exists" in match:
-        return "    file_exists: " + render_value(match["file_exists"])
+        return indent + "file_exists: " + render_value(match["file_exists"])
     if "file_glob" in match:
-        return "    file_glob: " + render_value(match["file_glob"])
+        return indent + "file_glob: " + render_value(match["file_glob"])
     if "env_set" in match:
-        return "    env_set: " + render_value(match["env_set"])
+        return indent + "env_set: " + render_value(match["env_set"])
     if "azure_metadata_reachable" in match:
-        return "    azure_metadata_reachable: " + render_value(match["azure_metadata_reachable"])
+        return indent + "azure_metadata_reachable: " + render_value(match["azure_metadata_reachable"])
     if "gcp_metadata_reachable" in match:
-        return "    gcp_metadata_reachable: " + render_value(match["gcp_metadata_reachable"])
+        return indent + "gcp_metadata_reachable: " + render_value(match["gcp_metadata_reachable"])
     if "imds_reachable" in match:
-        return "    imds_reachable: " + render_value(match["imds_reachable"])
+        return indent + "imds_reachable: " + render_value(match["imds_reachable"])
     raise ValueError(f"unknown match shape: {match}")
+
+
+def render_match(match: dict) -> str:
+    """Render the `match:` block — pre-gate predicate.
+
+    Supports `any_of: [predicate, predicate, ...]` for tools whose
+    invocation has multiple equivalent forms (e.g. `npm install`
+    vs `npm ci`). Each child is rendered as a YAML list item under
+    `any_of:`. Falls through to a leaf render for single-predicate
+    entries — the common case.
+    """
+    if "any_of" in match:
+        out = ["    any_of:"]
+        for child in match["any_of"]:
+            # YAML list item: leading "- " on the predicate's first
+            # (only) key. render_leaf returns one line at indent; we
+            # rewrite the leading spaces to "      - ".
+            line = render_leaf(child, "")
+            out.append("      - " + line)
+        return "\n".join(out)
+    return render_leaf(match, "    ")
 
 
 def render_entry(name: str, args: dict) -> str:

@@ -19,7 +19,10 @@ recommended_trace: light
 
 pre:
   match:
-    argv_prefix: [npm, ci]
+    any_of:
+      - argv_prefix: [npm, install]
+      - argv_prefix: [npm, ci]
+      - argv_prefix: [npm, i]
 
 llm_hints:
-  on_match: npm ci observed. lockfiles attestor captures package-lock.json; commandrun captures fetches.
+  on_match: npm install/ci observed. lockfiles attestor captures package-lock.json; commandrun captures fetches.
