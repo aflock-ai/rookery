@@ -71,6 +71,11 @@ and any warnings with rendered suggested_command strings.
 It does NOT execute the command. Use 'cilock run -a <attestor>,...' to
 actually run the planned set; pass the attestor names from the 'fire'
 list above.`,
+		Example: `  # Show which attestors would fire for a build, without running it
+  cilock plan -- go build ./...
+
+  # Machine-readable plan for an agent to consume
+  cilock plan --format json -- docker build -t app .`,
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,
 		Args:              cobra.MinimumNArgs(1),
