@@ -27,5 +27,6 @@ func PolicyCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(PolicyValidateCmd())
+	cmd.AddCommand(PolicyFromBundlesCmd())
 	return cmd
 }
