@@ -33,8 +33,8 @@ type VerifyOptions struct {
 	// same endpoint defaults the run-side wrote to. Pass `--platform-url ""`
 	// to opt out (fully offline verification — no archivista lookup,
 	// no platform-derived TSA verifier).
-	PlatformURL string
-	KeyPath     string
+	PlatformURL                string
+	KeyPath                    string
 	AttestationFilePaths       []string
 	BundlePaths                []string
 	OutputBundlePath           string
@@ -98,11 +98,17 @@ type VerifyOptions struct {
 	ChainSidecarHTTPMaxBytes int64
 }
 
-// ResolvePlatformDefaults derives archivista URL + TSA from the
-// configured --platform-url, the same way RunOptions does for
-// `cilock run`. Pass --platform-url "" to opt out (operator marks the
-// flag explicitly empty → no defaults derived). Call after flag
+// ResolvePlatformDefaults derives the Archivista URL from the
+// configured --platform-url, mirroring RunOptions's behavior for
+// `cilock run`. Pass --platform-url "" to opt out (operator marks
+// the flag explicitly empty → no defaults derived). Call after flag
 // parsing, before any verify logic runs.
+//
+// Note: unlike `cilock run`, we do NOT auto-populate
+// PolicyTimestampServers — verify's PolicyTimestampServers expects
+// file paths to CA cert bundles, not URLs. Operators who want
+// TSA-rooted trust for the policy still pass --policy-timestamp-servers
+// explicitly with the cert path.
 func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	platformExplicitlyDisabled := cmd.Flags().Changed("platform-url") && vo.PlatformURL == ""
 	if platformExplicitlyDisabled {
@@ -112,10 +118,6 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// Archivista URL: use platform default if not explicitly overridden.
 	if !cmd.Flags().Changed("archivista-server") && !cmd.Flags().Changed("archivist-server") {
 		vo.ArchivistaOptions.Url = pc.Archivista
-	}
-	// Policy timestamp servers: add platform TSA if none configured.
-	if len(vo.PolicyTimestampServers) == 0 {
-		vo.PolicyTimestampServers = []string{pc.TSA}
 	}
 }
 
@@ -200,5 +202,9 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 
 	cmd.MarkFlagsRequiredTogether("policy")
 	cmd.MarkFlagsOneRequired("publickey", "policy-ca", "policy-ca-roots", "policy-ca-intermediates", "verifier-kms-ref")
-	cmd.MarkFlagsOneRequired("artifactfile", "subjects")
+	// Note: we deliberately do NOT MarkFlagsOneRequired here. The
+	// custom check in runVerify gives a much better error — it lists
+	// candidate sha256 digests pulled from any supplied --attestations
+	// / --bundle files so the operator can paste one into --subjects.
+	// cobra's group-required error fires too early to see those.
 }

@@ -20,7 +20,6 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -236,51 +235,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	if len(subjects) == 0 {
-		// Try to surface subject candidates from any explicitly-supplied
-		// attestation/bundle files so the operator can see what they could
-		// pass to --subjects without having to crack open the DSSE payload
-		// with jq. This is a best-effort hint; failures here just fall
-		// back to the generic error message.
-		var hintLines []string
-		for _, path := range append([]string(nil), append(vo.AttestationFilePaths, vo.BundlePaths...)...) {
-			if envs, err := loadEnvelopesBestEffort(path); err == nil {
-				for _, env := range envs {
-					for s := range extractSubjectDigests(env) {
-						hintLines = append(hintLines, "sha256:"+s)
-					}
-				}
-			}
-		}
-		if len(hintLines) > 0 {
-			// Dedupe + cap to avoid pages of identical noise.
-			seen := map[string]struct{}{}
-			var uniq []string
-			for _, h := range hintLines {
-				if _, ok := seen[h]; ok {
-					continue
-				}
-				seen[h] = struct{}{}
-				uniq = append(uniq, h)
-				if len(uniq) >= 5 {
-					break
-				}
-			}
-			return fmt.Errorf(
-				"at least one subject is required (cilock verifies an attestation AGAINST an artifact — "+
-					"the subject is the entry point into the attestation graph).\n"+
-					"  Provide one of:\n"+
-					"    --artifactfile <path>     hash the file you're verifying\n"+
-					"    --directory-path <dir>    hash the directory you're verifying\n"+
-					"    --subjects <sha256:hex>   pass a digest directly (repeatable)\n"+
-					"  Candidates found in the supplied envelope(s):\n"+
-					"    --subjects %s",
-				strings.Join(uniq, "\n    --subjects "),
-			)
-		}
-		return errors.New(
-			"at least one subject is required (cilock verifies an attestation AGAINST an artifact). " +
-				"Provide --artifactfile <path>, --directory-path <dir>, or --subjects <sha256:hex>",
-		)
+		return buildNoSubjectError(vo)
 	}
 
 	// Track every envelope we explicitly load so --output-bundle can emit a
@@ -482,6 +437,63 @@ func maybeWriteOutputBundle(vo options.VerifyOptions, subjects []cryptoutil.Dige
 		bundleSource = bundle.SourceVerifyExport
 	}
 	return writeOutputBundle(vo.OutputBundlePath, bundleSubjects, bundleSource, vo.ArchivistaOptions.Url, loaded, archivistaEnvs)
+}
+
+// buildNoSubjectError returns the operator-facing error when verify is
+// invoked without --artifactfile / --directory-path / --subjects. It
+// best-effort scans any supplied --attestations / --bundle files for
+// in-toto subjects and pastes the first few sha256 digests into the
+// error message so the operator can copy them straight into --subjects
+// without cracking the DSSE payload with jq.
+//
+// Black-box UX test follow-up: cobra's MarkFlagsOneRequired was firing
+// before this code could run, so the helpful candidate-listing was
+// invisible. The flag-group constraint has been removed in favour of
+// this custom error.
+func buildNoSubjectError(vo options.VerifyOptions) error {
+	const baseMsg = "at least one subject is required (cilock verifies an attestation AGAINST an artifact — " +
+		"the subject is the entry point into the attestation graph).\n" +
+		"  Provide one of:\n" +
+		"    --artifactfile <path>     hash the file you're verifying\n" +
+		"    --directory-path <dir>    hash the directory you're verifying\n" +
+		"    --subjects <sha256:hex>   pass a digest directly (repeatable)"
+
+	candidates := candidateSubjectsFromEnvelopes(append([]string(nil), append(vo.AttestationFilePaths, vo.BundlePaths...)...))
+	if len(candidates) == 0 {
+		return fmt.Errorf("%s", baseMsg)
+	}
+	return fmt.Errorf("%s\n  Candidates found in the supplied envelope(s):\n    --subjects %s",
+		baseMsg, strings.Join(candidates, "\n    --subjects "))
+}
+
+// candidateSubjectsFromEnvelopes scans the supplied attestation/bundle
+// paths and returns up to 5 unique sha256 subject digests, prefixed
+// with "sha256:" so they can be pasted directly into --subjects.
+// Best-effort: unreadable paths are silently skipped (the caller falls
+// back to the no-candidates error variant).
+func candidateSubjectsFromEnvelopes(paths []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, path := range paths {
+		envs, err := loadEnvelopesBestEffort(path)
+		if err != nil {
+			continue
+		}
+		for _, env := range envs {
+			for s := range extractSubjectDigests(env) {
+				key := "sha256:" + s
+				if _, dup := seen[key]; dup {
+					continue
+				}
+				seen[key] = struct{}{}
+				out = append(out, key)
+				if len(out) >= 5 {
+					return out
+				}
+			}
+		}
+	}
+	return out
 }
 
 // loadEnvelopesBestEffort attempts to read DSSE envelopes from a path,
