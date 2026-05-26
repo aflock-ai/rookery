@@ -17,10 +17,10 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/chain"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/merkle"
 	"github.com/aflock-ai/rookery/attestation/source"
-	"github.com/aflock-ai/rookery/attestation/chain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

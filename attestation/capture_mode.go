@@ -172,7 +172,8 @@ type CaptureEntry struct {
 // and returns an error rather than silently falling back. That is
 // the "fail loudly" contract — operators who asked for IMA shouldn't
 // quietly get a walk-based attestation.
-//nolint:gocognit // capture-mode resolution is a single linear decision tree by design
+//
+//nolint:gocyclo,gocognit // capture-mode resolution is a single linear decision tree by design
 func ResolveCaptureMode(
 	requested CaptureMode,
 	completed []CompletedAttestor,
