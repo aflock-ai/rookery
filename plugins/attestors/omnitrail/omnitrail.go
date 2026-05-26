@@ -18,7 +18,7 @@ package omnitrail
 
 import (
 	"github.com/aflock-ai/rookery/attestation"
-	ot "github.com/fkautz/omnitrail-go"
+	ot "github.com/aflock-ai/rookery/plugins/attestors/omnitrail/internal/vendored/omnitrail"
 	"github.com/invopop/jsonschema"
 )
 

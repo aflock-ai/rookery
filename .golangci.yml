@@ -101,6 +101,10 @@ linters:
       - ".*\\.pb\\.go$"
       - ".*_gen\\.go$"
       - zz_generated.deepcopy.go
+      # Vendored single-maintainer upstream libs under an attestor's
+      # internal/vendored/ — linted to upstream's standards, not ours
+      # (kept byte-identical except the gitoid backend swap).
+      - ".*/internal/vendored/.*"
 
     rules:
       # Test files have different requirements
