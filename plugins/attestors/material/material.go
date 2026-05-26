@@ -255,9 +255,49 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 // walk uses the same RecordArtifacts call the v0.1 attestor used — only
 // the post-processing changed.
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
-	// Same walk semantics as v0.1: no include/exclude globs (material
-	// attestor captures the entire workdir pre-build), no tracing
-	// overlay (tracing data only matters for products).
+	// Trace-mode short-circuit: the material attestor runs in the
+	// MaterialRunType phase, BEFORE the command-run trace executes.
+	// In trace mode the canonical inputs come from the trace
+	// (processes[].openedfiles, exposed via CaptureProbe.TraceInputs).
+	// Walking the working dir here would do ~1.2 s of disk I/O whose
+	// results are about to be superseded — skip it. Materials map
+	// remains empty; downstream attestors that consume ctx.Materials()
+	// (slsa, link) should be explicitly enabled with --capture-mode=walk
+	// when their data is needed.
+	// Resolve capture mode. Material runs in MaterialRunType, BEFORE
+	// command-run completes, so ResolveCaptureMode's `completed` list
+	// has no CaptureProbe yet. The `registered` list does (command-run
+	// is in there with tracing intent), which is enough for the auto-
+	// or trace-mode short-circuit. We don't need the probe handle —
+	// data lands on command-run's processes[] later and product picks
+	// it up. We just skip the expensive walk here.
+	resolved, _, err := attestation.ResolveCaptureMode(
+		ctx.CaptureMode(), ctx.CompletedAttestors(), ctx.RegisteredAttestors())
+	if err != nil {
+		return fmt.Errorf("material attestor: %w", err)
+	}
+
+	if resolved == attestation.CaptureTrace {
+		// Emit an empty Merkle tree (RFC 6962 §2.1: empty input → sha256
+		// of empty string) so verifiers expecting the attestation type
+		// still find a well-formed structure.
+		a.materials = map[string]cryptoutil.DigestSet{}
+		a.leaves = nil
+		emptyTree, treeErr := merkle.NewTree(nil)
+		if treeErr != nil {
+			return fmt.Errorf("material attestor: empty tree: %w", treeErr)
+		}
+		a.MerkleRoot = hex.EncodeToString(emptyTree.Root())
+		a.TreeSize = emptyTree.Size()
+		a.HashAlgorithmField = HashAlgorithm
+		a.ConstructionField = Construction
+		return nil
+	}
+
+	// Walk mode (default + auto-when-trace-unavailable). Same walk
+	// semantics as v0.1: no include/exclude globs (material attestor
+	// captures the entire workdir pre-build), no tracing overlay
+	// (tracing data only matters for products).
 	mats, err := file.RecordArtifacts(
 		ctx.WorkingDir(),
 		nil,
@@ -298,6 +338,63 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	a.HashAlgorithmField = HashAlgorithm
 	a.ConstructionField = Construction
 
+	return nil
+}
+
+// Finalize implements attestation.Finalizer. In trace mode the
+// pre-execute walk was skipped (TreeSize=0 placeholder) because the
+// canonical input set lives on the command-run trace which hadn't
+// run yet. Now that every attestor has completed, fetch the trace
+// inputs and build the real materials tree. This makes the
+// material/v0.3 attestation self-contained: a verifier reading just
+// the material section gets the full input digest set, derived from
+// the kernel-mediated read-tap rather than a racy walk.
+func (a *Attestor) Finalize(ctx *attestation.AttestationContext) error {
+	// Resolve auto-mode → trace if any completed attestor can supply.
+	// Don't gate on raw ctx.CaptureMode() — auto resolves dynamically.
+	resolved, probe, err := attestation.ResolveCaptureMode(
+		ctx.CaptureMode(), ctx.CompletedAttestors(), ctx.RegisteredAttestors())
+	if err != nil || resolved != attestation.CaptureTrace || probe == nil {
+		// Walk mode or no provider — Attest already populated the tree
+		// (or left it empty if trace was supposed to provide).
+		return nil //nolint:nilerr // resolve-failure is non-fatal here; Finalize is best-effort upgrade from walk to trace
+	}
+	if a.TreeSize != 0 {
+		// Walk path also ran (unusual). Don't overwrite its tree.
+		return nil
+	}
+
+	entries := probe.TraceInputs()
+	if len(entries) == 0 {
+		return nil
+	}
+
+	mats := make(map[string]cryptoutil.DigestSet, len(entries))
+	for path, e := range entries {
+		ds, err := cryptoutil.NewDigestSet(e.Digest)
+		if err != nil {
+			continue
+		}
+		mats[path] = ds
+	}
+	a.materials = mats
+
+	leaves, err := buildLeaves(mats)
+	if err != nil {
+		return fmt.Errorf("material attestor finalize: build leaves: %w", err)
+	}
+	a.leaves = leaves
+
+	leafDigests, err := decodeLeafHashes(a.leaves)
+	if err != nil {
+		return fmt.Errorf("material attestor finalize: decode leaves: %w", err)
+	}
+	tree, err := merkle.NewTree(leafDigests)
+	if err != nil {
+		return fmt.Errorf("material attestor finalize: build tree: %w", err)
+	}
+	a.MerkleRoot = hex.EncodeToString(tree.Root())
+	a.TreeSize = tree.Size()
 	return nil
 }
 

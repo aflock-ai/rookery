@@ -1,4 +1,4 @@
-// Copyright 2026 The Witness Contributors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -64,6 +64,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -171,6 +172,16 @@ type Attestor struct {
 	compiledIncludeGlob glob.Glob
 	excludeGlob         string
 	compiledExcludeGlob glob.Glob
+
+	// requireExistsAtExit (default true) is the "product = surviving
+	// deliverable" gate. When true, files the tracee wrote but that
+	// no longer exist when the attestor runs are NOT recorded as
+	// products. When false, they're emitted as witness-only entries
+	// (path with nil digest) for forensic completeness — useful when
+	// investigating builds that produce-then-clean scratch artifacts
+	// you want named in the signed record. Set via
+	// WithRequireExistsAtExit(false) or `--product-allow-removed`.
+	requireExistsAtExit bool
 }
 
 // ProductLeaf describes one entry of the input tree. The Merkle leaf
@@ -181,6 +192,70 @@ type ProductLeaf struct {
 	Path       string `json:"path"`
 	FileDigest string `json:"fileDigest"`
 	LeafHash   string `json:"leafHash"`
+	// Kind hints what KIND of file this product is, by filename suffix.
+	// Empty when the file's kind isn't one of the well-known
+	// attestation/SBOM formats. omitempty so v0.3 attestations from
+	// before this field landed continue to round-trip byte-identically.
+	//
+	// Used by sandbox-boundary linking (V2 plan Phase 10): when a
+	// build emits its own inner attestation (Bazel SLSA provenance,
+	// BuildKit provenance, etc.), the OUTER trace catches the file
+	// in its products set. Tagging the kind here lets verifiers
+	// pick up the inner attestation by `kind` without re-parsing
+	// every product file.
+	//
+	// Recognized kinds (extend as needed; keep the set small to avoid
+	// scope creep — only formats that actually chain into the
+	// attestation graph belong here):
+	//   - "intoto"          — in-toto Statement envelope (.intoto.json/.jsonl)
+	//   - "intoto-dsse"     — DSSE-wrapped in-toto (.dsse, .intoto.dsse)
+	//   - "slsa-provenance" — SLSA provenance (.slsa-provenance.json)
+	//   - "spdx"            — SPDX SBOM (.spdx.json, .spdx.yaml)
+	//   - "cyclonedx"       — CycloneDX SBOM (.cdx.json, .cdx.xml, bom.json)
+	//   - "sarif"           — Static Analysis Results Interchange Format
+	//                          (.sarif, .sarif.json)
+	//   - "vex"             — OpenVEX / CSAF VEX (.vex.json, .csaf.json)
+	Kind string `json:"kind,omitempty"`
+}
+
+// detectProductKind inspects a filename for well-known attestation /
+// SBOM / scan-result format suffixes. Returns "" when the suffix
+// doesn't match a recognized kind. Pure function; no I/O.
+//
+// Conservative on purpose: filename-suffix only. We don't open files
+// to magic-byte sniff because (a) the product attestor runs at the
+// end of a build, files may be huge, (b) any reader-side validation
+// of the kind hint can re-verify by parsing. The hint is advisory.
+func detectProductKind(path string) string {
+	// Lower-case match. Most attestation tooling emits lowercase
+	// suffixes anyway, but normalize defensively.
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(lower, ".slsa-provenance.json"):
+		return "slsa-provenance"
+	case strings.HasSuffix(lower, ".intoto.jsonl"),
+		strings.HasSuffix(lower, ".intoto.json"):
+		return "intoto"
+	case strings.HasSuffix(lower, ".intoto.dsse"),
+		strings.HasSuffix(lower, ".dsse"):
+		return "intoto-dsse"
+	case strings.HasSuffix(lower, ".spdx.json"),
+		strings.HasSuffix(lower, ".spdx.yaml"),
+		strings.HasSuffix(lower, ".spdx.yml"):
+		return "spdx"
+	case strings.HasSuffix(lower, ".cdx.json"),
+		strings.HasSuffix(lower, ".cdx.xml"),
+		strings.HasSuffix(lower, "/bom.json"),
+		lower == "bom.json":
+		return "cyclonedx"
+	case strings.HasSuffix(lower, ".sarif.json"),
+		strings.HasSuffix(lower, ".sarif"):
+		return "sarif"
+	case strings.HasSuffix(lower, ".vex.json"),
+		strings.HasSuffix(lower, ".csaf.json"):
+		return "vex"
+	}
+	return ""
 }
 
 // Option configures a new Attestor.
@@ -198,13 +273,23 @@ func WithExcludeGlob(g string) Option {
 	return func(a *Attestor) { a.excludeGlob = g }
 }
 
+// WithRequireExistsAtExit toggles the "product must still exist when
+// the attestor runs" gate. Default is true (the strict, intent-matching
+// behavior). Set to false to keep witness-only entries (path with nil
+// digest) for files the tracee wrote then cleaned up — useful for
+// forensic builds where you want every transient artifact named.
+func WithRequireExistsAtExit(require bool) Option {
+	return func(a *Attestor) { a.requireExistsAtExit = require }
+}
+
 // New constructs an Attestor with default globs (include="*", exclude="").
 func New(opts ...Option) *Attestor {
 	a := &Attestor{
-		includeGlob:        defaultIncludeGlob,
-		excludeGlob:        defaultExcludeGlob,
-		HashAlgorithmField: HashAlgorithm,
-		ConstructionField:  Construction,
+		includeGlob:         defaultIncludeGlob,
+		excludeGlob:         defaultExcludeGlob,
+		requireExistsAtExit: true, // strict by default; explicit opt-out
+		HashAlgorithmField:  HashAlgorithm,
+		ConstructionField:   Construction,
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -237,6 +322,19 @@ func configOptions() []registry.Configurer {
 					return a, fmt.Errorf("unexpected attestor type: %T is not a product attestor", a)
 				}
 				WithExcludeGlob(excludeGlob)(prod)
+				return prod, nil
+			},
+		),
+		registry.BoolConfigOption(
+			"require-exists-at-exit",
+			"When true (default), a file the build wrote must still exist at attestation time to be recorded as a product. Files the build wrote then removed are treated as scratch and dropped. Set false to keep witness-only entries (path with nil digest) for forensic completeness.",
+			true,
+			func(a attestation.Attestor, v bool) (attestation.Attestor, error) {
+				prod, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("unexpected attestor type: %T is not a product attestor", a)
+				}
+				WithRequireExistsAtExit(v)(prod)
 				return prod, nil
 			},
 		),
@@ -288,6 +386,24 @@ func collectTracedFileSet(ctx *attestation.AttestationContext) (bool, map[string
 		if !ok || !cmd.TracingEnabled() {
 			continue
 		}
+		// Tracing was REQUESTED (config flag set) — but check that it
+		// actually produced data. On macOS / Windows / any platform
+		// where tracing_unsupported.go is built, trace() returns an
+		// error and cmd.Processes stays empty. Returning traced=true
+		// here with an empty openedFiles set would tell walk-mode
+		// "trust the trace" — which combined with the empty set
+		// causes shouldRecord() in file.RecordArtifacts to reject
+		// EVERY product (file.go:237 — "not in openedFiles AND
+		// processWasTraced → drop"). Result: silent product loss,
+		// no sbom / no go-build / no envelope despite the build
+		// having succeeded.
+		//
+		// If tracing failed to produce processes, fall back to an
+		// unfiltered walk so downstream attestors see the actual
+		// build outputs.
+		if len(cmd.Processes) == 0 {
+			continue
+		}
 		traced = true
 		for _, process := range cmd.Processes {
 			for fname := range process.OpenedFiles {
@@ -310,6 +426,8 @@ func collectTracedFileSet(ctx *attestation.AttestationContext) (bool, map[string
 // Attest walks the product set, computes the per-file pre-hashes, sorts
 // them deterministically, and builds the Merkle tree. The signed
 // predicate's MerkleRoot is the resulting tree root in hex.
+//
+//nolint:gocyclo,gocognit // glob compile → mode resolve → trace integrate → walk fallback; refactoring obscures the mode-dispatch logic
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	compiledIncludeGlob, err := glob.Compile(a.includeGlob)
 	if err != nil {
@@ -325,6 +443,89 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 	a.baseArtifacts = ctx.Materials()
 
+	// Resolve capture mode at attestor-run time. CaptureAuto picks the
+	// fastest available source (trace if a CaptureProbe was registered;
+	// otherwise walk). Non-auto modes fail loudly when their source
+	// isn't available — see ResolveCaptureMode for the contract.
+	resolved, probe, err := attestation.ResolveCaptureMode(
+		ctx.CaptureMode(), ctx.CompletedAttestors(), ctx.RegisteredAttestors())
+	if err != nil {
+		return fmt.Errorf("product attestor: %w", err)
+	}
+
+	if resolved == attestation.CaptureTrace && probe != nil { //nolint:nestif // trace-integration block has inherent nesting over probe outputs
+		// Build the cache/temp classifier from the configured
+		// pattern options (defaults + env-discovered + user-added,
+		// less user-allowed) and install it on the trace probe so
+		// TraceOutputs filters cache/temp paths into a separate
+		// bucket (TraceCacheArtifacts) rather than the products set.
+		patterns := attestation.ResolveCachePatterns(ctx.CachePatterns())
+		matcher, perrs := attestation.NewCachePathMatcher(patterns)
+		for _, perr := range perrs {
+			// Soft failure: a bad pattern doesn't block attestation,
+			// just gets logged. Operator sees it and fixes.
+			//nolint:errcheck // best-effort logging
+			_ = perr
+		}
+		if installer, ok := probe.(interface {
+			SetCacheMatcher(*attestation.CachePathMatcher)
+		}); ok {
+			installer.SetCacheMatcher(matcher)
+		}
+
+		// Trace mode: consume the digests the read-tap / path-hash
+		// already computed during the trace. Skip the workdir walk
+		// entirely — the trace knows exactly what files the tracee
+		// wrote, and path-hashing happened post-tracee-exit when the
+		// files are stable. No re-read on the hot path.
+		//
+		// Apply include/exclude globs to the trace outputs so the
+		// product set reflects the operator's intent rather than
+		// "every file the build wrote" (which on a typical Go build
+		// is thousands of compiler intermediates). Without this, the
+		// gh CLI smoke produced 9281 "products"; the user really only
+		// has one (the gh binary).
+		raw := probe.TraceOutputs()
+		filtered := make(map[string]attestation.CaptureEntry, len(raw))
+		// Resolve relative trace paths against workingDir. ctx.WorkingDir()
+		// may be empty when the caller didn't pass one explicitly (common
+		// from cilock-action with no `workingdir:` input); fall back to
+		// the process cwd, which is what the tracee inherited.
+		workdir := ctx.WorkingDir()
+		if workdir == "" {
+			if cwd, err := os.Getwd(); err == nil {
+				workdir = cwd
+			}
+		}
+		for path, entry := range raw {
+			// Trace records mix absolute and relative paths. atomic-
+			// rename builds (Go, Cargo, GCC -o) write to a temp
+			// absolute path then RENAME(2) to the final target —
+			// the rename target is recorded relative to the tracee's
+			// cwd. Resolve relative trace paths against workdir so
+			// the include-glob (always absolute when set from
+			// cilock-action) matches the right surface.
+			resolved := path
+			if workdir != "" && !filepath.IsAbs(resolved) {
+				resolved = filepath.Join(workdir, resolved)
+			}
+			if a.compiledIncludeGlob != nil && !a.compiledIncludeGlob.Match(resolved) {
+				continue
+			}
+			if a.compiledExcludeGlob != nil && a.compiledExcludeGlob.Match(resolved) {
+				continue
+			}
+			// Use resolved as the map key so downstream (mime detect,
+			// digest hash, exists-at-exit stat) sees the real path.
+			filtered[resolved] = entry
+		}
+		a.products = fromCaptureEntries(filtered, a.requireExistsAtExit)
+		return a.buildTree()
+	}
+
+	// Walk mode (legacy default). Walk the workdir, optionally
+	// filtered to files the tracee touched (collectTracedFileSet),
+	// hash each. This is the v0.1 behavior preserved bit-for-bit.
 	processWasTraced, openedFileSet := collectTracedFileSet(ctx)
 
 	digestMap, err := file.RecordArtifacts(
@@ -346,6 +547,77 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	return a.buildTree()
 }
 
+// fromCaptureEntries converts the trace probe's per-path digest map
+// into the attestation.Product type. A "product" must satisfy:
+//   - written by the tracee (the probe wouldn't include it otherwise)
+//   - matches the include-glob (caller already filtered)
+//   - **exists at the moment we attest** (this function's check)
+//   - has a content hash
+//
+// The exists-at-exit rule turns "product = anything the build wrote"
+// (which on a Go build was 9000+ scratch files) into "product = the
+// surviving deliverables". Files the build wrote then cleaned up are
+// no longer products — they're routed to ScratchWrites in the trace
+// summary so a verifier can still see "the build created N temp
+// files and removed them" as forensic evidence.
+//
+// Mime-type detection is best-effort.
+func fromCaptureEntries(entries map[string]attestation.CaptureEntry, requireExistsAtExit bool) map[string]attestation.Product {
+	out := make(map[string]attestation.Product, len(entries))
+	for path, entry := range entries {
+		// Exists-at-exit gate. Default-on; callers can opt out via
+		// WithRequireExistsAtExit(false) when they want forensic
+		// completeness over deliverable-only semantics.
+		fi, statErr := os.Stat(path)
+		if statErr != nil {
+			if requireExistsAtExit {
+				continue
+			}
+			// Path is gone — emit witness-only entry (nil digest,
+			// unknown mime).
+			out[path] = attestation.Product{MimeType: "unknown", Digest: nil}
+			continue
+		}
+
+		mimeType := "unknown"
+		if mt, mtErr := getFileContentType(path); mtErr == nil {
+			mimeType = mt
+		}
+		if mimeType == "application/octet-stream" && fi.IsDir() {
+			mimeType = "text/directory"
+		}
+
+		// Path exists but we couldn't hash it (trace race, transient
+		// permission). Keep as witness-only product entry — the
+		// existence-at-exit invariant tells us this IS a real
+		// deliverable, just one whose content we couldn't capture.
+		if entry.Digest == nil {
+			out[path] = attestation.Product{
+				MimeType: mimeType,
+				Digest:   nil,
+			}
+			continue
+		}
+
+		ds, err := cryptoutil.NewDigestSet(entry.Digest)
+		if err != nil {
+			// Same fallback path — bad digest data on the trace
+			// side; record the path without a digest rather than
+			// dropping it silently.
+			out[path] = attestation.Product{
+				MimeType: mimeType,
+				Digest:   nil,
+			}
+			continue
+		}
+		out[path] = attestation.Product{
+			MimeType: mimeType,
+			Digest:   ds,
+		}
+	}
+	return out
+}
+
 // buildTree filters the product set through the include / exclude globs,
 // sorts the survivors by normalized path, computes per-file leaf
 // pre-hashes, and constructs the Merkle tree.
@@ -358,6 +630,16 @@ func (a *Attestor) buildTree() error {
 	for _, p := range pairs {
 		prod, ok := a.products[p.originalKey]
 		if !ok {
+			continue
+		}
+		// Trace mode now emits witness-only entries with nil Digest
+		// when a write was observed but the file couldn't be hashed
+		// (gone before attest, fast-exit race, etc.). Those entries
+		// stay in the product map for inventory but DON'T enter the
+		// Merkle tree — a tree leaf needs a content digest. Skip
+		// silently here; downstream consumers (link, slsa) still see
+		// the path via Products().
+		if prod.Digest == nil {
 			continue
 		}
 		digestHex, ok := prod.Digest[cryptoutil.DigestValue{Hash: crypto.SHA256}]
@@ -379,6 +661,7 @@ func (a *Attestor) buildTree() error {
 			Path:       p.normalized,
 			FileDigest: digestHex,
 			LeafHash:   hex.EncodeToString(leafPreHash),
+			Kind:       detectProductKind(p.normalized),
 		})
 		preHashes = append(preHashes, leafPreHash)
 	}

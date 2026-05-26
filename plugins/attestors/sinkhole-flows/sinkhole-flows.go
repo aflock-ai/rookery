@@ -1,4 +1,4 @@
-// Copyright 2026 The Witness Contributors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ import (
 	"bufio"
 	"crypto"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -42,8 +43,12 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/invopop/jsonschema"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 const (
 	Name    = "sinkhole-flows"
@@ -75,6 +80,7 @@ var (
 func init() {
 	attestation.RegisterAttestation(Name, Type, RunType,
 		func() attestation.Attestor { return New() })
+	detection.Register(Name, detectorYAML)
 }
 
 // FlowBody holds either decoded utf-8 text or base64-encoded bytes from
