@@ -51,7 +51,10 @@ func KeyidCmd() *cobra.Command {
 }
 
 func keyidShowCmd() *cobra.Command {
-	var format string
+	var (
+		format  string
+		keyFlag string
+	)
 	cmd := &cobra.Command{
 		Use:   "show <key-file>...",
 		Short: "Print the keyid(s) for one or more key files",
@@ -64,19 +67,31 @@ half is extracted before hashing. Output is one line per input:
 matching sha256sum's shape so it pipes cleanly into other tools. Use
 --format=json for jq consumption.
 
+Keys may be supplied either as positional args or via -k/--key (consistent
+with 'cilock run', 'sign', 'verify', and 'policy from-bundles'). -k accepts
+a single key file; mixing -k with positional args is an error. (Fixes
+blind Linux finding F5.)
+
 Examples:
   cilock keyid show signer.pub
+  cilock keyid show -k signer.pub
   cilock keyid show signer.key signer.pub other.pem
   cilock keyid show --format=json signer.key | jq .`,
-		Args:          cobra.MinimumNArgs(1),
+		// Args validated in RunE so we can reject the -k + positional
+		// combo with a single message instead of cobra's default.
+		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			paths, err := resolveKeyidShowInputs(args, keyFlag)
+			if err != nil {
+				return err
+			}
 			asJSON, err := parseKeyidFormat(format)
 			if err != nil {
 				return err
 			}
-			results, anyError := collectKeyids(args)
+			results, anyError := collectKeyids(paths)
 			if err := renderKeyids(cmd.OutOrStdout(), cmd.ErrOrStderr(), results, asJSON); err != nil {
 				return err
 			}
@@ -87,7 +102,32 @@ Examples:
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "", "Output format: empty/text = sha256sum-style lines, 'json' = JSON array")
+	cmd.Flags().StringVarP(&keyFlag, "key", "k", "", "Path to public or private key (alternative to positional <key-file>)")
 	return cmd
+}
+
+// resolveKeyidShowInputs normalizes the two ways operators can pass key
+// files (positional + -k/--key) into a single []string of paths. It
+// enforces the contract documented in Long help:
+//
+//   - both supplied   → error (ambiguous: which set wins?)
+//   - neither         → error (nothing to do)
+//   - only positional → return positional unchanged
+//   - only -k         → return [-k]
+//
+// Centralized so the validation logic can be exercised by unit tests
+// independent of the cobra plumbing.
+func resolveKeyidShowInputs(positional []string, keyFlag string) ([]string, error) {
+	switch {
+	case keyFlag != "" && len(positional) > 0:
+		return nil, fmt.Errorf("cilock keyid show: -k/--key and positional <key-file> are mutually exclusive; supply one or the other")
+	case keyFlag != "":
+		return []string{keyFlag}, nil
+	case len(positional) > 0:
+		return positional, nil
+	default:
+		return nil, fmt.Errorf("cilock keyid show: at least one key file required (positional <key-file>... or -k/--key <file>)")
+	}
 }
 
 // keyidEntry is one row of the show subcommand's output. Exported as

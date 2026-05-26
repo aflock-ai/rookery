@@ -189,3 +189,96 @@ func TestKeyidShowCmd_MixedSuccessAndFailureReturnsError(t *testing.T) {
 	// …and stderr names the failing file.
 	assert.Contains(t, errBuf.String(), "ghost.pem")
 }
+
+// TestKeyidShow_AcceptsDashKFlag pins fix F5: -k/--key works as an
+// alternative to positional, matching the convention used by every other
+// cilock subcommand (run, sign, verify, policy from-bundles).
+func TestKeyidShow_AcceptsDashKFlag(t *testing.T) {
+	dir := t.TempDir()
+	_, pubPath, want := writeEd25519PEMs(t, dir)
+
+	var out bytes.Buffer
+	cmd := keyidShowCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"-k", pubPath})
+	require.NoError(t, cmd.Execute(), "-k <file> must be accepted (F5 fix)")
+
+	got := strings.TrimSpace(out.String())
+	assert.Contains(t, got, want, "keyid for -k input must match expected")
+	assert.Contains(t, got, pubPath, "output line must reference the supplied path")
+}
+
+// TestKeyidShow_AcceptsPositional pins backward-compatibility: pre-F5
+// scripts that pass keys positionally must continue to work unchanged.
+func TestKeyidShow_AcceptsPositional(t *testing.T) {
+	dir := t.TempDir()
+	_, pubPath, want := writeEd25519PEMs(t, dir)
+
+	var out bytes.Buffer
+	cmd := keyidShowCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{pubPath})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, out.String(), want)
+}
+
+// TestKeyidShow_RejectsBoth: mixing -k with positional args is ambiguous
+// (which set wins?), so it's rejected with a clear message.
+func TestKeyidShow_RejectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	_, pubPath, _ := writeEd25519PEMs(t, dir)
+
+	var out bytes.Buffer
+	cmd := keyidShowCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"-k", pubPath, pubPath})
+	err := cmd.Execute()
+	require.Error(t, err, "-k together with positional must be rejected")
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+// TestKeyidShow_RejectsNeither: zero positional args AND no -k must
+// produce a clear "supply something" error, not panic or do nothing.
+func TestKeyidShow_RejectsNeither(t *testing.T) {
+	var out bytes.Buffer
+	cmd := keyidShowCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required")
+}
+
+// TestResolveKeyidShowInputs covers the validator directly so each branch
+// of the (positional, flag) cross-product is pinned independently of the
+// cobra plumbing.
+func TestResolveKeyidShowInputs(t *testing.T) {
+	cases := []struct {
+		name        string
+		positional  []string
+		keyFlag     string
+		wantPaths   []string
+		wantErrLike string
+	}{
+		{name: "only positional", positional: []string{"a.pem", "b.pem"}, wantPaths: []string{"a.pem", "b.pem"}},
+		{name: "only flag", keyFlag: "a.pem", wantPaths: []string{"a.pem"}},
+		{name: "both rejected", positional: []string{"a.pem"}, keyFlag: "b.pem", wantErrLike: "mutually exclusive"},
+		{name: "neither rejected", wantErrLike: "required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveKeyidShowInputs(tc.positional, tc.keyFlag)
+			if tc.wantErrLike != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErrLike)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantPaths, got)
+		})
+	}
+}
