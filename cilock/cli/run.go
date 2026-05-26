@@ -49,6 +49,51 @@ var defaultAttestorNames = []string{product.Name, material.Name}
 
 // applyNoDefaultAttestors filters out always-on attestors named in
 // the operator's --no-default-attestor flags. Hard-fails when the
+// applyHardeningProfile sets per-feature env defaults based on the
+// named --hardening profile, leaving explicit operator env vars
+// untouched. Recognised profiles:
+//
+//   - "off"      — fanotify off, fs-verity off, no require-zero-drops
+//   - "standard" — fanotify on,  fs-verity opportunistic, drops surfaced
+//   - "strict"   — fanotify required, fs-verity required, drops fail
+//
+// requireZeroDrops is updated only when the operator didn't explicitly
+// pass --require-zero-drops on the command line (changed=false).
+// Operators can still pin individual env vars; the profile only seeds
+// defaults via setEnvIfUnset.
+//
+// Phase 3 of #234.
+func applyHardeningProfile(profile string, requireZeroDrops *bool, requireZeroDropsExplicit bool) error {
+	switch profile {
+	case "", "standard":
+		setEnvIfUnset("CILOCK_FANOTIFY", "1")
+		setEnvIfUnset("CILOCK_FSVERITY", "auto")
+		// standard: drops surfaced but not fatal (no override).
+	case "off":
+		setEnvIfUnset("CILOCK_FANOTIFY", "off")
+		setEnvIfUnset("CILOCK_FSVERITY", "off")
+		// off: drops are non-fatal (no override).
+	case "strict":
+		setEnvIfUnset("CILOCK_FANOTIFY", "1")
+		setEnvIfUnset("CILOCK_FSVERITY", "1")
+		if !requireZeroDropsExplicit {
+			*requireZeroDrops = true
+		}
+	default:
+		return fmt.Errorf("--hardening: unknown profile %q (valid: off, standard, strict)", profile)
+	}
+	return nil
+}
+
+// setEnvIfUnset sets an env var only when no value is already present.
+// Used by applyHardeningProfile so explicit operator env vars take
+// precedence over profile defaults.
+func setEnvIfUnset(key, value string) {
+	if _, present := os.LookupEnv(key); !present {
+		_ = os.Setenv(key, value)
+	}
+}
+
 // splitCaptureModeSuffix parses an optional `:backend` suffix from the
 // --capture-mode value. Recognised: `trace:ebpf`, `trace:ptrace`,
 // `trace:auto`, or `auto:ebpf|ptrace|auto` (auto mode can also pin the
@@ -185,6 +230,14 @@ Exit-code policy (finding #221):
 				_ = os.Setenv("CILOCK_DIAGNOSE", "1")
 			}
 
+			// Apply --hardening profile defaults BEFORE any attestor runs.
+			// Per-feature env vars still win — applyHardeningProfile only
+			// sets defaults via setEnvIfUnset. Profile also seeds the
+			// --require-zero-drops gate when --hardening=strict.
+			if err := applyHardeningProfile(o.Hardening, &o.RequireZeroDrops, cmd.Flags().Changed("require-zero-drops")); err != nil {
+				return err
+			}
+
 			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, providersFromFlags("signer", cmd.Flags()))
 			if err != nil {
 				return fmt.Errorf("failed to load signers: %w", err)
@@ -239,6 +292,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 			commandrun.WithIgnoreExitCode(ro.IgnoreCommandExitCode),
 			commandrun.WithPrewalkSkipDirs(ro.PrewalkSkipDirs),
 			commandrun.WithPrewalkIncludeDirs(ro.PrewalkIncludeDirs),
+			commandrun.WithRequireZeroDrops(ro.RequireZeroDrops),
 		))
 	}
 

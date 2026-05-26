@@ -81,6 +81,27 @@ type RunOptions struct {
 	// subpackage consumers. Replaces (and consolidates) the per-feature
 	// env vars: CILOCK_EBPF_DEBUG, CILOCK_BPF_DIAGNOSE.
 	Diagnose bool
+
+	// Hardening bundles the per-feature integrity toggles (fanotify,
+	// fs-verity, require-zero-drops) into a named profile. Recognised:
+	//
+	//   - "off"      — minimum overhead; no fanotify, no fs-verity,
+	//                  no zero-drops gate. Use when iterating on a
+	//                  CI policy locally.
+	//   - "standard" (default) — fanotify on, fs-verity opportunistic
+	//                  (sealed where supported, skipped silently
+	//                  elsewhere), drops surfaced as warnings.
+	//   - "strict"   — fanotify required, fs-verity required, drops
+	//                  fail the run. For release-grade attestations.
+	//
+	// Explicit env vars (CILOCK_FANOTIFY, CILOCK_FSVERITY) still win;
+	// the profile only sets defaults. Phase 3 of #234.
+	Hardening string
+
+	// RequireZeroDrops forces the run to fail if the eBPF ringbuf
+	// dropped any event during the trace. Hard gate against silent
+	// loss. Defaults from --hardening (strict ⇒ true).
+	RequireZeroDrops bool
 	TimestampServers      []string
 	// Subjects holds raw --subjects flag values. Each entry is either a bare
 	// subject name (e.g. "product:<uuid>") — in which case a sha256 digest of
@@ -213,6 +234,15 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 		"Enable verbose internal logging across cilock subsystems (eBPF program loading, "+
 			"fanotify event traces, ringbuf drop reporting, fs-verity probe results). "+
 			"Off by default. Replaces the per-feature CILOCK_EBPF_DEBUG / CILOCK_BPF_DIAGNOSE env vars.")
+	cmd.Flags().StringVar(&ro.Hardening, "hardening", "standard",
+		"Bundle integrity toggles (fanotify, fs-verity, require-zero-drops) into a named profile. "+
+			"'off' = minimum overhead, no fanotify or fs-verity. "+
+			"'standard' (default) = fanotify on, fs-verity opportunistic, drops surfaced as warnings. "+
+			"'strict' = fanotify required, fs-verity required, drops fail the run. "+
+			"Explicit CILOCK_FANOTIFY / CILOCK_FSVERITY env vars still win.")
+	cmd.Flags().BoolVar(&ro.RequireZeroDrops, "require-zero-drops", false,
+		"Fail the run if the eBPF ringbuf dropped any event during the trace. "+
+			"Default derives from --hardening (strict ⇒ true).")
 	cmd.Flags().StringSliceVarP(&ro.TimestampServers, "timestamp-servers", "t", []string{}, "Timestamp Authority Servers to use when signing envelope")
 
 	cmd.Flags().StringArrayVar(&ro.Subjects, "subjects", []string{},
