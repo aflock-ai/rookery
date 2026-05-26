@@ -174,27 +174,30 @@ func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope,
 		sort.Strings(fired)
 		fmt.Fprintf(&b, "  to run: cilock run -a %s -- %s\n",
 			strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
+
+		// Fix F7: when tracing would benefit at least one of the fired
+		// attestors (per detector's recommended_trace field), also emit
+		// the --trace variant so operators don't paste the plain "to
+		// run:" line and silently miss tracing's value.
+		//
+		// The recommendation is non-empty + non-Off iff at least one
+		// matched detector's recommended_trace fed into RecommendTrace
+		// — i.e. tracing would actually help. We don't double-check
+		// against the fired list because RecommendTrace already only
+		// reports modes for matched detectors.
+		if env.TraceRecommendation.Mode != "" && env.TraceRecommendation.Mode != detection.TraceOff {
+			fmt.Fprintf(&b, "  to run (with tracing): cilock run --trace -a %s -- %s\n",
+				strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
+		}
 	}
 
-	// TODO(#220): when 'cilock run --tracing=<mode>' (M3d) lands,
-	// switch this back to printing an actionable flag suggestion.
-	// Until then 'cilock run' only exposes a boolean --trace, so the
-	// per-mode recommendation is informational only — we deliberately
-	// avoid printing a copy-pasteable '--tracing=...' string that would
-	// produce 'unknown flag' on the next invocation.
-	if env.TraceRecommendation.Mode != "" && env.TraceRecommendation.Mode != detection.TraceOff {
-		fmt.Fprintf(&b, "  recommended tracing: %s (no equivalent --trace mode in this build; informational only)\n", env.TraceRecommendation.Mode)
-		drivers := make([]string, 0, len(env.TraceRecommendation.Reasons))
-		for name, mode := range env.TraceRecommendation.Reasons {
-			if mode == env.TraceRecommendation.Mode {
-				drivers = append(drivers, name)
-			}
-		}
-		sort.Strings(drivers)
-		if len(drivers) > 0 {
-			fmt.Fprintf(&b, "    driven by: %s\n", strings.Join(drivers, ", "))
-		}
-	}
+	// TODO(#220): when 'cilock run --trace=<mode>' lands, re-emit a
+	// per-mode recommendation line here. Until then the disclaimer-laden
+	// "recommended tracing: light (informational only)" line was more
+	// confusing than helpful — see the fix-3 batch. Fix-5 still uses
+	// TraceRecommendation to drive the optional "to run (with tracing):"
+	// hint above, but THIS line stays gone until the flag actually
+	// exists on `cilock run`.
 
 	if len(plan.Warnings) > 0 {
 		fmt.Fprintln(&b, "  warnings:")

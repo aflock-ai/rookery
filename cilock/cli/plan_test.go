@@ -39,7 +39,14 @@ func TestPlanHelpLong_DoesNotReferenceAutoFlag(t *testing.T) {
 		"long help should point users at the working `-a` form")
 }
 
-func TestWritePlanHuman_TraceRecommendation_DoesNotEmitFakeFlag(t *testing.T) {
+// TestWritePlanHuman_NoTraceRecommendationLine pins the fix-3 behaviour:
+// the disclaimer-laden "recommended tracing: <mode> (informational only)"
+// line was more confusing than helpful and was dropped entirely. Fix-5 now
+// surfaces tracing intent inline in the "to run (with tracing):" hint.
+//
+// Restore the standalone line only when `cilock run --trace=<mode>` (#220)
+// actually lands and the line can advertise a runnable flag.
+func TestWritePlanHuman_NoTraceRecommendationLine(t *testing.T) {
 	env := planEnvelope{
 		Plan: detection.PlanResult{
 			Fire: []detection.FireDecision{
@@ -59,20 +66,18 @@ func TestWritePlanHuman_TraceRecommendation_DoesNotEmitFakeFlag(t *testing.T) {
 	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
-	// The fake --tracing=<mode> flag must not appear anywhere in the
-	// recommendation line. `cilock run` only has a boolean --trace.
+	// Whole "recommended tracing" block must be gone — both the string
+	// itself and the "informational only" disclaimer that came with it.
+	assert.NotContains(t, out, "recommended tracing",
+		"recommended tracing line is dropped until --trace=<mode> lands (#220)")
+	assert.NotContains(t, out, "informational only",
+		"the disclaimer that came with the dropped line must also be gone")
+
+	// Old footguns still excluded.
 	assert.NotContains(t, out, "--tracing=",
 		"output must not advertise a non-existent --tracing=<mode> flag (#220)")
 	assert.NotContains(t, out, "--auto",
 		"output must not advertise a non-existent --auto flag (#220)")
-
-	// The recommendation should still be visible, just labeled as
-	// informational rather than as a copy-pasteable flag.
-	assert.Contains(t, out, "recommended tracing: light",
-		"the trace tier should still be surfaced for situational awareness")
-	assert.Contains(t, out, "informational only",
-		"output should make clear the recommendation is not a runnable flag")
-	assert.Contains(t, out, "driven by: docker")
 }
 
 func TestWritePlanHuman_FireSet_EmitsRunnableCilockRunCommand(t *testing.T) {
@@ -100,6 +105,71 @@ func TestWritePlanHuman_FireSet_EmitsRunnableCilockRunCommand(t *testing.T) {
 	assert.True(t,
 		strings.Contains(out, "cilock run -a docker,git -- docker build ."),
 		"expected runnable line with sorted attestors and argv; got:\n%s", out)
+}
+
+// TestWritePlanHuman_RecommendsTraceWhenAttestorBenefits pins fix F7: when
+// at least one fired attestor benefits from tracing (per detector YAML's
+// recommended_trace), plan emits a second runnable line with --trace
+// inlined so operators don't paste the plain form and silently miss
+// tracing's value.
+func TestWritePlanHuman_RecommendsTraceWhenAttestorBenefits(t *testing.T) {
+	env := planEnvelope{
+		Plan: detection.PlanResult{
+			Fire: []detection.FireDecision{
+				{Attestor: "git"},
+				{Attestor: "go-build"},
+				{Attestor: "lockfiles"},
+			},
+			Inputs: detection.InputSnapshot{Argv: []string{"go", "build", "-o", "./bin/argocd", "./cmd"}},
+		},
+		TraceRecommendation: detection.TraceRecommendation{
+			Mode: detection.TraceLight,
+			Reasons: map[string]detection.TraceMode{
+				"go-build": detection.TraceLight,
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, writePlanHuman(&buf, env, false))
+	out := buf.String()
+
+	// Plain line still there (back-compat for operators who don't care
+	// about tracing).
+	assert.Contains(t, out, "to run: cilock run -a git,go-build,lockfiles -- go build -o ./bin/argocd ./cmd",
+		"plain 'to run:' line must still be present for back-compat")
+
+	// New tracing line MUST be present and MUST use the real --trace
+	// flag (not the fake --trace=<mode> from #220).
+	assert.Contains(t, out, "to run (with tracing): cilock run --trace -a git,go-build,lockfiles -- go build -o ./bin/argocd ./cmd",
+		"plan must emit a --trace variant when a fired attestor benefits (F7)")
+	assert.NotContains(t, out, "--trace=",
+		"F7 must use the real boolean --trace flag, not the unimplemented --trace=<mode> form")
+}
+
+// TestWritePlanHuman_NoTraceVariantWhenNoneBenefits asserts that when the
+// TraceRecommendation is off / empty, only the plain "to run:" line is
+// emitted — no spurious second line.
+func TestWritePlanHuman_NoTraceVariantWhenNoneBenefits(t *testing.T) {
+	env := planEnvelope{
+		Plan: detection.PlanResult{
+			Fire: []detection.FireDecision{
+				{Attestor: "environment"},
+			},
+			Inputs: detection.InputSnapshot{Argv: []string{"true"}},
+		},
+		TraceRecommendation: detection.TraceRecommendation{
+			Mode: detection.TraceOff,
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, writePlanHuman(&buf, env, false))
+	out := buf.String()
+
+	assert.Contains(t, out, "to run: cilock run -a environment -- true")
+	assert.NotContains(t, out, "to run (with tracing)",
+		"no fired attestor benefits from tracing → no --trace variant emitted")
 }
 
 func TestWritePlanHuman_TraceOff_OmitsRecommendationLine(t *testing.T) {

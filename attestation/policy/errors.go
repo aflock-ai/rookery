@@ -38,6 +38,40 @@ func (e ErrNoCollections) Error() string {
 	return fmt.Sprintf("no collections found for step %v", e.Step)
 }
 
+// ErrSubjectDigestMismatch fires when a collection IS loaded for the step
+// (signed envelope present, signature-verified) but the operator's supplied
+// artifact / subject digests don't intersect ANY of the collection's
+// subjects. Distinct from ErrNoCollections so operators don't chase a
+// phantom "did I load my attestation?" issue when the real problem is that
+// they passed the wrong artifact path or built a different binary than the
+// one the collection covers. (Fixes blind Linux UX test Bug 2.)
+//
+// ObservedSubjects is a sorted, deduplicated rendering of the subject
+// strings that ARE present in the loaded collections for this step. It is
+// intentionally a []string (not a typed digest set) so the error message
+// can be read at a glance; debugging needs to see "what was actually in the
+// envelope vs what I asked for", not parse a structured payload.
+type ErrSubjectDigestMismatch struct {
+	Step             string
+	SuppliedDigests  []string
+	ObservedSubjects []string
+}
+
+func (e ErrSubjectDigestMismatch) Error() string {
+	observed := "(none)"
+	if len(e.ObservedSubjects) > 0 {
+		observed = strings.Join(e.ObservedSubjects, ", ")
+	}
+	supplied := "(none)"
+	if len(e.SuppliedDigests) > 0 {
+		supplied = strings.Join(e.SuppliedDigests, ", ")
+	}
+	return fmt.Sprintf(
+		"supplied artifact digest(s) [%s] not present in any subject of step %q collection. Subjects observed: [%s]",
+		supplied, e.Step, observed,
+	)
+}
+
 type ErrMissingAttestation struct {
 	Step        string
 	Attestation string

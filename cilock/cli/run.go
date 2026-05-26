@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -98,8 +99,27 @@ func RunCmd() *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:           "run [cmd]",
-		Short:         "Runs the provided command and records attestations about the execution",
+		Use:   "run [cmd]",
+		Short: "Runs the provided command and records attestations about the execution",
+		Long: `Runs the provided command and records attestations about the execution.
+
+Exit-code policy (finding #221):
+  Attestor errors are split into two classes:
+
+  Fatal (exit 1, logged under "Errors:")
+    - signer failure
+    - command exited non-zero
+    - --trace requested on a platform that doesn't support tracing
+    - output path inaccessible / key parse failed
+    - any other attestor contract violation
+
+  Soft  (exit 0, logged under "Warnings:")
+    - sbom: no products to attest / no SBOM file found
+    - go-build: no Go binaries among products
+    - any attestor that ran successfully but had nothing to do
+
+  CI should gate on cilock's exit code — only a fatal class produces
+  a non-zero exit.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -390,10 +410,58 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	}
 
 	// Return the deferred attestor error (e.g. secretscan fail-on-detection)
-	// after writing all output files.
+	// after writing all output files. Soft attestor errors (sbom found no
+	// SBOM file, etc.) are demoted to warnings and the process exits 0;
+	// only contract violations (signer failure, tracing unsupported,
+	// command exit, etc.) propagate to exit 1. See finding #221.
 	if runErr != nil {
+		return classifyAttestorRunError(runErr)
+	}
+	return nil
+}
+
+// classifyAttestorRunError splits a workflow.Run error into the two classes
+// finding #221 calls for: soft (attestor had nothing to do — exit 0,
+// warn-level log under a "Warnings:" header) and fatal (contract violation —
+// exit 1, error-level log under an "Errors:" header).
+//
+// When the deferred error is NOT a *workflow.AttestorRunErrors (e.g. a
+// signer or sidecar error returned earlier in the run pipeline), the error
+// is treated as fatal and returned unchanged.
+func classifyAttestorRunError(runErr error) error {
+	var aggregate *workflow.AttestorRunErrors
+	if !errors.As(runErr, &aggregate) || aggregate == nil {
+		// Not an aggregate — propagate as fatal. Pre-workflow errors
+		// (signer load, key parse) and any other error type land here.
 		return runErr
 	}
+
+	softLegs := aggregate.SoftLegs()
+	fatalLegs := aggregate.FatalLegs()
+
+	// Surface soft legs as warnings BEFORE the (possibly) fatal exit so
+	// CI logs always show the full picture, even when something also
+	// went wrong.
+	if len(softLegs) > 0 {
+		log.Warn("Warnings:")
+		for _, leg := range softLegs {
+			log.Warnf("  - %s", leg.Err)
+		}
+	}
+
+	if len(fatalLegs) > 0 {
+		// Build a new aggregate containing only the fatal legs so the
+		// returned error message reflects what actually drove the exit
+		// code. log.Errorf separately so the "Errors:" header is
+		// visible whether or not the caller has a top-level error log.
+		log.Error("Errors:")
+		for _, leg := range fatalLegs {
+			log.Errorf("  - %s", leg.Err)
+		}
+		return &workflow.AttestorRunErrors{Legs: fatalLegs}
+	}
+
+	// Only soft legs — exit 0.
 	return nil
 }
 
