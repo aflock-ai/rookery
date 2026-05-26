@@ -201,3 +201,68 @@ func TestValidateUserCommand_NotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "this-binary-definitely-does-not-exist-12345")
 }
+
+func TestAttestorExternalGenerators_Known(t *testing.T) {
+	// Phase 4 follow-up: pre-flight needs to know which generators
+	// each attestor records. Verify the contract for the attestors
+	// the black-box test exercised.
+	assert.Contains(t, attestorExternalGenerators("sbom"), "cyclonedx-npm")
+	assert.Contains(t, attestorExternalGenerators("sbom"), "syft")
+	assert.Equal(t, []string{"govulncheck"}, attestorExternalGenerators("govulncheck"))
+	assert.Equal(t, []string{"go"}, attestorExternalGenerators("go-build"))
+}
+
+func TestAttestorExternalGenerators_SelfContained(t *testing.T) {
+	// These attestors read workspace files / state directly; no
+	// external tool is involved. Pre-flight must not warn about them.
+	for _, name := range []string{"git", "environment", "lockfiles", "oci", "secretscan"} {
+		assert.Empty(t, attestorExternalGenerators(name),
+			"attestor %q reads workspace state directly; should not have external generators", name)
+	}
+}
+
+func TestAttestorWorkspacePrereq_Git(t *testing.T) {
+	assert.Equal(t, ".git", attestorWorkspacePrereq("git"))
+	assert.Empty(t, attestorWorkspacePrereq("sbom"))
+}
+
+func TestPreflightAttestorTooling_GitMissing(t *testing.T) {
+	dir := t.TempDir()
+	// .git/ deliberately absent → git attestor pre-flight must warn.
+	warned := preflightAttestorTooling(dir, []string{"git", "environment"})
+	assert.True(t, warned, "git attestor without .git/ must trigger a pre-flight warning")
+}
+
+func TestPreflightAttestorTooling_GitPresent(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	warned := preflightAttestorTooling(dir, []string{"git"})
+	assert.False(t, warned, ".git/ present → git attestor pre-flight must not warn")
+}
+
+func TestPreflightAttestorTooling_SbomNoGenerator(t *testing.T) {
+	// Swap execLookPath to simulate a PATH with no SBOM generators.
+	orig := execLookPath
+	defer func() { execLookPath = orig }()
+	execLookPath = func(name string) (string, error) {
+		return "", os.ErrNotExist
+	}
+	dir := t.TempDir()
+	warned := preflightAttestorTooling(dir, []string{"sbom"})
+	assert.True(t, warned, "sbom attestor with no generator on PATH must warn")
+}
+
+func TestPreflightAttestorTooling_SbomGeneratorOnPath(t *testing.T) {
+	// One of the listed generators is on PATH → no warning fires.
+	orig := execLookPath
+	defer func() { execLookPath = orig }()
+	execLookPath = func(name string) (string, error) {
+		if name == "syft" {
+			return "/usr/local/bin/syft", nil
+		}
+		return "", os.ErrNotExist
+	}
+	dir := t.TempDir()
+	warned := preflightAttestorTooling(dir, []string{"sbom"})
+	assert.False(t, warned, "sbom attestor with syft on PATH must NOT warn")
+}

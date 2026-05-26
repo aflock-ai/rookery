@@ -108,6 +108,123 @@ func detectWorkloadAttestors(workdir string) []string {
 	return detected
 }
 
+// attestorExternalGenerators returns the external generators / tools
+// whose output an attestor records. cilock NEVER invokes these — they
+// must already be on PATH (or have been invoked by the user's command).
+// Empty slice = self-contained attestor (reads workspace files directly,
+// no external tool needed).
+//
+// Used by the pre-flight check to warn the operator at startup if an
+// auto-enabled attestor's expected generator isn't available, so they
+// can either install it or drop the attestor before the build runs
+// and the attestation comes out empty.
+//
+// Known: any of the listed generators on PATH counts as satisfied —
+// operators are free to use whichever they prefer.
+func attestorExternalGenerators(name string) []string {
+	switch name {
+	case "sbom":
+		return []string{"cyclonedx-npm", "cyclonedx-cli", "cyclonedx-gomod", "syft", "cdxgen", "spdx-sbom-generator"}
+	case "govulncheck":
+		return []string{"govulncheck"}
+	case "go-build":
+		return []string{"go"}
+	case "trivy":
+		return []string{"trivy"}
+	case "oscap":
+		return []string{"oscap"}
+	case "kube-bench":
+		return []string{"kube-bench"}
+	case "docker-bench":
+		return []string{"docker-bench-security"}
+	case "inspec":
+		return []string{"inspec"}
+	case "steampipe":
+		return []string{"steampipe"}
+	case "nessus":
+		return []string{"nessuscli"}
+	case "prowler":
+		return []string{"prowler"}
+	case "linkerd-check":
+		return []string{"linkerd"}
+	case "falco":
+		return []string{"falco"}
+	}
+	return nil
+}
+
+// attestorWorkspacePrereq reports the workspace file/dir path an
+// attestor needs present in the workdir to produce any output. Empty
+// = no workspace prerequisite. Pre-flight surfaces missing prereqs
+// as warnings so operators don't wait for the build to complete
+// before learning their attestor will fail.
+func attestorWorkspacePrereq(name string) string {
+	switch name {
+	case "git":
+		return ".git"
+	}
+	return ""
+}
+
+// preflightAttestorTooling inspects every attestor in the active set
+// and emits one-line warnings for prerequisites the operator hasn't
+// satisfied. Returns true if any warning was emitted — callers may
+// surface the count in --validate-only output.
+//
+// Two checks per attestor:
+//
+//  1. External generator on PATH (sbom needs cyclonedx-npm/syft/etc.,
+//     govulncheck needs govulncheck, ...). cilock never invokes the
+//     generator; the user's build command must produce its output.
+//  2. Workspace prereq present (git needs .git/, etc.).
+//
+// Warnings are non-fatal — the attestor itself decides whether the
+// missing prereq is a soft-error (sbom) or a hard-error (git) at
+// run time. Pre-flight just gives operators a heads-up so they can
+// fix the gap before the build runs.
+func preflightAttestorTooling(workdir string, attestors []string) (warned bool) {
+	if workdir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			workdir = cwd
+		}
+	}
+	for _, name := range attestors {
+		// Workspace prereq check.
+		if prereq := attestorWorkspacePrereq(name); prereq != "" {
+			path := workdir + "/" + prereq
+			if _, err := os.Stat(path); err != nil {
+				log.Warnf("attestor %q will fail: workspace is missing %q (the attestor reads from it)", name, prereq)
+				warned = true
+			}
+		}
+		// External-generator check: if any candidate generator is on
+		// PATH, the attestor has a chance of seeing its output.
+		gens := attestorExternalGenerators(name)
+		if len(gens) == 0 {
+			continue
+		}
+		found := false
+		var available []string
+		for _, g := range gens {
+			if _, err := execLookPath(g); err == nil {
+				found = true
+				available = append(available, g)
+				break
+			}
+		}
+		if !found {
+			log.Warnf("attestor %q will produce no output: no generator found on PATH (looked for %v) — "+
+				"this attestor RECORDS the output of an external tool; cilock does NOT invoke the generator. "+
+				"Install one of [%v] or drop the attestor from --attestations.",
+				name, gens, gens)
+			warned = true
+			continue
+		}
+		_ = available
+	}
+	return warned
+}
+
 // mergeAttestorNames adds detected names into the operator's list,
 // dropping duplicates while preserving the operator-supplied order
 // first. Returns the merged list and a slice of names actually added
@@ -356,6 +473,14 @@ Exit-code policy (finding #221):
 			// Soft warning when --validate-only is off; hard exit when on.
 			cmdErr := validateUserCommand(args)
 
+			// Pre-flight: warn the operator about attestors whose
+			// prerequisites aren't satisfied (no .git/ for git; no SBOM
+			// generator on PATH for sbom; no govulncheck binary on PATH;
+			// etc.). cilock never invokes these tools — the warnings let
+			// operators install them OR drop the attestor before the
+			// build runs and produces an empty attestation.
+			preflightWarned := preflightAttestorTooling(o.WorkingDir, o.Attestations)
+
 			if o.ValidateOnly {
 				fmt.Fprintln(os.Stderr, "cilock pre-flight:")
 				fmt.Fprintf(os.Stderr, "  attestations (operator + detected): %v\n", o.Attestations)
@@ -366,6 +491,9 @@ Exit-code policy (finding #221):
 				fmt.Fprintf(os.Stderr, "  capture-mode: %s\n", o.CaptureMode)
 				if cmdErr != nil {
 					fmt.Fprintf(os.Stderr, "  WARN: %v\n", cmdErr)
+				}
+				if preflightWarned {
+					fmt.Fprintln(os.Stderr, "  (see WARN lines above — at least one attestor's prerequisite is missing)")
 				}
 				fmt.Fprintln(os.Stderr, "  (--validate-only — exiting without running the command)")
 				return nil
