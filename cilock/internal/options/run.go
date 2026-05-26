@@ -257,10 +257,12 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 		"Fail the run if the eBPF ringbuf dropped any event during the trace. "+
 			"Default derives from --hardening (strict ⇒ true).")
 	cmd.Flags().StringVar(&ro.Workload, "workload", "auto",
-		"How attestors are picked. 'auto' (default) inspects the workspace at "+
-			"startup and adds detected attestors (go-build for go.mod, sbom for "+
-			"package.json, git for .git/, etc.) to whatever --attestations lists. "+
-			"'manual' uses --attestations as the exact set with no detection.")
+		"How attestors are picked. By default cilock auto-detects ONLY when you "+
+			"don't pass -a: it inspects the workspace (go-build for go.mod, git "+
+			"for .git/, etc.) and attaches detected attestors. Pass -a and that "+
+			"becomes your exact set with no detection. Set --workload explicitly "+
+			"to override: 'auto' forces detection even alongside -a; 'manual' "+
+			"disables detection entirely.")
 	cmd.Flags().BoolVar(&ro.ValidateOnly, "validate-only", false,
 		"Run the pre-flight workload + tool-availability checks, print the planned "+
 			"attestor set + warnings, then exit without running the user command. "+
