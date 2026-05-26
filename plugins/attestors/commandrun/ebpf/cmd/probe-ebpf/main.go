@@ -46,7 +46,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "open: %v\n", err)
 		os.Exit(1)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	fmt.Fprintln(os.Stderr, "probe-ebpf: attached. Tracing openat-class syscalls. ^C to exit.")
 

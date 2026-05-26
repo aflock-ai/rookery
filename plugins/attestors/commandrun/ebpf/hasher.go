@@ -125,7 +125,7 @@ func CaptureFileForLaterHash(pid uint32, fd int32) (*os.File, error) {
 // the path may already be gone.
 func HashCapturedFile(path string, f *os.File, statBefore os.FileInfo, hashFuncs []cryptoutil.DigestValue) HashResult {
 	r := HashResult{Path: path}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	digest, err := cryptoutil.CalculateDigestSet(f, hashFuncs)
 	if err != nil {
 		r.Status = TOCTOUError
