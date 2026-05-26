@@ -126,11 +126,37 @@ Examples:
 // bundleSummary is what we extract from one DSSE envelope to build the
 // policy. Kept as an internal type so we don't depend on cilock's own
 // bundle helpers — this subcommand should be readable in isolation.
+//
+// A bundle is either a *collection* envelope (predicateType ==
+// collectionPredicateURI; the standard `cilock run` output) or a
+// *bare-predicate* envelope (anything else: inclusion-proof, SLSA
+// provenance export, sbom export, link export, …). The two go into
+// different parts of the witness Policy: collections → Steps[],
+// bare predicates → ExternalAttestations[].
 type bundleSummary struct {
 	path           string
 	stepName       string
 	signingKeyIDs  []string
 	predicateTypes []string
+	// outerPredicateType is the statement's top-level predicateType.
+	// Used to decide collection vs bare-predicate routing.
+	outerPredicateType string
+	// sidecars are *-<exportname>.json envelopes auto-discovered
+	// alongside the main bundle (e.g., the file the sbom attestor
+	// emits when --attestor-sbom-export is set). Empty for
+	// bare-predicate bundles (we don't recurse).
+	sidecars []sidecarSummary
+}
+
+// sidecarSummary captures one of the export sidecar envelopes that
+// `cilock run --attestor-*-export` emits alongside the main bundle.
+// File-naming convention: `<mainBundlePath>-<exportname>.json` (e.g.
+// `build.bundle.json-sbom.json`).
+type sidecarSummary struct {
+	path          string
+	name          string // stable name for the ExternalAttestation entry
+	signingKeyIDs []string
+	predicateType string
 }
 
 func runPolicyFromBundles(stdout io.Writer, bundlePaths, pubKeyPaths []string, outputPath string, expiresIn time.Duration, stepPrefix string) error {
@@ -256,14 +282,117 @@ func summarizeOneBundle(path, stepPrefix string) (bundleSummary, error) {
 	}
 
 	predicateTypes := extractPredicateTypes(stmt.PredicateType, stmt.Predicate.Attestations)
+	sidecars, _ := discoverSidecars(path)
 
 	stepName := stepPrefix + deriveStepName(path)
 	return bundleSummary{
-		path:           path,
-		stepName:       stepName,
-		signingKeyIDs:  keyids,
-		predicateTypes: predicateTypes,
+		path:               path,
+		stepName:           stepName,
+		signingKeyIDs:      keyids,
+		predicateTypes:     predicateTypes,
+		outerPredicateType: stmt.PredicateType,
+		sidecars:           sidecars,
 	}, nil
+}
+
+// discoverSidecars finds export-sidecar DSSE envelopes adjacent to the
+// main bundle. cilock's --attestor-*-export flags emit one envelope per
+// exported attestor at `<mainPath>-<exportname>.json`. Each sidecar is
+// itself a bare-predicate DSSE that the witness Policy must reference
+// via ExternalAttestation (NOT a Step). Without this discovery, a
+// `cilock run --attestor-sbom-export` would silently produce an
+// unverifiable policy because the SBOM predicate is no longer in the
+// main bundle's attestations[] list.
+//
+// Sidecars are detected by:
+//  1. Filename matches `<mainPath>-*.json` (cilock's naming convention)
+//  2. The file parses as a DSSE envelope (excludes tree.json /
+//     detection.json sidecars which are JSON but not envelopes)
+//
+// Returns an empty slice (not an error) when no sidecars are found.
+// Errors decoding a candidate file are silently skipped — finding the
+// main bundle should not fail because a corrupted neighbor exists.
+func discoverSidecars(mainPath string) ([]sidecarSummary, error) {
+	dir := filepath.Dir(mainPath)
+	base := filepath.Base(mainPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("scan sidecar dir %s: %w", dir, err)
+	}
+
+	out := make([]sidecarSummary, 0, 2)
+	prefix := base + "-" // e.g. "build.bundle.json-"
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		// Exclude cilock's other sidecar kinds (tree, detection) which
+		// share the suffix space but aren't DSSE envelopes. Those don't
+		// match the `<base>-*.json` pattern (they use `.<kind>.json`),
+		// so the prefix check above already excludes them — but we'll
+		// also validate by attempting a DSSE decode below.
+		side, ok := readSidecar(filepath.Join(dir, name), strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".json"))
+		if !ok {
+			continue
+		}
+		out = append(out, side)
+	}
+	return out, nil
+}
+
+// readSidecar attempts to parse a candidate file as a DSSE envelope
+// carrying a bare-predicate statement. Returns ok=false when the file
+// doesn't fit (not JSON, not DSSE, missing fields) — the caller skips
+// it without error.
+func readSidecar(path, exportName string) (sidecarSummary, bool) {
+	raw, err := os.ReadFile(path) //nolint:gosec // adjacent-to-input by construction
+	if err != nil {
+		return sidecarSummary{}, false
+	}
+	var env struct {
+		Payload    string `json:"payload"`
+		Signatures []struct {
+			KeyID string `json:"keyid"`
+		} `json:"signatures"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return sidecarSummary{}, false
+	}
+	if env.Payload == "" || len(env.Signatures) == 0 {
+		return sidecarSummary{}, false
+	}
+	payloadBytes, err := base64.StdEncoding.DecodeString(env.Payload)
+	if err != nil {
+		return sidecarSummary{}, false
+	}
+	var stmt struct {
+		PredicateType string `json:"predicateType"`
+	}
+	if err := json.Unmarshal(payloadBytes, &stmt); err != nil || stmt.PredicateType == "" {
+		return sidecarSummary{}, false
+	}
+	keyids := make([]string, 0, len(env.Signatures))
+	seen := make(map[string]struct{}, len(env.Signatures))
+	for _, s := range env.Signatures {
+		if s.KeyID == "" {
+			continue
+		}
+		if _, dup := seen[s.KeyID]; dup {
+			continue
+		}
+		seen[s.KeyID] = struct{}{}
+		keyids = append(keyids, s.KeyID)
+	}
+	return sidecarSummary{
+		path:          path,
+		name:          exportName,
+		signingKeyIDs: keyids,
+		predicateType: stmt.PredicateType,
+	}, true
 }
 
 // extractPredicateTypes flattens a statement into the set of inner
@@ -311,48 +440,107 @@ func deriveStepName(path string) string {
 }
 
 // buildStarterPolicy assembles the Policy struct from the summaries
-// and the keyid → PEM map. Bundles signed by a key the user didn't
-// supply via -k get a placeholder publickeys entry with empty Key
-// material — the policy file will still validate-as-JSON but fail
-// signature verification until the user fills in the PEM.
+// and the keyid → PEM map.
+//
+// Routing:
+//   - bundles whose outer predicateType is the attestation-collection
+//     URI become Steps[] entries (the standard `cilock run` output)
+//   - bundles whose outer predicateType is anything else
+//     (inclusion-proof, slsa-provenance, vsa, vex, …) become
+//     ExternalAttestations[] entries — witness Policy's primitive for
+//     "this signed bare-predicate envelope must be present"
+//   - sidecars (auto-discovered next to collection bundles) become
+//     ExternalAttestations[] AND are linked back from the parent Step
+//     via Step.ExternalFrom so Rego in the step can read them
+//
+// Bundles signed by a key the user didn't supply via -k get a
+// placeholder publickeys entry with empty Key material — the policy
+// file will still validate-as-JSON but fail signature verification
+// until the user fills in the PEM.
 func buildStarterPolicy(summaries []bundleSummary, pubKeys map[string][]byte, expiresIn time.Duration) (*policy.Policy, error) {
 	expires := time.Now().UTC().Add(expiresIn)
 	p := &policy.Policy{
-		Expires:    metav1.NewTime(expires),
-		PublicKeys: make(map[string]policy.PublicKey),
-		Steps:      make(map[string]policy.Step, len(summaries)),
+		Expires:              metav1.NewTime(expires),
+		PublicKeys:           make(map[string]policy.PublicKey),
+		Steps:                make(map[string]policy.Step),
+		ExternalAttestations: make(map[string]policy.ExternalAttestation),
 	}
 
 	for _, s := range summaries {
-		// Add functionaries — one per distinct signing keyid in this bundle.
-		funcs := make([]policy.Functionary, 0, len(s.signingKeyIDs))
-		for _, kid := range s.signingKeyIDs {
-			funcs = append(funcs, policy.Functionary{
-				Type:        "publickey",
-				PublicKeyID: kid,
-			})
-			if pem, ok := pubKeys[kid]; ok {
-				p.PublicKeys[kid] = policy.PublicKey{KeyID: kid, Key: pem}
-			} else if _, exists := p.PublicKeys[kid]; !exists {
-				// Placeholder for the user to fill in.
-				p.PublicKeys[kid] = policy.PublicKey{KeyID: kid, Key: nil}
+		funcs := buildFunctionaries(s.signingKeyIDs, pubKeys, p.PublicKeys)
+
+		if s.outerPredicateType == "" || s.outerPredicateType == collectionPredicateURI {
+			// Collection envelope → a Step.
+			atts := make([]policy.Attestation, 0, len(s.predicateTypes))
+			for _, t := range s.predicateTypes {
+				atts = append(atts, policy.Attestation{Type: t})
 			}
+			if _, dup := p.Steps[s.stepName]; dup {
+				return nil, fmt.Errorf("duplicate step name %q (two bundles with the same basename — pass --step-prefix or rename inputs)", s.stepName)
+			}
+
+			// Attach sidecars as ExternalAttestations, linked via
+			// ExternalFrom so the step's Rego (if any) can read them.
+			extFrom := make([]string, 0, len(s.sidecars))
+			for _, sc := range s.sidecars {
+				extName := s.stepName + "-" + sc.name
+				if err := addExternalAttestation(p, extName, sc.predicateType, sc.signingKeyIDs, pubKeys); err != nil {
+					return nil, err
+				}
+				extFrom = append(extFrom, extName)
+			}
+
+			p.Steps[s.stepName] = policy.Step{
+				Name:          s.stepName,
+				Functionaries: funcs,
+				Attestations:  atts,
+				ExternalFrom:  extFrom,
+			}
+			continue
 		}
 
-		// Add attestations.
-		atts := make([]policy.Attestation, 0, len(s.predicateTypes))
-		for _, t := range s.predicateTypes {
-			atts = append(atts, policy.Attestation{Type: t})
-		}
-
-		if _, dup := p.Steps[s.stepName]; dup {
-			return nil, fmt.Errorf("duplicate step name %q (two bundles with the same basename — pass --step-prefix or rename inputs)", s.stepName)
-		}
-		p.Steps[s.stepName] = policy.Step{
-			Name:          s.stepName,
-			Functionaries: funcs,
-			Attestations:  atts,
+		// Bare-predicate envelope → an ExternalAttestation. No Step.
+		// This is the fix for the blind-test friction where
+		// `cilock prove` output was generating an always-failing Step.
+		if err := addExternalAttestation(p, s.stepName, s.outerPredicateType, s.signingKeyIDs, pubKeys); err != nil {
+			return nil, err
 		}
 	}
 	return p, nil
+}
+
+// buildFunctionaries materializes Functionary entries for a set of
+// signing keyids, side-effecting the policy's publickeys map with the
+// matching PEM material (or a placeholder if the user didn't pass -k
+// for the signing key).
+func buildFunctionaries(keyids []string, pubKeys map[string][]byte, policyKeys map[string]policy.PublicKey) []policy.Functionary {
+	out := make([]policy.Functionary, 0, len(keyids))
+	for _, kid := range keyids {
+		out = append(out, policy.Functionary{
+			Type:        "publickey",
+			PublicKeyID: kid,
+		})
+		if pem, ok := pubKeys[kid]; ok {
+			policyKeys[kid] = policy.PublicKey{KeyID: kid, Key: pem}
+		} else if _, exists := policyKeys[kid]; !exists {
+			policyKeys[kid] = policy.PublicKey{KeyID: kid, Key: nil}
+		}
+	}
+	return out
+}
+
+// addExternalAttestation appends one ExternalAttestation, ensuring
+// the name is unique and the functionary keys are recorded in the
+// policy's publickeys map.
+func addExternalAttestation(p *policy.Policy, name, predicateType string, signingKeyIDs []string, pubKeys map[string][]byte) error {
+	if _, dup := p.ExternalAttestations[name]; dup {
+		return fmt.Errorf("duplicate external attestation name %q", name)
+	}
+	p.ExternalAttestations[name] = policy.ExternalAttestation{
+		Name:          name,
+		PredicateType: predicateType,
+		Functionaries: buildFunctionaries(signingKeyIDs, pubKeys, p.PublicKeys),
+		Required:      true,
+	}
+	return nil
 }

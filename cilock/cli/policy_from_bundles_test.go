@@ -97,6 +97,32 @@ func synthBundle(t *testing.T, dir, name, keyid string, innerTypes []string, isC
 	return path
 }
 
+// writeBarePredicateSidecar synthesizes the kind of DSSE envelope
+// cilock's --attestor-*-export flags produce: a signed envelope whose
+// inner statement carries a bare predicate (no attestation-collection
+// wrapper). Used by the sidecar auto-discovery tests.
+func writeBarePredicateSidecar(t *testing.T, path, keyid, predicateType string) {
+	t.Helper()
+	stmt := map[string]any{
+		"_type":         "https://in-toto.io/Statement/v0.1",
+		"subject":       []map[string]any{{"name": "x", "digest": map[string]string{"sha256": "00"}}},
+		"predicateType": predicateType,
+		"predicate":     map[string]any{},
+	}
+	stmtBytes, err := json.Marshal(stmt)
+	require.NoError(t, err)
+	env := map[string]any{
+		"payloadType": "application/vnd.in-toto+json",
+		"payload":     base64.StdEncoding.EncodeToString(stmtBytes),
+		"signatures": []map[string]string{
+			{"keyid": keyid, "sig": "dummy"},
+		},
+	}
+	envBytes, err := json.Marshal(env)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, envBytes, 0o600))
+}
+
 func TestDeriveStepName(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -165,9 +191,16 @@ func TestPolicyFromBundles_HappyPath(t *testing.T) {
 	assert.Equal(t, keyid, pol.PublicKeys[keyid].KeyID)
 	assert.NotEmpty(t, pol.PublicKeys[keyid].Key)
 
-	// Steps: source-git + sbom.
+	// Steps: only the collection bundle (source-git) becomes a Step.
+	// The bare-predicate sbom bundle goes into ExternalAttestations
+	// instead — see TestPolicyFromBundles_BarePredicateGoesToExternal
+	// for the regression coverage.
 	require.Contains(t, pol.Steps, "source-git")
-	require.Contains(t, pol.Steps, "sbom")
+	assert.NotContains(t, pol.Steps, "sbom",
+		"bare-predicate bundles must not be routed into Steps[]")
+	require.Contains(t, pol.ExternalAttestations, "sbom",
+		"bare-predicate bundles must land in ExternalAttestations[]")
+	assert.Equal(t, "https://spdx.dev/Document", pol.ExternalAttestations["sbom"].PredicateType)
 
 	src := pol.Steps["source-git"]
 	require.Len(t, src.Functionaries, 1)
@@ -182,11 +215,6 @@ func TestPolicyFromBundles_HappyPath(t *testing.T) {
 		"https://aflock.ai/attestations/git/v0.1",
 		"https://aflock.ai/attestations/material/v0.3",
 	}, attTypes)
-
-	// Bare-predicate bundle: one attestation, the outer predicateType.
-	sbom := pol.Steps["sbom"]
-	require.Len(t, sbom.Attestations, 1)
-	assert.Equal(t, "https://spdx.dev/Document", sbom.Attestations[0].Type)
 
 	// Expiry within a sensible window.
 	assert.True(t, pol.Expires.After(time.Now().Add(364*24*time.Hour)),
@@ -216,13 +244,13 @@ func TestPolicyFromBundles_DuplicateStepNameFails(t *testing.T) {
 	dir := t.TempDir()
 	pubPath, keyid := writePolicyFixtureKey(t, dir)
 
-	// Two bundles with the same basename in different subdirs.
+	// Two collection bundles with the same basename in different subdirs.
 	subA := filepath.Join(dir, "a")
 	subB := filepath.Join(dir, "b")
 	require.NoError(t, os.MkdirAll(subA, 0o755))
 	require.NoError(t, os.MkdirAll(subB, 0o755))
-	aPath := synthBundle(t, subA, "build", keyid, []string{"x/v1"}, false)
-	bPath := synthBundle(t, subB, "build", keyid, []string{"x/v1"}, false)
+	aPath := synthBundle(t, subA, "build", keyid, []string{"x/v1"}, true)
+	bPath := synthBundle(t, subB, "build", keyid, []string{"x/v1"}, true)
 
 	var out bytes.Buffer
 	err := runPolicyFromBundles(&out, []string{aPath, bPath}, []string{pubPath}, "-", 365*24*time.Hour, "")
@@ -233,7 +261,7 @@ func TestPolicyFromBundles_DuplicateStepNameFails(t *testing.T) {
 func TestPolicyFromBundles_StepPrefixApplied(t *testing.T) {
 	dir := t.TempDir()
 	pubPath, keyid := writePolicyFixtureKey(t, dir)
-	bundlePath := synthBundle(t, dir, "build", keyid, []string{"x/v1"}, false)
+	bundlePath := synthBundle(t, dir, "build", keyid, []string{"x/v1"}, true)
 
 	var out bytes.Buffer
 	err := runPolicyFromBundles(&out, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "release-")
@@ -247,7 +275,7 @@ func TestPolicyFromBundles_StepPrefixApplied(t *testing.T) {
 func TestPolicyFromBundles_OutputFile(t *testing.T) {
 	dir := t.TempDir()
 	pubPath, keyid := writePolicyFixtureKey(t, dir)
-	bundlePath := synthBundle(t, dir, "build", keyid, []string{"x/v1"}, false)
+	bundlePath := synthBundle(t, dir, "build", keyid, []string{"x/v1"}, true)
 	outPath := filepath.Join(dir, "policy.json")
 
 	var out bytes.Buffer
@@ -262,6 +290,123 @@ func TestPolicyFromBundles_OutputFile(t *testing.T) {
 	var pol policy.Policy
 	require.NoError(t, json.Unmarshal(body, &pol))
 	assert.Contains(t, pol.Steps, "build")
+}
+
+// TestPolicyFromBundles_BarePredicateGoesToExternal exercises the
+// blind-test #2 friction #7 bug: prior to this fix, a bare-predicate
+// envelope (e.g., the inclusion-proof DSSE that `cilock prove`
+// emits) was incorrectly routed into Steps[] expecting a collection,
+// which `cilock verify` could never satisfy. The fix: bare predicates
+// go into ExternalAttestations[] instead.
+func TestPolicyFromBundles_BarePredicateGoesToExternal(t *testing.T) {
+	dir := t.TempDir()
+	pubPath, keyid := writePolicyFixtureKey(t, dir)
+
+	// synthBundle with isCollection=false produces a bare-predicate
+	// envelope (predicateType = the inner URI, no attestation-collection
+	// wrapper). This mirrors what `cilock prove` writes.
+	bundlePath := synthBundle(t, dir, "inclusion", keyid,
+		[]string{"https://aflock.ai/attestations/inclusion-proof/v0.1"}, false)
+
+	var out bytes.Buffer
+	err := runPolicyFromBundles(&out, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	require.NoError(t, err)
+
+	var pol policy.Policy
+	require.NoError(t, json.Unmarshal(out.Bytes(), &pol))
+
+	// Crucially: no Step for "inclusion" — that would be unverifiable.
+	assert.NotContains(t, pol.Steps, "inclusion",
+		"bare-predicate envelopes must NOT generate a Step (would always fail verify)")
+
+	// They go into ExternalAttestations instead.
+	require.Contains(t, pol.ExternalAttestations, "inclusion")
+	ext := pol.ExternalAttestations["inclusion"]
+	assert.Equal(t, "https://aflock.ai/attestations/inclusion-proof/v0.1", ext.PredicateType)
+	assert.True(t, ext.Required, "starter policies should require external attestations by default")
+	require.Len(t, ext.Functionaries, 1)
+	assert.Equal(t, keyid, ext.Functionaries[0].PublicKeyID)
+}
+
+// TestPolicyFromBundles_SidecarsAutoDiscovered covers the blind-test
+// #9 silent-downgrade bug. When `cilock run --attestor-sbom-export`
+// is used, the SBOM predicate moves to a sibling file
+// `<main>-sbom.json`. Without auto-discovery, `policy from-bundles`
+// would silently produce a step that requires only material +
+// command-run + product — the SBOM content is no longer policy-
+// required, so a build with no SBOM still passes verification.
+//
+// After the fix, the sidecar is discovered, its predicate type is
+// recorded as an ExternalAttestation, and the parent Step references
+// it via ExternalFrom.
+func TestPolicyFromBundles_SidecarsAutoDiscovered(t *testing.T) {
+	dir := t.TempDir()
+	pubPath, keyid := writePolicyFixtureKey(t, dir)
+
+	// Main collection bundle (the kind `cilock run` writes).
+	mainPath := synthBundle(t, dir, "build", keyid,
+		[]string{
+			"https://aflock.ai/attestations/material/v0.3",
+			"https://aflock.ai/attestations/command-run/v0.1",
+			"https://aflock.ai/attestations/product/v0.3",
+		}, true)
+
+	// Sidecar #1: SBOM export — naming convention is
+	// `<mainPath>-<exportname>.json`.
+	sbomSidecarPath := mainPath + "-sbom.json"
+	writeBarePredicateSidecar(t, sbomSidecarPath, keyid, "https://spdx.dev/Document")
+
+	// Sidecar #2: SLSA provenance export.
+	slsaSidecarPath := mainPath + "-slsa.json"
+	writeBarePredicateSidecar(t, slsaSidecarPath, keyid, "https://slsa.dev/provenance/v1")
+
+	var out bytes.Buffer
+	err := runPolicyFromBundles(&out, []string{mainPath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	require.NoError(t, err)
+
+	var pol policy.Policy
+	require.NoError(t, json.Unmarshal(out.Bytes(), &pol))
+
+	// The main bundle's Step is present.
+	require.Contains(t, pol.Steps, "build")
+	step := pol.Steps["build"]
+
+	// Both sidecars surfaced as ExternalAttestations named after the export.
+	require.Contains(t, pol.ExternalAttestations, "build-sbom")
+	require.Contains(t, pol.ExternalAttestations, "build-slsa")
+	assert.Equal(t, "https://spdx.dev/Document", pol.ExternalAttestations["build-sbom"].PredicateType)
+	assert.Equal(t, "https://slsa.dev/provenance/v1", pol.ExternalAttestations["build-slsa"].PredicateType)
+
+	// And the Step links to both via ExternalFrom so step-level Rego can read them.
+	assert.ElementsMatch(t, []string{"build-sbom", "build-slsa"}, step.ExternalFrom)
+}
+
+// TestPolicyFromBundles_SidecarIgnoresNonDSSE confirms we don't get
+// confused by cilock's other sidecar kinds (tree.json, detection.json)
+// which share the directory but aren't DSSE envelopes.
+func TestPolicyFromBundles_SidecarIgnoresNonDSSE(t *testing.T) {
+	dir := t.TempDir()
+	pubPath, keyid := writePolicyFixtureKey(t, dir)
+
+	mainPath := synthBundle(t, dir, "build", keyid,
+		[]string{"https://aflock.ai/attestations/material/v0.3"}, true)
+
+	// Plant non-DSSE sidecars that DO match the prefix glob.
+	require.NoError(t, os.WriteFile(mainPath+"-bogus.json",
+		[]byte(`{"leaves":[],"merkleRoot":"deadbeef"}`), 0o600))
+	require.NoError(t, os.WriteFile(mainPath+"-empty.json",
+		[]byte(`{}`), 0o600))
+
+	var out bytes.Buffer
+	err := runPolicyFromBundles(&out, []string{mainPath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	require.NoError(t, err)
+
+	var pol policy.Policy
+	require.NoError(t, json.Unmarshal(out.Bytes(), &pol))
+	// No external attestations should have been emitted from the
+	// non-DSSE neighbors.
+	assert.Empty(t, pol.ExternalAttestations,
+		"non-DSSE sidecars (tree/detection/etc) must be silently skipped")
 }
 
 func TestPolicyFromBundles_NoBundlesFails(t *testing.T) {
