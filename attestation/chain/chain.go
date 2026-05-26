@@ -164,7 +164,7 @@ func NormalizePath(p string) string {
 // rebuilt tree root matches source.MerkleRoot (catches domain
 // mismatch, leaf-order drift, tampered source sidecar). Producer
 // errors here mean the chain cannot be honestly constructed.
-func BuildChainSidecar(source SourceStepRef, sourceLeaves []SidecarLeaf, consumed []ConsumedMaterial) (ChainSidecar, error) {
+func BuildChainSidecar(source SourceStepRef, sourceLeaves []SidecarLeaf, consumed []ConsumedMaterial) (ChainSidecar, error) { //nolint:gocognit // linear validate → rebuild → sort → emit; splitting would obscure the producer-side bail-outs
 	if source.EnvelopeDigest == "" {
 		return ChainSidecar{}, errors.New("BuildChainSidecar: source.EnvelopeDigest must be set (binds chain to specific source attestation, not just root)")
 	}
