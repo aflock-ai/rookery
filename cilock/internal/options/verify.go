@@ -17,6 +17,7 @@ package options
 import (
 	"time"
 
+	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/sigstore/fulcio/pkg/certificate"
 	"github.com/spf13/cobra"
 )
@@ -27,7 +28,13 @@ type VerifyOptions struct {
 	KMSVerifierProviderOptions KMSVerifierProviderOptions
 	SignerOptions              SignerOptions
 	KMSSignerProviderOptions   KMSSignerProviderOptions
-	KeyPath                    string
+	// PlatformURL derives archivista + TSA URLs the same way `cilock
+	// run` does, so the verify-side of a cilock workflow uses the
+	// same endpoint defaults the run-side wrote to. Pass `--platform-url ""`
+	// to opt out (fully offline verification — no archivista lookup,
+	// no platform-derived TSA verifier).
+	PlatformURL string
+	KeyPath     string
 	AttestationFilePaths       []string
 	BundlePaths                []string
 	OutputBundlePath           string
@@ -91,10 +98,36 @@ type VerifyOptions struct {
 	ChainSidecarHTTPMaxBytes int64
 }
 
+// ResolvePlatformDefaults derives archivista URL + TSA from the
+// configured --platform-url, the same way RunOptions does for
+// `cilock run`. Pass --platform-url "" to opt out (operator marks the
+// flag explicitly empty → no defaults derived). Call after flag
+// parsing, before any verify logic runs.
+func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
+	platformExplicitlyDisabled := cmd.Flags().Changed("platform-url") && vo.PlatformURL == ""
+	if platformExplicitlyDisabled {
+		return
+	}
+	pc := platformconfig.Derive(vo.PlatformURL)
+	// Archivista URL: use platform default if not explicitly overridden.
+	if !cmd.Flags().Changed("archivista-server") && !cmd.Flags().Changed("archivist-server") {
+		vo.ArchivistaOptions.Url = pc.Archivista
+	}
+	// Policy timestamp servers: add platform TSA if none configured.
+	if len(vo.PolicyTimestampServers) == 0 {
+		vo.PolicyTimestampServers = []string{pc.TSA}
+	}
+}
+
+//nolint:funlen // each verify flag carries its own multi-line help text; splitting the registration loses readability
 func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	vo.VerifierOptions.AddFlags(cmd)
 	vo.ArchivistaOptions.AddFlags(cmd)
 	vo.KMSVerifierProviderOptions.AddFlags(cmd)
+	cmd.Flags().StringVar(&vo.PlatformURL, "platform-url", platformconfig.DefaultPlatformURL,
+		"TestifySec platform URL (derives archivista + TSA URLs the same way `cilock run` does). "+
+			"Pass --platform-url \"\" to opt out (fully offline verify — no archivista lookup, "+
+			"no platform-derived TSA verifier).")
 	// Register --publickey BEFORE signer flags so it claims the -k shorthand.
 	// The signer registry adds --signer-file-key-path and, for backward compat
 	// with `cilock sign`/`cilock run`, wants to bind -k — but here on verify,

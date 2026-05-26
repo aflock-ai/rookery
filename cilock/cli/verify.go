@@ -60,6 +60,12 @@ func VerifyCmd() *cobra.Command {
 				log.Warn("The flag `--policy-ca` is deprecated and will be removed in a future release. Please use `--policy-ca-root` and `--policy-ca-intermediate` instead.")
 			}
 
+			// Resolve platform-derived defaults the same way `cilock run`
+			// does so verify-side endpoint defaults match the run-side
+			// of the workflow. `--platform-url ""` opts out for fully
+			// offline verify.
+			vo.ResolvePlatformDefaults(cmd)
+
 			verifiers, err := loadVerifiers(cmd.Context(), vo.VerifierOptions, vo.KMSVerifierProviderOptions, providersFromFlags("verifier", cmd.Flags()))
 			if err != nil {
 				return fmt.Errorf("failed to load verifier: %w", err)
@@ -230,7 +236,51 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	if len(subjects) == 0 {
-		return errors.New("at least one subject is required, provide an artifact file or subject")
+		// Try to surface subject candidates from any explicitly-supplied
+		// attestation/bundle files so the operator can see what they could
+		// pass to --subjects without having to crack open the DSSE payload
+		// with jq. This is a best-effort hint; failures here just fall
+		// back to the generic error message.
+		var hintLines []string
+		for _, path := range append([]string(nil), append(vo.AttestationFilePaths, vo.BundlePaths...)...) {
+			if envs, err := loadEnvelopesBestEffort(path); err == nil {
+				for _, env := range envs {
+					for s := range extractSubjectDigests(env) {
+						hintLines = append(hintLines, "sha256:"+s)
+					}
+				}
+			}
+		}
+		if len(hintLines) > 0 {
+			// Dedupe + cap to avoid pages of identical noise.
+			seen := map[string]struct{}{}
+			var uniq []string
+			for _, h := range hintLines {
+				if _, ok := seen[h]; ok {
+					continue
+				}
+				seen[h] = struct{}{}
+				uniq = append(uniq, h)
+				if len(uniq) >= 5 {
+					break
+				}
+			}
+			return fmt.Errorf(
+				"at least one subject is required (cilock verifies an attestation AGAINST an artifact — "+
+					"the subject is the entry point into the attestation graph).\n"+
+					"  Provide one of:\n"+
+					"    --artifactfile <path>     hash the file you're verifying\n"+
+					"    --directory-path <dir>    hash the directory you're verifying\n"+
+					"    --subjects <sha256:hex>   pass a digest directly (repeatable)\n"+
+					"  Candidates found in the supplied envelope(s):\n"+
+					"    --subjects %s",
+				strings.Join(uniq, "\n    --subjects "),
+			)
+		}
+		return errors.New(
+			"at least one subject is required (cilock verifies an attestation AGAINST an artifact). " +
+				"Provide --artifactfile <path>, --directory-path <dir>, or --subjects <sha256:hex>",
+		)
 	}
 
 	// Track every envelope we explicitly load so --output-bundle can emit a
@@ -432,6 +482,57 @@ func maybeWriteOutputBundle(vo options.VerifyOptions, subjects []cryptoutil.Dige
 		bundleSource = bundle.SourceVerifyExport
 	}
 	return writeOutputBundle(vo.OutputBundlePath, bundleSubjects, bundleSource, vo.ArchivistaOptions.Url, loaded, archivistaEnvs)
+}
+
+// loadEnvelopesBestEffort attempts to read DSSE envelopes from a path,
+// trying first as a bundle (tar.gz) and falling back to a single
+// envelope JSON. Returns nil + no error if neither shape parses —
+// callers use this for hint-extraction and shouldn't treat unreadable
+// inputs as fatal. Used by the no-subjects error path to surface
+// candidate subjects to the operator without requiring jq surgery.
+func loadEnvelopesBestEffort(path string) ([]dsse.Envelope, error) {
+	if env, err := loadEnvelopeFromFile(path); err == nil && len(env.Payload) > 0 {
+		return []dsse.Envelope{env}, nil
+	}
+	f, err := os.Open(path) //nolint:gosec // G304: path is from --attestations / --bundle CLI flag
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	r, err := bundle.Read(f)
+	if err != nil {
+		return nil, err
+	}
+	envs, err := r.Envelopes()
+	if err != nil {
+		return nil, err
+	}
+	return envs, nil
+}
+
+// extractSubjectDigests pulls the set of sha256 subject digests from
+// an envelope's in-toto payload. Returns an empty map if the payload
+// isn't a Statement (e.g. raw VSA, predicate-only envelope) — same
+// best-effort contract as loadEnvelopesBestEffort.
+func extractSubjectDigests(env dsse.Envelope) map[string]struct{} {
+	out := map[string]struct{}{}
+	if len(env.Payload) == 0 {
+		return out
+	}
+	var stmt struct {
+		Subject []struct {
+			Digest map[string]string `json:"digest"`
+		} `json:"subject"`
+	}
+	if err := json.Unmarshal(env.Payload, &stmt); err != nil {
+		return out
+	}
+	for _, s := range stmt.Subject {
+		if h, ok := s.Digest["sha256"]; ok && h != "" {
+			out[h] = struct{}{}
+		}
+	}
+	return out
 }
 
 // loadEnvelopeFromFile reads a DSSE envelope from path. Used by verify in
