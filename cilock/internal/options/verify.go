@@ -15,6 +15,8 @@
 package options
 
 import (
+	"time"
+
 	"github.com/sigstore/fulcio/pkg/certificate"
 	"github.com/spf13/cobra"
 )
@@ -73,6 +75,20 @@ type VerifyOptions struct {
 	// directly (without going through the CLI flag layer) must set
 	// this explicitly if strict mode is desired.
 	RequireSidecar bool
+
+	// ChainSidecarHTTPTimeout overrides the per-request HTTP client
+	// timeout used by the chain sidecar HTTP source. Defaults to
+	// policy.DefaultHTTPChainSidecarTimeout (30s). Increase for very
+	// large sidecars on cold caches; decrease in latency-sensitive
+	// pipelines.
+	ChainSidecarHTTPTimeout time.Duration
+
+	// ChainSidecarHTTPMaxBytes caps the HTTP response body the
+	// verifier will read from a chain sidecar server. Defaults to
+	// policy.DefaultHTTPChainSidecarMaxBytes (64 MiB). Tune up for
+	// builds with very large material sets; tune down to harden
+	// against hostile servers.
+	ChainSidecarHTTPMaxBytes int64
 }
 
 func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
@@ -140,6 +156,14 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 		"HTTP(S) URL template for fetching chain sidecars by upstream envelope digest. Placeholders: {envelopeDigest}, {downstreamStep}, {upstreamStep}. When both --chain-sidecar-dir and --chain-sidecar-url are set, the filesystem source is tried first.")
 	cmd.Flags().BoolVar(&vo.RequireSidecar, "require-sidecar", true,
 		"Strict-chain mode: fail verification if a chain edge has no matching chain sidecar (closes the v0.3 vacuous-pass attack surface). DEFAULT TRUE in v0.4. Pass --require-sidecar=false to verify legacy v0.1 chains without sidecars.")
+	cmd.Flags().DurationVar(&vo.ChainSidecarHTTPTimeout, "chain-sidecar-http-timeout", 0,
+		"Per-request HTTP client timeout for chain-sidecar fetches (Go duration format, e.g. 15s, 2m). "+
+			"Zero (default) uses the compiled-in DefaultHTTPChainSidecarTimeout (30s). Increase for very large "+
+			"sidecars on cold caches; decrease in latency-sensitive pipelines.")
+	cmd.Flags().Int64Var(&vo.ChainSidecarHTTPMaxBytes, "chain-sidecar-http-max-bytes", 0,
+		"Cap on the HTTP response body size when fetching a chain sidecar (raw bytes). "+
+			"Zero (default) uses the compiled-in DefaultHTTPChainSidecarMaxBytes (64 MiB ≈ 67108864). "+
+			"Tune up for builds with very large material sets; tune down to harden against hostile servers.")
 
 	cmd.MarkFlagsRequiredTogether("policy")
 	cmd.MarkFlagsOneRequired("publickey", "policy-ca", "policy-ca-roots", "policy-ca-intermediates", "verifier-kms-ref")
