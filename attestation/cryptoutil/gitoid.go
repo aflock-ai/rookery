@@ -20,7 +20,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/edwarnicke/gitoid"
+	"github.com/aflock-ai/rookery/attestation/gitoid"
 )
 
 // gitoidHasher implements io.Writer so we can generate gitoids with our CalculateDigestSet function.
