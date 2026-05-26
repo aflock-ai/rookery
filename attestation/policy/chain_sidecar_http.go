@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -89,12 +90,31 @@ func (s *HTTPChainSidecarSource) LookupChainSidecar(ctx context.Context, downstr
 	if downstreamStep == "" || upstreamStep == "" || upstreamEnvelopeDigest == "" {
 		return nil, errors.New("http chain sidecar source: downstreamStep, upstreamStep, and upstreamEnvelopeDigest are all required")
 	}
-	url := s.URLTemplate
-	url = strings.ReplaceAll(url, "{envelopeDigest}", upstreamEnvelopeDigest)
-	url = strings.ReplaceAll(url, "{downstreamStep}", downstreamStep)
-	url = strings.ReplaceAll(url, "{upstreamStep}", upstreamStep)
+	// Validate step names before URL substitution: reject any
+	// character that could escape a URL path segment. The policy DAG
+	// is signed but step names are author-controlled — a hostile
+	// policy could use names like '../admin' or 'a?b=c' to redirect
+	// fetches. Mirrors the filesystem source's path-traversal guard
+	// so HTTP-only deployments (no multi-source fallback) get the
+	// same defense.
+	if err := validateStepNameForURL(downstreamStep); err != nil {
+		return nil, fmt.Errorf("http chain sidecar source: downstreamStep: %w", err)
+	}
+	if err := validateStepNameForURL(upstreamStep); err != nil {
+		return nil, fmt.Errorf("http chain sidecar source: upstreamStep: %w", err)
+	}
+	if err := validateEnvelopeDigestForURL(upstreamEnvelopeDigest); err != nil {
+		return nil, fmt.Errorf("http chain sidecar source: upstreamEnvelopeDigest: %w", err)
+	}
+	// PathEscape after validation: validation rejects path-bearing
+	// characters (/, ..), PathEscape encodes any remaining URL-special
+	// bytes (?, #, %, etc.). Belt-and-braces.
+	urlStr := s.URLTemplate
+	urlStr = strings.ReplaceAll(urlStr, "{envelopeDigest}", url.PathEscape(upstreamEnvelopeDigest))
+	urlStr = strings.ReplaceAll(urlStr, "{downstreamStep}", url.PathEscape(downstreamStep))
+	urlStr = strings.ReplaceAll(urlStr, "{upstreamStep}", url.PathEscape(upstreamStep))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, fmt.Errorf("http chain sidecar source: build request: %w", err)
 	}
@@ -109,7 +129,7 @@ func (s *HTTPChainSidecarSource) LookupChainSidecar(ctx context.Context, downstr
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http chain sidecar source: fetch %s: %w", url, err)
+		return nil, fmt.Errorf("http chain sidecar source: fetch %s: %w", urlStr, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -121,7 +141,7 @@ func (s *HTTPChainSidecarSource) LookupChainSidecar(ctx context.Context, downstr
 	default:
 		// Read up to 1 KiB of body for diagnostics; servers vary.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("http chain sidecar source: unexpected status %d from %s: %s", resp.StatusCode, url, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("http chain sidecar source: unexpected status %d from %s: %s", resp.StatusCode, urlStr, strings.TrimSpace(string(body)))
 	}
 
 	// Cap the body size — a hostile server could otherwise OOM the
@@ -143,14 +163,70 @@ func (s *HTTPChainSidecarSource) LookupChainSidecar(ctx context.Context, downstr
 	// Belt-and-braces with the verifier's own envelope check.
 	if sidecar.SourceStep.StepName != "" && sidecar.SourceStep.StepName != upstreamStep {
 		return nil, fmt.Errorf("http chain sidecar from %s declares sourceStep=%q but policy edge expects %q",
-			url, sidecar.SourceStep.StepName, upstreamStep)
+			urlStr, sidecar.SourceStep.StepName, upstreamStep)
 	}
 	if sidecar.SourceStep.EnvelopeDigest != "" && sidecar.SourceStep.EnvelopeDigest != upstreamEnvelopeDigest {
 		return nil, fmt.Errorf("http chain sidecar from %s binds to envelope %s but policy edge upstream envelope is %s",
-			url, sidecar.SourceStep.EnvelopeDigest, upstreamEnvelopeDigest)
+			urlStr, sidecar.SourceStep.EnvelopeDigest, upstreamEnvelopeDigest)
 	}
 
 	return &sidecar, nil
+}
+
+// validateStepNameForURL rejects step names that could escape the
+// URL path segment they get substituted into. Mirrors the
+// filesystem source's path-traversal guard: no '/', no '..' path
+// components, no URL control characters. Step names are
+// policy-signed but author-controlled — a hostile policy author
+// could otherwise redirect chain-sidecar fetches to arbitrary URLs.
+func validateStepNameForURL(s string) error {
+	if s == "" {
+		return errors.New("step name must not be empty")
+	}
+	return rejectURLInjectionChars("step name", s)
+}
+
+// validateEnvelopeDigestForURL rejects URL-injection characters
+// in the digest before substitution. We deliberately validate the
+// security property (no URL-syntactic chars), not the content
+// shape (hex / sha256 / length):
+//
+//   - The canonical length + hex check happens at the verify-side
+//     envelope-digest comparison.
+//   - Forcing length == 64 here rejects future digest algorithms
+//     (sha384, sha512) without buying any security.
+//   - Restricting to hex blocks test fixtures that exercise the
+//     HTTP flow without supplying realistic digests.
+//
+// The single thing we must enforce here is: a hostile policy
+// can't sneak a '/' or '?' into the URL via this argument.
+func validateEnvelopeDigestForURL(s string) error {
+	if s == "" {
+		return errors.New("envelope digest must not be empty")
+	}
+	return rejectURLInjectionChars("envelope digest", s)
+}
+
+// rejectURLInjectionChars is the shared core of step-name and
+// digest validation. Any character that could escape a URL path
+// segment or carry URL-syntactic meaning is fatal.
+func rejectURLInjectionChars(label, s string) error {
+	if strings.Contains(s, "/") || strings.Contains(s, "\\") {
+		return fmt.Errorf("%s %q must not contain path separators", label, s)
+	}
+	if strings.Contains(s, "..") {
+		return fmt.Errorf("%s %q must not contain '..'", label, s)
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%s %q contains control character %#x", label, s, r)
+		}
+		switch r {
+		case '?', '#', '@', '&', '=', '+', '\n', '\r', '\t', ' ', '%':
+			return fmt.Errorf("%s %q contains URL-syntactic character %q", label, s, r)
+		}
+	}
+	return nil
 }
 
 // MultiChainSidecarSource composes multiple sources, returning the

@@ -77,6 +77,22 @@ func untrackedMaterialsAllowed(step Step, mats map[string]cryptoutil.DigestSet, 
 		step.Name, len(uncovered), suffix, sample)
 }
 
+// overbroadPatterns are globs that match every conceivable material
+// path. Allowing one in allowedUntracked silently disables
+// chain-of-custody verification for the step — the policy says
+// "anything from anywhere is fine" — which defeats the entire
+// point of the feature. We reject them at compile time with a
+// clear error so the policy author has to be explicit about which
+// directories they trust.
+var overbroadPatterns = map[string]struct{}{
+	"**":    {},
+	"**/*":  {},
+	"/**":   {},
+	"/**/*": {},
+	"*":     {},
+	"*/**":  {},
+}
+
 func compileAllowedUntracked(patterns []string) ([]glob.Glob, error) {
 	if len(patterns) == 0 {
 		return nil, nil
@@ -85,6 +101,9 @@ func compileAllowedUntracked(patterns []string) ([]glob.Glob, error) {
 	for _, p := range patterns {
 		if p == "" {
 			return nil, errors.New("allowedUntracked: empty glob pattern is not allowed (use specific paths)")
+		}
+		if _, isOverbroad := overbroadPatterns[p]; isOverbroad {
+			return nil, fmt.Errorf("allowedUntracked: pattern %q matches every path and silently disables chain-of-custody verification; use specific directory globs like '/usr/lib/**' instead", p)
 		}
 		g, err := glob.Compile(p)
 		if err != nil {

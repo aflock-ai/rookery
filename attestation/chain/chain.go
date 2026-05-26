@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/merkle"
+	"golang.org/x/text/unicode/norm"
 )
 
 // ChainSidecarSchemaVersion is the version tag emitted in every chain
@@ -148,11 +149,26 @@ func LeafHashWithDomain(domain, path, fileDigestHex string) ([]byte, error) {
 }
 
 // NormalizePath returns the canonical, portable form of a path used
-// by every v0.3 leaf encoder. Backslashes → forward slashes; no
-// OS-aware normalization. Mirrors inclusion-proof.NormalizePath
-// byte-for-byte.
+// by every v0.3 leaf encoder. Two normalizations apply:
+//
+//  1. Backslash → forward slash. Windows paths produced by the same
+//     logical build hash identically to POSIX paths.
+//  2. Unicode NFC normalization. macOS HFS+ / APFS stores paths as
+//     NFD (decomposed) by default; Linux ext4 / xfs preserves bytes
+//     (usually NFC from build tools). The same logical material
+//     `café.txt` becomes NFD on macOS and NFC on Linux. Without
+//     this step, the two hash to different leaf bytes and chain
+//     verification fails cross-platform — same build, different
+//     sidecars, no match. NFC is the W3C recommendation for
+//     compose-then-compare workflows (Unicode TR #15).
+//
+// The legacy inclusion-proof.NormalizePath (which this used to
+// mirror) only did step 1. Pure-ASCII paths verify identically
+// under either function — only non-ASCII material names diverge,
+// and that divergence is the bug being fixed here.
 func NormalizePath(p string) string {
-	return strings.ReplaceAll(p, "\\", "/")
+	p = strings.ReplaceAll(p, "\\", "/")
+	return norm.NFC.String(p)
 }
 
 // BuildChainSidecar generates inclusion proofs for each
@@ -177,8 +193,9 @@ func BuildChainSidecar(source SourceStepRef, sourceLeaves []SidecarLeaf, consume
 
 	idxByPath := make(map[string]int, len(sourceLeaves))
 	for i, l := range sourceLeaves {
-		if i > 0 && sourceLeaves[i-1].Path >= sourceLeaves[i].Path {
-			return ChainSidecar{}, fmt.Errorf("BuildChainSidecar: sourceLeaves not sorted by path (leaf %d=%q >= leaf %d=%q)", i-1, sourceLeaves[i-1].Path, i, sourceLeaves[i].Path)
+		// i-1 only evaluated when i > 0; bounds-safe. gosec G602 false positive.
+		if i > 0 && sourceLeaves[i-1].Path >= sourceLeaves[i].Path { //nolint:gosec // bounded by i > 0 guard
+			return ChainSidecar{}, fmt.Errorf("BuildChainSidecar: sourceLeaves not sorted by path (leaf %d=%q >= leaf %d=%q)", i-1, sourceLeaves[i-1].Path, i, sourceLeaves[i].Path) //nolint:gosec // bounded by i > 0 guard above
 		}
 		idxByPath[l.Path] = i
 	}
