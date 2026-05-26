@@ -183,6 +183,19 @@ ENTRIES: list[tuple[str, dict]] = [
         match=dict(argv_prefix=["gosec"]),
         on_match="gosec invocation observed. -fmt sarif|json captures findings."
     )),
+    ("malcontent", dict(
+        # The binary is `mal` (not `malcontent`); subcommands scan/analyze/diff.
+        desc="malcontent (`mal`) — flags supply-chain-attack capabilities and behaviors in binaries and source (Chainguard).",
+        categories=["vulnerability-scan"],
+        upstream=dict(name="malcontent", source="https://github.com/chainguard-dev/malcontent",
+                      license="Apache-2.0", vendor="Chainguard"),
+        match=dict(any_of=[
+            dict(argv_prefix=["mal", "scan"]),
+            dict(argv_prefix=["mal", "analyze"]),
+            dict(argv_prefix=["mal", "diff"]),
+        ]),
+        on_match="malcontent (mal) scan observed. JSON findings (-o <file>) captured as a product."
+    )),
 
     # ===== IaC SCANNERS (validated) =====
     ("checkov", dict(
@@ -390,6 +403,31 @@ ENTRIES: list[tuple[str, dict]] = [
         match=dict(argv_prefix=["kustomize", "build"]),
         recommended_trace="light",
         on_match="Kustomize build observed. Generated manifests captured by the product attestor."
+    )),
+
+    # ===== CHAINGUARD BUILD TOOLS (SBOM-emitting; e2e validation via test-catalog-tools.py pending local tool install) =====
+    ("apko", dict(
+        desc="apko — builds single-layer OCI images from apk packages (Chainguard); auto-generates an SPDX SBOM per build.",
+        categories=["image-build"],
+        upstream=dict(name="apko", source="https://github.com/chainguard-dev/apko",
+                      license="Apache-2.0", vendor="Chainguard"),
+        emits_formats=["sbom"],
+        match=dict(any_of=[
+            dict(argv_prefix=["apko", "build"]),
+            dict(argv_prefix=["apko", "publish"]),
+        ]),
+        recommended_trace="light",
+        on_match="apko build observed. The sbom attestor captures the SPDX SBOM apko generates for the image."
+    )),
+    ("melange", dict(
+        desc="melange — builds apk packages from declarative YAML pipelines (Chainguard); emits an SBOM per package.",
+        categories=["build"],
+        upstream=dict(name="melange", source="https://github.com/chainguard-dev/melange",
+                      license="Apache-2.0", vendor="Chainguard"),
+        emits_formats=["sbom"],
+        match=dict(argv_prefix=["melange", "build"]),
+        recommended_trace="full",
+        on_match="melange build observed. The sbom attestor captures the SPDX SBOM melange generates for each apk."
     )),
 
     # ===== CI/CD SYSTEMS (validated via env fixture) =====
