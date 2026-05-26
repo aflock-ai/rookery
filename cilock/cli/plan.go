@@ -60,12 +60,17 @@ func PlanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plan -- <command> [args...]",
 		Short: "Show which attestors detection would fire for a command, without executing it",
+		// TODO(#220): once 'cilock run --auto' lands, restore the
+		// auto-run suggestion here. Until then we point users at the
+		// explicit -a form, which is the only flag that actually exists
+		// on 'cilock run' today.
 		Long: `Plan runs cilock's pre-gate detection against a hypothetical command
 invocation and prints what would fire, what would be skipped (with reasons),
 and any warnings with rendered suggested_command strings.
 
-It does NOT execute the command. Use 'cilock run --auto' to actually run
-the planned set.`,
+It does NOT execute the command. Use 'cilock run -a <attestor>,...' to
+actually run the planned set; pass the attestor names from the 'fire'
+list above.`,
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,
 		Args:              cobra.MinimumNArgs(1),
@@ -159,10 +164,26 @@ func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope,
 				fmt.Fprintf(&b, "        %s\n", f.LLMHint)
 			}
 		}
+		// TODO(#220): once 'cilock run --auto' lands, replace this
+		// explicit -a list with a '--auto' suggestion. Until then '-a'
+		// is the only working way to actually fire the planned set.
+		fired := make([]string, 0, len(plan.Fire))
+		for _, f := range plan.Fire {
+			fired = append(fired, f.Attestor)
+		}
+		sort.Strings(fired)
+		fmt.Fprintf(&b, "  to run: cilock run -a %s -- %s\n",
+			strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
 	}
 
+	// TODO(#220): when 'cilock run --tracing=<mode>' (M3d) lands,
+	// switch this back to printing an actionable flag suggestion.
+	// Until then 'cilock run' only exposes a boolean --trace, so the
+	// per-mode recommendation is informational only — we deliberately
+	// avoid printing a copy-pasteable '--tracing=...' string that would
+	// produce 'unknown flag' on the next invocation.
 	if env.TraceRecommendation.Mode != "" && env.TraceRecommendation.Mode != detection.TraceOff {
-		fmt.Fprintf(&b, "  recommended tracing: --tracing=%s\n", env.TraceRecommendation.Mode)
+		fmt.Fprintf(&b, "  recommended tracing: %s (no equivalent --trace mode in this build; informational only)\n", env.TraceRecommendation.Mode)
 		drivers := make([]string, 0, len(env.TraceRecommendation.Reasons))
 		for name, mode := range env.TraceRecommendation.Reasons {
 			if mode == env.TraceRecommendation.Mode {
