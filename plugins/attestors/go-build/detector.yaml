@@ -1,0 +1,30 @@
+apiVersion: cilock.detection/v0.1
+name: go-build
+description: "Captures Go build provenance (module graph, vcs.revision, build settings) and persists a .gobuild.json sidecar per binary that survives strip(1)."
+
+category: [build]
+
+upstream:
+  name: Go toolchain
+  source: "https://go.dev"
+  license: BSD-3-Clause
+  vendor: Google / Go team
+
+# The build is what we attest; full tracing captures the inputs (source
+# files, fetched modules) and the produced binaries as products.
+recommended_trace: full
+
+# Fires on a direct `go build` / `go install`, OR on any command run inside
+# a Go module (file_exists: go.mod). The marker branch keeps build
+# provenance attached when the real `go build` is wrapped by make / a
+# script and never appears in argv — go-build soft-fails when no Go binary
+# is produced, so attaching broadly is safe.
+pre:
+  match:
+    any_of:
+      - argv_prefix: ["go", "build"]
+      - argv_prefix: ["go", "install"]
+      - file_exists: "go.mod"
+
+llm_hints:
+  on_match: "Go build context observed. The go-build attestor captures BuildInfo (module graph + vcs.revision + build settings) and writes a .gobuild.json sidecar next to each binary."

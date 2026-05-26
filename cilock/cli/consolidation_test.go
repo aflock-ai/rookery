@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -127,52 +128,43 @@ func TestApplyHardeningProfile_EmptyDefaultsToStandard(t *testing.T) {
 	assert.Equal(t, "auto", os.Getenv("CILOCK_FSVERITY"))
 }
 
-func TestDetectWorkloadAttestors_GoMod(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\n"), 0o644))
+// resolveDetectedAttestors: a fired plugin-backed detector attaches by name;
+// a detection-only catalog entry attaches the format attestor(s) it feeds.
+func TestResolveDetectedAttestors(t *testing.T) {
+	reg := detection.NewRegistry()
+	// Detection-only catalog entry: not an attestor itself; feeds "sbom".
+	reg.Register("syft", []byte("apiVersion: cilock.detection/v0.1\n"+
+		"name: syft\ndetection_only: true\ncategory: [sbom-generate]\n"+
+		"emits_formats: [sbom]\npre:\n  match:\n    argv_prefix: [syft]"))
 
-	detected := detectWorkloadAttestors(dir)
-	assert.Contains(t, detected, "go-build")
-	assert.Contains(t, detected, "govulncheck")
-}
+	// git, go-build, trivy are plugin-backed (registered attestors).
+	registered := map[string]bool{"git": true, "go-build": true, "trivy": true}
 
-func TestDetectWorkloadAttestors_PackageJSON(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0o644))
+	fire := func(name string) detection.FireDecision {
+		return detection.FireDecision{Attestor: name, Gate: detection.GatePre}
+	}
 
-	detected := detectWorkloadAttestors(dir)
-	assert.Contains(t, detected, "sbom")
-	assert.Contains(t, detected, "lockfiles")
-}
+	t.Run("plugin-backed detector attaches by name", func(t *testing.T) {
+		got := resolveDetectedAttestors([]detection.FireDecision{fire("git"), fire("go-build")}, registered, reg)
+		assert.Equal(t, []string{"git", "go-build"}, got)
+	})
 
-func TestDetectWorkloadAttestors_GitDir(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
+	t.Run("detection-only entry attaches its emits_formats attestor", func(t *testing.T) {
+		got := resolveDetectedAttestors([]detection.FireDecision{fire("syft")}, registered, reg)
+		assert.Equal(t, []string{"sbom"}, got)
+	})
 
-	detected := detectWorkloadAttestors(dir)
-	assert.Contains(t, detected, "git")
-}
+	t.Run("mixed + dedupe", func(t *testing.T) {
+		got := resolveDetectedAttestors([]detection.FireDecision{
+			fire("git"), fire("syft"), fire("trivy"), fire("git"),
+		}, registered, reg)
+		assert.Equal(t, []string{"git", "sbom", "trivy"}, got)
+	})
 
-func TestDetectWorkloadAttestors_MixedRepo(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0o644))
-	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\n"), 0o644))
-
-	detected := detectWorkloadAttestors(dir)
-	assert.Contains(t, detected, "go-build")
-	assert.Contains(t, detected, "govulncheck")
-	assert.Contains(t, detected, "sbom")
-	assert.Contains(t, detected, "lockfiles")
-	assert.Contains(t, detected, "git")
-	assert.Contains(t, detected, "oci")
-}
-
-func TestDetectWorkloadAttestors_EmptyDir(t *testing.T) {
-	dir := t.TempDir()
-	detected := detectWorkloadAttestors(dir)
-	assert.Empty(t, detected, "empty workdir produces no auto-attestors")
+	t.Run("unknown detector with no emits_formats contributes nothing", func(t *testing.T) {
+		got := resolveDetectedAttestors([]detection.FireDecision{fire("mystery")}, registered, reg)
+		assert.Empty(t, got)
+	})
 }
 
 func TestMergeAttestorNames_NoDuplicates(t *testing.T) {
