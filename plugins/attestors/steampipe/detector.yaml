@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: steampipe
 description: "Captures Steampipe SQL-against-cloud-API scan results."
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: Steampipe

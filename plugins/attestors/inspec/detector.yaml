@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: inspec
 description: "Captures Chef InSpec compliance scan results."
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: Chef InSpec

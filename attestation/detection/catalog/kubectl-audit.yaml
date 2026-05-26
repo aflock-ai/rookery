@@ -7,7 +7,7 @@ detection_only: true
 
 description: kubectl get audit/events — Kubernetes API audit access.
 
-category: [posture-scan]
+category: [runtime-event]
 
 upstream:
   name: kubectl

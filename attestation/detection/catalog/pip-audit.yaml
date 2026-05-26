@@ -7,7 +7,7 @@ detection_only: true
 
 description: pip-audit — Python dependency vulnerability scanner from PyPA.
 
-category: [artifact-scan]
+category: [vulnerability-scan]
 
 upstream:
   name: pip-audit

@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: prowler
 description: "Captures Prowler cloud security posture scan results (AWS / GCP / Azure)."
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: Prowler

@@ -7,7 +7,7 @@ detection_only: true
 
 description: Azure DevOps Pipelines — Microsoft CI/CD context.
 
-category: [build]
+category: [ci-context]
 
 upstream:
   name: Azure Pipelines

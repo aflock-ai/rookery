@@ -7,7 +7,7 @@ detection_only: true
 
 description: kubeaudit — K8s security auditor (Shopify).
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: kubeaudit

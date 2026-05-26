@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: github-review
 description: "Snapshots GitHub PR review state for the current commit (or an explicit SHA/PR) via the `gh` CLI."
 
-category: [statement, posture-scan]
+category: [code-review]
 
 upstream:
   name: GitHub Pull Request Reviews API

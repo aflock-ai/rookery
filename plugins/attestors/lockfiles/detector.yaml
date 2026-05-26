@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: lockfiles
 description: "Captures dependency lockfile contents (npm/yarn/pnpm/go/Cargo/Python/Ruby) when present in the workspace."
 
-category: [build]
+category: [dependency-resolve]
 
 pre:
   match:

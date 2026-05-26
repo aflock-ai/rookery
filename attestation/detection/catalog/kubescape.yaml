@@ -7,7 +7,7 @@ detection_only: true
 
 description: Kubescape — open-source K8s + image security posture scanner (CNCF).
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: Kubescape

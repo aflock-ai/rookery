@@ -7,7 +7,7 @@ detection_only: true
 
 description: "Anchore Syft — SBOM generator for containers, filesystems, archives."
 
-category: [artifact-scan]
+category: [sbom-generate]
 
 upstream:
   name: Syft

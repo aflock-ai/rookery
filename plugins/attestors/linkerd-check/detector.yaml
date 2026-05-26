@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: linkerd-check
 description: "Captures Linkerd service mesh health checks (output of `linkerd check`)."
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: Linkerd

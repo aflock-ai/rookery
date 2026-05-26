@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: docker-bench
 description: "Captures Docker Bench for Security CIS benchmark results."
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: Docker Bench for Security

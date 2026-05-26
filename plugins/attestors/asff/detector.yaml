@@ -2,7 +2,7 @@ apiVersion: cilock.detection/v0.1
 name: asff
 description: "Captures AWS Security Finding Format (ASFF) reports from AWS Security Hub (typically the output of `aws securityhub get-findings`)."
 
-category: [posture-scan]
+category: [compliance-scan]
 
 upstream:
   name: AWS Security Finding Format (ASFF)

@@ -2,7 +2,10 @@ apiVersion: cilock.detection/v0.1
 name: sarif
 description: "Captures SARIF (Static Analysis Results Interchange Format) reports produced by scanners (CodeQL, Semgrep, Brakeman, etc.)."
 
-category: [artifact-scan]
+# No category: SARIF is a format wrapper used by many scanner kinds
+# (SAST, DAST, IaC scan, secret scan, code review). Step intent comes
+# from the tool that emitted the file, not the format. See
+# docs/lexicon-v1.md composition rule 6.
 
 upstream:
   name: SARIF (Static Analysis Results Interchange Format)

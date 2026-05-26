@@ -7,7 +7,7 @@ detection_only: true
 
 description: pytest — Python test runner.
 
-category: [artifact-scan]
+category: [unit-test]
 
 upstream:
   name: pytest

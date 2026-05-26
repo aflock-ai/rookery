@@ -2,7 +2,10 @@ apiVersion: cilock.detection/v0.1
 name: test-results
 description: "Captures JUnit XML test reports and CTRF JSON reports produced by test runners (go test -junit, pytest, jest, gradle, surefire, etc.)."
 
-category: [artifact-scan]
+# No category: JUnit/CTRF are formats that carry both unit-test and
+# integration-test outcomes. Step intent comes from the test command
+# that produced the file, not the format. See docs/lexicon-v1.md
+# composition rule 6.
 
 upstream:
   name: JUnit XML + CTRF JSON
