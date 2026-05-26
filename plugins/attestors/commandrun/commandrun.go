@@ -1135,6 +1135,55 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 			Source: source,
 		}
 	}
+
+	// Authoritative product signal: exists-at-exit + modified-in-window.
+	// Any regular file under the tracee's workspace whose mtime is at/after
+	// the command-start instant and that survives at exit is a product the
+	// command produced — even when the (lossy) eBPF write-tap captured NO
+	// write event for it (GitHub's Azure 6.17 kernel dropped entire write
+	// events, e.g. syft's SBOM output) and even when the file was also read
+	// in this step (a one-step build+scan legitimately yields multiple
+	// products — the binary AND its SBOM). This anchors products on
+	// filesystem reality rather than on lossy syscall events. Pure inputs
+	// are excluded for free: a read does not update mtime, so only
+	// written/created files match. Cache classification still runs in the
+	// product attestor (classifyTracePath), so workspace files under cache
+	// patterns are filtered there. Digest comes from the write-tap when we
+	// captured it; otherwise nil and the product attestor hashes the
+	// surviving file at attest time.
+	if base != "" && !rc.traceStartTime.IsZero() {
+		_ = filepath.Walk(base, func(path string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return nil //nolint:nilerr // best-effort; a stat error on one entry must not abort product capture
+			}
+			if info.IsDir() {
+				// Never descend into VCS metadata — it's never a product
+				// and is expensive to walk.
+				if info.Name() == ".git" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !info.Mode().IsRegular() {
+				return nil
+			}
+			if _, seen := out[path]; seen {
+				return nil
+			}
+			if info.ModTime().Before(rc.traceStartTime) {
+				return nil
+			}
+			var dm map[string]string
+			if ds, ok := writtenDigests[path]; ok {
+				if m, e := ds.ToNameMap(); e == nil {
+					dm = m
+				}
+			}
+			out[path] = attestation.CaptureEntry{Digest: dm, Source: "trace-mtime-survivor"}
+			return nil
+		})
+	}
+
 	return out
 }
 
