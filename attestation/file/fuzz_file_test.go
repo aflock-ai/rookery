@@ -17,13 +17,13 @@
 package file
 
 import (
-	"time"
 	"crypto"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/gobwas/glob"
