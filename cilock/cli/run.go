@@ -524,6 +524,18 @@ Exit-code policy (finding #221):
 				o.Attestations = merged
 			}
 
+			// Infer --step from the wrapped command when the operator didn't
+			// set one: the detection engine matches the argv to a tool, and
+			// the tool's lexicon category becomes the step name. Unknown or
+			// ambiguous commands get an actionable diagnostic and a hard
+			// error — cilock will not silently guess the routing key the
+			// policy verifier binds evidence by.
+			if o.StepName == "" {
+				if err := inferStepName(&o, args); err != nil {
+					return err
+				}
+			}
+
 			// Validate the user command resolves before doing the real run.
 			// Soft warning when --validate-only is off; hard exit when on.
 			cmdErr := validateUserCommand(args)
