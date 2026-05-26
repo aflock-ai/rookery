@@ -668,11 +668,24 @@ func fromCaptureEntries(entries map[string]attestation.CaptureEntry, requireExis
 			mimeType = "text/directory"
 		}
 
-		// Path exists but we couldn't hash it (trace race, transient
-		// permission). Keep as witness-only product entry — the
-		// existence-at-exit invariant tells us this IS a real
-		// deliverable, just one whose content we couldn't capture.
+		// The trace write-tap didn't yield a content digest (ringbuf
+		// drop, partial-read fallback, an mmap+msync write we don't tap,
+		// or — seen on GHA's Azure 6.17 kernel — a rebuilt-on-host BPF
+		// object whose write-tap never fires). The file is a confirmed
+		// surviving deliverable (exists-at-exit just passed), so hash it
+		// directly now instead of emitting a digest-less entry that
+		// buildTree() then drops from the Merkle tree. Without this, a
+		// build whose writes the tracer couldn't digest ships a signed
+		// attestation with an EMPTY product set, and the verify gate has
+		// no subject to anchor on. Regular files only — never block on a
+		// FIFO/socket. Falls through to witness-only if the hash fails.
 		if entry.Digest == nil {
+			if fi.Mode().IsRegular() {
+				if ds, herr := cryptoutil.CalculateDigestSetFromFile(path, []cryptoutil.DigestValue{{Hash: crypto.SHA256}}); herr == nil {
+					out[path] = attestation.Product{MimeType: mimeType, Digest: ds}
+					continue
+				}
+			}
 			out[path] = attestation.Product{
 				MimeType: mimeType,
 				Digest:   nil,
@@ -682,9 +695,14 @@ func fromCaptureEntries(entries map[string]attestation.CaptureEntry, requireExis
 
 		ds, err := cryptoutil.NewDigestSet(entry.Digest)
 		if err != nil {
-			// Same fallback path — bad digest data on the trace
-			// side; record the path without a digest rather than
-			// dropping it silently.
+			// Bad digest data on the trace side — same fallback: hash
+			// the surviving file directly rather than dropping it.
+			if fi.Mode().IsRegular() {
+				if ds2, herr := cryptoutil.CalculateDigestSetFromFile(path, []cryptoutil.DigestValue{{Hash: crypto.SHA256}}); herr == nil {
+					out[path] = attestation.Product{MimeType: mimeType, Digest: ds2}
+					continue
+				}
+			}
 			out[path] = attestation.Product{
 				MimeType: mimeType,
 				Digest:   nil,
