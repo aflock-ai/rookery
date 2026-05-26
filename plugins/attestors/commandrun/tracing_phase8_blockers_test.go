@@ -105,11 +105,11 @@ func TestPhase8Blocker_ForkChainStability(t *testing.T) {
 // fastCloseRelativeCSource: opens a file by RELATIVE path, reads it,
 // closes immediately, exits. Pins the read-tap/path-resolution race
 // where cc1-style fast compilers lose digests because:
-//  1. openat(AT_FDCWD, "data.bin", O_RDONLY) — relative path
-//  2. fast read + close + exit
-//  3. by the time userspace processes the openat event, the tracee
-//     has exited; /proc/<pid>/cwd is gone; path-hash fallback fails;
-//     digest is nil.
+//   1. openat(AT_FDCWD, "data.bin", O_RDONLY) — relative path
+//   2. fast read + close + exit
+//   3. by the time userspace processes the openat event, the tracee
+//      has exited; /proc/<pid>/cwd is gone; path-hash fallback fails;
+//      digest is nil.
 //
 // Phase 8's canonical fix: fentry on `security_file_open` with
 // `bpf_d_path` (allowlisted on that hook) gives a kernel-canonical

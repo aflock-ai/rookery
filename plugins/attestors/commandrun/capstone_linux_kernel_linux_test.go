@@ -48,9 +48,7 @@ const capstoneLinuxSrcEnv = "CILOCK_CAPSTONE_LINUX_SRC"
 //
 // Workload: `make tinyconfig && make -j$(nproc) vmlinux`.
 // Scale: ~thousands of source files, hundreds of compile workers,
-//
-//	millions of opens/reads, parallel fork-exec chains.
-//
+//   millions of opens/reads, parallel fork-exec chains.
 // Pass criteria:
 //   - vmlinux ends up in products (or intermediates if the linker
 //     re-reads its output, which gcc/ld commonly does).

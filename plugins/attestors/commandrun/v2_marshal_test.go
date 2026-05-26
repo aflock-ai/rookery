@@ -52,11 +52,11 @@ func synthCommandRun() *CommandRun {
 	rc.Processes = make([]ProcessInfo, 0, 100)
 	for pid := 1000; pid < 1100; pid++ {
 		pi := ProcessInfo{
-			ProcessID:   pid,
-			ParentPID:   999,
-			Comm:        "compile",
-			Cmdline:     "go tool compile -p main -lang go1.21 -complete -buildid xyz123 -goversion go1.21.5 -o /tmp/foo.a -trimpath /home/user/code main.go",
-			Environ:     "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nHOME=/root\nGOCACHE=/root/.cache/go-build\nGOROOT=/usr/local/go\n",
+			ProcessID: pid,
+			ParentPID: 999,
+			Comm:      "compile",
+			Cmdline:   "go tool compile -p main -lang go1.21 -complete -buildid xyz123 -goversion go1.21.5 -o /tmp/foo.a -trimpath /home/user/code main.go",
+			Environ:   "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\nHOME=/root\nGOCACHE=/root/.cache/go-build\nGOROOT=/usr/local/go\n",
 			OpenedFiles: make(map[string]cryptoutil.DigestSet),
 		}
 		for i := 0; i < 30; i++ {

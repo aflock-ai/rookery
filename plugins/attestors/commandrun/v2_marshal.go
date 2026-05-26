@@ -71,11 +71,11 @@ const V02PredicateType = "https://aflock.ai/attestations/command-run/v0.2"
 // whole document. Empty when the document is emitted via plain
 // json.Marshal (e.g., during construction tests).
 type V02Meta struct {
-	Version      string              `json:"version"` // "v0.2"
-	CaptureMode  string              `json:"captureMode,omitempty"`
-	TraceBackend string              `json:"traceBackend,omitempty"`
-	Counts       V02MetaCounts       `json:"counts"`
-	Sections     map[string][2]int64 `json:"sections,omitempty"`
+	Version      string                `json:"version"`           // "v0.2"
+	CaptureMode  string                `json:"captureMode,omitempty"`
+	TraceBackend string                `json:"traceBackend,omitempty"`
+	Counts       V02MetaCounts         `json:"counts"`
+	Sections     map[string][2]int64   `json:"sections,omitempty"`
 }
 
 // V02MetaCounts surfaces the cardinality of each interned table so
