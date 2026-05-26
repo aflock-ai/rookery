@@ -40,6 +40,56 @@ import (
 
 var alwaysRunAttestors = []attestation.Attestor{product.New(), material.New()}
 
+// defaultAttestorNames lists the always-on attestor names that
+// --no-default-attestor can disable. Kept in sync with
+// alwaysRunAttestors; if a name appears here it MUST be present in
+// the slice above and vice versa.
+var defaultAttestorNames = []string{product.Name, material.Name}
+
+// applyNoDefaultAttestors filters out always-on attestors named in
+// the operator's --no-default-attestor flags. Hard-fails when the
+// user disables every default attestor — the attestation collection
+// would have no body to attest.
+func applyNoDefaultAttestors(base []attestation.Attestor, disabled []string) ([]attestation.Attestor, error) {
+	if len(disabled) == 0 {
+		return base, nil
+	}
+	disabledSet := make(map[string]struct{}, len(disabled))
+	for _, name := range disabled {
+		if name == "" {
+			continue
+		}
+		known := false
+		for _, k := range defaultAttestorNames {
+			if k == name {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return nil, fmt.Errorf("--no-default-attestor=%q: not a recognised default attestor (valid: %s)",
+				name, strings.Join(defaultAttestorNames, ", "))
+		}
+		disabledSet[name] = struct{}{}
+	}
+	if len(disabledSet) >= len(defaultAttestorNames) {
+		return nil, fmt.Errorf(
+			"SECURITY: --no-default-attestor disables every always-on attestor (%s). "+
+				"The resulting attestation collection would have no product or material evidence — "+
+				"refusing to proceed. Drop one of the --no-default-attestor flags",
+			strings.Join(defaultAttestorNames, ", "))
+	}
+	out := make([]attestation.Attestor, 0, len(base))
+	for _, a := range base {
+		if _, drop := disabledSet[a.Name()]; drop {
+			log.Warnf("--no-default-attestor: dropping always-on attestor %q (operator override)", a.Name())
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
 func RunCmd() *cobra.Command {
 	o := options.RunOptions{
 		AttestorOptSetters:       make(map[string][]func(attestation.Attestor) (attestation.Attestor, error)),
@@ -99,12 +149,18 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 
 	// Create fresh attestor instances each time to avoid leaking state
 	// from prior invocations (alwaysRunAttestors holds shared singletons).
-	attestors := []attestation.Attestor{product.New(), material.New()}
+	defaults := []attestation.Attestor{product.New(), material.New()}
+	attestors, err := applyNoDefaultAttestors(defaults, ro.NoDefaultAttestors)
+	if err != nil {
+		return err
+	}
 	if len(args) > 0 {
 		attestors = append(attestors, commandrun.New(
 			commandrun.WithCommand(args),
 			commandrun.WithTracing(ro.Tracing),
 			commandrun.WithIgnoreExitCode(ro.IgnoreCommandExitCode),
+			commandrun.WithPrewalkSkipDirs(ro.PrewalkSkipDirs),
+			commandrun.WithPrewalkIncludeDirs(ro.PrewalkIncludeDirs),
 		))
 	}
 

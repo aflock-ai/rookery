@@ -110,6 +110,44 @@ func WithIgnoreExitCode(ignore bool) Option {
 	}
 }
 
+// WithPrewalkSkipDirs adds directory base names to the pre-trace
+// workspace walk's skip list. Directories with these basenames are
+// not descended into during the snapshot used to distinguish
+// overwrites from clean creations. Additive on top of the built-in
+// defaults (.git, node_modules, vendor, .cache).
+//
+// Each entry should be a single directory NAME (basename), not a
+// path. Empty entries are silently ignored.
+func WithPrewalkSkipDirs(names []string) Option {
+	return func(cr *CommandRun) {
+		for _, n := range names {
+			if n == "" {
+				continue
+			}
+			cr.prewalkSkipDirs = append(cr.prewalkSkipDirs, n)
+		}
+	}
+}
+
+// WithPrewalkIncludeDirs marks directory base names that must NOT
+// be skipped during the pre-trace walk, even if those names appear
+// in the built-in default skip set or in the operator's
+// --prewalk-skip-dir list. Most-specific wins: include beats skip.
+//
+// Useful when a build legitimately writes into one of the
+// default-skipped trees (e.g. a vendoring step that produces files
+// under vendor/, or a tool that emits artefacts into .cache/).
+func WithPrewalkIncludeDirs(names []string) Option {
+	return func(cr *CommandRun) {
+		for _, n := range names {
+			if n == "" {
+				continue
+			}
+			cr.prewalkIncludeDirs = append(cr.prewalkIncludeDirs, n)
+		}
+	}
+}
+
 // WithRequireZeroDrops enables the fail-closed attestation gate. If
 // the trace observed ANY BPF ringbuf drops, fanotify handler
 // timeouts, or other data-loss signals at the end of the trace, the
@@ -654,6 +692,20 @@ type CommandRun struct {
 	prePaths         map[string]struct{}
 	ignoreExitCode   bool
 	requireZeroDrops bool
+
+	// prewalkSkipDirs lists directory base names to skip when
+	// snapshotting pre-trace workspace state. Populated by
+	// WithPrewalkSkipDirs from the operator's --prewalk-skip-dir
+	// flags. Additive on top of the built-in default set.
+	prewalkSkipDirs []string
+
+	// prewalkIncludeDirs lists directory base names that must NOT
+	// be skipped even if they appear in the built-in default set or
+	// the user's --prewalk-skip-dir list. Populated by
+	// WithPrewalkIncludeDirs from --prewalk-include-dir. The
+	// include set is the most-specific override and wins over both
+	// defaults and user-supplied skips.
+	prewalkIncludeDirs []string
 
 	// cacheMatcher classifies tracee-written paths as cache/temp
 	// (excluded from products) vs user-facing outputs. Installed by
@@ -1397,17 +1449,33 @@ func isInterestingPath(p string) bool {
 // when the limit is hit, we return what we have and the overwrite
 // tag will be missing for any paths beyond it (degraded honesty,
 // not silent corruption).
-func snapshotPrePaths(root string) map[string]struct{} {
+// DefaultPrewalkSkipDirs lists the built-in directory basenames the
+// pre-trace walk skips by default. Operators extend or override
+// this set via --prewalk-skip-dir and --prewalk-include-dir.
+//
+// Exported so the override-audit regression test can find a
+// matching CLI flag by string-grep without false negatives.
+var DefaultPrewalkSkipDirs = []string{".git", "node_modules", "vendor", ".cache"}
+
+func snapshotPrePaths(root string, extraSkip, includeOverride []string) map[string]struct{} {
 	if root == "" {
 		return nil
 	}
 	const maxPrePathEntries = 1_000_000
 	out := make(map[string]struct{}, 4096)
-	skipDirs := map[string]struct{}{
-		".git":         {},
-		"node_modules": {},
-		"vendor":       {},
-		".cache":       {},
+	skipDirs := make(map[string]struct{}, len(DefaultPrewalkSkipDirs)+len(extraSkip))
+	for _, n := range DefaultPrewalkSkipDirs {
+		skipDirs[n] = struct{}{}
+	}
+	for _, n := range extraSkip {
+		if n == "" {
+			continue
+		}
+		skipDirs[n] = struct{}{}
+	}
+	// Most-specific wins: includes override both defaults and user skips.
+	for _, n := range includeOverride {
+		delete(skipDirs, n)
 	}
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -1526,7 +1594,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	// boundary is tight. snapshotPrePaths is best-effort: walk
 	// errors are logged but don't abort the trace.
 	r.traceStartTime = time.Now()
-	r.prePaths = snapshotPrePaths(r.traceeWorkdir)
+	r.prePaths = snapshotPrePaths(r.traceeWorkdir, r.prewalkSkipDirs, r.prewalkIncludeDirs)
 
 	if err := c.Start(); err != nil {
 		// If eBPF was pre-opened but Start failed, release the consumer.

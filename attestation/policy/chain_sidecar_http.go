@@ -60,23 +60,65 @@ type HTTPChainSidecarSource struct {
 	URLTemplate string
 
 	// Client is the HTTP client used for fetches. nil → http.DefaultClient
-	// with a 30s timeout applied per request (some sidecars are large
-	// for high-cardinality material sets; tighter timeouts cause false
-	// negatives on cold caches).
+	// with DefaultHTTPChainSidecarTimeout applied per request (some
+	// sidecars are large for high-cardinality material sets; tighter
+	// timeouts cause false negatives on cold caches). Operators
+	// override via the --chain-sidecar-http-timeout CLI flag.
 	Client *http.Client
 
 	// Headers are merged into every request — useful for bearer tokens
 	// or Archivista-specific authentication. Nil means no extra headers.
 	Headers map[string]string
+
+	// MaxBodyBytes caps the response body the source will read from a
+	// server. Zero falls back to DefaultHTTPChainSidecarMaxBytes
+	// (64 MiB). Operators override via the
+	// --chain-sidecar-http-max-bytes CLI flag.
+	MaxBodyBytes int64
 }
+
+// DefaultHTTPChainSidecarTimeout is the per-request HTTP client
+// timeout used when no override is supplied. Picked generously
+// (30s) because cold-cache fetches of high-cardinality sidecars
+// from Archivista take meaningful wall-clock time. Operators
+// override via the --chain-sidecar-http-timeout flag.
+const DefaultHTTPChainSidecarTimeout = 30 * time.Second
+
+// DefaultHTTPChainSidecarMaxBytes caps the HTTP response body the
+// source will read. A realistic sidecar (12k materials × 14 proof
+// depth × 32 bytes + JSON overhead) is ≈ 6 MB; 64 MiB is well
+// above that but well below memory exhaustion. Operators override
+// via the --chain-sidecar-http-max-bytes flag.
+const DefaultHTTPChainSidecarMaxBytes int64 = 64 << 20
 
 // NewHTTPChainSidecarSource builds a source with sensible defaults.
 // An empty URLTemplate is allowed and short-circuits to "no source"
 // the same way an empty Dir does in FilesystemChainSidecarSource.
 func NewHTTPChainSidecarSource(urlTemplate string) *HTTPChainSidecarSource {
 	return &HTTPChainSidecarSource{
-		URLTemplate: urlTemplate,
-		Client:      &http.Client{Timeout: 30 * time.Second},
+		URLTemplate:  urlTemplate,
+		Client:       &http.Client{Timeout: DefaultHTTPChainSidecarTimeout},
+		MaxBodyBytes: DefaultHTTPChainSidecarMaxBytes,
+	}
+}
+
+// NewHTTPChainSidecarSourceWithOptions builds a source with operator
+// overrides for the timeout and response-body cap. Zero values mean
+// "use the compiled-in default" (DefaultHTTPChainSidecarTimeout,
+// DefaultHTTPChainSidecarMaxBytes). Use this constructor when the
+// CLI layer is plumbing through --chain-sidecar-http-timeout and
+// --chain-sidecar-http-max-bytes.
+func NewHTTPChainSidecarSourceWithOptions(urlTemplate string, timeout time.Duration, maxBodyBytes int64) *HTTPChainSidecarSource {
+	if timeout <= 0 {
+		timeout = DefaultHTTPChainSidecarTimeout
+	}
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = DefaultHTTPChainSidecarMaxBytes
+	}
+	return &HTTPChainSidecarSource{
+		URLTemplate:  urlTemplate,
+		Client:       &http.Client{Timeout: timeout},
+		MaxBodyBytes: maxBodyBytes,
 	}
 }
 
@@ -125,7 +167,7 @@ func (s *HTTPChainSidecarSource) LookupChainSidecar(ctx context.Context, downstr
 
 	client := s.Client
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Timeout: DefaultHTTPChainSidecarTimeout}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -145,10 +187,15 @@ func (s *HTTPChainSidecarSource) LookupChainSidecar(ctx context.Context, downstr
 	}
 
 	// Cap the body size — a hostile server could otherwise OOM the
-	// verifier with a multi-GB response. 64 MiB is well above any
+	// verifier with a multi-GB response. The default
+	// (DefaultHTTPChainSidecarMaxBytes, 64 MiB) is well above any
 	// realistic sidecar (12k materials × 14 proof depth × 32 bytes
 	// + JSON overhead ≈ 6 MB) but well below memory exhaustion.
-	const maxBody = 64 << 20
+	// Operators override via --chain-sidecar-http-max-bytes.
+	maxBody := s.MaxBodyBytes
+	if maxBody <= 0 {
+		maxBody = DefaultHTTPChainSidecarMaxBytes
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		return nil, fmt.Errorf("http chain sidecar source: read body: %w", err)

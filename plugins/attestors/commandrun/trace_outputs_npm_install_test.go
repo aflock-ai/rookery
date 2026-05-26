@@ -56,7 +56,7 @@ func TestTraceOutputs_NpmInstall_ManyProducts(t *testing.T) {
 	// Step 2: snapshot pre-state RIGHT before the install (mirrors
 	// what runCmd does). prePaths should contain only package.json.
 	traceStart := time.Now()
-	prePaths := snapshotPrePaths(workdir)
+	prePaths := snapshotPrePaths(workdir, nil, nil)
 	t.Logf("prePaths snapshot: %d entries (expect 1: package.json)", len(prePaths))
 	if len(prePaths) < 1 {
 		t.Fatalf("expected at least package.json in prePaths, got %d", len(prePaths))

@@ -90,6 +90,25 @@ type RunOptions struct {
 	// validator-installed CLIs) that's fine in production but noisy in
 	// committed validation artifacts. See rookery#142.
 	EnvCaptureAllowlist []string
+
+	// PrewalkSkipDirs is the user-supplied addition to the built-in
+	// pre-trace walk skip list (commandrun.DefaultPrewalkSkipDirs).
+	// Each entry is a single directory basename. Additive only —
+	// does NOT remove anything from the default set; use
+	// --prewalk-include-dir for that.
+	PrewalkSkipDirs []string
+
+	// PrewalkIncludeDirs forces directory basenames to be descended
+	// into during the pre-trace walk even when they are in the
+	// built-in default skip set or the user's PrewalkSkipDirs.
+	// Most-specific wins: include beats skip.
+	PrewalkIncludeDirs []string
+
+	// NoDefaultAttestors lists names of always-on attestors to drop
+	// from the alwaysRunAttestors set (product, material). Repeated
+	// flag values are merged. Disabling BOTH is a hard error — the
+	// attestation collection would have no body to attest.
+	NoDefaultAttestors []string
 }
 
 var RequiredRunFlags = []string{
@@ -188,6 +207,20 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVarP(&ro.EnvDisableSensitiveVars, "env-disable-default-sensitive-vars", "", false, "Disable the default list of sensitive vars and only use the items mentioned by --add-sensitive-key.")
 	cmd.Flags().StringSliceVar(&ro.EnvAddSensitiveKeys, "env-add-sensitive-key", []string{}, "Add keys or globs (e.g. '*TEXT') to the list of sensitive environment keys.")
 	cmd.Flags().StringSliceVar(&ro.EnvAllowSensitiveKeys, "env-allow-sensitive-key", []string{}, "Allow specific keys from the list of sensitive environment keys. Note: This does not support globs.")
+	cmd.Flags().StringSliceVar(&ro.PrewalkSkipDirs, "prewalk-skip-dir", nil,
+		"Add a directory basename to the pre-trace walk skip list. The walk snapshots "+
+			"workspace state to distinguish overwrites from clean creations; by default it skips "+
+			".git, node_modules, vendor, .cache. Repeatable. Additive on top of defaults. "+
+			"Use --prewalk-include-dir to remove names from the skip set.")
+	cmd.Flags().StringSliceVar(&ro.PrewalkIncludeDirs, "prewalk-include-dir", nil,
+		"Force the pre-trace walk to descend into the given directory basename even if it "+
+			"is in the built-in skip set or --prewalk-skip-dir list. Repeatable. Most-specific "+
+			"wins: include beats skip. Use when a build legitimately writes into one of the "+
+			"default-skipped trees (e.g. a vendoring step producing files under vendor/).")
+	cmd.Flags().StringSliceVar(&ro.NoDefaultAttestors, "no-default-attestor", nil,
+		"Drop the named always-on attestor (product, material) from the run. Repeatable. "+
+			"Disabling BOTH product and material is a fatal error: the attestation collection "+
+			"would have no body to attest. Use sparingly — these defaults exist for a reason.")
 	cmd.Flags().StringSliceVar(&ro.EnvCaptureAllowlist, "env-capture-allowlist", []string{},
 		"Positive allowlist for environment capture. When set, only env keys matching one of the patterns "+
 			"(exact key like PATH, or glob like GITHUB_*) are captured. Everything else is dropped — not obfuscated, not recorded. "+
