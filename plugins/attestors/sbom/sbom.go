@@ -86,6 +86,19 @@ func init() {
 				return sbomAttestor, nil
 			},
 		),
+		registry.StringConfigOption(
+			"file",
+			"Path to an existing SBOM file to attest directly (SPDX-JSON or CycloneDX-JSON). Bypasses product-set scanning; format auto-detected from JSON content. Relative paths are resolved against the working directory.",
+			"",
+			func(a attestation.Attestor, val string) (attestation.Attestor, error) {
+				sbomAttestor, ok := a.(*SBOMAttestor)
+				if !ok {
+					return a, fmt.Errorf("unexpected attestor type: %T is not an SBOM attestor", a)
+				}
+				WithSBOMFile(val)(sbomAttestor)
+				return sbomAttestor, nil
+			},
+		),
 	)
 }
 
@@ -97,10 +110,24 @@ func WithExport(export bool) Option {
 	}
 }
 
+// WithSBOMFile pins the attestor to a specific SBOM file on disk. When
+// set, getCandidate reads the file directly instead of scanning the
+// product attestor's output set — useful when the SBOM existed before
+// the wrapped command ran (i.e., it's a material, not a product).
+//
+// The value supports relative or absolute paths; relatives are
+// resolved against ctx.WorkingDir() at attest time.
+func WithSBOMFile(path string) Option {
+	return func(a *SBOMAttestor) {
+		a.sbomFile = path
+	}
+}
+
 type SBOMAttestor struct {
 	SBOMDocument  interface{}
 	predicateType string
 	export        bool
+	sbomFile      string
 	subjects      map[string]cryptoutil.DigestSet
 }
 
@@ -131,11 +158,102 @@ func (a *SBOMAttestor) Schema() *jsonschema.Schema {
 }
 
 func (a *SBOMAttestor) Attest(ctx *attestation.AttestationContext) error {
+	// Explicit-file mode: when --attestor-sbom-file points at a path,
+	// skip the product-set scan entirely and attest that file directly.
+	// This covers the common "I generated the SBOM in a previous step,
+	// now attest it" workflow where the SBOM is a material, not a product.
+	if a.sbomFile != "" {
+		if err := a.loadFromExplicitFile(ctx); err != nil {
+			log.Debugf("(attestation/sbom) explicit file load failed: %v", err)
+			return err
+		}
+		return nil
+	}
+
 	if err := a.getCandidate(ctx); err != nil {
 		log.Debugf("(attestation/sbom) error getting candidate: %v", err)
 		return err
 	}
 
+	return nil
+}
+
+// loadFromExplicitFile reads the file at a.sbomFile, auto-detects
+// SPDX-JSON vs CycloneDX-JSON from the JSON content, and populates the
+// attestor's predicate + subjects exactly as getCandidate would for a
+// product-set match. Format detection uses two unambiguous signals
+// published by the respective specs:
+//
+//   - SPDX 2.x:        top-level "spdxVersion": "SPDX-2.x"
+//   - CycloneDX 1.x:   top-level "bomFormat": "CycloneDX"
+//
+// Anything else (or a file that doesn't parse as JSON) is rejected
+// with an actionable error so the user knows immediately rather than
+// silently producing an empty attestation.
+func (a *SBOMAttestor) loadFromExplicitFile(ctx *attestation.AttestationContext) error {
+	resolved := a.sbomFile
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(ctx.WorkingDir(), resolved)
+	}
+
+	sbomBytes, err := os.ReadFile(resolved) //nolint:gosec // G304: user-specified flag
+	if err != nil {
+		return fmt.Errorf("sbom: read --attestor-sbom-file %s: %w", resolved, err)
+	}
+	if !json.Valid(sbomBytes) {
+		return fmt.Errorf("sbom: --attestor-sbom-file %s is not valid JSON", resolved)
+	}
+
+	// Sniff format. Both detection fields are at the top level and
+	// don't collide with each other, so a single decode covers both.
+	var sniff struct {
+		SPDXVersion string `json:"spdxVersion"`
+		BOMFormat   string `json:"bomFormat"`
+	}
+	_ = json.Unmarshal(sbomBytes, &sniff)
+	switch {
+	case sniff.SPDXVersion != "":
+		a.predicateType = SPDXPredicateType
+	case sniff.BOMFormat == "CycloneDX":
+		a.predicateType = CycloneDxPredicateType
+	default:
+		return fmt.Errorf("sbom: --attestor-sbom-file %s is not a recognized SBOM (need top-level spdxVersion or bomFormat:\"CycloneDX\")", resolved)
+	}
+
+	// Reuse the existing subject-extraction code path for parity with
+	// product-scanned SBOMs.
+	subjectsByName := make(map[string]string)
+	var extracted sbomSubjectExtractor
+	_ = json.Unmarshal(sbomBytes, &extracted)
+	switch a.predicateType {
+	case SPDXPredicateType:
+		if extracted.SPDXDocumentName != "" {
+			subjectsByName["name"] = extracted.SPDXDocumentName
+		}
+	case CycloneDxPredicateType:
+		if extracted.Metadata.Component.Name != "" {
+			subjectsByName["name"] = extracted.Metadata.Component.Name
+		}
+		if extracted.Metadata.Component.Version != "" {
+			subjectsByName["version"] = extracted.Metadata.Component.Version
+		}
+	}
+
+	a.SBOMDocument = json.RawMessage(sbomBytes)
+	a.subjects = make(map[string]cryptoutil.DigestSet)
+
+	// Subject for the file itself — same shape ("file:<path>") as the
+	// product-set path uses, so policy can match without dispatch.
+	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
+	fileDigest, err := cryptoutil.CalculateDigestSetFromBytes(sbomBytes, hashes)
+	if err == nil {
+		a.subjects[fmt.Sprintf("file:%v", a.sbomFile)] = fileDigest
+	}
+	for k, v := range subjectsByName {
+		if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(v), hashes); err == nil {
+			a.subjects[fmt.Sprintf("%s:%s", k, v)] = ds
+		}
+	}
 	return nil
 }
 
