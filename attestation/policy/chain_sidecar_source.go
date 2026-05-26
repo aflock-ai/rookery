@@ -62,3 +62,23 @@ func WithChainSidecarSource(src ChainSidecarSource) VerifyOption {
 		vo.chainSidecarSource = src
 	}
 }
+
+// WithRequireSidecar enables strict-chain mode: any step whose
+// policy declares ArtifactsFrom MUST have a chain sidecar available
+// (via the installed ChainSidecarSource) for every upstream edge.
+// Edges without a sidecar fail closed instead of falling through to
+// legacy compareArtifacts.
+//
+// Closes the v0.3 vacuous-pass attack surface — without this flag,
+// an attacker can omit the chain sidecar entirely and the verifier
+// silently accepts the chain via legacy comparison, which trivially
+// passes because v0.3 attestations return empty Materials() by
+// design (data lives off-envelope in the sidecar).
+//
+// Recommended for any chain that involves v0.3 attestations. Leave
+// off only when verifying legacy v0.1 chains for back-compat.
+func WithRequireSidecar(require bool) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.requireSidecar = require
+	}
+}

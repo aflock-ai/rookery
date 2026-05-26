@@ -63,6 +63,7 @@ type Attestor struct {
 	aiServerURL        string
 	kmsProviderOptions map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 	chainSidecarSource policy.ChainSidecarSource
+	requireSidecar     bool
 }
 
 type DenyReason struct {
@@ -130,6 +131,14 @@ func (a *Attestor) SetKMSProviderOptions(opts map[string][]func(signer.SignerPro
 // has a matching sidecar. Nil disables (preserves legacy behavior).
 func (a *Attestor) SetChainSidecarSource(src policy.ChainSidecarSource) {
 	a.chainSidecarSource = src
+}
+
+// SetRequireSidecar enables strict-chain mode. When true and the
+// policy declares ArtifactsFrom on any step, every such edge MUST
+// have a chain sidecar available or verification fails. Closes the
+// v0.3 vacuous-pass attack surface.
+func (a *Attestor) SetRequireSidecar(require bool) {
+	a.requireSidecar = require
 }
 
 // PolicyVerifyResult interface methods
@@ -218,6 +227,9 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 	}
 	if a.chainSidecarSource != nil {
 		verifyOpts = append(verifyOpts, policy.WithChainSidecarSource(a.chainSidecarSource))
+	}
+	if a.requireSidecar {
+		verifyOpts = append(verifyOpts, policy.WithRequireSidecar(true))
 	}
 
 	accepted, stepResults, policyErr := pol.Verify(ctx.Context(), verifyOpts...)

@@ -46,6 +46,9 @@ type PolicyVerifyConfigurer interface {
 	// SetChainSidecarSource installs the v0.3 chain-of-custody sidecar
 	// source. Nil disables. See policy.ChainSidecarSource for behavior.
 	SetChainSidecarSource(src policy.ChainSidecarSource)
+	// SetRequireSidecar enables strict-chain mode. See
+	// policy.WithRequireSidecar for behavior.
+	SetRequireSidecar(require bool)
 }
 
 // PolicyVerifyResult is implemented by the policyverify attestor plugin.
@@ -75,6 +78,7 @@ type verifyOptions struct {
 	aiServerURL                  string
 	kmsProviderOptions           map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 	chainSidecarSource           policy.ChainSidecarSource
+	requireSidecar               bool
 }
 
 type VerifyOption func(*verifyOptions)
@@ -163,6 +167,17 @@ func VerifyWithChainSidecarSource(src policy.ChainSidecarSource) VerifyOption {
 	}
 }
 
+// VerifyWithRequireSidecar enables strict-chain mode: any
+// ArtifactsFrom edge without a chain sidecar fails verification
+// instead of falling through to legacy compareArtifacts. Closes
+// the v0.3 vacuous-pass attack surface; recommended for any chain
+// that involves v0.3 attestations.
+func VerifyWithRequireSidecar(require bool) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.requireSidecar = require
+	}
+}
+
 type VerifyResult struct {
 	RunResult
 	VerificationSummary slsa.VerificationSummary
@@ -209,6 +224,9 @@ func Verify(ctx context.Context, policyEnvelope dsse.Envelope, policyVerifiers [
 	}
 	if vo.chainSidecarSource != nil {
 		configurer.SetChainSidecarSource(vo.chainSidecarSource)
+	}
+	if vo.requireSidecar {
+		configurer.SetRequireSidecar(true)
 	}
 
 	if len(vo.signers) > 0 {

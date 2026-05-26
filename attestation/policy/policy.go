@@ -187,6 +187,13 @@ type verifyOptions struct {
 	aiServerURL        string
 	clockSkewTolerance time.Duration
 	chainSidecarSource ChainSidecarSource
+	// requireSidecar fails verification if a step has ArtifactsFrom
+	// declared in the policy AND no chain sidecar is available for
+	// that edge. Closes the v0.3 vacuous-pass attack surface where
+	// the legacy compareArtifacts path silently accepts any
+	// upstream-downstream pair because v0.3's Materials() returns
+	// empty by design.
+	requireSidecar bool
 }
 
 func WithVerifiedSource(verifiedSource source.VerifiedSourcer) VerifyOption {
@@ -836,6 +843,15 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 			return ErrVerifyArtifactsFailed{Reasons: reasons}
 		}
 
+		// Strict-chain enforcement: if the policy requires sidecars
+		// but no source is configured, every ArtifactsFrom edge fails.
+		// Catches the operator-error case where --require-sidecar was
+		// asked for but --chain-sidecar-dir/url wasn't set.
+		if vo != nil && vo.requireSidecar && vo.chainSidecarSource == nil {
+			reasons = append(reasons, fmt.Sprintf("step %s requires chain sidecars (--require-sidecar) but no ChainSidecarSource is configured", step.Name))
+			return ErrVerifyArtifactsFailed{Reasons: reasons}
+		}
+
 		accepted := make([]source.CollectionVerificationResult, 0)
 		for _, testCollection := range refResult.Passed {
 			// v0.3 chain-proof verification (preferred when wired):
@@ -851,6 +867,10 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 				sidecar, lookupErr := vo.chainSidecarSource.LookupChainSidecar(ctx, step.Name, artifactsFrom, upstreamEnvDigest)
 				if lookupErr != nil {
 					reasons = append(reasons, fmt.Sprintf("chain sidecar lookup for step %s ← %s: %v", step.Name, artifactsFrom, lookupErr))
+					continue
+				}
+				if sidecar == nil && vo.requireSidecar {
+					reasons = append(reasons, fmt.Sprintf("chain edge %s ← %s requires a chain sidecar but none was found (--require-sidecar)", step.Name, artifactsFrom))
 					continue
 				}
 				if sidecar != nil {
