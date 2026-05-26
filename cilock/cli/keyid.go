@@ -100,16 +100,16 @@ type keyidEntry struct {
 }
 
 // parseKeyidFormat normalizes the --format flag into a boolean.
-// Empty/"text"/"lines" mean sha256sum-style; "json" means JSON array.
+// Empty/"text"/"lines" mean sha256sum-style; formatJSON means JSON array.
 // Anything else is a user error.
 func parseKeyidFormat(format string) (bool, error) {
 	switch format {
 	case "", "text", "lines":
 		return false, nil
-	case "json":
+	case formatJSON:
 		return true, nil
 	default:
-		return false, fmt.Errorf("unknown --format %q (want 'json' or 'text')", format)
+		return false, fmt.Errorf("unknown --format %q (want %q or 'text')", format, formatJSON)
 	}
 }
 
