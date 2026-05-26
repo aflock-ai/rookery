@@ -232,15 +232,23 @@ jobs:
         working-directory: cilock-action
         run: |
           set -euo pipefail
-          # cilock-action's replace directives point at ../rookery/... — exactly
-          # this two-checkout layout — so the build resolves rookery from THIS
-          # PR. Build with -mod=mod so missing go.sum entries for *new* external
-          # transitive deps are auto-fetched (routine consumer housekeeping,
-          # surfaced as a warning) and the gate fails only on genuine compile/
-          # API breaks. We do NOT `go mod tidy` here: tidy resolves the full
-          # test-dep graph, which trips over intra-repo pseudo-versions on
-          # paths cmd/cilock-action never imports — a false failure unrelated
-          # to whether the consumer compiles.
+          # Repoint every rookery replace at the ABSOLUTE path of this PR's
+          # rookery checkout. cilock-action ships relative `../rookery/...`
+          # replaces that assume a specific sibling layout; rewriting them to
+          # absolute removes any dependence on checkout-relative resolution
+          # (which proved fragile for the nested commandrun/ebpf module on the
+          # runner) so the gate tests THIS rookery deterministically.
+          R="$(cd "$GITHUB_WORKSPACE/rookery" && pwd)"
+          while read -r old; do
+            sub="${old#github.com/aflock-ai/rookery}"
+            go mod edit -replace="${old}=${R}${sub}"
+          done < <(go mod edit -json | jq -r '.Replace[].Old.Path' | grep '^github.com/aflock-ai/rookery')
+          # Build with -mod=mod so go.sum entries for *new* external transitive
+          # deps are auto-fetched (routine consumer housekeeping, surfaced as a
+          # warning); the gate fails only on genuine compile/API breaks. We do
+          # NOT `go mod tidy` here — tidy resolves the full test-dep graph,
+          # which trips over intra-repo pseudo-versions on paths
+          # cmd/cilock-action never imports.
           before=$(sha256sum go.mod go.sum | sha256sum)
           GOWORK=off go build -mod=mod ./cmd/cilock-action
           after=$(sha256sum go.mod go.sum | sha256sum)
