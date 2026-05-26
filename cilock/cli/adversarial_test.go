@@ -1912,7 +1912,7 @@ func TestAdversarial_LoadSignersRequiresAtLeastOne(t *testing.T) {
 func TestAdversarial_RunRunRejectsZeroSigners(t *testing.T) {
 	err := runRun(context.Background(), options.RunOptions{
 		StepName: "test",
-	}, []string{"echo", "hello"})
+	}, []string{"echo", "hello"}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no signers found")
 }
@@ -1920,7 +1920,7 @@ func TestAdversarial_RunRunRejectsZeroSigners(t *testing.T) {
 func TestAdversarial_RunRunRejectsMultipleSigners(t *testing.T) {
 	err := runRun(context.Background(), options.RunOptions{
 		StepName: "test",
-	}, []string{"echo", "hello"}, &fakeSignerForTesting{}, &fakeSignerForTesting{})
+	}, []string{"echo", "hello"}, nil, &fakeSignerForTesting{}, &fakeSignerForTesting{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "only one signer")
 }

@@ -879,19 +879,22 @@ func (rc *CommandRun) Finalize(ctx *attestation.AttestationContext) error {
 }
 
 // TraceOutputs implements attestation.CaptureProbe. Returns ONE entry
-// per file path the tracee wrote and then NEVER read back, EXCLUDING
-// build-internal storage (caches, temp dirs). These are the true
-// user-facing "products" of the build — the final compiled binary,
-// generated source files in the working directory, etc.
+// per file path the tracee wrote and then NEVER read back. The map is
+// the unfiltered write set — cache/temp classification is the
+// product attestor's job (and lives in product.Attest's precedence
+// table). Returning everything here lets the operator's
+// --attestor-product-include-glob rescue paths a default cache pattern
+// would otherwise drop.
 //
 // Files the tracee wrote AND later read are intermediates (e.g.,
 // Go's _pkg_.a build cache entries that compile workers produce and
 // the linker consumes); those flow into TraceInputs() instead, since
 // semantically they're inputs the linker stage consumed.
 //
-// Files written to /tmp, ~/.cache, /var/tmp etc. are cache/temp
-// artifacts — surfaced via TraceCacheArtifacts() for inventory but
-// not counted as products.
+// Callers that want the cache-only bucket (for inventory) use
+// TraceCacheArtifacts(); both methods now see the same superset of
+// writes, and downstream classification picks the bucket per the
+// product-attestor precedence rules.
 //
 // Path-hashing happens here lazily: outputs aren't streamed during the
 // trace (the tracee owns those bytes and writes them; the read-tap
@@ -988,9 +991,14 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 		if readPaths[p] {
 			continue // intermediate — belongs to materials, not products
 		}
-		if rc.cacheMatcher != nil && rc.cacheMatcher.Matches(p) {
-			continue // cache/temp — surfaced via TraceCacheArtifacts
-		}
+		// Cache classification deliberately does NOT happen here.
+		// Returning the unfiltered write set lets the product attestor
+		// apply user-facing precedence (--attestor-product-include-glob
+		// can rescue a path the cache pattern would otherwise drop).
+		// commandrun.TraceCacheArtifacts() applies the cache matcher
+		// for callers that specifically want the cache-only bucket.
+		// (Fixes blind Linux UX test Bug 1: silent empty product set
+		// when build output lands under /tmp/**.)
 
 		// Primary path: in-kernel write-tap digest. Race-free.
 		if ds, ok := writtenDigests[p]; ok {
