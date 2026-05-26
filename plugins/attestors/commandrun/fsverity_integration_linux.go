@@ -45,7 +45,7 @@ func probeFsVerity(workspaceDir string) (*fsVerityState, error) {
 	switch mode {
 	case "", "0", "off":
 		return nil, nil
-	case "auto", "1", "on":
+	case tokenAuto, "1", "on":
 		// continue
 	default:
 		log.Debugf("(fsverity) unknown %s=%q; disabled", EnvVarFsVerity, mode)

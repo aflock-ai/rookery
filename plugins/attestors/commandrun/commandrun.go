@@ -51,6 +51,14 @@ const (
 	// Verifiers use this label to distinguish race-free content
 	// from after-the-fact path hashing.
 	digestSourceTracePathHashOverwrite = "trace-pathhash-overwrite"
+
+	// tokenAuto is the shared knob value meaning "probe + enable
+	// where available." Used by fanotify, fs-verity, and trace-mode
+	// dispatch — extracted to a const because goconst counts the
+	// 3 string-literal occurrences across the package.
+	//
+	//nolint:unused // referenced from *_linux.go build-tagged files; appears unused on non-Linux builds
+	tokenAuto = "auto"
 )
 
 // This is a hacky way to create a compile time error in case the attestor

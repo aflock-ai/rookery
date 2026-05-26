@@ -252,7 +252,7 @@ func Probe(markPath string) error {
 //     to filter non-regular files → SHA-256 the fd → write
 //     FAN_ALLOW response → close the event fd.
 //
-//nolint:gocognit // pump loop dispatches read+classify+respond — splitting would obscure the lock-step
+//nolint:gocognit,gocyclo // pump loop dispatches read+classify+respond — splitting would obscure the lock-step
 func (h *Handler) Run(ctx context.Context) error {
 	const workerChanBuffer = 1024
 	workerCount := runtime.NumCPU()
@@ -280,7 +280,7 @@ func (h *Handler) Run(ctx context.Context) error {
 	}()
 
 	buf := make([]byte, 4096)
-	pollFds := []unix.PollFd{{Fd: int32(h.fd), Events: unix.POLLIN}}
+	pollFds := []unix.PollFd{{Fd: int32(h.fd), Events: unix.POLLIN}} //nolint:gosec // G115: h.fd from FanotifyInit is always within int32 range
 	for {
 		if h.closed.Load() {
 			return nil

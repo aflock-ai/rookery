@@ -48,7 +48,7 @@ func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
 	switch mode {
 	case "", "0", "off", "off-explicit":
 		return nil, nil
-	case "auto", "1", "on":
+	case tokenAuto, "1", "on":
 		// continue
 	default:
 		// Unknown value — treat as disabled but log so operators can
@@ -132,6 +132,8 @@ func (s *fanotifySession) stop() (map[string][32]byte, fanotify.Stats) {
 // but ProcessInfo.OpenedFiles is per-pid. We fold the same fanotify
 // digest into every process that recorded an open for the path,
 // providing per-pid attribution alongside the kernel-rooted digest.
+//
+//nolint:gocognit // per-process digest merge with rebuild + dedup against fanotify-only set
 func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (touched int, fanotifyOnly map[string]string) {
 	if len(fanDigests) == 0 {
 		return 0, nil

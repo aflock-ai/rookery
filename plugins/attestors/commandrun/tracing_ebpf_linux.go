@@ -124,6 +124,7 @@ func resolveRelative(pid int, path string) string {
 //     explicitly chdir. Last resort when a fast-fork-and-exit
 //     cascade tore down /proc entries for the entire ancestor
 //     chain before our readlinks landed.
+//
 // Returns the resolved absolute path, or path unchanged if already
 // absolute or all four tiers fail.
 func resolveCwdRelative(watched *watchedSet, pid, ppid uint32, path, rootCwd string) string {
@@ -157,7 +158,7 @@ func resolveCwdRelative(watched *watchedSet, pid, ppid uint32, path, rootCwd str
 // so kprobes attach before any child syscall fires.
 // arm into a helper just hides the goroutine/lifecycle interaction.
 //
-//nolint:gocognit // event-loop dispatch on a 4-variant union; pulling each
+//nolint:gocognit,gocyclo // event-loop dispatch on a 4-variant union; pulling each
 func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationContext, pctx *ptraceContext) ([]ProcessInfo, error) {
 	raw := r.ebpfConsumer
 	if raw == nil {
@@ -253,9 +254,9 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		FD  int32
 	}
 	type openInfo struct {
-		Path        string
-		EV          *ebpf.OpenatEvent // for path-hash fallback
-		Streamed    uint64            // total bytes streamed via read-tap
+		Path     string
+		EV       *ebpf.OpenatEvent // for path-hash fallback
+		Streamed uint64            // total bytes streamed via read-tap
 	}
 	openPaths := make(map[pidFdKey]*openInfo)
 	streamHashes := make(map[pidFdKey]map[cryptoutil.DigestValue]hash.Hash)
@@ -1161,6 +1162,8 @@ const (
 // recordEBPFOpenat records one openat event + its hash result into
 // the appropriate ProcessInfo. Concurrent-safe via pctx.mu, which
 // guards both the processes-map and the ProcessInfo entries within.
+//
+//nolint:gocognit // dispatches on outcome (stable/suspect/missing/error) + classifies into per-process state
 func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashResult) recordOutcome {
 	pctx.mu.Lock()
 	defer pctx.mu.Unlock()
@@ -1631,23 +1634,23 @@ func recordEBPFSecurity(pctx *ptraceContext, ev *ebpf.SecurityEvent, paths fdRes
 func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent, paths fdResolvedPaths) SyscallEvent {
 	// IDs must match CILOCK_SEC_* in openat_kprobe.bpf.c.
 	const (
-		secPtrace      = 100
-		secMemfdCreate = 101
-		secMount       = 102
-		secMprotect    = 103
-		secPrctl       = 104
-		secSetsid      = 105
-		secSetns       = 106
-		secInitModule  = 107
-		secFinitModule = 108
-		secClone       = 109
-		secClone3      = 110
-		secDup2            = 111
-		secDup3            = 112
-		secCopyFileRange   = 113
-		secSplice          = 114
-		secSendfile        = 115
-		secMmap            = 116
+		secPtrace        = 100
+		secMemfdCreate   = 101
+		secMount         = 102
+		secMprotect      = 103
+		secPrctl         = 104
+		secSetsid        = 105
+		secSetns         = 106
+		secInitModule    = 107
+		secFinitModule   = 108
+		secClone         = 109
+		secClone3        = 110
+		secDup2          = 111
+		secDup3          = 112
+		secCopyFileRange = 113
+		secSplice        = 114
+		secSendfile      = 115
+		secMmap          = 116
 	)
 	nr := ev.SyscallNr
 	switch nr {
@@ -2092,14 +2095,14 @@ func (w *watchedSet) match(pid, tgid, ppid uint32) bool {
 //
 // Root cause of the ~40% deep-fork-chain flake before this:
 //
-//   1. depth=4 openat arrives at dispatcher → watched.match passes
-//      (ppid=cilock=root) → enqueued to openatCh.
-//   2. depth=3 openat arrives → watched.match: pid/tgid not in set,
-//      ppid=depth=4 — depth=4 NOT YET in set because addAndReturnNew
-//      runs in the HASHER goroutine which hasn't drained openatCh yet
-//      → REJECTED. depth=3's events are dropped.
-//   3. Hasher pulls depth=4 from openatCh, adds it to set. Too late
-//      for depth=3 and everything beneath it.
+//  1. depth=4 openat arrives at dispatcher → watched.match passes
+//     (ppid=cilock=root) → enqueued to openatCh.
+//  2. depth=3 openat arrives → watched.match: pid/tgid not in set,
+//     ppid=depth=4 — depth=4 NOT YET in set because addAndReturnNew
+//     runs in the HASHER goroutine which hasn't drained openatCh yet
+//     → REJECTED. depth=3's events are dropped.
+//  3. Hasher pulls depth=4 from openatCh, adds it to set. Too late
+//     for depth=3 and everything beneath it.
 //
 // matchAndAdd resolves this by inlining the add at dispatch time.
 // Verified: 50/50 PASS on TestPhase8Blocker_ForkChainStability after

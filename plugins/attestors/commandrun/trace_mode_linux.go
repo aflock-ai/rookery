@@ -79,7 +79,7 @@ func selectTraceMode() (traceMode, error) {
 		// Explicit opt-in: skip detection.
 		return traceModePtrace, nil
 
-	case "", "ebpf", "auto":
+	case "", "ebpf", tokenAuto:
 		// Default behavior: detect eBPF. If available, use it. If not,
 		// FAIL with a clear remediation message. (Auto is currently
 		// an alias for ebpf — same hard-fail semantics. A future
