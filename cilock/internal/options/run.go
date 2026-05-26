@@ -56,10 +56,10 @@ type RunOptions struct {
 	// cover common build caches across languages (Go, Rust, Python,
 	// Node, etc.) — see attestation.DefaultCachePatterns. These flags
 	// let the operator tune that list per build.
-	CacheAddPatterns      []string // additive glob patterns
-	CacheAllowPatterns    []string // patterns to remove from the effective set
-	CacheDisableDefaults  bool     // drop DefaultCachePatterns entirely
-	CacheDisableEnvProbe  bool     // skip SystemCachePathsFromEnv discovery
+	CacheAddPatterns     []string // additive glob patterns
+	CacheAllowPatterns   []string // patterns to remove from the effective set
+	CacheDisableDefaults bool     // drop DefaultCachePatterns entirely
+	CacheDisableEnvProbe bool     // skip SystemCachePathsFromEnv discovery
 	// IgnoreCommandExitCode tells cilock to record the wrapped command's
 	// exit code in `command-run/v0.1.exitcode` but NOT abort the cilock run
 	// when the command exits non-zero. Without this flag, every postproduct
