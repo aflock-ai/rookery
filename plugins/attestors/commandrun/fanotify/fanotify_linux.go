@@ -37,6 +37,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -113,6 +114,18 @@ type Handler struct {
 	stats    statsAtomic
 	digestMu sync.Mutex
 	digests  map[string][32]byte
+	// closeWriteDigests holds the FINAL content hash of files the tracee
+	// closed after writing (FAN_CLOSE_WRITE). Unlike `digests` (open-time,
+	// = inputs/reads), these are PRODUCTS — the kernel hashes the file at
+	// close, so the digest is the finished output, captured zero-drop
+	// (modulo queue overflow, which is counted) and independent of the
+	// lossy eBPF write-tap. Scoped to workspaceRoot to bound overhead.
+	closeWriteDigests map[string][32]byte
+	// workspaceRoot bounds FAN_CLOSE_WRITE hashing to the build workspace:
+	// products live there, and hashing every closed file across the whole
+	// marked filesystem (every /tmp/go-build/*.a) would be ruinous. Reads
+	// stay filesystem-wide; only product capture is scoped.
+	workspaceRoot string
 	// Per-event handler budget. Default 2s leaves margin under the
 	// kernel's 5s default timeout; configurable for stress tests.
 	HandlerBudget time.Duration
@@ -158,7 +171,11 @@ func New(markPath string) (*Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("FanotifyInit: %w", err)
 	}
-	mask := uint64(unix.FAN_OPEN_PERM)
+	// FAN_OPEN_PERM (permission, blocks the tracee → zero-drop reads) for
+	// materials; FAN_CLOSE_WRITE (notification) for products — the kernel
+	// hashes the final content when a written file is closed, so product
+	// digests no longer depend on the lossy eBPF write-tap.
+	mask := uint64(unix.FAN_OPEN_PERM | unix.FAN_CLOSE_WRITE)
 
 	// Coverage paths. The first one must succeed (it's the build's
 	// own workspace — if we can't watch that, the whole layer is
@@ -189,10 +206,12 @@ func New(markPath string) (*Handler, error) {
 	}
 
 	h := &Handler{
-		fd:            fd,
-		digests:       make(map[string][32]byte),
-		HandlerBudget: 2 * time.Second,
-		MaxDigests:    defaultMaxDigestsFromEnv(),
+		fd:                fd,
+		digests:           make(map[string][32]byte),
+		closeWriteDigests: make(map[string][32]byte),
+		workspaceRoot:     markPath,
+		HandlerBudget:     2 * time.Second,
+		MaxDigests:        defaultMaxDigestsFromEnv(),
 	}
 	return h, nil
 }
@@ -416,20 +435,44 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 	}
 	defer func() { _ = unix.Close(int(meta.Fd)) }()
 
-	if meta.Mask&unix.FAN_OPEN_PERM == 0 {
-		h.respond(meta.Fd, true)
+	isOpenPerm := meta.Mask&unix.FAN_OPEN_PERM != 0
+	isCloseWrite := meta.Mask&unix.FAN_CLOSE_WRITE != 0
+
+	// respondIfPerm writes the kernel response only for permission
+	// events. FAN_CLOSE_WRITE is a notification — responding to it is
+	// wrong (the kernel isn't waiting). Centralizing this keeps every
+	// early-return path correct for both event classes.
+	respondIfPerm := func() {
+		if isOpenPerm {
+			h.respond(meta.Fd, true)
+		}
+	}
+
+	if !isOpenPerm && !isCloseWrite {
+		// An event we didn't ask for. Only release the tracee if it's a
+		// permission class event; notifications need no response.
+		respondIfPerm()
 		return
 	}
 
 	// Resolve path via /proc/self/fd/<fd> readlink — works because
 	// we OWN this fd (kernel handed it to us). The path is the
-	// canonical kernel-resolved path the tracee actually opened.
+	// canonical kernel-resolved path the tracee actually opened/closed.
 	procPath := fmt.Sprintf("/proc/self/fd/%d", meta.Fd)
 	realPath, lerr := os.Readlink(procPath)
 	if lerr != nil {
 		h.stats.HashErrors.Add(1)
-		h.respond(meta.Fd, true)
+		respondIfPerm()
 		return
+	}
+
+	// Product capture (close-write) is scoped to the build workspace —
+	// hashing every closed file across the whole marked filesystem (every
+	// /tmp/go-build/*.a) would be ruinous, and products live in the
+	// workspace. Reads (open-perm) stay filesystem-wide so materials are
+	// captured wherever they're read from.
+	if isCloseWrite && !isOpenPerm && !h.underWorkspace(realPath) {
+		return // notification, out of scope — no response, nothing to hash
 	}
 
 	// Skip non-regular files — pipes/sockets/devices shouldn't be
@@ -438,7 +481,7 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 	var stat syscall.Stat_t
 	if err := syscall.Fstat(int(meta.Fd), &stat); err == nil {
 		if stat.Mode&syscall.S_IFMT != syscall.S_IFREG {
-			h.respond(meta.Fd, true)
+			respondIfPerm()
 			return
 		}
 	}
@@ -446,29 +489,55 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 	digest, nBytes, err := hashFD(int(meta.Fd))
 	if err != nil {
 		h.stats.HashErrors.Add(1)
-		h.respond(meta.Fd, true)
+		respondIfPerm()
 		return
 	}
 	h.stats.EventsHashed.Add(1)
 	h.stats.BytesHashed.Add(uint64(nBytes))
 
 	h.digestMu.Lock()
-	if h.MaxDigests > 0 && len(h.digests) >= h.MaxDigests {
-		// Cap hit: tracee still allowed to proceed, but we stop
-		// recording new entries. Existing entries keep their
-		// (still-correct) digest. Re-opens of paths already in the
-		// map are also still updated (write-then-reopen case).
-		if _, existing := h.digests[realPath]; !existing {
+	if isCloseWrite {
+		// FINAL written content → product. Authoritative (content at
+		// close), overrides any earlier open-time entry for this path.
+		if h.MaxDigests <= 0 || len(h.closeWriteDigests) < h.MaxDigests {
+			h.closeWriteDigests[realPath] = digest
+		} else if _, existing := h.closeWriteDigests[realPath]; existing {
+			h.closeWriteDigests[realPath] = digest
+		} else {
 			h.stats.DigestsCapHit.Add(1)
-			h.digestMu.Unlock()
-			h.respond(meta.Fd, true)
-			return
 		}
 	}
-	h.digests[realPath] = digest
+	if isOpenPerm {
+		// Open-time content → read/material.
+		if h.MaxDigests > 0 && len(h.digests) >= h.MaxDigests {
+			if _, existing := h.digests[realPath]; !existing {
+				h.stats.DigestsCapHit.Add(1)
+				h.digestMu.Unlock()
+				h.respond(meta.Fd, true)
+				return
+			}
+		}
+		h.digests[realPath] = digest
+	}
 	h.digestMu.Unlock()
 
-	h.respond(meta.Fd, true)
+	respondIfPerm()
+}
+
+// underWorkspace reports whether path is at or beneath the build
+// workspace root. Used to scope FAN_CLOSE_WRITE product hashing.
+func (h *Handler) underWorkspace(path string) bool {
+	if h.workspaceRoot == "" {
+		return true
+	}
+	if path == h.workspaceRoot {
+		return true
+	}
+	root := h.workspaceRoot
+	if !strings.HasSuffix(root, "/") {
+		root += "/"
+	}
+	return strings.HasPrefix(path, root)
 }
 
 // hashFD streams SHA-256 over the file descriptor's content. The fd
@@ -534,6 +603,19 @@ func (h *Handler) Digests() map[string][32]byte {
 	defer h.digestMu.Unlock()
 	out := make(map[string][32]byte, len(h.digests))
 	for k, v := range h.digests {
+		out[k] = v
+	}
+	return out
+}
+
+// CloseWriteDigests returns a snapshot of paths → SHA-256 of their FINAL
+// written content, captured at FAN_CLOSE_WRITE. These are PRODUCTS (outputs
+// the tracee wrote and closed), distinct from Digests() (open-time reads).
+func (h *Handler) CloseWriteDigests() map[string][32]byte {
+	h.digestMu.Lock()
+	defer h.digestMu.Unlock()
+	out := make(map[string][32]byte, len(h.closeWriteDigests))
+	for k, v := range h.closeWriteDigests {
 		out[k] = v
 	}
 	return out

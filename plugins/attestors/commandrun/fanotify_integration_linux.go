@@ -114,16 +114,17 @@ func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
 
 // stop drains the handler and harvests its digests. Safe to call on
 // nil session (the typical disabled case).
-func (s *fanotifySession) stop() (map[string][32]byte, fanotify.Stats) {
+func (s *fanotifySession) stop() (openDigests map[string][32]byte, closeWriteDigests map[string][32]byte, stats fanotify.Stats) {
 	if s == nil {
-		return nil, fanotify.Stats{}
+		return nil, nil, fanotify.Stats{}
 	}
 	s.cancel()
-	digests := s.h.Digests()
-	stats := s.h.GetStats()
+	openDigests = s.h.Digests()
+	closeWriteDigests = s.h.CloseWriteDigests()
+	stats = s.h.GetStats()
 	_ = s.h.Close()
 	s.wg.Wait()
-	return digests, stats
+	return openDigests, closeWriteDigests, stats
 }
 
 // mergeFanotifyDigests folds fanotify-captured (path → SHA-256) into

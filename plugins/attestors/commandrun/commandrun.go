@@ -747,6 +747,11 @@ type CommandRun struct {
 	// these from readPaths — otherwise a written product fanotify hashed
 	// gets demoted to an "intermediate" and dropped from the product tree.
 	fanotifyWriteOpenClaimed map[string]bool
+	// fanotifyProductDigests holds path → SHA-256 of FINAL written content
+	// captured at FAN_CLOSE_WRITE — authoritative product content the kernel
+	// hashed at close, independent of the lossy eBPF write-tap. TraceOutputs
+	// emits these as products with zero-drop content.
+	fanotifyProductDigests map[string][32]byte
 	// fsVerityState holds opportunistic fs-verity sealing state.
 	// Probed at trace start; per-product seal calls during finalize
 	// consult Available to skip the ioctl on unsupported FS.
@@ -1182,6 +1187,18 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 			out[path] = attestation.CaptureEntry{Digest: dm, Source: "trace-mtime-survivor"}
 			return nil
 		})
+	}
+
+	// FAN_CLOSE_WRITE products: the kernel hashed each written file's FINAL
+	// content at close. This is authoritative, zero-drop product content
+	// (modulo fanotify queue overflow, which is counted) captured WITHOUT
+	// the lossy eBPF write-tap — so it overrides any prior entry (write-tap
+	// digest, witness-only nil, or survivor-walk placeholder) for the path.
+	for path, raw := range rc.fanotifyProductDigests {
+		out[path] = attestation.CaptureEntry{
+			Digest: map[string]string{"sha256": fmt.Sprintf("%x", raw[:])},
+			Source: "fanotify-close-write",
+		}
 	}
 
 	return out
@@ -1703,7 +1720,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			r.ebpfConsumer = nil
 		}
 		if r.fanotifySession != nil {
-			_, _ = r.fanotifySession.stop()
+			_, _, _ = r.fanotifySession.stop()
 			r.fanotifySession = nil
 		}
 		return err
@@ -1722,12 +1739,17 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		// Drain + merge fanotify digests (if enabled). Done BEFORE
 		// summary build so Diagnostics see the merged count.
 		if r.fanotifySession != nil {
-			fanDigests, fanStats := r.fanotifySession.stop()
+			fanDigests, fanCloseWrite, fanStats := r.fanotifySession.stop()
 			r.fanotifySession = nil
 			merged, only, writeOpenClaimed := mergeFanotifyDigests(r.Processes, fanDigests)
 			r.fanotifyDigestsMerged = uint64(merged)
 			r.fanotifyOnlyDigests = only
 			r.fanotifyWriteOpenClaimed = writeOpenClaimed
+			// FAN_CLOSE_WRITE digests are the kernel-hashed FINAL content of
+			// files the tracee wrote+closed — authoritative product content,
+			// captured without the lossy eBPF write-tap. TraceOutputs emits
+			// these as products.
+			r.fanotifyProductDigests = fanCloseWrite
 			r.fanotifyEventsHashed = fanStats.EventsHashed
 			r.fanotifyTimeouts = fanStats.HandlerTimeouts
 			r.fanotifyQueueOverflows = fanStats.QueueOverflows

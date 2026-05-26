@@ -26,8 +26,8 @@ type fanotifyStatsStub struct {
 	DigestsCapHit   uint64
 }
 
-func (s *fanotifySession) stop() (map[string][32]byte, fanotifyStatsStub) {
-	return nil, fanotifyStatsStub{}
+func (s *fanotifySession) stop() (map[string][32]byte, map[string][32]byte, fanotifyStatsStub) {
+	return nil, nil, fanotifyStatsStub{}
 }
 
 func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (int, map[string]string, map[string]bool) {
