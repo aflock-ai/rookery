@@ -15,6 +15,7 @@
 package sarif
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,9 +24,13 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/invopop/jsonschema"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 const (
 	Name    = "sarif"
@@ -45,6 +50,7 @@ func init() {
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return New()
 	})
+	detection.Register(Name, detectorYAML)
 }
 
 // Attestor stores a SARIF report alongside its source path and digest. The

@@ -24,6 +24,7 @@ package pipinstall
 import (
 	"bufio"
 	"crypto"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -35,9 +36,13 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/invopop/jsonschema"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 const (
 	Name    = "pip-install"
@@ -54,6 +59,7 @@ func init() {
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return New()
 	})
+	detection.Register(Name, detectorYAML)
 }
 
 // PackageInfo describes a single installed Python package.

@@ -1,0 +1,38 @@
+apiVersion: cilock.detection/v0.1
+name: oci
+description: "Captures OCI image / artifact provenance from docker save, skopeo copy, or OCI image layouts."
+
+category: [build]
+
+upstream:
+  name: OCI Image Specification
+  source: "https://github.com/opencontainers/image-spec"
+  license: Apache-2.0
+  vendor: Open Container Initiative
+
+# Threat model: similar to docker but the focus is the image manifest +
+# layer digests, not the build process. Light trace captures the docker
+# save / skopeo copy invocations we need to correlate image refs.
+recommended_trace: light
+
+pre:
+  match:
+    any_of:
+      - argv_prefix: ["docker", "save"]
+      - argv_prefix: ["skopeo", "copy"]
+      - argv_prefix: ["crane"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["docker", "save"]
+      - exec_observed:
+          argv_prefix: ["skopeo", "copy"]
+      - exec_observed:
+          argv_prefix: ["crane"]
+      - product_glob: ["index.json", "**/index.json", "oci-layout", "**/oci-layout"]
+      - product_glob: ["*.oci.tar", "**/*.oci.tar", "oci-image.tar", "**/oci-image.tar"]
+
+llm_hints:
+  on_match: "OCI image / artifact captured (image refs, manifest digest, layer materials)."
