@@ -69,13 +69,13 @@ func verboseErr(err error) string {
 // the low bits of timestamp_ns, which can never equal 0 in practice
 // for a running system, so it'll never collide with a small enum tag.
 const (
-	EVT_OPENAT     = 1
-	EVT_EXECVE     = 2
-	EVT_UNLINKAT   = 3
-	EVT_RENAMEAT   = 4
-	EVT_FCHMODAT   = 5
-	EVT_SECURITY   = 6
-	EVT_WRITE      = 7
+	EVT_OPENAT      = 1
+	EVT_EXECVE      = 2
+	EVT_UNLINKAT    = 3
+	EVT_RENAMEAT    = 4
+	EVT_FCHMODAT    = 5
+	EVT_SECURITY    = 6
+	EVT_WRITE       = 7
 	EVT_SOCKET      = 8
 	EVT_CONNECT     = 9
 	EVT_BIND        = 10
@@ -167,10 +167,10 @@ type ReadChunkEvent struct {
 // to its in-flight state if any.
 type CloseEvent struct {
 	EventHeader
-	Comm        string
-	FD          int32
-	Path        string // resolved absolute path from BPF; "" if no fd_table entry
-	SizeAtOpen  uint64
+	Comm       string
+	FD         int32
+	Path       string // resolved absolute path from BPF; "" if no fd_table entry
+	SizeAtOpen uint64
 }
 
 // WriteEvent carries (fd, bytes) from a write/pwrite kprobe.
@@ -212,7 +212,7 @@ type OpenatEvent struct {
 	TGID        uint32
 	PPID        uint32
 	Dirfd       int32
-	FD          int32  // kernel-returned fd (>=0 ok, <0 errno) — V1.3
+	FD          int32 // kernel-returned fd (>=0 ok, <0 errno) — V1.3
 	PathLen     uint32
 	Flags       uint32 // openat() flags: O_RDONLY/O_WRONLY/O_CREAT/...
 	SizeAtOpen  uint64
@@ -224,14 +224,14 @@ type OpenatEvent struct {
 // O_* flag constants matching <fcntl.h>. Mode bits in the openat flags
 // argument; userspace uses these to decide whether to hash the file.
 const (
-	O_RDONLY = 0o0
-	O_WRONLY = 0o1
-	O_RDWR   = 0o2
+	O_RDONLY  = 0o0
+	O_WRONLY  = 0o1
+	O_RDWR    = 0o2
 	O_ACCMODE = 0o3
-	O_CREAT  = 0o100
-	O_TRUNC  = 0o1000
-	O_APPEND = 0o2000
-	O_PATH   = 0o10000000 // 010000000 — symlink-only / metadata-only open
+	O_CREAT   = 0o100
+	O_TRUNC   = 0o1000
+	O_APPEND  = 0o2000
+	O_PATH    = 0o10000000 // 010000000 — symlink-only / metadata-only open
 )
 
 // IsWriteOnly returns true if the openat was opened with O_WRONLY (no
@@ -262,9 +262,10 @@ type ExecveEvent struct {
 // FileOpEvent covers SYS_UNLINKAT, SYS_RENAMEAT2, SYS_FCHMODAT. The
 // Op field carries the discriminator (EVT_UNLINKAT / RENAMEAT /
 // FCHMODAT); other fields are populated per-op.
-//   unlinkat:   Path = pathname, Flags = AT_REMOVEDIR
-//   renameat2:  Path = oldpath,  Path2 = newpath, Flags = renameat2 flags
-//   fchmodat:   Path = pathname, Mode = new mode bits
+//
+//	unlinkat:   Path = pathname, Flags = AT_REMOVEDIR
+//	renameat2:  Path = oldpath,  Path2 = newpath, Flags = renameat2 flags
+//	fchmodat:   Path = pathname, Mode = new mode bits
 type FileOpEvent struct {
 	EventHeader
 	Op    uint32 // EVT_UNLINKAT | EVT_RENAMEAT | EVT_FCHMODAT
@@ -313,17 +314,17 @@ var bpfSrcBytes []byte
 // Caller drains both in parallel goroutines (each ringbuf has its
 // own Read method) and multiplexes Events into a single dispatcher.
 type Consumer struct {
-	coll              *ebpf.Collection
-	links             []link.Link
-	reader            *ringbuf.Reader
-	readRec           ringbuf.Record // reused across Read() calls (single consumer)
-	readTapReader     *ringbuf.Reader
-	readTapRec        ringbuf.Record // reused across ReadReadTap() calls
-	watchedPids       *ebpf.Map      // BPF_MAP_TYPE_HASH: pid -> 1
-	filterFlag        *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte
-	rootParentTgid    *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: u32
-	readTapFlag       *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte (V1.4 read-tap)
-	ringbufDrops      *ebpf.Map      // BPF_MAP_TYPE_PERCPU_ARRAY[2]: u64 drop counters
+	coll           *ebpf.Collection
+	links          []link.Link
+	reader         *ringbuf.Reader
+	readRec        ringbuf.Record // reused across Read() calls (single consumer)
+	readTapReader  *ringbuf.Reader
+	readTapRec     ringbuf.Record // reused across ReadReadTap() calls
+	watchedPids    *ebpf.Map      // BPF_MAP_TYPE_HASH: pid -> 1
+	filterFlag     *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte
+	rootParentTgid *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: u32
+	readTapFlag    *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte (V1.4 read-tap)
+	ringbufDrops   *ebpf.Map      // BPF_MAP_TYPE_PERCPU_ARRAY[2]: u64 drop counters
 }
 
 // Open loads the embedded BPF object, attaches kprobes for the
@@ -1197,9 +1198,9 @@ func decodeWriteEvent(raw []byte) (*WriteEvent, error) {
 		return nil, fmt.Errorf("write event too short: %d < %d", len(raw), writeEventSize)
 	}
 	h := decodeEventHeader(raw)
-	const commOff = cilockHdrSize          // 32
-	const fdOff = commOff + taskCommLen    // 48
-	const bytesOff = fdOff + 4 + 4         // 56 (fd + pad)
+	const commOff = cilockHdrSize       // 32
+	const fdOff = commOff + taskCommLen // 48
+	const bytesOff = fdOff + 4 + 4      // 56 (fd + pad)
 	return &WriteEvent{
 		EventHeader: h,
 		Comm:        readCStr(raw[commOff : commOff+taskCommLen]),
@@ -1409,4 +1410,3 @@ func decodeOpenatEvent(raw []byte) (*OpenatEvent, error) {
 	}
 	return ev, nil
 }
-
