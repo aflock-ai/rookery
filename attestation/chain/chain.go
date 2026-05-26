@@ -193,8 +193,9 @@ func BuildChainSidecar(source SourceStepRef, sourceLeaves []SidecarLeaf, consume
 
 	idxByPath := make(map[string]int, len(sourceLeaves))
 	for i, l := range sourceLeaves {
-		if i > 0 && sourceLeaves[i-1].Path >= sourceLeaves[i].Path {
-			return ChainSidecar{}, fmt.Errorf("BuildChainSidecar: sourceLeaves not sorted by path (leaf %d=%q >= leaf %d=%q)", i-1, sourceLeaves[i-1].Path, i, sourceLeaves[i].Path)
+		// i-1 only evaluated when i > 0; bounds-safe. gosec G602 false positive.
+		if i > 0 && sourceLeaves[i-1].Path >= sourceLeaves[i].Path { //nolint:gosec // bounded by i > 0 guard
+			return ChainSidecar{}, fmt.Errorf("BuildChainSidecar: sourceLeaves not sorted by path (leaf %d=%q >= leaf %d=%q)", i-1, sourceLeaves[i-1].Path, i, sourceLeaves[i].Path) //nolint:gosec // bounded by i > 0 guard above
 		}
 		idxByPath[l.Path] = i
 	}
