@@ -276,7 +276,7 @@ func collectDefaultDecls(t *testing.T, repoRoot string) []defaultDecl {
 		}
 		if d.IsDir() {
 			base := d.Name()
-			if base == "vendor" || base == ".git" || base == "node_modules" || base == ".claude" {
+			if base == "vendor" || base == ".git" || base == "node_modules" || base == ".claude" || base == "security-patches" {
 				return filepath.SkipDir
 			}
 			return nil
