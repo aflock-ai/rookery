@@ -29,8 +29,6 @@ import (
 	"github.com/aflock-ai/rookery/attestation/signer"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
 	"github.com/aflock-ai/rookery/attestation/source"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const PolicyPredicate = "https://aflock.ai/policy/v0.1"
@@ -38,7 +36,7 @@ const LegacyPolicyPredicate = "https://witness.testifysec.com/policy/v0.1"
 
 // +kubebuilder:object:generate=true
 type Policy struct {
-	Expires              metav1.Time                    `json:"expires" jsonschema:"title=Expires,description=Timestamp when this policy expires and should no longer be used for verification"`
+	Expires              Time                           `json:"expires" jsonschema:"title=Expires,description=Timestamp when this policy expires and should no longer be used for verification"`
 	Roots                map[string]Root                `json:"roots,omitempty" jsonschema:"title=Root Certificates,description=Trusted root certificates keyed by a unique identifier"`
 	TimestampAuthorities map[string]Root                `json:"timestampauthorities,omitempty" jsonschema:"title=Timestamp Authorities,description=Trusted timestamp authority certificates keyed by a unique identifier"`
 	PublicKeys           map[string]PublicKey           `json:"publickeys,omitempty" jsonschema:"title=Public Keys,description=Trusted public keys keyed by their key ID"`

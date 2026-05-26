@@ -34,7 +34,6 @@ import (
 	"github.com/invopop/jsonschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ===========================================================================
@@ -571,7 +570,7 @@ func TestSecurity_R3_206_SearchDepthAccumulatesDuplicates(t *testing.T) {
 	}
 
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			stepName: {
 				Name:          stepName,
@@ -1063,7 +1062,7 @@ func TestSecurity_R3_214_ResultMergeUsesMapKeyNotStepName(t *testing.T) {
 	}
 
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			stepName: {
 				Name:          stepName,
@@ -1095,5 +1094,5 @@ func TestSecurity_R3_214_ResultMergeUsesMapKeyNotStepName(t *testing.T) {
 
 // Ensure all types compile properly.
 var _ = fmt.Sprintf
-var _ = metav1.Time{}
+var _ = Time{}
 var _ = context.Background

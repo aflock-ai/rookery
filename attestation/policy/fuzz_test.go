@@ -12,7 +12,6 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/gobwas/glob"
 	"github.com/invopop/jsonschema"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // fuzzAttestor implements attestation.Attestor with exported fields so
@@ -210,7 +209,7 @@ func FuzzGlobCompile(f *testing.F) {
 func FuzzPolicyValidation(f *testing.F) {
 	// Valid minimal policy JSON
 	validPolicy, _ := json.Marshal(Policy{
-		Expires: metav1.Now(),
+		Expires: Time{Time: time.Now()},
 		Steps: map[string]Step{
 			"build": {
 				Name: "build",
@@ -512,7 +511,7 @@ func FuzzPolicyValidate(f *testing.F) {
 		}
 
 		p := Policy{
-			Expires: metav1.Now(),
+			Expires: Time{Time: time.Now()},
 			Steps:   steps,
 		}
 

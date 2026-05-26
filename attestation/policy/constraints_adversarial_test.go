@@ -32,7 +32,6 @@ import (
 	"github.com/aflock-ai/rookery/attestation/source"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ===========================================================================
@@ -532,7 +531,7 @@ func TestAdversarial_Verify_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 	ms := &mockVerifiedSource{results: []source.CollectionVerificationResult{cvr}}
 
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			stepName: {
 				Name: stepName,
@@ -636,7 +635,7 @@ func TestAdversarial_CertConstraintCheck_ErrorAccumulation(t *testing.T) {
 
 func TestAdversarial_Verify_EmptyPolicyNoSteps(t *testing.T) {
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+		Expires: Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps:   map[string]Step{}, // No steps!
 	}
 
@@ -783,7 +782,7 @@ func TestAdversarial_CheckCertConstraint_AllowAllNotFirstElement(t *testing.T) {
 func TestAdversarial_Verify_NegativeClockSkewTolerance(t *testing.T) {
 	// Policy that expires 5 minutes from now
 	p := Policy{
-		Expires: metav1.Time{Time: time.Now().Add(5 * time.Minute)},
+		Expires: Time{Time: time.Now().Add(5 * time.Minute)},
 		Steps: map[string]Step{
 			"build": {Name: "build"},
 		},
