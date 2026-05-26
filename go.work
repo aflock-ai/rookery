@@ -31,6 +31,7 @@ use (
 	./plugins/attestors/githubaction
 	./plugins/attestors/githubwebhook
 	./plugins/attestors/gitlab
+	./plugins/attestors/go-build
 	./plugins/attestors/govulncheck
 	./plugins/attestors/inclusion-proof
 	./plugins/attestors/inspec

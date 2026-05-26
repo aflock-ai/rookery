@@ -33,6 +33,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/githubaction"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/githubwebhook"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/gitlab"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/go-build"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/govulncheck"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/inspec"
