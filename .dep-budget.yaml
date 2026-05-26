@@ -45,4 +45,9 @@ cilock:
   # 4 small declared-dep additions (cilium/ebpf, golang.org/x/* indirect
   # bumps) showed up in go.sum after `go mod tidy`. transitive_pkgs
   # bumped by 1 in the same PR (see above).
-  go_sum_bytes: 71820
+  # 2026-05-26: +1180 bytes for the golang.org/x/* security bump
+  # (#238). Pure indirect/declared-dep churn from `go mod tidy` after
+  # bumping x/crypto, x/net, x/sys, etc. to patched versions;
+  # transitive_pkgs unchanged (137 < 177) — nothing new linked into the
+  # binary, this is go.sum-only growth.
+  go_sum_bytes: 73000
