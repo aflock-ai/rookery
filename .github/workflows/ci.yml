@@ -225,15 +225,20 @@ jobs:
           set -euo pipefail
           # cilock-action's replace directives point at ../rookery/... — exactly
           # this two-checkout layout — so the build resolves rookery from THIS
-          # PR. Tidy first so we fail only on real compile/API breaks, not on
-          # routine go.sum drift (which the consumer re-tidies at release time).
-          before=$(sha256sum go.sum 2>/dev/null | cut -d' ' -f1 || true)
-          GOWORK=off go mod tidy
-          after=$(sha256sum go.sum 2>/dev/null | cut -d' ' -f1 || true)
+          # PR. Build with -mod=mod so missing go.sum entries for *new* external
+          # transitive deps are auto-fetched (routine consumer housekeeping,
+          # surfaced as a warning) and the gate fails only on genuine compile/
+          # API breaks. We do NOT `go mod tidy` here: tidy resolves the full
+          # test-dep graph, which trips over intra-repo pseudo-versions on
+          # paths cmd/cilock-action never imports — a false failure unrelated
+          # to whether the consumer compiles.
+          before=$(sha256sum go.mod go.sum | sha256sum)
+          GOWORK=off go build -mod=mod ./cmd/cilock-action
+          after=$(sha256sum go.mod go.sum | sha256sum)
           if [ "$before" != "$after" ]; then
-            echo "::warning::cilock-action's committed go.sum drifts against this rookery — cilock-action must run 'go mod tidy' before its next release or the release build will fail."
+            echo "::warning::cilock-action's go.mod/go.sum drifted against this rookery (new transitive dep) — cilock-action must re-tidy before its next release."
           fi
-          GOWORK=off go build ./cmd/cilock-action
+          echo "cilock-action cmd/cilock-action builds against this rookery"
 
   # ── Builder Smoke ───────────────────────────────────────────────────
   # Runs the integration suite at builder/integration_test.go: builds
