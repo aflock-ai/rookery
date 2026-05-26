@@ -741,6 +741,12 @@ type CommandRun struct {
 	// process recorded an open for. Surfaced at end-of-trace to
 	// Summary.FanotifyOnlyDigests so no kernel-observed open is lost.
 	fanotifyOnlyDigests map[string]string
+	// fanotifyWriteOpenClaimed holds paths whose OpenedFiles entry was a
+	// WRITE-open (nil-digest) that fanotify upgraded with an open-time
+	// hash. That hash is NOT read-evidence, so TraceOutputs excludes
+	// these from readPaths — otherwise a written product fanotify hashed
+	// gets demoted to an "intermediate" and dropped from the product tree.
+	fanotifyWriteOpenClaimed map[string]bool
 	// fsVerityState holds opportunistic fs-verity sealing state.
 	// Probed at trace start; per-product seal calls during finalize
 	// consult Available to skip the ioctl on unsupported FS.
@@ -969,6 +975,18 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 			if path == "" || ds == nil {
 				continue
 			}
+			// A digest that came from fanotify upgrading a WRITE-open is
+			// NOT read-evidence (fanotify hashes every open, including the
+			// build's output files; for an O_CREAT output it's the empty
+			// pre-write content). Counting it as a read would demote the
+			// written product to an "intermediate" and drop it from the
+			// product tree — the empty-product-tree failure on GitHub's
+			// Azure runner when fanotify is on and the eBPF write-tap
+			// fails. Genuine reads still appear via their BPF read-tap
+			// digest (not in fanotifyWriteOpenClaimed).
+			if rc.fanotifyWriteOpenClaimed[path] {
+				continue
+			}
 			readPaths[path] = true
 		}
 	}
@@ -1143,6 +1161,18 @@ func (rc *CommandRun) TraceCacheArtifacts() map[string]attestation.CaptureEntry 
 			if path == "" || ds == nil {
 				continue
 			}
+			// A digest that came from fanotify upgrading a WRITE-open is
+			// NOT read-evidence (fanotify hashes every open, including the
+			// build's output files; for an O_CREAT output it's the empty
+			// pre-write content). Counting it as a read would demote the
+			// written product to an "intermediate" and drop it from the
+			// product tree — the empty-product-tree failure on GitHub's
+			// Azure runner when fanotify is on and the eBPF write-tap
+			// fails. Genuine reads still appear via their BPF read-tap
+			// digest (not in fanotifyWriteOpenClaimed).
+			if rc.fanotifyWriteOpenClaimed[path] {
+				continue
+			}
 			readPaths[path] = true
 		}
 	}
@@ -1194,6 +1224,18 @@ func (rc *CommandRun) TraceIntermediates() map[string]attestation.CaptureEntry {
 	for i := range rc.Processes {
 		for path, ds := range rc.Processes[i].OpenedFiles {
 			if path == "" || ds == nil {
+				continue
+			}
+			// A digest that came from fanotify upgrading a WRITE-open is
+			// NOT read-evidence (fanotify hashes every open, including the
+			// build's output files; for an O_CREAT output it's the empty
+			// pre-write content). Counting it as a read would demote the
+			// written product to an "intermediate" and drop it from the
+			// product tree — the empty-product-tree failure on GitHub's
+			// Azure runner when fanotify is on and the eBPF write-tap
+			// fails. Genuine reads still appear via their BPF read-tap
+			// digest (not in fanotifyWriteOpenClaimed).
+			if rc.fanotifyWriteOpenClaimed[path] {
 				continue
 			}
 			readPaths[path] = true
@@ -1633,9 +1675,10 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		if r.fanotifySession != nil {
 			fanDigests, fanStats := r.fanotifySession.stop()
 			r.fanotifySession = nil
-			merged, only := mergeFanotifyDigests(r.Processes, fanDigests)
+			merged, only, writeOpenClaimed := mergeFanotifyDigests(r.Processes, fanDigests)
 			r.fanotifyDigestsMerged = uint64(merged)
 			r.fanotifyOnlyDigests = only
+			r.fanotifyWriteOpenClaimed = writeOpenClaimed
 			r.fanotifyEventsHashed = fanStats.EventsHashed
 			r.fanotifyTimeouts = fanStats.HandlerTimeouts
 			r.fanotifyQueueOverflows = fanStats.QueueOverflows

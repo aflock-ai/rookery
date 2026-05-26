@@ -30,6 +30,6 @@ func (s *fanotifySession) stop() (map[string][32]byte, fanotifyStatsStub) {
 	return nil, fanotifyStatsStub{}
 }
 
-func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (int, map[string]string) {
-	return 0, nil
+func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (int, map[string]string, map[string]bool) {
+	return 0, nil, nil
 }
