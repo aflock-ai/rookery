@@ -57,7 +57,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
-	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -360,12 +359,3 @@ func sortBinaries(bins []BinaryInfo) {
 		}
 	}
 }
-
-// init-only sanity: SidecarExt must start with a dot so
-// `<path> + SidecarExt` is a valid extension.
-var _ = func() bool {
-	if !strings.HasPrefix(SidecarExt, ".") {
-		panic("SidecarExt must start with '.'")
-	}
-	return true
-}()
