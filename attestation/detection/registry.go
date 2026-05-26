@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+
+	"github.com/aflock-ai/rookery/attestation/log"
 )
 
 // Registry holds the embedded detector.yaml bytes for every plugin that
@@ -58,13 +60,16 @@ func Default() *Registry {
 // each plugin's init() right after attestation.RegisterAttestation. The
 // YAML is *not* parsed here — parsing happens lazily on first Lookup.
 //
-// Re-registering the same plugin name panics: this indicates a build
-// configuration bug (two init() functions trying to claim the same name).
+// Re-registering the same plugin name is a build-config bug (two
+// init() functions claiming the same name). We log loudly and keep
+// the first registration — silent first-write-wins beats crashing
+// every binary that links both plugins.
 func (r *Registry) Register(pluginName string, yamlBytes []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, dup := r.raw[pluginName]; dup {
-		panic(fmt.Sprintf("detection: duplicate detector registration for plugin %q", pluginName))
+		log.Errorf("(detection/registry) duplicate detector registration for plugin %q — keeping first registration, dropping second", pluginName)
+		return
 	}
 	r.raw[pluginName] = yamlBytes
 }

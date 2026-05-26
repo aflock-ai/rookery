@@ -16,6 +16,10 @@ Outputs:
   .catalog-test/report.json — machine-readable for CI consumption
 
 Re-run as often as you like; the work dir is fully refreshed per run.
+
+Build the all-attestors binary first (every plugin + every signer):
+    cd presets/all && go build -o /tmp/cilock-all-cat ./cmd/cilock-all
+Override the binary location with the CILOCK_BIN env var.
 """
 
 from __future__ import annotations
@@ -604,7 +608,12 @@ RECIPES: list[Recipe] = [
            allow_nonzero=True,
            invoke=lambda fix: (
                ["bash", "-c",
-                "prowler aws --checks ec2_instance_account_imdsv2_enabled "
+                # iam_root_hardware_mfa_enabled always produces a finding
+                # (either PASS or FAIL), so prowler always writes the
+                # OCSF output file. ec2_instance_account_imdsv2_enabled
+                # writes nothing when there are no findings, which makes
+                # the post-product prowler attestor skip.
+                "prowler aws --checks iam_root_hardware_mfa_enabled "
                 "--output-modes json-ocsf --output-directory . "
                 "--output-filename prowler-out --no-banner || true"],
                {"AWS_PROFILE": "testifysec-demo"},
@@ -622,6 +631,74 @@ RECIPES: list[Recipe] = [
                {"AWS_PROFILE": "testifysec-demo"},
                fix,
            )),
+    # AWS Security Hub — query real findings from testifysec-demo
+    # (account 898769392027). The recipe is bounded to 5 findings so it
+    # stays fast and produces a small JSON blob.
+    Recipe(name="aws-security-hub", need="aws", category="posture-scan",
+           expect_uris=[URI_COMMANDRUN],
+           allow_nonzero=True,
+           invoke=lambda fix: (
+               ["bash", "-c",
+                "aws securityhub get-findings --max-results 5 "
+                "--output json > securityhub-findings.json"],
+               {"AWS_PROFILE": "testifysec-demo"},
+               fix,
+           )),
+    Recipe(name="aws-inspector", need="aws", category="posture-scan",
+           expect_uris=[URI_COMMANDRUN],
+           allow_nonzero=True,
+           invoke=lambda fix: (
+               ["bash", "-c",
+                "aws inspector2 list-findings --max-results 5 "
+                "--output json > inspector-findings.json"],
+               {"AWS_PROFILE": "testifysec-demo"},
+               fix,
+           )),
+    Recipe(name="aws-guardduty", need="aws", category="posture-scan",
+           expect_uris=[URI_COMMANDRUN],
+           allow_nonzero=True,
+           # Two-step: list detectors, then findings for the first.
+           # If GuardDuty isn't enabled, the detectors list is empty and
+           # the recipe still attests the (empty) query.
+           invoke=lambda fix: (
+               ["bash", "-c",
+                "aws guardduty list-detectors --output json > gd-detectors.json && "
+                "DID=$(aws guardduty list-detectors --query 'DetectorIds[0]' --output text); "
+                "if [ -n \"$DID\" ] && [ \"$DID\" != \"None\" ]; then "
+                "  aws guardduty list-findings --detector-id \"$DID\" --max-results 5 "
+                "    --output json > gd-findings.json; "
+                "fi"],
+               {"AWS_PROFILE": "testifysec-demo"},
+               fix,
+           )),
+    Recipe(name="aws-macie", need="aws", category="posture-scan",
+           expect_uris=[URI_COMMANDRUN],
+           allow_nonzero=True,
+           invoke=lambda fix: (
+               ["bash", "-c",
+                "aws macie2 get-macie-session --output json > macie-session.json"],
+               {"AWS_PROFILE": "testifysec-demo"},
+               fix,
+           )),
+    Recipe(name="aws-iam-credential-report", need="aws", category="posture-scan",
+           expect_uris=[URI_COMMANDRUN],
+           allow_nonzero=True,
+           # generate-credential-report is async; the second call retrieves
+           # whatever the last generation produced (base64-encoded CSV).
+           # We poll until COMPLETE or 10s elapses.
+           invoke=lambda fix: (
+               ["bash", "-c",
+                "aws iam generate-credential-report > /dev/null 2>&1; "
+                "for i in 1 2 3 4 5; do "
+                "  STATE=$(aws iam generate-credential-report --query State --output text 2>/dev/null); "
+                "  if [ \"$STATE\" = \"COMPLETE\" ]; then break; fi; "
+                "  sleep 1; "
+                "done; "
+                "aws iam get-credential-report --output json > iam-creds-report.json"],
+               {"AWS_PROFILE": "testifysec-demo"},
+               fix,
+           )),
+
     # AWS Config attestor expects `get-compliance-details-by-config-rule`
     # output (EvaluationResults shape). We probe a known rule; if AWS
     # Config isn't running rules in this account the JSON will have an

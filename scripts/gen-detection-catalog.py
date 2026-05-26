@@ -583,6 +583,48 @@ ENTRIES: list[tuple[str, dict]] = [
         on_match="kubectl audit/events query observed. Cluster-state snapshot captured."
     )),
 
+    # ===== AWS security services (data-plane validated; need IAM read perms) =====
+    ("aws-security-hub", dict(
+        desc="AWS Security Hub — central security findings aggregator across AWS services.",
+        categories=["posture-scan"],
+        upstream=dict(name="AWS Security Hub", source="https://docs.aws.amazon.com/securityhub/",
+                      license="commercial", vendor="Amazon Web Services"),
+        match=dict(argv_prefix=["aws", "securityhub"]),
+        on_match="Security Hub query observed. Findings JSON captured as a product; subjects are findingArn entries."
+    )),
+    ("aws-inspector", dict(
+        desc="AWS Inspector v2 — vulnerability + network reachability findings for EC2/ECR/Lambda.",
+        categories=["artifact-scan", "posture-scan"],
+        upstream=dict(name="AWS Inspector", source="https://docs.aws.amazon.com/inspector/",
+                      license="commercial", vendor="Amazon Web Services"),
+        match=dict(argv_prefix=["aws", "inspector2"]),
+        on_match="Inspector findings query observed. ECR image / EC2 / Lambda vulnerability findings captured."
+    )),
+    ("aws-guardduty", dict(
+        desc="AWS GuardDuty — threat detection findings (CloudTrail/VPC/DNS log analysis).",
+        categories=["posture-scan", "runtime"],
+        upstream=dict(name="AWS GuardDuty", source="https://docs.aws.amazon.com/guardduty/",
+                      license="commercial", vendor="Amazon Web Services"),
+        match=dict(argv_prefix=["aws", "guardduty"]),
+        on_match="GuardDuty findings query observed. Behavioral/anomaly threat findings captured."
+    )),
+    ("aws-macie", dict(
+        desc="AWS Macie — automated S3 sensitive-data discovery.",
+        categories=["posture-scan"],
+        upstream=dict(name="AWS Macie", source="https://docs.aws.amazon.com/macie/",
+                      license="commercial", vendor="Amazon Web Services"),
+        match=dict(argv_prefix=["aws", "macie2"]),
+        on_match="Macie query observed. Sensitive-data discovery findings captured."
+    )),
+    ("aws-iam-credential-report", dict(
+        desc="AWS IAM credential report — per-user MFA + key-rotation + password-age posture.",
+        categories=["posture-scan"],
+        upstream=dict(name="AWS IAM", source="https://docs.aws.amazon.com/iam/",
+                      license="commercial", vendor="Amazon Web Services"),
+        match=dict(argv_prefix=["aws", "iam", "get-credential-report"]),
+        on_match="IAM credential report fetched. Per-user MFA/key-age/password-age posture captured."
+    )),
+
     # ===== TEST RUNNERS (validated) =====
     ("pytest", dict(
         desc="pytest — Python test runner.",

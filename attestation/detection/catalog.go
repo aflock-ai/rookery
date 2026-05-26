@@ -20,6 +20,8 @@ import (
 	"io/fs"
 	"path"
 	"strings"
+
+	"github.com/aflock-ai/rookery/attestation/log"
 )
 
 // catalogYAMLs is the embedded directory of detection-only entries —
@@ -75,9 +77,11 @@ func errIsNoSuchFile(err error) bool {
 
 func init() {
 	if err := loadCatalog(); err != nil {
-		// init() panics on a malformed embedded catalog — this is a
-		// developer / build configuration bug, not a runtime input
-		// error. Bake-time mistake; bake-time crash.
-		panic(err)
+		// A malformed embedded catalog is a build-config bug; the
+		// embed-FS read should have failed at compile time. If we
+		// reach this branch in production, log loudly and continue
+		// with an empty catalog — silent failure beats crashing every
+		// binary that imports this package on a developer typo.
+		log.Errorf("(detection/catalog) failed to load embedded catalog: %v — catalog will be empty", err)
 	}
 }

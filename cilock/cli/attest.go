@@ -26,8 +26,8 @@ import (
 // for consultative / state-snapshot attestors that don't need a
 // wrapped command. Examples:
 //
-//   cilock attest -a github-review -k key.pem -o review.bundle.json -s review
-//   cilock attest -a aws-iid       -k key.pem -o iid.bundle.json    -s iid
+//	cilock attest -a github-review -k key.pem -o review.bundle.json -s review
+//	cilock attest -a aws-iid       -k key.pem -o iid.bundle.json    -s iid
 //
 // Internally we synthesize argv `["true"]` (or `["cmd","/c","exit"]`
 // on Windows) and call runRun. Every other flag (-a, -k, -o, -s,
