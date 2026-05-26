@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -181,15 +182,20 @@ func (a *SBOMAttestor) Attest(ctx *attestation.AttestationContext) error {
 // loadFromExplicitFile reads the file at a.sbomFile, auto-detects
 // SPDX-JSON vs CycloneDX-JSON from the JSON content, and populates the
 // attestor's predicate + subjects exactly as getCandidate would for a
-// product-set match. Format detection uses two unambiguous signals
+// product-set match. Format detection uses three unambiguous signals
 // published by the respective specs:
 //
 //   - SPDX 2.x:        top-level "spdxVersion": "SPDX-2.x"
 //   - CycloneDX 1.x:   top-level "bomFormat": "CycloneDX"
+//   - SPDX 3.0:        top-level "specVersion": "3.x.y" + "@context"
+//     pointing at the SPDX 3 JSON-LD context. SPDX 3 dropped the
+//     `spdxVersion` field entirely and replaced it with a JSON-LD
+//     shape, so it can't be detected by the 2.x signal.
 //
-// Anything else (or a file that doesn't parse as JSON) is rejected
-// with an actionable error so the user knows immediately rather than
-// silently producing an empty attestation.
+// Detection order is 2.x first, CycloneDX second, 3.0 third (least
+// common today). Anything else (or a file that doesn't parse as JSON)
+// is rejected with an actionable error so the user knows immediately
+// rather than silently producing an empty attestation.
 func (a *SBOMAttestor) loadFromExplicitFile(ctx *attestation.AttestationContext) error {
 	resolved := a.sbomFile
 	if !filepath.IsAbs(resolved) {
@@ -204,24 +210,17 @@ func (a *SBOMAttestor) loadFromExplicitFile(ctx *attestation.AttestationContext)
 		return fmt.Errorf("sbom: --attestor-sbom-file %s is not valid JSON", resolved)
 	}
 
-	// Sniff format. Both detection fields are at the top level and
-	// don't collide with each other, so a single decode covers both.
-	var sniff struct {
-		SPDXVersion string `json:"spdxVersion"`
-		BOMFormat   string `json:"bomFormat"`
+	predicateType, ok := sniffPredicateType(sbomBytes)
+	if !ok {
+		return fmt.Errorf("sbom: --attestor-sbom-file %s is not a recognized SBOM (need top-level spdxVersion, bomFormat:\"CycloneDX\", or specVersion:\"3.x\"+@context for SPDX 3.0)", resolved)
 	}
-	_ = json.Unmarshal(sbomBytes, &sniff)
-	switch {
-	case sniff.SPDXVersion != "":
-		a.predicateType = SPDXPredicateType
-	case sniff.BOMFormat == "CycloneDX":
-		a.predicateType = CycloneDxPredicateType
-	default:
-		return fmt.Errorf("sbom: --attestor-sbom-file %s is not a recognized SBOM (need top-level spdxVersion or bomFormat:\"CycloneDX\")", resolved)
-	}
+	a.predicateType = predicateType
 
 	// Reuse the existing subject-extraction code path for parity with
-	// product-scanned SBOMs.
+	// product-scanned SBOMs. SPDX 3.0 documents have a different shape
+	// (subjects live in @graph[].name / rootElements), so we leave
+	// subjects-by-name empty for now — capturing the file digest is
+	// enough; a follow-up will extract 3.0 subjects properly.
 	subjectsByName := make(map[string]string)
 	var extracted sbomSubjectExtractor
 	_ = json.Unmarshal(sbomBytes, &extracted)
@@ -255,6 +254,42 @@ func (a *SBOMAttestor) loadFromExplicitFile(ctx *attestation.AttestationContext)
 		}
 	}
 	return nil
+}
+
+// sniffPredicateType inspects the top-level JSON of an SBOM and
+// returns the matching predicate type URI. Detection signals (all at
+// the top level, all non-overlapping):
+//
+//   - SPDX 2.x:   "spdxVersion" set.
+//   - CycloneDX:  "bomFormat" == "CycloneDX".
+//   - SPDX 3.0:   "specVersion" starts with "3." AND "@context" present.
+//     SPDX 3 dropped `spdxVersion` and switched to JSON-LD, so 2.x's
+//     signal can't be reused.
+//
+// SPDX 3 reuses the SPDX predicate URI because the URI names the
+// SPDX *predicate*, not a spec version — verifiers dispatch on the
+// document shape, not the URI. `@context` is RawMessage because SPDX
+// 3 allows it to be either a string or an array; we only check for
+// presence.
+//
+// Returns (predicateType, true) on a hit, ("", false) otherwise.
+func sniffPredicateType(sbomBytes []byte) (string, bool) {
+	var sniff struct {
+		SPDXVersion string          `json:"spdxVersion"`
+		BOMFormat   string          `json:"bomFormat"`
+		SpecVersion string          `json:"specVersion"`
+		Context     json.RawMessage `json:"@context"`
+	}
+	_ = json.Unmarshal(sbomBytes, &sniff)
+	switch {
+	case sniff.SPDXVersion != "":
+		return SPDXPredicateType, true
+	case sniff.BOMFormat == "CycloneDX":
+		return CycloneDxPredicateType, true
+	case strings.HasPrefix(sniff.SpecVersion, "3.") && len(sniff.Context) > 0:
+		return SPDXPredicateType, true
+	}
+	return "", false
 }
 
 func (a *SBOMAttestor) Subjects() map[string]cryptoutil.DigestSet {

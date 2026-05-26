@@ -69,6 +69,38 @@ func TestSBOMFile_ExplicitFile_CycloneDX(t *testing.T) {
 	require.Contains(t, sbom.Subjects(), "file:"+target)
 }
 
+// TestSBOMFile_ExplicitFile_SPDX3 covers SPDX 3.0 documents, which
+// drop the `spdxVersion` field used by 2.x and instead carry a
+// JSON-LD `@context` plus `specVersion: "3.x.y"`. A red-team review
+// of PR #187 caught that the original sniffer only matched 2.x +
+// CycloneDX, silently rejecting any SPDX 3 SBOM the user pointed at.
+func TestSBOMFile_ExplicitFile_SPDX3(t *testing.T) {
+	cwd := t.TempDir()
+	target := "doc.spdx3.json"
+	// Minimal SPDX 3.0 fixture — only the fields the sniffer keys on.
+	// Real 3.0 documents have a populated @graph; an empty array is
+	// enough to prove detection works without forcing us to vendor a
+	// full SPDX 3 example.
+	body := []byte(`{"@context":"https://spdx.org/rdf/3.0.0/spdx-context.jsonld","@graph":[],"specVersion":"3.0.0"}`)
+	require.NoError(t, os.WriteFile(filepath.Join(cwd, target), body, 0o600))
+
+	sbom := NewSBOMAttestor()
+	WithSBOMFile(target)(sbom)
+	p := product.New()
+
+	ctx, err := attestation.NewContext("test", []attestation.Attestor{p, sbom},
+		attestation.WithWorkingDir(cwd))
+	require.NoError(t, err)
+	require.NoError(t, ctx.RunAttestors())
+
+	// SPDX 3 reuses the SPDX predicate URI — the URI names the
+	// predicate, not the spec version. Document shape is what differs.
+	assert.Equal(t, SPDXPredicateType, sbom.predicateType)
+	require.NotNil(t, sbom.SBOMDocument, "SBOMDocument must be populated from the SPDX 3 file")
+	require.Contains(t, sbom.Subjects(), "file:"+target,
+		"file: subject must be present even though SPDX 3 subject extraction is deferred")
+}
+
 func TestSBOMFile_AbsolutePath(t *testing.T) {
 	// Absolute paths should be honored as-is, NOT joined with cwd.
 	cwd := t.TempDir()
