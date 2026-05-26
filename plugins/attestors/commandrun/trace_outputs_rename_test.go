@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -115,6 +116,139 @@ func keys(m map[string]attestation.CaptureEntry) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestTraceOutputs_PreExistingUntouchedNotEmittedAsProduct covers the
+// case Cole flagged: a file is already on disk in the workspace
+// BEFORE the trace begins, the build does not touch it, but somehow
+// our trace's writePaths set includes it (e.g. a spurious rename to
+// the same path, or a stray FileWrite recorded by an over-eager
+// kprobe). The stat-fallback would happily hash the existing content
+// and emit it as a product — that's WRONG. We must detect the file
+// was pre-existing and untouched (mtime older than trace start),
+// and skip it.
+func TestTraceOutputs_PreExistingUntouchedNotEmittedAsProduct(t *testing.T) {
+	workdir := t.TempDir()
+	preExisting := filepath.Join(workdir, "README.md")
+	if err := os.WriteFile(preExisting, []byte("pre-existing content\n"), 0o644); err != nil {
+		t.Fatalf("write pre-existing: %v", err)
+	}
+	// Make the file's mtime safely old.
+	old := time.Now().Add(-1 * time.Hour)
+	if err := os.Chtimes(preExisting, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	// Trace starts NOW; the tracee will not actually touch README.md.
+	traceStart := time.Now()
+
+	rc := &CommandRun{
+		traceeWorkdir:  workdir,
+		traceStartTime: traceStart,
+		Processes: []ProcessInfo{
+			{
+				ProcessID: 1234,
+				Program:   "/usr/bin/sh",
+				// Trace recorded a (spurious) write to README.md — but
+				// the file's mtime is older than traceStartTime, so
+				// we know it wasn't actually modified.
+				FileOps: &FileActivity{
+					Writes: []FileWrite{
+						{Path: "README.md", Bytes: 0},
+					},
+				},
+			},
+		},
+	}
+
+	out := rc.TraceOutputs()
+	t.Logf("TraceOutputs returned %d entries", len(out))
+	for p, e := range out {
+		t.Logf("  %s  src=%s digest=%v", p, e.Source, e.Digest)
+	}
+
+	resolvedPre := filepath.Join(workdir, "README.md")
+	if _, ok := out[resolvedPre]; ok {
+		t.Fatalf("pre-existing untouched file %q must NOT be emitted as a product (mtime older than traceStartTime)", resolvedPre)
+	}
+}
+
+// TestTraceOutputs_PreExistingOverwrittenEmittedWithSourceTag covers
+// the overwrite-detection case: a file exists pre-build with content
+// A, the build mmap-writes content B (write-tap misses it), file is
+// closed with new mtime. We MUST emit the file as a product with the
+// new content's digest AND tag the entry so verifiers know this was
+// an overwrite of pre-existing content (not a clean creation).
+func TestTraceOutputs_PreExistingOverwrittenEmittedWithSourceTag(t *testing.T) {
+	workdir := t.TempDir()
+	productPath := filepath.Join(workdir, "bin", "gh")
+	if err := os.MkdirAll(filepath.Dir(productPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Pre-existing content from an earlier (incremental) build.
+	if err := os.WriteFile(productPath, []byte("OLD BINARY CONTENT\n"), 0o755); err != nil {
+		t.Fatalf("write pre-existing: %v", err)
+	}
+	old := time.Now().Add(-1 * time.Hour)
+	if err := os.Chtimes(productPath, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	// Trace starts.
+	traceStart := time.Now()
+	time.Sleep(10 * time.Millisecond) // ensure mtime resolution boundary
+
+	// Tracee mmap-overwrites the file. Update content + mtime.
+	newContent := []byte("\x7fELFnew binary content\n")
+	if err := os.WriteFile(productPath, newContent, 0o755); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+	wantSHA := sha256.Sum256(newContent)
+	wantHex := hex.EncodeToString(wantSHA[:])
+
+	rc := &CommandRun{
+		traceeWorkdir:  workdir,
+		traceStartTime: traceStart,
+		// runCmd's pre-exec walk would have recorded bin/gh because
+		// it already existed.
+		prePaths: map[string]struct{}{
+			productPath: {},
+		},
+		Processes: []ProcessInfo{
+			{
+				ProcessID: 1234,
+				Program:   "/path/to/link",
+				FileOps: &FileActivity{
+					// write-tap saw the open-for-write but mmap-write
+					// bypassed sys_write; FileOps.Writes records the
+					// path with 0 captured bytes.
+					Writes: []FileWrite{
+						{Path: "bin/gh", Bytes: 0},
+					},
+				},
+			},
+		},
+	}
+
+	out := rc.TraceOutputs()
+	t.Logf("TraceOutputs returned %d entries", len(out))
+	for p, e := range out {
+		t.Logf("  %s  src=%s digest=%v", p, e.Source, e.Digest)
+	}
+
+	got, ok := out[productPath]
+	if !ok {
+		t.Fatalf("expected product at %q in TraceOutputs map", productPath)
+	}
+	if got.Digest == nil || got.Digest["sha256"] != wantHex {
+		t.Fatalf("digest mismatch: got %v want sha256=%s", got.Digest, wantHex)
+	}
+	// The Source MUST distinguish overwrite from new creation. Verifiers
+	// need this to spot supply-chain attacks where an attacker swaps a
+	// pre-existing artifact mid-build.
+	if got.Source != "trace-pathhash-overwrite" {
+		t.Errorf("expected Source=trace-pathhash-overwrite for pre-existing overwritten file, got %q", got.Source)
+	}
 }
 
 // TestTraceOutputs_AtomicRenameProducesProduct_WriteTapMissed reproduces

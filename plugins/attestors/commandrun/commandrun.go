@@ -634,6 +634,24 @@ type CommandRun struct {
 	// summary build, and ctx.WorkingDir() may be empty when the
 	// caller didn't pass one explicitly.
 	traceeWorkdir string
+
+	// traceStartTime is the wall-clock time captured just before
+	// exec.Command starts. The stat-fallback in TraceOutputs uses it
+	// to distinguish pre-existing files (mtime < traceStartTime) from
+	// files actually modified during the trace (mtime >= traceStartTime).
+	// Critical when write-tap misses an overwrite — without this we'd
+	// hash a pre-build file and falsely emit it as a product.
+	traceStartTime time.Time
+
+	// prePaths is the set of absolute file paths under traceeWorkdir
+	// that existed BEFORE the trace started. Populated by runCmd's
+	// pre-exec walk. Used by the stat-fallback in TraceOutputs to
+	// distinguish (a) overwrites of pre-existing files (Source:
+	// trace-pathhash-overwrite — content lost unless verifier has a
+	// prior attestation) from (b) clean creations during the trace
+	// (Source: trace-pathhash). The mtime check handles the
+	// untouched-skip case; this set handles the overwrite tag.
+	prePaths map[string]struct{}
 	ignoreExitCode   bool
 	requireZeroDrops bool
 
@@ -992,6 +1010,20 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 		if !info.Mode().IsRegular() {
 			continue
 		}
+		// Pre-existence + overwrite detection. Without this, a file
+		// that was already on disk before the trace started and was
+		// never touched would silently get hashed and emitted as a
+		// product — wrong. mtime is the cheapest reliable signal:
+		// every write path (sys_write, mmap+msync, writev,
+		// copy_file_range, rename) updates mtime. Compare against
+		// the snapshot captured in runCmd just before exec.
+		if !rc.traceStartTime.IsZero() && info.ModTime().Before(rc.traceStartTime) {
+			// Pre-existing AND untouched during the trace. Skip:
+			// it's not a product, regardless of what the trace
+			// thought it saw. Don't emit a witness-only entry —
+			// that would still surface this file in the attestation.
+			continue
+		}
 		digest := pathHashIfExists(p, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
 		if digest == nil {
 			out[p] = attestation.CaptureEntry{
@@ -1000,9 +1032,20 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 			}
 			continue
 		}
+		// Source tag: distinguish overwrite of pre-existing content
+		// from clean creation. Verifiers can use this to spot
+		// supply-chain swaps (attacker pre-stages a file, build
+		// overwrites it but the trace can't tell what was there
+		// before). For overwrites we only know the POST-write
+		// digest; pre-content is lost unless the verifier has it
+		// from a prior attestation.
+		source := "trace-pathhash"
+		if _, preExisted := rc.prePaths[p]; preExisted {
+			source = "trace-pathhash-overwrite"
+		}
 		out[p] = attestation.CaptureEntry{
 			Digest: digest,
-			Source: "trace-pathhash",
+			Source: source,
 		}
 	}
 	return out
@@ -1322,6 +1365,55 @@ func isInterestingPath(p string) bool {
 	return false
 }
 
+// snapshotPrePaths walks root and returns the set of absolute file
+// paths that exist on disk RIGHT NOW. Called by runCmd immediately
+// before c.Start() so the stat-fallback in TraceOutputs can later
+// distinguish overwrites (path was in prePaths) from clean creations
+// (path was NOT in prePaths). Skips:
+//   - non-regular files (devices, sockets, pipes — not products)
+//   - directories the user can't read (best-effort, log + continue)
+//   - well-known build-cache trees that produce useless noise
+//     (.git/, node_modules/, vendor/) since the verifier already
+//     classifies these via CachePathMatcher.
+//
+// Bounded by maxPrePathEntries to prevent OOM on monster workdirs;
+// when the limit is hit, we return what we have and the overwrite
+// tag will be missing for any paths beyond it (degraded honesty,
+// not silent corruption).
+func snapshotPrePaths(root string) map[string]struct{} {
+	if root == "" {
+		return nil
+	}
+	const maxPrePathEntries = 1_000_000
+	out := make(map[string]struct{}, 4096)
+	skipDirs := map[string]struct{}{
+		".git":         {},
+		"node_modules": {},
+		"vendor":       {},
+		".cache":       {},
+	}
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // best-effort; skip unreadable subtrees
+		}
+		if d.IsDir() {
+			if _, skip := skipDirs[d.Name()]; skip && path != root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		if len(out) >= maxPrePathEntries {
+			return filepath.SkipAll
+		}
+		out[path] = struct{}{}
+		return nil
+	})
+	return out
+}
+
 // pathHashIfExists returns a name-map digest for the file at path, or
 // nil if the file doesn't exist / can't be read. Errors are swallowed
 // here because outputs may legitimately disappear (the tracee writes
@@ -1410,6 +1502,15 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	// build inherits root + caps and can escalate trivially. No-op
 	// when not running as root or SUDO_UID isn't set.
 	applyTraceePrivilegeDrop(c)
+
+	// Snapshot the workspace pre-state so TraceOutputs can later
+	// distinguish (a) pre-existing files we never touched (skip),
+	// (b) overwrites of pre-existing files (tag), and (c) clean
+	// creations. Done immediately before c.Start() so the time
+	// boundary is tight. snapshotPrePaths is best-effort: walk
+	// errors are logged but don't abort the trace.
+	r.traceStartTime = time.Now()
+	r.prePaths = snapshotPrePaths(r.traceeWorkdir)
 
 	if err := c.Start(); err != nil {
 		// If eBPF was pre-opened but Start failed, release the consumer.
