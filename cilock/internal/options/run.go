@@ -102,6 +102,18 @@ type RunOptions struct {
 	// dropped any event during the trace. Hard gate against silent
 	// loss. Defaults from --hardening (strict ⇒ true).
 	RequireZeroDrops bool
+
+	// Workload selects how attestors are picked. "auto" (default)
+	// inspects the workspace at startup and adds detected attestors
+	// to whatever the operator listed via --attestations; "manual"
+	// uses --attestations as the exact set. Phase 4 of #234.
+	Workload string
+
+	// ValidateOnly runs the pre-flight workload + tool-availability
+	// checks, prints the planned attestor set + any warnings, and
+	// exits without running the user command. Lets operators dry-run
+	// their cilock config in CI.
+	ValidateOnly bool
 	TimestampServers      []string
 	// Subjects holds raw --subjects flag values. Each entry is either a bare
 	// subject name (e.g. "product:<uuid>") — in which case a sha256 digest of
@@ -243,6 +255,15 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&ro.RequireZeroDrops, "require-zero-drops", false,
 		"Fail the run if the eBPF ringbuf dropped any event during the trace. "+
 			"Default derives from --hardening (strict ⇒ true).")
+	cmd.Flags().StringVar(&ro.Workload, "workload", "auto",
+		"How attestors are picked. 'auto' (default) inspects the workspace at "+
+			"startup and adds detected attestors (go-build for go.mod, sbom for "+
+			"package.json, git for .git/, etc.) to whatever --attestations lists. "+
+			"'manual' uses --attestations as the exact set with no detection.")
+	cmd.Flags().BoolVar(&ro.ValidateOnly, "validate-only", false,
+		"Run the pre-flight workload + tool-availability checks, print the planned "+
+			"attestor set + warnings, then exit without running the user command. "+
+			"Use to dry-run a cilock config in CI before committing it.")
 	cmd.Flags().StringSliceVarP(&ro.TimestampServers, "timestamp-servers", "t", []string{}, "Timestamp Authority Servers to use when signing envelope")
 
 	cmd.Flags().StringArrayVar(&ro.Subjects, "subjects", []string{},

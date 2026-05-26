@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -49,6 +50,106 @@ var defaultAttestorNames = []string{product.Name, material.Name}
 
 // applyNoDefaultAttestors filters out always-on attestors named in
 // the operator's --no-default-attestor flags. Hard-fails when the
+// detectWorkloadAttestors probes the working directory for indicators
+// of common build systems and returns the names of attestors that
+// should run on top of whatever the operator already configured.
+// Cheap stat-based detection — no recursive walks, no file content
+// reading. The probe runs once at startup, before any attestor fires.
+//
+// Detection rules:
+//
+//   - go.mod                          → go-build, govulncheck
+//   - package.json or package-lock    → sbom, lockfiles
+//   - Cargo.toml                      → lockfiles
+//   - Dockerfile / Containerfile      → oci
+//   - .git/                           → git
+//
+// Names returned are merged with --attestations by the caller via
+// dedupe; an operator's explicit choice is never silently dropped.
+// Phase 4 of #234.
+func detectWorkloadAttestors(workdir string) []string {
+	if workdir == "" {
+		var err error
+		workdir, err = os.Getwd()
+		if err != nil {
+			return nil
+		}
+	}
+	var detected []string
+	add := func(name string) {
+		for _, d := range detected {
+			if d == name {
+				return
+			}
+		}
+		detected = append(detected, name)
+	}
+	exists := func(name string) bool {
+		_, err := os.Stat(workdir + "/" + name)
+		return err == nil
+	}
+	if exists("go.mod") {
+		add("go-build")
+		add("govulncheck")
+	}
+	if exists("package.json") || exists("package-lock.json") {
+		add("sbom")
+		add("lockfiles")
+	}
+	if exists("Cargo.toml") {
+		add("lockfiles")
+	}
+	if exists("Dockerfile") || exists("Containerfile") {
+		add("oci")
+	}
+	if exists(".git") {
+		add("git")
+	}
+	return detected
+}
+
+// mergeAttestorNames adds detected names into the operator's list,
+// dropping duplicates while preserving the operator-supplied order
+// first. Returns the merged list and a slice of names actually added
+// (for the --validate-only report).
+func mergeAttestorNames(operatorList, detected []string) (merged, added []string) {
+	seen := make(map[string]struct{}, len(operatorList)+len(detected))
+	for _, name := range operatorList {
+		merged = append(merged, name)
+		seen[name] = struct{}{}
+	}
+	for _, name := range detected {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		merged = append(merged, name)
+		added = append(added, name)
+		seen[name] = struct{}{}
+	}
+	return merged, added
+}
+
+// validateUserCommand checks that args[0] resolves on PATH (or as an
+// absolute path). Returns a non-nil error if the resolution fails;
+// the run.go caller decides whether to treat that as fatal or just
+// a warning depending on --validate-only.
+func validateUserCommand(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	cmd := args[0]
+	// LookPath handles both bare names (resolves on PATH) and paths
+	// (verifies existence + executable bit). No special-case needed.
+	if _, err := execLookPath(cmd); err != nil {
+		return fmt.Errorf("user command %q: %w", cmd, err)
+	}
+	return nil
+}
+
+// execLookPath is a tiny wrapper so the lookup can be mocked in tests.
+// Kept as a var so tests can swap it.
+var execLookPath = exec.LookPath
+
 // applyHardeningProfile sets per-feature env defaults based on the
 // named --hardening profile, leaving explicit operator env vars
 // untouched. Recognised profiles:
@@ -236,6 +337,43 @@ Exit-code policy (finding #221):
 			// --require-zero-drops gate when --hardening=strict.
 			if err := applyHardeningProfile(o.Hardening, &o.RequireZeroDrops, cmd.Flags().Changed("require-zero-drops")); err != nil {
 				return err
+			}
+
+			// Workload auto-detection: probe the workspace for build-system
+			// indicators (go.mod, package.json, .git, etc.) and merge the
+			// matched attestors into the operator's --attestations list.
+			// Phase 4 of #234. Skip when --workload=manual.
+			var detectedNames []string
+			if o.Workload != "manual" {
+				probed := detectWorkloadAttestors(o.WorkingDir)
+				var merged []string
+				merged, detectedNames = mergeAttestorNames(o.Attestations, probed)
+				o.Attestations = merged
+			}
+
+			// Validate the user command resolves before doing the real run.
+			// Soft warning when --validate-only is off; hard exit when on.
+			cmdErr := validateUserCommand(args)
+
+			if o.ValidateOnly {
+				fmt.Fprintln(os.Stderr, "cilock pre-flight:")
+				fmt.Fprintf(os.Stderr, "  attestations (operator + detected): %v\n", o.Attestations)
+				if len(detectedNames) > 0 {
+					fmt.Fprintf(os.Stderr, "  workload auto-added: %v\n", detectedNames)
+				}
+				fmt.Fprintf(os.Stderr, "  hardening: %s\n", o.Hardening)
+				fmt.Fprintf(os.Stderr, "  capture-mode: %s\n", o.CaptureMode)
+				if cmdErr != nil {
+					fmt.Fprintf(os.Stderr, "  WARN: %v\n", cmdErr)
+				}
+				fmt.Fprintln(os.Stderr, "  (--validate-only — exiting without running the command)")
+				return nil
+			}
+			if cmdErr != nil {
+				// Non-fatal in normal mode — the user command may be a
+				// shell builtin, a wrapper, or come from a PATH the
+				// subprocess will set up. Print and continue.
+				log.Warnf("%v", cmdErr)
 			}
 
 			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, providersFromFlags("signer", cmd.Flags()))
