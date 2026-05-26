@@ -49,6 +49,23 @@ var defaultAttestorNames = []string{product.Name, material.Name}
 
 // applyNoDefaultAttestors filters out always-on attestors named in
 // the operator's --no-default-attestor flags. Hard-fails when the
+// splitCaptureModeSuffix parses an optional `:backend` suffix from the
+// --capture-mode value. Recognised: `trace:ebpf`, `trace:ptrace`,
+// `trace:auto`, or `auto:ebpf|ptrace|auto` (auto mode can also pin the
+// tracer backend explicitly). Empty backend means "no suffix supplied;
+// commandrun chooses based on CILOCK_TRACE_MODE / its own default".
+//
+// Phase 2 of #234 — replaces CILOCK_TRACE_MODE as the canonical knob
+// for the tracer backend; the env var still works but is now derived
+// from --capture-mode.
+func splitCaptureModeSuffix(s string) (mode, backend string) {
+	idx := strings.IndexByte(s, ':')
+	if idx < 0 {
+		return s, ""
+	}
+	return s[:idx], s[idx+1:]
+}
+
 // warnLegacyDiagnosticEnv prints a one-line migration message for each
 // legacy diagnostic env var the operator still has set in their CI YAML.
 // The new world is a single --diagnose flag (or CILOCK_DIAGNOSE=1 for
@@ -296,10 +313,23 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		}
 	}
 
-	// Build attestation context options
-	captureMode := attestation.CaptureMode(ro.CaptureMode)
+	// Build attestation context options.
+	//
+	// Phase 2: --capture-mode accepts an optional tracer-backend suffix
+	// `:ebpf|:ptrace|:auto` (e.g. `trace:ebpf`). The suffix selects the
+	// commandrun tracer backend by setting CILOCK_TRACE_MODE before any
+	// attestor runs. Without a suffix, behavior is the same as before
+	// (commandrun's own auto-fallback applies).
+	baseCaptureMode, traceBackend := splitCaptureModeSuffix(ro.CaptureMode)
+	captureMode := attestation.CaptureMode(baseCaptureMode)
 	if err := captureMode.Validate(); err != nil {
 		return fmt.Errorf("--capture-mode: %w", err)
+	}
+	if traceBackend != "" {
+		if captureMode != attestation.CaptureTrace && captureMode != attestation.CaptureAuto {
+			return fmt.Errorf("--capture-mode: backend suffix %q is only meaningful with capture-mode=trace or =auto, not %q", traceBackend, baseCaptureMode)
+		}
+		_ = os.Setenv("CILOCK_TRACE_MODE", traceBackend)
 	}
 	attestationOpts := []attestation.AttestationContextOption{
 		attestation.WithWorkingDir(ro.WorkingDir),

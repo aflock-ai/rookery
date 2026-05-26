@@ -180,11 +180,14 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&ro.StepName, "step", "s", "", "Name of the step being run")
 	cmd.Flags().BoolVarP(&ro.Tracing, "trace", "r", false, "Enable tracing for the command")
 	cmd.Flags().StringVar(&ro.CaptureMode, "capture-mode", "auto",
-		"Where material + product attestors get their digests. "+
-			"'auto' (default) picks the fastest available — trace data when --trace is set, "+
-			"otherwise walks the working directory. 'walk' forces the legacy directory walk "+
-			"(slower; race-prone with concurrent writers). 'trace' requires --trace and fails "+
-			"if no trace data is available. 'ima' requires kernel IMA (not yet implemented).")
+		"Where material + product attestors get their digests, plus optional tracer-backend "+
+			"selector for trace modes. Base modes: 'auto' (default — picks the fastest available), "+
+			"'walk' (directory walk; race-prone with concurrent writers), 'trace' (requires "+
+			"tracing data; fails if unavailable), 'ima' (kernel IMA — not yet wired). "+
+			"Trace modes accept an optional ':<backend>' suffix: "+
+			"'trace:ebpf' = require eBPF, fail loudly if unavailable; "+
+			"'trace:ptrace' = use ptrace+seccomp, skip eBPF probe; "+
+			"'trace:auto' = probe eBPF then fall back to ptrace silently (recommended default).")
 	cmd.Flags().StringSliceVar(&ro.CacheAddPatterns, "cache-add-pattern", nil,
 		"Add a glob pattern to the cache/temp classifier. Files written by the tracee "+
 			"matching any cache pattern are surfaced as cache artifacts, not products. "+
