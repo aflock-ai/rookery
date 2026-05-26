@@ -43,6 +43,9 @@ type PolicyVerifyConfigurer interface {
 	SetCollectionSource(source source.Sourcer)
 	SetAiServerURL(url string)
 	SetKMSProviderOptions(opts map[string][]func(signer.SignerProvider) (signer.SignerProvider, error))
+	// SetChainSidecarSource installs the v0.3 chain-of-custody sidecar
+	// source. Nil disables. See policy.ChainSidecarSource for behavior.
+	SetChainSidecarSource(src policy.ChainSidecarSource)
 }
 
 // PolicyVerifyResult is implemented by the policyverify attestor plugin.
@@ -71,6 +74,7 @@ type verifyOptions struct {
 	collectionSource             source.Sourcer
 	aiServerURL                  string
 	kmsProviderOptions           map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
+	chainSidecarSource           policy.ChainSidecarSource
 }
 
 type VerifyOption func(*verifyOptions)
@@ -148,6 +152,17 @@ func VerifyWithKMSProviderOptions(opts map[string][]func(signer.SignerProvider) 
 	}
 }
 
+// VerifyWithChainSidecarSource installs a v0.3 chain-of-custody
+// sidecar source on the workflow's policy verifier. When set and a
+// sidecar is available for a given ArtifactsFrom edge, the verifier
+// validates that edge via RFC 6962 inclusion proofs instead of the
+// legacy path-by-path comparison. Nil disables (legacy behavior).
+func VerifyWithChainSidecarSource(src policy.ChainSidecarSource) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.chainSidecarSource = src
+	}
+}
+
 type VerifyResult struct {
 	RunResult
 	VerificationSummary slsa.VerificationSummary
@@ -191,6 +206,9 @@ func Verify(ctx context.Context, policyEnvelope dsse.Envelope, policyVerifiers [
 	}
 	if vo.aiServerURL != "" {
 		configurer.SetAiServerURL(vo.aiServerURL)
+	}
+	if vo.chainSidecarSource != nil {
+		configurer.SetChainSidecarSource(vo.chainSidecarSource)
 	}
 
 	if len(vo.signers) > 0 {

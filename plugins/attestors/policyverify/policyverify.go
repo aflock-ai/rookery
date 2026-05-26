@@ -62,6 +62,7 @@ type Attestor struct {
 	subjectDigests     []string
 	aiServerURL        string
 	kmsProviderOptions map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
+	chainSidecarSource policy.ChainSidecarSource
 }
 
 type DenyReason struct {
@@ -120,6 +121,15 @@ func (a *Attestor) SetAiServerURL(url string) {
 
 func (a *Attestor) SetKMSProviderOptions(opts map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)) {
 	a.kmsProviderOptions = opts
+}
+
+// SetChainSidecarSource installs a v0.3 chain-of-custody sidecar
+// source. When set, the policy verifier will prefer per-material
+// RFC 6962 inclusion-proof verification over the legacy
+// path-by-path artifact comparison on every ArtifactsFrom edge that
+// has a matching sidecar. Nil disables (preserves legacy behavior).
+func (a *Attestor) SetChainSidecarSource(src policy.ChainSidecarSource) {
+	a.chainSidecarSource = src
 }
 
 // PolicyVerifyResult interface methods
@@ -205,6 +215,9 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 	}
 	if a.aiServerURL != "" {
 		verifyOpts = append(verifyOpts, policy.WithAiServerURL(a.aiServerURL))
+	}
+	if a.chainSidecarSource != nil {
+		verifyOpts = append(verifyOpts, policy.WithChainSidecarSource(a.chainSidecarSource))
 	}
 
 	accepted, stepResults, policyErr := pol.Verify(ctx.Context(), verifyOpts...)
