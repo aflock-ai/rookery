@@ -46,7 +46,7 @@ func TestUntrackedMaterialsAllowed_AllProven_OK(t *testing.T) {
 func TestUntrackedMaterialsAllowed_StrictFailsWhenAnyUncovered(t *testing.T) {
 	step := Step{Name: "build"} // no AllowedUntracked
 	mats := map[string]cryptoutil.DigestSet{
-		"src/main.go": ds("a"),
+		"src/main.go":      ds("a"),
 		"/usr/lib/libc.so": ds("b"),
 	}
 	proven := map[string]struct{}{
@@ -67,9 +67,9 @@ func TestUntrackedMaterialsAllowed_GlobCoversSystemPaths(t *testing.T) {
 		},
 	}
 	mats := map[string]cryptoutil.DigestSet{
-		"src/main.go":                                ds("a"),
-		"/usr/lib/libc.so":                           ds("b"),
-		"/opt/hostedtoolcache/go/1.26/x64/bin/go":    ds("c"),
+		"src/main.go":      ds("a"),
+		"/usr/lib/libc.so": ds("b"),
+		"/opt/hostedtoolcache/go/1.26/x64/bin/go": ds("c"),
 	}
 	proven := map[string]struct{}{
 		"src/main.go": {},

@@ -27,7 +27,7 @@ import (
 // adversarial tests to mutate. Returns the sidecar, the source-step
 // reference (with EnvelopeDigest binding), and the audit-path
 // material so individual tests can poke specific fields.
-func buildSampleChain(t *testing.T, domain string) (ChainSidecar, []SidecarLeaf, []ConsumedMaterial) {
+func buildSampleChain(t *testing.T, domain string) (ChainSidecar, []SidecarLeaf) {
 	t.Helper()
 	leaves := []SidecarLeaf{
 		{Path: "build/binary", FileDigest: strings.Repeat("aa", 32)},
@@ -67,7 +67,7 @@ func buildSampleChain(t *testing.T, domain string) (ChainSidecar, []SidecarLeaf,
 	if err != nil {
 		t.Fatalf("BuildChainSidecar: %v", err)
 	}
-	return sidecar, leaves, consumed
+	return sidecar, leaves
 }
 
 // TestAdversarial_TamperedMerkleRoot exercises the verifier's
@@ -75,7 +75,7 @@ func buildSampleChain(t *testing.T, domain string) (ChainSidecar, []SidecarLeaf,
 // MerkleRoot must cause every inclusion proof to fail — otherwise
 // the chain anchor is meaningless.
 func TestAdversarial_TamperedMerkleRoot(t *testing.T) {
-	sidecar, _, _ := buildSampleChain(t, "")
+	sidecar, _ := buildSampleChain(t, "")
 
 	// Flip the trailing hex nibble of the root.
 	root := sidecar.SourceStep.MerkleRoot
@@ -99,7 +99,7 @@ func TestAdversarial_TamperedMerkleRoot(t *testing.T) {
 // Drop the first sibling hash; the rebuilt root will diverge from
 // the signed root.
 func TestAdversarial_TamperedAuditPath(t *testing.T) {
-	sidecar, _, _ := buildSampleChain(t, "")
+	sidecar, _ := buildSampleChain(t, "")
 	if len(sidecar.MaterialProofs[0].AuditPath) == 0 {
 		t.Fatalf("expected non-empty audit path; tree may have only one leaf")
 	}
@@ -115,7 +115,7 @@ func TestAdversarial_TamperedAuditPath(t *testing.T) {
 // formats must not be accepted by a v0.1 verifier — that would let
 // a malicious producer add semantics the verifier silently ignores.
 func TestAdversarial_SchemaVersionDowngrade(t *testing.T) {
-	sidecar, _, _ := buildSampleChain(t, "")
+	sidecar, _ := buildSampleChain(t, "")
 	sidecar.SchemaVersion = "rookery.chain-proof.sidecar/v0.99"
 	err := VerifyChainSidecar(sidecar)
 	if err == nil {
@@ -131,7 +131,7 @@ func TestAdversarial_SchemaVersionDowngrade(t *testing.T) {
 // (path, digest) leaf data. Closes threat-model E4
 // (cross-application replay).
 func TestAdversarial_DomainSeparation(t *testing.T) {
-	sidecar, _, _ := buildSampleChain(t, "rookery-product/v0.3")
+	sidecar, _ := buildSampleChain(t, "rookery-product/v0.3")
 
 	// Forge a "matching" sidecar under a different domain. The leaf
 	// pre-hash bytes will differ because the domain prefix differs;
@@ -191,7 +191,7 @@ func TestAdversarial_NFCNFDPathDivergence(t *testing.T) {
 // any honest verifier would reject anyway, but failing fast at
 // produce time tells the operator immediately.
 func TestAdversarial_ConsumedNotProduced(t *testing.T) {
-	_, leaves, _ := buildSampleChain(t, "")
+	_, leaves := buildSampleChain(t, "")
 	// Reuse the real root so we get past the rebuilt-root check
 	// and reach the consumed-material validation.
 	preHashes := make([][]byte, len(leaves))
@@ -225,7 +225,7 @@ func TestAdversarial_ConsumedNotProduced(t *testing.T) {
 // BuildChainSidecar must refuse — verifying this sidecar later
 // would silently accept a substituted artifact.
 func TestAdversarial_DigestMismatch(t *testing.T) {
-	_, leaves, _ := buildSampleChain(t, "")
+	_, leaves := buildSampleChain(t, "")
 	// Rebuild the source ref so the root matches the leaves.
 	preHashes := make([][]byte, len(leaves))
 	for i, l := range leaves {
@@ -285,7 +285,7 @@ func TestAdversarial_UnsortedSourceLeaves(t *testing.T) {
 // the same Merkle root — closes threat-model D1 (cross-step proof
 // replay). Both produce and verify paths must refuse.
 func TestAdversarial_EmptyEnvelopeDigest(t *testing.T) {
-	_, leaves, _ := buildSampleChain(t, "")
+	_, leaves := buildSampleChain(t, "")
 	source := SourceStepRef{
 		StepName:       "source",
 		EnvelopeDigest: "", // load-bearing field deliberately omitted

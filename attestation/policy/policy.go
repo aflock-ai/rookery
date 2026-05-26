@@ -26,11 +26,11 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/chain"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/signer"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
-	"github.com/aflock-ai/rookery/attestation/chain"
 	"github.com/aflock-ai/rookery/attestation/source"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -828,7 +828,7 @@ func (p Policy) verifyArtifacts(ctx context.Context, vo *verifyOptions, resultsB
 	return resultsByStep, nil
 }
 
-func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit
+func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo,nestif // chain-sidecar branch + legacy-fallback branch make this inherently wide
 	mats := collection.Collection.Materials()
 	reasons := []string{}
 	for _, artifactsFrom := range step.ArtifactsFrom {
@@ -862,7 +862,7 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 			// the source has no sidecar for this pair) we fall back
 			// to the legacy compareArtifacts path that operates on
 			// the in-process Materials() / Artifacts() maps.
-			if vo != nil && vo.chainSidecarSource != nil {
+			if vo != nil && vo.chainSidecarSource != nil { //nolint:nestif // chain-sidecar lookup → verify → require-mode gate; refactoring would split the policy decision across helpers
 				upstreamEnvDigest := envelopePayloadDigest(testCollection.Collection)
 				sidecar, lookupErr := vo.chainSidecarSource.LookupChainSidecar(ctx, step.Name, artifactsFrom, upstreamEnvDigest)
 				if lookupErr != nil {
@@ -937,7 +937,7 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 // identifier independent of signature material that may vary
 // between re-signings of the same content.
 func envelopePayloadDigest(c source.CollectionVerificationResult) string {
-	sum := sha256.Sum256(c.CollectionEnvelope.Envelope.Payload)
+	sum := sha256.Sum256(c.Envelope.Payload)
 	return hex.EncodeToString(sum[:])
 }
 

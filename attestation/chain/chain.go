@@ -180,6 +180,8 @@ func NormalizePath(p string) string {
 // rebuilt tree root matches source.MerkleRoot (catches domain
 // mismatch, leaf-order drift, tampered source sidecar). Producer
 // errors here mean the chain cannot be honestly constructed.
+//
+//nolint:gocognit,gocyclo // linear validate → rebuild → sort → emit; splitting would obscure the producer-side bail-outs
 func BuildChainSidecar(source SourceStepRef, sourceLeaves []SidecarLeaf, consumed []ConsumedMaterial) (ChainSidecar, error) {
 	if source.EnvelopeDigest == "" {
 		return ChainSidecar{}, errors.New("BuildChainSidecar: source.EnvelopeDigest must be set (binds chain to specific source attestation, not just root)")
@@ -193,8 +195,9 @@ func BuildChainSidecar(source SourceStepRef, sourceLeaves []SidecarLeaf, consume
 
 	idxByPath := make(map[string]int, len(sourceLeaves))
 	for i, l := range sourceLeaves {
-		if i > 0 && sourceLeaves[i-1].Path >= sourceLeaves[i].Path {
-			return ChainSidecar{}, fmt.Errorf("BuildChainSidecar: sourceLeaves not sorted by path (leaf %d=%q >= leaf %d=%q)", i-1, sourceLeaves[i-1].Path, i, sourceLeaves[i].Path)
+		// i-1 only evaluated when i > 0; bounds-safe. gosec G602 false positive.
+		if i > 0 && sourceLeaves[i-1].Path >= sourceLeaves[i].Path { //nolint:gosec // bounded by i > 0 guard
+			return ChainSidecar{}, fmt.Errorf("BuildChainSidecar: sourceLeaves not sorted by path (leaf %d=%q >= leaf %d=%q)", i-1, sourceLeaves[i-1].Path, i, sourceLeaves[i].Path) //nolint:gosec // bounded by i > 0 guard above
 		}
 		idxByPath[l.Path] = i
 	}

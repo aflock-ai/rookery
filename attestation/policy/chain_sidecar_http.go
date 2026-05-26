@@ -83,6 +83,8 @@ func NewHTTPChainSidecarSource(urlTemplate string) *HTTPChainSidecarSource {
 // LookupChainSidecar fetches the chain sidecar for the given chain
 // edge. See HTTPChainSidecarSource doc-comment for URL template
 // semantics and status-code mapping.
+//
+//nolint:gocyclo,gocognit // validate → fetch → status-switch → parse → bind-check; one linear path
 func (s *HTTPChainSidecarSource) LookupChainSidecar(ctx context.Context, downstreamStep, upstreamStep, upstreamEnvelopeDigest string) (*chain.ChainSidecar, error) {
 	if s == nil || s.URLTemplate == "" {
 		return nil, nil //nolint:nilnil // disabled
