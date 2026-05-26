@@ -635,6 +635,7 @@ type CommandRun struct {
 	// caller didn't pass one explicitly.
 	traceeWorkdir string
 
+
 	// traceStartTime is the wall-clock time captured just before
 	// exec.Command starts. The stat-fallback in TraceOutputs uses it
 	// to distinguish pre-existing files (mtime < traceStartTime) from
@@ -738,6 +739,16 @@ func (a *CommandRun) Schema() *jsonschema.Schema {
 }
 
 func (rc *CommandRun) Attest(ctx *attestation.AttestationContext) error {
+	// Snapshot the AttestationContext's workdir before any early
+	// return so that downstream consumers (TraceOutputs's relative-
+	// path resolution, the stat-fallback's pre-existence checks) have
+	// a usable base path even when runCmd doesn't execute — e.g.
+	// tests that synthesize a CommandRun with pre-populated Processes
+	// and no Cmd, or callers that want to introspect a partial state.
+	if rc.traceeWorkdir == "" {
+		rc.traceeWorkdir = ctx.WorkingDir()
+	}
+
 	if len(rc.Cmd) == 0 {
 		return attestation.ErrAttestor{
 			Name:    rc.Name(),

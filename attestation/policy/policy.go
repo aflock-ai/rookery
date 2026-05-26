@@ -30,8 +30,8 @@ import (
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/signer"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
+	"github.com/aflock-ai/rookery/attestation/chain"
 	"github.com/aflock-ai/rookery/attestation/source"
-	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -865,7 +865,7 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 							sidecar.SourceStep.EnvelopeDigest, artifactsFrom, upstreamEnvDigest))
 						continue
 					}
-					if err := inclusionproof.VerifyChainSidecar(*sidecar); err != nil {
+					if err := chain.VerifyChainSidecar(*sidecar); err != nil {
 						collection.Warnings = append(collection.Warnings, fmt.Sprintf("chain sidecar verify for step %s ← %s: %v", step.Name, artifactsFrom, err))
 						reasons = append(reasons, err.Error())
 						continue

@@ -20,7 +20,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/merkle"
 	"github.com/aflock-ai/rookery/attestation/source"
-	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
+	"github.com/aflock-ai/rookery/attestation/chain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,17 +28,17 @@ import (
 // inMemoryChainSidecarSource is the test fixture for ChainSidecarSource.
 // Keyed by (downstreamStep, upstreamStep, upstreamEnvelopeDigest).
 type inMemoryChainSidecarSource struct {
-	sidecars map[string]*inclusionproof.ChainSidecar
+	sidecars map[string]*chain.ChainSidecar
 }
 
-func (s *inMemoryChainSidecarSource) LookupChainSidecar(_ context.Context, downstreamStep, upstreamStep, upstreamEnvelopeDigest string) (*inclusionproof.ChainSidecar, error) {
+func (s *inMemoryChainSidecarSource) LookupChainSidecar(_ context.Context, downstreamStep, upstreamStep, upstreamEnvelopeDigest string) (*chain.ChainSidecar, error) {
 	key := downstreamStep + "|" + upstreamStep + "|" + upstreamEnvelopeDigest
 	return s.sidecars[key], nil
 }
 
-func (s *inMemoryChainSidecarSource) put(downstream, upstream, envDigest string, sc *inclusionproof.ChainSidecar) {
+func (s *inMemoryChainSidecarSource) put(downstream, upstream, envDigest string, sc *chain.ChainSidecar) {
 	if s.sidecars == nil {
-		s.sidecars = map[string]*inclusionproof.ChainSidecar{}
+		s.sidecars = map[string]*chain.ChainSidecar{}
 	}
 	s.sidecars[downstream+"|"+upstream+"|"+envDigest] = sc
 }
@@ -46,9 +46,9 @@ func (s *inMemoryChainSidecarSource) put(downstream, upstream, envDigest string,
 // chainTestFixture builds a 2-step (source → build) scenario the
 // chain-sidecar verifier path needs to validate.
 type chainTestFixture struct {
-	sourceLeaves   []inclusionproof.SidecarLeaf
+	sourceLeaves   []chain.SidecarLeaf
 	sourceEnvHex   string // sha256 of source step's "envelope payload"
-	sourceRefForCS inclusionproof.SourceStepRef
+	sourceRefForCS chain.SourceStepRef
 }
 
 // makeChainFixture constructs a source step with three products and
@@ -57,7 +57,7 @@ type chainTestFixture struct {
 func makeChainFixture(t *testing.T) chainTestFixture {
 	t.Helper()
 	const domain = "rookery-product/v0.3"
-	leaves := []inclusionproof.SidecarLeaf{
+	leaves := []chain.SidecarLeaf{
 		{Path: "src/main.go", FileDigest: sha256Hex("main")},
 		{Path: "src/util.go", FileDigest: sha256Hex("util")},
 		{Path: "src/parser.go", FileDigest: sha256Hex("parser")},
@@ -67,7 +67,7 @@ func makeChainFixture(t *testing.T) chainTestFixture {
 
 	preHashes := make([][]byte, len(leaves))
 	for i, l := range leaves {
-		h, err := inclusionproof.LeafHashWithDomain(domain, l.Path, l.FileDigest)
+		h, err := chain.LeafHashWithDomain(domain, l.Path, l.FileDigest)
 		require.NoError(t, err)
 		preHashes[i] = h
 	}
@@ -87,7 +87,7 @@ func makeChainFixture(t *testing.T) chainTestFixture {
 	return chainTestFixture{
 		sourceLeaves: leaves,
 		sourceEnvHex: envHex,
-		sourceRefForCS: inclusionproof.SourceStepRef{
+		sourceRefForCS: chain.SourceStepRef{
 			StepName:       "source",
 			EnvelopeDigest: envHex,
 			MerkleRoot:     hex.EncodeToString(tree.Root()),
@@ -139,11 +139,11 @@ func TestChainSidecarSource_HappyPath(t *testing.T) {
 	fix := makeChainFixture(t)
 
 	// Step 2 consumes 2 of the 3 source products.
-	consumed := []inclusionproof.ConsumedMaterial{
+	consumed := []chain.ConsumedMaterial{
 		{Path: "src/main.go", FileDigest: sha256Hex("main")},
 		{Path: "src/parser.go", FileDigest: sha256Hex("parser")},
 	}
-	chain, err := inclusionproof.BuildChainSidecar(fix.sourceRefForCS, fix.sourceLeaves, consumed)
+	chain, err := chain.BuildChainSidecar(fix.sourceRefForCS, fix.sourceLeaves, consumed)
 	require.NoError(t, err)
 
 	src := &inMemoryChainSidecarSource{}
@@ -168,10 +168,10 @@ func TestChainSidecarSource_HappyPath(t *testing.T) {
 func TestChainSidecarSource_TamperedProof(t *testing.T) {
 	fix := makeChainFixture(t)
 
-	consumed := []inclusionproof.ConsumedMaterial{
+	consumed := []chain.ConsumedMaterial{
 		{Path: "src/main.go", FileDigest: sha256Hex("main")},
 	}
-	chain, err := inclusionproof.BuildChainSidecar(fix.sourceRefForCS, fix.sourceLeaves, consumed)
+	chain, err := chain.BuildChainSidecar(fix.sourceRefForCS, fix.sourceLeaves, consumed)
 	require.NoError(t, err)
 
 	// Flip a bit in the audit path.
@@ -203,10 +203,10 @@ func TestChainSidecarSource_TamperedProof(t *testing.T) {
 // attestation that happens to share the same Merkle root.
 func TestChainSidecarSource_WrongEnvelopeBinding(t *testing.T) {
 	fix := makeChainFixture(t)
-	consumed := []inclusionproof.ConsumedMaterial{
+	consumed := []chain.ConsumedMaterial{
 		{Path: "src/main.go", FileDigest: sha256Hex("main")},
 	}
-	chain, err := inclusionproof.BuildChainSidecar(fix.sourceRefForCS, fix.sourceLeaves, consumed)
+	chain, err := chain.BuildChainSidecar(fix.sourceRefForCS, fix.sourceLeaves, consumed)
 	require.NoError(t, err)
 
 	// Tamper: sidecar claims it chains from a DIFFERENT envelope.
