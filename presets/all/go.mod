@@ -34,6 +34,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/git => ../../plugins/atte
 
 replace github.com/aflock-ai/rookery/plugins/attestors/github => ../../plugins/attestors/github
 
+replace github.com/aflock-ai/rookery/plugins/attestors/github-review => ../../plugins/attestors/github-review
+
 replace github.com/aflock-ai/rookery/plugins/attestors/githubaction => ../../plugins/attestors/githubaction
 
 replace github.com/aflock-ai/rookery/plugins/attestors/githubwebhook => ../../plugins/attestors/githubwebhook
@@ -122,6 +124,8 @@ replace github.com/aflock-ai/rookery/plugins/signers/vault => ../../plugins/sign
 replace github.com/aflock-ai/rookery/plugins/signers/vault-transit => ../../plugins/signers/vault-transit
 
 require (
+	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/cilock v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/asff v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-config v0.0.0-00010101000000-000000000000
@@ -135,6 +139,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/gcp-iit v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/git v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/github v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/github-review v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/githubaction v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/githubwebhook v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gitlab v0.0.0-00010101000000-000000000000
@@ -157,7 +162,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/pip-install v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/policyverify v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/product v0.0.0-00010101000000-000000000000
-	github.com/aflock-ai/rookery/plugins/attestors/prowler v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/prowler v0.0.0-20260522233336-64c65b91ab8f
 	github.com/aflock-ai/rookery/plugins/attestors/sarif v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/sbom v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/secretscan v0.0.0-00010101000000-000000000000
@@ -204,7 +209,6 @@ require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
 	github.com/STARRY-S/zip v0.2.3 // indirect
-	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000 // indirect
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.1 // indirect
@@ -242,6 +246,7 @@ require (
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
 	github.com/edwarnicke/gitoid v0.0.0-20220710194850-1be5bfda1f9d // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
+	github.com/fatih/color v1.18.0 // indirect
 	github.com/fatih/semgroup v1.2.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fkautz/omnitrail-go v0.0.0-20240613153526-999f2e7d0fc9 // indirect
@@ -281,6 +286,7 @@ require (
 	github.com/hashicorp/vault/api v1.22.0 // indirect
 	github.com/hashicorp/vault/api/auth/kubernetes v0.10.0 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/jellydator/ttlcache/v3 v3.4.0 // indirect
@@ -314,6 +320,9 @@ require (
 	github.com/muesli/termenv v0.15.1 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nwaples/rardecode/v2 v2.2.0 // indirect
+	github.com/olekukonko/errors v1.1.0 // indirect
+	github.com/olekukonko/ll v0.0.9 // indirect
+	github.com/olekukonko/tablewriter v1.1.0 // indirect
 	github.com/omnibor/omnibor-go v0.0.0-20230521145532-a77de61a16cd // indirect
 	github.com/open-policy-agent/opa v1.13.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -344,6 +353,7 @@ require (
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
+	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spf13/viper v1.21.0 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
@@ -404,3 +414,6 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+// For cmd/cilock-all dev target — pulls in cilock/cli.
+replace github.com/aflock-ai/rookery/cilock => ../../cilock

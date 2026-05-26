@@ -1,0 +1,27 @@
+apiVersion: cilock.detection/v0.1
+name: kube-bench
+description: "Captures kube-bench Kubernetes CIS benchmark results."
+
+category: [posture-scan]
+
+upstream:
+  name: kube-bench
+  source: "https://github.com/aquasecurity/kube-bench"
+  license: Apache-2.0
+  vendor: Aqua Security
+
+recommended_trace: "off"
+
+pre:
+  match:
+    argv_prefix: ["kube-bench"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["kube-bench"]
+      - product_glob: ["kube-bench*.json", "**/kube-bench*.json", "kube-bench*.yaml", "**/kube-bench*.yaml"]
+
+llm_hints:
+  on_match: "kube-bench results captured. CIS benchmark checks preserved."

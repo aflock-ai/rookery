@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,9 +28,13 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/invopop/jsonschema"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 const (
 	Name    = "oci"
@@ -64,6 +69,7 @@ func init() {
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return New()
 	})
+	detection.Register(Name, detectorYAML)
 }
 
 type Attestor struct {

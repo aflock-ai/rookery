@@ -1,0 +1,27 @@
+apiVersion: cilock.detection/v0.1
+name: linkerd-check
+description: "Captures Linkerd service mesh health checks (output of `linkerd check`)."
+
+category: [posture-scan]
+
+upstream:
+  name: Linkerd
+  source: "https://github.com/linkerd/linkerd2"
+  license: Apache-2.0
+  vendor: Linkerd Authors (CNCF)
+
+recommended_trace: "off"
+
+pre:
+  match:
+    argv_prefix: ["linkerd", "check"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["linkerd", "check"]
+      - product_glob: ["linkerd-check*.json", "**/linkerd-check*.json", "linkerd-check*.yaml", "**/linkerd-check*.yaml"]
+
+llm_hints:
+  on_match: "Linkerd service mesh health check results captured."

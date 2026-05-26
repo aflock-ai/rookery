@@ -1,0 +1,27 @@
+apiVersion: cilock.detection/v0.1
+name: steampipe
+description: "Captures Steampipe SQL-against-cloud-API scan results."
+
+category: [posture-scan]
+
+upstream:
+  name: Steampipe
+  source: "https://github.com/turbot/steampipe"
+  license: AGPL-3.0-only
+  vendor: Turbot HQ Inc.
+
+recommended_trace: "off"
+
+pre:
+  match:
+    argv_prefix: ["steampipe"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["steampipe"]
+      - product_glob: ["steampipe*.json", "**/steampipe*.json"]
+
+llm_hints:
+  on_match: "Steampipe query results captured."
