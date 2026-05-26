@@ -26,6 +26,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -101,6 +102,50 @@ func synthBundle(t *testing.T, dir, name, keyid string, innerTypes []string, isC
 	return path
 }
 
+// synthBundleWithFilename is the issue-#224 testing variant of
+// synthBundle. It lets the caller decouple the on-disk filename
+// (`filename`, e.g. `argocd-cli-v3.att.json`) from the recorded
+// collection name in the bundle payload (`recordedName`, what
+// `cilock run -s <name>` writes into predicate.name). isCollection
+// is always true here because the bug only manifests for collection
+// envelopes — bare-predicate envelopes don't carry a name.
+//
+// Pass recordedName="" to mimic an old/malformed bundle that lacks a
+// predicate.name field, exercising the filename-fallback path.
+func synthBundleWithFilename(t *testing.T, dir, filename, recordedName, keyid string, innerTypes []string) string {
+	t.Helper()
+	atts := make([]map[string]string, 0, len(innerTypes))
+	for _, tp := range innerTypes {
+		atts = append(atts, map[string]string{"type": tp})
+	}
+	predicate := map[string]any{"attestations": atts}
+	if recordedName != "" {
+		predicate["name"] = recordedName
+	}
+	stmt := map[string]any{
+		"_type":         "https://in-toto.io/Statement/v0.1",
+		"subject":       []map[string]any{{"name": "x", "digest": map[string]string{"sha256": "00"}}},
+		"predicateType": collectionPredicateURI,
+		"predicate":     predicate,
+	}
+	stmtBytes, err := json.Marshal(stmt)
+	require.NoError(t, err)
+
+	env := map[string]any{
+		"payloadType": "application/vnd.in-toto+json",
+		"payload":     base64.StdEncoding.EncodeToString(stmtBytes),
+		"signatures": []map[string]string{
+			{"keyid": keyid, "sig": "dummy"},
+		},
+	}
+	envBytes, err := json.Marshal(env)
+	require.NoError(t, err)
+
+	path := filepath.Join(dir, filename)
+	require.NoError(t, os.WriteFile(path, envBytes, 0o600))
+	return path
+}
+
 // writeBarePredicateSidecar synthesizes the kind of DSSE envelope
 // cilock's --attestor-*-export flags produce: a signed envelope whose
 // inner statement carries a bare predicate (no attestation-collection
@@ -136,6 +181,10 @@ func TestDeriveStepName(t *testing.T) {
 		{"plain.json", "plain"},
 		{"no-extension", "no-extension"},
 		{"/tmp/.hidden.bundle.json", "hidden"},
+		// Issue #224: additional fallback extensions.
+		{"foo.att.json", "foo"},
+		{"argocd-cli-v3.att.json", "argocd-cli-v3"},
+		{"build.envelope.json", "build"},
 	}
 	for _, c := range cases {
 		assert.Equal(t, c.want, deriveStepName(c.in), "input %q", c.in)
@@ -179,6 +228,7 @@ func TestPolicyFromBundles_HappyPath(t *testing.T) {
 	var out bytes.Buffer
 	err := runPolicyFromBundles(
 		&out,
+		io.Discard,
 		[]string{srcPath, sbomPath},
 		[]string{pubPath},
 		"-",              // stdout
@@ -232,7 +282,7 @@ func TestPolicyFromBundles_UnknownKeyIDGetsPlaceholder(t *testing.T) {
 		[]string{"https://example.com/rogue/v1"}, false)
 
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	err := runPolicyFromBundles(&out, io.Discard, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "")
 	require.NoError(t, err)
 
 	var pol policy.Policy
@@ -257,7 +307,7 @@ func TestPolicyFromBundles_DuplicateStepNameFails(t *testing.T) {
 	bPath := synthBundle(t, subB, "build", keyid, []string{"x/v1"}, true)
 
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, []string{aPath, bPath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	err := runPolicyFromBundles(&out, io.Discard, []string{aPath, bPath}, []string{pubPath}, "-", 365*24*time.Hour, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate step name")
 }
@@ -268,7 +318,7 @@ func TestPolicyFromBundles_StepPrefixApplied(t *testing.T) {
 	bundlePath := synthBundle(t, dir, "build", keyid, []string{"x/v1"}, true)
 
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "release-")
+	err := runPolicyFromBundles(&out, io.Discard, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "release-")
 	require.NoError(t, err)
 
 	var pol policy.Policy
@@ -283,7 +333,7 @@ func TestPolicyFromBundles_OutputFile(t *testing.T) {
 	outPath := filepath.Join(dir, "policy.json")
 
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, []string{bundlePath}, []string{pubPath}, outPath, 365*24*time.Hour, "")
+	err := runPolicyFromBundles(&out, io.Discard, []string{bundlePath}, []string{pubPath}, outPath, 365*24*time.Hour, "")
 	require.NoError(t, err)
 
 	// Output file exists, stdout is empty.
@@ -313,7 +363,7 @@ func TestPolicyFromBundles_BarePredicateGoesToExternal(t *testing.T) {
 		[]string{"https://aflock.ai/attestations/inclusion-proof/v0.1"}, false)
 
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	err := runPolicyFromBundles(&out, io.Discard, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "")
 	require.NoError(t, err)
 
 	var pol policy.Policy
@@ -365,7 +415,7 @@ func TestPolicyFromBundles_SidecarsAutoDiscovered(t *testing.T) {
 	writeBarePredicateSidecar(t, slsaSidecarPath, keyid, "https://slsa.dev/provenance/v1")
 
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, []string{mainPath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	err := runPolicyFromBundles(&out, io.Discard, []string{mainPath}, []string{pubPath}, "-", 365*24*time.Hour, "")
 	require.NoError(t, err)
 
 	var pol policy.Policy
@@ -402,7 +452,7 @@ func TestPolicyFromBundles_SidecarIgnoresNonDSSE(t *testing.T) {
 		[]byte(`{}`), 0o600))
 
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, []string{mainPath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	err := runPolicyFromBundles(&out, io.Discard, []string{mainPath}, []string{pubPath}, "-", 365*24*time.Hour, "")
 	require.NoError(t, err)
 
 	var pol policy.Policy
@@ -417,7 +467,7 @@ func TestPolicyFromBundles_NoBundlesFails(t *testing.T) {
 	dir := t.TempDir()
 	pubPath, _ := writePolicyFixtureKey(t, dir)
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, nil, []string{pubPath}, "-", 365*24*time.Hour, "")
+	err := runPolicyFromBundles(&out, io.Discard, nil, []string{pubPath}, "-", 365*24*time.Hour, "")
 	require.Error(t, err)
 }
 
@@ -428,7 +478,7 @@ func TestPolicyFromBundles_BadEnvelopeFails(t *testing.T) {
 	require.NoError(t, os.WriteFile(bad, []byte("not json"), 0o600))
 
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, []string{bad}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	err := runPolicyFromBundles(&out, io.Discard, []string{bad}, []string{pubPath}, "-", 365*24*time.Hour, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "summarize")
 }
@@ -531,7 +581,7 @@ func TestPolicyFromBundles_CertSignedBundle(t *testing.T) {
 	// No -k pubkeys: this is cert-based, so the pubkey path
 	// shouldn't be touched. The policy must still build.
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, []string{bundlePath}, nil, "-", 365*24*time.Hour, "")
+	err := runPolicyFromBundles(&out, io.Discard, []string{bundlePath}, nil, "-", 365*24*time.Hour, "")
 	require.NoError(t, err)
 
 	var pol policy.Policy
@@ -579,7 +629,7 @@ func TestPolicyFromBundles_CertSignedBareBundle(t *testing.T) {
 		[]string{"https://slsa.dev/provenance/v1"}, false)
 
 	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, []string{bundlePath}, nil, "-", 365*24*time.Hour, "")
+	err := runPolicyFromBundles(&out, io.Discard, []string{bundlePath}, nil, "-", 365*24*time.Hour, "")
 	require.NoError(t, err)
 
 	var pol policy.Policy
@@ -592,4 +642,105 @@ func TestPolicyFromBundles_CertSignedBareBundle(t *testing.T) {
 	require.Len(t, ext.Functionaries, 1)
 	assert.Equal(t, "root", ext.Functionaries[0].Type)
 	assert.ElementsMatch(t, []string{leafKeyID}, ext.Functionaries[0].CertConstraint.Roots)
+}
+
+// TestFromBundles_UsesBundleRecordedStepName covers issue #224.
+// The bundle's predicate.name (what `cilock run -s <name>` recorded)
+// is authoritative. If a user renames the file to something else
+// (e.g. for archival), the generated policy must still reference the
+// original step name so `cilock verify` finds the collection.
+func TestFromBundles_UsesBundleRecordedStepName(t *testing.T) {
+	dir := t.TempDir()
+	pubPath, keyid := writePolicyFixtureKey(t, dir)
+
+	// File is named one thing, the bundle records a different step name.
+	bundlePath := synthBundleWithFilename(t, dir,
+		"something-else.att.json", // filename on disk
+		"real-step-name",          // predicate.name (what `cilock run -s` set)
+		keyid,
+		[]string{"https://aflock.ai/attestations/git/v0.1"},
+	)
+
+	var out, errOut bytes.Buffer
+	err := runPolicyFromBundles(&out, &errOut, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	require.NoError(t, err)
+
+	var pol policy.Policy
+	require.NoError(t, json.Unmarshal(out.Bytes(), &pol))
+
+	// The bundle-recorded name wins.
+	require.Contains(t, pol.Steps, "real-step-name",
+		"policy step must use predicate.name from the bundle, not filename")
+	assert.NotContains(t, pol.Steps, "something-else.att",
+		"policy must not be derived from filename when payload carries a recorded name")
+	assert.NotContains(t, pol.Steps, "something-else",
+		"policy must not be derived from filename when payload carries a recorded name")
+
+	// And the user gets a notice on stderr explaining the divergence.
+	assert.Contains(t, errOut.String(), "real-step-name",
+		"notice should mention the bundle-recorded name")
+	assert.Contains(t, errOut.String(), "something-else",
+		"notice should mention the filename-derived name that was overridden")
+}
+
+// TestFromBundles_FallsBackToFilename covers the defensive path: when
+// a bundle has no recorded predicate.name (e.g. an older bundle, or a
+// malformed payload), the generator still produces a usable step name
+// by stripping known extensions from the filename. Issue #224.
+func TestFromBundles_FallsBackToFilename(t *testing.T) {
+	dir := t.TempDir()
+	pubPath, keyid := writePolicyFixtureKey(t, dir)
+
+	// Empty recordedName → no `predicate.name` in payload at all.
+	bundlePath := synthBundleWithFilename(t, dir,
+		"mything.att.json",
+		"", // no recorded name
+		keyid,
+		[]string{"https://aflock.ai/attestations/git/v0.1"},
+	)
+
+	var out, errOut bytes.Buffer
+	err := runPolicyFromBundles(&out, &errOut, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	require.NoError(t, err)
+
+	var pol policy.Policy
+	require.NoError(t, json.Unmarshal(out.Bytes(), &pol))
+
+	// Filename `mything.att.json` → step `mything` (extension stripped).
+	require.Contains(t, pol.Steps, "mything",
+		"missing predicate.name should fall back to filename with extension stripped")
+	// And no notice when nothing to compare against — the user didn't
+	// "lose" any expected name in this path.
+	assert.Empty(t, errOut.String(),
+		"no notice should fire when the bundle carries no recorded name to diverge from")
+}
+
+// TestFromBundles_StripsAttJsonExtension covers the longest-match-first
+// extension stripping requirement from issue #224: a file named
+// `foo.att.json` must produce step `foo`, not `foo.att`. The same
+// applies to other compound suffixes (.bundle.json, .envelope.json).
+// Without the ordered strip, a simple `TrimSuffix(.json)` would leave
+// the `.att` part in the step name and break verify.
+func TestFromBundles_StripsAttJsonExtension(t *testing.T) {
+	dir := t.TempDir()
+	pubPath, keyid := writePolicyFixtureKey(t, dir)
+
+	bundlePath := synthBundleWithFilename(t, dir,
+		"foo.att.json",
+		"", // empty recorded name → exercise filename fallback
+		keyid,
+		[]string{"https://aflock.ai/attestations/git/v0.1"},
+	)
+
+	var out bytes.Buffer
+	err := runPolicyFromBundles(&out, io.Discard, []string{bundlePath}, []string{pubPath}, "-", 365*24*time.Hour, "")
+	require.NoError(t, err)
+
+	var pol policy.Policy
+	require.NoError(t, json.Unmarshal(out.Bytes(), &pol))
+
+	assert.Contains(t, pol.Steps, "foo",
+		"foo.att.json should yield step foo, with the full .att.json suffix stripped")
+	assert.NotContains(t, pol.Steps, "foo.att",
+		"step name must not retain the .att fragment (would be the naive TrimSuffix(.json) bug)")
 }
