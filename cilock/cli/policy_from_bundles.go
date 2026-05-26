@@ -16,8 +16,10 @@ package cli
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"os"
@@ -146,6 +148,28 @@ type bundleSummary struct {
 	// emits when --attestor-sbom-export is set). Empty for
 	// bare-predicate bundles (we don't recurse).
 	sidecars []sidecarSummary
+	// certSigners holds one entry per signatures[] element that
+	// carried an x509 certificate chain instead of a raw-keyid
+	// pubkey signature. When non-empty, this bundle is "cert-signed"
+	// and the policy generator emits Functionary{Type: "root"} with
+	// a CertConstraint pointing at policy.Roots[<keyid>] — not the
+	// raw-keyid Functionary{Type: "publickey"} shape used for
+	// pubkey-signed bundles.
+	//
+	// Red-team finding (PR #186 follow-up): treating a cert-signed
+	// bundle as a pubkey-signed one yields a Functionary the
+	// generated policy can never verify; users had to hand-edit.
+	certSigners []certSigner
+}
+
+// certSigner describes one x509-cert-bearing signature on a DSSE
+// envelope. Used to route cert-signed bundles to Policy.Roots[] +
+// Functionary{Type: "root"} instead of the pubkey path.
+type certSigner struct {
+	keyID         string // sigs[].keyid (still present; identifies leaf cert pubkey)
+	leafPEM       []byte // raw PEM bytes of the leaf cert, as embedded in the envelope
+	intermediates [][]byte
+	commonName    string // leaf cert CN, if parseable; "" otherwise (best-effort)
 }
 
 // sidecarSummary captures one of the export sidecar envelopes that
@@ -242,6 +266,12 @@ func summarizeOneBundle(path, stepPrefix string) (bundleSummary, error) {
 		PayloadType string `json:"payloadType"`
 		Signatures  []struct {
 			KeyID string `json:"keyid"`
+			// Certificate is the leaf x509 cert PEM bytes, JSON-encoded
+			// (Go encodes []byte as base64). cilock writes this field
+			// whenever the signer is a TrustBundler (Fulcio leaf, manual
+			// cert chain, etc); see attestation/dsse/sign.go.
+			Certificate   []byte   `json:"certificate,omitempty"`
+			Intermediates [][]byte `json:"intermediates,omitempty"`
 		} `json:"signatures"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
@@ -268,16 +298,42 @@ func summarizeOneBundle(path, stepPrefix string) (bundleSummary, error) {
 		return bundleSummary{}, fmt.Errorf("decode in-toto statement: %w", err)
 	}
 
+	// Walk signatures once, separating cert-signed entries from
+	// raw-keyid pubkey entries. A signature with non-empty
+	// Certificate bytes is cert-based: its keyid identifies the leaf
+	// cert's public key, but the policy must use a CertConstraint /
+	// Root rather than a raw publickeys[] entry. Mixed envelopes
+	// (one pubkey sig + one cert sig) are unusual but supported —
+	// both shapes land in their respective policy collections.
 	keyids := make([]string, 0, len(env.Signatures))
-	seen := make(map[string]struct{}, len(env.Signatures))
+	certs := make([]certSigner, 0, len(env.Signatures))
+	seenKID := make(map[string]struct{}, len(env.Signatures))
+	seenCert := make(map[string]struct{}, len(env.Signatures))
 	for _, s := range env.Signatures {
 		if s.KeyID == "" {
 			continue
 		}
-		if _, dup := seen[s.KeyID]; dup {
+		if len(s.Certificate) > 0 {
+			// Cert-signed: keyid is the leaf-cert pubkey hash. Track
+			// uniquely by keyid so two sigs from the same leaf cert
+			// don't produce two Roots[] entries.
+			if _, dup := seenCert[s.KeyID]; dup {
+				continue
+			}
+			seenCert[s.KeyID] = struct{}{}
+			certs = append(certs, certSigner{
+				keyID:         s.KeyID,
+				leafPEM:       s.Certificate,
+				intermediates: s.Intermediates,
+				commonName:    extractLeafCommonName(s.Certificate),
+			})
 			continue
 		}
-		seen[s.KeyID] = struct{}{}
+		// Raw-keyid pubkey signature: existing behavior.
+		if _, dup := seenKID[s.KeyID]; dup {
+			continue
+		}
+		seenKID[s.KeyID] = struct{}{}
 		keyids = append(keyids, s.KeyID)
 	}
 
@@ -292,7 +348,24 @@ func summarizeOneBundle(path, stepPrefix string) (bundleSummary, error) {
 		predicateTypes:     predicateTypes,
 		outerPredicateType: stmt.PredicateType,
 		sidecars:           sidecars,
+		certSigners:        certs,
 	}, nil
+}
+
+// extractLeafCommonName best-effort parses the leaf cert PEM to pull
+// its Subject Common Name. Failure is non-fatal: this is starter-policy
+// metadata, and the user is expected to tighten the CertConstraint
+// before signing. Returns "" on any parse error.
+func extractLeafCommonName(leafPEM []byte) string {
+	block, _ := pem.Decode(leafPEM)
+	if block == nil {
+		return ""
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return ""
+	}
+	return cert.Subject.CommonName
 }
 
 // discoverSidecars finds export-sidecar DSSE envelopes adjacent to the
@@ -468,6 +541,10 @@ func buildStarterPolicy(summaries []bundleSummary, pubKeys map[string][]byte, ex
 
 	for _, s := range summaries {
 		funcs := buildFunctionaries(s.signingKeyIDs, pubKeys, p.PublicKeys)
+		// Cert-signed signatures contribute Functionary{Type:"root"}
+		// entries and Roots[] registrations rather than publickeys[].
+		// See certSigner doc for the red-team motivation.
+		funcs = append(funcs, buildCertFunctionaries(s.certSigners, p)...)
 
 		if s.outerPredicateType == "" || s.outerPredicateType == collectionPredicateURI {
 			// Collection envelope → a Step.
@@ -502,7 +579,8 @@ func buildStarterPolicy(summaries []bundleSummary, pubKeys map[string][]byte, ex
 		// Bare-predicate envelope → an ExternalAttestation. No Step.
 		// This is the fix for the blind-test friction where
 		// `cilock prove` output was generating an always-failing Step.
-		if err := addExternalAttestation(p, s.stepName, s.outerPredicateType, s.signingKeyIDs, pubKeys); err != nil {
+		// Cert functionaries (if any) are already in `funcs`.
+		if err := addExternalAttestationWithFuncs(p, s.stepName, s.outerPredicateType, funcs); err != nil {
 			return nil, err
 		}
 	}
@@ -531,16 +609,70 @@ func buildFunctionaries(keyids []string, pubKeys map[string][]byte, policyKeys m
 
 // addExternalAttestation appends one ExternalAttestation, ensuring
 // the name is unique and the functionary keys are recorded in the
-// policy's publickeys map.
+// policy's publickeys map. Used for raw-keyid (pubkey-signed) sidecar
+// envelopes. For cert-signed envelopes the caller pre-builds the
+// functionary list and uses addExternalAttestationWithFuncs.
 func addExternalAttestation(p *policy.Policy, name, predicateType string, signingKeyIDs []string, pubKeys map[string][]byte) error {
+	return addExternalAttestationWithFuncs(p, name, predicateType,
+		buildFunctionaries(signingKeyIDs, pubKeys, p.PublicKeys))
+}
+
+// addExternalAttestationWithFuncs is the cert-aware variant: callers
+// pre-compute the Functionary slice (mix of publickey + root types)
+// and pass it in directly. Used by buildStarterPolicy's bare-
+// predicate path so cert-signed bare-predicate envelopes (e.g. a
+// Fulcio-signed SLSA provenance) get the correct root-functionary
+// shape.
+func addExternalAttestationWithFuncs(p *policy.Policy, name, predicateType string, funcs []policy.Functionary) error {
 	if _, dup := p.ExternalAttestations[name]; dup {
 		return fmt.Errorf("duplicate external attestation name %q", name)
 	}
 	p.ExternalAttestations[name] = policy.ExternalAttestation{
 		Name:          name,
 		PredicateType: predicateType,
-		Functionaries: buildFunctionaries(signingKeyIDs, pubKeys, p.PublicKeys),
+		Functionaries: funcs,
 		Required:      true,
 	}
 	return nil
+}
+
+// buildCertFunctionaries materializes Functionary{Type:"root"} entries
+// for cert-signed signatures and side-effects p.Roots with the leaf
+// cert chain so the policy is self-contained. The CertConstraint is
+// intentionally minimal — a starter template — pinning the trust to
+// the specific root we just embedded (Roots: [keyid]). When the leaf
+// has a parseable Common Name we copy it into the constraint so the
+// generated policy fails fast on cert substitutions; users are
+// expected to tighten DNSNames / Emails / Organizations / Extensions
+// before production use.
+func buildCertFunctionaries(signers []certSigner, p *policy.Policy) []policy.Functionary {
+	if len(signers) == 0 {
+		return nil
+	}
+	if p.Roots == nil {
+		p.Roots = make(map[string]policy.Root, len(signers))
+	}
+	out := make([]policy.Functionary, 0, len(signers))
+	for _, cs := range signers {
+		rootName := cs.keyID
+		// Two cert-signed bundles by the same leaf cert share a Root
+		// entry — register once. We don't try to merge intermediates
+		// across registrations; the first writer wins, and a
+		// generator that produces an inconsistent chain is a bug in
+		// the upstream signer, not here.
+		if _, exists := p.Roots[rootName]; !exists {
+			p.Roots[rootName] = policy.Root{
+				Certificate:   cs.leafPEM,
+				Intermediates: cs.intermediates,
+			}
+		}
+		out = append(out, policy.Functionary{
+			Type: "root",
+			CertConstraint: policy.CertConstraint{
+				Roots:      []string{rootName},
+				CommonName: cs.commonName, // empty when parse failed; user fills in
+			},
+		})
+	}
+	return out
 }

@@ -17,12 +17,16 @@ package cli
 import (
 	"bytes"
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -427,4 +431,165 @@ func TestPolicyFromBundles_BadEnvelopeFails(t *testing.T) {
 	err := runPolicyFromBundles(&out, []string{bad}, []string{pubPath}, "-", 365*24*time.Hour, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "summarize")
+}
+
+// synthCertSignedBundle synthesises a DSSE envelope whose signature
+// carries an x509 leaf certificate (PEM bytes, JSON-encoded as
+// base64) — the shape cilock writes whenever the signer is a
+// TrustBundler (Fulcio, manual cert chain). The signature value is
+// dummy; from-bundles never re-verifies it.
+//
+// Returns (bundle path, leaf cert keyid, leaf cert CN).
+func synthCertSignedBundle(t *testing.T, dir, name string, innerTypes []string, isCollection bool) (path, keyID, commonName string) {
+	t.Helper()
+
+	// Self-signed leaf certificate. The "CA" semantics don't matter
+	// for the policy generator — it just embeds the bytes.
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	commonName = "ci-signer.test.example"
+	tpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(42),
+		Subject:               pkix.Name{CommonName: commonName, Organization: []string{"TestifySec, Inc."}},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &leafKey.PublicKey, leafKey)
+	require.NoError(t, err)
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+
+	// Derive the keyid the same way cilock does (matches
+	// cryptoutil.GeneratePublicKeyID on the leaf's pubkey).
+	keyID, err = cryptoutil.GeneratePublicKeyID(&leafKey.PublicKey, crypto.SHA256)
+	require.NoError(t, err)
+
+	var stmt map[string]any
+	if isCollection {
+		atts := make([]map[string]string, 0, len(innerTypes))
+		for _, tp := range innerTypes {
+			atts = append(atts, map[string]string{"type": tp})
+		}
+		stmt = map[string]any{
+			"_type":         "https://in-toto.io/Statement/v0.1",
+			"subject":       []map[string]any{{"name": "x", "digest": map[string]string{"sha256": "00"}}},
+			"predicateType": collectionPredicateURI,
+			"predicate":     map[string]any{"attestations": atts},
+		}
+	} else {
+		require.Len(t, innerTypes, 1)
+		stmt = map[string]any{
+			"_type":         "https://in-toto.io/Statement/v0.1",
+			"subject":       []map[string]any{{"name": "x", "digest": map[string]string{"sha256": "00"}}},
+			"predicateType": innerTypes[0],
+			"predicate":     map[string]any{},
+		}
+	}
+	stmtBytes, err := json.Marshal(stmt)
+	require.NoError(t, err)
+
+	// Note: `certificate` field is []byte in the canonical DSSE
+	// struct, which means Go's json package emits it as base64.
+	// Mirror that here by base64-encoding the PEM bytes.
+	env := map[string]any{
+		"payloadType": "application/vnd.in-toto+json",
+		"payload":     base64.StdEncoding.EncodeToString(stmtBytes),
+		"signatures": []map[string]any{
+			{
+				"keyid":       keyID,
+				"sig":         "dummy",
+				"certificate": base64.StdEncoding.EncodeToString(leafPEM),
+			},
+		},
+	}
+	envBytes, err := json.Marshal(env)
+	require.NoError(t, err)
+
+	path = filepath.Join(dir, name+".bundle.json")
+	require.NoError(t, os.WriteFile(path, envBytes, 0o600))
+	return path, keyID, commonName
+}
+
+// TestPolicyFromBundles_CertSignedBundle covers the red-team finding
+// against PR #186: a cert-signed bundle (x509 leaf cert embedded in
+// the DSSE signature) was being emitted as Functionary{Type:
+// "publickey"} — a shape `cilock verify` can never satisfy without
+// hand-edits because no PEM material lives in PublicKeys[]. The fix
+// routes cert-signed signatures through Roots[] +
+// Functionary{Type: "root", CertConstraint: {...}} instead.
+func TestPolicyFromBundles_CertSignedBundle(t *testing.T) {
+	dir := t.TempDir()
+
+	bundlePath, leafKeyID, leafCN := synthCertSignedBundle(t, dir, "build",
+		[]string{
+			"https://aflock.ai/attestations/material/v0.3",
+			"https://aflock.ai/attestations/command-run/v0.1",
+		}, true)
+
+	// No -k pubkeys: this is cert-based, so the pubkey path
+	// shouldn't be touched. The policy must still build.
+	var out bytes.Buffer
+	err := runPolicyFromBundles(&out, []string{bundlePath}, nil, "-", 365*24*time.Hour, "")
+	require.NoError(t, err)
+
+	var pol policy.Policy
+	require.NoError(t, json.Unmarshal(out.Bytes(), &pol))
+
+	// Roots[] must contain the leaf cert, keyed by leaf keyid.
+	require.NotEmpty(t, pol.Roots, "cert-signed bundles must populate policy.Roots[]")
+	require.Contains(t, pol.Roots, leafKeyID,
+		"Roots[] should be keyed by the leaf cert keyid")
+	assert.NotEmpty(t, pol.Roots[leafKeyID].Certificate,
+		"Root.Certificate must hold the embedded leaf PEM bytes")
+
+	// PublicKeys[] must NOT contain a raw-keyid entry for this cert —
+	// that was the bug. The cert-signed path is a separate trust anchor.
+	assert.NotContains(t, pol.PublicKeys, leafKeyID,
+		"cert-signed bundles must NOT leak into PublicKeys[] (bug from PR #186 red-team)")
+
+	// Step Functionary must be the root shape, not the publickey shape.
+	require.Contains(t, pol.Steps, "build")
+	step := pol.Steps["build"]
+	require.Len(t, step.Functionaries, 1)
+	f := step.Functionaries[0]
+	assert.Equal(t, "root", f.Type,
+		"cert-signed bundle must produce Functionary{Type:\"root\"}, not \"publickey\"")
+	assert.Empty(t, f.PublicKeyID,
+		"root functionaries should leave PublicKeyID empty")
+
+	// CertConstraint must at minimum pin Roots; CommonName is a
+	// starter-template best-effort.
+	assert.ElementsMatch(t, []string{leafKeyID}, f.CertConstraint.Roots,
+		"CertConstraint.Roots must reference the embedded leaf root")
+	assert.Equal(t, leafCN, f.CertConstraint.CommonName,
+		"CertConstraint.CommonName should mirror the leaf cert CN as a starter template")
+}
+
+// TestPolicyFromBundles_CertSignedBareBundle confirms the cert path
+// also lands correctly for bare-predicate envelopes (e.g. a Fulcio-
+// signed SLSA provenance export). Bare predicates route to
+// ExternalAttestations[], and the functionary there must use the
+// root shape — not the pubkey shape — when the sig was cert-based.
+func TestPolicyFromBundles_CertSignedBareBundle(t *testing.T) {
+	dir := t.TempDir()
+
+	bundlePath, leafKeyID, _ := synthCertSignedBundle(t, dir, "slsa",
+		[]string{"https://slsa.dev/provenance/v1"}, false)
+
+	var out bytes.Buffer
+	err := runPolicyFromBundles(&out, []string{bundlePath}, nil, "-", 365*24*time.Hour, "")
+	require.NoError(t, err)
+
+	var pol policy.Policy
+	require.NoError(t, json.Unmarshal(out.Bytes(), &pol))
+
+	// Bare predicate → ExternalAttestations, not Steps.
+	assert.NotContains(t, pol.Steps, "slsa")
+	require.Contains(t, pol.ExternalAttestations, "slsa")
+	ext := pol.ExternalAttestations["slsa"]
+	require.Len(t, ext.Functionaries, 1)
+	assert.Equal(t, "root", ext.Functionaries[0].Type)
+	assert.ElementsMatch(t, []string{leafKeyID}, ext.Functionaries[0].CertConstraint.Roots)
 }
