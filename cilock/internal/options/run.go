@@ -113,8 +113,8 @@ type RunOptions struct {
 	// checks, prints the planned attestor set + any warnings, and
 	// exits without running the user command. Lets operators dry-run
 	// their cilock config in CI.
-	ValidateOnly bool
-	TimestampServers      []string
+	ValidateOnly     bool
+	TimestampServers []string
 	// Subjects holds raw --subjects flag values. Each entry is either a bare
 	// subject name (e.g. "product:<uuid>") — in which case a sha256 digest of
 	// the name is synthesised — or a "name=<alg>:<hex>" form that supplies an
@@ -201,6 +201,7 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// Archivista is enabled explicitly via --enable-archivista or config.
 }
 
+//nolint:funlen // each flag carries its own multi-line help text; splitting the registration loses readability
 func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	ro.SignerOptions.AddFlags(cmd)
 	ro.ArchivistaOptions.AddFlags(cmd)

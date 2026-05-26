@@ -286,6 +286,7 @@ func applyNoDefaultAttestors(base []attestation.Attestor, disabled []string) ([]
 	return out, nil
 }
 
+//nolint:funlen // RunCmd composes flag registration + pre-flight gates inline; refactoring would split closely-related code
 func RunCmd() *cobra.Command {
 	o := options.RunOptions{
 		AttestorOptSetters:       make(map[string][]func(attestation.Attestor) (attestation.Attestor, error)),
