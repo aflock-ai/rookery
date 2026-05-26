@@ -69,10 +69,10 @@ func newLegacyDecoder(predicateType string) *LegacyDecoder {
 	}
 }
 
-func (a *LegacyDecoder) Name() string                  { return legacyV01Name }
-func (a *LegacyDecoder) Type() string                  { return a.predicateType }
-func (a *LegacyDecoder) RunType() attestation.RunType  { return attestation.ExecuteRunType }
-func (a *LegacyDecoder) Schema() *jsonschema.Schema    { return jsonschema.Reflect(&CommandRun{}) }
+func (a *LegacyDecoder) Name() string                 { return legacyV01Name }
+func (a *LegacyDecoder) Type() string                 { return a.predicateType }
+func (a *LegacyDecoder) RunType() attestation.RunType { return attestation.ExecuteRunType }
+func (a *LegacyDecoder) Schema() *jsonschema.Schema   { return jsonschema.Reflect(&CommandRun{}) }
 func (a *LegacyDecoder) Attest(_ *attestation.AttestationContext) error {
 	return errLegacyDecodeOnly
 }

@@ -1627,7 +1627,7 @@ func recordEBPFSecurity(pctx *ptraceContext, ev *ebpf.SecurityEvent, paths fdRes
 // ptrace's filtering, e.g. only mprotect with PROT_EXEC, only certain
 // prctl options).
 //
-//nolint:gocyclo // per-syscall classifier, one short case per syscall — splitting hides the parity with the ptrace path.
+//nolint:gocyclo,funlen // per-syscall classifier, one short case per syscall — splitting hides the parity with the ptrace path.
 func classifyEBPFSecurityEvent(ev *ebpf.SecurityEvent, paths fdResolvedPaths) SyscallEvent {
 	// IDs must match CILOCK_SEC_* in openat_kprobe.bpf.c.
 	const (

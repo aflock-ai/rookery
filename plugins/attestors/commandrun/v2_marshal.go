@@ -57,7 +57,15 @@ import (
 // V02PredicateType is the in-toto predicate URI for v0.2 attestations.
 // Discoverable separately from the v0.1 type so verifiers can route
 // envelopes to the correct decoder.
-const V02PredicateType = "https://aflock.ai/attestations/command-run/v0.2"
+const (
+	V02PredicateType = "https://aflock.ai/attestations/command-run/v0.2"
+
+	// hashSHA256 is the canonical name v0.2 emits for the SHA-256
+	// digest of a file's content. Same string as v0.1; called out
+	// as a const because goconst would otherwise flag the 3
+	// occurrences in this file.
+	hashSHA256 = "sha256"
+)
 
 // V02Meta is the leading metadata block of a v0.2 attestation. AI
 // agents and operators read this first to learn the document's shape
@@ -71,11 +79,11 @@ const V02PredicateType = "https://aflock.ai/attestations/command-run/v0.2"
 // whole document. Empty when the document is emitted via plain
 // json.Marshal (e.g., during construction tests).
 type V02Meta struct {
-	Version      string                `json:"version"`           // "v0.2"
-	CaptureMode  string                `json:"captureMode,omitempty"`
-	TraceBackend string                `json:"traceBackend,omitempty"`
-	Counts       V02MetaCounts         `json:"counts"`
-	Sections     map[string][2]int64   `json:"sections,omitempty"`
+	Version      string              `json:"version"` // "v0.2"
+	CaptureMode  string              `json:"captureMode,omitempty"`
+	TraceBackend string              `json:"traceBackend,omitempty"`
+	Counts       V02MetaCounts       `json:"counts"`
+	Sections     map[string][2]int64 `json:"sections,omitempty"`
 }
 
 // V02MetaCounts surfaces the cardinality of each interned table so
@@ -161,6 +169,8 @@ type V02Predicate struct {
 //
 // Returns *V02Predicate so callers can mutate before marshal if
 // needed.
+//
+//nolint:gocognit,gocyclo,funlen // populates 8+ section structs in one pass; splitting would re-walk Processes
 func (rc *CommandRun) ToV02() *V02Predicate {
 	if rc == nil {
 		return nil
@@ -224,7 +234,7 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 		// Extract sha256 — the canonical interning key.
 		var sha256 string
 		for k, v := range ds {
-			if hashName(k) == "sha256" {
+			if hashName(k) == hashSHA256 {
 				sha256 = v
 				break
 			}
@@ -239,7 +249,7 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 		// Capture additional hash types if present.
 		for k, v := range ds {
 			n := hashName(k)
-			if n == "sha256" {
+			if n == hashSHA256 {
 				continue
 			}
 			if entry.Others == nil {
@@ -317,6 +327,8 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 // Returns the byte stream + the populated *V02Predicate (with
 // Meta.Sections set) so callers can introspect the offsets directly
 // rather than re-parsing the output.
+//
+//nolint:gocognit,gocyclo,funlen // single-pass section assembler — splitting would force re-marshal
 func MarshalV02WithSections(p *V02Predicate) ([]byte, *V02Predicate, error) {
 	if p == nil {
 		return nil, nil, fmt.Errorf("nil predicate")
@@ -458,9 +470,9 @@ func MarshalV02WithSections(p *V02Predicate) ([]byte, *V02Predicate, error) {
 func hashName(dv cryptoutil.DigestValue) string {
 	// cryptoutil.DigestValue.Hash is a crypto.Hash; standard names are
 	// in lowercase per the in-toto convention.
-	switch dv.Hash.String() {
+	switch dv.String() {
 	case "SHA-256":
-		return "sha256"
+		return hashSHA256
 	case "SHA-512":
 		return "sha512"
 	case "SHA-1":

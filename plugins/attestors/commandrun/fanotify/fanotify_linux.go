@@ -223,7 +223,7 @@ func Probe(markPath string) error {
 	if err != nil {
 		return fmt.Errorf("FanotifyInit: %w (CAP_SYS_ADMIN required)", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	// Try the mark to ensure the mount supports it. FILESYSTEM is
 	// the desired mode; if that fails, try MOUNT.
 	mask := uint64(unix.FAN_OPEN_PERM)
@@ -251,6 +251,8 @@ func Probe(markPath string) error {
 //  2. Worker: read user's path via /proc/self/fd readlink → fstat
 //     to filter non-regular files → SHA-256 the fd → write
 //     FAN_ALLOW response → close the event fd.
+//
+//nolint:gocognit // pump loop dispatches read+classify+respond — splitting would obscure the lock-step
 func (h *Handler) Run(ctx context.Context) error {
 	const workerChanBuffer = 1024
 	workerCount := runtime.NumCPU()
@@ -376,7 +378,7 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 		h.respond(meta.Fd, true)
 		return
 	}
-	defer unix.Close(int(meta.Fd))
+	defer func() { _ = unix.Close(int(meta.Fd)) }()
 
 	if meta.Mask&unix.FAN_OPEN_PERM == 0 {
 		h.respond(meta.Fd, true)

@@ -44,6 +44,13 @@ const (
 	//	(unset) | "ebpf" — eBPF (default on Linux). Hard-fail if not available.
 	//	"ptrace"        — ptrace+seccomp. Explicit opt-in; no fallback errors.
 	EnvVarTraceMode = "CILOCK_TRACE_MODE"
+
+	// digestSourceTracePathHashOverwrite tags a captured digest as
+	// "the file was overwritten during the trace; we hashed the
+	// final state via stat-fallback, not via in-kernel read-tap."
+	// Verifiers use this label to distinguish race-free content
+	// from after-the-fact path hashing.
+	digestSourceTracePathHashOverwrite = "trace-pathhash-overwrite"
 )
 
 // This is a hacky way to create a compile time error in case the attestor
@@ -335,14 +342,14 @@ type FileActivity struct {
 }
 
 type ProcessInfo struct {
-	Program          string                          `json:"program,omitempty"`
-	ProcessID        int                             `json:"processid"`
-	ParentPID        int                             `json:"parentpid"`
-	ProgramDigest    cryptoutil.DigestSet            `json:"programdigest,omitempty"`
-	Comm             string                          `json:"comm,omitempty"`
-	Cmdline          string                          `json:"cmdline,omitempty"`
-	ExeDigest        cryptoutil.DigestSet            `json:"exedigest,omitempty"`
-	OpenedFiles      map[string]cryptoutil.DigestSet `json:"openedfiles,omitempty"`
+	Program       string                          `json:"program,omitempty"`
+	ProcessID     int                             `json:"processid"`
+	ParentPID     int                             `json:"parentpid"`
+	ProgramDigest cryptoutil.DigestSet            `json:"programdigest,omitempty"`
+	Comm          string                          `json:"comm,omitempty"`
+	Cmdline       string                          `json:"cmdline,omitempty"`
+	ExeDigest     cryptoutil.DigestSet            `json:"exedigest,omitempty"`
+	OpenedFiles   map[string]cryptoutil.DigestSet `json:"openedfiles,omitempty"`
 	// WrittenDigests carries content digests for files the tracee
 	// WROTE during the trace, captured via the BPF write-tap (kretprobe
 	// on sys_write / pwrite64 returns the bytes the kernel actually
@@ -352,7 +359,7 @@ type ProcessInfo struct {
 	// READ digests). A path may appear in both if the tracee wrote
 	// AND read it; classification rules use this split to put outputs
 	// in products and inputs in materials without conflation.
-	WrittenDigests   map[string]cryptoutil.DigestSet `json:"writtenDigests,omitempty"`
+	WrittenDigests map[string]cryptoutil.DigestSet `json:"writtenDigests,omitempty"`
 	// FsVerityDigests holds kernel-rooted Merkle root digests for
 	// product files where the kernel computed and stored a
 	// fs-verity hash. Keyed by absolute path, value is the
@@ -363,7 +370,7 @@ type ProcessInfo struct {
 	// Distinct from WrittenDigests because the Merkle root is NOT
 	// the same as a plain SHA-256 over the file content (it's a
 	// hash of a Merkle tree over fixed-size blocks).
-	FsVerityDigests  map[string]string               `json:"fsverityDigests,omitempty"`
+	FsVerityDigests map[string]string `json:"fsverityDigests,omitempty"`
 	// UnhashedOpens carries opens we saw the kernel event for but
 	// could NOT hash — typically because the file was unlinked or
 	// the process exited between the kernel event and our hash
@@ -381,12 +388,12 @@ type ProcessInfo struct {
 	// Common adversarial cases:
 	//  - Tracee deliberately racing to delete sensitive files
 	//  - A read-then-unlink that "launders" content from view
-	UnhashedOpens    []UnhashedOpen                  `json:"unhashedOpens,omitempty"`
-	Environ          string                          `json:"environ,omitempty"`
-	SpecBypassIsVuln bool                            `json:"specbypassisvuln,omitempty"`
-	Network          *NetworkActivity                `json:"network,omitempty"`
-	FileOps          *FileActivity                   `json:"fileOps,omitempty"`
-	SyscallEvents    []SyscallEvent                  `json:"syscallEvents,omitempty"`
+	UnhashedOpens    []UnhashedOpen   `json:"unhashedOpens,omitempty"`
+	Environ          string           `json:"environ,omitempty"`
+	SpecBypassIsVuln bool             `json:"specbypassisvuln,omitempty"`
+	Network          *NetworkActivity `json:"network,omitempty"`
+	FileOps          *FileActivity    `json:"fileOps,omitempty"`
+	SyscallEvents    []SyscallEvent   `json:"syscallEvents,omitempty"`
 
 	// ExitCode is the wait status of the traced process. For cleanly-
 	// exited processes it is the literal exit status. For signal-
@@ -461,31 +468,31 @@ type TraceSummary struct {
 
 // TraceTotals is the scalar count summary.
 type TraceTotals struct {
-	Processes        int `json:"processes,omitempty"`
-	UniquePaths      int `json:"uniquePaths,omitempty"`
-	Reads            int `json:"reads,omitempty"`
-	Writes           int `json:"writes,omitempty"`
-	Renames          int `json:"renames,omitempty"`
-	Deletes          int `json:"deletes,omitempty"`
-	Execs            int `json:"execs,omitempty"`
-	NetEvents        int `json:"netEvents,omitempty"`
+	Processes   int `json:"processes,omitempty"`
+	UniquePaths int `json:"uniquePaths,omitempty"`
+	Reads       int `json:"reads,omitempty"`
+	Writes      int `json:"writes,omitempty"`
+	Renames     int `json:"renames,omitempty"`
+	Deletes     int `json:"deletes,omitempty"`
+	Execs       int `json:"execs,omitempty"`
+	NetEvents   int `json:"netEvents,omitempty"`
 	// Classification breakdown — populated when CaptureProbe path
 	// runs (capture-mode=trace). Lets the AI agent see at-a-glance
 	// what kind of files the tracee touched without loading the
 	// per-process arrays.
-	Materials      int `json:"materials,omitempty"`     // distinct files read
-	Intermediates  int `json:"intermediates,omitempty"` // files both written + read
-	Products       int `json:"products,omitempty"`      // user-facing outputs
-	CacheArtifacts int `json:"cacheArtifacts,omitempty"`// written into cache/temp
+	Materials      int `json:"materials,omitempty"`      // distinct files read
+	Intermediates  int `json:"intermediates,omitempty"`  // files both written + read
+	Products       int `json:"products,omitempty"`       // user-facing outputs
+	CacheArtifacts int `json:"cacheArtifacts,omitempty"` // written into cache/temp
 }
 
 // TraceOutliers flags noteworthy artifacts. Most are file-event
 // outliers; SuspiciousOps is a tally of security-sensitive syscalls
 // (ptrace, mount, etc.) that any reader should examine.
 type TraceOutliers struct {
-	LargestRead   *TraceFileRef     `json:"largestRead,omitempty"`
-	MostOpened    *TraceFileRef     `json:"mostOpened,omitempty"`
-	SuspiciousOps map[string]int    `json:"suspiciousOps,omitempty"`
+	LargestRead   *TraceFileRef  `json:"largestRead,omitempty"`
+	MostOpened    *TraceFileRef  `json:"mostOpened,omitempty"`
+	SuspiciousOps map[string]int `json:"suspiciousOps,omitempty"`
 }
 
 // TraceFileRef points at a specific file mentioned in the trace,
@@ -621,9 +628,9 @@ type CommandRun struct {
 	Stderr    string        `json:"stderr,omitempty"`
 	Processes []ProcessInfo `json:"processes,omitempty"`
 
-	silent           bool
-	materials        map[string]cryptoutil.DigestSet
-	enableTracing    bool
+	silent        bool
+	materials     map[string]cryptoutil.DigestSet
+	enableTracing bool
 
 	// traceeWorkdir is the working directory the tracee actually ran
 	// with — populated by runCmd just before exec.Command starts.
@@ -634,7 +641,6 @@ type CommandRun struct {
 	// summary build, and ctx.WorkingDir() may be empty when the
 	// caller didn't pass one explicitly.
 	traceeWorkdir string
-
 
 	// traceStartTime is the wall-clock time captured just before
 	// exec.Command starts. The stat-fallback in TraceOutputs uses it
@@ -652,7 +658,7 @@ type CommandRun struct {
 	// prior attestation) from (b) clean creations during the trace
 	// (Source: trace-pathhash). The mtime check handles the
 	// untouched-skip case; this set handles the overwrite tag.
-	prePaths map[string]struct{}
+	prePaths         map[string]struct{}
 	ignoreExitCode   bool
 	requireZeroDrops bool
 
@@ -708,7 +714,6 @@ type CommandRun struct {
 	// failure count masks real holes or harmless retries.
 	hashSilentByDigest uint64
 	hashSilentByDedup  uint64
-
 
 	// resolvedCaptureMode records which capture-mode the framework
 	// selected for this run ("trace", "walk", "ima"). Populated by
@@ -900,6 +905,8 @@ func (rc *CommandRun) Finalize(ctx *attestation.AttestationContext) error {
 // only sees content for files the tracee READ). At this point the
 // tracee has exited, files are stable on disk, and a path-hash is
 // race-free.
+//
+//nolint:gocognit,gocyclo,funlen // post-trace classifier — fileOps + write-tap + stat-fallback + rename-target reconciliation; splitting obscures the data flow
 func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 	if rc == nil {
 		return nil
@@ -1052,7 +1059,7 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 		// from a prior attestation.
 		source := "trace-pathhash"
 		if _, preExisted := rc.prePaths[p]; preExisted {
-			source = "trace-pathhash-overwrite"
+			source = digestSourceTracePathHashOverwrite
 		}
 		out[p] = attestation.CaptureEntry{
 			Digest: digest,
@@ -1075,6 +1082,8 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 //   - written + matches  → cache artifact (this method)
 //   - written, not read,
 //     no cache match     → product (TraceOutputs)
+//
+//nolint:gocognit // cache-match classifier walks fileOps + applies cacheMatcher + dedupes; complexity is inherent
 func (rc *CommandRun) TraceCacheArtifacts() map[string]attestation.CaptureEntry {
 	if rc == nil || rc.cacheMatcher == nil {
 		return nil
@@ -1128,6 +1137,8 @@ func (rc *CommandRun) TraceCacheArtifacts() map[string]attestation.CaptureEntry 
 // TraceInputs (as reads); this method exists so callers can
 // explicitly surface the "produced-then-consumed" subset for
 // auditing or for a separate intermediate/v0.1 attestation type.
+//
+//nolint:gocognit,gocyclo // produced-then-consumed walk: needs both read-set and write-set per path
 func (rc *CommandRun) TraceIntermediates() map[string]attestation.CaptureEntry {
 	if rc == nil {
 		return nil
@@ -1194,6 +1205,8 @@ func (rc *CommandRun) TraceIntermediates() map[string]attestation.CaptureEntry {
 // fanotifyOnlyDigests is the set of paths fanotify hashed but no
 // process opened — used to disambiguate the "fanotify-on-time"
 // label from the openat-time path-hash case.
+//
+//nolint:gocognit // per-process per-file annotation across fanotify + openat + write-tap sources
 func annotateDigestSources(processes []ProcessInfo, fanotifyAvailable bool, fanotifyOnly map[string]string) {
 	if !fanotifyAvailable && len(fanotifyOnly) == 0 {
 		// No fanotify ran; every digest is BPF-sourced.
@@ -1244,6 +1257,8 @@ func annotateDigestSources(processes []ProcessInfo, fanotifyAvailable bool, fano
 // of a finished trace. Computed in a single pass over Processes.
 // Cost is O(N) over the captured opens + file-ops, which is tiny
 // compared to the trace itself.
+//
+//nolint:gocognit,gocyclo // single-pass aggregator computing 12+ summary buckets in one walk; splitting would re-walk
 func buildTraceSummary(processes []ProcessInfo, duration time.Duration) *TraceSummary {
 	s := &TraceSummary{
 		DurationNs: duration.Nanoseconds(),
@@ -1405,7 +1420,7 @@ func snapshotPrePaths(root string) map[string]struct{} {
 	}
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // best-effort; skip unreadable subtrees
+			return nil //nolint:nilerr // best-effort; skip unreadable subtrees rather than abort the walk
 		}
 		if d.IsDir() {
 			if _, skip := skipDirs[d.Name()]; skip && path != root {
@@ -1442,11 +1457,11 @@ func pathHashIfExists(path string, hashes []cryptoutil.DigestValue) map[string]s
 	return nameMap
 }
 
-
 func (rc *CommandRun) TracingEnabled() bool {
 	return rc.enableTracing
 }
 
+//nolint:gocognit,gocyclo,funlen // exec-prep + trace-setup + I/O-wiring + post-wait fan-in; refactoring would split process lifecycle across helpers
 func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	c := exec.Command(r.Cmd[0], r.Cmd[1:]...) //nolint:gosec // G204: command is user-specified by design
 	c.Dir = ctx.WorkingDir()
@@ -1552,7 +1567,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			fanDigests, fanStats := r.fanotifySession.stop()
 			r.fanotifySession = nil
 			merged, only := mergeFanotifyDigests(r.Processes, fanDigests)
-			r.fanotifyDigestsMerged = uint64(merged)
+			r.fanotifyDigestsMerged = uint64(merged) //nolint:gosec // G115: merged is a count, always >= 0; uint64 conversion is safe
 			r.fanotifyOnlyDigests = only
 			r.fanotifyEventsHashed = fanStats.EventsHashed
 			r.fanotifyTimeouts = fanStats.HandlerTimeouts

@@ -111,7 +111,10 @@ linters:
           - dupl
           - funlen
           - gocognit
+          - gocyclo   # adversarial / fixture tests are long by nature
           - goconst
+          - nestif    # table-driven tests + setup/teardown nest naturally
+          - nilerr    # tests deliberately exercise nil-return-after-error paths
 
       # Builder main.go is a long procedural entry point
       - path: builder/cmd/builder/main\.go
