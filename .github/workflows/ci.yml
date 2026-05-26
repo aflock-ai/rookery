@@ -219,6 +219,15 @@ jobs:
         with:
           go-version-file: rookery/.go-version
 
+      - name: Diagnose checkout layout (why commandrun/ebpf replace may not resolve)
+        working-directory: cilock-action
+        run: |
+          echo "pwd: $(pwd)"
+          echo "--- siblings of cilock-action ---"; ls -la ..
+          echo "--- ebpf module dir on disk? ---"; ls -la ../rookery/plugins/attestors/commandrun/ebpf/ 2>&1 | head
+          echo "--- cilock-action go.mod: commandrun/ebpf require + replace ---"; grep -n "commandrun/ebpf" go.mod || echo "NONE"
+          echo "--- go env (GOFLAGS/GONOSUMCHECK) ---"; GOWORK=off go env GOFLAGS GONOSUMDB GONOSUMCHECK GOMODCACHE
+
       - name: Build cilock-action against this rookery
         working-directory: cilock-action
         run: |
