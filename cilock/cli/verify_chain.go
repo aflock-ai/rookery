@@ -27,7 +27,11 @@ func buildChainSidecarSource(vo options.VerifyOptions) policy.ChainSidecarSource
 		sources = append(sources, policy.NewFilesystemChainSidecarSource(vo.ChainSidecarDir))
 	}
 	if vo.ChainSidecarURL != "" {
-		sources = append(sources, policy.NewHTTPChainSidecarSource(vo.ChainSidecarURL))
+		sources = append(sources, policy.NewHTTPChainSidecarSourceWithOptions(
+			vo.ChainSidecarURL,
+			vo.ChainSidecarHTTPTimeout,
+			vo.ChainSidecarHTTPMaxBytes,
+		))
 	}
 	switch len(sources) {
 	case 0:
