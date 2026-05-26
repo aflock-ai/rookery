@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -24,6 +25,12 @@ import (
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/spf13/cobra"
 )
+
+// errHelpAdvanced is returned from PersistentPreRunE when the user passed
+// --help-advanced (without -h). It signals "help has been printed; stop
+// without running the command and without treating this as a failure".
+// Execute recognizes it and exits 0.
+var errHelpAdvanced = errors.New("help requested via --help-advanced")
 
 func New() *cobra.Command {
 	ro := &options.RootOptions{}
@@ -37,11 +44,15 @@ func New() *cobra.Command {
 		SilenceErrors:     true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// `<cmd> --help-advanced` (without -h) parses normally and would
-			// otherwise fall through to RunE. Intercept it here and render
-			// the full help instead of running the command.
-			if changed, _ := cmd.Flags().GetBool(helpAdvancedFlag); changed {
-				_ = cmd.Help()
-				os.Exit(0)
+			// otherwise fall through to RunE. Intercept it here, render the
+			// full help, and return the sentinel so Execute stops cleanly
+			// (exit 0) instead of running the command.
+			if adv, _ := cmd.Flags().GetBool(helpAdvancedFlag); adv {
+				if err := cmd.Help(); err != nil {
+					return err
+				}
+				cmd.SilenceUsage = true
+				return errHelpAdvanced
 			}
 			return preRoot(cmd, ro, logger, &cpuProfileFile)
 		},
@@ -75,7 +86,7 @@ func New() *cobra.Command {
 }
 
 func Execute() {
-	if err := New().Execute(); err != nil {
+	if err := New().Execute(); err != nil && !errors.Is(err, errHelpAdvanced) {
 		log.Error(err)
 		os.Exit(1)
 	}

@@ -110,40 +110,40 @@ func conciseHelpFunc(cmd *cobra.Command, _ []string) {
 	advanced := wantAdvancedHelp(os.Args)
 
 	if long := strings.TrimSpace(cmd.Long); long != "" {
-		fmt.Fprintln(out, long)
+		_, _ = fmt.Fprintln(out, long)
 	} else if cmd.Short != "" {
-		fmt.Fprintln(out, cmd.Short)
+		_, _ = fmt.Fprintln(out, cmd.Short)
 	}
 
-	fmt.Fprintf(out, "\nUsage:\n  %s\n", cmd.UseLine())
+	_, _ = fmt.Fprintf(out, "\nUsage:\n  %s\n", cmd.UseLine())
 	if cmd.HasAvailableSubCommands() {
-		fmt.Fprintf(out, "  %s [command]\n", cmd.CommandPath())
+		_, _ = fmt.Fprintf(out, "  %s [command]\n", cmd.CommandPath())
 	}
 
 	if len(cmd.Aliases) > 0 {
-		fmt.Fprintf(out, "\nAliases:\n  %s\n", strings.Join(append([]string{cmd.Name()}, cmd.Aliases...), ", "))
+		_, _ = fmt.Fprintf(out, "\nAliases:\n  %s\n", strings.Join(append([]string{cmd.Name()}, cmd.Aliases...), ", "))
 	}
 
 	// Examples are authored with their own (2-space) indentation, matching
 	// cobra's default rendering — print them verbatim, only trimming the
 	// surrounding blank lines.
 	if ex := strings.Trim(cmd.Example, "\n"); strings.TrimSpace(ex) != "" {
-		fmt.Fprintf(out, "\nExamples:\n%s\n", ex)
+		_, _ = fmt.Fprintf(out, "\nExamples:\n%s\n", ex)
 	}
 
 	if cmd.HasAvailableSubCommands() {
-		fmt.Fprintln(out, "\nAvailable Commands:")
+		_, _ = fmt.Fprintln(out, "\nAvailable Commands:")
 		writeSubcommands(out, cmd)
 	}
 
 	writeFlagSections(out, cmd, advanced)
 
 	if inherited := cmd.InheritedFlags().FlagUsages(); strings.TrimSpace(inherited) != "" {
-		fmt.Fprintf(out, "\nGlobal Flags:\n%s", inherited)
+		_, _ = fmt.Fprintf(out, "\nGlobal Flags:\n%s", inherited)
 	}
 
 	if cmd.HasAvailableSubCommands() {
-		fmt.Fprintf(out, "\nUse \"%s [command] --help\" for more information about a command.\n", cmd.CommandPath())
+		_, _ = fmt.Fprintf(out, "\nUse \"%s [command] --help\" for more information about a command.\n", cmd.CommandPath())
 	}
 }
 
@@ -157,7 +157,7 @@ func writeFlagSections(out io.Writer, cmd *cobra.Command, advanced bool) {
 	}
 
 	if advanced {
-		fmt.Fprintf(out, "\nFlags:\n%s", local.FlagUsages())
+		_, _ = fmt.Fprintf(out, "\nFlags:\n%s", local.FlagUsages())
 		return
 	}
 
@@ -175,11 +175,11 @@ func writeFlagSections(out io.Writer, cmd *cobra.Command, advanced bool) {
 	})
 
 	if usages := essential.FlagUsages(); strings.TrimSpace(usages) != "" {
-		fmt.Fprintf(out, "\nFlags:\n%s", usages)
+		_, _ = fmt.Fprintf(out, "\nFlags:\n%s", usages)
 	}
 
 	if advancedCount > 0 {
-		fmt.Fprintf(out,
+		_, _ = fmt.Fprintf(out,
 			"\n%d advanced flag(s) hidden (signing backends, attestor tuning, cache, env).\n"+
 				"  See all:  %s --%s\n",
 			advancedCount, cmd.CommandPath(), helpAdvancedFlag)
@@ -202,6 +202,6 @@ func writeSubcommands(out io.Writer, cmd *cobra.Command) {
 		if !c.IsAvailableCommand() {
 			continue
 		}
-		fmt.Fprintf(out, "  %-*s  %s\n", width, c.Name(), c.Short)
+		_, _ = fmt.Fprintf(out, "  %-*s  %s\n", width, c.Name(), c.Short)
 	}
 }
