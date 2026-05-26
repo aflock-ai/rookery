@@ -70,7 +70,51 @@ type RunOptions struct {
 	// Policy Rego still has access to the recorded exit code via
 	// `input.attestation.exitcode` if a deny rule wants to gate on it.
 	IgnoreCommandExitCode bool
-	TimestampServers      []string
+
+	// Diagnose enables verbose internal logging across cilock subsystems:
+	// eBPF program loading, fanotify event traces, ringbuf drop reporting,
+	// fs-verity probe results, etc. Off by default — the normal run is
+	// already loud enough for typical operators. Turn on when filing a
+	// bug or debugging a CI flake.
+	//
+	// Internally sets CILOCK_DIAGNOSE=1 for downstream subprocess /
+	// subpackage consumers. Replaces (and consolidates) the per-feature
+	// env vars: CILOCK_EBPF_DEBUG, CILOCK_BPF_DIAGNOSE.
+	Diagnose bool
+
+	// Hardening bundles the per-feature integrity toggles (fanotify,
+	// fs-verity, require-zero-drops) into a named profile. Recognised:
+	//
+	//   - "off"      — minimum overhead; no fanotify, no fs-verity,
+	//                  no zero-drops gate. Use when iterating on a
+	//                  CI policy locally.
+	//   - "standard" (default) — fanotify on, fs-verity opportunistic
+	//                  (sealed where supported, skipped silently
+	//                  elsewhere), drops surfaced as warnings.
+	//   - "strict"   — fanotify required, fs-verity required, drops
+	//                  fail the run. For release-grade attestations.
+	//
+	// Explicit env vars (CILOCK_FANOTIFY, CILOCK_FSVERITY) still win;
+	// the profile only sets defaults. Phase 3 of #234.
+	Hardening string
+
+	// RequireZeroDrops forces the run to fail if the eBPF ringbuf
+	// dropped any event during the trace. Hard gate against silent
+	// loss. Defaults from --hardening (strict ⇒ true).
+	RequireZeroDrops bool
+
+	// Workload selects how attestors are picked. "auto" (default)
+	// inspects the workspace at startup and adds detected attestors
+	// to whatever the operator listed via --attestations; "manual"
+	// uses --attestations as the exact set. Phase 4 of #234.
+	Workload string
+
+	// ValidateOnly runs the pre-flight workload + tool-availability
+	// checks, prints the planned attestor set + any warnings, and
+	// exits without running the user command. Lets operators dry-run
+	// their cilock config in CI.
+	ValidateOnly     bool
+	TimestampServers []string
 	// Subjects holds raw --subjects flag values. Each entry is either a bare
 	// subject name (e.g. "product:<uuid>") — in which case a sha256 digest of
 	// the name is synthesised — or a "name=<alg>:<hex>" form that supplies an
@@ -157,6 +201,7 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// Archivista is enabled explicitly via --enable-archivista or config.
 }
 
+//nolint:funlen // each flag carries its own multi-line help text; splitting the registration loses readability
 func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	ro.SignerOptions.AddFlags(cmd)
 	ro.ArchivistaOptions.AddFlags(cmd)
@@ -169,11 +214,14 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&ro.StepName, "step", "s", "", "Name of the step being run")
 	cmd.Flags().BoolVarP(&ro.Tracing, "trace", "r", false, "Enable tracing for the command")
 	cmd.Flags().StringVar(&ro.CaptureMode, "capture-mode", "auto",
-		"Where material + product attestors get their digests. "+
-			"'auto' (default) picks the fastest available — trace data when --trace is set, "+
-			"otherwise walks the working directory. 'walk' forces the legacy directory walk "+
-			"(slower; race-prone with concurrent writers). 'trace' requires --trace and fails "+
-			"if no trace data is available. 'ima' requires kernel IMA (not yet implemented).")
+		"Where material + product attestors get their digests, plus optional tracer-backend "+
+			"selector for trace modes. Base modes: 'auto' (default — picks the fastest available), "+
+			"'walk' (directory walk; race-prone with concurrent writers), 'trace' (requires "+
+			"tracing data; fails if unavailable), 'ima' (kernel IMA — not yet wired). "+
+			"Trace modes accept an optional ':<backend>' suffix: "+
+			"'trace:ebpf' = require eBPF, fail loudly if unavailable; "+
+			"'trace:ptrace' = use ptrace+seccomp, skip eBPF probe; "+
+			"'trace:auto' = probe eBPF then fall back to ptrace silently (recommended default).")
 	cmd.Flags().StringSliceVar(&ro.CacheAddPatterns, "cache-add-pattern", nil,
 		"Add a glob pattern to the cache/temp classifier. Files written by the tracee "+
 			"matching any cache pattern are surfaced as cache artifacts, not products. "+
@@ -195,6 +243,28 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 			"checkov, trivy --exit-code, prowler v3, govulncheck) so postproduct attestors still fire and "+
 			"the SARIF/JSON output is captured. Policy Rego retains access to the real exit code via "+
 			"input.attestation.exitcode for gating.")
+	cmd.Flags().BoolVar(&ro.Diagnose, "diagnose", false,
+		"Enable verbose internal logging across cilock subsystems (eBPF program loading, "+
+			"fanotify event traces, ringbuf drop reporting, fs-verity probe results). "+
+			"Off by default. Replaces the per-feature CILOCK_EBPF_DEBUG / CILOCK_BPF_DIAGNOSE env vars.")
+	cmd.Flags().StringVar(&ro.Hardening, "hardening", "standard",
+		"Bundle integrity toggles (fanotify, fs-verity, require-zero-drops) into a named profile. "+
+			"'off' = minimum overhead, no fanotify or fs-verity. "+
+			"'standard' (default) = fanotify on, fs-verity opportunistic, drops surfaced as warnings. "+
+			"'strict' = fanotify required, fs-verity required, drops fail the run. "+
+			"Explicit CILOCK_FANOTIFY / CILOCK_FSVERITY env vars still win.")
+	cmd.Flags().BoolVar(&ro.RequireZeroDrops, "require-zero-drops", false,
+		"Fail the run if the eBPF ringbuf dropped any event during the trace. "+
+			"Default derives from --hardening (strict ⇒ true).")
+	cmd.Flags().StringVar(&ro.Workload, "workload", "auto",
+		"How attestors are picked. 'auto' (default) inspects the workspace at "+
+			"startup and adds detected attestors (go-build for go.mod, sbom for "+
+			"package.json, git for .git/, etc.) to whatever --attestations lists. "+
+			"'manual' uses --attestations as the exact set with no detection.")
+	cmd.Flags().BoolVar(&ro.ValidateOnly, "validate-only", false,
+		"Run the pre-flight workload + tool-availability checks, print the planned "+
+			"attestor set + warnings, then exit without running the user command. "+
+			"Use to dry-run a cilock config in CI before committing it.")
 	cmd.Flags().StringSliceVarP(&ro.TimestampServers, "timestamp-servers", "t", []string{}, "Timestamp Authority Servers to use when signing envelope")
 
 	cmd.Flags().StringArrayVar(&ro.Subjects, "subjects", []string{},

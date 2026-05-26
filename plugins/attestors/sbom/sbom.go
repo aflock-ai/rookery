@@ -457,7 +457,19 @@ func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error {
 
 	// Soft opt-out: the upstream product set contained no SBOM-shaped
 	// file. The attestor's contract was satisfied; there was nothing to
-	// attest. CI shouldn't fail on a project that doesn't ship an SBOM.
-	// See finding #221.
-	return attestation.NewSoftError("no SBOM file found")
+	// attest.
+	//
+	// Note: this attestor ATTESTS to an SBOM you produced (CycloneDX
+	// JSON/XML, SPDX JSON, in-toto SBOM-bundle); it does NOT generate
+	// one. To populate a workspace with an SBOM, run a generator
+	// alongside your command — e.g. `npm install && cyclonedx-npm
+	// --output-file bom.cdx.json`, or `syft . -o cyclonedx-json`.
+	// CI shouldn't fail on a project that doesn't ship an SBOM, so this
+	// is a soft error (skipped, not a fatal). See finding #221.
+	return attestation.NewSoftError(
+		"no SBOM file found in product set — the sbom attestor records " +
+			"the output of an SBOM generator (cyclonedx-npm / syft / etc.); " +
+			"it does not generate one itself. Configure your build command " +
+			"to emit a *.cdx.json / *.spdx.json file alongside your products.",
+	)
 }

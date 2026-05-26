@@ -16,14 +16,18 @@
 
 // Trace mode selection and capability detection (#167 follow-up).
 //
-// Policy (per Cole's direction):
-//   - DEFAULT: eBPF. The fastest path. Fails loudly if unavailable
-//     with a clear message telling the user how to enable it OR how
-//     to opt into ptrace as a fallback.
-//   - EXPLICIT eBPF (CILOCK_TRACE_MODE=ebpf): same as default.
-//   - EXPLICIT ptrace (CILOCK_TRACE_MODE=ptrace): use ptrace+seccomp,
-//     skip eBPF detection. For environments where eBPF can't be
-//     enabled (most non-root container configs).
+// Policy (Phase 2 — task #79):
+//   - DEFAULT / auto: probe eBPF; if available use it, otherwise fall
+//     back silently to ptrace+seccomp. Operators get tracing either
+//     way; the choice is logged at startup so the attestation records
+//     which backend produced it.
+//   - EXPLICIT eBPF (CILOCK_TRACE_MODE=ebpf): probe eBPF; fail loudly
+//     if unavailable. For high-stakes builds where ptrace's coverage
+//     gap is unacceptable.
+//   - EXPLICIT ptrace (CILOCK_TRACE_MODE=ptrace): skip detection,
+//     use ptrace+seccomp. For environments where eBPF is known
+//     unavailable (most non-root container configs) and the operator
+//     wants to skip the probe latency.
 //
 // The detection probe mirrors the standalone tool at
 // .github/probes/trace-capability-probe — kept identical so changes
@@ -79,19 +83,36 @@ func selectTraceMode() (traceMode, error) {
 		// Explicit opt-in: skip detection.
 		return traceModePtrace, nil
 
-	case "", "ebpf", "auto":
-		// Default behavior: detect eBPF. If available, use it. If not,
-		// FAIL with a clear remediation message. (Auto is currently
-		// an alias for ebpf — same hard-fail semantics. A future
-		// "auto-fallback" mode could differ if there's demand.)
+	case "ebpf":
+		// Explicit eBPF: probe; FAIL loudly if unavailable.
 		probe := probeEBPFAvailable()
 		if probe.available {
 			return traceModeEBPF, nil
 		}
 		return 0, ebpfUnavailableError(probe)
 
+	case "", "auto":
+		// Default / auto: probe eBPF; on failure, fall back to ptrace
+		// silently. Operators get tracing either way. The chosen
+		// backend is logged in logTraceModeStartup and recorded in
+		// the attestation, so downstream verifiers can tell which
+		// path produced the data. Closes task #79.
+		probe := probeEBPFAvailable()
+		if probe.available {
+			return traceModeEBPF, nil
+		}
+		// Auto-fallback. Emit a one-line stderr note so the operator
+		// knows why eBPF was skipped; full diagnostic is available
+		// via --diagnose. ebpfUnavailableError already produces a
+		// readable summary — strip multi-line formatting.
+		fmt.Fprintf(os.Stderr,
+			"cilock-trace: eBPF unavailable (%s); falling back to ptrace+seccomp. "+
+				"For the full probe diagnostic, set CILOCK_TRACE_MODE=ebpf to force a loud failure.\n",
+			probe.summary())
+		return traceModePtrace, nil
+
 	default:
-		return 0, fmt.Errorf("CILOCK_TRACE_MODE=%q is not recognized; valid values: ebpf, ptrace", requested)
+		return 0, fmt.Errorf("CILOCK_TRACE_MODE=%q is not recognized; valid values: ebpf, ptrace, auto", requested)
 	}
 }
 
@@ -104,6 +125,22 @@ type ebpfProbeResult struct {
 	progLoadError    string // empty if succeeded
 	capEffective     string
 	euid             int
+}
+
+// summary returns a one-line reason for the eBPF unavailability,
+// suitable for inline fallback messages. Used by the auto-fallback
+// path which logs to stderr without exiting.
+func (r ebpfProbeResult) summary() string {
+	switch {
+	case !r.bpfSyscallExists:
+		return "bpf(2) syscall returned ENOSYS"
+	case r.mapCreateError != "":
+		return "BPF_MAP_CREATE failed: " + r.mapCreateError
+	case r.progLoadError != "":
+		return "BPF_PROG_LOAD failed: " + r.progLoadError
+	default:
+		return "unknown reason"
+	}
 }
 
 // probeEBPFAvailable tries the minimum bpf(2) operations cilock needs
