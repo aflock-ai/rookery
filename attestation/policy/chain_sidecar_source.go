@@ -11,7 +11,7 @@ package policy
 import (
 	"context"
 
-	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
+	"github.com/aflock-ai/rookery/attestation/chain"
 )
 
 // ChainSidecarSource is the pluggable lookup the policy verifier uses
@@ -45,7 +45,7 @@ type ChainSidecarSource interface {
 	// to bind the sidecar to a specific signed attestation rather
 	// than just to any tree that happens to share the same Merkle
 	// root.
-	LookupChainSidecar(ctx context.Context, downstreamStep, upstreamStep, upstreamEnvelopeDigest string) (*inclusionproof.ChainSidecar, error)
+	LookupChainSidecar(ctx context.Context, downstreamStep, upstreamStep, upstreamEnvelopeDigest string) (*chain.ChainSidecar, error)
 }
 
 // WithChainSidecarSource installs a ChainSidecarSource on the verify
