@@ -146,6 +146,112 @@ jobs:
       - name: Verify each module builds in isolation
         run: make verify-isolated
 
+  # ── go.mod / go.sum tidy drift (advisory) ────────────────────────────
+  # The workspace (go.work) resolves every intra-repo module from the local
+  # tree, which hides per-module go.mod/go.sum drift. That drift is invisible
+  # in workspace mode but breaks any consumer that builds a single module with
+  # GOWORK=off + a committed go.sum (e.g. the cilock-action release — the only
+  # place it surfaced before, days after the offending merge).
+  #
+  # ADVISORY for now: main is currently broadly untidy (go.work has masked it),
+  # so this reports drift as warnings instead of failing. It flips to blocking
+  # (exit on drift) once the dedicated repo-wide `go mod tidy` cleanup lands —
+  # that cleanup is kept separate to avoid a 50+-module go.sum rewrite colliding
+  # with in-flight PRs.
+  mod-tidy-check:
+    name: go.mod tidy drift (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Report go mod tidy drift (GOWORK=off)
+        run: |
+          set -uo pipefail   # deliberately NOT -e: advisory, never fails the job
+          drift=0
+          while IFS= read -r mod; do
+            dir=$(dirname "$mod")
+            if ! (cd "$dir" && GOWORK=off go mod tidy) 2>/tmp/tidyerr; then
+              echo "::warning file=$dir/go.mod::go mod tidy could not run in $dir (often a missing replace for a transitively-needed sibling module): $(head -1 /tmp/tidyerr)"
+              drift=1; continue
+            fi
+            if ! git diff --quiet -- "$dir/go.mod" "$dir/go.sum"; then
+              echo "::warning file=$dir/go.mod::$dir is not tidy — run 'cd $dir && GOWORK=off go mod tidy' and commit the result"
+              drift=1
+            fi
+          done < <(find . -name go.mod -not -path './go.mod' -not -path '*/vendor/*')
+          if [ "$drift" -ne 0 ]; then
+            echo "::warning::Per-module go.mod/go.sum drift detected (advisory). go.work masks this; it breaks GOWORK=off consumers like the cilock-action release. Flip this check to blocking after the repo-wide tidy cleanup."
+          else
+            echo "All modules are go mod tidy-clean."
+          fi
+          # TODO(flip-to-blocking once main is tidy): exit "$drift"
+
+  # ── Downstream consumer build ────────────────────────────────────────
+  # cilock-action is the real downstream consumer: it pins every rookery module
+  # via replace + a committed go.sum and builds with GOWORK=off — the config
+  # that runs only at release time today, so a rookery change that breaks
+  # cilock-action's compile is invisible until a release is cut (exactly how
+  # the rc15 break slipped through). Build it here against THIS PR's rookery so
+  # genuine API/compile breaks fail the PR. go.sum is tidied first (a rookery
+  # dep change legitimately drifts the consumer's committed go.sum — that's the
+  # consumer's release-time housekeeping, surfaced here as a warning, not a
+  # rookery defect), so this gates only on real compile breaks.
+  downstream-cilock-action:
+    name: downstream cilock-action build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout rookery (this PR)
+        uses: actions/checkout@v4
+        with:
+          path: rookery
+
+      - name: Checkout cilock-action (default branch)
+        uses: actions/checkout@v4
+        with:
+          repository: aflock-ai/cilock-action
+          path: cilock-action
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: rookery/.go-version
+
+      - name: Build cilock-action against this rookery
+        working-directory: cilock-action
+        run: |
+          set -euo pipefail
+          R="$(cd "$GITHUB_WORKSPACE/rookery" && pwd)"
+          # Add an absolute replace for EVERY rookery module in the checkout so
+          # the build resolves any rookery package locally — including modules
+          # the consumer's committed go.mod doesn't list yet (e.g. the
+          # commandrun/ebpf module rookery split out after cilock-action last
+          # synced). This tests compile-compat against THIS rookery and gates
+          # only on genuine API/compile breaks; whether the consumer's own
+          # go.mod is in sync is its release-time concern, not a rookery defect.
+          # (Relative ../rookery replaces are also why this must be absolute:
+          # the nested ebpf module didn't resolve relatively on the runner.)
+          while IFS= read -r gomod; do
+            moddir=$(dirname "$gomod")
+            modpath=$(cd "$moddir" && GOWORK=off go mod edit -json | jq -r .Module.Path)
+            case "$modpath" in
+              github.com/aflock-ai/rookery*) go mod edit -replace="${modpath}=${moddir}" ;;
+            esac
+          done < <(find "$R" -name go.mod -not -path '*/vendor/*')
+          # -mod=mod lets go auto-add go.sum entries for any new external
+          # transitive deps (surfaced as a warning); we do NOT `go mod tidy`
+          # (it resolves the full test-dep graph and trips over intra-repo
+          # pseudo-versions on paths cmd/cilock-action never imports).
+          before=$(sha256sum go.mod go.sum | sha256sum)
+          GOWORK=off go build -mod=mod ./cmd/cilock-action
+          after=$(sha256sum go.mod go.sum | sha256sum)
+          if [ "$before" != "$after" ]; then
+            echo "::warning::cilock-action's committed go.mod/go.sum is out of sync with this rookery (a module/dep it doesn't list). It compiles here, but cilock-action must update its go.mod (add the missing replace/require) before its next release or the release build will fail."
+          fi
+          echo "cilock-action cmd/cilock-action builds against this rookery"
+
   # ── Builder Smoke ───────────────────────────────────────────────────
   # Runs the integration suite at builder/integration_test.go: builds
   # both stock cilock and a builder-generated cilock, asserts they
@@ -364,6 +470,8 @@ jobs:
       - vet
       - build
       - verify-isolated
+      - mod-tidy-check
+      - downstream-cilock-action
       - builder-smoke
       - commitlint
       - forbidden-patterns
