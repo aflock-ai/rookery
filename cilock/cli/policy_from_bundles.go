@@ -110,7 +110,7 @@ Examples:
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPolicyFromBundles(cmd.OutOrStdout(), args, pubKeyPaths, output, expiresIn, stepNamePrefix)
+			return runPolicyFromBundles(cmd.OutOrStdout(), cmd.ErrOrStderr(), args, pubKeyPaths, output, expiresIn, stepNamePrefix)
 		},
 	}
 
@@ -183,7 +183,7 @@ type sidecarSummary struct {
 	predicateType string
 }
 
-func runPolicyFromBundles(stdout io.Writer, bundlePaths, pubKeyPaths []string, outputPath string, expiresIn time.Duration, stepPrefix string) error {
+func runPolicyFromBundles(stdout, stderr io.Writer, bundlePaths, pubKeyPaths []string, outputPath string, expiresIn time.Duration, stepPrefix string) error {
 	if len(bundlePaths) == 0 {
 		return fmt.Errorf("at least one bundle path is required")
 	}
@@ -193,7 +193,7 @@ func runPolicyFromBundles(stdout io.Writer, bundlePaths, pubKeyPaths []string, o
 		return err
 	}
 
-	summaries, err := summarizeBundles(bundlePaths, stepPrefix)
+	summaries, err := summarizeBundles(stderr, bundlePaths, stepPrefix)
 	if err != nil {
 		return err
 	}
@@ -238,10 +238,10 @@ func loadPolicyPubKeys(paths []string) (map[string][]byte, error) {
 	return out, nil
 }
 
-func summarizeBundles(paths []string, stepPrefix string) ([]bundleSummary, error) {
+func summarizeBundles(stderr io.Writer, paths []string, stepPrefix string) ([]bundleSummary, error) {
 	out := make([]bundleSummary, 0, len(paths))
 	for _, p := range paths {
-		s, err := summarizeOneBundle(p, stepPrefix)
+		s, err := summarizeOneBundle(stderr, p, stepPrefix)
 		if err != nil {
 			return nil, fmt.Errorf("summarize %s: %w", p, err)
 		}
@@ -255,7 +255,7 @@ func summarizeBundles(paths []string, stepPrefix string) ([]bundleSummary, error
 // For attestation-collection envelopes, the inner types live in
 // predicate.attestations[].type; for bare-predicate envelopes the
 // outer predicateType is the single attestation type.
-func summarizeOneBundle(path, stepPrefix string) (bundleSummary, error) {
+func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummary, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // user-supplied arg
 	if err != nil {
 		return bundleSummary{}, err
@@ -286,9 +286,15 @@ func summarizeOneBundle(path, stepPrefix string) (bundleSummary, error) {
 		return bundleSummary{}, fmt.Errorf("decode payload: %w", err)
 	}
 
+	// The collection envelope's predicate carries a `name` field that
+	// is the authoritative step name (passed to `cilock run -s <name>`).
+	// We prefer this over the filename-derived name so that a user
+	// renaming `<step>.bundle.json` to `<anything>.att.json` doesn't
+	// break the policy. See issue #224.
 	var stmt struct {
 		PredicateType string `json:"predicateType"`
 		Predicate     struct {
+			Name         string `json:"name"`
 			Attestations []struct {
 				Type string `json:"type"`
 			} `json:"attestations"`
@@ -340,7 +346,7 @@ func summarizeOneBundle(path, stepPrefix string) (bundleSummary, error) {
 	predicateTypes := extractPredicateTypes(stmt.PredicateType, stmt.Predicate.Attestations)
 	sidecars, _ := discoverSidecars(path)
 
-	stepName := stepPrefix + deriveStepName(path)
+	stepName := stepPrefix + resolveStepName(stderr, path, stmt.Predicate.Name)
 	return bundleSummary{
 		path:               path,
 		stepName:           stepName,
@@ -497,13 +503,50 @@ func extractPredicateTypes(outerType string, atts []struct {
 	return out
 }
 
+// resolveStepName decides which name to use as the policy step name
+// for a bundle. The bundle's predicate.name (what `cilock run -s
+// <name>` recorded inside the collection envelope) is authoritative;
+// only when it's missing do we fall back to deriving from the file
+// basename. When the recorded name differs from what the filename
+// would have produced, we emit a notice on stderr — historically the
+// filename drove the step name (see issue #224), so a user renaming
+// their bundles to a non-standard extension would otherwise be
+// silently overridden.
+func resolveStepName(stderr io.Writer, path, recordedName string) string {
+	filenameDerived := deriveStepName(path)
+	if recordedName == "" {
+		return filenameDerived
+	}
+	if stderr != nil && recordedName != filenameDerived {
+		_, _ = fmt.Fprintf(stderr,
+			"info: bundle %s records step name %q; using that instead of filename-derived %q\n",
+			path, recordedName, filenameDerived)
+	}
+	return recordedName
+}
+
 // deriveStepName turns "/path/to/source-git.bundle.json" into
 // "source-git". This matches the convention `cilock run -o` users
 // already adopt (one bundle per logical step).
+//
+// Only used as a fallback when the bundle payload's predicate.name is
+// missing (issue #224). To accommodate the variety of filename
+// conventions users have adopted, we strip the longest known
+// double-extension first (`.bundle.json`, `.att.json`, `.envelope.json`)
+// before falling through to a plain `.json` strip. Longest-match-first
+// ordering matters: `foo.att.json` must produce `foo`, not `foo.att`.
 func deriveStepName(path string) string {
 	base := filepath.Base(path)
-	base = strings.TrimSuffix(base, ".json")
-	base = strings.TrimSuffix(base, ".bundle")
+	// Ordered longest-match-first. Each suffix is tried in turn; the
+	// first match wins so we don't over-strip when an extension that
+	// would otherwise be a prefix of another (e.g. `.json` vs
+	// `.bundle.json`) is also a candidate.
+	for _, suffix := range []string{".bundle.json", ".att.json", ".envelope.json", ".json"} {
+		if strings.HasSuffix(base, suffix) {
+			base = strings.TrimSuffix(base, suffix)
+			break
+		}
+	}
 	// Drop any leading dot so hidden filenames don't yield empty names.
 	base = strings.TrimLeft(base, ".")
 	if base == "" {
