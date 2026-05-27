@@ -1,4 +1,4 @@
-// Copyright 2026 The Aflock Authors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -315,6 +315,29 @@ func NormalizePath(p string) string {
 // byte-identical leaves. Centralising the encoding here is the only way
 // to guarantee that across module boundaries.
 func LeafHash(path, fileDigestHex string) ([]byte, error) {
+	return LeafHashWithDomain("", path, fileDigestHex)
+}
+
+// LeafHashWithDomain is LeafHash with explicit cryptographic domain
+// separation. The domain is prefixed (NUL-delimited) so that a proof
+// computed under domain A does not verify under domain B. This is the
+// citation-hijacking defense (threat-model E4): a proof of inclusion in
+// a software-build tree can NOT be replayed against a dataset-provenance
+// tree, even if the (path, digest) leaf data is identical.
+//
+// Empty domain ("") is byte-identical to LeafHash, preserving back-
+// compat for existing v0.3 software-supply-chain attestations.
+//
+// Domain values are HARDCODED per attestor type (see issue #191, the
+// per-attestor-type-hardcoded choice). Recognised values today:
+//
+//   - "" (empty)                — legacy / v0.3 software-build (back-compat)
+//   - "rookery-product/v0.3"    — product attestor (proposed)
+//   - "rookery-material/v0.3"   — material attestor (proposed)
+//
+// Future per-application domains (corpus citation, sensor telemetry,
+// etc.) get their own attestor type with its own hardcoded domain.
+func LeafHashWithDomain(domain, path, fileDigestHex string) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("leaf path must not be empty")
 	}
@@ -326,6 +349,13 @@ func LeafHash(path, fileDigestHex string) ([]byte, error) {
 		return nil, fmt.Errorf("file digest must decode to %d bytes (got %d)", sha256.Size, len(digest))
 	}
 	h := sha256.New()
+	if domain != "" {
+		// Domain prefix is NUL-delimited from the path. Empty domain
+		// MUST collapse to the original wire format — no leading NUL —
+		// so old attestations verify unchanged.
+		_, _ = h.Write([]byte(domain))
+		_, _ = h.Write([]byte{0x00})
+	}
 	_, _ = h.Write([]byte(path))
 	_, _ = h.Write([]byte{0x00})
 	_, _ = h.Write(digest)

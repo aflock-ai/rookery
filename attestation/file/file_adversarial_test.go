@@ -775,13 +775,13 @@ func TestAdversarial_ConcurrentWithSymlinkCycles(t *testing.T) {
 // TestAdversarial_ShouldRecord_NilDigestSet tests shouldRecord with nil DigestSet.
 func TestAdversarial_ShouldRecord_NilDigestSet(t *testing.T) {
 	// nil artifact, nil baseArtifacts -- should record (no dedup match)
-	assert.True(t, shouldRecord("file.txt", nil, nil, false, nil, nil, nil))
+	assert.True(t, shouldRecord("file.txt", nil, nil, false, nil, nil, nil, time.Time{}, time.Time{}))
 
 	// nil artifact with non-nil baseArtifacts that don't contain this path
 	baseArtifacts := map[string]cryptoutil.DigestSet{
 		"other.txt": {cryptoutil.DigestValue{Hash: crypto.SHA256}: "abc"},
 	}
-	assert.True(t, shouldRecord("file.txt", nil, baseArtifacts, false, nil, nil, nil))
+	assert.True(t, shouldRecord("file.txt", nil, baseArtifacts, false, nil, nil, nil, time.Time{}, time.Time{}))
 }
 
 // TestAdversarial_ShouldRecord_EmptyDigestSet tests shouldRecord with an empty DigestSet.
@@ -793,7 +793,7 @@ func TestAdversarial_ShouldRecord_EmptyDigestSet(t *testing.T) {
 
 	// Two empty DigestSets: Equal returns false (no matching digests),
 	// so the file should be recorded.
-	result := shouldRecord("file.txt", emptyDS, baseArtifacts, false, nil, nil, nil)
+	result := shouldRecord("file.txt", emptyDS, baseArtifacts, false, nil, nil, nil, time.Time{}, time.Time{})
 	assert.True(t, result,
 		"empty DigestSets should not match (Equal returns false for no common hashes)")
 }
@@ -802,14 +802,14 @@ func TestAdversarial_ShouldRecord_EmptyDigestSet(t *testing.T) {
 // filter when processWasTraced=true but openedFiles is empty.
 func TestAdversarial_ShouldRecord_ProcessTracedNoOpenedFiles(t *testing.T) {
 	// processWasTraced=true, openedFiles=empty -- nothing should be recorded
-	assert.False(t, shouldRecord("anything.go", nil, nil, true, map[string]bool{}, nil, nil))
+	assert.False(t, shouldRecord("anything.go", nil, nil, true, map[string]bool{}, nil, nil, time.Time{}, time.Time{}))
 }
 
 // TestAdversarial_ShouldRecord_ProcessTracedNilOpenedFiles tests the tracing
 // filter when processWasTraced=true but openedFiles is nil.
 func TestAdversarial_ShouldRecord_ProcessTracedNilOpenedFiles(t *testing.T) {
 	// processWasTraced=true, openedFiles=nil -- lookup on nil map returns false
-	assert.False(t, shouldRecord("anything.go", nil, nil, true, nil, nil, nil))
+	assert.False(t, shouldRecord("anything.go", nil, nil, true, nil, nil, nil, time.Time{}, time.Time{}))
 }
 
 // ---------------------------------------------------------------------------
@@ -826,9 +826,9 @@ func TestAdversarial_ShouldRecord_PathSlashNormalization(t *testing.T) {
 	require.NoError(t, err)
 
 	// Use forward-slash path (Unix native)
-	assert.True(t, shouldRecord("subdir/main.go", nil, nil, false, nil, includeGlob, nil))
-	assert.False(t, shouldRecord("subdir/main.txt", nil, nil, false, nil, includeGlob, nil))
-	assert.False(t, shouldRecord("other/main.go", nil, nil, false, nil, includeGlob, nil))
+	assert.True(t, shouldRecord("subdir/main.go", nil, nil, false, nil, includeGlob, nil, time.Time{}, time.Time{}))
+	assert.False(t, shouldRecord("subdir/main.txt", nil, nil, false, nil, includeGlob, nil, time.Time{}, time.Time{}))
+	assert.False(t, shouldRecord("other/main.go", nil, nil, false, nil, includeGlob, nil, time.Time{}, time.Time{}))
 }
 
 // ---------------------------------------------------------------------------

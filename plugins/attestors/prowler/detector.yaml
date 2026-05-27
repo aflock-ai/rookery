@@ -1,0 +1,27 @@
+apiVersion: cilock.detection/v0.1
+name: prowler
+description: "Captures Prowler cloud security posture scan results (AWS / GCP / Azure)."
+
+category: [compliance-scan]
+
+upstream:
+  name: Prowler
+  source: "https://github.com/prowler-cloud/prowler"
+  license: Apache-2.0
+  vendor: Prowler Pro / community
+
+recommended_trace: "off"
+
+pre:
+  match:
+    argv_prefix: ["prowler"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["prowler"]
+      - product_glob: ["prowler-output-*.json", "**/prowler-output-*.json", "prowler*.ocsf.json", "**/prowler*.ocsf.json"]
+
+llm_hints:
+  on_match: "Prowler findings captured (OCSF or ASFF format)."

@@ -15,6 +15,9 @@
 package options
 
 import (
+	"time"
+
+	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/sigstore/fulcio/pkg/certificate"
 	"github.com/spf13/cobra"
 )
@@ -25,6 +28,12 @@ type VerifyOptions struct {
 	KMSVerifierProviderOptions KMSVerifierProviderOptions
 	SignerOptions              SignerOptions
 	KMSSignerProviderOptions   KMSSignerProviderOptions
+	// PlatformURL derives archivista + TSA URLs the same way `cilock
+	// run` does, so the verify-side of a cilock workflow uses the
+	// same endpoint defaults the run-side wrote to. Pass `--platform-url ""`
+	// to opt out (fully offline verification — no archivista lookup,
+	// no platform-derived TSA verifier).
+	PlatformURL                string
 	KeyPath                    string
 	AttestationFilePaths       []string
 	BundlePaths                []string
@@ -44,12 +53,83 @@ type VerifyOptions struct {
 	PolicyEmails               []string
 	PolicyOrganizations        []string
 	PolicyURIs                 []string
+
+	// ChainSidecarDir is a local directory containing chain-of-custody
+	// sidecars (one per downstream step, named <step>.chain.json). When
+	// set, the verifier installs a FilesystemChainSidecarSource and
+	// prefers per-material RFC 6962 inclusion-proof verification over
+	// the legacy path-by-path artifact comparison for any
+	// ArtifactsFrom edge that has a matching sidecar. Empty disables.
+	ChainSidecarDir string
+
+	// ChainSidecarURL is an HTTP(S) URL template used to fetch chain
+	// sidecars by upstream envelope digest. Placeholders:
+	// {envelopeDigest}, {downstreamStep}, {upstreamStep}. When both
+	// ChainSidecarDir and ChainSidecarURL are set, the filesystem
+	// source is tried first; HTTP is the fallback.
+	ChainSidecarURL string
+
+	// RequireSidecar fails verification if a chain edge has an
+	// upstream step but no matching chain sidecar is available. The
+	// CLI flag defaults to TRUE for v0.4 — closing the vacuous-pass
+	// attack surface where v0.3 attestations return empty
+	// Materials() and the legacy compareArtifacts fallback trivially
+	// passes. Users verifying legacy v0.1 chains can opt out via
+	// `--require-sidecar=false`.
+	//
+	// Note: the Go struct's zero value is false; the flag default
+	// in AddFlags is true. Callers constructing VerifyOptions
+	// directly (without going through the CLI flag layer) must set
+	// this explicitly if strict mode is desired.
+	RequireSidecar bool
+
+	// ChainSidecarHTTPTimeout overrides the per-request HTTP client
+	// timeout used by the chain sidecar HTTP source. Defaults to
+	// policy.DefaultHTTPChainSidecarTimeout (30s). Increase for very
+	// large sidecars on cold caches; decrease in latency-sensitive
+	// pipelines.
+	ChainSidecarHTTPTimeout time.Duration
+
+	// ChainSidecarHTTPMaxBytes caps the HTTP response body the
+	// verifier will read from a chain sidecar server. Defaults to
+	// policy.DefaultHTTPChainSidecarMaxBytes (64 MiB). Tune up for
+	// builds with very large material sets; tune down to harden
+	// against hostile servers.
+	ChainSidecarHTTPMaxBytes int64
 }
 
+// ResolvePlatformDefaults derives the Archivista URL from the
+// configured --platform-url, mirroring RunOptions's behavior for
+// `cilock run`. Pass --platform-url "" to opt out (operator marks
+// the flag explicitly empty → no defaults derived). Call after flag
+// parsing, before any verify logic runs.
+//
+// Note: unlike `cilock run`, we do NOT auto-populate
+// PolicyTimestampServers — verify's PolicyTimestampServers expects
+// file paths to CA cert bundles, not URLs. Operators who want
+// TSA-rooted trust for the policy still pass --policy-timestamp-servers
+// explicitly with the cert path.
+func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
+	platformExplicitlyDisabled := cmd.Flags().Changed("platform-url") && vo.PlatformURL == ""
+	if platformExplicitlyDisabled {
+		return
+	}
+	pc := platformconfig.Derive(vo.PlatformURL)
+	// Archivista URL: use platform default if not explicitly overridden.
+	if !cmd.Flags().Changed("archivista-server") && !cmd.Flags().Changed("archivist-server") {
+		vo.ArchivistaOptions.Url = pc.Archivista
+	}
+}
+
+//nolint:funlen // each verify flag carries its own multi-line help text; splitting the registration loses readability
 func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	vo.VerifierOptions.AddFlags(cmd)
 	vo.ArchivistaOptions.AddFlags(cmd)
 	vo.KMSVerifierProviderOptions.AddFlags(cmd)
+	cmd.Flags().StringVar(&vo.PlatformURL, "platform-url", platformconfig.DefaultPlatformURL,
+		"TestifySec platform URL (derives archivista + TSA URLs the same way `cilock run` does). "+
+			"Pass --platform-url \"\" to opt out (fully offline verify — no archivista lookup, "+
+			"no platform-derived TSA verifier).")
 	// Register --publickey BEFORE signer flags so it claims the -k shorthand.
 	// The signer registry adds --signer-file-key-path and, for backward compat
 	// with `cilock sign`/`cilock run`, wants to bind -k — but here on verify,
@@ -104,7 +184,27 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.SourceRepositoryRef, "policy-fulcio-source-repository-ref", "",
 		"Source Repository Ref that the build run was based upon.")
 
+	// v0.3 chain-of-custody verification.
+	cmd.Flags().StringVar(&vo.ChainSidecarDir, "chain-sidecar-dir", "",
+		"Directory containing chain-of-custody sidecars (one per downstream step, named <step>.chain.json). When set, the verifier validates ArtifactsFrom edges via per-material RFC 6962 inclusion proofs against the upstream step's signed Merkle root instead of the legacy path-by-path comparison.")
+	cmd.Flags().StringVar(&vo.ChainSidecarURL, "chain-sidecar-url", "",
+		"HTTP(S) URL template for fetching chain sidecars by upstream envelope digest. Placeholders: {envelopeDigest}, {downstreamStep}, {upstreamStep}. When both --chain-sidecar-dir and --chain-sidecar-url are set, the filesystem source is tried first.")
+	cmd.Flags().BoolVar(&vo.RequireSidecar, "require-sidecar", true,
+		"Strict-chain mode: fail verification if a chain edge has no matching chain sidecar (closes the v0.3 vacuous-pass attack surface). DEFAULT TRUE in v0.4. Pass --require-sidecar=false to verify legacy v0.1 chains without sidecars.")
+	cmd.Flags().DurationVar(&vo.ChainSidecarHTTPTimeout, "chain-sidecar-http-timeout", 0,
+		"Per-request HTTP client timeout for chain-sidecar fetches (Go duration format, e.g. 15s, 2m). "+
+			"Zero (default) uses the compiled-in DefaultHTTPChainSidecarTimeout (30s). Increase for very large "+
+			"sidecars on cold caches; decrease in latency-sensitive pipelines.")
+	cmd.Flags().Int64Var(&vo.ChainSidecarHTTPMaxBytes, "chain-sidecar-http-max-bytes", 0,
+		"Cap on the HTTP response body size when fetching a chain sidecar (raw bytes). "+
+			"Zero (default) uses the compiled-in DefaultHTTPChainSidecarMaxBytes (64 MiB ≈ 67108864). "+
+			"Tune up for builds with very large material sets; tune down to harden against hostile servers.")
+
 	cmd.MarkFlagsRequiredTogether("policy")
 	cmd.MarkFlagsOneRequired("publickey", "policy-ca", "policy-ca-roots", "policy-ca-intermediates", "verifier-kms-ref")
-	cmd.MarkFlagsOneRequired("artifactfile", "subjects")
+	// Note: we deliberately do NOT MarkFlagsOneRequired here. The
+	// custom check in runVerify gives a much better error — it lists
+	// candidate sha256 digests pulled from any supplied --attestations
+	// / --bundle files so the operator can paste one into --subjects.
+	// cobra's group-required error fires too early to see those.
 }

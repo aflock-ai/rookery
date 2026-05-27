@@ -1,0 +1,18 @@
+apiVersion: cilock.detection/v0.1
+name: jenkins
+description: "Captures Jenkins runner context (job name, node, build ID, URL) when running inside a Jenkins pipeline."
+
+category: [ci-context]
+
+upstream:
+  name: Jenkins
+  source: "https://github.com/jenkinsci/jenkins"
+  license: MIT
+  vendor: Jenkins Project / CD Foundation
+
+pre:
+  match:
+    env_set: JENKINS_URL
+
+llm_hints:
+  on_match: "Jenkins runner context captured (job, node, build id)."

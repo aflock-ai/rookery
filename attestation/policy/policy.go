@@ -17,13 +17,17 @@ package policy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/chain"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/signer"
@@ -183,6 +187,14 @@ type verifyOptions struct {
 	searchDepth        int
 	aiServerURL        string
 	clockSkewTolerance time.Duration
+	chainSidecarSource ChainSidecarSource
+	// requireSidecar fails verification if a step has ArtifactsFrom
+	// declared in the policy AND no chain sidecar is available for
+	// that edge. Closes the v0.3 vacuous-pass attack surface where
+	// the legacy compareArtifacts path silently accepts any
+	// upstream-downstream pair because v0.3's Materials() returns
+	// empty by design.
+	requireSidecar bool
 }
 
 func WithVerifiedSource(verifiedSource source.VerifiedSourcer) VerifyOption {
@@ -496,7 +508,14 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 			}
 
 			if len(collections) == 0 {
-				collections = append(collections, source.CollectionVerificationResult{Errors: []error{ErrNoCollections{Step: stepName}}})
+				// Distinguish "no envelope loaded for this step" from
+				// "envelope IS loaded but operator's artifact digest
+				// isn't a subject of it." Without this the operator
+				// chases a phantom 'did I load my attestation?' issue
+				// when the real problem is digest mismatch / scoping.
+				// (Fixes blind Linux UX test Bug 2.)
+				diag := diagnoseEmptyCollectionResult(ctx, vo.verifiedSource, stepName, vo.subjectDigests, attestationsByStep[stepName])
+				collections = append(collections, source.CollectionVerificationResult{Errors: []error{diag}})
 			}
 
 			// Verify the functionaries
@@ -547,7 +566,7 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 		vo.subjectDigests = append(vo.subjectDigests, nextDepthDigests...)
 	}
 
-	resultsByStep, err = p.verifyArtifacts(resultsByStep)
+	resultsByStep, err = p.verifyArtifacts(ctx, vo, resultsByStep)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify artifacts: %w", err)
 	}
@@ -768,7 +787,14 @@ func (step Step) checkFunctionaries(statements []source.CollectionVerificationRe
 
 // verifyArtifacts will check the artifacts (materials+products) of the step referred to by `ArtifactsFrom` against the
 // materials of the original step.  This ensures file integrity between each step.
-func (p Policy) verifyArtifacts(resultsByStep map[string]StepResult) (map[string]StepResult, error) { //nolint:gocognit
+//
+// When vo.chainSidecarSource is non-nil and a chain sidecar is available
+// for a (downstreamStep, upstreamStep) pair, verification uses the
+// cryptographic per-material inclusion proofs in the sidecar (the v0.3
+// chain-of-custody mode). Without a sidecar source the legacy
+// path-by-path comparison runs, preserving back-compat with v0.1
+// attestations and single-invocation in-process chains.
+func (p Policy) verifyArtifacts(ctx context.Context, vo *verifyOptions, resultsByStep map[string]StepResult) (map[string]StepResult, error) { //nolint:gocognit
 	for _, step := range p.Steps {
 		accepted := false
 		if len(resultsByStep[step.Name].Passed) == 0 {
@@ -784,7 +810,7 @@ func (p Policy) verifyArtifacts(resultsByStep map[string]StepResult) (map[string
 
 		reasons := []error{}
 		for _, collection := range resultsByStep[step.Name].Passed {
-			if err := verifyCollectionArtifacts(step, collection.Collection, resultsByStep); err == nil {
+			if err := verifyCollectionArtifacts(ctx, vo, step, collection.Collection, resultsByStep); err == nil {
 				accepted = true
 			} else {
 				reasons = append(reasons, err)
@@ -810,7 +836,7 @@ func (p Policy) verifyArtifacts(resultsByStep map[string]StepResult) (map[string
 	return resultsByStep, nil
 }
 
-func verifyCollectionArtifacts(step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit
+func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo // single chain-edge dispatcher: legacy vs chain-proof vs strict-mode branches share state; splitting would require threading too many params
 	mats := collection.Collection.Materials()
 	reasons := []string{}
 	for _, artifactsFrom := range step.ArtifactsFrom {
@@ -825,8 +851,75 @@ func verifyCollectionArtifacts(step Step, collection source.CollectionVerificati
 			return ErrVerifyArtifactsFailed{Reasons: reasons}
 		}
 
+		// Strict-chain enforcement: if the policy requires sidecars
+		// but no source is configured, every ArtifactsFrom edge fails.
+		// Catches the operator-error case where --require-sidecar was
+		// asked for but --chain-sidecar-dir/url wasn't set.
+		if vo != nil && vo.requireSidecar && vo.chainSidecarSource == nil {
+			reasons = append(reasons, fmt.Sprintf("step %s requires chain sidecars (--require-sidecar) but no ChainSidecarSource is configured", step.Name))
+			return ErrVerifyArtifactsFailed{Reasons: reasons}
+		}
+
 		accepted := make([]source.CollectionVerificationResult, 0)
 		for _, testCollection := range refResult.Passed {
+			// v0.3 chain-proof verification (preferred when wired):
+			// if a ChainSidecarSource is installed AND it returns a
+			// sidecar for this (downstream, upstream) pair, the
+			// chain is verified cryptographically against the upstream
+			// step's signed root. Without a sidecar source (or when
+			// the source has no sidecar for this pair) we fall back
+			// to the legacy compareArtifacts path that operates on
+			// the in-process Materials() / Artifacts() maps.
+			if vo != nil && vo.chainSidecarSource != nil { //nolint:nestif // chain-proof verification needs all bindings checked in-line; refactoring obscures the failure-reason trail
+				upstreamEnvDigest := envelopePayloadDigest(testCollection.Collection)
+				sidecar, lookupErr := vo.chainSidecarSource.LookupChainSidecar(ctx, step.Name, artifactsFrom, upstreamEnvDigest)
+				if lookupErr != nil {
+					reasons = append(reasons, fmt.Sprintf("chain sidecar lookup for step %s ← %s: %v", step.Name, artifactsFrom, lookupErr))
+					continue
+				}
+				if sidecar == nil && vo.requireSidecar {
+					reasons = append(reasons, fmt.Sprintf("chain edge %s ← %s requires a chain sidecar but none was found (--require-sidecar)", step.Name, artifactsFrom))
+					continue
+				}
+				if sidecar != nil {
+					// Sidecar found — chain-proof mode commits the
+					// pair. Bind to the upstream envelope digest
+					// (closes D1 cross-step replay): the sidecar
+					// MUST reference the specific upstream
+					// attestation we just verified, not just any
+					// attestation that happens to share the root.
+					if sidecar.SourceStep.EnvelopeDigest != upstreamEnvDigest {
+						reasons = append(reasons, fmt.Sprintf("chain sidecar binds to envelope %s but upstream step %s has envelope %s",
+							sidecar.SourceStep.EnvelopeDigest, artifactsFrom, upstreamEnvDigest))
+						continue
+					}
+					if err := chain.VerifyChainSidecar(*sidecar); err != nil {
+						collection.Warnings = append(collection.Warnings, fmt.Sprintf("chain sidecar verify for step %s ← %s: %v", step.Name, artifactsFrom, err))
+						reasons = append(reasons, err.Error())
+						continue
+					}
+					// Materials covered by the chain sidecar are
+					// cryptographically proven against the upstream
+					// root. Any REMAINING material in this step's
+					// collection that the sidecar doesn't claim must
+					// either be allowed by Step.AllowedUntracked (the
+					// policy-declared escape hatch for build-toolchain
+					// reads under e.g. /usr/lib/**) or fail the step.
+					proven := make(map[string]struct{}, len(sidecar.MaterialProofs))
+					for _, p := range sidecar.MaterialProofs {
+						proven[p.Path] = struct{}{}
+					}
+					if uncoveredErr := untrackedMaterialsAllowed(step, mats, proven); uncoveredErr != nil {
+						collection.Warnings = append(collection.Warnings, fmt.Sprintf("step %s ← %s: %v", step.Name, artifactsFrom, uncoveredErr))
+						reasons = append(reasons, uncoveredErr.Error())
+						continue
+					}
+					accepted = append(accepted, testCollection.Collection)
+					continue
+				}
+				// sidecar == nil falls through to legacy compare.
+			}
+
 			if err := compareArtifacts(mats, testCollection.Collection.Collection.Artifacts()); err != nil {
 				collection.Warnings = append(collection.Warnings, fmt.Sprintf("failed to verify artifacts for step %s: %v", step.Name, err))
 				reasons = append(reasons, err.Error())
@@ -842,6 +935,87 @@ func verifyCollectionArtifacts(step Step, collection source.CollectionVerificati
 	}
 
 	return nil
+}
+
+// envelopePayloadDigest returns the lowercase-hex sha256 of the
+// collection envelope's signed DSSE payload, used to bind a chain
+// sidecar to the SPECIFIC upstream attestation rather than just to
+// any attestation that publishes the same Merkle root. The DSSE
+// payload IS the in-toto Statement; hashing it gives a stable
+// identifier independent of signature material that may vary
+// between re-signings of the same content.
+func envelopePayloadDigest(c source.CollectionVerificationResult) string {
+	sum := sha256.Sum256(c.Envelope.Payload)
+	return hex.EncodeToString(sum[:])
+}
+
+// diagnoseEmptyCollectionResult is called when the subject-filtered Search
+// for (stepName, subjectDigests) returns zero collections. It re-probes the
+// source with an empty subject filter to figure out whether the step has
+// ANY loaded collections at all:
+//
+//   - 0 collections after the empty-subject probe   → ErrNoCollections.
+//     The step legitimately has no envelope loaded — the operator forgot
+//     to pass --attestations, the file didn't load, etc.
+//   - >0 collections after the empty-subject probe → ErrSubjectDigestMismatch.
+//     The envelope IS loaded; the operator's --artifactfile / --subjects
+//     digest just doesn't match anything in the collection. Surface the
+//     observed subjects so the operator can see what they ARE asked to
+//     verify against.
+//
+// The probe is unverified-search-aware: it performs the SAME signature
+// verification the original Search did (via the same VerifiedSourcer), so
+// envelopes with bad signatures don't fool the diagnostic into reporting a
+// digest mismatch on something that wouldn't have verified anyway.
+//
+// Errors from the probe itself collapse back to ErrNoCollections — we don't
+// want a diagnostic helper to surface a different error class than the
+// original failure mode.
+func diagnoseEmptyCollectionResult(ctx context.Context, src source.VerifiedSourcer, stepName string, suppliedDigests, attestations []string) error {
+	allForStep, err := src.Search(ctx, stepName, nil, attestations)
+	if err != nil || len(allForStep) == 0 {
+		return ErrNoCollections{Step: stepName}
+	}
+
+	// Collection loaded but subject set doesn't intersect supplied digests.
+	// Render the observed subjects as a stable, sorted, deduplicated list
+	// so the error message is reproducible across runs.
+	observed := observedCollectionSubjects(allForStep)
+	return ErrSubjectDigestMismatch{
+		Step:             stepName,
+		SuppliedDigests:  append([]string(nil), suppliedDigests...),
+		ObservedSubjects: observed,
+	}
+}
+
+// observedCollectionSubjects walks a list of CollectionVerificationResults
+// and returns the union of subject entries (rendered as "<name>"). The
+// in-toto statement's Subject slice is the authoritative source — that's
+// what subject-digest matching runs against in source.Search. Each subject
+// is rendered with its first available digest so the operator sees both
+// the symbolic name (e.g. "file:dist/argocd") AND the digest they would
+// need to match against. Sorted + deduped for stable output.
+func observedCollectionSubjects(results []source.CollectionVerificationResult) []string {
+	seen := make(map[string]struct{})
+	for _, r := range results {
+		// Statement.Subject is the canonical list source.Search filters on.
+		for _, subj := range r.Statement.Subject {
+			repr := subj.Name
+			// Include the first digest pair so operators can see what they
+			// would need to pass via --artifactfile / --subjects to match.
+			for algo, dig := range subj.Digest {
+				repr = fmt.Sprintf("%s (%s:%s)", subj.Name, algo, dig)
+				break
+			}
+			seen[repr] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func compareArtifacts(mats map[string]cryptoutil.DigestSet, arts map[string]cryptoutil.DigestSet) error {

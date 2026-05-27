@@ -1,4 +1,4 @@
-// Copyright 2026 The Aflock Authors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -265,8 +265,11 @@ func TestAttest_EndToEnd(t *testing.T) {
 	assert.True(t, hasReachable, "reachable OSV must be exposed as go:vuln:<id>")
 }
 
-// TestAttest_NoProducts surfaces the empty-context error so callers know to
-// expect it on misconfiguration rather than getting silent success.
+// TestAttest_NoProducts surfaces the empty-context outcome as a SoftError:
+// a build that didn't run govulncheck has nothing to attest, which must not
+// fail the run (exit 0, "Warnings:"). Regression guard for #240 — when the
+// attestor is auto-added by --workload for any go.mod project, a plain build
+// must stay green.
 func TestAttest_NoProducts(t *testing.T) {
 	gv := New()
 	ctx, err := attestation.NewContext("test", []attestation.Attestor{gv},
@@ -276,6 +279,7 @@ func TestAttest_NoProducts(t *testing.T) {
 	err = gv.Attest(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no products")
+	assert.True(t, attestation.IsSoftError(err), "no-output must be a SoftError, not a fatal contract violation")
 }
 
 // loadFixture reads a fixture file and parses the govulncheck JSON stream.

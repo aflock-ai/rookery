@@ -1,4 +1,4 @@
-// Copyright 2026 The Aflock Authors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -222,6 +222,7 @@ func bundleInspectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "inspect <bundle.tar.gz>",
 		Short:             "Print a bundle's manifest and a per-envelope summary",
+		Example:           "  # Print a bundle's manifest and per-envelope summary\n  cilock bundle inspect evidence.tar.gz",
 		Args:              cobra.ExactArgs(1),
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,

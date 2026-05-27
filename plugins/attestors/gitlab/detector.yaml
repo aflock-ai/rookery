@@ -1,0 +1,20 @@
+apiVersion: cilock.detection/v0.1
+name: gitlab
+description: "Captures GitLab CI runner context (job, pipeline, project, runner, optional JWT) when running inside a GitLab CI job."
+
+category: [ci-context]
+
+upstream:
+  name: GitLab CI/CD
+  source: "https://docs.gitlab.com/ee/ci/"
+  license: MIT
+  vendor: GitLab Inc.
+
+pre:
+  match:
+    env_equals:
+      var: GITLAB_CI
+      value: "true"
+
+llm_hints:
+  on_match: "GitLab CI runner context captured (job, pipeline, project, runner id)."

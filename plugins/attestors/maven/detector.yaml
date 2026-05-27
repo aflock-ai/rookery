@@ -1,0 +1,21 @@
+apiVersion: cilock.detection/v0.1
+name: maven
+description: "Captures Maven project metadata (pom.xml coordinates, dependencies) when run in a Maven workspace."
+
+category: [build, dependency-resolve]
+primary_category: build
+
+upstream:
+  name: Apache Maven
+  source: "https://maven.apache.org/"
+  license: Apache-2.0
+  vendor: Apache Software Foundation
+
+pre:
+  match:
+    any_of:
+      - file_exists: "pom.xml"
+      - file_exists: "mvnw"
+
+llm_hints:
+  on_match: "Maven project metadata captured (groupId, artifactId, version, dependencies)."

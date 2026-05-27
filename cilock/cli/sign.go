@@ -34,9 +34,11 @@ func SignCmd() *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:               "sign [file]",
-		Short:             "Signs a file",
-		Long:              "Signs a file with the provided key source and outputs the signed file to the specified destination",
+		Use:   "sign [file]",
+		Short: "Signs a file",
+		Long:  "Signs a file with the provided key source and outputs the signed file to the specified destination",
+		Example: `  # Sign a policy file with a local key, write the signed envelope
+  cilock sign -k cosign.key -f policy.json -o policy.signed.json`,
 		SilenceErrors:     true,
 		SilenceUsage:      true,
 		DisableAutoGenTag: true,

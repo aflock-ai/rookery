@@ -1,4 +1,4 @@
-// Copyright 2026 The Witness Contributors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -64,6 +64,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -171,6 +173,32 @@ type Attestor struct {
 	compiledIncludeGlob glob.Glob
 	excludeGlob         string
 	compiledExcludeGlob glob.Glob
+
+	// includeGlobUserSet tracks whether the include-glob came from
+	// explicit user intent (cobra Changed()) or from the default. Only
+	// user-intent include-globs participate in the precedence table
+	// in Attest — i.e., can rescue a path that default cache patterns
+	// would otherwise classify as cache. Without this signal the
+	// default include="*" would always match and would "rescue"
+	// everything from cache, defeating the cache classifier entirely.
+	includeGlobUserSet bool
+
+	// droppedByClassification counts paths the trace probe returned
+	// but the precedence table classified as CACHE or DROP. Populated
+	// in Attest's trace path so the CLI can emit a helpful "products
+	// set is empty but trace observed N writes" warning before
+	// signing.
+	droppedByClassification int
+
+	// requireExistsAtExit (default true) is the "product = surviving
+	// deliverable" gate. When true, files the tracee wrote but that
+	// no longer exist when the attestor runs are NOT recorded as
+	// products. When false, they're emitted as witness-only entries
+	// (path with nil digest) for forensic completeness — useful when
+	// investigating builds that produce-then-clean scratch artifacts
+	// you want named in the signed record. Set via
+	// WithRequireExistsAtExit(false) or `--product-allow-removed`.
+	requireExistsAtExit bool
 }
 
 // ProductLeaf describes one entry of the input tree. The Merkle leaf
@@ -181,6 +209,70 @@ type ProductLeaf struct {
 	Path       string `json:"path"`
 	FileDigest string `json:"fileDigest"`
 	LeafHash   string `json:"leafHash"`
+	// Kind hints what KIND of file this product is, by filename suffix.
+	// Empty when the file's kind isn't one of the well-known
+	// attestation/SBOM formats. omitempty so v0.3 attestations from
+	// before this field landed continue to round-trip byte-identically.
+	//
+	// Used by sandbox-boundary linking (V2 plan Phase 10): when a
+	// build emits its own inner attestation (Bazel SLSA provenance,
+	// BuildKit provenance, etc.), the OUTER trace catches the file
+	// in its products set. Tagging the kind here lets verifiers
+	// pick up the inner attestation by `kind` without re-parsing
+	// every product file.
+	//
+	// Recognized kinds (extend as needed; keep the set small to avoid
+	// scope creep — only formats that actually chain into the
+	// attestation graph belong here):
+	//   - "intoto"          — in-toto Statement envelope (.intoto.json/.jsonl)
+	//   - "intoto-dsse"     — DSSE-wrapped in-toto (.dsse, .intoto.dsse)
+	//   - "slsa-provenance" — SLSA provenance (.slsa-provenance.json)
+	//   - "spdx"            — SPDX SBOM (.spdx.json, .spdx.yaml)
+	//   - "cyclonedx"       — CycloneDX SBOM (.cdx.json, .cdx.xml, bom.json)
+	//   - "sarif"           — Static Analysis Results Interchange Format
+	//                          (.sarif, .sarif.json)
+	//   - "vex"             — OpenVEX / CSAF VEX (.vex.json, .csaf.json)
+	Kind string `json:"kind,omitempty"`
+}
+
+// detectProductKind inspects a filename for well-known attestation /
+// SBOM / scan-result format suffixes. Returns "" when the suffix
+// doesn't match a recognized kind. Pure function; no I/O.
+//
+// Conservative on purpose: filename-suffix only. We don't open files
+// to magic-byte sniff because (a) the product attestor runs at the
+// end of a build, files may be huge, (b) any reader-side validation
+// of the kind hint can re-verify by parsing. The hint is advisory.
+func detectProductKind(path string) string {
+	// Lower-case match. Most attestation tooling emits lowercase
+	// suffixes anyway, but normalize defensively.
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(lower, ".slsa-provenance.json"):
+		return "slsa-provenance"
+	case strings.HasSuffix(lower, ".intoto.jsonl"),
+		strings.HasSuffix(lower, ".intoto.json"):
+		return "intoto"
+	case strings.HasSuffix(lower, ".intoto.dsse"),
+		strings.HasSuffix(lower, ".dsse"):
+		return "intoto-dsse"
+	case strings.HasSuffix(lower, ".spdx.json"),
+		strings.HasSuffix(lower, ".spdx.yaml"),
+		strings.HasSuffix(lower, ".spdx.yml"):
+		return "spdx"
+	case strings.HasSuffix(lower, ".cdx.json"),
+		strings.HasSuffix(lower, ".cdx.xml"),
+		strings.HasSuffix(lower, "/bom.json"),
+		lower == "bom.json":
+		return "cyclonedx"
+	case strings.HasSuffix(lower, ".sarif.json"),
+		strings.HasSuffix(lower, ".sarif"):
+		return "sarif"
+	case strings.HasSuffix(lower, ".vex.json"),
+		strings.HasSuffix(lower, ".csaf.json"):
+		return "vex"
+	}
+	return ""
 }
 
 // Option configures a new Attestor.
@@ -192,19 +284,39 @@ func WithIncludeGlob(g string) Option {
 	return func(a *Attestor) { a.includeGlob = g }
 }
 
+// WithIncludeGlobUserIntent marks the include-glob as having come from
+// explicit operator intent (e.g., a non-default cobra flag value). The
+// CLI calls this when cmd.Flags().Changed("attestor-product-include-glob")
+// is true. The precedence table in Attest treats a user-intent include
+// glob as the highest-priority signal — a path matching it is recorded
+// as a product even if a default cache pattern would otherwise drop it.
+func WithIncludeGlobUserIntent(userSet bool) Option {
+	return func(a *Attestor) { a.includeGlobUserSet = userSet }
+}
+
 // WithExcludeGlob removes paths matching the glob from the recorded
 // product set (default empty — exclude nothing).
 func WithExcludeGlob(g string) Option {
 	return func(a *Attestor) { a.excludeGlob = g }
 }
 
+// WithRequireExistsAtExit toggles the "product must still exist when
+// the attestor runs" gate. Default is true (the strict, intent-matching
+// behavior). Set to false to keep witness-only entries (path with nil
+// digest) for files the tracee wrote then cleaned up — useful for
+// forensic builds where you want every transient artifact named.
+func WithRequireExistsAtExit(require bool) Option {
+	return func(a *Attestor) { a.requireExistsAtExit = require }
+}
+
 // New constructs an Attestor with default globs (include="*", exclude="").
 func New(opts ...Option) *Attestor {
 	a := &Attestor{
-		includeGlob:        defaultIncludeGlob,
-		excludeGlob:        defaultExcludeGlob,
-		HashAlgorithmField: HashAlgorithm,
-		ConstructionField:  Construction,
+		includeGlob:         defaultIncludeGlob,
+		excludeGlob:         defaultExcludeGlob,
+		requireExistsAtExit: true, // strict by default; explicit opt-out
+		HashAlgorithmField:  HashAlgorithm,
+		ConstructionField:   Construction,
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -237,6 +349,19 @@ func configOptions() []registry.Configurer {
 					return a, fmt.Errorf("unexpected attestor type: %T is not a product attestor", a)
 				}
 				WithExcludeGlob(excludeGlob)(prod)
+				return prod, nil
+			},
+		),
+		registry.BoolConfigOption(
+			"require-exists-at-exit",
+			"When true (default), a file the build wrote must still exist at attestation time to be recorded as a product. Files the build wrote then removed are treated as scratch and dropped. Set false to keep witness-only entries (path with nil digest) for forensic completeness.",
+			true,
+			func(a attestation.Attestor, v bool) (attestation.Attestor, error) {
+				prod, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("unexpected attestor type: %T is not a product attestor", a)
+				}
+				WithRequireExistsAtExit(v)(prod)
 				return prod, nil
 			},
 		),
@@ -274,9 +399,79 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 	return jsonschema.Reflect(&Attestor{})
 }
 
+// collectTracedFileSet inspects completed attestors for any traced
+// CommandRun and returns (a) whether tracing was active, and (b) the
+// set of paths whose contents should survive the --trace filter in
+// shouldRecord. open()'d files are obvious; rename destinations and
+// direct-write targets are required because atomic-rename builds (e.g.
+// `go build`) never open() the final artifact directly. (closes #152)
+func collectTracedFileSet(ctx *attestation.AttestationContext) (bool, map[string]bool) {
+	traced := false
+	set := map[string]bool{}
+	for _, completed := range ctx.CompletedAttestors() {
+		cmd, ok := completed.Attestor.(*commandrun.CommandRun)
+		if !ok || !cmd.TracingEnabled() {
+			continue
+		}
+		// Tracing was REQUESTED (config flag set) — but check that it
+		// actually produced data. On macOS / Windows / any platform
+		// where tracing_unsupported.go is built, trace() returns an
+		// error and cmd.Processes stays empty. Returning traced=true
+		// here with an empty openedFiles set would tell walk-mode
+		// "trust the trace" — which combined with the empty set
+		// causes shouldRecord() in file.RecordArtifacts to reject
+		// EVERY product (file.go:237 — "not in openedFiles AND
+		// processWasTraced → drop"). Result: silent product loss,
+		// no sbom / no go-build / no envelope despite the build
+		// having succeeded.
+		//
+		// If tracing failed to produce processes, fall back to an
+		// unfiltered walk so downstream attestors see the actual
+		// build outputs.
+		if len(cmd.Processes) == 0 {
+			continue
+		}
+		traced = true
+		for _, process := range cmd.Processes {
+			for fname := range process.OpenedFiles {
+				set[fname] = true
+			}
+			if process.FileOps == nil {
+				continue
+			}
+			for _, r := range process.FileOps.Renames {
+				set[r.NewPath] = true
+			}
+			for _, w := range process.FileOps.Writes {
+				set[w.Path] = true
+			}
+		}
+	}
+	return traced, set
+}
+
+// commandStartTime returns the wall-clock instant the wrapped command began,
+// read from a completed CommandRun attestor. The walk path passes it to
+// file.RecordArtifacts so a same-digest file the build rewrote during its run
+// (mtime >= start) is still recorded as a product. Returns the zero time when
+// no command ran (e.g. `cilock attest` with no wrapped command), which makes
+// RecordArtifacts fall back to the legacy digest-only dedup.
+func commandStartTime(ctx *attestation.AttestationContext) time.Time {
+	for _, completed := range ctx.CompletedAttestors() {
+		if cmd, ok := completed.Attestor.(*commandrun.CommandRun); ok {
+			if started := cmd.StartedAt(); !started.IsZero() {
+				return started
+			}
+		}
+	}
+	return time.Time{}
+}
+
 // Attest walks the product set, computes the per-file pre-hashes, sorts
 // them deterministically, and builds the Merkle tree. The signed
 // predicate's MerkleRoot is the resulting tree root in hex.
+//
+//nolint:gocyclo,gocognit,funlen // glob compile → mode resolve → trace integrate → walk fallback; refactoring obscures the mode-dispatch logic
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	compiledIncludeGlob, err := glob.Compile(a.includeGlob)
 	if err != nil {
@@ -292,20 +487,122 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 	a.baseArtifacts = ctx.Materials()
 
-	processWasTraced := false
-	openedFileSet := map[string]bool{}
-	for _, completed := range ctx.CompletedAttestors() {
-		cmd, ok := completed.Attestor.(*commandrun.CommandRun)
-		if !ok || !cmd.TracingEnabled() {
-			continue
+	// Resolve capture mode at attestor-run time. CaptureAuto picks the
+	// fastest available source (trace if a CaptureProbe was registered;
+	// otherwise walk). Non-auto modes fail loudly when their source
+	// isn't available — see ResolveCaptureMode for the contract.
+	resolved, probe, err := attestation.ResolveCaptureMode(
+		ctx.CaptureMode(), ctx.CompletedAttestors(), ctx.RegisteredAttestors())
+	if err != nil {
+		return fmt.Errorf("product attestor: %w", err)
+	}
+
+	if resolved == attestation.CaptureTrace && probe != nil { //nolint:nestif // trace-integration block has inherent nesting over probe outputs
+		// Build cache-pattern matchers used by the precedence table
+		// below. Two matchers, two roles:
+		//
+		//   cacheMatcher: defaults + env-derived + user-added.
+		//     A path matching here is CACHE unless a higher-priority
+		//     rule (user include-glob, --cache-allow-pattern) rescues
+		//     it. Drives classifyCache.
+		//
+		//   cacheAllowMatcher: a separate per-PATH glob set from
+		//     CachePatternOptions.Allow. This is intentionally per-path
+		//     (not the existing pattern-string-removal in
+		//     ResolveCachePatterns) so operators can write
+		//     --cache-allow-pattern='/tmp/build/**' and have that
+		//     path-glob exempt their build output from the default
+		//     /tmp/** cache pattern, without having to know the exact
+		//     default pattern string.
+		//
+		// Cache classification runs HERE, in the product attestor,
+		// rather than inside commandrun.TraceOutputs(). That move is
+		// the substance of Bug 1 from the blind Linux UX test
+		// (rookery#TBD): the user's --attestor-product-include-glob
+		// flag must be able to rescue a path the cache pattern would
+		// otherwise drop. Doing classification in commandrun (where
+		// product globs are out of reach) deprived the user of any
+		// way to override.
+		cachePatternOpts := ctx.CachePatterns()
+		patterns := attestation.ResolveCachePatterns(cachePatternOpts)
+		cacheMatcher, perrs := attestation.NewCachePathMatcher(patterns)
+		for _, perr := range perrs {
+			// Soft failure: a bad pattern doesn't block attestation,
+			// just gets logged. Operator sees it and fixes.
+			log.Debugf("cache pattern compile error: %v", perr)
 		}
-		processWasTraced = true
-		for _, process := range cmd.Processes {
-			for fname := range process.OpenedFiles {
-				openedFileSet[fname] = true
+		cacheAllowMatcher, aerrs := attestation.NewCachePathMatcher(cachePatternOpts.Allow)
+		for _, aerr := range aerrs {
+			log.Debugf("cache-allow pattern compile error: %v", aerr)
+		}
+		// Keep the cache matcher installed on the probe so
+		// TraceCacheArtifacts() / TraceIntermediates() see the same
+		// cache definition the product attestor uses. Their bucket
+		// (cache-only inventory) still uses the pattern matcher
+		// directly.
+		if installer, ok := probe.(interface {
+			SetCacheMatcher(*attestation.CachePathMatcher)
+		}); ok {
+			installer.SetCacheMatcher(cacheMatcher)
+		}
+
+		// Trace mode: consume the digests the read-tap / path-hash
+		// already computed during the trace. Skip the workdir walk
+		// entirely — the trace knows exactly what files the tracee
+		// wrote, and path-hashing happened post-tracee-exit when the
+		// files are stable. No re-read on the hot path.
+		raw := probe.TraceOutputs()
+		filtered := make(map[string]attestation.CaptureEntry, len(raw))
+		dropped := 0
+		// Resolve relative trace paths against workingDir. ctx.WorkingDir()
+		// may be empty when the caller didn't pass one explicitly (common
+		// from cilock-action with no `workingdir:` input); fall back to
+		// the process cwd, which is what the tracee inherited.
+		workdir := ctx.WorkingDir()
+		if workdir == "" {
+			if cwd, err := os.Getwd(); err == nil {
+				workdir = cwd
 			}
 		}
+		for path, entry := range raw {
+			// Trace records mix absolute and relative paths. atomic-
+			// rename builds (Go, Cargo, GCC -o) write to a temp
+			// absolute path then RENAME(2) to the final target —
+			// the rename target is recorded relative to the tracee's
+			// cwd. Resolve relative trace paths against workdir so
+			// the include-glob (always absolute when set from
+			// cilock-action) matches the right surface.
+			resolved := path
+			if workdir != "" && !filepath.IsAbs(resolved) {
+				resolved = filepath.Join(workdir, resolved)
+			}
+
+			decision := classifyTracePath(
+				resolved,
+				a.compiledIncludeGlob, a.includeGlobUserSet,
+				a.compiledExcludeGlob,
+				cacheAllowMatcher,
+				cacheMatcher,
+			)
+			switch decision {
+			case classifyProduct:
+				// Use resolved as the map key so downstream (mime
+				// detect, digest hash, exists-at-exit stat) sees the
+				// real path.
+				filtered[resolved] = entry
+			case classifyCache, classifyDrop:
+				dropped++
+			}
+		}
+		a.products = fromCaptureEntries(filtered, a.requireExistsAtExit)
+		a.droppedByClassification = dropped
+		return a.buildTree()
 	}
+
+	// Walk mode (legacy default). Walk the workdir, optionally
+	// filtered to files the tracee touched (collectTracedFileSet),
+	// hash each. This is the v0.1 behavior preserved bit-for-bit.
+	processWasTraced, openedFileSet := collectTracedFileSet(ctx)
 
 	digestMap, err := file.RecordArtifacts(
 		ctx.WorkingDir(),
@@ -317,6 +614,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		ctx.DirHashGlob(),
 		a.compiledIncludeGlob,
 		a.compiledExcludeGlob,
+		// Command-start time so RecordArtifacts can rescue same-digest
+		// files the build rewrote during its run (deterministic rebuilds).
+		// Without a syscall view, mtime >= start is the only signal walk
+		// mode has that a byte-identical file is actually a fresh product.
+		commandStartTime(ctx),
 	)
 	if err != nil {
 		return err
@@ -324,6 +626,77 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 	a.products = fromDigestMap(ctx.WorkingDir(), digestMap)
 	return a.buildTree()
+}
+
+// fromCaptureEntries converts the trace probe's per-path digest map
+// into the attestation.Product type. A "product" must satisfy:
+//   - written by the tracee (the probe wouldn't include it otherwise)
+//   - matches the include-glob (caller already filtered)
+//   - **exists at the moment we attest** (this function's check)
+//   - has a content hash
+//
+// The exists-at-exit rule turns "product = anything the build wrote"
+// (which on a Go build was 9000+ scratch files) into "product = the
+// surviving deliverables". Files the build wrote then cleaned up are
+// no longer products — they're routed to ScratchWrites in the trace
+// summary so a verifier can still see "the build created N temp
+// files and removed them" as forensic evidence.
+//
+// Mime-type detection is best-effort.
+func fromCaptureEntries(entries map[string]attestation.CaptureEntry, requireExistsAtExit bool) map[string]attestation.Product {
+	out := make(map[string]attestation.Product, len(entries))
+	for path, entry := range entries {
+		// Exists-at-exit gate. Default-on; callers can opt out via
+		// WithRequireExistsAtExit(false) when they want forensic
+		// completeness over deliverable-only semantics.
+		fi, statErr := os.Stat(path)
+		if statErr != nil {
+			if requireExistsAtExit {
+				continue
+			}
+			// Path is gone — emit witness-only entry (nil digest,
+			// unknown mime).
+			out[path] = attestation.Product{MimeType: "unknown", Digest: nil}
+			continue
+		}
+
+		mimeType := "unknown"
+		if mt, mtErr := getFileContentType(path); mtErr == nil {
+			mimeType = mt
+		}
+		if mimeType == "application/octet-stream" && fi.IsDir() {
+			mimeType = "text/directory"
+		}
+
+		// Path exists but we couldn't hash it (trace race, transient
+		// permission). Keep as witness-only product entry — the
+		// existence-at-exit invariant tells us this IS a real
+		// deliverable, just one whose content we couldn't capture.
+		if entry.Digest == nil {
+			out[path] = attestation.Product{
+				MimeType: mimeType,
+				Digest:   nil,
+			}
+			continue
+		}
+
+		ds, err := cryptoutil.NewDigestSet(entry.Digest)
+		if err != nil {
+			// Same fallback path — bad digest data on the trace
+			// side; record the path without a digest rather than
+			// dropping it silently.
+			out[path] = attestation.Product{
+				MimeType: mimeType,
+				Digest:   nil,
+			}
+			continue
+		}
+		out[path] = attestation.Product{
+			MimeType: mimeType,
+			Digest:   ds,
+		}
+	}
+	return out
 }
 
 // buildTree filters the product set through the include / exclude globs,
@@ -338,6 +711,16 @@ func (a *Attestor) buildTree() error {
 	for _, p := range pairs {
 		prod, ok := a.products[p.originalKey]
 		if !ok {
+			continue
+		}
+		// Trace mode now emits witness-only entries with nil Digest
+		// when a write was observed but the file couldn't be hashed
+		// (gone before attest, fast-exit race, etc.). Those entries
+		// stay in the product map for inventory but DON'T enter the
+		// Merkle tree — a tree leaf needs a content digest. Skip
+		// silently here; downstream consumers (link, slsa) still see
+		// the path via Products().
+		if prod.Digest == nil {
 			continue
 		}
 		digestHex, ok := prod.Digest[cryptoutil.DigestValue{Hash: crypto.SHA256}]
@@ -359,6 +742,7 @@ func (a *Attestor) buildTree() error {
 			Path:       p.normalized,
 			FileDigest: digestHex,
 			LeafHash:   hex.EncodeToString(leafPreHash),
+			Kind:       detectProductKind(p.normalized),
 		})
 		preHashes = append(preHashes, leafPreHash)
 	}
@@ -381,6 +765,14 @@ func (a *Attestor) buildTree() error {
 // Products returns the per-file product map for in-process consumers
 // (link, slsa). It is NOT part of the predicate.
 func (a *Attestor) Products() map[string]attestation.Product { return a.products }
+
+// DroppedByClassification returns the number of paths the trace probe
+// surfaced that the precedence table classified as CACHE or filtered
+// out by user globs. The CLI uses this signal to emit a helpful
+// "products set is empty but the trace observed N writes" warning so
+// operators don't ship a signed-but-empty envelope without realising
+// their build output went to a default cache location.
+func (a *Attestor) DroppedByClassification() int { return a.droppedByClassification }
 
 // Subjects returns the single tree:products subject. If the product set
 // is empty the subject is still emitted, with the digest set to the
@@ -481,6 +873,112 @@ func (a *Attestor) RootBytes() []byte {
 	out := make([]byte, len(a.rootBytes))
 	copy(out, a.rootBytes)
 	return out
+}
+
+// =====================================================================
+// Trace-mode classification
+// =====================================================================
+
+// classification is the per-path outcome of the precedence table in
+// classifyTracePath. Exported via a small helper rather than booleans
+// so callers can clearly distinguish "this is a product" from "this is
+// a cache artifact" from "the user explicitly excluded it" without
+// magic-string-matching log lines.
+type classification int
+
+const (
+	classifyProduct classification = iota
+	classifyCache
+	classifyDrop
+)
+
+// classifyTracePath applies the v0.3 product precedence rules from
+// the design doc (most-specific wins, top to bottom):
+//
+//  1. User --attestor-product-include-glob (when non-default) matches
+//     → PRODUCT (regardless of cache patterns). This is the rescue
+//     path: the operator typed an include glob, that intent dominates
+//     default classification.
+//  2. User --attestor-product-exclude-glob matches → DROP (never a
+//     product, even if include-glob also matched).
+//  3. User --cache-allow-pattern matches path → PRODUCT. cache-allow
+//     is a per-path exemption from the cache classifier; useful for
+//     reclaiming specific cache locations as products without
+//     knowing the exact default pattern string.
+//  4. cache pattern (defaults + env-derived + user-added) matches
+//     → CACHE. This is where /tmp/**, GOCACHE, ~/.cache, etc. live.
+//  5. Otherwise → PRODUCT.
+//
+// includeGlobUserSet captures whether the include-glob came from the
+// operator or the default. When false (default "*"), the include-glob
+// is NOT treated as user intent: it still acts as a filter at step 5
+// (when nothing else fired), but it does NOT override cache
+// classification. This preserves the existing behavior for operators
+// who never touched the flag.
+//
+// Returns classifyProduct / classifyCache / classifyDrop. The caller
+// (Attest's trace path) decides which bucket to put the path in.
+//
+//nolint:gocognit,nestif // five-step precedence with a small nested check for exclude-inside-include; flattening hides the precedence intent
+func classifyTracePath(
+	path string,
+	includeGlob glob.Glob, includeGlobUserSet bool,
+	excludeGlob glob.Glob,
+	cacheAllow *attestation.CachePathMatcher,
+	cache *attestation.CachePathMatcher,
+) classification {
+	// 1. User include-glob (non-default) takes precedence over
+	//    cache classification. Without this rule the default cache
+	//    pattern (/tmp/**) silently drops Argo CD's
+	//    `go build -o /tmp/out/argocd ./cmd` output even though the
+	//    operator passed --attestor-product-include-glob '/tmp/**'.
+	if includeGlobUserSet && includeGlob != nil {
+		if matched, _ := safeGlobMatch(includeGlob, path); matched {
+			// Step 2 still applies — even with user-set include,
+			// an explicit exclude wins.
+			if excludeGlob != nil {
+				if exMatched, _ := safeGlobMatch(excludeGlob, path); exMatched {
+					return classifyDrop
+				}
+			}
+			return classifyProduct
+		}
+		// User set an include glob and this path did not match.
+		// Fall through to the rest of the table — the path may still
+		// be a default-classifiable cache item that should land in
+		// the cache bucket rather than being silently dropped here.
+		// (Step 5's default include-glob check below catches the
+		// "exclude things outside the user's intent" case.)
+	}
+
+	// 2. User exclude-glob always wins for paths it matches.
+	if excludeGlob != nil {
+		if matched, _ := safeGlobMatch(excludeGlob, path); matched {
+			return classifyDrop
+		}
+	}
+
+	// 3. Cache-allow rescues from cache classification.
+	if cacheAllow != nil && cacheAllow.Matches(path) {
+		return classifyProduct
+	}
+
+	// 4. Default + user-added cache patterns.
+	if cache != nil && cache.Matches(path) {
+		return classifyCache
+	}
+
+	// 5. Otherwise: PRODUCT — but still honour the include glob as a
+	// FILTER (not a rescue). When the include glob is the default
+	// "*" everything matches, so this is a no-op for unset flags.
+	// When the operator passed a narrower include glob, paths that
+	// don't match it AND aren't cache get DROPPED here.
+	if includeGlob != nil {
+		if matched, _ := safeGlobMatch(includeGlob, path); !matched {
+			return classifyDrop
+		}
+	}
+	return classifyProduct
 }
 
 // =====================================================================

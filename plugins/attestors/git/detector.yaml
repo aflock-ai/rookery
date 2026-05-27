@@ -1,0 +1,18 @@
+apiVersion: cilock.detection/v0.1
+name: git
+description: "Captures git repository state (commit, status, tags, signatures) when run inside a git checkout."
+
+category: [source-checkout]
+
+upstream:
+  name: Git
+  source: "https://git-scm.com/"
+  license: GPL-2.0-only
+  vendor: Software Freedom Conservancy
+
+pre:
+  match:
+    file_exists: ".git/HEAD"
+
+llm_hints:
+  on_match: "Git repository state captured (commit SHA, status, tags)."

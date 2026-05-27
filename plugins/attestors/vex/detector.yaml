@@ -1,0 +1,26 @@
+apiVersion: cilock.detection/v0.1
+name: vex
+description: "Captures OpenVEX documents asserting vulnerability statuses (affected, not_affected, fixed, under_investigation)."
+
+# No category: VEX is a format that can carry both consumption
+# (vex-consume) and disclosure (vulnerability-disclosure) intent. Step
+# intent comes from the producing context, not the format. See
+# docs/lexicon-v1.md composition rule 6.
+
+upstream:
+  name: OpenVEX
+  source: "https://github.com/openvex"
+  license: CC-BY-4.0
+  vendor: OpenSSF
+  format_only: true
+
+recommended_trace: "off"
+
+post:
+  match:
+    any_of:
+      - product_glob: ["*.openvex.json", "**/*.openvex.json", "*.vex.json", "**/*.vex.json"]
+      - product_glob: ["vex.json", "**/vex.json"]
+
+llm_hints:
+  on_match: "OpenVEX document captured. Vulnerability statements preserved for downstream policy."

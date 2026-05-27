@@ -1,0 +1,22 @@
+apiVersion: cilock.detection/v0.1
+name: lockfiles
+description: "Captures dependency lockfile contents (npm/yarn/pnpm/go/Cargo/Python/Ruby) when present in the workspace."
+
+category: [dependency-resolve]
+
+pre:
+  match:
+    any_of:
+      - file_exists: "package-lock.json"
+      - file_exists: "yarn.lock"
+      - file_exists: "pnpm-lock.yaml"
+      - file_exists: "go.sum"
+      - file_exists: "Cargo.lock"
+      - file_exists: "Gemfile.lock"
+      - file_exists: "poetry.lock"
+      - file_exists: "Pipfile.lock"
+      - file_exists: "requirements.txt"
+      - file_exists: "composer.lock"
+
+llm_hints:
+  on_match: "Lockfile contents captured for downstream provenance and SBOM correlation."

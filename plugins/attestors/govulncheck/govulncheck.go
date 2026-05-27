@@ -1,4 +1,4 @@
-// Copyright 2026 The Aflock Authors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@ package govulncheck
 import (
 	"bytes"
 	"crypto"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,9 +43,13 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/invopop/jsonschema"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 const (
 	Name    = "govulncheck"
@@ -82,6 +87,7 @@ func init() {
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return New()
 	})
+	detection.Register(Name, detectorYAML)
 }
 
 // Message is a single envelope from the v1.0.0 govulncheck wire protocol. Each
@@ -327,7 +333,10 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
 	if len(products) == 0 {
-		return fmt.Errorf("no products to attest")
+		// Soft: no products at all is "nothing to do", not a contract
+		// violation (mirrors sbom). See the SoftError at the end of this
+		// function for the products-present-but-no-govulncheck-JSON case.
+		return attestation.NewSoftError("no products to attest")
 	}
 
 	for path, product := range products {
@@ -379,7 +388,12 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 		return nil
 	}
 
-	return fmt.Errorf("no govulncheck JSON output file found in products")
+	// Soft, not fatal: a build that simply didn't run `govulncheck -json`
+	// (e.g. --workload auto adds this attestor for any go.mod project, even
+	// a plain `go build`) has nothing to attest — that's "nothing to do",
+	// not a contract violation. Mirrors sbom/go-build so `--workload auto`
+	// stays usable without every Go build hard-failing. (closes #240)
+	return attestation.NewSoftError("no govulncheck JSON output file found in products — run `govulncheck -json` in the wrapped command to capture results")
 }
 
 // parseStream reads the v1.0.0 wire format. The stream is a concatenation of

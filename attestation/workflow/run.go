@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -106,6 +107,108 @@ func RunWithAdditionalSubjects(subjects map[string]cryptoutil.DigestSet) RunOpti
 	}
 }
 
+// AttestorRunErrors is the structured aggregate returned by Run /
+// RunWithExports when one or more attestors reported a non-nil error.
+//
+// Callers (specifically `cilock run`) split the legs into two classes to set
+// the process exit code correctly (finding #221):
+//
+//   - Fatal: the attestor's contract was violated (signer failure, tracing
+//     requested on a platform that doesn't support it, output path
+//     inaccessible, command exited non-zero). Exit 1.
+//   - Soft:  the attestor ran successfully but the project didn't ship the
+//     evidence the attestor wraps (sbom: no SBOM file; go-build: no Go
+//     binary). Exit 0; surfaced as a Warnings: line, not Errors:.
+//
+// SoftLegs() and FatalLegs() walk the captured per-attestor errors so the
+// CLI doesn't have to re-do the errors.As dispatch itself.
+type AttestorRunErrors struct {
+	// Legs is the per-attestor error list, in completion order. Each
+	// entry already wraps the underlying error with the
+	// "attestor X failed: ..." prefix the legacy code path used.
+	Legs []AttestorErrorLeg
+}
+
+// AttestorErrorLeg pairs an attestor name with the error it returned. The
+// Err field still wraps any SoftError or other typed error returned by the
+// attestor, so callers can errors.As(leg.Err, &target) freely.
+type AttestorErrorLeg struct {
+	Attestor string
+	Err      error
+}
+
+// Error implements error. Preserves the legacy "attestors failed with error
+// messages: ..." shape so existing string-matching consumers don't break.
+func (e *AttestorRunErrors) Error() string {
+	if e == nil || len(e.Legs) == 0 {
+		return "attestors failed with error messages"
+	}
+	parts := make([]string, 0, len(e.Legs)+1)
+	parts = append(parts, "attestors failed with error messages")
+	for _, leg := range e.Legs {
+		parts = append(parts, leg.Err.Error())
+	}
+	return strings.Join(parts, "\n")
+}
+
+// Unwrap returns the slice of per-attestor errors. errors.As / errors.Is
+// traverse this slice so callers can interrogate any individual leg.
+func (e *AttestorRunErrors) Unwrap() []error {
+	if e == nil {
+		return nil
+	}
+	out := make([]error, 0, len(e.Legs))
+	for _, leg := range e.Legs {
+		out = append(out, leg.Err)
+	}
+	return out
+}
+
+// SoftLegs returns the legs whose error wraps an attestation.SoftError —
+// i.e. "attestor ran but had nothing to do" cases. CLI demotes these to
+// warnings and keeps the exit code at zero.
+func (e *AttestorRunErrors) SoftLegs() []AttestorErrorLeg {
+	if e == nil {
+		return nil
+	}
+	var out []AttestorErrorLeg
+	for _, leg := range e.Legs {
+		if attestation.IsSoftError(leg.Err) {
+			out = append(out, leg)
+		}
+	}
+	return out
+}
+
+// FatalLegs returns the legs that are NOT SoftErrors — contract violations
+// that should propagate to a non-zero process exit code.
+func (e *AttestorRunErrors) FatalLegs() []AttestorErrorLeg {
+	if e == nil {
+		return nil
+	}
+	var out []AttestorErrorLeg
+	for _, leg := range e.Legs {
+		if !attestation.IsSoftError(leg.Err) {
+			out = append(out, leg)
+		}
+	}
+	return out
+}
+
+// HasFatal reports whether any leg is fatal. Convenience over FatalLegs()
+// for callers that only need a boolean.
+func (e *AttestorRunErrors) HasFatal() bool {
+	if e == nil {
+		return false
+	}
+	for _, leg := range e.Legs {
+		if !attestation.IsSoftError(leg.Err) {
+			return true
+		}
+	}
+	return false
+}
+
 // RunResult contains the generated attestation collection as well as the signed DSSE envelope, if one was
 // created.
 //
@@ -162,11 +265,27 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 		return result, fmt.Errorf("failed to run attestors: %w", err)
 	}
 
-	errs := make([]error, 0)
+	// Compute the parent-subject pool ONCE: the union of subjects from
+	// every non-exported attestor (git, material, product, …) plus the
+	// user-supplied additional subjects. This is the same anchor set the
+	// wrapping collection envelope's subjects[] will carry.
+	//
+	// Each exported sidecar envelope (sbom, slsa, link, vex, …) is then
+	// signed with `parentSubjects ∪ exporter.Subjects()`. Without this,
+	// the sidecar only carries its own internal subjects (file digests
+	// of the predicate body), which don't overlap with the seed subjects
+	// users pass to `cilock verify -s <commit>` — verify's
+	// ExternalAttestation lookup returns 0 envelopes even though the
+	// sidecar is on disk and signed by a trusted functionary. Bug
+	// surfaced by the prometheus blind-test (cf. `cilock policy
+	// from-bundles` sidecar discovery, PR #186).
+	parentSubjects := collectParentSubjects(runCtx, ro.additionalSubjects)
+
+	legs := make([]AttestorErrorLeg, 0)
 	for _, r := range runCtx.CompletedAttestors() {
 		if r.Error != nil { //nolint:nestif
 			wrappedErr := fmt.Errorf("attestor %s failed: %w", r.Attestor.Name(), r.Error)
-			errs = append(errs, wrappedErr)
+			legs = append(legs, AttestorErrorLeg{Attestor: r.Attestor.Name(), Err: wrappedErr})
 		} else {
 			// Check if this is a MultiExporter first
 			if multiExporter, ok := r.Attestor.(attestation.MultiExporter); ok {
@@ -181,15 +300,15 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 					}
 
 					var envelope dsse.Envelope
-					var subjects map[string]cryptoutil.DigestSet
+					var ownSubjects map[string]cryptoutil.DigestSet
 
 					// Get subjects if the exported attestor implements Subjecter
 					if subjecter, ok := exportedAttestor.(attestation.Subjecter); ok {
-						subjects = subjecter.Subjects()
+						ownSubjects = subjecter.Subjects()
 					}
 
 					if !ro.insecure {
-						envelope, err = createAndSignEnvelope(exportedAttestor, exportedAttestor.Type(), subjects, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						envelope, err = createAndSignEnvelope(exportedAttestor, exportedAttestor.Type(), mergeCollectionSubjects(parentSubjects, ownSubjects), dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 						if err != nil {
 							return result, fmt.Errorf("failed to sign envelope for %s: %w", exportedAttestor.Name(), err)
 						}
@@ -208,7 +327,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 				if subjecter, ok := r.Attestor.(attestation.Subjecter); ok {
 					var envelope dsse.Envelope
 					if !ro.insecure {
-						envelope, err = createAndSignEnvelope(r.Attestor, r.Attestor.Type(), subjecter.Subjects(), dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						envelope, err = createAndSignEnvelope(r.Attestor, r.Attestor.Type(), mergeCollectionSubjects(parentSubjects, subjecter.Subjects()), dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 						if err != nil {
 							return result, fmt.Errorf("failed to sign envelope: %w", err)
 						}
@@ -221,10 +340,13 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	// Build and sign the collection even when attestors failed. This ensures
 	// forensic data (e.g. secretscan findings) is captured in the attestation
 	// file so it can be used for post-incident analysis and policy verification.
+	//
+	// Errors are returned as a typed AttestorRunErrors so callers (the
+	// `cilock run` CLI) can split soft errors (attestor had nothing to do)
+	// from fatal ones (contract violation). See finding #221.
 	var attestorErr error
-	if !ro.ignoreErrors && len(errs) > 0 {
-		errs := append([]error{errors.New("attestors failed with error messages")}, errs...)
-		attestorErr = errors.Join(errs...)
+	if !ro.ignoreErrors && len(legs) > 0 {
+		attestorErr = &AttestorRunErrors{Legs: legs}
 	}
 
 	// Filter attestors for collection - exclude those that are exported separately
@@ -265,6 +387,49 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	result = append(result, collectionResult)
 
 	return result, attestorErr
+}
+
+// collectParentSubjects walks the completed attestors and assembles
+// the subject pool that the wrapping collection envelope will carry.
+// Subjects from any attestor opting OUT of the collection (i.e.,
+// implementing Exporter with Export()==true, or MultiExporter) are
+// excluded — those attestors carry their own subjects in their
+// sidecar envelopes, and inheriting them here would create a
+// circular subject graph (sidecar carrying its own digest as a
+// subject to itself).
+//
+// User-supplied additional subjects are merged on top with precedence
+// matching mergeCollectionSubjects.
+//
+// This pool is then unioned with each exported attestor's own
+// subjects when signing its sidecar — see the export loop in run().
+// Without it, a sidecar's subjects don't overlap with the seed
+// subjects users pass to `cilock verify -s <commit>`, and
+// ExternalAttestation lookups fail with "not found" even though the
+// envelope is loaded and trusted.
+func collectParentSubjects(runCtx *attestation.AttestationContext, additional map[string]cryptoutil.DigestSet) map[string]cryptoutil.DigestSet {
+	pool := make(map[string]cryptoutil.DigestSet)
+	for _, completed := range runCtx.CompletedAttestors() {
+		if completed.Error != nil {
+			continue
+		}
+		// Skip attestors that emit their own sidecar — we're computing
+		// the *non-sidecar* subject pool.
+		if _, ok := completed.Attestor.(attestation.MultiExporter); ok {
+			continue
+		}
+		if exp, ok := completed.Attestor.(attestation.Exporter); ok && exp.Export() {
+			continue
+		}
+		subjecter, ok := completed.Attestor.(attestation.Subjecter)
+		if !ok {
+			continue
+		}
+		for name, digest := range subjecter.Subjects() {
+			pool[name] = digest
+		}
+	}
+	return mergeCollectionSubjects(pool, additional)
 }
 
 // mergeCollectionSubjects returns the union of attestor-discovered subjects

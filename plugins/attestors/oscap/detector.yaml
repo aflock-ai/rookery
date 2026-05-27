@@ -1,0 +1,27 @@
+apiVersion: cilock.detection/v0.1
+name: oscap
+description: "Captures OpenSCAP compliance / vulnerability scan results."
+
+category: [compliance-scan]
+
+upstream:
+  name: OpenSCAP
+  source: "https://github.com/OpenSCAP/openscap"
+  license: LGPL-2.1-or-later
+  vendor: Red Hat / OpenSCAP project
+
+recommended_trace: "off"
+
+pre:
+  match:
+    argv_prefix: ["oscap"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["oscap"]
+      - product_glob: ["oscap*.xml", "**/oscap*.xml", "oscap*.html", "**/oscap*.html"]
+
+llm_hints:
+  on_match: "OpenSCAP results captured. SCAP rule outcomes preserved."

@@ -26,6 +26,20 @@ import (
 func enableTracing(c *exec.Cmd) {
 }
 
+// applyTraceePrivilegeDrop is a no-op on non-Linux platforms. The
+// SUDO_UID-based downgrade logic is Linux-specific (capabilities,
+// SysProcAttr.Credential semantics differ on darwin/windows).
+func applyTraceePrivilegeDrop(c *exec.Cmd) {
+}
+
+// preStartTracingSetup is the no-op stub for non-Linux platforms.
+// On Linux this opens the eBPF consumer before c.Start(); elsewhere
+// tracing is unsupported and the trace() method returns an error
+// after Start, so this helper has nothing to do.
+func (r *CommandRun) preStartTracingSetup() error {
+	return nil
+}
+
 func (rc *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([]ProcessInfo, error) {
 	return nil, errors.New("tracing not supported on this platform")
 }

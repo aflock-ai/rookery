@@ -16,17 +16,23 @@ package prowler
 
 import (
 	"crypto"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/invopop/jsonschema"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 const (
 	Name    = "prowler"
@@ -47,6 +53,7 @@ func init() {
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return New()
 	})
+	detection.Register(Name, detectorYAML)
 }
 
 // Finding represents a single prowler check result as produced by `prowler -M json`.
@@ -184,6 +191,20 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subjects
 }
 
+// resolveProductPath turns a product path (recorded relative to the attestation
+// working directory) into a path that can be opened from the current process,
+// which may have a different CWD than the working directory. Absolute paths are
+// returned unchanged.
+func resolveProductPath(ctx *attestation.AttestationContext, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	if wd := ctx.WorkingDir(); wd != "" {
+		return filepath.Join(wd, path)
+	}
+	return path
+}
+
 //nolint:gocognit // sequential candidate scan: iterate products → open → decode → validate
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
@@ -208,17 +229,23 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 			continue
 		}
 
-		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
+		// Product paths are recorded relative to the attestation working
+		// directory, which is not necessarily the process CWD (e.g. when the
+		// caller passed --workingdir/-d). Resolve against ctx.WorkingDir() so
+		// discovery works regardless of where cilock was invoked from.
+		resolved := resolveProductPath(ctx, path)
+
+		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(resolved, ctx.Hashes())
 		if newDigestSet == nil || err != nil {
-			log.Debugf("(attestation/prowler) error calculating digest set from file %s: %v", path, err)
+			log.Debugf("(attestation/prowler) error calculating digest set from file %s: %v", resolved, err)
 			continue
 		}
 		if !newDigestSet.Equal(product.Digest) {
-			log.Debugf("(attestation/prowler) integrity error for %s: product digest does not match", path)
+			log.Debugf("(attestation/prowler) integrity error for %s: product digest does not match", resolved)
 			continue
 		}
 
-		f, err := os.Open(path) //nolint:gosec // G304: path from attestation context products
+		f, err := os.Open(resolved) //nolint:gosec // G304: path from attestation context products, resolved against working dir
 		if err != nil {
 			log.Debugf("(attestation/prowler) error opening file %s: %v", path, err)
 			continue

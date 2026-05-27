@@ -1,0 +1,27 @@
+apiVersion: cilock.detection/v0.1
+name: aws-config
+description: "Captures AWS Config compliance state for resources (output of `aws configservice get-compliance-details-by-config-rule` and related calls)."
+
+category: [compliance-scan]
+
+upstream:
+  name: AWS Config
+  source: "https://aws.amazon.com/config/"
+  license: proprietary
+  vendor: Amazon Web Services
+
+recommended_trace: "off"
+
+pre:
+  match:
+    argv_prefix: ["aws", "configservice"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["aws", "configservice"]
+      - product_glob: ["aws-config*.json", "**/aws-config*.json"]
+
+llm_hints:
+  on_match: "AWS Config compliance snapshot captured."

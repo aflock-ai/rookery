@@ -71,9 +71,9 @@ func TestAttest(t *testing.T) {
 		{"SPDX 2.2", "./boms/spdx-2.2/", "alpine.spdx-2-2.json", SPDXPredicateType, ""},
 		{"SPDX 2.3", "./boms/spdx-2.3/", "alpine.spdx-2-3.json", SPDXPredicateType, ""},
 		{"CycloneDx", "./boms/cyclonedx-json/", "alpine.cyclonedx.json", CycloneDxPredicateType, ""},
-		{"CycloneDx XML", "./boms/cyclonedx-xml/", "alpine.cyclonedx.xml", Type, "no SBOM file found"},
-		{"Bad JSON", "./boms/bad-json/", "bad.json", Type, "no SBOM file found"},
-		{"No JSON", "./boms/emptyDir", "no.json", Type, "no products to attest"},
+		{"CycloneDx XML", "./boms/cyclonedx-xml/", "alpine.cyclonedx.xml", Type, "soft: no SBOM file found"},
+		{"Bad JSON", "./boms/bad-json/", "bad.json", Type, "soft: no SBOM file found"},
+		{"No JSON", "./boms/emptyDir", "no.json", Type, "soft: no products to attest"},
 	}
 
 	err := os.Mkdir("emptyDir", 0777)

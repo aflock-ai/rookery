@@ -1,0 +1,33 @@
+apiVersion: cilock.detection/v0.1
+name: govulncheck
+description: "Captures Go call-graph-aware vulnerability scan results from `govulncheck`."
+
+category: [vulnerability-scan]
+
+upstream:
+  name: govulncheck
+  source: "https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck"
+  license: BSD-3-Clause
+  vendor: The Go Authors
+
+pre:
+  match:
+    argv_prefix: ["govulncheck"]
+
+post:
+  # govulncheck emits JSON to stdout by default — there is no canonical
+  # output filename. To get a file the user must redirect:
+  #   govulncheck -json ./... > report.json
+  # So exec_observed is the only reliable post-gate signal. The
+  # product_glob branch covers the cases where the user redirected to
+  # a govulncheck-prefixed filename.
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["govulncheck"]
+      - all_of:
+          - file_exists: "go.mod"
+          - product_glob: ["govulncheck*.json", "**/govulncheck*.json"]
+
+llm_hints:
+  on_match: "govulncheck results captured. Call-graph-reachable Go vulns preserved."

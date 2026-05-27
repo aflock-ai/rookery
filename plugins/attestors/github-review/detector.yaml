@@ -1,0 +1,28 @@
+apiVersion: cilock.detection/v0.1
+name: github-review
+description: "Snapshots GitHub PR review state for the current commit (or an explicit SHA/PR) via the `gh` CLI."
+
+category: [code-review]
+
+upstream:
+  name: GitHub Pull Request Reviews API
+  source: "https://docs.github.com/en/rest/pulls/reviews"
+  license: commercial
+  vendor: GitHub, Inc. / Microsoft
+
+recommended_trace: "off"
+
+# Pre-gate: fires when we're inside a github checkout AND `gh` is on PATH.
+# The gh auth (token / `gh auth login`) is required for the API call, but we
+# can't probe that without spending network; left to runtime.
+pre:
+  match:
+    all_of:
+      - file_exists: ".git/HEAD"
+      - any_of:
+          - env_set: GITHUB_TOKEN
+          - env_set: GH_TOKEN
+          - env_set: GITHUB_ACTIONS
+
+llm_hints:
+  on_match: "GitHub PR review state captured. Subjects include commit SHA, repo, PR numbers, and every distinct reviewer login. Use policyverify to gate on `state == APPROVED` from required reviewers."

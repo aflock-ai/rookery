@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -24,6 +25,12 @@ import (
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/spf13/cobra"
 )
+
+// errHelpAdvanced is returned from PersistentPreRunE when the user passed
+// --help-advanced (without -h). It signals "help has been printed; stop
+// without running the command and without treating this as a failure".
+// Execute recognizes it and exits 0.
+var errHelpAdvanced = errors.New("help requested via --help-advanced")
 
 func New() *cobra.Command {
 	ro := &options.RootOptions{}
@@ -36,6 +43,17 @@ func New() *cobra.Command {
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// `<cmd> --help-advanced` (without -h) parses normally and would
+			// otherwise fall through to RunE. Intercept it here, render the
+			// full help, and return the sentinel so Execute stops cleanly
+			// (exit 0) instead of running the command.
+			if adv, _ := cmd.Flags().GetBool(helpAdvancedFlag); adv {
+				if err := cmd.Help(); err != nil {
+					return err
+				}
+				cmd.SilenceUsage = true
+				return errHelpAdvanced
+			}
 			return preRoot(cmd, ro, logger, &cpuProfileFile)
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
@@ -46,21 +64,29 @@ func New() *cobra.Command {
 	log.SetLogger(logger)
 
 	ro.AddFlags(cmd)
+	cmd.PersistentFlags().Bool(helpAdvancedFlag, false, "Show the full flag listing, including advanced/rarely-used flags")
+	_ = cmd.PersistentFlags().MarkHidden(helpAdvancedFlag)
+	cmd.SetHelpFunc(conciseHelpFunc)
 	cmd.AddCommand(SignCmd())
 	cmd.AddCommand(VerifyCmd())
 	cmd.AddCommand(RunCmd())
+	cmd.AddCommand(AttestCmd())
 	cmd.AddCommand(ProveCmd())
+	cmd.AddCommand(ProveChainCmd())
 	cmd.AddCommand(CompletionCmd())
 	cmd.AddCommand(VersionCmd())
 	cmd.AddCommand(AttestorsCmd())
 	cmd.AddCommand(PolicyCmd())
 	cmd.AddCommand(LicenseCmd())
+	cmd.AddCommand(KeyidCmd())
 	cmd.AddCommand(BundleCmd())
+	cmd.AddCommand(PlanCmd())
+	cmd.AddCommand(ToolsCmd())
 	return cmd
 }
 
 func Execute() {
-	if err := New().Execute(); err != nil {
+	if err := New().Execute(); err != nil && !errors.Is(err, errHelpAdvanced) {
 		log.Error(err)
 		os.Exit(1)
 	}

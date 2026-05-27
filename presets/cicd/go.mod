@@ -8,6 +8,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof => ../../
 
 replace github.com/aflock-ai/rookery/plugins/attestors/commandrun => ../../plugins/attestors/commandrun
 
+replace github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf => ../../plugins/attestors/commandrun/ebpf
+
 replace github.com/aflock-ai/rookery/plugins/attestors/configuration => ../../plugins/attestors/configuration
 
 replace github.com/aflock-ai/rookery/plugins/attestors/environment => ../../plugins/attestors/environment
@@ -88,6 +90,7 @@ require (
 	github.com/STARRY-S/zip v0.2.3 // indirect
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000 // indirect
 	github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild v0.0.0-00010101000000-000000000000 // indirect
+	github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf v0.0.0-00010101000000-000000000000 // indirect
 	github.com/aflock-ai/rookery/plugins/attestors/jenkins v0.0.0-00010101000000-000000000000 // indirect
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
@@ -116,6 +119,7 @@ require (
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/lipgloss v0.5.0 // indirect
+	github.com/cilium/ebpf v0.18.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.4.1 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect

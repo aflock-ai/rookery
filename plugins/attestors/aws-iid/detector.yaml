@@ -1,0 +1,18 @@
+apiVersion: cilock.detection/v0.1
+name: aws
+description: "Captures the AWS Instance Identity Document when running on EC2 (or any host that can reach the EC2 IMDS endpoint)."
+
+category: [ci-context]
+
+upstream:
+  name: AWS Instance Metadata Service
+  source: "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html"
+  license: proprietary
+  vendor: Amazon Web Services
+
+pre:
+  match:
+    imds_reachable: true
+
+llm_hints:
+  on_match: "AWS instance identity captured (instance ID, region, account, signed by AWS regional cert)."
