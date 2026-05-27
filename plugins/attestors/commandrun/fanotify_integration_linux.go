@@ -49,7 +49,7 @@ type fanotifySession struct {
 //
 // The probe + activate sequence costs a few syscalls and is safe to
 // call regardless of trace mode; we just gate on the env var.
-func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
+func maybeStartFanotify(workingDir string, skipHash func(string) bool) (*fanotifySession, error) {
 	mode := os.Getenv(EnvVarFanotify)
 	switch mode {
 	case "0", "off", "off-explicit":
@@ -87,6 +87,10 @@ func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
 		log.Debugf("(fanotify) New failed (auto-mode, falling back): %v", err)
 		return nil, nil
 	}
+	// Skip synchronous hashing of build-internal cache/temp paths — the
+	// dominant open volume on cold builds, content-addressed by lockfiles,
+	// and not products. Set before Run starts its goroutine (race-free).
+	h.SkipHash = skipHash
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &fanotifySession{h: h, cancel: cancel}

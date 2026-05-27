@@ -13,7 +13,7 @@ const EnvVarFanotify = "CILOCK_FANOTIFY"
 
 type fanotifySession struct{}
 
-func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
+func maybeStartFanotify(workingDir string, skipHash func(string) bool) (*fanotifySession, error) {
 	return nil, nil
 }
 
@@ -22,8 +22,11 @@ func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
 type fanotifyStatsStub struct {
 	EventsHashed    uint64
 	HandlerTimeouts uint64
-	QueueOverflows  uint64
-	DigestsCapHit   uint64
+	QueueOverflows   uint64
+	DigestsCapHit    uint64
+	CacheSkips       uint64
+	IgnoreMarksAdded uint64
+	IgnoreMarkErrors uint64
 }
 
 func (s *fanotifySession) stop() (map[string][32]byte, map[string][32]byte, fanotifyStatsStub) {

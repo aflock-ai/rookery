@@ -330,6 +330,12 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// entries land in OpenedFiles with a nil digest, which is the
 	// honest stance: a hole in the attestation.
 	var partialFallbacks, fallbackFailures atomic.Uint64
+	// cacheReadsSkipped counts read opens the hasher released WITHOUT
+	// hashing because the path classified as build-internal cache/temp
+	// (pctx.cacheMatcher). Surfaced as a diagnostic so the reduction in
+	// hash attempts (and the corresponding absence of cache-file gaps)
+	// is transparent rather than a silent behavior change.
+	var cacheReadsSkipped atomic.Uint64
 	// Per-bucket counters for hash-failure outcomes. Surfaces the
 	// difference between "we caught it elsewhere" (silentByDigest)
 	// and "we already recorded this gap" (silentByDedup) so the
@@ -979,6 +985,22 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					}
 					continue
 				}
+				// Build-internal cache/temp reads (Go module cache,
+				// GOCACHE, /tmp scratch) are content-addressed storage
+				// pinned by lockfiles, not meaningful materials. Skip
+				// hashing them: on a cold build they are the bulk of
+				// opens, and they churn (created/renamed in ms) so the
+				// path-hash fallback racemost often FAILS — those
+				// failures otherwise inflate fallbackHashFailures /
+				// hashFailureSilentDrops and break --require-zero-drops.
+				// We do NOT record an open for them (no nil-digest gap).
+				if pctx.cacheMatcher != nil && pctx.cacheMatcher.Matches(ev.Path) {
+					cacheReadsSkipped.Add(1)
+					if ph.file != nil {
+						_ = ph.file.Close()
+					}
+					continue
+				}
 				// Per-trace digest cache: most files in a build are
 				// opened many times. Cache by (path, size, mtime);
 				// hit means the same bytes are on disk → same digest.
@@ -1077,6 +1099,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		r.fallbackHashFailures = fallbackFailures.Load()
 		r.hashSilentByDigest = hashSilentByDigest.Load()
 		r.hashSilentByDedup = hashSilentByDedup.Load()
+		r.cacheReadsSkipped = cacheReadsSkipped.Load()
 		if oDrops > 0 || rDrops > 0 {
 			log.Errorf("(ebpf) RINGBUF DROPS — attestation has gaps: openat=%d read_tap=%d  "+
 				"bump ringbuf size or reduce build parallelism",

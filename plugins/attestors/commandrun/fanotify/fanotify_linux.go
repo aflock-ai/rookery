@@ -65,6 +65,22 @@ type Stats struct {
 	// attestation lacks the path's entry. Non-zero = resource cap
 	// degraded the attestation.
 	DigestsCapHit uint64
+	// CacheSkips counts events the handler released WITHOUT hashing
+	// because the path classified as build-internal cache/temp (via
+	// SkipHash). These are content-addressed storage (Go module cache,
+	// GOCACHE, /tmp scratch) pinned by lockfiles — hashing them adds
+	// no provenance and is the dominant synchronous cost + backpressure
+	// source on cold builds, so we skip them on purpose.
+	CacheSkips uint64
+	// IgnoreMarksAdded counts inode FAN_MARK_IGNORE marks added by the
+	// "hash once" experiment (EnvVarIgnoreOnce). After first hashing an
+	// inode we tell the kernel to stop sending FAN_OPEN_PERM for it
+	// (re-armed on modify), collapsing repeat-open storms in-kernel.
+	IgnoreMarksAdded uint64
+	// IgnoreMarkErrors counts failures to add an ignore mark (does not
+	// affect correctness — the file was still hashed; we just keep
+	// getting events for it).
+	IgnoreMarkErrors uint64
 }
 
 // statsAtomic holds the live counters mutated by worker goroutines.
@@ -77,8 +93,11 @@ type statsAtomic struct {
 	BytesHashed     atomic.Uint64
 	MarkFailures    atomic.Uint64
 	UnknownFamily   atomic.Uint64
-	QueueOverflows  atomic.Uint64
-	DigestsCapHit   atomic.Uint64
+	QueueOverflows   atomic.Uint64
+	DigestsCapHit    atomic.Uint64
+	CacheSkips       atomic.Uint64
+	IgnoreMarksAdded atomic.Uint64
+	IgnoreMarkErrors atomic.Uint64
 }
 
 func (s *statsAtomic) toStats() Stats {
@@ -90,8 +109,11 @@ func (s *statsAtomic) toStats() Stats {
 		BytesHashed:     s.BytesHashed.Load(),
 		MarkFailures:    s.MarkFailures.Load(),
 		UnknownFamily:   s.UnknownFamily.Load(),
-		QueueOverflows:  s.QueueOverflows.Load(),
-		DigestsCapHit:   s.DigestsCapHit.Load(),
+		QueueOverflows:   s.QueueOverflows.Load(),
+		DigestsCapHit:    s.DigestsCapHit.Load(),
+		CacheSkips:       s.CacheSkips.Load(),
+		IgnoreMarksAdded: s.IgnoreMarksAdded.Load(),
+		IgnoreMarkErrors: s.IgnoreMarkErrors.Load(),
 	}
 }
 
@@ -136,6 +158,26 @@ type Handler struct {
 	// counter surfaces the degradation. Zero = unbounded (default
 	// 200_000, set in New).
 	MaxDigests int
+	// SkipHash, when non-nil, is consulted per event with the kernel-
+	// resolved path. Returning true releases the tracee (FAN_ALLOW for
+	// permission events) WITHOUT hashing the file. Used to skip
+	// build-internal cache/temp paths (Go module cache, GOCACHE, /tmp),
+	// which are the bulk of opens on a cold build and are content-
+	// addressed by lockfiles — hashing them is wasted work and the
+	// dominant backpressure source. Set before Run; read-only after.
+	SkipHash func(path string) bool
+
+	// ignoreOnce enables the "hash each inode once" EXPERIMENT
+	// (EnvVarIgnoreOnce). After first hashing an inode's open we add an
+	// inode FAN_MARK_IGNORE for FAN_OPEN_PERM so the kernel stops
+	// notifying us about repeat opens of that inode — collapsing the
+	// repeat-open storm of a cold build at the source. We deliberately
+	// do NOT set FAN_MARK_IGNORED_SURV_MODIFY, so a modify RE-ARMS
+	// notification (a rewritten material gets re-hashed — correctness).
+	ignoreOnce bool
+	// ignoredInodes dedupes the FanotifyMark syscall: once an inode is
+	// ignored we don't re-issue the mark. Guarded by digestMu.
+	ignoredInodes map[uint64]struct{}
 }
 
 // New opens a fanotify fd and registers a mark on the given mount
@@ -165,6 +207,12 @@ func New(markPath string) (*Handler, error) {
 	// FAN_CLASS_CONTENT enables permission events; FAN_NONBLOCK lets
 	// us poll(). We don't use FAN_REPORT_FID — keeping the simpler
 	// fd-based path matching ClamAV's pattern.
+	//
+	// Note: FAN_UNLIMITED_QUEUE was trialed (drops the 16384-event cap)
+	// and removed — the cap never overflowed in practice (0 FAN_Q_OVERFLOW
+	// across local + GHA Azure cold builds), because the blocking
+	// permission handler throttles the queue. Re-add the flag here under
+	// CAP_SYS_ADMIN if a high-core-count workload ever shows overflows.
 	const fanFlags = unix.FAN_CLASS_CONTENT | unix.FAN_NONBLOCK | unix.FAN_CLOEXEC
 	const eventFlags = unix.O_RDONLY | unix.O_LARGEFILE | unix.O_CLOEXEC
 	fd, err := unix.FanotifyInit(fanFlags, eventFlags)
@@ -212,8 +260,28 @@ func New(markPath string) (*Handler, error) {
 		workspaceRoot:     markPath,
 		HandlerBudget:     2 * time.Second,
 		MaxDigests:        defaultMaxDigestsFromEnv(),
+		ignoreOnce:        ignoreOnceEnabled(),
+		ignoredInodes:     make(map[uint64]struct{}),
 	}
 	return h, nil
+}
+
+// EnvVarIgnoreOnce controls "hash each inode once" — after hashing an
+// inode's open, FAN_MARK_IGNORE its FAN_OPEN_PERM (re-armed on modify) so
+// the kernel stops re-notifying. DEFAULT ON (validated on GHA Azure: −71%
+// synchronous hashes / −16% wall on a cold Hugo build; −79%/−30% on a
+// synthetic build, correctness-safe). Set to "0"/"off"/"false" to disable.
+const EnvVarIgnoreOnce = "CILOCK_FANO_IGNORE_ONCE"
+
+// ignoreOnceEnabled returns whether the hash-once optimization is active.
+// DEFAULT ON: only an explicit off-switch disables it.
+func ignoreOnceEnabled() bool {
+	switch os.Getenv(EnvVarIgnoreOnce) {
+	case "0", "off", "false", "no":
+		return false
+	default:
+		return true
+	}
 }
 
 // DefaultMaxDigests is the compiled-in cap on the digests map size,
@@ -466,6 +534,30 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 		return
 	}
 
+	// Cache/temp paths are build-internal, content-addressed storage
+	// (Go module cache, GOCACHE, /tmp scratch). They are neither
+	// products nor meaningful materials — their provenance comes from
+	// lockfiles (go.sum) + the build attestor, not per-file hashes.
+	// Skipping them here removes the dominant synchronous-hash load on
+	// cold builds, cutting handler latency (→ fewer timeouts / queue
+	// overflows) and overall overhead. Release the tracee immediately.
+	if h.SkipHash != nil && h.SkipHash(realPath) {
+		h.stats.CacheSkips.Add(1)
+		// EXPERIMENT (deletable): under "hash once", also tell the kernel
+		// to stop notifying us about this cache inode entirely — the cache
+		// storm (GOCACHE/module cache, the bulk of opens) then collapses at
+		// the kernel boundary instead of crossing it cheaply each time.
+		// Safe: cache files aren't attested, and a modify re-arms the mark.
+		if h.ignoreOnce && isOpenPerm {
+			var st syscall.Stat_t
+			if syscall.Fstat(int(meta.Fd), &st) == nil && st.Mode&syscall.S_IFMT == syscall.S_IFREG {
+				h.maybeIgnoreInode(uint64(st.Ino), realPath)
+			}
+		}
+		respondIfPerm()
+		return
+	}
+
 	// Product capture (close-write) is scoped to the build workspace —
 	// hashing every closed file across the whole marked filesystem (every
 	// /tmp/go-build/*.a) would be ruinous, and products live in the
@@ -521,7 +613,48 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 	}
 	h.digestMu.Unlock()
 
+	// EXPERIMENT (deletable): "hash once" — now that this inode's content
+	// is captured, stop the kernel notifying us about repeat opens of it.
+	if h.ignoreOnce && isOpenPerm {
+		h.maybeIgnoreInode(uint64(stat.Ino), realPath)
+	}
+
 	respondIfPerm()
+}
+
+// maybeIgnoreInode adds an inode FAN_MARK_IGNORE for FAN_OPEN_PERM so the
+// kernel stops sending us open-permission events for an inode we've already
+// hashed — the in-kernel collapse of a cold build's repeat-open storm.
+//
+// We deliberately do NOT pass FAN_MARK_IGNORE_SURV (survive-modify): a
+// write to the file CLEARS the ignore mask, so the next open re-notifies
+// and we re-hash. That preserves attestation correctness for materials
+// rewritten mid-build — "ignore forever" would silently freeze a stale
+// digest. Dedup via ignoredInodes keeps this to one syscall per inode.
+//
+// EXPERIMENT (deletable along with EnvVarIgnoreOnce / the call site).
+func (h *Handler) maybeIgnoreInode(ino uint64, path string) {
+	if ino == 0 {
+		return // fstat failed earlier; can't safely dedup by inode
+	}
+	h.digestMu.Lock()
+	if _, done := h.ignoredInodes[ino]; done {
+		h.digestMu.Unlock()
+		return
+	}
+	h.ignoredInodes[ino] = struct{}{}
+	h.digestMu.Unlock()
+
+	flags := uint(unix.FAN_MARK_ADD | unix.FAN_MARK_IGNORE)
+	if err := unix.FanotifyMark(h.fd, flags, unix.FAN_OPEN_PERM, unix.AT_FDCWD, path); err != nil {
+		h.stats.IgnoreMarkErrors.Add(1)
+		// Roll back so a later event for the same inode can retry.
+		h.digestMu.Lock()
+		delete(h.ignoredInodes, ino)
+		h.digestMu.Unlock()
+		return
+	}
+	h.stats.IgnoreMarksAdded.Add(1)
 }
 
 // underWorkspace reports whether path is at or beneath the build

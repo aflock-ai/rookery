@@ -625,6 +625,32 @@ type TraceDiagnostics struct {
 	// are missing).
 	FanotifyDigestsCapHit uint64 `json:"fanotifyDigestsCapHit,omitempty"`
 
+	// CacheReadsSkipped is the count of read opens the eBPF hasher
+	// released WITHOUT hashing because the path classified as
+	// build-internal cache/temp (Go module cache, GOCACHE, /tmp). These
+	// are content-addressed storage pinned by lockfiles, not products
+	// and not meaningful materials. Skipping them removes the dominant
+	// hash load on cold builds and avoids churning-cache TOCTOU
+	// failures that would otherwise inflate FallbackHashFailures /
+	// HashFailureSilentDrops. High here + low drops = the optimization
+	// is working as intended, not a sign of lost data.
+	CacheReadsSkipped uint64 `json:"cacheReadsSkipped,omitempty"`
+
+	// FanotifyCacheSkips is the same idea for the fanotify gate: opens
+	// the synchronous handler released without hashing because the path
+	// classified as cache/temp. Reduces handler latency → fewer
+	// timeouts / queue overflows.
+	FanotifyCacheSkips uint64 `json:"fanotifyCacheSkips,omitempty"`
+
+	// FanotifyIgnoreMarksAdded / FanotifyIgnoreMarkErrors report the
+	// "hash once" EXPERIMENT (CILOCK_FANO_IGNORE_ONCE): how many inode
+	// FAN_MARK_IGNORE marks were added (each suppresses repeat
+	// FAN_OPEN_PERM for one inode until it's modified) and how many such
+	// marks failed. High added-count + low EventsHashed on a repeat-heavy
+	// build = the in-kernel open-storm collapse is working.
+	FanotifyIgnoreMarksAdded uint64 `json:"fanotifyIgnoreMarksAdded,omitempty"`
+	FanotifyIgnoreMarkErrors uint64 `json:"fanotifyIgnoreMarkErrors,omitempty"`
+
 	// FsVerityAvailable reports whether fs-verity sealing was active
 	// for this trace's workspace FS. true = the kernel computed and
 	// stored Merkle roots over product files; false = streaming
@@ -737,6 +763,13 @@ type CommandRun struct {
 	fanotifyTimeouts       uint64
 	fanotifyQueueOverflows uint64
 	fanotifyDigestsCapHit  uint64
+	// fanotifyCacheSkips stashes the count of opens the fanotify gate
+	// released without hashing because the path classified as cache/temp.
+	fanotifyCacheSkips uint64
+	// fanotifyIgnoreMarksAdded / fanotifyIgnoreMarkErrors stash the
+	// "hash once" experiment's inode-ignore-mark counters.
+	fanotifyIgnoreMarksAdded uint64
+	fanotifyIgnoreMarkErrors uint64
 	// fanotifyOnlyDigests holds paths fanotify hashed that no
 	// process recorded an open for. Surfaced at end-of-trace to
 	// Summary.FanotifyOnlyDigests so no kernel-observed open is lost.
@@ -770,6 +803,11 @@ type CommandRun struct {
 	// failure count masks real holes or harmless retries.
 	hashSilentByDigest uint64
 	hashSilentByDedup  uint64
+	// cacheReadsSkipped stashes the eBPF hasher's count of read opens
+	// released without hashing because the path classified as
+	// build-internal cache/temp (cacheMatcher). Surfaced into
+	// Summary.Diagnostics so the skip is transparent.
+	cacheReadsSkipped uint64
 
 	// resolvedCaptureMode records which capture-mode the framework
 	// selected for this run ("trace", "walk", "ima"). Populated by
@@ -1156,7 +1194,10 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 	// patterns are filtered there. Digest comes from the write-tap when we
 	// captured it; otherwise nil and the product attestor hashes the
 	// surviving file at attest time.
-	if base != "" && !rc.traceStartTime.IsZero() {
+	// CILOCK_DEV_DISABLE_SURVIVOR_WALK is an ablation knob (dev/experiments
+	// only) to isolate the survivor-walk's contribution vs the write-tap /
+	// FAN_CLOSE_WRITE paths. Unset in normal operation.
+	if base != "" && !rc.traceStartTime.IsZero() && os.Getenv("CILOCK_DEV_DISABLE_SURVIVOR_WALK") == "" {
 		_ = filepath.Walk(base, func(path string, info os.FileInfo, walkErr error) error {
 			if walkErr != nil {
 				return nil //nolint:nilerr // best-effort; a stat error on one entry must not abort product capture
@@ -1678,12 +1719,29 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		if err := r.preStartTracingSetup(); err != nil {
 			return err
 		}
+		// Build the cache classifier up front so the trace can consult
+		// it DURING capture (the product attestor's SetCacheMatcher runs
+		// later, after the trace). Same patterns the product attestor
+		// uses, so capture-time skips and product-time classification
+		// agree. fanotify + the eBPF hasher skip these paths to avoid
+		// hashing build-internal cache (Go module cache, GOCACHE, /tmp)
+		// — the dominant open volume on cold builds and the main drop /
+		// overhead source.
+		if r.cacheMatcher == nil {
+			if m, _ := attestation.NewCachePathMatcher(attestation.ResolveCachePatterns(ctx.CachePatterns())); m != nil {
+				r.cacheMatcher = m
+			}
+		}
+		var cacheSkip func(string) bool
+		if r.cacheMatcher != nil {
+			cacheSkip = r.cacheMatcher.Matches
+		}
 		// Optional fanotify integrity gate. When enabled, EVERY
 		// open() of a file under the workspace mount is synchronously
 		// hashed by the kernel-blocking fanotify handler — zero drops
 		// by construction. Falls back to BPF-only if the env var
 		// requests auto-mode and fanotify is unavailable.
-		fanSession, err := maybeStartFanotify(c.Dir)
+		fanSession, err := maybeStartFanotify(c.Dir, cacheSkip)
 		if err != nil {
 			return err
 		}
@@ -1754,6 +1812,9 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			r.fanotifyTimeouts = fanStats.HandlerTimeouts
 			r.fanotifyQueueOverflows = fanStats.QueueOverflows
 			r.fanotifyDigestsCapHit = fanStats.DigestsCapHit
+			r.fanotifyCacheSkips = fanStats.CacheSkips
+			r.fanotifyIgnoreMarksAdded = fanStats.IgnoreMarksAdded
+			r.fanotifyIgnoreMarkErrors = fanStats.IgnoreMarkErrors
 		}
 
 		// Build the AI-agent-friendly summary from the captured
@@ -1784,6 +1845,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			}
 			r.Summary.Diagnostics.UnhashedOpensTotal = unhashedTotal
 			r.Summary.Diagnostics.HashFailureSilentDrops = r.hashSilentByDigest + r.hashSilentByDedup
+			r.Summary.Diagnostics.CacheReadsSkipped = r.cacheReadsSkipped
 			// Fanotify integrity-gate stats. FanotifyAvailable is
 			// true iff any events were hashed (the handler was active);
 			// merged-count tells verifiers how many BPF digests got
@@ -1795,6 +1857,9 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 				r.Summary.Diagnostics.FanotifyTimeouts = r.fanotifyTimeouts
 				r.Summary.Diagnostics.FanotifyQueueOverflows = r.fanotifyQueueOverflows
 				r.Summary.Diagnostics.FanotifyDigestsCapHit = r.fanotifyDigestsCapHit
+				r.Summary.Diagnostics.FanotifyCacheSkips = r.fanotifyCacheSkips
+				r.Summary.Diagnostics.FanotifyIgnoreMarksAdded = r.fanotifyIgnoreMarksAdded
+				r.Summary.Diagnostics.FanotifyIgnoreMarkErrors = r.fanotifyIgnoreMarkErrors
 			}
 			if len(r.fanotifyOnlyDigests) > 0 {
 				r.Summary.FanotifyOnlyDigests = r.fanotifyOnlyDigests

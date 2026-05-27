@@ -360,6 +360,12 @@ func Open() (*Consumer, error) {
 		return nil, fmt.Errorf("load BPF spec: %w", err)
 	}
 
+	// EXPERIMENT (deletable — see ringbuf_tuning_experiment.go): override
+	// the oversized compiled-in ringbufs at load time without recompiling
+	// the BPF object. No-op unless the env vars are set.
+	resizeRingbufFromEnv(spec, "events", "CILOCK_EBPF_EVENTS_RINGBUF_BYTES")
+	resizeRingbufFromEnv(spec, "read_tap_events", "CILOCK_EBPF_READTAP_RINGBUF_BYTES")
+
 	// Rebuild-on-CO-RE-failure: try the embedded .bpf.o first; if it
 	// poisons (kernel BTF mismatch), rebuild from the embedded source
 	// against /sys/kernel/btf/vmlinux. Auto-on unless explicitly off

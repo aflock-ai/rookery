@@ -53,9 +53,9 @@ func DefaultCachePatterns() map[string]struct{} {
 		"**/AppData/Local/Microsoft/Windows/INetCache/**": {}, // IE/Edge
 
 		// ─── Go ───
-		"**/go-build*/**":        {}, // GOCACHE (default ~/.cache/go-build; also /tmp/go-build*)
-		"**/go/pkg/mod/cache/**": {}, // module download cache
-		"**/go/pkg/sumdb/**":     {}, // checksum database cache
+		"**/go-build*/**":    {}, // GOCACHE (default ~/.cache/go-build; also /tmp/go-build*)
+		"**/go/pkg/mod/**":   {}, // module cache: download cache AND extracted module source ($GOMODCACHE/<mod>@<ver>/…)
+		"**/go/pkg/sumdb/**": {}, // checksum database cache
 
 		// ─── Python ───
 		"**/__pycache__/**":   {},
@@ -197,7 +197,7 @@ func SystemCachePathsFromEnv() []string {
 
 		// ─── Go ───
 		{"GOCACHE", "/**"},
-		{"GOMODCACHE", "/cache/**"},
+		{"GOMODCACHE", "/**"}, // whole module cache is build-internal: download cache + extracted source
 		{"GOTMPDIR", "/**"},
 
 		// ─── Rust / Cargo ───
