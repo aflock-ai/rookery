@@ -35,7 +35,9 @@ type ErrNoCollections struct {
 }
 
 func (e ErrNoCollections) Error() string {
-	return fmt.Sprintf("no collections found for step %v", e.Step)
+	return fmt.Sprintf("no collections found for step %v: no loaded attestation's subjects matched the artifact/subject digests. "+
+		"If the artifact is a product committed in a Merkle tree (subject \"tree:products\"), its plain file digest won't match the tree root — "+
+		"supply the inclusion-proof sidecar so the verifier can bridge the file to the tree (e.g. --attestations <step>.inclusion-proof.json, or --chain-sidecar-dir for ArtifactsFrom edges)", e.Step)
 }
 
 // ErrSubjectDigestMismatch fires when a collection IS loaded for the step

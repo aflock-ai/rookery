@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -34,6 +36,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/source"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 	"github.com/aflock-ai/rookery/attestation/workflow"
+	"github.com/aflock-ai/rookery/cilock/internal/embeddedtrust"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/aflock-ai/rookery/cilock/internal/policy"
 	"github.com/spf13/cobra"
@@ -48,23 +51,47 @@ func VerifyCmd() *cobra.Command {
 		KMSSignerProviderOptions:   options.KMSSignerProviderOptions{},
 	}
 	cmd := &cobra.Command{
-		Use:   "verify",
+		Use:   "verify [artifact-path]",
 		Short: "Verifies a witness policy",
-		Long:  "Verifies a policy provided key source and exits with code 0 if verification succeeds",
-		Example: `  # Verify a policy against local attestation files
+		Long: "Verifies a policy provided key source and exits with code 0 if verification succeeds.\n\n" +
+			"The artifact to verify may be given as a positional argument — `cilock verify ./app -p policy.json` —\n" +
+			"as a shorthand for --artifactfile (a regular file) or --directory-path (a directory).",
+		Example: `  # Verify a binary against a signed policy (positional artifact)
+  cilock verify ./judge-api -p policy.json.signed --policy-ca-roots fulcio-root.pem
+
+  # Verify a policy against local attestation files
   cilock verify -p policy.json -k policy-pub.pem -a build.att.json -a test.att.json
 
   # Verify a subject artifact, pulling evidence from Archivista
-  cilock verify -p policy.json -k policy-pub.pem -f ./dist/app.tar.gz --enable-archivista
+  cilock verify ./dist/app.tar.gz -p policy.json -k policy-pub.pem --enable-archivista
 
   # Fully offline verify from a bundle (no platform lookup)
   cilock verify -p policy.json -k policy-pub.pem --bundle evidence.tar.gz --platform-url ""`,
+		Args:              cobra.MaximumNArgs(1),
 		SilenceErrors:     true,
 		SilenceUsage:      true,
 		DisableAutoGenTag: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Lookup("policy-ca").Changed {
-				log.Warn("The flag `--policy-ca` is deprecated and will be removed in a future release. Please use `--policy-ca-root` and `--policy-ca-intermediate` instead.")
+				log.Warn("The flag `--policy-ca` is deprecated and will be removed in a future release. Please use `--policy-ca-roots` and `--policy-ca-intermediates` instead.")
+			}
+
+			// Positional artifact path is shorthand for --artifactfile (file)
+			// or --directory-path (directory). Explicit flags win; a positional
+			// arg alongside a conflicting flag is a usage error.
+			if len(args) == 1 {
+				if vo.ArtifactFilePath != "" || vo.ArtifactDirectoryPath != "" {
+					return fmt.Errorf("artifact given both positionally (%q) and via --artifactfile/--directory-path; use one", args[0])
+				}
+				info, statErr := os.Stat(args[0])
+				switch {
+				case statErr != nil:
+					return fmt.Errorf("artifact path %q: %w", args[0], statErr)
+				case info.IsDir():
+					vo.ArtifactDirectoryPath = args[0]
+				default:
+					vo.ArtifactFilePath = args[0]
+				}
 			}
 
 			// Resolve platform-derived defaults the same way `cilock run`
@@ -122,8 +149,25 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		}
 	}
 
-	if vo.KeyPath == "" && len(vo.PolicyCARootPaths) == 0 && len(verifiers) == 0 {
-		return fmt.Errorf("must supply either a public key, CA certificates or a verifier")
+	// Embedded policy trust: roots + signer identity compiled into this cilock
+	// build for verifying the POLICY signature only. Attestation trust always
+	// comes from the policy itself, never from here.
+	embTrust, err := embeddedtrust.Load()
+	if err != nil {
+		return fmt.Errorf("load embedded policy trust: %w", err)
+	}
+	var embFulcioRoots, embTSARoots []*x509.Certificate
+	if embTrust != nil {
+		if embFulcioRoots, err = embTrust.FulcioRoots(); err != nil {
+			return err
+		}
+		if embTSARoots, err = embTrust.TSARoots(); err != nil {
+			return err
+		}
+	}
+
+	if vo.KeyPath == "" && len(vo.PolicyCARootPaths) == 0 && len(verifiers) == 0 && len(embFulcioRoots) == 0 {
+		return fmt.Errorf("must supply a public key, CA certificates, a verifier, or a cilock built with embedded policy trust")
 	}
 
 	if !vo.ArchivistaOptions.Enable && len(vo.AttestationFilePaths) == 0 && len(vo.BundlePaths) == 0 {
@@ -185,6 +229,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	ptsVerifiers := make([]timestamp.TimestampVerifier, 0)
+	var tsaRootCerts []*x509.Certificate // tracked only so we can display them
 	if len(vo.PolicyTimestampServers) > 0 {
 		for _, server := range vo.PolicyTimestampServers {
 			f, err := os.ReadFile(server) //nolint:gosec // G304: server path is from CLI flags
@@ -198,8 +243,50 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			}
 
 			ptsVerifiers = append(ptsVerifiers, timestamp.NewVerifier(timestamp.VerifyWithCerts([]*x509.Certificate{cert})))
+			tsaRootCerts = append(tsaRootCerts, cert)
 		}
 	}
+
+	// Fill any policy-trust dimension the operator did not pass on the command
+	// line from embedded trust. Flags win wholesale per dimension; embedded
+	// fills the gaps. Covers ONLY policy-signature trust — attestation trust is
+	// untouched. Signer identity is applied ONLY when the operator set NO
+	// signer-identity constraint at all (CN/DNS/email/org/URIs/Fulcio
+	// extensions). Gating on --policy-uris alone would silently overwrite an
+	// operator who pinned the signer via --policy-emails / --policy-fulcio-*
+	// without --policy-uris, verifying under unintended trust.
+	if embTrust != nil { //nolint:nestif // per-dimension flag-vs-embedded precedence (ca-roots / tsa-roots / signer-identity); flattening obscures which dimension wins
+		applied := make([]string, 0, 3)
+		if len(vo.PolicyCARootPaths) == 0 && len(embFulcioRoots) > 0 {
+			policyRoots = append(policyRoots, embFulcioRoots...)
+			applied = append(applied, "ca-roots")
+		}
+		if len(vo.PolicyTimestampServers) == 0 && len(embTSARoots) > 0 {
+			for _, c := range embTSARoots {
+				ptsVerifiers = append(ptsVerifiers, timestamp.NewVerifier(timestamp.VerifyWithCerts([]*x509.Certificate{c})))
+				tsaRootCerts = append(tsaRootCerts, c)
+			}
+			applied = append(applied, "timestamp-roots")
+		}
+		if policySignerIdentityUnset(vo) && len(embTrust.PolicySigners) > 0 {
+			if len(embTrust.PolicySigners) > 1 {
+				return fmt.Errorf("embedded trust defines %d policy signers; selecting among multiple embedded signers is not yet supported — pass --policy-uris / --policy-fulcio-* to choose", len(embTrust.PolicySigners))
+			}
+			cc := embTrust.PolicySigners[0].CertConstraint
+			vo.PolicyCommonName = cc.CommonName
+			vo.PolicyDNSNames = cc.DNSNames
+			vo.PolicyEmails = cc.Emails
+			vo.PolicyOrganizations = cc.Organizations
+			vo.PolicyURIs = cc.URIs
+			vo.PolicyFulcioCertExtensions = cc.Extensions
+			applied = append(applied, "signer-identity")
+		}
+		if len(applied) > 0 {
+			log.Infof("using embedded policy trust (%s); pass the corresponding --policy-* flags to override", strings.Join(applied, ", "))
+		}
+	}
+
+	logPolicyTrust(policyRoots, tsaRootCerts, vo)
 
 	policyEnvelope, err := policy.LoadPolicy(ctx, vo.PolicyFilePath, archivistaClient)
 	if err != nil {
@@ -216,12 +303,14 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		subjects = append(subjects, artifactDigestSet)
 	}
 
+	var artifactFileDigestHex string
 	if len(vo.ArtifactFilePath) > 0 {
 		artifactDigestSet, err := cryptoutil.CalculateDigestSetFromFile(vo.ArtifactFilePath, []cryptoutil.DigestValue{{Hash: crypto.SHA256, GitOID: false}})
 		if err != nil {
 			return fmt.Errorf("failed to calculate artifact digest: %w", err)
 		}
 
+		artifactFileDigestHex = artifactDigestSet[cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}]
 		subjects = append(subjects, artifactDigestSet)
 	}
 
@@ -269,6 +358,14 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		}
 		loadedEnvelopes = append(loadedEnvelopes, envs...)
 	}
+
+	// Bridge a primary artifact (plain file digest) to a Merkle-tree product
+	// collection: if a signed inclusion-proof envelope proves the artifact is
+	// a leaf of a loaded collection's product/material tree, add that tree's
+	// root as a subject so the collection matches. Trust is still enforced by
+	// the engine's downstream functionary/signature checks. See
+	// expandSubjectsWithInclusionProofs for the CVE-2026-22703 / RFC 6962 notes.
+	subjects = expandSubjectsWithInclusionProofs(subjects, loadedEnvelopes, vo.ArtifactFilePath, artifactFileDigestHex)
 
 	verifyOpts := []workflow.VerifyOption{
 		workflow.VerifyWithSubjectDigests(subjects),
@@ -350,6 +447,64 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		}
 	}
 	return nil
+}
+
+// logPolicyTrust prints the trust anchors that will gate policy-signature
+// verification — the CA root(s), timestamp root(s), and signer identity
+// constraint — so an operator can see exactly what this run trusts, whether it
+// came from --policy-* flags or from trust compiled into the binary. Trust
+// should never be invisible.
+func logPolicyTrust(policyRoots, tsaRootCerts []*x509.Certificate, vo options.VerifyOptions) {
+	if len(policyRoots) == 0 && len(tsaRootCerts) == 0 && len(vo.PolicyURIs) == 0 {
+		return // key-based verify with no x509 policy trust; nothing to show
+	}
+	log.Infof("policy trust anchors (%d CA root(s), %d timestamp root(s)):", len(policyRoots), len(tsaRootCerts))
+	for _, c := range policyRoots {
+		log.Infof("  policy CA root: %s [sha256:%s]", certSubject(c), certFingerprint(c))
+	}
+	for _, c := range tsaRootCerts {
+		log.Infof("  policy timestamp root: %s [sha256:%s]", certSubject(c), certFingerprint(c))
+	}
+	ext := vo.PolicyFulcioCertExtensions
+	log.Infof("  policy signer: uris=%v issuer=%q sourceRepositoryURI=%q buildConfigURI=%q",
+		vo.PolicyURIs, ext.Issuer, ext.SourceRepositoryURI, ext.BuildConfigURI)
+}
+
+// policySignerIdentityUnset reports whether the operator supplied NO policy
+// signer-identity constraint on the command line. Only then may embedded trust
+// supply the signer identity — otherwise an operator who pinned the signer via
+// any single field (e.g. --policy-emails, --policy-fulcio-source-repository-uri)
+// without --policy-uris would have their constraint silently overwritten by the
+// embedded signer, verifying under unintended trust. The Fulcio Issuer is
+// excluded because it carries a non-empty default (the GitHub Actions issuer),
+// so its presence is not evidence of an explicit operator pin.
+func policySignerIdentityUnset(vo options.VerifyOptions) bool {
+	e := vo.PolicyFulcioCertExtensions
+	return vo.PolicyCommonName == "" &&
+		len(vo.PolicyDNSNames) == 0 &&
+		len(vo.PolicyEmails) == 0 &&
+		len(vo.PolicyOrganizations) == 0 &&
+		len(vo.PolicyURIs) == 0 &&
+		e.SourceRepositoryURI == "" &&
+		e.BuildConfigURI == "" &&
+		e.RunnerEnvironment == "" &&
+		e.SourceRepositoryDigest == "" &&
+		e.SourceRepositoryRef == "" &&
+		e.SourceRepositoryIdentifier == "" &&
+		e.BuildTrigger == "" &&
+		e.RunInvocationURI == ""
+}
+
+func certSubject(c *x509.Certificate) string {
+	if s := c.Subject.String(); s != "" {
+		return s
+	}
+	return "(no subject)"
+}
+
+func certFingerprint(c *x509.Certificate) string {
+	sum := sha256.Sum256(c.Raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // writeVSAOutfile writes the Verification Summary Attestation to disk.
