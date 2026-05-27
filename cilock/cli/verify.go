@@ -474,6 +474,7 @@ func logPolicyTrust(policyRoots, tsaRootCerts []*x509.Certificate, vo options.Ve
 // ANY of them, embedded trust must NOT supply the signer identity (flags win).
 var signerIdentityFlags = []string{
 	"policy-commonname",
+	"policy-dns-names",
 	"policy-emails",
 	"policy-organizations",
 	"policy-uris",
