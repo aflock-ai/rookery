@@ -258,59 +258,21 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		EV   *ebpf.OpenatEvent
 	}
 	openPaths := make(map[pidFdKey]*openInfo)
-	var readTapBytes, readTapClosures atomic.Uint64
-	// Write-tap counters: bytes the BPF kretprobe captured from sys_write.
-	// Symmetric to readTapBytes — surfaced as diagnostic in the trace summary.
-	var writeTapBytes, writeChunkSeen atomic.Uint64
-	// ABLATION lever (deletable): CILOCK_EBPF_WRITETAP=off drops write
-	// chunks in the dispatcher so products come ONLY from fanotify
-	// close-write + survivor-walk + exists-at-exit. Tests whether the
-	// write-tap is redundant (like the read-tap proved to be). The BPF
-	// still emits the chunks; we just ignore them, and finalizeWriteTap
-	// then no-ops on the empty hash.
-	// Write-tap content is permanently OFF (hardcoded default): ablation
-	// proved products are captured identically by fanotify FAN_CLOSE_WRITE +
-	// survivor-walk + exists-at-exit (digest-verified on GHA Hugo). Write
-	// chunks are dropped in the dispatch loop below.
-	//
-	// openat-time content hashing is skipped WHEN FANOTIFY IS ACTIVE —
-	// fanotify (open-perm, hash-once) is the authoritative content source,
-	// and the eBPF openat-hash was shown to add only non-regular/transient
-	// NOISE (dirs, devices, /tmp cgo intermediates) with zero unique real
-	// materials. It is retained ONLY as the no-fanotify fallback so non-GHA
-	// runs without fanotify still capture material content.
+	// Write-tap content is OFF (write chunks dropped in the loop below) and
+	// the eBPF openat content-hash is skipped when fanotify is active —
+	// fanotify (open-perm, hash-once) is the authoritative content source.
+	// The openat path-hash is retained only as the no-fanotify fallback.
 	openatHashDisabled := r.fanotifySession != nil
 
 	var readTotal, matchedTotal, otherTotal atomic.Uint64
-	// V2 diagnostic: read-chunk traffic counters. Lets us distinguish
-	// "BPF kprobe never fired for the tracee" from "kprobe fired but
-	// our matchAndAdd rejected it" when files end up with digest=nil.
-	// Surfaced into Summary.Diagnostics at trace end.
-	var readChunkSeen, readChunkRejected atomic.Uint64
-	// V2 Phase 8 stage 2 diagnostic: count how often the kernel-side
-	// fd_table carried the path inline on the close event vs how
-	// often we had to fall back to the userspace openPaths cache.
-	// A high inlinePath ratio confirms stage 2 is doing its job and
-	// the openPaths userspace map can be safely removed.
-	var closeWithInlinePath, closeWithoutInlinePath atomic.Uint64
-	// Phase 5 diagnostics: count of fds where read-tap captured only
-	// a prefix of the file — the openat-time path-hash is the
-	// authoritative digest for those (read-tap upgrade declined).
-	// fallbackHashFailures counts openat-time path-hash failures
-	// (file missing at hash time, permission denied, etc.) — those
-	// entries land in OpenedFiles with a nil digest, which is the
-	// honest stance: a hole in the attestation.
-	var partialFallbacks, fallbackFailures atomic.Uint64
-	// cacheReadsSkipped counts read opens the hasher released WITHOUT
-	// hashing because the path classified as build-internal cache/temp
-	// (pctx.cacheMatcher). Surfaced as a diagnostic so the reduction in
-	// hash attempts (and the corresponding absence of cache-file gaps)
-	// is transparent rather than a silent behavior change.
+	// fallbackFailures: openat-time path-hash failures on the no-fanotify
+	// fallback path (file gone / perm denied) → an honest nil-digest hole.
+	var fallbackFailures atomic.Uint64
+	// cacheReadsSkipped: read opens released without hashing because the path
+	// classified as build-internal cache/temp (pctx.cacheMatcher).
 	var cacheReadsSkipped atomic.Uint64
-	// Per-bucket counters for hash-failure outcomes. Surfaces the
-	// difference between "we caught it elsewhere" (silentByDigest)
-	// and "we already recorded this gap" (silentByDedup) so the
-	// fallbackFailures total can be honestly explained, not handwaved.
+	// hashSilentByDigest / hashSilentByDedup decompose fallbackFailures:
+	// "caught it elsewhere" vs "already recorded this gap".
 	var hashSilentByDigest, hashSilentByDedup atomic.Uint64
 
 	// V2 Phase 6/8: two-ringbuf architecture. The BPF program emits
@@ -753,7 +715,6 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		// write here would be clobbered.
 		r.ringbufDropOpenat = oDrops
 		r.ringbufDropReadTap = rDrops
-		r.partialReadFallbacks = partialFallbacks.Load()
 		r.fallbackHashFailures = fallbackFailures.Load()
 		r.hashSilentByDigest = hashSilentByDigest.Load()
 		r.hashSilentByDedup = hashSilentByDedup.Load()
@@ -793,16 +754,9 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		captureAttempts.Load(), captureSucceeded.Load())
 	if v := os.Getenv("CILOCK_DIAGNOSE"); v == "1" {
 		fmt.Fprintf(os.Stderr,
-			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d "+
-				"readChunkSeen=%d readChunkRejected=%d readTapBytes=%d readTapClosures=%d "+
-				"writeChunkSeen=%d writeTapBytes=%d "+
-				"closeInlinePath=%d closeFallbackPath=%d\n",
+			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d\n",
 			pctx.parentPid, readTotal.Load(), matchedTotal.Load(), otherTotal.Load(),
-			hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load(),
-			readChunkSeen.Load(), readChunkRejected.Load(),
-			readTapBytes.Load(), readTapClosures.Load(),
-			writeChunkSeen.Load(), writeTapBytes.Load(),
-			closeWithInlinePath.Load(), closeWithoutInlinePath.Load())
+			hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load())
 	}
 
 	if pctx.exitCode != 0 {
