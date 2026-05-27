@@ -97,8 +97,8 @@ func writeToolSection(w io.Writer, name string, doc *detection.DetectorDoc, slug
 	}
 	for _, s := range doc.Sections {
 		if s.Slug == slug {
-			fmt.Fprintln(w, s.Markdown)
-			return nil
+			_, err := fmt.Fprintln(w, s.Markdown)
+			return err
 		}
 	}
 	avail := make([]string, 0, len(doc.Sections))
@@ -113,46 +113,48 @@ func writeToolSummary(w io.Writer, e toolEntry, doc *detection.DetectorDoc) erro
 	if doc != nil && doc.Description != "" {
 		desc = doc.Description
 	}
-	fmt.Fprintf(w, "%s\n\n", e.Name)
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("%s\n\n", e.Name))
 	if desc != "" {
-		fmt.Fprintf(w, "%s\n\n", desc)
+		b.WriteString(fmt.Sprintf("%s\n\n", desc))
 	}
-	fmt.Fprintf(w, "  source:            %s\n", e.Source)
+	b.WriteString(fmt.Sprintf("  source:            %s\n", e.Source))
 	if len(e.Categories) > 0 {
-		fmt.Fprintf(w, "  category:          %s\n", joinCategories(e.Categories))
+		b.WriteString(fmt.Sprintf("  category:          %s\n", joinCategories(e.Categories)))
 	}
 	if e.PredicateType != "" {
-		fmt.Fprintf(w, "  predicate type:    %s\n", e.PredicateType)
+		b.WriteString(fmt.Sprintf("  predicate type:    %s\n", e.PredicateType))
 	}
 	if len(e.EmitsFormats) > 0 {
-		fmt.Fprintf(w, "  emits format:      %s\n", strings.Join(e.EmitsFormats, ", "))
+		b.WriteString(fmt.Sprintf("  emits format:      %s\n", strings.Join(e.EmitsFormats, ", ")))
 	}
-	fmt.Fprintf(w, "  recommended trace: %s\n", e.RecommendedTrace)
+	b.WriteString(fmt.Sprintf("  recommended trace: %s\n", e.RecommendedTrace))
 	if e.Upstream != nil && e.Upstream.Source != "" {
-		fmt.Fprintf(w, "  upstream:          %s\n", e.Upstream.Source)
+		b.WriteString(fmt.Sprintf("  upstream:          %s\n", e.Upstream.Source))
 	}
 	if len(e.Triggers) > 0 {
-		fmt.Fprintf(w, "  detected when:\n")
+		b.WriteString("  detected when:\n")
 		for _, t := range e.Triggers {
-			fmt.Fprintf(w, "    - [%s] %s: %s\n", t.Gate, t.Kind, t.Value)
+			b.WriteString(fmt.Sprintf("    - [%s] %s: %s\n", t.Gate, t.Kind, t.Value))
 		}
 	}
 
 	if doc != nil && len(doc.Sections) > 0 {
-		fmt.Fprintf(w, "\nDocumentation sections (use --section <slug>):\n")
+		b.WriteString("\nDocumentation sections (use --section <slug>):\n")
 		for _, s := range doc.Sections {
-			fmt.Fprintf(w, "    %-22s %s\n", s.Slug, s.Title)
+			b.WriteString(fmt.Sprintf("    %-22s %s\n", s.Slug, s.Title))
 		}
-		fmt.Fprintf(w, "\nFull docs: https://cilock.aflock.ai/%s/%s\n", docArea(e), e.Name)
+		b.WriteString(fmt.Sprintf("\nFull docs: https://cilock.aflock.ai/%s/%s\n", docArea(e), e.Name))
 	} else {
-		fmt.Fprintf(w, "\n(no long-form documentation in the catalog yet — add %s.doc.md)\n", e.Name)
+		b.WriteString(fmt.Sprintf("\n(no long-form documentation in the catalog yet — add %s.doc.md)\n", e.Name))
 	}
-	return nil
+	_, err := io.WriteString(w, b.String())
+	return err
 }
 
 // docArea picks the website section a catalog entry's page lives under.
 func docArea(e toolEntry) string {
-	if e.Source == "attestor-backed" && e.PredicateType != "" {
+	if e.Source == sourceAttestorBacked && e.PredicateType != "" {
 		return "attestors"
 	}
 	return "tools"

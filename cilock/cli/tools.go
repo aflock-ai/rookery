@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	formatJSON     = "json"
-	noDetectorYAML = "(no detector.yaml)"
+	formatJSON           = "json"
+	noDetectorYAML       = "(no detector.yaml)"
+	sourceAttestorBacked = "attestor-backed"
 )
 
 // ToolsCmd is `cilock tools` — discoverability surface for what cilock
@@ -149,7 +150,7 @@ func filterBySource(in []toolEntry, want string) []toolEntry {
 	for _, e := range in {
 		src := e.Source
 		if src == "" {
-			src = "attestor-backed"
+			src = sourceAttestorBacked
 		}
 		if src == want {
 			out = append(out, e)
@@ -234,11 +235,11 @@ func buildToolEntries() []toolEntry {
 		if err != nil || d == nil {
 			te = toolEntry{
 				Name:        name,
-				Source:      "attestor-backed",
+				Source:      sourceAttestorBacked,
 				Description: "(no detector.yaml; user-driven or always-on)",
 			}
 		} else {
-			te = makeToolEntry(name, d, "attestor-backed")
+			te = makeToolEntry(name, d, sourceAttestorBacked)
 		}
 		// Enrich from the attestor factory so `tools show --format json`
 		// is self-sufficient (predicate type + lifecycle + default-on),
@@ -423,7 +424,7 @@ func writeToolsTable(w interface{ Write([]byte) (int, error) }, entries []toolEn
 		}
 		src := e.Source
 		if src == "" {
-			src = "attestor-backed"
+			src = sourceAttestorBacked
 		}
 		fmt.Fprintf(&b, "  %-22s  %-15s  %-26s  %-12s  %s\n", e.Name, src, cats, lic, upName)
 	}
