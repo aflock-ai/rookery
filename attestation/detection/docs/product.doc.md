@@ -4,11 +4,11 @@ description: The cilock product attestor snapshots the working directory after a
 sidebar_position: 4
 ---
 
-Snapshots the working directory after the step's command runs, computes a Merkle root over every product file's digest, and emits a single in-toto subject (`tree:products`) whose digest is the root. The full per-file digest map is **not** carried in the predicate — that lives in a producer-side sidecar (`attestation.tree.json`) and is exposed to consumers via separate [inclusion-proof attestations](./inclusion-proof) on demand.
+Snapshots the working directory after the step's command runs, computes a Merkle root over every product file's digest, and emits a single in-toto subject (`tree:products`) whose digest is the root. The subject stays a single fixed-size root, but **by default the predicate also carries the per-file Merkle `leaves` inline** — each `(path, fileDigest, leafHash)` — so a verifier can resolve any product file's digest to the signed tree root with no separate inclusion-proof envelope (`cilock verify <artifact> -p policy` just works). Opt out with the producer-side `WithSuppressInlineLeaves` option when envelope size matters; per-file claims then come from the sidecar + [inclusion-proof attestations](./inclusion-proof) on demand.
 
 ## What it captures
 
-The v0.3 predicate is small and fixed-size. The schema:
+The v0.3 subject is a single fixed-size root; the predicate carries that root plus, by default, the inline leaves. The schema:
 
 | JSON field | Type | Source |
 |---|---|---|
@@ -16,6 +16,7 @@ The v0.3 predicate is small and fixed-size. The schema:
 | `treeSize` | integer | Number of files that contributed to the root (after include/exclude glob filtering). |
 | `hashAlgorithm` | string | Name of the hash algorithm. Default `sha256`. Matches the algorithm cilock used to build the tree. |
 | `construction` | string | Always `RFC6962` for v0.3. Future hash constructions would extend this field. |
+| `leaves` | array of `{path, fileDigest, leafHash}` | **Present by default.** The sorted per-file leaf set — exactly what a verifier needs to resolve a file digest to this signed root without a separate inclusion-proof envelope. Omitted when the producer sets `WithSuppressInlineLeaves` (the root subject is still emitted). |
 
 The DSSE statement's subject array carries one entry:
 
@@ -28,7 +29,7 @@ The DSSE statement's subject array carries one entry:
 ]
 ```
 
-That is the entire surface area of the predicate. The full per-file list — every path and every digest — does not appear here. It lives in the `<outfile>.product.tree.json` sidecar `cilock run` writes next to the signed envelope (and a parallel `<outfile>.material.tree.json` for the material attestor).
+The subject array stays one fixed-size entry no matter how many files the tree has. The per-file list lives in two places: the `leaves` field **inline in the predicate by default** (so verifiers resolve a file digest to this signed root with nothing else), and the unsigned `<outfile>.product.tree.json` sidecar `cilock run` writes next to the envelope (and a parallel `<outfile>.material.tree.json`) for `cilock prove`. When the producer suppresses inline leaves, only the sidecar carries the list.
 
 ## Why v0.3 looks like this
 
@@ -38,7 +39,7 @@ v0.2 carried the full per-file digest map (`map[path]Product`) inside the predic
 - Required Archivista to materialize a separate per-file index server-side to answer the question "which build contains file digest X" without re-decoding every predicate.
 - Forced consumers to download and parse the full predicate even when they only cared about one file.
 
-v0.3 fixes all three by moving per-file claims into separate inclusion-proof attestations. The product attestation says "this tree exists and these are its properties"; an inclusion-proof attestation says "and this specific file is in it." Together they verify per-file claims. See [issue #135](https://github.com/aflock-ai/rookery/issues/135) for the full rationale.
+v0.3 fixes all three by making the **subject** a single fixed-size root instead of a `map[path]Product`. Per-file claims are served by the inline `leaves` (default) — or, when leaves are suppressed for very large trees, by separate inclusion-proof attestations. Either way the signed *subject* stays one digest, so Archivista still indexes builds by a single root and the envelope's subject array never balloons. Inlining the leaves by default is what makes `cilock verify <artifact> -p policy` resolve a file with no extra envelope; suppression trades that convenience back for the smallest possible envelope. See [issue #135](https://github.com/aflock-ai/rookery/issues/135) for the original rationale.
 
 ## How the product set is captured
 
@@ -103,12 +104,16 @@ The full DSSE statement for a v0.3 product attestation:
     "merkleRoot":    "sha256:9c6f...d3a1",
     "treeSize":      30142,
     "hashAlgorithm": "sha256",
-    "construction":  "RFC6962"
+    "construction":  "RFC6962",
+    "leaves": [
+      { "path": "dist/app", "fileDigest": "e258...b317", "leafHash": "1227...be1f" }
+      // ... one entry per product file, sorted by path
+    ]
   }
 }
 ```
 
-The predicate is fixed-size regardless of how many files were in the working directory. A 30,000-file build produces the same predicate length as a 3-file build.
+The **subject** is fixed-size regardless of file count — a 30,000-file build has the same one-entry subject array as a 3-file build. The inline `leaves` list does scale with the tree; suppress it with `WithSuppressInlineLeaves` when envelope size matters and serve per-file claims from inclusion-proof attestations instead.
 
 ## Sidecar tree
 
@@ -127,12 +132,12 @@ See [prove files in a build](../guides/prove-files-in-a-build) for the producer 
 
 ## Composition with inclusion-proof attestations
 
-The product attestation alone does not let a consumer verify a per-file claim — it says "the tree exists and its root is X" but does not expose any specific leaf. The consumer-facing piece is the inclusion-proof attestation:
+By default the product attestation is self-sufficient for per-file claims: its inline `leaves` already bind every product file's digest to the signed root, so `cilock verify <artifact> -p policy` matches the artifact's sha256 against a leaf and verifies it against the product attestation's subject — no second envelope. Inclusion-proof attestations matter in two cases:
 
-- The **product attestation** says: "this tree exists; its root is X; size is N; built with sha256/RFC6962."
-- An **inclusion-proof attestation** for a specific file says: "this file's digest is leaf `i` in the tree with root X; here is the audit path."
+- **Suppressed inline leaves** (very large trees): the product attestation carries only the root, and an **inclusion-proof attestation** supplies the per-file claim — "this file's digest is leaf `i` in the tree with root X; here is the audit path."
+- **Selective disclosure**: publish a proof for one file without shipping the whole leaf set.
 
-A verifier with both attestations confirms (a) the audit path reconstructs the claimed root, (b) the claimed root matches the product attestation's subject digest, and (c) the leaf hash matches the file the verifier was asked about. See [verify a specific file](../guides/verify-a-specific-file) for the full check sequence.
+In those cases a verifier with both attestations confirms (a) the audit path reconstructs the claimed root, (b) the claimed root matches the product attestation's subject digest, and (c) the leaf hash matches the file asked about. See [verify a specific file](../guides/verify-a-specific-file) for the full sequence.
 
 ## Gotchas
 
