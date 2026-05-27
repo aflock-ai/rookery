@@ -360,10 +360,10 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	// Bridge a primary artifact (plain file digest) to a Merkle-tree product
-	// collection: if a signed inclusion-proof envelope proves the artifact is
-	// a leaf of a loaded collection's product/material tree, add that tree's
-	// root as a subject so the collection matches. Trust is still enforced by
-	// the engine's downstream functionary/signature checks. See
+	// collection so the collection matches by subject. Resolved from the
+	// collection's inline leaves (default), a single-leaf reconstruct, or a
+	// signed inclusion-proof envelope — whichever applies. Trust is still
+	// enforced by the engine's downstream functionary/signature checks. See
 	// expandSubjectsWithInclusionProofs for the CVE-2026-22703 / RFC 6962 notes.
 	subjects = expandSubjectsWithInclusionProofs(subjects, loadedEnvelopes, vo.ArtifactFilePath, artifactFileDigestHex)
 
