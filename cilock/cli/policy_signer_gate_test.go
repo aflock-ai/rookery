@@ -11,36 +11,34 @@ package cli
 import (
 	"testing"
 
-	"github.com/aflock-ai/rookery/cilock/internal/options"
-	"github.com/sigstore/fulcio/pkg/certificate"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// Embedded policy-signer identity must be applied ONLY when the operator
-// supplied no signer-identity constraint of any kind. Gating on --policy-uris
-// alone would silently overwrite an operator who pinned the signer via another
-// field (regression flagged by Codex review on PR #5112).
-func TestPolicySignerIdentityUnset(t *testing.T) {
-	tests := []struct {
-		name string
-		vo   options.VerifyOptions
-		want bool
-	}{
-		{"nothing set", options.VerifyOptions{}, true},
-		// Issuer has a non-empty default and is NOT an explicit pin.
-		{"only default issuer", options.VerifyOptions{PolicyFulcioCertExtensions: certificate.Extensions{Issuer: "https://token.actions.githubusercontent.com"}}, true},
-		{"emails set (no uris)", options.VerifyOptions{PolicyEmails: []string{"alice@example.com"}}, false},
-		{"commonname set", options.VerifyOptions{PolicyCommonName: "release-signer"}, false},
-		{"uris set", options.VerifyOptions{PolicyURIs: []string{"*"}}, false},
-		{"dns set", options.VerifyOptions{PolicyDNSNames: []string{"a.example.com"}}, false},
-		{"orgs set", options.VerifyOptions{PolicyOrganizations: []string{"Acme"}}, false},
-		{"fulcio source-repo set", options.VerifyOptions{PolicyFulcioCertExtensions: certificate.Extensions{SourceRepositoryURI: "https://github.com/acme/repo"}}, false},
-		{"fulcio build-config set", options.VerifyOptions{PolicyFulcioCertExtensions: certificate.Extensions{BuildConfigURI: "https://github.com/acme/repo/.github/workflows/x.yml@*"}}, false},
-		{"fulcio runner-env set", options.VerifyOptions{PolicyFulcioCertExtensions: certificate.Extensions{RunnerEnvironment: "github-hosted"}}, false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, policySignerIdentityUnset(tc.vo))
+// Embedded policy-signer identity must be applied ONLY when the operator set
+// NO signer-identity flag. Detection is by cobra Changed (not value), so a flag
+// with a non-empty default (--policy-fulcio-oidc-issuer) is correctly treated as
+// an explicit pin when set — the follow-on bug Codex flagged on PR #5112 after
+// the value-based gate was tried.
+func TestSignerIdentityPinnedByFlags(t *testing.T) {
+	t.Run("nothing set", func(t *testing.T) {
+		assert.False(t, signerIdentityPinnedByFlags(VerifyCmd()))
+	})
+
+	// Each signer-identity flag, when explicitly set, must register as a pin —
+	// including --policy-fulcio-oidc-issuer (which carries a non-empty default).
+	for _, name := range signerIdentityFlags {
+		t.Run("set "+name, func(t *testing.T) {
+			cmd := VerifyCmd()
+			require.NoError(t, cmd.Flags().Set(name, "x"))
+			assert.True(t, signerIdentityPinnedByFlags(cmd), "%s set explicitly must count as a signer pin", name)
 		})
 	}
+
+	// A non-signer flag (CA roots) must NOT count — embedded signer still applies.
+	t.Run("only ca-roots set", func(t *testing.T) {
+		cmd := VerifyCmd()
+		require.NoError(t, cmd.Flags().Set("policy-ca-roots", "root.pem"))
+		assert.False(t, signerIdentityPinnedByFlags(cmd))
+	})
 }

@@ -2700,7 +2700,7 @@ func TestSecurity_R3_310_RunVerifyRequiresVerifiers(t *testing.T) {
 		ArtifactFilePath:     "/dev/null",
 	}
 
-	err := runVerify(context.Background(), vo, nil, nil)
+	err := runVerify(context.Background(), vo, nil, nil, false)
 	require.Error(t, err, "runVerify with no verifiers must fail")
 	assert.Contains(t, err.Error(), "must supply",
 		"error should indicate missing verifier/key/CA")
