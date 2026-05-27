@@ -175,6 +175,62 @@ func (c *Collection) Materials() map[string]cryptoutil.DigestSet {
 	return materials
 }
 
+// InlineLeafVerifier is implemented by attestors (product, material v0.3) that
+// embed their per-file Merkle leaves in the signed predicate by default. The
+// engine calls VerifyInlineLeaves before trusting any Materials()/Products()
+// rehydrated from those inline leaves for sidecar-free artifactsFrom chain
+// checks: the envelope signature covers the leaves, but this guards against a
+// signer (or a bug) committing a Merkle root that doesn't match the leaves it
+// shipped, which would otherwise let chain comparison run on attacker-chosen
+// data. Implementations MUST return nil when they carry no inline leaves
+// (nothing to trust; the sidecar/legacy path governs instead).
+type InlineLeafVerifier interface {
+	VerifyInlineLeaves() error
+}
+
+// VerifyInlineLeaves runs VerifyInlineLeaves on every attestation in the
+// collection that embeds inline Merkle leaves, returning the first failure.
+// It returns nil when no attestation carries inline leaves (e.g. legacy
+// sidecar-only collections) — absence of inline data is not an error here; the
+// engine's strict/sidecar gate decides whether that absence is acceptable.
+func (c *Collection) VerifyInlineLeaves() error {
+	for _, attestation := range c.Attestations {
+		if verifier, ok := attestation.Attestation.(InlineLeafVerifier); ok {
+			if err := verifier.VerifyInlineLeaves(); err != nil {
+				return fmt.Errorf("%s: %w", attestation.Type, err)
+			}
+		}
+	}
+	return nil
+}
+
+// InlineLeafReporter is implemented by attestors that can report whether they
+// committed their per-file leaves inline (even an empty set). See
+// Collection.HasInlineMaterials.
+type InlineLeafReporter interface {
+	HasInlineLeaves() bool
+}
+
+// HasInlineMaterials reports whether the collection's MATERIAL set is committed
+// inline and is therefore authoritative — including an authoritative empty set
+// (a step that provably consumed nothing, e.g. a build in an isolated
+// workingdir). The engine uses this so strict-chain mode can accept a verified
+// empty material set without a sidecar, while still failing closed on a
+// leaf-less attestation whose empty Materials() is merely unknown. Only the
+// material attestor counts (it implements Materialer); a product attestor's
+// inline leaves say nothing about consumed materials.
+func (c *Collection) HasInlineMaterials() bool {
+	for _, attestation := range c.Attestations {
+		if _, isMaterialer := attestation.Attestation.(Materialer); !isMaterialer {
+			continue
+		}
+		if reporter, ok := attestation.Attestation.(InlineLeafReporter); ok && reporter.HasInlineLeaves() {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Collection) BackRefs() map[string]cryptoutil.DigestSet {
 	backRefs := make(map[string]cryptoutil.DigestSet)
 	for _, attestation := range c.Attestations {

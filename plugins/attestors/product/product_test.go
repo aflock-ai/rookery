@@ -335,7 +335,12 @@ func TestSidecarRoundTrip(t *testing.T) {
 // Test 9 — sidecar is NOT signed and NOT in the predicate
 // =====================================================================
 
-func TestSidecarNotInPredicate(t *testing.T) {
+// TestInlineLeavesInPredicate pins the v0.4 default: per-file leaves ARE
+// embedded in the signed predicate so a verifier can rehydrate Products()
+// and verify an artifactsFrom chain with no out-of-band sidecar. The four
+// canonical commitment fields must also still be present, and the legacy
+// in-memory `products` map must NOT leak into the predicate.
+func TestInlineLeavesInPredicate(t *testing.T) {
 	a := makeAttestor(t, map[string]string{
 		"a.txt": "alpha",
 		"b.txt": "bravo",
@@ -345,23 +350,64 @@ func TestSidecarNotInPredicate(t *testing.T) {
 	data, err := json.Marshal(a)
 	require.NoError(t, err)
 
-	// The signed predicate must NOT contain the per-file leaves slice
-	// (the whole point of v0.3 is the predicate stays O(1) regardless
-	// of product count).
 	var generic map[string]any
 	require.NoError(t, json.Unmarshal(data, &generic))
 
 	_, hasLeaves := generic["leaves"]
-	require.False(t, hasLeaves, "signed predicate must NOT contain 'leaves' field; got %v", generic)
+	require.True(t, hasLeaves, "v0.4 signed predicate MUST inline the 'leaves' field by default; got %v", generic)
 
 	_, hasProducts := generic["products"]
-	require.False(t, hasProducts, "signed predicate must NOT contain 'products' field; got %v", generic)
+	require.False(t, hasProducts, "signed predicate must NOT contain the in-memory 'products' field; got %v", generic)
 
-	// And the predicate MUST contain the four canonical fields.
 	require.Contains(t, generic, "merkleRoot")
 	require.Contains(t, generic, "treeSize")
 	require.Contains(t, generic, "hashAlgorithm")
 	require.Contains(t, generic, "construction")
+}
+
+// TestSuppressInlineLeavesOptsOut verifies the size-sensitive opt-out:
+// WithSuppressInlineLeaves(true) keeps the predicate O(1) (root + treeSize
+// only, leaves shipped via an external sidecar). The commitment fields
+// stay; only the leaves disappear.
+func TestSuppressInlineLeavesOptsOut(t *testing.T) {
+	a := makeAttestorWithOpts(t, map[string]string{
+		"a.txt": "alpha",
+		"b.txt": "bravo",
+	}, WithSuppressInlineLeaves(true))
+
+	data, err := json.Marshal(a)
+	require.NoError(t, err)
+
+	var generic map[string]any
+	require.NoError(t, json.Unmarshal(data, &generic))
+
+	_, hasLeaves := generic["leaves"]
+	require.False(t, hasLeaves, "WithSuppressInlineLeaves(true) must drop the 'leaves' field; got %v", generic)
+
+	require.Contains(t, generic, "merkleRoot")
+	require.Contains(t, generic, "treeSize")
+}
+
+// TestVerifyInlineLeavesRejectsForgedLeaf is the core integrity guard for the
+// product attestor: leaves that do not reconstruct to the committed merkleRoot
+// must be rejected, so a sidecar-free chain check never trusts attacker-chosen
+// product data.
+func TestVerifyInlineLeavesRejectsForgedLeaf(t *testing.T) {
+	a := makeAttestor(t, map[string]string{"a.txt": "alpha", "b.txt": "bravo"})
+	data, err := json.Marshal(a)
+	require.NoError(t, err)
+
+	var generic map[string]any
+	require.NoError(t, json.Unmarshal(data, &generic))
+	leaves := generic["leaves"].([]any)
+	require.NotEmpty(t, leaves)
+	leaves[0].(map[string]any)["fileDigest"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	forged, err := json.Marshal(generic)
+	require.NoError(t, err)
+
+	var b Attestor
+	require.NoError(t, json.Unmarshal(forged, &b))
+	require.Error(t, b.VerifyInlineLeaves(), "forged leaf that does not reconstruct to the signed root must be rejected")
 }
 
 // =====================================================================
@@ -395,8 +441,10 @@ func TestPredicateRoundTripJSON(t *testing.T) {
 	require.Equal(t, a.TreeSize, b.TreeSize)
 	require.Equal(t, a.HashAlgorithmField, b.HashAlgorithmField)
 	require.Equal(t, a.ConstructionField, b.ConstructionField)
-	// Leaves must NOT survive — they are out of band.
-	require.Empty(t, b.Leaves())
+	// Leaves MUST survive the round trip (inline by default) and the
+	// restored leaves must reconstruct to the signed root.
+	require.Equal(t, a.Leaves(), b.Leaves())
+	require.NoError(t, b.VerifyInlineLeaves(), "round-tripped inline leaves must reconstruct to the signed merkleRoot")
 }
 
 // TestIncludeExcludeGlobs verifies the glob options filter products

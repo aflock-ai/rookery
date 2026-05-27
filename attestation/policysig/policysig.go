@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
@@ -166,8 +167,51 @@ func VerifyPolicySignature(ctx context.Context, envelope dsse.Envelope, vo *Veri
 	}
 
 	if !passed {
-		return fmt.Errorf("no policy verifiers passed verification")
+		// The signature(s) chained to a trusted root, but no signer's
+		// cert identity matched the configured constraints. Surface the
+		// ACTUAL identities so the operator knows exactly what to pass.
+		if hint := policyVerifierIdentityHint(passedPolicyVerifiers); hint != "" {
+			return fmt.Errorf("policy signature verified against a trusted CA root, but the signer identity matched no configured policy verifier.\n"+
+				"  signer identity: %s\n"+
+				"  fix: pass --policy-uris (and/or --policy-emails) matching the URI/email above; --policy-fulcio-oidc-issuer defaults to GitHub Actions", hint)
+		}
+		return fmt.Errorf("no policy verifiers passed verification: the policy signature chained to a trusted root, " +
+			"but no signer matched the configured identity constraints (set --policy-uris / --policy-emails to the signer's SAN)")
 	}
 
 	return nil
+}
+
+// policyVerifierIdentityHint extracts the SAN identity (URIs/emails, or CN
+// as a fallback) and OIDC issuer from each x509 policy-signing cert so a
+// failed match can tell the operator the exact --policy-uris value to use.
+func policyVerifierIdentityHint(verifiers []dsse.CheckedVerifier) string {
+	parts := make([]string, 0, len(verifiers))
+	for _, v := range verifiers {
+		x509v, ok := v.Verifier.(*cryptoutil.X509Verifier)
+		if !ok {
+			continue
+		}
+		cert := x509v.Certificate()
+		if cert == nil {
+			continue
+		}
+		fields := make([]string, 0, 4)
+		for _, u := range cert.URIs {
+			fields = append(fields, "uri="+u.String())
+		}
+		for _, e := range cert.EmailAddresses {
+			fields = append(fields, "email="+e)
+		}
+		if len(fields) == 0 && cert.Subject.CommonName != "" {
+			fields = append(fields, "cn="+cert.Subject.CommonName)
+		}
+		if ext, err := certificate.ParseExtensions(cert.Extensions); err == nil && ext.Issuer != "" {
+			fields = append(fields, "issuer="+ext.Issuer)
+		}
+		if len(fields) > 0 {
+			parts = append(parts, strings.Join(fields, ", "))
+		}
+	}
+	return strings.Join(parts, " | ")
 }
