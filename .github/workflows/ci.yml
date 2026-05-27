@@ -125,12 +125,10 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang llvm libbpf-dev linux-tools-common linux-tools-generic
-          # Ubuntu's /usr/sbin/bpftool is a version-dispatch wrapper that
-          # refuses to run unless the per-running-kernel linux-tools package
-          # exists. linux-tools-generic ships a real bpftool that can dump
-          # /sys/kernel/btf/vmlinux regardless; shadow the wrapper with it.
-          REAL_BPFTOOL="$(find /usr/lib/linux-tools-* -maxdepth 1 -name bpftool -type f 2>/dev/null | sort -V | tail -1 || true)"
-          [ -n "${REAL_BPFTOOL:-}" ] && { sudo ln -sf "$REAL_BPFTOOL" /usr/local/sbin/bpftool; sudo ln -sf "$REAL_BPFTOOL" /usr/sbin/bpftool; } || true
+          # bpf-lint.sh resolves the real bpftool itself (the same way the
+          # runtime rebuild path does, preferring /usr/lib/linux-tools/*/
+          # over Ubuntu's /usr/sbin/bpftool version-dispatch wrapper, which
+          # can emit an incomplete vmlinux.h).
 
       - name: Compile-lint eBPF object source
         run: make bpf-lint
