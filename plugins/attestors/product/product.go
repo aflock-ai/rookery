@@ -659,62 +659,55 @@ func fromCaptureEntries(entries map[string]attestation.CaptureEntry, requireExis
 			out[path] = attestation.Product{MimeType: "unknown", Digest: nil}
 			continue
 		}
-
-		mimeType := "unknown"
-		if mt, mtErr := getFileContentType(path); mtErr == nil {
-			mimeType = mt
-		}
-		if mimeType == "application/octet-stream" && fi.IsDir() {
-			mimeType = "text/directory"
-		}
-
-		// The trace write-tap didn't yield a content digest (ringbuf
-		// drop, partial-read fallback, an mmap+msync write we don't tap,
-		// or — seen on GHA's Azure 6.17 kernel — a rebuilt-on-host BPF
-		// object whose write-tap never fires). The file is a confirmed
-		// surviving deliverable (exists-at-exit just passed), so hash it
-		// directly now instead of emitting a digest-less entry that
-		// buildTree() then drops from the Merkle tree. Without this, a
-		// build whose writes the tracer couldn't digest ships a signed
-		// attestation with an EMPTY product set, and the verify gate has
-		// no subject to anchor on. Regular files only — never block on a
-		// FIFO/socket. Falls through to witness-only if the hash fails.
-		if entry.Digest == nil {
-			if fi.Mode().IsRegular() {
-				if ds, herr := cryptoutil.CalculateDigestSetFromFile(path, []cryptoutil.DigestValue{{Hash: crypto.SHA256}}); herr == nil {
-					out[path] = attestation.Product{MimeType: mimeType, Digest: ds}
-					continue
-				}
-			}
-			out[path] = attestation.Product{
-				MimeType: mimeType,
-				Digest:   nil,
-			}
-			continue
-		}
-
-		ds, err := cryptoutil.NewDigestSet(entry.Digest)
-		if err != nil {
-			// Bad digest data on the trace side — same fallback: hash
-			// the surviving file directly rather than dropping it.
-			if fi.Mode().IsRegular() {
-				if ds2, herr := cryptoutil.CalculateDigestSetFromFile(path, []cryptoutil.DigestValue{{Hash: crypto.SHA256}}); herr == nil {
-					out[path] = attestation.Product{MimeType: mimeType, Digest: ds2}
-					continue
-				}
-			}
-			out[path] = attestation.Product{
-				MimeType: mimeType,
-				Digest:   nil,
-			}
-			continue
-		}
-		out[path] = attestation.Product{
-			MimeType: mimeType,
-			Digest:   ds,
-		}
+		out[path] = productForSurvivor(path, entry, fi)
 	}
 	return out
+}
+
+// productForSurvivor builds the Product for an entry whose path still
+// exists at process exit (fi is its stat result). It prefers the digest
+// the tracer captured, but falls back to hashing the surviving file
+// directly when the trace digest is missing or unparseable.
+func productForSurvivor(path string, entry attestation.CaptureEntry, fi os.FileInfo) attestation.Product {
+	mimeType := "unknown"
+	if mt, mtErr := getFileContentType(path); mtErr == nil {
+		mimeType = mt
+	}
+	if mimeType == "application/octet-stream" && fi.IsDir() {
+		mimeType = "text/directory"
+	}
+
+	// The trace write-tap didn't yield a content digest (ringbuf drop,
+	// partial-read fallback, an mmap+msync write we don't tap, or — seen
+	// on GHA's Azure 6.17 kernel — a rebuilt-on-host BPF object whose
+	// write-tap never fires). The file is a confirmed surviving
+	// deliverable, so hash it directly instead of emitting a digest-less
+	// entry that buildTree() would drop from the Merkle tree — which
+	// would otherwise ship a signed attestation with an EMPTY product set
+	// and leave the verify gate with no subject to anchor on.
+	if entry.Digest == nil {
+		return hashSurvivorOrWitness(path, mimeType, fi)
+	}
+
+	ds, err := cryptoutil.NewDigestSet(entry.Digest)
+	if err != nil {
+		// Bad digest data on the trace side — same direct-hash fallback.
+		return hashSurvivorOrWitness(path, mimeType, fi)
+	}
+	return attestation.Product{MimeType: mimeType, Digest: ds}
+}
+
+// hashSurvivorOrWitness hashes a surviving regular file directly and
+// returns a product carrying that digest. Regular files only — never
+// block on a FIFO/socket. If the file isn't regular or hashing fails, it
+// degrades to a witness-only product (nil digest).
+func hashSurvivorOrWitness(path, mimeType string, fi os.FileInfo) attestation.Product {
+	if fi.Mode().IsRegular() {
+		if ds, herr := cryptoutil.CalculateDigestSetFromFile(path, []cryptoutil.DigestValue{{Hash: crypto.SHA256}}); herr == nil {
+			return attestation.Product{MimeType: mimeType, Digest: ds}
+		}
+	}
+	return attestation.Product{MimeType: mimeType, Digest: nil}
 }
 
 // buildTree filters the product set through the include / exclude globs,
