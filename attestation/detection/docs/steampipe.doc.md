@@ -33,7 +33,7 @@ Each cilock run emits an in-toto envelope whose predicate carries the following 
 | `https://aflock.ai/attestations/material/v0.3`         | Merkle tree of working-directory inputs (`.sql` files, mod definitions) |
 | `https://aflock.ai/attestations/product/v0.3`          | Merkle tree of outputs, including `steampipe.json`                      |
 | `https://aflock.ai/attestations/steampipe/v0.1`        | Parsed query rows, `resultHash` (SHA-256 of raw JSON), frontmatter (id, KSI, NIST, plugin, severity), per-row subjects |
-| `https://aflock.ai/attestations/environment/v0.1`      | OS, arch, user, env vars (PII-filtered)                                 |
+| `https://aflock.ai/attestations/environment/v0.1`      | OS, hostname, user, env vars (PII-filtered)                             |
 | `https://aflock.ai/attestations/git/v0.1`              | Commit SHA, branch, remotes                                             |
 
 The `steampipe/v0.1` predicate's `results[].resultHash` matches the SHA-256 of the `steampipe.json` leaf in the `product/v0.3` tree. That is the chain that makes the rows verifiable — you can't swap in different JSON without invalidating the product tree. Per-row subjects (`aws:account:<id>`, `aws:arn:<arn>`, `aws:region:<region>` for the AWS plugin; `github:repo:<owner/name>`, `github:org:<login>` for GitHub; `k8s:uid:<uid>`, `k8s:namespace:<ns>` for Kubernetes; `okta:user:<id>`, `okta:org:<organization>` for Okta) are surfaced via `Subjects()` so policy graphs can join across tools.

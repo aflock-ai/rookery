@@ -32,7 +32,7 @@ Each cilock run emits an in-toto envelope whose predicate carries the following 
 | `https://aflock.ai/attestations/material/v0.3`         | Merkle tree of the IaC inputs (the `-d` directory)        |
 | `https://aflock.ai/attestations/product/v0.3`          | Merkle tree of outputs, including `results_sarif.sarif`   |
 | `https://aflock.ai/attestations/sarif/v0.1`            | Parsed SARIF report + `reportDigestSet.sha256`            |
-| `https://aflock.ai/attestations/environment/v0.1`      | OS, arch, user, env vars (PII-filtered)                   |
+| `https://aflock.ai/attestations/environment/v0.1`      | OS, hostname, user, env vars (PII-filtered)               |
 | `https://aflock.ai/attestations/git/v0.1`              | Commit SHA, branch, remotes                               |
 
 The `sarif/v0.1` predicate's `reportDigestSet.sha256` exactly matches the digest of the `results_sarif.sarif` leaf in the `product/v0.3` tree. That is the chain that makes the findings verifiable — you can't swap in a different SARIF without invalidating the product tree.

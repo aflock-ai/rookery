@@ -5,7 +5,7 @@ sidebar_position: 2
 examples_repo: 01-command-run
 ---
 
-Records the command `cilock run` executed — argv, exit code, captured stdout/stderr, and (when `--trace` is enabled on Linux) a per-process ptrace record of opened files, network activity, file mutations, and security-sensitive syscalls.
+Records the command `cilock run` executed — argv, exit code, captured stdout/stderr, and (when `--trace` is enabled on Linux) a per-process record of opened files, network activity, file mutations, and security-sensitive syscalls, captured via eBPF where the kernel supports it and ptrace+seccomp otherwise.
 
 ## What it captures
 

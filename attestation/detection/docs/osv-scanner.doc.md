@@ -33,7 +33,7 @@ The DSSE envelope wraps six predicates from the cilock run:
 | `https://aflock.ai/attestations/material/v0.3` | `material` | Merkle digests of every input file the scanner read |
 | `https://aflock.ai/attestations/product/v0.3` | `product` | Merkle digest of `osv.sarif` as the scanner wrote it |
 | `https://aflock.ai/attestations/sarif/v0.1` | `sarif` | Parsed report — rules, results, locations, severities |
-| `https://aflock.ai/attestations/environment/v0.1` | `environment` | OS, arch, hostname, env subset |
+| `https://aflock.ai/attestations/environment/v0.1` | `environment` | OS, hostname, user, env subset |
 | `https://aflock.ai/attestations/git/v0.1` | `git` | Commit, branch, remote, dirty state |
 
 The `sarif` attestor is what makes the OSV findings queryable. The other five bind those findings to a specific commit, machine, scanner argv, input set, and output digest.

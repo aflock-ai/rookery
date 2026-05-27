@@ -51,7 +51,7 @@ The wrapped `sh -c` records `["sh","-c","govulncheck -format sarif ./... > govul
 
 | Predicate type | Source |
 |---|---|
-| `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
+| `https://aflock.ai/attestations/environment/v0.1` | host OS, hostname, username, env vars (sensitive ones obfuscated) |
 | `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, tags, dirty status, parents |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle root over the Go module before govulncheck runs |
 | `https://aflock.ai/attestations/command-run/v0.1` | the literal `sh -c 'govulncheck …'` argv + exit code + ptrace |
