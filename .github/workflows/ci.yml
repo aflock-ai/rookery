@@ -302,8 +302,10 @@ jobs:
           for COMMIT in $(git rev-list "$BASE".."$HEAD"); do
             MSG=$(git log -1 --format='%s' "$COMMIT")
             if ! echo "$MSG" | grep -qP "$PATTERN"; then
-              # Allow merge commits and Co-Authored-By
-              if ! echo "$MSG" | grep -qP '^Merge '; then
+              # Allow git-generated merge ("Merge ...") and revert
+              # ("Revert \"...\"") subjects — both are legitimate
+              # standard formats, not author-authored messages.
+              if ! echo "$MSG" | grep -qP '^(Merge|Revert) '; then
                 ERRORS="${ERRORS}\n  ${COMMIT:0:8}: $MSG"
               fi
             fi
