@@ -7,6 +7,7 @@
 # - test-go: Go tests with coverage
 # - test-go-race: Go tests with race detector
 # - vet: go vet across all modules
+# - bpf-lint: clang -Wall -Werror compile-check of the eBPF object source
 # - build: Build all binaries (cilock, builder)
 # - verify-isolated: Verify each module builds outside workspace
 # - commitlint: Conventional commit validation
@@ -106,6 +107,33 @@ jobs:
             (cd "$dir" && go vet ./...) || exit 1
           done
           echo "All modules pass go vet"
+
+  # ── eBPF Compile-Lint ───────────────────────────────────────────────
+  # Fast fail before the full pipeline: compile the CO-RE eBPF object
+  # source with the SAME strict flags the runtime rebuild path uses
+  # (clang -Wall -Werror -target bpf). The kernel verifier remains the
+  # authoritative safety check at load time; this just catches source
+  # regressions early without needing to run a traced build.
+  bpf-lint:
+    name: bpf lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install eBPF toolchain (clang, libbpf, bpftool)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang llvm libbpf-dev linux-tools-common linux-tools-generic
+          # Ubuntu's /usr/sbin/bpftool is a version-dispatch wrapper that
+          # refuses to run unless the per-running-kernel linux-tools package
+          # exists. linux-tools-generic ships a real bpftool that can dump
+          # /sys/kernel/btf/vmlinux regardless; shadow the wrapper with it.
+          REAL_BPFTOOL="$(find /usr/lib/linux-tools-* -maxdepth 1 -name bpftool -type f 2>/dev/null | sort -V | tail -1 || true)"
+          [ -n "${REAL_BPFTOOL:-}" ] && { sudo ln -sf "$REAL_BPFTOOL" /usr/local/sbin/bpftool; sudo ln -sf "$REAL_BPFTOOL" /usr/sbin/bpftool; } || true
+
+      - name: Compile-lint eBPF object source
+        run: make bpf-lint
 
   # ── Build ───────────────────────────────────────────────────────────
   build:
@@ -468,6 +496,7 @@ jobs:
       - test-go
       - test-go-race
       - vet
+      - bpf-lint
       - build
       - verify-isolated
       - mod-tidy-check
