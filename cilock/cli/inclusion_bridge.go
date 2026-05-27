@@ -58,7 +58,7 @@ type treeCommitment struct {
 //     the policy engine still verifies the matched collection's signature
 //     against the step functionary. A bogus collection+proof pair is rejected
 //     downstream at signature verification.
-func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelopes []dsse.Envelope, artifactPath, artifactDigestHex string) []cryptoutil.DigestSet {
+func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelopes []dsse.Envelope, artifactPath, artifactDigestHex string) []cryptoutil.DigestSet { //nolint:gocognit,gocyclo,funlen // single-pass primary-artifact→tree bridge: collection-commitment parse, inclusion-proof verify, and single-leaf reconstruct share the CVE-2026-22703 treeSize/root checks; splitting would fragment the trust trail
 	requested := map[string]bool{}
 	for _, ds := range subjects {
 		for dv, h := range ds {

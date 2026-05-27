@@ -255,7 +255,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// extensions). Gating on --policy-uris alone would silently overwrite an
 	// operator who pinned the signer via --policy-emails / --policy-fulcio-*
 	// without --policy-uris, verifying under unintended trust.
-	if embTrust != nil {
+	if embTrust != nil { //nolint:nestif // per-dimension flag-vs-embedded precedence (ca-roots / tsa-roots / signer-identity); flattening obscures which dimension wins
 		applied := make([]string, 0, 3)
 		if len(vo.PolicyCARootPaths) == 0 && len(embFulcioRoots) > 0 {
 			policyRoots = append(policyRoots, embFulcioRoots...)
