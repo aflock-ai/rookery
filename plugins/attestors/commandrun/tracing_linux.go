@@ -61,6 +61,14 @@ type ptraceContext struct {
 	// CILOCK_FSVERITY enables it. nil when disabled.
 	fsVerityState *fsVerityState
 
+	// cacheMatcher classifies opened paths as build-internal cache/temp.
+	// When set, the eBPF hasher skips hashing matching read opens: they
+	// are content-addressed storage (Go module cache, GOCACHE, /tmp)
+	// pinned by lockfiles, not meaningful materials, and hashing them on
+	// a cold build both wastes cycles and produces churning-file TOCTOU
+	// failures that would otherwise count as drops/gaps. nil = hash all.
+	cacheMatcher *attestation.CachePathMatcher
+
 	// digestCache memoizes per-file sha digests across the trace. Without
 	// it, a `go build` of any non-trivial project re-hashes the same
 	// stdlib + dep .go files thousands of times — each SYS_OPENAT and
@@ -318,11 +326,15 @@ func (r *CommandRun) preStartTracingSetup() error {
 	// openat-time path-hash (via the capture pool) remains as the
 	// fallback for files where read-tap didn't complete the full read
 	// before the tracee exited.
-	if err := consumer.EnableReadTap(); err != nil {
-		log.Debugf("(ebpf) read-tap unavailable (%v); falling back to openat-time path hash", err)
-	} else {
-		log.Debugf("(ebpf) read-tap enabled (default)")
-	}
+	// Read-tap is permanently OFF. Experiments (local 6.8 + GHA Azure 6.17
+	// Hugo) proved it net-negative: it nearly DOUBLED the materials set with
+	// pure GOCACHE/module-cache + /tmp cgo-temp NOISE (it never honored the
+	// cache-skip fanotify applies), made materials non-deterministic, and
+	// caused all the partial-read fallbacks + the 1GiB ringbuf. fanotify
+	// (default-on, synchronous, zero-drop) is the authoritative materials
+	// source; the openat-time path-hash remains as the no-fanotify fallback.
+	// EnableReadTap is intentionally never called (the tap content path is
+	// being removed; this locks in the validated default).
 	r.ebpfConsumer = consumer
 	return nil
 }
@@ -336,6 +348,7 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		environmentCapturer: actx.EnvironmentCapturer(),
 		tlsPendingFDs:       make(map[string]int),
 		fsVerityState:       r.fsVerityState,
+		cacheMatcher:        r.cacheMatcher,
 		digestCache:         make(map[string]cryptoutil.DigestSet, 8192),
 	}
 
