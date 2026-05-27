@@ -97,7 +97,7 @@ Yes. The `attestation.json` produced above is a standard DSSE envelope wrapping 
 ## See also
 
 - [`sbom` attestor](../attestors/sbom) — the underlying ingestion path, predicate-type switching, and SBOM format detection
-- [`product/v0.3` attestor](../attestors/product-v0.3) — how syft's output file lands in the Merkle tree as a real product
+- [`product/v0.3` attestor](../attestors/product) — how syft's output file lands in the Merkle tree as a real product
 - [`command-run/v0.1` attestor](../attestors/command-run) — what records the literal syft argv
 - [Validated example: tool-syft-sbom](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-syft-sbom) — the upstream README this page mirrors
 - [Anchore Syft on GitHub](https://github.com/anchore/syft) — upstream project

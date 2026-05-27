@@ -5,7 +5,7 @@ sidebar_position: 5
 examples_repo: multi-step-attestationsFrom
 ---
 
-Emits a signed inclusion proof binding a single file's digest to a Merkle tree's root. Generated on demand by [`cilock prove`](../guides/prove-files-in-a-build) against a producer-side tree sidecar; consumed by `cilock verify` when a downstream verifier needs to confirm a per-file claim against a v0.3 [product](./product-v0.3) or material attestation.
+Emits a signed inclusion proof binding a single file's digest to a Merkle tree's root. Generated on demand by [`cilock prove`](../guides/prove-files-in-a-build) against a producer-side tree sidecar; consumed by `cilock verify` when a downstream verifier needs to confirm a per-file claim against a v0.3 [product](./product) or material attestation.
 
 ## What it captures
 
@@ -143,7 +143,7 @@ See [`multi-step-attestationsFrom`](https://github.com/aflock-ai/attestor-compli
 
 ## See also
 
-- [Product attestor v0.3](./product-v0.3) — the source of the Merkle root being proved against
+- [Product attestor v0.3](./product) — the source of the Merkle root being proved against
 - [Inclusion proofs](../concepts/inclusion-proofs) — the underlying algorithm
 - [The spine of the graph](../concepts/the-spine-of-the-graph) — why the subject is the file digest
 - [Prove files in a build](../guides/prove-files-in-a-build) — producer-side workflow

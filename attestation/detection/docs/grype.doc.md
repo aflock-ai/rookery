@@ -132,7 +132,7 @@ See the [`sarif` attestor reference](../attestors/sarif) for the full predicate 
 ## See also
 
 - [`sarif` attestor reference](../attestors/sarif) — predicate schema, Rego patterns, the `.report` wrapper
-- [`product/v0.3` attestor](../attestors/product-v0.3) — how Grype's SARIF gets captured as a real product
+- [`product/v0.3` attestor](../attestors/product) — how Grype's SARIF gets captured as a real product
 - [`command-run/v0.1` attestor](../attestors/command-run) — how the literal `grype` argv is recorded
 - [Tools index](./) — full catalog of validated tool integrations
 - [`tool-grype-sarif` validated example](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-grype-sarif) — the upstream example this page mirrors
