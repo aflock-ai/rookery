@@ -22,6 +22,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/detection"
+	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/spf13/cobra"
 )
 
@@ -49,14 +50,34 @@ func ToolsCmd() *cobra.Command {
 		SilenceErrors:     true,
 	}
 	cmd.AddCommand(toolsListCmd())
+	cmd.AddCommand(toolsShowCmd())
 	cmd.AddCommand(toolsTestPlanCmd())
 	return cmd
+}
+
+// defaultOnAttestor reports whether an attestor is part of the default
+// binary's always-run/default set (matches cilock/cli/run.go and the
+// `cilock attestors list` table): product/material/command-run always run,
+// and options.DefaultAttestors (environment, git) are on by default.
+func defaultOnAttestor(name string) bool {
+	switch name {
+	case "product", "material", "command-run":
+		return true
+	}
+	for _, d := range options.DefaultAttestors {
+		if d == name {
+			return true
+		}
+	}
+	return false
 }
 
 // toolEntry is one row in the tools list / one section in the test plan.
 type toolEntry struct {
 	Name             string                  `json:"name"`
 	PredicateType    string                  `json:"predicate_type,omitempty"`
+	RunType          string                  `json:"run_type,omitempty"` // attestor lifecycle: prematerial|material|...|postproduct
+	DefaultOn        bool                    `json:"default_on"`         // part of the default binary's always-run/default set
 	Description      string                  `json:"description,omitempty"`
 	Categories       []detection.Category    `json:"categories,omitempty"`
 	Upstream         *detection.UpstreamInfo `json:"upstream,omitempty"`
@@ -208,16 +229,25 @@ func buildToolEntries() []toolEntry {
 	for _, ent := range attestation.RegistrationEntries() {
 		name := ent.Name
 		seen[name] = true
+		var te toolEntry
 		d, _, err := reg.Lookup(name)
 		if err != nil || d == nil {
-			out = append(out, toolEntry{
+			te = toolEntry{
 				Name:        name,
 				Source:      "attestor-backed",
 				Description: "(no detector.yaml; user-driven or always-on)",
-			})
-			continue
+			}
+		} else {
+			te = makeToolEntry(name, d, "attestor-backed")
 		}
-		out = append(out, makeToolEntry(name, d, "attestor-backed"))
+		// Enrich from the attestor factory so `tools show --format json`
+		// is self-sufficient (predicate type + lifecycle + default-on),
+		// and the website doesn't need a second data source.
+		f := ent.Factory()
+		te.PredicateType = f.Type()
+		te.RunType = fmt.Sprintf("%v", f.RunType())
+		te.DefaultOn = defaultOnAttestor(name)
+		out = append(out, te)
 	}
 
 	// Pass 2: detection-only catalog entries — registered via go:embed
