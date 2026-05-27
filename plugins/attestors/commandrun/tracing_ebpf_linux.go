@@ -309,6 +309,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// Write-tap counters: bytes the BPF kretprobe captured from sys_write.
 	// Symmetric to readTapBytes — surfaced as diagnostic in the trace summary.
 	var writeTapBytes, writeChunkSeen atomic.Uint64
+	// ABLATION lever (deletable): CILOCK_EBPF_WRITETAP=off drops write
+	// chunks in the dispatcher so products come ONLY from fanotify
+	// close-write + survivor-walk + exists-at-exit. Tests whether the
+	// write-tap is redundant (like the read-tap proved to be). The BPF
+	// still emits the chunks; we just ignore them, and finalizeWriteTap
+	// then no-ops on the empty hash.
+	writeTapEnabled := os.Getenv("CILOCK_EBPF_WRITETAP") != "off"
 
 	var readTotal, matchedTotal, otherTotal atomic.Uint64
 	// V2 diagnostic: read-chunk traffic counters. Lets us distinguish
@@ -714,6 +721,9 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				recordEBPFNet(pctx, ev.Net)
 			case ev.ReadChunk != nil:
 				isWrite := ev.Type == ebpf.EVT_WRITE_CHUNK
+				if isWrite && !writeTapEnabled {
+					continue // write-tap ablation: products via fanotify/survivor-walk only
+				}
 				if isWrite {
 					writeChunkSeen.Add(1)
 				} else {
@@ -1264,14 +1274,15 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 			outcome = recordOutcomeSilentByDigest
 			break
 		}
-		// Directory opens are not content gaps — there's nothing to
-		// hash, and the verifier's "what files did this build read"
-		// view should not be cluttered with locale dirs, /etc/ssl
-		// directory entries, /proc subdirs, etc. Drop them. If a
-		// future policy needs "what directories did the build scan,"
-		// we can add a dedicated field; today the cost-benefit
-		// strongly favors suppression.
-		if strings.HasPrefix(res.Reason, "directory open") {
+		// Non-regular files (directories, char/block devices, pipes,
+		// sockets, symlinks) are not content gaps — there's nothing to
+		// hash and they aren't materials. Every build opens /dev/null,
+		// locale dirs, /proc subdirs, etc.; recording them as "unhashed
+		// opens" is a false gap that pollutes the verifier view and trips
+		// --require-zero-drops. Drop them (not a real gap). If a future
+		// policy needs "what directories/devices did the build touch," add
+		// a dedicated field; today suppression is the right call.
+		if res.NonRegular || strings.HasPrefix(res.Reason, "directory open") {
 			outcome = recordOutcomeSilentByDedup // bookkeeping: not a real gap
 			break
 		}
