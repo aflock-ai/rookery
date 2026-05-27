@@ -67,7 +67,7 @@ func toolsShowCmd() *cobra.Command {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
 				return enc.Encode(toolShow{toolEntry: entry, Doc: doc})
-			case "", "text":
+			case "", formatText:
 				if section != "" {
 					return writeToolSection(cmd.OutOrStdout(), name, doc, section)
 				}
@@ -77,7 +77,7 @@ func toolsShowCmd() *cobra.Command {
 			}
 		},
 	}
-	cmd.Flags().StringVar(&format, "format", "text", "Output format: text (default) or json")
+	cmd.Flags().StringVar(&format, "format", formatText, "Output format: text (default) or json")
 	cmd.Flags().StringVar(&section, "section", "", "Print only one documentation section, by slug (see the summary)")
 	return cmd
 }
@@ -113,43 +113,50 @@ func writeToolSummary(w io.Writer, e toolEntry, doc *detection.DetectorDoc) erro
 	if doc != nil && doc.Description != "" {
 		desc = doc.Description
 	}
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("%s\n\n", e.Name))
-	if desc != "" {
-		b.WriteString(fmt.Sprintf("%s\n\n", desc))
+	// Write directly to w via a helper that latches the first error, so
+	// each Fprintf's error is handled (errcheck) without WriteString(Sprintf)
+	// (staticcheck QF1012).
+	var werr error
+	pr := func(format string, a ...any) {
+		if werr == nil {
+			_, werr = fmt.Fprintf(w, format, a...)
+		}
 	}
-	b.WriteString(fmt.Sprintf("  source:            %s\n", e.Source))
+	pr("%s\n\n", e.Name)
+	if desc != "" {
+		pr("%s\n\n", desc)
+	}
+	pr("  source:            %s\n", e.Source)
 	if len(e.Categories) > 0 {
-		b.WriteString(fmt.Sprintf("  category:          %s\n", joinCategories(e.Categories)))
+		pr("  category:          %s\n", joinCategories(e.Categories))
 	}
 	if e.PredicateType != "" {
-		b.WriteString(fmt.Sprintf("  predicate type:    %s\n", e.PredicateType))
+		pr("  predicate type:    %s\n", e.PredicateType)
 	}
 	if len(e.EmitsFormats) > 0 {
-		b.WriteString(fmt.Sprintf("  emits format:      %s\n", strings.Join(e.EmitsFormats, ", ")))
+		pr("  emits format:      %s\n", strings.Join(e.EmitsFormats, ", "))
 	}
-	b.WriteString(fmt.Sprintf("  recommended trace: %s\n", e.RecommendedTrace))
+	pr("  recommended trace: %s\n", e.RecommendedTrace)
 	if e.Upstream != nil && e.Upstream.Source != "" {
-		b.WriteString(fmt.Sprintf("  upstream:          %s\n", e.Upstream.Source))
+		pr("  upstream:          %s\n", e.Upstream.Source)
 	}
 	if len(e.Triggers) > 0 {
-		b.WriteString("  detected when:\n")
+		pr("  detected when:\n")
 		for _, t := range e.Triggers {
-			b.WriteString(fmt.Sprintf("    - [%s] %s: %s\n", t.Gate, t.Kind, t.Value))
+			pr("    - [%s] %s: %s\n", t.Gate, t.Kind, t.Value)
 		}
 	}
 
 	if doc != nil && len(doc.Sections) > 0 {
-		b.WriteString("\nDocumentation sections (use --section <slug>):\n")
+		pr("\nDocumentation sections (use --section <slug>):\n")
 		for _, s := range doc.Sections {
-			b.WriteString(fmt.Sprintf("    %-22s %s\n", s.Slug, s.Title))
+			pr("    %-22s %s\n", s.Slug, s.Title)
 		}
-		b.WriteString(fmt.Sprintf("\nFull docs: https://cilock.aflock.ai/%s/%s\n", docArea(e), e.Name))
+		pr("\nFull docs: https://cilock.aflock.ai/%s/%s\n", docArea(e), e.Name)
 	} else {
-		b.WriteString(fmt.Sprintf("\n(no long-form documentation in the catalog yet — add %s.doc.md)\n", e.Name))
+		pr("\n(no long-form documentation in the catalog yet — add %s.doc.md)\n", e.Name)
 	}
-	_, err := io.WriteString(w, b.String())
-	return err
+	return werr
 }
 
 // docArea picks the website section a catalog entry's page lives under.

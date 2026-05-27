@@ -97,14 +97,14 @@ list above.`,
 			switch strings.ToLower(format) {
 			case "json":
 				return writePlanJSON(cmd.OutOrStdout(), env)
-			case "", "text", "human":
+			case "", formatText, "human":
 				return writePlanHuman(cmd.OutOrStdout(), env, verbose)
 			default:
 				return fmt.Errorf("unknown --format %q (want text|json)", format)
 			}
 		},
 	}
-	cmd.Flags().StringVar(&format, "format", "text", "Output format: text (default) or json")
+	cmd.Flags().StringVar(&format, "format", formatText, "Output format: text (default) or json")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Include the full skip list (every detector considered) in text output")
 	return cmd
 }

@@ -28,8 +28,10 @@ import (
 
 const (
 	formatJSON           = "json"
+	formatText           = "text"
 	noDetectorYAML       = "(no detector.yaml)"
 	sourceAttestorBacked = "attestor-backed"
+	attestorCommandRun   = "command-run"
 )
 
 // ToolsCmd is `cilock tools` — discoverability surface for what cilock
@@ -62,7 +64,7 @@ func ToolsCmd() *cobra.Command {
 // and options.DefaultAttestors (environment, git) are on by default.
 func defaultOnAttestor(name string) bool {
 	switch name {
-	case "product", "material", "command-run":
+	case "product", "material", attestorCommandRun:
 		return true
 	}
 	for _, d := range options.DefaultAttestors {
