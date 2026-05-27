@@ -851,15 +851,6 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 			return ErrVerifyArtifactsFailed{Reasons: reasons}
 		}
 
-		// Strict-chain enforcement: if the policy requires sidecars
-		// but no source is configured, every ArtifactsFrom edge fails.
-		// Catches the operator-error case where --require-sidecar was
-		// asked for but --chain-sidecar-dir/url wasn't set.
-		if vo != nil && vo.requireSidecar && vo.chainSidecarSource == nil {
-			reasons = append(reasons, fmt.Sprintf("step %s requires chain sidecars (--require-sidecar) but no ChainSidecarSource is configured", step.Name))
-			return ErrVerifyArtifactsFailed{Reasons: reasons}
-		}
-
 		accepted := make([]source.CollectionVerificationResult, 0)
 		for _, testCollection := range refResult.Passed {
 			// v0.3 chain-proof verification (preferred when wired):
@@ -917,7 +908,37 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 					accepted = append(accepted, testCollection.Collection)
 					continue
 				}
-				// sidecar == nil falls through to legacy compare.
+				// sidecar == nil falls through to inline/legacy compare.
+			}
+
+			// Inline-leaves path (v0.3 default, no chain sidecar). The
+			// upstream products and downstream materials are rehydrated
+			// from Merkle leaves embedded in — and signed by — each
+			// collection envelope, so the artifactsFrom chain verifies
+			// WITHOUT a sidecar. Before trusting that rehydrated data we
+			// confirm the leaves reconstruct to their signed roots: the
+			// signature covers the leaves, but this guards against a
+			// signer (or bug) committing a root that doesn't match the
+			// leaves, which would otherwise let the chain compare run on
+			// attacker-chosen data.
+			if err := testCollection.Collection.Collection.VerifyInlineLeaves(); err != nil {
+				collection.Warnings = append(collection.Warnings, fmt.Sprintf("upstream step %s inline leaves for step %s: %v", artifactsFrom, step.Name, err))
+				reasons = append(reasons, fmt.Sprintf("upstream step %s inline leaves: %v", artifactsFrom, err))
+				continue
+			}
+			if err := collection.Collection.VerifyInlineLeaves(); err != nil {
+				reasons = append(reasons, fmt.Sprintf("step %s inline leaves: %v", step.Name, err))
+				continue
+			}
+
+			// Vacuous-pass defense (CVE class for v0.3): compareArtifacts
+			// matches by path, so an EMPTY downstream materials map passes
+			// trivially. Under --require-sidecar an inline chain must
+			// therefore present real material data — a leaf-less v0.3
+			// collection with no sidecar cannot satisfy a strict chain.
+			if vo != nil && vo.requireSidecar && len(mats) == 0 {
+				reasons = append(reasons, fmt.Sprintf("step %s requires a verified chain (--require-sidecar) but the collection carries neither a chain sidecar nor inline material leaves", step.Name))
+				continue
 			}
 
 			if err := compareArtifacts(mats, testCollection.Collection.Collection.Artifacts()); err != nil {

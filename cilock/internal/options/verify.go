@@ -69,13 +69,18 @@ type VerifyOptions struct {
 	// source is tried first; HTTP is the fallback.
 	ChainSidecarURL string
 
-	// RequireSidecar fails verification if a chain edge has an
-	// upstream step but no matching chain sidecar is available. The
-	// CLI flag defaults to TRUE for v0.4 — closing the vacuous-pass
-	// attack surface where v0.3 attestations return empty
-	// Materials() and the legacy compareArtifacts fallback trivially
-	// passes. Users verifying legacy v0.1 chains can opt out via
-	// `--require-sidecar=false`.
+	// RequireSidecar enables strict-chain mode: a chain edge with an
+	// upstream step must be backed by EITHER a matching chain sidecar
+	// OR verified inline Merkle leaves (the v0.4 default — product and
+	// material attestors embed their per-file leaves in the signed
+	// predicate, so the engine rehydrates real Materials()/Products(),
+	// confirms they reconstruct to the signed root, and compares).
+	// Strict mode only fails closed when an edge has NEITHER — i.e. a
+	// leaf-less v0.3 collection with no sidecar, the vacuous-pass attack
+	// surface where empty Materials() made compareArtifacts pass
+	// trivially. The CLI flag defaults to TRUE for v0.4. Users verifying
+	// legacy v0.1 / leaf-less v0.3 chains without either proof can opt
+	// out via `--require-sidecar=false`.
 	//
 	// Note: the Go struct's zero value is false; the flag default
 	// in AddFlags is true. Callers constructing VerifyOptions
@@ -169,10 +174,18 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringSliceVar(&vo.PolicyOrganizations, "policy-organizations", []string{}, "The organizations to use when verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVar(&vo.PolicyURIs, "policy-uris", []string{}, "The URIs to use when verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVarP(&vo.PolicyCARootPaths, "policy-ca", "", []string{}, "Paths to CA certificates to use for verifying the policy (deprecated: use --policy-ca-roots instead)")
+	// Deprecated alias retained for backward compatibility but hidden from
+	// help to declutter the flag set — --policy-ca-roots is the supported flag.
+	_ = cmd.Flags().MarkHidden("policy-ca")
 
-	// Fulcio cert extensions
-	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.Issuer, "policy-fulcio-oidc-issuer", "",
-		"The OIDC issuer expected in a valid Fulcio certificate, e.g. https://token.actions.githubusercontent.com or https://oauth2.sigstore.dev/auth. Either --certificate-oidc-issuer or --certificate-oidc-issuer-regexp must be set for keyless flows.")
+	// Fulcio cert extensions.
+	// Default the OIDC issuer to GitHub Actions: keyless policies in this
+	// project are signed by the release workflow's GHA OIDC token, so this
+	// is the overwhelmingly common case. It fails closed for other issuers
+	// (a mismatching issuer is rejected) — override explicitly for non-GHA
+	// keyless flows.
+	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.Issuer, "policy-fulcio-oidc-issuer", "https://token.actions.githubusercontent.com",
+		"The OIDC issuer expected in a valid Fulcio certificate (default: GitHub Actions). Override for non-GHA keyless flows, e.g. https://oauth2.sigstore.dev/auth.")
 	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.BuildTrigger, "policy-fulcio-build-trigger", "",
 		"Event or action that initiated the build.")
 	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.SourceRepositoryDigest, "policy-fulcio-source-repository-digest", "",
@@ -183,6 +196,12 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 		"Immutable identifier for the source repository the workflow was based upon.")
 	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.SourceRepositoryRef, "policy-fulcio-source-repository-ref", "",
 		"Source Repository Ref that the build run was based upon.")
+	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.SourceRepositoryURI, "policy-fulcio-source-repository-uri", "",
+		"Source repository URI the policy signer's build was based upon (glob-matched). The stable way to pin a keyless policy signer to a repo, e.g. https://github.com/testifysec/judge — unlike the cert SAN URI, which embeds the per-run ref and changes every release.")
+	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.BuildConfigURI, "policy-fulcio-build-config-uri", "",
+		"Build config (workflow) URI of the policy signer (glob-matched), e.g. https://github.com/testifysec/judge/.github/workflows/release.yml@* — pins WHICH workflow may sign a trusted policy without pinning the changing ref.")
+	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.RunnerEnvironment, "policy-fulcio-runner-environment", "",
+		"Runner environment of the policy signer (glob-matched), e.g. github-hosted or self-hosted.")
 
 	// v0.3 chain-of-custody verification.
 	cmd.Flags().StringVar(&vo.ChainSidecarDir, "chain-sidecar-dir", "",
@@ -190,7 +209,7 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&vo.ChainSidecarURL, "chain-sidecar-url", "",
 		"HTTP(S) URL template for fetching chain sidecars by upstream envelope digest. Placeholders: {envelopeDigest}, {downstreamStep}, {upstreamStep}. When both --chain-sidecar-dir and --chain-sidecar-url are set, the filesystem source is tried first.")
 	cmd.Flags().BoolVar(&vo.RequireSidecar, "require-sidecar", true,
-		"Strict-chain mode: fail verification if a chain edge has no matching chain sidecar (closes the v0.3 vacuous-pass attack surface). DEFAULT TRUE in v0.4. Pass --require-sidecar=false to verify legacy v0.1 chains without sidecars.")
+		"Strict-chain mode: every artifactsFrom edge must be backed by verified inline Merkle leaves (the v0.4 default) or a chain sidecar; fails closed only when an edge has neither (closes the v0.3 vacuous-pass attack surface). DEFAULT TRUE. Pass --require-sidecar=false to verify legacy chains lacking both.")
 	cmd.Flags().DurationVar(&vo.ChainSidecarHTTPTimeout, "chain-sidecar-http-timeout", 0,
 		"Per-request HTTP client timeout for chain-sidecar fetches (Go duration format, e.g. 15s, 2m). "+
 			"Zero (default) uses the compiled-in DefaultHTTPChainSidecarTimeout (30s). Increase for very large "+

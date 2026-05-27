@@ -202,6 +202,17 @@ type Attestor struct {
 	// the walker produced; consumers that need a portable form can
 	// use the leaves slice instead. Not marshaled.
 	materials map[string]cryptoutil.DigestSet `json:"-"`
+
+	// suppressInlineLeaves opts OUT of embedding per-file leaves in the signed
+	// predicate (default is to inline them). Set via WithSuppressInlineLeaves
+	// for size-sensitive material sets that ship a separate sidecar instead.
+	suppressInlineLeaves bool
+}
+
+// WithSuppressInlineLeaves opts OUT of embedding per-file leaves in the signed
+// predicate. Default inlines them (self-sufficient attestation).
+func WithSuppressInlineLeaves(suppress bool) Option {
+	return func(a *Attestor) { a.suppressInlineLeaves = suppress }
 }
 
 // MaterialLeaf is one (path, file-digest, leaf-hash) triple. The leaf
@@ -489,16 +500,27 @@ func decodeLeafHashes(leaves []MaterialLeaf) ([][]byte, error) {
 // the schema remains a stable, documented contract independent of
 // struct-field reordering.
 func (a *Attestor) MarshalJSON() ([]byte, error) {
+	// Inline the per-file leaves into the signed predicate by default so the
+	// attestation is self-sufficient for inclusion + artifactsFrom chain
+	// verification without a separate sidecar. Only the Merkle root is a
+	// subject, so the leaves add no subject re-indexing cost. Opt out with
+	// WithSuppressInlineLeaves(true) for size-sensitive material sets.
+	var leaves []MaterialLeaf
+	if !a.suppressInlineLeaves {
+		leaves = a.leaves
+	}
 	return json.Marshal(struct {
-		MerkleRoot         string `json:"merkleRoot"`
-		TreeSize           uint64 `json:"treeSize"`
-		HashAlgorithmField string `json:"hashAlgorithm"`
-		ConstructionField  string `json:"construction"`
+		MerkleRoot         string         `json:"merkleRoot"`
+		TreeSize           uint64         `json:"treeSize"`
+		HashAlgorithmField string         `json:"hashAlgorithm"`
+		ConstructionField  string         `json:"construction"`
+		Leaves             []MaterialLeaf `json:"leaves,omitempty"`
 	}{
 		MerkleRoot:         a.MerkleRoot,
 		TreeSize:           a.TreeSize,
 		HashAlgorithmField: a.HashAlgorithmField,
 		ConstructionField:  a.ConstructionField,
+		Leaves:             leaves,
 	})
 }
 
@@ -506,10 +528,11 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 // leaves are not reconstructed — they live in the sidecar.
 func (a *Attestor) UnmarshalJSON(data []byte) error {
 	aux := struct {
-		MerkleRoot         string `json:"merkleRoot"`
-		TreeSize           uint64 `json:"treeSize"`
-		HashAlgorithmField string `json:"hashAlgorithm"`
-		ConstructionField  string `json:"construction"`
+		MerkleRoot         string         `json:"merkleRoot"`
+		TreeSize           uint64         `json:"treeSize"`
+		HashAlgorithmField string         `json:"hashAlgorithm"`
+		ConstructionField  string         `json:"construction"`
+		Leaves             []MaterialLeaf `json:"leaves,omitempty"`
 	}{}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
@@ -518,6 +541,18 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 	a.TreeSize = aux.TreeSize
 	a.HashAlgorithmField = aux.HashAlgorithmField
 	a.ConstructionField = aux.ConstructionField
+
+	// Restore inline leaves and rehydrate the materials map so a verifier
+	// loading this attestation from JSON can match artifactsFrom edges by
+	// digest without a chain sidecar. Leaf-less v0.3 attestations leave these
+	// empty (sidecar fallback still applies).
+	a.leaves = aux.Leaves
+	if len(aux.Leaves) > 0 {
+		a.materials = make(map[string]cryptoutil.DigestSet, len(aux.Leaves))
+		for _, lf := range aux.Leaves {
+			a.materials[lf.Path] = cryptoutil.DigestSet{{Hash: crypto.SHA256}: lf.FileDigest}
+		}
+	}
 	return nil
 }
 
@@ -527,6 +562,29 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 // downstream attestors must consume it during the same run.
 func (a *Attestor) Materials() map[string]cryptoutil.DigestSet {
 	return a.materials
+}
+
+// VerifyInlineLeaves confirms the inline leaves reconstruct to the signed
+// MerkleRoot. Callers MUST run this before trusting Materials() rehydrated
+// from inline leaves for sidecar-free artifactsFrom chain verification — it
+// guards against a signer (or bug) committing a root that doesn't match the
+// leaves shipped. Returns nil when there are no inline leaves.
+func (a *Attestor) VerifyInlineLeaves() error {
+	if len(a.leaves) == 0 {
+		return nil
+	}
+	digests := make(map[string]string, len(a.leaves))
+	for _, lf := range a.leaves {
+		digests[lf.Path] = lf.FileDigest
+	}
+	side, err := inclusionproof.BuildSidecar("material", digests)
+	if err != nil {
+		return fmt.Errorf("material: reconstruct inline leaves: %w", err)
+	}
+	if side.MerkleRoot != a.MerkleRoot {
+		return fmt.Errorf("material: inline leaves reconstruct to root %s but signed merkleRoot is %s", side.MerkleRoot, a.MerkleRoot)
+	}
+	return nil
 }
 
 // Subjects returns the in-toto subject set. v0.3 emits exactly ONE

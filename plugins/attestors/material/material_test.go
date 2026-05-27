@@ -57,7 +57,7 @@ import (
 // under a temp dir, runs Attest, and returns the attestor. The default
 // attestation context hashes with SHA256, which is what the v0.3 root
 // commits to.
-func makeMaterialAttestor(t *testing.T, files map[string]string) *Attestor {
+func makeMaterialAttestor(t *testing.T, files map[string]string, opts ...Option) *Attestor {
 	t.Helper()
 	dir := t.TempDir()
 	for relPath, content := range files {
@@ -66,7 +66,7 @@ func makeMaterialAttestor(t *testing.T, files map[string]string) *Attestor {
 		require.NoError(t, os.WriteFile(full, []byte(content), 0o644))
 	}
 
-	a := New()
+	a := New(opts...)
 	ctx, err := attestation.NewContext("test", []attestation.Attestor{}, attestation.WithWorkingDir(dir))
 	require.NoError(t, err)
 	require.NoError(t, a.Attest(ctx))
@@ -282,7 +282,12 @@ func TestV03_008_LeavesReconstructRoot(t *testing.T) {
 // The check is structural: unmarshal the predicate JSON into a generic
 // map and assert no "leaves" key. Bytes-of-encoding tests would be
 // brittle to field reordering.
-func TestV03_009_SignedPredicateExcludesLeaves(t *testing.T) {
+// TestV03_009_SignedPredicateInlinesLeaves pins the v0.4 default: per-file
+// leaves ARE embedded in the signed predicate so a verifier rehydrates
+// Materials() and checks an artifactsFrom chain with no sidecar. The legacy
+// in-memory `materials` map must still NOT leak, and the four commitment
+// fields stay present.
+func TestV03_009_SignedPredicateInlinesLeaves(t *testing.T) {
 	a := makeMaterialAttestor(t, map[string]string{
 		"a.txt":     "1",
 		"b.txt":     "2",
@@ -295,13 +300,70 @@ func TestV03_009_SignedPredicateExcludesLeaves(t *testing.T) {
 	var generic map[string]interface{}
 	require.NoError(t, json.Unmarshal(body, &generic))
 
-	assert.NotContains(t, generic, "leaves", "predicate must NOT contain leaves")
-	assert.NotContains(t, generic, "materials", "predicate must NOT contain materials")
-	// Positive assertions: the 4 documented predicate fields are present.
+	assert.Contains(t, generic, "leaves", "v0.4 predicate MUST inline leaves by default")
+	assert.NotContains(t, generic, "materials", "predicate must NOT contain the in-memory materials map")
 	assert.Contains(t, generic, "merkleRoot")
 	assert.Contains(t, generic, "treeSize")
 	assert.Contains(t, generic, "hashAlgorithm")
 	assert.Contains(t, generic, "construction")
+}
+
+// TestSuppressInlineLeavesOptsOut verifies the size-sensitive opt-out keeps
+// the predicate O(1) (root + treeSize, no leaves) for sidecar workflows.
+func TestSuppressInlineLeavesOptsOut(t *testing.T) {
+	a := makeMaterialAttestor(t, map[string]string{
+		"a.txt": "1",
+		"b.txt": "2",
+	}, WithSuppressInlineLeaves(true))
+
+	body, err := json.Marshal(a)
+	require.NoError(t, err)
+
+	var generic map[string]interface{}
+	require.NoError(t, json.Unmarshal(body, &generic))
+
+	assert.NotContains(t, generic, "leaves", "WithSuppressInlineLeaves(true) must drop leaves")
+	assert.Contains(t, generic, "merkleRoot")
+	assert.Contains(t, generic, "treeSize")
+}
+
+// TestInlineLeavesRoundTripAndVerify confirms the inline leaves survive a
+// JSON round trip, rehydrate Materials(), and reconstruct to the signed root.
+func TestInlineLeavesRoundTripAndVerify(t *testing.T) {
+	a := makeMaterialAttestor(t, map[string]string{"a.txt": "1", "b.txt": "2"})
+	body, err := json.Marshal(a)
+	require.NoError(t, err)
+
+	var b Attestor
+	require.NoError(t, json.Unmarshal(body, &b))
+	require.Equal(t, a.MerkleRoot, b.MerkleRoot)
+	require.NotEmpty(t, b.Materials(), "round-tripped attestor must rehydrate Materials() from inline leaves")
+	require.NoError(t, b.VerifyInlineLeaves(), "round-tripped inline leaves must reconstruct to the signed merkleRoot")
+}
+
+// TestVerifyInlineLeavesRejectsForgedLeaf is the core integrity guard: if a
+// signer (or attacker who re-signs) ships leaves that do NOT reconstruct to
+// the committed merkleRoot, VerifyInlineLeaves must reject them — otherwise a
+// chain check would run on attacker-chosen material data.
+func TestVerifyInlineLeavesRejectsForgedLeaf(t *testing.T) {
+	a := makeMaterialAttestor(t, map[string]string{"a.txt": "1", "b.txt": "2"})
+	body, err := json.Marshal(a)
+	require.NoError(t, err)
+
+	// Tamper one leaf's fileDigest in the serialized predicate, then
+	// re-parse. The merkleRoot is unchanged, so reconstruction must
+	// disagree with it.
+	var generic map[string]interface{}
+	require.NoError(t, json.Unmarshal(body, &generic))
+	leaves := generic["leaves"].([]interface{})
+	require.NotEmpty(t, leaves)
+	leaves[0].(map[string]interface{})["fileDigest"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	forged, err := json.Marshal(generic)
+	require.NoError(t, err)
+
+	var b Attestor
+	require.NoError(t, json.Unmarshal(forged, &b))
+	require.Error(t, b.VerifyInlineLeaves(), "forged leaf that does not reconstruct to the signed root must be rejected")
 }
 
 // =============================================================================

@@ -175,6 +175,35 @@ func (c *Collection) Materials() map[string]cryptoutil.DigestSet {
 	return materials
 }
 
+// InlineLeafVerifier is implemented by attestors (product, material v0.3) that
+// embed their per-file Merkle leaves in the signed predicate by default. The
+// engine calls VerifyInlineLeaves before trusting any Materials()/Products()
+// rehydrated from those inline leaves for sidecar-free artifactsFrom chain
+// checks: the envelope signature covers the leaves, but this guards against a
+// signer (or a bug) committing a Merkle root that doesn't match the leaves it
+// shipped, which would otherwise let chain comparison run on attacker-chosen
+// data. Implementations MUST return nil when they carry no inline leaves
+// (nothing to trust; the sidecar/legacy path governs instead).
+type InlineLeafVerifier interface {
+	VerifyInlineLeaves() error
+}
+
+// VerifyInlineLeaves runs VerifyInlineLeaves on every attestation in the
+// collection that embeds inline Merkle leaves, returning the first failure.
+// It returns nil when no attestation carries inline leaves (e.g. legacy
+// sidecar-only collections) — absence of inline data is not an error here; the
+// engine's strict/sidecar gate decides whether that absence is acceptable.
+func (c *Collection) VerifyInlineLeaves() error {
+	for _, attestation := range c.Attestations {
+		if verifier, ok := attestation.Attestation.(InlineLeafVerifier); ok {
+			if err := verifier.VerifyInlineLeaves(); err != nil {
+				return fmt.Errorf("%s: %w", attestation.Type, err)
+			}
+		}
+	}
+	return nil
+}
+
 func (c *Collection) BackRefs() map[string]cryptoutil.DigestSet {
 	backRefs := make(map[string]cryptoutil.DigestSet)
 	for _, attestation := range c.Attestations {

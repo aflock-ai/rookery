@@ -48,23 +48,47 @@ func VerifyCmd() *cobra.Command {
 		KMSSignerProviderOptions:   options.KMSSignerProviderOptions{},
 	}
 	cmd := &cobra.Command{
-		Use:   "verify",
+		Use:   "verify [artifact-path]",
 		Short: "Verifies a witness policy",
-		Long:  "Verifies a policy provided key source and exits with code 0 if verification succeeds",
-		Example: `  # Verify a policy against local attestation files
+		Long: "Verifies a policy provided key source and exits with code 0 if verification succeeds.\n\n" +
+			"The artifact to verify may be given as a positional argument — `cilock verify ./app -p policy.json` —\n" +
+			"as a shorthand for --artifactfile (a regular file) or --directory-path (a directory).",
+		Example: `  # Verify a binary against a signed policy (positional artifact)
+  cilock verify ./judge-api -p policy.json.signed --policy-ca-roots fulcio-root.pem
+
+  # Verify a policy against local attestation files
   cilock verify -p policy.json -k policy-pub.pem -a build.att.json -a test.att.json
 
   # Verify a subject artifact, pulling evidence from Archivista
-  cilock verify -p policy.json -k policy-pub.pem -f ./dist/app.tar.gz --enable-archivista
+  cilock verify ./dist/app.tar.gz -p policy.json -k policy-pub.pem --enable-archivista
 
   # Fully offline verify from a bundle (no platform lookup)
   cilock verify -p policy.json -k policy-pub.pem --bundle evidence.tar.gz --platform-url ""`,
+		Args:              cobra.MaximumNArgs(1),
 		SilenceErrors:     true,
 		SilenceUsage:      true,
 		DisableAutoGenTag: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Lookup("policy-ca").Changed {
-				log.Warn("The flag `--policy-ca` is deprecated and will be removed in a future release. Please use `--policy-ca-root` and `--policy-ca-intermediate` instead.")
+				log.Warn("The flag `--policy-ca` is deprecated and will be removed in a future release. Please use `--policy-ca-roots` and `--policy-ca-intermediates` instead.")
+			}
+
+			// Positional artifact path is shorthand for --artifactfile (file)
+			// or --directory-path (directory). Explicit flags win; a positional
+			// arg alongside a conflicting flag is a usage error.
+			if len(args) == 1 {
+				if vo.ArtifactFilePath != "" || vo.ArtifactDirectoryPath != "" {
+					return fmt.Errorf("artifact given both positionally (%q) and via --artifactfile/--directory-path; use one", args[0])
+				}
+				info, statErr := os.Stat(args[0])
+				switch {
+				case statErr != nil:
+					return fmt.Errorf("artifact path %q: %w", args[0], statErr)
+				case info.IsDir():
+					vo.ArtifactDirectoryPath = args[0]
+				default:
+					vo.ArtifactFilePath = args[0]
+				}
 			}
 
 			// Resolve platform-derived defaults the same way `cilock run`
@@ -216,12 +240,14 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		subjects = append(subjects, artifactDigestSet)
 	}
 
+	var artifactFileDigestHex string
 	if len(vo.ArtifactFilePath) > 0 {
 		artifactDigestSet, err := cryptoutil.CalculateDigestSetFromFile(vo.ArtifactFilePath, []cryptoutil.DigestValue{{Hash: crypto.SHA256, GitOID: false}})
 		if err != nil {
 			return fmt.Errorf("failed to calculate artifact digest: %w", err)
 		}
 
+		artifactFileDigestHex = artifactDigestSet[cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}]
 		subjects = append(subjects, artifactDigestSet)
 	}
 
@@ -269,6 +295,14 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		}
 		loadedEnvelopes = append(loadedEnvelopes, envs...)
 	}
+
+	// Bridge a primary artifact (plain file digest) to a Merkle-tree product
+	// collection: if a signed inclusion-proof envelope proves the artifact is
+	// a leaf of a loaded collection's product/material tree, add that tree's
+	// root as a subject so the collection matches. Trust is still enforced by
+	// the engine's downstream functionary/signature checks. See
+	// expandSubjectsWithInclusionProofs for the CVE-2026-22703 / RFC 6962 notes.
+	subjects = expandSubjectsWithInclusionProofs(subjects, loadedEnvelopes, vo.ArtifactFilePath, artifactFileDigestHex)
 
 	verifyOpts := []workflow.VerifyOption{
 		workflow.VerifyWithSubjectDigests(subjects),

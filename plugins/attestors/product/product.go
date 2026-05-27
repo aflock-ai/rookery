@@ -198,6 +198,13 @@ type Attestor struct {
 	// you want named in the signed record. Set via
 	// WithRequireExistsAtExit(false) or `--product-allow-removed`.
 	requireExistsAtExit bool
+
+	// suppressInlineLeaves opts OUT of embedding the per-file leaves in the
+	// signed predicate (the default is to include them, making the
+	// attestation self-sufficient for inclusion + chain verification).
+	// Set via WithSuppressInlineLeaves(true) for size-sensitive builds that
+	// prefer to ship the leaves in a separate sidecar instead.
+	suppressInlineLeaves bool
 }
 
 // ProductLeaf describes one entry of the input tree. The Merkle leaf
@@ -306,6 +313,13 @@ func WithExcludeGlob(g string) Option {
 // forensic builds where you want every transient artifact named.
 func WithRequireExistsAtExit(require bool) Option {
 	return func(a *Attestor) { a.requireExistsAtExit = require }
+}
+
+// WithSuppressInlineLeaves opts OUT of embedding per-file leaves in the signed
+// predicate. Default is to inline them (self-sufficient attestation); set this
+// for size-sensitive builds that ship the leaves in a separate sidecar.
+func WithSuppressInlineLeaves(suppress bool) Option {
+	return func(a *Attestor) { a.suppressInlineLeaves = suppress }
 }
 
 // New constructs an Attestor with default globs (include="*", exclude="").
@@ -743,6 +757,31 @@ func (a *Attestor) buildTree() error {
 // (link, slsa). It is NOT part of the predicate.
 func (a *Attestor) Products() map[string]attestation.Product { return a.products }
 
+// VerifyInlineLeaves confirms the inline leaves reconstruct to the signed
+// MerkleRoot. Callers MUST run this before trusting Products() rehydrated from
+// inline leaves (e.g. for sidecar-free artifactsFrom chain verification): the
+// envelope signature covers the leaves, but this guards against a signer — or
+// a bug — committing a root that doesn't match the leaves it shipped, which
+// would let chain checks run on attacker-chosen data. Returns nil when there
+// are no inline leaves (nothing to trust; sidecar/legacy paths apply).
+func (a *Attestor) VerifyInlineLeaves() error {
+	if len(a.leaves) == 0 {
+		return nil
+	}
+	digests := make(map[string]string, len(a.leaves))
+	for _, lf := range a.leaves {
+		digests[lf.Path] = lf.FileDigest
+	}
+	side, err := inclusionproof.BuildSidecar("product", digests)
+	if err != nil {
+		return fmt.Errorf("product: reconstruct inline leaves: %w", err)
+	}
+	if side.MerkleRoot != a.MerkleRoot {
+		return fmt.Errorf("product: inline leaves reconstruct to root %s but signed merkleRoot is %s", side.MerkleRoot, a.MerkleRoot)
+	}
+	return nil
+}
+
 // DroppedByClassification returns the number of paths the trace probe
 // surfaced that the precedence table classified as CACHE or filtered
 // out by user globs. The CLI uses this signal to emit a helpful
@@ -781,17 +820,30 @@ func (a *Attestor) rootDigestSet() cryptoutil.DigestSet {
 // kept out of the signed Statement; sidecar consumers use BuildSidecar.
 func (a *Attestor) MarshalJSON() ([]byte, error) {
 	type predicate struct {
-		MerkleRoot    string `json:"merkleRoot"`
-		TreeSize      uint64 `json:"treeSize"`
-		HashAlgorithm string `json:"hashAlgorithm"`
-		Construction  string `json:"construction"`
+		MerkleRoot    string        `json:"merkleRoot"`
+		TreeSize      uint64        `json:"treeSize"`
+		HashAlgorithm string        `json:"hashAlgorithm"`
+		Construction  string        `json:"construction"`
+		Leaves        []ProductLeaf `json:"leaves,omitempty"`
 	}
-	return json.Marshal(predicate{
+	p := predicate{
 		MerkleRoot:    a.MerkleRoot,
 		TreeSize:      a.TreeSize,
 		HashAlgorithm: a.HashAlgorithmField,
 		Construction:  a.ConstructionField,
-	})
+	}
+	// Inline the per-file leaves into the signed predicate BY DEFAULT. This
+	// makes the attestation self-sufficient — a verifier can confirm any
+	// product's inclusion (and the policy engine can match artifactsFrom
+	// edges) without a separate inclusion-proof envelope or chain sidecar.
+	// It is cheap: only the Merkle ROOT is a subject (one index entry), so
+	// the leaves add no subject-graph re-indexing cost. Opt out with
+	// WithSuppressInlineLeaves(true) / --sidecar-only for size-sensitive
+	// builds, which fall back to BuildSidecar.
+	if !a.suppressInlineLeaves {
+		p.Leaves = a.leaves
+	}
+	return json.Marshal(p)
 }
 
 // UnmarshalJSON restores the predicate fields from JSON. The leaves and
@@ -800,10 +852,11 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 // outputs.
 func (a *Attestor) UnmarshalJSON(data []byte) error {
 	type predicate struct {
-		MerkleRoot    string `json:"merkleRoot"`
-		TreeSize      uint64 `json:"treeSize"`
-		HashAlgorithm string `json:"hashAlgorithm"`
-		Construction  string `json:"construction"`
+		MerkleRoot    string        `json:"merkleRoot"`
+		TreeSize      uint64        `json:"treeSize"`
+		HashAlgorithm string        `json:"hashAlgorithm"`
+		Construction  string        `json:"construction"`
+		Leaves        []ProductLeaf `json:"leaves,omitempty"`
 	}
 	var p predicate
 	if err := json.Unmarshal(data, &p); err != nil {
@@ -813,6 +866,21 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 	a.TreeSize = p.TreeSize
 	a.HashAlgorithmField = p.HashAlgorithm
 	a.ConstructionField = p.Construction
+
+	// Restore inline leaves (when present) and rehydrate the products map so
+	// a verifier loading this attestation from JSON has the per-file data —
+	// enabling inclusion checks and artifactsFrom edge matching without a
+	// sidecar. Leaf-less v0.3 attestations (sidecar-only / pre-inline) simply
+	// leave these empty, and the legacy sidecar/single-leaf paths still apply.
+	a.leaves = p.Leaves
+	if len(p.Leaves) > 0 {
+		a.products = make(map[string]attestation.Product, len(p.Leaves))
+		for _, lf := range p.Leaves {
+			a.products[lf.Path] = attestation.Product{
+				Digest: cryptoutil.DigestSet{{Hash: crypto.SHA256}: lf.FileDigest},
+			}
+		}
+	}
 	return nil
 }
 
