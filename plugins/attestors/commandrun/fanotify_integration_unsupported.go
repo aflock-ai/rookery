@@ -20,8 +20,8 @@ func maybeStartFanotify(workingDir string, skipHash func(string) bool) (*fanotif
 // fanotifyStatsStub mirrors fanotify.Stats fields the Linux integration
 // reads; on non-Linux all values are zero.
 type fanotifyStatsStub struct {
-	EventsHashed    uint64
-	HandlerTimeouts uint64
+	EventsHashed     uint64
+	HandlerTimeouts  uint64
 	QueueOverflows   uint64
 	DigestsCapHit    uint64
 	CacheSkips       uint64

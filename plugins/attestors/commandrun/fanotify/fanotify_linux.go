@@ -86,13 +86,13 @@ type Stats struct {
 // statsAtomic holds the live counters mutated by worker goroutines.
 // Snapshot via toStats() (Atomic.Load). All adds use atomic.AddUint64.
 type statsAtomic struct {
-	EventsReceived  atomic.Uint64
-	EventsHashed    atomic.Uint64
-	HashErrors      atomic.Uint64
-	HandlerTimeouts atomic.Uint64
-	BytesHashed     atomic.Uint64
-	MarkFailures    atomic.Uint64
-	UnknownFamily   atomic.Uint64
+	EventsReceived   atomic.Uint64
+	EventsHashed     atomic.Uint64
+	HashErrors       atomic.Uint64
+	HandlerTimeouts  atomic.Uint64
+	BytesHashed      atomic.Uint64
+	MarkFailures     atomic.Uint64
+	UnknownFamily    atomic.Uint64
 	QueueOverflows   atomic.Uint64
 	DigestsCapHit    atomic.Uint64
 	CacheSkips       atomic.Uint64
@@ -102,13 +102,13 @@ type statsAtomic struct {
 
 func (s *statsAtomic) toStats() Stats {
 	return Stats{
-		EventsReceived:  s.EventsReceived.Load(),
-		EventsHashed:    s.EventsHashed.Load(),
-		HashErrors:      s.HashErrors.Load(),
-		HandlerTimeouts: s.HandlerTimeouts.Load(),
-		BytesHashed:     s.BytesHashed.Load(),
-		MarkFailures:    s.MarkFailures.Load(),
-		UnknownFamily:   s.UnknownFamily.Load(),
+		EventsReceived:   s.EventsReceived.Load(),
+		EventsHashed:     s.EventsHashed.Load(),
+		HashErrors:       s.HashErrors.Load(),
+		HandlerTimeouts:  s.HandlerTimeouts.Load(),
+		BytesHashed:      s.BytesHashed.Load(),
+		MarkFailures:     s.MarkFailures.Load(),
+		UnknownFamily:    s.UnknownFamily.Load(),
 		QueueOverflows:   s.QueueOverflows.Load(),
 		DigestsCapHit:    s.DigestsCapHit.Load(),
 		CacheSkips:       s.CacheSkips.Load(),
