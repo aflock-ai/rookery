@@ -45,7 +45,7 @@ var docMarkdowns embed.FS
 type DetectorDoc struct {
 	Name            string       `json:"name"`
 	Title           string       `json:"title"`
-	Description     string       `json:"description"`                // SEO summary (~30 words)
+	Description     string       `json:"description"` // SEO summary (~30 words)
 	SidebarPosition int          `json:"sidebar_position,omitempty"`
 	ExamplesRepo    string       `json:"examples_repo,omitempty"` // path under attestor-compliance-examples
 	Sections        []DocSection `json:"sections"`
