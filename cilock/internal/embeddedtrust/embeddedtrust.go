@@ -1,0 +1,119 @@
+// Package embeddedtrust exposes policy-signing trust compiled into the cilock
+// binary at build time. It pins ONLY policy trust — the roots and signer
+// identity allowed to sign a policy — never attestation trust. Attestation
+// trust is always defined by the (now-trusted) policy itself; see
+// docs/design/cilock-baked-policy-trust.md.
+//
+// The committed default (trust.json = `{}`) embeds nothing, so a stock cilock
+// behaves exactly as before and still requires --policy-ca-roots / --policy-*.
+// A purpose-built cilock (e.g. for self-host-minimal) ships a trust.json with
+// the Sigstore Fulcio + TSA roots and the trusted policy-signer Functionary,
+// collapsing the customer verify command to `cilock verify <art> --policy --attestations`.
+package embeddedtrust
+
+import (
+	"crypto/x509"
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/policy"
+)
+
+// trust.json is the compiled-in trust document. The committed default is `{}`
+// (no embedded trust). Builders overwrite it before `go build` to bake roots
+// and a policy signer into a specific cilock distribution.
+//
+//go:embed trust.json
+var trustJSON []byte
+
+const (
+	KindFulcioRoot = "FULCIO_ROOT"
+	KindTSARoot    = "TSA_ROOT"
+)
+
+// Root is a named trust-root bundle, mirroring the TrustSource entity's
+// (name, kind, pem) shape.
+type Root struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+	PEM  string `json:"pem"`
+}
+
+// Trust is the compiled-in policy-signing trust. PolicySigners are
+// policy.Functionary values verbatim — the same shape the policy uses for its
+// per-step functionaries — so there is no parallel trust model to review.
+type Trust struct {
+	Roots          []Root               `json:"roots"`
+	PolicySigners  []policy.Functionary `json:"policy_signers"`
+	PolicyTSARoots []string             `json:"policy_timestamp_roots,omitempty"`
+}
+
+// Load returns the trust compiled into this binary, or (nil, nil) when the
+// binary was built with the empty default (nothing embedded).
+func Load() (*Trust, error) {
+	return parse(trustJSON)
+}
+
+// parse decodes a trust document, returning (nil, nil) when it is empty/`{}` or
+// carries no roots and no signers. Rejects unknown keys so a typo in a baked
+// trust document fails the build's verify gate loudly rather than silently
+// trusting less than intended.
+func parse(raw []byte) (*Trust, error) {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "{}" {
+		return nil, nil
+	}
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.DisallowUnknownFields()
+	var t Trust
+	if err := dec.Decode(&t); err != nil {
+		return nil, fmt.Errorf("parse embedded trust.json: %w", err)
+	}
+	if len(t.Roots) == 0 && len(t.PolicySigners) == 0 {
+		return nil, nil
+	}
+	return &t, nil
+}
+
+// FulcioRoots parses the embedded FULCIO_ROOT bundles into x509 certs for use
+// as the policy-signature CA root pool.
+func (t *Trust) FulcioRoots() ([]*x509.Certificate, error) {
+	return t.rootsOfKind(KindFulcioRoot, nil)
+}
+
+// TSARoots parses the embedded TSA_ROOT bundles used to anchor the policy
+// signature's RFC3161 timestamp. When PolicyTSARoots is non-empty it selects
+// only those roots by name; otherwise all TSA_ROOT bundles are returned.
+func (t *Trust) TSARoots() ([]*x509.Certificate, error) {
+	var filter map[string]struct{}
+	if len(t.PolicyTSARoots) > 0 {
+		filter = make(map[string]struct{}, len(t.PolicyTSARoots))
+		for _, n := range t.PolicyTSARoots {
+			filter[n] = struct{}{}
+		}
+	}
+	return t.rootsOfKind(KindTSARoot, filter)
+}
+
+func (t *Trust) rootsOfKind(kind string, nameFilter map[string]struct{}) ([]*x509.Certificate, error) {
+	var out []*x509.Certificate
+	for _, r := range t.Roots {
+		if r.Kind != kind {
+			continue
+		}
+		if nameFilter != nil {
+			if _, ok := nameFilter[r.Name]; !ok {
+				continue
+			}
+		}
+		cert, err := cryptoutil.TryParseCertificate([]byte(r.PEM))
+		if err != nil {
+			return nil, fmt.Errorf("embedded %s root %q: %w", kind, r.Name, err)
+		}
+		out = append(out, cert)
+	}
+	return out, nil
+}

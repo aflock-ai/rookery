@@ -836,7 +836,7 @@ func (p Policy) verifyArtifacts(ctx context.Context, vo *verifyOptions, resultsB
 	return resultsByStep, nil
 }
 
-func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo // single chain-edge dispatcher: legacy vs chain-proof vs strict-mode branches share state; splitting would require threading too many params
+func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo,funlen // single chain-edge dispatcher: sidecar vs inline-leaves vs strict-mode branches share reason-tracking state; splitting would thread too many params and obscure the failure-reason trail
 	mats := collection.Collection.Materials()
 	reasons := []string{}
 	for _, artifactsFrom := range step.ArtifactsFrom {
@@ -933,11 +933,17 @@ func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step
 
 			// Vacuous-pass defense (CVE class for v0.3): compareArtifacts
 			// matches by path, so an EMPTY downstream materials map passes
-			// trivially. Under --require-sidecar an inline chain must
-			// therefore present real material data — a leaf-less v0.3
-			// collection with no sidecar cannot satisfy a strict chain.
-			if vo != nil && vo.requireSidecar && len(mats) == 0 {
-				reasons = append(reasons, fmt.Sprintf("step %s requires a verified chain (--require-sidecar) but the collection carries neither a chain sidecar nor inline material leaves", step.Name))
+			// trivially. Fail closed under --require-sidecar ONLY when the
+			// collection is leaf-less — i.e. its empty Materials() is merely
+			// unknown. A v0.4 collection that inlines its material leaves (even
+			// an empty set) has authoritatively committed, via the signed
+			// predicate, that it consumed nothing; that is a verified fact, not
+			// a bypass, so it satisfies strict mode without a sidecar. This is
+			// what lets an isolated-workingdir build step (which records no
+			// materials) verify flaglessly while a leaf-less attestation still
+			// fails closed.
+			if vo != nil && vo.requireSidecar && len(mats) == 0 && !collection.Collection.HasInlineMaterials() {
+				reasons = append(reasons, fmt.Sprintf("step %s requires a verified chain (--require-sidecar) but the collection is leaf-less: it carries neither a chain sidecar nor inline material leaves (its empty material set is unverified)", step.Name))
 				continue
 			}
 

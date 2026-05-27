@@ -204,6 +204,33 @@ func (c *Collection) VerifyInlineLeaves() error {
 	return nil
 }
 
+// InlineLeafReporter is implemented by attestors that can report whether they
+// committed their per-file leaves inline (even an empty set). See
+// Collection.HasInlineMaterials.
+type InlineLeafReporter interface {
+	HasInlineLeaves() bool
+}
+
+// HasInlineMaterials reports whether the collection's MATERIAL set is committed
+// inline and is therefore authoritative — including an authoritative empty set
+// (a step that provably consumed nothing, e.g. a build in an isolated
+// workingdir). The engine uses this so strict-chain mode can accept a verified
+// empty material set without a sidecar, while still failing closed on a
+// leaf-less attestation whose empty Materials() is merely unknown. Only the
+// material attestor counts (it implements Materialer); a product attestor's
+// inline leaves say nothing about consumed materials.
+func (c *Collection) HasInlineMaterials() bool {
+	for _, attestation := range c.Attestations {
+		if _, isMaterialer := attestation.Attestation.(Materialer); !isMaterialer {
+			continue
+		}
+		if reporter, ok := attestation.Attestation.(InlineLeafReporter); ok && reporter.HasInlineLeaves() {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Collection) BackRefs() map[string]cryptoutil.DigestSet {
 	backRefs := make(map[string]cryptoutil.DigestSet)
 	for _, attestation := range c.Attestations {

@@ -505,16 +505,30 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 	// verification without a separate sidecar. Only the Merkle root is a
 	// subject, so the leaves add no subject re-indexing cost. Opt out with
 	// WithSuppressInlineLeaves(true) for size-sensitive material sets.
-	var leaves []MaterialLeaf
+	// A pointer lets us distinguish three states on the wire, which the
+	// verifier's vacuous-pass defense relies on:
+	//   - suppressed              -> nil pointer -> "leaves" omitted (leaf-less)
+	//   - inline, has materials   -> "leaves":[...]
+	//   - inline, zero materials  -> "leaves":[]  (authoritative empty)
+	// The empty-but-present case is the key one: it is a SIGNED commitment that
+	// the step consumed nothing (e.g. a build in an isolated workingdir), which
+	// the engine must trust rather than fail closed on. With omitempty, an empty
+	// set would serialize identically to a leaf-less v0.3 attestation, and the
+	// verifier could not tell "provably empty" from "materials hidden".
+	var leaves *[]MaterialLeaf
 	if !a.suppressInlineLeaves {
-		leaves = a.leaves
+		ls := a.leaves
+		if ls == nil {
+			ls = []MaterialLeaf{}
+		}
+		leaves = &ls
 	}
 	return json.Marshal(struct {
-		MerkleRoot         string         `json:"merkleRoot"`
-		TreeSize           uint64         `json:"treeSize"`
-		HashAlgorithmField string         `json:"hashAlgorithm"`
-		ConstructionField  string         `json:"construction"`
-		Leaves             []MaterialLeaf `json:"leaves,omitempty"`
+		MerkleRoot         string          `json:"merkleRoot"`
+		TreeSize           uint64          `json:"treeSize"`
+		HashAlgorithmField string          `json:"hashAlgorithm"`
+		ConstructionField  string          `json:"construction"`
+		Leaves             *[]MaterialLeaf `json:"leaves,omitempty"`
 	}{
 		MerkleRoot:         a.MerkleRoot,
 		TreeSize:           a.TreeSize,
@@ -528,11 +542,11 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 // leaves are not reconstructed — they live in the sidecar.
 func (a *Attestor) UnmarshalJSON(data []byte) error {
 	aux := struct {
-		MerkleRoot         string         `json:"merkleRoot"`
-		TreeSize           uint64         `json:"treeSize"`
-		HashAlgorithmField string         `json:"hashAlgorithm"`
-		ConstructionField  string         `json:"construction"`
-		Leaves             []MaterialLeaf `json:"leaves,omitempty"`
+		MerkleRoot         string          `json:"merkleRoot"`
+		TreeSize           uint64          `json:"treeSize"`
+		HashAlgorithmField string          `json:"hashAlgorithm"`
+		ConstructionField  string          `json:"construction"`
+		Leaves             *[]MaterialLeaf `json:"leaves,omitempty"`
 	}{}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
@@ -544,17 +558,32 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 
 	// Restore inline leaves and rehydrate the materials map so a verifier
 	// loading this attestation from JSON can match artifactsFrom edges by
-	// digest without a chain sidecar. Leaf-less v0.3 attestations leave these
-	// empty (sidecar fallback still applies).
-	a.leaves = aux.Leaves
-	if len(aux.Leaves) > 0 {
-		a.materials = make(map[string]cryptoutil.DigestSet, len(aux.Leaves))
-		for _, lf := range aux.Leaves {
+	// digest without a chain sidecar. A present "leaves" key (even empty) means
+	// the materials are inline and authoritative; an absent key means the
+	// attestation is leaf-less (suppressed / legacy v0.3) and the sidecar
+	// fallback applies. HasInlineLeaves() distinguishes the two via a.leaves
+	// being non-nil, so we keep an empty present set as a non-nil empty slice.
+	if aux.Leaves != nil {
+		a.leaves = *aux.Leaves
+		if a.leaves == nil {
+			a.leaves = []MaterialLeaf{}
+		}
+		a.materials = make(map[string]cryptoutil.DigestSet, len(a.leaves))
+		for _, lf := range a.leaves {
 			a.materials[lf.Path] = cryptoutil.DigestSet{{Hash: crypto.SHA256}: lf.FileDigest}
 		}
+	} else {
+		a.leaves = nil
 	}
 	return nil
 }
+
+// HasInlineLeaves reports whether this attestation committed its material
+// leaves inline (a present "leaves" key, even when empty). The engine uses it
+// to tell a signed empty-material commitment (trustworthy: the step provably
+// consumed nothing) from a leaf-less attestation whose empty Materials() is
+// merely unknown (the vacuous-pass surface that must fail closed under strict).
+func (a *Attestor) HasInlineLeaves() bool { return a.leaves != nil }
 
 // Materials returns the per-file (path → DigestSet) map. Preserved for
 // the Materialer interface so slsa and link attestors keep working

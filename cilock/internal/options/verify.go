@@ -220,7 +220,11 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 			"Tune up for builds with very large material sets; tune down to harden against hostile servers.")
 
 	cmd.MarkFlagsRequiredTogether("policy")
-	cmd.MarkFlagsOneRequired("publickey", "policy-ca", "policy-ca-roots", "policy-ca-intermediates", "verifier-kms-ref")
+	// NOTE: policy-trust sources (publickey / policy-ca* / verifier-kms-ref) are
+	// NOT enforced via MarkFlagsOneRequired here, because a cilock built with
+	// embedded policy trust (see internal/embeddedtrust) needs none of them. The
+	// requirement is enforced in runVerify, which is embedded-trust-aware and
+	// emits a clearer error.
 	// Note: we deliberately do NOT MarkFlagsOneRequired here. The
 	// custom check in runVerify gives a much better error — it lists
 	// candidate sha256 digests pulled from any supplied --attestations
