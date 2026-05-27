@@ -40,6 +40,16 @@ v0.2 carried the full per-file digest map (`map[path]Product`) inside the predic
 
 v0.3 fixes all three by moving per-file claims into separate inclusion-proof attestations. The product attestation says "this tree exists and these are its properties"; an inclusion-proof attestation says "and this specific file is in it." Together they verify per-file claims. See [issue #135](https://github.com/aflock-ai/rookery/issues/135) for the full rationale.
 
+## How the product set is captured
+
+This attestor commits a Merkle root over a set of output files — but *which* files count as products, and where their digests come from, is decided by the active **capture mode**, not by the attestor itself:
+
+- **Directory walk** (default, and the only mode without `--trace`): files created or changed in `--workingdir` during the command window become products. cilock uses mtime so a byte-identical rebuild still registers as a product.
+- **Syscall trace** (`--trace`, Linux): cilock observes which files the step *and its child processes* wrote — including outputs written outside the working directory. The trace backend is `ptrace+seccomp` (always available) or `eBPF` where the kernel supports it; `CILOCK_TRACE_MODE=auto` probes eBPF and falls back to ptrace.
+- **fanotify** (`--hardening standard`/`strict`): hashes product content at `FAN_CLOSE_WRITE` and anchors the set to files that still exist at process exit.
+
+`--capture-mode auto` (the default) uses trace events when `--trace` is on and the directory walk otherwise. See [how cilock captures files](../concepts/capture-modes) for the full comparison and a selection guide.
+
 ## When to use
 
 It always fires — there is no `--enable-attestor product` toggle and no opt-out. Shape the input file set with `--attestor-product-include-glob` and `--attestor-product-exclude-glob`. These globs apply to forward-slash-normalized paths.
