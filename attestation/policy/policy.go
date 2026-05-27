@@ -836,7 +836,7 @@ func (p Policy) verifyArtifacts(ctx context.Context, vo *verifyOptions, resultsB
 	return resultsByStep, nil
 }
 
-func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo // single chain-edge dispatcher: legacy vs chain-proof vs strict-mode branches share state; splitting would require threading too many params
+func verifyCollectionArtifacts(ctx context.Context, vo *verifyOptions, step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo,funlen // single chain-edge dispatcher: sidecar vs inline-leaves vs strict-mode branches share reason-tracking state; splitting would thread too many params and obscure the failure-reason trail
 	mats := collection.Collection.Materials()
 	reasons := []string{}
 	for _, artifactsFrom := range step.ArtifactsFrom {

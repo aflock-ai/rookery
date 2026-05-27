@@ -250,9 +250,11 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// Fill any policy-trust dimension the operator did not pass on the command
 	// line from embedded trust. Flags win wholesale per dimension; embedded
 	// fills the gaps. Covers ONLY policy-signature trust — attestation trust is
-	// untouched. Signer identity is gated on --policy-uris because a keyless
-	// (Fulcio) signer always needs a SAN-URI disposition, so its presence is
-	// the unambiguous "operator is pinning the signer themselves" signal.
+	// untouched. Signer identity is applied ONLY when the operator set NO
+	// signer-identity constraint at all (CN/DNS/email/org/URIs/Fulcio
+	// extensions). Gating on --policy-uris alone would silently overwrite an
+	// operator who pinned the signer via --policy-emails / --policy-fulcio-*
+	// without --policy-uris, verifying under unintended trust.
 	if embTrust != nil {
 		applied := make([]string, 0, 3)
 		if len(vo.PolicyCARootPaths) == 0 && len(embFulcioRoots) > 0 {
@@ -266,7 +268,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			}
 			applied = append(applied, "timestamp-roots")
 		}
-		if len(vo.PolicyURIs) == 0 && len(embTrust.PolicySigners) > 0 {
+		if policySignerIdentityUnset(vo) && len(embTrust.PolicySigners) > 0 {
 			if len(embTrust.PolicySigners) > 1 {
 				return fmt.Errorf("embedded trust defines %d policy signers; selecting among multiple embedded signers is not yet supported — pass --policy-uris / --policy-fulcio-* to choose", len(embTrust.PolicySigners))
 			}
@@ -466,6 +468,31 @@ func logPolicyTrust(policyRoots, tsaRootCerts []*x509.Certificate, vo options.Ve
 	ext := vo.PolicyFulcioCertExtensions
 	log.Infof("  policy signer: uris=%v issuer=%q sourceRepositoryURI=%q buildConfigURI=%q",
 		vo.PolicyURIs, ext.Issuer, ext.SourceRepositoryURI, ext.BuildConfigURI)
+}
+
+// policySignerIdentityUnset reports whether the operator supplied NO policy
+// signer-identity constraint on the command line. Only then may embedded trust
+// supply the signer identity — otherwise an operator who pinned the signer via
+// any single field (e.g. --policy-emails, --policy-fulcio-source-repository-uri)
+// without --policy-uris would have their constraint silently overwritten by the
+// embedded signer, verifying under unintended trust. The Fulcio Issuer is
+// excluded because it carries a non-empty default (the GitHub Actions issuer),
+// so its presence is not evidence of an explicit operator pin.
+func policySignerIdentityUnset(vo options.VerifyOptions) bool {
+	e := vo.PolicyFulcioCertExtensions
+	return vo.PolicyCommonName == "" &&
+		len(vo.PolicyDNSNames) == 0 &&
+		len(vo.PolicyEmails) == 0 &&
+		len(vo.PolicyOrganizations) == 0 &&
+		len(vo.PolicyURIs) == 0 &&
+		e.SourceRepositoryURI == "" &&
+		e.BuildConfigURI == "" &&
+		e.RunnerEnvironment == "" &&
+		e.SourceRepositoryDigest == "" &&
+		e.SourceRepositoryRef == "" &&
+		e.SourceRepositoryIdentifier == "" &&
+		e.BuildTrigger == "" &&
+		e.RunInvocationURI == ""
 }
 
 func certSubject(c *x509.Certificate) string {
