@@ -1,0 +1,129 @@
+---
+title: govulncheck
+description: Scan Go modules for vulnerabilities with reachability via govulncheck under cilock — the SARIF report becomes a signed v0.3 attestation parsed by the rookery sarif attestor.
+sidebar_position: 10
+examples_repo: tool-govulncheck-sarif
+---
+
+## You already know how to run govulncheck. Here's what cilock adds.
+
+On its own, `govulncheck` writes a report file. That's an artifact you have to remember, can't prove came from a specific build, and can't tie back to the artifact it was scanning. Cilock wraps the same command and turns the report into a **signed, linked attestation** in your supply chain graph.
+
+### What cilock adds
+
+**Signed evidence.** govulncheck's reachability claims are signed by the CI workflow. "This vulnerability is not exploitable in our binary" becomes a defensible audit statement, not a hand-wave.
+
+**Linked to the artifact.** Each govulncheck attestation links to the Go module materials, the binary it analyzed, and the git commit — auditors trace reachability claims back to the actual artifact.
+
+**Policy at the deploy gate.** Policy: "vulnerability findings without a call-trace are advisory; findings WITH a trace block the deploy." Cilock verify reads the reachable flag.
+
+**Central audit.** When the next Spring4Shell happens, you can prove which Go services are reachably affected vs imported-but-safe in minutes, not weeks.
+
+### From code to prod, end-to-end
+
+```
+     git commit (git attestor)
+           ↓ subject digest matches
+     CI run (github attestor: OIDC, run id)
+           ↓ same run produces
+     govulncheck scan (this attestor: signed findings)
+           ↓ back-refs the artifact
+     image / SBOM / binary it scanned
+           ↓ same digest gates
+     cilock verify policy → allow/deny deploy
+```
+
+Each arrow is a cryptographic subject digest match. No human reads logs, no copy-paste between systems. The same digest links the scan to the artifact to the deploy decision.
+
+## Validated invocation
+cilock invokes govulncheck directly so `command-run/v0.1` records the literal govulncheck argv. govulncheck has no `-o`/`--output` flag (it writes SARIF to stdout), so a single shell redirect routes its output to a file the product attestor can hash — that's not the `cp` antipattern, it's the only way govulncheck exposes file output today:
+
+```bash
+cilock run --step govulncheck-scan \
+  --signer-file-key-path key.pem --outfile attestation.json \
+  --attestations sarif,environment,git \
+  -- sh -c 'govulncheck -format sarif ./... > govulncheck.sarif'
+```
+
+The wrapped `sh -c` records `["sh","-c","govulncheck -format sarif ./... > govulncheck.sarif"]` in command-run — the literal govulncheck argv is right there in the captured envelope, not hidden behind a `cp` of a file produced outside cilock's view. When [`golang/vuln`](https://github.com/golang/vuln) adds a file-output flag, the shell wrapper can be dropped.
+
+## What gets captured
+
+| Predicate type | Source |
+|---|---|
+| `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
+| `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, tags, dirty status, parents |
+| `https://aflock.ai/attestations/material/v0.3` | Merkle root over the Go module before govulncheck runs |
+| `https://aflock.ai/attestations/command-run/v0.1` | the literal `sh -c 'govulncheck …'` argv + exit code + ptrace |
+| `https://aflock.ai/attestations/product/v0.3` | Merkle root over `govulncheck.sarif` as a real product file |
+| `https://aflock.ai/attestations/sarif/v0.1` | the parsed SARIF document (driver = `govulncheck`, rules + results) |
+
+## Why this shape
+
+| Antipattern (older docs) | Correct shape (this example) |
+|---|---|
+| `cilock run ... -- bash -c "cp govulncheck.sarif govulncheck-product.sarif"` after running govulncheck outside cilock | `cilock run ... -- sh -c 'govulncheck -format sarif ./... > govulncheck.sarif'` |
+| `command-run.cmd` records `["bash","-c","cp …"]` — cilock "ran" cp | `command-run.cmd` records `["sh","-c","govulncheck -format sarif ./... > govulncheck.sarif"]` — the literal govulncheck argv is in the envelope |
+| The ptrace spy traces `cp`, not govulncheck | The ptrace spy traces govulncheck's syscalls because cilock is its parent (via the shell) |
+| Product is a copy of a file govulncheck wrote elsewhere | Product is the file govulncheck wrote inside the wrapped step |
+
+The `sh -c` wrapper is a tool-output limitation — govulncheck (as of v1.x) has no `-o` / `--output` flag and writes SARIF only to stdout. A single shell redirect routes its output to a file the product attestor can hash. This is NOT the cp antipattern — once [`golang/vuln`](https://github.com/golang/vuln) ships a file-output flag, the wrapper can be dropped.
+
+## Validate it locally
+
+List the predicate types emitted into the Collection:
+
+```bash
+jq -r '.payload' attestation.json | base64 -d | jq '.predicate.attestations | map(.type)'
+```
+
+Expected output:
+
+```json
+[
+  "https://aflock.ai/attestations/environment/v0.1",
+  "https://aflock.ai/attestations/git/v0.1",
+  "https://aflock.ai/attestations/material/v0.3",
+  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/product/v0.3",
+  "https://aflock.ai/attestations/sarif/v0.1"
+]
+```
+
+Confirm `command-run.cmd` carries the literal shell-redirect argv (proof the cp antipattern is gone):
+
+```bash
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.1") | .attestation.cmd'
+# ["sh","-c","govulncheck -format sarif ./... > govulncheck.sarif"]
+```
+
+## Validated example
+
+The exact invocation above runs end-to-end against real infrastructure in CI. The signed envelope + real predicate excerpt is at [`aflock-ai/attestor-compliance-examples/tool-govulncheck-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-govulncheck-sarif).
+
+## FAQ
+
+### Does cilock support govulncheck?
+
+Yes. Wrap `govulncheck -format sarif ./... > govulncheck.sarif` with `cilock run --attestations sarif,environment,git`. The SARIF report becomes a signed v0.3 attestation under `https://aflock.ai/attestations/sarif/v0.1`, the literal govulncheck argv is captured in `command-run/v0.1`, and the report file is hashed into the v0.3 Merkle tree.
+
+### Why does cilock wrap govulncheck in `sh -c`?
+
+govulncheck (v1.x) has no `-o` / `--output` flag — it writes SARIF only to stdout. A single shell redirect (`> govulncheck.sarif`) routes the output to a file so cilock's `product/v0.3` attestor can hash it. The `command-run` attestor still records the literal govulncheck argv inside the `sh -c` string; this is a tool-output limitation, not the cp antipattern.
+
+### What's the difference between govulncheck and Grype / OSV-Scanner?
+
+govulncheck does **call-graph reachability** — it flags only the vulnerabilities your code actually calls into, not every vulnerable package in your dependency tree. Grype and OSV-Scanner do lockfile/package-level matching, which catches more (sometimes too much). govulncheck is Go-only; Grype and OSV-Scanner are polyglot.
+
+### Can I gate deploys on govulncheck findings under cilock?
+
+Yes — write a Rego policy over the captured SARIF predicate. The `sarif/v0.1` predicate carries `runs[].results[].level` (`error` / `warning` / `note`) and `runs[].results[].properties` (which includes govulncheck's reachability annotations). Deny on `level == "error"` or on any finding with a populated call trace. See [verify-in-a-release-gate](../guides/verify-in-a-release-gate).
+
+## See also
+
+- [`sarif` attestor](../attestors/sarif) — the underlying ingestion path
+- [Verify in a release gate](../guides/verify-in-a-release-gate) — Rego over the captured SARIF
+- [Validated example: tool-govulncheck-sarif](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-govulncheck-sarif) — the upstream README this page mirrors
+- [`golang/vuln` on GitHub](https://github.com/golang/vuln) — upstream govulncheck source
+- [Tools index](./)

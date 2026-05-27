@@ -1,0 +1,88 @@
+---
+title: lockfiles
+description: The cilock lockfiles attestor captures the contents and SHA-256 digest of common package-manager lockfiles in the working tree and signs them into in-toto evidence as a pinned-dependency fingerprint.
+sidebar_position: 8
+examples_repo: 07-lockfiles
+---
+
+Captures the contents and SHA-256 digest of common package-manager lockfiles found in the working tree, providing a cheap, deterministic fingerprint of the project's pinned dependency set.
+
+## What it captures
+
+The attestor records a list of `lockfiles`. Each entry has three fields:
+
+- `filename` — the path at which the lockfile was found.
+- `content` — the raw file contents as a string.
+- `digest` — a `DigestSet` containing the SHA-256 of the file bytes.
+
+Each lockfile is also emitted as an in-toto subject named `` `file:<path>` `` keyed by its digest.
+
+The following lockfile filenames are matched exactly (no globbing of the basename):
+
+- `Gemfile.lock` — Ruby (Bundler)
+- `package-lock.json` — Node.js (npm)
+- `yarn.lock` — Node.js (Yarn)
+- `Cargo.lock` — Rust
+- `poetry.lock` — Python (Poetry)
+- `Pipfile.lock` — Python (Pipenv)
+- `requirements.txt` — Python (pip)
+- `composer.lock` — PHP
+- `go.sum` — Go
+- `Podfile.lock` — iOS/macOS (CocoaPods)
+- `gradle.lockfile` — Gradle
+- `pnpm-lock.yaml` — Node.js (pnpm)
+
+Search behavior is controlled by the `WITNESS_LOCKFILES_SEARCH_PATHS` environment variable, read at attestor construction:
+
+- Unset / empty (default): searches the current directory only.
+- `recursive`: walks the entire tree, skipping `node_modules`, `vendor`, `.git`, `.svn`, `.hg`, `__pycache__`, `venv`, `.venv`, `target`, `build`, `dist`, and any directory whose name begins with `.`.
+- A list using the OS path-list separator (colon on Unix): searches each listed directory non-recursively.
+
+## When to use
+
+When you need a tamper-evident snapshot of pinned dependencies without paying for a full SBOM scan. Useful as a pre-build attestation to prove the dependency graph that fed into a subsequent build step, or as an input to policies that gate on lockfile drift.
+
+## Flags
+
+None. Configuration is via the `WITNESS_LOCKFILES_SEARCH_PATHS` environment variable.
+
+## Output shape
+
+```json
+{
+  "lockfiles": [
+    {
+      "filename": "go.sum",
+      "content": "github.com/example/mod v1.2.3 h1:...\ngithub.com/example/mod v1.2.3/go.mod h1:...\n",
+      "digest": {
+        "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      }
+    }
+  ]
+}
+```
+
+## Gotchas
+
+- The digest is over the lockfile **bytes**, not the parsed dependency set — reformatting or reordering changes the hash even when the resolved versions do not. For semantic dependency inventory, use [`sbom`](./sbom).
+- Basenames are matched exactly via `filepath.Glob(dir/<name>)`; non-standard names (e.g. `dev-requirements.txt`) are not detected.
+- Recursive mode skips a fixed ignore list and every dotted directory; lockfiles inside those trees are invisible to the attestor.
+- The full file content is embedded in the attestation. Lockfiles that contain sensitive index URLs or credentials will be captured verbatim.
+
+## CLI example
+
+Real lockfile capture from a multi-language repo: `go.sum`, `package-lock.json`, `Cargo.lock`, `poetry.lock`, etc.
+
+```bash
+cilock run --step lockfiles-capture \
+  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \
+  --attestations lockfiles \
+  -- echo "captured lockfiles" 
+```
+
+Validated against a real multi-language repo with several lockfiles. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/07-lockfiles](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/07-lockfiles).
+
+## See also
+- [Catalog row](../reference/attestor-catalog)
+- [`sbom`](./sbom)
+- Upstream: [witness/lockfiles.md](https://github.com/in-toto/witness/blob/main/docs/attestors/lockfiles.md)
