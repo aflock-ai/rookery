@@ -360,11 +360,16 @@ func Open() (*Consumer, error) {
 		return nil, fmt.Errorf("load BPF spec: %w", err)
 	}
 
-	// EXPERIMENT (deletable — see ringbuf_tuning_experiment.go): override
-	// the oversized compiled-in ringbufs at load time without recompiling
-	// the BPF object. No-op unless the env vars are set.
+	// The read-tap is permanently off (its content path is removed), so
+	// nothing is ever emitted to read_tap_events. The compiled-in 1 GiB
+	// size is pure wasted allocation — shrink it to one page at load. (The
+	// map itself stays until the BPF object is recompiled without it.)
+	if m, ok := spec.Maps["read_tap_events"]; ok {
+		m.MaxEntries = 4096
+	}
+	// Allow tuning the classification-event ringbuf for memory-constrained
+	// hosts; no-op unless the env var is set.
 	resizeRingbufFromEnv(spec, "events", "CILOCK_EBPF_EVENTS_RINGBUF_BYTES")
-	resizeRingbufFromEnv(spec, "read_tap_events", "CILOCK_EBPF_READTAP_RINGBUF_BYTES")
 
 	// Rebuild-on-CO-RE-failure: try the embedded .bpf.o first; if it
 	// poisons (kernel BTF mismatch), rebuild from the embedded source

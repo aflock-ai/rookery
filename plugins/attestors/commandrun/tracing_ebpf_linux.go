@@ -1022,18 +1022,35 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					}
 					continue
 				}
-				// fanotify is the authoritative content source: record the
-				// open's path (so fanotify reconciliation attaches the
-				// kernel-synchronous digest) without an eBPF content hash.
-				// Non-regular files (dirs/devices, via ph.stat) are flagged
-				// so they're suppressed rather than logged as gaps.
+				// fanotify is the authoritative content source: don't hash
+				// here, just record the open so fanotify reconciliation can
+				// attach the kernel-synchronous digest. Only REGULAR,
+				// still-present files are materials — non-regular files
+				// (dirs/devices) and already-gone transient intermediates
+				// (gcc/cgo /tmp/cc*.s) are neither materials nor gaps, so we
+				// suppress them outright (an lstat is far cheaper than a
+				// content hash). This keeps the gap list to real files only.
 				if openatHashDisabled {
-					nonReg := ph.stat != nil && !ph.stat.Mode().IsRegular()
+					// fanotify (open-perm, hash-once) is the authoritative
+					// content source. Record the open's PATH (without an eBPF
+					// content hash) so fanotify reconciliation attaches the
+					// kernel-synchronous digest — fanotify-only digests are
+					// not in the material tree on their own; they need a
+					// recorded open to merge into. Only REGULAR, still-present
+					// files are materials: lstat ev.Path authoritatively (the
+					// captured ph.stat can be a stale fd-reuse stat), and drop
+					// non-regular (dirs/devices) + already-gone transients so
+					// they're neither materials nor false gaps.
+					if s, e := os.Lstat(ev.Path); e != nil || !s.Mode().IsRegular() {
+						if ph.file != nil {
+							_ = ph.file.Close()
+						}
+						continue
+					}
 					recordEBPFOpenat(pctx, ev, ebpf.HashResult{
-						Path:       ev.Path,
-						Status:     ebpf.TOCTOUError,
-						Reason:     "fanotify-authoritative: eBPF openat content hash skipped",
-						NonRegular: nonReg,
+						Path:   ev.Path,
+						Status: ebpf.TOCTOUError,
+						Reason: "fanotify-authoritative: eBPF openat content hash skipped",
 					})
 					if ph.file != nil {
 						_ = ph.file.Close()

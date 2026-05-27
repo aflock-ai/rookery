@@ -46,6 +46,8 @@ func DefaultCachePatterns() map[string]struct{} {
 		// ─── Generic OS temp + cache roots ───
 		"/tmp/**":                  {}, // Linux/BSD scratch
 		"/var/tmp/**":              {}, // Linux long-lived temp
+		"/proc/**":                 {}, // kernel procfs — runtime state, never a build material
+		"/sys/**":                  {}, // kernel sysfs — runtime state, never a build material
 		"/var/folders/**":          {}, // macOS TMPDIR root (per-user)
 		"**/.cache/**":             {}, // XDG cache spec (~/.cache, project-local .cache)
 		"**/Library/Caches/**":     {}, // macOS user caches
