@@ -1,0 +1,154 @@
+---
+title: OWASP ZAP
+description: Run OWASP ZAP DAST scans under cilock — the SARIF report from ZAP's automation framework becomes a signed v0.3 attestation parsed by the rookery sarif attestor, with the literal docker argv captured in command-run/v0.1.
+sidebar_position: 12
+examples_repo: tool-zap-sarif
+---
+
+[OWASP ZAP](https://www.zaproxy.org/) (Zed Attack Proxy) is the most popular open-source DAST scanner — it proxies traffic to a running web application, runs passive and active scan rules across every request/response, and flags OWASP Top 10 issues (CSP misconfigurations, info disclosure, injection, broken authentication, etc.). Under cilock, the SARIF report ZAP writes via its automation-framework `report` job becomes a signed in-toto attestation linked to the host environment, the git commit, and the docker argv that ran it.
+
+Unlike Trivy (`--format sarif`) or Semgrep (`--sarif`), ZAP has **no one-flag SARIF switch**. The canonical SARIF flow is the automation-framework plan: a YAML file that declares the scan jobs (spider, passive-scan, active-scan, etc.) and a final `report` job with `template: sarif-json`. The SARIF template ships in the `reports` add-on bundled in the `zaproxy/zap-stable` Docker image, so no extra install steps are needed.
+
+## Validated invocation
+
+```bash
+# zap-plan.yaml (next to your working dir) — declares spider + passive scan
+# + a SARIF report job. The reportFile gets `.json` appended by ZAP.
+cat > zap-plan.yaml <<'YAML'
+env:
+  contexts:
+    - name: target
+      urls:
+        - http://localhost:3000
+  parameters:
+    failOnError: false
+jobs:
+  - type: passiveScan-config
+    parameters: { maxAlertsPerRule: 10, scanOnlyInScope: true }
+  - type: spider
+    parameters: { context: target, url: http://localhost:3000, maxDuration: 1 }
+  - type: passiveScan-wait
+    parameters: { maxDuration: 2 }
+  - type: report
+    parameters:
+      template: sarif-json
+      reportDir: /zap/wrk
+      reportFile: zap.sarif        # ZAP appends .json → zap.sarif.json
+      reportTitle: ZAP Baseline
+YAML
+
+cilock run --step zap-scan \
+  --signer-file-key-path key.pem \
+  --outfile attestation.json \
+  --attestations sarif,environment,git \
+  --enable-archivista=false \
+  -- docker run --rm --network host \
+       -v "$(pwd):/zap/wrk/:rw" \
+       zaproxy/zap-stable \
+       zap.sh -cmd -autorun /zap/wrk/zap-plan.yaml
+```
+
+This is the exact command exercised in [`tool-zap-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-zap-sarif). The wrapped command is the `docker` CLI itself — the same binary the user runs in their terminal. ZAP executes inside the container, writes `zap.sarif.json` into `/zap/wrk/` (the bind-mounted host working directory), and the file lands at `$(pwd)/zap.sarif.json` on the host — where cilock's product attestor scans for outputs.
+
+For active scans, add an `activeScan` job to `zap-plan.yaml` between `passiveScan-wait` and `report`. For authenticated scans, define a `users` block under `env.contexts[].authentication`. Both are documented in the [ZAP automation framework reference](https://www.zaproxy.org/docs/automate/automation-framework/).
+
+## What gets captured
+
+| Predicate type | Source |
+|---|---|
+| `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
+| `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, tags, dirty status, parents |
+| `https://aflock.ai/attestations/material/v0.3` | Merkle root over the source tree (including `zap-plan.yaml`) before ZAP runs |
+| `https://aflock.ai/attestations/command-run/v0.1` | literal `docker run … zaproxy/zap-stable …` argv + exit code + ptrace |
+| `https://aflock.ai/attestations/product/v0.3` | Merkle root over `zap.sarif.json` as written by ZAP into the bind-mounted workdir |
+| `https://aflock.ai/attestations/sarif/v0.1` | parsed SARIF document (ZAP's findings, rule metadata, scan locations) |
+
+## Why this shape
+
+| Antipattern | Correct shape (this example) |
+|---|---|
+| `cilock run ... -- bash -c "docker run ... && cp zap.sarif.json out/"` | `cilock run ... -- docker run --rm --network host -v $(pwd):/zap/wrk/:rw zaproxy/zap-stable zap.sh -cmd -autorun /zap/wrk/zap-plan.yaml` |
+| `command-run.cmd` records `["bash","-c","docker run ... && cp ..."]` | `command-run.cmd` records the literal docker argv |
+| The ptrace spy traces `bash` and `cp`, not docker | The spy traces docker's syscalls because cilock is its parent |
+| The product is a copy of a file written outside cilock's view | The product is the file ZAP wrote into the bind-mounted workdir during the wrapped step |
+
+Three properties matter: (1) `command-run/v0.1.cmd` records the real tool argv (`docker run …`), not the shell. (2) The ptrace spy traces the wrapped binary's syscalls — cilock is `docker`'s direct parent, so the syscall log is the docker daemon-client RPC + the container's process tree as docker reports it, not a shell's. (3) `product/v0.3` captures the file ZAP actually wrote into the bind-mounted workdir, not a copy of one written outside cilock's view.
+
+Because ZAP runs in a container, the wrapped argv is `docker run ... zaproxy/zap-stable zap.sh -cmd -autorun …` rather than `zap.sh` directly. That's not a shim — `docker` is the binary the user invokes, and it's the binary cilock should record. Wrapping `docker run ...` in a `bash -c` would hide that argv behind the shell.
+
+## Validate it locally
+
+List the predicate types in the captured envelope:
+
+```bash
+jq -r '.payload' attestation.json | base64 -d | jq '.predicate.attestations | map(.type)'
+```
+
+Expected output:
+
+```json
+[
+  "https://aflock.ai/attestations/environment/v0.1",
+  "https://aflock.ai/attestations/git/v0.1",
+  "https://aflock.ai/attestations/material/v0.3",
+  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/product/v0.3",
+  "https://aflock.ai/attestations/sarif/v0.1"
+]
+```
+
+Confirm `command-run.cmd` carries the literal docker argv (proof the cp antipattern is gone):
+
+```bash
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.1") | .attestation.cmd'
+# ["docker","run","--rm","--network","host","-v","<host-cwd>:/zap/wrk/:rw",
+#  "zaproxy/zap-stable","zap.sh","-cmd","-autorun","/zap/wrk/zap-plan.yaml"]
+```
+
+Count the findings in the captured SARIF:
+
+```bash
+jq '.runs[0].results | length' zap.sarif.json
+# 19 against the Juice Shop fixture (4 distinct ZAP rules)
+```
+
+## Notes
+
+- **Target selection.** Do **not** scan a production site you don't own. The validated example runs ZAP against [OWASP Juice Shop](https://github.com/juice-shop/juice-shop) (`bkimminich/juice-shop`) on `localhost:3000` — a deliberately vulnerable testbed. [Google's public-firing-range](https://public-firing-range.appspot.com/) is another safe public target. For production-system pen-tests, use a staging environment under your control.
+- **Baseline vs. full scan.** `zap-baseline.py` (passive scan only) is the conservative default — it spiders the target and runs passive rules against captured traffic without sending payload attacks. For active scanning, swap the plan to include an `activeScan` job or use `zap-full-scan.py`. Active scans send attack payloads and take 10–30× longer; always run them against staging.
+- **`failOnError`.** The automation plan's `env.parameters.failOnError: false` keeps the plan's exit code 0 even when findings are present. Set it `true` if you want the scan's exit code to gate the cilock step (`command-run/v0.1.exitcode != 0`). The findings themselves are always recorded in the SARIF and the `sarif/v0.1` predicate — the flag affects only the process exit code.
+- **SARIF report file naming.** ZAP appends `.json` to `reportFile` when `template: sarif-json` is set, so a configured `reportFile: zap.sarif` produces `zap.sarif.json` on disk. The sarif attestor selects by MIME (`application/json` from content sniffing) and validates JSON shape, not by extension, so this works without renaming.
+- **`zap-baseline.py` doesn't emit SARIF.** Its `-J` flag writes ZAP's traditional JSON, not SARIF. To get SARIF you must use the automation-framework `report` job with `template: sarif-json` (this page) or the SARIF JSON Report add-on UI in the desktop client.
+- **`--network host` on macOS.** Docker Desktop tunnels `--network host` through the Docker VM. The container can reach `localhost:3000` because the VM's localhost forwards to the host's localhost for published ports. On Linux it's straight host networking.
+
+## FAQ
+
+### Does cilock support OWASP ZAP?
+
+Yes. Wrap `docker run zaproxy/zap-stable zap.sh -cmd -autorun <plan.yaml>` with `cilock run --attestations sarif,environment,git`. The SARIF the plan's `report` job writes becomes a signed v0.3 attestation under `https://aflock.ai/attestations/sarif/v0.1`, the literal docker argv is captured in `command-run/v0.1`, and the SARIF file is hashed into the v0.3 Merkle tree as a real product.
+
+### What targets can ZAP scan under cilock?
+
+Any HTTP/HTTPS endpoint the container can reach. The validated example points at `http://localhost:3000` (OWASP Juice Shop on the host). For staging environments behind authentication, define an `authentication` block in the automation plan's context. For internal-only targets, ensure the container has network access (`--network host` on Linux, or attach to a custom Docker network). Do not scan a production site you don't own.
+
+### Why is the wrapped command `docker run`, not `zap.sh` directly?
+
+Because ZAP doesn't have a stable, batteries-included binary distribution outside the Docker image — the Homebrew cask was deprecated 2026, the desktop installer bundles a JVM, and CI runs almost always use the container. `docker` is the binary the user actually executes; recording it under `command-run/v0.1` matches what the user would type in their terminal. The container's process tree (java + zap.sh) is reported by the ptrace spy via docker's syscall log.
+
+### Can I use the same SARIF in GitHub's code-scanning UI?
+
+Yes. The SARIF cilock captures is byte-identical to what ZAP's `report` job writes; it's just additionally signed. Upload `zap.sarif.json` to GitHub's `code-scanning/sarifs` API and you get the same UI as a non-cilock ZAP run, plus the signed attestation as a separate piece of evidence.
+
+### How does this differ from running ZAP standalone?
+
+Standalone ZAP gives you a SARIF file with no provenance — nothing binds it to the source tree, the git commit, the host, or the binary that ran. cilock adds five predicates around the same scan: `git/v0.1` (the commit), `environment/v0.1` (the host), `material/v0.3` (the inputs the scan read), `command-run/v0.1` (the exact docker argv + exit code), and `product/v0.3` (the SARIF's content hash). The SARIF itself is unchanged — same bytes, same upload path — but the surrounding evidence is now signed and policy-checkable.
+
+## See also
+
+- [`sarif` attestor](../attestors/sarif) — the underlying ingestion path
+- [Validated example: tool-zap-sarif](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-zap-sarif) — fixture, raw SARIF, raw envelope, reproduce script
+- [OWASP ZAP project](https://www.zaproxy.org/) — upstream
+- [ZAP automation framework reference](https://www.zaproxy.org/docs/automate/automation-framework/) — plan-YAML schema
+- [`zaproxy/zap-stable` on Docker Hub](https://hub.docker.com/r/zaproxy/zap-stable) — the container used here
+- [Tools index](./)

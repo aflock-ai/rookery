@@ -733,6 +733,64 @@ ENTRIES: list[tuple[str, dict]] = [
         match=dict(argv_prefix=["jest"]),
         on_match="Jest invocation observed. jest-junit reporter emits JUnit XML, captured by test-results."
     )),
+
+    # ===== SARIF-emitting scanners (documented; validated end-to-end via
+    # the cilock-docs tool pages). Each routes its SARIF output through the
+    # sarif attestor. =====
+    ("trivy", dict(
+        desc="Trivy — Aqua Security's all-in-one scanner (vulnerabilities, IaC misconfig, secrets, licenses) for containers, filesystems, and repos.",
+        categories=["vulnerability-scan"],
+        upstream=dict(name="Trivy", source="https://github.com/aquasecurity/trivy",
+                      license="Apache-2.0", vendor="Aqua Security"),
+        emits_formats=["sarif"],
+        match=dict(argv_prefix=["trivy"]),
+        on_match="Trivy scan observed. --format sarif --output <file>.sarif is captured by the sarif attestor."
+    )),
+    ("codeql", dict(
+        desc="CodeQL — GitHub's semantic static-analysis engine; `codeql database analyze` produces SARIF for 100+ query packs.",
+        categories=["vulnerability-scan"],
+        upstream=dict(name="CodeQL", source="https://codeql.github.com/",
+                      license="proprietary", vendor="GitHub (Microsoft)"),
+        emits_formats=["sarif"],
+        match=dict(argv_prefix=["codeql"]),
+        on_match="CodeQL invocation observed. `database analyze --format=sarifv2.1.0` output is captured by the sarif attestor."
+    )),
+    ("nuclei", dict(
+        desc="Nuclei — ProjectDiscovery's template-driven DAST/vulnerability scanner (~13,000 community templates).",
+        categories=["vulnerability-scan"],
+        upstream=dict(name="Nuclei", source="https://github.com/projectdiscovery/nuclei",
+                      license="MIT", vendor="ProjectDiscovery"),
+        emits_formats=["sarif"],
+        match=dict(argv_prefix=["nuclei"]),
+        on_match="Nuclei scan observed. -sarif-export <file> output is captured by the sarif attestor."
+    )),
+    ("zap", dict(
+        desc="OWASP ZAP — dynamic application security testing (DAST) via the automation framework; commonly run from the zaproxy container image.",
+        categories=["vulnerability-scan"],
+        upstream=dict(name="OWASP ZAP", source="https://github.com/zaproxy/zaproxy",
+                      license="Apache-2.0", vendor="OWASP / Checkmarx"),
+        emits_formats=["sarif"],
+        match=dict(argv_prefix=["zap-baseline.py"]),
+        on_match="OWASP ZAP scan observed (zap-baseline.py / automation framework). The SARIF report is captured by the sarif attestor; when run via `docker run`, the literal docker argv is recorded by command-run."
+    )),
+    ("hadolint", dict(
+        desc="Hadolint — Dockerfile linter (pinned base images, install hygiene, USER root checks, 100+ rules).",
+        categories=["lint"],
+        upstream=dict(name="Hadolint", source="https://github.com/hadolint/hadolint",
+                      license="GPL-3.0", vendor="Hadolint maintainers"),
+        emits_formats=["sarif"],
+        match=dict(argv_prefix=["hadolint"]),
+        on_match="Hadolint invocation observed. `--no-fail --format sarif` output (routed via sh -c redirect) is captured by the sarif attestor."
+    )),
+    ("testssl", dict(
+        desc="testssl.sh — TLS connection scanner: protocol negotiation, cipher matrix, named TLS vulnerabilities, and FIPS 140-2/140-3 compliance findings.",
+        categories=["vulnerability-scan"],
+        upstream=dict(name="testssl.sh", source="https://github.com/testssl/testssl.sh",
+                      license="GPL-2.0", vendor="Dirk Wetter / testssl.sh maintainers"),
+        emits_formats=["sarif"],
+        match=dict(argv_prefix=["testssl.sh"]),
+        on_match="testssl.sh scan observed. --jsonfile-pretty output is captured (parsed by the sarif attestor)."
+    )),
 ]
 
 

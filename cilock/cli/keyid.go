@@ -142,7 +142,7 @@ type keyidEntry struct {
 // Anything else is a user error.
 func parseKeyidFormat(format string) (bool, error) {
 	switch format {
-	case "", "text", "lines":
+	case "", formatText, "lines":
 		return false, nil
 	case formatJSON:
 		return true, nil

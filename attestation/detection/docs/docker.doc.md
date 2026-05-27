@@ -1,0 +1,86 @@
+---
+title: docker
+description: The cilock docker attestor parses docker buildx --metadata-file JSON from products and records image digests, references, and per-architecture SLSA materials into signed in-toto evidence.
+sidebar_position: 19
+examples_repo: 16-docker
+---
+
+Parses `docker buildx --metadata-file` JSON output from the products and records image digests, references, and SLSA-style materials per architecture.
+
+## What it captures
+
+The top-level field is `products`, keyed by the image's SHA256 digest (without the `sha256:` prefix). Each `DockerProduct` entry contains:
+
+- `imagedigest` — a `DigestSet` holding the SHA256 of the container image (from `containerimage.digest` in the metadata file).
+- `imagereferences` — list of image refs (populated from `image.name` in the metadata file).
+- `materials` — `map[architecture][]Material`, where each `Material` has:
+  - `uri` — the source material URI from buildx provenance.
+  - `architecture` — the platform key (e.g. `linux/amd64`), extracted from the `buildx.build.provenance/<arch>` key or, for the single-arch `buildx.build.provenance` key, parsed from the `platform=` query parameter on the material URI.
+  - `digest` — a `DigestSet` containing the SHA256 from the provenance material.
+
+`Subjects()` exposes four subject types: `imagedigest:<sha256>`, `imagereference:<ref>`, `materialdigest:<sha256>`, and `materialuri:<uri>`.
+
+## When to use
+
+When your pipeline builds container images with `docker buildx build --metadata-file <path>` and that JSON file lands in the products. Pair with [`oci`](./oci) when you also `docker save` a tarball, or with `slsa` for SLSA-shaped consumers.
+
+```bash
+docker buildx build --metadata-file dist/metadata.json -t myapp:dev .
+cilock run --step image \
+  --attestations command-run,material,product,docker \
+  -- echo "image built"
+```
+
+## Flags
+
+None.
+
+## Output shape
+
+```json
+{
+  "products": {
+    "abc123...def": {
+      "materials": {
+        "linux/amd64": [
+          {
+            "uri": "https://github.com/example/repo.git#refs/heads/main",
+            "architecture": "linux/amd64",
+            "digest": { "sha256": "deadbeef..." }
+          }
+        ]
+      },
+      "imagereferences": ["registry.example.com/myapp:dev"],
+      "imagedigest": { "sha256": "abc123...def" }
+    }
+  }
+}
+```
+
+## Gotchas
+
+- **Buildx only.** Classic `docker build` does not emit a metadata file with `containerimage.digest` / `buildx.build.provenance` keys. Without those, nothing attests.
+- **Detection is MIME-based, not filename-based.** The attestor iterates `ctx.Products()` and tries to JSON-parse every product whose MIME type is `application/json`. Files that fail to parse as a `BuildInfo` struct are silently skipped (logged at debug). There is no fixed filename — name the metadata file anything you like as long as the product MIME detector recognizes it as JSON.
+- **Multiple metadata files per attestation are supported.** Every JSON product that successfully unmarshals into a `BuildInfo` becomes its own entry in `products`, keyed by image digest.
+- **Digest must be `sha256:`-prefixed.** Metadata files whose `containerimage.digest` doesn't start with `sha256:` are skipped with a warning.
+- **`Attest` returns an error if no candidates produce a product** (`"no products to attest"`). A buildx metadata file with a missing or non-`sha256:` digest will trip this if it's the only candidate.
+- **Per-arch provenance keys.** Multi-platform builds emit `buildx.build.provenance/<arch>` entries; single-platform builds emit a bare `buildx.build.provenance` key, and the architecture is recovered from the `platform=` query parameter of one of the material URIs.
+
+## CLI example
+
+Real `docker buildx build --metadata-file metadata.json` against a Dockerfile. The metadata file is a BuildKit JSON product consumed by the docker attestor.
+
+```bash
+cilock run --step docker-build \
+  --signer-file-key-path key.pem --outfile attestation.json \
+  --attestations docker,environment,git \
+  -- docker buildx build --metadata-file metadata.json --load -t app:latest .
+```
+
+Validated against a real built image (sha256:1c1ee1a2...). The `--metadata-file` flag produces a buildx JSON metadata that the docker attestor consumes as an `application/json` product. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/16-docker](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/16-docker).
+
+## See also
+
+- [Catalog row](../reference/attestor-catalog)
+- [`oci`](./oci) — for `docker save` tarballs (registry/distribution layout)
+- Upstream: [witness/docker.md](https://github.com/in-toto/witness/blob/main/docs/attestors/docker.md)

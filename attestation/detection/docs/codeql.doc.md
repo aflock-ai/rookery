@@ -1,0 +1,126 @@
+---
+title: CodeQL
+description: Run GitHub CodeQL under cilock — the SARIF report from `codeql database analyze` becomes a signed v0.3 attestation parsed by the rookery sarif attestor, with the literal codeql argv captured in command-run/v0.1.
+sidebar_position: 11
+examples_repo: tool-codeql-sarif
+---
+
+[CodeQL](https://codeql.github.com/) is GitHub's static analysis engine — the same one that powers GitHub Advanced Security's code-scanning feature. It supports Python, JavaScript/TypeScript, Go, Java, Kotlin, C/C++, C#, Ruby, and Swift. Under cilock, the SARIF report `codeql database analyze` writes becomes a signed in-toto attestation linked to the source tree it analyzed.
+
+CodeQL is a two-step flow: `codeql database create` extracts a queryable database from your source, then `codeql database analyze` runs query packs against it and emits findings as SARIF. Only the analyze step produces structured output, so that's the step we wrap with cilock. The database creation can be pre-built (typical) or wrapped as its own discrete cilock step.
+
+## Validated invocation
+
+```bash
+# Step 1 (outside cilock): build the CodeQL database for the language.
+codeql database create codeql-db \
+  --language=python \
+  --source-root=src
+
+# Step 2 (wrapped): cilock invokes codeql analyze directly. The SARIF is
+# captured as a v0.3 product Merkle leaf; the sarif attestor parses it.
+cilock run --step codeql-scan \
+  --signer-file-key-path key.pem \
+  --outfile attestation.json \
+  --attestations sarif,environment,git \
+  --enable-archivista=false \
+  -- codeql database analyze codeql-db \
+       --format=sarif-latest \
+       --output=codeql.sarif \
+       codeql/python-queries:codeql-suites/python-security-and-quality.qls
+```
+
+This is the exact command exercised in [`tool-codeql-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-codeql-sarif). For other languages substitute `python-queries` with `go-queries`, `javascript-queries`, `java-queries`, `cpp-queries`, `csharp-queries`, `ruby-queries`, or `swift-queries`. The `python-security-and-quality.qls` suite covers both security and code-quality queries; switch to `python-code-scanning.qls` for the narrower GitHub-default set.
+
+## What gets captured
+
+| Predicate type | Source |
+|---|---|
+| `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
+| `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, tags, dirty status, parents |
+| `https://aflock.ai/attestations/material/v0.3` | Merkle root over the source tree + CodeQL database before analyze runs |
+| `https://aflock.ai/attestations/command-run/v0.1` | literal `codeql database analyze …` argv + exit code + ptrace |
+| `https://aflock.ai/attestations/product/v0.3` | Merkle root over `codeql.sarif` as a real product file |
+| `https://aflock.ai/attestations/sarif/v0.1` | parsed SARIF (rules + results from CodeQL's query pack) |
+
+## Why this shape
+
+| Antipattern | Correct shape (this example) |
+|---|---|
+| `cilock run ... -- bash -c "codeql database analyze ... && cp codeql.sarif codeql-product.sarif"` | `cilock run ... -- codeql database analyze ... --output=codeql.sarif` |
+| `command-run.cmd` records `["bash","-c","codeql ... && cp ..."]` | `command-run.cmd` records the literal codeql argv |
+| The ptrace spy traces `bash` and `cp`, not codeql | The spy traces codeql's syscalls because cilock is its parent |
+| The product is a copy of a file codeql wrote outside cilock | The product is the SARIF codeql wrote inside the wrapped step |
+
+`codeql database analyze` accepts `--output=<file>` natively, so no shell wrapper is needed. The analyze step also exits 0 even when findings are present, so no soft-fail flag is needed (unlike gosec/hadolint/checkov which need `-no-fail`/`-s`).
+
+## Validate it locally
+
+List the predicate types in the captured envelope:
+
+```bash
+jq -r '.payload' attestation.json | base64 -d | jq '.predicate.attestations | map(.type)'
+```
+
+Expected output:
+
+```json
+[
+  "https://aflock.ai/attestations/environment/v0.1",
+  "https://aflock.ai/attestations/git/v0.1",
+  "https://aflock.ai/attestations/material/v0.3",
+  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/product/v0.3",
+  "https://aflock.ai/attestations/sarif/v0.1"
+]
+```
+
+Confirm `command-run.cmd` carries the literal codeql argv (proof the cp antipattern is gone):
+
+```bash
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.1") | .attestation.cmd'
+# ["codeql","database","analyze","codeql-db","--format=sarif-latest",
+#  "--output=codeql.sarif",
+#  "codeql/python-queries:codeql-suites/python-security-and-quality.qls"]
+```
+
+Count the findings in the captured SARIF:
+
+```bash
+jq '.runs[0].results | length' codeql.sarif
+# 6 against the fixture in the examples repo (4 CWEs + 2 unused imports)
+```
+
+## Notes
+
+- **Query suite selection.** `python-security-and-quality.qls` includes security queries (CWE-78/89/94/611/etc.) plus code-quality lints (unused imports, dead code). For the narrower set GitHub Advanced Security ships by default, use `python-code-scanning.qls`. Reference the suite you actually want in CI to keep finding counts stable.
+- **Multi-language repos.** Build one database per language: `codeql database create db-python --language=python` then `--language=javascript`, etc. Wrap each analyze step under its own cilock step so per-language attestations stay independent.
+- **Database as a separate cilock step.** Wrapping `codeql database create` under cilock too gives you a `command-run/v0.1` recording the extraction step + `product/v0.3` digest over the database directory. Useful if you want to verify the analyze step ran against the database that `create` actually produced — pair with [`attestationsFrom`](../reference/policy-schema#step-object) on the release-gate Rego.
+- **Exit codes.** `codeql database analyze` always exits 0 when the query suite runs to completion. Gate findings in policy Rego over the captured SARIF, not on the tool exit code.
+
+## FAQ
+
+### Does cilock support CodeQL?
+
+Yes. Wrap `codeql database analyze ... --output=codeql.sarif` with `cilock run --attestations sarif,environment,git`. The SARIF becomes a signed v0.3 attestation under `https://aflock.ai/attestations/sarif/v0.1`, the literal codeql argv is captured in `command-run/v0.1`, and the SARIF file is hashed into the v0.3 Merkle tree as a real product.
+
+### Do I need to wrap `codeql database create` too?
+
+Only if your policy needs to verify the database matches the source it was built from. For most workflows, build the database outside cilock and wrap only the analyze step. The analyze step's `material/v0.3` digest covers the database directory, so a downstream policy can still verify the analyze ran against a specific database state.
+
+### Which query pack should I use?
+
+For security-focused gating, `<language>-queries:codeql-suites/<language>-security-and-quality.qls`. For matching what GitHub Advanced Security writes by default, `<language>-queries:codeql-suites/<language>-code-scanning.qls`. Pre-download the pack with `codeql pack download codeql/<language>-queries` so CI doesn't depend on network access at analyze time.
+
+### Can I use the same SARIF in GitHub's code-scanning UI?
+
+Yes. The SARIF cilock captures is byte-identical to what `codeql database analyze --output` writes; it's just additionally signed. Upload it to GitHub's `code-scanning/sarifs` API and you get the same UI as a non-cilock CodeQL run, plus the signed attestation as a separate piece of evidence.
+
+## See also
+
+- [`sarif` attestor](../attestors/sarif) — the underlying ingestion path
+- [Validated example: tool-codeql-sarif](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-codeql-sarif) — fixture, raw SARIF, raw envelope, reproduce script
+- [GitHub CodeQL CLI manual](https://docs.github.com/en/code-security/codeql-cli) — upstream
+- [github/codeql-cli-binaries releases](https://github.com/github/codeql-cli-binaries/releases) — install
+- [Tools index](./)
