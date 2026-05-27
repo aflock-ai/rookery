@@ -315,7 +315,18 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// write-tap is redundant (like the read-tap proved to be). The BPF
 	// still emits the chunks; we just ignore them, and finalizeWriteTap
 	// then no-ops on the empty hash.
-	writeTapEnabled := os.Getenv("CILOCK_EBPF_WRITETAP") != "off"
+	// Write-tap content is permanently OFF (hardcoded default): ablation
+	// proved products are captured identically by fanotify FAN_CLOSE_WRITE +
+	// survivor-walk + exists-at-exit (digest-verified on GHA Hugo). Write
+	// chunks are dropped in the dispatch loop below.
+	//
+	// openat-time content hashing is skipped WHEN FANOTIFY IS ACTIVE —
+	// fanotify (open-perm, hash-once) is the authoritative content source,
+	// and the eBPF openat-hash was shown to add only non-regular/transient
+	// NOISE (dirs, devices, /tmp cgo intermediates) with zero unique real
+	// materials. It is retained ONLY as the no-fanotify fallback so non-GHA
+	// runs without fanotify still capture material content.
+	openatHashDisabled := r.fanotifySession != nil
 
 	var readTotal, matchedTotal, otherTotal atomic.Uint64
 	// V2 diagnostic: read-chunk traffic counters. Lets us distinguish
@@ -721,8 +732,8 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				recordEBPFNet(pctx, ev.Net)
 			case ev.ReadChunk != nil:
 				isWrite := ev.Type == ebpf.EVT_WRITE_CHUNK
-				if isWrite && !writeTapEnabled {
-					continue // write-tap ablation: products via fanotify/survivor-walk only
+				if isWrite {
+					continue // write-tap off: products via fanotify close-write + survivor-walk
 				}
 				if isWrite {
 					writeChunkSeen.Add(1)
@@ -1006,6 +1017,24 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				// We do NOT record an open for them (no nil-digest gap).
 				if pctx.cacheMatcher != nil && pctx.cacheMatcher.Matches(ev.Path) {
 					cacheReadsSkipped.Add(1)
+					if ph.file != nil {
+						_ = ph.file.Close()
+					}
+					continue
+				}
+				// fanotify is the authoritative content source: record the
+				// open's path (so fanotify reconciliation attaches the
+				// kernel-synchronous digest) without an eBPF content hash.
+				// Non-regular files (dirs/devices, via ph.stat) are flagged
+				// so they're suppressed rather than logged as gaps.
+				if openatHashDisabled {
+					nonReg := ph.stat != nil && !ph.stat.Mode().IsRegular()
+					recordEBPFOpenat(pctx, ev, ebpf.HashResult{
+						Path:       ev.Path,
+						Status:     ebpf.TOCTOUError,
+						Reason:     "fanotify-authoritative: eBPF openat content hash skipped",
+						NonRegular: nonReg,
+					})
 					if ph.file != nil {
 						_ = ph.file.Close()
 					}

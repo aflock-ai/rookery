@@ -326,25 +326,15 @@ func (r *CommandRun) preStartTracingSetup() error {
 	// openat-time path-hash (via the capture pool) remains as the
 	// fallback for files where read-tap didn't complete the full read
 	// before the tracee exited.
-	// Read-tap is OFF by default. Experiments (local 6.8 + GHA Azure 6.17
-	// Hugo) showed it nearly DOUBLED the materials set with pure
-	// GOCACHE/module-cache + /tmp cgo-temp NOISE (it never honored the
+	// Read-tap is permanently OFF. Experiments (local 6.8 + GHA Azure 6.17
+	// Hugo) proved it net-negative: it nearly DOUBLED the materials set with
+	// pure GOCACHE/module-cache + /tmp cgo-temp NOISE (it never honored the
 	// cache-skip fanotify applies), made materials non-deterministic, and
-	// caused all the partial-read fallbacks + the 1GiB ringbuf — while
-	// fanotify (default-on, synchronous, zero-drop) is the authoritative
-	// materials source. Set CILOCK_EBPF_READTAP=on to re-enable.
-	// (The ~1% GOROOT headers only the read-tap saw are fanotify's mmap
-	// gap, to be closed via an fentry mmap hook, not this noisy path.)
-	switch os.Getenv("CILOCK_EBPF_READTAP") {
-	case "on", "1", "true":
-		if err := consumer.EnableReadTap(); err != nil {
-			log.Debugf("(ebpf) read-tap unavailable (%v); falling back to openat-time path hash", err)
-		} else {
-			log.Debugf("(ebpf) read-tap enabled via CILOCK_EBPF_READTAP")
-		}
-	default:
-		log.Debugf("(ebpf) read-tap off (default)")
-	}
+	// caused all the partial-read fallbacks + the 1GiB ringbuf. fanotify
+	// (default-on, synchronous, zero-drop) is the authoritative materials
+	// source; the openat-time path-hash remains as the no-fanotify fallback.
+	// EnableReadTap is intentionally never called (the tap content path is
+	// being removed; this locks in the validated default).
 	r.ebpfConsumer = consumer
 	return nil
 }
