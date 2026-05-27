@@ -9,8 +9,10 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,5 +42,35 @@ func TestSignerIdentityPinnedByFlags(t *testing.T) {
 		cmd := VerifyCmd()
 		require.NoError(t, cmd.Flags().Set("policy-ca-roots", "root.pem"))
 		assert.False(t, signerIdentityPinnedByFlags(cmd))
+	})
+}
+
+// Drift guard: every registered policy signer-identity flag must appear in
+// signerIdentityFlags. The list is maintained by hand and a single omission
+// (e.g. --policy-dns-names) silently lets embedded trust overwrite an operator
+// pin — the trust-correctness bug class Codex flagged on PR #5112. Trust-source
+// flags (policy-ca*, policy-timestamp*) and the deprecated alias are excluded
+// because they are NOT signer-identity constraints.
+func TestSignerIdentityFlagsCoversAllRegisteredFlags(t *testing.T) {
+	notSignerIdentity := map[string]bool{
+		"policy-ca":                true, // deprecated alias for policy-ca-roots (trust source)
+		"policy-ca-roots":          true, // trust source, not identity
+		"policy-ca-intermediates":  true, // trust source, not identity
+		"policy-timestamp-servers": true, // trust source, not identity
+	}
+	known := make(map[string]bool, len(signerIdentityFlags))
+	for _, n := range signerIdentityFlags {
+		known[n] = true
+	}
+	VerifyCmd().Flags().VisitAll(func(f *pflag.Flag) {
+		if !strings.HasPrefix(f.Name, "policy-") {
+			return
+		}
+		if notSignerIdentity[f.Name] {
+			return
+		}
+		assert.Truef(t, known[f.Name],
+			"registered signer-identity flag %q is missing from signerIdentityFlags; "+
+				"embedded trust would silently overwrite an operator who pins via this flag alone", f.Name)
 	})
 }
