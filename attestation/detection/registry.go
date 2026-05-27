@@ -36,6 +36,12 @@ type Registry struct {
 	raw      map[string][]byte
 	parsed   map[string]*DetectorYAML
 	parseErr map[string]error
+
+	// Long-form documentation, keyed by detector name. Populated from the
+	// embedded docs/ catalog (see doc.go). Parsed lazily like detector.yaml.
+	docRaw    map[string][]byte
+	docParsed map[string]*DetectorDoc
+	docErr    map[string]error
 }
 
 // defaultRegistry is the singleton plugins write to from init().
@@ -45,9 +51,12 @@ var defaultRegistry = NewRegistry()
 // tests. Production code uses Default().
 func NewRegistry() *Registry {
 	return &Registry{
-		raw:      make(map[string][]byte),
-		parsed:   make(map[string]*DetectorYAML),
-		parseErr: make(map[string]error),
+		raw:       make(map[string][]byte),
+		parsed:    make(map[string]*DetectorYAML),
+		parseErr:  make(map[string]error),
+		docRaw:    make(map[string][]byte),
+		docParsed: make(map[string]*DetectorDoc),
+		docErr:    make(map[string]error),
 	}
 }
 
@@ -168,4 +177,7 @@ func (r *Registry) Reset() {
 	r.raw = make(map[string][]byte)
 	r.parsed = make(map[string]*DetectorYAML)
 	r.parseErr = make(map[string]error)
+	r.docRaw = make(map[string][]byte)
+	r.docParsed = make(map[string]*DetectorDoc)
+	r.docErr = make(map[string]error)
 }

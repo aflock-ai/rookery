@@ -1,0 +1,132 @@
+---
+title: OSV-Scanner
+description: Scan lockfiles or containers against the OpenSSF OSV vulnerability database with OSV-Scanner under cilock — each match becomes a signed v0.3 SARIF attestation.
+sidebar_position: 9
+examples_repo: tool-osv-scanner-sarif
+---
+
+[OSV-Scanner](https://github.com/google/osv-scanner) is Google / OpenSSF's reference scanner against the [OSV.dev](https://osv.dev) database. It walks lockfiles (`go.sum`, `package-lock.json`, `Pipfile.lock`, `requirements.txt`, `Cargo.lock`, `pom.xml`, `build.gradle.lockfile`, `composer.lock`, `Gemfile.lock`, and more), OCI images, and container filesystems and reports any package version that matches an OSV advisory. Under cilock, that report becomes a signed in-toto SARIF v0.3 attestation that links every CVE back to the exact lockfile line that pulled the vulnerable version in.
+
+## Validated invocation
+
+```bash
+# osv-scanner v2+ uses --output-file (older versions used --output).
+cilock run --step tool-osv-scanner \
+  --signer-file-key-path _validation/key.pem \
+  --outfile attestation.json \
+  --attestations sarif,environment,git \
+  --enable-archivista=false \
+  -- osv-scanner --format sarif --output-file osv.sarif fixtures/
+```
+
+`cilock` invokes `osv-scanner` directly. No `bash -c` wrapper, no post-hoc `cp` — the scanner writes its SARIF straight to disk, and `command-run`, `material`, `product`, and `sarif` all observe the real process tree and the real output file.
+
+Point `osv-scanner` at any directory that contains a supported lockfile and the same shape works. For OCI images, swap the trailing `fixtures/` for `--docker <image>` or `--image <ref>`.
+
+## What gets captured
+
+The DSSE envelope wraps six predicates from the cilock run:
+
+| Predicate type | Source attestor | What it carries |
+|---|---|---|
+| `https://aflock.ai/attestations/command-run/v0.1` | `command-run` | The real `osv-scanner` argv, exit code, working dir, env subset |
+| `https://aflock.ai/attestations/material/v0.3` | `material` | Merkle digests of every input file the scanner read |
+| `https://aflock.ai/attestations/product/v0.3` | `product` | Merkle digest of `osv.sarif` as the scanner wrote it |
+| `https://aflock.ai/attestations/sarif/v0.1` | `sarif` | Parsed report — rules, results, locations, severities |
+| `https://aflock.ai/attestations/environment/v0.1` | `environment` | OS, arch, hostname, env subset |
+| `https://aflock.ai/attestations/git/v0.1` | `git` | Commit, branch, remote, dirty state |
+
+The `sarif` attestor is what makes the OSV findings queryable. The other five bind those findings to a specific commit, machine, scanner argv, input set, and output digest.
+
+## Why this shape
+
+Running `osv-scanner` as cilock's direct subcommand keeps argv, exit code, working directory, and product hashes bound to the actual scanner invocation. A `bash -c "cp …"` wrapper would break that chain in three places:
+
+- **`command-run`** would record `["bash","-c","cp …"]` instead of the real scanner argv — a verifier inspecting the attestation has no evidence that `osv-scanner` ever ran.
+- **`product`** would capture whatever file `cp` produced, not the file the scanner emitted. The merkle root no longer binds to the tool's output.
+- **`sarif`** would parse a copy that the build script wrote — a malicious or buggy wrapper could substitute arbitrary SARIF and the chain wouldn't notice.
+
+## From code to prod, end-to-end
+
+```
+     git commit (git attestor)
+           ↓ subject digest matches
+     CI run (github attestor: OIDC, run id)
+           ↓ same run produces
+     OSV-Scanner scan (this attestor: signed findings)
+           ↓ back-refs the artifact
+     image / SBOM / binary it scanned
+           ↓ same digest gates
+     cilock verify policy → allow/deny deploy
+```
+
+Each arrow is a cryptographic subject digest match. No human reads logs, no copy-paste between systems. The same digest links the scan to the artifact to the deploy decision.
+
+## Validate it locally
+```bash
+# 1. Generate a signing key (ed25519).
+mkdir -p _validation
+openssl genpkey -algorithm ed25519 -out _validation/key.pem
+
+# 2. Run the cilock command above against a directory containing a lockfile.
+
+# 3. Confirm all six predicate types are present.
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations[].type'
+# https://aflock.ai/attestations/environment/v0.1
+# https://aflock.ai/attestations/git/v0.1
+# https://aflock.ai/attestations/material/v0.3
+# https://aflock.ai/attestations/command-run/v0.1
+# https://aflock.ai/attestations/product/v0.3
+# https://aflock.ai/attestations/sarif/v0.1
+
+# 4. Confirm command-run captured the real osv-scanner argv.
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '[.predicate.attestations[]
+         | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+        ][0].attestation.cmd'
+# [ "osv-scanner", "--format", "sarif", "--output-file", "osv.sarif", "fixtures/" ]
+
+# 5. Confirm the sarif attestor parsed the report.
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '[.predicate.attestations[]
+         | select(.type=="https://aflock.ai/attestations/sarif/v0.1")
+        ][0].attestation
+       | {reportFileName, findings: [.report.runs[].results[]] | length}'
+# { "reportFileName": "osv.sarif", "findings": <N> }
+```
+
+The reference fixture is a `go.sum` pinning `testify v1.8.0`, which produces 40 SARIF results across `stretchr/testify`, `davecgh/go-spew`, `pmezard/go-difflib`, and `gopkg.in/yaml.v3`. The validated end-to-end example lives at [`attestor-compliance-examples/tool-osv-scanner-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-osv-scanner-sarif).
+
+## Notes
+
+- **`--output-file` vs `--output` (v2 flag rename).** OSV-Scanner v2.0 renamed the output flag from `--output` to `--output-file`. v2 still accepts `--output` as a deprecated alias, but it emits a deprecation warning that may break strict-mode CI logs. The validated invocation uses `--output-file` so it works on v2.x without warnings; on v1.x you must use `--output`. Check `osv-scanner --version` if you're unsure which is on the build agent.
+- **Ecosystem coverage.** OSV-Scanner reads lockfiles for Go (`go.mod` / `go.sum`), npm (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`), Python (`Pipfile.lock`, `poetry.lock`, `requirements.txt`, `uv.lock`), Maven (`pom.xml`), Gradle (`build.gradle.lockfile`, `verification-metadata.xml`), Cargo (`Cargo.lock`), Composer (`composer.lock`), RubyGems (`Gemfile.lock`), NuGet (`packages.lock.json`, `packages.config`), Pub (`pubspec.lock`), Conan (`conan.lock`), Hex (`mix.lock`), and others. The same `osv-scanner <dir>` invocation auto-detects every supported lockfile underneath.
+- **OSV.dev vs language-specific advisory feeds.** OSV.dev is the federated database that ingests advisories from GitHub Security Advisory (GHSA), the Go vulnerability database, PyPA, RustSec, the Linux distro CVE feeds (Alpine, Debian, Ubuntu, Rocky, etc.), OSS-Fuzz, and others, normalizing every record into the OSV schema. OSV-Scanner queries OSV.dev directly, so a single scan covers all of these feeds in one pass with consistent ID formatting (`GHSA-*`, `GO-*`, `PYSEC-*`, `RUSTSEC-*`, `CVE-*`, `OSV-*`). You do not have to plumb language-specific advisory clients in your CI.
+
+## FAQ
+
+### Does cilock support OSV-Scanner?
+
+Yes. OSV-Scanner runs as a direct subcommand of `cilock run`, and its SARIF output is consumed by the [`sarif` attestor](../attestors/sarif). The resulting DSSE envelope carries six predicates (`command-run`, `material`, `product`, `sarif`, `environment`, `git`), all signed under one CI identity. A native OSV attestor that ingests OSV-Scanner's tool-specific JSON directly is tracked in [rookery#91](https://github.com/aflock-ai/rookery/issues/91); until then, SARIF is the canonical path.
+
+### Which lockfiles does OSV-Scanner check?
+
+OSV-Scanner auto-detects lockfiles across roughly a dozen ecosystems: Go (`go.mod`, `go.sum`), npm (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`), Python (`Pipfile.lock`, `poetry.lock`, `requirements.txt`, `uv.lock`), Maven (`pom.xml`), Gradle (`build.gradle.lockfile`), Cargo (`Cargo.lock`), Composer (`composer.lock`), RubyGems (`Gemfile.lock`), NuGet (`packages.lock.json`), Pub (`pubspec.lock`), Conan (`conan.lock`), and Hex (`mix.lock`). Pointing it at a repo root with `osv-scanner <dir>` is sufficient; the OCI image path (`--docker`, `--image`) layers in container-filesystem scanning on top.
+
+### How does OSV-Scanner differ from Grype / Trivy?
+
+Grype and Trivy lead with container-image scanning — they prefer to scan an installed package database (Syft SBOM, apk/dpkg/rpm metadata) inside an image and match against vendor-specific feeds plus NVD. OSV-Scanner leads with **lockfiles** — the manifests that pin direct and transitive dependencies before they're built into an image — and matches against the OSV.dev federated database. In practice they overlap on language-package CVEs but diverge sharply on OS-package CVEs (Trivy/Grype excel) and pre-build dependency CVEs (OSV-Scanner excels). Running both is common; cilock attests each independently so policy can require either or both.
+
+### What's the difference between OSV.dev and CVE feeds?
+
+CVE (and NVD) is a flat namespace of vulnerability identifiers maintained by MITRE and enriched by NIST. It has well-known coverage gaps for ecosystems like Go modules, Rust crates, and language-specific package registries — a vuln in a Go module might land in the [Go vulnerability database](https://pkg.go.dev/vuln/) months before it gets a CVE. OSV.dev is a **schema and aggregator** that ingests advisories from GHSA, Go, PyPA, RustSec, Alpine, Debian, Ubuntu, OSS-Fuzz, and more, and normalizes each into the OSV schema with stable IDs. The OSV record links back to upstream CVE IDs when they exist, so OSV-Scanner output covers the union — CVE feeds when available, plus the language-native advisories that haven't been CVE-assigned yet.
+
+## See also
+
+- [How cilock policy works](../guides/policy) — the verify side: how the attestation gets read at deploy time
+- [Attestation graph + back-refs](../concepts/attestation-graph) — how multiple attestors link via subject digests
+- [`sarif` attestor](../attestors/sarif) — the underlying ingestion path
+- [Grype tool page](./grype) and [Trivy tool page](./trivy) — complementary image-side scanners
+- [Validated example: `tool-osv-scanner-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-osv-scanner-sarif)
+- [Tools index](./index)

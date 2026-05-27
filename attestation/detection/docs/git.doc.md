@@ -1,0 +1,92 @@
+---
+title: git
+description: The cilock git attestor captures the repository state at the working directory — HEAD commit, identities, refs, remotes, tags, parents, tree hash, and dirtiness — signed into in-toto evidence.
+sidebar_position: 4
+examples_repo: 05-git
+---
+
+Captures the state of the git repository at the working directory — HEAD commit, author/committer identity, refs, remotes, tags pointing at HEAD, parent commits, tree hash, and worktree/staging dirtiness.
+
+## What it captures
+
+The attestor opens the repo with `go-git` (using `DetectDotGit`, so it walks up from `--workingdir` to find `.git`) and records:
+
+- **`commithash`** — SHA-1 of HEAD commit. Also emitted as a `commitdigest` `DigestSet` (`sha1`).
+- **`author` / `authoremail`** — `commit.Author.Name` / `.Email`.
+- **`committername` / `committeremail`** — `commit.Committer.Name` / `.Email`.
+- **`commitdate`** — author timestamp (`time.Time.String()` format).
+- **`commitmessage`** — full commit message.
+- **`signature`** — PGP signature on the commit, if present.
+- **`parenthashes`** — SHA-1s of parent commits (multiple for merges).
+- **`treehash`** — SHA-1 of the root tree.
+- **`refs`** — every ref (branches, remote-tracking, tags) whose target equals HEAD.
+- **`branch`** — short ref name of HEAD (json key is `branch`, struct field `RefNameShort`).
+- **`remotes`** — configured remote URLs, with embedded user-info (tokens) stripped.
+- **`tags`** — annotated tag objects pointing at HEAD: `name`, `taggername`, `taggeremail`, `when` (RFC3339), `pgpsignature`, `message`.
+- **`status`** — map of dirty files to `{staging, worktree}` codes: `unmodified`, `untracked`, `modified`, `added`, `deleted`, `renamed`, `copied`, `updated`.
+- **`gittool`** — `"go-git+git-bin"` when the `git` binary is on `PATH`, else `"go-git"`.
+- **`gitbinpath` / `gitbinhash`** — path and digest of the `git` binary (only when present). Hash uses the attestation context's configured hashes.
+
+If HEAD cannot be resolved (`reference not found` — e.g. a brand-new repo with no commits), the attestor returns no error and emits an empty predicate rather than failing the run.
+
+## When to use
+
+Almost every CI step that runs inside a git checkout. The captured `commithash` is the canonical SLSA source identifier most release policies pin against, and the `parenthash` subjects make the resulting collection traversable along the commit-graph during policy evaluation.
+
+## Flags
+
+None. The attestor is configured entirely by the working directory; there are no cobra flag registrations.
+
+## Output shape
+
+```json
+{
+  "gittool": "go-git+git-bin",
+  "gitbinpath": "/usr/bin/git",
+  "gitbinhash": { "sha256": "..." },
+  "commithash": "9f1c...",
+  "author": "Jane Dev",
+  "authoremail": "jane@example.com",
+  "committername": "Jane Dev",
+  "committeremail": "jane@example.com",
+  "commitdate": "2026-05-20 12:34:56 +0000 UTC",
+  "commitmessage": "fix: ...",
+  "commitdigest": { "sha1": "9f1c..." },
+  "signature": "-----BEGIN PGP SIGNATURE-----\n...",
+  "parenthashes": ["abcd..."],
+  "treehash": "1234...",
+  "refs": ["refs/heads/main", "refs/remotes/origin/main"],
+  "remotes": ["https://github.com/org/repo"],
+  "tags": [{"name": "v1.2.3", "taggername": "...", "taggeremail": "...", "when": "2026-05-20T12:34:56Z", "pgpsignature": "...", "message": "..."}],
+  "branch": "main",
+  "status": {"path/to/file": {"staging": "modified", "worktree": "unmodified"}}
+}
+```
+
+Emitted subjects: `commithash:<sha1>`, `authoremail:<email>`, `committeremail:<email>`, `parenthash:<sha1>` (one per parent), `refnameshort:<branch>`, `remote:<url>`. `BackRefs()` exposes `commithash:` and `parenthash:` with sha1 digests.
+
+## Gotchas
+
+- **Parent-hash chain semantics.** `parenthash:<sha>` subjects use the **raw SHA-1** of the parent commit — the same encoding used for `commithash:<sha>`. This is deliberate (issue #34, PR #37): a downstream collection's `parenthash` subject digest now matches the upstream collection's `commithash` subject digest for the same commit, so policy can traverse the parent chain across collections via subject-graph matching. Earlier builds hashed the string with sha256, which broke the join.
+- **Status detection has two modes.** If the `git` binary is on `PATH`, status comes from `git status --porcelain`; otherwise it uses go-git's worktree status. The two implementations are not always byte-identical for edge cases (submodules, ignored files).
+- **Shallow clones / missing refs.** `refs` only contains refs the local repo knows about. CI checkouts that fetch a single SHA may produce an empty `branch` and minimal `refs`. Tags must be fetched explicitly (`fetch-tags`) to appear in `tags`.
+- **Submodules** are not traversed — only the outer repo's HEAD is recorded.
+- **Remote URL scrubbing.** URLs are parsed and `User` is cleared before recording, so `https://x-access-token:TOKEN@github.com/...` becomes `https://github.com/...`. If parsing fails the raw URL is recorded — review remotes if you've put credentials in non-URL syntax.
+- **Dirty trees still attest.** A non-empty `status` map does not fail the attestor; downstream policy must reject dirty builds explicitly if that is the requirement.
+
+## CLI example
+
+Real `.git/` discovery. Reads HEAD commit, branch, tag, parent SHA, author, signature.
+
+```bash
+cilock run --step git-context \
+  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \
+  --attestations git \
+  -- echo "captured git context" 
+```
+
+Validated against a real git checkout (rookery). Captures real commit metadata. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/05-git](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/05-git).
+
+## See also
+- [Catalog row](../reference/attestor-catalog)
+- Upstream: [witness/git.md](https://github.com/in-toto/witness/blob/main/docs/attestors/git.md)

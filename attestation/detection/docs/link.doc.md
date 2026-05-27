@@ -1,0 +1,74 @@
+---
+title: link
+description: The cilock link attestor synthesizes an in-toto Link v0.3 predicate from the step's command-run, material, product, and environment attestors and signs it into in-toto evidence for legacy verifiers.
+sidebar_position: 7
+examples_repo: 08-link
+---
+
+Emits an [in-toto Link v0.3](https://github.com/in-toto/attestation/blob/main/spec/predicates/link.md) predicate synthesized from the step's `command-run`, `material`, `product`, and `environment` attestors — for compatibility with legacy in-toto verifiers.
+
+## What it captures
+
+This attestor does **not** produce its own predicate type — it produces the upstream in-toto Link predicate. The serialized JSON shape (`attestation/intoto/link.Link`) has these fields:
+
+- `name` — the cilock step name (from `AttestationContext.StepName()`)
+- `command` — `argv` of the executed command, copied from the `command-run` attestor's `cmd` field
+- `materials` — list of [in-toto v1 `ResourceDescriptor`](https://github.com/in-toto/attestation/blob/main/spec/v1/resource_descriptor.md) entries (`name`, `digest`) built from the `material` attestor's pre-execution file digests
+- `environment` — map of environment-variable name → value, copied from the `environment` attestor's filtered `variables`
+- `byproducts` — reserved field in the upstream schema; not populated by the current `Attest()` implementation
+
+Subjects are derived from the `product` attestor: each product path is emitted as `` `file:<path>` `` with its digest set.
+
+## When to use
+
+Enable `link` when a downstream consumer expects raw in-toto Link statements rather than cilock-native predicates — for example, a legacy in-toto verifier, or interop with another supply-chain tool that already knows how to consume `https://in-toto.io/attestation/link/v0.3`. For new pipelines, prefer the dedicated `command-run`, `material`, `product`, and `environment` attestors directly.
+
+## Flags
+
+| Flag | Type | Default | Effect |
+|---|---|---|---|
+| `--attestor-link-export` | bool | `false` | Emit the Link predicate as its own standalone DSSE envelope instead of nesting it inside the cilock collection envelope. |
+
+## Output shape
+
+```json
+{
+  "name": "build",
+  "command": ["go", "build", "./..."],
+  "materials": [
+    {
+      "name": "main.go",
+      "digest": {"sha256": "…"}
+    }
+  ],
+  "environment": {
+    "PATH": "/usr/local/bin:/usr/bin:/bin",
+    "GOOS": "linux"
+  }
+}
+```
+
+## Gotchas
+
+- **Requires sibling attestors.** `link` runs at `postproduct` and only populates fields it can read off `CompletedAttestors()`. If `command-run`, `material`, `product`, or `environment` did not run, the corresponding `command` / `materials` / subjects / `environment` fields are simply empty — no error is raised.
+- **Standalone vs wrapped.** Without `--attestor-link-export`, the Link predicate is wrapped inside the cilock collection alongside the source attestors. With `--attestor-link-export=true`, `Export()` returns true and cilock emits the Link in its own DSSE envelope — useful when feeding it directly to an in-toto verifier.
+- **Duplication.** The Link data is a re-projection of `command-run` + `material` + `product` + `environment`. Enabling `link` does not replace those attestors; it adds a second view of the same evidence.
+- **`byproducts` is not populated** by this implementation even though the upstream schema defines it.
+
+## CLI example
+
+Real in-toto Link statement v0.3 derived from material + product + command-run, with stable byte-identical canonical encoding.
+
+```bash
+cilock run --step link-emit \
+  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \
+  --attestations link \
+  -- make build 
+```
+
+Validated against a real build producing an in-toto Link statement. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/08-link](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/08-link).
+
+## See also
+
+- [Catalog row](../reference/attestor-catalog)
+- Upstream: [witness/link.md](https://github.com/in-toto/witness/blob/main/docs/attestors/link.md)

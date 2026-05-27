@@ -1,0 +1,220 @@
+---
+title: Chef InSpec
+description: Run Chef InSpec (Progress) compliance profiles under cilock — every CIS, custom Ruby, or dev-sec.io scan becomes a signed v0.1 InSpec attestation linked to the profile and target it scanned.
+sidebar_position: 16
+examples_repo: 30-inspec
+---
+
+[Chef InSpec](https://github.com/inspec/inspec) (originally Chef Software, now maintained by [Progress Software](https://www.chef.io/products/chef-inspec) after the 2020 acquisition) is a compliance-as-code framework. You write profiles as Ruby DSL files — `describe` blocks asserting facts about the target — and `inspec exec` runs them against any host reachable over SSH, WinRM, Docker, Kubernetes, or the local filesystem. Under cilock, every `inspec exec` becomes a **signed v0.1 InSpec attestation** carrying the profile name, target platform, and per-control pass/fail/skip counts alongside the raw JSON report.
+
+## Validated invocation
+
+```bash
+cilock run --step inspec-scan \
+  --signer-file-key-path key.pem \
+  --outfile attestation.json \
+  --attestations inspec,environment,git \
+  --enable-archivista=false \
+  -- inspec exec dev-sec/linux-baseline \
+       --reporter json:inspec-results.json \
+       --no-distinct-exit \
+       --chef-license=accept-silent
+```
+
+Three InSpec-specific quirks are baked into that command — each matters for clean attestations:
+
+- **`--reporter json:inspec-results.json`** — InSpec writes the machine-readable JSON to a file in cwd. The `inspec` attestor (a `postproduct` lifecycle attestor) reads that file out of cilock's product set, integrity-checks it against the recorded digest, and parses the profile / platform / per-control results into the predicate.
+- **`--no-distinct-exit`** — InSpec normally exits `100` when controls fail and `101` when only skipped controls remain. Without this flag, the very fact that you ran the scan to surface a finding makes `command-run/v0.1` record a non-zero exit code. `--no-distinct-exit` folds both into a clean `0` while the failed control IDs stay in the JSON (and in the signed `inspec/v0.1` predicate).
+- **`--chef-license=accept-silent`** — InSpec 5+ refuses to run interactively until the license is accepted. Passing the flag silently accepts the community license on the same invocation; without it, the run blocks on a TTY prompt that doesn't exist inside cilock.
+
+## What gets captured
+
+Each cilock run emits an in-toto envelope whose predicate carries the following attestor types:
+
+| Attestor type                                          | Captures                                                              |
+| ------------------------------------------------------ | --------------------------------------------------------------------- |
+| `https://aflock.ai/attestations/command-run/v0.1`      | Real `inspec exec ...` argv, env, exit code, stdout/stderr            |
+| `https://aflock.ai/attestations/material/v0.3`         | Merkle tree of inputs (profile sources, custom Ruby controls, fixtures) |
+| `https://aflock.ai/attestations/product/v0.3`          | Merkle tree of outputs, including `inspec-results.json`               |
+| `https://aflock.ai/attestations/inspec/v0.1`           | Profile name, platform `<name>-<release>`, pass/fail/skip counts, failed control IDs |
+| `https://aflock.ai/attestations/environment/v0.1`      | OS, arch, user, env vars (PII-filtered)                               |
+| `https://aflock.ai/attestations/git/v0.1`              | Commit SHA, branch, remotes                                           |
+
+The `inspec/v0.1` predicate's `reportDigestSet.sha256` exactly matches the digest of the `inspec-results.json` leaf in the `product/v0.3` tree. That chain is what makes the compliance findings verifiable — you can't swap in a clean JSON without invalidating the product tree. Each failed control ID also becomes a subject (`inspec:control:<id>`) so a downstream Rego policy can gate on specific rule failures.
+
+## Why this shape
+
+| Antipattern                                                      | This page                                                        |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `cilock run ... -- bash -c "cp inspec-out.json product.json"`    | `cilock run ... -- inspec exec <profile> --reporter json:...`    |
+| `command-run` records `bash -c "cp ..."` — useless               | `command-run` records the real `inspec exec` argv                |
+| Product attestor digests the `cp` destination                    | Product attestor digests InSpec's actual output file             |
+| Tool execution happens outside the attestation                   | InSpec runs inside cilock; spy traces its syscalls and target connections |
+
+cilock invokes `inspec exec` **directly** — no `bash -c` wrapper. That preserves the real argv in `command-run` (including the profile reference and target backend), and lets the spy attestors observe every file InSpec read and every report it wrote. The `inspec` attestor then picks the JSON file out of the products map, re-hashes it, and parses it.
+
+## Validate it locally
+
+```bash
+# Generate a signing key (one-time).
+openssl genpkey -algorithm ed25519 -out key.pem
+
+# Run cilock + inspec exec against a profile (dev-sec/linux-baseline shown here;
+# substitute any local path, git URL, or Automate-hosted profile reference).
+cilock run --step inspec-scan \
+  --signer-file-key-path key.pem \
+  --outfile attestation.json \
+  --attestations inspec,environment,git \
+  --enable-archivista=false \
+  -- inspec exec dev-sec/linux-baseline \
+       --reporter json:inspec-results.json \
+       --no-distinct-exit \
+       --chef-license=accept-silent
+
+# Confirm the predicate carries the expected attestor types.
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations | map(.type)'
+```
+
+Expected output:
+
+```json
+[
+  "https://aflock.ai/attestations/environment/v0.1",
+  "https://aflock.ai/attestations/git/v0.1",
+  "https://aflock.ai/attestations/material/v0.3",
+  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/product/v0.3",
+  "https://aflock.ai/attestations/inspec/v0.1"
+]
+```
+
+```bash
+# Confirm InSpec's real argv ended up in command-run.
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations[]
+        | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+        | .attestation.cmd'
+```
+
+Expected output (literal InSpec argv — proof the `cp` antipattern is gone):
+
+```json
+[
+  "inspec",
+  "exec",
+  "dev-sec/linux-baseline",
+  "--reporter",
+  "json:inspec-results.json",
+  "--no-distinct-exit",
+  "--chef-license=accept-silent"
+]
+```
+
+```bash
+# Pull the compliance roll-up out of the inspec attestor.
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations[]
+        | select(.type=="https://aflock.ai/attestations/inspec/v0.1")
+        | .attestation
+        | {reportFile,
+           digest: .reportDigestSet.sha256,
+           profile: .scanSummary.profileName,
+           platform: .scanSummary.platform,
+           total: .scanSummary.totalControls,
+           failed: .scanSummary.failedControls,
+           failedIds: [.scanSummary.failedDetails[].id]}'
+```
+
+Against the [`30-inspec`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/30-inspec) example (real `dev-sec/linux-baseline` scan on an AL2023 EC2 host) this surfaces the profile name (`linux-baseline`), the platform (`amazon-2023`), the total / failed control counts, and the IDs of every failed control — feeding directly into a `cilock verify` Rego gate.
+
+## How a verifier consumes this
+
+The `inspec` attestor is a `postproduct` lifecycle attestor with predicate type `https://aflock.ai/attestations/inspec/v0.1`. It does not shell out to `inspec`; it reads a pre-existing JSON report from the step's products. It populates three top-level fields:
+
+- `reportFile` — path of the InSpec JSON file picked up from products.
+- `reportDigestSet` — digest set of that file, integrity-checked against the product entry before parsing.
+- `scanSummary` — structured roll-up of the report:
+  - `profileName` — name of the first profile in the report.
+  - `platform` — `<name>-<release>` from the InSpec `platform` block (just `<name>` if release is empty).
+  - `totalControls`, `passedControls`, `failedControls`, `skippedControls` — aggregate counts.
+  - `failedDetails[]` — `{ id, title, profile }` for every control with at least one failing result.
+
+Subjects published:
+
+- `platform:<name>-<release>`
+- `profile:<profile-name>` for each profile in the report.
+- `inspec:control:<id>` for each control with a failing result.
+
+Pair this attestor with [`policyverify`](./policyverify) to gate promotion on `failedControls == 0`.
+
+### Output shape
+
+```json
+{
+  "reportFile": "results/inspec.json",
+  "reportDigestSet": { "sha256": "..." },
+  "scanSummary": {
+    "profileName": "cis-ubuntu-22.04",
+    "platform": "ubuntu-22.04",
+    "totalControls": 142,
+    "passedControls": 130,
+    "failedControls": 4,
+    "skippedControls": 8,
+    "failedDetails": [
+      { "id": "xccdf_org.cisecurity.benchmarks_rule_1.1.1.1", "title": "Disable cramfs", "profile": "cis-ubuntu-22.04" }
+    ]
+  }
+}
+```
+
+## Notes
+
+- **Profile selection.** InSpec accepts a profile as a local path (`./my-profile`), a git URL (`https://github.com/dev-sec/linux-baseline`), a [Chef Supermarket](https://supermarket.chef.io) shortname (`dev-sec/linux-baseline`, `dev-sec/ssh-baseline`), an Automate-hosted reference, or a `.tar.gz` archive. The community CIS profiles maintained by the [dev-sec.io](https://dev-sec.io) project are the most common starting point — they cover Linux baseline, SSH, NGINX, Apache, MySQL, PostgreSQL, and Windows. The same cilock invocation works for any of them; only the profile argument changes.
+- **Target backends.** InSpec scans whatever target `-t` points at: `-t ssh://user@host` (SSH, key-auth recommended), `-t winrm://user@host` (Windows), `-t docker://<container-id>` (running container), `-t podman://<container-id>`, `-t k8s://<context>`, `-t aws://<region>` / `-t azure://` / `-t gcp://` (cloud-resource scanning), or omitted (local target). cilock is target-agnostic — it captures whatever the InSpec backend produces. The `--no-distinct-exit` and `--reporter json:...` flags apply uniformly.
+- **Reporter formats.** InSpec supports `cli` (human), `json`, `json-min`, `junit`, `html`, `progress`, `documentation`, `yaml`, and `automate` reporters; multiples can stack (`--reporter cli json:results.json junit:results.xml`). Only the `json` reporter (or `json-min`) is parsed by the `inspec` attestor — the others ride along in the product Merkle tree as opaque files for human review.
+- **Custom Ruby profiles.** Profile sources are inputs, so anything in your local profile directory (Ruby `controls/*.rb` files, custom resources, libraries, attribute files) gets digested into `material/v0.3`. Findings produced by custom controls flow into the same `inspec/v0.1` predicate as findings from upstream rules — your in-house compliance rules are attested alongside the dev-sec.io / CIS ones.
+- **License model.** The InSpec engine itself is Apache-2.0, but newer releases ship under Progress's commercial agreement; the `--chef-license=accept-silent` flag covers the community use case. If you're running under a Progress commercial license, the same flag still works — the license is consumed locally and does not appear in the captured attestation.
+- **Chef → Progress rename.** The tool is still binary-named `inspec` and the GitHub org is still `inspec/inspec`; only the corporate ownership changed. Documentation and marketing copy increasingly say "Progress Chef InSpec," but the CLI surface this page documents is stable.
+
+## Gotchas
+
+- **Does not shell out to `inspec`.** The attestor reads a pre-existing JSON report from products; you must run `inspec exec --reporter json:<path>` (or equivalent) in a prior step and surface the file as a product.
+- **MIME filter.** Only products with MIME type `text/plain` or `application/json` are considered; reports written with other types are skipped.
+- **Shape detection.** A candidate must parse as JSON and contain a non-empty `profiles` array, otherwise it is rejected as "not an InSpec report".
+- **Digest integrity.** The file is re-hashed and compared against the product digest before parsing; a mismatch causes that candidate to be skipped.
+- **First match wins.** Iteration order over products is non-deterministic; if multiple files look like InSpec reports, only the first accepted one is attested.
+- **Control outcome.** A control is `failed` if any result has status `failed`; `skipped` if it has no results or every result is `skipped`; otherwise `passed`. Only failing control IDs become subjects.
+- **`profileName` in the summary** is taken from the first profile only, even when the report contains multiple.
+
+## FAQ
+
+### Does cilock support Chef InSpec?
+
+Yes. Cilock invokes the upstream `inspec` binary unchanged and captures its JSON reporter output via the native [`inspec` attestor](../attestors/inspec), which emits a `https://aflock.ai/attestations/inspec/v0.1` predicate. No InSpec fork, no plugin install — InSpec is treated as a normal tool that happens to write a documented JSON schema cilock knows how to parse.
+
+### Which targets can InSpec scan under cilock?
+
+All of them — local (`-t local://`, the default), SSH (`-t ssh://`), WinRM (`-t winrm://`), Docker / Podman containers (`-t docker://`, `-t podman://`), Kubernetes (`-t k8s://`), and the major cloud providers (`-t aws://`, `-t azure://`, `-t gcp://`). cilock is target-agnostic: it captures whatever the InSpec backend produces. The same flags (`--reporter json:...`, `--no-distinct-exit`) apply uniformly.
+
+### Can I write custom Ruby controls?
+
+Yes — custom controls work exactly as they do without cilock. Drop your `controls/*.rb` files into a profile directory, point `inspec exec` at it, and the findings flow into the same `inspec/v0.1` predicate alongside any upstream rules. The custom control sources themselves get digested into `material/v0.3`, so a verifier can prove which version of which control produced each finding.
+
+### Why `--no-distinct-exit`?
+
+InSpec exits `100` when any control fails and `101` when only skipped controls remain. Without `--no-distinct-exit`, `command-run/v0.1` records a non-zero exit code on every scan that surfaces a real finding — which makes downstream tooling treat the scan itself as broken. The flag folds 100/101 back to 0; the failed control IDs still ride in the signed `inspec/v0.1` attestation, and the gate belongs at `cilock verify` time (a Rego policy over `failedControls`), not at scan time.
+
+### How does InSpec compare to OpenSCAP / `oscap`?
+
+Both are compliance scanners; the differences are the rule language, the ecosystem, and the target shape. OpenSCAP consumes [SCAP](https://csrc.nist.gov/projects/security-content-automation-protocol) content (XCCDF / OVAL XML, mostly Red Hat / SCAP-Security-Guide profiles) and is best for Linux baseline scans. InSpec consumes Ruby DSL profiles, ships a much larger community library (dev-sec.io, CIS, vendor-specific), and natively scans remote SSH / WinRM / cloud-API targets that OpenSCAP can't reach. Cilock has [a native attestor for each](../attestors/oscap) — pick the tool that matches your existing compliance content, not the attestor.
+
+## See also
+
+- [`oscap` tool integration](../attestors/oscap) — sibling compliance scanner with the same `cilock verify` gating pattern
+- [Validated example: `30-inspec`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/30-inspec) — real `dev-sec/linux-baseline` scan against an AL2023 EC2 host
+- [Chef InSpec upstream](https://github.com/inspec/inspec) — the tool itself, maintained by Progress Software
+- [dev-sec.io community profiles](https://dev-sec.io) — Linux, SSH, NGINX, Apache, MySQL, PostgreSQL, Windows hardening baselines
+- [`kube-bench`](./kube-bench), [`oscap`](./oscap), [`prowler`](./prowler)
+- Upstream: [witness/inspec.md](https://github.com/in-toto/witness/blob/main/docs/attestors/inspec.md)
+- [Tools index](./index)

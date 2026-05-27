@@ -77,7 +77,7 @@ func runList(_ context.Context) error {
 		name := entry.Factory().Name()
 
 		for _, a := range alwaysRunAttestors {
-			if name == a.Name() || name == "command-run" {
+			if name == a.Name() || name == attestorCommandRun {
 				name = name + " (always run)"
 			}
 		}

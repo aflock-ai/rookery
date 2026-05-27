@@ -675,7 +675,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	}
 
 	for _, a := range ro.Attestations {
-		if a == "command-run" {
+		if a == attestorCommandRun {
 			log.Warnf("'command-run' is a builtin attestor and cannot be called with --attestations flag")
 			continue
 		}
