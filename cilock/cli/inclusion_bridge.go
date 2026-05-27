@@ -35,6 +35,12 @@ const (
 type treeCommitment struct {
 	rootHex  string
 	treeSize uint64
+	// leaves is the per-file (path → fileDigest) set carried inline in the
+	// product/material v0.3 predicate by default. Empty when the producer set
+	// WithSuppressInlineLeaves; in that case the single-leaf reconstruct and
+	// inclusion-proof paths still apply. NEVER trusted without first
+	// reconstructing the tree and confirming it folds back to rootHex.
+	leaves map[string]string
 }
 
 // expandSubjectsWithInclusionProofs bridges a primary artifact (a plain file
@@ -44,13 +50,27 @@ type treeCommitment struct {
 // The verifier matches collections to a step by subject digest. A binary
 // committed as a product carries the tree ROOT as the collection subject,
 // not its own file hash, so `cilock verify <binary>` finds nothing. This
-// pass repairs that: for each signed inclusion-proof envelope whose
-// FileDigest matches a requested artifact subject, it RFC 6962-verifies the
-// audit path against the trusted (root, treeSize) of a loaded collection's
-// product/material tree, and on success adds that tree root as an additional
-// subject — so the collection now matches.
+// pass repairs that with three resolution paths, in order of generality:
+//
+//   - Inline leaves (default): product/material v0.3 predicates embed the
+//     per-file leaves. A requested digest matching a leaf is provably in the
+//     tree once the leaves reconstruct to the signed root — no path, no
+//     sidecar, no inclusion-proof envelope. Resolves any file of a multi-file
+//     build from the signed collection alone.
+//   - Single-leaf reconstruct: when leaves are suppressed but the artifact is
+//     the SOLE product (treeSize==1), the root IS the leaf hash; reconstruct
+//     it from (basename, digest). Needs the artifact path.
+//   - Inclusion-proof envelope: for suppressed leaves / selective disclosure,
+//     RFC 6962-verify a separate proof's audit path against the trusted
+//     (root, treeSize).
+//
+// On success each path adds the tree root as an additional subject so the
+// collection now matches.
 //
 // Safety:
+//   - Inline leaves are reconstructed via the canonical BuildSidecar and the
+//     recomputed root MUST equal the collection's signed root, fail closed
+//     (mirrors product/material.VerifyInlineLeaves).
 //   - treeSize and root come from the collection's predicate (CVE-2026-22703).
 //   - The audit-path check (inclusionproof.Attestor.Verify) means forging
 //     inclusion of a file NOT in the tree is a Merkle second-preimage attack.
@@ -101,9 +121,20 @@ func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelope
 				var tree struct {
 					MerkleRoot string `json:"merkleRoot"`
 					TreeSize   uint64 `json:"treeSize"`
+					Leaves     []struct {
+						Path       string `json:"path"`
+						FileDigest string `json:"fileDigest"`
+					} `json:"leaves"`
 				}
 				if err := json.Unmarshal(a.Attestation, &tree); err == nil && tree.MerkleRoot != "" && tree.TreeSize > 0 {
-					commitments = append(commitments, treeCommitment{rootHex: tree.MerkleRoot, treeSize: tree.TreeSize})
+					tc := treeCommitment{rootHex: tree.MerkleRoot, treeSize: tree.TreeSize}
+					if len(tree.Leaves) > 0 {
+						tc.leaves = make(map[string]string, len(tree.Leaves))
+						for _, lf := range tree.Leaves {
+							tc.leaves[lf.Path] = lf.FileDigest
+						}
+					}
+					commitments = append(commitments, tc)
 				}
 			}
 		case inclusionproof.Type:
@@ -139,6 +170,44 @@ func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelope
 					subjects = append(subjects, cryptoutil.DigestSet{{Hash: crypto.SHA256}: c.rootHex})
 					log.Debugf("inclusion-proof bridge: single-leaf artifact %s reconstructs product tree %s; added as subject", artifactDigestHex, c.rootHex)
 				}
+			}
+		}
+	}
+
+	// Inline-leaf resolution (no sidecar, no inclusion-proof envelope, no
+	// artifact path required): product/material v0.3 predicates embed the
+	// per-file leaves BY DEFAULT, so a requested artifact digest can be matched
+	// to a leaf straight from the collection — the common case for verifying
+	// any one file of a multi-file build with nothing but the signed envelope.
+	// Before trusting any leaf we reconstruct the tree from the inline leaves
+	// via the canonical BuildSidecar (the exact producer encoding — "source" is
+	// metadata only and does not affect the root) and REQUIRE the recomputed
+	// root to equal the collection's signed root. Fail closed on mismatch,
+	// mirroring product/material.VerifyInlineLeaves: this guards against a
+	// signer — or a bug — shipping leaves that don't fold to the committed root,
+	// which would otherwise let a file be "verified" against attacker-chosen
+	// data. Adding the root grants no trust on its own; the matched collection's
+	// signature is still checked against the step functionary downstream.
+	for i := range commitments {
+		c := commitments[i]
+		if len(c.leaves) == 0 || added[c.rootHex] {
+			continue
+		}
+		side, err := inclusionproof.BuildSidecar("product", c.leaves)
+		if err != nil {
+			log.Debugf("inclusion-proof bridge: reconstruct inline leaves for tree %s: %v", c.rootHex, err)
+			continue
+		}
+		if side.MerkleRoot != c.rootHex {
+			log.Debugf("inclusion-proof bridge: inline leaves for tree %s reconstruct to %s, not the signed root; ignoring", c.rootHex, side.MerkleRoot)
+			continue
+		}
+		for _, lf := range side.Leaves {
+			if requested[lf.FileDigest] {
+				added[c.rootHex] = true
+				subjects = append(subjects, cryptoutil.DigestSet{{Hash: crypto.SHA256}: c.rootHex})
+				log.Debugf("inclusion-proof bridge: artifact %s matched inline leaf %q in product tree %s; added tree root as subject", lf.FileDigest, lf.Path, c.rootHex)
+				break
 			}
 		}
 	}
