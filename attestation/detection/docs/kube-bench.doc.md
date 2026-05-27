@@ -89,5 +89,5 @@ See the constraint summary + reproduction recipe at [https://github.com/aflock-a
 
 - [Catalog row](../reference/attestor-catalog)
 - [Build from source](../getting-started/installation#4-build-from-source)
-- [`docker-bench`](./docker-bench), [`inspec`](./inspec)
+- [`inspec`](./inspec)
 - Upstream: [witness/kube-bench.md](https://github.com/in-toto/witness/blob/main/docs/attestors/kube-bench.md)

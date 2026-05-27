@@ -32,7 +32,7 @@ A single run with `--attestations sarif,environment,git` produces these predicat
 - `https://aflock.ai/attestations/material/v0.3` — Merkle hashes of every input file Trivy read.
 - `https://aflock.ai/attestations/product/v0.3` — Merkle hash of `trivy.sarif` as written by the run.
 - `https://aflock.ai/attestations/sarif/v0.1` — structured parse of the SARIF report, ready for policy.
-- `https://aflock.ai/attestations/environment/v0.1` — host OS, kernel, env vars (with redaction).
+- `https://aflock.ai/attestations/environment/v0.1` — host OS, hostname, username, env vars (with redaction).
 - `https://aflock.ai/attestations/git/v0.1` — repo commit, branch, dirty/clean state.
 
 ## Why this shape

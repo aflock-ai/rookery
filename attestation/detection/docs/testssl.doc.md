@@ -35,7 +35,7 @@ This is the exact command exercised in [`tool-testssl-sarif`](https://github.com
 
 | Predicate type | Source |
 |---|---|
-| `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
+| `https://aflock.ai/attestations/environment/v0.1` | host OS, hostname, username, env vars (sensitive ones obfuscated) |
 | `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, tags, dirty status |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle root over the working tree before the scan |
 | `https://aflock.ai/attestations/command-run/v0.1` | literal `testssl.sh --jsonfile-pretty testssl.json --quiet <target>` argv + exit code |
