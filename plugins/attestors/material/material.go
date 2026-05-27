@@ -202,6 +202,17 @@ type Attestor struct {
 	// the walker produced; consumers that need a portable form can
 	// use the leaves slice instead. Not marshaled.
 	materials map[string]cryptoutil.DigestSet `json:"-"`
+
+	// suppressInlineLeaves opts OUT of embedding per-file leaves in the signed
+	// predicate (default is to inline them). Set via WithSuppressInlineLeaves
+	// for size-sensitive material sets that ship a separate sidecar instead.
+	suppressInlineLeaves bool
+}
+
+// WithSuppressInlineLeaves opts OUT of embedding per-file leaves in the signed
+// predicate. Default inlines them (self-sufficient attestation).
+func WithSuppressInlineLeaves(suppress bool) Option {
+	return func(a *Attestor) { a.suppressInlineLeaves = suppress }
 }
 
 // MaterialLeaf is one (path, file-digest, leaf-hash) triple. The leaf
@@ -489,16 +500,41 @@ func decodeLeafHashes(leaves []MaterialLeaf) ([][]byte, error) {
 // the schema remains a stable, documented contract independent of
 // struct-field reordering.
 func (a *Attestor) MarshalJSON() ([]byte, error) {
+	// Inline the per-file leaves into the signed predicate by default so the
+	// attestation is self-sufficient for inclusion + artifactsFrom chain
+	// verification without a separate sidecar. Only the Merkle root is a
+	// subject, so the leaves add no subject re-indexing cost. Opt out with
+	// WithSuppressInlineLeaves(true) for size-sensitive material sets.
+	// A pointer lets us distinguish three states on the wire, which the
+	// verifier's vacuous-pass defense relies on:
+	//   - suppressed              -> nil pointer -> "leaves" omitted (leaf-less)
+	//   - inline, has materials   -> "leaves":[...]
+	//   - inline, zero materials  -> "leaves":[]  (authoritative empty)
+	// The empty-but-present case is the key one: it is a SIGNED commitment that
+	// the step consumed nothing (e.g. a build in an isolated workingdir), which
+	// the engine must trust rather than fail closed on. With omitempty, an empty
+	// set would serialize identically to a leaf-less v0.3 attestation, and the
+	// verifier could not tell "provably empty" from "materials hidden".
+	var leaves *[]MaterialLeaf
+	if !a.suppressInlineLeaves {
+		ls := a.leaves
+		if ls == nil {
+			ls = []MaterialLeaf{}
+		}
+		leaves = &ls
+	}
 	return json.Marshal(struct {
-		MerkleRoot         string `json:"merkleRoot"`
-		TreeSize           uint64 `json:"treeSize"`
-		HashAlgorithmField string `json:"hashAlgorithm"`
-		ConstructionField  string `json:"construction"`
+		MerkleRoot         string          `json:"merkleRoot"`
+		TreeSize           uint64          `json:"treeSize"`
+		HashAlgorithmField string          `json:"hashAlgorithm"`
+		ConstructionField  string          `json:"construction"`
+		Leaves             *[]MaterialLeaf `json:"leaves,omitempty"`
 	}{
 		MerkleRoot:         a.MerkleRoot,
 		TreeSize:           a.TreeSize,
 		HashAlgorithmField: a.HashAlgorithmField,
 		ConstructionField:  a.ConstructionField,
+		Leaves:             leaves,
 	})
 }
 
@@ -506,10 +542,11 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 // leaves are not reconstructed — they live in the sidecar.
 func (a *Attestor) UnmarshalJSON(data []byte) error {
 	aux := struct {
-		MerkleRoot         string `json:"merkleRoot"`
-		TreeSize           uint64 `json:"treeSize"`
-		HashAlgorithmField string `json:"hashAlgorithm"`
-		ConstructionField  string `json:"construction"`
+		MerkleRoot         string          `json:"merkleRoot"`
+		TreeSize           uint64          `json:"treeSize"`
+		HashAlgorithmField string          `json:"hashAlgorithm"`
+		ConstructionField  string          `json:"construction"`
+		Leaves             *[]MaterialLeaf `json:"leaves,omitempty"`
 	}{}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
@@ -518,8 +555,35 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 	a.TreeSize = aux.TreeSize
 	a.HashAlgorithmField = aux.HashAlgorithmField
 	a.ConstructionField = aux.ConstructionField
+
+	// Restore inline leaves and rehydrate the materials map so a verifier
+	// loading this attestation from JSON can match artifactsFrom edges by
+	// digest without a chain sidecar. A present "leaves" key (even empty) means
+	// the materials are inline and authoritative; an absent key means the
+	// attestation is leaf-less (suppressed / legacy v0.3) and the sidecar
+	// fallback applies. HasInlineLeaves() distinguishes the two via a.leaves
+	// being non-nil, so we keep an empty present set as a non-nil empty slice.
+	if aux.Leaves != nil {
+		a.leaves = *aux.Leaves
+		if a.leaves == nil {
+			a.leaves = []MaterialLeaf{}
+		}
+		a.materials = make(map[string]cryptoutil.DigestSet, len(a.leaves))
+		for _, lf := range a.leaves {
+			a.materials[lf.Path] = cryptoutil.DigestSet{{Hash: crypto.SHA256}: lf.FileDigest}
+		}
+	} else {
+		a.leaves = nil
+	}
 	return nil
 }
+
+// HasInlineLeaves reports whether this attestation committed its material
+// leaves inline (a present "leaves" key, even when empty). The engine uses it
+// to tell a signed empty-material commitment (trustworthy: the step provably
+// consumed nothing) from a leaf-less attestation whose empty Materials() is
+// merely unknown (the vacuous-pass surface that must fail closed under strict).
+func (a *Attestor) HasInlineLeaves() bool { return a.leaves != nil }
 
 // Materials returns the per-file (path → DigestSet) map. Preserved for
 // the Materialer interface so slsa and link attestors keep working
@@ -527,6 +591,29 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 // downstream attestors must consume it during the same run.
 func (a *Attestor) Materials() map[string]cryptoutil.DigestSet {
 	return a.materials
+}
+
+// VerifyInlineLeaves confirms the inline leaves reconstruct to the signed
+// MerkleRoot. Callers MUST run this before trusting Materials() rehydrated
+// from inline leaves for sidecar-free artifactsFrom chain verification — it
+// guards against a signer (or bug) committing a root that doesn't match the
+// leaves shipped. Returns nil when there are no inline leaves.
+func (a *Attestor) VerifyInlineLeaves() error {
+	if len(a.leaves) == 0 {
+		return nil
+	}
+	digests := make(map[string]string, len(a.leaves))
+	for _, lf := range a.leaves {
+		digests[lf.Path] = lf.FileDigest
+	}
+	side, err := inclusionproof.BuildSidecar("material", digests)
+	if err != nil {
+		return fmt.Errorf("material: reconstruct inline leaves: %w", err)
+	}
+	if side.MerkleRoot != a.MerkleRoot {
+		return fmt.Errorf("material: inline leaves reconstruct to root %s but signed merkleRoot is %s", side.MerkleRoot, a.MerkleRoot)
+	}
+	return nil
 }
 
 // Subjects returns the in-toto subject set. v0.3 emits exactly ONE
