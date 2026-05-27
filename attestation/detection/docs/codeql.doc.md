@@ -36,7 +36,7 @@ This is the exact command exercised in [`tool-codeql-sarif`](https://github.com/
 
 | Predicate type | Source |
 |---|---|
-| `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
+| `https://aflock.ai/attestations/environment/v0.1` | host OS, hostname, username, env vars (sensitive ones obfuscated) |
 | `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, tags, dirty status, parents |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle root over the source tree + CodeQL database before analyze runs |
 | `https://aflock.ai/attestations/command-run/v0.1` | literal `codeql database analyze …` argv + exit code + ptrace |

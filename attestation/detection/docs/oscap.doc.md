@@ -38,7 +38,7 @@ Each cilock run emits an in-toto envelope whose predicate carries the following 
 | `https://aflock.ai/attestations/material/v0.3`         | Merkle tree of inputs (the SSG datastream XML is read, not in cwd)        |
 | `https://aflock.ai/attestations/product/v0.3`          | Merkle tree of outputs, including `oscap-results.xml`                     |
 | `https://aflock.ai/attestations/oscap/v0.1`            | Parsed XCCDF: profile, benchmark, target host, per-result counts, failed-rule list, `reportDigestSet.sha256` |
-| `https://aflock.ai/attestations/environment/v0.1`      | OS, arch, user, env vars (PII-filtered)                                   |
+| `https://aflock.ai/attestations/environment/v0.1`      | OS, hostname, user, env vars (PII-filtered)                               |
 | `https://aflock.ai/attestations/git/v0.1`              | Commit SHA, branch, remotes                                               |
 
 The `oscap/v0.1` predicate's `reportDigestSet.sha256` exactly matches the digest of the `oscap-results.xml` leaf in the `product/v0.3` tree. That is the chain that makes the findings verifiable — you can't swap in a different XCCDF report without invalidating the product tree. The `oscap` attestor also publishes three SHA-256 subjects on the envelope: `profile:<profile-id>`, `host:<target-hostname>`, and `benchmark:<benchmark-id>`, so a policy can pin "this attestation is the STIG scan for *this* host."

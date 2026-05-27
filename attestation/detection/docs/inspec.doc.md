@@ -37,7 +37,7 @@ Each cilock run emits an in-toto envelope whose predicate carries the following 
 | `https://aflock.ai/attestations/material/v0.3`         | Merkle tree of inputs (profile sources, custom Ruby controls, fixtures) |
 | `https://aflock.ai/attestations/product/v0.3`          | Merkle tree of outputs, including `inspec-results.json`               |
 | `https://aflock.ai/attestations/inspec/v0.1`           | Profile name, platform `<name>-<release>`, pass/fail/skip counts, failed control IDs |
-| `https://aflock.ai/attestations/environment/v0.1`      | OS, arch, user, env vars (PII-filtered)                               |
+| `https://aflock.ai/attestations/environment/v0.1`      | OS, hostname, user, env vars (PII-filtered)                           |
 | `https://aflock.ai/attestations/git/v0.1`              | Commit SHA, branch, remotes                                           |
 
 The `inspec/v0.1` predicate's `reportDigestSet.sha256` exactly matches the digest of the `inspec-results.json` leaf in the `product/v0.3` tree. That chain is what makes the compliance findings verifiable — you can't swap in a clean JSON without invalidating the product tree. Each failed control ID also becomes a subject (`inspec:control:<id>`) so a downstream Rego policy can gate on specific rule failures.

@@ -157,7 +157,7 @@ cilock run --step my-step \
   -- make build
 ```
 
-The signed `attestation.json` and the unsigned `attestation.tree.json` sidecar both land in the working directory after the run completes.
+The signed `attestation.json` and the unsigned `attestation.product.tree.json` / `attestation.material.tree.json` sidecars all land in the working directory after the run completes.
 
 ## See also
 
