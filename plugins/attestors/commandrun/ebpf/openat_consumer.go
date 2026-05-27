@@ -318,12 +318,9 @@ type Consumer struct {
 	links          []link.Link
 	reader         *ringbuf.Reader
 	readRec        ringbuf.Record // reused across Read() calls (single consumer)
-	readTapReader  *ringbuf.Reader
-	readTapRec     ringbuf.Record // reused across ReadReadTap() calls
 	watchedPids    *ebpf.Map      // BPF_MAP_TYPE_HASH: pid -> 1
 	filterFlag     *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte
 	rootParentTgid *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: u32
-	readTapFlag    *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte (V1.4 read-tap)
 	ringbufDrops   *ebpf.Map      // BPF_MAP_TYPE_PERCPU_ARRAY[2]: u64 drop counters
 }
 
@@ -359,6 +356,17 @@ func Open() (*Consumer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load BPF spec: %w", err)
 	}
+
+	// The read-tap is permanently off (its content path is removed), so
+	// nothing is ever emitted to read_tap_events. The compiled-in 1 GiB
+	// size is pure wasted allocation — shrink it to one page at load. (The
+	// map itself stays until the BPF object is recompiled without it.)
+	if m, ok := spec.Maps["read_tap_events"]; ok {
+		m.MaxEntries = 4096
+	}
+	// Allow tuning the classification-event ringbuf for memory-constrained
+	// hosts; no-op unless the env var is set.
+	resizeRingbufFromEnv(spec, "events", "CILOCK_EBPF_EVENTS_RINGBUF_BYTES")
 
 	// Rebuild-on-CO-RE-failure: try the embedded .bpf.o first; if it
 	// poisons (kernel BTF mismatch), rebuild from the embedded source
@@ -613,17 +621,6 @@ func Open() (*Consumer, error) {
 	}
 	c.reader = r
 
-	// read_tap_events ringbuf: only present when the BPF object
-	// includes V1.4 read-tap. Older builds may not export it.
-	if rtMap, ok := coll.Maps["read_tap_events"]; ok {
-		rt, err := ringbuf.NewReader(rtMap)
-		if err != nil {
-			_ = c.Close()
-			return nil, fmt.Errorf("read_tap_events ringbuf reader: %w", err)
-		}
-		c.readTapReader = rt
-	}
-
 	watched, ok := coll.Maps["watched_pids"]
 	if !ok {
 		_ = c.Close()
@@ -645,12 +642,6 @@ func Open() (*Consumer, error) {
 	}
 	c.rootParentTgid = root
 
-	// V1.4 read-tap toggle map. Optional — older .bpf.o without
-	// read-tap programs won't expose this map, in which case
-	// EnableReadTap returns an error and the caller falls back.
-	if rt, ok := coll.Maps["read_tap_enabled"]; ok {
-		c.readTapFlag = rt
-	}
 	if drops, ok := coll.Maps["ringbuf_drops"]; ok {
 		c.ringbufDrops = drops
 	}
@@ -773,33 +764,6 @@ func (c *Consumer) DisableFilter() error {
 	zero := uint32(0)
 	off := uint8(0)
 	return c.filterFlag.Update(&zero, &off, ebpf.UpdateAny)
-}
-
-// EnableReadTap turns on the V1.4 read-tap. With it enabled, the
-// read/pread64 kprobes copy up to 16 KB from the user buffer per
-// syscall and emit EVT_READ_CHUNK / EVT_CLOSE events the caller
-// streams into a per-(pid, fd) SHA-256. See bpf source for the
-// threat model — tamper-proof vs the calling thread and external
-// procs, NOT vs sibling threads sharing the address space.
-func (c *Consumer) EnableReadTap() error {
-	if c == nil || c.readTapFlag == nil {
-		return fmt.Errorf("read-tap not available (BPF object too old?)")
-	}
-	zero := uint32(0)
-	on := uint8(1)
-	return c.readTapFlag.Update(&zero, &on, ebpf.UpdateAny)
-}
-
-// DisableReadTap turns the read-tap off. Existing in-flight stash
-// entries get cleared by the kretprobe on syscall exit; no draining
-// needed on the caller side.
-func (c *Consumer) DisableReadTap() error {
-	if c == nil || c.readTapFlag == nil {
-		return nil
-	}
-	zero := uint32(0)
-	off := uint8(0)
-	return c.readTapFlag.Update(&zero, &off, ebpf.UpdateAny)
 }
 
 // unameKernelVersionCode returns the running kernel version encoded
@@ -1029,40 +993,6 @@ func (c *Consumer) Read() (*Event, error) {
 	}
 	return decodeEvent(c.readRec.RawSample)
 }
-
-// ReadReadTap blocks until the next read-tap chunk event is
-// available on the read_tap_events ringbuf, then decodes it.
-// Returns the same errors as Read() (os.ErrDeadlineExceeded after a
-// SetReadDeadline; ringbuf.ErrFlushed after Flush()).
-//
-// Single-consumer guarantee per ringbuf: callers must drain
-// read_tap_events from a SEPARATE goroutine than the one draining
-// `events` via Read(). The returned Event.ReadChunk.Data points into
-// readTapRec's reusable backing buffer; consume before the next call.
-//
-// Returns (nil, ErrReadTapUnavailable) if the BPF object didn't
-// export read_tap_events (e.g. older builds without V1.4).
-func (c *Consumer) ReadReadTap() (*Event, error) {
-	if c.readTapReader == nil {
-		return nil, ErrReadTapUnavailable
-	}
-	if err := c.readTapReader.ReadInto(&c.readTapRec); err != nil {
-		return nil, err
-	}
-	return decodeEvent(c.readTapRec.RawSample)
-}
-
-// HasReadTap reports whether the BPF object exposed the
-// read_tap_events ringbuf. Callers gate their second consumer
-// goroutine on this.
-func (c *Consumer) HasReadTap() bool {
-	return c != nil && c.readTapReader != nil
-}
-
-// ErrReadTapUnavailable is returned by ReadReadTap when the BPF
-// object did not include the read_tap_events ringbuf map. Callers
-// should not spawn the second consumer goroutine in this case.
-var ErrReadTapUnavailable = fmt.Errorf("read_tap_events ringbuf not present in BPF object")
 
 // decodeEvent dispatches a raw ring-buffer record on its leading
 // event_type field (first 4 bytes, little-endian).
@@ -1339,11 +1269,6 @@ func (c *Consumer) Flush() error {
 			firstErr = err
 		}
 	}
-	if c.readTapReader != nil {
-		if err := c.readTapReader.Flush(); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
 	return firstErr
 }
 
@@ -1366,10 +1291,6 @@ func (c *Consumer) Close() error {
 	if c.reader != nil {
 		_ = c.reader.Close()
 		c.reader = nil
-	}
-	if c.readTapReader != nil {
-		_ = c.readTapReader.Close()
-		c.readTapReader = nil
 	}
 	if c.coll != nil {
 		c.coll.Close()

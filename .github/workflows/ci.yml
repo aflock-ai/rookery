@@ -7,6 +7,7 @@
 # - test-go: Go tests with coverage
 # - test-go-race: Go tests with race detector
 # - vet: go vet across all modules
+# - bpf-lint: clang -Wall -Werror compile-check of the eBPF object source
 # - build: Build all binaries (cilock, builder)
 # - verify-isolated: Verify each module builds outside workspace
 # - commitlint: Conventional commit validation
@@ -106,6 +107,31 @@ jobs:
             (cd "$dir" && go vet ./...) || exit 1
           done
           echo "All modules pass go vet"
+
+  # ── eBPF Compile-Lint ───────────────────────────────────────────────
+  # Fast fail before the full pipeline: compile the CO-RE eBPF object
+  # source with the SAME strict flags the runtime rebuild path uses
+  # (clang -Wall -Werror -target bpf). The kernel verifier remains the
+  # authoritative safety check at load time; this just catches source
+  # regressions early without needing to run a traced build.
+  bpf-lint:
+    name: bpf lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install eBPF toolchain (clang, libbpf, bpftool)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang llvm libbpf-dev linux-tools-common linux-tools-generic
+          # bpf-lint.sh resolves the real bpftool itself (the same way the
+          # runtime rebuild path does, preferring /usr/lib/linux-tools/*/
+          # over Ubuntu's /usr/sbin/bpftool version-dispatch wrapper, which
+          # can emit an incomplete vmlinux.h).
+
+      - name: Compile-lint eBPF object source
+        run: make bpf-lint
 
   # ── Build ───────────────────────────────────────────────────────────
   build:
@@ -468,6 +494,7 @@ jobs:
       - test-go
       - test-go-race
       - vet
+      - bpf-lint
       - build
       - verify-isolated
       - mod-tidy-check

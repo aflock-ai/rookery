@@ -68,6 +68,12 @@ type HashResult struct {
 	Digest cryptoutil.DigestSet
 	Status TOCTOUStatus
 	Reason string // populated for non-stable statuses
+	// NonRegular is true when the open targeted a non-regular file
+	// (directory, char/block device, pipe, socket, symlink). These have
+	// no hashable content and are NOT materials — callers suppress them
+	// rather than recording a spurious "unhashed open" gap (e.g. every
+	// build opens /dev/null).
+	NonRegular bool
 }
 
 // CaptureFileForLaterHash opens /proc/<pid>/fd/<fd> from the
@@ -255,6 +261,7 @@ func hashViaProcFD(fdPath, origPath string, hashFuncs []cryptoutil.DigestValue) 
 	if statBefore != nil && !statBefore.Mode().IsRegular() {
 		r.Status = TOCTOUError
 		r.Reason = nonRegularReason(statBefore.Mode())
+		r.NonRegular = true
 		return r, true
 	}
 
@@ -347,6 +354,7 @@ func hashViaPath(path string, hashFuncs []cryptoutil.DigestValue) HashResult {
 	if !statBefore.Mode().IsRegular() {
 		r.Status = TOCTOUError
 		r.Reason = "non-regular file (pipe/socket/fifo/device); skipped to avoid draining tracee IO"
+		r.NonRegular = true
 		return r
 	}
 

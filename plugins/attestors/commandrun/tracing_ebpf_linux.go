@@ -40,7 +40,6 @@ package commandrun
 import (
 	"errors"
 	"fmt"
-	"hash"
 	"net"
 	"os"
 	"os/exec"
@@ -247,93 +246,33 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 
 	stopCh := make(chan struct{})
 
-	// V1.4 read-tap state. Single-goroutine — no synchronization
-	// needed for these maps; pctx.mu still guards the attestation.
+	// Per-(pid, fd) → path map so write/security/close events can resolve
+	// fd → path even when the process exits before dispatch. A reopen of
+	// the same key overwrites the prior entry.
 	type pidFdKey struct {
 		PID uint32
 		FD  int32
 	}
 	type openInfo struct {
-		Path     string
-		EV       *ebpf.OpenatEvent // for path-hash fallback
-		Streamed uint64            // total bytes streamed via read-tap
+		Path string
+		EV   *ebpf.OpenatEvent
 	}
 	openPaths := make(map[pidFdKey]*openInfo)
-	streamHashes := make(map[pidFdKey]map[cryptoutil.DigestValue]hash.Hash)
-	// pendingWriteFinalize tracks write-only close events that arrived
-	// BEFORE all sys_write kretprobe chunks reached us — the close
-	// flows on the `events` ringbuf while write-chunks flow on the
-	// `read_tap_events` ringbuf; cross-ringbuf delivery is unordered.
-	// We stash {path, pid} here and finalize once chunks catch up
-	// (or at end-of-trace, whichever comes first).
-	type pendingWrite struct {
-		Path string
-		PID  uint32
-	}
-	pendingWriteFinalize := make(map[pidFdKey]pendingWrite)
-	// pendingReadFinalize is the read-side counterpart to
-	// pendingWriteFinalize: when close fires for a read open with no
-	// chunks yet (cross-ringbuf race), stash here so end-of-trace
-	// can finalize fullRead upgrades against late-arriving chunks.
-	// Same shape as pendingWrite but carries sizeAtOpen so we can
-	// decide fullRead at flush time.
-	type pendingRead struct {
-		Path       string
-		PID        uint32
-		SizeAtOpen uint64
-	}
-	pendingReadFinalize := make(map[pidFdKey]pendingRead)
-	// openTS records the kernel timestamp of the latest openat for
-	// each (pid, fd). Used as a fence against stale chunks delivered
-	// out-of-order across the events / read_tap_events ringbufs —
-	// a chunk with TimestampNs older than the current openTS[k] is
-	// data from a prior fd-use whose close already drained state.
-	openTS := make(map[pidFdKey]uint64)
-	// streamCounts tracks bytes-streamed per (pid, fd) independently of
-	// openPaths. Ringbuf can deliver read-chunk events BEFORE the
-	// matching openat (different-CPU submission ordering), in which
-	// case openPaths[k] is nil at chunk arrival and we'd lose the
-	// running-total. Keying off pidFdKey alone — same as streamHashes —
-	// makes the count survive arrival reorder. openInfo.Streamed is
-	// kept in sync as a convenience for the end-of-trace sweep, but
-	// the close handler reads from streamCounts.
-	streamCounts := make(map[pidFdKey]uint64)
-	// pendingCloses: ringbuf event reordering can deliver a CLOSE
-	// event for (pid, fd) BEFORE the OPENAT event for the same key.
-	// This happens when the tracee opens, reads, and closes in
-	// microseconds and the events from different CPUs arrive at
-	// the userspace ringbuf reader out-of-order. Buffer close events
-	// until the matching openat arrives; the openat handler replays.
-	pendingCloses := make(map[pidFdKey]*ebpf.CloseEvent)
-	var readTapBytes, readTapClosures atomic.Uint64
-	// Write-tap counters: bytes the BPF kretprobe captured from sys_write.
-	// Symmetric to readTapBytes — surfaced as diagnostic in the trace summary.
-	var writeTapBytes, writeChunkSeen atomic.Uint64
+	// Write-tap content is OFF (write chunks dropped in the loop below) and
+	// the eBPF openat content-hash is skipped when fanotify is active —
+	// fanotify (open-perm, hash-once) is the authoritative content source.
+	// The openat path-hash is retained only as the no-fanotify fallback.
+	openatHashDisabled := r.fanotifySession != nil
 
 	var readTotal, matchedTotal, otherTotal atomic.Uint64
-	// V2 diagnostic: read-chunk traffic counters. Lets us distinguish
-	// "BPF kprobe never fired for the tracee" from "kprobe fired but
-	// our matchAndAdd rejected it" when files end up with digest=nil.
-	// Surfaced into Summary.Diagnostics at trace end.
-	var readChunkSeen, readChunkRejected atomic.Uint64
-	// V2 Phase 8 stage 2 diagnostic: count how often the kernel-side
-	// fd_table carried the path inline on the close event vs how
-	// often we had to fall back to the userspace openPaths cache.
-	// A high inlinePath ratio confirms stage 2 is doing its job and
-	// the openPaths userspace map can be safely removed.
-	var closeWithInlinePath, closeWithoutInlinePath atomic.Uint64
-	// Phase 5 diagnostics: count of fds where read-tap captured only
-	// a prefix of the file — the openat-time path-hash is the
-	// authoritative digest for those (read-tap upgrade declined).
-	// fallbackHashFailures counts openat-time path-hash failures
-	// (file missing at hash time, permission denied, etc.) — those
-	// entries land in OpenedFiles with a nil digest, which is the
-	// honest stance: a hole in the attestation.
-	var partialFallbacks, fallbackFailures atomic.Uint64
-	// Per-bucket counters for hash-failure outcomes. Surfaces the
-	// difference between "we caught it elsewhere" (silentByDigest)
-	// and "we already recorded this gap" (silentByDedup) so the
-	// fallbackFailures total can be honestly explained, not handwaved.
+	// fallbackFailures: openat-time path-hash failures on the no-fanotify
+	// fallback path (file gone / perm denied) → an honest nil-digest hole.
+	var fallbackFailures atomic.Uint64
+	// cacheReadsSkipped: read opens released without hashing because the path
+	// classified as build-internal cache/temp (pctx.cacheMatcher).
+	var cacheReadsSkipped atomic.Uint64
+	// hashSilentByDigest / hashSilentByDedup decompose fallbackFailures:
+	// "caught it elsewhere" vs "already recorded this gap".
 	var hashSilentByDigest, hashSilentByDedup atomic.Uint64
 
 	// V2 Phase 6/8: two-ringbuf architecture. The BPF program emits
@@ -381,35 +320,10 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 			}
 		}
 	}()
-	// Read-tap reader: ONLY runs if the BPF object exported the
-	// read_tap_events map. Older builds may not have it.
-	if consumer.HasReadTap() {
-		readerWG.Add(1)
-		go func() {
-			defer readerWG.Done()
-			for {
-				ev, err := consumer.ReadReadTap()
-				if err != nil {
-					if ebpf.IsFlushedError(err) || errors.Is(err, os.ErrClosed) {
-						return
-					}
-					select {
-					case <-stopCh:
-						return
-					default:
-					}
-					log.Debugf("(ebpf) read_tap-ringbuf read transient error (skipping): %v", err)
-					continue
-				}
-				select {
-				case evCh <- ev:
-				case <-stopCh:
-					return
-				}
-			}
-		}()
-	}
-	// Closer goroutine: once both readers exit (Flush or stopCh),
+	// (The read-tap reader was removed — the read-tap is gone; fanotify is
+	// the authoritative content source. Only the main events reader feeds
+	// evCh now.)
+	// Closer goroutine: once the reader exits (Flush or stopCh),
 	// close evCh so the dispatcher's for-range terminates.
 	go func() {
 		readerWG.Wait()
@@ -421,66 +335,6 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	go func() {
 		defer consumerWG.Done()
 		defer close(captureCh)
-
-		// End-of-trace finalize: any (pid, fd) state we still hold
-		// represents tracees that exited with fds open. The hasher
-		// pool already ran HashOpenatEvent at openat time, so the
-		// race-tight path-hash is already in OpenedFiles. We only
-		// need to upgrade to streaming-hash for entries where
-		// read-tap captured the full file content before the
-		// kernel-initiated close (which doesn't fire our sys_close
-		// kprobe). All other state just drains.
-		defer func() {
-			for k, oi := range openPaths {
-				hs := streamHashes[k]
-				delete(streamHashes, k)
-				delete(streamCounts, k)
-				delete(openPaths, k)
-				if oi == nil || oi.Path == "" || oi.EV == nil {
-					continue
-				}
-				// Only upgrade to streaming hash when read-tap saw
-				// the entire file content. Partial-stream hashes
-				// would be WRONG (digest of a prefix, not the file).
-				if hs == nil {
-					continue
-				}
-				if oi.EV.SizeAtOpen == 0 || oi.Streamed < oi.EV.SizeAtOpen {
-					continue
-				}
-				finalizeReadTap(pctx, oi.EV.PID, oi.Path, hs)
-			}
-			// Flush any pending write-only closes whose chunks
-			// finally arrived AFTER the close (cross-ringbuf race).
-			// The streamHashes entry holds the accumulated digest;
-			// pendingWriteFinalize carries the {path, pid}.
-			for k, pw := range pendingWriteFinalize {
-				hs := streamHashes[k]
-				delete(streamHashes, k)
-				delete(streamCounts, k)
-				delete(pendingWriteFinalize, k)
-				if hs == nil {
-					continue
-				}
-				finalizeWriteTap(pctx, pw.PID, pw.Path, hs)
-				readTapClosures.Add(1)
-			}
-			// Flush any pending read closes that may have had late
-			// chunks arrive — only finalize fullRead, since partial
-			// reads would produce a wrong digest (prefix vs. file).
-			for k, pr := range pendingReadFinalize {
-				hs := streamHashes[k]
-				cnt := streamCounts[k]
-				delete(streamHashes, k)
-				delete(streamCounts, k)
-				delete(pendingReadFinalize, k)
-				if hs == nil || pr.SizeAtOpen == 0 || cnt < pr.SizeAtOpen {
-					continue
-				}
-				finalizeReadTap(pctx, pr.PID, pr.Path, hs)
-				readTapClosures.Add(1)
-			}
-		}()
 
 		for ev := range evCh {
 			readTotal.Add(1)
@@ -525,107 +379,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				// at chunk time, so we don't waste cycles streaming
 				// non-read fds.
 				if ev.Openat.FD >= 0 {
+					// Remember (pid, fd) → path so later write/security/
+					// close events can resolve fd → path even when the
+					// process exits fast and /proc/<pid>/fd/<fd> is gone by
+					// dispatch time. A reopen of the same (pid, fd) simply
+					// overwrites the prior entry.
 					k := pidFdKey{PID: ev.Openat.PID, FD: ev.Openat.FD}
-					// A pending finalize from a CLOSED prior open at the
-					// same (pid, fd) means streamHashes[k] holds bytes
-					// for the prior file. Finalize it now against the
-					// stashed path before the new open clobbers state.
-					if pw, ok := pendingWriteFinalize[k]; ok {
-						if hs := streamHashes[k]; hs != nil {
-							finalizeWriteTap(pctx, pw.PID, pw.Path, hs)
-							readTapClosures.Add(1)
-						}
-						delete(streamHashes, k)
-						delete(streamCounts, k)
-						delete(pendingWriteFinalize, k)
-					}
-					if pr, ok := pendingReadFinalize[k]; ok {
-						if hs := streamHashes[k]; hs != nil &&
-							pr.SizeAtOpen > 0 && streamCounts[k] >= pr.SizeAtOpen {
-							finalizeReadTap(pctx, pr.PID, pr.Path, hs)
-							readTapClosures.Add(1)
-						}
-						delete(streamHashes, k)
-						delete(streamCounts, k)
-						delete(pendingReadFinalize, k)
-					}
-					// Clear any stale state from an earlier open
-					// of the same (pid, fd) whose close we missed
-					// (process exit, dropped event, etc.). Without
-					// this, fd reuse can cause streaming-hash bytes
-					// from the OLD file to be attributed to the NEW
-					// file's path.
-					if prior, ok := openPaths[k]; ok && prior != nil && prior.EV != nil {
-						hs := streamHashes[k]
-						delete(streamHashes, k)
-						// fd reuse: prior open's race-tight path-hash
-						// is already in OpenedFiles (the hasher pool
-						// ran HashOpenatEvent at openat-time). If
-						// read-tap got the full file, upgrade to the
-						// streaming hash. Otherwise leave the path-
-						// hash result — no after-the-fact fallback.
-						fullRead := hs != nil && prior.EV.SizeAtOpen > 0 &&
-							prior.Streamed >= prior.EV.SizeAtOpen
-						if fullRead {
-							finalizeReadTap(pctx, prior.EV.PID, prior.Path, hs)
-						}
-						// fd reuse: clear stale stream counter so the
-						// new openInfo starts fresh.
-						delete(streamCounts, k)
-					}
-					openPaths[k] = &openInfo{
-						Path:     ev.Openat.Path,
-						EV:       ev.Openat,
-						Streamed: streamCounts[k],
-					}
-					// Fence: chunks older than this openat must be
-					// discarded as belonging to a prior fd-use whose
-					// close already drained streamHashes. Take max
-					// in case openat events arrive out of order in
-					// userspace (a later kernel-TS openat may be
-					// dispatched first if delivered on a faster CPU).
-					if ev.Openat.TimestampNs > openTS[k] {
-						openTS[k] = ev.Openat.TimestampNs
-					}
-					// Replay an out-of-order close that arrived before
-					// this openat — finalize now that we know the path.
-					//
-					// CRITICAL: only replay if the stashed close happened
-					// AFTER this openat in kernel time. A close stashed
-					// with TimestampNs < openat.TimestampNs was for a
-					// PRIOR file at the same (pid, fd) — e.g., cc1
-					// inherits fd 3 from gcc and closes it on startup,
-					// leaving a pendingClose that would otherwise
-					// incorrectly "finalize" every subsequent openat at
-					// fd 3 (deleting the freshly-set openInfo and
-					// orphaning the real close event).
-					if pendingClose, ok := pendingCloses[k]; ok {
-						// Always clear — either replay or discard as stale.
-						delete(pendingCloses, k)
-						// Replay only when the close happened AFTER the
-						// openat in kernel time. Stale closes (T_close <=
-						// T_openat) belonged to a prior open of the same
-						// (pid, fd) — e.g., cc1 inherits fd 3 from gcc
-						// and closes it on startup; without this guard
-						// every subsequent openat at fd 3 gets
-						// incorrectly finalized against that stale close.
-						if pendingClose.TimestampNs > ev.Openat.TimestampNs {
-							hs, hadData := streamHashes[k]
-							oi := openPaths[k]
-							delete(streamHashes, k)
-							delete(streamCounts, k)
-							delete(openPaths, k)
-							// Race-tight path-hash from the hasher
-							// pool is already in OpenedFiles. Only
-							// upgrade to streaming-hash on full-read.
-							if oi != nil && oi.Path != "" && oi.EV != nil &&
-								hadData && oi.EV.SizeAtOpen > 0 &&
-								oi.Streamed >= oi.EV.SizeAtOpen {
-								finalizeReadTap(pctx, pendingClose.PID, oi.Path, hs)
-								readTapClosures.Add(1)
-							}
-						}
-					}
+					openPaths[k] = &openInfo{Path: ev.Openat.Path, EV: ev.Openat}
 				}
 				// Hand off to the parallel capture pool. Consumer stays
 				// microsecond-per-event; capturers do os.Open in
@@ -706,175 +466,6 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				}
 				otherTotal.Add(1)
 				recordEBPFNet(pctx, ev.Net)
-			case ev.ReadChunk != nil:
-				isWrite := ev.Type == ebpf.EVT_WRITE_CHUNK
-				if isWrite {
-					writeChunkSeen.Add(1)
-				} else {
-					readChunkSeen.Add(1)
-				}
-				if !watched.matchAndAdd(ev.ReadChunk.PID, ev.ReadChunk.TGID, ev.ReadChunk.PPID) {
-					if !isWrite {
-						readChunkRejected.Add(1)
-					}
-					continue
-				}
-				k := pidFdKey{PID: ev.ReadChunk.PID, FD: ev.ReadChunk.FD}
-				// Fence: drop chunks delivered older than the latest
-				// openat for this (pid, fd). They're from a prior
-				// fd-use whose close already drained state and would
-				// corrupt the current open's digest.
-				if ts, ok := openTS[k]; ok && ev.ReadChunk.TimestampNs < ts {
-					continue
-				}
-				// If a write-only close is pending for (pid, fd),
-				// any non-write chunk is stale from a prior open of
-				// this fd whose read chunks were delayed. Discard it.
-				if _, ok := pendingWriteFinalize[k]; ok && !isWrite {
-					continue
-				}
-				hs := streamHashes[k]
-				if hs == nil {
-					hs = make(map[cryptoutil.DigestValue]hash.Hash, len(pctx.hash))
-					for _, dv := range pctx.hash {
-						hs[dv] = dv.New()
-					}
-					streamHashes[k] = hs
-				}
-				for _, h := range hs {
-					h.Write(ev.ReadChunk.Data)
-				}
-				streamCounts[k] += uint64(ev.ReadChunk.ChunkLen)
-				if oi := openPaths[k]; oi != nil {
-					oi.Streamed = streamCounts[k]
-				}
-				if isWrite {
-					writeTapBytes.Add(uint64(ev.ReadChunk.ChunkLen))
-				} else {
-					readTapBytes.Add(uint64(ev.ReadChunk.ChunkLen))
-				}
-			case ev.Close != nil:
-				if !watched.matchAndAdd(ev.Close.PID, ev.Close.TGID, ev.Close.PPID) {
-					continue
-				}
-				k := pidFdKey{PID: ev.Close.PID, FD: ev.Close.FD}
-
-				// V2 Phase 8 stage 2: the close event may carry the
-				// path INLINE (populated by BPF fd_table on openat).
-				// When present, it's authoritative — kernel-side
-				// state is race-free against the userspace ringbuf
-				// dispatch order. When absent (path_len=0), fall
-				// back to the openPaths cache (e.g., inherited fd,
-				// LRU-evicted entry, or relative path > 256 bytes).
-				inlinePath := ev.Close.Path
-				inlineSize := ev.Close.SizeAtOpen
-				if inlinePath != "" {
-					closeWithInlinePath.Add(1)
-				} else {
-					closeWithoutInlinePath.Add(1)
-				}
-
-				// Inline path may be relative (raw openat string from
-				// BPF kprobe). Use the same three-tier cwd resolver
-				// as the openat handler.
-				inlinePath = resolveCwdRelative(watched,
-					ev.Close.PID, ev.Close.PPID, inlinePath, rootCwd)
-
-				oi := openPaths[k]
-				if oi == nil && inlinePath == "" {
-					// Out-of-order delivery: openat for this fd
-					// hasn't been processed yet AND BPF didn't
-					// carry path inline. Buffer the close — the
-					// openat handler will replay it. Don't touch
-					// streamHashes; read-chunks accumulate lazily.
-					pendingCloses[k] = ev.Close
-					continue
-				}
-				hs, hadData := streamHashes[k]
-				delete(streamHashes, k)
-				delete(streamCounts, k)
-				delete(openPaths, k)
-
-				// Choose the authoritative path. Prefer inline
-				// (kernel-side fd_table, race-free); fall back to
-				// openPaths if inline absent.
-				path := inlinePath
-				sizeAtOpen := inlineSize
-				if path == "" && oi != nil {
-					path = oi.Path
-					if oi.EV != nil {
-						sizeAtOpen = oi.EV.SizeAtOpen
-					}
-				}
-				if path == "" {
-					continue
-				}
-				// Write-tap: if the open was write-only (or had
-				// O_TRUNC effectively), the streaming hash IS the
-				// file content the tracee emitted — independent of
-				// sizeAtOpen (which is 0 for newly-created files).
-				// Finalize into WrittenDigests, separate from read
-				// digests, so classifiers don't conflate inputs and
-				// outputs.
-				wroteOnly := false
-				if oi != nil && oi.EV != nil &&
-					(oi.EV.IsWriteOnly() || isCreateOrTrunc(oi.EV.Flags)) {
-					wroteOnly = true
-				}
-				// Full-read check: if the tracee read every byte of
-				// the file, the streaming digest IS the file digest.
-				// If it read only a prefix (very common — bufio
-				// peek, magic-number sniff, partial parse), the
-				// streaming digest would be wrong; fall back to a
-				// path-hash of the now-closed file.
-				fullRead := false
-				if sizeAtOpen > 0 && streamCounts[k] >= sizeAtOpen {
-					fullRead = true
-				} else if oi != nil && oi.EV != nil && oi.EV.SizeAtOpen > 0 && oi.Streamed >= oi.EV.SizeAtOpen {
-					fullRead = true
-				}
-				if wroteOnly && !hadData {
-					// Close arrived before write-chunks (cross-ringbuf
-					// delivery race). Stash for late finalization;
-					// chunk handler will pick it up. Also clear any
-					// stream state for this key — any later READ chunk
-					// arriving against (pid, fd) is stale from a prior
-					// open and must not bleed into the write digest.
-					delete(streamHashes, k)
-					delete(streamCounts, k)
-					pendingWriteFinalize[k] = pendingWrite{Path: path, PID: ev.Close.PID}
-				}
-				if hadData && wroteOnly {
-					finalizeWriteTap(pctx, ev.Close.PID, path, hs)
-					readTapClosures.Add(1)
-				} else if hadData && fullRead {
-					// Streaming hash is more race-tight than the
-					// openat-time path-hash; upgrade.
-					finalizeReadTap(pctx, ev.Close.PID, path, hs)
-					readTapClosures.Add(1)
-				} else if !hadData && !wroteOnly && sizeAtOpen > 0 {
-					// Symmetric to write-tap: close fired before
-					// chunks arrived. Stash for end-of-trace flush
-					// so late read chunks can still promote to
-					// streaming-hash if they complete a full read.
-					pendingReadFinalize[k] = pendingRead{
-						Path:       path,
-						PID:        ev.Close.PID,
-						SizeAtOpen: sizeAtOpen,
-					}
-				} else if hadData {
-					// Read-tap saw read activity but not enough bytes
-					// to cover the full file — common for mmap'd
-					// readers (loader reads 832B ELF header then
-					// mmaps). The openat-time path-hash already
-					// stands as the authoritative digest. Counted
-					// for diagnostic purposes only.
-					partialFallbacks.Add(1)
-				}
-				// No post-close path-hash fallback: the race-tight
-				// openat-time path-hash already in OpenedFiles is the
-				// best we can honestly attest about the bytes the
-				// tracee read.
 			}
 		}
 	}()
@@ -979,6 +570,57 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					}
 					continue
 				}
+				// Build-internal cache/temp reads (Go module cache,
+				// GOCACHE, /tmp scratch) are content-addressed storage
+				// pinned by lockfiles, not meaningful materials. Skip
+				// hashing them: on a cold build they are the bulk of
+				// opens, and they churn (created/renamed in ms) so the
+				// path-hash fallback racemost often FAILS — those
+				// failures otherwise inflate fallbackHashFailures /
+				// hashFailureSilentDrops and break --require-zero-drops.
+				// We do NOT record an open for them (no nil-digest gap).
+				if pctx.cacheMatcher != nil && pctx.cacheMatcher.Matches(ev.Path) {
+					cacheReadsSkipped.Add(1)
+					if ph.file != nil {
+						_ = ph.file.Close()
+					}
+					continue
+				}
+				// fanotify is the authoritative content source: don't hash
+				// here, just record the open so fanotify reconciliation can
+				// attach the kernel-synchronous digest. Only REGULAR,
+				// still-present files are materials — non-regular files
+				// (dirs/devices) and already-gone transient intermediates
+				// (gcc/cgo /tmp/cc*.s) are neither materials nor gaps, so we
+				// suppress them outright (an lstat is far cheaper than a
+				// content hash). This keeps the gap list to real files only.
+				if openatHashDisabled {
+					// fanotify (open-perm, hash-once) is the authoritative
+					// content source. Record the open's PATH (without an eBPF
+					// content hash) so fanotify reconciliation attaches the
+					// kernel-synchronous digest — fanotify-only digests are
+					// not in the material tree on their own; they need a
+					// recorded open to merge into. Only REGULAR, still-present
+					// files are materials: lstat ev.Path authoritatively (the
+					// captured ph.stat can be a stale fd-reuse stat), and drop
+					// non-regular (dirs/devices) + already-gone transients so
+					// they're neither materials nor false gaps.
+					if s, e := os.Lstat(ev.Path); e != nil || !s.Mode().IsRegular() {
+						if ph.file != nil {
+							_ = ph.file.Close()
+						}
+						continue
+					}
+					recordEBPFOpenat(pctx, ev, ebpf.HashResult{
+						Path:   ev.Path,
+						Status: ebpf.TOCTOUError,
+						Reason: "fanotify-authoritative: eBPF openat content hash skipped",
+					})
+					if ph.file != nil {
+						_ = ph.file.Close()
+					}
+					continue
+				}
 				// Per-trace digest cache: most files in a build are
 				// opened many times. Cache by (path, size, mtime);
 				// hit means the same bytes are on disk → same digest.
@@ -1073,10 +715,10 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		// write here would be clobbered.
 		r.ringbufDropOpenat = oDrops
 		r.ringbufDropReadTap = rDrops
-		r.partialReadFallbacks = partialFallbacks.Load()
 		r.fallbackHashFailures = fallbackFailures.Load()
 		r.hashSilentByDigest = hashSilentByDigest.Load()
 		r.hashSilentByDedup = hashSilentByDedup.Load()
+		r.cacheReadsSkipped = cacheReadsSkipped.Load()
 		if oDrops > 0 || rDrops > 0 {
 			log.Errorf("(ebpf) RINGBUF DROPS — attestation has gaps: openat=%d read_tap=%d  "+
 				"bump ringbuf size or reduce build parallelism",
@@ -1112,16 +754,9 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 		captureAttempts.Load(), captureSucceeded.Load())
 	if v := os.Getenv("CILOCK_DIAGNOSE"); v == "1" {
 		fmt.Fprintf(os.Stderr,
-			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d "+
-				"readChunkSeen=%d readChunkRejected=%d readTapBytes=%d readTapClosures=%d "+
-				"writeChunkSeen=%d writeTapBytes=%d "+
-				"closeInlinePath=%d closeFallbackPath=%d\n",
+			"cilock-ebpf: parentPid=%d read=%d matched=%d other=%d hashed=%d suspect=%d errors=%d\n",
 			pctx.parentPid, readTotal.Load(), matchedTotal.Load(), otherTotal.Load(),
-			hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load(),
-			readChunkSeen.Load(), readChunkRejected.Load(),
-			readTapBytes.Load(), readTapClosures.Load(),
-			writeChunkSeen.Load(), writeTapBytes.Load(),
-			closeWithInlinePath.Load(), closeWithoutInlinePath.Load())
+			hashedTotal.Load(), suspectTotal.Load(), errorTotal.Load())
 	}
 
 	if pctx.exitCode != 0 {
@@ -1241,14 +876,15 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 			outcome = recordOutcomeSilentByDigest
 			break
 		}
-		// Directory opens are not content gaps — there's nothing to
-		// hash, and the verifier's "what files did this build read"
-		// view should not be cluttered with locale dirs, /etc/ssl
-		// directory entries, /proc subdirs, etc. Drop them. If a
-		// future policy needs "what directories did the build scan,"
-		// we can add a dedicated field; today the cost-benefit
-		// strongly favors suppression.
-		if strings.HasPrefix(res.Reason, "directory open") {
+		// Non-regular files (directories, char/block devices, pipes,
+		// sockets, symlinks) are not content gaps — there's nothing to
+		// hash and they aren't materials. Every build opens /dev/null,
+		// locale dirs, /proc subdirs, etc.; recording them as "unhashed
+		// opens" is a false gap that pollutes the verifier view and trips
+		// --require-zero-drops. Drop them (not a real gap). If a future
+		// policy needs "what directories/devices did the build touch," add
+		// a dedicated field; today suppression is the right call.
+		if res.NonRegular || strings.HasPrefix(res.Reason, "directory open") {
 			outcome = recordOutcomeSilentByDedup // bookkeeping: not a real gap
 			break
 		}
@@ -1360,100 +996,6 @@ func isCreateOrTrunc(flags uint32) bool {
 		oAppend = 0o2000
 	)
 	return flags&(oCreat|oTrunc|oAppend) != 0
-}
-
-// finalizeReadTap turns a per-(pid, fd) streaming-hash state into a
-// DigestSet and records it on the ProcessInfo against the captured
-// path. Called from the consumer goroutine on each EVT_CLOSE that
-// had any read bytes streamed. The hashes were maintained by the
-// dispatcher; here we just Sum + persist.
-//
-// The streaming digest is authoritative when read-tap is enabled:
-// it reflects the exact bytes the tracee actually consumed,
-// race-free against the calling thread (kernel-context capture).
-// It overwrites any earlier path-hash entry for the same file —
-// the path-hash entry can be racey, the streaming hash isn't.
-func finalizeReadTap(
-	pctx *ptraceContext, pid uint32, path string,
-	hashes map[cryptoutil.DigestValue]hash.Hash,
-) {
-	if len(hashes) == 0 || path == "" {
-		return
-	}
-	ds := make(cryptoutil.DigestSet, len(hashes))
-	for dv, h := range hashes {
-		if dv.GitOID {
-			ds[dv] = string(h.Sum(nil))
-			continue
-		}
-		ds[dv] = string(cryptoutil.HexEncode(h.Sum(nil)))
-	}
-
-	pctx.mu.Lock()
-	defer pctx.mu.Unlock()
-	procInfo := pctx.getProcInfo(int(pid))
-	if procInfo.OpenedFiles == nil {
-		procInfo.OpenedFiles = make(map[string]cryptoutil.DigestSet)
-	}
-	// Read-tap digest is authoritative — overwrite path-hash (which
-	// may have come from the racey async hasher pool).
-	procInfo.OpenedFiles[path] = ds
-}
-
-// finalizeWriteTap is the write-tap symmetric counterpart. The streaming
-// hash accumulated from sys_write kretprobe chunks IS the digest of the
-// bytes the tracee emitted to the file — captured race-free in kernel
-// context, immune to post-close mutation by another process.
-//
-// After recording the streaming digest, opportunistically seal the
-// file with fs-verity (kernel-rooted Merkle digest). On success the
-// kernel becomes the source of truth for this file's content — any
-// later corruption is rejected at read time. fs-verity sealing is
-// purely additive: streaming digest always set, fs-verity attempted
-// if available.
-func finalizeWriteTap(
-	pctx *ptraceContext, pid uint32, path string,
-	hashes map[cryptoutil.DigestValue]hash.Hash,
-) {
-	if len(hashes) == 0 || path == "" {
-		return
-	}
-	ds := make(cryptoutil.DigestSet, len(hashes))
-	for dv, h := range hashes {
-		if dv.GitOID {
-			ds[dv] = string(h.Sum(nil))
-			continue
-		}
-		ds[dv] = string(cryptoutil.HexEncode(h.Sum(nil)))
-	}
-
-	pctx.mu.Lock()
-	procInfo := pctx.getProcInfo(int(pid))
-	if procInfo.WrittenDigests == nil {
-		procInfo.WrittenDigests = make(map[string]cryptoutil.DigestSet)
-	}
-	procInfo.WrittenDigests[path] = ds
-	fsvState := pctx.fsVerityState
-	pctx.mu.Unlock()
-
-	// fs-verity seal happens OUTSIDE the lock — the ioctl can take
-	// non-trivial time on large files. The streaming SHA-256 digest
-	// is already recorded; fs-verity provides an ADDITIONAL kernel-
-	// rooted Merkle root the kernel will refuse to bypass on later
-	// reads. Store the Merkle root in ProcessInfo.FsVerityDigests
-	// so verifiers can re-verify by re-reading the file with the
-	// verity feature active.
-	if fsvState != nil {
-		if merkleHex := fsvState.sealProduct(path); merkleHex != "" {
-			pctx.mu.Lock()
-			procInfo := pctx.getProcInfo(int(pid))
-			if procInfo.FsVerityDigests == nil {
-				procInfo.FsVerityDigests = make(map[string]string)
-			}
-			procInfo.FsVerityDigests[path] = "sha256:" + merkleHex
-			pctx.mu.Unlock()
-		}
-	}
 }
 
 // recordEBPFExecve handles an EVT_EXECVE event from the BPF kprobe.
