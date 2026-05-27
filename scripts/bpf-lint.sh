@@ -16,12 +16,12 @@ command -v clang >/dev/null 2>&1 || { echo "bpf-lint: clang not on PATH" >&2; ex
 
 # Resolve a REAL bpftool the same way the runtime rebuild path does
 # (rebuild_linux.go: findBpftool). Ubuntu's /usr/sbin/bpftool is a
-# version-dispatch wrapper that, when its kernel-matched linux-tools
-# package is absent, still "works" but can emit an incomplete vmlinux.h
-# (e.g. a struct pt_regs missing the x86 di/si/dx register fields),
-# which makes the CO-RE PT_REGS_* macros fail to compile. The real
-# binaries shipped by linux-tools-generic live under
-# /usr/lib/linux-tools/<kver>/bpftool — prefer those.
+# version-dispatch wrapper that refuses to run unless the per-running-
+# kernel linux-tools package is installed (the common failure on Azure-
+# flavored hosted runners). The real binaries shipped by
+# linux-tools-generic live under /usr/lib/linux-tools/<kver>/bpftool and
+# can dump /sys/kernel/btf/vmlinux regardless of kernel version — prefer
+# those over the PATH wrapper.
 BPFTOOL=""
 for cand in /usr/lib/linux-tools/*/bpftool /usr/lib/linux-tools-*/bpftool /snap/bin/bpftool; do
 	[ -x "$cand" ] && { BPFTOOL="$cand"; break; }
@@ -32,14 +32,12 @@ done
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# CO-RE vmlinux.h matched to the running kernel's BTF.
+# CO-RE vmlinux.h matched to the RUNNING kernel's BTF (correct arch).
 "$BPFTOOL" btf dump file /sys/kernel/btf/vmlinux format c > "$TMP/vmlinux.h"
 
-# Guard against a partial dump: the x86/arm64 PT_REGS_* CO-RE macros
-# need a complete struct pt_regs, but a stub/mismatched bpftool can emit
-# a truncated header whose pt_regs lacks the register fields — surfacing
-# later as a confusing "no member named 'di'" deep in a macro expansion.
-# A real kernel vmlinux.h is multiple MB; flag a suspiciously small dump.
+# Guard against a partial dump: a complete kernel vmlinux.h is multiple
+# MB. A stub/mismatched bpftool can emit a truncated header, which later
+# surfaces as a confusing macro-expansion error rather than a clear one.
 dump_lines="$(wc -l < "$TMP/vmlinux.h")"
 if [ "$dump_lines" -lt 10000 ]; then
 	echo "bpf-lint: dumped vmlinux.h is only $dump_lines lines — wrong/stub bpftool ($BPFTOOL)?" >&2
@@ -52,8 +50,17 @@ case "$(uname -m)" in
 	*) echo "bpf-lint: unsupported arch $(uname -m)" >&2; exit 1 ;;
 esac
 
+# Compile a COPY of the source placed next to the fresh vmlinux.h, exactly
+# like the runtime rebuild path (rebuild_linux.go) does. The source uses
+# `#include "vmlinux.h"` — a quoted include, which clang resolves relative
+# to the SOURCE FILE'S directory first. Compiling in-place would pick up
+# the committed bpf/vmlinux.h (a single fixed arch, e.g. aarch64) and, when
+# the target arch differs, fail with a baffling "no member named 'di' in
+# struct pt_regs". Compiling from $TMP makes the quoted include resolve to
+# the freshly-dumped, correct-arch header.
+cp "$SRC" "$TMP/openat_kprobe.bpf.c"
 clang -g -O2 -Wall -Werror -target bpf "$ARCH_DEF" \
 	-I "$TMP" -I "$INC" \
-	-c "$SRC" -o "$TMP/openat_kprobe.bpf.o"
+	-c "$TMP/openat_kprobe.bpf.c" -o "$TMP/openat_kprobe.bpf.o"
 
 echo "bpf-lint: $SRC compiles clean (clang -Wall -Werror -target bpf, $(uname -m))"
