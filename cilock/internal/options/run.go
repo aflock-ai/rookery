@@ -26,11 +26,45 @@ import (
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/spf13/cobra"
 )
 
-var DefaultAttestors = []string{"environment", "git"}
+var DefaultAttestors = []string{"environment", "git", "platform"}
+
+// platformURLEnv tells the platform attestor which logged-in platform session
+// to bind to. Kept as a literal (not an import of the attestor package) to
+// avoid coupling options → attestor.
+const platformURLEnv = "CILOCK_PLATFORM_URL"
+
+// hasAuthorizationHeader reports whether an explicit Authorization header is
+// already present, so a platform session doesn't clobber a user-supplied one.
+func hasAuthorizationHeader(headers []string) bool {
+	for _, h := range headers {
+		if len(h) >= 14 && strings.EqualFold(h[:14], "authorization:") {
+			return true
+		}
+	}
+	return false
+}
+
+// sameOrigin reports whether two URLs share scheme+host (the security origin).
+// The platform session token is a bearer credential scoped to the platform's
+// own Archivista; it must never travel to a host the user redirected
+// --archivista-server to. A parse failure or mismatch returns false so the
+// token is withheld (fail closed).
+func sameOrigin(a, b string) bool {
+	ua, err := url.Parse(a)
+	if err != nil || ua.Host == "" {
+		return false
+	}
+	ub, err := url.Parse(b)
+	if err != nil || ub.Host == "" {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+}
 
 type RunOptions struct {
 	SignerOptions            SignerOptions
@@ -194,6 +228,25 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// Timestamp servers: add platform TSA if none explicitly configured
 	if len(ro.TimestampServers) == 0 {
 		ro.TimestampServers = []string{pc.TSA}
+	}
+
+	// Platform session: if the user has logged in (`cilock login`) to this
+	// platform, authenticate Archivista uploads with the session token and
+	// expose the platform URL to the platform attestor (via CILOCK_PLATFORM_URL)
+	// so it can bind the attestation to the tenant/product. Best-effort — a
+	// missing/expired session just means no platform auth (offline/CI paths
+	// keep working).
+	if cred, lookupErr := auth.Lookup(ro.PlatformURL); lookupErr == nil && cred != nil {
+		_ = os.Setenv(platformURLEnv, auth.NormalizeURL(ro.PlatformURL))
+		// Only attach the platform bearer token when the upload target is the
+		// platform's own Archivista origin. Without this guard a user who
+		// points --archivista-server at a third-party host while logged in
+		// would leak their platform JWT to that host. Fail closed: an origin
+		// mismatch (e.g. a custom --archivista-server) gets no auth header,
+		// and the upload proceeds unauthenticated as it would offline.
+		if !hasAuthorizationHeader(ro.ArchivistaOptions.Headers) && sameOrigin(ro.ArchivistaOptions.Url, pc.Archivista) {
+			ro.ArchivistaOptions.Headers = append(ro.ArchivistaOptions.Headers, "Authorization: Bearer "+cred.Token)
+		}
 	}
 
 	// NOTE: We intentionally do NOT force enable-archivista here.
