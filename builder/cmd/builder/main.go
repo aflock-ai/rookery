@@ -457,10 +457,15 @@ func main() {
 	// Plugins, FipsMode) stay in the generated rookery-build/buildinfo
 	// package — they describe the builder invocation itself and aren't
 	// part of cilock's public surface.
+	// The rookery builder, its derivative works, and the binaries it produces
+	// are licensed under the Business Source License 1.1, so stamp the BUSL
+	// edition into every builder-produced binary. (A stock `go build` of cilock
+	// leaves Edition empty and reports Apache 2.0.)
 	metadataFlags := fmt.Sprintf("-X 'rookery-build/buildinfo.BuilderVersion=%s' "+
 		"-X 'rookery-build/buildinfo.BuildTime=%s' "+
 		"-X 'rookery-build/buildinfo.Plugins=%s' "+
 		"-X 'rookery-build/buildinfo.FipsMode=%s' "+
+		"-X 'github.com/aflock-ai/rookery/cilock/cli.Edition=busl' "+
 		"-X 'github.com/aflock-ai/rookery/cilock/cli.CustomerID=%s' "+
 		"-X 'github.com/aflock-ai/rookery/cilock/cli.TenantID=%s'",
 		builderVer, buildTime, pluginsStr, fipsModeStr, customerID, tenantID)
