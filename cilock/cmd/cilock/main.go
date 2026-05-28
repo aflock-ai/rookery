@@ -7,6 +7,10 @@ import (
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/cilock/cli"
 
+	// cilock-native attestor: binds attestations to the TestifySec platform
+	// tenant/product when logged in (no-op otherwise).
+	_ "github.com/aflock-ai/rookery/cilock/internal/attestors/platform"
+
 	// All attestor plugins
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-iid"
