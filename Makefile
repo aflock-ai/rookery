@@ -1,4 +1,4 @@
-.PHONY: build test test-race test-coverage tidy verify-isolated lint lint-fix vet vulncheck deadcode docs help
+.PHONY: build test test-race test-coverage tidy verify-isolated lint lint-fix vet vulncheck deadcode docs help bpf-lint
 
 # Workspace members (parsed from go.work, excluding comments)
 MODULES = $(shell grep '^\s*\./' go.work | sed 's/^[[:space:]]*//' | sed 's|^\.\/||')
@@ -26,6 +26,9 @@ lint-fix: ## Run golangci-lint with auto-fix
 
 vet: ## Run go vet on all modules
 	@for dir in $(MODULES); do echo "vetting $$dir..."; (cd $$dir && go vet ./...) || exit 1; done
+
+bpf-lint: ## Compile-lint the eBPF object source (clang -Wall -Werror); needs clang+bpftool+BTF
+	@./scripts/bpf-lint.sh
 
 vulncheck: ## Run govulncheck for known vulnerabilities
 	@for dir in $(MODULES); do echo "checking $$dir..."; (cd $$dir && govulncheck ./...); done

@@ -1,0 +1,88 @@
+---
+title: gitlab
+description: The cilock gitlab attestor captures GitLab CI job context plus the GitLab-issued OIDC JWT and signs it into in-toto evidence, proving an attestation came from a specific pipeline, job, and project.
+sidebar_position: 13
+examples_repo: 22-gitlab
+---
+
+Captures GitLab CI job context and the GitLab-issued OIDC JWT — the CI-side identity that proves "this attestation came from this pipeline, this job, this project."
+
+## What it captures
+
+CI/CD context read from GitLab's predefined `CI_*` environment variables, plus the decoded GitLab-issued JWT (claims + JWKS verification, recorded under the nested `jwt` field).
+
+Struct fields (json tags):
+
+- `jwt` — full embedded `jwt` attestor result (token claims + JWKS verification)
+- `ciconfigpath` — `CI_CONFIG_PATH`
+- `jobid` — `CI_JOB_ID`
+- `jobimage` — `CI_JOB_IMAGE`
+- `jobname` — `CI_JOB_NAME`
+- `jobstage` — `CI_JOB_STAGE`
+- `joburl` — `CI_JOB_URL` (also recorded as a subject)
+- `pipelineid` — `CI_PIPELINE_ID`
+- `pipelineurl` — `CI_PIPELINE_URL` (subject + back-reference)
+- `projectid` — `CI_PROJECT_ID`
+- `projecturl` — `CI_PROJECT_URL` (also recorded as a subject)
+- `runnerid` — `CI_RUNNER_ID`
+- `cihost` — `CI_SERVER_HOST`
+- `ciserverurl` — `CI_SERVER_URL` (used to derive the JWKS URL)
+
+`Attest()` first checks `GITLAB_CI=true` and returns `ErrNotGitlab` if unset.
+
+## When to use
+
+In any GitLab CI pipeline. The embedded JWT gives the verifier a GitLab-signed proof of pipeline/project/job identity that is independent of the cilock binary itself. Pair with the cilock-action GitLab template (or an equivalent `.gitlab-ci.yml` snippet) so the runner exposes a JWT env var to the attestor.
+
+## Flags
+
+None. JWT discovery is configured via environment, not flags:
+
+- `WITNESS_GITLAB_JWKS_URL` — override the JWKS endpoint (defaults to `${CI_SERVER_URL}/oauth/discovery/keys`).
+- `CI_JOB_JWT` — fallback token source when no programmatic token / env-var override is set. Note: `CI_JOB_JWT` was removed in GitLab 17.0; for GitLab >= 17 the caller must inject a token (e.g. via `id_tokens:` in `.gitlab-ci.yml`) and point the attestor at it.
+
+Programmatic options (Go API): `WithToken(string)`, `WithTokenEnvVar(string)`.
+
+## Output shape
+
+```json
+{
+  "jwt": {
+    "claims": { "iss": "https://gitlab.com", "sub": "project_path:group/repo:ref_type:branch:ref:main", "...": "..." },
+    "verifiedBy": { "jwksUrl": "https://gitlab.com/oauth/discovery/keys", "...": "..." }
+  },
+  "ciconfigpath": ".gitlab-ci.yml",
+  "jobid": "9876543210",
+  "jobimage": "alpine:3.20",
+  "jobname": "build",
+  "jobstage": "build",
+  "joburl": "https://gitlab.com/group/repo/-/jobs/9876543210",
+  "pipelineid": "1234567890",
+  "pipelineurl": "https://gitlab.com/group/repo/-/pipelines/1234567890",
+  "projectid": "42",
+  "projecturl": "https://gitlab.com/group/repo",
+  "runnerid": "12345",
+  "cihost": "gitlab.com",
+  "ciserverurl": "https://gitlab.com"
+}
+```
+
+Subjects: `` `pipelineurl:<url>` ``, `` `joburl:<url>` ``, `` `projecturl:<url>` `` (SHA-256). Back-reference: `` `pipelineurl:<url>` ``.
+
+## Gotchas
+
+- **Not in GitLab CI**: if `GITLAB_CI` is unset or not `"true"`, the attestor returns `ErrNotGitlab` and produces no output.
+- **No JWT in env**: if no token is supplied via `WithToken`, `WithTokenEnvVar`, or `CI_JOB_JWT`, the attestor logs `no jwt token found in environment` and continues — you get the `CI_*` fields but no JWT proof. On GitLab 17+, this is the default unless you configure `id_tokens:`.
+- **`CI_JOB_JWT` is legacy**: it only exists on GitLab < 17.0. For 17.0+, declare an ID token in `.gitlab-ci.yml` (e.g. `` `id_tokens: { WITNESS_TOKEN: { aud: "..." } }` ``) and pass its env var name via `WithTokenEnvVar`.
+- **Self-hosted GitLab**: JWKS defaults to `${CI_SERVER_URL}/oauth/discovery/keys`. For air-gapped or non-standard installs, override with `WITNESS_GITLAB_JWKS_URL`. The verifier hitting that URL must be able to reach it (or have the keys cached) when validating attestations.
+- **JWT verification failure is fatal**: if a token is present but JWKS verification fails, `Attest()` returns the underlying jwt-attestor error and no gitlab attestation is recorded.
+
+## CLI example
+
+See the constraint summary + reproduction recipe at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/22-gitlab](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/22-gitlab). This attestor is currently blocked or doc-only — the linked example explains why and shows the recipe to validate once the constraint is removed.
+
+## See also
+
+- [Catalog row](../reference/attestor-catalog)
+- [GitLab component reference](../reference/gitlab-component)
+- Upstream: [witness/gitlab.md](https://github.com/in-toto/witness/blob/main/docs/attestors/gitlab.md)

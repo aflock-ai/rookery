@@ -1,0 +1,141 @@
+---
+title: gosec
+description: Run gosec Go SAST under cilock — flags insecure patterns (weak crypto, math/rand, command injection) and emits a signed v0.3 SARIF attestation linked to the commit that produced the code.
+sidebar_position: 5
+examples_repo: tool-gosec-sarif
+---
+
+[`gosec`](https://github.com/securego/gosec) is the de-facto static analyzer for Go. It walks the AST and flags the patterns Go reviewers actually argue about in PRs: `math/rand` where `crypto/rand` was meant (`G404`), MD5/SHA1 (`G401`), `crypto/des` and other blocklisted imports (`G501`), `os/exec` with tainted input (`G204`), unescaped SQL (`G201`), and so on. Cilock's contribution is that the resulting SARIF report becomes a **signed, linked attestation** — the report is no longer a stray file in a CI artifact bucket, it's an entry in your supply-chain graph that policy can gate against.
+
+## Validated invocation
+
+Run it the way the [`tool-gosec-sarif` compliance example](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-gosec-sarif) runs it in CI:
+
+```bash
+cilock run --step gosec-scan \
+  --signer-file-key-path key.pem \
+  --outfile attestation.json \
+  --attestations sarif,environment,git \
+  --enable-archivista=false \
+  -- gosec -no-fail -fmt=sarif -out=gosec.sarif ./...
+```
+
+`-no-fail` is **mandatory** here. gosec's default behaviour is to exit non-zero whenever it finds *anything* — even a single low-severity issue. Cilock's `command-run` attestor treats a non-zero child exit as a failed step and aborts the run **before signing**, so without `-no-fail` you get no envelope at all when gosec actually does its job. With `-no-fail`, gosec writes the SARIF and exits 0; the findings are still in the file, still signed, still enforceable in policy. See [Why `-no-fail`?](#why--no-fail-and-not-just-let-gosec-fail-the-build) below.
+
+## What gets captured
+The DSSE envelope contains an `https://aflock.ai/attestations/collection/v0.1` predicate whose `attestations` array carries:
+
+| Predicate type                                          | Purpose |
+|---------------------------------------------------------|---------|
+| `https://aflock.ai/attestations/environment/v0.1`       | OS, arch, env vars (scrubbed), user — pins where the scan ran. |
+| `https://aflock.ai/attestations/git/v0.1`               | Commit SHA, branch, signing identity — pins what the scan ran against. |
+| `https://aflock.ai/attestations/material/v0.3`          | SHA-256 digests of every input file gosec saw. |
+| `https://aflock.ai/attestations/command-run/v0.1`       | The literal argv (`gosec -no-fail -fmt=sarif -out=gosec.sarif ./...`), exit code, stdout, stderr. |
+| `https://aflock.ai/attestations/product/v0.3`           | Digest of `gosec.sarif` after the run — the *product* the next step's `material` attestor can chain on. |
+| `https://aflock.ai/attestations/sarif/v0.1`             | The parsed SARIF document — findings, rule IDs, levels, locations. Policy reads this. |
+
+The DSSE envelope's outer `subject` is the digest of `gosec.sarif`, so any downstream verify step can resolve "the gosec scan that produced *this* report" by digest.
+
+## Why this shape (and not the older `bash -c "cp …"` shim)
+
+| Shape | What `command-run` records | Problem |
+|---|---|---|
+| `-- bash -c 'gosec … && cp gosec.sarif out.sarif'` | argv = `bash -c …` | The actual tool is hidden inside a shell string. A reviewer reading the envelope cannot see that `gosec` ran. |
+| `-- cp gosec.sarif out.sarif` (gosec pre-step) | argv = `cp …` | `command-run` attests `cp`, not the scanner. Product chain breaks because `cp` is not the producer. |
+| **`-- gosec -no-fail -fmt=sarif -out=gosec.sarif ./...`** ✅ | argv = `gosec …` | The real tool, the real flags, the real exit code. `product` picks up `gosec.sarif` from the same working directory on the same run. No shell wrapper, no rename, no copy. |
+
+Direct invocation is what makes the envelope *honest* — what `command-run` claims is what actually ran.
+
+## Validate it locally
+```bash
+# Sign a fresh attestation (against a Go module that has files for gosec to scan)
+cilock run --step gosec-scan \
+  --signer-file-key-path key.pem \
+  --outfile attestation.json \
+  --attestations sarif,environment,git \
+  --enable-archivista=false \
+  -- gosec -no-fail -fmt=sarif -out=gosec.sarif ./...
+
+# Confirm the predicate types are all present
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations | map(.type)'
+```
+
+Expected output:
+
+```json
+[
+  "https://aflock.ai/attestations/environment/v0.1",
+  "https://aflock.ai/attestations/git/v0.1",
+  "https://aflock.ai/attestations/material/v0.3",
+  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/product/v0.3",
+  "https://aflock.ai/attestations/sarif/v0.1"
+]
+```
+
+To see the actual rule IDs gosec flagged:
+
+```bash
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations[]
+        | select(.type=="https://aflock.ai/attestations/sarif/v0.1")
+        | .attestation.runs[0].results
+        | map({ruleId, level})'
+```
+
+The [example fixture](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-gosec-sarif/fixtures) deliberately triggers `G401`, `G404`, and `G501`, so this query returns three results against it.
+
+## Enforcing findings in policy (not on the tool exit code)
+
+Because `-no-fail` zeros out gosec's exit code, the build's pass/fail decision moves into Rego inside the cilock policy — which is where it belonged anyway. A minimal "no high-severity findings" rule reading the captured SARIF:
+
+```rego
+package gosec
+
+import rego.v1
+
+deny contains msg if {
+  some run in input.attestations[_].attestation.runs
+  some result in run.results
+  result.level == "error"
+  msg := sprintf("gosec rule %v at %v",
+    [result.ruleId, result.locations[0].physicalLocation.artifactLocation.uri])
+}
+```
+
+This is strictly stronger than relying on the exit code — the rule reads the *signed, immutable* SARIF predicate, not a transient process status, and the same rule applies whether the scan ran in CI, on a laptop, or as part of a re-verification weeks later.
+
+## Notes on `-no-fail` (the general pattern)
+
+`gosec` is one of a class of CLI tools that conflate "scanner ran successfully" with "scanner found nothing". Under cilock, you almost always want those two split:
+
+- **Scanner ran successfully** → exit code 0 → cilock signs the envelope.
+- **Scanner found something bad** → recorded in the SARIF predicate → policy decides whether the build moves forward.
+
+The same `--no-fail` / `--exit-code 0` / `|| true` pattern applies to other SARIF-producing tools whose default is to exit non-zero on findings. The rule of thumb: if the tool has a flag that means "still write the report but exit 0", set it, and put the enforcement in Rego.
+
+## FAQ
+
+### Does cilock support gosec?
+
+Yes. gosec emits SARIF natively, and cilock ingests SARIF via its built-in `sarif` attestor — no plugin install, no extra binary. The compliance example at [`aflock-ai/attestor-compliance-examples/tool-gosec-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-gosec-sarif) is run end-to-end in CI on every release of the example repo.
+
+### Why `-no-fail` and not just let gosec fail the build?
+
+Because cilock's `command-run` attestor treats a non-zero child exit as a failed step and aborts the run before signing. Without `-no-fail`, gosec finds an issue, exits 1, cilock bails, and you get **no signed envelope at all** — so you've lost the evidence of *both* the scan happening and what it found. With `-no-fail`, the SARIF still contains every finding (and is cryptographically signed); enforcement moves into the cilock policy's Rego rule, which is more expressive than a binary exit code anyway.
+
+### How do I enforce zero findings if gosec is exiting 0?
+
+Write the gate in Rego against the `sarif/v0.1` predicate, as shown in [Enforcing findings in policy](#enforcing-findings-in-policy-not-on-the-tool-exit-code) above. Policy can require zero results, zero results at `level == "error"`, zero results matching a specific rule list (e.g. only block on `G401`, `G402`, `G501`), or any other shape your compliance program needs. `cilock verify` will refuse to release the artifact when the Rego `deny` set is non-empty.
+
+### Does it cover specific G-codes (G401, G404, G501, …)?
+
+The cilock side is rule-agnostic — it captures whatever gosec puts in the SARIF, including the `ruleId` for every finding. Coverage of specific G-codes is a property of gosec itself; you control it with gosec's own `-include` / `-exclude` flags. The compliance example's fixture is built to trip `G401` (weak crypto, MD5), `G404` (insecure RNG, `math/rand`), and `G501` (blocklisted import, `crypto/des`) so the end-to-end validation exercises real findings, real rule IDs, and a real Rego gate against them.
+
+## See also
+
+- [`sarif` attestor](../attestors/sarif) — the underlying ingestion path
+- [How cilock policy works](../guides/policy) — the verify side
+- [Attestation graph + back-refs](../concepts/attestation-graph) — how multiple attestors link via subject digests
+- [Tools index](./index)

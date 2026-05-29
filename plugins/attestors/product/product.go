@@ -65,6 +65,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -463,6 +464,23 @@ func collectTracedFileSet(ctx *attestation.AttestationContext) (bool, map[string
 	return traced, set
 }
 
+// commandStartTime returns the wall-clock instant the wrapped command began,
+// read from a completed CommandRun attestor. The walk path passes it to
+// file.RecordArtifacts so a same-digest file the build rewrote during its run
+// (mtime >= start) is still recorded as a product. Returns the zero time when
+// no command ran (e.g. `cilock attest` with no wrapped command), which makes
+// RecordArtifacts fall back to the legacy digest-only dedup.
+func commandStartTime(ctx *attestation.AttestationContext) time.Time {
+	for _, completed := range ctx.CompletedAttestors() {
+		if cmd, ok := completed.Attestor.(*commandrun.CommandRun); ok {
+			if started := cmd.StartedAt(); !started.IsZero() {
+				return started
+			}
+		}
+	}
+	return time.Time{}
+}
+
 // Attest walks the product set, computes the per-file pre-hashes, sorts
 // them deterministically, and builds the Merkle tree. The signed
 // predicate's MerkleRoot is the resulting tree root in hex.
@@ -610,6 +628,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		ctx.DirHashGlob(),
 		a.compiledIncludeGlob,
 		a.compiledExcludeGlob,
+		// Command-start time so RecordArtifacts can rescue same-digest
+		// files the build rewrote during its run (deterministic rebuilds).
+		// Without a syscall view, mtime >= start is the only signal walk
+		// mode has that a byte-identical file is actually a fresh product.
+		commandStartTime(ctx),
 	)
 	if err != nil {
 		return err
@@ -650,44 +673,55 @@ func fromCaptureEntries(entries map[string]attestation.CaptureEntry, requireExis
 			out[path] = attestation.Product{MimeType: "unknown", Digest: nil}
 			continue
 		}
-
-		mimeType := "unknown"
-		if mt, mtErr := getFileContentType(path); mtErr == nil {
-			mimeType = mt
-		}
-		if mimeType == "application/octet-stream" && fi.IsDir() {
-			mimeType = "text/directory"
-		}
-
-		// Path exists but we couldn't hash it (trace race, transient
-		// permission). Keep as witness-only product entry — the
-		// existence-at-exit invariant tells us this IS a real
-		// deliverable, just one whose content we couldn't capture.
-		if entry.Digest == nil {
-			out[path] = attestation.Product{
-				MimeType: mimeType,
-				Digest:   nil,
-			}
-			continue
-		}
-
-		ds, err := cryptoutil.NewDigestSet(entry.Digest)
-		if err != nil {
-			// Same fallback path — bad digest data on the trace
-			// side; record the path without a digest rather than
-			// dropping it silently.
-			out[path] = attestation.Product{
-				MimeType: mimeType,
-				Digest:   nil,
-			}
-			continue
-		}
-		out[path] = attestation.Product{
-			MimeType: mimeType,
-			Digest:   ds,
-		}
+		out[path] = productForSurvivor(path, entry, fi)
 	}
 	return out
+}
+
+// productForSurvivor builds the Product for an entry whose path still
+// exists at process exit (fi is its stat result). It prefers the digest
+// the tracer captured, but falls back to hashing the surviving file
+// directly when the trace digest is missing or unparseable.
+func productForSurvivor(path string, entry attestation.CaptureEntry, fi os.FileInfo) attestation.Product {
+	mimeType := "unknown"
+	if mt, mtErr := getFileContentType(path); mtErr == nil {
+		mimeType = mt
+	}
+	if mimeType == "application/octet-stream" && fi.IsDir() {
+		mimeType = "text/directory"
+	}
+
+	// The trace write-tap didn't yield a content digest (ringbuf drop,
+	// partial-read fallback, an mmap+msync write we don't tap, or — seen
+	// on GHA's Azure 6.17 kernel — a rebuilt-on-host BPF object whose
+	// write-tap never fires). The file is a confirmed surviving
+	// deliverable, so hash it directly instead of emitting a digest-less
+	// entry that buildTree() would drop from the Merkle tree — which
+	// would otherwise ship a signed attestation with an EMPTY product set
+	// and leave the verify gate with no subject to anchor on.
+	if entry.Digest == nil {
+		return hashSurvivorOrWitness(path, mimeType, fi)
+	}
+
+	ds, err := cryptoutil.NewDigestSet(entry.Digest)
+	if err != nil {
+		// Bad digest data on the trace side — same direct-hash fallback.
+		return hashSurvivorOrWitness(path, mimeType, fi)
+	}
+	return attestation.Product{MimeType: mimeType, Digest: ds}
+}
+
+// hashSurvivorOrWitness hashes a surviving regular file directly and
+// returns a product carrying that digest. Regular files only — never
+// block on a FIFO/socket. If the file isn't regular or hashing fails, it
+// degrades to a witness-only product (nil digest).
+func hashSurvivorOrWitness(path, mimeType string, fi os.FileInfo) attestation.Product {
+	if fi.Mode().IsRegular() {
+		if ds, herr := cryptoutil.CalculateDigestSetFromFile(path, []cryptoutil.DigestValue{{Hash: crypto.SHA256}}); herr == nil {
+			return attestation.Product{MimeType: mimeType, Digest: ds}
+		}
+	}
+	return attestation.Product{MimeType: mimeType, Digest: nil}
 }
 
 // buildTree filters the product set through the include / exclude globs,

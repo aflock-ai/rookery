@@ -625,6 +625,32 @@ type TraceDiagnostics struct {
 	// are missing).
 	FanotifyDigestsCapHit uint64 `json:"fanotifyDigestsCapHit,omitempty"`
 
+	// CacheReadsSkipped is the count of read opens the eBPF hasher
+	// released WITHOUT hashing because the path classified as
+	// build-internal cache/temp (Go module cache, GOCACHE, /tmp). These
+	// are content-addressed storage pinned by lockfiles, not products
+	// and not meaningful materials. Skipping them removes the dominant
+	// hash load on cold builds and avoids churning-cache TOCTOU
+	// failures that would otherwise inflate FallbackHashFailures /
+	// HashFailureSilentDrops. High here + low drops = the optimization
+	// is working as intended, not a sign of lost data.
+	CacheReadsSkipped uint64 `json:"cacheReadsSkipped,omitempty"`
+
+	// FanotifyCacheSkips is the same idea for the fanotify gate: opens
+	// the synchronous handler released without hashing because the path
+	// classified as cache/temp. Reduces handler latency → fewer
+	// timeouts / queue overflows.
+	FanotifyCacheSkips uint64 `json:"fanotifyCacheSkips,omitempty"`
+
+	// FanotifyIgnoreMarksAdded / FanotifyIgnoreMarkErrors report the
+	// "hash once" EXPERIMENT (CILOCK_FANO_IGNORE_ONCE): how many inode
+	// FAN_MARK_IGNORE marks were added (each suppresses repeat
+	// FAN_OPEN_PERM for one inode until it's modified) and how many such
+	// marks failed. High added-count + low EventsHashed on a repeat-heavy
+	// build = the in-kernel open-storm collapse is working.
+	FanotifyIgnoreMarksAdded uint64 `json:"fanotifyIgnoreMarksAdded,omitempty"`
+	FanotifyIgnoreMarkErrors uint64 `json:"fanotifyIgnoreMarkErrors,omitempty"`
+
 	// FsVerityAvailable reports whether fs-verity sealing was active
 	// for this trace's workspace FS. true = the kernel computed and
 	// stored Merkle roots over product files; false = streaming
@@ -737,10 +763,28 @@ type CommandRun struct {
 	fanotifyTimeouts       uint64
 	fanotifyQueueOverflows uint64
 	fanotifyDigestsCapHit  uint64
+	// fanotifyCacheSkips stashes the count of opens the fanotify gate
+	// released without hashing because the path classified as cache/temp.
+	fanotifyCacheSkips uint64
+	// fanotifyIgnoreMarksAdded / fanotifyIgnoreMarkErrors stash the
+	// "hash once" experiment's inode-ignore-mark counters.
+	fanotifyIgnoreMarksAdded uint64
+	fanotifyIgnoreMarkErrors uint64
 	// fanotifyOnlyDigests holds paths fanotify hashed that no
 	// process recorded an open for. Surfaced at end-of-trace to
 	// Summary.FanotifyOnlyDigests so no kernel-observed open is lost.
 	fanotifyOnlyDigests map[string]string
+	// fanotifyWriteOpenClaimed holds paths whose OpenedFiles entry was a
+	// WRITE-open (nil-digest) that fanotify upgraded with an open-time
+	// hash. That hash is NOT read-evidence, so TraceOutputs excludes
+	// these from readPaths — otherwise a written product fanotify hashed
+	// gets demoted to an "intermediate" and dropped from the product tree.
+	fanotifyWriteOpenClaimed map[string]bool
+	// fanotifyProductDigests holds path → SHA-256 of FINAL written content
+	// captured at FAN_CLOSE_WRITE — authoritative product content the kernel
+	// hashed at close, independent of the lossy eBPF write-tap. TraceOutputs
+	// emits these as products with zero-drop content.
+	fanotifyProductDigests map[string][32]byte
 	// fsVerityState holds opportunistic fs-verity sealing state.
 	// Probed at trace start; per-product seal calls during finalize
 	// consult Available to skip the ioctl on unsupported FS.
@@ -759,6 +803,11 @@ type CommandRun struct {
 	// failure count masks real holes or harmless retries.
 	hashSilentByDigest uint64
 	hashSilentByDedup  uint64
+	// cacheReadsSkipped stashes the eBPF hasher's count of read opens
+	// released without hashing because the path classified as
+	// build-internal cache/temp (cacheMatcher). Surfaced into
+	// Summary.Diagnostics so the skip is transparent.
+	cacheReadsSkipped uint64
 
 	// resolvedCaptureMode records which capture-mode the framework
 	// selected for this run ("trace", "walk", "ima"). Populated by
@@ -969,6 +1018,18 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 			if path == "" || ds == nil {
 				continue
 			}
+			// A digest that came from fanotify upgrading a WRITE-open is
+			// NOT read-evidence (fanotify hashes every open, including the
+			// build's output files; for an O_CREAT output it's the empty
+			// pre-write content). Counting it as a read would demote the
+			// written product to an "intermediate" and drop it from the
+			// product tree — the empty-product-tree failure on GitHub's
+			// Azure runner when fanotify is on and the eBPF write-tap
+			// fails. Genuine reads still appear via their BPF read-tap
+			// digest (not in fanotifyWriteOpenClaimed).
+			if rc.fanotifyWriteOpenClaimed[path] {
+				continue
+			}
 			readPaths[path] = true
 		}
 	}
@@ -1117,6 +1178,70 @@ func (rc *CommandRun) TraceOutputs() map[string]attestation.CaptureEntry {
 			Source: source,
 		}
 	}
+
+	// Authoritative product signal: exists-at-exit + modified-in-window.
+	// Any regular file under the tracee's workspace whose mtime is at/after
+	// the command-start instant and that survives at exit is a product the
+	// command produced — even when the (lossy) eBPF write-tap captured NO
+	// write event for it (GitHub's Azure 6.17 kernel dropped entire write
+	// events, e.g. syft's SBOM output) and even when the file was also read
+	// in this step (a one-step build+scan legitimately yields multiple
+	// products — the binary AND its SBOM). This anchors products on
+	// filesystem reality rather than on lossy syscall events. Pure inputs
+	// are excluded for free: a read does not update mtime, so only
+	// written/created files match. Cache classification still runs in the
+	// product attestor (classifyTracePath), so workspace files under cache
+	// patterns are filtered there. Digest comes from the write-tap when we
+	// captured it; otherwise nil and the product attestor hashes the
+	// surviving file at attest time.
+	// CILOCK_DEV_DISABLE_SURVIVOR_WALK is an ablation knob (dev/experiments
+	// only) to isolate the survivor-walk's contribution vs the write-tap /
+	// FAN_CLOSE_WRITE paths. Unset in normal operation.
+	if base != "" && !rc.traceStartTime.IsZero() && os.Getenv("CILOCK_DEV_DISABLE_SURVIVOR_WALK") == "" {
+		_ = filepath.Walk(base, func(path string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return nil //nolint:nilerr // best-effort; a stat error on one entry must not abort product capture
+			}
+			if info.IsDir() {
+				// Never descend into VCS metadata — it's never a product
+				// and is expensive to walk.
+				if info.Name() == ".git" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !info.Mode().IsRegular() {
+				return nil
+			}
+			if _, seen := out[path]; seen {
+				return nil
+			}
+			if info.ModTime().Before(rc.traceStartTime) {
+				return nil
+			}
+			var dm map[string]string
+			if ds, ok := writtenDigests[path]; ok {
+				if m, e := ds.ToNameMap(); e == nil {
+					dm = m
+				}
+			}
+			out[path] = attestation.CaptureEntry{Digest: dm, Source: "trace-mtime-survivor"}
+			return nil
+		})
+	}
+
+	// FAN_CLOSE_WRITE products: the kernel hashed each written file's FINAL
+	// content at close. This is authoritative, zero-drop product content
+	// (modulo fanotify queue overflow, which is counted) captured WITHOUT
+	// the lossy eBPF write-tap — so it overrides any prior entry (write-tap
+	// digest, witness-only nil, or survivor-walk placeholder) for the path.
+	for path, raw := range rc.fanotifyProductDigests {
+		out[path] = attestation.CaptureEntry{
+			Digest: map[string]string{"sha256": fmt.Sprintf("%x", raw[:])},
+			Source: "fanotify-close-write",
+		}
+	}
+
 	return out
 }
 
@@ -1141,6 +1266,18 @@ func (rc *CommandRun) TraceCacheArtifacts() map[string]attestation.CaptureEntry 
 	for i := range rc.Processes {
 		for path, ds := range rc.Processes[i].OpenedFiles {
 			if path == "" || ds == nil {
+				continue
+			}
+			// A digest that came from fanotify upgrading a WRITE-open is
+			// NOT read-evidence (fanotify hashes every open, including the
+			// build's output files; for an O_CREAT output it's the empty
+			// pre-write content). Counting it as a read would demote the
+			// written product to an "intermediate" and drop it from the
+			// product tree — the empty-product-tree failure on GitHub's
+			// Azure runner when fanotify is on and the eBPF write-tap
+			// fails. Genuine reads still appear via their BPF read-tap
+			// digest (not in fanotifyWriteOpenClaimed).
+			if rc.fanotifyWriteOpenClaimed[path] {
 				continue
 			}
 			readPaths[path] = true
@@ -1194,6 +1331,18 @@ func (rc *CommandRun) TraceIntermediates() map[string]attestation.CaptureEntry {
 	for i := range rc.Processes {
 		for path, ds := range rc.Processes[i].OpenedFiles {
 			if path == "" || ds == nil {
+				continue
+			}
+			// A digest that came from fanotify upgrading a WRITE-open is
+			// NOT read-evidence (fanotify hashes every open, including the
+			// build's output files; for an O_CREAT output it's the empty
+			// pre-write content). Counting it as a read would demote the
+			// written product to an "intermediate" and drop it from the
+			// product tree — the empty-product-tree failure on GitHub's
+			// Azure runner when fanotify is on and the eBPF write-tap
+			// fails. Genuine reads still appear via their BPF read-tap
+			// digest (not in fanotifyWriteOpenClaimed).
+			if rc.fanotifyWriteOpenClaimed[path] {
 				continue
 			}
 			readPaths[path] = true
@@ -1520,6 +1669,15 @@ func (rc *CommandRun) TracingEnabled() bool {
 	return rc.enableTracing
 }
 
+// StartedAt returns the wall-clock instant captured immediately before the
+// command's exec.Start, on every run (traced or not). The product attestor's
+// walk path uses it to decide whether a same-digest file was rewritten during
+// the command window (mtime >= StartedAt → product). Zero if the command never
+// started.
+func (rc *CommandRun) StartedAt() time.Time {
+	return rc.traceStartTime
+}
+
 func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	c := exec.Command(r.Cmd[0], r.Cmd[1:]...) //nolint:gosec // G204: command is user-specified by design
 	c.Dir = ctx.WorkingDir()
@@ -1561,12 +1719,29 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		if err := r.preStartTracingSetup(); err != nil {
 			return err
 		}
+		// Build the cache classifier up front so the trace can consult
+		// it DURING capture (the product attestor's SetCacheMatcher runs
+		// later, after the trace). Same patterns the product attestor
+		// uses, so capture-time skips and product-time classification
+		// agree. fanotify + the eBPF hasher skip these paths to avoid
+		// hashing build-internal cache (Go module cache, GOCACHE, /tmp)
+		// — the dominant open volume on cold builds and the main drop /
+		// overhead source.
+		if r.cacheMatcher == nil {
+			if m, _ := attestation.NewCachePathMatcher(attestation.ResolveCachePatterns(ctx.CachePatterns())); m != nil {
+				r.cacheMatcher = m
+			}
+		}
+		var cacheSkip func(string) bool
+		if r.cacheMatcher != nil {
+			cacheSkip = r.cacheMatcher.Matches
+		}
 		// Optional fanotify integrity gate. When enabled, EVERY
 		// open() of a file under the workspace mount is synchronously
 		// hashed by the kernel-blocking fanotify handler — zero drops
 		// by construction. Falls back to BPF-only if the env var
 		// requests auto-mode and fanotify is unavailable.
-		fanSession, err := maybeStartFanotify(c.Dir)
+		fanSession, err := maybeStartFanotify(c.Dir, cacheSkip)
 		if err != nil {
 			return err
 		}
@@ -1603,7 +1778,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			r.ebpfConsumer = nil
 		}
 		if r.fanotifySession != nil {
-			_, _ = r.fanotifySession.stop()
+			_, _, _ = r.fanotifySession.stop()
 			r.fanotifySession = nil
 		}
 		return err
@@ -1622,15 +1797,24 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		// Drain + merge fanotify digests (if enabled). Done BEFORE
 		// summary build so Diagnostics see the merged count.
 		if r.fanotifySession != nil {
-			fanDigests, fanStats := r.fanotifySession.stop()
+			fanDigests, fanCloseWrite, fanStats := r.fanotifySession.stop()
 			r.fanotifySession = nil
-			merged, only := mergeFanotifyDigests(r.Processes, fanDigests)
+			merged, only, writeOpenClaimed := mergeFanotifyDigests(r.Processes, fanDigests)
 			r.fanotifyDigestsMerged = uint64(merged)
 			r.fanotifyOnlyDigests = only
+			r.fanotifyWriteOpenClaimed = writeOpenClaimed
+			// FAN_CLOSE_WRITE digests are the kernel-hashed FINAL content of
+			// files the tracee wrote+closed — authoritative product content,
+			// captured without the lossy eBPF write-tap. TraceOutputs emits
+			// these as products.
+			r.fanotifyProductDigests = fanCloseWrite
 			r.fanotifyEventsHashed = fanStats.EventsHashed
 			r.fanotifyTimeouts = fanStats.HandlerTimeouts
 			r.fanotifyQueueOverflows = fanStats.QueueOverflows
 			r.fanotifyDigestsCapHit = fanStats.DigestsCapHit
+			r.fanotifyCacheSkips = fanStats.CacheSkips
+			r.fanotifyIgnoreMarksAdded = fanStats.IgnoreMarksAdded
+			r.fanotifyIgnoreMarkErrors = fanStats.IgnoreMarkErrors
 		}
 
 		// Build the AI-agent-friendly summary from the captured
@@ -1661,6 +1845,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			}
 			r.Summary.Diagnostics.UnhashedOpensTotal = unhashedTotal
 			r.Summary.Diagnostics.HashFailureSilentDrops = r.hashSilentByDigest + r.hashSilentByDedup
+			r.Summary.Diagnostics.CacheReadsSkipped = r.cacheReadsSkipped
 			// Fanotify integrity-gate stats. FanotifyAvailable is
 			// true iff any events were hashed (the handler was active);
 			// merged-count tells verifiers how many BPF digests got
@@ -1672,6 +1857,9 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 				r.Summary.Diagnostics.FanotifyTimeouts = r.fanotifyTimeouts
 				r.Summary.Diagnostics.FanotifyQueueOverflows = r.fanotifyQueueOverflows
 				r.Summary.Diagnostics.FanotifyDigestsCapHit = r.fanotifyDigestsCapHit
+				r.Summary.Diagnostics.FanotifyCacheSkips = r.fanotifyCacheSkips
+				r.Summary.Diagnostics.FanotifyIgnoreMarksAdded = r.fanotifyIgnoreMarksAdded
+				r.Summary.Diagnostics.FanotifyIgnoreMarkErrors = r.fanotifyIgnoreMarkErrors
 			}
 			if len(r.fanotifyOnlyDigests) > 0 {
 				r.Summary.FanotifyOnlyDigests = r.fanotifyOnlyDigests

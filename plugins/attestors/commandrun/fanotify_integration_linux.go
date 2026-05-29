@@ -21,10 +21,16 @@ import (
 )
 
 // EnvVarFanotify selects the fanotify integrity gate. Values:
-//   - "" / "0" / "off": disabled (default, BPF-only)
+//   - "" (unset): DEFAULT — same as "auto" (enable if available).
+//     fanotify is the authoritative, synchronous content-hash source
+//     that closes the eBPF write-tap gap on kernels where the CO-RE
+//     object (or its host-rebuilt variant) mis-hashes writes — e.g.
+//     GitHub's Azure 6.17 runner, where the eBPF tap silently dropped
+//     every product digest and shipped an empty product tree. Defaulting
+//     it ON means correct product capture out of the box.
 //   - "auto": enable if Probe succeeds; otherwise fall back silently
 //   - "1" / "on": REQUIRE fanotify; error if Probe fails
-//   - "off-explicit": explicitly disable (suppresses auto-detect)
+//   - "0" / "off" / "off-explicit": explicitly disable (BPF-only)
 const EnvVarFanotify = "CILOCK_FANOTIFY"
 
 // fanotifySession bundles the running Handler and its goroutine so
@@ -43,12 +49,15 @@ type fanotifySession struct {
 //
 // The probe + activate sequence costs a few syscalls and is safe to
 // call regardless of trace mode; we just gate on the env var.
-func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
+func maybeStartFanotify(workingDir string, skipHash func(string) bool) (*fanotifySession, error) {
 	mode := os.Getenv(EnvVarFanotify)
 	switch mode {
-	case "", "0", "off", "off-explicit":
+	case "0", "off", "off-explicit":
+		// Explicit opt-out — operator chose BPF-only.
 		return nil, nil
-	case "auto", "1", "on":
+	case "", "auto", "1", "on":
+		// Unset now defaults to auto (enable-if-available). "1"/"on"
+		// additionally REQUIRE it (see `required` below).
 		// continue
 	default:
 		// Unknown value — treat as disabled but log so operators can
@@ -78,6 +87,10 @@ func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
 		log.Debugf("(fanotify) New failed (auto-mode, falling back): %v", err)
 		return nil, nil
 	}
+	// Skip synchronous hashing of build-internal cache/temp paths — the
+	// dominant open volume on cold builds, content-addressed by lockfiles,
+	// and not products. Set before Run starts its goroutine (race-free).
+	h.SkipHash = skipHash
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &fanotifySession{h: h, cancel: cancel}
@@ -105,16 +118,17 @@ func maybeStartFanotify(workingDir string) (*fanotifySession, error) {
 
 // stop drains the handler and harvests its digests. Safe to call on
 // nil session (the typical disabled case).
-func (s *fanotifySession) stop() (map[string][32]byte, fanotify.Stats) {
+func (s *fanotifySession) stop() (openDigests map[string][32]byte, closeWriteDigests map[string][32]byte, stats fanotify.Stats) {
 	if s == nil {
-		return nil, fanotify.Stats{}
+		return nil, nil, fanotify.Stats{}
 	}
 	s.cancel()
-	digests := s.h.Digests()
-	stats := s.h.GetStats()
+	openDigests = s.h.Digests()
+	closeWriteDigests = s.h.CloseWriteDigests()
+	stats = s.h.GetStats()
 	_ = s.h.Close()
 	s.wg.Wait()
-	return digests, stats
+	return openDigests, closeWriteDigests, stats
 }
 
 // mergeFanotifyDigests folds fanotify-captured (path → SHA-256) into
@@ -132,9 +146,17 @@ func (s *fanotifySession) stop() (map[string][32]byte, fanotify.Stats) {
 // but ProcessInfo.OpenedFiles is per-pid. We fold the same fanotify
 // digest into every process that recorded an open for the path,
 // providing per-pid attribution alongside the kernel-rooted digest.
-func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (touched int, fanotifyOnly map[string]string) {
+// writeOpenClaimed (3rd return) is the set of paths whose OpenedFiles entry
+// was a WRITE-open (recorded nil-digest to mark "opened to write, not read")
+// that fanotify then upgraded with an open-time hash. fanotify hashes every
+// open indiscriminately, so this digest is NOT read-evidence — and for an
+// O_CREAT output it's the empty pre-write content. TraceOutputs must exclude
+// these from readPaths, otherwise a written product fanotify happened to hash
+// gets counted as a read and dropped as an "intermediate" (empty product tree
+// on GitHub's Azure runner when fanotify is on and the write-tap fails).
+func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (touched int, fanotifyOnly map[string]string, writeOpenClaimed map[string]bool) {
 	if len(fanDigests) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 	// Pre-convert to cryptoutil.DigestSet once per path.
 	dsCache := make(map[string]cryptoutil.DigestSet, len(fanDigests))
@@ -154,8 +176,19 @@ func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byt
 		//     digest — fanotify is kernel-synchronous, race-free, so
 		//     it overwrites any BPF-time digest for the same path.
 		if processes[i].OpenedFiles != nil {
-			for path := range processes[i].OpenedFiles {
+			for path, existing := range processes[i].OpenedFiles {
 				if ds, ok := dsCache[path]; ok {
+					// A nil existing entry means this was a write-open
+					// (recorded for inventory, not a read). fanotify's
+					// open-time hash here isn't read-evidence — flag it so
+					// TraceOutputs doesn't demote the written product to an
+					// intermediate.
+					if existing == nil {
+						if writeOpenClaimed == nil {
+							writeOpenClaimed = make(map[string]bool)
+						}
+						writeOpenClaimed[path] = true
+					}
 					processes[i].OpenedFiles[path] = ds
 					claimed[path] = true
 					touched++
@@ -194,7 +227,7 @@ func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byt
 			fanotifyOnly[path] = h
 		}
 	}
-	return touched, fanotifyOnly
+	return touched, fanotifyOnly, writeOpenClaimed
 }
 
 type fanotifyUnavailableError struct {

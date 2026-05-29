@@ -28,6 +28,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestResolveProductPath guards the regression where product paths (recorded
+// relative to the attestation working directory) were opened relative to the
+// process CWD instead. That broke discovery whenever cilock was invoked with
+// --workingdir/-d pointing somewhere other than the CWD.
+func TestResolveProductPath(t *testing.T) {
+	wd := t.TempDir()
+	ctx, err := attestation.NewContext("test", []attestation.Attestor{}, attestation.WithWorkingDir(wd))
+	require.NoError(t, err)
+
+	// A relative product path must resolve against the working dir.
+	assert.Equal(t, filepath.Join(wd, "kube-bench-report.json"), resolveProductPath(ctx, "kube-bench-report.json"))
+
+	// Absolute paths pass through unchanged.
+	abs := filepath.Join(wd, "abs.json")
+	assert.Equal(t, abs, resolveProductPath(ctx, abs))
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 func defaultHashes() []cryptoutil.DigestValue {

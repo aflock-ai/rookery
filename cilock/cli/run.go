@@ -51,62 +51,94 @@ var defaultAttestorNames = []string{product.Name, material.Name}
 
 // applyNoDefaultAttestors filters out always-on attestors named in
 // the operator's --no-default-attestor flags. Hard-fails when the
-// detectWorkloadAttestors probes the working directory for indicators
-// of common build systems and returns the names of attestors that
-// should run on top of whatever the operator already configured.
-// Cheap stat-based detection — no recursive walks, no file content
-// reading. The probe runs once at startup, before any attestor fires.
+// shouldAutoDetect decides whether workload auto-detection runs for a run.
 //
-// Detection rules:
+// Default behavior: auto-detect ONLY when the operator didn't specify
+// attestors (`-a`). If they passed -a, that's their exact set and we don't
+// add to it. An explicit `--workload` overrides the default — "auto" forces
+// detection even alongside -a, "manual" disables it.
+func shouldAutoDetect(attestationsSet, workloadSet bool, workload string) bool {
+	if workloadSet {
+		return workload != "manual"
+	}
+	return !attestationsSet
+}
+
+// detectCatalogAttestors runs the catalog detection engine against the
+// wrapped command (argv + env + working dir) and returns the attestor names
+// to attach on top of whatever the operator configured. This is the single,
+// data-driven detection path: every rule lives in a detector.yaml
+// (argv_prefix / file_exists / env_set), not hardcoded in Go. It replaces
+// the old marker-file probe — `.git/HEAD` still attaches git (the spine
+// subject), `go build` / `go.mod` attaches go-build, and a tool only
+// attaches its scanner when that tool actually runs (govulncheck fires on
+// `argv_prefix: [govulncheck]`, never on a plain build).
 //
-//   - go.mod                          → go-build, govulncheck
-//   - package.json or package-lock    → sbom, lockfiles
-//   - Cargo.toml                      → lockfiles
-//   - Dockerfile / Containerfile      → oci
-//   - .git/                           → git
+// Each fired detector resolves to attestor(s):
+//   - a plugin-backed detector (git, go-build, govulncheck, trivy, …) IS an
+//     attestor — attach it by name.
+//   - a detection-only catalog entry (syft, semgrep, …) is not itself an
+//     attestor; attach the format attestor(s) it feeds via emits_formats
+//     (syft → sbom, semgrep → sarif).
 //
-// Names returned are merged with --attestations by the caller via
-// dedupe; an operator's explicit choice is never silently dropped.
-// Phase 4 of #234.
-func detectWorkloadAttestors(workdir string) []string {
+// Names returned are merged with --attestations by the caller via dedupe;
+// an operator's explicit choice is never silently dropped.
+func detectCatalogAttestors(argv []string, workdir string) []string {
+	if len(argv) == 0 {
+		return nil
+	}
 	if workdir == "" {
-		var err error
-		workdir, err = os.Getwd()
-		if err != nil {
-			return nil
+		if wd, err := os.Getwd(); err == nil {
+			workdir = wd
 		}
 	}
-	var detected []string
+	plan := detection.RunPrePlan(detection.PrePlan{
+		Argv: argv,
+		Env:  envSliceToMap(os.Environ()),
+		Cwd:  workdir,
+	})
+	return resolveDetectedAttestors(plan.Fire, registeredAttestorNames(), detection.Default())
+}
+
+// resolveDetectedAttestors maps fired detectors to the attestor names to
+// attach. Pure (registry + registered-set injected) so it's unit-testable
+// without a fully-linked plugin set. A fired detector that is itself a
+// registered attestor attaches by name; a detection-only catalog entry
+// attaches the format attestor(s) it declares via emits_formats.
+func resolveDetectedAttestors(fire []detection.FireDecision, registered map[string]bool, reg *detection.Registry) []string {
+	var out []string
+	seen := make(map[string]bool)
 	add := func(name string) {
-		for _, d := range detected {
-			if d == name {
-				return
+		if name != "" && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	for _, f := range fire {
+		if registered[f.Attestor] {
+			add(f.Attestor)
+			continue
+		}
+		if d, _, err := reg.Lookup(f.Attestor); err == nil && d != nil {
+			for _, fmtName := range d.EmitsFormats {
+				add(fmtName)
 			}
 		}
-		detected = append(detected, name)
 	}
-	exists := func(name string) bool {
-		_, err := os.Stat(workdir + "/" + name)
-		return err == nil
+	return out
+}
+
+// registeredAttestorNames is the set of attestor names linked into this
+// binary. Used to distinguish a plugin-backed detector (whose name is an
+// attestor) from a detection-only catalog entry (whose evidence is captured
+// by a format attestor named in emits_formats).
+func registeredAttestorNames() map[string]bool {
+	entries := attestation.RegistrationEntries()
+	m := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		m[e.Name] = true
 	}
-	if exists("go.mod") {
-		add("go-build")
-		add("govulncheck")
-	}
-	if exists("package.json") || exists("package-lock.json") {
-		add("sbom")
-		add("lockfiles")
-	}
-	if exists("Cargo.toml") {
-		add("lockfiles")
-	}
-	if exists("Dockerfile") || exists("Containerfile") {
-		add("oci")
-	}
-	if exists(".git") {
-		add("git")
-	}
-	return detected
+	return m
 }
 
 // attestorExternalGenerators returns the external tool binaries whose
@@ -512,13 +544,25 @@ Exit-code policy (finding #221):
 				return err
 			}
 
-			// Workload auto-detection: probe the workspace for build-system
-			// indicators (go.mod, package.json, .git, etc.) and merge the
-			// matched attestors into the operator's --attestations list.
-			// Phase 4 of #234. Skip when --workload=manual.
+			// Attestor auto-detection: run the catalog detection engine
+			// against the wrapped command and merge the attestors it matches
+			// into the --attestations list. All detection rules live in
+			// detector.yaml (argv_prefix / file_exists / env_set) — there is
+			// no hardcoded marker probe anymore.
+			//
+			// Default: auto-detect ONLY when the operator didn't specify
+			// attestors. If they passed -a, that's their exact set — we
+			// don't second-guess it. An explicit --workload always wins
+			// over this default (--workload=auto forces detection even
+			// alongside -a; --workload=manual disables it).
+			autoDetect := shouldAutoDetect(
+				cmd.Flags().Changed("attestations"),
+				cmd.Flags().Changed("workload"),
+				o.Workload,
+			)
 			var detectedNames []string
-			if o.Workload != "manual" {
-				probed := detectWorkloadAttestors(o.WorkingDir)
+			if autoDetect {
+				probed := detectCatalogAttestors(args, o.WorkingDir)
 				var merged []string
 				merged, detectedNames = mergeAttestorNames(o.Attestations, probed)
 				o.Attestations = merged
@@ -631,7 +675,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	}
 
 	for _, a := range ro.Attestations {
-		if a == "command-run" {
+		if a == attestorCommandRun {
 			log.Warnf("'command-run' is a builtin attestor and cannot be called with --attestations flag")
 			continue
 		}

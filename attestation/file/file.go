@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
@@ -45,12 +46,19 @@ func safeGlobMatch(g glob.Glob, s string) (matched bool, err error) {
 type fileJob struct {
 	path    string
 	relPath string
+	// mtime is the file's modification time captured at walk time. It lets
+	// shouldRecord distinguish a same-content file the command rewrote during
+	// its run (mtime >= cmdStart → product) from a pre-existing input the
+	// command never touched (mtime < cmdStart → material). Zero for dir-hash
+	// and symlinked results, where the legacy digest-only rule applies.
+	mtime time.Time
 }
 
 // fileResult represents the result of hashing a file.
 type fileResult struct {
 	relPath string
 	digest  cryptoutil.DigestSet
+	mtime   time.Time
 	err     error
 }
 
@@ -59,7 +67,22 @@ type fileResult struct {
 // returned map of artifacts.
 // includeGlob/excludeGlob filter which files are recorded: exclude is checked first (excluded files are
 // never recorded), then include (only matching files are recorded). Pass nil for either to skip that filter.
-func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob, includeGlob glob.Glob, excludeGlob glob.Glob) (map[string]cryptoutil.DigestSet, error) { //nolint:gocognit,gocyclo,funlen
+//
+// cmdStartTime is optional. When provided (non-zero), a file present in
+// baseArtifacts with an UNCHANGED content digest is still recorded as an
+// artifact if its mtime is at/after cmdStartTime — i.e. the command rewrote
+// it during the run. This closes the walk-mode silent product drop: a
+// deterministic rebuild that re-emits byte-identical output produces no digest
+// delta, and without the mtime signal the real build output vanished from the
+// attestation. Omit it (or pass the zero time) for pure input snapshots — e.g.
+// the material attestor — to keep the legacy digest-only dedup behavior.
+// Mirrors the trace path's commandrun.traceStartTime handling.
+func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob, includeGlob glob.Glob, excludeGlob glob.Glob, cmdStartTime ...time.Time) (map[string]cryptoutil.DigestSet, error) { //nolint:gocognit,gocyclo,funlen
+	var cmdStart time.Time
+	if len(cmdStartTime) > 0 {
+		cmdStart = cmdStartTime[0]
+	}
+
 	artifacts := make(map[string]cryptoutil.DigestSet)
 
 	numWorkers := max(runtime.GOMAXPROCS(0), 1)
@@ -73,7 +96,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 			defer wg.Done()
 			for job := range jobs {
 				digest, err := cryptoutil.CalculateDigestSetFromFile(job.path, hashes)
-				results <- fileResult{relPath: job.relPath, digest: digest, err: err}
+				results <- fileResult{relPath: job.relPath, digest: digest, mtime: job.mtime, err: err}
 			}
 		}()
 	}
@@ -151,7 +174,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 
 				visitedSymlinks[linkedPath] = struct{}{}
 				// Recursive call handles its own parallelization
-				symlinkedArtifacts, err := RecordArtifacts(linkedPath, baseArtifacts, hashes, visitedSymlinks, processWasTraced, openedFiles, dirHashGlob, includeGlob, excludeGlob)
+				symlinkedArtifacts, err := RecordArtifacts(linkedPath, baseArtifacts, hashes, visitedSymlinks, processWasTraced, openedFiles, dirHashGlob, includeGlob, excludeGlob, cmdStart)
 				if err != nil {
 					return err
 				}
@@ -173,7 +196,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 				return nil
 			}
 
-			jobs <- fileJob{path: path, relPath: relPath}
+			jobs <- fileJob{path: path, relPath: relPath, mtime: info.ModTime()}
 			return nil
 		})
 		close(jobs)
@@ -198,7 +221,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 			continue
 		}
 
-		if firstErr == nil && shouldRecord(result.relPath, result.digest, baseArtifacts, processWasTraced, openedFiles, includeGlob, excludeGlob) {
+		if firstErr == nil && shouldRecord(result.relPath, result.digest, baseArtifacts, processWasTraced, openedFiles, includeGlob, excludeGlob, result.mtime, cmdStart) {
 			artifacts[result.relPath] = result.digest
 		}
 	}
@@ -218,7 +241,16 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 // Exclude glob is checked first (excluded files are never recorded), then include glob
 // (only matching files are recorded). After glob filtering, tracing and deduplication
 // checks are applied.
-func shouldRecord(path string, artifact cryptoutil.DigestSet, baseArtifacts map[string]cryptoutil.DigestSet, processWasTraced bool, openedFiles map[string]bool, includeGlob glob.Glob, excludeGlob glob.Glob) bool {
+//
+// mtime is the file's modification time (zero for dir-hash / symlinked
+// results). cmdStart is the command-start instant (zero when the caller didn't
+// supply one). When a file's content digest matches the pre-command snapshot
+// it is normally deduped as a material — UNLESS it was rewritten during the
+// command window (mtime >= cmdStart), in which case it is a product the build
+// produced with byte-identical content. Without this, walk mode silently drops
+// deterministic-rebuild outputs because it can't observe the write syscall the
+// way the eBPF tracer can.
+func shouldRecord(path string, artifact cryptoutil.DigestSet, baseArtifacts map[string]cryptoutil.DigestSet, processWasTraced bool, openedFiles map[string]bool, includeGlob glob.Glob, excludeGlob glob.Glob, mtime time.Time, cmdStart time.Time) bool {
 	normalizedPath := filepath.ToSlash(path)
 	if excludeGlob != nil {
 		if matched, err := safeGlobMatch(excludeGlob, normalizedPath); err != nil {
@@ -238,7 +270,15 @@ func shouldRecord(path string, artifact cryptoutil.DigestSet, baseArtifacts map[
 		return false
 	}
 	if previous, ok := baseArtifacts[path]; ok && artifact.Equal(previous) {
-		return false
+		// Same content as the pre-command snapshot. Dedup as a material
+		// UNLESS the command rewrote it during its run: mtime >= cmdStart
+		// means the build produced this file even though the bytes are
+		// identical (deterministic rebuild, same-content overwrite). Walk
+		// mode has no syscall view, so mtime is the signal. Inclusive
+		// comparison mirrors the trace path (commandrun ModTime().Before).
+		if cmdStart.IsZero() || mtime.Before(cmdStart) {
+			return false
+		}
 	}
 	return true
 }

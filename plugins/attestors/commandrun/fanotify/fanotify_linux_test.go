@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -163,6 +164,79 @@ func TestHandler_HashesOpenedFile(t *testing.T) {
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
 		t.Errorf("Run returned unexpected error: %v", runErr)
 	}
+}
+
+// TestHandler_SkipHashSkipsMatchingPaths verifies the SkipHash hook:
+// an opened file whose path matches the predicate is released WITHOUT
+// hashing (no digest stored, counted under CacheSkips), while a
+// non-matching file in the same mark is still hashed normally. This is
+// the capture-time cache/temp skip that removes the dominant hash load
+// on cold builds.
+func TestHandler_SkipHashSkipsMatchingPaths(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("requires root for fanotify")
+	}
+	dir := t.TempDir()
+	_ = os.Chmod(dir, 0o755)
+	skipIfNoFanotify(t, dir)
+
+	cacheDir := filepath.Join(dir, "cache")
+	if err := os.Mkdir(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skipped := filepath.Join(cacheDir, "module.go")
+	kept := filepath.Join(dir, "source.go")
+	for _, f := range []string{skipped, kept} {
+		if err := os.WriteFile(f, []byte("content of "+f), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chownToSudoInvoker(dir)
+
+	h, err := New(dir)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer h.Close()
+	// Skip anything under the cache/ subdir.
+	h.SkipHash = func(p string) bool { return strings.HasPrefix(p, cacheDir+"/") }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); _ = h.Run(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+
+	for _, f := range []string{skipped, kept} {
+		cmd := exec.Command("/bin/cat", f)
+		if sudoUid := os.Getenv("SUDO_UID"); sudoUid != "" {
+			uid, _ := strconv.Atoi(sudoUid)
+			gid, _ := strconv.Atoi(os.Getenv("SUDO_GID"))
+			cmd.SysProcAttr = &syscall.SysProcAttr{
+				Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), NoSetGroups: true},
+			}
+		}
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("cat %s: %v", f, err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	digests := h.Digests()
+	if _, ok := digests[skipped]; ok {
+		t.Errorf("%s matched SkipHash but was still hashed", skipped)
+	}
+	if _, ok := digests[kept]; !ok {
+		t.Errorf("%s did not match SkipHash but was not hashed; digests=%+v", kept, digests)
+	}
+	if stats := h.GetStats(); stats.CacheSkips == 0 {
+		t.Errorf("CacheSkips should be > 0; stats=%+v", stats)
+	}
+
+	cancel()
+	_ = h.Close()
+	wg.Wait()
 }
 
 // TestHandler_ZeroDropUnderBurst opens N files in tight succession

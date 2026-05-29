@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/gobwas/glob"
@@ -253,7 +254,7 @@ func FuzzShouldRecordGlobPatterns(f *testing.F) {
 		}
 
 		// Must not panic regardless of path/pattern combination
-		_ = shouldRecord(path, nil, nil, false, nil, includeGlob, excludeGlob)
+		_ = shouldRecord(path, nil, nil, false, nil, includeGlob, excludeGlob, time.Time{}, time.Time{})
 	})
 }
 
@@ -605,7 +606,7 @@ func TestSecurity_R3_194_FileGlobExcludePrecedence(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			result := shouldRecord(tt.filename, nil, nil, false, nil, incGlob, excGlob)
+			result := shouldRecord(tt.filename, nil, nil, false, nil, incGlob, excGlob, time.Time{}, time.Time{})
 			assert.Equal(t, tt.shouldRecord, result,
 				"shouldRecord(%q, include=%q, exclude=%q)", tt.filename, tt.include, tt.exclude)
 		})

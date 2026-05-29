@@ -1,0 +1,90 @@
+---
+title: aws-codebuild
+description: The cilock aws-codebuild attestor captures CodeBuild build identity from CODEBUILD_* env vars and the BatchGetBuilds API, signing the full build context into in-toto evidence.
+sidebar_position: 17
+examples_repo: 24-aws-codebuild
+---
+
+Captures AWS CodeBuild build identity from the `CODEBUILD_*` environment variables and, when AWS credentials are available, calls the CodeBuild API to record the full `Build` object returned by `BatchGetBuilds`.
+
+## What it captures
+
+The top-level attestation has exactly two fields:
+
+| Field | Type | Source |
+|---|---|---|
+| `build_info` | `BuildInfo` (object) | `CODEBUILD_*` env vars + CodeBuild API call |
+| `raw_build_details` | string | JSON-marshalled `types.Build` returned by `BatchGetBuilds` (empty if the API call fails) |
+
+`BuildInfo` carries the env-derived fields plus an optional nested `build_details` populated from the AWS SDK:
+
+| `build_info` field | json tag | Source env var |
+|---|---|---|
+| BuildID | `build_id` | `CODEBUILD_BUILD_ID` (required) |
+| BuildARN | `build_arn` | `CODEBUILD_BUILD_ARN` |
+| BuildNumber | `build_number` | `CODEBUILD_BUILD_NUMBER` |
+| ProjectName | `project_name` | `CODEBUILD_PROJECT_NAME` |
+| Initiator | `initiator` | `CODEBUILD_INITIATOR` |
+| SourceVersion | `source_version` | `CODEBUILD_RESOLVED_SOURCE_VERSION` |
+| SourceRepo | `source_repo` | `CODEBUILD_SOURCE_REPO_URL` |
+| BatchBuildID | `batch_build_id` | `CODEBUILD_BATCH_BUILD_IDENTIFIER` |
+| WebhookEvent | `webhook_event` | `CODEBUILD_WEBHOOK_EVENT` |
+| WebhookHeadRef | `webhook_head_ref` | `CODEBUILD_WEBHOOK_HEAD_REF` |
+| WebhookActorID | `webhook_actor_id` | `CODEBUILD_WEBHOOK_ACTOR_ACCOUNT_ID` |
+| Region | `region` | `AWS_REGION` |
+| BuildDetails | `build_details` | `codebuild:BatchGetBuilds` API (`types.Build`) |
+
+`build_details` is the full AWS SDK `types.Build` shape, including `Arn`, `Artifacts`, `AutoRetryConfig`, `BuildBatchArn`, `BuildComplete`, `BuildNumber`, `BuildStatus`, `Cache`, `CurrentPhase`, `DebugSession`, `EncryptionKey`, `StartTime`/`EndTime`, `Environment`, `ExportedEnvironmentVariables`, `FileSystemLocations`, `Initiator`, `Logs`, `NetworkInterface`, `Phases`, `ProjectName`, `QueuedTimeoutInMinutes`, `ReportArns`, `ResolvedSourceVersion`, `SecondaryArtifacts`, `SecondarySources`, `SecondarySourceVersions`, `ServiceRole`, `Source`, `SourceVersion`, `TimeoutInMinutes`, and `VpcConfig`.
+
+Subjects emitted: `codebuild-build-id:<id>`, `codebuild-project:<name>`, `codebuild-source-version:<commit>` (each non-empty field becomes one subject; backrefs mirror subjects).
+
+## When to use
+
+In any CodeBuild project. Pair with [`aws`](./aws) (EC2 IID) for a cryptographically-verified host identity alongside the CodeBuild-side build identity.
+
+## Flags
+
+None.
+
+## Output shape
+
+```json
+{
+  "build_info": {
+    "build_id": "my-project:abc-123",
+    "build_arn": "arn:aws:codebuild:us-east-1:...:build/my-project:abc-123",
+    "project_name": "my-project",
+    "source_version": "<commit-sha>",
+    "region": "us-east-1",
+    "build_details": { "Arn": "...", "AutoRetryConfig": { }, "Phases": [ ] }
+  },
+  "raw_build_details": "{\"Arn\":\"...\",\"AutoRetryConfig\":{...}}"
+}
+```
+
+## Gotchas
+
+- **Fails outside CodeBuild.** `Attest` returns an error if `CODEBUILD_BUILD_ID` is unset. Do not include this attestor on non-CodeBuild hosts.
+- **Uses the AWS SDK.** `New()` calls `config.LoadDefaultConfig`, then `Attest` invokes `codebuild:BatchGetBuilds` to populate `build_details` and `raw_build_details`. The build's service role must have `codebuild:BatchGetBuilds`; otherwise the API call is logged at warn level and the attestor continues with env-var-only data.
+- **`AWS_REGION` overrides** the SDK-discovered region when present.
+- **Build ID parsing.** The SDK call splits `CODEBUILD_BUILD_ID` on `:` and uses the second segment; malformed IDs skip the API call but still produce env-derived `build_info`.
+
+## CLI example
+
+The attestor reads CodeBuild environment variables exposed to every build (`CODEBUILD_BUILD_ID`, `CODEBUILD_BUILD_ARN`, `CODEBUILD_PUBLIC_BUILD_URL`, `CODEBUILD_SOURCE_REPO_URL`, `CODEBUILD_SOURCE_VERSION`, `CODEBUILD_RESOLVED_SOURCE_VERSION`).
+
+```bash
+# Inside a CodeBuild buildspec.yml phase:
+cilock run --step codebuild \
+  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \
+  --attestations aws-codebuild,environment \
+  -- echo "captured CodeBuild context" 
+```
+
+Validated by synthesizing real-format CodeBuild env vars on the validation VM. The attestor reads from env, no other inputs. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/24-aws-codebuild](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/24-aws-codebuild).
+
+## See also
+
+- [Catalog row](../reference/attestor-catalog)
+- [`aws`](./aws)
+- Upstream: [witness/aws-codebuild.md](https://github.com/in-toto/witness/blob/main/docs/attestors/aws-codebuild.md)
