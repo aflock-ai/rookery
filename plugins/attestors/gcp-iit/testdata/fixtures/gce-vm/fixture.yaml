@@ -1,0 +1,72 @@
+schema_version: "0.1"
+attestor: gcp-iit
+description: >-
+  GCP Instance Identity Token attestor proven from a REAL GCE VM. A minimal
+  e2-micro Debian-12 instance (cilock-gcpiit-fixture, us-central1-a) was launched
+  solely to reach the metadata server — the instance identity token is ONLY
+  issued by the metadata server ON a GCE instance — then torn down immediately.
+  http-mock mode replays the recorded evidence captured on that VM: the attestor
+  fetches the identity token from the metadata host (GCE_METADATA_HOST override)
+  and verifies its RS256 signature against the JWKS at WITNESS_GCP_JWKS_URL
+  (signature-only, no exp/nbf — by design; see record.sh), then emits the five
+  subject families. The committed identity-token is an EXPIRED JWT by replay
+  (claims-only, no live credential); its kid is present in the captured JWKS.
+setup:
+  mode: http-mock
+  # The attestor reads NO plain env in the GCE-VM path: every subject family
+  # comes from the identity-token JWT claims (the google.compute_engine block),
+  # not separate metadata fetches (those only fire on the GKE/workload-identity
+  # branch, when the `google` claim is absent — it is present here). The two
+  # endpoints below are the only HTTP the attestor performs.
+  options:
+    endpoints:
+      # GCE_METADATA_HOST is the GCP-SDK-standard override for the metadata
+      # server (mirrors github's ACTIONS_ID_TOKEN_REQUEST_URL). The driver sets
+      # it to the stub base URL + this path; metadataHost() takes the authority.
+      - env: GCE_METADATA_HOST
+        file: identity-token
+        path: /computeMetadata/v1/instance/service-accounts/default/identity
+      # The jwt attestor GETs this full URL for the signing keys.
+      - env: WITNESS_GCP_JWKS_URL
+        file: gcp-jwks.json
+        path: /jwks
+recording:
+  tool: cilock
+  # cilock-all built from THIS tree (presets/all/cmd/cilock-all, GOOS=linux
+  # GOARCH=amd64), scp'd to the VM and run there — so the provenance below is a
+  # binary whose sha256 we can recompute from this tree.
+  version: "dev"
+  binary_sha256: "add5d194e39859e3fab928b44c3761dfea646a3eac13df350c51a480e4a97880"
+  recorded_with: cilock
+  attestation: attestation.json
+  argv: ["true"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/gcp-iit/v0.1
+  run_type: prematerial
+  subjects:
+    match: prefix
+    keys:
+      - "instanceid:"
+      - "instancename:"
+      - "projectid:"
+      - "projectnumber:"
+      - "clusteruid:"
+  # Volatile-but-faithful fields zeroed before the recorded-vs-replay cross-check
+  # and the determinism check. The recorded attestation.json and the committed
+  # identity-token are TWO DISTINCT real token mints from the SAME VM (the
+  # capture curls one token into identity-token; cilock fetches another into
+  # attestation.json), so the metadata server's per-mint time claims (iat/exp)
+  # differ by design. The signing JWK (same kid) and EVERY subject-bearing claim
+  # are byte-identical — the committed token was captured with the exact
+  # query the attestor uses (format=full, no licenses=TRUE), so its
+  # google.compute_engine block matches cilock's recorded token claim-for-claim.
+  # This is genuine per-mint time volatility, NOT a stale recording.
+  #   jwt.claims.{iat,exp} — per-mint token timestamps.
+  #   jwt.verifiedBy.jwksUrl — the http-mock stub's random localhost port on
+  #     replay (the real run records the live www.googleapis.com URL); this is
+  #     also what made the replay non-deterministic run-to-run.
+  redact:
+    - "jwt.claims.iat"
+    - "jwt.claims.exp"
+    - "jwt.verifiedBy.jwksUrl"

@@ -68,7 +68,6 @@ Regenerate after adding or renaming an attestor:
 | `kube-bench` | `plugins/attestors/kube-bench` | `https://aflock.ai/attestations/kube-bench/v0.1` |
 | `link` | `plugins/attestors/link` | `https://in-toto.io/attestation/link/v0.3` |
 | `linkerd-check` | `plugins/attestors/linkerd-check` | `https://aflock.ai/attestations/linkerd-check/v0.1` |
-| `nessus` | `plugins/attestors/nessus` | `https://aflock.ai/attestations/nessus/v0.1` |
 | `oci` | `plugins/attestors/oci` | `https://aflock.ai/attestations/oci/v0.1` |
 | `oscap` | `plugins/attestors/oscap` | `https://aflock.ai/attestations/oscap/v0.1` |
 | `pip-install` | `plugins/attestors/pip-install` | `https://aflock.ai/attestations/pip-install/v0.1` |

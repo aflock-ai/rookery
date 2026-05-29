@@ -79,7 +79,6 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/attestors/lockfiles",
 		"github.com/aflock-ai/rookery/plugins/attestors/material",
 		"github.com/aflock-ai/rookery/plugins/attestors/maven",
-		"github.com/aflock-ai/rookery/plugins/attestors/nessus",
 		"github.com/aflock-ai/rookery/plugins/attestors/oci",
 		"github.com/aflock-ai/rookery/plugins/attestors/omnitrail",
 		"github.com/aflock-ai/rookery/plugins/attestors/oscap",

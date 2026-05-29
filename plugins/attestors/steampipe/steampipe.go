@@ -53,7 +53,7 @@ const (
 
 // steampipe is a state-reporting attestor (same class as prowler,
 // aws-config, asff, sarif, sbom, docker-bench, kube-bench, oscap,
-// nessus, inspec — every one of which implements Subjecter but NOT
+// inspec — every one of which implements Subjecter but NOT
 // BackReffer). The BackReffer interface is reserved for CI/build-context
 // attestors (git, github, gitlab, jenkins, githubwebhook, aws-codebuild)
 // that have a workflow-run identity to anchor downstream verdicts on.

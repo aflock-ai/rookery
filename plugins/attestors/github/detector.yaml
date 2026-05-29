@@ -42,3 +42,6 @@ contract:
       env_vars: ["ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
       scopes: ["id-token:write"]
       required: true
+  fixtures:
+    - name: gha-oidc
+      role: canonical

@@ -43,50 +43,64 @@ import (
 //   - DSSE attestation.json carries a base64 `payload`/`sig`/`keyid` (a signed
 //     envelope, not a credential),
 //   - go.sum files carry `h1:` module hashes.
+//
 // We do NOT carve out whole directories (that would be a blind spot a real
 // future leak could hide behind). Instead we allowlist by *documented-fake
 // sentinel value* for tokens, and for PEM blocks we only pass a BEGIN marker
 // that is NOT backed by a real key body — so a genuine leaked key (marker +
 // hundreds of base64 chars) still fails even inside the detector corpora.
 func TestFixturesNoSecrets(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", "..", "..", "plugins", "attestors"))
+	pluginsRootDir, err := filepath.Abs(filepath.Join("..", "..", "..", "plugins", "attestors"))
 	if err != nil {
 		t.Fatalf("resolve plugins dir: %v", err)
 	}
+	examplesDir, err := filepath.Abs(filepath.Join("..", "..", "..", "examples"))
+	if err != nil {
+		t.Fatalf("resolve examples dir: %v", err)
+	}
 
 	scanned := 0
-	walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			// Only descend into each attestor's testdata/ tree.
+	scan := func(root string, restrict func(string) bool) {
+		walkErr := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if restrict != nil && !restrict(path) {
+				return nil
+			}
+			data, rerr := os.ReadFile(path)
+			if rerr != nil {
+				t.Errorf("read %s: %v", path, rerr)
+				return nil
+			}
+			scanned++
+			scanFile(t, path, data)
 			return nil
+		})
+		if walkErr != nil {
+			t.Fatalf("walk %s: %v", root, walkErr)
 		}
-		// Restrict to files that live under a testdata/ directory.
-		if !underTestdata(path) {
-			return nil
-		}
-		data, rerr := os.ReadFile(path)
-		if rerr != nil {
-			t.Errorf("read %s: %v", path, rerr)
-			return nil
-		}
-		scanned++
-		scanFile(t, path, data)
-		return nil
-	})
-	if walkErr != nil {
-		t.Fatalf("walk %s: %v", root, walkErr)
+	}
+
+	// Plugin fixtures live under each attestor's testdata/ tree.
+	scan(pluginsRootDir, underTestdata)
+	// Every file under examples/ (live-only attestors' real reproductions:
+	// reproduce.sh + recorded attestation.json) two-way-syncs to the public
+	// mirror, so it must be as secret-clean as a fixture. Scan all of it.
+	if _, statErr := os.Stat(examplesDir); statErr == nil {
+		scan(examplesDir, nil)
 	}
 
 	// A broken walk (layout change, wrong relative path) that finds nothing
 	// would otherwise make this gate pass vacuously. We KNOW there are recorded
 	// fixtures on disk, so zero scanned files is a hard failure, never a green.
 	if scanned == 0 {
-		t.Fatalf("scanned 0 files under %s — the testdata walk is broken (expected committed fixtures); a skip here would be a false green", root)
+		t.Fatalf("scanned 0 files under %s — the fixture walk is broken (expected committed fixtures); a skip here would be a false green", pluginsRootDir)
 	}
-	t.Logf("secret-scanned %d fixture file(s) under %s", scanned, root)
+	t.Logf("secret-scanned %d file(s) under %s and %s", scanned, pluginsRootDir, examplesDir)
 }
 
 func underTestdata(path string) bool {
@@ -139,7 +153,7 @@ var awsSecretRE = regexp.MustCompile(`(?i)(aws[_-]?secret[_-]?access[_-]?key|sec
 // fails — so a real token dropped into the very same corpus file still trips
 // the gate; there is no whole-file allowlist.
 var sentinelTokens = map[string]bool{
-	"ghp_012345678901234567890123456789":            true,
+	"ghp_012345678901234567890123456789":             true,
 	"ghp_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ":       true,
 	"AKIAIOSFODNN7EXAMPLE":                           true,
 	"AIzaSyDdoASSAD90YgOUNWXQLTIZTZ0oh13zU10":        true,

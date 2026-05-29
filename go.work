@@ -46,7 +46,6 @@ use (
 	./plugins/attestors/lockfiles
 	./plugins/attestors/material
 	./plugins/attestors/maven
-	./plugins/attestors/nessus
 	./plugins/attestors/oci
 	./plugins/attestors/omnitrail
 	./plugins/attestors/oscap

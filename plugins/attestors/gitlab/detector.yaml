@@ -45,3 +45,6 @@ contract:
       scopes: []
       required: false
       description: "Optional GitLab CI OIDC ID token, injected ambiently by the GitLab runner (CI_JOB_JWT, deprecated in GitLab >= 17.0). Can be overridden via a configured token env var (WithTokenEnvVar) or literal token (WithToken). When present it is verified against the JWKS endpoint (WITNESS_GITLAB_JWKS_URL or <CI_SERVER_URL>/oauth/discovery/keys). The attestor still runs and succeeds without it; only the GITLAB_CI=true ambient environment is strictly required to execute."
+  fixtures:
+    - name: gitlab-ci
+      role: canonical

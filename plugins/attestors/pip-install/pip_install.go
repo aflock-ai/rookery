@@ -64,18 +64,21 @@ func init() {
 
 // PackageInfo describes a single installed Python package.
 type PackageInfo struct {
-	Name         string   `json:"name"`
-	Version      string   `json:"version"`
-	InstallType  string   `json:"installType,omitempty"`  // "wheel" or "sdist"
-	Location     string   `json:"location,omitempty"`     // install path
-	Requires     []string `json:"requires,omitempty"`     // direct dependencies
-	RequiredBy   []string `json:"requiredBy,omitempty"`   // reverse dependencies
-	HomePage     string   `json:"homePage,omitempty"`     // project URL
-	Author       string   `json:"author,omitempty"`       // package author
-	License      string   `json:"license,omitempty"`      // declared license
-	HasSetupPy   bool     `json:"hasSetupPy,omitempty"`   // sdist with setup.py
-	HasCmdClass  bool     `json:"hasCmdClass,omitempty"`  // custom install commands
-	InstallerLog string   `json:"installerLog,omitempty"` // pip install log snippet
+	Name        string   `json:"name"`
+	Version     string   `json:"version"`
+	InstallType string   `json:"installType,omitempty"` // "wheel", "sdist", or "editable"
+	Location    string   `json:"location,omitempty"`    // install path
+	Requires    []string `json:"requires,omitempty"`    // direct dependencies
+	RequiredBy  []string `json:"requiredBy,omitempty"`  // reverse dependencies
+	HomePage    string   `json:"homePage,omitempty"`    // project URL
+	Author      string   `json:"author,omitempty"`      // package author
+	License     string   `json:"license,omitempty"`     // declared license
+	HasSetupPy  bool     `json:"hasSetupPy,omitempty"`  // a setup.py for this package was found+analyzed
+	HasCmdClass bool     `json:"hasCmdClass,omitempty"` // that setup.py referenced cmdclass
+	// Installer is the tool that installed this dist, read verbatim from
+	// <dist-info>/INSTALLER (e.g. "pip", "poetry", "uv"). It is NOT a log
+	// snippet — the attestor does not capture pip stdout.
+	Installer string `json:"installer,omitempty"`
 }
 
 // SetupPyAnalysis contains static analysis results for a setup.py file.
@@ -237,6 +240,15 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	// Look for setup.py files in pip's download/build cache
 	a.SetupPyAnalysis = findAndAnalyzeSetupPy(ctx.WorkingDir())
 
+	// Populate per-package provenance fields from on-disk markers and the
+	// setup.py analysis. Order matters: correlate setup.py FIRST so HasSetupPy
+	// is set before populateDiskMarkers consults it for the InstallType
+	// build-evidence fallback.
+	for i := range a.Packages {
+		a.Packages[i] = correlateSetupPy(a.Packages[i], a.SetupPyAnalysis)
+		a.Packages[i] = populateDiskMarkers(a.Packages[i])
+	}
+
 	// Analyze installed .py files in site-packages
 	a.InstalledFileAnalysis = analyzeInstalledFiles()
 
@@ -313,6 +325,203 @@ func parseShowOutput(output string, pkg PackageInfo) PackageInfo {
 		}
 	}
 	return pkg
+}
+
+// canonicalizeName applies PEP 503 normalization: lowercase the name and
+// collapse any run of -, _ or . into a single dash.
+func canonicalizeName(name string) string {
+	lower := strings.ToLower(name)
+	var b strings.Builder
+	prevDash := false
+	for _, r := range lower {
+		if r == '-' || r == '_' || r == '.' {
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		prevDash = false
+	}
+	return b.String()
+}
+
+// correlateSetupPy attributes a found-and-analyzed setup.py to a package by
+// name+layout, setting HasSetupPy (and HasCmdClass from the analysis). A
+// setup.py is attributed to pkg iff its path contains pkg's canonical name AND
+// its parent directory's canonical form is "<canonical>-<version>" or
+// "<canonical>" (the layouts pip uses for build/download caches). A pure wheel
+// install leaves no setup.py in the cache, so its package correctly stays
+// HasSetupPy=false.
+func correlateSetupPy(pkg PackageInfo, analyses []SetupPyAnalysis) PackageInfo {
+	canon := canonicalizeName(pkg.Name)
+	if canon == "" {
+		return pkg
+	}
+	for _, an := range analyses {
+		if an.Path == "" {
+			continue
+		}
+		// The path must mention the canonical name somewhere (cheap reject).
+		if !strings.Contains(canonicalizeName(an.Path), canon) {
+			continue
+		}
+		// The setup.py's parent directory must be this package's project dir:
+		// "<canonical>-<version>" or bare "<canonical>".
+		parent := canonicalizeName(filepath.Base(filepath.Dir(an.Path)))
+		if parent != canon && parent != canon+"-"+canonicalizeName(pkg.Version) {
+			continue
+		}
+		pkg.HasSetupPy = true
+		for _, call := range an.SuspiciousCalls {
+			if strings.Contains(call, "cmdclass") {
+				pkg.HasCmdClass = true
+				break
+			}
+		}
+		return pkg
+	}
+	return pkg
+}
+
+// findDistInfoDir locates the <name>-<version>.dist-info directory for pkg
+// under location. pip writes dist-info using either the dashed or the
+// underscore-joined distribution name (PEP 427), and casing can vary, so we
+// match case-insensitively on the canonical name + version. Returns "" if none.
+func findDistInfoDir(location string, pkg PackageInfo) string {
+	canon := canonicalizeName(pkg.Name)
+	entries, err := os.ReadDir(location)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		if !strings.HasSuffix(n, ".dist-info") {
+			continue
+		}
+		stem := strings.TrimSuffix(n, ".dist-info")
+		// stem is "<distname>-<version>"; split on the last dash.
+		idx := strings.LastIndex(stem, "-")
+		if idx < 0 {
+			continue
+		}
+		distName, ver := stem[:idx], stem[idx+1:]
+		if ver != pkg.Version {
+			continue
+		}
+		if canonicalizeName(distName) == canon {
+			return filepath.Join(location, n)
+		}
+	}
+	return ""
+}
+
+// populateDiskMarkers fills InstallType and Installer from on-disk install
+// markers under pkg.Location. All reads are defensive: missing files are normal
+// and leave the corresponding field unset (never error the attestation).
+//
+// InstallType priority:
+//  1. <canonical>.egg-link or <canonical>*.egg-info under Location ⇒ "editable".
+//  2. <dist-info>/direct_url.json archive url ending .whl ⇒ "wheel";
+//     ending .tar.gz/.zip ⇒ "sdist".
+//  3. Build-evidence fallback: HasSetupPy==true ⇒ "sdist" (pip ran a setup.py);
+//     else "wheel" (a prebuilt wheel was dropped, no build step).
+//
+// Installer is read verbatim from <dist-info>/INSTALLER (one token).
+func populateDiskMarkers(pkg PackageInfo) PackageInfo {
+	if pkg.Location == "" {
+		return pkg
+	}
+	canon := canonicalizeName(pkg.Name)
+
+	// (a) Editable markers take precedence.
+	if hasEditableMarker(pkg.Location, canon) {
+		pkg.InstallType = "editable"
+	}
+
+	distInfo := findDistInfoDir(pkg.Location, pkg)
+	if distInfo != "" {
+		// Installer token (e.g. "pip").
+		if data, err := os.ReadFile(filepath.Join(distInfo, "INSTALLER")); err == nil { //nolint:gosec
+			pkg.Installer = strings.TrimSpace(string(data))
+		}
+		// (b) direct_url.json archive url, only if not already editable.
+		if pkg.InstallType == "" {
+			pkg.InstallType = installTypeFromDirectURL(filepath.Join(distInfo, "direct_url.json"))
+		}
+	}
+
+	// (c) Build-evidence fallback.
+	if pkg.InstallType == "" {
+		if pkg.HasSetupPy {
+			pkg.InstallType = "sdist"
+		} else {
+			pkg.InstallType = "wheel"
+		}
+	}
+
+	return pkg
+}
+
+// hasEditableMarker reports whether an editable-install marker for canon exists
+// directly under location: a "<canonical>.egg-link" file or a directory whose
+// canonical name starts with canon and ends in ".egg-info".
+func hasEditableMarker(location, canon string) bool {
+	entries, err := os.ReadDir(location)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() && canonicalizeName(strings.TrimSuffix(name, ".egg-link")) == canon &&
+			strings.HasSuffix(name, ".egg-link") {
+			return true
+		}
+		if e.IsDir() && strings.HasSuffix(name, ".egg-info") {
+			stem := canonicalizeName(strings.TrimSuffix(name, ".egg-info"))
+			// stem may be "<canonical>" or "<canonical>-<version>".
+			if stem == canon || strings.HasPrefix(stem, canon+"-") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// installTypeFromDirectURL reads a PEP 610 direct_url.json and classifies the
+// archive by its url suffix. Returns "wheel" (.whl), "sdist" (.tar.gz/.zip), or
+// "" when the file is absent/unreadable or carries no recognizable archive url.
+func installTypeFromDirectURL(path string) string {
+	data, err := os.ReadFile(path) //nolint:gosec
+	if err != nil {
+		return ""
+	}
+	var du struct {
+		URL         string `json:"url"`
+		ArchiveInfo struct {
+			URL string `json:"url"`
+		} `json:"archive_info"`
+	}
+	if err := json.Unmarshal(data, &du); err != nil {
+		return ""
+	}
+	url := du.URL
+	if du.ArchiveInfo.URL != "" {
+		url = du.ArchiveInfo.URL
+	}
+	url = strings.ToLower(url)
+	switch {
+	case strings.HasSuffix(url, ".whl"):
+		return "wheel"
+	case strings.HasSuffix(url, ".tar.gz"), strings.HasSuffix(url, ".tgz"), strings.HasSuffix(url, ".zip"):
+		return "sdist"
+	default:
+		return ""
+	}
 }
 
 // findAndAnalyzeSetupPy walks the working directory looking for setup.py

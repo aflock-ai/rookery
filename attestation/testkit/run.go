@@ -75,6 +75,19 @@ func RunAttestorWithFixture(t *testing.T, fx *Fixture, opts ...RunOption) *Resul
 		o(cfg)
 	}
 
+	// http-mock: stand up the stub server and set its plain + endpoint env BEFORE
+	// constructing the attestor. Endpoint-reading attestors (github reads
+	// ACTIONS_ID_TOKEN_REQUEST_URL / WITNESS_GITHUB_JWKS_URL in New()) capture the
+	// URL at construction time, so the env must already point at the stub. (Safe
+	// for IMDS attestors too — the AWS SDK reads the endpoint lazily at request
+	// time regardless.) `option:` endpoints (github-review's api-url) can't bind
+	// at construction time since the stub URL isn't known until the server is up;
+	// startHTTPMock returns them as option name -> stub base URL to apply below.
+	var optionEndpointBindings map[string]any
+	if fx.Mode == ModeHTTPMock {
+		optionEndpointBindings = startHTTPMock(t, fx)
+	}
+
 	target := cfg.attestor
 	if target == nil {
 		a, err := attestation.GetAttestor(fx.Attestor)
@@ -82,17 +95,14 @@ func RunAttestorWithFixture(t *testing.T, fx *Fixture, opts ...RunOption) *Resul
 			t.Fatalf("testkit: get attestor %q: %v", fx.Attestor, err)
 		}
 		// Apply fixture-declared attestor-specific options (e.g. steampipe
-		// plugin/sql/id) through the SAME registered setters the CLI flags use.
-		// The hermetic replay rebuilds the attestor by name, so without this it
-		// would lose the plugin and emit zero subjects — diverging from the
-		// recorded real run. ADDITIVE: fixtures with no Options are untouched.
-		//
-		// http-mock options (imds_document/imds_signature/imds_token) are
-		// testkit DRIVER options (paths to the recorded metadata responses), not
-		// attestor config setters, so they are consumed by startMetadataMock —
-		// never forwarded to ApplyAttestorOptions.
-		if len(fx.Options) > 0 && fx.Mode != ModeHTTPMock {
-			a, err = attestation.ApplyAttestorOptions(fx.Attestor, a, fx.Options)
+		// plugin/sql/id, or github-review repo/pr) through the SAME registered
+		// setters the CLI flags use. The hermetic replay rebuilds the attestor by
+		// name, so without this it would lose the config and emit zero/divergent
+		// subjects — diverging from the recorded real run. ADDITIVE: fixtures with
+		// no options are untouched.
+		opts := attestorOptionValues(fx, optionEndpointBindings)
+		if len(opts) > 0 {
+			a, err = attestation.ApplyAttestorOptions(fx.Attestor, a, opts)
 			if err != nil {
 				t.Fatalf("testkit: apply options for %q: %v", fx.Attestor, err)
 			}
@@ -154,19 +164,18 @@ func RunAttestorWithFixture(t *testing.T, fx *Fixture, opts ...RunOption) *Resul
 		runErr = runAndCollect(ctx, target)
 
 	case ModeHTTPMock:
-		// cloud-identity attestors (aws-iid, gcp-iit) read a metadata endpoint
-		// (the EC2 IMDS / GCP metadata server). We stand up an httptest server
-		// that replays the COMMITTED RECORDED responses captured from a real
-		// node, point the attestor at it via the standard endpoint env var, then
-		// run it through the same NewContext/RunAttestors path as every other
-		// mode. The recorded bytes are the real signed instance-identity document
-		// + signature, so the attestor's real RSA signature verification runs
-		// against real AWS evidence — hermetically, no live cloud.
-		srv := startMetadataMock(t, fx)
-		for k, v := range fx.Env {
-			t.Setenv(k, v)
-		}
-		t.Setenv(metadataEndpointEnv, srv.URL)
+		// Attestors that read a service endpoint over HTTP: cloud-identity
+		// (aws-iid IMDS / gcp-iit metadata) and ci-context (github's OIDC token +
+		// JWKS, gitlab's JWKS, github-review's GitHub API). startHTTPMock stands up
+		// an httptest server replaying the COMMITTED RECORDED responses captured
+		// from a real run, sets the plain setup.env, and points the attestor at
+		// the stub via the right endpoint env var(s) — the AWS-IMDS special case
+		// or the generalized setup.options.endpoints model. It then runs through
+		// the same NewContext/RunAttestors path. The recorded bytes are the real
+		// signed evidence (instance-identity doc+sig / OIDC JWT verified against
+		// the recorded JWKS), so the attestor's real verification runs against
+		// real evidence — hermetically, no live cloud/CI. The stub + env were set
+		// up before the attestor was constructed (see top of this function).
 		ctx, err := attestation.NewContext(fx.Attestor, []attestation.Attestor{target}, attestation.WithHashes(hashes))
 		if err != nil {
 			t.Fatalf("testkit: new context: %v", err)
@@ -188,6 +197,37 @@ func RunAttestorWithFixture(t *testing.T, fx *Fixture, opts ...RunOption) *Resul
 	}
 
 	return buildResult(t, target, runErr)
+}
+
+// driverOnlyOptionKeys are setup.options keys consumed by the testkit DRIVER
+// (the http-mock metadata/endpoint plumbing), never forwarded to the attestor's
+// registered config setters. Everything else in setup.options is an attestor
+// option (steampipe sql/plugin, github-review repo/pr) applied via
+// ApplyAttestorOptions.
+var driverOnlyOptionKeys = map[string]struct{}{
+	optEndpoints:     {},
+	optIMDSDocument:  {},
+	optIMDSSignature: {},
+	optIMDSToken:     {},
+}
+
+// attestorOptionValues computes the option map to apply to the constructed
+// attestor: the fixture's plain setup.options (minus driver-only keys) merged
+// with the option-endpoint bindings produced by the http-mock server (e.g.
+// github-review's api-url -> stub base URL). Endpoint bindings win on a key
+// clash — a fixture can't both hardcode and bind the same option.
+func attestorOptionValues(fx *Fixture, endpointBindings map[string]any) map[string]any {
+	out := make(map[string]any, len(fx.Options)+len(endpointBindings))
+	for k, v := range fx.Options {
+		if _, drv := driverOnlyOptionKeys[k]; drv {
+			continue
+		}
+		out[k] = v
+	}
+	for k, v := range endpointBindings {
+		out[k] = v
+	}
+	return out
 }
 
 // runAndCollect runs the context's attestors and returns the TARGET attestor's

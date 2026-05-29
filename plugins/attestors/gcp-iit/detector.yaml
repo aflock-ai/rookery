@@ -48,3 +48,6 @@ contract:
       env_vars: []
       scopes: ["read:instance/service-accounts/default/identity", "read:instance/metadata", "read:project/metadata"]
       required: true
+  fixtures:
+    - name: gce-vm
+      role: canonical

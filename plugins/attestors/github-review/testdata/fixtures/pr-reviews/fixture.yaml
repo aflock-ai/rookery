@@ -1,0 +1,84 @@
+schema_version: "0.1"
+attestor: github-review
+description: >-
+  github-review attestor proven from a REAL GitHub pull-request review. PR #1 on
+  testifysec/cilock-ci-fixtures was opened and a real COMMENTED review submitted
+  by colek42 (gh pr review --comment); the attestor's two consumed REST endpoints
+  were captured verbatim from api.github.com:
+    GET /repos/testifysec/cilock-ci-fixtures/pulls/1          -> pull.json
+    GET /repos/testifysec/cilock-ci-fixtures/pulls/1/reviews  -> reviews.json
+  (each trimmed to exactly the fields the ghPull / ghReview DTOs read — real
+  values, no synthesis). The canonical recording.attestation was produced by
+  running cilock against the LIVE GitHub API once (attest -a github-review --pr 1
+  against api.github.com with a real GH_TOKEN), so attestation.json is genuine
+  signed evidence of a real PR review, not a hand-authored blob.
+
+  http-mock mode replays the two captured endpoint files. github-review's API
+  base is a flag/option (--attestor-github-review-api-url), NOT an env var, so the
+  endpoints bind via the testkit `option:` kind: the stub's BASE URL is bound to
+  the attestor's `api-url` option (the attestor appends repos/<repo>/pulls/<n>
+  paths itself), and the recorded reviews are served at exactly those paths. The
+  attestor then re-fetches the PR + reviews from the stub and re-derives the same
+  predicate, which is cross-checked byte-for-byte against attestation.json after
+  redacting the two genuinely-volatile fields (fetched_at wall-clock, api_base_url
+  = the stub's random localhost port vs the live api.github.com). token_source is
+  gh-token-env in BOTH the live run (real GH_TOKEN) and the replay (benign GH_TOKEN
+  stub), so it is NOT redacted. Topology is PUBLIC-OK (testifysec throwaway repo);
+  no token is committed (GH_TOKEN below is a benign stub the mock ignores).
+setup:
+  mode: http-mock
+  # Plain env the attestor reads. GITHUB_ACTIONS=true reproduces the recorded run's
+  # in-Actions detection branch; GH_TOKEN is a benign stub — the mock serves the
+  # recorded JSON regardless of the Authorization header, and token_source records
+  # only that a GH_TOKEN was present (gh-token-env), never the token bytes.
+  env:
+    GITHUB_ACTIONS: "true"
+    GH_TOKEN: "stub-not-a-real-token"
+  options:
+    # repo + pr drive the attestor's --pr lookup path (fetchPR -> fetchReviews),
+    # matching the recorded live invocation. These are applied through the SAME
+    # registered config setters the CLI --attestor-github-review-repo/-pr flags use.
+    repo: "testifysec/cilock-ci-fixtures"
+    pr: "1"
+    endpoints:
+      # `option:` binds the stub BASE URL to the attestor's api-url option; the
+      # attestor appends its own request path, which the stub serves below.
+      - option: api-url
+        file: pull.json
+        path: /repos/testifysec/cilock-ci-fixtures/pulls/1
+      - option: api-url
+        file: reviews.json
+        path: /repos/testifysec/cilock-ci-fixtures/pulls/1/reviews
+recording:
+  tool: cilock
+  # cilock-all built from THIS tree (presets/all/cmd/cilock-all). The fresh linux
+  # build of the same tree is 1cc41ca1570dd56d13321f52c986d223b6c9cf10a03e2c946b262e36a3b57058
+  # (matches the github fixture, same tree); the recording below ran on a darwin
+  # build of the identical source against the live api.github.com.
+  version: "dev"
+  binary_sha256: "fcc115945f7fc72d4dadcc707ca49cfa1291857ee28c75bd17144a27e410b88a"
+  recorded_with: cilock
+  attestation: attestation.json
+  argv: ["true"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/github-review/v0.1
+  run_type: prematerial
+  subjects:
+    match: prefix
+    keys:
+      - "commitsha:01e5299490fda8b8ff787392eb03b134e3a287af"
+      - "repo:testifysec/cilock-ci-fixtures"
+      - "pr:testifysec/cilock-ci-fixtures#1"
+      - "reviewer:colek42"
+  # Two genuinely-volatile fields, zeroed before the recorded-vs-replay cross-check
+  # and the determinism check:
+  #   fetched_at   — RFC3339 wall-clock set at attest time (differs every run)
+  #   api_base_url — live run records https://api.github.com; the replay records the
+  #                  http-mock stub's random localhost port (also the determinism
+  #                  delta run-to-run). Every other field (repo, commit_sha,
+  #                  token_source, prs[].*, reviews[].*) is byte-identical to the
+  #                  recorded live evidence.
+  redact:
+    - "fetched_at"
+    - "api_base_url"

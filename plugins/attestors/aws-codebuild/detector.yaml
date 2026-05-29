@@ -42,6 +42,10 @@ contract:
     - "codebuild-project:"
     - "codebuild-source-version:"
   schema_required: true
+  fixtures:
+    - name: codebuild-build
+      role: canonical
+
   credentials:
     - name: aws-codebuild-readonly
       type: cloud-role

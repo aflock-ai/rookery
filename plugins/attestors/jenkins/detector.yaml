@@ -32,4 +32,7 @@ contract:
   backref_subjects:
     - "pipelineurl:"
   schema_required: true
+  fixtures:
+    - name: jenkins-build
+      role: canonical
   credentials: []

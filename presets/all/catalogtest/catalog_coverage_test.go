@@ -27,41 +27,36 @@ import (
 	_ "github.com/aflock-ai/rookery/presets/all" // register every attestor + detector
 )
 
-// provenExempt lists attestors that declare an output contract but are NOT yet
-// backed by a recorded real-run fixture. It is the warn->promote allowlist that
-// keeps the gate HONEST during migration: without it, "declared a contract" and
-// "proven by a real run" are conflated, and 28 of 31 contracts ride green while
-// verifying nothing.
+// provenExempt would list contracted attestors that lack a recorded real-run
+// fixture yet are still OBTAINABLE hermetically (the fixture just hasn't been
+// captured). It keeps the gate HONEST: the gate fails if a contracted attestor
+// is neither fixture-proven, listed here, nor classified liveOnly — so a new
+// contracted-but-unproven attestor can't ride green silently.
 //
-// The gate fails if a contracted attestor is neither proven nor listed here,
-// AND it fails if an entry here has become proven — so the list can only
-// SHRINK, never rot. Promotion is mechanical: record a fixture (trivy / sbom /
-// sarif are the templates), add `fixtures:` to the contract, and DELETE the
-// entry below. Each entry states why it isn't proven yet.
-var provenExempt = map[string]string{
-	// PostProduct — what remains is a genuine env/license/runtime gap, NOT
-	// unrecorded laziness: every attestor whose real tool we can run has been
-	// proven from a real run and DELETED from this list (and bugs that blocked
-	// real output — docker-bench schema, steampipe sidecar — were FIXED, not
-	// exempted).
-	"nessus":         "declared; Nessus is commercial (license required) — no real scanner available to produce a .nessus report",
-	"pip-install":    "declared; ambient introspector — bare-pip bug FIXED (now resolves pip3), but Attest() shells out to the live interpreter + makes live PyPI HTTP calls (PEP 740) and ignores any injected Product; not hermetically product-provable",
-	"sinkhole-flows": "declared; consumes a hardcoded absolute /flows/out.jsonl produced ONLY by the proprietary testifysec/pip-witness mitmproxy sidecar (private, unreachable) — no available tool emits the schema and no testkit mode can write that absolute path",
+// It is currently EMPTY: every contracted attestor is either fixture-proven or
+// liveOnly. (nessus was REMOVED from the catalog — a real .nessus needs a live
+// Tenable plugin feed we can't obtain in CI, and an attestor we can't prove
+// from real output does not belong in a "proven from real runs" catalog. The
+// headless curl record path is preserved in git history if it ever returns.)
+// Adding an entry here remains the explicit "I owe a fixture" escape hatch; the
+// list can only SHRINK.
+var provenExempt = map[string]string{}
 
-	// PreMaterial — need env/workdir-mode fixtures. Those driver paths exist in
-	// testkit but are not yet exercised by any fixture (see task #22). git is
-	// now PROVEN (workdir-mode fixture single-commit) and removed from here.
-	"aws-codebuild": "declared; needs env-mode fixture",
-	"github":        "declared; needs env-mode fixture",
-	"github-review": "declared; needs env-mode fixture",
-	"gitlab":        "declared; needs env-mode fixture",
-	"jenkins":       "declared; needs env-mode fixture",
-
-	// PreMaterial cloud-identity — the http-mock metadata driver is now
-	// implemented. aws (aws-iid) is PROVEN (http-mock fixture
-	// ec2-instance-identity, replaying a real EC2 IMDS capture) and removed from
-	// here. gcp-iit still needs its own recorded GCP metadata capture.
-	"gcp-iit": "declared; http-mock driver exists, but needs a real GCP metadata-server capture (GCE_METADATA_HOST + recorded identity token) — not yet recorded",
+// liveOnly lists attestors that CANNOT be proven by the hermetic replay harness
+// by design — not for lack of a recording, but because Attest() executes a LIVE
+// environment (a running interpreter, a live network service, a proprietary
+// sidecar) instead of parsing a recordable artifact. There is no byte stream to
+// record and replay, so the recorded-vs-replay cross-check that proves every
+// other attestor has nothing to bite on. They are proven instead by a REAL
+// end-to-end reproduction under examples/<name>/ (a runnable reproduce.sh + a
+// recorded real attestation), on a separate cadence from the merge gate. The
+// gate ENFORCES that the reproduction exists, so liveOnly is an honest
+// classification, not a free pass: an entry with no examples/<name>/reproduce.sh
+// fails the gate. Unlike provenExempt this need not shrink — these are
+// genuinely live-only.
+var liveOnly = map[string]string{
+	"pip-install":    "live introspector: Attest() shells out to the running python3/pip interpreter (pip list/show, site.getsitepackages, walks site-packages, execs python on pickle files) AND makes live PyPI HTTP calls for PEP 740 provenance; it ignores any injected Product and its PEP740 output varies with PyPI's live state. No recordable artifact ⇒ no hermetic replay. Proven by examples/pip-install/ (a real `cilock run -- pip install` capture).",
+	"sinkhole-flows": "live consumer: reads a hardcoded absolute /flows/out.jsonl emitted ONLY by the proprietary testifysec/pip-witness mitmproxy sidecar (private, unreachable in CI). No available tool emits the schema and no testkit mode can write that absolute path ⇒ no hermetic fixture. Proven by examples/sinkhole-flows/ (documented reproduction against the pip-witness sidecar).",
 }
 
 // liveExempt lists PROVEN attestors whose contract is NOT backed by a
@@ -124,7 +119,7 @@ func TestCatalogLiveReRunnableOrExempt(t *testing.T) {
 				// re-run to re-derive. (Same honest basis as the lockfiles/oci
 				// liveExempt entries, but recognized structurally instead of by an
 				// allowlist, so these can't masquerade as "untested".)
-				if fx.Mode == testkit.ModeHTTPMock || fx.Mode == testkit.ModeWorkdir {
+				if fx.Mode == testkit.ModeHTTPMock || fx.Mode == testkit.ModeWorkdir || fx.Mode == testkit.ModeEnv {
 					hermetic = true
 				}
 				if fx.Recording == nil || len(fx.Recording.Argv) == 0 {
@@ -179,11 +174,16 @@ func TestCatalogCoverageEnforced(t *testing.T) {
 			proven++
 		}
 
+		_, live := liveOnly[name]
 		switch {
+		case exempt && live:
+			t.Errorf("attestor %q is in BOTH provenExempt and liveOnly — pick one (provenExempt = an obtainable hermetic fixture not yet recorded; liveOnly = cannot be hermetically replayed by design)", name)
 		case isProven && exempt:
 			t.Errorf("attestor %q is fixture-proven but still in provenExempt — delete the allowlist entry (the list must only shrink)", name)
-		case !isProven && !exempt:
-			t.Errorf("attestor %q declares a contract but has no canonical fixture and is not in provenExempt — record a real-run fixture (see trivy/sbom/sarif) or add an allowlist entry with a reason", name)
+		case isProven && live:
+			t.Errorf("attestor %q has a hermetic fixture but is classified liveOnly — remove it from liveOnly; if it can ride the hermetic gate it is not live-only", name)
+		case !isProven && !exempt && !live:
+			t.Errorf("attestor %q declares a contract but has no canonical fixture and is in neither provenExempt nor liveOnly — record a real-run fixture (see trivy/sbom/sarif), or classify it (provenExempt if a hermetic fixture is obtainable, liveOnly if Attest() executes a live environment)", name)
 		}
 
 		// A proven contract's declared canonical fixtures must exist on disk,
@@ -214,12 +214,33 @@ func TestCatalogCoverageEnforced(t *testing.T) {
 		}
 	}
 
+	// liveOnly entries must map to a real contract AND ship a runnable
+	// reproduction under examples/<name>/ — otherwise "live-only" would be a
+	// silent free pass. The reproduction is the proof the hermetic gate can't be.
+	examplesDir := examplesRoot(t)
+	for name := range liveOnly {
+		d, ok := all[name]
+		if !ok || d.Contract == nil {
+			t.Errorf("liveOnly lists %q but it has no registered contract — remove the stale entry", name)
+			continue
+		}
+		repro := filepath.Join(examplesDir, name, "reproduce.sh")
+		if _, err := os.Stat(repro); err != nil {
+			t.Errorf("attestor %q is classified liveOnly but %s is missing — a live-only attestor must ship a runnable real-world reproduction (proven by reproduction, not by the hermetic gate)", name, repro)
+		}
+	}
+
 	exemptNames := make([]string, 0, len(provenExempt))
 	for n := range provenExempt {
 		exemptNames = append(exemptNames, n)
 	}
 	sort.Strings(exemptNames)
-	t.Logf("coverage: %d contracts, %d fixture-proven, %d exempt (allowlist must shrink): %v", contracted, proven, len(provenExempt), exemptNames)
+	liveNames := make([]string, 0, len(liveOnly))
+	for n := range liveOnly {
+		liveNames = append(liveNames, n)
+	}
+	sort.Strings(liveNames)
+	t.Logf("coverage: %d contracts, %d hermetically proven, %d hermetic-exempt (obtainable, must shrink): %v, %d live-only (example-proven): %v", contracted, proven, len(provenExempt), exemptNames, len(liveOnly), liveNames)
 }
 
 // pluginDirs maps each registered attestor name to its plugin directory under
@@ -260,6 +281,19 @@ func pluginsRoot(t *testing.T) string {
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", "plugins", "attestors"))
 	if err != nil {
 		t.Fatalf("resolve plugins dir: %v", err)
+	}
+	return root
+}
+
+// examplesRoot resolves the repo-root examples/ dir where live-only attestors
+// ship their real end-to-end reproductions (examples/<name>/reproduce.sh). The
+// coverage gate stats these to enforce that a liveOnly classification is backed
+// by a runnable reproduction, not a bare allowlist entry.
+func examplesRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", "..", "examples"))
+	if err != nil {
+		t.Fatalf("resolve examples dir: %v", err)
 	}
 	return root
 }

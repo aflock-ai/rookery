@@ -1,6 +1,6 @@
 apiVersion: cilock.detection/v0.1
 name: github-review
-description: "Snapshots GitHub PR review state for the current commit (or an explicit SHA/PR) via the `gh` CLI."
+description: "Snapshots GitHub PR review state for the current commit (or an explicit SHA/PR) via the GitHub REST API (token: GH_TOKEN/GITHUB_TOKEN, or `gh auth token` fallback)."
 
 category: [code-review]
 
@@ -51,3 +51,9 @@ contract:
       env_vars: ["GH_TOKEN", "GITHUB_TOKEN"]
       scopes: ["pull-requests:read"]
       required: false
+  fixtures:
+    # http-mock proof: a REAL PR review on testifysec/cilock-ci-fixtures#1,
+    # captured from api.github.com and replayed (see fixture.yaml). The canonical
+    # attestation.json was produced by cilock against the live API.
+    - name: pr-reviews
+      role: canonical

@@ -59,7 +59,7 @@ type OutputContract struct {
 	// material, product, environment); recommended = common security/build
 	// evidence (sbom, sarif, oci, docker, trivy); maturity = advanced
 	// (policyverify, trace, slsa); extended = specialized/niche scanners
-	// (prowler, steampipe, kube-bench, nessus, oscap, …) typically only in a
+	// (prowler, steampipe, kube-bench, oscap, …) typically only in a
 	// custom cilock build. Optional.
 	Tier string `yaml:"tier,omitempty" json:"tier,omitempty"`
 
