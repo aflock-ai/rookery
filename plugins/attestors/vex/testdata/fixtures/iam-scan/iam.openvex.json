@@ -1,0 +1,22 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://openvex.dev/docs/public/vex-c9cc73818bcd8bd68c99968a5b5fd968c41982f626d646d0f5ee85d84edefad3",
+  "author": "TestifySec Security",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2024-3094"
+      },
+      "products": [
+        {
+          "@id": "pkg:oci/judge-api@sha256:6b5a8e9c1f3d2a4b7c8e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "timestamp": "2023-11-14T22:13:20Z"
+    }
+  ],
+  "timestamp": "2023-11-14T22:13:20Z"
+}

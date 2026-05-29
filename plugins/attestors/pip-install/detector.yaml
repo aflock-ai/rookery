@@ -31,3 +31,34 @@ post:
 
 llm_hints:
   on_match: "pip install captured. Package coordinates, version pins, and wheel digests preserved."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/pip-install/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: >-
+      Package list/versions come from `pip list`/`pip show` (deterministic,
+      name-sorted) but install paths (Location), discovered file paths, and
+      pickle global-ref ordering vary by environment. PEP740Verification is
+      populated from live unauthenticated PyPI HTTP calls, so its contents
+      depend on network availability and PyPI's current provenance state and
+      may be empty or differ between runs. No wall-clock timestamps are emitted.
+    volatile_fields:
+      - packages[].location
+      - setupPyAnalysis[].path
+      - pyprojectAnalysis
+      - installedFileAnalysis.pickleFiles
+      - installedFileAnalysis.pickleAnalysis
+      - installedFileAnalysis.pthFiles
+      - installedFileAnalysis.totalPyFiles
+      - pep740Verification
+  subjects:
+    - prefix: "pip://"
+      description: >-
+        One subject per installed package, keyed pip://<name>@<version>; the
+        digest is sha256 of the literal "<name>==<version>" string, not the
+        wheel artifact.
+  schema_required: true
+  credentials: []

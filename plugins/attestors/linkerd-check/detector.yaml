@@ -25,3 +25,26 @@ post:
 
 llm_hints:
   on_match: "Linkerd service mesh health check results captured."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/linkerd-check/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: "Output derived from `linkerd check -o json` (required) and optional `linkerd viz edges -o json` scanned from the product set. Check categories and per-check results are deterministic from the tool, but the predicate embeds host-specific and unordered fields: Hostname (os.Hostname), ClusterName (from $LINKERD_CLUSTER_NAME), and the distinct namespace lists in EdgesSummary which are built from Go maps and therefore have non-deterministic ordering. EdgesSummary/edge_report are absent unless an edges file is present, and edges_file/cluster subjects are conditional."
+    volatile_fields: ["hostname", "cluster_name", "edges_summary.distinct_src_namespaces", "edges_summary.distinct_dst_namespaces"]
+  subjects:
+    - prefix: "check_file:"
+      description: "path of the linkerd check -o json report file in the product set (digested by the product set)"
+    - prefix: "edges_file:"
+      description: "path of the optional linkerd viz edges -o json report file (only emitted when an edges file is present)"
+    - prefix: "cluster:"
+      description: "cluster name from $LINKERD_CLUSTER_NAME (only emitted when the env var is set)"
+    - prefix: "linkerd-overall:"
+      description: "top-level pass/fail signal, suffix is 'success' or 'fail' based on CheckSummary.OverallSuccess"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: control-plane-check
+      role: canonical

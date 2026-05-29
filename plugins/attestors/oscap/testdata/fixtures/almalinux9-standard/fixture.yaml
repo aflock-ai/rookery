@@ -1,0 +1,43 @@
+schema_version: "0.1"
+attestor: oscap
+description: >-
+  OpenSCAP XCCDF evaluation of the AlmaLinux 9 SCAP Security Guide datastream
+  against the ANSSI-BP-028 (minimal) profile — RECORDED FROM A REAL `oscap
+  xccdf eval` run inside an almalinux:9 container under cilock (14 pass / 1 fail
+  / 24 n-a out of the selected rules; benchmark ALMALINUX-9). Proves the oscap
+  output contract against real scanner output, not a hand-authored sample. The
+  results XML is the raw product the postproduct attestor parses.
+setup:
+  mode: product
+  input: oscap-results.xml   # the RAW XCCDF results XML from the real run — replay source
+  mime_type: application/xml
+# Provenance of the real run that produced this fixture. Re-record with
+# `./record.sh` (builds the oscap-runner image from recording-input/Dockerfile
+# and re-runs the scan under cilock). The version + binary digest are the
+# staleness signal: when openscap or the SSG content changes, re-record and the
+# diff shows what moved.
+recording:
+  tool: oscap
+  version: "1.3.13"
+  binary_sha256: "7ef28eded784c97af5b7eceacef99b2ad6a42bf9e5108c4b6a8f89646b0e7ed7"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["sh", "-c", "docker run --rm -v \"$PWD\":/work -w /work oscap-runner oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_anssi_bp28_minimal --results oscap-results.xml /usr/share/xml/scap/ssg/content/ssg-almalinux9-ds.xml || true"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/oscap/v0.1
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "profile:"
+      - "host:"
+      - "benchmark:"
+# No redact list: the oscap attestor's predicate is a deterministic parse of the
+# committed XCCDF results XML. reportFile is the relative product basename
+# (oscap-results.xml), which the hermetic replay injects identically; targetSystem
+# (the container id baked into the scanned report), the pass/fail/n-a counts, and
+# the failed-rule list are all derived from the same committed bytes — so the
+# recorded predicate and the replay predicate are byte-identical with nothing to
+# redact. The detector.yaml contract declares volatile_fields: [] for the same
+# reason.

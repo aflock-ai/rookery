@@ -1,0 +1,54 @@
+schema_version: "0.1"
+attestor: falco
+description: "Falco runtime-security capture (164 real 'Read sensitive file untrusted' events, priority Warning) — RECORDED FROM A REAL Falco 0.44.0 modern-eBPF run. Falco loaded an eBPF probe into the Docker Desktop LinuxKit kernel (6.10.14-linuxkit) and observed 82 distinct throwaway containers reading /etc/shadow over a 25s window; the line-delimited JSON it emitted IS falco-events.jsonl. The falco attestor (postproduct) parses it and emits falco-events:<host> / rule:<name> / report_file:<path> subjects. Proves the falco output contract against real eBPF tool output, not a hand-copied sample. LIVE-EXEMPT: a Falco event stream is non-reproducible (per-event timestamps, evt ids, and 82 unique container ids vary every run), so there is no recording-input/ for the live gate to re-run — the same class as prowler (live AWS scan)."
+setup:
+  mode: product
+  input: falco-events.jsonl   # the RAW Falco line-delimited JSON events from the real eBPF run — replay source
+  mime_type: application/x-ndjson
+# Provenance of the real run that produced this fixture. Falco is a live runtime
+# threat detector: it streams kernel events through an eBPF probe, so its output
+# is inherently NON-DETERMINISTIC (every event carries a fresh timestamp/evt id,
+# and here each of the 164 events references one of 82 short-lived container ids
+# that exist only for that run). A second real capture would never reproduce
+# byte-for-byte. That makes falco LIVE-EXEMPT for the live re-verify gate (no
+# recording-input/), exactly like prowler's live AWS scan — but the committed
+# capture below IS real eBPF output and the hermetic gate replays it.
+#
+# Re-record with ./record.sh: it runs the privileged Falco container to capture a
+# fresh real event window, then wraps a path-clean emit under cilock. The version
+# + binary digest are the staleness signal: when Falco changes, re-record and the
+# diff shows what moved.
+recording:
+  tool: falco
+  version: "0.44.0"
+  binary_sha256: "3fa36887c8a49c3dca9ca1abc63cf40dea002244c88bd153040decfd440f6561"  # /usr/bin/falco in falcosecurity/falco@sha256:288c8dd795834ee660d7adfb7d66db525a24a0b78c1f125155f8e237677c030c
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  # The recorded command-run argv. Falco itself runs in a privileged container
+  # (it must load an eBPF probe — it cannot run as a plain on-PATH binary in this
+  # macOS dev env), so the cilock-wrapped step is a path-clean emit of the events
+  # the live Falco run captured into falco-events.jsonl (the product the falco
+  # attestor then parses). The genuine Falco capture command is documented in
+  # record.sh. argv MUST equal the recorded command-run cmd for the cross-check.
+  argv: ["sh", "-c", "cat falco-events.real.jsonl > falco-events.jsonl"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/falco/v0.1
+  run_type: postproduct
+  # hostname is the contract's documented volatile field: the falco attestor
+  # stamps os.Hostname() of the cilock node (here "Mac"), which differs between
+  # the recording host and a CI runner. Redact it so the recorded-evidence
+  # cross-check and the two-run determinism gate compare the deterministic,
+  # file-derived content (events, priority counts, rule_hits, window). The
+  # per-event times + window_start/window_end are NOT redacted: they live inside
+  # the committed events file, so both hermetic replays read identical values —
+  # they only vary across DIFFERENT real captures, which the live-exempt status
+  # already covers.
+  redact:
+    - hostname
+  subjects:
+    match: prefix
+    keys:
+      - "falco-events:"   # falco-events:<host> (os.Hostname of the cilock node)
+      - "rule:"           # rule:Read sensitive file untrusted (one per distinct rule that fired)
+      - "report_file:"    # report_file:falco-events.jsonl (keyed by the product digest)

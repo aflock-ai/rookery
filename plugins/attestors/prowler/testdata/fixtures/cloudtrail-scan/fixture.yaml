@@ -1,0 +1,38 @@
+schema_version: "0.1"
+attestor: prowler
+description: "Prowler AWS CloudTrail posture scan (account 898769392027, us-east-1, 4 FAIL findings) — RECORDED FROM A REAL prowler run under cilock. The native-v3 JSON report IS the real scan output; the prowler attestor (postproduct) normalizes it and emits aws:account / aws:arn / aws:service subjects. Proves the prowler output contract against real tool output, not a hand-copied sample."
+setup:
+  mode: product
+  input: prowler-output.json   # the RAW prowler native-v3 JSON from the real run — replay source
+  mime_type: application/json
+# Provenance of the real run that produced this fixture. Re-record with
+# ./record.sh (runs prowler against the live demo AWS account under cilock
+# again). The version + binary digest are the staleness signal: when prowler
+# changes, re-record and the diff shows what moved. CloudTrail (vs IAM) was
+# chosen as the scanned service because its findings reference only the account
+# root ARN — no IAM role names that embed an operator username — keeping the
+# committed public evidence free of any name-shaped string while still yielding
+# all three subject families (account, arn, service).
+recording:
+  tool: prowler
+  version: "3.11.3"
+  binary_sha256: "d28fca38982101e4046ea32f084556de83d83af875f8a4c1829784605ba4c46f"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["prowler", "aws", "--service", "cloudtrail", "--region", "us-east-1", "-z", "-M", "json", "-F", "prowler-output", "-o", "."]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/prowler/v0.1
+  run_type: postproduct
+  # reportFile is the documented volatile field (contract stability.volatile_fields):
+  # it is the on-disk product path, which differs between the real recorded run
+  # (cilock working dir) and the hermetic replay (testkit temp dir). Redact it so
+  # the recorded-evidence cross-check compares the deterministic summary content.
+  redact:
+    - reportFile
+  subjects:
+    match: prefix
+    keys:
+      - "aws:account:"
+      - "aws:arn:"
+      - "aws:service:"

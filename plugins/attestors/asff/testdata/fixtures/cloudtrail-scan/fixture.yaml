@@ -1,0 +1,40 @@
+schema_version: "0.1"
+attestor: asff
+description: "ASFF summary of a real prowler v3.11.3 AWS CloudTrail scan (testifysec-demo, account 898769392027, us-east-1, 4 FAILED findings: 1 HIGH + 3 LOW) — RECORDED FROM A REAL prowler run under cilock. Prowler emits a bare JSON array with -M json-asff; the recorded command wraps it into the {\"Findings\":[...]} AWS Security Hub envelope the asff attestor consumes (the same shape `aws securityhub get-findings --output json` returns). CloudTrail (not IAM) is the scanned service: its findings reference only the account-root ARN — pure account topology, no person-named IAM resource — while still surfacing all three subject families. Proves the asff output contract against real cloud-scan output, not a hand-copied sample."
+setup:
+  mode: product
+  input: findings.asff.json   # the REAL prowler findings, wrapped in the Security Hub {Findings:[...]} envelope — replay source (byte-identical to the recorded product; its sha256 equals the recorded summary.reportDigest)
+  mime_type: application/json
+# Provenance of the real run that produced this fixture. Re-record with
+# ./record.sh (runs prowler under cilock again against the live demo AWS account).
+# The version + binary digest are the staleness signal: when prowler changes,
+# re-record and the diff shows what moved. NOTE: re-recording needs AWS credentials
+# + network, so this fixture is liveExempt (not re-runnable in hermetic CI) — the
+# committed findings.asff.json + attestation.json ARE the real artifact. CloudTrail
+# (vs IAM) was chosen because its findings reference only the account-root ARN,
+# keeping the committed public evidence free of any person-named IAM resource while
+# still yielding all three subject families (account, finding, arn).
+recording:
+  tool: prowler
+  version: "3.11.3"
+  binary_sha256: "d28fca38982101e4046ea32f084556de83d83af875f8a4c1829784605ba4c46f"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["sh", "-c", "prowler aws --service cloudtrail --region us-east-1 -z -M json-asff -F asff-raw -o . || true; jq \"{Findings: .}\" asff-raw.asff.json > findings.asff.json; rm -f asff-raw.asff.json"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/asff/v0.1
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "aws:account:"
+      - "aws:finding:"
+      - "aws:arn:"
+  # summary.reportFile is the consumed product's on-disk path (env-dependent: the
+  # cilock working dir at record time vs the testkit temp dir at replay). The
+  # contract declares it volatile (stability.volatile_fields). Redact it before the
+  # recorded-vs-replay predicate cross-check so the deterministic summary content is
+  # what's compared.
+  redact:
+    - "summary.reportFile"

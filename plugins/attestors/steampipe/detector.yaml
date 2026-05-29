@@ -25,3 +25,54 @@ post:
 
 llm_hints:
   on_match: "Steampipe query results captured."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/steampipe/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: "Subject keys and captured rows are deterministic for a pinned plugin version + the same account state; the predicate stamps wall-clock collectedAt/ranAt on every run, which are redacted before the recorded-evidence cross-check. Attestor consumes a JSON product produced by a separate steampipe commandrun step — it does not run steampipe itself."
+    volatile_fields: ["predicate.collectedAt", "predicate.results.[].ranAt"]
+  validated_invocation:
+    tool: steampipe
+    argv: ["sh", "-c", "steampipe query \"select account_id, arn, name from aws_iam_user order by name\" --output json > steampipe-output.json"]
+    step: steampipe-query
+    attestations: ["steampipe"]
+  subjects:
+    - prefix: "aws:account:"
+      description: "AWS account_id column value (aws plugin)"
+    - prefix: "aws:arn:"
+      description: "AWS resource arn column value (aws plugin)"
+    - prefix: "aws:region:"
+      description: "AWS region column value (aws plugin)"
+    - prefix: "github:repo:"
+      description: "GitHub name_with_owner repo slug (github plugin)"
+    - prefix: "github:org:"
+      description: "GitHub org login (github plugin)"
+    - prefix: "okta:user:"
+      description: "Okta user id column value (okta plugin)"
+    - prefix: "okta:org:"
+      description: "Okta organization column value (okta plugin)"
+    - prefix: "k8s:uid:"
+      description: "Kubernetes resource uid column value (kubernetes plugin)"
+    - prefix: "k8s:namespace:"
+      description: "Kubernetes namespace column value (kubernetes plugin)"
+  emits_materials: true
+  # Export() now defaults FALSE (embed the predicate in the signed collection)
+  # and is opt-in via --attestor-steampipe-export — mirroring sbom/slsa/link.
+  # exports records the canonical fixture's setting (the default); the predicate
+  # embeds, which is what makes it recordable/verifiable like trivy.
+  exports: false
+  export_configurable: true
+  schema_required: true
+  credentials:
+    - name: "AWS read-only credentials"
+      type: cloud-role
+      provided: ambient
+      scopes: ["iam:ListUsers", "iam:GetUser"]
+      required: true
+      description: "The steampipe aws plugin reads ~/.aws via the connection profile; the canonical fixture uses a read-only IAM identity in the demo account (898769392027)."
+  fixtures:
+    - name: aws-iam-users
+      role: canonical

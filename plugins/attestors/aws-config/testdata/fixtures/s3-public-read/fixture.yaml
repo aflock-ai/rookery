@@ -1,0 +1,51 @@
+schema_version: "0.1"
+attestor: aws-config
+description: "AWS Config compliance detail for the s3-bucket-public-read-prohibited rule (account 898769392027, us-east-1, 1 COMPLIANT S3 bucket) — RECORDED FROM A REAL `aws configservice` query under cilock. The get-compliance-details JSON IS the real service output; the aws-config attestor (postproduct) parses its EvaluationResults and emits aws-config:rule: / aws-config:resource: subjects. Proves the aws-config output contract against real tool output, not a hand-copied sample."
+setup:
+  mode: product
+  input: aws-config.json   # the RAW get-compliance-details JSON from the real run — replay source
+  mime_type: application/json
+# Provenance of the real run that produced this fixture. Re-record with
+# ./record.sh (runs `aws configservice get-compliance-details-by-resource`
+# against the live demo AWS Config service under cilock again). The version +
+# binary digest are the staleness signal: when the AWS CLI changes, re-record
+# and the diff shows what moved.
+#
+# SCOPE NOTE: the demo account exposes a single Config rule
+# (s3-bucket-public-read-prohibited). Querying it by-config-rule returns all six
+# evaluated buckets, one of which embeds a person's name in its bucket name —
+# that string would leak into committed PUBLIC evidence (the rookery subtree
+# syncs to a public repo). We therefore scope to a single durable, name-clean
+# bucket (config-bucket-…, AWS Config's own delivery bucket) via the
+# get-compliance-details-by-resource call: same `aws configservice` command
+# family, same top-level EvaluationResults shape the attestor consumes, real
+# live output, no PII.
+recording:
+  tool: aws
+  version: "2.33.17"
+  binary_sha256: "62f5c449bcd3f6badeb6c1788871aa6da750c3cd28702231c693a9a5b3bdfd9d"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["sh", "-c", "aws configservice get-compliance-details-by-resource --resource-type 'AWS::S3::Bucket' --resource-id 'config-bucket-898769392027-us-east-1' --region us-east-1 --output json > aws-config.json"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/aws-config/v0.1
+  run_type: postproduct
+  # reportFile is the contract's documented volatile field (stability.volatile_fields):
+  # it is the on-disk product path, which can differ between the real recorded
+  # run (cilock working dir) and the hermetic replay (testkit temp dir). Redact
+  # it so the recorded-evidence cross-check compares the deterministic summary +
+  # reportDigestSet content (reportDigestSet is the byte-for-byte product hash,
+  # so flipping any byte of aws-config.json makes the cross-check fail).
+  redact:
+    - reportFile
+  subjects:
+    match: prefix
+    # Only the two families an S3-bucket rule actually emits. The contract also
+    # declares aws:account:, but the attestor extracts the account id only from a
+    # ResourceId that is an ARN (field 5); S3 ResourceIds are bare bucket names,
+    # not ARNs, so this real run emits no aws:account: subject. The fixture
+    # asserts only what the real evidence carries.
+    keys:
+      - "aws-config:rule:"
+      - "aws-config:resource:"

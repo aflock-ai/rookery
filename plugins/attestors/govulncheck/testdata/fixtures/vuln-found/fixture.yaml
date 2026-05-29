@@ -1,0 +1,37 @@
+schema_version: "0.1"
+attestor: govulncheck
+description: "govulncheck v1.3.0 scan of a Go module that calls golang.org/x/text/language.ParseAcceptLanguage — the vulnerable symbol of GO-2022-1059 — RECORDED FROM A REAL govulncheck run under cilock. Proves BOTH the go:module: subject and the symbol-reachable go:vuln: subject (the contract's call-graph-reachability claim)."
+setup:
+  mode: product
+  input: govulncheck.json   # RAW govulncheck -format json wire stream — replay source
+  # govulncheck's wire format is a STREAM of concatenated JSON objects, which
+  # fails the single-document JSON sniffer and classifies as text/plain — NOT
+  # application/json. The attestor matches the MIME by prefix; inject as
+  # text/plain or the product is skipped ("no govulncheck JSON output found").
+  mime_type: "text/plain; charset=utf-8"
+recording:
+  tool: govulncheck
+  version: "v1.3.0"
+  binary_sha256: "ceea4d45bbdb3f8b4d9168a12eef7188507e82110ea7f3fb693194f3c2eb4102"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock collection (the evidence)
+  # The recorded command-run argv: govulncheck writes JSON to stdout, so it is
+  # wrapped in `bash -c '... > govulncheck.json'` to land as a product file.
+  # GOWORK=off is required — a parent go.work excludes this nested demo module.
+  argv: ["bash", "-c", "GOWORK=off govulncheck -format json ./... > govulncheck.json"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/govulncheck/v0.1
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "go:module:"   # the scanned module (summary.scanRoots)
+      - "go:vuln:"     # the symbol-reachable OSV id (GO-2022-1059)
+  # Volatile under re-record: the Go vuln DB refresh timestamp (and the file
+  # digest that depends on it). Redacted before any golden compare. (The
+  # hermetic replay re-reads the SAME committed bytes, so the cross-check is
+  # unaffected; these matter when re-recording against a refreshed DB.)
+  redact:
+    - "report[].config.db_last_modified"
+    - "reportDigestSet"

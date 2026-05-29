@@ -180,6 +180,101 @@ func RegistrationEntries() []registry.Entry[Attestor] {
 	return attestorRegistry.AllEntries()
 }
 
+// ApplyAttestorOptions applies a map of attestor-specific option values to an
+// already-constructed attestor via the SAME registered config-option setters
+// the CLI flags use. Keys are bare option names (e.g. "plugin", "sql",
+// "export"); values are coerced to the option's declared type. Unknown keys
+// and type mismatches return an error so a malformed fixture/recipe fails
+// loudly rather than silently producing empty evidence.
+//
+// This lets callers that build attestors by name — the testkit catalog harness,
+// recipe drivers — drive options the bare factory can't express, WITHOUT
+// importing each plugin package (no coupling, no import cycle). It is the
+// programmatic sibling of the cobra flag wiring in cilock/internal/options.
+func ApplyAttestorOptions(nameOrType string, attestor Attestor, values map[string]any) (Attestor, error) {
+	if len(values) == 0 {
+		return attestor, nil
+	}
+	opts := AttestorOptions(nameOrType)
+	byName := make(map[string]registry.Configurer, len(opts))
+	for _, opt := range opts {
+		byName[opt.Name()] = opt
+	}
+	result := attestor
+	for key, raw := range values {
+		opt, ok := byName[key]
+		if !ok {
+			return attestor, fmt.Errorf("attestor %q: unknown option %q", nameOrType, key)
+		}
+		var err error
+		switch o := opt.(type) {
+		case *registry.ConfigOption[Attestor, string]:
+			v, ok := raw.(string)
+			if !ok {
+				return attestor, fmt.Errorf("attestor %q option %q: want string, got %T", nameOrType, key, raw)
+			}
+			result, err = o.Setter()(result, v)
+		case *registry.ConfigOption[Attestor, bool]:
+			v, ok := raw.(bool)
+			if !ok {
+				return attestor, fmt.Errorf("attestor %q option %q: want bool, got %T", nameOrType, key, raw)
+			}
+			result, err = o.Setter()(result, v)
+		case *registry.ConfigOption[Attestor, int]:
+			v, ok := toInt(raw)
+			if !ok {
+				return attestor, fmt.Errorf("attestor %q option %q: want int, got %T", nameOrType, key, raw)
+			}
+			result, err = o.Setter()(result, v)
+		case *registry.ConfigOption[Attestor, []string]:
+			v, ok := toStringSlice(raw)
+			if !ok {
+				return attestor, fmt.Errorf("attestor %q option %q: want []string, got %T", nameOrType, key, raw)
+			}
+			result, err = o.Setter()(result, v)
+		default:
+			return attestor, fmt.Errorf("attestor %q option %q: unsupported option type %T", nameOrType, key, opt)
+		}
+		if err != nil {
+			return attestor, fmt.Errorf("attestor %q option %q: %w", nameOrType, key, err)
+		}
+	}
+	return result, nil
+}
+
+// toInt coerces a YAML/JSON-decoded scalar (int, int64, float64) to int.
+func toInt(raw any) (int, bool) {
+	switch v := raw.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	}
+	return 0, false
+}
+
+// toStringSlice coerces a []string or a []any-of-strings (the shape a YAML
+// sequence decodes to) into []string.
+func toStringSlice(raw any) ([]string, bool) {
+	switch v := raw.(type) {
+	case []string:
+		return v, true
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			s, ok := e.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	}
+	return nil, false
+}
+
 // RegisterLegacyAlias registers an additional predicate type URI that maps to
 // the same factory as an existing type. This allows old attestation JSON using
 // legacy URIs (e.g. witness.dev, witness.testifysec.com) to be deserialized

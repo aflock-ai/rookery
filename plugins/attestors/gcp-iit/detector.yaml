@@ -20,3 +20,31 @@ pre:
 
 llm_hints:
   on_match: "GCP instance identity captured (project, zone, instance id, signed identity token)."
+
+contract:
+  tier: foundation
+  predicate_type: https://aflock.ai/attestations/gcp-iit/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: "Output is GCP instance metadata + Instance Identity JWT claims (project_id, project_number, zone, instance_id, instance_hostname, cluster_*). Subject digests are SHA-256 of these per-instance values and are deterministic for a fixed instance. The raw IIT itself is NOT serialized (jwt.token is unexported); the predicate embeds jwt.claims, whose freshly-minted time claims (iat/exp/nbf) rotate on every Attest() call. instance_creation_timestamp is fixed per instance but environment-specific. Requires running on a live GCP instance with a reachable metadata server."
+    volatile_fields: ["jwt.claims.iat", "jwt.claims.exp", "jwt.claims.nbf", "instance_creation_timestamp"]
+  subjects:
+    - prefix: "instanceid:"
+      description: "GCP instance ID (numeric)"
+    - prefix: "instancename:"
+      description: "GCP instance hostname / name"
+    - prefix: "projectid:"
+      description: "GCP project ID"
+    - prefix: "projectnumber:"
+      description: "GCP numeric project number"
+    - prefix: "clusteruid:"
+      description: "GKE cluster UID (populated for workload-identity / GKE nodes)"
+  schema_required: true
+  credentials:
+    - name: gcp-instance-identity
+      type: instance-identity
+      provided: instance-metadata
+      env_vars: []
+      scopes: ["read:instance/service-accounts/default/identity", "read:instance/metadata", "read:project/metadata"]
+      required: true

@@ -1,0 +1,41 @@
+schema_version: "0.1"
+attestor: inspec
+description: "inspec attestation of a REAL CINC Auditor (open-source InSpec) scan of the dev-sec/linux-baseline public profile against the auditor container itself — RECORDED FROM A REAL `cinc-auditor exec` run under cilock (ubuntu 22.04, 3 failing controls). The inspec attestor is POSTPRODUCT: it consumes the json reporter output as a Product and derives subjects deterministically from the parsed report. Proves all three subject families: platform: (os-name-release), profile: (profile name), and inspec:control: (one per failing control)."
+setup:
+  mode: product
+  input: inspec.json          # the RAW CINC Auditor json reporter output from the real run — replay source
+  mime_type: application/json # the attestor's isAcceptedMimeType accepts application/json
+# Provenance of the real run that produced this fixture. CINC Auditor is the
+# open-source distribution of InSpec; it runs in the cincproject/auditor
+# container (the tool is not on the host PATH — cilock RECORDS the container's
+# output, it does not invoke the generator). The version + image digest are the
+# staleness signal: when CINC changes, re-record and the diff shows what moved.
+recording:
+  tool: inspec
+  version: "7.1.7"            # `cinc-auditor version` inside cincproject/auditor
+  binary_sha256: "c0ca751a762583994a8bc800dfaa97542876f45d994e954a78b54a36b03f2eff"  # cincproject/auditor@sha256 image digest (the tool runs in-container)
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  # The recorded command-run argv, byte-identical to the cilock command-run
+  # sub-attestation. The wrapped `sh -c '...; true'` runs the real CINC Auditor
+  # exec of the public dev-sec/linux-baseline profile, writing /work/inspec.json
+  # (relative basename `inspec.json`); the trailing `; true` neutralizes ONLY the
+  # non-zero exit CINC returns on control failures so cilock still records the
+  # command-run + product. The tool's actual output is not altered.
+  argv: ["sh", "-c", "docker run --rm -v \"$PWD\":/work -w /work cincproject/auditor exec https://github.com/dev-sec/linux-baseline --reporter json:/work/inspec.json --chef-license accept-silent; true"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/inspec/v0.1
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "platform:"        # platform:ubuntu-22.04 (single subject: <os-name>-<release>)
+      - "profile:"         # profile:linux-baseline (one per InSpec profile)
+      - "inspec:control:"  # inspec:control:os-05 / os-13 / os-14 (one per FAILING control)
+  # No redact: reportFile is the RELATIVE product basename `inspec.json`, identical
+  # in the recorded run and the hermetic replay (materializeProduct uses the same
+  # basename + the same bytes -> same reportDigestSet), and the scanSummary is a
+  # deterministic parse of the report. statistics.duration is read but never
+  # surfaced (contract volatile_fields: []), so the recorded predicate equals the
+  # hermetic replay byte-for-byte.

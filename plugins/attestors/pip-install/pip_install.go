@@ -189,9 +189,39 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subjects
 }
 
+// resolvePipLauncher picks the pip launcher to shell out to. It prefers the
+// canonical Python 3 launcher `pip3`, then bare `pip`, then `python3 -m pip`.
+// Many environments (macOS/Homebrew, slim CI images) ship `pip3` but no bare
+// `pip` on PATH; calling bare `pip` there fails with "command not found" and
+// the attestor silently produces an empty package list. The returned (name,
+// prefixArgs) are prepended to each pip subcommand's args.
+func resolvePipLauncher() (name string, prefixArgs []string) {
+	for _, cand := range []string{"pip3", "pip"} {
+		if _, err := exec.LookPath(cand); err == nil {
+			return cand, nil
+		}
+	}
+	if _, err := exec.LookPath("python3"); err == nil {
+		return "python3", []string{"-m", "pip"}
+	}
+	// Last resort: bare pip. exec will surface the not-found error to callers,
+	// which treat it as non-fatal (empty package list).
+	return "pip", nil
+}
+
+// pipCommand builds an *exec.Cmd that runs the resolved pip launcher with args.
+func pipCommand(args ...string) *exec.Cmd {
+	name, prefix := resolvePipLauncher()
+	return exec.Command(name, append(prefix, args...)...) //nolint:gosec
+}
+
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
-	// Get pip and python versions
-	a.PipVersion = runQuiet("pip", "--version")
+	// Get pip and python versions. Use the resolved launcher so `pip --version`
+	// works on PATHs that only carry pip3 / python3 -m pip.
+	a.PipVersion = "unknown"
+	if out, err := pipCommand("--version").Output(); err == nil {
+		a.PipVersion = strings.TrimSpace(string(out))
+	}
 	a.PythonVersion = runQuiet("python3", "--version")
 
 	// Get list of installed packages as JSON
@@ -222,7 +252,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 // getInstalledPackages uses pip list --format=json and pip show to get
 // detailed info about installed packages.
 func getInstalledPackages() ([]PackageInfo, error) {
-	out, err := exec.Command("pip", "list", "--format=json").Output() //nolint:gosec
+	out, err := pipCommand("list", "--format=json").Output()
 	if err != nil {
 		return nil, fmt.Errorf("pip list: %w", err)
 	}
@@ -243,7 +273,7 @@ func getInstalledPackages() ([]PackageInfo, error) {
 		}
 
 		// Get detailed info via pip show
-		showOut, err := exec.Command("pip", "show", p.Name).Output() //nolint:gosec
+		showOut, err := pipCommand("show", p.Name).Output()
 		if err == nil {
 			pkg = parseShowOutput(string(showOut), pkg)
 		}

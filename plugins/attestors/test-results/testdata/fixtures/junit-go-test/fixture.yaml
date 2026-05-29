@@ -1,0 +1,52 @@
+schema_version: "0.1"
+attestor: test-results
+description: >-
+  go1.26.3 `go test -v ./...` of a throwaway 6-test module (3 pass, 1 skip,
+  2 fail), converted to JUnit XML by go-junit-report and RECORDED FROM A REAL
+  cilock run. The attestor consumes the junit.xml PRODUCT and emits a normalized
+  test-results predicate. Proves BOTH subject families: test-suite: (the suite
+  name) and test-failure: (the 2 failed cases — the SLSA "tests ran AND we can
+  see what failed" claim). No creds, no network, no leak: the module has zero
+  dependencies and the input is a Go-toolchain test report.
+setup:
+  mode: product
+  input: junit.xml          # the RAW go-junit-report XML — replay source
+  # The test-results attestor dispatches by BYTE content (first non-whitespace
+  # byte: '<' => JUnit XML, '{' => CTRF JSON), NOT by Product.MimeType, so the
+  # injected mime is informational only. application/xml is the honest value for
+  # a JUnit XML report.
+  mime_type: "application/xml"
+recording:
+  tool: go
+  version: "go1.26.3"
+  binary_sha256: "1b6e73b4f9eae9108e2e747f5cd29dc27ddfc1999a414fe11cd593072d607a84"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock collection (the evidence)
+  # The recorded command-run argv: `go test` writes test output to stdout, which
+  # go-junit-report converts to junit.xml. `go test` exits non-zero on the 2
+  # intentional failures, so the wrapper appends `; exit 0` to let cilock's
+  # command-run succeed and the product attestor digest junit.xml. GOWORK=off is
+  # required — a parent go.work excludes this nested throwaway demo module.
+  argv:
+    - "bash"
+    - "-c"
+    - "GOWORK=off go test -v ./... 2>&1 | GOWORK=off go-junit-report > junit.xml; exit 0"
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/test-results/v0.1
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "test-suite:"     # the suite name (example.com/junitgen)
+      - "test-failure:"   # each failed case (TestSubFails, TestMulFails)
+  # Volatile across REAL re-runs of the test command (wall-clock timing + stack
+  # traces / line numbers), per the contract's stability.volatile_fields. The
+  # predicate marshals as {"predicate": {...}} (Attestor.Predicate json tag), so
+  # the redact paths are rooted at predicate. The hermetic replay re-reads the
+  # SAME committed junit.xml, so these are identical run-to-run anyway; redaction
+  # matters when re-recording against a fresh `go test` run.
+  redact:
+    - "predicate.summary.durationSeconds"
+    - "predicate.failedTests.[].duration"
+    - "predicate.failedTests.[].message"

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="6" failures="2" skipped="1">
+	<testsuite name="example.com/junitgen" tests="6" failures="2" errors="0" id="0" hostname="Mac" skipped="1" time="0.140" timestamp="2026-05-29T03:53:19-05:00">
+		<testcase name="TestAdd" classname="example.com/junitgen" time="0.000"></testcase>
+		<testcase name="TestSub" classname="example.com/junitgen" time="0.000"></testcase>
+		<testcase name="TestMul" classname="example.com/junitgen" time="0.000"></testcase>
+		<testcase name="TestSkipMe" classname="example.com/junitgen" time="0.000">
+			<skipped message="Skipped"><![CDATA[    calc_test.go:28: not ready]]></skipped>
+		</testcase>
+		<testcase name="TestSubFails" classname="example.com/junitgen" time="0.000">
+			<failure message="Failed"><![CDATA[    calc_test.go:33: intentional failure in suite]]></failure>
+		</testcase>
+		<testcase name="TestMulFails" classname="example.com/junitgen" time="0.000">
+			<failure message="Failed"><![CDATA[    calc_test.go:38: second intentional failure]]></failure>
+		</testcase>
+	</testsuite>
+</testsuites>

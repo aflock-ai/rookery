@@ -26,3 +26,28 @@ pre:
 
 llm_hints:
   on_match: "GitHub PR review state captured. Subjects include commit SHA, repo, PR numbers, and every distinct reviewer login. Use policyverify to gate on `state == APPROVED` from required reviewers."
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/github-review/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: "Predicate is a point-in-time snapshot of mutable GitHub PR/review state fetched over the REST API. FetchedAt is a wall-clock RFC3339 timestamp set at attest time, and the PRs/reviews captured reflect whatever the resolved token could see at that moment (review counts, states, and reviewer logins change as the PR evolves). The interface (subject prefixes, predicate shape) is stable; the captured values are not reproducible across runs."
+    volatile_fields: ["FetchedAt", "PRs", "PRs[].Reviews"]
+  subjects:
+    - prefix: "commitsha:"
+      description: "the target commit SHA reviews were looked up for"
+    - prefix: "repo:"
+      description: "the owner/name GitHub repository"
+    - prefix: "pr:"
+      description: "each pull request associated with the commit, keyed pr:<repo>#<number>"
+    - prefix: "reviewer:"
+      description: "each distinct reviewer login that submitted a review"
+  schema_required: true
+  credentials:
+    - name: github-token
+      type: api-token
+      provided: env
+      env_vars: ["GH_TOKEN", "GITHUB_TOKEN"]
+      scopes: ["pull-requests:read"]
+      required: false

@@ -1,0 +1,27 @@
+schema_version: "0.1"
+attestor: trivy
+description: "Trivy filesystem scan of a vulnerable Python requirements.txt — RECORDED FROM A REAL trivy run under cilock (51 CVEs). Proves the trivy output contract against real tool output, not a hand-copied sample."
+setup:
+  mode: product
+  input: trivy-results.json   # the RAW trivy output from the real run — replay source
+  mime_type: application/json
+# Provenance of the real run that produced this fixture. Re-record with
+# `make catalog-record name=trivy` (runs trivy under cilock again). The version
+# + binary digest are the staleness signal: when trivy changes, re-record and
+# the diff shows what moved.
+recording:
+  tool: trivy
+  version: "0.70.0"
+  binary_sha256: "8fb0d5b762c6aa9e0ea5058a9ed62b10c8855dc8f9bc1f739dfa94d7531e1d2d"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["trivy", "fs", "--format", "json", "--output", "trivy-results.json", "."]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/trivy/v0.1
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "trivy:artifact:"
+      - "trivy:cve:"

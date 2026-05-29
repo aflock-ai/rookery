@@ -1,0 +1,47 @@
+schema_version: "0.1"
+attestor: kube-bench
+description: "kube-bench CIS Kubernetes Benchmark node scan (eks-1.5.0, --targets node) of a LIVE EKS worker node in the testifysec-demo demo cluster (account 898769392027, dropbox-clone-dev) — RECORDED FROM A REAL kube-bench run under cilock. The {Controls,Totals} JSON IS the real benchmark output (12 PASS / 1 FAIL on the Worker Node Security Configuration section); the kube-bench attestor (postproduct) parses it and emits benchmark: and node: subjects. Proves the kube-bench output contract against real tool output, not a hand-copied sample."
+setup:
+  mode: product
+  input: kube-bench.json   # the RAW kube-bench --json report from the real run — replay source
+  mime_type: application/json
+# Provenance of the real run that produced this fixture. Re-record with
+# ./record.sh (re-runs kube-bench as a Job on the live demo EKS cluster, captures
+# the JSON, and re-records it under cilock). The version + image digest are the
+# staleness signal: when kube-bench changes, re-record and the diff shows what
+# moved. kube-bench ran inside the official aquasec/kube-bench container, so
+# binary_sha256 is that container image's digest (the verifiable identity of what
+# produced the scan), not a local on-PATH binary.
+recording:
+  tool: kube-bench
+  version: "v0.15.5"
+  binary_sha256: "c8d202e3725ad046dd427f2a3aa3c0000c3c10657cda9482c9e015664d31e5df"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["sh", "-c", "cat kube-bench.src > kube-bench.json"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/kube-bench/v0.1
+  run_type: postproduct
+  # Documented volatile fields (contract stability.volatile_fields). report_file
+  # is the on-disk product path (differs between the recorded cilock workdir and
+  # the hermetic replay temp dir). report_digest_set is the file digest (re-keyed
+  # to the replay path/copy). node_hostname (os.Hostname) and cluster_name
+  # (KUBE_BENCH_CLUSTER_NAME env) are environment-specific and shift across hosts.
+  # Redact them so the recorded-evidence cross-check compares the deterministic
+  # summary/version content, not the host-specific shell.
+  redact:
+    - report_file
+    - report_digest_set
+    - node_hostname
+    - cluster_name
+  subjects:
+    match: prefix
+    keys:
+      # benchmark: is always emitted (CIS Kubernetes Benchmark identity, derived
+      # from the first Control section id — here "3", the Worker Node section).
+      - "benchmark:"
+      # node: is emitted from os.Hostname of the recording host. cluster: is
+      # contract-optional (only when KUBE_BENCH_CLUSTER_NAME is set); this run
+      # did not set it, so it is intentionally absent and not asserted.
+      - "node:"

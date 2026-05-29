@@ -161,7 +161,13 @@ func (a *SBOMAttestor) Export() bool {
 }
 
 func (a *SBOMAttestor) Schema() *jsonschema.Schema {
-	return jsonschema.Reflect(a)
+	// MarshalJSON emits the wrapped SBOM document INLINE (optionally with a
+	// _sbomFormat discriminator), not the reflected struct shape — so a
+	// Reflect(a) schema falsely requires an "SBOMDocument" property the actual
+	// predicate never has (the catalog schema-validation gate caught this). The
+	// honest schema is "an object": the predicate is the tool's SBOM JSON
+	// (CycloneDX / SPDX / …), whose internal shape is the tool's to define.
+	return &jsonschema.Schema{Type: "object"}
 }
 
 func (a *SBOMAttestor) Attest(ctx *attestation.AttestationContext) error {

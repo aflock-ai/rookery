@@ -1,0 +1,31 @@
+schema_version: "0.1"
+attestor: sbom
+description: "syft CycloneDX SBOM of a small Python requirements.txt — RECORDED FROM A REAL syft run under cilock. Proves the sbom output contract against real tool output, not a hand-copied sample."
+setup:
+  mode: product
+  input: bom.cdx.json   # the RAW syft CycloneDX output from the real run — replay source
+  # CRITICAL: the sbom attestor dispatches on the product MIME, not the filename.
+  # The testkit default (application/json) is SILENTLY SKIPPED ("no SBOM file
+  # found"). CycloneDX-JSON must be injected as application/vnd.cyclonedx+json.
+  mime_type: application/vnd.cyclonedx+json
+# Provenance of the real run that produced this fixture. Re-record with
+# `CILOCK=/path/to/cilock-all ./record.sh` (runs syft under cilock again). The
+# version + binary digest are the staleness signal: when syft changes, re-record
+# and the diff shows what moved.
+recording:
+  tool: syft
+  version: "1.44.0"
+  binary_sha256: "a0ccb238c2354837846d590b063e8855d824068ac1bd4238d92518dabc7550e3"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["syft", "scan", "dir:.", "--source-name", "demo-app", "--source-version", "1.0.0", "--select-catalogers", "-file", "-o", "cyclonedx-json=bom.cdx.json"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://cyclonedx.org/bom
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "file:"
+      - "name:"
+      - "version:"

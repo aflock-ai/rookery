@@ -1,0 +1,18 @@
+{
+    "EvaluationResults": [
+        {
+            "EvaluationResultIdentifier": {
+                "EvaluationResultQualifier": {
+                    "ConfigRuleName": "s3-bucket-public-read-prohibited",
+                    "ResourceType": "AWS::S3::Bucket",
+                    "ResourceId": "config-bucket-898769392027-us-east-1",
+                    "EvaluationMode": "DETECTIVE"
+                },
+                "OrderingTimestamp": "2026-05-29T04:29:44.711000-05:00"
+            },
+            "ComplianceType": "COMPLIANT",
+            "ResultRecordedTime": "2026-05-29T04:30:20.024000-05:00",
+            "ConfigRuleInvokedTime": "2026-05-29T04:30:19.421000-05:00"
+        }
+    ]
+}

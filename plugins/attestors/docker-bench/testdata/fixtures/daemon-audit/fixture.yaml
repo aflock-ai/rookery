@@ -1,0 +1,37 @@
+schema_version: "0.1"
+attestor: docker-bench
+description: "docker/docker-bench-security v1.3.4 CIS audit of a LIVE Docker daemon (105 checks, score 6) — RECORDED FROM A REAL bench run under cilock. The docker-bench.log.json IS the real audit output; the docker-bench attestor (postproduct) rolls it up into pass/warn/info/note tallies and emits benchmark: and container: subjects. A throwaway dbfix-sleep container guarantees a container: subject. Proves the docker-bench output contract against real tool output, not the hypothetical {desc,results} sample the AI-authored parser was written against."
+setup:
+  mode: product
+  input: docker-bench.log.json   # the RAW docker-bench-security JSON from the real run — replay source
+  mime_type: application/json
+# Provenance of the real run that produced this fixture. Re-record with
+# ./record.sh (runs docker-bench-security against the live Docker daemon under
+# cilock again). The version + image digest are the staleness signal: when the
+# bench tool changes, re-record and the diff shows what moved. The audit
+# reflects live host/container state, so counts and container: subjects vary
+# between runs — re-recording regenerates a self-consistent product+attestation
+# pair.
+recording:
+  tool: docker-bench-security
+  version: "1.3.4"
+  binary_sha256: "0037349aef7e10449ef40a10eec41195fe33b38a1440170dbc0c957386372b2d"   # docker/docker-bench-security image id (containerized tool)
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["docker", "run", "--rm", "--net", "host", "--pid", "host", "--userns", "host", "--cap-add", "audit_control", "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", "./:/report", "docker/docker-bench-security", "-b", "-l", "/report/docker-bench.log"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/docker-bench/v0.1
+  run_type: postproduct
+  # report_file is the documented volatile field (contract stability.volatile_fields):
+  # it is the on-disk product path, which can differ between the real recorded
+  # run (cilock working dir) and the hermetic replay (testkit temp dir basename).
+  # Redact it so the recorded-evidence cross-check compares the deterministic
+  # summary content.
+  redact:
+    - report_file
+  subjects:
+    match: prefix
+    keys:
+      - "benchmark:"
+      - "container:"
