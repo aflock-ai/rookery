@@ -56,6 +56,7 @@ use (
 	./plugins/attestors/prowler
 	./plugins/attestors/sarif
 	./plugins/attestors/sbom
+	./plugins/attestors/scubagoggles
 	./plugins/attestors/secretscan
 	./plugins/attestors/sinkhole-flows
 	./plugins/attestors/slsa

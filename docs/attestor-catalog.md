@@ -21,6 +21,7 @@ Regenerate after adding or renaming an attestor:
 | `environment` | `plugins/attestors/environment` | `https://aflock.ai/attestations/environment/v0.1` |
 | `gcp-iit` | `plugins/attestors/gcp-iit` | `https://aflock.ai/attestations/gcp-iit/v0.1` |
 | `git` | `plugins/attestors/git` | `https://aflock.ai/attestations/git/v0.1` |
+| `github-review` | `plugins/attestors/github-review` | `https://aflock.ai/attestations/github-review/v0.1` |
 | `github` | `plugins/attestors/github` | `https://aflock.ai/attestations/github/v0.1` |
 | `gitlab` | `plugins/attestors/gitlab` | `https://aflock.ai/attestations/gitlab/v0.1` |
 | `jenkins` | `plugins/attestors/jenkins` | `https://aflock.ai/attestations/jenkins/v0.1` |
@@ -34,7 +35,7 @@ Regenerate after adding or renaming an attestor:
 
 | Name | Import path | Predicate type |
 |---|---|---|
-| `material` | `plugins/attestors/material` | `https://aflock.ai/attestations/material/v0.1` |
+| `material` | `plugins/attestors/material` | `https://aflock.ai/attestations/material/v0.3` |
 
 ## Execute (the wrapped step)
 
@@ -57,12 +58,16 @@ Regenerate after adding or renaming an attestor:
 | `aws-config` | `plugins/attestors/aws-config` | `https://aflock.ai/attestations/aws-config/v0.1` |
 | `docker-bench` | `plugins/attestors/docker-bench` | `https://aflock.ai/attestations/docker-bench/v0.1` |
 | `docker` | `plugins/attestors/docker` | `https://aflock.ai/attestations/docker/v0.1` |
+| `falco` | `plugins/attestors/falco` | `https://aflock.ai/attestations/falco/v0.1` |
 | `githubwebhook` | `plugins/attestors/githubwebhook` | `https://aflock.ai/attestations/githubwebhook/v0.1` |
+| `go-build` | `plugins/attestors/go-build` | `https://aflock.ai/attestations/go-build/v0.1` |
 | `govulncheck` | `plugins/attestors/govulncheck` | `https://aflock.ai/attestations/govulncheck/v0.1` |
+| `inclusion-proof` | `plugins/attestors/inclusion-proof` | `https://aflock.ai/attestations/inclusion-proof/v0.1` |
 | `inspec` | `plugins/attestors/inspec` | `https://aflock.ai/attestations/inspec/v0.1` |
 | `k8smanifest` | `plugins/attestors/k8smanifest` | — |
 | `kube-bench` | `plugins/attestors/kube-bench` | `https://aflock.ai/attestations/kube-bench/v0.1` |
 | `link` | `plugins/attestors/link` | `https://in-toto.io/attestation/link/v0.3` |
+| `linkerd-check` | `plugins/attestors/linkerd-check` | `https://aflock.ai/attestations/linkerd-check/v0.1` |
 | `nessus` | `plugins/attestors/nessus` | `https://aflock.ai/attestations/nessus/v0.1` |
 | `oci` | `plugins/attestors/oci` | `https://aflock.ai/attestations/oci/v0.1` |
 | `oscap` | `plugins/attestors/oscap` | `https://aflock.ai/attestations/oscap/v0.1` |
@@ -70,6 +75,7 @@ Regenerate after adding or renaming an attestor:
 | `prowler` | `plugins/attestors/prowler` | `https://aflock.ai/attestations/prowler/v0.1` |
 | `sarif` | `plugins/attestors/sarif` | `https://aflock.ai/attestations/sarif/v0.1` |
 | `sbom` | `plugins/attestors/sbom` | `https://aflock.ai/attestations/sbom/v0.1` |
+| `scubagoggles` | `plugins/attestors/scubagoggles` | `https://aflock.ai/attestations/scubagoggles/v0.1` |
 | `secretscan` | `plugins/attestors/secretscan` | `https://aflock.ai/attestations/secretscan/v0.1` |
 | `sinkhole-flows` | `plugins/attestors/sinkhole-flows` | `https://aflock.ai/attestations/sinkhole-flows/v0.1` |
 | `slsa` | `plugins/attestors/slsa` | `https://slsa.dev/provenance/v1` |

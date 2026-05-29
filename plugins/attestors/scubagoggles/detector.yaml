@@ -1,0 +1,27 @@
+apiVersion: cilock.detection/v0.1
+name: scubagoggles
+description: "Captures the raw Google Workspace configuration collected by CISA ScubaGoggles (provider settings, not the verdict)."
+
+category: [compliance-scan]
+
+upstream:
+  name: ScubaGoggles
+  source: "https://github.com/cisagov/ScubaGoggles"
+  license: CC0-1.0
+  vendor: CISA (Cybersecurity and Infrastructure Security Agency)
+
+recommended_trace: "off"
+
+pre:
+  match:
+    argv_prefix: ["scubagoggles"]
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["scubagoggles"]
+      - product_glob: ["ScubaResults*.json", "**/ScubaResults*.json"]
+
+llm_hints:
+  on_match: "ScubaGoggles Google Workspace baseline results captured (per-control Pass/Fail/Warning)."

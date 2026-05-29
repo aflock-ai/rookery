@@ -78,6 +78,37 @@ var pluginConventions = map[string]pluginConvention{
 			{column: "namespace", prefix: "k8s:namespace:"},
 		},
 	},
+	// googledirectory is the turbot/googledirectory plugin — the Google
+	// Workspace Admin SDK Directory (users, groups, domains, org units, roles).
+	// This is the plugin a Workspace *security-posture* recipe targets (MFA
+	// enrollment, super-admins, OU layout), so it's the one that overlaps with
+	// the scubagoggles attestor. Every directory table carries `customer_id`,
+	// the GWS customer/tenant id; the scubagoggles attestor hashes that same
+	// value as its tenant subject, so a Steampipe googledirectory attestation
+	// and a ScubaGoggles attestation converge on `customer_id`/`domain_name`
+	// in policyverify's digest-value graph join. Columns verified against
+	// github.com/turbot/steampipe-plugin-googledirectory.
+	"googledirectory": {
+		subjectExtractors: []columnExtractor{
+			{column: "customer_id", prefix: "googleworkspace:customer:"},
+			{column: "primary_email", prefix: "googleworkspace:user:"}, // googledirectory_user
+			{column: "email", prefix: "googleworkspace:group:"},        // googledirectory_group
+			{column: "domain_name", prefix: "googleworkspace:domain:"}, // googledirectory_domain
+			{column: "org_unit_path", prefix: "googleworkspace:orgunit:"},
+		},
+	},
+	// googleworkspace is the turbot/googleworkspace plugin — Workspace *content/
+	// activity* (gmail settings, drive, calendar, people, audit activity), NOT
+	// directory objects. Identity here is the per-user mailbox owner or the
+	// actor on an audit event. Columns verified against
+	// github.com/turbot/steampipe-plugin-googleworkspace.
+	"googleworkspace": {
+		subjectExtractors: []columnExtractor{
+			{column: "customer_id", prefix: "googleworkspace:customer:"}, // googleworkspace_activity_report
+			{column: "user_email", prefix: "googleworkspace:user:"},      // googleworkspace_gmail_settings
+			{column: "actor_email", prefix: "googleworkspace:user:"},     // googleworkspace_activity_report
+		},
+	},
 }
 
 // extract pulls identity-bearing values out of one row according to the
