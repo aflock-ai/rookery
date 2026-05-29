@@ -8,6 +8,7 @@ require (
 	github.com/gobwas/glob v0.2.3
 	github.com/invopop/jsonschema v0.13.0
 	github.com/open-policy-agent/opa v1.13.1
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/sigstore/fulcio v1.8.5
 	github.com/sirupsen/logrus v1.9.4
 	github.com/stretchr/testify v1.11.1

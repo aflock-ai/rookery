@@ -31,7 +31,7 @@ func LoginCmd() *cobra.Command {
 			"  # Log in to a specific TestifySec platform, pre-selecting a tenant\n" +
 			"  cilock login --platform-url https://platform.example.com --tenant acme\n\n" +
 			"  # CI/headless: provide a JWT directly (or '-' to read from stdin)\n" +
-			"  cilock login --platform-url https://platform.example.com --token $TESTIFYSEC_TOKEN",
+			"  cilock login --platform-url https://platform.example.com --token \"$TESTIFYSEC_TOKEN\"",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -40,17 +40,42 @@ func LoginCmd() *cobra.Command {
 			if url == "" {
 				url = config.DefaultPlatformURL
 			}
-			cred, err := resolveLoginCredential(cmd, url, token, tenant, product)
-			if err != nil {
-				return err
+
+			var cred *auth.Credential
+			if token != "" {
+				t := token
+				if t == "-" {
+					data, err := io.ReadAll(cmd.InOrStdin())
+					if err != nil {
+						return fmt.Errorf("read token from stdin: %w", err)
+					}
+					t = string(data)
+				} else {
+					fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: a token passed via --token may be recorded in shell history; prefer '-' (stdin).")
+				}
+				cred = &auth.Credential{PlatformURL: url, Token: strings.TrimSpace(t)}
+				if cred.Token == "" {
+					return fmt.Errorf("empty token")
+				}
+			} else {
+				var err error
+				cred, err = auth.BrowserLogin(url, auth.LoginParams{
+					Tenant:  tenant,
+					Product: product,
+					Purpose: "cilock CLI",
+				})
+				if err != nil {
+					return err
+				}
 			}
+
 			if err := auth.Save(*cred); err != nil {
 				return err
 			}
 			if cred.TenantName != "" {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ logged in to %s (tenant: %s)\n", auth.NormalizeURL(url), cred.TenantName)
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ logged in to %s (tenant: %s)\n", auth.NormalizeURL(url), cred.TenantName)
 			} else {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ logged in to %s\n", auth.NormalizeURL(url))
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ logged in to %s\n", auth.NormalizeURL(url))
 			}
 			return nil
 		},
@@ -60,34 +85,6 @@ func LoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&tenant, "tenant", "", "Tenant id or name to pre-select on the approve page")
 	cmd.Flags().StringVar(&product, "product", "", "Product id or name to pre-select on the approve page")
 	return cmd
-}
-
-// resolveLoginCredential obtains a session credential either from a directly
-// supplied --token (or '-' to read it from stdin) or, when no token is given,
-// via the interactive browser login flow.
-func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product string) (*auth.Credential, error) {
-	if token == "" {
-		return auth.BrowserLogin(url, auth.LoginParams{
-			Tenant:  tenant,
-			Product: product,
-			Purpose: "cilock CLI",
-		})
-	}
-	t := token
-	if t == "-" {
-		data, err := io.ReadAll(cmd.InOrStdin())
-		if err != nil {
-			return nil, fmt.Errorf("read token from stdin: %w", err)
-		}
-		t = string(data)
-	} else {
-		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: a token passed via --token may be recorded in shell history; prefer '-' (stdin).")
-	}
-	cred := &auth.Credential{PlatformURL: url, Token: strings.TrimSpace(t)}
-	if cred.Token == "" {
-		return nil, fmt.Errorf("empty token")
-	}
-	return cred, nil
 }
 
 // LogoutCmd removes a stored session credential.
@@ -109,9 +106,9 @@ func LogoutCmd() *cobra.Command {
 				return err
 			}
 			if removed {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ logged out of %s\n", auth.NormalizeURL(url))
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ logged out of %s\n", auth.NormalizeURL(url))
 			} else {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "no stored credential for %s\n", auth.NormalizeURL(url))
+				fmt.Fprintf(cmd.OutOrStdout(), "no stored credential for %s\n", auth.NormalizeURL(url))
 			}
 			return nil
 		},
@@ -139,22 +136,22 @@ func WhoamiCmd() *cobra.Command {
 				return err
 			}
 			if cred == nil {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "not logged in to %s (run: cilock login --platform-url %s)\n", auth.NormalizeURL(url), auth.NormalizeURL(url))
+				fmt.Fprintf(cmd.OutOrStdout(), "not logged in to %s (run: cilock login --platform-url %s)\n", auth.NormalizeURL(url), auth.NormalizeURL(url))
 				return fmt.Errorf("no active session")
 			}
 			out := cmd.OutOrStdout()
-			_, _ = fmt.Fprintf(out, "platform: %s\n", cred.PlatformURL)
+			fmt.Fprintf(out, "platform: %s\n", cred.PlatformURL)
 			if cred.TenantName != "" || cred.TenantID != "" {
-				_, _ = fmt.Fprintf(out, "tenant:   %s %s\n", cred.TenantName, cred.TenantID)
+				fmt.Fprintf(out, "tenant:   %s %s\n", cred.TenantName, cred.TenantID)
 			}
 			if cred.ProductName != "" || cred.ProductID != "" {
-				_, _ = fmt.Fprintf(out, "product:  %s %s\n", cred.ProductName, cred.ProductID)
+				fmt.Fprintf(out, "product:  %s %s\n", cred.ProductName, cred.ProductID)
 			}
 			if cred.Email != "" {
-				_, _ = fmt.Fprintf(out, "email:    %s\n", cred.Email)
+				fmt.Fprintf(out, "email:    %s\n", cred.Email)
 			}
 			if !cred.ExpiresAt.IsZero() {
-				_, _ = fmt.Fprintf(out, "expires:  %s\n", cred.ExpiresAt.Format("2006-01-02 15:04 MST"))
+				fmt.Fprintf(out, "expires:  %s\n", cred.ExpiresAt.Format("2006-01-02 15:04 MST"))
 			}
 			return nil
 		},

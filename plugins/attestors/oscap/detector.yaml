@@ -25,3 +25,30 @@ post:
 
 llm_hints:
   on_match: "OpenSCAP results captured. SCAP rule outcomes preserved."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/oscap/v0.1
+  run_type: postproduct
+  stability:
+    level: stable
+    notes: >-
+      Output is a deterministic parse of the XCCDF/ARF XML product:
+      benchmark id, profile, target system, pass/fail/notapplicable/error
+      counts, and the list of failed rules in document order. No timestamps,
+      hostnames, or wall-clock values are injected by the attestor; everything
+      is derived from the scanned report file. Subject keys/digests are stable
+      for a given input report.
+    volatile_fields: []
+  subjects:
+    - prefix: "profile:"
+      description: "the XCCDF profile id that was evaluated (TestResult/profile/@idref)"
+    - prefix: "host:"
+      description: "the target system that was scanned (TestResult/target)"
+    - prefix: "benchmark:"
+      description: "the XCCDF benchmark document id (Benchmark/@id)"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: almalinux9-standard
+      role: canonical

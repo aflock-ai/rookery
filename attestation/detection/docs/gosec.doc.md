@@ -27,7 +27,7 @@ The DSSE envelope contains an `https://aflock.ai/attestations/collection/v0.1` p
 
 | Predicate type                                          | Purpose |
 |---------------------------------------------------------|---------|
-| `https://aflock.ai/attestations/environment/v0.1`       | OS, hostname, env vars (scrubbed), user — pins where the scan ran. |
+| `https://aflock.ai/attestations/environment/v0.1`       | OS, arch, env vars (scrubbed), user — pins where the scan ran. |
 | `https://aflock.ai/attestations/git/v0.1`               | Commit SHA, branch, signing identity — pins what the scan ran against. |
 | `https://aflock.ai/attestations/material/v0.3`          | SHA-256 digests of every input file gosec saw. |
 | `https://aflock.ai/attestations/command-run/v0.1`       | The literal argv (`gosec -no-fail -fmt=sarif -out=gosec.sarif ./...`), exit code, stdout, stderr. |

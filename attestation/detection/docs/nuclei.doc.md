@@ -31,7 +31,7 @@ A successful run emits a DSSE envelope with six predicate entries:
 
 | Predicate | What it records |
 |---|---|
-| `https://aflock.ai/attestations/environment/v0.1` | OS, hostname, user, env vars (filtered) |
+| `https://aflock.ai/attestations/environment/v0.1` | OS, arch, env vars (filtered), CI hints |
 | `https://aflock.ai/attestations/git/v0.1` | repo state — head SHA, branch, dirty bit |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle tree of files Nuclei read (templates, helpers, config) |
 | `https://aflock.ai/attestations/command-run/v0.1` | the literal nuclei argv + exit code + stdout/stderr digests |

@@ -18,3 +18,33 @@ pre:
 
 llm_hints:
   on_match: "GitLab CI runner context captured (job, pipeline, project, runner id)."
+
+contract:
+  tier: foundation
+  predicate_type: https://aflock.ai/attestations/gitlab/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: "Output is captured verbatim from GitLab CI predefined environment variables (CI_JOB_*, CI_PIPELINE_*, CI_PROJECT_*, CI_RUNNER_ID, CI_SERVER_*). No timestamps are recorded, so the predicate is structurally deterministic, but every field value (job id, urls, runner id, optional JWT) varies per CI job/pipeline. The jwt sub-attestor is only populated when a token is present in the environment; otherwise it is omitted and a warning is logged."
+    volatile_fields: ["jobid", "joburl", "jobimage", "jobname", "jobstage", "pipelineid", "pipelineurl", "projectid", "projecturl", "runnerid", "cihost", "ciserverurl", "ciconfigpath", "jwt"]
+  subjects:
+    - prefix: "pipelineurl:"
+      description: "the GitLab CI pipeline URL (CI_PIPELINE_URL)"
+    - prefix: "joburl:"
+      description: "the GitLab CI job URL (CI_JOB_URL)"
+    - prefix: "projecturl:"
+      description: "the GitLab CI project URL (CI_PROJECT_URL)"
+  backref_subjects:
+    - "pipelineurl:"
+  schema_required: true
+  credentials:
+    - name: gitlab-ci-job-jwt
+      type: oidc
+      provided: ambient
+      env_vars: ["CI_JOB_JWT"]
+      scopes: []
+      required: false
+      description: "Optional GitLab CI OIDC ID token, injected ambiently by the GitLab runner (CI_JOB_JWT, deprecated in GitLab >= 17.0). Can be overridden via a configured token env var (WithTokenEnvVar) or literal token (WithToken). When present it is verified against the JWKS endpoint (WITNESS_GITLAB_JWKS_URL or <CI_SERVER_URL>/oauth/discovery/keys). The attestor still runs and succeeds without it; only the GITLAB_CI=true ambient environment is strictly required to execute."
+  fixtures:
+    - name: gitlab-ci
+      role: canonical

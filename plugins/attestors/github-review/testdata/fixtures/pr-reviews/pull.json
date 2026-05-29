@@ -1,0 +1,12 @@
+{
+  "number": 1,
+  "state": "open",
+  "merged": false,
+  "html_url": "https://github.com/testifysec/cilock-ci-fixtures/pull/1",
+  "head": {
+    "sha": "01e5299490fda8b8ff787392eb03b134e3a287af"
+  },
+  "base": {
+    "sha": "431af272908835085ba48b5ff3d83ff1ec2a63e5"
+  }
+}

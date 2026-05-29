@@ -1,0 +1,35 @@
+schema_version: "0.1"
+attestor: oci
+description: "crane pull of the TINY PUBLIC docker.io/library/hello-world:latest image as a docker-save compatible tarball — RECORDED FROM A REAL crane run under cilock. Proves the oci output contract against what a real tool actually emits (manifest.json + config blob + gzip layer), not a hand-authored tarball. A public image means no creds and no leak."
+setup:
+  mode: product
+  input: image.tar   # the RAW crane --format=tarball output from the real run — replay source
+  # The oci attestor dispatches on product MIME application/x-tar (NOT filename):
+  # getCandidate() skips any product whose MimeType != application/x-tar. crane
+  # --format=tarball writes a docker-save layout (manifest.json, sha256:<id>
+  # config blob, <hash>.tar.gz layer) and the command-run/product attestors tag
+  # it application/x-tar. The default application/json would be silently skipped
+  # ("no tar file found").
+  mime_type: application/x-tar
+recording:
+  tool: crane
+  version: "0.20.7"
+  binary_sha256: "f06a465b79345dabda65c6e30bc119b1a6cf4e21c5ac2279ae91558192c23eb2"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  # --platform=linux/amd64 is pinned so re-records are reproducible across the
+  # recorder's host arch (hello-world is multi-arch). MUST equal the command-run
+  # argv inside attestation.json.
+  argv: ["crane", "pull", "--platform=linux/amd64", "--format=tarball", "hello-world:latest", "image.tar"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/oci/v0.1
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "manifestdigest:"   # sha256 of the raw manifest.json bytes
+      - "tardigest:"        # digest of the crane/docker-save tar product file
+      - "imageid:"          # sha256 of the image config blob (the OCI image ID)
+      - "imagetag:"         # one per RepoTag (hello-world:latest)
+      - "layerdiffid"       # per-layer uncompressed diffID (layerdiffid00:)

@@ -1,0 +1,24 @@
+{
+ "columns": [
+  {
+   "name": "account_id",
+   "data_type": "text"
+  },
+  {
+   "name": "arn",
+   "data_type": "text"
+  },
+  {
+   "name": "name",
+   "data_type": "text"
+  }
+ ],
+ "rows": [
+  {
+   "account_id": "898769392027",
+   "arn": "arn:aws:iam::898769392027:user/catalog-evidence-ro",
+   "name": "catalog-evidence-ro"
+  }
+ ]
+}
+

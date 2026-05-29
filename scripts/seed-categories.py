@@ -44,7 +44,6 @@ CATEGORIES = {
     "inspec":         ["posture-scan"],
     "kube-bench":     ["posture-scan"],
     "linkerd-check":  ["posture-scan"],
-    "nessus":         ["posture-scan"],
     "oscap":          ["posture-scan"],
     "prowler":        ["posture-scan"],
     "steampipe":      ["posture-scan"],
@@ -162,12 +161,6 @@ UPSTREAMS = {
         "source": "https://maven.apache.org/",
         "license": "Apache-2.0",
         "vendor": "Apache Software Foundation",
-    },
-    "nessus": {
-        "name": "Nessus",
-        "source": "https://www.tenable.com/products/nessus",
-        "license": "commercial",
-        "vendor": "Tenable, Inc.",
     },
     "oci": {
         "name": "OCI Image Specification",

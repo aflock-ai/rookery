@@ -139,7 +139,42 @@ func (a *Attestor) RunType() attestation.RunType {
 }
 
 func (a *Attestor) Schema() *jsonschema.Schema {
-	return jsonschema.Reflect(&a)
+	s := jsonschema.Reflect(&a)
+	// The embedded imds.InstanceIdentityDocument declares devpayProductCodes,
+	// marketplaceProductCodes and billingProducts as bare []string (no
+	// omitempty). AWS returns them as JSON null for the common case of an
+	// instance with none, and a nil Go slice marshals to null — so the predicate
+	// legitimately carries null there. Reflect generates a non-nullable
+	// "array" for them, which the predicate then fails to validate against.
+	// Mark these three as array-or-null so Schema() honestly describes the
+	// real, AWS-shaped predicate instead of drifting from it.
+	allowNullArray(s, "devpayProductCodes", "marketplaceProductCodes", "billingProducts")
+	return s
+}
+
+// allowNullArray rewrites the named array properties (wherever they appear in
+// the reflected schema's $defs) to accept JSON null in addition to an array,
+// matching the AWS instance-identity document's nullable product-code fields.
+func allowNullArray(s *jsonschema.Schema, names ...string) {
+	if s == nil || s.Definitions == nil {
+		return
+	}
+	for _, def := range s.Definitions {
+		if def == nil || def.Properties == nil {
+			continue
+		}
+		for _, name := range names {
+			prop, ok := def.Properties.Get(name)
+			if !ok || prop == nil || prop.Type != "array" {
+				continue
+			}
+			arr := *prop // copy the original array schema (items etc.)
+			prop.Ref = ""
+			prop.Type = ""
+			prop.Items = nil
+			prop.OneOf = []*jsonschema.Schema{&arr, {Type: "null"}}
+		}
+	}
 }
 
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {

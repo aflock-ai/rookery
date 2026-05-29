@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -38,7 +39,19 @@ const (
 	Type    = "https://aflock.ai/attestations/docker-bench/v0.1"
 	RunType = attestation.PostProductRunType
 
-	// cisDockerDesc is the expected description prefix for a docker-bench report.
+	// benchmarkID is the stable identity of the benchmark this tool runs.
+	benchmarkID = "docker-bench-security"
+
+	// containerRuntimeSectionID is the docker-bench section ("5" / "Container
+	// Runtime") whose per-check items list running container names. Image-build
+	// sections (e.g. "4") also carry items, but those are image references, not
+	// container identifiers, so only this section's items yield container:
+	// subjects.
+	containerRuntimeSectionID = "5"
+
+	// cisDockerDesc is the description prefix some hypothetical/older report
+	// shapes use. The real docker/docker-bench-security tool does NOT emit this;
+	// it is retained only for the back-compat fallback parser.
 	cisDockerDesc = "CIS Docker Benchmark"
 )
 
@@ -56,20 +69,85 @@ func init() {
 	detection.Register(Name, detectorYAML)
 }
 
-// CheckResult is a single result entry produced by docker-bench-security --json.
+// CheckResult is a single result entry produced by docker-bench-security. In the
+// real tool output it lives under tests[].results[]; the legacy fallback shape
+// places it at the top level under "results".
 type CheckResult struct {
-	ID      string `json:"id"`
-	Desc    string `json:"desc"`
-	Result  string `json:"result"` // PASS | WARN | INFO | NOTE
-	Details string `json:"details,omitempty"`
+	ID      string   `json:"id"`
+	Desc    string   `json:"desc"`
+	Result  string   `json:"result"` // PASS | WARN | INFO | NOTE
+	Details string   `json:"details,omitempty"`
+	Items   []string `json:"items,omitempty"`
 }
 
-// DockerBenchReport is the top-level structure produced by docker-bench-security
-// when invoked with the --json flag.
-type DockerBenchReport struct {
+// TestSection is one numbered docker-bench section (e.g. "5" / "Container
+// Runtime") holding its individual check results.
+type TestSection struct {
 	ID      string        `json:"id"`
 	Desc    string        `json:"desc"`
 	Results []CheckResult `json:"results"`
+}
+
+// DockerBenchReport is the REAL top-level structure produced by
+// docker/docker-bench-security (v1.3.4 confirmed). It carries the tool version
+// under "dockerbenchsecurity", the sections under "tests", and the tool's own
+// rollup under "checks"/"score". There is NO top-level "desc" or "results".
+type DockerBenchReport struct {
+	DockerBenchSecurity string        `json:"dockerbenchsecurity"`
+	Start               int64         `json:"start,omitempty"`
+	End                 int64         `json:"end,omitempty"`
+	Tests               []TestSection `json:"tests"`
+	Checks              int           `json:"checks"`
+	Score               int           `json:"score"`
+
+	// Legacy fallback shape: some older/hypothetical reports emit the checks at
+	// the top level under "desc"/"results" instead of under "tests". These are
+	// only consulted when "tests" is empty (see allResults).
+	ID            string        `json:"id,omitempty"`
+	Desc          string        `json:"desc,omitempty"`
+	LegacyResults []CheckResult `json:"results,omitempty"`
+}
+
+// isDockerBench reports whether the decoded report is recognizably
+// docker-bench-security output: either the real schema (a tool version under
+// "dockerbenchsecurity" plus sections) or the legacy fallback shape (a
+// CIS-Docker desc with top-level results).
+func (r *DockerBenchReport) isDockerBench() bool {
+	if r.DockerBenchSecurity != "" && len(r.Tests) > 0 {
+		return true
+	}
+	// Legacy fallback: top-level CIS Docker Benchmark report with results.
+	return strings.Contains(r.Desc, cisDockerDesc) && len(r.LegacyResults) > 0
+}
+
+// version returns the benchmark/tool version. The real tool reports it in the
+// "dockerbenchsecurity" field; the legacy shape embeds it in the Desc string
+// ("CIS Docker Benchmark v1.6.0" -> "v1.6.0").
+func (r *DockerBenchReport) version() string {
+	if r.DockerBenchSecurity != "" {
+		return r.DockerBenchSecurity
+	}
+	if idx := strings.Index(r.Desc, cisDockerDesc); idx >= 0 {
+		if rest := strings.TrimSpace(r.Desc[idx+len(cisDockerDesc):]); rest != "" {
+			return rest
+		}
+	}
+	return ""
+}
+
+// allResults flattens the per-check results across every section. For the real
+// schema it walks tests[].results[]; for the legacy fallback it returns the
+// top-level results. Section order and within-section order are preserved so
+// the derived predicate is deterministic.
+func (r *DockerBenchReport) allResults() []CheckResult {
+	if len(r.Tests) > 0 {
+		var out []CheckResult
+		for _, s := range r.Tests {
+			out = append(out, s.Results...)
+		}
+		return out
+	}
+	return r.LegacyResults
 }
 
 // FailedCheck records a single non-passing check in the attestation summary.
@@ -81,11 +159,16 @@ type FailedCheck struct {
 
 // Summary contains the roll-up data stored in the attestation.
 type Summary struct {
-	TotalChecks  int           `json:"total_checks"`
-	TotalPass    int           `json:"total_pass"`
-	TotalWarn    int           `json:"total_warn"`
-	TotalInfo    int           `json:"total_info"`
-	TotalNote    int           `json:"total_note"`
+	// TotalChecks is the count of individual checks the attestor tallied.
+	TotalChecks int `json:"total_checks"`
+	TotalPass   int `json:"total_pass"`
+	TotalWarn   int `json:"total_warn"`
+	TotalInfo   int `json:"total_info"`
+	TotalNote   int `json:"total_note"`
+	// Checks is the tool's own top-level check count ("checks" field).
+	Checks int `json:"checks"`
+	// Score is the tool's own top-level score ("score" field).
+	Score        int           `json:"score"`
 	FailedChecks []FailedCheck `json:"failed_checks,omitempty"`
 }
 
@@ -95,14 +178,14 @@ type Attestor struct {
 	ReportFile string `json:"report_file"`
 	// ReportDigestSet is the cryptographic digest of the report file.
 	ReportDigestSet cryptoutil.DigestSet `json:"report_digest_set"`
-	// BenchmarkID is the top-level ID field from the report (e.g. "docker-bench-security").
+	// BenchmarkID is the stable benchmark identity ("docker-bench-security").
 	BenchmarkID string `json:"benchmark_id,omitempty"`
-	// Version is derived from the Desc field by stripping the common prefix.
-	// docker-bench does not always emit an explicit version field; when present
-	// it appears in the Desc as "CIS Docker Benchmark v1.6.0".
+	// Version is the tool/benchmark version, from the "dockerbenchsecurity"
+	// field (real schema) or the Desc suffix (legacy fallback).
 	Version string `json:"version,omitempty"`
-	// ContainerIDs lists container IDs found in failing check details.
-	ContainerIDs []string `json:"container_ids,omitempty"`
+	// ContainerNames lists the running container names docker-bench audited in
+	// its Container Runtime section.
+	ContainerNames []string `json:"container_names,omitempty"`
 	// Summary contains aggregated pass/warn/info/note counts and failed check details.
 	Summary Summary `json:"summary"`
 
@@ -189,14 +272,11 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 			continue
 		}
 
-		// Validate that this is a docker-bench report: the Desc field must
-		// contain the CIS Docker Benchmark string, and Results must be non-empty.
-		if !strings.Contains(report.Desc, cisDockerDesc) {
-			log.Debugf("(attestation/docker-bench) file %s desc %q does not match expected docker-bench format, skipping", path, report.Desc)
-			continue
-		}
-		if len(report.Results) == 0 {
-			log.Debugf("(attestation/docker-bench) file %s has no results, skipping", path)
+		// Validate that this is a docker-bench report: the real schema is
+		// recognized by the top-level "dockerbenchsecurity" version field plus
+		// sections; the legacy fallback by a CIS-Docker desc + top-level results.
+		if !report.isDockerBench() {
+			log.Debugf("(attestation/docker-bench) file %s is not docker-bench-security output, skipping", path)
 			continue
 		}
 
@@ -216,20 +296,15 @@ func (a *Attestor) populateSummary() {
 		return
 	}
 
-	a.BenchmarkID = a.report.ID
+	a.BenchmarkID = benchmarkID
+	a.Version = a.report.version()
+	a.Summary.Checks = a.report.Checks
+	a.Summary.Score = a.report.Score
 
-	// Extract version from the Desc if present, e.g.
-	// "CIS Docker Benchmark v1.6.0" → "v1.6.0".
-	if idx := strings.Index(a.report.Desc, cisDockerDesc); idx >= 0 {
-		rest := strings.TrimSpace(a.report.Desc[idx+len(cisDockerDesc):])
-		if rest != "" {
-			a.Version = rest
-		}
-	}
+	results := a.report.allResults()
+	a.Summary.TotalChecks = len(results)
 
-	a.Summary.TotalChecks = len(a.report.Results)
-
-	for _, r := range a.report.Results {
+	for _, r := range results {
 		switch strings.ToUpper(r.Result) {
 		case "PASS":
 			a.Summary.TotalPass++
@@ -252,31 +327,73 @@ func (a *Attestor) populateSummary() {
 				Result: r.Result,
 			})
 		}
-
-		// Extract container IDs from details. docker-bench often embeds the
-		// container ID (12-char hex prefix) in the details string.
-		if r.Details != "" {
-			a.ContainerIDs = append(a.ContainerIDs, extractContainerIDs(r.Details)...)
-		}
 	}
 
-	// De-duplicate container IDs.
-	a.ContainerIDs = unique(a.ContainerIDs)
+	a.ContainerNames = a.extractContainerNames()
 }
 
-// extractContainerIDs finds space-separated 12-hex-char tokens that look like
-// short Docker container IDs within a details string.
-func extractContainerIDs(details string) []string {
-	var ids []string
-	for _, token := range strings.Fields(details) {
-		if len(token) >= 12 && isHex(token[:12]) {
-			ids = append(ids, token[:12])
+// extractContainerNames collects the running container names docker-bench
+// reports in its Container Runtime section (id "5"). The tool lists them in the
+// per-check items array in three shapes that this normalizes to the bare name:
+//
+//   - "name"                     → "name"
+//   - "<64-hex-id>:name"  (5.29) → "name"
+//   - "name:<ip-or-port>" (5.13) → "name"
+//
+// Results are sorted + de-duplicated so the predicate is deterministic.
+func (a *Attestor) extractContainerNames() []string {
+	if a.report == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var names []string
+	for _, s := range a.report.Tests {
+		if s.ID != containerRuntimeSectionID {
+			continue
+		}
+		for _, r := range s.Results {
+			for _, item := range r.Items {
+				name := normalizeContainerName(item)
+				if name == "" {
+					continue
+				}
+				if _, ok := seen[name]; ok {
+					continue
+				}
+				seen[name] = struct{}{}
+				names = append(names, name)
+			}
 		}
 	}
-	return ids
+	sort.Strings(names)
+	return names
+}
+
+// normalizeContainerName reduces a docker-bench Container Runtime item to a bare
+// container name. docker-bench reports either a plain name, an "<id>:<name>"
+// pair (long-hex id, take the name) or a "<name>:<port-or-ip>" pair (take the
+// name). Returns "" if nothing usable remains.
+func normalizeContainerName(item string) string {
+	item = strings.TrimSpace(item)
+	if item == "" {
+		return ""
+	}
+	if idx := strings.Index(item, ":"); idx >= 0 {
+		left, right := item[:idx], item[idx+1:]
+		// "<id>:<name>" — a long-hex container id prefix: keep the name.
+		if len(left) >= 12 && isHex(left) {
+			return strings.TrimSpace(right)
+		}
+		// "<name>:<port-or-ip>" — keep the name.
+		return strings.TrimSpace(left)
+	}
+	return item
 }
 
 func isHex(s string) bool {
+	if s == "" {
+		return false
+	}
 	for _, c := range s {
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
 			return false
@@ -285,51 +402,37 @@ func isHex(s string) bool {
 	return true
 }
 
-func unique(ss []string) []string {
-	seen := make(map[string]struct{}, len(ss))
-	out := ss[:0]
-	for _, s := range ss {
-		if _, ok := seen[s]; !ok {
-			seen[s] = struct{}{}
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 // Subjects returns the in-toto subjects for this attestation. Each subject
 // creates a node in the supply chain graph:
 //
-//   - benchmark:<benchmark-id>     — identifies the CIS Docker Benchmark version
-//   - container:<container-id>     — each container ID found in failing check details
+//   - benchmark:cis-docker[@<version>]  — the CIS Docker Benchmark identity,
+//     derived from the tool version (e.g. benchmark:cis-docker@1.3.4)
+//   - container:<name>                  — each running container docker-bench
+//     audited in its Container Runtime section
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 	subjects := make(map[string]cryptoutil.DigestSet)
 
-	// Benchmark identity subject.
-	benchmarkID := "cis-docker"
-	if a.Version != "" {
-		// Strip leading whitespace/v prefix for a clean ID, e.g. "v1.6.0" → "1.6.0".
-		ver := strings.TrimSpace(a.Version)
-		ver = strings.TrimPrefix(ver, "v")
-		if ver != "" {
-			benchmarkID = fmt.Sprintf("cis-docker-%s", ver)
-		}
+	// Benchmark identity subject — honestly derived from the tool's reported
+	// version (no fabricated "v1.6.0").
+	benchmarkKey := "benchmark:cis-docker"
+	if ver := strings.TrimSpace(a.Version); ver != "" {
+		benchmarkKey = fmt.Sprintf("benchmark:cis-docker@%s", ver)
 	}
-	benchmarkKey := fmt.Sprintf("benchmark:%s", benchmarkID)
 	if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(benchmarkKey), hashes); err == nil {
 		subjects[benchmarkKey] = ds
 	} else {
 		log.Debugf("(attestation/docker-bench) failed to record benchmark subject: %v", err)
 	}
 
-	// Container identity subjects — tie the attestation to specific running containers.
-	for _, cid := range a.ContainerIDs {
-		containerKey := fmt.Sprintf("container:%s", cid)
+	// Container identity subjects — tie the attestation to the specific running
+	// containers docker-bench audited.
+	for _, name := range a.ContainerNames {
+		containerKey := fmt.Sprintf("container:%s", name)
 		if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(containerKey), hashes); err == nil {
 			subjects[containerKey] = ds
 		} else {
-			log.Debugf("(attestation/docker-bench) failed to record container subject %s: %v", cid, err)
+			log.Debugf("(attestation/docker-bench) failed to record container subject %s: %v", name, err)
 		}
 	}
 

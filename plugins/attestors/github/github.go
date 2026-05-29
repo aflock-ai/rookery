@@ -136,7 +136,22 @@ func (a *Attestor) RunType() attestation.RunType {
 }
 
 func (a *Attestor) Schema() *jsonschema.Schema {
-	return jsonschema.Reflect(a)
+	// DoNotReference inlines nested types instead of emitting shared $defs keyed
+	// by bare type name. github.Attestor and the embedded jwt.Attestor are BOTH
+	// named "Attestor", so the default reflector collapses them into one
+	// "#/$defs/Attestor" and the `jwt` property wrongly inherits github's
+	// required fields (ciconfigpath/pipelineid/...) — making a valid github
+	// predicate fail its own schema. Inlining gives the jwt field its own schema.
+	r := jsonschema.Reflector{DoNotReference: true}
+	s := r.Reflect(a)
+	// The embedded jwt.Attestor's VerifiedBy.JWK is a jose.JSONWebKey, a type
+	// with a custom MarshalJSON that emits JWK JSON (kty/n/e/kid/...) rather than
+	// the reflected Go struct shape. DoNotReference inlines it here as
+	// jwt.verifiedBy.jwk, so reuse the jwt attestor's permissive-object patch
+	// (same fix, one source of jose-marshalling knowledge) — otherwise a valid
+	// github predicate fails its own Schema() on the jwk's bogus required fields.
+	jwt.PermissiveJWK(s)
+	return s
 }
 
 // Attest performs the attestation for the github environment.

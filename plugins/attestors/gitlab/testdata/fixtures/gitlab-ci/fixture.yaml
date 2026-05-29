@@ -1,0 +1,85 @@
+schema_version: "0.1"
+attestor: gitlab
+description: >-
+  GitLab CI attestor proven from a REAL GitLab CI run on a self-hosted
+  gitlab-ce 19.0.1 instance (no SaaS account, no live credential left behind).
+  A registered gitlab-runner executed a real pipeline; the job minted a genuine
+  OIDC ID token via the GitLab `id_tokens` keyword (aud=witness), exported it as
+  CI_JOB_JWT (the var the attestor reads by default), and ran a tree-built
+  cilock-all of known provenance (see recording.binary_sha256) with
+  `--attestations gitlab --workload manual` so the predicate is the gitlab
+  attestor alone. http-mock mode replays the recorded JWKS captured from that
+  same instance: the attestor reads CI_JOB_JWT from setup.env and verifies it
+  (SIGNATURE-ONLY, by design — same jwt sub-attestor as github; see jwt.go's
+  intentional no-Validate) against the JWKS served at WITNESS_GITLAB_JWKS_URL,
+  then emits pipelineurl:/joburl:/projecturl: from the CI_* env. The recorded
+  CI_JOB_JWT and the JWT embedded in attestation.json are the SAME mint (same
+  jti/exp), so the replayed jwt.claims are byte-identical to the recorded ones —
+  only jwt.verifiedBy.jwksUrl differs (http-mock random localhost port vs the
+  recorded http://gitlab/oauth/discovery/keys) and is redacted.
+  Topology is PUBLIC-OK: a throwaway local gitlab-ce (hostname `gitlab`, no real
+  host/domain), root user with an example.com address (RFC-2606 reserved), no
+  secrets. CI tokens/registry creds are filtered out of the recorded env. See
+  record.sh for the full capture recipe; the instance was torn down after
+  capture.
+setup:
+  mode: http-mock
+  # EXACTLY the GITLAB_CI + CI_* vars the gitlab attestor reads, verbatim from
+  # the recorded run, plus the real minted OIDC token under CI_JOB_JWT (the
+  # default var the attestor reads; GitLab 17.0 removed the auto-injected
+  # CI_JOB_JWT, so the pipeline minted it via id_tokens and exported it under
+  # that name). The token is claims-only evidence — a now-defunct instance's
+  # OIDC ID token, verified signature-only against the committed JWKS; it is not
+  # a live credential and carries no secret (identity claims only).
+  env:
+    GITLAB_CI: "true"
+    CI_SERVER_URL: "http://gitlab"
+    CI_SERVER_HOST: "gitlab"
+    CI_CONFIG_PATH: ".gitlab-ci.yml"
+    CI_JOB_ID: "1"
+    CI_JOB_IMAGE: "debian:stable-slim"
+    CI_JOB_NAME: "capture"
+    CI_JOB_STAGE: "test"
+    CI_JOB_URL: "http://gitlab/root/rookery-gitlab-capture/-/jobs/1"
+    CI_PIPELINE_ID: "1"
+    CI_PIPELINE_URL: "http://gitlab/root/rookery-gitlab-capture/-/pipelines/1"
+    CI_PROJECT_ID: "1"
+    CI_PROJECT_URL: "http://gitlab/root/rookery-gitlab-capture"
+    CI_RUNNER_ID: "1"
+    CI_JOB_JWT: "eyJraWQiOiJvWFZ3VEdSakdIZzRqX09yNWhRNVJkLW15em5Zb2tQU0lkV3VpSUZtak5JIiwidHlwIjoiSldUIiwiYWxnIjoiUlMyNTYifQ.eyJwcm9qZWN0X2lkIjoiMSIsInByb2plY3RfcGF0aCI6InJvb3Qvcm9va2VyeS1naXRsYWItY2FwdHVyZSIsIm5hbWVzcGFjZV9pZCI6IjEiLCJuYW1lc3BhY2VfcGF0aCI6InJvb3QiLCJ1c2VyX2lkIjoiMSIsInVzZXJfbG9naW4iOiJyb290IiwidXNlcl9lbWFpbCI6ImdpdGxhYl9hZG1pbl9lOGJjZDBAZXhhbXBsZS5jb20iLCJ1c2VyX2FjY2Vzc19sZXZlbCI6Im93bmVyIiwiam9iX3Byb2plY3RfaWQiOiIxIiwiam9iX3Byb2plY3RfcGF0aCI6InJvb3Qvcm9va2VyeS1naXRsYWItY2FwdHVyZSIsImpvYl9uYW1lc3BhY2VfaWQiOiIxIiwiam9iX25hbWVzcGFjZV9wYXRoIjoicm9vdCIsInBpcGVsaW5lX2lkIjoiMSIsInBpcGVsaW5lX3NvdXJjZSI6InB1c2giLCJqb2JfaWQiOiIxIiwicmVmIjoibWFpbiIsInJlZl90eXBlIjoiYnJhbmNoIiwicmVmX3BhdGgiOiJyZWZzL2hlYWRzL21haW4iLCJyZWZfcHJvdGVjdGVkIjoidHJ1ZSIsImpvYl9zb3VyY2UiOiJwdXNoIiwicnVubmVyX2lkIjoxLCJydW5uZXJfZW52aXJvbm1lbnQiOiJzZWxmLWhvc3RlZCIsInNoYSI6ImMzMzMyZGM3YjM3MGIzZjVhZWYwYTIyMjQ4MGQzODVmOWEwZWU3YWIiLCJwcm9qZWN0X3Zpc2liaWxpdHkiOiJwcml2YXRlIiwiY2lfY29uZmlnX3JlZl91cmkiOiJnaXRsYWIvcm9vdC9yb29rZXJ5LWdpdGxhYi1jYXB0dXJlLy8uZ2l0bGFiLWNpLnltbEByZWZzL2hlYWRzL21haW4iLCJjaV9jb25maWdfc2hhIjoiYzMzMzJkYzdiMzcwYjNmNWFlZjBhMjIyNDgwZDM4NWY5YTBlZTdhYiIsImp0aSI6IjQ4NmNjMzYzLWM2NzYtNGE5YS04ODI2LTY1YzY1OTRhMzRhYSIsImlhdCI6MTc4MDA3NDYzMCwibmJmIjoxNzgwMDc0NjI1LCJleHAiOjE3ODAwNzgyMzAsImlzcyI6Imh0dHA6Ly9naXRsYWIiLCJzdWIiOiJwcm9qZWN0X3BhdGg6cm9vdC9yb29rZXJ5LWdpdGxhYi1jYXB0dXJlOnJlZl90eXBlOmJyYW5jaDpyZWY6bWFpbiIsImF1ZCI6IndpdG5lc3MifQ.LS2JRu20PuaY6Hr9Ex8gElzzMgV29eM9-SzT-sxpch0S_snC1wmNCJCIxMtlnIaqj-T6NjK10dinK8ZpXoRG22ox416fOx_niLzzy0lOPnaJ_kbubpgR_w5kIPiqUFuxhRtEvv5IySNM4-FmiGmRDbPgAT0iu8SBxJP-uzNd9J9XgKjzlkbCpl5e6yo5hWcnWlhiX2VxkM4ea1M5axiL5g5_v1OC0oMb6vf2FLwC5otvHYd4mTUWdmgwXO2H8lw503nDcRGvYjsuUPRSBPIfCjTeltZy3CzjHGVonpKKcvartCCpZypEjmJgiocnn-dsK76PqDeTpbCYOVELJMkJtA"
+  options:
+    endpoints:
+      - env: WITNESS_GITLAB_JWKS_URL
+        file: jwks.json
+        path: /jwks
+recording:
+  tool: cilock
+  # cilock-all built from THIS tree (presets/all/cmd/cilock-all), GOOS=linux
+  # GOARCH=arm64 (the gitlab-ce + runner ran natively on an arm64 docker host).
+  # The binary_sha256 below is the sha256 of THAT binary — it ran in the job and
+  # produced attestation.json (cilock.sha256 artifact matched). Re-record on a
+  # different arch and this digest moves; that is the staleness signal.
+  version: "dev"
+  binary_sha256: "9a3b26ef621a44a6e28387d809923251fa7ee94fdbad2f89a369c580a5ebcb42"
+  recorded_with: cilock
+  attestation: attestation.json
+  argv: ["true"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/gitlab/v0.1
+  run_type: prematerial
+  subjects:
+    match: prefix
+    keys:
+      - "pipelineurl:"
+      - "joburl:"
+      - "projecturl:"
+  # The recorded CI_JOB_JWT and the JWT in attestation.json are the SAME mint, so
+  # the replayed jwt.claims (incl. exp/iat/nbf/jti) are byte-identical to the
+  # recorded ones — no claim redaction needed. Only jwt.verifiedBy.jwksUrl is
+  # volatile: the recorded run verified against http://gitlab/oauth/discovery/keys,
+  # the hermetic replay against the http-mock stub's random localhost port. That
+  # single field is zeroed on both sides of the recorded-evidence cross-check and
+  # across the two determinism runs.
+  redact:
+    - "jwt.verifiedBy.jwksUrl"

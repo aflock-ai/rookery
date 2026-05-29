@@ -59,7 +59,13 @@ esac
 # struct pt_regs". Compiling from $TMP makes the quoted include resolve to
 # the freshly-dumped, correct-arch header.
 cp "$SRC" "$TMP/openat_kprobe.bpf.c"
+# -ffile-prefix-map/-fdebug-compilation-dir canonicalize the embedded DWARF
+# comp-dir and source filename to a relative "." so the build path (here the
+# random $TMP dir, in the runtime/Makefile path a dev home tree) never leaks
+# into the object. This mirrors the flags in bpf/Makefile and rebuild_linux.go
+# so the lint compile is byte-equivalent to the checked-in .bpf.o.
 clang -g -O2 -Wall -Werror -target bpf "$ARCH_DEF" \
+	-ffile-prefix-map="$TMP"=. -fdebug-compilation-dir=. \
 	-I "$TMP" -I "$INC" \
 	-c "$TMP/openat_kprobe.bpf.c" -o "$TMP/openat_kprobe.bpf.o"
 

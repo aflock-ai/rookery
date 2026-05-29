@@ -1,0 +1,28 @@
+schema_version: "0.1"
+attestor: sarif
+description: "gosec SARIF report of a tiny Go module (one G404 weak-random finding) — RECORDED FROM A REAL gosec run under cilock. Proves the sarif output contract against real tool output, not a hand-copied sample."
+setup:
+  mode: product
+  input: results.sarif.json   # the RAW gosec SARIF output from the real run — replay source
+  mime_type: application/json
+# Provenance of the real run that produced this fixture. Re-record with
+# `CILOCK=/path/to/cilock-all ./record.sh` (runs gosec under cilock again). The
+# version + binary digest are the staleness signal: when gosec changes,
+# re-record and the diff shows what moved. gosec is offline + deterministic and
+# does not stamp invocation start/end times into the SARIF body.
+recording:
+  tool: gosec
+  version: "2.26.1"
+  binary_sha256: "16d455ee250c5efb51467f7d52293d0445c662db0f83d471e8bdcf1ef32ae30c"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["gosec", "-quiet", "-fmt=sarif", "-out=results.sarif.json", "-no-fail", "./..."]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/sarif/v0.1
+  run_type: postproduct
+  # sarif is NOT a Subjecter — it records the report bytes + file path + digest
+  # and emits ZERO subjects. The empty keys list asserts exactly that contract.
+  subjects:
+    match: prefix
+    keys: []

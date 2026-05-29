@@ -1,0 +1,26 @@
+schema_version: "0.1"
+attestor: sbom
+description: "syft SPDX SBOM of a small Python requirements.txt — RECORDED FROM A REAL syft run under cilock. Proves the sbom contract's SPDX predicate path (https://spdx.dev/Document), complementing the CycloneDX fixture: this is the multi-type contract's SECOND registered predicate type."
+setup:
+  mode: product
+  input: bom.spdx.json   # RAW syft SPDX-JSON output from the real run — replay source
+  # The sbom attestor dispatches on the product MIME. SPDX-JSON must be injected
+  # as application/spdx+json (the testkit default application/json soft-skips,
+  # and application/vnd.cyclonedx+json would route to the CycloneDX path).
+  mime_type: application/spdx+json
+recording:
+  tool: syft
+  version: "1.44.0"
+  binary_sha256: "a0ccb238c2354837846d590b063e8855d824068ac1bd4238d92518dabc7550e3"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock collection (the evidence)
+  argv: ["syft", "scan", "dir:.", "--source-name", "demo-app", "--source-version", "1.0.0", "--select-catalogers", "-file", "-o", "spdx-json=bom.spdx.json"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://spdx.dev/Document
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "file:"
+      - "name:"   # SPDX carries no version subject (unlike CycloneDX) — documentName only

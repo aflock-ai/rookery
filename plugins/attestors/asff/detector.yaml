@@ -25,3 +25,32 @@ post:
 
 llm_hints:
   on_match: "ASFF findings captured. AWS Security Hub posture preserved."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/asff/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: >-
+      Predicate is a summary derived from a versioned AWS ASFF JSON report
+      (AWS Security Finding Format). For a fixed input file the summary
+      counts/failed-findings are deterministic, but the predicate embeds
+      reportFile (the absolute filesystem path of the consumed product),
+      which is environment-dependent. The underlying ASFF report itself can
+      contain per-run timestamps and non-deterministic finding ordering from
+      `aws securityhub get-findings`. The attestor reads files only; it makes
+      no AWS API calls.
+    volatile_fields: ["summary.reportFile"]
+  subjects:
+    - prefix: "aws:account:"
+      description: "the scanned AWS account id (from the first finding carrying one)"
+    - prefix: "aws:finding:"
+      description: "ARN of each CRITICAL or HIGH severity FAILED finding"
+    - prefix: "aws:arn:"
+      description: "each unique resource ARN referenced by a FAILED finding"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: cloudtrail-scan
+      role: canonical

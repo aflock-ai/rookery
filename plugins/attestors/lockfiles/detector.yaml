@@ -20,3 +20,20 @@ pre:
 
 llm_hints:
   on_match: "Lockfile contents captured for downstream provenance and SBOM correlation."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/lockfiles/v0.1
+  run_type: prematerial
+  stability:
+    level: stable
+    notes: "Output is the literal lockfile bytes (Content) plus a SHA256 DigestSet per file. No timestamps, no clock- or host-derived fields. Glob/walk iteration order is deterministic for a given tree, so subject ordering and content are reproducible."
+    volatile_fields: []
+  subjects:
+    - prefix: "file:"
+      description: "each discovered lockfile, keyed file:<path> (e.g. Gemfile.lock, package-lock.json, yarn.lock, Cargo.lock, poetry.lock, Pipfile.lock, requirements.txt, composer.lock, go.sum, Podfile.lock, gradle.lockfile, pnpm-lock.yaml); path is relative to the search root and digested with SHA256"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: go-sum
+      role: canonical

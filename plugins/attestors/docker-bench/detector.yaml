@@ -29,3 +29,30 @@ post:
 
 llm_hints:
   on_match: "Docker Bench results captured. CIS Docker benchmark outcomes preserved."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/docker-bench/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: >-
+      Counts and failed-check rollup are deterministic given a fixed report.
+      However the report reflects live host/container state at scan time:
+      container names are extracted from the Container Runtime section (tests
+      id "5") items and depend on which containers are running, and the
+      benchmark version derives from the tool's top-level "dockerbenchsecurity"
+      field. Re-running against a changed host yields different container
+      subjects and summary counts. report_file is the on-disk product path,
+      which differs between the recorded run and a hermetic replay.
+    volatile_fields: ["report_file", "container_names", "summary.total_warn", "summary.total_pass", "summary.failed_checks", "summary.score"]
+  subjects:
+    - prefix: "benchmark:"
+      description: "the CIS Docker Benchmark identity (e.g. benchmark:cis-docker@1.3.4), derived from the tool's reported version"
+    - prefix: "container:"
+      description: "each running container name docker-bench audited in its Container Runtime section (tests id \"5\")"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: daemon-audit
+      role: canonical

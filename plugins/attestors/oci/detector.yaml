@@ -36,3 +36,36 @@ post:
 
 llm_hints:
   on_match: "OCI image / artifact captured (image refs, manifest digest, layer materials)."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/oci/v0.1
+  run_type: postproduct
+  stability:
+    level: stable
+    notes: >-
+      Output is deterministic: every subject's digest is a SHA256 computed from the
+      content of a Docker-save tarball (manifest.json bytes, config bytes for the
+      image ID, the tar file itself, and per-layer diffIDs after gzip decompression;
+      the imagetag subject's digest is the SHA256 of the literal tag string). No
+      timestamps, no host-varying fields. Per-layer diffID subjects are appended in
+      the order the layer blobs are encountered while streaming the tar (not strictly
+      the manifest.json Layers order), so the layerdiffid<NN> index follows the tar's
+      physical layout; docker save writes that layout deterministically for a given
+      image.
+  subjects:
+    - prefix: "manifestdigest:"
+      description: "sha256 of the raw manifest.json bytes extracted from the tar"
+    - prefix: "tardigest:"
+      description: "digest of the docker-save tar product file"
+    - prefix: "imageid:"
+      description: "sha256 of the image config blob (the OCI image ID)"
+    - prefix: "imagetag:"
+      description: "one subject per RepoTag from manifest.json (key tail is the literal image tag)"
+    - prefix: "layerdiffid"
+      description: "per-layer uncompressed diffID; key is layerdiffid<NN>: where NN is the zero-padded layer index"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: hello-world
+      role: canonical

@@ -22,7 +22,7 @@ Every meaningful policy template should reference these. They form the lingua fr
 | `threat-model` | Architectural threat analysis and design review artifact | threagile, IriusRisk, OWASP Threat Dragon |
 | `vulnerability-scan` | Find known CVEs in code, deps, or artifacts (pre-release) | trivy, govulncheck, grype, snyk, semgrep |
 | `secret-scan` | Find leaked credentials in source or artifacts | gitleaks, trufflehog, detect-secrets |
-| `compliance-scan` | Configuration scan against a control baseline | inspec, oscap, kube-bench, docker-bench, prowler, steampipe, nessus |
+| `compliance-scan` | Configuration scan against a control baseline | inspec, oscap, kube-bench, docker-bench, prowler, steampipe |
 | `sbom-generate` | Produce a component inventory | syft, cdxgen, trivy sbom, mvn cyclonedx |
 | `sbom-consume` | Verify an upstream SBOM against policy | dependency-track, sbomqs, scancode |
 | `provenance` | Build-time provenance (how/where/from-what an artifact was built) | slsa attestor, buildx provenance, github-attestations |

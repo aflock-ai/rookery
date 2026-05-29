@@ -29,3 +29,26 @@ post:
 
 llm_hints:
   on_match: "Falco runtime events captured."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/falco/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: "Falco line-delimited JSON events carry per-event timestamps and arbitrary event ordering; the attestor also stamps the cilock host's os.Hostname() and derives a WindowStart/WindowEnd time window. These vary run-to-run. Falco JSON output has no embedded schema-version field, so this is best-effort rather than versioned-schema. The per-event records, priority counts, and rule-hit aggregation are otherwise deterministic for a fixed input file."
+    volatile_fields: ["hostname", "summary.window_start", "summary.window_end", "events[].time", "cluster_name"]
+  subjects:
+    - prefix: "falco-events:"
+      description: "the host whose Falco runtime events were captured (os.Hostname of the cilock node); emitted only when hostname is non-empty"
+    - prefix: "cluster:"
+      description: "the Kubernetes cluster name from $FALCO_CLUSTER_NAME; emitted only when set"
+    - prefix: "rule:"
+      description: "one subject per distinct Falco rule that fired in the captured window"
+    - prefix: "report_file:"
+      description: "the captured Falco event file, keyed by its real product-set digest so the BFS can chain back to product/v0.3; emitted only when the report digest set is non-empty"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: runtime-events
+      role: canonical

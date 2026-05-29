@@ -48,7 +48,7 @@ Six attestations end up in the envelope's predicate:
 
 | Attestation | Predicate type | What it carries |
 |---|---|---|
-| `environment` | `https://aflock.ai/attestations/environment/v0.1` | OS, hostname, user, env vars |
+| `environment` | `https://aflock.ai/attestations/environment/v0.1` | OS, arch, working dir, env vars |
 | `git` | `https://aflock.ai/attestations/git/v0.1` | commit SHA, branch, remotes, tag |
 | `material/v0.3` | `https://aflock.ai/attestations/material/v0.3` | Merkle root of pre-execution files |
 | `command-run/v0.1` | `https://aflock.ai/attestations/command-run/v0.1` | literal grype argv + exit code + stdio digests |

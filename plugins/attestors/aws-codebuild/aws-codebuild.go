@@ -48,6 +48,7 @@ const (
 	envCodeBuildBuildNumber        = "CODEBUILD_BUILD_NUMBER"
 	envCodeBuildInitiator          = "CODEBUILD_INITIATOR"
 	envCodeBuildProjectName        = "CODEBUILD_PROJECT_NAME"
+	envCodeBuildProjectARN         = "CODEBUILD_PROJECT_ARN"
 	envCodeBuildResolvedSrcVer     = "CODEBUILD_RESOLVED_SOURCE_VERSION"
 	envCodeBuildSourceRepo         = "CODEBUILD_SOURCE_REPO_URL"
 	envCodeBuildBatchBuildID       = "CODEBUILD_BATCH_BUILD_IDENTIFIER"
@@ -160,7 +161,15 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	a.BuildInfo.BuildID = buildID
 	a.BuildInfo.BuildARN = os.Getenv(envCodeBuildBuildARN)
 	a.BuildInfo.BuildNumber = os.Getenv(envCodeBuildBuildNumber)
+	// AWS CodeBuild does NOT export CODEBUILD_PROJECT_NAME; it exports
+	// CODEBUILD_PROJECT_ARN (arn:aws:codebuild:<region>:<account>:project/<name>).
+	// Prefer the explicit name when present (e.g. a user-set env var or test),
+	// otherwise derive it from the ARN's project/<name> tail so the
+	// codebuild-project subject is emitted from real CodeBuild evidence.
 	a.BuildInfo.ProjectName = os.Getenv(envCodeBuildProjectName)
+	if a.BuildInfo.ProjectName == "" {
+		a.BuildInfo.ProjectName = projectNameFromARN(os.Getenv(envCodeBuildProjectARN))
+	}
 	a.BuildInfo.Initiator = os.Getenv(envCodeBuildInitiator)
 	a.BuildInfo.SourceVersion = os.Getenv(envCodeBuildResolvedSrcVer)
 	a.BuildInfo.SourceRepo = os.Getenv(envCodeBuildSourceRepo)
@@ -178,6 +187,20 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	return nil
+}
+
+// projectNameFromARN extracts the project name from a CodeBuild project ARN of
+// the form arn:aws:codebuild:<region>:<account>:project/<name>. It returns ""
+// for an empty or non-conforming ARN so the caller can leave ProjectName unset.
+func projectNameFromARN(arn string) string {
+	if arn == "" {
+		return ""
+	}
+	const marker = ":project/"
+	if i := strings.Index(arn, marker); i >= 0 {
+		return arn[i+len(marker):]
+	}
+	return ""
 }
 
 func (a *Attestor) getBuildDetails() error {

@@ -35,7 +35,7 @@ This is the exact command exercised in [`tool-linkerd-check`](https://github.com
 
 | Predicate type | Source |
 |---|---|
-| `https://aflock.ai/attestations/environment/v0.1` | host OS, hostname, username, env vars (sensitive ones obfuscated) |
+| `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
 | `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, dirty status |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle root over the working tree before the capture |
 | `https://aflock.ai/attestations/command-run/v0.1` | literal `sh -c 'linkerd check ...; linkerd viz edges ...'` argv |

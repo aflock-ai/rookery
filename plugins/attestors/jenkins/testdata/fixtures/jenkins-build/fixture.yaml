@@ -1,0 +1,65 @@
+schema_version: "0.1"
+attestor: jenkins
+description: >-
+  A REAL Jenkins pipeline run, captured from a live Jenkins controller
+  (jenkins/jenkins:lts 2.555.2) running in Docker. A freestyle job's
+  Execute-shell step ran a tree-built linux cilock-all (see
+  recording.binary_sha256) against the jenkins attestor; the build's signed
+  collection is committed as attestation.json and the Jenkins-injected env it
+  dumped is in jenkins-env.txt. jenkins is PreMaterial and PURE ENV: it gates on
+  JENKINS_URL and reads BUILD_ID/BUILD_NUMBER/BUILD_TAG/BUILD_URL/
+  EXECUTOR_NUMBER/JAVA_HOME/JENKINS_URL/JOB_NAME/NODE_NAME/WORKSPACE (no OIDC, no
+  JWT, no API call). The env block below holds those ten vars EXACTLY as Jenkins
+  injected them into build #2 (verbatim from jenkins-env.txt) — the testkit
+  env-mode driver sets them and re-runs the attestor, regenerating the recorded
+  predicate, then cross-checks it against attestation.json (the REAL signed
+  cilock collection, ed25519-signed, signature verified). The predicate has no
+  timestamps and no non-deterministic ordering, so it reproduces byte-for-byte —
+  nothing is redacted. Topology is PUBLIC-OK: the only host-shaped strings are
+  the container-internal JAVA_HOME (/opt/java/openjdk) and WORKSPACE
+  (/var/jenkins_home/...) — no host home paths, no credentials (the build's
+  ed25519 key never left the container and was destroyed with it). See record.sh
+  for the capture recipe.
+setup:
+  mode: env
+  # EXACTLY the env vars the jenkins attestor reads, verbatim from jenkins-env.txt
+  # (the real Jenkins build #2). JENKINS_URL is the required gate (Attest returns
+  # ErrNotJenkins without it); the other nine populate the predicate one-to-one.
+  # BUILD_URL becomes the pipelineurl: subject, JENKINS_URL the jenkinsurl:
+  # subject. These are deterministic for that build, so the replay regenerates
+  # the recorded predicate.
+  env:
+    JENKINS_URL: "http://localhost:18080/"
+    BUILD_URL: "http://localhost:18080/job/jenkins-fixture-capture/2/"
+    BUILD_ID: "2"
+    BUILD_NUMBER: "2"
+    BUILD_TAG: "jenkins-jenkins-fixture-capture-2"
+    EXECUTOR_NUMBER: "1"
+    JAVA_HOME: "/opt/java/openjdk"
+    JOB_NAME: "jenkins-fixture-capture"
+    NODE_NAME: "built-in"
+    WORKSPACE: "/var/jenkins_home/workspace/jenkins-fixture-capture"
+# Provenance of the real run that produced this fixture. Re-record with
+# ./record.sh (stands up jenkins/jenkins:lts in Docker, creates the job, runs
+# cilock against the jenkins attestor again). The version + binary digest are the
+# staleness signal: when cilock or the attestor changes, re-record and the diff
+# shows what moved.
+recording:
+  tool: cilock
+  version: "dev"
+  binary_sha256: "80431bce3566d0313e9e2775b2e62539457b70853cb4bfe9bc5c453620bc9517"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["true"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/jenkins/v0.1
+  run_type: prematerial
+  # No volatile fields: the predicate is a fixed struct of Jenkins env values
+  # with no timestamps and no non-deterministic ordering, so it reproduces
+  # byte-for-byte and nothing needs redacting.
+  subjects:
+    match: prefix
+    keys:
+      - "pipelineurl:http://localhost:18080/job/jenkins-fixture-capture/2/"
+      - "jenkinsurl:http://localhost:18080/"

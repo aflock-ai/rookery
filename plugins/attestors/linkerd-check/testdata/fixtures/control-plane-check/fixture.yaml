@@ -1,0 +1,37 @@
+schema_version: "0.1"
+attestor: linkerd-check
+description: "Linkerd control-plane health check (`linkerd check -o json`) against a live k3d cluster with the Linkerd control plane installed — RECORDED FROM A REAL linkerd run under cilock (9 categories: 38 pass / 3 warn / 0 error, overall success). The check JSON IS the real tool output; the linkerd-check attestor (postproduct) normalizes it into the signed summary and emits check_file: + linkerd-overall: subjects. Proves the linkerd-check output contract against real tool output, not a hand-copied sample."
+setup:
+  mode: product
+  input: linkerd-check.json   # the RAW `linkerd check -o json` report from the real run — replay source
+  mime_type: application/json
+# Provenance of the real run that produced this fixture. Re-record with ./record.sh
+# (spins up a disposable k3d cluster, installs the Linkerd control plane, runs
+# `linkerd check -o json` under cilock, then tears the cluster down). The version +
+# binary digest are the staleness signal: when linkerd changes, re-record and the
+# diff shows what moved. LINKERD_CLUSTER_NAME is left unset so no environment-
+# derived cluster name lands in the public evidence (the contract's cluster:
+# subject and cluster_name field are conditional on that env var).
+recording:
+  tool: linkerd
+  version: "stable-2.14.10"
+  binary_sha256: "577d41bbb60544bd8e1d318092719b0b99d2695f620e77ef5f3524787597f8b4"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["sh", "-c", "linkerd check -o json > linkerd-check.json || true"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/linkerd-check/v0.1
+  run_type: postproduct
+  # hostname is a contract-declared volatile field (stability.volatile_fields): it
+  # is os.Hostname() of the recording host, which differs across machines. Redact it
+  # so the recorded-evidence cross-check and the determinism re-run compare only the
+  # deterministic, tool-derived check content. cluster_name / edges_summary are
+  # absent here (LINKERD_CLUSTER_NAME unset, no edges file), so they need no redact.
+  redact:
+    - hostname
+  subjects:
+    match: prefix
+    keys:
+      - "check_file:"
+      - "linkerd-overall:"

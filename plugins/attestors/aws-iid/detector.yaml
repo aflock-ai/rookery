@@ -16,3 +16,32 @@ pre:
 
 llm_hints:
   on_match: "AWS instance identity captured (instance ID, region, account, signed by AWS regional cert)."
+
+contract:
+  tier: foundation
+  predicate_type: https://aflock.ai/attestations/aws/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: "Subjects (instanceid/accountid/imageid/privateip) are stable digests of stable EC2 identifiers. The predicate embeds the raw instance identity document (RawIID), which contains a pendingTime timestamp that varies per instance launch, plus a PublicKey PEM derived from the regional AWS CA cert valid at attest time."
+    volatile_fields: ["rawiid", "publickey", "pendingTime"]
+  subjects:
+    - prefix: "instanceid:"
+      description: "the EC2 instance ID from the instance identity document"
+    - prefix: "accountid:"
+      description: "the AWS account ID owning the instance"
+    - prefix: "imageid:"
+      description: "the AMI (image) ID the instance was launched from"
+    - prefix: "privateip:"
+      description: "the private IPv4 address of the instance"
+  schema_required: true
+  credentials:
+    - name: ec2-instance-metadata
+      type: instance-identity
+      provided: instance-metadata
+      env_vars: []
+      scopes: ["read:instance-identity/document", "read:instance-identity/signature"]
+      required: true
+  fixtures:
+    - name: ec2-instance-identity
+      role: canonical

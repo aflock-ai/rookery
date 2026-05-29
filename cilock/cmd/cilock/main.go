@@ -47,6 +47,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/prowler"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/sarif"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/sbom"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/scubagoggles"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/secretscan"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/slsa"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/steampipe"
