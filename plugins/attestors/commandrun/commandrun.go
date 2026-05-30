@@ -1792,7 +1792,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		// Wait for I/O copying goroutines to complete before reading buffers.
 		// trace() uses ptrace to detect process exit, but exec's I/O goroutines
 		// may still be flushing pipe data into stdoutBuffer/stderrBuffer.
-		_ = c.Wait() //nolint:errcheck // exit status already captured by trace
+		_ = c.Wait() // exit status already captured by trace
 
 		// Drain + merge fanotify digests (if enabled). Done BEFORE
 		// summary build so Diagnostics see the merged count.
