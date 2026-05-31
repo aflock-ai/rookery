@@ -6,6 +6,8 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"html"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -82,14 +84,7 @@ func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
 				ExpiresAt:   time.Now().Add(30 * 24 * time.Hour),
 			}
 			w.Header().Set("Content-Type", "text/html")
-			_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="utf-8">`+
-				`<style>body{font-family:-apple-system,system-ui,sans-serif;background:#1e1b4b;color:#e2e8f0;`+
-				`display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}`+
-				`.card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:16px;`+
-				`padding:40px;max-width:400px;text-align:center}.ok{color:#34d399;font-size:48px}</style></head>`+
-				`<body><div class="card"><div class="ok">&#x2713;</div><h2>cilock authorized</h2>`+
-				`<p>Tenant: <strong>%s</strong></p><p style="color:#94a3b8">You can close this window.</p></div>`+
-				`<script>setTimeout(function(){window.close()},3000)</script></body></html>`, r.FormValue("tenant"))
+			writeCallbackPage(w, r.FormValue("tenant"))
 			return
 		}
 		http.Redirect(w, r, cliAuthURL(judgeURL, callbackURL, state, params), http.StatusFound)
@@ -109,6 +104,23 @@ func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
 	case <-time.After(5 * time.Minute):
 		return nil, fmt.Errorf("login timed out after 5 minutes")
 	}
+}
+
+// writeCallbackPage renders the loopback success page shown after the platform
+// POSTs the credential back. tenant is the only interpolated value; it is
+// HTML-escaped because a crafted `tenant` form value on the callback could
+// otherwise inject script into the page, and the loopback listener is reachable
+// by any other local process — so the value is escaped to neutralize XSS.
+func writeCallbackPage(w io.Writer, tenant string) {
+	//nolint:gosec // G705: tenant is the only interpolation and is html-escaped; loopback-only, state-gated page
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="utf-8">`+
+		`<style>body{font-family:-apple-system,system-ui,sans-serif;background:#1e1b4b;color:#e2e8f0;`+
+		`display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}`+
+		`.card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:16px;`+
+		`padding:40px;max-width:400px;text-align:center}.ok{color:#34d399;font-size:48px}</style></head>`+
+		`<body><div class="card"><div class="ok">&#x2713;</div><h2>cilock authorized</h2>`+
+		`<p>Tenant: <strong>%s</strong></p><p style="color:#94a3b8">You can close this window.</p></div>`+
+		`<script>setTimeout(function(){window.close()},3000)</script></body></html>`, html.EscapeString(tenant))
 }
 
 // cliAuthURL builds the /auth/cli URL. client=cilock scopes/brands the page;
@@ -138,9 +150,9 @@ func openBrowserURL(rawURL string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "linux":
-		cmd = exec.Command("xdg-open", rawURL)
+		cmd = exec.Command("xdg-open", rawURL) //nolint:gosec // G204: fixed opener binary; only the URL (built by cliAuthURL) varies
 	default:
-		cmd = exec.Command("open", rawURL)
+		cmd = exec.Command("open", rawURL) //nolint:gosec // G204: fixed opener binary; only the URL (built by cliAuthURL) varies
 	}
 	_ = cmd.Start()
 }
