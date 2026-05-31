@@ -124,3 +124,57 @@ func TestExtract_GoogleWorkspacePlugins(t *testing.T) {
 		})
 	}
 }
+
+// TestExtract_SlackPlugin covers the slack workspace-posture convention. The
+// posture recipe aliases the colliding primary key (`id as user_id` /
+// `id as channel_id`) so user and channel rows map to distinct identity axes;
+// a bare `id` is intentionally NOT mapped. team_id (on slack_user) anchors the
+// workspace.
+func TestExtract_SlackPlugin(t *testing.T) {
+	cases := []struct {
+		name   string
+		plugin string
+		row    map[string]any
+		want   []string
+	}{
+		{
+			name:   "slack_user row",
+			plugin: "slack",
+			row: map[string]any{
+				"user_id":  "U0123456789",
+				"team_id":  "T0123456789",
+				"has_2fa":  false, // non-identity column, ignored
+				"is_admin": true,
+			},
+			want: []string{
+				"slack:team:T0123456789",
+				"slack:user:U0123456789",
+			},
+		},
+		{
+			name:   "slack_conversation row",
+			plugin: "slack",
+			row: map[string]any{
+				"channel_id":    "C0123456789",
+				"name":          "general",
+				"is_ext_shared": true,
+			},
+			want: []string{"slack:channel:C0123456789"},
+		},
+		{
+			name:   "bare id is not conflated into a subject",
+			plugin: "slack",
+			row:    map[string]any{"id": "U0123456789", "team_id": "T0123456789"},
+			want:   []string{"slack:team:T0123456789"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractedKeys(tc.plugin, tc.row)
+			if !equalStrings(got, tc.want) {
+				t.Errorf("extract(%q) keys = %v, want %v", tc.plugin, got, tc.want)
+			}
+		})
+	}
+}

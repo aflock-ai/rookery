@@ -109,6 +109,22 @@ var pluginConventions = map[string]pluginConvention{
 			{column: "actor_email", prefix: "googleworkspace:user:"},     // googleworkspace_activity_report
 		},
 	},
+	// slack is the turbot/slack plugin — workspace security posture (members,
+	// 2FA enrollment, admin/owner/guest flags, channels and their external-
+	// sharing flags). The plugin reuses `id` for both slack_user and
+	// slack_conversation rows, so posture recipes alias the primary key
+	// (`id as user_id` / `id as channel_id`) to keep the user and channel
+	// identity axes distinct; `team_id` (on slack_user) anchors the workspace.
+	// A bare `id` column is intentionally NOT mapped — it would conflate users
+	// and channels. Columns verified against
+	// github.com/turbot/steampipe-plugin-slack.
+	"slack": {
+		subjectExtractors: []columnExtractor{
+			{column: "team_id", prefix: "slack:team:"},       // slack_user
+			{column: "user_id", prefix: "slack:user:"},       // slack_user, aliased `id as user_id`
+			{column: "channel_id", prefix: "slack:channel:"}, // slack_conversation, aliased `id as channel_id`
+		},
+	},
 }
 
 // extract pulls identity-bearing values out of one row according to the
@@ -159,8 +175,8 @@ func stringify(v any) string {
 // formatFloat renders a float64 the way ECMAScript / JSON-canonical form
 // does — no decimal point for whole numbers, shortest round-trip otherwise.
 // AWS account ids and other numeric ids come back as float64 from
-// encoding/json and need to round-trip as integer strings ("339150376714",
-// not "3.39150376714e+11").
+// encoding/json and need to round-trip as integer strings ("123456789012",
+// not "1.23456789012e+11").
 func formatFloat(f float64) string {
 	if f == float64(int64(f)) {
 		return strconv.FormatInt(int64(f), 10)
