@@ -16,8 +16,14 @@ type PlatformConfig struct {
 	Fulcio       string
 	TSA          string
 	OIDCAudience string
-	OIDCIssuer   string
-	OIDCClientID string
+	// OIDCLoginAudience is the audience a workflow-identity OIDC token must carry
+	// to authenticate `cilock login` against the platform. It is intentionally
+	// DISTINCT from OIDCAudience (Archivista upload) and from the Fulcio signing
+	// audience ("sigstore") — reusing either would be a confused-deputy hazard
+	// (a token minted for one purpose replayed to obtain a login session).
+	OIDCLoginAudience string
+	OIDCIssuer        string
+	OIDCClientID      string
 }
 
 // Derive computes all service URLs from the platform URL.
@@ -30,12 +36,13 @@ func Derive(platformURL string) PlatformConfig {
 	platformURL = strings.TrimRight(platformURL, "/")
 
 	return PlatformConfig{
-		PlatformURL:  platformURL,
-		Archivista:   platformURL + "/archivista",
-		Fulcio:       platformURL + "/fulcio",
-		TSA:          platformURL + "/api/v1/timestamp",
-		OIDCAudience: platformURL + "/archivista",
-		OIDCIssuer:   "https://token.actions.githubusercontent.com",
-		OIDCClientID: "sigstore",
+		PlatformURL:       platformURL,
+		Archivista:        platformURL + "/archivista",
+		Fulcio:            platformURL + "/fulcio",
+		TSA:               platformURL + "/api/v1/timestamp",
+		OIDCAudience:      platformURL + "/archivista",
+		OIDCLoginAudience: platformURL + "/login",
+		OIDCIssuer:        "https://token.actions.githubusercontent.com",
+		OIDCClientID:      "sigstore",
 	}
 }
