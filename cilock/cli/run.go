@@ -495,6 +495,18 @@ func RunCmd() *cobra.Command {
 		Short: "Runs the provided command and records attestations about the execution",
 		Long: `Runs the provided command and records attestations about the execution.
 
+Platform & trust:
+  By default cilock targets the hosted TestifySec platform
+  (https://platform.testifysec.com) for keyless Fulcio signing, RFC 3161
+  timestamps, and Archivista attestation storage — the Fulcio, TSA, and
+  Archivista URLs are all derived from --platform-url. Run 'cilock login' to
+  authenticate to the hosted platform. To bring your own infrastructure instead,
+  override the providers individually: --signer-* selects a key provider,
+  --timestamp-servers a timestamper, and --archivista-server attestation
+  storage. Pass --platform-url "" to run fully offline (no platform, no TSA).
+  Additional key/signer providers can be compiled in; see
+  https://github.com/aflock-ai/rookery/blob/main/docs/signers.md.
+
 Exit-code policy (finding #221):
   Attestor errors are split into two classes:
 

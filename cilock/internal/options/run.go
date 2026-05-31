@@ -230,6 +230,17 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 		ro.TimestampServers = []string{pc.TSA}
 	}
 
+	// Fulcio signer URL: derive from the platform when the user didn't set it
+	// explicitly. The fulcio signer reads its address from the registry-bound
+	// --signer-fulcio-url flag at signer-construction time (see options.go), so
+	// updating the flag value here propagates to the signer without RunOptions
+	// holding a direct handle on it. Guard on the flag existing — not every
+	// command registers the fulcio signer provider. cobra Set marks the flag
+	// changed so the registry setter applies the derived value during signing.
+	if f := cmd.Flags().Lookup("signer-fulcio-url"); f != nil && !f.Changed {
+		_ = cmd.Flags().Set("signer-fulcio-url", pc.Fulcio)
+	}
+
 	// Platform session: if the user has logged in (`cilock login`) to this
 	// platform, authenticate Archivista uploads with the session token and
 	// expose the platform URL to the platform attestor (via CILOCK_PLATFORM_URL)
@@ -258,7 +269,13 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	ro.SignerOptions.AddFlags(cmd)
 	ro.ArchivistaOptions.AddFlags(cmd)
-	cmd.Flags().StringVar(&ro.PlatformURL, "platform-url", platformconfig.DefaultPlatformURL, "TestifySec platform URL (derives archivista, fulcio, and TSA URLs)")
+	cmd.Flags().StringVar(&ro.PlatformURL, "platform-url", platformconfig.DefaultPlatformURL,
+		"TestifySec platform URL — derives the Archivista, Fulcio, and TSA URLs "+
+			"(default "+platformconfig.DefaultPlatformURL+"). Run 'cilock login' to authenticate to the "+
+			"hosted platform, or bring your own infrastructure by overriding --signer-* (key provider), "+
+			"--timestamp-servers (timestamper), and --archivista-server (attestation storage). Pass "+
+			"--platform-url \"\" to run fully offline. Additional key/signer providers can be compiled in — "+
+			"see https://github.com/aflock-ai/rookery/blob/main/docs/signers.md")
 	cmd.Flags().StringVarP(&ro.WorkingDir, "workingdir", "d", "", "Directory from which commands will run")
 	cmd.Flags().StringSliceVarP(&ro.Attestations, "attestations", "a", DefaultAttestors, "Attestations to record ('product' and 'material' are always recorded)")
 	cmd.Flags().StringSliceVar(&ro.DirHashGlobs, "dirhash-glob", []string{}, "Dirhash glob can be used to collapse material and product hashes on matching directory matches.")
