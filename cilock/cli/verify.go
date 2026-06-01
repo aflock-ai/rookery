@@ -234,7 +234,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// the platform's keyless signing CA without a --policy-ca-roots file. The
 	// bundle carries the self-signed root plus intermediates; split by
 	// self-signedness so each lands in the right pool, exactly as the file flags do.
-	if len(vo.PolicyCARootsPEM) > 0 {
+	if len(vo.PolicyCARootsPEM) > 0 { //nolint:nestif // PEM block-decode loop with a self-signed-vs-intermediate split; the nesting mirrors the parse structure.
 		for rest := vo.PolicyCARootsPEM; len(rest) > 0; {
 			var block *pem.Block
 			block, rest = pem.Decode(rest)

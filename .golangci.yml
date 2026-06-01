@@ -117,6 +117,7 @@ linters:
           - gocognit
           - gocyclo
           - goconst
+          - unparam
 
       # Builder main.go is a long procedural entry point
       - path: builder/cmd/builder/main\.go
@@ -169,6 +170,15 @@ linters:
           - gocyclo
           - nestif
           - funlen
+
+      # pip-install classifies packages by repeated domain strings ("wheel",
+      # "sdist", "editable") that double as both install-type values AND literal
+      # pip package names (e.g. the "wheel" package). goconst's "make it a
+      # constant" would conflate those semantically-distinct uses, so it's
+      # excluded for this attestor.
+      - path: plugins/attestors/pip-install/.*
+        linters:
+          - goconst
 
 formatters:
   enable:
