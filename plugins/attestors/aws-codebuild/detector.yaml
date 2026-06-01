@@ -16,3 +16,47 @@ pre:
 
 llm_hints:
   on_match: "AWS CodeBuild context captured (project, build id, batch id, region)."
+
+contract:
+  tier: foundation
+  predicate_type: https://aflock.ai/attestations/aws-codebuild/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: "Env-var-derived fields are deterministic per build. When AWS credentials are present, the optional BatchGetBuilds API call populates BuildDetails/RawBuildDetails, which include build phase timestamps and durations that vary across runs. The API call is best-effort: failures are logged and attestation continues with env-only metadata."
+    volatile_fields:
+      - "build_info.build_details.StartTime"
+      - "build_info.build_details.EndTime"
+      - "build_info.build_details.CurrentPhase"
+      - "build_info.build_details.Phases"
+      - "raw_build_details"
+  subjects:
+    - prefix: "codebuild-build-id:"
+      description: "the CodeBuild build ID (CODEBUILD_BUILD_ID)"
+    - prefix: "codebuild-project:"
+      description: "the CodeBuild project name (CODEBUILD_PROJECT_NAME)"
+    - prefix: "codebuild-source-version:"
+      description: "the resolved source commit (CODEBUILD_RESOLVED_SOURCE_VERSION)"
+  backref_subjects:
+    - "codebuild-build-id:"
+    - "codebuild-project:"
+    - "codebuild-source-version:"
+  schema_required: true
+  fixtures:
+    - name: codebuild-build
+      role: canonical
+
+  credentials:
+    - name: aws-codebuild-readonly
+      type: cloud-role
+      provided: ambient
+      env_vars:
+        - AWS_REGION
+        - AWS_ACCESS_KEY_ID
+        - AWS_SECRET_ACCESS_KEY
+        - AWS_SESSION_TOKEN
+        - AWS_WEB_IDENTITY_TOKEN_FILE
+        - AWS_ROLE_ARN
+      scopes:
+        - "codebuild:BatchGetBuilds"
+      required: false

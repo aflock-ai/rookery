@@ -25,3 +25,33 @@ post:
 
 llm_hints:
   on_match: "Prowler findings captured (OCSF or ASFF format)."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/prowler/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: >-
+      The attestor post-processes a prowler JSON report already present in the
+      products (OCSF class_uid=2003, ASFF, or legacy v3 native shapes are all
+      normalized to a canonical Finding slice). The signed predicate is a derived
+      Summary (counts, per-severity tallies, condensed failedChecks). Counts and
+      digests are deterministic for a fixed input report, but reportFile is the
+      absolute on-disk path of the scanned product (environment-dependent), and
+      failedChecks ordering mirrors the input findings order. The underlying
+      prowler scan itself is best-effort (results vary with live cloud account
+      state), so the same target rescanned will not reproduce byte-identically.
+    volatile_fields: ["reportFile"]
+  subjects:
+    - prefix: "aws:account:"
+      description: "the AWS account id scanned (Summary.AccountId)"
+    - prefix: "aws:arn:"
+      description: "each unique resource ARN from a failed check (FailedCheck.ResourceArn)"
+    - prefix: "aws:service:"
+      description: "each unique AWS service name from a failed check (FailedCheck.ServiceName)"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: cloudtrail-scan
+      role: canonical

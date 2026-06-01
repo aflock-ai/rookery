@@ -1,0 +1,47 @@
+schema_version: "0.1"
+attestor: steampipe
+description: "Steampipe aws_iam_user query against the live demo account (898769392027, us-east-1, 1 IAM user) — RECORDED FROM A REAL steampipe run under cilock. The --output json result IS the real query output; the steampipe attestor (postproduct) seals it and fans out aws:account / aws:arn subjects via the aws plugin convention. Proves the steampipe output contract against real tool output, not a hand-copied sample."
+setup:
+  mode: product
+  input: steampipe-output.json   # the RAW steampipe --output json from the real run — replay source
+  mime_type: application/json
+  # Attestor-specific options the hermetic replay must re-apply (the harness
+  # rebuilds the attestor by name and would otherwise lose them). plugin is the
+  # subject-convention routing key — without it the replay emits ZERO subjects
+  # and diverges from the recorded run. Applied through the same registered
+  # setters the --attestor-steampipe-* CLI flags use.
+  options:
+    plugin: aws
+    id: aws-iam-users
+    sql: "select account_id, arn, name from aws_iam_user order by name"
+# Provenance of the real run that produced this fixture. Re-record with
+# ./record.sh (runs steampipe against the live demo AWS account under cilock
+# again). The version + binary digest are the staleness signal: when steampipe
+# or the aws plugin changes, re-record and the diff shows what moved. The
+# aws_iam_user table was chosen because the demo account holds a single benign
+# IAM user (catalog-evidence-ro) — no person-named resource lands in the
+# committed public evidence — while still yielding the aws:account / aws:arn
+# subject families.
+recording:
+  tool: steampipe
+  version: "v2.4.2"
+  binary_sha256: "2fdeb5908cb3a6b3fb45ce602230e613d50be5b169063d52c0c7b3fb7ec241bf"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["sh", "-c", "steampipe query \"select account_id, arn, name from aws_iam_user order by name\" --output json > steampipe-output.json"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/steampipe/v0.1
+  run_type: postproduct
+  # collectedAt / results[].ranAt are wall-clock stamps set at attest time
+  # (time.Now()), so they differ between the real recorded run and the hermetic
+  # replay. Redact them so the recorded-evidence cross-check compares the
+  # deterministic content (sql, frontmatter, rows, resultHash).
+  redact:
+    - predicate.collectedAt
+    - predicate.results.[].ranAt
+  subjects:
+    match: prefix
+    keys:
+      - "aws:account:"
+      - "aws:arn:"

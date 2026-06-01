@@ -1,0 +1,34 @@
+schema_version: "0.1"
+attestor: git
+description: >-
+  A REAL single-commit git repository captured as the working-dir input. The
+  committed dot-git/ tree is an actual `git init` + one `git commit` (no remote,
+  no parent), stored under dot-git/ because git refuses to track a nested .git/;
+  the testkit workdir materializer renames dot-git/ -> .git/ when it stages the
+  tree. Proves the git attestor's prematerial contract against a real repo, not
+  a hand-authored sample. See record.sh for how it was produced.
+setup:
+  mode: workdir
+  # Every file of the recorded repo, materialized at its subpath (the
+  # materializeWorkdir subpath fix). dot-git/ becomes .git/ on materialize.
+  workdir:
+    - dot-git/HEAD
+    - dot-git/config
+    - dot-git/index
+    - dot-git/refs/heads/main
+    - dot-git/objects/04/1a7e649121fe0f6e99da05c573bb9512b4980c
+    - dot-git/objects/21/92e9d89cbff605d1c2c01481e55ba5dafd538d
+    - dot-git/objects/28/448a75c69ba08971443b819d740887eb3af166
+    - README.md
+expect:
+  predicate_type: https://aflock.ai/attestations/git/v0.1
+  run_type: prematerial
+  subjects:
+    match: prefix
+    keys:
+      # HEAD commit SHA-1 (041a7e6...) — the strongest anchor: it changes if any
+      # committed object byte changes.
+      - "commithash:041a7e649121fe0f6e99da05c573bb9512b4980c"
+      - "authoremail:catalog-test@aflock.ai"
+      - "committeremail:catalog-test@aflock.ai"
+      - "refnameshort:main"

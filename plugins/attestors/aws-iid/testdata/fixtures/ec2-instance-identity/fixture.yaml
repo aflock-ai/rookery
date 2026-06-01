@@ -1,0 +1,34 @@
+schema_version: "0.1"
+attestor: aws
+description: >-
+  A REAL EC2 instance identity, captured from a live node (instance
+  i-0fafd8cc5598d3834 in the testifysec demo account 898769392027, us-east-1).
+  The committed instance-identity-document.json and instance-identity-signature
+  are the EXACT raw bytes the EC2 IMDS returned — the document AWS's regional CA
+  signed, plus its PKCS#1 RSA signature. The testkit http-mock driver replays
+  them from an httptest server (via AWS_EC2_METADATA_SERVICE_ENDPOINT) so the
+  attestor's REAL signature verification (rsa.VerifyPKCS1v15 against the embedded
+  us-east-1 AWS CA cert) runs against real evidence, hermetically. A single
+  corrupted document byte breaks that verification — the strongest possible
+  anchor. Topology is PUBLIC-OK (demo account, no secrets). See record.sh.
+setup:
+  mode: http-mock
+  # AWS_REGION pins the regional CA cert the attestor verifies against; the
+  # captured document is also region us-east-1, so verification would fall back
+  # to it anyway, but pinning keeps the run deterministic and region-explicit.
+  env:
+    AWS_REGION: us-east-1
+  # Paths (relative to this fixture dir) to the committed recorded IMDS bytes.
+  options:
+    imds_document: instance-identity-document.json
+    imds_signature: instance-identity-signature
+expect:
+  predicate_type: https://aflock.ai/attestations/aws/v0.1
+  run_type: prematerial
+  subjects:
+    match: prefix
+    keys:
+      - "instanceid:i-0fafd8cc5598d3834"
+      - "accountid:898769392027"
+      - "imageid:ami-0a23644f1ead7eb05"
+      - "privateip:10.0.58.222"

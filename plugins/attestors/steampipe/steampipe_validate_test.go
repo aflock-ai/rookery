@@ -170,7 +170,7 @@ func TestValidateAgainstRealOutput(t *testing.T) {
 	// --- BackRefs: NONE expected ---
 	// Steampipe is a state-reporting attestor (same class as prowler,
 	// aws-config, asff, sarif, sbom, docker-bench, kube-bench, oscap,
-	// nessus, inspec — every one of which implements Subjecter but NOT
+	// inspec — every one of which implements Subjecter but NOT
 	// BackReffer). BackReffer is exclusively for CI/build-context
 	// attestors (git, github, gitlab, jenkins, githubwebhook,
 	// aws-codebuild). If a future change accidentally re-introduces

@@ -5,9 +5,7 @@ sidebar_position: 5
 examples_repo: multi-step-attestationsFrom
 ---
 
-Emits a signed inclusion proof binding a single file's digest to a Merkle tree's root. Generated on demand by [`cilock prove`](../guides/prove-files-in-a-build) against a producer-side tree sidecar.
-
-Since the v0.3 [product](./product)/material attestors **inline their Merkle leaves by default**, a verifier can already resolve a file digest to the signed root with no extra envelope — `cilock verify <artifact> -p policy` just works. Inclusion-proof attestations are the explicit per-file primitive for the two cases where inline leaves aren't present: **selective disclosure** (publish a proof for one file without shipping the whole leaf set) and **suppressed inline leaves** (`WithSuppressInlineLeaves`, used for very large trees). The verification mechanics below apply whenever a proof *is* used.
+Emits a signed inclusion proof binding a single file's digest to a Merkle tree's root. Generated on demand by [`cilock prove`](../guides/prove-files-in-a-build) against a producer-side tree sidecar; consumed by `cilock verify` when a downstream verifier needs to confirm a per-file claim against a v0.3 [product](./product) or material attestation.
 
 ## What it captures
 
@@ -40,7 +38,7 @@ The subject being the file digest is what makes the inclusion-proof attestation 
 
 ## When to use
 
-Most builds don't need this — the inline leaves on the product/material attestation already cover per-file verification. Reach for `cilock prove` when you want **selective disclosure** (hand someone a proof for one release binary without the full leaf set) or when you've **suppressed inline leaves** for envelope size. In those cases, after `cilock run` has produced a v0.3 product (or material) attestation and the matching `` `<outfile>.product.tree.json` `` (or `.material.tree.json`) sidecar, run `cilock prove` against the sidecar for each file a consumer might verify by digest (release binaries, container images, SBOMs). See [prove files in a build](../guides/prove-files-in-a-build).
+After `cilock run` has produced a v0.3 product (or material) attestation and the matching `` `<outfile>.product.tree.json` `` (or `.material.tree.json`) sidecar, run `cilock prove` against the sidecar for any file a downstream consumer might need to verify. Typically that means release binaries, container images, public-API entry points, and SBOMs — anything someone might verify by digest. Skip intermediate build files (`node_modules` contents, object files, build temp). See [prove files in a build](../guides/prove-files-in-a-build).
 
 ## Flags
 

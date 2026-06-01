@@ -1,0 +1,46 @@
+{
+  "buildx.build.provenance": {
+    "builder": {
+      "id": ""
+    },
+    "buildType": "https://mobyproject.org/buildkit@v1",
+    "materials": [
+      {
+        "uri": "pkg:docker/alpine?digest=sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc\u0026platform=linux%2Farm64",
+        "digest": {
+          "sha256": "d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+        }
+      }
+    ],
+    "invocation": {
+      "configSource": {
+        "entryPoint": "Dockerfile"
+      },
+      "parameters": {
+        "frontend": "dockerfile.v0",
+        "locals": [
+          {
+            "name": "context"
+          },
+          {
+            "name": "dockerfile"
+          }
+        ]
+      },
+      "environment": {
+        "platform": "linux/arm64"
+      }
+    }
+  },
+  "buildx.build.ref": "multiarch/multiarch0/u79e6nqpt25mmd2ok00b5hkx9",
+  "containerimage.descriptor": {
+    "mediaType": "application/vnd.oci.image.index.v1+json",
+    "digest": "sha256:8874845b27e4f941b0646f608df8429cc144b45881995e782ec910f9603f0041",
+    "size": 855,
+    "annotations": {
+      "org.opencontainers.image.created": "2026-05-29T09:33:19Z"
+    }
+  },
+  "containerimage.digest": "sha256:8874845b27e4f941b0646f608df8429cc144b45881995e782ec910f9603f0041",
+  "image.name": "docker.io/library/dbx-fixture:test"
+}

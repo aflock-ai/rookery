@@ -1,7 +1,10 @@
-.PHONY: build test test-race test-coverage tidy verify-isolated lint lint-fix vet vulncheck deadcode docs help bpf-lint
+.PHONY: build test test-race test-coverage tidy verify-isolated lint lint-fix vet vulncheck deadcode docs catalog-verify catalog-verify-live catalog-record help bpf-lint bpf-build
 
 # Workspace members (parsed from go.work, excluding comments)
 MODULES = $(shell grep '^\s*\./' go.work | sed 's/^[[:space:]]*//' | sed 's|^\.\/||')
+
+# Directory holding the generated, CI-verified eBPF object + its Makefile.
+BPF_DIR = plugins/attestors/commandrun/ebpf/bpf
 
 # ── Build ────────────────────────────────────────────────────────────
 build: ## Build all modules in workspace
@@ -30,6 +33,9 @@ vet: ## Run go vet on all modules
 bpf-lint: ## Compile-lint the eBPF object source (clang -Wall -Werror); needs clang+bpftool+BTF
 	@./scripts/bpf-lint.sh
 
+bpf-build: ## Regenerate the committed canonical eBPF object (pinned arch); CI byte-verifies this
+	@$(MAKE) -C $(BPF_DIR) bpf-build
+
 vulncheck: ## Run govulncheck for known vulnerabilities
 	@for dir in $(MODULES); do echo "checking $$dir..."; (cd $$dir && govulncheck ./...); done
 
@@ -53,6 +59,25 @@ verify-isolated: ## Verify each module builds outside workspace
 # ── Docs ─────────────────────────────────────────────────────────────
 docs: ## Regenerate docs from source (currently: attestor-catalog.md)
 	@./scripts/gen-attestor-catalog.sh
+
+# ── Catalog verification ─────────────────────────────────────────────
+catalog-verify: ## Verify the attestor catalog: contracts parse + fixtures match real-run evidence
+	@echo "verifying catalog contracts..."
+	@(cd attestation && go test -count=1 -run 'Contract|EmbeddedCatalog' ./detection/) || exit 1
+	@echo "verifying catalog fixtures (all contracted attestors)..."
+	@echo "  (unfiltered ./catalogtest/ also runs TestFixturesNoSecrets — the public-sync secret-scan gate)"
+	@(cd presets/all && go test -count=1 ./catalogtest/) || exit 1
+	@echo "catalog verified."
+
+catalog-verify-live: ## Re-run the REAL tools and verify the contract holds against fresh output (the un-forgeable anchor). Needs the tools installed (syft, govulncheck, gosec, trivy) + network.
+	@echo "live-verifying catalog contracts against freshly-run real tools..."
+	@(cd presets/all && go test -count=1 -tags live -run TestCatalogLiveReverify ./catalogtest/ -catalog.live.strict) || exit 1
+	@echo "catalog live-verified."
+
+catalog-record: ## Re-record a fixture from a REAL tool run. Usage: make catalog-record FIXTURE=plugins/attestors/<name>/testdata/fixtures/<case>
+	@test -n "$(FIXTURE)" || { echo "set FIXTURE=<path to fixture dir containing record.sh>"; exit 1; }
+	@test -x "$(FIXTURE)/record.sh" || { echo "no executable $(FIXTURE)/record.sh"; exit 1; }
+	@"$(FIXTURE)/record.sh"
 
 # ── Help ─────────────────────────────────────────────────────────────
 help: ## Show this help

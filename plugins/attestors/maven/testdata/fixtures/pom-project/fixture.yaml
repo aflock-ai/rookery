@@ -1,0 +1,31 @@
+schema_version: "0.1"
+attestor: maven
+description: "maven attestation of a REAL Maven project scaffolded by `mvn archetype:generate` (maven-archetype-quickstart 1.4) — RECORDED FROM A REAL `mvn -q -B validate` run under cilock. The maven attestor is PREMATERIAL: it parses pom.xml directly from the working dir (os.Open(\"pom.xml\")), so it does NOT consume the mvn command's output — it captures the pom.xml that the recorded `mvn validate` run validated. Proves BOTH the project: subject (POM coordinates) and a dependency: subject (the junit test dependency the archetype declared)."
+setup:
+  mode: workdir          # PreMaterial attestor that opens pom.xml relative to "." (the process CWD).
+  input: pom.xml         # the archetype-generated pom.xml; testkit materializes it into the workdir and chdirs in
+  # No mime_type: workdir mode materializes a file tree and chdirs — it does not
+  # inject a Product, so dispatch is by os.Open("pom.xml"), not by MIME.
+recording:
+  tool: mvn
+  version: "3.9.16"
+  binary_sha256: "840832118022e6adc8d87150debb16cef405710799925d527b9adcd70a33ffa1"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock collection (the evidence)
+  # The recorded command-run argv. `mvn -q -B validate` is a genuine Maven run
+  # against the project (quiet + batch keep paths/prompts out of captured stderr);
+  # the maven attestor parses pom.xml from the same working dir during the run.
+  argv: ["mvn", "-q", "-B", "validate"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/maven/v0.1
+  run_type: prematerial
+  subjects:
+    match: prefix
+    keys:
+      - "project:"      # project:com.example.demo/trivial-app@1.0.0 (POM coordinates)
+      - "dependency:"   # dependency:junit/junit@4.11 (declared test dependency)
+  # No redact: the maven predicate is a deterministic parse of pom.xml fields
+  # (groupId/artifactId/version/name/dependencies) — no timestamps, hostnames,
+  # tool versions, or paths are embedded, so the recorded predicate equals the
+  # hermetic replay byte-for-byte.

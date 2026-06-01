@@ -25,3 +25,32 @@ post:
 
 llm_hints:
   on_match: "kube-bench results captured. CIS benchmark checks preserved."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/kube-bench/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: >-
+      Summary counts and FailedChecks/WarnedChecks are deterministically derived
+      from the kube-bench JSON report in deterministic iteration order; no
+      timestamps are stored. node_hostname (os.Hostname) and cluster_name
+      (KUBE_BENCH_CLUSTER_NAME env) are environment-specific and shift the node:
+      and cluster: subjects across hosts/runs. ReportFile records the product
+      path (the attestation-context product map key). The attestor does not run
+      kube-bench; it parses a pre-existing report from the attestation-context
+      products.
+    volatile_fields: ["report_file", "node_hostname", "cluster_name", "report_digest_set"]
+  subjects:
+    - prefix: "benchmark:"
+      description: "CIS Kubernetes Benchmark identity (e.g. benchmark:cis-kubernetes or benchmark:cis-kubernetes-<version>); always emitted"
+    - prefix: "cluster:"
+      description: "target cluster name from KUBE_BENCH_CLUSTER_NAME; emitted only when set"
+    - prefix: "node:"
+      description: "hostname of the node that was scanned (os.Hostname); emitted only when non-empty"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: eks-node-scan
+      role: canonical

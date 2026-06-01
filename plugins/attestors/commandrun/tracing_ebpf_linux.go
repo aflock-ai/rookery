@@ -1724,19 +1724,3 @@ func (w *watchedSet) addAndReturnNew(pid, ppid uint32) bool {
 func openEBPFConsumer() (*ebpf.Consumer, error) {
 	return ebpf.Open()
 }
-
-// envInt is a small helper so callers can override hash worker count
-// without re-running go build.
-//
-//nolint:unused // reserved for future tunable
-func envInt(key string, def int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	var n int
-	if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n < 1 {
-		return def
-	}
-	return n
-}

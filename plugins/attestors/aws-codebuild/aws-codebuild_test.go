@@ -111,6 +111,44 @@ func TestAttest(t *testing.T) {
 	})
 }
 
+func TestProjectNameFromARN(t *testing.T) {
+	cases := []struct {
+		name string
+		arn  string
+		want string
+	}{
+		{"real codebuild arn", "arn:aws:codebuild:us-east-1:898769392027:project/my-project", "my-project"},
+		{"name with dashes", "arn:aws:codebuild:us-east-1:123456789012:project/cilock-aws-codebuild-fixture", "cilock-aws-codebuild-fixture"},
+		{"empty", "", ""},
+		{"not an arn", "garbage", ""},
+		{"build arn (no project segment)", "arn:aws:codebuild:us-east-1:123:build/p:bid", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, projectNameFromARN(tc.arn))
+		})
+	}
+}
+
+// TestAttestProjectNameFromARN proves the codebuild-project subject is emitted
+// from real CodeBuild evidence. AWS CodeBuild does NOT export
+// CODEBUILD_PROJECT_NAME (only CODEBUILD_PROJECT_ARN); without the ARN fallback
+// the project subject would never fire on a genuine build.
+func TestAttestProjectNameFromARN(t *testing.T) {
+	t.Setenv(envCodeBuildBuildID, "cilock-aws-codebuild-fixture:263b0282")
+	t.Setenv(envCodeBuildProjectARN, "arn:aws:codebuild:us-east-1:898769392027:project/cilock-aws-codebuild-fixture")
+	// Explicitly ensure CODEBUILD_PROJECT_NAME is unset, mirroring the real env.
+	t.Setenv(envCodeBuildProjectName, "")
+
+	attestor := New()
+	ctx, err := attestation.NewContext("test", []attestation.Attestor{attestor})
+	require.NoError(t, err)
+	require.NoError(t, attestor.Attest(ctx))
+
+	assert.Equal(t, "cilock-aws-codebuild-fixture", attestor.BuildInfo.ProjectName)
+	assert.Contains(t, attestor.Subjects(), "codebuild-project:cilock-aws-codebuild-fixture")
+}
+
 func TestSubjects(t *testing.T) {
 	// Set mock data
 	attestor := New()

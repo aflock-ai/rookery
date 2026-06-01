@@ -37,3 +37,37 @@ post:
 
 llm_hints:
   on_match: "SBOM captured (SPDX or CycloneDX). Components, licenses, and supplier metadata preserved."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/sbom/v0.1
+  predicate_types:
+    - https://aflock.ai/attestations/sbom/v0.1
+    - https://spdx.dev/Document
+    - https://cyclonedx.org/bom
+  run_type: postproduct
+  stability:
+    level: versioned-schema
+    notes: "The attestor stores the source SPDX-JSON or CycloneDX-JSON document as json.RawMessage and adds no fields of its own except a deterministic `_sbomFormat` discriminator (\"spdx\"/\"cyclonedx\") injected by MarshalJSON; it does not generate the SBOM. When the discriminator is added the predicate is re-marshalled through a map (deterministic, alphabetized keys) rather than byte-identical to the input, so output structure — not input bytes — is what's stable, governed by the source document's versioned schema (SPDX 2.x / CycloneDX 1.x). Volatile fields live in the wrapped SBOM body produced by the upstream generator (creation timestamps, component ordering), not in attestor-added data."
+    volatile_fields:
+      - "creationInfo.created"
+      - "metadata.timestamp"
+  exports: false
+  export_configurable: true
+  subjects:
+    - prefix: "file:"
+      description: "the SBOM file path (from the product set, or the --attestor-sbom-file path)"
+      digest_algs: ["sha256"]
+    - prefix: "name:"
+      description: "the document/component name (SPDX documentName or CycloneDX metadata.component.name)"
+      digest_algs: ["sha256"]
+    - prefix: "version:"
+      description: "the CycloneDX metadata.component.version, when present"
+      digest_algs: ["sha256"]
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: cyclonedx
+      role: canonical
+    - name: spdx
+      role: variant   # proves the multi-type contract's SPDX predicate path

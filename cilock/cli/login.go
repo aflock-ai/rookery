@@ -18,18 +18,26 @@ import (
 // LoginCmd signs in to a TestifySec platform and stores a session credential.
 func LoginCmd() *cobra.Command {
 	var platformURL, token, tenant, product string
+	var interactive, workflowIdentity bool
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Sign in to the TestifySec platform and store a session credential",
-		Long: "Sign in to the TestifySec platform via an interactive browser flow and store a\n" +
-			"session token locally, so subsequent cilock platform calls (attestation storage,\n" +
-			"signing-token exchange) are authenticated. login establishes identity only; choose\n" +
-			"the working tenant/product separately with `cilock use` or per-command flags.\n" +
-			"Use --token for CI/headless logins. --tenant/--product pre-fill the approve page.",
+		Long: "Sign in to the TestifySec platform and store a session credential, so subsequent\n" +
+			"cilock platform calls (attestation storage, signing-token exchange) are\n" +
+			"authenticated. login establishes identity only; choose the working tenant/product\n" +
+			"separately with `cilock use` or per-command flags.\n\n" +
+			"Identity is resolved by precedence:\n" +
+			"  1. --token            an explicit JWT (CI/headless; '-' reads from stdin)\n" +
+			"  2. workflow identity  ambient CI OIDC (GitHub Actions) — auto-detected on the\n" +
+			"                        default platform; no browser, no stored secret. cilock run\n" +
+			"                        mints a fresh OIDC token per call.\n" +
+			"  3. browser            interactive loopback login (default for local use)\n\n" +
+			"--interactive forces the browser. --workflow-identity forces ambient OIDC (and is\n" +
+			"required to send a workflow token to a non-default --platform-url).",
 		Example: "  # Interactive browser login to the default TestifySec platform\n" +
 			"  cilock login\n\n" +
-			"  # Log in to a specific TestifySec platform, pre-selecting a tenant\n" +
-			"  cilock login --platform-url https://platform.example.com --tenant acme\n\n" +
+			"  # CI on GitHub Actions: use the ambient workflow identity (auto-detected)\n" +
+			"  cilock login   # with `permissions: id-token: write`\n\n" +
 			"  # CI/headless: provide a JWT directly (or '-' to read from stdin)\n" +
 			"  cilock login --platform-url https://platform.example.com --token $TESTIFYSEC_TOKEN",
 		Args:          cobra.NoArgs,
@@ -40,17 +48,21 @@ func LoginCmd() *cobra.Command {
 			if url == "" {
 				url = config.DefaultPlatformURL
 			}
-			cred, err := resolveLoginCredential(cmd, url, token, tenant, product)
+			cred, err := resolveLoginCredential(cmd, url, token, tenant, product, interactive, workflowIdentity)
 			if err != nil {
 				return err
 			}
 			if err := auth.Save(*cred); err != nil {
 				return err
 			}
-			if cred.TenantName != "" {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ logged in to %s (tenant: %s)\n", auth.NormalizeURL(url), cred.TenantName)
-			} else {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ logged in to %s\n", auth.NormalizeURL(url))
+			out := cmd.OutOrStdout()
+			switch {
+			case cred.AuthMode == auth.AuthModeWorkflowOIDC:
+				_, _ = fmt.Fprintf(out, "✓ workflow identity active for %s (GitHub Actions OIDC; cilock run mints a token per call)\n", auth.NormalizeURL(url))
+			case cred.TenantName != "":
+				_, _ = fmt.Fprintf(out, "✓ logged in to %s (tenant: %s)\n", auth.NormalizeURL(url), cred.TenantName)
+			default:
+				_, _ = fmt.Fprintf(out, "✓ logged in to %s\n", auth.NormalizeURL(url))
 			}
 			return nil
 		},
@@ -59,20 +71,75 @@ func LoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&token, "token", "", "JWT for CI/headless login (skips the browser); '-' reads it from stdin")
 	cmd.Flags().StringVar(&tenant, "tenant", "", "Tenant id or name to pre-select on the approve page")
 	cmd.Flags().StringVar(&product, "product", "", "Product id or name to pre-select on the approve page")
+	cmd.Flags().BoolVar(&interactive, "interactive", false, "Force the interactive browser login (skip ambient CI workflow identity)")
+	cmd.Flags().BoolVar(&workflowIdentity, "workflow-identity", false, "Use the ambient CI workflow OIDC identity (auto-detected on the default platform; required to send a workflow token to a non-default --platform-url)")
 	return cmd
 }
 
-// resolveLoginCredential obtains a session credential either from a directly
-// supplied --token (or '-' to read it from stdin) or, when no token is given,
-// via the interactive browser login flow.
-func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product string) (*auth.Credential, error) {
-	if token == "" {
+// loginTier is the resolved login method (see decideLoginTier).
+type loginTier int
+
+const (
+	tierToken loginTier = iota
+	tierWorkflow
+	tierBrowser
+)
+
+// decideLoginTier resolves the login precedence — a pure function so the
+// precedence and its security gates are unit-testable without I/O:
+//
+//  1. explicit --token            (highest)
+//  2. ambient workflow OIDC       (auto only on the compiled-in default platform;
+//     a non-default --platform-url requires an explicit
+//     --workflow-identity opt-in)
+//  3. interactive browser         (default for local use)
+//
+// Security gates: ambient auto-fire is limited to the default platform so a
+// hostile --platform-url cannot harvest a replayable workflow token. A request
+// that cannot be satisfied (--workflow-identity with no ambient identity, or
+// ambient present against a non-default platform without opt-in) is a hard
+// error — never a silent browser fallback, which in CI just hangs until timeout.
+func decideLoginTier(token string, interactive, workflowIdentity, ambientAvailable bool, url, defaultURL string) (loginTier, error) {
+	if token != "" {
+		return tierToken, nil
+	}
+	if interactive {
+		return tierBrowser, nil
+	}
+	if ambientAvailable {
+		if url == defaultURL || workflowIdentity {
+			return tierWorkflow, nil
+		}
+		return tierBrowser, fmt.Errorf("ambient workflow OIDC identity detected but --platform-url %q is not the default (%s); pass --workflow-identity to send a workflow-identity token to it, or use --token / --interactive", url, defaultURL)
+	}
+	if workflowIdentity {
+		return tierBrowser, fmt.Errorf("--workflow-identity requested but no ambient OIDC identity is present (need ACTIONS_ID_TOKEN_REQUEST_URL and `permissions: id-token: write`)")
+	}
+	return tierBrowser, nil
+}
+
+// resolveLoginCredential obtains a session credential per decideLoginTier.
+func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product string, interactive, workflowIdentity bool) (*auth.Credential, error) {
+	tier, err := decideLoginTier(token, interactive, workflowIdentity, auth.WorkflowOIDCAvailable(), url, config.DefaultPlatformURL)
+	if err != nil {
+		return nil, err
+	}
+	switch tier {
+	case tierToken:
+		return tokenCredential(cmd, url, token)
+	case tierWorkflow:
+		return auth.AmbientWorkflowLogin(url, config.Derive(url).OIDCLoginAudience)
+	default: // tierBrowser
 		return auth.BrowserLogin(url, auth.LoginParams{
 			Tenant:  tenant,
 			Product: product,
 			Purpose: "cilock CLI",
 		})
 	}
+}
+
+// tokenCredential builds a credential from an explicit --token (or stdin).
+func tokenCredential(cmd *cobra.Command, url, token string) (*auth.Credential, error) {
 	t := token
 	if t == "-" {
 		data, err := io.ReadAll(cmd.InOrStdin())
@@ -83,7 +150,7 @@ func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product stri
 	} else {
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: a token passed via --token may be recorded in shell history; prefer '-' (stdin).")
 	}
-	cred := &auth.Credential{PlatformURL: url, Token: strings.TrimSpace(t)}
+	cred := &auth.Credential{PlatformURL: url, Token: strings.TrimSpace(t), AuthMode: auth.AuthModeToken}
 	if cred.Token == "" {
 		return nil, fmt.Errorf("empty token")
 	}
@@ -134,7 +201,7 @@ func WhoamiCmd() *cobra.Command {
 			if url == "" {
 				url = config.DefaultPlatformURL
 			}
-			cred, err := auth.Lookup(url)
+			cred, err := auth.LookupAny(url)
 			if err != nil {
 				return err
 			}
@@ -144,6 +211,9 @@ func WhoamiCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			_, _ = fmt.Fprintf(out, "platform: %s\n", cred.PlatformURL)
+			if cred.AuthMode == auth.AuthModeWorkflowOIDC {
+				_, _ = fmt.Fprintf(out, "auth:     workflow identity (GitHub Actions OIDC)\n")
+			}
 			if cred.TenantName != "" || cred.TenantID != "" {
 				_, _ = fmt.Fprintf(out, "tenant:   %s %s\n", cred.TenantName, cred.TenantID)
 			}

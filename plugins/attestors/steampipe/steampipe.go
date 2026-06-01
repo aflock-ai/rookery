@@ -30,6 +30,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/invopop/jsonschema"
 )
 
@@ -40,11 +41,19 @@ const (
 	Name    = "steampipe"
 	Type    = "https://aflock.ai/attestations/steampipe/v0.1"
 	RunType = attestation.PostProductRunType
+
+	// defaultExport mirrors sbom/slsa/link: the predicate EMBEDS in the signed
+	// collection by default (Export() == false). Set --attestor-steampipe-export
+	// to self-export it into a sidecar instead. The old code hardcoded
+	// Export()==true, which stripped the predicate out of attestation.json and
+	// left the steampipe evidence unrecordable/unverifiable by the catalog
+	// harness (unlike trivy, whose predicate always embeds).
+	defaultExport = false
 )
 
 // steampipe is a state-reporting attestor (same class as prowler,
 // aws-config, asff, sarif, sbom, docker-bench, kube-bench, oscap,
-// nessus, inspec — every one of which implements Subjecter but NOT
+// inspec — every one of which implements Subjecter but NOT
 // BackReffer). The BackReffer interface is reserved for CI/build-context
 // attestors (git, github, gitlab, jenkins, githubwebhook, aws-codebuild)
 // that have a workflow-run identity to anchor downstream verdicts on.
@@ -59,9 +68,75 @@ var (
 )
 
 func init() {
-	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
-		return New()
-	})
+	attestation.RegisterAttestation(Name, Type, RunType,
+		func() attestation.Attestor { return New() },
+		// --attestor-steampipe-export: opt in to self-exporting the predicate
+		// into its own sidecar attestation. Defaults false so the predicate
+		// EMBEDS in the signed collection (recordable/verifiable like trivy).
+		// Same registration shape as the sbom attestor's export flag.
+		registry.BoolConfigOption(
+			"export",
+			"Export the steampipe predicate in its own attestation (default: embed in the collection)",
+			defaultExport,
+			func(a attestation.Attestor, export bool) (attestation.Attestor, error) {
+				sp, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("unexpected attestor type: %T is not a steampipe attestor", a)
+				}
+				WithExport(export)(sp)
+				return sp, nil
+			},
+		),
+		// --attestor-steampipe-plugin: the Steampipe plugin name (aws, github,
+		// okta, googledirectory, …). This is the routing key the subject
+		// convention reads — without it a plain `cilock run --attestations
+		// steampipe` emits ZERO subjects because extract() has no convention to
+		// apply. The recipe driver sets the same field via WithFrontmatter.
+		registry.StringConfigOption(
+			"plugin",
+			"Steampipe plugin name driving the subject convention (e.g. aws, github, okta, googledirectory)",
+			"",
+			func(a attestation.Attestor, plugin string) (attestation.Attestor, error) {
+				sp, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("unexpected attestor type: %T is not a steampipe attestor", a)
+				}
+				WithPlugin(plugin)(sp)
+				return sp, nil
+			},
+		),
+		// --attestor-steampipe-sql: the literal SQL the run executed; surfaced
+		// verbatim in the predicate's `sql` field for auditor review.
+		registry.StringConfigOption(
+			"sql",
+			"Literal SQL the steampipe query ran (recorded verbatim in the predicate for auditor review)",
+			"",
+			func(a attestation.Attestor, sql string) (attestation.Attestor, error) {
+				sp, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("unexpected attestor type: %T is not a steampipe attestor", a)
+				}
+				WithSQL(sql)(sp)
+				return sp, nil
+			},
+		),
+		// --attestor-steampipe-id: the recipe/query id used to route the
+		// envelope (Frontmatter.ID). Falls back to the steampipe output's
+		// intrinsic id when unset.
+		registry.StringConfigOption(
+			"id",
+			"Query/recipe id stamped onto the predicate frontmatter for routing",
+			"",
+			func(a attestation.Attestor, id string) (attestation.Attestor, error) {
+				sp, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("unexpected attestor type: %T is not a steampipe attestor", a)
+				}
+				WithID(id)(sp)
+				return sp, nil
+			},
+		),
+	)
 	detection.Register(Name, detectorYAML)
 }
 
@@ -122,6 +197,11 @@ type Attestor struct {
 	frontmatter QueryFrontmatter
 	sql         string
 
+	// export controls whether the predicate self-exports into its own sidecar
+	// attestation (true) or embeds in the signed collection (false, default).
+	// Driven by --attestor-steampipe-export. See defaultExport.
+	export bool
+
 	subjects  map[string]cryptoutil.DigestSet
 	materials map[string]cryptoutil.DigestSet
 }
@@ -131,6 +211,7 @@ func New() *Attestor {
 		subjects:        map[string]cryptoutil.DigestSet{},
 		materials:       map[string]cryptoutil.DigestSet{},
 		maxRowsPerQuery: 500,
+		export:          defaultExport,
 	}
 }
 
@@ -138,7 +219,13 @@ func (a *Attestor) Name() string                 { return Name }
 func (a *Attestor) Type() string                 { return Type }
 func (a *Attestor) RunType() attestation.RunType { return RunType }
 func (a *Attestor) Schema() *jsonschema.Schema   { return jsonschema.Reflect(&a) }
-func (a *Attestor) Export() bool                 { return true }
+
+// Export reports whether the predicate self-exports into its own sidecar
+// attestation. Defaults false (embed in the signed collection) — opt in via
+// --attestor-steampipe-export. Mirrors sbom/slsa/link; the old hardcoded
+// `return true` stripped the predicate out of the collection and broke catalog
+// recording/verification.
+func (a *Attestor) Export() bool { return a.export }
 
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet  { return a.subjects }
 func (a *Attestor) Materials() map[string]cryptoutil.DigestSet { return a.materials }
@@ -330,6 +417,33 @@ func parseSteampipeOutput(body []byte) (parsedQuery, bool) {
 func WithQueryPackPath(p string) func(*Attestor) { return func(a *Attestor) { a.queryPackPath = p } }
 func WithMaxRowsPerQuery(n int) func(*Attestor)  { return func(a *Attestor) { a.maxRowsPerQuery = n } }
 
+// WithExport sets whether the predicate self-exports to a sidecar (true) or
+// embeds in the signed collection (false). Wired to --attestor-steampipe-export.
+func WithExport(export bool) func(*Attestor) { return func(a *Attestor) { a.export = export } }
+
+// WithPlugin sets the Steampipe plugin name (the subject-convention routing
+// key) on the frontmatter. Wired to --attestor-steampipe-plugin so a plain CLI
+// run can produce convention-keyed subjects without the recipe driver. Empty
+// is a no-op so applying the option default does not clobber a frontmatter the
+// recipe driver already set via WithFrontmatter.
+func WithPlugin(plugin string) func(*Attestor) {
+	return func(a *Attestor) {
+		if plugin != "" {
+			a.frontmatter.Plugin = plugin
+		}
+	}
+}
+
+// WithID sets the query/recipe id on the frontmatter. Wired to
+// --attestor-steampipe-id. Empty is a no-op (see WithPlugin).
+func WithID(id string) func(*Attestor) {
+	return func(a *Attestor) {
+		if id != "" {
+			a.frontmatter.ID = id
+		}
+	}
+}
+
 // WithFrontmatter is called by the recipe driver (cilock) after it parses
 // the .sql comment block. The frontmatter rides the resulting predicate
 // so the Phase 4 scanKSIProjection workflow can route the envelope to the
@@ -339,5 +453,12 @@ func WithFrontmatter(fm QueryFrontmatter) func(*Attestor) {
 }
 
 // WithSQL records the literal SQL the recipe ran. Optional but useful for
-// auditor review — the predicate's `sql` field surfaces it verbatim.
-func WithSQL(sql string) func(*Attestor) { return func(a *Attestor) { a.sql = sql } }
+// auditor review — the predicate's `sql` field surfaces it verbatim. Empty is
+// a no-op so applying the option default does not clobber a recipe-set SQL.
+func WithSQL(sql string) func(*Attestor) {
+	return func(a *Attestor) {
+		if sql != "" {
+			a.sql = sql
+		}
+	}
+}

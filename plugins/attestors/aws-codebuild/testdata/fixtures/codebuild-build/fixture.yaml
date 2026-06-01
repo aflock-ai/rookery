@@ -1,0 +1,67 @@
+schema_version: "0.1"
+attestor: aws-codebuild
+description: >-
+  A REAL AWS CodeBuild run, captured from a live build in the testifysec demo
+  account (898769392027, us-east-1). The env block holds the EXACT CODEBUILD_*
+  variables the attestor reads, copied verbatim from the recorded build
+  (build e8b360eb-23a0-47fc-b916-cab7f2135f89). aws-codebuild is PreMaterial: it
+  reads only env (no OIDC, no JWT) and, when AWS creds are ambient, makes a
+  best-effort BatchGetBuilds API call. This run carried no usable creds for that
+  call, so the predicate is env-only and deterministic — the testkit env-mode
+  driver sets these vars and re-runs the attestor, reproducing the recorded
+  predicate, then cross-checks it against attestation.json (the real signed
+  cilock collection). CODEBUILD_INITIATOR is the only field replaced: the live
+  build's initiator was a person SSO identity, so the committed env uses a
+  benign value and build_info.initiator is redacted from the cross-check (both
+  sides nilled, so the comparison still proves every other field byte-for-byte).
+  Topology is PUBLIC-OK (demo account, public octocat/Hello-World source, no
+  secrets). See record.sh for the CodeBuild capture recipe.
+setup:
+  mode: env
+  # EXACTLY the CODEBUILD_* vars the aws-codebuild attestor reads, verbatim from
+  # the recorded build. AWS CodeBuild does NOT export CODEBUILD_PROJECT_NAME; it
+  # exports CODEBUILD_PROJECT_ARN, from which the attestor derives the
+  # codebuild-project subject. AWS_REGION reproduces build_info.region. These are
+  # deterministic for that build, so the replay regenerates the recorded
+  # predicate (modulo the redacted initiator).
+  env:
+    CODEBUILD_BUILD_ID: "catalog-codebuild-fixture:e8b360eb-23a0-47fc-b916-cab7f2135f89"
+    CODEBUILD_BUILD_ARN: "arn:aws:codebuild:us-east-1:898769392027:build/catalog-codebuild-fixture:e8b360eb-23a0-47fc-b916-cab7f2135f89"
+    CODEBUILD_BUILD_NUMBER: "3"
+    # Benign stand-in for the live SSO initiator (a person identity); the real
+    # value is in attestation.json and build_info.initiator is redacted below.
+    CODEBUILD_INITIATOR: "catalog-fixture"
+    CODEBUILD_PROJECT_ARN: "arn:aws:codebuild:us-east-1:898769392027:project/catalog-codebuild-fixture"
+    CODEBUILD_RESOLVED_SOURCE_VERSION: "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d"
+    CODEBUILD_SOURCE_REPO_URL: "https://github.com/octocat/Hello-World.git"
+    AWS_REGION: "us-east-1"
+# Provenance of the real run that produced this fixture. Re-record with
+# ./record.sh (stands up a CodeBuild project in the demo account and runs cilock
+# against the aws-codebuild attestor again). The version + binary digest are the
+# staleness signal: when cilock or the attestor changes, re-record and the diff
+# shows what moved.
+recording:
+  tool: cilock
+  version: "dev"
+  binary_sha256: "dd0cf43e4d054008bf29492ee785154bd2bc57414cc501c5832572fe7f30c30b"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["true"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/aws-codebuild/v0.1
+  run_type: prematerial
+  # build_info.initiator is a person SSO identity in the real run; the committed
+  # env uses a benign stand-in, so redact it on both sides of the
+  # recorded-evidence cross-check. (build_details/raw_build_details are absent in
+  # this env-only run — the BatchGetBuilds call had no usable creds — so no
+  # API-volatile fields need redacting here; they remain volatile_fields in the
+  # detector contract for runs that DO populate them.)
+  redact:
+    - build_info.initiator
+  subjects:
+    match: prefix
+    keys:
+      - "codebuild-build-id:catalog-codebuild-fixture:e8b360eb-23a0-47fc-b916-cab7f2135f89"
+      - "codebuild-project:catalog-codebuild-fixture"
+      - "codebuild-source-version:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d"

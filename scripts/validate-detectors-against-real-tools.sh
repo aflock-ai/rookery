@@ -40,7 +40,6 @@ skip=0
 EXCLUDED_FROM_CANONICAL=(
   trivy
   docker-bench
-  nessus
   aws-config
   asff
   structured-data

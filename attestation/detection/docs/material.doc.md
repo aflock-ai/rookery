@@ -4,11 +4,11 @@ description: The cilock material attestor snapshots the working directory before
 sidebar_position: 2
 ---
 
-Snapshots the working directory **before** the step's command runs, computes a Merkle root over every input file's digest, and emits a single in-toto subject (`tree:materials`) whose digest is the root. Like [product](./product), the predicate **carries the per-file Merkle `leaves` inline by default**, so a verifier can confirm a specific input without a separate envelope and `artifactsFrom` chains verify straight from the inline leaves (no chain sidecar). An inline-but-empty leaf set is an authoritative *"this step consumed nothing"* commitment — so isolated-workdir build steps verify flaglessly, while a collection with no inline leaves at all still fails closed. Suppress inline leaves with `WithSuppressInlineLeaves`; per-file claims then come from the sidecar + [inclusion-proof attestations](./inclusion-proof).
+Snapshots the working directory **before** the step's command runs, computes a Merkle root over every input file's digest, and emits a single in-toto subject (`tree:materials`) whose digest is the root. The full per-file digest map is **not** carried in the predicate — it lives in a producer-side sidecar (`<outfile>.material.tree.json`) and is exposed to consumers via separate [inclusion-proof attestations](./inclusion-proof) on demand.
 
 ## What it captures
 
-The v0.3 material subject is a single fixed-size root; the predicate carries that root plus, by default, the inline leaves. The schema:
+The v0.3 material predicate is small and fixed-size. The schema:
 
 | JSON field | Type | Source |
 |---|---|---|
@@ -16,7 +16,6 @@ The v0.3 material subject is a single fixed-size root; the predicate carries tha
 | `treeSize` | integer | Number of files that contributed to the root. |
 | `hashAlgorithm` | string | Always `sha256` for v0.3. |
 | `construction` | string | Always `RFC6962` for v0.3. |
-| `leaves` | array of `{path, fileDigest, leafHash}` | **Present by default.** The sorted per-file leaf set; an empty array is the authoritative "consumed nothing" commitment for chain verification. Omitted under `WithSuppressInlineLeaves`. |
 
 The DSSE statement's subject array carries one entry:
 
@@ -29,13 +28,13 @@ The DSSE statement's subject array carries one entry:
 ]
 ```
 
-The subject array stays one fixed-size entry. The per-file list lives in the `leaves` field **inline by default**, and in the `<outfile>.material.tree.json` sidecar `cilock run` writes adjacent to the envelope for `cilock prove`. When inline leaves are suppressed, only the sidecar carries the list.
+That is the entire surface area of the predicate. The full per-file list lives in the `<outfile>.material.tree.json` sidecar `cilock run` writes adjacent to the signed envelope.
 
 ## Why v0.3 looks like this
 
 v0.1 emitted a flat `map[path]DigestSet` directly as the predicate body, with one `file:<path>` subject per material. For source trees the cardinality was fine — a Go module produces a few dozen materials. For container builds (`COPY . /app` over a JS project's `node_modules`) the per-file subject count blew through Archivista's placeholder budget and inflated the signed envelope to multi-megabyte territory.
 
-v0.3 publishes a single subject (the Merkle root) so the signed subject array never balloons, and serves per-file claims from the inline `leaves` by default (or from inclusion-proof attestations when leaves are suppressed for very large trees).
+v0.3 publishes a single subject (the Merkle root) and moves per-file claims into separate inclusion-proof attestations.
 
 ## How the material set is captured
 
@@ -80,7 +79,7 @@ so the actual leaf the tree commits to is:
 
 The leaf encoder is `inclusionproof.LeafHash` — the same canonical function the product attestor uses. Any drift between the two would mean a file recorded as a product in one step could not be matched against the same file recorded as a material in the next step. There is exactly one implementation; both attestors call it.
 
-If the working directory has no regular files with a sha256 digest, `Subjects()` returns an empty map (unlike product, no empty-tree root subject is emitted). The attestation still carries an **inline, empty `leaves` set**, which chain verification reads as an authoritative "this step consumed nothing" commitment (`HasInlineMaterials`) — an isolated-workdir build step therefore satisfies `artifactsFrom` with no sidecar, while a collection carrying *no* inline leaves at all fails closed in strict-chain mode.
+If the working directory has no regular files with a sha256 digest, `Subjects()` returns an empty map. (Unlike product, the material attestor does **not** emit an empty-tree root: an empty material set is treated as absent, since "the workingdir was empty before this step" is a less interesting claim than "the step produced nothing.")
 
 ## Output shape
 
@@ -100,16 +99,12 @@ The full DSSE statement for a v0.3 material attestation:
     "merkleRoot":    "4f1e...aa72",
     "treeSize":      218,
     "hashAlgorithm": "sha256",
-    "construction":  "RFC6962",
-    "leaves": [
-      { "path": "src/main.go", "fileDigest": "...", "leafHash": "..." }
-      // ... one entry per material file, sorted by path; empty array = consumed nothing
-    ]
+    "construction":  "RFC6962"
   }
 }
 ```
 
-The **subject** is fixed-size regardless of file count; the inline `leaves` list scales with the tree (suppress it with `WithSuppressInlineLeaves` when envelope size matters).
+The predicate is fixed-size regardless of how many files were in the working directory.
 
 ## Sidecar tree
 
@@ -119,7 +114,7 @@ The sidecar is **not signed**. Treat it as a build cache.
 
 ## Composition with inclusion-proof attestations
 
-By default the inline `leaves` already let a verifier confirm a specific input was in the tree, and let `artifactsFrom` chain a step's materials to the prior step's products with no chain sidecar. A separate inclusion-proof attestation is only needed when inline leaves are suppressed or for selective disclosure; the combined check is then:
+The material attestation alone confirms a tree exists with root X. To prove that a *specific* input file was in the tree, the consumer also needs the inclusion-proof attestation `cilock prove` emits for that file. The combined check is:
 
 1. The inclusion-proof attestation's `treeRoot` matches the material attestation's `tree:materials` subject digest.
 2. The audit path reconstructs the claimed root.
@@ -132,7 +127,7 @@ See [verify a specific file](../guides/verify-a-specific-file) for the full chec
 - **The leaf set excludes dirhash and gitoid entries.** `--dirhash-glob` directories still appear in the in-memory `Materials()` map (so downstream attestors that walk `ctx.Materials()` continue to see them), but they do not contribute to the Merkle root because the dirhash isn't a raw file sha256.
 - **Symlinks pointing outside `--workingdir` are silently dropped, not errored.** If you depend on a linked tree being recorded, place it inside the working directory.
 - **`material` runs before the command.** Files created by the step appear only in `product`, never here.
-- **Empty material set → no subject, but an inline empty-leaves commitment.** There's no `tree:materials` subject, yet the attestation carries an inline empty `leaves` set that chain verification treats as an authoritative "consumed nothing" — so a leaf-less collection (no inline leaves at all) is what fails closed, not an isolated-workdir step.
+- **Empty material set → no subject.** Verifiers must handle the no-`tree:materials` case (typically: a step that adds no inputs is allowed; the policy gate is elsewhere).
 
 ## CLI example
 

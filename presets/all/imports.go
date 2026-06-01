@@ -47,7 +47,6 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/lockfiles"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/material"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/maven"
-	_ "github.com/aflock-ai/rookery/plugins/attestors/nessus"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/oci"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/omnitrail"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/oscap"

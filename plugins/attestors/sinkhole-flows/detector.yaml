@@ -16,3 +16,21 @@ pre:
 
 llm_hints:
   on_match: "Sinkhole flows captured. Inbound/outbound HTTPS request/response bodies preserved for the named pip package."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/sinkhole-flows/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: "Predicate embeds raw captured HTTP(S) flows (timestamps, headers, request/response bodies) and a sha256 of the live capture file, all of which vary per run. UniqueHosts/UniqueSNIs are sorted and deterministic, but the flow entries, timestamps, byte counts, and file hash depend on observed network traffic and capture timing."
+    volatile_fields: ["summary.flowsFileSha256", "summary.totalFlows", "summary.totalBytesOut", "summary.totalBytesIn", "summary.schemeCounts", "summary.statusCounts", "flows", "flows[].timestamp", "flows[].requestBody", "flows[].responseBody", "flows[].requestHeaders", "flows[].responseHeaders"]
+  subjects:
+    - prefix: "pip://"
+      description: "pip://NAME@VERSION, byte-identical to the pip-install attestor's subject (digest = sha256 of \"NAME==VERSION\"); emitted only when PIPW_PACKAGE_NAME and PIPW_PACKAGE_VERSION are both set"
+    - prefix: "pipw-sinkhole-scan://"
+      description: "pipw-sinkhole-scan://SCAN_ID (digest = sha256 of the scan id); emitted only when PIPW_SCAN_ID is set"
+    - prefix: "pipw-sinkhole-flows-file://"
+      description: "pipw-sinkhole-flows-file://SCAN_ID with digest = sha256 of the captured /flows/out.jsonl file; emitted only when the flows file was present and hashed"
+  schema_required: true
+  credentials: []

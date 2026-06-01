@@ -133,6 +133,42 @@ jobs:
       - name: Compile-lint eBPF object source
         run: make bpf-lint
 
+      # ── Regenerate-and-verify the committed eBPF object ──────────────
+      # The committed openat_kprobe.bpf.o is a GENERATED artifact built with
+      # a PINNED canonical arch (not `uname -m`), so it is byte-identical no
+      # matter who/where builds it. Rebuild it here from source and fail if
+      # the committed bytes drifted (stale, hand-built, or arch-mismatched)
+      # OR if a build path leaked into the object. `-target bpf` codegen is
+      # host-arch independent, so this amd64 runner reproduces the pinned
+      # object exactly.
+      - name: Regenerate canonical eBPF object
+        run: make bpf-build
+
+      - name: Verify committed eBPF object is not stale (byte-for-byte)
+        run: |
+          set -euo pipefail
+          OBJ=plugins/attestors/commandrun/ebpf/bpf/openat_kprobe.bpf.o
+          if ! git diff --exit-code -- "$OBJ"; then
+            echo "::error::$OBJ drifted from a clean canonical rebuild." \
+              "Run 'make bpf-build' and commit the regenerated object" \
+              "(it is a generated artifact — never hand-build it)."
+            exit 1
+          fi
+          echo "committed eBPF object matches the canonical rebuild (sha: $(sha256sum "$OBJ" | cut -d' ' -f1))"
+
+      - name: Verify freshly-built eBPF object leaks no build paths
+        run: |
+          set -euo pipefail
+          OBJ=plugins/attestors/commandrun/ebpf/bpf/openat_kprobe.bpf.o
+          # Only the bare relative source filename "openat_kprobe.bpf.c" is
+          # allowed. Any absolute/home build path (a dev's /Users or /home
+          # tree, the CI /work dir, etc.) baked into the object is a leak.
+          if strings "$OBJ" | grep -nE '/Users|/home|/root|/work|nkennedy|/private/var'; then
+            echo "::error::$OBJ contains a leaked build path (see matches above)."
+            exit 1
+          fi
+          echo "no build-path leaks in the canonical eBPF object"
+
   # ── Build ───────────────────────────────────────────────────────────
   build:
     name: build
@@ -483,6 +519,28 @@ jobs:
       - name: Verify .provenance/ entries
         run: ./scripts/check-provenance.sh
 
+  # ── Catalog Verification Gate ───────────────────────────────────────
+  # The headline "the catalog data is verified" gate. Verifies (1) every
+  # detector.yaml output contract parses + is structurally valid, and (2) every
+  # contracted attestor's fixtures match the contract when driven through the
+  # testkit SDK — both the hermetic replay over recorded tool output AND the
+  # recorded REAL-run cilock attestation (argv + subject families + tool
+  # version/digest provenance). Hard-fails for migrated attestors; attestors
+  # without a contract are simply not yet checked (warn->promote: contract
+  # coverage becomes required as attestors are migrated).
+  catalog-verify:
+    name: catalog verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Verify catalog contracts + fixtures
+        run: make catalog-verify
+
   # ── CI Success Gate ─────────────────────────────────────────────────
   ci-success:
     name: ci success
@@ -505,6 +563,7 @@ jobs:
       - dep-budget
       - canonical-attestor-audit
       - provenance-check
+      - catalog-verify
     steps:
       - name: Check all jobs
         run: |
@@ -512,12 +571,25 @@ jobs:
           echo "Job results:"
           echo "$RESULTS" | jq -r 'to_entries[] | "  \(.key): \(.value.result)"'
 
-          # Check for failures (skip skipped jobs like commitlint on push)
-          FAILED=$(echo "$RESULTS" | jq -r 'to_entries[] | select(.value.result == "failure") | .key')
+          # A job that FAILED or was CANCELLED blocks. A cancelled job
+          # (timeout/infra/manual cancel) must never be treated as a silent
+          # pass. `skipped` stays allowed — change-detection and commitlint-on-
+          # push legitimately skip.
+          FAILED=$(echo "$RESULTS" | jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key')
+
+          # catalog-verify has NO change-detection gate — it always runs — so
+          # anything other than success (skipped or cancelled) means the catalog
+          # verification gate did not actually execute, which is a false green.
+          CATALOG=$(echo "$RESULTS" | jq -r '.["catalog-verify"].result')
+          if [ "$CATALOG" != "success" ]; then
+            echo ""
+            echo "catalog-verify result=$CATALOG — the catalog verification gate must run AND pass (it has no skip condition)"
+            exit 1
+          fi
 
           if [ -n "$FAILED" ]; then
             echo ""
-            echo "Failed jobs:"
+            echo "Failed/cancelled jobs:"
             echo "$FAILED"
             exit 1
           fi

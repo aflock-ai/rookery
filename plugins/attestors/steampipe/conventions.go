@@ -78,6 +78,53 @@ var pluginConventions = map[string]pluginConvention{
 			{column: "namespace", prefix: "k8s:namespace:"},
 		},
 	},
+	// googledirectory is the turbot/googledirectory plugin — the Google
+	// Workspace Admin SDK Directory (users, groups, domains, org units, roles).
+	// This is the plugin a Workspace *security-posture* recipe targets (MFA
+	// enrollment, super-admins, OU layout), so it's the one that overlaps with
+	// the scubagoggles attestor. Every directory table carries `customer_id`,
+	// the GWS customer/tenant id; the scubagoggles attestor hashes that same
+	// value as its tenant subject, so a Steampipe googledirectory attestation
+	// and a ScubaGoggles attestation converge on `customer_id`/`domain_name`
+	// in policyverify's digest-value graph join. Columns verified against
+	// github.com/turbot/steampipe-plugin-googledirectory.
+	"googledirectory": {
+		subjectExtractors: []columnExtractor{
+			{column: "customer_id", prefix: "googleworkspace:customer:"},
+			{column: "primary_email", prefix: "googleworkspace:user:"}, // googledirectory_user
+			{column: "email", prefix: "googleworkspace:group:"},        // googledirectory_group
+			{column: "domain_name", prefix: "googleworkspace:domain:"}, // googledirectory_domain
+			{column: "org_unit_path", prefix: "googleworkspace:orgunit:"},
+		},
+	},
+	// googleworkspace is the turbot/googleworkspace plugin — Workspace *content/
+	// activity* (gmail settings, drive, calendar, people, audit activity), NOT
+	// directory objects. Identity here is the per-user mailbox owner or the
+	// actor on an audit event. Columns verified against
+	// github.com/turbot/steampipe-plugin-googleworkspace.
+	"googleworkspace": {
+		subjectExtractors: []columnExtractor{
+			{column: "customer_id", prefix: "googleworkspace:customer:"}, // googleworkspace_activity_report
+			{column: "user_email", prefix: "googleworkspace:user:"},      // googleworkspace_gmail_settings
+			{column: "actor_email", prefix: "googleworkspace:user:"},     // googleworkspace_activity_report
+		},
+	},
+	// slack is the turbot/slack plugin — workspace security posture (members,
+	// 2FA enrollment, admin/owner/guest flags, channels and their external-
+	// sharing flags). The plugin reuses `id` for both slack_user and
+	// slack_conversation rows, so posture recipes alias the primary key
+	// (`id as user_id` / `id as channel_id`) to keep the user and channel
+	// identity axes distinct; `team_id` (on slack_user) anchors the workspace.
+	// A bare `id` column is intentionally NOT mapped — it would conflate users
+	// and channels. Columns verified against
+	// github.com/turbot/steampipe-plugin-slack.
+	"slack": {
+		subjectExtractors: []columnExtractor{
+			{column: "team_id", prefix: "slack:team:"},       // slack_user
+			{column: "user_id", prefix: "slack:user:"},       // slack_user, aliased `id as user_id`
+			{column: "channel_id", prefix: "slack:channel:"}, // slack_conversation, aliased `id as channel_id`
+		},
+	},
 }
 
 // extract pulls identity-bearing values out of one row according to the
@@ -128,8 +175,8 @@ func stringify(v any) string {
 // formatFloat renders a float64 the way ECMAScript / JSON-canonical form
 // does — no decimal point for whole numbers, shortest round-trip otherwise.
 // AWS account ids and other numeric ids come back as float64 from
-// encoding/json and need to round-trip as integer strings ("339150376714",
-// not "3.39150376714e+11").
+// encoding/json and need to round-trip as integer strings ("123456789012",
+// not "1.23456789012e+11").
 func formatFloat(f float64) string {
 	if f == float64(int64(f)) {
 		return strconv.FormatInt(int64(f), 10)

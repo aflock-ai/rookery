@@ -18,3 +18,30 @@ pre:
 
 llm_hints:
   on_match: "GitHub Actions runner context captured (workflow, job, run id, repository)."
+
+contract:
+  tier: foundation
+  predicate_type: https://aflock.ai/attestations/github/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: "Subject keys (pipelineurl:/projecturl:) are deterministic given fixed GitHub Actions env vars. The embedded OIDC JWT sub-attestor carries time-varying claims (iat/exp/nbf/jti) and the captured runner context includes a non-deterministic run id and runner name, so the full predicate body is not byte-stable across runs."
+    volatile_fields: ["jwt", "pipelineid", "pipelineurl", "runnerid"]
+  subjects:
+    - prefix: "pipelineurl:"
+      description: "the GitHub Actions workflow run URL (server/repo/actions/runs/<run-id>)"
+    - prefix: "projecturl:"
+      description: "the GitHub repository URL (server/owner/repo)"
+  backref_subjects:
+    - "pipelineurl:"
+  schema_required: true
+  credentials:
+    - name: github-actions-oidc
+      type: oidc
+      provided: oidc-flow
+      env_vars: ["ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+      scopes: ["id-token:write"]
+      required: true
+  fixtures:
+    - name: gha-oidc
+      role: canonical

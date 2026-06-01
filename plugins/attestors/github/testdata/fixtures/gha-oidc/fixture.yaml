@@ -1,0 +1,75 @@
+schema_version: "0.1"
+attestor: github
+description: >-
+  GitHub Actions attestor proven from a REAL GitHub Actions run
+  (testifysec/cilock-ci-fixtures, run 26650236718, recorded with a tree-built
+  cilock-all of known provenance — see recording.binary_sha256). http-mock mode
+  replays the recorded OIDC token + JWKS captured in that run: the attestor
+  fetches the token from ACTIONS_ID_TOKEN_REQUEST_URL and verifies it against
+  the JWKS at WITNESS_GITHUB_JWKS_URL (signature-only, by design — see
+  record.sh), then emits pipelineurl:/projecturl: from the GITHUB_* env.
+setup:
+  mode: http-mock
+  # Plain runner env the attestor reads, verbatim from the real run. (We omit
+  # GITHUB_ENV/OUTPUT/PATH/EVENT_PATH — they carry /home/runner paths and the
+  # attestor ignores them.) ACTIONS_ID_TOKEN_REQUEST_TOKEN is a benign stub
+  # bearer (the mock serves the token regardless of the header); not a secret.
+  env:
+    GITHUB_ACTIONS: "true"
+    GITHUB_SERVER_URL: "https://github.com"
+    GITHUB_REPOSITORY: "testifysec/cilock-ci-fixtures"
+    GITHUB_RUN_ID: "26650236718"
+    GITHUB_WORKFLOW: "capture-github"
+    GITHUB_ACTION_PATH: ""
+    RUNNER_NAME: "GitHub Actions 1000049568"
+    RUNNER_ARCH: "X64"
+    RUNNER_OS: "Linux"
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: "mock"
+  options:
+    endpoints:
+      - env: ACTIONS_ID_TOKEN_REQUEST_URL
+        file: oidc-token.json
+        path: /token
+      - env: WITNESS_GITHUB_JWKS_URL
+        file: jwks.json
+        path: /jwks
+recording:
+  tool: cilock
+  # cilock-all built from THIS tree (presets/all/cmd/cilock-all), pushed as the
+  # `cilock` binary to testifysec/cilock-ci-fixtures and run in GHA — so the
+  # provenance below is a binary whose sha256 we can recompute, not the prior
+  # unknown-provenance binary that the original capture (run 26647420184) used.
+  version: "dev"
+  binary_sha256: "1cc41ca1570dd56d13321f52c986d223b6c9cf10a03e2c946b262e36a3b57058"
+  recorded_with: cilock
+  attestation: attestation.json
+  argv: ["true"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/github/v0.1
+  run_type: prematerial
+  subjects:
+    match: prefix
+    keys:
+      - "pipelineurl:"
+      - "projecturl:"
+  # Volatile-but-faithful fields zeroed before the recorded-vs-replay cross-check
+  # and the determinism check. The recorded attestation.json and the committed
+  # oidc-token.json are TWO DISTINCT real OIDC mints from the SAME GitHub Actions
+  # run (the capture workflow curls one token to oidc-token.json, cilock fetches
+  # another into attestation.json). GitHub mints a fresh JWT per
+  # ACTIONS_ID_TOKEN_REQUEST_URL call, so the per-mint timestamps + jti differ
+  # by design — every other claim and the signing JWK are byte-identical (same
+  # kid, same key), so this is genuine per-mint volatility, NOT a stale
+  # recording (verified: 0 structural claim diffs). Re-capturing would not make
+  # these stable; redacting the minimum is the honest fix.
+  #   jwt.claims.{exp,iat,nbf,jti} — per-mint OIDC token timestamps + unique id
+  #   jwt.verifiedBy.jwksUrl       — the http-mock stub's random localhost port
+  #     (the real run records https://token.actions.githubusercontent.com/...);
+  #     this is also what made the replay non-deterministic run-to-run.
+  redact:
+    - "jwt.claims.exp"
+    - "jwt.claims.iat"
+    - "jwt.claims.nbf"
+    - "jwt.claims.jti"
+    - "jwt.verifiedBy.jwksUrl"

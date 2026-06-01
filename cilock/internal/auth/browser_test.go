@@ -1,9 +1,36 @@
 package auth
 
 import (
+	"bytes"
 	"net/url"
+	"strings"
 	"testing"
 )
+
+// A crafted `tenant` form value on the loopback callback must never reach the
+// rendered page un-escaped — otherwise it injects script into a page served on
+// a localhost origin reachable by any other local process (XSS).
+func TestWriteCallbackPageEscapesTenant(t *testing.T) {
+	const payload = `<script>alert(document.cookie)</script>`
+	var buf bytes.Buffer
+	writeCallbackPage(&buf, payload)
+	out := buf.String()
+
+	if strings.Contains(out, payload) {
+		t.Fatalf("tenant rendered un-escaped (XSS):\n%s", out)
+	}
+	if !strings.Contains(out, "&lt;script&gt;alert(document.cookie)&lt;/script&gt;") {
+		t.Fatalf("expected html-escaped tenant in output:\n%s", out)
+	}
+}
+
+func TestWriteCallbackPageRendersTenant(t *testing.T) {
+	var buf bytes.Buffer
+	writeCallbackPage(&buf, "acme")
+	if !strings.Contains(buf.String(), "Tenant: <strong>acme</strong>") {
+		t.Fatalf("expected tenant rendered in page, got:\n%s", buf.String())
+	}
+}
 
 func TestNewStateIsRandomAndHex(t *testing.T) {
 	a, err := newState()

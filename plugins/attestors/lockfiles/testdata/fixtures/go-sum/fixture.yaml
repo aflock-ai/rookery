@@ -1,0 +1,13 @@
+schema_version: "0.1"
+attestor: lockfiles
+description: "lockfiles attestation of a real go.sum — NO EXTERNAL TOOL. lockfiles parses committed lockfiles directly in pure Go, so there is no scanner to run, record, or re-run; the go.sum IS the real artifact. This is the no-external-deps proof, and it exercises workdir mode (the attestor searches '.', so the testkit chdirs into the materialized workdir)."
+setup:
+  mode: workdir
+  input: go.sum   # a real go.sum (golang.org/x/text); lockfiles walks the working dir and captures it
+expect:
+  predicate_type: https://aflock.ai/attestations/lockfiles/v0.1
+  run_type: prematerial
+  subjects:
+    match: prefix
+    keys:
+      - "file:"   # file:go.sum — each discovered lockfile, digested

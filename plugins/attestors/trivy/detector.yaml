@@ -35,3 +35,36 @@ post:
 
 llm_hints:
   on_match: "Trivy scan captured. Vulnerabilities, misconfigurations, and secrets findings preserved."
+
+# Output contract — proven by the verification loop (testkit + fixtures + CI).
+# See testdata/fixtures/. The trivy attestor is a Subjecter only (no Materials/
+# Products/Export): it signs the scan report and fans out subjects per artifact
+# and per CVE / misconfig resource.
+contract:
+  predicate_type: https://aflock.ai/attestations/trivy/v0.1
+  run_type: postproduct
+  tier: recommended
+  stability:
+    level: best-effort
+    notes: "Trivy JSON output is structurally stable for a pinned tool version + DB; finding ordering and scan timestamps vary."
+    volatile_fields:
+      - "CreatedAt"
+      - "Results[].Vulnerabilities[].LastModifiedDate"
+      - "Results[].Vulnerabilities[].PublishedDate"
+  credentials: []
+  subjects:
+    - prefix: "trivy:artifact:"
+      description: "the scanned artifact (image ref or filesystem path)"
+    - prefix: "trivy:cve:"
+      description: "each unique vulnerability id across failed findings"
+    - prefix: "trivy:resource:"
+      description: "each misconfiguration resource id across failed findings"
+  schema_required: true
+  validated_invocation:
+    tool: trivy
+    argv: ["trivy", "fs", "--format", "json", "--output", "trivy-results.json", "."]
+    step: trivy-scan
+    attestations: ["trivy", "environment"]
+  fixtures:
+    - name: fs-vuln
+      role: canonical

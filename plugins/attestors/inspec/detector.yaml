@@ -25,3 +25,24 @@ post:
 
 llm_hints:
   on_match: "InSpec results captured. Compliance profile outcomes preserved."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/inspec/v0.1
+  run_type: postproduct
+  stability:
+    level: stable
+    notes: "Subjects and the stored Summary are derived deterministically from the parsed InSpec JSON report (platform name/release, profile names, and failing control IDs). The report's statistics.duration field is read into inspecStatistics but is never surfaced into subjects or the Summary, so no volatile timing data leaks into the contract output. Given identical report content the emitted subjects are identical."
+    volatile_fields: []
+  subjects:
+    - prefix: "platform:"
+      description: "scanned platform as <os-name> or <os-name>-<release> (single subject)"
+    - prefix: "profile:"
+      description: "one subject per InSpec profile, keyed by profile name"
+    - prefix: "inspec:control:"
+      description: "one subject per control that had at least one failing result, keyed by control id"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: linux-baseline
+      role: canonical

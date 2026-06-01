@@ -1,0 +1,645 @@
+[{
+    "AssessmentStartTime": "2026-05-29T04:12:20.863291",
+    "FindingUniqueId": "prowler-aws-cloudtrail_multi_region_enabled-898769392027-us-east-1-898769392027",
+    "Provider": "aws",
+    "CheckID": "cloudtrail_multi_region_enabled",
+    "CheckTitle": "Ensure CloudTrail is enabled in all regions",
+    "CheckType": [
+        "Software and Configuration Checks",
+        "Industry and Regulatory Standards",
+        "CIS AWS Foundations Benchmark"
+    ],
+    "ServiceName": "cloudtrail",
+    "SubServiceName": "",
+    "Status": "FAIL",
+    "StatusExtended": "No CloudTrail trails enabled and logging were found.",
+    "Severity": "high",
+    "ResourceType": "AwsCloudTrailTrail",
+    "ResourceDetails": "",
+    "Description": "Ensure CloudTrail is enabled in all regions",
+    "Risk": "AWS CloudTrail is a web service that records AWS API calls for your account and delivers log files to you. The recorded information includes the identity of the API caller; the time of the API call; the source IP address of the API caller; the request parameters; and the response elements returned by the AWS service.",
+    "RelatedUrl": "",
+    "Remediation": {
+        "Code": {
+            "NativeIaC": "https://docs.bridgecrew.io/docs/logging_1#cloudformation",
+            "Terraform": "https://docs.bridgecrew.io/docs/logging_1#terraform",
+            "CLI": "aws cloudtrail create-trail --name <trail_name> --bucket-name <s3_bucket_for_cloudtrail> --is-multi-region-trail aws cloudtrail update-trail --name <trail_name> --is-multi-region-trail ",
+            "Other": "https://docs.bridgecrew.io/docs/logging_1#aws-console"
+        },
+        "Recommendation": {
+            "Text": "Ensure Logging is set to ON on all regions (even if they are not being used at the moment.",
+            "Url": "https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrailconcepts.html#cloudtrail-concepts-management-events"
+        }
+    },
+    "Compliance": {
+        "CISA": [
+            "your-systems-3",
+            "your-data-2"
+        ],
+        "SOC2": [
+            "cc_2_1",
+            "cc_7_2",
+            "cc_a_1_2"
+        ],
+        "CIS-1.4": [
+            "3.1"
+        ],
+        "CIS-1.5": [
+            "3.1"
+        ],
+        "GDPR": [
+            "article_25",
+            "article_30"
+        ],
+        "AWS-Foundational-Security-Best-Practices": [
+            "cloudtrail"
+        ],
+        "ISO27001-2013": [
+            "A.12.4"
+        ],
+        "HIPAA": [
+            "164_308_a_1_ii_d",
+            "164_308_a_3_ii_a",
+            "164_308_a_6_ii",
+            "164_312_b",
+            "164_312_e_2_i"
+        ],
+        "CIS-2.0": [
+            "3.1"
+        ],
+        "GxP-21-CFR-Part-11": [
+            "11.10-e",
+            "11.10-k",
+            "11.300-d"
+        ],
+        "AWS-Well-Architected-Framework-Security-Pillar": [
+            "SEC04-BP02",
+            "SEC04-BP03"
+        ],
+        "GxP-EU-Annex-11": [
+            "1-risk-management",
+            "4.2-validation-documentation-change-control"
+        ],
+        "NIST-800-171-Revision-2": [
+            "3_1_12",
+            "3_3_1",
+            "3_3_2",
+            "3_3_3",
+            "3_4_1",
+            "3_6_1",
+            "3_6_2",
+            "3_13_1",
+            "3_13_2",
+            "3_14_6",
+            "3_14_7"
+        ],
+        "NIST-800-53-Revision-4": [
+            "ac_2_4",
+            "ac_2",
+            "au_2",
+            "au_3",
+            "au_12",
+            "cm_2"
+        ],
+        "NIST-800-53-Revision-5": [
+            "ac_2_4",
+            "ac_3_1",
+            "ac_3_10",
+            "ac_4_26",
+            "ac_6_9",
+            "au_2_b",
+            "au_3_1",
+            "au_3_a",
+            "au_3_b",
+            "au_3_c",
+            "au_3_d",
+            "au_3_e",
+            "au_3_f",
+            "au_6_3",
+            "au_6_4",
+            "au_6_6",
+            "au_6_9",
+            "au_8_b",
+            "au_10",
+            "au_12_a",
+            "au_12_c",
+            "au_12_1",
+            "au_12_2",
+            "au_12_3",
+            "au_12_4",
+            "au_14_a",
+            "au_14_b",
+            "au_14_3",
+            "ca_7_b",
+            "cm_5_1_b",
+            "cm_6_a",
+            "cm_9_b",
+            "ia_3_3_b",
+            "ma_4_1_a",
+            "pm_14_a_1",
+            "pm_14_b",
+            "pm_31",
+            "sc_7_9_b",
+            "si_1_1_c",
+            "si_3_8_b",
+            "si_4_2",
+            "si_4_17",
+            "si_4_20",
+            "si_7_8",
+            "si_10_1_c"
+        ],
+        "ENS-RD2022": [
+            "op.acc.6.r5.aws.iam.1",
+            "op.exp.5.aws.ct.1",
+            "op.exp.8.aws.ct.1",
+            "op.exp.8.aws.ct.6",
+            "op.exp.9.aws.ct.1",
+            "op.mon.1.aws.ct.1"
+        ],
+        "NIST-CSF-1.1": [
+            "ae_1",
+            "ae_3",
+            "ae_4",
+            "cm_1",
+            "cm_3",
+            "cm_6",
+            "cm_7",
+            "am_3",
+            "ac_6",
+            "ds_5",
+            "ma_2",
+            "pt_1"
+        ],
+        "RBI-Cyber-Security-Framework": [
+            "annex_i_7_4"
+        ],
+        "FFIEC": [
+            "d2-ma-ma-b-1",
+            "d2-ma-ma-b-2",
+            "d3-dc-an-b-3",
+            "d3-dc-an-b-4",
+            "d3-dc-an-b-5",
+            "d3-dc-ev-b-1",
+            "d3-dc-ev-b-3",
+            "d3-pc-im-b-3",
+            "d3-pc-im-b-7",
+            "d5-dr-de-b-3"
+        ],
+        "PCI-3.2.1": [
+            "cloudtrail"
+        ],
+        "FedRamp-Moderate-Revision-4": [
+            "ac-2-4",
+            "ac-2-g",
+            "au-2-a-d",
+            "au-3",
+            "au-6-1-3",
+            "au-12-a-c",
+            "ca-7-a-b",
+            "si-4-16",
+            "si-4-2",
+            "si-4-4",
+            "si-4-5"
+        ],
+        "FedRAMP-Low-Revision-4": [
+            "ac-2",
+            "au-2",
+            "ca-7"
+        ]
+    },
+    "Categories": [
+        "forensics-ready"
+    ],
+    "DependsOn": [],
+    "RelatedTo": [],
+    "Notes": "",
+    "Profile": null,
+    "AccountId": "898769392027",
+    "OrganizationsInfo": null,
+    "Region": "us-east-1",
+    "ResourceId": "898769392027",
+    "ResourceArn": "arn:aws:iam::898769392027:root",
+    "ResourceTags": {}
+},{
+    "AssessmentStartTime": "2026-05-29T04:12:20.863291",
+    "FindingUniqueId": "prowler-aws-cloudtrail_multi_region_enabled_logging_management_events-898769392027-us-east-1-898769392027",
+    "Provider": "aws",
+    "CheckID": "cloudtrail_multi_region_enabled_logging_management_events",
+    "CheckTitle": "Ensure CloudTrail logging management events in All Regions",
+    "CheckType": [
+        "CIS AWS Foundations Benchmark"
+    ],
+    "ServiceName": "cloudtrail",
+    "SubServiceName": "",
+    "Status": "FAIL",
+    "StatusExtended": "No trail found with multi-region enabled and logging management events.",
+    "Severity": "low",
+    "ResourceType": "AwsCloudTrailTrail",
+    "ResourceDetails": "",
+    "Description": "Ensure CloudTrail logging management events in All Regions",
+    "Risk": "AWS CloudTrail enables governance, compliance, operational auditing, and risk auditing of your AWS account. To meet FTR requirements, you must have management events enabled for all AWS accounts and in all regions and aggregate these logs into an Amazon Simple Storage Service (Amazon S3) bucket owned by a separate AWS account.",
+    "RelatedUrl": "https://docs.bridgecrew.io/docs/logging_14",
+    "Remediation": {
+        "Code": {
+            "NativeIaC": "",
+            "Terraform": "https://docs.bridgecrew.io/docs/logging_14#terraform",
+            "CLI": "aws cloudtrail update-trail --name <trail_name> --is-multi-region-trail",
+            "Other": "https://docs.bridgecrew.io/docs/logging_14"
+        },
+        "Recommendation": {
+            "Text": "Enable CloudTrail logging management events in All Regions",
+            "Url": "https://docs.bridgecrew.io/docs/logging_14"
+        }
+    },
+    "Compliance": {},
+    "Categories": [
+        "forensics-ready"
+    ],
+    "DependsOn": [],
+    "RelatedTo": [],
+    "Notes": "",
+    "Profile": null,
+    "AccountId": "898769392027",
+    "OrganizationsInfo": null,
+    "Region": "us-east-1",
+    "ResourceId": "898769392027",
+    "ResourceArn": "arn:aws:iam::898769392027:root",
+    "ResourceTags": {}
+},{
+    "AssessmentStartTime": "2026-05-29T04:12:20.863291",
+    "FindingUniqueId": "prowler-aws-cloudtrail_s3_dataevents_read_enabled-898769392027-us-east-1-898769392027",
+    "Provider": "aws",
+    "CheckID": "cloudtrail_s3_dataevents_read_enabled",
+    "CheckTitle": "Check if S3 buckets have Object-level logging for read events is enabled in CloudTrail.",
+    "CheckType": [
+        "Logging and Monitoring"
+    ],
+    "ServiceName": "cloudtrail",
+    "SubServiceName": "",
+    "Status": "FAIL",
+    "StatusExtended": "No CloudTrail trails have a data event to record all S3 object-level API operations.",
+    "Severity": "low",
+    "ResourceType": "AwsS3Bucket",
+    "ResourceDetails": "",
+    "Description": "Ensure that all your AWS CloudTrail trails are configured to log Data events in order to record S3 object-level API operations, such as GetObject, DeleteObject and PutObject, for individual S3 buckets or for all current and future S3 buckets provisioned in your AWS account.",
+    "Risk": "If logs are not enabled, monitoring of service use and threat analysis is not possible.",
+    "RelatedUrl": "",
+    "Remediation": {
+        "Code": {
+            "NativeIaC": "",
+            "Terraform": "",
+            "CLI": "aws cloudtrail put-event-selectors --trail-name <YOUR_TRAIL_NAME_HERE> --event-selectors '[{ 'ReadWriteType': 'ReadOnly', 'IncludeManagementEvents':true, 'DataResources': [{ 'Type': 'AWS::S3::Object', 'Values': ['arn:aws:s3'] }] }]'",
+            "Other": ""
+        },
+        "Recommendation": {
+            "Text": "Enable logs. Create an S3 lifecycle policy. Define use cases, metrics and automated responses where applicable.",
+            "Url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/enable-cloudtrail-logging-for-s3.html"
+        }
+    },
+    "Compliance": {
+        "CISA": [
+            "your-systems-3",
+            "your-data-2"
+        ],
+        "SOC2": [
+            "cc_2_1",
+            "cc_7_2"
+        ],
+        "CIS-1.4": [
+            "3.11"
+        ],
+        "CIS-1.5": [
+            "3.11"
+        ],
+        "GDPR": [
+            "article_30"
+        ],
+        "HIPAA": [
+            "164_308_a_1_ii_d",
+            "164_308_a_3_ii_a",
+            "164_308_a_6_ii",
+            "164_312_a_2_i",
+            "164_312_b",
+            "164_312_e_2_i"
+        ],
+        "CIS-2.0": [
+            "3.11"
+        ],
+        "GxP-21-CFR-Part-11": [
+            "11.10-e",
+            "11.10-k"
+        ],
+        "AWS-Well-Architected-Framework-Security-Pillar": [
+            "SEC04-BP01"
+        ],
+        "GxP-EU-Annex-11": [
+            "8.2-printouts-data-changes",
+            "9-audit-trails",
+            "12.4-security-audit-trail"
+        ],
+        "NIST-800-171-Revision-2": [
+            "3_1_12",
+            "3_3_1",
+            "3_3_2",
+            "3_3_3",
+            "3_13_1",
+            "3_14_6",
+            "3_14_7"
+        ],
+        "NIST-800-53-Revision-4": [
+            "ac_2",
+            "au_2",
+            "au_3",
+            "au_12"
+        ],
+        "NIST-800-53-Revision-5": [
+            "ac_2_4",
+            "ac_3_1",
+            "ac_3_10",
+            "ac_4_26",
+            "ac_6_9",
+            "au_2_b",
+            "au_3_a",
+            "au_3_b",
+            "au_3_c",
+            "au_3_d",
+            "au_3_e",
+            "au_3_f",
+            "au_6_3",
+            "au_6_4",
+            "au_6_6",
+            "au_6_9",
+            "au_8_b",
+            "au_10",
+            "au_12_a",
+            "au_12_c",
+            "au_12_1",
+            "au_12_2",
+            "au_12_3",
+            "au_12_4",
+            "au_14_a",
+            "au_14_b",
+            "au_14_3",
+            "ca_7_b",
+            "cm_5_1_b",
+            "cm_6_a",
+            "cm_9_b",
+            "ia_3_3_b",
+            "ma_4_1_a",
+            "pm_14_a_1",
+            "pm_14_b",
+            "pm_31",
+            "sc_7_9_b",
+            "si_1_1_c",
+            "si_3_8_b",
+            "si_4_2",
+            "si_4_17",
+            "si_4_20",
+            "si_7_8",
+            "si_10_1_c"
+        ],
+        "ENS-RD2022": [
+            "op.exp.8.r1.aws.ct.2",
+            "op.exp.8.r1.aws.ct.4"
+        ],
+        "NIST-CSF-1.1": [
+            "ae_3",
+            "ae_4",
+            "cm_1",
+            "cm_3",
+            "cm_6",
+            "cm_7",
+            "ds_5"
+        ],
+        "RBI-Cyber-Security-Framework": [
+            "annex_i_7_4"
+        ],
+        "FFIEC": [
+            "d2-ma-ma-b-1",
+            "d2-ma-ma-b-2",
+            "d3-dc-an-b-3",
+            "d3-dc-an-b-4",
+            "d3-dc-ev-b-1",
+            "d5-dr-de-b-3"
+        ],
+        "FedRamp-Moderate-Revision-4": [
+            "ac-2-4",
+            "ac-2-g",
+            "au-2-a-d",
+            "au-3",
+            "au-6-1-3",
+            "au-12-a-c",
+            "ca-7-a-b",
+            "si-4-16",
+            "si-4-2",
+            "si-4-4",
+            "si-4-5"
+        ],
+        "FedRAMP-Low-Revision-4": [
+            "ac-2",
+            "au-2",
+            "ca-7"
+        ]
+    },
+    "Categories": [],
+    "DependsOn": [],
+    "RelatedTo": [],
+    "Notes": "",
+    "Profile": null,
+    "AccountId": "898769392027",
+    "OrganizationsInfo": null,
+    "Region": "us-east-1",
+    "ResourceId": "898769392027",
+    "ResourceArn": "arn:aws:iam::898769392027:root",
+    "ResourceTags": {}
+},{
+    "AssessmentStartTime": "2026-05-29T04:12:20.863291",
+    "FindingUniqueId": "prowler-aws-cloudtrail_s3_dataevents_write_enabled-898769392027-us-east-1-898769392027",
+    "Provider": "aws",
+    "CheckID": "cloudtrail_s3_dataevents_write_enabled",
+    "CheckTitle": "Check if S3 buckets have Object-level logging for write events is enabled in CloudTrail.",
+    "CheckType": [
+        "Logging and Monitoring"
+    ],
+    "ServiceName": "cloudtrail",
+    "SubServiceName": "",
+    "Status": "FAIL",
+    "StatusExtended": "No CloudTrail trails have a data event to record all S3 object-level API operations.",
+    "Severity": "low",
+    "ResourceType": "AwsS3Bucket",
+    "ResourceDetails": "",
+    "Description": "Ensure that all your AWS CloudTrail trails are configured to log Data events in order to record S3 object-level API operations, such as GetObject, DeleteObject and PutObject, for individual S3 buckets or for all current and future S3 buckets provisioned in your AWS account.",
+    "Risk": "If logs are not enabled, monitoring of service use and threat analysis is not possible.",
+    "RelatedUrl": "",
+    "Remediation": {
+        "Code": {
+            "NativeIaC": "",
+            "Terraform": "",
+            "CLI": "aws cloudtrail put-event-selectors --trail-name <YOUR_TRAIL_NAME_HERE> --event-selectors '[{ 'ReadWriteType': 'WriteOnly', 'IncludeManagementEvents':true, 'DataResources': [{ 'Type': 'AWS::S3::Object', 'Values': ['arn:aws:s3'] }] }]'",
+            "Other": ""
+        },
+        "Recommendation": {
+            "Text": "Enable logs. Create an S3 lifecycle policy. Define use cases, metrics and automated responses where applicable.",
+            "Url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/enable-cloudtrail-logging-for-s3.html"
+        }
+    },
+    "Compliance": {
+        "CISA": [
+            "your-systems-3",
+            "your-data-2"
+        ],
+        "SOC2": [
+            "cc_2_1",
+            "cc_7_2"
+        ],
+        "CIS-1.4": [
+            "3.10"
+        ],
+        "CIS-1.5": [
+            "3.10"
+        ],
+        "GDPR": [
+            "article_30"
+        ],
+        "HIPAA": [
+            "164_308_a_1_ii_d",
+            "164_308_a_3_ii_a",
+            "164_308_a_6_ii",
+            "164_312_a_2_i",
+            "164_312_b",
+            "164_312_e_2_i"
+        ],
+        "CIS-2.0": [
+            "3.10"
+        ],
+        "GxP-21-CFR-Part-11": [
+            "11.10-e",
+            "11.10-k"
+        ],
+        "AWS-Well-Architected-Framework-Security-Pillar": [
+            "SEC04-BP01"
+        ],
+        "GxP-EU-Annex-11": [
+            "8.2-printouts-data-changes",
+            "9-audit-trails",
+            "12.4-security-audit-trail"
+        ],
+        "NIST-800-171-Revision-2": [
+            "3_1_12",
+            "3_3_1",
+            "3_3_2",
+            "3_3_3",
+            "3_13_1",
+            "3_14_6",
+            "3_14_7"
+        ],
+        "NIST-800-53-Revision-4": [
+            "ac_2",
+            "au_2",
+            "au_3",
+            "au_12"
+        ],
+        "NIST-800-53-Revision-5": [
+            "ac_2_4",
+            "ac_3_1",
+            "ac_3_10",
+            "ac_4_26",
+            "ac_6_9",
+            "au_2_b",
+            "au_3_a",
+            "au_3_b",
+            "au_3_c",
+            "au_3_d",
+            "au_3_e",
+            "au_3_f",
+            "au_6_3",
+            "au_6_4",
+            "au_6_6",
+            "au_6_9",
+            "au_8_b",
+            "au_10",
+            "au_12_a",
+            "au_12_c",
+            "au_12_1",
+            "au_12_2",
+            "au_12_3",
+            "au_12_4",
+            "au_14_a",
+            "au_14_b",
+            "au_14_3",
+            "ca_7_b",
+            "cm_5_1_b",
+            "cm_6_a",
+            "cm_9_b",
+            "ia_3_3_b",
+            "ma_4_1_a",
+            "pm_14_a_1",
+            "pm_14_b",
+            "pm_31",
+            "sc_7_9_b",
+            "si_1_1_c",
+            "si_3_8_b",
+            "si_4_2",
+            "si_4_17",
+            "si_4_20",
+            "si_7_8",
+            "si_10_1_c"
+        ],
+        "ENS-RD2022": [
+            "op.exp.8.aws.ct.4",
+            "op.exp.8.r1.aws.ct.2",
+            "op.exp.8.r1.aws.ct.4"
+        ],
+        "NIST-CSF-1.1": [
+            "ae_3",
+            "ae_4",
+            "cm_1",
+            "cm_3",
+            "cm_6",
+            "cm_7",
+            "ds_5"
+        ],
+        "RBI-Cyber-Security-Framework": [
+            "annex_i_7_4"
+        ],
+        "FFIEC": [
+            "d2-ma-ma-b-1",
+            "d2-ma-ma-b-2",
+            "d3-dc-an-b-3",
+            "d3-dc-an-b-4",
+            "d3-dc-ev-b-1",
+            "d5-dr-de-b-3"
+        ],
+        "FedRamp-Moderate-Revision-4": [
+            "ac-2-4",
+            "ac-2-g",
+            "au-2-a-d",
+            "au-3",
+            "au-6-1-3",
+            "au-12-a-c",
+            "ca-7-a-b",
+            "si-4-16",
+            "si-4-2",
+            "si-4-4",
+            "si-4-5"
+        ],
+        "FedRAMP-Low-Revision-4": [
+            "ac-2",
+            "au-2",
+            "ca-7"
+        ]
+    },
+    "Categories": [
+        "forensics-ready"
+    ],
+    "DependsOn": [],
+    "RelatedTo": [],
+    "Notes": "",
+    "Profile": null,
+    "AccountId": "898769392027",
+    "OrganizationsInfo": null,
+    "Region": "us-east-1",
+    "ResourceId": "898769392027",
+    "ResourceArn": "arn:aws:iam::898769392027:root",
+    "ResourceTags": {}
+}]

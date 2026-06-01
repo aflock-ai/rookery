@@ -20,8 +20,6 @@ EXCLUDED=(
   # Aqua docker-bench-security parser; small, but the example flow requires
   # a docker-in-docker setup that's preset-territory.
   "docker-bench"
-  # Tenable Nessus, commercial scanner feed; preset-only by design.
-  "nessus"
   # AWS Config recorder output; requires AWS Config to be deployed. The
   # attestor is preset-only because most users don't have a recorder set up.
   "aws-config"

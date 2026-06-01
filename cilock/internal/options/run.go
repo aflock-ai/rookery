@@ -29,6 +29,7 @@ import (
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var DefaultAttestors = []string{"environment", "git", "platform"}
@@ -64,6 +65,100 @@ func sameOrigin(a, b string) bool {
 		return false
 	}
 	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+}
+
+// fulcioSignerNeedsToken reports whether the fulcio signer has no operator-chosen
+// token source yet, so the login-driven keyless exchange may supply one. An
+// explicit --signer-fulcio-token / -token-path / -oidc-issuer always wins. If the
+// command never registered the fulcio signer (flag absent), there is nothing to
+// fill, so it returns false.
+func fulcioSignerNeedsToken(cmd *cobra.Command) bool {
+	f := cmd.Flags().Lookup("signer-fulcio-token")
+	if f == nil {
+		return false
+	}
+	for _, name := range []string{"signer-fulcio-token", "signer-fulcio-token-path", "signer-fulcio-oidc-issuer"} {
+		if g := cmd.Flags().Lookup(name); g != nil && g.Changed {
+			return false
+		}
+	}
+	return true
+}
+
+// fulcioFlagURL returns the fulcio signer's configured URL (set either by the
+// user or by the platform-URL derivation earlier in ResolvePlatformDefaults). It
+// is the origin the keyless OIDC token would be presented to, so the exchange is
+// gated on it matching the platform's own Fulcio origin.
+func fulcioFlagURL(cmd *cobra.Command) string {
+	if f := cmd.Flags().Lookup("signer-fulcio-url"); f != nil {
+		return f.Value.String()
+	}
+	return ""
+}
+
+// fulcioSignerSelected reports whether the fulcio signer is selected, mirroring
+// cli.providersFromFlags: the signer is chosen when any *changed* flag carries the
+// "signer-fulcio-" prefix (--signer-fulcio-token / -token-path / -oidc-issuer /
+// -url). Used to decide when the platform should fill in a missing Fulcio URL.
+func fulcioSignerSelected(cmd *cobra.Command) bool {
+	selected := false
+	cmd.Flags().Visit(func(f *pflag.Flag) {
+		if strings.HasPrefix(f.Name, "signer-fulcio-") {
+			selected = true
+		}
+	})
+	return selected
+}
+
+// ensureFulcioURL gives a SELECTED fulcio signer a URL when it has none, deriving
+// it from the platform. The fulcio signer needs a host regardless of where its
+// token comes from — an explicit --signer-fulcio-token (e.g. a CI OIDC token) or
+// the keyless login exchange below — so without this,
+// `cilock run|sign --platform-url X --signer-fulcio-token T` fails with
+// "fulcio URL must include a host" unless the user also passes --signer-fulcio-url.
+//
+// CRITICAL: it only fills an EMPTY url and only when fulcio is ALREADY selected,
+// so it never selects the signer itself. A non-keyless invocation with no
+// signer-fulcio-* flag (local/KMS signing) is left completely untouched — that is
+// the regression that broke local/KMS signing when the URL was derived
+// unconditionally (the first bug Codex caught).
+func ensureFulcioURL(cmd *cobra.Command, fulcioURL string) {
+	if fulcioURL == "" || !fulcioSignerSelected(cmd) {
+		return
+	}
+	if f := cmd.Flags().Lookup("signer-fulcio-url"); f != nil && f.Value.String() == "" {
+		_ = cmd.Flags().Set("signer-fulcio-url", fulcioURL)
+	}
+}
+
+// applyKeylessFulcioToken exchanges a stored platform login credential for a
+// short-lived OIDC token the platform's Fulcio trusts and feeds it to the fulcio
+// signer (--signer-fulcio-token). Shared by `cilock run` and `cilock sign` so
+// both can sign keyless after `cilock login`. The caller pairs this with
+// ensureFulcioURL, which supplies the URL the now-selected signer needs.
+//
+// It only fires when the user hasn't already chosen a Fulcio token source
+// (--signer-fulcio-token / -token-path / -oidc-issuer) — an explicit choice
+// always wins. If the user explicitly set --signer-fulcio-url to some origin,
+// we only attach the token when it matches the platform's own Fulcio origin, so
+// the session credential never travels to a third-party Fulcio. Fails OPEN: a
+// failed exchange (offline, missing OIDC server) sets nothing and signing
+// proceeds exactly as before — CI, offline, and local/KMS paths are unaffected.
+func applyKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL, sessionToken string) {
+	if !fulcioSignerNeedsToken(cmd) {
+		return
+	}
+	if cur := fulcioFlagURL(cmd); cur != "" && !sameOrigin(cur, fulcioURL) {
+		return
+	}
+	oidcToken, err := auth.ExchangeSignToken(platformURL, sessionToken)
+	if err != nil {
+		log.Debugf("keyless sign-token exchange skipped: %v", err)
+		return
+	}
+	// Setting the token selects the fulcio signer; ensureFulcioURL (called right
+	// after this by the caller) gives it the platform URL.
+	_ = cmd.Flags().Set("signer-fulcio-token", oidcToken)
 }
 
 type RunOptions struct {
@@ -230,6 +325,14 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 		ro.TimestampServers = []string{pc.TSA}
 	}
 
+	// NOTE: We deliberately do NOT derive --signer-fulcio-url unconditionally.
+	// Setting it marks the flag "changed", which SELECTS the fulcio signer (signer
+	// selection keys off changed signer-* flags). Deriving it for every run would
+	// force fulcio onto local/KMS signing and fail with "no token provided" when
+	// not logged in. Instead ensureFulcioURL (below) fills the URL only once the
+	// fulcio signer is already selected — by an explicit --signer-fulcio-* flag or
+	// by the keyless exchange.
+
 	// Platform session: if the user has logged in (`cilock login`) to this
 	// platform, authenticate Archivista uploads with the session token and
 	// expose the platform URL to the platform attestor (via CILOCK_PLATFORM_URL)
@@ -247,18 +350,43 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 		if !hasAuthorizationHeader(ro.ArchivistaOptions.Headers) && sameOrigin(ro.ArchivistaOptions.Url, pc.Archivista) {
 			ro.ArchivistaOptions.Headers = append(ro.ArchivistaOptions.Headers, "Authorization: Bearer "+cred.Token)
 		}
+
+		// Keyless signing: exchange the session credential for a short-lived
+		// OIDC token the platform's Fulcio trusts, and feed it to the fulcio
+		// signer. This is what makes a minimal-flag `cilock run` sign keyless
+		// after `cilock login`.
+		applyKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred.Token)
+
+		// Archivista on by default WHEN LOGGED IN. Storing the attestation is
+		// the whole point of being logged in to a platform, so a minimal-flag
+		// `cilock run` should persist it without `--enable-archivista`. We only
+		// default it on — never override an explicit choice — and only when a
+		// session exists, so the offline/no-platform path (the case the old
+		// "users may rely on false" note protected) keeps its false default.
+		// Opt out with `--enable-archivista=false`.
+		if !cmd.Flags().Changed("enable-archivista") && !cmd.Flags().Changed("enable-archivist") {
+			ro.ArchivistaOptions.Enable = true
+		}
 	}
 
-	// NOTE: We intentionally do NOT force enable-archivista here.
-	// The flag defaults to false and users/configs may rely on that.
-	// Archivista is enabled explicitly via --enable-archivista or config.
+	// Give a selected fulcio signer a URL if it lacks one — whether it was
+	// selected by the keyless exchange above or by an explicit --signer-fulcio-token
+	// (a CI OIDC token). Runs outside the login block so the explicit-token path
+	// works without `cilock login`. No-op for local/KMS signing (fulcio unselected).
+	ensureFulcioURL(cmd, pc.Fulcio)
 }
 
 //nolint:funlen // each flag carries its own multi-line help text; splitting the registration loses readability
 func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	ro.SignerOptions.AddFlags(cmd)
 	ro.ArchivistaOptions.AddFlags(cmd)
-	cmd.Flags().StringVar(&ro.PlatformURL, "platform-url", platformconfig.DefaultPlatformURL, "TestifySec platform URL (derives archivista, fulcio, and TSA URLs)")
+	cmd.Flags().StringVar(&ro.PlatformURL, "platform-url", platformconfig.DefaultPlatformURL,
+		"TestifySec platform URL — derives the Archivista, Fulcio, and TSA URLs "+
+			"(default "+platformconfig.DefaultPlatformURL+"). Run 'cilock login' to authenticate to the "+
+			"hosted platform, or bring your own infrastructure by overriding --signer-* (key provider), "+
+			"--timestamp-servers (timestamper), and --archivista-server (attestation storage). Pass "+
+			"--platform-url \"\" to run fully offline. Additional key/signer providers can be compiled in — "+
+			"see https://github.com/aflock-ai/rookery/blob/main/docs/signers.md")
 	cmd.Flags().StringVarP(&ro.WorkingDir, "workingdir", "d", "", "Directory from which commands will run")
 	cmd.Flags().StringSliceVarP(&ro.Attestations, "attestations", "a", DefaultAttestors, "Attestations to record ('product' and 'material' are always recorded)")
 	cmd.Flags().StringSliceVar(&ro.DirHashGlobs, "dirhash-glob", []string{}, "Dirhash glob can be used to collapse material and product hashes on matching directory matches.")
