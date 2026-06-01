@@ -109,9 +109,16 @@ func buildCilockWithTestHook(t *testing.T) string {
 // same credential file on Linux and macOS.
 func seedCredential(t *testing.T, homeDir string, c auth.Credential) {
 	t.Helper()
+	seedCredentialFor(t, homeDir, config.DefaultPlatformURL, c)
+}
+
+// seedCredentialFor is seedCredential for an explicit platform URL (e.g. staging),
+// so a smoke case can prove telemetry follows the platform the command targeted.
+func seedCredentialFor(t *testing.T, homeDir, platformURL string, c auth.Credential) {
+	t.Helper()
 	t.Setenv("HOME", homeDir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
-	c.PlatformURL = config.DefaultPlatformURL
+	c.PlatformURL = platformURL
 	if c.ExpiresAt.IsZero() {
 		c.ExpiresAt = time.Now().Add(time.Hour)
 	}
@@ -204,5 +211,26 @@ func TestTelemetryBinarySmoke(t *testing.T) {
 		runVersion(t, bin, home, url)
 
 		assert.Equal(t, 0, hub.hitCount(), "no platform session must emit no telemetry (own-keys / off-by-default)")
+	})
+
+	// Platform-awareness: a credential for a NON-default platform (staging) plus
+	// CILOCK_PLATFORM_URL pointing at it (as run/verify export at runtime) must
+	// emit, attributed to that platform. Regression guard for the dropped-staging
+	// telemetry bug.
+	t.Run("resolved platform (staging) is attributed", func(t *testing.T) {
+		const staging = "https://platform.aws-sandbox-staging.testifysec.dev"
+		home := t.TempDir()
+		seedCredentialFor(t, home, staging, auth.Credential{
+			Token:      "staging-bearer",
+			Email:      "ci@testifysec.com",
+			TenantName: "staging-tenant",
+		})
+		hub, url := newMockHub(t)
+
+		runVersion(t, bin, home, url, "CILOCK_PLATFORM_URL="+staging)
+
+		require.Equal(t, 1, hub.hitCount(), "usage against the resolved staging platform must emit telemetry")
+		assert.Equal(t, "Bearer staging-bearer", hub.authHdr)
+		assert.Equal(t, "staging-tenant", hub.payload["account"])
 	})
 }

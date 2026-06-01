@@ -9,6 +9,14 @@ import "strings"
 // Enterprise/self-hosted builds override this via ldflags.
 var DefaultPlatformURL = "https://platform.testifysec.com"
 
+// PlatformURLEnv carries the platform URL the current cilock command bound to
+// (the logged-in platform session resolved from --platform-url). run/verify set
+// it when a credential exists for that platform; telemetry reads it so usage is
+// attributed to the platform actually used (staging / self-hosted / a custom
+// --platform-url), not just the compiled-in default. Single source of truth for
+// the env-var name shared by the options and telemetry packages.
+const PlatformURLEnv = "CILOCK_PLATFORM_URL"
+
 // PlatformConfig holds derived service URLs from a single platform URL.
 type PlatformConfig struct {
 	PlatformURL  string

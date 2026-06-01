@@ -34,7 +34,7 @@ import (
 func clearTelemetryEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
-		"CILOCK_NO_TELEMETRY", "DO_NOT_TRACK",
+		"CILOCK_NO_TELEMETRY", "DO_NOT_TRACK", "CILOCK_PLATFORM_URL",
 		"GITHUB_ACTIONS", "GITLAB_CI", "JENKINS_URL", "CIRCLECI", "CI",
 	} {
 		t.Setenv(k, "")
@@ -367,4 +367,60 @@ func TestReportSwallowsTransportError(t *testing.T) {
 	assert.NotPanics(t, func() {
 		Report("verify", "1.0.0", "success")
 	}, "Report must swallow transport errors and never panic")
+}
+
+// ---- Report: platform-awareness (CILOCK_PLATFORM_URL) -----------------------
+
+// TestReportAttributesToResolvedPlatform pins the platform-awareness fix:
+// telemetry follows the platform the command actually used (CILOCK_PLATFORM_URL,
+// set by run/verify), not the hardcoded production default. Regression — staging
+// / self-hosted / --platform-url usage was silently dropped because Report only
+// ever looked up config.DefaultPlatformURL.
+func TestReportAttributesToResolvedPlatform(t *testing.T) {
+	clearTelemetryEnv(t)
+	isolateConfig(t)
+	const staging = "https://platform.aws-sandbox-staging.testifysec.dev"
+	require.NoError(t, auth.Save(auth.Credential{
+		PlatformURL: staging, // NOT config.DefaultPlatformURL
+		Token:       "staging-jwt",
+		Email:       "ci@testifysec.com",
+		TenantName:  "staging-tenant",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}))
+	t.Setenv("CILOCK_PLATFORM_URL", staging)
+	cs := newCaptureServer(t)
+
+	Report("run", "1.2.3", "success")
+
+	require.Equal(t, 1, cs.Hits(), "telemetry must emit attributed to the resolved (staging) platform")
+	assert.Equal(t, "Bearer staging-jwt", cs.auth)
+	assert.Equal(t, "staging-tenant", cs.payload["account"])
+	assert.Equal(t, "ci@testifysec.com", cs.payload["user_ref"])
+}
+
+// TestReportResolvedPlatformUnauthenticatedSendsNothing ensures credentials for
+// one platform are never attributed to usage of another: targeting a platform
+// with no stored credential emits nothing, even when logged in elsewhere.
+func TestReportResolvedPlatformUnauthenticatedSendsNothing(t *testing.T) {
+	clearTelemetryEnv(t)
+	isolateConfig(t)
+	authenticate(t, auth.Credential{Token: "prod-jwt", Email: "a@b.com", TenantName: "prod"}) // default platform only
+	t.Setenv("CILOCK_PLATFORM_URL", "https://platform.aws-sandbox-staging.testifysec.dev")    // command targeted staging
+	cs := newCaptureServer(t)
+
+	Report("run", "1.2.3", "success")
+	assert.Equal(t, 0, cs.Hits(), "no credential for the resolved platform => no telemetry (no cross-platform leakage)")
+}
+
+// TestReportFallsBackToDefaultPlatform ensures back-compat: with no
+// CILOCK_PLATFORM_URL set, Report still attributes to the default platform.
+func TestReportFallsBackToDefaultPlatform(t *testing.T) {
+	clearTelemetryEnv(t)
+	isolateConfig(t)
+	authenticate(t, auth.Credential{Token: "default-jwt", Email: "a@b.com", TenantName: "default-tenant"})
+	cs := newCaptureServer(t) // CILOCK_PLATFORM_URL intentionally unset
+
+	Report("verify", "1.2.3", "success")
+	require.Equal(t, 1, cs.Hits(), "with no resolved platform, telemetry falls back to the default platform credential")
+	assert.Equal(t, "default-tenant", cs.payload["account"])
 }

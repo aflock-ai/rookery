@@ -79,7 +79,18 @@ func Report(commandName, version, outcome string) {
 		return
 	}
 
-	cred, err := auth.Lookup(config.DefaultPlatformURL)
+	// Attribute the event to the platform the command actually interacted with:
+	// run/verify set CILOCK_PLATFORM_URL when they bind to a logged-in platform
+	// session, so telemetry follows the platform the user is really using
+	// (staging, self-hosted, or any --platform-url). Falls back to the compiled-in
+	// default. Without this, usage against a non-default platform was silently
+	// dropped because the lookup only ever checked the default (production) URL.
+	platformURL := strings.TrimSpace(os.Getenv(config.PlatformURLEnv))
+	if platformURL == "" {
+		platformURL = config.DefaultPlatformURL
+	}
+
+	cred, err := auth.Lookup(platformURL)
 	if err != nil || cred == nil || cred.Token == "" {
 		return // no authenticated platform session -> send nothing
 	}

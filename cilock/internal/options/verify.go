@@ -15,6 +15,7 @@
 package options
 
 import (
+	"os"
 	"time"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
@@ -136,6 +137,12 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) { //nolint:
 		return
 	}
 	pc := platformconfig.Derive(vo.PlatformURL)
+	// Attribute telemetry to this logged-in platform session (CILOCK_PLATFORM_URL)
+	// so `cilock verify --platform-url X` is recorded against platform X, not the
+	// compiled-in default. Mirrors RunOptions; only set when a credential exists.
+	if cred, lookupErr := auth.Lookup(vo.PlatformURL); lookupErr == nil && cred != nil {
+		_ = os.Setenv(platformconfig.PlatformURLEnv, auth.NormalizeURL(vo.PlatformURL))
+	}
 	// Archivista URL: use platform default if not explicitly overridden.
 	if !cmd.Flags().Changed("archivista-server") && !cmd.Flags().Changed("archivist-server") {
 		vo.ArchivistaOptions.Url = pc.Archivista

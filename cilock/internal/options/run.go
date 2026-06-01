@@ -37,7 +37,7 @@ var DefaultAttestors = []string{"environment", "git", "platform"}
 // platformURLEnv tells the platform attestor which logged-in platform session
 // to bind to. Kept as a literal (not an import of the attestor package) to
 // avoid coupling options → attestor.
-const platformURLEnv = "CILOCK_PLATFORM_URL"
+const platformURLEnv = platformconfig.PlatformURLEnv
 
 // hasAuthorizationHeader reports whether an explicit Authorization header is
 // already present, so a platform session doesn't clobber a user-supplied one.
