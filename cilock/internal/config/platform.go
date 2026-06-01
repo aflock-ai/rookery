@@ -36,9 +36,12 @@ func Derive(platformURL string) PlatformConfig {
 	platformURL = strings.TrimRight(platformURL, "/")
 
 	return PlatformConfig{
-		PlatformURL:       platformURL,
-		Archivista:        platformURL + "/archivista",
-		Fulcio:            platformURL + "/fulcio",
+		PlatformURL: platformURL,
+		Archivista:  platformURL + "/archivista",
+		// Fulcio's gRPC-gateway REST API is mounted at the platform root
+		// (/api/v2/signingCert); the fulcio signer appends the /api/v2 path
+		// itself, so the base URL is the platform root, NOT a /fulcio subpath.
+		Fulcio:            platformURL,
 		TSA:               platformURL + "/api/v1/timestamp",
 		OIDCAudience:      platformURL + "/archivista",
 		OIDCLoginAudience: platformURL + "/login",
