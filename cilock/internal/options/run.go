@@ -161,6 +161,36 @@ func applyKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL, session
 	_ = cmd.Flags().Set("signer-fulcio-token", oidcToken)
 }
 
+// applyWorkflowKeylessFulcioToken wires the fulcio signer for ambient CI
+// workflow identity (AuthModeWorkflowOIDC). It mints a fresh GitHub Actions OIDC
+// token carrying the Fulcio signing audience and feeds it to --signer-fulcio-token,
+// so `cilock run --platform-url <any>` signs keyless in CI with no manual
+// --signer-fulcio-* flags after `cilock login --workflow-identity`. The session
+// path (applyKeylessFulcioToken) cannot serve this case: a workflow-identity
+// credential carries no stored token to exchange at /oauth/sign-token.
+//
+// Same guards as applyKeylessFulcioToken: an explicit --signer-fulcio-token /
+// -token-path / -oidc-issuer always wins, and a user-set --signer-fulcio-url to a
+// different origin suppresses the token so the workflow OIDC never travels to a
+// third-party Fulcio. Fails OPEN — a missing OIDC server (not in GitHub Actions,
+// or no id-token: write) sets nothing and signing proceeds as before.
+func applyWorkflowKeylessFulcioToken(cmd *cobra.Command, fulcioURL, audience string) {
+	if !fulcioSignerNeedsToken(cmd) {
+		return
+	}
+	if cur := fulcioFlagURL(cmd); cur != "" && !sameOrigin(cur, fulcioURL) {
+		return
+	}
+	oidcToken, err := fetchGitHubOIDCToken(audience)
+	if err != nil {
+		log.Debugf("workflow keyless OIDC mint skipped: %v", err)
+		return
+	}
+	// Setting the token selects the fulcio signer; ensureFulcioURL (called by the
+	// caller right after) gives it the platform's Fulcio URL.
+	_ = cmd.Flags().Set("signer-fulcio-token", oidcToken)
+}
+
 type RunOptions struct {
 	SignerOptions            SignerOptions
 	KMSSignerProviderOptions KMSSignerProviderOptions
@@ -339,34 +369,19 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// so it can bind the attestation to the tenant/product. Best-effort — a
 	// missing/expired session just means no platform auth (offline/CI paths
 	// keep working).
-	if cred, lookupErr := auth.Lookup(ro.PlatformURL); lookupErr == nil && cred != nil {
-		_ = os.Setenv(platformURLEnv, auth.NormalizeURL(ro.PlatformURL))
-		// Only attach the platform bearer token when the upload target is the
-		// platform's own Archivista origin. Without this guard a user who
-		// points --archivista-server at a third-party host while logged in
-		// would leak their platform JWT to that host. Fail closed: an origin
-		// mismatch (e.g. a custom --archivista-server) gets no auth header,
-		// and the upload proceeds unauthenticated as it would offline.
-		if !hasAuthorizationHeader(ro.ArchivistaOptions.Headers) && sameOrigin(ro.ArchivistaOptions.Url, pc.Archivista) {
-			ro.ArchivistaOptions.Headers = append(ro.ArchivistaOptions.Headers, "Authorization: Bearer "+cred.Token)
-		}
-
-		// Keyless signing: exchange the session credential for a short-lived
-		// OIDC token the platform's Fulcio trusts, and feed it to the fulcio
-		// signer. This is what makes a minimal-flag `cilock run` sign keyless
-		// after `cilock login`.
-		applyKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred.Token)
-
-		// Archivista on by default WHEN LOGGED IN. Storing the attestation is
-		// the whole point of being logged in to a platform, so a minimal-flag
-		// `cilock run` should persist it without `--enable-archivista`. We only
-		// default it on — never override an explicit choice — and only when a
-		// session exists, so the offline/no-platform path (the case the old
-		// "users may rely on false" note protected) keeps its false default.
-		// Opt out with `--enable-archivista=false`.
-		if !cmd.Flags().Changed("enable-archivista") && !cmd.Flags().Changed("enable-archivist") {
-			ro.ArchivistaOptions.Enable = true
-		}
+	// LookupAny (not Lookup) so a workflow-identity marker — which carries no
+	// stored token — is returned too; its keyless signing comes from a freshly
+	// minted ambient OIDC token, not a stored bearer.
+	if cred, lookupErr := auth.LookupAny(ro.PlatformURL); lookupErr == nil && cred != nil {
+		ro.applyPlatformCredential(cmd, cred, pc)
+	} else if auth.WorkflowOIDCAvailable() {
+		// Not logged in, but running in CI with an ambient OIDC identity
+		// (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN present ⇒ `permissions: id-token:
+		// write`). Sign keyless with the workflow identity directly, so a bare
+		// `cilock run --platform-url X` works in CI with no `cilock login` step.
+		// The minted OIDC token carries the Fulcio signing audience (sigstore) and
+		// is presented to the platform's own Fulcio (derived from --platform-url).
+		applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
 	}
 
 	// Give a selected fulcio signer a URL if it lacks one — whether it was
@@ -374,6 +389,46 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// (a CI OIDC token). Runs outside the login block so the explicit-token path
 	// works without `cilock login`. No-op for local/KMS signing (fulcio unselected).
 	ensureFulcioURL(cmd, pc.Fulcio)
+}
+
+// applyPlatformCredential wires a stored login credential into the run: the
+// Archivista bearer (session credentials only), the keyless Fulcio signer, and
+// the logged-in Archivista-on default. Split out of ResolvePlatformDefaults to
+// keep that method's nesting flat.
+func (ro *RunOptions) applyPlatformCredential(cmd *cobra.Command, cred *auth.Credential, pc platformconfig.PlatformConfig) {
+	_ = os.Setenv(platformURLEnv, auth.NormalizeURL(ro.PlatformURL))
+
+	// Only attach the platform bearer when uploading to the platform's own
+	// Archivista origin (never leak the JWT to a third-party --archivista-server),
+	// and only for a session credential — a workflow-identity marker carries no
+	// stored token (its Archivista auth comes from --archivista-oidc, auto-enabled
+	// in GitHub Actions).
+	if cred.Token != "" && !hasAuthorizationHeader(ro.ArchivistaOptions.Headers) && sameOrigin(ro.ArchivistaOptions.Url, pc.Archivista) {
+		ro.ArchivistaOptions.Headers = append(ro.ArchivistaOptions.Headers, "Authorization: Bearer "+cred.Token)
+	}
+
+	// Keyless signing — feed the fulcio signer an OIDC token the platform's Fulcio
+	// trusts so a minimal-flag `cilock run` signs keyless after `cilock login`:
+	//   - workflow identity (CI ambient OIDC, no stored token): mint a fresh GitHub
+	//     Actions OIDC token carrying the Fulcio signing audience.
+	//   - session login (browser/token): exchange the stored session at
+	//     /oauth/sign-token for a short-lived signing token.
+	if cred.AuthMode == auth.AuthModeWorkflowOIDC {
+		applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+	} else {
+		applyKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred.Token)
+	}
+
+	// Archivista on by default when logged in with a SESSION/token credential —
+	// it carries a tenant and can authorize the upload. NOT for a workflow-identity
+	// marker (empty token): a raw workflow identity maps to no tenant and would 401
+	// on upload, and `cilock run` treats an upload failure as fatal — auto-enabling
+	// it would break the minimal-flag ambient UX (sign-only). Those users opt in
+	// explicitly with --enable-archivista once they have a tenant-authorized path.
+	// Never override an explicit choice; the offline/no-platform path keeps false.
+	if cred.Token != "" && !cmd.Flags().Changed("enable-archivista") && !cmd.Flags().Changed("enable-archivist") {
+		ro.ArchivistaOptions.Enable = true
+	}
 }
 
 //nolint:funlen // each flag carries its own multi-line help text; splitting the registration loses readability
