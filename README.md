@@ -2,7 +2,11 @@
 
 **Modular supply-chain attestation toolkit for Go.** Build SLSA / in-toto evidence at every step of your SDLC — local dev, CI, release, deploy — and verify it with policy.
 
-Rookery is the upstream for **[`cilock`](cilock/)** (witness-compatible attestation CLI), the **[`attestation`](attestation/)** library, 40+ attestor plugins, a pluggable signer set (file, Fulcio, KMS, Vault, SPIFFE), and a **[`builder`](builder/)** that emits custom binaries with only the plugins you want.
+Rookery is the upstream for **[`cilock`](cilock/)** (witness-compatible attestation CLI), the **[`attestation`](attestation/)** library, 50+ attestor plugins (see [`docs/attestor-catalog.md`](docs/attestor-catalog.md)), a pluggable signer set (file, Fulcio, KMS, Vault, Vault-Transit, SPIFFE), and a **[`builder`](builder/)** that emits custom binaries with only the plugins you want.
+
+![cilock securing curl's supply chain](docs/img/hero-demo.gif)
+
+*A real, unscripted Claude Code session: `cilock` wraps a Trivy scan under eBPF kernel-side tracing and signs the result as an in-toto attestation — nothing faked.*
 
 > Working with an AI agent on this repo? Point it at **[AGENTS.md](AGENTS.md)** — it has the layout, commands, and conventions you'd otherwise have to discover by reading source.
 
@@ -12,11 +16,18 @@ Rookery is the upstream for **[`cilock`](cilock/)** (witness-compatible attestat
 
 | You want to… | Use |
 |---|---|
-| Wrap a build step and produce signed evidence | [`cilock run`](cilock/) |
-| Verify a chain of attestations against policy | [`cilock verify`](cilock/) |
+| Wrap a build step and produce signed evidence | `cilock run` |
+| Record attestations without wrapping a command | `cilock attest` |
+| Verify a chain of attestations against policy | `cilock verify` |
+| Package evidence into a portable bundle | `cilock bundle` |
+| Emit signed file inclusion proofs / chain-of-custody | `cilock prove` / `cilock prove-chain` |
+| Manage and validate Witness policies | `cilock policy` |
 | Embed attestation in your own Go program | [`attestation`](attestation/) library |
 | Ship a slimmer CLI with only the attestors you need | [`builder`](builder/) |
 | Drop into a GitHub Actions workflow | [`aflock-ai/cilock-action`](https://github.com/aflock-ai/cilock-action) |
+
+Run `cilock --help` for the full command list (`attest`, `bundle`, `prove`, `prove-chain`,
+`policy`, `plan`, `tools`, `sign`, `login`, `whoami`, …).
 
 ---
 
@@ -27,18 +38,22 @@ Rookery is the upstream for **[`cilock`](cilock/)** (witness-compatible attestat
 go install github.com/aflock-ai/rookery/cilock/cmd/cilock@latest
 
 # Wrap a build step — produces an in-toto/DSSE attestation
+# (product + material are always recorded; pass --platform-url "" to sign fully offline)
 cilock run \
   --step build \
-  --attestations command-run,environment,git,material,product \
+  --attestations command-run,environment,git \
   --signer-file-key-path cosign.key \
   --outfile build.attestation.json \
   -- go build ./...
 
 # List every attestor compiled into this binary
-cilock attestors
+cilock attestors list
 ```
 
-For a full example including signing with Sigstore Fulcio and verifying against a policy, see [`cilock/README.md`](cilock/) and the [attestor catalog](docs/attestor-catalog.md).
+For configuring signing backends and the hosted platform, see [`docs/configuration.md`](docs/configuration.md)
+and [`docs/signers.md`](docs/signers.md); for canonical attestor names and predicate types, see the
+[attestor catalog](docs/attestor-catalog.md). `cilock run --help` and `cilock verify --help` document
+the full set of signing, tracing, and Archivista flags.
 
 ---
 
@@ -49,8 +64,8 @@ rookery/
 ├── attestation/            # Core library: AttestationContext, Attestor interface, DSSE envelope
 ├── cilock/                 # Batteries-included CLI (witness-compatible)
 ├── plugins/
-│   ├── attestors/          # 40+ attestors, each its own Go module
-│   └── signers/            # file, fulcio, kms (aws|azure|gcp), spiffe, vault, vault-transit
+│   ├── attestors/          # 50+ attestors, each its own Go module
+│   └── signers/            # file, fulcio, kms (aws|azure|gcp), spiffe, vault, vault-transit, debug-signer
 ├── presets/                # Curated plugin sets (minimal, cicd, all) — blank-import these
 ├── builder/                # Generate custom cilock binaries with a chosen plugin set
 ├── compat/                 # Import shims for the legacy witness.dev module paths
@@ -73,22 +88,32 @@ Pick only the plugins you ship — smaller binary, smaller transitive dep tree.
 ```bash
 cd builder
 go run ./cmd/builder/ --preset minimal --local --output /tmp/cilock-min
-/tmp/cilock-min attestors
+/tmp/cilock-min attestors list
 ```
-Presets: `minimal` (commandrun + git + material + product + file), `cicd`, `all`.
+Presets: `minimal` (commandrun + environment + git + material + product, with the file signer),
+`cicd` (minimal + github, gitlab, slsa), `all` (every attestor + every signer). Run
+`go run ./cmd/builder/ --help` for manifest format and the `--with`, `--fips`, and `--manifest` flags.
 
 ### 3. Embed the library
+The high-level entrypoint is `workflow.RunWithExports`, which builds the attestation context, runs
+the attestors, and signs the collection into a DSSE envelope. Blank-import the attestor and signer
+plugins you need to register them, then pass a `cryptoutil.Signer` via `RunWithSigners`:
 ```go
-import "github.com/aflock-ai/rookery/attestation"
-import _ "github.com/aflock-ai/rookery/plugins/attestors/git"   // register
-import _ "github.com/aflock-ai/rookery/plugins/signers/file"    // register
+import (
+    "github.com/aflock-ai/rookery/attestation"
+    "github.com/aflock-ai/rookery/attestation/workflow"
+    _ "github.com/aflock-ai/rookery/plugins/attestors/git"  // register the git attestor
+    _ "github.com/aflock-ai/rookery/plugins/signers/file"   // register the file signer
+)
 
-ctx, _ := attestation.NewContext("build",
-    []attestation.Attestor{ /* attestors */ },
-    attestation.WithWorkingDir("./"))
-_ = ctx.RunAttestors()
-envelope, _ := attestation.SignAndMarshal(ctx, signer)
+results, err := workflow.RunWithExports("build",
+    workflow.RunWithAttestors([]attestation.Attestor{ /* attestors */ }),
+    workflow.RunWithAttestationOpts(attestation.WithWorkingDir("./")),
+    workflow.RunWithSigners(signer))
+// results[0].SignedEnvelope is the signed dsse.Envelope
 ```
+See [`cilock/cli/run.go`](cilock/cli/run.go) and the [`attestation/workflow`](attestation/workflow/)
+package for the full wiring (signer-provider resolution, timestampers, Archivista export).
 
 ---
 
