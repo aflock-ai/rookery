@@ -191,13 +191,15 @@ jobs:
       - name: Build melange package
         working-directory: deploy/cilock
         run: |
+          # melange has no --substitution flag (removed in current versions) and
+          # does not expand shell-style ${CILOCK_VERSION}. Inject the release
+          # version straight into package.version, then build.
+          sed -i "s|\${CILOCK_VERSION}|${{ steps.version.outputs.version }}|g" melange.yaml
           sudo melange build melange.yaml \
             --arch x86_64,aarch64 \
             --signing-key melange.rsa \
             --out-dir ./packages \
-            --env-file "" \
-            --source-dir ../../ \
-            --substitution "CILOCK_VERSION=${{ steps.version.outputs.version }}"
+            --source-dir ../../
 
       - name: Build apko image
         working-directory: deploy/cilock
