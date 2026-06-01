@@ -51,10 +51,10 @@ Each item lists:
 ### 1.4 Content-bypass syscalls
 - [x] **mmap-write (Go linker)** — write-tap blind, stat-fallback rescues with `trace-pathhash`.
   How: gh CLI smoke — link subprocesses have 0 sys_write events.
-  See [[go-link-mmap-write-gap]].
-- [!] **copy_file_range / splice / sendfile / vmsplice** — surfaced via zero-copy hooks, content NOT digested.
-  Accept: entry exists in attestation with `WrittenContentLimited: true`.
-- [!] **Memory-mapped reads (filemap_fault)** — content gap documented.
+  Note: file-backed `mmap` is recorded as a `SyscallEvent` (`Syscall: "mmap"`) — bytes written through the mapping bypass the read/write kprobes by design; the digest comes from the openat-time hash, not the mapped bytes. See `plugins/attestors/commandrun/tracing_ebpf_linux.go:1337-1346`.
+- [!] **copy_file_range / splice / sendfile** — surfaced as `SyscallEvent` entries (`Syscall: "copy_file_range" | "splice" | "sendfile"`, with `Path`/`TargetPath`), but content is NOT digested from the moved bytes (zero-copy intra-kernel transfer bypasses the read kprobe). See `plugins/attestors/commandrun/tracing_ebpf_linux.go:1303-1336`.
+  Accept: a `SyscallEvent` with the matching syscall name appears on the process; the produced file's content digest derives from the openat-time hash or read-tap on other reads, not the moved bytes.
+- [!] **Memory-mapped reads** — content gap documented in code (see mmap note above); no separate hook beyond the `mmap` `SyscallEvent`.
 
 ---
 
@@ -63,7 +63,9 @@ Each item lists:
 ### 2.1 Schema correctness (v0.3)
 - [x] **product/v0.3 envelope** — has `merkleRoot`, `treeSize`, `hashAlgorithm: sha256`, `construction: RFC6962`.
   How: `jq '.predicate.attestations[]? | select(.type | test("product/v0\\.3"))' payload.json`.
-- [x] **material/v0.3 envelope** — same shape.
+  Fields confirmed in `plugins/attestors/product/product.go:104-108,159-162` (`HashAlgorithm = "sha256"`, `Construction = "RFC6962"`).
+- [x] **material/v0.3 envelope** — same shape (`plugins/attestors/material/material.go:117-120`).
+- Note: the `always run` product/material attestors emit v0.3 only (`cilock attestors list`). `product-v0.2` (`product/v0.2`), `product-v0.1`, and `material-v0.1` are still registered as decoders for verifying older envelopes, but current `cilock run` produces v0.3.
 - [ ] **subject[] contains the tree subjects** — `tree:products` and `tree:materials` as in-toto subjects with digests matching `merkleRoot`.
   Accept: `jq '.subject[] | select(.name | endswith("tree:products"))'` returns a subject whose digest equals the predicate's `merkleRoot`.
 
@@ -87,8 +89,8 @@ Each item lists:
 ### 3.1 Round-trip envelope verification
 - [x] **DSSE envelope parses** — gh CLI smoke produces a parseable envelope.
 - [ ] **`cilock verify` against attestation + product file** — verifier reads attestation, fetches leaf list (Archivista or sidecar), recomputes product Merkle root, compares against attestation root.
-  How: `cilock verify --attestation /tmp/gh-build-attestation.json --product bin/gh` in a smoke step.
-  Accept: exit 0; "verified" line in output; digest matches.
+  How: `cilock verify -f bin/gh -a /tmp/gh-build-attestation.json -p policy.json -k policy-pub.pem` in a smoke step (`-f`/`--artifactfile` is the subject; `-a`/`--attestations` the envelope; `-p`/`--policy` + `-k`/`--publickey` the signed policy and its public key). The artifact may also be passed positionally: `cilock verify bin/gh -p policy.json ...`.
+  Accept: exit 0 (verify exits 0 on success per `cilock verify --help`); digest matches.
 - [ ] **`cilock verify` rejects tampered product** — overwrite `bin/gh` post-attestation, verify must fail.
   Accept: exit non-zero; error mentions digest mismatch.
 - [ ] **`cilock verify` rejects truncated leaf list** — drop one leaf, recomputed root won't match.
@@ -124,10 +126,10 @@ Run each on **ubuntu-22.04** and **ubuntu-24.04** to cover both hosted-runner ke
 ## 5. Failure modes (must-detect)
 
 ### 5.1 Drops & gaps
-- [x] **Zero-drop fanotify burst** — `TestZeroDropGate` + capstone harshness.
-- [x] **`--require-zero-drops` fails when drops > 0** — fail-closed gate.
+- [x] **Zero-drop fanotify burst** — `TestZeroDropsGate_*` (`plugins/attestors/commandrun/zero_drops_gate_test.go`: `_NilSummary`, `_AllZero`, `_PartialReadFallbacksDontFail`, `_RingbufDropFails`, `_FanotifyTimeoutFails`, `_AllCountersAggregated`) + capstone harshness.
+- [x] **`--require-zero-drops` fails when drops > 0** — fail-closed gate (`cilock/internal/options/run.go:437` registers `--require-zero-drops`; derives from `--hardening strict`).
 - [ ] **Missing fanotify (no CAP_SYS_ADMIN)** — graceful BPF-only fallback with diagnostic surfaced.
-  Accept: `diagnostics.fanotifyAvailable: false` + reason in summary.
+  Accept: `diagnostics.fanotifyAvailable: false` (real field, `plugins/attestors/commandrun/commandrun.go:592`) + reason in summary.
 - [ ] **Process tree gap** — child process whose writes don't reach the trace (the gh linker scenario in production).
   Accept: surface as diagnostic OR rescued by stat-fallback.
 
@@ -173,10 +175,9 @@ Run each on **ubuntu-22.04** and **ubuntu-24.04** to cover both hosted-runner ke
 ## 8. Compatibility & ergonomics
 
 - [ ] **cilock-action @v1 docs** — link from action.yml to docs page covering inputs, modes, products glob.
-  Owner: [[v1.0.5 docs]] task #74.
 - [ ] **Witness/cosign migration story** — document the import shim path.
 - [ ] **Schema migration v0.2 → v0.3** — verifier handles both predicates.
-- [ ] **Default products glob explained** — workingDir/** documented with override examples.
+- [ ] **Default products glob explained** — document that products are scoped to the working dir (`-d`/`--workingdir`, default cwd) and filtered by `--attestor-product-include-glob` (default `*`) / `--attestor-product-exclude-glob` (no literal `workingDir/**` glob exists), with override examples.
 - [ ] **CI examples in cilock-action README** — Go, Node, Rust at minimum.
 
 ---
@@ -196,7 +197,7 @@ Before tagging `v1.1.0` final (no `-rcN`):
 
 ---
 
-## 10. Today's status (2026-05-25)
+## 10. Today's status (2026-06-01)
 
 - Local validation: **strong** — 4 unit tests + real npm install integration test covering products + overwrite detection.
 - Production validation: **good** — two end-to-end workloads on rc64+rc13:
@@ -208,6 +209,7 @@ Before tagging `v1.1.0` final (no `-rcN`):
 
 Diagnostics surfaced from npm smoke that need follow-up:
 - `partialReadFallbacks: 39`, `fallbackHashFailures: 71`, `hashFailureSilentDrops: 68`
+  (all three are real diagnostic JSON fields — `plugins/attestors/commandrun/commandrun.go:551,567,586`.)
   Likely transient files npm creates+deletes during install. Investigate before release-grade promotion.
 
 Next concrete steps in priority order:

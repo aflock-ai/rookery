@@ -9,7 +9,7 @@ wrapped command's stdout/stderr/exit-code to produce evidence.
 | Use `cilock attest` when…                          | Use `cilock run -- <cmd>` when…                  |
 | -------------------------------------------------- | ------------------------------------------------ |
 | You want a snapshot of an *external* fact          | You want a record of *running* a build or scan   |
-| Examples: PR review state, EC2 identity, IAM creds | Examples: docker build, syft scan, semgrep, etc. |
+| Examples: PR review state, EC2 / GCP identity      | Examples: docker build, syft scan, semgrep, etc. |
 | The attestor reads APIs / metadata endpoints       | The attestor wraps a wrapped command             |
 
 Internally, `cilock attest` synthesizes the no-op argv `["true"]` and
@@ -203,21 +203,35 @@ typically reject these for production use.
 
 ## Other consultative attestors that work with `cilock attest`
 
-| Attestor      | Captures                                       |
-| ------------- | ---------------------------------------------- |
-| `aws-iid`     | EC2 instance identity document (when on EC2)   |
-| `gcp-iit`     | GCP instance identity token (when on GCE)      |
-| `aws-config`  | AWS Config compliance evaluation results       |
-| `vault-cli`   | (with explicit query argv) HashiCorp Vault state |
+These prematerial attestors snapshot at-rest identity facts without a
+wrapped command — the same shape as `github-review`:
 
-All follow the same shape — no wrapped command, just snapshot + sign.
+| Attestor   | Captures                                     |
+| ---------- | -------------------------------------------- |
+| `aws`      | EC2 instance identity document (when on EC2) |
+| `gcp-iit`  | GCP instance identity token (when on GCE)    |
+
+Both are confirmed present in `cilock attestors list` (run it to see the
+full, authoritative attestor set). Select either by its registered name:
+
+```bash
+cilock attest -a aws     -k signer.key -o iid.bundle.json -s iid
+cilock attest -a gcp-iit -k signer.key -o iit.bundle.json -s iit
+```
+
+> The EC2 attestor's plugin directory is named `aws-iid`, but its
+> registered attestor name — the value you pass to `-a` — is `aws`
+> (`plugins/attestors/aws-iid/aws-iid.go`: `Name = "aws"`). Some older
+> built-in help examples still show `-a aws-iid`; use `-a aws`.
 
 ## Implementation notes
 
 - The wrapped `command-run` attestor still records the no-op `true`
   exec. That's intentional: it stamps the moment of attestation in the
-  bundle. If you don't want command-run, pass `-a <attestor>`
-  selectively (this overrides the default attestor set).
+  bundle. `command-run` is always-on (listed as `(always run)` in
+  `cilock attestors list`, alongside `product` and `material`) — passing
+  `-a <attestor>` only replaces the *default* set
+  (`environment, git, platform`); it does not drop `command-run`.
 - `cilock attest` accepts no positional arguments. If you find
   yourself wanting `cilock attest -- foo`, you actually want
   `cilock run -- foo` — the attestation is for the command you ran,

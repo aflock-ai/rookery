@@ -13,7 +13,7 @@ import (
 // session (a sign-scoped API credential) for a short-lived, email-identity OIDC
 // token the platform's embedded Fulcio trusts. It lives under the authenticated
 // /auth subrouter on the Judge API.
-const signTokenPath = "/oauth/sign-token"
+const signTokenPath = "/oauth/sign-token" //nolint:gosec // G101 false positive: a URL path on the platform API, not a credential.
 
 // ExchangeSignToken trades a stored platform session credential for a
 // short-lived OIDC token suitable for keyless Fulcio signing. It POSTs to

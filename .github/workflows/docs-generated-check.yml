@@ -1,0 +1,49 @@
+# Fails if the committed generated catalogs drift from their generators.
+#
+# docs/attestor-catalog.md and docs/detector-catalog.md are produced by
+# scripts/gen-attestor-catalog.sh and scripts/gen-detector-catalog.sh. They
+# must never be hand-edited and must be regenerated whenever an attestor or
+# detector.yaml changes. This job regenerates them and fails if the result
+# differs from what is committed.
+name: Docs Generated Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-generated-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-generated-check:
+    name: generated docs in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      # gen-detector-catalog.sh parses detector.yaml via Python's PyYAML.
+      # python3 is preinstalled on ubuntu-latest; ensure PyYAML is present.
+      - name: Ensure PyYAML
+        run: python3 -m pip install --user pyyaml
+
+      - name: Regenerate catalogs
+        run: |
+          bash scripts/gen-attestor-catalog.sh
+          bash scripts/gen-detector-catalog.sh
+
+      - name: Verify catalogs are committed in sync
+        run: |
+          if ! git diff --exit-code -- docs/attestor-catalog.md docs/detector-catalog.md; then
+            echo "::error::Generated catalogs are out of date. Run scripts/gen-attestor-catalog.sh and scripts/gen-detector-catalog.sh, then commit the result."
+            exit 1
+          fi

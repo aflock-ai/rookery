@@ -130,7 +130,7 @@ type VerifyOptions struct {
 // Note: unlike `cilock run`, we do NOT auto-populate PolicyTimestampServers —
 // verify's PolicyTimestampServers expects file paths to CA cert bundles, not
 // URLs; embedded-trust / discovery TSA roots are applied in the cli layer.
-func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
+func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) { //nolint:gocyclo // login-gated discovery + archivista + trust-derivation branches; each is a distinct, intentional resolution path and sits just over the threshold.
 	platformExplicitlyDisabled := cmd.Flags().Changed("platform-url") && vo.PlatformURL == ""
 	if platformExplicitlyDisabled {
 		return
