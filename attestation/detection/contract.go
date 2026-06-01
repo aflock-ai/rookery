@@ -347,7 +347,7 @@ var fixtureDriveableRunTypes = map[string]bool{
 // validateOutputContract enforces the internal consistency of a Contract
 // block. Like validateDetectorYAML, a returned error is a developer-side bug:
 // the contract is authored and embedded at build time.
-func validateOutputContract(c *OutputContract, name string) error {
+func validateOutputContract(c *OutputContract, name string) error { //nolint:gocognit // exhaustive field-by-field contract validator: a flat sequence of independent build-time consistency checks; splitting it would scatter the contract's invariants across helpers without reducing real complexity.
 	if c == nil {
 		return nil
 	}

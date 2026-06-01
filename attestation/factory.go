@@ -191,7 +191,7 @@ func RegistrationEntries() []registry.Entry[Attestor] {
 // recipe drivers — drive options the bare factory can't express, WITHOUT
 // importing each plugin package (no coupling, no import cycle). It is the
 // programmatic sibling of the cobra flag wiring in cilock/internal/options.
-func ApplyAttestorOptions(nameOrType string, attestor Attestor, values map[string]any) (Attestor, error) {
+func ApplyAttestorOptions(nameOrType string, attestor Attestor, values map[string]any) (Attestor, error) { //nolint:gocognit // option-dispatch over recipe drivers; the branchiness is the dispatch table itself, not hidden logic, and it sits just over the threshold.
 	if len(values) == 0 {
 		return attestor, nil
 	}

@@ -157,6 +157,19 @@ linters:
           - unparam
           - unused
 
+      # attestation/testkit is TEST INFRASTRUCTURE (fixture loaders, assertion
+      # helpers, HTTP mocks) — same rationale as the _test.go exemption above:
+      # the gosec "hardcoded credentials" finding is a mock token, and the
+      # loaders/asserters are intentionally branchy scaffolding. We lint the
+      # behavior under test, not the harness that drives it.
+      - path: attestation/testkit/.*
+        linters:
+          - gosec
+          - gocognit
+          - gocyclo
+          - nestif
+          - funlen
+
 formatters:
   enable:
     - gofmt
