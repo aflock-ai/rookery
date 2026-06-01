@@ -356,6 +356,17 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 		// signer. This is what makes a minimal-flag `cilock run` sign keyless
 		// after `cilock login`.
 		applyKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred.Token)
+
+		// Archivista on by default WHEN LOGGED IN. Storing the attestation is
+		// the whole point of being logged in to a platform, so a minimal-flag
+		// `cilock run` should persist it without `--enable-archivista`. We only
+		// default it on — never override an explicit choice — and only when a
+		// session exists, so the offline/no-platform path (the case the old
+		// "users may rely on false" note protected) keeps its false default.
+		// Opt out with `--enable-archivista=false`.
+		if !cmd.Flags().Changed("enable-archivista") && !cmd.Flags().Changed("enable-archivist") {
+			ro.ArchivistaOptions.Enable = true
+		}
 	}
 
 	// Give a selected fulcio signer a URL if it lacks one — whether it was
@@ -363,10 +374,6 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// (a CI OIDC token). Runs outside the login block so the explicit-token path
 	// works without `cilock login`. No-op for local/KMS signing (fulcio unselected).
 	ensureFulcioURL(cmd, pc.Fulcio)
-
-	// NOTE: We intentionally do NOT force enable-archivista here.
-	// The flag defaults to false and users/configs may rely on that.
-	// Archivista is enabled explicitly via --enable-archivista or config.
 }
 
 //nolint:funlen // each flag carries its own multi-line help text; splitting the registration loses readability

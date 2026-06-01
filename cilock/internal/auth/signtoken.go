@@ -47,13 +47,26 @@ func ExchangeSignToken(platformURL, sessionToken string) (string, error) {
 	}
 
 	var out struct {
-		Token string `json:"token"`
+		Token          string `json:"token"`
+		Email          string `json:"email"`
+		AssuranceLevel string `json:"assurance_level"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
 		return "", fmt.Errorf("decode sign-token response: %w", err)
 	}
 	if out.Token == "" {
 		return "", fmt.Errorf("sign-token response carried no token")
+	}
+	// The server resolves the signing identity (email) and the assurance level
+	// (acr) it minted at; persist the email onto the stored session when it has
+	// none, so later `cilock verify` can default the expected signer to it. The
+	// platform URL is the lookup key. Best-effort — a persistence failure must
+	// not fail the signing path.
+	if out.Email != "" {
+		if cred, lookupErr := Lookup(platformURL); lookupErr == nil && cred != nil && cred.Email == "" {
+			cred.Email = out.Email
+			_ = Save(*cred)
+		}
 	}
 	return out.Token, nil
 }

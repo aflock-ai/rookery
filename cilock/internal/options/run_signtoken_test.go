@@ -134,3 +134,80 @@ func TestResolvePlatformDefaults_ExplicitFulcioTokenWins(t *testing.T) {
 		t.Fatal("must not call the sign-token exchange when an explicit token is set")
 	}
 }
+
+// signTokenStub returns an httptest server that answers the sign-token exchange,
+// so ResolvePlatformDefaults's logged-in branch runs end to end.
+func signTokenStub(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": fakeSignToken})
+	}))
+}
+
+func seedLoginCredential(t *testing.T, platformURL string) {
+	t.Helper()
+	if err := auth.Save(auth.Credential{
+		PlatformURL: platformURL,
+		Token:       "stored-session-credential",
+		AuthMode:    auth.AuthModeBrowser,
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("seed credential: %v", err)
+	}
+}
+
+// TestResolvePlatformDefaults_ArchivistaOnWhenLoggedIn pins the "stored
+// attestation is the point of logging in" UX: a logged-in minimal-flag run
+// enables Archivista without --enable-archivista.
+func TestResolvePlatformDefaults_ArchivistaOnWhenLoggedIn(t *testing.T) {
+	isolateCredentialStore(t)
+	srv := signTokenStub(t)
+	defer srv.Close()
+	seedLoginCredential(t, srv.URL)
+
+	cmd, ro := newRunCmd(t)
+	if err := cmd.ParseFlags([]string{"--platform-url", srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	ro.ResolvePlatformDefaults(cmd)
+
+	if !ro.ArchivistaOptions.Enable {
+		t.Fatal("Archivista should be enabled by default when logged in")
+	}
+}
+
+// TestResolvePlatformDefaults_ArchivistaExplicitFalseWins ensures a logged-in
+// user can still opt out of storage with --enable-archivista=false.
+func TestResolvePlatformDefaults_ArchivistaExplicitFalseWins(t *testing.T) {
+	isolateCredentialStore(t)
+	srv := signTokenStub(t)
+	defer srv.Close()
+	seedLoginCredential(t, srv.URL)
+
+	cmd, ro := newRunCmd(t)
+	if err := cmd.ParseFlags([]string{"--platform-url", srv.URL, "--enable-archivista=false"}); err != nil {
+		t.Fatal(err)
+	}
+	ro.ResolvePlatformDefaults(cmd)
+
+	if ro.ArchivistaOptions.Enable {
+		t.Fatal("explicit --enable-archivista=false must win over the logged-in default")
+	}
+}
+
+// TestResolvePlatformDefaults_ArchivistaOffWhenLoggedOut preserves the
+// offline/no-platform default: without a session, Archivista stays off.
+func TestResolvePlatformDefaults_ArchivistaOffWhenLoggedOut(t *testing.T) {
+	isolateCredentialStore(t)
+
+	cmd, ro := newRunCmd(t)
+	if err := cmd.ParseFlags([]string{"--platform-url", "https://platform.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	ro.ResolvePlatformDefaults(cmd)
+
+	if ro.ArchivistaOptions.Enable {
+		t.Fatal("Archivista must stay off when there is no login session")
+	}
+}

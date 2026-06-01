@@ -60,17 +60,20 @@ func truncLogField(s string, n int) string {
 }
 
 func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionVerificationResult, error) {
-	unverified, err := s.source.Search(ctx, collectionName, subjectDigests, attestations)
+	candidates, err := s.source.Search(ctx, collectionName, subjectDigests, attestations)
 	if err != nil {
 		return nil, err
 	}
 
 	results := make([]CollectionVerificationResult, 0)
-	fmt.Fprintf(os.Stderr, "[verified-source] processing %d unverified envelopes for collection %q\n", len(unverified), collectionName)
-	for _, toVerify := range unverified {
+	// These envelopes are candidates matched by subject/attestation — their
+	// signatures are checked below; "candidate" (not "unverified") avoids reading
+	// as a verdict when it just means "fetched, pending verification".
+	fmt.Fprintf(os.Stderr, "[verified-source] verifying %d candidate envelope(s) for collection %q\n", len(candidates), collectionName)
+	for _, toVerify := range candidates {
 		envelopeVerifiers, err := toVerify.Envelope.Verify(s.verifyOpts...)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s verify FAILED: %v\n", toVerify.Reference, err)
+			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature verification FAILED: %v\n", toVerify.Reference, err)
 			results = append(results,
 				CollectionVerificationResult{
 					Errors:             []error{fmt.Errorf("failed to verify envelope: %w", err)},
@@ -80,7 +83,8 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 			continue
 		}
 
-		// Log each checked verifier
+		// Log each checked verifier with an explicit pass/fail verdict rather
+		// than a raw "error=<nil>", which reads as cryptic to an operator.
 		for _, cv := range envelopeVerifiers {
 			kid := "unknown"
 			if cv.Verifier != nil {
@@ -88,7 +92,11 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 					kid = truncLogField(k, 12)
 				}
 			}
-			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s verifier kid=%s error=%v\n", truncLogField(toVerify.Reference, 12), kid, cv.Error)
+			if cv.Error == nil {
+				fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature OK (verifier kid=%s)\n", truncLogField(toVerify.Reference, 12), kid)
+			} else {
+				fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature rejected (verifier kid=%s): %v\n", truncLogField(toVerify.Reference, 12), kid, cv.Error)
+			}
 		}
 
 		passedVerifiers := make([]cryptoutil.Verifier, 0)
@@ -120,13 +128,13 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 // empty Verifiers slice + an error in Errors) so that callers can surface
 // the rejection reason rather than silently dropping them.
 func (s *VerifiedSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
-	unverified, err := s.source.SearchByPredicateType(ctx, predicateTypes, subjectDigests)
+	candidates, err := s.source.SearchByPredicateType(ctx, predicateTypes, subjectDigests)
 	if err != nil {
 		return nil, err
 	}
 
-	results := make([]StatementEnvelope, 0, len(unverified))
-	for _, toVerify := range unverified {
+	results := make([]StatementEnvelope, 0, len(candidates))
+	for _, toVerify := range candidates {
 		envelopeVerifiers, err := toVerify.Envelope.Verify(s.verifyOpts...)
 		if err != nil {
 			toVerify.Errors = append(toVerify.Errors, fmt.Errorf("failed to verify envelope: %w", err))
