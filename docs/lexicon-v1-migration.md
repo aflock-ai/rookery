@@ -11,7 +11,7 @@ Applied: 2026-05-26. Companion change: `attestation/detection/categories.go` clo
 | asff | `[posture-scan]` | `[compliance-scan]` | — | mechanical rename |
 | aws-codebuild | `[build]` | `[ci-context]` | — | CodeBuild captures runner identity, not the build itself |
 | aws-config | `[posture-scan]` | `[compliance-scan]` | — | mechanical rename |
-| aws-iid | `[build]` | `[ci-context]` | — | EC2 instance identity is runner context |
+| aws | `[build]` | `[ci-context]` | — | EC2 instance identity is runner context (plugin dir `aws-iid/`, canonical `name: aws`) |
 | docker | `[build]` | `[image-build]` | — | wraps `docker build` / `buildx`; image-specific is more precise than generic build |
 | docker-bench | `[posture-scan]` | `[compliance-scan]` | — | mechanical rename |
 | falco | `[runtime]` | `[runtime-event]` | — | clarified — events, not "runtime" generally |
@@ -36,7 +36,7 @@ Applied: 2026-05-26. Companion change: `attestation/detection/categories.go` clo
 | sinkhole-flows | `[build]` | `[dependency-verify]` | — | pip-witness sinkhole observes network during dep fetch to verify integrity |
 | steampipe | `[posture-scan]` | `[compliance-scan]` | — | mechanical rename |
 | test-results | `[artifact-scan]` | (removed) | — | format adapter for JUnit/CTRF; producer is the test command |
-| trivy | `[artifact-scan, posture-scan]` | `[vulnerability-scan]` | — | trivy's primary mode is CVE scanning; config scan secondary |
+| trivy | `[artifact-scan, posture-scan]` | `[vulnerability-scan]` | — | collapsed to a single category; the predicate still carries vulnerability, misconfiguration, and secret findings, but the step intent is CVE scanning |
 | vex | `[statement]` | (removed) | — | format adapter; VEX can carry vex-consume or vulnerability-disclosure intent depending on producer |
 
 ## Decisions worth flagging for review
@@ -63,16 +63,26 @@ Any external consumer of the platform API that hardcoded the old names must upda
 
 ## Plugins still without a category
 
-20 plugins ship attestors but no `detector.yaml` (listed in `docs/lexicon-v1.md` §"What's missing"). The next pass should assign categories to those, especially:
+19 plugins under `plugins/attestors/` ship an attestor but no `detector.yaml`:
+`apple-device`, `commandrun`, `configuration`, `environment`, `githubaction`,
+`githubwebhook`, `inclusion-proof`, `jwt`, `k8smanifest`, `link`, `material`,
+`omnitrail`, `policyverify`, `product`, `secretscan`, `slsa`, `structured-data`,
+`system-packages`, `vsa`. (Reproduce with
+`comm -23 <(ls plugins/attestors/ | sort) <(find plugins/attestors -name detector.yaml | sed 's|plugins/attestors/||;s|/detector.yaml||' | sort)`.)
 
-- `commandrun` → no category (it is meta — actual category comes from co-firing detectors against the wrapped argv)
+The next pass should assign categories to those that are real pipeline steps,
+and explicitly leave the envelope/format/meta plugins uncategorized per
+`docs/lexicon-v1.md` composition rule 6. Suggested assignments (categories must
+be valid Tier 1/2 names from `attestation/detection/categories.go`):
+
+- `commandrun` → no category (meta — actual category comes from co-firing detectors against the wrapped argv; named in composition rule 6)
 - `configuration`, `environment`, `githubaction`, `githubwebhook` → `ci-context`
-- `go-build` → `build`
 - `secretscan` → `secret-scan`
 - `slsa`, `link` → `provenance`
 - `k8smanifest` → `manifest-validate`
 - `system-packages` → `sbom-generate`
-- `omnitrail`, `material`, `product` → no category (envelope wrappers / fingerprint riders)
 - `policyverify` → `policy-eval`
 - `vsa` → `release-approve`
-- `inclusion-proof`, `jwt`, `structured-data` → no category (envelope/format adapters)
+- `apple-device` → not yet triaged (device-identity capture; no Tier 1/2 category maps cleanly today)
+- `omnitrail`, `material`, `product` → no category (envelope wrappers / fingerprint riders; named in composition rule 6)
+- `inclusion-proof`, `jwt`, `structured-data` → no category (envelope/format adapters; named in composition rule 6)

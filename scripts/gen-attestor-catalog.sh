@@ -68,8 +68,11 @@ Regenerate after adding or renaming an attestor:
 EOF
 
   for phase in PreMaterialRunType MaterialRunType ExecuteRunType ProductRunType PostProductRunType VerifyRunType; do
-    # Filter to rows for this phase, sorted by name
-    rows=$(awk -F'|' -v p="$phase" '$1==p {print $0}' "$TMP" | sort -t'|' -k2)
+    # Filter to rows for this phase, sorted by name. LC_ALL=C pins byte-order
+    # collation so the output is identical on macOS (BSD sort) and Linux CI
+    # (GNU sort) — otherwise locale-dependent ordering of '-'/'|'/'/' makes the
+    # committed catalog drift vs a CI regen and trips docs-generated-check.
+    rows=$(awk -F'|' -v p="$phase" '$1==p {print $0}' "$TMP" | LC_ALL=C sort -t'|' -k2)
     if [ -z "$rows" ]; then
       continue
     fi

@@ -12,45 +12,74 @@ validation account is `testifysec-demo` (898769392027), profile
 # 1. SSO login (one-time per session)
 aws sso login --profile testifysec-demo
 
-# 2. Generate the signing keypair (or use your own)
+# 2. (Optional) Generate the signing keypair, or use your own.
+#    The script auto-generates an ed25519 key at
+#    .catalog-test/keys/signer.key if one isn't already present.
 mkdir -p .catalog-test/keys
 openssl genpkey -algorithm ed25519 -out .catalog-test/keys/signer.key
 openssl pkey -in .catalog-test/keys/signer.key -pubout \
   -out .catalog-test/keys/signer.pub
 
-# 3. Build the all-attestors binary
+# 3. Build the all-attestors binary (every plugin + every signer)
 cd presets/all && go build -o /tmp/cilock-all-cat ./cmd/cilock-all
 ```
 
+The script defaults to the `/tmp/cilock-all-cat` binary; override it with
+the `CILOCK_BIN` env var. The base `cilock` binary does not compile in the
+cloud-posture plugins (`aws-config`, `asff`) — build the all-attestors
+binary above so detection can fire them.
+
 ## Validated AWS recipes (testifysec-demo)
 
-| Recipe                  | API surface                            | What gets attested                          |
-| ----------------------- | -------------------------------------- | ------------------------------------------- |
-| `cloudtrail`            | `aws cloudtrail lookup-events`         | Last 5 audit-log events as JSON product     |
-| `aws-secrets-manager`   | `aws secretsmanager list-secrets`      | Secret names + ARNs (no values)             |
-| `aws-config`            | `aws configservice get-compliance-...` | Per-rule EvaluationResults                  |
-| `prowler`               | `prowler aws --checks ...`             | Posture findings in OCSF JSON               |
-| `steampipe`             | `steampipe query`                      | SQL-over-API query results                  |
-| `aws-security-hub`      | `aws securityhub get-findings`         | Aggregated findings from across services    |
-| `aws-inspector`         | `aws inspector2 list-findings`         | Vuln + reachability findings for EC2/ECR    |
-| `aws-guardduty`         | `aws guardduty list-detectors/findings`| Threat-detection findings                   |
-| `aws-macie`             | `aws macie2 get-macie-session`         | Sensitive-data discovery state              |
-| `aws-iam-credential-report` | `aws iam get-credential-report`    | Per-user MFA + key-age + password-age posture |
+A **recipe** is a test scenario in `scripts/test-catalog-tools.py`; an
+**attestor** is a registered plugin under `plugins/attestors/`. The two
+are distinct. Most cloud recipes only assert that the `command-run/v0.1`
+predicate is produced — the wrapped `aws ...` call is the evidence, and
+the generic command-run attestor captures it. A few recipes drive a
+dedicated plugin attestor as well:
+
+- `prowler` and `steampipe` pass an explicit `-a <attestor>`, so those
+  plugins always fire.
+- `aws-config` (plugin `aws-config`) and `aws-security-hub` (plugin
+  `asff`) carry detector rules that auto-fire the plugin when the
+  workspace detection sees the matching `aws ...` command. The recipes
+  themselves only assert `command-run/v0.1`, so they pass with or without
+  the plugin being present.
+
+| Recipe                      | API surface                                                                     | Plugin attestor          | What gets attested                            |
+| --------------------------- | ------------------------------------------------------------------------------- | ------------------------ | --------------------------------------------- |
+| `cloudtrail`                | `aws cloudtrail lookup-events --max-results 5`                                   | none (command-run only)  | Last 5 audit-log events as JSON product       |
+| `aws-secrets-manager`       | `aws secretsmanager list-secrets --max-results 10`                              | none (command-run only)  | Secret names + ARNs (no values)               |
+| `aws-config`                | `aws configservice describe-config-rules` → `get-compliance-details-by-config-rule` | `aws-config` (auto)  | Per-rule EvaluationResults                    |
+| `prowler`                   | `prowler aws --checks iam_root_hardware_mfa_enabled --output-modes json-ocsf`    | `prowler` (`-a prowler`) | Posture findings in OCSF JSON                 |
+| `steampipe`                 | `steampipe query "select ... from aws_ec2_instance limit 3"`                     | `steampipe` (`-a steampipe`) | SQL-over-API query results                |
+| `aws-security-hub`          | `aws securityhub get-findings --max-results 5`                                   | `asff` (auto)            | Security Hub findings (ASFF) across services   |
+| `aws-inspector`             | `aws inspector2 list-findings --max-results 5`                                   | none (command-run only)  | Vuln + reachability findings for EC2/ECR      |
+| `aws-guardduty`             | `aws guardduty list-detectors` → `list-findings`                                | none (command-run only)  | Threat-detection findings                     |
+| `aws-macie`                 | `aws macie2 get-macie-session`                                                   | none (command-run only)  | Sensitive-data discovery state                |
+| `aws-iam-credential-report` | `aws iam generate-credential-report` → `get-credential-report`                   | none (command-run only)  | Per-user MFA + key-age + password-age posture |
+
+The `asff` plugin (`plugins/attestors/asff/`) is what attests AWS
+Security Hub output — there is no attestor literally named
+`aws-security-hub`. Its detector matches the
+`aws securityhub get-findings` command (and `*.asff.json` products) and
+emits the `https://aflock.ai/attestations/asff/v0.1` predicate.
 
 ## Running
 
 ```bash
-# All recipes (~80, including non-AWS)
+# All recipes (80 total, including non-AWS) — passing no args runs them all
 python3 scripts/test-catalog-tools.py
 
-# Just the AWS subset
+# Just the AWS subset — positional args select recipes by name
 python3 scripts/test-catalog-tools.py \
   cloudtrail aws-secrets-manager aws-config prowler steampipe \
   aws-security-hub aws-inspector aws-guardduty aws-macie \
   aws-iam-credential-report
 
-# Report lands at:
-cat .catalog-test/report.md
+# Reports land at:
+cat .catalog-test/report.md     # human-readable per-tool table + details
+cat .catalog-test/report.json   # machine-readable for CI consumption
 ```
 
 ## Real findings surfaced during this PR
@@ -81,18 +110,20 @@ GuardDuty in every region that runs workloads.
 
 ## Pending validation rounds
 
-Tools requiring cloud-host context (not testable from a laptop):
+Host-context attestors that need a real cloud environment for full
+validation (not exercisable end-to-end from a laptop):
 
-| Tool          | Required context                          |
-| ------------- | ----------------------------------------- |
-| `aws-iid`     | Running on an EC2 instance (IMDS access)  |
-| `gcp-iit`     | Running on a GCE instance                 |
-| `azure-iid`   | Running on an Azure VM                    |
-| `aws-codebuild` | Inside a CodeBuild build container      |
+| Attestor        | Required context                          |
+| --------------- | ----------------------------------------- |
+| `aws`           | Running on an EC2 instance (IMDS access)  |
+| `gcp-iit`       | Running on a GCE instance                 |
+| `aws-codebuild` | Inside a CodeBuild build container        |
 
 These can be validated by SSM-exec'ing cilock onto an EC2 host, or by
 adding a one-off CodeBuild project that invokes cilock during its
-phase.
+phase. (There is no Azure instance-identity attestor today — only the
+AWS and GCP host-identity plugins above exist under
+`plugins/attestors/`.)
 
 ## GitHub Actions integration
 

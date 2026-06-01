@@ -52,79 +52,74 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      # Dogfood: every release-build step is wrapped by cilock-action.
-      # Records signed attestations (environment/git/github/commandrun/product/sbom)
-      # for the go build, signs them keyless via public Sigstore Fulcio with the
-      # workflow's GitHub Actions OIDC identity, and timestamps via the public
-      # Sigstore TSA. No platform / Archivista dependency — the attestation
-      # bundle is written to a file and shipped with the GitHub Release.
+      # Dogfood: self-attest each release build with the cilock we are RELEASING.
+      # Build a bootstrap cilock (native to this runner), then use it to wrap the
+      # cross-compiled `go build`, recording signed attestations
+      # (environment/git/github/command-run/product) and signing them keyless via
+      # public Sigstore Fulcio using the workflow's GitHub Actions OIDC identity,
+      # timestamped by the public Sigstore TSA. No platform/Archivista dependency —
+      # the attestation is written to a file and shipped with the Release.
       #
-      # End users verify by:
-      #   cilock verify --policy release-v1.policy.json <attestation.json>
-      # which checks the Fulcio cert chain + workflow identity in the policy.
-      - name: Attest release-build with cilock-action
+      # End users verify with the published policy:
+      #   cilock verify <artifact> -p release-v1.policy.json -a <attestation.json>
+      # which checks the Fulcio cert chain + the workflow OIDC identity.
+      - name: Build bootstrap cilock (to self-attest the release)
+        working-directory: cilock
+        run: |
+          CGO_ENABLED=0 GOWORK=off go build -trimpath \
+            -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
+            -o /tmp/cilock-bootstrap ./cmd/cilock/
+          /tmp/cilock-bootstrap version
+
+      - name: Fetch GitHub Actions OIDC token (audience sigstore)
+        # Written to a file (never an env var / step output) so the cilock
+        # environment attestor can't capture the short-lived token. The fulcio
+        # signer reads it via --signer-fulcio-token-path.
+        run: |
+          curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore" | jq -r '.value' > /tmp/oidc.token
+          test -s /tmp/oidc.token && echo "OIDC token acquired" || { echo "::error::no OIDC token"; exit 1; }
+
+      - name: Attest release build with cilock (dogfood, keyless Fulcio)
         id: attest
-        # OPTIONAL — cilock-action self-attests the release build of
-        # cilock. When the action's attestor pipeline regresses against
-        # the new attestor code, the attestation step fails but the
-        # build itself is still wanted. continue-on-error keeps the
-        # release flowing; the fallback step below runs if attestation
-        # didn't produce the binary.
-        #
-        # NOTE: cilock-action ref must be a tag, not a SHA. The action's
-        # binary download URL is constructed from the ref as
-        #   /releases/download/v<ref>/cilock-action_linux_amd64.tar.gz
-        # so SHA pinning 404s. Verified live in
-        # aflock-ai/supply-chain-attacks#1. Pin to a specific tag instead.
+        # continue-on-error keeps the release flowing if keyless attestation has a
+        # transient issue; the fallback below then produces the binary unsigned.
         continue-on-error: true
-        uses: aflock-ai/cilock-action@v1.0.1
-        with:
-          step: release-build-${{ matrix.goos }}-${{ matrix.goarch }}
-          # Note: registered attestor name is `command-run` (hyphen), not
-          # `commandrun`. cilock-action's `trace` input handles command
-          # capture; `product` + `sbom` cover the artifact + SBOM evidence.
-          attestations: "environment git github product sbom"
-          outfile: dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json
-          enable-sigstore: "true"
-          enable-archivista: "false"
-          fulcio-url: "https://fulcio.sigstore.dev"
-          fulcio-oidc-client-id: "sigstore"
-          fulcio-oidc-issuer: "https://token.actions.githubusercontent.com"
-          timestamp-servers: "https://timestamp.sigstore.dev/api/v1/timestamp"
-          # Hash the output binary as the product subject so verification can
-          # match the attestation to the artifact downloaded by end users.
-          hashes: "sha256"
-          workingdir: cilock
-          command: |
-            BINARY="cilock"
-            if [ "${{ matrix.goos }}" = "windows" ]; then
-              BINARY="cilock.exe"
-            fi
-            CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
-              go build \
-                -trimpath \
-                -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/internal/cmd.Version=${{ steps.version.outputs.version }}'" \
-                -o "../dist/${BINARY}" \
-                ./cmd/cilock/
+        working-directory: cilock
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOWORK: "off"
+        run: |
+          BINARY="cilock"; [ "${{ matrix.goos }}" = "windows" ] && BINARY="cilock.exe"
+          /tmp/cilock-bootstrap run \
+            --step "release-build-${{ matrix.goos }}-${{ matrix.goarch }}" \
+            --workload manual \
+            --platform-url "" \
+            --signer-fulcio-url "https://fulcio.sigstore.dev" \
+            --signer-fulcio-token-path /tmp/oidc.token \
+            --signer-fulcio-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --timestamp-servers "https://timestamp.sigstore.dev/api/v1/timestamp" \
+            -a environment,git,github \
+            --hashes sha256 \
+            -o "../dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json" \
+            -- go build -trimpath \
+                 -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
+                 -o "../dist/${BINARY}" ./cmd/cilock/
 
       - name: Fallback build (no attestation) if attest step failed
-        # Runs only when cilock-action above failed. Produces the
-        # binary so the rest of the release can proceed; the
-        # attestation file simply won't exist for this matrix entry.
+        # Runs only when the dogfood attestation above failed. Produces the binary
+        # so the release can proceed; the attestation file simply won't exist.
         if: steps.attest.outcome == 'failure'
         working-directory: cilock
         run: |
-          BINARY="cilock"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY="cilock.exe"
-          fi
+          BINARY="cilock"; [ "${{ matrix.goos }}" = "windows" ] && BINARY="cilock.exe"
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} GOWORK=off \
-            go build \
-              -trimpath \
-              -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/internal/cmd.Version=${{ steps.version.outputs.version }}'" \
-              -o "../dist/${BINARY}" \
-              ./cmd/cilock/
-          echo "::warning::cilock-action self-attestation failed; release binary built without signed attestation"
+            go build -trimpath \
+              -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
+              -o "../dist/${BINARY}" ./cmd/cilock/
+          echo "::warning::cilock self-attestation failed; release binary built without a signed attestation"
 
       - name: Create archive
         run: |
@@ -196,13 +191,15 @@ jobs:
       - name: Build melange package
         working-directory: deploy/cilock
         run: |
+          # melange has no --substitution flag (removed in current versions) and
+          # does not expand shell-style ${CILOCK_VERSION}. Inject the release
+          # version straight into package.version, then build.
+          sed -i "s|\${CILOCK_VERSION}|${{ steps.version.outputs.version }}|g" melange.yaml
           sudo melange build melange.yaml \
             --arch x86_64,aarch64 \
             --signing-key melange.rsa \
             --out-dir ./packages \
-            --env-file "" \
-            --source-dir ../../ \
-            --substitution "CILOCK_VERSION=${{ steps.version.outputs.version }}"
+            --source-dir ../../
 
       - name: Build apko image
         working-directory: deploy/cilock

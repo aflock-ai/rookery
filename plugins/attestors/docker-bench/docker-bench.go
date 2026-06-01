@@ -141,7 +141,11 @@ func (r *DockerBenchReport) version() string {
 // the derived predicate is deterministic.
 func (r *DockerBenchReport) allResults() []CheckResult {
 	if len(r.Tests) > 0 {
-		var out []CheckResult
+		total := 0
+		for _, s := range r.Tests {
+			total += len(s.Results)
+		}
+		out := make([]CheckResult, 0, total)
 		for _, s := range r.Tests {
 			out = append(out, s.Results...)
 		}

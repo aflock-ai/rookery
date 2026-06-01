@@ -31,7 +31,7 @@ pipeline:
       cd cilock
       GOWORK=off go build \
         -trimpath \
-        -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/internal/cmd.Version=v${{package.version}}'" \
+        -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{package.version}}'" \
         -o "${{targets.destdir}}/usr/bin/cilock" \
         ./cmd/cilock/
 

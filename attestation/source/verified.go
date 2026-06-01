@@ -59,7 +59,7 @@ func truncLogField(s string, n int) string {
 	return s[:n]
 }
 
-func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionVerificationResult, error) {
+func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionVerificationResult, error) { //nolint:gocognit // per-candidate verify loop with per-verifier pass/fail accounting; the branches enumerate signature-verification states, which is the function's purpose.
 	candidates, err := s.source.Search(ctx, collectionName, subjectDigests, attestations)
 	if err != nil {
 		return nil, err

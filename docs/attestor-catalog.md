@@ -20,10 +20,10 @@ Regenerate after adding or renaming an attestor:
 | `configuration` | `plugins/attestors/configuration` | `https://aflock.ai/attestations/configuration/v0.1` |
 | `environment` | `plugins/attestors/environment` | `https://aflock.ai/attestations/environment/v0.1` |
 | `gcp-iit` | `plugins/attestors/gcp-iit` | `https://aflock.ai/attestations/gcp-iit/v0.1` |
-| `git` | `plugins/attestors/git` | `https://aflock.ai/attestations/git/v0.1` |
 | `github-review` | `plugins/attestors/github-review` | `https://aflock.ai/attestations/github-review/v0.1` |
 | `github` | `plugins/attestors/github` | `https://aflock.ai/attestations/github/v0.1` |
 | `gitlab` | `plugins/attestors/gitlab` | `https://aflock.ai/attestations/gitlab/v0.1` |
+| `git` | `plugins/attestors/git` | `https://aflock.ai/attestations/git/v0.1` |
 | `jenkins` | `plugins/attestors/jenkins` | `https://aflock.ai/attestations/jenkins/v0.1` |
 | `jwt` | `plugins/attestors/jwt` | `https://aflock.ai/attestations/jwt/v0.1` |
 | `lockfiles` | `plugins/attestors/lockfiles` | `https://aflock.ai/attestations/lockfiles/v0.1` |
@@ -66,8 +66,8 @@ Regenerate after adding or renaming an attestor:
 | `inspec` | `plugins/attestors/inspec` | `https://aflock.ai/attestations/inspec/v0.1` |
 | `k8smanifest` | `plugins/attestors/k8smanifest` | — |
 | `kube-bench` | `plugins/attestors/kube-bench` | `https://aflock.ai/attestations/kube-bench/v0.1` |
-| `link` | `plugins/attestors/link` | `https://in-toto.io/attestation/link/v0.3` |
 | `linkerd-check` | `plugins/attestors/linkerd-check` | `https://aflock.ai/attestations/linkerd-check/v0.1` |
+| `link` | `plugins/attestors/link` | `https://in-toto.io/attestation/link/v0.3` |
 | `oci` | `plugins/attestors/oci` | `https://aflock.ai/attestations/oci/v0.1` |
 | `oscap` | `plugins/attestors/oscap` | `https://aflock.ai/attestations/oscap/v0.1` |
 | `pip-install` | `plugins/attestors/pip-install` | `https://aflock.ai/attestations/pip-install/v0.1` |

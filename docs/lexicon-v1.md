@@ -1,9 +1,10 @@
 # cilock Step Category Lexicon v1
 
-Canonical vocabulary for the `category:` field in `detector.yaml` files, used to:
+Canonical vocabulary for the `category:` field in `detector.yaml` files. Per `attestation/detection/categories.go`, categories serve three purposes:
 
-1. Auto-default `--step` when the producer doesn't pass one.
-2. Provide a shared lexicon between attestor authors and policy authors.
+1. Auto-default `--step` when the producer doesn't pass one (`cilock run` uses the matched detector's primary category as the step name).
+2. Route uploads on the platform side — the agent reads `category` to decide which bucket the evidence lands in.
+3. Provide a shared lexicon between attestor authors and policy authors.
 
 ## Tier 1 — Core (19)
 
@@ -12,7 +13,7 @@ Every meaningful policy template should reference these. They form the lingua fr
 | Category | Definition | Example tools |
 |---|---|---|
 | `source-checkout` | Capture VCS state at the start of a pipeline run | git, jj, hg |
-| `ci-context` | Identify the runner environment and OIDC identity | github-actions, gitlab-ci, jenkins, aws-codebuild, aws-iid, gcp-iit |
+| `ci-context` | Identify the runner environment and OIDC identity | github-action, gitlab, jenkins, aws-codebuild, aws, gcp-iit |
 | `dependency-resolve` | Pin/resolve the transitive dependency set | npm ci, pip install, go mod, mvn resolve, lockfiles |
 | `dependency-verify` | Verify acquired components (signature, provenance, advisory) | cosign verify-blob, sigstore-verify, pip-witness sinkhole |
 | `build` | Produce the primary build artifact | go build, mvn package, cargo build, bazel |
@@ -80,20 +81,22 @@ Tier 3 categories are **not warned on** by cilock and **not standardized**. When
 3. **Specialized beats Core for inference.** When both Tier 1 and Tier 2 categories match the observed argv, the more specific Tier 2 category wins (e.g., `image-build` over `build`).
 4. **No SDLC-stage pinning.** Categories name the *kind* of step, not its pipeline position. `vulnerability-scan` can run pre-build (source SCA), post-build (artifact scan), or post-deploy (registry rescan — except that last case is `runtime-vulnerability-detect`). Stage is positional in the policy DAG.
 5. **Tier 1 and Tier 2 names are reserved.** A detector.yaml that uses a Tier 1/2 name must mean what this document says it means. Repo-local extensions must use Tier 3 namespacing.
-6. **Format adapters and modifiers carry no category.** Plugins that are envelope wrappers or fingerprint riders (`material`, `product`, `inclusion-proof`, `jwt`, `structured-data`, `commandrun`) MUST omit `category:` — they are not pipeline steps.
+6. **Envelope wrappers and fingerprint riders carry no category.** Plugins that wrap an envelope or ride along with every run (`material`, `product`, `inclusion-proof`, `jwt`, `structured-data`, `commandrun`) MUST omit `category:` — they are not pipeline steps. Pure *format* adapters (`format_only: true`) also omit `category:` when the step intent depends on the producing tool rather than the file shape — `sarif`, `vex`, and `test-results` do (a producing tool can be a vuln-scan, a VEX consume/disclosure, or a unit/integration test). The one exception is `sbom`, which is `format_only` yet carries `category: [sbom-generate]` because producing an SBOM is itself a first-class step regardless of which tool emitted it (see `docs/lexicon-v1-migration.md`).
 
 ## Step name inference
 
-When `--step` is not provided to `cilock run`, the step name is inferred as follows:
+When `--step` is not provided to `cilock run`, the step name is inferred by `detection.InferStep` (`attestation/detection/stepinfer.go`):
 
-1. Run the detector engine against the observed argv.
-2. Collect the union of `category:` values from all matching detectors.
-3. Filter out Tier 3 (extension) categories *unless* no Tier 1/2 categories matched.
-4. Prefer the most-specific match: Tier 2 > Tier 1.
-5. If multiple equally-specific matches remain and any matched detector declares `primary_category:`, use that. Otherwise refuse with `E_STEP_INFERENCE_AMBIGUOUS`.
-6. If no detector matched, refuse with `E_STEP_INFERENCE_NO_MATCH`.
+1. Build a pre-gate plan for the observed argv and collect the firing detectors.
+2. Keep only **command-intent** matches — detectors that fired because the argv matched one of their argv predicates. Detectors that fired on ambient signal (a `file_exists` probe, an `env_set`, a metadata check) are scaffolding that rides along with every command and are dropped, so they never make a build "ambiguous".
+3. Each surviving detector contributes **one** category: its `primary_category:` if set, otherwise its sole `category:` entry. Detectors with no `category:` (format adapters, scaffolding) contribute nothing. (Tier 3 names cannot appear here — `detector.yaml` `category:` is the closed Tier 1/2 enum and is rejected at load otherwise.)
+4. Reduce to the distinct set of contributed categories:
+   - zero distinct categories → refuse with `E_STEP_INFERENCE_NO_MATCH`.
+   - one distinct category → resolved; that category is the step name.
+   - many distinct categories, but **exactly one** is Tier 2 (specialized beats core) → resolved to that Tier 2 category.
+   - otherwise (two or more Tier 1, or two or more Tier 2) → refuse with `E_STEP_INFERENCE_AMBIGUOUS`.
 
-On success, emit an info-level diagnostic (`I_STEP_INFERENCE_OK`) recording the inference chain (matched detector → category → step name) so verifiers can audit the choice.
+On success, `cilock run` emits a warn-level diagnostic (`I_STEP_INFERENCE_OK`) naming the inferred step and the source detector so verifiers can audit the choice. On refusal it writes a dual-channel diagnostic — human-readable prose plus a fenced `cilock.stepdiag/v1` JSON block carrying the stable code, observed argv, candidate detector→category pairs, the full lexicon, and remediation — then exits non-zero. cilock never silently guesses the step, because the step name is the routing key the policy verifier uses to bind the attestation to a policy step.
 
 ## Adding a new category
 
