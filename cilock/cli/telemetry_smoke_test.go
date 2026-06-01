@@ -125,6 +125,21 @@ func seedCredentialFor(t *testing.T, homeDir, platformURL string, c auth.Credent
 	require.NoError(t, auth.Save(c))
 }
 
+// seedAmbientMarkerFor writes the workflow-identity marker `cilock login` stores
+// in keyless CI (AuthModeWorkflowOIDC, EMPTY Token) into homeDir for platformURL,
+// so a smoke case can prove the shipped binary emits NOTHING in pure ambient mode.
+func seedAmbientMarkerFor(t *testing.T, homeDir, platformURL string) {
+	t.Helper()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(homeDir, ".config"))
+	require.NoError(t, auth.Save(auth.Credential{
+		PlatformURL: platformURL,
+		AuthMode:    auth.AuthModeWorkflowOIDC,
+		// Token intentionally empty — the ambient marker never persists a bearer.
+		ExpiresAt: time.Now().Add(time.Hour),
+	}))
+}
+
 // runVersion runs `cilock version` against the mock hub from an isolated HOME.
 // `version` is local-only and always succeeds, inheriting the same root
 // PersistentPostRun telemetry hook as `cilock login`.
@@ -211,6 +226,27 @@ func TestTelemetryBinarySmoke(t *testing.T) {
 		runVersion(t, bin, home, url)
 
 		assert.Equal(t, 0, hub.hitCount(), "no platform session must emit no telemetry (own-keys / off-by-default)")
+	})
+
+	// Ambient GitHub Actions OIDC (keyless CI): `cilock login` stores only a
+	// workflow-identity marker with an EMPTY token, and the GHA OIDC token env
+	// vars are present. cilock IS interacting with the platform, but the shipped
+	// binary must emit NOTHING — the only available bearer is the raw GHA OIDC
+	// token, whose claims embed repo/org/ref/sha (identifiers telemetry never
+	// transmits). This is the binary-level guard for the ambient privacy invariant.
+	t.Run("ambient workflow-identity emits nothing", func(t *testing.T) {
+		home := t.TempDir()
+		seedAmbientMarkerFor(t, home, config.DefaultPlatformURL)
+		hub, url := newMockHub(t)
+
+		runVersion(t, bin, home, url,
+			"GITHUB_ACTIONS=true",
+			"ACTIONS_ID_TOKEN_REQUEST_URL=https://token.actions.example/req",
+			"ACTIONS_ID_TOKEN_REQUEST_TOKEN=ambient-req-token",
+		)
+
+		assert.Equal(t, 0, hub.hitCount(),
+			"ambient keyless CI (workflow-identity marker, no bearer) must emit no telemetry — sending the GHA OIDC token would leak repo/org claims")
 	})
 
 	// Platform-awareness: a credential for a NON-default platform (staging) plus
