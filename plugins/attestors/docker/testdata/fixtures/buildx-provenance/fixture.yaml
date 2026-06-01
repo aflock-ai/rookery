@@ -1,0 +1,29 @@
+schema_version: "0.1"
+attestor: docker
+description: "docker buildx build with SLSA provenance — RECORDED FROM A REAL `docker buildx build` run under cilock. The product is the buildx --metadata-file JSON (containerimage.digest, image.name, buildx.build.provenance materials); the attestor keys on it. Proves the docker output contract against real buildx output, not a hand-authored sample."
+setup:
+  mode: product
+  input: metadata.json   # the REAL buildx --metadata-file output — the replay source
+  mime_type: application/json
+# Provenance of the real run that produced this fixture. Re-record with
+# `./record.sh` (runs `docker buildx build` under cilock again). The version +
+# binary digest are the staleness signal: when docker/buildx changes, re-record
+# and the diff shows what moved.
+recording:
+  tool: docker buildx
+  version: "v0.28.0-desktop.1"
+  binary_sha256: "f15161bac7f4149be33d96cc42c2f90d88f76abd3a5fd6f4dd792dfc509bf905"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["docker", "buildx", "build", "--builder", "multiarch", "--platform", "linux/arm64", "--provenance=mode=max", "--metadata-file", "metadata.json", "--output", "type=oci,dest=image.tar", "-t", "dbx-fixture:test", "."]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://aflock.ai/attestations/docker/v0.1
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "imagedigest:"
+      - "imagereference:"
+      - "materialdigest:"
+      - "materialuri:"

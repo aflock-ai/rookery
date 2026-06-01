@@ -19,3 +19,21 @@ pre:
 
 llm_hints:
   on_match: "Maven project metadata captured (groupId, artifactId, version, dependencies)."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/maven/v0.1
+  run_type: prematerial
+  stability:
+    level: stable
+    notes: "Predicate is a deterministic parse of pom.xml fields (groupId, artifactId, version, name, dependencies) via encoding/xml. No timestamps, hostnames, or tool versions are embedded. Subject map keys are derived directly from POM coordinates. Map iteration order is non-deterministic in Go but does not affect the declared subject prefixes or predicate field values."
+  subjects:
+    - prefix: "project:"
+      description: "the Maven project itself, formatted project:<groupId>/<artifactId>@<version> from pom.xml coordinates"
+    - prefix: "dependency:"
+      description: "each declared Maven dependency, formatted dependency:<groupId>/<artifactId>@<version>"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: pom-project
+      role: canonical

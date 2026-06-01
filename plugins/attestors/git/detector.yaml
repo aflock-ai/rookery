@@ -16,3 +16,33 @@ pre:
 
 llm_hints:
   on_match: "Git repository state captured (commit SHA, status, tags)."
+
+contract:
+  tier: foundation
+  predicate_type: https://aflock.ai/attestations/git/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: "The commit SHA, parent hashes, tree hash, and the commit/tag dates are all deterministic for a given checkout — the dates are baked into the immutable commit/tag objects, not read from the wall clock. What actually varies is the live worktree state and host-dependent fields: per-file git status (staging/worktree codes), the discovered git binary path/hash and selected tool (go-git vs go-git+git-bin, host-dependent), and the ref/remote sets and their go-git iteration order. Subject digests for commithash/parenthash are raw SHA-1 commit IDs; the email/refname/remote subjects are SHA-256 over their UTF-8 bytes."
+    volatile_fields: ["Status", "GitBinPath", "GitBinHash", "GitTool", "Refs", "Remotes"]
+  subjects:
+    - prefix: "commithash:"
+      description: "the HEAD commit SHA-1"
+    - prefix: "authoremail:"
+      description: "the commit author email"
+    - prefix: "committeremail:"
+      description: "the commit committer email"
+    - prefix: "parenthash:"
+      description: "each parent commit SHA-1 of HEAD"
+    - prefix: "refnameshort:"
+      description: "the short name of the checked-out ref (branch)"
+    - prefix: "remote:"
+      description: "each configured remote URL (credentials stripped)"
+  backref_subjects:
+    - "commithash:"
+    - "parenthash:"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: single-commit
+      role: canonical

@@ -81,7 +81,7 @@ cilock run --step github-validation \
   -- echo "real GH Actions run" 
 ```
 
-Validated alongside `github` in the same workflow run. Captures real `GITHUB_RUN_ID`, `GITHUB_WORKFLOW`, and `GITHUB_JOB`. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/20-github-action](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/20-github-action).
+Validated alongside `github` in the same workflow run. Captures real `GITHUB_RUN_ID`, `GITHUB_WORKFLOW`, `GITHUB_REPOSITORY`, `RUNNER_OS`, etc. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/20-github-action](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/20-github-action).
 
 ## See also
 

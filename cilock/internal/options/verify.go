@@ -17,6 +17,7 @@ package options
 import (
 	"time"
 
+	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/sigstore/fulcio/pkg/certificate"
 	"github.com/spf13/cobra"
@@ -47,12 +48,19 @@ type VerifyOptions struct {
 	PolicyFulcioCertExtensions certificate.Extensions
 	PolicyCARootPaths          []string
 	PolicyCAIntermediatePaths  []string
-	PolicyTimestampServers     []string
-	PolicyCommonName           string
-	PolicyDNSNames             []string
-	PolicyEmails               []string
-	PolicyOrganizations        []string
-	PolicyURIs                 []string
+	// PolicyCARootsPEM holds CA root certificates discovered from the platform
+	// (the inlined trust bundle in /.well-known/judge-configuration), as raw
+	// PEM. It supplements PolicyCARootPaths so a logged-in `cilock verify` trusts
+	// the platform's keyless signing CA without the user passing a CA file. The
+	// cli layer parses it the same way it parses --policy-ca-roots files. Empty
+	// when discovery is unavailable or --platform-url "" opted out.
+	PolicyCARootsPEM       []byte
+	PolicyTimestampServers []string
+	PolicyCommonName       string
+	PolicyDNSNames         []string
+	PolicyEmails           []string
+	PolicyOrganizations    []string
+	PolicyURIs             []string
 
 	// ChainSidecarDir is a local directory containing chain-of-custody
 	// sidecars (one per downstream step, named <step>.chain.json). When
@@ -103,17 +111,25 @@ type VerifyOptions struct {
 	ChainSidecarHTTPMaxBytes int64
 }
 
-// ResolvePlatformDefaults derives the Archivista URL from the
-// configured --platform-url, mirroring RunOptions's behavior for
-// `cilock run`. Pass --platform-url "" to opt out (operator marks
-// the flag explicitly empty → no defaults derived). Call after flag
-// parsing, before any verify logic runs.
+// ResolvePlatformDefaults derives verification trust from the configured
+// --platform-url so a logged-in `cilock verify` needs no CA files or issuer
+// flags. It mirrors RunOptions's resolution for the verify subset and, beyond
+// the Archivista URL, fetches the platform discovery document
+// (/.well-known/judge-configuration) and — only where the operator did NOT set
+// the corresponding flag — derives:
+//   - the policy-signer CA roots, from the inlined trust bundle (PolicyCARootsPEM);
+//   - the policy-signer Fulcio OIDC issuer (PolicyFulcioCertExtensions.Issuer);
+//   - the expected signer email, from the stored login session (PolicyEmails).
 //
-// Note: unlike `cilock run`, we do NOT auto-populate
-// PolicyTimestampServers — verify's PolicyTimestampServers expects
-// file paths to CA cert bundles, not URLs. Operators who want
-// TSA-rooted trust for the policy still pass --policy-timestamp-servers
-// explicitly with the cert path.
+// Every derived value is overridable: an explicit --policy-ca-roots /
+// --policy-fulcio-oidc-issuer / --policy-emails always wins. Pass --platform-url ""
+// to opt out entirely (fully offline verify; operator supplies the files).
+// Discovery is best-effort: a fetch failure leaves the explicit-flag behavior
+// untouched. Call after flag parsing, before any verify logic runs.
+//
+// Note: unlike `cilock run`, we do NOT auto-populate PolicyTimestampServers —
+// verify's PolicyTimestampServers expects file paths to CA cert bundles, not
+// URLs; embedded-trust / discovery TSA roots are applied in the cli layer.
 func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	platformExplicitlyDisabled := cmd.Flags().Changed("platform-url") && vo.PlatformURL == ""
 	if platformExplicitlyDisabled {
@@ -123,6 +139,49 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// Archivista URL: use platform default if not explicitly overridden.
 	if !cmd.Flags().Changed("archivista-server") && !cmd.Flags().Changed("archivist-server") {
 		vo.ArchivistaOptions.Url = pc.Archivista
+	}
+
+	// Verification trust (CA roots, OIDC issuer, expected signer) is derived ONLY
+	// for a platform the operator has actually logged in to. Without a session we
+	// stop here — an unauthenticated verify must supply explicit --policy-ca-roots
+	// / --policy-fulcio-oidc-issuer rather than trust whatever a (possibly
+	// attacker-controlled) --platform-url advertises. The Archivista URL derived
+	// above is not trust-sensitive: it only says WHERE to fetch evidence; the
+	// signatures are still checked against explicit/embedded/discovered roots.
+	cred, _ := auth.Lookup(vo.PlatformURL)
+	if cred == nil {
+		return
+	}
+
+	// Default the expected signer email to the session identity, so a user
+	// verifying their own org's policy doesn't restate it.
+	if len(vo.PolicyEmails) == 0 && cred.Email != "" {
+		vo.PolicyEmails = []string{cred.Email}
+	}
+	// Enable Archivista by default when logged in (only defaulted, never
+	// overriding an explicit choice), and attach the session bearer for
+	// authenticated reads — origin-guarded so the platform token never travels to
+	// a third-party --archivista-server. Opt out with --enable-archivista=false.
+	if !cmd.Flags().Changed("enable-archivista") && !cmd.Flags().Changed("enable-archivist") {
+		vo.ArchivistaOptions.Enable = true
+	}
+	if !hasAuthorizationHeader(vo.ArchivistaOptions.Headers) && sameOrigin(vo.ArchivistaOptions.Url, pc.Archivista) {
+		vo.ArchivistaOptions.Headers = append(vo.ArchivistaOptions.Headers, "Authorization: Bearer "+cred.Token)
+	}
+
+	// Fetch discovery and derive the policy-signer trust material. Discover itself
+	// refuses non-https (except loopback), so trust is never sourced over
+	// plaintext. Best-effort: on any failure the explicit-flag / embedded-trust
+	// paths in the cli layer still apply.
+	disc, err := platformconfig.Discover(vo.PlatformURL)
+	if err != nil || disc == nil || disc.Signing == nil {
+		return
+	}
+	if len(vo.PolicyCARootPaths) == 0 && len(vo.PolicyCARootsPEM) == 0 && disc.Signing.TrustBundlePEM != "" {
+		vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
+	}
+	if !cmd.Flags().Changed("policy-fulcio-oidc-issuer") && disc.Signing.FulcioOIDCIssuer != "" {
+		vo.PolicyFulcioCertExtensions.Issuer = disc.Signing.FulcioOIDCIssuer
 	}
 }
 

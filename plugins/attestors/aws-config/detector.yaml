@@ -25,3 +25,24 @@ post:
 
 llm_hints:
   on_match: "AWS Config compliance snapshot captured."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/aws-config/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: "Parses a static AWS Config get-compliance-details-by-config-rule JSON product already on disk; makes no AWS API calls. Summary counts and content-hashed subjects are deterministic for identical input. The recorded reportFile is the absolute product path, which varies by run/environment. Upstream ResultRecordedTime/ConfigRuleInvokedTime are parsed but intentionally not propagated into the predicate."
+    volatile_fields: ["reportFile"]
+  subjects:
+    - prefix: "aws-config:rule:"
+      description: "each unique AWS Config rule name from the evaluation results"
+    - prefix: "aws-config:resource:"
+      description: "each evaluated resource as <resourceType>/<resourceId>"
+    - prefix: "aws:account:"
+      description: "AWS account id parsed from any ResourceId that is an ARN (field 5)"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: s3-public-read
+      role: canonical

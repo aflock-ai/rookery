@@ -56,3 +56,26 @@ llm_hints:
   on_match: "Docker build captured. Attestation includes image digest, layer materials, and image references."
   on_warn: "User ran docker build without --provenance=true. Re-run with the suggested_command from the warning to capture full SLSA build provenance."
   on_observed_but_not_invoked: "docker build ran inside the step (likely via make/script). Post-gate captured it via exec_observed."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/docker/v0.1
+  run_type: postproduct
+  stability:
+    level: stable
+    notes: "Output is derived deterministically from the buildx metadata JSON product (containerimage.digest, image.name, buildx.build.provenance materials). The attestor introduces no timestamps or random data; the subject map is a set, so non-deterministic Go map iteration over provenance materials does not affect the result."
+    volatile_fields: []
+  subjects:
+    - prefix: "imagedigest:"
+      description: "sha256 image digest (sha256: prefix trimmed) parsed from containerimage.digest"
+    - prefix: "imagereference:"
+      description: "image.name reference string from the buildx metadata"
+    - prefix: "materialdigest:"
+      description: "sha256 digest of a SLSA provenance build material"
+    - prefix: "materialuri:"
+      description: "URI of a SLSA provenance build material"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: buildx-provenance
+      role: canonical

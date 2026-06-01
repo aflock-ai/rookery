@@ -188,7 +188,10 @@ func (a *Attestor) buildSummaryAndSubjects(results evaluationResults) {
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 	subjects := make(map[string]cryptoutil.DigestSet)
 
-	var summary ComplianceSummary
+	// NonCompliantResources is initialized non-nil so an all-compliant scan
+	// marshals it as [] (matching the schema's array type) rather than null,
+	// which would not validate against the attestor's own Schema().
+	summary := ComplianceSummary{NonCompliantResources: []string{}}
 	ruleSet := make(map[string]struct{})
 	accountSet := make(map[string]struct{})
 

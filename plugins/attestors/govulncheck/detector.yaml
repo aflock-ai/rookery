@@ -31,3 +31,25 @@ post:
 
 llm_hints:
   on_match: "govulncheck results captured. Call-graph-reachable Go vulns preserved."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/govulncheck/v0.1
+  run_type: postproduct
+  stability:
+    level: versioned-schema
+    tool_schema_version: v1.0.0
+    notes: "Parses the govulncheck JSON wire protocol v1.x (validated via config.protocol_version prefix 'v1.'). The summary aggregation is deterministic: OSV ids are sorted and scan roots deduped before emission, and config.db_last_modified is intentionally NOT copied into the Summary so DB-refresh timestamps do not perturb the rolled-up summary. HOWEVER the verbatim message stream is preserved in the report field (and reportDigestSet pins the source file), so the config message's db_last_modified timestamp — and the file digest that depends on it — DO vary run-to-run when the upstream Go vuln DB is refreshed, even against identical code and an identical tool version. Those paths are listed as volatile and must be redacted before a golden comparison; the Summary itself is otherwise byte-stable under the v1.0.0 schema."
+    volatile_fields:
+      - "report[].config.db_last_modified"
+      - "reportDigestSet"
+  subjects:
+    - prefix: "go:module:"
+      description: "each scan-root Go module path (summary.scanRoots, from the SBOM message roots)"
+    - prefix: "go:vuln:"
+      description: "each unique OSV id whose finding is call-graph reachable (symbol-level trace)"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: vuln-found
+      role: canonical

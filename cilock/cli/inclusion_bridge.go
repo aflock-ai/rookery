@@ -145,33 +145,33 @@ func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelope
 			proofs = append(proofs, &p)
 		}
 	}
-	if len(commitments) == 0 {
-		return subjects
-	}
-
 	added := map[string]bool{}
 
-	// Single-leaf shortcut (no sidecar required): when the artifact is the
-	// SOLE product of a step (treeSize==1), the tree has no interior nodes —
-	// the RFC 6962 root IS the leaf hash, and the audit path is empty. We can
-	// therefore reconstruct the expected root directly from (basename, digest)
-	// using the canonical BuildSidecar (the exact producer-side encoding, so
-	// no drift), and match it against a collection commitment. This is the
-	// common case for a single released binary: no inclusion-proof envelope
-	// and no chain sidecar needed for the primary artifact. The root only
-	// matches when the committed tree IS exactly {basename: digest} — a multi-
-	// leaf tree has a different root, so this never false-matches.
+	// Single-leaf candidate for Archivista lookup (CRITICAL for `cilock verify
+	// <artifact> --enable-archivista` with no local -a envelope): a product
+	// collection is indexed in Archivista under its Merkle TREE ROOT, not the
+	// primary artifact's plain sha256 — so a search by the file digest alone
+	// finds nothing and no commitment ever loads. When the artifact is the SOLE
+	// product of a step (treeSize==1) the RFC 6962 root IS the leaf hash, so we
+	// reconstruct the candidate root directly from (basename, digest) via the
+	// canonical BuildSidecar (the exact producer-side encoding, no drift) and add
+	// it as a SEARCH subject BEFORE the commitments check — so the collection can
+	// be fetched by its root. This only matches a collection whose committed tree
+	// is exactly {basename: digest}; the policy engine still verifies that
+	// collection's signature downstream, so adding the candidate grants no trust
+	// on its own. A multi-leaf tree has a different root and is unaffected (it
+	// still needs a local -a / inclusion proof).
 	if artifactPath != "" && artifactDigestHex != "" {
 		base := filepath.Base(artifactPath)
-		if side, err := inclusionproof.BuildSidecar("product", map[string]string{base: artifactDigestHex}); err == nil {
-			for _, c := range commitments {
-				if c.rootHex == side.MerkleRoot && !added[c.rootHex] {
-					added[c.rootHex] = true
-					subjects = append(subjects, cryptoutil.DigestSet{{Hash: crypto.SHA256}: c.rootHex})
-					log.Debugf("inclusion-proof bridge: single-leaf artifact %s reconstructs product tree %s; added as subject", artifactDigestHex, c.rootHex)
-				}
-			}
+		if side, err := inclusionproof.BuildSidecar("product", map[string]string{base: artifactDigestHex}); err == nil && side.MerkleRoot != "" && !added[side.MerkleRoot] {
+			added[side.MerkleRoot] = true
+			subjects = append(subjects, cryptoutil.DigestSet{{Hash: crypto.SHA256}: side.MerkleRoot})
+			log.Debugf("inclusion-proof bridge: added single-leaf candidate tree root %s for artifact %s as an Archivista search subject", side.MerkleRoot, artifactDigestHex)
 		}
+	}
+
+	if len(commitments) == 0 {
+		return subjects
 	}
 
 	// Inline-leaf resolution (no sidecar, no inclusion-proof envelope, no

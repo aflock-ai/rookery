@@ -22,3 +22,22 @@ post:
 
 llm_hints:
   on_match: "SARIF report captured. Scanner findings preserved verbatim for downstream policy evaluation."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/sarif/v0.1
+  run_type: postproduct
+  stability:
+    level: versioned-schema
+    tool_schema_version: "2.1.0"
+    notes: "The attestor records the SARIF report bytes verbatim as json.RawMessage (byte-identical to the input file), plus the relative file path and the product DigestSet copied from the product attestor. The attestor itself introduces no re-encoding, timestamps, or re-ordering — its added data is deterministic for a fixed input. Volatile fields live in the wrapped SARIF body produced by the upstream scanner (per-run scan timestamps under runs[].invocations[], finding detection times, and finding ordering), not in attestor-added data. Wire format is SARIF 2.1.0 (OASIS SARIF TC)."
+    volatile_fields:
+      - "runs[].invocations[].startTimeUtc"
+      - "runs[].invocations[].endTimeUtc"
+      - "runs[].results[].provenance.firstDetectionTimeUtc"
+      - "runs[].results[].provenance.lastDetectionTimeUtc"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: gosec
+      role: canonical

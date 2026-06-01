@@ -15,12 +15,28 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// AuthMode records how a stored credential was obtained, so `cilock whoami`
+// can describe the session and `cilock run` can tell a real session JWT apart
+// from a workflow-identity marker that carries no stored token.
+const (
+	// AuthModeToken — credential is a directly-supplied --token.
+	AuthModeToken = "token"
+	// AuthModeBrowser — credential came from the interactive browser flow.
+	AuthModeBrowser = "browser"
+	// AuthModeWorkflowOIDC — CI workflow identity. No long-lived token is
+	// stored; `cilock run` sources a fresh ambient OIDC token per call.
+	AuthModeWorkflowOIDC = "workflow-oidc"
+)
+
 // Credential is a stored platform session, keyed by platform URL. It also
 // carries the working scope (tenant + product) negotiated during login so
 // cilock can bind attestations to the product without re-prompting.
 type Credential struct {
-	PlatformURL string    `json:"platform_url"`
-	Token       string    `json:"token"`
+	PlatformURL string `json:"platform_url"`
+	Token       string `json:"token"`
+	// AuthMode is how this credential was obtained (see AuthMode* constants).
+	// A workflow-oidc credential intentionally carries an empty Token.
+	AuthMode    string    `json:"auth_mode,omitempty"`
 	TenantID    string    `json:"tenant_id,omitempty"`
 	TenantName  string    `json:"tenant_name,omitempty"`
 	ProductID   string    `json:"product_id,omitempty"`
@@ -130,6 +146,26 @@ func Lookup(platformURL string) (*Credential, error) {
 		return nil, err
 	}
 	if c, ok := s.Credentials[key]; ok && c.Token != "" && !c.Expired() {
+		return &c, nil
+	}
+	if c, ok := lookupJctl(key); ok {
+		return c, nil
+	}
+	return nil, nil
+}
+
+// LookupAny returns a non-expired stored credential for the platform URL
+// regardless of whether it carries a token. Unlike Lookup (which gates on a
+// non-empty Token because callers attach it as a Bearer), this also returns a
+// workflow-identity marker (AuthModeWorkflowOIDC, empty Token). Use it for
+// status/display (`cilock whoami`), never to obtain a bearer token.
+func LookupAny(platformURL string) (*Credential, error) {
+	key := NormalizeURL(platformURL)
+	s, err := load()
+	if err != nil {
+		return nil, err
+	}
+	if c, ok := s.Credentials[key]; ok && !c.Expired() {
 		return &c, nil
 	}
 	if c, ok := lookupJctl(key); ok {

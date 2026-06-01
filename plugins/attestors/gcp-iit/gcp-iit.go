@@ -82,7 +82,7 @@ type Attestor struct {
 	InstanceHostname          string        `json:"instance_hostname"`
 	InstanceCreationTimestamp string        `json:"instance_creation_timestamp"`
 	InstanceConfidentiality   string        `json:"instance_confidentiality"`
-	LicenceID                 []string      `json:"licence_id"`
+	LicenceID                 []string      `json:"licence_id,omitempty"`
 	ClusterName               string        `json:"cluster_name"`
 	ClusterUID                string        `json:"cluster_uid"`
 	ClusterLocation           string        `json:"cluster_location"`
@@ -107,11 +107,27 @@ func (a *Attestor) RunType() attestation.RunType {
 }
 
 func (a *Attestor) Schema() *jsonschema.Schema {
-	return jsonschema.Reflect(a)
+	// DoNotReference inlines nested types instead of emitting shared $defs keyed
+	// by bare type name. gcpiit.Attestor and the embedded jwt.Attestor are BOTH
+	// named "Attestor", so the default reflector collapses them into one
+	// "#/$defs/Attestor" and the `jwt` property wrongly inherits gcp-iit's
+	// required fields (project_id/instance_id/...) — making a valid gcp-iit
+	// predicate fail its own schema. Inlining gives the jwt field its own schema.
+	// (Same fix the github attestor applies for the identical name collision.)
+	r := jsonschema.Reflector{DoNotReference: true}
+	s := r.Reflect(a)
+	// The embedded jwt.Attestor's VerifiedBy.JWK is a jose.JSONWebKey, a type
+	// with a custom MarshalJSON that emits JWK JSON (kty/n/e/kid/...) rather than
+	// the reflected Go struct shape. DoNotReference inlines it here as
+	// jwt.verifiedBy.jwk, so reuse the jwt attestor's permissive-object patch —
+	// otherwise a valid gcp-iit predicate fails its own Schema() on the jwk's
+	// bogus required fields.
+	jwt.PermissiveJWK(s)
+	return s
 }
 
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:gocognit,gocyclo // GCP attestation involves multiple metadata lookups
-	tokenURL := identityTokenURL(defaultIdentityTokenHost, defaultServiceAccount)
+	tokenURL := identityTokenURL(metadataHost(), defaultServiceAccount)
 	identityToken, err := getMetadata(tokenURL)
 	if err != nil {
 		// status.Errorf does not support %w directive
@@ -179,15 +195,18 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 }
 
 func (a *Attestor) getInstanceData() {
+	base := fmt.Sprintf("http://%s", metadataHost())
+	instanceURL := base + "/computeMetadata/v1/instance/"
+	projectURL := base + "/computeMetadata/v1/project/"
 	endpoints := map[string]string{
-		"hostname":         InstanceMetadataUrl + "hostname",
-		"id":               InstanceMetadataUrl + "id",
-		"zone":             InstanceMetadataUrl + "zone",
-		"cluster-name":     InstanceMetadataUrl + "attributes/cluster-name",
-		"cluster-uid":      InstanceMetadataUrl + "attributes/cluster-uid",
-		"cluster-location": InstanceMetadataUrl + "attributes/cluster-location",
-		"project-id":       ProjectMetadataUrl + "project-id",
-		"project-number":   ProjectMetadataUrl + "numeric-project-id",
+		"hostname":         instanceURL + "hostname",
+		"id":               instanceURL + "id",
+		"zone":             instanceURL + "zone",
+		"cluster-name":     instanceURL + "attributes/cluster-name",
+		"cluster-uid":      instanceURL + "attributes/cluster-uid",
+		"cluster-location": instanceURL + "attributes/cluster-location",
+		"project-id":       projectURL + "project-id",
+		"project-number":   projectURL + "numeric-project-id",
 	}
 
 	metadata := make(map[string]string)
@@ -278,6 +297,27 @@ func getMetadata(url string) ([]byte, error) {
 		return nil, err
 	}
 	return respBytes, nil
+}
+
+// metadataHost returns the GCE metadata-server authority (host[:port]) the
+// attestor talks to. It honors GCE_METADATA_HOST — the standard env the Google
+// Cloud SDK's metadata client reads for exactly this purpose — mirroring how the
+// github attestor lets ACTIONS_ID_TOKEN_REQUEST_URL redirect its OIDC fetch.
+// Production leaves it unset and falls back to metadata.google.internal.
+//
+// The value is normally a bare host[:port] (GCP convention, no scheme). A full
+// URL is also accepted (its authority is taken) so the catalog http-mock driver
+// can point it at a localhost httptest server via the generalized endpoints
+// model, which sets the env to the stub's base URL + path.
+func metadataHost() string {
+	v := os.Getenv("GCE_METADATA_HOST")
+	if v == "" {
+		return defaultIdentityTokenHost
+	}
+	if u, err := url.Parse(v); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return v
 }
 
 // identityTokenURL creates the URL to find an instance identity document given the

@@ -64,8 +64,6 @@ replace github.com/aflock-ai/rookery/plugins/attestors/material => ../../plugins
 
 replace github.com/aflock-ai/rookery/plugins/attestors/maven => ../../plugins/attestors/maven
 
-replace github.com/aflock-ai/rookery/plugins/attestors/nessus => ../../plugins/attestors/nessus
-
 replace github.com/aflock-ai/rookery/plugins/attestors/oci => ../../plugins/attestors/oci
 
 replace github.com/aflock-ai/rookery/plugins/attestors/omnitrail => ../../plugins/attestors/omnitrail
@@ -156,7 +154,6 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/lockfiles v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/material v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/maven v0.0.0-00010101000000-000000000000
-	github.com/aflock-ai/rookery/plugins/attestors/nessus v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/oci v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/omnitrail v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/oscap v0.0.0-00010101000000-000000000000
@@ -185,6 +182,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/signers/spiffe v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/vault v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/vault-transit v0.0.0-00010101000000-000000000000
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -247,12 +245,10 @@ require (
 	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c // indirect
 	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea // indirect
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
-	github.com/edwarnicke/gitoid v0.0.0-20220710194850-1be5bfda1f9d // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fatih/semgroup v1.2.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/fkautz/omnitrail-go v0.0.0-20240613153526-999f2e7d0fc9 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
@@ -326,7 +322,6 @@ require (
 	github.com/olekukonko/errors v1.1.0 // indirect
 	github.com/olekukonko/ll v0.0.9 // indirect
 	github.com/olekukonko/tablewriter v1.1.0 // indirect
-	github.com/omnibor/omnibor-go v0.0.0-20230521145532-a77de61a16cd // indirect
 	github.com/open-policy-agent/opa v1.13.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
@@ -343,6 +338,7 @@ require (
 	github.com/rs/zerolog v1.33.0 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.10.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
@@ -407,7 +403,6 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.1 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/apimachinery v0.35.0 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20250910181357-589584f1c912 // indirect

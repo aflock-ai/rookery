@@ -22,6 +22,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"strings"
@@ -166,7 +167,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		}
 	}
 
-	if vo.KeyPath == "" && len(vo.PolicyCARootPaths) == 0 && len(verifiers) == 0 && len(embFulcioRoots) == 0 {
+	if vo.KeyPath == "" && len(vo.PolicyCARootPaths) == 0 && len(vo.PolicyCARootsPEM) == 0 && len(verifiers) == 0 && len(embFulcioRoots) == 0 {
 		return fmt.Errorf("must supply a public key, CA certificates, a verifier, or a cilock built with embedded policy trust")
 	}
 
@@ -225,6 +226,33 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			}
 
 			policyIntermediates = append(policyIntermediates, cert)
+		}
+	}
+
+	// CA roots discovered from the platform (the inlined trust bundle in
+	// /.well-known/judge-configuration). Lets a logged-in `cilock verify` trust
+	// the platform's keyless signing CA without a --policy-ca-roots file. The
+	// bundle carries the self-signed root plus intermediates; split by
+	// self-signedness so each lands in the right pool, exactly as the file flags do.
+	if len(vo.PolicyCARootsPEM) > 0 {
+		for rest := vo.PolicyCARootsPEM; len(rest) > 0; {
+			var block *pem.Block
+			block, rest = pem.Decode(rest)
+			if block == nil {
+				break
+			}
+			if block.Type != "CERTIFICATE" {
+				continue
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return fmt.Errorf("failed to parse discovered CA certificate: %w", err)
+			}
+			if bytes.Equal(cert.RawSubject, cert.RawIssuer) {
+				policyRoots = append(policyRoots, cert)
+			} else {
+				policyIntermediates = append(policyIntermediates, cert)
+			}
 		}
 	}
 

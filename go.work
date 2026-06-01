@@ -46,7 +46,6 @@ use (
 	./plugins/attestors/lockfiles
 	./plugins/attestors/material
 	./plugins/attestors/maven
-	./plugins/attestors/nessus
 	./plugins/attestors/oci
 	./plugins/attestors/omnitrail
 	./plugins/attestors/oscap
@@ -56,6 +55,7 @@ use (
 	./plugins/attestors/prowler
 	./plugins/attestors/sarif
 	./plugins/attestors/sbom
+	./plugins/attestors/scubagoggles
 	./plugins/attestors/secretscan
 	./plugins/attestors/sinkhole-flows
 	./plugins/attestors/slsa

@@ -111,8 +111,24 @@ func TestAttestorMethods(t *testing.T) {
 
 	schema := attestor.Schema()
 	assert.NotNil(t, schema)
-	assert.NotNil(t, schema.Definitions)
-	assert.Contains(t, schema.Definitions, "Attestor")
+	// Schema() inlines nested types (DoNotReference) to avoid the
+	// gitlab.Attestor/jwt.Attestor "$defs/Attestor" name collision, so the
+	// reflected schema describes the attestor's properties directly rather than
+	// via a shared $def. Assert the gitlab fields AND a distinct jwt sub-schema
+	// are present — the property that proves the embedded jwt type isn't
+	// collapsed into gitlab's own shape (the bug the inlining fixes).
+	require.NotNil(t, schema.Properties)
+	_, hasPipelineURL := schema.Properties.Get("pipelineurl")
+	assert.True(t, hasPipelineURL, "schema should describe gitlab pipelineurl field")
+	jwtProp, hasJWT := schema.Properties.Get("jwt")
+	assert.True(t, hasJWT, "schema should describe the embedded jwt sub-attestor")
+	if hasJWT {
+		// The jwt sub-schema must carry the JWT shape (claims), NOT gitlab's
+		// own required fields — that inheritance was the schema bug.
+		assert.NotNil(t, jwtProp.Properties, "jwt sub-schema should have its own properties")
+		_, jwtHasClaims := jwtProp.Properties.Get("claims")
+		assert.True(t, jwtHasClaims, "jwt sub-schema should describe claims, not gitlab fields")
+	}
 }
 
 func TestAttestorInterfaces(t *testing.T) {

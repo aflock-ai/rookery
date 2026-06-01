@@ -25,3 +25,39 @@ post:
 
 llm_hints:
   on_match: "Test results captured. Suite/case counts and pass/fail/skip outcomes preserved."
+
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/test-results/v0.1
+  run_type: postproduct
+  stability:
+    level: best-effort
+    notes: >-
+      Given an IDENTICAL input report the predicate is byte-stable: no
+      wall-clock timestamp is injected by the attestor itself, and ReportDigest
+      is the product digest. JUnit counts are recomputed from the actual
+      <testcase> entries; CTRF trusts results.summary and only recomputes from
+      tests[] when the summary block omits counts. FailedTests is capped at 50
+      entries (maxFailedTests); failed counts in Summary remain exact. Across
+      REAL re-runs of the test command, however, the duration fields and
+      failure messages vary run-to-run (wall-clock timing, stack traces, file
+      paths/line numbers), so they must be redacted before a golden compare —
+      hence best-effort, not stable. The input formats are not uniformly
+      versioned: JUnit XML has no canonical schema (a stable OASIS-style
+      dialect), while CTRF JSON is versioned (https://ctrf.io); the attestor
+      pins neither, so no tool_schema_version is asserted. Subject ordering
+      depends on suite/test iteration order in the source report.
+    volatile_fields:
+      - summary.durationSeconds
+      - failedTests[].duration
+      - failedTests[].message
+  subjects:
+    - prefix: "test-suite:"
+      description: "SHA-256 of each distinct top-level test-suite name observed in the report."
+    - prefix: "test-failure:"
+      description: "SHA-256 of each failed test's fully-qualified name (classname.name, suite::name, or bare name)."
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: junit-go-test
+      role: canonical

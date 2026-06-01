@@ -1,0 +1,37 @@
+schema_version: "0.1"
+attestor: vex
+description: "OpenVEX not_affected statement for an OCI image vs CVE-2024-3094 (xz backdoor) — RECORDED FROM A REAL vexctl run under cilock. Proves the vex attestor unmarshals real vexctl OpenVEX output verbatim into the predicate, not a hand-copied sample. The product/vuln are example identifiers (the SUBJECT of the VEX statement), not secrets."
+setup:
+  mode: product
+  input: iam.openvex.json    # the RAW OpenVEX document from the real vexctl run — replay source
+  mime_type: application/json
+# Provenance of the real run that produced this fixture. Re-record with
+# `./record.sh` (runs vexctl under cilock again). The version + binary digest
+# are the staleness signal: when vexctl changes, re-record and the diff shows
+# what moved. The VEX attestor itself is deterministic — it unmarshals the
+# input file verbatim — so the volatile fields below come from vexctl, not the
+# attestor (pinned here via SOURCE_DATE_EPOCH in record.sh).
+recording:
+  tool: vexctl
+  version: "v0.4.1"
+  binary_sha256: "c5b7c2ce3dcfcd656e1b7097a8626898a60ed62fd9261585d8d4ff9ce7d23bb3"
+  recorded_with: cilock
+  attestation: attestation.json   # the REAL recorded cilock attestation collection (the evidence)
+  argv: ["vexctl", "create", "--product", "pkg:oci/judge-api@sha256:6b5a8e9c1f3d2a4b7c8e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c", "--vuln", "CVE-2024-3094", "--status", "not_affected", "--justification", "vulnerable_code_not_present", "--author", "TestifySec Security", "--file", "iam.openvex.json"]
+  recorded_at: "2026-05-29"
+expect:
+  predicate_type: https://openvex.dev/ns
+  run_type: postproduct
+  # No subjects: the vex attestor does not implement Subjecter. The subject of
+  # the VEX statement (the product purl) lives INSIDE the predicate, not as an
+  # in-toto subject; cilock's product/material tree subjects carry the file
+  # digest in the recorded collection.
+  # Volatile: vexctl carries document/statement timestamps through verbatim
+  # (per detector.yaml volatile_fields). Redact so the recorded-vs-replay
+  # cross-check and the determinism re-run stay green across re-records.
+  redact:
+    - "vexDocument.timestamp"
+    - "vexDocument.last_updated"
+    - "vexDocument.statements.[].timestamp"
+    - "vexDocument.statements.[].last_updated"
+    - "vexDocument.statements.[].action_statement_timestamp"

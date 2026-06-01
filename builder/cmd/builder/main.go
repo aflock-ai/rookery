@@ -1,9 +1,16 @@
 // Copyright 2025 The Aflock Authors
 //
-// Use of this software is governed by the Business Source License 1.1,
-// included in the builder/LICENSE file (https://spdx.org/licenses/BUSL-1.1).
-// As of the Change Date specified in that file, the Licensed Work converts
-// to the GNU General Public License, version 2.0.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package main
 
@@ -72,7 +79,6 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/attestors/lockfiles",
 		"github.com/aflock-ai/rookery/plugins/attestors/material",
 		"github.com/aflock-ai/rookery/plugins/attestors/maven",
-		"github.com/aflock-ai/rookery/plugins/attestors/nessus",
 		"github.com/aflock-ai/rookery/plugins/attestors/oci",
 		"github.com/aflock-ai/rookery/plugins/attestors/omnitrail",
 		"github.com/aflock-ai/rookery/plugins/attestors/oscap",
@@ -450,15 +456,10 @@ func main() {
 	// Plugins, FipsMode) stay in the generated rookery-build/buildinfo
 	// package — they describe the builder invocation itself and aren't
 	// part of cilock's public surface.
-	// The rookery builder, its derivative works, and the binaries it produces
-	// are licensed under the Business Source License 1.1, so stamp the BUSL
-	// edition into every builder-produced binary. (A stock `go build` of cilock
-	// leaves Edition empty and reports Apache 2.0.)
 	metadataFlags := fmt.Sprintf("-X 'rookery-build/buildinfo.BuilderVersion=%s' "+
 		"-X 'rookery-build/buildinfo.BuildTime=%s' "+
 		"-X 'rookery-build/buildinfo.Plugins=%s' "+
 		"-X 'rookery-build/buildinfo.FipsMode=%s' "+
-		"-X 'github.com/aflock-ai/rookery/cilock/cli.Edition=busl' "+
 		"-X 'github.com/aflock-ai/rookery/cilock/cli.CustomerID=%s' "+
 		"-X 'github.com/aflock-ai/rookery/cilock/cli.TenantID=%s'",
 		builderVer, buildTime, pluginsStr, fipsModeStr, customerID, tenantID)

@@ -1,0 +1,38 @@
+{
+  "MetaData": {
+    "TenantId": "C0153amby",
+    "DisplayName": "Example Org",
+    "DomainName": "example.org",
+    "ProductSuite": "Google Workspace",
+    "Tool": "ScubaGoggles",
+    "ToolVersion": "0.6.0",
+    "TimestampZulu": "2025-10-10T20:08:58.871Z",
+    "ReportUUID": "26751c8b-430c-4c75-9ceb-c44b6c253901"
+  },
+  "Summary": {
+    "commoncontrols": { "Manual": 0, "Passes": 1, "Failures": 1 }
+  },
+  "Results": {
+    "commoncontrols": [
+      { "GroupName": "MFA", "Controls": [ { "Control ID": "GWS.COMMONCONTROLS.1.1v0.6", "Result": "Fail" } ] }
+    ]
+  },
+  "Raw": {
+    "tenant_info": { "ID": "C0153amby", "domain": "example.org", "topLevelOU": "Example Org" },
+    "domains": ["example.org", "alias.example.org", "example.org"],
+    "alias_domains": ["alias.example.org"],
+    "organizational_unit_names": ["", "Engineering", "Suspended", "Engineering"],
+    "policies": {
+      "Example Org": {
+        "security_two_step_verification_enforcement": { "enforcedFrom": "" },
+        "security_password_min_length": { "minimumLength": 8 }
+      }
+    },
+    "super_admins": ["admin@example.org"],
+    "dkim_records": [{ "domain": "example.org", "rdata": [] }],
+    "spf_records": [{ "domain": "example.org", "rdata": ["v=spf1 -all"] }],
+    "dmarc_records": [{ "domain": "example.org", "rdata": ["v=DMARC1; p=reject;"] }],
+    "baseline_suffix": "v0.6",
+    "baseline_versions": {}
+  }
+}

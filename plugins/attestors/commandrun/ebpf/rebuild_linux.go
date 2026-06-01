@@ -107,10 +107,17 @@ func rebuildBPFAgainstHostKernel() ([]byte, error) {
 	}
 
 	objPath := filepath.Join(dir, "openat_kprobe.bpf.o")
+	// -ffile-prefix-map / -fdebug-compilation-dir canonicalize the embedded
+	// DWARF comp-dir and source filename to a relative "." so the absolute
+	// tempdir path (and, on a dev machine, the home tree) is never baked into
+	// the rebuilt object. Mirrors bpf/Makefile and scripts/bpf-lint.sh; keeps
+	// a host-rebuilt .bpf.o reproducible and free of leaked build paths.
 	cmd := exec.Command(clang,
 		"-g", "-O2", "-Wall", "-Werror",
 		"-target", "bpf",
 		archDef,
+		"-ffile-prefix-map="+dir+"=.",
+		"-fdebug-compilation-dir=.",
 		"-I", dir,
 		"-I", multiarchInc,
 		"-c", srcPath,

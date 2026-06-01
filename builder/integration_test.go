@@ -1,9 +1,16 @@
 // Copyright 2025 The Aflock Authors
 //
-// Use of this software is governed by the Business Source License 1.1,
-// included in the builder/LICENSE file (https://spdx.org/licenses/BUSL-1.1).
-// As of the Change Date specified in that file, the Licensed Work converts
-// to the GNU General Public License, version 2.0.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+
+// Builder integration test. Generates a cilock binary with a known plugin
+// set, runs it to produce a DSSE envelope, and confirms the wire format
+// matches a stock cilock binary built from the same tree. The critical
+// invariant is symmetric: stock cilock must verify what the generated
+// binary signs, and vice versa.
 //
 // Built with the build tag `integration` to keep `make test` fast.
 // CI runs this in a dedicated `builder-smoke` job (see ci.yml).

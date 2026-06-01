@@ -43,6 +43,11 @@ func SignCmd() *cobra.Command {
 		SilenceUsage:      true,
 		DisableAutoGenTag: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Derive Fulcio/TSA from --platform-url and, if logged in, exchange the
+			// stored session for a short-lived Fulcio token — so `cilock sign` can
+			// sign a policy keyless after `cilock login`, with minimal flags.
+			so.ResolvePlatformDefaults(cmd)
+
 			signers, err := loadSigners(cmd.Context(), so.SignerOptions, so.KMSSignerProviderOptions, providersFromFlags("signer", cmd.Flags()))
 			if err != nil {
 				return fmt.Errorf("failed to load signer: %w", err)

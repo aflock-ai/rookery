@@ -110,6 +110,13 @@ type DetectorYAML struct {
 	Pre      *GateBlock `yaml:"pre,omitempty"`
 	Post     *GateBlock `yaml:"post,omitempty"`
 	LLMHints LLMHints   `yaml:"llm_hints,omitempty"`
+
+	// Contract is the OUTPUT contract: the predicate type, lifecycle, and
+	// subject/material/product shape the attestor produces, proven by the
+	// verification loop (testkit SDK + fixtures + CI gate). Optional —
+	// detection-only entries and not-yet-migrated plugins omit it. See
+	// contract.go.
+	Contract *OutputContract `yaml:"contract,omitempty" json:"contract,omitempty"`
 }
 
 // UpstreamInfo describes the third-party tool a detector wraps. License
@@ -295,6 +302,9 @@ func validateDetectorYAML(d *DetectorYAML) error {
 		if err := validateGate(d.Post, GatePost, "post"); err != nil {
 			return err
 		}
+	}
+	if err := validateOutputContract(d.Contract, d.Name); err != nil {
+		return err
 	}
 	return nil
 }

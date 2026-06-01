@@ -23,6 +23,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
+	"github.com/aflock-ai/rookery/cilock/internal/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -58,6 +59,12 @@ func New() *cobra.Command {
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
 			postRoot(ro, logger, cpuProfileFile)
+			// Best-effort cross-property usage telemetry. No-op unless the user is
+			// authenticated to a platform (see internal/telemetry); the platform
+			// session identity (Email) is the join key linking this CLI run to the
+			// same user's cilock.dev / testifysec.com web activity in the hub.
+			// PersistentPostRun only fires on a successful run, so outcome=success.
+			telemetry.Report(cmd.Name(), Version, "success")
 		},
 	}
 
