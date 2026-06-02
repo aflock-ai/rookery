@@ -153,8 +153,16 @@ jobs:
           # is moved afterward, nothing else creates dist/ before cilock writes
           # the attestation there — so make it explicitly.
           mkdir -p ../dist
+          # --step sets the attestation COLLECTION NAME, which cilock verify
+          # matches EXACTLY against the policy step name (source.Search keys on
+          # referencesByCollectionName[stepName]). The release policy has a single
+          # step "release-build" that verifies every platform binary, so the
+          # collection must be named "release-build" too — NOT per-arch. A per-arch
+          # name (release-build-linux-amd64) never matches step "release-build" and
+          # surfaces as ErrNoCollections. Per-arch distinction lives in the -o
+          # outfile name, not the step.
           /tmp/cilock-bootstrap run \
-            --step "release-build-${{ matrix.goos }}-${{ matrix.goarch }}" \
+            --step "release-build" \
             --workload manual \
             --platform-url "${PLATFORM_URL}" \
             -a environment,git,github \

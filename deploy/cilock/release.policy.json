@@ -22,23 +22,24 @@
   "steps": {
     "release-build": {
       "name": "release-build",
-      "_comment": "Built and signed in .github/workflows/release.yml against the TestifySec Platform (--platform-url). Identity is the GitHub Actions OIDC workflow identity, which the platform Fulcio binds into the ephemeral signing cert's extensions. git/github/commandrun use witness.dev/v0.1 — cilock's LegacyAlternate aliasing maps these to the aflock.ai attestations it emits AT THE SAME VERSION. product is aflock.ai/attestations/product/v0.3 natively: the product attestor bumped v0.1->v0.3 and the namespace alias does NOT bridge versions, so the binary's single-leaf products tree (committed under product/v0.3) only matches a product/v0.3 step entry. Verified locally via cilock/test/inclusion_verify_e2e.sh.",
+      "_comment": "Built and signed in .github/workflows/release.yml against the TestifySec Platform (--platform-url). Identity is the GitHub Actions OIDC workflow identity, which the platform Fulcio binds into the ephemeral signing cert's extensions. All required attestation types use the aflock.ai-native URIs the current cilock actually emits — NOT witness.dev legacy URIs. The policy engine filters candidate collections by required type (source.MemorySource.matchesAttestations, an exact map lookup over both the emitted type and its LegacyAlternate); a type the collection does not carry filters the collection out entirely, surfacing as the misleading ErrNoCollections 'no subjects matched / supply inclusion-proof sidecar'. The legacy alias bridges witness.dev<->aflock.ai only for the SAME name+version: it does NOT bridge a version bump (product/material are v0.3) NOR a name spelling (the attestor is 'command-run', hyphenated — 'commandrun' aliases to nothing). Using native types removes that whole failure class. Verified locally via the differential in cli/inclusion_bridge logs (command-run -> 1 candidate, commandrun -> 0).",
       "attestations": [
         {
-          "type": "https://witness.dev/attestations/git/v0.1",
+          "type": "https://aflock.ai/attestations/git/v0.1",
           "regopolicies": []
         },
         {
-          "type": "https://witness.dev/attestations/github/v0.1",
+          "type": "https://aflock.ai/attestations/github/v0.1",
           "regopolicies": [
             {
               "name": "release-from-aflock-ai-rookery",
-              "module": "cGFja2FnZSByZWxlYXNlX2Zyb21fYWZsb2NrX2FpX3Jvb2tlcnkKCmRlbnlbbXNnXSB7CglpbnB1dC5yZXBvc2l0b3J5ICE9ICJhZmxvY2stYWkvcm9va2VyeSIKCW1zZyA6PSBzcHJpbnRmKCJhdHRlc3RhdGlvbiBub3QgZnJvbSBhZmxvY2stYWkvcm9va2VyeTogJXMiLCBbaW5wdXQucmVwb3NpdG9yeV0pCn0KCmRlbnlbbXNnXSB7Cglub3Qgc3RhcnRzd2l0aChpbnB1dC5yZWZ0eXBlLCAidGFnIikKCW1zZyA6PSBzcHJpbnRmKCJyZWxlYXNlcyBtdXN0IGJlIHRhZ2dlZCwgZ290OiAlcyIsIFtpbnB1dC5yZWZ0eXBlXSkKfQ=="
+              "_comment": "v0-syntax rego (cilock's evaluator uses the legacy github.com/open-policy-agent/opa/ast path = RegoV0; v1 'deny contains msg if' would fail to parse). Reads the github attestor's jwt.claims.{repository,ref_type} (NOT top-level input.repository/input.reftype, which do not exist — the prior version read those and was silently vacuous). Fail-closed: denies missing fields.",
+              "module": "cGFja2FnZSByZWxlYXNlX2Zyb21fYWZsb2NrX2FpX3Jvb2tlcnkKCmRlbnlbbXNnXSB7CglpbnB1dC5qd3QuY2xhaW1zLnJlcG9zaXRvcnkgIT0gImFmbG9jay1haS9yb29rZXJ5IgoJbXNnIDo9IHNwcmludGYoImF0dGVzdGF0aW9uIG5vdCBmcm9tIGFmbG9jay1haS9yb29rZXJ5OiAldiIsIFtpbnB1dC5qd3QuY2xhaW1zLnJlcG9zaXRvcnldKQp9CgpkZW55W21zZ10gewoJbm90IGlucHV0Lmp3dC5jbGFpbXMucmVwb3NpdG9yeQoJbXNnIDo9ICJnaXRodWIgYXR0ZXN0YXRpb24gbWlzc2luZyBqd3QuY2xhaW1zLnJlcG9zaXRvcnkiCn0KCmRlbnlbbXNnXSB7CglpbnB1dC5qd3QuY2xhaW1zLnJlZl90eXBlICE9ICJ0YWciCgltc2cgOj0gc3ByaW50ZigicmVsZWFzZXMgbXVzdCBiZSB0YWdnZWQsIGdvdCByZWZfdHlwZTogJXYiLCBbaW5wdXQuand0LmNsYWltcy5yZWZfdHlwZV0pCn0KCmRlbnlbbXNnXSB7Cglub3QgaW5wdXQuand0LmNsYWltcy5yZWZfdHlwZQoJbXNnIDo9ICJnaXRodWIgYXR0ZXN0YXRpb24gbWlzc2luZyBqd3QuY2xhaW1zLnJlZl90eXBlIgp9Cg=="
             }
           ]
         },
         {
-          "type": "https://witness.dev/attestations/commandrun/v0.1",
+          "type": "https://aflock.ai/attestations/command-run/v0.1",
           "regopolicies": []
         },
         {
