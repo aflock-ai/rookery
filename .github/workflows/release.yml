@@ -307,8 +307,12 @@ jobs:
               echo "::error::expected release archive ${archive} is missing — refusing to publish an incomplete release"
               exit 1
             fi
-            stem="${archive%.tar.gz}"
-            platform="${archive#cilock-*-}"; platform="${platform%.tar.gz}"
+            stem="${archive%.tar.gz}"   # cilock-<version>-<os>-<arch>
+            # <os>-<arch> are the last two hyphen segments. The version itself can
+            # contain a hyphen (e.g. 2.0.0-rc2), so a fixed-prefix strip
+            # (${archive#cilock-*-}) mis-parses it — derive os/arch from the suffix.
+            arch="${stem##*-}"; os="${stem%-*}"; os="${os##*-}"
+            platform="${os}-${arch}"
             attest="${platform}.attestation.json"
             if [ ! -f "$attest" ]; then
               echo "::error::no attestation for ${archive} — refusing to publish an unverifiable binary (keyless attestation must have failed; re-run the release)"
