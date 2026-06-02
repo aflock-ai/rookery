@@ -147,6 +147,12 @@ jobs:
         # so the environment attestor can't capture it.
         run: |
           BINARY="cilock"; [ "${{ matrix.goos }}" = "windows" ] && BINARY="cilock.exe"
+          # Pre-create dist/ for the attestation outfile. Previously `go build -o
+          # ../dist/cilock` created it as a side effect; now that the binary
+          # builds inside the workdir (so the product attestor captures it) and
+          # is moved afterward, nothing else creates dist/ before cilock writes
+          # the attestation there — so make it explicitly.
+          mkdir -p ../dist
           /tmp/cilock-bootstrap run \
             --step "release-build-${{ matrix.goos }}-${{ matrix.goarch }}" \
             --workload manual \
