@@ -323,7 +323,7 @@ jobs:
               --policy "${SIGNED_POLICY}" \
               --artifactfile "$archive" \
               --attestations "$attest" \
-              --vsa-out "${stem}.vsa.json" \
+              --vsa-outfile "${stem}.vsa.json" \
               || { echo "::error::policy verification FAILED for ${archive} — refusing to publish"; exit 1; }
           done
 
