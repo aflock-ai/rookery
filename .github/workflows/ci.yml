@@ -335,6 +335,28 @@ jobs:
       - name: Run builder integration tests
         run: go test -v -tags=integration -timeout 5m ./builder/...
 
+  # ── Telemetry gate ──────────────────────────────────────────────────
+  # Builds the shipped cilock binary and asserts its END-USER telemetry
+  # behavior end-to-end against a LOCAL mock hub (no network egress, no
+  # id-token, fork-PR-safe): an authenticated run emits exactly ONE usage
+  # event to analytics.testifysec.com/cli/t; CILOCK_NO_TELEMETRY / DO_NOT_TRACK
+  # emit NOTHING; an unauthenticated run (own keys / offline) emits NOTHING.
+  # Locks the opt-out contract + the "only when authenticated to the platform"
+  # privacy invariant for the cross-property analytics hub.
+  telemetry-smoke:
+    name: telemetry smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+
+      - name: Run telemetry binary smoke
+        working-directory: cilock
+        run: GOWORK=off go test -v -tags=integration -timeout 5m -run TestTelemetryBinarySmoke ./cli/...
+
   # ── Conventional Commits ────────────────────────────────────────────
   commitlint:
     name: commitlint
@@ -558,6 +580,7 @@ jobs:
       - mod-tidy-check
       - downstream-cilock-action
       - builder-smoke
+      - telemetry-smoke
       - commitlint
       - forbidden-patterns
       - dep-budget

@@ -14,11 +14,21 @@
 // cross-property analytics hub (analytics.testifysec.com/cli/t), so CLI usage
 // can be stitched to the same user's cilock.dev / testifysec.com web activity.
 //
-// IDENTITY / AUTH GATE: telemetry is sent ONLY when the user is authenticated to
-// a Judge platform — i.e. a non-expired credential exists (see internal/auth).
-// An offline / unauthenticated cilock sends nothing. The platform session JWT is
-// the bearer (the hub verifies it platform-side; we never send the user's
-// GitHub token). The cross-property join key is the authenticated user's Email.
+// IDENTITY / AUTH GATE: telemetry is sent ONLY when the user holds a usable
+// platform session BEARER — a non-expired credential with a non-empty Token (see
+// internal/auth). An offline / unauthenticated cilock sends nothing. The platform
+// session JWT is the bearer (the hub verifies it platform-side; we never send the
+// user's GitHub token). The cross-property join key is the authenticated user's
+// Email.
+//
+// AMBIENT GitHub Actions OIDC (keyless CI) is a deliberate exception: cilock IS
+// interacting with a platform, but `cilock login` in CI stores only a workflow-
+// identity marker with no bearer, and the only platform-acceptable credential is
+// the raw GHA OIDC token — whose claims embed repo/org/ref/sha, the very
+// identifiers this package never transmits. So the ambient path sends NOTHING
+// today (it does not weaken the redaction invariant). See the Report no-bearer
+// branch for the full blocker analysis and the seam where a future telemetry-
+// scoped bearer would be wired.
 //
 // USAGE METADATA ONLY: command verb, os/arch, version, CI flags, outcome. It
 // NEVER transmits artifact/file digests, paths, repo/org names, signer subjects,
@@ -79,20 +89,60 @@ func Report(commandName, version, outcome string) {
 		return
 	}
 
-	cred, err := auth.Lookup(config.DefaultPlatformURL)
-	if err != nil || cred == nil || cred.Token == "" {
-		return // no authenticated platform session -> send nothing
+	// Attribute the event to the platform the command actually interacted with:
+	// run/verify set CILOCK_PLATFORM_URL when they bind to a logged-in platform
+	// session, so telemetry follows the platform the user is really using
+	// (staging, self-hosted, or any --platform-url). Falls back to the compiled-in
+	// default. Without this, usage against a non-default platform was silently
+	// dropped because the lookup only ever checked the default (production) URL.
+	platformURL := strings.TrimSpace(os.Getenv(config.PlatformURLEnv))
+	if platformURL == "" {
+		platformURL = config.DefaultPlatformURL
 	}
 
-	ci, provider := detectCI()
+	cred, err := auth.Lookup(platformURL)
+	if err != nil || cred == nil || cred.Token == "" {
+		// No usable bearer token for the resolved platform. This covers three
+		// distinct states, all of which must send nothing:
+		//
+		//   - not logged in at all (offline / own-keys);
+		//   - an expired/empty stored credential;
+		//   - AMBIENT GitHub Actions OIDC (keyless CI). `cilock login` in CI
+		//     stores only a workflow-identity MARKER (auth.AuthModeWorkflowOIDC,
+		//     empty Token); the platform-acceptable bearer in that mode is the
+		//     raw GitHub Actions OIDC token, sourced fresh per call by run/sign.
+		//
+		// We deliberately do NOT emit telemetry in the ambient case today, even
+		// though cilock IS interacting with a TestifySec platform: the only
+		// bearer available is the GHA OIDC token, whose claims embed repo / org /
+		// ref / sha — exactly the identifiers this package promises never to
+		// transmit. Sending it to the analytics hub (which may log the bearer)
+		// would weaken the redaction invariant, and the hub's acceptance of a
+		// foreign-issuer OIDC bearer is unverified. Emitting nothing is the
+		// honest, privacy-preserving choice until a telemetry-scoped, identity-
+		// only platform bearer exists for the ambient path. See the package
+		// doc comment and the TestReportAmbient* cases for the full analysis;
+		// when a telemetry-scoped, identity-only platform bearer exists for the
+		// ambient case, resolve it here and call postEvent.
+		return
+	}
+
 	account := cred.TenantName
 	if account == "" {
 		account = cred.TenantID
 	}
+	postEvent(cred.Token, account, cred.Email, commandName, version, outcome)
+}
+
+// postEvent builds and sends a single usage event. The bearer travels ONLY in
+// the Authorization header — never in the JSON body — preserving the redaction
+// invariant. It swallows every error so telemetry never affects the CLI.
+func postEvent(bearer, account, userRef, commandName, version, outcome string) {
+	ci, provider := detectCI()
 
 	body, err := json.Marshal(map[string]any{
 		"account":     account,
-		"user_ref":    cred.Email, // cross-property identity join key
+		"user_ref":    userRef, // cross-property identity join key
 		"command":     commandName,
 		"cli_version": version,
 		"os":          runtime.GOOS,
@@ -113,7 +163,7 @@ func Report(commandName, version, outcome string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cred.Token)
+	req.Header.Set("Authorization", "Bearer "+bearer)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
