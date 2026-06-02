@@ -156,7 +156,15 @@ jobs:
             -o "../dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json" \
             -- go build -trimpath \
                  -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
-                 -o "../dist/${BINARY}" ./cmd/cilock/
+                 -o "${BINARY}" ./cmd/cilock/
+          # Move the captured binary into dist/ for archiving. The build wrote it
+          # INSIDE the cilock/ working dir (NOT ../dist/) so the product attestor
+          # commits it as a single-leaf products tree; the publish gate then binds
+          # the binary by digest. Building straight to ../dist/ (outside the
+          # attestor's working dir) left the products tree EMPTY (sha256 of empty
+          # input), so policy verification could never match the binary — the rc4
+          # "no collections found for step release-build" failure.
+          mv "${BINARY}" "../dist/${BINARY}"
 
       - name: Fallback build (no attestation) if attest step failed
         # Runs only when the dogfood attestation above failed. Produces the binary
@@ -318,13 +326,21 @@ jobs:
               echo "::error::no attestation for ${archive} — refusing to publish an unverifiable binary (keyless attestation must have failed; re-run the release)"
               exit 1
             fi
-            echo "verifying ${archive} against the signed release policy..."
-            /tmp/cilock verify \
+            # Verify the BINARY, not the .tar.gz: the dogfood attestation commits
+            # the binary as a product (single-leaf Merkle tree), so the archive's
+            # plain digest never matches a product subject. Extract the binary and
+            # verify it directly — single-leaf reconstruct binds it to the products
+            # tree with no separate inclusion-proof sidecar (validated locally
+            # against cilock/test/inclusion_verify_e2e.sh).
+            bindir="$(mktemp -d)"
+            tar -xzf "$archive" -C "$bindir" cilock
+            echo "verifying ${archive} (binary) against the signed release policy..."
+            /tmp/cilock verify "${bindir}/cilock" \
               --policy "${SIGNED_POLICY}" \
-              --artifactfile "$archive" \
               --attestations "$attest" \
               --vsa-outfile "${stem}.vsa.json" \
               || { echo "::error::policy verification FAILED for ${archive} — refusing to publish"; exit 1; }
+            rm -rf "$bindir"
           done
 
       - name: Publish install script

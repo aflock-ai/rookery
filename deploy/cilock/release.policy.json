@@ -22,7 +22,7 @@
   "steps": {
     "release-build": {
       "name": "release-build",
-      "_comment": "Built and signed in .github/workflows/release.yml against the TestifySec Platform (--platform-url). Identity is the GitHub Actions OIDC workflow identity, which the platform Fulcio binds into the ephemeral signing cert's extensions. attestation type URIs use witness.dev/v0.1 for back-compat; cilock's LegacyAlternate aliasing matches them to the aflock.ai attestations it actually emits.",
+      "_comment": "Built and signed in .github/workflows/release.yml against the TestifySec Platform (--platform-url). Identity is the GitHub Actions OIDC workflow identity, which the platform Fulcio binds into the ephemeral signing cert's extensions. git/github/commandrun use witness.dev/v0.1 — cilock's LegacyAlternate aliasing maps these to the aflock.ai attestations it emits AT THE SAME VERSION. product is aflock.ai/attestations/product/v0.3 natively: the product attestor bumped v0.1->v0.3 and the namespace alias does NOT bridge versions, so the binary's single-leaf products tree (committed under product/v0.3) only matches a product/v0.3 step entry. Verified locally via cilock/test/inclusion_verify_e2e.sh.",
       "attestations": [
         {
           "type": "https://witness.dev/attestations/git/v0.1",
@@ -42,7 +42,7 @@
           "regopolicies": []
         },
         {
-          "type": "https://witness.dev/attestations/product/v0.1",
+          "type": "https://aflock.ai/attestations/product/v0.3",
           "regopolicies": []
         }
       ],
