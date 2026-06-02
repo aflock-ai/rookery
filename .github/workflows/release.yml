@@ -381,44 +381,47 @@ jobs:
         run: |
           syft dir:. --output spdx-json=dist/cilock-${{ steps.version.outputs.version }}-sbom.spdx.json
 
-      # Verify each platform binary against the published release policy and
-      # produce a Verification Summary Attestation (VSA) per artifact. VSAs
-      # ship with the release so downstream consumers can rely on TestifySec's
-      # verification result without re-running the full policy check.
-
-      - name: Generate VSA for each platform
-        # VSA depends on per-platform .attestation.json. When the
-        # cilock-action self-attestation step fell back to a plain
-        # build (rc-quality release), the attestation file doesn't
-        # exist and VSA generation must be skipped, not failed.
-        # continue-on-error keeps the rest of the release flowing.
-        continue-on-error: true
+      # Fail-closed verify-then-publish gate. A binary is published ONLY if it
+      # carries a platform-signed attestation that PASSES `cilock verify` against
+      # the signed release policy, and `cilock verify` writes the per-artifact VSA
+      # that ships with the release. This is the publisher-side guarantee
+      # install.sh's trust model depends on (independent client-side verification
+      # is a tracked fast-follow). The staged cilock embeds the platform
+      # policy-signing trust (baked in build-binaries), so no --policy-* flags are
+      # needed: it checks the policy's own signature AND the per-platform
+      # attestation chain flaglessly.
+      - name: Verify every release binary against the signed policy (publish gate)
+        # Fail CLOSED: a missing expected archive, a missing attestation, or a
+        # failed verification ABORTS the release rather than shipping an
+        # unverifiable binary. A missing attestation means the keyless dogfood
+        # attestation fell back to a plain build — re-run the release; we do not
+        # publish a binary that cannot be verified against the policy. (If you
+        # want RC-tolerance instead, exclude the unattested archive from the
+        # upload — do NOT relax this gate to a warning, or install.sh's
+        # "publisher only uploads verified artifacts" claim becomes false.)
         working-directory: dist
         run: |
+          set -euo pipefail
           for archive in cilock-*-linux-amd64.tar.gz cilock-*-linux-arm64.tar.gz \
                          cilock-*-darwin-amd64.tar.gz cilock-*-darwin-arm64.tar.gz; do
-            [ -f "$archive" ] || continue
+            if [ ! -f "$archive" ]; then
+              echo "::error::expected release archive ${archive} is missing — refusing to publish an incomplete release"
+              exit 1
+            fi
             stem="${archive%.tar.gz}"
-            # Locate the matching attestation file. If absent, skip
-            # VSA for this platform with a warning — the binary
-            # ships without a signed VSA, which is acceptable for
-            # RC releases.
             platform="${archive#cilock-*-}"; platform="${platform%.tar.gz}"
             attest="${platform}.attestation.json"
             if [ ! -f "$attest" ]; then
-              echo "::warning::no attestation for ${archive}; skipping VSA generation"
-              continue
+              echo "::error::no attestation for ${archive} — refusing to publish an unverifiable binary (keyless attestation must have failed; re-run the release)"
+              exit 1
             fi
-            # Verify against the PLATFORM-SIGNED policy. The staged cilock embeds
-            # the platform policy-signing trust (baked in build-binaries), so no
-            # --policy-* flags are needed: it checks the policy's own signature
-            # AND the per-platform attestation chain flaglessly.
+            echo "verifying ${archive} against the signed release policy..."
             /tmp/cilock verify \
               --policy "${SIGNED_POLICY}" \
               --artifactfile "$archive" \
               --attestations "$attest" \
               --vsa-out "${stem}.vsa.json" \
-              || echo "::warning::VSA generation failed for $archive (continuing)"
+              || { echo "::error::policy verification FAILED for ${archive} — refusing to publish"; exit 1; }
           done
 
       - name: Publish install script
