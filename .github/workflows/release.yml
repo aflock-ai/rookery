@@ -19,7 +19,20 @@ on:
 permissions:
   contents: write
   packages: write
-  id-token: write  # For cosign OIDC keyless signing
+  id-token: write  # For keyless OIDC signing (platform Fulcio + GHCR cosign)
+
+env:
+  # Platform-trust pivot: cilock release artifacts are signed against the
+  # TestifySec Platform (its keyless Fulcio + TSA), NOT public Sigstore.
+  # cilock derives the Fulcio (/api/v2/signingCert), TSA (/api/v1/timestamp),
+  # and Archivista URLs from this single --platform-url; the GitHub Actions
+  # ambient OIDC identity (id-token: write) is exchanged at the platform's
+  # Fulcio (audience 'sigstore', issuer token.actions.githubusercontent.com)
+  # for the ephemeral signing cert. Staging-first; flip to the prod platform
+  # URL once it proxies /api/v2/signingCert + /api/v1/timestamp externally,
+  # and refresh deploy/cilock/platform-fulcio-*.pem + the release policy in
+  # lockstep.
+  PLATFORM_URL: https://platform.aws-sandbox-staging.testifysec.dev
 
 jobs:
   # ── Build static binaries for all platforms ─────────────────────────
@@ -52,17 +65,58 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      # Bake the PLATFORM policy-signing trust into every cilock we build here
+      # (bootstrap + the shipped matrix binary). This makes `cilock verify`
+      # trust the platform-signed release-v1.policy.json with NO --policy-*
+      # flags: the embedded trust pins WHO MAY SIGN A POLICY (the TestifySec
+      # Platform Root CA + the release.yml workflow identity), while attestation
+      # trust still comes from the policy itself. The committed
+      # internal/embeddedtrust/trust.json default is `{}`, so only the binaries
+      # built in this workflow embed trust — stock/dev cilock is unchanged.
+      #
+      # Roots come from the committed PEMs (deploy/cilock/platform-fulcio-root.pem
+      # and platform-tsa-root.pem), which are the TestifySec Platform Root CA
+      # fetched from /api/v1/fulcio/trustbundle (Fulcio leaf + TSA both chain to
+      # it). Refresh those PEMs + this bake if the platform root rotates.
+      - name: Bake platform policy trust into the release cilock
+        run: |
+          set -euo pipefail
+          jq -n \
+            --rawfile fulcio deploy/cilock/platform-fulcio-root.pem \
+            --rawfile tsa    deploy/cilock/platform-tsa-root.pem \
+            '{
+              roots: [
+                {name:"testifysec-platform-fulcio", kind:"FULCIO_ROOT", pem:$fulcio},
+                {name:"testifysec-platform-tsa",    kind:"TSA_ROOT",    pem:$tsa}
+              ],
+              policy_signers: [
+                {type:"root", certConstraint:{
+                  commonname:"", dnsnames:[], emails:[], organizations:[],
+                  uris:["*"], roots:["testifysec-platform-fulcio"],
+                  extensions:{
+                    Issuer:"https://token.actions.githubusercontent.com",
+                    SourceRepositoryURI:"https://github.com/aflock-ai/rookery",
+                    BuildConfigURI:"https://github.com/aflock-ai/rookery/.github/workflows/release.yml@*"
+                  }
+                }}
+              ],
+              policy_timestamp_roots: ["testifysec-platform-tsa"]
+            }' > cilock/internal/embeddedtrust/trust.json
+          echo "baked trust.json ($(wc -c < cilock/internal/embeddedtrust/trust.json) bytes)"
+
       # Dogfood: self-attest each release build with the cilock we are RELEASING.
       # Build a bootstrap cilock (native to this runner), then use it to wrap the
       # cross-compiled `go build`, recording signed attestations
       # (environment/git/github/command-run/product) and signing them keyless via
-      # public Sigstore Fulcio using the workflow's GitHub Actions OIDC identity,
-      # timestamped by the public Sigstore TSA. No platform/Archivista dependency —
-      # the attestation is written to a file and shipped with the Release.
+      # the TestifySec Platform's own Fulcio (derived from --platform-url) using
+      # the workflow's GitHub Actions ambient OIDC identity, timestamped by the
+      # platform's TSA. The attestation is written to a file and shipped with the
+      # Release (no Archivista upload here — a raw workflow identity maps to no
+      # tenant, so the dogfood path stays sign-only / offline-publishable).
       #
-      # End users verify with the published policy:
+      # End users verify with the published, platform-rooted policy:
       #   cilock verify <artifact> -p release-v1.policy.json -a <attestation.json>
-      # which checks the Fulcio cert chain + the workflow OIDC identity.
+      # which checks the platform Fulcio cert chain + the workflow OIDC identity.
       - name: Build bootstrap cilock (to self-attest the release)
         working-directory: cilock
         run: |
@@ -71,16 +125,7 @@ jobs:
             -o /tmp/cilock-bootstrap ./cmd/cilock/
           /tmp/cilock-bootstrap version
 
-      - name: Fetch GitHub Actions OIDC token (audience sigstore)
-        # Written to a file (never an env var / step output) so the cilock
-        # environment attestor can't capture the short-lived token. The fulcio
-        # signer reads it via --signer-fulcio-token-path.
-        run: |
-          curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore" | jq -r '.value' > /tmp/oidc.token
-          test -s /tmp/oidc.token && echo "OIDC token acquired" || { echo "::error::no OIDC token"; exit 1; }
-
-      - name: Attest release build with cilock (dogfood, keyless Fulcio)
+      - name: Attest release build with cilock (dogfood, platform keyless Fulcio)
         id: attest
         # continue-on-error keeps the release flowing if keyless attestation has a
         # transient issue; the fallback below then produces the binary unsigned.
@@ -91,16 +136,22 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOWORK: "off"
+        # Minimal flags: --platform-url is the single trust anchor. cilock
+        # derives the platform Fulcio (/api/v2/signingCert) + TSA
+        # (/api/v1/timestamp), detects the ambient GitHub Actions OIDC identity
+        # (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN from `id-token: write`), mints a
+        # fresh OIDC token (audience 'sigstore', issuer
+        # token.actions.githubusercontent.com), and presents it to the platform
+        # Fulcio for the ephemeral signing cert. No manual token fetch, no
+        # --signer-fulcio-*/--timestamp-servers pins — they all flow from the
+        # platform URL. The minted token is never written to a step output/env,
+        # so the environment attestor can't capture it.
         run: |
           BINARY="cilock"; [ "${{ matrix.goos }}" = "windows" ] && BINARY="cilock.exe"
           /tmp/cilock-bootstrap run \
             --step "release-build-${{ matrix.goos }}-${{ matrix.goarch }}" \
             --workload manual \
-            --platform-url "" \
-            --signer-fulcio-url "https://fulcio.sigstore.dev" \
-            --signer-fulcio-token-path /tmp/oidc.token \
-            --signer-fulcio-oidc-issuer "https://token.actions.githubusercontent.com" \
-            --timestamp-servers "https://timestamp.sigstore.dev/api/v1/timestamp" \
+            --platform-url "${PLATFORM_URL}" \
             -a environment,git,github \
             --hashes sha256 \
             -o "../dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json" \
@@ -233,6 +284,13 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      # NOTE (platform-trust pivot): the OCI image is still signed keyless
+      # against PUBLIC Sigstore cosign. The image is a convenience artifact —
+      # the release binaries (signed against the TestifySec Platform Fulcio,
+      # see the `release` job) are primary. Re-anchoring registry signing on the
+      # platform Fulcio needs a custom cosign Sigstore SigningConfig/TUF root
+      # (cilock signs files/blobs, not registry references), which is a separate
+      # workstream; deferred to keep this pivot's moving parts minimal.
       - name: Sign container image
         run: |
           cosign sign --yes \
@@ -260,11 +318,17 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
       - name: Install syft
         uses: anchore/sbom-action/download-syft@v0
+
+      # Use the just-built linux-amd64 binary as cilock for this release's own
+      # blob signing AND verification — same source as the artifacts it signs
+      # and verifies. Extracted before signing so a single cilock serves both.
+      - name: Stage release cilock
+        run: |
+          tar -xzf dist/cilock-${{ steps.version.outputs.version }}-linux-amd64.tar.gz -C /tmp/
+          chmod +x /tmp/cilock
+          /tmp/cilock version
 
       - name: Generate checksums
         working-directory: dist
@@ -272,74 +336,107 @@ jobs:
           sha256sum cilock-* > checksums-sha256.txt
           cat checksums-sha256.txt
 
-      - name: Sign all artifacts with cosign
+      - name: Sign the release verification policy (platform keyless)
+        # cilock verify requires the policy to be a SIGNED DSSE envelope whose
+        # signature chains to trusted policy-signing roots. Sign the committed
+        # release.policy.json with cilock against the platform Fulcio + TSA using
+        # the workflow OIDC identity — the exact identity the embedded trust (and
+        # release-v1.policy's functionary) pins. The signed copy ships as
+        # release-v1.policy.json; the unsigned committed copy stays reviewer-
+        # readable in deploy/cilock/. Exported as SIGNED_POLICY for the VSA gate.
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          /tmp/cilock sign \
+            --platform-url "${PLATFORM_URL}" \
+            --infile ../deploy/cilock/release.policy.json \
+            --outfile release-v1.policy.json
+          echo "SIGNED_POLICY=$(pwd)/release-v1.policy.json" >> "$GITHUB_ENV"
+
+      # Platform-trust pivot: sign the release blobs (tarballs, zips, checksums)
+      # with cilock against the TestifySec Platform's keyless Fulcio + TSA — NOT
+      # public Sigstore cosign. cilock derives both from --platform-url and signs
+      # with the workflow's ambient GitHub Actions OIDC identity (id-token:
+      # write). Each blob gets a detached DSSE envelope (.dsse.json) wrapping its
+      # bytes, signed by the same platform-issued ephemeral cert end users trust
+      # via release-v1.policy.json. The primary, flagless trust artifact is still
+      # the per-platform .attestation.json + VSA verified by `cilock verify`;
+      # these blob envelopes are a convenience integrity layer over the archives.
+      - name: Sign release blobs with cilock (platform keyless)
+        # Fail CLOSED: a release must not publish a binary/checksums file without
+        # its platform-signed DSSE envelope. If signing fails, the whole release
+        # fails rather than silently shipping unsigned artifacts.
         working-directory: dist
         run: |
           for artifact in cilock-*.tar.gz cilock-*.zip checksums-sha256.txt; do
             [ -f "$artifact" ] || continue
-            cosign sign-blob --yes \
-              --output-signature "${artifact}.sig" \
-              --output-certificate "${artifact}.pem" \
-              "$artifact"
+            /tmp/cilock sign \
+              --platform-url "${PLATFORM_URL}" \
+              --infile "$artifact" \
+              --outfile "${artifact}.dsse.json" \
+              || { echo "::error::cilock blob signing failed for $artifact"; exit 1; }
           done
 
       - name: Generate SBOM
         run: |
           syft dir:. --output spdx-json=dist/cilock-${{ steps.version.outputs.version }}-sbom.spdx.json
 
-      # Verify each platform binary against the published release policy and
-      # produce a Verification Summary Attestation (VSA) per artifact. VSAs
-      # ship with the release so downstream consumers can rely on TestifySec's
-      # verification result without re-running the full policy check.
-      - name: Download bootstrap cilock for VSA generation
-        run: |
-          # Use the just-built linux-amd64 binary as the bootstrap cilock for
-          # this release's own verification. Same source as the artifacts it
-          # verifies.
-          tar -xzf dist/cilock-${{ steps.version.outputs.version }}-linux-amd64.tar.gz -C /tmp/
-          chmod +x /tmp/cilock
-          /tmp/cilock version
-
-      - name: Generate VSA for each platform
-        # VSA depends on per-platform .attestation.json. When the
-        # cilock-action self-attestation step fell back to a plain
-        # build (rc-quality release), the attestation file doesn't
-        # exist and VSA generation must be skipped, not failed.
-        # continue-on-error keeps the rest of the release flowing.
-        continue-on-error: true
+      # Fail-closed verify-then-publish gate. A binary is published ONLY if it
+      # carries a platform-signed attestation that PASSES `cilock verify` against
+      # the signed release policy, and `cilock verify` writes the per-artifact VSA
+      # that ships with the release. This is the publisher-side guarantee
+      # install.sh's trust model depends on (independent client-side verification
+      # is a tracked fast-follow). The staged cilock embeds the platform
+      # policy-signing trust (baked in build-binaries), so no --policy-* flags are
+      # needed: it checks the policy's own signature AND the per-platform
+      # attestation chain flaglessly.
+      - name: Verify every release binary against the signed policy (publish gate)
+        # Fail CLOSED: a missing expected archive, a missing attestation, or a
+        # failed verification ABORTS the release rather than shipping an
+        # unverifiable binary. A missing attestation means the keyless dogfood
+        # attestation fell back to a plain build — re-run the release; we do not
+        # publish a binary that cannot be verified against the policy. (If you
+        # want RC-tolerance instead, exclude the unattested archive from the
+        # upload — do NOT relax this gate to a warning, or install.sh's
+        # "publisher only uploads verified artifacts" claim becomes false.)
         working-directory: dist
         run: |
+          set -euo pipefail
           for archive in cilock-*-linux-amd64.tar.gz cilock-*-linux-arm64.tar.gz \
                          cilock-*-darwin-amd64.tar.gz cilock-*-darwin-arm64.tar.gz; do
-            [ -f "$archive" ] || continue
+            if [ ! -f "$archive" ]; then
+              echo "::error::expected release archive ${archive} is missing — refusing to publish an incomplete release"
+              exit 1
+            fi
             stem="${archive%.tar.gz}"
-            # Locate the matching attestation file. If absent, skip
-            # VSA for this platform with a warning — the binary
-            # ships without a signed VSA, which is acceptable for
-            # RC releases.
             platform="${archive#cilock-*-}"; platform="${platform%.tar.gz}"
             attest="${platform}.attestation.json"
             if [ ! -f "$attest" ]; then
-              echo "::warning::no attestation for ${archive}; skipping VSA generation"
-              continue
+              echo "::error::no attestation for ${archive} — refusing to publish an unverifiable binary (keyless attestation must have failed; re-run the release)"
+              exit 1
             fi
+            echo "verifying ${archive} against the signed release policy..."
             /tmp/cilock verify \
-              --policy ../deploy/cilock/release.policy.json \
+              --policy "${SIGNED_POLICY}" \
               --artifactfile "$archive" \
+              --attestations "$attest" \
               --vsa-out "${stem}.vsa.json" \
-              || echo "::warning::VSA generation failed for $archive (continuing)"
+              || { echo "::error::policy verification FAILED for ${archive} — refusing to publish"; exit 1; }
           done
 
-      - name: Publish install script + signed release policy
+      - name: Publish install script
         working-directory: dist
         run: |
           cp ../deploy/cilock/install.sh install.sh
-          # Sign install.sh with the same OIDC identity end users will check.
-          cosign sign-blob --yes \
-            --output-signature install.sh.sig \
-            --output-certificate install.sh.cert \
-            install.sh
-          cp ../deploy/cilock/release.policy.json release-v1.policy.json
+          # Sign install.sh with cilock against the platform keyless Fulcio + TSA
+          # — the same workflow OIDC identity end users check via the release
+          # policy. Detached DSSE envelope (install.sh.dsse.json). Fail CLOSED:
+          # the installer must ship with its signature, not silently unsigned.
+          /tmp/cilock sign \
+            --platform-url "${PLATFORM_URL}" \
+            --infile install.sh \
+            --outfile install.sh.dsse.json \
+            || { echo "::error::cilock signing of install.sh failed"; exit 1; }
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -348,17 +445,15 @@ jobs:
           files: |
             dist/cilock-*.tar.gz
             dist/cilock-*.zip
-            dist/cilock-*.sig
-            dist/cilock-*.pem
+            dist/cilock-*.tar.gz.dsse.json
+            dist/cilock-*.zip.dsse.json
             dist/checksums-sha256.txt
-            dist/checksums-sha256.txt.sig
-            dist/checksums-sha256.txt.pem
+            dist/checksums-sha256.txt.dsse.json
             dist/cilock-*-sbom.spdx.json
             dist/*.attestation.json
             dist/cilock-*.vsa.json
             dist/install.sh
-            dist/install.sh.sig
-            dist/install.sh.cert
+            dist/install.sh.dsse.json
             dist/release-v1.policy.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

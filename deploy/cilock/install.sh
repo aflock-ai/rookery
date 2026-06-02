@@ -2,46 +2,62 @@
 #
 # Cilock install script.
 #
-# Recommended (verifies the install script itself before running anything):
+# cilock release artifacts are built + signed against the TestifySec Platform's
+# keyless Fulcio + TSA (NOT public Sigstore) using the release workflow's GitHub
+# Actions OIDC identity. The release pipeline's publisher then runs `cilock verify`
+# against release-v1.policy.json and uploads ONLY artifacts that pass to
+# cilock.dev — so everything this script fetches has already been cryptographically
+# verified in a trusted CI context. Trust here is: TLS to cilock.dev (origin
+# authenticity) + that verify-then-upload gate, with SHA256 integrity on the
+# download.
 #
-#   curl -fsSL https://cilock.aflock.ai/install.sh -o /tmp/install.sh
-#   curl -fsSL https://cilock.aflock.ai/install.sh.sig -o /tmp/install.sh.sig
-#   curl -fsSL https://cilock.aflock.ai/install.sh.cert -o /tmp/install.sh.cert
-#   cosign verify-blob \
-#     --certificate /tmp/install.sh.cert \
-#     --signature /tmp/install.sh.sig \
-#     --certificate-identity-regexp '^https://github\.com/aflock-ai/rookery/\.github/workflows/release\.yml@.+' \
-#     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-#     /tmp/install.sh
-#   bash /tmp/install.sh
+# NOTE: independent CLIENT-SIDE cryptographic verification (cosign against the
+# platform Fulcio root, before executing anything) is a deliberate fast-follow.
+# Until it lands, verify provenance after install with a cilock you already trust
+# (a release-built cilock embeds the platform Fulcio CA root, TSA root, and
+# policy-signer identity, so it needs no trust flags):
+#
+#   curl -fsSLO https://cilock.dev/policy/release-v1.policy.json
+#   curl -fsSLO https://cilock.dev/dl/<version>/<os>-<arch>.attestation.json
+#   cilock verify "$(command -v cilock)" \
+#     --policy release-v1.policy.json --attestations <os>-<arch>.attestation.json
 #
 # Convenience (curl-pipe-bash):
 #
-#   curl -fsSL https://cilock.aflock.ai/install.sh | bash
+#   curl -fsSL https://cilock.dev/install.sh | bash
 #
 # Environment variables:
-#   CILOCK_VERSION  Tag (v1.0.0) or digest (sha256:abc...). Defaults to latest.
-#   CILOCK_BIN_DIR  Install directory. Defaults to /usr/local/bin if writable,
-#                   else $HOME/.local/bin.
-#   CILOCK_VERIFY   "1" (default) to verify cosign signature before installing.
-#                   "0" to skip (not recommended).
+#   CILOCK_VERSION   Version (e.g. v2.0.0) to install. Defaults to the latest
+#                    stable from cilock.dev/dl/manifest.json. Pre-releases
+#                    (e.g. -rc1) do not move "latest" — install them explicitly.
+#   CILOCK_BIN_DIR   Install directory. Defaults to /usr/local/bin if writable,
+#                    else $HOME/.local/bin.
+#   CILOCK_DIST_BASE Override the distribution origin (default https://cilock.dev).
 
 set -euo pipefail
 
-REPO="aflock-ai/rookery"
-DOCS_BASE="https://cilock.aflock.ai"
-WORKFLOW_REGEX='^https://github\.com/aflock-ai/rookery/\.github/workflows/release\.yml@.+'
-OIDC_ISSUER='https://token.actions.githubusercontent.com'
+DIST_BASE="${CILOCK_DIST_BASE:-https://cilock.dev}"
 
 CILOCK_VERSION="${CILOCK_VERSION:-}"
 CILOCK_BIN_DIR="${CILOCK_BIN_DIR:-}"
-CILOCK_VERIFY="${CILOCK_VERIFY:-1}"
 
 log() { printf '%s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
 
 require() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is required (install: $2)"
+}
+
+# sha256_check verifies "<expected>  <file>" lines on stdin, portably across
+# Linux (sha256sum) and macOS (shasum -a 256).
+sha256_check() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -c -
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 -c -
+  else
+    die "need sha256sum or shasum to verify the download"
+  fi
 }
 
 detect_platform() {
@@ -66,10 +82,12 @@ resolve_version() {
     return
   fi
   require curl "https://curl.se"
+  # Latest stable comes from the signed-publish manifest on cilock.dev — no
+  # GitHub dependency. Pre-releases do not move "latest"; set CILOCK_VERSION for those.
   local tag
-  tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
-  [ -n "$tag" ] || die "could not resolve latest release tag from GitHub"
+  tag="$(curl -fsSL "${DIST_BASE}/dl/manifest.json" \
+    | grep -oE '"latest"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
+  [ -n "$tag" ] || die "could not resolve latest version from ${DIST_BASE}/dl/manifest.json (set CILOCK_VERSION to install a specific or pre-release version)"
   printf '%s\n' "$tag"
 }
 
@@ -92,7 +110,7 @@ main() {
   require tar "your package manager"
 
   read -r os arch <<<"$(detect_platform)"
-  local version bin_dir
+  local version bin_dir version_clean
   version="$(resolve_version)"
   version_clean="${version#v}"
   bin_dir="$(resolve_bin_dir)"
@@ -104,36 +122,18 @@ main() {
   trap 'rm -rf "$tmpdir"' EXIT
 
   local archive="cilock-${version_clean}-${os}-${arch}.tar.gz"
-  local base="https://github.com/${REPO}/releases/download/${version}"
+  # Versioned distribution path on cilock.dev (served from R2; the release
+  # publisher only uploads artifacts that passed `cilock verify`). TLS to the
+  # origin authenticates the source; SHA256 below covers transfer integrity.
+  local base="${DIST_BASE}/dl/${version}"
 
-  log "  downloading ${archive}"
+  log "  downloading ${archive} from ${base}"
   curl -fsSL "${base}/${archive}" -o "${tmpdir}/${archive}"
-  curl -fsSL "${base}/${archive}.sig" -o "${tmpdir}/${archive}.sig"
-  curl -fsSL "${base}/${archive}.pem" -o "${tmpdir}/${archive}.pem"
   curl -fsSL "${base}/checksums-sha256.txt" -o "${tmpdir}/checksums-sha256.txt"
 
   log "  verifying SHA256 against checksums-sha256.txt"
-  (cd "${tmpdir}" && grep " ${archive}\$" checksums-sha256.txt | sha256sum -c -) \
+  (cd "${tmpdir}" && grep " ${archive}\$" checksums-sha256.txt | sha256_check) \
     || die "checksum verification failed"
-
-  if [ "${CILOCK_VERIFY}" = "1" ]; then
-    if command -v cosign >/dev/null 2>&1; then
-      log "  verifying cosign keyless signature (release workflow OIDC identity)"
-      cosign verify-blob \
-        --certificate "${tmpdir}/${archive}.pem" \
-        --signature "${tmpdir}/${archive}.sig" \
-        --certificate-identity-regexp "${WORKFLOW_REGEX}" \
-        --certificate-oidc-issuer "${OIDC_ISSUER}" \
-        "${tmpdir}/${archive}" >/dev/null \
-        || die "cosign verification failed — refusing to install an unverified binary"
-    else
-      log "  cosign not found; skipping signature verification."
-      log "  install cosign to enable end-to-end verification: https://docs.sigstore.dev/cosign/installation/"
-      log "  (re-run with CILOCK_VERIFY=0 to suppress this warning explicitly)"
-    fi
-  else
-    log "  CILOCK_VERIFY=0 — skipping signature check (not recommended)."
-  fi
 
   log "  extracting"
   tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}"
@@ -149,10 +149,12 @@ main() {
   log "cilock ${version} installed."
   log "  $ cilock --version"
   log
-  log "Verify the install with cilock itself:"
-  log "  cilock verify \\"
-  log "    --policy ${DOCS_BASE}/policy/release-v1.policy.json \\"
-  log "    ${bin_dir}/cilock"
+  log "Verify provenance against the platform-signed release policy (no trust"
+  log "flags — platform roots + signer identity are compiled into cilock):"
+  log "  curl -fsSLO ${DIST_BASE}/policy/release-v1.policy.json"
+  log "  curl -fsSLO ${base}/${os}-${arch}.attestation.json"
+  log "  cilock verify ${bin_dir}/cilock \\"
+  log "    --policy release-v1.policy.json --attestations ${os}-${arch}.attestation.json"
 }
 
 main "$@"
