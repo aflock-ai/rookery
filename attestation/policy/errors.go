@@ -35,9 +35,36 @@ type ErrNoCollections struct {
 }
 
 func (e ErrNoCollections) Error() string {
-	return fmt.Sprintf("no collections found for step %v: no loaded attestation's subjects matched the artifact/subject digests. "+
-		"If the artifact is a product committed in a Merkle tree (subject \"tree:products\"), its plain file digest won't match the tree root — "+
-		"supply the inclusion-proof sidecar so the verifier can bridge the file to the tree (e.g. --attestations <step>.inclusion-proof.json, or --chain-sidecar-dir for ArtifactsFrom edges)", e.Step)
+	return fmt.Sprintf("no attestation collection named %q is loaded for this step. Either no attestation was "+
+		"supplied for it (pass it with --attestations / --bundle, or enable Archivista), or the collection name "+
+		"does not match the policy step name. cilock matches them EXACTLY: the collection name is set by "+
+		"`cilock run --step <name>`, which must equal the policy step name %q.", e.Step, e.Step)
+}
+
+// ErrMissingRequiredAttestationTypes fires when collection(s) ARE loaded under
+// the step's name, but none carries all the attestation types the policy step
+// requires — so candidate selection (which also filters by required type) finds
+// nothing. This is the most common policy-authoring mistake and was previously
+// indistinguishable from "nothing loaded" and "subject mismatch": all three
+// collapsed into the generic ErrNoCollections message.
+type ErrMissingRequiredAttestationTypes struct {
+	Step          string
+	MissingTypes  []string
+	ObservedTypes []string
+}
+
+func (e ErrMissingRequiredAttestationTypes) Error() string {
+	if len(e.MissingTypes) > 0 {
+		return fmt.Sprintf("step %q: an attestation collection is loaded under this name, but it is missing "+
+			"required attestation type(s) %v. The collection carries: %v. Check the policy step's "+
+			"attestations[].type against the types the attestor actually emits — a wrong namespace "+
+			"(witness.dev vs aflock.ai), version (e.g. product/material are v0.3, not v0.1), or spelling "+
+			"(the attestor is \"command-run\", hyphenated, not \"commandrun\") will not match.",
+			e.Step, e.MissingTypes, e.ObservedTypes)
+	}
+	return fmt.Sprintf("step %q: attestation collections are loaded under this name, but no single collection "+
+		"carries all required attestation types — they are split across collections. Types observed: %v.",
+		e.Step, e.ObservedTypes)
 }
 
 // ErrSubjectDigestMismatch fires when a collection IS loaded for the step
@@ -69,7 +96,9 @@ func (e ErrSubjectDigestMismatch) Error() string {
 		supplied = strings.Join(e.SuppliedDigests, ", ")
 	}
 	return fmt.Sprintf(
-		"supplied artifact digest(s) [%s] not present in any subject of step %q collection. Subjects observed: [%s]",
+		"supplied artifact digest(s) [%s] are not a subject of step %q's collection. Subjects observed: [%s]. "+
+			"If the artifact is a product committed in a Merkle tree (subject \"tree:products\"), cilock bridges the "+
+			"file to the tree automatically — a mismatch here means the supplied file is not the one the attestation covers.",
 		supplied, e.Step, observed,
 	)
 }

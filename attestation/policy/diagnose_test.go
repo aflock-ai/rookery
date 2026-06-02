@@ -115,7 +115,7 @@ func TestVerify_DigestMismatch_NamesObservedSubjects(t *testing.T) {
 	assert.Contains(t, mm.SuppliedDigests, "abc123notinenvelope")
 
 	msg := got.Error()
-	assert.Contains(t, msg, "not present in any subject", "error must explain the real problem")
+	assert.Contains(t, msg, "are not a subject", "error must explain the real problem")
 	assert.Contains(t, msg, "binary:dist/argocd", "error must name the observed binary subject")
 	assert.Contains(t, msg, "commit", "error must name the observed commit subject")
 	assert.Contains(t, msg, "file:dist/argocd", "error must name the observed file subject")
@@ -134,4 +134,71 @@ func TestDiagnose_ProbeErrorFallsBackToNoCollections(t *testing.T) {
 	got := diagnoseEmptyCollectionResult(context.Background(), src, "build", []string{"x"}, nil)
 	var nc ErrNoCollections
 	assert.True(t, errors.As(got, &nc), "probe error path must collapse to ErrNoCollections")
+}
+
+// diagnosingStub is a VerifiedSourcer that ALSO implements the index-based
+// StepDiagnoser hook the diagnostic prefers. It returns a canned StepDiagnosis
+// so the three candidate-selection failure modes can be mapped to their
+// cause-specific error types.
+type diagnosingStub struct {
+	*stubVerifiedSourcer
+	diag      source.StepDiagnosis
+	supported bool
+}
+
+func (d *diagnosingStub) DiagnoseStep(string, []string) (source.StepDiagnosis, bool) {
+	return d.diag, d.supported
+}
+
+// TestDiagnose_StepDiagnoser_DistinctErrors is the headline test for the fix:
+// when the source can diagnose, the three candidate-selection failure modes map
+// to three DISTINCT, cause-specific errors instead of one generic message.
+func TestDiagnose_StepDiagnoser_DistinctErrors(t *testing.T) {
+	base := &stubVerifiedSourcer{
+		allByStep:         map[string][]source.CollectionVerificationResult{},
+		matchByStepDigest: map[string]map[string][]source.CollectionVerificationResult{},
+	}
+
+	t.Run("name not loaded -> ErrNoCollections", func(t *testing.T) {
+		src := &diagnosingStub{stubVerifiedSourcer: base, supported: true, diag: source.StepDiagnosis{NameLoaded: false}}
+		got := diagnoseEmptyCollectionResult(context.Background(), src, "release-build", []string{"d"}, []string{"t"})
+		var e ErrNoCollections
+		assert.True(t, errors.As(got, &e), "got %T: %v", got, got)
+	})
+
+	t.Run("loaded but missing required type -> ErrMissingRequiredAttestationTypes", func(t *testing.T) {
+		src := &diagnosingStub{stubVerifiedSourcer: base, supported: true, diag: source.StepDiagnosis{
+			NameLoaded:     true,
+			TypesSatisfied: false,
+			MissingTypes:   []string{"https://aflock.ai/attestations/product/v0.3"},
+			ObservedTypes:  []string{"https://aflock.ai/attestations/command-run/v0.1"},
+		}}
+		got := diagnoseEmptyCollectionResult(context.Background(), src, "release-build", []string{"d"}, []string{"t"})
+		var e ErrMissingRequiredAttestationTypes
+		require.True(t, errors.As(got, &e), "got %T: %v", got, got)
+		assert.Contains(t, e.MissingTypes, "https://aflock.ai/attestations/product/v0.3")
+		assert.Contains(t, got.Error(), "command-run", "must name the hyphen-vs-no-hyphen pitfall context")
+		assert.NotContains(t, got.Error(), "inclusion-proof sidecar", "must not surface the outdated sidecar advice")
+	})
+
+	t.Run("types ok, subject mismatch -> ErrSubjectDigestMismatch", func(t *testing.T) {
+		src := &diagnosingStub{stubVerifiedSourcer: base, supported: true, diag: source.StepDiagnosis{
+			NameLoaded:       true,
+			TypesSatisfied:   true,
+			ObservedSubjects: []string{"product/v0.3/tree:products (sha256:4c84)"},
+		}}
+		got := diagnoseEmptyCollectionResult(context.Background(), src, "release-build", []string{"deadbeef"}, []string{"t"})
+		var e ErrSubjectDigestMismatch
+		require.True(t, errors.As(got, &e), "got %T: %v", got, got)
+		assert.Contains(t, e.ObservedSubjects, "product/v0.3/tree:products (sha256:4c84)")
+	})
+
+	t.Run("diagnoser unsupported -> falls back to probe", func(t *testing.T) {
+		// supported=false means the diagnostic ignores the hook and uses the
+		// Search-based probe; with an empty population that is ErrNoCollections.
+		src := &diagnosingStub{stubVerifiedSourcer: base, supported: false}
+		got := diagnoseEmptyCollectionResult(context.Background(), src, "release-build", []string{"d"}, []string{"t"})
+		var e ErrNoCollections
+		assert.True(t, errors.As(got, &e), "got %T: %v", got, got)
+	})
 }

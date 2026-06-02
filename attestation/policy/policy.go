@@ -999,6 +999,37 @@ func envelopePayloadDigest(c source.CollectionVerificationResult) string {
 // want a diagnostic helper to surface a different error class than the
 // original failure mode.
 func diagnoseEmptyCollectionResult(ctx context.Context, src source.VerifiedSourcer, stepName string, suppliedDigests, attestations []string) error {
+	// Precise, index-based diagnosis when the source supports it (local
+	// MemorySource / MultiSource). Candidate selection filters by name, type,
+	// AND subject simultaneously; this attributes the miss to the right one and
+	// emits a cause-specific error instead of the generic ErrNoCollections that
+	// previously fired for all three.
+	if diagnoser, ok := src.(interface {
+		DiagnoseStep(string, []string) (source.StepDiagnosis, bool)
+	}); ok {
+		if d, supported := diagnoser.DiagnoseStep(stepName, attestations); supported {
+			switch {
+			case !d.NameLoaded:
+				return ErrNoCollections{Step: stepName}
+			case !d.TypesSatisfied:
+				return ErrMissingRequiredAttestationTypes{
+					Step:          stepName,
+					MissingTypes:  d.MissingTypes,
+					ObservedTypes: d.ObservedTypes,
+				}
+			default:
+				return ErrSubjectDigestMismatch{
+					Step:             stepName,
+					SuppliedDigests:  append([]string(nil), suppliedDigests...),
+					ObservedSubjects: d.ObservedSubjects,
+				}
+			}
+		}
+	}
+
+	// Fallback for sources without index-based diagnosis (e.g. remote-only
+	// Archivista): probe with an empty subject filter to at least distinguish
+	// "nothing loaded" from "loaded but subject mismatch".
 	allForStep, err := src.Search(ctx, stepName, nil, attestations)
 	if err != nil || len(allForStep) == 0 {
 		return ErrNoCollections{Step: stepName}
