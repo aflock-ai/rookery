@@ -1,20 +1,28 @@
 {
-  "_comment": "Release verification policy for cilock binaries. The policy itself is committed unsigned here so reviewers can read it; the release workflow signs it (DSSE) at publish time and ships the signed copy as release-v1.policy.json. Users verify cilock binaries against the signed copy hosted at https://cilock.aflock.ai/policy/release-v1.policy.json.",
+  "_comment": "Release verification policy for cilock binaries, anchored on the TestifySec Platform PKI (NOT public Sigstore). The platform's keyless Fulcio issues the ephemeral code-signing certs and its TSA timestamps the DSSE envelopes; both chain to the single 'TestifySec Platform Root CA'. The policy itself is committed unsigned here so reviewers can read it; the release workflow signs it (DSSE) at publish time and ships the signed copy as release-v1.policy.json. Users verify cilock binaries against the signed copy (cilock verify <artifact> --policy release-v1.policy.json --attestations <bundle>). A cilock built with embedded platform trust (deploy/cilock release pipeline bakes embeddedtrust/trust.json) verifies flaglessly. PEM material here mirrors deploy/cilock/platform-fulcio-root.pem (root, the .certificate) and deploy/cilock/platform-fulcio-intermediate.pem (the issuing Fulcio CA, in .intermediates). NB: the platform leaf signing certs do NOT carry the Fulcio URL as commonName (unlike public Sigstore O=sigstore.dev), so identity is pinned via the Fulcio cert EXTENSIONS (Issuer / SourceRepositoryURI / BuildConfigURI), with commonname:'*' and uris:['*'] AllowAllConstraint sentinels — a literal glob in uris never matches a real cert URI, and omitting uris fails because Fulcio certs always carry a SAN URI (learned on the self-host-minimal rc14/rc15).",
+  "_renewal_policy": "Bump 'expires' by 6 months on every PR-merged release. If the platform Root CA rotates, re-fetch /api/v1/fulcio/trustbundle, refresh deploy/cilock/platform-fulcio-*.pem, and re-base64 the certificate/intermediates below.",
   "expires": "2027-12-31T23:59:59Z",
   "name": "cilock-release-v1",
   "roots": {
-    "sigstore-fulcio": {
-      "_comment": "Public Sigstore Fulcio root, used to verify the keyless cosign signature on the binary tarball, .sig, and .cert that ship with every release.",
-      "certConstraint": {
-        "commonName": "https://fulcio.sigstore.dev"
-      }
+    "platform-testifysec-fulcio": {
+      "_comment": "TestifySec Platform PKI. .certificate is the self-signed 'TestifySec Platform Root CA'; .intermediates is the issuing 'TestifySec Platform Fulcio CA'. The keyless leaf cert chains leaf -> Fulcio CA -> Root CA. The leaf carries its issuing intermediate in the DSSE signature too, but pinning it here keeps verification robust if a signer omits it.",
+      "certificate": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUIwekNDQVhtZ0F3SUJBZ0lRRERvWS83bVBRQUpIbmF2cFBmQ25ZREFLQmdncWhrak9QUVFEQWpCSU1Rc3cKQ1FZRFZRUUdFd0pWVXpFVE1CRUdBMVVFQ2hNS1ZHVnpkR2xtZVZObFl6RWtNQ0lHQTFVRUF4TWJWR1Z6ZEdsbQplVk5sWXlCUWJHRjBabTl5YlNCU2IyOTBJRU5CTUI0WERUSTFNREV3TVRBd01EQXdNRm9YRFRRME1USXlOekF3Ck1EQXdNRm93U0RFTE1Ba0dBMVVFQmhNQ1ZWTXhFekFSQmdOVkJBb1RDbFJsYzNScFpubFRaV014SkRBaUJnTlYKQkFNVEcxUmxjM1JwWm5sVFpXTWdVR3hoZEdadmNtMGdVbTl2ZENCRFFUQlpNQk1HQnlxR1NNNDlBZ0VHQ0NxRwpTTTQ5QXdFSEEwSUFCSytRWjBZb3o5dFhhalR6RkJIMUhIK0QzekRDODRKK05QdCs2UldNWTdPUEY5eEg4bStCCis4aXJXWTJpbEhTQjhtVEIyWGR2bWx1QVp6R1I1dnhSbEQyalJUQkRNQTRHQTFVZER3RUIvd1FFQXdJQkJqQVMKQmdOVkhSTUJBZjhFQ0RBR0FRSC9BZ0VCTUIwR0ExVWREZ1FXQkJTZjdXRm4ydUs1SzE3dis5bFhWV3NkdmxmLwo4akFLQmdncWhrak9QUVFEQWdOSUFEQkZBaUErV04vSU5MU3hUVGRtVmwySDhzdllHNURweWdCaW9JMmd2eXBWClQ0RHZkQUloQUtiMml4c21kRjU2M0dNRWt0RC9OTTZWTUNUR2kvTjhWRHZLUlEzcjZJNm0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=",
+      "intermediates": [
+        "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUNDekNDQWJHZ0F3SUJBZ0lRZkZBRFIxTWZKdUZYbkxpaFNTSFRzVEFLQmdncWhrak9QUVFEQWpCSU1Rc3cKQ1FZRFZRUUdFd0pWVXpFVE1CRUdBMVVFQ2hNS1ZHVnpkR2xtZVZObFl6RWtNQ0lHQTFVRUF4TWJWR1Z6ZEdsbQplVk5sWXlCUWJHRjBabTl5YlNCU2IyOTBJRU5CTUI0WERUSTFNREV3TVRBd01EQXdNRm9YRFRJNU1USXpNVEF3Ck1EQXdNRm93U2pFTE1Ba0dBMVVFQmhNQ1ZWTXhFekFSQmdOVkJBb1RDbFJsYzNScFpubFRaV014SmpBa0JnTlYKQkFNVEhWUmxjM1JwWm5sVFpXTWdVR3hoZEdadmNtMGdSblZzWTJsdklFTkJNRmt3RXdZSEtvWkl6ajBDQVFZSQpLb1pJemowREFRY0RRZ0FFUFIwY1pxdjU4YTFZREk3T2FnQ01HdlozRkViZ29Ga2JCY3dMN0Q5N0pEaWQwbjVvCkhoMWg1cFNkeW1tSmJPVDh5U3U4VDZTV0NlbUF3UjRQSk9YOENhTjdNSGt3RGdZRFZSMFBBUUgvQkFRREFnRUcKTUJNR0ExVWRKUVFNTUFvR0NDc0dBUVVGQndNRE1CSUdBMVVkRXdFQi93UUlNQVlCQWY4Q0FRQXdIUVlEVlIwTwpCQllFRkhHQmwyQ0JESmdZcGV5YzZVM244Z29WQVltOU1COEdBMVVkSXdRWU1CYUFGSi90WVdmYTRya3JYdS83CjJWZFZheDIrVi8veU1Bb0dDQ3FHU000OUJBTUNBMGdBTUVVQ0lRRElOc2xXT2IrYlRuR3NUOTQ4dUw0TzdjSHkKMXRUV2NiT1dzRVRsQUJhVnpRSWdGdmJtVE9oT1FTUFFqcnQvdWd6SDVIRThhZXh3ck15L0JPcFdMcEQxMDNZPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=="
+      ]
+    }
+  },
+  "timestampauthorities": {
+    "platform-testifysec-tsa": {
+      "_comment": "TestifySec Platform TSA root. The TSA leaf (CN=TestifySec Platform TSA, EKU=Time Stamping) is issued directly by the Platform Root CA — same root as Fulcio — so .certificate here is identical bytes to roots.platform-testifysec-fulcio.certificate. Mirrors deploy/cilock/platform-tsa-root.pem. Anchors the RFC3161 timestamp on each DSSE envelope, without which the ~20-minute Fulcio cert lifetime would make verify report 'certificate has expired' minutes after signing.",
+      "certificate": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUIwekNDQVhtZ0F3SUJBZ0lRRERvWS83bVBRQUpIbmF2cFBmQ25ZREFLQmdncWhrak9QUVFEQWpCSU1Rc3cKQ1FZRFZRUUdFd0pWVXpFVE1CRUdBMVVFQ2hNS1ZHVnpkR2xtZVZObFl6RWtNQ0lHQTFVRUF4TWJWR1Z6ZEdsbQplVk5sWXlCUWJHRjBabTl5YlNCU2IyOTBJRU5CTUI0WERUSTFNREV3TVRBd01EQXdNRm9YRFRRME1USXlOekF3Ck1EQXdNRm93U0RFTE1Ba0dBMVVFQmhNQ1ZWTXhFekFSQmdOVkJBb1RDbFJsYzNScFpubFRaV014SkRBaUJnTlYKQkFNVEcxUmxjM1JwWm5sVFpXTWdVR3hoZEdadmNtMGdVbTl2ZENCRFFUQlpNQk1HQnlxR1NNNDlBZ0VHQ0NxRwpTTTQ5QXdFSEEwSUFCSytRWjBZb3o5dFhhalR6RkJIMUhIK0QzekRDODRKK05QdCs2UldNWTdPUEY5eEg4bStCCis4aXJXWTJpbEhTQjhtVEIyWGR2bWx1QVp6R1I1dnhSbEQyalJUQkRNQTRHQTFVZER3RUIvd1FFQXdJQkJqQVMKQmdOVkhSTUJBZjhFQ0RBR0FRSC9BZ0VCTUIwR0ExVWREZ1FXQkJTZjdXRm4ydUs1SzE3dis5bFhWV3NkdmxmLwo4akFLQmdncWhrak9QUVFEQWdOSUFEQkZBaUErV04vSU5MU3hUVGRtVmwySDhzdllHNURweWdCaW9JMmd2eXBWClQ0RHZkQUloQUtiMml4c21kRjU2M0dNRWt0RC9OTTZWTUNUR2kvTjhWRHZLUlEzcjZJNm0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo="
     }
   },
   "publickeys": {},
   "steps": {
     "release-build": {
       "name": "release-build",
-      "_comment": "Built and signed in .github/workflows/release.yml. Identity is the GH Actions OIDC workflow identity, which Fulcio binds to the cosign cert.",
+      "_comment": "Built and signed in .github/workflows/release.yml against the TestifySec Platform (--platform-url). Identity is the GitHub Actions OIDC workflow identity, which the platform Fulcio binds into the ephemeral signing cert's extensions. attestation type URIs use witness.dev/v0.1 for back-compat; cilock's LegacyAlternate aliasing matches them to the aflock.ai attestations it actually emits.",
       "attestations": [
         {
           "type": "https://witness.dev/attestations/git/v0.1",
@@ -42,10 +50,13 @@
         {
           "type": "root",
           "certConstraint": {
-            "commonName": "https://fulcio.sigstore.dev",
+            "commonname": "*",
+            "uris": ["*"],
+            "roots": ["platform-testifysec-fulcio"],
             "extensions": {
-              "buildConfigURI": "https://github.com/aflock-ai/rookery/.github/workflows/release.yml",
-              "issuer": "https://token.actions.githubusercontent.com"
+              "Issuer": "https://token.actions.githubusercontent.com",
+              "SourceRepositoryURI": "https://github.com/aflock-ai/rookery",
+              "BuildConfigURI": "https://github.com/aflock-ai/rookery/.github/workflows/release.yml@*"
             }
           }
         }
