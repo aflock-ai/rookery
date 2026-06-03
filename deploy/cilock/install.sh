@@ -41,6 +41,14 @@ DIST_BASE="${CILOCK_DIST_BASE:-https://cilock.dev}"
 CILOCK_VERSION="${CILOCK_VERSION:-}"
 CILOCK_BIN_DIR="${CILOCK_BIN_DIR:-}"
 
+# Temp dir, cleaned up on exit. Declared at script scope (NOT `local` in main) so
+# the EXIT trap — which fires in the global scope after main returns — can see it.
+# Under `set -u` a `local` here would be unbound at trap time and abort the script
+# with a spurious "unbound variable" *after* a successful install.
+tmpdir=""
+cleanup() { [ -n "${tmpdir:-}" ] && rm -rf "$tmpdir"; }
+trap cleanup EXIT
+
 log() { printf '%s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
 
@@ -117,9 +125,7 @@ main() {
 
   log "installing cilock ${version} for ${os}/${arch} to ${bin_dir}"
 
-  local tmpdir
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' EXIT
 
   local archive="cilock-${version_clean}-${os}-${arch}.tar.gz"
   # Versioned distribution path on cilock.dev (served from R2; the release
