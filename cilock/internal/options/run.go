@@ -312,7 +312,42 @@ type RunOptions struct {
 	// flag values are merged. Disabling BOTH is a hard error — the
 	// attestation collection would have no body to attest.
 	NoDefaultAttestors []string
+
+	// OutputFormat selects how the run result is reported. "text"
+	// (default) prints a human-readable self-explaining summary to
+	// stderr. "json" emits a single machine-readable RunSummary object
+	// to stdout (logr + the human summary stay on stderr). --json is a
+	// shorthand for --output-format json. Designed so an agent driving
+	// cilock gets a clean tool-result instead of grepping logr text.
+	OutputFormat string
+
+	// resolved* fields are populated by ResolvePlatformDefaults from the
+	// logged-in credential and platform derivation so the post-run summary
+	// can report the tenant / identity / destinations cilock actually bound
+	// to without re-deriving or re-reading the credential store. They are
+	// not flags.
+	resolvedTenantName  string
+	resolvedSignerEmail string
+	resolvedFulcioURL   string
 }
+
+// OutputJSON reports whether the run result should be emitted as a structured
+// JSON object on stdout (set via --json or --output-format json).
+func (ro *RunOptions) OutputJSON() bool {
+	return strings.EqualFold(ro.OutputFormat, "json")
+}
+
+// ResolvedTenantName returns the tenant the logged-in credential is scoped to,
+// as captured during ResolvePlatformDefaults. Empty when not logged in.
+func (ro *RunOptions) ResolvedTenantName() string { return ro.resolvedTenantName }
+
+// ResolvedSignerEmail returns the signing identity's email from the logged-in
+// credential, as captured during ResolvePlatformDefaults. Empty when unknown.
+func (ro *RunOptions) ResolvedSignerEmail() string { return ro.resolvedSignerEmail }
+
+// ResolvedFulcioURL returns the platform-derived Fulcio URL, as captured
+// during ResolvePlatformDefaults. Empty when the platform was disabled.
+func (ro *RunOptions) ResolvedFulcioURL() string { return ro.resolvedFulcioURL }
 
 var RequiredRunFlags = []string{
 	"step",
@@ -339,6 +374,11 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	}
 
 	pc := platformconfig.Derive(ro.PlatformURL)
+
+	// Record the platform-derived Fulcio URL for the post-run summary so an
+	// agent can see the signing destination even on a local/KMS run where the
+	// fulcio signer flag is never set.
+	ro.resolvedFulcioURL = pc.Fulcio
 
 	// Archivista URL: use platform default if not explicitly overridden
 	if !cmd.Flags().Changed("archivista-server") && !cmd.Flags().Changed("archivist-server") {
@@ -397,6 +437,12 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 // keep that method's nesting flat.
 func (ro *RunOptions) applyPlatformCredential(cmd *cobra.Command, cred *auth.Credential, pc platformconfig.PlatformConfig) {
 	_ = os.Setenv(platformURLEnv, auth.NormalizeURL(ro.PlatformURL))
+
+	// Capture the tenant + identity for the post-run summary so the agent can
+	// confirm WHICH tenant/identity the attestation was bound to without
+	// re-reading the credential store.
+	ro.resolvedTenantName = cred.TenantName
+	ro.resolvedSignerEmail = cred.Email
 
 	// Only attach the platform bearer when uploading to the platform's own
 	// Archivista origin (never leak the JWT to a third-party --archivista-server),
@@ -504,6 +550,29 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 			"attestor set + warnings, then exit without running the user command. "+
 			"Use to dry-run a cilock config in CI before committing it.")
 	cmd.Flags().StringSliceVarP(&ro.TimestampServers, "timestamp-servers", "t", []string{}, "Timestamp Authority Servers to use when signing envelope")
+
+	cmd.Flags().StringVar(&ro.OutputFormat, "output-format", "text",
+		"How to report the run result. 'text' (default) prints a human-readable, "+
+			"self-explaining summary (working dir, subjects/anchor, tenant, signer, "+
+			"Fulcio/TSA/Archivista destinations) to stderr. 'json' emits a single "+
+			"machine-readable result object {gitoid, archivista_url, tenant, signer, "+
+			"subjects, attestors:[{name,status}], wrapped_command:{exit_code}, ...} to "+
+			"stdout — logr and the human summary stay on stderr, and the wrapped command's "+
+			"own output is redirected to stderr so stdout carries ONLY the JSON object.")
+	var jsonShorthand bool
+	cmd.Flags().BoolVar(&jsonShorthand, "json", false, "Shorthand for --output-format json (structured run result on stdout).")
+	// Resolve --json into OutputFormat at parse time. PreRunE composes with
+	// any existing hook so this stays self-contained to the flag registration.
+	prev := cmd.PreRunE
+	cmd.PreRunE = func(c *cobra.Command, args []string) error {
+		if jsonShorthand && !c.Flags().Changed("output-format") {
+			ro.OutputFormat = "json"
+		}
+		if prev != nil {
+			return prev(c, args)
+		}
+		return nil
+	}
 
 	cmd.Flags().StringArrayVar(&ro.Subjects, "subjects", []string{},
 		"Additional in-toto subject to inject into the attestation collection. Repeat the flag to add multiple. "+

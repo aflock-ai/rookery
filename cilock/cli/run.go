@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -628,7 +629,8 @@ Exit-code policy (finding #221):
 				log.Warnf("%v", cmdErr)
 			}
 
-			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, providersFromFlags("signer", cmd.Flags()))
+			signerProviders := providersFromFlags("signer", cmd.Flags())
+			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, signerProviders)
 			if err != nil {
 				return fmt.Errorf("failed to load signers: %w", err)
 			}
@@ -645,7 +647,7 @@ Exit-code policy (finding #221):
 				"attestor-product-include-glob": cmd.Flags().Changed("attestor-product-include-glob"),
 			}
 
-			return runRun(cmd.Context(), o, args, userSetFlags, signers...)
+			return runRun(cmd.Context(), o, args, userSetFlags, signerProviders, signers...)
 		},
 		Args: cobra.ArbitraryArgs,
 	}
@@ -654,7 +656,7 @@ Exit-code policy (finding #221):
 	return cmd
 }
 
-func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFlags map[string]bool, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
+func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFlags map[string]bool, signerProviders map[string]struct{}, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
 	if len(signers) > 1 {
 		return fmt.Errorf("only one signer is supported")
 	}
@@ -675,15 +677,27 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	if err != nil {
 		return err
 	}
+	// Under --json the wrapped command's stdout must NOT leak onto the
+	// parent's stdout — stdout is reserved for the single structured result
+	// object. WithSilent(true) drops commandrun's default os.Stdout/os.Stderr
+	// writers; the WithOutputWriters([]io.Writer{os.Stderr}) attestation opt
+	// below then re-attaches os.Stderr so the command's output is still
+	// visible (on stderr) and still captured into the attestation. Nothing is
+	// lost — only the destination of the passthrough changes.
+	jsonOutput := ro.OutputJSON()
 	if len(args) > 0 {
-		attestors = append(attestors, commandrun.New(
+		cmdOpts := []commandrun.Option{
 			commandrun.WithCommand(args),
 			commandrun.WithTracing(ro.Tracing),
 			commandrun.WithIgnoreExitCode(ro.IgnoreCommandExitCode),
 			commandrun.WithPrewalkSkipDirs(ro.PrewalkSkipDirs),
 			commandrun.WithPrewalkIncludeDirs(ro.PrewalkIncludeDirs),
 			commandrun.WithRequireZeroDrops(ro.RequireZeroDrops),
-		))
+		}
+		if jsonOutput {
+			cmdOpts = append(cmdOpts, commandrun.WithSilent(true))
+		}
+		attestors = append(attestors, commandrun.New(cmdOpts...))
 	}
 
 	for _, a := range ro.Attestations {
@@ -787,6 +801,13 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 			DisableSystemQuery: ro.CacheDisableEnvProbe,
 		}),
 	}
+	// In JSON mode, re-route the wrapped command's stdout+stderr to the
+	// parent's stderr (paired with commandrun.WithSilent above) so the
+	// command's output stays visible but stdout is reserved for the JSON
+	// result object.
+	if jsonOutput {
+		attestationOpts = append(attestationOpts, attestation.WithOutputWriters([]io.Writer{os.Stderr}))
+	}
 
 	if ro.EnvFilterSensitiveVars {
 		attestationOpts = append(attestationOpts, attestation.WithEnvFilterVarsEnabled())
@@ -853,6 +874,10 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		return fmt.Errorf("--outfile is required when attestors export multiple attestations")
 	}
 
+	// uploadedGitoid records the gitoid of the collection envelope once it is
+	// stored in Archivista, for the structured/human run summary below.
+	var uploadedGitoid string
+
 	for _, result := range results {
 		signedBytes, err := json.Marshal(&result.SignedEnvelope)
 		if err != nil {
@@ -867,13 +892,24 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 			outfile += "-" + safeName + ".json"
 		}
 
-		out, err := loadOutfile(outfile)
-		if err != nil {
-			return fmt.Errorf("failed to open out file: %w", err)
+		// Under --json, stdout is reserved for the machine-readable run summary.
+		// When no --outfile is given the envelope would otherwise default to
+		// stdout (loadOutfile("") == os.Stdout) and corrupt that JSON object, so
+		// route it to stderr instead. Pass --outfile to persist it to a file.
+		var out *os.File
+		if jsonOutput && outfile == "" {
+			out = os.Stderr
+		} else {
+			out, err = loadOutfile(outfile)
+			if err != nil {
+				return fmt.Errorf("failed to open out file: %w", err)
+			}
 		}
 
 		_, writeErr := out.Write(signedBytes)
-		closeOutfile(out)
+		if out != os.Stderr {
+			closeOutfile(out)
+		}
 		if writeErr != nil {
 			return fmt.Errorf("failed to write envelope to out file: %w", writeErr)
 		}
@@ -889,6 +925,13 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 				return fmt.Errorf("failed to store artifact in archivista: %w", err)
 			}
 			log.Infof("Stored in archivista as %v\n", gitoid)
+			// The collection envelope (AttestorName == "") carries the
+			// collection subjects — it is the correlation anchor we report
+			// in the run summary. Per-attestor sidecar gitoids are not the
+			// anchor, so only the collection gitoid is surfaced.
+			if result.AttestorName == "" {
+				uploadedGitoid = gitoid
+			}
 		}
 	}
 
@@ -924,6 +967,21 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		}
 	}
 
+	// Report the run result. The human-readable self-explaining summary
+	// always goes to stderr (alongside logr); --json additionally emits the
+	// single structured result object to stdout. Built from data already in
+	// scope — no extra server round-trips. Emitted before the deferred error
+	// return so the summary is present even when an attestor fails.
+	summary := buildRunSummary(ro, args, attestors, results, signerProviders, uploadedGitoid, runErr)
+	summary.WriteHuman(os.Stderr)
+	if ro.OutputJSON() {
+		if err := summary.WriteJSON(os.Stdout); err != nil {
+			// Don't mask a successful run on a summary-marshal error, but make
+			// it loud — an agent relying on the JSON contract needs to know.
+			fmt.Fprintf(os.Stderr, "error: failed to emit JSON run summary: %v\n", err)
+		}
+	}
+
 	// Return the deferred attestor error (e.g. secretscan fail-on-detection)
 	// after writing all output files. Soft attestor errors (sbom found no
 	// SBOM file, etc.) are demoted to warnings and the process exits 0;
@@ -931,6 +989,154 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// command exit, etc.) propagate to exit 1. See finding #221.
 	if runErr != nil {
 		return classifyAttestorRunError(runErr)
+	}
+	return nil
+}
+
+// buildRunSummary assembles the structured RunSummary from data the run
+// already produced: the signed collection's subjects (the correlation
+// anchors), the attestor set with each one's ran/skipped/failed status, the
+// signer kind, the wrapped command's exit code, and the platform/credential
+// facts captured during ResolvePlatformDefaults. Pure given its inputs so the
+// assembly logic is unit-testable without a live run.
+func buildRunSummary(
+	ro options.RunOptions,
+	args []string,
+	attestors []attestation.Attestor,
+	results []workflow.RunResult,
+	signerProviders map[string]struct{},
+	uploadedGitoid string,
+	runErr error,
+) *options.RunSummary {
+	s := &options.RunSummary{
+		Step:               ro.StepName,
+		WorkingDir:         ro.WorkingDir,
+		PlatformURL:        ro.PlatformURL,
+		Tenant:             ro.ResolvedTenantName(),
+		Signer:             signerKind(signerProviders),
+		SignerEmail:        ro.ResolvedSignerEmail(),
+		TimestampAuthority: ro.TimestampServers,
+		FulcioURL:          ro.ResolvedFulcioURL(),
+		ArchivistaURL:      ro.ArchivistaOptions.Url,
+		Uploaded:           uploadedGitoid != "",
+		Gitoid:             uploadedGitoid,
+		OutFile:            ro.OutFilePath,
+		Subjects:           collectionSubjects(results),
+		Attestors:          attestorOutcomes(attestors, runErr),
+	}
+	// Only report a platform-derived Fulcio/TSA/Archivista when the platform
+	// is actually in play. Offline runs (--platform-url "") leave them blank.
+	if ro.PlatformURL == "" {
+		s.FulcioURL = ""
+	}
+	if cmd := wrappedCommandOutcome(args, attestors); cmd != nil {
+		s.WrappedCommand = cmd
+	}
+	return s
+}
+
+// signerKind names the selected signer provider (file, fulcio, kms, spiffe…)
+// from the changed --signer-<kind>-* flags. Empty when no provider matched.
+func signerKind(signerProviders map[string]struct{}) string {
+	kinds := make([]string, 0, len(signerProviders))
+	for k := range signerProviders {
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds)
+	return strings.Join(kinds, ",")
+}
+
+// collectionSubjects extracts the in-toto subject set from the signed
+// collection result (the RunResult with an empty AttestorName), which is the
+// anchor set an uploaded attestation is correlated by. Per-attestor sidecar
+// results are skipped — their subjects are the union the collection already
+// carries.
+func collectionSubjects(results []workflow.RunResult) []options.RunSubject {
+	for _, r := range results {
+		if r.AttestorName != "" {
+			continue
+		}
+		out := make([]options.RunSubject, 0, len(r.CollectionSubjects))
+		for name, ds := range r.CollectionSubjects {
+			// ds (the per-iteration range variable, Go 1.22+) is addressable,
+			// so the pointer-receiver ToNameMap can be called on it directly.
+			digests, err := ds.ToNameMap()
+			if err != nil {
+				digests = nil
+			}
+			out = append(out, options.RunSubject{Name: name, Digests: digests})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		return out
+	}
+	return nil
+}
+
+// attestorOutcomes maps the final attestor set onto ran/skipped/failed
+// statuses. The default is "ran"; soft error legs (attestor had nothing to do)
+// become "skipped" and fatal legs become "failed", with the leg's error as the
+// actionable detail. The commandrun attestor is excluded — its result is
+// reported separately under wrapped_command.
+func attestorOutcomes(attestors []attestation.Attestor, runErr error) []options.AttestorOutcome {
+	type legInfo struct {
+		soft   bool
+		detail string
+	}
+	legs := map[string]legInfo{}
+	var aggregate *workflow.AttestorRunErrors
+	if errors.As(runErr, &aggregate) && aggregate != nil {
+		for _, leg := range aggregate.SoftLegs() {
+			legs[leg.Attestor] = legInfo{soft: true, detail: legDetail(leg.Err)}
+		}
+		for _, leg := range aggregate.FatalLegs() {
+			legs[leg.Attestor] = legInfo{soft: false, detail: legDetail(leg.Err)}
+		}
+	}
+
+	var out []options.AttestorOutcome
+	for _, a := range attestors {
+		name := a.Name()
+		if name == attestorCommandRun {
+			continue
+		}
+		oc := options.AttestorOutcome{Name: name, Status: options.AttestorStatusRan}
+		if li, ok := legs[name]; ok {
+			if li.soft {
+				oc.Status = options.AttestorStatusSkipped
+			} else {
+				oc.Status = options.AttestorStatusFailed
+			}
+			oc.Detail = li.detail
+		}
+		out = append(out, oc)
+	}
+	return out
+}
+
+// legDetail strips the "attestor <name> failed: " wrapper the workflow layer
+// adds and the "soft: " log-reader prefix a SoftError carries, so the summary
+// detail reads as the underlying actionable message. The ran/skipped/failed
+// status field already conveys the soft-vs-fatal classification.
+func legDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if i := strings.Index(msg, "failed: "); i >= 0 {
+		msg = msg[i+len("failed: "):]
+	}
+	msg = strings.TrimPrefix(msg, "soft: ")
+	return msg
+}
+
+// wrappedCommandOutcome reports the wrapped command's exit code from the
+// commandrun attestor, if one was present. Returns nil when cilock wrapped no
+// command (sign-only / attest-only style invocation).
+func wrappedCommandOutcome(args []string, attestors []attestation.Attestor) *options.WrappedCommand {
+	for _, a := range attestors {
+		if cr, ok := a.(*commandrun.CommandRun); ok {
+			return &options.WrappedCommand{Args: args, ExitCode: cr.ExitCode}
+		}
 	}
 	return nil
 }
