@@ -422,6 +422,26 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 		// The minted OIDC token carries the Fulcio signing audience (sigstore) and
 		// is presented to the platform's own Fulcio (derived from --platform-url).
 		applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+
+		// Expose the platform URL to the platform attestor so it binds the run to
+		// the tenant even with no prior `cilock login`: in CI the ambient GitHub
+		// Actions OIDC token authenticates the Archivista upload directly
+		// (ArchivistaOptions.OIDC, auto-enabled when ACTIONS_ID_TOKEN_REQUEST_URL is
+		// set), and the platform resolves the tenant/product server-side from that
+		// credential. Same-origin guard: never advertise the platform binding for an
+		// upload aimed at a third-party --archivista-server (the OIDC token, and the
+		// binding it implies, only make sense against the platform's own Archivista).
+		if ro.ArchivistaOptions.OIDC && sameOrigin(ro.ArchivistaOptions.Url, pc.Archivista) {
+			normalized := auth.NormalizeURL(ro.PlatformURL)
+			_ = os.Setenv(platformURLEnv, normalized)
+			// In-process trust handshake: authorize the platform attestor to emit a
+			// workflow-identity binding for THIS url. CILOCK_PLATFORM_URL alone is
+			// user-controllable (inheritable env), so the attestor additionally
+			// requires this marker — set only here, after the same-origin check — to
+			// match before binding. Closes the confused-deputy gap where a hostile CI
+			// step exports CILOCK_PLATFORM_URL to forge a platform binding.
+			platformconfig.MarkTrustedPlatformBinding(normalized)
+		}
 	}
 
 	// Give a selected fulcio signer a URL if it lacks one — whether it was
