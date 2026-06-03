@@ -147,7 +147,7 @@ main() {
 
   log
   log "cilock ${version} installed."
-  log "  $ cilock --version"
+  log "  $ cilock version"
   log
   log "Verify provenance against the platform-signed release policy (no trust"
   log "flags — platform roots + signer identity are compiled into cilock):"
