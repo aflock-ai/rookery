@@ -1111,14 +1111,44 @@ func attestorOutcomes(attestors []attestation.Attestor, runErr error) []options.
 		if li, ok := legs[name]; ok {
 			if li.soft {
 				oc.Status = options.AttestorStatusSkipped
+				oc.Detail = enrichSkippedDetail(name, li.detail)
 			} else {
 				oc.Status = options.AttestorStatusFailed
+				oc.Detail = li.detail
 			}
-			oc.Detail = li.detail
 		}
 		out = append(out, oc)
 	}
 	return out
+}
+
+// enrichSkippedDetail makes a skipped attestor's detail actionable. A skipped
+// (soft) attestor "ran but had nothing to do" — usually because the external
+// tool whose output it records never ran. When the attestor's own soft-error
+// message doesn't already name a generator (some emit a generic "no products
+// to attest"), append the list of generators that WOULD feed it, sourced from
+// the detection registry (attestorExternalGenerators). This turns
+// "sbom: skipped (no products to attest)" into
+// "sbom: skipped (no products to attest; record an SBOM tool's output —
+// cilock does NOT run it — e.g. one of: apko, bom, cdxgen, melange, syft)".
+func enrichSkippedDetail(name, detail string) string {
+	gens := attestorExternalGenerators(name)
+	if len(gens) == 0 {
+		// Self-contained attestor (git, environment) — no external generator,
+		// so there's nothing actionable to add beyond its own message.
+		return detail
+	}
+	// Don't double up if the attestor's own message already named a generator.
+	for _, g := range gens {
+		if strings.Contains(detail, g) {
+			return detail
+		}
+	}
+	hint := fmt.Sprintf("record an external tool's output — cilock does NOT run it — e.g. one of: %s", strings.Join(gens, ", "))
+	if detail == "" {
+		return hint
+	}
+	return detail + "; " + hint
 }
 
 // legDetail strips the "attestor <name> failed: " wrapper the workflow layer
