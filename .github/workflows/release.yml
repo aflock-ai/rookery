@@ -1,13 +1,13 @@
 # Rookery Release Pipeline
-# Builds CIlock using Chainguard toolset (melange + apko)
+# Builds cilock and distributes it via cilock.dev (Cloudflare R2), NOT GitHub.
 #
 # Produces:
-# - Multi-platform static binaries (linux x amd64/arm64)
-# - Minimal container image via apko (ghcr.io/aflock-ai/cilock)
-# - Cosign signatures on all artifacts
-# - SPDX SBOMs via syft
-# - GitHub Release with checksums
-# - macOS/Windows cross-compiled binaries
+# - Multi-platform static binaries (linux + darwin, amd64/arm64)
+# - cilock-signed DSSE envelopes over every artifact, keyless against the
+#   TestifySec Platform Fulcio + TSA (not public Sigstore)
+# - SPDX SBOMs via syft + per-platform attestations and VSAs
+# - A single CI artifact consumed by the cilock-docs publish-release workflow,
+#   which verify-then-uploads it to cilock.dev R2. No GitHub Release; no image.
 
 name: Release
 
@@ -17,9 +17,8 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
-  packages: write
-  id-token: write  # For keyless OIDC signing (platform Fulcio + GHCR cosign)
+  contents: read
+  id-token: write  # ambient GitHub Actions OIDC -> platform Fulcio keyless signing
 
 env:
   # Platform-trust pivot: cilock release artifacts are signed against the
@@ -148,6 +147,12 @@ jobs:
         # so the environment attestor can't capture it.
         run: |
           BINARY="cilock"; [ "${{ matrix.goos }}" = "windows" ] && BINARY="cilock.exe"
+          # Pre-create dist/ for the attestation outfile. Previously `go build -o
+          # ../dist/cilock` created it as a side effect; now that the binary
+          # builds inside the workdir (so the product attestor captures it) and
+          # is moved afterward, nothing else creates dist/ before cilock writes
+          # the attestation there — so make it explicitly.
+          mkdir -p ../dist
           /tmp/cilock-bootstrap run \
             --step "release-build-${{ matrix.goos }}-${{ matrix.goarch }}" \
             --workload manual \
@@ -157,7 +162,15 @@ jobs:
             -o "../dist/${{ matrix.goos }}-${{ matrix.goarch }}.attestation.json" \
             -- go build -trimpath \
                  -ldflags="-s -w -X 'github.com/aflock-ai/rookery/cilock/cli.Version=${{ steps.version.outputs.version }}'" \
-                 -o "../dist/${BINARY}" ./cmd/cilock/
+                 -o "${BINARY}" ./cmd/cilock/
+          # Move the captured binary into dist/ for archiving. The build wrote it
+          # INSIDE the cilock/ working dir (NOT ../dist/) so the product attestor
+          # commits it as a single-leaf products tree; the publish gate then binds
+          # the binary by digest. Building straight to ../dist/ (outside the
+          # attestor's working dir) left the products tree EMPTY (sha256 of empty
+          # input), so policy verification could never match the binary — the rc4
+          # "no collections found for step release-build" failure.
+          mv "${BINARY}" "../dist/${BINARY}"
 
       - name: Fallback build (no attestation) if attest step failed
         # Runs only when the dogfood attestation above failed. Produces the binary
@@ -194,116 +207,16 @@ jobs:
           # Don't fail the upload on a missing optional file.
           if-no-files-found: warn
 
-  # ── Build container image with melange + apko ───────────────────────
-  # NOTE: The melange signing key is ephemeral — generated fresh each run.
-  # This is acceptable for RC/release images since the apk signature is
-  # only used during the apko build and is not a trust anchor for consumers.
-  # Container image integrity is provided by cosign keyless signing below.
-  build-image:
-    name: build container image
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: '.go-version'
-
-      - name: Extract version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Install melange
-        run: |
-          # Use --strip-components=1 to handle the nested directory structure
-          # (tarball contains melange_VERSION_OS_ARCH/melange)
-          MELANGE_VERSION=$(curl -fsS https://api.github.com/repos/chainguard-dev/melange/releases/latest | jq -r .tag_name | sed 's/^v//')
-          curl -fsL "https://github.com/chainguard-dev/melange/releases/download/v${MELANGE_VERSION}/melange_${MELANGE_VERSION}_linux_amd64.tar.gz" \
-            | sudo tar xzf - --strip-components=1 -C /usr/local/bin
-          melange version
-
-      - name: Install apko
-        run: |
-          # Same nested directory structure as melange
-          APKO_VERSION=$(curl -fsS https://api.github.com/repos/chainguard-dev/apko/releases/latest | jq -r .tag_name | sed 's/^v//')
-          curl -fsL "https://github.com/chainguard-dev/apko/releases/download/v${APKO_VERSION}/apko_${APKO_VERSION}_linux_amd64.tar.gz" \
-            | sudo tar xzf - --strip-components=1 -C /usr/local/bin
-          apko version
-
-      - name: Install QEMU for multi-arch
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static bubblewrap
-
-      - name: Generate melange signing key
-        working-directory: deploy/cilock
-        run: melange keygen melange.rsa
-
-      - name: Build melange package
-        working-directory: deploy/cilock
-        run: |
-          # melange has no --substitution flag (removed in current versions) and
-          # does not expand shell-style ${CILOCK_VERSION}. Inject the release
-          # version straight into package.version, then build.
-          sed -i "s|\${CILOCK_VERSION}|${{ steps.version.outputs.version }}|g" melange.yaml
-          sudo melange build melange.yaml \
-            --arch x86_64,aarch64 \
-            --signing-key melange.rsa \
-            --out-dir ./packages \
-            --source-dir ../../
-
-      - name: Build apko image
-        working-directory: deploy/cilock
-        run: |
-          apko build apko.yaml \
-            ghcr.io/aflock-ai/cilock:${{ steps.version.outputs.version }} \
-            cilock.tar \
-            --arch x86_64,aarch64
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Push container image
-        run: |
-          # Load and push multi-arch image
-          docker load -i deploy/cilock/cilock.tar
-
-          # Tag with version and latest
-          docker tag ghcr.io/aflock-ai/cilock:${{ steps.version.outputs.version }}-amd64 \
-            ghcr.io/aflock-ai/cilock:${{ steps.version.outputs.version }}
-          docker tag ghcr.io/aflock-ai/cilock:${{ steps.version.outputs.version }} \
-            ghcr.io/aflock-ai/cilock:latest
-
-          docker push ghcr.io/aflock-ai/cilock:${{ steps.version.outputs.version }}
-          docker push ghcr.io/aflock-ai/cilock:latest
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
-      # NOTE (platform-trust pivot): the OCI image is still signed keyless
-      # against PUBLIC Sigstore cosign. The image is a convenience artifact —
-      # the release binaries (signed against the TestifySec Platform Fulcio,
-      # see the `release` job) are primary. Re-anchoring registry signing on the
-      # platform Fulcio needs a custom cosign Sigstore SigningConfig/TUF root
-      # (cilock signs files/blobs, not registry references), which is a separate
-      # workstream; deferred to keep this pivot's moving parts minimal.
-      - name: Sign container image
-        run: |
-          cosign sign --yes \
-            ghcr.io/aflock-ai/cilock:${{ steps.version.outputs.version }}
-
-  # ── Create GitHub Release ───────────────────────────────────────────
+  # ── Publish signed artifacts (consumed by cilock-docs → cilock.dev R2) ──
+  # No GitHub Release, no container image: cilock binaries are distributed ONLY
+  # via cilock.dev (Cloudflare R2 + the /dl download-analytics Functions), never
+  # GitHub. This job signs + policy-verifies the artifacts (fail-closed) and
+  # uploads them as a CI artifact; the cilock-docs publish-release workflow
+  # downloads it and verify-then-uploads to R2.
   release:
-    name: github release
+    name: publish signed artifacts
     runs-on: ubuntu-latest
     needs: [build-binaries]
-    # Release binaries even if the container image build fails.
-    # The container image is a convenience artifact — binaries are primary.
-    if: ${{ always() && needs.build-binaries.result == 'success' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -408,20 +321,32 @@ jobs:
               echo "::error::expected release archive ${archive} is missing — refusing to publish an incomplete release"
               exit 1
             fi
-            stem="${archive%.tar.gz}"
-            platform="${archive#cilock-*-}"; platform="${platform%.tar.gz}"
+            stem="${archive%.tar.gz}"   # cilock-<version>-<os>-<arch>
+            # <os>-<arch> are the last two hyphen segments. The version itself can
+            # contain a hyphen (e.g. 2.0.0-rc2), so a fixed-prefix strip
+            # (${archive#cilock-*-}) mis-parses it — derive os/arch from the suffix.
+            arch="${stem##*-}"; os="${stem%-*}"; os="${os##*-}"
+            platform="${os}-${arch}"
             attest="${platform}.attestation.json"
             if [ ! -f "$attest" ]; then
               echo "::error::no attestation for ${archive} — refusing to publish an unverifiable binary (keyless attestation must have failed; re-run the release)"
               exit 1
             fi
-            echo "verifying ${archive} against the signed release policy..."
-            /tmp/cilock verify \
+            # Verify the BINARY, not the .tar.gz: the dogfood attestation commits
+            # the binary as a product (single-leaf Merkle tree), so the archive's
+            # plain digest never matches a product subject. Extract the binary and
+            # verify it directly — single-leaf reconstruct binds it to the products
+            # tree with no separate inclusion-proof sidecar (validated locally
+            # against cilock/test/inclusion_verify_e2e.sh).
+            bindir="$(mktemp -d)"
+            tar -xzf "$archive" -C "$bindir" cilock
+            echo "verifying ${archive} (binary) against the signed release policy..."
+            /tmp/cilock verify "${bindir}/cilock" \
               --policy "${SIGNED_POLICY}" \
-              --artifactfile "$archive" \
               --attestations "$attest" \
-              --vsa-out "${stem}.vsa.json" \
+              --vsa-outfile "${stem}.vsa.json" \
               || { echo "::error::policy verification FAILED for ${archive} — refusing to publish"; exit 1; }
+            rm -rf "$bindir"
           done
 
       - name: Publish install script
@@ -438,15 +363,18 @@ jobs:
             --outfile install.sh.dsse.json \
             || { echo "::error::cilock signing of install.sh failed"; exit 1; }
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload signed release artifacts
+        # No GitHub Release: cilock binaries are distributed ONLY via cilock.dev
+        # (Cloudflare R2 + the /dl download-analytics Functions), never GitHub.
+        # The cilock-docs publish-release workflow downloads this artifact and
+        # verify-then-uploads it to R2. These are the platform-signed,
+        # policy-verified artifacts the publish gate above just passed.
+        uses: actions/upload-artifact@v4
         with:
-          generate_release_notes: true
-          files: |
+          name: cilock-release-${{ steps.version.outputs.version }}
+          path: |
             dist/cilock-*.tar.gz
-            dist/cilock-*.zip
             dist/cilock-*.tar.gz.dsse.json
-            dist/cilock-*.zip.dsse.json
             dist/checksums-sha256.txt
             dist/checksums-sha256.txt.dsse.json
             dist/cilock-*-sbom.spdx.json
@@ -455,5 +383,5 @@ jobs:
             dist/install.sh
             dist/install.sh.dsse.json
             dist/release-v1.policy.json
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if-no-files-found: error
+          retention-days: 7

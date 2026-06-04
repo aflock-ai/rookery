@@ -77,12 +77,45 @@ func fulcioSignerNeedsToken(cmd *cobra.Command) bool {
 	if f == nil {
 		return false
 	}
+	// An explicit non-fulcio signer (file / KMS / SPIFFE / vault) wins outright.
+	// cilock accepts exactly one signer (cli/sign.go: "only one signer is
+	// supported"), so attaching an ambient/session fulcio token here would select a
+	// SECOND signer and fail the build — the regression Codex flagged on a CI job
+	// that runs `cilock sign -k key.pem` with id-token: write present.
+	if nonFulcioSignerSelected(cmd) {
+		return false
+	}
 	for _, name := range []string{"signer-fulcio-token", "signer-fulcio-token-path", "signer-fulcio-oidc-issuer"} {
 		if g := cmd.Flags().Lookup(name); g != nil && g.Changed {
 			return false
 		}
 	}
 	return true
+}
+
+// nonFulcioSignerSelected reports whether the operator explicitly selected a
+// signer other than fulcio (e.g. --signer-file-key-path, --signer-kms-*,
+// --signer-spiffe-*, --signer-vault-*). It mirrors cli.providersFromFlags, the
+// canonical provider detector the signer loader itself uses: a provider is the
+// second '-'-delimited segment of any CHANGED "signer-*" flag. We only treat a
+// provider as chosen when its flag was actually set, so default-registered flags
+// never count. Used to suppress the keyless fulcio-token wiring when the user has
+// already committed to a different signer.
+func nonFulcioSignerSelected(cmd *cobra.Command) bool {
+	selected := false
+	cmd.Flags().Visit(func(f *pflag.Flag) {
+		if !strings.HasPrefix(f.Name, "signer-") {
+			return
+		}
+		parts := strings.Split(f.Name, "-")
+		if len(parts) < 2 {
+			return
+		}
+		if parts[1] != "fulcio" {
+			selected = true
+		}
+	})
+	return selected
 }
 
 // fulcioFlagURL returns the fulcio signer's configured URL (set either by the
