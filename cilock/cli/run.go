@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"sort"
@@ -32,6 +34,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 	"github.com/aflock-ai/rookery/attestation/workflow"
+	"github.com/aflock-ai/rookery/cilock/internal/keyguard"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
@@ -475,6 +478,16 @@ func applyNoDefaultAttestors(base []attestation.Attestor, disabled []string) ([]
 	for _, a := range base {
 		if _, drop := disabledSet[a.Name()]; drop {
 			log.Warnf("--no-default-attestor: dropping always-on attestor %q (operator override)", a.Name())
+			// Dropping material (or product) leaves the collection unable to
+			// serve as a build step downstream: `cilock policy from-bundles`
+			// build steps require BOTH material/v0.3 (inputs) and product/v0.3
+			// (outputs) to wire + verify the chain. Spell out the consequence so
+			// the operator isn't surprised when a from-bundles policy built on
+			// this bundle won't verify.
+			if a.Name() == material.Name || a.Name() == product.Name {
+				log.Warnf("--no-default-attestor: build-step policies require material/v0.3 + product/v0.3; "+
+					"a `cilock policy from-bundles` build step built from this bundle (missing %s/v0.3) won't verify end-to-end.", a.Name())
+			}
 			continue
 		}
 		out = append(out, a)
@@ -628,7 +641,8 @@ Exit-code policy (finding #221):
 				log.Warnf("%v", cmdErr)
 			}
 
-			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, providersFromFlags("signer", cmd.Flags()))
+			signerProviders := providersFromFlags("signer", cmd.Flags())
+			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, signerProviders)
 			if err != nil {
 				return fmt.Errorf("failed to load signers: %w", err)
 			}
@@ -645,7 +659,7 @@ Exit-code policy (finding #221):
 				"attestor-product-include-glob": cmd.Flags().Changed("attestor-product-include-glob"),
 			}
 
-			return runRun(cmd.Context(), o, args, userSetFlags, signers...)
+			return runRun(cmd.Context(), o, args, userSetFlags, signerProviders, signers...)
 		},
 		Args: cobra.ArbitraryArgs,
 	}
@@ -654,7 +668,7 @@ Exit-code policy (finding #221):
 	return cmd
 }
 
-func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFlags map[string]bool, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
+func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFlags map[string]bool, signerProviders map[string]struct{}, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
 	if len(signers) > 1 {
 		return fmt.Errorf("only one signer is supported")
 	}
@@ -675,15 +689,27 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	if err != nil {
 		return err
 	}
+	// Under --json the wrapped command's stdout must NOT leak onto the
+	// parent's stdout — stdout is reserved for the single structured result
+	// object. WithSilent(true) drops commandrun's default os.Stdout/os.Stderr
+	// writers; the WithOutputWriters([]io.Writer{os.Stderr}) attestation opt
+	// below then re-attaches os.Stderr so the command's output is still
+	// visible (on stderr) and still captured into the attestation. Nothing is
+	// lost — only the destination of the passthrough changes.
+	jsonOutput := ro.OutputJSON()
 	if len(args) > 0 {
-		attestors = append(attestors, commandrun.New(
+		cmdOpts := []commandrun.Option{
 			commandrun.WithCommand(args),
 			commandrun.WithTracing(ro.Tracing),
 			commandrun.WithIgnoreExitCode(ro.IgnoreCommandExitCode),
 			commandrun.WithPrewalkSkipDirs(ro.PrewalkSkipDirs),
 			commandrun.WithPrewalkIncludeDirs(ro.PrewalkIncludeDirs),
 			commandrun.WithRequireZeroDrops(ro.RequireZeroDrops),
-		))
+		}
+		if jsonOutput {
+			cmdOpts = append(cmdOpts, commandrun.WithSilent(true))
+		}
+		attestors = append(attestors, commandrun.New(cmdOpts...))
 	}
 
 	for _, a := range ro.Attestations {
@@ -787,6 +813,13 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 			DisableSystemQuery: ro.CacheDisableEnvProbe,
 		}),
 	}
+	// In JSON mode, re-route the wrapped command's stdout+stderr to the
+	// parent's stderr (paired with commandrun.WithSilent above) so the
+	// command's output stays visible but stdout is reserved for the JSON
+	// result object.
+	if jsonOutput {
+		attestationOpts = append(attestationOpts, attestation.WithOutputWriters([]io.Writer{os.Stderr}))
+	}
 
 	if ro.EnvFilterSensitiveVars {
 		attestationOpts = append(attestationOpts, attestation.WithEnvFilterVarsEnabled())
@@ -853,6 +886,10 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		return fmt.Errorf("--outfile is required when attestors export multiple attestations")
 	}
 
+	// uploadedGitoid records the gitoid of the collection envelope once it is
+	// stored in Archivista, for the structured/human run summary below.
+	var uploadedGitoid string
+
 	for _, result := range results {
 		signedBytes, err := json.Marshal(&result.SignedEnvelope)
 		if err != nil {
@@ -867,13 +904,24 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 			outfile += "-" + safeName + ".json"
 		}
 
-		out, err := loadOutfile(outfile)
-		if err != nil {
-			return fmt.Errorf("failed to open out file: %w", err)
+		// Under --json, stdout is reserved for the machine-readable run summary.
+		// When no --outfile is given the envelope would otherwise default to
+		// stdout (loadOutfile("") == os.Stdout) and corrupt that JSON object, so
+		// route it to stderr instead. Pass --outfile to persist it to a file.
+		var out *os.File
+		if jsonOutput && outfile == "" {
+			out = os.Stderr
+		} else {
+			out, err = loadOutfile(outfile)
+			if err != nil {
+				return fmt.Errorf("failed to open out file: %w", err)
+			}
 		}
 
 		_, writeErr := out.Write(signedBytes)
-		closeOutfile(out)
+		if out != os.Stderr {
+			closeOutfile(out)
+		}
 		if writeErr != nil {
 			return fmt.Errorf("failed to write envelope to out file: %w", writeErr)
 		}
@@ -889,6 +937,13 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 				return fmt.Errorf("failed to store artifact in archivista: %w", err)
 			}
 			log.Infof("Stored in archivista as %v\n", gitoid)
+			// The collection envelope (AttestorName == "") carries the
+			// collection subjects — it is the correlation anchor we report
+			// in the run summary. Per-attestor sidecar gitoids are not the
+			// anchor, so only the collection gitoid is surfaced.
+			if result.AttestorName == "" {
+				uploadedGitoid = gitoid
+			}
 		}
 	}
 
@@ -924,6 +979,36 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		}
 	}
 
+	// Report the run result. The human-readable self-explaining summary
+	// always goes to stderr (alongside logr); --json additionally emits the
+	// single structured result object to stdout. Built from data already in
+	// scope — no extra server round-trips. Emitted before the deferred error
+	// return so the summary is present even when an attestor fails.
+	summary := buildRunSummary(ro, args, attestors, results, signerProviders, uploadedGitoid, runErr)
+	// Stamp the achieved SLSA Build level + verdict onto the summary. This is
+	// the headline a user needs to NOT over-trust a local-key signature: running
+	// the slsa attestor does not by itself make a build L3 — the signing trust
+	// model does. ComputeSLSA derives it from the run's evidence + platform.
+	//
+	// Gate it on a SUCCESSFUL run: a fatal signer/attestor error (the kind
+	// classifyAttestorRunError keeps as exit 1) or a non-zero wrapped command
+	// means no completed signed provenance was emitted, so there is no SLSA
+	// floor to claim — ComputeSLSA reports level 0 / not-assessed instead of
+	// overstating evidence the run never produced. A soft error (e.g. sbom found
+	// nothing, demoted to exit 0) leaves signing intact and keeps the claim.
+	runFailed := classifyAttestorRunError(runErr) != nil ||
+		(summary.WrappedCommand != nil && summary.WrappedCommand.ExitCode != 0)
+	summary.ComputeSLSA(ro.PlatformURL, runFailed)
+	summary.AssuranceLevel = ro.ResolvedAssuranceLevel()
+	summary.WriteHuman(os.Stderr)
+	if ro.OutputJSON() {
+		if err := summary.WriteJSON(os.Stdout); err != nil {
+			// Don't mask a successful run on a summary-marshal error, but make
+			// it loud — an agent relying on the JSON contract needs to know.
+			fmt.Fprintf(os.Stderr, "error: failed to emit JSON run summary: %v\n", err)
+		}
+	}
+
 	// Return the deferred attestor error (e.g. secretscan fail-on-detection)
 	// after writing all output files. Soft attestor errors (sbom found no
 	// SBOM file, etc.) are demoted to warnings and the process exits 0;
@@ -931,6 +1016,373 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// command exit, etc.) propagate to exit 1. See finding #221.
 	if runErr != nil {
 		return classifyAttestorRunError(runErr)
+	}
+	return nil
+}
+
+// buildRunSummary assembles the structured RunSummary from data the run
+// already produced: the signed collection's subjects (the correlation
+// anchors), the attestor set with each one's ran/skipped/failed status, the
+// signer kind, the wrapped command's exit code, and the platform/credential
+// facts captured during ResolvePlatformDefaults. Pure given its inputs so the
+// assembly logic is unit-testable without a live run.
+func buildRunSummary(
+	ro options.RunOptions,
+	args []string,
+	attestors []attestation.Attestor,
+	results []workflow.RunResult,
+	signerProviders map[string]struct{},
+	uploadedGitoid string,
+	runErr error,
+) *options.RunSummary {
+	s := &options.RunSummary{
+		Step:               ro.StepName,
+		WorkingDir:         ro.WorkingDir,
+		PlatformURL:        ro.PlatformURL,
+		Tenant:             ro.ResolvedTenantName(),
+		Signer:             signerKind(signerProviders),
+		SignerEmail:        ro.ResolvedSignerEmail(),
+		TimestampAuthority: ro.TimestampServers,
+		FulcioURL:          ro.ResolvedFulcioURL(),
+		ArchivistaURL:      ro.ArchivistaOptions.Url,
+		Uploaded:           uploadedGitoid != "",
+		Gitoid:             uploadedGitoid,
+		OutFile:            ro.OutFilePath,
+		Subjects:           collectionSubjects(results),
+		Attestors:          attestorOutcomes(attestors, runErr),
+	}
+	// Only report a platform-derived Fulcio/TSA/Archivista when the platform
+	// is actually in play. Offline runs (--platform-url "" / --offline) leave
+	// them blank — otherwise the summary contradicts itself by naming the
+	// hosted Archivista the run deliberately opted out of.
+	if ro.PlatformURL == "" {
+		s.FulcioURL = ""
+		s.TimestampAuthority = nil
+		// Keep an Archivista URL only when an upload actually happened (the
+		// operator pointed --archivista-server at their own store and enabled
+		// it); otherwise drop the misleading hosted default.
+		if !ro.ArchivistaOptions.Enable {
+			s.ArchivistaURL = ""
+		}
+	}
+	if cmd := wrappedCommandOutcome(args, attestors); cmd != nil {
+		s.WrappedCommand = cmd
+	}
+	// Record the in-process anti-tamper state that was in effect while the
+	// signing key was live (read back from the kernel by keyguard.Protect in
+	// preRoot, never asserted). This is the non-forgeability evidence a verifier
+	// gates an L3 verdict on. keyguard.Current() returns the cached State.
+	if kp := keyguard.Current(); kp.Applied {
+		s.KeyProtection = &kp
+	}
+	// SLSA evidence: the isolated-builder signal (did a platform workflow
+	// identity sign this run?) and the hermeticity signal (did a traced build
+	// reach the network?). ComputeSLSA (called by the caller) derives the
+	// achieved Build level from these — never from the signer-kind string.
+	//
+	// Require BOTH that cilock installed a workflow OIDC token AND that the
+	// fulcio signer was the one actually used: the workflow flag alone could be
+	// stale if an explicit signer override won at sign time, so we confirm the
+	// signer kind before claiming the isolated-builder signal.
+	s.WorkflowIdentity = ro.SignerIsWorkflowIdentity() && s.Signer == "fulcio"
+	stampHermeticity(s, attestors)
+	return s
+}
+
+// stampHermeticity records the wrapped build's network-hermeticity evidence on
+// the summary from the commandrun attestor. It is meaningful ONLY when tracing
+// actually CAPTURED — the attestor recorded a capture mode. Tracing that was
+// requested but produced nothing (an unsupported platform, or a failed trace
+// backend) leaves Tracing empty / Hermetic false, so ComputeSLSA treats
+// hermeticity as UNKNOWN rather than "hermetic by absence of evidence". A build
+// whose trace silently captured zero syscalls must never read as hermetic.
+//
+// "Hermetic" means the traced command made zero EXTERNAL network egress — a
+// connect() to a non-loopback IP. AF_UNIX sockets and loopback (a local daemon
+// or proxy) are local IPC, not undeclared network inputs, so they don't break
+// it; bind()/listen() (serving, not fetching) is ignored.
+func stampHermeticity(s *options.RunSummary, attestors []attestation.Attestor) {
+	for _, a := range attestors {
+		cr, ok := a.(*commandrun.CommandRun)
+		if !ok || !cr.TracingEnabled() {
+			continue
+		}
+		mode := traceModeLabel(cr)
+		if mode == "" {
+			// Tracing was requested but captured nothing (unsupported platform or a
+			// failed backend) — no evidence, so make no hermeticity claim.
+			return
+		}
+		s.Tracing = mode
+		s.NetworkEgress = externalEgress(cr.Processes)
+		s.Hermetic = len(s.NetworkEgress) == 0
+		return
+	}
+}
+
+// traceModeLabel returns the commandrun capture mode that actually observed the
+// build ("ebpf", "ptrace", or the raw mode string), or "" when the attestor
+// recorded NO capture — i.e. tracing did not actually run. The empty return is
+// load-bearing: stampHermeticity uses it to withhold a hermeticity claim when
+// nothing was captured, so an unsupported or failed trace never reads as a
+// hermetic build.
+func traceModeLabel(cr *commandrun.CommandRun) string {
+	if cr.Summary == nil {
+		return ""
+	}
+	switch {
+	case strings.Contains(cr.Summary.CaptureMode, "ebpf"):
+		return "ebpf"
+	case strings.Contains(cr.Summary.CaptureMode, "ptrace"):
+		return "ptrace"
+	default:
+		return cr.Summary.CaptureMode // raw mode, or "" when none was recorded
+	}
+}
+
+// externalEgress returns the sorted, de-duplicated set of external network
+// destinations the traced processes connected to — the evidence that breaks
+// hermeticity. See egressEndpoint for the per-connection classification.
+func externalEgress(procs []commandrun.ProcessInfo) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, p := range procs {
+		if p.Network == nil {
+			continue
+		}
+		for _, c := range p.Network.Connections {
+			ep, ok := egressEndpoint(c)
+			if !ok {
+				continue
+			}
+			if _, dup := seen[ep]; dup {
+				continue
+			}
+			seen[ep] = struct{}{}
+			out = append(out, ep)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// egressEndpoint classifies one observed connect() as a hermeticity-breaking
+// channel, returning a named endpoint and true. A build is only hermetic if it
+// fetched nothing undeclared, so we conservatively count the channels through
+// which a build CAN pull undeclared inputs:
+//
+//   - External IP egress — AF_INET/AF_INET6 connect() to a non-loopback host.
+//   - Loopback IP — a connect() to 127.0.0.0/8 or ::1 reaches a localhost
+//     service or proxy, which can itself fetch external inputs. We cannot prove
+//     it didn't, so it breaks hermeticity (labelled "loopback:<host>:<port>").
+//   - Container-runtime UNIX sockets — an AF_UNIX connect() to docker.sock /
+//     containerd / podman / crio can pull images or run commands that fetch
+//     undeclared inputs (labelled "unix:<path>").
+//
+// Ordinary AF_UNIX IPC (D-Bus, NSS, journald, …) and bind()/listen() are NOT
+// counted: they are pervasive in any build and are not input-fetch vectors, so
+// counting them would make L3 unreachable without improving honesty.
+func egressEndpoint(c commandrun.NetworkConnection) (string, bool) {
+	if c.Syscall != "connect" {
+		return "", false // bind()/listen() is serving, not fetching
+	}
+
+	// AF_UNIX: only container-runtime control sockets are a fetch vector.
+	if c.Family == "AF_UNIX" {
+		if isContainerRuntimeSocket(c.Address) {
+			return "unix:" + c.Address, true
+		}
+		return "", false
+	}
+
+	if !isInetFamily(c.Family) {
+		return "", false
+	}
+
+	host := c.Address
+	if c.Hostname != "" {
+		host = c.Hostname // prefer the TLS SNI hostname when known
+	}
+	if host == "" {
+		return "", false // no nameable endpoint — skip rather than emit ":port"
+	}
+	endpoint := host
+	if c.Port != 0 {
+		endpoint = fmt.Sprintf("%s:%d", host, c.Port)
+	}
+	// Loopback reaches a localhost service/proxy that can fetch external inputs;
+	// label it so the verdict is explicit about why hermeticity didn't hold.
+	if isLoopbackAddr(c.Address) {
+		return "loopback:" + endpoint, true
+	}
+	return endpoint, true
+}
+
+// isInetFamily reports whether a socket family denotes IP networking.
+func isInetFamily(family string) bool {
+	return family == "AF_INET" || family == "AF_INET6"
+}
+
+// isLoopbackAddr reports whether an address is an IP loopback address.
+func isLoopbackAddr(addr string) bool {
+	if ip := net.ParseIP(addr); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// isContainerRuntimeSocket reports whether a UNIX socket path is a container
+// runtime control socket (docker / containerd / podman / cri-o). Connecting to
+// one during a build can pull images or exec commands that fetch undeclared
+// inputs, so it breaks hermeticity. Matched by basename to tolerate the varied
+// host paths these sockets live at (/var/run, /run, rootless dirs, …).
+func isContainerRuntimeSocket(path string) bool {
+	if path == "" {
+		return false
+	}
+	base := path
+	if i := strings.LastIndexByte(base, '/'); i >= 0 {
+		base = base[i+1:]
+	}
+	switch base {
+	case "docker.sock", "containerd.sock", "podman.sock", "crio.sock", "cri-dockerd.sock":
+		return true
+	}
+	return false
+}
+
+// signerKind names the selected signer provider (file, fulcio, kms, spiffe…)
+// from the changed --signer-<kind>-* flags. Empty when no provider matched.
+func signerKind(signerProviders map[string]struct{}) string {
+	kinds := make([]string, 0, len(signerProviders))
+	for k := range signerProviders {
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds)
+	return strings.Join(kinds, ",")
+}
+
+// collectionSubjects extracts the in-toto subject set from the signed
+// collection result (the RunResult with an empty AttestorName), which is the
+// anchor set an uploaded attestation is correlated by. Per-attestor sidecar
+// results are skipped — their subjects are the union the collection already
+// carries.
+func collectionSubjects(results []workflow.RunResult) []options.RunSubject {
+	for _, r := range results {
+		if r.AttestorName != "" {
+			continue
+		}
+		out := make([]options.RunSubject, 0, len(r.CollectionSubjects))
+		for name, ds := range r.CollectionSubjects {
+			// ds (the per-iteration range variable, Go 1.22+) is addressable,
+			// so the pointer-receiver ToNameMap can be called on it directly.
+			digests, err := ds.ToNameMap()
+			if err != nil {
+				digests = nil
+			}
+			out = append(out, options.RunSubject{Name: name, Digests: digests})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		return out
+	}
+	return nil
+}
+
+// attestorOutcomes maps the final attestor set onto ran/skipped/failed
+// statuses. The default is "ran"; soft error legs (attestor had nothing to do)
+// become "skipped" and fatal legs become "failed", with the leg's error as the
+// actionable detail. The commandrun attestor is excluded — its result is
+// reported separately under wrapped_command.
+func attestorOutcomes(attestors []attestation.Attestor, runErr error) []options.AttestorOutcome {
+	type legInfo struct {
+		soft   bool
+		detail string
+	}
+	legs := map[string]legInfo{}
+	var aggregate *workflow.AttestorRunErrors
+	if errors.As(runErr, &aggregate) && aggregate != nil {
+		for _, leg := range aggregate.SoftLegs() {
+			legs[leg.Attestor] = legInfo{soft: true, detail: legDetail(leg.Err)}
+		}
+		for _, leg := range aggregate.FatalLegs() {
+			legs[leg.Attestor] = legInfo{soft: false, detail: legDetail(leg.Err)}
+		}
+	}
+
+	var out []options.AttestorOutcome
+	for _, a := range attestors {
+		name := a.Name()
+		if name == attestorCommandRun {
+			continue
+		}
+		oc := options.AttestorOutcome{Name: name, Status: options.AttestorStatusRan}
+		if li, ok := legs[name]; ok {
+			if li.soft {
+				oc.Status = options.AttestorStatusSkipped
+				oc.Detail = enrichSkippedDetail(name, li.detail)
+			} else {
+				oc.Status = options.AttestorStatusFailed
+				oc.Detail = li.detail
+			}
+		}
+		out = append(out, oc)
+	}
+	return out
+}
+
+// enrichSkippedDetail makes a skipped attestor's detail actionable. A skipped
+// (soft) attestor "ran but had nothing to do" — usually because the external
+// tool whose output it records never ran. When the attestor's own soft-error
+// message doesn't already name a generator (some emit a generic "no products
+// to attest"), append the list of generators that WOULD feed it, sourced from
+// the detection registry (attestorExternalGenerators). This turns
+// "sbom: skipped (no products to attest)" into
+// "sbom: skipped (no products to attest; record an SBOM tool's output —
+// cilock does NOT run it — e.g. one of: apko, bom, cdxgen, melange, syft)".
+func enrichSkippedDetail(name, detail string) string {
+	gens := attestorExternalGenerators(name)
+	if len(gens) == 0 {
+		// Self-contained attestor (git, environment) — no external generator,
+		// so there's nothing actionable to add beyond its own message.
+		return detail
+	}
+	// Don't double up if the attestor's own message already named a generator.
+	for _, g := range gens {
+		if strings.Contains(detail, g) {
+			return detail
+		}
+	}
+	hint := fmt.Sprintf("record an external tool's output — cilock does NOT run it — e.g. one of: %s", strings.Join(gens, ", "))
+	if detail == "" {
+		return hint
+	}
+	return detail + "; " + hint
+}
+
+// legDetail strips the "attestor <name> failed: " wrapper the workflow layer
+// adds and the "soft: " log-reader prefix a SoftError carries, so the summary
+// detail reads as the underlying actionable message. The ran/skipped/failed
+// status field already conveys the soft-vs-fatal classification.
+func legDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if i := strings.Index(msg, "failed: "); i >= 0 {
+		msg = msg[i+len("failed: "):]
+	}
+	msg = strings.TrimPrefix(msg, "soft: ")
+	return msg
+}
+
+// wrappedCommandOutcome reports the wrapped command's exit code from the
+// commandrun attestor, if one was present. Returns nil when cilock wrapped no
+// command (sign-only / attest-only style invocation).
+func wrappedCommandOutcome(args []string, attestors []attestation.Attestor) *options.WrappedCommand {
+	for _, a := range attestors {
+		if cr, ok := a.(*commandrun.CommandRun); ok {
+			return &options.WrappedCommand{Args: args, ExitCode: cr.ExitCode}
+		}
 	}
 	return nil
 }

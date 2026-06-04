@@ -16,6 +16,7 @@ package options
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
@@ -110,6 +111,24 @@ type VerifyOptions struct {
 	// builds with very large material sets; tune down to harden
 	// against hostile servers.
 	ChainSidecarHTTPMaxBytes int64
+
+	// OutputFormat selects how the verify verdict is reported. "text"
+	// (default) prints the human-readable evidence + binding line to
+	// stderr. "json" additionally emits a single machine-readable verdict
+	// object {passed, step, matchedSubject, slsaLevel?} to stdout so a CI
+	// gate can branch without parsing logr prose. Set via --format / -o json.
+	OutputFormat string
+
+	// Offline is a clear alias for --platform-url "": fully offline verify
+	// (no Archivista lookup, no discovery, no platform-derived TSA). Mirrors
+	// RunOptions.Offline so the run and verify sides share one opt-out idiom.
+	Offline bool
+}
+
+// OutputJSON reports whether the verify verdict should be emitted as a
+// structured JSON object on stdout (set via --format json or -o json).
+func (vo *VerifyOptions) OutputJSON() bool {
+	return strings.EqualFold(vo.OutputFormat, "json")
 }
 
 // ResolvePlatformDefaults derives verification trust from the configured
@@ -131,8 +150,13 @@ type VerifyOptions struct {
 // Note: unlike `cilock run`, we do NOT auto-populate PolicyTimestampServers —
 // verify's PolicyTimestampServers expects file paths to CA cert bundles, not
 // URLs; embedded-trust / discovery TSA roots are applied in the cli layer.
-func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) { //nolint:gocyclo // login-gated discovery + archivista + trust-derivation branches; each is a distinct, intentional resolution path and sits just over the threshold.
-	platformExplicitlyDisabled := cmd.Flags().Changed("platform-url") && vo.PlatformURL == ""
+func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) { //nolint:gocyclo,gocognit // login-gated discovery + archivista + trust-derivation branches; each is a distinct, intentional resolution path and sits just over the threshold.
+	// --offline is a clear alias for --platform-url "": clear the platform URL
+	// so the explicit-disable path takes over (no Archivista/discovery/TSA).
+	if vo.Offline {
+		vo.PlatformURL = ""
+	}
+	platformExplicitlyDisabled := (cmd.Flags().Changed("platform-url") || vo.Offline) && vo.PlatformURL == ""
 	if platformExplicitlyDisabled {
 		return
 	}
@@ -201,6 +225,9 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 		"TestifySec platform URL (derives archivista + TSA URLs the same way `cilock run` does). "+
 			"Pass --platform-url \"\" to opt out (fully offline verify — no archivista lookup, "+
 			"no platform-derived TSA verifier).")
+	cmd.Flags().BoolVar(&vo.Offline, "offline", false,
+		"Fully offline verify — a clear alias for --platform-url \"\". No Archivista lookup, no platform "+
+			"discovery, no platform-derived TSA verifier; trust comes only from --policy-* flags or embedded trust.")
 	// Register --publickey BEFORE signer flags so it claims the -k shorthand.
 	// The signer registry adds --signer-file-key-path and, for backward compat
 	// with `cilock sign`/`cilock run`, wants to bind -k — but here on verify,
@@ -284,6 +311,13 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 		"Cap on the HTTP response body size when fetching a chain sidecar (raw bytes). "+
 			"Zero (default) uses the compiled-in DefaultHTTPChainSidecarMaxBytes (64 MiB ≈ 67108864). "+
 			"Tune up for builds with very large material sets; tune down to harden against hostile servers.")
+
+	cmd.Flags().StringVarP(&vo.OutputFormat, "format", "o", "text",
+		"How to report the verdict. 'text' (default) prints human-readable evidence + the matched-subject "+
+			"binding line to stderr. 'json' additionally emits a single machine-readable verdict object "+
+			"{passed, step, matchedSubject, slsaLevel} to stdout so a CI gate can branch without parsing logs. "+
+			"Branch on cilock's EXIT CODE, never on grepped output: `if cilock verify ...; then`. Piping to "+
+			"tail/grep replaces the exit code with the pipe's and masks a verification failure.")
 
 	cmd.MarkFlagsRequiredTogether("policy")
 	// NOTE: policy-trust sources (publickey / policy-ca* / verifier-kms-ref) are

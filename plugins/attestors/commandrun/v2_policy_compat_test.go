@@ -1,4 +1,4 @@
-// Copyright 2026 The Rookery Contributors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -109,11 +109,12 @@ func TestPolicyCompat_V01V02_ProduceIdenticalMaterialsView(t *testing.T) {
 			}
 			path := v02.Paths[of.PathID]
 			d := v02.Digests[of.DigestID]
-			if d.SHA256 == "" {
+			sha := d.Digests["sha256"]
+			if sha == "" {
 				continue
 			}
 			v02Inputs[path] = cryptoutil.DigestSet{
-				cryptoutil.DigestValue{Hash: 5}: d.SHA256, // crypto.SHA256 = 5
+				cryptoutil.DigestValue{Hash: 5}: sha, // crypto.SHA256 = 5
 			}
 		}
 	}

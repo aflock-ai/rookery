@@ -22,7 +22,7 @@
   "steps": {
     "release-build": {
       "name": "release-build",
-      "_comment": "Built and signed in .github/workflows/release.yml against the TestifySec Platform (--platform-url). Identity is the GitHub Actions OIDC workflow identity, which the platform Fulcio binds into the ephemeral signing cert's extensions. All required attestation types use the aflock.ai-native URIs the current cilock actually emits — NOT witness.dev legacy URIs. The policy engine filters candidate collections by required type (source.MemorySource.matchesAttestations, an exact map lookup over both the emitted type and its LegacyAlternate); a type the collection does not carry filters the collection out entirely, surfacing as the misleading ErrNoCollections 'no subjects matched / supply inclusion-proof sidecar'. The legacy alias bridges witness.dev<->aflock.ai only for the SAME name+version: it does NOT bridge a version bump (product/material are v0.3) NOR a name spelling (the attestor is 'command-run', hyphenated — 'commandrun' aliases to nothing). Using native types removes that whole failure class. Verified locally via the differential in cli/inclusion_bridge logs (command-run -> 1 candidate, commandrun -> 0).",
+      "_comment": "Built and signed in .github/workflows/release.yml against the TestifySec Platform (--platform-url). Identity is the GitHub Actions OIDC workflow identity, which the platform Fulcio binds into the ephemeral signing cert's extensions. All required attestation types use the aflock.ai-native URIs the current cilock actually emits — NOT witness.dev legacy URIs. The policy engine filters candidate collections by required type (source.MemorySource.matchesAttestations, an exact map lookup over both the emitted type and its LegacyAlternate); a type the collection does not carry filters the collection out entirely, surfacing as the misleading ErrNoCollections 'no subjects matched / supply inclusion-proof sidecar'. The legacy alias bridges witness.dev<->aflock.ai only for the SAME name+version: it does NOT bridge a version bump (product/material are v0.3, command-run is v0.2) NOR a name spelling (the attestor is 'command-run', hyphenated — 'commandrun' aliases to nothing). Using native types removes that whole failure class. Verified locally via the differential in cli/inclusion_bridge logs (command-run -> 1 candidate, commandrun -> 0).",
       "attestations": [
         {
           "type": "https://aflock.ai/attestations/git/v0.1",
@@ -39,7 +39,7 @@
           ]
         },
         {
-          "type": "https://aflock.ai/attestations/command-run/v0.1",
+          "type": "https://aflock.ai/attestations/command-run/v0.2",
           "regopolicies": []
         },
         {

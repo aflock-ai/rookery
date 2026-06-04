@@ -268,12 +268,14 @@ func TestBackRefs(t *testing.T) {
 	require.NoError(t, err, fmt.Sprintf("policy.Verify returned error: results=%+v", stepResults))
 	require.True(t, pass, fmt.Sprintf("policy did not pass: results=%+v", stepResults))
 
-	// Assert BOTH steps surfaced passed collections. step02 passes directly
-	// on depth 0 (empty subject index matches any search). step01 passes
-	// only after the BackRef digest "abcde" — published by step02's
-	// dummyBackrefAttestor — is added to the search set for the next
-	// depth iteration. Without BackRef expansion, step01.Passed would be
-	// empty and this assertion would fail.
+	// Assert BOTH steps surfaced passed collections. step02 passes at depth 0
+	// because its collection carries the operator's seed digest
+	// "dummydigestfortest" as a real subject (a genuine subject-digest match,
+	// not subjectless fail-open matching). step01 passes only after the
+	// BackRef digest "abcde" — published by step02's dummyBackrefAttestor and
+	// also carried as one of its subjects per the BackReffer contract — is
+	// added to the search set for the next depth iteration. Without BackRef
+	// expansion, step01.Passed would be empty and this assertion would fail.
 	step1ResultEntry, ok := stepResults["step01"]
 	require.True(t, ok, "step01 missing from results")
 	require.NotEmpty(t, step1ResultEntry.Passed, "step01 must have passed collections — proves BackRef expansion found it via step02's back-reference digest")
@@ -404,6 +406,17 @@ func (a *dummySubjectAttestor) Subjects() map[string]cryptoutil.DigestSet {
 }
 
 // dummyBackrefAttestor is a test attestor used to expose a back ref subject.
+//
+// It exposes TWO subjects: the operator's seed digest ("dummydigestfortest"),
+// so step02's collection is found legitimately at depth 0 by a real
+// subject-digest match (NOT by subjectless fail-open matching), and the
+// back-reference digest ("abcde"), which step01 carries as its subject. This
+// honors the BackReffer contract (factory.go / detection contract.go): an
+// attestor's BackRefs MUST be a subset of its own Subjects — the canonical
+// example being the git attestor publishing its commit hash as both a subject
+// and a back-reference. Without "dummydigestfortest" as a real subject here,
+// step02 could only be matched via the subjectless fail-open that
+// memory_subjectless_test.go closes.
 type dummyBackrefAttestor struct{}
 
 func (a *dummyBackrefAttestor) Name() string                                     { return dummyBackrefAttestorName }
@@ -411,6 +424,16 @@ func (a *dummyBackrefAttestor) Type() string                                    
 func (a *dummyBackrefAttestor) RunType() attestation.RunType                     { return attestation.PreMaterialRunType }
 func (a *dummyBackrefAttestor) Attest(ctx *attestation.AttestationContext) error { return nil }
 func (a *dummyBackrefAttestor) Schema() *jsonschema.Schema                       { return nil }
+func (a *dummyBackrefAttestor) Subjects() map[string]cryptoutil.DigestSet {
+	return map[string]cryptoutil.DigestSet{
+		"seed": {
+			{Hash: crypto.SHA256}: "dummydigestfortest",
+		},
+		matchSubjectName: {
+			{Hash: crypto.SHA256}: "abcde",
+		},
+	}
+}
 func (a *dummyBackrefAttestor) BackRefs() map[string]cryptoutil.DigestSet {
 	return map[string]cryptoutil.DigestSet{
 		matchSubjectName: {

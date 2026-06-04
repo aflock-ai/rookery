@@ -140,13 +140,26 @@ func (s *MemorySource) Search(ctx context.Context, collectionName string, subjec
 	return matches, nil
 }
 
-// matchesSubjects checks if at least one subject digest matches the reference.
-// Returns true if the reference has no subjects (subjectless collections).
+// matchesSubjects decides whether a loaded collection (ref) satisfies a
+// subject-digest query.
+//
+// An EMPTY query (len(subjectDigests) == 0) means the caller asked for no
+// specific artifact — e.g. a subject-agnostic probe, a whole-policy walk, or
+// the diagnoseEmptyCollectionResult re-probe. In that case every collection
+// matches, including subjectless ones (env-only / SBOM-only steps).
+//
+// A NON-EMPTY query means the caller is asking "does this collection attest
+// THIS specific artifact?" That can only be answered yes if the collection
+// actually carries one of the queried subject digests. A subjectless
+// collection carries none, so it must NOT match — otherwise a legitimately
+// signed but subjectless collection could be replayed to "verify" an
+// arbitrary, never-attested artifact (artifact substitution; this is the
+// fail-open closed by memory_subjectless_test.go).
 func (s *MemorySource) matchesSubjects(ref string, subjectDigests []string) bool {
-	indexSubjects := s.subjectDigestsByReference[ref]
-	if len(indexSubjects) == 0 {
+	if len(subjectDigests) == 0 {
 		return true
 	}
+	indexSubjects := s.subjectDigestsByReference[ref]
 	for _, digest := range subjectDigests {
 		if _, ok := indexSubjects[digest]; ok {
 			return true

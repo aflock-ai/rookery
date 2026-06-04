@@ -72,10 +72,11 @@ flag accepted by ` + "`cilock run`" + ` works identically here.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.ResolvePlatformDefaults(cmd)
 
+			signerProviders := providersFromFlags("signer", cmd.Flags())
 			signers, err := loadSigners(cmd.Context(),
 				o.SignerOptions,
 				o.KMSSignerProviderOptions,
-				providersFromFlags("signer", cmd.Flags()))
+				signerProviders)
 			if err != nil {
 				return fmt.Errorf("failed to load signers: %w", err)
 			}
@@ -88,7 +89,7 @@ flag accepted by ` + "`cilock run`" + ` works identically here.`,
 			userSetFlags := map[string]bool{
 				"attestor-product-include-glob": cmd.Flags().Changed("attestor-product-include-glob"),
 			}
-			return runRun(cmd.Context(), o, []string{"true"}, userSetFlags, signers...)
+			return runRun(cmd.Context(), o, []string{"true"}, userSetFlags, signerProviders, signers...)
 		},
 	}
 

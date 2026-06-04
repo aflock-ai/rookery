@@ -247,6 +247,13 @@ func TestSearch(t *testing.T) {
 			wantErr:        false,
 		},
 		{
+			// A NON-EMPTY query for a digest that no collection carries must
+			// find nothing. (Previously this case used an empty subDigest to
+			// get zero results — that relied on the old behavior where an
+			// empty query returned nothing for subject-bearing collections.
+			// An empty query is now subject-agnostic and matches all
+			// collections of the step name, per memory_subjectless_test.go and
+			// the diagnoseEmptyCollectionResult re-probe in policy.go.)
 			name: "no matches",
 			statements: []intoto.Statement{
 				{
@@ -270,7 +277,7 @@ func TestSearch(t *testing.T) {
 			},
 			searchQuery: args{
 				collectionName: "t",
-				subDigest:      []string{},
+				subDigest:      []string{"sha256:digest-no-collection-carries"},
 				attestations:   []string{},
 			},
 			wantReferences: map[string]struct{}{},

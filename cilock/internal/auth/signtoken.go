@@ -15,6 +15,15 @@ import (
 // /auth subrouter on the Judge API.
 const signTokenPath = "/oauth/sign-token" //nolint:gosec // G101 false positive: a URL path on the platform API, not a credential.
 
+// SignTokenResult is the outcome of a sign-token exchange: the short-lived
+// keyless signing token plus the assurance level (acr) the platform minted the
+// signing identity at. AssuranceLevel is surfaced in the run summary so an
+// operator sees the strength of the identity that signed.
+type SignTokenResult struct {
+	Token          string
+	AssuranceLevel string
+}
+
 // ExchangeSignToken trades a stored platform session credential for a
 // short-lived OIDC token suitable for keyless Fulcio signing. It POSTs to
 // <platformURL>/auth/oauth/sign-token with the session credential as a bearer
@@ -24,12 +33,25 @@ const signTokenPath = "/oauth/sign-token" //nolint:gosec // G101 false positive:
 // The long-lived session credential never reaches Fulcio — only the returned
 // short token does. Callers must only ever send the credential to its own
 // platform origin (the caller owns that origin check).
+//
+// Returns the bare token (existing contract). Callers needing the assurance
+// level call ExchangeSignTokenResult.
 func ExchangeSignToken(platformURL, sessionToken string) (string, error) {
+	res, err := ExchangeSignTokenResult(platformURL, sessionToken)
+	if err != nil {
+		return "", err
+	}
+	return res.Token, nil
+}
+
+// ExchangeSignTokenResult is ExchangeSignToken plus the platform-reported
+// assurance level, for callers that surface it (the run summary).
+func ExchangeSignTokenResult(platformURL, sessionToken string) (SignTokenResult, error) {
 	endpoint := strings.TrimRight(NormalizeURL(platformURL), "/") + signTokenPath
 
 	req, err := http.NewRequest(http.MethodPost, endpoint, http.NoBody)
 	if err != nil {
-		return "", fmt.Errorf("build sign-token request: %w", err)
+		return SignTokenResult{}, fmt.Errorf("build sign-token request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+sessionToken)
 	req.Header.Set("Accept", "application/json")
@@ -37,13 +59,13 @@ func ExchangeSignToken(platformURL, sessionToken string) (string, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("sign-token request: %w", err)
+		return SignTokenResult{}, fmt.Errorf("sign-token request: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024)) //nolint:errcheck // diagnostic only
-		return "", fmt.Errorf("sign-token exchange returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return SignTokenResult{}, fmt.Errorf("sign-token exchange returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var out struct {
@@ -52,10 +74,10 @@ func ExchangeSignToken(platformURL, sessionToken string) (string, error) {
 		AssuranceLevel string `json:"assurance_level"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode sign-token response: %w", err)
+		return SignTokenResult{}, fmt.Errorf("decode sign-token response: %w", err)
 	}
 	if out.Token == "" {
-		return "", fmt.Errorf("sign-token response carried no token")
+		return SignTokenResult{}, fmt.Errorf("sign-token response carried no token")
 	}
 	// The server resolves the signing identity (email) and the assurance level
 	// (acr) it minted at; persist the email onto the stored session when it has
@@ -68,5 +90,5 @@ func ExchangeSignToken(platformURL, sessionToken string) (string, error) {
 			_ = Save(*cred)
 		}
 	}
-	return out.Token, nil
+	return SignTokenResult{Token: out.Token, AssuranceLevel: out.AssuranceLevel}, nil
 }

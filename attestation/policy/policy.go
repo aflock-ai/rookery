@@ -773,7 +773,15 @@ func (step Step) checkFunctionaries(statements []source.CollectionVerificationRe
 			}
 
 			if len(statements[i].ValidFunctionaries) == 0 {
-				result.Rejected = append(result.Rejected, RejectedCollection{Collection: statements[i], Reason: fmt.Errorf("no verifiers matched with allowed functionaries for step %s", step.Name)})
+				// Surface WHY each functionary rejected the cert. The per-functionary
+				// failures (e.g. "cert presents email X but the constraint forbids it")
+				// were captured as warnings above; a bare "no verifiers matched" hides
+				// the one thing the operator needs to fix the policy.
+				reason := fmt.Errorf("no verifiers matched the allowed functionaries for step %s", step.Name)
+				if len(statements[i].Warnings) > 0 {
+					reason = fmt.Errorf("%w: %s", reason, strings.Join(statements[i].Warnings, "; "))
+				}
+				result.Rejected = append(result.Rejected, RejectedCollection{Collection: statements[i], Reason: reason})
 			} else {
 				result.Passed = append(result.Passed, PassedCollection{Collection: statements[i]})
 			}

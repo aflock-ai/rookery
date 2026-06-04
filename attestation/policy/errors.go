@@ -35,9 +35,10 @@ type ErrNoCollections struct {
 }
 
 func (e ErrNoCollections) Error() string {
-	return fmt.Sprintf("no collections found for step %v: no loaded attestation's subjects matched the artifact/subject digests. "+
-		"If the artifact is a product committed in a Merkle tree (subject \"tree:products\"), its plain file digest won't match the tree root — "+
-		"supply the inclusion-proof sidecar so the verifier can bridge the file to the tree (e.g. --attestations <step>.inclusion-proof.json, or --chain-sidecar-dir for ArtifactsFrom edges)", e.Step)
+	return fmt.Sprintf("no collection passed verification for step %v. Likely causes, in order: "+
+		"(1) the attestation wasn't loaded — pass it with --attestations/--bundle or --enable-archivista; "+
+		"(2) a collection loaded but its signature or functionary check failed — see the \"collection rejected\" reason(s) logged above for the specific cause (e.g. a certConstraint that doesn't match the signer's identity); "+
+		"(3) the artifact is a product committed in a Merkle tree (subject \"tree:products\") whose root won't equal the plain file digest — load the attestation carrying the inline v0.3 tree leaves (a sidecar is only needed for cross-step ArtifactsFrom edges: --chain-sidecar-dir)", e.Step)
 }
 
 // ErrSubjectDigestMismatch fires when a collection IS loaded for the step
@@ -68,9 +69,26 @@ func (e ErrSubjectDigestMismatch) Error() string {
 	if len(e.SuppliedDigests) > 0 {
 		supplied = strings.Join(e.SuppliedDigests, ", ")
 	}
+	// Steer toward the most likely cause. The collection IS loaded and its
+	// signature verified for this step — the operator's artifact digest simply
+	// isn't among its subjects. Lead with the fail-closed reading (a modified /
+	// wrong file) so the message never reads as "add a flag to make it pass". The
+	// inclusion-proof path is offered only when the collection actually commits
+	// its products in a Merkle tree (a "tree:" subject), and even then second.
+	hint := "If you expected this artifact to match, the file was likely modified after it was " +
+		"attested, or you pointed at a different artifact than the one this step covers."
+	for _, s := range e.ObservedSubjects {
+		if strings.Contains(s, "tree:") {
+			hint = "This step commits its products in a Merkle tree (a \"tree:\" subject), so a " +
+				"plain file digest never equals the tree root. If you expected this artifact to " +
+				"match, the file was likely modified after it was attested; only if it is " +
+				"genuinely a member of that tree do you need its inclusion proof to bridge the file to the tree."
+			break
+		}
+	}
 	return fmt.Sprintf(
-		"supplied artifact digest(s) [%s] not present in any subject of step %q collection. Subjects observed: [%s]",
-		supplied, e.Step, observed,
+		"supplied artifact digest(s) [%s] not present in any subject of step %q collection. Subjects observed: [%s]. %s",
+		supplied, e.Step, observed, hint,
 	)
 }
 

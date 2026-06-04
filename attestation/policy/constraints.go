@@ -187,7 +187,11 @@ func checkCertConstraint(attribute string, constraints, values []string) error {
 	}
 
 	if len(constraints) == 0 && len(values) > 0 {
-		return fmt.Errorf("not expecting any %s(s), but cert has %d %s(s)", attribute, len(values), attribute)
+		// An empty list-constraint forbids ALL of this SAN type, so a cert that
+		// presents one is rejected. Name the value(s) and the fix — a null/empty
+		// constraint reads like "allow any" but does the opposite.
+		return fmt.Errorf("cert presents %s %+q but the policy's %s constraint is empty, which forbids all; add the value to the functionary's certConstraint %s list (or %q to allow any)",
+			attribute, values, attribute, attribute, AllowAllConstraint)
 	}
 
 	unmet := make(map[string]struct{})

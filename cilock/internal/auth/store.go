@@ -174,6 +174,38 @@ func LookupAny(platformURL string) (*Credential, error) {
 	return nil, nil
 }
 
+// LookupAnyIncludingExpired returns the credential the platform call would use,
+// but unlike LookupAny it will surface an EXPIRED cilock credential rather than
+// collapsing it to nil — so diagnostic callers (e.g. `cilock doctor`) can tell
+// an EXPIRED session apart from a MISSING one (LookupAny reports both as "not
+// logged in", which would pass preflight on expired auth).
+//
+// Precedence mirrors LookupAny so the doctor's verdict matches what `cilock run`
+// actually does: a usable (non-expired) cilock credential first, then a
+// jctl-sourced one. Only when neither exists is an expired cilock credential
+// returned — so an expired session is reported as EXPIRED when it is the only
+// thing available, without masking a valid jctl fallback behind a stale cilock
+// entry (which would make the doctor over-report FAIL on an environment a real
+// run would handle). NEVER use this to obtain a bearer token — an expired
+// credential must not sign; gate on Expired() before any use.
+func LookupAnyIncludingExpired(platformURL string) (*Credential, error) {
+	key := NormalizeURL(platformURL)
+	s, err := load()
+	if err != nil {
+		return nil, err
+	}
+	if c, ok := s.Credentials[key]; ok && !c.Expired() {
+		return &c, nil
+	}
+	if c, ok := lookupJctl(key); ok {
+		return c, nil
+	}
+	if c, ok := s.Credentials[key]; ok { // expired — surfaced for diagnosis only
+		return &c, nil
+	}
+	return nil, nil
+}
+
 // lookupJctl reads ~/.jctl/config.yaml (best-effort) for a context whose
 // judgeURL matches and that carries a non-empty token.
 func lookupJctl(platformURL string) (*Credential, bool) {

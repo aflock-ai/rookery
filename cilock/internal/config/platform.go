@@ -2,7 +2,10 @@
 // It derives all service URLs from a single platform URL.
 package config
 
-import "strings"
+import (
+	"strings"
+	"sync"
+)
 
 // DefaultPlatformURL is the hosted TestifySec platform.
 // This is compiled into the binary and used when no platform-url is specified.
@@ -16,6 +19,45 @@ var DefaultPlatformURL = "https://platform.testifysec.com"
 // --platform-url), not just the compiled-in default. Single source of truth for
 // the env-var name shared by the options and telemetry packages.
 const PlatformURLEnv = "CILOCK_PLATFORM_URL"
+
+// trustedPlatformBinding records the platform URL that the trusted run-option
+// resolver (RunOptions.ResolvePlatformDefaults) authorized for a workflow-identity
+// platform binding, after it confirmed the upload targets the platform's OWN
+// Archivista origin (same-origin) under an ambient OIDC identity.
+//
+// It is the in-process trust handshake between the resolver and the platform
+// attestor. CILOCK_PLATFORM_URL alone is NOT sufficient to bind: that env var is
+// inherited/user-controllable, so a hostile CI step could export it directly and
+// make the attestor stamp a forged platform_url into a signed predicate without
+// the resolver's same-origin check ever running. This flag, set only by trusted
+// in-process code paths, closes that confused-deputy gap — an external env var
+// cannot flip it. Stored normalized (NormalizeURL-equivalent: trimmed, no trailing
+// slash) so the attestor can compare it to the value it is about to bind.
+var (
+	trustedPlatformBinding   string
+	trustedPlatformBindingMu sync.RWMutex
+)
+
+// MarkTrustedPlatformBinding records that the trusted resolver authorized a
+// workflow-identity platform binding for platformURL. Called by
+// RunOptions.ResolvePlatformDefaults after its same-origin + ambient-OIDC checks
+// pass. The platform attestor's ambient branch requires this marker to match the
+// URL it is about to bind, so an externally-injected CILOCK_PLATFORM_URL cannot
+// forge a binding on its own.
+func MarkTrustedPlatformBinding(platformURL string) {
+	trustedPlatformBindingMu.Lock()
+	defer trustedPlatformBindingMu.Unlock()
+	trustedPlatformBinding = strings.TrimRight(strings.TrimSpace(platformURL), "/")
+}
+
+// TrustedPlatformBinding reports the platform URL the trusted resolver authorized
+// for a workflow-identity binding, and whether one was set this process. Empty +
+// false when no trusted in-process path marked a binding.
+func TrustedPlatformBinding() (string, bool) {
+	trustedPlatformBindingMu.RLock()
+	defer trustedPlatformBindingMu.RUnlock()
+	return trustedPlatformBinding, trustedPlatformBinding != ""
+}
 
 // PlatformConfig holds derived service URLs from a single platform URL.
 type PlatformConfig struct {

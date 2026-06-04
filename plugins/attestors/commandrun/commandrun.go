@@ -17,6 +17,7 @@ package commandrun
 import (
 	"bytes"
 	"crypto"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -32,8 +33,13 @@ import (
 )
 
 const (
-	Name    = "command-run"
-	Type    = "https://aflock.ai/attestations/command-run/v0.1"
+	Name = "command-run"
+	// Type is the predicate URI the producer emits. v0.2 is the current
+	// producer (the interned, _meta-first wire shape — see v2_marshal.go).
+	// v0.1 attestations remain *verifiable* via the LegacyDecoder in
+	// legacy.go, which registers under a distinct name + the v0.1 URI so
+	// `cilock run --attestations command-run` always selects this producer.
+	Type    = V02PredicateType
 	RunType = attestation.ExecuteRunType
 
 	// EnvVarTraceMode selects the tracing backend. Hoisted to the
@@ -685,6 +691,13 @@ type CommandRun struct {
 	Stderr    string        `json:"stderr,omitempty"`
 	Processes []ProcessInfo `json:"processes,omitempty"`
 
+	// keyGuard is the signer's anti-tamper state read back at Attest time
+	// (see readHardening). It is copied into the v0.2 `_meta.keyGuard` block
+	// by ToV02 and restored by FromV02, so it travels INSIDE the signed
+	// predicate as non-forgeability evidence. Never marshaled directly (it is
+	// unexported); the v0.1 wire shape never carried it.
+	keyGuard *V02KeyGuard
+
 	silent        bool
 	materials     map[string]cryptoutil.DigestSet
 	enableTracing bool
@@ -815,6 +828,16 @@ type CommandRun struct {
 	// it; otherwise blank.
 	resolvedCaptureMode string
 
+	// resolvedTraceBackend records the concrete tracing backend that
+	// actually ran ("ebpf", "ptrace+seccomp"), captured at dispatch in
+	// trace(). It is the HONEST source for Summary.TraceModeDetail — the
+	// env var CILOCK_TRACE_MODE only reflects a user *request*, which is
+	// empty in the common auto-select case, leaving a traced attestation
+	// unable to say which backend produced it. Downstream hermeticity
+	// derivation needs to know the backend (and that a trace actually ran),
+	// so this is set from the resolved mode, not the request.
+	resolvedTraceBackend string
+
 	// ebpfConsumer holds an open eBPF consumer when the eBPF tracing
 	// path is active. Opened BEFORE the child process starts so
 	// kprobes are attached when the child fires its first openat.
@@ -831,6 +854,10 @@ type CommandRun struct {
 // builds don't have to import the ebpf submodule.
 type ebpfConsumerIface interface {
 	Close() error
+	// RootGlobalTgid returns cilock's kernel-global tgid as recorded by the
+	// BPF sentinel, for seeding the userspace watched-set's rootParent so
+	// the trace is namespace-correct. 0 when unset (host-namespace path).
+	RootGlobalTgid() uint32
 }
 
 func (a *CommandRun) Schema() *jsonschema.Schema {
@@ -860,6 +887,11 @@ func (rc *CommandRun) Attest(ctx *attestation.AttestationContext) error {
 		return err
 	}
 
+	// Record the signer's anti-tamper state (read back from the kernel, never
+	// asserted) so the non-forgeability evidence travels inside the signed
+	// v0.2 predicate's _meta.keyGuard.
+	rc.keyGuard = readHardening()
+
 	return nil
 }
 
@@ -877,6 +909,45 @@ func (rc *CommandRun) Type() string {
 
 func (rc *CommandRun) RunType() attestation.RunType {
 	return RunType
+}
+
+// commandRunWire is a method-less view of CommandRun used to (de)serialize the
+// historical v0.1 wire shape via struct tags. Casting to it strips
+// CommandRun's custom v0.2 MarshalJSON/UnmarshalJSON, so the legacy decoder and
+// the v0.1-baseline tests can still round-trip the original inline format.
+type commandRunWire CommandRun
+
+// MarshalJSON emits the v0.2 predicate body: the interned, _meta-first wire
+// shape (see v2_marshal.go), with the signer's anti-tamper state in
+// _meta.keyGuard. This is what the producer publishes under command-run/v0.2.
+func (rc *CommandRun) MarshalJSON() ([]byte, error) {
+	out, _, err := MarshalV02WithSections(rc.ToV02())
+	if err != nil {
+		return nil, fmt.Errorf("command-run v0.2 marshal: %w", err)
+	}
+	return out, nil
+}
+
+// UnmarshalJSON decodes a v0.2 predicate body and de-interns it back into this
+// CommandRun, so verify-time consumers reading Data() (link, slsa, rego) see
+// the same trace the producer recorded.
+func (rc *CommandRun) UnmarshalJSON(data []byte) error {
+	var p V02Predicate
+	if err := json.Unmarshal(data, &p); err != nil {
+		return fmt.Errorf("command-run v0.2 unmarshal: %w", err)
+	}
+	decoded := FromV02(&p)
+	if decoded == nil {
+		return fmt.Errorf("command-run v0.2 unmarshal: nil predicate")
+	}
+	rc.Cmd = decoded.Cmd
+	rc.ExitCode = decoded.ExitCode
+	rc.Stdout = decoded.Stdout
+	rc.Stderr = decoded.Stderr
+	rc.Summary = decoded.Summary
+	rc.Processes = decoded.Processes
+	rc.keyGuard = decoded.keyGuard
+	return nil
 }
 
 // CanProvide implements attestation.CaptureProbe. Returns true when
@@ -1888,7 +1959,13 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 				// expand this.
 				switch r.resolvedCaptureMode {
 				case "trace":
-					if traceMode := os.Getenv(EnvVarTraceMode); traceMode != "" {
+					// Prefer the concrete backend resolved at dispatch ("ebpf" /
+					// "ptrace+seccomp") so auto-select runs name their backend;
+					// fall back to the env *request* only when no backend was
+					// recorded (e.g. a non-Linux build that never dispatched a trace).
+					if r.resolvedTraceBackend != "" {
+						r.Summary.TraceModeDetail = r.resolvedTraceBackend
+					} else if traceMode := os.Getenv(EnvVarTraceMode); traceMode != "" {
 						r.Summary.TraceModeDetail = traceMode
 					}
 				}

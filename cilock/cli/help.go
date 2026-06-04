@@ -44,6 +44,7 @@ var essentialFlags = map[string][]string{
 	"run": {
 		"step", "attestations", "outfile", "signer-file-key-path",
 		"trace", "capture-mode", "enable-archivista", "workingdir", "workload",
+		"output-format", "json",
 	},
 	"verify": {
 		"policy", "publickey", "attestations", "artifactfile", "bundle",

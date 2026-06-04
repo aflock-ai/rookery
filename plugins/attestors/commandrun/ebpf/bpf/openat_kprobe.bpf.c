@@ -354,6 +354,19 @@ struct {
     __type(value, __u32);
 } root_parent_tgid SEC(".maps");
 
+// sentinel_nonce authenticates the bootstrap sentinel. Userspace writes a
+// per-run secret (crypto/rand, non-zero) here BEFORE firing the sentinel
+// prctl; the kprobe records the caller's tgid as the root ONLY when the prctl
+// arg equals this nonce. Without it the sentinel value was a public constant
+// any co-resident same-UID process could spam during the attach/bootstrap
+// window to poison root_parent_tgid and corrupt the signed trace.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} sentinel_nonce SEC(".maps");
+
 // emit_filter returns 1 if this caller should be observed. Mirror of
 // the openat filter logic — checked at every kprobe entry. Writes
 // (cur_pid, cur_tgid, cur_ppid) into the out-params so the caller can
@@ -447,6 +460,69 @@ emit_filter(__u32 *out_pid, __u32 *out_tgid, __u32 *out_ppid)
     *out_pid  = cur_pid;
     *out_tgid = cur_tgid;
     *out_ppid = cur_ppid;
+    return 1;
+}
+
+// ───── namespace-agnostic root bootstrap (sentinel) ─────────────────
+// emit_filter matches descendants against root_parent_tgid, which MUST
+// hold cilock's KERNEL-GLOBAL tgid (cur_ppid is read from the kernel
+// task_struct, always global). Userspace cannot supply that from inside
+// a nested PID namespace: os.Getpid() returns the namespace-LOCAL pid,
+// and /proc/self/status NSpid never exposes the global pid upward. The
+// pre-sentinel code wrote the local pid, so the global cur_ppid never
+// matched it — zero events captured in Docker/colima/K8s (only the host
+// PID namespace, e.g. a GitHub Actions runner, happened to work).
+//
+// Fix: cilock seeds a per-run secret nonce into sentinel_nonce, then fires
+// prctl(PR_SET_DUMPABLE, <nonce>) just before fork. THIS kprobe runs in the
+// caller's kernel context, where bpf_get_current_pid_tgid() returns the global
+// (pid, tgid); when the prctl arg matches the seeded nonce we record that as
+// the root. The nonce is an INVALID PR_SET_DUMPABLE argument (only 0/1/2 are
+// valid), so the prctl itself is a harmless EINVAL no-op; authenticating it
+// against the nonce closes the window where a co-resident process could spam a
+// public constant to poison the root. Capture works identically in every PID
+// namespace.
+#define CILOCK_PR_SET_DUMPABLE 39
+
+// cilock_sentinel_bootstrap returns 1 when this prctl is cilock's AUTHENTICATED
+// bootstrap sentinel — which the caller MUST NOT record as a syscall event: it
+// carries the per-run secret nonce, and emitting it would both leak the nonce
+// and make otherwise-identical command-run attestations nondeterministic.
+// Returns 0 for every other prctl (recorded normally as a security event).
+static __always_inline int
+cilock_sentinel_bootstrap(__u64 option, __u64 arg2)
+{
+    if (option != CILOCK_PR_SET_DUMPABLE)
+        return 0;
+
+    // Authenticate the sentinel against the per-run secret nonce userspace
+    // seeded into sentinel_nonce. A zero/unset nonce never matches, so only the
+    // process that knows the nonce (cilock, which wrote the map before firing
+    // the prctl) can pin root_parent_tgid — closing the public-constant
+    // spoofing window a co-resident attacker could otherwise race.
+    __u32 zero = 0;
+    __u64 *nonce = bpf_map_lookup_elem(&sentinel_nonce, &zero);
+    if (!nonce || *nonce == 0 || arg2 != *nonce)
+        return 0;
+
+    // It IS our authenticated sentinel. Record the root ONCE (the first
+    // sentinel is cilock's pre-fork call; ignore later ones so root_parent_tgid
+    // stays pinned), then tell the caller to drop this event from the trace.
+    __u32 *existing = bpf_map_lookup_elem(&root_parent_tgid, &zero);
+    if (!existing || *existing == 0) {
+        __u64 pid_tgid    = bpf_get_current_pid_tgid(); /* KERNEL-GLOBAL */
+        __u32 caller_pid  = (__u32)(pid_tgid & 0xffffffff);
+        __u32 caller_tgid = (__u32)(pid_tgid >> 32);
+
+        bpf_map_update_elem(&root_parent_tgid, &zero, &caller_tgid, BPF_ANY);
+
+        // Mark cilock itself watched so its direct children match on the fast
+        // path immediately (no ancestor-walk needed).
+        __u8 one = 1;
+        bpf_map_update_elem(&watched_pids, &caller_pid,  &one, BPF_ANY);
+        bpf_map_update_elem(&watched_pids, &caller_tgid, &one, BPF_ANY);
+        task_set_watched();
+    }
     return 1;
 }
 
@@ -916,7 +992,25 @@ DEFINE_SECURITY_KPROBE(ptrace_arm64,       "__arm64_sys_ptrace",       CILOCK_SE
 DEFINE_SECURITY_KPROBE(memfd_create_arm64, "__arm64_sys_memfd_create", CILOCK_SEC_MEMFD_CREATE)
 DEFINE_SECURITY_KPROBE(mount_arm64,        "__arm64_sys_mount",        CILOCK_SEC_MOUNT)
 DEFINE_SECURITY_KPROBE(mprotect_arm64,     "__arm64_sys_mprotect",     CILOCK_SEC_MPROTECT)
-DEFINE_SECURITY_KPROBE(prctl_arm64,        "__arm64_sys_prctl",        CILOCK_SEC_PRCTL)
+// prctl uses a CUSTOM handler (not DEFINE_SECURITY_KPROBE) so it can run the
+// namespace-agnostic root bootstrap BEFORE the watched-filter, in addition to
+// the normal security observation. Same program name (kprobe_prctl_arm64), so
+// the userspace attach list (archKprobeNames) is unchanged.
+SEC("kprobe/__arm64_sys_prctl")
+int BPF_KPROBE(kprobe_prctl_arm64, struct pt_regs *regs)
+{
+    __u64 a0 = (__u64)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 a1 = (__u64)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    __u64 a2 = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    __u64 a3 = (__u64)PT_REGS_PARM4_CORE_SYSCALL(regs);
+    // The authenticated bootstrap sentinel carries the secret nonce; drop it
+    // from the trace so it never enters signed (and must stay deterministic)
+    // evidence. Every other prctl is recorded normally.
+    if (cilock_sentinel_bootstrap(a0, a1))
+        return 0;
+    emit_security(CILOCK_SEC_PRCTL, a0, a1, a2, a3);
+    return 0;
+}
 DEFINE_SECURITY_KPROBE(setsid_arm64,       "__arm64_sys_setsid",       CILOCK_SEC_SETSID)
 DEFINE_SECURITY_KPROBE(setns_arm64,        "__arm64_sys_setns",        CILOCK_SEC_SETNS)
 DEFINE_SECURITY_KPROBE(init_module_arm64,  "__arm64_sys_init_module",  CILOCK_SEC_INIT_MODULE)
@@ -1000,7 +1094,21 @@ DEFINE_SECURITY_KPROBE(ptrace_x64,       "__x64_sys_ptrace",       CILOCK_SEC_PT
 DEFINE_SECURITY_KPROBE(memfd_create_x64, "__x64_sys_memfd_create", CILOCK_SEC_MEMFD_CREATE)
 DEFINE_SECURITY_KPROBE(mount_x64,        "__x64_sys_mount",        CILOCK_SEC_MOUNT)
 DEFINE_SECURITY_KPROBE(mprotect_x64,     "__x64_sys_mprotect",     CILOCK_SEC_MPROTECT)
-DEFINE_SECURITY_KPROBE(prctl_x64,        "__x64_sys_prctl",        CILOCK_SEC_PRCTL)
+// prctl custom handler (x64) — see kprobe_prctl_arm64 above.
+SEC("kprobe/__x64_sys_prctl")
+int BPF_KPROBE(kprobe_prctl_x64, struct pt_regs *regs)
+{
+    __u64 a0 = (__u64)PT_REGS_PARM1_CORE_SYSCALL(regs);
+    __u64 a1 = (__u64)PT_REGS_PARM2_CORE_SYSCALL(regs);
+    __u64 a2 = (__u64)PT_REGS_PARM3_CORE_SYSCALL(regs);
+    __u64 a3 = (__u64)PT_REGS_PARM4_CORE_SYSCALL(regs);
+    // Drop the authenticated bootstrap sentinel (secret nonce) from the trace;
+    // record every other prctl. See kprobe_prctl_arm64 above.
+    if (cilock_sentinel_bootstrap(a0, a1))
+        return 0;
+    emit_security(CILOCK_SEC_PRCTL, a0, a1, a2, a3);
+    return 0;
+}
 DEFINE_SECURITY_KPROBE(setsid_x64,       "__x64_sys_setsid",       CILOCK_SEC_SETSID)
 DEFINE_SECURITY_KPROBE(setns_x64,        "__x64_sys_setns",        CILOCK_SEC_SETNS)
 DEFINE_SECURITY_KPROBE(init_module_x64,  "__x64_sys_init_module",  CILOCK_SEC_INIT_MODULE)

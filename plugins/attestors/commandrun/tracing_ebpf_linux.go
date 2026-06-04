@@ -196,7 +196,13 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	// Userspace mirrors the watched set so userspace-side filtering
 	// remains exact and so the cleanup AddWatchedPID calls keep the
 	// in-kernel map in sync as new descendants are observed.
-	watched := newWatchedSet(c.Process.Pid)
+	//
+	// rootParent is cilock's KERNEL-GLOBAL tgid (from the BPF sentinel). In
+	// a nested PID namespace the BPF events carry global pids that never
+	// equal c.Process.Pid (the namespace-local tracee pid), so the local
+	// seed alone matches nothing; rootParent lets the tracee (ppid == our
+	// global tgid) be recognised and tracked, while excluding cilock itself.
+	watched := newWatchedSet(c.Process.Pid, r.ebpfConsumer.RootGlobalTgid())
 
 	// Two-stage pipeline between the BPF ringbuf consumer and the
 	// hasher pool: the consumer enqueues events to captureCh; the
@@ -594,31 +600,30 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				// (gcc/cgo /tmp/cc*.s) are neither materials nor gaps, so we
 				// suppress them outright (an lstat is far cheaper than a
 				// content hash). This keeps the gap list to real files only.
-				if openatHashDisabled {
-					// fanotify (open-perm, hash-once) is the authoritative
-					// content source. Record the open's PATH (without an eBPF
-					// content hash) so fanotify reconciliation attaches the
-					// kernel-synchronous digest — fanotify-only digests are
-					// not in the material tree on their own; they need a
-					// recorded open to merge into. Only REGULAR, still-present
-					// files are materials: lstat ev.Path authoritatively (the
-					// captured ph.stat can be a stale fd-reuse stat), and drop
-					// non-regular (dirs/devices) + already-gone transients so
-					// they're neither materials nor false gaps.
+				// fanotify (open-perm, hash-once) is the authoritative content
+				// source: where it saw the open, mergeFanotifyDigests OVERWRITES
+				// whatever we record here with its kernel-synchronous digest. But
+				// fanotify can MISS opens — virtiofs/overlay host-mounts that don't
+				// deliver content events (e.g. Docker/colima bind mounts), a
+				// FAN_Q_OVERFLOW burst, or a kernel that doesn't hook some
+				// filesystem — which would leave a real material with NO digest in
+				// OpenedFiles. So only DEFER to fanotify when we have nothing
+				// better: with no captured fd, record the PATH as a gap for
+				// fanotify to fill (dropping non-regular / already-gone opens via a
+				// cheap lstat). When the capture pool DID pin the inode via
+				// /proc/<pid>/fd, fall through and hash THAT as a reliable fallback
+				// — fanotify still upgrades it to the kernel-synchronous digest
+				// when it saw the open, so this never weakens the authoritative
+				// path; it only closes the all-environments capture gap.
+				if openatHashDisabled && ph.file == nil {
 					if s, e := os.Lstat(ev.Path); e != nil || !s.Mode().IsRegular() {
-						if ph.file != nil {
-							_ = ph.file.Close()
-						}
 						continue
 					}
 					recordEBPFOpenat(pctx, ev, ebpf.HashResult{
 						Path:   ev.Path,
 						Status: ebpf.TOCTOUError,
-						Reason: "fanotify-authoritative: eBPF openat content hash skipped",
+						Reason: "fanotify-authoritative: eBPF openat content hash skipped (no captured fd)",
 					})
-					if ph.file != nil {
-						_ = ph.file.Close()
-					}
 					continue
 				}
 				// Per-trace digest cache: most files in a build are
@@ -1608,6 +1613,16 @@ func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
 type watchedSet struct {
 	mu  sync.RWMutex
 	pid map[uint32]bool
+	// rootParent is cilock's KERNEL-GLOBAL tgid (recorded by the BPF
+	// sentinel). An event whose ppid == rootParent is the tracee (cilock's
+	// direct child) and is added to the set; cilock itself is NEVER a
+	// member, so its own syscalls (e.g. its platform uploads) are excluded
+	// from the build's traced activity. This makes the userspace filter
+	// correct in nested PID namespaces, where the BPF events carry global
+	// pids that never equal the namespace-local pid the tracer knows
+	// (c.Process.Pid). Zero ⇒ host-namespace path, where the local-pid seed
+	// already matches the global event pids.
+	rootParent uint32
 	// cwd caches the resolved cwd per-pid, captured at matchAndAdd
 	// time (when we KNOW the pid is alive — it just fired an event).
 	// Later openat events with relative paths use this cache to
@@ -1616,17 +1631,24 @@ type watchedSet struct {
 	cwd map[uint32]string
 }
 
-func newWatchedSet(root int) *watchedSet {
+func newWatchedSet(root int, rootParent uint32) *watchedSet {
 	return &watchedSet{
-		pid: map[uint32]bool{uint32(root): true}, //nolint:gosec // G115: pid fits in u32 by Linux convention
-		cwd: map[uint32]string{},
+		pid:        map[uint32]bool{uint32(root): true}, //nolint:gosec // G115: pid fits in u32 by Linux convention
+		rootParent: rootParent,
+		cwd:        map[uint32]string{},
 	}
 }
 
 func (w *watchedSet) match(pid, tgid, ppid uint32) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.pid[pid] || w.pid[tgid] || w.pid[ppid]
+	return w.pid[pid] || w.pid[tgid] || w.pid[ppid] || w.isRootChild(ppid)
+}
+
+// isRootChild reports whether ppid is cilock's global tgid — i.e. the event
+// is from the tracee (cilock's direct child). Caller holds the lock.
+func (w *watchedSet) isRootChild(ppid uint32) bool {
+	return w.rootParent != 0 && ppid == w.rootParent
 }
 
 // matchAndAdd is the dispatch-time variant of match: when match succeeds
@@ -1653,7 +1675,7 @@ func (w *watchedSet) matchAndAdd(pid, tgid, ppid uint32) bool {
 		w.mu.RUnlock()
 		return true
 	}
-	descent := w.pid[ppid]
+	descent := w.pid[ppid] || w.isRootChild(ppid)
 	w.mu.RUnlock()
 	if !descent {
 		return false
@@ -1710,7 +1732,7 @@ func (w *watchedSet) addAndReturnNew(pid, ppid uint32) bool {
 	if w.pid[pid] {
 		return false
 	}
-	if w.pid[ppid] {
+	if w.pid[ppid] || w.isRootChild(ppid) {
 		w.pid[pid] = true
 		return true
 	}
