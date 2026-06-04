@@ -33,6 +33,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 	"github.com/aflock-ai/rookery/attestation/workflow"
+	"github.com/aflock-ai/rookery/cilock/internal/keyguard"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
@@ -1031,6 +1032,13 @@ func buildRunSummary(
 	}
 	if cmd := wrappedCommandOutcome(args, attestors); cmd != nil {
 		s.WrappedCommand = cmd
+	}
+	// Record the in-process anti-tamper state that was in effect while the
+	// signing key was live (read back from the kernel by keyguard.Protect in
+	// preRoot, never asserted). This is the non-forgeability evidence a verifier
+	// gates an L3 verdict on. keyguard.Current() returns the cached State.
+	if kp := keyguard.Current(); kp.Applied {
+		s.KeyProtection = &kp
 	}
 	return s
 }

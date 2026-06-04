@@ -22,6 +22,7 @@ import (
 	"runtime/pprof"
 
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/cilock/internal/keyguard"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/aflock-ai/rookery/cilock/internal/telemetry"
 	"github.com/spf13/cobra"
@@ -104,6 +105,14 @@ func Execute() {
 }
 
 func preRoot(cmd *cobra.Command, ro *options.RootOptions, logger *logrusLogger, cpuProfileFile **os.File) error {
+	// Harden the process against extraction of in-memory secrets (the signing
+	// key) by a same-UID local attacker — non-forgeable-provenance requires the
+	// key to be unextractable while live. Applied as early as possible, before
+	// any key is loaded, and process-wide. No-op on non-Linux dev machines.
+	if st := keyguard.Protect(); st.Applied {
+		log.Debugf("keyguard: process hardened (dumpable=%v yama=%d)", st.Dumpable, st.YamaPtraceScope)
+	}
+
 	if err := logger.SetLevel(ro.LogLevel); err != nil {
 		return fmt.Errorf("invalid log level: %w", err)
 	}

@@ -291,13 +291,13 @@ func (r *CommandRun) preStartTracingSetup() error {
 	if err != nil {
 		return fmt.Errorf("eBPF tracing requested but failed to attach kprobes: %w", err)
 	}
-	// Seed the in-kernel bootstrap signal: we (cilock, os.Getpid())
-	// are about to fork a child that should be traced. The kprobe
-	// matches openats whose ppid == our tgid, emits them, and adds
-	// the child's pid to the watched set so subsequent descendants
-	// follow. Enable the filter NOW (before c.Start) so the child's
-	// first openat (typically /lib/ld-linux.so) is captured.
-	if err := consumer.SetRootParentTgid(uint32(os.Getpid())); err != nil { //nolint:gosec // G115: pid fits in u32 by Linux convention
+	// Seed the in-kernel bootstrap signal so the to-be-forked tracee's
+	// subtree is watched. BootstrapRoot fires a sentinel prctl whose kprobe
+	// records cilock's KERNEL-GLOBAL tgid as the root — namespace-agnostic,
+	// so capture works in nested PID namespaces (Docker/colima/K8s), not just
+	// the host namespace. Enable the filter NOW (before c.Start) so the
+	// child's first openat (typically /lib/ld-linux.so) is captured.
+	if err := consumer.BootstrapRoot(); err != nil {
 		_ = consumer.Close()
 		return fmt.Errorf("eBPF filter setup: %w", err)
 	}
@@ -366,6 +366,15 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 	}
 	requested := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVarTraceMode)))
 	logTraceModeStartup(mode, requested)
+
+	// Record the resolved capture mode + concrete backend so the run summary
+	// reports them honestly. This fixes a latent bug: resolvedCaptureMode was
+	// never assigned anywhere, so summary.captureMode was always empty even on
+	// a successful trace. Set from the RESOLVED mode (not the env request) so
+	// auto-select runs still name their backend ("ebpf"/"ptrace+seccomp"),
+	// which downstream hermeticity derivation needs.
+	r.resolvedCaptureMode = string(attestation.CaptureTrace)
+	r.resolvedTraceBackend = mode.String()
 
 	switch mode {
 	case traceModeEBPF:

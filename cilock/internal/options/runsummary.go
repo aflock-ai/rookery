@@ -20,6 +20,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/aflock-ai/rookery/cilock/internal/keyguard"
 )
 
 // Attestor outcome statuses surfaced in the run summary. They map the
@@ -83,6 +85,14 @@ type RunSummary struct {
 	Subjects           []RunSubject      `json:"subjects,omitempty"`
 	Attestors          []AttestorOutcome `json:"attestors,omitempty"`
 	WrappedCommand     *WrappedCommand   `json:"wrapped_command,omitempty"`
+
+	// KeyProtection records the in-process anti-tamper hardening that was in
+	// effect during the run (read back from the kernel, never asserted). It is
+	// NON-FORGEABILITY evidence: dumpable==false means the signing key could
+	// not be lifted from cilock's memory by a same-UID attacker mid-build, so
+	// the keyless workflow identity it signed with is actually non-forgeable.
+	// A policy can gate an L3 verdict on it. Omitted on unsupported platforms.
+	KeyProtection *keyguard.State `json:"key_protection,omitempty"`
 }
 
 // gitRemoteAnchor returns the git remote URL the collection is anchored by,
@@ -180,7 +190,21 @@ func (s *RunSummary) WriteHuman(w io.Writer) {
 	if s.WrappedCommand != nil {
 		fmt.Fprintf(&b, "  command exit: %d\n", s.WrappedCommand.ExitCode)
 	}
+	s.writeKeyGuardLine(&b)
 	_, _ = io.WriteString(w, b.String())
+}
+
+// writeKeyGuardLine appends the non-forgeability evidence line when the signer
+// was hardened: dumpable==false means the signing key was unextractable from
+// cilock's memory by a same-UID attacker during the run. Split out of
+// WriteHuman to keep that function's branch count in check.
+func (s *RunSummary) writeKeyGuardLine(b *strings.Builder) {
+	kp := s.KeyProtection
+	if kp == nil || !kp.Applied {
+		return
+	}
+	fmt.Fprintf(b, "  key guard:  signing key non-extractable (dumpable=%v, yama=%d)\n",
+		kp.Dumpable, kp.YamaPtraceScope)
 }
 
 // subjectNames returns the (sorted) subject names for the compact human line,

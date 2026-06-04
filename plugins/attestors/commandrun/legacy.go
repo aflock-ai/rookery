@@ -1,4 +1,4 @@
-// Copyright 2026 The Rookery Contributors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -46,11 +46,27 @@ const (
 
 // errLegacyDecodeOnly mirrors product/legacy.go's contract: a verify-only
 // decoder must REFUSE Attest() so an accidental producer-mode call
-// fails loudly. The producer is the v0.2 attestor (when wired in a
-// follow-up) registered under `command-run`.
+// fails loudly. The producer is the v0.2 attestor registered under
+// `command-run` in commandrun.go.
 var errLegacyDecodeOnly = errors.New(
 	"legacy command-run attestor is verify-only: use v0.2 to produce new attestations",
 )
+
+func init() {
+	// Register the v0.1 decoder under a DISTINCT name + the v0.1 predicate
+	// URI. RegisterAttestation is name+type keyed, so this coexists with the
+	// v0.2 producer (registered under Name in commandrun.go). A verifier
+	// handed a v0.1 envelope routes here by predicate type and decodes the
+	// original inline wire shape, while `cilock run --attestations command-run`
+	// always selects the v0.2 producer (the base Name). This is what keeps a
+	// v0.1 policy + v0.1 attestation verifying after the producer flip.
+	attestation.RegisterAttestation(
+		legacyV01Name,
+		LegacyV01Type,
+		attestation.ExecuteRunType,
+		func() attestation.Attestor { return newLegacyDecoder(LegacyV01Type) },
+	)
+}
 
 // LegacyDecoder parses a v0.1 command-run predicate body for
 // verification. It deliberately re-uses the existing CommandRun
@@ -80,18 +96,22 @@ func (a *LegacyDecoder) Attest(_ *attestation.AttestationContext) error {
 // MarshalJSON re-emits the inner CommandRun exactly as v0.1 did, so
 // a verifier round-tripping a decoded attestation produces byte-
 // identical output (modulo Go map ordering — semantically equivalent).
+// The commandRunWire cast strips CommandRun's v0.2 MarshalJSON so the
+// original inline wire shape is reproduced, not re-encoded as v0.2.
 func (a *LegacyDecoder) MarshalJSON() ([]byte, error) {
-	return json.Marshal(a.cmd)
+	return json.Marshal((*commandRunWire)(a.cmd))
 }
 
 // UnmarshalJSON decodes the v0.1 predicate body into the inner
-// CommandRun.
+// CommandRun via the method-less commandRunWire view, so the historical
+// inline shape is parsed by struct tags rather than CommandRun's v0.2
+// UnmarshalJSON (which expects the interned wire format).
 func (a *LegacyDecoder) UnmarshalJSON(data []byte) error {
-	cmd := New()
-	if err := json.Unmarshal(data, cmd); err != nil {
+	var body commandRunWire
+	if err := json.Unmarshal(data, &body); err != nil {
 		return fmt.Errorf("legacy command-run (%s): decode: %w", a.predicateType, err)
 	}
-	a.cmd = cmd
+	a.cmd = (*CommandRun)(&body)
 	return nil
 }
 

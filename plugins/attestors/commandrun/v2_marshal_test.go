@@ -1,4 +1,4 @@
-// Copyright 2026 The Rookery Contributors
+// Copyright 2026 TestifySec, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -74,7 +74,9 @@ func synthCommandRun() *CommandRun {
 func TestV02_SmallerThan_V01(t *testing.T) {
 	rc := synthCommandRun()
 
-	v01Bytes, err := json.Marshal(rc)
+	// rc now marshals as v0.2 (custom MarshalJSON); take the v0.1 baseline via
+	// the method-less wire view so the comparison is v0.1-shape vs v0.2-shape.
+	v01Bytes, err := json.Marshal((*commandRunWire)(rc))
 	if err != nil {
 		t.Fatalf("v0.1 marshal: %v", err)
 	}
@@ -155,7 +157,9 @@ func TestV02_DigestsDedup(t *testing.T) {
 // pre-v0.2 attestation in production breaks.
 func TestV02_LegacyDecode_V01Envelope(t *testing.T) {
 	rc := synthCommandRun()
-	v01Bytes, err := json.Marshal(rc)
+	// A genuine v0.1 envelope is the inline wire shape, produced via the
+	// method-less view (rc itself now marshals as v0.2).
+	v01Bytes, err := json.Marshal((*commandRunWire)(rc))
 	if err != nil {
 		t.Fatalf("v0.1 marshal: %v", err)
 	}
@@ -272,6 +276,12 @@ func TestV02_SectionOffsets_RoundTripExact(t *testing.T) {
 			want, werr = json.Marshal(v02.Processes)
 		case "cmd":
 			want, werr = json.Marshal(v02.Cmd)
+		case "exitcode":
+			want, werr = json.Marshal(v02.ExitCode)
+		case "stdout":
+			want, werr = json.Marshal(v02.Stdout)
+		case "stderr":
+			want, werr = json.Marshal(v02.Stderr)
 		default:
 			t.Errorf("unknown section %s in offsets", name)
 			continue

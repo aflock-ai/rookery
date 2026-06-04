@@ -28,6 +28,7 @@ package ebpf
 
 import (
 	"bytes"
+	"crypto/rand"
 	_ "embed"
 	"encoding/binary"
 	"errors"
@@ -321,6 +322,7 @@ type Consumer struct {
 	watchedPids    *ebpf.Map      // BPF_MAP_TYPE_HASH: pid -> 1
 	filterFlag     *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: byte
 	rootParentTgid *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: u32
+	sentinelNonce  *ebpf.Map      // BPF_MAP_TYPE_ARRAY[1]: u64 per-run sentinel secret
 	ringbufDrops   *ebpf.Map      // BPF_MAP_TYPE_PERCPU_ARRAY[2]: u64 drop counters
 }
 
@@ -642,6 +644,13 @@ func Open() (*Consumer, error) {
 	}
 	c.rootParentTgid = root
 
+	nonce, ok := coll.Maps["sentinel_nonce"]
+	if !ok {
+		_ = c.Close()
+		return nil, fmt.Errorf("sentinel_nonce map not found in BPF object")
+	}
+	c.sentinelNonce = nonce
+
 	if drops, ok := coll.Maps["ringbuf_drops"]; ok {
 		c.ringbufDrops = drops
 	}
@@ -711,6 +720,78 @@ func (c *Consumer) SetRootParentTgid(tgid uint32) error {
 	}
 	zero := uint32(0)
 	return c.rootParentTgid.Update(&zero, &tgid, ebpf.UpdateAny)
+}
+
+// prSetDumpable mirrors CILOCK_PR_SET_DUMPABLE in openat_kprobe.bpf.c. cilock
+// fires prctl(PR_SET_DUMPABLE, <per-run nonce>); the nonce is an INVALID
+// dumpable argument (only 0/1/2 are valid) so the syscall is a harmless EINVAL
+// no-op, while the kprobe (which authenticates the arg against the
+// sentinel_nonce map) records cilock's global tgid as the watched root.
+const prSetDumpable = 39
+
+// BootstrapRoot seeds the BPF root-filter so the tracee's process subtree is
+// watched — correctly in ANY PID namespace, including nested ones (Docker,
+// colima, K8s). It fires the sentinel prctl, whose kprobe records cilock's
+// KERNEL-GLOBAL tgid into root_parent_tgid; that global value is the only one
+// the in-kernel filter (which sees global pids) can match a descendant's
+// ppid against. os.Getpid() can't be used directly: in a nested PID namespace
+// it returns the namespace-local pid, which never matches the kernel-global
+// ppid the filter reads — the bug this replaces.
+//
+// If the sentinel didn't land (the prctl kprobe isn't attached on this
+// kernel), it falls back to writing os.Getpid() directly, which is correct
+// only in the host PID namespace (the pre-sentinel behaviour). Call AFTER
+// Open() (kprobes attached) and BEFORE the tracee forks.
+//
+// The sentinel is authenticated: a per-run secret nonce is seeded into the
+// sentinel_nonce BPF map and passed as the prctl argument. The kprobe records
+// the root only when the argument equals that nonce, so a co-resident attacker
+// cannot poison root_parent_tgid by racing the (formerly constant) sentinel.
+func (c *Consumer) BootstrapRoot() error {
+	if c == nil || c.rootParentTgid == nil || c.sentinelNonce == nil {
+		return fmt.Errorf("consumer not initialized")
+	}
+
+	// Generate a per-run secret nonce, seed it into the BPF map, then fire the
+	// sentinel with it. Only a caller that knows the nonce (us) can pin the
+	// root. If any step fails we fall through to the host-ns fallback below.
+	var nb [8]byte
+	if _, err := rand.Read(nb[:]); err == nil {
+		nonce := binary.LittleEndian.Uint64(nb[:])
+		if nonce == 0 {
+			nonce = 1 // never the map's "unset" value
+		}
+		zero := uint32(0)
+		if err := c.sentinelNonce.Update(&zero, &nonce, ebpf.UpdateAny); err == nil {
+			// The (expected) EINVAL is irrelevant — the kprobe fires on syscall
+			// entry, before the kernel validates the argument.
+			_, _ = unix.PrctlRetInt(prSetDumpable, uintptr(nonce), 0, 0, 0) //nolint:gosec // nonce->uintptr is 64-bit on supported targets
+		}
+	}
+
+	// Confirm the kprobe recorded our global tgid as the root. If it did,
+	// we're namespace-correct. If not, the prctl kprobe isn't attached on
+	// this kernel — fall back to the namespace-local pid (host-ns only).
+	if c.RootGlobalTgid() != 0 {
+		return nil
+	}
+	return c.SetRootParentTgid(uint32(os.Getpid())) //nolint:gosec // pid fits u32 by Linux convention
+}
+
+// RootGlobalTgid returns the kernel-global root tgid recorded by the sentinel
+// (cilock's own global tgid), or 0 if unset. Userspace seeds its watched-set
+// rootParent from this so it can correlate the global-pid BPF events against
+// the right subtree even inside a nested PID namespace, where the tracer's
+// namespace-local pid never equals the global pids the events carry.
+func (c *Consumer) RootGlobalTgid() uint32 {
+	if c == nil || c.rootParentTgid == nil {
+		return 0
+	}
+	var zero, root uint32
+	if err := c.rootParentTgid.Lookup(&zero, &root); err != nil {
+		return 0
+	}
+	return root
 }
 
 // AddWatchedPID adds a pid to the in-kernel watched set. The kprobe
