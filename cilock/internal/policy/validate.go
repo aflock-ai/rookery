@@ -224,6 +224,29 @@ func validateSteps(policy *policyDocument, result *ValidationResult) { //nolint:
 				result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', functionary %d: publickey type must have publickeyid", stepName, i))
 				result.Valid = false
 			}
+
+			// A 'root' functionary matches an x509 (Fulcio) signer via its
+			// certConstraint. With no trusted roots it can NEVER match any cert
+			// (Functionary.Validate rejects "no trusted roots provided"), so it is
+			// a dead policy — catch it here instead of at verify time. Each listed
+			// root must also resolve to the policy's roots map (the '*' AllowAll
+			// sentinel excepted), mirroring the publickeyid cross-check below.
+			if functionary.Type == "root" { //nolint:nestif // require non-empty certConstraint.roots, then cross-check each against the policy's roots map — two shallow guarded branches.
+				if functionary.CertConstraint == nil || len(functionary.CertConstraint.Roots) == 0 {
+					result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', functionary %d: root functionary must list at least one trusted root in certConstraint.roots (or \"*\" to allow any defined root)", stepName, i))
+					result.Valid = false
+				} else {
+					for _, rootRef := range functionary.CertConstraint.Roots {
+						if rootRef == "*" {
+							continue
+						}
+						if _, ok := policy.Roots[rootRef]; !ok {
+							result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', functionary %d: certConstraint references undefined root '%s' — define it in the policy's roots map or use \"*\"", stepName, i, rootRef))
+							result.Valid = false
+						}
+					}
+				}
+			}
 		}
 
 		for i, attestation := range step.Attestations {

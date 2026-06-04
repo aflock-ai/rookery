@@ -71,3 +71,35 @@ func TestApplyNoDefaultAttestors_UnknownName_Fails(t *testing.T) {
 		t.Fatalf("error should explain unknown name, got: %v", err)
 	}
 }
+
+// TestApplyNoDefaultAttestors_DropMaterial_WarnsBuildStepConsequence proves the
+// drop warning now spells out the downstream build-step consequence (rec #8):
+// a from-bundles build step built from a material-less bundle won't verify.
+func TestApplyNoDefaultAttestors_DropMaterial_WarnsBuildStepConsequence(t *testing.T) {
+	c := useCaptureLogger(t)
+	defaults := []attestation.Attestor{product.New(), material.New()}
+	if _, err := applyNoDefaultAttestors(defaults, []string{material.Name}); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	joined := strings.Join(c.snapshot(), "\n")
+	if !strings.Contains(joined, "build-step policies require material/v0.3 + product/v0.3") {
+		t.Errorf("drop-material warning should explain the build-step requirement, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "won't verify end-to-end") {
+		t.Errorf("drop-material warning should flag the verify consequence, got:\n%s", joined)
+	}
+}
+
+// TestApplyNoDefaultAttestors_DropProduct_WarnsBuildStepConsequence proves the
+// same consequence note fires when product is dropped.
+func TestApplyNoDefaultAttestors_DropProduct_WarnsBuildStepConsequence(t *testing.T) {
+	c := useCaptureLogger(t)
+	defaults := []attestation.Attestor{product.New(), material.New()}
+	if _, err := applyNoDefaultAttestors(defaults, []string{product.Name}); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	joined := strings.Join(c.snapshot(), "\n")
+	if !strings.Contains(joined, "build-step policies require material/v0.3 + product/v0.3") {
+		t.Errorf("drop-product warning should explain the build-step requirement, got:\n%s", joined)
+	}
+}

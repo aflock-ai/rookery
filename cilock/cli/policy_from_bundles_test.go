@@ -197,13 +197,11 @@ func TestExtractPredicateTypes_BarePredicate(t *testing.T) {
 }
 
 func TestExtractPredicateTypes_CollectionFlattens(t *testing.T) {
-	atts := []struct {
-		Type string `json:"type"`
-	}{
-		{Type: "https://aflock.ai/attestations/git/v0.1"},
-		{Type: "https://aflock.ai/attestations/command-run/v0.1"},
-		{Type: "https://aflock.ai/attestations/git/v0.1"}, // dup
-		{Type: ""}, // empty (ignored)
+	atts := []string{
+		"https://aflock.ai/attestations/git/v0.1",
+		"https://aflock.ai/attestations/command-run/v0.1",
+		"https://aflock.ai/attestations/git/v0.1", // dup
+		"", // empty (ignored)
 	}
 	got := extractPredicateTypes(collectionPredicateURI, atts)
 	// Output is sorted + deduped.

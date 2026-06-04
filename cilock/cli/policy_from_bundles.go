@@ -160,6 +160,16 @@ type bundleSummary struct {
 	// bundle as a pubkey-signed one yields a Functionary the
 	// generated policy can never verify; users had to hand-edit.
 	certSigners []certSigner
+
+	// productDigests / materialDigests are the sha256 file digests of
+	// this step's product (output) and material (input) v0.3 Merkle
+	// leaves. They drive cross-step provenance edge detection: a step
+	// whose materials include another step's product output consumed
+	// that output, so the generator wires an artifactsFrom edge between
+	// them. Empty for bundles with no v0.3 product/material attestation
+	// (e.g. bare-predicate envelopes, legacy v0.1 collections).
+	productDigests  map[string]struct{}
+	materialDigests map[string]struct{}
 }
 
 // certSigner describes one x509-cert-bearing signature on a DSSE
@@ -198,7 +208,7 @@ func runPolicyFromBundles(stdout, stderr io.Writer, bundlePaths, pubKeyPaths []s
 		return err
 	}
 
-	pol, err := buildStarterPolicy(summaries, pubKeys, expiresIn)
+	pol, err := buildStarterPolicy(stderr, summaries, pubKeys, expiresIn)
 	if err != nil {
 		return err
 	}
@@ -250,6 +260,16 @@ func summarizeBundles(stderr io.Writer, paths []string, stepPrefix string) ([]bu
 	return out, nil
 }
 
+// bundleSignature is one DSSE signature entry as cilock writes it. Certificate
+// is the leaf x509 cert PEM bytes, JSON-encoded (Go encodes []byte as base64);
+// cilock populates it whenever the signer is a TrustBundler (Fulcio leaf, manual
+// cert chain, etc) — see attestation/dsse/sign.go.
+type bundleSignature struct {
+	KeyID         string   `json:"keyid"`
+	Certificate   []byte   `json:"certificate,omitempty"`
+	Intermediates [][]byte `json:"intermediates,omitempty"`
+}
+
 // summarizeOneBundle parses a DSSE envelope on disk and extracts the
 // pieces a policy needs: signing keyids and inner predicate types.
 // For attestation-collection envelopes, the inner types live in
@@ -262,17 +282,9 @@ func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummar
 	}
 
 	var env struct {
-		Payload     string `json:"payload"`
-		PayloadType string `json:"payloadType"`
-		Signatures  []struct {
-			KeyID string `json:"keyid"`
-			// Certificate is the leaf x509 cert PEM bytes, JSON-encoded
-			// (Go encodes []byte as base64). cilock writes this field
-			// whenever the signer is a TrustBundler (Fulcio leaf, manual
-			// cert chain, etc); see attestation/dsse/sign.go.
-			Certificate   []byte   `json:"certificate,omitempty"`
-			Intermediates [][]byte `json:"intermediates,omitempty"`
-		} `json:"signatures"`
+		Payload     string            `json:"payload"`
+		PayloadType string            `json:"payloadType"`
+		Signatures  []bundleSignature `json:"signatures"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return bundleSummary{}, fmt.Errorf("decode DSSE envelope: %w", err)
@@ -296,7 +308,12 @@ func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummar
 		Predicate     struct {
 			Name         string `json:"name"`
 			Attestations []struct {
-				Type string `json:"type"`
+				Type        string `json:"type"`
+				Attestation struct {
+					Leaves []struct {
+						FileDigest string `json:"fileDigest"`
+					} `json:"leaves"`
+				} `json:"attestation"`
 			} `json:"attestations"`
 		} `json:"predicate"`
 	}
@@ -304,25 +321,71 @@ func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummar
 		return bundleSummary{}, fmt.Errorf("decode in-toto statement: %w", err)
 	}
 
-	// Walk signatures once, separating cert-signed entries from
-	// raw-keyid pubkey entries. A signature with non-empty
-	// Certificate bytes is cert-based: its keyid identifies the leaf
-	// cert's public key, but the policy must use a CertConstraint /
-	// Root rather than a raw publickeys[] entry. Mixed envelopes
-	// (one pubkey sig + one cert sig) are unusual but supported —
-	// both shapes land in their respective policy collections.
-	keyids := make([]string, 0, len(env.Signatures))
-	certs := make([]certSigner, 0, len(env.Signatures))
-	seenKID := make(map[string]struct{}, len(env.Signatures))
-	seenCert := make(map[string]struct{}, len(env.Signatures))
-	for _, s := range env.Signatures {
+	// Capture the inner attestation types AND the product (output) + material
+	// (input) file digests from the v0.3 Merkle attestations in a single pass.
+	// The digests drive cross-step provenance edge detection.
+	innerTypes := make([]string, 0, len(stmt.Predicate.Attestations))
+	productDigests := make(map[string]struct{})
+	materialDigests := make(map[string]struct{})
+	for _, a := range stmt.Predicate.Attestations {
+		innerTypes = append(innerTypes, a.Type)
+		var sink map[string]struct{}
+		switch {
+		case strings.Contains(a.Type, "/product/"):
+			sink = productDigests
+		case strings.Contains(a.Type, "/material/"):
+			sink = materialDigests
+		default:
+			continue
+		}
+		for _, l := range a.Attestation.Leaves {
+			if l.FileDigest != "" {
+				sink[l.FileDigest] = struct{}{}
+			}
+		}
+	}
+
+	// Walk signatures once, separating cert-signed entries from raw-keyid
+	// pubkey entries (see collectSigners).
+	keyids, certs := collectSigners(env.Signatures)
+
+	predicateTypes := extractPredicateTypes(stmt.PredicateType, innerTypes)
+	sidecars, _ := discoverSidecars(path)
+
+	stepName := stepPrefix + resolveStepName(stderr, path, stmt.Predicate.Name)
+	return bundleSummary{
+		path:               path,
+		stepName:           stepName,
+		signingKeyIDs:      keyids,
+		predicateTypes:     predicateTypes,
+		outerPredicateType: stmt.PredicateType,
+		sidecars:           sidecars,
+		certSigners:        certs,
+		productDigests:     productDigests,
+		materialDigests:    materialDigests,
+	}, nil
+}
+
+// collectSigners walks a bundle's DSSE signatures once, separating cert-signed
+// entries from raw-keyid pubkey entries. A signature with non-empty Certificate
+// bytes is cert-based: its keyid identifies the leaf cert's public key, but the
+// policy must use a CertConstraint / Root rather than a raw publickeys[] entry.
+// Mixed envelopes (one pubkey sig + one cert sig) are unusual but supported —
+// both shapes land in their respective policy collections. Each keyid is deduped
+// so repeat signatures from the same key don't produce duplicate policy entries.
+func collectSigners(sigs []bundleSignature) (keyids []string, certs []certSigner) {
+	keyids = make([]string, 0, len(sigs))
+	certs = make([]certSigner, 0, len(sigs))
+	seenKID := make(map[string]struct{}, len(sigs))
+	seenCert := make(map[string]struct{}, len(sigs))
+	for _, s := range sigs {
 		if s.KeyID == "" {
 			continue
 		}
 		if len(s.Certificate) > 0 {
-			// Cert-signed: keyid is the leaf-cert pubkey hash. Track
-			// uniquely by keyid so two sigs from the same leaf cert
-			// don't produce two Roots[] entries.
+			// Cert-signed: keyid is the leaf-cert pubkey hash. Track uniquely
+			// by keyid so two sigs from the same leaf cert don't produce two
+			// Roots[] entries.
 			if _, dup := seenCert[s.KeyID]; dup {
 				continue
 			}
@@ -342,20 +405,7 @@ func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummar
 		seenKID[s.KeyID] = struct{}{}
 		keyids = append(keyids, s.KeyID)
 	}
-
-	predicateTypes := extractPredicateTypes(stmt.PredicateType, stmt.Predicate.Attestations)
-	sidecars, _ := discoverSidecars(path)
-
-	stepName := stepPrefix + resolveStepName(stderr, path, stmt.Predicate.Name)
-	return bundleSummary{
-		path:               path,
-		stepName:           stepName,
-		signingKeyIDs:      keyids,
-		predicateTypes:     predicateTypes,
-		outerPredicateType: stmt.PredicateType,
-		sidecars:           sidecars,
-		certSigners:        certs,
-	}, nil
+	return keyids, certs
 }
 
 // extractLeafCommonName best-effort parses the leaf cert PEM to pull
@@ -476,28 +526,26 @@ func readSidecar(path, exportName string) (sidecarSummary, bool) {
 
 // extractPredicateTypes flattens a statement into the set of inner
 // attestation types a Witness step needs to list. For collection
-// envelopes we recurse into predicate.attestations[].type; for bare
+// envelopes we recurse into the inner attestation types; for bare
 // predicates we return the outer type as the only entry.
-func extractPredicateTypes(outerType string, atts []struct {
-	Type string `json:"type"`
-}) []string {
+func extractPredicateTypes(outerType string, innerTypes []string) []string {
 	if outerType != collectionPredicateURI {
 		if outerType == "" {
 			return nil
 		}
 		return []string{outerType}
 	}
-	out := make([]string, 0, len(atts))
-	seen := make(map[string]struct{}, len(atts))
-	for _, a := range atts {
-		if a.Type == "" {
+	out := make([]string, 0, len(innerTypes))
+	seen := make(map[string]struct{}, len(innerTypes))
+	for _, t := range innerTypes {
+		if t == "" {
 			continue
 		}
-		if _, dup := seen[a.Type]; dup {
+		if _, dup := seen[t]; dup {
 			continue
 		}
-		seen[a.Type] = struct{}{}
-		out = append(out, a.Type)
+		seen[t] = struct{}{}
+		out = append(out, t)
 	}
 	sort.Strings(out)
 	return out
@@ -573,7 +621,7 @@ func deriveStepName(path string) string {
 // placeholder publickeys entry with empty Key material — the policy
 // file will still validate-as-JSON but fail signature verification
 // until the user fills in the PEM.
-func buildStarterPolicy(summaries []bundleSummary, pubKeys map[string][]byte, expiresIn time.Duration) (*policy.Policy, error) {
+func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map[string][]byte, expiresIn time.Duration) (*policy.Policy, error) {
 	expires := time.Now().UTC().Add(expiresIn)
 	p := &policy.Policy{
 		Expires:              metav1.NewTime(expires),
@@ -627,7 +675,91 @@ func buildStarterPolicy(summaries []bundleSummary, pubKeys map[string][]byte, ex
 			return nil, err
 		}
 	}
+
+	// Wire cross-step provenance edges where a step's materials consumed
+	// another step's product output, then warn if a multi-step policy still
+	// has no cross-step integrity — the linker can't recover that from the
+	// github attestor's shared pipelineurl offline, so the result LOOKS
+	// complete but won't verify end-to-end. See wireProvenanceEdges.
+	edgesEmitted := wireProvenanceEdges(p, summaries)
+	warnMissingProvenanceEdges(stderr, p, edgesEmitted)
+
 	return p, nil
+}
+
+// wireProvenanceEdges detects product→material flow between the input bundles
+// and emits Step.ArtifactsFrom edges: step B consumed step A's output when B's
+// material set contains a file whose sha256 digest equals one of A's product
+// digests. This recovers the cross-step integrity the offline linker otherwise
+// loses (the github attestor's shared pipelineurl is absent offline), so the
+// generated policy enforces that the build's inputs really are the upstream
+// step's outputs instead of independent, unverified steps.
+//
+// Returns the number of edges emitted so the caller can warn when a multi-step
+// policy ended up with none. Self-edges (a step consuming its own product) are
+// skipped. Only collection steps (present in p.Steps) participate.
+func wireProvenanceEdges(p *policy.Policy, summaries []bundleSummary) int {
+	emitted := 0
+	for _, consumer := range summaries {
+		step, ok := p.Steps[consumer.stepName]
+		if !ok || len(consumer.materialDigests) == 0 {
+			continue
+		}
+		var from []string
+		seen := make(map[string]struct{})
+		for _, producer := range summaries {
+			if producer.stepName == consumer.stepName || len(producer.productDigests) == 0 {
+				continue
+			}
+			if _, dup := seen[producer.stepName]; dup {
+				continue
+			}
+			if digestSetsOverlap(producer.productDigests, consumer.materialDigests) {
+				from = append(from, producer.stepName)
+				seen[producer.stepName] = struct{}{}
+			}
+		}
+		if len(from) == 0 {
+			continue
+		}
+		sort.Strings(from)
+		step.ArtifactsFrom = from
+		p.Steps[consumer.stepName] = step
+		emitted += len(from)
+	}
+	return emitted
+}
+
+// digestSetsOverlap reports whether any digest in a is also in b. Iterates the
+// smaller set for cheapness.
+func digestSetsOverlap(a, b map[string]struct{}) bool {
+	small, large := a, b
+	if len(b) < len(a) {
+		small, large = b, a
+	}
+	for d := range small {
+		if _, ok := large[d]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// warnMissingProvenanceEdges emits a one-line warning when the generated policy
+// has more than one step but no cross-step provenance edge was wired. Such a
+// policy looks complete — N independent steps — but enforces NO ordering or
+// product→material integrity between them, a silent footgun the offline linker
+// can't avoid without the github attestor's pipelineurl. The warning tells the
+// operator how to close the gap.
+func warnMissingProvenanceEdges(stderr io.Writer, p *policy.Policy, edgesEmitted int) {
+	if stderr == nil || len(p.Steps) <= 1 || edgesEmitted > 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(stderr,
+		"warning: emitted %d independent steps with no cross-step provenance edges; "+
+			"cross-step integrity is NOT enforced. Wire steps with cilock prove-chain, "+
+			"or verify each step's product individually.\n",
+		len(p.Steps))
 }
 
 // buildFunctionaries materializes Functionary entries for a set of

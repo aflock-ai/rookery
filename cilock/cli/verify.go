@@ -67,7 +67,14 @@ func VerifyCmd() *cobra.Command {
   cilock verify ./dist/app.tar.gz -p policy.json -k policy-pub.pem --enable-archivista
 
   # Fully offline verify from a bundle (no platform lookup)
-  cilock verify -p policy.json -k policy-pub.pem --bundle evidence.tar.gz --platform-url ""`,
+  cilock verify -p policy.json -k policy-pub.pem --bundle evidence.tar.gz --platform-url ""
+
+  # Gate on the EXIT CODE, never on grepped output:
+  if cilock verify ./app -p policy.json.signed; then echo deploy; else echo blocked; fi
+  # Machine-readable verdict for an agent (stdout = pure JSON, exit code = gate):
+  cilock verify ./app -p policy.json.signed -o json
+  # WARNING: piping to tail/grep replaces the exit code with the pipe's and
+  # MASKS a verification failure — 'cilock verify ... | grep ...' is unsafe in a gate.`,
 		Args:              cobra.MaximumNArgs(1),
 		SilenceErrors:     true,
 		SilenceUsage:      true,
@@ -322,6 +329,12 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	subjects := []cryptoutil.DigestSet{}
+	// suppliedDigests records the sha256 hexes the operator asked cilock to
+	// bind (from --directory-path / --artifactfile / --subjects), in supply
+	// order. On a passing verify these drive the "verified: <digest> bound to
+	// step ... subject ..." binding line so a green run confirms the binding
+	// was to THEIR file, not just that the policy was satisfiable.
+	var suppliedDigests []string
 	if len(vo.ArtifactDirectoryPath) > 0 {
 		artifactDigestSet, err := cryptoutil.CalculateDigestSetFromDir(vo.ArtifactDirectoryPath, []cryptoutil.DigestValue{{Hash: crypto.SHA256, GitOID: false}})
 		if err != nil {
@@ -329,6 +342,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		}
 
 		subjects = append(subjects, artifactDigestSet)
+		suppliedDigests = append(suppliedDigests, suppliedSHA256(artifactDigestSet))
 	}
 
 	var artifactFileDigestHex string
@@ -340,6 +354,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 
 		artifactFileDigestHex = artifactDigestSet[cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}]
 		subjects = append(subjects, artifactDigestSet)
+		suppliedDigests = append(suppliedDigests, artifactFileDigestHex)
 	}
 
 	for _, subDigest := range vo.AdditionalSubjects {
@@ -357,6 +372,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			digestHex = subDigest[idx+1:]
 		}
 		subjects = append(subjects, cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: digestHex})
+		suppliedDigests = append(suppliedDigests, digestHex)
 	}
 
 	if len(subjects) == 0 {
@@ -461,6 +477,15 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 				}
 			}
 		}
+		// Under --format json, still emit a machine-readable {passed:false}
+		// verdict on stdout so a gate consuming the JSON sees the failure (the
+		// exit code remains the canonical signal). Emitted before the error
+		// return so it always lands.
+		if vo.OutputJSON() {
+			if werr := writeVerifyVerdictJSON(os.Stdout, VerifyVerdict{Passed: false}); werr != nil {
+				log.Errorf("failed to emit JSON verify verdict: %v", werr)
+			}
+		}
 		return fmt.Errorf("failed to verify policy: %w", verifyErr)
 	}
 
@@ -472,6 +497,15 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		for _, p := range result.Passed {
 			log.Info(fmt.Sprintf("%d: %s", num, p.Collection.Reference))
 			num++
+		}
+	}
+	// Confirm WHICH supplied artifact bound, and to which step's subject — a
+	// green verify otherwise leaves the binding implicit. Written to stderr
+	// alongside the evidence log.
+	writeVerifyBindingLines(os.Stderr, suppliedDigests, verifiedEvidence.StepResults)
+	if vo.OutputJSON() {
+		if werr := writeVerifyVerdictJSON(os.Stdout, buildVerifyVerdict(suppliedDigests, verifiedEvidence.StepResults)); werr != nil {
+			log.Errorf("failed to emit JSON verify verdict: %v", werr)
 		}
 	}
 	return nil

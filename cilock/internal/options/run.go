@@ -177,21 +177,25 @@ func ensureFulcioURL(cmd *cobra.Command, fulcioURL string) {
 // the session credential never travels to a third-party Fulcio. Fails OPEN: a
 // failed exchange (offline, missing OIDC server) sets nothing and signing
 // proceeds exactly as before — CI, offline, and local/KMS paths are unaffected.
-func applyKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL, sessionToken string) {
+//
+// Returns the platform-reported assurance level (acr) when the exchange
+// succeeded, so the caller can surface it in the run summary; empty otherwise.
+func applyKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL, sessionToken string) string {
 	if !fulcioSignerNeedsToken(cmd) {
-		return
+		return ""
 	}
 	if cur := fulcioFlagURL(cmd); cur != "" && !sameOrigin(cur, fulcioURL) {
-		return
+		return ""
 	}
-	oidcToken, err := auth.ExchangeSignToken(platformURL, sessionToken)
+	res, err := auth.ExchangeSignTokenResult(platformURL, sessionToken)
 	if err != nil {
 		log.Debugf("keyless sign-token exchange skipped: %v", err)
-		return
+		return ""
 	}
 	// Setting the token selects the fulcio signer; ensureFulcioURL (called right
 	// after this by the caller) gives it the platform URL.
-	_ = cmd.Flags().Set("signer-fulcio-token", oidcToken)
+	_ = cmd.Flags().Set("signer-fulcio-token", res.Token)
+	return res.AssuranceLevel
 }
 
 // applyWorkflowKeylessFulcioToken wires the fulcio signer for ambient CI
@@ -207,21 +211,32 @@ func applyKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL, session
 // different origin suppresses the token so the workflow OIDC never travels to a
 // third-party Fulcio. Fails OPEN — a missing OIDC server (not in GitHub Actions,
 // or no id-token: write) sets nothing and signing proceeds as before.
-func applyWorkflowKeylessFulcioToken(cmd *cobra.Command, fulcioURL, audience string) {
+//
+// Returns true ONLY when it actually installed a workflow OIDC token (which
+// selects the fulcio signer). Every fail-open path returns false: an explicit
+// signer override, a foreign --signer-fulcio-url, no ambient OIDC server, or a
+// flag-set error. Callers gate signerWorkflowIdentity on this result so the
+// SLSA level is never claimed for a run that did not actually sign keyless with
+// the platform workflow identity.
+func applyWorkflowKeylessFulcioToken(cmd *cobra.Command, fulcioURL, audience string) bool {
 	if !fulcioSignerNeedsToken(cmd) {
-		return
+		return false
 	}
 	if cur := fulcioFlagURL(cmd); cur != "" && !sameOrigin(cur, fulcioURL) {
-		return
+		return false
 	}
 	oidcToken, err := fetchGitHubOIDCToken(audience)
 	if err != nil {
 		log.Debugf("workflow keyless OIDC mint skipped: %v", err)
-		return
+		return false
 	}
 	// Setting the token selects the fulcio signer; ensureFulcioURL (called by the
 	// caller right after) gives it the platform's Fulcio URL.
-	_ = cmd.Flags().Set("signer-fulcio-token", oidcToken)
+	if err := cmd.Flags().Set("signer-fulcio-token", oidcToken); err != nil {
+		log.Debugf("workflow keyless token set failed: %v", err)
+		return false
+	}
+	return true
 }
 
 type RunOptions struct {
@@ -354,14 +369,33 @@ type RunOptions struct {
 	// cilock gets a clean tool-result instead of grepping logr text.
 	OutputFormat string
 
+	// Offline is a clear alias for --platform-url "": it runs cilock with
+	// no platform integration (no hosted Fulcio / TSA / Archivista, no
+	// session lookup). It exists so an operator signing with a local -k key
+	// doesn't have to know the empty-string idiom, and so "offline" is an
+	// explicit, greppable intent rather than an inference. ResolvePlatformDefaults
+	// honours it by clearing PlatformURL before any derivation.
+	Offline bool
+
 	// resolved* fields are populated by ResolvePlatformDefaults from the
 	// logged-in credential and platform derivation so the post-run summary
 	// can report the tenant / identity / destinations cilock actually bound
 	// to without re-deriving or re-reading the credential store. They are
 	// not flags.
-	resolvedTenantName  string
-	resolvedSignerEmail string
-	resolvedFulcioURL   string
+	resolvedTenantName     string
+	resolvedSignerEmail    string
+	resolvedFulcioURL      string
+	resolvedAssuranceLevel string
+
+	// signerWorkflowIdentity records that cilock minted the signing identity from
+	// the platform's WORKFLOW-identity path — the ambient-CI OIDC exchange or a
+	// stored workflow-identity marker — i.e. an isolated, hosted builder signed
+	// this run with a non-forgeable ephemeral identity. It is the SLSA Build L2
+	// evidence gate (see RunSummary.ComputeSLSA), and is deliberately NOT set for
+	// a browser/token session (the build ran on a developer's machine), an
+	// explicit --signer-fulcio-token (provenance cilock cannot attest), or any
+	// offline/local-key run.
+	signerWorkflowIdentity bool
 }
 
 // OutputJSON reports whether the run result should be emitted as a structured
@@ -382,6 +416,17 @@ func (ro *RunOptions) ResolvedSignerEmail() string { return ro.resolvedSignerEma
 // during ResolvePlatformDefaults. Empty when the platform was disabled.
 func (ro *RunOptions) ResolvedFulcioURL() string { return ro.resolvedFulcioURL }
 
+// ResolvedAssuranceLevel returns the assurance level (acr) the platform minted
+// the keyless signing identity at, as reported by the sign-token exchange.
+// Empty for offline / local-key runs or when the platform supplied none.
+func (ro *RunOptions) ResolvedAssuranceLevel() string { return ro.resolvedAssuranceLevel }
+
+// SignerIsWorkflowIdentity reports whether the run signed with a platform
+// workflow identity (ambient CI OIDC or a stored workflow-identity marker), as
+// captured during ResolvePlatformDefaults. It is the isolated-builder evidence
+// the SLSA Build-level computation requires for L2+.
+func (ro *RunOptions) SignerIsWorkflowIdentity() bool { return ro.signerWorkflowIdentity }
+
 var RequiredRunFlags = []string{
 	"step",
 }
@@ -396,11 +441,20 @@ var RequiredRunFlags = []string{
 // continues with the configured signer only — no third-party
 // timestamp) and the archivista URL stays whatever the user set.
 func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
+	// --offline is a clear alias for --platform-url "". Clear the platform URL
+	// up front so the explicit-disable path below takes over; cmd.Flags() is
+	// also patched so the Changed("platform-url") check sees the opt-out even
+	// when the operator used --offline instead of --platform-url "".
+	if ro.Offline {
+		ro.PlatformURL = ""
+		log.Info("--offline: running with no platform (no hosted Fulcio/TSA/Archivista, no session lookup)")
+	}
+
 	// Detect the explicit-disable case. If the user did NOT change
 	// --platform-url, ro.PlatformURL holds the compiled-in default.
 	// If the user passed --platform-url "" (or any empty value), we
 	// treat that as "no platform" and skip all derivation.
-	platformExplicitlyDisabled := cmd.Flags().Changed("platform-url") && ro.PlatformURL == ""
+	platformExplicitlyDisabled := (cmd.Flags().Changed("platform-url") || ro.Offline) && ro.PlatformURL == ""
 	if platformExplicitlyDisabled {
 		// User opted out of the platform. Don't derive anything.
 		return
@@ -454,7 +508,10 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 		// `cilock run --platform-url X` works in CI with no `cilock login` step.
 		// The minted OIDC token carries the Fulcio signing audience (sigstore) and
 		// is presented to the platform's own Fulcio (derived from --platform-url).
-		applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+		// Only claim workflow identity when the token was ACTUALLY installed —
+		// the helper fails open (no CI OIDC, explicit override, foreign Fulcio),
+		// and an over-claimed identity would inflate the SLSA level.
+		ro.signerWorkflowIdentity = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
 
 		// Expose the platform URL to the platform attestor so it binds the run to
 		// the tenant even with no prior `cilock login`: in CI the ambient GitHub
@@ -475,6 +532,15 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 			// step exports CILOCK_PLATFORM_URL to forge a platform binding.
 			platformconfig.MarkTrustedPlatformBinding(normalized)
 		}
+	} else if !cmd.Flags().Changed("platform-url") {
+		// No platform session, no ambient CI identity, and the operator never
+		// changed --platform-url — so cilock is silently using the compiled-in
+		// HOSTED platform defaults (TSA, Archivista) while signing with whatever
+		// local --signer-* key was supplied. That is fine, but make it VISIBLE:
+		// the operator is effectively running offline against the local key, and
+		// the only platform interaction left is the default TSA timestamp. Pass
+		// --offline (or --platform-url "") to drop the hosted defaults entirely.
+		log.Info("no platform session — running offline (signing with the local key; pass --offline to drop hosted platform defaults)")
 	}
 
 	// Give a selected fulcio signer a URL if it lacks one — whether it was
@@ -513,9 +579,12 @@ func (ro *RunOptions) applyPlatformCredential(cmd *cobra.Command, cred *auth.Cre
 	//   - session login (browser/token): exchange the stored session at
 	//     /oauth/sign-token for a short-lived signing token.
 	if cred.AuthMode == auth.AuthModeWorkflowOIDC {
-		applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+		// Only claim workflow identity when the token was ACTUALLY installed —
+		// the helper fails open (no CI OIDC, explicit override, foreign Fulcio),
+		// and an over-claimed identity would inflate the SLSA level.
+		ro.signerWorkflowIdentity = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
 	} else {
-		applyKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred.Token)
+		ro.resolvedAssuranceLevel = applyKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred.Token)
 	}
 
 	// Archivista on by default when logged in with a SESSION/token credential —
@@ -541,6 +610,10 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 			"--timestamp-servers (timestamper), and --archivista-server (attestation storage). Pass "+
 			"--platform-url \"\" to run fully offline. Additional key/signer providers can be compiled in — "+
 			"see https://github.com/aflock-ai/rookery/blob/main/docs/signers.md")
+	cmd.Flags().BoolVar(&ro.Offline, "offline", false,
+		"Run with no platform integration — a clear alias for --platform-url \"\". Drops the hosted "+
+			"Fulcio/TSA/Archivista defaults and skips the session lookup; signing continues with the "+
+			"configured local --signer-* key only (no third-party timestamp).")
 	cmd.Flags().StringVarP(&ro.WorkingDir, "workingdir", "d", "", "Directory from which commands will run")
 	cmd.Flags().StringSliceVarP(&ro.Attestations, "attestations", "a", DefaultAttestors, "Attestations to record ('product' and 'material' are always recorded)")
 	cmd.Flags().StringSliceVar(&ro.DirHashGlobs, "dirhash-glob", []string{}, "Dirhash glob can be used to collapse material and product hashes on matching directory matches.")

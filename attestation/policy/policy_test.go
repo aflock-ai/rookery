@@ -565,7 +565,7 @@ func TestCheckFunctionaries_NoCollectionsPlaceholder(t *testing.T) {
 	require.Len(t, result.Rejected, 1)
 
 	msg := result.Rejected[0].Reason.Error()
-	assert.Contains(t, msg, "no collections")
+	assert.Contains(t, msg, "no collection passed verification")
 	assert.Contains(t, msg, "build")
 	assert.NotContains(t, msg, "predicate type", "must not surface the misleading predicate-type error for the no-collections placeholder")
 

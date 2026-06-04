@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation/dsse"
@@ -532,8 +533,10 @@ deny = []`
 // certConstraint (no CN, no Org, no Roots) passes validation.
 // ===========================================================================
 
-// TestSecurity_R3_270_RootFunctionaryWithEmptyCertConstraint proves that
-// the validator does not check certConstraint fields on root functionaries.
+// TestSecurity_R3_270_RootFunctionaryWithEmptyCertConstraint proves the
+// validator now REJECTS a root functionary with an empty certConstraint (no
+// trusted roots) at authoring time — previously it passed and only failed at
+// verify time with a confusing "no trusted roots provided" error.
 func TestSecurity_R3_270_RootFunctionaryWithEmptyCertConstraint(t *testing.T) {
 	rawJSON := `{
 		"expires": "2030-01-01T00:00:00Z",
@@ -553,10 +556,12 @@ func TestSecurity_R3_270_RootFunctionaryWithEmptyCertConstraint(t *testing.T) {
 	}`
 
 	result := ValidateRawPolicy(context.Background(), []byte(rawJSON))
-	require.True(t, result.Valid, "SECURITY FINDING: a root functionary with an empty "+
-		"certConstraint (no CN, Org, Roots, etc.) passes validation. At runtime, this "+
-		"functionary's CertConstraint.Roots will be empty, causing the functionary to "+
-		"reject all certs. But the validator does not warn about this likely misconfiguration.")
+	// FIXED (was R3-270): an empty certConstraint has no trusted roots, so the
+	// functionary can never match any cert. The validator now catches this dead
+	// policy at authoring time instead of letting every verify fail.
+	require.False(t, result.Valid, "a root functionary with an empty certConstraint (no trusted roots) must FAIL validation")
+	require.Contains(t, strings.Join(result.Errors, " | "), "trusted root",
+		"the error must name the missing trusted root so the author knows the fix")
 }
 
 // ===========================================================================
@@ -601,9 +606,9 @@ func TestSecurity_R3_270_MultipleErrorsAccumulate(t *testing.T) {
 // root IDs are not validated by the cilock validator.
 // ===========================================================================
 
-// TestSecurity_R3_270_RootReferenceNotValidated proves that
-// certConstraint.roots entries are not validated against the policy's
-// roots map.
+// TestSecurity_R3_270_RootReferenceNotValidated proves the validator now
+// REJECTS a certConstraint.roots entry that references a root id absent from
+// the policy's roots map (previously silently accepted, failing only at verify).
 func TestSecurity_R3_270_RootReferenceNotValidated(t *testing.T) {
 	rawJSON := `{
 		"expires": "2030-01-01T00:00:00Z",
@@ -625,8 +630,10 @@ func TestSecurity_R3_270_RootReferenceNotValidated(t *testing.T) {
 	}`
 
 	result := ValidateRawPolicy(context.Background(), []byte(rawJSON))
-	require.True(t, result.Valid, "SECURITY FINDING: certConstraint.roots references "+
-		"'nonexistent-root-id' which does not exist in the policy's roots map, but "+
-		"the validator does not catch this. At runtime, the functionary will never "+
-		"match any certificate because the referenced root bundle doesn't exist.")
+	// FIXED (was R3-270): the validator now cross-checks certConstraint.roots
+	// against the policy's roots map (mirroring the publickeyid check) and names
+	// the offending id, so a typo is caught at authoring time.
+	require.False(t, result.Valid, "certConstraint.roots referencing an undefined root id must FAIL validation")
+	require.Contains(t, strings.Join(result.Errors, " | "), "nonexistent-root-id",
+		"the error must name the undefined root id so the author can fix the typo")
 }

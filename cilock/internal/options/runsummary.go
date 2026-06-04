@@ -93,6 +93,132 @@ type RunSummary struct {
 	// the keyless workflow identity it signed with is actually non-forgeable.
 	// A policy can gate an L3 verdict on it. Omitted on unsupported platforms.
 	KeyProtection *keyguard.State `json:"key_protection,omitempty"`
+	// WorkflowIdentity reports whether the run signed with an isolated platform
+	// workflow identity — keyless Fulcio minted via cilock's ambient-CI or stored
+	// workflow-identity path (NOT a local key, NOT offline, NOT a raw
+	// --signer-fulcio-token whose provenance cilock cannot attest, NOT a browser
+	// session whose build ran on a developer's machine). It is the evidence gate
+	// between SLSA Build L1 (forgeable provenance) and L2 (non-forgeable
+	// provenance from an isolated builder). Set by buildRunSummary.
+	WorkflowIdentity bool `json:"workflow_identity,omitempty"`
+	// Tracing records the commandrun capture mode that observed the wrapped
+	// command ("ebpf", "ptrace", …), or is empty when the build was not traced.
+	// Without a trace, hermeticity is UNKNOWN and the run cannot reach L3. Set by
+	// buildRunSummary from the commandrun attestor.
+	Tracing string `json:"tracing,omitempty"`
+	// Hermetic reports whether the TRACED build made zero external network egress
+	// — i.e. pulled no undeclared network inputs during the wrapped command. Only
+	// meaningful when Tracing is non-empty; it is the evidence gate between SLSA
+	// Build L2 and L3.
+	Hermetic bool `json:"hermetic,omitempty"`
+	// NetworkEgress lists the external destinations the traced build reached
+	// (hostname/address with port) — the evidence that breaks hermeticity. Empty
+	// when the build was hermetic or untraced.
+	NetworkEgress []string `json:"network_egress,omitempty"`
+
+	// SLSABuildLevel is the SLSA Build track level this run ACHIEVED, derived by
+	// ComputeSLSA from the EVIDENCE above (the trusted signing path + traced
+	// hermeticity) — NOT from the level the slsa attestor claims, and NOT from
+	// the signer-kind string. See ComputeSLSA for the L1/L2/L3 ladder.
+	SLSABuildLevel int `json:"slsa_build_level,omitempty"`
+	// SLSAVerdict is the human-readable one-line verdict + upgrade hint that
+	// accompanies SLSABuildLevel. Empty until ComputeSLSA runs.
+	SLSAVerdict string `json:"slsa_verdict,omitempty"`
+	// AssuranceLevel echoes the platform discovery doc's assurance_level (the
+	// acr the platform minted the signing identity at, e.g. "aal2"), when a
+	// platform session supplied one. Empty for offline / local-key runs.
+	AssuranceLevel string `json:"assurance_level,omitempty"`
+}
+
+// ComputeSLSA derives the achieved SLSA Build level + verdict from the EVIDENCE
+// the run actually produced — never from the signer-kind string alone (a signer
+// named "fulcio" proves nothing about WHERE the signing happened or whether the
+// build was isolated). Two evidence gates, each requiring a positive signal;
+// absent evidence keeps the level LOW rather than assuming the best:
+//
+//   - L1 (floor): a signed provenance attestation exists. Every cilock run.
+//   - L2: the provenance is non-forgeable — signed by an isolated platform
+//     workflow identity (s.WorkflowIdentity: keyless Fulcio minted via cilock's
+//     ambient-CI or stored workflow-identity path). A local/KMS key, an offline
+//     run, a raw --signer-fulcio-token, or a browser session whose build ran on
+//     a developer's machine all stay at L1.
+//   - L3: L2 AND the build is hermetic — the commandrun attestor traced the
+//     wrapped command (s.Tracing) and observed zero external network egress
+//     (s.Hermetic), so the build pulled no undeclared inputs. No trace ⇒
+//     hermeticity is UNKNOWN ⇒ held at L2 (we never assume hermetic unobserved).
+//
+// This is deliberately conservative: a higher level is claimed ONLY when the run
+// carries the evidence to back it, so release automation keying on
+// slsa_build_level cannot be tricked into trusting non-isolated, non-hermetic
+// provenance. platform is the targeted platform URL (empty ⇒ offline); it feeds
+// the upgrade hint so the message names where the operator can sign.
+//
+// runFailed reports that the run did NOT successfully produce its signed
+// evidence — a fatal signer/attestor error, or a non-zero wrapped command. The
+// L1 floor is "a signed provenance attestation EXISTS", so a failed run has no
+// floor to stand on: it is held at level 0 with an explicit "not assessed"
+// verdict rather than claiming evidence the run never emitted (the overclaim a
+// verifier or release gate keying on slsa_build_level must never be handed).
+func (s *RunSummary) ComputeSLSA(platform string, runFailed bool) {
+	// A failed run produced no completed, signed provenance — there is no L1
+	// floor to claim. Report level 0 / not-assessed instead of overstating it.
+	if runFailed {
+		s.SLSABuildLevel = 0
+		s.SLSAVerdict = "SLSA: not assessed — the build did not complete successfully, so no signed provenance was produced."
+		return
+	}
+
+	// L1 floor: a signed provenance attestation exists.
+	s.SLSABuildLevel = 1
+	if !s.WorkflowIdentity {
+		s.SLSAVerdict = "SLSA Build L1 (forgeable provenance — local key, offline, or an unattested signer). " +
+			"For L2+ sign with an isolated platform workflow identity: " +
+			"cilock login --workflow-identity --platform-url " + slsaPlatformHint(platform)
+		return
+	}
+
+	// L2: non-forgeable provenance from an isolated platform workflow identity.
+	s.SLSABuildLevel = 2
+	if s.Tracing == "" {
+		s.SLSAVerdict = "SLSA Build L2 (non-forgeable platform workflow identity). " +
+			"For L3 prove the build is hermetic: re-run with --trace so cilock can attest zero network egress."
+		return
+	}
+	if !s.Hermetic {
+		s.SLSAVerdict = "SLSA Build L2 (non-forgeable platform workflow identity); the " + s.Tracing +
+			"-traced build made network egress (" + slsaEgressHint(s.NetworkEgress) + ") so it is NOT hermetic. " +
+			"L3 requires no undeclared network during the build."
+		return
+	}
+
+	// L3: isolated workflow identity AND a traced, hermetic build.
+	s.SLSABuildLevel = 3
+	s.SLSAVerdict = "SLSA Build L3 (isolated, non-forgeable platform workflow identity; " +
+		s.Tracing + "-traced build is hermetic — no external network egress)."
+}
+
+// slsaEgressHint renders a short, capped summary of the egress endpoints that
+// broke hermeticity, for the L2 verdict — never an unbounded dump.
+func slsaEgressHint(egress []string) string {
+	const max = 3
+	switch {
+	case len(egress) == 0:
+		return "network observed"
+	case len(egress) <= max:
+		return strings.Join(egress, ", ")
+	default:
+		return strings.Join(egress[:max], ", ") + fmt.Sprintf(", +%d more", len(egress)-max)
+	}
+}
+
+// slsaPlatformHint returns the platform URL to name in the L1→L3 upgrade hint,
+// falling back to a readable placeholder when the run was fully offline so the
+// message is still actionable.
+func slsaPlatformHint(platform string) string {
+	if platform == "" {
+		return "<platform>"
+	}
+	return platform
 }
 
 // gitRemoteAnchor returns the git remote URL the collection is anchored by,
@@ -141,7 +267,7 @@ func (s *RunSummary) WriteJSON(w io.Writer) error {
 // The summary is composed into a strings.Builder (whose writes never fail) and
 // flushed in a single checked write, so a partial line never lands on a flaky
 // writer and errcheck stays satisfied.
-func (s *RunSummary) WriteHuman(w io.Writer) {
+func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line human report: one branch per optional summary field; intentionally flat.
 	var b strings.Builder
 	b.WriteString("cilock run summary:\n")
 	fmt.Fprintf(&b, "  step:       %s\n", orNone(s.Step))
@@ -191,6 +317,20 @@ func (s *RunSummary) WriteHuman(w io.Writer) {
 		fmt.Fprintf(&b, "  command exit: %d\n", s.WrappedCommand.ExitCode)
 	}
 	s.writeKeyGuardLine(&b)
+	// Build-isolation evidence behind the SLSA verdict (whether the wrapped
+	// command was traced, and any network egress it made); empty for an untraced
+	// build, which has nothing honest to say.
+	b.WriteString(s.buildEvidenceLine())
+	// The SLSA verdict — the achieved Build level — is the headline a user
+	// needs before they over-trust a local-key signature. Print it last so it
+	// is the final thing on screen. Echo the platform's assurance_level beside
+	// it when a session supplied one.
+	if s.SLSAVerdict != "" {
+		fmt.Fprintf(&b, "  %s\n", s.SLSAVerdict)
+	}
+	if s.AssuranceLevel != "" {
+		fmt.Fprintf(&b, "  platform assurance level: %s\n", s.AssuranceLevel)
+	}
 	_, _ = io.WriteString(w, b.String())
 }
 
@@ -205,6 +345,20 @@ func (s *RunSummary) writeKeyGuardLine(b *strings.Builder) {
 	}
 	fmt.Fprintf(b, "  key guard:  signing key non-extractable (dumpable=%v, yama=%d)\n",
 		kp.Dumpable, kp.YamaPtraceScope)
+}
+
+// buildEvidenceLine renders the human summary's "build:" line from the traced
+// hermeticity evidence, or "" when the build was not traced (no honest claim to
+// make). Split out of WriteHuman so that already-flat printer stays under the
+// cognitive-complexity bar.
+func (s *RunSummary) buildEvidenceLine() string {
+	if s.Tracing == "" {
+		return ""
+	}
+	if s.Hermetic {
+		return fmt.Sprintf("  build:      hermetic (%s-traced, no external network egress)\n", s.Tracing)
+	}
+	return fmt.Sprintf("  build:      NOT hermetic (%s-traced, network egress: %s)\n", s.Tracing, slsaEgressHint(s.NetworkEgress))
 }
 
 // subjectNames returns the (sorted) subject names for the compact human line,
