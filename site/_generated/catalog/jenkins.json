@@ -1,0 +1,85 @@
+{
+  "name": "jenkins",
+  "source": "attestor-backed",
+  "description": "The cilock jenkins attestor captures Jenkins build metadata from JENKINS_/BUILD_ environment variables and signs it into in-toto evidence, binding an artifact to the pipeline run that produced it.",
+  "title": "jenkins",
+  "sidebarPosition": 14,
+  "examplesRepo": "23-jenkins",
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "Jenkins",
+    "source": "https://github.com/jenkinsci/jenkins",
+    "license": "MIT",
+    "vendor": "Jenkins Project / CD Foundation"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "JENKINS_URL"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Jenkins runner context captured (job, node, build id)."
+  },
+  "predicateType": "https://aflock.ai/attestations/jenkins/v0.1",
+  "runType": "prematerial",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "JENKINS_URL=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var JENKINS_URL (any value)",
+  "negativeSetup": "Run with env var JENKINS_URL UNSET",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Captures Jenkins build metadata from `JENKINS_*`, `BUILD_*`, and related environment variables exported into the build's shell, binding the artifact to the pipeline run that produced it."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe attestor first checks for `JENKINS_URL`. If unset, it returns `ErrNotJenkins` (\"not in a jenkins ci job\") and contributes nothing. Otherwise it reads the following environment variables and writes them to the json-tagged fields below:\n\n| Field (JSON) | Env var |\n|---|---|\n| `buildid` | `BUILD_ID` |\n| `buildnumber` | `BUILD_NUMBER` |\n| `buildtag` | `BUILD_TAG` |\n| `pipelineurl` | `BUILD_URL` |\n| `executornumber` | `EXECUTOR_NUMBER` |\n| `javahome` | `JAVA_HOME` |\n| `jenkinsurl` | `JENKINS_URL` |\n| `jobname` | `JOB_NAME` |\n| `nodename` | `NODE_NAME` |\n| `workspace` | `WORKSPACE` |\n\nTwo subjects are recorded as SHA-256 digests of the literal URL strings: `` `pipelineurl:<BUILD_URL>` `` and `` `jenkinsurl:<JENKINS_URL>` ``. Only `pipelineurl:` is exposed as a back-reference for chaining."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nUse this attestor on any Jenkins-driven CI job where you want the resulting attestation to record which pipeline, job, build number, and agent node produced an artifact. Jenkins does not ship a native OIDC identity for build jobs, so this attestor only records self-reported environment variables — pair it with [`jwt`](./jwt) when a Jenkins plugin (for example, the OIDC Provider plugin) issues a verifiable token that can stand in as the functionary identity."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. The attestor consumes environment variables only; there are no `--attestor-jenkins-*` flags."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"buildid\": \"42\",\n  \"buildnumber\": \"42\",\n  \"buildtag\": \"jenkins-my-job-42\",\n  \"pipelineurl\": \"https://jenkins.example.com/job/my-job/42/\",\n  \"executornumber\": \"0\",\n  \"javahome\": \"/opt/java/openjdk\",\n  \"jenkinsurl\": \"https://jenkins.example.com/\",\n  \"jobname\": \"my-job\",\n  \"nodename\": \"built-in\",\n  \"workspace\": \"/var/jenkins_home/workspace/my-job\"\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- All fields are unverified, self-reported strings from the build environment. Anything with write access to the shell — a `sh` step, an upstream pipeline, a malicious dependency — can overwrite them before `cilock` runs. Treat this attestor as build-context metadata, not as proof of provenance.\n- Detection hinges on `JENKINS_URL` being present. If a shell step unsets or shadows it (`env -i`, container with a scrubbed environment), `Attest` returns `ErrNotJenkins{}` and the attestor contributes nothing.\n- On modern Jenkins, `BUILD_ID` is identical to `BUILD_NUMBER`; both fields are populated for backward compatibility and will usually match.\n- Subjects are digests of the URL *strings*, not of their contents. They identify the pipeline run but do not attest that the URL resolves to anything.\n- `JAVA_HOME` is recorded if present in the environment regardless of whether the job uses Java; it reflects the controller/agent JDK, not the build toolchain.\n- Despite the upstream witness doc mentioning a `BUILD_USER` field, this implementation does **not** read `BUILD_USER` — the actor field is absent from the predicate."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal Jenkins runtime context. Reads canonical Jenkins env vars (`BUILD_ID`, `BUILD_URL`, `JOB_NAME`, `JENKINS_URL`) exposed by the agent.\n\n```bash\n# In a Jenkins pipeline / freestyle job:\ncilock run --step jenkins-validation \\\n  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \\\n  --attestations jenkins,environment \\\n  -- echo \"captured Jenkins context\" \n```\n\nValidated by setting the canonical Jenkins env vars in shell. The attestor reads from env, no other inputs. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/23-jenkins](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/23-jenkins)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- [`jwt`](./jwt) for OIDC via Jenkins plugins\n- Upstream: [witness/jenkins.md](https://github.com/in-toto/witness/blob/main/docs/attestors/jenkins.md)"
+    }
+  ],
+  "hasDoc": true
+}

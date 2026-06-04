@@ -1,0 +1,44 @@
+{
+  "name": "argo-workflows",
+  "source": "catalog-only",
+  "description": "Argo Workflows — Kubernetes-native workflow engine (CNCF).",
+  "title": "argo-workflows",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "Argo Workflows",
+    "source": "https://github.com/argoproj/argo-workflows",
+    "license": "Apache-2.0",
+    "vendor": "CNCF / Argoproj"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "ARGO_TEMPLATE"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside an Argo Workflow step. Workflow metadata available via ARGO_* env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "ARGO_TEMPLATE=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var ARGO_TEMPLATE (any value)",
+  "negativeSetup": "Run with env var ARGO_TEMPLATE UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

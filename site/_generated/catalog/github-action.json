@@ -1,0 +1,68 @@
+{
+  "name": "github-action",
+  "source": "attestor-backed",
+  "description": "The cilock github-action attestor captures GitHub Action execution metadata — reference, type, inputs/outputs, exit code, and runtime context — signed into in-toto evidence.",
+  "title": "github-action",
+  "sidebarPosition": 10,
+  "examplesRepo": "20-github-action",
+  "categories": [],
+  "primaryCategory": null,
+  "upstream": null,
+  "gates": [],
+  "recommendedTrace": "off",
+  "triggers": [],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {},
+  "predicateType": "https://aflock.ai/attestations/github-action/v0.1",
+  "runType": "execute",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": null,
+  "positiveSetup": "no detector.yaml; this attestor is always-on or user-driven",
+  "negativeSetup": null,
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Captures metadata about a GitHub Action execution — the action reference, type, inputs/outputs, exit code, and a small slice of GitHub Actions runtime context."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe attestor records pre-set action metadata supplied by the action runner, plus a few `GITHUB_*` env vars sampled at `Attest()` time. Unlike `command-run`, it does not itself shell out — execution happens via a runner-provided `ExecuteFunc`.\n\nTop-level fields:\n\n- `actionref` — action reference such as `actions/checkout@v4`. Also emitted as a subject (`actionref:<ref>`).\n- `actiontype` — `javascript`, `docker`, or `composite`.\n- `actionname` — `name` field from the action's `action.yml`.\n- `actioninputs` — map of user-provided inputs.\n- `actionoutputs` — map of captured outputs.\n- `exitcode` — exit code returned by the execute function.\n- `actiondir` — resolved local path of the action on disk.\n- `refpinned` — true if `actionref` was pinned to a commit SHA.\n- `docker` — nested `DockerContainerConfig` (populated only for docker actions): `image`, `network`, `workspace`, `entrypoint`, `envcount`, `args`.\n- `runid` — from `GITHUB_RUN_ID`.\n- `workflowname` — from `GITHUB_WORKFLOW`.\n- `jobname` — from `GITHUB_JOB`.\n\nThe only `GITHUB_*` env vars consumed are `GITHUB_RUN_ID`, `GITHUB_WORKFLOW`, and `GITHUB_JOB`. Anything else about the workflow (event, actor, ref, sha, runner OS, repository) is **not** in this attestor — see `github` for OIDC-derived identity."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nInside GitHub Actions workflows when an action is being executed under cilock's action runner. `cilock-action` wires this attestor in by default; you generally don't add it manually."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. The attestor is configured by the in-process action runner via functional options (`WithActionRef`, `WithActionType`, `WithDockerConfig`, `WithExecuteFunc`, etc.), not by CLI flags."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"actionref\": \"actions/checkout@v4\",\n  \"actiontype\": \"javascript\",\n  \"actionname\": \"Checkout\",\n  \"actioninputs\": { \"ref\": \"main\" },\n  \"actionoutputs\": { \"ref\": \"main\" },\n  \"exitcode\": 0,\n  \"actiondir\": \"/runner/_actions/actions/checkout/v4\",\n  \"refpinned\": false,\n  \"docker\": {\n    \"image\": \"ghcr.io/example/action:1.2.3\",\n    \"network\": \"none\",\n    \"workspace\": \"/github/workspace\",\n    \"entrypoint\": \"/entrypoint.sh\",\n    \"envcount\": 12,\n    \"args\": [\"--flag\"]\n  },\n  \"runid\": \"1234567890\",\n  \"workflowname\": \"release\",\n  \"jobname\": \"build\"\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- The predicate is `aflock.ai/attestations/github-action/v0.1` — a cilock-native type, not an upstream in-toto or witness predicate.\n- `Attest()` runs the `ExecuteFunc` (if set) between material and product attestors, so file-system side effects of the action are visible to `product`. If execution fails, `exitcode` is still recorded and the error is returned.\n- Only `actionref` becomes a subject; if it's empty, the attestation has no subjects.\n- The three `GITHUB_*` env vars are only read at `Attest()` time. Outside Actions they will simply be empty strings."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal GitHub Actions runtime context. Reads canonical `GITHUB_*` env vars exposed to every Actions job and records them in a predicate.\n\n```bash\n# Same workflow as the github attestor; both are run together:\ncilock run --step github-validation \\\n  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \\\n  --attestations environment,git,github,github-action \\\n  -- echo \"real GH Actions run\" \n```\n\nValidated alongside `github` in the same workflow run. Captures real `GITHUB_RUN_ID`, `GITHUB_WORKFLOW`, `GITHUB_REPOSITORY`, `RUNNER_OS`, etc. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/20-github-action](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/20-github-action)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- [`github`](./github) for OIDC claims\n- [GitHub Action reference](../reference/github-action)"
+    }
+  ],
+  "hasDoc": true
+}

@@ -1,0 +1,70 @@
+.metaTable {
+  width: 100%;
+  margin: 0 0 1rem;
+}
+
+.metaTable th {
+  text-align: left;
+  white-space: nowrap;
+  width: 14rem;
+  vertical-align: top;
+}
+
+.generatedNote {
+  font-size: 0.8rem;
+  color: var(--ifm-color-emphasis-600);
+  margin: 0.25rem 0 1rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: var(--ifm-color-emphasis-200);
+  color: var(--ifm-color-emphasis-800);
+  margin-right: 0.35rem;
+}
+
+.triggerList {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.triggerKind {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.85em;
+  color: var(--ifm-color-primary);
+}
+
+.generatedFooter {
+  margin-top: 2.5rem;
+  font-size: 0.9rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.generatedFooter hr {
+  margin-bottom: 1rem;
+}
+
+.versionBar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 0.5rem;
+  background: var(--ifm-color-emphasis-100);
+}
+
+.versionBar select {
+  font-family: var(--ifm-font-family-monospace);
+  padding: 0.1rem 0.3rem;
+}
+
+.legacyWarn {
+  font-size: 0.85rem;
+  color: var(--ifm-color-warning-darker);
+}

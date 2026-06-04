@@ -1,0 +1,97 @@
+---
+title: "environment"
+description: "The cilock environment attestor captures the host OS, hostname, username, and full process environment with sensitive values obfuscated, signing them into in-toto evidence."
+sidebar_position: 5
+---
+
+{/* GENERATED — do not edit. Source: rookery attestation/detection/docs/environment.doc.md. Regenerate: npm run gen */}
+import AttestorMeta from '@site/src/components/Catalog/AttestorMeta';
+import GeneratedFooter from '@site/src/components/Catalog/GeneratedFooter';
+import meta from '@catalog/environment.json';
+
+# `environment` attestor
+
+Captures the host OS, hostname, username, and the full process environment (with sensitive variables obfuscated by default) at attestation time.
+
+<AttestorMeta data={meta} />
+
+## What it captures
+
+Four json-tagged fields on the `Attestor` struct:
+
+- **`os`** — `runtime.GOOS` (e.g. `linux`, `darwin`, `windows`). No kernel version, no architecture.
+- **`hostname`** — `os.Hostname()`.
+- **`username`** — `user.Current().Username`.
+- **`variables`** — map of every `KEY=VAL` entry returned by `os.Environ()`, after the sensitive-variable filter has been applied. Keys are always preserved; only values are touched.
+
+Sensitive-variable filter behavior (`plugins/attestors/environment/filter.go`, `obfuscate.go`):
+
+- The blocklist is split into two sets at runtime. Entries containing `*` are compiled as **gobwas/glob** patterns; entries without `*` become **case-insensitive exact-match** keys.
+- Both the env-var key and the blocklist entry are upper-cased before comparison, so `aws_secret_key` matches `AWS_SECRET_ACCESS_KEY` and `*token*` matches `MyToken`.
+- Default mode is **obfuscate**: matched values are replaced with the literal string `******`. The key still appears in `variables`.
+- With `--env-filter-sensitive-vars`, matched entries are **dropped entirely** — neither key nor value appears in `variables`.
+- `--env-allow-sensitive-key` excludes specific keys from the filter (exact-match only, no globs).
+
+The default blocklist (`attestation/sensitive_env_vars.go::DefaultSensitiveEnvList`) ships these glob patterns: `*TOKEN*`, `*SECRET*`, `*API_KEY*`, `*PASSWORD*`, `*JWT*`, `*sshKey*`, `*passphrase*`. It also carries ~70 explicit keys including `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AZURE_CLIENT_SECRET`, `GH_TOKEN`, `GOOGLE_APPLICATION_CREDENTIALS`, `CI_JOB_JWT`, `CI_JOB_JWT_V2`, `CI_JOB_TOKEN`, `VAULT_TOKEN`, `ACTIONS_RUNTIME_TOKEN`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `DOCKER_PASSWORD`, `NPM_AUTH_TOKEN`, `SLACK_TOKEN`, `SNYK_TOKEN`, `STRIPE_API_KEY`, cloud-provider keys for Heroku/DigitalOcean/Vultr/Sauce/Sentry/Percy/Twilio, and the bare key `TOKEN`.
+
+## When to use
+
+Always. It is one of two default-on attestors (with `git`) and provides the baseline host/identity context every downstream collection links back to. Disable it only if you are intentionally producing an environment-free predicate.
+
+## Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--env-filter-sensitive-vars` | `false` | Switch from obfuscation to outright removal — matched keys and values are dropped from `variables`. |
+| `--env-disable-default-sensitive-vars` | `false` | Skip the built-in `DefaultSensitiveEnvList`; only `--env-add-sensitive-key` entries are sensitive. |
+| `--env-add-sensitive-key` | `[]` | Repeatable. Adds keys or globs (e.g. `*INTERNAL*`) to the blocklist. |
+| `--env-allow-sensitive-key` | `[]` | Repeatable. Allowlist that bypasses the filter for specific keys. No glob support. |
+
+These four flags live on the `cilock run` command (in `cilock/internal/options/run.go`), not as `--attestor-environment-*` flags. The environment attestor registers no per-attestor flags of its own.
+
+## Output shape
+
+```json
+{
+  "os": "linux",
+  "hostname": "runner-abc123",
+  "username": "runner",
+  "variables": {
+    "PATH": "/usr/local/bin:/usr/bin:/bin",
+    "HOME": "/home/runner",
+    "GH_TOKEN": "******",
+    "AWS_ACCESS_KEY_ID": "******",
+    "CI_JOB_JWT": "******"
+  }
+}
+```
+
+## Gotchas
+
+- **The key still leaks.** In the default obfuscate mode only the value becomes `******` — `GH_TOKEN`, `AWS_ACCESS_KEY_ID`, `CI_JOB_JWT_V2` etc. remain visible in the predicate. If even the presence of a key is sensitive, use `--env-filter-sensitive-vars`.
+- **Glob vs exact is decided by `*`.** A blocklist entry like `MY_SECRET` is exact-match (case-insensitive); `MY_SECRET*` is a glob. Half-baked patterns like `MY_SECRET_` will only match that literal key. There is no regex support.
+- **Glob patterns are normalised to uppercase.** Mixed-case patterns like `*sshKey*` and `*passphrase*` in the default list are upper-cased at compile time, then matched against upper-cased keys — so they catch any casing.
+- **Panic-safe matching.** `safeGlobMatch` recovers from `gobwas/glob` panics on adversarial patterns and treats them as non-matches; an unmatched-due-to-panic value is **not** filtered. Audit custom patterns before trusting them.
+- **No kernel, no arch.** Despite what older witness docs imply, this attestor records only `runtime.GOOS` — not kernel version, not `runtime.GOARCH`. Hardware/kernel context must come from a separate attestor.
+- **Shared capturer.** `Attest` writes the capturer into `AttestationContext.SetEnvironmentCapturer` so other attestors (e.g. `command-run`) apply the same filter to any environment they record.
+
+## CLI example
+
+Default. Captures the process's ENV vars; sensitive keys (TOKEN, KEY, SECRET, PASSWORD) are redacted to `****`.
+
+```bash
+cilock run --step my-step \
+  --signer-file-key-path key.pem --outfile attestation.json \
+  --attestations environment \
+  -- echo hi 
+```
+
+Validated. Default attestor. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/04-environment](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/04-environment).
+
+## See also
+- [Catalog row](../reference/attestor-catalog.md)
+- Upstream: [witness/environment.md](https://github.com/in-toto/witness/blob/main/docs/attestors/environment.md)
+
+<script type="application/ld+json" dangerouslySetInnerHTML={{__html: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"environment — cilock attestor\",\"description\":\"The cilock environment attestor captures the host OS, hostname, username, and full process environment with sensitive values obfuscated, signing them into in-toto evidence.\",\"url\":\"https://cilock.aflock.ai/attestors/environment\"}"}} />
+
+<GeneratedFooter name="environment" />

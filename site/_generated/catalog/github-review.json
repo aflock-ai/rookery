@@ -1,0 +1,59 @@
+{
+  "name": "github-review",
+  "source": "attestor-backed",
+  "description": "Snapshots GitHub PR review state for the current commit (or an explicit SHA/PR) via the GitHub REST API (token: GH_TOKEN/GITHUB_TOKEN, or `gh auth token` fallback).",
+  "title": "github-review",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "code-review"
+  ],
+  "primaryCategory": "code-review",
+  "upstream": {
+    "name": "GitHub Pull Request Reviews API",
+    "source": "https://docs.github.com/en/rest/pulls/reviews",
+    "license": "commercial",
+    "vendor": "GitHub, Inc. / Microsoft"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": ".git/HEAD"
+    },
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "GITHUB_TOKEN"
+    },
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "GH_TOKEN"
+    },
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "GITHUB_ACTIONS"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "GitHub PR review state captured. Subjects include commit SHA, repo, PR numbers, and every distinct reviewer login. Use policyverify to gate on `state == APPROVED` from required reviewers."
+  },
+  "predicateType": "https://aflock.ai/attestations/github-review/v0.1",
+  "runType": "prematerial",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "touch .git/HEAD && cilock plan --format=json -- echo hi",
+  "positiveSetup": "Create file \".git/HEAD\" in cwd",
+  "negativeSetup": "Run in a tempdir without that file",
+  "docSections": [],
+  "hasDoc": false
+}

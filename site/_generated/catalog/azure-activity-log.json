@@ -1,0 +1,44 @@
+{
+  "name": "azure-activity-log",
+  "source": "catalog-only",
+  "description": "Azure Activity Log / Monitor logs.",
+  "title": "azure-activity-log",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "runtime-event"
+  ],
+  "primaryCategory": "runtime-event",
+  "upstream": {
+    "name": "Azure Monitor",
+    "source": "https://learn.microsoft.com/azure/azure-monitor/",
+    "license": "commercial",
+    "vendor": "Microsoft Azure"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "az monitor"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "az monitor query observed. Captured Activity Log slice."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- az monitor .",
+  "detectionCommand": "cilock plan --format=json -- az monitor [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"az monitor\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

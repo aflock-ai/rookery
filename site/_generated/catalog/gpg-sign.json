@@ -1,0 +1,44 @@
+{
+  "name": "gpg-sign",
+  "source": "catalog-only",
+  "description": "GnuPG signing — long-form artifact signature.",
+  "title": "gpg-sign",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "sign"
+  ],
+  "primaryCategory": "sign",
+  "upstream": {
+    "name": "GnuPG",
+    "source": "https://gnupg.org/",
+    "license": "GPL-3.0-or-later",
+    "vendor": "Free Software Foundation"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "gpg --sign"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "GPG signing observed. Detached signature in .asc/.sig."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- gpg --sign .",
+  "detectionCommand": "cilock plan --format=json -- gpg --sign [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"gpg --sign\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

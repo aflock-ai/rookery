@@ -1,0 +1,46 @@
+{
+  "name": "melange",
+  "source": "catalog-only",
+  "description": "melange — builds apk packages from declarative YAML pipelines (Chainguard); emits an SBOM per package.",
+  "title": "melange",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "build"
+  ],
+  "primaryCategory": "build",
+  "upstream": {
+    "name": "melange",
+    "source": "https://github.com/chainguard-dev/melange",
+    "license": "Apache-2.0",
+    "vendor": "Chainguard"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "full",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "melange build"
+    }
+  ],
+  "emitsFormats": [
+    "sbom"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "melange build observed. The sbom attestor captures the SPDX SBOM melange generates for each apk."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- melange build .",
+  "detectionCommand": "cilock plan --format=json -- melange build [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"melange build\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

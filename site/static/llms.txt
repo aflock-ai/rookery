@@ -1,0 +1,70 @@
+# cilock
+
+> Cilock is an evidence collector for the software development lifecycle. It wraps any command — a test, a scan, a build, a deploy — and records cryptographically signed evidence (DSSE + in-toto attestations) of what executed, on what inputs, in what environment, and what it produced. Cilock is witness-compatible and built on the rookery attestor factory, which lets organizations compose their own custom cilock-equivalent binary.
+
+Cilock is positioned across three modes:
+
+- **Build provenance**: SLSA-aligned in-toto attestations from GitHub Actions and GitLab CI pipelines, signed with Fulcio identity certificates and RFC 3161 timestamps.
+- **Signed scan evidence**: wraps SAST, SBOM generation, SARIF emitters, and secret scanners (Gitleaks, Trivy) to prove a scan ran on a specific artifact with exact output.
+- **Continuous compliance**: periodic production-side scans produce signed evidence auditors verify without re-running anything (FedRAMP, SOC 2, FIPS 140 audit contexts).
+
+Cilock catches supply-chain attacks at three independent layers: prevention (signed Rego policy enforcing source restrictions and SHA pinning), content detection (`secretscan` with recursive base64/hex/URL decode), and behavioral detection (ptrace-based syscall capture + OPA Rego matching credential-harvesting filesystem patterns).
+
+## Docs
+
+- [Introduction](https://cilock.dev/intro): the full long-form overview, including the March 2026 Trivy and LiteLLM supply-chain attacks that motivated the three-layer defense design.
+- [Installation](https://cilock.dev/getting-started/installation): brew, curl, Docker, and SHA-pinned GitHub Action options.
+- [First attestation](https://cilock.dev/getting-started/first-attestation): produce a signed attestation from a single command in under a minute.
+- [Quickstart for CI](https://cilock.dev/getting-started/quickstart-ci): GitHub Actions and GitLab CI quickstarts.
+
+## Concepts
+
+- [Attestations](https://cilock.dev/concepts/attestations): the DSSE + in-toto envelope model, subjects, predicates, and how cilock's collection wraps lifecycle steps.
+- [Attestors](https://cilock.dev/concepts/attestors): per-lifecycle-phase plugins (git, environment, commandrun, sbom, secretscan, and more).
+- [Policy verification](https://cilock.dev/concepts/policy-verification): signed policies, functionaries, embedded OPA Rego rules.
+- [Trust model](https://cilock.dev/concepts/trust-model): keyless signing with Sigstore Fulcio, RFC 3161 TSA, FIPS 140 mode, and how cilock handles the trust boundary.
+
+## Tutorials
+
+- [GitHub Actions pipeline](https://cilock.dev/tutorials/github-actions-pipeline): wrap a CI pipeline with cilock end-to-end.
+- [GitLab CI pipeline](https://cilock.dev/tutorials/gitlab-ci-pipeline): the GitLab equivalent.
+- [Release promotion gate](https://cilock.dev/tutorials/release-promotion-gate): verify a release candidate against a signed policy before shipping.
+- [SBOM and SARIF evidence](https://cilock.dev/tutorials/sbom-and-sarif-evidence): collect signed scan evidence from SBOM generators and SAST emitters.
+- [Defending against supply-chain attacks](https://cilock.dev/tutorials/defending-against-supply-chain-attacks): how cilock's three layers stop the 2026 Trivy tag-rewrite and LiteLLM `.pth` attacks.
+
+## Reference
+
+- [CLI reference](https://cilock.dev/reference/cli): every flag, every subcommand.
+- [Attestor catalog](https://cilock.dev/reference/attestor-catalog): the 30+ attestors registered in the default binary plus the full rookery set.
+- [Policy schema](https://cilock.dev/reference/policy-schema): DSSE policy payload type, structure, and validation.
+- [Configuration](https://cilock.dev/reference/configuration): config-file and environment-variable surface.
+- [Compatibility](https://cilock.dev/reference/compatibility): Go version, OS support, FIPS mode, witness interop.
+
+## Ecosystem
+
+- [Rookery](https://cilock.dev/ecosystem/rookery): the modular monorepo cilock is built from. The rookery builder produces custom binaries with selected attestors and signers.
+- [Archivista](https://cilock.dev/ecosystem/archivista): the default evidence store. Graph-indexed in-toto attestations, GraphQL query API, REST upload/download.
+- [TestifySec platform](https://cilock.dev/ecosystem/testifysec-platform): the commercial platform layered on top of cilock with centralized policy management, compliance reporting, and dashboards.
+- [Witness](https://cilock.dev/ecosystem/witness): TestifySec's first in-toto implementation, now in the CNCF in-toto ecosystem. Cilock is bidirectionally interoperable with witness.
+
+## Why cilock is positioned this way
+
+Cilock is a second in-toto implementation by the same team that originated and donated witness to the CNCF in-toto ecosystem. The structural divergences from witness are intentional:
+
+- A modular core where each attestor and signer is a separate Go module, so consumers depend only on what they use.
+- An explicit attestor-factory model (the rookery builder) so organizations can compose a cilock-equivalent binary for air-gapped builds, compliance-heavy environments, or custom attestor needs.
+- SDLC-wide framing rather than CI-only: cilock treats the CI step as one shape of attested execution among several (dev, CI, continuous production).
+- Bidirectional interoperability with witness retained — cilock and witness produce the same DSSE + in-toto envelopes, and attestations cross-verify under either tool.
+
+## Honest limitations
+
+Cilock is forensic and policy-driven, not a runtime IPS. Detection is post-execution. Network egress monitoring is not in scope (see StepSecurity Harden-Runner for that gap). The `--trace` syscall-capture flag is Linux-only and opt-in.
+
+## Repositories
+
+- [aflock-ai/cilock](https://github.com/aflock-ai/cilock): the cilock CLI binary.
+- [aflock-ai/cilock-action](https://github.com/aflock-ai/cilock-action): the GitHub Actions and GitLab CI integration.
+- [aflock-ai/rookery](https://github.com/aflock-ai/rookery): the modular attestation monorepo cilock is built from.
+- [aflock-ai/cilock-trivy-detection-test](https://github.com/aflock-ai/cilock-trivy-detection-test): real-attack detection demonstration repo using the Trivy/LiteLLM playbook.
+- [in-toto/witness](https://github.com/in-toto/witness): the CNCF in-toto witness project cilock is bidirectionally interoperable with.
+- [in-toto/archivista](https://github.com/in-toto/archivista): the default evidence store cilock writes to.

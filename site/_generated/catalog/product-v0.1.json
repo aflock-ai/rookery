@@ -1,0 +1,48 @@
+{
+  "name": "product-v0.1",
+  "source": "attestor-backed",
+  "description": "The legacy v0.1 product wire format — a flat path→Product map with per-file MIME and digest, one file subject each. Verify-only today; current builds emit product v0.3.",
+  "title": "product (v0.1)",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [],
+  "primaryCategory": null,
+  "upstream": null,
+  "gates": [],
+  "recommendedTrace": "off",
+  "triggers": [],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {},
+  "predicateType": "https://aflock.ai/attestations/product/v0.1",
+  "runType": "product",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": null,
+  "positiveSetup": "no detector.yaml; this attestor is always-on or user-driven",
+  "negativeSetup": null,
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "> **Status:** this documents the **historical** v0.1 wire format, not emitted by any current cilock build — new attestations use the latest version (select it from the version dropdown above). The v0.1 decoder remains registered so `cilock verify` can read pre-cutover attestations.\n\nSnapshots the working directory after the step's command runs and records each new or changed file with its hash and detected MIME type."
+    },
+    {
+      "slug": "v0-1-wire-format",
+      "title": "v0.1 wire format",
+      "markdown": "## v0.1 wire format\n\nThe v0.1 predicate body is a flat `map[string]Product` keyed by file path relative to the working directory. Each entry carries the json-tagged fields of `attestation.Product`:\n\n- `mime_type` — MIME type from `gabriel-vasile/mimetype` detection on the file contents.\n- `digest` — `cryptoutil.DigestSet` of the file (sha256, plus any other algorithms the producing run configured).\n\nExample:\n\n```json\n{\n  \"dist/cilock\": {\n    \"mime_type\": \"application/x-mach-binary\",\n    \"digest\": {\n      \"sha256\": \"…\",\n      \"gitoid:sha1\": \"gitoid:blob:sha1:…\"\n    }\n  },\n  \"dist/sbom.spdx.json\": {\n    \"mime_type\": \"application/spdx+json\",\n    \"digest\": { \"sha256\": \"…\" }\n  }\n}\n```\n\nThe DSSE statement's `subject` array carries one `file:<path>` entry per product. The `product-v0.1` `LegacyDecoder` (in `plugins/attestors/product/legacy.go`) reads this shape and exposes `Subjects()` for policy BFS lookup; `BackRefs()` returns empty (per-file BackRefs on historical attestations are an explosion risk in the verify-time graph walk). `Attest()` returns `errLegacyDecodeOnly` — the decoder cannot produce."
+    },
+    {
+      "slug": "why-the-cutover",
+      "title": "Why the cutover",
+      "markdown": "## Why the cutover\n\nv0.1's per-file subject array caused two real problems Archivista had to work around:\n\n- **Placeholder explosion.** A `pip install litellm` produces ~3,200 files, each emitting its own `file:<path>` subject. Multi-file builds blew through MySQL's 65,535 prepared-statement parameter cap.\n- **10+ MB DSSE envelopes.** Every file's path and digest landed in the signed predicate body.\n\nThe latest version publishes a single `tree:products` subject (the RFC 6962 Merkle root) and moves the per-file claims into separate [inclusion-proof attestations](./inclusion-proof) emitted on demand by `cilock prove`. See [rookery#135](https://github.com/aflock-ai/rookery/issues/135) for the full rationale."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Inclusion-proof attestor](./inclusion-proof) — the per-file claim primitive\n- Upstream: [witness/product.md](https://github.com/in-toto/witness/blob/main/docs/attestors/product.md)"
+    }
+  ],
+  "hasDoc": true
+}

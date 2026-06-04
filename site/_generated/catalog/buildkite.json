@@ -1,0 +1,44 @@
+{
+  "name": "buildkite",
+  "source": "catalog-only",
+  "description": "Buildkite CI/CD context.",
+  "title": "buildkite",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "Buildkite",
+    "source": "https://buildkite.com/docs",
+    "license": "commercial",
+    "vendor": "Buildkite"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "BUILDKITE"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside Buildkite. Build metadata available in BUILDKITE_* env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "BUILDKITE=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var BUILDKITE (any value)",
+  "negativeSetup": "Run with env var BUILDKITE UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

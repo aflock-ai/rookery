@@ -1,0 +1,44 @@
+{
+  "name": "yarn-audit",
+  "source": "catalog-only",
+  "description": "yarn audit — Yarn dependency vulnerability scanner.",
+  "title": "yarn-audit",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "yarn audit",
+    "source": "https://yarnpkg.com/cli/audit",
+    "license": "BSD-2-Clause",
+    "vendor": "Yarn / Meta"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "yarn audit"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "yarn audit observed. --json output captures findings."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- yarn audit .",
+  "detectionCommand": "cilock plan --format=json -- yarn audit [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"yarn audit\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

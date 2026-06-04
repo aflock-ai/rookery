@@ -1,0 +1,44 @@
+{
+  "name": "pnpm-install",
+  "source": "catalog-only",
+  "description": "pnpm install — fast disk-efficient Node.js package manager.",
+  "title": "pnpm-install",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "dependency-resolve"
+  ],
+  "primaryCategory": "dependency-resolve",
+  "upstream": {
+    "name": "pnpm",
+    "source": "https://github.com/pnpm/pnpm",
+    "license": "MIT",
+    "vendor": "pnpm"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "light",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "pnpm install"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "pnpm install observed. lockfiles attestor captures pnpm-lock.yaml."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- pnpm install .",
+  "detectionCommand": "cilock plan --format=json -- pnpm install [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"pnpm install\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

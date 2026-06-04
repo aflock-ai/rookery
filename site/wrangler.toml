@@ -1,0 +1,43 @@
+# Cloudflare Pages config (infrastructure as code) for the `cilock` project.
+# This file is the source of truth for the project's runtime bindings; do NOT
+# add bindings via the dashboard (that would drift from this file).
+#
+# Deploy (see .github/workflows/deploy-cloudflare.yml):
+#   wrangler pages deploy            # reads pages_build_output_dir + functions/ + bindings
+#
+# One-time D1 bootstrap (schema lives in schema.sql, also code):
+#   wrangler d1 create cilock-analytics            # -> copy the id into database_id below
+#   wrangler d1 execute cilock-analytics --remote --file=schema.sql
+#
+# Access policy for /dash is defined in infra/cloudflare/ (Terraform).
+
+name = "cilock"
+pages_build_output_dir = "build"
+compatibility_date = "2024-11-01"
+
+# D1 — capture sidecar (functions/_middleware.ts) + beacon (functions/cl/e.ts) + dashboard (functions/dash).
+[[d1_databases]]
+binding = "DB"
+database_name = "cilock-analytics"
+database_id = "629a819f-a221-4d47-8d60-1403a92b538b"
+
+# R2 — release artifact distribution (functions/dl, functions/install.sh, functions/policy).
+# The bucket is PRIVATE; the only public read path is through these Pages Functions,
+# which gate on the manifest and relay every download to the cross-property analytics hub
+# (analytics.testifysec.com/ingest/web; see functions/_lib/dist.ts logDownload — overridable
+# via CILOCK_ANALYTICS_HUB). Publishing is done by scripts/publish-release.mjs
+# (verify-then-upload) — never write to this bucket by hand.
+#
+# One-time bucket bootstrap (the bucket already exists in this account):
+#   wrangler r2 bucket create cilock-dist
+[[r2_buckets]]
+binding = "DIST"
+bucket_name = "cilock-dist"
+
+# Workers Analytics Engine — optional scalable write-time metrics (the dashboard
+# reads D1, not WAE). Requires a one-time account enablement before the binding can
+# attach: https://dash.cloudflare.com/<account>/workers/analytics-engine
+# Once enabled, uncomment to turn on the WAE write path (functions already guard on it).
+# [[analytics_engine_datasets]]
+# binding = "ANALYTICS"
+# dataset = "cilock_web"

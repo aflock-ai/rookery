@@ -1,0 +1,47 @@
+{
+  "name": "kics",
+  "source": "catalog-only",
+  "description": "KICS — Checkmarx IaC security scanner.",
+  "title": "kics",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan",
+    "compliance-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "KICS",
+    "source": "https://github.com/Checkmarx/kics",
+    "license": "Apache-2.0",
+    "vendor": "Checkmarx"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "kics"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "KICS scan observed. --report-formats sarif|json captures findings."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- kics .",
+  "detectionCommand": "cilock plan --format=json -- kics [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"kics\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

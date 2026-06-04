@@ -1,0 +1,44 @@
+{
+  "name": "cloudbuild-gcp",
+  "source": "catalog-only",
+  "description": "Google Cloud Build — GCP managed CI.",
+  "title": "cloudbuild-gcp",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "Cloud Build",
+    "source": "https://cloud.google.com/build/docs",
+    "license": "commercial",
+    "vendor": "Google Cloud"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "BUILD_ID"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside GCP Cloud Build. Build metadata available via BUILD_* and PROJECT_ID env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "BUILD_ID=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var BUILD_ID (any value)",
+  "negativeSetup": "Run with env var BUILD_ID UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

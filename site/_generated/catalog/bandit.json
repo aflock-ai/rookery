@@ -1,0 +1,44 @@
+{
+  "name": "bandit",
+  "source": "catalog-only",
+  "description": "Bandit — Python static security analyzer (PyCQA).",
+  "title": "bandit",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "Bandit",
+    "source": "https://github.com/PyCQA/bandit",
+    "license": "Apache-2.0",
+    "vendor": "PyCQA"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "bandit"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Bandit invocation observed. JSON findings (-f json) captured as a product."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- bandit .",
+  "detectionCommand": "cilock plan --format=json -- bandit [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"bandit\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

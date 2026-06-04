@@ -1,0 +1,44 @@
+{
+  "name": "tekton-pipelines",
+  "source": "catalog-only",
+  "description": "Tekton Pipelines — Kubernetes-native CI/CD (CDF).",
+  "title": "tekton-pipelines",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "Tekton",
+    "source": "https://github.com/tektoncd/pipeline",
+    "license": "Apache-2.0",
+    "vendor": "CD Foundation / Tekton"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "TEKTON_RESOURCES"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside a Tekton task. Step metadata in TEKTON_* env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "TEKTON_RESOURCES=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var TEKTON_RESOURCES (any value)",
+  "negativeSetup": "Run with env var TEKTON_RESOURCES UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

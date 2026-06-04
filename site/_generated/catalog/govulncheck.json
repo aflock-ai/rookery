@@ -1,0 +1,101 @@
+{
+  "name": "govulncheck",
+  "source": "attestor-backed",
+  "description": "Scan Go modules for vulnerabilities with reachability via govulncheck under cilock — the SARIF report becomes a signed v0.3 attestation parsed by the rookery sarif attestor.",
+  "title": "govulncheck",
+  "sidebarPosition": 10,
+  "examplesRepo": "tool-govulncheck-sarif",
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "govulncheck",
+    "source": "https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck",
+    "license": "BSD-3-Clause",
+    "vendor": "The Go Authors"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "govulncheck"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "govulncheck"
+    },
+    {
+      "gate": "post",
+      "kind": "file_exists",
+      "value": "go.mod"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "govulncheck*.json | **/govulncheck*.json"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "govulncheck results captured. Call-graph-reachable Go vulns preserved."
+  },
+  "predicateType": "https://aflock.ai/attestations/govulncheck/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- govulncheck .",
+  "detectionCommand": "cilock plan --format=json -- govulncheck [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"govulncheck\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "you-already-know-how-to-run-govulncheck-here-s-what-cilock-adds",
+      "title": "You already know how to run govulncheck. Here's what cilock adds.",
+      "markdown": "## You already know how to run govulncheck. Here's what cilock adds.\n\nOn its own, `govulncheck` writes a report file. That's an artifact you have to remember, can't prove came from a specific build, and can't tie back to the artifact it was scanning. Cilock wraps the same command and turns the report into a **signed, linked attestation** in your supply chain graph.\n\n### What cilock adds\n\n**Signed evidence.** govulncheck's reachability claims are signed by the CI workflow. \"This vulnerability is not exploitable in our binary\" becomes a defensible audit statement, not a hand-wave.\n\n**Linked to the artifact.** Each govulncheck attestation links to the Go module materials, the binary it analyzed, and the git commit — auditors trace reachability claims back to the actual artifact.\n\n**Policy at the deploy gate.** Policy: \"vulnerability findings without a call-trace are advisory; findings WITH a trace block the deploy.\" Cilock verify reads the reachable flag.\n\n**Central audit.** When the next Spring4Shell happens, you can prove which Go services are reachably affected vs imported-but-safe in minutes, not weeks.\n\n### From code to prod, end-to-end\n\n```\n     git commit (git attestor)\n           ↓ subject digest matches\n     CI run (github attestor: OIDC, run id)\n           ↓ same run produces\n     govulncheck scan (this attestor: signed findings)\n           ↓ back-refs the artifact\n     image / SBOM / binary it scanned\n           ↓ same digest gates\n     cilock verify policy → allow/deny deploy\n```\n\nEach arrow is a cryptographic subject digest match. No human reads logs, no copy-paste between systems. The same digest links the scan to the artifact to the deploy decision."
+    },
+    {
+      "slug": "validated-invocation",
+      "title": "Validated invocation",
+      "markdown": "## Validated invocation\ncilock invokes govulncheck directly so `command-run/v0.1` records the literal govulncheck argv. govulncheck has no `-o`/`--output` flag (it writes SARIF to stdout), so a single shell redirect routes its output to a file the product attestor can hash — that's not the `cp` antipattern, it's the only way govulncheck exposes file output today:\n\n```bash\ncilock run --step govulncheck-scan \\\n  --signer-file-key-path key.pem --outfile attestation.json \\\n  --attestations sarif,environment,git \\\n  -- sh -c 'govulncheck -format sarif ./... > govulncheck.sarif'\n```\n\nThe wrapped `sh -c` records `[\"sh\",\"-c\",\"govulncheck -format sarif ./... > govulncheck.sarif\"]` in command-run — the literal govulncheck argv is right there in the captured envelope, not hidden behind a `cp` of a file produced outside cilock's view. When [`golang/vuln`](https://github.com/golang/vuln) adds a file-output flag, the shell wrapper can be dropped."
+    },
+    {
+      "slug": "what-gets-captured",
+      "title": "What gets captured",
+      "markdown": "## What gets captured\n\n| Predicate type | Source |\n|---|---|\n| `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |\n| `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, tags, dirty status, parents |\n| `https://aflock.ai/attestations/material/v0.3` | Merkle root over the Go module before govulncheck runs |\n| `https://aflock.ai/attestations/command-run/v0.1` | the literal `sh -c 'govulncheck …'` argv + exit code + ptrace |\n| `https://aflock.ai/attestations/product/v0.3` | Merkle root over `govulncheck.sarif` as a real product file |\n| `https://aflock.ai/attestations/sarif/v0.1` | the parsed SARIF document (driver = `govulncheck`, rules + results) |"
+    },
+    {
+      "slug": "why-this-shape",
+      "title": "Why this shape",
+      "markdown": "## Why this shape\n\n| Antipattern (older docs) | Correct shape (this example) |\n|---|---|\n| `cilock run ... -- bash -c \"cp govulncheck.sarif govulncheck-product.sarif\"` after running govulncheck outside cilock | `cilock run ... -- sh -c 'govulncheck -format sarif ./... > govulncheck.sarif'` |\n| `command-run.cmd` records `[\"bash\",\"-c\",\"cp …\"]` — cilock \"ran\" cp | `command-run.cmd` records `[\"sh\",\"-c\",\"govulncheck -format sarif ./... > govulncheck.sarif\"]` — the literal govulncheck argv is in the envelope |\n| The ptrace spy traces `cp`, not govulncheck | The ptrace spy traces govulncheck's syscalls because cilock is its parent (via the shell) |\n| Product is a copy of a file govulncheck wrote elsewhere | Product is the file govulncheck wrote inside the wrapped step |\n\nThe `sh -c` wrapper is a tool-output limitation — govulncheck (as of v1.x) has no `-o` / `--output` flag and writes SARIF only to stdout. A single shell redirect routes its output to a file the product attestor can hash. This is NOT the cp antipattern — once [`golang/vuln`](https://github.com/golang/vuln) ships a file-output flag, the wrapper can be dropped."
+    },
+    {
+      "slug": "validate-it-locally",
+      "title": "Validate it locally",
+      "markdown": "## Validate it locally\n\nList the predicate types emitted into the Collection:\n\n```bash\njq -r '.payload' attestation.json | base64 -d | jq '.predicate.attestations | map(.type)'\n```\n\nExpected output:\n\n```json\n[\n  \"https://aflock.ai/attestations/environment/v0.1\",\n  \"https://aflock.ai/attestations/git/v0.1\",\n  \"https://aflock.ai/attestations/material/v0.3\",\n  \"https://aflock.ai/attestations/command-run/v0.1\",\n  \"https://aflock.ai/attestations/product/v0.3\",\n  \"https://aflock.ai/attestations/sarif/v0.1\"\n]\n```\n\nConfirm `command-run.cmd` carries the literal shell-redirect argv (proof the cp antipattern is gone):\n\n```bash\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[] | select(.type==\"https://aflock.ai/attestations/command-run/v0.1\") | .attestation.cmd'\n# [\"sh\",\"-c\",\"govulncheck -format sarif ./... > govulncheck.sarif\"]\n```"
+    },
+    {
+      "slug": "validated-example",
+      "title": "Validated example",
+      "markdown": "## Validated example\n\nThe exact invocation above runs end-to-end against real infrastructure in CI. The signed envelope + real predicate excerpt is at [`aflock-ai/attestor-compliance-examples/tool-govulncheck-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-govulncheck-sarif)."
+    },
+    {
+      "slug": "faq",
+      "title": "FAQ",
+      "markdown": "## FAQ\n\n### Does cilock support govulncheck?\n\nYes. Wrap `govulncheck -format sarif ./... > govulncheck.sarif` with `cilock run --attestations sarif,environment,git`. The SARIF report becomes a signed v0.3 attestation under `https://aflock.ai/attestations/sarif/v0.1`, the literal govulncheck argv is captured in `command-run/v0.1`, and the report file is hashed into the v0.3 Merkle tree.\n\n### Why does cilock wrap govulncheck in `sh -c`?\n\ngovulncheck (v1.x) has no `-o` / `--output` flag — it writes SARIF only to stdout. A single shell redirect (`> govulncheck.sarif`) routes the output to a file so cilock's `product/v0.3` attestor can hash it. The `command-run` attestor still records the literal govulncheck argv inside the `sh -c` string; this is a tool-output limitation, not the cp antipattern.\n\n### What's the difference between govulncheck and Grype / OSV-Scanner?\n\ngovulncheck does **call-graph reachability** — it flags only the vulnerabilities your code actually calls into, not every vulnerable package in your dependency tree. Grype and OSV-Scanner do lockfile/package-level matching, which catches more (sometimes too much). govulncheck is Go-only; Grype and OSV-Scanner are polyglot.\n\n### Can I gate deploys on govulncheck findings under cilock?\n\nYes — write a Rego policy over the captured SARIF predicate. The `sarif/v0.1` predicate carries `runs[].results[].level` (`error` / `warning` / `note`) and `runs[].results[].properties` (which includes govulncheck's reachability annotations). Deny on `level == \"error\"` or on any finding with a populated call trace. See [verify-in-a-release-gate](../guides/verify-in-a-release-gate)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [`sarif` attestor](../attestors/sarif) — the underlying ingestion path\n- [Verify in a release gate](../guides/verify-in-a-release-gate) — Rego over the captured SARIF\n- [Validated example: tool-govulncheck-sarif](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-govulncheck-sarif) — the upstream README this page mirrors\n- [`golang/vuln` on GitHub](https://github.com/golang/vuln) — upstream govulncheck source\n- [Tools index](./)"
+    }
+  ],
+  "hasDoc": true
+}

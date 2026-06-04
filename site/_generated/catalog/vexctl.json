@@ -1,0 +1,46 @@
+{
+  "name": "vexctl",
+  "source": "catalog-only",
+  "description": "vexctl — OpenVEX statement generation.",
+  "title": "vexctl",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vex-consume"
+  ],
+  "primaryCategory": "vex-consume",
+  "upstream": {
+    "name": "vexctl",
+    "source": "https://github.com/openvex/vexctl",
+    "license": "Apache-2.0",
+    "vendor": "OpenVEX / Chainguard"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "vexctl"
+    }
+  ],
+  "emitsFormats": [
+    "vex"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "vexctl invocation observed. OpenVEX document captured by the vex attestor."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- vexctl .",
+  "detectionCommand": "cilock plan --format=json -- vexctl [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"vexctl\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

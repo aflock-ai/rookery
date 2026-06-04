@@ -1,0 +1,46 @@
+{
+  "name": "tflint",
+  "source": "catalog-only",
+  "description": "TFLint — Terraform linter for syntax + provider correctness.",
+  "title": "tflint",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "lint"
+  ],
+  "primaryCategory": "lint",
+  "upstream": {
+    "name": "TFLint",
+    "source": "https://github.com/terraform-linters/tflint",
+    "license": "MPL-2.0",
+    "vendor": "terraform-linters community"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "tflint"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "TFLint invocation observed. --format sarif|json captures findings."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- tflint .",
+  "detectionCommand": "cilock plan --format=json -- tflint [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"tflint\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

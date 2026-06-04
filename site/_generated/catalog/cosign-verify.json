@@ -1,0 +1,44 @@
+{
+  "name": "cosign-verify",
+  "source": "catalog-only",
+  "description": "Sigstore cosign verification.",
+  "title": "cosign-verify",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "dependency-verify"
+  ],
+  "primaryCategory": "dependency-verify",
+  "upstream": {
+    "name": "cosign",
+    "source": "https://github.com/sigstore/cosign",
+    "license": "Apache-2.0",
+    "vendor": "Sigstore / Linux Foundation"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "cosign verify"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "cosign verify observed. Signature + Rekor entry validated."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- cosign verify .",
+  "detectionCommand": "cilock plan --format=json -- cosign verify [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"cosign verify\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

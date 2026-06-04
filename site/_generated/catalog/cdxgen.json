@@ -1,0 +1,46 @@
+{
+  "name": "cdxgen",
+  "source": "catalog-only",
+  "description": "CycloneDX SBOM generator (cdxgen) — multi-language SBOM tool from OWASP.",
+  "title": "cdxgen",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "sbom-generate"
+  ],
+  "primaryCategory": "sbom-generate",
+  "upstream": {
+    "name": "cdxgen",
+    "source": "https://github.com/CycloneDX/cdxgen",
+    "license": "Apache-2.0",
+    "vendor": "OWASP Foundation / CycloneDX"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "cdxgen"
+    }
+  ],
+  "emitsFormats": [
+    "sbom"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "cdxgen invocation observed. The sbom attestor captures the CycloneDX output (typically bom.json or sbom.cdx.json)."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- cdxgen .",
+  "detectionCommand": "cilock plan --format=json -- cdxgen [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"cdxgen\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

@@ -1,0 +1,44 @@
+{
+  "name": "azure-iid",
+  "source": "catalog-only",
+  "description": "Azure VM IMDS — instance metadata + attested identity document.",
+  "title": "azure-iid",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "Azure Instance Metadata Service",
+    "source": "https://learn.microsoft.com/azure/virtual-machines/instance-metadata-service",
+    "license": "commercial",
+    "vendor": "Microsoft Azure"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "probe",
+      "value": "azure_metadata_reachable=true"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Azure VM identity available. attested document covers vmId, subscriptionId, signed by Azure regional cert."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "(real cloud only) cilock plan --format=json -- echo hi",
+  "positiveSetup": "Probe must return: azure_metadata_reachable=true. Run on the actual cloud (EC2/GCE/Azure); unit-test via detection.InjectProbeResult.",
+  "negativeSetup": "Off-cloud / no metadata endpoint",
+  "docSections": [],
+  "hasDoc": false
+}

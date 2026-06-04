@@ -1,0 +1,133 @@
+---
+title: "Kubescape"
+description: "Scan Kubernetes manifests or a live cluster snapshot for NSA/CISA, MITRE, and ArmoBest framework violations with Kubescape under cilock — emits a signed v0.3 SARIF attestation."
+sidebar_position: 8
+---
+
+{/* GENERATED — do not edit. Source: rookery attestation/detection/docs/kubescape.doc.md. Regenerate: npm run gen */}
+import ToolMeta from '@site/src/components/Catalog/ToolMeta';
+import GeneratedFooter from '@site/src/components/Catalog/GeneratedFooter';
+import meta from '@catalog/kubescape.json';
+
+# `kubescape` integration
+
+Kubescape is ARMO's Kubernetes posture scanner. It maps cluster and manifest configuration against a set of named frameworks (NSA/CISA hardening, MITRE ATT&CK for Kubernetes, ArmoBest, DevOpsBest, SOC2, etc.) and emits the result as SARIF. Cilock wraps that scan so the SARIF output becomes a **signed in-toto attestation** linked to the build that produced it.
+
+<ToolMeta data={meta} />
+
+## Validated invocations
+### Static manifests (default, fastest)
+
+This is the canonical flow — no cluster required, no kubeconfig, no RBAC. Point Kubescape at a directory of YAML and let it run as cilock's direct child process.
+
+```bash
+cilock run --step kubescape-scan \
+  --signer-file-key-path _validation/key.pem \
+  --outfile attestation.json \
+  --attestations sarif,environment,git \
+  --enable-archivista=false \
+  -- kubescape scan framework nsa --format sarif --output kubescape.sarif manifests/
+```
+
+### Cluster snapshot (for real-cluster findings)
+
+When you want findings against a **live cluster's actual state** — real `SecurityContext`, `serviceAccountName`, RBAC bindings as they exist in the API server — and you still need **SARIF** out the other end, you need a snapshot-then-scan flow. See [Why this shape](#why-this-shape) for the upstream reason.
+
+```bash
+cilock run --step kubescape-cluster-snapshot-scan \
+  --signer-file-key-path _validation/key.pem \
+  --outfile attestation.json \
+  --attestations sarif,environment,git \
+  --enable-archivista=false \
+  -- sh -c 'kubectl get all,networkpolicies,roles,rolebindings,serviceaccounts -A -o yaml > cluster-snapshot.yaml && kubescape scan framework nsa --format sarif --output kubescape-cluster.sarif cluster-snapshot.yaml'
+```
+
+`command-run/v0.1` records the literal `["sh", "-c", "kubectl get … && kubescape scan …"]` argv, so the dump-then-scan recipe is fully captured.
+
+## What gets captured
+
+Both flows produce the **same predicate type set**:
+
+| Predicate type | Source |
+|---|---|
+| `https://aflock.ai/attestations/command-run/v0.1` | The argv cilock actually exec'd |
+| `https://aflock.ai/attestations/environment/v0.1` | Host + env at scan time |
+| `https://aflock.ai/attestations/git/v0.1` | Commit, remote, dirty state |
+| `https://aflock.ai/attestations/material/v0.3` | Pre-run digests of `manifests/` (or the snapshot file) |
+| `https://aflock.ai/attestations/product/v0.3` | Post-run digest of the SARIF file Kubescape itself wrote |
+| `https://aflock.ai/attestations/sarif/v0.1` | Parsed SARIF findings, ready for rego gating |
+
+## Why this shape
+
+Kubescape supports `--format sarif --output FILE` directly. Letting cilock exec Kubescape as its **direct child** — no `bash -c "cp …"` glue — gives four properties the old `cp`-based pattern broke:
+
+1. `command-run/v0.1` records the real argv (`["kubescape", "scan", "framework", "nsa", ...]`), not `cp`.
+2. The `tracing` spy (when enabled) traces the real Kubescape syscalls.
+3. `product/v0.3` hashes the SARIF file Kubescape itself produced — not a copy laundered through `cp`.
+4. `sarif/v0.1` parses that same file for rego gating.
+
+### The upstream cluster-SARIF limitation
+
+Kubescape **refuses to emit SARIF when scanning the live cluster context**. From [`core/pkg/resultshandling/results.go`](https://github.com/kubescape/kubescape/blob/master/core/pkg/resultshandling/results.go) in the kubescape source (search for `ContextCluster`), `ContextCluster` is excluded from the SARIF-emitting contexts. SARIF is only produced for **local-file** contexts.
+
+That's why the cluster flow is `kubectl get … > snapshot.yaml && kubescape scan … snapshot.yaml`. The dump captures live state, and Kubescape then sees a local file — which it will happily render as SARIF.
+
+If your policy can consume JSON instead, you can drop the snapshot entirely: `kubescape scan framework nsa --format json` works directly against the live cluster. The snapshot exists purely because of the SARIF/context restriction.
+
+## Validate it locally
+After running either invocation, confirm the predicate types and find counts:
+
+```bash
+# All predicate types present (order may vary).
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations[].type'
+
+# command-run captured the real argv (not bash -c / cp).
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations[]
+        | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+        | .attestation.cmd'
+
+# Count SARIF findings the rego gate would see.
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '[.predicate.attestations[]
+         | select(.type=="https://aflock.ai/attestations/sarif/v0.1")
+         | .attestation.report.runs[0].results[]] | length'
+```
+
+## Notes
+
+- **Framework selection.** Swap `nsa` for any framework Kubescape ships: `mitre`, `armobest`, `devopsbest`, `cis-v1.23-t1.0.1`, `soc2`, etc. Each emits a SARIF results array gated by the rules in that framework. Run `kubescape list frameworks` to see what your binary supports.
+- **Direct-cluster JSON.** `kubescape scan framework nsa --format json` works directly against the live cluster (no snapshot needed) — but produces JSON, not SARIF, so it can't feed the `sarif/v0.1` attestor. Use the JSON path only if your downstream policy ingests Kubescape JSON natively.
+- **Static vs snapshot finding counts.** The bundled example produces **5 SARIF findings** under `nsa` against the sample `manifests/deployment.yaml`, vs **55 SARIF findings** under `nsa` against a ~140 KB snapshot of a small live EKS dev cluster. The static flow exercises the wrapper; the snapshot flow exercises a real cluster.
+- **What gets read from the cluster.** All reads are read-only `kubectl get`. The default set is `all,networkpolicies,roles,rolebindings,serviceaccounts -A`. Add `clusterroles,clusterrolebindings,ingresses` if your framework rules need them — Kubescape picks up anything it recognises from the snapshot.
+
+## FAQ
+
+**Does cilock support Kubescape?**
+Yes. Kubescape's SARIF output flows through cilock's `sarif` attestor — no rookery code change required. Both static-manifest and live-cluster-snapshot flows are validated end-to-end in [`tool-kubescape-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-kubescape-sarif).
+
+**Can Kubescape scan my live cluster under cilock?**
+Yes, via the snapshot pattern: `sh -c 'kubectl get … -o yaml > snapshot.yaml && kubescape scan … snapshot.yaml'`. The kubectl dump captures real cluster state (live `SecurityContext`, RBAC, NetworkPolicies); Kubescape then scans the YAML dump as a local-file context and emits SARIF. `command-run/v0.1` records the full `sh -c` argv so the recipe is auditable.
+
+**Why can't I use `--format sarif` directly against the cluster?**
+Upstream Kubescape excludes the live-cluster context from its SARIF emitter. See [`core/pkg/resultshandling/results.go`](https://github.com/kubescape/kubescape/blob/master/core/pkg/resultshandling/results.go) — `ContextCluster` is missing from the SARIF-allowed contexts. Run `kubescape scan framework nsa --format sarif` against a live cluster and you'll get JSON (or an error), not SARIF. The snapshot pattern is the documented workaround.
+
+**Which frameworks does Kubescape check?**
+NSA/CISA Kubernetes Hardening Guide (`nsa`), MITRE ATT&CK for Kubernetes (`mitre`), ArmoBest (`armobest`), DevOpsBest (`devopsbest`), CIS Kubernetes Benchmark (`cis-v1.23-t1.0.1`), SOC2 (`soc2`), and others. Each framework is a named bundle of controls (`C-0013`, `C-0016`, …). Pick whichever your audit regime requires; the SARIF predicate is the same shape.
+
+**What's the difference between scanning `manifests/` vs the cluster snapshot?**
+The static-manifest flow scans the YAML you have on disk — the source of truth Kustomize/Helm produces. The snapshot flow scans what's actually applied in the API server, including admission-controller mutations, default service accounts, and operator-managed objects. They will diverge: in the example repo, static gives 5 findings and the snapshot gives 55, because the live cluster has system pods, controller-manager Deployments, and default RBAC that the sample manifest set doesn't.
+
+## See also
+
+- [`sarif` attestor](../attestors/sarif.mdx) — the underlying ingestion path
+- [How cilock policy works](../concepts/policy-verification.md) — how the SARIF predicate is gated at verify time
+- [Attestation graph + back-refs](../concepts/the-spine-of-the-graph.md) — how the scan links via subject digests to the artifact
+- [Validated example: `tool-kubescape-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-kubescape-sarif)
+- [Kubescape upstream SARIF/context restriction (`core/pkg/resultshandling/results.go`)](https://github.com/kubescape/kubescape/blob/master/core/pkg/resultshandling/results.go)
+- [Tools index](./index.md)
+
+<script type="application/ld+json" dangerouslySetInnerHTML={{__html: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Kubescape — cilock tool integration\",\"description\":\"Scan Kubernetes manifests or a live cluster snapshot for NSA/CISA, MITRE, and ArmoBest framework violations with Kubescape under cilock — emits a signed v0.3 SARIF attestation.\",\"url\":\"https://cilock.aflock.ai/tools/kubescape\"}"}} />
+
+<GeneratedFooter name="kubescape" />

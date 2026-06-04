@@ -1,0 +1,91 @@
+---
+title: Signed compliance evidence (GRC)
+description: A CIS Ubuntu 24.04 scan becomes a signed, tamper-evident attestation mapped to NIST 800-53 and FedRAMP. A signed policy blocks the release on high-severity failures — and the GRC scanners are compiled in with the rookery builder.
+sidebar_position: 3
+keywords:
+  - compliance
+  - GRC
+  - CIS benchmark
+  - NIST 800-53
+  - FedRAMP
+  - OpenSCAP
+  - oscap
+  - continuous compliance
+  - rookery builder
+---
+
+import CastPlayer from '@site/src/components/CastPlayer';
+
+# Signed compliance evidence (GRC)
+
+Auditors don't want a PDF they have to trust — they want **signed, machine-readable
+evidence** of every control check, verifiable without re-running anything. In this
+session a GRC engineer asks Claude to prove a system meets its **CIS Ubuntu 24.04
+Level 1** baseline before release.
+
+There's a catch: the compliance scanners (OpenSCAP, InSpec, kube-bench, …) aren't in
+the default `cilock`. So this team composed a custom **`cilock-grc`** with the
+[rookery builder](../ecosystem/rookery.md) that includes the
+[`oscap`](../attestors/oscap.mdx) attestor. You build the tool you need.
+
+<CastPlayer
+  src="/img/grc-compliance.cast"
+  label="A Claude Code session running a CIS compliance scan with a custom cilock-grc binary, gated by a signed policy and mapped to NIST 800-53 and FedRAMP"
+  poster="npt:1:05"
+  autoPlay
+  controls
+/>
+
+## What it does, step by step
+
+1. **Confirm the tool exists.** `cilock-grc attestors list` shows `oscap` (and the
+   rest of the GRC family) compiled into this binary — composed earlier with the
+   builder.
+2. **Run the CIS scan under CI/lock.** `cilock-grc run --step compliance-scan -a
+   environment,oscap --capture-mode walk -- oscap xccdf eval --profile
+   cis_level1_server …` wraps the [OpenSCAP](../tools/oscap.md) scan. (oscap exits 2
+   when rules fail — expected; the findings are in the results file.) The result is
+   a signed [`oscap`](../attestors/oscap.mdx) attestation.
+3. **Open the evidence.** Claude pulls the `scanSummary` from the signed
+   attestation — **220 pass / 113 fail** on CIS L1 (≈66% of evaluated rules) — and
+   the high-severity failures: the system permits **empty passwords**
+   (`no_empty_passwords_unix`, `sshd_disable_empty_passwords`).
+4. **Visualize the flow** from scan → signed attestation → policy → control
+   frameworks.
+5. **Verify against the baseline.** The signed policy's `compliance-baseline` Rego
+   rule blocks any release with a high-severity failure, so `cilock-grc verify`
+   returns **Verification failed** and exits non-zero. See
+   [policy verification](../concepts/policy-verification.md).
+6. **Write the auditor report.** The real posture, the high-severity failures, and
+   the **CIS L1 / NIST 800-53 (IA-5) / FedRAMP** mapping are captured into a report
+   the auditor reads instead of re-running the scan.
+
+## The rest of the GRC toolbox
+
+The same pattern — wrap a compliance tool, sign the result, gate on a policy, map
+to controls — works across the GRC scanners. They're all rookery plugins you can
+compile into your binary:
+
+| Tool | Use |
+|------|-----|
+| [`oscap`](../tools/oscap.md) | SCAP / STIG / CIS host benchmarks (shown). The Ubuntu 24.04 content also ships a Canonical **STIG** profile. |
+| [`inspec`](../tools/inspec.md) | Chef InSpec compliance profiles |
+| [`kubescape`](../tools/kubescape.mdx) · [kube-bench](../attestors/kube-bench.mdx) | CIS Kubernetes benchmarks and cluster posture |
+| [`prowler`](../tools/prowler.md) · [`steampipe`](../tools/steampipe.md) | Cloud security posture (CSPM) for AWS/GCP/Azure |
+| [`testssl`](../tools/testssl.mdx) | TLS / FIPS cryptographic compliance |
+| [nessus](../attestors/nessus.md) | Vulnerability assessment |
+
+## Why GRC teams care
+
+- The scan result is **tamper-evident evidence**, mapped to **CIS L1 / NIST SP
+  800-53 / FedRAMP** — an auditor verifies the signature and reads it.
+- It uses the [same evidence model](../concepts/the-spine-of-the-graph.md) as build,
+  scan, and runtime — one pipeline, many control regimes.
+- A signed policy turns the baseline into an **automatic, continuous gate**, and the
+  generated report is the durable audit record of exactly what was checked.
+
+:::note Build the tool you need
+The default CI/lock ships a lean attestor set. The
+[rookery builder](../ecosystem/rookery.md) composes a binary with exactly the
+attestors you require — here, the GRC compliance scanners.
+:::

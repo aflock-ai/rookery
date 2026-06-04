@@ -1,0 +1,44 @@
+{
+  "name": "trufflehog",
+  "source": "catalog-only",
+  "description": "TruffleHog — secret + credential scanner (Truffle Security).",
+  "title": "trufflehog",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "secret-scan"
+  ],
+  "primaryCategory": "secret-scan",
+  "upstream": {
+    "name": "TruffleHog",
+    "source": "https://github.com/trufflesecurity/trufflehog",
+    "license": "AGPL-3.0-only",
+    "vendor": "Truffle Security"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "trufflehog"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "TruffleHog scan observed. JSON output captures verified + unverified secret findings. NOTE: AGPL-3.0 — review before bundling."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- trufflehog .",
+  "detectionCommand": "cilock plan --format=json -- trufflehog [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"trufflehog\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

@@ -1,0 +1,10 @@
+{
+  "label": "Attestors",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "slug": "/attestors",
+    "title": "Attestors",
+    "description": "One page per attestor: what it captures, when to use it, flags, and gotchas. For the comparative overview see the Attestor Catalog reference."
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "name": "pip-install",
+  "source": "attestor-backed",
+  "description": "The cilock pip-install attestor captures the post-build Python package environment via pip, statically analyzes installed code and PyPI PEP 740 provenance, and signs it into in-toto evidence.",
+  "title": "pip-install",
+  "sidebarPosition": 30,
+  "examplesRepo": "11-pip-install",
+  "categories": [
+    "dependency-resolve"
+  ],
+  "primaryCategory": "dependency-resolve",
+  "upstream": {
+    "name": "pip",
+    "source": "https://github.com/pypa/pip",
+    "license": "MIT",
+    "vendor": "Python Packaging Authority"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "full",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "pip install"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "pip3 install"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "pip install"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "pip3 install"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "pip install captured. Package coordinates, version pins, and wheel digests preserved."
+  },
+  "predicateType": "https://aflock.ai/attestations/pip-install/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- pip install .",
+  "detectionCommand": "cilock plan --format=json -- pip install [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"pip install\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Captures the Python package environment that exists **after** a build step by shelling out to `pip`, then statically analyses installed code, `setup.py`, `pyproject.toml`, and pickle files, and queries PyPI for PEP 740 provenance bundles."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe top-level predicate has eight JSON fields:\n\n- `pipVersion` — output of `pip --version`, or `\"unknown\"` if the binary is missing.\n- `pythonVersion` — output of `python3 --version`.\n- `packages` — array of `PackageInfo` (see below), one per row of `pip list --format=json`.\n- `setupPyAnalysis` — array of `SetupPyAnalysis` records found by walking the working directory and `/tmp/pip-{download,install,build}`.\n- `totalInstalled` — `len(packages)`.\n- `installedFileAnalysis` — single `InstalledFileAnalysis` from walking `site.getsitepackages()[0]`.\n- `pyprojectAnalysis` — array of build-backend records parsed from any `pyproject.toml` under `/tmp/pip-download` or `/tmp/pip-build`.\n- `pep740Verification` — array of `PEP740Status`, one per installed package (excluding `pip`, `setuptools`, `wheel`), each fetched from `pypi.org`.\n\nEach `PackageInfo` carries `name`, `version`, `installType`, `location`, `requires`, `requiredBy`, `homePage`, `author`, `license`, `hasSetupPy`, `hasCmdClass`, and `installer`. The descriptive fields (`location`, `requires`, `requiredBy`, `homePage`, `author`, `license`) are parsed line-by-line from `pip show <name>`. The provenance fields come from the installed package's on-disk layout, not from `pip show`: `installer` is read verbatim from `<dist-info>/INSTALLER` (e.g. `pip`); `installType` is `editable` (an `.egg-link`/`.egg-info` marker), `wheel`, or `sdist` (resolved from `<dist-info>/direct_url.json`, falling back to whether a build-time `setup.py` was executed); `hasSetupPy`/`hasCmdClass` are set when a `setup.py` correlated to this package (by canonical name + project directory) was found in the build cache and, for `hasCmdClass`, referenced `cmdclass`.\n\n`InstalledFileAnalysis` records `suspiciousImports` (`sys.meta_path`, `atexit.register`, `codecs.register` references inside any `__init__.py`), `subprocessInInit`, `networkInInit`, every `.pkl`/`.pickle`/`.pt` file under site-packages (`pickleFiles`), a `pickleAnalysis` disassembly (capped at the first 50 files) produced by an embedded `python3 -c \"import pickletools...\"` script that flags `REDUCE`, `GLOBAL`, `STACK_GLOBAL`, `INST` opcodes, all `.pth` files, and a `totalPyFiles` count.\n\nEach installed package is also emitted as an in-toto subject `pip://<name>@<version>` digested over the literal bytes `<name>==<version>` (SHA-256). That digest is **not** a hash of the wheel — it is only an identifier."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nAfter a Python build or install step, to record what actually ended up on disk and to surface a few classes of supply-chain red flag in the same predicate. Pair with [`lockfiles`](./lockfiles) (pre-material pin) and [`sbom`](./sbom) (resolved tree) for full coverage; this attestor is the only one that observes the post-install state of `site-packages`."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. The package exposes a `WithTargetPackage` `Option` internally, but it is not wired to any CLI flag."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"pipVersion\": \"pip 24.0 from /usr/lib/python3.12/site-packages/pip (python 3.12)\",\n  \"pythonVersion\": \"Python 3.12.3\",\n  \"totalInstalled\": 1,\n  \"packages\": [\n    {\n      \"name\": \"requests\",\n      \"version\": \"2.32.3\",\n      \"location\": \"/usr/lib/python3.12/site-packages\",\n      \"requires\": [\"charset-normalizer\", \"idna\", \"urllib3\", \"certifi\"],\n      \"homePage\": \"https://requests.readthedocs.io\",\n      \"author\": \"Kenneth Reitz\",\n      \"license\": \"Apache-2.0\"\n    }\n  ],\n  \"pep740Verification\": [\n    {\n      \"package\": \"requests\",\n      \"version\": \"2.32.3\",\n      \"hasAttestation\": true,\n      \"attestationUrl\": \"https://pypi.org/integrity/requests/2.32.3/requests-2.32.3-py3-none-any.whl/provenance\",\n      \"publisherKind\": \"GitHub\",\n      \"repository\": \"psf/requests\",\n      \"workflow\": \"publish.yml\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- Requires `pip` and `python3` on `PATH`. If `pip list` fails the attestor logs and returns `nil` — you get an attestation with empty `packages` and zero `totalInstalled`, not a failure.\n- Does **not** run `pip install` itself, does **not** read a `requirements.txt` or `pip freeze` output, and does **not** scan declared products. It snapshots whatever is installed in the active Python environment at the time `Attest` runs, so virtualenv activation must happen before the step.\n- `setupPyAnalysis` and `pyprojectAnalysis` only look under the working directory and three hard-coded `/tmp/pip-*` paths; if pip's build cache lives elsewhere (e.g. inside a container with `TMPDIR` override) nothing is found.\n- The pickle scanner shells out to `python3 -c '...pickletools...'` per file and is capped at 50 pickles per attestation. `IsSafe` is a heuristic — absence of `REDUCE`/`GLOBAL`/`INST` does not prove safety.\n- PEP 740 lookup hits `pypi.org/pypi/<pkg>/<ver>/json` and `pypi.org/integrity/.../provenance` over a 5 s HTTP client per package, serially. For an environment with hundreds of packages this dominates wall time, and offline runs silently return `hasAttestation: false` for every package.\n- Bundled but not default: even though `pip-install` registers correctly and appears in `cilock attestors list`, it is absent from `options.DefaultAttestors`, so you must pass `-a pip-install` explicitly or it will never run."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal `pip install` against PyPI inside a virtualenv. The attestor reads `pip list --format=json`, walks site-packages, and checks PEP 740 attestations for every installed package.\n\n```bash\npython3 -m venv .venv && source .venv/bin/activate\n\ncilock run --step pip-install-real \\\n  --signer-file-key-path key.pem --outfile attestation.json \\\n  --attestations pip-install,environment,git \\\n  -- pip install --quiet requests httpx\n```\n\nValidated against real PyPI: 10 packages, 9 had valid PEP 740 attestations from GitHub-issued Sigstore certs. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/11-pip-install](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/11-pip-install)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n- [Catalog row](../reference/attestor-catalog)\n- [`lockfiles`](./lockfiles), [`sbom`](./sbom)\n- Upstream: [witness/pip-install.md](https://github.com/in-toto/witness/blob/main/docs/attestors/pip-install.md)"
+    }
+  ],
+  "hasDoc": true
+}

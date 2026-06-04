@@ -1,0 +1,44 @@
+{
+  "name": "polaris",
+  "source": "catalog-only",
+  "description": "Polaris — Fairwinds Kubernetes best-practices validator.",
+  "title": "polaris",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "compliance-scan"
+  ],
+  "primaryCategory": "compliance-scan",
+  "upstream": {
+    "name": "Polaris",
+    "source": "https://github.com/FairwindsOps/polaris",
+    "license": "Apache-2.0",
+    "vendor": "Fairwinds"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "polaris"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Polaris invocation observed. JSON output captures findings."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- polaris .",
+  "detectionCommand": "cilock plan --format=json -- polaris [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"polaris\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

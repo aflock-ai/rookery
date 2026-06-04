@@ -1,0 +1,44 @@
+{
+  "name": "yarn-install",
+  "source": "catalog-only",
+  "description": "yarn install — Yarn package manager install.",
+  "title": "yarn-install",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "dependency-resolve"
+  ],
+  "primaryCategory": "dependency-resolve",
+  "upstream": {
+    "name": "Yarn",
+    "source": "https://github.com/yarnpkg/berry",
+    "license": "BSD-2-Clause",
+    "vendor": "Yarn / Meta"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "light",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "yarn install"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "yarn install observed. lockfiles attestor captures yarn.lock."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- yarn install .",
+  "detectionCommand": "cilock plan --format=json -- yarn install [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"yarn install\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

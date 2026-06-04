@@ -1,0 +1,125 @@
+{
+  "name": "lockfiles",
+  "source": "attestor-backed",
+  "description": "The cilock lockfiles attestor captures the contents and SHA-256 digest of common package-manager lockfiles in the working tree and signs them into in-toto evidence as a pinned-dependency fingerprint.",
+  "title": "lockfiles",
+  "sidebarPosition": 8,
+  "examplesRepo": "07-lockfiles",
+  "categories": [
+    "dependency-resolve"
+  ],
+  "primaryCategory": "dependency-resolve",
+  "upstream": null,
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "package-lock.json"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "yarn.lock"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "pnpm-lock.yaml"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "go.sum"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "Cargo.lock"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "Gemfile.lock"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "poetry.lock"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "Pipfile.lock"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "requirements.txt"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "composer.lock"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Lockfile contents captured for downstream provenance and SBOM correlation."
+  },
+  "predicateType": "https://aflock.ai/attestations/lockfiles/v0.1",
+  "runType": "prematerial",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "touch package-lock.json && cilock plan --format=json -- echo hi",
+  "positiveSetup": "Create file \"package-lock.json\" in cwd",
+  "negativeSetup": "Run in a tempdir without that file",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Captures the contents and SHA-256 digest of common package-manager lockfiles found in the working tree, providing a cheap, deterministic fingerprint of the project's pinned dependency set."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe attestor records a list of `lockfiles`. Each entry has three fields:\n\n- `filename` — the path at which the lockfile was found.\n- `content` — the raw file contents as a string.\n- `digest` — a `DigestSet` containing the SHA-256 of the file bytes.\n\nEach lockfile is also emitted as an in-toto subject named `` `file:<path>` `` keyed by its digest.\n\nThe following lockfile filenames are matched exactly (no globbing of the basename):\n\n- `Gemfile.lock` — Ruby (Bundler)\n- `package-lock.json` — Node.js (npm)\n- `yarn.lock` — Node.js (Yarn)\n- `Cargo.lock` — Rust\n- `poetry.lock` — Python (Poetry)\n- `Pipfile.lock` — Python (Pipenv)\n- `requirements.txt` — Python (pip)\n- `composer.lock` — PHP\n- `go.sum` — Go\n- `Podfile.lock` — iOS/macOS (CocoaPods)\n- `gradle.lockfile` — Gradle\n- `pnpm-lock.yaml` — Node.js (pnpm)\n\nSearch behavior is controlled by the `WITNESS_LOCKFILES_SEARCH_PATHS` environment variable, read at attestor construction:\n\n- Unset / empty (default): searches the current directory only.\n- `recursive`: walks the entire tree, skipping `node_modules`, `vendor`, `.git`, `.svn`, `.hg`, `__pycache__`, `venv`, `.venv`, `target`, `build`, `dist`, and any directory whose name begins with `.`.\n- A list using the OS path-list separator (colon on Unix): searches each listed directory non-recursively."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nWhen you need a tamper-evident snapshot of pinned dependencies without paying for a full SBOM scan. Useful as a pre-build attestation to prove the dependency graph that fed into a subsequent build step, or as an input to policies that gate on lockfile drift."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. Configuration is via the `WITNESS_LOCKFILES_SEARCH_PATHS` environment variable."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"lockfiles\": [\n    {\n      \"filename\": \"go.sum\",\n      \"content\": \"github.com/example/mod v1.2.3 h1:...\\ngithub.com/example/mod v1.2.3/go.mod h1:...\\n\",\n      \"digest\": {\n        \"sha256\": \"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"\n      }\n    }\n  ]\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- The digest is over the lockfile **bytes**, not the parsed dependency set — reformatting or reordering changes the hash even when the resolved versions do not. For semantic dependency inventory, use [`sbom`](./sbom).\n- Basenames are matched exactly via `filepath.Glob(dir/<name>)`; non-standard names (e.g. `dev-requirements.txt`) are not detected.\n- Recursive mode skips a fixed ignore list and every dotted directory; lockfiles inside those trees are invisible to the attestor.\n- The full file content is embedded in the attestation. Lockfiles that contain sensitive index URLs or credentials will be captured verbatim."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal lockfile capture from a multi-language repo: `go.sum`, `package-lock.json`, `Cargo.lock`, `poetry.lock`, etc.\n\n```bash\ncilock run --step lockfiles-capture \\\n  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \\\n  --attestations lockfiles \\\n  -- echo \"captured lockfiles\" \n```\n\nValidated against a real multi-language repo with several lockfiles. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/07-lockfiles](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/07-lockfiles)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n- [Catalog row](../reference/attestor-catalog)\n- [`sbom`](./sbom)\n- Upstream: [witness/lockfiles.md](https://github.com/in-toto/witness/blob/main/docs/attestors/lockfiles.md)"
+    }
+  ],
+  "hasDoc": true
+}

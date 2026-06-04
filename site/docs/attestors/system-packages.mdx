@@ -1,0 +1,90 @@
+---
+title: "system-packages"
+description: "The cilock system-packages attestor records the build host's installed OS package inventory (name and version) before materials are gathered, signing it into in-toto evidence."
+sidebar_position: 28
+---
+
+{/* GENERATED — do not edit. Source: rookery attestation/detection/docs/system-packages.doc.md. Regenerate: npm run gen */}
+import AttestorMeta from '@site/src/components/Catalog/AttestorMeta';
+import GeneratedFooter from '@site/src/components/Catalog/GeneratedFooter';
+import meta from '@catalog/system-packages.json';
+
+# `system-packages` attestor
+
+Records the installed OS package inventory of the build host before materials are gathered.
+
+<AttestorMeta data={meta} />
+
+## What it captures
+
+Top-level fields on the predicate:
+
+- `os` — fixed string `linux`, set by the backend.
+- `distribution` — value of the `ID=` line from `/etc/os-release` (e.g. `ubuntu`, `debian`, `fedora`, `rhel`, `centos`, `rocky`, `alma`, `oracle`, `suse`, `opensuse`, `amazon`).
+- `version` — value of the `VERSION_ID=` line from `/etc/os-release`.
+- `packages` — list of installed packages, each with:
+  - `name` — package name
+  - `version` — package version string
+- `digest` — `cryptoutil.DigestSet` SHA-256 over the marshalled predicate (excluding the `digest` field itself).
+
+Supported backends:
+
+- **Debian / Ubuntu** — selected for `debian`, `ubuntu`, or any unrecognized/missing `ID`. Shells out to `/usr/bin/dpkg-query -W -f '${Package}\t${Version}\n'`.
+- **RPM** — selected for `fedora`, `rhel`, `centos`, `rocky`, `alma`, `oracle`, `suse`, `opensuse`, `amazon`. Shells out to `/usr/bin/rpm -qa --qf '%{NAME}\t%{VERSION}\n'`.
+
+No `apk`, no Arch `pacman`, no Homebrew, no per-package architecture or source fields — only `name` and `version` are emitted.
+
+## When to use
+
+For container-image and VM build provenance where downstream policy needs to know the exact OS package set baked into the build environment. Pair with `oci` or `sbom` attestors when you also need image-layer or component-graph data.
+
+## Flags
+
+None. Backend selection is automatic based on `/etc/os-release`.
+
+## Output shape
+
+```json
+{
+  "os": "linux",
+  "distribution": "ubuntu",
+  "version": "22.04",
+  "packages": [
+    { "name": "libc6", "version": "2.35-0ubuntu3.4" },
+    { "name": "openssl", "version": "3.0.2-0ubuntu1.10" }
+  ],
+  "digest": {
+    "sha256": "..."
+  }
+}
+```
+
+## Gotchas
+
+- **Backend detection reads `/etc/os-release` only.** It does not probe for the presence of `dpkg`, `rpm`, or `apk` binaries. If `/etc/os-release` is missing or unreadable, the attestor falls back to the Debian backend.
+- **Unknown distributions fall through to the Debian backend.** Running on Alpine, Arch, or any distro whose `ID` is not in the RPM list will attempt `/usr/bin/dpkg-query` and fail at `Attest` time with the underlying exec error.
+- **Hard-coded absolute paths** (`/usr/bin/dpkg-query`, `/usr/bin/rpm`) are used to defeat PATH manipulation. Distros that ship these binaries elsewhere will not work without symlinks.
+- **Package metadata is minimal.** Only `name` and `version` are captured — no architecture, epoch, release, source package, or signing key info.
+- **Digest is computed over a clone of the predicate** with `Digest` zeroed, so it is reproducible for a given package set.
+
+## CLI example
+
+Real OS package inventory. The attestor reads `/etc/os-release` to detect the distribution, picks the right backend (`rpm -qa` on RHEL/Amazon, `dpkg-query` on Debian), and emits a name+version inventory.
+
+```bash
+cilock run --step host-packages \
+  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \
+  --attestations system-packages \
+  -- echo "captured host packages" 
+```
+
+Validated against Amazon Linux 2023 (real RPM inventory). Exposed a bug (filed): `ID=amzn` wasn't mapped to the RPM backend, causing AL2023 to fall through to Debian. Patched. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/14-system-packages](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/14-system-packages).
+
+## See also
+
+- [Catalog row](../reference/attestor-catalog.md)
+- Upstream: [witness/system-packages.md](https://github.com/in-toto/witness/blob/main/docs/attestors/system-packages.md)
+
+<script type="application/ld+json" dangerouslySetInnerHTML={{__html: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"system-packages — cilock attestor\",\"description\":\"The cilock system-packages attestor records the build host's installed OS package inventory (name and version) before materials are gathered, signing it into in-toto evidence.\",\"url\":\"https://cilock.aflock.ai/attestors/system-packages\"}"}} />
+
+<GeneratedFooter name="system-packages" />

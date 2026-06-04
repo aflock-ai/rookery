@@ -1,0 +1,101 @@
+{
+  "name": "linkerd-check",
+  "source": "attestor-backed",
+  "description": "Capture Linkerd service-mesh state under cilock — the native linkerd-check attestor parses `linkerd check -o json` plus optional `linkerd viz edges -o json` into a signed v0.3 attestation with per-category check rollup and per-edge mTLS booleans, gated by Rego for release-time mTLS enforcement.",
+  "title": "Linkerd",
+  "sidebarPosition": 20,
+  "examplesRepo": "tool-linkerd-check",
+  "categories": [
+    "compliance-scan"
+  ],
+  "primaryCategory": "compliance-scan",
+  "upstream": {
+    "name": "Linkerd",
+    "source": "https://github.com/linkerd/linkerd2",
+    "license": "Apache-2.0",
+    "vendor": "Linkerd Authors (CNCF)"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "linkerd check"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "linkerd check"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "linkerd-check*.json | **/linkerd-check*.json | linkerd-check*.yaml | **/linkerd-check*.yaml"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Linkerd service mesh health check results captured."
+  },
+  "predicateType": "https://aflock.ai/attestations/linkerd-check/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- linkerd check .",
+  "detectionCommand": "cilock plan --format=json -- linkerd check [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"linkerd check\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "[Linkerd](https://linkerd.io) is the CNCF-graduated Kubernetes service mesh — a sidecar-based mTLS, retries, and traffic-routing layer that's auto-injected into meshed workloads. Under cilock, the rookery **native `linkerd-check` attestor** ingests two of Linkerd's JSON outputs and produces a single signed in-toto attestation linked to the host environment, the git commit, and the literal capture argv:\n\n- `linkerd check -o json` — control-plane + extension health (kubernetes-api, linkerd-existence, linkerd-identity, linkerd-control-plane-proxy, linkerd-viz, etc.) with per-check pass/warn/error results.\n- `linkerd viz edges deploy -A -o json` — the meshed service graph with `client_id` / `server_id` peer identities and a `no_tls_reason` per src→dst pair. An edge is mTLS-secured iff both IDs are present AND `no_tls_reason` is empty.\n\nThe headline use case: a release-gate Rego that **denies any deploy where any meshed edge is non-mTLS**. The full positive + negative case is exercised end-to-end against the `dropbox-clone-dev` EKS cluster with the emojivoto demo in [`tool-linkerd-check`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-linkerd-check)."
+    },
+    {
+      "slug": "validated-invocation",
+      "title": "Validated invocation",
+      "markdown": "## Validated invocation\n\n```bash\n# Pre-reqs: linkerd CLI + kubeconfig pointed at a cluster with Linkerd\n# control plane installed. Viz extension required for the edges capture.\n\nLINKERD_CLUSTER_NAME=<your-cluster> cilock run --step linkerd-mesh-check \\\n  --signer-file-key-path key.pem \\\n  --outfile attestation.json \\\n  --attestations linkerd-check,environment,git \\\n  --enable-archivista=false \\\n  -- sh -c 'linkerd check -o json > linkerd-check.json; \\\n            linkerd viz edges deploy -A -o json > linkerd-edges.json'\n```\n\nThis is the exact command exercised in [`tool-linkerd-check`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-linkerd-check). The single `sh -c` wrapper writes both JSON files into the working directory in one shot: cilock's product attestor hashes both, the linkerd-check attestor parses both. The `command-run/v0.1` predicate records the full `sh -c` argv.\n\n`LINKERD_CLUSTER_NAME` is read by the attestor and stamped into the predicate's `cluster_name` field so cluster-aware Rego can branch on it. Optional; if unset the field is empty but the attestation still signs."
+    },
+    {
+      "slug": "what-gets-captured",
+      "title": "What gets captured",
+      "markdown": "## What gets captured\n\n| Predicate type | Source |\n|---|---|\n| `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |\n| `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, dirty status |\n| `https://aflock.ai/attestations/material/v0.3` | Merkle root over the working tree before the capture |\n| `https://aflock.ai/attestations/command-run/v0.1` | literal `sh -c 'linkerd check ...; linkerd viz edges ...'` argv |\n| `https://aflock.ai/attestations/product/v0.3` | Merkle root over `linkerd-check.json` + `linkerd-edges.json` |\n| `https://aflock.ai/attestations/linkerd-check/v0.1` | parsed reports with per-category pass/warn/error counts, edges summary with secured/insecure counts, cluster name |\n\nThe `linkerd-check/v0.1` predicate body has this shape:\n\n```json\n{\n  \"cluster_name\": \"dropbox-clone-dev\",\n  \"check_summary\": {\n    \"pass\": 50, \"warn\": 4, \"error\": 0,\n    \"overall_success\": true, \"distinct_categories\": 10,\n    \"categories\": [\n      { \"category\": \"kubernetes-api\", \"pass\": 2, \"warn\": 0, \"error\": 0 },\n      ...\n    ]\n  },\n  \"check_report\": { /* full parsed check JSON */ },\n  \"edges_summary\": {\n    \"total_edges\": 15, \"secured\": 15, \"insecure\": 0,\n    \"distinct_src_namespaces\": [\"emojivoto\", \"linkerd-viz\"],\n    \"distinct_dst_namespaces\": [\"emojivoto\", \"linkerd\", \"linkerd-viz\"]\n  },\n  \"edge_report\": [ /* full parsed edges array */ ]\n}\n```"
+    },
+    {
+      "slug": "why-this-shape",
+      "title": "Why this shape",
+      "markdown": "## Why this shape\n\n| Antipattern | Correct shape (this example) |\n|---|---|\n| `cilock run ... -- bash -c \"linkerd check ... > check.json && cp check.json out.json\"` | `cilock run ... -- sh -c 'linkerd check -o json > linkerd-check.json; linkerd viz edges deploy -A -o json > linkerd-edges.json'` |\n| `command-run.cmd` records `[\"bash\",\"-c\",\"... && cp ...\"]` | `command-run.cmd` records the literal `sh -c` argv invoking the two linkerd subcommands |\n| The product is a copy of a file written outside cilock's view | The product is the JSON file as `linkerd` wrote it during the wrapped step |\n\nThree properties matter: (1) `command-run/v0.1.cmd` records the real argv (the `sh -c` invoking the two linkerd subcommands), not a chained shell with a separate cp. (2) The ptrace spy traces the shell + linkerd child processes because cilock is `sh`'s direct parent. (3) `product/v0.3` captures `linkerd-check.json` and `linkerd-edges.json` as written via the single redirects inside the wrapped step, and the linkerd-check attestor parses those exact files.\n\nThe single `sh -c` wrapper is the same pattern as [hadolint](./hadolint), [govulncheck](./govulncheck), and [falco](./falco) — tools that need stdout-to-file conversion to be hashed by the product attestor. The shell redirect is a one-shot conversion, not the cp antipattern."
+    },
+    {
+      "slug": "the-mtls-required-policy-the-value-cilock-adds",
+      "title": "The mTLS-required policy (the value cilock adds)",
+      "markdown": "## The mTLS-required policy (the value cilock adds)\n\nWithout policy, you have a signed envelope but no enforcement. The canonical service-mesh release gate is \"**any insecure edge → block deploy**.\" A minimal Rego:\n\n```rego\npackage linkerd_mtls\n\ndeny[msg] {\n    input.edges_summary.insecure > 0\n    msg := sprintf(\n        \"linkerd viz edges reports %d insecure (non-mTLS) edge(s) of %d total — refusing to deploy through unmeshed traffic\",\n        [input.edges_summary.insecure, input.edges_summary.total_edges]\n    )\n}\n\ndeny[msg] {\n    input.check_summary.error > 0\n    msg := sprintf(\"linkerd reports %d error-level check(s)\", [input.check_summary.error])\n}\n\ndeny[msg] {\n    not input.edges_summary\n    msg := \"edges report not captured — mTLS contract cannot be enforced\"\n}\n```\n\nFull Rego with five deny rules + the positive/negative end-to-end runner is in [`tool-linkerd-check/policy/`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-linkerd-check/policy)."
+    },
+    {
+      "slug": "validate-it-locally",
+      "title": "Validate it locally",
+      "markdown": "## Validate it locally\n\nList the predicate types in the captured envelope:\n\n```bash\njq -r '.payload' attestation.json | base64 -d | jq '.predicate.attestations | map(.type)'\n```\n\nExpected output:\n\n```json\n[\n  \"https://aflock.ai/attestations/environment/v0.1\",\n  \"https://aflock.ai/attestations/git/v0.1\",\n  \"https://aflock.ai/attestations/material/v0.3\",\n  \"https://aflock.ai/attestations/command-run/v0.1\",\n  \"https://aflock.ai/attestations/product/v0.3\",\n  \"https://aflock.ai/attestations/linkerd-check/v0.1\"\n]\n```\n\nConfirm `command-run.cmd` carries the literal `sh -c` argv:\n\n```bash\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[] | select(.type==\"https://aflock.ai/attestations/command-run/v0.1\") | .attestation.cmd'\n# [\"sh\",\"-c\",\"linkerd check -o json > linkerd-check.json; linkerd viz edges deploy -A -o json > linkerd-edges.json\"]\n```\n\nPull the mesh summary from the signed envelope:\n\n```bash\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[] | select(.type==\"https://aflock.ai/attestations/linkerd-check/v0.1\") | .attestation | {\n      cluster: .cluster_name,\n      check: .check_summary | {pass, warn, error, overall_success},\n      edges: .edges_summary | {total_edges, secured, insecure}\n    }'\n# {\n#   \"cluster\": \"dropbox-clone-dev\",\n#   \"check\": { \"pass\": 50, \"warn\": 4, \"error\": 0, \"overall_success\": true },\n#   \"edges\": { \"total_edges\": 15, \"secured\": 15, \"insecure\": 0 }\n# }\n```"
+    },
+    {
+      "slug": "notes",
+      "title": "Notes",
+      "markdown": "## Notes\n\n- **Extension JSON concatenation.** `linkerd check -o json` emits the core report and one report per installed extension (viz, jaeger, multicluster) with **no delimiter** between objects ([linkerd/linkerd2#5837](https://github.com/linkerd/linkerd2/issues/5837)). The attestor uses a streaming JSON decoder to read every object and merges their categories; the merged report's `overall_success` is the logical AND of all sub-reports. This is transparent to the operator — you just run `linkerd check -o json > file` and the attestor handles the quirk.\n- **Viz extension required for mTLS gating.** `linkerd check` alone doesn't surface per-edge mTLS state — that's a viz-extension feature. Install with `linkerd viz install | kubectl apply -f -` (or via the official Helm chart). Without viz, the linkerd-check predicate still produces, but `edges_summary` is absent and policies that require it fail-closed (which is the right default).\n- **`-A` namespace scope.** The validated example uses `linkerd viz edges deploy -A -o json` to scope across all namespaces. For a tighter release gate, scan only the namespaces your release touches — `linkerd viz edges deploy -n <ns1> -n <ns2>`. Either way the predicate captures `distinct_src_namespaces` and `distinct_dst_namespaces` so policies can branch on scope.\n- **Cluster name stamping.** Set `LINKERD_CLUSTER_NAME` in CI so policies can branch on cluster (e.g. allow warnings on `dev`, deny them on `prod`). If unset, the field is empty.\n- **Stable-channel warnings.** Linkerd's `linkerd check` flags warnings for any non-edge channel version mismatch — running stable-2.14.10 against the current `linkerd version` check produces 4 warnings. Warnings are NOT release-gate failures by default; only errors block. Errors require explicit deny rules."
+    },
+    {
+      "slug": "faq",
+      "title": "FAQ",
+      "markdown": "## FAQ\n\n### Does cilock support Linkerd?\n\nYes. Wrap `sh -c 'linkerd check -o json > check.json; linkerd viz edges deploy -A -o json > edges.json'` with `cilock run --attestations linkerd-check,environment,git`. The native `linkerd-check` attestor parses both files into a `https://aflock.ai/attestations/linkerd-check/v0.1` predicate with per-category check rollup and per-edge mTLS booleans, alongside the standard collection (environment, git, material, command-run, product).\n\n### How do I gate a release on every edge being mTLS-secured?\n\nWrite a Rego that denies on `input.edges_summary.insecure > 0`. The Rego runs against the `linkerd-check/v0.1` predicate's `attestation` field, so it sees the same `edges_summary` block. A 3-line policy with one deny rule is enough for the headline case; the [`tool-linkerd-check/policy/decoded-rego-linkerd-mtls.txt`](https://github.com/aflock-ai/attestor-compliance-examples/blob/main/tool-linkerd-check/policy/decoded-rego-linkerd-mtls.txt) shows the production-ready 5-rule version.\n\n### Why parse `linkerd check` JSON into a custom predicate instead of using k8smanifest?\n\n`linkerd check` validates dynamic cluster state (control plane pods are healthy, identity certs are valid, viz proxies are running the right version) — none of that lives in a static Kubernetes manifest. `k8smanifest` would snapshot the policy CRDs (Server, ServerAuthorization, HTTPRoute) but couldn't capture whether the linkerd-identity Deployment is actually ready or whether the trust anchor is about to expire. The two attestors are complementary: capture CRDs with `k8smanifest` for the desired state, capture `linkerd check` for the actual state.\n\n### Does this require the viz extension?\n\nFor the mTLS gate, yes — `linkerd viz edges` is what provides per-edge mTLS booleans. The plain `linkerd check` capture works without viz but only surfaces control-plane health, not data-plane integrity. Install viz with `linkerd viz install | kubectl apply -f -`.\n\n### How does this differ from running Linkerd standalone?\n\nStandalone `linkerd check` and `linkerd viz edges` give you JSON outputs with no provenance — nothing binds them to a release, a cluster (modulo the kubeconfig that ran the command), or a policy. cilock adds five predicates around the same JSON: `git/v0.1` (the commit that defined the policy), `environment/v0.1` (the host running the capture), `material/v0.3` (the working tree), `command-run/v0.1` (the exact `sh -c` argv + exit code), and `product/v0.3` (the JSON files' content hashes). The linkerd JSON is unchanged — same bytes, same downstream pipeline — but the surrounding evidence is now signed and policy-checkable."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [`linkerd-check` attestor](../attestors/linkerd-check) — the underlying ingestion path\n- [Validated example: tool-linkerd-check](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-linkerd-check) — real EKS-cluster capture + raw envelopes + mTLS-required Rego (positive + negative)\n- [Linkerd project](https://linkerd.io) — upstream\n- [`linkerd check` CLI reference](https://linkerd.io/2-edge/reference/cli/check/)\n- [`linkerd viz` CLI reference](https://linkerd.io/2-edge/reference/cli/viz/)\n- [Tools index](./)"
+    }
+  ],
+  "hasDoc": true
+}

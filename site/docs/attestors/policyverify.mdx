@@ -1,0 +1,84 @@
+---
+title: "policyverify"
+description: "The cilock policyverify attestor emits a SLSA Verification Summary Attestation recording the outcome of a cilock verify run against a signed policy, signed into in-toto evidence."
+sidebar_position: 29
+---
+
+{/* GENERATED — do not edit. Source: rookery attestation/detection/docs/policyverify.doc.md. Regenerate: npm run gen */}
+import AttestorMeta from '@site/src/components/Catalog/AttestorMeta';
+import GeneratedFooter from '@site/src/components/Catalog/GeneratedFooter';
+import meta from '@catalog/policyverify.json';
+
+# `policyverify` attestor
+
+Emits a SLSA Verification Summary Attestation (VSA) recording the outcome of a `cilock verify` run against a signed policy.
+
+<AttestorMeta data={meta} />
+
+## What it captures
+
+The attestor embeds `slsa.VerificationSummary` and serializes per the SLSA VSA v1 spec:
+
+- `verifier.id` — hard-coded to `"aflock"`. Identifies who produced the VSA.
+- `timeVerified` — wall-clock timestamp captured when `Attest` finishes verification.
+- `policy.uri` — set to the policy predicate type constant (`policy.PolicyPredicate`); the policy's content identity is in `policy.digest`.
+- `policy.digest` — digest set computed from the policy DSSE envelope payload (the canonical policy bytes that were signature-verified).
+- `inputAttestations[]` — for every policy step, each passing collection's `Reference` URI plus a computed digest. When verification *fails*, rejected collections are also included so downstream consumers can see what was considered.
+- `verificationResult` — `"PASSED"` or `"FAILED"`, derived from the policy engine's `accepted` return value.
+
+Additional fields outside the SLSA predicate:
+
+- `denyReasons[]` — per-collection rejection records (`reference`, `collection_name`, `message`).
+
+Subjects emitted by the attestor (via the `Subjecter` interface):
+
+- One `artifact:<digest>` entry per subject digest supplied to verify.
+- One `policy:<uri>` entry pointing at the verified policy.
+
+## When to use
+
+Run as part of `cilock verify` at a release or deploy gate. The resulting VSA is a portable, signed statement that "this policy passed against these subjects at this time." Downstream consumers (admission controllers, deploy pipelines, auditors) can trust the VSA without re-fetching the full evidence chain or re-running the policy engine.
+
+## Flags
+
+None. The attestor is configured programmatically by `cilock verify` via setter methods (`SetPolicyEnvelope`, `SetSubjectDigests`, `SetCollectionSource`, `SetPolicyVerificationOptions`, `SetAiServerURL`, `SetKMSProviderOptions`) — there are no user-facing attestor flags.
+
+## Output shape
+
+```json
+{
+  "verifier": { "id": "aflock" },
+  "timeVerified": "2026-05-21T12:34:56Z",
+  "policy": {
+    "uri": "https://witness.dev/attestations/policy/v0.1",
+    "digest": { "sha256": "..." }
+  },
+  "inputAttestations": [
+    { "uri": "...", "digest": { "sha256": "..." } }
+  ],
+  "verificationResult": "PASSED",
+  "denyReasons": []
+}
+```
+
+## Gotchas
+
+- **Verify-type only.** `RunType` is `attestation.VerifyRunType`, so this attestor cannot be selected inside `cilock run`. It is wired in automatically by `cilock verify`.
+- **Policy identity, not policy contents.** The VSA records the policy envelope digest plus the predicate-type URI in `policy.uri` — it does not embed the policy body. Consumers must dereference the digest against their policy store.
+- **Verifier ID is fixed.** The `verifier.id` is hard-coded to `"aflock"`; it does not reflect the signing identity or hostname of the verifier.
+- **Rejected attestations only listed on failure.** When `verificationResult == "PASSED"`, `inputAttestations` contains only the passing collections that satisfied each step.
+- **Policy signature is verified first.** If the policy envelope signature fails to verify, `Attest` returns an error before any VSA is produced — no failed VSA is emitted for signature-level failures.
+
+## CLI example
+
+See the constraint summary + reproduction recipe at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/41-policyverify](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/41-policyverify). This attestor is currently blocked or doc-only — the linked example explains why and shows the recipe to validate once the constraint is removed.
+
+## See also
+
+- [Catalog row](../reference/attestor-catalog.md)
+- [Verify in a release gate](../guides/verify-in-a-release-gate.md)
+- [SLSA VSA spec](https://slsa.dev/spec/v1.0/verification_summary)
+
+<script type="application/ld+json" dangerouslySetInnerHTML={{__html: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"policyverify — cilock attestor\",\"description\":\"The cilock policyverify attestor emits a SLSA Verification Summary Attestation recording the outcome of a cilock verify run against a signed policy, signed into in-toto evidence.\",\"url\":\"https://cilock.aflock.ai/attestors/policyverify\"}"}} />
+
+<GeneratedFooter name="policyverify" />

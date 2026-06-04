@@ -1,0 +1,92 @@
+---
+title: "maven"
+description: "The cilock maven attestor parses a Maven pom.xml and signs the project coordinates and declared dependencies into in-toto evidence as a static, pre-build dependency record."
+sidebar_position: 9
+---
+
+{/* GENERATED — do not edit. Source: rookery attestation/detection/docs/maven.doc.md. Regenerate: npm run gen */}
+import AttestorMeta from '@site/src/components/Catalog/AttestorMeta';
+import GeneratedFooter from '@site/src/components/Catalog/GeneratedFooter';
+import meta from '@catalog/maven.json';
+
+# `maven` attestor
+
+Parses a Maven `pom.xml` and records the project coordinates plus its declared dependencies as an attestation.
+
+<AttestorMeta data={meta} />
+
+## What it captures
+
+Fields are read directly out of the POM XML and emitted under these JSON keys:
+
+- `groupid` — from `<project><groupId>`.
+- `artifactid` — from `<project><artifactId>`.
+- `version` — from `<project><version>`.
+- `projectname` — from `<project><name>`.
+- `dependencies` — array of objects from `<project><dependencies><dependency>`. Each entry exposes:
+  - `groupid` (`<groupId>`)
+  - `artifactid` (`<artifactId>`)
+  - `version` (`<version>`)
+  - `scope` (`<scope>`)
+
+The attestor also emits subjects: one `` `project:<groupId>/<artifactId>@<version>` `` entry for the project and one `` `dependency:<groupId>/<artifactId>@<version>` `` entry per declared dependency. Each subject's digest is the SHA-256 of that subject string.
+
+## When to use
+
+Run during the `prematerial` phase of a Maven build to lock in the declared coordinates and dependency set before compile/fetch. Pair with a `material` attestor if you also need to bind the resolved artifact bytes.
+
+## Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--attestor-maven-pom-path` | `pom.xml` | Path to the Project Object Model (POM) XML file used for the task being attested. |
+
+## Output shape
+
+```json
+{
+  "groupid": "com.example",
+  "artifactid": "my-service",
+  "version": "1.2.3",
+  "projectname": "My Service",
+  "dependencies": [
+    {
+      "groupid": "org.springframework",
+      "artifactid": "spring-core",
+      "version": "6.1.0",
+      "scope": "compile"
+    }
+  ]
+}
+```
+
+## Gotchas
+
+- **Direct dependencies only.** Only entries under `<project><dependencies><dependency>` are captured. `<dependencyManagement>`, `<build><plugins>`, profile-scoped dependencies, and parent-inherited dependencies are not parsed. No transitive resolution is performed — the attestor never invokes Maven.
+- **No POM digest is recorded.** The attestor does not hash the `pom.xml` file itself; only the parsed coordinates and dependency list end up in the predicate. Capture the POM with a material attestor if you need to bind its bytes.
+- **No property/variable interpolation.** Values like `${project.version}` or `${revision}` are emitted verbatim as they appear in the XML; Maven's effective-POM substitution is not applied.
+- **Single POM only.** The flag accepts one path. Multi-module reactor builds need one attestation per module POM.
+- **Subjects are coordinate-string digests, not artifact digests.** Each `project:` / `dependency:` subject's SHA-256 is computed over the coordinate string itself, not over a resolved JAR.
+
+## CLI example
+
+Real `pom.xml` resolution: groupId, artifactId, version, declared dependencies extracted statically.
+
+```bash
+# In a directory containing pom.xml:
+cilock run --step maven-build \
+  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \
+  --attestations maven \
+  -- mvn -q package 
+```
+
+Validated against a real `pom.xml` with declared dependencies. The attestor reads the pom statically; no Maven invocation needed. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/10-maven](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/10-maven).
+
+## See also
+
+- [Catalog row](../reference/attestor-catalog.md)
+- Upstream: [witness/maven.md](https://github.com/in-toto/witness/blob/main/docs/attestors/maven.md)
+
+<script type="application/ld+json" dangerouslySetInnerHTML={{__html: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"maven — cilock attestor\",\"description\":\"The cilock maven attestor parses a Maven pom.xml and signs the project coordinates and declared dependencies into in-toto evidence as a static, pre-build dependency record.\",\"url\":\"https://cilock.aflock.ai/attestors/maven\"}"}} />
+
+<GeneratedFooter name="maven" />

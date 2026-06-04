@@ -1,0 +1,46 @@
+{
+  "name": "gitleaks",
+  "source": "catalog-only",
+  "description": "Gitleaks — secret detection in git history and source.",
+  "title": "gitleaks",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "secret-scan"
+  ],
+  "primaryCategory": "secret-scan",
+  "upstream": {
+    "name": "Gitleaks",
+    "source": "https://github.com/gitleaks/gitleaks",
+    "license": "MIT",
+    "vendor": "Gitleaks community"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "gitleaks"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Gitleaks scan observed. --report-format sarif|json captures findings."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- gitleaks .",
+  "detectionCommand": "cilock plan --format=json -- gitleaks [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"gitleaks\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

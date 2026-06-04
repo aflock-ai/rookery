@@ -1,0 +1,106 @@
+{
+  "name": "oscap",
+  "source": "attestor-backed",
+  "description": "Run OpenSCAP (oscap) XCCDF baseline scans under cilock — every SCAP Security Guide profile evaluation becomes a signed in-toto envelope carrying parsed pass/fail/N/A counts plus the raw XCCDF results XML.",
+  "title": "OpenSCAP",
+  "sidebarPosition": 15,
+  "examplesRepo": "29-oscap",
+  "categories": [
+    "compliance-scan"
+  ],
+  "primaryCategory": "compliance-scan",
+  "upstream": {
+    "name": "OpenSCAP",
+    "source": "https://github.com/OpenSCAP/openscap",
+    "license": "LGPL-2.1-or-later",
+    "vendor": "Red Hat / OpenSCAP project"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "oscap"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "oscap"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "oscap*.xml | **/oscap*.xml | oscap*.html | **/oscap*.html"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "OpenSCAP results captured. SCAP rule outcomes preserved."
+  },
+  "predicateType": "https://aflock.ai/attestations/oscap/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- oscap .",
+  "detectionCommand": "cilock plan --format=json -- oscap [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"oscap\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "[OpenSCAP](https://www.open-scap.org/) is the Red Hat-maintained reference implementation of the SCAP (Security Content Automation Protocol) stack — it evaluates a host against XCCDF benchmarks (CIS, DoD STIG, PCI-DSS, ANSSI, CUI, etc.) using OVAL probes and writes an XCCDF results XML report. Under cilock, every `oscap xccdf eval` run becomes a **signed `oscap/v0.1` attestation** carrying the parsed pass/fail/notapplicable counts, the failed-rule list, and a digest of the raw XCCDF XML alongside the file itself in `product/v0.3`."
+    },
+    {
+      "slug": "validated-invocation",
+      "title": "Validated invocation",
+      "markdown": "## Validated invocation\n\n```bash\ncilock run --step oscap-scan \\\n  --signer-file-key-path key.pem \\\n  --outfile attestation.json \\\n  --attestations oscap,environment,git \\\n  -- oscap xccdf eval \\\n       --profile xccdf_org.ssgproject.content_profile_standard \\\n       --results oscap-results.xml \\\n       /usr/share/xml/scap/ssg/content/ssg-amzn2023-ds.xml\n```\n\nThis is the [`29-oscap`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/29-oscap) example verbatim, validated end-to-end against a fresh Amazon Linux 2023 EC2 host using the SCAP Security Guide (SSG) `standard` profile from `ssg-amzn2023-ds.xml`. The scan produced **11 pass, 3 fail, 64 N/A** — real findings, not synthetic fixtures. The three failed rules (`rpm_verify_permissions`, `file_permissions_library_dirs`, `grub2_nousb_argument`) reflect actual gaps on the host.\n\nA few things to know about this invocation:\n\n- **No soft-fail flag needed.** `oscap xccdf eval` exits 0 when the scan completes, regardless of how many rules failed — the rule outcomes live inside the XCCDF results XML. `command-run/v0.1` records exit 0 even when `failCount > 0`. The gate belongs at `cilock verify` time over the parsed `oscap/v0.1` predicate, not at scan time.\n- **`--results <file>` is required.** Without it `oscap` only prints to stdout and there is no XML file for cilock's `product/v0.3` and `oscap` attestors to ingest.\n- **Datastream path is distribution-specific.** AL2023 ships SSG content at `/usr/share/xml/scap/ssg/content/ssg-amzn2023-ds.xml`; RHEL 9 uses `ssg-rhel9-ds.xml`, Ubuntu 22.04 uses `ssg-ubuntu2204-ds.xml`, etc. The `scap-security-guide` package (RHEL/Fedora) or `ssg-base` (Debian/Ubuntu) installs them."
+    },
+    {
+      "slug": "what-gets-captured",
+      "title": "What gets captured",
+      "markdown": "## What gets captured\n\nEach cilock run emits an in-toto envelope whose predicate carries the following attestor types:\n\n| Attestor type                                          | Captures                                                                  |\n| ------------------------------------------------------ | ------------------------------------------------------------------------- |\n| `https://aflock.ai/attestations/command-run/v0.1`      | Real `oscap xccdf eval ...` argv, env, exit code, stdout/stderr           |\n| `https://aflock.ai/attestations/material/v0.3`         | Merkle tree of inputs (the SSG datastream XML is read, not in cwd)        |\n| `https://aflock.ai/attestations/product/v0.3`          | Merkle tree of outputs, including `oscap-results.xml`                     |\n| `https://aflock.ai/attestations/oscap/v0.1`            | Parsed XCCDF: profile, benchmark, target host, per-result counts, failed-rule list, `reportDigestSet.sha256` |\n| `https://aflock.ai/attestations/environment/v0.1`      | OS, arch, user, env vars (PII-filtered)                                   |\n| `https://aflock.ai/attestations/git/v0.1`              | Commit SHA, branch, remotes                                               |\n\nThe `oscap/v0.1` predicate's `reportDigestSet.sha256` exactly matches the digest of the `oscap-results.xml` leaf in the `product/v0.3` tree. That is the chain that makes the findings verifiable — you can't swap in a different XCCDF report without invalidating the product tree. The `oscap` attestor also publishes three SHA-256 subjects on the envelope: `profile:<profile-id>`, `host:<target-hostname>`, and `benchmark:<benchmark-id>`, so a policy can pin \"this attestation is the STIG scan for *this* host.\""
+    },
+    {
+      "slug": "why-this-shape",
+      "title": "Why this shape",
+      "markdown": "## Why this shape\n\n| Antipattern                                                     | This page                                                              |\n| --------------------------------------------------------------- | ---------------------------------------------------------------------- |\n| `cilock run ... -- bash -c \"cp scan.xml results.xml\"`           | `cilock run ... -- oscap xccdf eval --results oscap-results.xml ...`   |\n| `command-run` records `bash -c \"cp ...\"` — useless              | `command-run` records the real `oscap xccdf eval` argv                 |\n| Product attestor digests a copy of a file written outside cilock | Product attestor digests the XCCDF XML `oscap` actually wrote          |\n| Tool execution happens outside cilock's syscall view             | `oscap` runs as cilock's direct child; the spy traces its syscalls     |\n| `oscap` predicate parses a file of unknown provenance            | `oscap` predicate parses the same file cilock just hashed into product |\n\ncilock invokes `oscap` **directly** — no `bash -c` wrapper, no `cp` of a pre-existing report, no `echo scan-done` placeholder. This page was promoted from the `29-oscap` validated example precisely because earlier internal docs used those antipatterns; the [antipattern sweep](https://github.com/aflock-ai/cilock-docs/pull/27) cleaned the attestor reference page, and this user-facing page inherits the corrected shape. The three guarantees — real argv in `command-run`, ptrace coverage of the scan, product digest matching the parsed report — only hold when cilock is the tool's direct parent."
+    },
+    {
+      "slug": "validate-it-locally",
+      "title": "Validate it locally",
+      "markdown": "## Validate it locally\n\n```bash\n# Generate a signing key (one-time).\nopenssl genpkey -algorithm ed25519 -out key.pem\n\n# Run cilock + oscap against the host.\ncilock run --step oscap-scan \\\n  --signer-file-key-path key.pem \\\n  --outfile attestation.json \\\n  --attestations oscap,environment,git \\\n  -- oscap xccdf eval \\\n       --profile xccdf_org.ssgproject.content_profile_standard \\\n       --results oscap-results.xml \\\n       /usr/share/xml/scap/ssg/content/ssg-amzn2023-ds.xml\n\n# Confirm the predicate carries the expected attestor types.\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations | map(.type)'\n```\n\nExpected output:\n\n```json\n[\n  \"https://aflock.ai/attestations/environment/v0.1\",\n  \"https://aflock.ai/attestations/git/v0.1\",\n  \"https://aflock.ai/attestations/material/v0.3\",\n  \"https://aflock.ai/attestations/command-run/v0.1\",\n  \"https://aflock.ai/attestations/product/v0.3\",\n  \"https://aflock.ai/attestations/oscap/v0.1\"\n]\n```\n\nConfirm `oscap`'s real argv ended up in `command-run`:\n\n```bash\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[]\n        | select(.type==\"https://aflock.ai/attestations/command-run/v0.1\")\n        | .attestation.cmd'\n```\n\nExpected output (no `bash`, no `cp` — the literal `oscap` argv):\n\n```json\n[\n  \"oscap\",\n  \"xccdf\",\n  \"eval\",\n  \"--profile\",\n  \"xccdf_org.ssgproject.content_profile_standard\",\n  \"--results\",\n  \"oscap-results.xml\",\n  \"/usr/share/xml/scap/ssg/content/ssg-amzn2023-ds.xml\"\n]\n```\n\nExtract the pass/fail/N/A counts and the failed-rule list from the `oscap/v0.1` predicate:\n\n```bash\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[]\n        | select(.type==\"https://aflock.ai/attestations/oscap/v0.1\")\n        | .attestation.scanSummary\n        | {profile, benchmarkId, targetSystem,\n           passCount, failCount, notApplicableCount, errorCount,\n           failedRules: [.failedRules[] | {idref, severity}]}'\n```\n\nAgainst the `29-oscap` AL2023 host you should see `passCount: 11, failCount: 3, notApplicableCount: 64` and the three failed rules listed above."
+    },
+    {
+      "slug": "how-a-verifier-consumes-this",
+      "title": "How a verifier consumes this",
+      "markdown": "## How a verifier consumes this\n\nThe `oscap` attestor is a `postproduct` lifecycle attestor with predicate type `https://aflock.ai/attestations/oscap/v0.1`. It does not shell out to `oscap`; it reads a pre-existing XCCDF/ARF XML report from the step's products. It populates three top-level fields:\n\n- `reportFile` — path of the XCCDF/ARF XML file picked up from products.\n- `reportDigestSet` — digest set of that file, integrity-checked against the product entry before parsing.\n- `scanSummary` — structured roll-up of the first `` `<TestResult>` `` in the document:\n  - `profile` — the `idref` from the `` `<profile>` `` child of `` `<TestResult>` ``.\n  - `benchmarkId` — the `id` attribute of the XCCDF `` `<Benchmark>` `` element.\n  - `targetSystem` — the trimmed contents of the `` `<target>` `` element.\n  - `passCount`, `failCount`, `notApplicableCount`, `errorCount` — aggregate counts derived from `` `<rule-result>` `` outcomes.\n  - `failedRules[]` — `{ idref, severity, result }` for every rule whose `` `<result>` `` is `fail`.\n\nSubjects published (each value hashed with SHA-256):\n\n- `profile:<profile-id>` — the XCCDF profile that was evaluated.\n- `host:<target-hostname>` — the system that was scanned.\n- `benchmark:<benchmark-id>` — the XCCDF benchmark document.\n\nPair this attestor with [`policyverify`](./policyverify) to gate promotion on `failCount == 0`.\n\n### Output shape\n\n```json\n{\n  \"reportFile\": \"results/oscap-results.xml\",\n  \"reportDigestSet\": { \"sha256\": \"...\" },\n  \"scanSummary\": {\n    \"profile\": \"xccdf_org.ssgproject.content_profile_stig\",\n    \"benchmarkId\": \"xccdf_org.ssgproject.content_benchmark_RHEL-9\",\n    \"targetSystem\": \"host.example.com\",\n    \"passCount\": 312,\n    \"failCount\": 4,\n    \"notApplicableCount\": 27,\n    \"errorCount\": 0,\n    \"failedRules\": [\n      {\n        \"idref\": \"xccdf_org.ssgproject.content_rule_package_telnet_removed\",\n        \"severity\": \"high\",\n        \"result\": \"fail\"\n      }\n    ]\n  }\n}\n```"
+    },
+    {
+      "slug": "notes",
+      "title": "Notes",
+      "markdown": "## Notes\n\n- **Profile selection.** SSG ships a dozen profiles per OS — the canonical ones are `xccdf_org.ssgproject.content_profile_standard` (baseline), `xccdf_org.ssgproject.content_profile_cis` / `_cis_server_l1` / `_cis_workstation_l1` (CIS), `xccdf_org.ssgproject.content_profile_stig` (DISA STIG), `xccdf_org.ssgproject.content_profile_pci-dss` (PCI), `xccdf_org.ssgproject.content_profile_cui` (NIST 800-171), and `xccdf_org.ssgproject.content_profile_anssi_bp28_high`. `oscap info <datastream>` lists every profile id available in a given DS.\n- **Datastream paths by distro.** RHEL/CentOS/Rocky/Alma: `/usr/share/xml/scap/ssg/content/ssg-rhel{8,9,10}-ds.xml`. Fedora: `ssg-fedora-ds.xml`. AL2023: `ssg-amzn2023-ds.xml`. Ubuntu: `ssg-ubuntu{2004,2204,2404}-ds.xml`. Install via `dnf install scap-security-guide` (RHEL/Fedora) or `apt install ssg-base ssg-debderived` (Debian/Ubuntu).\n- **SCAP spec triad.** SCAP is an umbrella for several XML grammars: **XCCDF** (the human-authored benchmark with rule descriptions, profiles, and remediation text), **OVAL** (the machine-checkable probes XCCDF rules delegate to), and **CPE** (the platform identifiers that gate which rules apply). `oscap xccdf eval` walks all three and writes a single XCCDF results XML — that file is what cilock attests.\n- **ARF wrappers.** `oscap` can also emit an Asset Reporting Format (`--results-arf arf.xml`) that wraps XCCDF in a richer envelope. The rookery `oscap` attestor handles both: it walks XML tokens looking for the first `` `<Benchmark>` `` element regardless of nesting depth.\n- **Result strings.** The attestor buckets rule outcomes by exact match on `pass`, `fail`, `notapplicable` (and `not applicable`), and `error`. Other XCCDF result values — `notchecked`, `informational`, `fixed`, `unknown` — are present in the raw XML but not counted in the predicate's roll-up."
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Does not shell out to `oscap`.** The attestor reads a pre-existing XCCDF/ARF XML report from products; you must run `oscap xccdf eval --results <path>` (or equivalent) in a prior step and surface the file as a product.\n- **File-suffix filter.** Only products whose path ends in `.xml` are considered; reports written with other extensions are skipped.\n- **XCCDF namespace check.** A candidate file must contain the literal string `http://checklists.nist.gov/xccdf/1.2` as a fast pre-filter before structural parse; non-XCCDF XML is rejected.\n- **Digest integrity.** The file is re-hashed and compared against the product digest before parsing; a mismatch causes that candidate to be skipped.\n- **First match wins.** Iteration order over products is non-deterministic; if multiple files look like XCCDF reports, only the first accepted one is attested.\n- **ARF wrappers.** The decoder walks tokens looking for the first `` `<Benchmark>` `` element regardless of depth, so XCCDF wrapped in an ARF `` `<asset-report-collection>` `` envelope is supported.\n- **First TestResult only.** Only `bm.Results[0]` is summarized — `oscap xccdf eval` produces exactly one, but documents containing multiple are otherwise ignored.\n- **Result strings.** Counts are bucketed by exact match on `pass`, `fail`, `notapplicable` / `not applicable`, and `error`; other XCCDF result values (`notchecked`, `informational`, `fixed`, `unknown`) are recorded by neither the counters nor `failedRules`.\n- **Only failing rules are listed.** `failedRules` contains entries where `` `<result>` `` is `fail`; non-pass-but-non-fail outcomes (e.g., `error`) are counted but not enumerated."
+    },
+    {
+      "slug": "faq",
+      "title": "FAQ",
+      "markdown": "## FAQ\n\n### Does cilock support OpenSCAP?\n\nYes. Cilock invokes the upstream `oscap` binary unchanged and captures its XCCDF results XML via the native `oscap` attestor. No OpenSCAP fork, no patched build — `oscap xccdf eval` runs exactly as it would outside cilock, and the resulting XML is parsed into a signed `oscap/v0.1` predicate.\n\n### Which SCAP profiles can I scan under cilock?\n\nAny profile shipped in your SCAP Security Guide datastream — CIS Level 1 / Level 2, DISA STIG, PCI-DSS, NIST 800-171 (CUI), ANSSI BP-028, the SSG `standard` baseline, and any custom profile you author. Cilock is profile-agnostic: it captures whatever XCCDF results XML `oscap` writes, and the `oscap/v0.1` predicate records the profile id (`xccdf_org.ssgproject.content_profile_*`) alongside the per-rule outcomes.\n\n### Can I use the SCAP results in a GRC platform?\n\nYes. The raw XCCDF results XML lands in `product/v0.3` as a Merkle leaf, so it's preserved verbatim — feed it directly into Tenable, Wazuh, Splunk Phantom, ServiceNow GRC, or any tool that already speaks XCCDF/ARF. The signed `oscap/v0.1` predicate gives you a tamper-evident roll-up (counts plus failed-rule list) that's easier to evaluate in Rego or OPA, and the envelope subjects (`profile:`, `host:`, `benchmark:`) let a verifier confirm the scan was the right benchmark on the right machine before trusting the counts.\n\n### Does `oscap` exit non-zero on findings?\n\nNo — unlike SARIF tools like Checkov or gosec, `oscap xccdf eval` exits 0 whenever the scan completes successfully, even if many rules failed. The rule outcomes are inside the XCCDF XML, not in the process exit code. That means cilock's `command-run/v0.1` records exit 0 and no soft-fail flag is needed. Enforce thresholds in policy (e.g., `failCount == 0` in Rego against the `oscap/v0.1` predicate at `cilock verify` time)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [`29-oscap` validated example](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/29-oscap) — the AL2023 + SSG `standard` reference run this page is built from\n- [SCAP Security Guide (ComplianceAsCode)](https://github.com/ComplianceAsCode/content) — the upstream source of every `ssg-*-ds.xml` datastream\n- [OpenSCAP project](https://www.open-scap.org/) — the `oscap` CLI, libraries, and SCAP toolchain\n- [`inspec`](./inspec)\n- [Tools index](./index)"
+    }
+  ],
+  "hasDoc": true
+}

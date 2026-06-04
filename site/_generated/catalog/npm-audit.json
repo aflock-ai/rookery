@@ -1,0 +1,44 @@
+{
+  "name": "npm-audit",
+  "source": "catalog-only",
+  "description": "npm audit — Node.js dependency vulnerability scanner.",
+  "title": "npm-audit",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "npm audit",
+    "source": "https://docs.npmjs.com/cli/v10/commands/npm-audit",
+    "license": "Artistic-2.0",
+    "vendor": "OpenJS Foundation / npm Inc."
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "npm audit"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "npm audit observed. --json output captures findings."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- npm audit .",
+  "detectionCommand": "cilock plan --format=json -- npm audit [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"npm audit\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

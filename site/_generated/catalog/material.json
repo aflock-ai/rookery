@@ -1,0 +1,93 @@
+{
+  "name": "material",
+  "source": "attestor-backed",
+  "description": "The cilock material attestor snapshots the working directory before a step runs and emits a single RFC 6962 Merkle-root in-toto subject (tree:materials) over every input file's digest.",
+  "title": "material",
+  "sidebarPosition": 2,
+  "examplesRepo": null,
+  "categories": [],
+  "primaryCategory": null,
+  "upstream": null,
+  "gates": [],
+  "recommendedTrace": "off",
+  "triggers": [],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {},
+  "predicateType": "https://aflock.ai/attestations/material/v0.3",
+  "runType": "material",
+  "defaultOn": true,
+  "runExample": null,
+  "detectionCommand": null,
+  "positiveSetup": "no detector.yaml; this attestor is always-on or user-driven",
+  "negativeSetup": null,
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Snapshots the working directory **before** the step's command runs, computes a Merkle root over every input file's digest, and emits a single in-toto subject (`tree:materials`) whose digest is the root. The full per-file digest map is **not** carried in the predicate — it lives in a producer-side sidecar (`<outfile>.material.tree.json`) and is exposed to consumers via separate [inclusion-proof attestations](./inclusion-proof) on demand."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe v0.3 material predicate is small and fixed-size. The schema:\n\n| JSON field | Type | Source |\n|---|---|---|\n| `merkleRoot` | string (hex) | The Merkle root over the sorted material list, computed via [RFC 6962 §2.1](https://datatracker.ietf.org/doc/html/rfc6962#section-2.1). |\n| `treeSize` | integer | Number of files that contributed to the root. |\n| `hashAlgorithm` | string | Always `sha256` for v0.3. |\n| `construction` | string | Always `RFC6962` for v0.3. |\n\nThe DSSE statement's subject array carries one entry:\n\n```json\n\"subject\": [\n  {\n    \"name\": \"tree:materials\",\n    \"digest\": { \"sha256\": \"<merkleRoot>\" }\n  }\n]\n```\n\nThat is the entire surface area of the predicate. The full per-file list lives in the `<outfile>.material.tree.json` sidecar `cilock run` writes adjacent to the signed envelope."
+    },
+    {
+      "slug": "why-v0-3-looks-like-this",
+      "title": "Why v0.3 looks like this",
+      "markdown": "## Why v0.3 looks like this\n\nv0.1 emitted a flat `map[path]DigestSet` directly as the predicate body, with one `file:<path>` subject per material. For source trees the cardinality was fine — a Go module produces a few dozen materials. For container builds (`COPY . /app` over a JS project's `node_modules`) the per-file subject count blew through Archivista's placeholder budget and inflated the signed envelope to multi-megabyte territory.\n\nv0.3 publishes a single subject (the Merkle root) and moves per-file claims into separate inclusion-proof attestations."
+    },
+    {
+      "slug": "how-the-material-set-is-captured",
+      "title": "How the material set is captured",
+      "markdown": "## How the material set is captured\n\nThis attestor commits a Merkle root over a set of input files — but *which* files, and where their digests come from, is decided by the active **capture mode**, not by the attestor itself:\n\n- **Directory walk** (default, and the only mode without `--trace`): every regular file under `--workingdir` at step start is hashed. A portable before-snapshot of the inputs.\n- **Syscall trace** (`--trace`, Linux): cilock observes the process's `openat` calls so materials reflect the inputs actually read — including files outside the working directory. The trace backend is `ptrace+seccomp` (always available) or `eBPF` where the kernel supports it; `CILOCK_TRACE_MODE=auto` probes eBPF and falls back to ptrace.\n- **fanotify** (`--hardening standard`/`strict`): supplies the content hash at `FAN_OPEN_PERM` time (each inode hashed once), race-tight against an input that's modified later in the same build.\n\n`--capture-mode auto` (the default) uses trace events when `--trace` is on and the directory walk otherwise. See [how cilock captures files](../concepts/capture-modes) for the full comparison and a selection guide."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nIt always fires. Its output is the canonical \"what existed on disk when the step started\" record — consumed by policy to verify that a step's inputs match a known prior product (chained materials → products across steps), and used as `subjectOf` evidence for SLSA provenance."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nThe `material` attestor itself registers no flags. Its behavior is controlled by the global `run` flags it reads from `AttestationContext`:\n\n| Flag | Effect on `material` |\n|---|---|\n| `--workingdir` / `-d` | Root of the walk |\n| `--hashes` | Hash algorithms applied to every file (default `sha256`) — v0.3 commits only the sha256 leaf to the tree |\n| `--dirhash-glob` | Glob patterns of directories to collapse into a single `dirhash` digest (excluded from the v0.3 leaf set because the dirhash key isn't a raw file content sha256) |"
+    },
+    {
+      "slug": "subject-behavior",
+      "title": "Subject behavior",
+      "markdown": "## Subject behavior\n\n`Subjects()` returns exactly one entry, `tree:materials`. The digest is the Merkle root computed via:\n\n```\nWalk the working directory per attestation/file.RecordArtifacts (regular files only,\nsymlinks bounded to the workingdir, dirhash globs honoured).\nFilter to entries that have a raw sha256 digest (dirhash/gitoid entries are skipped).\nSort by inclusionproof.NormalizePath(path) (lexically).\nFor each (path, file-digest) pair:\n  leafPreHash = sha256(path-bytes || 0x00 || file-digest-bytes-raw32)\nPass the leafPreHash list into a merkle tree built per RFC 6962 §2.1.\nThe wrapper applies its own 0x00 leaf-domain prefix and 0x01 interior prefix,\nso the actual leaf the tree commits to is:\n  H(0x00 || leafPreHash) = H(0x00 || sha256(path || 0x00 || file-digest))\n```\n\nThe leaf encoder is `inclusionproof.LeafHash` — the same canonical function the product attestor uses. Any drift between the two would mean a file recorded as a product in one step could not be matched against the same file recorded as a material in the next step. There is exactly one implementation; both attestors call it.\n\nIf the working directory has no regular files with a sha256 digest, `Subjects()` returns an empty map. (Unlike product, the material attestor does **not** emit an empty-tree root: an empty material set is treated as absent, since \"the workingdir was empty before this step\" is a less interesting claim than \"the step produced nothing.\")"
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\nThe full DSSE statement for a v0.3 material attestation:\n\n```json\n{\n  \"_type\":         \"https://in-toto.io/Statement/v0.1\",\n  \"subject\": [\n    {\n      \"name\":   \"tree:materials\",\n      \"digest\": { \"sha256\": \"4f1e...aa72\" }\n    }\n  ],\n  \"predicateType\": \"https://aflock.ai/attestations/material/v0.3\",\n  \"predicate\": {\n    \"merkleRoot\":    \"4f1e...aa72\",\n    \"treeSize\":      218,\n    \"hashAlgorithm\": \"sha256\",\n    \"construction\":  \"RFC6962\"\n  }\n}\n```\n\nThe predicate is fixed-size regardless of how many files were in the working directory."
+    },
+    {
+      "slug": "sidecar-tree",
+      "title": "Sidecar tree",
+      "markdown": "## Sidecar tree\n\n`cilock run` writes `<outfile>.material.tree.json` adjacent to the signed envelope. The schema is `rookery.inclusion-proof.sidecar/v0.1` — the same format as the product sidecar, distinguished by the `source: \"material\"` field at the top of the document. `cilock prove --sidecar <outfile>.material.tree.json` reconstructs the tree and emits per-file inclusion proofs.\n\nThe sidecar is **not signed**. Treat it as a build cache."
+    },
+    {
+      "slug": "composition-with-inclusion-proof-attestations",
+      "title": "Composition with inclusion-proof attestations",
+      "markdown": "## Composition with inclusion-proof attestations\n\nThe material attestation alone confirms a tree exists with root X. To prove that a *specific* input file was in the tree, the consumer also needs the inclusion-proof attestation `cilock prove` emits for that file. The combined check is:\n\n1. The inclusion-proof attestation's `treeRoot` matches the material attestation's `tree:materials` subject digest.\n2. The audit path reconstructs the claimed root.\n3. The leaf path + digest identify the file the consumer is asking about.\n\nSee [verify a specific file](../guides/verify-a-specific-file) for the full check sequence."
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **The leaf set excludes dirhash and gitoid entries.** `--dirhash-glob` directories still appear in the in-memory `Materials()` map (so downstream attestors that walk `ctx.Materials()` continue to see them), but they do not contribute to the Merkle root because the dirhash isn't a raw file sha256.\n- **Symlinks pointing outside `--workingdir` are silently dropped, not errored.** If you depend on a linked tree being recorded, place it inside the working directory.\n- **`material` runs before the command.** Files created by the step appear only in `product`, never here.\n- **Empty material set → no subject.** Verifiers must handle the no-`tree:materials` case (typically: a step that adds no inputs is allowed; the policy gate is elsewhere)."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nBuiltin. cilock always runs this — hashes files present in workingdir BEFORE the wrapped command runs.\n\n```bash\ncilock run --step my-step \\\n  --signer-file-key-path key.pem --outfile attestation.json --workingdir src/ \\\n  -- make build\n```\n\nThe signed `attestation.json` and the unsigned `attestation.material.tree.json` sidecar both land in the working directory after the run completes."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Inclusion-proof attestor](./inclusion-proof) — the per-file claim primitive\n- [Product attestor](./product) — companion attestor for outputs\n- [Merkle trees](../concepts/merkle-trees) — the underlying construction\n- [Prove files in a build](../guides/prove-files-in-a-build) — producer-side flow\n- [Verify a specific file](../guides/verify-a-specific-file) — consumer-side flow"
+    }
+  ],
+  "hasDoc": true
+}

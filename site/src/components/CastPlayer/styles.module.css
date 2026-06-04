@@ -1,0 +1,70 @@
+.castPlayer {
+  position: relative;
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 24px 48px -24px rgba(15, 23, 42, 0.5),
+    0 10px 24px -14px rgba(15, 23, 42, 0.4);
+  margin-bottom: 1rem;
+}
+
+.castPlayer :global(.ap-player) {
+  border-radius: 12px;
+}
+
+/* The native fullscreen button's exit path mangles the page layout; hide it and
+   use our own width-fill expand instead. */
+.castPlayer :global(.ap-fullscreen-button) {
+  display: none !important;
+}
+
+/* Expanded = grow to the content width in a centered overlay (no Fullscreen
+   API). */
+.expanded {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(95vw, 1200px);
+  max-height: 92vh;
+  z-index: 1001;
+  margin: 0;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 12, 22, 0.72);
+  z-index: 1000;
+}
+
+.expandBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(20, 26, 38, 0.6);
+  color: #e6edf3;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.expandBtn:hover {
+  opacity: 1;
+  background: rgba(20, 26, 38, 0.9);
+}
+
+.fallback {
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}

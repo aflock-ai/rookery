@@ -1,0 +1,101 @@
+{
+  "name": "kube-bench",
+  "source": "attestor-backed",
+  "description": "The cilock kube-bench attestor ingests an Aqua Security kube-bench CIS Kubernetes Benchmark JSON report from the step's products and signs a per-check pass/fail/warn summary into in-toto evidence.",
+  "title": "kube-bench",
+  "sidebarPosition": 32,
+  "examplesRepo": "18-kube-bench",
+  "categories": [
+    "compliance-scan"
+  ],
+  "primaryCategory": "compliance-scan",
+  "upstream": {
+    "name": "kube-bench",
+    "source": "https://github.com/aquasecurity/kube-bench",
+    "license": "Apache-2.0",
+    "vendor": "Aqua Security"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "kube-bench"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "kube-bench"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "kube-bench*.json | **/kube-bench*.json | kube-bench*.yaml | **/kube-bench*.yaml"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "kube-bench results captured. CIS benchmark checks preserved."
+  },
+  "predicateType": "https://aflock.ai/attestations/kube-bench/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- kube-bench .",
+  "detectionCommand": "cilock plan --format=json -- kube-bench [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"kube-bench\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Captures Aqua Security `kube-bench` CIS Kubernetes Benchmark results by scanning the step's products for a JSON report and recording a per-check pass / fail / warn summary.\n\nEnable in a custom build with `--with github.com/aflock-ai/rookery/plugins/attestors/kube-bench`."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe attestor does **not** execute `kube-bench` itself. It runs in the `postproduct` phase: you run `kube-bench --json > report.json` (or equivalent) earlier in the step so the file lands in the attestation context's products map, and this attestor picks it up.\n\nEach product is filtered first by MIME type (only `text/plain` or `application/json` are considered), the file digest is recomputed and compared against the product's recorded digest, and the bytes are decoded into `KubeBenchReport`. The first file that decodes successfully **and** has a non-empty `Controls` array wins.\n\nTop-level attestor fields:\n\n- `report_file` — path of the kube-bench JSON file inside the attestation context.\n- `report_digest_set` — digest of that file (taken from the product entry).\n- `cluster_name` — populated from the `KUBE_BENCH_CLUSTER_NAME` environment variable at `New()` time.\n- `version` — derived from the first control section's `ID` (e.g. section `\"1\"` → version `\"1\"`); this is the major section identifier, not a full CIS version string.\n- `node_hostname` — captured from `os.Hostname()` when the attestor is constructed.\n- `summary` — see below.\n\n`summary` rolls up:\n\n- `total_pass`, `total_fail`, `total_warn` — copied from the report's `Totals`.\n- `failed_checks` — every result with `status == \"FAIL\"`, recorded as `{id, text}` from the result's `test_number` and `test_desc`.\n- `warned_checks` — same shape, every result with `status == \"WARN\"`.\n\nThe full nested report (`Controls` → `Tests` → `Results` with `test_number`, `test_desc`, `status`, `scored`, `actual_value`, `expected_result`) is parsed during ingest but only the rolled-up summary is persisted in the attestation."
+    },
+    {
+      "slug": "subjects",
+      "title": "Subjects",
+      "markdown": "## Subjects\n\n`Subjects()` emits up to three synthetic identity subjects so the report ties into the supply-chain graph:\n\n- `benchmark:cis-kubernetes-<version>` (falls back to `benchmark:cis-kubernetes` if no version was derived).\n- `cluster:<cluster_name>` — only when `KUBE_BENCH_CLUSTER_NAME` was set.\n- `node:<node_hostname>` — only when the hostname was resolvable.\n\nEach subject's digest is computed over the literal subject key string."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nRun as a dedicated step in a Kubernetes cluster hardening pipeline. Pair the actual `kube-bench` invocation with this attestor in `postproduct`, then verify the resulting attestation against a policy that gates on `summary.total_fail` or specific `failed_checks[*].id` values."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. Configuration is environment-driven: set `KUBE_BENCH_CLUSTER_NAME` before invoking `cilock` to label the run."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"report_file\": \"kube-bench.json\",\n  \"report_digest_set\": { \"sha256\": \"...\" },\n  \"cluster_name\": \"prod-eks\",\n  \"version\": \"1\",\n  \"node_hostname\": \"ip-10-0-1-23\",\n  \"summary\": {\n    \"total_pass\": 42,\n    \"total_fail\": 3,\n    \"total_warn\": 5,\n    \"failed_checks\": [\n      { \"id\": \"1.2.6\", \"text\": \"Ensure that the --kubelet-certificate-authority argument is set as appropriate\" }\n    ],\n    \"warned_checks\": [\n      { \"id\": \"1.2.10\", \"text\": \"Ensure that the admission control plugin EventRateLimit is set\" }\n    ]\n  }\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **No exec.** If you forget to produce a `kube-bench` JSON file in the step, `Attest` returns `no kube-bench report found in products`.\n- **Products must declare a compatible MIME type.** Files with a MIME type other than `text/plain` or `application/json` are skipped; products with an empty MIME type are still considered.\n- **Digest must match.** If the file on disk no longer matches the product's recorded digest, the file is skipped silently (debug log only).\n- **`version` is just the first section ID.** It is not a parsed CIS benchmark version — downstream policies should treat it as an opaque tag.\n- **Node role is not captured.** Despite the CIS benchmark distinguishing master / node / etcd / controlplane profiles, this attestor does not record which profile was scanned; encode that into the `KUBE_BENCH_CLUSTER_NAME` value or a separate attestor if you need it."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nSee the constraint summary + reproduction recipe at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/18-kube-bench](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/18-kube-bench). This attestor is currently blocked or doc-only — the linked example explains why and shows the recipe to validate once the constraint is removed."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- [Build from source](../getting-started/installation#4-build-from-source)\n- [`docker-bench`](./docker-bench), [`inspec`](./inspec)\n- Upstream: [witness/kube-bench.md](https://github.com/in-toto/witness/blob/main/docs/attestors/kube-bench.md)"
+    }
+  ],
+  "hasDoc": true
+}

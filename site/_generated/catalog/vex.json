@@ -1,0 +1,91 @@
+{
+  "name": "vex",
+  "source": "attestor-backed",
+  "description": "The cilock vex attestor captures an OpenVEX document found among a step's product files and attaches it as in-toto evidence under the canonical OpenVEX predicate type URI.",
+  "title": "vex",
+  "sidebarPosition": 25,
+  "examplesRepo": "37-vex",
+  "categories": [],
+  "primaryCategory": null,
+  "upstream": {
+    "name": "OpenVEX",
+    "source": "https://github.com/openvex",
+    "license": "CC-BY-4.0",
+    "vendor": "OpenSSF",
+    "format_only": true
+  },
+  "gates": [
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "*.openvex.json | **/*.openvex.json | *.vex.json | **/*.vex.json"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "vex.json | **/vex.json"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [
+    "vexctl"
+  ],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "OpenVEX document captured. Vulnerability statements preserved for downstream policy."
+  },
+  "predicateType": "https://openvex.dev/ns",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "cilock run -o out.bundle -- <cmd-that-produces> *.openvex.json | **/*.openvex.json | *.vex.json | **/*.vex.json",
+  "positiveSetup": "After the wrapped command runs, expect a product file matching \"*.openvex.json | **/*.openvex.json | *.vex.json | **/*.vex.json\" to be present",
+  "negativeSetup": "Run a command that does NOT produce the matching file",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Captures an OpenVEX document discovered among the step's product files and attaches it as an in-toto predicate with the canonical OpenVEX type URI."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe attestor walks `ctx.Products()`, recomputes each file's digest, verifies it matches the recorded product digest, then attempts to `json.Unmarshal` the bytes into the inlined `openvex.VEX` type. The first product whose bytes decode cleanly into a VEX document is captured. The serialized predicate has three fields:\n\n- `vexDocument` (`openvex.VEX`) — the full parsed OpenVEX document (see types below).\n- `reportFileName` (`string`) — path of the source product file.\n- `reportDigestSet` (`cryptoutil.DigestSet`) — digest set carried over from the product, recorded so verifiers can re-anchor the document to the step's product attestor.\n\nThe `openvex` types are **inlined** at `plugins/attestors/vex/internal/openvex/types.go` from `github.com/openvex/go-vex` commit `3185a64ed27703fc3fe4af8cd5e1ce0ed2fa2569` (tag `v0.2.7`, Apache-2.0). Only the type definitions and constants required for JSON decode/encode are present — no upstream methods (`Validate`, `Matches`, `Builder`, etc.) are reproduced. The inlined surface:\n\n- `VEX` — embeds `Metadata` plus `Statements []Statement`. Has a custom `MarshalJSON` that normalizes `timestamp` / `last_updated` to UTC RFC3339 (no nanoseconds), byte-compatible with upstream go-vex output.\n- `Metadata` — `@context`, `@id`, `author`, `role`, `timestamp`, `last_updated`, `version`, `tooling`, `supplier`.\n- `Statement` — `@id`, `vulnerability`, `timestamp`, `last_updated`, `products`, `status`, `status_notes`, `justification`, `impact_statement`, `action_statement`, `action_statement_timestamp`.\n- `Vulnerability` — `@id`, `name` (`VulnerabilityID`), `description`, `aliases`.\n- `Product` — embeds `Component`, plus `subcomponents []Subcomponent`.\n- `Subcomponent` — embeds `Component`.\n- `Component` — `@id`, `hashes` (`map[Algorithm]Hash`), `identifiers` (`map[IdentifierType]string`), `supplier`.\n- `Status` constants: `not_affected`, `affected`, `fixed`, `under_investigation`.\n- `Justification` constants: `component_not_present`, `vulnerable_code_not_present`, `vulnerable_code_not_in_execute_path`, `vulnerable_code_cannot_be_controlled_by_adversary`, `inline_mitigations_already_exist`.\n- `IdentifierType` constants: `purl`, `cpe22`, `cpe23`.\n- `Algorithm` constants: `md5`, `sha1`, `sha-256`, `sha-384`, `sha-512`, `sha3-224`, `sha3-256`, `sha3-384`, `sha3-512`, `blake2s-256`, `blake2b-256`, `blake2b-512`, `blake3`."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nPair with the `sbom` attestor to deliver SBOM + VEX evidence in a single step: the SBOM enumerates components, the VEX document records exploitability statements (not_affected / affected / fixed / under_investigation) against those components. Policies can then gate releases on the presence and contents of both predicate types."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. The attestor takes no configuration — selection is implicit via product unmarshal probing."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"vexDocument\": {\n    \"@context\": \"https://openvex.dev/ns/v0.2.0\",\n    \"@id\": \"https://openvex.example/docs/vex-001\",\n    \"author\": \"Example, Inc.\",\n    \"timestamp\": \"2026-05-21T12:00:00Z\",\n    \"version\": 1,\n    \"statements\": [\n      {\n        \"vulnerability\": { \"name\": \"CVE-2024-12345\" },\n        \"products\": [\n          { \"@id\": \"pkg:oci/example@sha256:abcd...\" }\n        ],\n        \"status\": \"not_affected\",\n        \"justification\": \"vulnerable_code_not_in_execute_path\"\n      }\n    ]\n  },\n  \"reportFileName\": \"build/vex.json\",\n  \"reportDigestSet\": {\n    \"sha256\": \"...\"\n  }\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Detection is unmarshal-probing, not MIME-based.** The attestor calls `json.Unmarshal` against every product in turn and picks the first that parses into `openvex.VEX`. There is no content-type check, file-extension filter, or `@context` validation — any JSON whose top-level shape happens to fit (e.g. a document with a `statements` array) will be accepted. Keep VEX files distinct in the product set.\n- **`Attest` returns `no VEX file found` if no product decodes.** Add the VEX file to the step's products (e.g. via the `product` attestor's path config) or the step will fail.\n- **Digest mismatches are skipped, not fatal.** If `CalculateDigestSetFromFile` disagrees with the recorded product digest, the file is logged at debug and skipped — no error is surfaced unless every candidate fails.\n- **Inlined types, not the upstream library.** Documents are decoded against the rookery-internal `openvex` package, which is byte-compatible with OpenVEX 0.2.0 but does not call upstream `Validate` / `Matches`. Schema drift in newer OpenVEX versions will silently lose unknown fields.\n- **Timestamps re-serialize to RFC3339 UTC.** `VEX.MarshalJSON` strips sub-second precision and forces UTC. Round-tripping a document through the attestor produces a canonical form, not a byte-identical copy of the input."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal OpenVEX statement emitted alongside an SBOM, expressing CVE-not-affected status.\n\n```bash\ncilock run --step vex-capture \\\n  --signer-file-key-path key.pem --outfile attestation.json \\\n  --attestations vex,environment,git \\\n  -- vexctl create --product pkg:apk/alpine/curl@8.0.0 --vuln CVE-2023-38545 --status not_affected --justification vulnerable_code_not_in_execute_path --file app.openvex.json\n```\n\nValidated with a real OpenVEX (openvex.dev/ns) statement. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/37-vex](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/37-vex)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n- [Catalog row](../reference/attestor-catalog)\n- [`sbom`](./sbom)\n- [OpenVEX spec](https://github.com/openvex/spec)\n- Upstream: [witness/vex.md](https://github.com/in-toto/witness/blob/main/docs/attestors/vex.md)"
+    }
+  ],
+  "hasDoc": true
+}

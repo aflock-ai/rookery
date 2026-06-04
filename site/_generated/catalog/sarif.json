@@ -1,0 +1,109 @@
+{
+  "name": "sarif",
+  "source": "attestor-backed",
+  "description": "The cilock sarif attestor captures a SARIF result file emitted by a code scanner (CodeQL, Semgrep, gosec, Trivy) and embeds it byte-identical in a signed in-toto attestation under a .report field.",
+  "title": "sarif",
+  "sidebarPosition": 21,
+  "examplesRepo": "36-sarif",
+  "categories": [],
+  "primaryCategory": null,
+  "upstream": {
+    "name": "SARIF (Static Analysis Results Interchange Format)",
+    "source": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html",
+    "license": "OASIS",
+    "vendor": "OASIS / OASIS SARIF TC",
+    "format_only": true
+  },
+  "gates": [
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "*.sarif | **/*.sarif | *.sarif.json | **/*.sarif.json"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [
+    "checkov",
+    "codeql",
+    "conftest",
+    "gitleaks",
+    "gosec",
+    "grype",
+    "hadolint",
+    "kics",
+    "kubescape",
+    "nuclei",
+    "osv-scanner",
+    "semgrep",
+    "staticcheck",
+    "terrascan",
+    "testssl",
+    "tflint",
+    "tfsec",
+    "trivy",
+    "zap"
+  ],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "SARIF report captured. Scanner findings preserved verbatim for downstream policy evaluation."
+  },
+  "predicateType": "https://aflock.ai/attestations/sarif/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "cilock run -o out.bundle -- <cmd-that-produces> *.sarif | **/*.sarif | *.sarif.json | **/*.sarif.json",
+  "positiveSetup": "After the wrapped command runs, expect a product file matching \"*.sarif | **/*.sarif | *.sarif.json | **/*.sarif.json\" to be present",
+  "negativeSetup": "Run a command that does NOT produce the matching file",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Captures a SARIF result file emitted by a code-scanning tool (CodeQL, Semgrep, gosec, Trivy, etc.) and embeds it verbatim in the attestation."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe attestor's struct fields define the predicate schema exactly:\n\n| JSON field | Go type | Source |\n|---|---|---|\n| `report` | `json.RawMessage` | Raw bytes of the SARIF file, preserved byte-identical to the input. |\n| `reportFileName` | `string` | Path of the SARIF product, as reported by the attestation context. |\n| `reportDigestSet` | `cryptoutil.DigestSet` | Digest set computed by the product attestor for that file. |\n\nThe `report` field is a `json.RawMessage`, not a typed SARIF struct. The previous implementation deserialized into `owenrumney/go-sarif` and re-encoded; the current attestor stores raw bytes so the predicate is byte-identical to the file on disk. The bytes are validated as JSON via `json.Valid` before being recorded."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nAfter a SAST scan, container scan, or any tool that emits SARIF as a product. Pair with `product` so the SARIF file is also recorded as a subject:\n\n```bash\ncilock run --step sast \\\n  --attestations command-run,material,product,sarif \\\n  -- semgrep --config=auto --sarif --output=sast.sarif .\n```"
+    },
+    {
+      "slug": "policy-gotcha",
+      "title": "Policy gotcha",
+      "markdown": "## Policy gotcha\n\nThe cilock SARIF predicate **wraps** the SARIF document inside a `.report` field. Rego policies must reference `input.report.runs`, not `input.runs`:\n\n```rego\npackage cilock.verify\n\ndeny contains msg if {\n  some run in input.report.runs\n  some result in run.results\n  result.level == \"error\"\n  msg := sprintf(\"SAST found %s: %s\", [result.ruleId, result.message.text])\n}\n```\n\nA policy written against the raw SARIF schema (`input.runs[_].results[_]`) will silently match nothing."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"report\":          { \"/* ... raw SARIF 2.1.0 document ... */\": true },\n  \"reportFileName\":  \"sast.sarif\",\n  \"reportDigestSet\": { \"sha256\": \"…\", \"sha1\": \"…\" }\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Candidate selection is MIME-driven.** The attestor walks `ctx.Products()` and considers only products whose `MimeType` is `text/plain` or `application/json`. Files with any other detected MIME are skipped — debug-logged with the detected MIME so `--log-level=debug` makes the mismatch visible.\n- **JSON validity is enforced.** After reading the file, the bytes are passed through `json.Valid`; non-JSON candidates are rejected even if MIME matched.\n- **Digest re-verification.** The attestor recomputes the digest of the candidate file under `ctx.WorkingDir()` and compares it against the product's recorded digest; mismatches are skipped, not errored.\n- **First match wins.** Products are iterated and the first JSON-valid, digest-matching candidate becomes the report. If multiple SARIF files are products, deterministic selection is not guaranteed — emit only one, or run the step in isolation.\n- **No SARIF schema validation.** The attestor does not check `$schema`, `version`, or the presence of `runs[]`. Any valid JSON under a JSON-ish MIME will be recorded under `report`.\n- **Large reports bloat the envelope.** Thousands of results inflate the signed payload; run scanning as its own `cilock run` step rather than mixing with build.\n- **No products → error.** `Attest` fails with `no products to attest` if the context has no products, and `no sarif file found` if none of them pass MIME + JSON checks."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal SARIF 2.1.0 report (semgrep / gosec / codeql / trivy) ingested as a JSON product, byte-preserved into the attestation predicate.\n\n```bash\n# With a real SARIF report as a product (any SARIF-emitting scanner works):\ncilock run --step sast \\\n  --signer-file-key-path key.pem --outfile attestation.json \\\n  --attestations sarif \\\n  -- semgrep --sarif --output app.sarif .\n```"
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [`sbom` attestor](./sbom)\n- Upstream: [witness/sarif.md](https://github.com/in-toto/witness/blob/main/docs/attestors/sarif.md)"
+    }
+  ],
+  "hasDoc": true
+}

@@ -1,0 +1,44 @@
+{
+  "name": "teamcity",
+  "source": "catalog-only",
+  "description": "JetBrains TeamCity CI/CD context.",
+  "title": "teamcity",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "TeamCity",
+    "source": "https://www.jetbrains.com/teamcity/",
+    "license": "commercial / freemium",
+    "vendor": "JetBrains"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "TEAMCITY_VERSION"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside JetBrains TeamCity. Build metadata available via TEAMCITY_* env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "TEAMCITY_VERSION=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var TEAMCITY_VERSION (any value)",
+  "negativeSetup": "Run with env var TEAMCITY_VERSION UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

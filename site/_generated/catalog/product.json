@@ -1,0 +1,93 @@
+{
+  "name": "product",
+  "source": "attestor-backed",
+  "description": "The cilock product attestor snapshots the working directory after a step runs and emits a single RFC 6962 Merkle-root in-toto subject (tree:products) over every output file's digest.",
+  "title": "product",
+  "sidebarPosition": 4,
+  "examplesRepo": null,
+  "categories": [],
+  "primaryCategory": null,
+  "upstream": null,
+  "gates": [],
+  "recommendedTrace": "off",
+  "triggers": [],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {},
+  "predicateType": "https://aflock.ai/attestations/product/v0.3",
+  "runType": "product",
+  "defaultOn": true,
+  "runExample": null,
+  "detectionCommand": null,
+  "positiveSetup": "no detector.yaml; this attestor is always-on or user-driven",
+  "negativeSetup": null,
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Snapshots the working directory after the step's command runs, computes a Merkle root over every product file's digest, and emits a single in-toto subject (`tree:products`) whose digest is the root. The full per-file digest map is **not** carried in the predicate — that lives in a producer-side sidecar (`attestation.tree.json`) and is exposed to consumers via separate [inclusion-proof attestations](./inclusion-proof) on demand."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe v0.3 predicate is small and fixed-size. The schema:\n\n| JSON field | Type | Source |\n|---|---|---|\n| `merkleRoot` | string (`<algo>:<hex>`) | The Merkle root over the sorted product list, computed via [RFC 6962 §2.1](https://datatracker.ietf.org/doc/html/rfc6962#section-2.1). Hex-encoded for byte hashes; gitoid URI form for gitoid hashes. |\n| `treeSize` | integer | Number of files that contributed to the root (after include/exclude glob filtering). |\n| `hashAlgorithm` | string | Name of the hash algorithm. Default `sha256`. Matches the algorithm cilock used to build the tree. |\n| `construction` | string | Always `RFC6962` for v0.3. Future hash constructions would extend this field. |\n\nThe DSSE statement's subject array carries one entry:\n\n```json\n\"subject\": [\n  {\n    \"name\": \"tree:products\",\n    \"digest\": { \"sha256\": \"<merkleRoot>\" }\n  }\n]\n```\n\nThat is the entire surface area of the predicate. The full per-file list — every path and every digest — does not appear here. It lives in the `<outfile>.product.tree.json` sidecar `cilock run` writes next to the signed envelope (and a parallel `<outfile>.material.tree.json` for the material attestor)."
+    },
+    {
+      "slug": "why-v0-3-looks-like-this",
+      "title": "Why v0.3 looks like this",
+      "markdown": "## Why v0.3 looks like this\n\nv0.2 carried the full per-file digest map (`map[path]Product`) inside the predicate. For source-only projects that was fine — a `go build` produces a handful of files. For package installations (`pip install litellm`, `npm install next`, `cargo build`) the map ballooned to tens of thousands of entries, which:\n\n- Inflated DSSE envelope size to multi-megabyte territory.\n- Required Archivista to materialize a separate per-file index server-side to answer the question \"which build contains file digest X\" without re-decoding every predicate.\n- Forced consumers to download and parse the full predicate even when they only cared about one file.\n\nv0.3 fixes all three by moving per-file claims into separate inclusion-proof attestations. The product attestation says \"this tree exists and these are its properties\"; an inclusion-proof attestation says \"and this specific file is in it.\" Together they verify per-file claims. See [issue #135](https://github.com/aflock-ai/rookery/issues/135) for the full rationale."
+    },
+    {
+      "slug": "how-the-product-set-is-captured",
+      "title": "How the product set is captured",
+      "markdown": "## How the product set is captured\n\nThis attestor commits a Merkle root over a set of output files — but *which* files count as products, and where their digests come from, is decided by the active **capture mode**, not by the attestor itself:\n\n- **Directory walk** (default, and the only mode without `--trace`): files created or changed in `--workingdir` during the command window become products. cilock uses mtime so a byte-identical rebuild still registers as a product.\n- **Syscall trace** (`--trace`, Linux): cilock observes which files the step *and its child processes* wrote — including outputs written outside the working directory. The trace backend is `ptrace+seccomp` (always available) or `eBPF` where the kernel supports it; `CILOCK_TRACE_MODE=auto` probes eBPF and falls back to ptrace.\n- **fanotify** (`--hardening standard`/`strict`): hashes product content at `FAN_CLOSE_WRITE` and anchors the set to files that still exist at process exit.\n\n`--capture-mode auto` (the default) uses trace events when `--trace` is on and the directory walk otherwise. See [how cilock captures files](../concepts/capture-modes) for the full comparison and a selection guide."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nIt always fires — there is no `--enable-attestor product` toggle and no opt-out. Shape the input file set with `--attestor-product-include-glob` and `--attestor-product-exclude-glob`. These globs apply to forward-slash-normalized paths."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\n| Flag | Default | Effect |\n|---|---|---|\n| `--attestor-product-include-glob` | `*` | Files matching this `gobwas/glob` pattern are included as leaves in the Merkle tree. |\n| `--attestor-product-exclude-glob` | `\"\"` | Files matching this pattern are skipped; evaluated before include. |\n\nBoth globs match against the forward-slash-normalized relative path inside the working directory. On Windows, write patterns with `/` even when the on-disk separator is `\\`."
+    },
+    {
+      "slug": "subject-behavior",
+      "title": "Subject behavior",
+      "markdown": "## Subject behavior\n\n`Subjects()` returns exactly one entry, `tree:products`. The digest is the Merkle root computed via the following two-step leaf encoding:\n\n```\nSort products by forward-slash-normalized path (lexically).\nFor each (path, file-digest) pair:\n  leafPreHash = sha256(path-bytes || 0x00 || file-digest-bytes-raw32)\n  // 32-byte pre-hash; path-bytes is the UTF-8 forward-slash form,\n  // file-digest-bytes-raw32 is the RAW 32-byte sha256 (NOT the hex string).\nPass the leafPreHash list into a merkle tree built per RFC 6962 §2.1.\nThe wrapper applies its own 0x00 leaf-domain prefix and 0x01 interior prefix,\nso the actual leaf the tree commits to is:\n  H(0x00 || leafPreHash) = H(0x00 || sha256(path || 0x00 || file-digest))\n```\n\nThe 0x00 inside `leafPreHash` is the path/digest separator (preventing collisions like `(\"foo\", digestA)` vs `(\"fooX\", digestA')`). The 0x00 the merkle wrapper prepends is the RFC 6962 leaf-domain prefix (preventing the CVE-2017-12842 64-byte interior-node-as-leaf attack). They are distinct constants serving distinct purposes — see [merkle trees](../concepts/merkle-trees).\n\nPaths are normalized with `inclusionproof.NormalizePath` (`strings.ReplaceAll(p, \"\\\\\", \"/\")`, not `filepath.ToSlash`) so a Windows-recorded root re-hashes identically on Linux. The same helper is the single canonical normalizer for both product and material — drift between the two would silently break verification.\n\nIf zero files survive the globs, the predicate still carries a root: the RFC 6962 empty-tree root (`sha256(\"\")`). The `tree:products` subject is always present so verifiers can refuse a missing root rather than treating \"empty\" as \"absent.\""
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\nThe full DSSE statement for a v0.3 product attestation:\n\n```json\n{\n  \"_type\":         \"https://in-toto.io/Statement/v0.1\",\n  \"subject\": [\n    {\n      \"name\":   \"tree:products\",\n      \"digest\": { \"sha256\": \"9c6f...d3a1\" }\n    }\n  ],\n  \"predicateType\": \"https://aflock.ai/attestations/product/v0.3\",\n  \"predicate\": {\n    \"merkleRoot\":    \"sha256:9c6f...d3a1\",\n    \"treeSize\":      30142,\n    \"hashAlgorithm\": \"sha256\",\n    \"construction\":  \"RFC6962\"\n  }\n}\n```\n\nThe predicate is fixed-size regardless of how many files were in the working directory. A 30,000-file build produces the same predicate length as a 3-file build."
+    },
+    {
+      "slug": "sidecar-tree",
+      "title": "Sidecar tree",
+      "markdown": "## Sidecar tree\n\n`cilock run` writes two sidecar files adjacent to the signed envelope whenever the product and material attestors build trees:\n\n- `<outfile>.product.tree.json` — the product tree\n- `<outfile>.material.tree.json` — the material tree\n\nBoth share the same on-disk schema: `rookery.inclusion-proof.sidecar/v0.1`, defined in `plugins/attestors/inclusion-proof`. The body carries `source` (either `\"product\"` or `\"material\"`), the Merkle root, the tree size, the pinned hash algorithm and construction constants, and the sorted list of `(path, fileDigest)` pairs — exactly the inputs needed for `cilock prove` to reconstruct the tree and emit inclusion proofs.\n\nThe sidecar is **not signed**. It is not evidence. Treat it as a build cache: regenerate by re-running the build, or discard once the inclusion proofs you need have been emitted. Do not ship it to downstream consumers — they only need the signed inclusion-proof attestations.\n\nPath convention: for `--outfile attestation.json` the sidecars are `attestation.product.tree.json` and `attestation.material.tree.json`. If `--outfile` is empty (stdout), no sidecars are written.\n\nSee [prove files in a build](../guides/prove-files-in-a-build) for the producer flow."
+    },
+    {
+      "slug": "composition-with-inclusion-proof-attestations",
+      "title": "Composition with inclusion-proof attestations",
+      "markdown": "## Composition with inclusion-proof attestations\n\nThe product attestation alone does not let a consumer verify a per-file claim — it says \"the tree exists and its root is X\" but does not expose any specific leaf. The consumer-facing piece is the inclusion-proof attestation:\n\n- The **product attestation** says: \"this tree exists; its root is X; size is N; built with sha256/RFC6962.\"\n- An **inclusion-proof attestation** for a specific file says: \"this file's digest is leaf `i` in the tree with root X; here is the audit path.\"\n\nA verifier with both attestations confirms (a) the audit path reconstructs the claimed root, (b) the claimed root matches the product attestation's subject digest, and (c) the leaf hash matches the file the verifier was asked about. See [verify a specific file](../guides/verify-a-specific-file) for the full check sequence."
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Globs operate on forward-slash-normalized paths.** Write `dist/**/*` even on Windows.\n- **MIME detection is gone from v0.3.** v0.2 emitted per-file MIME types so downstream attestors (SBOM, VEX, SLSA) could find SBOM files by MIME. v0.3 does not carry per-file metadata. Downstream attestors that previously walked `ctx.Products()` for MIME-typed files continue to work — they read from the attestation context's product map, which is populated by the same workdir-snapshot code, not from the v0.3 predicate.\n- **Include/exclude globs affect the tree, not just the subject.** Excluded files are not leaves and do not contribute to the root. (v0.2 globs affected only the subject; v0.3 globs affect the full tree.)\n- **Anything in `ctx.Materials()` at step start is not a product.** Files produced by an earlier stage become *materials* in later stages and stop appearing as products.\n- **Empty product set still emits a tree subject.** Per the v0.3 spec the predicate ALWAYS carries a root — an empty workdir produces the RFC 6962 empty-tree root (`sha256(\"\")`). Verifiers must refuse a missing-root predicate, not treat \"empty\" as \"absent.\""
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nBuiltin. cilock always runs this — classifies files written during the wrapped command and emits the Merkle root.\n\n```bash\ncilock run --step my-step \\\n  --signer-file-key-path key.pem --outfile attestation.json --workingdir build/ \\\n  -- make build\n```\n\nThe signed `attestation.json` and the unsigned `attestation.tree.json` sidecar both land in the working directory after the run completes."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Inclusion-proof attestor](./inclusion-proof) — the per-file claim primitive\n- [Merkle trees](../concepts/merkle-trees) — the underlying construction\n- [Prove files in a build](../guides/prove-files-in-a-build) — producer-side flow\n- [Verify a specific file](../guides/verify-a-specific-file) — consumer-side flow\n- [Issue #135](https://github.com/aflock-ai/rookery/issues/135) — design rationale"
+    }
+  ],
+  "hasDoc": true
+}

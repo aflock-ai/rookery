@@ -1,0 +1,49 @@
+{
+  "name": "protoc",
+  "source": "catalog-only",
+  "description": "Protocol Buffers compiler — generates Go/Java/Python/JS bindings from .proto files. Common in monorepos with API codegen pipelines.",
+  "title": "protoc",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "build"
+  ],
+  "primaryCategory": "build",
+  "upstream": {
+    "name": "Protocol Buffers",
+    "source": "https://github.com/protocolbuffers/protobuf",
+    "license": "BSD-3-Clause",
+    "vendor": "Google / Protocol Buffers Authors"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "light",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "protoc"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "buf generate"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "protoc / buf generate observed. Generated source files appear as products; downstream attestors (go-build, sbom) pick up the binaries/SBOMs that result."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- protoc .",
+  "detectionCommand": "cilock plan --format=json -- protoc [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"protoc\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

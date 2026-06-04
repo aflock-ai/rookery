@@ -1,0 +1,121 @@
+{
+  "name": "oci",
+  "source": "attestor-backed",
+  "description": "The cilock oci attestor ingests an OCI/Docker image saved as a tarball product and signs the manifest, image ID, layer diffIDs, and repo tags into in-toto evidence.",
+  "title": "oci",
+  "sidebarPosition": 26,
+  "examplesRepo": "15-oci",
+  "categories": [
+    "image-build"
+  ],
+  "primaryCategory": "image-build",
+  "upstream": {
+    "name": "OCI Image Specification",
+    "source": "https://github.com/opencontainers/image-spec",
+    "license": "Apache-2.0",
+    "vendor": "Open Container Initiative"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "light",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "docker save"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "skopeo copy"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "crane"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "docker save"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "skopeo copy"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "crane"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "index.json | **/index.json | oci-layout | **/oci-layout"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "*.oci.tar | **/*.oci.tar | oci-image.tar | **/oci-image.tar"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "OCI image / artifact captured (image refs, manifest digest, layer materials)."
+  },
+  "predicateType": "https://aflock.ai/attestations/oci/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- docker save .",
+  "detectionCommand": "cilock plan --format=json -- docker save [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"docker save\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Ingests an OCI/Docker image saved as a tarball product and records the manifest, image ID, layer diffIDs, and repo tags."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe attestor finds a `.tar` product, reads its `manifest.json`, and computes digests over the config blob and each referenced layer. The predicate carries these json-tagged fields:\n\n- `tardigest` — `DigestSet` of the tar file itself (taken from the product digest after re-verification).\n- `manifest` — array of `Manifest` entries parsed from `manifest.json`. Each entry has:\n  - `Config` — tar-relative path to the image config JSON.\n  - `RepoTags` — repo tags recorded by `docker save` / `nerdctl save`.\n  - `Layers` — tar-relative paths of the layer blobs in order.\n- `imagetags` — `RepoTags` copied from the first manifest entry.\n- `diffids` — array of `DigestSet`s, one per layer. Gzipped layers are decompressed first so the digest matches OCI \"diffID\" semantics (digest of the uncompressed tar stream); non-gzipped layers are hashed as-is.\n- `imageid` — `DigestSet` over the bytes of the config blob (matches Docker's image ID).\n- `manifestraw` — raw bytes of `manifest.json` as read from the tar.\n- `manifestdigest` — `DigestSet` over `manifestraw`.\n\n`Subjects()` exposes: `manifestdigest:<sha256>`, `tardigest:<sha256>`, `imageid:<sha256>`, one `imagetag:<tag>` per repo tag (digest is the SHA256 of the tag string), and `layerdiffidNN:<sha256>` for each layer (zero-padded index)."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nPipelines that produce image tarballs via `docker save`, `nerdctl save`, `podman save`, or `skopeo copy ... docker-archive:`. Run the attestor in `postproduct` after the tar has been written and recorded as a product. For buildx metadata-file workflows, use the [`docker`](./docker) attestor instead."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. The attestor takes no configuration."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"tardigest\": { \"sha256\": \"...\" },\n  \"manifest\": [\n    {\n      \"Config\": \"blobs/sha256/abc123...\",\n      \"RepoTags\": [\"registry.example.com/app:1.2.3\"],\n      \"Layers\": [\"blobs/sha256/def456...\", \"blobs/sha256/789aaa...\"]\n    }\n  ],\n  \"imagetags\": [\"registry.example.com/app:1.2.3\"],\n  \"diffids\": [\n    { \"sha256\": \"...\" },\n    { \"sha256\": \"...\" }\n  ],\n  \"imageid\": { \"sha256\": \"...\" },\n  \"manifestraw\": \"<base64-encoded manifest.json bytes>\",\n  \"manifestdigest\": { \"sha256\": \"...\" }\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Tarball detection is MIME-based.** The candidate selector iterates `ctx.Products()` and picks the first product whose `MimeType == \"application/x-tar\"`. Filename and extension are ignored. If a product is not classified as `application/x-tar` upstream (e.g. it was gzipped to `image.tar.gz` and detected as `application/gzip`), it will be skipped.\n- **Integrity re-check.** The on-disk file is re-hashed and compared against the recorded product digest; mismatches are logged and skipped, not surfaced as errors. If no tar survives the check, attestation fails with `no tar file found`.\n- **`docker save` layout assumed.** The parser looks for a top-level `manifest.json` and treats it as the legacy Docker tar layout (a JSON array of `{Config, RepoTags, Layers}` entries with tar-relative paths). It does not parse the OCI image-layout `index.json` / `oci-layout` form. `docker save` writes both `manifest.json` and OCI-style blobs since recent Docker versions, so output from `docker save` and `nerdctl save` works; pure `oci-layout` archives (no top-level `manifest.json`) do not.\n- **Only the first manifest entry is used.** `ImageID`, `LayerDiffIDs`, and `ImageTags` are taken from `Manifest[0]`. Multi-image tarballs (saving more than one image into one archive) record only the first image's derived fields, though all manifest entries are preserved in `manifest`.\n- **Entry-size cap of 256 MB.** `manifest.json`, the config blob, and each layer must each be under 256 MiB on-disk; gzipped layers must also decompress to under 256 MiB. Larger entries fail attestation."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal `docker save` OCI tarball. The attestor reads the tar, parses `manifest.json` for repo tags + layer digests, computes the image-id digest.\n\n```bash\ndocker pull alpine:3.20\n\n# cilock invokes docker save directly. command-run records the real argv;\n# product/v0.3 captures alpine-3.20.tar as a Merkle leaf; the oci attestor\n# parses the saved tarball from the product set.\ncilock run --step oci-save \\\n  --signer-file-key-path key.pem --outfile attestation.json \\\n  --attestations oci,environment,git \\\n  -- docker save alpine:3.20 -o alpine-3.20.tar\n```\n\nValidated against the real `alpine:3.20` image. Manifest, layer diff-ids, and image-id all match independent verification. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/15-oci](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/15-oci)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- [`docker`](./docker) — buildx metadata file approach\n- Upstream: [witness/oci.md](https://github.com/in-toto/witness/blob/main/docs/attestors/oci.md)"
+    }
+  ],
+  "hasDoc": true
+}

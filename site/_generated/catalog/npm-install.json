@@ -1,0 +1,54 @@
+{
+  "name": "npm-install",
+  "source": "catalog-only",
+  "description": "npm install / npm ci — Node.js dependency resolution + install.",
+  "title": "npm-install",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "dependency-resolve"
+  ],
+  "primaryCategory": "dependency-resolve",
+  "upstream": {
+    "name": "npm",
+    "source": "https://github.com/npm/cli",
+    "license": "Artistic-2.0",
+    "vendor": "OpenJS Foundation / npm Inc."
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "light",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "npm install"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "npm ci"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "npm i"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "npm install/ci observed. lockfiles attestor captures package-lock.json; commandrun captures fetches."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- npm install .",
+  "detectionCommand": "cilock plan --format=json -- npm install [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"npm install\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

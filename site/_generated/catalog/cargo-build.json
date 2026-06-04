@@ -1,0 +1,44 @@
+{
+  "name": "cargo-build",
+  "source": "catalog-only",
+  "description": "cargo build — Rust build orchestrator.",
+  "title": "cargo-build",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "build"
+  ],
+  "primaryCategory": "build",
+  "upstream": {
+    "name": "Cargo",
+    "source": "https://github.com/rust-lang/cargo",
+    "license": "Apache-2.0 OR MIT",
+    "vendor": "Rust Foundation"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "full",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "cargo build"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "cargo build observed. commandrun (with --tracing) captures opens/writes; Cargo.lock captured by lockfiles."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- cargo build .",
+  "detectionCommand": "cilock plan --format=json -- cargo build [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"cargo build\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

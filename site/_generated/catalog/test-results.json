@@ -1,0 +1,57 @@
+{
+  "name": "test-results",
+  "source": "attestor-backed",
+  "description": "Captures JUnit XML test reports and CTRF JSON reports produced by test runners (go test -junit, pytest, jest, gradle, surefire, etc.).",
+  "title": "test-results",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [],
+  "primaryCategory": null,
+  "upstream": {
+    "name": "JUnit XML + CTRF JSON",
+    "source": "https://github.com/testmoapp/junitxml  +  https://ctrf.io",
+    "license": "OASIS / community",
+    "vendor": "JUnit / CTRF community",
+    "format_only": true
+  },
+  "gates": [
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "junit*.xml | **/junit*.xml | JUnit*.xml | **/JUnit*.xml"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "TEST-*.xml | **/TEST-*.xml"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "ctrf-report.json | **/ctrf-report.json | ctrf.json | **/ctrf.json"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [
+    "go-test",
+    "jest",
+    "pytest"
+  ],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Test results captured. Suite/case counts and pass/fail/skip outcomes preserved."
+  },
+  "predicateType": "https://aflock.ai/attestations/test-results/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "cilock run -o out.bundle -- <cmd-that-produces> junit*.xml | **/junit*.xml | JUnit*.xml | **/JUnit*.xml",
+  "positiveSetup": "After the wrapped command runs, expect a product file matching \"junit*.xml | **/junit*.xml | JUnit*.xml | **/JUnit*.xml\" to be present",
+  "negativeSetup": "Run a command that does NOT produce the matching file",
+  "docSections": [],
+  "hasDoc": false
+}

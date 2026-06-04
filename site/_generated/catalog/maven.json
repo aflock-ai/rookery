@@ -1,0 +1,91 @@
+{
+  "name": "maven",
+  "source": "attestor-backed",
+  "description": "The cilock maven attestor parses a Maven pom.xml and signs the project coordinates and declared dependencies into in-toto evidence as a static, pre-build dependency record.",
+  "title": "maven",
+  "sidebarPosition": 9,
+  "examplesRepo": "10-maven",
+  "categories": [
+    "build",
+    "dependency-resolve"
+  ],
+  "primaryCategory": "build",
+  "upstream": {
+    "name": "Apache Maven",
+    "source": "https://maven.apache.org/",
+    "license": "Apache-2.0",
+    "vendor": "Apache Software Foundation"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "pom.xml"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "mvnw"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Maven project metadata captured (groupId, artifactId, version, dependencies)."
+  },
+  "predicateType": "https://aflock.ai/attestations/maven/v0.1",
+  "runType": "prematerial",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "touch pom.xml && cilock plan --format=json -- echo hi",
+  "positiveSetup": "Create file \"pom.xml\" in cwd",
+  "negativeSetup": "Run in a tempdir without that file",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Parses a Maven `pom.xml` and records the project coordinates plus its declared dependencies as an attestation."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nFields are read directly out of the POM XML and emitted under these JSON keys:\n\n- `groupid` — from `<project><groupId>`.\n- `artifactid` — from `<project><artifactId>`.\n- `version` — from `<project><version>`.\n- `projectname` — from `<project><name>`.\n- `dependencies` — array of objects from `<project><dependencies><dependency>`. Each entry exposes:\n  - `groupid` (`<groupId>`)\n  - `artifactid` (`<artifactId>`)\n  - `version` (`<version>`)\n  - `scope` (`<scope>`)\n\nThe attestor also emits subjects: one `` `project:<groupId>/<artifactId>@<version>` `` entry for the project and one `` `dependency:<groupId>/<artifactId>@<version>` `` entry per declared dependency. Each subject's digest is the SHA-256 of that subject string."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nRun during the `prematerial` phase of a Maven build to lock in the declared coordinates and dependency set before compile/fetch. Pair with a `material` attestor if you also need to bind the resolved artifact bytes."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\n| Flag | Default | Description |\n|---|---|---|\n| `--attestor-maven-pom-path` | `pom.xml` | Path to the Project Object Model (POM) XML file used for the task being attested. |"
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"groupid\": \"com.example\",\n  \"artifactid\": \"my-service\",\n  \"version\": \"1.2.3\",\n  \"projectname\": \"My Service\",\n  \"dependencies\": [\n    {\n      \"groupid\": \"org.springframework\",\n      \"artifactid\": \"spring-core\",\n      \"version\": \"6.1.0\",\n      \"scope\": \"compile\"\n    }\n  ]\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Direct dependencies only.** Only entries under `<project><dependencies><dependency>` are captured. `<dependencyManagement>`, `<build><plugins>`, profile-scoped dependencies, and parent-inherited dependencies are not parsed. No transitive resolution is performed — the attestor never invokes Maven.\n- **No POM digest is recorded.** The attestor does not hash the `pom.xml` file itself; only the parsed coordinates and dependency list end up in the predicate. Capture the POM with a material attestor if you need to bind its bytes.\n- **No property/variable interpolation.** Values like `${project.version}` or `${revision}` are emitted verbatim as they appear in the XML; Maven's effective-POM substitution is not applied.\n- **Single POM only.** The flag accepts one path. Multi-module reactor builds need one attestation per module POM.\n- **Subjects are coordinate-string digests, not artifact digests.** Each `project:` / `dependency:` subject's SHA-256 is computed over the coordinate string itself, not over a resolved JAR."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal `pom.xml` resolution: groupId, artifactId, version, declared dependencies extracted statically.\n\n```bash\n# In a directory containing pom.xml:\ncilock run --step maven-build \\\n  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \\\n  --attestations maven \\\n  -- mvn -q package \n```\n\nValidated against a real `pom.xml` with declared dependencies. The attestor reads the pom statically; no Maven invocation needed. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/10-maven](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/10-maven)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- Upstream: [witness/maven.md](https://github.com/in-toto/witness/blob/main/docs/attestors/maven.md)"
+    }
+  ],
+  "hasDoc": true
+}

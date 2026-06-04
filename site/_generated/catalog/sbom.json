@@ -1,0 +1,123 @@
+{
+  "name": "sbom",
+  "source": "attestor-backed",
+  "description": "The cilock sbom attestor picks up SPDX-JSON or CycloneDX-JSON files from the product set, stores each document byte-preservingly, and signs it into in-toto evidence under the SBOM's native predicate type.",
+  "title": "sbom",
+  "sidebarPosition": 20,
+  "examplesRepo": "09-sbom",
+  "categories": [
+    "sbom-generate"
+  ],
+  "primaryCategory": "sbom-generate",
+  "upstream": {
+    "name": "SPDX + CycloneDX",
+    "source": "https://spdx.dev/  +  https://cyclonedx.org/",
+    "license": "CC-BY-3.0 / Apache-2.0",
+    "vendor": "Linux Foundation / OWASP",
+    "format_only": true
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "syft"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "cdxgen"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "*.spdx.json | **/*.spdx.json | *.spdx | **/*.spdx"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "*.cyclonedx.json | **/*.cyclonedx.json | *.cdx.json | **/*.cdx.json"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "sbom.json | **/sbom.json | bom.json | **/bom.json"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "syft"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "cdxgen"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [
+    "apko",
+    "bom",
+    "cdxgen",
+    "melange",
+    "syft"
+  ],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "SBOM captured (SPDX or CycloneDX). Components, licenses, and supplier metadata preserved."
+  },
+  "predicateType": "https://aflock.ai/attestations/sbom/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- syft .",
+  "detectionCommand": "cilock plan --format=json -- syft [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"syft\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Picks up SPDX-JSON or CycloneDX-JSON files from the product set, stores the document byte-preservingly, and extracts a minimal subject surface (document/component name and version) without pulling in either format's full Go library."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe `SBOMAttestor` struct has four fields:\n\n| Field | JSON tag | Notes |\n|---|---|---|\n| `SBOMDocument` | (the entire predicate body) | Stored as `json.RawMessage` of the SBOM file as read from disk — byte-equality preserved, no re-encoding |\n| `predicateType` | unexported | Set to the SPDX or CycloneDX predicate type after format detection |\n| `export` | unexported | Toggled by `WithExport` / the `export` config option |\n| `subjects` | unexported | Built during `Attest`; exposed via `Subjects()` |\n\n`MarshalJSON` emits `SBOMDocument` directly, so the predicate body **is** the SBOM bytes — there is no wrapping envelope around the document.\n\nA small inline `sbomSubjectExtractor` parses only what's needed to derive subjects (hand-written from the SPDX 2.3 and CycloneDX 1.6 JSON Schemas — no upstream library dependency):\n\n- SPDX: top-level `name` (the SPDX 2.3 §6.4 `documentName` property).\n- CycloneDX: `metadata.component.name` and `metadata.component.version`.\n\nPR #76 refactored the attestor onto this approach and dropped the `cyclonedx-go` and `spdx/tools-golang` dependencies."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nWhenever your build produces an SBOM (`syft`, `cyclonedx-gomod`, `npm sbom`, etc.). The SBOM must land in `--workingdir` so the `product` attestor hashes it and the `sbom` attestor can pick it up."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\n| Flag | Default | What it does |\n|---|---|---|\n| `--attestor-sbom-export` | `false` | Also emit the SBOM as its own attestation under the upstream `spdx.dev/Document` or `cyclonedx.org/bom` predicate type, in addition to the wrapped form |"
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\nThe predicate body is the SBOM file itself, with one cilock-added field — `_sbomFormat` — that lets rego policies dispatch on format without dual-shape walking:\n\n```json\n{\n  \"_sbomFormat\": \"cyclonedx\",\n  \"bomFormat\": \"CycloneDX\",\n  \"specVersion\": \"1.6\",\n  \"components\": [\n    { \"name\": \"my-app\", \"version\": \"1.2.3\", \"purl\": \"pkg:...\" }\n  ]\n}\n```\n\nFor SPDX documents the discriminator is `\"_sbomFormat\": \"spdx\"` and the document fields are `spdxVersion`, `packages`, etc. The underscore prefix signals the field is added by the attestor, not part of either SBOM spec. Policy authors can write:\n\n```rego\nis_cyclonedx if input._sbomFormat == \"cyclonedx\"\nis_spdx      if input._sbomFormat == \"spdx\"\n```\n\nSubjects are recorded for the file digest and for any name/version pulled by the extractor:\n\n```json\n{\n  \"subjects\": {\n    \"file:dist/sbom.cdx.json\": { \"sha256\": \"...\" },\n    \"name:my-app\":             { \"sha256\": \"...\" },\n    \"version:1.2.3\":           { \"sha256\": \"...\" }\n  }\n}\n```\n\nThe `name:` and `version:` subject digests are SHA-256 of the string value, so policies can pin against them."
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Format detection is content-based, not filename-based.** The `product` attestor's MIME detector (`IsSPDXJson` / `IsCycloneDXJson`) scans the first 500 bytes for `\"spdxVersion\":\"SPDX-\"` or `\"bomFormat\":\"CycloneDX\"`. Generators that omit these markers won't be detected even with `.spdx.json` / `.cdx.json` extensions.\n- **JSON only.** CycloneDX XML is detected by `product` (`application/vnd.cyclonedx+xml`) but the `sbom` attestor's switch in `getCandidate` only matches the two JSON MIME types — XML SBOMs are skipped.\n- **First match wins.** `getCandidate` returns on the first valid SBOM it finds; if your build emits multiple SBOMs, only one is captured per `cilock run` invocation.\n- **Subjects come from inside the SBOM.** If the SPDX `name` or CycloneDX `metadata.component.name` is missing, no name subject is recorded — only the file-digest subject. The extraction parse is best-effort; missing fields are silently skipped.\n- **Wrapped vs exported are additive.** With `--attestor-sbom-export=true`, the standalone predicate is emitted *in addition to* the wrapped attestation, not instead of it. The standalone export is the **bare** SBOM (no `_sbomFormat` injection) since downstream consumers expect the upstream format.\n- **Products skipped for MIME mismatch are now logged at debug.** Set `--log-level=debug` to see lines like `\"skipping <path>: MIME ... not in accepted list ...\"` when debugging \"why isn't my SBOM attached?\""
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal CycloneDX / SPDX SBOM ingested as a JSON product, byte-preserved into the attestation predicate.\n\n```bash\n# cilock invokes syft directly so command-run records the real argv and\n# product/v0.3 binds the SBOM as a real Merkle leaf.\ncilock run --step sbom-capture \\\n  --signer-file-key-path key.pem --outfile attestation.json \\\n  --attestations sbom \\\n  -- syft dir:. -o cyclonedx-json=app.cdx.json\n```\n\nThe emitted predicate type in the resulting Collection is `https://cyclonedx.org/bom`, **not** `https://aflock.ai/attestations/sbom/v0.1` — policies should match on `cyclonedx.org/bom` (or `spdx.dev/Document` for SPDX). The aflock namespace registration is what makes `--attestations sbom` resolve to this attestor at runtime.\n\nValidated with a real CycloneDX SBOM from syft. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/09-sbom](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/09-sbom)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- [`sarif`](./sarif), [`vex`](./vex)\n- Upstream: [witness/sbom.md](https://github.com/in-toto/witness/blob/main/docs/attestors/sbom.md)"
+    }
+  ],
+  "hasDoc": true
+}

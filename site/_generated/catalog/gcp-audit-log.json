@@ -1,0 +1,44 @@
+{
+  "name": "gcp-audit-log",
+  "source": "catalog-only",
+  "description": "Google Cloud Audit Logs (Cloud Logging).",
+  "title": "gcp-audit-log",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "runtime-event"
+  ],
+  "primaryCategory": "runtime-event",
+  "upstream": {
+    "name": "Cloud Logging",
+    "source": "https://cloud.google.com/logging/docs",
+    "license": "commercial",
+    "vendor": "Google Cloud"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "gcloud logging"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "gcloud logging query observed. Captured audit-log slice."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- gcloud logging .",
+  "detectionCommand": "cilock plan --format=json -- gcloud logging [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"gcloud logging\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

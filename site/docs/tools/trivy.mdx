@@ -1,0 +1,120 @@
+---
+title: "Trivy"
+description: "Scan containers, IaC, secrets, and licenses with Trivy under cilock — the SARIF report becomes a signed v0.3 attestation parsed by the rookery sarif attestor."
+sidebar_position: 1
+---
+
+{/* GENERATED — do not edit. Source: rookery attestation/detection/docs/trivy.doc.md. Regenerate: npm run gen */}
+import ToolMeta from '@site/src/components/Catalog/ToolMeta';
+import GeneratedFooter from '@site/src/components/Catalog/GeneratedFooter';
+import meta from '@catalog/trivy.json';
+
+# `trivy` integration
+
+Trivy is Aqua Security's all-in-one scanner — containers, filesystems, IaC, secrets, licenses, and OS/library vulnerabilities, all from one binary. Cilock wraps the same `trivy` invocation, signs its SARIF output, and links it to the git commit and host environment it ran against.
+
+<ToolMeta data={meta} />
+
+## Validated invocation
+
+Cilock invokes `trivy` **directly** as the wrapped command — no `bash -c "cp ..."` shim. The real tool is what cilock executes, traces, and records.
+
+```bash
+cilock run --step trivy-scan \
+  --signer-file-key-path _validation/key.pem \
+  --outfile attestation.json \
+  --attestations sarif,environment,git \
+  --enable-archivista=false \
+  -- trivy fs --scanners vuln --format sarif --output trivy.sarif .
+```
+
+This is the exact line validated end-to-end in [`tool-trivy-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-trivy-sarif) — don't paraphrase it.
+
+Trivy exits non-zero when it finds vulnerabilities at or above its severity threshold. The validated example uses Trivy's default exit-code behavior; cilock surfaces that exit code in the `command-run/v0.1` predicate, so policies can reason about scan results without re-parsing.
+
+## What gets captured
+
+A single run with `--attestations sarif,environment,git` produces these predicate types in the signed envelope:
+
+- `https://aflock.ai/attestations/command-run/v0.1` — the actual `argv`, exit code, and traced syscalls of `trivy`.
+- `https://aflock.ai/attestations/material/v0.3` — Merkle hashes of every input file Trivy read.
+- `https://aflock.ai/attestations/product/v0.3` — Merkle hash of `trivy.sarif` as written by the run.
+- `https://aflock.ai/attestations/sarif/v0.1` — structured parse of the SARIF report, ready for policy.
+- `https://aflock.ai/attestations/environment/v0.1` — host OS, kernel, env vars (with redaction).
+- `https://aflock.ai/attestations/git/v0.1` — repo commit, branch, dirty/clean state.
+
+## Why this shape
+
+| Pattern | What cilock sees | Verdict |
+|---|---|---|
+| `-- trivy fs --scanners vuln --format sarif --output trivy.sarif .` | Real `trivy` argv, real exit code, real syscalls. SARIF written into the workdir is picked up by `product/v0.3` and parsed by `sarif/v0.1`. | **Use this.** |
+| `-- bash -c "trivy fs ... && cp trivy.sarif out/"` | `bash` argv, `bash` exit code, `bash` + `cp` syscalls. Trivy's real exit code is hidden behind the shell. | Antipattern. |
+
+The direct invocation matters because the `command-run` attestor records what cilock actually executes. Wrapping the scanner in `bash -c` means a vuln-induced non-zero exit gets either silently swallowed or attributed to `bash`, and the syscall trace is the shell's, not Trivy's.
+
+## Validate it locally
+
+```bash
+# 1. Generate an ephemeral signing key.
+mkdir -p _validation
+openssl genpkey -algorithm ed25519 -out _validation/key.pem
+
+# 2. Clone the validated example and run it.
+git clone https://github.com/aflock-ai/attestor-compliance-examples.git
+cd attestor-compliance-examples/tool-trivy-sarif
+cilock run --step trivy-scan \
+  --signer-file-key-path ../_validation/key.pem \
+  --outfile attestation.json \
+  --attestations sarif,environment,git \
+  --enable-archivista=false \
+  -- trivy fs --scanners vuln --format sarif --output trivy.sarif .
+
+# 3. Confirm the expected predicate types are present.
+jq -r '.payload' attestation.json | base64 -d \
+  | jq '.predicate.attestations | map(.type)'
+```
+
+Expected output (order may vary):
+
+```
+https://aflock.ai/attestations/command-run/v0.1
+https://aflock.ai/attestations/environment/v0.1
+https://aflock.ai/attestations/material/v0.3
+https://aflock.ai/attestations/product/v0.3
+https://aflock.ai/attestations/sarif/v0.1
+https://aflock.ai/attestations/git/v0.1
+```
+
+## Notes
+
+Rookery also ships a **native Trivy attestor** at `https://aflock.ai/attestations/trivy/v0.1`. It ingests Trivy's tool-specific JSON (`--format json`) and preserves the per-target Vulnerability / Misconfiguration / Secret / License split that SARIF's flat finding list can't represent. See `trivy` attestor for the native flow. Use this page (SARIF) when you want a single uniform pipeline across every scanner; use the native attestor when downstream policy needs to distinguish a license violation from a CVE.
+
+## FAQ
+
+### Does cilock support Trivy?
+
+Yes. Cilock supports Trivy two ways: through the generic [`sarif` attestor](../attestors/sarif.mdx) (documented on this page), and through a Trivy-native attestor that ingests Trivy's own JSON format. Both produce a signed DSSE envelope; the SARIF flow gives you a uniform predicate across all SARIF-emitting tools, the native flow preserves Trivy's per-target finding categories.
+
+### What does Trivy scan when called from cilock?
+
+Cilock doesn't change what Trivy scans — Trivy still scans whatever target you pass it (filesystem, container image, repository, Kubernetes cluster, IaC tree). The validated invocation runs `trivy fs --scanners vuln .`, which scans the working directory for OS-package and language-library vulnerabilities. Swap in `trivy image <ref>` or add `--scanners vuln,secret,misconfig,license` to widen coverage; cilock wraps whichever invocation you choose.
+
+### Do I need the Trivy native attestor or the SARIF attestor?
+
+Pick **SARIF** if you want a single ingestion path that works for Trivy, Grype, Semgrep, gosec, and every other SARIF-emitting scanner. Pick the **native Trivy attestor** if your policies need to branch on Trivy's per-target categories (Vulnerabilities vs Misconfigurations vs Secrets vs Licenses) — SARIF flattens them into a single `results` array, so that distinction is lost.
+
+### Will the SARIF be empty if Trivy finds nothing?
+
+Yes — and that's fine. Trivy still writes a valid SARIF document with an empty `results` array, the `product/v0.3` attestor still records the file's content hash, and the `sarif/v0.1` predicate is still produced. The collection shape doesn't depend on findings being non-empty, so a clean scan still proves the scan ran against the signed inputs.
+
+## See also
+
+- [`sarif` attestor](../attestors/sarif.mdx) — the ingestion path used by this page
+- `trivy` attestor — native attestor for the multi-target JSON split
+- [`tool-trivy-sarif` example](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-trivy-sarif) — the validated end-to-end run
+- [Trivy homepage](https://trivy.dev/) — upstream tool documentation
+- [Tools index](./index.md)
+
+<script type="application/ld+json" dangerouslySetInnerHTML={{__html: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Trivy — cilock tool integration\",\"description\":\"Scan containers, IaC, secrets, and licenses with Trivy under cilock — the SARIF report becomes a signed v0.3 attestation parsed by the rookery sarif attestor.\",\"url\":\"https://cilock.aflock.ai/tools/trivy\"}"}} />
+
+<GeneratedFooter name="trivy" />

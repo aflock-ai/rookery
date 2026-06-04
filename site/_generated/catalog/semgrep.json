@@ -1,0 +1,87 @@
+{
+  "name": "semgrep",
+  "source": "catalog-only",
+  "description": "Run Semgrep SAST under cilock — the SARIF report becomes a signed v0.3 attestation parsed by the rookery sarif attestor; supports any of Semgrep's bundled rulesets or custom rules.",
+  "title": "Semgrep",
+  "sidebarPosition": 4,
+  "examplesRepo": "tool-semgrep-sarif",
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "Semgrep",
+    "source": "https://github.com/semgrep/semgrep",
+    "license": "LGPL-2.1-only",
+    "vendor": "Semgrep Inc."
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "semgrep"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Semgrep invocation observed. --sarif output captured by the sarif attestor."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- semgrep .",
+  "detectionCommand": "cilock plan --format=json -- semgrep [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"semgrep\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Semgrep is a multi-language static analysis engine — Python, Go, Java, JavaScript/TypeScript, Ruby, C#, PHP, Scala, Kotlin, Swift, Terraform, Dockerfile, generic, and more. It ships with curated rulesets (`p/security-audit`, `p/owasp-top-ten`, language-specific packs) and accepts user-authored YAML rules.\n\nCilock doesn't replace Semgrep. It runs the same `semgrep ... --sarif --output ...` command you already use and turns the SARIF report into a **signed v0.3 in-toto attestation** that records the exact argv, the materials Semgrep read, the SARIF file Semgrep produced, and the structured findings — all in one envelope that policy can evaluate later."
+    },
+    {
+      "slug": "validated-invocation",
+      "title": "Validated invocation",
+      "markdown": "## Validated invocation\n\n```bash\ncilock run --step semgrep-scan \\\n  --signer-file-key-path _validation/key.pem \\\n  --outfile attestation.json \\\n  --attestations sarif,environment,git \\\n  --enable-archivista=false \\\n  -- semgrep --config p/security-audit --sarif --output semgrep.sarif fixture/\n```\n\n`--config p/security-audit` uses a bundled Semgrep Registry ruleset and runs without a Semgrep account or API key. `--config auto` works too but requires network access to the Semgrep Registry so it can resolve the project-appropriate ruleset.\n\nThe trailing `fixture/` is the path Semgrep scans — substitute the source directory you care about."
+    },
+    {
+      "slug": "what-gets-captured",
+      "title": "What gets captured",
+      "markdown": "## What gets captured\nA successful run emits a DSSE envelope with six predicate entries:\n\n| Predicate | What it records |\n|---|---|\n| `https://aflock.ai/attestations/environment/v0.1` | OS, arch, env vars (filtered), CI hints |\n| `https://aflock.ai/attestations/git/v0.1` | repo state — head SHA, branch, dirty bit |\n| `https://aflock.ai/attestations/material/v0.3` | Merkle tree of files Semgrep read |\n| `https://aflock.ai/attestations/command-run/v0.1` | the literal semgrep argv + exit code + stdout/stderr digests |\n| `https://aflock.ai/attestations/product/v0.3` | Merkle tree of files Semgrep produced (the SARIF report) |\n| `https://aflock.ai/attestations/sarif/v0.1` | parsed SARIF — driver name, version, ruleset, structured findings |\n\nThe `sarif` predicate is what your verify-time rego gate reads. The `command-run` predicate is what proves the ruleset wasn't tampered with after the fact."
+    },
+    {
+      "slug": "why-this-shape",
+      "title": "Why this shape",
+      "markdown": "## Why this shape\n\n`cilock run -- <tool> <args>` invokes the tool directly. Earlier examples wrapped scanners in `bash -c \"cp ...\"`; that broke causality:\n\n- `command-run` recorded `bash` plus a `-c` string, not the actual semgrep argv — so consumers couldn't see which ruleset ran.\n- The spy / ptrace-based attestors traced `cp`, not `semgrep` — so material→product causality was wrong.\n- `sarif` still had to scrape a file that `cilock` never observed being produced inside the traced process tree.\n\nWith the direct invocation:\n\n- `command-run` records `[\"semgrep\", \"--config\", \"p/security-audit\", \"--sarif\", \"--output\", \"semgrep.sarif\", \"fixture/\"]` verbatim.\n- `product` captures `semgrep.sarif` as a real output of the traced process.\n- `sarif` parses that same file — and the digest matches what `product` recorded."
+    },
+    {
+      "slug": "validate-it-locally",
+      "title": "Validate it locally",
+      "markdown": "## Validate it locally\n```bash\n# Confirm all six predicates are present\njq -r '.payload' attestation.json | base64 -d \\\n  | jq -r '.predicate.attestations[].type'\n\n# Confirm command-run captured the real semgrep argv (not bash -c)\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[]\n        | select(.type==\"https://aflock.ai/attestations/command-run/v0.1\")\n        | .attestation.cmd'\n\n# Inspect SARIF findings count + tool driver\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[]\n        | select(.type==\"https://aflock.ai/attestations/sarif/v0.1\")\n        | .attestation\n        | {tool:     .report.runs[0].tool.driver.name,\n           findings: ([.report.runs[].results[]] | length),\n           report:   .reportFileName}'\n```\n\nValidated against cilock dev (v0.3 line) + Semgrep OSS 1.157.0 + ruleset `p/security-audit` — produces one finding on the bundled `fixture/vuln.py`."
+    },
+    {
+      "slug": "semgrep-rulesets",
+      "title": "Semgrep rulesets",
+      "markdown": "## Semgrep rulesets\n\nThe `--config` flag accepts:\n\n- **Bundled registry packs** — `p/security-audit`, `p/owasp-top-ten`, `p/cwe-top-25`, `p/r2c-security-audit`, language packs like `p/golang`, `p/python`, `p/javascript`, `p/typescript`, `p/java`, `p/ruby`, `p/dockerfile`, `p/terraform`, `p/kubernetes`. Most run network-free once Semgrep has bootstrapped them.\n- **`--config auto`** — Semgrep inspects the repo and picks the relevant packs. Requires network access to the Registry; no account needed.\n- **Custom rule files** — `--config ./my-rules.yml` or `--config ./rules/` for repo-local YAML. The rule file itself shows up under the `material` predicate, so the attestation records both the code that was scanned **and** the rules it was scanned against.\n- **Multiple configs** — pass `--config` more than once; Semgrep unions the rules.\n\nFor policy purposes, prefer pinning to a specific pack (or a vendored rule file) so the `command-run` predicate is reproducible across runs."
+    },
+    {
+      "slug": "faq",
+      "title": "FAQ",
+      "markdown": "## FAQ\n\n**Does cilock support Semgrep?**\nYes. Semgrep emits SARIF and the `sarif` attestor parses it; the validated invocation above is in [`attestor-compliance-examples/tool-semgrep-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-semgrep-sarif).\n\n**Which Semgrep rulesets does the attestor work with?**\nAll of them. The attestor reads the SARIF emitted by Semgrep — it doesn't care which `--config` produced it. Bundled packs (`p/security-audit`, `p/owasp-top-ten`, language packs), `--config auto`, and custom YAML rules all flow through the same predicate.\n\n**Do I need a Semgrep account or API key?**\nNo for `--config p/<pack>` and `--config ./rules.yml`. `--config auto` needs network access to the Semgrep Registry but still doesn't require auth. Semgrep AppSec Platform / Pro features (Pro engine, supply chain, secrets) are separate products and not required by cilock.\n\n**Does cilock pin the ruleset version?**\nCilock records the **exact argv** in the `command-run` predicate and the **digests of every file Semgrep read** in the `material` predicate. If you `--config` a local rule file, that file's hash is captured. If you reference a remote pack like `p/security-audit`, the ruleset name is recorded but Semgrep itself fetches/caches the pack — pin Semgrep's version (and vendor the rules if you need byte-level reproducibility)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [`sarif` attestor](../attestors/sarif) — the underlying ingestion path\n- [How cilock policy works](../guides/policy) — using SARIF findings at the deploy gate\n- [Attestation graph + back-refs](../concepts/attestation-graph) — how scans link to artifacts via subject digests\n- [Tools index](./index)"
+    }
+  ],
+  "hasDoc": true
+}

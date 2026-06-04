@@ -1,0 +1,44 @@
+{
+  "name": "circleci",
+  "source": "catalog-only",
+  "description": "CircleCI CI/CD context.",
+  "title": "circleci",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "CircleCI",
+    "source": "https://circleci.com/docs/",
+    "license": "commercial",
+    "vendor": "Circle Internet Services"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "CIRCLECI"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside CircleCI. Build metadata available in CIRCLE_* env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "CIRCLECI=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var CIRCLECI (any value)",
+  "negativeSetup": "Run with env var CIRCLECI UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

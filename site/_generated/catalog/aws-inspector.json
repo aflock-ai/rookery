@@ -1,0 +1,44 @@
+{
+  "name": "aws-inspector",
+  "source": "catalog-only",
+  "description": "AWS Inspector v2 — vulnerability + network reachability findings for EC2/ECR/Lambda.",
+  "title": "aws-inspector",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "AWS Inspector",
+    "source": "https://docs.aws.amazon.com/inspector/",
+    "license": "commercial",
+    "vendor": "Amazon Web Services"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "aws inspector2"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Inspector findings query observed. ECR image / EC2 / Lambda vulnerability findings captured."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- aws inspector2 .",
+  "detectionCommand": "cilock plan --format=json -- aws inspector2 [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"aws inspector2\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

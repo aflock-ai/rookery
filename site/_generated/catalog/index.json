@@ -1,0 +1,1705 @@
+{
+  "generatedFrom": "cilock tools show --format json",
+  "count": 127,
+  "withDoc": 55,
+  "emittedBy": {
+    "sbom": [
+      "apko",
+      "bom",
+      "cdxgen",
+      "melange",
+      "syft"
+    ],
+    "sarif": [
+      "checkov",
+      "codeql",
+      "conftest",
+      "gitleaks",
+      "gosec",
+      "grype",
+      "hadolint",
+      "kics",
+      "kubescape",
+      "nuclei",
+      "osv-scanner",
+      "semgrep",
+      "staticcheck",
+      "terrascan",
+      "testssl",
+      "tflint",
+      "tfsec",
+      "trivy",
+      "zap"
+    ],
+    "test-results": [
+      "go-test",
+      "jest",
+      "pytest"
+    ],
+    "vex": [
+      "vexctl"
+    ]
+  },
+  "tools": [
+    {
+      "name": "apko",
+      "source": "catalog-only",
+      "categories": [
+        "image-build"
+      ],
+      "primaryCategory": "image-build",
+      "description": "apko — builds single-layer OCI images from apk packages (Chainguard); auto-generates an SPDX SBOM per build.",
+      "emitsFormats": [
+        "sbom"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "argo-workflows",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "Argo Workflows — Kubernetes-native workflow engine (CNCF).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "aws",
+      "source": "attestor-backed",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "The cilock aws attestor fetches the EC2 instance identity document from IMDS, verifies its RSA-SHA256 signature against the AWS region certificate, and signs the verified host identity into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/aws/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "aws-codebuild",
+      "source": "attestor-backed",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "The cilock aws-codebuild attestor captures CodeBuild build identity from CODEBUILD_* env vars and the BatchGetBuilds API, signing the full build context into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/aws-codebuild/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "aws-guardduty",
+      "source": "catalog-only",
+      "categories": [
+        "runtime-event"
+      ],
+      "primaryCategory": "runtime-event",
+      "description": "AWS GuardDuty — threat detection findings (CloudTrail/VPC/DNS log analysis).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "aws-iam-credential-report",
+      "source": "catalog-only",
+      "categories": [
+        "asset-inventory"
+      ],
+      "primaryCategory": "asset-inventory",
+      "description": "AWS IAM credential report — per-user MFA + key-rotation + password-age posture.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "aws-inspector",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "AWS Inspector v2 — vulnerability + network reachability findings for EC2/ECR/Lambda.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "aws-macie",
+      "source": "catalog-only",
+      "categories": [
+        "secret-scan"
+      ],
+      "primaryCategory": "secret-scan",
+      "description": "AWS Macie — automated S3 sensitive-data discovery.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "aws-secrets-manager",
+      "source": "catalog-only",
+      "categories": [
+        "asset-inventory"
+      ],
+      "primaryCategory": "asset-inventory",
+      "description": "AWS Secrets Manager via aws-cli.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "aws-security-hub",
+      "source": "catalog-only",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "AWS Security Hub — central security findings aggregator across AWS services.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "azure-activity-log",
+      "source": "catalog-only",
+      "categories": [
+        "runtime-event"
+      ],
+      "primaryCategory": "runtime-event",
+      "description": "Azure Activity Log / Monitor logs.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "azure-devops",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "Azure DevOps Pipelines — Microsoft CI/CD context.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "azure-iid",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "Azure VM IMDS — instance metadata + attested identity document.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "bandit",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Bandit — Python static security analyzer (PyCQA).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "bitbucket-pipelines",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "Bitbucket Pipelines — Atlassian CI/CD context.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "bom",
+      "source": "catalog-only",
+      "categories": [
+        "sbom-generate"
+      ],
+      "primaryCategory": "sbom-generate",
+      "description": "Kubernetes SIGs `bom` — SBOM tool for Kubernetes releases (SPDX).",
+      "emitsFormats": [
+        "sbom"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "buildkite",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "Buildkite CI/CD context.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "cargo-audit",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "cargo-audit — Rust dependency vulnerability scanner.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "cargo-build",
+      "source": "catalog-only",
+      "categories": [
+        "build"
+      ],
+      "primaryCategory": "build",
+      "description": "cargo build — Rust build orchestrator.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "cdxgen",
+      "source": "catalog-only",
+      "categories": [
+        "sbom-generate"
+      ],
+      "primaryCategory": "sbom-generate",
+      "description": "CycloneDX SBOM generator (cdxgen) — multi-language SBOM tool from OWASP.",
+      "emitsFormats": [
+        "sbom"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "checkov",
+      "source": "catalog-only",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Scan Terraform, CloudFormation, Kubernetes, Helm, and other IaC with Checkov under cilock — every misconfig becomes a signed v0.3 SARIF attestation.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "circleci",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "CircleCI CI/CD context.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "cloudbuild-gcp",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "Google Cloud Build — GCP managed CI.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "cloudtrail",
+      "source": "catalog-only",
+      "categories": [
+        "runtime-event"
+      ],
+      "primaryCategory": "runtime-event",
+      "description": "AWS CloudTrail — AWS account audit log.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "codebuild-aws",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "AWS CodeBuild context.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "codeql",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Run GitHub CodeQL under cilock — the SARIF report from `codeql database analyze` becomes a signed v0.3 attestation parsed by the rookery sarif attestor, with the literal codeql argv captured in command-run/v0.1.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "command-run",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock command-run attestor records the executed argv, exit code, captured stdout/stderr, and an optional Linux ptrace forensic record, signed into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/command-run/v0.2",
+      "runType": "execute",
+      "hasDoc": true
+    },
+    {
+      "name": "command-run-v0.1",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "(no detector.yaml; user-driven or always-on)",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/command-run/v0.1",
+      "runType": "execute",
+      "hasDoc": false
+    },
+    {
+      "name": "configuration",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock configuration attestor captures the raw CLI flags, config file path, digest, and parsed contents that drove a run, signing them into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/configuration/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "conftest",
+      "source": "catalog-only",
+      "categories": [
+        "policy-eval"
+      ],
+      "primaryCategory": "policy-eval",
+      "description": "Conftest — Rego/OPA policy testing for structured config.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "cosign-sign",
+      "source": "catalog-only",
+      "categories": [
+        "sign"
+      ],
+      "primaryCategory": "sign",
+      "description": "Sigstore cosign — container/artifact signing (validated via cosign sign-blob with a local ED25519 key).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "cosign-verify",
+      "source": "catalog-only",
+      "categories": [
+        "dependency-verify"
+      ],
+      "primaryCategory": "dependency-verify",
+      "description": "Sigstore cosign verification.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "detect-secrets",
+      "source": "catalog-only",
+      "categories": [
+        "secret-scan"
+      ],
+      "primaryCategory": "secret-scan",
+      "description": "detect-secrets — Yelp's pre-commit secret scanner.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "docker",
+      "source": "attestor-backed",
+      "categories": [
+        "image-build"
+      ],
+      "primaryCategory": "image-build",
+      "description": "The cilock docker attestor parses docker buildx --metadata-file JSON from products and records image digests, references, and per-architecture SLSA materials into signed in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/docker/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "drone-ci",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "Drone — open-source container-native CI.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "environment",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock environment attestor captures the host OS, hostname, username, and full process environment with sensitive values obfuscated, signing them into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/environment/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "gcp-audit-log",
+      "source": "catalog-only",
+      "categories": [
+        "runtime-event"
+      ],
+      "primaryCategory": "runtime-event",
+      "description": "Google Cloud Audit Logs (Cloud Logging).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "gcp-iit",
+      "source": "attestor-backed",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "The cilock gcp-iit attestor captures the GCE Instance Identity Token, verifies its signature against Google's JWKS, and signs the resulting GCE host identity into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/gcp-iit/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "git",
+      "source": "attestor-backed",
+      "categories": [
+        "source-checkout"
+      ],
+      "primaryCategory": "source-checkout",
+      "description": "The cilock git attestor captures the repository state at the working directory — HEAD commit, identities, refs, remotes, tags, parents, tree hash, and dirtiness — signed into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/git/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "github",
+      "source": "attestor-backed",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "The cilock github attestor fetches the GitHub Actions OIDC token, verifies it against the GitHub JWKS, and signs the decoded claims plus workflow context into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/github/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "github-action",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock github-action attestor captures GitHub Action execution metadata — reference, type, inputs/outputs, exit code, and runtime context — signed into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/github-action/v0.1",
+      "runType": "execute",
+      "hasDoc": true
+    },
+    {
+      "name": "github-review",
+      "source": "attestor-backed",
+      "categories": [
+        "code-review"
+      ],
+      "primaryCategory": "code-review",
+      "description": "Snapshots GitHub PR review state for the current commit (or an explicit SHA/PR) via the GitHub REST API (token: GH_TOKEN/GITHUB_TOKEN, or `gh auth token` fallback).",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/github-review/v0.1",
+      "runType": "prematerial",
+      "hasDoc": false
+    },
+    {
+      "name": "githubwebhook",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock githubwebhook attestor verifies a GitHub webhook payload's HMAC-SHA256 signature and signs the parsed payload and event name into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/githubwebhook/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "gitlab",
+      "source": "attestor-backed",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "The cilock gitlab attestor captures GitLab CI job context plus the GitLab-issued OIDC JWT and signs it into in-toto evidence, proving an attestation came from a specific pipeline, job, and project.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/gitlab/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "gitleaks",
+      "source": "catalog-only",
+      "categories": [
+        "secret-scan"
+      ],
+      "primaryCategory": "secret-scan",
+      "description": "Gitleaks — secret detection in git history and source.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "go-build",
+      "source": "attestor-backed",
+      "categories": [
+        "build"
+      ],
+      "primaryCategory": "build",
+      "description": "go build — Go compiler. Output binaries carry BuildInfo (module + VCS metadata) which the go-build attestor extracts and writes as a JSON sidecar so the evidence survives strip(1).",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/go-build/v0.1",
+      "runType": "postproduct",
+      "hasDoc": false
+    },
+    {
+      "name": "go-test",
+      "source": "catalog-only",
+      "categories": [
+        "unit-test"
+      ],
+      "primaryCategory": "unit-test",
+      "description": "go test — Go test runner.",
+      "emitsFormats": [
+        "test-results"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "gosec",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Run gosec Go SAST under cilock — flags insecure patterns (weak crypto, math/rand, command injection) and emits a signed v0.3 SARIF attestation linked to the commit that produced the code.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "govulncheck",
+      "source": "attestor-backed",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Scan Go modules for vulnerabilities with reachability via govulncheck under cilock — the SARIF report becomes a signed v0.3 attestation parsed by the rookery sarif attestor.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/govulncheck/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "gpg-sign",
+      "source": "catalog-only",
+      "categories": [
+        "sign"
+      ],
+      "primaryCategory": "sign",
+      "description": "GnuPG signing — long-form artifact signature.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "gradle",
+      "source": "catalog-only",
+      "categories": [
+        "build"
+      ],
+      "primaryCategory": "build",
+      "description": "Gradle — JVM build tool (Java/Kotlin/Groovy/Android).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "grype",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Scan images or directories for vulnerabilities with Grype under cilock — the SARIF report becomes a signed v0.3 attestation parsed by the rookery sarif attestor, byte-identical to what Grype produced.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "hadolint",
+      "source": "catalog-only",
+      "categories": [
+        "lint"
+      ],
+      "primaryCategory": "lint",
+      "description": "Lint Dockerfiles with Hadolint under cilock — pinned base images, package install hygiene, USER root checks, and 100+ other rules become a signed v0.3 SARIF attestation.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "helm-install",
+      "source": "catalog-only",
+      "categories": [
+        "deploy"
+      ],
+      "primaryCategory": "deploy",
+      "description": "helm install / upgrade — Kubernetes chart deployment.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "huggingface-hub",
+      "source": "catalog-only",
+      "categories": [
+        "dataset-snapshot"
+      ],
+      "primaryCategory": "dataset-snapshot",
+      "description": "HuggingFace Hub CLI (`hf`) — model card + repo management. Validated by generating a HuggingFace-standard ModelCard README.md and attesting it as a material.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "inclusion-proof",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock inclusion-proof attestor binds a single file's digest to a Merkle tree root via an RFC 6962 audit path and signs it into in-toto evidence for downstream per-file verification.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/inclusion-proof/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "inspec",
+      "source": "attestor-backed",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Run Chef InSpec (Progress) compliance profiles under cilock — every CIS, custom Ruby, or dev-sec.io scan becomes a signed v0.1 InSpec attestation linked to the profile and target it scanned.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/inspec/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "jenkins",
+      "source": "attestor-backed",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "The cilock jenkins attestor captures Jenkins build metadata from JENKINS_/BUILD_ environment variables and signs it into in-toto evidence, binding an artifact to the pipeline run that produced it.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/jenkins/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "jest",
+      "source": "catalog-only",
+      "categories": [
+        "unit-test"
+      ],
+      "primaryCategory": "unit-test",
+      "description": "Jest — JavaScript test runner (Meta).",
+      "emitsFormats": [
+        "test-results"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "jwt",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock jwt attestor parses a JWT, fetches a JWKS, verifies the token signature, and signs the decoded claims plus the verifying key into in-toto evidence as a generic OIDC identity proof.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/jwt/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "k8smanifest",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock k8smanifest attestor walks YAML/JSON Kubernetes manifests, strips ephemeral fields, records per-document digests and container image references, and signs them into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/k8smanifest/v0.2",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "kics",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan",
+        "compliance-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "KICS — Checkmarx IaC security scanner.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "kube-bench",
+      "source": "attestor-backed",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "The cilock kube-bench attestor ingests an Aqua Security kube-bench CIS Kubernetes Benchmark JSON report from the step's products and signs a per-check pass/fail/warn summary into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/kube-bench/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "kubeaudit",
+      "source": "catalog-only",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "kubeaudit — K8s security auditor (Shopify).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "kubectl-audit",
+      "source": "catalog-only",
+      "categories": [
+        "runtime-event"
+      ],
+      "primaryCategory": "runtime-event",
+      "description": "kubectl get audit/events — Kubernetes API audit access.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "kubescape",
+      "source": "catalog-only",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Scan Kubernetes manifests or a live cluster snapshot for NSA/CISA, MITRE, and ArmoBest framework violations with Kubescape under cilock — emits a signed v0.3 SARIF attestation.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "kustomize-build",
+      "source": "catalog-only",
+      "categories": [
+        "manifest-validate"
+      ],
+      "primaryCategory": "manifest-validate",
+      "description": "kustomize build — declarative K8s manifest customization.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "kyverno",
+      "source": "catalog-only",
+      "categories": [
+        "policy-eval"
+      ],
+      "primaryCategory": "policy-eval",
+      "description": "Kyverno — Kubernetes policy management (CNCF).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "link",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock link attestor synthesizes an in-toto Link v0.3 predicate from the step's command-run, material, product, and environment attestors and signs it into in-toto evidence for legacy verifiers.",
+      "emitsFormats": [],
+      "predicateType": "https://in-toto.io/attestation/link/v0.3",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "linkerd-check",
+      "source": "attestor-backed",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Capture Linkerd service-mesh state under cilock — the native linkerd-check attestor parses `linkerd check -o json` plus optional `linkerd viz edges -o json` into a signed v0.3 attestation with per-category check rollup and per-edge mTLS booleans, gated by Rego for release-time mTLS enforcement.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/linkerd-check/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "lockfiles",
+      "source": "attestor-backed",
+      "categories": [
+        "dependency-resolve"
+      ],
+      "primaryCategory": "dependency-resolve",
+      "description": "The cilock lockfiles attestor captures the contents and SHA-256 digest of common package-manager lockfiles in the working tree and signs them into in-toto evidence as a pinned-dependency fingerprint.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/lockfiles/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "malcontent",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "malcontent (`mal`) — flags supply-chain-attack capabilities and behaviors in binaries and source (Chainguard).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "material",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock material attestor snapshots the working directory before a step runs and emits a single RFC 6962 Merkle-root in-toto subject (tree:materials) over every input file's digest.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/material/v0.3",
+      "runType": "material",
+      "hasDoc": true
+    },
+    {
+      "name": "material-v0.1",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The legacy v0.1 material wire format — a flat path→digest map of every input file. Verify-only today; current builds emit material v0.3. Documented for reading pre-cutover attestations.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/material/v0.1",
+      "runType": "material",
+      "hasDoc": true
+    },
+    {
+      "name": "maven",
+      "source": "attestor-backed",
+      "categories": [
+        "build",
+        "dependency-resolve"
+      ],
+      "primaryCategory": "build",
+      "description": "The cilock maven attestor parses a Maven pom.xml and signs the project coordinates and declared dependencies into in-toto evidence as a static, pre-build dependency record.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/maven/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "maven-build",
+      "source": "catalog-only",
+      "categories": [
+        "build",
+        "dependency-resolve"
+      ],
+      "primaryCategory": "build",
+      "description": "Apache Maven `mvn` — JVM dependency + build orchestrator (catalog-only; the maven attestor plugin emits the actual SLSA-style record).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "melange",
+      "source": "catalog-only",
+      "categories": [
+        "build"
+      ],
+      "primaryCategory": "build",
+      "description": "melange — builds apk packages from declarative YAML pipelines (Chainguard); emits an SBOM per package.",
+      "emitsFormats": [
+        "sbom"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "nancy",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Nancy — Sonatype's OSS Index vulnerability scanner for Go modules.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "notary-v2",
+      "source": "catalog-only",
+      "categories": [
+        "sign"
+      ],
+      "primaryCategory": "sign",
+      "description": "notation (Notary v2) — OCI artifact signing.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "npm-audit",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "npm audit — Node.js dependency vulnerability scanner.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "npm-install",
+      "source": "catalog-only",
+      "categories": [
+        "dependency-resolve"
+      ],
+      "primaryCategory": "dependency-resolve",
+      "description": "npm install / npm ci — Node.js dependency resolution + install.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "nuclei",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Run ProjectDiscovery Nuclei under cilock — the SARIF report it emits via -sarif-export becomes a signed v0.3 attestation parsed by the rookery sarif attestor; supports any of Nuclei's ~13,000 community templates.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "oci",
+      "source": "attestor-backed",
+      "categories": [
+        "image-build"
+      ],
+      "primaryCategory": "image-build",
+      "description": "The cilock oci attestor ingests an OCI/Docker image saved as a tarball product and signs the manifest, image ID, layer diffIDs, and repo tags into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/oci/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "omnitrail",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock omnitrail attestor captures a content-addressed trail of every file and directory under the working directory with POSIX metadata, signed into in-toto evidence for cross-tool provenance correlation.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/omnitrail/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "oscap",
+      "source": "attestor-backed",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Run OpenSCAP (oscap) XCCDF baseline scans under cilock — every SCAP Security Guide profile evaluation becomes a signed in-toto envelope carrying parsed pass/fail/N/A counts plus the raw XCCDF results XML.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/oscap/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "osv-scanner",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Scan lockfiles or containers against the OpenSSF OSV vulnerability database with OSV-Scanner under cilock — each match becomes a signed v0.3 SARIF attestation.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "pip-audit",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "pip-audit — Python dependency vulnerability scanner from PyPA.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "pip-install",
+      "source": "attestor-backed",
+      "categories": [
+        "dependency-resolve"
+      ],
+      "primaryCategory": "dependency-resolve",
+      "description": "The cilock pip-install attestor captures the post-build Python package environment via pip, statically analyzes installed code and PyPI PEP 740 provenance, and signs it into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/pip-install/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "platform",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "(no detector.yaml; user-driven or always-on)",
+      "emitsFormats": [],
+      "predicateType": "https://testifysec.com/attestations/platform/v0.1",
+      "runType": "prematerial",
+      "hasDoc": false
+    },
+    {
+      "name": "pnpm-install",
+      "source": "catalog-only",
+      "categories": [
+        "dependency-resolve"
+      ],
+      "primaryCategory": "dependency-resolve",
+      "description": "pnpm install — fast disk-efficient Node.js package manager.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "polaris",
+      "source": "catalog-only",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Polaris — Fairwinds Kubernetes best-practices validator.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "policyverify",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock policyverify attestor emits a SLSA Verification Summary Attestation recording the outcome of a cilock verify run against a signed policy, signed into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://slsa.dev/verification_summary/v1",
+      "runType": "verify",
+      "hasDoc": true
+    },
+    {
+      "name": "product",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock product attestor snapshots the working directory after a step runs and emits a single RFC 6962 Merkle-root in-toto subject (tree:products) over every output file's digest.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/product/v0.3",
+      "runType": "product",
+      "hasDoc": true
+    },
+    {
+      "name": "product-v0.1",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The legacy v0.1 product wire format — a flat path→Product map with per-file MIME and digest, one file subject each. Verify-only today; current builds emit product v0.3.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/product/v0.1",
+      "runType": "product",
+      "hasDoc": true
+    },
+    {
+      "name": "product-v0.2",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The legacy v0.2 product wire format — same per-file map as v0.1 but a single tree:products subject via a hand-rolled hash chain. Verify-only today; current builds emit product v0.3.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/product/v0.2",
+      "runType": "product",
+      "hasDoc": true
+    },
+    {
+      "name": "protoc",
+      "source": "catalog-only",
+      "categories": [
+        "build"
+      ],
+      "primaryCategory": "build",
+      "description": "Protocol Buffers compiler — generates Go/Java/Python/JS bindings from .proto files. Common in monorepos with API codegen pipelines.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "prowler",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "Scan AWS, GCP, Azure, Kubernetes, and Microsoft 365 against CIS, NIST, ISO 27001, HIPAA, and PCI-DSS with Prowler under cilock — findings become a signed v0.3 attestation parsed by the native prowler attestor.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/prowler/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "pytest",
+      "source": "catalog-only",
+      "categories": [
+        "unit-test"
+      ],
+      "primaryCategory": "unit-test",
+      "description": "pytest — Python test runner.",
+      "emitsFormats": [
+        "test-results"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "retire-js",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "RetireJS — JavaScript library vulnerability scanner.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "safety",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Safety — Python dependency vulnerability scanner (PyUp).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "sarif",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock sarif attestor captures a SARIF result file emitted by a code scanner (CodeQL, Semgrep, gosec, Trivy) and embeds it byte-identical in a signed in-toto attestation under a .report field.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/sarif/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "sbom",
+      "source": "attestor-backed",
+      "categories": [
+        "sbom-generate"
+      ],
+      "primaryCategory": "sbom-generate",
+      "description": "The cilock sbom attestor picks up SPDX-JSON or CycloneDX-JSON files from the product set, stores each document byte-preservingly, and signs it into in-toto evidence under the SBOM's native predicate type.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/sbom/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "scubagoggles",
+      "source": "attestor-backed",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Capture a Google Workspace tenant's raw configuration with CISA ScubaGoggles under cilock — the provider settings become a signed scubagoggles/v0.1 attestation that your own Rego policy evaluates. Facts in the evidence, verdict in the policy.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/scubagoggles/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "secretscan",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock secretscan attestor runs a Gitleaks pattern scan over every product and prior attestor's JSON, with recursive decoding, recording redacted findings into signed in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/secretscan/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "semgrep",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Run Semgrep SAST under cilock — the SARIF report becomes a signed v0.3 attestation parsed by the rookery sarif attestor; supports any of Semgrep's bundled rulesets or custom rules.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "slsa",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock slsa attestor assembles a SLSA Provenance v1.0 predicate from sibling attestors in the same collection and signs it into in-toto evidence under the slsa.dev predicate type.",
+      "emitsFormats": [],
+      "predicateType": "https://slsa.dev/provenance/v1.0",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "slsa-provenance-v1",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "(no detector.yaml; user-driven or always-on)",
+      "emitsFormats": [],
+      "predicateType": "https://slsa.dev/provenance/v1",
+      "runType": "verify",
+      "hasDoc": false
+    },
+    {
+      "name": "staticcheck",
+      "source": "catalog-only",
+      "categories": [
+        "lint"
+      ],
+      "primaryCategory": "lint",
+      "description": "staticcheck — Go static analyzer (Honnef.co/go/tools).",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "steampipe",
+      "source": "attestor-backed",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Query AWS, GCP, Azure, Kubernetes, GitHub, and other cloud or SaaS APIs as SQL with Steampipe under cilock — every row becomes a signed v0.1 Steampipe attestation chained to subject digests per identity axis.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/steampipe/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "syft",
+      "source": "catalog-only",
+      "categories": [
+        "sbom-generate"
+      ],
+      "primaryCategory": "sbom-generate",
+      "description": "Generate signed CycloneDX or SPDX SBOMs with cilock — Anchore's Syft runs under `cilock run` so the SBOM is captured as a real v0.3 product, hashed into a Merkle tree, and parsed by the `sbom` attestor.",
+      "emitsFormats": [
+        "sbom"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "system-packages",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock system-packages attestor records the build host's installed OS package inventory (name and version) before materials are gathered, signing it into in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/system-packages/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
+      "name": "teamcity",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "JetBrains TeamCity CI/CD context.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "tekton-pipelines",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "Tekton Pipelines — Kubernetes-native CI/CD (CDF).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "terrascan",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan",
+        "compliance-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Terrascan — multi-IaC scanner (Terraform/K8s/Helm/ARM).",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "test-results",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "Captures JUnit XML test reports and CTRF JSON reports produced by test runners (go test -junit, pytest, jest, gradle, surefire, etc.).",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/test-results/v0.1",
+      "runType": "postproduct",
+      "hasDoc": false
+    },
+    {
+      "name": "testssl",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Run testssl.sh TLS connection scans under cilock — the testssl JSON output becomes a signed v0.3 attestation parsed by the rookery sarif attestor, capturing protocol negotiation, cipher matrix, named TLS vulnerabilities, and FIPS 140-2/140-3 compliance findings.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "tflint",
+      "source": "catalog-only",
+      "categories": [
+        "lint"
+      ],
+      "primaryCategory": "lint",
+      "description": "TFLint — Terraform linter for syntax + provider correctness.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "tfsec",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan",
+        "compliance-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "tfsec — Terraform-specific static analysis (Aqua Security).",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "travis-ci",
+      "source": "catalog-only",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "Travis CI context.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "trivy",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Scan containers, IaC, secrets, and licenses with Trivy under cilock — the SARIF report becomes a signed v0.3 attestation parsed by the rookery sarif attestor.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "trufflehog",
+      "source": "catalog-only",
+      "categories": [
+        "secret-scan"
+      ],
+      "primaryCategory": "secret-scan",
+      "description": "TruffleHog — secret + credential scanner (Truffle Security).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "vault-cli",
+      "source": "catalog-only",
+      "categories": [
+        "key-ceremony"
+      ],
+      "primaryCategory": "key-ceremony",
+      "description": "HashiCorp Vault CLI — secret distribution / dynamic credentials.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "vex",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "The cilock vex attestor captures an OpenVEX document found among a step's product files and attaches it as in-toto evidence under the canonical OpenVEX predicate type URI.",
+      "emitsFormats": [],
+      "predicateType": "https://openvex.dev/ns",
+      "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "vexctl",
+      "source": "catalog-only",
+      "categories": [
+        "vex-consume"
+      ],
+      "primaryCategory": "vex-consume",
+      "description": "vexctl — OpenVEX statement generation.",
+      "emitsFormats": [
+        "vex"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "yarn-audit",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "yarn audit — Yarn dependency vulnerability scanner.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "yarn-install",
+      "source": "catalog-only",
+      "categories": [
+        "dependency-resolve"
+      ],
+      "primaryCategory": "dependency-resolve",
+      "description": "yarn install — Yarn package manager install.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "zap",
+      "source": "catalog-only",
+      "categories": [
+        "vulnerability-scan"
+      ],
+      "primaryCategory": "vulnerability-scan",
+      "description": "Run OWASP ZAP DAST scans under cilock — the SARIF report from ZAP's automation framework becomes a signed v0.3 attestation parsed by the rookery sarif attestor, with the literal docker argv captured in command-run/v0.1.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    }
+  ]
+}

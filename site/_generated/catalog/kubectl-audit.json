@@ -1,0 +1,44 @@
+{
+  "name": "kubectl-audit",
+  "source": "catalog-only",
+  "description": "kubectl get audit/events — Kubernetes API audit access.",
+  "title": "kubectl-audit",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "runtime-event"
+  ],
+  "primaryCategory": "runtime-event",
+  "upstream": {
+    "name": "kubectl",
+    "source": "https://github.com/kubernetes/kubectl",
+    "license": "Apache-2.0",
+    "vendor": "Kubernetes / CNCF"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "kubectl get events"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "kubectl audit/events query observed. Cluster-state snapshot captured."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- kubectl get events .",
+  "detectionCommand": "cilock plan --format=json -- kubectl get events [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"kubectl get events\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

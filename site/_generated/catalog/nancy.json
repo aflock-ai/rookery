@@ -1,0 +1,44 @@
+{
+  "name": "nancy",
+  "source": "catalog-only",
+  "description": "Nancy — Sonatype's OSS Index vulnerability scanner for Go modules.",
+  "title": "nancy",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "Nancy",
+    "source": "https://github.com/sonatype-nexus-community/nancy",
+    "license": "Apache-2.0",
+    "vendor": "Sonatype"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "nancy"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Nancy scan observed. Reads `go list -json` on stdin; JSON output captured."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- nancy .",
+  "detectionCommand": "cilock plan --format=json -- nancy [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"nancy\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

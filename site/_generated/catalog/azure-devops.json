@@ -1,0 +1,44 @@
+{
+  "name": "azure-devops",
+  "source": "catalog-only",
+  "description": "Azure DevOps Pipelines — Microsoft CI/CD context.",
+  "title": "azure-devops",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "Azure Pipelines",
+    "source": "https://learn.microsoft.com/azure/devops/pipelines/",
+    "license": "commercial",
+    "vendor": "Microsoft"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "TF_BUILD"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside Azure DevOps Pipelines. Build/release metadata available in TF_* and BUILD_* env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "TF_BUILD=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var TF_BUILD (any value)",
+  "negativeSetup": "Run with env var TF_BUILD UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

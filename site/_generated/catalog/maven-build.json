@@ -1,0 +1,45 @@
+{
+  "name": "maven-build",
+  "source": "catalog-only",
+  "description": "Apache Maven `mvn` — JVM dependency + build orchestrator (catalog-only; the maven attestor plugin emits the actual SLSA-style record).",
+  "title": "maven-build",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "build",
+    "dependency-resolve"
+  ],
+  "primaryCategory": "build",
+  "upstream": {
+    "name": "Apache Maven",
+    "source": "https://github.com/apache/maven",
+    "license": "Apache-2.0",
+    "vendor": "Apache Software Foundation"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "full",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "mvn"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "mvn invocation observed. The dedicated maven attestor plugin captures the project + dep tree."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- mvn .",
+  "detectionCommand": "cilock plan --format=json -- mvn [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"mvn\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

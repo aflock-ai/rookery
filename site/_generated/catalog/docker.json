@@ -1,0 +1,120 @@
+{
+  "name": "docker",
+  "source": "attestor-backed",
+  "description": "The cilock docker attestor parses docker buildx --metadata-file JSON from products and records image digests, references, and per-architecture SLSA materials into signed in-toto evidence.",
+  "title": "docker",
+  "sidebarPosition": 19,
+  "examplesRepo": "16-docker",
+  "categories": [
+    "image-build"
+  ],
+  "primaryCategory": "image-build",
+  "upstream": {
+    "name": "Docker",
+    "source": "https://github.com/moby/moby",
+    "license": "Apache-2.0",
+    "vendor": "Docker, Inc. / Moby"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "full",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "docker build"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "docker buildx build"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "buildah build"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "docker build"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "docker buildx build"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "buildah build"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [
+    {
+      "code": "DOCKER_NO_PROVENANCE",
+      "severity": "warn",
+      "message": "docker build invoked without --provenance=true",
+      "suggested_example": "docker '<args>' --provenance=true"
+    }
+  ],
+  "llmHints": {
+    "on_match": "Docker build captured. Attestation includes image digest, layer materials, and image references.",
+    "on_observed_but_not_invoked": "docker build ran inside the step (likely via make/script). Post-gate captured it via exec_observed.",
+    "on_warn": "User ran docker build without --provenance=true. Re-run with the suggested_command from the warning to capture full SLSA build provenance."
+  },
+  "predicateType": "https://aflock.ai/attestations/docker/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- docker build .",
+  "detectionCommand": "cilock plan --format=json -- docker build [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"docker build\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Parses `docker buildx --metadata-file` JSON output from the products and records image digests, references, and SLSA-style materials per architecture."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe top-level field is `products`, keyed by the image's SHA256 digest (without the `sha256:` prefix). Each `DockerProduct` entry contains:\n\n- `imagedigest` — a `DigestSet` holding the SHA256 of the container image (from `containerimage.digest` in the metadata file).\n- `imagereferences` — list of image refs (populated from `image.name` in the metadata file).\n- `materials` — `map[architecture][]Material`, where each `Material` has:\n  - `uri` — the source material URI from buildx provenance.\n  - `architecture` — the platform key (e.g. `linux/amd64`), extracted from the `buildx.build.provenance/<arch>` key or, for the single-arch `buildx.build.provenance` key, parsed from the `platform=` query parameter on the material URI.\n  - `digest` — a `DigestSet` containing the SHA256 from the provenance material.\n\n`Subjects()` exposes four subject types: `imagedigest:<sha256>`, `imagereference:<ref>`, `materialdigest:<sha256>`, and `materialuri:<uri>`."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nWhen your pipeline builds container images with `docker buildx build --metadata-file <path>` and that JSON file lands in the products. Pair with [`oci`](./oci) when you also `docker save` a tarball, or with `slsa` for SLSA-shaped consumers.\n\n```bash\ndocker buildx build --metadata-file dist/metadata.json -t myapp:dev .\ncilock run --step image \\\n  --attestations command-run,material,product,docker \\\n  -- echo \"image built\"\n```"
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"products\": {\n    \"abc123...def\": {\n      \"materials\": {\n        \"linux/amd64\": [\n          {\n            \"uri\": \"https://github.com/example/repo.git#refs/heads/main\",\n            \"architecture\": \"linux/amd64\",\n            \"digest\": { \"sha256\": \"deadbeef...\" }\n          }\n        ]\n      },\n      \"imagereferences\": [\"registry.example.com/myapp:dev\"],\n      \"imagedigest\": { \"sha256\": \"abc123...def\" }\n    }\n  }\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Buildx only.** Classic `docker build` does not emit a metadata file with `containerimage.digest` / `buildx.build.provenance` keys. Without those, nothing attests.\n- **Detection is MIME-based, not filename-based.** The attestor iterates `ctx.Products()` and tries to JSON-parse every product whose MIME type is `application/json`. Files that fail to parse as a `BuildInfo` struct are silently skipped (logged at debug). There is no fixed filename — name the metadata file anything you like as long as the product MIME detector recognizes it as JSON.\n- **Multiple metadata files per attestation are supported.** Every JSON product that successfully unmarshals into a `BuildInfo` becomes its own entry in `products`, keyed by image digest.\n- **Digest must be `sha256:`-prefixed.** Metadata files whose `containerimage.digest` doesn't start with `sha256:` are skipped with a warning.\n- **`Attest` returns an error if no candidates produce a product** (`\"no products to attest\"`). A buildx metadata file with a missing or non-`sha256:` digest will trip this if it's the only candidate.\n- **Per-arch provenance keys.** Multi-platform builds emit `buildx.build.provenance/<arch>` entries; single-platform builds emit a bare `buildx.build.provenance` key, and the architecture is recovered from the `platform=` query parameter of one of the material URIs."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal `docker buildx build --metadata-file metadata.json` against a Dockerfile. The metadata file is a BuildKit JSON product consumed by the docker attestor.\n\n```bash\ncilock run --step docker-build \\\n  --signer-file-key-path key.pem --outfile attestation.json \\\n  --attestations docker,environment,git \\\n  -- docker buildx build --metadata-file metadata.json --load -t app:latest .\n```\n\nValidated against a real built image (sha256:1c1ee1a2...). The `--metadata-file` flag produces a buildx JSON metadata that the docker attestor consumes as an `application/json` product. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/16-docker](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/16-docker)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- [`oci`](./oci) — for `docker save` tarballs (registry/distribution layout)\n- Upstream: [witness/docker.md](https://github.com/in-toto/witness/blob/main/docs/attestors/docker.md)"
+    }
+  ],
+  "hasDoc": true
+}

@@ -1,0 +1,87 @@
+{
+  "name": "hadolint",
+  "source": "catalog-only",
+  "description": "Lint Dockerfiles with Hadolint under cilock — pinned base images, package install hygiene, USER root checks, and 100+ other rules become a signed v0.3 SARIF attestation.",
+  "title": "Hadolint",
+  "sidebarPosition": 6,
+  "examplesRepo": "tool-hadolint-sarif",
+  "categories": [
+    "lint"
+  ],
+  "primaryCategory": "lint",
+  "upstream": {
+    "name": "Hadolint",
+    "source": "https://github.com/hadolint/hadolint",
+    "license": "GPL-3.0",
+    "vendor": "Hadolint maintainers"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "hadolint"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Hadolint invocation observed. `--no-fail --format sarif` output (routed via sh -c redirect) is captured by the sarif attestor."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- hadolint .",
+  "detectionCommand": "cilock plan --format=json -- hadolint [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"hadolint\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Hadolint applies 100+ rules to a `Dockerfile` (unpinned base images, missing `--no-cache`, `USER root`, etc.) and writes findings as SARIF 2.1.0. Under cilock that SARIF report becomes a signed, content-addressed attestation pinned to the exact Dockerfile bytes that produced it."
+    },
+    {
+      "slug": "validated-invocation",
+      "title": "Validated invocation",
+      "markdown": "## Validated invocation\n\n```bash\ncilock run --step hadolint-scan \\\n  --signer-file-key-path key.pem \\\n  --outfile attestation.json \\\n  --attestations sarif,environment,git \\\n  --enable-archivista=false \\\n  -- sh -c 'hadolint --no-fail --format sarif Dockerfile > hadolint.sarif'\n```\n\nThis is the exact command exercised in [`tool-hadolint-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-hadolint-sarif) against `hadolint` 2.14.0 and `cilock` v0.3."
+    },
+    {
+      "slug": "why-this-shape",
+      "title": "Why this shape",
+      "markdown": "## Why this shape\n\n`hadolint` writes SARIF to **stdout only** — even the latest release (2.14.0) has no `-o/--output` file flag (upstream feature request: [hadolint/hadolint#1118](https://github.com/hadolint/hadolint/issues/1118)). The minimal `sh -c '... > hadolint.sarif'` wrapper exists solely to redirect stdout to a file the `product` attestor can hash.\n\nThat's a different shape from the `bash -c \"cp scan.sarif scan-product.sarif\"` antipattern other docs (and earlier drafts of this page) used:\n\n| | `sh -c 'hadolint ... > file.sarif'` | `bash -c 'cp scan.sarif scan-product.sarif'` |\n|---|---|---|\n| Recorded `command-run` argv | `[\"sh\",\"-c\",\"hadolint --no-fail --format sarif Dockerfile > hadolint.sarif\"]` | `[\"bash\",\"-c\",\"cp ...\"]` |\n| Process the tracer/spy sees | real `hadolint` | `cp` |\n| Genuine parent of `hadolint` | `cilock` | something earlier in CI — `cilock` has no causal link |\n| Provable claim | \"cilock ran hadolint and got these findings\" | \"cilock copied a file someone else produced\" |\n\nHere `cilock` is the **genuine parent** of `hadolint`. The `command-run` attestor records the literal shell argv, the spy/tracer sees the real `hadolint` process, and the `product` attestor digests the resulting `hadolint.sarif`. Hadolint's stdout-only output is a tool limitation we work around; it isn't an excuse to launder a pre-existing report."
+    },
+    {
+      "slug": "what-gets-captured",
+      "title": "What gets captured",
+      "markdown": "## What gets captured\nThe signed envelope's payload (`.payload`, base64-decoded) carries one in-toto Statement whose predicate contains these attestations:\n\n```\nhttps://aflock.ai/attestations/environment/v0.1\nhttps://aflock.ai/attestations/git/v0.1\nhttps://aflock.ai/attestations/material/v0.3\nhttps://aflock.ai/attestations/command-run/v0.1\nhttps://aflock.ai/attestations/product/v0.3\nhttps://aflock.ai/attestations/sarif/v0.1\n```\n\n`material/v0.3` digests the Dockerfile **before** the scan, `product/v0.3` digests `hadolint.sarif` **after** the scan, and `sarif/v0.1` parses the report and exposes structured findings (rule id, level, location, message). The subject digest of the Dockerfile is what later verify-time policy joins against."
+    },
+    {
+      "slug": "validate-it-locally",
+      "title": "Validate it locally",
+      "markdown": "## Validate it locally\nAfter running the invocation above, the report should have exactly 4 findings against the deliberately bad Dockerfile in the example repo (`DL3007`, `DL3018`, `DL3019`, `DL3002`):\n\n```bash\n# list predicate types in the signed payload\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[].type'\n\n# show the recorded command-run argv — should be the real hadolint shell invocation\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[]\n        | select(.type==\"https://aflock.ai/attestations/command-run/v0.1\")\n        | .attestation.cmd'\n\n# count findings parsed by the sarif attestor\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[]\n        | select(.type==\"https://aflock.ai/attestations/sarif/v0.1\")\n        | .attestation.report.runs[0].results | length'\n```"
+    },
+    {
+      "slug": "notes-on-no-fail",
+      "title": "Notes on `--no-fail`",
+      "markdown": "## Notes on `--no-fail`\n\nHadolint, like `gosec`, exits non-zero whenever any rule fires. Without `--no-fail`, `command-run` records `exitcode != 0` and the run terminates **before** the post-product `sarif` attestor runs — you get half an attestation. `--no-fail` keeps the exit code at 0 so the full pipeline (material → command-run → product → sarif) completes; the findings themselves are still recorded in the SARIF predicate either way. Gate severity in policy at verify time, not via the scanner's exit code."
+    },
+    {
+      "slug": "faq",
+      "title": "FAQ",
+      "markdown": "## FAQ\n\n**Does cilock support Hadolint?**\nYes, via the `sarif` attestor. Hadolint emits SARIF 2.1.0 on stdout; cilock wraps the invocation, hashes the report, signs it, and folds the findings into a v0.1 `sarif` predicate inside the same in-toto Statement as the Dockerfile material and the `command-run` argv.\n\n**Why `sh -c` instead of running Hadolint directly?**\nHadolint 2.14.0 has no file-output flag — SARIF goes to stdout only. The `sh -c '... > hadolint.sarif'` wrapper is a minimal redirect so the `product` attestor has a file to digest. Crucially, `cilock` is still the genuine parent of the `hadolint` process; the `command-run` attestor records the literal shell argv. Once [hadolint/hadolint#1118](https://github.com/hadolint/hadolint/issues/1118) lands, the wrapper goes away.\n\n**Why `--no-fail`?**\nHadolint exits non-zero on findings, which terminates the cilock run before product/sarif attestors fire. `--no-fail` keeps the exit code at 0 while still recording every finding in the SARIF predicate; enforce severity gating in policy at verify time.\n\n**Which Dockerfile rules does it cover?**\nAll 100+ Hadolint rules — the same rule set you'd get from `hadolint Dockerfile` outside cilock. The reference example exercises `DL3007` (unpinned tag), `DL3018` (unpinned apk package), `DL3019` (`apk add` without `--no-cache`), and `DL3002` (final `USER root`). The full rule catalog is at [hadolint/hadolint#rules](https://github.com/hadolint/hadolint#rules)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [`sarif` attestor](../attestors/sarif) — the predicate this tool flows through\n- [How cilock policy works](../guides/policy) — verify-time enforcement on Hadolint findings\n- [Attestation graph + back-refs](../concepts/attestation-graph) — how Dockerfile material links to the image attestation\n- [Validated example: `tool-hadolint-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-hadolint-sarif)\n- [Tools index](./index)"
+    }
+  ],
+  "hasDoc": true
+}

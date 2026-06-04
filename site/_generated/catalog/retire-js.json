@@ -1,0 +1,44 @@
+{
+  "name": "retire-js",
+  "source": "catalog-only",
+  "description": "RetireJS — JavaScript library vulnerability scanner.",
+  "title": "retire-js",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "RetireJS",
+    "source": "https://github.com/RetireJS/retire.js",
+    "license": "Apache-2.0",
+    "vendor": "RetireJS contributors"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "retire"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "RetireJS observed. --outputformat json|jsonsimple captures findings."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- retire .",
+  "detectionCommand": "cilock plan --format=json -- retire [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"retire\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

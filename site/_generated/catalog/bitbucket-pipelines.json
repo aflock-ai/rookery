@@ -1,0 +1,44 @@
+{
+  "name": "bitbucket-pipelines",
+  "source": "catalog-only",
+  "description": "Bitbucket Pipelines — Atlassian CI/CD context.",
+  "title": "bitbucket-pipelines",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "Bitbucket Pipelines",
+    "source": "https://support.atlassian.com/bitbucket-cloud/docs/get-started-with-bitbucket-pipelines/",
+    "license": "commercial",
+    "vendor": "Atlassian"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "BITBUCKET_BUILD_NUMBER"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside Bitbucket Pipelines. Build metadata available in BITBUCKET_* env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "BITBUCKET_BUILD_NUMBER=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var BITBUCKET_BUILD_NUMBER (any value)",
+  "negativeSetup": "Run with env var BITBUCKET_BUILD_NUMBER UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

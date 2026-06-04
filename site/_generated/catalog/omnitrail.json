@@ -1,0 +1,68 @@
+{
+  "name": "omnitrail",
+  "source": "attestor-backed",
+  "description": "The cilock omnitrail attestor captures a content-addressed trail of every file and directory under the working directory with POSIX metadata, signed into in-toto evidence for cross-tool provenance correlation.",
+  "title": "omnitrail",
+  "sidebarPosition": 27,
+  "examplesRepo": "12-omnitrail",
+  "categories": [],
+  "primaryCategory": null,
+  "upstream": null,
+  "gates": [],
+  "recommendedTrace": "off",
+  "triggers": [],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {},
+  "predicateType": "https://aflock.ai/attestations/omnitrail/v0.1",
+  "runType": "prematerial",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": null,
+  "positiveSetup": "no detector.yaml; this attestor is always-on or user-driven",
+  "negativeSetup": null,
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Captures a content-addressed trail of every file and directory under the working directory, with POSIX metadata, suitable for cross-tool provenance correlation."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe attestor wraps the upstream [`omnitrail-go`](https://github.com/fkautz/omnitrail-go) factory, which walks `ctx.WorkingDir()` and produces a single `Envelope` with three default plugins active: file, directory, and POSIX.\n\nThe attestor struct itself has exactly one json-tagged field:\n\n| Field | Type | Description |\n|---|---|---|\n| `Envelope` | `*omnitrail.Envelope` | Trail envelope — header + per-path mapping |\n\n`Envelope.Header.Features` records which hash algorithms were enabled (SHA1 is on by default). `Envelope.Mapping` is a `map[string]*Element` keyed by path. Each `Element` records:\n\n- `type` — `file` or `directory`\n- `sha1`, `sha256` — content hashes (when the corresponding algorithm is enabled)\n- `gitoid:sha1`, `gitoid:sha256` — OmniBOR artifact dependency graph identifiers\n- `posix` — atime, ctime, mtime, creation_time, file_inode, file_device_id, file_system_id, file_type, file_flags, hard_link_count, owner_uid, owner_gid, permissions, size, extended_attributes, metadata_ctime\n\n> **Note:** Despite the name, omnitrail does **not** auto-detect toolchains (go, cargo, node, pip, gcc, etc.). It is a filesystem trail, not a tool inventory. For toolchain provenance, layer in `command-run` or language-specific attestors."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nUse omnitrail when downstream verifiers need a stable, content-addressed reference for every input file in the workspace — particularly for OmniBOR/ADG-based correlation across pipeline stages or between independent reproducible builds. Because it runs in the `prematerial` phase, it sees the workspace before any user command mutates it."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. The attestor exposes no CLI flags; the upstream library is constructed with defaults (SHA1 enabled, no allow-list, all three plugins active)."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"Envelope\": {\n    \"header\": {\n      \"features\": {\n        \"sha1\": { \"algorithms\": [\"sha1\"] }\n      }\n    },\n    \"mapping\": {\n      \"src/main.go\": {\n        \"type\": \"file\",\n        \"sha1\": \"…\",\n        \"gitoid:sha1\": \"gitoid:blob:sha1:…\",\n        \"posix\": {\n          \"mtime\": \"2026-05-21T12:00:00Z\",\n          \"owner_uid\": \"501\",\n          \"permissions\": \"0644\",\n          \"size\": \"4096\"\n        }\n      },\n      \"src\": {\n        \"type\": \"directory\",\n        \"sha1\": \"…\",\n        \"gitoid:sha1\": \"gitoid:tree:sha1:…\"\n      }\n    }\n  }\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Windows exclusion.** `omnitrail.go` carries `//go:build !windows`. Custom binaries built for Windows via `cilock build` silently omit this attestor; policies that require it will fail on Windows runners.\n- **POSIX plugin is Unix-only.** Upstream `posix_plugin_unix.go` is gated on Unix; even on macOS/Linux the POSIX fields depend on filesystem support for the relevant syscalls.\n- **No allow-list wiring.** The upstream `SetAllowList` hook exists but the cilock adapter never calls it — every file under the working directory is walked. Large workspaces produce large envelopes.\n- **No tool detection.** This attestor records files, not toolchain binaries. Documentation that claims otherwise (including any prior version of this page) was wrong.\n- **SHA256 off by default.** `NewTrail()` enables SHA1 unless an option flips SHA256 on; the cilock adapter passes no options."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal omnitrail SBOM emission tied to a real material set.\n\n```bash\ncilock run --step omnitrail-emit \\\n  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \\\n  --attestations omnitrail \\\n  -- echo \"captured omnitrail bom\" \n```\n\nValidated against a real material set. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/12-omnitrail](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/12-omnitrail)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- Upstream: [witness/omnitrail.md](https://github.com/in-toto/witness/blob/main/docs/attestors/omnitrail.md)\n- Library: [fkautz/omnitrail-go](https://github.com/fkautz/omnitrail-go)"
+    }
+  ],
+  "hasDoc": true
+}

@@ -1,0 +1,44 @@
+{
+  "name": "gradle",
+  "source": "catalog-only",
+  "description": "Gradle — JVM build tool (Java/Kotlin/Groovy/Android).",
+  "title": "gradle",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "build"
+  ],
+  "primaryCategory": "build",
+  "upstream": {
+    "name": "Gradle",
+    "source": "https://github.com/gradle/gradle",
+    "license": "Apache-2.0",
+    "vendor": "Gradle Inc."
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "full",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "gradle"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Gradle build observed. commandrun (with --tracing) captures opens/writes."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- gradle .",
+  "detectionCommand": "cilock plan --format=json -- gradle [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"gradle\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

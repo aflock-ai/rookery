@@ -1,0 +1,68 @@
+{
+  "name": "githubwebhook",
+  "source": "attestor-backed",
+  "description": "The cilock githubwebhook attestor verifies a GitHub webhook payload's HMAC-SHA256 signature and signs the parsed payload and event name into in-toto evidence.",
+  "title": "githubwebhook",
+  "sidebarPosition": 12,
+  "examplesRepo": "21-githubwebhook",
+  "categories": [],
+  "primaryCategory": null,
+  "upstream": null,
+  "gates": [],
+  "recommendedTrace": "off",
+  "triggers": [],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {},
+  "predicateType": "https://aflock.ai/attestations/githubwebhook/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": null,
+  "positiveSetup": "no detector.yaml; this attestor is always-on or user-driven",
+  "negativeSetup": null,
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Verifies a GitHub webhook payload's HMAC-SHA256 signature against a configured shared secret and records the parsed payload plus event name so a verifier can prove which webhook delivery triggered the pipeline."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nThe attestor struct has two JSON-tagged fields written into the predicate:\n\n- `payload` (`map[string]interface{}`) — the full webhook body parsed as JSON.\n- `event` (`string`) — the GitHub event name (`push`, `pull_request`, `pull_request_review`, or any other delivered event).\n\nFor known events, the attestor also derives subjects and back-references from the parsed payload:\n\n- Always: `event:<name>`, plus `reponame:` / `repourl:` (from `repository.name` / `repository.html_url`) and `sender:` (from `sender.login`) when present.\n- `push`: one `commit:<sha>` subject per entry in `commits[]`, plus author username/email hashes.\n- `pull_request` / `pull_request_review`: `pullrequest:<html_url>`, `pullrequestheadref:`, `pullrequestheadsha:<sha>`, and (when set) `mergecommitsha:<sha>`. Head SHA and merge SHA are also emitted as back-refs so the webhook attestation can be chained to downstream git/build attestations.\n\nNeither the raw body bytes nor the received HMAC signature are written into the predicate — they are consumed only to validate the delivery."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nFor self-hosted CI (Jenkins, Tekton, custom runners) that receives GitHub webhook deliveries directly and needs to prove \"this build was triggered by a webhook GitHub actually signed.\" Not needed inside GitHub Actions itself — use the [`github`](./github) and [`github-action`](./github-action) attestors there."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. The attestor has no CLI surface in cilock today; it is configured in-process via Go options (`WithBody`, `WithSecret`, `WithRecievedSignature`, `WithEvent`) by an embedding application that has already received the webhook."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"payload\": {\n    \"repository\": { \"name\": \"rookery\", \"html_url\": \"https://github.com/aflock-ai/rookery\" },\n    \"sender\":     { \"login\": \"octocat\" },\n    \"pull_request\": {\n      \"html_url\":         \"https://github.com/aflock-ai/rookery/pull/42\",\n      \"merge_commit_sha\": \"deadbeef...\",\n      \"head\": { \"sha\": \"cafef00d...\", \"ref\": \"feature/x\" }\n    }\n  },\n  \"event\": \"pull_request\"\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **HMAC verification is mandatory and fail-closed.** `Attest()` returns an error if any of `body`, `secret`, or `receivedSig` is empty, and computes `HMAC-SHA256(body, secret)` and compares it (constant-time) against the hex value after stripping the `sha256=` prefix from the `X-Hub-Signature-256` header. A mismatch aborts attestation; no partial record is emitted.\n- **Secret comes from the embedder, not a flag.** Because there is no CLI wiring, the shared secret must be supplied by whatever component invokes the attestor in-process. Do not pass it on the command line.\n- **Payload bytes must be the exact bytes GitHub signed.** Any re-serialization (pretty-printing, key reordering) before passing to `WithBody` will fail HMAC verification.\n- **Unknown event types still attest.** If `event` is not `push`, `pull_request`, or `pull_request_review`, the payload and event are still recorded, but no event-specific subjects or back-refs are derived (a debug log is emitted).\n- **cilock-native.** This attestor exists only in rookery/cilock; there is no upstream witness equivalent."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nSee the constraint summary + reproduction recipe at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/21-githubwebhook](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/21-githubwebhook). This attestor is currently blocked or doc-only — the linked example explains why and shows the recipe to validate once the constraint is removed."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- [`github`](./github)\n- [`github-action`](./github-action)"
+    }
+  ],
+  "hasDoc": true
+}

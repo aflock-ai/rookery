@@ -1,0 +1,44 @@
+{
+  "name": "drone-ci",
+  "source": "catalog-only",
+  "description": "Drone — open-source container-native CI.",
+  "title": "drone-ci",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "Drone",
+    "source": "https://github.com/harness/drone",
+    "license": "Apache-2.0 / commercial (Harness)",
+    "vendor": "Harness, Inc."
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "DRONE"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside Drone CI. Build metadata available in DRONE_* env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "DRONE=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var DRONE (any value)",
+  "negativeSetup": "Run with env var DRONE UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

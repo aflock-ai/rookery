@@ -1,0 +1,54 @@
+{
+  "name": "malcontent",
+  "source": "catalog-only",
+  "description": "malcontent (`mal`) — flags supply-chain-attack capabilities and behaviors in binaries and source (Chainguard).",
+  "title": "malcontent",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "malcontent",
+    "source": "https://github.com/chainguard-dev/malcontent",
+    "license": "Apache-2.0",
+    "vendor": "Chainguard"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "mal scan"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "mal analyze"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "mal diff"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "malcontent (mal) scan observed. JSON findings (-o <file>) captured as a product."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- mal scan .",
+  "detectionCommand": "cilock plan --format=json -- mal scan [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"mal scan\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

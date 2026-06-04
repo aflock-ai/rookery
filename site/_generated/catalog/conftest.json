@@ -1,0 +1,46 @@
+{
+  "name": "conftest",
+  "source": "catalog-only",
+  "description": "Conftest — Rego/OPA policy testing for structured config.",
+  "title": "conftest",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "policy-eval"
+  ],
+  "primaryCategory": "policy-eval",
+  "upstream": {
+    "name": "Conftest",
+    "source": "https://github.com/open-policy-agent/conftest",
+    "license": "Apache-2.0",
+    "vendor": "OPA / CNCF"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "conftest"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Conftest invocation observed. -o json|sarif|tap captures findings."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- conftest .",
+  "detectionCommand": "cilock plan --format=json -- conftest [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"conftest\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

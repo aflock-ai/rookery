@@ -1,0 +1,46 @@
+{
+  "name": "staticcheck",
+  "source": "catalog-only",
+  "description": "staticcheck — Go static analyzer (Honnef.co/go/tools).",
+  "title": "staticcheck",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "lint"
+  ],
+  "primaryCategory": "lint",
+  "upstream": {
+    "name": "staticcheck",
+    "source": "https://github.com/dominikh/go-tools",
+    "license": "MIT",
+    "vendor": "Dominik Honnef"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "staticcheck"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "staticcheck invocation observed. Findings captured via stdout / SARIF (-f sarif)."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- staticcheck .",
+  "detectionCommand": "cilock plan --format=json -- staticcheck [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"staticcheck\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

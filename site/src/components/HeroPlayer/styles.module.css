@@ -1,0 +1,14 @@
+.heroPlayer {
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 30px 60px -25px rgba(15, 23, 42, 0.55),
+    0 12px 28px -16px rgba(15, 23, 42, 0.45);
+}
+
+/* asciinema-player draws its own terminal; keep its chrome minimal in the hero. */
+.heroPlayer :global(.ap-player) {
+  border-radius: 12px;
+}

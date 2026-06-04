@@ -1,0 +1,49 @@
+{
+  "name": "go-build",
+  "source": "attestor-backed",
+  "description": "go build — Go compiler. Output binaries carry BuildInfo (module + VCS metadata) which the go-build attestor extracts and writes as a JSON sidecar so the evidence survives strip(1).",
+  "title": "go-build",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "build"
+  ],
+  "primaryCategory": "build",
+  "upstream": {
+    "name": "go build",
+    "source": "https://pkg.go.dev/cmd/go",
+    "license": "BSD-3-Clause",
+    "vendor": "Google / Go Authors"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "light",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "go build"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "go install"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "go build/install observed. The go-build attestor captures BuildInfo (module graph + vcs.revision + build settings) and persists a .gobuild.json sidecar next to each binary so the evidence survives strip(1)."
+  },
+  "predicateType": "https://aflock.ai/attestations/go-build/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- go build .",
+  "detectionCommand": "cilock plan --format=json -- go build [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"go build\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

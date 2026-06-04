@@ -1,0 +1,44 @@
+{
+  "name": "huggingface-hub",
+  "source": "catalog-only",
+  "description": "HuggingFace Hub CLI (`hf`) — model card + repo management. Validated by generating a HuggingFace-standard ModelCard README.md and attesting it as a material.",
+  "title": "huggingface-hub",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "dataset-snapshot"
+  ],
+  "primaryCategory": "dataset-snapshot",
+  "upstream": {
+    "name": "huggingface_hub",
+    "source": "https://github.com/huggingface/huggingface_hub",
+    "license": "Apache-2.0",
+    "vendor": "Hugging Face"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "hf"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "HuggingFace CLI invocation observed. Adjacent README.md with model-card YAML frontmatter is captured as material/product."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- hf .",
+  "detectionCommand": "cilock plan --format=json -- hf [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"hf\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

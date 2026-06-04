@@ -1,0 +1,79 @@
+---
+title: Release gates (pass and block)
+description: A Claude Code session verifies a signed CI/lock attestation against a Witness release policy — one build passes the gate, a stricter gate blocks a build that wasn't cut from a tagged ref.
+sidebar_position: 4
+keywords:
+  - release gate
+  - witness policy
+  - in-toto verification
+  - supply chain policy
+  - rego policy
+---
+
+import CastPlayer from '@site/src/components/CastPlayer';
+
+# Release gates
+
+A **release gate** answers one question before you ship: *does this artifact
+have the evidence my policy requires, signed by a key I trust?* With CI/lock the
+evidence is an in-toto attestation produced during the build (here, a Trivy
+vulnerability scan of curl captured under eBPF tracing and signed), and the gate
+is a [Witness policy](../concepts/policy-verification.md) that `cilock verify`
+evaluates against a specific artifact subject.
+
+The two recordings below are the same developer, the same signed scan, and two
+policies — one the build satisfies, one it doesn't.
+
+## The gate passes
+
+The developer asks Claude to check the release. The policy requires the
+vulnerability-scan evidence to be signed by the approved release key **and** a
+Rego rule confirms the source came from the approved upstream
+(`github.com/curl/curl`). Every requirement is met, so `cilock verify` returns
+**Verification succeeded** and exits `0` — the release is approved.
+
+<CastPlayer
+  src="/img/release-gate-pass.cast"
+  label="A Claude Code session verifying a curl release against a Witness policy that passes"
+  autoPlay
+/>
+
+What the gate checked:
+
+- **Subject** — verification is bound to the artifact's digest
+  (`-s sha256:…`); the attestation is evidence *about that subject*, never a
+  thing verified on its own.
+- **Functionary** — the attestation's DSSE signature must chain to the release
+  key declared in the policy.
+- **Rego** — a source-allowlist rule on the `git` attestation requires the
+  build's remote to be `github.com/curl/curl`.
+
+## The gate blocks
+
+Now the org adopts a stricter rule: **release builds may only come from a
+tagged ref** — no shipping straight off a branch checkout. The same signed scan
+is re-checked against the stricter policy. The build was cut from `master`, so
+the Rego rule denies it: `cilock verify` returns **Verification failed** with a
+human-readable reason and exits `1`. The release is blocked.
+
+<CastPlayer
+  src="/img/release-gate-deny.cast"
+  label="A Claude Code session where a stricter Witness policy blocks a curl build that was not cut from a tagged ref"
+  autoPlay
+/>
+
+The denial is explicit, not a mystery:
+
+```
+policy was denied due to: release builds must come from a tagged ref; got branch "master"
+```
+
+The fix is exactly what the message says: check out a signed release tag,
+re-run the scan to produce fresh evidence, and the same gate passes.
+
+:::tip Same data, terminal or web
+Everything the gate evaluates — attestor predicates, the subject digest, the
+signing identity — is the same whether you read it from `cilock verify` output
+or inspect the attestation yourself. See
+[Policy verification](../concepts/policy-verification.md) for the full model.
+:::

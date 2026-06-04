@@ -1,0 +1,47 @@
+{
+  "name": "tfsec",
+  "source": "catalog-only",
+  "description": "tfsec — Terraform-specific static analysis (Aqua Security).",
+  "title": "tfsec",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan",
+    "compliance-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "tfsec",
+    "source": "https://github.com/aquasecurity/tfsec",
+    "license": "MIT",
+    "vendor": "Aqua Security"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "tfsec"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "tfsec scan observed. --format sarif|json captured by the matching attestor."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- tfsec .",
+  "detectionCommand": "cilock plan --format=json -- tfsec [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"tfsec\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

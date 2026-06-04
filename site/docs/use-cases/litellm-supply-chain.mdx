@@ -1,0 +1,95 @@
+---
+title: Rebuild a compromised package (internal supply chain)
+description: LiteLLM was backdoored on PyPI. A Claude Code session stands up an internal supply chain with CI/lock — build the wheel from a forked source under eBPF, scan it, verify the chain against a signed policy, install it with zero egress, and use it — then reports.
+sidebar_position: 1
+keywords:
+  - software supply chain
+  - litellm
+  - pypi compromise
+  - slsa provenance
+  - ebpf
+  - in-toto
+  - internal build
+---
+
+import CastPlayer from '@site/src/components/CastPlayer';
+
+# Rebuild a compromised package (internal supply chain)
+
+In March 2026 `litellm==1.82.7` and `1.82.8` shipped to PyPI with a credential
+stealer hidden in a `.pth` file that executed on every Python interpreter start.
+No `import litellm` required. The structural fix isn't "pin harder" — it's **stop
+trusting the public artifact**: fork the source you've reviewed, build it
+yourself, and prove every step.
+
+This session is a real, unedited [Claude Code](https://claude.com/claude-code)
+run. The developer asks Claude to stand up that internal supply chain; Claude
+drives the real `cilock` CLI and the Linux kernel does the rest.
+
+<CastPlayer
+  src="/img/hero-demo.cast"
+  label="A Claude Code session building LiteLLM from a forked source with CI/lock under eBPF tracing, verifying it against a signed policy, installing it, and using it"
+  poster="npt:1:15"
+  autoPlay
+  controls
+/>
+
+## What it does, step by step
+
+The recording is the script — here's what each step proves.
+
+1. **Snapshot the source.** `cilock run --step source --capture-mode walk` records
+   a signed [`material`](../attestors/material.mdx) tree (Merkle root) of the forked
+   LiteLLM source. That digest is now the trusted source of record.
+2. **Build under tracing.** `cilock run --step build --trace -- uv build --wheel`
+   wraps the wheel build. [`--trace`](../concepts/capture-modes.md) captures
+   kernel-side — **eBPF in this recording, with automatic ptrace+seccomp fallback
+   where eBPF can't load** — recording what the build *read* (≈2,778 source
+   materials in) and *wrote* (the wheel out): SLSA-style
+   [build provenance](../attestors/slsa.mdx) linking inputs to the output, signed.
+3. **Scan the source.** `cilock run --step scan --trace -- trivy fs …` wraps a
+   [Trivy](../tools/trivy.mdx) vulnerability scan, also under eBPF.
+4. **Read the policy.** The signed Witness policy is shown on screen — its
+   `approved-internal-fork` Rego rule requires the build's git remote to be the
+   approved fork, never PyPI.
+5. **Verify the chain.** `cilock verify` checks the `source`, `build`, and `scan`
+   attestations against the policy, anchored on the wheel's product-tree digest →
+   **Verification succeeded**. See [policy verification](../concepts/policy-verification.md).
+6. **Install under eBPF.** `cilock run --step install --trace -- pip install …`
+   captures exactly what installation touches — and confirms **zero `.pth` files**
+   were written and **zero network egress** occurred (the opposite of the
+   compromised artifact).
+7. **Show the egress.** A kernel-level network summary: the build and install made
+   **zero outbound connections**, while CI/lock even caught Trivy itself doing DNS +
+   a TLS connect during the scan — you see your own tools' egress, not just your
+   code's.
+8. **Use it.** The verified wheel is installed into the team's service and called —
+   running from the internal supply chain, never PyPI.
+
+Every artifact is a signed DSSE + in-toto envelope; nothing in the recording is
+faked.
+
+## Swap in the tools you use
+
+The scan and build steps wrap *any* command, so the same shape works with the
+scanner and packager your team already runs:
+
+- **Vulnerability scanning:** [Trivy](../tools/trivy.mdx) (shown),
+  [Grype](../tools/grype.mdx), [osv-scanner](../tools/osv-scanner.mdx),
+  [govulncheck](../tools/govulncheck.mdx).
+- **SBOM:** [Syft](../tools/syft.mdx) emits an [SBOM attestation](../attestors/sbom.mdx)
+  for the same build.
+- **Static analysis:** [Semgrep](../tools/semgrep.mdx), [gosec](../tools/gosec.mdx),
+  [CodeQL](../tools/codeql.mdx) as additional signed steps.
+- **Secrets:** add the [`secretscan`](../attestors/secretscan.mdx) attestor to fail
+  the build on a leaked credential (see the
+  [CI credential-harvester use case](./credential-harvester.mdx)).
+
+## Why it matters
+
+A pin protects you from a *different* artifact; it does nothing when the artifact
+you pinned to is itself malicious. Building from reviewed source under kernel-level
+tracing, then gating on a [signed policy](../concepts/policy-verification.md),
+turns "trust PyPI" into "verify our own evidence." The same evidence model carries
+through scan, install, and runtime — [one spine](../concepts/the-spine-of-the-graph.md),
+many checkpoints.

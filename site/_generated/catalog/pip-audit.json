@@ -1,0 +1,44 @@
+{
+  "name": "pip-audit",
+  "source": "catalog-only",
+  "description": "pip-audit — Python dependency vulnerability scanner from PyPA.",
+  "title": "pip-audit",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "pip-audit",
+    "source": "https://github.com/pypa/pip-audit",
+    "license": "Apache-2.0",
+    "vendor": "PyPA"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "pip-audit"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "pip-audit observed. JSON findings captured as a product."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- pip-audit .",
+  "detectionCommand": "cilock plan --format=json -- pip-audit [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"pip-audit\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

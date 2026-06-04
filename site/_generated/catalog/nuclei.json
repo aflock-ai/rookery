@@ -1,0 +1,87 @@
+{
+  "name": "nuclei",
+  "source": "catalog-only",
+  "description": "Run ProjectDiscovery Nuclei under cilock — the SARIF report it emits via -sarif-export becomes a signed v0.3 attestation parsed by the rookery sarif attestor; supports any of Nuclei's ~13,000 community templates.",
+  "title": "Nuclei",
+  "sidebarPosition": 13,
+  "examplesRepo": "tool-nuclei-sarif",
+  "categories": [
+    "vulnerability-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "Nuclei",
+    "source": "https://github.com/projectdiscovery/nuclei",
+    "license": "MIT",
+    "vendor": "ProjectDiscovery"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "nuclei"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Nuclei scan observed. -sarif-export <file> output is captured by the sarif attestor."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- nuclei .",
+  "detectionCommand": "cilock plan --format=json -- nuclei [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"nuclei\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Nuclei is the fastest-growing template-based scanner — ~13,000 community-maintained YAML templates covering CVEs, default credentials, exposed dashboards, security-header misconfigurations, tech fingerprints, and DAST checks for URLs, IPs, and CIDRs. Cilock doesn't replace Nuclei. It runs the same `nuclei -sarif-export <file>` command you already use and turns the SARIF report into a **signed v0.3 in-toto attestation** that records the exact argv, the templates Nuclei read, the SARIF file Nuclei produced, and the structured findings — all in one envelope policy can evaluate later."
+    },
+    {
+      "slug": "validated-invocation",
+      "title": "Validated invocation",
+      "markdown": "## Validated invocation\n\n```bash\ncilock run --step nuclei-scan \\\n  --signer-file-key-path key.pem \\\n  --outfile attestation.json \\\n  --attestations sarif,environment,git \\\n  --enable-archivista=false \\\n  -- nuclei \\\n       -u https://public-firing-range.appspot.com/ \\\n       -t http/exposures/ -t http/technologies/ -t http/misconfiguration/ \\\n       -sarif-export nuclei.sarif \\\n       -rl 20 -c 25 -no-color -stats -timeout 8 -retries 1\n```\n\n`-sarif-export nuclei.sarif` is the required flag — that's the file the `sarif` attestor picks up. The `-t` flags scope the run to a deterministic template subset (the full ~13k library works too but takes longer and changes when templates ship). `-rl 20 -c 25` keeps the scan polite against shared testbeds. Nuclei exits `0` whether or not findings are present, so no soft-fail flag is needed.\n\nRun `nuclei -update-templates` once before the first scan so the template library is on disk and reproducible across runs."
+    },
+    {
+      "slug": "what-gets-captured",
+      "title": "What gets captured",
+      "markdown": "## What gets captured\nA successful run emits a DSSE envelope with six predicate entries:\n\n| Predicate | What it records |\n|---|---|\n| `https://aflock.ai/attestations/environment/v0.1` | OS, arch, env vars (filtered), CI hints |\n| `https://aflock.ai/attestations/git/v0.1` | repo state — head SHA, branch, dirty bit |\n| `https://aflock.ai/attestations/material/v0.3` | Merkle tree of files Nuclei read (templates, helpers, config) |\n| `https://aflock.ai/attestations/command-run/v0.1` | the literal nuclei argv + exit code + stdout/stderr digests |\n| `https://aflock.ai/attestations/product/v0.3` | Merkle tree of files Nuclei produced (the SARIF report) |\n| `https://aflock.ai/attestations/sarif/v0.1` | parsed SARIF — driver name (`Nuclei`), ruleset, structured findings |\n\nThe `sarif` predicate is what your verify-time rego gate reads. The `command-run` predicate is what proves the template selection and target weren't tampered with after the fact."
+    },
+    {
+      "slug": "why-this-shape",
+      "title": "Why this shape",
+      "markdown": "## Why this shape\n\n`cilock run -- nuclei -u <target> -sarif-export <file>` invokes nuclei directly. The antipattern would be wrapping in `bash -c \"cp ...\"`, which breaks three properties at once:\n\n- `command-run` would record `bash` plus a `-c` string, not the nuclei argv — so consumers couldn't see which templates / rate limits / target the scan ran against.\n- The ptrace spy would trace `cp`, not `nuclei` — so material→product causality is wrong; the spy never observes nuclei reading its templates or writing the SARIF.\n- `sarif` would still parse a file `cilock` never observed being produced inside the traced process tree.\n\nWith the direct invocation:\n\n- `command-run` records `[\"nuclei\",\"-u\",\"https://...\",\"-t\",\"http/exposures/\",...,\"-sarif-export\",\"nuclei.sarif\",...]` verbatim.\n- `product` captures `nuclei.sarif` as a real output of the traced process.\n- `sarif` parses that same file — and the digest matches what `product` recorded."
+    },
+    {
+      "slug": "validate-it-locally",
+      "title": "Validate it locally",
+      "markdown": "## Validate it locally\n```bash\n# Confirm all six predicates are present\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations | map(.type)'\n```\n\nExpected output:\n\n```json\n[\n  \"https://aflock.ai/attestations/environment/v0.1\",\n  \"https://aflock.ai/attestations/git/v0.1\",\n  \"https://aflock.ai/attestations/material/v0.3\",\n  \"https://aflock.ai/attestations/command-run/v0.1\",\n  \"https://aflock.ai/attestations/product/v0.3\",\n  \"https://aflock.ai/attestations/sarif/v0.1\"\n]\n```\n\n```bash\n# Confirm command-run captured the real nuclei argv (not bash -c)\njq -r '.payload' attestation.json | base64 -d \\\n  | jq '.predicate.attestations[]\n        | select(.type==\"https://aflock.ai/attestations/command-run/v0.1\")\n        | .attestation.cmd'\n```\n\nExpected output:\n\n```json\n[\n  \"nuclei\",\n  \"-u\",\n  \"https://public-firing-range.appspot.com/\",\n  \"-t\",\n  \"http/exposures/\",\n  \"-t\",\n  \"http/technologies/\",\n  \"-t\",\n  \"http/misconfiguration/\",\n  \"-sarif-export\",\n  \"nuclei.sarif\",\n  \"-rl\",\n  \"20\",\n  \"-c\",\n  \"25\",\n  \"-no-color\",\n  \"-stats\",\n  \"-timeout\",\n  \"8\",\n  \"-retries\",\n  \"1\"\n]\n```\n\nValidated against cilock v0.3 + Nuclei v3.8.0 + 2,521 templates loaded from the `http/exposures/`, `http/technologies/`, and `http/misconfiguration/` trees — produces 14 findings against Google's [Public Firing Range](https://public-firing-range.appspot.com/) in ~4m 27s."
+    },
+    {
+      "slug": "notes",
+      "title": "Notes",
+      "markdown": "## Notes\n\n- **Template selection.** `-t <path>` selects template directories; `-tags <tag1,tag2>` filters by tag (e.g. `-tags cve,exposure,misconfig`). Scoping to a subset is what makes the run deterministic — the full template library is community-maintained and grows over time, so an unscoped scan can change findings week-over-week without any change in target. For policy work, pin the template subset (or vendor a specific template directory) and record it in the cilock argv.\n- **`-update-templates` cadence.** Nuclei caches its template library at `~/nuclei-templates/` and refreshes on `nuclei -update-templates`. Run the update step out-of-band (CI bootstrap, container build, scheduled job) — NOT inside the cilock-wrapped scan — so the `material` predicate captures a stable template tree.\n- **Rate-limit etiquette.** Public testbeds (`public-firing-range.appspot.com`, `testphp.vulnweb.com`) tolerate scans because they're built for it, but they're shared infrastructure. Use `-rl 20` (requests/sec global) and `-c 25` (concurrent templates per host) as a polite default. Production targets you own can run at the defaults; targets you don't own should not be scanned at all.\n- **Severity flag selection.** Add `-severity critical,high` to scope the run to high-impact templates. The `command-run` predicate records the filter, so the policy gate at verify time sees which severities the scan covered."
+    },
+    {
+      "slug": "faq",
+      "title": "FAQ",
+      "markdown": "## FAQ\n\n**Does cilock support Nuclei?**\nYes. Nuclei emits SARIF natively via `-sarif-export <file>` and the `sarif` attestor parses it; the validated invocation above is captured end-to-end in [`attestor-compliance-examples/tool-nuclei-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-nuclei-sarif). No new attestor is required.\n\n**Which templates run by default?**\nWith no `-t` or `-tags` flag, Nuclei runs its entire installed template library (~13,000 community templates from `~/nuclei-templates/`). For attestation purposes that's usually too broad — pin a subset like `-t http/exposures/ -t http/cves/ -t http/misconfiguration/` (or `-tags cve,exposure`) so the `command-run` predicate is reproducible across runs and the scan duration is bounded.\n\n**How is this different from running Nuclei standalone?**\nStandalone Nuclei writes a SARIF file to disk. Cilock wraps the same invocation and produces a DSSE-signed envelope containing six predicates: the literal nuclei argv (`command-run`), digests of every template/config file Nuclei read (`material`), the digest of the SARIF file Nuclei wrote (`product`), the parsed SARIF findings (`sarif`), plus environment and git context. Your policy gate at deploy time evaluates the signed envelope, not the unsigned SARIF.\n\n**Can I gate on finding severity in policy?**\nYes. The `sarif` attestor exposes each result's `level` (`error`, `warning`, `note`, `none`) and the underlying SARIF rule's `properties` (which Nuclei populates with `severity`: `critical`/`high`/`medium`/`low`/`info`). A rego gate can count findings by severity and block deploys above a threshold — e.g. fail if any `critical` or `high` finding is present.\n\n**Does cilock pin the template library version?**\nCilock records the exact `nuclei` argv and digests of every file Nuclei reads in the `material` predicate, so if you scope to a vendored template directory (`-t ./vendored-templates/`) the attestation is byte-reproducible. If you reference the system template library (`~/nuclei-templates/`), Nuclei's own update cadence governs reproducibility — pin Nuclei's version and run `-update-templates` deterministically in CI bootstrap."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [`sarif` attestor](../attestors/sarif) — the underlying ingestion path\n- [Validated example: `tool-nuclei-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-nuclei-sarif) — captured envelope + SARIF + `reproduce.sh`\n- [Nuclei upstream](https://github.com/projectdiscovery/nuclei) — templates, CLI reference\n- [How cilock policy works](../guides/policy) — using SARIF findings at the deploy gate\n- [Tools index](./index)"
+    }
+  ],
+  "hasDoc": true
+}

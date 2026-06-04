@@ -1,0 +1,44 @@
+{
+  "name": "notary-v2",
+  "source": "catalog-only",
+  "description": "notation (Notary v2) — OCI artifact signing.",
+  "title": "notary-v2",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "sign"
+  ],
+  "primaryCategory": "sign",
+  "upstream": {
+    "name": "notation",
+    "source": "https://github.com/notaryproject/notation",
+    "license": "Apache-2.0",
+    "vendor": "CNCF / Notary Project"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "notation"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "notation invocation observed. Signed OCI artifact + signature manifest."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- notation .",
+  "detectionCommand": "cilock plan --format=json -- notation [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"notation\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

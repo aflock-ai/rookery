@@ -1,0 +1,47 @@
+{
+  "name": "terrascan",
+  "source": "catalog-only",
+  "description": "Terrascan — multi-IaC scanner (Terraform/K8s/Helm/ARM).",
+  "title": "terrascan",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "vulnerability-scan",
+    "compliance-scan"
+  ],
+  "primaryCategory": "vulnerability-scan",
+  "upstream": {
+    "name": "Terrascan",
+    "source": "https://github.com/tenable/terrascan",
+    "license": "Apache-2.0",
+    "vendor": "Tenable"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "terrascan"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Terrascan scan observed. -o sarif|json captures findings."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- terrascan .",
+  "detectionCommand": "cilock plan --format=json -- terrascan [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"terrascan\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

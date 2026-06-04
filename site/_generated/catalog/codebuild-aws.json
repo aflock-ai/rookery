@@ -1,0 +1,44 @@
+{
+  "name": "codebuild-aws",
+  "source": "catalog-only",
+  "description": "AWS CodeBuild context.",
+  "title": "codebuild-aws",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "AWS CodeBuild",
+    "source": "https://docs.aws.amazon.com/codebuild/",
+    "license": "commercial",
+    "vendor": "Amazon Web Services"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "CODEBUILD_BUILD_ID"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside AWS CodeBuild. Build metadata available via CODEBUILD_* env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "CODEBUILD_BUILD_ID=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var CODEBUILD_BUILD_ID (any value)",
+  "negativeSetup": "Run with env var CODEBUILD_BUILD_ID UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

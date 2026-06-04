@@ -1,0 +1,68 @@
+{
+  "name": "system-packages",
+  "source": "attestor-backed",
+  "description": "The cilock system-packages attestor records the build host's installed OS package inventory (name and version) before materials are gathered, signing it into in-toto evidence.",
+  "title": "system-packages",
+  "sidebarPosition": 28,
+  "examplesRepo": "14-system-packages",
+  "categories": [],
+  "primaryCategory": null,
+  "upstream": null,
+  "gates": [],
+  "recommendedTrace": "off",
+  "triggers": [],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {},
+  "predicateType": "https://aflock.ai/attestations/system-packages/v0.1",
+  "runType": "prematerial",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": null,
+  "positiveSetup": "no detector.yaml; this attestor is always-on or user-driven",
+  "negativeSetup": null,
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Records the installed OS package inventory of the build host before materials are gathered."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\nTop-level fields on the predicate:\n\n- `os` — fixed string `linux`, set by the backend.\n- `distribution` — value of the `ID=` line from `/etc/os-release` (e.g. `ubuntu`, `debian`, `fedora`, `rhel`, `centos`, `rocky`, `alma`, `oracle`, `suse`, `opensuse`, `amazon`).\n- `version` — value of the `VERSION_ID=` line from `/etc/os-release`.\n- `packages` — list of installed packages, each with:\n  - `name` — package name\n  - `version` — package version string\n- `digest` — `cryptoutil.DigestSet` SHA-256 over the marshalled predicate (excluding the `digest` field itself).\n\nSupported backends:\n\n- **Debian / Ubuntu** — selected for `debian`, `ubuntu`, or any unrecognized/missing `ID`. Shells out to `/usr/bin/dpkg-query -W -f '${Package}\\t${Version}\\n'`.\n- **RPM** — selected for `fedora`, `rhel`, `centos`, `rocky`, `alma`, `oracle`, `suse`, `opensuse`, `amazon`. Shells out to `/usr/bin/rpm -qa --qf '%{NAME}\\t%{VERSION}\\n'`.\n\nNo `apk`, no Arch `pacman`, no Homebrew, no per-package architecture or source fields — only `name` and `version` are emitted."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nFor container-image and VM build provenance where downstream policy needs to know the exact OS package set baked into the build environment. Pair with `oci` or `sbom` attestors when you also need image-layer or component-graph data."
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. Backend selection is automatic based on `/etc/os-release`."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"os\": \"linux\",\n  \"distribution\": \"ubuntu\",\n  \"version\": \"22.04\",\n  \"packages\": [\n    { \"name\": \"libc6\", \"version\": \"2.35-0ubuntu3.4\" },\n    { \"name\": \"openssl\", \"version\": \"3.0.2-0ubuntu1.10\" }\n  ],\n  \"digest\": {\n    \"sha256\": \"...\"\n  }\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Backend detection reads `/etc/os-release` only.** It does not probe for the presence of `dpkg`, `rpm`, or `apk` binaries. If `/etc/os-release` is missing or unreadable, the attestor falls back to the Debian backend.\n- **Unknown distributions fall through to the Debian backend.** Running on Alpine, Arch, or any distro whose `ID` is not in the RPM list will attempt `/usr/bin/dpkg-query` and fail at `Attest` time with the underlying exec error.\n- **Hard-coded absolute paths** (`/usr/bin/dpkg-query`, `/usr/bin/rpm`) are used to defeat PATH manipulation. Distros that ship these binaries elsewhere will not work without symlinks.\n- **Package metadata is minimal.** Only `name` and `version` are captured — no architecture, epoch, release, source package, or signing key info.\n- **Digest is computed over a clone of the predicate** with `Digest` zeroed, so it is reproducible for a given package set."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\nReal OS package inventory. The attestor reads `/etc/os-release` to detect the distribution, picks the right backend (`rpm -qa` on RHEL/Amazon, `dpkg-query` on Debian), and emits a name+version inventory.\n\n```bash\ncilock run --step host-packages \\\n  --signer-file-key-path key.pem --outfile attestation.json --workingdir . \\\n  --attestations system-packages \\\n  -- echo \"captured host packages\" \n```\n\nValidated against Amazon Linux 2023 (real RPM inventory). Exposed a bug (filed): `ID=amzn` wasn't mapped to the RPM backend, causing AL2023 to fall through to Debian. Patched. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/14-system-packages](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/14-system-packages)."
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- Upstream: [witness/system-packages.md](https://github.com/in-toto/witness/blob/main/docs/attestors/system-packages.md)"
+    }
+  ],
+  "hasDoc": true
+}

@@ -1,0 +1,117 @@
+---
+title: "k8smanifest"
+description: "The cilock k8smanifest attestor walks YAML/JSON Kubernetes manifests, strips ephemeral fields, records per-document digests and container image references, and signs them into in-toto evidence."
+sidebar_position: 23
+---
+
+{/* GENERATED — do not edit. Source: rookery attestation/detection/docs/k8smanifest.doc.md. Regenerate: npm run gen */}
+import AttestorMeta from '@site/src/components/Catalog/AttestorMeta';
+import GeneratedFooter from '@site/src/components/Catalog/GeneratedFooter';
+import meta from '@catalog/k8smanifest.json';
+
+# `k8smanifest` attestor
+
+Walks YAML/JSON products as Kubernetes manifests, strips ephemeral fields, optionally normalizes via `kubectl --dry-run=server`, and records per-document digests plus extracted container image references.
+
+<AttestorMeta data={meta} />
+
+## What it captures
+
+For every `.yaml`, `.yml`, or `.json` product the attestor decodes each document, removes ephemeral fields, and appends a `RecordedObject` with these JSON-tagged fields: `filepath`, `kind`, `name`, `data` (ephemeral-cleaned JSON), `subjectkey`, and `recordedimages`. Each `recordedimage` carries a `reference` and a `digest` map populated by resolving the OCI reference against the registry's `/v2` manifest endpoint.
+
+Container images are extracted by a path-walker (`internal/k8sparse`) that knows these kinds: `Pod` (`spec`), `Deployment`/`ReplicaSet`/`StatefulSet`/`DaemonSet`/`Job` (`spec.template.spec`), and `CronJob` (`spec.jobTemplate.spec.template.spec`). Both `containers[]` and `initContainers[]` are scanned. Top-level `kind: List` documents are unwrapped and each item is processed individually. Other kinds (CRDs, ConfigMaps, etc.) produce a `RecordedObject` with an empty `recordedimages` slice.
+
+When `record-cluster-information` is on, the attestor also fills `clusterinfo.server` from the active kubeconfig context and, for any `Node` documents in the products, adds an entry to `clusterinfo.nodes` keyed by `nodeInfo.machineID`. The recorded `NodeSystemInfo` carries `machineID`, `systemUUID`, `bootID`, `kernelVersion`, `osImage`, `containerRuntimeVersion`, `kubeletVersion`, `kubeProxyVersion`, `operatingSystem`, and `architecture` — wire-compatible with the upstream `corev1.NodeSystemInfo` JSON shape but parsed locally.
+
+## When to use
+
+In the manifest-generation step of a GitOps or CD pipeline. A downstream `cilock verify` step on the apply side checks that the deployed manifest's ephemeral-cleaned digest matches the attested digest, blocking drift between rendered and applied state.
+
+## Server-side dry-run
+
+With `server-side-dry-run` enabled, each document is marshalled back to YAML and piped to `kubectl apply --dry-run=server -o json -f -`; the JSON output replaces the local document before ephemeral stripping. This forces admission controllers and defaulting to run, so the recorded digest reflects the form the API server would persist. If the kubectl invocation fails, the attestor logs a debug message and falls back to the un-normalized document.
+
+## Flags
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--attestor-k8smanifest-server-side-dry-run` | `false` | Normalize each doc via `kubectl apply --dry-run=server` before hashing. |
+| `--attestor-k8smanifest-kubeconfig` | `$HOME/.kube/config` | Kubeconfig path. Used both for dry-run and cluster-info recording. |
+| `--attestor-k8smanifest-context` | (kubeconfig's `current-context`) | Override the active kubeconfig context. |
+| `--attestor-k8smanifest-record-cluster-information` | `true` | Resolve the active context's cluster server URL into `clusterinfo.server`. |
+| `--attestor-k8smanifest-ignore-fields` | (none) | Extra dot-paths to strip in addition to the defaults below. |
+| `--attestor-k8smanifest-ignore-annotations` | (none) | Extra `metadata.annotations` keys to strip beyond the defaults. |
+
+Default stripped fields: `metadata.resourceVersion`, `metadata.uid`, `metadata.creationTimestamp`, `metadata.managedFields`, `metadata.generation`, `status`.
+
+Default stripped annotations: `kubectl.kubernetes.io/last-applied-configuration`, `deployment.kubernetes.io/revision`, `aflock.ai/content-hash`, `cosign.sigstore.dev/message`, `cosign.sigstore.dev/signature`, `cosign.sigstore.dev/bundle`.
+
+## Output shape
+
+```json
+{
+  "serversidedryrun": false,
+  "recordclusterinfo": true,
+  "kubeconfig": "/home/user/.kube/config",
+  "kubecontext": "staging",
+  "recordeddocs": [
+    {
+      "filepath": "dist/manifest.yaml",
+      "kind": "Deployment",
+      "name": "api",
+      "data": { "apiVersion": "apps/v1", "kind": "Deployment", "...": "..." },
+      "subjectkey": "k8smanifest:dist/manifest.yaml:Deployment:api",
+      "recordedimages": [
+        { "reference": "ghcr.io/example/api:1.2.3", "digest": { "sha256": "abc..." } }
+      ]
+    }
+  ],
+  "clusterinfo": {
+    "server": "https://k8s.example.com",
+    "nodes": {}
+  }
+}
+```
+
+Subject keys collide-resolve by appending `#2`, `#3`, ... when the same `file:kind:name` triple appears more than once in a single attestor run.
+
+## Gotchas
+
+- The kubeconfig parser (`internal/k8sparse/kubeconfig.go`) only reads `current-context`, `contexts[]`, and `clusters[]` (server URL). Auth fields — `users`, `auth-provider`, `exec` credential plugins — are ignored. That is fine for cluster-info recording, but `server-side-dry-run` shells out to real `kubectl`, which does honor those auth fields.
+- `server-side-dry-run` requires `kubectl` on `PATH` and network reachability to the API server. CI runners need a kubeconfig with apply permission on a cluster matching your prod's Kubernetes version, or admission-controller defaults will diverge.
+- The path-walker covers seven workload kinds. CRDs, `ConfigMap`, `Secret`, `Service`, etc. are still recorded (with cleaned digest and subject), but their `recordedimages` will be empty.
+- Files without a `.json`, `.yaml`, or `.yml` extension are skipped. Multi-doc YAML and JSON arrays are both supported; each document becomes its own `RecordedObject`.
+- Image digest resolution hits the registry directly. Private registries that require auth will log a debug message and record an empty `digest` map; the `reference` is still preserved.
+
+## CLI example
+
+Real Kubernetes manifest. Captures `apiVersion`, `kind`, `metadata.name`, and `metadata.namespace`; subjects are derived from these.
+
+```bash
+# Static manifest: cilock invokes kubectl directly so the manifest is
+# rendered by kubectl (which materializes any kustomization), captured
+# as a real product, then parsed by the k8smanifest attestor.
+cilock run --step k8s-deploy-manifest \
+  --signer-file-key-path key.pem --outfile attestation.json \
+  --attestations k8smanifest,environment,git \
+  -- sh -c 'kubectl kustomize ./manifests > deploy.yaml'
+
+# Live cluster: pull the running deployment manifest from the API server.
+cilock run --step k8smanifest-live \
+  --signer-file-key-path key.pem --outfile attestation.json \
+  --attestations k8smanifest,environment,git \
+  -- sh -c 'kubectl get deployment my-app -n production -o yaml > deploy.yaml'
+```
+
+The `sh -c` redirect is a tool-output limitation (kubectl writes YAML to stdout, not a file path) — `command-run` records the literal `sh -c` argv including kubectl, so the attestation pipeline is intact.
+
+Validated against a real Deployment manifest. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/13-k8smanifest](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/13-k8smanifest).
+
+## See also
+
+- [Catalog row](../reference/attestor-catalog.md)
+- Upstream: [witness/k8smanifest.md](https://github.com/in-toto/witness/blob/main/docs/attestors/k8smanifest.md)
+
+<script type="application/ld+json" dangerouslySetInnerHTML={{__html: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"k8smanifest — cilock attestor\",\"description\":\"The cilock k8smanifest attestor walks YAML/JSON Kubernetes manifests, strips ephemeral fields, records per-document digests and container image references, and signs them into in-toto evidence.\",\"url\":\"https://cilock.aflock.ai/attestors/k8smanifest\"}"}} />
+
+<GeneratedFooter name="k8smanifest" />

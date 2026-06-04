@@ -1,0 +1,44 @@
+{
+  "name": "travis-ci",
+  "source": "catalog-only",
+  "description": "Travis CI context.",
+  "title": "travis-ci",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "ci-context"
+  ],
+  "primaryCategory": "ci-context",
+  "upstream": {
+    "name": "Travis CI",
+    "source": "https://docs.travis-ci.com/",
+    "license": "commercial",
+    "vendor": "Travis CI GmbH / Idera"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "TRAVIS"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Running inside Travis CI. Build metadata available in TRAVIS_* env vars."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "TRAVIS=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var TRAVIS (any value)",
+  "negativeSetup": "Run with env var TRAVIS UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

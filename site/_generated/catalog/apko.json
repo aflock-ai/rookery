@@ -1,0 +1,51 @@
+{
+  "name": "apko",
+  "source": "catalog-only",
+  "description": "apko — builds single-layer OCI images from apk packages (Chainguard); auto-generates an SPDX SBOM per build.",
+  "title": "apko",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "image-build"
+  ],
+  "primaryCategory": "image-build",
+  "upstream": {
+    "name": "apko",
+    "source": "https://github.com/chainguard-dev/apko",
+    "license": "Apache-2.0",
+    "vendor": "Chainguard"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "light",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "apko build"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "apko publish"
+    }
+  ],
+  "emitsFormats": [
+    "sbom"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "apko build observed. The sbom attestor captures the SPDX SBOM apko generates for the image."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- apko build .",
+  "detectionCommand": "cilock plan --format=json -- apko build [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"apko build\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}
