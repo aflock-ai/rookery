@@ -128,7 +128,10 @@ func (t TSPTimestamper) Timestamp(ctx context.Context, r io.Reader) ([]byte, err
 	}
 
 	req.Header.Add("Content-Type", "application/timestamp-query")
-	client := http.Client{}
+	// Bound the RFC3161 TSA request: a bare http.Client{} has no Timeout, so a
+	// timestamp endpoint that stalls would hang the signing leg (which runs before
+	// the upload) until the CI job timeout. The request is tiny; 30s is ample.
+	client := http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

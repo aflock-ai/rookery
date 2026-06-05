@@ -28,12 +28,20 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/dsse"
 )
 
 // maxErrorBodySize limits how much of an error response body we read to prevent OOM.
 const maxErrorBodySize = 1 << 20 // 1MB
+
+// defaultHTTPTimeout bounds every Archivista request. http.DefaultClient has no
+// Timeout, so a server (or LB) that TCP-accepts then stalls the response would
+// otherwise hang the caller forever — in CI that meant a 20-min job-timeout hang
+// with no error. Generous enough for an attestation upload, short enough that a
+// stall fails fast with a diagnostic instead of parking the whole run.
+const defaultHTTPTimeout = 120 * time.Second
 
 // readLimitedErrorBody reads up to maxErrorBodySize bytes from the response body
 // and returns a truncated string suitable for error messages.
@@ -78,7 +86,7 @@ func WithHTTPClient(hc *http.Client) Option {
 func New(url string, opts ...Option) *Client {
 	c := &Client{
 		url:    strings.TrimRight(url, "/"),
-		client: http.DefaultClient,
+		client: &http.Client{Timeout: defaultHTTPTimeout},
 	}
 	for _, opt := range opts {
 		if opt != nil {

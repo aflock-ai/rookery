@@ -310,18 +310,19 @@ func TestSecurity_R3_207_GraphQLErrorLeaksInfo(t *testing.T) {
 // HTTP client security
 // ==========================================================================
 
-// TestSecurity_R3_208_DefaultClientNoTimeout proves that the default Client
-// uses http.DefaultClient which has no timeout.
+// TestSecurity_R3_208_DefaultClientHasTimeout verifies the default Client carries
+// a bounded http.Client Timeout (regression guard for the fix to R3-208).
 //
-// BUG [MEDIUM]: client.go:81 — default client is http.DefaultClient which
-// has zero Timeout. Without a context deadline, requests can hang forever.
-func TestSecurity_R3_208_DefaultClientNoTimeout(t *testing.T) {
+// Previously the default was http.DefaultClient (zero Timeout): a server that
+// TCP-accepts then stalls the response hung the caller forever — in CI that was
+// an unbounded ~20-min job-timeout hang with no error. New() now installs an
+// explicit Timeout so a stall fails fast.
+func TestSecurity_R3_208_DefaultClientHasTimeout(t *testing.T) {
 	c := New("https://example.com")
-	assert.Equal(t, http.DefaultClient, c.client,
-		"BUG [MEDIUM]: Default client is http.DefaultClient with no timeout. "+
-			"Callers must always use context deadlines. File: client.go:81")
-	assert.Zero(t, c.client.Timeout,
-		"http.DefaultClient has zero Timeout")
+	assert.NotSame(t, http.DefaultClient, c.client,
+		"default client must NOT be the shared http.DefaultClient (which has no Timeout)")
+	assert.Positive(t, c.client.Timeout,
+		"the Archivista client must carry a bounded Timeout so a stalled server fails fast instead of hanging")
 }
 
 // TestSecurity_R3_209_DefaultClientFollowsRedirects proves that the default

@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/stretchr/testify/require"
@@ -161,4 +162,45 @@ func readBody(r *http.Request) ([]byte, error) {
 	var buf [4096]byte
 	n, _ := r.Body.Read(buf[:])
 	return buf[:n], nil
+}
+
+// TestNew_DefaultClientHasBoundedTimeout is the standard-CI regression guard for
+// the unbounded-client hang: New() must install an http.Client with a positive
+// Timeout (not the shared http.DefaultClient, which has none). Without it, a
+// server that TCP-accepts then stalls would hang the caller forever — the
+// ~20-min CI job-timeout hang this fixes.
+func TestNew_DefaultClientHasBoundedTimeout(t *testing.T) {
+	c := New("https://example.com")
+	require.NotSame(t, http.DefaultClient, c.client,
+		"default client must not be the shared http.DefaultClient")
+	require.Positive(t, c.client.Timeout, "Archivista client must carry a bounded Timeout")
+}
+
+// TestStore_TimesOutOnStalledServer proves the bounded timeout actually fires:
+// against a server that accepts the connection then never responds, Store()
+// returns an error promptly instead of blocking forever. Uses an injected short
+// timeout so the test is fast.
+func TestStore_TimesOutOnStalledServer(t *testing.T) {
+	block := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block // accept, then stall until released
+	}))
+	// LIFO: close(block) runs BEFORE server.Close(), so Close() never deadlocks
+	// waiting on the stalled handler goroutine.
+	defer server.Close()
+	defer close(block)
+
+	c := New(server.URL, WithHTTPClient(&http.Client{Timeout: 250 * time.Millisecond}))
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Store(context.Background(), dsse.Envelope{Payload: []byte(`{}`), PayloadType: "test"})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err, "Store must fail (timeout) against a stalled server, not hang")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Store hung past the client Timeout — the bounded-timeout fix is not in effect")
+	}
 }

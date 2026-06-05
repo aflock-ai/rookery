@@ -119,6 +119,13 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// docs/configuration.md as an "advanced runtime tuning" case.
 	"DefaultProbeTimeout": {},
 
+	// defaultHTTPTimeout bounds the Archivista client's HTTP requests. It IS
+	// overridable via the WithHTTPClient(*http.Client) per-call option (the same
+	// API-layer override pattern as DefaultProbeTimeout) — cilock injects a client
+	// there when it needs a different policy. It is a library safety default
+	// (preventing an unbounded hang on a stalled server), not an operator CLI knob.
+	"defaultHTTPTimeout": {},
+
 	// DefaultPrewalkSkipDirs IS overridable via --prewalk-skip-dir
 	// and --prewalk-include-dir. The override coupling is in
 	// cilock/cli/run.go (different package), so the same-package

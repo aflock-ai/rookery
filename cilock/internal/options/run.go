@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/archivista"
@@ -835,7 +836,14 @@ func fetchGitHubOIDCToken(audience string) (string, error) {
 	}
 	req.Header.Set("Authorization", "bearer "+bearerToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	// Bound the request. This is the FIRST network op on the ambient-OIDC path
+	// (it mints the token for both keyless Fulcio signing and the Archivista
+	// upload), and http.DefaultClient has no Timeout. A GitHub OIDC endpoint that
+	// TCP-accepts then stalls would otherwise park `cilock run` until the CI job
+	// timeout (observed: a 20-min hang with no error). A client Timeout bounds the
+	// whole request even though this helper carries no context.
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("OIDC token request failed: %w", err)
 	}
