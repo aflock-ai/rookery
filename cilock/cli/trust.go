@@ -19,6 +19,11 @@ import (
 	"golang.org/x/term"
 )
 
+// trustScope is the narrow capability `cilock trust` requires: it lets a session
+// register an OIDC federated upload identity (and nothing else). A session only
+// carries it when the user opted in via `cilock login --allow-trust`.
+const trustScope = "oidc:write"
+
 // TrustCmd registers a CI/OIDC identity the platform will trust for attestation
 // upload. It only ever creates OIDC (federated) credentials — never an OAUTH
 // bearer secret. The complement to keyless `cilock run`: it registers the same
@@ -122,6 +127,17 @@ func runTrust(cmd *cobra.Command, args []string, o *options.TrustOptions, platfo
 	}
 	if cred == nil || cred.Token == "" {
 		return fmt.Errorf("not logged in to %s — run `cilock login` first (trust needs an admin session)", auth.NormalizeURL(o.PlatformURL))
+	}
+
+	// Pre-flight the scope: registering CI trust needs the narrow oidc:write
+	// capability, which a session only carries when the user opted in at login.
+	// The platform would otherwise reject createCredential with an opaque
+	// "missing required scope" error — surface the exact remedy here instead.
+	if !auth.TokenAuthorizedForScope(cred.Token, trustScope) {
+		return fmt.Errorf("this session can't register CI trust — it lacks the %q permission.\n"+
+			"Re-authenticate with the trust opt-in, then run `cilock trust` again:\n\n"+
+			"  cilock login --platform-url %s --allow-trust",
+			trustScope, auth.NormalizeURL(o.PlatformURL))
 	}
 
 	resolved, err := o.Resolve(cred.TenantID)

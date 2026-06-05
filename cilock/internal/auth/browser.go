@@ -37,6 +37,10 @@ type LoginParams struct {
 	Tenant  string // tenant id or name
 	Product string // product id or name
 	Purpose string // human-readable credential purpose
+	// AllowTrust opts the session into the narrow oidc:write scope so it can
+	// later run `cilock trust`. Off by default — registering CI trust is a
+	// privileged action the user must explicitly request at login.
+	AllowTrust bool
 }
 
 // BrowserLogin opens the TestifySec platform's /auth/cli page for the user to
@@ -142,6 +146,12 @@ func cliAuthURL(judgeURL, callbackURL, state string, params LoginParams) string 
 	}
 	if params.Purpose != "" {
 		q.Set("purpose", params.Purpose)
+	}
+	if params.AllowTrust {
+		// The approve page reads this to pre-include the oidc:write scope, so the
+		// minted session can register CI trust (`cilock trust`). The user still
+		// sees and authorizes the scope in the browser.
+		q.Set("allow_trust", "1")
 	}
 	return judgeURL + "/auth/cli?" + q.Encode()
 }

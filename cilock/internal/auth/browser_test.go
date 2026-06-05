@@ -100,8 +100,28 @@ func TestCLIAuthURLOmitsEmptyHints(t *testing.T) {
 			t.Errorf("expected %q to be omitted when empty, got %q", k, q.Get(k))
 		}
 	}
+	// allow_trust is opt-in: absent unless explicitly requested.
+	if q.Has("allow_trust") {
+		t.Errorf("allow_trust must be omitted by default, got %q", q.Get("allow_trust"))
+	}
 	// state and client are always present.
 	if q.Get("state") != "s" || q.Get("client") != "cilock" {
 		t.Errorf("state/client missing: %q", raw)
+	}
+}
+
+// TestCLIAuthURLAllowTrust proves the `--allow-trust` opt-in reaches the approve
+// page as allow_trust=1, which the page reads to pre-include the oidc:write
+// scope so the minted session can later run `cilock trust`. Without this hint a
+// default cilock session has no way to acquire oidc:write and `cilock trust`
+// fails with an opaque "missing required scope" error.
+func TestCLIAuthURLAllowTrust(t *testing.T) {
+	raw := cliAuthURL("https://platform.testifysec.com", "http://localhost:5000/callback", "s", LoginParams{AllowTrust: true})
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := u.Query().Get("allow_trust"); got != "1" {
+		t.Errorf("allow_trust = %q, want %q", got, "1")
 	}
 }

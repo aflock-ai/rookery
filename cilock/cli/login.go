@@ -18,7 +18,7 @@ import (
 // LoginCmd signs in to a TestifySec platform and stores a session credential.
 func LoginCmd() *cobra.Command {
 	var platformURL, token, tenant, product string
-	var interactive, workflowIdentity bool
+	var interactive, workflowIdentity, allowTrust bool
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Sign in to the TestifySec platform and store a session credential",
@@ -48,7 +48,7 @@ func LoginCmd() *cobra.Command {
 			if url == "" {
 				url = config.DefaultPlatformURL
 			}
-			cred, err := resolveLoginCredential(cmd, url, token, tenant, product, interactive, workflowIdentity)
+			cred, err := resolveLoginCredential(cmd, url, token, tenant, product, interactive, workflowIdentity, allowTrust)
 			if err != nil {
 				return err
 			}
@@ -73,6 +73,7 @@ func LoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&product, "product", "", "Product id or name to pre-select on the approve page")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "Force the interactive browser login (skip ambient CI workflow identity)")
 	cmd.Flags().BoolVar(&workflowIdentity, "workflow-identity", false, "Use the ambient CI workflow OIDC identity (auto-detected on the default platform; required to send a workflow token to a non-default --platform-url)")
+	cmd.Flags().BoolVar(&allowTrust, "allow-trust", false, "Also grant the narrow oidc:write scope so this session can register CI trust with `cilock trust` (off by default)")
 	return cmd
 }
 
@@ -119,7 +120,7 @@ func decideLoginTier(token string, interactive, workflowIdentity, ambientAvailab
 }
 
 // resolveLoginCredential obtains a session credential per decideLoginTier.
-func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product string, interactive, workflowIdentity bool) (*auth.Credential, error) {
+func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product string, interactive, workflowIdentity, allowTrust bool) (*auth.Credential, error) {
 	tier, err := decideLoginTier(token, interactive, workflowIdentity, auth.WorkflowOIDCAvailable(), url, config.DefaultPlatformURL)
 	if err != nil {
 		return nil, err
@@ -131,9 +132,10 @@ func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product stri
 		return auth.AmbientWorkflowLogin(url, config.Derive(url).OIDCLoginAudience)
 	default: // tierBrowser
 		return auth.BrowserLogin(url, auth.LoginParams{
-			Tenant:  tenant,
-			Product: product,
-			Purpose: "cilock CLI",
+			Tenant:     tenant,
+			Product:    product,
+			Purpose:    "cilock CLI",
+			AllowTrust: allowTrust,
 		})
 	}
 }
