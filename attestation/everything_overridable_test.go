@@ -126,6 +126,12 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// prewalk_override_test.go.
 	"DefaultPrewalkSkipDirs": {},
 
+	// DefaultTrustScopes IS overridable via the `--scope` flag (and `--verify`)
+	// on `cilock trust`. The flag binds in cilock/cli/trust.go (different
+	// package from the default in cilock/internal/options/trust.go), so the
+	// same-package heuristic misses it. Covered by trust_test.go.
+	"DefaultTrustScopes": {},
+
 	// DefaultMaxDigests is overridable via the
 	// CILOCK_FANOTIFY_MAX_DIGESTS env var resolved by
 	// defaultMaxDigestsFromEnv in the same file — but the

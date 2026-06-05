@@ -102,6 +102,7 @@ func fulcioSignerNeedsToken(cmd *cobra.Command) bool {
 // never count. Used to suppress the keyless fulcio-token wiring when the user has
 // already committed to a different signer.
 func nonFulcioSignerSelected(cmd *cobra.Command) bool {
+	const fulcioSignerName = "fulcio" // the "fulcio" segment in e.g. --signer-fulcio-url
 	selected := false
 	cmd.Flags().Visit(func(f *pflag.Flag) {
 		if !strings.HasPrefix(f.Name, "signer-") {
@@ -111,7 +112,7 @@ func nonFulcioSignerSelected(cmd *cobra.Command) bool {
 		if len(parts) < 2 {
 			return
 		}
-		if parts[1] != "fulcio" {
+		if parts[1] != fulcioSignerName {
 			selected = true
 		}
 	})
