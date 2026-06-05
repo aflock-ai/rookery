@@ -21,5 +21,5 @@ require (
 require (
 	github.com/wasilibs/go-re2 v1.9.0
 	golang.org/x/sync v0.11.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
 )

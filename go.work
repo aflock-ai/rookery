@@ -1,4 +1,4 @@
-go 1.26.3
+go 1.26.4
 
 use (
 	// Core
@@ -91,6 +91,7 @@ use (
 // encoding/json. Public API and on-wire JSON format unchanged. See
 // security-patches/wk8-orderedmap/README.md for the rationale.
 replace github.com/wk8/go-ordered-map/v2 => ./security-patches/wk8-orderedmap/v2
+
 // TestifySec-maintained slim fork of github.com/zricethezav/gitleaks/v8.
 // Drops cmd/, sources/, report emitters (CSV/SARIF/JSON/JUnit/template),
 // and exposes the secretscan attestor's exact surface (DetectBytes +
