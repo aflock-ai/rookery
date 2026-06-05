@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -51,6 +52,19 @@ const (
 	//	"ptrace"        — ptrace+seccomp. Explicit opt-in; no fallback errors.
 	EnvVarTraceMode = "CILOCK_TRACE_MODE"
 )
+
+// commandWaitDelay bounds how long c.Wait() waits for the exec I/O copy
+// goroutines AFTER the wrapped process has already exited. See the large
+// comment in runCmd for why this is the anti-hang guarantee. Sized
+// generously so a legitimately slow final flush from the real command is
+// never clipped; it only ever fires when a lingering descendant is
+// holding the inherited stdout/stderr pipe write-end open past process
+// exit (in which case the alternative is hanging forever).
+//
+// A var (not a const) solely so the hang regression test can shorten it
+// to keep the suite fast while still exercising the real force-close
+// path; production never reassigns it.
+var commandWaitDelay = 30 * time.Second
 
 // This is a hacky way to create a compile time error in case the attestor
 // doesn't implement the expected interfaces.
@@ -1750,7 +1764,13 @@ func (rc *CommandRun) StartedAt() time.Time {
 }
 
 func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
-	c := exec.Command(r.Cmd[0], r.Cmd[1:]...) //nolint:gosec // G204: command is user-specified by design
+	// CommandContext (not Command) so configureProcessReaping can wire a
+	// non-nil c.Cancel — os/exec REQUIRES the command be created with a
+	// context before Cancel may be set, else Start() fails. ctx.Context()
+	// defaults to context.Background() (never nil), so when no cancellable
+	// context is plumbed the command simply never cancels and Cancel never
+	// fires; WaitDelay remains the sole anti-hang guarantee on that path.
+	c := exec.CommandContext(ctx.Context(), r.Cmd[0], r.Cmd[1:]...) //nolint:gosec // G204: command is user-specified by design
 	c.Dir = ctx.WorkingDir()
 	// Snapshot the dir the tracee will actually run in, before any
 	// post-exec cwd changes happen on the parent. Used by TraceOutputs
@@ -1779,6 +1799,34 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	stderrWriter := io.MultiWriter(stderrWriters...)
 	c.Stdout = stdoutWriter
 	c.Stderr = stderrWriter
+
+	// Anti-hang guarantee. Because c.Stdout/c.Stderr are io.Writers
+	// (not *os.File), os/exec wires the child's stdout/stderr through
+	// INTERNAL os.Pipes and spawns copy goroutines; c.Wait() blocks
+	// until those pipes hit EOF — which requires EVERY descendant that
+	// inherited the write end to close it (i.e. exit). A wrapped build
+	// that backgrounds a child outliving the main process (or a traced
+	// grandchild stranded by ptrace/eBPF under concurrent cold builds)
+	// keeps the write end open, so c.Wait() hangs FOREVER and the CI
+	// step never returns. WaitDelay bounds the wait that happens AFTER
+	// the wrapped process itself exits: its timer starts only on
+	// process exit and force-closes the pipes (Wait returns
+	// exec.ErrWaitDelay) if the I/O goroutines haven't finished by then.
+	//
+	// For a normal fast command no descendant holds the write end, the
+	// goroutines hit EOF in microseconds, and WaitDelay never fires —
+	// zero truncation of legitimate output. It fires ONLY in the
+	// pathological lingering-descendant case, where the alternative is
+	// hanging forever and capturing nothing. The window is generous so
+	// a legitimately slow final flush from the real command is never
+	// clipped. configureProcessReaping additionally puts the child in
+	// its own process group and wires c.Cancel so the descendant GROUP
+	// is killed, letting the pipes reach EOF naturally in the common
+	// slow case and reserving the force-close strictly for truly stuck
+	// descendants.
+	c.WaitDelay = commandWaitDelay
+	configureProcessReaping(c)
+
 	if r.enableTracing {
 		enableTracing(c)
 		// For the eBPF mode we MUST attach kprobes before the child
@@ -1863,6 +1911,10 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		// Wait for I/O copying goroutines to complete before reading buffers.
 		// trace() uses ptrace to detect process exit, but exec's I/O goroutines
 		// may still be flushing pipe data into stdoutBuffer/stderrBuffer.
+		// c.WaitDelay (set in runCmd before Start) bounds this so a lingering
+		// grandchild holding the pipe write-end can never hang us forever; on
+		// expiry Wait returns exec.ErrWaitDelay, which we ignore here because
+		// the trace already captured the authoritative exit status.
 		_ = c.Wait() // exit status already captured by trace
 
 		// Drain + merge fanotify digests (if enabled). Done BEFORE
@@ -1990,6 +2042,13 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 				// etc.) still fire for tools that exit non-zero on findings.
 				err = nil
 			}
+		} else if errors.Is(err, exec.ErrWaitDelay) {
+			// The wrapped command itself exited cleanly; WaitDelay only fired
+			// because a lingering descendant kept the inherited stdout/stderr
+			// pipe write-end open past process exit. We force-closed the pipes
+			// and captured the output we had — far better than hanging the CI
+			// step forever. Don't propagate this as a command failure.
+			err = nil
 		}
 	}
 
