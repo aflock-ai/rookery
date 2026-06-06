@@ -22,9 +22,18 @@
 //   - zero-copy syscalls (splice/sendfile/copy_file_range) don't fire
 //     fanotify; same gap as today.
 //   - O_PATH opens don't trigger FAN_OPEN_PERM.
-//   - 5-second handler timeout — if userspace is too slow, kernel
-//     defaults to FAN_ALLOW; we count these as "degraded" and surface.
-//   - 10 consecutive timeouts evicts the group; we re-init if seen.
+//
+// Response contract (CRITICAL): the kernel has NO per-event timeout for
+// permission events — an opener blocks UNINTERRUPTIBLY inside open() ->
+// fanotify_get_response() (wait_event_killable, no timeout) until userspace
+// writes a FAN_ALLOW/FAN_DENY response, or the fanotify fd is closed (which
+// auto-allows all in-flight waiters via fanotify_release). cilock MUST write
+// a response for EVERY permission event, and it must NEVER gate that response
+// on unbounded work: a blocking read (pipe/socket) or a pathologically slow
+// hash would otherwise strand the opener forever (uninterruptible D-state,
+// holding inherited pipes — hangs the whole build). hashWithDeadline bounds
+// the hash by HandlerBudget so the FAN_ALLOW is always emitted in bounded
+// time regardless of what the fd does when read.
 package fanotify
 
 import (
@@ -50,9 +59,16 @@ import (
 // stores atomic counters internally (statsAtomic) so workers can
 // increment concurrently; GetStats reads them with atomic.Load.
 type Stats struct {
-	EventsReceived    uint64
-	EventsHashed      uint64
-	HashErrors        uint64
+	EventsReceived uint64
+	EventsHashed   uint64
+	HashErrors     uint64
+	// HashDeadlines counts permission events where hashWithDeadline timed
+	// out (the hash exceeded HandlerBudget) and we released the opener with
+	// FAN_ALLOW WITHOUT a digest. Distinct from HashErrors (a hard hash
+	// failure) — this is the bounded-hash safety valve that prevents the
+	// opener from stranding in uninterruptible D-state. Non-zero means a
+	// file took too long to hash; the opener still proceeded.
+	HashDeadlines     uint64
 	HandlerTimeouts   uint64 // events where reading took > budget
 	HandlerLatencyP99 time.Duration
 	BytesHashed       uint64
@@ -89,6 +105,7 @@ type statsAtomic struct {
 	EventsReceived   atomic.Uint64
 	EventsHashed     atomic.Uint64
 	HashErrors       atomic.Uint64
+	HashDeadlines    atomic.Uint64
 	HandlerTimeouts  atomic.Uint64
 	BytesHashed      atomic.Uint64
 	MarkFailures     atomic.Uint64
@@ -105,6 +122,7 @@ func (s *statsAtomic) toStats() Stats {
 		EventsReceived:   s.EventsReceived.Load(),
 		EventsHashed:     s.EventsHashed.Load(),
 		HashErrors:       s.HashErrors.Load(),
+		HashDeadlines:    s.HashDeadlines.Load(),
 		HandlerTimeouts:  s.HandlerTimeouts.Load(),
 		BytesHashed:      s.BytesHashed.Load(),
 		MarkFailures:     s.MarkFailures.Load(),
@@ -148,8 +166,13 @@ type Handler struct {
 	// marked filesystem (every /tmp/go-build/*.a) would be ruinous. Reads
 	// stay filesystem-wide; only product capture is scoped.
 	workspaceRoot string
-	// Per-event handler budget. Default 2s leaves margin under the
-	// kernel's 5s default timeout; configurable for stress tests.
+	// Per-event handler budget. Default 2s. The kernel imposes NO
+	// per-event timeout on permission events (the opener blocks
+	// uninterruptibly until we respond), so this is OUR self-imposed
+	// bound: hashWithDeadline gives up on a hash that exceeds it and
+	// releases the opener anyway, so a FAN_ALLOW response is never gated
+	// on an unbounded read. Configurable for stress tests. Zero/negative
+	// disables the deadline (hash inline — test/diagnostic use only).
 	HandlerBudget time.Duration
 	// MaxDigests caps the digests map size to bound memory under
 	// adversarial / pathological workloads (tracee opens 1M files).
@@ -178,6 +201,20 @@ type Handler struct {
 	// ignoredInodes dedupes the FanotifyMark syscall: once an inode is
 	// ignored we don't re-issue the mark. Guarded by digestMu.
 	ignoredInodes map[uint64]struct{}
+
+	// hashFn is the hash SEAM: handleOne calls it (via hashWithDeadline)
+	// to compute the content digest of an event fd. Defaults to the
+	// package func hashFD; tests inject a blocking implementation to
+	// exercise the deadline path (proving the opener is released even
+	// when the hash never returns). Named hashFn so it doesn't shadow
+	// the package func hashFD.
+	hashFn func(fd int) (digest [32]byte, n int64, err error)
+	// selfPID is os.Getpid(), cached at construction. handleOne skips
+	// (immediately FAN_ALLOWs, never hashes) events whose meta.Pid is our
+	// own PID: cilock's own opens land under the global marks and, if we
+	// tried to hash them, we'd re-enter our own permission wait inside the
+	// handler — a self-deadlock under load.
+	selfPID int
 }
 
 // New opens a fanotify fd and registers a mark on the given mount
@@ -200,6 +237,15 @@ type Handler struct {
 //
 // FAN_MARK_FILESYSTEM dedupes per-filesystem — marking 5 paths
 // that all live on / is a single in-kernel filesystem-mark.
+// globalCoveragePaths are the whole-filesystem marks New() adds beyond the
+// build workspace, so the trace also captures toolchain reads (libc, the
+// compiler) that live outside the build dir. It is a package var ONLY so the
+// strand regression test can scope marks to a dedicated tmpfs mount (a
+// FAN_MARK_FILESYSTEM on '/' plus a deliberately-blocking hash would wedge
+// every process in the test container, not just the test's child). Production
+// never reassigns it.
+var globalCoveragePaths = []string{"/", "/usr", "/opt", "/home", "/tmp"}
+
 func New(markPath string) (*Handler, error) {
 	if markPath == "" {
 		return nil, errors.New("fanotify: empty markPath")
@@ -230,13 +276,7 @@ func New(markPath string) (*Handler, error) {
 	// useless). Subsequent paths are best-effort; a missing path
 	// (e.g., /opt/hostedtoolcache on non-GHA) is fine to skip.
 	primary := []string{markPath}
-	extra := []string{
-		"/",
-		"/usr",
-		"/opt",
-		"/home",
-		"/tmp",
-	}
+	extra := globalCoveragePaths
 
 	if err := markFilesystemOrMount(fd, mask, primary[0]); err != nil {
 		_ = unix.Close(fd)
@@ -262,6 +302,8 @@ func New(markPath string) (*Handler, error) {
 		MaxDigests:        defaultMaxDigestsFromEnv(),
 		ignoreOnce:        ignoreOnceEnabled(),
 		ignoredInodes:     make(map[uint64]struct{}),
+		hashFn:            hashFD,
+		selfPID:           os.Getpid(),
 	}
 	return h, nil
 }
@@ -516,6 +558,17 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 		}
 	}
 
+	// PID self-exclusion: never hash cilock's OWN opens. The handler itself
+	// opens files under the same global marks (the /proc/self/fd readlink
+	// target, hashFD's read, the FanotifyMark ignore-path). Hashing those
+	// would make the handler block on a permission event of its own — the
+	// classic fanotify self-deadlock — and under load it strands the whole
+	// worker pool. A permission event from our own PID is released at once.
+	if int(meta.Pid) == h.selfPID {
+		respondIfPerm()
+		return
+	}
+
 	if !isOpenPerm && !isCloseWrite {
 		// An event we didn't ask for. Only release the tracee if it's a
 		// permission class event; notifications need no response.
@@ -567,20 +620,29 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 		return // notification, out of scope — no response, nothing to hash
 	}
 
-	// Skip non-regular files — pipes/sockets/devices shouldn't be
-	// hashed (would drain the tracee's content), and we'd just be
-	// wasting cycles.
+	// Skip non-regular files AND any fd we can't stat. Pipes/sockets/devices
+	// must NOT be hashed — reading them drains the tracee's content or blocks
+	// forever with no writer — and an un-stattable fd is just as unsafe to
+	// read. Release the opener immediately on EITHER condition rather than
+	// fall through to a read that could strand it (the old `err == nil` guard
+	// let a Fstat error fall through to hashFD — a stranding path).
 	var stat syscall.Stat_t
-	if err := syscall.Fstat(int(meta.Fd), &stat); err == nil {
-		if stat.Mode&syscall.S_IFMT != syscall.S_IFREG {
-			respondIfPerm()
-			return
-		}
+	if err := syscall.Fstat(int(meta.Fd), &stat); err != nil || stat.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		respondIfPerm()
+		return
 	}
 
-	digest, nBytes, err := hashFD(int(meta.Fd))
+	// hashWithDeadline bounds the read by HandlerBudget: the kernel never
+	// times out a FAN_OPEN_PERM wait, so the response must never be gated on
+	// an unbounded read. On budget expiry we release the opener anyway and
+	// record a coverage gap (HashDeadlines) instead of stranding it.
+	digest, nBytes, err := h.hashWithDeadline(int(meta.Fd))
 	if err != nil {
-		h.stats.HashErrors.Add(1)
+		if errors.Is(err, errHashDeadline) {
+			h.stats.HashDeadlines.Add(1)
+		} else {
+			h.stats.HashErrors.Add(1)
+		}
 		respondIfPerm()
 		return
 	}
@@ -671,6 +733,61 @@ func (h *Handler) underWorkspace(path string) bool {
 		root += "/"
 	}
 	return strings.HasPrefix(path, root)
+}
+
+// errHashDeadline signals that hashWithDeadline abandoned a hash that
+// exceeded HandlerBudget. handleOne treats it as a coverage gap (bumps
+// HashDeadlines) and STILL releases the opener: the cardinal rule is that a
+// FAN_OPEN_PERM response is never gated on an unbounded read.
+var errHashDeadline = errors.New("fanotify: hash exceeded handler budget")
+
+// hashWithDeadline computes the content digest of an event fd but bounds the
+// wait by h.HandlerBudget, so the caller can ALWAYS write a FAN_ALLOW response
+// in bounded time even if the underlying read blocks forever (a FIFO/socket
+// with no writer, a stalled FUSE/network mount). The kernel imposes no
+// per-event timeout on FAN_OPEN_PERM — fanotify_get_response() waits
+// uninterruptibly — so this self-imposed bound is what keeps the opener from
+// stranding in D-state.
+//
+// Cancellation is leak-free: it dups the fd and hashes the dup on a goroutine,
+// and the SELECT owner closes the dup EXACTLY ONCE (either branch). On timeout
+// the close unblocks the goroutine's in-flight read (EBADF); the goroutine then
+// sends its (now-stale) result to the buffered channel and exits — the send
+// never blocks. h.HandlerBudget<=0 disables the deadline (inline hash) for
+// tests/diagnostics, which reproduces the pre-fix respond-after-blocking-hash.
+func (h *Handler) hashWithDeadline(fd int) ([32]byte, int64, error) {
+	if h.HandlerBudget <= 0 {
+		return h.hashFn(fd)
+	}
+	dup, err := unix.Dup(fd)
+	if err != nil {
+		// Can't dup the fd to hash it on a cancellable goroutine. Do NOT fall
+		// back to an inline hash: h.hashFn can block (a regular file on a
+		// stalled FUSE/network mount), which would re-gate FAN_ALLOW on an
+		// unbounded read and reintroduce the D-state strand. Skip the hash
+		// (coverage gap) and release the opener — the invariant holds.
+		return [32]byte{}, 0, errHashDeadline
+	}
+	type result struct {
+		digest [32]byte
+		n      int64
+		err    error
+	}
+	ch := make(chan result, 1) // buffered: the goroutine never blocks on send
+	go func() {
+		d, n, e := h.hashFn(dup)
+		ch <- result{d, n, e}
+	}()
+	timer := time.NewTimer(h.HandlerBudget)
+	defer timer.Stop()
+	select {
+	case r := <-ch:
+		_ = unix.Close(dup) // goroutine is done reading; safe to close
+		return r.digest, r.n, r.err
+	case <-timer.C:
+		_ = unix.Close(dup) // unblock the stuck read so the goroutine exits
+		return [32]byte{}, 0, errHashDeadline
+	}
 }
 
 // hashFD streams SHA-256 over the file descriptor's content. The fd
