@@ -11,6 +11,12 @@ import styles from './download.module.css';
 const MANIFEST_URL = '/dl/manifest.json';
 const INSTALL_CMD = 'curl -fsSL https://cilock.dev/install.sh | bash';
 
+// Trust model: release candidates are signed by the TestifySec STAGING platform;
+// stable (GA) releases are signed by PRODUCTION keys. The published binary bakes
+// in the matching platform trust, so `cilock verify` needs no --policy-* flags.
+const STAGING_PLATFORM = 'https://platform.aws-sandbox-staging.testifysec.dev';
+const PROD_PLATFORM = 'https://platform.testifysec.com';
+
 type ManifestFile = {name: string; sha256: string; size: number; os?: string; arch?: string};
 type ManifestVersion = {version: string; released?: string; files: ManifestFile[]};
 type Manifest = {schema: number; latest: string; updated?: string; versions: ManifestVersion[]};
@@ -100,6 +106,8 @@ function DownloadInner(): React.ReactElement {
     byNewest.find((v) => !isPre(v.version)) ??
     byNewest[0];
   const headlinePre = ver ? isPre(ver.version) : false;
+  const verPlatform = headlinePre ? STAGING_PLATFORM : PROD_PLATFORM;
+  const verEnv = headlinePre ? 'staging' : 'production';
   const others = byNewest.filter((v) => v.version !== ver?.version);
   const binaries = (ver?.files ?? []).filter((f) => f.os && f.arch);
   const mine = ver && platform && platform !== 'windows' ? binFor(ver, platform) : undefined;
@@ -266,21 +274,29 @@ function DownloadInner(): React.ReactElement {
           Verify it's the real thing
         </Heading>
         <p className={styles.sectionHint}>
-          Every binary carries the build's signed evidence. A released <code>cilock</code> bakes
-          in the TestifySec platform trust, so verification is flagless and offline:
+          {headlinePre ? 'Release candidates are' : 'Stable releases are'} signed by the TestifySec{' '}
+          <strong>{verEnv}</strong> platform (Fulcio + RFC&nbsp;3161 TSA). This binary bakes in the
+          matching trust, so <code>cilock verify</code> needs no <code>--policy-*</code> flags — it
+          pulls the build's signed evidence from the platform and checks it against the release
+          policy published with the binary:
         </p>
         <CopyCmd
           cmd={
             mine
-              ? `tar xzf ${mine.name} cilock\ncilock verify ./cilock -p release-v1.policy.json -a ${mine.os}-${mine.arch}.attestation.json`
-              : `tar xzf cilock-<version>-<os>-<arch>.tar.gz cilock\ncilock verify ./cilock -p release-v1.policy.json -a <os>-<arch>.attestation.json`
+              ? `tar xzf ${mine.name} cilock\ncurl -fsSLO https://cilock.dev${dlBase}/release-policy.json\ncilock verify ./cilock --policy release-policy.json --platform-url ${verPlatform} --enable-archivista`
+              : `tar xzf cilock-<version>-<os>-<arch>.tar.gz cilock\ncurl -fsSLO https://cilock.dev/dl/<version>/release-policy.json\ncilock verify ./cilock --policy release-policy.json --platform-url ${verPlatform} --enable-archivista`
           }
         />
+        <p className={styles.muted} style={{marginTop: '0.6rem'}}>
+          Release candidates are signed by the TestifySec <strong>staging</strong> platform; stable
+          releases are signed by <strong>production</strong> keys. The <code>--platform-url</code>{' '}
+          above is the <strong>{verEnv}</strong> platform that signed this release.
+        </p>
         <div className={styles.verifyBox} style={{marginTop: '1rem'}}>
           <strong>What that proves</strong>
           <ul className={styles.trustPoints}>
-            <li>The binary was built by the official release workflow on <code>aflock-ai/rookery</code> (functionary identity bound into the signing cert).</li>
-            <li>Signed by the <strong>TestifySec Platform Fulcio</strong>, chained to the Platform Root CA.</li>
+            <li>The binary was built by the official TestifySec release pipeline — the workflow's identity is bound into the signing certificate.</li>
+            <li>Signed by the <strong>TestifySec {verEnv} Platform Fulcio</strong>, chained to its Platform Root CA.</li>
             <li>Countersigned by an <strong>RFC 3161 TSA</strong> — the short-lived signing cert verifies as valid at signing time, long after it expires.</li>
             <li>It's the exact artifact the publish gate verified — nothing unverified ever reaches cilock.dev.</li>
           </ul>
