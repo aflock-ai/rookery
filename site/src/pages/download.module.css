@@ -196,3 +196,61 @@
   background: #22c55e;
   display: inline-block;
 }
+
+.preBadge {
+  display: inline-block;
+  margin-left: 0.6rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+  color: var(--ifm-color-emphasis-800);
+  background: color-mix(in srgb, var(--ifm-color-warning) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ifm-color-warning) 55%, transparent);
+}
+
+.verItem {
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 8px;
+  padding: 0.5rem 0.9rem;
+  margin-bottom: 0.5rem;
+  background: var(--ifm-background-surface-color);
+}
+
+.verSummary {
+  cursor: pointer;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  list-style: none;
+}
+
+/* display:flex drops the native disclosure triangle in Blink/WebKit, so render
+   our own chevron that rotates when the <details> is open. */
+.verSummary::-webkit-details-marker {
+  display: none;
+}
+
+.verSummary::before {
+  content: '▸';
+  color: var(--ifm-color-emphasis-600);
+  transition: transform 0.15s ease;
+}
+
+details[open] > .verSummary::before {
+  transform: rotate(90deg);
+}
+
+.verFiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+  font-size: 0.9rem;
+}

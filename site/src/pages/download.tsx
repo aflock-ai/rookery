@@ -83,8 +83,24 @@ function DownloadInner(): React.ReactElement {
       .catch((e) => setError(String(e)));
   }, []);
 
+  // Headline = the latest STABLE release. Until a GA exists, fall back to the
+  // newest version overall (a pre-release) so the page reflects what actually
+  // published instead of a stale `latest` pointer that --no-latest RCs never
+  // move. Everything else (older builds + pre-releases) drops into "Other
+  // releases" below — present but de-emphasized.
+  const isPre = (s: string) => s.includes('-');
+  const byNewest = [...(manifest?.versions ?? [])].sort((a, b) =>
+    (b.released ?? '').localeCompare(a.released ?? ''),
+  );
+  // Prefer the manifest's authoritative `latest` pointer when it resolves to a
+  // stable release (so the headline matches the install.sh default); else the
+  // newest stable; else the newest version overall (a pre-release).
   const ver =
-    manifest?.versions?.find((v) => v.version === manifest.latest) ?? manifest?.versions?.[0];
+    byNewest.find((v) => v.version === manifest?.latest && !isPre(v.version)) ??
+    byNewest.find((v) => !isPre(v.version)) ??
+    byNewest[0];
+  const headlinePre = ver ? isPre(ver.version) : false;
+  const others = byNewest.filter((v) => v.version !== ver?.version);
   const binaries = (ver?.files ?? []).filter((f) => f.os && f.arch);
   const mine = ver && platform && platform !== 'windows' ? binFor(ver, platform) : undefined;
   const dlBase = ver ? `/dl/${ver.version}` : '/dl';
@@ -119,8 +135,22 @@ function DownloadInner(): React.ReactElement {
       {/* Story 2 — the right binary for me. */}
       <section className={styles.section}>
         <Heading as="h2" className={styles.sectionTitle}>
-          {ver ? `Latest release — ${ver.version}` : 'Latest release'}
+          {ver ? (
+            <>
+              {headlinePre ? 'Latest pre-release' : 'Latest release'} — {ver.version}
+              {headlinePre && <span className={styles.preBadge}>pre-release</span>}
+            </>
+          ) : (
+            'Latest release'
+          )}
         </Heading>
+
+        {headlinePre && (
+          <p className={styles.sectionHint}>
+            No stable release yet — this is the most recent release candidate. Pin it explicitly
+            with <code>CILOCK_VERSION={ver?.version}</code>.
+          </p>
+        )}
 
         {error && (
           <p className={styles.muted}>
@@ -193,6 +223,42 @@ function DownloadInner(): React.ReactElement {
           </>
         )}
       </section>
+
+      {/* Other releases — previous builds + pre-releases, present but de-emphasized. */}
+      {others.length > 0 && (
+        <section className={styles.section}>
+          <Heading as="h2" className={styles.sectionTitle}>
+            Other releases
+          </Heading>
+          <p className={styles.sectionHint}>
+            Previous builds and release candidates. Pre-releases are not the default install —
+            expand a version to grab a specific binary.
+          </p>
+          {others.map((v) => {
+            const pre = isPre(v.version);
+            const base = `/dl/${v.version}`;
+            const bins = v.files.filter((f) => f.os && f.arch);
+            const day = v.released ? v.released.slice(0, 10) : '';
+            return (
+              <details key={v.version} className={styles.verItem}>
+                <summary className={styles.verSummary}>
+                  <code>{v.version}</code>
+                  {pre && <span className={styles.preBadge}>pre-release</span>}
+                  {day && <span className={styles.muted}> · {day}</span>}
+                </summary>
+                <div className={styles.verFiles}>
+                  {bins.map((f) => (
+                    <a key={f.name} href={`${base}/${f.name}`}>
+                      {PLATFORM_LABEL[`${f.os}-${f.arch}`] ?? `${f.os}-${f.arch}`}
+                    </a>
+                  ))}
+                  <a href={`${base}/checksums-sha256.txt`}>checksums</a>
+                </div>
+              </details>
+            );
+          })}
+        </section>
+      )}
 
       {/* Story 3 — verify what I downloaded. */}
       <section className={styles.section}>
