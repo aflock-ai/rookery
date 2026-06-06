@@ -41,6 +41,21 @@ type fanotifySession struct {
 	wg     sync.WaitGroup
 }
 
+// setBuildPgid scopes the handler's blocking hash to the build's own process
+// group, so foreign openers (the CI runner that launched cilock, sibling
+// containers sharing this superblock) are released immediately instead of
+// being stalled on a hash — a stall can make the runner miss our step shell's
+// exit and hang to the job timeout. pid is the wrapped build's pid; with
+// Setpgid (configureProcessReaping) the child is a group leader, so its pgid
+// equals its pid. No-op on a nil session. Call once, right after the build
+// starts.
+func (s *fanotifySession) setBuildPgid(pid int) {
+	if s == nil || s.h == nil {
+		return
+	}
+	s.h.SetBuildPgid(pid)
+}
+
 // maybeStartFanotify decides whether to enable the fanotify integrity
 // gate, probes capability, and starts the handler goroutine. Returns
 // (session, nil) on success, (nil, nil) when disabled or unavailable

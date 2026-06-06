@@ -1903,6 +1903,18 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		return err
 	}
 
+	// Scope the fanotify hash to the build's own process group now that the
+	// child exists. configureProcessReaping set Setpgid, so the child is a
+	// group leader whose pgid == its pid and its descendants inherit it. After
+	// this, the handler releases every FOREIGN opener (the CI runner that
+	// launched cilock, sibling build containers, host daemons) immediately
+	// instead of blocking it on a hash — a foreign stall can make the runner
+	// miss this step shell's exit and hang the job to its timeout. Nil-safe;
+	// a no-op on non-Linux.
+	if r.fanotifySession != nil && c.Process != nil {
+		r.fanotifySession.setBuildPgid(c.Process.Pid)
+	}
+
 	var err error
 	if r.enableTracing { //nolint:nestif // sequential exit-handling: trace vs Wait, ExitError type assert, ignore-exit-code branch — each shallow check, refactor would obscure ordering
 		traceStart := time.Now()

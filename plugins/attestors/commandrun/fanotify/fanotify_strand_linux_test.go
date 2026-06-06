@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -156,5 +157,110 @@ func TestHandler_ReleasesOpenerWhenHashBlocks(t *testing.T) {
 		st := childProcState(childPID)
 		t.Fatalf("RED: opener (pid %d) stranded for >15s in kernel state %q — the handler never wrote FAN_ALLOW because the response was gated on a blocking hash. State 'D' is the uninterruptible fanotify_get_response strand that hung the fan-out. (budget=%v)",
 			childPID, st, budget)
+	}
+}
+
+// TestHandler_ForeignOpenerReleasedWithoutHash is the regression test for the
+// build-scope gate that keeps cilock from stalling processes OUTSIDE the build.
+//
+// THE BUG IT GUARDS: cilock's marks are host-global (FAN_MARK_FILESYSTEM on
+// /, /usr, ...), so the permission handler intercepts opens by EVERY process
+// on the box — including the CI runner that launched cilock. Hashing (and thus
+// briefly blocking) a foreign opener perturbs its lifecycle: the GitHub Actions
+// runner relies on a prompt SIGCHLD/reap of its step shell, and a
+// fanotify-stalled open in its reaper path makes .NET's Process.Exited never
+// fire, hanging the step to the job timeout (the runner's ProcessInvoker has
+// no fallback if that event is missed).
+//
+// THE FIX: handleOne hashes ONLY opens by processes in the build's process
+// group (SetBuildPgid; the build child is a group leader via Setpgid). Every
+// foreign opener is released IMMEDIATELY, never hashed.
+//
+// This test injects a hash that blocks FOREVER and sets the build pgid to a
+// group the child is NOT in. With the gate, the child's open is released
+// without the hash ever running (GREEN). Without the gate, the foreign open
+// would hit the blocking hash and strand the child (RED — >15s in state 'D').
+//
+// Requires Linux + CAP_SYS_ADMIN; skips otherwise.
+func TestHandler_ForeignOpenerReleasedWithoutHash(t *testing.T) {
+	mnt := t.TempDir()
+	if err := syscall.Mount("tmpfs", mnt, "tmpfs", 0, ""); err != nil {
+		t.Skipf("need CAP_SYS_ADMIN to mount tmpfs (run in a privileged container): %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Unmount(mnt, 0) })
+
+	if err := Probe(mnt); err != nil {
+		t.Skipf("fanotify FAN_OPEN_PERM unavailable (need Linux + CAP_SYS_ADMIN): %v", err)
+	}
+	file := filepath.Join(mnt, "input.bin")
+	if err := os.WriteFile(file, []byte("material-content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origPaths := globalCoveragePaths
+	globalCoveragePaths = nil
+	t.Cleanup(func() { globalCoveragePaths = origPaths })
+
+	h, err := New(mnt)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// A hash that blocks forever AND records whether it ran. A long budget
+	// ensures that if the gate fails and we DO hash, the opener really strands
+	// (rather than being saved by the deadline) — isolating the gate as the
+	// thing under test.
+	var hashCalled atomic.Bool
+	block := make(chan struct{})
+	h.hashFn = func(int) ([32]byte, int64, error) {
+		hashCalled.Store(true)
+		<-block
+		return [32]byte{}, 0, nil
+	}
+	h.HandlerBudget = time.Hour
+
+	// Make the child its own process-group leader so its pgid == its pid, then
+	// scope hashing to a DIFFERENT group (the test's own pid is never the
+	// child's new pgid). The child is therefore a "foreign" opener — the
+	// CI-runner case — and must be released without hashing.
+	//
+	// CILOCK_TEST_DISABLE_PGID_GATE=1 leaves buildPgid unset (gate off) to
+	// reproduce the pre-fix RED: the foreign open hits the blocking hash and
+	// strands. Default sets it → GREEN.
+	if os.Getenv("CILOCK_TEST_DISABLE_PGID_GATE") != "1" {
+		h.SetBuildPgid(os.Getpid())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() { _ = h.Run(ctx); close(runDone) }()
+	time.Sleep(200 * time.Millisecond) // let Run reach poll()
+
+	child := exec.Command("cat", file)
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := child.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	childPID := child.Process.Pid
+	childDone := make(chan error, 1)
+	go func() { childDone <- child.Wait() }()
+
+	t.Cleanup(func() {
+		close(block)
+		_ = child.Process.Kill()
+		cancel()
+		_ = h.Close()
+		<-runDone
+	})
+
+	select {
+	case <-childDone:
+		if hashCalled.Load() {
+			t.Fatalf("foreign opener was hashed — the build-scope gate did not fast-release it (a foreign open must never reach the blocking hash)")
+		}
+		t.Logf("GREEN: foreign opener released without hashing")
+	case <-time.After(15 * time.Second):
+		t.Fatalf("RED: foreign opener (pid %d) stranded for >15s in kernel state %q — the build-scope gate did not release it; the blocking hash ran on a foreign open (the perturbation that hangs the CI runner)",
+			childPID, childProcState(childPID))
 	}
 }

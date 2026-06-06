@@ -97,6 +97,13 @@ type Stats struct {
 	// affect correctness — the file was still hashed; we just keep
 	// getting events for it).
 	IgnoreMarkErrors uint64
+	// ForeignSkips counts permission events released WITHOUT hashing because
+	// the opener was not in the build's process group (buildPgid) — the CI
+	// runner, sibling containers, host daemons. These are not the build's
+	// materials, and crucially we must NOT block them (see buildPgid). A high
+	// value is expected and healthy on a busy host; it is the count of opens
+	// we deliberately stayed out of the way of.
+	ForeignSkips uint64
 }
 
 // statsAtomic holds the live counters mutated by worker goroutines.
@@ -115,6 +122,7 @@ type statsAtomic struct {
 	CacheSkips       atomic.Uint64
 	IgnoreMarksAdded atomic.Uint64
 	IgnoreMarkErrors atomic.Uint64
+	ForeignSkips     atomic.Uint64
 }
 
 func (s *statsAtomic) toStats() Stats {
@@ -132,6 +140,7 @@ func (s *statsAtomic) toStats() Stats {
 		CacheSkips:       s.CacheSkips.Load(),
 		IgnoreMarksAdded: s.IgnoreMarksAdded.Load(),
 		IgnoreMarkErrors: s.IgnoreMarkErrors.Load(),
+		ForeignSkips:     s.ForeignSkips.Load(),
 	}
 }
 
@@ -215,6 +224,23 @@ type Handler struct {
 	// tried to hash them, we'd re-enter our own permission wait inside the
 	// handler — a self-deadlock under load.
 	selfPID int
+
+	// buildPgid is the process-group id of the wrapped build, set by the
+	// command-run attestor right after the build starts (the build child is a
+	// group leader via Setpgid, so its pgid == its pid; descendants inherit
+	// it). handleOne hashes ONLY opens by processes in this group — the build
+	// and its children. Every OTHER opener is released immediately without a
+	// blocking hash, because our marks are host-global (FAN_MARK_FILESYSTEM on
+	// /, /usr, ...) and therefore intercept opens by unrelated processes too:
+	// the CI runner that launched cilock, sibling build containers sharing
+	// this filesystem's superblock, host daemons. Blocking THOSE (even briefly,
+	// to hash) perturbs their process lifecycle — most consequentially the
+	// GitHub Actions runner, which relies on a prompt SIGCHLD/reap of its step
+	// shell; a fanotify-stalled open in its reaper path makes .NET's
+	// Process.Exited never fire and the step hangs to the job timeout. Zero
+	// until set (the brief pre-build window): events are hashed, matching the
+	// prior whole-host behavior.
+	buildPgid atomic.Int64
 }
 
 // New opens a fanotify fd and registers a mark on the given mount
@@ -306,6 +332,17 @@ func New(markPath string) (*Handler, error) {
 		selfPID:           os.Getpid(),
 	}
 	return h, nil
+}
+
+// SetBuildPgid records the wrapped build's process group so handleOne can
+// scope the (blocking) hash to the build's own process tree and immediately
+// release every foreign opener — see the buildPgid field doc. Call once,
+// right after the build process is started. Safe to call concurrently with a
+// running handler (atomic). A pgid <= 0 is ignored (leaves the gate off).
+func (h *Handler) SetBuildPgid(pgid int) {
+	if pgid > 0 {
+		h.buildPgid.Store(int64(pgid))
+	}
 }
 
 // EnvVarIgnoreOnce controls "hash each inode once" — after hashing an
@@ -567,6 +604,28 @@ func (h *Handler) handleOne(meta *unix.FanotifyEventMetadata) {
 	if int(meta.Pid) == h.selfPID {
 		respondIfPerm()
 		return
+	}
+
+	// Build-scope gate. Only the wrapped build's own process tree produces
+	// materials/products we must hash. Our marks are host-global, so without
+	// this we ALSO intercept (and, by hashing, briefly BLOCK) every other
+	// process's opens — above all the CI runner that launched us. Stalling a
+	// foreign opener perturbs its lifecycle: the GitHub Actions runner relies
+	// on a prompt SIGCHLD/reap of its step shell, and a fanotify-delayed open
+	// in its reaper path makes .NET's Process.Exited never fire — the step
+	// then hangs to the job timeout (runner ProcessInvoker has no fallback if
+	// that event is missed). The build child is its own process-group leader
+	// (Setpgid, set by configureProcessReaping), so one Getpgid tells us
+	// whether this opener is ours. Foreign opener → release at once, no hash.
+	// buildPgid==0 means "not set yet" (pre-Start window): hash everything,
+	// preserving the prior behavior until the build's group is known.
+	if pgid := h.buildPgid.Load(); pgid > 0 {
+		openerPgid, err := unix.Getpgid(int(meta.Pid))
+		if err != nil || int64(openerPgid) != pgid {
+			h.stats.ForeignSkips.Add(1)
+			respondIfPerm()
+			return
+		}
 	}
 
 	if !isOpenPerm && !isCloseWrite {

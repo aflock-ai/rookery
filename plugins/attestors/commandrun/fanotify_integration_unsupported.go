@@ -33,6 +33,9 @@ func (s *fanotifySession) stop() (map[string][32]byte, map[string][32]byte, fano
 	return nil, nil, fanotifyStatsStub{}
 }
 
+// setBuildPgid is a no-op on non-Linux (no fanotify session exists).
+func (s *fanotifySession) setBuildPgid(pid int) {}
+
 func mergeFanotifyDigests(processes []ProcessInfo, fanDigests map[string][32]byte) (int, map[string]string, map[string]bool) {
 	return 0, nil, nil
 }
