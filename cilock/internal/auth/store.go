@@ -115,6 +115,38 @@ func Save(c Credential) error {
 	return nil
 }
 
+// SetScope updates only the working tenant/product binding on the stored
+// credential for platformURL, preserving its token, auth mode, email, and
+// expiry. It requires an existing cilock credential (run `cilock login` first);
+// it does not write to jctl's config. Empty arguments are left unchanged, so a
+// caller can rebind product alone or tenant alone. This is the mechanism behind
+// `cilock use` and the headless binding path — mirroring jctl's
+// `config set-product`, which writes the scope onto the active context.
+func SetScope(platformURL, tenantID, tenantName, productID, productName string) error {
+	key := NormalizeURL(platformURL)
+	s, err := load()
+	if err != nil {
+		return err
+	}
+	c, ok := s.Credentials[key]
+	if !ok {
+		return fmt.Errorf("not logged in to %s (run: cilock login --platform-url %s)", key, key)
+	}
+	if tenantID != "" {
+		c.TenantID = tenantID
+	}
+	if tenantName != "" {
+		c.TenantName = tenantName
+	}
+	if productID != "" {
+		c.ProductID = productID
+	}
+	if productName != "" {
+		c.ProductName = productName
+	}
+	return Save(c)
+}
+
 // Delete removes the credential for a platform URL. Returns whether one existed.
 func Delete(platformURL string) (bool, error) {
 	s, err := load()
@@ -219,10 +251,12 @@ func lookupJctl(platformURL string) (*Credential, bool) {
 	}
 	var cfg struct {
 		Contexts map[string]struct {
-			JudgeURL   string `yaml:"judgeURL"`
-			Token      string `yaml:"token"`
-			TenantID   string `yaml:"tenant_id"`
-			TenantName string `yaml:"tenant_name"`
+			JudgeURL    string `yaml:"judgeURL"`
+			Token       string `yaml:"token"`
+			TenantID    string `yaml:"tenant_id"`
+			TenantName  string `yaml:"tenant_name"`
+			ProductID   string `yaml:"product_id"`
+			ProductName string `yaml:"product_name"`
 		} `yaml:"contexts"`
 	}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -235,6 +269,8 @@ func lookupJctl(platformURL string) (*Credential, bool) {
 				Token:       ctx.Token,
 				TenantID:    ctx.TenantID,
 				TenantName:  ctx.TenantName,
+				ProductID:   ctx.ProductID,
+				ProductName: ctx.ProductName,
 			}, true
 		}
 	}

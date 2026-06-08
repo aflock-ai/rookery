@@ -78,6 +78,7 @@ func New() *cobra.Command {
 	cmd.AddCommand(LoginCmd())
 	cmd.AddCommand(LogoutCmd())
 	cmd.AddCommand(WhoamiCmd())
+	cmd.AddCommand(UseCmd())
 	cmd.AddCommand(TrustCmd())
 	cmd.AddCommand(DoctorCmd())
 	cmd.AddCommand(SignCmd())

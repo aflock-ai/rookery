@@ -18,14 +18,16 @@ import (
 // LoginCmd signs in to a TestifySec platform and stores a session credential.
 func LoginCmd() *cobra.Command {
 	var platformURL, token, tenant, product string
+	var tenantID, tenantName, productID, productName string
 	var interactive, workflowIdentity, allowTrust bool
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Sign in to the TestifySec platform and store a session credential",
 		Long: "Sign in to the TestifySec platform and store a session credential, so subsequent\n" +
 			"cilock platform calls (attestation storage, signing-token exchange) are\n" +
-			"authenticated. login establishes identity only; choose the working tenant/product\n" +
-			"separately with `cilock use` or per-command flags.\n\n" +
+			"authenticated. The browser approve page binds a working tenant AND product\n" +
+			"(creating a default tenant/product if you have none) so every attestation is\n" +
+			"scoped to one; switch them later with `cilock use`, or override per-command.\n\n" +
 			"Identity is resolved by precedence:\n" +
 			"  1. --token            an explicit JWT (CI/headless; '-' reads from stdin)\n" +
 			"  2. workflow identity  ambient CI OIDC (GitHub Actions) — auto-detected on the\n" +
@@ -34,12 +36,13 @@ func LoginCmd() *cobra.Command {
 			"  3. browser            interactive loopback login (default for local use)\n\n" +
 			"--interactive forces the browser. --workflow-identity forces ambient OIDC (and is\n" +
 			"required to send a workflow token to a non-default --platform-url).",
-		Example: "  # Interactive browser login to the default TestifySec platform\n" +
+		Example: "  # Interactive browser login (binds tenant+product on the approve page)\n" +
 			"  cilock login\n\n" +
 			"  # CI on GitHub Actions: use the ambient workflow identity (auto-detected)\n" +
 			"  cilock login   # with `permissions: id-token: write`\n\n" +
-			"  # CI/headless: provide a JWT directly (or '-' to read from stdin)\n" +
-			"  cilock login --platform-url https://platform.example.com --token $TESTIFYSEC_TOKEN",
+			"  # CI/headless: provide a JWT plus the tenant+product to bind\n" +
+			"  cilock login --platform-url https://platform.example.com --token $TESTIFYSEC_TOKEN \\\n" +
+			"    --tenant-id <uuid> --product-id <uuid>",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -52,18 +55,21 @@ func LoginCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Headless (--token) login binds tenant+product from flags — the browser
+			// approve page supplies them for the interactive path. cilock binds every
+			// attestation to a tenant+product, so the contract is enforced here too.
+			if cred.AuthMode == auth.AuthModeToken {
+				applyScopeFlags(cred, tenantID, tenantName, productID, productName)
+				if cred.TenantID == "" || cred.ProductID == "" {
+					return fmt.Errorf("--token login requires --tenant-id and --product-id " +
+						"(cilock binds every attestation to a tenant+product); pass them, " +
+						"run `cilock login` interactively, or set them later with `cilock use`")
+				}
+			}
 			if err := auth.Save(*cred); err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			switch {
-			case cred.AuthMode == auth.AuthModeWorkflowOIDC:
-				_, _ = fmt.Fprintf(out, "✓ workflow identity active for %s (GitHub Actions OIDC; cilock run mints a token per call)\n", auth.NormalizeURL(url))
-			case cred.TenantName != "":
-				_, _ = fmt.Fprintf(out, "✓ logged in to %s (tenant: %s)\n", auth.NormalizeURL(url), cred.TenantName)
-			default:
-				_, _ = fmt.Fprintf(out, "✓ logged in to %s\n", auth.NormalizeURL(url))
-			}
+			printLoginResult(cmd.OutOrStdout(), url, cred)
 			return nil
 		},
 	}
@@ -71,6 +77,10 @@ func LoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&token, "token", "", "JWT for CI/headless login (skips the browser); '-' reads it from stdin")
 	cmd.Flags().StringVar(&tenant, "tenant", "", "Tenant id or name to pre-select on the approve page")
 	cmd.Flags().StringVar(&product, "product", "", "Product id or name to pre-select on the approve page")
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "Tenant UUID to bind for a headless --token login")
+	cmd.Flags().StringVar(&tenantName, "tenant-name", "", "Tenant name to record with --tenant-id")
+	cmd.Flags().StringVar(&productID, "product-id", "", "Product UUID to bind for a headless --token login")
+	cmd.Flags().StringVar(&productName, "product-name", "", "Product name to record with --product-id")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "Force the interactive browser login (skip ambient CI workflow identity)")
 	cmd.Flags().BoolVar(&workflowIdentity, "workflow-identity", false, "Use the ambient CI workflow OIDC identity (auto-detected on the default platform; required to send a workflow token to a non-default --platform-url)")
 	cmd.Flags().BoolVar(&allowTrust, "allow-trust", false, "Also grant the narrow oidc:write scope so this session can register CI trust with `cilock trust` (off by default)")
@@ -137,6 +147,44 @@ func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product stri
 			Purpose:    "cilock CLI",
 			AllowTrust: allowTrust,
 		})
+	}
+}
+
+// printLoginResult reports the stored session after a successful login: the
+// workflow-identity marker, or the logged-in tenant + bound product (nudging to
+// `cilock use` when no product is bound).
+func printLoginResult(out io.Writer, url string, cred *auth.Credential) {
+	if cred.AuthMode == auth.AuthModeWorkflowOIDC {
+		_, _ = fmt.Fprintf(out, "✓ workflow identity active for %s (GitHub Actions OIDC; cilock run mints a token per call)\n", auth.NormalizeURL(url))
+		return
+	}
+	_, _ = fmt.Fprintf(out, "✓ logged in to %s\n", auth.NormalizeURL(url))
+	if cred.TenantName != "" || cred.TenantID != "" {
+		_, _ = fmt.Fprintf(out, "  tenant:  %s %s\n", cred.TenantName, cred.TenantID)
+	}
+	if cred.ProductName != "" || cred.ProductID != "" {
+		_, _ = fmt.Fprintf(out, "  product: %s %s\n", cred.ProductName, cred.ProductID)
+	} else {
+		_, _ = fmt.Fprintf(out, "  ⚠ no working product bound — set one with `cilock use`\n")
+	}
+}
+
+// applyScopeFlags binds an explicit --tenant-id/--product-id (and their name
+// labels) onto a headless (--token) credential before it is stored. Empty flags
+// leave existing values unchanged. Mirrors the scope the browser approve page
+// would otherwise negotiate.
+func applyScopeFlags(c *auth.Credential, tenantID, tenantName, productID, productName string) {
+	if tenantID != "" {
+		c.TenantID = tenantID
+	}
+	if tenantName != "" {
+		c.TenantName = tenantName
+	}
+	if productID != "" {
+		c.ProductID = productID
+	}
+	if productName != "" {
+		c.ProductName = productName
 	}
 }
 

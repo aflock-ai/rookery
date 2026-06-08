@@ -57,6 +57,71 @@ func TestStoreRoundTrip(t *testing.T) {
 	assert.Nil(t, got, "lookup after delete must be nil")
 }
 
+// TestSetScope_UpdatesBindingPreservesToken is the core of `cilock use`: rebinding
+// the working product must change only the scope fields and leave token / auth
+// mode / tenant / expiry untouched.
+func TestSetScope_UpdatesBindingPreservesToken(t *testing.T) {
+	isolateConfig(t)
+
+	exp := time.Now().Add(time.Hour)
+	require.NoError(t, Save(Credential{
+		PlatformURL: "https://p.example.com",
+		Token:       "jwt-abc",
+		AuthMode:    AuthModeBrowser,
+		TenantID:    "t-1",
+		TenantName:  "acme",
+		ExpiresAt:   exp,
+	}))
+
+	// Rebind product only (tenant args empty) — tenant/token/expiry must survive.
+	require.NoError(t, SetScope("https://p.example.com/", "", "", "prod-9", "Widget"))
+
+	got, err := Lookup("https://p.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "jwt-abc", got.Token, "token preserved")
+	assert.Equal(t, AuthModeBrowser, got.AuthMode, "auth mode preserved")
+	assert.Equal(t, "t-1", got.TenantID, "tenant id preserved")
+	assert.Equal(t, "acme", got.TenantName, "tenant name preserved")
+	assert.Equal(t, "prod-9", got.ProductID, "product id bound")
+	assert.Equal(t, "Widget", got.ProductName, "product name bound")
+	assert.WithinDuration(t, exp, got.ExpiresAt, time.Second, "expiry preserved")
+}
+
+// TestSetScope_RequiresExistingCredential confirms you must `cilock login` first.
+func TestSetScope_RequiresExistingCredential(t *testing.T) {
+	isolateConfig(t)
+	err := SetScope("https://nope.example.com", "", "", "p", "P")
+	require.Error(t, err, "SetScope with no stored credential must error")
+}
+
+// TestLookupJctl_InheritsProduct confirms a prior `jctl config set-product` is
+// inherited by cilock's read-through (product_id/product_name were dropped before).
+func TestLookupJctl_InheritsProduct(t *testing.T) {
+	isolateConfig(t) // HOME -> temp dir
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".jctl"), 0o700))
+	cfgYAML := `current_context: p
+contexts:
+  p:
+    judgeURL: https://p.example.com
+    token: jctl-jwt
+    tenant_id: t-1
+    tenant_name: acme
+    product_id: prod-7
+    product_name: Gadget
+`
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".jctl", "config.yaml"), []byte(cfgYAML), 0o600))
+
+	got, err := Lookup("https://p.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, got, "jctl fallback should resolve")
+	assert.Equal(t, "jctl-jwt", got.Token)
+	assert.Equal(t, "prod-7", got.ProductID, "product_id inherited from jctl config")
+	assert.Equal(t, "Gadget", got.ProductName, "product_name inherited from jctl config")
+}
+
 func TestExpiredCredentialNotReturned(t *testing.T) {
 	isolateConfig(t)
 	require.NoError(t, Save(Credential{
