@@ -60,6 +60,31 @@ sha256_check() {
   fi
 }
 
+# manifest_latest extracts the "latest" stable tag from the manifest JSON on stdin.
+# Trailing `|| true`: a no-match grep returns non-zero, which would trip the
+# caller's `set -o pipefail`; an empty result is the caller's "not found" signal.
+manifest_latest() {
+  { grep -oE '"latest"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/'; } || true
+}
+
+# manifest_sha extracts the per-file sha256 for $1 (an archive filename) from the
+# manifest JSON on stdin. The manifest's files[] entries are
+# {"name":"<archive>","sha256":"<hex>",...}; splitting on '}' isolates one object
+# per line so we read the sha256 from the SAME object as the matching name.
+# Prints the hex digest, or nothing if the manifest doesn't carry it. This is the
+# primary integrity source: it's always published with the manifest, unlike the
+# aggregate checksums-sha256.txt which isn't present for every version.
+manifest_sha() {
+  # Trailing `|| true`: when the file has no sha256 entry the inner grep returns
+  # non-zero, which would trip the caller's `set -o pipefail` and abort before the
+  # checksums-sha256.txt fallback. An empty result is the "not found" signal.
+  { tr '}' '\n' \
+    | grep -F "\"$1\"" \
+    | grep -oE '"sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' \
+    | head -1 \
+    | sed -E 's/.*"([0-9a-f]+)"$/\1/'; } || true
+}
+
 detect_platform() {
   local os arch
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -76,17 +101,17 @@ detect_platform() {
   printf '%s %s\n' "$os" "$arch"
 }
 
+# resolve_version returns the version to install: an explicit CILOCK_VERSION, else
+# the manifest's "latest" stable. $1 is the already-fetched manifest JSON.
 resolve_version() {
   if [ -n "$CILOCK_VERSION" ]; then
     printf '%s\n' "$CILOCK_VERSION"
     return
   fi
-  require curl "https://curl.se"
   # Latest stable comes from the signed-publish manifest on cilock.dev — no
   # GitHub dependency. Pre-releases do not move "latest"; set CILOCK_VERSION for those.
   local tag
-  tag="$(curl -fsSL "${DIST_BASE}/dl/manifest.json" \
-    | grep -oE '"latest"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
+  tag="$(printf '%s' "$1" | manifest_latest)"
   [ -n "$tag" ] || die "could not resolve latest version from ${DIST_BASE}/dl/manifest.json (set CILOCK_VERSION to install a specific or pre-release version)"
   printf '%s\n' "$tag"
 }
@@ -110,8 +135,15 @@ main() {
   require tar "your package manager"
 
   read -r os arch <<<"$(detect_platform)"
+
+  # Fetch the manifest once — it carries both the "latest" pointer and the
+  # per-file sha256 used to verify the download.
+  local manifest
+  manifest="$(curl -fsSL "${DIST_BASE}/dl/manifest.json")" \
+    || die "could not fetch ${DIST_BASE}/dl/manifest.json"
+
   local version bin_dir version_clean
-  version="$(resolve_version)"
+  version="$(resolve_version "$manifest")"
   version_clean="${version#v}"
   bin_dir="$(resolve_bin_dir)"
 
@@ -119,7 +151,11 @@ main() {
 
   local tmpdir
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' EXIT
+  # Guard with :- because the EXIT trap fires at script scope, after main()
+  # returns and its `local tmpdir` is gone — a bare $tmpdir there is an unbound
+  # variable under `set -u`, which made install.sh exit non-zero (looking like a
+  # failure) right after a successful install.
+  trap 'rm -rf "${tmpdir:-}"' EXIT
 
   local archive="cilock-${version_clean}-${os}-${arch}.tar.gz"
   # Versioned distribution path on cilock.dev (served from R2; the release
@@ -129,11 +165,25 @@ main() {
 
   log "  downloading ${archive} from ${base}"
   curl -fsSL "${base}/${archive}" -o "${tmpdir}/${archive}"
-  curl -fsSL "${base}/checksums-sha256.txt" -o "${tmpdir}/checksums-sha256.txt"
 
-  log "  verifying SHA256 against checksums-sha256.txt"
-  (cd "${tmpdir}" && grep " ${archive}\$" checksums-sha256.txt | sha256_check) \
-    || die "checksum verification failed"
+  # Verify against the manifest's per-file sha256 (always published with the
+  # manifest). Only fall back to the aggregate checksums-sha256.txt if the
+  # manifest doesn't carry the digest — that file isn't present for every
+  # version, and hard-requiring it broke installs of versions that are otherwise
+  # complete and verifiable.
+  local want_sha
+  want_sha="$(printf '%s' "$manifest" | manifest_sha "$archive")"
+  if [ -n "$want_sha" ]; then
+    log "  verifying SHA256 against the signed manifest"
+    printf '%s  %s\n' "$want_sha" "$archive" | (cd "${tmpdir}" && sha256_check) \
+      || die "checksum verification failed (manifest sha256 mismatch for ${archive})"
+  else
+    log "  verifying SHA256 against checksums-sha256.txt"
+    curl -fsSL "${base}/checksums-sha256.txt" -o "${tmpdir}/checksums-sha256.txt" \
+      || die "no sha256 for ${archive} in the manifest and ${base}/checksums-sha256.txt is missing"
+    (cd "${tmpdir}" && grep " ${archive}\$" checksums-sha256.txt | sha256_check) \
+      || die "checksum verification failed"
+  fi
 
   log "  extracting"
   tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}"

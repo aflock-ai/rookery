@@ -225,6 +225,14 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      # Gate the release on install.sh actually working: the smoke test runs the
+      # real installer against a local file:// "distribution" (no network) and
+      # proves it installs via the manifest's per-file sha256, rejects a tampered
+      # archive, and still falls back to checksums-sha256.txt. Self-contained
+      # (curl + tar + sha256sum), so a broken front-door can't ship.
+      - name: Smoke-test install.sh
+        run: bash deploy/cilock/install_test.sh
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
