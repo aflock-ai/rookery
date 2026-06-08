@@ -20,14 +20,41 @@ package attestation
 func DefaultSensitiveEnvList() map[string]struct{} { //nolint:funlen
 	return map[string]struct{}{
 
-		// Glob pattern list
-		"*TOKEN*":      {},
-		"*SECRET*":     {},
-		"*API_KEY*":    {},
-		"*PASSWORD*":   {},
-		"*JWT*":        {},
-		"*sshKey*":     {},
-		"*passphrase*": {},
+		// Glob pattern list. Broad on purpose: the attestor OBFUSCATES matches
+		// (value -> ****, key retained), so over-matching a non-secret var is
+		// harmless, while a miss leaks a credential into a signed/published
+		// attestation. A real GITHUB_PAT leaked publicly because the list had
+		// *TOKEN*/*SECRET*/*KEY* patterns but nothing matching "PAT" — fixed below.
+		"*TOKEN*":             {},
+		"*SECRET*":            {},
+		"*API_KEY*":           {},
+		"*APIKEY*":            {},
+		"*KEY*":               {}, // access keys, signing keys, private keys, etc.
+		"*PASSWORD*":          {},
+		"*PASSWD*":            {},
+		"*PWD*":               {},
+		"*PASSPHRASE*":        {},
+		"*JWT*":               {},
+		"*sshKey*":            {},
+		"*PAT*":               {}, // personal access tokens (GITHUB_PAT, GH_PAT, ...)
+		"*CREDENTIAL*":        {},
+		"*CRED*":              {},
+		"*AUTH*":              {}, // AUTHORIZATION, *_AUTH, OAUTH bearer creds
+		"*OAUTH*":             {},
+		"*BEARER*":            {},
+		"*PRIVATE*":           {}, // PRIVATE_KEY and friends
+		"*SIGNING*":           {},
+		"*ACCESS_KEY*":        {},
+		"*SESSION_TOKEN*":     {},
+		"*WEBHOOK*":           {}, // webhook URLs frequently embed a secret
+		"*DSN*":               {}, // datasource/connection strings carry passwords
+		"*CONNECTION_STRING*": {},
+		"*DATABASE_URL*":      {},
+		"*passphrase*":        {},
+
+		// Explicitly named tokens not caught by the globs above.
+		"GITHUB_PAT": {},
+		"GH_PAT":     {},
 
 		// Explicit list
 		"AWS_ACCESS_KEY_ID":              {},
