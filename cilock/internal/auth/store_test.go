@@ -211,3 +211,27 @@ func TestLookupAnyIncludingExpired_PrefersValidJctlOverExpiredCilock(t *testing.
 	require.NotNil(t, la)
 	assert.Equal(t, "fresh-jctl-token", la.Token, "doctor and run must resolve the same credential")
 }
+
+// TestActivePlatformURL is the "default to the platform you logged into" behavior:
+// the most recent login is active; logout falls back to the sole remaining one.
+func TestActivePlatformURL(t *testing.T) {
+	isolateConfig(t)
+
+	// No credentials → empty (callers fall back to the compiled default).
+	assert.Equal(t, "", ActivePlatformURL())
+
+	// Login to staging → staging is the active platform.
+	require.NoError(t, Save(Credential{PlatformURL: "https://staging.example.com", Token: "s", ExpiresAt: time.Now().Add(time.Hour)}))
+	assert.Equal(t, "https://staging.example.com", ActivePlatformURL())
+
+	// A later login to prod makes prod active (most recent write).
+	require.NoError(t, Save(Credential{PlatformURL: "https://prod.example.com", Token: "p", ExpiresAt: time.Now().Add(time.Hour)}))
+	assert.Equal(t, "https://prod.example.com", ActivePlatformURL())
+
+	// Logging out of prod clears the dangling active platform and falls back to
+	// the sole remaining credential (staging).
+	removed, err := Delete("https://prod.example.com")
+	require.NoError(t, err)
+	require.True(t, removed)
+	assert.Equal(t, "https://staging.example.com", ActivePlatformURL())
+}

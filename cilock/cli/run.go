@@ -945,7 +945,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 
 			gitoid, err := archivistaClient.Store(ctx, result.SignedEnvelope)
 			if err != nil {
-				return fmt.Errorf("failed to store artifact in archivista: %w", err)
+				return uploadError(ro.PlatformURL, err)
 			}
 			log.Infof("Stored in archivista as %v\n", gitoid)
 			// The collection envelope (AttestorName == "") carries the
@@ -1020,7 +1020,11 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// expecting end-to-end platform integration. Call it out with the one flag
 	// that fixes it.
 	if shouldWarnNotUploaded(ro.PlatformURL, ro.ArchivistaOptions.Enable, runFailed, ro.OutputJSON()) {
-		fmt.Fprintln(os.Stderr, "warning: signed locally; not uploaded (pass --enable-archivista to store on the platform)")
+		// Upload is auto-enabled whenever a platform identity is present, so this
+		// fires only when there is no usable identity (e.g. a local-key run with no
+		// `cilock login`) or upload was explicitly disabled — don't prescribe a flag
+		// that may not be the fix.
+		fmt.Fprintln(os.Stderr, "warning: signed locally; not uploaded to the platform (run `cilock login` to store attestations there)")
 	}
 	if ro.OutputJSON() {
 		if err := summary.WriteJSON(os.Stdout); err != nil {
@@ -1050,6 +1054,22 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 // unit-testable without driving a full run.
 func shouldWarnNotUploaded(platformURL string, archivistaEnabled, runFailed, jsonOutput bool) bool {
 	return platformURL != "" && !archivistaEnabled && !runFailed && !jsonOutput
+}
+
+// uploadError wraps an Archivista store failure. Signing already succeeded, so a
+// platform upload 401/403 almost always means the repo/identity is not trusted
+// for upload yet — surface the one-time fix (`cilock trust`) instead of a raw
+// "Invalid API credential". Non-auth failures (network, 5xx) pass through.
+func uploadError(platformURL string, err error) error {
+	msg := err.Error()
+	if platformURL != "" && (strings.Contains(msg, "401") || strings.Contains(msg, "403") ||
+		strings.Contains(msg, "Invalid API credential")) {
+		return fmt.Errorf("upload to %s rejected (%w)\n"+
+			"  this repo/identity is not trusted for upload yet — run `cilock trust` once,\n"+
+			"  or sign without uploading via --enable-archivista=false",
+			platformURL, err)
+	}
+	return fmt.Errorf("failed to store attestation on the platform: %w", err)
 }
 
 // buildRunSummary assembles the structured RunSummary from data the run

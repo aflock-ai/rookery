@@ -33,11 +33,11 @@ func UseCmd() *cobra.Command {
 			"                       page to resolve names to ids and auto-create a default\n" +
 			"                       tenant/product if you have none, then persist the choice.",
 		Example: "  # Switch the working product by id (no browser)\n" +
-			"  cilock use --product-id 5664d4f5-9003-41e8-90e4-035c51d09b45 --product-name \"My Product\"\n\n" +
+			"  cilock use --product-id 5664d4f5-9003-41e8-90e4-035c51d09b45 --product-name acme-web\n\n" +
 			"  # Pick or create tenant+product interactively\n" +
 			"  cilock use\n\n" +
 			"  # Pre-select by name on the approve page\n" +
-			"  cilock use --tenant acme --product \"My Product\"",
+			"  cilock use --tenant acme --product acme-web",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,

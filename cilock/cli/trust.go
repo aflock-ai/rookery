@@ -117,7 +117,12 @@ func runTrust(cmd *cobra.Command, args []string, o *options.TrustOptions, platfo
 
 	o.PlatformURL = platformURL
 	if o.PlatformURL == "" {
-		o.PlatformURL = config.DefaultPlatformURL
+		// Default to the platform you logged into, not the compiled prod default.
+		if active := auth.ActivePlatformURL(); active != "" {
+			o.PlatformURL = active
+		} else {
+			o.PlatformURL = config.DefaultPlatformURL
+		}
 	}
 
 	// Require a real (token-bearing) admin session.
@@ -170,7 +175,7 @@ func runTrust(cmd *cobra.Command, args []string, o *options.TrustOptions, platfo
 	_, _ = fmt.Fprintf(out, "  issuer:   %s\n  subject:  %s\n  audience: %s\n  scopes:   %s\n",
 		created.IssuerURL, created.Subject, created.Audience, strings.Join(created.Scopes, ", "))
 	_, _ = fmt.Fprintf(out, "\nWorkflows matching %q can now upload attestations. Verify with:\n"+
-		"  cilock run --platform-url %s --enable-archivista -- <build>\n",
+		"  cilock run --platform-url %s -- <build>\n",
 		created.Subject, auth.NormalizeURL(o.PlatformURL))
 	return nil
 }

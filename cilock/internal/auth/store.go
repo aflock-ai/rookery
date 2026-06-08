@@ -52,6 +52,10 @@ func (c Credential) Expired() bool {
 
 type fileStore struct {
 	Credentials map[string]Credential `json:"credentials"`
+	// CurrentPlatform is the platform of the most recent login/use — the active
+	// working platform, so `cilock run`/`trust` default to where you logged in
+	// instead of the compiled-in default. Cleared when its credential is deleted.
+	CurrentPlatform string `json:"current_platform,omitempty"`
 }
 
 // NormalizeURL trims a trailing slash so lookups are stable.
@@ -98,6 +102,8 @@ func Save(c Credential) error {
 		return err
 	}
 	s.Credentials[c.PlatformURL] = c
+	// The most recently written credential becomes the active working platform.
+	s.CurrentPlatform = c.PlatformURL
 	path, err := StorePath()
 	if err != nil {
 		return err
@@ -147,6 +153,30 @@ func SetScope(platformURL, tenantID, tenantName, productID, productName string) 
 	return Save(c)
 }
 
+// ActivePlatformURL returns the platform a bare command should target when
+// --platform-url is not given: the most recent login/use (CurrentPlatform) if it
+// still has a stored credential, else the sole stored credential's URL, else ""
+// (callers then fall back to the compiled default). This is what lets
+// `cilock run` / `cilock trust` default to the platform you logged into rather
+// than the hard-coded prod default.
+func ActivePlatformURL() string {
+	s, err := load()
+	if err != nil {
+		return ""
+	}
+	if s.CurrentPlatform != "" {
+		if _, ok := s.Credentials[s.CurrentPlatform]; ok {
+			return s.CurrentPlatform
+		}
+	}
+	if len(s.Credentials) == 1 {
+		for url := range s.Credentials {
+			return url
+		}
+	}
+	return ""
+}
+
 // Delete removes the credential for a platform URL. Returns whether one existed.
 func Delete(platformURL string) (bool, error) {
 	s, err := load()
@@ -158,6 +188,9 @@ func Delete(platformURL string) (bool, error) {
 		return false, nil
 	}
 	delete(s.Credentials, key)
+	if s.CurrentPlatform == key {
+		s.CurrentPlatform = "" // don't leave a dangling active platform
+	}
 	path, _ := StorePath()
 	data, _ := json.MarshalIndent(s, "", "  ")
 	if err := os.WriteFile(path, data, 0o600); err != nil {

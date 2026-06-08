@@ -74,11 +74,12 @@ func TestResolvePlatformDefaults_WorkflowIdentityKeyless(t *testing.T) {
 	if got, _ := gotAudience.Load().(string); got != "sigstore" {
 		t.Fatalf("minted OIDC audience = %q, want %q", got, "sigstore")
 	}
-	// A workflow-identity marker maps to no platform tenant, so Archivista upload
-	// would 401 and `cilock run` treats that as fatal. Auto-enabling it would break
-	// the minimal-flag ambient UX, so a workflow login must NOT default it on.
-	if ro.ArchivistaOptions.Enable {
-		t.Fatal("workflow-identity must NOT auto-enable Archivista (no tenant; upload would 401 and is fatal)")
+	// A workflow login auto-enables Archivista upload too (parity with a session):
+	// a TRUSTED CI repo (after `cilock trust`) uploads flag-free, and an UNTRUSTED
+	// one gets an actionable "run cilock trust" error on upload (uploadError in
+	// cli/run.go) rather than a silent sign-only — so no --enable-archivista needed.
+	if !ro.ArchivistaOptions.Enable {
+		t.Fatal("workflow-identity must auto-enable Archivista (trusted CI uploads flag-free; untrusted gets an actionable error)")
 	}
 }
 

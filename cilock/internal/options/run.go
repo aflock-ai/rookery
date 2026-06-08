@@ -442,6 +442,19 @@ var RequiredRunFlags = []string{
 // compiled-in DefaultPlatformURL. In that mode no TSA is added (signing
 // continues with the configured signer only — no third-party
 // timestamp) and the archivista URL stays whatever the user set.
+// applyActivePlatformDefault points --platform-url at the platform you logged
+// into (the active stored platform) when the flag was not given and we're not
+// offline — so `cilock login <staging>` then a bare `cilock run` targets staging
+// rather than the compiled-in prod default.
+func (ro *RunOptions) applyActivePlatformDefault(cmd *cobra.Command) {
+	if cmd.Flags().Changed("platform-url") || ro.Offline {
+		return
+	}
+	if active := auth.ActivePlatformURL(); active != "" {
+		ro.PlatformURL = active
+	}
+}
+
 func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// --offline is a clear alias for --platform-url "". Clear the platform URL
 	// up front so the explicit-disable path below takes over; cmd.Flags() is
@@ -451,6 +464,8 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 		ro.PlatformURL = ""
 		log.Info("--offline: running with no platform (no hosted Fulcio/TSA/Archivista, no session lookup)")
 	}
+
+	ro.applyActivePlatformDefault(cmd)
 
 	// Detect the explicit-disable case. If the user did NOT change
 	// --platform-url, ro.PlatformURL holds the compiled-in default.
@@ -659,14 +674,16 @@ func (ro *RunOptions) applyPlatformCredential(cmd *cobra.Command, cred *auth.Cre
 		ro.resolvedAssuranceLevel = applyKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred.Token)
 	}
 
-	// Archivista on by default when logged in with a SESSION/token credential —
-	// it carries a tenant and can authorize the upload. NOT for a workflow-identity
-	// marker (empty token): a raw workflow identity maps to no tenant and would 401
-	// on upload, and `cilock run` treats an upload failure as fatal — auto-enabling
-	// it would break the minimal-flag ambient UX (sign-only). Those users opt in
-	// explicitly with --enable-archivista once they have a tenant-authorized path.
-	// Never override an explicit choice; the offline/no-platform path keeps false.
-	if cred.Token != "" && !cmd.Flags().Changed("enable-archivista") && !cmd.Flags().Changed("enable-archivist") {
+	// Archivista on by default whenever we have a platform identity — a SESSION
+	// credential (carries a tenant) OR a CI workflow identity (whose ambient OIDC
+	// `cilock trust` maps to a tenant; its upload auth comes from --archivista-oidc,
+	// auto-enabled in GitHub Actions). The user clearly wants their evidence on the
+	// platform, so requiring --enable-archivista is needless friction — and silently
+	// NOT uploading is its own footgun. An UNTRUSTED CI identity gets a clear
+	// "run cilock trust" error on upload (see uploadError in cli/run.go), not a
+	// silent sign-only. Never override an explicit choice; offline/no-platform
+	// (no credential resolved here) keeps Enable false.
+	if !cmd.Flags().Changed("enable-archivista") && !cmd.Flags().Changed("enable-archivist") {
 		ro.ArchivistaOptions.Enable = true
 	}
 }
