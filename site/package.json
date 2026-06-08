@@ -7,6 +7,7 @@
     "gen:catalog": "node scripts/gen-catalog.mjs",
     "gen:pages": "node scripts/gen-pages.mjs",
     "gen": "node scripts/gen-catalog.mjs && node scripts/gen-pages.mjs",
+    "check:cli": "node scripts/check-cli-coverage.mjs",
     "publish:release": "node scripts/publish-release.mjs",
     "start": "docusaurus start",
     "build": "docusaurus build",

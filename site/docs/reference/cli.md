@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # `cilock` CLI reference
 
-> Source of truth: [`rookery/cilock/cmd/cilock/main.go`](https://github.com/aflock-ai/rookery/blob/main/cilock/cmd/cilock/main.go) and [`rookery/cilock/internal/cmd/`](https://github.com/aflock-ai/rookery/tree/main/cilock/internal/cmd). All defaults and flag names below match `cilock 1.1.0`.
+> Source of truth: [`rookery/cilock/cmd/cilock/main.go`](https://github.com/aflock-ai/rookery/blob/main/cilock/cmd/cilock/main.go) and [`rookery/cilock/internal/cmd/`](https://github.com/aflock-ai/rookery/tree/main/cilock/internal/cmd). Defaults and flag names below track the released `cilock` and are completeness-gated against the binary in CI (`scripts/check-cli-coverage.mjs`) — every command has a section here.
 
 ```
 cilock - Collect and verify attestations about your build environments
@@ -17,6 +17,12 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 
 | Command | Purpose |
 |---|---|
+| `cilock login` | Sign in to the platform and store a session bound to a working tenant + product. |
+| `cilock use` | Switch the working tenant/product the stored session binds attestations to. |
+| `cilock whoami` | Show the current platform session (tenant, product, expiry). |
+| `cilock logout` | Remove the stored platform session credential. |
+| `cilock trust [provider] [owner/repo]` | Register an OIDC identity the platform trusts for keyless upload (CI). |
+| `cilock doctor` | Read-only preflight: is the environment sane to attest + upload against the platform? |
 | `cilock run [cmd]` | Run a command and record signed attestations about its execution. |
 | `cilock attest` | Record attestations without wrapping a command (sugar for `run -- true`; for consultative/at-rest attestors). |
 | `cilock sign [file]` | Sign an arbitrary file (typically a policy) with the configured signer. |
@@ -27,10 +33,10 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock policy validate` | Validate a Witness/cilock policy document (schema only, no signature check). |
 | `cilock keyid` | Print the canonical keyid (`hex(sha256(PEM(pub)))`) derived from a public or private key. |
 | `cilock bundle create` / `inspect` | Build or inspect a portable attestation bundle (tar.gz of DSSE envelopes). |
-| `cilock plan [cmd]` | Show which attestors detection would fire for a command, without executing it. |
+| `cilock plan -- <cmd>` | Show which attestors detection would fire for a command, without executing it. |
 | `cilock attestors list` | List every attestor compiled into the binary. |
 | `cilock attestors schema <name>` | Print the JSON schema of a specific attestor's predicate. |
-| `cilock tools` | List supported detectors and emit per-tool test plans. |
+| `cilock tools list` / `show` / `test-plan` | List supported detectors, show one, or emit per-tool test plans. |
 | `cilock completion <shell>` | Emit shell completion script (bash, zsh, fish, powershell). |
 | `cilock version` | Print the `cilock` version. |
 
@@ -45,6 +51,135 @@ These persistent flags are accepted on every subcommand:
 | `--debug-cpu-profile-file <path>` | (none) | Write a CPU pprof profile to this path. Profiling enabled when non-empty. |
 | `--debug-mem-profile-file <path>` | (none) | Write a heap pprof profile to this path. Profiling enabled when non-empty. |
 
+## Platform session & CI trust
+
+These commands establish and inspect the platform session that attestation **upload** (and keyless signing-token exchange) need. Signing itself is keyless and needs no login; uploading to Archivista binds the evidence to your tenant/product, which is what the session carries. The onboarding path is `login` → (`use` to switch scope) → `trust` to let CI upload → `doctor` to preflight.
+
+The platform is derived from a single `--platform-url` (default `https://platform.testifysec.com`); it auto-resolves Fulcio, TSA, and Archivista from that host's discovery document. After login, bare commands default to the platform you logged into.
+
+### `cilock login`
+
+Sign in and store a session credential. The browser approve page binds a working **tenant AND product** — creating a default tenant/product if you have none — so every subsequent attestation is scoped to one. Identity resolves by precedence: `--token` (explicit JWT, CI/headless; `-` reads stdin) → ambient CI workflow OIDC (GitHub Actions, auto-detected) → interactive browser (default for local use).
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform to sign in to. |
+| `--token <jwt>` | (none) | JWT for CI/headless login (skips the browser); `-` reads it from stdin. |
+| `--workflow-identity` | `false` | Use the ambient CI workflow OIDC identity (auto-detected on the default platform; **required** to send a workflow token to a non-default `--platform-url`). |
+| `--interactive` | `false` | Force the interactive browser login (skip ambient CI identity). |
+| `--tenant <id\|name>` / `--product <id\|name>` | (none) | Pre-select tenant/product on the approve page. |
+| `--tenant-id <uuid>` / `--product-id <uuid>` | (none) | Bind tenant/product directly for a headless `--token` login. |
+| `--tenant-name` / `--product-name <str>` | (none) | Label to record alongside `--tenant-id` / `--product-id`. |
+| `--allow-trust` | `false` | Also grant the narrow `oidc:write` scope so this session can run [`cilock trust`](#cilock-trust). Off by default. |
+
+```bash
+# Interactive browser login (binds tenant+product on the approve page)
+cilock login
+
+# CI on GitHub Actions: ambient workflow identity (needs permissions: id-token: write)
+cilock login --workflow-identity --platform-url "$PLATFORM_URL"
+
+# CI/headless with an explicit JWT + the tenant+product to bind
+cilock login --platform-url https://platform.example.com --token "$TESTIFYSEC_TOKEN" \
+  --tenant-id <uuid> --product-id <uuid>
+```
+
+### `cilock use`
+
+Switch the working tenant + product the stored session binds attestations to, so `cilock run` scopes evidence without re-prompting. Requires an existing session (`cilock login` first). The analog of `kubectl config use-context` for cilock.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--product-id <uuid>` / `--tenant-id <uuid>` | (none) | Bind directly (no browser). |
+| `--product-name` / `--tenant-name <str>` | (none) | Label recorded alongside the id. |
+| `--product <id\|name>` / `--tenant <id\|name>` | (none) | Select by name on the approve page (re-opens the browser to resolve names → ids, auto-creating a default tenant/product if you have none). |
+| `--platform-url <url>` | active session's platform | Platform whose session to rebind. |
+
+```bash
+# Switch the working product by id (no browser)
+cilock use --product-id 5664d4f5-9003-41e8-90e4-035c51d09b45 --product-name acme-web
+
+# Pick or create tenant+product interactively
+cilock use
+
+# Pre-select by name on the approve page
+cilock use --tenant acme --product acme-web
+```
+
+### `cilock whoami`
+
+Show the current platform session — the logged-in tenant, bound product, and expiry — for the given (or active) platform.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | active session's platform | Platform whose session to show. |
+
+```bash
+cilock whoami
+```
+
+### `cilock logout`
+
+Remove the stored platform session credential.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose session to remove. |
+
+```bash
+cilock logout
+```
+
+### `cilock trust`
+
+Register an OIDC **federated** identity the platform will trust for keyless attestation upload — the CI complement to [`cilock run`](#cilock-run-cmd). It creates an OIDC credential only; cilock never mints a long-lived API-token secret. Run it as a tenant admin after `cilock login --allow-trust` (the `oidc:write` scope is opt-in). The audience defaults to the same `${platform}/archivista` that `cilock run` uploads to, and the subject is templated from the provider's claim convention, so trust and run can't drift. Providers: `github`, `gitlab` (or `--issuer` + `--subject` for any other); on-prem GHES / self-hosted GitLab add `--host`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `[provider] [owner/repo]` | auto-detect repo | Positional: e.g. `github testifysec/judge`. With no args (interactive), detects the current repo. |
+| `--host <host>` | (none) | On-prem instance host for the provider (e.g. `github.acme.com`). |
+| `--issuer <url>` / `--subject <glob>` | (none) | Generic provider escape hatch (use together). |
+| `--audience <aud>` | `${platform-url}/archivista` | OIDC audience (matches `cilock run`). |
+| `--scope <s>` | `attestation:upload` | Repeatable. Only `attestation:{upload,read,verify}` allowed. |
+| `--verify` | `false` | Also grant `attestation:read` (for `cilock verify --enable-archivista`). |
+| `--allowed-ip <cidr>` | any | Source IP/CIDR allowlist (repeatable; e.g. the runner egress). |
+| `--name` / `--description <str>` | `<provider>:<slug>` | Credential name / description. |
+| `--tag <t>` | (none) | Categorization tag (repeatable). |
+| `--tenant <id>` | logged-in working tenant | Tenant to register the trust under. |
+| `--dry-run` | `false` | Print what would be created without calling the platform. |
+| `--yes, -y` | `false` | Skip the interactive confirmation. |
+
+```bash
+# Trust a GitHub repo's Actions to upload (most common)
+cilock trust github testifysec/judge
+
+# Interactive: auto-detect the current repo and confirm
+cilock trust
+
+# On-prem GitHub Enterprise Server
+cilock trust github acme/app --host github.acme.com
+
+# Any OIDC provider (generic escape hatch)
+cilock trust --issuer https://oidc.corp/foo --subject sub:acme:prod
+```
+
+### `cilock doctor`
+
+Read-only preflight (no build, no upload) of a cilock attestation environment. Prints a green/red checklist: logged in? platform reachable (`.well-known/judge-configuration` discovery)? Fulcio / TSA / Archivista destinations (derived + discovered); upload authorization (login session origin matches Archivista origin). Run it before a multi-minute `cilock run` to confirm signing + upload will work. `--json` emits a machine-readable report an agent can gate on (`report.ok`).
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform to probe. |
+| `--json` | `false` | Emit the preflight report as a single JSON object (`report.ok` is the rollup to gate on). |
+
+```bash
+# Check the default hosted platform
+cilock doctor
+
+# Check a self-hosted / standalone platform, machine-readable
+cilock doctor --platform-url https://judge.example.com --json
+```
+
 ## `cilock run [cmd]`
 
 > Runs the provided command and records attestations about the execution.
@@ -58,7 +193,7 @@ Only **one signer** is supported per `run` invocation (enforced at `cilock/inter
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--step <name>` | `-s` | inferred | Step category. Optional — when omitted, [inferred from the wrapped command](../concepts/step-categories). Must be a value from the step lexicon. |
-| `--attestations <list>` | `-a` | `environment,git` | **Comma-separated** attestors. Passing `-a` disables [auto-detection](../concepts/auto-detection-and-defaults) (set becomes exact) unless `--workload auto`. |
+| `--attestations <list>` | `-a` | `environment,git,platform` | **Comma-separated** attestors (`product` + `material` are always recorded). Passing `-a` disables [auto-detection](../concepts/auto-detection-and-defaults) (set becomes exact) unless `--workload auto`. |
 | `--workingdir <dir>` | `-d` | current dir | Working directory for material/product capture. |
 | `--outfile <path>` | `-o` | stdout | Path for the signed DSSE envelope. |
 | `--trace` | `-r` | `false` | Enable syscall tracing (Linux). Backend is ptrace+seccomp or eBPF — see [capture modes](../concepts/capture-modes). No-op on non-Linux. |
@@ -109,6 +244,24 @@ Additional providers (`spiffe`, `vault`, and per-cloud KMS broker clients with t
 
 For the full URI conventions, see [signing & identity](../concepts/signing-and-identity).
 
+## `cilock plan`
+
+> Dry-run of [`cilock run`](#cilock-run-cmd)'s pre-gate detection: prints which attestors **would fire** for a hypothetical command, which would be skipped (with reasons), and any warnings — **without executing** the command. Take the names from the `fire` list and pass them to `cilock run -a <attestor>,...` to run the planned set.
+
+| Flag | Default | Description |
+|---|---|---|
+| `-- <command> [args...]` | (required) | The command to plan for (after the `--` separator). |
+| `--format <fmt>` | `text` | `text` or `json` (machine-readable, for an agent to consume). |
+| `--verbose, -v` | `false` | Include the full skip list (every detector considered) in text output. |
+
+```bash
+# Show which attestors would fire for a build, without running it
+cilock plan -- go build ./...
+
+# Machine-readable plan for an agent to consume
+cilock plan --format json -- docker build -t app .
+```
+
 ## `cilock sign [file]`
 
 > Signs a file with the provided key source and outputs the signed file to the specified destination.
@@ -150,6 +303,40 @@ Full verifier flag list is in [`cilock/internal/options/verify.go`](https://gith
 
 Exit code **0** on policy pass, non-zero on any verification failure or error.
 
+## `cilock bundle`
+
+> Build or inspect a portable attestation **bundle** (a tar.gz of DSSE envelopes) — the offline-evidence companion to [`cilock verify --bundle`](#cilock-verify). `create` walks Archivista's subject graph from a digest and packs everything reachable; `inspect` prints a bundle's manifest so you can see what's inside before verifying.
+
+### `cilock bundle create`
+
+Pulls every DSSE envelope reachable from the given subject digest(s) via Archivista's subject graph and packs them into a tar.gz.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--subject, -s <digest>` | (required) | Subject digest(s) to seed the graph walk (e.g. `sha256:abc...`). Repeatable. |
+| `--output, -o <path>` | stdout | Path to write the bundle (tar.gz). |
+| `--max-depth <n>` | `5` | Maximum subject-graph traversal depth. |
+| `--max-envelopes <n>` | `10000` | Maximum envelopes to fetch before aborting. |
+
+```bash
+cilock bundle create -s sha256:<digest> -o evidence.tar.gz
+```
+
+### `cilock bundle inspect`
+
+Print a bundle's manifest and a per-envelope summary.
+
+| Flag | Default | Description |
+|---|---|---|
+| `<bundle.tar.gz>` | (required) | Bundle to inspect. |
+| `--json` | `false` | Emit the manifest as JSON (suppresses the per-envelope summary). |
+
+```bash
+cilock bundle inspect evidence.tar.gz
+# then verify offline against it:
+cilock verify ./app -p policy.signed.json -k pub.pem --bundle evidence.tar.gz --platform-url ""
+```
+
 ## `cilock attest`
 
 > Records attestations against the current context **without wrapping a command** — sugar for `cilock run -- true`. Every `run` flag works here. Use it for consultative / at-rest attestors that snapshot state (e.g. `github-review`, `aws-iid`) rather than observe a command.
@@ -189,12 +376,19 @@ cilock attest -a github-review -k key.pem -o review.bundle.json -s review-head
 cilock policy from-bundles -k signer.pub build.bundle.json scan.bundle.json -o policy.json
 ```
 
-## `cilock keyid`
+## `cilock keyid show`
 
-> Prints the canonical keyid — `hex(sha256(PEM(pubkey)))` — derived from a public or private key. The same value that appears in policy `functionaries[].publickeyid` and in attestation signatures.
+> Prints the canonical keyid — `hex(sha256(PEM(pubkey)))` — derived from a public or private key. The same value that appears in policy `functionaries[].publickeyid` and in attestation signatures. Reads PEM public keys (PKIX) or private keys (PKCS#8/PKCS#1/SEC1; the public half is extracted). One line per input (`<keyid>  <path>`, matching `sha256sum`'s shape). Keys come from positional args or `-k/--key`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `<key-file>...` / `--key, -k <path>` | (required) | Public or private key(s). `-k` takes a single file; mixing `-k` with positional args is an error. |
+| `--format <fmt>` | `text` | `text` = sha256sum-style lines; `json` = JSON array (for `jq`). |
 
 ```bash
-cilock keyid show -k key.pub
+cilock keyid show signer.pub
+cilock keyid show signer.key signer.pub other.pem
+cilock keyid show --format=json signer.key | jq .
 ```
 
 ## `cilock attestors list`
@@ -229,6 +423,55 @@ Prints the JSON Schema document for the named attestor's predicate. Useful for w
 ## `cilock policy validate <path>`
 
 Validates a Witness/cilock policy document for schema correctness. Does not perform signature verification.
+
+## `cilock tools`
+
+> The catalog of detectors cilock knows how to auto-fire (the same source [cilock.dev's tool pages](../tools/) render from). `list` enumerates them, `show` prints one tool's full record, `test-plan` emits a validation plan.
+
+### `cilock tools list`
+
+List every detector cilock knows how to auto-fire.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--category <cat>` | (all) | Filter by lexicon category (e.g. `build`, `vulnerability-scan`, `ci-context`, `sbom-generate`). |
+| `--source <src>` | (all) | Filter: `attestor-backed` \| `catalog-only`. |
+| `--format <fmt>` | `table` | `table` or `json`. |
+
+```bash
+cilock tools list
+cilock tools list --category vulnerability-scan --format json
+```
+
+### `cilock tools show <name>`
+
+Show full catalog detail for one tool/attestor — the same record the website generates from.
+
+| Flag | Default | Description |
+|---|---|---|
+| `<name>` | (required) | Tool/attestor to show (e.g. `sarif`). |
+| `--section <slug>` | (all) | Print only one documentation section, by slug (see the summary). |
+| `--format <fmt>` | `text` | `text` or `json` (the full machine-readable record). |
+
+```bash
+cilock tools show sarif
+cilock tools show sarif --section policy-gotcha
+cilock tools show sarif --format json
+```
+
+### `cilock tools test-plan`
+
+Emit a structured test plan describing how to validate each detector (what triggers it, the expected fire decision, and a negative case). Pipe `--format=json` into a runner that exercises each scenario against `cilock plan`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--only <name>` | (all) | Limit the plan to a single detector. |
+| `--format <fmt>` | `markdown` | `markdown` or `json`. |
+
+```bash
+cilock tools test-plan
+cilock tools test-plan --only sarif --format json
+```
 
 ## `cilock completion <shell>`
 
