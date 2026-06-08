@@ -641,6 +641,17 @@ Exit-code policy (finding #221):
 				log.Warnf("%v", cmdErr)
 			}
 
+			// First-run identity gate: a brand-new operator with no `cilock login`,
+			// no local --signer-* key, and no ambient CI OIDC identity would
+			// otherwise dead-end inside Fulcio signer construction with an opaque
+			// error ("failed to load any signers" / "no token provided") and never
+			// run the wrapped command. Catch it here with an actionable message that
+			// names 'cilock login'. Stands down for every path that CAN sign (local
+			// key, explicit token, CI ambient OIDC, logged-in session, --offline).
+			if err := o.PreflightIdentity(cmd); err != nil {
+				return err
+			}
+
 			signerProviders := providersFromFlags("signer", cmd.Flags())
 			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, signerProviders)
 			if err != nil {
@@ -1001,6 +1012,16 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	summary.ComputeSLSA(ro.PlatformURL, runFailed)
 	summary.AssuranceLevel = ro.ResolvedAssuranceLevel()
 	summary.WriteHuman(os.Stderr)
+	// Non-upload warning: when a platform is configured (--platform-url set)
+	// and signing succeeded but Archivista upload was never enabled, the signed
+	// attestation lives only on the operator's disk — it was NOT stored on the
+	// platform, so nothing on the platform can verify against it later. That is
+	// a silent surprise for a first-run operator who passed --platform-url
+	// expecting end-to-end platform integration. Call it out with the one flag
+	// that fixes it.
+	if shouldWarnNotUploaded(ro.PlatformURL, ro.ArchivistaOptions.Enable, runFailed, ro.OutputJSON()) {
+		fmt.Fprintln(os.Stderr, "warning: signed locally; not uploaded (pass --enable-archivista to store on the platform)")
+	}
 	if ro.OutputJSON() {
 		if err := summary.WriteJSON(os.Stdout); err != nil {
 			// Don't mask a successful run on a summary-marshal error, but make
@@ -1018,6 +1039,17 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		return classifyAttestorRunError(runErr)
 	}
 	return nil
+}
+
+// shouldWarnNotUploaded reports whether the run should emit the "signed locally;
+// not uploaded" stderr warning. The condition: a platform was configured
+// (platformURL non-empty) but Archivista upload was never enabled, the run did
+// not fatally fail (so there IS a completed signed attestation that could have
+// been uploaded), and the operator is not consuming machine-readable JSON (where
+// the Uploaded:false field already carries this fact). Pure so the policy is
+// unit-testable without driving a full run.
+func shouldWarnNotUploaded(platformURL string, archivistaEnabled, runFailed, jsonOutput bool) bool {
+	return platformURL != "" && !archivistaEnabled && !runFailed && !jsonOutput
 }
 
 // buildRunSummary assembles the structured RunSummary from data the run

@@ -552,6 +552,76 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	ensureFulcioURL(cmd, pc.Fulcio)
 }
 
+// explicitFulcioTokenSource reports whether the operator already supplied a
+// Fulcio token source on the command line (--signer-fulcio-token / -token-path /
+// -oidc-issuer). When true, the keyless platform identity is irrelevant — the
+// operator is bringing their own token — so the pre-flight identity gate must
+// stand down and let signer construction proceed.
+func explicitFulcioTokenSource(cmd *cobra.Command) bool {
+	for _, name := range []string{"signer-fulcio-token", "signer-fulcio-token-path", "signer-fulcio-oidc-issuer"} {
+		if g := cmd.Flags().Lookup(name); g != nil && g.Changed {
+			return true
+		}
+	}
+	return false
+}
+
+// PreflightIdentity is the first-run identity gate. A brand-new operator who
+// runs `cilock run --platform-url <url> -- <cmd>` with no `cilock login`, no
+// local --signer-* key, and no ambient CI OIDC identity has no way to obtain a
+// signing certificate: the bare path dead-ends in signer construction with
+// "failed to load any signers", and an explicit --signer-fulcio-url dead-ends in
+// "no token provided" — neither mentions "account" or "login", and the wrapped
+// build never runs. This returns a friendly, actionable error BEFORE signer
+// construction so the operator is steered to `cilock login` (or a local key)
+// instead of decoding a Fulcio internal.
+//
+// It must run AFTER ResolvePlatformDefaults, which is what installs the keyless
+// token/URL when a session or CI identity IS present — so by the time we get
+// here, the absence of any of those is conclusive.
+//
+// The gate stands down (returns nil) in every case where signing has a real
+// path, so it never blocks a working invocation:
+//   - platform disabled (--offline / --platform-url ""): no platform signing at all.
+//   - a non-fulcio signer is selected (-k / --signer-file-* / KMS / SPIFFE / vault):
+//     local signing needs no platform identity.
+//   - an explicit --signer-fulcio-token / -token-path / -oidc-issuer is set: the
+//     operator brought their own Fulcio token (CI OIDC, interactive issuer).
+//   - ambient CI workflow OIDC is available (GitHub Actions id-token: write): the
+//     keyless identity is minted per-call, so no `cilock login` is needed.
+//   - a stored platform session exists (LookupAny != nil): the operator is logged
+//     in (browser/token session OR a workflow-identity marker).
+func (ro *RunOptions) PreflightIdentity(cmd *cobra.Command) error {
+	// Platform disabled — no hosted Fulcio in play, so there is nothing to gate.
+	if (cmd.Flags().Changed("platform-url") || ro.Offline) && ro.PlatformURL == "" {
+		return nil
+	}
+	// A non-fulcio local/KMS/SPIFFE/vault signer was explicitly chosen, or the
+	// operator brought their own Fulcio token — signing has a path either way.
+	if nonFulcioSignerSelected(cmd) || explicitFulcioTokenSource(cmd) {
+		return nil
+	}
+	// Ambient CI workflow OIDC identity (GitHub Actions id-token: write) signs
+	// keyless with no `cilock login` step — never block the CI path.
+	if auth.WorkflowOIDCAvailable() {
+		return nil
+	}
+	// A stored session (browser/token) or workflow-identity marker means the
+	// operator is logged in to this platform — let the run proceed.
+	if cred, lookupErr := auth.LookupAny(ro.PlatformURL); lookupErr == nil && cred != nil {
+		return nil
+	}
+	// No local key, no token, no CI identity, no session — the run would otherwise
+	// dead-end inside Fulcio signer construction with an opaque error and never run
+	// the wrapped command. Steer the operator to the fix.
+	platformURL := auth.NormalizeURL(ro.PlatformURL)
+	if platformURL == "" {
+		platformURL = platformconfig.DefaultPlatformURL
+	}
+	return fmt.Errorf("not signed in to %s — run 'cilock login' first, "+
+		"or pass -k/--signer-file-key-path for a local key (or --offline to skip platform signing)", platformURL)
+}
+
 // applyPlatformCredential wires a stored login credential into the run: the
 // Archivista bearer (session credentials only), the keyless Fulcio signer, and
 // the logged-in Archivista-on default. Split out of ResolvePlatformDefaults to
