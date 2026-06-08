@@ -12,8 +12,10 @@
 package embeddedtrust
 
 import (
+	"crypto/sha256"
 	"crypto/x509"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -46,6 +48,11 @@ type Root struct {
 // policy.Functionary values verbatim — the same shape the policy uses for its
 // per-step functionaries — so there is no parallel trust model to review.
 type Trust struct {
+	// Source is the platform URL whose Fulcio + TSA trust was baked in (e.g.
+	// https://platform.testifysec.com). Provenance only — it makes the embedded
+	// trust auditable via `cilock version` so a user can see WHICH platform a
+	// binary trusts (prod vs staging) rather than it being implicit. Optional.
+	Source         string               `json:"source,omitempty"`
 	Roots          []Root               `json:"roots"`
 	PolicySigners  []policy.Functionary `json:"policy_signers"`
 	PolicyTSARoots []string             `json:"policy_timestamp_roots,omitempty"`
@@ -96,6 +103,69 @@ func (t *Trust) TSARoots() ([]*x509.Certificate, error) {
 		}
 	}
 	return t.rootsOfKind(KindTSARoot, filter)
+}
+
+// Summary loads the trust compiled into this binary and renders it as human
+// lines for `cilock version`, or (nil, nil) when nothing is embedded. This is
+// the explicit-disclosure surface: a baked binary states exactly which platform
+// trust it carries instead of it being invisible until a verify runs.
+func Summary() ([]string, error) {
+	t, err := Load()
+	if err != nil {
+		return nil, err
+	}
+	if t == nil {
+		return nil, nil
+	}
+	return t.Describe()
+}
+
+// Describe renders the policy-signing trust as auditable lines: the source
+// platform, the Fulcio CA + TSA roots (count + SPKI fingerprints, matching the
+// platform PKI docs' first-8-hex-of-sha256(SubjectPublicKeyInfo) convention so a
+// user can cross-check), and the pinned policy-signer identity.
+func (t *Trust) Describe() ([]string, error) {
+	var lines []string
+	if t.Source != "" {
+		lines = append(lines, fmt.Sprintf("Source platform: %s", t.Source))
+	}
+	fr, err := t.FulcioRoots()
+	if err != nil {
+		return nil, err
+	}
+	lines = append(lines, fmt.Sprintf("Fulcio CA roots: %d%s", len(fr), spkiSuffix(fr)))
+	tr, err := t.TSARoots()
+	if err != nil {
+		return nil, err
+	}
+	lines = append(lines, fmt.Sprintf("TSA roots:       %d%s", len(tr), spkiSuffix(tr)))
+	for _, f := range t.PolicySigners {
+		cc := f.CertConstraint
+		signer := strings.Join(cc.Emails, ", ")
+		if signer == "" {
+			signer = "(no email constraint)"
+		}
+		if iss := cc.Extensions.Issuer; iss != "" {
+			lines = append(lines, fmt.Sprintf("Policy signer:   %s (issuer %s)", signer, iss))
+		} else {
+			lines = append(lines, fmt.Sprintf("Policy signer:   %s", signer))
+		}
+	}
+	return lines, nil
+}
+
+// spkiSuffix renders a "(SPKI ab12cd34, ...)" tail of per-cert public-key
+// fingerprints (first 4 bytes of sha256(SubjectPublicKeyInfo)), or "" when empty.
+func spkiSuffix(certs []*x509.Certificate) string {
+	if len(certs) == 0 {
+		return ""
+	}
+	fps := make([]string, 0, len(certs))
+	for _, c := range certs {
+		sum := sha256.Sum256(c.RawSubjectPublicKeyInfo)
+		fps = append(fps, hex.EncodeToString(sum[:4]))
+	}
+	return " (SPKI " + strings.Join(fps, ", ") + ")"
 }
 
 func (t *Trust) rootsOfKind(kind string, nameFilter map[string]struct{}) ([]*x509.Certificate, error) {

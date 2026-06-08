@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,4 +126,54 @@ func TestCommittedDefaultIsEmpty(t *testing.T) {
 	got, err := Load()
 	require.NoError(t, err)
 	assert.Nil(t, got, "committed trust.json default must embed no trust")
+}
+
+// The provenance `source` field is accepted (DisallowUnknownFields) and surfaced
+// so a baked binary can state WHICH platform it trusts.
+func TestParse_AcceptsSource(t *testing.T) {
+	doc := fmt.Sprintf(`{
+      "source": "https://platform.testifysec.com",
+      "roots": [{"name":"f","kind":"FULCIO_ROOT","pem":%q}],
+      "policy_signers": [{"type":"root","certConstraint":{"uris":["*"]}}]
+    }`, selfSignedPEM(t, "fulcio"))
+	tr, err := parse([]byte(doc))
+	require.NoError(t, err)
+	require.NotNil(t, tr)
+	assert.Equal(t, "https://platform.testifysec.com", tr.Source)
+}
+
+// Describe renders the auditable lines `cilock version` prints: the source
+// platform, root counts with SPKI fingerprints, and the pinned signer identity.
+func TestDescribe_Lines(t *testing.T) {
+	doc := fmt.Sprintf(`{
+      "source": "https://platform.testifysec.com",
+      "roots": [
+        {"name":"f","kind":"FULCIO_ROOT","pem":%q},
+        {"name":"t","kind":"TSA_ROOT","pem":%q}
+      ],
+      "policy_signers": [{"type":"root","certConstraint":{
+        "uris":["*"],"emails":["release@testifysec.com"],"roots":["f"],
+        "extensions":{"Issuer":"https://platform.testifysec.com/fulcio/oidc"}
+      }}],
+      "policy_timestamp_roots": ["t"]
+    }`, selfSignedPEM(t, "fulcio"), selfSignedPEM(t, "tsa"))
+	tr, err := parse([]byte(doc))
+	require.NoError(t, err)
+
+	lines, err := tr.Describe()
+	require.NoError(t, err)
+	joined := strings.Join(lines, "\n")
+
+	assert.Contains(t, joined, "Source platform: https://platform.testifysec.com")
+	assert.Contains(t, joined, "Fulcio CA roots: 1 (SPKI ")
+	assert.Contains(t, joined, "TSA roots:       1 (SPKI ")
+	assert.Contains(t, joined, "Policy signer:   release@testifysec.com (issuer https://platform.testifysec.com/fulcio/oidc)")
+}
+
+// Summary loads the committed (empty) trust and returns no lines — the stock
+// build advertises no embedded trust.
+func TestSummary_EmptyDefault(t *testing.T) {
+	lines, err := Summary()
+	require.NoError(t, err)
+	assert.Empty(t, lines)
 }

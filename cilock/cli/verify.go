@@ -161,8 +161,18 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// Embedded policy trust: roots + signer identity compiled into this cilock
 	// build for verifying the POLICY signature only. Attestation trust always
 	// comes from the policy itself, never from here.
-	embTrust, err := embeddedtrust.Load()
-	if err != nil {
+	//
+	// --no-embedded-trust (or CILOCK_NO_EMBEDDED_TRUST) opts out: the binary stops
+	// auto-trusting its baked platform roots/signer and behaves like a stock build,
+	// so verify requires explicit --policy-ca-roots / --policy-timestamp-servers /
+	// --policy-* identity. Inspect what is baked in with `cilock version`.
+	var (
+		embTrust *embeddedtrust.Trust
+		err      error
+	)
+	if vo.NoEmbeddedTrust || os.Getenv("CILOCK_NO_EMBEDDED_TRUST") != "" {
+		log.Infof("ignoring embedded policy trust (--no-embedded-trust); supply --policy-ca-roots / --policy-* explicitly")
+	} else if embTrust, err = embeddedtrust.Load(); err != nil {
 		return fmt.Errorf("load embedded policy trust: %w", err)
 	}
 	var embFulcioRoots, embTSARoots []*x509.Certificate
@@ -329,7 +339,11 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			applied = append(applied, "signer-identity")
 		}
 		if len(applied) > 0 {
-			log.Infof("using embedded policy trust (%s); pass the corresponding --policy-* flags to override", strings.Join(applied, ", "))
+			src := embTrust.Source
+			if src == "" {
+				src = "this build"
+			}
+			log.Infof("using embedded policy trust from %s (%s); override with the corresponding --policy-* flags, or ignore it entirely with --no-embedded-trust", src, strings.Join(applied, ", "))
 		}
 	}
 

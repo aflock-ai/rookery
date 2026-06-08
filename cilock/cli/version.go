@@ -17,6 +17,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/aflock-ai/rookery/cilock/internal/embeddedtrust"
 	"github.com/spf13/cobra"
 )
 
@@ -43,6 +44,22 @@ func VersionCmd() *cobra.Command {
 			fmt.Printf("cilock %s\n", Version)
 			fmt.Printf("  Commit: %s\n", GitCommit)
 			fmt.Printf("  Built:  %s\n", BuildTime)
+
+			// Embedded policy trust: state explicitly which platform's signing trust
+			// (if any) this binary verifies policies against, so it is auditable and
+			// never silently in effect. A stock/dev build embeds nothing.
+			switch lines, err := embeddedtrust.Summary(); {
+			case err != nil:
+				fmt.Printf("  Embedded policy trust: ERROR (%v)\n", err)
+			case len(lines) == 0:
+				fmt.Println("  Embedded policy trust: none (flagless verify disabled; supply --policy-ca-roots / --policy-*)")
+			default:
+				fmt.Println("  Embedded policy trust:")
+				for _, l := range lines {
+					fmt.Printf("    %s\n", l)
+				}
+				fmt.Println("    (ignore at verify time with --no-embedded-trust)")
+			}
 		},
 	}
 }

@@ -123,6 +123,13 @@ type VerifyOptions struct {
 	// (no Archivista lookup, no discovery, no platform-derived TSA). Mirrors
 	// RunOptions.Offline so the run and verify sides share one opt-out idiom.
 	Offline bool
+
+	// NoEmbeddedTrust ignores the policy-signing trust compiled into this cilock
+	// build (embeddedtrust). With it set, a released binary stops auto-trusting
+	// its baked platform roots/signer and behaves like a stock build — verify
+	// then requires explicit --policy-ca-roots / --policy-timestamp-servers /
+	// --policy-* identity. Also settable via CILOCK_NO_EMBEDDED_TRUST (non-empty).
+	NoEmbeddedTrust bool
 }
 
 // OutputJSON reports whether the verify verdict should be emitted as a
@@ -270,6 +277,12 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	// Deprecated alias retained for backward compatibility but hidden from
 	// help to declutter the flag set — --policy-ca-roots is the supported flag.
 	_ = cmd.Flags().MarkHidden("policy-ca")
+
+	cmd.Flags().BoolVar(&vo.NoEmbeddedTrust, "no-embedded-trust", false,
+		"Ignore the policy-signing trust compiled into this cilock build (see `cilock version`). "+
+			"The binary stops auto-trusting its baked platform roots/signer; verify then requires "+
+			"explicit --policy-ca-roots / --policy-timestamp-servers / --policy-* identity. "+
+			"Also settable via CILOCK_NO_EMBEDDED_TRUST.")
 
 	// Fulcio cert extensions.
 	// Default the OIDC issuer to GitHub Actions: keyless policies in this
