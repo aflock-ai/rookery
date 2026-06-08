@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aflock-ai/cilock-action@v1.0.1
+      - uses: aflock-ai/cilock-action@v1.0.4
         with:
           step: build
           command: "go build -o myapp ./"
@@ -51,7 +51,7 @@ jobs:
           if-no-files-found: error
 ```
 
-Adapted from [`cilock-action/examples/github/basic-command.yml`](https://github.com/aflock-ai/cilock-action/blob/main/examples/github/basic-command.yml). Pinning to an exact tag (`@v1.0.1`) is consistent with the SHA-pinning advice in [Layer 1 of the intro](../intro#layer-1-prevention-dont-run-untrusted-code), the floating-tag pattern is what the March 2026 Trivy attack exploited.
+Adapted from [`cilock-action/examples/github/basic-command.yml`](https://github.com/aflock-ai/cilock-action/blob/main/examples/github/basic-command.yml). Pinning to an exact tag (`@v1.0.4`) is consistent with the SHA-pinning advice in [Layer 1 of the intro](../intro#layer-1-prevention-dont-run-untrusted-code), the floating-tag pattern is what the March 2026 Trivy attack exploited.
 
 :::caution why `enable-archivista: false`
 The action's default `enable-archivista: true` pushes attestations to `https://platform.testifysec.com/archivista`, which requires either a TestifySec API key or an OIDC token from an allowlisted org. Without those, the action exits with `archivista store returned 401: Invalid API credential`. The fix above keeps the attestation local, you can wire up a self-hosted Archivista or paid TestifySec credentials later, see [where to go next](#where-to-go-next).
@@ -86,7 +86,7 @@ jq -r '.signatures[0].certificate' build.attestation.json | base64 -d \
 If you want the cert to chain to the **Sigstore public-good root** (so any standard cosign + Sigstore trust root can verify it without depending on TestifySec infrastructure), override the Fulcio + TSA endpoints:
 
 ```yaml
-- uses: aflock-ai/cilock-action@v1.0.1
+- uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: build
     command: "go build -o myapp ./"
@@ -109,7 +109,7 @@ The resulting cert's `Issuer` becomes `O=sigstore.dev, CN=sigstore-intermediate`
 To match the SHA-pinning + content-detection + behavioral-detection story from the [intro](../intro), add `secretscan` (content), `sbom` (provenance), or `sarif` (SAST output) per step:
 
 ```yaml
-- uses: aflock-ai/cilock-action@v1.0.1
+- uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: sast
     command: "gosec -fmt=sarif -out=gosec-results.sarif ./..."
@@ -118,7 +118,7 @@ To match the SHA-pinning + content-detection + behavioral-detection story from t
     enable-archivista: false
     outfile: sast.attestation.json
 
-- uses: aflock-ai/cilock-action@v1.0.1
+- uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: build
     command: "go build -o bin/myapp ./cmd/myapp"

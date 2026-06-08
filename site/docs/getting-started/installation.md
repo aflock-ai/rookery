@@ -84,7 +84,7 @@ permissions:
   contents: read
 
 steps:
-  - uses: aflock-ai/cilock-action@v1.0.3   # pin to an exact tag or commit SHA
+  - uses: aflock-ai/cilock-action@v1.0.4   # pin to an exact tag or commit SHA
     with:
       step: build
       command: "go build -o myapp ./cmd/myapp"

@@ -14,7 +14,7 @@ and what each guarantee means.
 ## Quick start (release-grade)
 
 ```yaml
-- uses: aflock-ai/cilock-action@v1
+- uses: aflock-ai/cilock-action@v1.0.4
   env:
     CILOCK_FANOTIFY: "1"          # require synchronous file capture
     CILOCK_FSVERITY: "auto"       # opportunistic Merkle seal on products

@@ -45,7 +45,7 @@ Tested integrations from the cilock-action ecosystem:
 
 | Platform | Integration | Source |
 |---|---|---|
-| GitHub Actions | `aflock-ai/cilock-action@v1.0.1` (also `@v1`) | [cilock-action](https://github.com/aflock-ai/cilock-action) |
+| GitHub Actions | `aflock-ai/cilock-action@v1.0.4` (also `@v1`) | [cilock-action](https://github.com/aflock-ai/cilock-action) |
 | GitLab CI | Reusable template at `cilock-action/gitlab/cilock.gitlab-ci.yml` | Same repo |
 | Jenkins | Via the `jenkins` attestor + raw `cilock` binary | `rookery/plugins/attestors/jenkins` |
 | AWS CodeBuild | Via the `aws-codebuild` attestor | `rookery/plugins/attestors/aws-codebuild` |

@@ -137,7 +137,7 @@ if currentDepth < a.maxDecodeLayers {
 Add it to your pipeline by passing `secretscan` in `attestations` and the fail-closed flag:
 
 ```yaml
-- uses: aflock-ai/cilock-action@v1.0.1
+- uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: install
     command: pip install -r requirements.txt
@@ -183,7 +183,7 @@ A legitimate `pip install` does not read `/.ssh/`, `/.aws/`, and `/.kube/config`
 Enable it on the steps where third-party code actually runs:
 
 ```yaml
-- uses: aflock-ai/cilock-action@v1.0.1
+- uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: install
     command: pip install -r requirements.txt

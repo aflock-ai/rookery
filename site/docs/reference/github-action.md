@@ -10,13 +10,13 @@ sidebar_position: 2
 The CI/lock GitHub Action wraps a command (or another GitHub Action) and produces signed attestations. It downloads its own variant of the `cilock` binary at runtime from the cilock-action releases.
 
 ```yaml
-- uses: aflock-ai/cilock-action@v1.0.3   # latest as of 2026-05-23
+- uses: aflock-ai/cilock-action@v1.0.4   # pin to an exact tag or commit SHA
   with:
     step: build
     command: "go build -o myapp ./cmd/myapp"
 ```
 
-**Latest release:** [`v1.0.3`](https://github.com/aflock-ai/cilock-action/releases/tag/v1.0.3) — bundles a CI/lock built from rookery `main` with `govulncheck`, `inclusion-proof`, `secretscan`, `slsa`, and the [PR #153 atomic-rename trace fix](https://github.com/aflock-ai/rookery/pull/153). Pin to the exact tag (or commit SHA) — never a moving major-version ref.
+**Latest release:** [`v1.0.4`](https://github.com/aflock-ai/cilock-action/releases/tag/v1.0.4) — bundles a CI/lock built from rookery `main` with `govulncheck`, `inclusion-proof`, `secretscan`, `slsa`, and the [PR #153 atomic-rename trace fix](https://github.com/aflock-ai/rookery/pull/153). Pin to the exact tag (or commit SHA) — never a moving major-version ref.
 
 ## Multi-step chain via `step` names
 
@@ -24,14 +24,14 @@ CI/lock's policy language lets you declare relationships between attested steps.
 
 ```yaml
 # Step 1 — vendor
-- uses: aflock-ai/cilock-action@v1.0.3
+- uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: vendor-deps        # ← policy declares this step
     command: go mod vendor
     outfile: dist/vendor.attestation.json
 
 # Step 2 — build, references step 1 via artifactsFrom in your policy
-- uses: aflock-ai/cilock-action@v1.0.3
+- uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: app-build
     command: go build -mod=vendor -o app ./cmd/app

@@ -66,7 +66,7 @@ jobs:
 
       # 1. Lint + secret scan
       - name: lint + secrets
-        uses: aflock-ai/cilock-action@v1.0.1
+        uses: aflock-ai/cilock-action@v1.0.4
         with:
           step: lint
           command: echo "lint passed"
@@ -78,7 +78,7 @@ jobs:
       #    the policy gate is the Rego over the captured SARIF, not the
       #    tool's exit code.
       - name: sast
-        uses: aflock-ai/cilock-action@v1.0.1
+        uses: aflock-ai/cilock-action@v1.0.4
         with:
           step: sast
           command: gosec -no-fail -fmt=sarif -out=gosec-results.sarif ./...
@@ -88,7 +88,7 @@ jobs:
 
       # 3. Tests
       - name: test
-        uses: aflock-ai/cilock-action@v1.0.1
+        uses: aflock-ai/cilock-action@v1.0.4
         with:
           step: test
           command: go test -count=1 ./...
@@ -99,7 +99,7 @@ jobs:
       #    via command-run; bin/myapp lands in product/v0.3 as a Merkle
       #    leaf. This is the artifact the SBOM step (next) will scan.
       - name: build
-        uses: aflock-ai/cilock-action@v1.0.1
+        uses: aflock-ai/cilock-action@v1.0.4
         env:
           CGO_ENABLED: "0"
         with:
@@ -116,7 +116,7 @@ jobs:
       #    gate Rego in step 7 verifies the SBOM's targeted file digest
       #    matches the build step's product.
       - name: sbom
-        uses: aflock-ai/cilock-action@v1.0.1
+        uses: aflock-ai/cilock-action@v1.0.4
         with:
           step: sbom
           command: syft bin/myapp -o cyclonedx-json=bin/bom.cdx.json
@@ -126,7 +126,7 @@ jobs:
 
       # 5. Container build
       - name: docker-build
-        uses: aflock-ai/cilock-action@v1.0.1
+        uses: aflock-ai/cilock-action@v1.0.4
         with:
           step: docker-build
           command: docker buildx build --metadata-file docker-metadata.json -t myapp:test --load .
@@ -154,7 +154,7 @@ Each step produces a signed DSSE envelope containing an in-toto Collection. With
 ```yaml
 - name: docker-build
   id: docker
-  uses: aflock-ai/cilock-action@v1.0.1
+  uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: docker-build
     # ...

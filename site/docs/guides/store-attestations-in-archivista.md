@@ -48,7 +48,7 @@ When using `aflock-ai/cilock-action`, Archivista upload uses OIDC by default, no
 
 ```yaml
 - name: build
-  uses: aflock-ai/cilock-action@v1.0.1
+  uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: build
     command: go build ./cmd/myapp
@@ -100,7 +100,7 @@ Each successful upload returns a **GitOID** that uniquely identifies the stored 
 ```yaml
 - name: build
   id: build
-  uses: aflock-ai/cilock-action@v1.0.1
+  uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: build
     command: go build ./cmd/myapp

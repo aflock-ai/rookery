@@ -130,7 +130,7 @@ jobs:
         run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
 
       - name: build
-        uses: aflock-ai/cilock-action@v1.0.1
+        uses: aflock-ai/cilock-action@v1.0.4
         env:
           CGO_ENABLED: "0"
         with:
@@ -140,7 +140,7 @@ jobs:
           cilock-args: --attestor-product-include-glob "bin/*"
 
       - name: sbom
-        uses: aflock-ai/cilock-action@v1.0.1
+        uses: aflock-ai/cilock-action@v1.0.4
         with:
           step: sbom
           command: syft bin/myapp -o cyclonedx-json=bin/bom.cdx.json

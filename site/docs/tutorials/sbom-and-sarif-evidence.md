@@ -24,7 +24,7 @@ Use two CI/lock steps — build then SBOM — so each tool's argv lands in its o
 
 ```yaml
 - name: build
-  uses: aflock-ai/cilock-action@v1.0.1
+  uses: aflock-ai/cilock-action@v1.0.4
   env:
     CGO_ENABLED: "0"
   with:
@@ -34,7 +34,7 @@ Use two CI/lock steps — build then SBOM — so each tool's argv lands in its o
     cilock-args: --attestor-product-include-glob "bin/*"
 
 - name: sbom
-  uses: aflock-ai/cilock-action@v1.0.1
+  uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: sbom
     command: syft bin/myapp -o cyclonedx-json=bin/bom.cdx.json
@@ -56,7 +56,7 @@ Same shape, different attestor. The trick is letting the SAST tool fail without 
 
 ```yaml
 - name: sast
-  uses: aflock-ai/cilock-action@v1.0.1
+  uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: sast
     command: gosec -no-fail -fmt=sarif -out=gosec-results.sarif ./...
@@ -82,7 +82,7 @@ For OCI images, generate the SBOM from the saved image tarball alongside the bui
 
 ```yaml
 - name: docker-build
-  uses: aflock-ai/cilock-action@v1.0.1
+  uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: docker-build
     command: docker buildx build --metadata-file docker-metadata.json -t myapp:test -o type=docker,dest=image.tar .
@@ -90,7 +90,7 @@ For OCI images, generate the SBOM from the saved image tarball alongside the bui
     cilock-args: --attestor-product-include-glob "{docker-metadata.json,image.tar}"
 
 - name: docker-sbom
-  uses: aflock-ai/cilock-action@v1.0.1
+  uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: docker-sbom
     command: syft image.tar -o cyclonedx-json=image-bom.cdx.json

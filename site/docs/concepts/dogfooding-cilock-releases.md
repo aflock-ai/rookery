@@ -212,7 +212,7 @@ release workflow is intentionally readable as a template:
 
 The minimum viable port is:
 
-1. Pick `cilock-action` v1.0.3+ in your workflow (SHA-pin it).
+1. Pick `cilock-action` v1.0.4+ in your workflow (SHA-pin it).
 2. Wrap your build (and optionally your vendor / install steps) in
    one or more `cilock-action` invocations with distinct `step:`
    names.

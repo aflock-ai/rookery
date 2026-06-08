@@ -33,7 +33,7 @@ The build step uses cilock-action with the `docker` and `oci` attestors so the r
 
 ```yaml
 - name: docker-build
-  uses: aflock-ai/cilock-action@v1.0.1
+  uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: docker-build
     command: docker buildx build --metadata-file docker-metadata.json -t ghcr.io/${{ github.repository }}:${{ github.sha }} -o type=docker,dest=image.tar .
@@ -41,7 +41,7 @@ The build step uses cilock-action with the `docker` and `oci` attestors so the r
     cilock-args: --attestor-product-include-glob "{docker-metadata.json,image.tar}"
 
 - name: docker-sbom
-  uses: aflock-ai/cilock-action@v1.0.1
+  uses: aflock-ai/cilock-action@v1.0.4
   with:
     step: docker-sbom
     command: syft image.tar -o cyclonedx-json=image-bom.cdx.json
