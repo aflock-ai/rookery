@@ -49,7 +49,7 @@ Each release publishes, under `https://cilock.dev/dl/<version>/`:
 | **Per-platform attestation** | `<os>-<arch>.attestation.json` | The build's signed evidence collection (environment, git, github, command-run, product) — the input to `cilock verify`. |
 | **VSA** | `cilock-<version>-<os>-<arch>.vsa.json` | Verification Summary Attestation — the verify result the release pipeline itself computed. |
 | **SBOM** | `cilock-<version>-sbom.spdx.json` | SPDX SBOM. |
-| **Signed policy** | `release-v1.policy.json` (at `https://cilock.dev/policy/`) | The DSSE-signed release policy, anchored to the **TestifySec Platform Root CA** and the release workflow identity. |
+| **Signed policy** | `release-policy.json` (at `https://cilock.dev/policy/`) | The DSSE-signed release policy, anchored to the **TestifySec Platform Root CA** and the release workflow identity. |
 
 ```bash
 # OS: linux|darwin   ARCH: amd64|arm64

@@ -34,7 +34,7 @@
           "size": 512
         },
         {
-          "name": "release-v1.policy.json",
+          "name": "release-policy.json",
           "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
           "size": 2048
         },
@@ -60,7 +60,7 @@
         }
       ],
       "verification": {
-        "policy": "policy/release-v1.policy.json",
+        "policy": "policy/release-policy.json",
         "fulcioRoots": "v1.2.0/fulcio-roots.pem",
         "tsaChain": "v1.2.0/tsa-chain.pem",
         "attestations": [

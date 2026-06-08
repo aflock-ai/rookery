@@ -61,7 +61,7 @@ mkdir -p ~/cilock-verify && cd ~/cilock-verify
 # SBOM, scans, VSAs) is inside the bundle.
 curl -fsLO "${BASE}/cilock-${VERSION}-${OS}-${ARCH}.tar.gz"
 curl -fsLO "${BASE}/cilock-${VERSION}-evidence-bundle.tar.gz"
-curl -fsLO "${BASE}/release-v1.policy.json"
+curl -fsLO "${BASE}/release-policy.json"
 curl -fsLO "${BASE}/cilock-policy.pub"
 
 # Extract the binary so cilock verify can hash it directly. The
@@ -69,7 +69,7 @@ curl -fsLO "${BASE}/cilock-policy.pub"
 tar -xzf "cilock-${VERSION}-${OS}-${ARCH}.tar.gz"
 
 cilock verify \
-  --policy release-v1.policy.json \
+  --policy release-policy.json \
   --publickey cilock-policy.pub \
   --bundle "cilock-${VERSION}-evidence-bundle.tar.gz" \
   --artifactfile ./cilock \
@@ -113,7 +113,7 @@ cat VERIFY.md           # The exact commands below, baked into the kit.
 
 # (c) Re-run the chain verification against the bundle.
 cilock verify \
-  --policy release-v1.policy.json \
+  --policy release-policy.json \
   --publickey cilock-policy.pub \
   --bundle "cilock-${VERSION}-evidence-bundle.tar.gz" \
   --artifactfile ../cilock          # extracted in Path 2
@@ -143,7 +143,7 @@ PASSED
 
 ## What the release policy asserts
 
-[`release-v1.policy.json`](https://github.com/aflock-ai/rookery/blob/main/deploy/cilock/release.policy.json) is committed unsigned in the repo so reviewers can read it; the release workflow signs it at publish time. The policy declares two steps — `vendor-cilock-deps` and `release-build` — chained via `artifactsFrom`. Each step has its own functionary check + Rego layers; the chain link is the last check.
+[`release-policy.json`](https://github.com/aflock-ai/rookery/blob/main/deploy/cilock/release.policy.json) is committed unsigned in the repo so reviewers can read it; the release workflow signs it at publish time. The policy declares two steps — `vendor-cilock-deps` and `release-build` — chained via `artifactsFrom`. Each step has its own functionary check + Rego layers; the chain link is the last check.
 
 ### Per-step gates
 
@@ -245,7 +245,7 @@ End-to-end, this is the same evidence shape you'd use for verifying *any* artifa
 | `cosign verify-blob: no matching identities found` | The archive came from somewhere other than the canonical workflow — a tampered mirror, a fork, or the wrong identity-regexp. | Re-download from the [canonical release page](https://github.com/aflock-ai/rookery/releases) and re-check the identity-regexp matches exactly: `^https://github\.com/aflock-ai/rookery/\.github/workflows/release\.yml@.+` |
 | `policy verification failed: no passed collections present` | The attestation file doesn't match the artifact (subject digest mismatch). Usually you mixed files from different releases. | Re-download both `cilock-<VERSION>-<OS>-<ARCH>.tar.gz` and `<OS>-<ARCH>.attestation.json` from the **same** release tag. |
 | `policy verification failed: ... functionary mismatch` | Fulcio cert in the envelope doesn't match policy's expected `buildConfigURI`. Means the binary was built by a different workflow. | **Halt and investigate.** Could be a release candidate from a non-canonical branch, or a supply-chain compromise. |
-| `policy expired` | `release-v1.policy.json` has an `expires` field; the file is past that date. | Download the latest published policy from the most recent release — we rotate when expiry is near. |
+| `policy expired` | `release-policy.json` has an `expires` field; the file is past that date. | Download the latest published policy from the most recent release — we rotate when expiry is near. |
 | The bundled VSA's `verificationResult` is `FAILED` | The release workflow itself caught a policy failure. | **Treat the release as poisoned.** [Report it on GitHub](https://github.com/aflock-ai/rookery/security/advisories/new). |
 | `Verified OK` on the install script but `bash install.sh` exits non-zero | Network issue downloading the archive, or your `$CILOCK_BIN_DIR` isn't writable. | Set `CILOCK_BIN_DIR=$HOME/.local/bin` and re-run; ensure that path is on your `$PATH`. |
 
@@ -318,7 +318,7 @@ A cosign signature proves "these bytes were signed by this identity." A CI/lock 
   ],
   "step": [
     {"@type": "HowToStep", "name": "30-second verify (Path 1)", "text": "Download install.sh + .sig + .cert; cosign verify-blob with certificate-identity-regexp pointing at the canonical workflow; if Verified OK, run bash install.sh. install.sh auto-detects OS / arch / latest version and cosign-verifies the binary archive too."},
-    {"@type": "HowToStep", "name": "3-minute verify (Path 2)", "text": "After Path 1, run cilock verify --policy release-v1.policy.json --artifactfile <archive> --attestations <env-arch>.attestation.json. Output 'Verification succeeded' means all five Rego layers (source identity, source integrity, build hygiene, hermeticity, artifact identity) plus SBOM presence held."},
+    {"@type": "HowToStep", "name": "3-minute verify (Path 2)", "text": "After Path 1, run cilock verify --policy release-policy.json --artifactfile <archive> --attestations <env-arch>.attestation.json. Output 'Verification succeeded' means all five Rego layers (source identity, source integrity, build hygiene, hermeticity, artifact identity) plus SBOM presence held."},
     {"@type": "HowToStep", "name": "Full chain (Path 3)", "text": "After Path 2, download <archive>.vsa.json and jq-decode its predicate. Compare verificationResult against your local result; PASSED matching PASSED means you and the publisher agree on the policy outcome at signing time."}
   ]
 })}} />

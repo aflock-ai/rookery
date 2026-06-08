@@ -1,11 +1,12 @@
 /**
  * GET /policy/<file> — verification policy files, served from R2 (application/json).
  *
- *   /policy/release-v1.policy.json   -> policy/release-v1.policy.json
+ *   /policy/release-policy.json   -> policy/release-policy.json
  *
- * install.sh and `cilock verify` reference cilock.dev/policy/release-v1.policy.json as
- * the trust anchor for release artifacts. Policies are versioned by file name
- * (release-v1, release-v2, ...), so each name is immutable once published.
+ * install.sh and `cilock verify` reference cilock.dev/policy/release-policy.json as
+ * the trust anchor for release artifacts. This root key is the current signed
+ * policy (overwritten each release with the same prod-signed policy); an
+ * immutable per-version copy ships at /dl/<version>/release-policy.json.
  *
  * Path traversal is rejected: only a single flat segment under /policy/ is allowed.
  */

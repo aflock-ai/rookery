@@ -284,7 +284,7 @@ function DownloadInner(): React.ReactElement {
             <div className={styles.assetLinks}>
               <span className={styles.muted}>Also in this release:</span>
               <a href={`${dlBase}/checksums-sha256.txt`}>checksums-sha256.txt</a>
-              <a href="/policy/release-v1.policy.json">signed release policy</a>
+              <a href="/policy/release-policy.json">signed release policy</a>
               {ver?.files.some((f) => f.name.endsWith('-sbom.spdx.json')) && (
                 <a href={`${dlBase}/${ver.version.replace(/^v/, 'cilock-')}-sbom.spdx.json`}>SBOM</a>
               )}

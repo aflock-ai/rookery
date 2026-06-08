@@ -32,7 +32,7 @@
  *   --version <vX.Y.Z>  Release version (required).
  *   --bucket <name>     R2 bucket (default: cilock-dist).
  *   --policy <file>     Release policy file in --dir to publish (default:
- *                       release-v1.policy.json). Uploaded to policy/<file>.
+ *                       release-policy.json). Uploaded to policy/<file>.
  *   --latest            Mark this version "latest" (default: true for a higher
  *                       semver; --no-latest to skip; pre-releases default to no).
  *   --dry-run           Plan only; perform no R2 writes.
@@ -53,7 +53,7 @@ import { join } from 'node:path';
 const MANIFEST_KEY = 'manifest.json';
 
 function parseArgs(argv) {
-  const out = { bucket: 'cilock-dist', policy: 'release-v1.policy.json', target: '--remote', latest: undefined, dryRun: false };
+  const out = { bucket: 'cilock-dist', policy: 'release-policy.json', target: '--remote', latest: undefined, dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     switch (a) {

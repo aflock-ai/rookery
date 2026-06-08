@@ -7,7 +7,7 @@
  *
  *   manifest.json                                   <- versions index + "latest" pointer
  *   install.sh, install.sh.sig, install.sh.cert     <- bootstrap installer (version-agnostic)
- *   policy/release-v1.policy.json                    <- verification policy referenced by cilock verify
+ *   policy/release-policy.json                    <- verification policy referenced by cilock verify
  *   <version>/cilock-<version>-<os>-<arch>.tar.gz    <- binary tarballs (+ .sig / .pem)
  *   <version>/checksums-sha256.txt(.sig/.pem)
  *   <version>/release-<version>.policy.json
