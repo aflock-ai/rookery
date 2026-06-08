@@ -77,23 +77,15 @@ https://aflock.ai/attestations/sarif/v0.1
 https://aflock.ai/attestations/git/v0.1
 ```
 
-## Notes
-
-Rookery also ships a **native Trivy attestor** at `https://aflock.ai/attestations/trivy/v0.1`. It ingests Trivy's tool-specific JSON (`--format json`) and preserves the per-target Vulnerability / Misconfiguration / Secret / License split that SARIF's flat finding list can't represent. See [`trivy` attestor](../attestors/trivy) for the native flow. Use this page (SARIF) when you want a single uniform pipeline across every scanner; use the native attestor when downstream policy needs to distinguish a license violation from a CVE.
-
 ## FAQ
 
 ### Does cilock support Trivy?
 
-Yes. Cilock supports Trivy two ways: through the generic [`sarif` attestor](../attestors/sarif) (documented on this page), and through a Trivy-native attestor that ingests Trivy's own JSON format. Both produce a signed DSSE envelope; the SARIF flow gives you a uniform predicate across all SARIF-emitting tools, the native flow preserves Trivy's per-target finding categories.
+Yes — through the generic [`sarif` attestor](../attestors/sarif) (documented on this page). Run Trivy with `--format sarif` and cilock captures the report as a signed `sarif/v0.1` attestation, the same uniform predicate it produces for every SARIF-emitting scanner (Grype, Semgrep, gosec, …).
 
 ### What does Trivy scan when called from cilock?
 
 Cilock doesn't change what Trivy scans — Trivy still scans whatever target you pass it (filesystem, container image, repository, Kubernetes cluster, IaC tree). The validated invocation runs `trivy fs --scanners vuln .`, which scans the working directory for OS-package and language-library vulnerabilities. Swap in `trivy image <ref>` or add `--scanners vuln,secret,misconfig,license` to widen coverage; cilock wraps whichever invocation you choose.
-
-### Do I need the Trivy native attestor or the SARIF attestor?
-
-Pick **SARIF** if you want a single ingestion path that works for Trivy, Grype, Semgrep, gosec, and every other SARIF-emitting scanner. Pick the **native Trivy attestor** if your policies need to branch on Trivy's per-target categories (Vulnerabilities vs Misconfigurations vs Secrets vs Licenses) — SARIF flattens them into a single `results` array, so that distinction is lost.
 
 ### Will the SARIF be empty if Trivy finds nothing?
 
@@ -102,7 +94,6 @@ Yes — and that's fine. Trivy still writes a valid SARIF document with an empty
 ## See also
 
 - [`sarif` attestor](../attestors/sarif) — the ingestion path used by this page
-- [`trivy` attestor](../attestors/trivy) — native attestor for the multi-target JSON split
 - [`tool-trivy-sarif` example](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-trivy-sarif) — the validated end-to-end run
 - [Trivy homepage](https://trivy.dev/) — upstream tool documentation
 - [Tools index](./index)
