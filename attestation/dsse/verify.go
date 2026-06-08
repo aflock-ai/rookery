@@ -115,6 +115,17 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 	// verified count and meet the threshold with a single key.
 	verifiedKeyIDs := make(map[string]struct{})
 
+	// detectedMismatch holds the first same-CN/different-key trust mismatch
+	// found while a signature/timestamp FAILED to verify. It is purely
+	// diagnostic — recorded here and surfaced on the verified==0 error path
+	// below. It NEVER affects whether a signature counts toward the threshold.
+	var detectedMismatch *TrustNameKeyMismatchError
+	recordMismatch := func(m *TrustNameKeyMismatchError) {
+		if m != nil && detectedMismatch == nil {
+			detectedMismatch = m
+		}
+	}
+
 	// Pre-compute stable KeyIDs for each provided verifier so that a verifier
 	// with a non-deterministic KeyID() cannot inflate the threshold count by
 	// producing a different ID on each call.
@@ -134,6 +145,13 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 				// block raw-key verification if we used 'continue' here.
 				log.Debugf("failed to parse certificate in signature, skipping cert verification: %v", err)
 			} else {
+				// artifactIssuerChain is the leaf's own issuer chain (its
+				// embedded intermediates), kept separate from the policy's
+				// configured intermediates so the trust-mismatch diagnostic
+				// compares the ARTIFACT's CAs (cert + sig intermediates)
+				// against the POLICY's CAs (roots + options.intermediates).
+				artifactIssuerChain := make([]*x509.Certificate, 0, 1+len(sig.Intermediates))
+				artifactIssuerChain = append(artifactIssuerChain, cert)
 				sigIntermediates := make([]*x509.Certificate, 0)
 				for _, int := range sig.Intermediates {
 					intCert, err := cryptoutil.TryParseCertificate(int)
@@ -142,21 +160,36 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 					}
 
 					sigIntermediates = append(sigIntermediates, intCert)
+					artifactIssuerChain = append(artifactIssuerChain, intCert)
 				}
 
 				sigIntermediates = append(sigIntermediates, options.intermediates...)
+				// policyTrusted is the policy's CA set: roots plus any
+				// configured intermediates. Built into a fresh slice so it never
+				// aliases or mutates options.roots/intermediates. Diagnostic-only.
+				policyTrusted := make([]*x509.Certificate, 0, len(options.roots)+len(options.intermediates))
+				policyTrusted = append(policyTrusted, options.roots...)
+				policyTrusted = append(policyTrusted, options.intermediates...)
 				if len(options.timestampVerifiers) == 0 {
+					// Emit the artifact issuer + trusted-root key fingerprints so a
+					// same-CN/different-key mismatch is visible in debug output on
+					// the no-timestamp path too.
+					fmt.Fprintf(os.Stderr, "[dsse-verify] cert subject=%q issuer=%q issuerKey=%s trustedRootKeys=%s\n",
+						cert.Subject.CommonName, cert.Issuer.CommonName,
+						chainIssuerFingerprint(artifactIssuerChain), trustedRootFingerprints(options.roots))
 					if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, time.Now()); err == nil {
 						checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier})
 						verifiedKeyIDs[verifierKeyID(verifier)] = struct{}{}
 					} else if verifier != nil {
 						// Verifier was created but signature verification failed
+						recordMismatch(detectTrustNameKeyMismatch(artifactIssuerChain, policyTrusted, false))
 						checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier, Error: err})
 						log.Debugf("failed to verify signature: %v", err)
 					} else {
 						// Verifier creation failed (e.g., invalid cert chain) — don't
 						// add a nil verifier to checkedVerifiers as it would cause nil
 						// dereferences in consumers that iterate the list.
+						recordMismatch(detectTrustNameKeyMismatch(artifactIssuerChain, policyTrusted, false))
 						log.Debugf("failed to create x509 verifier: %v", err)
 					}
 				} else {
@@ -165,13 +198,22 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 					passedTimestampVerifiers := []timestamp.TimestampVerifier{}
 					failedTimestampVerifiers := []timestamp.TimestampVerifier{}
 
-					fmt.Fprintf(os.Stderr, "[dsse-verify] cert subject=%q issuer=%q notAfter=%s sigTimestamps=%d\n",
-						cert.Subject.CommonName, cert.Issuer.CommonName, cert.NotAfter.Format(time.RFC3339), len(sig.Timestamps))
+					// Surface the artifact issuer's key fingerprint and the
+					// trusted-root key fingerprint(s) so a same-CN/different-key
+					// mismatch is visible even in raw debug output.
+					fmt.Fprintf(os.Stderr, "[dsse-verify] cert subject=%q issuer=%q notAfter=%s sigTimestamps=%d issuerKey=%s trustedRootKeys=%s\n",
+						cert.Subject.CommonName, cert.Issuer.CommonName, cert.NotAfter.Format(time.RFC3339), len(sig.Timestamps),
+						chainIssuerFingerprint(artifactIssuerChain), trustedRootFingerprints(options.roots))
 					for _, timestampVerifier := range options.timestampVerifiers {
 						for _, sigTimestamp := range sig.Timestamps {
 							tsTime, err := timestampVerifier.Verify(context.TODO(), bytes.NewReader(sigTimestamp.Data), bytes.NewReader(sig.Signature))
 							if err != nil {
 								fmt.Fprintf(os.Stderr, "[dsse-verify] TSA verify FAILED: %v\n", err)
+								// The timestamp failed to verify. If the TSA token's
+								// signing chain shares a CN with the policy's trusted
+								// TSA roots but uses a different key, that is the
+								// "wrong platform" timestamp mismatch — diagnose it.
+								recordMismatch(detectTimestampMismatch(sigTimestamp.Data, timestampVerifier))
 								continue
 							}
 							fmt.Fprintf(os.Stderr, "[dsse-verify] TSA verified, timestamp=%s\n", tsTime.Format(time.RFC3339))
@@ -181,6 +223,9 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 								passedVerifier = verifier
 								passedTimestampVerifiers = append(passedTimestampVerifiers, timestampVerifier)
 							} else {
+								// TSA validated the time but the Fulcio chain still
+								// failed: same diagnostic as the no-TSA branch.
+								recordMismatch(detectTrustNameKeyMismatch(artifactIssuerChain, policyTrusted, false))
 								// Only track non-nil verifiers in failed list to prevent
 								// nil dereferences when iterating failed verifiers below.
 								if verifier != nil {
@@ -229,7 +274,11 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 
 	verified := len(verifiedKeyIDs)
 	if verified == 0 {
-		return nil, ErrNoMatchingSigs{Verifiers: checkedVerifiers}
+		// Attach the trust-mismatch diagnostic (if any) only on the failure
+		// path. detectedMismatch is non-nil only when a signature/timestamp
+		// already failed AND a same-CN/different-key collision was found, so
+		// this cannot change a passing verify into a failing one.
+		return nil, ErrNoMatchingSigs{Verifiers: checkedVerifiers, TrustMismatch: detectedMismatch}
 	} else if verified < options.threshold {
 		return checkedVerifiers, ErrThresholdNotMet{Theshold: options.threshold, Actual: verified}
 	}

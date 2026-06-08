@@ -161,7 +161,13 @@ func (t TSPTimestamper) Timestamp(ctx context.Context, r io.Reader) ([]byte, err
 
 type TSPVerifier struct {
 	certChain *x509.CertPool
-	hash      crypto.Hash
+	// roots retains the trusted certificate slice passed to VerifyWithCerts
+	// (the CertPool above discards the originals). It is exposed via
+	// TrustedRoots() so callers can run trust diagnostics — e.g. detecting a
+	// same-CN/different-key mismatch between the TSA token's signer chain and
+	// these trusted roots — WITHOUT changing verification behavior.
+	roots []*x509.Certificate
+	hash  crypto.Hash
 }
 
 type TSPVerifierOption func(*TSPVerifier)
@@ -169,10 +175,33 @@ type TSPVerifierOption func(*TSPVerifier)
 func VerifyWithCerts(certs []*x509.Certificate) TSPVerifierOption {
 	return func(t *TSPVerifier) {
 		t.certChain = x509.NewCertPool()
+		t.roots = make([]*x509.Certificate, 0, len(certs))
 		for _, cert := range certs {
 			t.certChain.AddCert(cert)
+			t.roots = append(t.roots, cert)
 		}
 	}
+}
+
+// TrustedRoots returns the trusted timestamp-authority certificates this
+// verifier was configured with (via VerifyWithCerts). It is read-only
+// diagnostic metadata; the returned slice must not be mutated.
+func (v TSPVerifier) TrustedRoots() []*x509.Certificate {
+	return v.roots
+}
+
+// TokenCertificates parses an RFC 3161 timestamp token (the raw TSR bytes
+// stored in a DSSE signature timestamp) and returns the X.509 certificates
+// embedded in it — i.e. the TSA's signing chain. It is a best-effort
+// diagnostic helper: it performs NO verification and returns an error only
+// when the bytes cannot be parsed as PKCS#7. Used to compare the TSA chain
+// that actually produced a timestamp against the policy's trusted TSA roots.
+func TokenCertificates(tsrData []byte) ([]*x509.Certificate, error) {
+	p7, err := pkcs7.Parse(tsrData)
+	if err != nil {
+		return nil, err
+	}
+	return p7.Certificates, nil
 }
 
 func VerifyWithHash(h crypto.Hash) TSPVerifierOption {

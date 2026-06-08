@@ -786,7 +786,17 @@ func (step Step) checkFunctionaries(statements []source.CollectionVerificationRe
 				result.Passed = append(result.Passed, PassedCollection{Collection: statements[i]})
 			}
 		} else {
-			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statements[i], Reason: fmt.Errorf("no verifiers present to validate against collection verifiers")})
+			// No verifiers means the envelope's signature(s) failed to verify
+			// upstream (source.VerifiedSource records the cause in Errors). Carry
+			// those underlying errors into the rejection Reason so a typed
+			// diagnostic — e.g. dsse.TrustNameKeyMismatchError wrapped in
+			// ErrNoMatchingSigs — survives errors.As at the top-level CLI error
+			// instead of being flattened to the bare "no verifiers present" text.
+			reason := fmt.Errorf("no verifiers present to validate against collection verifiers")
+			if len(statements[i].Errors) > 0 {
+				reason = errors.Join(reason, errors.Join(statements[i].Errors...))
+			}
+			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statements[i], Reason: reason})
 		}
 	}
 

@@ -28,6 +28,13 @@ func (e ErrNoSignatures) Error() string {
 
 type ErrNoMatchingSigs struct {
 	Verifiers []CheckedVerifier
+	// TrustMismatch, when non-nil, carries a precise diagnostic explaining
+	// that the signature failed because the artifact's signing chain shares
+	// a Subject CN with a policy-trusted root but uses a different key (the
+	// "wrong platform" case). It is purely informational — it does not change
+	// the verdict (verification already failed) — and is surfaced via Unwrap
+	// so callers can pull it out with errors.As at the top-level error.
+	TrustMismatch *TrustNameKeyMismatchError
 }
 
 func (e ErrNoMatchingSigs) Error() string {
@@ -48,7 +55,24 @@ func (e ErrNoMatchingSigs) Error() string {
 		}
 	}
 
+	// Lead with the trust-mismatch block when present: it is the actionable
+	// root cause, whereas the per-verifier "unknown authority" lines above are
+	// just the generic symptom.
+	if e.TrustMismatch != nil {
+		mess = e.TrustMismatch.Error() + "\n" + mess
+	}
+
 	return mess
+}
+
+// Unwrap exposes the embedded trust-mismatch diagnostic (if any) so that
+// errors.As(err, &TrustNameKeyMismatchError{}) succeeds anywhere this error is
+// wrapped up the call stack.
+func (e ErrNoMatchingSigs) Unwrap() error {
+	if e.TrustMismatch == nil {
+		return nil
+	}
+	return e.TrustMismatch
 }
 
 type ErrThresholdNotMet struct {

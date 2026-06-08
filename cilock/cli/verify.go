@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -459,6 +460,15 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	if verifyErr != nil { //nolint:nestif
+		// Hunt the step rejection reasons for a precise trust-mismatch
+		// diagnostic (same Common Name, different key — the "wrong platform"
+		// case). When present it is the actionable root cause, so we surface it
+		// PROMINENTLY above the generic per-step reasons and carry it into the
+		// returned error so a programmatic caller can pull it out via errors.As.
+		trustMismatch := findTrustMismatch(verifyErr, verifiedEvidence.StepResults)
+		if trustMismatch != nil {
+			log.Error(trustMismatch.Error())
+		}
 		if verifiedEvidence.StepResults != nil {
 			log.Error("Verification failed")
 			log.Error("Evidence:")
@@ -485,6 +495,12 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			if werr := writeVerifyVerdictJSON(os.Stdout, VerifyVerdict{Passed: false}); werr != nil {
 				log.Errorf("failed to emit JSON verify verdict: %v", werr)
 			}
+		}
+		if trustMismatch != nil {
+			// errors.Join keeps the trust-mismatch error reachable via
+			// errors.As at the top level while preserving the original
+			// verifyErr chain for existing callers.
+			return fmt.Errorf("failed to verify policy: %w", errors.Join(trustMismatch, verifyErr))
 		}
 		return fmt.Errorf("failed to verify policy: %w", verifyErr)
 	}

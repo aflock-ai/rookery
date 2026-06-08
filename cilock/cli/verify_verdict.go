@@ -17,12 +17,14 @@ package cli
 import (
 	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/policy"
 )
 
@@ -199,6 +201,31 @@ func shortSubjectName(name string) string {
 		return rest
 	}
 	return name
+}
+
+// findTrustMismatch scans the top-level verify error AND every step rejection
+// reason for a dsse.TrustNameKeyMismatchError (same Common Name, different key
+// — the "wrong platform" trust failure). It returns the first one found, or
+// nil. The per-step Reasons are the reliable carrier: the dsse diagnostic is
+// wrapped into a CollectionVerificationResult error, which the policy engine
+// joins into RejectedCollection.Reason, so errors.As reaches it here even
+// though the workflow's own top-level error is generic.
+func findTrustMismatch(verifyErr error, stepResults map[string]policy.StepResult) *dsse.TrustNameKeyMismatchError {
+	var tm *dsse.TrustNameKeyMismatchError
+	if errors.As(verifyErr, &tm) {
+		return tm
+	}
+	for _, result := range stepResults {
+		for _, rejected := range result.Rejected {
+			if rejected.Reason == nil {
+				continue
+			}
+			if errors.As(rejected.Reason, &tm) {
+				return tm
+			}
+		}
+	}
+	return nil
 }
 
 // writeVerifyVerdictJSON emits the verdict as a single indented JSON object plus
