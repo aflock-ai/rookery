@@ -30,12 +30,12 @@ You should see:
 
 ```
 Verified OK
-[install.sh] resolving latest release ... v1.1.0
-[install.sh] downloading cilock-1.1.0-linux-amd64.tar.gz ...
+[install.sh] resolving latest release ... v3.0.0
+[install.sh] downloading cilock-3.0.0-linux-amd64.tar.gz ...
 [install.sh] cosign-verifying archive ... Verified OK
 [install.sh] installed cilock to /usr/local/bin/cilock
 $ cilock version
-cilock 1.1.0
+cilock 3.0.0
 ```
 
 If `Verified OK` doesn't appear, **stop** — see [Troubleshooting](#troubleshooting). Do not run an unverified `install.sh`.
@@ -191,7 +191,7 @@ The release pipeline records evidence at three boundaries, each signed by the sa
           │ STEP: vendor-cilock-deps                                    │
           │ command:  go mod vendor                                     │
           │ products: every file under cilock/vendor/*                  │
-          │ signed:   Fulcio keyless, this workflow @ v1.1.0            │
+          │ signed:   Fulcio keyless, this workflow @ v3.0.0            │
           └────────────────────────┬────────────────────────────────────┘
                                    │
             artifactsFrom enforces this digest chain ↓
@@ -202,7 +202,7 @@ The release pipeline records evidence at three boundaries, each signed by the sa
           │ traced:   ptrace captures network egress (Rego allowlist)   │
           │ materials: every file the compiler read (= vendor products) │
           │ products: cilock-bin-<plat>                                 │
-          │ signed:   Fulcio keyless, this workflow @ v1.1.0            │
+          │ signed:   Fulcio keyless, this workflow @ v3.0.0            │
           └────────────────────────┬────────────────────────────────────┘
                                    │
                                    ▼
@@ -287,7 +287,7 @@ jq -r '.signatures[0].extension.tsa_response' \
 The release also publishes a signed container image:
 
 ```bash
-cosign verify ghcr.io/aflock-ai/cilock:v1.1.0 \
+cosign verify ghcr.io/aflock-ai/cilock:v3.0.0 \
   --certificate-identity-regexp '^https://github\.com/aflock-ai/rookery/\.github/workflows/release\.yml@.+' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```

@@ -5,7 +5,7 @@ sidebar_position: 4
 
 # Attestor catalog
 
-Every attestor compiled into the **default `cilock` binary** (verified against `cilock 1.1.0`'s `cilock attestors list` output), with its predicate type URL, lifecycle phase, and a one-line summary. Per-attestor JSON schemas live upstream in the witness docs (linked in the table); CI/lock and witness use compatible schemas, with CI/lock attestation types namespaced under `https://aflock.ai/attestations/<name>/v0.1` and witness types under `https://witness.dev/attestations/<name>/v0.1`. CI/lock accepts both via legacy aliases. Several attestors emit upstream-typed predicates (SLSA, OpenVEX, in-toto link, SLSA VSA) instead of an aflock-namespaced one; those exact types are shown in the table.
+Every attestor compiled into the **default `cilock` binary** (verified against the released `cilock`'s `cilock attestors list` output), with its predicate type URL, lifecycle phase, and a one-line summary. Per-attestor JSON schemas live upstream in the witness docs (linked in the table); CI/lock and witness use compatible schemas, with CI/lock attestation types namespaced under `https://aflock.ai/attestations/<name>/v0.1` and witness types under `https://witness.dev/attestations/<name>/v0.1`. CI/lock accepts both via legacy aliases. Several attestors emit upstream-typed predicates (SLSA, OpenVEX, in-toto link, SLSA VSA) instead of an aflock-namespaced one; those exact types are shown in the table.
 
 > Source of truth: [`rookery/cilock/cmd/cilock/main.go`](https://github.com/aflock-ai/rookery/blob/main/cilock/cmd/cilock/main.go) for the registered set; per-attestor source in [`rookery/plugins/attestors/<name>/`](https://github.com/aflock-ai/rookery/tree/main/plugins/attestors).
 
