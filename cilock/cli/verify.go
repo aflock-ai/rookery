@@ -203,38 +203,45 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		verifiers = append(verifiers, v)
 	}
 
+	// --policy-ca-roots may point at a MULTI-cert PEM bundle (the platform's
+	// fulcio-roots.pem is the Fulcio CA + the self-signed Root CA, in that
+	// order). Parse every cert and bucket by self-signedness — the self-signed
+	// Root goes to policyRoots (the trust anchor), the rest to
+	// policyIntermediates — so the keyless signing leaf chains
+	// leaf -> Fulcio CA -> Root. This mirrors the discovered-trust
+	// (PolicyCARootsPEM) split below; without it, a single-file bundle would
+	// load only the first cert (the intermediate) and verify would fail to build
+	// a chain. This is what makes the published-trust offline command
+	// `cilock verify --policy-ca-roots fulcio-roots.pem ... --platform-url ""`
+	// work with one file.
 	var policyRoots []*x509.Certificate
-	if len(vo.PolicyCARootPaths) > 0 {
-		for _, caPath := range vo.PolicyCARootPaths {
-			caFile, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is from CLI flags
-			if err != nil {
-				return fmt.Errorf("failed to read root CA certificate file: %w", err)
-			}
-
-			cert, err := cryptoutil.TryParseCertificate(caFile)
-			if err != nil {
-				return fmt.Errorf("failed to parse root CA certificate: %w", err)
-			}
-
-			policyRoots = append(policyRoots, cert)
+	var policyIntermediates []*x509.Certificate
+	for _, caPath := range vo.PolicyCARootPaths {
+		caFile, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is from CLI flags
+		if err != nil {
+			return fmt.Errorf("failed to read root CA certificate file: %w", err)
 		}
+		roots, intermediates, err := splitPEMCertsBySelfSigned(caFile)
+		if err != nil {
+			return fmt.Errorf("failed to parse root CA certificate file %q: %w", caPath, err)
+		}
+		policyRoots = append(policyRoots, roots...)
+		policyIntermediates = append(policyIntermediates, intermediates...)
 	}
 
-	var policyIntermediates []*x509.Certificate
-	if len(vo.PolicyCAIntermediatePaths) > 0 {
-		for _, caPath := range vo.PolicyCAIntermediatePaths {
-			caFile, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is from CLI flags
-			if err != nil {
-				return fmt.Errorf("failed to read intermediate CA certificate file: %w", err)
-			}
-
-			cert, err := cryptoutil.TryParseCertificate(caFile)
-			if err != nil {
-				return fmt.Errorf("failed to parse intermediate CA certificate: %w", err)
-			}
-
-			policyIntermediates = append(policyIntermediates, cert)
+	// --policy-ca-intermediates: load EVERY cert in each file as an intermediate
+	// (no self-signed split — the operator explicitly declared these as
+	// intermediates).
+	for _, caPath := range vo.PolicyCAIntermediatePaths {
+		caFile, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is from CLI flags
+		if err != nil {
+			return fmt.Errorf("failed to read intermediate CA certificate file: %w", err)
 		}
+		certs, err := parsePEMCerts(caFile)
+		if err != nil {
+			return fmt.Errorf("failed to parse intermediate CA certificate file %q: %w", caPath, err)
+		}
+		policyIntermediates = append(policyIntermediates, certs...)
 	}
 
 	// CA roots discovered from the platform (the inlined trust bundle in
@@ -266,21 +273,25 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 
 	ptsVerifiers := make([]timestamp.TimestampVerifier, 0)
 	var tsaRootCerts []*x509.Certificate // tracked only so we can display them
-	if len(vo.PolicyTimestampServers) > 0 {
-		for _, server := range vo.PolicyTimestampServers {
-			f, err := os.ReadFile(server) //nolint:gosec // G304: server path is from CLI flags
-			if err != nil {
-				return fmt.Errorf("failed to open Timestamp Server CA certificate file: %w", err)
-			}
-
-			cert, err := cryptoutil.TryParseCertificate(f)
-			if err != nil {
-				return fmt.Errorf("failed to parse Timestamp Server CA certificate: %w", err)
-			}
-
-			ptsVerifiers = append(ptsVerifiers, timestamp.NewVerifier(timestamp.VerifyWithCerts([]*x509.Certificate{cert})))
-			tsaRootCerts = append(tsaRootCerts, cert)
+	for _, server := range vo.PolicyTimestampServers {
+		f, err := os.ReadFile(server) //nolint:gosec // G304: server path is from CLI flags
+		if err != nil {
+			return fmt.Errorf("failed to open Timestamp Server CA certificate file: %w", err)
 		}
+
+		// A TSA chain file (the platform's tsa-chain.pem) holds the TSA leaf AND
+		// the self-signed Root CA. Load EVERY cert into one verifier pool so
+		// p7.VerifyWithChain can build TSA-leaf -> Root: the embedded token cert
+		// chains to the Root anchor in the pool. Parsing only the first cert (the
+		// old behavior) dropped the anchor and the timestamp failed to validate —
+		// which broke the single-file offline command
+		// `cilock verify --policy-timestamp-servers tsa-chain.pem ... --platform-url ""`.
+		certs, err := parsePEMCerts(f)
+		if err != nil {
+			return fmt.Errorf("failed to parse Timestamp Server CA certificate file %q: %w", server, err)
+		}
+		ptsVerifiers = append(ptsVerifiers, timestamp.NewVerifier(timestamp.VerifyWithCerts(certs)))
+		tsaRootCerts = append(tsaRootCerts, certs...)
 	}
 
 	// Fill any policy-trust dimension the operator did not pass on the command
@@ -799,6 +810,56 @@ func extractSubjectDigests(env dsse.Envelope) map[string]struct{} {
 // loadEnvelopeFromFile reads a DSSE envelope from path. Used by verify in
 // preference to source.MemorySource.LoadFile when we also need the raw
 // envelope (for --output-bundle accounting).
+// parsePEMCerts decodes EVERY PEM CERTIFICATE block in data. Unlike
+// cryptoutil.TryParseCertificate (which returns only the first cert), this is
+// used for the policy-trust file flags, whose files routinely carry a full
+// chain (e.g. the platform's fulcio-roots.pem / tsa-chain.pem each hold a CA
+// plus the self-signed Root). Non-CERTIFICATE blocks are skipped. Returns an
+// error only when a CERTIFICATE block fails to parse or none is found.
+func parsePEMCerts(data []byte) ([]*x509.Certificate, error) {
+	var certs []*x509.Certificate
+	for rest := data; len(rest) > 0; {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse certificate: %w", err)
+		}
+		certs = append(certs, cert)
+	}
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("no PEM CERTIFICATE block found")
+	}
+	return certs, nil
+}
+
+// splitPEMCertsBySelfSigned parses every cert in a PEM bundle and buckets it by
+// self-signedness: a self-signed cert (subject == issuer) is a trust-anchor
+// ROOT, everything else is an INTERMEDIATE. This is the same split the
+// discovered-trust path (PolicyCARootsPEM) applies, lifted here so an explicit
+// --policy-ca-roots file holding a full chain (Fulcio CA + Root CA) anchors
+// correctly instead of treating the intermediate as a root.
+func splitPEMCertsBySelfSigned(data []byte) (roots, intermediates []*x509.Certificate, err error) {
+	certs, err := parsePEMCerts(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, cert := range certs {
+		if bytes.Equal(cert.RawSubject, cert.RawIssuer) {
+			roots = append(roots, cert)
+		} else {
+			intermediates = append(intermediates, cert)
+		}
+	}
+	return roots, intermediates, nil
+}
+
 func loadEnvelopeFromFile(path string) (dsse.Envelope, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // G304: path is from --attestations CLI flag
 	if err != nil {

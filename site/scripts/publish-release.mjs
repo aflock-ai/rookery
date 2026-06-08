@@ -8,14 +8,20 @@
  *   2. Promotes version-agnostic files (install.sh{,.sig,.cert}, the release
  *      policy) to canonical root keys, and writes/updates manifest.json with the
  *      new version + a "latest" pointer.
+ *   3. Writes a per-version `verification` block into manifest.json indexing the
+ *      OFFLINE-verification material the release publishes alongside the binaries
+ *      (the signed policy, the Fulcio CA + Root CA `fulcio-roots.pem`, the TSA
+ *      `tsa-chain.pem`, and each binary's two per-step DSSE envelopes with
+ *      sha256s). This is what lets a PUBLIC downloader run `cilock verify
+ *      --platform-url ""` with no platform/tenant/Archivista access.
  *
- * VERIFICATION is the CALLER's responsibility. In the release fan-out
- * (.github/workflows/release-fanout.yml) the `verify` job verifies every binary
- * ONLINE against the platform-trust policy (`cilock verify --platform-url
- * --enable-archivista`, attestations pulled from Archivista by subject digest)
- * and BLOCKS publish on any failure — this script runs only after that gate.
- * (The earlier offline attestation-sidecar "verify-then-upload" was an alpha
- * pattern and has been removed.)
+ * VERIFICATION (the publish gate) is still the CALLER's responsibility. In the
+ * release fan-out (.github/workflows/release-fanout.yml) the `verify` job verifies
+ * every binary ONLINE against the platform-trust policy (`cilock verify
+ * --platform-url --enable-archivista`, attestations pulled from Archivista by
+ * subject digest) and BLOCKS publish on any failure — this script runs only after
+ * that gate. The `verification` block this script writes is the material for a
+ * DOWNLOADER's later offline re-verify, NOT a gate on this upload.
  *
  * Usage:
  *   node scripts/publish-release.mjs --dir ./dist/v1.2.0 --version v1.2.0 [options]
@@ -98,6 +104,76 @@ function isPrerelease(version) {
   return version.includes('-');
 }
 
+// os/arch parsed from a per-step envelope name
+// cilock-<version>-<os>-<arch>.<step>.att.json. Returns {os, arch, step} or nulls.
+function parseAttestationName(name) {
+  const m = /^cilock-.+-(\w+)-(\w+)\.(source-git|build)\.att\.json$/.exec(name);
+  return m ? { os: m[1], arch: m[2], step: m[3] } : { os: null, arch: null, step: null };
+}
+
+// buildVerification assembles the per-version `verification` block that lets a
+// downloader run `cilock verify --platform-url ""` FULLY OFFLINE — no platform,
+// tenant, or Archivista access. It references the published trust material and
+// the per-binary DSSE attestation envelopes (BOTH the source-git and build
+// envelopes are required for the verify to pass), each with its sha256.
+//
+//   policy      — canonical root key for the signed release policy.
+//   fulcioRoots — <version>/fulcio-roots.pem (Fulcio CA + platform Root CA).
+//   tsaChain    — <version>/tsa-chain.pem (RFC3161 TSA cert chain).
+//   attestations[] — one entry per binary, with the matching tarball name and
+//                    BOTH per-step envelope files (sourceGit + build) + sha256s.
+//
+// Any piece that isn't present in --dir is omitted, so the block degrades
+// gracefully (e.g. an older publisher dir without envelopes still publishes).
+function buildVerification(dir, allFiles, version, policyName) {
+  const v = {};
+  if (allFiles.includes(policyName)) v.policy = `policy/${policyName}`;
+  if (allFiles.includes('fulcio-roots.pem')) v.fulcioRoots = `${version}/fulcio-roots.pem`;
+  if (allFiles.includes('tsa-chain.pem')) v.tsaChain = `${version}/tsa-chain.pem`;
+
+  // Group the per-step envelopes by os-arch so each binary references both.
+  const byBinary = {};
+  for (const name of allFiles) {
+    const { os, arch, step } = parseAttestationName(name);
+    if (!os) continue;
+    const key = `${os}-${arch}`;
+    byBinary[key] ??= {};
+    byBinary[key][step] = {
+      file: `${version}/${name}`,
+      sha256: sha256Hex(join(dir, name)),
+    };
+  }
+
+  const binaries = allFiles.filter(isBinaryTarball);
+  const attestations = [];
+  for (const tarball of binaries) {
+    const { os, arch } = parseBinaryName(tarball);
+    const env = byBinary[`${os}-${arch}`];
+    // Offline verify needs BOTH the source-git AND build envelopes. A binary
+    // with only one would get a manifest entry whose published verify command
+    // can't pass — so omit a partial set (and warn) rather than advertise an
+    // unverifiable binary.
+    if (!env || !env['source-git'] || !env.build) {
+      if (env && (env['source-git'] || env.build)) {
+        console.warn(`   ! ${tarball}: incomplete attestation envelopes (need source-git AND build) — omitting from the verification block`);
+      }
+      continue;
+    }
+    const entry = {
+      binary: tarball,
+      os,
+      arch,
+      // source-git first, then build (readability only).
+      envelopes: ['source-git', 'build'].map((step) => ({ step, file: env[step].file, sha256: env[step].sha256 })),
+    };
+    attestations.push(entry);
+  }
+  if (attestations.length > 0) v.attestations = attestations;
+
+  // Only emit the block when it carries something an offline verify can use.
+  return Object.keys(v).length > 0 ? v : undefined;
+}
+
 // --- main -------------------------------------------------------------------
 
 const opts = parseArgs(process.argv.slice(2));
@@ -140,14 +216,21 @@ const manifestFiles = allFiles.map((name) => {
   return entry;
 });
 
+const verification = buildVerification(opts.dir, allFiles, opts.version, opts.policy);
 const newVersion = { version: opts.version, released: new Date().toISOString(), files: manifestFiles };
+// Per-version offline-verification material (trust roots + per-binary envelopes).
+// Backward-compatible: a consumer that doesn't know the field (install.sh reads
+// only `latest` + per-file sha256) ignores it. Omitted entirely when absent.
+if (verification) newVersion.verification = verification;
 
 // Decide "latest": explicit flag wins; otherwise promote unless it's a pre-release.
 const promoteLatest = opts.latest === undefined ? !isPrerelease(opts.version) : opts.latest;
 
+const attestedBinaries = verification?.attestations?.length ?? 0;
 console.log(`   version:       ${opts.version}`);
 console.log(`   files:         ${allFiles.length} -> ${opts.version}/<file>`);
 console.log(`   root promote:  ${Object.entries(rootPromotions).filter(([k]) => allFiles.includes(k)).map(([k, v]) => `${k}->${v}`).join(', ') || '(none present)'}`);
+console.log(`   verification:  ${verification ? `policy=${verification.policy ?? '-'} fulcioRoots=${verification.fulcioRoots ? 'yes' : 'no'} tsaChain=${verification.tsaChain ? 'yes' : 'no'} attestedBinaries=${attestedBinaries}` : '(none — no trust/envelopes in --dir)'}`);
 console.log(`   latest:        ${promoteLatest ? `YES (manifest.latest=${opts.version})` : 'no (pre-release or --no-latest)'}`);
 
 if (opts.dryRun) {

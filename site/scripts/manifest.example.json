@@ -37,8 +37,52 @@
           "name": "release-v1.policy.json",
           "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
           "size": 2048
+        },
+        {
+          "name": "fulcio-roots.pem",
+          "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+          "size": 1800
+        },
+        {
+          "name": "tsa-chain.pem",
+          "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+          "size": 1600
+        },
+        {
+          "name": "cilock-v1.2.0-linux-amd64.source-git.att.json",
+          "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+          "size": 9000
+        },
+        {
+          "name": "cilock-v1.2.0-linux-amd64.build.att.json",
+          "sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+          "size": 12000
         }
-      ]
+      ],
+      "verification": {
+        "policy": "policy/release-v1.policy.json",
+        "fulcioRoots": "v1.2.0/fulcio-roots.pem",
+        "tsaChain": "v1.2.0/tsa-chain.pem",
+        "attestations": [
+          {
+            "binary": "cilock-v1.2.0-linux-amd64.tar.gz",
+            "os": "linux",
+            "arch": "amd64",
+            "envelopes": [
+              {
+                "step": "source-git",
+                "file": "v1.2.0/cilock-v1.2.0-linux-amd64.source-git.att.json",
+                "sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+              },
+              {
+                "step": "build",
+                "file": "v1.2.0/cilock-v1.2.0-linux-amd64.build.att.json",
+                "sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

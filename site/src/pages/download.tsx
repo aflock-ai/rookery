@@ -18,7 +18,18 @@ const STAGING_PLATFORM = 'https://platform.aws-sandbox-staging.testifysec.dev';
 const PROD_PLATFORM = 'https://platform.testifysec.com';
 
 type ManifestFile = {name: string; sha256: string; size: number; os?: string; arch?: string};
-type ManifestVersion = {version: string; released?: string; files: ManifestFile[]};
+type AttestationEnvelope = {step: string; file: string; sha256: string};
+type AttestationEntry = {binary: string; os?: string; arch?: string; envelopes: AttestationEnvelope[]};
+// Per-version offline-verification material published alongside the binaries so a
+// downloader can `cilock verify --platform-url ""` with NO platform/Archivista
+// access. All optional — older versions predate it and the page degrades cleanly.
+type Verification = {
+  policy?: string;
+  fulcioRoots?: string;
+  tsaChain?: string;
+  attestations?: AttestationEntry[];
+};
+type ManifestVersion = {version: string; released?: string; files: ManifestFile[]; verification?: Verification};
 type Manifest = {schema: number; latest: string; updated?: string; versions: ManifestVersion[]};
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -74,6 +85,56 @@ function CopyCmd({cmd, big}: {cmd: string; big?: boolean}): React.ReactElement {
 
 function binFor(ver: ManifestVersion, platform: string): ManifestFile | undefined {
   return ver.files.find((f) => f.os && f.arch && `${f.os}-${f.arch}` === platform);
+}
+
+// The keyless policy signer identity baked into the release fan-out
+// (release-fanout.yml RELEASE_POLICY_SIGNER_EMAIL + the platform Fulcio OIDC
+// issuer). An offline verify pins these so the signed policy can't be swapped for
+// one signed by a different Fulcio cert.
+const POLICY_SIGNER_EMAIL = 'colek42@gmail.com';
+const fulcioIssuerFor = (platformUrl: string) => `${platformUrl}/fulcio/oidc`;
+
+// basename of an R2 key (e.g. "v3.0.0/fulcio-roots.pem" -> "fulcio-roots.pem").
+const base = (key: string) => key.split('/').pop() ?? key;
+
+// Build the copy-paste FULLY OFFLINE verify command from a version's published
+// verification block, for a specific binary's two envelopes. `--platform-url ""`
+// opts out of all platform/Archivista/discovery access; trust comes only from the
+// published Fulcio roots + TSA chain + signed policy. Returns null when the block
+// lacks the pieces an offline verify needs.
+function offlineVerifyCmd(
+  ver: ManifestVersion,
+  att: AttestationEntry | undefined,
+  platformUrl: string,
+): string | null {
+  const v = ver.verification;
+  if (!v || !att || !v.fulcioRoots || !v.tsaChain || !v.policy) return null;
+  const dl = `/dl/${ver.version}`;
+  const policyName = base(v.policy);
+  const attFiles = att.envelopes.map((e) => base(e.file));
+  const lines = [
+    `# download the binary + all verification material`,
+    `curl -fsSLO https://cilock.dev${dl}/${att.binary}`,
+    `curl -fsSL  https://cilock.dev/${v.policy} -o ${policyName}`,
+    `curl -fsSLO https://cilock.dev/dl/${v.fulcioRoots}`,
+    `curl -fsSLO https://cilock.dev/dl/${v.tsaChain}`,
+    ...attFiles.map((f) => `curl -fsSLO https://cilock.dev${dl}/${f}`),
+    `tar xzf ${att.binary} cilock`,
+    ``,
+    `# verify FULLY OFFLINE — no platform, tenant, or Archivista access`,
+    `cilock verify ./cilock -p ${policyName} \\`,
+    `  --attestations ${attFiles.join(',')} \\`,
+    `  --policy-ca-roots ${base(v.fulcioRoots)} \\`,
+    `  --policy-timestamp-servers ${base(v.tsaChain)} \\`,
+    `  --policy-emails ${POLICY_SIGNER_EMAIL} \\`,
+    `  --policy-fulcio-oidc-issuer ${fulcioIssuerFor(platformUrl)} \\`,
+    `  --platform-url ""`,
+  ];
+  return lines.join('\n');
+}
+
+function attFor(ver: ManifestVersion, platform: string): AttestationEntry | undefined {
+  return ver.verification?.attestations?.find((a) => a.os && a.arch && `${a.os}-${a.arch}` === platform);
 }
 
 function DownloadInner(): React.ReactElement {
@@ -308,6 +369,48 @@ function DownloadInner(): React.ReactElement {
           </p>
         </div>
       </section>
+
+      {/* Story 3b — verify FULLY OFFLINE (no platform/tenant/Archivista). */}
+      {ver?.verification && (() => {
+        // Prefer the detected platform; else the first binary that has envelopes.
+        const offlinePlatform =
+          (platform && platform !== 'windows' && attFor(ver, platform) && platform) ||
+          ver.verification.attestations?.[0] &&
+            `${ver.verification.attestations[0].os}-${ver.verification.attestations[0].arch}`;
+        const att = offlinePlatform ? attFor(ver, offlinePlatform) : undefined;
+        const cmd = offlineVerifyCmd(ver, att, verPlatform);
+        const v = ver.verification;
+        if (!cmd) return null;
+        return (
+          <section className={styles.section}>
+            <Heading as="h2" className={styles.sectionTitle}>
+              Verify it offline (no platform needed)
+            </Heading>
+            <p className={styles.sectionHint}>
+              For air-gapped or zero-trust verifiers. Every proof travels with the release: the
+              per-binary DSSE attestation envelopes, the {verEnv} platform Fulcio + Root CA, and the
+              RFC&nbsp;3161 TSA chain. <code>cilock verify --platform-url ""</code> checks the binary
+              against the signed release policy using only those published files — no platform,
+              tenant, or Archivista access:
+            </p>
+            <CopyCmd cmd={cmd} />
+            <div className={styles.assetLinks} style={{marginTop: '0.9rem'}}>
+              <span className={styles.muted}>Verification material:</span>
+              {v.policy && <a href={`/${v.policy}`}>signed release policy</a>}
+              {v.fulcioRoots && <a href={`/dl/${v.fulcioRoots}`}>fulcio-roots.pem</a>}
+              {v.tsaChain && <a href={`/dl/${v.tsaChain}`}>tsa-chain.pem</a>}
+              {att?.envelopes.map((e) => (
+                <a key={e.file} href={`/dl/${e.file}`}>{base(e.file)}</a>
+              ))}
+            </div>
+            <p className={styles.muted} style={{marginTop: '0.6rem'}}>
+              Both the <code>source-git</code> and <code>build</code> envelopes are required — the
+              policy has both steps. Full walkthrough:{' '}
+              <Link to="/getting-started/verify-a-release-offline">Verify a release offline →</Link>
+            </p>
+          </section>
+        );
+      })()}
 
       {/* Story 4 — CI users. */}
       <section className={styles.section}>
