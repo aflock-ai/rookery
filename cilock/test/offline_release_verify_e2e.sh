@@ -32,6 +32,17 @@
 set -euo pipefail
 
 CILOCK="${CILOCK:-cilock}"
+
+# This hermetic smoke test mints a throwaway ed25519 file key with openssl. If
+# openssl isn't on the host (e.g. a minimal CI runner), skip gracefully rather
+# than failing closed — the offline-verify MECHANICS this guards are also covered
+# by cli/verify_policycerts_test.go, and a missing build tool must never block a
+# release. Install openssl on the runner to enable the full smoke test.
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "::warning::openssl not found — skipping the hermetic offline-verify smoke test (mechanics covered by verify_policycerts_test.go)"
+  exit 0
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 cd "$WORK"
