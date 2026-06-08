@@ -2,6 +2,7 @@ import React, {useEffect, useState} from 'react';
 import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
 import Link from '@docusaurus/Link';
+import TrustCenter from '../components/TrustCenter';
 import styles from './download.module.css';
 
 // CI/lock binaries are distributed ONLY from cilock.dev (Cloudflare R2 + the /dl
@@ -292,6 +293,18 @@ function DownloadInner(): React.ReactElement {
           </>
         )}
       </section>
+
+      {/* Supply Chain Trust Center — the visual provenance story for the headline
+          build. Renders only when the release published verification material. */}
+      {ver?.verification && (
+        <TrustCenter
+          version={ver.version}
+          verification={ver.verification}
+          platform={platform}
+          verEnv={verEnv}
+          binarySha256={mine?.sha256}
+        />
+      )}
 
       {/* Other releases — previous builds + pre-releases, present but de-emphasized. */}
       {others.length > 0 && (

@@ -1,0 +1,207 @@
+/* Supply Chain Trust Center — a marketing-grade provenance panel. Uses Docusaurus
+   theme vars so it adapts to light/dark; green = verified throughout. */
+
+.trustCenter {
+  --tc-green: #10b981;
+  --tc-green-soft: rgba(16, 185, 129, 0.12);
+  --tc-green-line: rgba(16, 185, 129, 0.32);
+  margin: 2.5rem 0;
+  padding: 1.75rem;
+  border: 1px solid var(--tc-green-line);
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 80% at 0% 0%, var(--tc-green-soft), transparent 60%),
+    var(--ifm-card-background-color, var(--ifm-background-surface-color));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.shield svg {
+  width: 44px;
+  height: 44px;
+  fill: var(--tc-green);
+  filter: drop-shadow(0 2px 6px rgba(16, 185, 129, 0.35));
+}
+.shieldCheck {
+  fill: var(--ifm-card-background-color, #fff);
+}
+
+.title {
+  margin: 0;
+  font-size: 1.5rem;
+  line-height: 1.2;
+}
+.subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--ifm-color-emphasis-700);
+  max-width: 60ch;
+  font-size: 0.95rem;
+}
+
+.envBadge {
+  margin-left: auto;
+  align-self: flex-start;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--tc-green);
+  background: var(--tc-green-soft);
+  border: 1px solid var(--tc-green-line);
+}
+.envBadge[data-env='staging'] {
+  --tc-green: #d97706;
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.12);
+  border-color: rgba(217, 119, 6, 0.32);
+}
+
+/* Chain of custody — a responsive row of verified steps. */
+.chain {
+  list-style: none;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 10px;
+  background: var(--ifm-background-color);
+  border: 1px solid var(--ifm-color-emphasis-200);
+}
+.stepTitle {
+  display: block;
+  font-weight: 650;
+  font-size: 0.9rem;
+}
+.stepDesc {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--ifm-color-emphasis-600);
+  margin-top: 0.1rem;
+  overflow-wrap: anywhere;
+}
+
+.check {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  fill: #fff;
+  background: var(--tc-green);
+  border-radius: 50%;
+  padding: 2px;
+}
+
+/* What happened — the parsed facts. */
+.factsBox {
+  margin-top: 1.5rem;
+  padding: 1rem 1.1rem;
+  border-radius: 12px;
+  background: var(--ifm-background-color);
+  border: 1px solid var(--ifm-color-emphasis-200);
+}
+.factsHead {
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-bottom: 0.6rem;
+}
+.facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.5rem 1.5rem;
+}
+.fact {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+  padding-top: 0.4rem;
+}
+.fact dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ifm-color-emphasis-600);
+}
+.fact dd {
+  margin: 0.1rem 0 0;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+.mono {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.82rem !important;
+}
+
+/* Threat model — the marketing grid. */
+.defends {
+  margin-top: 1.5rem;
+}
+.defendsHead {
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-bottom: 0.7rem;
+}
+.defendsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.7rem;
+}
+.threat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 10px;
+  background: var(--ifm-background-color);
+  border: 1px solid var(--ifm-color-emphasis-200);
+}
+.threatTop {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.threatTitle {
+  font-weight: 650;
+  font-size: 0.9rem;
+}
+.threatEx {
+  font-size: 0.72rem;
+  color: var(--ifm-color-emphasis-600);
+  font-style: italic;
+}
+.threatHow {
+  font-size: 0.8rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+/* Receipts. */
+.receipts {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+.receipts a {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.muted {
+  color: var(--ifm-color-emphasis-600);
+  font-size: 0.82rem;
+}
