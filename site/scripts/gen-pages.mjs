@@ -59,7 +59,7 @@ function jsonLd(entry, area) {
     '@type': 'TechArticle',
     headline: `${entry.title} — cilock ${area === 'attestors' ? 'attestor' : 'tool integration'}`,
     description: entry.description,
-    url: `https://cilock.aflock.ai/${area}/${entry.name}`,
+    url: `https://cilock.dev/${area}/${entry.name}`,
   };
   return `<script type="application/ld+json" dangerouslySetInnerHTML={{__html: ${JSON.stringify(
     JSON.stringify(ld),

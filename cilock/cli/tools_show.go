@@ -152,7 +152,7 @@ func writeToolSummary(w io.Writer, e toolEntry, doc *detection.DetectorDoc) erro
 		for _, s := range doc.Sections {
 			pr("    %-22s %s\n", s.Slug, s.Title)
 		}
-		pr("\nFull docs: https://cilock.aflock.ai/%s/%s\n", docArea(e), e.Name)
+		pr("\nFull docs: https://cilock.dev/%s/%s\n", docArea(e), e.Name)
 	} else {
 		pr("\n(no long-form documentation in the catalog yet — add %s.doc.md)\n", e.Name)
 	}

@@ -147,16 +147,16 @@ Yes — every tool page shows the raw CI/lock invocation; the [GitHub Actions](.
   "name": "cilock supported tools",
   "description": "CLI security and supply-chain tools whose output can be captured under cilock as a signed v0.3 attestation.",
   "itemListElement": [
-    {"@type": "SoftwareApplication", "name": "Syft", "url": "https://cilock.aflock.ai/tools/syft", "applicationCategory": "SBOM generator"},
-    {"@type": "SoftwareApplication", "name": "Trivy", "url": "https://cilock.aflock.ai/tools/trivy", "applicationCategory": "Vulnerability scanner"},
-    {"@type": "SoftwareApplication", "name": "Grype", "url": "https://cilock.aflock.ai/tools/grype", "applicationCategory": "Vulnerability scanner"},
-    {"@type": "SoftwareApplication", "name": "OSV-Scanner", "url": "https://cilock.aflock.ai/tools/osv-scanner", "applicationCategory": "Vulnerability scanner"},
-    {"@type": "SoftwareApplication", "name": "govulncheck", "url": "https://cilock.aflock.ai/tools/govulncheck", "applicationCategory": "Vulnerability scanner"},
-    {"@type": "SoftwareApplication", "name": "CodeQL", "url": "https://cilock.aflock.ai/tools/codeql", "applicationCategory": "Static analysis"},
-    {"@type": "SoftwareApplication", "name": "Semgrep", "url": "https://cilock.aflock.ai/tools/semgrep", "applicationCategory": "Static analysis"},
-    {"@type": "SoftwareApplication", "name": "gosec", "url": "https://cilock.aflock.ai/tools/gosec", "applicationCategory": "Static analysis"},
-    {"@type": "SoftwareApplication", "name": "Checkov", "url": "https://cilock.aflock.ai/tools/checkov", "applicationCategory": "IaC misconfig scanner"},
-    {"@type": "SoftwareApplication", "name": "Hadolint", "url": "https://cilock.aflock.ai/tools/hadolint", "applicationCategory": "Dockerfile linter"},
-    {"@type": "SoftwareApplication", "name": "Kubescape", "url": "https://cilock.aflock.ai/tools/kubescape", "applicationCategory": "Kubernetes posture scanner"}
+    {"@type": "SoftwareApplication", "name": "Syft", "url": "https://cilock.dev/tools/syft", "applicationCategory": "SBOM generator"},
+    {"@type": "SoftwareApplication", "name": "Trivy", "url": "https://cilock.dev/tools/trivy", "applicationCategory": "Vulnerability scanner"},
+    {"@type": "SoftwareApplication", "name": "Grype", "url": "https://cilock.dev/tools/grype", "applicationCategory": "Vulnerability scanner"},
+    {"@type": "SoftwareApplication", "name": "OSV-Scanner", "url": "https://cilock.dev/tools/osv-scanner", "applicationCategory": "Vulnerability scanner"},
+    {"@type": "SoftwareApplication", "name": "govulncheck", "url": "https://cilock.dev/tools/govulncheck", "applicationCategory": "Vulnerability scanner"},
+    {"@type": "SoftwareApplication", "name": "CodeQL", "url": "https://cilock.dev/tools/codeql", "applicationCategory": "Static analysis"},
+    {"@type": "SoftwareApplication", "name": "Semgrep", "url": "https://cilock.dev/tools/semgrep", "applicationCategory": "Static analysis"},
+    {"@type": "SoftwareApplication", "name": "gosec", "url": "https://cilock.dev/tools/gosec", "applicationCategory": "Static analysis"},
+    {"@type": "SoftwareApplication", "name": "Checkov", "url": "https://cilock.dev/tools/checkov", "applicationCategory": "IaC misconfig scanner"},
+    {"@type": "SoftwareApplication", "name": "Hadolint", "url": "https://cilock.dev/tools/hadolint", "applicationCategory": "Dockerfile linter"},
+    {"@type": "SoftwareApplication", "name": "Kubescape", "url": "https://cilock.dev/tools/kubescape", "applicationCategory": "Kubernetes posture scanner"}
   ]
 })}} />
