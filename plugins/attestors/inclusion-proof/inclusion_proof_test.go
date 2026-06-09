@@ -52,8 +52,10 @@ func buildProof(t *testing.T, leaves map[string]string, path string) (*Attestor,
 	tree, idx, err := side.Reconstruct()
 	require.NoError(t, err)
 
-	leafIdx, ok := idx[path]
-	require.True(t, ok, "path %q must exist in sidecar index", path)
+	// v0.3: the reconstructed index is keyed by content DIGEST, not path
+	// (the leaf hash binds content only). Look up by the file's digest.
+	leafIdx, ok := idx[leaves[path]]
+	require.True(t, ok, "digest for path %q must exist in sidecar index", path)
 
 	auditPath, err := tree.InclusionProof(leafIdx)
 	require.NoError(t, err)
@@ -209,9 +211,12 @@ func TestSidecar_ReconstructionRootMismatch(t *testing.T) {
 	side, err := BuildSidecar("product", leaves)
 	require.NoError(t, err)
 
-	// Corrupt one leaf's digest. The sidecar's claimed MerkleRoot is
-	// still the ORIGINAL root, so Reconstruct() must detect mismatch.
-	side.Leaves[0].FileDigest = digestHex([]byte("definitely a different file body"))
+	// Corrupt the LAST leaf's digest to all-f's. Leaves are canonically
+	// ordered by (fileDigest, path); an all-f digest sorts to the end so the
+	// canonical-order check still passes — isolating the failure on the ROOT
+	// mismatch path (the claimed MerkleRoot is still the ORIGINAL root).
+	require.GreaterOrEqual(t, len(side.Leaves), 1)
+	side.Leaves[len(side.Leaves)-1].FileDigest = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 
 	_, _, err = side.Reconstruct()
 	require.Error(t, err)
@@ -261,7 +266,7 @@ func TestSidecar_RefusesUnsortedLeaves(t *testing.T) {
 
 	_, _, err = side.Reconstruct()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not lexicographically sorted")
+	assert.Contains(t, err.Error(), "canonical")
 }
 
 // TestVerify_RefusesHashAlgorithmConfusion: changing the predicate's
@@ -299,11 +304,41 @@ func TestLeafHash_RejectsMalformedDigest(t *testing.T) {
 	assert.Contains(t, err.Error(), "decode to 32 bytes")
 }
 
-// TestLeafHash_RejectsEmptyPath documents the empty-path rejection.
-func TestLeafHash_RejectsEmptyPath(t *testing.T) {
-	d := digestHex([]byte("body"))
-	_, err := LeafHash("", d)
-	require.Error(t, err)
+// TestLeafHashWithDomain_EmptyDomainIsBackCompat (RESCUED from the deleted
+// chain_sidecar_test.go) confirms the empty-domain leaf is byte-identical to
+// LeafHash. This is the only in-package regression test for the empty-domain
+// canonical form; it must survive the chain-sidecar rip. Rewritten to the v0.3
+// path-dropped hash: the path arg is non-authoritative.
+func TestLeafHashWithDomain_EmptyDomainIsBackCompat(t *testing.T) {
+	digest := digestHex([]byte("content"))
+	legacy, err := LeafHash("src/main.go", digest)
+	require.NoError(t, err)
+	domained, err := LeafHashWithDomain("", "src/main.go", digest)
+	require.NoError(t, err)
+	assert.Equal(t, hex.EncodeToString(legacy), hex.EncodeToString(domained),
+		"empty-domain leaf must equal LeafHash byte-for-byte")
+}
+
+// TestLeafHashWithDomain_NonEmptyDomainShifts (RESCUED from the deleted
+// chain_sidecar_test.go AND attestation/chain's TestAdversarial_LeafHashDomainPrefix)
+// confirms a non-empty domain produces a DIFFERENT hash than empty for the same
+// digest, AND that the domained hash is deterministic. This is the E4
+// citation-hijack defense's regression test; it must survive the chain-sidecar
+// rip. Path-independent in v0.3 — the leaf binds (domain, content) only.
+func TestLeafHashWithDomain_NonEmptyDomainShifts(t *testing.T) {
+	digest := digestHex([]byte("content"))
+	empty, err := LeafHashWithDomain("", "src/main.go", digest)
+	require.NoError(t, err)
+	domained, err := LeafHashWithDomain("rookery-product/v0.3", "src/main.go", digest)
+	require.NoError(t, err)
+	assert.NotEqual(t, hex.EncodeToString(empty), hex.EncodeToString(domained),
+		"domain separation: a non-empty domain must shift the leaf hash")
+
+	// Determinism: the same domain at two calls must produce identical bytes.
+	domained2, err := LeafHashWithDomain("rookery-product/v0.3", "src/main.go", digest)
+	require.NoError(t, err)
+	assert.Equal(t, hex.EncodeToString(domained), hex.EncodeToString(domained2),
+		"LeafHashWithDomain must be deterministic")
 }
 
 // TestPredicateConstants makes sure the package exports the same

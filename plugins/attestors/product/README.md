@@ -44,7 +44,7 @@ Verify-only support for v0.1/v0.2 wire format is retained via
 
 ## Leaf encoding
 
-This attestor and the inclusion-proof attestor (`cilock prove`) agree on:
+This attestor and the inclusion-proof attestor agree on the following leaf encoding (used for both inline leaves and standalone proof verification):
 
 ```
 leafPreHash = sha256(path-bytes || 0x00 || file-digest-bytes-raw32)
@@ -83,20 +83,11 @@ filesystem walk order.
 }
 ```
 
-The four fields are O(1) regardless of product count — that is the whole
-point of the rewrite. Per-file data is **not** in the predicate; sidecars
-carry it.
+The predicate also carries the per-file `leaves` array inline (path, fileDigest, leafHash per entry), making every product file directly verifiable from the signed attestation. The fixed-size fields above are O(1) regardless of product count; the leaves array scales with treeSize.
 
-## Side-channel tree sidecar
+## Inline leaves
 
-`cilock run` writes a side-channel sidecar adjacent to the signed
-attestation file so `cilock prove` can generate inclusion proofs after
-the fact. The sidecar format is defined once in
-`plugins/attestors/inclusion-proof` and used uniformly for product and
-material trees — see that package's `Sidecar` type and the
-`rookery.inclusion-proof.sidecar/v0.1` schema. Library consumers
-holding an `*Attestor` can call `BuildSidecar()` to produce the same
-shape without going through the CLI.
+Since v0.3 is the sole producer, the signed envelope always carries the full `leaves` array inline — every `(path, fileDigest, leafHash)` triple. This makes the product attestation self-contained: no sidecar or separate inclusion-proof envelope is needed for per-file verification. Library consumers holding an `*Attestor` can call `BuildSidecar()` to produce the `rookery.inclusion-proof.sidecar/v0.1` shape if needed for interoperability purposes.
 
 The sidecar is **NOT signed** and **NOT** part of the attestation envelope.
 Producers may discard it. Verifiers may demand it from the producer for

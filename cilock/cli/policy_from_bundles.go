@@ -757,8 +757,9 @@ func warnMissingProvenanceEdges(stderr io.Writer, p *policy.Policy, edgesEmitted
 	}
 	_, _ = fmt.Fprintf(stderr,
 		"warning: emitted %d independent steps with no cross-step provenance edges; "+
-			"cross-step integrity is NOT enforced. Wire steps with cilock prove-chain, "+
-			"or verify each step's product individually.\n",
+			"cross-step integrity is NOT enforced. Wire steps with artifactsFrom so a "+
+			"downstream step's materials are checked against an upstream step's signed "+
+			"inline-leaf products, or verify each step's product individually.\n",
 		len(p.Steps))
 }
 

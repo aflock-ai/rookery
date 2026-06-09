@@ -148,15 +148,6 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// heuristic is conservative. Covered by max_digests_env_test.go.
 	"DefaultMaxDigests": {},
 
-	// Default HTTP chain-sidecar timeout / max-bytes are
-	// overridable via --chain-sidecar-http-timeout and
-	// --chain-sidecar-http-max-bytes, plumbed from
-	// cilock/internal/options/verify.go (different package).
-	// Same-package heuristic misses it; coverage lives in
-	// chain_sidecar_http_override_test.go.
-	"DefaultHTTPChainSidecarTimeout":  {},
-	"DefaultHTTPChainSidecarMaxBytes": {},
-
 	// DefaultPlatformURL is overridable via --platform-url; the
 	// flag binding lives in cilock/internal/options/run.go (a
 	// different package from where the const is declared).

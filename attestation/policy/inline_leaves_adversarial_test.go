@@ -6,11 +6,13 @@
 //
 //      http://www.apache.org/licenses/LICENSE-2.0
 //
-// These tests pin the v0.4 inline-leaves trust boundary in
-// verifyCollectionArtifacts: an artifactsFrom chain can be verified from the
-// Merkle leaves embedded in (and signed by) each collection — no sidecar —
-// but ONLY after the leaves are confirmed to reconstruct to the signed root
-// and the downstream materials are non-empty under strict mode.
+// These tests pin the v0.3 inline-leaves trust boundary in
+// verifyCollectionArtifacts: an artifactsFrom chain is verified from the Merkle
+// leaves embedded in (and signed by) each collection — inline leaves are now
+// the SOLE trust path (the off-envelope chain sidecar was removed). Verification
+// only proceeds after the leaves are confirmed to reconstruct to the signed
+// root, and a leaf-less collection with no inline materials ALWAYS fails closed
+// (no flag, no opt-out).
 
 package policy
 
@@ -88,13 +90,14 @@ func inlineChainSetup(upProduct, downMaterial cryptoutil.DigestSet, downVerifyEr
 	return step, build, collectionsByStep
 }
 
-// Strict mode, no sidecar: valid inline leaves + matching material digest pass.
-func TestInlineLeaves_StrictPassesWithoutSidecar(t *testing.T) {
+// Valid inline leaves + matching material digest pass — inline leaves are the
+// sole trust path; no sidecar, no flag.
+func TestInlineLeaves_PassesFromInlineLeaves(t *testing.T) {
 	d := digest("aa")
 	step, build, byStep := inlineChainSetup(d, d, nil)
-	vo := &verifyOptions{requireSidecar: true} // chainSidecarSource nil
+	vo := &verifyOptions{}
 	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
-	require.NoError(t, err, "verified inline leaves with matching material must satisfy strict mode with no sidecar")
+	require.NoError(t, err, "verified inline leaves with matching material must satisfy the chain with no sidecar")
 }
 
 // Forged inline leaves (VerifyInlineLeaves errors) must be rejected even when
@@ -103,7 +106,7 @@ func TestInlineLeaves_StrictPassesWithoutSidecar(t *testing.T) {
 func TestInlineLeaves_ForgedLeafRejected(t *testing.T) {
 	d := digest("aa")
 	step, build, byStep := inlineChainSetup(d, d, errors.New("inline leaves reconstruct to a different root"))
-	vo := &verifyOptions{requireSidecar: true}
+	vo := &verifyOptions{}
 	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
 	require.Error(t, err, "downstream inline leaves that fail reconstruction must be rejected")
 }
@@ -112,15 +115,17 @@ func TestInlineLeaves_ForgedLeafRejected(t *testing.T) {
 // must fail compareArtifacts.
 func TestInlineLeaves_MismatchedMaterialRejected(t *testing.T) {
 	step, build, byStep := inlineChainSetup(digest("aa"), digest("bb"), nil)
-	vo := &verifyOptions{requireSidecar: true}
+	vo := &verifyOptions{}
 	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
 	require.Error(t, err, "downstream material whose digest disagrees with the upstream product must be rejected")
 }
 
-// Vacuous-pass defense: a leaf-less collection (no inline materials, no
-// products, no sidecar) cannot satisfy strict mode — empty materials would
-// otherwise make compareArtifacts pass trivially.
-func TestInlineLeaves_VacuousFailsUnderStrict(t *testing.T) {
+// Vacuous-pass defense (UNCONDITIONAL fail-closed): a leaf-less collection (no
+// inline materials, no products, no sidecar) can NEVER satisfy the chain —
+// empty materials would otherwise make compareArtifacts pass trivially. With
+// the chain sidecar removed, inline leaves are the sole trust path, so this
+// fails closed with no flag and no opt-out.
+func TestInlineLeaves_VacuousAlwaysFailsClosed(t *testing.T) {
 	up := &inlineFakeAttestor{typ: "https://aflock.ai/attestations/product/v0.3"}
 	down := &inlineFakeAttestor{typ: "https://aflock.ai/attestations/material/v0.3"}
 	step := Step{Name: "build", ArtifactsFrom: []string{"source"}}
@@ -128,18 +133,18 @@ func TestInlineLeaves_VacuousFailsUnderStrict(t *testing.T) {
 	byStep := map[string]StepResult{
 		"source": {Step: "source", Passed: []PassedCollection{{Collection: inlineCollection("source", up)}}},
 	}
-	vo := &verifyOptions{requireSidecar: true}
+	vo := &verifyOptions{}
 	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
-	require.Error(t, err, "empty materials with no sidecar must fail closed under --require-sidecar")
+	require.Error(t, err, "a leaf-less collection (empty materials, no inline leaves) must always fail closed")
 }
 
 // Authoritative empty: a downstream step that INLINES an empty material set
 // (HasInlineLeaves == true) has signed a commitment that it consumed nothing —
 // e.g. a build in an isolated workingdir. That is a verified fact, not a
-// vacuous-pass bypass, so strict mode must accept it WITHOUT a sidecar and
+// vacuous-pass bypass, so the chain must accept it WITHOUT a sidecar and
 // WITHOUT any flag. This is the rc4 regression: the self-host-minimal
-// binary-build step records no materials and must still verify flaglessly.
-func TestInlineLeaves_AuthoritativeEmptyPassesStrict(t *testing.T) {
+// binary-build step records no materials and must still verify.
+func TestInlineLeaves_AuthoritativeEmptyPasses(t *testing.T) {
 	up := &inlineFakeAttestor{typ: "https://aflock.ai/attestations/product/v0.3", inlinePresent: true}
 	down := &inlineFakeAttestor{typ: "https://aflock.ai/attestations/material/v0.3", inlinePresent: true} // inline, zero materials
 	step := Step{Name: "build", ArtifactsFrom: []string{"source"}}
@@ -147,22 +152,7 @@ func TestInlineLeaves_AuthoritativeEmptyPassesStrict(t *testing.T) {
 	byStep := map[string]StepResult{
 		"source": {Step: "source", Passed: []PassedCollection{{Collection: inlineCollection("source", up)}}},
 	}
-	vo := &verifyOptions{requireSidecar: true}
+	vo := &verifyOptions{}
 	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
-	require.NoError(t, err, "an inline, authoritatively-empty material set must satisfy strict mode with no sidecar and no flag")
-}
-
-// Back-compat: with --require-sidecar=false the legacy vacuous pass is
-// preserved (matches pre-existing behavior for leaf-less chains).
-func TestInlineLeaves_VacuousPassesWhenNotStrict(t *testing.T) {
-	up := &inlineFakeAttestor{typ: "https://aflock.ai/attestations/product/v0.3"}
-	down := &inlineFakeAttestor{typ: "https://aflock.ai/attestations/material/v0.3"}
-	step := Step{Name: "build", ArtifactsFrom: []string{"source"}}
-	build := inlineCollection("build", down)
-	byStep := map[string]StepResult{
-		"source": {Step: "source", Passed: []PassedCollection{{Collection: inlineCollection("source", up)}}},
-	}
-	vo := &verifyOptions{requireSidecar: false}
-	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
-	require.NoError(t, err, "non-strict mode preserves the legacy vacuous-pass for leaf-less chains")
+	require.NoError(t, err, "an inline, authoritatively-empty material set must satisfy the chain with no sidecar and no flag")
 }

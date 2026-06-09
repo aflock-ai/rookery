@@ -31,23 +31,29 @@
 //
 // # Leaf encoding (binding contract with product/material v0.3 attestors)
 //
-// Every v0.3 product/material tree leaf is constructed as:
+// Every v0.3 product/material tree leaf binds CONTENT ONLY — the path is NOT
+// part of the hash (v0.3 clean break). The pre-hash is:
 //
-//	preHash := sha256(pathBytes || 0x00 || fileDigestBytes)
+//	preHash := sha256(domain || 0x00 || fileDigestBytes)   // domain != ""
+//	preHash := sha256(fileDigestBytes)                      // empty domain (canonical software-build leaf)
 //
 // where `fileDigestBytes` is the 32-byte SHA-256 of the file content (NOT
-// the hex-string representation). The merkle wrapper then applies the
-// RFC 6962 §2.1 0x00 leaf domain prefix internally, so the actual leaf
-// hash committed to is `H(0x00 || preHash)`.
+// the hex-string representation), and `domain` is a hardcoded per-attestor-type
+// constant for cross-APPLICATION separation (E4), empty for the software-build
+// context. The merkle wrapper then applies the RFC 6962 §2.1 0x00 leaf domain
+// prefix internally, so the committed leaf hash is `H(0x00 || preHash)`.
 //
-// The path bytes are the UTF-8 bytes of the **portable**, forward-slash
-// form of the path that the producing attestor recorded in its sidecar
-// (so the leaf hash is reproducible across operating systems). Callers of
-// this attestor never need to know that detail — they just pass the same
-// `leafPath` string the producing attestor wrote into its sidecar.
+// Path authentication: a leaf's `path` is carried as NON-AUTHORITATIVE metadata
+// in the signed predicate. It is authenticated by the DSSE signature over the
+// inline leaves, NOT by the Merkle commitment — an independent verifier MUST NOT
+// expect the root to bind the path, and MUST recompute the leaf as above. This
+// is what makes a build's product reproducible (no build-host path in the root)
+// and reconstructible from the artifact digest alone (Archivista discovery).
 //
-// The 0x00 separator between path and digest is critical: without framing,
-// `("foo", digestA)` and `("fooX", digestA')` could collide.
+// Injectivity of the (domain, digest) encoding holds because the digest is a
+// fixed-length (32-byte) TERMINAL field and the domains are a closed hardcoded
+// enum containing no 0x00 byte (NIST SP 800-185 achieves the same goal via
+// length-prefix framing; adopt that before any variable-length leaf field).
 //
 // # Verification contract
 //
@@ -301,19 +307,20 @@ func NormalizePath(p string) string {
 	return strings.ReplaceAll(p, "\\", "/")
 }
 
-// LeafHash returns the v0.3 pre-hash for a (path, fileDigest) pair —
-// i.e. sha256(path || 0x00 || rawFileDigest). The merkle wrapper applies
-// the 0x00 leaf domain prefix on top of this when building or verifying
-// the tree.
+// LeafHash returns the v0.3 pre-hash for a leaf — i.e. sha256(rawFileDigest).
+// The path argument is accepted but IGNORED (v0.3 clean break): the leaf binds
+// content only; path authentication comes from the DSSE signature over the
+// inline leaves. The merkle wrapper applies the 0x00 leaf domain prefix on top
+// of this when building or verifying the tree.
 //
 // fileDigestHex must be the lowercase hex encoding of a 32-byte SHA-256
 // digest. The function rejects anything else loudly: a silently mis-
 // encoded leaf would make the entire tree unverifiable.
 //
 // This function is exported because the matching v0.3 product/material
-// attestors AND `cilock prove`'s sidecar reconstruction MUST produce
-// byte-identical leaves. Centralising the encoding here is the only way
-// to guarantee that across module boundaries.
+// attestors AND the verify-side inline-leaf/discovery reconstruction MUST
+// produce byte-identical leaves. Centralising the encoding here is the only
+// way to guarantee that across module boundaries.
 func LeafHash(path, fileDigestHex string) ([]byte, error) {
 	return LeafHashWithDomain("", path, fileDigestHex)
 }
@@ -338,9 +345,15 @@ func LeafHash(path, fileDigestHex string) ([]byte, error) {
 // Future per-application domains (corpus citation, sensor telemetry,
 // etc.) get their own attestor type with its own hardcoded domain.
 func LeafHashWithDomain(domain, path, fileDigestHex string) ([]byte, error) {
-	if path == "" {
-		return nil, errors.New("leaf path must not be empty")
-	}
+	// path is intentionally NOT part of the leaf hash (v0.3 clean break).
+	// Path authentication now comes from the DSSE signature over the always-
+	// inline leaves, not from the Merkle commitment. The leaf binds CONTENT
+	// only: sha256(domain || 0x00 || rawDigest), or sha256(rawDigest) when the
+	// domain is empty. This makes a build's product reproducible (no build-host
+	// path in the root) and reconstructible from the artifact digest alone
+	// (Archivista discovery). `path` is retained in the signature solely so the
+	// existing callers compile unchanged; it is non-authoritative metadata.
+	_ = path
 	digest, err := hex.DecodeString(fileDigestHex)
 	if err != nil {
 		return nil, fmt.Errorf("file digest must be hex: %w", err)
@@ -350,14 +363,13 @@ func LeafHashWithDomain(domain, path, fileDigestHex string) ([]byte, error) {
 	}
 	h := sha256.New()
 	if domain != "" {
-		// Domain prefix is NUL-delimited from the path. Empty domain
-		// MUST collapse to the original wire format — no leading NUL —
-		// so old attestations verify unchanged.
+		// Domain prefix is NUL-delimited. Empty domain MUST collapse to a bare
+		// digest hash (no leading NUL) so the empty-domain form is the canonical
+		// v0.x software-build leaf. Domain separation is the E4 citation-hijack
+		// defense and is preserved independently of the (now dropped) path.
 		_, _ = h.Write([]byte(domain))
 		_, _ = h.Write([]byte{0x00})
 	}
-	_, _ = h.Write([]byte(path))
-	_, _ = h.Write([]byte{0x00})
 	_, _ = h.Write(digest)
 	return h.Sum(nil), nil
 }

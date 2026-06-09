@@ -56,12 +56,6 @@ var essentialFlags = map[string][]string{
 	"sign": {
 		"signer-file-key-path", "outfile", "datatype",
 	},
-	"prove": {
-		"file", "outfile", "signer-file-key-path",
-	},
-	"prove-chain": {
-		"consumed", "source-envelope", "source-sidecar", "source-step", "outfile",
-	},
 }
 
 // advancedPrefixes marks whole families of flags as advanced regardless

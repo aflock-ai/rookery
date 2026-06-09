@@ -40,7 +40,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -100,32 +99,57 @@ func TestV03_001_DeterministicRoot(t *testing.T) {
 }
 
 // =============================================================================
-// V03_002: Renaming a file changes the root
+// V03_001b: Equal-content materials dedup to one leaf
 // =============================================================================
 
-// V03_002 covers the "sort-by-path → renaming changes the root" leg of
-// the path-binding invariant. The leaf includes the path, so renaming
-// (or, equivalently, reordering paths) MUST produce a different root.
-func TestV03_002_RenameChangesRoot(t *testing.T) {
-	r1 := makeMaterialAttestor(t, map[string]string{"a": "x", "b": "y"}).MerkleRoot
-	r2 := makeMaterialAttestor(t, map[string]string{"a": "x", "c": "y"}).MerkleRoot // b → c
-	assert.NotEqual(t, r1, r2, "renaming a file must change the merkle root")
+// TestV03_001b_DedupEqualContentMaterials pins the v0.3 dedup invariant: two
+// distinct paths with identical content collapse to ONE leaf (TreeSize==1) so
+// the producer root equals any digest-only reconstruction. Without dedup the
+// RFC6962 wrapper would keep two byte-identical leaves and the tree would
+// diverge from VerifyInlineLeaves / Archivista discovery.
+func TestV03_001b_DedupEqualContentMaterials(t *testing.T) {
+	a := makeMaterialAttestor(t, map[string]string{
+		"a/dup": "same-bytes",
+		"b/dup": "same-bytes",
+	})
+	require.Equal(t, uint64(1), a.TreeSize, "equal-content materials must collapse to one leaf")
+	require.Len(t, a.Leaves(), 1)
+
+	solo := makeMaterialAttestor(t, map[string]string{"a/dup": "same-bytes"})
+	require.Equal(t, solo.MerkleRoot, a.MerkleRoot, "deduped root must equal the single-leaf root")
+	require.NoError(t, a.VerifyInlineLeaves())
 }
 
 // =============================================================================
-// V03_003: Path-binding — swapping paths between two files changes the root
+// V03_002: Renaming a file changes the root
 // =============================================================================
 
-// V03_003 is the critical leg of path-binding. With a naive
-// "hash(concat-of-digests)" approach, swapping paths between files
-// would produce the same root because the multiset of file digests is
-// the same. With our (path || 0x00 || digest) leaf encoding, the leaf
-// hashes change and so does the root.
-//
-// If this test ever fails, the leaf encoding has lost path binding and
-// an attacker can substitute file contents without invalidating the
-// tree subject.
-func TestV03_003_PathBindingDistinctFromContentOnly(t *testing.T) {
+// V03_002 (INVERTED for v0.3 clean break): the leaf hash binds CONTENT only —
+// the path is NOT part of the hash. Renaming a file WITHOUT changing its
+// content does NOT change the root. The two material sets below have the
+// identical content multiset {x, y}, so their roots must be EQUAL. Path
+// protection now comes from the DSSE signature over the always-inline leaves
+// (the path-keyed Materials() map a verifier sees), not from the Merkle root.
+func TestV03_002_RenameDoesNotChangeRoot(t *testing.T) {
+	r1 := makeMaterialAttestor(t, map[string]string{"a": "x", "b": "y"}).MerkleRoot
+	r2 := makeMaterialAttestor(t, map[string]string{"a": "x", "c": "y"}).MerkleRoot // b → c
+	assert.Equal(t, r1, r2, "renaming a file (same content) must NOT change the merkle root in v0.3")
+}
+
+// =============================================================================
+// V03_003: Content-only root — swapping paths between two files keeps the root
+// =============================================================================
+
+// V03_003 (INVERTED for v0.3 clean break): the leaf hash binds CONTENT only,
+// so swapping which path holds which content does NOT change the root — the
+// multiset of content digests is identical. This is the intended v0.3
+// behavior: the Merkle root commits to the set of file CONTENTS, and path
+// substitution is detected NOT by the root but by the DSSE signature over the
+// inline leaves (and the path-keyed Materials() map the verifier consumes in
+// compareArtifacts). A verifier comparing artifactsFrom edges still sees the
+// path→digest binding via the signed leaves; it just no longer lives in the
+// Merkle commitment.
+func TestV03_003_RootIsContentOnly(t *testing.T) {
 	a := makeMaterialAttestor(t, map[string]string{
 		"a": "one",
 		"b": "two",
@@ -135,8 +159,8 @@ func TestV03_003_PathBindingDistinctFromContentOnly(t *testing.T) {
 		"a": "two",
 		"b": "one",
 	})
-	assert.NotEqual(t, a.MerkleRoot, b.MerkleRoot,
-		"path binding broken: swapping paths produced the same root")
+	assert.Equal(t, a.MerkleRoot, b.MerkleRoot,
+		"v0.3 root commits to content only; swapping paths over the same content set keeps the root")
 }
 
 // =============================================================================
@@ -183,15 +207,13 @@ func TestV03_005_SingleFileTreePredictableRoot(t *testing.T) {
 
 	// File digest = sha256("hello").
 	fileDigest := sha256.Sum256([]byte("hello"))
-	// Leaf content = "only.txt" || 0x00 || raw-sha256-bytes.
-	leafContent := append([]byte("only.txt"), 0)
-	leafContent = append(leafContent, fileDigest[:]...)
-	leafHash := sha256.Sum256(leafContent)
+	// v0.3 clean break: leaf content = raw-sha256-bytes ONLY (path dropped).
+	leafHash := sha256.Sum256(fileDigest[:])
 	// Single-leaf RFC 6962 tree: root = HashLeaf(leafHash) = SHA256(0x00 || leafHash).
 	expectedRoot := sha256.Sum256(append([]byte{0x00}, leafHash[:]...))
 
 	assert.Equal(t, hex.EncodeToString(expectedRoot[:]), a.MerkleRoot,
-		"single-file tree root must equal the hand-computed value")
+		"single-file tree root must equal the hand-computed value (content-only leaf)")
 	assert.Equal(t, uint64(1), a.TreeSize, "single-file tree size must be 1")
 }
 
@@ -308,23 +330,30 @@ func TestV03_009_SignedPredicateInlinesLeaves(t *testing.T) {
 	assert.Contains(t, generic, "construction")
 }
 
-// TestSuppressInlineLeavesOptsOut verifies the size-sensitive opt-out keeps
-// the predicate O(1) (root + treeSize, no leaves) for sidecar workflows.
-func TestSuppressInlineLeavesOptsOut(t *testing.T) {
-	a := makeMaterialAttestor(t, map[string]string{
-		"a.txt": "1",
-		"b.txt": "2",
-	}, WithSuppressInlineLeaves(true))
+// TestEmptyMaterialSetEmitsAuthoritativeEmptyLeaves pins the vacuous-pass
+// defense (#189): a material set with zero materials still emits a PRESENT but
+// empty "leaves":[] in the signed predicate (not an omitted key). This is the
+// signed commitment that the step provably consumed nothing — the engine must
+// trust it rather than fail closed, and it must be distinguishable from a
+// leaf-less attestation where materials are merely unknown.
+func TestEmptyMaterialSetEmitsAuthoritativeEmptyLeaves(t *testing.T) {
+	dir := t.TempDir()
+	a := New()
+	ctx, err := attestation.NewContext("test", []attestation.Attestor{}, attestation.WithWorkingDir(dir))
+	require.NoError(t, err)
+	require.NoError(t, a.Attest(ctx))
 
 	body, err := json.Marshal(a)
 	require.NoError(t, err)
 
-	var generic map[string]interface{}
-	require.NoError(t, json.Unmarshal(body, &generic))
+	// The "leaves" key MUST be present (authoritative empty), encoded as [].
+	require.Contains(t, string(body), `"leaves":[]`,
+		"empty material set must emit a PRESENT empty leaves array (authoritative-empty commitment); got %s", body)
 
-	assert.NotContains(t, generic, "leaves", "WithSuppressInlineLeaves(true) must drop leaves")
-	assert.Contains(t, generic, "merkleRoot")
-	assert.Contains(t, generic, "treeSize")
+	// And it must rehydrate as HasInlineLeaves()==true (non-nil empty slice).
+	var b Attestor
+	require.NoError(t, json.Unmarshal(body, &b))
+	assert.True(t, b.HasInlineLeaves(), "present empty leaves must rehydrate as inline (non-nil)")
 }
 
 // TestInlineLeavesRoundTripAndVerify confirms the inline leaves survive a
@@ -371,9 +400,9 @@ func TestVerifyInlineLeavesRejectsForgedLeaf(t *testing.T) {
 // =============================================================================
 
 // V03_010 is the SPEC LOCK between Agent C (material) and Agent B
-// (product). The contract is that the leaf encoding
+// (product). The v0.3 contract is that the leaf encoding
 //
-//	leafHash = SHA256(path || 0x00 || raw-file-digest)
+//	leafHash = SHA256(raw-file-digest)   (content only; path NOT bound)
 //
 // is identical in both attestors. If a future refactor changes one
 // side without the other, inclusion proofs rooted in a material tree
@@ -412,10 +441,10 @@ func TestV03_010_LeafFormatConsistencyWithProduct(t *testing.T) {
 		// only. The product attestor's spec-lock test does the
 		// same thing on its side, so the two attestors converge
 		// on this reference implementation by construction.
+		// v0.3 clean break: the leaf binds CONTENT only — no path,
+		// no NUL delimiter — just sha256(raw-file-digest).
 		raw, _ := hex.DecodeString(c.fileDigest)
 		ref := sha256.New()
-		_, _ = ref.Write([]byte(c.path))
-		_, _ = ref.Write([]byte{0})
 		_, _ = ref.Write(raw)
 		want := hex.EncodeToString(ref.Sum(nil))
 
@@ -489,15 +518,16 @@ func TestV03_013_NoV01Registration(t *testing.T) {
 }
 
 // =============================================================================
-// V03_014: Leaves() is sorted by normalized path
+// V03_014: Leaves() is in canonical (fileDigest, path) order
 // =============================================================================
 
-// V03_014 is the sort-stability check. Subjects() determinism relies
-// on a stable sort by normalized path. If the sort key changes (e.g.,
-// to OS-native paths), Windows-recorded and Linux-recorded
-// attestations over the same logical input will produce DIFFERENT
-// roots — and the bug will only surface in cross-OS CI.
-func TestV03_014_LeavesSortedByNormalizedPath(t *testing.T) {
+// V03_014 is the sort-stability check. Subjects() determinism relies on a
+// stable canonical leaf order. v0.3 sorts by (fileDigest, path) and dedups
+// equal digests (the leaf binds content only). Forward-slash-normalized paths
+// keep the order portable across OSes — a Windows-recorded and a
+// Linux-recorded attestation over the same logical input produce the SAME
+// root.
+func TestV03_014_LeavesInCanonicalDigestPathOrder(t *testing.T) {
 	a := makeMaterialAttestor(t, map[string]string{
 		"zeta":    "1",
 		"alpha":   "2",
@@ -508,14 +538,14 @@ func TestV03_014_LeavesSortedByNormalizedPath(t *testing.T) {
 	})
 	leaves := a.Leaves()
 	require.Len(t, leaves, 6)
-	paths := make([]string, len(leaves))
-	for i, l := range leaves {
-		paths[i] = l.Path
+	for i := 1; i < len(leaves); i++ {
+		prev, cur := leaves[i-1], leaves[i]
+		ordered := prev.FileDigest < cur.FileDigest ||
+			(prev.FileDigest == cur.FileDigest && prev.Path < cur.Path)
+		assert.True(t, ordered,
+			"leaves must be in canonical (fileDigest, path) order; got (%q,%q) before (%q,%q)",
+			prev.FileDigest, prev.Path, cur.FileDigest, cur.Path)
 	}
-	sorted := make([]string, len(paths))
-	copy(sorted, paths)
-	sort.Strings(sorted)
-	assert.Equal(t, sorted, paths, "leaves must be sorted by normalized path")
 }
 
 // =============================================================================

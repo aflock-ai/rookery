@@ -153,33 +153,45 @@ func TestPathOrderInsensitive(t *testing.T) {
 	require.Equal(t, a.MerkleRoot, b.MerkleRoot,
 		"path ordering of the input must not affect the merkle root")
 
-	// Also confirm leaves are sorted in the attestor's own leaves slice
-	// — this is the contract the inclusion-proof attestor relies on.
+	// Also confirm leaves are in the canonical (fileDigest, path) order in
+	// the attestor's own leaves slice — this is the contract the
+	// inclusion-proof attestor relies on (v0.3: dedup-by-digest, sort by
+	// (digest, path)).
 	leaves := a.Leaves()
 	for i := 1; i < len(leaves); i++ {
-		assert.True(t, leaves[i-1].Path < leaves[i].Path,
-			"leaves must be sorted by path; got %q before %q", leaves[i-1].Path, leaves[i].Path)
+		prev, cur := leaves[i-1], leaves[i]
+		ordered := prev.FileDigest < cur.FileDigest ||
+			(prev.FileDigest == cur.FileDigest && prev.Path < cur.Path)
+		assert.True(t, ordered,
+			"leaves must be sorted by (fileDigest, path); got (%q,%q) before (%q,%q)",
+			prev.FileDigest, prev.Path, cur.FileDigest, cur.Path)
 	}
 }
 
 // =====================================================================
-// Test 3 — path-binding: same content, different paths → different roots
+// Test 3 — content-binding: same content, different paths → SAME root
 // =====================================================================
 
-func TestPathBinding(t *testing.T) {
+// TestContentBinding pins the v0.3 clean break (inverse of the old
+// TestPathBinding): the leaf hash binds CONTENT only — the path is NOT part
+// of the hash. Two files with identical content at different paths produce the
+// SAME root and the SAME leaf hash. Path authentication now comes from the
+// DSSE signature over the always-inline leaves, not the Merkle commitment.
+func TestContentBinding(t *testing.T) {
 	const content = "identical content"
 
 	a := makeAttestor(t, map[string]string{"path/one.txt": content})
 	b := makeAttestor(t, map[string]string{"path/two.txt": content})
 
-	require.NotEqual(t, a.MerkleRoot, b.MerkleRoot,
-		"two files with identical content but different paths must produce different roots")
+	require.Equal(t, a.MerkleRoot, b.MerkleRoot,
+		"two files with identical content must produce the same root regardless of path (v0.3 content-only leaf)")
 
-	// And the leaf-level pre-hashes themselves must differ — that is
-	// where the path binding originates.
+	// And the leaf-level pre-hashes are identical — the path no longer
+	// participates in the leaf hash.
 	require.Len(t, a.Leaves(), 1)
 	require.Len(t, b.Leaves(), 1)
-	require.NotEqual(t, a.Leaves()[0].LeafHash, b.Leaves()[0].LeafHash)
+	require.Equal(t, a.Leaves()[0].LeafHash, b.Leaves()[0].LeafHash,
+		"leaf hash binds content only; equal content => equal leaf hash")
 }
 
 // =====================================================================
@@ -207,11 +219,10 @@ func TestSingleFileTree(t *testing.T) {
 	a := makeAttestor(t, map[string]string{path: content})
 	require.Equal(t, uint64(1), a.TreeSize)
 
-	// Hand-compute the expected root: sha256(0x00 || sha256(path || 0x00 || sha256(content)))
+	// v0.3 clean break: the leaf binds CONTENT only (path dropped).
+	// Hand-compute the expected root: sha256(0x00 || sha256(sha256(content)))
 	fileDigest := sha256.Sum256([]byte(content))
 	preHashWriter := sha256.New()
-	_, _ = preHashWriter.Write([]byte(path))
-	_, _ = preHashWriter.Write([]byte{0x00})
 	_, _ = preHashWriter.Write(fileDigest[:])
 	preHash := preHashWriter.Sum(nil)
 
@@ -221,7 +232,7 @@ func TestSingleFileTree(t *testing.T) {
 	expectedRoot := rootWriter.Sum(nil)
 
 	require.Equal(t, hex.EncodeToString(expectedRoot), a.MerkleRoot,
-		"single-file root must be H(0x00 || H(path || 0x00 || file-digest))")
+		"single-file root must be H(0x00 || H(file-digest)) — path is not bound in v0.3")
 
 	// And the cross-check helper for the single-file case.
 	expectedRootFromHelper := expectedRootFromLeaves(t, a.Leaves())
@@ -365,27 +376,28 @@ func TestInlineLeavesInPredicate(t *testing.T) {
 	require.Contains(t, generic, "construction")
 }
 
-// TestSuppressInlineLeavesOptsOut verifies the size-sensitive opt-out:
-// WithSuppressInlineLeaves(true) keeps the predicate O(1) (root + treeSize
-// only, leaves shipped via an external sidecar). The commitment fields
-// stay; only the leaves disappear.
-func TestSuppressInlineLeavesOptsOut(t *testing.T) {
-	a := makeAttestorWithOpts(t, map[string]string{
-		"a.txt": "alpha",
-		"b.txt": "bravo",
-	}, WithSuppressInlineLeaves(true))
+// TestDedupEqualContentProducts pins the v0.3 dedup invariant in the producer:
+// two distinct paths with identical content collapse to ONE leaf (TreeSize==1)
+// and the root is reproducible from the single surviving leaf. Without dedup
+// the producer tree would diverge from any digest-only reconstruction
+// (Archivista discovery / VerifyInlineLeaves).
+func TestDedupEqualContentProducts(t *testing.T) {
+	const content = "byte-identical product"
+	a := makeAttestor(t, map[string]string{
+		"dist/a.bin": content,
+		"dist/b.bin": content,
+	})
 
-	data, err := json.Marshal(a)
-	require.NoError(t, err)
+	require.Equal(t, uint64(1), a.TreeSize, "equal-content products must collapse to one leaf")
+	require.Len(t, a.Leaves(), 1)
 
-	var generic map[string]any
-	require.NoError(t, json.Unmarshal(data, &generic))
+	// A single-product build with the same content must yield the same root.
+	solo := makeAttestor(t, map[string]string{"dist/a.bin": content})
+	require.Equal(t, solo.MerkleRoot, a.MerkleRoot,
+		"deduped root must equal the single-leaf root")
 
-	_, hasLeaves := generic["leaves"]
-	require.False(t, hasLeaves, "WithSuppressInlineLeaves(true) must drop the 'leaves' field; got %v", generic)
-
-	require.Contains(t, generic, "merkleRoot")
-	require.Contains(t, generic, "treeSize")
+	// And the inline leaves must reconstruct to the signed root.
+	require.NoError(t, a.VerifyInlineLeaves())
 }
 
 // TestVerifyInlineLeavesRejectsForgedLeaf is the core integrity guard for the
@@ -408,6 +420,29 @@ func TestVerifyInlineLeavesRejectsForgedLeaf(t *testing.T) {
 	var b Attestor
 	require.NoError(t, json.Unmarshal(forged, &b))
 	require.Error(t, b.VerifyInlineLeaves(), "forged leaf that does not reconstruct to the signed root must be rejected")
+}
+
+// TestPathIndependentDiscovery pins the property that makes Archivista
+// digest-discovery work: a single-product tree's root is reconstructible from
+// the content digest under ANY path key. BuildSidecar over an absolute
+// build-host path and over the bare basename (same digest) MUST yield the same
+// root, because the leaf binds content only.
+func TestPathIndependentDiscovery(t *testing.T) {
+	const content = "the one product"
+	a := makeAttestor(t, map[string]string{"only.txt": content})
+	require.Equal(t, uint64(1), a.TreeSize)
+
+	digest := sha256Hex(t, content)
+
+	abs, err := inclusionproof.BuildSidecar("build", map[string]string{"/tmp/build/host/only.txt": digest})
+	require.NoError(t, err)
+	base, err := inclusionproof.BuildSidecar("build", map[string]string{"only.txt": digest})
+	require.NoError(t, err)
+
+	require.Equal(t, abs.MerkleRoot, base.MerkleRoot,
+		"root must reconstruct from the digest under any path key (path-independent discovery)")
+	require.Equal(t, a.MerkleRoot, base.MerkleRoot,
+		"producer root must equal the digest-only reconstruction")
 }
 
 // =====================================================================

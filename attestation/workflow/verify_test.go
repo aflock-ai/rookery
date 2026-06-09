@@ -303,7 +303,14 @@ func makePolicy(functionary policy.Functionary, publicKey policy.PublicKey, root
 		Name:          "step02",
 		Functionaries: []policy.Functionary{functionary},
 		Attestations:  []policy.Attestation{{Type: commandrunType}},
-		ArtifactsFrom: []string{"step01"},
+		// NOTE: no ArtifactsFrom here. This fixture exercises BackRef SUBJECT
+		// expansion (the depth-iteration search graph), not artifactsFrom
+		// artifact comparison. Under v0.3, inline leaves are the sole trust path
+		// and a leaf-less collection (these dummy attestors carry no inline
+		// materials) fails the artifactsFrom chain closed — which is correct, but
+		// orthogonal to what this test asserts. The chain-comparison path is
+		// covered by inline_leaves_adversarial_test.go and the policy package's
+		// verifyCollectionArtifacts tests.
 	}
 
 	p := policy.Policy{

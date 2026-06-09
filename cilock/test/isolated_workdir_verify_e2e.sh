@@ -8,7 +8,7 @@
 # commitment that the step consumed nothing. Its artifactsFrom edge to the
 # upstream step is therefore legitimately vacuous, but AUTHORITATIVELY so.
 #
-# Strict-chain mode (the default, --require-sidecar=true) MUST accept this with
+# Inline-leaves-only mode (off-envelope sidecars removed) MUST accept this with
 # NO flag: an inline, authoritatively-empty material set is a verified fact, not
 # the v0.3 vacuous-pass surface. (The leaf-less case — where empty Materials()
 # is merely unknown and must fail closed — is covered by the engine unit test
@@ -55,7 +55,7 @@ print(json.dumps({"expires":"2030-01-01T00:00:00Z","publickeys":{k:{"keyid":k,"k
 PY
 "$CILOCK" sign --signer-file-key-path key.pem --infile policy.json --outfile policy.signed.json >/dev/null 2>&1
 
-echo "=== STRICT (default --require-sidecar): isolated/empty-materials downstream must PASS flaglessly ==="
+echo "=== INLINE-ONLY: isolated/empty-materials downstream must PASS flaglessly ==="
 set +e
 "$CILOCK" verify "$BIN" -p policy.signed.json --publickey pub.pem \
   --attestations s.att.json,b.att.json --platform-url "" >strict.log 2>&1

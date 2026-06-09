@@ -35,7 +35,7 @@ That is the spine of the graph. Subjects that are *not* in BackRefs are still se
 
 ## How inclusion proofs join the spine
 
-Since v0.3, product/material attestations [inline their per-file `leaves` in the signed predicate by default](../attestors/product), so the common per-file path needs no standalone inclusion-proof attestation at all — the verifier folds a file digest to the signed root straight from the product attestation. The graph walk below is the path used when a **standalone inclusion-proof attestation** is present: for selective disclosure, or for size-sensitive builds that suppressed the inline leaves and shipped them in a sidecar (`cilock prove`). The same subject-digest BFS handles it with no special-case code.
+Since v0.3, product/material attestations [inline their per-file `leaves` in the signed predicate](../attestors/product), so the common per-file path needs no standalone inclusion-proof attestation at all — the verifier folds a file digest to the signed root straight from the product attestation. Inline DSSE-signed leaves are the sole trust path in v0.3; off-envelope chain sidecars are not part of the current design. The graph walk below documents the subject-digest BFS path, which also handles any standalone inclusion-proof attestation supplied for backward compatibility with pre-v0.3 evidence, with no special-case code.
 
 An inclusion-proof attestation's predicate names a Merkle root; its subject is the per-file digest. We want the verifier, starting from a file digest, to:
 
@@ -77,11 +77,11 @@ This is the structural reason inclusion proofs slot in so cleanly. The v0.3 atte
 
 The alternative was to keep the v0.2 design — a flat per-file digest map in the product predicate as the *only* per-file representation, with the verifier reading digests directly out of that map and **no Merkle root or inline-leaves discipline** behind it.
 
-That approach was rejected for three reasons, none of which are inflation. v0.3's inline `leaves` (the default) avoid all three because they fold to a single signed root and the subject stays the tree root; very large trees can suppress the inline leaves and emit standalone inclusion-proof attestations instead:
+That approach was rejected for three reasons, none of which are inflation. v0.3's inline `leaves` avoid all three: they fold to a single signed root, the subject stays the tree root, and every per-file claim is verifiable directly from the signed envelope:
 
-1. **Unbounded predicate size with no escape hatch.** An `npm install`-scale tree carries ~30k entries × ~80 bytes ≈ 2.4 MB of predicate per envelope, plaintext. Multiply by every build per day. The v0.2 map had no way to opt out; v0.3 inlines leaves by default but lets size-sensitive builds suppress them and ship a sidecar.
+1. **Unbounded predicate size with no escape hatch.** An `npm install`-scale tree carries ~30k entries × ~80 bytes ≈ 2.4 MB of predicate per envelope, plaintext. Multiply by every build per day. The v0.2 map had no way to opt out; v0.3 inlines the leaf array which is already compact (path + digest + pre-hash per entry) rather than a full flat map.
 
-2. **No selective disclosure.** With the v0.2 flat map, answering one per-file question still meant downloading and parsing the entire map. v0.3's suppressed-inline path lets a verifier download a single ~640-byte inclusion proof and a tiny predicate instead.
+2. **No per-file provability.** With the v0.2 flat map, the verifier had no Merkle path to walk — every per-file claim required re-decoding the full predicate. v0.3's inline leaves carry the RFC 6962 audit path preimage directly, so a single leaf check is O(log n).
 
 3. **No clean BFS path from file to product.** The v0.2 product attestor's subject is `tree:products` (the Merkle root). Per-file digests lived only in the predicate, not the subject array, so the subject-digest BFS could not find a v0.2 product attestation by file digest at all — Judge issues #3840 and #3841 existed specifically to materialize a separate file-digest index server-side to bridge that gap. v0.3's inline leaves keep the tree-root subject *and* make every file verifiable from the one signed attestation, and the inclusion-proof attestation closes the gap on the client side when leaves are suppressed.
 

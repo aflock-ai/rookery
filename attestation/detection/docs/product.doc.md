@@ -110,29 +110,19 @@ The full DSSE statement for a v0.3 product attestation:
 
 The predicate is fixed-size regardless of how many files were in the working directory. A 30,000-file build produces the same predicate length as a 3-file build.
 
-## Sidecar tree
+## Inline leaves
 
-`cilock run` writes two sidecar files adjacent to the signed envelope whenever the product and material attestors build trees:
+Since v0.3 is the sole producer, the signed envelope always carries the full `leaves` array — every `(path, fileDigest, leafHash)` triple — inline. This means the product attestation is self-contained: a verifier can confirm any specific file's inclusion by matching its digest to a leaf, reconstructing the leaf hash via `inclusionproof.LeafHash`, and confirming it folds to the signed `tree:products` root. No sidecar, no separate inclusion-proof envelope, no additional round-trip.
 
-- `<outfile>.product.tree.json` — the product tree
-- `<outfile>.material.tree.json` — the material tree
+## Per-file verification
 
-Both share the same on-disk schema: `rookery.inclusion-proof.sidecar/v0.1`, defined in `plugins/attestors/inclusion-proof`. The body carries `source` (either `"product"` or `"material"`), the Merkle root, the tree size, the pinned hash algorithm and construction constants, and the sorted list of `(path, fileDigest)` pairs — exactly the inputs needed for `cilock prove` to reconstruct the tree and emit inclusion proofs.
+The product attestation's inline `leaves` array exposes every `(path, fileDigest, leafHash)` triple, so per-file claims are verified directly from the product attestation:
 
-The sidecar is **not signed**. It is not evidence. Treat it as a build cache: regenerate by re-running the build, or discard once the inclusion proofs you need have been emitted. Do not ship it to downstream consumers — they only need the signed inclusion-proof attestations.
+1. Find the leaf whose `fileDigest` equals the file digest being verified.
+2. Confirm the leaf's `leafHash` equals `sha256(leafPath-bytes || 0x00 || fileDigest-bytes-raw32)` (the canonical `inclusionproof.LeafHash` encoder).
+3. Fold the leaf hash through the tree's RFC 6962 structure and confirm the result equals the attestation's `tree:products` subject digest (the Merkle root).
 
-Path convention: for `--outfile attestation.json` the sidecars are `attestation.product.tree.json` and `attestation.material.tree.json`. If `--outfile` is empty (stdout), no sidecars are written.
-
-See [prove files in a build](../guides/prove-files-in-a-build) for the producer flow.
-
-## Composition with inclusion-proof attestations
-
-The product attestation alone does not let a consumer verify a per-file claim — it says "the tree exists and its root is X" but does not expose any specific leaf. The consumer-facing piece is the inclusion-proof attestation:
-
-- The **product attestation** says: "this tree exists; its root is X; size is N; built with sha256/RFC6962."
-- An **inclusion-proof attestation** for a specific file says: "this file's digest is leaf `i` in the tree with root X; here is the audit path."
-
-A verifier with both attestations confirms (a) the audit path reconstructs the claimed root, (b) the claimed root matches the product attestation's subject digest, and (c) the leaf hash matches the file the verifier was asked about. See [verify a specific file](../guides/verify-a-specific-file) for the full check sequence.
+This is the sole trust path. Inline leaves are always present in v0.3 attestations. See [verify a specific file](../guides/verify-a-specific-file) for the full check sequence.
 
 ## Gotchas
 
@@ -152,12 +142,11 @@ cilock run --step my-step \
   -- make build
 ```
 
-The signed `attestation.json` and the unsigned `attestation.tree.json` sidecar both land in the working directory after the run completes.
+The signed `attestation.json` carries the Merkle root and all inline leaves in the predicate.
 
 ## See also
 
-- [Inclusion-proof attestor](./inclusion-proof) — the per-file claim primitive
+- [Inclusion-proof attestor](./inclusion-proof) — the standalone proof primitive
 - [Merkle trees](../concepts/merkle-trees) — the underlying construction
-- [Prove files in a build](../guides/prove-files-in-a-build) — producer-side flow
 - [Verify a specific file](../guides/verify-a-specific-file) — consumer-side flow
 - [Issue #135](https://github.com/aflock-ai/rookery/issues/135) — design rationale

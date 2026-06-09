@@ -1129,9 +1129,13 @@ func TestVerifyCollectionArtifacts_ArtifactsFromNotInResults(t *testing.T) {
 }
 
 func TestVerifyCollectionArtifacts_ArtifactsFromWithPassedCollections(t *testing.T) {
-	// When the referenced step has passed collections, artifact comparison runs.
-	// Both collections have empty attestations, so Materials()/Artifacts() return empty maps.
-	// compareArtifacts with empty maps returns nil (no overlap = no error).
+	// v0.3 UNCONDITIONAL fail-closed (inverted from the old vacuous-pass):
+	// both collections have empty attestations, so Materials() returns an empty
+	// map AND HasInlineMaterials() is false (leaf-less). The old code let
+	// compareArtifacts pass trivially on the empty overlap; the new code rejects
+	// a leaf-less collection because inline leaves are the SOLE trust path — an
+	// empty material set that is merely unknown (not an authoritative signed
+	// commitment) can never satisfy an artifactsFrom edge.
 	step := Step{
 		Name:          "deploy",
 		ArtifactsFrom: []string{"build"},
@@ -1157,7 +1161,10 @@ func TestVerifyCollectionArtifacts_ArtifactsFromWithPassedCollections(t *testing
 	}
 
 	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, deployCVR, collectionsByStep)
-	assert.NoError(t, err)
+	assert.Error(t, err, "a leaf-less collection with an empty material set must fail closed")
+	var artErr ErrVerifyArtifactsFailed
+	assert.ErrorAs(t, err, &artErr)
+	assert.Contains(t, err.Error(), "leaf-less")
 }
 
 func TestVerify_ArtifactsFromUnknownStep(t *testing.T) {
@@ -1516,59 +1523,52 @@ deny[msg] {
 // TestVerifyCollectionArtifacts_ContinuesAfterMismatch verifies that artifact
 // verification tries all passed collections rather than stopping at the first
 // one that fails comparison.
+//
+// v0.3: inline leaves are the sole trust path, so the fixtures use
+// inlineFakeAttestor to carry real (non-leaf-less) materials/products. The
+// downstream "build" collection consumes libshared.so; the first source
+// publishes a MISMATCHED product digest (compareArtifacts fails) and the second
+// publishes the MATCHING digest. The loop must continue past the first failure
+// and accept the second.
 func TestVerifyCollectionArtifacts_ContinuesAfterMismatch(t *testing.T) {
 	step := Step{
 		Name:          "build",
 		ArtifactsFrom: []string{"source"},
 	}
 
-	// The verifying collection's materials
-	collection := source.CollectionVerificationResult{
-		CollectionEnvelope: source.CollectionEnvelope{
-			Collection: attestation.Collection{
-				Name: "build",
-			},
-		},
-	}
+	good := digest("aa")
+	bad := digest("bb")
 
-	// Create two passed source collections:
-	// - first has mismatched artifact digests (will fail)
-	// - second has correct matching digests (should pass if we continue past first)
-	badDigests := cryptoutil.DigestSet{
-		{Hash: crypto.SHA256, GitOID: false}: "bad_digest",
+	// Downstream build consumes libshared.so@good, committed inline.
+	down := &inlineFakeAttestor{
+		typ:           "https://aflock.ai/attestations/material/v0.3",
+		materials:     map[string]cryptoutil.DigestSet{"libshared.so": good},
+		inlinePresent: true,
 	}
-	goodDigests := cryptoutil.DigestSet{}
+	collection := inlineCollection("build", down)
 
-	badCollection := source.CollectionVerificationResult{
-		CollectionEnvelope: source.CollectionEnvelope{
-			Collection: attestation.Collection{Name: "source"},
-		},
+	// First source publishes a MISMATCHED product (fails compareArtifacts).
+	badSrc := &inlineFakeAttestor{
+		typ:      "https://aflock.ai/attestations/product/v0.3",
+		products: map[string]attestation.Product{"libshared.so": {Digest: bad}},
 	}
-	goodCollection := source.CollectionVerificationResult{
-		CollectionEnvelope: source.CollectionEnvelope{
-			Collection: attestation.Collection{Name: "source"},
-		},
+	// Second source publishes the MATCHING product (passes).
+	goodSrc := &inlineFakeAttestor{
+		typ:      "https://aflock.ai/attestations/product/v0.3",
+		products: map[string]attestation.Product{"libshared.so": {Digest: good}},
 	}
-
-	// If materials are empty, compareArtifacts will pass for any artifacts,
-	// so we need materials that actually match goodCollection but not badCollection.
-	// For this test, both collections have no materials/artifacts, so both pass.
-	// The real scenario is tested by ensuring the break->continue fix allows the
-	// loop to find a matching collection.
-	_ = badDigests
-	_ = goodDigests
 
 	collectionsByStep := map[string]StepResult{
 		"source": {
 			Step: "source",
 			Passed: []PassedCollection{
-				{Collection: badCollection},
-				{Collection: goodCollection},
+				{Collection: inlineCollection("source", badSrc)},
+				{Collection: inlineCollection("source", goodSrc)},
 			},
 		},
 	}
 
-	// With the continue fix, this should pass (at least one collection matches)
+	// With the continue fix, this should pass (at least one collection matches).
 	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, collection, collectionsByStep)
 	assert.NoError(t, err, "should pass when at least one source collection matches")
 }

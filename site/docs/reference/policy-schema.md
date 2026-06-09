@@ -289,7 +289,7 @@ deny[msg] {
 }
 ```
 
-The full worked example — including the `cilock prove` invocation that emits the inclusion-proof envelope, the build/scan steps, and the `cilock verify` recipe — lives at [`multi-step-attestationsFrom`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/multi-step-attestationsFrom) in the examples repo.
+The full worked example — including the build/scan steps and the `cilock verify` recipe — lives at [`multi-step-attestationsFrom`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/multi-step-attestationsFrom) in the examples repo.
 
 ## See also
 

@@ -32,6 +32,18 @@ import (
 // to interpret a layout the reader does not understand.
 const SidecarSchemaVersion = "rookery.inclusion-proof.sidecar/v0.1"
 
+// MaxLeaves bounds the number of leaves accepted at every tree-build /
+// reconstruction entry point. A v0.3 collection inlines its leaves into the
+// DSSE-signed predicate, so VerifyInlineLeaves rebuilds the tree from
+// attestation-supplied (and possibly MITM'd / crafted) leaves on every passed
+// collection. Without a cap, a single bounded (<512 MiB) attestation carrying
+// ~5-6M leaves forces multi-GB allocation (leaves slice + products/materials
+// map + preHashed [][]byte + the merkle node store). 2^20 is orders of
+// magnitude above any real build's product/material count yet kills the
+// resource-exhaustion vector. This is a DoS guard, not a soundness control —
+// it never causes a wrong PASS, only a clean rejection.
+const MaxLeaves = 1 << 20
+
 // SidecarLeaf is one entry in the sidecar's leaf list. Paths are stored
 // in their portable (forward-slash) form so the sidecar is OS-independent;
 // FileDigest is the lowercase hex SHA-256 of the file's content.
@@ -96,21 +108,23 @@ type Sidecar struct {
 // will cause `cilock prove` to refuse the sidecar (the reconstructed
 // root won't match Sidecar.MerkleRoot).
 func BuildSidecar(source string, digests map[string]string) (Sidecar, error) {
-	paths := make([]string, 0, len(digests))
-	for p := range digests {
-		paths = append(paths, p)
+	if len(digests) > MaxLeaves {
+		return Sidecar{}, fmt.Errorf("build sidecar: %d entries exceeds MaxLeaves=%d", len(digests), MaxLeaves)
 	}
-	sort.Strings(paths)
+	entries := make([]LeafEntry, 0, len(digests))
+	for p, dg := range digests {
+		entries = append(entries, LeafEntry{Path: p, DigestHex: strings.ToLower(dg)})
+	}
+	entries = DedupAndSortByDigest(entries)
 
-	leaves := make([]SidecarLeaf, 0, len(paths))
-	preHashed := make([][]byte, 0, len(paths))
-	for _, p := range paths {
-		dg := digests[p]
-		preHash, err := LeafHash(p, dg)
+	leaves := make([]SidecarLeaf, 0, len(entries))
+	preHashed := make([][]byte, 0, len(entries))
+	for _, e := range entries {
+		preHash, err := LeafHash(e.Path, e.DigestHex)
 		if err != nil {
-			return Sidecar{}, fmt.Errorf("build sidecar: leaf %q: %w", p, err)
+			return Sidecar{}, fmt.Errorf("build sidecar: leaf %q: %w", e.Path, err)
 		}
-		leaves = append(leaves, SidecarLeaf{Path: p, FileDigest: strings.ToLower(dg)})
+		leaves = append(leaves, SidecarLeaf{Path: e.Path, FileDigest: e.DigestHex})
 		preHashed = append(preHashed, preHash)
 	}
 
@@ -128,6 +142,47 @@ func BuildSidecar(source string, digests map[string]string) (Sidecar, error) {
 		Construction:  Construction,
 		Leaves:        leaves,
 	}, nil
+}
+
+// LeafEntry is a (path, lowercase-hex content digest) pair feeding a v0.3
+// Merkle tree build. The path is carried for human-readable metadata only;
+// it is NOT part of the leaf hash (see LeafHash).
+type LeafEntry struct {
+	Path      string
+	DigestHex string
+}
+
+// DedupAndSortByDigest returns the canonical, deterministic leaf set for a v0.3
+// tree. Since the leaf hash now binds CONTENT only (the path was removed), two
+// distinct paths sharing a digest would otherwise produce two byte-identical
+// leaves — which the RFC6962 wrapper deliberately does NOT collapse (its
+// CVE-2012-2459 defense). That would make the producer tree diverge from any
+// digest-only reconstruction (Archivista discovery / VerifyInlineLeaves). So we
+// collapse equal digests to ONE leaf here, at production time:
+//   - sort by (digestHex, path) ascending,
+//   - keep one survivor per unique digest: the lexicographically-smallest path
+//     (deterministic so the inline-leaf JSON is byte-stable run-to-run).
+//
+// All three production tree-build sites (BuildSidecar, product.buildTree,
+// material.buildLeaves) route through this single helper so they can never
+// drift, mirroring the single-LeafHash-encoder discipline.
+func DedupAndSortByDigest(entries []LeafEntry) []LeafEntry {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].DigestHex != entries[j].DigestHex {
+			return entries[i].DigestHex < entries[j].DigestHex
+		}
+		return entries[i].Path < entries[j].Path
+	})
+	out := make([]LeafEntry, 0, len(entries))
+	var last string
+	for i, e := range entries {
+		if i > 0 && e.DigestHex == last {
+			continue // same digest: smallest path already kept (sorted)
+		}
+		out = append(out, e)
+		last = e.DigestHex
+	}
+	return out
 }
 
 // WriteSidecar marshals the sidecar to JSON and writes it to w.
@@ -164,6 +219,15 @@ func ReadSidecar(r io.Reader) (Sidecar, error) {
 	if s.Construction != Construction {
 		return Sidecar{}, fmt.Errorf("sidecar construction=%q is not supported (need %q)", s.Construction, Construction)
 	}
+	// DoS guard: reject an oversized sidecar before any tree allocation. The
+	// treeSize check fires on a tiny JSON lying about its size; the leaf-count
+	// check fires on a genuinely huge (but <512 MiB) leaf array.
+	if s.TreeSize > MaxLeaves {
+		return Sidecar{}, fmt.Errorf("sidecar treeSize=%d exceeds MaxLeaves=%d", s.TreeSize, MaxLeaves)
+	}
+	if len(s.Leaves) > MaxLeaves {
+		return Sidecar{}, fmt.Errorf("sidecar carries %d leaves, exceeds MaxLeaves=%d", len(s.Leaves), MaxLeaves)
+	}
 	if uint64(len(s.Leaves)) != s.TreeSize {
 		return Sidecar{}, fmt.Errorf("sidecar treeSize=%d but %d leaves were carried", s.TreeSize, len(s.Leaves))
 	}
@@ -190,11 +254,18 @@ func ReadSidecarFile(path string) (Sidecar, error) {
 // not match the sidecar's claimed root. Callers should propagate it as
 // "sidecar corrupted; refusing to emit proof".
 func (s *Sidecar) Reconstruct() (*merkle.Tree, map[string]uint64, error) {
-	// Verify sort order. A non-sorted sidecar would produce a different
-	// Merkle root than any conformant producer wrote, so reject loudly.
+	if len(s.Leaves) > MaxLeaves {
+		return nil, nil, fmt.Errorf("reconstruct: %d leaves exceeds MaxLeaves=%d", len(s.Leaves), MaxLeaves)
+	}
+	// Verify canonical order. Leaves are sorted by (fileDigest, path) and carry
+	// at most one entry per unique digest (the leaf hash binds content only, so
+	// equal digests collapse — see DedupAndSortByDigest). Any other order would
+	// produce a different Merkle root than a conformant producer wrote, so
+	// reject loudly. The returned index is keyed by fileDigest.
 	for i := 1; i < len(s.Leaves); i++ {
-		if s.Leaves[i].Path < s.Leaves[i-1].Path {
-			return nil, nil, fmt.Errorf("sidecar leaves are not lexicographically sorted (leaf %d %q < leaf %d %q)", i, s.Leaves[i].Path, i-1, s.Leaves[i-1].Path)
+		prev, cur := s.Leaves[i-1], s.Leaves[i]
+		if cur.FileDigest < prev.FileDigest || (cur.FileDigest == prev.FileDigest && cur.Path < prev.Path) {
+			return nil, nil, fmt.Errorf("sidecar leaves are not in canonical (fileDigest,path) order (leaf %d %q/%q < leaf %d %q/%q)", i, cur.FileDigest, cur.Path, i-1, prev.FileDigest, prev.Path)
 		}
 	}
 
@@ -206,10 +277,10 @@ func (s *Sidecar) Reconstruct() (*merkle.Tree, map[string]uint64, error) {
 			return nil, nil, fmt.Errorf("reconstruct: leaf %d %q: %w", i, leaf.Path, err)
 		}
 		preHashed[i] = h
-		if _, dupe := index[leaf.Path]; dupe {
-			return nil, nil, fmt.Errorf("reconstruct: duplicate leaf path %q", leaf.Path)
+		if _, dupe := index[leaf.FileDigest]; dupe {
+			return nil, nil, fmt.Errorf("reconstruct: duplicate leaf digest %q", leaf.FileDigest)
 		}
-		index[leaf.Path] = uint64(i)
+		index[leaf.FileDigest] = uint64(i)
 	}
 
 	tree, err := merkle.NewTree(preHashed)

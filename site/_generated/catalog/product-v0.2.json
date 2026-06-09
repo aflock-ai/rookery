@@ -36,7 +36,7 @@
     {
       "slug": "why-the-cutover",
       "title": "Why the cutover",
-      "markdown": "## Why the cutover\n\nv0.2 still carried the full per-file digest map inside the signed predicate (10+ MB envelopes for large installs) and, despite the single subject, gave the verifier no way to prove a specific file was in the tree without re-walking the build.\n\nThe latest version publishes a single `tree:products` subject (the RFC 6962 Merkle root) and moves the per-file claims into separate [inclusion-proof attestations](./inclusion-proof) emitted on demand by `cilock prove`. See [rookery#135](https://github.com/aflock-ai/rookery/issues/135) for the full rationale."
+      "markdown": "## Why the cutover\n\nv0.2 still carried the full per-file digest map inside the signed predicate (10+ MB envelopes for large installs) and, despite the single subject, gave the verifier no way to prove a specific file was in the tree without re-walking the build.\n\nThe latest version publishes a single `tree:products` subject (the RFC 6962 Merkle root) and inlines the per-file `leaves` in the signed predicate, so every file is verifiable from the product attestation alone. See [rookery#135](https://github.com/aflock-ai/rookery/issues/135) for the full rationale."
     },
     {
       "slug": "see-also",

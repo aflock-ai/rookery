@@ -93,8 +93,8 @@ func TestWarnMissingProvenanceEdges_FiresOnMultiStepNoEdge(t *testing.T) {
 	if !strings.Contains(out, "no cross-step provenance edges") {
 		t.Errorf("expected the missing-edges warning, got: %q", out)
 	}
-	if !strings.Contains(out, "cilock prove-chain") {
-		t.Errorf("warning should point at cilock prove-chain, got: %q", out)
+	if !strings.Contains(out, "artifactsFrom") {
+		t.Errorf("warning should point at artifactsFrom inline-leaf chaining, got: %q", out)
 	}
 
 	// With an edge emitted, no warning.

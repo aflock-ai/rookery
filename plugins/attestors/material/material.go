@@ -32,15 +32,14 @@
 //
 // # Leaf encoding
 //
-// Each leaf commits to a (path, file-digest) pair. The encoding is the
-// concatenation:
+// v0.3 clean break: each leaf commits to the file CONTENT only — the path
+// is NOT part of the leaf hash. Path authentication comes from the DSSE
+// signature over the always-inline leaves, not from the Merkle commitment.
+// The encoding is:
 //
-//	leafContent := path-bytes || 0x00 || file-digest-bytes
+//	leafContent := file-digest-bytes   (RAW 32-byte sha256, not hex)
 //
-// where path-bytes is the UTF-8 of the path normalized to forward slashes
-// (so the root is portable across operating systems) and file-digest-bytes
-// is the RAW 32-byte sha256 of the file (not its hex form). The attestor
-// pre-hashes:
+// The attestor pre-hashes:
 //
 //	leafHash := sha256(leafContent)
 //
@@ -51,6 +50,8 @@
 // us trivially share that encoding with the v0.3 product attestor so a
 // material tree and a product tree over the same input list produce
 // byte-identical roots (see the cross-coherence test in the test suite).
+// Because the leaf binds content only, equal-digest files at different paths
+// are deduped to one leaf at build time (see inclusionproof.DedupAndSortByDigest).
 //
 // # Why the leaf encoding MUST match the product attestor
 //
@@ -69,7 +70,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -202,17 +202,6 @@ type Attestor struct {
 	// the walker produced; consumers that need a portable form can
 	// use the leaves slice instead. Not marshaled.
 	materials map[string]cryptoutil.DigestSet `json:"-"`
-
-	// suppressInlineLeaves opts OUT of embedding per-file leaves in the signed
-	// predicate (default is to inline them). Set via WithSuppressInlineLeaves
-	// for size-sensitive material sets that ship a separate sidecar instead.
-	suppressInlineLeaves bool
-}
-
-// WithSuppressInlineLeaves opts OUT of embedding per-file leaves in the signed
-// predicate. Default inlines them (self-sufficient attestation).
-func WithSuppressInlineLeaves(suppress bool) Option {
-	return func(a *Attestor) { a.suppressInlineLeaves = suppress }
 }
 
 // MaterialLeaf is one (path, file-digest, leaf-hash) triple. The leaf
@@ -230,10 +219,10 @@ type MaterialLeaf struct {
 	// from (path, this digest) below.
 	FileDigest string `json:"fileDigest"`
 
-	// LeafHash is the lowercase hex sha256 of
-	// (path-bytes || 0x00 || file-digest-bytes). 64 hex chars. This
-	// is the value passed to merkle.NewTree as a 32-byte leaf
-	// (after hex-decoding).
+	// LeafHash is the lowercase hex sha256 of the RAW file-digest bytes
+	// (content only — the path is NOT part of the leaf hash in v0.3).
+	// 64 hex chars. This is the value passed to merkle.NewTree as a
+	// 32-byte leaf (after hex-decoding).
 	LeafHash string `json:"leafHash"`
 }
 
@@ -409,16 +398,28 @@ func (a *Attestor) Finalize(ctx *attestation.AttestationContext) error {
 	return nil
 }
 
-// buildLeaves turns the walker output into the canonical sorted leaf
-// list. The sort key is the FORWARD-SLASH-NORMALIZED path so the merkle
-// root is portable across operating systems — without this step a
-// Windows-recorded attestation would produce a different root when
-// re-hashed on Linux.
+// buildLeaves turns the walker output into the canonical deduped leaf
+// list. v0.3 leaf encoding binds CONTENT only (the path was removed from
+// the leaf hash — see inclusionproof.LeafHash), so two distinct paths
+// sharing a digest would emit byte-identical leaves that the RFC6962
+// wrapper does NOT collapse (its CVE-2012-2459 defense). To keep the
+// producer root equal to any digest-only reconstruction (Archivista
+// discovery / VerifyInlineLeaves), equal digests are deduped to a single
+// leaf here, via the one shared helper that BuildSidecar and
+// product.buildTree also route through. The surviving leaf keeps the
+// lexicographically-smallest forward-slash-normalized path so the root is
+// portable and the inline-leaf JSON is byte-stable run-to-run.
 func buildLeaves(mats map[string]cryptoutil.DigestSet) ([]MaterialLeaf, error) {
-	out := make([]MaterialLeaf, 0, len(mats))
+	entries := make([]inclusionproof.LeafEntry, 0, len(mats))
 	for path, ds := range mats {
 		digest := extractSha256(ds)
 		normalized := inclusionproof.NormalizePath(path)
+		entries = append(entries, inclusionproof.LeafEntry{Path: normalized, DigestHex: digest})
+	}
+	entries = inclusionproof.DedupAndSortByDigest(entries)
+
+	out := make([]MaterialLeaf, 0, len(entries))
+	for _, e := range entries {
 		// inclusionproof.LeafHash is the single canonical leaf encoder
 		// shared with the product attestor. It validates that the
 		// fileDigestHex is a real 32-byte sha256 — material rejects
@@ -426,19 +427,16 @@ func buildLeaves(mats map[string]cryptoutil.DigestSet) ([]MaterialLeaf, error) {
 		// rather than silently building a tree over a defensive empty
 		// digest. The v0.3 contract is that every leaf is anchored to
 		// a real artifact digest.
-		leafBytes, err := inclusionproof.LeafHash(normalized, digest)
+		leafBytes, err := inclusionproof.LeafHash(e.Path, e.DigestHex)
 		if err != nil {
-			return nil, fmt.Errorf("material %q: %w", normalized, err)
+			return nil, fmt.Errorf("material %q: %w", e.Path, err)
 		}
 		out = append(out, MaterialLeaf{
-			Path:       normalized,
-			FileDigest: digest,
+			Path:       e.Path,
+			FileDigest: e.DigestHex,
 			LeafHash:   hex.EncodeToString(leafBytes),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Path < out[j].Path
-	})
 	return out, nil
 }
 
@@ -500,29 +498,27 @@ func decodeLeafHashes(leaves []MaterialLeaf) ([][]byte, error) {
 // the schema remains a stable, documented contract independent of
 // struct-field reordering.
 func (a *Attestor) MarshalJSON() ([]byte, error) {
-	// Inline the per-file leaves into the signed predicate by default so the
-	// attestation is self-sufficient for inclusion + artifactsFrom chain
-	// verification without a separate sidecar. Only the Merkle root is a
-	// subject, so the leaves add no subject re-indexing cost. Opt out with
-	// WithSuppressInlineLeaves(true) for size-sensitive material sets.
-	// A pointer lets us distinguish three states on the wire, which the
-	// verifier's vacuous-pass defense relies on:
-	//   - suppressed              -> nil pointer -> "leaves" omitted (leaf-less)
-	//   - inline, has materials   -> "leaves":[...]
-	//   - inline, zero materials  -> "leaves":[]  (authoritative empty)
+	// Inline the per-file leaves into the signed predicate ALWAYS (v0.3 forces
+	// inline leaves — there is no opt-out). This makes the attestation
+	// self-sufficient for inclusion + artifactsFrom chain verification without a
+	// separate sidecar. Only the Merkle root is a subject, so the leaves add no
+	// subject re-indexing cost.
+	//
+	// The leaves pointer is ALWAYS non-nil here, but the nil->empty-slice
+	// collapse below is load-bearing and MUST stay: it distinguishes
+	//   - has materials  -> "leaves":[...]
+	//   - zero materials  -> "leaves":[]  (authoritative empty)
 	// The empty-but-present case is the key one: it is a SIGNED commitment that
 	// the step consumed nothing (e.g. a build in an isolated workingdir), which
 	// the engine must trust rather than fail closed on. With omitempty, an empty
 	// set would serialize identically to a leaf-less v0.3 attestation, and the
-	// verifier could not tell "provably empty" from "materials hidden".
-	var leaves *[]MaterialLeaf
-	if !a.suppressInlineLeaves {
-		ls := a.leaves
-		if ls == nil {
-			ls = []MaterialLeaf{}
-		}
-		leaves = &ls
+	// verifier could not tell "provably empty" from "materials hidden" (vacuous-
+	// pass defense, #189).
+	ls := a.leaves
+	if ls == nil {
+		ls = []MaterialLeaf{}
 	}
+	leaves := &ls
 	return json.Marshal(struct {
 		MerkleRoot         string          `json:"merkleRoot"`
 		TreeSize           uint64          `json:"treeSize"`
@@ -602,9 +598,21 @@ func (a *Attestor) VerifyInlineLeaves() error {
 	if len(a.leaves) == 0 {
 		return nil
 	}
+	// DoS cap BEFORE any O(N) allocation (the digests map / tree rebuild): a
+	// crafted predicate must be rejected before it can force a large allocation.
+	if len(a.leaves) > inclusionproof.MaxLeaves {
+		return fmt.Errorf("material: inline leaves %d exceeds MaxLeaves=%d", len(a.leaves), inclusionproof.MaxLeaves)
+	}
 	digests := make(map[string]string, len(a.leaves))
 	for _, lf := range a.leaves {
 		digests[lf.Path] = lf.FileDigest
+	}
+	// Reject duplicate paths: BuildSidecar keys by path, so two signed leaves
+	// sharing a path would silently collapse (last-writer-wins) and hide a leaf
+	// from the reconstructed root. A conformant producer never emits duplicate
+	// paths; an attacker-padded predicate must fail closed here, not silently.
+	if len(digests) != len(a.leaves) {
+		return fmt.Errorf("material: inline leaves contain duplicate paths (%d leaves, %d distinct paths)", len(a.leaves), len(digests))
 	}
 	side, err := inclusionproof.BuildSidecar("material", digests)
 	if err != nil {

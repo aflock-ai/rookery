@@ -13,7 +13,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/rand"
-	"sort"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation/merkle"
@@ -21,15 +20,15 @@ import (
 )
 
 // TestMerkleRoot_Reproducibility is the load-bearing check that a
-// verifier with ONLY the leaf list (path + sha256-hex pairs) can
-// recompute the exact Merkle root that the producer published.
-// Without this guarantee, the v0.3 schema — which keeps the leaf
-// list off-envelope — is unverifiable.
+// verifier with ONLY the leaf list (sha256-hex content digests) can
+// recompute the exact Merkle root that the producer published. v0.3
+// inlines the leaf list in the signed predicate, so this reconstruction
+// is what the verify gate and Archivista discovery both rely on.
 //
-// The producer (product attestor + material attestor) and the
-// verifier (this test, simulating cilock verify) both go through
-// inclusionproof.LeafHash + merkle.NewTree. If either drifts, this
-// test detonates.
+// The producer (product attestor + material attestor) and the verifier
+// (this test, simulating cilock verify) both go through the shared
+// inclusionproof.DedupAndSortByDigest + inclusionproof.LeafHash +
+// merkle.NewTree path. If either drifts, this test detonates.
 func TestMerkleRoot_Reproducibility(t *testing.T) {
 	t.Parallel()
 
@@ -150,16 +149,20 @@ func TestMerkleRoot_TamperingDetected(t *testing.T) {
 	})
 
 	t.Run("path_swap", func(t *testing.T) {
+		// v0.3 clean break: the leaf hash binds CONTENT only — the path is
+		// NOT part of the hash. Renaming a file (without changing its
+		// content) must NOT change the root. Path authentication now comes
+		// from the DSSE signature over the always-inline leaves, not from
+		// the Merkle commitment. This is the inverse of the old invariant.
 		tampered := make([]leaf, len(base))
 		copy(tampered, base)
-		// Change one path; binding of path-to-content must shift root.
 		tampered[12].Path = tampered[12].Path + ".attacker"
 		got, err := rootFromLeaves(tampered)
 		if err != nil {
 			t.Fatalf("tampered: %v", err)
 		}
-		if got == baseRoot {
-			t.Fatalf("renaming leaf 12 did NOT change root — paths aren't bound at the leaf")
+		if got != baseRoot {
+			t.Fatalf("renaming leaf 12 (same content) CHANGED the root — v0.3 leaf must bind content only, not path")
 		}
 	})
 
@@ -203,6 +206,41 @@ func TestMerkleRoot_EmptyTree(t *testing.T) {
 	}
 }
 
+// TestMerkleRoot_DedupByDigest pins the v0.3 dedup invariant at the
+// reproducibility-helper level: two distinct paths with identical content
+// collapse to ONE leaf (TreeSize == 1) and produce the same root as a single
+// leaf carrying that digest. Without dedup the producer tree would diverge
+// from any digest-only reconstruction.
+func TestMerkleRoot_DedupByDigest(t *testing.T) {
+	t.Parallel()
+	d := digestOf("identical-content")
+
+	twoRoot, err := rootFromLeaves([]leaf{
+		{Path: "b/copy", FileDigestHex: d},
+		{Path: "a/orig", FileDigestHex: d},
+	})
+	if err != nil {
+		t.Fatalf("two-path: %v", err)
+	}
+	oneRoot, err := rootFromLeaves([]leaf{{Path: "a/orig", FileDigestHex: d}})
+	if err != nil {
+		t.Fatalf("one-path: %v", err)
+	}
+	if twoRoot != oneRoot {
+		t.Fatalf("equal-digest leaves did not collapse: two=%s one=%s", twoRoot, oneRoot)
+	}
+
+	// TreeSize must be 1 — confirm via a sidecar build, which routes through
+	// the same dedup helper.
+	side, err := inclusionproof.BuildSidecar("build", map[string]string{"b/copy": d, "a/orig": d})
+	if err != nil {
+		t.Fatalf("BuildSidecar: %v", err)
+	}
+	if side.TreeSize != 1 {
+		t.Fatalf("treeSize=%d, want 1 (equal-digest leaves must collapse)", side.TreeSize)
+	}
+}
+
 // --- helpers ---
 
 type leaf struct {
@@ -230,30 +268,31 @@ func syntheticNpmLeaves(n int) []leaf {
 }
 
 // rootFromLeaves mirrors the producer logic byte-for-byte: normalize
-// path, compute the canonical pre-hash via inclusionproof.LeafHash,
-// sort by normalized path (deterministic), feed into merkle.NewTree,
-// return root as hex. ANY divergence from production code here is
-// the bug the test exists to catch.
+// path, dedup by content digest and sort by (digest, path) via the shared
+// inclusionproof.DedupAndSortByDigest helper (the SAME helper the producers
+// route through), compute the canonical pre-hash via inclusionproof.LeafHash,
+// feed into merkle.NewTree, return root as hex. ANY divergence from
+// production code here is the bug the test exists to catch.
+//
+// v0.3 clean break: the leaf hash binds CONTENT only, so equal-digest files
+// at different paths collapse to one leaf (else the producer tree diverges
+// from any digest-only reconstruction).
 func rootFromLeaves(in []leaf) (string, error) {
-	type pair struct {
-		normalized string
-		preHash    []byte
-	}
-	pairs := make([]pair, 0, len(in))
+	entries := make([]inclusionproof.LeafEntry, 0, len(in))
 	for _, l := range in {
-		normalized := inclusionproof.NormalizePath(l.Path)
-		h, err := inclusionproof.LeafHash(normalized, l.FileDigestHex)
+		entries = append(entries, inclusionproof.LeafEntry{
+			Path:      inclusionproof.NormalizePath(l.Path),
+			DigestHex: l.FileDigestHex,
+		})
+	}
+	entries = inclusionproof.DedupAndSortByDigest(entries)
+	preHashes := make([][]byte, 0, len(entries))
+	for _, e := range entries {
+		h, err := inclusionproof.LeafHash(e.Path, e.DigestHex)
 		if err != nil {
 			return "", err
 		}
-		pairs = append(pairs, pair{normalized: normalized, preHash: h})
-	}
-	sort.Slice(pairs, func(i, j int) bool {
-		return pairs[i].normalized < pairs[j].normalized
-	})
-	preHashes := make([][]byte, len(pairs))
-	for i, p := range pairs {
-		preHashes[i] = p.preHash
+		preHashes = append(preHashes, h)
 	}
 	tree, err := merkle.NewTree(preHashes)
 	if err != nil {

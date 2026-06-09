@@ -11,7 +11,7 @@ import meta from '@catalog/inclusion-proof.json';
 
 # `inclusion-proof` attestor
 
-Emits a signed inclusion proof binding a single file's digest to a Merkle tree's root. Generated on demand by [`cilock prove`](../guides/prove-files-in-a-build.md) against a producer-side tree sidecar; consumed by `cilock verify` when a downstream verifier needs to confirm a per-file claim against a v0.3 [product](./product.mdx) or material attestation.
+Defines the predicate schema for a signed inclusion proof binding a single file's digest to a Merkle tree's root. Since v0.3, the product and material attestors inline all per-file leaves directly in the signed envelope, so per-file verification flows through the product attestation itself — no separate inclusion-proof envelope is needed for the default path. Standalone inclusion-proof envelopes remain a recognized predicate type for interoperability with pre-v0.3 pipelines and for policies that consume them as `externalAttestations`.
 
 <AttestorMeta data={meta} />
 
@@ -46,19 +46,11 @@ The subject being the file digest is what makes the inclusion-proof attestation 
 
 ## When to use
 
-After `cilock run` has produced a v0.3 product (or material) attestation and the matching `` `<outfile>.product.tree.json` `` (or `.material.tree.json`) sidecar, run `cilock prove` against the sidecar for any file a downstream consumer might need to verify. Typically that means release binaries, container images, public-API entry points, and SBOMs — anything someone might verify by digest. Skip intermediate build files (`node_modules` contents, object files, build temp). See [prove files in a build](../guides/prove-files-in-a-build.md).
+In the v0.3 inline-leaves model, per-file verification flows directly from the product or material attestation — no standalone inclusion-proof envelope is required. The inclusion-proof predicate type is recognized for backward compatibility with pre-v0.3 pipelines and for policies that wire standalone envelopes via `externalAttestations`.
 
 ## Flags
 
-The `cilock prove` subcommand carries the flags that drive this attestor. (The attestor itself does not register CLI flags via the standard attestor registry; it is producer-driven only.)
-
-| Flag | Effect |
-|---|---|
-| `--tree-sidecar <path>` | Path to the product or material tree sidecar from `cilock run` (required). |
-| `--file <path>` | Leaf path within the sidecar tree to emit a proof for. Repeat to emit multiple proofs in one invocation. |
-| `--outfile <path>` | Where to write the signed inclusion-proof envelope. With multiple `--file` values each envelope lands at `<outfile>-<sanitised-path>.json`. |
-| `--signer-file-key-path` / `--signer-fulcio-*` / `--signer-kms-*` | Standard cilock signer flags. Same flow as `cilock run`. |
-| `--timestamp-servers` | Optional TSA servers to use when signing the envelope. |
+The `inclusion-proof` attestor does not register CLI flags via the standard attestor registry; it is not produced by a `cilock run` step. Standalone inclusion-proof envelopes are produced programmatically or by external tooling and consumed by `cilock verify` via the `externalAttestations` policy mechanism.
 
 ## Verification semantics
 
@@ -112,17 +104,9 @@ A full DSSE statement for an inclusion-proof attestation:
 - **The proof is meaningless without a signed root.** Always verify the product/material attestation's signature before trusting its claimed root as the proof's terminator. ([GHSA-jp26-88mw-89qr](https://github.com/sigstore/sigstore-java/security/advisories/GHSA-jp26-88mw-89qr) is the canonical example of skipping this step.)
 - **The sidecar tree is not evidence.** `` `<outfile>.product.tree.json` `` / `` `<outfile>.material.tree.json` `` are unsigned and producer-only. A consumer who somehow obtained one has no signed claim to verify against — only the producer's signature on the inclusion-proof attestation makes the proof trustworthy.
 
-## CLI example
+## Usage note
 
-```bash
-cilock prove \
-  --tree-sidecar attestation.product.tree.json \
-  --file dist/binary \
-  --signer-file-key-path key.pem \
-  --outfile dist-binary.inclusion-proof.json
-```
-
-The output is a standalone signed DSSE envelope. Archive it alongside the build's other evidence, upload it to Archivista, or attach it to the release bundle.
+With v0.3 inline leaves, `cilock verify` resolves per-file claims directly from the product or material attestation — no standalone inclusion-proof envelope is needed. If you have a pre-existing standalone inclusion-proof envelope (from a pre-v0.3 pipeline), reference it via `externalAttestations` in the policy; the predicate schema and verification semantics above remain valid.
 
 ## Wiring into a policy
 
@@ -151,10 +135,9 @@ See [`multi-step-attestationsFrom`](https://github.com/aflock-ai/attestor-compli
 
 ## See also
 
-- [Product attestor v0.3](./product.mdx) — the source of the Merkle root being proved against
+- [Product attestor v0.3](./product.mdx) — inline-leaves model, primary per-file verification path
 - [Inclusion proofs](../concepts/inclusion-proofs.md) — the underlying algorithm
 - [The spine of the graph](../concepts/the-spine-of-the-graph.md) — why the subject is the file digest
-- [Prove files in a build](../guides/prove-files-in-a-build.md) — producer-side workflow
 - [Verify a specific file](../guides/verify-a-specific-file.md) — consumer-side workflow
 - [Issue #135](https://github.com/aflock-ai/rookery/issues/135) — design rationale
 

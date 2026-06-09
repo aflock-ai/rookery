@@ -121,21 +121,19 @@ The full DSSE statement for a v0.3 material attestation:
 
 The predicate is fixed-size regardless of how many files were in the working directory.
 
-## Sidecar tree
+## Inline leaves
 
-`cilock run` writes `<outfile>.material.tree.json` adjacent to the signed envelope. The schema is `rookery.inclusion-proof.sidecar/v0.1` — the same format as the product sidecar, distinguished by the `source: "material"` field at the top of the document. `cilock prove --sidecar <outfile>.material.tree.json` reconstructs the tree and emits per-file inclusion proofs.
+Since v0.3 is the sole producer, the signed envelope always carries the full `leaves` array — every `(path, fileDigest, leafHash)` triple — inline. The material attestation is self-contained: a verifier can confirm any specific input file's inclusion from the attestation alone.
 
-The sidecar is **not signed**. Treat it as a build cache.
+## Per-file verification
 
-## Composition with inclusion-proof attestations
+The material attestation's inline `leaves` array exposes every `(path, fileDigest, leafHash)` triple, so per-file input claims are verified directly from the attestation:
 
-The material attestation alone confirms a tree exists with root X. To prove that a *specific* input file was in the tree, the consumer also needs the inclusion-proof attestation `cilock prove` emits for that file. The combined check is:
+1. Find the leaf whose `fileDigest` equals the file digest being verified.
+2. Confirm the leaf's `leafHash` equals `sha256(leafPath-bytes || 0x00 || fileDigest-bytes-raw32)` (the canonical `inclusionproof.LeafHash` encoder).
+3. Fold the leaf hash through the tree's RFC 6962 structure and confirm the result equals the `tree:materials` subject digest.
 
-1. The inclusion-proof attestation's `treeRoot` matches the material attestation's `tree:materials` subject digest.
-2. The audit path reconstructs the claimed root.
-3. The leaf path + digest identify the file the consumer is asking about.
-
-See [verify a specific file](../guides/verify-a-specific-file.md) for the full check sequence.
+Inline leaves are always present in v0.3 attestations. See [verify a specific file](../guides/verify-a-specific-file.md) for the full check sequence.
 
 ## Gotchas
 
@@ -154,14 +152,13 @@ cilock run --step my-step \
   -- make build
 ```
 
-The signed `attestation.json` and the unsigned `attestation.material.tree.json` sidecar both land in the working directory after the run completes.
+The signed `attestation.json` carries the Merkle root and all inline leaves in the predicate.
 
 ## See also
 
-- [Inclusion-proof attestor](./inclusion-proof.mdx) — the per-file claim primitive
+- [Inclusion-proof attestor](./inclusion-proof.mdx) — the standalone proof primitive
 - [Product attestor](./product.mdx) — companion attestor for outputs
 - [Merkle trees](../concepts/merkle-trees.md) — the underlying construction
-- [Prove files in a build](../guides/prove-files-in-a-build.md) — producer-side flow
 - [Verify a specific file](../guides/verify-a-specific-file.md) — consumer-side flow
 
 </VersionPane>

@@ -41,7 +41,7 @@ v0.1's per-file subject array caused two real problems Archivista had to work ar
 - **Placeholder explosion.** A `pip install litellm` produces ~3,200 files, each emitting its own `file:<path>` subject. Multi-file builds blew through MySQL's 65,535 prepared-statement parameter cap.
 - **10+ MB DSSE envelopes.** Every file's path and digest landed in the signed predicate body.
 
-The latest version publishes a single `tree:products` subject (the RFC 6962 Merkle root) and moves the per-file claims into separate [inclusion-proof attestations](./inclusion-proof) emitted on demand by `cilock prove`. See [rookery#135](https://github.com/aflock-ai/rookery/issues/135) for the full rationale.
+The latest version publishes a single `tree:products` subject (the RFC 6962 Merkle root) and inlines the per-file `leaves` in the signed predicate, so every file is verifiable from the product attestation alone. See [rookery#135](https://github.com/aflock-ai/rookery/issues/135) for the full rationale.
 
 ## See also
 

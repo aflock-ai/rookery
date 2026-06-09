@@ -38,7 +38,7 @@ func (e ErrNoCollections) Error() string {
 	return fmt.Sprintf("no collection passed verification for step %v. Likely causes, in order: "+
 		"(1) the attestation wasn't loaded — pass it with --attestations/--bundle or --enable-archivista; "+
 		"(2) a collection loaded but its signature or functionary check failed — see the \"collection rejected\" reason(s) logged above for the specific cause (e.g. a certConstraint that doesn't match the signer's identity); "+
-		"(3) the artifact is a product committed in a Merkle tree (subject \"tree:products\") whose root won't equal the plain file digest — load the attestation carrying the inline v0.3 tree leaves (a sidecar is only needed for cross-step ArtifactsFrom edges: --chain-sidecar-dir)", e.Step)
+		"(3) the artifact is a product committed in a Merkle tree (subject \"tree:products\") whose root won't equal the plain file digest — load the attestation carrying the inline v0.3 tree leaves (the leaves are always inlined in the DSSE-signed predicate; pass that envelope via --attestations/--bundle)", e.Step)
 }
 
 // ErrSubjectDigestMismatch fires when a collection IS loaded for the step

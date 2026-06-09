@@ -25,31 +25,33 @@
 //
 // # Leaf encoding (coordinate with the inclusion-proof attestor)
 //
-// Two-step hashing keeps the attestation/merkle wrapper API contract clean
-// (every leaf is exactly HashSize bytes) while still cryptographically
-// binding the file path to the file content:
+// v0.3 clean break: the leaf hash binds CONTENT only — the file path is NOT
+// part of the leaf hash. Path authentication comes from the DSSE signature
+// over the always-inline leaves, not from the Merkle commitment.
 //
-//  1. Per file, compute the path-prefixed pre-hash
-//     leafPreHash = sha256(path-bytes || 0x00 || file-digest-bytes-raw32)
-//     The path is the UTF-8 file path (forward slashes, see
-//     inclusionproof.NormalizePath); 0x00 is a single NUL delimiter; the
-//     file digest is the raw 32-byte SHA-256 of the file content.
+// Two-step hashing keeps the attestation/merkle wrapper API contract clean
+// (every leaf is exactly HashSize bytes):
+//
+//  1. Per file, compute the content-only pre-hash
+//     leafPreHash = sha256(file-digest-bytes-raw32)
+//     where the file digest is the raw 32-byte SHA-256 of the file content.
 //
 //  2. Pass leafPreHash (32 bytes) into merkle.NewTree([][]byte). The wrapper
 //     applies its own 0x00 leaf domain prefix per RFC 6962 §2.1, so the
 //     hash the Merkle tree actually commits to is
-//     H(0x00 || sha256(path || 0x00 || file-digest)).
+//     H(0x00 || sha256(file-digest)).
 //
 // This guarantees:
-//   - Two files with identical content but different paths produce distinct
-//     leaf hashes and distinct roots.
-//   - The path is cryptographically bound at the leaf level.
+//   - Two files with identical content hash to the SAME leaf regardless of
+//     path; equal-digest files are deduped to one leaf at production time
+//     (see inclusionproof.DedupAndSortByDigest) so the producer root equals
+//     any digest-only reconstruction (Archivista discovery).
 //   - The merkle wrapper sees only HashSize leaves, preserving its
 //     fixed-length-leaf invariant.
 //
 // # Determinism
 //
-// Leaves are sorted by their forward-slash-normalized path before tree
+// Leaves are deduped by digest and sorted by (digest, path) before tree
 // construction. Two attestations recorded against the same logical product
 // set always produce the same root regardless of host OS or filesystem walk
 // order.
@@ -199,19 +201,13 @@ type Attestor struct {
 	// you want named in the signed record. Set via
 	// WithRequireExistsAtExit(false) or `--product-allow-removed`.
 	requireExistsAtExit bool
-
-	// suppressInlineLeaves opts OUT of embedding the per-file leaves in the
-	// signed predicate (the default is to include them, making the
-	// attestation self-sufficient for inclusion + chain verification).
-	// Set via WithSuppressInlineLeaves(true) for size-sensitive builds that
-	// prefer to ship the leaves in a separate sidecar instead.
-	suppressInlineLeaves bool
 }
 
 // ProductLeaf describes one entry of the input tree. The Merkle leaf
 // digest the tree commits to is H(0x00 || LeafHash) — the merkle wrapper
 // applies the 0x00 RFC 6962 leaf prefix to the value passed into NewTree.
-// LeafHash itself is the pre-hash H(path || 0x00 || file-digest).
+// LeafHash itself is the content-only pre-hash H(file-digest) (the path is
+// NOT part of the leaf hash in v0.3). Path is carried as metadata only.
 type ProductLeaf struct {
 	Path       string `json:"path"`
 	FileDigest string `json:"fileDigest"`
@@ -314,13 +310,6 @@ func WithExcludeGlob(g string) Option {
 // forensic builds where you want every transient artifact named.
 func WithRequireExistsAtExit(require bool) Option {
 	return func(a *Attestor) { a.requireExistsAtExit = require }
-}
-
-// WithSuppressInlineLeaves opts OUT of embedding per-file leaves in the signed
-// predicate. Default is to inline them (self-sufficient attestation); set this
-// for size-sensitive builds that ship the leaves in a separate sidecar.
-func WithSuppressInlineLeaves(suppress bool) Option {
-	return func(a *Attestor) { a.suppressInlineLeaves = suppress }
 }
 
 // New constructs an Attestor with default globs (include="*", exclude="").
@@ -725,14 +714,24 @@ func hashSurvivorOrWitness(path, mimeType string, fi os.FileInfo) attestation.Pr
 }
 
 // buildTree filters the product set through the include / exclude globs,
-// sorts the survivors by normalized path, computes per-file leaf
-// pre-hashes, and constructs the Merkle tree.
+// dedups the survivors by content digest, sorts them deterministically by
+// (digest, path), computes per-file leaf pre-hashes, and constructs the
+// Merkle tree.
+//
+// v0.3 leaf encoding binds CONTENT only (the path was removed from the leaf
+// hash — see inclusionproof.LeafHash). Two distinct paths sharing a digest
+// would therefore emit byte-identical leaves, which the RFC6962 wrapper does
+// NOT collapse (its CVE-2012-2459 defense). To keep the producer root equal to
+// any digest-only reconstruction (Archivista discovery / VerifyInlineLeaves)
+// we dedup equal digests to a single leaf here, via the one shared helper that
+// BuildSidecar and material.buildLeaves also route through.
 func (a *Attestor) buildTree() error {
 	pairs := a.includedProductPairs()
 
-	leaves := make([]ProductLeaf, 0, len(pairs))
-	preHashes := make([][]byte, 0, len(pairs))
-
+	// Collect (path, digest) for every product that carries a sha256 digest,
+	// then dedup+sort via the shared helper so all three production tree-build
+	// sites stay byte-identical.
+	entries := make([]inclusionproof.LeafEntry, 0, len(pairs))
 	for _, p := range pairs {
 		prod, ok := a.products[p.originalKey]
 		if !ok {
@@ -755,19 +754,26 @@ func (a *Attestor) buildTree() error {
 			// tree that silently omits files.
 			return fmt.Errorf("product %q has no sha256 digest; v0.3 requires sha256", p.normalized)
 		}
+		entries = append(entries, inclusionproof.LeafEntry{Path: p.normalized, DigestHex: digestHex})
+	}
+	entries = inclusionproof.DedupAndSortByDigest(entries)
+
+	leaves := make([]ProductLeaf, 0, len(entries))
+	preHashes := make([][]byte, 0, len(entries))
+	for _, e := range entries {
 		// LeafHash is the single canonical leaf encoder for v0.3 product
 		// and material attestors. Defined once in plugins/attestors/inclusion-proof
 		// so the producer (product/material) and the verifier (inclusion-proof)
 		// can never drift apart byte-for-byte.
-		leafPreHash, err := inclusionproof.LeafHash(p.normalized, digestHex)
+		leafPreHash, err := inclusionproof.LeafHash(e.Path, e.DigestHex)
 		if err != nil {
-			return fmt.Errorf("product %q: %w", p.normalized, err)
+			return fmt.Errorf("product %q: %w", e.Path, err)
 		}
 		leaves = append(leaves, ProductLeaf{
-			Path:       p.normalized,
-			FileDigest: digestHex,
+			Path:       e.Path,
+			FileDigest: e.DigestHex,
 			LeafHash:   hex.EncodeToString(leafPreHash),
-			Kind:       detectProductKind(p.normalized),
+			Kind:       detectProductKind(e.Path),
 		})
 		preHashes = append(preHashes, leafPreHash)
 	}
@@ -802,9 +808,21 @@ func (a *Attestor) VerifyInlineLeaves() error {
 	if len(a.leaves) == 0 {
 		return nil
 	}
+	// DoS cap BEFORE any O(N) allocation (the digests map / tree rebuild): a
+	// crafted predicate must be rejected before it can force a large allocation.
+	if len(a.leaves) > inclusionproof.MaxLeaves {
+		return fmt.Errorf("product: inline leaves %d exceeds MaxLeaves=%d", len(a.leaves), inclusionproof.MaxLeaves)
+	}
 	digests := make(map[string]string, len(a.leaves))
 	for _, lf := range a.leaves {
 		digests[lf.Path] = lf.FileDigest
+	}
+	// Reject duplicate paths: BuildSidecar keys by path, so two signed leaves
+	// sharing a path would silently collapse (last-writer-wins) and hide a leaf
+	// from the reconstructed root. A conformant producer never emits duplicate
+	// paths; an attacker-padded predicate must fail closed here, not silently.
+	if len(digests) != len(a.leaves) {
+		return fmt.Errorf("product: inline leaves contain duplicate paths (%d leaves, %d distinct paths)", len(a.leaves), len(digests))
 	}
 	side, err := inclusionproof.BuildSidecar("product", digests)
 	if err != nil {
@@ -866,17 +884,13 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 		HashAlgorithm: a.HashAlgorithmField,
 		Construction:  a.ConstructionField,
 	}
-	// Inline the per-file leaves into the signed predicate BY DEFAULT. This
-	// makes the attestation self-sufficient — a verifier can confirm any
-	// product's inclusion (and the policy engine can match artifactsFrom
-	// edges) without a separate inclusion-proof envelope or chain sidecar.
-	// It is cheap: only the Merkle ROOT is a subject (one index entry), so
-	// the leaves add no subject-graph re-indexing cost. Opt out with
-	// WithSuppressInlineLeaves(true) / --sidecar-only for size-sensitive
-	// builds, which fall back to BuildSidecar.
-	if !a.suppressInlineLeaves {
-		p.Leaves = a.leaves
-	}
+	// Inline the per-file leaves into the signed predicate ALWAYS (v0.3 forces
+	// inline leaves — there is no opt-out). This makes the attestation
+	// self-sufficient: a verifier can confirm any product's inclusion (and the
+	// policy engine can match artifactsFrom edges) without a separate
+	// inclusion-proof envelope. It is cheap: only the Merkle ROOT is a subject
+	// (one index entry), so the leaves add no subject-graph re-indexing cost.
+	p.Leaves = a.leaves
 	return json.Marshal(p)
 }
 

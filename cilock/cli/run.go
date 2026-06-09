@@ -16,7 +16,6 @@ package cli
 
 import (
 	"context"
-	"crypto"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,7 +36,6 @@ import (
 	"github.com/aflock-ai/rookery/cilock/internal/keyguard"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
-	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	"github.com/aflock-ai/rookery/plugins/attestors/material"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
 	"github.com/gobwas/glob"
@@ -958,33 +956,19 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		}
 	}
 
-	// Emit v0.3 product/material tree sidecars adjacent to the signed
-	// attestation file. These sidecars carry the full leaf set the
-	// Merkle root commits to and are consumed by `cilock prove` to
-	// generate per-leaf inclusion proofs. They are NOT signed —
-	// integrity comes from the fact that the reconstructed Merkle
-	// root must match the root in the signed collection attestation.
+	// v0.3 forces inline leaves into the signed predicate, so the full
+	// leaf set the Merkle root commits to travels inside the signed
+	// envelope itself — there is no separate off-envelope tree sidecar to
+	// write (the `cilock prove` off-envelope subsystem was removed).
 	//
-	// If --outfile was empty (stdout), no sidecars are written: there
-	// is no on-disk anchor to derive the sidecar path from.
+	// If --outfile was empty (stdout), no detection sidecar is written:
+	// there is no on-disk anchor to derive the path from.
 	if ro.OutFilePath != "" {
-		if err := emitRunSidecars(ro.OutFilePath, attestors); err != nil {
-			// Don't fail the whole run on a sidecar write error: the
-			// signed attestation is already on disk and is the real
-			// artifact. But the sidecar IS required for `cilock prove`,
-			// so emit an unambiguous error-tagged line to stderr too so
-			// CI log scrapers don't miss it — a missing sidecar surfaces
-			// later as a confusing "no such file" from `prove`, which is
-			// a known operator footgun.
-			log.Errorf("tree sidecar write failed; `cilock prove` will not work against this attestation until the sidecar is regenerated: %v", err)
-			fmt.Fprintf(os.Stderr, "error: tree sidecar write failed: %v\n", err)
-		}
 		// Shadow-mode detection: emit <outfile>.detection.json with the
 		// pre-gate plan. This is informational only — it does NOT change
 		// which attestors fired in this run. Verifiers may inspect the
 		// sidecar to see what cilock *would* have auto-selected. Errors
-		// are non-fatal for the same reason as above: the signed
-		// attestation is the real artifact.
+		// are non-fatal: the signed attestation is the real artifact.
 		if err := emitDetectionSidecar(ro.OutFilePath, args); err != nil {
 			log.Debugf("detection sidecar emit failed (non-fatal): %v", err)
 		}
@@ -1589,40 +1573,4 @@ func warnEmptyProductBundle(attestors []attestation.Attestor) {
 	log.Warnf("command exited 0 and traced %d file write(s), but all were classified as cache or filtered out.", dropped)
 	log.Warnf("products set is empty — the signed envelope will NOT include any binary subject.")
 	log.Warnf("Check: build output path vs --workingdir, --attestor-product-include-glob, --cache-allow-pattern <pattern>")
-}
-
-// emitRunSidecars walks the attestor list looking for product and
-// material attestors, extracts their (path -> sha256-hex) maps, and
-// hands them to writeSidecarsForRun. Decoupled into its own function
-// so the sidecar logic doesn't dominate runRun.
-func emitRunSidecars(outfile string, attestors []attestation.Attestor) error {
-	products := map[string]string{}
-	materials := map[string]string{}
-	sha256DV := cryptoutil.DigestValue{Hash: crypto.SHA256}
-
-	for _, att := range attestors {
-		if p, ok := att.(attestation.Producer); ok {
-			for path, prod := range p.Products() {
-				digest, hasSHA := prod.Digest[sha256DV]
-				if !hasSHA {
-					// A product without a sha256 digest cannot
-					// participate in the v0.3 tree. Skip silently —
-					// the v0.3 attestor will emit the same skip.
-					continue
-				}
-				products[inclusionproof.NormalizePath(path)] = digest
-			}
-		}
-		if m, ok := att.(attestation.Materialer); ok {
-			for path, ds := range m.Materials() {
-				digest, hasSHA := ds[sha256DV]
-				if !hasSHA {
-					continue
-				}
-				materials[inclusionproof.NormalizePath(path)] = digest
-			}
-		}
-	}
-
-	return writeSidecarsForRun(outfile, products, materials)
 }

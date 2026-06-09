@@ -30,8 +30,6 @@ For the full set, run `cilock run --help` and `cilock verify --help`.
 | `--no-default-attestor=<name>` (repeatable) | run | none | — | Drops the named always-on attestor (`product`, `material`). Disabling BOTH is a hard error. |
 | `--prewalk-skip-dir=<name>` (repeatable) | run | (none, additive) | — | Adds a basename to the pre-trace walk skip list. Built-in defaults: `.git`, `node_modules`, `vendor`, `.cache`. |
 | `--prewalk-include-dir=<name>` (repeatable) | run | (none) | — | Forces the walker to descend into the basename even if a default or `--prewalk-skip-dir` would skip it. Most-specific wins. |
-| `--chain-sidecar-http-timeout=<dur>` | verify | `30s` (compiled-in `DefaultHTTPChainSidecarTimeout`) | — | Go duration: `15s`, `2m`, etc. Zero falls back to the default. |
-| `--chain-sidecar-http-max-bytes=<n>` | verify | `64 MiB` (`DefaultHTTPChainSidecarMaxBytes`, ≈67108864) | — | Cap on the HTTP response body size when fetching a chain sidecar. |
 
 ## Env var reference
 

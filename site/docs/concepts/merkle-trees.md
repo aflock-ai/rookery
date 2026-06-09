@@ -64,7 +64,7 @@ CI/lock v0.3 ships inclusion proofs as a standalone primitive; consistency proof
 
 ## How CI/lock uses them
 
-The product v0.3 attestor computes the Merkle root over the per-file digest list of products written during a `cilock run` step. That root is the single in-toto subject of the product attestation, so the *subject* stays fixed-size no matter the file count. By default the predicate also carries the per-file `leaves` inline, so per-file provability comes straight from the product attestation — a verifier matches a file digest to a leaf and folds it to the signed root with nothing else. When inline leaves are suppressed (very large trees) or for selective disclosure, per-file provability instead comes from separate inclusion-proof attestations emitted by `cilock prove` against the producer's sidecar tree.
+The product v0.3 attestor computes the Merkle root over the per-file digest list of products written during a `cilock run` step. That root is the single in-toto subject of the product attestation, so the *subject* stays fixed-size no matter the file count. The predicate also carries the per-file `leaves` inline (the sole trust path in v0.3), so per-file provability comes straight from the product attestation — a verifier matches a file digest to a leaf and folds it to the signed root with nothing else. Inline DSSE-signed leaves are always present; off-envelope chain sidecars are not part of the current design.
 
 See [the spine of the graph](./the-spine-of-the-graph) for how inclusion-proof attestations slot into CI/lock's existing subject-digest discovery.
 

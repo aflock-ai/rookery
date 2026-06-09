@@ -25,7 +25,7 @@ const files = execSync(
   { encoding: 'utf8' }
 ).split('\n').filter(Boolean);
 
-const SUBCMDS = '(run|verify|sign|prove|prove-chain|attestors|tools|plan|init|build|keyid|bundle|attest|license|completion|version|help)';
+const SUBCMDS = '(run|verify|sign|attestors|tools|plan|init|build|keyid|bundle|attest|license|completion|version|help)';
 // CLI context => the occurrence refers to the binary/command.
 function isCLI(prose, idx, m) {
   const after = prose.slice(idx + m.length);

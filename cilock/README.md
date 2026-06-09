@@ -85,8 +85,6 @@ exposes the hidden signing-backend, attestor-tuning, cache, and env flags.
 | `plan` | Show which attestors detection would fire for a command, without executing it. |
 | `bundle` | Create and inspect attestation bundles (tar.gz of DSSE envelopes). |
 | `policy` | Validate a policy, or generate a starter policy from signed bundles. |
-| `prove` | Emit signed inclusion proofs for files in a v0.3 product/material tree. |
-| `prove-chain` | Build a multi-step chain-of-custody sidecar binding consumed materials to an upstream step's signed Merkle root. |
 | `attestors` | List available attestors or print an attestor's JSON schema. |
 | `tools` | Introspect the in-binary detector registry (list / show / test-plan). |
 | `keyid` | Inspect the canonical keyid derived from a public or private key. |
@@ -287,34 +285,6 @@ cilock bundle inspect evidence.tar.gz
 
 `create` flags include `--max-depth` (default 5) and `--max-envelopes`
 (default 10000). `inspect --json` emits the manifest as JSON.
-
----
-
-## `cilock prove` / `cilock prove-chain`
-
-`prove` emits one signed inclusion-proof DSSE envelope per `--file`, each binding
-`(path, fileDigest, treeRoot, leafIndex, auditPath)` against a v0.3
-product/material tree carried in a sidecar:
-
-```bash
-cilock prove --file path/in/tree --signer-file-key-path cosign.key \
-  -o proof.json --tree-sidecar <sidecar>
-```
-
-`prove-chain` builds an unsigned `rookery.chain-proof.sidecar/v0.1` document that
-binds consumed materials to an upstream step's signed Merkle root:
-
-```bash
-cilock prove-chain \
-  --source-envelope upstream.bundle.json \
-  --source-sidecar upstream.sidecar.json \
-  --source-step source \
-  --consumed path/to/material=sha256:<hex> \
-  -o chain.sidecar.json
-```
-
-Each `--consumed` material must already appear in the upstream sidecar's leaf set;
-the command refuses to fabricate proofs for materials not in the upstream tree.
 
 ---
 

@@ -17,7 +17,6 @@ package options
 import (
 	"os"
 	"strings"
-	"time"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
@@ -63,54 +62,6 @@ type VerifyOptions struct {
 	PolicyEmails           []string
 	PolicyOrganizations    []string
 	PolicyURIs             []string
-
-	// ChainSidecarDir is a local directory containing chain-of-custody
-	// sidecars (one per downstream step, named <step>.chain.json). When
-	// set, the verifier installs a FilesystemChainSidecarSource and
-	// prefers per-material RFC 6962 inclusion-proof verification over
-	// the legacy path-by-path artifact comparison for any
-	// ArtifactsFrom edge that has a matching sidecar. Empty disables.
-	ChainSidecarDir string
-
-	// ChainSidecarURL is an HTTP(S) URL template used to fetch chain
-	// sidecars by upstream envelope digest. Placeholders:
-	// {envelopeDigest}, {downstreamStep}, {upstreamStep}. When both
-	// ChainSidecarDir and ChainSidecarURL are set, the filesystem
-	// source is tried first; HTTP is the fallback.
-	ChainSidecarURL string
-
-	// RequireSidecar enables strict-chain mode: a chain edge with an
-	// upstream step must be backed by EITHER a matching chain sidecar
-	// OR verified inline Merkle leaves (the v0.4 default — product and
-	// material attestors embed their per-file leaves in the signed
-	// predicate, so the engine rehydrates real Materials()/Products(),
-	// confirms they reconstruct to the signed root, and compares).
-	// Strict mode only fails closed when an edge has NEITHER — i.e. a
-	// leaf-less v0.3 collection with no sidecar, the vacuous-pass attack
-	// surface where empty Materials() made compareArtifacts pass
-	// trivially. The CLI flag defaults to TRUE for v0.4. Users verifying
-	// legacy v0.1 / leaf-less v0.3 chains without either proof can opt
-	// out via `--require-sidecar=false`.
-	//
-	// Note: the Go struct's zero value is false; the flag default
-	// in AddFlags is true. Callers constructing VerifyOptions
-	// directly (without going through the CLI flag layer) must set
-	// this explicitly if strict mode is desired.
-	RequireSidecar bool
-
-	// ChainSidecarHTTPTimeout overrides the per-request HTTP client
-	// timeout used by the chain sidecar HTTP source. Defaults to
-	// policy.DefaultHTTPChainSidecarTimeout (30s). Increase for very
-	// large sidecars on cold caches; decrease in latency-sensitive
-	// pipelines.
-	ChainSidecarHTTPTimeout time.Duration
-
-	// ChainSidecarHTTPMaxBytes caps the HTTP response body the
-	// verifier will read from a chain sidecar server. Defaults to
-	// policy.DefaultHTTPChainSidecarMaxBytes (64 MiB). Tune up for
-	// builds with very large material sets; tune down to harden
-	// against hostile servers.
-	ChainSidecarHTTPMaxBytes int64
 
 	// OutputFormat selects how the verify verdict is reported. "text"
 	// (default) prints the human-readable evidence + binding line to
@@ -308,22 +259,6 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 		"Build config (workflow) URI of the policy signer (glob-matched), e.g. https://github.com/testifysec/judge/.github/workflows/release.yml@* — pins WHICH workflow may sign a trusted policy without pinning the changing ref.")
 	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.RunnerEnvironment, "policy-fulcio-runner-environment", "",
 		"Runner environment of the policy signer (glob-matched), e.g. github-hosted or self-hosted.")
-
-	// v0.3 chain-of-custody verification.
-	cmd.Flags().StringVar(&vo.ChainSidecarDir, "chain-sidecar-dir", "",
-		"Directory containing chain-of-custody sidecars (one per downstream step, named <step>.chain.json). When set, the verifier validates ArtifactsFrom edges via per-material RFC 6962 inclusion proofs against the upstream step's signed Merkle root instead of the legacy path-by-path comparison.")
-	cmd.Flags().StringVar(&vo.ChainSidecarURL, "chain-sidecar-url", "",
-		"HTTP(S) URL template for fetching chain sidecars by upstream envelope digest. Placeholders: {envelopeDigest}, {downstreamStep}, {upstreamStep}. When both --chain-sidecar-dir and --chain-sidecar-url are set, the filesystem source is tried first.")
-	cmd.Flags().BoolVar(&vo.RequireSidecar, "require-sidecar", true,
-		"Strict-chain mode: every artifactsFrom edge must be backed by verified inline Merkle leaves (the v0.4 default) or a chain sidecar; fails closed only when an edge has neither (closes the v0.3 vacuous-pass attack surface). DEFAULT TRUE. Pass --require-sidecar=false to verify legacy chains lacking both.")
-	cmd.Flags().DurationVar(&vo.ChainSidecarHTTPTimeout, "chain-sidecar-http-timeout", 0,
-		"Per-request HTTP client timeout for chain-sidecar fetches (Go duration format, e.g. 15s, 2m). "+
-			"Zero (default) uses the compiled-in DefaultHTTPChainSidecarTimeout (30s). Increase for very large "+
-			"sidecars on cold caches; decrease in latency-sensitive pipelines.")
-	cmd.Flags().Int64Var(&vo.ChainSidecarHTTPMaxBytes, "chain-sidecar-http-max-bytes", 0,
-		"Cap on the HTTP response body size when fetching a chain sidecar (raw bytes). "+
-			"Zero (default) uses the compiled-in DefaultHTTPChainSidecarMaxBytes (64 MiB ≈ 67108864). "+
-			"Tune up for builds with very large material sets; tune down to harden against hostile servers.")
 
 	cmd.Flags().StringVarP(&vo.OutputFormat, "format", "o", "text",
 		"How to report the verdict. 'text' (default) prints human-readable evidence + the matched-subject "+

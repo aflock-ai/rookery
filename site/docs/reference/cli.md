@@ -27,8 +27,6 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock attest` | Record attestations without wrapping a command (sugar for `run -- true`; for consultative/at-rest attestors). |
 | `cilock sign [file]` | Sign an arbitrary file (typically a policy) with the configured signer. |
 | `cilock verify` | Verify an artifact (subject) against a signed policy using attestations as evidence. |
-| `cilock prove` | Emit signed inclusion proofs for files in a v0.3 product/material tree (selective disclosure / suppressed inline leaves). |
-| `cilock prove-chain` | Build a chain-of-custody sidecar binding a step's consumed materials to an upstream step's signed Merkle root. |
 | `cilock policy from-bundles` | Generate a starter Witness policy from one or more signed attestation bundles. |
 | `cilock policy validate` | Validate a Witness/cilock policy document (schema only, no signature check). |
 | `cilock keyid` | Print the canonical keyid (`hex(sha256(PEM(pub)))`) derived from a public or private key. |
@@ -278,7 +276,7 @@ Wraps an arbitrary file in a DSSE envelope. Used most commonly to sign a policy 
 
 > Verifies an **artifact (subject)** against a signed policy. You name the subject — an artifact file (`-f`) or a digest such as `sha1:$COMMIT` (`-s`) — and CI/lock uses the supplied **attestations as the evidence** that validates it. You verify the thing, not the attestation.
 
-Because v0.3 product/material attestations [inline their Merkle leaves](../attestors/product) by default, `cilock verify <artifact> -p policy -a <attestations>` resolves the artifact's digest to its signed tree with **no inclusion-proof envelope** — the inclusion-proof bridge maps the artifact's sha256 to the `tree:products` root. `artifactsFrom` chains verify from the inline leaves with no chain sidecar; strict-chain mode (`--require-sidecar`, default) is satisfied by verified inline leaves or a sidecar.
+Because v0.3 product/material attestations [inline their Merkle leaves](../attestors/product) by default, `cilock verify <artifact> -p policy -a <attestations>` resolves the artifact's digest to its signed tree with **no separate inclusion-proof envelope** — the inclusion-proof bridge maps the artifact's sha256 to the `tree:products` root directly from the signed attestation's inline leaves.
 
 **Policy-signer trust.** A build can embed its policy trust anchors (policy CA root, TSA root, signer functionary) at compile time, so `cilock verify <artifact> -p policy -a <attestations>` needs no `--policy-*` flags; verify prints the trust anchors it uses. The canonical binary ships **empty** embedded trust (`{}`), so you supply trust per dimension via `-k`/`--publickey` (key) or `--policy-ca-roots` + the Fulcio constraint flags below. Flags override embedded trust; verify **fails closed** when neither a flag nor embedded trust is present for a required dimension.
 
@@ -295,7 +293,6 @@ Because v0.3 product/material attestations [inline their Merkle leaves](../attes
 | `--policy-ca-intermediates <list>` | (none) | Intermediate CAs for the policy cert chain. |
 | `--policy-commonname`, `--policy-dns-names`, `--policy-emails`, `--policy-organizations`, `--policy-uris` | (none) | Cert-constraint fields when the policy is signed with x.509. |
 | `--policy-fulcio-oidc-issuer`, `--policy-fulcio-build-trigger`, `--policy-fulcio-build-config-uri`, `--policy-fulcio-runner-environment`, `--policy-fulcio-run-invocation-uri`, `--policy-fulcio-source-repository-{ref,identifier,digest}` | (none) | Fulcio cert-constraint fields pinning a **keyless** policy signer — e.g. `--policy-fulcio-build-config-uri https://github.com/org/repo/.github/workflows/release.yml@*` pins which workflow may sign a trusted policy without pinning the ref; `--policy-fulcio-runner-environment github-hosted`. |
-| `--require-sidecar` | (none) | Strict-chain mode (default on): an `artifactsFrom` chain must be satisfied by verified inline leaves **or** a chain sidecar. |
 | `--policy-timestamp-servers <list>` | (none) | Trusted TSA CA cert paths for verifying timestamped policies. |
 | `--verifier-kms-*` | (none) | Same shape as `--signer-kms-*`, used when the policy's public key is referenced by a KMS URI. |
 
@@ -344,29 +341,6 @@ cilock verify ./app -p policy.signed.json -k pub.pem --bundle evidence.tar.gz --
 ```bash
 cilock attest -a github-review -k key.pem -o review.bundle.json -s review-head
 ```
-
-## `cilock prove`
-
-> Emits a signed inclusion-proof attestation binding one file's digest to a v0.3 product/material Merkle root. Needed only for **selective disclosure** or when a build **suppressed inline leaves** — by default the product attestation's inline leaves already make every file verifiable. See [prove files in a build](../guides/prove-files-in-a-build).
-
-| Flag | Description |
-|---|---|
-| `--tree-sidecar <path>` | The `<outfile>.product.tree.json` / `.material.tree.json` written by `cilock run` (required). |
-| `--file <path>` | Leaf path to prove. Repeatable; each envelope lands at `<outfile>-<sanitised-path>.json`. |
-| `--outfile <path>` | Output path for the signed inclusion-proof envelope. |
-| `--signer-file-key-path` etc. | Standard signer flags (same as `run`). |
-
-## `cilock prove-chain`
-
-> Builds an unsigned `rookery.chain-proof.sidecar/v0.1` binding a step's **consumed** materials to an **upstream** step's signed Merkle root, so a policy verifier can confirm provenance across steps. With v0.3 inline leaves, `artifactsFrom` chains usually verify with no chain sidecar; `prove-chain` is for the cases that still need an explicit sidecar.
-
-| Flag | Description |
-|---|---|
-| `--source-envelope <path>` | Signed DSSE envelope of the upstream step (its payload sha256 becomes the chain binding). |
-| `--source-sidecar <path>` | The upstream step's v0.3 leaf sidecar. |
-| `--source-step <name>` | Upstream step name as declared in the policy (default `source`). |
-| `--consumed <path=sha256hex>` | A consumed material; must appear in the upstream tree. Repeatable. |
-| `--outfile <path>` | Output path for the chain sidecar JSON (required). |
 
 ## `cilock policy from-bundles`
 

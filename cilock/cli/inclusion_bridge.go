@@ -36,9 +36,9 @@ type treeCommitment struct {
 	rootHex  string
 	treeSize uint64
 	// leaves is the per-file (path → fileDigest) set carried inline in the
-	// product/material v0.3 predicate by default. Empty when the producer set
-	// WithSuppressInlineLeaves; in that case the single-leaf reconstruct and
-	// inclusion-proof paths still apply. NEVER trusted without first
+	// product/material v0.3 predicate (always inlined in v0.3). The single-leaf
+	// reconstruct and inclusion-proof paths remain as fallbacks for a
+	// predicate that happens to carry no leaves. NEVER trusted without first
 	// reconstructing the tree and confirming it folds back to rootHex.
 	leaves map[string]string
 }
@@ -57,12 +57,11 @@ type treeCommitment struct {
 //     tree once the leaves reconstruct to the signed root — no path, no
 //     sidecar, no inclusion-proof envelope. Resolves any file of a multi-file
 //     build from the signed collection alone.
-//   - Single-leaf reconstruct: when leaves are suppressed but the artifact is
-//     the SOLE product (treeSize==1), the root IS the leaf hash; reconstruct
-//     it from (basename, digest). Needs the artifact path.
-//   - Inclusion-proof envelope: for suppressed leaves / selective disclosure,
-//     RFC 6962-verify a separate proof's audit path against the trusted
-//     (root, treeSize).
+//   - Single-leaf reconstruct: fallback when a predicate carries no inline
+//     leaves and the artifact is the SOLE product (treeSize==1) — the root IS
+//     the leaf hash; reconstruct it from the digest. (Path-independent in v0.3.)
+//   - Inclusion-proof envelope: for selective disclosure, RFC 6962-verify a
+//     separate proof's audit path against the trusted (root, treeSize).
 //
 // On success each path adds the tree root as an additional subject so the
 // collection now matches.

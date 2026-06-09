@@ -19,9 +19,7 @@ To verify a single file you need three things:
 
 - A **product attestation** (`https://aflock.ai/attestations/product/v0.3`) whose subject is `tree:products` and whose predicate carries the inline `leaves`.
 
-**The inclusion-proof path is the exception**, for builds that used **selective disclosure** or **suppressed inline leaves**. There you also need:
-
-- An **inclusion-proof attestation** (`https://aflock.ai/attestations/inclusion-proof/v0.1`) whose subject is the file digest, produced by [`cilock prove`](./prove-files-in-a-build) for that file.
+**The inclusion-proof path is the exception**, for builds that carry a separately-emitted standalone inclusion-proof attestation (`https://aflock.ai/attestations/inclusion-proof/v0.1`) whose subject is the file digest.
 
 Both paths are covered below.
 
@@ -76,7 +74,7 @@ Five common failure modes and what they mean:
 
 | Failure | Cause |
 |---|---|
-| `no collections found for subject <digest>` | No product/material attestation lists that digest as an inline leaf, and no inclusion-proof attestation has it as a subject. Usual cause: the attestation set you passed is incomplete, or the build suppressed inline leaves and you didn't pass the matching inclusion proof (run `cilock prove` for the file). |
+| `no collections found for subject <digest>` | No product/material attestation lists that digest as an inline leaf, and no inclusion-proof attestation has it as a subject. Usual cause: the attestation set you passed is incomplete. |
 | `inclusion proof: root mismatch` | The audit path does not reconstruct the claimed root. The proof was tampered with, was for a different tree, or was generated against a different RFC 6962 implementation than the verifier expects. |
 | `inclusion proof: fileDigest does not match subject digest` | The proof verifies in isolation but the predicate's `fileDigest` does not match the file the user asked the verifier to check. Symptom of [CVE-2026-22703](https://nvd.nist.gov/vuln/detail/CVE-2026-22703) if the verifier had skipped this check. |
 | `attestation signature invalid` | DSSE signature did not verify against the policy's trusted functionaries. The signer is wrong, the policy is wrong, or the envelope was modified after signing. |
@@ -102,6 +100,5 @@ The signer flags are required if you want the VSA itself signed; without them th
 ## See also
 
 - [Inclusion proofs](../concepts/inclusion-proofs) — the underlying primitive
-- [Prove files in a build](./prove-files-in-a-build) — the producer-side counterpart
 - [The spine of the graph](../concepts/the-spine-of-the-graph) — why the BFS finds the right attestations
 - [Verify in a release gate](./verify-in-a-release-gate) — wiring this into CI

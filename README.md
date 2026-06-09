@@ -20,14 +20,13 @@ Rookery is the upstream for **[`cilock`](cilock/)** (witness-compatible attestat
 | Record attestations without wrapping a command | `cilock attest` |
 | Verify a chain of attestations against policy | `cilock verify` |
 | Package evidence into a portable bundle | `cilock bundle` |
-| Emit signed file inclusion proofs / chain-of-custody | `cilock prove` / `cilock prove-chain` |
+| Inspect per-file inclusion proofs (inline in v0.3 product attestations) | `cilock verify` with the attestation's inline leaves |
 | Manage and validate Witness policies | `cilock policy` |
 | Embed attestation in your own Go program | [`attestation`](attestation/) library |
 | Ship a slimmer CLI with only the attestors you need | [`builder`](builder/) |
 | Drop into a GitHub Actions workflow | [`aflock-ai/cilock-action`](https://github.com/aflock-ai/cilock-action) |
 
-Run `cilock --help` for the full command list (`attest`, `bundle`, `prove`, `prove-chain`,
-`policy`, `plan`, `tools`, `sign`, `login`, `whoami`, …).
+Run `cilock --help` for the full command list (`attest`, `bundle`, `policy`, `plan`, `tools`, `sign`, `login`, `whoami`, …).
 
 ---
 

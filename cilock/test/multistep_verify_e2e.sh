@@ -8,7 +8,7 @@
 # signed predicate by default, so the engine rehydrates upstream Products() and
 # downstream Materials() from the (signed, root-checked) leaves and verifies the
 # artifactsFrom chain with NO sidecar. This proves:
-#   POSITIVE   — chain verifies from inline leaves alone (no --chain-sidecar-dir).
+#   POSITIVE   — chain verifies from inline leaves alone (off-envelope chain sidecars were removed).
 #   NEGATIVE 1 — forging an inline leaf so it no longer reconstructs to the
 #                signed merkleRoot is rejected (VerifyInlineLeaves fails closed).
 #   NEGATIVE 2 — a downstream material whose digest disagrees with the upstream
