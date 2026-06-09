@@ -9,6 +9,17 @@ sidebar_position: 3
 
 CI/lock is described in its own source as "**a witness-compatible CI attestation CLI with all attestors and signers**." It shares Witness's DSSE + in-toto envelope format, but the interop is **asymmetric** — CI/lock consumes Witness evidence, not the other way around for everything (see [How CI/lock relates](#how-cilock-relates)).
 
+## At a glance
+
+| What it does | Witness | CI/lock |
+| --- | --- | --- |
+| Trust setup (Fulcio, TSA, Archivista, keyless CI) | First-class, wired per endpoint with its own flag. | Adds one `--platform-url` that derives the hosted Archivista, Fulcio, TSA, and OIDC audience; in GitHub Actions it signs keylessly off the runner's ambient OIDC token, no login or stored secret. Every endpoint stays overridable. |
+| Capturing what ran | `commandrun` traces the process with ptrace. | Keeps ptrace as a mode and adds an eBPF kprobe backend at the kernel boundary; default `auto` probes eBPF and falls back to ptrace. |
+| Integrity over the build's files | `product`/`material` record each file as an in-toto subject with a digest set. | The same per-file digests, plus an RFC 6962 Merkle root over the set and standalone inclusion proofs. |
+| Support and backing | A CNCF / in-toto project, maintained by a global open-source community. | Open source as well, with a commercial SLA from TestifySec, a US company, behind it. |
+
+For attestation-format interop, see [Interop direction, precisely](#interop-direction-precisely) below.
+
 ## What witness provides
 
 From the witness project itself:

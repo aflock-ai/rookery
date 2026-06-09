@@ -233,7 +233,20 @@ const config = {
           sidebarPath: './sidebars.js',
           routeBasePath: '/',
         },
-        blog: false,
+        blog: {
+          path: 'blog',
+          routeBasePath: 'blog',
+          blogTitle: 'CI/lock blog',
+          blogDescription:
+            'Notes on supply-chain security, signed builds, and shipping safely with AI coding agents.',
+          showReadingTime: true,
+          blogSidebarTitle: 'All posts',
+          blogSidebarCount: 'ALL',
+          postsPerPage: 10,
+          feedOptions: {type: ['rss', 'atom'], title: 'CI/lock blog'},
+          onInlineAuthors: 'ignore',
+          onUntruncatedBlogPosts: 'ignore',
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
@@ -282,6 +295,7 @@ const config = {
             position: 'left',
             label: 'Supported Tools',
           },
+          {to: '/blog', position: 'left', label: 'Blog'},
           {
             type: 'doc',
             docId: 'reference/cli',
