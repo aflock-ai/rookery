@@ -47,9 +47,7 @@ It's Apache 2.0, and it speaks Witness in both directions, so it drops into what
 
 ## Built for how we ship now
 
-The tooling we built to secure the supply chain assumed a human with time to read the docs and wire up signing by hand. That doesn't survive contact with an agent that's already three commits deep. CI/lock is what Witness taught me, rebuilt for that: same lineage, with the bug fixes we found auditing the upstream code. What's new is who it's for. The first-class user is your agent.
-
-So CI/lock talks back. When something's wrong, the error tells you the next command instead of a stack trace — not logged in, it hands you the `cilock login` line. The catalog of what it can do is queryable as JSON, so an agent reads it and acts instead of guessing.
+The tooling we built to secure the supply chain assumed a human doing the setup by hand, at human speed. An agent is already three commits deep before you've finished reading the docs. CI/lock is what Witness taught me, rebuilt for that: same lineage, with the bug fixes we found auditing the upstream code. What's new is who it's for. The first-class user is your agent.
 
 Point your agent at a goal like "get this build to SLSA Level 3" and it can take you there. CI/lock is the engine: it emits SLSA Provenance and in-toto evidence at every step, signs it, and verifies it against Rego policy you write. The evidence then flows into the [TestifySec platform](https://testifysec.com), which maps it onto the frameworks you answer to — FedRAMP, SOC 2, NIST 800-53. A compliance report stops being a project you dread and becomes a read of evidence you already have.
 
