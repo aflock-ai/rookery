@@ -67,11 +67,10 @@ func TestEverythingOverridable(t *testing.T) {
 		sort.Slice(missing, func(i, j int) bool { return missing[i].Path < missing[j].Path })
 		var b strings.Builder
 		b.WriteString("\nThe following package-level defaults have no detectable override path " +
-			"(no --flag, no os.Getenv, no config-file accessor in the same package).\n" +
+			"(no --flag, no os.Getenv in the same package).\n" +
 			"Add one of:\n" +
 			"  - a CLI flag (cmd.Flags().XxxVar(&MyDefault, ...))\n" +
 			"  - an env var (os.Getenv(\"CILOCK_*\"))\n" +
-			"  - a config-file key (.cilock.yaml / .witness.yaml entry)\n" +
 			"Or add the constant to deliberateExclusionsWhitelist in this file with a comment\n" +
 			"explaining why it is intentionally not overridable (e.g. kernel boundary,\n" +
 			"schema version, crypto algorithm choice).\n\n")
@@ -185,12 +184,6 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// is a `var x = pkg.x` aliasing pattern, not a new default.
 	"DefaultSensitiveEnvList": {},
 
-	// defaultConfigFile (plugins/attestors/configuration): hard-
-	// coded fallback path ".witness.yaml" used by the legacy
-	// configuration attestor when the caller passes "". The
-	// caller-supplied path IS the override.
-	"defaultConfigFile": {},
-
 	// defaultRegistryAliases (k8smanifest/ociref): the OCI spec's
 	// canonical short-form → registry-1.docker.io alias table.
 	// Changing it would break image-reference resolution; this is
@@ -251,8 +244,6 @@ func hasOverride(t *testing.T, d defaultDecl) bool {
 		}
 		if strings.Contains(s, "cmd.Flags()") ||
 			strings.Contains(s, "os.Getenv(") ||
-			strings.Contains(s, "getStringFromConfig(") ||
-			strings.Contains(s, "getStringSliceFromConfig(") ||
 			// Registry-based attestor config options route into the
 			// `--attestor-<name>-<key>` CLI flag namespace at startup
 			// (see cilock/internal/options/options.go addFlagsFromRegistry).

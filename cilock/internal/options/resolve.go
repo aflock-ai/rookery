@@ -5,17 +5,15 @@
 
 // Package options' resolve.go centralises the override-hierarchy
 // rules documented in docs/configuration.md. Every cilock knob is
-// resolvable from four layers, in most-specific-wins order:
+// resolvable from three layers, in most-specific-wins order:
 //
 //  1. CLI flag (per-invocation)
 //  2. Env var (CILOCK_*)
-//  3. Config file (.cilock.yaml / .witness.yaml)
-//  4. Built-in default
+//  3. Built-in default
 //
-// New flags should consistently route through these helpers so the
-// hierarchy is enforced uniformly. Existing flags are NOT being
-// retrofitted in this PR — too much churn — but every NEW flag
-// added in PR B uses these helpers when applicable.
+// cilock is args-only: there is no config file. New flags should
+// consistently route through these helpers so the hierarchy is
+// enforced uniformly.
 
 package options
 
@@ -31,15 +29,12 @@ import (
 //     if they passed an empty value — empty-but-explicit is still
 //     an explicit choice that beats the env-var fallback)
 //   - the env var named by envVar, when non-empty
-//   - configVal, when non-empty (caller should have already
-//     pre-resolved the config-file value via getStringFromConfig
-//     or its variant)
 //   - defaultVal as the last resort
 //
 // Callers pass cliChanged from cmd.Flags().Changed("flag-name") so
 // the helper can tell "user explicitly passed --foo=<empty>" from
 // "user did not pass --foo".
-func ResolveString(cliVal string, cliChanged bool, envVar, configVal, defaultVal string) string {
+func ResolveString(cliVal string, cliChanged bool, envVar, defaultVal string) string {
 	if cliChanged {
 		return cliVal
 	}
@@ -48,24 +43,18 @@ func ResolveString(cliVal string, cliChanged bool, envVar, configVal, defaultVal
 			return v
 		}
 	}
-	if configVal != "" {
-		return configVal
-	}
 	return defaultVal
 }
 
-// ResolveInt is the integer companion to ResolveString. Env-var and
-// config values that fail to parse are SILENTLY ignored — i.e. the
-// hierarchy falls through to the next layer. This is deliberate:
-//   - typo'd env var → operator gets the default (fail-safe),
-//   - garbage config-file value → operator gets the default
-//     (config files are user-edited and a stray quote should not
-//     OOM the verifier).
+// ResolveInt is the integer companion to ResolveString. Env-var
+// values that fail to parse are SILENTLY ignored — i.e. the
+// hierarchy falls through to the default. This is deliberate:
+// a typo'd env var means the operator gets the default (fail-safe).
 //
 // Callers that need parse errors to be FATAL should resolve
 // themselves and validate inline. Use this helper when the default
 // is the safe fallback.
-func ResolveInt(cliVal int, cliChanged bool, envVar string, configVal string, defaultVal int) int {
+func ResolveInt(cliVal int, cliChanged bool, envVar string, defaultVal int) int {
 	if cliChanged {
 		return cliVal
 	}
@@ -76,18 +65,13 @@ func ResolveInt(cliVal int, cliChanged bool, envVar string, configVal string, de
 			}
 		}
 	}
-	if configVal != "" {
-		if n, err := strconv.Atoi(configVal); err == nil {
-			return n
-		}
-	}
 	return defaultVal
 }
 
 // ResolveDuration mirrors ResolveInt for Go duration strings. Same
-// fail-safe semantics: an unparseable env-var or config value falls
-// through to the next layer, ending at the default.
-func ResolveDuration(cliVal time.Duration, cliChanged bool, envVar, configVal string, defaultVal time.Duration) time.Duration {
+// fail-safe semantics: an unparseable env-var value falls through
+// to the default.
+func ResolveDuration(cliVal time.Duration, cliChanged bool, envVar string, defaultVal time.Duration) time.Duration {
 	if cliChanged {
 		return cliVal
 	}
@@ -96,11 +80,6 @@ func ResolveDuration(cliVal time.Duration, cliChanged bool, envVar, configVal st
 			if d, err := time.ParseDuration(v); err == nil {
 				return d
 			}
-		}
-	}
-	if configVal != "" {
-		if d, err := time.ParseDuration(configVal); err == nil {
-			return d
 		}
 	}
 	return defaultVal

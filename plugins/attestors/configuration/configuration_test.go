@@ -26,7 +26,7 @@ import (
 
 func TestConstants(t *testing.T) {
 	assert.Equal(t, "configuration", Name)
-	assert.Equal(t, "https://aflock.ai/attestations/configuration/v0.1", Type)
+	assert.Equal(t, "https://aflock.ai/attestations/configuration/v0.2", Type)
 	assert.Equal(t, attestation.PreMaterialRunType, RunType)
 }
 
@@ -87,20 +87,14 @@ func TestAttest_FlagsWithCommandSeparator(t *testing.T) {
 	assert.False(t, hasGo)
 }
 
-func TestAttest_ConfigFile(t *testing.T) {
+// TestAttest_IgnoresConfigFileOnDisk pins the args-only contract: even when a
+// legacy .witness.yaml sits in the working directory, the attestor captures
+// only the CLI flags — there is no config-file surface to record.
+func TestAttest_IgnoresConfigFileOnDisk(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, ".witness.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("run:\n  step: from-config\n"), 0644))
 
-	configContent := `run:
-  step: build
-  attestations:
-    - environment
-    - git
-  signer-file-key-path: testkey.pem
-`
-	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0644))
-
-	// Change to temp dir so default config file is found
 	oldWd, err := os.Getwd()
 	require.NoError(t, err)
 	require.NoError(t, os.Chdir(tempDir))
@@ -111,65 +105,8 @@ func TestAttest_ConfigFile(t *testing.T) {
 	err = a.Attest(ctx)
 	require.NoError(t, err)
 
-	assert.Equal(t, ".witness.yaml", a.ConfigPath)
-	assert.NotNil(t, a.ConfigDigest)
-	assert.NotNil(t, a.ConfigContent)
-
-	// Verify config content was parsed
-	run, ok := a.ConfigContent["run"]
-	assert.True(t, ok, "config should have 'run' key")
-	runMap, ok := run.(map[string]interface{})
-	assert.True(t, ok)
-	assert.Equal(t, "build", runMap["step"])
-}
-
-func TestAttest_CustomConfigPath(t *testing.T) {
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "custom.yaml")
-
-	require.NoError(t, os.WriteFile(configPath, []byte("key: value\n"), 0644))
-
-	a := New(WithCustomArgs([]string{"witness", "run", "-c", configPath}))
-	ctx := &attestation.AttestationContext{}
-	err := a.Attest(ctx)
-	require.NoError(t, err)
-
-	assert.Equal(t, configPath, a.ConfigPath)
-	assert.NotNil(t, a.ConfigDigest)
-	assert.Equal(t, "value", a.ConfigContent["key"])
-}
-
-func TestAttest_CustomConfigPathLongFlag(t *testing.T) {
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, "custom.yaml")
-
-	require.NoError(t, os.WriteFile(configPath, []byte("foo: bar\n"), 0644))
-
-	a := New(WithCustomArgs([]string{"witness", "run", "--config", configPath}))
-	ctx := &attestation.AttestationContext{}
-	err := a.Attest(ctx)
-	require.NoError(t, err)
-
-	assert.Equal(t, configPath, a.ConfigPath)
-	assert.Equal(t, "bar", a.ConfigContent["foo"])
-}
-
-func TestAttest_NoConfigFile(t *testing.T) {
-	tempDir := t.TempDir()
-	oldWd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(tempDir))
-	defer func() { _ = os.Chdir(oldWd) }()
-
-	a := New(WithCustomArgs([]string{"witness", "run", "--step", "build"}))
-	ctx := &attestation.AttestationContext{}
-	err = a.Attest(ctx)
-	require.NoError(t, err)
-
-	// No config file → no config data
-	assert.Empty(t, a.ConfigPath)
-	assert.Nil(t, a.ConfigDigest)
-	assert.Nil(t, a.ConfigContent)
+	assert.Equal(t, "build", a.Flags["step"])
+	assert.NotEmpty(t, a.WorkingDir)
 }
 
 func TestExtractWitnessArgs(t *testing.T) {

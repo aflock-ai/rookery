@@ -547,7 +547,7 @@ Exit-code policy (finding #221):
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Apply platform-derived defaults (archivista, TSA URLs) for any
-			// flags not explicitly set by the user or config file.
+			// flags not explicitly set by the user.
 			o.ResolvePlatformDefaults(cmd)
 
 			// Warn loudly if operators are still using legacy diagnostic env

@@ -44,7 +44,6 @@ These persistent flags are accepted on every subcommand:
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--config, -c <path>` | `.witness.yaml` | Path to a YAML config file with persisted flag values. The `.witness.yaml` name is a legacy from the witness lineage; not yet renamed to `.cilock.yaml`. |
 | `--log-level, -l <level>` | `info` | One of `debug`, `info`, `warn`, `error`. |
 | `--debug-cpu-profile-file <path>` | (none) | Write a CPU pprof profile to this path. Profiling enabled when non-empty. |
 | `--debug-mem-profile-file <path>` | (none) | Write a heap pprof profile to this path. Profiling enabled when non-empty. |
@@ -466,6 +465,6 @@ Tenant:    Y
 
 The CustomerID and TenantID are injected via `-ldflags="-X 'github.com/aflock-ai/rookery/cilock/cli.CustomerID=...' -X 'github.com/aflock-ai/rookery/cilock/cli.TenantID=...'"`.
 
-## Configuration file
+## Configuration
 
-CI/lock supports a YAML config file at `.witness.yaml` (legacy name from the witness lineage). The schema mirrors the CLI flag names. See [Configuration](./configuration) for the full schema and override behavior.
+CI/lock is **args-only**: there is no config file. CLI flags (highest precedence), a small set of `CILOCK_*` env vars, and built-in defaults are the entire configuration surface. See [Configuration](./configuration) for the override hierarchy. (The legacy `.witness.yaml` config file inherited from the witness lineage was removed deliberately — a config file in a cloned repo could silently override security-critical flags.)

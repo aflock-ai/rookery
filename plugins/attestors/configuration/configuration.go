@@ -15,22 +15,22 @@
 package configuration
 
 import (
-	"crypto"
 	"os"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/invopop/jsonschema"
-	"gopkg.in/yaml.v3"
 )
 
 const (
-	Name    = "configuration"
-	Type    = "https://aflock.ai/attestations/configuration/v0.1"
+	Name = "configuration"
+	// Type is v0.2: the v0.1 predicate additionally carried config_path /
+	// config_digest / config_content captured from the legacy .witness.yaml
+	// config file. cilock is args-only now, so those fields were removed —
+	// an output-shape change, hence the version bump (same convention as
+	// product/material). Policies keyed to v0.1 do not match v0.2 evidence.
+	Type    = "https://aflock.ai/attestations/configuration/v0.2"
 	RunType = attestation.PreMaterialRunType
-
-	defaultConfigFile = ".witness.yaml"
 )
 
 var (
@@ -53,13 +53,14 @@ func WithCustomArgs(args []string) Option {
 	}
 }
 
-// Attestor captures CLI flags and configuration file data.
+// Attestor captures the raw CLI flags that drove this run. cilock is
+// args-only: there is no config file, so flags (plus the working
+// directory) are the complete configuration surface this attestor can
+// observe. Environment variables are captured by the `environment`
+// attestor instead.
 type Attestor struct {
-	Flags         map[string]string      `json:"flags,omitempty"`
-	ConfigPath    string                 `json:"config_path,omitempty"`
-	ConfigDigest  cryptoutil.DigestSet   `json:"config_digest,omitempty"`
-	ConfigContent map[string]interface{} `json:"config_content,omitempty"`
-	WorkingDir    string                 `json:"working_directory,omitempty"`
+	Flags      map[string]string `json:"flags,omitempty"`
+	WorkingDir string            `json:"working_directory,omitempty"`
 
 	osArgs func() []string
 }
@@ -107,35 +108,6 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	wd, err := os.Getwd()
 	if err == nil {
 		a.WorkingDir = wd
-	}
-
-	// Determine config path
-	configPath := a.Flags["c"]
-	if configPath == "" {
-		configPath = a.Flags["config"]
-	}
-	if configPath == "" {
-		configPath = defaultConfigFile
-	}
-
-	// Read and process config file if it exists
-	content, err := os.ReadFile(configPath) //nolint:gosec // G304: config path is user-provided
-	if err == nil {
-		a.ConfigPath = configPath
-
-		// Calculate digest
-		digest, err := cryptoutil.CalculateDigestSetFromBytes(content, []cryptoutil.DigestValue{
-			{Hash: crypto.SHA256},
-		})
-		if err == nil {
-			a.ConfigDigest = digest
-		}
-
-		// Parse YAML content
-		var parsed map[string]interface{}
-		if err := yaml.Unmarshal(content, &parsed); err == nil {
-			a.ConfigContent = parsed
-		}
 	}
 
 	return nil

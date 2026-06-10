@@ -1,8 +1,9 @@
 # Configuration Hierarchy
 
-cilock follows the principle **everything user-overridable**. Every built-in
-default exposed to operators is reachable through at least one of four layers,
-applied in **most-specific-wins** order.
+cilock follows the principle **everything user-overridable**. cilock is
+**args-only** — there is no config file. Every built-in default exposed to
+operators is reachable through at least one of three layers, applied in
+**most-specific-wins** order.
 
 ## Override hierarchy
 
@@ -10,13 +11,16 @@ applied in **most-specific-wins** order.
 |-------|--------|-------|
 | 1 | **CLI flag** (per-invocation) | Highest precedence. An explicitly-passed flag wins over everything, including an empty value — `--platform-url=""` means "no platform", not "use the default". |
 | 2 | **Env var** (`CILOCK_*`) | Set in the parent shell or CI job. Useful for cluster-wide tuning that you do not want to repeat on every `cilock run` invocation. |
-| 3 | **Config file** (`.cilock.yaml` / `.witness.yaml`) | Discovered via `--config` (defaults to `.witness.yaml` in `$PWD`). Keyed by cobra command name then flag name. |
-| 4 | **Built-in default** (lowest) | Compiled-in fallback if no other layer resolves. Every default is regression-tested by `attestation/everything_overridable_test.go`. |
+| 3 | **Built-in default** (lowest) | Compiled-in fallback if no other layer resolves. Every default is regression-tested by `attestation/everything_overridable_test.go`. |
 
 The precedence resolver helpers live in `cilock/internal/options/resolve.go`
 (`ResolveString`, `ResolveInt`, `ResolveDuration`). New flags should route
-through them; existing flags follow the same hierarchy via cobra +
-`cilock/cli/config.go`.
+through them; existing flags follow the same hierarchy via cobra defaults.
+
+> Historical note: cilock inherited a `.witness.yaml` config-file layer from
+> its witness lineage. It was removed deliberately — a config file in a cloned
+> repo could silently override security-critical flags (archivista server,
+> signing key paths, trust anchors). Flags and env vars are the whole surface.
 
 ## CLI flag reference (run / verify)
 
@@ -46,23 +50,17 @@ For the full set, run `cilock run --help` and `cilock verify --help`.
 | `CILOCK_DEV_BPF_SKIP_PROGRAMS` | — | — | **Dev-only**. Comma-separated BPF program names to skip during load. Used to isolate CO-RE failures. (Was: `CILOCK_BPF_SKIP_PROGRAMS`.) |
 | `ACTIONS_ID_TOKEN_REQUEST_URL` | `--archivista-oidc` (auto-enables when set) | — | Triggers GitHub Actions OIDC token fetch for Archivista auth. |
 
-## Worked example: changing the product include-glob across three layers
+## Worked example: changing the product include-glob
 
 Goal: include only `*.tar.gz` in the product attestor.
 
 ```bash
-# Layer 4 (default): * (everything)
-
-# Layer 3 (config file: .cilock.yaml)
-cat > .cilock.yaml <<EOF
-run:
-  attestor-product-include-glob: "**/*"
-EOF
+# Layer 3 (default): * (everything)
 
 # Layer 2 (env var) — registry-routed attestor flags do not have
-# corresponding env vars; use the config file or CLI flag.
+# corresponding env vars; use the CLI flag.
 
-# Layer 1 (CLI flag): wins over the config file
+# Layer 1 (CLI flag): wins over everything
 cilock run \
   --step build \
   --signer-file-key-path key.pem \
@@ -70,13 +68,8 @@ cilock run \
   -- make release
 ```
 
-Precedence: the CLI flag (layer 1) overrides the config file's `**/*` (layer 3).
-If you remove the CLI flag, the `.cilock.yaml` value applies. Remove both and
-the compiled-in default `*` applies.
-
-> *Note: this example is illustrative — PR A handles the product attestor's
-> own internal precedence-ordering work. The point here is the cilock CLI
-> hierarchy applies uniformly.*
+Precedence: the CLI flag (layer 1) overrides the compiled-in default `*`
+(layer 3). Remove the flag and the default applies.
 
 ## What's NOT overridable on purpose
 
@@ -113,7 +106,7 @@ with a per-entry justification comment.
 
 If you are adding a new package-level `const default*` or `var default*`:
 
-1. Add a CLI flag, env var, or config-file key that exposes it.
+1. Add a CLI flag or env var that exposes it.
 2. If the value is genuinely fixed (kernel boundary, schema version,
    internal singleton, etc.), add it to
    `attestation/everything_overridable_test.go`'s

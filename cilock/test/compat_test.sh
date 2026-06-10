@@ -118,8 +118,10 @@ test_flag_names() {
     log_section "Flag Name Compatibility"
 
     for subcmd in run verify sign; do
-        # Extract just flag names (--flag-name) from help output
-        $WITNESS $subcmd --help 2>&1 | grep -oE '\-\-[a-zA-Z0-9_-]+' | sort -u > "$TESTDIR/w_flags.txt"
+        # Extract just flag names (--flag-name) from help output.
+        # --config is excluded: cilock is args-only (no config file) by
+        # design, a deliberate compatibility break with witness.
+        $WITNESS $subcmd --help 2>&1 | grep -oE '\-\-[a-zA-Z0-9_-]+' | grep -vx -- '--config' | sort -u > "$TESTDIR/w_flags.txt"
         $CILOCK $subcmd --help 2>&1 | grep -oE '\-\-[a-zA-Z0-9_-]+' | sort -u > "$TESTDIR/c_flags.txt"
 
         # Check all witness flags exist in cilock
@@ -158,7 +160,8 @@ test_short_flags() {
     log_section "Short Flag Compatibility"
 
     for subcmd in run verify sign; do
-        $WITNESS $subcmd --help 2>&1 | grep -oE '\s-[a-zA-Z],' | sed 's/,//' | tr -d ' ' | sort -u > "$TESTDIR/w_short.txt"
+        # -c (witness's --config shorthand) is excluded: cilock is args-only.
+        $WITNESS $subcmd --help 2>&1 | grep -oE '\s-[a-zA-Z],' | sed 's/,//' | tr -d ' ' | grep -vx -- '-c' | sort -u > "$TESTDIR/w_short.txt"
         $CILOCK $subcmd --help 2>&1 | grep -oE '\s-[a-zA-Z],' | sed 's/,//' | tr -d ' ' | sort -u > "$TESTDIR/c_short.txt"
 
         if diff -q "$TESTDIR/w_short.txt" "$TESTDIR/c_short.txt" > /dev/null 2>&1; then
@@ -1183,42 +1186,9 @@ test_run_product_glob() {
     fi
 }
 
-# -------------------------------------------------------------------
-# Test: Config file
-# -------------------------------------------------------------------
-test_config_file() {
-    log_section "Config File Support"
-
-    cat > "$TESTDIR/workdir/.witness.yaml" <<'CFEOF'
-run:
-    step: config-step
-    attestations:
-        - environment
-        - git
-CFEOF
-
-    local w_exit=0 c_exit=0
-
-    (cd "$TESTDIR/workdir" && $WITNESS run \
-        --signer-file-key-path "$TESTDIR/test.pem" \
-        -o "$TESTDIR/w_run_config.json" \
-        -- echo "config test") > /dev/null 2>&1 || w_exit=$?
-
-    (cd "$TESTDIR/workdir" && $CILOCK run \
-        --signer-file-key-path "$TESTDIR/test.pem" \
-        -o "$TESTDIR/c_run_config.json" \
-        -- echo "config test") > /dev/null 2>&1 || c_exit=$?
-
-    if [[ $w_exit -eq 0 && $c_exit -eq 0 ]]; then
-        log_pass "config file: both succeed reading .witness.yaml"
-    elif [[ $w_exit -eq $c_exit ]]; then
-        log_pass "config file: same behavior (exit=$w_exit)"
-    else
-        log_fail "config file" "witness exit=$w_exit, cilock exit=$c_exit"
-    fi
-
-    rm -f "$TESTDIR/workdir/.witness.yaml"
-}
+# NOTE: the config-file compat test was removed: cilock is args-only and
+# intentionally does NOT read witness's .witness.yaml config file. This is
+# a deliberate compatibility break, not a gap.
 
 # -------------------------------------------------------------------
 # Test: Dirhash glob option
@@ -1316,7 +1286,6 @@ main() {
     test_run_failing_command
     test_run_product_glob
     test_run_dirhash
-    test_config_file
     test_sign
     test_sign_datatype
     test_sign_ec

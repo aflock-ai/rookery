@@ -17,7 +17,7 @@ Regenerate after adding or renaming an attestor:
 |---|---|---|
 | `aws-codebuild` | `plugins/attestors/aws-codebuild` | `https://aflock.ai/attestations/aws-codebuild/v0.1` |
 | `aws` | `plugins/attestors/aws-iid` | `https://aflock.ai/attestations/aws/v0.1` |
-| `configuration` | `plugins/attestors/configuration` | `https://aflock.ai/attestations/configuration/v0.1` |
+| `configuration` | `plugins/attestors/configuration` | `https://aflock.ai/attestations/configuration/v0.2` |
 | `environment` | `plugins/attestors/environment` | `https://aflock.ai/attestations/environment/v0.1` |
 | `gcp-iit` | `plugins/attestors/gcp-iit` | `https://aflock.ai/attestations/gcp-iit/v0.1` |
 | `github-review` | `plugins/attestors/github-review` | `https://aflock.ai/attestations/github-review/v0.1` |

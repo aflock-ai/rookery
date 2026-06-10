@@ -416,9 +416,9 @@
       "source": "attestor-backed",
       "categories": [],
       "primaryCategory": null,
-      "description": "The cilock configuration attestor captures the raw CLI flags, config file path, digest, and parsed contents that drove a run, signing them into in-toto evidence.",
+      "description": "The cilock configuration attestor captures the raw CLI flags and working directory that drove a run, signing them into in-toto evidence.",
       "emitsFormats": [],
-      "predicateType": "https://aflock.ai/attestations/configuration/v0.1",
+      "predicateType": "https://aflock.ai/attestations/configuration/v0.2",
       "runType": "prematerial",
       "hasDoc": true
     },

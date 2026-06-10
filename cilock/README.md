@@ -96,7 +96,6 @@ exposes the hidden signing-backend, attestor-tuning, cache, and env flags.
 ### Global flags
 
 ```
--c, --config string                   Path to the witness config file (default ".witness.yaml")
 -l, --log-level string                Level of logging to output (debug, info, warn, error) (default "info")
     --debug-cpu-profile-file string   Path to store the CPU profile (enables profiling when non-empty)
     --debug-mem-profile-file string   Path to store the Memory profile (enables profiling when non-empty)
