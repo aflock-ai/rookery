@@ -73,6 +73,7 @@ replace github.com/aflock-ai/rookery/plugins/attestors/product => ../plugins/att
 replace github.com/aflock-ai/rookery/plugins/attestors/sarif => ../plugins/attestors/sarif
 
 replace github.com/aflock-ai/rookery/plugins/attestors/sbom => ../plugins/attestors/sbom
+replace github.com/aflock-ai/rookery/plugins/attestors/trivy => ../plugins/attestors/trivy
 
 replace github.com/aflock-ai/rookery/plugins/attestors/scubagoggles => ../plugins/attestors/scubagoggles
 
@@ -150,6 +151,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/prowler v0.0.0-20260522233336-64c65b91ab8f
 	github.com/aflock-ai/rookery/plugins/attestors/sarif v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/sbom v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/trivy v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/scubagoggles v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/secretscan v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/slsa v0.0.0-00010101000000-000000000000

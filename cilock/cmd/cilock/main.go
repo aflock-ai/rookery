@@ -53,6 +53,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/steampipe"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/system-packages"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/test-results"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/trivy"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/vex"
 
 	// Default signer plugins (lightweight set).

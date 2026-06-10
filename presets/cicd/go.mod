@@ -45,6 +45,7 @@ replace github.com/aflock-ai/rookery/plugins/attestors/lockfiles => ../../plugin
 replace github.com/aflock-ai/rookery/plugins/attestors/policyverify => ../../plugins/attestors/policyverify
 
 replace github.com/aflock-ai/rookery/plugins/attestors/sbom => ../../plugins/attestors/sbom
+replace github.com/aflock-ai/rookery/plugins/attestors/trivy => ../../plugins/attestors/trivy
 
 replace github.com/aflock-ai/rookery/plugins/attestors/system-packages => ../../plugins/attestors/system-packages
 
@@ -71,6 +72,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/product v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/sarif v0.0.0-20260226224745-dcff6ea0a95d
 	github.com/aflock-ai/rookery/plugins/attestors/sbom v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/trivy v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/secretscan v0.0.0-20260226224745-dcff6ea0a95d
 	github.com/aflock-ai/rookery/plugins/attestors/slsa v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/system-packages v0.0.0-00010101000000-000000000000
