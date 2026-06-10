@@ -84,8 +84,14 @@ function CopyCmd({cmd, big}: {cmd: string; big?: boolean}): React.ReactElement {
   );
 }
 
+// This page is cilock's download surface. The manifest also carries jctl
+// artifacts (released through the same fan-out, surfaced on the platform /tools
+// page instead), so every binary/attestation lookup filters by the cilock- name
+// prefix — os/arch alone is ambiguous across tools.
+const isCilockFile = (name: string) => name.startsWith('cilock-');
+
 function binFor(ver: ManifestVersion, platform: string): ManifestFile | undefined {
-  return ver.files.find((f) => f.os && f.arch && `${f.os}-${f.arch}` === platform);
+  return ver.files.find((f) => isCilockFile(f.name) && f.os && f.arch && `${f.os}-${f.arch}` === platform);
 }
 
 // The keyless policy signer identity baked into the release fan-out
@@ -135,7 +141,13 @@ function offlineVerifyCmd(
 }
 
 function attFor(ver: ManifestVersion, platform: string): AttestationEntry | undefined {
-  return ver.verification?.attestations?.find((a) => a.os && a.arch && `${a.os}-${a.arch}` === platform);
+  return cilockAtts(ver).find((a) => a.os && a.arch && `${a.os}-${a.arch}` === platform);
+}
+
+// The version's attestation entries for cilock binaries only (the manifest also
+// carries jctl attestation entries with the SAME os/arch values).
+function cilockAtts(ver: ManifestVersion): AttestationEntry[] {
+  return (ver.verification?.attestations ?? []).filter((a) => isCilockFile(a.binary));
 }
 
 function DownloadInner(): React.ReactElement {
@@ -171,7 +183,7 @@ function DownloadInner(): React.ReactElement {
   const verPlatform = headlinePre ? STAGING_PLATFORM : PROD_PLATFORM;
   const verEnv = headlinePre ? 'staging' : 'production';
   const others = byNewest.filter((v) => v.version !== ver?.version);
-  const binaries = (ver?.files ?? []).filter((f) => f.os && f.arch);
+  const binaries = (ver?.files ?? []).filter((f) => isCilockFile(f.name) && f.os && f.arch);
   const mine = ver && platform && platform !== 'windows' ? binFor(ver, platform) : undefined;
   const dlBase = ver ? `/dl/${ver.version}` : '/dl';
 
@@ -319,7 +331,7 @@ function DownloadInner(): React.ReactElement {
           {others.map((v) => {
             const pre = isPre(v.version);
             const base = `/dl/${v.version}`;
-            const bins = v.files.filter((f) => f.os && f.arch);
+            const bins = v.files.filter((f) => isCilockFile(f.name) && f.os && f.arch);
             const day = v.released ? v.released.slice(0, 10) : '';
             return (
               <details key={v.version} className={styles.verItem}>
@@ -385,11 +397,12 @@ function DownloadInner(): React.ReactElement {
 
       {/* Story 3b — verify FULLY OFFLINE (no platform/tenant/Archivista). */}
       {ver?.verification && (() => {
-        // Prefer the detected platform; else the first binary that has envelopes.
+        // Prefer the detected platform; else the first CILOCK binary that has
+        // envelopes (the manifest also carries jctl attestation entries).
+        const firstAtt = cilockAtts(ver)[0];
         const offlinePlatform =
           (platform && platform !== 'windows' && attFor(ver, platform) && platform) ||
-          ver.verification.attestations?.[0] &&
-            `${ver.verification.attestations[0].os}-${ver.verification.attestations[0].arch}`;
+          (firstAtt && `${firstAtt.os}-${firstAtt.arch}`);
         const att = offlinePlatform ? attFor(ver, offlinePlatform) : undefined;
         const cmd = offlineVerifyCmd(ver, att, verPlatform);
         const v = ver.verification;
