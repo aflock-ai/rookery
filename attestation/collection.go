@@ -29,6 +29,16 @@ const LegacyCollectionType = "https://witness.testifysec.com/attestation-collect
 type Collection struct {
 	Name         string                  `json:"name"`
 	Attestations []CollectionAttestation `json:"attestations"`
+	// RecordedBackRefs is the producer's declaration of this collection's
+	// back-references, captured at collection build time from every attestor
+	// implementing BackReffer (keys use the same <attestor-type>/<name>
+	// format as the live aggregation). Serializing them makes the edge set
+	// part of the signed payload, so consumers — the platform's supply-chain
+	// graph and verifiers that decode unregistered plugin attestor types as
+	// RawAttestation — recover the edges without typed attestor factories.
+	// Nil on collections serialized before this field existed; BackRefs()
+	// falls back to live aggregation for those.
+	RecordedBackRefs map[string]cryptoutil.DigestSet `json:"backrefs,omitempty"`
 }
 
 type CollectionAttestation struct {
@@ -72,6 +82,10 @@ func NewCollection(name string, attestors []CompletedAttestor) Collection {
 
 	for _, completed := range attestors {
 		collection.Attestations = append(collection.Attestations, NewCollectionAttestation(completed))
+	}
+
+	if backRefs := collection.aggregateBackRefs(); len(backRefs) > 0 {
+		collection.RecordedBackRefs = backRefs
 	}
 
 	return collection
@@ -231,7 +245,22 @@ func (c *Collection) HasInlineMaterials() bool {
 	return false
 }
 
+// BackRefs returns the collection's back-references. When the collection
+// carries recorded backrefs (signed wire format), those are authoritative —
+// this is what lets RawAttestation-decoded plugin attestors keep their edges.
+// Collections from before the field existed fall back to live aggregation
+// over typed attestors.
 func (c *Collection) BackRefs() map[string]cryptoutil.DigestSet {
+	if c.RecordedBackRefs != nil {
+		return c.RecordedBackRefs
+	}
+
+	return c.aggregateBackRefs()
+}
+
+// aggregateBackRefs computes back-references from every attestor in the
+// collection that implements BackReffer, namespacing keys by attestor type.
+func (c *Collection) aggregateBackRefs() map[string]cryptoutil.DigestSet {
 	backRefs := make(map[string]cryptoutil.DigestSet)
 	for _, attestation := range c.Attestations {
 		if backReffer, ok := attestation.Attestation.(BackReffer); ok {

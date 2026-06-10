@@ -88,10 +88,16 @@ function sha256Hex(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-/** os/arch parsed from cilock-<version>-<os>-<arch>.tar.gz; nulls for non-binaries. */
+// Tools published through this lane (release-fanout.yml builds + verifies both).
+// The download UIs and install.sh stay cilock-only by design — they filter by
+// the cilock- name prefix; jctl's front door is the platform /tools page.
+const TOOLS = ['cilock', 'jctl'];
+const TOOL_ALT = TOOLS.join('|');
+
+/** tool/os/arch parsed from <tool>-<version>-<os>-<arch>.tar.gz; nulls for non-binaries. */
 function parseBinaryName(name) {
-  const m = /^cilock-[^-]+(?:-[^-]+)*?-(\w+)-(\w+)\.(?:tar\.gz|tgz|zip)$/.exec(name);
-  return m ? { os: m[1], arch: m[2] } : { os: null, arch: null };
+  const m = new RegExp(`^(${TOOL_ALT})-[^-]+(?:-[^-]+)*?-(\\w+)-(\\w+)\\.(?:tar\\.gz|tgz|zip)$`).exec(name);
+  return m ? { tool: m[1], os: m[2], arch: m[3] } : { tool: null, os: null, arch: null };
 }
 
 function isBinaryTarball(name) {
@@ -104,11 +110,11 @@ function isPrerelease(version) {
   return version.includes('-');
 }
 
-// os/arch parsed from a per-step envelope name
-// cilock-<version>-<os>-<arch>.<step>.att.json. Returns {os, arch, step} or nulls.
+// tool/os/arch parsed from a per-step envelope name
+// <tool>-<version>-<os>-<arch>.<step>.att.json. Returns {tool, os, arch, step} or nulls.
 function parseAttestationName(name) {
-  const m = /^cilock-.+-(\w+)-(\w+)\.(source-git|build)\.att\.json$/.exec(name);
-  return m ? { os: m[1], arch: m[2], step: m[3] } : { os: null, arch: null, step: null };
+  const m = new RegExp(`^(${TOOL_ALT})-.+-(\\w+)-(\\w+)\\.(source-git|build)\\.att\\.json$`).exec(name);
+  return m ? { tool: m[1], os: m[2], arch: m[3], step: m[4] } : { tool: null, os: null, arch: null, step: null };
 }
 
 // buildVerification assembles the per-version `verification` block that lets a
@@ -131,12 +137,14 @@ function buildVerification(dir, allFiles, version, policyName) {
   if (allFiles.includes('fulcio-roots.pem')) v.fulcioRoots = `${version}/fulcio-roots.pem`;
   if (allFiles.includes('tsa-chain.pem')) v.tsaChain = `${version}/tsa-chain.pem`;
 
-  // Group the per-step envelopes by os-arch so each binary references both.
+  // Group the per-step envelopes by tool-os-arch so each binary references both.
+  // The tool is part of the key: cilock AND jctl ship the same os-arch matrix,
+  // and an os-arch-only key would let one tool's envelopes clobber the other's.
   const byBinary = {};
   for (const name of allFiles) {
-    const { os, arch, step } = parseAttestationName(name);
+    const { tool, os, arch, step } = parseAttestationName(name);
     if (!os) continue;
-    const key = `${os}-${arch}`;
+    const key = `${tool}-${os}-${arch}`;
     byBinary[key] ??= {};
     byBinary[key][step] = {
       file: `${version}/${name}`,
@@ -147,8 +155,8 @@ function buildVerification(dir, allFiles, version, policyName) {
   const binaries = allFiles.filter(isBinaryTarball);
   const attestations = [];
   for (const tarball of binaries) {
-    const { os, arch } = parseBinaryName(tarball);
-    const env = byBinary[`${os}-${arch}`];
+    const { tool, os, arch } = parseBinaryName(tarball);
+    const env = byBinary[`${tool}-${os}-${arch}`];
     // Offline verify needs BOTH the source-git AND build envelopes. A binary
     // with only one would get a manifest entry whose published verify command
     // can't pass — so omit a partial set (and warn) rather than advertise an
@@ -187,7 +195,7 @@ if (!existsSync(policyPath)) die(`release policy not found in --dir: ${policyPat
 
 const allFiles = readdirSync(opts.dir).filter((f) => statSync(join(opts.dir, f)).isFile());
 const binaries = allFiles.filter(isBinaryTarball);
-if (binaries.length === 0) die(`no binary tarballs (cilock-*-<os>-<arch>.tar.gz) found in ${opts.dir}`);
+if (binaries.length === 0) die(`no binary tarballs ({${TOOLS.join(',')}}-*-<os>-<arch>.tar.gz) found in ${opts.dir}`);
 
 // NOTE: no verification here. The release fan-out's `verify` job already verified
 // every binary ONLINE against the platform-trust policy (fail-closed) before this

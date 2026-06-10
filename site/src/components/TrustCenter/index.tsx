@@ -131,9 +131,11 @@ export default function TrustCenter({
 }): React.ReactElement | null {
   // Pick the binary to spotlight: the visitor's platform if it has envelopes,
   // else the first attested binary. (A null platform simply never matches.)
+  // cilock entries only — the manifest also carries jctl attestation entries
+  // (same release lane, same os/arch values), and this panel narrates cilock.
+  const cilockAtts = (verification.attestations ?? []).filter((a) => a.binary.startsWith('cilock-'));
   const entry: AttestationEntry | undefined =
-    verification.attestations?.find((a) => `${a.os}-${a.arch}` === platform) ??
-    verification.attestations?.[0];
+    cilockAtts.find((a) => `${a.os}-${a.arch}` === platform) ?? cilockAtts[0];
 
   const [facts, setFacts] = useState<BuildFacts | null>(null);
   const [loading, setLoading] = useState(false);

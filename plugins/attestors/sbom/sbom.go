@@ -46,13 +46,16 @@ type sbomSubjectExtractor struct {
 	// Spec: https://spdx.github.io/spdx-spec/v2.3/document-creation-information/#64-document-name
 	SPDXDocumentName string `json:"name"`
 
-	// CycloneDX 1.6 metadata.component.{name,version} per the
-	// bom-1.6.schema.json definition.
+	// CycloneDX 1.6 metadata.component.{name,version,purl} per the
+	// bom-1.6.schema.json definition. The purl carries the source image
+	// digest for container-image SBOMs (pkg:oci/<name>@sha256%3A<digest>),
+	// which is the inventory's provenance anchor.
 	// Spec: https://cyclonedx.org/docs/1.6/json/#metadata_component
 	Metadata struct {
 		Component struct {
 			Name    string `json:"name"`
 			Version string `json:"version"`
+			PURL    string `json:"purl"`
 		} `json:"component"`
 	} `json:"metadata"`
 }
@@ -136,6 +139,7 @@ type SBOMAttestor struct {
 	export        bool
 	sbomFile      string
 	subjects      map[string]cryptoutil.DigestSet
+	backRefs      map[string]cryptoutil.DigestSet
 }
 
 func NewSBOMAttestor() *SBOMAttestor {
@@ -252,6 +256,7 @@ func (a *SBOMAttestor) loadFromExplicitFile(ctx *attestation.AttestationContext)
 
 	a.SBOMDocument = json.RawMessage(sbomBytes)
 	a.subjects = make(map[string]cryptoutil.DigestSet)
+	a.backRefs = backRefsFromExtraction(a.predicateType, extracted)
 
 	// Subject for the file itself — same shape ("file:<path>") as the
 	// product-set path uses, so policy can match without dispatch.
@@ -266,6 +271,73 @@ func (a *SBOMAttestor) loadFromExplicitFile(ctx *attestation.AttestationContext)
 		}
 	}
 	return nil
+}
+
+// BackRefs declares what this SBOM inventories — the provenance anchor
+// connecting the inventory to the build/run attestations of the same
+// artifact. For container-image SBOMs that is the source image digest from
+// metadata.component.purl; otherwise the component/document name is the
+// only stable anchor. The per-component contents stay out: backreffing
+// thousands of shared packages would create hub edges linking every
+// product that depends on a common library.
+func (a *SBOMAttestor) BackRefs() map[string]cryptoutil.DigestSet {
+	if a.backRefs == nil {
+		return map[string]cryptoutil.DigestSet{}
+	}
+	return a.backRefs
+}
+
+// backRefsFromExtraction derives the provenance anchors from the parsed
+// SBOM identity fields.
+func backRefsFromExtraction(predicateType string, extracted sbomSubjectExtractor) map[string]cryptoutil.DigestSet {
+	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
+	refs := make(map[string]cryptoutil.DigestSet)
+
+	name := ""
+	switch predicateType {
+	case SPDXPredicateType:
+		name = extracted.SPDXDocumentName
+	case CycloneDxPredicateType:
+		name = extracted.Metadata.Component.Name
+		if digest := imageDigestFromPURL(extracted.Metadata.Component.PURL); digest != "" {
+			refs[fmt.Sprintf("imagedigest:%s", digest)] = cryptoutil.DigestSet{
+				cryptoutil.DigestValue{Hash: crypto.SHA256}: digest,
+			}
+		}
+	}
+
+	if len(refs) == 0 && name != "" {
+		if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(name), hashes); err == nil {
+			refs[fmt.Sprintf("name:%s", name)] = ds
+		} else {
+			log.Debugf("(attestation/sbom) failed to hash name backref: %v", err)
+		}
+	}
+
+	return refs
+}
+
+// imageDigestFromPURL extracts the bare sha256 digest from a package URL of
+// the form pkg:<type>/<name>@sha256:<digest> or the URL-encoded
+// pkg:<type>/<name>@sha256%3A<digest> that syft emits, ignoring qualifiers.
+// Returns "" when the purl carries no sha256 version.
+func imageDigestFromPURL(purl string) string {
+	if purl == "" {
+		return ""
+	}
+	_, version, found := strings.Cut(purl, "@")
+	if !found {
+		return ""
+	}
+	if qIdx := strings.IndexAny(version, "?#"); qIdx >= 0 {
+		version = version[:qIdx]
+	}
+	for _, sep := range []string{"sha256:", "sha256%3A", "sha256%3a"} {
+		if digest, ok := strings.CutPrefix(version, sep); ok && digest != "" {
+			return digest
+		}
+	}
+	return ""
 }
 
 // sniffPredicateType inspects the top-level JSON of an SBOM and
@@ -447,6 +519,7 @@ func (a *SBOMAttestor) getCandidate(ctx *attestation.AttestationContext) error {
 		// Record subject only after successful parse — recording before
 		// validation would claim the SBOM was observed even on parse failure.
 		a.predicateType = predicateType
+		a.backRefs = backRefsFromExtraction(predicateType, extracted)
 		a.subjects[fmt.Sprintf("file:%v", path)] = product.Digest
 
 		hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}

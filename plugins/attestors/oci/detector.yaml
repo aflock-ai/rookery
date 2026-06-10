@@ -64,6 +64,10 @@ contract:
       description: "one subject per RepoTag from manifest.json (key tail is the literal image tag)"
     - prefix: "layerdiffid"
       description: "per-layer uncompressed diffID; key is layerdiffid<NN>: where NN is the zero-padded layer index"
+  backref_subjects:
+    - "manifestdigest:"
+    - "imageid:"
+    - "imagetag:"
   schema_required: true
   credentials: []
   fixtures:
