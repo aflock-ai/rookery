@@ -52,14 +52,20 @@ const (
 )
 
 // steampipe is a state-reporting attestor (same class as prowler,
-// aws-config, asff, sarif, sbom, docker-bench, kube-bench, oscap,
-// inspec — every one of which implements Subjecter but NOT
-// BackReffer). The BackReffer interface is reserved for CI/build-context
-// attestors (git, github, gitlab, jenkins, githubwebhook, aws-codebuild)
-// that have a workflow-run identity to anchor downstream verdicts on.
-// State-reporting attestors expose their evidence via Subjects only;
-// verifiers discover via subject-digest match, and the chain ends at
-// the DSSE envelope's gitoid in Archivista.
+// aws-config, asff, sarif, docker-bench, kube-bench, oscap, inspec).
+//
+// BackRefs typology: backrefs declare what an attestation is ANCHORED TO
+// (provenance edges back to previously-attested artifacts or run
+// identities); subjects declare the claims/findings it contributes.
+// CI/build-context attestors (git, github, gitlab, jenkins,
+// githubwebhook, aws-codebuild) backref their workflow-run identity;
+// scan-type attestors that examine a concrete artifact (trivy, sbom,
+// oci) backref their scan TARGET — never their findings, which would
+// hub-link unrelated products sharing a CVE or package. steampipe
+// reports on a cloud account rather than a discrete artifact; its
+// account-scoped anchor lands via Subjects today. If a stable
+// account-identity backref is added later, it must anchor the scanned
+// account, not the control findings.
 var (
 	_ attestation.Attestor   = &Attestor{}
 	_ attestation.Subjecter  = &Attestor{}

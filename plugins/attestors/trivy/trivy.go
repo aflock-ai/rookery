@@ -360,6 +360,53 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subjects
 }
 
+// BackRefs declares the artifact this scan targeted — the provenance anchors
+// that let the platform graph connect the verdict to the build/run
+// attestations of the same image. Findings (CVEs, misconfig resources) stay
+// subjects only: they are claims, not provenance edges, and backreffing them
+// would cross-link every unrelated product sharing a vulnerability.
+//
+//   - imagedigest:<hex>          raw manifest digest from Metadata.RepoDigests;
+//     value format matches the docker attestor's imagedigest subjects (bare
+//     hex, raw digest as the DigestSet value) so shared edges connect
+//   - imagereference:<repo:tag>  sha256-of-string, matching docker
+//   - trivy:artifact:<name>      fallback anchor for filesystem/repo scans
+func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
+	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
+	refs := make(map[string]cryptoutil.DigestSet)
+
+	for _, repoDigest := range a.Summary.Metadata.RepoDigests {
+		_, digest, found := strings.Cut(repoDigest, "@sha256:")
+		if !found || digest == "" {
+			continue
+		}
+		refs[fmt.Sprintf("imagedigest:%s", digest)] = cryptoutil.DigestSet{
+			cryptoutil.DigestValue{Hash: crypto.SHA256}: digest,
+		}
+	}
+
+	for _, tag := range a.Summary.Metadata.RepoTags {
+		if tag == "" {
+			continue
+		}
+		if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(tag), hashes); err == nil {
+			refs[fmt.Sprintf("imagereference:%s", tag)] = ds
+		} else {
+			log.Debugf("(attestation/trivy) failed to hash imagereference backref %s: %v", tag, err)
+		}
+	}
+
+	if len(refs) == 0 && a.Summary.ArtifactName != "" {
+		if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.Summary.ArtifactName), hashes); err == nil {
+			refs[fmt.Sprintf("trivy:artifact:%s", a.Summary.ArtifactName)] = ds
+		} else {
+			log.Debugf("(attestation/trivy) failed to hash artifact backref: %v", err)
+		}
+	}
+
+	return refs
+}
+
 //nolint:gocognit // sequential candidate scan: iterate products → open → decode → validate
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()

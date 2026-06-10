@@ -287,6 +287,37 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subj
 }
 
+// BackRefs declares the identity of the image this attestor examined —
+// manifest digest, image ID, and tags — anchoring downstream verdicts to
+// the image's build attestations. Layer diff IDs deliberately stay subjects
+// only: layers are shared across every image built on a common base, so
+// backreffing them would create hub edges linking unrelated products. The
+// local tarball digest likewise identifies this archive, not the image's
+// cross-collection identity.
+func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
+	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
+	refs := make(map[string]cryptoutil.DigestSet)
+
+	if digest := a.ManifestDigest[cryptoutil.DigestValue{Hash: crypto.SHA256}]; digest != "" {
+		refs[fmt.Sprintf("manifestdigest:%s", digest)] = a.ManifestDigest
+	}
+	if digest := a.ImageID[cryptoutil.DigestValue{Hash: crypto.SHA256}]; digest != "" {
+		refs[fmt.Sprintf("imageid:%s", digest)] = a.ImageID
+	}
+	for _, tag := range a.ImageTags {
+		if tag == "" {
+			continue
+		}
+		if hash, err := cryptoutil.CalculateDigestSetFromBytes([]byte(tag), hashes); err == nil {
+			refs[fmt.Sprintf("imagetag:%s", tag)] = hash
+		} else {
+			log.Debugf("(attestation/oci) error calculating image tag backref: %v", err)
+		}
+	}
+
+	return refs
+}
+
 func (m *Manifest) getLayerDIFFIDs(ctx *attestation.AttestationContext, tarFilePath string) ([]cryptoutil.DigestSet, error) { //nolint:gocognit,gocyclo // OCI layer diffID calculation is inherently complex
 	var layerDiffIDs []cryptoutil.DigestSet
 
