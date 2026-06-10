@@ -108,9 +108,9 @@ func TestContractMatchesLiveInterfaces(t *testing.T) {
 					t.Errorf("contract says finalizes but attestor does not implement Finalizer")
 				}
 			}
-			if len(c.BackRefSubjects) > 0 {
+			if len(c.BackRefSubjects) > 0 || len(c.BackRefs) > 0 {
 				if _, ok := a.(attestation.BackReffer); !ok {
-					t.Errorf("contract declares backref_subjects but attestor does not implement BackReffer")
+					t.Errorf("contract declares backref_subjects/backrefs but attestor does not implement BackReffer")
 				}
 			}
 			if len(c.MultiExported) > 0 {

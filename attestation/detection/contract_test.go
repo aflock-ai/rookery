@@ -141,6 +141,75 @@ func TestValidateOutputContract(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "backrefs superset of backref_subjects valid",
+			c: &OutputContract{
+				PredicateType:   "x",
+				RunType:         ContractRunPostProduct,
+				Subjects:        []SubjectClaim{{Prefix: "trivy:artifact:"}},
+				BackRefSubjects: []string{"trivy:artifact:"},
+				BackRefs: []BackRefClaim{
+					{Prefix: "imagedigest:", Description: "scan-target image digest"},
+					{Prefix: "imagereference:", Description: "scan-target image reference"},
+					{Prefix: "trivy:artifact:", Description: "fallback anchor"},
+				},
+				Fixtures: canonical,
+			},
+		},
+		{
+			name: "backrefs without backref_subjects valid (non-subject prefixes only)",
+			c: &OutputContract{
+				PredicateType: "x",
+				RunType:       ContractRunPostProduct,
+				BackRefs:      []BackRefClaim{{Prefix: "imagedigest:", Description: "image digest"}},
+				Fixtures:      canonical,
+			},
+		},
+		{
+			name: "backrefs entry missing prefix rejected",
+			c: &OutputContract{
+				PredicateType: "x",
+				RunType:       ContractRunPostProduct,
+				BackRefs:      []BackRefClaim{{Prefix: "  ", Description: "image digest"}},
+				Fixtures:      canonical,
+			},
+			wantErr: true,
+		},
+		{
+			name: "backrefs entry missing description rejected",
+			c: &OutputContract{
+				PredicateType: "x",
+				RunType:       ContractRunPostProduct,
+				BackRefs:      []BackRefClaim{{Prefix: "imagedigest:"}},
+				Fixtures:      canonical,
+			},
+			wantErr: true,
+		},
+		{
+			name: "backrefs duplicate prefix rejected",
+			c: &OutputContract{
+				PredicateType: "x",
+				RunType:       ContractRunPostProduct,
+				BackRefs: []BackRefClaim{
+					{Prefix: "imagedigest:", Description: "image digest"},
+					{Prefix: "imagedigest:", Description: "image digest again"},
+				},
+				Fixtures: canonical,
+			},
+			wantErr: true,
+		},
+		{
+			name: "backref_subjects entry missing from backrefs rejected when both present",
+			c: &OutputContract{
+				PredicateType:   "x",
+				RunType:         ContractRunPostProduct,
+				Subjects:        []SubjectClaim{{Prefix: "name:"}},
+				BackRefSubjects: []string{"name:"},
+				BackRefs:        []BackRefClaim{{Prefix: "imagedigest:", Description: "image digest"}},
+				Fixtures:        canonical,
+			},
+			wantErr: true,
+		},
+		{
 			name: "bad exit behavior value",
 			c: &OutputContract{
 				PredicateType: "x",
@@ -180,6 +249,13 @@ contract:
   subjects:
     - prefix: "demo:thing:"
       digest_algs: [sha256]
+  backrefs:
+    - prefix: "imagedigest:"
+      description: "non-subject anchor onto the built image"
+    - prefix: "demo:thing:"
+      description: "fallback anchor on the demo thing"
+  backref_subjects:
+    - "demo:thing:"
   emits_materials: true
   schema_required: true
   fixtures:
@@ -198,6 +274,12 @@ contract:
 	}
 	if len(d.Contract.Subjects) != 1 || d.Contract.Subjects[0].Prefix != "demo:thing:" {
 		t.Errorf("subjects = %+v", d.Contract.Subjects)
+	}
+	if len(d.Contract.BackRefs) != 2 || d.Contract.BackRefs[0].Prefix != "imagedigest:" || d.Contract.BackRefs[0].Description == "" {
+		t.Errorf("backrefs = %+v", d.Contract.BackRefs)
+	}
+	if len(d.Contract.BackRefSubjects) != 1 || d.Contract.BackRefSubjects[0] != "demo:thing:" {
+		t.Errorf("backref_subjects = %+v", d.Contract.BackRefSubjects)
 	}
 	if len(d.Contract.Fixtures) != 1 || d.Contract.Fixtures[0].Name != "canonical" || d.Contract.Fixtures[0].Role != FixtureCanonical {
 		t.Errorf("fixtures = %+v", d.Contract.Fixtures)

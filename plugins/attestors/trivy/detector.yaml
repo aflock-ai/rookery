@@ -59,12 +59,18 @@ contract:
       description: "each unique vulnerability id across failed findings"
     - prefix: "trivy:resource:"
       description: "each misconfiguration resource id across failed findings"
-  # BackReffer: the attestor backrefs its SCAN TARGET. Besides the
-  # trivy:artifact: fallback below, it emits imagedigest:/imagereference:
-  # backrefs (from Metadata.RepoDigests/RepoTags) that are NOT subjects —
-  # the contract schema requires backref_subjects ⊆ subjects, so those are
-  # carried only in the collection's recorded backrefs until the schema
-  # grows an independent backrefs section.
+  # BackReffer: the attestor backrefs its SCAN TARGET. backrefs: is the
+  # complete BackRefs() declaration — imagedigest:/imagereference: (from
+  # Metadata.RepoDigests/RepoTags) are NOT subjects and live only here;
+  # backref_subjects keeps the subjects-constrained subset (the
+  # trivy:artifact: fallback) for the legacy ⊆-subjects view.
+  backrefs:
+    - prefix: "imagedigest:"
+      description: "scan-target image digest from Metadata.RepoDigests (bare hex, matches the docker attestor's imagedigest subjects so shared edges connect)"
+    - prefix: "imagereference:"
+      description: "scan-target image reference from Metadata.RepoTags (repo:tag, sha256-of-string, matching docker)"
+    - prefix: "trivy:artifact:"
+      description: "fallback anchor for filesystem/repo scans when no image metadata is present"
   backref_subjects:
     - "trivy:artifact:"
   schema_required: true

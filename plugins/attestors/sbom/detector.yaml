@@ -64,10 +64,16 @@ contract:
     - prefix: "version:"
       description: "the CycloneDX metadata.component.version, when present"
       digest_algs: ["sha256"]
-  # BackReffer: anchors the inventory to what it describes. The name:
-  # fallback below is a subject; the imagedigest: backref (parsed from the
-  # CycloneDX metadata.component.purl) is NOT a subject and rides only in
-  # the collection's recorded backrefs (schema: backref_subjects ⊆ subjects).
+  # BackReffer: anchors the inventory to what it describes. backrefs: is the
+  # complete BackRefs() declaration — the imagedigest: backref (parsed from
+  # the CycloneDX metadata.component.purl) is NOT a subject and lives only
+  # here; backref_subjects keeps the subjects-constrained subset (the name:
+  # fallback) for the legacy ⊆-subjects view.
+  backrefs:
+    - prefix: "imagedigest:"
+      description: "described-component image digest from the CycloneDX metadata.component.purl (bare hex, matches the docker attestor's imagedigest subjects)"
+    - prefix: "name:"
+      description: "fallback anchor on the document/component name when no image digest is present"
   backref_subjects:
     - "name:"
   schema_required: true

@@ -109,6 +109,16 @@ type OutputContract struct {
 	// the attestor is not a BackReffer.
 	BackRefSubjects []string `yaml:"backref_subjects,omitempty" json:"backref_subjects,omitempty"`
 
+	// BackRefs declares the COMPLETE set of back-reference key prefixes the
+	// attestor can emit via BackReffer.BackRefs(), independent of Subjects.
+	// Unlike BackRefSubjects (constrained to subject prefixes), this section
+	// can honestly declare backrefs that are NOT subjects — e.g. trivy's
+	// imagedigest:/imagereference: scan-target anchors. When both sections
+	// are present, BackRefs is the superset: every BackRefSubjects entry must
+	// also appear among BackRefs prefixes. Optional; existing contracts that
+	// only declare BackRefSubjects stay valid unchanged.
+	BackRefs []BackRefClaim `yaml:"backrefs,omitempty" json:"backrefs,omitempty"`
+
 	// SchemaRequired, when true, asserts Attestor.Schema() returns a non-nil
 	// schema. The JSON-shape gate.
 	SchemaRequired bool `yaml:"schema_required,omitempty" json:"schema_required,omitempty"`
@@ -177,6 +187,20 @@ type SubjectClaim struct {
 	// DigestAlgs lists digest algorithms expected in the DigestSet for this
 	// subject (e.g. ["sha256"]). Optional; checked when present.
 	DigestAlgs []string `yaml:"digest_algs,omitempty" json:"digest_algs,omitempty"`
+}
+
+// BackRefClaim is one declared back-reference key family — what
+// BackReffer.BackRefs() can emit, independent of the subject table. Unlike
+// SubjectClaim there is no DigestAlgs field: backrefs are graph-edge keys and
+// the digest set rides on the recorded backref itself.
+type BackRefClaim struct {
+	// Prefix is the stable leading segment of the backref key, INCLUDING any
+	// trailing separator (e.g. "imagedigest:", "trivy:artifact:").
+	Prefix string `yaml:"prefix" json:"prefix"`
+	// Description is one line of human text explaining what the backref
+	// anchors to. Required: a non-subject backref never appears in the
+	// subject table, so its declaration must be self-documenting.
+	Description string `yaml:"description" json:"description"`
 }
 
 // FixtureRef names one fixture case + its role in proving the contract.
@@ -395,6 +419,31 @@ func validateOutputContract(c *OutputContract, name string) error { //nolint:goc
 	for _, br := range c.BackRefSubjects {
 		if !prefixes[br] {
 			return fmt.Errorf("detector.yaml %q: contract.backref_subjects %q is not among contract.subjects prefixes", name, br)
+		}
+	}
+	// backrefs: is the COMPLETE declaration of BackRefs() prefixes,
+	// independent of subjects. Validate entry shape, reject duplicates, and —
+	// when the legacy subjects-constrained backref_subjects is ALSO present —
+	// require it to be a subset of backrefs (the new section is the superset
+	// declaration; a backref_subjects entry missing from it is a contradiction).
+	backrefPrefixes := make(map[string]bool, len(c.BackRefs))
+	for i, br := range c.BackRefs {
+		if strings.TrimSpace(br.Prefix) == "" {
+			return fmt.Errorf("detector.yaml %q: contract.backrefs[%d].prefix is required", name, i)
+		}
+		if strings.TrimSpace(br.Description) == "" {
+			return fmt.Errorf("detector.yaml %q: contract.backrefs[%d] (%q) requires a description", name, i, br.Prefix)
+		}
+		if backrefPrefixes[br.Prefix] {
+			return fmt.Errorf("detector.yaml %q: contract.backrefs prefix %q is duplicated", name, br.Prefix)
+		}
+		backrefPrefixes[br.Prefix] = true
+	}
+	if len(c.BackRefs) > 0 {
+		for _, br := range c.BackRefSubjects {
+			if !backrefPrefixes[br] {
+				return fmt.Errorf("detector.yaml %q: contract.backref_subjects %q is missing from contract.backrefs prefixes (backrefs is the complete BackRefs() declaration)", name, br)
+			}
 		}
 	}
 	if c.ExitBehavior != nil {
