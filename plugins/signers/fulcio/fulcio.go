@@ -379,6 +379,13 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 	return signer, nil
 }
 
+// fulcioCertRequestTimeout bounds EACH gRPC CreateSigningCertificate attempt.
+// It matches the 30s the HTTP path's http.Client already uses (getCertHTTP).
+// A package var (not a const) so tests can shrink it to assert the deadline
+// fires without waiting the real 30s. NOT operator-tunable by design — the
+// keyless signing budget is an implementation detail, not a knob.
+var fulcioCertRequestTimeout = 30 * time.Second
+
 func getCert(ctx context.Context, key *ecdsa.PrivateKey, fc fulciopb.CAClient, token string) (*fulciopb.SigningCertificate, error) { //nolint:gocognit,gocyclo,funlen
 	// Validate token format before parsing
 	if token == "" {
@@ -461,7 +468,7 @@ func getCert(ctx context.Context, key *ecdsa.PrivateKey, fc fulciopb.CAClient, t
 		},
 	}
 
-	// Retry logic with exponential backoff for Fulcio certificate creation
+	// Retry logic with exponential backoff for Fulcio certificate creation.
 	const maxRetries = 3
 	var lastErr error
 	var sc *fulciopb.SigningCertificate
@@ -478,7 +485,19 @@ func getCert(ctx context.Context, key *ecdsa.PrivateKey, fc fulciopb.CAClient, t
 		}
 
 		log.Infof("Requesting signing certificate from Fulcio for subject: %s (attempt %d/%d)", tok.Subject, attempt+1, maxRetries)
-		sc, lastErr = fc.CreateSigningCertificate(ctx, cscr)
+		// Bound EACH gRPC attempt with a per-call deadline. grpc.NewClient's
+		// dial options do not bound an RPC, and the run context is only
+		// signal-cancellable, so a Fulcio endpoint that TCP-accepts then
+		// stalls (a wedged replica, a half-open LB connection) would park
+		// CreateSigningCertificate forever — the first call never returns, so
+		// the retry/backoff below never even engages. That is the CI
+		// "20-min hang with no error" at the keyless signing step. A deadline
+		// turns the stall into a DeadlineExceeded the retry loop can act on.
+		sc, lastErr = func() (*fulciopb.SigningCertificate, error) {
+			callCtx, cancel := context.WithTimeout(ctx, fulcioCertRequestTimeout)
+			defer cancel()
+			return fc.CreateSigningCertificate(callCtx, cscr)
+		}()
 		if lastErr == nil {
 			log.Debugf("Successfully obtained signing certificate from Fulcio")
 			break
