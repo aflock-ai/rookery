@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/zalando/go-keyring"
 )
 
 // isolateConfig points os.UserConfigDir at a temp dir (HOME on macOS,
@@ -210,6 +212,109 @@ func TestLookupAnyIncludingExpired_PrefersValidJctlOverExpiredCilock(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, la)
 	assert.Equal(t, "fresh-jctl-token", la.Token, "doctor and run must resolve the same credential")
+}
+
+// writeJctlScrubbedConfig writes a ~/.jctl/config.yaml in jctl's KEYCHAIN-mode
+// shape: full context metadata but an empty token, because jctl scrubbed the
+// token into the OS keychain (service "jctl", account = the context NAME).
+// This is what jctl actually writes on macOS and desktop Linux.
+func writeJctlScrubbedConfig(t *testing.T, contextName, judgeURL string) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("HOME"), ".jctl")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	body := "current_context: " + contextName + "\n" +
+		"contexts:\n" +
+		"  " + contextName + ":\n" +
+		"    judgeURL: " + judgeURL + "\n" +
+		"    token: \"\"\n" +
+		"    tenant_id: t-1\n" +
+		"    tenant_name: acme\n" +
+		"    product_id: prod-7\n" +
+		"    product_name: Gadget\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(body), 0o600))
+}
+
+// TestLookupJctl_KeychainScrubbedToken is the core interop fix: on macOS and
+// desktop Linux jctl stores the token in the OS keychain and leaves token: ""
+// in the YAML, which made the documented "jctl login works for cilock too"
+// read-through silently dead. The fallback must fetch the token from the
+// keychain under service "jctl" with account = the context NAME (the YAML map
+// key, NOT a recomputed hostname — hence the context name "staging" here,
+// which is deliberately not the URL's hostname).
+func TestLookupJctl_KeychainScrubbedToken(t *testing.T) {
+	isolateConfig(t)
+	keyring.MockInit() // fresh in-memory keychain — never touches the real OS keychain
+	writeJctlScrubbedConfig(t, "staging", "https://p.example.com")
+	require.NoError(t, keyring.Set("jctl", "staging", "keychain-jwt"))
+
+	got, err := Lookup("https://p.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, got, "keychain-scrubbed jctl context must resolve")
+	assert.Equal(t, "keychain-jwt", got.Token, "token must come from the keychain")
+	assert.Equal(t, "t-1", got.TenantID, "tenant metadata still inherited from YAML")
+	assert.Equal(t, "acme", got.TenantName)
+	assert.Equal(t, "prod-7", got.ProductID)
+	assert.Equal(t, "Gadget", got.ProductName)
+}
+
+// TestLookupJctl_KeychainMiss pins the no-regression contract: an empty YAML
+// token with no matching keychain entry behaves exactly as before the
+// fallback existed — no credential from that context.
+func TestLookupJctl_KeychainMiss(t *testing.T) {
+	isolateConfig(t)
+	keyring.MockInit() // fresh empty mock — Get returns ErrNotFound
+	writeJctlScrubbedConfig(t, "default", "https://p.example.com")
+
+	got, err := Lookup("https://p.example.com")
+	require.NoError(t, err)
+	assert.Nil(t, got, "empty YAML token + keychain miss must mean no credential")
+}
+
+// TestLookupJctl_KeychainTimeout simulates a wedged secret-service daemon
+// (broken GNOME Keyring, zombie session bus): the keychain read blocks
+// forever. The bounded read must give up and report no credential instead of
+// hanging every cilock command.
+func TestLookupJctl_KeychainTimeout(t *testing.T) {
+	isolateConfig(t)
+	writeJctlScrubbedConfig(t, "default", "https://p.example.com")
+
+	release := make(chan struct{})
+	origGet, origTimeout := getJctlKeyringToken, jctlKeyringTimeout
+	getJctlKeyringToken = func(string) (string, error) {
+		<-release // wedged daemon: never answers until the test releases it
+		return "", errors.New("wedged")
+	}
+	jctlKeyringTimeout = 50 * time.Millisecond
+	t.Cleanup(func() {
+		close(release) // unblock the abandoned goroutine so it exits
+		getJctlKeyringToken, jctlKeyringTimeout = origGet, origTimeout
+	})
+
+	start := time.Now()
+	got, err := Lookup("https://p.example.com")
+	require.NoError(t, err)
+	assert.Nil(t, got, "wedged keychain must time out to no credential")
+	assert.Less(t, time.Since(start), 5*time.Second, "lookup must be bounded, not hang")
+}
+
+// TestLookupJctl_FileTokenSkipsKeychain pins precedence: when the YAML token
+// is present (jctl file mode / JCTL_DISABLE_KEYRING=1), the keychain must not
+// be consulted at all — today's working path stays byte-for-byte identical
+// and can't be slowed down by a wedged daemon.
+func TestLookupJctl_FileTokenSkipsKeychain(t *testing.T) {
+	isolateConfig(t)
+	orig := getJctlKeyringToken
+	getJctlKeyringToken = func(string) (string, error) {
+		t.Error("keychain must not be consulted when the YAML token is present")
+		return "", errors.New("unexpected keychain read")
+	}
+	t.Cleanup(func() { getJctlKeyringToken = orig })
+	writeJctlConfig(t, "https://p.example.com", "file-token")
+
+	got, err := Lookup("https://p.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "file-token", got.Token, "file token wins without touching the keychain")
 }
 
 // TestActivePlatformURL is the "default to the platform you logged into" behavior:

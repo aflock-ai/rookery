@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zalando/go-keyring"
 	"gopkg.in/yaml.v3"
 )
 
@@ -202,8 +203,8 @@ func Delete(platformURL string) (bool, error) {
 // Lookup returns a non-expired credential for the platform URL. It checks
 // cilock's own store first, then falls back to a best-effort read of jctl's
 // ~/.jctl/config.yaml (so a prior `jctl login` works for cilock too). The jctl
-// read-through only succeeds when jctl stored the token in the file rather than
-// the OS keychain (jctl scrubs the token to the keychain when available).
+// read-through takes the token from the YAML when present, or from the OS
+// keychain entry jctl scrubbed it into (see lookupJctl).
 func Lookup(platformURL string) (*Credential, error) {
 	key := NormalizeURL(platformURL)
 	s, err := load()
@@ -271,8 +272,84 @@ func LookupAnyIncludingExpired(platformURL string) (*Credential, error) {
 	return nil, nil
 }
 
+// jctlKeyringService is jctl's keychain service identifier — every token jctl
+// scrubs out of ~/.jctl/config.yaml lives in the OS keychain under this
+// service, keyed by the context NAME as the account. Must stay in sync with
+// judge-api/cmd/jctl/internal/config (keyringService).
+const jctlKeyringService = "jctl"
+
+// jctlKeyringTimeout caps the keychain read. A wedged secret-service daemon
+// (broken GNOME Keyring, zombie session bus on Linux) can otherwise hang
+// every cilock command indefinitely — same guard as jctl's own startup probe.
+// A var (not const) so tests can shrink it.
+var jctlKeyringTimeout = 3 * time.Second
+
+// getJctlKeyringToken is a seam over keyring.Get so tests can simulate a
+// hanging or failing keychain backend.
+var getJctlKeyringToken = func(contextName string) (string, error) {
+	return keyring.Get(jctlKeyringService, contextName)
+}
+
+// jctlKeyringToken reads the token jctl stored in the OS keychain for
+// contextName, bounded by jctlKeyringTimeout. Any error, miss, or timeout
+// reports ok=false — the caller then behaves exactly as if the context had no
+// token, which is the pre-fallback behavior. On timeout the read goroutine is
+// abandoned; its buffered channel send cannot block, so it exits whenever the
+// backend finally answers.
+func jctlKeyringToken(contextName string) (string, bool) {
+	type result struct {
+		token string
+		err   error
+	}
+	// Capture the seam before spawning: the goroutine must only touch locals,
+	// so an abandoned (timed-out) read can never race a test restoring the var.
+	get := getJctlKeyringToken
+	ch := make(chan result, 1)
+	go func() {
+		token, err := get(contextName)
+		ch <- result{token: token, err: err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil || r.token == "" {
+			return "", false
+		}
+		return r.token, true
+	case <-time.After(jctlKeyringTimeout):
+		return "", false
+	}
+}
+
+// jctlContext is the per-context shape cilock reads from jctl's config.
+type jctlContext struct {
+	JudgeURL    string `yaml:"judgeURL"`
+	Token       string `yaml:"token"`
+	TenantID    string `yaml:"tenant_id"`
+	TenantName  string `yaml:"tenant_name"`
+	ProductID   string `yaml:"product_id"`
+	ProductName string `yaml:"product_name"`
+}
+
+// credential builds the cilock Credential a jctl context resolves to. token
+// is passed explicitly because it may come from the YAML or the OS keychain.
+func (ctx jctlContext) credential(platformURL, token string) *Credential {
+	return &Credential{
+		PlatformURL: platformURL,
+		Token:       token,
+		TenantID:    ctx.TenantID,
+		TenantName:  ctx.TenantName,
+		ProductID:   ctx.ProductID,
+		ProductName: ctx.ProductName,
+	}
+}
+
 // lookupJctl reads ~/.jctl/config.yaml (best-effort) for a context whose
-// judgeURL matches and that carries a non-empty token.
+// judgeURL matches. Tokens come from the YAML when present (jctl file mode /
+// JCTL_DISABLE_KEYRING=1); when the YAML token is empty, jctl scrubbed it
+// into the OS keychain (service "jctl", account = context name) and the
+// fallback reads it from there — otherwise the documented "jctl login works
+// for cilock too" interop is silently dead on macOS and desktop Linux, where
+// the keychain is jctl's default.
 func lookupJctl(platformURL string) (*Credential, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -283,28 +360,29 @@ func lookupJctl(platformURL string) (*Credential, bool) {
 		return nil, false
 	}
 	var cfg struct {
-		Contexts map[string]struct {
-			JudgeURL    string `yaml:"judgeURL"`
-			Token       string `yaml:"token"`
-			TenantID    string `yaml:"tenant_id"`
-			TenantName  string `yaml:"tenant_name"`
-			ProductID   string `yaml:"product_id"`
-			ProductName string `yaml:"product_name"`
-		} `yaml:"contexts"`
+		Contexts map[string]jctlContext `yaml:"contexts"`
 	}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, false
 	}
+	// Pass 1: contexts whose token is inline in the YAML. Exactly the
+	// pre-keychain behavior, and it never touches the keychain — a wedged
+	// daemon can't slow down an install that already works.
 	for _, ctx := range cfg.Contexts {
 		if NormalizeURL(ctx.JudgeURL) == platformURL && ctx.Token != "" {
-			return &Credential{
-				PlatformURL: platformURL,
-				Token:       ctx.Token,
-				TenantID:    ctx.TenantID,
-				TenantName:  ctx.TenantName,
-				ProductID:   ctx.ProductID,
-				ProductName: ctx.ProductName,
-			}, true
+			return ctx.credential(platformURL, ctx.Token), true
+		}
+	}
+	// Pass 2: matching contexts with an empty YAML token — read the keychain
+	// entry jctl scrubbed the token into. The account is the context NAME (the
+	// YAML map key), not a recomputed hostname. Any miss/error/timeout leaves
+	// us exactly where we were before this fallback: no credential.
+	for name, ctx := range cfg.Contexts {
+		if NormalizeURL(ctx.JudgeURL) != platformURL || ctx.Token != "" {
+			continue
+		}
+		if token, ok := jctlKeyringToken(name); ok {
+			return ctx.credential(platformURL, token), true
 		}
 	}
 	return nil, false
