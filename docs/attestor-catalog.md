@@ -41,7 +41,7 @@ Regenerate after adding or renaming an attestor:
 
 | Name | Import path | Predicate type |
 |---|---|---|
-| `command-run` | `plugins/attestors/commandrun` | `https://aflock.ai/attestations/command-run/v0.1` |
+| `command-run` | `plugins/attestors/commandrun` | `https://aflock.ai/attestations/command-run/v0.2` |
 | `github-action` | `plugins/attestors/githubaction` | `https://aflock.ai/attestations/github-action/v0.1` |
 
 ## Product (output snapshot)
