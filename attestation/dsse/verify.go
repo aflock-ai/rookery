@@ -85,6 +85,13 @@ func VerifyWithTimestampVerifiers(verifiers ...timestamp.TimestampVerifier) Veri
 type CheckedVerifier struct {
 	Verifier           cryptoutil.Verifier
 	TimestampVerifiers []timestamp.TimestampVerifier
+	// VerifiedTimestamps holds the RFC3161 TSA-attested times (genTime) that
+	// were cryptographically verified against the policy's trusted timestamp
+	// authorities for this signature. Empty when the signature verified
+	// without any timestamp verifier. These are TRUSTED times — consumers
+	// (e.g. policy timestampConstraint) must use these, never self-asserted
+	// attestor wall-clock fields.
+	VerifiedTimestamps []time.Time
 	Error              error
 }
 
@@ -197,6 +204,7 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 					failed := []cryptoutil.Verifier{}
 					passedTimestampVerifiers := []timestamp.TimestampVerifier{}
 					failedTimestampVerifiers := []timestamp.TimestampVerifier{}
+					passedTimestamps := []time.Time{}
 
 					// Surface the artifact issuer's key fingerprint and the
 					// trusted-root key fingerprint(s) so a same-CN/different-key
@@ -222,6 +230,7 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 								// NOTE: do we not want to save all the passed verifiers?
 								passedVerifier = verifier
 								passedTimestampVerifiers = append(passedTimestampVerifiers, timestampVerifier)
+								passedTimestamps = append(passedTimestamps, tsTime)
 							} else {
 								// TSA validated the time but the Fulcio chain still
 								// failed: same diagnostic as the no-TSA branch.
@@ -243,6 +252,7 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 						checkedVerifiers = append(checkedVerifiers, CheckedVerifier{
 							Verifier:           passedVerifier,
 							TimestampVerifiers: passedTimestampVerifiers,
+							VerifiedTimestamps: passedTimestamps,
 						})
 					} else {
 						for _, v := range failed {

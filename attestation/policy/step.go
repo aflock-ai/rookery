@@ -52,6 +52,15 @@ type Step struct {
 	// claims to have consumed MUST be covered either by an ArtifactsFrom
 	// edge + chain sidecar, or by the legacy compareArtifacts fallback.
 	AllowedUntracked []string `json:"allowedUntracked,omitempty" jsonschema:"title=Allowed Untracked,description=Glob patterns for material paths permitted without a chain-of-custody proof (e.g. '/usr/lib/**' for build toolchain). Each entry weakens chain integrity; use sparingly."`
+
+	// TimestampConstraint requires this step's collections to carry an
+	// RFC3161 TSA-verified signing time inside the declared window
+	// (notBefore/notAfter) and/or within maxAge of verification time.
+	// Enforced by the verifier against the TSA-VERIFIED time, never against
+	// self-asserted attestor timestamps. Fail-closed: when set, collections
+	// without a verified TSA timestamp are rejected. This is the FedRAMP-20x
+	// "scan/evidence newer than N days" primitive.
+	TimestampConstraint *TimestampConstraint `json:"timestampConstraint,omitempty" jsonschema:"title=Timestamp Constraint,description=Time-interval requirement on the RFC3161 TSA-verified signing time of this step's evidence (notBefore/notAfter window and/or maxAge relative to verification time). Fail-closed when evidence carries no verified TSA timestamp."`
 }
 
 // ExternalAttestation describes a bare-predicate DSSE envelope (non-Collection)

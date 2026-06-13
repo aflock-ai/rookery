@@ -269,6 +269,13 @@ func (p Policy) Validate() error { //nolint:gocognit,gocyclo
 				return ErrUnknownExternalAttestation{Step: name, Name: extName}
 			}
 		}
+
+		// Reject malformed timestamp constraints at load time so an
+		// unparseable maxAge or inverted window fails policy validation
+		// instead of rejecting every collection at verify time.
+		if err := step.TimestampConstraint.Validate(); err != nil {
+			return fmt.Errorf("step %q: %w", name, err)
+		}
 	}
 
 	// DFS cycle detection.
@@ -723,6 +730,46 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 
 // checkFunctionaries checks to make sure the signature on each statement corresponds to a trusted functionary for
 // the step the statement corresponds to
+// triageTrustedCollection decides whether a signature-verified collection is
+// accepted for the step. Returns nil to accept, or the rejection reason.
+// Two gates run here, in order:
+//  1. Functionary match — at least one verifier must have matched an allowed
+//     functionary; the per-functionary failures captured as warnings are
+//     surfaced so the operator sees WHY each one rejected the cert.
+//  2. TimestampConstraint — the step's time-interval requirement, enforced
+//     against the RFC3161 TSA-VERIFIED signing time. This runs only after a
+//     functionary matched: an unsigned/untrusted envelope is already rejected,
+//     and the constraint must judge the trusted time, not a self-asserted one.
+//     Fail-closed when the collection carries no verified TSA timestamp.
+func (step Step) triageTrustedCollection(statement source.CollectionVerificationResult) error {
+	if len(statement.ValidFunctionaries) == 0 {
+		reason := fmt.Errorf("no verifiers matched the allowed functionaries for step %s", step.Name)
+		if len(statement.Warnings) > 0 {
+			reason = fmt.Errorf("%w: %s", reason, strings.Join(statement.Warnings, "; "))
+		}
+		return reason
+	}
+
+	// Scope the timestamps to the signatures whose verifiers actually matched
+	// an allowed functionary. In a multi-signature envelope, a fresh TSA
+	// token on some OTHER (non-functionary) signature must not satisfy the
+	// constraint for the trusted signature.
+	functionaryTimestamps := make([]time.Time, 0)
+	for _, v := range statement.ValidFunctionaries {
+		if v == nil {
+			continue
+		}
+		if kid, err := v.KeyID(); err == nil {
+			functionaryTimestamps = append(functionaryTimestamps, statement.VerifiedTimestampsByKeyID[kid]...)
+		}
+	}
+	if err := step.TimestampConstraint.Check(functionaryTimestamps, time.Now()); err != nil {
+		return fmt.Errorf("timestamp constraint failed for step %s: %w", step.Name, err)
+	}
+
+	return nil
+}
+
 func (step Step) checkFunctionaries(statements []source.CollectionVerificationResult, trustBundles map[string]TrustBundle) StepResult { //nolint:gocognit
 	result := StepResult{Step: step.Name}
 	for i, statement := range statements {
@@ -761,15 +808,7 @@ func (step Step) checkFunctionaries(statements []source.CollectionVerificationRe
 				}
 			}
 
-			if len(statements[i].ValidFunctionaries) == 0 {
-				// Surface WHY each functionary rejected the cert. The per-functionary
-				// failures (e.g. "cert presents email X but the constraint forbids it")
-				// were captured as warnings above; a bare "no verifiers matched" hides
-				// the one thing the operator needs to fix the policy.
-				reason := fmt.Errorf("no verifiers matched the allowed functionaries for step %s", step.Name)
-				if len(statements[i].Warnings) > 0 {
-					reason = fmt.Errorf("%w: %s", reason, strings.Join(statements[i].Warnings, "; "))
-				}
+			if reason := step.triageTrustedCollection(statements[i]); reason != nil {
 				result.Rejected = append(result.Rejected, RejectedCollection{Collection: statements[i], Reason: reason})
 			} else {
 				result.Passed = append(result.Passed, PassedCollection{Collection: statements[i]})

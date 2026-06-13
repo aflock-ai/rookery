@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
@@ -26,6 +27,15 @@ import (
 type CollectionVerificationResult struct {
 	Verifiers          []cryptoutil.Verifier
 	ValidFunctionaries []cryptoutil.Verifier
+	// VerifiedTimestampsByKeyID holds the RFC3161 TSA-attested times that
+	// were cryptographically verified against trusted timestamp authorities,
+	// keyed by the KeyID of the PASSING verifier whose signature each token
+	// covers. The per-signature association matters: a policy timestamp
+	// constraint must judge the timestamps of the signature that matched the
+	// step's functionary, not a timestamp riding on some other signature in
+	// a multi-signature envelope. Empty when the envelope verified without
+	// timestamp verification.
+	VerifiedTimestampsByKeyID map[string][]time.Time
 	CollectionEnvelope
 	Errors   []error
 	Warnings []string
@@ -100,9 +110,19 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 		}
 
 		passedVerifiers := make([]cryptoutil.Verifier, 0)
+		timestampsByKeyID := make(map[string][]time.Time)
 		for _, verifier := range envelopeVerifiers {
 			if verifier.Error == nil {
 				passedVerifiers = append(passedVerifiers, verifier.Verifier)
+				if len(verifier.VerifiedTimestamps) > 0 && verifier.Verifier != nil {
+					// Bind the verified TSA times to THIS verifier's key so
+					// downstream policy checks can scope them to the
+					// functionary-matched signature. A KeyID failure drops the
+					// timestamps (fail-closed) rather than misattributing them.
+					if kid, kerr := verifier.Verifier.KeyID(); kerr == nil {
+						timestampsByKeyID[kid] = append(timestampsByKeyID[kid], verifier.VerifiedTimestamps...)
+					}
+				}
 			}
 		}
 
@@ -112,9 +132,10 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 		}
 
 		results = append(results, CollectionVerificationResult{
-			Verifiers:          passedVerifiers,
-			CollectionEnvelope: toVerify,
-			Errors:             Errors,
+			Verifiers:                 passedVerifiers,
+			VerifiedTimestampsByKeyID: timestampsByKeyID,
+			CollectionEnvelope:        toVerify,
+			Errors:                    Errors,
 		})
 	}
 
