@@ -188,6 +188,9 @@ func TestDeepAdversarial_CertPlusRawKeyMixedVerification(t *testing.T) {
 		VerifyWithRoots(root),
 		VerifyWithIntermediates(intermediate),
 		VerifyWithThreshold(1),
+		// Envelope has no RFC3161 timestamp; this test exercises cert+raw
+		// verification mechanics, so opt into the wall-clock cert path (#5237).
+		VerifyWithCurrentTimeFallback(),
 	)
 	require.NoError(t, err, "mixed cert + raw key should pass threshold=1")
 
@@ -496,11 +499,14 @@ func TestDeepAdversarial_ConcurrentVerifyWithCertAndRawMixed(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			if idx%2 == 0 {
-				// Cert path.
+				// Cert path. No RFC3161 timestamp in the envelope, so opt into
+				// the wall-clock cert path; this test checks concurrency-safety
+				// of the cert/raw verification mix, not timestamp policy (#5237).
 				_, err := env.Verify(
 					VerifyWithRoots(root),
 					VerifyWithIntermediates(intermediate),
 					VerifyWithThreshold(1),
+					VerifyWithCurrentTimeFallback(),
 				)
 				errs[idx] = err
 			} else {

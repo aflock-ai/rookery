@@ -90,6 +90,19 @@ func (e ErrInvalidThreshold) Error() string {
 	return fmt.Sprintf("invalid threshold (%v). thresholds must be greater than 0", int(e))
 }
 
+// ErrNoTimestamp is the per-signature error recorded when a cert-based
+// signature cannot be verified because there is no trusted RFC3161 timestamp
+// verifier configured and the caller has not opted into the wall-clock
+// (time.Now()) fallback via VerifyWithCurrentTimeFallback(). The signature is
+// rejected — it does not count toward the verification threshold — to preserve
+// proof-of-signing-time and avoid silently verifying against the current time
+// (see #5237).
+type ErrNoTimestamp struct{}
+
+func (e ErrNoTimestamp) Error() string {
+	return "cert-based signature rejected: no trusted timestamp verifier configured and current-time fallback not enabled (proof-of-signing-time required)"
+}
+
 const PemTypeCertificate = "CERTIFICATE"
 
 type Envelope struct {

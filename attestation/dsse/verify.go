@@ -48,6 +48,15 @@ type verificationOptions struct {
 	verifiers          []cryptoutil.Verifier
 	threshold          int
 	timestampVerifiers []timestamp.TimestampVerifier
+	// allowCurrentTimeFallback opts a caller INTO verifying a cert-based
+	// signature's validity window against the wall clock (time.Now()) when no
+	// trusted RFC3161 timestamp verifier is configured. It is OFF by default:
+	// substituting wall-clock time for the attested signing time loses
+	// proof-of-signing-time, so by default such a signature does NOT count
+	// toward the threshold and verification fails closed (see #5237). Only a
+	// caller that knowingly accepts long-lived, non-Fulcio certs without a TSA
+	// should turn this on via VerifyWithCurrentTimeFallback().
+	allowCurrentTimeFallback bool
 }
 
 type VerificationOption func(*verificationOptions)
@@ -79,6 +88,22 @@ func VerifyWithThreshold(threshold int) VerificationOption {
 func VerifyWithTimestampVerifiers(verifiers ...timestamp.TimestampVerifier) VerificationOption {
 	return func(vo *verificationOptions) {
 		vo.timestampVerifiers = verifiers
+	}
+}
+
+// VerifyWithCurrentTimeFallback explicitly permits verifying a cert-based
+// signature against the current wall-clock time (time.Now()) when NO trusted
+// RFC3161 timestamp verifier is configured.
+//
+// This is OFF by default and should stay off for any keyless/short-lived
+// (Fulcio) signing flow: without it, a cert-based signature lacking a trusted
+// timestamp does NOT count toward the verification threshold (fail closed),
+// preserving proof-of-signing-time. Turn it on ONLY when you knowingly trust a
+// long-lived CA and accept that the signing time is not cryptographically
+// attested (see #5237).
+func VerifyWithCurrentTimeFallback() VerificationOption {
+	return func(vo *verificationOptions) {
+		vo.allowCurrentTimeFallback = true
 	}
 }
 
@@ -184,7 +209,26 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 					fmt.Fprintf(os.Stderr, "[dsse-verify] cert subject=%q issuer=%q issuerKey=%s trustedRootKeys=%s\n",
 						cert.Subject.CommonName, cert.Issuer.CommonName,
 						chainIssuerFingerprint(artifactIssuerChain), trustedRootFingerprints(options.roots))
-					if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, time.Now()); err == nil {
+					if !options.allowCurrentTimeFallback {
+						// FAIL CLOSED (#5237): a cert-based signature has no trusted
+						// signing-time source here (no RFC3161 timestamp verifier),
+						// and the caller did not opt into the time.Now() fallback.
+						// Verifying the cert's validity window against the wall clock
+						// would substitute an untrusted time for the attested signing
+						// time and silently lose proof-of-signing-time. So this
+						// signature does NOT count toward the threshold. Record it as
+						// a failed verifier (non-nil, for KeyID + nil-safety) so the
+						// reason surfaces on the verified==0 ErrNoMatchingSigs path.
+						fmt.Fprintf(os.Stderr, "[dsse-verify] cert signature rejected: no trusted timestamp verifier and current-time fallback not enabled\n")
+						// Preserve the same-CN/different-key trust diagnostic on this
+						// failure path too (diagnostic-only; never flips a verdict).
+						recordMismatch(detectTrustNameKeyMismatch(artifactIssuerChain, policyTrusted, false))
+						if verifier, verr := cryptoutil.NewX509Verifier(cert, sigIntermediates, options.roots, time.Time{}); verr == nil && verifier != nil {
+							checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier, Error: ErrNoTimestamp{}})
+						} else {
+							log.Debugf("failed to create x509 verifier for no-timestamp rejection: %v", verr)
+						}
+					} else if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, time.Now()); err == nil {
 						checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier})
 						verifiedKeyIDs[verifierKeyID(verifier)] = struct{}{}
 					} else if verifier != nil {

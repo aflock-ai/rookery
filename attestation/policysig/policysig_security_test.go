@@ -20,6 +20,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/policy"
+	"github.com/aflock-ai/rookery/attestation/timestamp"
 )
 
 // ==========================================================================
@@ -158,7 +159,28 @@ func secSignEnvelopeX509(t *testing.T, leafKey *rsa.PrivateKey, leaf *x509.Certi
 	if err != nil {
 		t.Fatalf("new signer: %v", err)
 	}
-	return secSignEnvelope(t, signer)
+	// Attach a trusted RFC3161 timestamp. Cert-based (keyless-style) policy
+	// signatures are always TSA-timestamped in practice; without a timestamp the
+	// verify path fails closed by default (#5237). Tests pass secTSAOption() to
+	// supply the matching verifier.
+	env, err := dsse.Sign("application/vnd.test+json", bytes.NewReader([]byte(`{"test":"payload"}`)),
+		dsse.SignWithSigners(signer),
+		dsse.SignWithTimestampers(secFakeTS))
+	if err != nil {
+		t.Fatalf("sign envelope: %v", err)
+	}
+	return env
+}
+
+// secFakeTS is the shared fake RFC3161 timestamper used to timestamp cert-based
+// policy envelopes in these tests; secTSAOption() supplies the matching verifier.
+var secFakeTS = timestamp.FakeTimestamper{T: time.Now()}
+
+// secTSAOption returns the policy verify option that trusts secFakeTS. Add it to
+// every NewVerifyPolicySignatureOptions(...) that verifies an envelope produced
+// by secSignEnvelopeX509, so the cert path has a trusted signing-time source.
+func secTSAOption() Option {
+	return VerifyWithPolicyTimestampAuthorities([]timestamp.TimestampVerifier{secFakeTS})
 }
 
 // ==========================================================================
@@ -308,6 +330,7 @@ func TestSecurity_R3_262_WildcardInMultiElementSliceNotTreatedAsGlob(t *testing.
 			[]string{"*", "ExtraOrg"}, // orgs - should fail: cert has ["MyOrg"] not ["*","ExtraOrg"]
 			[]string{"*"},             // URIs - passes
 		),
+		secTSAOption(),
 	)
 
 	err := VerifyPolicySignature(context.Background(), env, vo)
@@ -343,13 +366,19 @@ func TestSecurity_R3_263_CertConstraintCNMismatchRejects(t *testing.T) {
 			[]string{"*"},
 			[]string{"*"},
 		),
+		secTSAOption(),
 	)
 
 	err := VerifyPolicySignature(context.Background(), env, vo)
 	if err == nil {
 		t.Fatal("expected rejection for CN mismatch, got nil")
 	}
-	if !strings.Contains(err.Error(), "no policy verifiers passed") {
+	// The signature chains to a trusted root but the leaf identity (CN) does not
+	// match the configured constraint, so verification surfaces the identity-hint
+	// rejection. (Pre-existing assertion drift: the message had been updated in
+	// policysig.go but this check still expected the older "no policy verifiers
+	// passed" string.)
+	if !strings.Contains(err.Error(), "matched no configured policy verifier") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }
@@ -373,6 +402,7 @@ func TestSecurity_R3_263_CertConstraintCNMatchPasses(t *testing.T) {
 			[]string{"*"},
 			[]string{"*"},
 		),
+		secTSAOption(),
 	)
 
 	err := VerifyPolicySignature(context.Background(), env, vo)
@@ -408,6 +438,7 @@ func TestSecurity_R3_264_CertOrgConstraintMismatchRejects(t *testing.T) {
 			[]string{"WrongOrg"}, // does not match "ActualOrg"
 			[]string{"*"},
 		),
+		secTSAOption(),
 	)
 
 	err := VerifyPolicySignature(context.Background(), env, vo)
@@ -436,6 +467,7 @@ func TestSecurity_R3_264_CertOrgConstraintMatchPasses(t *testing.T) {
 			[]string{"CorrectOrg"},
 			[]string{"*"},
 		),
+		secTSAOption(),
 	)
 
 	err := VerifyPolicySignature(context.Background(), env, vo)
@@ -571,6 +603,7 @@ func TestSecurity_R3_268_WrongRootCARejected(t *testing.T) {
 	vo := NewVerifyPolicySignatureOptions(
 		VerifyWithPolicyCARoots([]*x509.Certificate{rootB}),
 		VerifyWithPolicyCAIntermediates([]*x509.Certificate{interA}), // still provide interA but root mismatch
+		secTSAOption(),
 	)
 
 	err := VerifyPolicySignature(context.Background(), env, vo)
@@ -589,6 +622,7 @@ func TestSecurity_R3_268_CorrectRootCAPasses(t *testing.T) {
 	vo := NewVerifyPolicySignatureOptions(
 		VerifyWithPolicyCARoots([]*x509.Certificate{root}),
 		VerifyWithPolicyCAIntermediates([]*x509.Certificate{inter}),
+		secTSAOption(),
 	)
 
 	err := VerifyPolicySignature(context.Background(), env, vo)

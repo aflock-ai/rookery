@@ -232,7 +232,10 @@ func TestEnvelopeVerify_CorrectPlatform_PassesWithNoHint(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify against the CORRECT platform's root + intermediate: must pass clean.
-	checked, err := env.Verify(VerifyWithRoots(rootA), VerifyWithIntermediates(inter))
+	// This test exercises cert-chain trust mechanics, not timestamp policy, so it
+	// opts into the current-time fallback (the envelope carries no RFC3161
+	// timestamp). Without the opt-in the cert path now fails closed (#5237).
+	checked, err := env.Verify(VerifyWithRoots(rootA), VerifyWithIntermediates(inter), VerifyWithCurrentTimeFallback())
 	require.NoError(t, err, "correct-platform verify must succeed")
 
 	var tm *TrustNameKeyMismatchError

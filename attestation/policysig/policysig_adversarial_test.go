@@ -240,7 +240,14 @@ func TestAdversarial_VerifyPolicySignature_X509WithConstraints_MatchingCn(t *tes
 	)
 	require.NoError(t, err)
 
-	env := advSignEnvelope(t, signer)
+	// Attach a trusted RFC3161 timestamp: cert-based policy signatures are always
+	// TSA-timestamped in practice, and without a trusted timestamp the cert path
+	// fails closed by default (#5237). secFakeTS / secTSAOption are shared helpers
+	// defined in policysig_security_test.go (same package + audit build tag).
+	env, err := dsse.Sign("dummytype", bytes.NewReader([]byte("test payload")),
+		dsse.SignWithSigners(signer),
+		dsse.SignWithTimestampers(secFakeTS))
+	require.NoError(t, err)
 
 	vo := NewVerifyPolicySignatureOptions(
 		VerifyWithPolicyCARoots([]*x509.Certificate{root}),
@@ -252,6 +259,7 @@ func TestAdversarial_VerifyPolicySignature_X509WithConstraints_MatchingCn(t *tes
 			[]string{"*"},
 			[]string{"*"},
 		),
+		secTSAOption(),
 	)
 
 	err = VerifyPolicySignature(context.Background(), env, vo)

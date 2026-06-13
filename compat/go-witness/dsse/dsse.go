@@ -17,6 +17,7 @@ type ErrNoSignatures = rookery.ErrNoSignatures
 type ErrNoMatchingSigs = rookery.ErrNoMatchingSigs
 type ErrThresholdNotMet = rookery.ErrThresholdNotMet
 type ErrInvalidThreshold = rookery.ErrInvalidThreshold
+type ErrNoTimestamp = rookery.ErrNoTimestamp
 
 // Constants
 const (
@@ -33,3 +34,4 @@ var VerifyWithIntermediates = rookery.VerifyWithIntermediates
 var VerifyWithVerifiers = rookery.VerifyWithVerifiers
 var VerifyWithThreshold = rookery.VerifyWithThreshold
 var VerifyWithTimestampVerifiers = rookery.VerifyWithTimestampVerifiers
+var VerifyWithCurrentTimeFallback = rookery.VerifyWithCurrentTimeFallback

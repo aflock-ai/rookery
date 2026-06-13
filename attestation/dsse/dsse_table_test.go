@@ -887,6 +887,9 @@ func TestTableX509Verification(t *testing.T) {
 					VerifyWithRoots(root),
 					VerifyWithIntermediates(intermediate),
 					VerifyWithThreshold(1),
+					// No RFC3161 timestamp in the envelope; this case validates
+					// chain-building, so opt into the wall-clock path (#5237).
+					VerifyWithCurrentTimeFallback(),
 				}
 			},
 			wantErr: false,
@@ -981,6 +984,9 @@ func TestTableX509Verification(t *testing.T) {
 				return env, []VerificationOption{
 					VerifyWithRoots(cert), // The self-signed cert IS the root.
 					VerifyWithThreshold(1),
+					// No RFC3161 timestamp in the envelope; opt into the
+					// wall-clock cert path for this chain-mechanics case (#5237).
+					VerifyWithCurrentTimeFallback(),
 				}
 			},
 			wantErr: false,

@@ -372,7 +372,17 @@ func TestVerifyPolicySignature_MultipleVerifiers_NoneMatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "could not verify policy")
 }
 
-func TestVerifyPolicySignature_X509Verifier_Success(t *testing.T) {
+// TestVerifyPolicySignature_X509Verifier_NoTimestamp_FailsClosed is the
+// policysig-layer guard for #5237. A cert-based (Fulcio/keyless-style) policy
+// signature verified against trusted CA roots but with NO trusted RFC3161
+// timestamp authority MUST fail closed — VerifyPolicySignature must not silently
+// verify the signing cert's validity window against the wall clock (time.Now())
+// and thereby lose proof-of-signing-time. Keyless platform policy signatures are
+// always TSA-timestamped at signing time, so a cert-based policy signature
+// reaching verify without a timestamp authority is a misconfiguration and must
+// be rejected. The success-with-timestamp path is covered by
+// TestVerifyPolicySignature_X509Verifier_WithTimestamps.
+func TestVerifyPolicySignature_X509Verifier_NoTimestamp_FailsClosed(t *testing.T) {
 	root, rootPriv := createRoot(t)
 	inter, interPriv := createIntermediate(t, root, rootPriv)
 	leaf, leafPriv := createLeaf(t, inter, interPriv)
@@ -385,10 +395,13 @@ func TestVerifyPolicySignature_X509Verifier_Success(t *testing.T) {
 	vo := NewVerifyPolicySignatureOptions(
 		VerifyWithPolicyCARoots([]*x509.Certificate{root}),
 		VerifyWithPolicyCAIntermediates([]*x509.Certificate{inter}),
+		// Deliberately NO VerifyWithPolicyTimestampAuthorities: the cert-based
+		// signature has no trusted signing-time source.
 	)
 
 	err = VerifyPolicySignature(context.Background(), env, vo)
-	require.NoError(t, err)
+	require.Error(t, err,
+		"cert-based policy signature with no trusted timestamp authority must fail closed (#5237)")
 }
 
 func TestVerifyPolicySignature_X509Verifier_WrongRoot_Fails(t *testing.T) {
