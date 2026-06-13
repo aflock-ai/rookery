@@ -801,6 +801,7 @@ func TestArchivistaInvalidHeaderFormat(t *testing.T) {
 // ==========================================================================
 
 func TestRunECKeyAccepted(t *testing.T) {
+	isolateCLIConfig(t) // hermetic: a successful sign must not upload to a stray `cilock login` platform
 	dir := t.TempDir()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

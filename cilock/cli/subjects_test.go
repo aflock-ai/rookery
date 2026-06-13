@@ -147,6 +147,7 @@ func TestParseSubjectFlags_InvalidDigest(t *testing.T) {
 // --subjects results in the user-supplied subjects being present in the
 // in-toto statement subject[] array of the collection envelope.
 func TestRunFlag_SubjectsAppearInStatement(t *testing.T) {
+	isolateCLIConfig(t) // hermetic: no stray `cilock login` session ⇒ no prod upload
 	dir := t.TempDir()
 	keyPath := generateTestKey(t, dir)
 	outfile := filepath.Join(dir, "attestation.json")
@@ -198,6 +199,7 @@ func TestRunFlag_SubjectsAppearInStatement(t *testing.T) {
 // commandrun doesn't produce any artifact subjects, and asserts the user's
 // subject shows up alongside whatever product attestor reports.
 func TestRunFlag_SubjectsAreAdditive(t *testing.T) {
+	isolateCLIConfig(t) // hermetic: no stray `cilock login` session ⇒ no prod upload
 	dir := t.TempDir()
 	keyPath := generateTestKey(t, dir)
 	outfile := filepath.Join(dir, "attestation.json")
@@ -238,6 +240,7 @@ func TestRunFlag_SubjectsAreAdditive(t *testing.T) {
 // leaves the attestation output unchanged from the pre-flag behaviour: only
 // attestor-discovered subjects populate the statement.
 func TestRunFlag_NoSubjectsFlag_BackwardCompat(t *testing.T) {
+	isolateCLIConfig(t) // hermetic: no stray `cilock login` session ⇒ no prod upload
 	dir := t.TempDir()
 	keyPath := generateTestKey(t, dir)
 	outfile := filepath.Join(dir, "attestation.json")
@@ -261,6 +264,7 @@ func TestRunFlag_NoSubjectsFlag_BackwardCompat(t *testing.T) {
 }
 
 func TestRunFlag_InvalidSubjects_Fails(t *testing.T) {
+	isolateCLIConfig(t) // hermetic: no stray `cilock login` session ⇒ no prod upload
 	dir := t.TempDir()
 	keyPath := generateTestKey(t, dir)
 	outfile := filepath.Join(dir, "attestation.json")
