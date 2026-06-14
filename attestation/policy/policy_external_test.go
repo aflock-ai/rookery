@@ -130,6 +130,42 @@ func futureExpiry() metav1.Time {
 	return metav1.Time{Time: time.Now().Add(1 * time.Hour)}
 }
 
+// noopStepAttType is the required attestation type for the scaffold "noop"
+// step used by external-attestation tests. Since the F9 fail-closed fix
+// (#5746), a step with an EMPTY Attestations list rejects every collection, so
+// the noop scaffold must declare at least one required attestation to pass.
+const noopStepAttType = "https://example.com/noop/v1"
+
+// validNoopStep returns a "noop" scaffold step that passes under the F9
+// fail-closed contract: a single required attestation type with no rego/AI
+// policies (just presence). Used by external tests that need a passing step so
+// verifySteps has work to do while the real subject under test is the external
+// attestation behavior.
+func validNoopStep(keyID string) Step {
+	return Step{
+		Name:          "noop",
+		Functionaries: []Functionary{{PublicKeyID: keyID}},
+		Attestations:  []Attestation{{Type: noopStepAttType}},
+	}
+}
+
+// validNoopCollection returns the collection that satisfies validNoopStep: a
+// collection named "noop" carrying the required attestation type.
+func validNoopCollection(verifier cryptoutil.Verifier) source.CollectionVerificationResult {
+	return source.CollectionVerificationResult{
+		Verifiers: []cryptoutil.Verifier{verifier},
+		CollectionEnvelope: source.CollectionEnvelope{
+			Collection: attestation.Collection{
+				Name: "noop",
+				Attestations: []attestation.CollectionAttestation{
+					{Type: noopStepAttType, Attestation: &dummyAttestor{name: "noop-att", typeStr: noopStepAttType}},
+				},
+			},
+			Statement: intoto.Statement{PredicateType: attestation.CollectionType},
+		},
+	}
+}
+
 // passingSLSAPredicate is a minimal but valid SLSA v1 provenance body.
 var passingSLSAPredicate = json.RawMessage(`{
     "buildDefinition": {"buildType": "https://example.com/build/v1"},
@@ -176,17 +212,12 @@ func TestExternal_01_SLSAProvenanceAccepted(t *testing.T) {
 		},
 	}
 
-	// Need at least one step for verifySteps not to error. Give a dummy
-	// step with no attestations and a collection that auto-passes.
-	p.Steps = map[string]Step{"noop": {Name: "noop", Functionaries: []Functionary{{PublicKeyID: keyID}}}}
+	// Need at least one step for verifySteps not to error. Since the F9
+	// fail-closed fix (#5746), an empty-Attestations step rejects every
+	// collection, so the scaffold step must declare a required attestation.
+	p.Steps = map[string]Step{"noop": validNoopStep(keyID)}
 
-	noopColl := source.CollectionVerificationResult{
-		Verifiers: []cryptoutil.Verifier{verifier},
-		CollectionEnvelope: source.CollectionEnvelope{
-			Collection: attestation.Collection{Name: "noop"},
-			Statement:  intoto.Statement{PredicateType: attestation.CollectionType},
-		},
-	}
+	noopColl := validNoopCollection(verifier)
 
 	ms := &stepAwareVerifiedSource{
 		byStep:      map[string][]source.CollectionVerificationResult{"noop": {noopColl}},
@@ -247,9 +278,10 @@ func TestExternal_02_RequiredNoMatchFails(t *testing.T) {
 func TestExternal_03_OptionalNoMatchPasses(t *testing.T) {
 	verifier, keyID := newECDSAVerifier(t)
 
+	// Scaffold step must declare a required attestation post-F9 fail-closed fix (#5746).
 	p := Policy{
 		Expires: futureExpiry(),
-		Steps:   map[string]Step{"noop": {Name: "noop", Functionaries: []Functionary{{PublicKeyID: keyID}}}},
+		Steps:   map[string]Step{"noop": validNoopStep(keyID)},
 		ExternalAttestations: map[string]ExternalAttestation{
 			"slsa": {
 				Name:          "slsa",
@@ -260,13 +292,7 @@ func TestExternal_03_OptionalNoMatchPasses(t *testing.T) {
 		},
 	}
 
-	noopColl := source.CollectionVerificationResult{
-		Verifiers: []cryptoutil.Verifier{verifier},
-		CollectionEnvelope: source.CollectionEnvelope{
-			Collection: attestation.Collection{Name: "noop"},
-			Statement:  intoto.Statement{PredicateType: attestation.CollectionType},
-		},
-	}
+	noopColl := validNoopCollection(verifier)
 	ms := &stepAwareVerifiedSource{
 		byStep:      map[string][]source.CollectionVerificationResult{"noop": {noopColl}},
 		byPredicate: map[string][]source.StatementEnvelope{},
@@ -290,9 +316,10 @@ func TestExternal_04_VSAPassed(t *testing.T) {
 	verifier, keyID := newECDSAVerifier(t)
 	envelope := mkExternalEnvelope(t, vsaPredicateType, passingVSAPredicate, verifier)
 
+	// Scaffold step must declare a required attestation post-F9 fail-closed fix (#5746).
 	p := Policy{
 		Expires: futureExpiry(),
-		Steps:   map[string]Step{"noop": {Name: "noop", Functionaries: []Functionary{{PublicKeyID: keyID}}}},
+		Steps:   map[string]Step{"noop": validNoopStep(keyID)},
 		ExternalAttestations: map[string]ExternalAttestation{
 			"vsa": {
 				Name:          "vsa",
@@ -304,13 +331,7 @@ func TestExternal_04_VSAPassed(t *testing.T) {
 		},
 	}
 
-	noopColl := source.CollectionVerificationResult{
-		Verifiers: []cryptoutil.Verifier{verifier},
-		CollectionEnvelope: source.CollectionEnvelope{
-			Collection: attestation.Collection{Name: "noop"},
-			Statement:  intoto.Statement{PredicateType: attestation.CollectionType},
-		},
-	}
+	noopColl := validNoopCollection(verifier)
 	ms := &stepAwareVerifiedSource{
 		byStep:      map[string][]source.CollectionVerificationResult{"noop": {noopColl}},
 		byPredicate: map[string][]source.StatementEnvelope{vsaPredicateType: {envelope}},
@@ -421,18 +442,13 @@ func TestExternal_07_SubjectMismatch(t *testing.T) {
 	// strict: it returns no match when subject doesn't intersect. We
 	// simulate that by returning an empty envelope list for the predicate.
 
-	noopColl := source.CollectionVerificationResult{
-		Verifiers: []cryptoutil.Verifier{verifier},
-		CollectionEnvelope: source.CollectionEnvelope{
-			Collection: attestation.Collection{Name: "noop"},
-			Statement:  intoto.Statement{PredicateType: attestation.CollectionType},
-		},
-	}
+	// Scaffold step must declare a required attestation post-F9 fail-closed fix (#5746).
+	noopColl := validNoopCollection(verifier)
 
 	t.Run("required_fails", func(t *testing.T) {
 		p := Policy{
 			Expires: futureExpiry(),
-			Steps:   map[string]Step{"noop": {Name: "noop", Functionaries: []Functionary{{PublicKeyID: keyID}}}},
+			Steps:   map[string]Step{"noop": validNoopStep(keyID)},
 			ExternalAttestations: map[string]ExternalAttestation{
 				"slsa": {
 					Name:          "slsa",
@@ -457,7 +473,7 @@ func TestExternal_07_SubjectMismatch(t *testing.T) {
 	t.Run("optional_passes", func(t *testing.T) {
 		p := Policy{
 			Expires: futureExpiry(),
-			Steps:   map[string]Step{"noop": {Name: "noop", Functionaries: []Functionary{{PublicKeyID: keyID}}}},
+			Steps:   map[string]Step{"noop": validNoopStep(keyID)},
 			ExternalAttestations: map[string]ExternalAttestation{
 				"slsa": {
 					Name:          "slsa",
@@ -819,9 +835,10 @@ func TestExternal_14_TypedFactoryStructuredFields(t *testing.T) {
 		Reference: "typed-ref",
 	}
 
+	// Scaffold step must declare a required attestation post-F9 fail-closed fix (#5746).
 	p := Policy{
 		Expires: futureExpiry(),
-		Steps:   map[string]Step{"noop": {Name: "noop", Functionaries: []Functionary{{PublicKeyID: keyID}}}},
+		Steps:   map[string]Step{"noop": validNoopStep(keyID)},
 		ExternalAttestations: map[string]ExternalAttestation{
 			"slsa-typed": {
 				Name:          "slsa-typed",
@@ -833,14 +850,8 @@ func TestExternal_14_TypedFactoryStructuredFields(t *testing.T) {
 		},
 	}
 
-	// Noop step needs a collection to pass.
-	noopColl := source.CollectionVerificationResult{
-		Verifiers: []cryptoutil.Verifier{verifier},
-		CollectionEnvelope: source.CollectionEnvelope{
-			Collection: attestation.Collection{Name: "noop"},
-			Statement:  intoto.Statement{PredicateType: attestation.CollectionType},
-		},
-	}
+	// Noop step needs a collection (with the required attestation) to pass.
+	noopColl := validNoopCollection(verifier)
 
 	ms := &stepAwareVerifiedSource{
 		byStep:      map[string][]source.CollectionVerificationResult{"noop": {noopColl}},

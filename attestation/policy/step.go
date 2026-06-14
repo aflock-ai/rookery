@@ -333,6 +333,15 @@ func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepRe
 					log.Debugf("failed to decode attestation %s from step %s: %v", att.Type, depStep, err)
 					continue
 				}
+				// F17 (#5746): do NOT last-writer-win on a duplicated type. A
+				// second passed collection presenting the same attestation type
+				// must not silently overwrite the first (legitimate) one in the
+				// cross-step Rego context — that is a shadowing vector. Preserve
+				// the first writer; ignore later duplicates of the same type.
+				if _, exists := stepData[att.Type]; exists {
+					log.Debugf("ignoring duplicate attestation type %s from step %s (first-writer-wins to prevent shadowing)", att.Type, depStep)
+					continue
+				}
 				stepData[att.Type] = data
 			}
 		}
@@ -468,15 +477,31 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 	}
 
 	for _, collection := range collectionResults {
-		if collection.Collection.Name != s.Name && collection.Collection.Name != "" {
+		// F10 (#5746): require EXACT step-name equality. An empty collection
+		// name must NOT match every step — previously `name == ""` was treated
+		// as a wildcard, letting a name-less collection bypass the step-name
+		// filter. Fail closed: only a collection explicitly named for this step
+		// is considered.
+		if collection.Collection.Name != s.Name {
 			log.Debugf("Skipping collection %s as it is not for step %s", collection.Collection.Name, s.Name)
 			continue
 		}
 
-		found := make(map[string]attestation.Attestor)
+		found := make(map[string][]attestation.Attestor)
 		reasons := make([]string, 0)
 		passed := true
 		var allAiResponses []AiResponse
+
+		// F9 (#5746): a step with NO required attestations is a misconfigured
+		// no-op gate. It must NOT silently pass an arbitrary collection — that
+		// is fail-open (a gate with no requirements rubber-stamps anything).
+		// Reject the collection rather than accept it.
+		if len(s.Attestations) == 0 {
+			passed = false
+			reasons = append(reasons, fmt.Sprintf(
+				"step %q declares no required attestations; a gate with no requirements rejects all collections (fail closed)",
+				s.Name))
+		}
 
 		if len(collection.Errors) > 0 {
 			passed = false
@@ -485,25 +510,28 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 			}
 		}
 
+		// G (#5747): collect ALL attestors per type, not just the last one. A
+		// last-writer-wins map let a passing attestor shadow a failing attestor
+		// of the same type, so a malicious duplicate could bypass the policy.
 		for _, att := range collection.Collection.Attestations {
-			found[att.Type] = att.Attestation
+			found[att.Type] = append(found[att.Type], att.Attestation)
 			// Also register under the alternate URI so that policies
 			// written with witness.dev URIs match aflock.ai attestations and
 			// vice versa.
 			if alt := attestation.LegacyAlternate(att.Type); alt != "" {
-				found[alt] = att.Attestation
+				found[alt] = append(found[alt], att.Attestation)
 			}
 		}
 
 		for _, expected := range s.Attestations {
 			// Try both the original and alternate URI for the expected type.
-			attestor, ok := found[expected.Type]
+			attestors, ok := found[expected.Type]
 			if !ok {
 				if alt := attestation.LegacyAlternate(expected.Type); alt != "" {
-					attestor, ok = found[alt]
+					attestors, ok = found[alt]
 				}
 			}
-			if !ok {
+			if !ok || len(attestors) == 0 {
 				passed = false
 				reasons = append(reasons, ErrMissingAttestation{
 					Step:        s.Name,
@@ -515,38 +543,43 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 				continue
 			}
 
-			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies, stepContext); err != nil {
-				passed = false
-				reasons = append(reasons, err.Error())
-			}
+			// G (#5747): evaluate EVERY attestor of this type. If ANY fails, the
+			// collection fails — a passing duplicate must not shadow a failing
+			// one (no last-writer-wins bypass).
+			for _, attestor := range attestors {
+				if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies, stepContext); err != nil {
+					passed = false
+					reasons = append(reasons, err.Error())
+				}
 
-			aiResponses, err := EvaluateAIPolicy(attestor, expected.AiPolicies, aiServerURL)
-			if err != nil {
-				passed = false
-				reasons = append(reasons, err.Error())
-			}
+				aiResponses, err := EvaluateAIPolicy(attestor, expected.AiPolicies, aiServerURL)
+				if err != nil {
+					passed = false
+					reasons = append(reasons, err.Error())
+				}
 
-			if len(aiResponses) > 0 { //nolint:nestif
-				allAiResponses = append(allAiResponses, aiResponses...)
+				if len(aiResponses) > 0 { //nolint:nestif
+					allAiResponses = append(allAiResponses, aiResponses...)
 
-				if err == nil {
-					for i, resp := range aiResponses {
-						if resp.Status == AiStatusFail {
-							policyName := ""
-							if i < len(expected.AiPolicies) {
-								policyName = expected.AiPolicies[i].Name
+					if err == nil {
+						for i, resp := range aiResponses {
+							if resp.Status == AiStatusFail {
+								policyName := ""
+								if i < len(expected.AiPolicies) {
+									policyName = expected.AiPolicies[i].Name
+								}
+								if policyName == "" {
+									policyName = fmt.Sprintf("AI Policy %d", i+1)
+								}
+
+								reason := fmt.Sprintf("AI Policy '%s': %s - %s",
+									policyName,
+									resp.Status,
+									resp.Reason)
+
+								passed = false
+								reasons = append(reasons, reason)
 							}
-							if policyName == "" {
-								policyName = fmt.Sprintf("AI Policy %d", i+1)
-							}
-
-							reason := fmt.Sprintf("AI Policy '%s': %s - %s",
-								policyName,
-								resp.Status,
-								resp.Reason)
-
-							passed = false
-							reasons = append(reasons, reason)
 						}
 					}
 				}

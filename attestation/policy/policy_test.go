@@ -1201,7 +1201,17 @@ func TestVerify_FullPassWithPublicKeyFunctionary(t *testing.T) {
 	require.NoError(t, err)
 
 	stepName := "build"
-	coll := attestation.Collection{Name: stepName}
+	// Since the F9 fail-closed fix (#5746), an empty-Attestations step rejects
+	// every collection. The happy-path step now declares a required attestation
+	// type (with a matching attestor in its collection) so it still demonstrates
+	// a full pass.
+	buildAttType := "https://example.com/build-att/v1"
+	coll := attestation.Collection{
+		Name: stepName,
+		Attestations: []attestation.CollectionAttestation{
+			{Type: buildAttType, Attestation: &dummyAttestor{name: "build-att", typeStr: buildAttType}},
+		},
+	}
 
 	cvr := source.CollectionVerificationResult{
 		Verifiers: []cryptoutil.Verifier{verifier},
@@ -1220,6 +1230,9 @@ func TestVerify_FullPassWithPublicKeyFunctionary(t *testing.T) {
 				Name: stepName,
 				Functionaries: []Functionary{
 					{PublicKeyID: keyID},
+				},
+				Attestations: []Attestation{
+					{Type: buildAttType},
 				},
 			},
 		},
@@ -2155,8 +2168,20 @@ func TestVerify_CrossStepAttestationAccess(t *testing.T) {
 		},
 	}
 
-	// Deploy step collection — no attestations needed (just functionary check).
-	deployColl := attestation.Collection{Name: "deploy"}
+	// Deploy step collection. Since the F9 fail-closed fix (#5746), a step with
+	// no required attestations rejects every collection, so the deploy step now
+	// declares its own required attestation type (the test's real subject is
+	// cross-step access to build's data, not an empty-gate pass).
+	deployAttType := "https://example.com/deploy-att/v1"
+	deployColl := attestation.Collection{
+		Name: "deploy",
+		Attestations: []attestation.CollectionAttestation{
+			{
+				Type:        deployAttType,
+				Attestation: &dummyAttestor{name: "deploy-att", typeStr: deployAttType},
+			},
+		},
+	}
 	deployCVR := source.CollectionVerificationResult{
 		Verifiers: []cryptoutil.Verifier{verifier},
 		CollectionEnvelope: source.CollectionEnvelope{
@@ -2190,6 +2215,9 @@ func TestVerify_CrossStepAttestationAccess(t *testing.T) {
 				AttestationsFrom: []string{"build"},
 				Functionaries: []Functionary{
 					{PublicKeyID: keyID},
+				},
+				Attestations: []Attestation{
+					{Type: deployAttType},
 				},
 			},
 		},
