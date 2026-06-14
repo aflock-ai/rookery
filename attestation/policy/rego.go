@@ -139,18 +139,35 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	}
 
 	allDenyReasons := []string{}
+	// sawDenyElement is true whenever a non-empty deny list/set was returned,
+	// regardless of whether its elements serialize to strings. The deny
+	// DECISION must never depend on reason serializability: a non-string deny
+	// element (e.g. deny[42]) is still a genuine denial and must fail closed.
+	// (Upstream go-witness fails closed here with ErrRegoInvalidData; we match
+	// that intent by always rejecting a non-empty deny.)
+	sawDenyElement := false
 	for _, expression := range rs {
 		for _, value := range expression.Expressions {
 			switch v := value.Value.(type) {
 			case []interface{}:
 				// OPA returns deny as a list: ["reason1", "reason2"]
+				if len(v) > 0 {
+					sawDenyElement = true
+				}
 				for _, reason := range v {
 					if reasonStr, ok := reason.(string); ok {
 						allDenyReasons = append(allDenyReasons, reasonStr)
+					} else {
+						// Coerce non-string elements so a genuine deny still
+						// carries a reason; never silently drop it.
+						allDenyReasons = append(allDenyReasons, fmt.Sprintf("%v", reason))
 					}
 				}
 			case map[string]interface{}:
 				// OPA returns deny[msg] as a set: {"reason1": true, "reason2": true}
+				if len(v) > 0 {
+					sawDenyElement = true
+				}
 				for reason := range v {
 					allDenyReasons = append(allDenyReasons, reason)
 				}
@@ -160,7 +177,7 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 		}
 	}
 
-	if len(allDenyReasons) > 0 {
+	if len(allDenyReasons) > 0 || sawDenyElement {
 		return fmt.Errorf("rego policy evaluation failed for attestor type %s: %w", attestor.Type(), ErrPolicyDenied{Reasons: allDenyReasons})
 	}
 
