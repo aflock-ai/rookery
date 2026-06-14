@@ -36,46 +36,41 @@ import (
 )
 
 // ===========================================================================
-// FINDING 1 (HIGH): Duplicate constraints in checkCertConstraint collapse
-// via map deduplication, silently weakening the constraint set.
-//
-// When a policy author specifies constraints=["ACME", "ACME"] intending
-// to require two distinct cert values, the map deduplicates them to one
-// entry. A cert with values=["ACME"] will pass because the single map
-// entry gets deleted and len(unmet)==0. The constraint semantics are
-// silently weakened.
+// FINDING 1 (HIGH) — FIXED (#5746): Duplicate constraints in checkCertConstraint
+// no longer collapse via map deduplication. Occurrences are counted, so a
+// duplicate constraint requires that many matching cert values. These tests
+// previously pinned the buggy fail-open behavior (assert.NoError); they now
+// document the fail-closed fix (assert.Error). See failclosed_constraints_test.go
+// TestRed_F1.
 // ===========================================================================
 
 func TestAdversarial_CheckCertConstraint_DuplicateConstraintsCollapse(t *testing.T) {
-	// The constraint list has "ACME" twice. If the policy author intended
-	// the cert to have two "ACME" values (perhaps in a list-valued field),
-	// this should arguably fail when the cert only has one "ACME".
-	// But because constraints go into a map, duplicates collapse.
+	// The constraint list has "ACME" twice, so the cert must present two "ACME"
+	// values. A cert with only one "ACME" no longer collapses to a single map
+	// entry — occurrences are counted, so this fails closed.
 	err := checkCertConstraint("org",
-		[]string{"ACME", "ACME"}, // Two constraints, but map deduplicates to 1
+		[]string{"ACME", "ACME"}, // Two constraints — require TWO matching values
 		[]string{"ACME"},         // Cert has only one value
 	)
-	// BUG: This passes because the map {ACME: {}} has one entry, and the single
-	// cert value "ACME" matches it, leaving len(unmet)==0.
-	// A correct implementation would count occurrences, not just presence.
-	assert.NoError(t, err,
-		"CONFIRMED BUG: duplicate constraints are silently deduplicated. "+
-			"A policy with constraints=[ACME, ACME] passes with only one cert value ACME. "+
-			"This weakens constraint enforcement.")
+	// FIXED: duplicate constraints are NOT deduplicated; one cert value cannot
+	// satisfy two required occurrences.
+	assert.Error(t, err,
+		"FIXED (#5746): duplicate constraints [ACME, ACME] are no longer collapsed; "+
+			"a cert with only one ACME value must fail closed.")
 }
 
 func TestAdversarial_CheckCertConstraint_DuplicateConstraintsDifferentCounts(t *testing.T) {
-	// Policy requires ["A", "A", "B"] but cert has ["A", "B"].
-	// After dedup, constraints map = {A: {}, B: {}}. Cert has both.
-	// This will pass even though the original constraint list had 3 items
-	// and the cert only has 2 values.
+	// Policy requires ["A", "A", "B"] — three required occurrences (two A, one B).
+	// A cert with ["A", "B"] presents only one A, so it can no longer satisfy the
+	// two required A occurrences.
 	err := checkCertConstraint("org",
-		[]string{"A", "A", "B"}, // 3 constraints, but map has 2 entries
-		[]string{"A", "B"},      // 2 cert values
+		[]string{"A", "A", "B"}, // 3 required occurrences (2x A, 1x B)
+		[]string{"A", "B"},      // 2 cert values — only one A
 	)
-	assert.NoError(t, err,
-		"CONFIRMED BUG: constraints=[A, A, B] passes with values=[A, B]. "+
-			"The duplicate A constraint is silently dropped.")
+	// FIXED: the duplicate A constraint is honored, not silently dropped.
+	assert.Error(t, err,
+		"FIXED (#5746): constraints=[A, A, B] require two A values; a cert with "+
+			"values=[A, B] must fail closed (the duplicate A is no longer dropped).")
 }
 
 // ===========================================================================
@@ -198,25 +193,21 @@ func TestAdversarial_CheckCertConstraint_SubsetChecksCorrect(t *testing.T) {
 }
 
 // ===========================================================================
-// FINDING 5 (HIGH): checkCertConstraintGlob with empty value and non-empty
-// non-glob constraint passes when it should fail.
-//
-// When constraint is a non-empty, non-glob string (no "*") and value is "",
-// the exact match check at line 168 will correctly fail because
-// "something" != "". This is correct.
-//
-// But when constraint is "" (empty), it immediately returns nil (pass) at
-// line 148, regardless of what the cert's common name actually is. An
-// empty constraint means "allow any value" which is a dangerous default.
+// FINDING 5 (HIGH) — FIXED (#5746): checkCertConstraintGlob with an EMPTY
+// constraint now fails closed instead of defaulting to "allow all". A policy
+// author who forgets/empties CommonName must set the explicit AllowAllConstraint
+// ("*") to allow any value. This test previously pinned the dangerous fail-open
+// default (assert.NoError); it now documents the fail-closed fix (assert.Error).
+// See failclosed_constraints_test.go TestRed_F5.
 // ===========================================================================
 
 func TestAdversarial_CheckCertConstraintGlob_EmptyConstraintAllowsAnything(t *testing.T) {
-	// Empty constraint allows any value -- this is by design but dangerous.
-	// A policy author who forgets to set CommonName gets "allow all".
+	// Empty constraint now fails closed -- a forgotten CommonName no longer
+	// silently accepts an attacker-controlled CN; the author must opt in with "*".
 	err := checkCertConstraintGlob("common name", "", "evil-cn.attacker.com")
-	assert.NoError(t, err,
-		"DESIGN ISSUE: empty CommonName constraint allows any value. "+
-			"A missing/forgotten constraint defaults to 'allow all'.")
+	assert.Error(t, err,
+		"FIXED (#5746): an empty CommonName constraint fails closed; "+
+			"require the explicit '*' (AllowAllConstraint) to allow any value.")
 }
 
 func TestAdversarial_CheckCertConstraintGlob_EmptyValueWithConstraint(t *testing.T) {
@@ -472,32 +463,35 @@ func TestAdversarial_ValidateAttestations_EmptyCollectionNameMatchesAnyStep(t *t
 }
 
 // ===========================================================================
-// FINDING 11 (MEDIUM): checkCertConstraint single-empty-string normalization
-// only applies to index 0.
+// FINDING 11 (MEDIUM) — FIXED (#5746): checkCertConstraint single-empty-string
+// normalization now applies at ALL positions, not just index 0.
 //
-// constraints=["", "real"] does NOT trigger the normalization at line 181-183
-// because len(constraints)!=1. The empty string stays in the constraint set,
-// meaning the cert must have an entry matching exactly "".
+// constraints=["", "real"] now normalizes the empty string away (it carries no
+// SAN identity), so it means "require real" — the cert is NOT forced to present
+// a literal empty value. The second assertion previously pinned the buggy
+// behavior (assert.Error, "must have an empty value"); it now documents the
+// fail-closed-but-correct normalization (assert.NoError). See
+// failclosed_constraints_test.go TestRed_F11.
 // ===========================================================================
 
 func TestAdversarial_CheckCertConstraint_EmptyStringInMultipleConstraints(t *testing.T) {
-	// constraints=["", "real"] -- the empty string is NOT normalized away
-	// because the normalization only fires for single-element slices.
+	// constraints=["", "real"] -- the empty string normalizes away at any
+	// position, so this means "require real". A cert presenting "real" passes.
 	err := checkCertConstraint("org",
-		[]string{"", "real"}, // First constraint is ""
-		[]string{"", "real"}, // Cert has both
+		[]string{"", "real"}, // empty element normalized away -> require "real"
+		[]string{"", "real"}, // cert's empty element also normalized away
 	)
-	// This passes because both values match exactly
 	assert.NoError(t, err)
 
-	// But what if the cert doesn't have the empty string?
+	// The cert presenting only "real" (no empty value) now PASSES: the empty
+	// constraint element no longer forces the cert to carry an empty value.
 	err = checkCertConstraint("org",
-		[]string{"", "real"}, // First constraint is ""
-		[]string{"real"},     // Cert only has "real", not ""
+		[]string{"", "real"}, // empty element normalized away -> require "real"
+		[]string{"real"},     // cert has "real" only
 	)
-	// This should fail because the "" constraint is unmet
-	assert.Error(t, err,
-		"constraints with an embedded empty string require the cert to have an empty value")
+	assert.NoError(t, err,
+		"FIXED (#5746): an embedded empty-string constraint normalizes away at any "+
+			"position; the cert is not required to present a literal empty value.")
 }
 
 // ===========================================================================
@@ -583,12 +577,12 @@ func TestAdversarial_CheckCertConstraint_WildcardNotAtIndex0(t *testing.T) {
 }
 
 // ===========================================================================
-// FINDING 14 (HIGH): CertConstraint.Check accumulates errors but does not
-// short-circuit. All constraint checks run even if an early one fails.
-// This is by design (to report all failures), but it means the trust
-// bundle check (which may involve network calls for CRL/OCSP) always runs.
-// More critically, it means the error list can be used to enumerate
-// certificate details through error messages.
+// FINDING 14 (HIGH) — FIXED (#5746): CertConstraint.Check now short-circuits on
+// the FIRST failing constraint instead of accumulating every check's error. This
+// avoids needless work (the trust-bundle check can be expensive) and stops the
+// error fan from enumerating certificate details to callers. This test
+// previously pinned the accumulation behavior (errs >= 3); it now documents the
+// short-circuit fix (errs <= 1). See failclosed_constraints_test.go TestRed_F14.
 // ===========================================================================
 
 func TestAdversarial_CertConstraintCheck_ErrorAccumulation(t *testing.T) {
@@ -613,13 +607,13 @@ func TestAdversarial_CertConstraintCheck_ErrorAccumulation(t *testing.T) {
 	err = cc.Check(x509Verifier, trustBundles)
 	assert.Error(t, err)
 
-	// The error should contain details about ALL failing constraints
+	// FIXED: Check short-circuits on the first failing constraint, so exactly one
+	// underlying error is surfaced (no cert-detail enumeration via accumulated errs).
 	var constraintErr ErrConstraintCheckFailed
 	if assert.ErrorAs(t, err, &constraintErr) {
-		// All checks ran -- CN, Org, Email, DNS all failed
-		assert.GreaterOrEqual(t, len(constraintErr.errs), 3,
-			"All constraint checks should run and accumulate errors. "+
-				"Error messages may leak certificate details to callers.")
+		assert.LessOrEqual(t, len(constraintErr.errs), 1,
+			"FIXED (#5746): Check short-circuits on the first failing constraint "+
+				"and surfaces a single error, not one per failed check.")
 	}
 }
 

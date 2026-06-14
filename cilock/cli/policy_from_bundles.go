@@ -1049,11 +1049,27 @@ func buildCertFunctionaries(stderr io.Writer, signers []certSigner, p *policy.Po
 			}
 		}
 
+		commonName := cs.commonName
+		if commonName == "" {
+			// No recoverable leaf CN — emit the explicit AllowAllConstraint.
+			// An empty CommonName now fails closed in the verifier (F5, #5746),
+			// so a blank value would make the policy unverifiable. Wildcard it,
+			// matching the emails/URIs treatment above.
+			commonName = policy.AllowAllConstraint
+			if stderr != nil {
+				_, _ = fmt.Fprintf(stderr,
+					"note: cert-signed functionary for root %s has no parseable CN; "+
+						"wildcarding certConstraint.commonname to %q. Pin the real signer "+
+						"identity before production use.\n",
+					shortID(rootName), policy.AllowAllConstraint)
+			}
+		}
+
 		out = append(out, policy.Functionary{
 			Type: "root",
 			CertConstraint: policy.CertConstraint{
 				Roots:      []string{rootName},
-				CommonName: cs.commonName, // empty when parse failed; allow-all under glob check
+				CommonName: commonName,
 				Emails:     emails,
 				// A Fulcio workflow-identity cert carries a URI SAN; an empty
 				// list would forbid it, so default to AllowAll.

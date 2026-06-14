@@ -43,39 +43,39 @@ type CertConstraint struct {
 }
 
 func (cc CertConstraint) Check(verifier *cryptoutil.X509Verifier, trustBundles map[string]TrustBundle) error {
-	errs := make([]error, 0)
 	cert := verifier.Certificate()
 
+	// Short-circuit on the FIRST failing constraint (F14, #5746): do not run the
+	// remaining checks. Accumulating every check's error both does needless work
+	// (the trust-bundle check can be expensive) and leaks cert detail via a fan of
+	// error messages. Surface exactly one underlying error, wrapped so callers can
+	// still match ErrConstraintCheckFailed.
 	if err := checkCertConstraintGlob("common name", cc.CommonName, cert.Subject.CommonName); err != nil {
-		errs = append(errs, err)
+		return ErrConstraintCheckFailed{[]error{err}}
 	}
 
 	if err := checkCertConstraint("dns name", cc.DNSNames, cert.DNSNames); err != nil {
-		errs = append(errs, err)
+		return ErrConstraintCheckFailed{[]error{err}}
 	}
 
 	if err := checkCertConstraint("email", cc.Emails, cert.EmailAddresses); err != nil {
-		errs = append(errs, err)
+		return ErrConstraintCheckFailed{[]error{err}}
 	}
 
 	if err := checkCertConstraint("organization", cc.Organizations, cert.Subject.Organization); err != nil {
-		errs = append(errs, err)
+		return ErrConstraintCheckFailed{[]error{err}}
 	}
 
 	if err := checkCertConstraint("uri", cc.URIs, urisToStrings(cert.URIs)); err != nil {
-		errs = append(errs, err)
+		return ErrConstraintCheckFailed{[]error{err}}
 	}
 
 	if err := cc.checkTrustBundles(verifier, trustBundles); err != nil {
-		errs = append(errs, err)
+		return ErrConstraintCheckFailed{[]error{err}}
 	}
 
 	if err := cc.checkExtensions(cert.Extensions); err != nil {
-		errs = append(errs, err)
-	}
-
-	if len(errs) > 0 {
-		return ErrConstraintCheckFailed{errs}
+		return ErrConstraintCheckFailed{[]error{err}}
 	}
 
 	return nil
@@ -143,10 +143,18 @@ func urisToStrings(uris []*url.URL) []string {
 
 // checkCertConstraintGlob checks a single-value cert attribute against a constraint
 // that may contain glob patterns (e.g., "*.example.com" matches "foo.example.com").
-// An empty constraint allows any value. The AllowAllConstraint ("*") matches everything.
+// The AllowAllConstraint ("*") matches everything. An EMPTY constraint fails closed:
+// a forgotten/blank CommonName must NOT silently accept any value — the author must
+// opt in to "allow any" explicitly with "*" (F5, #5746).
 func checkCertConstraintGlob(attribute, constraint, value string) error {
-	if constraint == "" || constraint == AllowAllConstraint {
+	if constraint == AllowAllConstraint {
 		return nil
+	}
+
+	// Fail closed on an empty constraint: an unset attribute reads like "allow any"
+	// but must not be — require the explicit AllowAllConstraint ("*") to allow all.
+	if constraint == "" {
+		return fmt.Errorf("cert %s constraint is empty, which fails closed; set the expected value or %q to allow any", attribute, AllowAllConstraint)
 	}
 
 	if strings.Contains(constraint, "*") {
@@ -172,19 +180,17 @@ func checkCertConstraintGlob(attribute, constraint, value string) error {
 }
 
 func checkCertConstraint(attribute string, constraints, values []string) error {
-	// If our only constraint is the AllowAllConstraint it's a pass
+	// If our only constraint is the AllowAllConstraint it's a pass.
 	if len(constraints) == 1 && constraints[0] == AllowAllConstraint { //nolint:gosec // G602: len check guards index
 		return nil
 	}
 
-	// treat a single empty string the same as a constraint on an empty attribute
-	if len(constraints) == 1 && constraints[0] == "" { //nolint:gosec // G602: len check guards index
-		constraints = []string{}
-	}
-
-	if len(values) == 1 && values[0] == "" { //nolint:gosec // G602: len check guards index
-		values = []string{}
-	}
+	// Normalize empty-string elements away at ALL positions, not just index 0
+	// (F11, #5746). An empty string carries no SAN identity, so a constraint like
+	// ["", "real"] means "require real"; the cert is not forced to present a
+	// literal empty value. The same normalization applies to the cert's values.
+	constraints = dropEmpty(constraints)
+	values = dropEmpty(values)
 
 	if len(constraints) == 0 && len(values) > 0 {
 		// An empty list-constraint forbids ALL of this SAN type, so a cert that
@@ -194,24 +200,44 @@ func checkCertConstraint(attribute string, constraints, values []string) error {
 			attribute, values, attribute, attribute, AllowAllConstraint)
 	}
 
-	unmet := make(map[string]struct{})
+	// Count occurrences so duplicate constraints are NOT silently collapsed
+	// (F1, #5746): constraints=[ACME,ACME] requires TWO matching cert values.
+	// A subset of required values must FAIL (F4, #5746): N distinct required
+	// values need N distinct cert matches.
+	unmet := make(map[string]int, len(constraints))
 	for _, constraint := range constraints {
-		unmet[constraint] = struct{}{}
+		unmet[constraint]++
 	}
 
 	for _, value := range values {
-		if _, ok := unmet[value]; !ok {
+		if unmet[value] <= 0 {
 			return fmt.Errorf("cert has an unexpected %s %s given constraints %+q", attribute, value, constraints)
 		}
 
-		delete(unmet, value)
+		unmet[value]--
 	}
 
-	if len(unmet) > 0 {
-		return fmt.Errorf("cert with %s(s) %+q did not pass all constraints %+q", attribute, values, constraints)
+	for _, remaining := range unmet {
+		if remaining > 0 {
+			return fmt.Errorf("cert with %s(s) %+q did not pass all constraints %+q", attribute, values, constraints)
+		}
 	}
 
 	return nil
+}
+
+// dropEmpty returns a copy of in with all empty-string elements removed. It is
+// used to normalize cert-constraint and cert-value lists so a stray empty string
+// (e.g. an author's blank list entry) does not require the cert to present a
+// literal empty value at that position.
+func dropEmpty(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob library
