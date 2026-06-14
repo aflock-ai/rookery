@@ -121,6 +121,16 @@ func VerifyPolicySignature(ctx context.Context, envelope dsse.Envelope, vo *Veri
 
 	var passed bool
 	for _, verifier := range passedPolicyVerifiers {
+		// On the success path dsse.Envelope.Verify returns the FULL slice of
+		// CheckedVerifiers — including entries whose own signature FAILED
+		// (Error != nil) so long as the overall threshold was met by other
+		// signatures. Trusting a failed verifier's cert identity is fail-open
+		// (#5747 C): a corrupted signature whose cert still chains to a trusted
+		// root and matches the configured constraints would confer trust. Skip
+		// them, mirroring source/verified.go:115.
+		if verifier.Error != nil {
+			continue
+		}
 		kid, err := verifier.Verifier.KeyID()
 		if err != nil {
 			return fmt.Errorf("could not get verifier key id: %w", err)
