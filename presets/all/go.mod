@@ -1,9 +1,11 @@
 module github.com/aflock-ai/rookery/presets/all
 
-go 1.26.3
+go 1.26.4
 
 // Core
 replace github.com/aflock-ai/rookery/attestation => ../../attestation
+
+replace github.com/aflock-ai/rookery/cilock => ../../cilock
 
 replace github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof => ../../plugins/attestors/inclusion-proof
 
@@ -182,6 +184,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/signers/spiffe v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/vault v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/vault-transit v0.0.0-00010101000000-000000000000
+	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -241,6 +244,7 @@ require (
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/coreos/go-oidc/v3 v3.17.0 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c // indirect
 	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea // indirect
@@ -262,6 +266,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/go-containerregistry v0.20.7 // indirect
@@ -353,7 +358,6 @@ require (
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
-	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/spf13/viper v1.21.0 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.6.0 // indirect
@@ -372,6 +376,7 @@ require (
 	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
 	github.com/yashtewari/glob-intersection v0.2.0 // indirect
+	github.com/zalando/go-keyring v0.2.8 // indirect
 	github.com/zricethezav/gitleaks/v8 v8.30.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.63.0 // indirect
