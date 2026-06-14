@@ -16,6 +16,7 @@ package cli
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -28,11 +29,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aflock-ai/rookery/attestation/cryptoutil"
-	"github.com/aflock-ai/rookery/attestation/policy"
+	"github.com/digitorus/pkcs7"
+	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/spf13/cobra"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/policy"
 )
 
 const (
@@ -170,6 +173,26 @@ type bundleSummary struct {
 	// (e.g. bare-predicate envelopes, legacy v0.1 collections).
 	productDigests  map[string]struct{}
 	materialDigests map[string]struct{}
+
+	// tsaRoots holds the timestamp-authority trust anchors recovered from
+	// this bundle's RFC3161 timestamp tokens (signatures[].timestamps[]).
+	// Each token (PKCS7 SignedData) embeds the TSA signing cert; that cert
+	// is the trust anchor `cilock verify` consults to establish
+	// proof-of-signing-time for a short-lived keyless leaf. Empty for
+	// bundles with no timestamps (e.g. raw-keyid pubkey signatures, or a
+	// cert-signed bundle that was never timestamped). These feed
+	// Policy.TimestampAuthorities so the generated policy is self-contained
+	// and verifies without manual patching.
+	tsaRoots []tsaRoot
+}
+
+// tsaRoot is one timestamp-authority trust anchor recovered from a bundle's
+// RFC3161 token. keyID is the hex(sha256(pub)) of the TSA cert's public key
+// (same scheme as raw-keyid functionaries), used to key Policy.TimestampAuthorities
+// and dedupe identical TSAs across multiple signatures/bundles.
+type tsaRoot struct {
+	keyID string
+	pem   []byte
 }
 
 // certSigner describes one x509-cert-bearing signature on a DSSE
@@ -179,7 +202,8 @@ type certSigner struct {
 	keyID         string // sigs[].keyid (still present; identifies leaf cert pubkey)
 	leafPEM       []byte // raw PEM bytes of the leaf cert, as embedded in the envelope
 	intermediates [][]byte
-	commonName    string // leaf cert CN, if parseable; "" otherwise (best-effort)
+	commonName    string   // leaf cert CN, if parseable; "" otherwise (best-effort)
+	emails        []string // leaf cert SAN email addresses, if any (the keyless signer identity)
 }
 
 // sidecarSummary captures one of the export sidecar envelopes that
@@ -263,11 +287,23 @@ func summarizeBundles(stderr io.Writer, paths []string, stepPrefix string) ([]bu
 // bundleSignature is one DSSE signature entry as cilock writes it. Certificate
 // is the leaf x509 cert PEM bytes, JSON-encoded (Go encodes []byte as base64);
 // cilock populates it whenever the signer is a TrustBundler (Fulcio leaf, manual
-// cert chain, etc) — see attestation/dsse/sign.go.
+// cert chain, etc) — see attestation/dsse/sign.go. Timestamps holds the RFC3161
+// timestamp token(s) the signer obtained from a TSA (type "tsp", DER bytes);
+// the keyless path always carries one so an expired-by-verify-time leaf can
+// still establish proof-of-signing-time.
 type bundleSignature struct {
-	KeyID         string   `json:"keyid"`
-	Certificate   []byte   `json:"certificate,omitempty"`
-	Intermediates [][]byte `json:"intermediates,omitempty"`
+	KeyID         string               `json:"keyid"`
+	Certificate   []byte               `json:"certificate,omitempty"`
+	Intermediates [][]byte             `json:"intermediates,omitempty"`
+	Timestamps    []bundleSigTimestamp `json:"timestamps,omitempty"`
+}
+
+// bundleSigTimestamp mirrors dsse.SignatureTimestamp: a typed timestamp blob
+// attached to a DSSE signature. Type "tsp" is an RFC3161 token (PKCS7
+// SignedData) whose Data (DER) embeds the TSA signing cert.
+type bundleSigTimestamp struct {
+	Type string `json:"type"`
+	Data []byte `json:"data"`
 }
 
 // summarizeOneBundle parses a DSSE envelope on disk and extracts the
@@ -346,8 +382,8 @@ func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummar
 	}
 
 	// Walk signatures once, separating cert-signed entries from raw-keyid
-	// pubkey entries (see collectSigners).
-	keyids, certs := collectSigners(env.Signatures)
+	// pubkey entries and harvesting TSA trust anchors (see collectSigners).
+	keyids, certs, tsas := collectSigners(env.Signatures)
 
 	predicateTypes := extractPredicateTypes(stmt.PredicateType, innerTypes)
 	sidecars, _ := discoverSidecars(path)
@@ -363,22 +399,39 @@ func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummar
 		certSigners:        certs,
 		productDigests:     productDigests,
 		materialDigests:    materialDigests,
+		tsaRoots:           tsas,
 	}, nil
 }
 
 // collectSigners walks a bundle's DSSE signatures once, separating cert-signed
-// entries from raw-keyid pubkey entries. A signature with non-empty Certificate
-// bytes is cert-based: its keyid identifies the leaf cert's public key, but the
-// policy must use a CertConstraint / Root rather than a raw publickeys[] entry.
-// Mixed envelopes (one pubkey sig + one cert sig) are unusual but supported —
-// both shapes land in their respective policy collections. Each keyid is deduped
-// so repeat signatures from the same key don't produce duplicate policy entries.
-func collectSigners(sigs []bundleSignature) (keyids []string, certs []certSigner) {
+// entries from raw-keyid pubkey entries, and harvesting timestamp-authority
+// trust anchors from any RFC3161 timestamp tokens. A signature with non-empty
+// Certificate bytes is cert-based: its keyid identifies the leaf cert's public
+// key, but the policy must use a CertConstraint / Root rather than a raw
+// publickeys[] entry. Mixed envelopes (one pubkey sig + one cert sig) are
+// unusual but supported — both shapes land in their respective policy
+// collections. Each keyid is deduped so repeat signatures from the same key
+// don't produce duplicate policy entries. TSA roots are deduped by their
+// derived keyid so the same TSA across many signatures yields one
+// timestampauthorities[] entry.
+func collectSigners(sigs []bundleSignature) (keyids []string, certs []certSigner, tsas []tsaRoot) {
 	keyids = make([]string, 0, len(sigs))
 	certs = make([]certSigner, 0, len(sigs))
+	tsas = make([]tsaRoot, 0)
 	seenKID := make(map[string]struct{}, len(sigs))
 	seenCert := make(map[string]struct{}, len(sigs))
+	seenTSA := make(map[string]struct{})
 	for _, s := range sigs {
+		// Harvest TSA trust anchors regardless of the signature's own type —
+		// a raw-keyid pubkey signature can still carry RFC3161 timestamps.
+		for _, ts := range extractTSARoots(s.Timestamps) {
+			if _, dup := seenTSA[ts.keyID]; dup {
+				continue
+			}
+			seenTSA[ts.keyID] = struct{}{}
+			tsas = append(tsas, ts)
+		}
+
 		if s.KeyID == "" {
 			continue
 		}
@@ -390,11 +443,13 @@ func collectSigners(sigs []bundleSignature) (keyids []string, certs []certSigner
 				continue
 			}
 			seenCert[s.KeyID] = struct{}{}
+			cn, emails := extractLeafConstraintFields(s.Certificate)
 			certs = append(certs, certSigner{
 				keyID:         s.KeyID,
 				leafPEM:       s.Certificate,
 				intermediates: s.Intermediates,
-				commonName:    extractLeafCommonName(s.Certificate),
+				commonName:    cn,
+				emails:        emails,
 			})
 			continue
 		}
@@ -405,23 +460,61 @@ func collectSigners(sigs []bundleSignature) (keyids []string, certs []certSigner
 		seenKID[s.KeyID] = struct{}{}
 		keyids = append(keyids, s.KeyID)
 	}
-	return keyids, certs
+	return keyids, certs, tsas
 }
 
-// extractLeafCommonName best-effort parses the leaf cert PEM to pull
-// its Subject Common Name. Failure is non-fatal: this is starter-policy
-// metadata, and the user is expected to tighten the CertConstraint
-// before signing. Returns "" on any parse error.
-func extractLeafCommonName(leafPEM []byte) string {
+// extractTSARoots pulls the timestamp-authority trust anchor(s) out of a
+// signature's RFC3161 timestamp tokens. Each "tsp" token is a PKCS7 SignedData
+// that embeds the TSA signing cert(s); we PEM-encode each embedded cert and
+// derive its keyid. The TSA leaf cert IS a valid trust anchor for
+// `cilock verify`: the timestamp verifier (attestation/timestamp/tsp.go
+// VerifyWithCerts -> pkcs7.VerifyWithChain) accepts any cert in its pool as a
+// trust anchor, and the embedded leaf directly signs the token — so embedding
+// the leaf (recovered from the bundle) makes the policy self-contained without
+// needing the offline-unavailable TSA root CA. Non-tsp timestamps and
+// unparseable tokens are skipped (best-effort starter policy).
+func extractTSARoots(timestamps []bundleSigTimestamp) []tsaRoot {
+	out := make([]tsaRoot, 0, len(timestamps))
+	for _, ts := range timestamps {
+		if ts.Type != string(dsse.TimestampRFC3161) || len(ts.Data) == 0 {
+			continue
+		}
+		p7, err := pkcs7.Parse(ts.Data)
+		if err != nil {
+			continue
+		}
+		for _, cert := range p7.Certificates {
+			if cert == nil {
+				continue
+			}
+			kid, err := cryptoutil.GeneratePublicKeyID(cert.PublicKey, crypto.SHA256)
+			if err != nil {
+				continue
+			}
+			out = append(out, tsaRoot{
+				keyID: kid,
+				pem:   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}),
+			})
+		}
+	}
+	return out
+}
+
+// extractLeafConstraintFields best-effort parses the leaf cert PEM to pull the
+// Subject Common Name and SAN email addresses — the fields the generated
+// CertConstraint pins. Failure is non-fatal: this is starter-policy metadata,
+// and the user is expected to tighten the CertConstraint before signing.
+// Returns ("", nil) on any parse error.
+func extractLeafConstraintFields(leafPEM []byte) (commonName string, emails []string) {
 	block, _ := pem.Decode(leafPEM)
 	if block == nil {
-		return ""
+		return "", nil
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return ""
+		return "", nil
 	}
-	return cert.Subject.CommonName
+	return cert.Subject.CommonName, cert.EmailAddresses
 }
 
 // discoverSidecars finds export-sidecar DSSE envelopes adjacent to the
@@ -631,11 +724,16 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 	}
 
 	for _, s := range summaries {
+		// Register timestamp-authority trust anchors recovered from this
+		// bundle's RFC3161 tokens. Without these, a short-lived keyless leaf
+		// has no proof-of-signing-time and `cilock verify` rejects it.
+		registerTimestampAuthorities(p, s.tsaRoots)
+
 		funcs := buildFunctionaries(s.signingKeyIDs, pubKeys, p.PublicKeys)
 		// Cert-signed signatures contribute Functionary{Type:"root"}
 		// entries and Roots[] registrations rather than publickeys[].
 		// See certSigner doc for the red-team motivation.
-		funcs = append(funcs, buildCertFunctionaries(s.certSigners, p)...)
+		funcs = append(funcs, buildCertFunctionaries(stderr, s.certSigners, p)...)
 
 		if s.outerPredicateType == "" || s.outerPredicateType == collectionPredicateURI {
 			// Collection envelope → a Step.
@@ -684,7 +782,61 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 	edgesEmitted := wireProvenanceEdges(p, summaries)
 	warnMissingProvenanceEdges(stderr, p, edgesEmitted)
 
+	// A cert-signed (keyless) policy with no timestampauthorities[] cannot
+	// establish proof-of-signing-time for short-lived leaves and WILL fail
+	// verify. We recover the TSA from the bundle's RFC3161 token above; warn
+	// (don't fail) when a cert-signed bundle carried no recoverable timestamp
+	// so the operator knows the policy needs a manual timestampauthorities[]
+	// entry (or the evidence simply wasn't timestamped).
+	warnMissingTimestampAuthorities(stderr, p, summaries)
+
 	return p, nil
+}
+
+// registerTimestampAuthorities side-effects p.TimestampAuthorities with each
+// recovered TSA trust anchor, keyed by the TSA cert's derived keyid. Idempotent
+// across bundles: the same TSA seen in multiple bundles registers once (first
+// writer wins). Lazily allocates the map so a no-timestamp suite leaves the
+// field nil (omitted from JSON, preserving the prior output shape).
+func registerTimestampAuthorities(p *policy.Policy, tsas []tsaRoot) {
+	for _, ts := range tsas {
+		if ts.keyID == "" || len(ts.pem) == 0 {
+			continue
+		}
+		if p.TimestampAuthorities == nil {
+			p.TimestampAuthorities = make(map[string]policy.Root)
+		}
+		if _, exists := p.TimestampAuthorities[ts.keyID]; !exists {
+			p.TimestampAuthorities[ts.keyID] = policy.Root{Certificate: ts.pem}
+		}
+	}
+}
+
+// warnMissingTimestampAuthorities emits a one-line warning when the policy has
+// at least one cert-based (root) functionary but no timestampauthorities[].
+// Such a policy looks complete but rejects every short-lived keyless leaf at
+// verify time ("no trusted timestamp verifier configured ...
+// proof-of-signing-time required"). No-op when there are no cert functionaries
+// (a pubkey-only policy needs no TSA) or when authorities are present.
+func warnMissingTimestampAuthorities(stderr io.Writer, p *policy.Policy, summaries []bundleSummary) {
+	if stderr == nil || len(p.TimestampAuthorities) > 0 {
+		return
+	}
+	hasCertSigner := false
+	for _, s := range summaries {
+		if len(s.certSigners) > 0 {
+			hasCertSigner = true
+			break
+		}
+	}
+	if !hasCertSigner {
+		return
+	}
+	_, _ = fmt.Fprintf(stderr,
+		"warning: cert-signed (keyless) bundle(s) but no recoverable RFC3161 timestamp; "+
+			"timestampauthorities[] is empty. cilock verify will reject short-lived leaf "+
+			"certs without proof-of-signing-time. Add a timestampauthorities[] entry (the "+
+			"signing platform's TSA cert) before signing, or re-run with timestamping enabled.\n")
 }
 
 // wireProvenanceEdges detects product→material flow between the input bundles
@@ -814,14 +966,26 @@ func addExternalAttestationWithFuncs(p *policy.Policy, name, predicateType strin
 
 // buildCertFunctionaries materializes Functionary{Type:"root"} entries
 // for cert-signed signatures and side-effects p.Roots with the leaf
-// cert chain so the policy is self-contained. The CertConstraint is
-// intentionally minimal — a starter template — pinning the trust to
-// the specific root we just embedded (Roots: [keyid]). When the leaf
-// has a parseable Common Name we copy it into the constraint so the
-// generated policy fails fast on cert substitutions; users are
-// expected to tighten DNSNames / Emails / Organizations / Extensions
-// before production use.
-func buildCertFunctionaries(signers []certSigner, p *policy.Policy) []policy.Functionary {
+// cert chain so the policy is self-contained. The CertConstraint pins
+// the trust to the specific root we just embedded (Roots: [keyid]) and
+// — critically for a policy that verifies out of the box — sets a
+// NON-EMPTY email constraint. witness treats an empty list-constraint
+// (emails/uris) as "forbid all", so a keyless leaf that presents an
+// email SAN would match nothing. We therefore:
+//
+//   - emails: pin the leaf's SAN email(s) by default (the authentic,
+//     least-surprising constraint — it pins the actual author). When the
+//     leaf has no recoverable SAN email, fall back to the AllowAll
+//     sentinel ["*"] (the keyless model trusts the CA root as the real
+//     anchor) and print a note that the email constraint was wildcarded.
+//   - uris: always the AllowAll sentinel ["*"]. A Fulcio workflow-identity
+//     cert carries a URI SAN (the build identity); an empty uris list
+//     would forbid it. Mirrors the convention in the CI policies.
+//   - commonname: the leaf CN when parseable (empty CN is allow-all under
+//     the glob check, so leaving it empty is safe).
+//
+// Users are expected to tighten these before production use.
+func buildCertFunctionaries(stderr io.Writer, signers []certSigner, p *policy.Policy) []policy.Functionary {
 	if len(signers) == 0 {
 		return nil
 	}
@@ -842,13 +1006,41 @@ func buildCertFunctionaries(signers []certSigner, p *policy.Policy) []policy.Fun
 				Intermediates: cs.intermediates,
 			}
 		}
+
+		emails := cs.emails
+		if len(emails) == 0 {
+			// No recoverable SAN email — wildcard so the empty-list
+			// "forbid all" trap doesn't make the policy unverifiable.
+			emails = []string{policy.AllowAllConstraint}
+			if stderr != nil {
+				_, _ = fmt.Fprintf(stderr,
+					"note: cert-signed functionary for root %s has no SAN email; "+
+						"wildcarding certConstraint.emails to %q. Pin the real signer "+
+						"identity before production use.\n",
+					shortID(rootName), policy.AllowAllConstraint)
+			}
+		}
+
 		out = append(out, policy.Functionary{
 			Type: "root",
 			CertConstraint: policy.CertConstraint{
 				Roots:      []string{rootName},
-				CommonName: cs.commonName, // empty when parse failed; user fills in
+				CommonName: cs.commonName, // empty when parse failed; allow-all under glob check
+				Emails:     emails,
+				// A Fulcio workflow-identity cert carries a URI SAN; an empty
+				// list would forbid it, so default to AllowAll.
+				URIs: []string{policy.AllowAllConstraint},
 			},
 		})
 	}
 	return out
+}
+
+// shortID truncates a keyid for human-readable diagnostics. Full keyids are
+// 64 hex chars; the first 12 are enough to disambiguate in a warning.
+func shortID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
 }

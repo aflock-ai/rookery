@@ -21,8 +21,10 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -33,10 +35,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aflock-ai/rookery/attestation/cryptoutil"
-	"github.com/aflock-ai/rookery/attestation/policy"
+	tsp "github.com/digitorus/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/policy"
 )
 
 // writePolicyFixtureKey writes an ed25519 public key PEM to disk and
@@ -613,6 +617,14 @@ func TestPolicyFromBundles_CertSignedBundle(t *testing.T) {
 		"CertConstraint.Roots must reference the embedded leaf root")
 	assert.Equal(t, leafCN, f.CertConstraint.CommonName,
 		"CertConstraint.CommonName should mirror the leaf cert CN as a starter template")
+
+	// This synthetic leaf has no SAN email, so emails must fall back to the
+	// AllowAll sentinel — an empty list would forbid all and make the policy
+	// unverifiable. uris is always AllowAll for the same reason.
+	assert.Equal(t, []string{policy.AllowAllConstraint}, f.CertConstraint.Emails,
+		"no-SAN-email leaf must wildcard emails (empty list forbids all)")
+	assert.Equal(t, []string{policy.AllowAllConstraint}, f.CertConstraint.URIs,
+		"uris must default to AllowAll so a Fulcio URI SAN isn't forbidden")
 }
 
 // TestPolicyFromBundles_CertSignedBareBundle confirms the cert path
@@ -741,4 +753,206 @@ func TestFromBundles_StripsAttJsonExtension(t *testing.T) {
 		"foo.att.json should yield step foo, with the full .att.json suffix stripped")
 	assert.NotContains(t, pol.Steps, "foo.att",
 		"step name must not retain the .att fragment (would be the naive TrimSuffix(.json) bug)")
+}
+
+// mintRFC3161Token issues a real RFC3161 timestamp token over `signed`,
+// signed by a freshly minted TSA leaf that chains to a TSA root CA. It
+// returns the bare token bytes (the TimeStampToken / PKCS7 SignedData) —
+// exactly what `cilock run` stores in signature.timestamps[].data (see
+// TSPTimestamper.Timestamp -> timestamp.RawToken). The token embeds ONLY
+// the TSA leaf cert, mirroring the real platform's behavior (verified
+// against /tmp/smoke-work fixtures), so the policy generator must recover
+// the TSA trust anchor from that embedded leaf.
+func mintRFC3161Token(t *testing.T, signed []byte) []byte {
+	t.Helper()
+
+	// TSA root CA.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	caTpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(100),
+		Subject:               pkix.Name{CommonName: "Test TSA Root CA", Organization: []string{"TestifySec"}},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTpl, caTpl, &caKey.PublicKey, caKey)
+	require.NoError(t, err)
+	caCert, err := x509.ParseCertificate(caDER)
+	require.NoError(t, err)
+
+	// TSA signing leaf (EKU: timeStamping), issued by the root CA.
+	tsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tsaTpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(101),
+		Subject:               pkix.Name{CommonName: "Test TSA", Organization: []string{"TestifySec"}},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
+		BasicConstraintsValid: true,
+	}
+	tsaDER, err := x509.CreateCertificate(rand.Reader, tsaTpl, caCert, &tsaKey.PublicKey, caKey)
+	require.NoError(t, err)
+	tsaCert, err := x509.ParseCertificate(tsaDER)
+	require.NoError(t, err)
+
+	// Build a timestamp request over `signed`, then have the TSA sign it.
+	h := sha256.Sum256(signed)
+	ts := &tsp.Timestamp{
+		HashAlgorithm:     crypto.SHA256,
+		HashedMessage:     h[:],
+		Time:              time.Now(),
+		Nonce:             big.NewInt(1234),
+		Policy:            asn1.ObjectIdentifier{1, 2, 3, 4, 1}, // TSA policy OID (required for TSTInfo)
+		AddTSACertificate: true,                                 // embed the TSA leaf cert in the token
+	}
+	respDER, err := ts.CreateResponse(tsaCert, tsaKey)
+	require.NoError(t, err)
+	parsed, err := tsp.ParseResponse(respDER)
+	require.NoError(t, err)
+	require.NotEmpty(t, parsed.RawToken, "RFC3161 token bytes must be present")
+	return parsed.RawToken
+}
+
+// synthKeylessTimestampedBundle synthesises a DSSE envelope that mirrors
+// the real keyless (Fulcio) + RFC3161-timestamped shape `cilock run
+// --enable-archivista` writes: the signature carries a short-lived leaf
+// cert with an email SAN (the keyless signer identity) AND a real RFC3161
+// timestamp token (timestamps[].type == "tsp") signed by a separate TSA
+// leaf that chains to a TSA root CA.
+//
+// This is the fixture for the from-bundles "emits verifiable policy" fix:
+// a generated policy MUST trust the TSA (timestampauthorities[]) so the
+// expired-by-verify-time keyless leaf can establish proof-of-signing-time,
+// and MUST set a non-empty functionary email constraint (empty == forbid
+// all) so the keyless signer matches.
+//
+// Returns (bundle path, signer SAN email, leaf keyid).
+func synthKeylessTimestampedBundle(t *testing.T, dir, name, signerEmail string, innerTypes []string) (path, email, keyID string) {
+	t.Helper()
+
+	// --- keyless (Fulcio-style) leaf cert with an email SAN ---
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	leafTpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(7),
+		Subject:               pkix.Name{}, // Fulcio leaves carry SAN, not a CN/subject
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(10 * time.Minute), // short-lived, like Fulcio
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
+		EmailAddresses:        []string{signerEmail},
+		BasicConstraintsValid: true,
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTpl, leafTpl, &leafKey.PublicKey, leafKey)
+	require.NoError(t, err)
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})
+	keyID, err = cryptoutil.GeneratePublicKeyID(&leafKey.PublicKey, crypto.SHA256)
+	require.NoError(t, err)
+
+	// --- statement payload (collection envelope) ---
+	atts := make([]map[string]string, 0, len(innerTypes))
+	for _, tp := range innerTypes {
+		atts = append(atts, map[string]string{"type": tp})
+	}
+	stmt := map[string]any{
+		"_type":         "https://in-toto.io/Statement/v0.1",
+		"subject":       []map[string]any{{"name": "x", "digest": map[string]string{"sha256": "00"}}},
+		"predicateType": collectionPredicateURI,
+		"predicate":     map[string]any{"name": name, "attestations": atts},
+	}
+	stmtBytes, err := json.Marshal(stmt)
+	require.NoError(t, err)
+
+	// --- the DSSE signature value (dummy; from-bundles never re-verifies it) ---
+	sigValue := []byte("dummy-signature-bytes")
+
+	// --- real RFC3161 timestamp token over the signature value ---
+	tsToken := mintRFC3161Token(t, sigValue)
+
+	env := map[string]any{
+		"payloadType": "application/vnd.in-toto+json",
+		"payload":     base64.StdEncoding.EncodeToString(stmtBytes),
+		"signatures": []map[string]any{
+			{
+				"keyid":       keyID,
+				"sig":         base64.StdEncoding.EncodeToString(sigValue),
+				"certificate": base64.StdEncoding.EncodeToString(leafPEM),
+				"timestamps": []map[string]any{
+					{
+						"type": "tsp",
+						"data": base64.StdEncoding.EncodeToString(tsToken),
+					},
+				},
+			},
+		},
+	}
+	envBytes, err := json.Marshal(env)
+	require.NoError(t, err)
+
+	path = filepath.Join(dir, name+".bundle.json")
+	require.NoError(t, os.WriteFile(path, envBytes, 0o600))
+	return path, signerEmail, keyID
+}
+
+// TestPolicyFromBundles_KeylessTimestamped is the red-green proof for the
+// "from-bundles emits verifiable policy" fix. A keyless (Fulcio) +
+// RFC3161-timestamped bundle previously produced a policy that fails
+// `cilock verify` two ways:
+//
+//  1. no timestampauthorities[] → the short-lived keyless leaf has no
+//     proof-of-signing-time, so verify rejects it
+//     ("no trusted timestamp verifier configured ...").
+//  2. empty functionary certConstraint.emails → witness treats empty as
+//     "forbid all", so the keyless signer (which presents an email SAN)
+//     matches nothing.
+//
+// This test fails on current code (no timestampauthorities; empty emails)
+// and passes once from-bundles populates both from the bundle itself.
+func TestPolicyFromBundles_KeylessTimestamped(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath, signerEmail, _ := synthKeylessTimestampedBundle(t, dir, "build", "ci-signer@example.com",
+		[]string{
+			"https://aflock.ai/attestations/material/v0.3",
+			"https://aflock.ai/attestations/command-run/v0.1",
+		})
+
+	var out bytes.Buffer
+	err := runPolicyFromBundles(&out, io.Discard, []string{bundlePath}, nil, "-", 365*24*time.Hour, "")
+	require.NoError(t, err)
+
+	var pol policy.Policy
+	require.NoError(t, json.Unmarshal(out.Bytes(), &pol))
+
+	// (1) timestampauthorities[] must be populated from the bundle's
+	// RFC3161 token so verify can establish proof-of-signing-time.
+	require.NotEmpty(t, pol.TimestampAuthorities,
+		"keyless+timestamped bundle must yield a non-empty timestampauthorities[]; "+
+			"without it, cilock verify rejects the short-lived leaf with "+
+			"'no trusted timestamp verifier configured ... proof-of-signing-time required'")
+	for id, ta := range pol.TimestampAuthorities {
+		assert.NotEmpty(t, ta.Certificate, "timestampauthority %q must embed a PEM cert", id)
+	}
+
+	// (2) the step's functionary must have a non-empty email constraint —
+	// pinned to the signer's SAN email by default. Empty == forbid all.
+	require.Contains(t, pol.Steps, "build")
+	step := pol.Steps["build"]
+	require.Len(t, step.Functionaries, 1)
+	f := step.Functionaries[0]
+	require.Equal(t, "root", f.Type)
+	require.NotEmpty(t, f.CertConstraint.Emails,
+		"functionary email constraint must be non-empty (empty forbids all); "+
+			"default to the signer SAN email")
+	assert.Contains(t, f.CertConstraint.Emails, signerEmail,
+		"email constraint should pin the actual signer SAN email by default")
+
+	// uris must use the AllowAll sentinel so a Fulcio workflow-identity
+	// URI SAN (present in CI keyless certs) isn't forbidden by an empty list.
+	assert.Equal(t, []string{policy.AllowAllConstraint}, f.CertConstraint.URIs,
+		"uris constraint must be the AllowAll sentinel, mirroring the CI policies")
 }
