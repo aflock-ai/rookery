@@ -311,12 +311,41 @@ type bundleSigTimestamp struct {
 // For attestation-collection envelopes, the inner types live in
 // predicate.attestations[].type; for bare-predicate envelopes the
 // outer predicateType is the single attestation type.
+//
+// It is the file-source adapter over the shared envelope-summary core
+// (summarizeEnvelopeBytes): it reads the file, auto-discovers export
+// sidecars adjacent to it, and feeds both to the core. The
+// Archivista-source path (`cilock policy from-commit`) calls
+// summarizeEnvelopeBytes directly with the downloaded envelope bytes and
+// no sidecars, so both sources derive identical bundleSummaries and feed
+// the same buildStarterPolicy derivation core (TSA authorities +
+// cert/email constraints, the #5741 verifiable-policy fix).
 func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummary, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // user-supplied arg
 	if err != nil {
 		return bundleSummary{}, err
 	}
+	// Sidecars are a local-filesystem concept (cilock run --attestor-*-export
+	// emits `<mainPath>-<name>.json` next to the bundle). The Archivista source
+	// has no sidecars — each export is its own DSSE the subject search already
+	// returns — so discovery is done here, in the file adapter, not the core.
+	sidecars, _ := discoverSidecars(path)
+	return summarizeEnvelopeBytes(stderr, raw, path, stepPrefix, sidecars)
+}
 
+// summarizeEnvelopeBytes is the shared envelope-summary core. It parses a
+// DSSE envelope's raw JSON bytes (the on-disk bundle format, identical to
+// what archivista.Client.Download returns when re-marshalled) into a
+// bundleSummary: signing keyids, cert signers, recovered TSA roots, inner
+// predicate types, product/material digests, and the resolved step name.
+//
+// nameHint is used only as the filename fallback for the step name when the
+// envelope's predicate carries no `name` (collection envelopes from
+// `cilock run -s <name>` always do, so the hint rarely wins). For the file
+// source it is the bundle path; for the Archivista source it is a synthetic
+// label (the gitoid) that effectively never overrides the recorded name.
+// sidecars are attached as-is (empty for the Archivista source).
+func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix string, sidecars []sidecarSummary) (bundleSummary, error) {
 	var env struct {
 		Payload     string            `json:"payload"`
 		PayloadType string            `json:"payloadType"`
@@ -386,11 +415,10 @@ func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummar
 	keyids, certs, tsas := collectSigners(env.Signatures)
 
 	predicateTypes := extractPredicateTypes(stmt.PredicateType, innerTypes)
-	sidecars, _ := discoverSidecars(path)
 
-	stepName := stepPrefix + resolveStepName(stderr, path, stmt.Predicate.Name)
+	stepName := stepPrefix + resolveStepName(stderr, nameHint, stmt.Predicate.Name)
 	return bundleSummary{
-		path:               path,
+		path:               nameHint,
 		stepName:           stepName,
 		signingKeyIDs:      keyids,
 		predicateTypes:     predicateTypes,
