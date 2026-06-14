@@ -17,7 +17,10 @@ package policy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -531,19 +534,30 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 			stepResult := step.validateAttestations(passedCollections, vo.aiServerURL, stepCtx)
 			stepResult.Rejected = append(stepResult.Rejected, functionaryCheckResults.Rejected...)
 
-			// We perform many searches against the same step, so we need to merge the relevant fields
-			if resultsByStep[stepName].Step == "" {
-				resultsByStep[stepName] = stepResult
+			// We perform many searches against the same step (once per depth
+			// iteration), so we merge results across depths. The SAME collection
+			// can be returned on multiple iterations once its subjects re-enter
+			// the search set, so we de-duplicate Passed collections by content
+			// key (#5746, finding F12): accumulating duplicates inflates trust
+			// signals and the step_results UI with phantom passing collections.
+			if result, ok := resultsByStep[stepName]; ok && result.Step != "" {
+				result.Passed = mergePassedCollections(result.Passed, stepResult.Passed)
+				result.Rejected = append(result.Rejected, stepResult.Rejected...)
+				resultsByStep[stepName] = result
 			} else {
-				if result, ok := resultsByStep[stepName]; ok {
-					result.Passed = append(result.Passed, stepResult.Passed...)
-					result.Rejected = append(result.Rejected, stepResult.Rejected...)
-					resultsByStep[stepName] = result
-				}
+				resultsByStep[stepName] = stepResult
 			}
 
-			for _, coll := range passedCollections {
-				for _, digestSet := range coll.Collection.BackRefs() {
+			// Expand the reachable-subject set from the BackRefs of collections
+			// that PASSED THE STEP GATE (stepResult.Passed), NOT merely the
+			// functionary survivors (passedCollections) (#5747, finding B). A
+			// collection that clears the functionary check but is REJECTED by the
+			// gate (missing required attestation, failing rego, etc.) is not
+			// trusted, so its signer-asserted BackRefs must not widen the search
+			// — otherwise a throwaway rejected collection can make an unrelated
+			// downstream collection reachable.
+			for _, pc := range stepResult.Passed {
+				for _, digestSet := range pc.Collection.Collection.BackRefs() {
 					for _, digest := range digestSet {
 						if _, seen := knownDigests[digest]; !seen {
 							knownDigests[digest] = struct{}{}
@@ -576,6 +590,46 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 	}
 
 	return resultsByStep, nil
+}
+
+// mergePassedCollections appends src onto dst while skipping any collection
+// already present in dst (#5746, finding F12). Across depth iterations the same
+// collection can be re-discovered once its subjects re-enter the search set;
+// without de-duplication it would be appended once per iteration, inflating the
+// passing-collection count in trust signals and the step_results UI. Identity
+// is by content key (passedCollectionKey), so genuinely distinct collections
+// are still preserved.
+func mergePassedCollections(dst, src []PassedCollection) []PassedCollection {
+	seen := make(map[string]struct{}, len(dst))
+	for _, pc := range dst {
+		seen[passedCollectionKey(pc)] = struct{}{}
+	}
+	for _, pc := range src {
+		key := passedCollectionKey(pc)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		dst = append(dst, pc)
+	}
+	return dst
+}
+
+// passedCollectionKey returns a stable content identity for a passed
+// collection, used to de-duplicate the same collection re-discovered across
+// depth iterations. It hashes the underlying CollectionEnvelope (DSSE envelope,
+// statement, collection, and reference), so two results referring to the same
+// signed collection collapse to one key while distinct collections do not.
+func passedCollectionKey(pc PassedCollection) string {
+	b, err := json.Marshal(pc.Collection.CollectionEnvelope)
+	if err != nil {
+		// Marshaling the envelope should not fail, but if it does we fall back
+		// to a per-instance key so we never silently collapse distinct
+		// collections (fail-closed against over-deduplication).
+		return fmt.Sprintf("unmarshalable:%p", &pc)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // verifyExternalAttestations runs the external-attestation verification

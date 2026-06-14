@@ -495,13 +495,17 @@ func TestAdversarial_CheckCertConstraint_EmptyStringInMultipleConstraints(t *tes
 }
 
 // ===========================================================================
-// FINDING 12 (HIGH): Policy.Verify merges step results across depth iterations
-// in a way that can accumulate stale passed collections.
+// FINDING 12 (HIGH) — FIXED (#5746): Policy.Verify must NOT accumulate duplicate
+// passed collections across depth iterations.
 //
-// The merge logic at lines 475-483 appends to Passed and Rejected across
-// depth iterations. If a collection passes in depth=0 but the same
-// collection is seen again in depth=1 (due to back-reference expansion),
-// it gets appended again, leading to duplicate entries in Passed.
+// Previously the cross-depth merge appended stepResult.Passed each iteration,
+// so a collection re-discovered via back-reference expansion (or returned by
+// the source on every iteration) was appended once per depth — inflating the
+// passing-collection count in trust signals and the step_results UI. The merge
+// now de-duplicates by content key (mergePassedCollections / passedCollectionKey
+// in policy.go), so the same collection seen across N depths yields exactly ONE
+// Passed entry. This test was inverted from documenting the bug (a non-asserting
+// t.Logf) to ASSERTING the fixed, fail-closed behavior.
 // ===========================================================================
 
 func TestAdversarial_Verify_DuplicatePassedAcrossDepthIterations(t *testing.T) {
@@ -546,14 +550,12 @@ func TestAdversarial_Verify_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, pass)
 
-	// The same collection may appear multiple times in Passed due to the
-	// merge logic across depth iterations.
-	passedCount := len(results[stepName].Passed)
-	if passedCount > 1 {
-		t.Logf("FINDING: Step '%s' has %d passed collections (expected 1). "+
-			"The merge logic accumulates duplicates across depth iterations.",
-			stepName, passedCount)
-	}
+	// Fixed behavior (#5746, F12): the same collection seen across all 3 depth
+	// iterations must be de-duplicated to a SINGLE Passed entry, not accumulated
+	// once per iteration. (Was a non-asserting t.Logf documenting the bug.)
+	assert.Len(t, results[stepName].Passed, 1,
+		"step %q must have exactly 1 passed collection; the cross-depth merge must "+
+			"de-duplicate the same collection, not accumulate it once per depth iteration", stepName)
 }
 
 // ===========================================================================
