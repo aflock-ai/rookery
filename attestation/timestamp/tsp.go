@@ -260,9 +260,53 @@ func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) 
 		return time.Time{}, err
 	}
 
-	if err := p7.VerifyWithChain(v.certChain); err != nil {
+	// Require the signer cert to carry id-kp-timeStamping (RFC 3161 §2.3: the TSA
+	// signing cert MUST have the timeStamping EKU). pkcs7.VerifyWithChain defaults
+	// KeyUsages to ExtKeyUsageAny, which would let a non-timestamping cert from the
+	// same CA (e.g. a code-signing or TLS leaf) vouch for signing time.
+	// Finding F (#5747).
+	//
+	// We do this in two layers:
+	//  1. Pin KeyUsages to timeStamping in the chain build via VerifyWithOpts.
+	//     This rejects a signer whose EKU extension is present but excludes
+	//     timeStamping (e.g. codeSigning only).
+	//  2. Explicitly require the timeStamping EKU on the signer leaf. Go's x509
+	//     treats a leaf with NO ExtKeyUsage extension as valid for any usage, so
+	//     the chain check alone would still accept an EKU-less signer; this
+	//     explicit presence check closes that loophole.
+	signer := p7.GetOnlySigner()
+	if signer == nil {
+		return time.Time{}, fmt.Errorf("timestamp token must have exactly one signer")
+	}
+	if !hasTimeStampingEKU(signer) {
+		return time.Time{}, fmt.Errorf("timestamp token signer certificate lacks the id-kp-timeStamping extended key usage")
+	}
+
+	intermediates := x509.NewCertPool()
+	for _, cert := range p7.Certificates {
+		intermediates.AddCert(cert)
+	}
+	verifyOpts := x509.VerifyOptions{
+		Roots:         v.certChain,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
+	}
+	if err := p7.VerifyWithOpts(verifyOpts); err != nil {
 		return time.Time{}, err
 	}
 
 	return ts.Time, nil
+}
+
+// hasTimeStampingEKU reports whether the certificate explicitly carries the
+// id-kp-timeStamping extended key usage. RFC 3161 §2.3 requires the TSA signing
+// certificate to assert this EKU; absence (including a cert with no EKU
+// extension at all) must fail closed.
+func hasTimeStampingEKU(cert *x509.Certificate) bool {
+	for _, eku := range cert.ExtKeyUsage {
+		if eku == x509.ExtKeyUsageTimeStamping {
+			return true
+		}
+	}
+	return false
 }
