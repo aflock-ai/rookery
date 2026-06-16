@@ -152,7 +152,7 @@ func VerifyPolicySignature(ctx context.Context, envelope dsse.Envelope, vo *Veri
 				Type: "root",
 				CertConstraint: policy.CertConstraint{
 					Roots:         rootIDs,
-					CommonName:    vo.policyCommonName,
+					CommonName:    effectivePolicySignerCommonName(vo),
 					URIs:          vo.policyURIs,
 					Emails:        vo.policyEmails,
 					Organizations: vo.policyOrganizations,
@@ -190,6 +190,66 @@ func VerifyPolicySignature(ctx context.Context, envelope dsse.Envelope, vo *Veri
 	}
 
 	return nil
+}
+
+// effectivePolicySignerCommonName resolves the CommonName constraint applied
+// to a keyless POLICY-SIGNER cert. A keyless Fulcio cert legitimately has an
+// EMPTY Subject CommonName — its identity lives in the email + OIDC-issuer SANs
+// — so the release-fanout verify pins the signer with --policy-emails /
+// --policy-uris and leaves --policy-commonname at its empty default.
+//
+// After #5746 an empty CommonName CONSTRAINT fails closed (a forgotten/blank CN
+// must not silently accept any value). That hardening is correct for a
+// policy-EMBEDDED functionary CN, but for the policy SIGNER it rejected every
+// keyless author-signed policy. We restore the v3.0.9 behavior for the signer
+// path ONLY, and ONLY when identity is GENUINELY pinned: if CommonName is empty
+// AND the email or URI constraint list actually pins identity, the empty CN
+// means "CN unconstrained" (returns AllowAllConstraint).
+//
+// The anti-bypass from #5746 is preserved AND tightened: an empty CommonName is
+// relaxed ONLY when pinsIdentity is true for email or URI. A list that is empty,
+// nil, or that contains a wildcard ("*") or empty-string element does NOT pin —
+// because under the downstream OR-matching of multi-value SAN constraints
+// (attestation/policy.checkCertConstraint) a "*" matches ANY value at any
+// position (policy.hasAllowAll) and an empty element is dropped
+// (policy.dropEmpty). So a list like ["*", "trusted@example.com"] matches any
+// cert email and does NOT restrict identity; relaxing the CN there would yield a
+// fully-unconstrained signer (fail-open). Such cases are left empty and continue
+// to fail closed downstream. The functionary CN check
+// (attestation/policy.checkCertConstraintGlob) is NOT touched.
+func effectivePolicySignerCommonName(vo *VerifyPolicySignatureOptions) string {
+	if vo.policyCommonName != "" {
+		return vo.policyCommonName
+	}
+	if pinsIdentity(vo.policyEmails) || pinsIdentity(vo.policyURIs) {
+		return policy.AllowAllConstraint
+	}
+	return vo.policyCommonName
+}
+
+// pinsIdentity reports whether a multi-value SAN constraint list GENUINELY
+// restricts identity under the downstream OR-matching semantics
+// (attestation/policy.checkCertConstraint). A list pins identity iff it is
+// non-empty AND every element is a concrete value: non-empty and not the
+// AllowAll wildcard ("*").
+//
+// A list that is empty/nil does not constrain. A list containing "*" matches
+// ANY value (policy.hasAllowAll honors the wildcard at any position), so even
+// ["*", "trusted@example.com"] does NOT pin — it accepts any cert. An empty
+// element is dropped by policy.dropEmpty and carries no identity; a list with
+// one is treated conservatively as non-pinning here, which is strictly safer
+// than the downstream behavior. Only when EVERY element is concrete can the
+// empty-CN relaxation in effectivePolicySignerCommonName fire.
+func pinsIdentity(in []string) bool {
+	if len(in) == 0 {
+		return false
+	}
+	for _, s := range in {
+		if s == "" || s == policy.AllowAllConstraint {
+			return false
+		}
+	}
+	return true
 }
 
 // policyVerifierIdentityHint extracts the SAN identity (URIs/emails, or CN
