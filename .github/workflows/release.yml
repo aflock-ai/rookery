@@ -50,7 +50,11 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
-          # Windows excluded — omnitrail attestor has linux/darwin-only build constraints
+          - goos: windows
+            goarch: amd64
+          # windows/amd64 ships cilock.exe (zip-archived). The omnitrail attestor
+          # is linux/darwin-only — omnitrail_windows.go stubs it out so the package
+          # still compiles, the attestor is simply not registered on windows.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -324,12 +328,19 @@ jobs:
         run: |
           set -euo pipefail
           for archive in cilock-*-linux-amd64.tar.gz cilock-*-linux-arm64.tar.gz \
-                         cilock-*-darwin-amd64.tar.gz cilock-*-darwin-arm64.tar.gz; do
+                         cilock-*-darwin-amd64.tar.gz cilock-*-darwin-arm64.tar.gz \
+                         cilock-*-windows-amd64.zip; do
             if [ ! -f "$archive" ]; then
               echo "::error::expected release archive ${archive} is missing — refusing to publish an incomplete release"
               exit 1
             fi
-            stem="${archive%.tar.gz}"   # cilock-<version>-<os>-<arch>
+            # Strip the extension (.tar.gz or .zip) to get cilock-<version>-<os>-<arch>.
+            # Windows ships a .zip holding cilock.exe; every other OS a .tar.gz
+            # holding cilock.
+            case "$archive" in
+              *.zip) stem="${archive%.zip}"; bin="cilock.exe" ;;
+              *)     stem="${archive%.tar.gz}"; bin="cilock" ;;
+            esac
             # <os>-<arch> are the last two hyphen segments. The version itself can
             # contain a hyphen (e.g. 2.0.0-rc2), so a fixed-prefix strip
             # (${archive#cilock-*-}) mis-parses it — derive os/arch from the suffix.
@@ -340,16 +351,19 @@ jobs:
               echo "::error::no attestation for ${archive} — refusing to publish an unverifiable binary (keyless attestation must have failed; re-run the release)"
               exit 1
             fi
-            # Verify the BINARY, not the .tar.gz: the dogfood attestation commits
+            # Verify the BINARY, not the archive: the dogfood attestation commits
             # the binary as a product (single-leaf Merkle tree), so the archive's
             # plain digest never matches a product subject. Extract the binary and
             # verify it directly — single-leaf reconstruct binds it to the products
             # tree with no separate inclusion-proof sidecar (validated locally
             # against cilock/test/inclusion_verify_e2e.sh).
             bindir="$(mktemp -d)"
-            tar -xzf "$archive" -C "$bindir" cilock
+            case "$archive" in
+              *.zip) unzip -q "$archive" "$bin" -d "$bindir" ;;
+              *)     tar -xzf "$archive" -C "$bindir" "$bin" ;;
+            esac
             echo "verifying ${archive} (binary) against the signed release policy..."
-            /tmp/cilock verify "${bindir}/cilock" \
+            /tmp/cilock verify "${bindir}/${bin}" \
               --policy "${SIGNED_POLICY}" \
               --attestations "$attest" \
               --vsa-outfile "${stem}.vsa.json" \
