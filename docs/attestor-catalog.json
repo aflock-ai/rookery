@@ -1,0 +1,3995 @@
+{
+  "generated_from": "registry+detector.yaml",
+  "attestor_count": 132,
+  "attestors": [
+    {
+      "name": "aws",
+      "predicate_type": "https://aflock.ai/attestations/aws/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "ci-context"
+      ],
+      "tier": "foundation",
+      "upstream": {
+        "name": "AWS Instance Metadata Service",
+        "source": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html",
+        "license": "proprietary",
+        "vendor": "Amazon Web Services"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "accountid:",
+          "description": "the AWS account ID owning the instance"
+        },
+        {
+          "prefix": "imageid:",
+          "description": "the AMI (image) ID the instance was launched from"
+        },
+        {
+          "prefix": "instanceid:",
+          "description": "the EC2 instance ID from the instance identity document"
+        },
+        {
+          "prefix": "privateip:",
+          "description": "the private IPv4 address of the instance"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "imds_reachable:true"
+      },
+      "detection": {
+        "pre": {
+          "imds_reachable": true
+        }
+      }
+    },
+    {
+      "name": "aws-codebuild",
+      "predicate_type": "https://aflock.ai/attestations/aws-codebuild/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "ci-context"
+      ],
+      "tier": "foundation",
+      "upstream": {
+        "name": "AWS CodeBuild",
+        "source": "https://aws.amazon.com/codebuild/",
+        "license": "proprietary",
+        "vendor": "Amazon Web Services"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "codebuild-build-id:",
+          "description": "the CodeBuild build ID (CODEBUILD_BUILD_ID)"
+        },
+        {
+          "prefix": "codebuild-project:",
+          "description": "the CodeBuild project name (CODEBUILD_PROJECT_NAME)"
+        },
+        {
+          "prefix": "codebuild-source-version:",
+          "description": "the resolved source commit (CODEBUILD_RESOLVED_SOURCE_VERSION)"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "env_set:CODEBUILD_PROJECT_NAME"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "CODEBUILD_PROJECT_NAME"
+        }
+      }
+    },
+    {
+      "name": "configuration",
+      "predicate_type": "https://aflock.ai/attestations/configuration/v0.2",
+      "run_type": "prematerial",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "environment",
+      "predicate_type": "https://aflock.ai/attestations/environment/v0.1",
+      "run_type": "prematerial",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "gcp-iit",
+      "predicate_type": "https://aflock.ai/attestations/gcp-iit/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "ci-context"
+      ],
+      "tier": "foundation",
+      "upstream": {
+        "name": "GCP Metadata Server / Instance Identity Token",
+        "source": "https://cloud.google.com/compute/docs/instances/verifying-instance-identity",
+        "license": "proprietary",
+        "vendor": "Google Cloud"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "clusteruid:",
+          "description": "GKE cluster UID (populated for workload-identity / GKE nodes)"
+        },
+        {
+          "prefix": "instanceid:",
+          "description": "GCP instance ID (numeric)"
+        },
+        {
+          "prefix": "instancename:",
+          "description": "GCP instance hostname / name"
+        },
+        {
+          "prefix": "projectid:",
+          "description": "GCP project ID"
+        },
+        {
+          "prefix": "projectnumber:",
+          "description": "GCP numeric project number"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "gcp_metadata_reachable:true"
+      },
+      "detection": {
+        "pre": {
+          "gcp_metadata_reachable": true
+        }
+      }
+    },
+    {
+      "name": "git",
+      "predicate_type": "https://aflock.ai/attestations/git/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "source-checkout"
+      ],
+      "tier": "foundation",
+      "upstream": {
+        "name": "Git",
+        "source": "https://git-scm.com/",
+        "license": "GPL-2.0-only",
+        "vendor": "Software Freedom Conservancy"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "authoremail:",
+          "description": "the commit author email"
+        },
+        {
+          "prefix": "commithash:",
+          "description": "the HEAD commit SHA-1"
+        },
+        {
+          "prefix": "committeremail:",
+          "description": "the commit committer email"
+        },
+        {
+          "prefix": "parenthash:",
+          "description": "each parent commit SHA-1 of HEAD"
+        },
+        {
+          "prefix": "refnameshort:",
+          "description": "the short name of the checked-out ref (branch)"
+        },
+        {
+          "prefix": "remote:",
+          "description": "each configured remote URL (credentials stripped)"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "file_exists:.git/HEAD"
+      },
+      "detection": {
+        "pre": {
+          "file_exists": ".git/HEAD"
+        }
+      }
+    },
+    {
+      "name": "github",
+      "predicate_type": "https://aflock.ai/attestations/github/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "ci-context"
+      ],
+      "tier": "foundation",
+      "upstream": {
+        "name": "GitHub Actions",
+        "source": "https://docs.github.com/en/actions",
+        "license": "proprietary",
+        "vendor": "GitHub, Inc."
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "pipelineurl:",
+          "description": "the GitHub Actions workflow run URL (server/repo/actions/runs/<run-id>)"
+        },
+        {
+          "prefix": "projecturl:",
+          "description": "the GitHub repository URL (server/owner/repo)"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "env_equals:GITHUB_ACTIONS=true"
+      },
+      "detection": {
+        "pre": {
+          "env_equals": "GITHUB_ACTIONS=true"
+        }
+      }
+    },
+    {
+      "name": "github-review",
+      "predicate_type": "https://aflock.ai/attestations/github-review/v0.1",
+      "run_type": "prematerial",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "gitlab",
+      "predicate_type": "https://aflock.ai/attestations/gitlab/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "ci-context"
+      ],
+      "tier": "foundation",
+      "upstream": {
+        "name": "GitLab CI/CD",
+        "source": "https://docs.gitlab.com/ee/ci/",
+        "license": "MIT",
+        "vendor": "GitLab Inc."
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "joburl:",
+          "description": "the GitLab CI job URL (CI_JOB_URL)"
+        },
+        {
+          "prefix": "pipelineurl:",
+          "description": "the GitLab CI pipeline URL (CI_PIPELINE_URL)"
+        },
+        {
+          "prefix": "projecturl:",
+          "description": "the GitLab CI project URL (CI_PROJECT_URL)"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "env_equals:GITLAB_CI=true"
+      },
+      "detection": {
+        "pre": {
+          "env_equals": "GITLAB_CI=true"
+        }
+      }
+    },
+    {
+      "name": "jenkins",
+      "predicate_type": "https://aflock.ai/attestations/jenkins/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "ci-context"
+      ],
+      "tier": "foundation",
+      "upstream": {
+        "name": "Jenkins",
+        "source": "https://github.com/jenkinsci/jenkins",
+        "license": "MIT",
+        "vendor": "Jenkins Project / CD Foundation"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "jenkinsurl:",
+          "description": "the JENKINS_URL controller base URL (sha256 of the URL string)"
+        },
+        {
+          "prefix": "pipelineurl:",
+          "description": "the BUILD_URL of the Jenkins pipeline run (sha256 of the URL string)"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "env_set:JENKINS_URL"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "JENKINS_URL"
+        }
+      }
+    },
+    {
+      "name": "jwt",
+      "predicate_type": "https://aflock.ai/attestations/jwt/v0.1",
+      "run_type": "prematerial",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "lockfiles",
+      "predicate_type": "https://aflock.ai/attestations/lockfiles/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "dependency-resolve"
+      ],
+      "tier": "recommended",
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "file:",
+          "description": "each discovered lockfile, keyed file:<path> (e.g. Gemfile.lock, package-lock.json, yarn.lock, Cargo.lock, poetry.lock, Pipfile.lock, requirements.txt, composer.lock, go.sum, Podfile.lock, gradle.lockfile, pnpm-lock.yaml); path is relative to the search root and digested with SHA256"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(file_exists:Cargo.lock, file_exists:Gemfile.lock, file_exists:Pipfile.lock, file_exists:composer.lock, file_exists:go.sum, file_exists:package-lock.json, file_exists:pnpm-lock.yaml, file_exists:poetry.lock, file_exists:requirements.txt, file_exists:yarn.lock)"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "file_exists": "Cargo.lock"
+            },
+            {
+              "file_exists": "Gemfile.lock"
+            },
+            {
+              "file_exists": "Pipfile.lock"
+            },
+            {
+              "file_exists": "composer.lock"
+            },
+            {
+              "file_exists": "go.sum"
+            },
+            {
+              "file_exists": "package-lock.json"
+            },
+            {
+              "file_exists": "pnpm-lock.yaml"
+            },
+            {
+              "file_exists": "poetry.lock"
+            },
+            {
+              "file_exists": "requirements.txt"
+            },
+            {
+              "file_exists": "yarn.lock"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "maven",
+      "predicate_type": "https://aflock.ai/attestations/maven/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "build",
+        "dependency-resolve"
+      ],
+      "primary_category": "build",
+      "tier": "recommended",
+      "upstream": {
+        "name": "Apache Maven",
+        "source": "https://maven.apache.org/",
+        "license": "Apache-2.0",
+        "vendor": "Apache Software Foundation"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "dependency:",
+          "description": "each declared Maven dependency, formatted dependency:<groupId>/<artifactId>@<version>"
+        },
+        {
+          "prefix": "project:",
+          "description": "the Maven project itself, formatted project:<groupId>/<artifactId>@<version> from pom.xml coordinates"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(file_exists:mvnw, file_exists:pom.xml)"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "file_exists": "mvnw"
+            },
+            {
+              "file_exists": "pom.xml"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "omnitrail",
+      "predicate_type": "https://aflock.ai/attestations/omnitrail/v0.1",
+      "run_type": "prematerial",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "system-packages",
+      "predicate_type": "https://aflock.ai/attestations/system-packages/v0.1",
+      "run_type": "prematerial",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "material",
+      "predicate_type": "https://aflock.ai/attestations/material/v0.3",
+      "run_type": "material",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "material-v0.1",
+      "predicate_type": "https://aflock.ai/attestations/material/v0.1",
+      "run_type": "material",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "command-run",
+      "predicate_type": "https://aflock.ai/attestations/command-run/v0.2",
+      "run_type": "execute",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "command-run-v0.1",
+      "predicate_type": "https://aflock.ai/attestations/command-run/v0.1",
+      "run_type": "execute",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "github-action",
+      "predicate_type": "https://aflock.ai/attestations/github-action/v0.1",
+      "run_type": "execute",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "product",
+      "predicate_type": "https://aflock.ai/attestations/product/v0.3",
+      "run_type": "product",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "product-v0.1",
+      "predicate_type": "https://aflock.ai/attestations/product/v0.1",
+      "run_type": "product",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "product-v0.2",
+      "predicate_type": "https://aflock.ai/attestations/product/v0.2",
+      "run_type": "product",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "asff",
+      "predicate_type": "https://aflock.ai/attestations/asff/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "compliance-scan"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "AWS Security Finding Format (ASFF)",
+        "source": "https://docs.aws.amazon.com/securityhub/latest/userguide/securityhub-findings-format.html",
+        "license": "proprietary",
+        "vendor": "Amazon Web Services"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "aws:account:",
+          "description": "the scanned AWS account id (from the first finding carrying one)"
+        },
+        {
+          "prefix": "aws:arn:",
+          "description": "each unique resource ARN referenced by a FAILED finding"
+        },
+        {
+          "prefix": "aws:finding:",
+          "description": "ARN of each CRITICAL or HIGH severity FAILED finding"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "argv_prefix:[aws securityhub get-findings]",
+        "post": "any_of(exec_observed(argv_prefix:[aws securityhub get-findings]), product_glob:[*.asff.json, **/*.asff.json, asff*.json, **/asff*.json])"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "aws",
+            "securityhub",
+            "get-findings"
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "aws",
+                  "securityhub",
+                  "get-findings"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "*.asff.json",
+                "**/*.asff.json",
+                "asff*.json",
+                "**/asff*.json"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "aws-config",
+      "predicate_type": "https://aflock.ai/attestations/aws-config/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "compliance-scan"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "AWS Config",
+        "source": "https://aws.amazon.com/config/",
+        "license": "proprietary",
+        "vendor": "Amazon Web Services"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "aws-config:resource:",
+          "description": "each evaluated resource as <resourceType>/<resourceId>"
+        },
+        {
+          "prefix": "aws-config:rule:",
+          "description": "each unique AWS Config rule name from the evaluation results"
+        },
+        {
+          "prefix": "aws:account:",
+          "description": "AWS account id parsed from any ResourceId that is an ARN (field 5)"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "argv_prefix:[aws configservice]",
+        "post": "any_of(exec_observed(argv_prefix:[aws configservice]), product_glob:[aws-config*.json, **/aws-config*.json])"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "aws",
+            "configservice"
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "aws",
+                  "configservice"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "aws-config*.json",
+                "**/aws-config*.json"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "docker",
+      "predicate_type": "https://aflock.ai/attestations/docker/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "image-build"
+      ],
+      "tier": "recommended",
+      "upstream": {
+        "name": "Docker",
+        "source": "https://github.com/moby/moby",
+        "license": "Apache-2.0",
+        "vendor": "Docker, Inc. / Moby"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "imagedigest:",
+          "description": "sha256 image digest (sha256: prefix trimmed) parsed from containerimage.digest"
+        },
+        {
+          "prefix": "imagereference:",
+          "description": "image.name reference string from the buildx metadata"
+        },
+        {
+          "prefix": "materialdigest:",
+          "description": "sha256 digest of a SLSA provenance build material"
+        },
+        {
+          "prefix": "materialuri:",
+          "description": "URI of a SLSA provenance build material"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[buildah build], argv_prefix:[docker build], argv_prefix:[docker buildx build])",
+        "post": "any_of(exec_observed(argv_prefix:[buildah build]), exec_observed(argv_prefix:[docker build]), exec_observed(argv_prefix:[docker buildx build]))"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "buildah",
+                "build"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "docker",
+                "build"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "docker",
+                "buildx",
+                "build"
+              ]
+            }
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "buildah",
+                  "build"
+                ]
+              }
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "docker",
+                  "build"
+                ]
+              }
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "docker",
+                  "buildx",
+                  "build"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "docker-bench",
+      "predicate_type": "https://aflock.ai/attestations/docker-bench/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "compliance-scan"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "Docker Bench for Security",
+        "source": "https://github.com/docker/docker-bench-security",
+        "license": "Apache-2.0",
+        "vendor": "Docker, Inc."
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "benchmark:",
+          "description": "the CIS Docker Benchmark identity (e.g. benchmark:cis-docker@1.3.4), derived from the tool's reported version"
+        },
+        {
+          "prefix": "container:",
+          "description": "each running container name docker-bench audited in its Container Runtime section (tests id \"5\")"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[docker-bench-security.sh], argv_prefix:[docker-bench-security])",
+        "post": "any_of(exec_observed(argv_prefix:[docker-bench-security.sh]), exec_observed(argv_prefix:[docker-bench-security]), product_glob:[docker-bench*.json, **/docker-bench*.json, docker-bench*.log, **/docker-bench*.log])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "docker-bench-security.sh"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "docker-bench-security"
+              ]
+            }
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "docker-bench-security.sh"
+                ]
+              }
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "docker-bench-security"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "docker-bench*.json",
+                "**/docker-bench*.json",
+                "docker-bench*.log",
+                "**/docker-bench*.log"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "falco",
+      "predicate_type": "https://aflock.ai/attestations/falco/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "runtime-event"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "Falco",
+        "source": "https://github.com/falcosecurity/falco",
+        "license": "Apache-2.0",
+        "vendor": "The Falco Authors (CNCF)"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "cluster:",
+          "description": "the Kubernetes cluster name from $FALCO_CLUSTER_NAME; emitted only when set"
+        },
+        {
+          "prefix": "falco-events:",
+          "description": "the host whose Falco runtime events were captured (os.Hostname of the cilock node); emitted only when hostname is non-empty"
+        },
+        {
+          "prefix": "report_file:",
+          "description": "the captured Falco event file, keyed by its real product-set digest so the BFS can chain back to product/v0.3; emitted only when the report digest set is non-empty"
+        },
+        {
+          "prefix": "rule:",
+          "description": "one subject per distinct Falco rule that fired in the captured window"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[falco], argv_prefix:[falcoctl])",
+        "post": "any_of(exec_observed(argv_prefix:[falco]), exec_observed(argv_prefix:[falcoctl]), product_glob:[falco*.json, **/falco*.json, falco-events.log, **/falco-events.log])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "falco"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "falcoctl"
+              ]
+            }
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "falco"
+                ]
+              }
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "falcoctl"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "falco*.json",
+                "**/falco*.json",
+                "falco-events.log",
+                "**/falco-events.log"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "githubwebhook",
+      "predicate_type": "https://aflock.ai/attestations/githubwebhook/v0.1",
+      "run_type": "postproduct",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "go-build",
+      "predicate_type": "https://aflock.ai/attestations/go-build/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "build"
+      ],
+      "upstream": {
+        "name": "go build",
+        "source": "https://pkg.go.dev/cmd/go",
+        "license": "BSD-3-Clause",
+        "vendor": "Google / Go Authors"
+      },
+      "registered": true,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[go build], argv_prefix:[go install])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "go",
+                "build"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "go",
+                "install"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "govulncheck",
+      "predicate_type": "https://aflock.ai/attestations/govulncheck/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "tier": "recommended",
+      "upstream": {
+        "name": "govulncheck",
+        "source": "https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck",
+        "license": "BSD-3-Clause",
+        "vendor": "The Go Authors"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "go:module:",
+          "description": "each scan-root Go module path (summary.scanRoots, from the SBOM message roots)"
+        },
+        {
+          "prefix": "go:vuln:",
+          "description": "each unique OSV id whose finding is call-graph reachable (symbol-level trace)"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "argv_prefix:[govulncheck]",
+        "post": "any_of(all_of(file_exists:go.mod, product_glob:[govulncheck*.json, **/govulncheck*.json]), exec_observed(argv_prefix:[govulncheck]))"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "govulncheck"
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "all_of": [
+                {
+                  "file_exists": "go.mod"
+                },
+                {
+                  "product_glob": [
+                    "govulncheck*.json",
+                    "**/govulncheck*.json"
+                  ]
+                }
+              ]
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "govulncheck"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "inclusion-proof",
+      "predicate_type": "https://aflock.ai/attestations/inclusion-proof/v0.1",
+      "run_type": "postproduct",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "inspec",
+      "predicate_type": "https://aflock.ai/attestations/inspec/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "compliance-scan"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "Chef InSpec",
+        "source": "https://github.com/inspec/inspec",
+        "license": "Apache-2.0",
+        "vendor": "Progress Chef"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "inspec:control:",
+          "description": "one subject per control that had at least one failing result, keyed by control id"
+        },
+        {
+          "prefix": "platform:",
+          "description": "scanned platform as <os-name> or <os-name>-<release> (single subject)"
+        },
+        {
+          "prefix": "profile:",
+          "description": "one subject per InSpec profile, keyed by profile name"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "argv_prefix:[inspec]",
+        "post": "any_of(exec_observed(argv_prefix:[inspec]), product_glob:[inspec*.json, **/inspec*.json])"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "inspec"
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "inspec"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "inspec*.json",
+                "**/inspec*.json"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "k8smanifest",
+      "predicate_type": "https://aflock.ai/attestations/k8smanifest/v0.2",
+      "run_type": "postproduct",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "kube-bench",
+      "predicate_type": "https://aflock.ai/attestations/kube-bench/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "compliance-scan"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "kube-bench",
+        "source": "https://github.com/aquasecurity/kube-bench",
+        "license": "Apache-2.0",
+        "vendor": "Aqua Security"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "benchmark:",
+          "description": "CIS Kubernetes Benchmark identity (e.g. benchmark:cis-kubernetes or benchmark:cis-kubernetes-<version>); always emitted"
+        },
+        {
+          "prefix": "cluster:",
+          "description": "target cluster name from KUBE_BENCH_CLUSTER_NAME; emitted only when set"
+        },
+        {
+          "prefix": "node:",
+          "description": "hostname of the node that was scanned (os.Hostname); emitted only when non-empty"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "argv_prefix:[kube-bench]",
+        "post": "any_of(exec_observed(argv_prefix:[kube-bench]), product_glob:[kube-bench*.json, **/kube-bench*.json, kube-bench*.yaml, **/kube-bench*.yaml])"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "kube-bench"
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "kube-bench"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "kube-bench*.json",
+                "**/kube-bench*.json",
+                "kube-bench*.yaml",
+                "**/kube-bench*.yaml"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "link",
+      "predicate_type": "https://in-toto.io/attestation/link/v0.3",
+      "run_type": "postproduct",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "linkerd-check",
+      "predicate_type": "https://aflock.ai/attestations/linkerd-check/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "compliance-scan"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "Linkerd",
+        "source": "https://github.com/linkerd/linkerd2",
+        "license": "Apache-2.0",
+        "vendor": "Linkerd Authors (CNCF)"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "check_file:",
+          "description": "path of the linkerd check -o json report file in the product set (digested by the product set)"
+        },
+        {
+          "prefix": "cluster:",
+          "description": "cluster name from $LINKERD_CLUSTER_NAME (only emitted when the env var is set)"
+        },
+        {
+          "prefix": "edges_file:",
+          "description": "path of the optional linkerd viz edges -o json report file (only emitted when an edges file is present)"
+        },
+        {
+          "prefix": "linkerd-overall:",
+          "description": "top-level pass/fail signal, suffix is 'success' or 'fail' based on CheckSummary.OverallSuccess"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "argv_prefix:[linkerd check]",
+        "post": "any_of(exec_observed(argv_prefix:[linkerd check]), product_glob:[linkerd-check*.json, **/linkerd-check*.json, linkerd-check*.yaml, **/linkerd-check*.yaml])"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "linkerd",
+            "check"
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "linkerd",
+                  "check"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "linkerd-check*.json",
+                "**/linkerd-check*.json",
+                "linkerd-check*.yaml",
+                "**/linkerd-check*.yaml"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "oci",
+      "predicate_type": "https://aflock.ai/attestations/oci/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "image-build"
+      ],
+      "tier": "recommended",
+      "upstream": {
+        "name": "OCI Image Specification",
+        "source": "https://github.com/opencontainers/image-spec",
+        "license": "Apache-2.0",
+        "vendor": "Open Container Initiative"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "imageid:",
+          "description": "sha256 of the image config blob (the OCI image ID)"
+        },
+        {
+          "prefix": "imagetag:",
+          "description": "one subject per RepoTag from manifest.json (key tail is the literal image tag)"
+        },
+        {
+          "prefix": "layerdiffid",
+          "description": "per-layer uncompressed diffID; key is layerdiffid<NN>: where NN is the zero-padded layer index"
+        },
+        {
+          "prefix": "manifestdigest:",
+          "description": "sha256 of the raw manifest.json bytes extracted from the tar"
+        },
+        {
+          "prefix": "tardigest:",
+          "description": "digest of the docker-save tar product file"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[crane], argv_prefix:[docker save], argv_prefix:[skopeo copy])",
+        "post": "any_of(exec_observed(argv_prefix:[crane]), exec_observed(argv_prefix:[docker save]), exec_observed(argv_prefix:[skopeo copy]), product_glob:[*.oci.tar, **/*.oci.tar, oci-image.tar, **/oci-image.tar], product_glob:[index.json, **/index.json, oci-layout, **/oci-layout])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "crane"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "docker",
+                "save"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "skopeo",
+                "copy"
+              ]
+            }
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "crane"
+                ]
+              }
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "docker",
+                  "save"
+                ]
+              }
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "skopeo",
+                  "copy"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "*.oci.tar",
+                "**/*.oci.tar",
+                "oci-image.tar",
+                "**/oci-image.tar"
+              ]
+            },
+            {
+              "product_glob": [
+                "index.json",
+                "**/index.json",
+                "oci-layout",
+                "**/oci-layout"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "oscap",
+      "predicate_type": "https://aflock.ai/attestations/oscap/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "compliance-scan"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "OpenSCAP",
+        "source": "https://github.com/OpenSCAP/openscap",
+        "license": "LGPL-2.1-or-later",
+        "vendor": "Red Hat / OpenSCAP project"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "benchmark:",
+          "description": "the XCCDF benchmark document id (Benchmark/@id)"
+        },
+        {
+          "prefix": "host:",
+          "description": "the target system that was scanned (TestResult/target)"
+        },
+        {
+          "prefix": "profile:",
+          "description": "the XCCDF profile id that was evaluated (TestResult/profile/@idref)"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "argv_prefix:[oscap]",
+        "post": "any_of(exec_observed(argv_prefix:[oscap]), product_glob:[oscap*.xml, **/oscap*.xml, oscap*.html, **/oscap*.html])"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "oscap"
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "oscap"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "oscap*.xml",
+                "**/oscap*.xml",
+                "oscap*.html",
+                "**/oscap*.html"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "pip-install",
+      "predicate_type": "https://aflock.ai/attestations/pip-install/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "dependency-resolve"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "pip",
+        "source": "https://github.com/pypa/pip",
+        "license": "MIT",
+        "vendor": "Python Packaging Authority"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "pip://",
+          "description": "One subject per installed package, keyed pip://<name>@<version>; the digest is sha256 of the literal \"<name>==<version>\" string, not the wheel artifact."
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[pip install], argv_prefix:[pip3 install])",
+        "post": "any_of(exec_observed(argv_prefix:[pip install]), exec_observed(argv_prefix:[pip3 install]))"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "pip",
+                "install"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "pip3",
+                "install"
+              ]
+            }
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "pip",
+                  "install"
+                ]
+              }
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "pip3",
+                  "install"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "prowler",
+      "predicate_type": "https://aflock.ai/attestations/prowler/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "compliance-scan"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "Prowler",
+        "source": "https://github.com/prowler-cloud/prowler",
+        "license": "Apache-2.0",
+        "vendor": "Prowler Pro / community"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "aws:account:",
+          "description": "the AWS account id scanned (Summary.AccountId)"
+        },
+        {
+          "prefix": "aws:arn:",
+          "description": "each unique resource ARN from a failed check (FailedCheck.ResourceArn)"
+        },
+        {
+          "prefix": "aws:service:",
+          "description": "each unique AWS service name from a failed check (FailedCheck.ServiceName)"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "argv_prefix:[prowler]",
+        "post": "any_of(exec_observed(argv_prefix:[prowler]), product_glob:[prowler-output-*.json, **/prowler-output-*.json, prowler*.ocsf.json, **/prowler*.ocsf.json])"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "prowler"
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "prowler"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "prowler-output-*.json",
+                "**/prowler-output-*.json",
+                "prowler*.ocsf.json",
+                "**/prowler*.ocsf.json"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "sarif",
+      "predicate_type": "https://aflock.ai/attestations/sarif/v0.1",
+      "run_type": "postproduct",
+      "tier": "recommended",
+      "upstream": {
+        "name": "SARIF (Static Analysis Results Interchange Format)",
+        "source": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html",
+        "license": "OASIS",
+        "vendor": "OASIS / OASIS SARIF TC",
+        "format_only": true
+      },
+      "registered": true,
+      "has_contract": true,
+      "applies_when": {
+        "post": "product_glob:[*.sarif, **/*.sarif, *.sarif.json, **/*.sarif.json]"
+      },
+      "detection": {
+        "post": {
+          "product_glob": [
+            "*.sarif",
+            "**/*.sarif",
+            "*.sarif.json",
+            "**/*.sarif.json"
+          ]
+        }
+      }
+    },
+    {
+      "name": "sbom",
+      "predicate_type": "https://aflock.ai/attestations/sbom/v0.1",
+      "predicate_types": [
+        "https://aflock.ai/attestations/sbom/v0.1",
+        "https://cyclonedx.org/bom",
+        "https://spdx.dev/Document"
+      ],
+      "run_type": "postproduct",
+      "category": [
+        "sbom-generate"
+      ],
+      "tier": "recommended",
+      "upstream": {
+        "name": "SPDX + CycloneDX",
+        "source": "https://spdx.dev/  +  https://cyclonedx.org/",
+        "license": "CC-BY-3.0 / Apache-2.0",
+        "vendor": "Linux Foundation / OWASP",
+        "format_only": true
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "file:",
+          "description": "the SBOM file path (from the product set, or the --attestor-sbom-file path)",
+          "digest_algs": [
+            "sha256"
+          ]
+        },
+        {
+          "prefix": "name:",
+          "description": "the document/component name (SPDX documentName or CycloneDX metadata.component.name)",
+          "digest_algs": [
+            "sha256"
+          ]
+        },
+        {
+          "prefix": "version:",
+          "description": "the CycloneDX metadata.component.version, when present",
+          "digest_algs": [
+            "sha256"
+          ]
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[cdxgen], argv_prefix:[syft])",
+        "post": "any_of(exec_observed(argv_prefix:[cdxgen]), exec_observed(argv_prefix:[syft]), product_glob:[*.cyclonedx.json, **/*.cyclonedx.json, *.cdx.json, **/*.cdx.json], product_glob:[*.spdx.json, **/*.spdx.json, *.spdx, **/*.spdx], product_glob:[sbom.json, **/sbom.json, bom.json, **/bom.json])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "cdxgen"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "syft"
+              ]
+            }
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "cdxgen"
+                ]
+              }
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "syft"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "*.cyclonedx.json",
+                "**/*.cyclonedx.json",
+                "*.cdx.json",
+                "**/*.cdx.json"
+              ]
+            },
+            {
+              "product_glob": [
+                "*.spdx.json",
+                "**/*.spdx.json",
+                "*.spdx",
+                "**/*.spdx"
+              ]
+            },
+            {
+              "product_glob": [
+                "sbom.json",
+                "**/sbom.json",
+                "bom.json",
+                "**/bom.json"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "secretscan",
+      "predicate_type": "https://aflock.ai/attestations/secretscan/v0.1",
+      "run_type": "postproduct",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "sinkhole-flows",
+      "predicate_type": "https://aflock.ai/attestations/sinkhole-flows/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "dependency-verify"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "pip-witness sinkhole",
+        "source": "https://github.com/testifysec/pip-witness",
+        "license": "Apache-2.0",
+        "vendor": "TestifySec"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "pip://",
+          "description": "pip://NAME@VERSION, byte-identical to the pip-install attestor's subject (digest = sha256 of \"NAME==VERSION\"); emitted only when PIPW_PACKAGE_NAME and PIPW_PACKAGE_VERSION are both set"
+        },
+        {
+          "prefix": "pipw-sinkhole-flows-file://",
+          "description": "pipw-sinkhole-flows-file://SCAN_ID with digest = sha256 of the captured /flows/out.jsonl file; emitted only when the flows file was present and hashed"
+        },
+        {
+          "prefix": "pipw-sinkhole-scan://",
+          "description": "pipw-sinkhole-scan://SCAN_ID (digest = sha256 of the scan id); emitted only when PIPW_SCAN_ID is set"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "env_set:PIPW_PACKAGE_NAME"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "PIPW_PACKAGE_NAME"
+        }
+      }
+    },
+    {
+      "name": "slsa",
+      "predicate_type": "https://slsa.dev/provenance/v1.0",
+      "run_type": "postproduct",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "steampipe",
+      "predicate_type": "https://aflock.ai/attestations/steampipe/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "compliance-scan"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "Steampipe",
+        "source": "https://github.com/turbot/steampipe",
+        "license": "AGPL-3.0-only",
+        "vendor": "Turbot HQ Inc."
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "aws:account:",
+          "description": "AWS account_id column value (aws plugin)"
+        },
+        {
+          "prefix": "aws:arn:",
+          "description": "AWS resource arn column value (aws plugin)"
+        },
+        {
+          "prefix": "aws:region:",
+          "description": "AWS region column value (aws plugin)"
+        },
+        {
+          "prefix": "github:org:",
+          "description": "GitHub org login (github plugin)"
+        },
+        {
+          "prefix": "github:repo:",
+          "description": "GitHub name_with_owner repo slug (github plugin)"
+        },
+        {
+          "prefix": "k8s:namespace:",
+          "description": "Kubernetes namespace column value (kubernetes plugin)"
+        },
+        {
+          "prefix": "k8s:uid:",
+          "description": "Kubernetes resource uid column value (kubernetes plugin)"
+        },
+        {
+          "prefix": "okta:org:",
+          "description": "Okta organization column value (okta plugin)"
+        },
+        {
+          "prefix": "okta:user:",
+          "description": "Okta user id column value (okta plugin)"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "argv_prefix:[steampipe]",
+        "post": "any_of(exec_observed(argv_prefix:[steampipe]), product_glob:[steampipe*.json, **/steampipe*.json])"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "steampipe"
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "steampipe"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "steampipe*.json",
+                "**/steampipe*.json"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "structured-data",
+      "predicate_type": "https://aflock.ai/attestations/structured-data/v0.1",
+      "run_type": "postproduct",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "test-results",
+      "predicate_type": "https://aflock.ai/attestations/test-results/v0.1",
+      "run_type": "postproduct",
+      "tier": "extended",
+      "upstream": {
+        "name": "JUnit XML + CTRF JSON",
+        "source": "https://github.com/testmoapp/junitxml  +  https://ctrf.io",
+        "license": "OASIS / community",
+        "vendor": "JUnit / CTRF community",
+        "format_only": true
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "test-failure:",
+          "description": "SHA-256 of each failed test's fully-qualified name (classname.name, suite::name, or bare name)."
+        },
+        {
+          "prefix": "test-suite:",
+          "description": "SHA-256 of each distinct top-level test-suite name observed in the report."
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "post": "any_of(product_glob:[TEST-*.xml, **/TEST-*.xml], product_glob:[ctrf-report.json, **/ctrf-report.json, ctrf.json, **/ctrf.json], product_glob:[junit*.xml, **/junit*.xml, JUnit*.xml, **/JUnit*.xml])"
+      },
+      "detection": {
+        "post": {
+          "any_of": [
+            {
+              "product_glob": [
+                "TEST-*.xml",
+                "**/TEST-*.xml"
+              ]
+            },
+            {
+              "product_glob": [
+                "ctrf-report.json",
+                "**/ctrf-report.json",
+                "ctrf.json",
+                "**/ctrf.json"
+              ]
+            },
+            {
+              "product_glob": [
+                "junit*.xml",
+                "**/junit*.xml",
+                "JUnit*.xml",
+                "**/JUnit*.xml"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "trivy",
+      "predicate_type": "https://aflock.ai/attestations/trivy/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "Trivy",
+        "source": "https://github.com/aquasecurity/trivy",
+        "license": "Apache-2.0",
+        "vendor": "Aqua Security"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "registered": true,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[trivy]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "trivy"
+          ]
+        }
+      }
+    },
+    {
+      "name": "vex",
+      "predicate_type": "https://openvex.dev/ns",
+      "run_type": "postproduct",
+      "tier": "recommended",
+      "upstream": {
+        "name": "OpenVEX",
+        "source": "https://github.com/openvex",
+        "license": "CC-BY-4.0",
+        "vendor": "OpenSSF",
+        "format_only": true
+      },
+      "registered": true,
+      "has_contract": true,
+      "applies_when": {
+        "post": "any_of(product_glob:[*.openvex.json, **/*.openvex.json, *.vex.json, **/*.vex.json], product_glob:[vex.json, **/vex.json])"
+      },
+      "detection": {
+        "post": {
+          "any_of": [
+            {
+              "product_glob": [
+                "*.openvex.json",
+                "**/*.openvex.json",
+                "*.vex.json",
+                "**/*.vex.json"
+              ]
+            },
+            {
+              "product_glob": [
+                "vex.json",
+                "**/vex.json"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "policyverify",
+      "predicate_type": "https://slsa.dev/verification_summary/v1",
+      "run_type": "verify",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "slsa-provenance-v1",
+      "predicate_type": "https://slsa.dev/provenance/v1",
+      "run_type": "verify",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "vsa",
+      "predicate_type": "https://slsa.dev/verification_summary/v1",
+      "run_type": "verify",
+      "registered": true,
+      "has_contract": false
+    },
+    {
+      "name": "apko",
+      "category": [
+        "image-build"
+      ],
+      "upstream": {
+        "name": "apko",
+        "source": "https://github.com/chainguard-dev/apko",
+        "license": "Apache-2.0",
+        "vendor": "Chainguard"
+      },
+      "emits_formats": [
+        "sbom"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[apko build], argv_prefix:[apko publish])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "apko",
+                "build"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "apko",
+                "publish"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "argo-workflows",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "Argo Workflows",
+        "source": "https://github.com/argoproj/argo-workflows",
+        "license": "Apache-2.0",
+        "vendor": "CNCF / Argoproj"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:ARGO_TEMPLATE"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "ARGO_TEMPLATE"
+        }
+      }
+    },
+    {
+      "name": "aws-guardduty",
+      "category": [
+        "runtime-event"
+      ],
+      "upstream": {
+        "name": "AWS GuardDuty",
+        "source": "https://docs.aws.amazon.com/guardduty/",
+        "license": "commercial",
+        "vendor": "Amazon Web Services"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[aws guardduty]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "aws",
+            "guardduty"
+          ]
+        }
+      }
+    },
+    {
+      "name": "aws-iam-credential-report",
+      "category": [
+        "asset-inventory"
+      ],
+      "upstream": {
+        "name": "AWS IAM",
+        "source": "https://docs.aws.amazon.com/iam/",
+        "license": "commercial",
+        "vendor": "Amazon Web Services"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[aws iam get-credential-report]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "aws",
+            "iam",
+            "get-credential-report"
+          ]
+        }
+      }
+    },
+    {
+      "name": "aws-inspector",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "AWS Inspector",
+        "source": "https://docs.aws.amazon.com/inspector/",
+        "license": "commercial",
+        "vendor": "Amazon Web Services"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[aws inspector2]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "aws",
+            "inspector2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "aws-macie",
+      "category": [
+        "secret-scan"
+      ],
+      "upstream": {
+        "name": "AWS Macie",
+        "source": "https://docs.aws.amazon.com/macie/",
+        "license": "commercial",
+        "vendor": "Amazon Web Services"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[aws macie2]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "aws",
+            "macie2"
+          ]
+        }
+      }
+    },
+    {
+      "name": "aws-secrets-manager",
+      "category": [
+        "asset-inventory"
+      ],
+      "upstream": {
+        "name": "AWS Secrets Manager",
+        "source": "https://docs.aws.amazon.com/secretsmanager/",
+        "license": "commercial",
+        "vendor": "Amazon Web Services"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[aws secretsmanager]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "aws",
+            "secretsmanager"
+          ]
+        }
+      }
+    },
+    {
+      "name": "aws-security-hub",
+      "category": [
+        "compliance-scan"
+      ],
+      "upstream": {
+        "name": "AWS Security Hub",
+        "source": "https://docs.aws.amazon.com/securityhub/",
+        "license": "commercial",
+        "vendor": "Amazon Web Services"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[aws securityhub]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "aws",
+            "securityhub"
+          ]
+        }
+      }
+    },
+    {
+      "name": "azure-activity-log",
+      "category": [
+        "runtime-event"
+      ],
+      "upstream": {
+        "name": "Azure Monitor",
+        "source": "https://learn.microsoft.com/azure/azure-monitor/",
+        "license": "commercial",
+        "vendor": "Microsoft Azure"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[az monitor]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "az",
+            "monitor"
+          ]
+        }
+      }
+    },
+    {
+      "name": "azure-devops",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "Azure Pipelines",
+        "source": "https://learn.microsoft.com/azure/devops/pipelines/",
+        "license": "commercial",
+        "vendor": "Microsoft"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:TF_BUILD"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "TF_BUILD"
+        }
+      }
+    },
+    {
+      "name": "azure-iid",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "Azure Instance Metadata Service",
+        "source": "https://learn.microsoft.com/azure/virtual-machines/instance-metadata-service",
+        "license": "commercial",
+        "vendor": "Microsoft Azure"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "azure_metadata_reachable:true"
+      },
+      "detection": {
+        "pre": {
+          "azure_metadata_reachable": true
+        }
+      }
+    },
+    {
+      "name": "bandit",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "Bandit",
+        "source": "https://github.com/PyCQA/bandit",
+        "license": "Apache-2.0",
+        "vendor": "PyCQA"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[bandit]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "bandit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "bitbucket-pipelines",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "Bitbucket Pipelines",
+        "source": "https://support.atlassian.com/bitbucket-cloud/docs/get-started-with-bitbucket-pipelines/",
+        "license": "commercial",
+        "vendor": "Atlassian"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:BITBUCKET_BUILD_NUMBER"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "BITBUCKET_BUILD_NUMBER"
+        }
+      }
+    },
+    {
+      "name": "bom",
+      "category": [
+        "sbom-generate"
+      ],
+      "upstream": {
+        "name": "bom (sigs.k8s.io)",
+        "source": "https://github.com/kubernetes-sigs/bom",
+        "license": "Apache-2.0",
+        "vendor": "Kubernetes SIG Release Engineering"
+      },
+      "emits_formats": [
+        "sbom"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[bom]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "bom"
+          ]
+        }
+      }
+    },
+    {
+      "name": "buildkite",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "Buildkite",
+        "source": "https://buildkite.com/docs",
+        "license": "commercial",
+        "vendor": "Buildkite"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:BUILDKITE"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "BUILDKITE"
+        }
+      }
+    },
+    {
+      "name": "cargo-audit",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "cargo-audit",
+        "source": "https://github.com/rustsec/rustsec",
+        "license": "Apache-2.0 OR MIT",
+        "vendor": "RustSec / Rust Foundation"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[cargo-audit]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "cargo-audit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cargo-build",
+      "category": [
+        "build"
+      ],
+      "upstream": {
+        "name": "Cargo",
+        "source": "https://github.com/rust-lang/cargo",
+        "license": "Apache-2.0 OR MIT",
+        "vendor": "Rust Foundation"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[cargo build]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "cargo",
+            "build"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cdxgen",
+      "category": [
+        "sbom-generate"
+      ],
+      "upstream": {
+        "name": "cdxgen",
+        "source": "https://github.com/CycloneDX/cdxgen",
+        "license": "Apache-2.0",
+        "vendor": "OWASP Foundation / CycloneDX"
+      },
+      "emits_formats": [
+        "sbom"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[cdxgen]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "cdxgen"
+          ]
+        }
+      }
+    },
+    {
+      "name": "checkov",
+      "category": [
+        "compliance-scan"
+      ],
+      "upstream": {
+        "name": "Checkov",
+        "source": "https://github.com/bridgecrewio/checkov",
+        "license": "Apache-2.0",
+        "vendor": "Bridgecrew / Prisma Cloud (Palo Alto)"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[checkov]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "checkov"
+          ]
+        }
+      }
+    },
+    {
+      "name": "circleci",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "CircleCI",
+        "source": "https://circleci.com/docs/",
+        "license": "commercial",
+        "vendor": "Circle Internet Services"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:CIRCLECI"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "CIRCLECI"
+        }
+      }
+    },
+    {
+      "name": "cloudbuild-gcp",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "Cloud Build",
+        "source": "https://cloud.google.com/build/docs",
+        "license": "commercial",
+        "vendor": "Google Cloud"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:BUILD_ID"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "BUILD_ID"
+        }
+      }
+    },
+    {
+      "name": "cloudtrail",
+      "category": [
+        "runtime-event"
+      ],
+      "upstream": {
+        "name": "AWS CloudTrail",
+        "source": "https://docs.aws.amazon.com/awscloudtrail/",
+        "license": "commercial",
+        "vendor": "Amazon Web Services"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[aws cloudtrail]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "aws",
+            "cloudtrail"
+          ]
+        }
+      }
+    },
+    {
+      "name": "codebuild-aws",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "AWS CodeBuild",
+        "source": "https://docs.aws.amazon.com/codebuild/",
+        "license": "commercial",
+        "vendor": "Amazon Web Services"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:CODEBUILD_BUILD_ID"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "CODEBUILD_BUILD_ID"
+        }
+      }
+    },
+    {
+      "name": "codeql",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "CodeQL",
+        "source": "https://codeql.github.com/",
+        "license": "proprietary",
+        "vendor": "GitHub (Microsoft)"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[codeql]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "codeql"
+          ]
+        }
+      }
+    },
+    {
+      "name": "conftest",
+      "category": [
+        "policy-eval"
+      ],
+      "upstream": {
+        "name": "Conftest",
+        "source": "https://github.com/open-policy-agent/conftest",
+        "license": "Apache-2.0",
+        "vendor": "OPA / CNCF"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[conftest]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "conftest"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cosign-sign",
+      "category": [
+        "sign"
+      ],
+      "upstream": {
+        "name": "cosign",
+        "source": "https://github.com/sigstore/cosign",
+        "license": "Apache-2.0",
+        "vendor": "Sigstore / Linux Foundation"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[cosign sign]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "cosign",
+            "sign"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cosign-verify",
+      "category": [
+        "dependency-verify"
+      ],
+      "upstream": {
+        "name": "cosign",
+        "source": "https://github.com/sigstore/cosign",
+        "license": "Apache-2.0",
+        "vendor": "Sigstore / Linux Foundation"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[cosign verify]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "cosign",
+            "verify"
+          ]
+        }
+      }
+    },
+    {
+      "name": "detect-secrets",
+      "category": [
+        "secret-scan"
+      ],
+      "upstream": {
+        "name": "detect-secrets",
+        "source": "https://github.com/Yelp/detect-secrets",
+        "license": "Apache-2.0",
+        "vendor": "Yelp"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[detect-secrets]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "detect-secrets"
+          ]
+        }
+      }
+    },
+    {
+      "name": "drone-ci",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "Drone",
+        "source": "https://github.com/harness/drone",
+        "license": "Apache-2.0 / commercial (Harness)",
+        "vendor": "Harness, Inc."
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:DRONE"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "DRONE"
+        }
+      }
+    },
+    {
+      "name": "gcp-audit-log",
+      "category": [
+        "runtime-event"
+      ],
+      "upstream": {
+        "name": "Cloud Logging",
+        "source": "https://cloud.google.com/logging/docs",
+        "license": "commercial",
+        "vendor": "Google Cloud"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[gcloud logging]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "gcloud",
+            "logging"
+          ]
+        }
+      }
+    },
+    {
+      "name": "gitleaks",
+      "category": [
+        "secret-scan"
+      ],
+      "upstream": {
+        "name": "Gitleaks",
+        "source": "https://github.com/gitleaks/gitleaks",
+        "license": "MIT",
+        "vendor": "Gitleaks community"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[gitleaks]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "gitleaks"
+          ]
+        }
+      }
+    },
+    {
+      "name": "go-test",
+      "category": [
+        "unit-test"
+      ],
+      "upstream": {
+        "name": "go test",
+        "source": "https://pkg.go.dev/cmd/go",
+        "license": "BSD-3-Clause",
+        "vendor": "Google / Go Authors"
+      },
+      "emits_formats": [
+        "test-results"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[go test]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "go",
+            "test"
+          ]
+        }
+      }
+    },
+    {
+      "name": "gosec",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "gosec",
+        "source": "https://github.com/securego/gosec",
+        "license": "Apache-2.0",
+        "vendor": "securego"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[gosec]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "gosec"
+          ]
+        }
+      }
+    },
+    {
+      "name": "gpg-sign",
+      "category": [
+        "sign"
+      ],
+      "upstream": {
+        "name": "GnuPG",
+        "source": "https://gnupg.org/",
+        "license": "GPL-3.0-or-later",
+        "vendor": "Free Software Foundation"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[gpg --sign]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "gpg",
+            "--sign"
+          ]
+        }
+      }
+    },
+    {
+      "name": "gradle",
+      "category": [
+        "build"
+      ],
+      "upstream": {
+        "name": "Gradle",
+        "source": "https://github.com/gradle/gradle",
+        "license": "Apache-2.0",
+        "vendor": "Gradle Inc."
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[gradle]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "gradle"
+          ]
+        }
+      }
+    },
+    {
+      "name": "grype",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "Grype",
+        "source": "https://github.com/anchore/grype",
+        "license": "Apache-2.0",
+        "vendor": "Anchore"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[grype]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "grype"
+          ]
+        }
+      }
+    },
+    {
+      "name": "hadolint",
+      "category": [
+        "lint"
+      ],
+      "upstream": {
+        "name": "Hadolint",
+        "source": "https://github.com/hadolint/hadolint",
+        "license": "GPL-3.0",
+        "vendor": "Hadolint maintainers"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[hadolint]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "hadolint"
+          ]
+        }
+      }
+    },
+    {
+      "name": "helm-install",
+      "category": [
+        "deploy"
+      ],
+      "upstream": {
+        "name": "Helm",
+        "source": "https://github.com/helm/helm",
+        "license": "Apache-2.0",
+        "vendor": "CNCF / Helm"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[helm]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "helm"
+          ]
+        }
+      }
+    },
+    {
+      "name": "huggingface-hub",
+      "category": [
+        "dataset-snapshot"
+      ],
+      "upstream": {
+        "name": "huggingface_hub",
+        "source": "https://github.com/huggingface/huggingface_hub",
+        "license": "Apache-2.0",
+        "vendor": "Hugging Face"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[hf]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "hf"
+          ]
+        }
+      }
+    },
+    {
+      "name": "jest",
+      "category": [
+        "unit-test"
+      ],
+      "upstream": {
+        "name": "Jest",
+        "source": "https://github.com/jestjs/jest",
+        "license": "MIT",
+        "vendor": "OpenJS Foundation / Meta"
+      },
+      "emits_formats": [
+        "test-results"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[jest]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "jest"
+          ]
+        }
+      }
+    },
+    {
+      "name": "kics",
+      "category": [
+        "compliance-scan",
+        "vulnerability-scan"
+      ],
+      "primary_category": "vulnerability-scan",
+      "upstream": {
+        "name": "KICS",
+        "source": "https://github.com/Checkmarx/kics",
+        "license": "Apache-2.0",
+        "vendor": "Checkmarx"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[kics]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "kics"
+          ]
+        }
+      }
+    },
+    {
+      "name": "kubeaudit",
+      "category": [
+        "compliance-scan"
+      ],
+      "upstream": {
+        "name": "kubeaudit",
+        "source": "https://github.com/Shopify/kubeaudit",
+        "license": "MIT",
+        "vendor": "Shopify"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[kubeaudit]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "kubeaudit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "kubectl-audit",
+      "category": [
+        "runtime-event"
+      ],
+      "upstream": {
+        "name": "kubectl",
+        "source": "https://github.com/kubernetes/kubectl",
+        "license": "Apache-2.0",
+        "vendor": "Kubernetes / CNCF"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[kubectl get events]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "kubectl",
+            "get",
+            "events"
+          ]
+        }
+      }
+    },
+    {
+      "name": "kubescape",
+      "category": [
+        "compliance-scan"
+      ],
+      "upstream": {
+        "name": "Kubescape",
+        "source": "https://github.com/kubescape/kubescape",
+        "license": "Apache-2.0",
+        "vendor": "CNCF / ARMO"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[kubescape]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "kubescape"
+          ]
+        }
+      }
+    },
+    {
+      "name": "kustomize-build",
+      "category": [
+        "manifest-validate"
+      ],
+      "upstream": {
+        "name": "Kustomize",
+        "source": "https://github.com/kubernetes-sigs/kustomize",
+        "license": "Apache-2.0",
+        "vendor": "Kubernetes SIG CLI"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[kustomize build]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "kustomize",
+            "build"
+          ]
+        }
+      }
+    },
+    {
+      "name": "kyverno",
+      "category": [
+        "policy-eval"
+      ],
+      "upstream": {
+        "name": "Kyverno",
+        "source": "https://github.com/kyverno/kyverno",
+        "license": "Apache-2.0",
+        "vendor": "Nirmata / CNCF"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[kyverno]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "kyverno"
+          ]
+        }
+      }
+    },
+    {
+      "name": "malcontent",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "malcontent",
+        "source": "https://github.com/chainguard-dev/malcontent",
+        "license": "Apache-2.0",
+        "vendor": "Chainguard"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[mal analyze], argv_prefix:[mal diff], argv_prefix:[mal scan])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "mal",
+                "analyze"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "mal",
+                "diff"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "mal",
+                "scan"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "maven-build",
+      "category": [
+        "build",
+        "dependency-resolve"
+      ],
+      "primary_category": "build",
+      "upstream": {
+        "name": "Apache Maven",
+        "source": "https://github.com/apache/maven",
+        "license": "Apache-2.0",
+        "vendor": "Apache Software Foundation"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[mvn]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "mvn"
+          ]
+        }
+      }
+    },
+    {
+      "name": "melange",
+      "category": [
+        "build"
+      ],
+      "upstream": {
+        "name": "melange",
+        "source": "https://github.com/chainguard-dev/melange",
+        "license": "Apache-2.0",
+        "vendor": "Chainguard"
+      },
+      "emits_formats": [
+        "sbom"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[melange build]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "melange",
+            "build"
+          ]
+        }
+      }
+    },
+    {
+      "name": "nancy",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "Nancy",
+        "source": "https://github.com/sonatype-nexus-community/nancy",
+        "license": "Apache-2.0",
+        "vendor": "Sonatype"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[nancy]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "nancy"
+          ]
+        }
+      }
+    },
+    {
+      "name": "notary-v2",
+      "category": [
+        "sign"
+      ],
+      "upstream": {
+        "name": "notation",
+        "source": "https://github.com/notaryproject/notation",
+        "license": "Apache-2.0",
+        "vendor": "CNCF / Notary Project"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[notation]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "notation"
+          ]
+        }
+      }
+    },
+    {
+      "name": "npm-audit",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "npm audit",
+        "source": "https://docs.npmjs.com/cli/v10/commands/npm-audit",
+        "license": "Artistic-2.0",
+        "vendor": "OpenJS Foundation / npm Inc."
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[npm audit]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "npm",
+            "audit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "npm-install",
+      "category": [
+        "dependency-resolve"
+      ],
+      "upstream": {
+        "name": "npm",
+        "source": "https://github.com/npm/cli",
+        "license": "Artistic-2.0",
+        "vendor": "OpenJS Foundation / npm Inc."
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[npm ci], argv_prefix:[npm i], argv_prefix:[npm install])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "npm",
+                "ci"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "npm",
+                "i"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "npm",
+                "install"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "nuclei",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "Nuclei",
+        "source": "https://github.com/projectdiscovery/nuclei",
+        "license": "MIT",
+        "vendor": "ProjectDiscovery"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[nuclei]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "nuclei"
+          ]
+        }
+      }
+    },
+    {
+      "name": "osv-scanner",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "osv-scanner",
+        "source": "https://github.com/google/osv-scanner",
+        "license": "Apache-2.0",
+        "vendor": "Google / OSV"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[osv-scanner]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "osv-scanner"
+          ]
+        }
+      }
+    },
+    {
+      "name": "pip-audit",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "pip-audit",
+        "source": "https://github.com/pypa/pip-audit",
+        "license": "Apache-2.0",
+        "vendor": "PyPA"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[pip-audit]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "pip-audit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "pnpm-install",
+      "category": [
+        "dependency-resolve"
+      ],
+      "upstream": {
+        "name": "pnpm",
+        "source": "https://github.com/pnpm/pnpm",
+        "license": "MIT",
+        "vendor": "pnpm"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[pnpm install]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "pnpm",
+            "install"
+          ]
+        }
+      }
+    },
+    {
+      "name": "polaris",
+      "category": [
+        "compliance-scan"
+      ],
+      "upstream": {
+        "name": "Polaris",
+        "source": "https://github.com/FairwindsOps/polaris",
+        "license": "Apache-2.0",
+        "vendor": "Fairwinds"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[polaris]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "polaris"
+          ]
+        }
+      }
+    },
+    {
+      "name": "protoc",
+      "category": [
+        "build"
+      ],
+      "upstream": {
+        "name": "Protocol Buffers",
+        "source": "https://github.com/protocolbuffers/protobuf",
+        "license": "BSD-3-Clause",
+        "vendor": "Google / Protocol Buffers Authors"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[buf generate], argv_prefix:[protoc])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "buf",
+                "generate"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "protoc"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "pytest",
+      "category": [
+        "unit-test"
+      ],
+      "upstream": {
+        "name": "pytest",
+        "source": "https://github.com/pytest-dev/pytest",
+        "license": "MIT",
+        "vendor": "pytest-dev"
+      },
+      "emits_formats": [
+        "test-results"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[pytest]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "pytest"
+          ]
+        }
+      }
+    },
+    {
+      "name": "retire-js",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "RetireJS",
+        "source": "https://github.com/RetireJS/retire.js",
+        "license": "Apache-2.0",
+        "vendor": "RetireJS contributors"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[retire]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "retire"
+          ]
+        }
+      }
+    },
+    {
+      "name": "safety",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "Safety",
+        "source": "https://github.com/pyupio/safety",
+        "license": "MIT",
+        "vendor": "PyUp.io / Safety Cybersecurity"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[safety]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "safety"
+          ]
+        }
+      }
+    },
+    {
+      "name": "semgrep",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "Semgrep",
+        "source": "https://github.com/semgrep/semgrep",
+        "license": "LGPL-2.1-only",
+        "vendor": "Semgrep Inc."
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[semgrep]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "semgrep"
+          ]
+        }
+      }
+    },
+    {
+      "name": "staticcheck",
+      "category": [
+        "lint"
+      ],
+      "upstream": {
+        "name": "staticcheck",
+        "source": "https://github.com/dominikh/go-tools",
+        "license": "MIT",
+        "vendor": "Dominik Honnef"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[staticcheck]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "staticcheck"
+          ]
+        }
+      }
+    },
+    {
+      "name": "syft",
+      "category": [
+        "sbom-generate"
+      ],
+      "upstream": {
+        "name": "Syft",
+        "source": "https://github.com/anchore/syft",
+        "license": "Apache-2.0",
+        "vendor": "Anchore"
+      },
+      "emits_formats": [
+        "sbom"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[syft]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "syft"
+          ]
+        }
+      }
+    },
+    {
+      "name": "teamcity",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "TeamCity",
+        "source": "https://www.jetbrains.com/teamcity/",
+        "license": "commercial / freemium",
+        "vendor": "JetBrains"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:TEAMCITY_VERSION"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "TEAMCITY_VERSION"
+        }
+      }
+    },
+    {
+      "name": "tekton-pipelines",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "Tekton",
+        "source": "https://github.com/tektoncd/pipeline",
+        "license": "Apache-2.0",
+        "vendor": "CD Foundation / Tekton"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:TEKTON_RESOURCES"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "TEKTON_RESOURCES"
+        }
+      }
+    },
+    {
+      "name": "terrascan",
+      "category": [
+        "compliance-scan",
+        "vulnerability-scan"
+      ],
+      "primary_category": "vulnerability-scan",
+      "upstream": {
+        "name": "Terrascan",
+        "source": "https://github.com/tenable/terrascan",
+        "license": "Apache-2.0",
+        "vendor": "Tenable"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[terrascan]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "terrascan"
+          ]
+        }
+      }
+    },
+    {
+      "name": "testssl",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "testssl.sh",
+        "source": "https://github.com/testssl/testssl.sh",
+        "license": "GPL-2.0",
+        "vendor": "Dirk Wetter / testssl.sh maintainers"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[testssl.sh]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "testssl.sh"
+          ]
+        }
+      }
+    },
+    {
+      "name": "tflint",
+      "category": [
+        "lint"
+      ],
+      "upstream": {
+        "name": "TFLint",
+        "source": "https://github.com/terraform-linters/tflint",
+        "license": "MPL-2.0",
+        "vendor": "terraform-linters community"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[tflint]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "tflint"
+          ]
+        }
+      }
+    },
+    {
+      "name": "tfsec",
+      "category": [
+        "compliance-scan",
+        "vulnerability-scan"
+      ],
+      "primary_category": "vulnerability-scan",
+      "upstream": {
+        "name": "tfsec",
+        "source": "https://github.com/aquasecurity/tfsec",
+        "license": "MIT",
+        "vendor": "Aqua Security"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[tfsec]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "tfsec"
+          ]
+        }
+      }
+    },
+    {
+      "name": "travis-ci",
+      "category": [
+        "ci-context"
+      ],
+      "upstream": {
+        "name": "Travis CI",
+        "source": "https://docs.travis-ci.com/",
+        "license": "commercial",
+        "vendor": "Travis CI GmbH / Idera"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "env_set:TRAVIS"
+      },
+      "detection": {
+        "pre": {
+          "env_set": "TRAVIS"
+        }
+      }
+    },
+    {
+      "name": "trufflehog",
+      "category": [
+        "secret-scan"
+      ],
+      "upstream": {
+        "name": "TruffleHog",
+        "source": "https://github.com/trufflesecurity/trufflehog",
+        "license": "AGPL-3.0-only",
+        "vendor": "Truffle Security"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[trufflehog]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "trufflehog"
+          ]
+        }
+      }
+    },
+    {
+      "name": "vault-cli",
+      "category": [
+        "key-ceremony"
+      ],
+      "upstream": {
+        "name": "HashiCorp Vault",
+        "source": "https://github.com/hashicorp/vault",
+        "license": "BUSL-1.1 (since 2023) / MPL-2.0 (pre-1.14)",
+        "vendor": "HashiCorp / IBM"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[vault]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "vault"
+          ]
+        }
+      }
+    },
+    {
+      "name": "vexctl",
+      "category": [
+        "vex-consume"
+      ],
+      "upstream": {
+        "name": "vexctl",
+        "source": "https://github.com/openvex/vexctl",
+        "license": "Apache-2.0",
+        "vendor": "OpenVEX / Chainguard"
+      },
+      "emits_formats": [
+        "vex"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[vexctl]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "vexctl"
+          ]
+        }
+      }
+    },
+    {
+      "name": "yarn-audit",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "yarn audit",
+        "source": "https://yarnpkg.com/cli/audit",
+        "license": "BSD-2-Clause",
+        "vendor": "Yarn / Meta"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[yarn audit]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "yarn",
+            "audit"
+          ]
+        }
+      }
+    },
+    {
+      "name": "yarn-install",
+      "category": [
+        "dependency-resolve"
+      ],
+      "upstream": {
+        "name": "Yarn",
+        "source": "https://github.com/yarnpkg/berry",
+        "license": "BSD-2-Clause",
+        "vendor": "Yarn / Meta"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[yarn install]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "yarn",
+            "install"
+          ]
+        }
+      }
+    },
+    {
+      "name": "zap",
+      "category": [
+        "vulnerability-scan"
+      ],
+      "upstream": {
+        "name": "OWASP ZAP",
+        "source": "https://github.com/zaproxy/zaproxy",
+        "license": "Apache-2.0",
+        "vendor": "OWASP / Checkmarx"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[zap-baseline.py]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "zap-baseline.py"
+          ]
+        }
+      }
+    }
+  ],
+  "parse_errors": {
+    "github-review": "detector.yaml category \"statement\" must be one of [source-checkout ci-context dependency-resolve dependency-verify build unit-test integration-test code-review threat-model vulnerability-scan secret-scan compliance-scan sbom-generate sbom-consume provenance policy-eval sign publish deploy lint release-approve archive iac-plan iac-apply manifest-validate image-build image-scan image-sign package-publish runtime-event runtime-vulnerability-detect drift-detect asset-inventory vex-consume vulnerability-disclosure incident-response rollback key-ceremony api-surface-check model-train model-eval dataset-snapshot firmware-sign mobile-sign mobile-submit]"
+  }
+}

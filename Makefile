@@ -57,8 +57,9 @@ verify-isolated: ## Verify each module builds outside workspace
 	@echo "All modules build in isolation"
 
 # ── Docs ─────────────────────────────────────────────────────────────
-docs: ## Regenerate docs from source (currently: attestor-catalog.md)
+docs: ## Regenerate docs from source: attestor-catalog.md (bash) + attestor-catalog.json (registry+detector.yaml introspection)
 	@./scripts/gen-attestor-catalog.sh
+	@(cd presets/all && GOWORK=off go run ./cmd/gen-catalog)
 
 # ── Catalog verification ─────────────────────────────────────────────
 catalog-verify: ## Verify the attestor catalog: contracts parse + fixtures match real-run evidence
