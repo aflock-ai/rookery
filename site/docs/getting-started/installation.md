@@ -5,9 +5,34 @@ sidebar_position: 1
 
 # Installation
 
-There are four supported ways to get CI/lock running.
+There are five supported ways to get CI/lock running.
 
-## 1. Prebuilt binary
+## 1. Homebrew (macOS / Linux)
+
+The friendliest path for dev and CI machines. The tap is public:
+
+```bash
+brew install aflock-ai/tap/cilock
+```
+
+Or tap once, then install (and reuse the short name for upgrades):
+
+```bash
+brew tap aflock-ai/tap
+brew install cilock
+```
+
+Upgrade to the latest release:
+
+```bash
+brew upgrade cilock
+```
+
+Covers macOS (Intel + Apple Silicon) and Linux (x86_64 + arm64); Homebrew pins each download by SHA-256, and the tap formula is auto-bumped by the release pipeline.
+
+For cryptographic provenance verification of the binary, see [Verify the `cilock` binary](./verify-the-cilock-binary).
+
+## 2. Prebuilt binary
 
 Binaries are distributed from **[cilock.dev](https://cilock.dev)** — every download is served (and counted) from our own infrastructure, and each artifact is uploaded only after the release pipeline verifies it against the signed release policy (verify-then-upload). Static binaries are published for:
 
@@ -74,7 +99,7 @@ Use `OS=darwin` and `ARCH=arm64` on Apple Silicon (M1 and later), or `ARCH=amd64
 
 The SHA-256 check proves the bytes match the published checksums. To **cryptographically verify** the binary against the TestifySec platform signing identity — flagless `cilock verify` against the signed release policy + the per-platform attestation — see [Verify the `cilock` binary](./verify-the-cilock-binary).
 
-## 2. GitHub Action
+## 3. GitHub Action
 
 For GitHub Actions workflows, use the [`aflock-ai/cilock-action`](https://github.com/aflock-ai/cilock-action) Action. It downloads its own variant binary at runtime (containing every attestor — including `secretscan`, `govulncheck`, `slsa`, `inclusion-proof`, the trace-enabled product attestor) and wraps your commands.
 
@@ -100,7 +125,7 @@ steps:
 
 For a real five-step pipeline (lint, SAST, test, build+SBOM, docker build), see [`testifysec/dropbox-clone/.github/workflows/cilock-action-oidc.yaml`](https://github.com/testifysec/dropbox-clone/blob/main/.github/workflows/cilock-action-oidc.yaml). See the [GitHub Action reference](../reference/github-action) for the full input list.
 
-## 3. GitLab CI template
+## 4. GitLab CI template
 
 For GitLab CI, include the reusable template:
 
@@ -117,7 +142,7 @@ build:
 
 See the [GitLab component reference](../reference/gitlab-component) for the full variable list.
 
-## 4. Build from source
+## 5. Build from source
 
 The `cilock` binary lives in the [rookery monorepo](../ecosystem/rookery) at `cilock/cmd/cilock/main.go`. You'll need [Go 1.26+](https://go.dev/dl/).
 

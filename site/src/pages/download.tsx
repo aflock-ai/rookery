@@ -214,6 +214,22 @@ function DownloadInner(): React.ReactElement {
         </p>
       </section>
 
+      {/* Story 1b — Homebrew, the friendliest path on macOS/Linux. */}
+      <section className={styles.section}>
+        <Heading as="h2" className={styles.sectionTitle}>
+          Homebrew
+        </Heading>
+        <p className={styles.sectionHint}>
+          On macOS (Intel + Apple Silicon) and Linux (x86_64 + arm64). The tap is public; Homebrew
+          pins each download by SHA-256, and the formula is auto-bumped by the release pipeline.
+        </p>
+        <CopyCmd cmd={'brew install aflock-ai/tap/cilock'} />
+        <p className={styles.muted} style={{marginTop: '0.6rem'}}>
+          Or <code>brew tap aflock-ai/tap</code> then <code>brew install cilock</code>; upgrade with{' '}
+          <code>brew upgrade cilock</code>.
+        </p>
+      </section>
+
       {/* Story 2 — the right binary for me. */}
       <section className={styles.section}>
         <Heading as="h2" className={styles.sectionTitle}>

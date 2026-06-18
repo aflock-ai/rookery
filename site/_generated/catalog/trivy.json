@@ -1,6 +1,6 @@
 {
   "name": "trivy",
-  "source": "catalog-only",
+  "source": "attestor-backed",
   "description": "Scan containers, IaC, secrets, and licenses with Trivy under cilock — the SARIF report becomes a signed v0.3 attestation parsed by the rookery sarif attestor.",
   "title": "Trivy",
   "sidebarPosition": 1,
@@ -34,8 +34,8 @@
   "llmHints": {
     "on_match": "Trivy scan observed. --format sarif --output <file>.sarif is captured by the sarif attestor."
   },
-  "predicateType": null,
-  "runType": null,
+  "predicateType": "https://aflock.ai/attestations/trivy/v0.1",
+  "runType": "postproduct",
   "defaultOn": false,
   "runExample": "cilock run -- trivy .",
   "detectionCommand": "cilock plan --format=json -- trivy [...]",

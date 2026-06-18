@@ -1595,7 +1595,7 @@
     },
     {
       "name": "trivy",
-      "source": "catalog-only",
+      "source": "attestor-backed",
       "categories": [
         "vulnerability-scan"
       ],
@@ -1604,8 +1604,8 @@
       "emitsFormats": [
         "sarif"
       ],
-      "predicateType": null,
-      "runType": null,
+      "predicateType": "https://aflock.ai/attestations/trivy/v0.1",
+      "runType": "postproduct",
       "hasDoc": true
     },
     {

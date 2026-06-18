@@ -28,6 +28,9 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock sign [file]` | Sign an arbitrary file (typically a policy) with the configured signer. |
 | `cilock verify` | Verify an artifact (subject) against a signed policy using attestations as evidence. |
 | `cilock policy from-bundles` | Generate a starter Witness policy from one or more signed attestation bundles. |
+| `cilock policy from-commit` | Author a Witness policy from a commit's CI attestations already in the platform's Archivista. |
+| `cilock policy push` | Upload a signed policy DSSE to the platform and create a release. |
+| `cilock policy bind` | Bind a published policy definition/release to a product on the platform. |
 | `cilock policy validate` | Validate a Witness/cilock policy document (schema only, no signature check). |
 | `cilock keyid` | Print the canonical keyid (`hex(sha256(PEM(pub)))`) derived from a public or private key. |
 | `cilock bundle create` / `inspect` | Build or inspect a portable attestation bundle (tar.gz of DSSE envelopes). |
@@ -347,6 +350,64 @@ cilock attest -a github-review -k key.pem -o review.bundle.json -s review-head
 
 ```bash
 cilock policy from-bundles -k signer.pub build.bundle.json scan.bundle.json -o policy.json
+```
+
+## `cilock policy from-commit <commit-sha>`
+
+> Authors a starter Witness policy from the CI attestations the platform already holds for a commit — no local bundle files needed. It resolves the commit, finds every DSSE whose subjects include it, groups them by witness collection name (one step per collection), populates functionaries from each collection's signers (raw keyid or Fulcio keyless cert with the leaf SAN email pinned), recovers TSA trust anchors so short-lived keyless leaves verify, and wires cross-step provenance edges. Author-only by default (write the policy, then `cilock sign` → [`policy push`](#cilock-policy-push---file--definition---tag) → [`policy bind`](#cilock-policy-bind---definition--product)); pass both `--product` and `--tag` for the one-shot derive → sign → push → bind flow. The Archivista query needs a logged-in session; the one-shot mutations need `policy:write`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--definition, -d <name>` | the product name | PolicyDefinition name for the one-shot flow. |
+| `--description <str>` | (none) | Description used only when the one-shot flow creates a new PolicyDefinition. |
+| `--expires <dur>` | `8760h` (1 year) | How far in the future the policy's `expires` field is set. Set short and re-issue after review. |
+| `--output, -o <path>` | `-` (stdout) | Write the authored policy here. Ignored in one-shot mode. |
+| `--platform-url <url>` | the logged-in platform | TestifySec platform URL. |
+| `--product, -p <id\|name>` | (none) | Product id or exact name. With `--tag`, runs the one-shot sign→push→bind flow against this product. |
+| `--step-prefix <str>` | (none) | Optional prefix prepended to every generated step name (e.g. `release-`). |
+| `--tag, -t <t>` | (none) | Release tag for the one-shot flow (requires `--product`). |
+
+```bash
+# Author a policy from a commit's CI evidence, write it for review
+cilock policy from-commit 1a2b3c4d... -o policy.json
+
+# One-shot: derive, sign keyless, publish a release tagged v1, bind to a product
+cilock policy from-commit 1a2b3c4d... --product my-service --tag v1
+```
+
+## `cilock policy push --file --definition --tag`
+
+> Publishes an author-signed Witness policy to the platform. It uploads the signed policy DSSE to the platform's Archivista (the same upload path as `cilock run --enable-archivista`), ensures the named PolicyDefinition exists (creating it if absent), then creates a PolicyRelease that pins the definition to the uploaded policy under `--tag`. The policy file must already be DSSE-signed — produce it with `cilock sign` against the platform's keyless Fulcio. The DSSE upload needs `attestation:upload`; creating the release needs `policy:write`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--file, -f <path>` | (required) | Path to the DSSE-signed policy (from `cilock sign`). |
+| `--definition, -d <name>` | (required) | PolicyDefinition name; created if it doesn't exist. |
+| `--tag, -t <t>` | (required) | Release tag (e.g. a semver or string). |
+| `--description <str>` | (none) | Description used only when creating a new PolicyDefinition. |
+| `--platform-url <url>` | the logged-in platform | TestifySec platform URL. |
+
+```bash
+# Sign first, then publish a release tagged v1.0.0
+cilock sign -f policy.json -o policy.signed.json
+cilock policy push --file policy.signed.json --definition supply-chain --tag v1.0.0
+```
+
+## `cilock policy bind --definition --product`
+
+> Binds a published policy to a product on the platform. It resolves the named PolicyDefinition and the target product, then creates a PolicyBinding linking them. Pass `--release` (a release id) or `--tag` (resolved to a release under the definition) to pin a specific release; omit both to bind the definition itself. Creating the binding needs `policy:write`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--definition, -d <name>` | (required) | PolicyDefinition name. |
+| `--product, -p <id\|name>` | (required) | Product id or exact name to bind to. |
+| `--release <id>` | (none) | PolicyRelease id to bind (overrides `--tag`). |
+| `--tag, -t <t>` | (none) | Release tag to resolve under the definition. |
+| `--platform-url <url>` | the logged-in platform | TestifySec platform URL. |
+
+```bash
+# Bind a definition's v1.0.0 release to a product (by exact name)
+cilock policy bind --definition supply-chain --tag v1.0.0 --product my-service
 ```
 
 ## `cilock keyid show`

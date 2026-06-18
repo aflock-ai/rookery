@@ -296,7 +296,8 @@ function Quickstart() {
         <pre className={styles.quickstart}>
           <code>
 {`# 1. Install — platform-signed, verified-before-publish, from cilock.dev
-curl -fsSL https://cilock.dev/install.sh | bash
+brew install aflock-ai/tap/cilock          # macOS / Linux
+# or: curl -fsSL https://cilock.dev/install.sh | bash
 
 # 2. Wrap a command
 cilock run --step build \\
