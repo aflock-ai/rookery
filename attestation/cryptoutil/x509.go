@@ -55,7 +55,12 @@ func (v *X509Verifier) Verify(body io.Reader, sig []byte) error {
 		CurrentTime:   v.trustedTime,
 		Roots:         rootPool,
 		Intermediates: intermediatePool,
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		// Attestation/signing leaves are code-signing certs (our Fulcio CA
+		// stamps ExtKeyUsageCodeSigning). Require it so a cert chaining to a
+		// trusted root but issued for another purpose (e.g. TLS serverAuth)
+		// can't be substituted on the signature path. A leaf with no EKU
+		// extension stays valid (Go treats an absent EKU as unrestricted).
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
 	}); err != nil {
 		return err
 	}
@@ -70,7 +75,8 @@ func (v *X509Verifier) BelongsToRoot(root *x509.Certificate) error {
 		Roots:         rootPool,
 		Intermediates: intermediatePool,
 		CurrentTime:   v.trustedTime,
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+		// Same code-signing EKU requirement as Verify (see note there).
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
 	})
 
 	return err

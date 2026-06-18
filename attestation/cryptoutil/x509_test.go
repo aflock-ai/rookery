@@ -125,6 +125,32 @@ func createLeaf(parent *x509.Certificate, parentPriv interface{}) (*x509.Certifi
 	return cert, priv, err
 }
 
+// createLeafWithEKU mints a leaf certificate carrying the given extended key
+// usages. Used to exercise EKU enforcement on the attestation verification path.
+func createLeafWithEKU(parent *x509.Certificate, parentPriv interface{}, eku []x509.ExtKeyUsage) (*x509.Certificate, interface{}, error) {
+	priv, pub, err := createRsaKey()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	template := &x509.Certificate{
+		Subject: pkix.Name{
+			Country:      []string{"US"},
+			Organization: []string{"TestifySec"},
+			CommonName:   "Test Leaf EKU",
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           eku,
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+
+	cert, err := createCert(parentPriv, pub, template, parent)
+	return cert, priv, err
+}
+
 func TestX509(t *testing.T) {
 	root, rootPriv, err := createRoot()
 	require.NoError(t, err)
@@ -162,4 +188,59 @@ func TestX509(t *testing.T) {
 	require.NoError(t, err)
 	err = verifier.Verify(bytes.NewReader(data), sig)
 	assert.Error(t, err)
+}
+
+// TestX509VerifyEnforcesCodeSigningEKU asserts the attestation verification path
+// rejects a leaf certificate that chains to a trusted root but was issued for a
+// different purpose (e.g. TLS serverAuth), while still accepting the codeSigning
+// leaf shape our Fulcio CA actually issues. Without EKU enforcement (the old
+// ExtKeyUsageAny), a serverAuth leaf from the same CA org would satisfy
+// Verify/BelongsToRoot, allowing cert substitution on the signing path.
+func TestX509VerifyEnforcesCodeSigningEKU(t *testing.T) {
+	root, rootPriv, err := createRoot()
+	require.NoError(t, err)
+	intermediate, intPriv, err := createIntermediate(root, rootPriv)
+	require.NoError(t, err)
+
+	// Leaf with the WRONG EKU (TLS server auth, not code signing).
+	wrongLeaf, wrongPriv, err := createLeafWithEKU(intermediate, intPriv, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	require.NoError(t, err)
+
+	wrongBase, err := NewSigner(wrongPriv)
+	require.NoError(t, err)
+	wrongSigner, err := NewX509Signer(wrongBase, wrongLeaf, []*x509.Certificate{intermediate}, []*x509.Certificate{root})
+	require.NoError(t, err)
+
+	data := []byte("attestation payload")
+	wrongSig, err := wrongSigner.Sign(bytes.NewReader(data))
+	require.NoError(t, err)
+
+	// The cert chains correctly and the signature is valid, but the EKU is wrong:
+	// Verify must reject it rather than fall through ExtKeyUsageAny.
+	wrongVerifier, err := NewX509Verifier(wrongLeaf, []*x509.Certificate{intermediate}, []*x509.Certificate{root}, time.Time{})
+	require.NoError(t, err)
+	assert.Error(t, wrongVerifier.Verify(bytes.NewReader(data), wrongSig),
+		"serverAuth leaf must be rejected on the attestation Verify path")
+	assert.Error(t, wrongVerifier.BelongsToRoot(root),
+		"serverAuth leaf must be rejected by BelongsToRoot")
+
+	// Leaf with the codeSigning EKU — the shape our Fulcio CA issues
+	// (sigstore fulcio MakeX509 stamps ExtKeyUsageCodeSigning) — must still pass.
+	csLeaf, csPriv, err := createLeafWithEKU(intermediate, intPriv, []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning})
+	require.NoError(t, err)
+
+	csBase, err := NewSigner(csPriv)
+	require.NoError(t, err)
+	csSigner, err := NewX509Signer(csBase, csLeaf, []*x509.Certificate{intermediate}, []*x509.Certificate{root})
+	require.NoError(t, err)
+
+	csSig, err := csSigner.Sign(bytes.NewReader(data))
+	require.NoError(t, err)
+
+	csVerifier, err := NewX509Verifier(csLeaf, []*x509.Certificate{intermediate}, []*x509.Certificate{root}, time.Time{})
+	require.NoError(t, err)
+	assert.NoError(t, csVerifier.Verify(bytes.NewReader(data), csSig),
+		"codeSigning leaf (Fulcio shape) must still verify")
+	assert.NoError(t, csVerifier.BelongsToRoot(root),
+		"codeSigning leaf must still satisfy BelongsToRoot")
 }
