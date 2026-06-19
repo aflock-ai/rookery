@@ -16,10 +16,12 @@ package policy
 
 import (
 	"context"
+	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -108,6 +110,15 @@ type CertConstraint struct {
 	URIs          []string               `json:"uris" jsonschema:"title=URIs,description=Expected URI subject alternative names"`
 	Roots         []string               `json:"roots" jsonschema:"title=Roots,description=IDs of trusted root certificates from the policy's roots map (use * to allow all)"`
 	Extensions    certificate.Extensions `json:"extensions" jsonschema:"title=Extensions,description=Fulcio certificate extension constraints (supports glob patterns)"`
+
+	// RequiredPolicyOIDs lists X.509 certificatePolicies (OID 2.5.29.32) OIDs that
+	// the signer's leaf cert MUST carry, in dotted-decimal form (e.g.
+	// "1.3.6.1.4.1.57264.1.99"). When non-empty, EVERY listed OID must be present
+	// on the cert or the constraint fails CLOSED (subset match: extra cert OIDs are
+	// allowed, missing ones are not). When empty/nil this is a NO-OP, so existing
+	// policies are unaffected. This is the enforcement primitive for requiring a
+	// hardware-backed / AAL3 release-approval policy OID on a signer cert.
+	RequiredPolicyOIDs []string `json:"requiredpolicyoids,omitempty" jsonschema:"title=Required Policy OIDs,description=certificatePolicies (OID 2.5.29.32) OIDs in dotted-decimal form that the signer cert must all carry (fail-closed; empty means no constraint)"`
 }
 
 func (cc CertConstraint) Check(verifier *cryptoutil.X509Verifier, trustBundles map[string]TrustBundle) error {
@@ -146,7 +157,93 @@ func (cc CertConstraint) Check(verifier *cryptoutil.X509Verifier, trustBundles m
 		return ErrConstraintCheckFailed{[]error{err}}
 	}
 
+	if err := cc.checkPolicyOIDs(cert); err != nil {
+		return ErrConstraintCheckFailed{[]error{err}}
+	}
+
 	return nil
+}
+
+// checkPolicyOIDs enforces RequiredPolicyOIDs against the verified leaf cert's
+// certificatePolicies extension (OID 2.5.29.32). It fails CLOSED: when
+// RequiredPolicyOIDs is non-empty, EVERY listed OID must be present on the cert
+// or the check rejects. A subset match is intentional — a cert may carry extra
+// policy OIDs beyond those required. When RequiredPolicyOIDs is empty/nil this is
+// a NO-OP (backward compatible: existing policies that never set the field are
+// unaffected).
+//
+// The cert's policy OIDs are read from cert.Policies ([]x509.OID, the modern Go
+// API and the authoritative superset — it captures OIDs whose arcs overflow the
+// int32 components of the legacy field) and unioned with cert.PolicyIdentifiers
+// ([]asn1.ObjectIdentifier, populated for backward compatibility) so a cert is
+// matched regardless of which field a given OID landed in.
+func (cc CertConstraint) checkPolicyOIDs(cert *x509.Certificate) error {
+	if len(cc.RequiredPolicyOIDs) == 0 {
+		return nil
+	}
+
+	present := certPolicyOIDSet(cert)
+
+	for _, required := range cc.RequiredPolicyOIDs {
+		// A NUL/control byte in a constraint is never a legitimate OID and is
+		// rejected (fail closed), consistent with the other constraint passes.
+		if hasNonPrintable(required) {
+			return fmt.Errorf("cert policy OID constraint %q contains a non-printable byte; failing closed", required)
+		}
+		// Normalize the author's value through the x509 OID parser so equivalent
+		// dotted-decimal spellings (e.g. leading/trailing whitespace) do not cause
+		// a spurious miss; an unparseable value fails closed.
+		normalized, err := normalizePolicyOID(required)
+		if err != nil {
+			return fmt.Errorf("invalid required policy OID %q: %w; failing closed", required, err)
+		}
+		if !present[normalized] {
+			return fmt.Errorf("cert is missing required certificatePolicies OID %q; present OIDs %+q", normalized, sortedKeys(present))
+		}
+	}
+
+	return nil
+}
+
+// certPolicyOIDSet returns the set of dotted-decimal policy OID strings carried
+// by the cert's certificatePolicies extension. It unions cert.Policies (modern,
+// authoritative) with cert.PolicyIdentifiers (legacy) so an OID present in either
+// is treated as present.
+func certPolicyOIDSet(cert *x509.Certificate) map[string]bool {
+	set := make(map[string]bool, len(cert.Policies)+len(cert.PolicyIdentifiers))
+	for _, oid := range cert.Policies {
+		set[oid.String()] = true
+	}
+	for _, oid := range cert.PolicyIdentifiers {
+		set[oid.String()] = true
+	}
+	return set
+}
+
+// normalizePolicyOID parses a dotted-decimal OID string and returns its canonical
+// String() form, so author input and cert values are compared on the same
+// footing. An empty or malformed OID is an error (fail closed).
+func normalizePolicyOID(s string) (string, error) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return "", fmt.Errorf("empty OID")
+	}
+	oid, err := x509.ParseOID(trimmed)
+	if err != nil {
+		return "", err
+	}
+	return oid.String(), nil
+}
+
+// sortedKeys returns the keys of a set in sorted order for stable, readable
+// error messages.
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (cc CertConstraint) checkTrustBundles(verifier *cryptoutil.X509Verifier, trustBundles map[string]TrustBundle) error { //nolint:gocognit
