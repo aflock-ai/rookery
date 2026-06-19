@@ -62,6 +62,12 @@ import (
 	// See docs/signers.md for details.
 	_ "github.com/aflock-ai/rookery/plugins/signers/file"
 	_ "github.com/aflock-ai/rookery/plugins/signers/fulcio"
+
+	// piv is the pure-Go (CGO_ENABLED=0) YubiKey PIV slot-9c signer. It drives
+	// the smart card over PC/SC via goscard/purego (no cgo), so it ships in the
+	// default static binary; it only touches hardware when --signer-piv-* is
+	// actually selected for signing.
+	_ "github.com/aflock-ai/rookery/plugins/signers/piv"
 )
 
 func main() {

@@ -73,6 +73,7 @@ replace github.com/aflock-ai/rookery/plugins/attestors/product => ../plugins/att
 replace github.com/aflock-ai/rookery/plugins/attestors/sarif => ../plugins/attestors/sarif
 
 replace github.com/aflock-ai/rookery/plugins/attestors/sbom => ../plugins/attestors/sbom
+
 replace github.com/aflock-ai/rookery/plugins/attestors/trivy => ../plugins/attestors/trivy
 
 replace github.com/aflock-ai/rookery/plugins/attestors/scubagoggles => ../plugins/attestors/scubagoggles
@@ -101,6 +102,8 @@ replace github.com/aflock-ai/rookery/plugins/signers/debug-signer => ../plugins/
 replace github.com/aflock-ai/rookery/plugins/signers/file => ../plugins/signers/file
 
 replace github.com/aflock-ai/rookery/plugins/signers/fulcio => ../plugins/signers/fulcio
+
+replace github.com/aflock-ai/rookery/plugins/signers/piv => ../plugins/signers/piv
 
 replace github.com/aflock-ai/rookery/plugins/signers/kms/aws => ../plugins/signers/kms/aws
 
@@ -151,17 +154,21 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/prowler v0.0.0-20260522233336-64c65b91ab8f
 	github.com/aflock-ai/rookery/plugins/attestors/sarif v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/sbom v0.0.0-00010101000000-000000000000
-	github.com/aflock-ai/rookery/plugins/attestors/trivy v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/scubagoggles v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/secretscan v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/slsa v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/steampipe v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/system-packages v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/test-results v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/trivy v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/vex v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/debug-signer v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/file v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/signers/fulcio v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/signers/piv v0.0.0-00010101000000-000000000000
+	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c
+	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea
+	github.com/go-git/go-git/v5 v5.19.1
 	github.com/gobwas/glob v0.2.3
 	github.com/invopop/jsonschema v0.13.0
 	github.com/olekukonko/tablewriter v1.1.0
@@ -182,6 +189,7 @@ require (
 	dario.cat/mergo v1.0.1 // indirect
 	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/BobuSumisu/aho-corasick v1.0.3 // indirect
+	github.com/ElMostafaIdrassi/goscard v1.0.0 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
@@ -222,9 +230,8 @@ require (
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
-	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c // indirect
-	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea // indirect
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
+	github.com/ebitengine/purego v0.8.2 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/fatih/semgroup v1.2.0 // indirect
@@ -234,10 +241,10 @@ require (
 	github.com/gitleaks/go-gitdiff v0.9.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.9.0 // indirect
-	github.com/go-git/go-git/v5 v5.19.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/go-piv/piv-go/v2 v2.5.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect

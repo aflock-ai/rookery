@@ -274,6 +274,18 @@ func collectDefaultDecls(t *testing.T, repoRoot string) []defaultDecl {
 			if base == "vendor" || base == ".git" || base == "node_modules" || base == ".claude" || base == "security-patches" {
 				return filepath.SkipDir
 			}
+			// Skip an attestor/signer's internal/vendored/ tree. These are
+			// single-maintainer upstream libraries vendored byte-identical
+			// (e.g. go-piv under plugins/signers/piv) and are held to the
+			// UPSTREAM project's conventions, not ours — the same carve-out
+			// the golangci-lint config makes via the ".*/internal/vendored/.*"
+			// exclusion path. Their "default*" constants (DefaultPIN, etc.)
+			// are spec-dictated values we do not own and must not rename or
+			// wire to a CLI flag, so the operator-overridability audit does
+			// not apply to them.
+			if strings.HasSuffix(filepath.ToSlash(path), "/internal/vendored") {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") {

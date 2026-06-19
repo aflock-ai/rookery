@@ -74,6 +74,7 @@ use (
 	./plugins/signers/kms/aws
 	./plugins/signers/kms/azure
 	./plugins/signers/kms/gcp
+	./plugins/signers/piv
 	./plugins/signers/spiffe
 	./plugins/signers/vault
 	./plugins/signers/vault-transit

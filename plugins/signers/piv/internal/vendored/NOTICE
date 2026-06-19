@@ -1,0 +1,62 @@
+Vendored, CGO-free PIV protocol layer
+=====================================
+
+The files in this directory (except pcsc_goscard.go, NOTICE, and the *_test.go
+files authored by TestifySec) are vendored verbatim from the go-piv/piv-go
+project:
+
+    Upstream:  github.com/go-piv/piv-go/v2
+    Version:   v2.5.0
+    License:   Apache License 2.0
+    Copyright: Copyright 2020 Google LLC (and contributors)
+
+Files vendored UNCHANGED (logic), retaining their original Apache-2.0 headers:
+
+    piv.go          PIV applet select, version/serial, PIN/PUK/mgmt-key auth
+    key.go          keygen, sign (GENERAL AUTHENTICATE), attest, cert get/store,
+                    crypto.Signer / crypto.Decrypter implementations
+    pcsc.go         apdu type, SW-code error mapping (apduErr/AuthErr/ErrNotFound),
+                    the cgo-free (*scTx).Transmit command-chaining wrapper
+    pcsc_errors.go  SCARD_* return-code -> message table
+    doc.go          package doc
+    certs/          Yubico attestation CA roots/intermediates (//go:embed inputs)
+
+NOTE: piv.go and pcsc.go were normalized with `gofmt` for the current Go
+toolchain (whitespace/comment-indentation only). All other vendored files are
+byte-identical to upstream, with two logic deviations in piv.go:
+
+  - (*client).Open: upstream v2.5.0 leaks the PC/SC handle and context when
+    h.Begin() fails, and leaks the handle+context (closing only tx) when
+    ykSelectApplication() fails. Because the connection is SCardShareExclusive,
+    a leaked handle keeps the reader/card locked for the process and breaks
+    retries. Both error paths now close everything they opened.
+
+  - (*YubiKey).Close: upstream v2.5.0 disconnects the handle and releases the
+    context but never ends the PC/SC transaction Open() started with h.Begin().
+    On stacks that require SCardEndTransaction before SCardDisconnect this can
+    leave the exclusive transaction/card locked on the normal close path
+    (Card.Close / cardBoundSigner.Close). Close now ends the transaction first,
+    then the handle and context, preserving the first non-nil error.
+
+    Both fixes are marked "DEVIATION from upstream go-piv v2.5.0" inline. No
+    copyright headers were modified.
+
+Files NOT vendored (they carry the cgo PC/SC bindings) and DELETED relative to
+upstream:
+
+    pcsc_unix.go, pcsc_darwin.go, pcsc_linux.go, pcsc_freebsd.go,
+    pcsc_openbsd.go, pcsc_windows.go
+
+These are replaced by pcsc_goscard.go (Copyright 2026 TestifySec, Inc.), a pure-Go
+(CGO_ENABLED=0) PC/SC transport backed by github.com/ElMostafaIdrassi/goscard
+(which drives PC/SC over github.com/ebitengine/purego — no `import "C"`). The
+struct types (scContext/scHandle/scTx), their method signatures, the rcSuccess
+constant, and scCheck are kept compatible with the upstream cgo transport so the
+vendored protocol files compile and run unchanged.
+
+The go-piv/piv-go/v2 module is still a (direct) dependency of this package, but
+ONLY for its cgo-free third_party/rsa subpackage (an RSA-PSS fork used by
+key.go). Importing that subpackage does not compile any cgo file.
+
+Upstream LICENSE text: https://www.apache.org/licenses/LICENSE-2.0
+go-piv/piv-go LICENSE:  https://github.com/go-piv/piv-go/blob/master/LICENSE
