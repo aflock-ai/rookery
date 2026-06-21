@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 )
 
@@ -92,9 +93,24 @@ func (s *MemorySource) LoadEnvelope(reference string, env dsse.Envelope) error {
 
 	s.envelopesByReference[reference] = collEnv
 	s.referencesByCollectionName[collEnv.Collection.Name] = append(s.referencesByCollectionName[collEnv.Collection.Name], reference)
+	// Build the subject-match index. sub.Digest is keyed by ALGORITHM name
+	// (e.g. "sha256", "sha1", "gitoid:sha256") with the hex/URI value as the
+	// map value. Only index a digest whose algorithm is collision-resistant
+	// AND whose value is well-formed for that algorithm — this keeps SHA-1
+	// (chosen-prefix collidable) and malformed/wrong-length values out of the
+	// matchable set, so they cannot anchor a subject match and enable artifact
+	// substitution. See cryptoutil.IsMatchableSubjectDigest and finding S1.
+	//
+	// NOTE: the index is keyed by the raw value (not algorithm:value) because
+	// Search callers pass bare digest values. Keying by algorithm:value would
+	// require a coordinated change to every Sourcer caller (policy engine) and
+	// is tracked as a follow-up.
 	subDigestIndex := make(map[string]struct{})
 	for _, sub := range collEnv.Statement.Subject {
-		for _, digest := range sub.Digest {
+		for algorithm, digest := range sub.Digest {
+			if !cryptoutil.IsMatchableSubjectDigest(algorithm, digest) {
+				continue
+			}
 			subDigestIndex[digest] = struct{}{}
 		}
 	}

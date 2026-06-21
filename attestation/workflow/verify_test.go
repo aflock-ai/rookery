@@ -43,6 +43,14 @@ const (
 	dummyBackrefAttestorName = "backref attestor"
 	dummyBackrefAttestorType = "test/backrefattestor"
 	matchSubjectName         = "matchSubject"
+
+	// Valid 64-char hex sha256 stand-ins for the operator seed digest and the
+	// back-reference digest. They must be real hex: S1's IsMatchableSubjectDigest
+	// drops malformed sha256 values from the matchable set, so the earlier
+	// placeholders (seedDigestHex / backrefDigestHex) are no longer matchable and
+	// would fail the subject-match these tests assert.
+	seedDigestHex    = "5eed000000000000000000000000000000000000000000000000000000000000"
+	backrefDigestHex = "bac4ef0000000000000000000000000000000000000000000000000000000000"
 )
 
 // dummyCommandRunAttestor is a minimal attestor that simulates commandrun for testing.
@@ -112,7 +120,7 @@ func TestVerify(t *testing.T) {
 	// Create a dummy subject digest for policy verification
 	dummySubjects := []cryptoutil.DigestSet{
 		{
-			{Hash: crypto.SHA256}: "dummydigestfortest",
+			{Hash: crypto.SHA256}: seedDigestHex,
 		},
 	}
 
@@ -261,18 +269,18 @@ func TestBackRefs(t *testing.T) {
 		context.Background(),
 		policy.WithVerifiedSource(verifiedSource),
 		// Seed digest that no collection directly advertises as a subject.
-		// Without BackRef expansion, step01 (which has subject "abcde")
+		// Without BackRef expansion, step01 (which has subject backrefDigestHex)
 		// would never be located.
-		policy.WithSubjectDigests([]string{"dummydigestfortest"}),
+		policy.WithSubjectDigests([]string{seedDigestHex}),
 	)
 	require.NoError(t, err, fmt.Sprintf("policy.Verify returned error: results=%+v", stepResults))
 	require.True(t, pass, fmt.Sprintf("policy did not pass: results=%+v", stepResults))
 
 	// Assert BOTH steps surfaced passed collections. step02 passes at depth 0
 	// because its collection carries the operator's seed digest
-	// "dummydigestfortest" as a real subject (a genuine subject-digest match,
+	// seedDigestHex as a real subject (a genuine subject-digest match,
 	// not subjectless fail-open matching). step01 passes only after the
-	// BackRef digest "abcde" — published by step02's dummyBackrefAttestor and
+	// BackRef digest backrefDigestHex — published by step02's dummyBackrefAttestor and
 	// also carried as one of its subjects per the BackReffer contract — is
 	// added to the search set for the next depth iteration. Without BackRef
 	// expansion, step01.Passed would be empty and this assertion would fail.
@@ -407,21 +415,21 @@ func (a *dummySubjectAttestor) Schema() *jsonschema.Schema                      
 func (a *dummySubjectAttestor) Subjects() map[string]cryptoutil.DigestSet {
 	return map[string]cryptoutil.DigestSet{
 		matchSubjectName: {
-			{Hash: crypto.SHA256}: "abcde",
+			{Hash: crypto.SHA256}: backrefDigestHex,
 		},
 	}
 }
 
 // dummyBackrefAttestor is a test attestor used to expose a back ref subject.
 //
-// It exposes TWO subjects: the operator's seed digest ("dummydigestfortest"),
+// It exposes TWO subjects: the operator's seed digest (seedDigestHex),
 // so step02's collection is found legitimately at depth 0 by a real
 // subject-digest match (NOT by subjectless fail-open matching), and the
-// back-reference digest ("abcde"), which step01 carries as its subject. This
+// back-reference digest (backrefDigestHex), which step01 carries as its subject. This
 // honors the BackReffer contract (factory.go / detection contract.go): an
 // attestor's BackRefs MUST be a subset of its own Subjects — the canonical
 // example being the git attestor publishing its commit hash as both a subject
-// and a back-reference. Without "dummydigestfortest" as a real subject here,
+// and a back-reference. Without seedDigestHex as a real subject here,
 // step02 could only be matched via the subjectless fail-open that
 // memory_subjectless_test.go closes.
 type dummyBackrefAttestor struct{}
@@ -434,17 +442,17 @@ func (a *dummyBackrefAttestor) Schema() *jsonschema.Schema                      
 func (a *dummyBackrefAttestor) Subjects() map[string]cryptoutil.DigestSet {
 	return map[string]cryptoutil.DigestSet{
 		"seed": {
-			{Hash: crypto.SHA256}: "dummydigestfortest",
+			{Hash: crypto.SHA256}: seedDigestHex,
 		},
 		matchSubjectName: {
-			{Hash: crypto.SHA256}: "abcde",
+			{Hash: crypto.SHA256}: backrefDigestHex,
 		},
 	}
 }
 func (a *dummyBackrefAttestor) BackRefs() map[string]cryptoutil.DigestSet {
 	return map[string]cryptoutil.DigestSet{
 		matchSubjectName: {
-			{Hash: crypto.SHA256}: "abcde",
+			{Hash: crypto.SHA256}: backrefDigestHex,
 		},
 	}
 }

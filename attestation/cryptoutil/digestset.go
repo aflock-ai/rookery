@@ -122,6 +122,72 @@ func HashFromString(name string) (crypto.Hash, error) {
 	return crypto.Hash(0), ErrUnsupportedHash(name)
 }
 
+// matchableSubjectAlgorithms is the allowlist of digest-algorithm names whose
+// values are safe to use as a subject-match key when resolving "does this
+// collection attest THIS artifact?".
+//
+// Two properties are required to be on this list:
+//
+//  1. Collision resistance. Subject matching is an equality check on the
+//     digest value; if an attacker can craft two distinct artifacts that share
+//     a digest, a collection legitimately signed over one can be replayed to
+//     "verify" the other. SHA-1 is omitted for exactly this reason — it has
+//     practical chosen-prefix collisions and must NOT anchor a subject match.
+//
+//  2. A known fixed value length, so a malformed or wrong-length value can be
+//     rejected before it is indexed. The value is the number of hex characters
+//     a well-formed digest must have; 0 means the value is not a plain hex
+//     digest (e.g. a gitoid URI or a dirhash "h1:..." string) and only the
+//     algorithm allowlist applies.
+var matchableSubjectAlgorithms = map[string]int{
+	"sha256":        2 * (256 / 8), // 64 hex chars
+	"gitoid:sha256": 0,             // gitoid URI string, not plain hex
+	"dirHash":       0,             // dirhash h1: string, not plain hex
+}
+
+// isHexString reports whether s is non-empty and composed solely of hex
+// characters (0-9, a-f, A-F). Allocation-free; used to reject malformed digest
+// values before they are indexed for subject matching.
+func isHexString(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// IsMatchableSubjectDigest reports whether a subject digest under the given
+// algorithm name, with the given value, may be used as a subject-match key.
+//
+// It returns false for:
+//   - unknown algorithm names,
+//   - non-collision-resistant algorithms (notably "sha1" / "gitoid:sha1"),
+//   - plain-hex algorithms whose value is not the exact expected hex length OR
+//     contains non-hex characters (a 64-char string of "z" is the right length
+//     but is not a real sha256 — it must not anchor a match).
+//
+// Callers that build a subject index (e.g. attestation/source) use this to keep
+// SHA-1 and malformed digests out of the matchable set, closing a subject /
+// artifact-substitution avenue. See finding S1.
+func IsMatchableSubjectDigest(algorithm, value string) bool {
+	wantHexLen, ok := matchableSubjectAlgorithms[algorithm]
+	if !ok {
+		return false
+	}
+	if wantHexLen != 0 {
+		// Plain-hex algorithm: enforce exact length AND hex-ness.
+		return len(value) == wantHexLen && isHexString(value)
+	}
+	// Non-hex value (gitoid URI / dirhash string): the algorithm allowlist is
+	// the gate; only require a non-empty value.
+	return value != ""
+}
+
 // Equal returns true if every digest for hash functions both artifacts have in common are equal.
 // If the two artifacts don't have any digests from common hash functions, equal will return false.
 // If any digest from common hash functions differ between the two artifacts, equal will return false.

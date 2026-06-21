@@ -26,6 +26,16 @@ import (
 	intoto "github.com/aflock-ai/rookery/attestation/intoto"
 )
 
+// Valid 64-hex sha256 digest values used across the subject-index tests. The
+// subject index only accepts collision-resistant algorithms with well-formed
+// values (see cryptoutil.IsMatchableSubjectDigest / finding S1), so test
+// subjects must use a real algorithm name and a correctly-sized value.
+const (
+	testDigestA = "1111111111111111111111111111111111111111111111111111111111111111"
+	testDigestB = "2222222222222222222222222222222222222222222222222222222222222222"
+	testDigestC = "3333333333333333333333333333333333333333333333333333333333333333"
+)
+
 func TestLoadEnvelope(t *testing.T) {
 	// Marshal the attestation.Collection into a JSON byte array
 	predicate, err := json.Marshal(attestation.Collection{})
@@ -50,7 +60,7 @@ func TestLoadEnvelope(t *testing.T) {
 			reference: "ref",
 			intotoStatment: intoto.Statement{
 				Type:          "https://in-toto.io/Statement/v0.1",
-				Subject:       []intoto.Subject{{Name: "example", Digest: map[string]string{"sha256": "exampledigest"}}},
+				Subject:       []intoto.Subject{{Name: "example", Digest: map[string]string{"sha256": testDigestA}}},
 				PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 				Predicate:     json.RawMessage(predicate),
 			},
@@ -72,7 +82,7 @@ func TestLoadEnvelope(t *testing.T) {
 			reference: "ref",
 			intotoStatment: intoto.Statement{
 				Type:          "https://in-toto.io/Statement/v0.1",
-				Subject:       []intoto.Subject{{Name: "example", Digest: map[string]string{"sha256": "exampledigest"}}},
+				Subject:       []intoto.Subject{{Name: "example", Digest: map[string]string{"sha256": testDigestA}}},
 				PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 				Predicate:     json.RawMessage("invalid-predicate"),
 			},
@@ -86,7 +96,7 @@ func TestLoadEnvelope(t *testing.T) {
 			reference: "ref",
 			intotoStatment: intoto.Statement{
 				Type:          "https://in-toto.io/Statement/v0.1",
-				Subject:       []intoto.Subject{{Name: "example", Digest: map[string]string{"sha256": "exampledigest"}}},
+				Subject:       []intoto.Subject{{Name: "example", Digest: map[string]string{"sha256": testDigestA}}},
 				PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 				Predicate:     json.RawMessage(predicate),
 			},
@@ -185,26 +195,26 @@ func TestSearch(t *testing.T) {
 			statements: []intoto.Statement{
 				{
 					Type:          "1",
-					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"a": "exampledigest", "b": "exampledigest2", "c": "exampledigest3"}}},
+					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
 					Type:          "2",
-					Subject:       []intoto.Subject{{Name: "example2", Digest: map[string]string{"a": "exampledigest", "b": "exampledigest2"}}},
+					Subject:       []intoto.Subject{{Name: "example2", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
 					Type:          "3",
-					Subject:       []intoto.Subject{{Name: "example3", Digest: map[string]string{"a": "exampledigest"}}},
+					Subject:       []intoto.Subject{{Name: "example3", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 			},
 			searchQuery: args{
 				collectionName: "t",
-				subDigest:      []string{"exampledigest", "notincluded"},
+				subDigest:      []string{testDigestA, testDigestC},
 				attestations:   []string{},
 			},
 			wantReferences: map[string]struct{}{"ref0": {}, "ref1": {}, "ref2": {}},
@@ -215,32 +225,32 @@ func TestSearch(t *testing.T) {
 			statements: []intoto.Statement{
 				{
 					Type:          "1",
-					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"a": "exampledigest", "b": "exampledigest2", "c": "exampledigest3"}}},
+					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
 					Type:          "2",
-					Subject:       []intoto.Subject{{Name: "example2", Digest: map[string]string{"a": "exampledigest", "b": "exampledigest2"}}},
+					Subject:       []intoto.Subject{{Name: "example2", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
 					Type:          "3",
-					Subject:       []intoto.Subject{{Name: "example3", Digest: map[string]string{"a": "exampledigest"}}},
+					Subject:       []intoto.Subject{{Name: "example3", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
 					Type:          "4",
-					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"a": "not included"}}},
+					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"sha256": testDigestB}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 			},
 			searchQuery: args{
 				collectionName: "t",
-				subDigest:      []string{"exampledigest"},
+				subDigest:      []string{testDigestA},
 				attestations:   []string{},
 			},
 			wantReferences: map[string]struct{}{"ref0": {}, "ref1": {}, "ref2": {}},
@@ -258,19 +268,19 @@ func TestSearch(t *testing.T) {
 			statements: []intoto.Statement{
 				{
 					Type:          "1",
-					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"a": "exampledigest", "b": "exampledigest2", "c": "exampledigest3"}}},
+					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
 					Type:          "2",
-					Subject:       []intoto.Subject{{Name: "example2", Digest: map[string]string{"a": "exampledigest", "b": "exampledigest2"}}},
+					Subject:       []intoto.Subject{{Name: "example2", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
 					Type:          "3",
-					Subject:       []intoto.Subject{{Name: "example3", Digest: map[string]string{"a": "exampledigest"}}},
+					Subject:       []intoto.Subject{{Name: "example3", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
@@ -332,7 +342,7 @@ func TestSearch(t *testing.T) {
 func TestSearchByPredicateType_HappyPath(t *testing.T) {
 	const (
 		slsaV1PredicateType = "https://slsa.dev/provenance/v1"
-		matchingDigest      = "deadbeefcafebabe"
+		matchingDigest      = "deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe" // 64 hex
 	)
 
 	// Synthetic SLSA provenance v1 predicate — just enough shape for the
