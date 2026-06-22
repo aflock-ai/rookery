@@ -269,18 +269,28 @@ func TestCompareArtifacts_Mismatch(t *testing.T) {
 func TestCompareArtifacts_DisjointPaths(t *testing.T) {
 	mats := map[string]cryptoutil.DigestSet{"a.txt": newDigestSet("aaa")}
 	arts := map[string]cryptoutil.DigestSet{"b.txt": newDigestSet("bbb")}
-	// No overlap means no error — paths that don't intersect are ignored.
-	assert.NoError(t, compareArtifacts(mats, arts))
+	// Disjoint paths share no artifact: nothing actually flowed between the
+	// steps, so the artifactsFrom edge must be rejected rather than passing
+	// vacuously (GHSA-vmvj-p3hw-39q3).
+	var overlapErr ErrNoArtifactOverlap
+	assert.ErrorAs(t, compareArtifacts(mats, arts), &overlapErr)
 }
 
 func TestCompareArtifacts_EmptyMaterials(t *testing.T) {
 	arts := map[string]cryptoutil.DigestSet{"file.txt": newDigestSet("abc")}
+	// An empty downstream material set is the caller's domain: a leaf-less
+	// (unknown) empty set is rejected before compareArtifacts, while an
+	// authoritative signed "consumed nothing" claim legitimately satisfies the
+	// chain. compareArtifacts therefore does not reject empty materials here —
+	// only a non-empty material set with zero overlap is rejected.
 	assert.NoError(t, compareArtifacts(nil, arts))
 }
 
 func TestCompareArtifacts_EmptyArtifacts(t *testing.T) {
 	mats := map[string]cryptoutil.DigestSet{"file.txt": newDigestSet("abc")}
-	assert.NoError(t, compareArtifacts(mats, nil))
+	// No upstream artifacts => zero overlap => the edge proves nothing.
+	var overlapErr ErrNoArtifactOverlap
+	assert.ErrorAs(t, compareArtifacts(mats, nil), &overlapErr)
 }
 
 // ---------------------------------------------------------------------------

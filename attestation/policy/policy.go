@@ -1080,12 +1080,14 @@ func observedCollectionSubjects(results []source.CollectionVerificationResult) [
 }
 
 func compareArtifacts(mats map[string]cryptoutil.DigestSet, arts map[string]cryptoutil.DigestSet) error {
+	overlap := 0
 	for path, mat := range mats {
 		art, ok := arts[path]
 		if !ok {
 			continue
 		}
 
+		overlap++
 		if !mat.Equal(art) {
 			return ErrMismatchArtifact{
 				Artifact: art,
@@ -1093,6 +1095,20 @@ func compareArtifacts(mats map[string]cryptoutil.DigestSet, arts map[string]cryp
 				Path:     path,
 			}
 		}
+	}
+
+	// An artifactsFrom edge means the downstream materials came from the
+	// upstream artifacts. If the step consumed materials but none of them came
+	// from the referenced step (zero shared paths), nothing actually flowed
+	// between the steps and the comparison would otherwise pass vacuously, so
+	// reject it (GHSA-vmvj-p3hw-39q3).
+	//
+	// An empty material set is intentionally NOT rejected here: a leaf-less
+	// (unknown) empty set is already rejected by the caller before this point,
+	// so an empty set reaching compareArtifacts is an authoritative, signed
+	// "consumed nothing" claim that legitimately satisfies the chain.
+	if len(mats) > 0 && overlap == 0 {
+		return ErrNoArtifactOverlap{}
 	}
 
 	// Warn about artifacts that appear in the producing step but not in the

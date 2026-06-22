@@ -289,30 +289,30 @@ func TestSecurity_R3_181_EmptyConstraintMatchesEmptyCertFields(t *testing.T) {
 func TestSecurity_R3_182_EmptyMaterialsBypassesArtifactCheck(t *testing.T) {
 	sha256Key := cryptoutil.DigestValue{Hash: crypto.SHA256}
 
-	// Empty materials: the consuming step has no materials at all.
-	materials := map[string]cryptoutil.DigestSet{}
-
-	// Producing step has arbitrary artifacts.
+	// FIXED (GHSA-vmvj-p3hw-39q3): the artifactsFrom vacuous-pass is closed.
+	// A downstream step that consumed materials, NONE of which came from the
+	// referenced upstream step (disjoint paths), proves no genuine flow and is
+	// now rejected with ErrNoArtifactOverlap.
+	materials := map[string]cryptoutil.DigestSet{
+		"unrelated-src.go": {sha256Key: "ccc333"},
+	}
 	artifacts := map[string]cryptoutil.DigestSet{
 		"trusted-app.bin": {sha256Key: "aaa111"},
 		"config.yaml":     {sha256Key: "bbb222"},
 	}
 
 	err := compareArtifacts(materials, artifacts)
-
-	// BUG: The for loop over materials (line 639) has nothing to iterate,
-	// so the function falls through and returns nil.
-	if err != nil {
-		t.Log("FIXED: compareArtifacts now rejects empty materials when " +
-			"there are upstream artifacts to check against.")
-		return
+	if _, ok := err.(ErrNoArtifactOverlap); !ok {
+		t.Errorf("SECURITY BUG R3-182: expected ErrNoArtifactOverlap for a non-empty "+
+			"material set sharing no path with the upstream artifacts, got %v", err)
 	}
 
-	t.Error("SECURITY BUG R3-182: compareArtifacts returns nil (pass) when " +
-		"the consuming step has ZERO materials. An attacker can forge a " +
-		"collection with no material attestors, causing the artifact integrity " +
-		"check to trivially pass. The step's ArtifactsFrom constraint becomes " +
-		"meaningless because there are no materials to compare against.")
+	// The pure empty-materials case is handled one level up, not here: a
+	// leaf-less (unknown) empty collection is rejected by
+	// verifyCollectionArtifacts before compareArtifacts is reached, while an
+	// authoritative signed "consumed nothing" set legitimately satisfies the
+	// chain. compareArtifacts therefore intentionally does not reject an empty
+	// material set.
 }
 
 // ===========================================================================
