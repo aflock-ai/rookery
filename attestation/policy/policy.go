@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -631,19 +632,87 @@ func mergePassedCollections(dst, src []PassedCollection) []PassedCollection {
 
 // passedCollectionKey returns a stable content identity for a passed
 // collection, used to de-duplicate the same collection re-discovered across
-// depth iterations. It hashes the underlying CollectionEnvelope (DSSE envelope,
-// statement, collection, and reference), so two results referring to the same
-// signed collection collapse to one key while distinct collections do not.
+// depth iterations.
+//
+// Identity is the verified in-toto Statement (subject + predicateType +
+// predicate) bound to the SET OF SIGNERS THAT ACTUALLY PASSED VERIFICATION
+// (ValidFunctionaries), NOT the raw DSSE envelope bytes or the source
+// reference. DSSE signatures cover only the payload, so keying on the envelope
+// would let an attacker mutate/append unverified signature entries — or vary
+// the source reference — to make the SAME verified collection hash to a new
+// key and be counted twice; reference-based keying could likewise wrongly
+// collapse genuinely distinct collections from a MultiSource. Keying on the
+// verified signer identity is malleability-resistant (GHSA-c346-qp3r-53vf).
+//
+// Fields are length-prefix framed so field boundaries are unambiguous, and the
+// signer key IDs are sorted so the identity is order-independent.
 func passedCollectionKey(pc PassedCollection) string {
-	b, err := json.Marshal(pc.Collection.CollectionEnvelope)
+	cvr := pc.Collection
+
+	stmt, err := json.Marshal(cvr.Statement)
 	if err != nil {
-		// Marshaling the envelope should not fail, but if it does we fall back
-		// to a per-instance key so we never silently collapse distinct
-		// collections (fail-closed against over-deduplication).
-		return fmt.Sprintf("unmarshalable:%p", &pc)
+		// Marshaling the statement should not fail (it is already-parsed JSON in
+		// the verified path). If it does, fall back to a DETERMINISTIC,
+		// content-derived key so identical collections still collapse and
+		// distinct ones stay distinct — never a non-stable per-instance key.
+		return passedCollectionFallbackKey(cvr)
 	}
-	sum := sha256.Sum256(b)
+
+	// Collect the DISTINCT verified signer key IDs. The set (not the multiset)
+	// is the identity: the same verifier can legitimately appear more than once
+	// in ValidFunctionaries (e.g. accumulated across search-depth iterations),
+	// and that must not change the collection's identity.
+	seen := make(map[string]struct{}, len(cvr.ValidFunctionaries))
+	keyIDs := make([]string, 0, len(cvr.ValidFunctionaries))
+	for _, v := range cvr.ValidFunctionaries {
+		kid, err := v.KeyID()
+		if err != nil {
+			return passedCollectionFallbackKey(cvr)
+		}
+		if _, ok := seen[kid]; ok {
+			continue
+		}
+		seen[kid] = struct{}{}
+		keyIDs = append(keyIDs, kid)
+	}
+	sort.Strings(keyIDs)
+
+	var buf bytes.Buffer
+	writeFramed(&buf, stmt)
+	for _, kid := range keyIDs {
+		writeFramed(&buf, []byte(kid))
+	}
+	sum := sha256.Sum256(buf.Bytes())
 	return hex.EncodeToString(sum[:])
+}
+
+// passedCollectionFallbackKey is the deterministic fallback identity used only
+// when the verified Statement cannot be marshaled or a verified signer's KeyID
+// cannot be derived — exceptional cases that do not occur in the standard
+// verified path. It is derived from the DSSE envelope payload + signatures so
+// it is stable (identical collections collapse, distinct collections do not),
+// unlike a per-instance pointer key which would silently defeat de-duplication.
+// It is namespaced so it can never collide with a normal identity key.
+func passedCollectionFallbackKey(cvr source.CollectionVerificationResult) string {
+	env := cvr.Envelope
+	var buf bytes.Buffer
+	writeFramed(&buf, env.Payload)
+	writeFramed(&buf, []byte(env.PayloadType))
+	for _, s := range env.Signatures {
+		writeFramed(&buf, []byte(s.KeyID))
+		writeFramed(&buf, s.Signature)
+	}
+	sum := sha256.Sum256(buf.Bytes())
+	return "fallback:" + hex.EncodeToString(sum[:])
+}
+
+// writeFramed writes b to buf prefixed with its big-endian uint64 length, so
+// concatenated fields cannot be confused for one another when hashed.
+func writeFramed(buf *bytes.Buffer, b []byte) {
+	var lenBuf [8]byte
+	binary.BigEndian.PutUint64(lenBuf[:], uint64(len(b)))
+	buf.Write(lenBuf[:])
+	buf.Write(b)
 }
 
 // verifyExternalAttestations runs the external-attestation verification
