@@ -278,8 +278,22 @@ func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) 
 	if signer == nil {
 		return time.Time{}, fmt.Errorf("timestamp token must have exactly one signer")
 	}
-	if !hasTimeStampingEKU(signer) {
-		return time.Time{}, fmt.Errorf("timestamp token signer certificate lacks the id-kp-timeStamping extended key usage")
+	// RFC 3161 §2.3: the TSA signing certificate must assert id-kp-timeStamping
+	// as its SOLE extended key usage. A multi-purpose leaf (e.g.
+	// timeStamping + serverAuth) must be rejected, otherwise a CA-issued cert
+	// that is not exclusively a timestamping cert could forge timestamps
+	// (GHSA-5qp5-ph6r-qj9f).
+	//
+	// NOTE: RFC 3161 §2.3 also says this extension "must be critical", but that
+	// is intentionally NOT enforced here. Go's x509.CreateCertificate marks the
+	// EKU extension non-critical when set via the ExtKeyUsage field, so the
+	// platform's own TSA cert — and most real-world TSA certs — carry a
+	// non-critical EKU. Enforcing criticality would reject every previously
+	// issued timestamp (the token embeds that cert) for no additional protection:
+	// requiring timeStamping to be the SOLE EKU already closes the dual-purpose
+	// cert vector.
+	if !timestampingIsSoleEKU(signer) {
+		return time.Time{}, fmt.Errorf("timestamp token signer certificate must carry id-kp-timeStamping as its only extended key usage")
 	}
 
 	intermediates := x509.NewCertPool()
@@ -298,15 +312,12 @@ func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) 
 	return ts.Time, nil
 }
 
-// hasTimeStampingEKU reports whether the certificate explicitly carries the
-// id-kp-timeStamping extended key usage. RFC 3161 §2.3 requires the TSA signing
-// certificate to assert this EKU; absence (including a cert with no EKU
-// extension at all) must fail closed.
-func hasTimeStampingEKU(cert *x509.Certificate) bool {
-	for _, eku := range cert.ExtKeyUsage {
-		if eku == x509.ExtKeyUsageTimeStamping {
-			return true
-		}
-	}
-	return false
+// timestampingIsSoleEKU reports whether id-kp-timeStamping is the certificate's
+// ONLY extended key usage. RFC 3161 §2.3 requires the TSA signing certificate
+// to assert this EKU and no other; a multi-purpose leaf (or one with no EKU at
+// all, or with unrecognized EKUs alongside) must fail closed.
+func timestampingIsSoleEKU(cert *x509.Certificate) bool {
+	return len(cert.ExtKeyUsage) == 1 &&
+		cert.ExtKeyUsage[0] == x509.ExtKeyUsageTimeStamping &&
+		len(cert.UnknownExtKeyUsage) == 0
 }

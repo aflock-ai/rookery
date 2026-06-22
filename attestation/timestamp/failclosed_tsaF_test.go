@@ -208,7 +208,11 @@ func TestRed_F_VerifyRejectsNoEKUSigner(t *testing.T) {
 // Finding F (#5747) — control for tsp.go:225-267.
 func TestRed_F_VerifyAcceptsTimestampingEKU(t *testing.T) {
 	caCert, caKey := makeRedgateCA(t)
-	// Conformant TSA signer: id-kp-timeStamping EKU present.
+	// Conformant TSA signer: id-kp-timeStamping as the sole EKU. The EKU
+	// extension is NON-critical (Go's default via the ExtKeyUsage field — the
+	// same shape the platform TSA cert has), which must be ACCEPTED:
+	// GHSA-5qp5-ph6r-qj9f enforces sole-EKU but intentionally does not require
+	// criticality (see TestSecurity_GHSA_5qp5_AcceptsNonCriticalSoleEKU).
 	signerCert, signerKey := makeRedgateLeaf(t, caCert, caKey, []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping})
 
 	payload := []byte("artifact-bytes-to-be-timestamped-3")
