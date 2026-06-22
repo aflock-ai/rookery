@@ -429,7 +429,15 @@ func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (
 		return false, stepResults, externalResults, err
 	}
 
+	// A policy must affirmatively verify something to pass. A step imposes a real
+	// obligation; an external attestation only counts if it was actually
+	// satisfied — a Skipped (optional, unmatched) external verifies nothing.
+	// A policy with no steps whose only external is Skipped therefore proves
+	// nothing and must fail closed rather than pass vacuously
+	// (GHSA-rgp5-33mp-jhfm). The no-steps-and-no-externals case is already
+	// rejected with an error in verifySteps.
 	pass := true
+	verifiedSomething := len(p.Steps) > 0
 	for _, result := range stepResults {
 		if !result.Analyze() {
 			pass = false
@@ -439,6 +447,12 @@ func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (
 		if !er.Analyze() {
 			pass = false
 		}
+		if !er.Skipped {
+			verifiedSomething = true
+		}
+	}
+	if !verifiedSomething {
+		pass = false
 	}
 
 	return pass, stepResults, externalResults, nil

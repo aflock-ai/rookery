@@ -570,7 +570,10 @@ deny[msg] { msg := "always" }
 
 	p := Policy{
 		Expires: futureExpiry(),
-		Steps:   map[string]Step{"noop": {Name: "noop", Functionaries: []Functionary{{PublicKeyID: keyID}}}},
+		// Externals-only policy (no steps): isolates the external aggregate so
+		// the verdict is driven purely by the externals. slsa-accept (required)
+		// passes and makes the policy "verify something"; slsa-deny (optional) is
+		// found but rego-denied, which must still fail the policy.
 		ExternalAttestations: map[string]ExternalAttestation{
 			"slsa-accept": {
 				Name:          "slsa-accept",
@@ -593,27 +596,24 @@ deny[msg] { msg := "always" }
 		byPredicate: map[string][]source.StatementEnvelope{slsaProvenanceV1PredicateType: {envelope}},
 	}
 
-	_, _, extResults, err := p.VerifyWithExternals(context.Background(),
+	pass, _, extResults, err := p.VerifyWithExternals(context.Background(),
 		WithVerifiedSource(ms),
 		WithSubjectDigests([]string{"sha256:artifact"}),
 	)
-	// slsa-accept passes, slsa-deny has 0 passes — but is optional.
-	// Optional externals with all-rejected envelopes still count as failing.
-	// However our implementation marks them Skipped only if the source
-	// returned zero envelopes; here envelopes were returned and rejected
-	// so Skipped=false and len(Passed)=0 → Analyze() returns false. Since
-	// slsa-deny is not required, the overall error should still propagate
-	// as policy denial through the Analyze() aggregate.
+	// slsa-deny is optional and was FOUND but rego-denied: Skipped=false,
+	// len(Passed)=0 → Analyze() returns false. An optional external is not a
+	// hard error, so err is nil — but the overall verdict must be false.
+	require.NoError(t, err, "an optional rejected external is a verdict, not a hard error")
 	require.Contains(t, extResults, "slsa-accept")
 	require.Contains(t, extResults, "slsa-deny")
 	assert.Len(t, extResults["slsa-accept"].Passed, 1)
 	assert.Empty(t, extResults["slsa-deny"].Passed)
 	assert.NotEmpty(t, extResults["slsa-deny"].Rejected)
-	// Error channel: when optional external has all-rejected envelopes,
-	// verifyExternalAttestations skips the "required" hard failure path so
-	// no err is returned here — but Analyze() still reports false for
-	// that external, making overall pass false.
-	_ = err
+	// The aggregate verdict: even though slsa-accept passed (so the policy did
+	// verify something), the found-but-rejected optional slsa-deny must still
+	// make the overall verification fail.
+	assert.False(t, pass,
+		"a found-but-rejected optional external must fail the policy even when another external passes")
 }
 
 // ---------------------------------------------------------------------------
