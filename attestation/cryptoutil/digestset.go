@@ -188,25 +188,105 @@ func IsMatchableSubjectDigest(algorithm, value string) bool {
 	return value != ""
 }
 
+// digestSize returns the digest length in bytes for a recognized DigestValue,
+// and ok=false for any unknown or zero-value DigestValue. It gates calls to
+// crypto.Hash.Size(), which panics for an unregistered/zero hash: only the
+// algorithms in hashNames (sha256/sha1 and their gitoid/dirhash variants) reach
+// Size(), and those are always registered.
+func digestSize(dv DigestValue) (int, bool) {
+	if _, ok := hashNames[dv]; !ok {
+		return 0, false
+	}
+	return dv.Size(), true
+}
+
 // Equal returns true if every digest for hash functions both artifacts have in common are equal.
 // If the two artifacts don't have any digests from common hash functions, equal will return false.
 // If any digest from common hash functions differ between the two artifacts, equal will return false.
+//
+// Equality must not be allowed to silently downgrade to the weakest shared hash: an attacker who
+// omits the strong digest could otherwise force a match on a weak one (GHSA-pgpm-j729-qcvh).
+// Equality therefore additionally requires that the strongest algorithm present on either side is
+// carried by both sides and agrees. If the strongest available algorithm is absent from one side,
+// the sets are not equal.
 func (ds *DigestSet) Equal(second DigestSet) bool {
-	hasMatchingDigest := false
-	for hash, digest := range *ds {
-		otherDigest, ok := second[hash]
+	maxSize := strongestRecognizedSize(*ds, second)
+	if maxSize < 0 {
+		// Both sets are empty, or neither carries a recognized algorithm; there is
+		// nothing we can compare strength on, so they are not equal.
+		return false
+	}
+	if !strongestClassAgrees(*ds, second, maxSize) {
+		return false
+	}
+	return noRecognizedSharedDisagrees(*ds, second)
+}
+
+// strongestRecognizedSize returns the largest digest size (larger size ==
+// stronger) among recognized algorithms across either set, or -1 if neither has
+// one. Unknown / zero-value keys are skipped, so crypto.Hash.Size() is never
+// called on an unregistered hash, which would panic — a DoS vector for a caller
+// that hand-builds a DigestSet with a zero-value key (GHSA-pgpm-j729-qcvh).
+func strongestRecognizedSize(a, b DigestSet) int {
+	maxSize := -1
+	for _, set := range []DigestSet{a, b} {
+		for dv := range set {
+			if n, ok := digestSize(dv); ok && n > maxSize {
+				maxSize = n
+			}
+		}
+	}
+	return maxSize
+}
+
+// strongestClassAgrees reports whether at least one algorithm in the
+// strongest-size class is shared by both sides and every shared algorithm in
+// that class agrees. This prevents one side from dropping the strong digest to
+// force comparison onto a weaker shared algorithm (GHSA-pgpm-j729-qcvh).
+//
+// Tie semantics (intentional): when two algorithms tie at the strongest size, a
+// match on EITHER satisfies equality, so Equal is not strictly transitive across
+// the tie (e.g. {sha256:x} == {sha256:x, gitoid:sha256:y} and
+// {sha256:x, gitoid:sha256:y} == {gitoid:sha256:y}, but
+// {sha256:x} != {gitoid:sha256:y}). This leniency is deliberate and matches
+// upstream go-witness: it lets attestors that record different strong-algorithm
+// subsets still compare equal. It is not a downgrade vector — every
+// strongest-size algorithm here is a 32-byte SHA-256 variant, so matching any
+// one requires reproducing the actual content. Requiring ALL strongest-size
+// algorithms on both sides would restore transitivity but reject legitimate
+// cross-attestor comparisons, so it is intentionally not done.
+func strongestClassAgrees(a, b DigestSet, maxSize int) bool {
+	shared := false
+	for hash, digest := range a {
+		if n, ok := digestSize(hash); !ok || n != maxSize {
+			continue
+		}
+		other, ok := b[hash]
 		if !ok {
 			continue
 		}
+		if digest != other {
+			return false
+		}
+		shared = true
+	}
+	return shared
+}
 
-		if digest == otherDigest {
-			hasMatchingDigest = true
-		} else {
+// noRecognizedSharedDisagrees reports whether no shared RECOGNIZED algorithm of
+// any strength disagrees. Unknown keys are ignored so equality stays a proper
+// equivalence relation over recognized algorithms: two sets that agree on every
+// recognized algorithm are not made unequal by differing on an unrecognized key.
+func noRecognizedSharedDisagrees(a, b DigestSet) bool {
+	for hash, digest := range a {
+		if _, ok := digestSize(hash); !ok {
+			continue
+		}
+		if other, ok := b[hash]; ok && digest != other {
 			return false
 		}
 	}
-
-	return hasMatchingDigest
+	return true
 }
 
 func (ds *DigestSet) ToNameMap() (map[string]string, error) {
