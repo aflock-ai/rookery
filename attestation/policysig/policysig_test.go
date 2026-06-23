@@ -442,10 +442,14 @@ func TestVerifyPolicySignature_X509Verifier_WithTimestamps(t *testing.T) {
 	env, err := dsse.Sign("dummytype", bytes.NewReader([]byte("test payload")), dsse.SignWithSigners(signer), dsse.SignWithTimestampers(fakeTS))
 	require.NoError(t, err)
 
+	// GHSA-mpvw-hw8p-7x27: an X.509 policy signer is refused unless the caller
+	// explicitly opts into identity matching. Pin the leaf's CommonName and
+	// wildcard the SANs so this exercises the legitimate configured flow.
 	vo := NewVerifyPolicySignatureOptions(
 		VerifyWithPolicyCARoots([]*x509.Certificate{root}),
 		VerifyWithPolicyCAIntermediates([]*x509.Certificate{inter}),
 		VerifyWithPolicyTimestampAuthorities([]timestamp.TimestampVerifier{fakeTS}),
+		VerifyWithPolicyCertConstraints("Test Leaf", []string{"*"}, []string{"*"}, []string{"*"}, []string{"*"}),
 	)
 
 	err = VerifyPolicySignature(context.Background(), env, vo)

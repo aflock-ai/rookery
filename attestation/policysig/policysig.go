@@ -19,6 +19,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -40,6 +41,12 @@ type VerifyPolicySignatureOptions struct {
 	policyOrganizations        []string
 	policyURIs                 []string
 	fulcioCertExtensions       certificate.Extensions
+	// certConstraintsSet records whether the caller explicitly configured
+	// certificate-identity constraints via VerifyWithPolicyCertConstraints. It
+	// distinguishes "caller opted into X.509 policy-signer identity matching"
+	// from the all-wildcard default, so an unconstrained CA cert is refused
+	// rather than trusted (GHSA-mpvw-hw8p-7x27).
+	certConstraintsSet bool
 }
 
 type Option func(*VerifyPolicySignatureOptions)
@@ -97,7 +104,35 @@ func VerifyWithPolicyCertConstraints(commonName string, dnsNames []string, email
 		vo.policyEmails = emails
 		vo.policyOrganizations = organizations
 		vo.policyURIs = uris
+		// The caller has explicitly opted into X.509 policy-signer identity
+		// matching (even if the values are wildcards — that is their explicit
+		// choice). This gates the unconstrained-signer refusal below.
+		vo.certConstraintsSet = true
 	}
+}
+
+// extensionsPinIdentity reports whether the caller configured at least one
+// Fulcio certificate extension constraint that actually PINS identity — a
+// concrete value, not empty and not the all-wildcard "*". Only such a
+// constraint is a valid opt-in to X.509 policy-signer trust without SAN
+// constraints (GHSA-mpvw-hw8p-7x27).
+//
+// A wildcard-only extension (e.g. certificate.Extensions{Issuer: "*"}) is NOT a
+// pin: downstream constraint matching glob-accepts "*", so treating it as an
+// opt-in would let any cert chaining to a trusted CA be accepted as a policy
+// signer — exactly the bypass this guard exists to prevent.
+func extensionsPinIdentity(vo *VerifyPolicySignatureOptions) bool {
+	rv := reflect.ValueOf(vo.fulcioCertExtensions)
+	for i := 0; i < rv.NumField(); i++ {
+		f := rv.Field(i)
+		if f.Kind() != reflect.String {
+			continue
+		}
+		if s := f.String(); s != "" && s != policy.AllowAllConstraint {
+			return true
+		}
+	}
+	return false
 }
 
 func allWildcard(vo *VerifyPolicySignatureOptions) bool {
@@ -136,40 +171,12 @@ func VerifyPolicySignature(ctx context.Context, envelope dsse.Envelope, vo *Veri
 			return fmt.Errorf("could not get verifier key id: %w", err)
 		}
 
-		var f policy.Functionary
-		trustBundle := make(map[string]policy.TrustBundle)
-		if _, ok := verifier.Verifier.(*cryptoutil.X509Verifier); ok {
-			rootIDs := make([]string, 0)
-			for _, root := range vo.policyCARoots {
-				id := base64.StdEncoding.EncodeToString(root.Raw)
-				rootIDs = append(rootIDs, id)
-				trustBundle[id] = policy.TrustBundle{
-					Root: root,
-				}
-			}
-
-			f = policy.Functionary{
-				Type: "root",
-				CertConstraint: policy.CertConstraint{
-					Roots:         rootIDs,
-					CommonName:    effectivePolicySignerCommonName(vo),
-					URIs:          vo.policyURIs,
-					Emails:        vo.policyEmails,
-					Organizations: vo.policyOrganizations,
-					DNSNames:      vo.policyDNSNames,
-					Extensions:    vo.fulcioCertExtensions,
-				},
-			}
-
-		} else {
-			f = policy.Functionary{
-				Type:        "key",
-				PublicKeyID: kid,
-			}
+		f, trustBundle, skip := policyFunctionaryForVerifier(vo, verifier, kid)
+		if skip {
+			continue
 		}
 
-		err = f.Validate(verifier.Verifier, trustBundle)
-		if err != nil {
+		if err := f.Validate(verifier.Verifier, trustBundle); err != nil {
 			log.Debugf("Policy Verifier %s failed to match supplied constraints: %v, continuing...", kid, err)
 			continue
 		}
@@ -190,6 +197,43 @@ func VerifyPolicySignature(ctx context.Context, envelope dsse.Envelope, vo *Veri
 	}
 
 	return nil
+}
+
+// policyFunctionaryForVerifier builds the policy.Functionary (and its trust
+// bundle) used to validate a single policy-signature verifier. The bool return
+// is true when the verifier must be SKIPPED: an X.509 (keyless) signer with no
+// configured identity constraints or Fulcio extensions is refused rather than
+// trusted on the strength of chaining to a CA root alone (GHSA-mpvw-hw8p-7x27).
+func policyFunctionaryForVerifier(vo *VerifyPolicySignatureOptions, verifier dsse.CheckedVerifier, kid string) (policy.Functionary, map[string]policy.TrustBundle, bool) {
+	trustBundle := make(map[string]policy.TrustBundle)
+	if _, ok := verifier.Verifier.(*cryptoutil.X509Verifier); !ok {
+		return policy.Functionary{Type: "key", PublicKeyID: kid}, trustBundle, false
+	}
+
+	if !vo.certConstraintsSet && !extensionsPinIdentity(vo) {
+		log.Warnf("policy signer %s presents an X.509 identity but no certificate constraints or Fulcio extensions were configured; refusing to trust an unconstrained CA cert as a policy signer (use VerifyWithPolicyCertConstraints / VerifyWithPolicyFulcioCertExtensions)", kid)
+		return policy.Functionary{}, nil, true
+	}
+
+	rootIDs := make([]string, 0, len(vo.policyCARoots))
+	for _, root := range vo.policyCARoots {
+		id := base64.StdEncoding.EncodeToString(root.Raw)
+		rootIDs = append(rootIDs, id)
+		trustBundle[id] = policy.TrustBundle{Root: root}
+	}
+
+	return policy.Functionary{
+		Type: "root",
+		CertConstraint: policy.CertConstraint{
+			Roots:         rootIDs,
+			CommonName:    effectivePolicySignerCommonName(vo),
+			URIs:          vo.policyURIs,
+			Emails:        vo.policyEmails,
+			Organizations: vo.policyOrganizations,
+			DNSNames:      vo.policyDNSNames,
+			Extensions:    vo.fulcioCertExtensions,
+		},
+	}, trustBundle, false
 }
 
 // effectivePolicySignerCommonName resolves the CommonName constraint applied
