@@ -20,6 +20,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/docker => ../plugins/atte
 
 replace github.com/aflock-ai/rookery/plugins/attestors/environment => ../plugins/attestors/environment
 
+replace github.com/aflock-ai/rookery/plugins/attestors/falco => ../plugins/attestors/falco
+
 replace github.com/aflock-ai/rookery/plugins/attestors/gcp-iit => ../plugins/attestors/gcp-iit
 
 replace github.com/aflock-ai/rookery/plugins/attestors/git => ../plugins/attestors/git
@@ -125,6 +127,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/configuration v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/docker v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/environment v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/falco v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gcp-iit v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/git v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/github v0.0.0-00010101000000-000000000000
