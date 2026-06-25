@@ -40,6 +40,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/aflock-ai/rookery/cilock/internal/config"
 )
 
 // PolicyClient is the minimal platform GraphQL client for policy publishing. It
@@ -67,6 +69,11 @@ func (c *PolicyClient) post(ctx context.Context, query string, variables map[str
 	}
 	if c.Token == "" {
 		return fmt.Errorf("no session token — run `cilock login` first")
+	}
+	// Refuse to attach the session bearer over cleartext to a non-loopback host
+	// (#5997).
+	if err := config.RequireSecurePlatformURL(c.GraphQLURL); err != nil {
+		return err
 	}
 
 	body, err := json.Marshal(map[string]any{"query": query, "variables": variables})

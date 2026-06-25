@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/aflock-ai/rookery/cilock/internal/config"
 )
 
 // signTokenPath is the platform endpoint that exchanges an authenticated cilock
@@ -47,6 +49,12 @@ func ExchangeSignToken(platformURL, sessionToken string) (string, error) {
 // ExchangeSignTokenResult is ExchangeSignToken plus the platform-reported
 // assurance level, for callers that surface it (the run summary).
 func ExchangeSignTokenResult(platformURL, sessionToken string) (SignTokenResult, error) {
+	// Refuse to attach the session bearer over cleartext to a non-loopback host
+	// (#5997): this bearer can mint Fulcio signing tokens, so it must never leak
+	// to an on-path observer via a downgraded http:// platform URL.
+	if err := config.RequireSecurePlatformURL(platformURL); err != nil {
+		return SignTokenResult{}, err
+	}
 	endpoint := strings.TrimRight(NormalizeURL(platformURL), "/") + signTokenPath
 
 	req, err := http.NewRequest(http.MethodPost, endpoint, http.NoBody)

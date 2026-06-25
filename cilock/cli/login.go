@@ -51,6 +51,13 @@ func LoginCmd() *cobra.Command {
 			if url == "" {
 				url = config.DefaultPlatformURL
 			}
+			// Reject a non-loopback http:// platform URL before any login flow
+			// runs or a session bearer is stored/sent (#5997): a typo, copy-paste,
+			// or MITM downgrade must not be able to leak a replayable bearer over
+			// cleartext to an attacker host.
+			if err := config.RequireSecurePlatformURL(url); err != nil {
+				return err
+			}
 			cred, err := resolveLoginCredential(cmd, url, token, tenant, product, interactive, workflowIdentity, allowTrust)
 			if err != nil {
 				return err

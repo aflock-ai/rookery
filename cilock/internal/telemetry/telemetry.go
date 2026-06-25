@@ -155,6 +155,14 @@ func postEvent(bearer, account, userRef, commandName, version, outcome string) {
 		return
 	}
 
+	// Never send the platform session bearer over cleartext to a non-loopback
+	// host (#5997). The hub is a compiled-in https URL, but `endpoint` is a var
+	// (tests redirect it); guard the actual destination so no reassignment can
+	// leak the bearer to an on-path observer.
+	if err := config.RequireSecurePlatformURL(endpoint); err != nil {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 

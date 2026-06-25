@@ -55,12 +55,8 @@ func Discover(platformURL string) (*Discovery, error) {
 	// substitute trust material, so a verify would PASS against attacker-signed
 	// evidence. Require HTTPS — the one exception is loopback, where standalone/dev
 	// legitimately serves the platform over http://localhost.
-	u, err := url.Parse(base)
-	if err != nil {
-		return nil, fmt.Errorf("parse platform url: %w", err)
-	}
-	if u.Scheme != "https" && !isLoopbackHost(u.Hostname()) {
-		return nil, fmt.Errorf("refusing to source trust from discovery over %q: platform url must be https (got %q)", u.Scheme, base)
+	if err := RequireSecurePlatformURL(base); err != nil {
+		return nil, err
 	}
 	req, err := http.NewRequest(http.MethodGet, base+discoveryPath, http.NoBody)
 	if err != nil {
@@ -89,6 +85,31 @@ func Discover(platformURL string) (*Discovery, error) {
 // compare and concatenate consistently. Mirrors auth.NormalizeURL (kept here to
 // avoid an import cycle: auth already depends on config).
 func NormalizeURL(u string) string { return strings.TrimRight(strings.TrimSpace(u), "/") }
+
+// RequireSecurePlatformURL refuses a platform URL that would carry trust
+// material or a bearer token over cleartext. It permits https:// for any host,
+// and http:// only for loopback (local standalone/dev). Any other scheme — most
+// importantly a non-loopback http:// — is rejected with an error that names the
+// https requirement.
+//
+// This is the single guard shared by discovery (which sources trust material)
+// and every token-bearing call site (which attaches a session bearer): both
+// must refuse cleartext to a non-loopback host before any request is sent, so
+// a typo, copy-paste, or MITM downgrade cannot leak a replayable bearer to an
+// on-path observer. See issue #5997.
+func RequireSecurePlatformURL(rawURL string) error {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("parse platform url: %w", err)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	if isLoopbackHost(u.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("refusing to use platform url over %q: must be https for a non-loopback host (got %q)", u.Scheme, rawURL)
+}
 
 // isLoopbackHost reports whether host is a loopback target for which plaintext
 // http discovery is acceptable (local standalone/dev): "localhost", the reserved

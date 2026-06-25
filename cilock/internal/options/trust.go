@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
+	"github.com/aflock-ai/rookery/cilock/internal/config"
 )
 
 // Package note — `cilock trust`:
@@ -367,6 +368,11 @@ type CreatedCredential struct {
 // auth.ExchangeSignToken's authenticated-POST shape. The long-lived session
 // token only ever goes to its own platform origin (the caller owns that check).
 func CreateOIDCCredential(ctx context.Context, graphqlURL, sessionToken string, r *ResolvedTrust) (*CreatedCredential, error) {
+	// Refuse to attach the admin session bearer (oidc:write) over cleartext to a
+	// non-loopback host (#5997) — this credential can register CI trust.
+	if err := config.RequireSecurePlatformURL(graphqlURL); err != nil {
+		return nil, err
+	}
 	input := map[string]any{
 		"name":      r.Name,
 		"type":      TrustCredentialType,
