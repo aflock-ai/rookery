@@ -44,8 +44,12 @@ func safeGlobMatch(g glob.Glob, s string) (matched bool, err error) {
 
 // fileJob represents a file to be hashed by the worker pool.
 type fileJob struct {
-	path    string
 	relPath string
+	// openName is the path opened by the worker, relative to the os.Root rooted
+	// at rootDir. It usually equals relPath, but when basePath is itself a
+	// regular file (the symlink-to-file recursion) the root is the parent dir
+	// and openName is the file's base name while relPath stays ".".
+	openName string
 	// mtime is the file's modification time captured at walk time. It lets
 	// shouldRecord distinguish a same-content file the command rewrote during
 	// its run (mtime >= cmdStart → product) from a pre-existing input the
@@ -85,6 +89,28 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 
 	artifacts := make(map[string]cryptoutil.DigestSet)
 
+	// Open a root so worker opens resolve beneath it. This refuses a
+	// final-component (or any-component) symlink that escapes the root at open
+	// time, closing the per-file symlink TOCTOU (#5994): the walk classifies
+	// entries with Lstat, but a regular file swapped for an out-of-tree symlink
+	// before the worker opens it would otherwise be followed. Legitimate
+	// in-tree symlinks are resolved and recursed by the walk below before any
+	// worker open, so the only symlink a worker can hit here is a malicious
+	// post-Lstat swap.
+	//
+	// os.OpenRoot requires a directory. When basePath is itself a regular file
+	// (the symlink-to-file recursion below passes the resolved file as the new
+	// basePath) we root at its parent dir and open the file by base name.
+	rootDir := basePath
+	if fi, statErr := os.Lstat(basePath); statErr == nil && !fi.IsDir() {
+		rootDir = filepath.Dir(basePath)
+	}
+	root, err := os.OpenRoot(rootDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+
 	numWorkers := max(runtime.GOMAXPROCS(0), 1)
 	jobs := make(chan fileJob, numWorkers*2)
 	results := make(chan fileResult, numWorkers*2)
@@ -95,7 +121,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				digest, err := cryptoutil.CalculateDigestSetFromFile(job.path, hashes)
+				digest, err := cryptoutil.CalculateDigestSetFromFileInRoot(root, job.openName, hashes)
 				results <- fileResult{relPath: job.relPath, digest: digest, mtime: job.mtime, err: err}
 			}
 		}()
@@ -196,7 +222,13 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 				return nil
 			}
 
-			jobs <- fileJob{path: path, relPath: relPath, mtime: info.ModTime()}
+			openName := relPath
+			if rootDir != basePath {
+				// basePath is a regular file; root is its parent, so open by
+				// base name. The walk visits only basePath here (relPath ".").
+				openName = filepath.Base(basePath)
+			}
+			jobs <- fileJob{relPath: relPath, openName: openName, mtime: info.ModTime()}
 			return nil
 		})
 		close(jobs)

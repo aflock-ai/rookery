@@ -358,13 +358,50 @@ func CalculateDigestSetFromFile(path string, hashes []DigestValue) (DigestSet, e
 	}
 	defer func() { _ = file.Close() }()
 
+	return calculateDigestSetFromOpenFile(file, path, hashes)
+}
+
+// CalculateDigestSetFromFileInRoot hashes the file named by name relative to
+// root, refusing any symlink final component — escaping OR in-root.
+//
+// This closes the per-file symlink TOCTOU in attestation collection (#5994):
+// the directory walk classifies entries with Lstat and only ever dispatches
+// REGULAR files to a worker, but a worker opens them later. An attacker who
+// swaps a regular file for a symlink between classification and open could
+// otherwise have foreign content hashed and recorded under the original
+// relPath, bypassing the walk's classification and filtering. The escaping
+// case alone is not enough: a swap to a symlink pointing at an in-root target
+// (or, for the single-file basePath recursion, any sibling under the parent
+// root) is just as much an evidence-integrity break, and os.Root.Open would
+// happily follow it because os.Root deliberately follows in-root symlinks.
+//
+// openRegularInRoot therefore refuses ANY symlink final component (see the
+// unix build for the atomic O_NOFOLLOW openat). Legitimate in-tree symlinks are
+// still handled by the walker itself, which resolves and recurses them before
+// any worker open, so the only symlink a worker can encounter here is a
+// malicious post-Lstat swap — which is exactly what this refuses.
+func CalculateDigestSetFromFileInRoot(root *os.Root, name string, hashes []DigestValue) (DigestSet, error) {
+	if root == nil {
+		return DigestSet{}, fmt.Errorf("nil root")
+	}
+
+	file, err := openRegularInRoot(root, name)
+	if err != nil {
+		return DigestSet{}, err
+	}
+	defer func() { _ = file.Close() }()
+
+	return calculateDigestSetFromOpenFile(file, name, hashes)
+}
+
+func calculateDigestSetFromOpenFile(file *os.File, name string, hashes []DigestValue) (DigestSet, error) {
 	hashable, err := isHashableFile(file)
 	if err != nil {
 		return DigestSet{}, err
 	}
 
 	if !hashable {
-		return DigestSet{}, fmt.Errorf("%s is not a hashable file", path)
+		return DigestSet{}, fmt.Errorf("%s is not a hashable file", name)
 	}
 
 	return CalculateDigestSet(file, hashes)
