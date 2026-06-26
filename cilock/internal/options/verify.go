@@ -15,6 +15,9 @@
 package options
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"strings"
 
@@ -81,6 +84,15 @@ type VerifyOptions struct {
 	// then requires explicit --policy-ca-roots / --policy-timestamp-servers /
 	// --policy-* identity. Also settable via CILOCK_NO_EMBEDDED_TRUST (non-empty).
 	NoEmbeddedTrust bool
+
+	// TrustDiscovery opts in to (re-)trusting the platform's network-served
+	// discovery trust_bundle_pem as the policy-signature CA roots. The discovered
+	// bundle is trust-on-first-use pinned per platform; once pinned, a SILENTLY
+	// CHANGED bundle is refused. Passing --trust-discovery accepts the current
+	// bundle and re-pins it — the explicit operator acknowledgement required to
+	// rotate a platform's policy-signer CA (GHSA #5988). Out-of-band
+	// --policy-ca-roots always wins and makes this moot.
+	TrustDiscovery bool
 }
 
 // OutputJSON reports whether the verify verdict should be emitted as a
@@ -108,7 +120,12 @@ func (vo *VerifyOptions) OutputJSON() bool {
 // Note: unlike `cilock run`, we do NOT auto-populate PolicyTimestampServers —
 // verify's PolicyTimestampServers expects file paths to CA cert bundles, not
 // URLs; embedded-trust / discovery TSA roots are applied in the cli layer.
-func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) { //nolint:gocyclo,gocognit // login-gated discovery + archivista + trust-derivation branches; each is a distinct, intentional resolution path and sits just over the threshold.
+//
+// Returns an error only for a hard security stop: a logged-in platform whose
+// discovery trust_bundle_pem has CHANGED since it was first pinned (TOFU), unless
+// the operator re-pins with --trust-discovery (GHSA #5988). All other resolution
+// is best-effort and never errors.
+func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) error { //nolint:gocyclo,gocognit // login-gated discovery + archivista + trust-derivation branches; each is a distinct, intentional resolution path and sits just over the threshold.
 	// --offline is a clear alias for --platform-url "": clear the platform URL
 	// so the explicit-disable path takes over (no Archivista/discovery/TSA).
 	if vo.Offline {
@@ -116,7 +133,7 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) { //nolint:
 	}
 	platformExplicitlyDisabled := (cmd.Flags().Changed("platform-url") || vo.Offline) && vo.PlatformURL == ""
 	if platformExplicitlyDisabled {
-		return
+		return nil
 	}
 	pc := platformconfig.Derive(vo.PlatformURL)
 	// Attribute telemetry to this logged-in platform session (CILOCK_PLATFORM_URL)
@@ -139,7 +156,7 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) { //nolint:
 	// signatures are still checked against explicit/embedded/discovered roots.
 	cred, _ := auth.Lookup(vo.PlatformURL)
 	if cred == nil {
-		return
+		return nil
 	}
 
 	// Default the expected signer email to the session identity, so a user
@@ -162,16 +179,53 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) { //nolint:
 	// refuses non-https (except loopback), so trust is never sourced over
 	// plaintext. Best-effort: on any failure the explicit-flag / embedded-trust
 	// paths in the cli layer still apply.
-	disc, err := platformconfig.Discover(vo.PlatformURL)
-	if err != nil || disc == nil || disc.Signing == nil {
-		return
+	// Best-effort by contract: any Discover failure returns a nil Discovery, so
+	// the nil-checks below cover every error case. We deliberately discard the
+	// error (rather than returning it) — on failure the explicit-flag /
+	// embedded-trust paths in the cli layer still apply.
+	disc, _ := platformconfig.Discover(vo.PlatformURL)
+	if disc == nil || disc.Signing == nil {
+		return nil
 	}
+	// Adopt the discovery trust bundle as the policy-signature CA roots only when
+	// the operator supplied none out-of-band. Out-of-band --policy-ca-roots always
+	// wins (and never reaches the TOFU gate below).
 	if len(vo.PolicyCARootPaths) == 0 && len(vo.PolicyCARootsPEM) == 0 && disc.Signing.TrustBundlePEM != "" {
-		vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
+		// Trust-on-first-use pin (GHSA #5988): the network-served trust bundle
+		// defines the CA roots that validate the very policies the platform serves.
+		// Without pinning, a compromised/malicious platform could silently swap in
+		// an attacker CA and make verify PASS against forged evidence. So we pin the
+		// bundle's SHA-256 on first adoption and refuse a later CHANGE unless the
+		// operator explicitly re-pins with --trust-discovery.
+		sum := sha256.Sum256([]byte(disc.Signing.TrustBundlePEM))
+		spki := hex.EncodeToString(sum[:])
+		switch {
+		case cred.TrustBundleSPKI == "" || vo.TrustDiscovery:
+			// First use for this platform, or an explicit operator re-pin: adopt and
+			// persist the pin so the next resolve can detect a silent change.
+			vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
+			if err := auth.SetTrustBundleSPKI(vo.PlatformURL, spki); err != nil {
+				return fmt.Errorf("persist discovery trust-bundle pin for %s: %w", vo.PlatformURL, err)
+			}
+		case cred.TrustBundleSPKI == spki:
+			// Unchanged since it was pinned — safe to keep trusting it.
+			vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
+		default:
+			// Pinned bundle CHANGED with no operator opt-in. Refuse rather than
+			// silently adopt the new (possibly attacker) CA. The bundle is NOT
+			// adopted; the operator must re-pin with --trust-discovery (after
+			// verifying the rotation is legitimate) or supply --policy-ca-roots.
+			return fmt.Errorf(
+				"platform %s now advertises a DIFFERENT policy-signer trust bundle than the one pinned on first use; "+
+					"refusing to trust it silently. If this CA rotation is expected, re-run with --trust-discovery to re-pin, "+
+					"or pass --policy-ca-roots to supply trust out-of-band (GHSA #5988)",
+				vo.PlatformURL)
+		}
 	}
 	if !cmd.Flags().Changed("policy-fulcio-oidc-issuer") && disc.Signing.FulcioOIDCIssuer != "" {
 		vo.PolicyFulcioCertExtensions.Issuer = disc.Signing.FulcioOIDCIssuer
 	}
+	return nil
 }
 
 //nolint:funlen // each verify flag carries its own multi-line help text; splitting the registration loses readability
@@ -234,6 +288,11 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 			"The binary stops auto-trusting its baked platform roots/signer; verify then requires "+
 			"explicit --policy-ca-roots / --policy-timestamp-servers / --policy-* identity. "+
 			"Also settable via CILOCK_NO_EMBEDDED_TRUST.")
+
+	cmd.Flags().BoolVar(&vo.TrustDiscovery, "trust-discovery", false,
+		"Accept and (re-)pin the platform's network-served discovery trust bundle as the policy-signature "+
+			"CA roots. The bundle is trust-on-first-use pinned per platform; once pinned, a CHANGED bundle is "+
+			"refused unless you pass this flag to acknowledge the rotation. Out-of-band --policy-ca-roots always wins.")
 
 	// Fulcio cert extensions.
 	// Default the OIDC issuer to GitHub Actions: keyless policies in this

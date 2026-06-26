@@ -107,7 +107,9 @@ func VerifyCmd() *cobra.Command {
 			// does so verify-side endpoint defaults match the run-side
 			// of the workflow. `--platform-url ""` opts out for fully
 			// offline verify.
-			vo.ResolvePlatformDefaults(cmd)
+			if err := vo.ResolvePlatformDefaults(cmd); err != nil {
+				return err
+			}
 
 			verifiers, err := loadVerifiers(cmd.Context(), vo.VerifierOptions, vo.KMSVerifierProviderOptions, providersFromFlags("verifier", cmd.Flags()))
 			if err != nil {

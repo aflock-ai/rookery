@@ -44,6 +44,15 @@ type Credential struct {
 	ProductName string    `json:"product_name,omitempty"`
 	Email       string    `json:"email,omitempty"`
 	ExpiresAt   time.Time `json:"expires_at,omitempty"`
+	// TrustBundleSPKI is the trust-on-first-use pin for this platform's
+	// discovery-served policy-signer trust bundle: the SHA-256 (hex) of the
+	// raw trust_bundle_pem first adopted for this platform. On later resolves a
+	// changed bundle is refused unless the operator re-pins with
+	// --trust-discovery, so a compromised platform cannot silently swap in an
+	// attacker CA as the policy-signature trust anchor (GHSA #5988). Empty until
+	// the first discovery-trust adoption; omitted from older stores (backward
+	// compatible — an absent pin just means "not yet pinned").
+	TrustBundleSPKI string `json:"trust_bundle_spki,omitempty"`
 }
 
 // Expired reports whether the credential has a known expiry in the past.
@@ -190,6 +199,30 @@ func SetScope(platformURL, tenantID, tenantName, productID, productName string) 
 	if productName != "" {
 		c.ProductName = productName
 	}
+	return Save(c)
+}
+
+// SetTrustBundleSPKI records the trust-on-first-use pin (the SHA-256 hex of the
+// platform's discovery trust_bundle_pem) onto the stored credential for
+// platformURL, preserving its token, scope, email, and expiry. It is a no-op
+// when no cilock credential exists for the platform (a jctl-only session has no
+// cilock store entry to pin onto; verify falls back to refusing a later change
+// only when a pin was actually persisted). Used by verify's discovery-trust
+// adoption (GHSA #5988).
+func SetTrustBundleSPKI(platformURL, spki string) error {
+	key := NormalizeURL(platformURL)
+	s, err := load()
+	if err != nil {
+		return err
+	}
+	c, ok := s.Credentials[key]
+	if !ok {
+		return nil // nothing in cilock's own store to pin onto
+	}
+	if c.TrustBundleSPKI == spki {
+		return nil // already pinned to this value; avoid a needless rewrite
+	}
+	c.TrustBundleSPKI = spki
 	return Save(c)
 }
 
