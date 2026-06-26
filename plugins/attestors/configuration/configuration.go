@@ -31,6 +31,13 @@ const (
 	// product/material). Policies keyed to v0.1 do not match v0.2 evidence.
 	Type    = "https://aflock.ai/attestations/configuration/v0.2"
 	RunType = attestation.PreMaterialRunType
+
+	// redactedFlagValue replaces the value of a flag whose name is sensitive, so
+	// a credential passed on the command line (an auth header, token, or
+	// password) never enters the signed predicate that ships to Archivista + CI
+	// artifacts. The flag NAME is preserved — it is useful provenance and not
+	// itself secret.
+	redactedFlagValue = "[REDACTED]"
 )
 
 var (
@@ -131,8 +138,45 @@ func extractWitnessArgs(args []string) []string {
 	return args
 }
 
+// sensitiveFlagSubstrings: a flag whose name contains any of these
+// (case-insensitive) carries a credential in its VALUE — an auth header, a
+// token, or a password/passphrase — so the value is redacted before it enters
+// the signed predicate. Matched as substrings to cover both short and namespaced
+// variants (e.g. "token" matches --signer-fulcio-token, "header" matches
+// --archivista-headers). Deliberately NOT "key": key flags (--policy-ca-roots,
+// signer key paths) carry filesystem paths, not secret material, and the path is
+// useful provenance.
+var sensitiveFlagSubstrings = []string{
+	"token", "password", "passphrase", "secret", "credential", "header",
+}
+
+// isSensitiveFlag reports whether a flag's value should be redacted based on its
+// name. Boolean flags are never redacted (their value is the literal "true").
+func isSensitiveFlag(name string) bool {
+	lower := strings.ToLower(name)
+	for _, s := range sensitiveFlagSubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactFlagValue returns the redaction placeholder for a sensitive flag,
+// otherwise the value unchanged.
+func redactFlagValue(name, value string) string {
+	if isSensitiveFlag(name) {
+		return redactedFlagValue
+	}
+	return value
+}
+
 // parseFlags extracts flag name/value pairs from CLI arguments.
 // Handles: --flag value, -f value, --flag=value, -f=value, --flag (boolean).
+// Values of name-sensitive flags are redacted (see redactFlagValue). A
+// sensitive flag consumes its following token as the (redacted) value even when
+// that token starts with "-", so a secret never escapes redaction by being
+// re-parsed as its own flag name.
 func parseFlags(args []string) map[string]string {
 	flags := make(map[string]string)
 
@@ -147,17 +191,29 @@ func parseFlags(args []string) map[string]string {
 		arg = strings.TrimLeft(arg, "-")
 
 		// Handle --flag=value or -f=value
-		if idx := strings.Index(arg, "="); idx >= 0 {
-			flags[arg[:idx]] = arg[idx+1:]
+		if name, value, found := strings.Cut(arg, "="); found {
+			flags[name] = redactFlagValue(name, value)
 			continue
 		}
 
-		// Check if next arg is a value (doesn't start with -)
-		if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-			flags[arg] = args[i+1]
+		// Decide whether the next arg is this flag's value. Normally a token
+		// starting with "-" is the NEXT flag, so the current flag is boolean.
+		// But for a sensitive flag we MUST consume the next token as its value
+		// even when it starts with "-": otherwise a secret like
+		// "--password -s3cret" would leave --password recorded as boolean and
+		// then record "-s3cret" (trimmed to "s3cret") as its OWN flag name on
+		// the next iteration, leaking the credential into the signed predicate
+		// as a key. Sensitive flags in cilock all take values, so consuming the
+		// next token for them is correct; the only exception is a sensitive flag
+		// at the very end of argv, which has no value to consume and stays
+		// boolean (no secret to leak in that case).
+		hasNext := i+1 < len(args)
+		nextIsValue := hasNext && !strings.HasPrefix(args[i+1], "-")
+		if hasNext && (nextIsValue || isSensitiveFlag(arg)) {
+			flags[arg] = redactFlagValue(arg, args[i+1])
 			i++
 		} else {
-			// Boolean flag
+			// Boolean flag (or sensitive flag with no following token).
 			flags[arg] = "true"
 		}
 	}
