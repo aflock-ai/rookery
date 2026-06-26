@@ -38,6 +38,14 @@ build_dist() {
 {"schema":1,"latest":"$VERSION","versions":[{"version":"$VERSION","files":[{"name":"$ARCHIVE","sha256":"$sha","os":"$OS","arch":"$ARCH"}]}]}
 JSON
     # Deliberately NO checksums-sha256.txt — the manifest must be sufficient.
+  elif [ "$mode" = "envelopes-block-first" ]; then
+    # Real-manifest shape: an attestation block references the archive via "binary"
+    # with a BOGUS sha, ordered BEFORE files[] — a bare-substring lookup reads the
+    # bogus digest and rejects the good download. manifest_sha must key on "name".
+    local bogus="ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    cat > "$dist/dl/manifest.json" <<JSON
+{"schema":1,"latest":"$VERSION","versions":[{"version":"$VERSION","attestations":[{"binary":"$ARCHIVE","os":"$OS","arch":"$ARCH","envelopes":[{"step":"source-git","file":"$VERSION/x.source-git.att.json","sha256":"$bogus"}]}],"files":[{"name":"$ARCHIVE","sha256":"$sha","os":"$OS","arch":"$ARCH"}]}]}
+JSON
   else
     cat > "$dist/dl/manifest.json" <<JSON
 {"schema":1,"latest":"$VERSION","versions":[{"version":"$VERSION","files":[{"name":"$ARCHIVE","os":"$OS","arch":"$ARCH"}]}]}
@@ -74,5 +82,13 @@ run_install "$dist3" "$bin3" >/dev/null 2>&1 \
   || { echo "FAIL[3]: install errored on the checksums-sha256.txt fallback"; exit 1; }
 [ -x "$bin3/cilock" ] || { echo "FAIL[3]: cilock not installed via the checksums fallback"; exit 1; }
 echo "PASS[3]: installed via checksums-sha256.txt fallback (manifest had no sha256)"
+
+# --- 4. archive sha must come from files[] "name", not an envelope "binary" ---
+dist4="$work/dist4"; bin4="$work/bin4"; mkdir -p "$bin4"
+build_dist "$dist4" envelopes-block-first
+run_install "$dist4" "$bin4" >/dev/null 2>&1 \
+  || { echo "FAIL[4]: install read the wrong sha256 from the envelope-mapping block"; exit 1; }
+[ -x "$bin4/cilock" ] || { echo "FAIL[4]: cilock not installed when an envelope block precedes files[]"; exit 1; }
+echo "PASS[4]: read the archive sha256 from files[] name, ignoring the envelope block"
 
 echo "ALL PASS"

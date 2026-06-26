@@ -67,19 +67,16 @@ manifest_latest() {
   { grep -oE '"latest"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/'; } || true
 }
 
-# manifest_sha extracts the per-file sha256 for $1 (an archive filename) from the
-# manifest JSON on stdin. The manifest's files[] entries are
-# {"name":"<archive>","sha256":"<hex>",...}; splitting on '}' isolates one object
-# per line so we read the sha256 from the SAME object as the matching name.
-# Prints the hex digest, or nothing if the manifest doesn't carry it. This is the
-# primary integrity source: it's always published with the manifest, unlike the
-# aggregate checksums-sha256.txt which isn't present for every version.
+# manifest_sha prints the per-file sha256 for archive $1 from the manifest JSON on
+# stdin — the primary integrity source (checksums-sha256.txt isn't published every
+# version). Split on '}' for one object per line, then match the "name":"<archive>"
+# KEY, not a bare "<archive>" substring: the manifest also references the archive via
+# "binary" in its attestation block, so a substring match could read that envelope's
+# sha256 instead. `|| true`: a no-match grep must yield empty (the "not found"
+# signal), not trip the caller's pipefail before the checksums fallback.
 manifest_sha() {
-  # Trailing `|| true`: when the file has no sha256 entry the inner grep returns
-  # non-zero, which would trip the caller's `set -o pipefail` and abort before the
-  # checksums-sha256.txt fallback. An empty result is the "not found" signal.
   { tr '}' '\n' \
-    | grep -F "\"$1\"" \
+    | grep -F "\"name\":\"$1\"," \
     | grep -oE '"sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' \
     | head -1 \
     | sed -E 's/.*"([0-9a-f]+)"$/\1/'; } || true
