@@ -140,9 +140,13 @@ func (c *Collection) Subjects() map[string]cryptoutil.DigestSet {
 	allSubjects := make(map[string]cryptoutil.DigestSet)
 	for _, collectionAttestation := range c.Attestations {
 		if subjecter, ok := collectionAttestation.Attestation.(Subjecter); ok {
+			// Namespace by the resolved/canonical type so a legacy URI and its
+			// aflock.ai equivalent alias to the same subject key rather than
+			// occupying two distinct namespaces.
+			resolvedType := ResolveLegacyType(collectionAttestation.Type)
 			subjects := subjecter.Subjects()
 			for subject, digest := range subjects {
-				allSubjects[fmt.Sprintf("%v/%v", collectionAttestation.Type, subject)] = digest
+				allSubjects[fmt.Sprintf("%v/%v", resolvedType, subject)] = digest
 			}
 		}
 	}

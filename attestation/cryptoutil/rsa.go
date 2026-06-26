@@ -57,10 +57,42 @@ func (s *RSASigner) Verifier() (Verifier, error) {
 type RSAVerifier struct {
 	pub  *rsa.PublicKey
 	hash crypto.Hash
+	// allowPKCS1v15Fallback opts the verifier into accepting a PKCS#1 v1.5
+	// signature when PSS verification fails. PSS is always the preferred and
+	// expected scheme; this fallback is OFF by default because PKCS#1 v1.5 is
+	// the weaker scheme and silently accepting it widens the set of signatures
+	// the verifier will trust. It exists for providers (e.g. AWS KMS) that sign
+	// with PKCS#1 v1.5 only.
+	allowPKCS1v15Fallback bool
 }
 
+// RSAVerifierOption configures an RSAVerifier built via NewRSAVerifierWithOptions.
+type RSAVerifierOption func(*RSAVerifier)
+
+// WithPKCS1v15Fallback opts the verifier into accepting a PKCS#1 v1.5 signature
+// when PSS verification fails. Use only for signers that cannot produce PSS
+// (e.g. AWS KMS); prefer PSS-only verification otherwise.
+func WithPKCS1v15Fallback() RSAVerifierOption {
+	return func(v *RSAVerifier) {
+		v.allowPKCS1v15Fallback = true
+	}
+}
+
+// NewRSAVerifier returns an RSAVerifier that accepts only RSASSA-PSS signatures.
+// To also accept the weaker PKCS#1 v1.5 scheme, build the verifier with
+// NewRSAVerifierWithOptions(pub, hash, WithPKCS1v15Fallback()).
 func NewRSAVerifier(pub *rsa.PublicKey, hash crypto.Hash) *RSAVerifier {
-	return &RSAVerifier{pub, hash}
+	return &RSAVerifier{pub: pub, hash: hash}
+}
+
+// NewRSAVerifierWithOptions returns an RSAVerifier configured by the given
+// options. With no options it behaves identically to NewRSAVerifier (PSS only).
+func NewRSAVerifierWithOptions(pub *rsa.PublicKey, hash crypto.Hash, opts ...RSAVerifierOption) *RSAVerifier {
+	v := &RSAVerifier{pub: pub, hash: hash}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v
 }
 
 func (v *RSAVerifier) KeyID() (string, error) {
@@ -83,16 +115,18 @@ func (v *RSAVerifier) Verify(data io.Reader, sig []byte) error {
 		return nil
 	}
 
-	// Fallback: AWS KMS may sign with PKCS1v15 instead of PSS.
-	// This is a weaker scheme — log a warning so operators are aware.
-	pkcs1Err := rsa.VerifyPKCS1v15(v.pub, v.hash, digest, sig)
-	if pkcs1Err == nil {
-		log.Warn("RSA signature verified using PKCS1v15 fallback (PSS failed); this may indicate the signer uses AWS KMS or another provider that does not support PSS")
-		return nil
+	// PKCS#1 v1.5 is the weaker scheme; only attempt it when the verifier was
+	// explicitly opted in (e.g. AWS KMS compatibility). Otherwise the PSS
+	// failure is the verdict.
+	if v.allowPKCS1v15Fallback {
+		if pkcs1Err := rsa.VerifyPKCS1v15(v.pub, v.hash, digest, sig); pkcs1Err == nil {
+			log.Warn("RSA signature verified using opt-in PKCS1v15 fallback (PSS failed); this may indicate the signer uses AWS KMS or another provider that does not support PSS")
+			return nil
+		}
 	}
 
-	// Both failed — return the PSS error as the primary failure since PSS is
-	// the expected scheme.
+	// PSS failed (and any opted-in fallback also failed) — return the PSS error
+	// as the primary failure since PSS is the expected scheme.
 	return pssErr
 }
 

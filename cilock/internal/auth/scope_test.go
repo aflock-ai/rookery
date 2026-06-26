@@ -39,10 +39,10 @@ func TestTokenAuthorizedForScope(t *testing.T) {
 		{"default cilock session lacks oidc:write", defaultSession, false},
 		{"allow-trust session carries oidc:write", trustSession, true},
 		{"wildcard scope is full access", makeJWT(t, []string{"*"}), true},
-		{"empty scope array is full access (server parity)", makeJWT(t, []string{}), true},
-		{"absent scope claim is full access", makeJWT(t, nil), true},
-		{"undecodable token fails open (server decides)", "not-a-jwt", true},
-		{"opaque two-part token fails open", "aaa.bbb", true},
+		{"empty scope array fails closed", makeJWT(t, []string{}), false},
+		{"absent scope claim fails closed", makeJWT(t, nil), false},
+		{"undecodable token fails closed", "not-a-jwt", false},
+		{"opaque two-part token fails closed", "aaa.bbb", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
