@@ -752,10 +752,13 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 	}
 
 	for _, s := range summaries {
-		// Register timestamp-authority trust anchors recovered from this
-		// bundle's RFC3161 tokens. Without these, a short-lived keyless leaf
-		// has no proof-of-signing-time and `cilock verify` rejects it.
-		registerTimestampAuthorities(p, s.tsaRoots)
+		// #5989: we intentionally do NOT register the bundle's own RFC3161 TSA
+		// leaf as a trust anchor here. Embedding the evidence's own TSA cert
+		// lets whoever supplied the attestation also supply its proof-of-
+		// signing-time, so a policy derived from attacker evidence would trust
+		// the attacker's timestamp. The operator must add a known platform TSA
+		// root to timestampauthorities[] before signing (warned below via
+		// warnMissingTimestampAuthorities, which reads s.tsaRoots).
 
 		funcs := buildFunctionaries(s.signingKeyIDs, pubKeys, p.PublicKeys)
 		// Cert-signed signatures contribute Functionary{Type:"root"}
@@ -821,43 +824,43 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 	return p, nil
 }
 
-// registerTimestampAuthorities side-effects p.TimestampAuthorities with each
-// recovered TSA trust anchor, keyed by the TSA cert's derived keyid. Idempotent
-// across bundles: the same TSA seen in multiple bundles registers once (first
-// writer wins). Lazily allocates the map so a no-timestamp suite leaves the
-// field nil (omitted from JSON, preserving the prior output shape).
-func registerTimestampAuthorities(p *policy.Policy, tsas []tsaRoot) {
-	for _, ts := range tsas {
-		if ts.keyID == "" || len(ts.pem) == 0 {
-			continue
-		}
-		if p.TimestampAuthorities == nil {
-			p.TimestampAuthorities = make(map[string]policy.Root)
-		}
-		if _, exists := p.TimestampAuthorities[ts.keyID]; !exists {
-			p.TimestampAuthorities[ts.keyID] = policy.Root{Certificate: ts.pem}
-		}
-	}
-}
-
 // warnMissingTimestampAuthorities emits a one-line warning when the policy has
 // at least one cert-based (root) functionary but no timestampauthorities[].
 // Such a policy looks complete but rejects every short-lived keyless leaf at
 // verify time ("no trusted timestamp verifier configured ...
 // proof-of-signing-time required"). No-op when there are no cert functionaries
 // (a pubkey-only policy needs no TSA) or when authorities are present.
+//
+// #5989: we no longer auto-embed the bundle's own RFC3161 TSA leaf (that would
+// let attacker evidence supply its own proof-of-time), so timestampauthorities[]
+// is always empty after derivation. The operator must add a KNOWN platform TSA
+// root before signing. When the evidence carried a recoverable RFC3161 token we
+// say so explicitly, so the operator knows the timestamp exists but its leaf
+// must not be trusted blindly.
 func warnMissingTimestampAuthorities(stderr io.Writer, p *policy.Policy, summaries []bundleSummary) {
 	if stderr == nil || len(p.TimestampAuthorities) > 0 {
 		return
 	}
 	hasCertSigner := false
+	hadEvidenceTSA := false
 	for _, s := range summaries {
 		if len(s.certSigners) > 0 {
 			hasCertSigner = true
-			break
+		}
+		if len(s.tsaRoots) > 0 {
+			hadEvidenceTSA = true
 		}
 	}
 	if !hasCertSigner {
+		return
+	}
+	if hadEvidenceTSA {
+		_, _ = fmt.Fprintf(stderr,
+			"warning: cert-signed (keyless) bundle(s) carried an RFC3161 timestamp, but its "+
+				"TSA leaf is NOT trusted automatically (evidence cannot vouch for its own "+
+				"signing time). timestampauthorities[] is empty. Add the signing platform's "+
+				"KNOWN TSA root to timestampauthorities[] before signing, or cilock verify "+
+				"will reject short-lived leaf certs without proof-of-signing-time.\n")
 		return
 	}
 	_, _ = fmt.Fprintf(stderr,
@@ -1035,49 +1038,82 @@ func buildCertFunctionaries(stderr io.Writer, signers []certSigner, p *policy.Po
 			}
 		}
 
-		emails := cs.emails
-		if len(emails) == 0 {
-			// No recoverable SAN email — wildcard so the empty-list
-			// "forbid all" trap doesn't make the policy unverifiable.
-			emails = []string{policy.AllowAllConstraint}
-			if stderr != nil {
-				_, _ = fmt.Fprintf(stderr,
-					"note: cert-signed functionary for root %s has no SAN email; "+
-						"wildcarding certConstraint.emails to %q. Pin the real signer "+
-						"identity before production use.\n",
-					shortID(rootName), policy.AllowAllConstraint)
-			}
+		if fn, ok := certFunctionaryFor(stderr, cs, rootName); ok {
+			out = append(out, fn)
 		}
-
-		commonName := cs.commonName
-		if commonName == "" {
-			// No recoverable leaf CN — emit the explicit AllowAllConstraint.
-			// An empty CommonName now fails closed in the verifier (F5, #5746),
-			// so a blank value would make the policy unverifiable. Wildcard it,
-			// matching the emails/URIs treatment above.
-			commonName = policy.AllowAllConstraint
-			if stderr != nil {
-				_, _ = fmt.Fprintf(stderr,
-					"note: cert-signed functionary for root %s has no parseable CN; "+
-						"wildcarding certConstraint.commonname to %q. Pin the real signer "+
-						"identity before production use.\n",
-					shortID(rootName), policy.AllowAllConstraint)
-			}
-		}
-
-		out = append(out, policy.Functionary{
-			Type: "root",
-			CertConstraint: policy.CertConstraint{
-				Roots:      []string{rootName},
-				CommonName: commonName,
-				Emails:     emails,
-				// A Fulcio workflow-identity cert carries a URI SAN; an empty
-				// list would forbid it, so default to AllowAll.
-				URIs: []string{policy.AllowAllConstraint},
-			},
-		})
 	}
 	return out
+}
+
+// certFunctionaryFor builds the CertConstraint functionary for a single
+// cert-signed leaf, applying the #5989 identity rules. It returns ok=false
+// (and warns) when the leaf has no recoverable identity, so the caller omits
+// it rather than emitting a fully-wildcard functionary that would trust any
+// identity under the evidence-derived root.
+func certFunctionaryFor(stderr io.Writer, cs certSigner, rootName string) (policy.Functionary, bool) {
+	// #5989: a leaf with NO recoverable identity (no SAN email, no CN)
+	// must NOT be turned into a fully-wildcard functionary. Wildcarding
+	// every constraint trusts ANY identity under the evidence-derived
+	// root — i.e. whoever supplied the attestation. Omit the functionary
+	// entirely and warn; the operator must pin a real identity (or anchor
+	// a known root with -k) before the policy trusts this signer.
+	if len(cs.emails) == 0 && cs.commonName == "" {
+		if stderr != nil {
+			_, _ = fmt.Fprintf(stderr,
+				"warning: cert-signed signer for root %s has no recoverable identity "+
+					"(no SAN email, no CN); omitting it as a functionary. A wildcard "+
+					"functionary would trust any identity under the evidence-derived "+
+					"root. Pin the real signer identity (and anchor a known root) "+
+					"before this step is trusted.\n",
+				shortID(rootName))
+		}
+		return policy.Functionary{}, false
+	}
+
+	emails := cs.emails
+	if len(emails) == 0 {
+		// No recoverable SAN email, but the CN identifies the signer —
+		// wildcard only the empty field so the empty-list "forbid all"
+		// trap doesn't make the policy unverifiable.
+		emails = []string{policy.AllowAllConstraint}
+		if stderr != nil {
+			_, _ = fmt.Fprintf(stderr,
+				"note: cert-signed functionary for root %s has no SAN email; "+
+					"wildcarding certConstraint.emails to %q. Pin the real signer "+
+					"identity before production use.\n",
+				shortID(rootName), policy.AllowAllConstraint)
+		}
+	}
+
+	commonName := cs.commonName
+	if commonName == "" {
+		// No recoverable leaf CN, but the SAN email identifies the signer.
+		// An empty CommonName now fails closed in the verifier (F5, #5746),
+		// so a blank value would make the policy unverifiable. Wildcard it,
+		// matching the emails treatment above.
+		commonName = policy.AllowAllConstraint
+		if stderr != nil {
+			_, _ = fmt.Fprintf(stderr,
+				"note: cert-signed functionary for root %s has no parseable CN; "+
+					"wildcarding certConstraint.commonname to %q. Pin the real signer "+
+					"identity before production use.\n",
+				shortID(rootName), policy.AllowAllConstraint)
+		}
+	}
+
+	return policy.Functionary{
+		Type: "root",
+		CertConstraint: policy.CertConstraint{
+			Roots:      []string{rootName},
+			CommonName: commonName,
+			Emails:     emails,
+			// A Fulcio workflow-identity cert carries a URI SAN; an empty
+			// list would forbid it, so default to AllowAll. The signer is
+			// still pinned by CN and/or email above, so this is not a
+			// fully-wildcard functionary.
+			URIs: []string{policy.AllowAllConstraint},
+		},
+	}, true
 }
 
 // shortID truncates a keyid for human-readable diagnostics. Full keyids are

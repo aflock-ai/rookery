@@ -153,6 +153,7 @@ func addFromCommitFlags(cmd *cobra.Command, o *policyFromCommitOpts) {
 	f.StringVarP(&o.tag, "tag", "t", "", "Release tag for the one-shot flow (requires --product).")
 	f.StringVarP(&o.definition, "definition", "d", "", "PolicyDefinition name for the one-shot flow (default: the product name).")
 	f.StringVar(&o.description, "description", "", "Description used only when the one-shot flow creates a new PolicyDefinition.")
+	f.BoolVarP(&o.yes, "yes", "y", false, "Confirm the one-shot sign→push→bind of a policy whose functionaries were derived entirely from platform evidence. Required for one-shot publish; review the printed functionaries/TSA-anchors first (#5989).")
 }
 
 // policyFromCommitOpts groups the resolved flag values for `policy from-commit`.
@@ -167,6 +168,7 @@ type policyFromCommitOpts struct {
 	tag           string
 	definition    string
 	description   string
+	yes           bool
 }
 
 // oneShot reports whether the command should run the full sign→push→bind flow.
@@ -219,7 +221,58 @@ func runPolicyFromCommit(cmd *cobra.Command, o policyFromCommitOpts) error {
 	if !o.oneShot() {
 		return writeAuthoredPolicy(out, pol, o.output)
 	}
+
+	// #5989: from-commit derives functionaries / cert-constraints from the
+	// downloaded evidence ITSELF and accepts no operator-supplied key anchor.
+	// One-shot would then sign+push+bind a policy that trusts whoever supplied
+	// the evidence, with no review gate. Print the derived trust surface and
+	// refuse to auto-publish without explicit --yes (mirrors trust.go's
+	// confirm/--yes gate on the less-consequential trust registration).
+	printDerivedTrustSurface(stderr, pol)
+	if !o.yes {
+		return fmt.Errorf("refusing to one-shot sign→push→bind: this policy's functionaries and "+
+			"cert-constraints were derived entirely from platform evidence with no operator "+
+			"key anchor, so it trusts whoever supplied that evidence. Review the trust surface "+
+			"printed above, then re-run with --yes to confirm, or author for review first:\n\n"+
+			"  cilock policy from-commit %s -o policy.json   # then edit, sign, push, bind", shortID(commit))
+	}
 	return runFromCommitOneShot(cmd, o, sess, pol)
+}
+
+// printDerivedTrustSurface writes a human-readable summary of the trust the
+// derived policy would grant — the functionaries (and their cert-constraints)
+// per step plus any timestamp-authority anchors — so the operator can review it
+// before confirming a one-shot publish (#5989). All output goes to stderr so it
+// never corrupts a redirected policy artifact.
+func printDerivedTrustSurface(stderr io.Writer, pol *policy.Policy) {
+	_, _ = fmt.Fprintf(stderr, "\nDerived trust surface (review before --yes):\n")
+	steps := make([]string, 0, len(pol.Steps))
+	for name := range pol.Steps {
+		steps = append(steps, name)
+	}
+	sort.Strings(steps)
+	for _, name := range steps {
+		st := pol.Steps[name]
+		_, _ = fmt.Fprintf(stderr, "  step %q: %d functionary(ies)\n", name, len(st.Functionaries))
+		for _, fn := range st.Functionaries {
+			cc := fn.CertConstraint
+			_, _ = fmt.Fprintf(stderr, "    - type=%s cn=%q emails=%v uris=%v roots=%v\n",
+				fn.Type, cc.CommonName, cc.Emails, cc.URIs, cc.Roots)
+		}
+	}
+	if len(pol.TimestampAuthorities) == 0 {
+		_, _ = fmt.Fprintf(stderr, "  timestampauthorities: NONE (add a known platform TSA root before signing)\n")
+	} else {
+		ids := make([]string, 0, len(pol.TimestampAuthorities))
+		for id := range pol.TimestampAuthorities {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			_, _ = fmt.Fprintf(stderr, "  timestampauthority: %s\n", shortID(id))
+		}
+	}
+	_, _ = fmt.Fprintln(stderr)
 }
 
 // derivePolicyFromCommit queries Archivista for every DSSE whose subjects

@@ -211,14 +211,15 @@ func TestFromCommit_QueriesByCommitGroupsByStepAndDerivesVerifiablePolicy(t *tes
 	require.Contains(t, pol.Steps, "build")
 	require.Contains(t, pol.Steps, "test")
 
-	// (c) The keyless step inherits the verifiable-policy fix from the shared core:
-	//     TSA authorities recovered from the RFC3161 token...
-	require.NotEmpty(t, pol.TimestampAuthorities,
-		"keyless+timestamped collection must yield timestampauthorities[] (shared #5741 fix)")
-	for id, ta := range pol.TimestampAuthorities {
-		assert.NotEmpty(t, ta.Certificate, "timestampauthority %q must embed a PEM cert", id)
-	}
-	//     ...and a non-empty signer-email cert constraint on the keyless functionary.
+	// (c) #5989: the bundle's own RFC3161 TSA leaf must NOT be auto-embedded as
+	//     a trust anchor (evidence cannot vouch for its own signing time). The
+	//     operator must add a KNOWN platform TSA root before signing; we warn.
+	assert.Empty(t, pol.TimestampAuthorities,
+		"#5989: collection-derived TSA leaf must not be registered as a trust anchor")
+	assert.Contains(t, errOut.String(), "NOT trusted automatically",
+		"operator must be warned the evidence TSA leaf is not auto-trusted")
+	//     ...and a non-empty signer-email cert constraint on the keyless functionary
+	//     (this collection HAS a SAN email, so the functionary is emitted and pinned).
 	build := pol.Steps["build"]
 	require.Len(t, build.Functionaries, 1)
 	require.Equal(t, "root", build.Functionaries[0].Type)
@@ -349,8 +350,10 @@ func TestFromCommit_OneShotSignsPushesAndBinds(t *testing.T) {
 	}
 	t.Cleanup(func() { runSignViaCmd = origSign })
 
+	// #5989: one-shot publish now requires explicit --yes (functionaries are
+	// derived solely from evidence). Pass it to exercise the publish path.
 	out, err := runCmd(t, PolicyFromCommitCmd(), testCommitSHA,
-		"--platform-url", srv.URL, "--product", "my-svc", "--tag", "v1")
+		"--platform-url", srv.URL, "--product", "my-svc", "--tag", "v1", "--yes")
 	require.NoError(t, err, "one-shot output:\n%s", out)
 
 	require.True(t, signed, "the one-shot must invoke the sign step")

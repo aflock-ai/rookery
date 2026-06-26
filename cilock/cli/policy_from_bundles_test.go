@@ -921,22 +921,23 @@ func TestPolicyFromBundles_KeylessTimestamped(t *testing.T) {
 			"https://aflock.ai/attestations/command-run/v0.1",
 		})
 
-	var out bytes.Buffer
-	err := runPolicyFromBundles(&out, io.Discard, []string{bundlePath}, nil, "-", 365*24*time.Hour, "")
+	var out, errOut bytes.Buffer
+	err := runPolicyFromBundles(&out, &errOut, []string{bundlePath}, nil, "-", 365*24*time.Hour, "")
 	require.NoError(t, err)
 
 	var pol policy.Policy
 	require.NoError(t, json.Unmarshal(out.Bytes(), &pol))
 
-	// (1) timestampauthorities[] must be populated from the bundle's
-	// RFC3161 token so verify can establish proof-of-signing-time.
-	require.NotEmpty(t, pol.TimestampAuthorities,
-		"keyless+timestamped bundle must yield a non-empty timestampauthorities[]; "+
-			"without it, cilock verify rejects the short-lived leaf with "+
-			"'no trusted timestamp verifier configured ... proof-of-signing-time required'")
-	for id, ta := range pol.TimestampAuthorities {
-		assert.NotEmpty(t, ta.Certificate, "timestampauthority %q must embed a PEM cert", id)
-	}
+	// (1) #5989: the bundle's own RFC3161 TSA leaf must NOT be auto-embedded
+	// as a trust anchor — evidence cannot vouch for its own signing time.
+	// timestampauthorities[] stays empty; the operator must add a KNOWN
+	// platform TSA root before signing, and we warn that the timestamp exists
+	// but is not trusted automatically.
+	assert.Empty(t, pol.TimestampAuthorities,
+		"#5989: bundle-derived TSA leaf must not be registered as a trust anchor")
+	assert.Contains(t, errOut.String(), "NOT trusted automatically",
+		"operator must be warned the bundle's TSA leaf is not auto-trusted and a "+
+			"known TSA root is required before signing")
 
 	// (2) the step's functionary must have a non-empty email constraint —
 	// pinned to the signer's SAN email by default. Empty == forbid all.
