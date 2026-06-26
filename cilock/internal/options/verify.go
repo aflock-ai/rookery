@@ -201,12 +201,30 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) error { //n
 		spki := hex.EncodeToString(sum[:])
 		switch {
 		case cred.TrustBundleSPKI == "" || vo.TrustDiscovery:
-			// First use for this platform, or an explicit operator re-pin: adopt and
-			// persist the pin so the next resolve can detect a silent change.
-			vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
-			if err := auth.SetTrustBundleSPKI(vo.PlatformURL, spki); err != nil {
+			// First use for this platform, or an explicit operator re-pin. Adopt the
+			// bundle and persist the pin so the NEXT resolve can detect a silent
+			// change. But the pin can only be persisted onto a cilock-store session;
+			// a jctl-sourced credential has no cilock store entry, so the write is a
+			// no-op (un-pinnable). For an un-pinnable session the protection above is
+			// dead: every resolve sees TrustBundleSPKI=="" and re-takes THIS branch,
+			// so a later attacker-swapped bundle is silently re-adopted (the jctl gap
+			// in #6014). Refuse to adopt for an un-pinnable session unless the operator
+			// explicitly opted in with --trust-discovery (an out-of-band
+			// --policy-ca-roots already short-circuits before this block).
+			persisted, err := auth.SetTrustBundleSPKI(vo.PlatformURL, spki)
+			if err != nil {
 				return fmt.Errorf("persist discovery trust-bundle pin for %s: %w", vo.PlatformURL, err)
 			}
+			if !persisted && !vo.TrustDiscovery {
+				return fmt.Errorf(
+					"platform %s session cannot pin its discovery policy-signer trust bundle "+
+						"(this looks like a jctl login, which has no cilock-store entry to pin onto); "+
+						"refusing to silently trust the network-served bundle on first use. "+
+						"Re-run with --trust-discovery to accept it explicitly, pass --policy-ca-roots to "+
+						"supply trust out-of-band, or use a pinnable session (`cilock login`) (GHSA #5988)",
+					vo.PlatformURL)
+			}
+			vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
 		case cred.TrustBundleSPKI == spki:
 			// Unchanged since it was pinned — safe to keep trusting it.
 			vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)

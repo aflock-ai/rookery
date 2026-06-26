@@ -204,26 +204,37 @@ func SetScope(platformURL, tenantID, tenantName, productID, productName string) 
 
 // SetTrustBundleSPKI records the trust-on-first-use pin (the SHA-256 hex of the
 // platform's discovery trust_bundle_pem) onto the stored credential for
-// platformURL, preserving its token, scope, email, and expiry. It is a no-op
-// when no cilock credential exists for the platform (a jctl-only session has no
-// cilock store entry to pin onto; verify falls back to refusing a later change
-// only when a pin was actually persisted). Used by verify's discovery-trust
-// adoption (GHSA #5988).
-func SetTrustBundleSPKI(platformURL, spki string) error {
+// platformURL, preserving its token, scope, email, and expiry. It is used by
+// verify's discovery-trust adoption (GHSA #5988).
+//
+// It returns persisted=true only when the pin was actually written to cilock's
+// own credential store. When no cilock credential exists for the platform — a
+// jctl-only session, whose credential is read through from jctl's config and has
+// no cilock store entry to pin onto — it returns persisted=false with a nil
+// error: the pin is UN-PINNABLE for this session. The caller MUST treat an
+// un-pinnable session as a hard security stop for silent first-use adoption
+// rather than a benign no-op: without a persisted pin, every later resolve would
+// re-take the first-use branch and silently re-adopt whatever bundle the
+// platform then serves (the jctl gap in #6014's pin). A non-nil error is a real
+// store I/O failure, not the un-pinnable case.
+func SetTrustBundleSPKI(platformURL, spki string) (persisted bool, err error) {
 	key := NormalizeURL(platformURL)
 	s, err := load()
 	if err != nil {
-		return err
+		return false, err
 	}
 	c, ok := s.Credentials[key]
 	if !ok {
-		return nil // nothing in cilock's own store to pin onto
+		return false, nil // nothing in cilock's own store to pin onto — un-pinnable
 	}
 	if c.TrustBundleSPKI == spki {
-		return nil // already pinned to this value; avoid a needless rewrite
+		return true, nil // already pinned to this value; avoid a needless rewrite
 	}
 	c.TrustBundleSPKI = spki
-	return Save(c)
+	if err := Save(c); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ActivePlatformURL returns the platform a bare command should target when
