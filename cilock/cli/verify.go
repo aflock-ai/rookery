@@ -492,16 +492,16 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			log.Error("Verification failed")
 			log.Error("Evidence:")
 			for step, result := range verifiedEvidence.StepResults {
-				log.Error("Step: ", step)
+				log.Errorf("Step: %q", step)
 				if len(result.Passed) > 0 {
-					log.Infof("Passed with evidence: %s", result.Passed[0].Collection.Reference)
+					log.Infof("Passed with evidence: %q", result.Passed[0].Collection.Reference)
 					continue
 				}
 				for _, p := range result.Rejected {
 					if p.Collection.Collection.Name != "" {
-						log.Errorf("collection rejected: %s, Reason: %s ", p.Collection.Collection.Name, p.Reason)
+						log.Errorf("collection rejected: %q, Reason: %q ", p.Collection.Collection.Name, p.Reason)
 					} else {
-						log.Errorf("verification failure: Reason: %s", p.Reason)
+						log.Errorf("verification failure: Reason: %q", p.Reason)
 					}
 				}
 			}
@@ -528,9 +528,9 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	log.Info("Evidence:")
 	num := 0
 	for step, result := range verifiedEvidence.StepResults {
-		log.Info("Step: ", step)
+		log.Infof("Step: %q", step)
 		for _, p := range result.Passed {
-			log.Info(fmt.Sprintf("%d: %s", num, p.Collection.Reference))
+			log.Infof("%d: %q", num, p.Collection.Reference)
 			num++
 		}
 	}

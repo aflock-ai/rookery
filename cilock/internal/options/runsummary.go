@@ -278,7 +278,7 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 	// not it exists, because its ABSENCE is itself the signal an agent needs
 	// (uploaded-but-uncorrelated is a silent failure otherwise).
 	if anchor := s.gitRemoteAnchor(); anchor != "" {
-		fmt.Fprintf(&b, "  anchor:     git remote %s\n", anchor)
+		fmt.Fprintf(&b, "  anchor:     git remote %s\n", sanitizeForTerminal(anchor))
 	} else {
 		b.WriteString("  anchor:     (no git remote subject — attestation will NOT correlate to a repo product)\n")
 	}
@@ -329,7 +329,7 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 		fmt.Fprintf(&b, "  %s\n", s.SLSAVerdict)
 	}
 	if s.AssuranceLevel != "" {
-		fmt.Fprintf(&b, "  platform assurance level: %s\n", s.AssuranceLevel)
+		fmt.Fprintf(&b, "  platform assurance level: %s\n", sanitizeForTerminal(s.AssuranceLevel))
 	}
 	_, _ = io.WriteString(w, b.String())
 }
@@ -369,7 +369,7 @@ func (s *RunSummary) buildEvidenceLine() string {
 func (s *RunSummary) subjectNames() []string {
 	names := make([]string, 0, len(s.Subjects))
 	for _, sub := range s.Subjects {
-		names = append(names, shortSubjectName(sub.Name))
+		names = append(names, sanitizeForTerminal(shortSubjectName(sub.Name)))
 	}
 	sort.Strings(names)
 	return names
@@ -394,4 +394,40 @@ func orNone(s string) string {
 		return "(none)"
 	}
 	return s
+}
+
+// sanitizeForTerminal escapes ASCII control bytes — including the ANSI escape
+// (\x1b), CR (\r), NUL (\x00), and DEL (\x7f) — in untrusted strings before
+// they are written to the operator's terminal. Server-returned gitoids,
+// attestation subject names, git-remote URLs, and the platform-supplied
+// assurance_level are all attacker-influenceable; left raw they could carry
+// ANSI/CR sequences that spoof or overwrite the run summary the operator reads
+// to decide trust (#5993). Each offending byte is rendered in Go's \xNN form so
+// no information is lost while no raw control byte reaches the TTY. Printable
+// bytes (incl. tab and UTF-8 multibyte sequences) pass through unchanged.
+func sanitizeForTerminal(s string) string {
+	hasCtrl := false
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b < 0x20 && b != '\t' || b == 0x7f {
+			hasCtrl = true
+			break
+		}
+	}
+	if !hasCtrl {
+		return s
+	}
+	const hexDigits = "0123456789abcdef"
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 && c != '\t' || c == 0x7f {
+			b.WriteString(`\x`)
+			b.WriteByte(hexDigits[c>>4])
+			b.WriteByte(hexDigits[c&0x0f])
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }

@@ -121,7 +121,7 @@ func outputText(result *policy.ValidationResult) error {
 	if len(result.Errors) > 0 {
 		fmt.Println("Validation errors:")
 		for i, err := range result.Errors {
-			fmt.Printf("  %d. %s\n", i+1, err)
+			fmt.Printf("  %d. %q\n", i+1, err)
 		}
 	}
 
@@ -129,7 +129,7 @@ func outputText(result *policy.ValidationResult) error {
 		fmt.Println()
 		fmt.Println("Warnings:")
 		for i, warn := range result.Warnings {
-			fmt.Printf("  %d. %s\n", i+1, warn)
+			fmt.Printf("  %d. %q\n", i+1, warn)
 		}
 	}
 

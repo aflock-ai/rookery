@@ -945,7 +945,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 			if err != nil {
 				return uploadError(ro.PlatformURL, err)
 			}
-			log.Infof("Stored in archivista as %v\n", gitoid)
+			log.Infof("Stored in archivista as %q\n", gitoid)
 			// The collection envelope (AttestorName == "") carries the
 			// collection subjects — it is the correlation anchor we report
 			// in the run summary. Per-attestor sidecar gitoids are not the
@@ -1448,7 +1448,7 @@ func classifyAttestorRunError(runErr error) error {
 	if len(softLegs) > 0 {
 		log.Warn("Warnings:")
 		for _, leg := range softLegs {
-			log.Warnf("  - %s", leg.Err)
+			log.Warnf("  - %q", leg.Err)
 		}
 	}
 
@@ -1459,7 +1459,7 @@ func classifyAttestorRunError(runErr error) error {
 		// visible whether or not the caller has a top-level error log.
 		log.Error("Errors:")
 		for _, leg := range fatalLegs {
-			log.Errorf("  - %s", leg.Err)
+			log.Errorf("  - %q", leg.Err)
 		}
 		return &workflow.AttestorRunErrors{Legs: fatalLegs}
 	}
