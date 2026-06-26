@@ -288,19 +288,15 @@ func Delete(platformURL string) (bool, error) {
 // ~/.jctl/config.yaml (so a prior `jctl login` works for cilock too). The jctl
 // read-through takes the token from the YAML when present, or from the OS
 // keychain entry jctl scrubbed it into (see lookupJctl).
+//
+// It is a thin shim over Resolve(url, ForBearer): the provider seam holds the
+// (unchanged) filtering and precedence. Callers attach the result as a Bearer.
 func Lookup(platformURL string) (*Credential, error) {
-	key := NormalizeURL(platformURL)
-	s, err := load()
-	if err != nil {
+	res, err := Resolve(platformURL, ForBearer)
+	if err != nil || res == nil {
 		return nil, err
 	}
-	if c, ok := s.Credentials[key]; ok && c.Token != "" && !c.Expired() {
-		return &c, nil
-	}
-	if c, ok := lookupJctl(key); ok {
-		return c, nil
-	}
-	return nil, nil
+	return res.Credential, nil
 }
 
 // LookupAny returns a non-expired stored credential for the platform URL
@@ -308,19 +304,15 @@ func Lookup(platformURL string) (*Credential, error) {
 // non-empty Token because callers attach it as a Bearer), this also returns a
 // workflow-identity marker (AuthModeWorkflowOIDC, empty Token). Use it for
 // status/display (`cilock whoami`), never to obtain a bearer token.
+//
+// It is a thin shim over Resolve(url, ForDisplay): the provider seam holds the
+// (unchanged) filtering and precedence.
 func LookupAny(platformURL string) (*Credential, error) {
-	key := NormalizeURL(platformURL)
-	s, err := load()
-	if err != nil {
+	res, err := Resolve(platformURL, ForDisplay)
+	if err != nil || res == nil {
 		return nil, err
 	}
-	if c, ok := s.Credentials[key]; ok && !c.Expired() {
-		return &c, nil
-	}
-	if c, ok := lookupJctl(key); ok {
-		return c, nil
-	}
-	return nil, nil
+	return res.Credential, nil
 }
 
 // LookupAnyIncludingExpired returns the credential the platform call would use,
@@ -337,22 +329,15 @@ func LookupAny(platformURL string) (*Credential, error) {
 // entry (which would make the doctor over-report FAIL on an environment a real
 // run would handle). NEVER use this to obtain a bearer token — an expired
 // credential must not sign; gate on Expired() before any use.
+//
+// It is a thin shim over Resolve(url, IncludingExpired): the provider seam holds
+// the (unchanged) filtering, precedence, and the expired-as-last-resort fallback.
 func LookupAnyIncludingExpired(platformURL string) (*Credential, error) {
-	key := NormalizeURL(platformURL)
-	s, err := load()
-	if err != nil {
+	res, err := Resolve(platformURL, IncludingExpired)
+	if err != nil || res == nil {
 		return nil, err
 	}
-	if c, ok := s.Credentials[key]; ok && !c.Expired() {
-		return &c, nil
-	}
-	if c, ok := lookupJctl(key); ok {
-		return c, nil
-	}
-	if c, ok := s.Credentials[key]; ok { // expired — surfaced for diagnosis only
-		return &c, nil
-	}
-	return nil, nil
+	return res.Credential, nil
 }
 
 // jctlKeyringService is jctl's keychain service identifier — every token jctl
