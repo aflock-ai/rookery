@@ -8,7 +8,6 @@ package cli
 import (
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	"github.com/aflock-ai/rookery/cilock/internal/config"
@@ -207,11 +206,10 @@ func tokenCredential(cmd *cobra.Command, url, token string) (*auth.Credential, e
 	} else {
 		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: a token passed via --token may be recorded in shell history; prefer '-' (stdin).")
 	}
-	cred := &auth.Credential{PlatformURL: url, Token: strings.TrimSpace(t), AuthMode: auth.AuthModeToken}
-	if cred.Token == "" {
-		return nil, fmt.Errorf("empty token")
-	}
-	return cred, nil
+	// Validate the JWT client-side (exp/aud) before storing it as a session —
+	// a server-expired or wrong-audience token must not be replayed as a live
+	// bearer for a synthetic 30-day window (GHSA #5991).
+	return auth.TokenCredential(url, t, config.Derive(url).OIDCLoginAudience)
 }
 
 // LogoutCmd removes a stored session credential.

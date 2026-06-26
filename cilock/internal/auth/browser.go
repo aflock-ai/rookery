@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"time"
@@ -77,16 +78,13 @@ func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
 			return
 		}
 		if token != "" {
-			resultCh <- &Credential{
-				PlatformURL: judgeURL,
-				Token:       token,
-				TenantID:    r.FormValue("tenant_id"),
-				TenantName:  r.FormValue("tenant"),
-				ProductID:   r.FormValue("product_id"),
-				ProductName: r.FormValue("product"),
-				Email:       r.FormValue("email"),
-				ExpiresAt:   time.Now().Add(30 * 24 * time.Hour),
-			}
+			resultCh <- newBrowserCredential(judgeURL, token, map[string]string{
+				"tenant_id":  r.FormValue("tenant_id"),
+				"tenant":     r.FormValue("tenant"),
+				"product_id": r.FormValue("product_id"),
+				"product":    r.FormValue("product"),
+				"email":      r.FormValue("email"),
+			})
 			w.Header().Set("Content-Type", "text/html")
 			writeCallbackPage(w, r.FormValue("tenant"))
 			return
@@ -107,6 +105,51 @@ func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
 		return c, nil
 	case <-time.After(5 * time.Minute):
 		return nil, fmt.Errorf("login timed out after 5 minutes")
+	}
+}
+
+// defaultSessionTTL bounds a session credential whose JWT carries no `exp`
+// claim. It is a fallback only — when the token declares an `exp`, that real
+// server-side expiry wins (see newBrowserCredential / TokenCredential). Without
+// an `exp`, gating on a bounded window is still safer than treating the token
+// as valid forever.
+const defaultSessionTTL = 30 * 24 * time.Hour
+
+// sessionTTL resolves the fallback window applied to an exp-less session token.
+// Operators can shorten (or lengthen) it via CILOCK_SESSION_TTL, a Go duration
+// string (e.g. "24h", "168h"). An unset, empty, unparseable, or non-positive
+// value falls back to defaultSessionTTL — a bad knob never weakens the bound by
+// accident, it just reverts to the safe default.
+func sessionTTL() time.Duration {
+	if v := os.Getenv("CILOCK_SESSION_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultSessionTTL
+}
+
+// newBrowserCredential builds the session credential the loopback callback
+// stores. ExpiresAt is taken from the token's own `exp` claim so a
+// server-expired token is recognized as expired client-side; only when the
+// token carries no decodable `exp` does it fall back to a bounded default
+// window (defaultSessionTTL) rather than the previous unconditional now+30d
+// that ignored the real expiry entirely (GHSA #5991). form supplies the
+// tenant/product/email values the approve page POSTs back.
+func newBrowserCredential(judgeURL, token string, form map[string]string) *Credential {
+	expiresAt := time.Now().Add(sessionTTL())
+	if exp, ok := tokenExp(token); ok {
+		expiresAt = exp
+	}
+	return &Credential{
+		PlatformURL: judgeURL,
+		Token:       token,
+		TenantID:    form["tenant_id"],
+		TenantName:  form["tenant"],
+		ProductID:   form["product_id"],
+		ProductName: form["product"],
+		Email:       form["email"],
+		ExpiresAt:   expiresAt,
 	}
 }
 

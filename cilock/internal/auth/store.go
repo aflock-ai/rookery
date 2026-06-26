@@ -51,6 +51,45 @@ func (c Credential) Expired() bool {
 	return !c.ExpiresAt.IsZero() && time.Now().After(c.ExpiresAt)
 }
 
+// TokenCredential builds a session credential from an explicit --token (the
+// CI/headless login path), validating the JWT client-side before it is stored
+// (GHSA #5991):
+//
+//   - ExpiresAt is taken from the token's own `exp` claim so a server-expired
+//     token is recognized as expired rather than replayed for a synthetic
+//     now+30d window; a token with no decodable `exp` falls back to the bounded
+//     defaultSessionTTL.
+//   - The `aud` claim must include loginAudience (the platform's dedicated
+//     login audience, config.PlatformConfig.OIDCLoginAudience). A token minted
+//     for a different audience — e.g. the Archivista upload audience — is
+//     REJECTED rather than silently stored as a session bearer, closing the
+//     confused-deputy gap the workflow path already guards. A token carrying no
+//     decodable `aud` fails open (the server stays the authority).
+//
+// The token is decoded WITHOUT signature verification — this is a pre-flight;
+// the platform remains the authority on signature and issuer.
+func TokenCredential(platformURL, token, loginAudience string) (*Credential, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("empty token")
+	}
+	if !tokenHasAudience(token, loginAudience) {
+		return nil, fmt.Errorf("token audience does not match the platform login audience %q "+
+			"(a token minted for a different audience — e.g. attestation upload — must not be "+
+			"used as a login session); obtain a session token via `cilock login`", loginAudience)
+	}
+	expiresAt := time.Now().Add(defaultSessionTTL)
+	if exp, ok := tokenExp(token); ok {
+		expiresAt = exp
+	}
+	return &Credential{
+		PlatformURL: platformURL,
+		Token:       token,
+		AuthMode:    AuthModeToken,
+		ExpiresAt:   expiresAt,
+	}, nil
+}
+
 type fileStore struct {
 	Credentials map[string]Credential `json:"credentials"`
 	// CurrentPlatform is the platform of the most recent login/use — the active
