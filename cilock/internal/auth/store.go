@@ -1,7 +1,20 @@
 // Package auth handles cilock's interactive login to a Judge platform. A
 // browser authorization-code-with-loopback flow yields a tenant-scoped session
-// JWT, stored locally for subsequent platform calls (Archivista reads, Fulcio
+// JWT, stored for subsequent platform calls (Archivista reads, Fulcio
 // signing-token exchange). See docs/design/cilock-platform-identity-signing.md.
+//
+// The session/credential model and the keyring-backed store live in the shared
+// github.com/aflock-ai/rookery/platformauth library so cilock and jctl resolve
+// the same session. This package is cilock's adapter over it: the session model
+// types are aliases, and every store function routes through ONE predicate
+// (useShared) that delegates to platformauth's keyring-backed store only when the
+// shared-session flag is on AND the one-time legacy→keyring migration has
+// succeeded; otherwise it stays on cilock's legacy cleartext store for that
+// operation. Routing reads and writes through the same predicate keeps them
+// consistent: a migration failure drops the whole store (resolve, scope, trust-pin,
+// active-platform, delete) to legacy together rather than mixing sources. The flag
+// (JUDGE_SHARED_SESSION) makes the cutover reversible; the legacy store stays a
+// readable fallback during the transition. See platformauth/DESIGN.md (phase 3).
 package auth
 
 import (
@@ -9,106 +22,195 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/aflock-ai/rookery/platformauth"
 	"github.com/zalando/go-keyring"
 	"gopkg.in/yaml.v3"
 )
 
-// AuthMode records how a stored credential was obtained, so `cilock whoami`
-// can describe the session and `cilock run` can tell a real session JWT apart
-// from a workflow-identity marker that carries no stored token.
+// AuthMode records how a stored credential was obtained, so `cilock whoami` can
+// describe the session and `cilock run` can tell a real session JWT apart from a
+// workflow-identity marker that carries no stored token. These mirror the shared
+// platformauth constants.
 const (
 	// AuthModeToken — credential is a directly-supplied --token.
-	AuthModeToken = "token"
+	AuthModeToken = platformauth.AuthModeToken
 	// AuthModeBrowser — credential came from the interactive browser flow.
-	AuthModeBrowser = "browser"
-	// AuthModeWorkflowOIDC — CI workflow identity. No long-lived token is
-	// stored; `cilock run` sources a fresh ambient OIDC token per call.
-	AuthModeWorkflowOIDC = "workflow-oidc"
+	AuthModeBrowser = platformauth.AuthModeBrowser
+	// AuthModeWorkflowOIDC — CI workflow identity. No long-lived token is stored;
+	// `cilock run` sources a fresh ambient OIDC token per call.
+	AuthModeWorkflowOIDC = platformauth.AuthModeWorkflowOIDC
 )
 
-// Credential is a stored platform session, keyed by platform URL. It also
-// carries the working scope (tenant + product) negotiated during login so
-// cilock can bind attestations to the product without re-prompting.
-type Credential struct {
-	PlatformURL string `json:"platform_url"`
-	Token       string `json:"token"`
-	// AuthMode is how this credential was obtained (see AuthMode* constants).
-	// A workflow-oidc credential intentionally carries an empty Token.
-	AuthMode    string    `json:"auth_mode,omitempty"`
-	TenantID    string    `json:"tenant_id,omitempty"`
-	TenantName  string    `json:"tenant_name,omitempty"`
-	ProductID   string    `json:"product_id,omitempty"`
-	ProductName string    `json:"product_name,omitempty"`
-	Email       string    `json:"email,omitempty"`
-	ExpiresAt   time.Time `json:"expires_at,omitempty"`
-	// TrustBundleSPKI is the trust-on-first-use pin for this platform's
-	// discovery-served policy-signer trust bundle: the SHA-256 (hex) of the
-	// raw trust_bundle_pem first adopted for this platform. On later resolves a
-	// changed bundle is refused unless the operator re-pins with
-	// --trust-discovery, so a compromised platform cannot silently swap in an
-	// attacker CA as the policy-signature trust anchor (GHSA #5988). Empty until
-	// the first discovery-trust adoption; omitted from older stores (backward
-	// compatible — an absent pin just means "not yet pinned").
-	TrustBundleSPKI string `json:"trust_bundle_spki,omitempty"`
+// Credential is a stored platform session, keyed by platform URL. It carries the
+// working scope (tenant + product) negotiated at login plus the discovery
+// trust-on-first-use pin (TrustBundleSPKI, GHSA #5988). It is the shared
+// platformauth session type.
+type Credential = platformauth.Credential
+
+// sharedSessionEnvVar gates the cutover to the platformauth keyring-backed store.
+// When set to "1" / "true" AND the one-time legacy→keyring migration has
+// succeeded, the shared store becomes authoritative for EVERY operation (see
+// useShared). Until migration succeeds — or whenever the flag is unset — every
+// operation stays on the legacy cilock cleartext store, preserving prior behavior
+// consistently across reads and writes. The flip is reversible: the legacy file
+// stays readable so a flag flip back still finds it.
+const sharedSessionEnvVar = "JUDGE_SHARED_SESSION"
+
+// sharedSessionFlagOn reports only whether the operator turned the cutover flag
+// on. It has no side effects — it does NOT attempt migration. Use useShared for
+// the actual store-selection decision; this exists so the flag check and the
+// migration attempt are separable.
+func sharedSessionFlagOn() bool {
+	v := os.Getenv(sharedSessionEnvVar)
+	return v == "1" || v == "true"
 }
 
-// Expired reports whether the credential has a known expiry in the past.
-func (c Credential) Expired() bool {
-	return !c.ExpiresAt.IsZero() && time.Now().After(c.ExpiresAt)
-}
-
-// TokenCredential builds a session credential from an explicit --token (the
-// CI/headless login path), validating the JWT client-side before it is stored
-// (GHSA #5991):
+// useShared is the SINGLE source-of-truth predicate every Store operation routes
+// through to decide shared-keyring vs legacy-cleartext. It returns true ONLY when
+// (a) the operator turned the flag on AND (b) the one-time legacy→keyring
+// migration has actually SUCCEEDED. Calling it attempts the migration (via the
+// retryable once-guard) as a side effect, so a transient migration failure is
+// retried on the next operation.
 //
-//   - ExpiresAt is taken from the token's own `exp` claim so a server-expired
-//     token is recognized as expired rather than replayed for a synthetic
-//     now+30d window; a token with no decodable `exp` falls back to the bounded
-//     defaultSessionTTL.
-//   - The `aud` claim must include loginAudience (the platform's dedicated
-//     login audience, config.PlatformConfig.OIDCLoginAudience). A token minted
-//     for a different audience — e.g. the Archivista upload audience — is
-//     REJECTED rather than silently stored as a session bearer, closing the
-//     confused-deputy gap the workflow path already guards. A token carrying no
-//     decodable `aud` fails open (the server stays the authority).
+// This collapses the former per-operation inconsistency: previously every method
+// keyed off "flag on?" alone and routed unconditionally to the shared store, while
+// only Resolve carried a legacy fallback — so on a migration failure a read could
+// still resolve the legacy credential (with CapCanPinTrust) but a write
+// (SetTrustBundleSPKI, SetScope, Delete) hit the empty shared store and failed or
+// reported "unpinnable". With this predicate the three states are coherent:
 //
-// The token is decoded WITHOUT signature verification — this is a pre-flight;
-// the platform remains the authority on signature and issuer.
-func TokenCredential(platformURL, token, loginAudience string) (*Credential, error) {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return nil, fmt.Errorf("empty token")
+//   - flag off                        → legacy everywhere (prior behavior, unchanged).
+//   - flag on  + migration SUCCEEDED  → shared everywhere.
+//   - flag on  + migration FAILED     → legacy everywhere, consistently — full
+//     no-relogin: Resolve, ActivePlatformURL, SetScope, SetTrustBundleSPKI, Save,
+//     and Delete all operate on the legacy store, so the trust-pin actually
+//     persists (no false "unpinnable") and the active platform is preserved.
+//
+// Once migration succeeds the legacy store is never consulted again.
+func useShared() bool {
+	if !sharedSessionFlagOn() {
+		return false
 	}
-	if !tokenHasAudience(token, loginAudience) {
-		return nil, fmt.Errorf("token audience does not match the platform login audience %q "+
-			"(a token minted for a different audience — e.g. attestation upload — must not be "+
-			"used as a login session); obtain a session token via `cilock login`", loginAudience)
-	}
-	expiresAt := time.Now().Add(defaultSessionTTL)
-	if exp, ok := tokenExp(token); ok {
-		expiresAt = exp
-	}
-	return &Credential{
-		PlatformURL: platformURL,
-		Token:       token,
-		AuthMode:    AuthModeToken,
-		ExpiresAt:   expiresAt,
-	}, nil
+	migrateLegacyOnce() // retryable; sets the guard only on success
+	return migrated.Load()
 }
 
-type fileStore struct {
-	Credentials map[string]Credential `json:"credentials"`
-	// CurrentPlatform is the platform of the most recent login/use — the active
-	// working platform, so `cilock run`/`trust` default to where you logged in
-	// instead of the compiled-in default. Cleared when its credential is deleted.
-	CurrentPlatform string `json:"current_platform,omitempty"`
+// migration guard. Unlike a sync.Once (which is consumed even when the work it
+// guards fails), this pair marks the migration "done" ONLY on success, so a
+// failed migration is retried on the next read instead of leaving the process
+// wedged on fallbacks until restart. migrated is the fast-path flag; migrateMu
+// serializes the retries so a thundering herd of concurrent reads runs the
+// migration once at a time rather than all at once.
+var (
+	migrated  atomic.Bool
+	migrateMu sync.Mutex
+)
+
+// resetMigrateOnceForTest re-arms the one-shot legacy migration so a test can
+// exercise the migration path from a clean slate. Test-only.
+func resetMigrateOnceForTest() {
+	migrateMu.Lock()
+	defer migrateMu.Unlock()
+	migrated.Store(false)
 }
+
+// doMigrateLegacy runs the actual legacy import once. It is a package var so a
+// test can substitute a failing or succeeding migration to exercise the
+// retry-on-failure guard without standing up a real keyring backend.
+var doMigrateLegacy = func() error {
+	store, err := platformauth.DefaultStore()
+	if err != nil {
+		return err
+	}
+	if _, err := platformauth.MigrateLegacyCilock(store); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateLegacyOnce imports the legacy cilock cleartext store into the shared
+// keyring store at most once SUCCESSFULLY per process. It is best-effort and
+// retryable: a failure (e.g. a keyring write error, or the shared store being
+// momentarily unavailable) leaves the guard UNSET, so the next read path retries
+// the migration. The legacy file stays in place and the session keeps working off
+// the fallbacks meanwhile — the token is never dropped. A successful run sets the
+// guard so subsequent reads skip the work.
+//
+// Double-checked locking: the lock-free fast path skips the mutex once migration
+// has succeeded; otherwise the mutex serializes concurrent retries (one attempt at
+// a time, not a thundering herd), and the second check under the lock collapses a
+// race where another goroutine just succeeded.
+func migrateLegacyOnce() {
+	if migrated.Load() {
+		return
+	}
+	migrateMu.Lock()
+	defer migrateMu.Unlock()
+	if migrated.Load() {
+		return
+	}
+	if err := doMigrateLegacy(); err != nil {
+		// Leave the guard unset so the next read retries. Warn at most once would be
+		// nicer, but a per-attempt warning keeps a persistently-failing keyring
+		// visible; it is on stderr, not the program's output.
+		fmt.Fprintf(os.Stderr, "cilock: warning: legacy session migration incomplete (will retry): %v\n", err)
+		return
+	}
+	migrated.Store(true)
+}
+
+// sharedResolver builds a resolver over the shared keyring store with the jctl
+// read-through as its sole fallback (so a prior `jctl login` works for cilock
+// too — a jctl credential declares no capabilities, keeping the verify trust gate
+// fail-closed against it exactly as before).
+//
+// useShared() is the gate to reach this path, and it is true only once the legacy
+// session has actually migrated INTO the shared store — so the migration-failure
+// "resolve legacy with full capabilities" job is no longer this resolver's
+// concern. On migration failure useShared() is false and resolution runs through
+// the legacy seam instead (resolveLegacy), keeping read AND write consistently on
+// the legacy store. The legacy cilock provider is therefore intentionally NOT a
+// fallback here.
+func sharedResolver() (*platformauth.Resolver, error) {
+	store, err := platformauth.DefaultStore()
+	if err != nil {
+		return nil, err
+	}
+	return platformauth.NewResolver(store, jctlProvider{})
+}
+
+// sharedStore returns the platformauth keyring-backed store.
+func sharedStore() (*platformauth.Store, error) { return platformauth.DefaultStore() }
+
+// resolveShared runs resolution through the shared keyring-backed store.
+func resolveShared(platformURL string, mode ResolveMode) (*Resolved, error) {
+	r, err := sharedResolver()
+	if err != nil {
+		return nil, err
+	}
+	return r.Resolve(platformURL, mode)
+}
+
+// TokenCredential builds a session credential from an explicit --token, validating
+// the JWT audience and deriving expiry from its `exp` claim (GHSA #5991). It is the
+// shared platformauth implementation.
+var TokenCredential = platformauth.TokenCredential
 
 // NormalizeURL trims a trailing slash so lookups are stable.
-func NormalizeURL(u string) string { return strings.TrimRight(strings.TrimSpace(u), "/") }
+func NormalizeURL(u string) string { return platformauth.NormalizeURL(u) }
+
+// legacyFileStore is cilock's pre-shared-store on-disk shape: a token-bearing
+// 0600 JSON map keyed by normalized platform URL plus the active-platform pointer.
+type legacyFileStore struct {
+	Credentials map[string]Credential `json:"credentials"`
+	// CurrentPlatform is the platform of the most recent login/use — the active
+	// working platform. Cleared when its credential is deleted.
+	CurrentPlatform string `json:"current_platform,omitempty"`
+}
 
 // StorePath is cilock's own credential file (~/.config/cilock/credentials.json
 // on Linux; Application Support on macOS). cilock owns this file; it does not
@@ -121,19 +223,19 @@ func StorePath() (string, error) {
 	return filepath.Join(dir, "cilock", "credentials.json"), nil
 }
 
-func load() (*fileStore, error) {
+func load() (*legacyFileStore, error) {
 	path, err := StorePath()
 	if err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(path) //nolint:gosec // path is under the user's own config dir
 	if os.IsNotExist(err) {
-		return &fileStore{Credentials: map[string]Credential{}}, nil
+		return &legacyFileStore{Credentials: map[string]Credential{}}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read credential store: %w", err)
 	}
-	var s fileStore
+	var s legacyFileStore
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("parse credential store %s: %w", path, err)
 	}
@@ -143,15 +245,60 @@ func load() (*fileStore, error) {
 	return &s, nil
 }
 
-// Save writes (or replaces) the credential for its platform URL at 0600.
+// writeLegacyStore writes the legacy cleartext store to path with mode 0600,
+// ENFORCED even when path already exists at a looser mode. os.WriteFile alone
+// does NOT tighten a pre-existing 0644 file, which would leave the cleartext
+// bearer token world-readable. It writes a sibling temp file (created 0600,
+// chmod-pinned against a permissive umask), then atomically renames it over the
+// target so a concurrent reader never sees a partial or looser-mode file; a
+// pre-existing target is also chmod-tightened first as a belt-and-suspenders step.
+func writeLegacyStore(path string, data []byte) error {
+	if _, statErr := os.Stat(path); statErr == nil {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return fmt.Errorf("tighten credential store perms: %w", err)
+		}
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".credentials-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp credential store: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("set temp credential store perms: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp credential store: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp credential store: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil { //nolint:gosec // path is the store's own file under the user's config dir (StorePath), not external input
+		return fmt.Errorf("write credential store: %w", err)
+	}
+	return nil
+}
+
+// Save writes (or replaces) the credential for its platform URL. With the shared
+// session flag on it goes to the platformauth keyring store; otherwise to the
+// legacy cilock cleartext file at 0600.
 func Save(c Credential) error {
+	if useShared() {
+		store, err := sharedStore()
+		if err != nil {
+			return err
+		}
+		return store.Save(c)
+	}
 	c.PlatformURL = NormalizeURL(c.PlatformURL)
 	s, err := load()
 	if err != nil {
 		return err
 	}
 	s.Credentials[c.PlatformURL] = c
-	// The most recently written credential becomes the active working platform.
 	s.CurrentPlatform = c.PlatformURL
 	path, err := StorePath()
 	if err != nil {
@@ -164,20 +311,22 @@ func Save(c Credential) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write credential store: %w", err)
-	}
-	return nil
+	return writeLegacyStore(path, data)
 }
 
 // SetScope updates only the working tenant/product binding on the stored
 // credential for platformURL, preserving its token, auth mode, email, and
-// expiry. It requires an existing cilock credential (run `cilock login` first);
-// it does not write to jctl's config. Empty arguments are left unchanged, so a
-// caller can rebind product alone or tenant alone. This is the mechanism behind
-// `cilock use` and the headless binding path — mirroring jctl's
-// `config set-product`, which writes the scope onto the active context.
+// expiry. It requires an existing credential (run `cilock login` first). Empty
+// arguments are left unchanged, so a caller can rebind product alone or tenant
+// alone. This is the mechanism behind `cilock use` and the headless binding path.
 func SetScope(platformURL, tenantID, tenantName, productID, productName string) error {
+	if useShared() {
+		store, err := sharedStore()
+		if err != nil {
+			return err
+		}
+		return store.SetScope(platformURL, tenantID, tenantName, productID, productName)
+	}
 	key := NormalizeURL(platformURL)
 	s, err := load()
 	if err != nil {
@@ -207,17 +356,19 @@ func SetScope(platformURL, tenantID, tenantName, productID, productName string) 
 // platformURL, preserving its token, scope, email, and expiry. It is used by
 // verify's discovery-trust adoption (GHSA #5988).
 //
-// It returns persisted=true only when the pin was actually written to cilock's
-// own credential store. When no cilock credential exists for the platform — a
-// jctl-only session, whose credential is read through from jctl's config and has
-// no cilock store entry to pin onto — it returns persisted=false with a nil
-// error: the pin is UN-PINNABLE for this session. The caller MUST treat an
-// un-pinnable session as a hard security stop for silent first-use adoption
-// rather than a benign no-op: without a persisted pin, every later resolve would
-// re-take the first-use branch and silently re-adopt whatever bundle the
-// platform then serves (the jctl gap in #6014's pin). A non-nil error is a real
-// store I/O failure, not the un-pinnable case.
+// It returns persisted=true only when the pin was actually written. When no
+// credential exists for the platform — a jctl-only session, which has no store
+// entry to pin onto — it returns persisted=false with a nil error: the pin is
+// UN-PINNABLE for this session and the caller MUST treat that as a hard security
+// stop for silent first-use adoption. A non-nil error is a real store I/O failure.
 func SetTrustBundleSPKI(platformURL, spki string) (persisted bool, err error) {
+	if useShared() {
+		store, sErr := sharedStore()
+		if sErr != nil {
+			return false, sErr
+		}
+		return store.SetTrustBundleSPKI(platformURL, spki)
+	}
 	key := NormalizeURL(platformURL)
 	s, err := load()
 	if err != nil {
@@ -238,12 +389,17 @@ func SetTrustBundleSPKI(platformURL, spki string) (persisted bool, err error) {
 }
 
 // ActivePlatformURL returns the platform a bare command should target when
-// --platform-url is not given: the most recent login/use (CurrentPlatform) if it
-// still has a stored credential, else the sole stored credential's URL, else ""
-// (callers then fall back to the compiled default). This is what lets
-// `cilock run` / `cilock trust` default to the platform you logged into rather
-// than the hard-coded prod default.
+// --platform-url is not given: the most recent login/use if it still has a stored
+// credential, else the sole stored credential's URL, else "" (callers fall back to
+// the compiled default).
 func ActivePlatformURL() string {
+	if useShared() {
+		store, err := sharedStore()
+		if err != nil {
+			return ""
+		}
+		return store.ActivePlatformURL()
+	}
 	s, err := load()
 	if err != nil {
 		return ""
@@ -263,6 +419,13 @@ func ActivePlatformURL() string {
 
 // Delete removes the credential for a platform URL. Returns whether one existed.
 func Delete(platformURL string) (bool, error) {
+	if useShared() {
+		store, err := sharedStore()
+		if err != nil {
+			return false, err
+		}
+		return store.Delete(platformURL)
+	}
 	s, err := load()
 	if err != nil {
 		return false, err
@@ -275,22 +438,24 @@ func Delete(platformURL string) (bool, error) {
 	if s.CurrentPlatform == key {
 		s.CurrentPlatform = "" // don't leave a dangling active platform
 	}
-	path, _ := StorePath()
-	data, _ := json.MarshalIndent(s, "", "  ")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return false, fmt.Errorf("write credential store: %w", err)
+	path, err := StorePath()
+	if err != nil {
+		return false, err
+	}
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	if err := writeLegacyStore(path, data); err != nil {
+		return false, err
 	}
 	return true, nil
 }
 
-// Lookup returns a non-expired credential for the platform URL. It checks
-// cilock's own store first, then falls back to a best-effort read of jctl's
-// ~/.jctl/config.yaml (so a prior `jctl login` works for cilock too). The jctl
-// read-through takes the token from the YAML when present, or from the OS
-// keychain entry jctl scrubbed it into (see lookupJctl).
-//
-// It is a thin shim over Resolve(url, ForBearer): the provider seam holds the
-// (unchanged) filtering and precedence. Callers attach the result as a Bearer.
+// Lookup returns a non-expired credential with a non-empty Token for the platform
+// URL, or nil if none. It is a thin shim over Resolve(url, ForBearer): the
+// resolver holds the filtering and precedence. Callers attach the result's Token
+// as a Bearer.
 func Lookup(platformURL string) (*Credential, error) {
 	res, err := Resolve(platformURL, ForBearer)
 	if err != nil || res == nil {
@@ -300,13 +465,9 @@ func Lookup(platformURL string) (*Credential, error) {
 }
 
 // LookupAny returns a non-expired stored credential for the platform URL
-// regardless of whether it carries a token. Unlike Lookup (which gates on a
-// non-empty Token because callers attach it as a Bearer), this also returns a
-// workflow-identity marker (AuthModeWorkflowOIDC, empty Token). Use it for
-// status/display (`cilock whoami`), never to obtain a bearer token.
-//
-// It is a thin shim over Resolve(url, ForDisplay): the provider seam holds the
-// (unchanged) filtering and precedence.
+// regardless of whether it carries a token (including a workflow-identity marker
+// with an empty Token). Use it for status/display (`cilock whoami`), never to
+// obtain a bearer token. Thin shim over Resolve(url, ForDisplay).
 func LookupAny(platformURL string) (*Credential, error) {
 	res, err := Resolve(platformURL, ForDisplay)
 	if err != nil || res == nil {
@@ -316,22 +477,10 @@ func LookupAny(platformURL string) (*Credential, error) {
 }
 
 // LookupAnyIncludingExpired returns the credential the platform call would use,
-// but unlike LookupAny it will surface an EXPIRED cilock credential rather than
-// collapsing it to nil — so diagnostic callers (e.g. `cilock doctor`) can tell
-// an EXPIRED session apart from a MISSING one (LookupAny reports both as "not
-// logged in", which would pass preflight on expired auth).
-//
-// Precedence mirrors LookupAny so the doctor's verdict matches what `cilock run`
-// actually does: a usable (non-expired) cilock credential first, then a
-// jctl-sourced one. Only when neither exists is an expired cilock credential
-// returned — so an expired session is reported as EXPIRED when it is the only
-// thing available, without masking a valid jctl fallback behind a stale cilock
-// entry (which would make the doctor over-report FAIL on an environment a real
-// run would handle). NEVER use this to obtain a bearer token — an expired
-// credential must not sign; gate on Expired() before any use.
-//
-// It is a thin shim over Resolve(url, IncludingExpired): the provider seam holds
-// the (unchanged) filtering, precedence, and the expired-as-last-resort fallback.
+// but unlike LookupAny it surfaces an EXPIRED credential rather than collapsing it
+// to nil — so diagnostic callers (`cilock doctor`) can tell an EXPIRED session
+// apart from a MISSING one. NEVER use this to obtain a bearer token. Thin shim
+// over Resolve(url, IncludingExpired).
 func LookupAnyIncludingExpired(platformURL string) (*Credential, error) {
 	res, err := Resolve(platformURL, IncludingExpired)
 	if err != nil || res == nil {
@@ -341,36 +490,32 @@ func LookupAnyIncludingExpired(platformURL string) (*Credential, error) {
 }
 
 // jctlKeyringService is jctl's keychain service identifier — every token jctl
-// scrubs out of ~/.jctl/config.yaml lives in the OS keychain under this
-// service, keyed by the context NAME as the account. Must stay in sync with
+// scrubs out of ~/.jctl/config.yaml lives in the OS keychain under this service,
+// keyed by the context NAME as the account. Must stay in sync with
 // judge-api/cmd/jctl/internal/config (keyringService).
 const jctlKeyringService = "jctl"
 
-// jctlKeyringTimeout caps the keychain read. A wedged secret-service daemon
-// (broken GNOME Keyring, zombie session bus on Linux) can otherwise hang
-// every cilock command indefinitely — same guard as jctl's own startup probe.
-// A var (not const) so tests can shrink it.
+// jctlKeyringTimeout caps the keychain read. A wedged secret-service daemon can
+// otherwise hang every cilock command indefinitely. A var (not const) so tests
+// can shrink it.
 var jctlKeyringTimeout = 3 * time.Second
 
-// getJctlKeyringToken is a seam over keyring.Get so tests can simulate a
-// hanging or failing keychain backend.
+// getJctlKeyringToken is a seam over keyring.Get so tests can simulate a hanging
+// or failing keychain backend.
 var getJctlKeyringToken = func(contextName string) (string, error) {
 	return keyring.Get(jctlKeyringService, contextName)
 }
 
 // jctlKeyringToken reads the token jctl stored in the OS keychain for
-// contextName, bounded by jctlKeyringTimeout. Any error, miss, or timeout
-// reports ok=false — the caller then behaves exactly as if the context had no
-// token, which is the pre-fallback behavior. On timeout the read goroutine is
-// abandoned; its buffered channel send cannot block, so it exits whenever the
-// backend finally answers.
+// contextName, bounded by jctlKeyringTimeout. Any error, miss, or timeout reports
+// ok=false — the caller then behaves exactly as if the context had no token. On
+// timeout the read goroutine is abandoned; its buffered channel send cannot block,
+// so it exits whenever the backend finally answers.
 func jctlKeyringToken(contextName string) (string, bool) {
 	type result struct {
 		token string
 		err   error
 	}
-	// Capture the seam before spawning: the goroutine must only touch locals,
-	// so an abandoned (timed-out) read can never race a test restoring the var.
 	get := getJctlKeyringToken
 	ch := make(chan result, 1)
 	go func() {
@@ -398,8 +543,8 @@ type jctlContext struct {
 	ProductName string `yaml:"product_name"`
 }
 
-// credential builds the cilock Credential a jctl context resolves to. token
-// is passed explicitly because it may come from the YAML or the OS keychain.
+// credential builds the cilock Credential a jctl context resolves to. token is
+// passed explicitly because it may come from the YAML or the OS keychain.
 func (ctx jctlContext) credential(platformURL, token string) *Credential {
 	return &Credential{
 		PlatformURL: platformURL,
@@ -411,13 +556,12 @@ func (ctx jctlContext) credential(platformURL, token string) *Credential {
 	}
 }
 
-// lookupJctl reads ~/.jctl/config.yaml (best-effort) for a context whose
-// judgeURL matches. Tokens come from the YAML when present (jctl file mode /
-// JCTL_DISABLE_KEYRING=1); when the YAML token is empty, jctl scrubbed it
-// into the OS keychain (service "jctl", account = context name) and the
-// fallback reads it from there — otherwise the documented "jctl login works
-// for cilock too" interop is silently dead on macOS and desktop Linux, where
-// the keychain is jctl's default.
+// lookupJctl reads ~/.jctl/config.yaml (best-effort) for a context whose judgeURL
+// matches. Tokens come from the YAML when present (jctl file mode /
+// JCTL_DISABLE_KEYRING=1); when the YAML token is empty, jctl scrubbed it into the
+// OS keychain (service "jctl", account = context name) and the fallback reads it
+// from there — otherwise the documented "jctl login works for cilock too" interop
+// is silently dead on macOS and desktop Linux, where the keychain is jctl's default.
 func lookupJctl(platformURL string) (*Credential, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -433,18 +577,17 @@ func lookupJctl(platformURL string) (*Credential, bool) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, false
 	}
-	// Pass 1: contexts whose token is inline in the YAML. Exactly the
-	// pre-keychain behavior, and it never touches the keychain — a wedged
-	// daemon can't slow down an install that already works.
+	// Pass 1: contexts whose token is inline in the YAML. Never touches the
+	// keychain — a wedged daemon can't slow down an install that already works.
 	for _, ctx := range cfg.Contexts {
 		if NormalizeURL(ctx.JudgeURL) == platformURL && ctx.Token != "" {
 			return ctx.credential(platformURL, ctx.Token), true
 		}
 	}
-	// Pass 2: matching contexts with an empty YAML token — read the keychain
-	// entry jctl scrubbed the token into. The account is the context NAME (the
-	// YAML map key), not a recomputed hostname. Any miss/error/timeout leaves
-	// us exactly where we were before this fallback: no credential.
+	// Pass 2: matching contexts with an empty YAML token — read the keychain entry
+	// jctl scrubbed the token into. The account is the context NAME (the YAML map
+	// key), not a recomputed hostname. Any miss/error/timeout leaves us with no
+	// credential, exactly as before this fallback existed.
 	for name, ctx := range cfg.Contexts {
 		if NormalizeURL(ctx.JudgeURL) != platformURL || ctx.Token != "" {
 			continue

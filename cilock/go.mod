@@ -5,6 +5,8 @@ go 1.26.4
 // Core
 replace github.com/aflock-ai/rookery/attestation => ../attestation
 
+replace github.com/aflock-ai/rookery/platformauth => ../platformauth
+
 // Attestor plugins
 replace github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild => ../plugins/attestors/aws-codebuild
 
@@ -121,6 +123,7 @@ replace github.com/aflock-ai/rookery/plugins/signers/vault-transit => ../plugins
 
 require (
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/platformauth v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-iid v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/commandrun v0.0.0-00010101000000-000000000000
