@@ -323,12 +323,19 @@ func TestAdversarial_CompareArtifacts_InjectedArtifactsIgnored(t *testing.T) {
 		"backdoor.sh": {sha256: "evil_hash"},
 	}
 
+	// DEFAULT (warn-only, backward-compatible): compareArtifacts still passes —
+	// the injected backdoor.sh is logged, not rejected. Existing policies that
+	// under-declare materials must keep verifying.
 	err := compareArtifacts(materials, artifacts)
-	// BUG: This passes! The injected backdoor.sh is completely ignored.
 	assert.NoError(t, err,
-		"CONFIRMED: compareArtifacts ignores extra artifacts from the producing step. "+
-			"An attacker can inject arbitrary files (backdoor.sh) that downstream steps "+
-			"never validate. This is a supply chain injection vector.")
+		"DEFAULT: compareArtifacts logs (does not reject) extra producing-step artifacts for backward compat")
+
+	// STRICT (F7, opt-in via WithRequireAllArtifacts): the unconsumed
+	// backdoor.sh is detected and would fail the artifactsFrom edge closed.
+	// extraArtifacts is the exact predicate the strict path keys off.
+	extra := extraArtifacts(materials, artifacts)
+	assert.Equal(t, []string{"backdoor.sh"}, extra,
+		"STRICT (F7): the injected backdoor.sh must be flagged as an unconsumed artifact and fail closed under strict mode")
 }
 
 func TestAdversarial_CompareArtifacts_EmptyMaterialsIgnoresEverything(t *testing.T) {
@@ -344,10 +351,19 @@ func TestAdversarial_CompareArtifacts_EmptyMaterialsIgnoresEverything(t *testing
 		"keylogger.py": {sha256: "evil3"},
 	}
 
+	// DEFAULT (warn-only): empty materials still pass — preserved for backward
+	// compatibility (a leaf-less empty set is already rejected upstream in
+	// verifyCollectionArtifacts; an authoritative empty set is a valid "consumed
+	// nothing" claim).
 	err := compareArtifacts(materials, artifacts)
 	assert.NoError(t, err,
-		"CONFIRMED: empty materials pass any artifacts through. "+
-			"A step with no material attestations cannot detect injected artifacts.")
+		"DEFAULT: empty materials pass artifacts through (logged only)")
+
+	// STRICT (F7, opt-in): with empty materials, EVERY producing-step artifact
+	// is unconsumed, so strict mode flags all of them and fails closed.
+	extra := extraArtifacts(materials, artifacts)
+	assert.ElementsMatch(t, []string{"backdoor.sh", "rootkit.so", "keylogger.py"}, extra,
+		"STRICT (F7): every unconsumed artifact must be flagged when materials are empty")
 }
 
 // ===========================================================================
@@ -787,19 +803,19 @@ func TestAdversarial_Verify_NegativeClockSkewTolerance(t *testing.T) {
 
 	ms := &mockVerifiedSource{}
 
-	// Negative tolerance makes the expiry window SMALLER
+	// Negative tolerance SHRINKS the expiry window — left unchecked it would
+	// make a non-expired policy (5 min remaining) appear expired.
 	_, _, err := p.Verify(context.Background(),
 		WithVerifiedSource(ms),
 		WithSubjectDigests([]string{"sha256:abc"}),
-		WithClockSkewTolerance(-10*time.Minute), // Makes it expire 10 min EARLIER
+		WithClockSkewTolerance(-10*time.Minute), // would expire it 10 min EARLIER
 	)
-	// The check is: time.Now().After(p.Expires.Time.Add(vo.clockSkewTolerance))
-	// = time.Now().After(now+5min + (-10min))
-	// = time.Now().After(now - 5min)
-	// = true! The policy is treated as expired.
-	if err != nil {
-		assert.Contains(t, err.Error(), "expired",
-			"CONFIRMED: Negative clockSkewTolerance makes non-expired policies appear expired. "+
-				"No validation prevents negative tolerance values.")
-	}
+	// FIXED (F20, #5746): checkVerifyOpts now rejects a negative tolerance up
+	// front, so Verify fails with an option-validation error rather than
+	// silently treating the still-valid policy as expired.
+	require.Error(t, err, "F20: negative clock-skew tolerance must be rejected")
+	assert.Contains(t, err.Error(), "must be non-negative",
+		"F20: negative clockSkewTolerance must be rejected with a non-negative validation error, not silently applied")
+	assert.NotContains(t, err.Error(), "expired",
+		"F20: a still-valid policy must not be reported as expired due to negative tolerance")
 }

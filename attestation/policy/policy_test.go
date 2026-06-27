@@ -343,6 +343,36 @@ func TestCheckVerifyOpts_ZeroDepth(t *testing.T) {
 	assert.Equal(t, "search depth", invalid.Option)
 }
 
+// TestCheckVerifyOpts_NegativeClockSkewTolerance pins F20 (#5746): a negative
+// clock-skew tolerance SHRINKS the validity window (premature expiry), so
+// checkVerifyOpts must reject it rather than silently apply it.
+func TestCheckVerifyOpts_NegativeClockSkewTolerance(t *testing.T) {
+	vo := &verifyOptions{
+		verifiedSource:     &mockVerifiedSource{},
+		subjectDigests:     []string{"sha256:abc"},
+		searchDepth:        3,
+		clockSkewTolerance: -1 * time.Second,
+	}
+	err := checkVerifyOpts(vo)
+	assert.Error(t, err)
+	var invalid ErrInvalidOption
+	assert.ErrorAs(t, err, &invalid)
+	assert.Equal(t, "clock skew tolerance", invalid.Option)
+	assert.Contains(t, err.Error(), "must be non-negative")
+}
+
+// TestCheckVerifyOpts_ZeroClockSkewTolerance confirms the boundary: a zero
+// tolerance (the default) is permitted — only negative values are rejected.
+func TestCheckVerifyOpts_ZeroClockSkewTolerance(t *testing.T) {
+	vo := &verifyOptions{
+		verifiedSource:     &mockVerifiedSource{},
+		subjectDigests:     []string{"sha256:abc"},
+		searchDepth:        3,
+		clockSkewTolerance: 0,
+	}
+	assert.NoError(t, checkVerifyOpts(vo))
+}
+
 // ---------------------------------------------------------------------------
 // VerifyOption functional options
 // ---------------------------------------------------------------------------
@@ -1611,6 +1641,58 @@ func TestCompareArtifacts_LogsExtraArtifacts(t *testing.T) {
 	// Should not error (extra artifacts are logged, not rejected, for backward compat)
 	err := compareArtifacts(mats, arts)
 	assert.NoError(t, err, "extra artifacts should not cause error (logged only)")
+}
+
+// TestVerifyCollectionArtifacts_StrictRequireAllArtifacts pins F7 (#5746): the
+// opt-in WithRequireAllArtifacts flag makes verifyCollectionArtifacts fail
+// closed when a producing step emits an artifact the consuming step does not
+// consume as a material — while DEFAULT verification (flag off) is unchanged.
+//
+// Setup: downstream "build" consumes ONLY libshared.so; upstream "source"
+// produces libshared.so (matching) PLUS an injected malicious.bin that nothing
+// downstream consumes.
+func TestVerifyCollectionArtifacts_StrictRequireAllArtifacts(t *testing.T) {
+	good := digest("aa")
+	evil := digest("ee")
+
+	step := Step{Name: "build", ArtifactsFrom: []string{"source"}}
+
+	// Downstream consumes libshared.so@good, committed inline (not leaf-less).
+	down := &inlineFakeAttestor{
+		typ:           "https://aflock.ai/attestations/material/v0.3",
+		materials:     map[string]cryptoutil.DigestSet{"libshared.so": good},
+		inlinePresent: true,
+	}
+	build := inlineCollection("build", down)
+
+	// Upstream produces the consumed lib PLUS an unconsumed injected artifact.
+	src := &inlineFakeAttestor{
+		typ: "https://aflock.ai/attestations/product/v0.3",
+		products: map[string]attestation.Product{
+			"libshared.so":  {Digest: good},
+			"malicious.bin": {Digest: evil},
+		},
+	}
+	collectionsByStep := map[string]StepResult{
+		"source": {Step: "source", Passed: []PassedCollection{{Collection: inlineCollection("source", src)}}},
+	}
+
+	t.Run("default off — extra artifact tolerated (warn only)", func(t *testing.T) {
+		err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, build, collectionsByStep)
+		assert.NoError(t, err, "default verification must ignore the unconsumed malicious.bin (backward compat)")
+	})
+
+	t.Run("strict on — extra artifact fails closed", func(t *testing.T) {
+		vo := &verifyOptions{}
+		WithRequireAllArtifacts()(vo)
+		err := verifyCollectionArtifacts(context.Background(), vo, step, build, collectionsByStep)
+		require.Error(t, err, "strict mode must reject the unconsumed malicious.bin")
+		// The reason is surfaced through the aggregated ErrVerifyArtifactsFailed.
+		var artErr ErrVerifyArtifactsFailed
+		assert.ErrorAs(t, err, &artErr)
+		assert.Contains(t, err.Error(), "malicious.bin")
+		assert.Contains(t, err.Error(), "strict artifact matching")
+	})
 }
 
 // TestAIPolicy_ValidateServerURL verifies SSRF protections on the AI server URL.

@@ -183,11 +183,12 @@ func trustBundlesFromRoots(roots map[string]Root) (map[string]TrustBundle, error
 type VerifyOption func(*verifyOptions)
 
 type verifyOptions struct {
-	verifiedSource     source.VerifiedSourcer
-	subjectDigests     []string
-	searchDepth        int
-	aiServerURL        string
-	clockSkewTolerance time.Duration
+	verifiedSource      source.VerifiedSourcer
+	subjectDigests      []string
+	searchDepth         int
+	aiServerURL         string
+	clockSkewTolerance  time.Duration
+	requireAllArtifacts bool
 }
 
 func WithVerifiedSource(verifiedSource source.VerifiedSourcer) VerifyOption {
@@ -223,6 +224,22 @@ func WithClockSkewTolerance(d time.Duration) VerifyOption {
 	}
 }
 
+// WithRequireAllArtifacts enables STRICT artifact matching for artifactsFrom
+// edges (opt-in; default OFF). When enabled, the verifier fails closed if a
+// producing step emits an artifact that the consuming step does NOT consume as
+// a material — an unconsumed/extra artifact can indicate supply-chain injection
+// (a file slipped into a step's output that nobody downstream checks).
+//
+// This is DEFAULT-OFF by design: existing policies routinely under-declare
+// materials (build steps that read more than they enumerate), so enabling it
+// unconditionally would break them. Off (the default) preserves the historical
+// warn-only behavior — extra artifacts are logged, never rejected.
+func WithRequireAllArtifacts() VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.requireAllArtifacts = true
+	}
+}
+
 func checkVerifyOpts(vo *verifyOptions) error {
 	if vo.verifiedSource == nil {
 		return ErrInvalidOption{
@@ -242,6 +259,17 @@ func checkVerifyOpts(vo *verifyOptions) error {
 		return ErrInvalidOption{
 			Option: "search depth",
 			Reason: "search depth must be at least 1",
+		}
+	}
+
+	// A negative clock-skew tolerance SHRINKS the validity window (premature
+	// expiry / unidirectional skew), which is a fail-open soundness hole: it
+	// could reject a policy that has not actually expired, or — if abused —
+	// move the effective expiry. Tolerance must only ever widen the window.
+	if vo.clockSkewTolerance < 0 {
+		return ErrInvalidOption{
+			Option: "clock skew tolerance",
+			Reason: "clock skew tolerance must be non-negative",
 		}
 	}
 
@@ -1017,7 +1045,7 @@ func (p Policy) verifyArtifacts(ctx context.Context, vo *verifyOptions, resultsB
 	return resultsByStep, nil
 }
 
-func verifyCollectionArtifacts(_ context.Context, _ *verifyOptions, step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit // inline-leaf chain compare shares a reason-tracking trail across the artifactsFrom loop; splitting obscures the failure-reason trail
+func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit // inline-leaf chain compare shares a reason-tracking trail across the artifactsFrom loop; splitting obscures the failure-reason trail
 	reasons := []string{}
 	// Verify + cap the downstream collection's inline leaves BEFORE rehydrating
 	// its materials map. For v0.3 inline predicates the materials are
@@ -1076,10 +1104,26 @@ func verifyCollectionArtifacts(_ context.Context, _ *verifyOptions, step Step, c
 				continue
 			}
 
-			if err := compareArtifacts(mats, testCollection.Collection.Collection.Artifacts()); err != nil {
+			arts := testCollection.Collection.Collection.Artifacts()
+			if err := compareArtifacts(mats, arts); err != nil {
 				collection.Warnings = append(collection.Warnings, fmt.Sprintf("failed to verify artifacts for step %s: %v", step.Name, err))
 				reasons = append(reasons, err.Error())
 				continue
+			}
+
+			// Strict-mode (opt-in, default OFF — see WithRequireAllArtifacts):
+			// fail closed if the upstream step produced an artifact the
+			// downstream step does not consume as a material. compareArtifacts
+			// only logs these (warn) for backward compatibility; under strict
+			// mode an unconsumed/extra artifact is a hard chain-of-custody
+			// failure (potential supply-chain injection).
+			if vo != nil && vo.requireAllArtifacts {
+				if extra := extraArtifacts(mats, arts); len(extra) > 0 {
+					err := ErrUnconsumedArtifacts{Step: step.Name, ArtifactsFrom: artifactsFrom, Paths: extra}
+					collection.Warnings = append(collection.Warnings, err.Error())
+					reasons = append(reasons, err.Error())
+					continue
+				}
 			}
 
 			accepted = append(accepted, testCollection.Collection)
@@ -1197,13 +1241,27 @@ func compareArtifacts(mats map[string]cryptoutil.DigestSet, arts map[string]cryp
 	// Warn about artifacts that appear in the producing step but not in the
 	// consuming step's materials. Extra artifacts could indicate supply chain
 	// injection — a file added to a step's output that nobody downstream
-	// checks. We log rather than error to avoid breaking existing deployments,
-	// but this should be reviewed for strict mode enforcement.
-	for path := range arts {
-		if _, ok := mats[path]; !ok {
-			log.Debugf("artifact %q present in producing step but not consumed as material by the verifying step", path)
-		}
+	// checks. We log rather than error here to avoid breaking existing
+	// deployments; strict-mode enforcement (fail-closed) is opt-in at the
+	// caller via WithRequireAllArtifacts (see verifyCollectionArtifacts).
+	for _, path := range extraArtifacts(mats, arts) {
+		log.Debugf("artifact %q present in producing step but not consumed as material by the verifying step", path)
 	}
 
 	return nil
+}
+
+// extraArtifacts returns the sorted paths present in the producing step's
+// artifacts (arts) but absent from the consuming step's materials (mats) —
+// i.e. artifacts produced upstream that nothing downstream consumes. Sorted
+// output keeps error messages and logs deterministic.
+func extraArtifacts(mats map[string]cryptoutil.DigestSet, arts map[string]cryptoutil.DigestSet) []string {
+	var extra []string
+	for path := range arts {
+		if _, ok := mats[path]; !ok {
+			extra = append(extra, path)
+		}
+	}
+	sort.Strings(extra)
+	return extra
 }

@@ -78,6 +78,12 @@ func (s *auditMockSource) Search(_ context.Context, stepName string, _ []string,
 	return s.byStep[stepName], nil
 }
 
+// SearchByPredicateType satisfies source.VerifiedSourcer; these audit collection
+// tests do not exercise the external bare-predicate path (issue #39).
+func (s *auditMockSource) SearchByPredicateType(_ context.Context, _ []string, _ []string) ([]source.StatementEnvelope, error) {
+	return nil, nil
+}
+
 func auditMakeVerifierAndKeyID(t *testing.T) (cryptoutil.Verifier, string) {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

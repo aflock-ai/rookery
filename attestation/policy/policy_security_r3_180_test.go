@@ -80,6 +80,12 @@ func (s *r3MockSource) Search(_ context.Context, stepName string, _ []string, _ 
 	return s.byStep[stepName], nil
 }
 
+// SearchByPredicateType satisfies source.VerifiedSourcer; the R3-180 collection
+// tests do not exercise the external bare-predicate path (issue #39).
+func (s *r3MockSource) SearchByPredicateType(_ context.Context, _ []string, _ []string) ([]source.StatementEnvelope, error) {
+	return nil, nil
+}
+
 func r3MakeVerifierAndKeyID(t *testing.T) (cryptoutil.Verifier, string) {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -145,24 +151,23 @@ func TestSecurity_R3_180_CompareArtifactsIgnoresExtraUpstreamArtifacts(t *testin
 		"malware.bin": {sha256Key: "evil666"},
 	}
 
-	err := compareArtifacts(materials, artifacts)
-
-	// BUG: compareArtifacts returns nil because all materials matched.
-	// The injected "malware.bin" is silently ignored.
-	if err != nil {
-		// If this branch executes, the bug has been FIXED (strict mode).
-		t.Log("FIXED: compareArtifacts now rejects extra artifacts in the " +
-			"producing step that are not consumed as materials. Supply-chain " +
-			"injection via extra files is now detected.")
-		return
+	// DEFAULT (warn-only, backward-compatible): compareArtifacts returns nil
+	// because all materials matched; the injected "malware.bin" is logged, not
+	// rejected. Existing under-declared policies must keep verifying.
+	if err := compareArtifacts(materials, artifacts); err != nil {
+		t.Errorf("DEFAULT: compareArtifacts must remain warn-only (no error) for "+
+			"backward compatibility, got: %v", err)
 	}
 
-	// Bug is present: extra artifacts are silently ignored.
-	t.Error("SECURITY BUG R3-180: compareArtifacts does not detect extra " +
-		"artifacts ('malware.bin') in the producing step that are absent from " +
-		"the consuming step's materials. An attacker can inject arbitrary files " +
-		"into a step's products without triggering artifact verification failure. " +
-		"This is a supply-chain injection vector.")
+	// STRICT (F7, #5746): the injected "malware.bin" is an unconsumed upstream
+	// artifact. Under strict mode (opt-in via WithRequireAllArtifacts) the
+	// artifactsFrom edge fails closed. extraArtifacts is the exact predicate the
+	// strict path evaluates.
+	extra := extraArtifacts(materials, artifacts)
+	if len(extra) != 1 || extra[0] != "malware.bin" {
+		t.Errorf("STRICT (F7): expected the injected 'malware.bin' to be flagged as "+
+			"an unconsumed upstream artifact, got: %v", extra)
+	}
 }
 
 // ===========================================================================
@@ -871,8 +876,10 @@ func TestSecurity_R3_189_NegativeClockSkewTolerance(t *testing.T) {
 		byStep: map[string][]source.CollectionVerificationResult{},
 	}
 
-	// Negative tolerance: -2 hours. This shifts the effective expiry
-	// to 1 hour - 2 hours = -1 hour, making the policy "expired."
+	// Negative tolerance: -2 hours. A negative tolerance SHRINKS the validity
+	// window (1h - 2h = -1h), which would make a still-valid policy appear
+	// expired. F20 (#5746) hardens checkVerifyOpts to REJECT a negative
+	// tolerance up front rather than silently apply it.
 	_, _, err := p.Verify(context.Background(),
 		WithVerifiedSource(src),
 		WithSubjectDigests([]string{"sha256:abc"}),
@@ -883,14 +890,17 @@ func TestSecurity_R3_189_NegativeClockSkewTolerance(t *testing.T) {
 		t.Fatal("expected some error from Verify")
 	}
 
+	// FIXED (F20): the negative tolerance is rejected by checkVerifyOpts, so
+	// the error is an option-validation error, NOT a spurious "expired".
 	if strings.Contains(err.Error(), "expired") {
 		t.Error("SECURITY BUG R3-189: Negative clockSkewTolerance (-2h) caused " +
 			"a policy with 1h remaining validity to be treated as expired. " +
-			"A negative tolerance should be rejected by checkVerifyOpts, not " +
-			"silently applied. This can cause denial-of-service where valid " +
-			"policies are incorrectly rejected due to misconfigured tolerance values.")
-	} else {
-		t.Logf("Verify failed for a different reason: %v", err)
+			"A negative tolerance must be rejected by checkVerifyOpts, not " +
+			"silently applied.")
+	}
+	if !strings.Contains(err.Error(), "must be non-negative") {
+		t.Errorf("F20: expected negative clock-skew tolerance to be rejected with "+
+			"a 'must be non-negative' option-validation error, got: %v", err)
 	}
 
 	// Also verify there's no NotBefore check: a policy that "starts" in the

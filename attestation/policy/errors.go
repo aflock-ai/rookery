@@ -148,6 +148,22 @@ func (e ErrNoArtifactOverlap) Error() string {
 	return "no artifacts in common between the step's materials and the referenced step's artifacts"
 }
 
+// ErrUnconsumedArtifacts is returned ONLY under strict artifact matching
+// (opt-in via WithRequireAllArtifacts) when a producing step emits an artifact
+// that the consuming step does not consume as a material. An unconsumed
+// artifact is a potential supply-chain injection — a file added to a step's
+// output that nothing downstream checks. Default (warn-only) verification does
+// NOT return this error.
+type ErrUnconsumedArtifacts struct {
+	Step          string
+	ArtifactsFrom string
+	Paths         []string
+}
+
+func (e ErrUnconsumedArtifacts) Error() string {
+	return fmt.Sprintf("step %q (strict artifact matching): %d artifact(s) produced by step %q are not consumed as materials: %s", e.Step, len(e.Paths), e.ArtifactsFrom, strings.Join(e.Paths, ", "))
+}
+
 type ErrRegoInvalidData struct {
 	Path     string
 	Expected string

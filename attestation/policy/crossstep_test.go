@@ -2086,7 +2086,7 @@ func TestSecurity_R3_210_CompareArtifactsHashDowngrade(t *testing.T) {
 			},
 		}
 
-		err := verifyCollectionArtifacts(consumerStep, consumerCVR, collectionsByStep)
+		err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, consumerStep, consumerCVR, collectionsByStep)
 		assert.NoError(t, err,
 			"SECURITY FINDING: Full artifact flow confirms hash downgrade. "+
 				"Producer omits SHA256 from products, consumer has SHA256+SHA1 in materials. "+

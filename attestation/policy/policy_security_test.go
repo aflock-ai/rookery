@@ -80,6 +80,12 @@ func (s *secMockVerifiedSource) Search(_ context.Context, stepName string, _ []s
 	return s.byStep[stepName], nil
 }
 
+// SearchByPredicateType satisfies source.VerifiedSourcer; these security
+// collection tests do not exercise the external bare-predicate path (issue #39).
+func (s *secMockVerifiedSource) SearchByPredicateType(_ context.Context, _ []string, _ []string) ([]source.StatementEnvelope, error) {
+	return nil, nil
+}
+
 // secGenerateSelfSignedCert creates a self-signed CA cert.
 func secGenerateSelfSignedCert(t *testing.T, cn string, orgs []string) (*x509.Certificate, *ecdsa.PrivateKey, []byte) {
 	t.Helper()

@@ -69,10 +69,14 @@ func (m *mockVerifiedSrc) Search(_ context.Context, collectionName string, _ []s
 	return nil, nil
 }
 
-// futureExpiry returns an Expires time 1 year from now.
-func futureExpiry() metav1.Time {
-	return metav1.Time{Time: time.Now().Add(365 * 24 * time.Hour)}
+// SearchByPredicateType satisfies source.VerifiedSourcer; these collection-flow
+// tests do not exercise the external bare-predicate path (issue #39).
+func (m *mockVerifiedSrc) SearchByPredicateType(_ context.Context, _ []string, _ []string) ([]source.StatementEnvelope, error) {
+	return nil, nil
 }
+
+// futureExpiry is defined in policy_external_test.go (default build) and is
+// available to this audit-tagged file since both compile under -tags audit.
 
 // pastExpiry returns an Expires time 1 year in the past.
 func pastExpiry() metav1.Time {
@@ -1063,7 +1067,7 @@ func TestVerify_VerifyArtifacts_NoPassedCollections(t *testing.T) {
 		},
 	}
 
-	results, err := p.verifyArtifacts(resultsByStep)
+	results, err := p.verifyArtifacts(context.Background(), &verifyOptions{}, resultsByStep)
 	require.NoError(t, err)
 	assert.Len(t, results["build"].Rejected, 1)
 	assert.Contains(t, results["build"].Rejected[0].Reason.Error(), "no passed collections")
@@ -1174,7 +1178,7 @@ func TestVerify_VerifyArtifacts_AllCollectionsFail(t *testing.T) {
 		},
 	}
 
-	results, err := p.verifyArtifacts(resultsByStep)
+	results, err := p.verifyArtifacts(context.Background(), &verifyOptions{}, resultsByStep)
 	require.NoError(t, err, "verifyArtifacts itself should not error")
 	// Both steps should still be in results. Build step's artifact check passes
 	// vacuously because the collections have no materials/products to compare.
@@ -1498,7 +1502,7 @@ func TestVerify_VerifyArtifacts_StepMissingFromResults(t *testing.T) {
 		},
 	}
 
-	_, err := p.verifyArtifacts(resultsByStep)
+	_, err := p.verifyArtifacts(context.Background(), &verifyOptions{}, resultsByStep)
 	// BUG PROVEN: verifyArtifacts returns a hard error when a step is missing
 	// from the results map, rather than gracefully adding a rejection.
 	assert.Error(t, err, "BUG PROVEN: step missing from results map causes hard error instead of rejection")
