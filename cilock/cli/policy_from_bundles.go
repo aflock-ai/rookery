@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/digitorus/pkcs7"
+	"github.com/sigstore/fulcio/pkg/certificate"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -204,6 +205,8 @@ type certSigner struct {
 	intermediates [][]byte
 	commonName    string   // leaf cert CN, if parseable; "" otherwise (best-effort)
 	emails        []string // leaf cert SAN email addresses, if any (the keyless signer identity)
+	uris          []string // leaf cert SAN URIs, if any (the workflow-identity signer identity)
+	issuer        string   // Fulcio OIDC issuer extension, if any (the keyless trust root)
 }
 
 // sidecarSummary captures one of the export sidecar envelopes that
@@ -471,13 +474,15 @@ func collectSigners(sigs []bundleSignature) (keyids []string, certs []certSigner
 				continue
 			}
 			seenCert[s.KeyID] = struct{}{}
-			cn, emails := extractLeafConstraintFields(s.Certificate)
+			cn, emails, uris, issuer := extractLeafConstraintFields(s.Certificate)
 			certs = append(certs, certSigner{
 				keyID:         s.KeyID,
 				leafPEM:       s.Certificate,
 				intermediates: s.Intermediates,
 				commonName:    cn,
 				emails:        emails,
+				uris:          uris,
+				issuer:        issuer,
 			})
 			continue
 		}
@@ -533,16 +538,29 @@ func extractTSARoots(timestamps []bundleSigTimestamp) []tsaRoot {
 // CertConstraint pins. Failure is non-fatal: this is starter-policy metadata,
 // and the user is expected to tighten the CertConstraint before signing.
 // Returns ("", nil) on any parse error.
-func extractLeafConstraintFields(leafPEM []byte) (commonName string, emails []string) {
+func extractLeafConstraintFields(leafPEM []byte) (commonName string, emails, uris []string, issuer string) {
 	block, _ := pem.Decode(leafPEM)
 	if block == nil {
-		return "", nil
+		return "", nil, nil, ""
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return "", nil
+		return "", nil, nil, ""
 	}
-	return cert.Subject.CommonName, cert.EmailAddresses
+	// A Fulcio workflow-identity cert carries no SAN email — its identity is the
+	// SAN URI (the workflow ref) plus the OIDC issuer extension. Pull both so the
+	// starter policy pins the signer it was generated from instead of wildcarding.
+	for _, u := range cert.URIs {
+		uris = append(uris, u.String())
+	}
+	// Parse via the same helper the verifier uses (certificate.ParseExtensions),
+	// so the pinned issuer exactly matches what CertConstraint.checkExtensions
+	// compares against (it prefers the V2 issuer OID). Best-effort: a non-Fulcio
+	// cert just yields an empty issuer, which stays unconstrained.
+	if ext, perr := certificate.ParseExtensions(cert.Extensions); perr == nil {
+		issuer = ext.Issuer
+	}
+	return cert.Subject.CommonName, cert.EmailAddresses, uris, issuer
 }
 
 // discoverSidecars finds export-sidecar DSSE envelopes adjacent to the
@@ -1101,17 +1119,34 @@ func certFunctionaryFor(stderr io.Writer, cs certSigner, rootName string) (polic
 		}
 	}
 
+	uris := cs.uris
+	if len(uris) == 0 {
+		// A Fulcio workflow-identity cert carries a URI SAN (the build
+		// identity); an empty list would forbid it. When the leaf genuinely has
+		// none (e.g. an email-identity cert), wildcard to keep the policy
+		// verifiable — the signer is still pinned by CN and/or email above.
+		uris = []string{policy.AllowAllConstraint}
+		if stderr != nil {
+			_, _ = fmt.Fprintf(stderr,
+				"note: cert-signed functionary for root %s has no SAN URI; "+
+					"wildcarding certConstraint.uris to %q. Pin the real signer "+
+					"identity before production use.\n",
+				shortID(rootName), policy.AllowAllConstraint)
+		}
+	}
+
 	return policy.Functionary{
 		Type: "root",
 		CertConstraint: policy.CertConstraint{
 			Roots:      []string{rootName},
 			CommonName: commonName,
 			Emails:     emails,
-			// A Fulcio workflow-identity cert carries a URI SAN; an empty
-			// list would forbid it, so default to AllowAll. The signer is
-			// still pinned by CN and/or email above, so this is not a
-			// fully-wildcard functionary.
-			URIs: []string{policy.AllowAllConstraint},
+			// Pin the leaf's SAN URI (the Fulcio workflow identity) when
+			// present; fall back to AllowAll only when the leaf has none.
+			URIs: uris,
+			// Pin the Fulcio OIDC issuer when present; an empty issuer stays
+			// unconstrained (checkExtensions skips empty fields).
+			Extensions: certificate.Extensions{Issuer: cs.issuer},
 		},
 	}, true
 }

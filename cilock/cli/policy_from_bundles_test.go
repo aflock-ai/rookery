@@ -30,18 +30,53 @@ import (
 	"encoding/pem"
 	"io"
 	"math/big"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	tsp "github.com/digitorus/timestamp"
+	"github.com/sigstore/fulcio/pkg/certificate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/policy"
 )
+
+// TestExtractLeafConstraintFields_PinsURIAndIssuer guards the keyless-identity
+// fix: a Fulcio workflow-identity leaf carries no SAN email/CN — its identity is
+// the SAN URI plus the OIDC issuer extension. The extractor must surface both so
+// the starter policy pins the signer it was generated from instead of wildcarding.
+func TestExtractLeafConstraintFields_PinsURIAndIssuer(t *testing.T) {
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	u, err := url.Parse("https://github.com/acme/repo/.github/workflows/release.yml@refs/tags/v1.0.0")
+	require.NoError(t, err)
+	exts, err := certificate.Extensions{Issuer: "https://token.actions.githubusercontent.com"}.Render()
+	require.NoError(t, err)
+
+	tpl := &x509.Certificate{
+		SerialNumber:    big.NewInt(1),
+		URIs:            []*url.URL{u},
+		ExtraExtensions: exts,
+		NotBefore:       time.Now().Add(-time.Hour),
+		NotAfter:        time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &leafKey.PublicKey, leafKey)
+	require.NoError(t, err)
+	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+
+	cn, emails, uris, issuer := extractLeafConstraintFields(leafPEM)
+	assert.Empty(t, cn, "workflow-identity cert has no CN")
+	assert.Empty(t, emails, "workflow-identity cert has no SAN email")
+	assert.Equal(t, []string{"https://github.com/acme/repo/.github/workflows/release.yml@refs/tags/v1.0.0"}, uris,
+		"SAN URI must be extracted so the policy can pin it")
+	assert.Equal(t, "https://token.actions.githubusercontent.com", issuer,
+		"OIDC issuer must be extracted from the Fulcio extension via the verifier's own parser")
+}
 
 // writePolicyFixtureKey writes an ed25519 public key PEM to disk and
 // returns its path + canonical keyid.
