@@ -107,6 +107,14 @@ type DetectorYAML struct {
 	// the upcoming command.
 	RecommendedTrace TraceMode `yaml:"recommended_trace,omitempty"`
 
+	// ExitsNonzeroOnFindings marks a tool that exits non-zero when it FINDS
+	// something (its CI-gating contract: osv-scanner, gosec, trivy --exit-code,
+	// semgrep, etc.). Wrapped by `cilock run`, that non-zero exit aborts the run
+	// even though the report was already written. cilock plan surfaces
+	// --ignore-command-exit-code in its suggested command for such tools so an
+	// agent pasting it verbatim captures the report instead of failing the run.
+	ExitsNonzeroOnFindings bool `yaml:"exits_nonzero_on_findings,omitempty" json:"exits_nonzero_on_findings,omitempty"`
+
 	Pre      *GateBlock `yaml:"pre,omitempty"`
 	Post     *GateBlock `yaml:"post,omitempty"`
 	LLMHints LLMHints   `yaml:"llm_hints,omitempty"`

@@ -17,6 +17,8 @@ upstream:
 
 emits_formats: [sarif]
 
+exits_nonzero_on_findings: true
+
 pre:
   match:
     argv_prefix: [semgrep]

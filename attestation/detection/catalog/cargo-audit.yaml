@@ -15,6 +15,8 @@ upstream:
   license: Apache-2.0 OR MIT
   vendor: RustSec / Rust Foundation
 
+exits_nonzero_on_findings: true
+
 pre:
   match:
     argv_prefix: [cargo-audit]

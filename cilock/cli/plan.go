@@ -31,7 +31,11 @@ import (
 type planEnvelope struct {
 	Plan                detection.PlanResult          `json:"plan"`
 	TraceRecommendation detection.TraceRecommendation `json:"trace_recommendation"`
-	Summary             planSummary                   `json:"summary"`
+	// IgnoreExitCodeRecommended is true when a fired tool exits non-zero on
+	// findings; the suggested `to run:` command then includes
+	// --ignore-command-exit-code so a captured report isn't lost to a gate exit.
+	IgnoreExitCodeRecommended bool        `json:"ignore_exit_code_recommended"`
+	Summary                   planSummary `json:"summary"`
 }
 
 type planSummary struct {
@@ -90,9 +94,10 @@ list above.`,
 				Cwd:  cwd,
 			})
 			env := planEnvelope{
-				Plan:                plan,
-				TraceRecommendation: detection.RecommendTrace(detection.Default(), plan),
-				Summary:             buildPlanSummary(plan),
+				Plan:                      plan,
+				TraceRecommendation:       detection.RecommendTrace(detection.Default(), plan),
+				IgnoreExitCodeRecommended: detection.RecommendIgnoreExitCode(detection.Default(), plan),
+				Summary:                   buildPlanSummary(plan),
 			}
 			switch strings.ToLower(format) {
 			case "json":
@@ -162,38 +167,7 @@ func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope,
 		fmt.Fprintln(&b, "         Hint: run from inside a project (`.git/`, `Dockerfile`, `package.json`, etc.)")
 		fmt.Fprintln(&b, "         or pass attestors explicitly with `-a <name>`.")
 	} else {
-		fmt.Fprintln(&b, "  fire:")
-		for _, f := range plan.Fire {
-			fmt.Fprintf(&b, "    - %s\n", f.Attestor)
-			if f.LLMHint != "" {
-				fmt.Fprintf(&b, "        %s\n", f.LLMHint)
-			}
-		}
-		// TODO(#220): once 'cilock run --auto' lands, replace this
-		// explicit -a list with a '--auto' suggestion. Until then '-a'
-		// is the only working way to actually fire the planned set.
-		fired := make([]string, 0, len(plan.Fire))
-		for _, f := range plan.Fire {
-			fired = append(fired, f.Attestor)
-		}
-		sort.Strings(fired)
-		fmt.Fprintf(&b, "  to run: cilock run -a %s -- %s\n",
-			strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
-
-		// Fix F7: when tracing would benefit at least one of the fired
-		// attestors (per detector's recommended_trace field), also emit
-		// the --trace variant so operators don't paste the plain "to
-		// run:" line and silently miss tracing's value.
-		//
-		// The recommendation is non-empty + non-Off iff at least one
-		// matched detector's recommended_trace fed into RecommendTrace
-		// — i.e. tracing would actually help. We don't double-check
-		// against the fired list because RecommendTrace already only
-		// reports modes for matched detectors.
-		if env.TraceRecommendation.Mode != "" && env.TraceRecommendation.Mode != detection.TraceOff {
-			fmt.Fprintf(&b, "  to run (with tracing): cilock run --trace -a %s -- %s\n",
-				strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
-		}
+		writePlanFireSection(&b, env)
 	}
 
 	// TODO(#220): when 'cilock run --trace=<mode>' lands, re-emit a
@@ -232,4 +206,50 @@ func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope,
 
 	_, err := w.Write([]byte(b.String()))
 	return err
+}
+
+// writePlanFireSection renders the matched-attestor list plus the
+// copy-pasteable `cilock run` suggestion(s). Split out of writePlanHuman so
+// the empty-vs-fired branch there stays flat (nestif).
+func writePlanFireSection(b *strings.Builder, env planEnvelope) {
+	plan := env.Plan
+	fmt.Fprintln(b, "  fire:")
+	for _, f := range plan.Fire {
+		fmt.Fprintf(b, "    - %s\n", f.Attestor)
+		if f.LLMHint != "" {
+			fmt.Fprintf(b, "        %s\n", f.LLMHint)
+		}
+	}
+	// TODO(#220): once 'cilock run --auto' lands, replace this
+	// explicit -a list with a '--auto' suggestion. Until then '-a'
+	// is the only working way to actually fire the planned set.
+	fired := make([]string, 0, len(plan.Fire))
+	for _, f := range plan.Fire {
+		fired = append(fired, f.Attestor)
+	}
+	sort.Strings(fired)
+	// A fired tool that exits non-zero on findings (osv-scanner, gosec, …)
+	// would abort the run despite writing its report; surface the escape hatch
+	// in the suggested command so an agent pasting it verbatim still captures it.
+	ignoreExit := ""
+	if env.IgnoreExitCodeRecommended {
+		ignoreExit = "--ignore-command-exit-code "
+	}
+	fmt.Fprintf(b, "  to run: cilock run %s-a %s -- %s\n",
+		ignoreExit, strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
+
+	// Fix F7: when tracing would benefit at least one of the fired
+	// attestors (per detector's recommended_trace field), also emit
+	// the --trace variant so operators don't paste the plain "to
+	// run:" line and silently miss tracing's value.
+	//
+	// The recommendation is non-empty + non-Off iff at least one
+	// matched detector's recommended_trace fed into RecommendTrace
+	// — i.e. tracing would actually help. We don't double-check
+	// against the fired list because RecommendTrace already only
+	// reports modes for matched detectors.
+	if env.TraceRecommendation.Mode != "" && env.TraceRecommendation.Mode != detection.TraceOff {
+		fmt.Fprintf(b, "  to run (with tracing): cilock run --trace %s-a %s -- %s\n",
+			ignoreExit, strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
+	}
 }

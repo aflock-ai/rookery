@@ -66,6 +66,7 @@ ENTRIES: list[tuple[str, dict]] = [
                       license="Apache-2.0", vendor="Anchore"),
         emits_formats=["sarif"],
         match=dict(argv_prefix=["grype"]),
+        exits_nonzero_on_findings=True,
         on_match="Grype scan observed. Output (--output json|sarif|template) is captured by the matching format attestor."
     )),
     ("bom", dict(
@@ -86,6 +87,7 @@ ENTRIES: list[tuple[str, dict]] = [
                       license="LGPL-2.1-only", vendor="Semgrep Inc."),
         emits_formats=["sarif"],
         match=dict(argv_prefix=["semgrep"]),
+        exits_nonzero_on_findings=True,
         on_match="Semgrep invocation observed. --sarif output captured by the sarif attestor."
     )),
     ("bandit", dict(
@@ -116,6 +118,7 @@ ENTRIES: list[tuple[str, dict]] = [
                       license="Apache-2.0", vendor="Google / OSV"),
         emits_formats=["sarif"],
         match=dict(argv_prefix=["osv-scanner"]),
+        exits_nonzero_on_findings=True,
         on_match="osv-scanner observed. --format sarif|json captures findings."
     )),
     ("pip-audit", dict(
@@ -148,6 +151,7 @@ ENTRIES: list[tuple[str, dict]] = [
         upstream=dict(name="cargo-audit", source="https://github.com/rustsec/rustsec",
                       license="Apache-2.0 OR MIT", vendor="RustSec / Rust Foundation"),
         match=dict(argv_prefix=["cargo-audit"]),
+        exits_nonzero_on_findings=True,
         on_match="cargo audit observed. JSON output (--json) captured."
     )),
     ("npm-audit", dict(
@@ -181,6 +185,7 @@ ENTRIES: list[tuple[str, dict]] = [
                       license="Apache-2.0", vendor="securego"),
         emits_formats=["sarif"],
         match=dict(argv_prefix=["gosec"]),
+        exits_nonzero_on_findings=True,
         on_match="gosec invocation observed. -fmt sarif|json captures findings."
     )),
     ("malcontent", dict(
@@ -205,6 +210,7 @@ ENTRIES: list[tuple[str, dict]] = [
                       license="Apache-2.0", vendor="Bridgecrew / Prisma Cloud (Palo Alto)"),
         emits_formats=["sarif"],
         match=dict(argv_prefix=["checkov"]),
+        exits_nonzero_on_findings=True,
         on_match="Checkov scan observed. --output sarif captured by sarif attestor; CycloneDX / SPDX also supported."
     )),
     ("tfsec", dict(
@@ -744,6 +750,7 @@ ENTRIES: list[tuple[str, dict]] = [
                       license="Apache-2.0", vendor="Aqua Security"),
         emits_formats=["sarif"],
         match=dict(argv_prefix=["trivy"]),
+        exits_nonzero_on_findings=True,
         on_match="Trivy scan observed. --format sarif --output <file>.sarif is captured by the sarif attestor."
     )),
     ("codeql", dict(
@@ -780,6 +787,7 @@ ENTRIES: list[tuple[str, dict]] = [
                       license="GPL-3.0", vendor="Hadolint maintainers"),
         emits_formats=["sarif"],
         match=dict(argv_prefix=["hadolint"]),
+        exits_nonzero_on_findings=True,
         on_match="Hadolint invocation observed. `--no-fail --format sarif` output (routed via sh -c redirect) is captured by the sarif attestor."
     )),
     ("testssl", dict(
@@ -879,6 +887,10 @@ def render_entry(name: str, args: dict) -> str:
     if args.get("recommended_trace"):
         out.append("")
         out.append(f"recommended_trace: {render_value(args['recommended_trace'])}")
+
+    if args.get("exits_nonzero_on_findings"):
+        out.append("")
+        out.append("exits_nonzero_on_findings: true")
 
     out.append("")
     out.append("pre:")

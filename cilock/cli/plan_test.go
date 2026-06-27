@@ -172,6 +172,53 @@ func TestWritePlanHuman_NoTraceVariantWhenNoneBenefits(t *testing.T) {
 		"no fired attestor benefits from tracing → no --trace variant emitted")
 }
 
+// TestWritePlanHuman_RecommendsIgnoreExitCodeWhenToolGatesOnFindings pins the
+// fix for the scanner-exit-code bug: when a fired tool exits non-zero on findings
+// (ExitsNonzeroOnFindings), the suggested 'to run:' command must inline
+// --ignore-command-exit-code so an agent pasting it verbatim captures the report
+// instead of failing the run. It must compose with the --trace variant too.
+func TestWritePlanHuman_RecommendsIgnoreExitCodeWhenToolGatesOnFindings(t *testing.T) {
+	env := planEnvelope{
+		Plan: detection.PlanResult{
+			Fire: []detection.FireDecision{
+				{Attestor: "osv-scanner"},
+			},
+			Inputs: detection.InputSnapshot{Argv: []string{"osv-scanner", "--output", "osv.sarif", "."}},
+		},
+		IgnoreExitCodeRecommended: true,
+		TraceRecommendation:       detection.TraceRecommendation{Mode: detection.TraceLight},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, writePlanHuman(&buf, env, false))
+	out := buf.String()
+
+	assert.Contains(t, out, "to run: cilock run --ignore-command-exit-code -a osv-scanner -- osv-scanner --output osv.sarif .",
+		"plan must inline --ignore-command-exit-code for a tool that exits non-zero on findings")
+	assert.Contains(t, out, "to run (with tracing): cilock run --trace --ignore-command-exit-code -a osv-scanner -- osv-scanner --output osv.sarif .",
+		"the --trace variant must also carry --ignore-command-exit-code")
+}
+
+// TestWritePlanHuman_NoIgnoreExitCodeWhenToolDoesNotGate is the negative guard:
+// a tool that does not gate on findings must NOT get --ignore-command-exit-code.
+func TestWritePlanHuman_NoIgnoreExitCodeWhenToolDoesNotGate(t *testing.T) {
+	env := planEnvelope{
+		Plan: detection.PlanResult{
+			Fire:   []detection.FireDecision{{Attestor: "go-build"}},
+			Inputs: detection.InputSnapshot{Argv: []string{"go", "build", "./..."}},
+		},
+		IgnoreExitCodeRecommended: false,
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, writePlanHuman(&buf, env, false))
+	out := buf.String()
+
+	assert.Contains(t, out, "to run: cilock run -a go-build -- go build ./...")
+	assert.NotContains(t, out, "--ignore-command-exit-code",
+		"a non-gating tool must not get --ignore-command-exit-code")
+}
+
 func TestWritePlanHuman_TraceOff_OmitsRecommendationLine(t *testing.T) {
 	env := planEnvelope{
 		Plan: detection.PlanResult{
