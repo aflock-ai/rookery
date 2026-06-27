@@ -60,6 +60,17 @@ type Credential struct {
 	// trust anchor (GHSA #5988). Empty until the first discovery-trust adoption;
 	// omitted from stores that never pinned (an absent pin means "not yet pinned").
 	TrustBundleSPKI string `json:"trust_bundle_spki,omitempty"`
+	// AudienceValidated records whether this credential's `aud` claim was checked
+	// against the platform's dedicated login audience before it was stored — the
+	// confused-deputy guard in TokenCredential (GHSA #5991). It is true ONLY for a
+	// credential built on the validating --token path; a credential written by a
+	// raw Store.Save (a browser/device session, or a jctl/cilock legacy migration
+	// that never ran the audience check) leaves it false. The store provider
+	// declares CapAudienceValidated for a resolved credential only when this flag
+	// is true, so a non-validated session can never be MISTAKEN for an
+	// audience-checked one by a capability-gated trust decision. Default false is
+	// fail-closed: an unknown/legacy credential is treated as un-validated.
+	AudienceValidated bool `json:"audience_validated,omitempty"`
 }
 
 // Expired reports whether the credential has a known expiry in the past.

@@ -126,7 +126,66 @@ func TestCapabilities_FailClosed(t *testing.T) {
 	assert.False(t, nilCaps.Has(CapCanPinTrust), "nil capability set must report false")
 	empty := NewCapabilities()
 	assert.False(t, empty.Has(CapCanPinTrust), "empty capability set must report false")
-	full := storeCapabilities()
-	assert.True(t, full.Has(CapCanPinTrust))
-	assert.True(t, full.Has(CapAudienceValidated))
+
+	// The store's unconditional capabilities are declared for every credential.
+	base := storeCapabilitiesFor(&Credential{})
+	assert.True(t, base.Has(CapCanPinTrust))
+	assert.True(t, base.Has(CapCarriesIdentity))
+	assert.True(t, base.Has(CapEnforcesExpiry))
+	// CapAudienceValidated is per-credential: NOT declared for a credential whose
+	// audience was never validated (a raw Save / migrated session), declared only
+	// when the credential records that its audience was checked.
+	assert.False(t, base.Has(CapAudienceValidated), "a non-validated credential must NOT carry audience-validated (fail-closed)")
+	assert.False(t, storeCapabilitiesFor(nil).Has(CapAudienceValidated), "a nil credential is fail-closed")
+	validated := storeCapabilitiesFor(&Credential{AudienceValidated: true})
+	assert.True(t, validated.Has(CapAudienceValidated), "a token-validated credential carries audience-validated")
+}
+
+// TestResolve_AudienceValidatedIsPerCredential is the regression guard for the
+// per-credential audience capability (Finding 1): a migrated/raw-Save session
+// resolves WITHOUT CapAudienceValidated (its audience was never checked), while a
+// session built on the validating TokenCredential path resolves WITH it. Before
+// the fix the store declared CapAudienceValidated for EVERY credential, which
+// overstated the security of a migrated device/browser session.
+func TestResolve_AudienceValidatedIsPerCredential(t *testing.T) {
+	s := withKeyring(t)
+	// A raw Save — the path jctl migration and the browser/device flows use. No
+	// audience check ran, so the resolved credential must NOT claim it.
+	require.NoError(t, s.Save(Credential{PlatformURL: "https://migrated.example.com", Token: "raw", ExpiresAt: time.Now().Add(time.Hour)}))
+	// A credential whose audience WAS validated (what TokenCredential stamps).
+	require.NoError(t, s.Save(Credential{PlatformURL: "https://validated.example.com", Token: "checked", ExpiresAt: time.Now().Add(time.Hour), AudienceValidated: true}))
+
+	r, err := NewResolver(s)
+	require.NoError(t, err)
+
+	migrated, err := r.Resolve("https://migrated.example.com", ForBearer)
+	require.NoError(t, err)
+	require.NotNil(t, migrated)
+	assert.False(t, migrated.Has(CapAudienceValidated), "a raw-Save/migrated session must not be vouched audience-validated")
+	assert.True(t, migrated.Has(CapCanPinTrust), "other store capabilities are unchanged")
+
+	validated, err := r.Resolve("https://validated.example.com", ForBearer)
+	require.NoError(t, err)
+	require.NotNil(t, validated)
+	assert.True(t, validated.Has(CapAudienceValidated), "a TokenCredential-validated session carries the capability")
+}
+
+// TestResolve_TokenCredentialEndToEndCarriesAudience proves the only construction
+// path that checks the audience (TokenCredential) yields, once stored and
+// resolved, a credential that surfaces CapAudienceValidated — the end-to-end
+// version of the per-credential guard.
+func TestResolve_TokenCredentialEndToEndCarriesAudience(t *testing.T) {
+	tok := mintJWT(t, map[string]any{"aud": "https://p.example.com/login", "exp": time.Now().Add(time.Hour).Unix()})
+	cred, err := TokenCredential("https://p.example.com", tok, "https://p.example.com/login")
+	require.NoError(t, err)
+	require.True(t, cred.AudienceValidated, "the validating --token path stamps audience-validated")
+
+	s := withKeyring(t)
+	require.NoError(t, s.Save(*cred))
+	r, err := NewResolver(s)
+	require.NoError(t, err)
+	got, err := r.Resolve("https://p.example.com", ForBearer)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.Has(CapAudienceValidated), "a stored TokenCredential resolves with the audience capability")
 }

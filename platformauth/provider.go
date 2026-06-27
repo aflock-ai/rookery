@@ -10,23 +10,36 @@ package platformauth
 const SourceSharedStore = "judge-session"
 
 // storeProvider resolves credentials from the keyring-backed shared store. It
-// owns the TrustBundleSPKI pin and so declares every capability — it can persist
-// a trust-on-first-use pin, carries the identity/scope negotiated at login,
-// enforces the credential's expiry, and (for the --token path, via
-// TokenCredential) validated the login audience.
+// owns the TrustBundleSPKI pin and so declares the pin/identity/expiry
+// capabilities for every stored credential. CapAudienceValidated, by contrast,
+// is NOT a property of the store — it is a property of the individual credential:
+// only a credential built on the validating --token path (TokenCredential)
+// actually had its audience checked. A browser/device session or a migrated
+// legacy session is saved through a raw Store.Save that never ran that check, so
+// the store must NOT vouch for its audience. storeCapabilitiesFor therefore adds
+// CapAudienceValidated per-credential, gated on the credential's own
+// AudienceValidated flag (fail-closed: absent/false → not declared).
 type storeProvider struct {
 	store *Store
 }
 
-// storeCapabilities is what the shared store vouches for. Declared once so the
-// per-provider capability set is the single source of truth.
-func storeCapabilities() Capabilities {
-	return NewCapabilities(
+// storeCapabilitiesFor is what the shared store vouches for about a SPECIFIC
+// resolved credential. The pin/identity/expiry capabilities are unconditional
+// (the store owns them for every credential); CapAudienceValidated is added only
+// when the credential itself records that its audience was validated. A nil
+// credential gets the base set (the audience guard then defaults to off —
+// fail-closed). Declared in one place so the per-credential capability set is the
+// single source of truth.
+func storeCapabilitiesFor(c *Credential) Capabilities {
+	caps := NewCapabilities(
 		CapCanPinTrust,
 		CapCarriesIdentity,
 		CapEnforcesExpiry,
-		CapAudienceValidated,
 	)
+	if c != nil && c.AudienceValidated {
+		caps[CapAudienceValidated] = struct{}{}
+	}
+	return caps
 }
 
 func (storeProvider) Name() string { return SourceSharedStore }
@@ -60,7 +73,7 @@ func (p storeProvider) Resolve(platformURL string, mode ResolveMode) (*Resolved,
 			return nil, nil
 		}
 	}
-	return &Resolved{Credential: c, Source: SourceSharedStore, Capabilities: storeCapabilities()}, nil
+	return &Resolved{Credential: c, Source: SourceSharedStore, Capabilities: storeCapabilitiesFor(c)}, nil
 }
 
 // resolveExpired returns an EXPIRED stored credential for platformURL, or
@@ -76,7 +89,7 @@ func (p storeProvider) resolveExpired(platformURL string) (*Resolved, error) {
 	if c == nil {
 		return nil, nil
 	}
-	return &Resolved{Credential: c, Source: SourceSharedStore, Capabilities: storeCapabilities()}, nil
+	return &Resolved{Credential: c, Source: SourceSharedStore, Capabilities: storeCapabilitiesFor(c)}, nil
 }
 
 // Resolver walks credential providers in precedence order and returns the first

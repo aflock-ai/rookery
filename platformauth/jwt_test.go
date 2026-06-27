@@ -40,6 +40,7 @@ func TestTokenCredential_AcceptsMatchingAudience(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cred)
 	assert.Equal(t, AuthModeToken, cred.AuthMode)
+	assert.True(t, cred.AudienceValidated, "the --token path checked the audience and must stamp audience-validated")
 	assert.WithinDuration(t, time.Unix(exp, 0), cred.ExpiresAt, time.Second, "expiry comes from the token's exp claim")
 }
 

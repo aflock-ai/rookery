@@ -375,6 +375,16 @@ func (s *Store) forceActivePlatform(target string) error {
 	return s.save(m)
 }
 
+// SetActivePlatform is the exported, deterministic active-platform setter for a
+// CONSUMING module (e.g. jctl's shared-store bridge) that writes several
+// credentials in arbitrary order and must then pin the working platform to the
+// user's real current context — not inherit whichever Save landed last in Go's
+// randomized map order. An empty target clears the pointer (the caller's current
+// context is unknown/absent): the working platform is then left undetermined
+// rather than pointing at a random session. It delegates to forceActivePlatform
+// so the persistence and clear-on-empty semantics live in one place.
+func (s *Store) SetActivePlatform(target string) error { return s.forceActivePlatform(target) }
+
 // ActivePlatformURL returns the platform a bare command should target when no
 // platform URL is given: the most recent login/use if it still has a stored
 // credential, else the sole stored credential's URL, else "" (callers fall back
@@ -395,6 +405,25 @@ func (s *Store) ActivePlatformURL() string {
 		}
 	}
 	return ""
+}
+
+// Snapshot returns a copy of every stored credential (token overlaid from the
+// keyring, keyed by normalized platform URL) plus the current-platform pointer.
+// It is the read-only enumeration a tool needs to present ALL stored sessions —
+// e.g. jctl building its named-context view, where a single login per platform
+// must surface under each context so `--context <host>` still resolves. The
+// returned map is a fresh copy the caller may mutate freely; it does not alias
+// the store.
+func (s *Store) Snapshot() (creds map[string]Credential, currentPlatform string, err error) {
+	m, err := s.load()
+	if err != nil {
+		return nil, "", err
+	}
+	out := make(map[string]Credential, len(m.Credentials))
+	for k, c := range m.Credentials {
+		out[k] = c
+	}
+	return out, m.CurrentPlatform, nil
 }
 
 // Delete removes the credential for a platform URL (and its keyring token).

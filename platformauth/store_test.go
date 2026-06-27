@@ -275,3 +275,38 @@ func TestForceActivePlatform(t *testing.T) {
 	require.NoError(t, s.forceActivePlatform(""))
 	assert.Empty(t, s.ActivePlatformURL())
 }
+
+// TestSnapshot_EnumeratesAllSessions confirms Snapshot returns every stored
+// credential (token overlaid from the keyring) plus the current-platform
+// pointer, and that the returned map is a copy the caller may mutate without
+// affecting the store. This is the read-only enumeration jctl uses to build its
+// named-context view.
+func TestSnapshot_EnumeratesAllSessions(t *testing.T) {
+	s := withKeyring(t)
+	require.NoError(t, s.Save(Credential{PlatformURL: "https://a.example.com", Token: "tok-a", ExpiresAt: time.Now().Add(time.Hour)}))
+	require.NoError(t, s.Save(Credential{PlatformURL: "https://b.example.com", Token: "tok-b", ExpiresAt: time.Now().Add(time.Hour)}))
+
+	creds, current, err := s.Snapshot()
+	require.NoError(t, err)
+	require.Len(t, creds, 2, "both sessions must be enumerated")
+	assert.Equal(t, "tok-a", creds["https://a.example.com"].Token, "token overlaid from keyring")
+	assert.Equal(t, "tok-b", creds["https://b.example.com"].Token)
+	assert.Equal(t, "https://b.example.com", current, "current platform is the most recent save")
+
+	// Mutating the returned map must not affect the store.
+	delete(creds, "https://a.example.com")
+	got, err := s.Get("https://a.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, got, "snapshot copy is independent of the store")
+	assert.Equal(t, "tok-a", got.Token)
+}
+
+// TestSnapshot_EmptyStore returns an empty map and no current platform for a
+// store with no sessions.
+func TestSnapshot_EmptyStore(t *testing.T) {
+	s := withKeyring(t)
+	creds, current, err := s.Snapshot()
+	require.NoError(t, err)
+	assert.Empty(t, creds)
+	assert.Equal(t, "", current)
+}

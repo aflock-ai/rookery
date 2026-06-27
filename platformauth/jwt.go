@@ -82,6 +82,11 @@ func TokenCredential(platformURL, token, loginAudience string) (*Credential, err
 		Token:       token,
 		AuthMode:    AuthModeToken,
 		ExpiresAt:   expiresAt,
+		// This is the only construction path that checks the token's `aud` against
+		// the platform login audience (the tokenHasAudience guard above), so it is
+		// the only one that may vouch for the audience. Every other write path
+		// (browser/device flows, legacy migration) leaves this false — fail-closed.
+		AudienceValidated: true,
 	}, nil
 }
 
