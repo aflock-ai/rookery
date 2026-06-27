@@ -2064,7 +2064,99 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		}
 	}
 
-	r.Stdout = stdoutBuffer.String()
-	r.Stderr = stderrBuffer.String()
+	r.Stdout = redactSensitiveEnvValues(stdoutBuffer.String())
+	r.Stderr = redactSensitiveEnvValues(stderrBuffer.String())
+	// Same leak via sibling SIGNED sinks. Two more env-derived string fields
+	// reach the v0.2 predicate (signed + uploaded to Archivista) verbatim:
+	//
+	//  - r.Cmd: the operator's command argv. The shell expands a secret env var
+	//    into it BEFORE cilock starts (`cilock run -- mytool --token=$MY_API_TOKEN`
+	//    arrives as `["mytool","--token=<secret>"]`), and ToV02 signs it as the
+	//    top-level `cmd`. Redact here — AFTER exec at line 1773, so execution is
+	//    unaffected; the only remaining reader is the marshal.
+	//  - each traced process's Cmdline: read verbatim from /proc/<pid>/cmdline
+	//    and interned into the signed Cmdlines[] table (every process, not just
+	//    the top one).
+	//
+	// Both expand the secret into argv, so they would leak even with
+	// stdout/stderr scrubbed. (Environ is the other env-derived field, but ToV02
+	// deliberately DROPS it, so it never reaches the signed bytes — see
+	// v2_marshal.go.)
+	redactArgv(r.Cmd)
+	redactProcessCmdlines(r.Processes)
 	return err
+}
+
+// redactedOutputValue replaces a sensitive value found in captured output.
+const redactedOutputValue = "[REDACTED]"
+
+// minRedactableValueLen guards against pathological over-redaction: replacing a
+// very short env value (e.g. "1" or "ci") would scrub unrelated text from the
+// logs. Real credentials are long, so we only redact values at least this long.
+const minRedactableValueLen = 8
+
+// sensitiveEnvKeySubstrings identifies environment variables whose VALUE is a
+// credential. Unlike the environment attestor's DefaultSensitiveEnvList — which
+// is deliberately broad (`*KEY*`, `*PAT*`) because obfuscating a captured var is
+// harmless — output redaction must be CONSERVATIVE: a false positive scrubs
+// innocent text from the signed logs (e.g. a broad `KEY`/`PAT` would mangle
+// `MONKEY`/`PATH` values). These substrings appear only in real secret vars.
+var sensitiveEnvKeySubstrings = []string{
+	"TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "CREDENTIAL",
+	"PRIVATE_KEY", "ACCESS_KEY", "APIKEY", "API_KEY", "SIGNING_KEY", "SSH_KEY",
+}
+
+func isSensitiveEnvKey(key string) bool {
+	upper := strings.ToUpper(key)
+	for _, s := range sensitiveEnvKeySubstrings {
+		if strings.Contains(upper, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// redactSensitiveEnvValues masks the values of sensitive environment variables
+// wherever they appear in captured command output, before that output is signed
+// into evidence shipped to Archivista + CI artifacts. command-run is always-run
+// and captures stdout/stderr verbatim, so a secret echoed into the logs (the
+// common leak) would otherwise be re-published. This closes that case; it cannot
+// catch a secret that was never in the environment (e.g. typed inline).
+func redactSensitiveEnvValues(s string) string {
+	if s == "" {
+		return s
+	}
+	for _, kv := range os.Environ() {
+		key, val, found := strings.Cut(kv, "=")
+		if !found || len(val) < minRedactableValueLen || !isSensitiveEnvKey(key) {
+			continue
+		}
+		s = strings.ReplaceAll(s, val, redactedOutputValue)
+	}
+	return s
+}
+
+// redactArgv masks sensitive env-var values out of an argv slice in place. Used
+// for the top-level r.Cmd, which the shell expands a secret into before cilock
+// starts and which ToV02 signs as the predicate's `cmd`. Element 0 is a program
+// path; the conservative helper leaves it untouched (a path won't equal a >=8
+// char secret value), so passing the whole slice is safe.
+func redactArgv(argv []string) {
+	for i := range argv {
+		argv[i] = redactSensitiveEnvValues(argv[i])
+	}
+}
+
+// redactProcessCmdlines masks sensitive env-var values out of every traced
+// process's Cmdline before that slice is interned into the v0.2 predicate's
+// signed Cmdlines[] table (and uploaded to Archivista). Each Cmdline is read
+// verbatim from /proc/<pid>/cmdline, so an env secret expanded into argv (e.g.
+// `mytool --token=$MY_API_TOKEN`) would otherwise be re-published in the signed
+// evidence — the same leak the stdout/stderr redaction closes, via a sibling
+// sink. Applied to ALL processes, not just the top one. Uses the same
+// conservative helper for consistency.
+func redactProcessCmdlines(processes []ProcessInfo) {
+	for i := range processes {
+		processes[i].Cmdline = redactSensitiveEnvValues(processes[i].Cmdline)
+	}
 }
