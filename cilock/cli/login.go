@@ -230,10 +230,22 @@ func LogoutCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			out := cmd.OutOrStdout()
 			if removed {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ logged out of %s\n", auth.NormalizeURL(url))
+				_, _ = fmt.Fprintf(out, "✓ logged out of %s\n", auth.NormalizeURL(url))
 			} else {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "no stored credential for %s\n", auth.NormalizeURL(url))
+				_, _ = fmt.Fprintf(out, "no stored credential for %s\n", auth.NormalizeURL(url))
+			}
+			// Don't lie about being logged out: cilock removed only its OWN stored
+			// credential. If a session STILL resolves for this platform, it is coming
+			// from another source (a `jctl login` read through ~/.jctl/config.yaml +
+			// keychain). cilock must NEVER write jctl's files, so it cannot remove
+			// that session — warn instead, so the operator isn't misled into thinking
+			// the platform can no longer authenticate them.
+			if still, _ := auth.Resolve(url, auth.ForBearer); still != nil {
+				_, _ = fmt.Fprintf(out,
+					"! still authenticated to %s via %s; run 'jctl auth logout' to fully sign out\n",
+					auth.NormalizeURL(url), still.Source)
 			}
 			return nil
 		},
@@ -256,16 +268,27 @@ func WhoamiCmd() *cobra.Command {
 			if url == "" {
 				url = config.DefaultPlatformURL
 			}
-			cred, err := auth.LookupAny(url)
+			// Resolve through the provider seam (not the bare-Credential LookupAny
+			// shim) so whoami can report the resolving SOURCE and its capability
+			// posture — provenance the operator needs to understand why, e.g., a
+			// jctl session is refused trust-pinning by `cilock verify`. Display-only:
+			// no trust decision branches on Source or the posture string.
+			resolved, err := auth.Resolve(url, auth.ForDisplay)
 			if err != nil {
 				return err
 			}
-			if cred == nil {
+			if resolved == nil {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "not logged in to %s (run: cilock login --platform-url %s)\n", auth.NormalizeURL(url), auth.NormalizeURL(url))
 				return fmt.Errorf("no active session")
 			}
+			cred := resolved.Credential
 			out := cmd.OutOrStdout()
 			_, _ = fmt.Fprintf(out, "platform: %s\n", cred.PlatformURL)
+			// Provenance: which source vouched for this session + its capability
+			// posture (trust-pinning / expiry / audience). The trust gate in
+			// `cilock verify` keys on these capabilities, so surfacing them here
+			// explains its verdict without the operator reverse-engineering it.
+			_, _ = fmt.Fprintf(out, "session:  %s\n", resolved.Posture())
 			if cred.AuthMode == auth.AuthModeWorkflowOIDC {
 				_, _ = fmt.Fprintf(out, "auth:     workflow identity (GitHub Actions OIDC)\n")
 			}

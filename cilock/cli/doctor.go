@@ -134,14 +134,22 @@ func runDoctorChecks(platformURL, archivistaServer string) *DoctorReport {
 	report := &DoctorReport{PlatformURL: pc.PlatformURL, OK: true}
 
 	// 1. Logged in? (local credential store — no network)
-	// Use the expiry-INCLUSIVE lookup: LookupAny filters out an expired
-	// credential and returns nil, which checkLoggedIn would mislabel as "no
-	// stored session" (warn) and let preflight pass on an expired login. The
-	// doctor must surface expiry as a hard fail, so it needs to see the
-	// expired credential. (It must never SIGN with it — checkUploadAuth treats
-	// an expired bearer as no bearer.)
-	cred, lookupErr := auth.LookupAnyIncludingExpired(resolved)
-	checkLoggedIn(report, resolved, cred, lookupErr)
+	// Resolve through the provider seam with the expiry-INCLUSIVE mode: a usable
+	// (ForDisplay) resolve filters out an expired credential and returns nil,
+	// which checkLoggedIn would mislabel as "no stored session" (warn) and let
+	// preflight pass on an expired login. The doctor must surface expiry as a hard
+	// fail, so it needs to see the expired credential. (It must never SIGN with
+	// it — checkUploadAuth treats an expired bearer as no bearer.) Resolving (not
+	// the LookupAnyIncludingExpired shim) also yields the source + capability
+	// posture, which checkLoggedIn prints as session provenance.
+	resolvedCred, lookupErr := auth.Resolve(resolved, auth.IncludingExpired)
+	var cred *auth.Credential
+	posture := ""
+	if resolvedCred != nil {
+		cred = resolvedCred.Credential
+		posture = resolvedCred.Posture()
+	}
+	checkLoggedIn(report, resolved, cred, posture, lookupErr)
 
 	// 2. Platform reachable + discovery.
 	disc, discErr := platformconfig.Discover(resolved)
@@ -160,7 +168,7 @@ func runDoctorChecks(platformURL, archivistaServer string) *DoctorReport {
 	return report
 }
 
-func checkLoggedIn(report *DoctorReport, platformURL string, cred *auth.Credential, err error) {
+func checkLoggedIn(report *DoctorReport, platformURL string, cred *auth.Credential, posture string, err error) {
 	if err != nil {
 		report.add(DoctorCheck{Name: "logged-in", Status: doctorWarn, Detail: fmt.Sprintf("could not read credential store: %v", err)})
 		return
@@ -191,6 +199,12 @@ func checkLoggedIn(report *DoctorReport, platformURL string, cred *auth.Credenti
 		if cred.Email != "" {
 			detail += " (" + cred.Email + ")"
 		}
+	}
+	// Append the session provenance (source + capability posture) so the operator
+	// can see WHICH source vouched for the session and whether it can pin trust —
+	// the property `cilock verify`'s GHSA #5988 gate keys on. Display-only.
+	if posture != "" {
+		detail += " — " + posture
 	}
 	report.add(DoctorCheck{Name: "logged-in", Status: doctorPass, Detail: detail})
 }

@@ -95,6 +95,54 @@ type Resolved struct {
 	Capabilities Capabilities
 }
 
+// Has reports whether the resolving source declared cap. It is the trust-branch
+// entry point: a gate writes resolved.Has(CapCanPinTrust) and is fail-closed by
+// construction for any source that did not declare it (a nil/empty set returns
+// false). Delegates to Capabilities.Has so the safety property lives in one
+// place.
+func (r *Resolved) Has(cap Capability) bool {
+	return r.Capabilities.Has(cap)
+}
+
+// Posture renders a one-line, human-readable capability summary for the resolved
+// session: its Source plus a yes/no for each capability that matters to an
+// operator deciding whether a trust decision will go their way. It is
+// DISPLAY-ONLY — whoami/doctor print it so an operator can see WHY a jctl
+// session is refused trust-pinning while a cilock-login session is not. No trust
+// decision may branch on this string; trust branches gate on Has(cap) directly.
+//
+// Example (cilock-login):
+//
+//	cilock-login (trust-pinning: available · expiry-enforced: yes · audience-validated: yes)
+//
+// Example (jctl):
+//
+//	jctl (trust-pinning: unavailable · expiry-enforced: no · audience-validated: no)
+func (r *Resolved) Posture() string {
+	yesNo := func(ok bool) string {
+		if ok {
+			return "yes"
+		}
+		return "no"
+	}
+	// trust-pinning reads available/unavailable rather than yes/no because it
+	// describes a CAPABILITY of the session (can it pin at all), not a fact about
+	// a single credential — this is the property the GHSA #5988 gate keys on.
+	pin := "unavailable"
+	if r.Capabilities.Has(CapCanPinTrust) {
+		pin = "available"
+	}
+	source := r.Source
+	if source == sourceCilock {
+		// Spell out the login provenance so the operator reads "cilock-login"
+		// (the pinnable session) rather than the bare provider name.
+		source = "cilock-login"
+	}
+	return source + " (trust-pinning: " + pin +
+		" · expiry-enforced: " + yesNo(r.Capabilities.Has(CapEnforcesExpiry)) +
+		" · audience-validated: " + yesNo(r.Capabilities.Has(CapAudienceValidated)) + ")"
+}
+
 // Provider is a credential source. Each provider declares its own capabilities
 // and resolves a credential for a platform URL under a given mode. Resolve returns
 // (nil, nil) when this provider has no credential for the platform — the caller

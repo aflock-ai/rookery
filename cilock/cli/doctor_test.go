@@ -80,7 +80,7 @@ func TestCheckUploadAuth_NoSessionWarns(t *testing.T) {
 func TestCheckLoggedIn_ExpiredFails(t *testing.T) {
 	r := &DoctorReport{OK: true}
 	cred := &auth.Credential{Token: "abc", ExpiresAt: time.Now().Add(-time.Hour)}
-	checkLoggedIn(r, "https://platform.example.com", cred, nil)
+	checkLoggedIn(r, "https://platform.example.com", cred, "", nil)
 	c := findCheck(r, "logged-in")
 	if c == nil || c.Status != doctorFail {
 		t.Fatalf("expected logged-in fail on expired session, got %#v", c)

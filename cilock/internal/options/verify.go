@@ -154,10 +154,17 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) error { //n
 	// attacker-controlled) --platform-url advertises. The Archivista URL derived
 	// above is not trust-sensitive: it only says WHERE to fetch evidence; the
 	// signatures are still checked against explicit/embedded/discovered roots.
-	cred, _ := auth.Lookup(vo.PlatformURL)
-	if cred == nil {
+	//
+	// Resolve through the provider seam (not the bare-Credential Lookup shim) so
+	// the discovery-trust gate below can branch on the resolving source's DECLARED
+	// capabilities (CapCanPinTrust) rather than on a re-derived persisted-bool: a
+	// new credential source that cannot pin is fail-closed by construction (it
+	// simply does not declare the capability). A nil resolved means no session.
+	resolved, _ := auth.Resolve(vo.PlatformURL, auth.ForBearer)
+	if resolved == nil {
 		return nil
 	}
+	cred := resolved.Credential
 
 	// Default the expected signer email to the session identity, so a user
 	// verifying their own org's policy doesn't restate it.
@@ -189,60 +196,104 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) error { //n
 	}
 	// Adopt the discovery trust bundle as the policy-signature CA roots only when
 	// the operator supplied none out-of-band. Out-of-band --policy-ca-roots always
-	// wins (and never reaches the TOFU gate below).
-	if len(vo.PolicyCARootPaths) == 0 && len(vo.PolicyCARootsPEM) == 0 && disc.Signing.TrustBundlePEM != "" {
-		// Trust-on-first-use pin (GHSA #5988): the network-served trust bundle
-		// defines the CA roots that validate the very policies the platform serves.
-		// Without pinning, a compromised/malicious platform could silently swap in
-		// an attacker CA and make verify PASS against forged evidence. So we pin the
-		// bundle's SHA-256 on first adoption and refuse a later CHANGE unless the
-		// operator explicitly re-pins with --trust-discovery.
-		sum := sha256.Sum256([]byte(disc.Signing.TrustBundlePEM))
-		spki := hex.EncodeToString(sum[:])
-		switch {
-		case cred.TrustBundleSPKI == "" || vo.TrustDiscovery:
-			// First use for this platform, or an explicit operator re-pin. Adopt the
-			// bundle and persist the pin so the NEXT resolve can detect a silent
-			// change. But the pin can only be persisted onto a cilock-store session;
-			// a jctl-sourced credential has no cilock store entry, so the write is a
-			// no-op (un-pinnable). For an un-pinnable session the protection above is
-			// dead: every resolve sees TrustBundleSPKI=="" and re-takes THIS branch,
-			// so a later attacker-swapped bundle is silently re-adopted (the jctl gap
-			// in #6014). Refuse to adopt for an un-pinnable session unless the operator
-			// explicitly opted in with --trust-discovery (an out-of-band
-			// --policy-ca-roots already short-circuits before this block).
-			persisted, err := auth.SetTrustBundleSPKI(vo.PlatformURL, spki)
-			if err != nil {
-				return fmt.Errorf("persist discovery trust-bundle pin for %s: %w", vo.PlatformURL, err)
-			}
-			if !persisted && !vo.TrustDiscovery {
-				return fmt.Errorf(
-					"platform %s session cannot pin its discovery policy-signer trust bundle "+
-						"(this looks like a jctl login, which has no cilock-store entry to pin onto); "+
-						"refusing to silently trust the network-served bundle on first use. "+
-						"Re-run with --trust-discovery to accept it explicitly, pass --policy-ca-roots to "+
-						"supply trust out-of-band, or use a pinnable session (`cilock login`) (GHSA #5988)",
-					vo.PlatformURL)
-			}
-			vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
-		case cred.TrustBundleSPKI == spki:
-			// Unchanged since it was pinned — safe to keep trusting it.
-			vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
-		default:
-			// Pinned bundle CHANGED with no operator opt-in. Refuse rather than
-			// silently adopt the new (possibly attacker) CA. The bundle is NOT
-			// adopted; the operator must re-pin with --trust-discovery (after
-			// verifying the rotation is legitimate) or supply --policy-ca-roots.
-			return fmt.Errorf(
-				"platform %s now advertises a DIFFERENT policy-signer trust bundle than the one pinned on first use; "+
-					"refusing to trust it silently. If this CA rotation is expected, re-run with --trust-discovery to re-pin, "+
-					"or pass --policy-ca-roots to supply trust out-of-band (GHSA #5988)",
-				vo.PlatformURL)
-		}
+	// wins (and never reaches the TOFU gate inside the helper).
+	if err := vo.applyDiscoveryTrust(cred, resolved, disc); err != nil {
+		return err
 	}
 	if !cmd.Flags().Changed("policy-fulcio-oidc-issuer") && disc.Signing.FulcioOIDCIssuer != "" {
 		vo.PolicyFulcioCertExtensions.Issuer = disc.Signing.FulcioOIDCIssuer
 	}
+	return nil
+}
+
+// applyDiscoveryTrust adopts the discovery trust bundle as the policy-signature
+// CA roots, gated by the trust-on-first-use pin (GHSA #5988). It is a no-op when
+// the operator supplied trust out-of-band (--policy-ca-roots / --policy-ca-roots-pem)
+// or the platform advertises no trust bundle — out-of-band trust always wins and
+// never reaches the TOFU gate.
+//
+// Trust-on-first-use pin (GHSA #5988): the network-served trust bundle defines the
+// CA roots that validate the very policies the platform serves. Without pinning, a
+// compromised/malicious platform could silently swap in an attacker CA and make
+// verify PASS against forged evidence. So we pin the bundle's SHA-256 on first
+// adoption and refuse a later CHANGE unless the operator explicitly re-pins with
+// --trust-discovery.
+func (vo *VerifyOptions) applyDiscoveryTrust(cred *auth.Credential, resolved *auth.Resolved, disc *platformconfig.Discovery) error {
+	if len(vo.PolicyCARootPaths) != 0 || len(vo.PolicyCARootsPEM) != 0 || disc.Signing.TrustBundlePEM == "" {
+		return nil
+	}
+	sum := sha256.Sum256([]byte(disc.Signing.TrustBundlePEM))
+	spki := hex.EncodeToString(sum[:])
+	switch {
+	case cred.TrustBundleSPKI == "" || vo.TrustDiscovery:
+		// First use for this platform, or an explicit operator re-pin.
+		return vo.adoptFirstUseTrust(spki, resolved, disc)
+	case cred.TrustBundleSPKI == spki:
+		// Unchanged since it was pinned — safe to keep trusting it.
+		vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
+		return nil
+	default:
+		// Pinned bundle CHANGED with no operator opt-in. Refuse rather than
+		// silently adopt the new (possibly attacker) CA. The bundle is NOT
+		// adopted; the operator must re-pin with --trust-discovery (after
+		// verifying the rotation is legitimate) or supply --policy-ca-roots.
+		return fmt.Errorf(
+			"platform %s now advertises a DIFFERENT policy-signer trust bundle than the one pinned on first use; "+
+				"refusing to trust it silently. If this CA rotation is expected, re-run with --trust-discovery to re-pin, "+
+				"or pass --policy-ca-roots to supply trust out-of-band (GHSA #5988)",
+			vo.PlatformURL)
+	}
+}
+
+// adoptFirstUseTrust handles the first-use / explicit-re-pin case of the TOFU gate:
+// adopt the bundle and persist the pin so the NEXT resolve can detect a silent
+// change. The pin can only be persisted onto a session whose source OWNS a
+// credential store — declared by CapCanPinTrust. A jctl-sourced credential does NOT
+// declare it (no cilock store entry to write onto), so a pin write would be a silent
+// no-op: every resolve would see TrustBundleSPKI=="" and re-take THIS branch,
+// re-adopting whatever bundle the platform then serves (the jctl gap in #6014, GHSA
+// #5988). So gate on the DECLARED capability — fail-closed by construction for any
+// source that cannot pin — rather than on a re-derived persisted-bool.
+func (vo *VerifyOptions) adoptFirstUseTrust(spki string, resolved *auth.Resolved, disc *platformconfig.Discovery) error {
+	// Refuse to adopt for an un-pinnable session unless the operator explicitly
+	// opted in with --trust-discovery (an out-of-band --policy-ca-roots already
+	// short-circuits before this block).
+	if !resolved.Has(auth.CapCanPinTrust) {
+		if !vo.TrustDiscovery {
+			// CapabilityError names the missing capability for diagnostics;
+			// the actionable operator guidance is the wrapping message (and is
+			// the same guidance #6047 used for the un-pinnable case).
+			return fmt.Errorf(
+				"platform %s session cannot pin its discovery policy-signer trust bundle "+
+					"(this looks like a jctl login, which has no cilock-store entry to pin onto); "+
+					"refusing to silently trust the network-served bundle on first use. "+
+					"Re-run with --trust-discovery to accept it explicitly, pass --policy-ca-roots to "+
+					"supply trust out-of-band, or use a pinnable session (`cilock login`) (GHSA #5988): %w",
+				vo.PlatformURL, &auth.CapabilityError{Source: resolved.Source, Want: auth.CapCanPinTrust})
+		}
+		// Un-pinnable session, but the operator explicitly opted in with
+		// --trust-discovery. Adopt without a pin write (there is no store
+		// entry to write onto); matches #6047's --trust-discovery path where
+		// the no-op write's persisted=false was tolerated by the opt-in.
+		vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
+		return nil
+	}
+	// Pinnable (cilock-store) session: persist the pin so the NEXT resolve
+	// can detect a silent change, THEN adopt. The write must precede the
+	// adoption line, exactly as #6047 ordered it. A persisted=false here
+	// would be a contract violation (the source declared CapCanPinTrust yet
+	// has no store entry); treat it as a hard stop rather than adopt unpinned.
+	persisted, err := auth.SetTrustBundleSPKI(vo.PlatformURL, spki)
+	if err != nil {
+		return fmt.Errorf("persist discovery trust-bundle pin for %s: %w", vo.PlatformURL, err)
+	}
+	if !persisted {
+		return fmt.Errorf(
+			"platform %s session declared it can pin trust (%s) but no credential store entry was found to pin onto; "+
+				"refusing to adopt the discovery bundle unpinned (GHSA #5988)",
+			vo.PlatformURL, auth.CapCanPinTrust)
+	}
+	vo.PolicyCARootsPEM = []byte(disc.Signing.TrustBundlePEM)
 	return nil
 }
 
