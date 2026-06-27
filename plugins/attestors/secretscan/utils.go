@@ -68,11 +68,25 @@ func max(a, b int) int {
 	return b
 }
 
-// truncateMatch safely truncates the match string to avoid exposing full secrets
-// It keeps a short prefix and suffix while replacing the middle with "..."
+// truncateMatch returns a redaction-safe preview of a detected secret for the
+// human-readable Finding.Match field. The preview is signed into evidence that
+// ships to Archivista + CI artifacts, so it must NEVER expose enough of the value
+// to reconstruct it — the secret's verifiable identity is the Secret digest set,
+// not this field.
+//
+// It shows at most a short LEADING hint (enough to recognise the secret's type,
+// e.g. "ghp_", "AKIA") and elides the rest. It never returns the high-entropy
+// trailing bytes, and never returns a short value unchanged. The previous
+// implementation returned the value verbatim whenever it was <= 40 chars (a
+// classic GitHub PAT is exactly 40) and exposed the trailing bytes of longer
+// values — both leaked the secret into signed evidence.
 func truncateMatch(match string) string {
-	if len(match) > maxMatchDisplayLength {
-		return match[:truncatedMatchSegmentLength] + "..." + match[len(match)-truncatedMatchSegmentLength:]
+	if match == "" {
+		return ""
 	}
-	return match
+	// Too short to show any prefix without revealing most of the secret.
+	if len(match) <= truncatedMatchSegmentLength {
+		return redactedValuePlaceholder
+	}
+	return match[:truncatedMatchSegmentLength] + "..."
 }

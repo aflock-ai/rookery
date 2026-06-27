@@ -187,10 +187,12 @@ func TestAllowlist_DefaultConfigManual(t *testing.T) {
 		t.Logf("Finding %d: Rule=%s, Match=%s", i, finding.RuleID, finding.Match)
 	}
 
-	// Check if any findings match our TEST_SECRET pattern
+	// Identify the finding by its file location, not by the secret value: Match is
+	// redacted in signed findings, so a plaintext substring check would pass
+	// trivially and hide a filtering regression.
 	foundTestSecret := false
 	for _, finding := range findings {
-		if strings.Contains(finding.Match, "TEST_SECRET") {
+		if strings.Contains(finding.Location, "secret.txt") {
 			foundTestSecret = true
 			break
 		}
@@ -249,10 +251,11 @@ keywords = ["TEST_SECRET"]
 		t.Logf("Finding %d: Rule=%s, Match=%s", i, finding.RuleID, finding.Match)
 	}
 
-	// Check if any findings match our TEST_SECRET pattern
+	// Identify the finding by the custom rule id, not by the secret value: Match is
+	// redacted in signed findings, so a plaintext substring check no longer works.
 	foundTestSecret := false
 	for _, finding := range findings {
-		if strings.Contains(finding.Match, "TEST_SECRET") {
+		if finding.RuleID == "test-rule" {
 			foundTestSecret = true
 			break
 		}
@@ -338,9 +341,11 @@ func TestAllowlistConfig(t *testing.T) {
 	t.Logf("First test findings count: %d", len(secretscanAttestor.Findings))
 
 	// Verify the AWS key was allowlisted (no findings matching AWS_ACCESS_KEY)
+	// Identify by file location only — Match is redacted in signed findings, so
+	// a plaintext check would pass trivially and mask an allowlist regression.
 	foundAWS := false
 	for _, finding := range secretscanAttestor.Findings {
-		if strings.Contains(finding.Location, "secret-file.txt") && strings.Contains(finding.Match, "AWS_ACCESS_KEY") {
+		if strings.Contains(finding.Location, "secret-file.txt") {
 			foundAWS = true
 			break
 		}
@@ -396,11 +401,13 @@ func TestAllowlistStopWords(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify findings
+	// Identify by file location only — Match is redacted in signed findings, so
+	// a plaintext check would pass trivially and mask a stop-word regression.
 	foundStopWord := false
 	for _, finding := range secretscanAttestor.Findings {
-		if strings.Contains(finding.Location, "secret-file.txt") && strings.Contains(finding.Match, "EXAMPLEPASSWORD") {
+		if strings.Contains(finding.Location, "secret-file.txt") {
 			foundStopWord = true
-			t.Logf("Found stop word: %s", finding.Match)
+			t.Logf("Found finding at %s (rule %s)", finding.Location, finding.RuleID)
 		}
 	}
 

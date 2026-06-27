@@ -732,15 +732,21 @@ func TestAllowlistAdversarial(t *testing.T) {
 // =============================================================================
 
 func TestTruncateMatchAdversarial(t *testing.T) {
-	t.Run("short string", func(t *testing.T) {
+	// A detected secret must never survive verbatim into Finding.Match — that
+	// preview is signed into evidence shipped to Archivista + CI artifacts. These
+	// cases assert redaction, NOT round-tripping of the value.
+	t.Run("short string is fully redacted", func(t *testing.T) {
 		result := truncateMatch("short")
-		assert.Equal(t, "short", result)
+		assert.Equal(t, redactedValuePlaceholder, result)
+		assert.NotContains(t, result, "short")
 	})
 
-	t.Run("exactly at limit", func(t *testing.T) {
+	t.Run("value at the display limit is not returned whole", func(t *testing.T) {
 		input := strings.Repeat("A", maxMatchDisplayLength)
 		result := truncateMatch(input)
-		assert.Equal(t, input, result)
+		assert.NotEqual(t, input, result, "a 40-char value (e.g. a GitHub PAT) must not be returned verbatim")
+		assert.Contains(t, result, "...")
+		assert.True(t, len(result) < len(input), "redacted preview should be shorter")
 	})
 
 	t.Run("one over limit", func(t *testing.T) {
@@ -750,11 +756,13 @@ func TestTruncateMatchAdversarial(t *testing.T) {
 		assert.True(t, len(result) < len(input), "truncated should be shorter")
 	})
 
-	t.Run("very long string", func(t *testing.T) {
-		input := strings.Repeat("A", 10000)
+	t.Run("long value exposes only a leading prefix, never the tail", func(t *testing.T) {
+		// Obviously-fake value (a real ghp_/AKIA/xoxb token would trip push protection).
+		input := "FAKEkey0" + strings.Repeat("x", 60) + "TAILEND0"
 		result := truncateMatch(input)
-		expected := strings.Repeat("A", truncatedMatchSegmentLength) + "..." + strings.Repeat("A", truncatedMatchSegmentLength)
+		expected := input[:truncatedMatchSegmentLength] + "..."
 		assert.Equal(t, expected, result)
+		assert.NotContains(t, result, "TAILEND0", "the high-entropy trailing bytes must not leak")
 	})
 
 	t.Run("empty string", func(t *testing.T) {
