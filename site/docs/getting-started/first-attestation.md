@@ -55,6 +55,7 @@ cilock run \
   --step build \
   --signer-file-key-path testkey.pem \
   --outfile build.attestation.json \
+  --platform-url "" \
   -- go build -o myapp ./
 ```
 
@@ -63,6 +64,7 @@ cilock run \
 | `--step` | `-s` | Names the step in the supply-chain lifecycle. Required, the policy verifier matches collections by step name. |
 | `--signer-file-key-path` | `-k` | Path to a local PEM private key. For keyless Sigstore signing in CI, use `--signer-fulcio-url`, `--signer-fulcio-oidc-issuer`, etc. (see [signing and identity](../concepts/signing-and-identity)). |
 | `--outfile` | `-o` | Where to write the signed envelope. Omit to write to stdout. |
+| `--platform-url ""` | | Opts out of the hosted platform for this local tutorial. This keeps the command fully offline even if you previously ran `cilock login`. |
 | `--workingdir` | `-d` | Directory the wrapped command runs in. Defaults to the current directory. |
 | `--attestations` | `-a` | Attestors to record. Pass once per attestor (`-a env -a git`) or comma-separated (`-a env,git`). Defaults to `[environment, git]`. See note below. |
 | `-- <cmd>` | | Everything after `--` is the command CI/lock wraps. |
@@ -180,10 +182,15 @@ The policy itself is a signed DSSE envelope. Whoever signs the policy controls e
 cilock sign \
   -f policy.json \
   -o policy-signed.json \
-  --signer-file-key-path testkey.pem
+  --signer-file-key-path testkey.pem \
+  --platform-url ""
 ```
 
 In a real setup, the policy signing key would be a separate, more strictly controlled key than the per-step attestation key. We reuse `testkey.pem` here for brevity.
+
+:::tip Logged in already?
+`cilock login` enables the hosted platform's keyless Fulcio signer for commands that do not choose another signer. In this tutorial the local file key is intentional, so keep `--platform-url ""` on the local signing commands. You can also run `cilock logout` before following the offline walkthrough.
+:::
 
 ## 7. Verify the build meets the policy
 
@@ -194,7 +201,8 @@ cilock verify \
   -p policy-signed.json \
   -a build.attestation.json \
   -f myapp \
-  -k testpub.pem
+  -k testpub.pem \
+  --platform-url ""
 ```
 
 | Flag | Short | What it does |

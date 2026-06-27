@@ -54,7 +54,7 @@ cilock run \
 
 # 3. Generate a starter Witness policy from the evidence, then sign it
 cilock policy from-bundles -k cosign.pub build.att.json > policy.json
-cilock sign -k cosign.key -f policy.json -o policy.signed.json
+cilock sign -k cosign.key -f policy.json -o policy.signed.json --platform-url ""
 
 # 4. Verify the built artifact against the signed policy
 cilock verify ./app \
@@ -217,13 +217,14 @@ cilock verify -p policy.json -k policy-pub.pem --bundle evidence.tar.gz --platfo
 ## `cilock sign`
 
 ```bash
-cilock sign -k cosign.key -f policy.json -o policy.signed.json
+cilock sign -k cosign.key -f policy.json -o policy.signed.json --platform-url ""
 ```
 
 ```
 -k, --signer-file-key-path string   Path to the file containing the private key
 -f, --infile string                 File to sign
 -o, --outfile string                File to write signed data; defaults to stdout
+    --platform-url string          Hosted platform URL; pass "" for local/offline signing
 -t, --datatype string               URI for the data type being signed
                                     (default "https://witness.testifysec.com/policy/v0.1")
 ```

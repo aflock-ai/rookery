@@ -43,6 +43,7 @@ cilock run \
   --attestations command-run,environment,git \
   --signer-file-key-path cosign.key \
   --outfile build.attestation.json \
+  --platform-url "" \
   -- go build ./...
 
 # List every attestor compiled into this binary

@@ -17,6 +17,7 @@ import (
 
 	// Register the fulcio signer provider so AddFlags wires up the
 	// --signer-fulcio-* flags the keyless exchange targets.
+	_ "github.com/aflock-ai/rookery/plugins/signers/file"
 	_ "github.com/aflock-ai/rookery/plugins/signers/fulcio"
 
 	"github.com/spf13/cobra"
@@ -119,6 +120,56 @@ func TestSignResolvePlatformDefaults_ExplicitFulcioTokenWins(t *testing.T) {
 	}
 	if atomic.LoadInt32(&exchanged) != 0 {
 		t.Fatal("must not call the sign-token exchange when an explicit token is set")
+	}
+}
+
+// TestSignResolvePlatformDefaults_FileSignerSuppressesLoggedInKeyless pins the
+// offline/local-key tutorial path: after `cilock login`, an explicit file signer
+// still wins. The stored session must not auto-select Fulcio or add a platform
+// TSA to this local signature; users can opt into platform signing by omitting
+// -k, or opt out explicitly with --platform-url "".
+func TestSignResolvePlatformDefaults_FileSignerSuppressesLoggedInKeyless(t *testing.T) {
+	isolateCredentialStore(t)
+
+	exchanged := int32(0)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth/sign-token" {
+			atomic.AddInt32(&exchanged, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"token": fakeSignToken})
+	}))
+	defer srv.Close()
+
+	if err := auth.Save(auth.Credential{
+		PlatformURL: srv.URL,
+		Token:       "stored-session-credential",
+		AuthMode:    auth.AuthModeBrowser,
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("seed credential: %v", err)
+	}
+
+	cmd, so := newSignCmd(t)
+	if err := cmd.ParseFlags([]string{
+		"--platform-url", srv.URL,
+		"--signer-file-key-path", "/tmp/local-key.pem",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	so.ResolvePlatformDefaults(cmd)
+
+	if got := cmd.Flags().Lookup("signer-fulcio-token").Value.String(); got != "" {
+		t.Fatalf("file signer must suppress logged-in Fulcio token, got %q", got)
+	}
+	if cmd.Flags().Changed("signer-fulcio-token") || cmd.Flags().Changed("signer-fulcio-url") {
+		t.Fatal("file signer must not mark any signer-fulcio-* flag changed")
+	}
+	if atomic.LoadInt32(&exchanged) != 0 {
+		t.Fatal("must not call the sign-token exchange when a file signer is explicit")
+	}
+	if len(so.TimestampServers) != 0 {
+		t.Fatalf("file signer path must not derive a platform TSA, got %v", so.TimestampServers)
 	}
 }
 

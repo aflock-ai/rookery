@@ -679,7 +679,7 @@ Exit-code policy (finding #221):
 
 func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFlags map[string]bool, signerProviders map[string]struct{}, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
 	if len(signers) > 1 {
-		return fmt.Errorf("only one signer is supported")
+		return onlyOneSignerError()
 	}
 
 	if len(signers) == 0 {

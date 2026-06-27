@@ -1,0 +1,65 @@
+{
+  "name": "falco",
+  "source": "attestor-backed",
+  "description": "Captures runtime security events from Falco (Cloud Native Computing Foundation runtime threat detection).",
+  "title": "falco",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "runtime-event"
+  ],
+  "primaryCategory": "runtime-event",
+  "upstream": {
+    "name": "Falco",
+    "source": "https://github.com/falcosecurity/falco",
+    "license": "Apache-2.0",
+    "vendor": "The Falco Authors (CNCF)"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "falco"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "falcoctl"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "falco"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "falcoctl"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "falco*.json | **/falco*.json | falco-events.log | **/falco-events.log"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Falco runtime events captured."
+  },
+  "predicateType": "https://aflock.ai/attestations/falco/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- falco .",
+  "detectionCommand": "cilock plan --format=json -- falco [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"falco\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

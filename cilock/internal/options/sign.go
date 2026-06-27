@@ -80,22 +80,15 @@ func (so *SignOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// LookupAny (not Lookup) so a workflow-identity marker — which carries no
 	// stored token — is returned too; its signing comes from a freshly minted
 	// ambient OIDC token, not a stored bearer.
-	keyless := false
-	if cred, lookupErr := auth.LookupAny(so.PlatformURL); lookupErr == nil && cred != nil {
-		keyless = true
-		if cred.AuthMode == auth.AuthModeWorkflowOIDC {
-			applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
-		} else {
-			applyKeylessFulcioToken(cmd, so.PlatformURL, pc.Fulcio, cred.Token)
-		}
-	} else if auth.WorkflowOIDCAvailable() {
-		// Not logged in, but running in CI with an ambient OIDC identity
-		// (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN present ⇒ permissions: id-token:
-		// write). Sign keyless with the workflow identity directly — this is the
-		// path the release pipeline takes (no `cilock login` step).
-		keyless = true
-		applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
-	}
+	//
+	// Precedence: an explicit non-fulcio signer (--signer-file-key-path / KMS /
+	// SPIFFE / vault) wins over ambient/stored login. Skip the keyless apply so a
+	// logged-in `cilock sign -k key.pem` resolves exactly one signer instead of
+	// failing "only one signer is supported". The apply helpers already fail-closed
+	// on this internally (fulcioSignerNeedsToken ⇒ nonFulcioSignerSelected); gating
+	// here too keeps the precedence legible at the call site, is symmetric with the
+	// TSA gate below, and is defense-in-depth if that inner guard is ever refactored.
+	so.applyKeylessPlatformSigner(cmd, pc)
 
 	// Give a selected fulcio signer a URL if it lacks one — selected by the
 	// keyless exchange above OR by an explicit --signer-fulcio-token. Runs outside
@@ -106,7 +99,35 @@ func (so *SignOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// Timestamp servers: add the platform TSA only when actually doing a keyless
 	// platform signature. A purely local `cilock sign -k` should not get a platform
 	// TSA appended. Explicit --timestamp-servers wins.
-	if keyless && len(so.TimestampServers) == 0 {
+	if fulcioSignerSelected(cmd) && !nonFulcioSignerSelected(cmd) && len(so.TimestampServers) == 0 {
 		so.TimestampServers = []string{pc.TSA}
 	}
+}
+
+// applyKeylessPlatformSigner selects the platform's keyless fulcio signer from an
+// ambient/stored login, unless an explicit non-fulcio signer (--signer-file-key-path
+// / KMS / SPIFFE / vault) was chosen — that wins over ambient/stored login. Early
+// returns keep the precedence flat; see ResolvePlatformDefaults for the full rationale.
+func (so *SignOptions) applyKeylessPlatformSigner(cmd *cobra.Command, pc platformconfig.PlatformConfig) {
+	if nonFulcioSignerSelected(cmd) {
+		return
+	}
+
+	cred, lookupErr := auth.LookupAny(so.PlatformURL)
+	if lookupErr != nil || cred == nil {
+		// Not logged in, but possibly running in CI with an ambient OIDC identity
+		// (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN present ⇒ permissions: id-token:
+		// write). Sign keyless with the workflow identity directly — this is the
+		// path the release pipeline takes (no `cilock login` step).
+		if auth.WorkflowOIDCAvailable() {
+			applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+		}
+		return
+	}
+
+	if cred.AuthMode == auth.AuthModeWorkflowOIDC {
+		applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+		return
+	}
+	applyKeylessFulcioToken(cmd, so.PlatformURL, pc.Fulcio, cred.Token)
 }

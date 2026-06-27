@@ -63,7 +63,7 @@ func SignCmd() *cobra.Command {
 
 func runSign(_ context.Context, so options.SignOptions, signers ...cryptoutil.Signer) error {
 	if len(signers) > 1 {
-		return fmt.Errorf("only one signer is supported")
+		return onlyOneSignerError()
 	}
 
 	if len(signers) == 0 {

@@ -1,6 +1,6 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 127,
+  "count": 128,
   "withDoc": 55,
   "emittedBy": {
     "sbom": [
@@ -512,6 +512,19 @@
       "predicateType": "https://aflock.ai/attestations/environment/v0.1",
       "runType": "prematerial",
       "hasDoc": true
+    },
+    {
+      "name": "falco",
+      "source": "attestor-backed",
+      "categories": [
+        "runtime-event"
+      ],
+      "primaryCategory": "runtime-event",
+      "description": "Captures runtime security events from Falco (Cloud Native Computing Foundation runtime threat detection).",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/falco/v0.1",
+      "runType": "postproduct",
+      "hasDoc": false
     },
     {
       "name": "gcp-audit-log",
