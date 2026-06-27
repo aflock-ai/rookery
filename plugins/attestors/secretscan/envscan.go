@@ -145,31 +145,17 @@ func (a *Attestor) findPatternMatchesWithRedaction(content, patternStr string) [
 
 	for _, match := range matches {
 		// Get line number for this occurrence
-		lines := strings.Split(content[:match[0]], "\n")
-		lineNum := len(lines)
+		lineNum := len(strings.Split(content[:match[0]], "\n"))
 
-		// Extract surrounding context
-		startIdx := match[0]
-		endIdx := match[1]
-
-		// Get some context before and after the match
-		startContextIdx := startIdx - redactionMatchContextSize
-		if startContextIdx < 0 {
-			startContextIdx = 0
-		}
-		endContextIdx := endIdx + redactionMatchContextSize
-		if endContextIdx > len(content) {
-			endContextIdx = len(content)
-		}
-
-		// Extract the match with context - replace actual value with placeholder
-		contextPrefix := content[startContextIdx:startIdx]
-		contextSuffix := content[endIdx:endContextIdx]
-		matchText := contextPrefix + redactedValuePlaceholder + contextSuffix
-
+		// Do NOT emit the raw surrounding bytes as "context". A fixed-width
+		// window around the match can overlap an ADJACENT secret and leak it
+		// into signed evidence (R3-162): searching for one value, the suffix
+		// window captured the next value's bytes. The match position is recorded
+		// in lineNumber; the context is reduced to the redaction placeholder so
+		// no neighbouring secret material can survive.
 		result = append(result, matchInfo{
 			lineNumber:   lineNum,
-			matchContext: matchText,
+			matchContext: redactedValuePlaceholder,
 		})
 	}
 
@@ -327,14 +313,22 @@ func (a *Attestor) checkDecodedContentForSensitiveValues( //nolint:gocognit,gocy
 			for i, line := range lines {
 				if strings.Contains(line, matchValue) {
 					lineNumber = i + 1
-					// Create a redacted/truncated version of the context
-					if len(line) < 40 {
-						match = strings.ReplaceAll(line, matchValue, "[REDACTED]")
+					// A context window built around the current match can overlap
+					// an ADJACENT, DIFFERENT secret and leak its bytes into the
+					// signed Finding.Match (R3-162/R3-165). Slicing the window
+					// first would cut a neighbour into a fragment that a
+					// full-value replace can no longer catch, so we redact every
+					// OTHER sensitive value on the FULL line first (collapsing each
+					// to a [REDACTED] token), then window around the still-intact
+					// current match, then redact the current match itself.
+					redactedLine := redactSensitiveValuesExcept(line, matchValue, sensitiveEnvVars)
+					if len(redactedLine) < 40 {
+						match = strings.ReplaceAll(redactedLine, matchValue, "[REDACTED]")
 					} else {
-						valueIndex := strings.Index(line, matchValue)
+						valueIndex := strings.Index(redactedLine, matchValue)
 						startIndex := max(0, valueIndex-10)
-						endIndex := min(len(line), valueIndex+len(matchValue)+10)
-						context := line[startIndex:endIndex]
+						endIndex := min(len(redactedLine), valueIndex+len(matchValue)+10)
+						context := redactedLine[startIndex:endIndex]
 						match = strings.ReplaceAll(context, matchValue, "[REDACTED]")
 					}
 					break
@@ -374,4 +368,41 @@ func (a *Attestor) checkDecodedContentForSensitiveValues( //nolint:gocognit,gocy
 	}
 
 	return findings
+}
+
+// redactSensitiveValuesExcept replaces every sensitive environment-variable value
+// that appears in text with "[REDACTED]", skipping the value equal to exclude
+// (the current match, which the caller redacts separately after windowing).
+//
+// It exists to scrub context windows on the decoded-content path: a window built
+// around one secret can overlap an ADJACENT, DIFFERENT secret, and replacing only
+// the current match leaves the neighbour's bytes in the signed Finding.Match
+// (R3-162/R3-165). Redacting the FULL line for every other sensitive value BEFORE
+// the window is sliced means an adjacent secret is collapsed to a [REDACTED] token
+// while still whole, so windowing can never carve it into a leaking fragment. The
+// sensitivity gate is the same one the scan itself applies, and non-secret context
+// is preserved so the Match stays useful.
+func redactSensitiveValuesExcept(text, exclude string, sensitiveEnvVars map[string]struct{}) string {
+	for _, envPair := range os.Environ() {
+		parts := strings.SplitN(envPair, "=", 2)
+		if len(parts) != 2 || parts[1] == "" {
+			continue
+		}
+		key := parts[0]
+		value := parts[1]
+
+		if value == exclude {
+			continue
+		}
+		if len(value) < minSensitiveValueLength {
+			continue
+		}
+		if !isEnvironmentVariableSensitive(key, sensitiveEnvVars) {
+			continue
+		}
+		if strings.Contains(text, value) {
+			text = strings.ReplaceAll(text, value, "[REDACTED]")
+		}
+	}
+	return text
 }

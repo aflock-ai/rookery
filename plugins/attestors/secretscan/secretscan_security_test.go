@@ -193,6 +193,131 @@ func TestSecurity_R3_162_ContextWindowLeaksAdjacentSecret(t *testing.T) {
 }
 
 // =============================================================================
+// R3-165: checkDecodedContentForSensitiveValues context window leaks ADJACENT
+// DIFFERENT secrets (the sibling of R3-162 on the decoded-content path)
+//
+// SECURITY IMPACT:
+//   #6010 redacted the raw context window on the plaintext path
+//   (findPatternMatchesWithRedaction). The decoded-content path still builds a
+//   raw ±10-char window:
+//       context := line[startIndex:endIndex]
+//       match   = strings.ReplaceAll(context, matchValue, "[REDACTED]")
+//   and only redacts the CURRENT matchValue. When a DIFFERENT sensitive value
+//   sits within 10 chars, scanning for one secret captures the other's bytes
+//   into Finding.Match (same R3-162 class, decoded path).
+//
+//   R3-160/161 covered the same secret repeated; this covers two DISTINCT
+//   secrets adjacent to each other. Both the long-line window path
+//   (line >= 40) and the short-line whole-line path (line < 40) leak.
+//
+// AFFECTED CODE: envscan.go ~lines 306-328 (checkDecodedContentForSensitiveValues)
+//                reachable via scanner.go:104 for every base64/hex blob.
+// =============================================================================
+
+func TestSecurity_R3_165_DecodedContextWindowLeaksAdjacentSecret(t *testing.T) {
+	a := New()
+
+	// Two DIFFERENT sensitive env values, placed within 10 chars of each other.
+	const keyA = "TEST_R3_165_TOKEN_A"
+	const keyB = "TEST_R3_165_TOKEN_B"
+	const secretA = "AAAA_FIRST_SECRET_AAAA"  // 22 chars
+	const secretB = "BBBB_SECOND_SECRET_BBBB" // 23 chars
+
+	os.Setenv(keyA, secretA)
+	os.Setenv(keyB, secretB)
+	defer os.Unsetenv(keyA)
+	defer os.Unsetenv(keyB)
+
+	sensitiveVars := map[string]struct{}{keyA: {}, keyB: {}}
+
+	// Long-line path: total line length >= 40 so the ±10-char window path runs.
+	// Secrets separated by only 3 chars -- well within the 10-char window, so
+	// each secret's window overlaps the other.
+	decodedContent := secretA + "---" + secretB // 22 + 3 + 23 = 48 chars >= 40
+
+	findings := a.checkDecodedContentForSensitiveValues(
+		decodedContent,
+		"test-source",
+		"base64",
+		sensitiveVars,
+		make(map[string]struct{}),
+	)
+	require.Len(t, findings, 2,
+		"Should produce one finding for each of the two adjacent secrets")
+
+	// Whichever secret a finding is for, its Match must NOT contain the OTHER
+	// secret's plaintext, and its own value must be redacted.
+	// RuleID is "witness-encoded-env-value-<KEY with _->>->" and the key is NOT
+	// lowercased, so match on the uppercase suffix.
+	for _, f := range findings {
+		switch {
+		case strings.Contains(f.RuleID, "TOKEN-A"):
+			assert.NotContains(t, f.Match, secretB,
+				"Finding for secret A leaks adjacent secret B into the context "+
+					"window. The decoded-path window redacts only the current "+
+					"matchValue, not neighbouring secrets. Got: %q", f.Match)
+			assert.NotContains(t, f.Match, "BBBB",
+				"Finding for secret A leaks fragments of secret B. Got: %q", f.Match)
+			assert.NotContains(t, f.Match, secretA,
+				"Finding for secret A must redact its own value. Got: %q", f.Match)
+		case strings.Contains(f.RuleID, "TOKEN-B"):
+			assert.NotContains(t, f.Match, secretA,
+				"Finding for secret B leaks adjacent secret A into the context "+
+					"window. Got: %q", f.Match)
+			assert.NotContains(t, f.Match, "AAAA",
+				"Finding for secret B leaks fragments of secret A. Got: %q", f.Match)
+			assert.NotContains(t, f.Match, secretB,
+				"Finding for secret B must redact its own value. Got: %q", f.Match)
+		default:
+			t.Fatalf("unexpected finding rule id: %q", f.RuleID)
+		}
+	}
+}
+
+// =============================================================================
+// R3-165b: same leak on the SHORT-line path (line < 40). The whole-line branch
+// also redacts only the current value, so an adjacent distinct secret survives.
+// =============================================================================
+
+func TestSecurity_R3_165_DecodedShortLineLeaksAdjacentSecret(t *testing.T) {
+	a := New()
+
+	const keyA = "TEST_R3_165B_A"
+	const keyB = "TEST_R3_165B_B"
+	const secretA = "SECRET_ONE" // 10 chars
+	const secretB = "SECRET_TWO" // 10 chars
+
+	os.Setenv(keyA, secretA)
+	os.Setenv(keyB, secretB)
+	defer os.Unsetenv(keyA)
+	defer os.Unsetenv(keyB)
+
+	sensitiveVars := map[string]struct{}{keyA: {}, keyB: {}}
+
+	// Short line (< 40 chars) holding both distinct secrets: "SECRET_ONE SECRET_TWO" = 21 chars.
+	decodedContent := secretA + " " + secretB
+
+	findings := a.checkDecodedContentForSensitiveValues(
+		decodedContent,
+		"test-source",
+		"base64",
+		sensitiveVars,
+		make(map[string]struct{}),
+	)
+	require.Len(t, findings, 2, "Should produce a finding for each distinct secret")
+
+	for _, f := range findings {
+		other := secretB
+		if strings.Contains(f.RuleID, "165B-B") {
+			other = secretA
+		}
+		assert.NotContains(t, f.Match, other,
+			"Short-line decoded path redacts only the current secret; the "+
+				"adjacent distinct secret leaks into Finding.Match. Got: %q", f.Match)
+	}
+}
+
+// =============================================================================
 // R3-163: isEnvironmentVariableSensitive exact match is case-sensitive but
 // DefaultSensitiveEnvList contains lowercase entries that real CI systems
 // export in uppercase
