@@ -216,10 +216,16 @@ func printPlan(w interface{ Write([]byte) (int, error) }, r *options.ResolvedTru
 }
 
 // resolveGraphQLURL prefers the discovery-advertised graphql endpoint, falling
-// back to ${platform}/query when discovery is unavailable.
+// back to ${platform}/query when discovery is unavailable. A discovery URL whose
+// origin (scheme+host) differs from the platform is withheld (#5987): the session
+// bearer is scoped to the platform origin and must never be sent to a host the
+// discovery document — which may be MITM'd or misconfigured — points elsewhere.
 func resolveGraphQLURL(platformURL string) string {
+	fallback := auth.NormalizeURL(platformURL) + "/query"
 	if d, err := config.Discover(platformURL); err == nil && d.GraphQLURL != "" {
-		return d.GraphQLURL
+		if config.SameOrigin(d.GraphQLURL, platformURL) {
+			return d.GraphQLURL
+		}
 	}
-	return auth.NormalizeURL(platformURL) + "/query"
+	return fallback
 }

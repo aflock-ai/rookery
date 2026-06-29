@@ -325,39 +325,62 @@ func TestSecurity_R3_208_DefaultClientHasTimeout(t *testing.T) {
 		"the Archivista client must carry a bounded Timeout so a stalled server fails fast instead of hanging")
 }
 
-// TestSecurity_R3_209_DefaultClientFollowsRedirects proves that the default
-// http.Client follows redirects, which could lead to SSRF.
+// TestSecurity_R3_209_DefaultClientRefusesCrossOriginRedirect proves the fix for
+// the redirect-SSRF leg of #5987: New() now installs sameOriginRedirect as the
+// default CheckRedirect, so a cross-origin 302 is REFUSED (not silently
+// followed) while a same-origin 302 is still allowed.
 //
-// BUG [MEDIUM]: client.go:81 — http.DefaultClient follows up to 10 redirects.
-// A compromised archivista server could redirect to internal services.
-func TestSecurity_R3_209_DefaultClientFollowsRedirects(t *testing.T) {
-	var redirectCount int
+// FIXED [MEDIUM]: client.go New() — the default http.Client previously followed
+// up to 10 redirects with no CheckRedirect. A compromised/MITM'd Archivista
+// could 302 the bearer-bearing upload to attacker.tld or 169.254.169.254,
+// resending the platform session token and the uploaded DSSE bundle.
+func TestSecurity_R3_209_DefaultClientRefusesCrossOriginRedirect(t *testing.T) {
+	t.Run("cross-origin redirect refused", func(t *testing.T) {
+		var attackerHit bool
+		attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attackerHit = true
+			json.NewEncoder(w).Encode(storeResponse{Gitoid: "leaked"})
+		}))
+		defer attacker.Close()
 
-	finalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(storeResponse{Gitoid: "redirected"})
-	}))
-	defer finalServer.Close()
+		origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, attacker.URL+"/upload", http.StatusTemporaryRedirect)
+		}))
+		defer origin.Close()
 
-	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		redirectCount++
-		http.Redirect(w, r, finalServer.URL+"/upload", http.StatusTemporaryRedirect)
-	}))
-	defer redirectServer.Close()
+		client := New(origin.URL)
+		_, err := client.Store(context.Background(), dsse.Envelope{
+			Payload:     []byte(`{}`),
+			PayloadType: "test",
+		})
 
-	client := New(redirectServer.URL)
-	gitoid, err := client.Store(context.Background(), dsse.Envelope{
-		Payload:     []byte(`{}`),
-		PayloadType: "test",
+		require.Error(t, err,
+			"FIXED: the bearer-bearing client must refuse a cross-origin redirect")
+		assert.Contains(t, err.Error(), "cross-origin redirect")
+		assert.False(t, attackerHit,
+			"the cross-origin redirect target must NOT receive the request (bearer + body)")
 	})
 
-	// The redirect is followed silently.
-	assert.NoError(t, err,
-		"BUG [MEDIUM]: Client follows redirects to arbitrary servers. "+
-			"A compromised archivista could redirect to internal services. "+
-			"File: client.go:81")
-	assert.Equal(t, "redirected", gitoid)
-	assert.Equal(t, 1, redirectCount,
-		"At least one redirect was silently followed")
+	t.Run("same-origin redirect followed", func(t *testing.T) {
+		var mux http.ServeMux
+		mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/v2/upload", http.StatusTemporaryRedirect)
+		})
+		mux.HandleFunc("/v2/upload", func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(storeResponse{Gitoid: "redirected"})
+		})
+		server := httptest.NewServer(&mux)
+		defer server.Close()
+
+		client := New(server.URL)
+		gitoid, err := client.Store(context.Background(), dsse.Envelope{
+			Payload:     []byte(`{}`),
+			PayloadType: "test",
+		})
+
+		assert.NoError(t, err, "a same-origin redirect must still be followed")
+		assert.Equal(t, "redirected", gitoid)
+	})
 }
 
 // ==========================================================================
@@ -774,8 +797,15 @@ func TestSecurity_R3_222_ClientConstructionEdgeCases(t *testing.T) {
 	})
 
 	t.Run("nil HTTP client preserves default", func(t *testing.T) {
+		// WithHTTPClient(nil) is a no-op, so the client is the one New()
+		// constructs: NOT the shared http.DefaultClient (which has neither a
+		// Timeout nor a redirect policy). It must carry both the bounded
+		// Timeout (R3-208) and the same-origin CheckRedirect (R3-209/#5987).
 		c := New("https://example.com", WithHTTPClient(nil))
-		assert.Equal(t, http.DefaultClient, c.client)
+		assert.NotSame(t, http.DefaultClient, c.client,
+			"default client must not be the shared http.DefaultClient")
+		assert.Positive(t, c.client.Timeout, "default client must carry a bounded Timeout")
+		assert.NotNil(t, c.client.CheckRedirect, "default client must carry a same-origin CheckRedirect")
 	})
 
 	t.Run("custom HTTP client", func(t *testing.T) {

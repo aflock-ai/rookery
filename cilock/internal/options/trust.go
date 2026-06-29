@@ -404,7 +404,9 @@ func CreateOIDCCredential(ctx context.Context, graphqlURL, sessionToken string, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	// Refuse cross-origin / non-public redirects (#5987): a 30x would otherwise
+	// resend Authorization: Bearer to the redirect target.
+	resp, err := (&http.Client{Timeout: 30 * time.Second, CheckRedirect: config.SameOriginRedirect}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("trust request: %w", err)
 	}

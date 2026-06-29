@@ -68,9 +68,15 @@ func (s *policySession) policyClient() *options.PolicyClient {
 
 // resolveArchivistaURL resolves the Archivista upload endpoint: the
 // discovery-advertised URL when available, else derived from the platform URL.
+// A discovery URL whose origin (scheme+host) differs from the platform is
+// withheld (#5987): the session bearer / uploaded bundles are scoped to the
+// platform origin and must never be sent to a host an untrusted discovery
+// document points elsewhere.
 func resolveArchivistaURL(platformURL string) string {
 	if d, err := config.Discover(platformURL); err == nil && d.ArchivistaURL != "" {
-		return d.ArchivistaURL
+		if config.SameOrigin(d.ArchivistaURL, platformURL) {
+			return d.ArchivistaURL
+		}
 	}
 	return config.Derive(platformURL).Archivista
 }

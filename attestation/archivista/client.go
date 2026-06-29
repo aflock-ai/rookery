@@ -83,10 +83,16 @@ func WithHTTPClient(hc *http.Client) Option {
 }
 
 // New creates an Archivista client for the given server URL.
+//
+// The default http.Client installs sameOriginRedirect as its CheckRedirect:
+// requests carry the platform session token as a Bearer header, and a redirect
+// to a different origin (or a private/link-local IP) would resend that bearer
+// and the uploaded DSSE bundle to an attacker. Callers that supply their own
+// client via WithHTTPClient own their redirect policy.
 func New(url string, opts ...Option) *Client {
 	c := &Client{
 		url:    strings.TrimRight(url, "/"),
-		client: &http.Client{Timeout: defaultHTTPTimeout},
+		client: &http.Client{Timeout: defaultHTTPTimeout, CheckRedirect: sameOriginRedirect},
 	}
 	for _, opt := range opts {
 		if opt != nil {

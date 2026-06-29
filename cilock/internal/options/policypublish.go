@@ -93,6 +93,11 @@ func (c *PolicyClient) post(ctx context.Context, query string, variables map[str
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
 	}
+	// Refuse cross-origin / non-public redirects (#5987): a 30x would otherwise
+	// resend Authorization: Bearer (and the request body) to the redirect target.
+	if hc.CheckRedirect == nil {
+		hc.CheckRedirect = config.SameOriginRedirect
+	}
 	resp, err := hc.Do(req)
 	if err != nil {
 		return fmt.Errorf("platform request: %w", err)
@@ -100,8 +105,15 @@ func (c *PolicyClient) post(ctx context.Context, query string, variables map[str
 	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
 
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20)) //nolint:errcheck // diagnostic
-	if resp.StatusCode != http.StatusOK {
-		return classifyGQLErr(resp.StatusCode, strings.TrimSpace(string(raw)))
+	return decodeGraphQLResponse(resp.StatusCode, raw, out)
+}
+
+// decodeGraphQLResponse turns a raw GraphQL HTTP response into an error, or
+// unmarshals its `data` field into out. Split out of post so that function's
+// cyclomatic complexity stays within the linter bound (#5987).
+func decodeGraphQLResponse(status int, raw []byte, out any) error {
+	if status != http.StatusOK {
+		return classifyGQLErr(status, strings.TrimSpace(string(raw)))
 	}
 
 	var envelope struct {

@@ -204,3 +204,53 @@ func TestStore_TimesOutOnStalledServer(t *testing.T) {
 		t.Fatal("Store hung past the client Timeout — the bounded-timeout fix is not in effect")
 	}
 }
+
+// TestStore_RefusesCrossOriginRedirect is the standard-CI regression guard for
+// the redirect-SSRF leg of #5987. The Archivista client carries the platform
+// session bearer; New() must install a same-origin CheckRedirect so a
+// compromised/MITM'd server cannot 302 the upload to a different origin and
+// resend the bearer + DSSE bundle. Without the fix, the cross-origin redirect is
+// followed silently and Store returns nil (the gap proven by the audit-tagged
+// TestSecurity_R3_209). With the fix, Store returns an error and the attacker
+// origin never receives the body.
+func TestStore_RefusesCrossOriginRedirect(t *testing.T) {
+	var attackerHit bool
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attackerHit = true
+		json.NewEncoder(w).Encode(storeResponse{Gitoid: "leaked"})
+	}))
+	defer attacker.Close()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Cross-origin redirect to the attacker host (different scheme+host).
+		http.Redirect(w, r, attacker.URL+"/upload", http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	client := New(origin.URL)
+	_, err := client.Store(context.Background(), dsse.Envelope{Payload: []byte(`{}`), PayloadType: "test"})
+	require.Error(t, err, "Store must refuse a cross-origin redirect (bearer would leak)")
+	require.Contains(t, err.Error(), "cross-origin redirect")
+	require.False(t, attackerHit, "the cross-origin redirect target must NOT receive the request body")
+}
+
+// TestStore_FollowsSameOriginRedirect proves the policy is not over-broad: a
+// redirect that stays on the same origin (scheme+host) is still followed, so a
+// legitimate path rewrite on the Archivista server keeps working.
+func TestStore_FollowsSameOriginRedirect(t *testing.T) {
+	var mux http.ServeMux
+	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+		// Same-origin redirect: /upload -> /v2/upload on the same host.
+		http.Redirect(w, r, "/v2/upload", http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/v2/upload", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(storeResponse{Gitoid: "redirected-ok"})
+	})
+	server := httptest.NewServer(&mux)
+	defer server.Close()
+
+	client := New(server.URL)
+	gitoid, err := client.Store(context.Background(), dsse.Envelope{Payload: []byte(`{}`), PayloadType: "test"})
+	require.NoError(t, err, "a same-origin redirect must still be followed")
+	require.Equal(t, "redirected-ok", gitoid)
+}
