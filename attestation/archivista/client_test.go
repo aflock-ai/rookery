@@ -59,14 +59,22 @@ func TestDownload(t *testing.T) {
 		PayloadType: "application/vnd.in-toto+json",
 	}
 
+	// Archivista content-addresses envelopes by the git-blob-sha256 of the
+	// exact bytes it stored, and Download re-hashes the raw response body to
+	// verify that binding (#5990). Serve a fixed byte sequence and request the
+	// gitoid those bytes actually hash to.
+	body, err := json.Marshal(expectedEnv)
+	require.NoError(t, err)
+	gid := computeGitoid(body)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/download/gitoid123", r.URL.Path)
-		json.NewEncoder(w).Encode(expectedEnv)
+		require.Equal(t, "/download/"+gid, r.URL.Path)
+		_, _ = w.Write(body)
 	}))
 	defer server.Close()
 
 	client := New(server.URL)
-	env, err := client.Download(context.Background(), "gitoid123")
+	env, err := client.Download(context.Background(), gid)
 	require.NoError(t, err)
 	require.Equal(t, expectedEnv.PayloadType, env.PayloadType)
 }

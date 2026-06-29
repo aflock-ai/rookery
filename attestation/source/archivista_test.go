@@ -15,6 +15,7 @@
 package source
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -27,21 +28,47 @@ import (
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/gitoid"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/invopop/jsonschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// mockArchivista returns a minimal HTTP server emulating the Archivista
+// envelopeGitoid computes the git-blob-sha256 content address that Archivista
+// keys an envelope on, over the exact bytes the mock server will serve. The
+// archivista client re-hashes the raw download body and rejects mismatches
+// (#5990), so the mock must serve bytes that hash to the gitoid it advertises.
+func envelopeGitoid(t *testing.T, body []byte) string {
+	t.Helper()
+	gid, err := gitoid.New(bytes.NewReader(body), gitoid.WithSha256(), gitoid.WithContentLength(int64(len(body))))
+	require.NoError(t, err)
+	return gid.String()
+}
+
 // GraphQL + download endpoints for SearchByPredicateType tests.
 //
-// gitoidToEnvelope maps gitoidSha256 -> DSSE envelope returned by /download.
-// graphqlGitoids is the list returned by the GraphQL dsses query; pass nil
-// for "empty result", or set graphqlError to simulate a GraphQL error.
-func mockArchivista(t *testing.T, gitoidToEnvelope map[string]dsse.Envelope, graphqlGitoids []string, graphqlError string) *httptest.Server {
+// labelToEnvelope maps a caller-chosen label -> DSSE envelope. The server
+// content-addresses each envelope (computes its real gitoid over the served
+// bytes), advertises those real gitoids over GraphQL, and serves them under
+// /download/<realGitoid>. graphqlLabels selects which envelopes the GraphQL
+// dsses query returns (by label); pass nil for "empty result", or set
+// graphqlError to simulate a GraphQL error. The returned map gives each
+// label's real gitoid so tests can assert on the StatementEnvelope.Reference.
+func mockArchivista(t *testing.T, labelToEnvelope map[string]dsse.Envelope, graphqlLabels []string, graphqlError string) (*httptest.Server, map[string]string) {
 	t.Helper()
 	mux := http.NewServeMux()
+
+	// Serialize each envelope once and content-address it.
+	labelToGitoid := make(map[string]string, len(labelToEnvelope))
+	gitoidToBody := make(map[string][]byte, len(labelToEnvelope))
+	for label, env := range labelToEnvelope {
+		body, err := json.Marshal(env)
+		require.NoError(t, err)
+		gid := envelopeGitoid(t, body)
+		labelToGitoid[label] = gid
+		gitoidToBody[gid] = body
+	}
 
 	mux.HandleFunc("/query", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -54,9 +81,9 @@ func mockArchivista(t *testing.T, gitoidToEnvelope map[string]dsse.Envelope, gra
 			return
 		}
 
-		edges := make([]map[string]interface{}, 0, len(graphqlGitoids))
-		for _, g := range graphqlGitoids {
-			edges = append(edges, map[string]interface{}{"node": map[string]string{"gitoidSha256": g}})
+		edges := make([]map[string]interface{}, 0, len(graphqlLabels))
+		for _, label := range graphqlLabels {
+			edges = append(edges, map[string]interface{}{"node": map[string]string{"gitoidSha256": labelToGitoid[label]}})
 		}
 
 		resp := map[string]interface{}{
@@ -68,17 +95,17 @@ func mockArchivista(t *testing.T, gitoidToEnvelope map[string]dsse.Envelope, gra
 	})
 
 	mux.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
-		gitoid := strings.TrimPrefix(r.URL.Path, "/download/")
-		env, ok := gitoidToEnvelope[gitoid]
+		gid := strings.TrimPrefix(r.URL.Path, "/download/")
+		body, ok := gitoidToBody[gid]
 		if !ok {
-			http.Error(w, fmt.Sprintf("gitoid %s not found", gitoid), http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("gitoid %s not found", gid), http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(env)
+		_, _ = w.Write(body)
 	})
 
-	return httptest.NewServer(mux)
+	return httptest.NewServer(mux), labelToGitoid
 }
 
 // mockArchivistaDownloadFailure returns a server that always succeeds on
@@ -128,7 +155,7 @@ func TestArchivistaSource_SearchByPredicateType_HappyPath_Typed(t *testing.T) {
 	const (
 		predicateType = "https://slsa.dev/provenance/v1"
 		subjectDigest = "deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebab0"
-		gitoid        = "gitoid-slsa-v1-typed"
+		label         = "gitoid-slsa-v1-typed"
 	)
 
 	// Register a test factory for the predicate type so the typed path fires.
@@ -147,7 +174,7 @@ func TestArchivistaSource_SearchByPredicateType_HappyPath_Typed(t *testing.T) {
         "runDetails": {"builder": {"id": "https://example.com/builder"}}
     }`))
 
-	srv := mockArchivista(t, map[string]dsse.Envelope{gitoid: env}, []string{gitoid}, "")
+	srv, labelToGitoid := mockArchivista(t, map[string]dsse.Envelope{label: env}, []string{label}, "")
 	defer srv.Close()
 
 	client := archivista.New(srv.URL)
@@ -155,7 +182,7 @@ func TestArchivistaSource_SearchByPredicateType_HappyPath_Typed(t *testing.T) {
 	got, err := src.SearchByPredicateType(context.Background(), []string{predicateType}, []string{subjectDigest})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, gitoid, got[0].Reference)
+	assert.Equal(t, labelToGitoid[label], got[0].Reference)
 	assert.Equal(t, predicateType, got[0].Statement.PredicateType)
 	require.NotNil(t, got[0].Attestor)
 	// Confirm the typed path was taken (not RawAttestation) — factory returns
@@ -172,11 +199,11 @@ func TestArchivistaSource_SearchByPredicateType_HappyPath_UnknownFalsbackToRaw(t
 	const (
 		predicateType = "https://example.com/totally-unregistered/v1"
 		subjectDigest = "beefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeef"
-		gitoid        = "gitoid-unknown-predicate"
+		label         = "gitoid-unknown-predicate"
 	)
 
 	env := buildStatementEnvelope(t, predicateType, subjectDigest, json.RawMessage(`{"arbitrary":"payload","n":42}`))
-	srv := mockArchivista(t, map[string]dsse.Envelope{gitoid: env}, []string{gitoid}, "")
+	srv, _ := mockArchivista(t, map[string]dsse.Envelope{label: env}, []string{label}, "")
 	defer srv.Close()
 
 	client := archivista.New(srv.URL)
@@ -197,7 +224,7 @@ func TestArchivistaSource_SearchByPredicateType_HappyPath_UnknownFalsbackToRaw(t
 // TestArchivistaSource_SearchByPredicateType_EmptyResult asserts the
 // empty-list return shape when Archivista reports no matching gitoids.
 func TestArchivistaSource_SearchByPredicateType_EmptyResult(t *testing.T) {
-	srv := mockArchivista(t, nil, []string{}, "")
+	srv, _ := mockArchivista(t, nil, []string{}, "")
 	defer srv.Close()
 
 	client := archivista.New(srv.URL)
@@ -210,7 +237,7 @@ func TestArchivistaSource_SearchByPredicateType_EmptyResult(t *testing.T) {
 // TestArchivistaSource_SearchByPredicateType_GraphQLError asserts that a
 // GraphQL error from Archivista propagates as an error to the caller.
 func TestArchivistaSource_SearchByPredicateType_GraphQLError(t *testing.T) {
-	srv := mockArchivista(t, nil, nil, "schema does not support predicateIn")
+	srv, _ := mockArchivista(t, nil, nil, "schema does not support predicateIn")
 	defer srv.Close()
 
 	client := archivista.New(srv.URL)

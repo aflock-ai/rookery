@@ -31,10 +31,19 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/gitoid"
 )
 
 // maxErrorBodySize limits how much of an error response body we read to prevent OOM.
 const maxErrorBodySize = 1 << 20 // 1MB
+
+// MaxDownloadBytes caps the bytes the client will decode from an Archivista
+// response. It mirrors bundle.MaxBundleBytes (512 MiB): an attestation envelope
+// (DSSE carrying an in-toto statement, possibly with an embedded SBOM) is
+// comfortably under this, while a compromised/on-path server can no longer
+// stream a multi-GiB body to OOM-kill the caller. Without this bound the
+// json.Decoder would buffer the whole response.
+const MaxDownloadBytes = 512 << 20 // 512 MiB
 
 // defaultHTTPTimeout bounds every Archivista request. http.DefaultClient has no
 // Timeout, so a server (or LB) that TCP-accepts then stalls the response would
@@ -127,15 +136,15 @@ func (c *Client) Store(ctx context.Context, env dsse.Envelope) (string, error) {
 	}
 
 	var result storeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxDownloadBytes+1)).Decode(&result); err != nil {
 		return "", fmt.Errorf("decode store response: %w", err)
 	}
 	return result.Gitoid, nil
 }
 
 // Download retrieves a DSSE envelope by its gitoid.
-func (c *Client) Download(ctx context.Context, gitoid string) (dsse.Envelope, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/download/"+url.PathEscape(gitoid), nil)
+func (c *Client) Download(ctx context.Context, gitoidArg string) (dsse.Envelope, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/download/"+url.PathEscape(gitoidArg), nil)
 	if err != nil {
 		return dsse.Envelope{}, fmt.Errorf("create request: %w", err)
 	}
@@ -151,8 +160,32 @@ func (c *Client) Download(ctx context.Context, gitoid string) (dsse.Envelope, er
 		return dsse.Envelope{}, fmt.Errorf("archivista download returned %d: %s", resp.StatusCode, readLimitedErrorBody(resp.Body))
 	}
 
+	// Read the raw body under a hard cap. Archivista content-addresses each
+	// envelope by the git-blob-sha256 of the exact bytes it stored, so we must
+	// re-hash the raw bytes (not a re-marshaled struct, whose key order and
+	// dropped unknown fields would not reproduce the stored bytes) and decode
+	// from those same bytes. Reading MaxDownloadBytes+1 lets us detect overflow.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxDownloadBytes+1))
+	if err != nil {
+		return dsse.Envelope{}, fmt.Errorf("read envelope: %w", err)
+	}
+	if int64(len(raw)) > MaxDownloadBytes {
+		return dsse.Envelope{}, fmt.Errorf("archivista download exceeds %d byte limit", MaxDownloadBytes)
+	}
+
+	// Verify the content address: the returned bytes must hash to the requested
+	// gitoid. This rejects a compromised/on-path server returning a
+	// different-but-signed envelope than the gitoid names.
+	gid, err := gitoid.New(bytes.NewReader(raw), gitoid.WithSha256(), gitoid.WithContentLength(int64(len(raw))))
+	if err != nil {
+		return dsse.Envelope{}, fmt.Errorf("compute gitoid: %w", err)
+	}
+	if !strings.EqualFold(gid.String(), gitoidArg) {
+		return dsse.Envelope{}, fmt.Errorf("archivista download gitoid mismatch: requested %s, got %s", gitoidArg, gid.String())
+	}
+
 	var env dsse.Envelope
-	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+	if err := json.Unmarshal(raw, &env); err != nil {
 		return dsse.Envelope{}, fmt.Errorf("decode envelope: %w", err)
 	}
 	return env, nil
@@ -339,7 +372,7 @@ func (c *Client) graphqlQuery(ctx context.Context, query string, variables any, 
 	}
 
 	var gqlResp graphqlResponse
-	if err := json.NewDecoder(resp.Body).Decode(&gqlResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxDownloadBytes+1)).Decode(&gqlResp); err != nil {
 		return fmt.Errorf("decode graphql response: %w", err)
 	}
 

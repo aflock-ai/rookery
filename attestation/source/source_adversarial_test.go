@@ -324,6 +324,9 @@ func TestArchivistaSource_PartialDownloadFailure(t *testing.T) {
 func TestArchivistaSource_SeenGitoidsAccumulate(t *testing.T) {
 	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
 	envJSON, _ := json.Marshal(env)
+	// The client re-hashes the download body and rejects gitoid mismatches
+	// (#5990), so advertise and serve the envelope under its real gitoid.
+	gid := envelopeGitoid(t, envJSON)
 
 	callCount := int32(0)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -333,10 +336,10 @@ func TestArchivistaSource_SeenGitoidsAccumulate(t *testing.T) {
 			var edges []map[string]interface{}
 			if c == 1 {
 				edges = []map[string]interface{}{
-					{"node": map[string]interface{}{"gitoidSha256": "gitoid-1"}},
+					{"node": map[string]interface{}{"gitoidSha256": gid}},
 				}
 			}
-			// Second call: return empty because gitoid-1 is excluded
+			// Second call: return empty because the gitoid is excluded
 			resp := map[string]interface{}{
 				"data": map[string]interface{}{
 					"dsses": map[string]interface{}{
@@ -347,7 +350,7 @@ func TestArchivistaSource_SeenGitoidsAccumulate(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(resp)
 
-		case r.URL.Path == "/download/gitoid-1":
+		case r.URL.Path == "/download/"+gid:
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(envJSON)
 		}

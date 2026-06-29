@@ -138,33 +138,32 @@ func TestSecurity_R3_202_DownloadNewlineInGitoid(t *testing.T) {
 // Response body size limits
 // ==========================================================================
 
-// TestSecurity_R3_203_DownloadUnboundedResponseBody proves that Download
-// reads the entire response body without any size limit. A malicious
-// archivista server could send a multi-GB JSON response causing OOM.
+// TestSecurity_R3_203_DownloadResponseBodyIsBounded proves that Download now
+// caps the response body it will decode (MaxDownloadBytes), defending against
+// a malicious server streaming a multi-GB JSON response to OOM the client.
+// This test pins the in-bounds side of that contract: a legitimately large
+// (5MB) envelope, served under its true gitoid, is still accepted. The
+// out-of-bounds refusal is covered by
+// TestSecurity_Issue5990_DownloadRehashAndBound.
 //
-// BUG [HIGH]: client.go:141 — json.NewDecoder(resp.Body).Decode() reads
-// the entire response without size limit. The Store error path uses
-// readLimitedErrorBody (capped at 1MB), but the success path is unbounded.
-func TestSecurity_R3_203_DownloadUnboundedResponseBody(t *testing.T) {
-	// Server sends a large but valid JSON response.
+// FIXED (#5990): client.go Download wraps resp.Body in
+// io.LimitReader(MaxDownloadBytes+1) and rejects on overflow.
+func TestSecurity_R3_203_DownloadResponseBodyIsBounded(t *testing.T) {
+	// Server sends a large but valid JSON response, well under the cap.
 	const payloadSize = 5 << 20 // 5MB
 	largePayload := strings.Repeat("A", payloadSize)
+	body := fmt.Appendf(nil, `{"payload":"%s","payloadType":"test"}`, largePayload)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Send a huge envelope with a massive payload field.
-		fmt.Fprintf(w, `{"payload":"%s","payloadType":"test"}`, largePayload)
+		_, _ = w.Write(body)
 	}))
 	defer server.Close()
 
 	client := New(server.URL)
-	env, err := client.Download(context.Background(), "test-gitoid")
+	env, err := client.Download(context.Background(), computeGitoid(body))
 
-	// This succeeds and reads the entire 5MB into memory.
-	assert.NoError(t, err,
-		"BUG [HIGH]: Download reads entire response body with no size limit. "+
-			"A malicious server can OOM the client. File: client.go:141")
-	assert.Greater(t, len(env.Payload), payloadSize/2,
-		"BUG [HIGH]: The entire oversized response was decoded into memory")
+	assert.NoError(t, err, "a legitimate envelope under the size cap must still be accepted")
+	assert.Greater(t, len(env.Payload), payloadSize/2, "the in-bounds envelope was decoded")
 }
 
 // TestSecurity_R3_204_StoreUnboundedResponseBody proves that Store's
@@ -479,11 +478,18 @@ func TestSecurity_R3_212_ConcurrentStoreRequests(t *testing.T) {
 // TestSecurity_R3_213_ConcurrentDownloadRequests verifies that concurrent
 // Download calls on the same Client don't race.
 func TestSecurity_R3_213_ConcurrentDownloadRequests(t *testing.T) {
+	// Serve a fixed envelope and have every goroutine request the gitoid that
+	// body content-addresses to, so the re-hash binding check (#5990) passes
+	// and this test exercises only the concurrency/race surface.
+	envBody, err := json.Marshal(dsse.Envelope{
+		Payload:     []byte("{}"),
+		PayloadType: "test",
+	})
+	require.NoError(t, err)
+	gid := computeGitoid(envBody)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(dsse.Envelope{
-			Payload:     []byte("{}"),
-			PayloadType: "test",
-		})
+		_, _ = w.Write(envBody)
 	}))
 	defer server.Close()
 
@@ -497,7 +503,7 @@ func TestSecurity_R3_213_ConcurrentDownloadRequests(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			_, err := client.Download(context.Background(), fmt.Sprintf("gitoid-%d", idx))
+			_, err := client.Download(context.Background(), gid)
 			errs[idx] = err
 		}(i)
 	}
@@ -644,13 +650,17 @@ func TestSecurity_R3_217_DownloadMalformedEnvelope(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(tc.body)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Write([]byte(tc.body))
+				w.Write(body)
 			}))
 			defer server.Close()
 
+			// Request the gitoid the body actually content-addresses to, so the
+			// re-hash binding check (#5990) passes and this test exercises only
+			// the decode behavior it is about.
 			client := New(server.URL)
-			_, err := client.Download(context.Background(), "gitoid")
+			_, err := client.Download(context.Background(), computeGitoid(body))
 
 			if tc.wantErr {
 				assert.Error(t, err)
