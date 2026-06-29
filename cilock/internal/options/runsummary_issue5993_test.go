@@ -43,6 +43,19 @@ func TestSecurity_Issue5993_WriteHumanEscapesControlBytes(t *testing.T) {
 			{Name: "https://aflock.ai/attestations/file/v0.1/" + evil},
 		},
 		AssuranceLevel: evil,
+		// Same-class untrusted-fed sinks #6012 left raw (closed here, #6014-followup):
+		// the gitoid is the server-returned uploadedGitoid from Archivista (zero
+		// charset validation); tenant/identity come from the platform-login
+		// credential store (server/OIDC-influenced); and the attestor Detail is
+		// built from attestor error messages that can embed external-tool output.
+		Tenant:        evil,
+		SignerEmail:   evil,
+		Uploaded:      true,
+		ArchivistaURL: "https://archivista.example",
+		Gitoid:        "gitoid:blob:sha256:" + evil,
+		Attestors: []AttestorOutcome{
+			{Name: "sbom", Status: AttestorStatusFailed, Detail: evil},
+		},
 	}
 
 	var buf bytes.Buffer
@@ -60,5 +73,11 @@ func TestSecurity_Issue5993_WriteHumanEscapesControlBytes(t *testing.T) {
 		if strings.Contains(out, ctl.b) {
 			t.Errorf("WriteHuman output contains raw %s from untrusted field — terminal-spoofing risk (#5993); want it escaped/stripped.\noutput=%q", ctl.name, out)
 		}
+	}
+
+	// Belt-and-suspenders: the gitoid line specifically must carry the escaped
+	// form, proving the gitoid value (not merely some other line) was sanitized.
+	if !strings.Contains(out, `\x1b`) {
+		t.Errorf("expected escaped \\x1b in sanitized output; got %q", out)
 	}
 }

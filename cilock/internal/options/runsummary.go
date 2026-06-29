@@ -283,10 +283,10 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 		b.WriteString("  anchor:     (no git remote subject — attestation will NOT correlate to a repo product)\n")
 	}
 	if s.Tenant != "" {
-		fmt.Fprintf(&b, "  tenant:     %s\n", s.Tenant)
+		fmt.Fprintf(&b, "  tenant:     %s\n", sanitizeForTerminal(s.Tenant))
 	}
 	if s.SignerEmail != "" {
-		fmt.Fprintf(&b, "  identity:   %s\n", s.SignerEmail)
+		fmt.Fprintf(&b, "  identity:   %s\n", sanitizeForTerminal(s.SignerEmail))
 	}
 	fmt.Fprintf(&b, "  signer:     %s\n", orNone(s.Signer))
 	if len(s.TimestampAuthority) > 0 {
@@ -298,7 +298,7 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 	if s.Uploaded {
 		fmt.Fprintf(&b, "  archivista: %s\n", orNone(s.ArchivistaURL))
 		if s.Gitoid != "" {
-			fmt.Fprintf(&b, "  gitoid:     %s\n", s.Gitoid)
+			fmt.Fprintf(&b, "  gitoid:     %s\n", sanitizeForTerminal(s.Gitoid))
 		}
 	} else if s.ArchivistaURL != "" {
 		fmt.Fprintf(&b, "  archivista: %s (upload DISABLED — pass --enable-archivista to store)\n", s.ArchivistaURL)
@@ -307,9 +307,14 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 		fmt.Fprintf(&b, "  subjects (%d): %s\n", len(s.Subjects), strings.Join(s.subjectNames(), ", "))
 	}
 	for _, a := range s.Attestors {
+		// Name and Status are internal registry constants (the attestor's own
+		// Name() and the ran/skipped/failed vocabulary), so they're trusted. The
+		// Detail is built from attestor error messages, which can embed external
+		// tool output, file paths, and other attacker-influenceable data — so it
+		// is sanitized before it reaches the terminal (#5993).
 		fmt.Fprintf(&b, "  attestor:   %s — %s", a.Name, a.Status)
 		if a.Detail != "" {
-			b.WriteString(" (" + a.Detail + ")")
+			b.WriteString(" (" + sanitizeForTerminal(a.Detail) + ")")
 		}
 		b.WriteByte('\n')
 	}
