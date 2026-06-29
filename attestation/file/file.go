@@ -81,12 +81,44 @@ type fileResult struct {
 // attestation. Omit it (or pass the zero time) for pure input snapshots — e.g.
 // the material attestor — to keep the legacy digest-only dedup behavior.
 // Mirrors the trace path's commandrun.traceStartTime handling.
-func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob, includeGlob glob.Glob, excludeGlob glob.Glob, cmdStartTime ...time.Time) (map[string]cryptoutil.DigestSet, error) { //nolint:gocognit,gocyclo,funlen
+//
+// Symlink handling: RecordArtifacts REFUSES symlinks whose resolved target
+// escapes basePath — the safe default (GHSA-v6px-jqx8-8xwj). The dir hash fails
+// closed (race-free via os.Root) and per-file escapes are skipped, so
+// out-of-tree content can never be pulled into an attestation of an untrusted
+// tree. In-tree symlinks are still followed. Use RecordArtifactsFollowingSymlinks
+// to deliberately follow out-of-tree symlinks (e.g. recording toolchains or
+// dependency caches symlinked into a TRUSTED build tree). Symlink-cycle
+// detection and non-regular-file (FIFO/device) skipping apply in both modes.
+func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob, includeGlob glob.Glob, excludeGlob glob.Glob, cmdStartTime ...time.Time) (map[string]cryptoutil.DigestSet, error) {
+	return recordArtifactsTop(basePath, true, baseArtifacts, hashes, visitedSymlinks, processWasTraced, openedFiles, dirHashGlob, includeGlob, excludeGlob, cmdStartTime...)
+}
+
+// RecordArtifactsFollowingSymlinks is like RecordArtifacts but FOLLOWS symlinks
+// even when they resolve outside basePath, so the attestor faithfully records
+// what a build actually consumed — out-of-tree inputs (toolchains, module/
+// dependency caches symlinked into the working dir) included. Use it ONLY when
+// attesting a TRUSTED tree: an escaping symlink in an untrusted tree would pull
+// out-of-tree content into the signed attestation (GHSA-v6px-jqx8-8xwj). The
+// default RecordArtifacts is fail-closed and should be preferred unless the
+// build environment is trusted and out-of-tree fidelity is required.
+func RecordArtifactsFollowingSymlinks(basePath string, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob, includeGlob glob.Glob, excludeGlob glob.Glob, cmdStartTime ...time.Time) (map[string]cryptoutil.DigestSet, error) {
+	return recordArtifactsTop(basePath, false, baseArtifacts, hashes, visitedSymlinks, processWasTraced, openedFiles, dirHashGlob, includeGlob, excludeGlob, cmdStartTime...)
+}
+
+func recordArtifactsTop(basePath string, restrictSymlinks bool, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob, includeGlob glob.Glob, excludeGlob glob.Glob, cmdStartTime ...time.Time) (map[string]cryptoutil.DigestSet, error) {
 	var cmdStart time.Time
 	if len(cmdStartTime) > 0 {
 		cmdStart = cmdStartTime[0]
 	}
 
+	// The escape boundary (used only in restricted mode) is pinned to the
+	// original attestation root and threaded unchanged through symlink recursion,
+	// so a chained in-tree symlink cannot widen it (GHSA-v6px-jqx8-8xwj).
+	return recordArtifacts(basePath, basePath, baseArtifacts, hashes, visitedSymlinks, processWasTraced, openedFiles, dirHashGlob, includeGlob, excludeGlob, restrictSymlinks, cmdStart)
+}
+
+func recordArtifacts(basePath, root string, baseArtifacts map[string]cryptoutil.DigestSet, hashes []cryptoutil.DigestValue, visitedSymlinks map[string]struct{}, processWasTraced bool, openedFiles map[string]bool, dirHashGlob []glob.Glob, includeGlob glob.Glob, excludeGlob glob.Glob, restrictSymlinks bool, cmdStart time.Time) (map[string]cryptoutil.DigestSet, error) { //nolint:gocognit,gocyclo,funlen
 	artifacts := make(map[string]cryptoutil.DigestSet)
 
 	// Open a root so worker opens resolve beneath it. This refuses a
@@ -105,11 +137,11 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 	if fi, statErr := os.Lstat(basePath); statErr == nil && !fi.IsDir() {
 		rootDir = filepath.Dir(basePath)
 	}
-	root, err := os.OpenRoot(rootDir)
+	rootHandle, err := os.OpenRoot(rootDir)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = root.Close() }()
+	defer func() { _ = rootHandle.Close() }()
 
 	numWorkers := max(runtime.GOMAXPROCS(0), 1)
 	jobs := make(chan fileJob, numWorkers*2)
@@ -121,7 +153,7 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				digest, err := cryptoutil.CalculateDigestSetFromFileInRoot(root, job.openName, hashes)
+				digest, err := cryptoutil.CalculateDigestSetFromFileInRoot(rootHandle, job.openName, hashes)
 				results <- fileResult{relPath: job.relPath, digest: digest, mtime: job.mtime, err: err}
 			}
 		}()
@@ -152,9 +184,24 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 				}
 
 				if dirHashMatch {
-					dir, err := cryptoutil.CalculateDigestSetFromDir(path, hashes)
-					if err != nil {
-						return err
+					// Restricted (default): refuse a symlink whose target escapes the
+					// attestation root, race-free via os.Root, so no out-of-tree
+					// content enters the hash (GHSA-v6px-jqx8-8xwj). Unrestricted
+					// (opt-in): follow symlinks (incl. out-of-tree) so the dir hash
+					// faithfully records what a trusted build consumed. Either way the
+					// hash is byte-identical to the legacy dirhash for an equivalent
+					// tree.
+					var (
+						dir  cryptoutil.DigestSet
+						derr error
+					)
+					if restrictSymlinks {
+						dir, derr = cryptoutil.CalculateDigestSetFromDirWithinRoot(path, root, hashes)
+					} else {
+						dir, derr = cryptoutil.CalculateDigestSetFromDir(path, hashes)
+					}
+					if derr != nil {
+						return derr
 					}
 
 					results <- fileResult{relPath: relPath + string(os.PathSeparator), digest: dir}
@@ -173,25 +220,31 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 					return err
 				}
 
-				// Security: ensure the symlink target is within the basePath boundary.
-				// Use EvalSymlinks for both paths so they share the same prefix
-				// on systems where temp/working dirs are themselves symlinked
-				// (e.g. macOS: /var → /private/var).
-				absBase, err := filepath.Abs(basePath)
-				if err != nil {
-					return fmt.Errorf("failed to resolve base path: %w", err)
-				}
-				absBase, err = filepath.EvalSymlinks(absBase)
-				if err != nil {
-					return fmt.Errorf("failed to resolve base path symlinks: %w", err)
-				}
-				absLinked, err := filepath.Abs(linkedPath)
-				if err != nil {
-					return fmt.Errorf("failed to resolve symlink target: %w", err)
-				}
-				if !strings.HasPrefix(absLinked, absBase+string(os.PathSeparator)) && absLinked != absBase {
-					log.Debugf("(file) symlink %v points outside base path %v, skipping", path, basePath)
-					return nil
+				// RESTRICTED mode (the default): skip a symlink whose target escapes
+				// the attestation ROOT boundary — the original root threaded through
+				// recursion, NOT the per-call basePath, so a chained in-tree symlink
+				// cannot move it (GHSA-v6px-jqx8-8xwj). In the opt-in unrestricted
+				// mode the symlink is followed so the attestor records what a trusted
+				// build actually used (out-of-tree toolchains / dependency caches
+				// included). EvalSymlinks both paths so they share the same prefix
+				// where temp/working dirs are themselves symlinked (macOS /var).
+				if restrictSymlinks {
+					absRoot, err := filepath.Abs(root)
+					if err != nil {
+						return fmt.Errorf("failed to resolve attestation root: %w", err)
+					}
+					absRoot, err = filepath.EvalSymlinks(absRoot)
+					if err != nil {
+						return fmt.Errorf("failed to resolve attestation root symlinks: %w", err)
+					}
+					absLinked, err := filepath.Abs(linkedPath)
+					if err != nil {
+						return fmt.Errorf("failed to resolve symlink target: %w", err)
+					}
+					if !withinRoot(absLinked, absRoot) {
+						log.Debugf("(file) symlink %v points outside attestation root %v, skipping (restricted mode)", path, root)
+						return nil
+					}
 				}
 
 				if _, ok := visitedSymlinks[linkedPath]; ok {
@@ -199,8 +252,9 @@ func RecordArtifacts(basePath string, baseArtifacts map[string]cryptoutil.Digest
 				}
 
 				visitedSymlinks[linkedPath] = struct{}{}
-				// Recursive call handles its own parallelization
-				symlinkedArtifacts, err := RecordArtifacts(linkedPath, baseArtifacts, hashes, visitedSymlinks, processWasTraced, openedFiles, dirHashGlob, includeGlob, excludeGlob, cmdStart)
+				// Recursive call handles its own parallelization. Thread the
+				// original root and the restrict flag unchanged.
+				symlinkedArtifacts, err := recordArtifacts(linkedPath, root, baseArtifacts, hashes, visitedSymlinks, processWasTraced, openedFiles, dirHashGlob, includeGlob, excludeGlob, restrictSymlinks, cmdStart)
 				if err != nil {
 					return err
 				}
@@ -313,4 +367,18 @@ func shouldRecord(path string, artifact cryptoutil.DigestSet, baseArtifacts map[
 		}
 	}
 	return true
+}
+
+// withinRoot reports whether absPath is the attestation root itself or a
+// descendant of it. It uses filepath.Rel so the filesystem-root edge case
+// (absRoot == "/", where a naive prefix check would compare against "//" and
+// reject legitimate descendants) is handled correctly, and so a sibling-prefix
+// bypass (e.g. "/root-evil" inside "/root") is rejected. Both arguments are
+// expected to be absolute, symlink-resolved paths.
+func withinRoot(absPath, absRoot string) bool {
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }

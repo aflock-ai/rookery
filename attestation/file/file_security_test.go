@@ -182,11 +182,15 @@ func TestSecurity_R3_171_DirHashFollowsSymlinksOutsideBasePath(t *testing.T) {
 	// Place a symlink inside the vendor dir pointing to the outside secret file.
 	require.NoError(t, os.Symlink(outsideSecret, filepath.Join(vendorDir, "injected_link.txt")))
 
-	// Compute the dirHash with the symlink present (should include secret content).
 	dirGlob, err := glob.Compile("vendor")
 	require.NoError(t, err)
 
-	artifacts, err := RecordArtifacts(
+	// FIXED (GHSA-v6px-jqx8-8xwj): by DEFAULT, dir-hashing a directory that
+	// contains a symlink escaping the attestation root is refused, rather than
+	// incorporating the outside file's content into the directory hash. (The
+	// opt-in RecordArtifactsFollowingSymlinks follows it for build-input fidelity
+	// in trusted trees.)
+	_, err = RecordArtifacts(
 		inside,
 		map[string]cryptoutil.DigestSet{},
 		[]cryptoutil.DigestValue{{Hash: crypto.SHA256}},
@@ -195,16 +199,12 @@ func TestSecurity_R3_171_DirHashFollowsSymlinksOutsideBasePath(t *testing.T) {
 		map[string]bool{},
 		[]glob.Glob{dirGlob}, nil, nil,
 	)
-	require.NoError(t, err)
+	require.Error(t, err,
+		"R3-171 FIXED: restricted dir-hashing of a directory containing a symlink "+
+			"to an outside file must be refused so outside content cannot poison the hash.")
 
-	dirHashWithSymlink, ok := artifacts["vendor/"]
-	require.True(t, ok, "vendor/ should have a directory hash")
-	dhWithSymlink, err := dirHashWithSymlink.ToNameMap()
-	require.NoError(t, err)
-
-	// Now remove the symlink and recompute.
+	// With the escaping symlink removed, the directory hashes cleanly.
 	require.NoError(t, os.Remove(filepath.Join(vendorDir, "injected_link.txt")))
-
 	artifacts2, err := RecordArtifacts(
 		inside,
 		map[string]cryptoutil.DigestSet{},
@@ -215,22 +215,8 @@ func TestSecurity_R3_171_DirHashFollowsSymlinksOutsideBasePath(t *testing.T) {
 		[]glob.Glob{dirGlob}, nil, nil,
 	)
 	require.NoError(t, err)
-
-	dirHashWithout, ok := artifacts2["vendor/"]
-	require.True(t, ok, "vendor/ should still have a directory hash")
-	dhWithout, err := dirHashWithout.ToNameMap()
-	require.NoError(t, err)
-
-	// BUG PROOF: The hashes differ, which means the outside file's content
-	// was incorporated into the directory hash via the symlink.
-	assert.NotEqual(t, dhWithSymlink["dirHash"], dhWithout["dirHash"],
-		"R3-171 PROVEN: DirHash includes content from symlink pointing "+
-			"outside basePath. The dirHash changed when the symlink was "+
-			"removed, confirming outside content was incorporated.")
-
-	t.Log("R3-171 CONFIRMED: dirhash.HashDir follows symlinks inside a dirHash'd " +
-		"directory without any basePath boundary check. An attacker can poison " +
-		"the directory hash by placing a symlink to an outside file.")
+	_, ok := artifacts2["vendor/"]
+	require.True(t, ok, "vendor/ should have a directory hash once the escaping symlink is gone")
 }
 
 // ---------------------------------------------------------------------------
