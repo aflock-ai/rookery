@@ -30,11 +30,50 @@ function catalogAliasPlugin() {
  * NOTE: keep REGULATED below in sync with functions/_middleware.ts.
  */
 const FACTORS_TOKEN = process.env.FACTORS_TOKEN || 'gsvbg9jxleama3xv2kewqbvjkeqfchqx';
+// Google Ads tag id + the consent-regulated country set. REGULATED is the single
+// source of truth shared by the Consent Mode v2 head default AND the consent-banner
+// IIFE below (and, manually, functions/_lib/signals.ts) — keep all in parity.
+const AW_ID = 'AW-16567715897';
+const REGULATED = ['AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IE','IT','LV','LT','LU','MT','NL','PL','PT','RO','SK','SI','ES','SE','IS','LI','NO','GB','CH','BR','ZA','KR','JP','IN'];
 function factorsPlugin() {
   return {
     name: 'factors-ai',
     injectHtmlTags() {
       return {
+        // Google Ads via Consent Mode v2 (Advanced). The default state is set in
+        // <head> BEFORE gtag.js so it applies to the very first hit: in REGULATED
+        // regions everything ad/analytics defaults to DENIED (cookieless modeling
+        // pings only, no click-ids via ads_data_redaction); everywhere else it
+        // defaults to GRANTED (matches the banner's non-regulated auto-enable). The
+        // consent IIFE below flips DENIED→GRANTED on "Accept". send_page_view:false
+        // — page_views are sent from route() so SPA navigations count once each.
+        headTags: [
+          {
+            tagName: 'script',
+            innerHTML: `
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('consent', 'default', {
+  ad_storage: 'denied', ad_user_data: 'denied', ad_personalization: 'denied',
+  analytics_storage: 'denied', functionality_storage: 'denied',
+  personalization_storage: 'denied', security_storage: 'granted',
+  wait_for_update: 500, region: ${JSON.stringify(REGULATED)}
+});
+gtag('consent', 'default', {
+  ad_storage: 'granted', ad_user_data: 'granted', ad_personalization: 'granted',
+  analytics_storage: 'granted', functionality_storage: 'granted',
+  personalization_storage: 'granted', security_storage: 'granted'
+});
+gtag('set', 'ads_data_redaction', true);
+gtag('set', 'url_passthrough', true);
+gtag('js', new Date());
+gtag('config', '${AW_ID}', { send_page_view: false });`,
+          },
+          {
+            tagName: 'script',
+            attributes: {async: true, src: `https://www.googletagmanager.com/gtag/js?id=${AW_ID}`},
+          },
+        ],
         postBodyTags: [
           {
             tagName: 'style',
@@ -49,9 +88,20 @@ function factorsPlugin() {
             tagName: 'script',
             innerHTML: `(function () {
   var TOKEN = '${FACTORS_TOKEN}';
-  var REGULATED = ['AT','BE','BG','HR','CY','CZ','DK','EE','FI','FR','DE','GR','HU','IE','IT','LV','LT','LU','MT','NL','PL','PT','RO','SK','SI','ES','SE','IS','LI','NO','GB','CH','BR','ZA','KR','JP','IN'];
+  var REGULATED = ${JSON.stringify(REGULATED)};
   function getCookie(n) { var p = ('; ' + document.cookie).split('; ' + n + '='); return p.length === 2 ? p.pop().split(';')[0] : ''; }
   function setConsent(v) { document.cookie = 'cl_consent=' + v + '; Path=/; Max-Age=15552000; SameSite=Lax'; }
+  // Consent Mode v2: promote ad/analytics signals to granted (fired only on the
+  // consent-granted path — Accept, returning granted visitor, or non-regulated).
+  function gtagUpdateGranted() {
+    if (typeof gtag !== 'function') return;
+    gtag('consent', 'update', { ad_storage: 'granted', ad_user_data: 'granted', ad_personalization: 'granted', analytics_storage: 'granted', functionality_storage: 'granted', personalization_storage: 'granted' });
+  }
+  // One Google Ads page_view per (initial + SPA) navigation, for remarketing reach.
+  function gtagPageView() {
+    if (typeof gtag !== 'function') return;
+    gtag('event', 'page_view', { page_path: location.pathname + location.search, send_to: '${AW_ID}' });
+  }
   function loadFactors() {
     window.faitracker = window.faitracker || (function () {
       this.q = [];
@@ -98,8 +148,8 @@ function factorsPlugin() {
       var h = document.body.scrollHeight || 1, d = Math.round((window.scrollY + window.innerHeight) / h * 100);
       if (d > maxScroll) maxScroll = d > 100 ? 100 : d;
     }, { passive: true });
-    function route() { send('eng'); path = location.pathname; t0 = now(); maxScroll = 0; sent = false; send('pv'); }
-    ['pushState', 'replaceState'].forEach(function (m) { var o = history[m]; history[m] = function () { route(); return o.apply(this, arguments); }; });
+    function route() { send('eng'); path = location.pathname; t0 = now(); maxScroll = 0; sent = false; send('pv'); gtagPageView(); }
+    ['pushState', 'replaceState'].forEach(function (m) { var o = history[m]; history[m] = function () { var r = o.apply(this, arguments); route(); return r; }; });
     window.addEventListener('popstate', route);
     document.addEventListener('input', function (ev) {
       var t = ev.target;
@@ -131,7 +181,7 @@ function factorsPlugin() {
   }
   function enable() { loadFactors(); startBeacon(); }
   function dismiss() { var b = document.getElementById('cl-consent'); if (b && b.parentNode) b.parentNode.removeChild(b); }
-  function accept() { setConsent('granted'); dismiss(); enable(); }
+  function accept() { setConsent('granted'); dismiss(); enable(); gtagUpdateGranted(); gtagPageView(); }
   function decline() { setConsent('denied'); dismiss(); }
   function banner() {
     if (document.getElementById('cl-consent')) return;
@@ -151,9 +201,9 @@ function factorsPlugin() {
   var zone = (params.get('consent_zone') || '').toUpperCase();
   var country = zone || getCookie('cf_country');
   var regulated = !country || REGULATED.indexOf(country) >= 0;
-  if (consent === 'granted') { enable(); }
-  else if (consent === 'denied') { /* respect denial */ }
-  else if (!regulated) { setConsent('granted'); enable(); }
+  if (consent === 'granted') { enable(); gtagUpdateGranted(); gtagPageView(); }
+  else if (consent === 'denied') { /* respect denial; the denied Consent Mode default stands (cookieless modeling only) */ }
+  else if (!regulated) { setConsent('granted'); enable(); gtagUpdateGranted(); gtagPageView(); }
   else { banner(); }
 })();`,
           },
