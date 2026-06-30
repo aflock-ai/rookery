@@ -11,6 +11,7 @@
     "publish:release": "node scripts/publish-release.mjs",
     "start": "docusaurus start",
     "build": "docusaurus build",
+    "postbuild": "node scripts/strip-build-nul.mjs",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
