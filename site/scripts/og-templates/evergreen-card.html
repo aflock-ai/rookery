@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1200px; height:630px; }
+  body {
+    width:1200px; height:630px;
+    font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background:
+      radial-gradient(880px 520px at 86% -14%, rgba(111,163,247,0.26) 0%, transparent 58%),
+      linear-gradient(158deg, #0e1320 0%, #0a0e17 56%, #070a11 100%);
+    color: #eaf0fb;
+    position: relative; overflow: hidden;
+    padding: 64px 72px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .top { display:flex; align-items:center; justify-content:space-between; }
+  .brand { display:flex; align-items:baseline; gap:13px; }
+  .mark { color:#6fa3f7; font-size:30px; line-height:1; }
+  .wordmark { font-size:27px; font-weight:800; letter-spacing:-0.01em; }
+  .eyebrow {
+    font-size:18px; font-weight:700; letter-spacing:0.14em; color:#8aa6d6;
+    border:1px solid rgba(138,166,214,0.32); border-radius:999px; padding:9px 17px;
+  }
+  .hero { margin-top:4px; }
+  .headline { font-size:72px; font-weight:800; line-height:1.04; letter-spacing:-0.025em; color:#ffffff; max-width:16ch; }
+  .accent { color:#6fa3f7; }
+  .sub { font-size:30px; font-weight:600; color:#aebfe0; margin-top:18px; letter-spacing:-0.01em; }
+  .hl { display:flex; gap:14px; margin-top:30px; }
+  .pillr {
+    display:inline-flex; align-items:center; gap:11px;
+    padding:13px 22px; border-radius:999px;
+    background: rgba(52,208,88,0.10); border:1px solid rgba(52,208,88,0.30);
+    font-size:23px; font-weight:600; color:#dff3e6;
+  }
+  .check { color:#34d058; font-weight:900; }
+  .foot { display:flex; align-items:center; justify-content:space-between; }
+  .domain { font-size:25px; font-weight:800; color:#6fa3f7; }
+  .trust { font-size:18px; color:#7e90b3; letter-spacing:0.02em; }
+</style></head>
+<body>
+  <div class="top">
+    <div class="brand"><span class="mark">&#9650;</span><span class="wordmark">CI/lock</span></div>
+    <span class="eyebrow">SUPPLY-CHAIN EVIDENCE</span>
+  </div>
+  <div class="hero">
+    <div class="headline">Prove what your pipeline <span class="accent">actually ran.</span></div>
+    <div class="sub">Keyless signed evidence. Human-signed release gates.</div>
+    <div class="hl">
+      <span class="pillr"><span class="check">&#10003;</span> Wrap any command</span>
+      <span class="pillr"><span class="check">&#10003;</span> Sign what executed</span>
+      <span class="pillr"><span class="check">&#10003;</span> Gate the release</span>
+    </div>
+  </div>
+  <div class="foot">
+    <span class="domain">cilock.dev</span>
+    <span class="trust">in-toto &middot; DSSE &middot; keyless Fulcio &middot; RFC&nbsp;3161 TSA</span>
+  </div>
+</body>
+</html>

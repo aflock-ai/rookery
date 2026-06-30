@@ -254,3 +254,182 @@ details[open] > .verSummary::before {
   border-top: 1px solid var(--ifm-color-emphasis-200);
   font-size: 0.9rem;
 }
+
+/* ── Release banner — share-optimized hero (trust + AI changelog recap) ─── */
+.banner {
+  position: relative;
+  margin: 0 0 2.5rem;
+  padding: 1.75rem 1.9rem;
+  border: 1px solid color-mix(in srgb, var(--ifm-color-primary) 32%, var(--ifm-color-emphasis-300));
+  border-radius: 16px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--ifm-color-primary) 11%, var(--ifm-background-surface-color)) 0%,
+    var(--ifm-background-surface-color) 62%
+  );
+  overflow: hidden;
+}
+
+/* soft corner glow — pure decoration, sits behind the content */
+.bannerGlow {
+  position: absolute;
+  top: -45%;
+  right: -8%;
+  width: 360px;
+  height: 360px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--ifm-color-primary) 24%, transparent) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+}
+
+.bannerHead {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.9rem;
+  margin-bottom: 1.1rem;
+}
+
+.bannerMark {
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.bannerLogo {
+  color: var(--ifm-color-primary);
+}
+
+.bannerVer {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--ifm-color-primary);
+}
+
+.bannerDate {
+  margin-left: auto;
+  color: var(--ifm-color-emphasis-600);
+  font-size: 0.9rem;
+}
+
+.trustRow {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.6rem;
+  list-style: none;
+  margin: 0 0 1.25rem;
+  padding: 0;
+}
+
+.trustRow li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--ifm-color-success) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ifm-color-success) 32%, transparent);
+}
+
+.check {
+  color: var(--ifm-color-success);
+  font-weight: 800;
+}
+
+.recap {
+  position: relative;
+  margin: 0 0 1.4rem;
+  padding: 0.1rem 0 0.1rem 1rem;
+  border-left: 3px solid var(--ifm-color-primary);
+}
+
+.recapLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ifm-color-emphasis-600);
+}
+
+.aiSpark {
+  color: var(--ifm-color-primary);
+  font-size: 0.85rem;
+}
+
+.recapText {
+  margin: 0;
+  font-size: 1.08rem;
+  line-height: 1.5;
+  color: var(--ifm-color-emphasis-800);
+  max-width: 70ch;
+}
+
+.bannerActions {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.bannerActions .cmd {
+  flex: 1;
+  min-width: 260px;
+}
+
+.shareBtns {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.shareBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.95rem;
+  border-radius: 8px;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-color-emphasis-800);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none !important;
+  white-space: nowrap;
+}
+
+.shareBtn:hover {
+  border-color: var(--ifm-color-primary);
+  color: var(--ifm-color-primary);
+}
+
+@media (max-width: 640px) {
+  .banner {
+    padding: 1.4rem 1.25rem;
+  }
+  .bannerDate {
+    margin-left: 0;
+    width: 100%;
+  }
+  .bannerActions .cmd {
+    min-width: 100%;
+  }
+  .shareBtns {
+    width: 100%;
+  }
+  .shareBtn {
+    flex: 1;
+    justify-content: center;
+  }
+}

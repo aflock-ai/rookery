@@ -1,5 +1,6 @@
 import React, {useEffect, useState} from 'react';
 import Layout from '@theme/Layout';
+import Head from '@docusaurus/Head';
 import Heading from '@theme/Heading';
 import Link from '@docusaurus/Link';
 import TrustCenter from '../components/TrustCenter';
@@ -30,7 +31,17 @@ type Verification = {
   tsaChain?: string;
   attestations?: AttestationEntry[];
 };
-type ManifestVersion = {version: string; released?: string; files: ManifestFile[]; verification?: Verification};
+// `recap` is a short, plain-language "what's new" summary, generated at
+// release-cut and stored in the manifest so the page needs no rebuild per
+// release. PUBLIC + trust-focused by construction — the generator strips any
+// platform URL, customer name, or internal-infra detail (see gen:recap).
+type ManifestVersion = {
+  version: string;
+  released?: string;
+  files: ManifestFile[];
+  verification?: Verification;
+  recap?: string;
+};
 type Manifest = {schema: number; latest: string; updated?: string; versions: ManifestVersion[]};
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -39,6 +50,42 @@ const PLATFORM_LABEL: Record<string, string> = {
   'darwin-amd64': 'macOS · Intel',
   'darwin-arm64': 'macOS · Apple Silicon',
 };
+
+// Fallback recaps for releases published before the manifest carried `recap`.
+// Hand-written, PUBLIC, trust-forward — NO platform URLs, customer names, or
+// internal infrastructure. Once a version's manifest entry includes `recap`,
+// that wins and the fallback is unused.
+const RELEASE_RECAPS: Record<string, string> = {
+  'v3.5.1':
+    'Sharper supply-chain guarantees: terminal output is now sanitized against ' +
+    'injection, and every binary is verified against a signed release policy before ' +
+    'it can publish — failing closed on any tamper or misconfiguration. Safer ' +
+    'binaries, more reliable releases, fully verifiable offline.',
+};
+
+// Share targets for the release card. The page URL + a public, trust-forward
+// blurb — no internal or customer detail ever reaches a social post.
+const SHARE_PAGE_URL = 'https://cilock.dev/download/';
+const shareBlurb = (v?: string) =>
+  `CI/lock${v ? ' ' + v : ''} — a signed, policy-verified supply-chain CLI. ` +
+  `Every binary is verified against a signed release policy before publish, and you can verify it yourself, fully offline.`;
+// LinkedIn's share-offsite endpoint honors ONLY `url=` — it pulls all card text
+// from the page's OG tags (the legacy shareArticle title/summary params were
+// deprecated ~2018 and are ignored). So the trust pitch must live in og:title /
+// og:description, NOT here.
+const linkedInShareUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(SHARE_PAGE_URL)}`;
+// x.com is the canonical intent host (twitter.com only works via a 307 redirect).
+// X honors prefilled text; the version is sourced live from the manifest so it
+// never goes stale.
+const xShareUrl = (v?: string) =>
+  `https://x.com/intent/tweet?text=${encodeURIComponent(shareBlurb(v))}&url=${encodeURIComponent(SHARE_PAGE_URL)}`;
+
+function fmtReleaseDate(d?: string): string | null {
+  if (!d) return null;
+  const t = Date.parse(d);
+  if (Number.isNaN(t)) return null;
+  return new Date(t).toLocaleDateString(undefined, {year: 'numeric', month: 'short', day: 'numeric'});
+}
 
 function fmtSize(bytes: number): string {
   if (!bytes) return '';
@@ -150,6 +197,79 @@ function cilockAtts(ver: ManifestVersion): AttestationEntry[] {
   return (ver.verification?.attestations ?? []).filter((a) => isCilockFile(a.binary));
 }
 
+// The share-optimized release hero: version + trust signals + the AI changelog
+// recap + install/share actions. Built to be screenshot-worthy for LinkedIn/X AND
+// to read as the page's lede. Every value shown is public + trust-focused — no
+// platform URL, customer, or internal detail is rendered here.
+function ReleaseBanner({
+  ver,
+  recap,
+  isPre,
+}: {
+  ver?: ManifestVersion;
+  recap?: string;
+  isPre: boolean;
+}): React.ReactElement {
+  const v = ver?.version;
+  const released = fmtReleaseDate(ver?.released);
+  return (
+    <section className={styles.banner} aria-label={`CI/lock ${v ?? ''} release`}>
+      <div className={styles.bannerGlow} aria-hidden="true" />
+      <div className={styles.bannerHead}>
+        <span className={styles.bannerMark}>
+          <span className={styles.bannerLogo} aria-hidden="true">▲</span> CI/lock
+        </span>
+        {v && <span className={styles.bannerVer}>{v}</span>}
+        {isPre && <span className={styles.preBadge}>pre-release</span>}
+        {released && <span className={styles.bannerDate}>released {released}</span>}
+      </div>
+
+      <ul className={styles.trustRow}>
+        <li>
+          <span className={styles.check}>✓</span> Keyless-signed
+        </li>
+        <li>
+          <span className={styles.check}>✓</span> Policy-verified before publish
+        </li>
+        <li>
+          <span className={styles.check}>✓</span> Verifiable offline
+        </li>
+      </ul>
+
+      {recap && (
+        <div className={styles.recap}>
+          <div className={styles.recapLabel}>
+            <span className={styles.aiSpark} aria-hidden="true">✦</span> What's new — AI recap
+          </div>
+          <p className={styles.recapText}>{recap}</p>
+        </div>
+      )}
+
+      <div className={styles.bannerActions}>
+        <CopyCmd cmd={INSTALL_CMD} />
+        <div className={styles.shareBtns}>
+          <a
+            className={styles.shareBtn}
+            href={linkedInShareUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Share on LinkedIn">
+            <span aria-hidden="true">in</span> Share
+          </a>
+          <a
+            className={styles.shareBtn}
+            href={xShareUrl(v)}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Share on X">
+            <span aria-hidden="true">𝕏</span> Share
+          </a>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function DownloadInner(): React.ReactElement {
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -192,6 +312,16 @@ function DownloadInner(): React.ReactElement {
       <Heading as="h1" className={styles.title}>
         Download CI/lock
       </Heading>
+
+      {/* Share-optimized release hero: trust signals + AI changelog recap. The
+          recap prefers the manifest's `recap` (generated at release-cut) and
+          falls back to RELEASE_RECAPS for versions that predate the field. */}
+      <ReleaseBanner
+        ver={ver}
+        recap={ver ? ver.recap ?? RELEASE_RECAPS[ver.version] : undefined}
+        isPre={headlinePre}
+      />
+
       <p className={styles.lede}>
         Static, single-file binaries — signed by the TestifySec platform Fulcio + TSA and
         uploaded only after the release pipeline verifies each one against the signed release
@@ -494,11 +624,49 @@ function DownloadInner(): React.ReactElement {
   );
 }
 
+// Social-share / Open Graph metadata. Social crawlers (LinkedIn, X, Slack,
+// Discord, iMessage…) do NOT execute JavaScript, so the unfurl card is built
+// ENTIRELY from these static tags — the client-rendered release banner above is
+// invisible to them. Rules baked in here:
+//   • og:image is an ABSOLUTE https URL — relative/non-https images are silently
+//     dropped by LinkedIn + X.
+//   • It's a PER-RELEASE card on a VERSIONED filename (/img/og/v3.5.1.png). The
+//     versioned path is the cache fix: static/_headers marks /img/* immutable, so a
+//     fixed filename + LinkedIn's ~7-day snapshot = a guaranteed-stale card; a new
+//     filename each release means the immutable header works FOR us (always fresh,
+//     never mis-announces a version). Bump this to the current version each release
+//     (the card is regenerated from the HTML template in static/img/og/).
+//   • twitter:card=summary_large_image → the edge-to-edge banner, not a thumbnail.
+//   • All copy is public + trust-forward — no platform URL, customer, or internal
+//     detail (matches the page's privacy rule).
+const OG_URL = 'https://cilock.dev/download/';
+const OG_IMAGE = 'https://cilock.dev/img/og/v3.5.1.png';
+const OG_TITLE = 'CI/lock — prove what your pipeline actually ran';
+const OG_DESCRIPTION =
+  'CI/lock wraps any command in your pipeline and signs cryptographic proof of exactly what ran — then blocks the release if a human-signed policy says no. Keyless, portable, verifiable offline.';
+const OG_IMAGE_ALT =
+  'CI/lock v3.5.1 — signed pipeline evidence; keyless Fulcio + TSA, verifiable offline';
+
 export default function DownloadPage(): React.ReactElement {
   return (
-    <Layout
-      title="Download CI/lock"
-      description="Download CI/lock — static, platform-signed binaries for Linux and macOS (amd64/arm64), verified against the signed release policy before publish. Served from cilock.dev.">
+    <Layout title="Download CI/lock" description={OG_DESCRIPTION}>
+      <Head>
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="CI/lock" />
+        <meta property="og:url" content={OG_URL} />
+        <meta property="og:title" content={OG_TITLE} />
+        <meta property="og:description" content={OG_DESCRIPTION} />
+        <meta property="og:image" content={OG_IMAGE} />
+        <meta property="og:image:type" content="image/png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta property="og:image:alt" content={OG_IMAGE_ALT} />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={OG_TITLE} />
+        <meta name="twitter:description" content={OG_DESCRIPTION} />
+        <meta name="twitter:image" content={OG_IMAGE} />
+        <meta name="twitter:image:alt" content={OG_IMAGE_ALT} />
+      </Head>
       <DownloadInner />
     </Layout>
   );

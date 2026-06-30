@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1200px; height:630px; }
+  body {
+    width:1200px; height:630px;
+    font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background:
+      radial-gradient(880px 520px at 86% -14%, rgba(111,163,247,0.26) 0%, transparent 58%),
+      linear-gradient(158deg, #0e1320 0%, #0a0e17 56%, #070a11 100%);
+    color: #eaf0fb;
+    position: relative; overflow: hidden;
+    padding: 64px 72px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  /* TOP band — brand lockup + product hook (left), RELEASE pill (right) */
+  .top { display:flex; align-items:center; justify-content:space-between; }
+  .brand { display:flex; align-items:baseline; gap:13px; }
+  .mark { color:#6fa3f7; font-size:30px; line-height:1; }
+  .wordmark { font-size:27px; font-weight:800; letter-spacing:-0.01em; }
+  .hook { color:#93a7cc; font-size:21px; font-weight:500; }
+  .pill {
+    display:inline-flex; align-items:center; gap:10px;
+    padding:12px 22px; border-radius:999px;
+    background: #f5b544; /*BADGE*/
+    color:#1a1206;
+    font-size:19px; font-weight:800; letter-spacing:0.12em;
+    box-shadow: 0 0 32px rgba(245,181,68,0.55); /*GLOW*/
+  }
+  .dot { width:9px; height:9px; border-radius:50%; background:#1a1206; opacity:0.65; display:inline-block; }
+  /* HERO band — big version + 1-line recap */
+  .hero { margin-top:6px; }
+  .ver { font-family: ui-monospace,'SF Mono',Menlo,monospace; font-size:118px; font-weight:800; line-height:0.95; letter-spacing:-0.03em; color:#6fa3f7; }
+  .recap { font-size:33px; font-weight:600; color:#ffffff; margin-top:14px; letter-spacing:-0.01em; }
+  /* highlights */
+  .hl { display:flex; flex-direction:column; gap:11px; margin-top:26px; }
+  .hl div { display:flex; align-items:center; gap:13px; font-size:25px; color:#cdd9ef; }
+  .check { color:#34d058; font-weight:900; font-size:24px; }
+  /* FOOTER */
+  .foot { display:flex; align-items:center; justify-content:space-between; }
+  .domain { font-size:25px; font-weight:800; color:#6fa3f7; }
+  .trust { font-size:18px; color:#7e90b3; letter-spacing:0.02em; }
+</style></head>
+<body>
+  <div class="top">
+    <div class="brand">
+      <span class="mark">&#9650;</span>
+      <span class="wordmark">CI/lock</span>
+      <span class="hook">— prove what your pipeline actually ran</span>
+    </div>
+    <span class="pill"><span class="dot"></span> NEW RELEASE</span>
+  </div>
+
+  <div class="hero">
+    <div class="ver">v3.5.1</div>
+    <div class="recap">Hardened signing pipeline &mdash; every binary verified before it ships.</div>
+    <div class="hl">
+      <div><span class="check">&#10003;</span> Terminal output injection-sanitized</div>
+      <div><span class="check">&#10003;</span> Every release verified against signed policy before publish</div>
+      <div><span class="check">&#10003;</span> Offline verify &mdash; no platform access needed</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span class="domain">cilock.dev</span>
+    <span class="trust">in-toto &middot; DSSE &middot; keyless Fulcio &middot; RFC&nbsp;3161 TSA</span>
+  </div>
+</body>
+</html>
