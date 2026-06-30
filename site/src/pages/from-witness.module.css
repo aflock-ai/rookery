@@ -1,0 +1,73 @@
+/* /from-witness — message-match landing page for the "built Witness" ad
+   traffic. Reuses download.module.css for the shell (wrap/title/lede/cmd);
+   this module adds the CTA row, the three scannable blocks, and the optics
+   line. */
+
+.ctaRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  margin-top: 1rem;
+}
+
+.secondaryCta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 1.3rem;
+  border-radius: 8px;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  background: var(--ifm-background-surface-color);
+  color: var(--ifm-color-emphasis-800);
+  font-weight: 600;
+  text-decoration: none !important;
+  white-space: nowrap;
+}
+
+.secondaryCta:hover {
+  border-color: var(--ifm-color-primary);
+  color: var(--ifm-color-primary);
+}
+
+.tertiaryCta {
+  font-size: 0.9rem;
+  color: var(--ifm-color-emphasis-600);
+}
+
+/* three scannable blocks */
+.blocks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+}
+
+.block {
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 12px;
+  padding: 1.4rem 1.5rem;
+  background: var(--ifm-background-surface-color);
+}
+
+.blockTitle {
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+.blockBody {
+  margin: 0;
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.97rem;
+  line-height: 1.55;
+}
+
+/* optics / trust line — Witness is our donated CNCF project */
+.optics {
+  margin-top: 2.5rem;
+  padding: 0.9rem 1.25rem;
+  border-left: 3px solid var(--ifm-color-primary);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ifm-color-primary) 6%, transparent);
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.95rem;
+}

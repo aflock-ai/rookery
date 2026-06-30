@@ -4,6 +4,7 @@ import Head from '@docusaurus/Head';
 import Heading from '@theme/Heading';
 import Link from '@docusaurus/Link';
 import TrustCenter from '../components/TrustCenter';
+import {fireConversion} from '../lib/adsConversions';
 import styles from './download.module.css';
 
 // CI/lock binaries are distributed ONLY from cilock.dev (Cloudflare R2 + the /dl
@@ -107,7 +108,15 @@ function detectPlatform(): string | null {
   return null;
 }
 
-function CopyCmd({cmd, big}: {cmd: string; big?: boolean}): React.ReactElement {
+function CopyCmd({
+  cmd,
+  big,
+  onCopy,
+}: {
+  cmd: string;
+  big?: boolean;
+  onCopy?: () => void;
+}): React.ReactElement {
   const [copied, setCopied] = useState(false);
   return (
     <div className={`${styles.cmd} ${big ? styles.cmdBig : ''}`}>
@@ -122,6 +131,7 @@ function CopyCmd({cmd, big}: {cmd: string; big?: boolean}): React.ReactElement {
             navigator.clipboard.writeText(cmd).then(() => {
               setCopied(true);
               setTimeout(() => setCopied(false), 1600);
+              onCopy?.();
             });
           }
         }}>
@@ -337,7 +347,9 @@ function DownloadInner(): React.ReactElement {
           Auto-detects your OS/arch, resolves the latest version from the manifest, and verifies
           the SHA-256 against the signed checksums before installing.
         </p>
-        <CopyCmd cmd={INSTALL_CMD} big />
+        {/* Copying the install command is the primary Ads conversion signal.
+            Guarded no-op until a label is filled (see adsConversions.ts). */}
+        <CopyCmd cmd={INSTALL_CMD} big onCopy={() => fireConversion('installCopy', 20)} />
         <p className={styles.muted} style={{marginTop: '0.6rem'}}>
           Prefer Homebrew, Docker, or a SHA-pinned GitHub Action?{' '}
           <Link to="/getting-started/installation">See all install methods →</Link>
