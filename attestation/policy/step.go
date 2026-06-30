@@ -81,6 +81,28 @@ type ExternalAttestation struct {
 	Required      bool          `json:"required" jsonschema:"title=Required,description=When true (default), verification fails if no envelope matches; when false, absence is tolerated"`
 }
 
+// UnmarshalJSON applies the documented default for Required: when the "required"
+// key is ABSENT, the external attestation is treated as REQUIRED (fail-closed),
+// matching the jsonschema contract ("When true (default), verification fails if
+// no envelope matches"). Without this, the Go zero value (false) would silently
+// turn a mandatory external (e.g. SLSA provenance or a VSA) into an optional
+// one, so a policy author who omits the field per the documented default gets an
+// unenforced gate. An explicit "required": false still opts out.
+func (e *ExternalAttestation) UnmarshalJSON(data []byte) error {
+	type alias ExternalAttestation
+	if err := json.Unmarshal(data, (*alias)(e)); err != nil {
+		return err
+	}
+	var probe struct {
+		Required *bool `json:"required"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	e.Required = probe.Required == nil || *probe.Required
+	return nil
+}
+
 // +kubebuilder:object:generate=true
 type Functionary struct {
 	Type           string         `json:"type" jsonschema:"title=Type,description=Type of functionary (publickey or root)"`
