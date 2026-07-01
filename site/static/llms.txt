@@ -12,40 +12,40 @@ Cilock catches supply-chain attacks at three independent layers: prevention (sig
 
 ## Docs
 
-- [Introduction](https://cilock.dev/intro): the full long-form overview, including the March 2026 Trivy and LiteLLM supply-chain attacks that motivated the three-layer defense design.
-- [Installation](https://cilock.dev/getting-started/installation): brew, curl, Docker, and SHA-pinned GitHub Action options.
-- [First attestation](https://cilock.dev/getting-started/first-attestation): produce a signed attestation from a single command in under a minute.
-- [Quickstart for CI](https://cilock.dev/getting-started/quickstart-ci): GitHub Actions and GitLab CI quickstarts.
+- [Introduction](https://cilock.dev/intro/): the full long-form overview, including the March 2026 Trivy and LiteLLM supply-chain attacks that motivated the three-layer defense design.
+- [Installation](https://cilock.dev/getting-started/installation/): brew, curl, Docker, and SHA-pinned GitHub Action options.
+- [First attestation](https://cilock.dev/getting-started/first-attestation/): produce a signed attestation from a single command in under a minute.
+- [Quickstart for CI](https://cilock.dev/getting-started/quickstart-ci/): GitHub Actions and GitLab CI quickstarts.
 
 ## Concepts
 
-- [Attestations](https://cilock.dev/concepts/attestations): the DSSE + in-toto envelope model, subjects, predicates, and how cilock's collection wraps lifecycle steps.
-- [Attestors](https://cilock.dev/concepts/attestors): per-lifecycle-phase plugins (git, environment, commandrun, sbom, secretscan, and more).
-- [Policy verification](https://cilock.dev/concepts/policy-verification): signed policies, functionaries, embedded OPA Rego rules.
-- [Trust model](https://cilock.dev/concepts/trust-model): keyless signing with Sigstore Fulcio, RFC 3161 TSA, FIPS 140 mode, and how cilock handles the trust boundary.
+- [Attestations](https://cilock.dev/concepts/attestations/): the DSSE + in-toto envelope model, subjects, predicates, and how cilock's collection wraps lifecycle steps.
+- [Attestors](https://cilock.dev/concepts/attestors/): per-lifecycle-phase plugins (git, environment, commandrun, sbom, secretscan, and more).
+- [Policy verification](https://cilock.dev/concepts/policy-verification/): signed policies, functionaries, embedded OPA Rego rules.
+- [Trust model](https://cilock.dev/concepts/trust-model/): keyless signing with Sigstore Fulcio, RFC 3161 TSA, FIPS 140 mode, and how cilock handles the trust boundary.
 
 ## Tutorials
 
-- [GitHub Actions pipeline](https://cilock.dev/tutorials/github-actions-pipeline): wrap a CI pipeline with cilock end-to-end.
-- [GitLab CI pipeline](https://cilock.dev/tutorials/gitlab-ci-pipeline): the GitLab equivalent.
-- [Release promotion gate](https://cilock.dev/tutorials/release-promotion-gate): verify a release candidate against a signed policy before shipping.
-- [SBOM and SARIF evidence](https://cilock.dev/tutorials/sbom-and-sarif-evidence): collect signed scan evidence from SBOM generators and SAST emitters.
-- [Defending against supply-chain attacks](https://cilock.dev/tutorials/defending-against-supply-chain-attacks): how cilock's three layers stop the 2026 Trivy tag-rewrite and LiteLLM `.pth` attacks.
+- [GitHub Actions pipeline](https://cilock.dev/tutorials/github-actions-pipeline/): wrap a CI pipeline with cilock end-to-end.
+- [GitLab CI pipeline](https://cilock.dev/tutorials/gitlab-ci-pipeline/): the GitLab equivalent.
+- [Release promotion gate](https://cilock.dev/tutorials/release-promotion-gate/): verify a release candidate against a signed policy before shipping.
+- [SBOM and SARIF evidence](https://cilock.dev/tutorials/sbom-and-sarif-evidence/): collect signed scan evidence from SBOM generators and SAST emitters.
+- [Defending against supply-chain attacks](https://cilock.dev/tutorials/defending-against-supply-chain-attacks/): how cilock's three layers stop the 2026 Trivy tag-rewrite and LiteLLM `.pth` attacks.
 
 ## Reference
 
-- [CLI reference](https://cilock.dev/reference/cli): every flag, every subcommand.
-- [Attestor catalog](https://cilock.dev/reference/attestor-catalog): the 30+ attestors registered in the default binary plus the full rookery set.
-- [Policy schema](https://cilock.dev/reference/policy-schema): DSSE policy payload type, structure, and validation.
-- [Configuration](https://cilock.dev/reference/configuration): config-file and environment-variable surface.
-- [Compatibility](https://cilock.dev/reference/compatibility): Go version, OS support, FIPS mode, witness interop.
+- [CLI reference](https://cilock.dev/reference/cli/): every flag, every subcommand.
+- [Attestor catalog](https://cilock.dev/reference/attestor-catalog/): the 30+ attestors registered in the default binary plus the full rookery set.
+- [Policy schema](https://cilock.dev/reference/policy-schema/): DSSE policy payload type, structure, and validation.
+- [Configuration](https://cilock.dev/reference/configuration/): config-file and environment-variable surface.
+- [Compatibility](https://cilock.dev/reference/compatibility/): Go version, OS support, FIPS mode, witness interop.
 
 ## Ecosystem
 
-- [Rookery](https://cilock.dev/ecosystem/rookery): the modular monorepo cilock is built from. The rookery builder produces custom binaries with selected attestors and signers.
-- [Archivista](https://cilock.dev/ecosystem/archivista): the default evidence store. Graph-indexed in-toto attestations, GraphQL query API, REST upload/download.
-- [TestifySec platform](https://cilock.dev/ecosystem/testifysec-platform): the commercial platform layered on top of cilock with centralized policy management, compliance reporting, and dashboards.
-- [Witness](https://cilock.dev/ecosystem/witness): TestifySec's first in-toto implementation, now in the CNCF in-toto ecosystem. Cilock is bidirectionally interoperable with witness.
+- [Rookery](https://cilock.dev/ecosystem/rookery/): the modular monorepo cilock is built from. The rookery builder produces custom binaries with selected attestors and signers.
+- [Archivista](https://cilock.dev/ecosystem/archivista/): the default evidence store. Graph-indexed in-toto attestations, GraphQL query API, REST upload/download.
+- [TestifySec platform](https://cilock.dev/ecosystem/testifysec-platform/): the commercial platform layered on top of cilock with centralized policy management, compliance reporting, and dashboards.
+- [Witness](https://cilock.dev/ecosystem/witness/): TestifySec's first in-toto implementation, now in the CNCF in-toto ecosystem. Cilock is bidirectionally interoperable with witness.
 
 ## Why cilock is positioned this way
 

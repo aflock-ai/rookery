@@ -1,5 +1,6 @@
 ---
-title: Signing & identity
+title: Keyless CI/CD provenance signing with Fulcio & OIDC
+description: How CI/lock signs in-toto attestations — keyless with Sigstore Fulcio and CI OIDC (GitHub Actions, GitLab CI) or with a file key — and how policy functionaries decide which signer is trusted to sign for each step.
 sidebar_position: 4
 ---
 

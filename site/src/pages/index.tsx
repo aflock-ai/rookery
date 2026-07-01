@@ -1,5 +1,6 @@
 import React from 'react';
 import Link from '@docusaurus/Link';
+import Head from '@docusaurus/Head';
 import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
@@ -595,12 +596,45 @@ function NextSteps() {
   );
 }
 
+const HOMEPAGE_DESCRIPTION =
+  "CI/lock collects trusted telemetry across every checkpoint between commit and production — CI/CD builds, security scans (SAST/DAST/SBOM), runtime + cluster integrity (Falco, Linkerd mTLS, kube-bench), and continuous compliance (CSPM, FIPS, STIG). Signed as in-toto evidence for FedRAMP 20x, the EU Cyber Resilience Act, NIST 800-204D, SLSA, CMMC, and human-controlled cryptographic gates for AI-agent workflows. Witness-compatible, built on the rookery attestor factory.";
+
+const STRUCTURED_DATA = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'SoftwareApplication',
+      name: 'CI/lock',
+      applicationCategory: 'DeveloperApplication',
+      operatingSystem: 'Linux, macOS, Windows',
+      url: 'https://cilock.dev',
+      description: HOMEPAGE_DESCRIPTION,
+      license: 'Apache-2.0',
+      offers: {
+        '@type': 'Offer',
+        price: '0',
+        priceCurrency: 'USD',
+      },
+    },
+    {
+      '@type': 'Organization',
+      name: 'TestifySec',
+      url: 'https://www.testifysec.com',
+    },
+  ],
+};
+
 export default function Home(): React.ReactElement {
   const {siteConfig} = useDocusaurusContext();
   return (
     <Layout
       title={`${siteConfig.title} — Trusted telemetry for every checkpoint between commit and production`}
-      description="CI/lock collects trusted telemetry across every checkpoint between commit and production — CI/CD builds, security scans (SAST/DAST/SBOM), runtime + cluster integrity (Falco, Linkerd mTLS, kube-bench), and continuous compliance (CSPM, FIPS, STIG). Signed as in-toto evidence for FedRAMP 20x, the EU Cyber Resilience Act, NIST 800-204D, SLSA, CMMC, and human-controlled cryptographic gates for AI-agent workflows. Witness-compatible, built on the rookery attestor factory.">
+      description={HOMEPAGE_DESCRIPTION}>
+      <Head>
+        <script type="application/ld+json">
+          {JSON.stringify(STRUCTURED_DATA)}
+        </script>
+      </Head>
       <Hero />
       <main>
         <UseCaseCarousel />

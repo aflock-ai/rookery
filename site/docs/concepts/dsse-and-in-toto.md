@@ -1,5 +1,6 @@
 ---
-title: DSSE & in-toto
+title: in-toto attestations & the DSSE envelope, explained
+description: What DSSE (Dead Simple Signing Envelope) and in-toto are, and how CI/lock uses them to package signed, interoperable supply-chain evidence — payload, payloadType, and signatures — that other tools can verify.
 sidebar_position: 3
 ---
 

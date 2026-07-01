@@ -1,5 +1,6 @@
 ---
-title: GitHub Actions end-to-end
+title: Generate & verify SLSA provenance in GitHub Actions
+description: Wrap a GitHub Actions pipeline with CI/lock to produce signed, keyless (Fulcio + GitHub OIDC) in-toto attestations for every build step, timestamped with Sigstore TSA and uploaded to Archivista — SLSA-aligned CI/CD provenance end to end.
 sidebar_position: 2
 ---
 

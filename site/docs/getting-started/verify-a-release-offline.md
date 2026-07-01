@@ -1,6 +1,6 @@
 ---
 id: verify-a-release-offline
-title: Verify a release offline (no platform needed)
+title: Verify SLSA provenance offline (air-gapped, no platform)
 description: Verify a downloaded CI/lock binary FULLY OFFLINE — using only the DSSE attestation envelopes, Fulcio + Root CA, and RFC 3161 TSA chain published alongside the binary on cilock.dev. No TestifySec platform, tenant, or Archivista access required. For air-gapped and zero-trust verifiers.
 sidebar_position: 6
 ---
