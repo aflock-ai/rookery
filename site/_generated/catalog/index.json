@@ -1,6 +1,6 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 128,
+  "count": 131,
   "withDoc": 55,
   "emittedBy": {
     "sbom": [
@@ -70,6 +70,19 @@
       "hasDoc": false
     },
     {
+      "name": "asff",
+      "source": "attestor-backed",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Captures AWS Security Finding Format (ASFF) reports from AWS Security Hub (typically the output of `aws securityhub get-findings`).",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/asff/v0.1",
+      "runType": "postproduct",
+      "hasDoc": false
+    },
+    {
       "name": "aws",
       "source": "attestor-backed",
       "categories": [
@@ -94,6 +107,19 @@
       "predicateType": "https://aflock.ai/attestations/aws-codebuild/v0.1",
       "runType": "prematerial",
       "hasDoc": true
+    },
+    {
+      "name": "aws-config",
+      "source": "attestor-backed",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Captures AWS Config compliance state for resources (output of `aws configservice get-compliance-details-by-config-rule` and related calls).",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/aws-config/v0.1",
+      "runType": "postproduct",
+      "hasDoc": false
     },
     {
       "name": "aws-guardduty",
@@ -488,6 +514,19 @@
       "predicateType": "https://aflock.ai/attestations/docker/v0.1",
       "runType": "postproduct",
       "hasDoc": true
+    },
+    {
+      "name": "docker-bench",
+      "source": "attestor-backed",
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
+      "description": "Captures Docker Bench for Security CIS benchmark results.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/docker-bench/v0.1",
+      "runType": "postproduct",
+      "hasDoc": false
     },
     {
       "name": "drone-ci",

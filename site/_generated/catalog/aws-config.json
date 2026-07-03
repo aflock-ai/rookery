@@ -1,0 +1,55 @@
+{
+  "name": "aws-config",
+  "source": "attestor-backed",
+  "description": "Captures AWS Config compliance state for resources (output of `aws configservice get-compliance-details-by-config-rule` and related calls).",
+  "title": "aws-config",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "compliance-scan"
+  ],
+  "primaryCategory": "compliance-scan",
+  "upstream": {
+    "name": "AWS Config",
+    "source": "https://aws.amazon.com/config/",
+    "license": "proprietary",
+    "vendor": "Amazon Web Services"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "aws configservice"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "aws configservice"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "aws-config*.json | **/aws-config*.json"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "AWS Config compliance snapshot captured."
+  },
+  "predicateType": "https://aflock.ai/attestations/aws-config/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- aws configservice .",
+  "detectionCommand": "cilock plan --format=json -- aws configservice [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"aws configservice\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

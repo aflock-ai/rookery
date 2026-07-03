@@ -1,0 +1,55 @@
+{
+  "name": "asff",
+  "source": "attestor-backed",
+  "description": "Captures AWS Security Finding Format (ASFF) reports from AWS Security Hub (typically the output of `aws securityhub get-findings`).",
+  "title": "asff",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "compliance-scan"
+  ],
+  "primaryCategory": "compliance-scan",
+  "upstream": {
+    "name": "AWS Security Finding Format (ASFF)",
+    "source": "https://docs.aws.amazon.com/securityhub/latest/userguide/securityhub-findings-format.html",
+    "license": "proprietary",
+    "vendor": "Amazon Web Services"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "aws securityhub get-findings"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "*.asff.json | **/*.asff.json | asff*.json | **/asff*.json"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "aws securityhub get-findings"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "ASFF findings captured. AWS Security Hub posture preserved."
+  },
+  "predicateType": "https://aflock.ai/attestations/asff/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- aws securityhub get-findings .",
+  "detectionCommand": "cilock plan --format=json -- aws securityhub get-findings [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"aws securityhub get-findings\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

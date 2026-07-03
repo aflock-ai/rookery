@@ -1,0 +1,65 @@
+{
+  "name": "docker-bench",
+  "source": "attestor-backed",
+  "description": "Captures Docker Bench for Security CIS benchmark results.",
+  "title": "docker-bench",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "compliance-scan"
+  ],
+  "primaryCategory": "compliance-scan",
+  "upstream": {
+    "name": "Docker Bench for Security",
+    "source": "https://github.com/docker/docker-bench-security",
+    "license": "Apache-2.0",
+    "vendor": "Docker, Inc."
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "docker-bench-security"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "docker-bench-security.sh"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "docker-bench-security"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "docker-bench-security.sh"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "docker-bench*.json | **/docker-bench*.json | docker-bench*.log | **/docker-bench*.log"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Docker Bench results captured. CIS Docker benchmark outcomes preserved."
+  },
+  "predicateType": "https://aflock.ai/attestations/docker-bench/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- docker-bench-security .",
+  "detectionCommand": "cilock plan --format=json -- docker-bench-security [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"docker-bench-security\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

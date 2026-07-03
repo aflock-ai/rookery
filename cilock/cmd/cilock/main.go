@@ -12,11 +12,14 @@ import (
 	_ "github.com/aflock-ai/rookery/cilock/internal/attestors/platform"
 
 	// All attestor plugins
+	_ "github.com/aflock-ai/rookery/plugins/attestors/asff"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-config"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-iid"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/configuration"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/docker"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/docker-bench"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/environment"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/falco"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/gcp-iit"

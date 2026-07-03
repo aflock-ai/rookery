@@ -8,7 +8,11 @@ replace github.com/aflock-ai/rookery/attestation => ../attestation
 replace github.com/aflock-ai/rookery/platformauth => ../platformauth
 
 // Attestor plugins
+replace github.com/aflock-ai/rookery/plugins/attestors/asff => ../plugins/attestors/asff
+
 replace github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild => ../plugins/attestors/aws-codebuild
+
+replace github.com/aflock-ai/rookery/plugins/attestors/aws-config => ../plugins/attestors/aws-config
 
 replace github.com/aflock-ai/rookery/plugins/attestors/aws-iid => ../plugins/attestors/aws-iid
 
@@ -19,6 +23,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf => ../plu
 replace github.com/aflock-ai/rookery/plugins/attestors/configuration => ../plugins/attestors/configuration
 
 replace github.com/aflock-ai/rookery/plugins/attestors/docker => ../plugins/attestors/docker
+
+replace github.com/aflock-ai/rookery/plugins/attestors/docker-bench => ../plugins/attestors/docker-bench
 
 replace github.com/aflock-ai/rookery/plugins/attestors/environment => ../plugins/attestors/environment
 
@@ -124,11 +130,14 @@ replace github.com/aflock-ai/rookery/plugins/signers/vault-transit => ../plugins
 require (
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/platformauth v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/asff v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/aws-config v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-iid v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/commandrun v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/configuration v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/docker v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/docker-bench v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/environment v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/falco v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gcp-iit v0.0.0-00010101000000-000000000000
