@@ -74,41 +74,38 @@ func TestAdversarial_CheckCertConstraint_DuplicateConstraintsDifferentCounts(t *
 }
 
 // ===========================================================================
-// FINDING 2 (HIGH): checkCertConstraint does NOT support glob patterns for
-// multi-value fields (DNSNames, Emails, Organizations, URIs), unlike
-// checkCertConstraintGlob which is used for CommonName.
-//
-// A policy with constraint ["*.example.com"] for DNS names requires the
-// cert to have EXACTLY the string "*.example.com" as a DNS SAN -- it does
-// NOT match "foo.example.com" via glob expansion. This is a significant
-// inconsistency that could lead to policy bypass.
+// FINDING 2 (HIGH) — FIXED (#5746): checkCertConstraint now GLOB-matches
+// multi-value fields (DNSNames, Emails, Organizations, URIs) whenever a
+// constraint value carries a glob metacharacter (* ? { [), matching
+// checkCertConstraintGlob's behavior for CommonName. A constraint with NO glob
+// char still exact-matches (no behavior change for existing exact policies).
+// These tests previously pinned the exact-only behavior (assert.Error); they now
+// document the glob-match fix (assert.NoError).
 // ===========================================================================
 
 func TestAdversarial_CheckCertConstraint_NoGlobSupportForDNSNames(t *testing.T) {
-	// Policy expects "*.example.com" to match "foo.example.com" for DNS names,
-	// the same way CommonName glob matching works. But checkCertConstraint
-	// uses exact string matching, not glob matching.
+	// "*.example.com" now matches "foo.example.com" for DNS names via glob
+	// expansion, the same way CommonName glob matching works.
 	err := checkCertConstraint("dns name",
-		[]string{"*.example.com"},   // Policy author thinks this is a glob
+		[]string{"*.example.com"},   // glob constraint
 		[]string{"foo.example.com"}, // Cert has a matching DNS name
 	)
-	// BUG: This FAILS because "*.example.com" != "foo.example.com" (exact match).
-	// The policy author expects glob matching like CommonName gets.
-	assert.Error(t, err,
-		"CONFIRMED: checkCertConstraint does NOT support glob matching. "+
-			"A constraint of '*.example.com' requires the literal string, not a wildcard match. "+
-			"This is inconsistent with checkCertConstraintGlob behavior for CommonName.")
+	// FIXED (#5746, F2): the glob metachar '*' triggers glob matching for the
+	// multi-value DNS field, so "*.example.com" matches "foo.example.com".
+	assert.NoError(t, err,
+		"FIXED (#5746, F2): checkCertConstraint glob-matches multi-value SAN fields; "+
+			"'*.example.com' now matches 'foo.example.com', consistent with CommonName.")
 }
 
 func TestAdversarial_CheckCertConstraint_GlobInEmailConstraint(t *testing.T) {
-	// An email constraint with a glob pattern
+	// An email constraint with a glob pattern now matches via glob expansion.
 	err := checkCertConstraint("email",
-		[]string{"*@example.com"},     // Policy author thinks this matches any @example.com
+		[]string{"*@example.com"},     // glob constraint: any @example.com address
 		[]string{"alice@example.com"}, // Cert has a matching email
 	)
-	assert.Error(t, err,
-		"CONFIRMED: email constraints do not support glob patterns. "+
-			"'*@example.com' requires the cert to have exactly '*@example.com' as an email SAN.")
+	assert.NoError(t, err,
+		"FIXED (#5746, F2): email constraints support glob patterns; "+
+			"'*@example.com' matches 'alice@example.com'.")
 }
 
 // ===========================================================================
@@ -227,34 +224,30 @@ func TestAdversarial_CheckCertConstraintGlob_DoubleStarAllowsAll(t *testing.T) {
 }
 
 func TestAdversarial_CheckCertConstraintGlob_NonStarGlobCharsNotSupported(t *testing.T) {
-	// BUG: checkCertConstraintGlob at line 152 checks strings.Contains(constraint, "*")
-	// to decide whether to use glob matching. This means glob patterns that use
-	// "?", "[...]", or "{...}" WITHOUT any "*" are treated as literal strings
-	// and go to the exact-match path. This is a real bug.
+	// FIXED (#5746, F2): checkCertConstraintGlob now triggers glob mode on ANY
+	// glob metacharacter (globMetaChars = "*?{["), not only "*". So patterns
+	// using "?", "[...]", or "{...}" WITHOUT any "*" are glob-matched, not
+	// treated as literal strings.
 
-	// "?" should match any single character in glob semantics, but it goes
-	// to exact match because the constraint has no "*".
+	// "?" matches any single character in glob semantics.
 	err := checkCertConstraintGlob("common name", "?.example.com", "a.example.com")
-	assert.Error(t, err,
-		"BUG CONFIRMED: '?' glob pattern is treated as a literal string "+
-			"because checkCertConstraintGlob only checks for '*' to trigger glob mode. "+
-			"The pattern '?.example.com' requires the cert CN to be literally '?.example.com'. "+
-			"This silently breaks any policy using ?, [...], or {...} glob patterns without *.")
+	assert.NoError(t, err,
+		"FIXED (#5746, F2): '?' triggers glob mode; '?.example.com' matches 'a.example.com'.")
 
-	// Same issue with character classes
+	// Character classes are honored.
 	err = checkCertConstraintGlob("common name", "[abc].example.com", "a.example.com")
-	assert.Error(t, err,
-		"BUG CONFIRMED: '[abc]' character class is treated as a literal string")
+	assert.NoError(t, err,
+		"FIXED (#5746, F2): '[abc]' character class glob-matches 'a.example.com'.")
 
-	// Same issue with alternation
+	// Alternation is honored.
 	err = checkCertConstraintGlob("common name", "{foo,bar}.example.com", "foo.example.com")
-	assert.Error(t, err,
-		"BUG CONFIRMED: '{foo,bar}' alternation is treated as a literal string")
+	assert.NoError(t, err,
+		"FIXED (#5746, F2): '{foo,bar}' alternation glob-matches 'foo.example.com'.")
 
-	// Workaround: combining non-star globs with * triggers glob mode
+	// Combining non-star globs with * also works (glob mode either way).
 	err = checkCertConstraintGlob("common name", "{foo,bar}*", "foo")
 	assert.NoError(t, err,
-		"Adding a '*' to the pattern activates glob mode, making other glob chars work")
+		"A '*' also activates glob mode, making other glob chars work")
 }
 
 // ===========================================================================
@@ -429,20 +422,21 @@ func TestAdversarial_ValidateAttestations_EmptyAttestationsPassesAnything(t *tes
 	}
 
 	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
-	// BUG: This passes because the for loop over s.Attestations does nothing,
-	// and passed remains true.
-	assert.Len(t, result.Passed, 1,
-		"CONFIRMED: A step with no required attestations passes any collection. "+
-			"This is a policy misconfiguration vector -- forgetting to list attestations "+
-			"means the step is effectively a no-op.")
+	// FIXED (#5746, F9): a step with no required attestations is a misconfigured
+	// no-op gate and now fails CLOSED — the collection is rejected, not passed.
+	assert.Empty(t, result.Passed,
+		"FIXED (#5746, F9): a step with no required attestations rejects (fail closed) "+
+			"instead of rubber-stamping any collection.")
+	assert.Len(t, result.Rejected, 1,
+		"the no-requirements collection is rejected with a fail-closed reason")
 }
 
 // ===========================================================================
-// FINDING 10 (MEDIUM): validateAttestations collection name matching
-// allows empty collection names to bypass the name filter.
-//
-// At line 255: if collection.Collection.Name != s.Name && collection.Collection.Name != ""
-// An empty collection name will NOT be skipped, so it always matches any step.
+// FINDING 10 (MEDIUM) — FIXED (#5746): validateAttestations now requires EXACT
+// step-name equality. An empty collection name no longer acts as a wildcard —
+// only a collection explicitly named for the step is considered (fail closed).
+// This test previously pinned the empty-name-matches-any bypass (Passed len 1);
+// it now documents the fix (no passed collections for a name-less collection).
 // ===========================================================================
 
 func TestAdversarial_ValidateAttestations_EmptyCollectionNameMatchesAnyStep(t *testing.T) {
@@ -470,12 +464,11 @@ func TestAdversarial_ValidateAttestations_EmptyCollectionNameMatchesAnyStep(t *t
 	}
 
 	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
-	// The empty-name collection is NOT skipped (line 255 condition), so it's validated
-	// against the "build" step's attestations.
-	assert.Len(t, result.Passed, 1,
-		"CONFIRMED: A collection with an empty name matches any step. "+
-			"An attacker who can produce a collection with an empty name can bypass "+
-			"the step-name filter.")
+	// FIXED (#5746, F10): the empty-name collection does NOT match the "build"
+	// step (exact name equality required), so it is skipped — not passed.
+	assert.Empty(t, result.Passed,
+		"FIXED (#5746, F10): a collection with an empty name no longer matches every "+
+			"step; only an exact step-name match is considered (fail closed).")
 }
 
 // ===========================================================================
@@ -532,7 +525,17 @@ func TestAdversarial_Verify_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 	require.NoError(t, err)
 
 	stepName := "build"
-	coll := attestation.Collection{Name: stepName}
+	attType := "https://example.com/att/v1"
+	// The step declares a required attestation (post-#5746 F9: a step with no
+	// required attestations fails closed), so the dedup behavior under test is
+	// isolated from the empty-attestations fail-closed path.
+	coll := attestation.Collection{
+		Name: stepName,
+		Attestations: []attestation.CollectionAttestation{{
+			Type:        attType,
+			Attestation: &marshalableAttestor{AttName: "att", AttType: attType},
+		}},
+	}
 
 	cvr := source.CollectionVerificationResult{
 		Verifiers: []cryptoutil.Verifier{verifier},
@@ -549,7 +552,8 @@ func TestAdversarial_Verify_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
 			stepName: {
-				Name: stepName,
+				Name:         stepName,
+				Attestations: []Attestation{{Type: attType}},
 				Functionaries: []Functionary{
 					{PublicKeyID: keyID},
 				},
@@ -575,23 +579,24 @@ func TestAdversarial_Verify_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 }
 
 // ===========================================================================
-// FINDING 13 (HIGH): checkCertConstraint AllowAllConstraint only checks
-// position [0] of the Roots slice. If the wildcard appears at any other
-// position (e.g., ["specific-root", "*"]), it is NOT treated as a wildcard.
+// FINDING 13 (HIGH) — FIXED (#5746): checkCertConstraint honors the AllowAll
+// wildcard ("*") at ANY position in the constraint list, not only index 0. A
+// list like ["specific-root", "*"] means "allow any value". This test previously
+// pinned the position-0-only bug (assert.Error); it now documents the fix
+// (assert.NoError). See hasAllowAll in constraints.go (F13/F18).
 // ===========================================================================
 
 func TestAdversarial_CheckCertConstraint_WildcardNotAtIndex0(t *testing.T) {
-	// AllowAllConstraint at index 1 -- does it still act as wildcard?
+	// AllowAllConstraint at index 1 now acts as a wildcard (F13/F18).
 	err := checkCertConstraint("org",
 		[]string{"specific", AllowAllConstraint},
 		[]string{"anything"},
 	)
-	// The check at line 176 only fires if len==1 && [0]==AllowAllConstraint.
-	// With two elements, the wildcard at index 1 is treated as a literal "*".
-	assert.Error(t, err,
-		"CONFIRMED: '*' at non-zero index is treated as a literal string, not a wildcard. "+
-			"constraints=['specific', '*'] does NOT allow all values -- it requires "+
-			"the cert to have exactly 'specific' and '*' as values.")
+	// FIXED (#5746, F13/F18): hasAllowAll scans every position, so a "*" anywhere
+	// in the list means "allow any value".
+	assert.NoError(t, err,
+		"FIXED (#5746, F13/F18): '*' at any position is honored as a wildcard; "+
+			"constraints=['specific', '*'] allows all values.")
 }
 
 // ===========================================================================
@@ -687,8 +692,12 @@ func TestAdversarial_CheckCertConstraintGlob_WhitespaceInValue(t *testing.T) {
 }
 
 // ===========================================================================
-// FINDING 17 (MEDIUM): buildStepContext last-writer-wins for duplicate
-// attestation types across multiple passed collections.
+// FINDING 17 (MEDIUM) — FIXED (#5746): buildStepContext is now FIRST-writer-wins
+// for duplicate attestation types across multiple passed collections. A second
+// passed collection presenting the same attestation type must NOT overwrite the
+// first (legitimate) one in the cross-step Rego context — that was a shadowing
+// vector. This test previously pinned last-writer-wins ("second-scan"); it now
+// documents the first-writer-wins fix ("first-scan").
 // ===========================================================================
 
 func TestAdversarial_BuildStepContext_LastWriterWins(t *testing.T) {
@@ -743,33 +752,32 @@ func TestAdversarial_BuildStepContext_LastWriterWins(t *testing.T) {
 	attData, ok := scanCtx[attType].(map[string]interface{})
 	require.True(t, ok)
 
-	// The second passed collection overwrites the first for the same attestation type
-	assert.Equal(t, "second-scan", attData["name"],
-		"CONFIRMED: buildStepContext uses last-writer-wins. "+
-			"If an attacker can get a second signed collection for the same step and "+
-			"attestation type, their data overwrites the legitimate collection's data "+
-			"in the cross-step context visible to Rego policies.")
+	// FIXED (#5746, F17): the FIRST passed collection wins; the second collection
+	// with the same attestation type does NOT overwrite it.
+	assert.Equal(t, "first-scan", attData["name"],
+		"FIXED (#5746, F17): buildStepContext is first-writer-wins. A second signed "+
+			"collection for the same step and attestation type can no longer shadow the "+
+			"first (legitimate) collection's data in the cross-step Rego context.")
 }
 
 // ===========================================================================
-// FINDING 18 (MEDIUM): checkCertConstraint with AllowAllConstraint for
-// multi-value fields only works at the exact position constraints[0].
-// A constraint list like ["A", "*"] does not have wildcard semantics --
-// it requires the cert to have values ["A", "*"] exactly.
+// FINDING 18 (MEDIUM) — FIXED (#5746): checkCertConstraint honors the AllowAll
+// wildcard ("*") for multi-value fields at ANY position, not only constraints[0].
+// A list like ["A", "*"] means "allow any value". This test previously pinned the
+// position-0-only bug (assert.Error); it now documents the fix (assert.NoError).
 // ===========================================================================
 
 func TestAdversarial_CheckCertConstraint_AllowAllNotFirstElement(t *testing.T) {
-	// AllowAllConstraint mixed with other constraints
+	// AllowAllConstraint mixed with other constraints now allows all values.
 	err := checkCertConstraint("email",
 		[]string{"admin@example.com", AllowAllConstraint},
 		[]string{"admin@example.com", "other@example.com"},
 	)
-	// The check at line 176 only fires if len==1 && [0]=="*".
-	// Here len==2, so "*" is treated literally.
-	// The cert has "other@example.com" which is not in constraints, so it fails.
-	assert.Error(t, err,
-		"'*' mixed with other constraints is treated as a literal string, "+
-			"not as a wildcard. This is likely unexpected behavior for policy authors.")
+	// FIXED (#5746, F13/F18): hasAllowAll honors "*" at any position, so the list
+	// ["admin@example.com", "*"] allows any email value.
+	assert.NoError(t, err,
+		"FIXED (#5746, F13/F18): '*' mixed with other constraints is honored as a "+
+			"wildcard at any position, allowing all values.")
 }
 
 // ===========================================================================

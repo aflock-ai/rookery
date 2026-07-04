@@ -342,14 +342,15 @@ func TestVerify_CheckCertConstraint_SetEquality(t *testing.T) {
 // ===========================================================================
 
 func TestVerify_CheckCertConstraint_DuplicateConstraintWeakening(t *testing.T) {
-	// Finding: FV-006 | Severity: HIGH | Duplicate constraint collapse
-	// Description: Duplicate constraints are silently deduplicated by the
-	// unmet map, weakening the constraint set. This test PROVES the bug
-	// exists by asserting the (incorrect but current) behavior passes.
+	// Finding: FV-006 | Severity: HIGH | Duplicate constraint collapse — FIXED (#5746, F1)
+	// Description: Duplicate constraints are now count-preserved (no longer
+	// collapsed via the unmet map), so a duplicate constraint requires that many
+	// matching cert values. This test previously pinned the fail-open collapse
+	// (assert.NoError); it now documents the fail-closed fix (assert.Error).
 	err := checkCertConstraint("org", []string{"ACME", "ACME"}, []string{"ACME"})
-	// BUG: This SHOULD fail because the policy has 2 constraints but the cert
-	// only has 1 value. Instead it passes because the map deduplicates.
-	assert.NoError(t, err, "BUG PROVEN: duplicate constraints collapse via map dedup, silently weakening the constraint set")
+	// FIXED: the policy has 2 constraints but the cert has only 1 value, so it
+	// fails closed — the duplicate is no longer silently dropped.
+	assert.Error(t, err, "FIXED (#5746, F1): duplicate constraints are count-preserved; a cert with one 'ACME' cannot satisfy two required occurrences")
 }
 
 // ===========================================================================
@@ -378,32 +379,26 @@ func TestVerify_CheckCertConstraint_DuplicateValueRejection(t *testing.T) {
 // ===========================================================================
 
 func TestVerify_CheckCertConstraint_EmptyStringNormalization(t *testing.T) {
-	// Finding: FV-008 | Severity: MEDIUM | Empty string normalization edge cases
-	// Description: The function normalizes single-element [""] to [], but
-	// multi-element ["", ""] is NOT normalized. This creates inconsistency.
+	// Finding: FV-008 | Severity: MEDIUM | Empty string normalization — FIXED (#5746, F11)
+	// Description: dropEmpty now removes empty-string elements at ALL positions
+	// (not just a single-element special case) on BOTH the constraint and value
+	// sides, so the prior asymmetry between [""] and ["", ""] is closed — an empty
+	// string carries no SAN identity and is normalized away consistently.
 
-	// Single empty string -> normalized to empty
+	// Single empty string -> normalized away on both sides -> empty==empty pass.
 	err := checkCertConstraint("dns", []string{""}, []string{""})
 	assert.NoError(t, err, "single empty string on both sides normalizes to empty==empty")
 
-	// Two empty strings in constraints -> NOT normalized by the single-element check.
-	// The map `unmet` deduplicates "" to one entry. But values [""] IS normalized
-	// to [] (single empty string rule). So unmet has 1 entry but 0 values iterate.
-	// Result: len(unmet) > 0 -> error.
-	//
-	// This is inconsistent: ["", ""] constraints with [""] values fails, but
-	// [""] constraints with [""] values passes. The two-element form doesn't
-	// get the single-element normalization.
+	// Two empty strings in constraints -> ALL empties dropped (F11), leaving []
+	// constraints; values [""] also drops to []. Empty constraints + empty values
+	// pass (no SAN required, cert presents none).
 	err = checkCertConstraint("dns", []string{"", ""}, []string{""})
-	assert.Error(t, err, "two empty strings in constraints are not normalized, but values [''] is normalized to [], creating asymmetry")
+	assert.NoError(t, err, "FIXED (#5746, F11): empty strings are dropped at all positions on both sides; ['',''] constraints normalize to [] and pass against [''] values")
 
-	// However: ["", ""] constraints with ["", ""] values DOES pass because
-	// map dedup makes unmet have 1 entry, and values ["", ""] has first ""
-	// that deletes it plus second "" that is "unexpected".
+	// ["", ""] constraints with ["", ""] values: all empties dropped on both
+	// sides -> [] vs [] -> pass. The prior map-dedup 'unexpected' asymmetry is gone.
 	err = checkCertConstraint("dns", []string{"", ""}, []string{"", ""})
-	// BUG: Map dedup means 2 constraints -> 1 unmet entry. First value deletes it.
-	// Second value has no entry in unmet -> "unexpected" error.
-	assert.Error(t, err, "BUG PROVEN: duplicate constraints collapse via map, second value is 'unexpected'")
+	assert.NoError(t, err, "FIXED (#5746, F11): duplicate empty strings normalize away symmetrically; ['',''] vs ['',''] now passes")
 }
 
 // ===========================================================================
@@ -754,11 +749,11 @@ func TestVerify_CheckCertConstraintGlob_EdgeCases(t *testing.T) {
 		desc       string
 	}{
 		{
-			name:       "empty constraint allows all",
+			name:       "empty constraint fails closed",
 			constraint: "",
 			value:      "anything",
-			wantErr:    false,
-			desc:       "empty constraint is permissive",
+			wantErr:    true,
+			desc:       "FIXED (#5746, F5): empty CommonName constraint fails closed; require '*' to allow any",
 		},
 		{
 			name:       "star constraint allows all",

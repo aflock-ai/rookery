@@ -1060,14 +1060,16 @@ func TestAdversarial_BuildStepContext_LastWriterWins_SecurityImplication(t *test
 	scanCtx := ctx["scan"].(map[string]interface{})
 	attData := scanCtx[attType].(map[string]interface{})
 
-	// The second collection overwrites the first
+	// FIXED (#5746, F17): first writer wins -- the legitimate first collection is
+	// preserved; the attacker's second collection does NOT overwrite it.
 	actualName := attData["name"]
-	assert.Equal(t, "attacker-scan", actualName,
-		"CONFIRMED: Last writer wins -- attacker's scan data overwrites legitimate scan data. "+
-			"If an attacker can get a second collection signed and verified, they can control "+
-			"what downstream Rego policies see for this attestation type.")
-	t.Log("SECURITY ISSUE: buildStepContext uses last-writer-wins for overlapping " +
-		"attestation types across multiple passed collections")
+	assert.Equal(t, "legit-scan", actualName,
+		"FIXED (#5746, F17): buildStepContext is first-writer-wins. Even if an attacker "+
+			"gets a second collection signed and verified for the same attestation type, "+
+			"they cannot overwrite the legitimate first collection's data that downstream "+
+			"Rego policies see.")
+	t.Log("FIXED: buildStepContext uses first-writer-wins for overlapping " +
+		"attestation types across multiple passed collections (shadowing prevented)")
 }
 
 // ===========================================================================

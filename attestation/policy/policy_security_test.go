@@ -647,11 +647,11 @@ func TestSecurity_R3_155_AllowAllConstraintWithEmptyFieldsBypassesAllChecks(t *t
 	}
 
 	// A CertConstraint where ALL fields are empty/default, and Roots is ["*"].
-	// The cert has no Org/DNS/Email/URI, so those checks trivially pass.
-	// CN is "" (empty constraint = allow any CN).
+	// The cert has no Org/DNS/Email/URI. CN is "" — which, post-#5746 (F5), now
+	// FAILS CLOSED rather than silently allowing any CN.
 	// Roots = ["*"] matches any root in the trust bundle.
 	cc := CertConstraint{
-		CommonName:    "",                           // Empty = allow any CN
+		CommonName:    "",                           // Empty CN now fails closed (F5)
 		Organizations: nil,                          // nil = no constraint (passes if cert also has none)
 		Emails:        nil,                          // nil = no constraint
 		DNSNames:      nil,                          // nil = no constraint
@@ -659,16 +659,17 @@ func TestSecurity_R3_155_AllowAllConstraintWithEmptyFieldsBypassesAllChecks(t *t
 		Roots:         []string{AllowAllConstraint}, // Match any root
 	}
 
+	// FIXED (#5746, F5): the empty CommonName constraint fails closed. The
+	// all-empty-constraint bypass is closed — a forgotten/blank CN no longer
+	// silently accepts an attacker-controlled certificate; the author must opt in
+	// to "allow any" explicitly with "*".
 	err = cc.Check(x509Verifier, trustBundles)
 	if err == nil {
-		t.Log("SECURITY FINDING CONFIRMED: CertConstraint with all empty fields and " +
-			"Roots=[\"*\"] matches ANY certificate (that lacks SANs/Orgs) from ANY " +
-			"trusted root. The certificate CN='evil-attacker.com' passed all checks. " +
-			"A policy author who specifies only Roots=[\"*\"] without explicit CN/Org " +
-			"constraints effectively accepts any certificate from any root, making " +
-			"the functionary constraint meaningless for identity verification.")
-	} else {
-		t.Fatalf("Expected cert to pass all-empty constraints, got: %v", err)
+		t.Fatal("FIXED (#5746, F5): expected an all-empty CertConstraint (empty CommonName) " +
+			"to FAIL CLOSED, but Check passed — the bypass would still be open.")
+	}
+	if !strings.Contains(err.Error(), "common name constraint is empty") {
+		t.Errorf("FIXED (#5746, F5): expected the empty-CommonName fail-closed error, got: %v", err)
 	}
 }
 
@@ -988,7 +989,14 @@ func TestSecurity_R3_161_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 	verifier, keyID := secMakeVerifierAndKeyID(t)
 
 	stepName := "build"
-	cvr := secMakeCVR(stepName, verifier)
+	attType := "https://example.com/att/v1"
+	// The step declares a required attestation (post-#5746 F9: a step with no
+	// required attestations fails closed), isolating the cross-depth dedup
+	// behavior under test from the empty-attestations fail-closed path.
+	cvr := secMakeCVR(stepName, verifier, attestation.CollectionAttestation{
+		Type:        attType,
+		Attestation: &secMarshalableAttestor{AttName: "att", AttType: attType},
+	})
 
 	// Source always returns the same collection.
 	src := &secMockVerifiedSource{
@@ -1002,6 +1010,7 @@ func TestSecurity_R3_161_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 		Steps: map[string]Step{
 			stepName: {
 				Name:          stepName,
+				Attestations:  []Attestation{{Type: attType}},
 				Functionaries: []Functionary{{PublicKeyID: keyID}},
 			},
 		},
@@ -1020,15 +1029,14 @@ func TestSecurity_R3_161_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 		t.Fatal("expected Verify to pass")
 	}
 
+	// FIXED (#5746, F12): the same collection re-discovered across all 3 depth
+	// iterations is de-duplicated to a SINGLE Passed entry (mergePassedCollections
+	// keys by content), not accumulated once per depth iteration.
 	passedCount := len(results[stepName].Passed)
-	if passedCount > 1 {
-		t.Logf("CORRECTNESS BUG CONFIRMED: Step '%s' has %d passed collections "+
-			"(expected 1) due to accumulation across %d depth iterations. "+
-			"While not directly exploitable, this inflates results and could "+
-			"affect downstream logic that counts passed collections.",
-			stepName, passedCount, 3)
-	} else {
-		t.Logf("Step '%s' has %d passed collection(s) across 3 depth iterations", stepName, passedCount)
+	if passedCount != 1 {
+		t.Errorf("FIXED (#5746, F12): step %q must have exactly 1 passed collection after "+
+			"cross-depth de-duplication, got %d (accumulation across depth iterations "+
+			"must not inflate the count)", stepName, passedCount)
 	}
 }
 
@@ -1223,19 +1231,19 @@ func TestSecurity_R3_165_GlobCharactersWithoutStarTreatedAsLiteral(t *testing.T)
 			name:       "question_mark_without_star",
 			constraint: "?.example.com",
 			value:      "a.example.com",
-			expectErr:  true, // Should match in glob but treated as literal
+			expectErr:  false, // FIXED (F2): '?' triggers glob mode, matches any single char
 		},
 		{
 			name:       "character_class_without_star",
 			constraint: "[abc].example.com",
 			value:      "a.example.com",
-			expectErr:  true, // Should match in glob but treated as literal
+			expectErr:  false, // FIXED (F2): '[abc]' triggers glob mode, matches
 		},
 		{
 			name:       "alternation_without_star",
 			constraint: "{foo,bar}.example.com",
 			value:      "foo.example.com",
-			expectErr:  true, // Should match in glob but treated as literal
+			expectErr:  false, // FIXED (F2): '{foo,bar}' triggers glob mode, matches
 		},
 		{
 			name:       "question_mark_WITH_star",
@@ -1245,6 +1253,9 @@ func TestSecurity_R3_165_GlobCharactersWithoutStarTreatedAsLiteral(t *testing.T)
 		},
 	}
 
+	// FIXED (#5746, F2): checkCertConstraintGlob triggers glob mode on ANY glob
+	// metacharacter (globMetaChars = "*?{["), not only "*". Patterns using ?, [...],
+	// or {...} without a '*' are now glob-matched, not treated as literal strings.
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			err := checkCertConstraintGlob("common name", tc.constraint, tc.value)
@@ -1253,11 +1264,6 @@ func TestSecurity_R3_165_GlobCharactersWithoutStarTreatedAsLiteral(t *testing.T)
 			}
 			if !tc.expectErr && err != nil {
 				t.Fatalf("expected no error for constraint %q value %q, got: %v", tc.constraint, tc.value, err)
-			}
-			if tc.expectErr {
-				t.Logf("CONFIRMED: Glob pattern %q without '*' is treated as literal. "+
-					"Policy authors using ?, [...], or {...} without * will get "+
-					"unexpected exact-match behavior.", tc.constraint)
 			}
 		})
 	}

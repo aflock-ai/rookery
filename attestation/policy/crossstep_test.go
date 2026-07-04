@@ -1125,10 +1125,11 @@ func TestCrossStep_BuildStepContext_OverlappingAttestationTypes(t *testing.T) {
 	require.NotNil(t, ctx)
 	buildCtx := ctx["build"].(map[string]interface{})
 	attData := buildCtx[attType].(map[string]interface{})
-	// Document the current behavior: last writer wins.
-	assert.Equal(t, "second", attData["name"],
-		"when multiple passed collections have the same attestation type, "+
-			"the last one should overwrite (current behavior -- potential security concern)")
+	// FIXED (#5746, F17): first writer wins — a later duplicate of the same
+	// attestation type does NOT overwrite the first (legitimate) collection.
+	assert.Equal(t, "first", attData["name"],
+		"FIXED (#5746, F17): when multiple passed collections share an attestation type, "+
+			"the FIRST is preserved; a later duplicate can no longer shadow it")
 }
 
 // TestCrossStep_Verify_DepFailsButIsSoftSkipped verifies that when a
@@ -1707,32 +1708,28 @@ deny[msg] {
 	pass, results, err := p.Verify(context.Background(), verifyOpts(src)...)
 	require.NoError(t, err)
 
-	// The attack: buildStepContext iterates passedCollections in order.
-	// For the same attestation type, the second (attacker) collection
-	// overwrites the first (legitimate). The Rego policy sees
-	// build_status="compromised" and denies.
-	//
-	// This proves the vulnerability: an attacker who can get a second
-	// signed collection (e.g., through a compromised CI re-run or
-	// replayed envelope) controls what downstream Rego policies see.
-	assert.False(t, pass, "deploy should fail because attacker's data shadows legitimate data")
+	// FIXED (#5746, F17): buildStepContext is first-writer-wins. It iterates
+	// passedCollections in order and, for a duplicated attestation type, KEEPS the
+	// first (legitimate, build_status="safe") collection — the attacker's second
+	// collection cannot overwrite it. The Rego policy therefore sees "safe", does
+	// NOT deny, and deploy passes. The shadow attack is neutralized.
+	assert.True(t, pass,
+		"FIXED (#5746, F17): deploy passes because the legitimate first collection's "+
+			"data is preserved; the attacker's second collection cannot shadow it")
 	deployResult := results["deploy"]
-	require.True(t, deployResult.HasErrors(), "deploy should have rejections")
+	assert.False(t, deployResult.HasErrors(), "deploy should have no rejections after the shadow attack is neutralized")
 
 	foundShadowAttack := false
 	for _, rej := range deployResult.Rejected {
-		if rej.Reason != nil && assert.ObjectsAreEqual("", "") {
-			// Use string contains for the check
-		}
 		if rej.Reason != nil {
 			if contains(rej.Reason.Error(), "shadow attack") {
 				foundShadowAttack = true
 			}
 		}
 	}
-	assert.True(t, foundShadowAttack,
-		"Rego should detect compromised data from last-writer-wins overwrite; "+
-			"FINDING: buildStepContext allows second collection to shadow the first")
+	assert.False(t, foundShadowAttack,
+		"FIXED (#5746, F17): the Rego policy must NOT see compromised data; the "+
+			"attacker's second collection cannot shadow the legitimate first")
 }
 
 // ---------------------------------------------------------------------------
@@ -1917,47 +1914,41 @@ func TestSecurity_R3_210_CertConstraintAllowAllNotAtPositionZero(t *testing.T) {
 	})
 
 	t.Run("star_not_at_position_0_is_literal", func(t *testing.T) {
-		// ["foo", "*"] is NOT treated as wildcard. The "*" is literal.
-		// Cert has ["foo", "bar"]: "bar" doesn't match literal "*", so it fails.
+		// FIXED (#5746, F13/F18): ["foo", "*"] honors the "*" at any position as a
+		// wildcard, so any cert value is allowed.
 		err := checkCertConstraint("org", []string{"foo", "*"}, []string{"foo", "bar"})
-		assert.Error(t, err,
-			"SECURITY FINDING CONFIRMED: ['foo', '*'] treats '*' as literal string. "+
-				"Cert with ['foo', 'bar'] is rejected because 'bar' != '*'. "+
-				"This means '*' only acts as wildcard at position 0 in a single-element list.")
+		assert.NoError(t, err,
+			"FIXED (#5746, F13/F18): ['foo', '*'] honors '*' at any position as a wildcard; "+
+				"a cert with ['foo', 'bar'] is allowed (no longer treated as a literal '*').")
 	})
 
-	t.Run("star_not_at_position_0_requires_literal_star", func(t *testing.T) {
-		// ["foo", "*"]: cert must literally have "foo" and "*" as org values.
+	t.Run("star_not_at_position_0_still_allows_all", func(t *testing.T) {
+		// ["foo", "*"] with cert ["foo", "*"] also passes — the wildcard allows any
+		// value regardless of what the cert presents (F13/F18).
 		err := checkCertConstraint("org", []string{"foo", "*"}, []string{"foo", "*"})
 		assert.NoError(t, err,
-			"When '*' is not at position 0, it must match literally. "+
-				"Cert with values ['foo', '*'] should satisfy constraints ['foo', '*'].")
+			"FIXED (#5746, F13/F18): '*' anywhere in the constraint list allows all values.")
 	})
 
-	t.Run("multiple_stars_not_wildcard", func(t *testing.T) {
-		// ["*", "*"] has len > 1, so the AllowAll check (len==1) does not trigger.
-		// Each "*" is treated as a literal constraint.
+	t.Run("multiple_stars_allow_all", func(t *testing.T) {
+		// ["*", "*"] contains the AllowAll wildcard, so hasAllowAll short-circuits to
+		// allow any value (F13/F18).
 		err := checkCertConstraint("org", []string{"*", "*"}, []string{"*"})
-		// Map dedup: constraints become {"*":{}}, but cert has one "*", so unmet is empty.
-		// Actually: map has one entry "*", cert deletes it, len(unmet)==0 -> pass.
-		// This is a subtle map dedup interaction.
 		assert.NoError(t, err,
-			"Map dedup collapses ['*','*'] to one entry; cert with ['*'] satisfies it.")
+			"FIXED (#5746, F13/F18): a list containing '*' allows all values via hasAllowAll.")
 	})
 }
 
 // ---------------------------------------------------------------------------
-// R3-210-5: compareArtifacts hash downgrade via DigestSet.Equal
+// R3-210-5: compareArtifacts hash downgrade via DigestSet.Equal — FIXED.
 //
-// DigestSet.Equal compares only hash functions that BOTH sets have.
-// If set A has {SHA256: "abc", SHA1: "def"} and set B has {SHA1: "def"},
-// Equal returns true -- it only checked SHA1 and found a match.
-// The stronger SHA256 is silently ignored because set B doesn't have it.
-//
-// In compareArtifacts, this means an attacker can downgrade integrity
-// verification by providing artifacts with only a weak hash (SHA1),
-// even when the verifying step has both SHA256 and SHA1. As long as
-// the weak hash matches, the comparison passes.
+// DigestSet.Equal now fails CLOSED on a hash downgrade: it computes the
+// strongest recognized digest class across BOTH sets and requires that class to
+// be present and agree on both sides (strongestClassAgrees). If set A has
+// {SHA256, SHA1} and set B has only {SHA1}, the strongest class (SHA256) is
+// absent from B, so Equal returns false — the weak-hash-only downgrade no longer
+// passes. These tests previously pinned the downgrade bypass (assert.NoError);
+// they now document the anti-downgrade fix (assert.Error).
 // ---------------------------------------------------------------------------
 
 func TestSecurity_R3_210_CompareArtifactsHashDowngrade(t *testing.T) {
@@ -1982,12 +1973,11 @@ func TestSecurity_R3_210_CompareArtifactsHashDowngrade(t *testing.T) {
 		}
 
 		err := compareArtifacts(mats, arts)
-		assert.NoError(t, err,
-			"SECURITY FINDING CONFIRMED (R3-128 hash downgrade): compareArtifacts "+
-				"uses DigestSet.Equal which only compares common hash functions. "+
-				"Attacker provides only SHA1 (weak, collisionable) and omits SHA256. "+
-				"The comparison passes using only the weak hash. An attacker with a "+
-				"SHA1 collision can substitute an artifact and pass verification.")
+		assert.Error(t, err,
+			"FIXED (R3-128 hash downgrade): DigestSet.Equal fails closed when the "+
+				"stronger SHA256 class present in the materials is absent from the "+
+				"attacker's SHA1-only artifacts. The weak-hash-only downgrade is rejected, "+
+				"so a SHA1 collision can no longer substitute an artifact.")
 	})
 
 	t.Run("matching_sha256_still_works", func(t *testing.T) {
@@ -2087,10 +2077,11 @@ func TestSecurity_R3_210_CompareArtifactsHashDowngrade(t *testing.T) {
 		}
 
 		err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, consumerStep, consumerCVR, collectionsByStep)
-		assert.NoError(t, err,
-			"SECURITY FINDING: Full artifact flow confirms hash downgrade. "+
-				"Producer omits SHA256 from products, consumer has SHA256+SHA1 in materials. "+
-				"Comparison only checks SHA1 (the common hash) and passes.")
+		assert.Error(t, err,
+			"FIXED (hash downgrade): the full artifact flow rejects the downgrade. The "+
+				"producer omits SHA256 from its products while the consumer's materials carry "+
+				"SHA256+SHA1; DigestSet.Equal fails closed on the missing stronger class, so "+
+				"the SHA1-only match no longer passes.")
 	})
 }
 

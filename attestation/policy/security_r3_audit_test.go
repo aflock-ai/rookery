@@ -394,17 +394,17 @@ func TestSecurity_R3_203_BuildStepContextLastWriterWins(t *testing.T) {
 	attData, ok := scanMap[attType]
 	require.True(t, ok)
 
-	// The data should be from the second collection (last writer wins).
+	// FIXED (#5746, F17): the FIRST collection wins; the second collection with
+	// the same attestation type does NOT overwrite it.
 	attMap, ok := attData.(map[string]interface{})
 	require.True(t, ok)
 	name, _ := attMap["name"].(string)
 
-	assert.Equal(t, "second-scan", name,
-		"SECURITY FINDING R3-203: buildStepContext uses last-writer-wins when "+
-			"multiple PassedCollections have the same attestation type. The first "+
-			"collection's data ('first-scan') was overwritten by the second "+
-			"('second-scan'). A Rego policy checking cross-step data will see "+
-			"whichever collection happens to be last in the Passed slice.")
+	assert.Equal(t, "first-scan", name,
+		"FIXED (#5746, F17): buildStepContext is first-writer-wins. When multiple "+
+			"PassedCollections share an attestation type, the first (legitimate) "+
+			"collection's data is preserved; a later duplicate can no longer shadow it "+
+			"in the cross-step Rego context.")
 }
 
 // ===========================================================================
@@ -567,7 +567,14 @@ func TestSecurity_R3_206_SearchDepthAccumulatesDuplicates(t *testing.T) {
 	verifier, keyID := auditMakeVerifierAndKeyID(t)
 
 	stepName := "build"
-	cvr := auditMakeCVR(stepName, verifier)
+	attType := "https://example.com/att/v1"
+	// The step declares a required attestation (post-#5746 F9: a step with no
+	// required attestations fails closed), isolating the cross-depth dedup
+	// behavior under test from the empty-attestations fail-closed path.
+	cvr := auditMakeCVR(stepName, verifier, attestation.CollectionAttestation{
+		Type:        attType,
+		Attestation: &auditAttestor{AttName: "att", AttType: attType},
+	})
 
 	// Source always returns the same collection.
 	src := &auditMockSource{
@@ -581,6 +588,7 @@ func TestSecurity_R3_206_SearchDepthAccumulatesDuplicates(t *testing.T) {
 		Steps: map[string]Step{
 			stepName: {
 				Name:          stepName,
+				Attestations:  []Attestation{{Type: attType}},
 				Functionaries: []Functionary{{PublicKeyID: keyID}},
 			},
 		},
@@ -594,12 +602,14 @@ func TestSecurity_R3_206_SearchDepthAccumulatesDuplicates(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, pass)
 
+	// FIXED (#5746, F12): with searchDepth=5, the same collection re-discovered on
+	// every depth iteration is de-duplicated to a SINGLE Passed entry (keyed by
+	// content), no longer accumulated once per iteration.
 	passedCount := len(results[stepName].Passed)
-	assert.Greater(t, passedCount, 1,
-		"SECURITY FINDING R3-206: With searchDepth=5, the same collection is "+
-			"added to Passed multiple times (got %d). Each depth iteration "+
-			"re-processes the same collection because the source returns identical "+
-			"results. This inflates the Passed count and wastes resources.",
+	assert.Equal(t, 1, passedCount,
+		"FIXED (#5746, F12): the cross-depth merge de-duplicates the identical "+
+			"collection to exactly 1 Passed entry (got %d); depth iterations no longer "+
+			"inflate the Passed count.",
 		passedCount)
 }
 
@@ -647,13 +657,14 @@ func TestSecurity_R3_207_EmptyAttestationsPassesAnyContent(t *testing.T) {
 
 	result := step.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
 
-	assert.Len(t, result.Passed, 1,
-		"SECURITY BUG R3-207: A step with empty Attestations list auto-passes "+
-			"ANY collection that matches by name. The 'security-scan' step accepted "+
-			"a collection containing 'totally-random/v1' attestation. No Rego or AI "+
-			"policies were evaluated. Steps should require at least one expected "+
-			"attestation type, or Validate() should warn about empty Attestations lists.")
-	assert.Empty(t, result.Rejected)
+	// FIXED (#5746, F9): a step with an empty Attestations list is a misconfigured
+	// no-op gate and now fails CLOSED — the collection is rejected, not passed. No
+	// authorized signer can satisfy a no-requirements step with arbitrary content.
+	assert.Empty(t, result.Passed,
+		"FIXED (#5746, F9): a step with an empty Attestations list no longer auto-passes "+
+			"any collection; it rejects (fail closed).")
+	assert.Len(t, result.Rejected, 1,
+		"the collection is rejected because the step declares no required attestations")
 }
 
 // ===========================================================================
@@ -1002,14 +1013,18 @@ deny[msg] {
 // ===========================================================================
 
 func TestSecurity_R3_213_ConstraintDuplicateAsymmetry(t *testing.T) {
-	// Case 1: Duplicate constraints, single cert value => PASSES
-	// because map dedup reduces constraints to one entry.
-	err := checkCertConstraint("org", []string{"A", "A"}, []string{"A"})
-	assert.NoError(t, err,
-		"SECURITY FINDING R3-213a: Duplicate constraints ['A','A'] are silently "+
-			"reduced to one entry via map. Cert with single 'A' satisfies it.")
+	// FIXED (#5746, F1): duplicate constraints are count-preserved (no longer
+	// collapsed via a map), so the asymmetry is closed: two 'A' constraints
+	// require two matching cert values, symmetrically.
 
-	// Case 2: Single constraint, duplicate cert values => FAILS
+	// Case 1: Duplicate constraints, single cert value => now FAILS closed
+	// because constraints=['A','A'] require two matching values, cert has one.
+	err := checkCertConstraint("org", []string{"A", "A"}, []string{"A"})
+	assert.Error(t, err,
+		"FIXED (#5746, F1): duplicate constraints ['A','A'] are count-preserved; a cert "+
+			"with a single 'A' can no longer satisfy two required occurrences (fail closed).")
+
+	// Case 2: Single constraint, duplicate cert values => still FAILS
 	// because the second cert "A" is "unexpected" after the first consumed it.
 	err = checkCertConstraint("org", []string{"A"}, []string{"A", "A"})
 	assert.Error(t, err,
@@ -1017,14 +1032,14 @@ func TestSecurity_R3_213_ConstraintDuplicateAsymmetry(t *testing.T) {
 			"'A' values. The second 'A' is unexpected after the first consumed "+
 			"the constraint entry.")
 
-	// Case 3: Duplicate constraints AND duplicate cert values => FAILS
-	// because map dedup reduces constraints to one entry, but cert has two.
+	// Case 3: Duplicate constraints AND duplicate cert values => now PASSES
+	// because the two 'A' constraints are count-preserved and matched by the two
+	// 'A' cert values, symmetrically (no map dedup).
 	err = checkCertConstraint("org", []string{"A", "A"}, []string{"A", "A"})
-	assert.Error(t, err,
-		"SECURITY FINDING R3-213c: Duplicate constraints ['A','A'] reduced to "+
-			"one map entry, but cert has two 'A' values. The second cert 'A' is "+
-			"'unexpected'. Asymmetric dedup behavior means constraints=['A','A'] "+
-			"cert=['A','A'] FAILS, while constraints=['A','A'] cert=['A'] PASSES.")
+	assert.NoError(t, err,
+		"FIXED (#5746, F1): constraints=['A','A'] with cert=['A','A'] now PASSES — the "+
+			"count-preserving match is symmetric, closing the prior dedup asymmetry where "+
+			"['A','A'] vs ['A'] passed but ['A','A'] vs ['A','A'] failed.")
 }
 
 // ===========================================================================
