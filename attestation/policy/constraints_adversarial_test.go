@@ -664,17 +664,19 @@ func TestAdversarial_Verify_EmptyPolicyNoSteps(t *testing.T) {
 }
 
 // ===========================================================================
-// FINDING 16 (MEDIUM): checkCertConstraintGlob does not normalize the
-// value before comparison. Whitespace, case differences, etc. in the
-// common name could cause unexpected matches or mismatches.
+// FINDING 16 (MEDIUM): RESOLVED post-#5766. checkCertConstraintGlob now
+// case-folds the CommonName value (via normalizeGlobValue) before
+// comparison, so case differences no longer cause spurious mismatches.
+// Whitespace is still NOT trimmed (see _WhitespaceInValue below), which is
+// intentional: a SAN value carries no leading/trailing whitespace.
 // ===========================================================================
 
 func TestAdversarial_CheckCertConstraintGlob_CaseSensitivity(t *testing.T) {
-	// Glob matching is case-sensitive
+	// Post-#5766 F16: CommonName matching case-folds.
 	err := checkCertConstraintGlob("common name", "Example.COM", "example.com")
-	assert.Error(t, err,
-		"Glob matching is case-sensitive. 'Example.COM' does not match 'example.com'. "+
-			"This could cause legitimate certs to be rejected if the CN case differs.")
+	assert.NoError(t, err,
+		"post-#5766 F16: CommonName matching case-folds, so 'Example.COM' matches "+
+			"'example.com'. Legitimate certs are no longer rejected on CN case alone.")
 }
 
 func TestAdversarial_CheckCertConstraintGlob_WhitespaceInValue(t *testing.T) {
