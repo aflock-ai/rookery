@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/rego"
 )
@@ -98,6 +99,13 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 		if _, ok := denyPaths[packageDenyPathStr]; !ok {
 			query += fmt.Sprintf("%v.deny\n", parsedModule.Package.Path)
 			denyPaths[packageDenyPathStr] = struct{}{}
+		} else {
+			// R3_183 (#6266): a second module declaring the same package name is
+			// merged by OPA — their rules coexist in one package and can shadow
+			// each other. Policies are signed/trusted input so this is not a live
+			// bypass, but it is a footgun. Warn loudly (warn-first; enforcement
+			// deferred) instead of silently merging.
+			log.Warnf("duplicate rego package name %v across modules — rules merge and can shadow each other (#6266)", parsedModule.Package.Path)
 		}
 
 		regoOpts = append(regoOpts, rego.ParsedModule(parsedModule))
@@ -201,6 +209,14 @@ func buildRegoInput(attestorData interface{}, stepContext []map[string]interface
 	if len(stepContext) == 0 || stepContext[0] == nil {
 		return attestorData
 	}
+	// R3_201 (#6266): once cross-step context is present the input is re-shaped
+	// to {attestation, steps, external}, so a legacy module that references
+	// top-level fields (input.name, input.subjects, ...) silently stops matching
+	// — it evaluates against a shape those paths no longer exist in. Detecting
+	// which modules still use the old shape is hard; warn loudly whenever the
+	// wrap activates (warn-first; enforcement deferred) so the shape change is
+	// visible. Behavior is unchanged.
+	log.Warn("cross-step rego input shape active; legacy modules referencing top-level input fields (e.g. input.name) will silently not match (#6266)")
 	stepsData, externalData := splitStepAndExternalContext(stepContext[0])
 	wrapped := map[string]interface{}{
 		"attestation": attestorData,

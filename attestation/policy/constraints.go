@@ -121,6 +121,16 @@ type CertConstraint struct {
 	RequiredPolicyOIDs []string `json:"requiredpolicyoids,omitempty" jsonschema:"title=Required Policy OIDs,description=certificatePolicies (OID 2.5.29.32) OIDs in dotted-decimal form that the signer cert must all carry (fail-closed; empty means no constraint)"`
 }
 
+// IsSet reports whether the certificate constraint carries any configured field.
+// It is the zero-value test used to WARN (R3_184, #6266) when a functionary sets
+// BOTH a PublicKeyID and a CertConstraint: the PublicKeyID short-circuit in
+// Functionary.Validate returns before CertConstraint.Check runs, so the
+// constraint is silently ignored on a key-ID match. reflect.DeepEqual against the
+// zero value keeps this correct as new constraint fields are added.
+func (cc CertConstraint) IsSet() bool {
+	return !reflect.DeepEqual(cc, CertConstraint{})
+}
+
 func (cc CertConstraint) Check(verifier *cryptoutil.X509Verifier, trustBundles map[string]TrustBundle) error {
 	cert := verifier.Certificate()
 
@@ -421,12 +431,23 @@ func checkCertConstraint(attribute string, constraints, values []string) error {
 	constraints = dropEmpty(constraints)
 	values = dropEmpty(values)
 
-	if len(constraints) == 0 && len(values) > 0 {
-		// An empty list-constraint forbids ALL of this SAN type, so a cert that
-		// presents one is rejected. Name the value(s) and the fix — a null/empty
-		// constraint reads like "allow any" but does the opposite.
-		return fmt.Errorf("cert presents %s %+q but the policy's %s constraint is empty, which forbids all; add the value to the functionary's certConstraint %s list (or %q to allow any)",
-			attribute, values, attribute, attribute, AllowAllConstraint)
+	if len(constraints) == 0 {
+		if len(values) > 0 {
+			// An empty list-constraint forbids ALL of this SAN type, so a cert that
+			// presents one is rejected. Name the value(s) and the fix — a null/empty
+			// constraint reads like "allow any" but does the opposite.
+			return fmt.Errorf("cert presents %s %+q but the policy's %s constraint is empty, which forbids all; add the value to the functionary's certConstraint %s list (or %q to allow any)",
+				attribute, values, attribute, attribute, AllowAllConstraint)
+		}
+
+		// R3_181 (#6266): an empty constraint against an empty cert field is a
+		// no-op match that currently passes. On its own that is benign, but a
+		// policy whose Roots are all-wildcard ("*") plus empty SAN constraints
+		// makes identity verification a no-op. Warn loudly (warn-first;
+		// enforcement deferred) rather than silently accepting. Behavior is
+		// unchanged: this path already returned success below.
+		log.Warnf("empty constraint matched empty cert field %s — combined with permissive roots this weakens identity verification (#6266)", attribute)
+		return nil
 	}
 
 	// Split constraints into EXACT (no glob metachar) and GLOB. Exact constraints

@@ -305,6 +305,14 @@ func (f Functionary) Validate(verifier cryptoutil.Verifier, trustBundles map[str
 	}
 
 	if f.PublicKeyID != "" && f.PublicKeyID == verifierID {
+		// R3_184 (#6266): the PublicKeyID match short-circuits before
+		// CertConstraint.Check runs, so a functionary that sets BOTH fields has
+		// its certificate constraint silently ignored on a key-ID match. Warn
+		// loudly (warn-first; enforcement deferred) so the misconfiguration is
+		// visible instead of a false sense of certificate-scoped trust.
+		if f.CertConstraint.IsSet() {
+			log.Warn("functionary sets both PublicKeyID and CertConstraint; the certificate constraint is IGNORED when the key ID matches (enforcement tracked in #6266)")
+		}
 		return nil
 	}
 
