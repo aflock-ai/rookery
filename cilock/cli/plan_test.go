@@ -24,6 +24,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// runPrereqsWant mirrors the run-prerequisite placeholders plan renders into
+// its "to run:" suggestions (issue #6094): `cilock run` requires --step and a
+// signer, which `cilock plan` can't infer, so it emits them as fill-in
+// placeholders. Kept here (not imported) so a drift in the rendered string is
+// caught by these golden assertions.
+const runPrereqsWant = "-s <step> --signer-file-key-path <key.pem> "
+
 // Regression tests for issue #220: `cilock plan` used to recommend
 // flags that don't exist on `cilock run` (--tracing=<mode>, --auto).
 // Users would copy-paste the suggestions and immediately hit
@@ -96,15 +103,16 @@ func TestWritePlanHuman_FireSet_EmitsRunnableCilockRunCommand(t *testing.T) {
 	out := buf.String()
 
 	// Users should get a copy-pasteable next step that uses the
-	// flags that *actually* exist on `cilock run`.
-	assert.Contains(t, out, "cilock run -a ",
-		"plan should emit a runnable `cilock run -a ...` next-step (#220)")
+	// flags that *actually* exist on `cilock run`, including the
+	// required --step and a signer (#6094).
+	assert.Contains(t, out, "cilock run "+runPrereqsWant+"-a ",
+		"plan should emit a runnable `cilock run -s <step> --signer-... -a ...` next-step (#220, #6094)")
 
 	// Attestor list should be sorted and joined with commas; argv
 	// should be passed after `--`.
 	assert.True(t,
-		strings.Contains(out, "cilock run -a docker,git -- docker build ."),
-		"expected runnable line with sorted attestors and argv; got:\n%s", out)
+		strings.Contains(out, "cilock run "+runPrereqsWant+"-a docker,git -- docker build ."),
+		"expected runnable line with -s/--step + signer, sorted attestors and argv; got:\n%s", out)
 }
 
 // TestWritePlanHuman_RecommendsTraceWhenAttestorBenefits pins fix F7: when
@@ -136,12 +144,12 @@ func TestWritePlanHuman_RecommendsTraceWhenAttestorBenefits(t *testing.T) {
 
 	// Plain line still there (back-compat for operators who don't care
 	// about tracing).
-	assert.Contains(t, out, "to run: cilock run -a git,go-build,lockfiles -- go build -o ./bin/argocd ./cmd",
+	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-a git,go-build,lockfiles -- go build -o ./bin/argocd ./cmd",
 		"plain 'to run:' line must still be present for back-compat")
 
 	// New tracing line MUST be present and MUST use the real --trace
 	// flag (not the fake --trace=<mode> from #220).
-	assert.Contains(t, out, "to run (with tracing): cilock run --trace -a git,go-build,lockfiles -- go build -o ./bin/argocd ./cmd",
+	assert.Contains(t, out, "to run (with tracing): cilock run --trace "+runPrereqsWant+"-a git,go-build,lockfiles -- go build -o ./bin/argocd ./cmd",
 		"plan must emit a --trace variant when a fired attestor benefits (F7)")
 	assert.NotContains(t, out, "--trace=",
 		"F7 must use the real boolean --trace flag, not the unimplemented --trace=<mode> form")
@@ -167,7 +175,7 @@ func TestWritePlanHuman_NoTraceVariantWhenNoneBenefits(t *testing.T) {
 	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
-	assert.Contains(t, out, "to run: cilock run -a environment -- true")
+	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-a environment -- true")
 	assert.NotContains(t, out, "to run (with tracing)",
 		"no fired attestor benefits from tracing → no --trace variant emitted")
 }
@@ -193,9 +201,9 @@ func TestWritePlanHuman_RecommendsIgnoreExitCodeWhenToolGatesOnFindings(t *testi
 	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
-	assert.Contains(t, out, "to run: cilock run --ignore-command-exit-code -a osv-scanner -- osv-scanner --output osv.sarif .",
+	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"--ignore-command-exit-code -a osv-scanner -- osv-scanner --output osv.sarif .",
 		"plan must inline --ignore-command-exit-code for a tool that exits non-zero on findings")
-	assert.Contains(t, out, "to run (with tracing): cilock run --trace --ignore-command-exit-code -a osv-scanner -- osv-scanner --output osv.sarif .",
+	assert.Contains(t, out, "to run (with tracing): cilock run --trace "+runPrereqsWant+"--ignore-command-exit-code -a osv-scanner -- osv-scanner --output osv.sarif .",
 		"the --trace variant must also carry --ignore-command-exit-code")
 }
 
@@ -214,9 +222,34 @@ func TestWritePlanHuman_NoIgnoreExitCodeWhenToolDoesNotGate(t *testing.T) {
 	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
-	assert.Contains(t, out, "to run: cilock run -a go-build -- go build ./...")
+	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-a go-build -- go build ./...")
 	assert.NotContains(t, out, "--ignore-command-exit-code",
 		"a non-gating tool must not get --ignore-command-exit-code")
+}
+
+// TestWritePlanHuman_ToRunIncludesStepAndSigner pins fix #6094: the "to run:"
+// suggestion previously omitted the required --step and a signer, so pasting it
+// verbatim failed with `--step is required` whenever the step couldn't be
+// inferred from the command (e.g. `echo`). The line must now render both, so an
+// operator sees the flags to fill in.
+func TestWritePlanHuman_ToRunIncludesStepAndSigner(t *testing.T) {
+	env := planEnvelope{
+		Plan: detection.PlanResult{
+			Fire:   []detection.FireDecision{{Attestor: "environment"}},
+			Inputs: detection.InputSnapshot{Argv: []string{"echo", "hi"}},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, writePlanHuman(&buf, env, false))
+	out := buf.String()
+
+	assert.Contains(t, out, "-s <step>",
+		"the 'to run:' suggestion must render the required --step (#6094)")
+	assert.Contains(t, out, "--signer-file-key-path <key.pem>",
+		"the 'to run:' suggestion must render a signer (#6094)")
+	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-a environment -- echo hi",
+		"the full suggested command must carry step + signer before -a; got:\n%s", out)
 }
 
 func TestWritePlanHuman_TraceOff_OmitsRecommendationLine(t *testing.T) {

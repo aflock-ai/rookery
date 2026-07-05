@@ -41,7 +41,7 @@ Regenerate after adding or renaming an attestor:
 
 | Name | Import path | Predicate type |
 |---|---|---|
-| `command-run` | `plugins/attestors/commandrun` | `https://aflock.ai/attestations/command-run/v0.1` |
+| `command-run` | `plugins/attestors/commandrun` | `https://aflock.ai/attestations/command-run/v0.2` |
 | `github-action` | `plugins/attestors/githubaction` | `https://aflock.ai/attestations/github-action/v0.1` |
 
 ## Product (output snapshot)
@@ -103,7 +103,7 @@ Regenerate after adding or renaming an attestor:
 
 | Surface | Default attestors |
 |---|---|
-| `cilock run` (no `--attestations`) | environment, git, github, gitlab, jenkins, jwt, aws, gcp-iit, github-action, command-run, material, product |
+| `cilock run` (no `--attestations`) | environment, git, platform, github, gitlab, jenkins, jwt, aws, gcp-iit, github-action, command-run, material, product |
 | `cilock-action` (no `attestations:` input) | environment, git, github |
 
 When passing `--attestations`, you replace the default — you don't add to it. To extend rather than replace, list the defaults explicitly.

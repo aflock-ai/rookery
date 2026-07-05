@@ -235,8 +235,16 @@ func writePlanFireSection(b *strings.Builder, env planEnvelope) {
 	if env.IgnoreExitCodeRecommended {
 		ignoreExit = "--ignore-command-exit-code "
 	}
-	fmt.Fprintf(b, "  to run: cilock run %s-a %s -- %s\n",
-		ignoreExit, strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
+	// `cilock run` requires --step (RequiredRunFlags) and needs a signer, but
+	// `cilock plan` evaluates detection over argv alone and knows neither. Render
+	// them as <angle-bracket> placeholders — the same fill-in convention this
+	// command's own Use/Long help uses (`<command>`, `<attestor>`) — so an
+	// operator sees the flags to complete instead of pasting the line and hitting
+	// a cryptic `--step is required` (or an unsigned run) when the step can't be
+	// inferred from the command (e.g. `echo`).
+	runPrereqs := "-s <step> --signer-file-key-path <key.pem> "
+	fmt.Fprintf(b, "  to run: cilock run %s%s-a %s -- %s\n",
+		runPrereqs, ignoreExit, strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
 
 	// Fix F7: when tracing would benefit at least one of the fired
 	// attestors (per detector's recommended_trace field), also emit
@@ -249,7 +257,7 @@ func writePlanFireSection(b *strings.Builder, env planEnvelope) {
 	// against the fired list because RecommendTrace already only
 	// reports modes for matched detectors.
 	if env.TraceRecommendation.Mode != "" && env.TraceRecommendation.Mode != detection.TraceOff {
-		fmt.Fprintf(b, "  to run (with tracing): cilock run --trace %s-a %s -- %s\n",
-			ignoreExit, strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
+		fmt.Fprintf(b, "  to run (with tracing): cilock run --trace %s%s-a %s -- %s\n",
+			runPrereqs, ignoreExit, strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
 	}
 }

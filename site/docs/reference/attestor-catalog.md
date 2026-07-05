@@ -86,7 +86,7 @@ The `(always run)` and `(default)` markers in `cilock attestors list` show which
 Verified from `rookery/cilock/internal/cmd/run.go` + the live `cilock attestors list`:
 
 - **Always run** (cannot be omitted, run on every `cilock run`): `material`, `product`, and `command-run` (when args are provided).
-- **Default attestation set** (when `--attestations` is not specified): `environment,git` (comma-separated, per cobra `StringSlice` semantics).
+- **Default attestation set** (when `--attestations` is not specified): `environment,git,platform` (comma-separated, per cobra `StringSlice` semantics). `platform` binds the attestation to the hosted-platform tenant/product and silently skips when there is no platform session.
 
 Pass additional attestors with `--attestations "<a>,<b>,<c>"` (comma-separated, not space). CI/lock also accepts the legacy witness URL aliases via `attestation.RegisterLegacyAliases()`, called from `cilock/cmd/cilock/main.go` at startup.
 

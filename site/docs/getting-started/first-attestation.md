@@ -66,7 +66,7 @@ cilock run \
 | `--outfile` | `-o` | Where to write the signed envelope. Omit to write to stdout. |
 | `--platform-url ""` | | Opts out of the hosted platform for this local tutorial. This keeps the command fully offline even if you previously ran `cilock login`. |
 | `--workingdir` | `-d` | Directory the wrapped command runs in. Defaults to the current directory. |
-| `--attestations` | `-a` | Attestors to record. Pass once per attestor (`-a env -a git`) or comma-separated (`-a env,git`). Defaults to `[environment, git]`. See note below. |
+| `--attestations` | `-a` | Attestors to record. Pass once per attestor (`-a environment -a git`) or comma-separated (`-a environment,git`). Defaults to `[environment, git, platform]`. See note below. |
 | `-- <cmd>` | | Everything after `--` is the command CI/lock wraps. |
 
 ### What gets recorded
@@ -77,15 +77,16 @@ Three attestors are **always** recorded regardless of flags:
 - **`command-run`:** the wrapped command's argv, exit code, stdout/stderr digests, and process information.
 - **`product`:** SHA-256 digests of every file that changed or was added after the step ran.
 
-Two more are recorded **by default** when `-a` is omitted:
+Three more are recorded **by default** when `-a` is omitted:
 
 - **`environment`:** os, hostname, username, env vars (sensitive ones filtered).
 - **`git`:** commit SHA, tree hash, branch, and a snapshot of `git status`.
+- **`platform`:** binds the attestation to your hosted-platform tenant/product. Recorded only when a platform session exists (after `cilock login`); it silently skips when there is none — which is why it does not appear in the output below, since this tutorial passes `--platform-url ""`.
 
 Run `cilock attestors list` to see the full set with `(always run)` and `(default)` markers.
 
 :::caution `-a` replaces the default, it does not extend it
-Passing any `-a` overrides the `[environment, git]` default. If you want those plus an extra: `-a environment -a git -a secretscan`. A single `-a secretscan` drops `environment` and `git` from the output. The always-run `material` / `command-run` / `product` are unaffected.
+Passing any `-a` overrides the `[environment, git, platform]` default. If you want those plus an extra: `-a environment -a git -a platform -a secretscan`. A single `-a secretscan` drops `environment`, `git`, and `platform` from the output. The always-run `material` / `command-run` / `product` are unaffected.
 
 A space-separated string inside quotes (`-a "environment git"`) does not work, CI/lock treats the whole value as one attestor name.
 :::
@@ -143,7 +144,7 @@ The policy lists which attestations each step must produce and which keys are tr
         {"type": "https://aflock.ai/attestations/command-run/v0.1", "regopolicies": []},
         {"type": "https://aflock.ai/attestations/product/v0.3", "regopolicies": []}
       ],
-      "functionaries": [{"publickeyid": "{{PUBLIC_KEY_ID}}"}]
+      "functionaries": [{"type": "publickey", "publickeyid": "{{PUBLIC_KEY_ID}}"}]
     }
   },
   "publickeys": {

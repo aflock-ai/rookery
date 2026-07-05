@@ -19,7 +19,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"io"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
@@ -41,17 +42,25 @@ func AttestorsCmd() *cobra.Command {
 }
 
 func ListCmd() *cobra.Command {
+	var format string
 	cmd := &cobra.Command{
-		Use:               "list",
-		Short:             "List all available attestors",
-		Long:              "Lists all the available attestors in CIlock with supporting information",
+		Use:   "list",
+		Short: "List all available attestors",
+		Long:  "Lists all the available attestors in CIlock with supporting information",
+		Example: `  # List every attestor, as a table
+  cilock attestors list
+
+  # Machine-readable list for an agent to consume
+  cilock attestors list --format json`,
 		SilenceErrors:     true,
 		SilenceUsage:      true,
 		DisableAutoGenTag: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(cmd.Context())
+			return runList(cmd.OutOrStdout(), format)
 		},
 	}
+	// Mirror `cilock tools list`: table by default, json for agents.
+	cmd.Flags().StringVar(&format, "format", "table", "Output format: table (default) or json")
 	return cmd
 }
 
@@ -70,30 +79,88 @@ func SchemaCmd() *cobra.Command {
 	return cmd
 }
 
-func runList(_ context.Context) error {
+// attestorListEntry is the machine-readable shape emitted by
+// `cilock attestors list --format json`. The markers the table appends to the
+// name (" (always run)", " (default)") are split into booleans so an agent
+// enumerating attestors doesn't have to scrape ASCII.
+type attestorListEntry struct {
+	Name          string `json:"name"`
+	PredicateType string `json:"predicate_type"`
+	RunType       string `json:"run_type"`
+	AlwaysRun     bool   `json:"always_run"`
+	Default       bool   `json:"default"`
+}
+
+func buildAttestorListEntries() []attestorListEntry {
 	entries := attestation.RegistrationEntries()
-	items := make([][]string, 0, len(entries))
+	out := make([]attestorListEntry, 0, len(entries))
 	for _, entry := range entries {
-		name := entry.Factory().Name()
+		f := entry.Factory()
+		name := f.Name()
+		out = append(out, attestorListEntry{
+			Name:          name,
+			PredicateType: f.Type(),
+			RunType:       fmt.Sprintf("%v", f.RunType()),
+			AlwaysRun:     isAlwaysRunAttestor(name),
+			Default:       isDefaultAttestor(name),
+		})
+	}
+	return out
+}
 
-		for _, a := range alwaysRunAttestors {
-			if name == a.Name() || name == attestorCommandRun {
-				name = name + " (always run)"
-			}
+// isAlwaysRunAttestor reports whether the named attestor fires on every
+// `cilock run` regardless of --attestations (product, material, command-run).
+func isAlwaysRunAttestor(name string) bool {
+	if name == attestorCommandRun {
+		return true
+	}
+	for _, a := range alwaysRunAttestors {
+		if name == a.Name() {
+			return true
 		}
+	}
+	return false
+}
 
-		for _, a := range options.DefaultAttestors {
-			if name == a {
-				name = name + " (default)"
-			}
+// isDefaultAttestor reports whether the named attestor is in the default set
+// recorded when --attestations is omitted.
+func isDefaultAttestor(name string) bool {
+	for _, a := range options.DefaultAttestors {
+		if name == a {
+			return true
 		}
+	}
+	return false
+}
 
-		runType := entry.Factory().RunType()
-		item := []string{name, entry.Factory().Type(), fmt.Sprintf("%v", runType)}
-		items = append(items, item)
+func runList(w io.Writer, format string) error {
+	entries := buildAttestorListEntries()
+	switch strings.ToLower(format) {
+	case "", "table":
+		return writeAttestorsTable(w, entries)
+	case formatJSON:
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(entries)
+	default:
+		return fmt.Errorf("unknown --format %q (want table|json)", format)
+	}
+}
+
+func writeAttestorsTable(w io.Writer, entries []attestorListEntry) error {
+	items := make([][]string, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name
+		if e.AlwaysRun {
+			name += " (always run)"
+		}
+		if e.Default {
+			name += " (default)"
+		}
+		items = append(items, []string{name, e.PredicateType, e.RunType})
 	}
 
-	table := tablewriter.NewWriter(os.Stdout)
+	table := tablewriter.NewWriter(w)
 	table.Header([]string{"Name", "Type", "RunType"})
 	if err := table.Bulk(items); err != nil {
 		return fmt.Errorf("error adding items to table: %w", err)
