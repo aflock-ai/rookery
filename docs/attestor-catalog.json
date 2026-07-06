@@ -1,6 +1,6 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 132,
+  "attestor_count": 133,
   "attestors": [
     {
       "name": "aws",
@@ -1602,6 +1602,50 @@
                 "**/sbom.json",
                 "bom.json",
                 "**/bom.json"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "scubagoggles",
+      "predicate_type": "https://aflock.ai/attestations/scubagoggles/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "compliance-scan"
+      ],
+      "upstream": {
+        "name": "ScubaGoggles",
+        "source": "https://github.com/cisagov/ScubaGoggles",
+        "license": "CC0-1.0",
+        "vendor": "CISA (Cybersecurity and Infrastructure Security Agency)"
+      },
+      "registered": true,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[scubagoggles]",
+        "post": "any_of(exec_observed(argv_prefix:[scubagoggles]), product_glob:[ScubaResults*.json, **/ScubaResults*.json])"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "scubagoggles"
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "scubagoggles"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "ScubaResults*.json",
+                "**/ScubaResults*.json"
               ]
             }
           ]
