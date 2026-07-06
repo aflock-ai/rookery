@@ -24,8 +24,14 @@ export interface Env {
   CILOCK_ANALYTICS_HUB?: string;
 }
 
-/** Canonical cross-property analytics hub ingest endpoint (see logDownload). */
-const ANALYTICS_HUB_DEFAULT = 'https://analytics.testifysec.com/ingest/web';
+/**
+ * Canonical cross-property analytics ingest endpoint (see logDownload).
+ * salespot IS the hub: the standalone analytics.testifysec.com property was
+ * scaffolded but never deployed, so relays to it fired into the void. salespot's
+ * /ingest/web accepts this exact wire shape (kind=event/type=dl) and lands
+ * downloads as per-day WebMetric counters.
+ */
+const ANALYTICS_HUB_DEFAULT = 'https://salespot.testifysec.com/ingest/web';
 /**
  * Anti-noise write key the hub expects on /ingest/web (low-security, not a secret —
  * it just keeps casual junk out; real abuse protection is edge rate-limiting). Must
