@@ -215,6 +215,25 @@ func (e ErrSelfReference) Error() string {
 	return fmt.Sprintf("step '%v' cannot depend on itself", e.Step)
 }
 
+// ErrStepNameIncoherent is returned by Policy.Validate, ONLY when step-name
+// coherence enforcement is opted in (HardeningOptions.EnforceStepNameCoherence,
+// #6266), when a step's Name is empty or disagrees with its map key. The map key
+// is authoritative during search/result-merge while Step.Name drives the
+// collection-name filter and artifact lookup; a disagreement otherwise surfaces
+// far later at verify as a misleading "no passed collections" error. Key and Name
+// are both reported so the misconfiguration is unambiguous.
+type ErrStepNameIncoherent struct {
+	Key  string
+	Name string
+}
+
+func (e ErrStepNameIncoherent) Error() string {
+	if e.Name == "" {
+		return fmt.Sprintf("step keyed %q has an empty Name; the map key and Step.Name must match (#6266)", e.Key)
+	}
+	return fmt.Sprintf("step keyed %q has mismatched Name %q; the map key and Step.Name must match (#6266)", e.Key, e.Name)
+}
+
 type ErrDependencyNotVerified struct {
 	Step string
 }

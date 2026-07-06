@@ -193,6 +193,12 @@ func TestSecurity_R3_180_CompareArtifactsIgnoresExtraUpstreamArtifacts(t *testin
 // ===========================================================================
 
 func TestSecurity_R3_181_EmptyConstraintMatchesEmptyCertFields(t *testing.T) {
+	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_181); opt-in
+	// enforcement via HardeningOptions.RejectEmptyConstraintEmptyField, proven by
+	// TestEnforce_R3_181. This detector intentionally stays RED to track that
+	// enforcement is NOT the default (warn-first). It is also internally
+	// inconsistent — it asserts empty+empty both PASSES ("dns name") and FAILS
+	// ("organization") — so it can only go green once enforcement is the default.
 	// Verify that nil constraints + nil values = pass
 	err := checkCertConstraint("dns name", nil, nil)
 	if err != nil {
@@ -347,6 +353,9 @@ func TestSecurity_R3_182_EmptyMaterialsBypassesArtifactCheck(t *testing.T) {
 // ===========================================================================
 
 func TestSecurity_R3_183_RegoPackageNameCollisionEnablesShadowing(t *testing.T) {
+	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_183); opt-in
+	// enforcement via HardeningOptions.RejectDuplicateRegoPackage, proven by
+	// TestEnforce_R3_183. Stays RED to track the default-OFF gap (warn-first).
 	// Legitimate policy: denies if "approved" is not true.
 	legitimateModule := RegoPolicy{
 		Name: "legitimate.rego",
@@ -440,6 +449,11 @@ is_approved {
 // ===========================================================================
 
 func TestSecurity_R3_184_PublicKeyIDMatchBypassesCertConstraint(t *testing.T) {
+	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_184); opt-in
+	// enforcement via HardeningOptions.EnforceCertConstraintOnKeyIDMatch, proven
+	// by TestEnforce_R3_184. Stays RED to track that enforcing the constraint on a
+	// key-ID match is NOT the default (warn-first — the issue flags this a PRODUCT
+	// CALL because both-set policies would start failing closed).
 	// Create a CA and leaf cert.
 	caPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -549,6 +563,12 @@ func TestSecurity_R3_184_PublicKeyIDMatchBypassesCertConstraint(t *testing.T) {
 // ===========================================================================
 
 func TestSecurity_R3_185_ValidateAcceptsEmptyStepName(t *testing.T) {
+	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_185_187_209); opt-in
+	// enforcement via HardeningOptions.EnforceStepNameCoherence, proven by
+	// TestEnforce_R3_185_187_209. Stays RED to track the default-OFF gap. Kept
+	// warn-first rather than fixed-outright because #6276 (Cole co-authored)
+	// already locked in "no behavior change" for these, and a post-F10 empty-name
+	// step + empty-name collection is a degenerate case that can still pass verify.
 	p := Policy{
 		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
@@ -676,6 +696,11 @@ func TestSecurity_R3_186_NoAttestationsRequiredAutoPassesAnyCollection(t *testin
 // ===========================================================================
 
 func TestSecurity_R3_187_StepNameVsMapKeyBreaksArtifactVerification(t *testing.T) {
+	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_185_187_209); opt-in
+	// enforcement via HardeningOptions.EnforceStepNameCoherence, proven by
+	// TestEnforce_R3_185_187_209. Stays RED to track the default-OFF gap
+	// (warn-first). The mismatch already fails closed at verify today — enforcing
+	// only turns that misleading verify-time error into a clear load-time error.
 	verifier, keyID := r3MakeVerifierAndKeyID(t)
 	attType := "https://example.com/att/v1"
 

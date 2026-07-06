@@ -287,13 +287,19 @@ func (p Policy) Validate() error { //nolint:gocognit,gocyclo
 		// R3_185/187/209 (#6266): the map key is the authoritative step name at
 		// verify time, but Step.Name is what artifact/cross-step wiring and error
 		// messages use. When they disagree — or Name is empty — verification fails
-		// later with a misleading error that does not name the real cause. Warn
-		// loudly here at load time (warn-first; enforcement deferred). No error is
-		// returned, so behavior is unchanged.
-		if step.Name == "" {
-			log.Warnf("policy misconfiguration: step keyed %q has an empty Name; verification will fail at runtime with a misleading error (#6266)", name)
-		} else if step.Name != name {
-			log.Warnf("policy misconfiguration: step keyed %q has mismatched Name %q; verification will fail at runtime with a misleading error (#6266)", name, step.Name)
+		// later with a misleading error that does not name the real cause.
+		if step.Name == "" || step.Name != name {
+			if Hardening().EnforceStepNameCoherence {
+				// Enforce (opt-in): reject the misconfiguration at load time with a
+				// clear error instead of a misleading verify-time failure.
+				return ErrStepNameIncoherent{Key: name, Name: step.Name}
+			}
+			// Warn-first (default): no error is returned, so behavior is unchanged.
+			if step.Name == "" {
+				log.Warnf("policy misconfiguration: step keyed %q has an empty Name; verification will fail at runtime with a misleading error (#6266)", name)
+			} else {
+				log.Warnf("policy misconfiguration: step keyed %q has mismatched Name %q; verification will fail at runtime with a misleading error (#6266)", name, step.Name)
+			}
 		}
 
 		for _, dep := range step.AttestationsFrom {

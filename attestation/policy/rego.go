@@ -103,8 +103,12 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 			// R3_183 (#6266): a second module declaring the same package name is
 			// merged by OPA — their rules coexist in one package and can shadow
 			// each other. Policies are signed/trusted input so this is not a live
-			// bypass, but it is a footgun. Warn loudly (warn-first; enforcement
-			// deferred) instead of silently merging.
+			// bypass, but it is a footgun.
+			if Hardening().RejectDuplicateRegoPackage {
+				// Enforce (opt-in): reject the whole module set rather than merge.
+				return fmt.Errorf("duplicate rego package name %v across modules; OPA merges same-package rules which can shadow each other — give each module a distinct package (#6266)", parsedModule.Package.Path)
+			}
+			// Warn-first (default): merge as before but surface the footgun loudly.
 			log.Warnf("duplicate rego package name %v across modules — rules merge and can shadow each other (#6266)", parsedModule.Package.Path)
 		}
 

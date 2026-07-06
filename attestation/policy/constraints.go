@@ -408,6 +408,32 @@ func checkCertConstraintGlob(attribute, constraint, value string) error {
 	return nil
 }
 
+// resolveEmptyConstraint handles the len(constraints)==0 case for a SAN attribute
+// (after empty-string normalization). An empty list-constraint forbids ALL present
+// values, so a cert that presents one is rejected. An empty constraint against an
+// empty cert field is a no-op match (R3_181, #6266): benign alone, but combined
+// with permissive roots (Roots=["*"]) it makes identity verification vacuous. By
+// default that no-op match passes with a loud WARN (behavior unchanged); opting in
+// to HardeningOptions.RejectEmptyConstraintEmptyField fails it closed instead.
+func resolveEmptyConstraint(attribute string, values []string) error {
+	if len(values) > 0 {
+		// An empty list-constraint forbids ALL of this SAN type, so a cert that
+		// presents one is rejected. Name the value(s) and the fix — a null/empty
+		// constraint reads like "allow any" but does the opposite.
+		return fmt.Errorf("cert presents %s %+q but the policy's %s constraint is empty, which forbids all; add the value to the functionary's certConstraint %s list (or %q to allow any)",
+			attribute, values, attribute, attribute, AllowAllConstraint)
+	}
+	if Hardening().RejectEmptyConstraintEmptyField {
+		// Enforce (opt-in): fail closed rather than accept a vacuous match.
+		return fmt.Errorf("empty %s constraint matched an empty cert field; with permissive roots this makes identity verification a no-op — specify a %s value (or %q to explicitly allow any) (#6266)",
+			attribute, attribute, AllowAllConstraint)
+	}
+	// Warn-first (default): behavior is unchanged — this path already returned
+	// success — but surface the weakening loudly.
+	log.Warnf("empty constraint matched empty cert field %s — combined with permissive roots this weakens identity verification (#6266)", attribute)
+	return nil
+}
+
 func checkCertConstraint(attribute string, constraints, values []string) error {
 	// Honor the AllowAllConstraint ("*") at ANY position, not only when it is the
 	// sole element (F13/F18, #5746). A list like ["admin@x", "*"] means "allow any
@@ -432,22 +458,7 @@ func checkCertConstraint(attribute string, constraints, values []string) error {
 	values = dropEmpty(values)
 
 	if len(constraints) == 0 {
-		if len(values) > 0 {
-			// An empty list-constraint forbids ALL of this SAN type, so a cert that
-			// presents one is rejected. Name the value(s) and the fix — a null/empty
-			// constraint reads like "allow any" but does the opposite.
-			return fmt.Errorf("cert presents %s %+q but the policy's %s constraint is empty, which forbids all; add the value to the functionary's certConstraint %s list (or %q to allow any)",
-				attribute, values, attribute, attribute, AllowAllConstraint)
-		}
-
-		// R3_181 (#6266): an empty constraint against an empty cert field is a
-		// no-op match that currently passes. On its own that is benign, but a
-		// policy whose Roots are all-wildcard ("*") plus empty SAN constraints
-		// makes identity verification a no-op. Warn loudly (warn-first;
-		// enforcement deferred) rather than silently accepting. Behavior is
-		// unchanged: this path already returned success below.
-		log.Warnf("empty constraint matched empty cert field %s — combined with permissive roots this weakens identity verification (#6266)", attribute)
-		return nil
+		return resolveEmptyConstraint(attribute, values)
 	}
 
 	// Split constraints into EXACT (no glob metachar) and GLOB. Exact constraints

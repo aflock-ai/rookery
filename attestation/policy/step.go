@@ -307,10 +307,13 @@ func (f Functionary) Validate(verifier cryptoutil.Verifier, trustBundles map[str
 	if f.PublicKeyID != "" && f.PublicKeyID == verifierID {
 		// R3_184 (#6266): the PublicKeyID match short-circuits before
 		// CertConstraint.Check runs, so a functionary that sets BOTH fields has
-		// its certificate constraint silently ignored on a key-ID match. Warn
-		// loudly (warn-first; enforcement deferred) so the misconfiguration is
-		// visible instead of a false sense of certificate-scoped trust.
+		// its certificate constraint silently ignored on a key-ID match.
 		if f.CertConstraint.IsSet() {
+			if Hardening().EnforceCertConstraintOnKeyIDMatch {
+				return f.enforceCertConstraintAfterKeyIDMatch(verifier, trustBundles, verifierID)
+			}
+			// Warn-first (default): the constraint is silently ignored on a key-ID
+			// match, so surface the misconfiguration loudly instead.
 			log.Warn("functionary sets both PublicKeyID and CertConstraint; the certificate constraint is IGNORED when the key ID matches (enforcement tracked in #6266)")
 		}
 		return nil
@@ -329,6 +332,25 @@ func (f Functionary) Validate(verifier cryptoutil.Verifier, trustBundles map[str
 		return fmt.Errorf("verifier with ID %v doesn't meet certificate constraint: %w", verifierID, err)
 	}
 
+	return nil
+}
+
+// enforceCertConstraintAfterKeyIDMatch runs f.CertConstraint against the verifier
+// even though the PublicKeyID already matched (R3_184 enforcement, opt-in via
+// HardeningOptions.EnforceCertConstraintOnKeyIDMatch). A raw public-key verifier
+// cannot satisfy an X.509 constraint, so a CertConstraint set alongside a
+// PublicKeyID on a non-x509 verifier fails closed here.
+func (f Functionary) enforceCertConstraintAfterKeyIDMatch(verifier cryptoutil.Verifier, trustBundles map[string]TrustBundle, verifierID string) error {
+	x509Verifier, ok := verifier.(*cryptoutil.X509Verifier)
+	if !ok {
+		return fmt.Errorf("verifier with ID %v matched PublicKeyID but sets an X.509 CertConstraint it cannot satisfy (not an x509 verifier) (#6266)", verifierID)
+	}
+	if len(f.CertConstraint.Roots) == 0 {
+		return fmt.Errorf("verifier with ID %v matched PublicKeyID but its CertConstraint provides no trusted roots (#6266)", verifierID)
+	}
+	if err := f.CertConstraint.Check(x509Verifier, trustBundles); err != nil {
+		return fmt.Errorf("verifier with ID %v matched PublicKeyID but failed its certificate constraint: %w", verifierID, err)
+	}
 	return nil
 }
 

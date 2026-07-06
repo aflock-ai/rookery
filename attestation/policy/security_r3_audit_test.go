@@ -213,6 +213,12 @@ deny[msg] {
 // ===========================================================================
 
 func TestSecurity_R3_201_CrossStepContextBreaksExistingRegoPolicy(t *testing.T) {
+	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_201). Warn-only BY
+	// DESIGN — there is no enforcement flag (see hardening.go). Making input.name
+	// resolve again would mean a top-level compat-shim that undoes the intended
+	// {attestation, steps} shaping, and statically rejecting legacy input refs is
+	// hard; the issue itself blesses the warning as the fix. Stays RED to track
+	// the un-taken compat-shim option.
 	attType := "https://example.com/scan/v1"
 
 	// A backward-compatible Rego policy that checks input.name directly.
@@ -775,6 +781,10 @@ deny[msg] {
 // ===========================================================================
 
 func TestSecurity_R3_209_ValidateDoesNotCheckStepNameMatchesKey(t *testing.T) {
+	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_185_187_209); opt-in
+	// enforcement via HardeningOptions.EnforceStepNameCoherence, proven by
+	// TestEnforce_R3_185_187_209. Stays RED to track the default-OFF gap
+	// (warn-first).
 	p := Policy{
 		Steps: map[string]Step{
 			"map-key": {
