@@ -117,7 +117,7 @@ go run ./cmd/builder/ --preset minimal --local --output /tmp/test-binary
 Available presets (`builder/cmd/builder/main.go`): `minimal` (commandrun,
 environment, git, material, product + file signer), `cicd` (minimal + github,
 gitlab, slsa), `all` (every signer + most attestors; a few cilock-only
-plugins such as `github-review` and `apple-device` are not in the preset). See
+plugins such as `github-review` are not in the preset). See
 `go run ./cmd/builder/ --help` for manifest and `--with` forms.
 
 ### Adding a New Plugin

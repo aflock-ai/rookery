@@ -63,8 +63,8 @@ Any external consumer of the platform API that hardcoded the old names must upda
 
 ## Plugins still without a category
 
-19 plugins under `plugins/attestors/` ship an attestor but no `detector.yaml`:
-`apple-device`, `commandrun`, `configuration`, `environment`, `githubaction`,
+18 plugins under `plugins/attestors/` ship an attestor but no `detector.yaml`:
+`commandrun`, `configuration`, `environment`, `githubaction`,
 `githubwebhook`, `inclusion-proof`, `jwt`, `k8smanifest`, `link`, `material`,
 `omnitrail`, `policyverify`, `product`, `secretscan`, `slsa`, `structured-data`,
 `system-packages`, `vsa`. (Reproduce with
@@ -83,6 +83,5 @@ be valid Tier 1/2 names from `attestation/detection/categories.go`):
 - `system-packages` → `sbom-generate`
 - `policyverify` → `policy-eval`
 - `vsa` → `release-approve`
-- `apple-device` → not yet triaged (device-identity capture; no Tier 1/2 category maps cleanly today)
 - `omnitrail`, `material`, `product` → no category (envelope wrappers / fingerprint riders; named in composition rule 6)
 - `inclusion-proof`, `jwt`, `structured-data` → no category (envelope/format adapters; named in composition rule 6)

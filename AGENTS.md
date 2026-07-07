@@ -8,7 +8,7 @@ Humans: this is a quick map of where things live, what to run, and what trips ag
 
 ## What this repo is
 
-Rookery is a Go monorepo that produces **`cilock`** — a witness-compatible CLI for emitting and verifying SLSA / in-toto attestations — plus the underlying library and 40+ attestor plugins. Read `README.md` first if you have no context.
+Rookery is a Go monorepo that produces **`cilock`** — a witness-compatible CLI for emitting and verifying SLSA / in-toto attestations — plus the underlying library and 50+ attestor plugins. Read `README.md` first if you have no context.
 
 The CLI binary entrypoint is `cilock/cmd/cilock/main.go`. Library entrypoint is `attestation/`. Plugins live in `plugins/attestors/<name>/` and `plugins/signers/<name>/`, each as its own Go module.
 
@@ -19,8 +19,8 @@ The CLI binary entrypoint is `cilock/cmd/cilock/main.go`. Library entrypoint is 
 ```
 attestation/         # Core library. AttestationContext, Attestor interface, DSSE.
 cilock/              # The CLI. cmd/cilock/main.go blank-imports plugins.
-plugins/attestors/   # 40+ attestors. Each has its own go.mod.
-plugins/signers/     # file, fulcio, kms/{aws,azure,gcp}, spiffe, vault, vault-transit.
+plugins/attestors/   # 50+ attestors. Each has its own go.mod.
+plugins/signers/     # file, fulcio, piv, debug-signer, kms/{aws,azure,gcp}, spiffe, vault, vault-transit.
 presets/             # all/, cicd/, minimal/ — curated blank-import sets.
 builder/             # Generates custom cilock binaries with chosen plugins.
 compat/              # Import shims so legacy witness.dev paths still resolve.

@@ -36,13 +36,16 @@ KMS tuning flags: `--signer-kms-hashType` and `--signer-kms-keyVersion`.
 
 ## Default (shipped in `cilock`)
 
-Only the `file` and `fulcio` signers are registered in the stock binary
-(`cilock/cmd/cilock/main.go:62-63`).
+The `file`, `fulcio`, and `piv` signers are registered in the stock binary
+(`cilock/cmd/cilock/main.go:67,68,74`). `piv` is pure Go (`CGO_ENABLED=0`) —
+it drives the YubiKey over PC/SC via goscard/purego, so it ships in the default
+static binary and only touches hardware when a `--signer-piv-*` flag is selected.
 
 | Name | Import path | Use case |
 |---|---|---|
 | `file` | `plugins/signers/file` | Local PEM key / dev signing |
 | `fulcio` | `plugins/signers/fulcio` | Keyless OIDC signing against Fulcio (sigstore) |
+| `piv` | `plugins/signers/piv` | YubiKey PIV slot-9c hardware signing (`--signer-piv-*`) |
 
 ## Opt-in via `rookery-builder`
 

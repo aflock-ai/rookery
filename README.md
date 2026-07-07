@@ -2,7 +2,7 @@
 
 **Modular supply-chain attestation toolkit for Go.** Build SLSA / in-toto evidence at every step of your SDLC — local dev, CI, release, deploy — and verify it with policy.
 
-Rookery is the upstream for **[`cilock`](cilock/)** (witness-compatible attestation CLI), the **[`attestation`](attestation/)** library, 50+ attestor plugins (see [`docs/attestor-catalog.md`](docs/attestor-catalog.md)), a pluggable signer set (file, Fulcio, KMS, Vault, Vault-Transit, SPIFFE), and a **[`builder`](builder/)** that emits custom binaries with only the plugins you want.
+Rookery is the upstream for **[`cilock`](cilock/)** (witness-compatible attestation CLI), the **[`attestation`](attestation/)** library, 50+ attestor plugins (see [`docs/attestor-catalog.md`](docs/attestor-catalog.md)), a pluggable signer set (file, Fulcio, PIV, KMS, Vault, Vault-Transit, SPIFFE), and a **[`builder`](builder/)** that emits custom binaries with only the plugins you want.
 
 ![cilock securing curl's supply chain](docs/img/hero-demo.gif)
 
@@ -65,7 +65,7 @@ rookery/
 ├── cilock/                 # Batteries-included CLI (witness-compatible)
 ├── plugins/
 │   ├── attestors/          # 50+ attestors, each its own Go module
-│   └── signers/            # file, fulcio, kms (aws|azure|gcp), spiffe, vault, vault-transit, debug-signer
+│   └── signers/            # file, fulcio, piv, kms (aws|azure|gcp), spiffe, vault, vault-transit, debug-signer
 ├── presets/                # Curated plugin sets (minimal, cicd, all) — blank-import these
 ├── builder/                # Generate custom cilock binaries with a chosen plugin set
 ├── compat/                 # Import shims for the legacy witness.dev module paths

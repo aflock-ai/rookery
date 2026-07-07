@@ -101,9 +101,16 @@ Regenerate after adding or renaming an attestor:
 
 ## Default sets
 
-| Surface | Default attestors |
-|---|---|
-| `cilock run` (no `--attestations`) | environment, git, platform, github, gitlab, jenkins, jwt, aws, gcp-iit, github-action, command-run, material, product |
-| `cilock-action` (no `attestations:` input) | environment, git, github |
+The default `--attestations` set (`cilock/internal/options/run.go` `DefaultAttestors`) is only:
 
-When passing `--attestations`, you replace the default — you don't add to it. To extend rather than replace, list the defaults explicitly.
+| Surface | Default `--attestations` |
+|---|---|
+| `cilock run` (no `--attestations`) | environment, git, platform |
+| `cilock-action` (no `attestations:` input) | environment, git |
+
+On top of that:
+
+- **`product`, `material`, and `command-run` are always-on** — they run on every `cilock run` regardless of `--attestations` and cannot be selected by name (`command-run` warns if you try). Drop `product`/`material` with `--no-default-attestor`.
+- **Context attestors auto-fire via detection** — a plugin carrying detector rules (e.g. `aws-config`, `asff`, `github-action`) fires when the workspace detection sees its matching signal, independent of `--attestations`.
+
+When passing `--attestations`, you replace the default set (environment, git, platform) — you don't add to it. To extend rather than replace, list those defaults explicitly. The always-on and context attestors above fire either way.

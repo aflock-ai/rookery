@@ -25,9 +25,9 @@ cd presets/all && go build -o /tmp/cilock-all-cat ./cmd/cilock-all
 ```
 
 The script defaults to the `/tmp/cilock-all-cat` binary; override it with
-the `CILOCK_BIN` env var. The base `cilock` binary does not compile in the
-cloud-posture plugins (`aws-config`, `asff`) — build the all-attestors
-binary above so detection can fire them.
+the `CILOCK_BIN` env var. The cloud-posture plugins (`aws-config`, `asff`)
+ship in the stock `cilock` binary, so the base binary works here too — point
+`CILOCK_BIN` at it if you prefer.
 
 ## Validated AWS recipes (testifysec-demo)
 
