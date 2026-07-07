@@ -206,7 +206,8 @@ func VerifyPolicySignature(ctx context.Context, envelope dsse.Envelope, vo *Veri
 // trusted on the strength of chaining to a CA root alone (GHSA-mpvw-hw8p-7x27).
 func policyFunctionaryForVerifier(vo *VerifyPolicySignatureOptions, verifier dsse.CheckedVerifier, kid string) (policy.Functionary, map[string]policy.TrustBundle, bool) {
 	trustBundle := make(map[string]policy.TrustBundle)
-	if _, ok := verifier.Verifier.(*cryptoutil.X509Verifier); !ok {
+	x509v, ok := verifier.Verifier.(*cryptoutil.X509Verifier)
+	if !ok {
 		return policy.Functionary{Type: "key", PublicKeyID: kid}, trustBundle, false
 	}
 
@@ -222,18 +223,81 @@ func policyFunctionaryForVerifier(vo *VerifyPolicySignatureOptions, verifier dss
 		trustBundle[id] = policy.TrustBundle{Root: root}
 	}
 
+	// Resolve each SAN-list constraint through the signer-path empty-list
+	// relaxation (see effectivePolicySignerSANList): an empty --policy-* list
+	// matched against a cert field the leaf does not carry stays a no-op pass
+	// under R3_181 enforcement (#6266/#6454), provided the signer identity is
+	// genuinely pinned by some other concrete constraint.
+	pinned := signerIdentityPinned(vo)
+	cert := x509v.Certificate()
+	var certURIs, certDNS, certEmails, certOrgs []string
+	if cert != nil {
+		certURIs = make([]string, 0, len(cert.URIs))
+		for _, u := range cert.URIs {
+			certURIs = append(certURIs, u.String())
+		}
+		certDNS = cert.DNSNames
+		certEmails = cert.EmailAddresses
+		certOrgs = cert.Subject.Organization
+	}
+
 	return policy.Functionary{
 		Type: "root",
 		CertConstraint: policy.CertConstraint{
 			Roots:         rootIDs,
 			CommonName:    effectivePolicySignerCommonName(vo),
-			URIs:          vo.policyURIs,
-			Emails:        vo.policyEmails,
-			Organizations: vo.policyOrganizations,
-			DNSNames:      vo.policyDNSNames,
+			URIs:          effectivePolicySignerSANList(pinned, vo.policyURIs, certURIs),
+			Emails:        effectivePolicySignerSANList(pinned, vo.policyEmails, certEmails),
+			Organizations: effectivePolicySignerSANList(pinned, vo.policyOrganizations, certOrgs),
+			DNSNames:      effectivePolicySignerSANList(pinned, vo.policyDNSNames, certDNS),
 			Extensions:    vo.fulcioCertExtensions,
 		},
 	}, trustBundle, false
+}
+
+// signerIdentityPinned reports whether the operator pinned the policy-signer
+// identity by at least one CONCRETE constraint: a non-wildcard CommonName, a
+// SAN list in which every element is concrete (pinsIdentity), or a Fulcio
+// extension that pins identity (extensionsPinIdentity). It gates the
+// empty-SAN-list relaxation below the same way the email/URI pin gates the
+// empty-CN relaxation in effectivePolicySignerCommonName: with nothing pinned,
+// nothing is relaxed and verification keeps failing closed
+// (GHSA-mpvw-hw8p-7x27).
+func signerIdentityPinned(vo *VerifyPolicySignatureOptions) bool {
+	if vo.policyCommonName != "" && vo.policyCommonName != policy.AllowAllConstraint {
+		return true
+	}
+	return pinsIdentity(vo.policyEmails) || pinsIdentity(vo.policyURIs) ||
+		pinsIdentity(vo.policyDNSNames) || pinsIdentity(vo.policyOrganizations) ||
+		extensionsPinIdentity(vo)
+}
+
+// effectivePolicySignerSANList resolves one multi-value SAN constraint list
+// (dnsnames/emails/organizations/uris) applied to a policy-SIGNER cert. On the
+// signer path an empty list has always meant "unconstrained": before #6266 an
+// empty list matched against a cert field the leaf does not carry was a no-op
+// pass, and operators pin the signer with --policy-emails / --policy-uris while
+// leaving the other lists at their empty defaults (the exact release-fanout
+// shape). Under R3_181 ENFORCEMENT (empty constraint vs empty cert field fails
+// closed, #6266/#6454) that spelling would reject EVERY keyless author-signed
+// policy — the same regression class as the empty-CN case handled by
+// effectivePolicySignerCommonName, and resolved the same way:
+//
+//   - constraint empty + cert field ABSENT + identity otherwise pinned →
+//     AllowAll (preserves the pre-#6266 no-op pass, bit-for-bit).
+//   - constraint empty + cert field PRESENT → left empty: the downstream
+//     "empty list forbids all present values" rejection is unchanged.
+//   - nothing pinned anywhere → left empty: fails closed downstream.
+//   - non-empty constraints are never touched.
+//
+// The policy-EMBEDDED functionary constraints (policy.CertConstraint.Check on
+// step functionaries) are NOT relaxed — a policy author must spell out "*"
+// explicitly there.
+func effectivePolicySignerSANList(pinned bool, constraint, certValues []string) []string {
+	if pinned && len(constraint) == 0 && len(certValues) == 0 {
+		return []string{policy.AllowAllConstraint}
+	}
+	return constraint
 }
 
 // effectivePolicySignerCommonName resolves the CommonName constraint applied

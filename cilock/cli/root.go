@@ -56,7 +56,7 @@ func New() *cobra.Command {
 				cmd.SilenceUsage = true
 				return errHelpAdvanced
 			}
-			return preRoot(ro, logger, &cpuProfileFile)
+			return preRoot(cmd, ro, logger, &cpuProfileFile)
 		},
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
 			postRoot(ro, logger, cpuProfileFile)
@@ -104,7 +104,7 @@ func Execute() {
 	}
 }
 
-func preRoot(ro *options.RootOptions, logger *logrusLogger, cpuProfileFile **os.File) error {
+func preRoot(cmd *cobra.Command, ro *options.RootOptions, logger *logrusLogger, cpuProfileFile **os.File) error {
 	// Harden the process against extraction of in-memory secrets (the signing
 	// key) by a same-UID local attacker — non-forgeable-provenance requires the
 	// key to be unextractable while live. Applied as early as possible, before
@@ -115,6 +115,17 @@ func preRoot(ro *options.RootOptions, logger *logrusLogger, cpuProfileFile **os.
 
 	if err := logger.SetLevel(ro.LogLevel); err != nil {
 		return fmt.Errorf("invalid log level: %w", err)
+	}
+
+	// Opt in to the #6266 policy-verification hardening (ENFORCE by default,
+	// #6454) before any command logic can load, validate, or verify a policy.
+	// The flag lives on the root persistent flag set; the executing subcommand
+	// parses the same *pflag.Flag instance, so Changed is read there.
+	mode := options.ResolveString(ro.PolicyHardening,
+		cmd.Root().PersistentFlags().Changed(policyHardeningFlag),
+		policyHardeningEnv, policyHardeningEnforce)
+	if err := applyPolicyHardening(mode); err != nil {
+		return err
 	}
 
 	if len(ro.CpuProfileFile) > 0 {

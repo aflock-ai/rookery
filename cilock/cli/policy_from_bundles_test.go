@@ -69,11 +69,13 @@ func TestExtractLeafConstraintFields_PinsURIAndIssuer(t *testing.T) {
 	require.NoError(t, err)
 	leafPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 
-	cn, emails, uris, issuer := extractLeafConstraintFields(leafPEM)
+	cn, emails, uris, dnsNames, organizations, issuer := extractLeafConstraintFields(leafPEM)
 	assert.Empty(t, cn, "workflow-identity cert has no CN")
 	assert.Empty(t, emails, "workflow-identity cert has no SAN email")
 	assert.Equal(t, []string{"https://github.com/acme/repo/.github/workflows/release.yml@refs/tags/v1.0.0"}, uris,
 		"SAN URI must be extracted so the policy can pin it")
+	assert.Empty(t, dnsNames, "workflow-identity cert has no SAN DNS names")
+	assert.Empty(t, organizations, "workflow-identity cert has no subject organizations")
 	assert.Equal(t, "https://token.actions.githubusercontent.com", issuer,
 		"OIDC issuer must be extracted from the Fulcio extension via the verifier's own parser")
 }

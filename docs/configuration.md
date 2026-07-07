@@ -45,6 +45,7 @@ For the full set, run `cilock run --help` and `cilock verify --help`.
 | `CILOCK_HASH_WORKERS` | — | auto | Number of hashing goroutines in the eBPF consumer. |
 | `CILOCK_FSVERITY` | — | off | Opt-in fs-verity sealing of trace outputs. |
 | `CILOCK_DIAGNOSE` | `--diagnose` | off | Verbose internal logging across cilock subsystems (eBPF program loading, BPF CO-RE probe results, ringbuf drop reports). Replaces the per-feature `CILOCK_EBPF_DEBUG` / `CILOCK_BPF_DIAGNOSE` env vars. |
+| `CILOCK_POLICY_HARDENING` | `--policy-hardening` (global, all commands) | `enforce` | Policy-verification hardening mode (#6266). `enforce` rejects dangerous policy configurations (vacuous empty cert constraints, certConstraint ignored on key-ID match, duplicate rego packages, incoherent step names); `warn` downgrades them to loud warnings — a deliberate, temporary escape hatch for legacy signed policies. An invalid value fails the run. Distinct from `cilock run --hardening` (runtime tracing profile). |
 | `CILOCK_DEV_BPF_OBJECT_PATH` | — | — | **Dev-only**. Path to a prebuilt BPF object file; skips the embedded-object load. Not part of the supported operator surface. (Was: `CILOCK_BPF_OBJECT_PATH`.) |
 | `CILOCK_DEV_BPF_REBUILD` | — | `on` | **Dev-only**. Set to `off` to disable the rebuild-on-CO-RE-failure path. (Was: `CILOCK_BPF_REBUILD`.) |
 | `CILOCK_DEV_BPF_SKIP_PROGRAMS` | — | — | **Dev-only**. Comma-separated BPF program names to skip during load. Used to isolate CO-RE failures. (Was: `CILOCK_BPF_SKIP_PROGRAMS`.) |

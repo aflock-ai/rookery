@@ -19,13 +19,16 @@ import (
 )
 
 type RootOptions struct {
-	LogLevel       string
-	CpuProfileFile string
-	MemProfileFile string
+	LogLevel        string
+	CpuProfileFile  string
+	MemProfileFile  string
+	PolicyHardening string
 }
 
 func (ro *RootOptions) AddFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVarP(&ro.LogLevel, "log-level", "l", "info", "Level of logging to output (debug, info, warn, error)")
 	cmd.PersistentFlags().StringVar(&ro.CpuProfileFile, "debug-cpu-profile-file", "", "Path to store the CPU profile. Profiling will be enabled if this is non-empty")
 	cmd.PersistentFlags().StringVar(&ro.MemProfileFile, "debug-mem-profile-file", "", "Path to store the Memory profile. Profiling will be enabled if this is non-empty")
+	cmd.PersistentFlags().StringVar(&ro.PolicyHardening, "policy-hardening", "enforce",
+		"Policy-verification hardening mode (#6266). 'enforce' (default) rejects dangerous policy configurations: vacuous empty cert constraints, certConstraint ignored on key-ID match, duplicate rego packages, incoherent step names. 'warn' downgrades them to loud warnings for legacy policies that cannot be re-signed yet. Also settable via CILOCK_POLICY_HARDENING")
 }
