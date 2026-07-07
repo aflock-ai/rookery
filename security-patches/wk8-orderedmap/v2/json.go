@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"unicode/utf8"
 )
 
@@ -84,10 +85,10 @@ func writeJSONKey[K comparable](buf *bytes.Buffer, key K) error { //nolint:funle
 		if err != nil {
 			return err
 		}
-		buf.WriteByte('"')
-		buf.Write(text)
-		buf.WriteByte('"')
-		return nil
+		// MarshalText output may contain `"`, `\`, or control chars and must
+		// be JSON-string-escaped before being written between the surrounding
+		// quotes — writing raw bytes would produce invalid JSON.
+		return encodeStringKey(buf, string(text))
 	case int:
 		return encodeNumberKey(buf, fmt.Sprintf("%d", k))
 	case int8:
@@ -230,13 +231,28 @@ func assignKey[K comparable](dst *K, keyStr string) error { //nolint:funlen
 			}
 			rv.Set(reflect.ValueOf(keyStr).Convert(rv.Type()))
 			return nil
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			var raw any
-			if err := json.Unmarshal([]byte(keyStr), &raw); err != nil {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			// Parse the numeric string directly into int64 — going through
+			// json.Unmarshal into `any` would land in float64 and lose
+			// precision for keys > 2^53.
+			n, err := strconv.ParseInt(keyStr, 10, 64)
+			if err != nil {
 				return err
 			}
-			rv.Set(reflect.ValueOf(raw).Convert(rv.Type()))
+			if rv.OverflowInt(n) {
+				return fmt.Errorf("integer overflow: %s does not fit in %s", keyStr, rv.Type())
+			}
+			rv.SetInt(n)
+			return nil
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			n, err := strconv.ParseUint(keyStr, 10, 64)
+			if err != nil {
+				return err
+			}
+			if rv.OverflowUint(n) {
+				return fmt.Errorf("unsigned overflow: %s does not fit in %s", keyStr, rv.Type())
+			}
+			rv.SetUint(n)
 			return nil
 		default:
 			return fmt.Errorf("unsupported key type: %T", *dst)

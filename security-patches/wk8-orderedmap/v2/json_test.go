@@ -10,6 +10,7 @@ package orderedmap_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -107,6 +108,73 @@ func TestIntKey(t *testing.T) {
 	}
 	if v, ok := decoded.Get(1); !ok || v != "one" {
 		t.Errorf("expected decoded[1]='one', got %q (ok=%v)", v, ok)
+	}
+}
+
+// textMarshalerKey is a type whose MarshalText output contains JSON
+// metacharacters (`"`, `\`, control bytes). Encoding its value as a map
+// key must JSON-escape the bytes — writing them raw would emit invalid
+// JSON.
+type textMarshalerKey string
+
+func (t textMarshalerKey) MarshalText() ([]byte, error) {
+	return []byte(string(t)), nil
+}
+
+func (t *textMarshalerKey) UnmarshalText(b []byte) error {
+	*t = textMarshalerKey(b)
+	return nil
+}
+
+// TestTextMarshalerKey_SpecialChars guards against the JSON-injection /
+// invalid-JSON regression where a TextMarshaler-produced byte slice was
+// written between surrounding quotes without escaping.
+func TestTextMarshalerKey_SpecialChars(t *testing.T) {
+	om := orderedmap.New[textMarshalerKey, string]()
+	om.Set(`has "quotes"`, "v1")
+	om.Set(`has\backslash`, "v2")
+	om.Set("has\tcontrol", "v3")
+
+	encoded, err := json.Marshal(om)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Output must be valid JSON when handed back to the stdlib decoder.
+	var roundtrip map[string]string
+	if err := json.Unmarshal(encoded, &roundtrip); err != nil {
+		t.Fatalf("marshalled output is not valid JSON: %v\nencoded: %s", err, encoded)
+	}
+	if roundtrip[`has "quotes"`] != "v1" || roundtrip[`has\backslash`] != "v2" || roundtrip["has\tcontrol"] != "v3" {
+		t.Errorf("keys not preserved through round-trip: %#v", roundtrip)
+	}
+}
+
+// TestLargeUint64WrapperKey guards against silent precision loss when
+// decoding wrapper-typed numeric keys (`type MyID uint64`). Previously
+// the code unmarshalled into `any` (→ float64), which round-trips lossily
+// for values > 2^53.
+func TestLargeUint64WrapperKey(t *testing.T) {
+	type myID uint64
+	const big myID = 9007199254740993 // 2^53 + 1 — not exactly representable as float64
+
+	encoded := []byte(fmt.Sprintf(`{"%d":"v"}`, big))
+	om := orderedmap.New[myID, string]()
+	if err := json.Unmarshal(encoded, om); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	v, ok := om.Get(big)
+	if !ok {
+		// Walk what we have to surface what got decoded.
+		var got myID
+		for pair := om.Oldest(); pair != nil; pair = pair.Next() {
+			got = pair.Key
+			break
+		}
+		t.Fatalf("expected key %d to decode exactly; got %d (off by %d)", big, got, int64(got)-int64(big))
+	}
+	if v != "v" {
+		t.Errorf("value mismatch: %q", v)
 	}
 }
 
