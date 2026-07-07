@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# gate — CI fail-open lint target (jade lint-gate-scripts). Keep threshold
+# comparisons floored and never mask failures.
 # Fail if presets/all/imports.go declares attestors that are NOT in the canonical
 # cilock binary, unless the attestor is on the documented exclusion list.
 #

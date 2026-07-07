@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# gate — CI fail-open lint target (jade lint-gate-scripts). Keep threshold
+# comparisons floored (`[ "$N" -gt 0 ] || exit 2`) and never mask failures.
 # Checks the cilock binary's transitive dependency tree against the budget
 # committed in .dep-budget.yaml.
 #

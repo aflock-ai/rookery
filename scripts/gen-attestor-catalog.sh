@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# gate — CI fail-open lint target (jade lint-gate-scripts). Keep threshold
+# comparisons floored and never mask failures.
 # Regenerates docs/attestor-catalog.md by walking plugins/attestors/*/ and
 # extracting each attestor's registered Name, RunType, and PredicateType.
 #

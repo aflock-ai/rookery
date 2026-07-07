@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# gate — CI fail-open lint target (jade lint-gate-scripts). Keep threshold
+# comparisons floored and never mask failures.
 # Drift guard for detector.yaml ↔ init() wiring.
 #
 # Rules enforced:
