@@ -20,7 +20,7 @@ The CLI binary entrypoint is `cilock/cmd/cilock/main.go`. Library entrypoint is 
 attestation/         # Core library. AttestationContext, Attestor interface, DSSE.
 cilock/              # The CLI. cmd/cilock/main.go blank-imports plugins.
 plugins/attestors/   # 50+ attestors. Each has its own go.mod.
-plugins/signers/     # file, fulcio, piv, debug-signer, kms/{aws,azure,gcp}, spiffe, vault, vault-transit.
+plugins/signers/     # signer plugins — canonical list in docs/signers.md.
 presets/             # all/, cicd/, minimal/ — curated blank-import sets.
 builder/             # Generates custom cilock binaries with chosen plugins.
 compat/              # Import shims so legacy witness.dev paths still resolve.
