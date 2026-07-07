@@ -416,6 +416,12 @@ jobs:
       - name: Scan for forbidden patterns
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
+          # Fail CLOSED: an unresolvable base SHA would make `git diff` emit an
+          # empty stream and the scan trivially "pass". Assert it's set.
+          if [ -z "$BASE" ]; then
+            echo "::error::base SHA is empty — cannot compute the diff to scan; refusing to pass"
+            exit 1
+          fi
           ERRORS=""
 
           # File-aware diff scanning: track current file to properly
@@ -480,7 +486,7 @@ jobs:
                 fi
               fi
             fi
-          done < <(git diff "$BASE"..HEAD -- '*.go' || true)
+          done < <(git diff "$BASE"..HEAD -- '*.go')
 
           if [ -n "$ERRORS" ]; then
             echo "Forbidden patterns detected:$ERRORS"

@@ -43,6 +43,18 @@ EXCLUDED=(
 preset_attestors=$(grep -oE '/attestors/[a-z0-9-]+' "$PRESET" | sed 's|/attestors/||' | sort -u)
 canonical_attestors=$(grep -oE '/attestors/[a-z0-9-]+' "$CANONICAL" | sed 's|/attestors/||' | sort -u)
 
+# Fail CLOSED: an empty parse (moved/renamed file, changed import shape) would
+# make `comm` produce no missing attestors and the check trivially pass. Both
+# sets are known non-empty in a healthy tree, so refuse to proceed on empty.
+if [[ -z "$preset_attestors" ]]; then
+  echo "::error::parsed 0 attestors from $PRESET — parse is broken; refusing to pass" >&2
+  exit 2
+fi
+if [[ -z "$canonical_attestors" ]]; then
+  echo "::error::parsed 0 attestors from $CANONICAL — parse is broken; refusing to pass" >&2
+  exit 2
+fi
+
 missing=$(comm -23 <(echo "$preset_attestors") <(echo "$canonical_attestors"))
 
 unexplained=""

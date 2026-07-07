@@ -53,8 +53,23 @@ current_go_sum_bytes() {
   wc -c cilock/go.sum | awk '{print $1}'
 }
 
+# Fail CLOSED: a broken `go build` (toolchain, network, corrupted module) must
+# fail the gate, never silently produce an empty module list that trivially
+# "passes" the budget (PKGS=0 <= budget). Preflight the build WITHOUT stderr
+# suppression so the real error reaches the log, then refuse a zero count.
+# Mirrors agentflow/scripts/check-dep-budget.sh.
+_preflight_bin=$(mktemp)
+if ! (cd cilock && go build -o "$_preflight_bin" ./cmd/cilock/); then
+  rm -f "$_preflight_bin"
+  echo "::error::cilock build failed — cannot measure the dependency closure; refusing to pass"
+  exit 2
+fi
+rm -f "$_preflight_bin"
+
 PKGS=$(current_transitive_pkgs)
 BYTES=$(current_go_sum_bytes)
+
+[ "$PKGS" -gt 0 ] || { echo "::error::linked-module count is 0 — measurement is broken (cilock links real deps); refusing to pass"; exit 2; }
 
 if [ "${1:-}" = "--print" ]; then
   echo "cilock_transitive_pkgs: $PKGS"
@@ -63,15 +78,8 @@ if [ "${1:-}" = "--print" ]; then
 fi
 
 # ── Read budget ────────────────────────────────────────────────────────
-# Tiny YAML reader for our specific shape. Avoids a yq dependency on the
+# Tiny awk reader for our specific YAML shape. Avoids a yq dependency on the
 # runner — keeps the guardrail itself dep-light.
-extract_budget() {
-  local key="$1"
-  awk -v key="$key" '
-    $0 ~ "^" key ":" { sub(".*: ", ""); sub(" .*", ""); print; exit }
-  ' .dep-budget.yaml
-}
-
 BUDGET_PKGS=$(awk '/^  transitive_pkgs:/ { print $2; exit }' .dep-budget.yaml)
 BUDGET_BYTES=$(awk '/^  go_sum_bytes:/ { print $2; exit }' .dep-budget.yaml)
 
