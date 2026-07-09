@@ -81,6 +81,57 @@ func Discover(platformURL string) (*Discovery, error) {
 	return &d, nil
 }
 
+// FetchTSACertChain downloads the platform TSA certificate chain (PEM) that
+// discovery advertises at Signing.TSACertChainURL. It is the timestamp-trust
+// analogue of the inlined Signing.TrustBundlePEM: the chain that lets verify
+// validate RFC3161 tokens minted by the platform TSA without the user passing
+// --policy-timestamp-servers.
+//
+// Two guards, mirroring how the trust bundle travels:
+//   - same-origin: the chain is fetched only from the PLATFORM's own origin. A
+//     (possibly attacker-influenced) discovery document must not be able to
+//     point trust-material retrieval at a third-party host (#5987).
+//   - secure transport: https, or http for loopback only, exactly like the
+//     discovery fetch itself — timestamp roots sourced over cleartext could be
+//     substituted by an on-path attacker (see issue #5997).
+//
+// Callers must additionally gate ADOPTION of the returned chain on the same
+// trust decision that governs the discovery CA bundle (the GHSA #5988 TOFU
+// pin) — fetching is transport-safe here, but trusting is the caller's call.
+func FetchTSACertChain(platformURL string, disc *Discovery) ([]byte, error) {
+	if disc == nil || disc.Signing == nil || disc.Signing.TSACertChainURL == "" {
+		return nil, nil
+	}
+	chainURL := disc.Signing.TSACertChainURL
+	if !SameOrigin(chainURL, platformURL) {
+		return nil, fmt.Errorf("discovery tsa_cert_chain_url %q is not on the platform origin %q; refusing cross-origin trust material", chainURL, platformURL)
+	}
+	if err := RequireSecurePlatformURL(chainURL); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodGet, chainURL, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("build tsa cert chain request: %w", err)
+	}
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: SameOriginRedirect}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch tsa cert chain: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("tsa cert chain endpoint returned %d", resp.StatusCode)
+	}
+	pemBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read tsa cert chain: %w", err)
+	}
+	if !strings.Contains(string(pemBytes), "BEGIN CERTIFICATE") {
+		return nil, fmt.Errorf("tsa cert chain endpoint %q returned no PEM certificates", chainURL)
+	}
+	return pemBytes, nil
+}
+
 // NormalizeURL trims surrounding space and a trailing slash so platform URLs
 // compare and concatenate consistently. Mirrors auth.NormalizeURL (kept here to
 // avoid an import cycle: auth already depends on config).

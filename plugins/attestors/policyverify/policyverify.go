@@ -15,7 +15,6 @@
 package policyverify
 
 import (
-	"crypto"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -59,7 +58,7 @@ type Attestor struct {
 	stepResults        map[string]policy.StepResult
 	policyEnvelope     dsse.Envelope
 	collectionSource   source.Sourcer
-	subjectDigests     []string
+	subjectDigestSets  []cryptoutil.DigestSet
 	aiServerURL        string
 	kmsProviderOptions map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 }
@@ -102,12 +101,25 @@ func (a *Attestor) SetPolicyVerificationOptions(opts *policysig.VerifyPolicySign
 	a.VerifyPolicySignatureOptions = opts
 }
 
+// SetSubjectDigests records the seed subjects PRESERVING each digest's
+// declared algorithm (the CLI stores a "sha1:<hex>" --subjects value under
+// SHA-1). The policy engine's value-based search consumes the flattened hex
+// values via seedDigestStrings; Subjects() re-emits each digest under its true
+// algorithm instead of mislabeling everything sha256.
 func (a *Attestor) SetSubjectDigests(digests []cryptoutil.DigestSet) {
-	for _, set := range digests {
+	a.subjectDigestSets = append(a.subjectDigestSets, digests...)
+}
+
+// seedDigestStrings flattens the seed subject digests to the bare values the
+// policy engine's subject search expects.
+func (a *Attestor) seedDigestStrings() []string {
+	var out []string
+	for _, set := range a.subjectDigestSets {
 		for _, digest := range set {
-			a.subjectDigests = append(a.subjectDigests, digest)
+			out = append(out, digest)
 		}
 	}
+	return out
 }
 
 func (a *Attestor) SetCollectionSource(src source.Sourcer) {
@@ -134,9 +146,12 @@ func (a *Attestor) GetVerificationSummary() slsa.VerificationSummary {
 
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	subjects := map[string]cryptoutil.DigestSet{}
-	for _, digest := range a.subjectDigests {
-		subjects[fmt.Sprintf("artifact:%v", digest)] = cryptoutil.DigestSet{
-			cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: digest,
+	for _, set := range a.subjectDigestSets {
+		for dv, digest := range set {
+			// Each seed digest is emitted under its DECLARED algorithm — a
+			// sha1-declared subject must not be recorded as sha256 in the
+			// policyverify collection.
+			subjects[fmt.Sprintf("artifact:%v", digest)] = cryptoutil.DigestSet{dv: digest}
 		}
 	}
 
@@ -200,7 +215,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 	)
 
 	verifyOpts := []policy.VerifyOption{
-		policy.WithSubjectDigests(a.subjectDigests),
+		policy.WithSubjectDigests(a.seedDigestStrings()),
 		policy.WithVerifiedSource(verifiedSource),
 	}
 	if a.aiServerURL != "" {

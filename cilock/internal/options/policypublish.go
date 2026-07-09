@@ -307,21 +307,174 @@ type PolicyReleaseRef struct {
 // ResolveReleaseByTag returns the release under definitionID with the given tag,
 // or nil (no error) when none exists.
 func (c *PolicyClient) ResolveReleaseByTag(ctx context.Context, definitionID, tag string) (*PolicyReleaseRef, error) {
+	node, err := c.queryFirstRelease(ctx, policyReleaseByTagQuery, map[string]any{"defID": definitionID, "tag": tag}, fmt.Sprintf("resolve release tag %q", tag))
+	if err != nil || node == nil {
+		return nil, err
+	}
+	return &PolicyReleaseRef{ID: node.ID, Tag: node.Tag}, nil
+}
+
+// queryFirstRelease runs a policyReleases query expected to select at most one
+// release (first: 1) and returns its node, or nil (no error) on a miss. Shared
+// by the tag lookup and the bound-policy latest-release fallback so the
+// edges-unwrap plumbing lives in exactly one place.
+func (c *PolicyClient) queryFirstRelease(ctx context.Context, query string, vars map[string]any, errCtx string) (*boundReleaseNode, error) {
 	var out struct {
 		PolicyReleases struct {
 			Edges []struct {
-				Node PolicyReleaseRef `json:"node"`
+				Node boundReleaseNode `json:"node"`
 			} `json:"edges"`
 		} `json:"policyReleases"`
 	}
-	if err := c.post(ctx, policyReleaseByTagQuery, map[string]any{"defID": definitionID, "tag": tag}, &out); err != nil {
-		return nil, fmt.Errorf("resolve release tag %q: %w", tag, err)
+	if err := c.post(ctx, query, vars, &out); err != nil {
+		return nil, fmt.Errorf("%s: %w", errCtx, err)
 	}
 	if len(out.PolicyReleases.Edges) == 0 {
 		return nil, nil
 	}
 	node := out.PolicyReleases.Edges[0].Node
 	return &node, nil
+}
+
+const policyBindingsByProductQuery = `query CilockBoundPolicies($productID: ID!) {
+  policyBindings(first: 10, where: {hasProductWith: [{id: $productID}]}) {
+    edges { node {
+      id
+      createdAt
+      createdBy { name email }
+      policyDefinition { id name }
+      policyRelease { id tag dsse { gitoidSha256 } }
+    } }
+  }
+}`
+
+const latestReleaseForDefinitionQuery = `query CilockLatestRelease($defID: ID!) {
+  policyReleases(first: 1, where: {hasPolicyDefinitionWith: [{id: $defID}]}, orderBy: {field: CREATED_AT, direction: DESC}) {
+    edges { node { id tag dsse { gitoidSha256 } } }
+  }
+}`
+
+// BoundPolicy is a product's platform policy binding resolved to the point a
+// verify can consume it: the policy envelope's Archivista gitoid plus the
+// provenance a user needs to see WHICH policy their flagless verify trusted
+// and who put it there.
+type BoundPolicy struct {
+	DefinitionName string
+	ReleaseTag     string
+	Gitoid         string // Archivista gitoid (sha256) of the signed policy DSSE
+	BoundBy        string // name/email of the user who created the binding
+	BoundAt        string // RFC3339 creation time of the binding
+}
+
+// boundReleaseNode mirrors a policyRelease node carrying its policy envelope
+// gitoid, shared by the binding query and the latest-release fallback.
+type boundReleaseNode struct {
+	ID   string `json:"id"`
+	Tag  string `json:"tag"`
+	Dsse *struct {
+		GitoidSha256 string `json:"gitoidSha256"`
+	} `json:"dsse"`
+}
+
+// boundPolicyNode mirrors the policyBindings edge node shape.
+type boundPolicyNode struct {
+	ID        string `json:"id"`
+	CreatedAt string `json:"createdAt"`
+	CreatedBy *struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	} `json:"createdBy"`
+	PolicyDefinition *struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"policyDefinition"`
+	PolicyRelease *boundReleaseNode `json:"policyRelease"`
+}
+
+// binder renders the binding's creator for the provenance line, falling back
+// to "unknown" so the line never silently omits the who.
+func (n *boundPolicyNode) binder() string {
+	if n.CreatedBy == nil {
+		return "unknown"
+	}
+	switch {
+	case n.CreatedBy.Name != "" && n.CreatedBy.Email != "":
+		return fmt.Sprintf("%s <%s>", n.CreatedBy.Name, n.CreatedBy.Email)
+	case n.CreatedBy.Email != "":
+		return n.CreatedBy.Email
+	case n.CreatedBy.Name != "":
+		return n.CreatedBy.Name
+	default:
+		return "unknown"
+	}
+}
+
+// ResolveBoundPolicy resolves the policy bound to a product: the binding's
+// pinned release when one is set, else the bound definition's latest release.
+// Fail-closed on ambiguity: more than one binding is an error naming the bound
+// definitions (verifying under a silently-picked policy is worse than asking),
+// and a binding whose definition has no published release is an error naming
+// the fix. Returns nil (no error) when the product has no binding at all so
+// the caller owns that message.
+func (c *PolicyClient) ResolveBoundPolicy(ctx context.Context, productID string) (*BoundPolicy, error) {
+	var out struct {
+		PolicyBindings struct {
+			Edges []struct {
+				Node boundPolicyNode `json:"node"`
+			} `json:"edges"`
+		} `json:"policyBindings"`
+	}
+	if err := c.post(ctx, policyBindingsByProductQuery, map[string]any{"productID": productID}, &out); err != nil {
+		return nil, fmt.Errorf("resolve bound policy for product %s: %w", productID, err)
+	}
+	edges := out.PolicyBindings.Edges
+	if len(edges) == 0 {
+		return nil, nil
+	}
+	if len(edges) > 1 {
+		names := make([]string, 0, len(edges))
+		for _, e := range edges {
+			if e.Node.PolicyDefinition != nil {
+				names = append(names, e.Node.PolicyDefinition.Name)
+			} else {
+				names = append(names, e.Node.ID)
+			}
+		}
+		return nil, fmt.Errorf("product has %d policy bindings (%s) — cilock verify cannot pick one for you; pass -p with the policy to verify against", len(edges), strings.Join(names, ", "))
+	}
+	node := edges[0].Node
+	bp := &BoundPolicy{BoundBy: node.binder(), BoundAt: node.CreatedAt}
+	if node.PolicyDefinition != nil {
+		bp.DefinitionName = node.PolicyDefinition.Name
+	}
+	rel := node.PolicyRelease
+	if rel == nil {
+		// Binding pins no release: the definition's latest release applies
+		// (mirrors how `cilock policy bind` documents an unpinned binding).
+		if node.PolicyDefinition == nil {
+			return nil, fmt.Errorf("policy binding %s has neither a pinned release nor a definition — re-bind with `cilock policy bind`", node.ID)
+		}
+		latest, err := c.latestReleaseForDefinition(ctx, node.PolicyDefinition.ID)
+		if err != nil {
+			return nil, err
+		}
+		if latest == nil {
+			return nil, fmt.Errorf("policy %q is bound to this product but has no published release — run `cilock policy push` to publish one, or pass -p", bp.DefinitionName)
+		}
+		rel = latest
+	}
+	bp.ReleaseTag = rel.Tag
+	if rel.Dsse == nil || rel.Dsse.GitoidSha256 == "" {
+		return nil, fmt.Errorf("policy %q release %q has no stored policy envelope (missing dsse gitoid) — re-run `cilock policy push`, or pass -p", bp.DefinitionName, rel.Tag)
+	}
+	bp.Gitoid = rel.Dsse.GitoidSha256
+	return bp, nil
+}
+
+// latestReleaseForDefinition returns the newest release under a definition, or
+// nil (no error) when the definition has none.
+func (c *PolicyClient) latestReleaseForDefinition(ctx context.Context, definitionID string) (*boundReleaseNode, error) {
+	return c.queryFirstRelease(ctx, latestReleaseForDefinitionQuery, map[string]any{"defID": definitionID}, fmt.Sprintf("resolve latest release for definition %s", definitionID))
 }
 
 // --- mutations ---

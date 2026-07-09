@@ -306,6 +306,26 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		tsaRootCerts = append(tsaRootCerts, certs...)
 	}
 
+	// TSA roots discovered from the platform (the chain served at the discovery
+	// document's tsa_cert_chain_url). ResolvePlatformDefaults populates this
+	// ONLY when the operator passed no --policy-timestamp-servers AND the
+	// discovery CA trust bundle was adopted under its TOFU pin (GHSA #5988), so
+	// the timestamp-trust leg rides the same trust decision as the CA leg. Load
+	// the whole chain into ONE verifier pool, exactly like a
+	// --policy-timestamp-servers file, so p7.VerifyWithChain can build
+	// TSA-leaf -> Root. Additive to embedded trust below, mirroring how
+	// discovery CA roots coexist with embedded CA roots.
+	if len(vo.PolicyTSAChainPEM) > 0 {
+		certs, err := parsePEMCerts(vo.PolicyTSAChainPEM)
+		if err != nil {
+			return fmt.Errorf("failed to parse platform-discovered TSA certificate chain: %w", err)
+		}
+		if len(certs) > 0 {
+			ptsVerifiers = append(ptsVerifiers, timestamp.NewVerifier(timestamp.VerifyWithCerts(certs)))
+			tsaRootCerts = append(tsaRootCerts, certs...)
+		}
+	}
+
 	// Fill any policy-trust dimension the operator did not pass on the command
 	// line from embedded trust. Flags win wholesale per dimension; embedded
 	// fills the gaps. Covers ONLY policy-signature trust — attestation trust is
@@ -351,6 +371,19 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 
 	logPolicyTrust(policyRoots, tsaRootCerts, vo)
 
+	// No -p/--policy given: resolve the policy the PLATFORM binds to this
+	// session's product (session -> bound product -> bound policy -> Archivista
+	// gitoid) and verify against that, printing loud provenance for the policy
+	// we are about to trust. An explicit -p always wins and never reaches this
+	// path; without a session or binding this fails closed with the fix named.
+	if vo.PolicyFilePath == "" {
+		gitoid, err := resolveBoundPolicyRef(ctx, &vo)
+		if err != nil {
+			return err
+		}
+		vo.PolicyFilePath = gitoid
+	}
+
 	policyEnvelope, err := policy.LoadPolicy(ctx, vo.PolicyFilePath, archivistaClient)
 	if err != nil {
 		return fmt.Errorf("failed to open policy file: %w", err)
@@ -386,20 +419,11 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	for _, subDigest := range vo.AdditionalSubjects {
-		// Security: validate that subject digests look like hex-encoded hashes.
-		// Accepting arbitrary strings could cause false positive or negative
-		// matches against artifact digest sets during policy verification.
-		if !isValidHexDigest(subDigest) {
-			return fmt.Errorf("invalid subject digest %q: must be a hex-encoded hash (e.g. sha256:abc123...)", subDigest)
+		digestSet, digestHex, err := parseSubjectDigest(subDigest)
+		if err != nil {
+			return err
 		}
-		// Strip optional algorithm prefix (e.g. "sha256:") before storing.
-		// The prefix is accepted by isValidHexDigest for convenience, but DigestSet
-		// values must be raw hex to match computed digests from CalculateDigestSet.
-		digestHex := subDigest
-		if idx := strings.Index(subDigest, ":"); idx != -1 {
-			digestHex = subDigest[idx+1:]
-		}
-		subjects = append(subjects, cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: digestHex})
+		subjects = append(subjects, digestSet)
 		suppliedDigests = append(suppliedDigests, digestHex)
 	}
 
@@ -949,6 +973,50 @@ func writeOutputBundle(path string, subjects []string, sourceKind, sourceURL str
 		return fmt.Errorf("close bundle: %w", err)
 	}
 	return f.Close()
+}
+
+// subjectDigestAlgorithms maps the algorithm prefixes accepted by
+// --subjects to the DigestValue they are stored under, with the exact hex
+// length a well-formed digest of that algorithm must have. The declared
+// algorithm is honored: "sha1:<gitsha>" is stored as a SHA-1 digest so it can
+// match attestation subjects the git attestor records under sha1 (the commit
+// hash), instead of being silently mislabeled sha256 and never matching.
+var subjectDigestAlgorithms = map[string]struct {
+	value  cryptoutil.DigestValue
+	hexLen int
+}{
+	"sha1":   {cryptoutil.DigestValue{Hash: crypto.SHA1, GitOID: false}, 2 * (160 / 8)},
+	"sha256": {cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}, 2 * (256 / 8)},
+}
+
+// parseSubjectDigest parses one --subjects value into the DigestSet to seed
+// verification with and the raw hex recorded for the binding line.
+//
+// Forms accepted:
+//   - "<algo>:<hex>" — the digest is stored under its DECLARED algorithm
+//     (sha1 or sha256), with the exact hex length for that algorithm enforced.
+//     An unsupported algorithm is a clear error naming the supported set.
+//   - bare "<hex>" — backward compatible: stored as sha256, lenient length
+//     check (any even-length hex of at least 32 chars), exactly as before.
+func parseSubjectDigest(subDigest string) (cryptoutil.DigestSet, string, error) {
+	if idx := strings.Index(subDigest, ":"); idx != -1 {
+		algo, digestHex := strings.ToLower(subDigest[:idx]), subDigest[idx+1:]
+		spec, ok := subjectDigestAlgorithms[algo]
+		if !ok {
+			return nil, "", fmt.Errorf("unsupported subject digest algorithm %q in %q: supported algorithms are sha1, sha256 (e.g. sha1:<git-commit>, sha256:<hex>)", algo, subDigest)
+		}
+		if len(digestHex) != spec.hexLen || !isValidHexDigest(digestHex) {
+			return nil, "", fmt.Errorf("invalid subject digest %q: a %s digest must be exactly %d hex characters", subDigest, algo, spec.hexLen)
+		}
+		return cryptoutil.DigestSet{spec.value: digestHex}, digestHex, nil
+	}
+	// Security: validate that subject digests look like hex-encoded hashes.
+	// Accepting arbitrary strings could cause false positive or negative
+	// matches against artifact digest sets during policy verification.
+	if !isValidHexDigest(subDigest) {
+		return nil, "", fmt.Errorf("invalid subject digest %q: must be a hex-encoded hash (e.g. sha256:abc123...)", subDigest)
+	}
+	return cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: subDigest}, subDigest, nil
 }
 
 // isValidHexDigest checks whether s looks like a hex-encoded digest, optionally

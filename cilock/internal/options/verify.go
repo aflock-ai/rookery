@@ -58,7 +58,17 @@ type VerifyOptions struct {
 	// the platform's keyless signing CA without the user passing a CA file. The
 	// cli layer parses it the same way it parses --policy-ca-roots files. Empty
 	// when discovery is unavailable or --platform-url "" opted out.
-	PolicyCARootsPEM       []byte
+	PolicyCARootsPEM []byte
+	// PolicyTSAChainPEM holds the platform TSA certificate chain discovered via
+	// the platform's tsa_cert_chain_url, as raw PEM. It supplements
+	// PolicyTimestampServers so a logged-in `cilock verify` can validate the
+	// platform TSA's RFC3161 tokens without the user passing a chain file —
+	// completing the flagless trust story the same way PolicyCARootsPEM does
+	// for the policy-signer CA. Populated ONLY when the discovery CA trust
+	// bundle was itself adopted (the GHSA #5988 TOFU-pinned decision), so the
+	// timestamp-trust leg never outruns the CA-trust leg. Empty when discovery
+	// is unavailable or --platform-url "" opted out.
+	PolicyTSAChainPEM      []byte
 	PolicyTimestampServers []string
 	PolicyCommonName       string
 	PolicyDNSNames         []string
@@ -119,7 +129,9 @@ func (vo *VerifyOptions) OutputJSON() bool {
 //
 // Note: unlike `cilock run`, we do NOT auto-populate PolicyTimestampServers —
 // verify's PolicyTimestampServers expects file paths to CA cert bundles, not
-// URLs; embedded-trust / discovery TSA roots are applied in the cli layer.
+// URLs. Discovery-derived TSA roots travel as raw PEM in PolicyTSAChainPEM
+// (gated on the CA-bundle trust adoption below); embedded-trust TSA roots are
+// applied in the cli layer.
 //
 // Returns an error only for a hard security stop: a logged-in platform whose
 // discovery trust_bundle_pem has CHANGED since it was first pinned (TOFU), unless
@@ -199,6 +211,19 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) error { //n
 	// wins (and never reaches the TOFU gate inside the helper).
 	if err := vo.applyDiscoveryTrust(cred, resolved, disc); err != nil {
 		return err
+	}
+	// TSA roots ride the SAME trust decision as the CA bundle: adopt the
+	// platform's timestamp chain only when the discovery CA trust was itself
+	// adopted just above (TOFU-pinned per GHSA #5988) AND the operator set no
+	// --policy-timestamp-servers of their own. An operator-supplied chain file
+	// always wins; embedded trust (release binaries) is applied additively in
+	// the cli layer exactly as it is for CA roots. Fetch failures are
+	// best-effort like the rest of discovery: the explicit-flag and
+	// embedded-trust paths still apply.
+	if len(vo.PolicyCARootsPEM) > 0 && len(vo.PolicyTimestampServers) == 0 {
+		if chain, err := platformconfig.FetchTSACertChain(vo.PlatformURL, disc); err == nil {
+			vo.PolicyTSAChainPEM = chain
+		}
 	}
 	if !cmd.Flags().Changed("policy-fulcio-oidc-issuer") && disc.Signing.FulcioOIDCIssuer != "" {
 		vo.PolicyFulcioCertExtensions.Issuer = disc.Signing.FulcioOIDCIssuer
