@@ -106,7 +106,7 @@ func TestResolvePlatformDefaults_FulcioURLDerivedOnlyWhenSelected(t *testing.T) 
 			t.Fatal(err)
 		}
 		ro.ResolvePlatformDefaults(cmd)
-		if got, want := fulcioURL(t, cmd), "https://platform.example"; got != want {
+		if got, want := fulcioURL(t, cmd), "https://platform.example/fulcio"; got != want {
 			t.Fatalf("explicit-token run must derive fulcio url from the platform, got %q want %q", got, want)
 		}
 		if got := cmd.Flags().Lookup("signer-fulcio-token").Value.String(); got != "ci-oidc-token" {
@@ -125,7 +125,7 @@ func TestResolvePlatformDefaults_FulcioURLDerivedOnlyWhenSelected(t *testing.T) 
 			t.Fatal(err)
 		}
 		ro.ResolvePlatformDefaults(cmd)
-		if got, want := fulcioURL(t, cmd), srv.URL; got != want {
+		if got, want := fulcioURL(t, cmd), srv.URL+"/fulcio"; got != want {
 			t.Fatalf("logged-in keyless run should derive fulcio url %q, got %q", want, got)
 		}
 		if got := cmd.Flags().Lookup("signer-fulcio-token").Value.String(); got != fakeSignToken {

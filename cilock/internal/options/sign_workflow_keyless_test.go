@@ -62,8 +62,8 @@ func TestSignResolvePlatformDefaults_BareAmbientKeyless(t *testing.T) {
 	if got := cmd.Flags().Lookup("signer-fulcio-token").Value.String(); got != minted {
 		t.Fatalf("signer-fulcio-token = %q, want the minted ambient GHA OIDC token %q", got, minted)
 	}
-	if got := cmd.Flags().Lookup("signer-fulcio-url").Value.String(); got != platform {
-		t.Fatalf("signer-fulcio-url = %q, want platform root %q", got, platform)
+	if got, want := cmd.Flags().Lookup("signer-fulcio-url").Value.String(), platform+"/fulcio"; got != want {
+		t.Fatalf("signer-fulcio-url = %q, want platform /fulcio subpath %q", got, want)
 	}
 	if got := audience(); got != "sigstore" {
 		t.Fatalf("minted OIDC audience = %q, want %q (Fulcio signing audience)", got, "sigstore")
@@ -100,8 +100,8 @@ func TestSignResolvePlatformDefaults_WorkflowIdentityKeyless(t *testing.T) {
 	if got := cmd.Flags().Lookup("signer-fulcio-token").Value.String(); got != minted {
 		t.Fatalf("signer-fulcio-token = %q, want the minted GHA OIDC token %q", got, minted)
 	}
-	if got := cmd.Flags().Lookup("signer-fulcio-url").Value.String(); got != platform {
-		t.Fatalf("signer-fulcio-url = %q, want platform root %q", got, platform)
+	if got, want := cmd.Flags().Lookup("signer-fulcio-url").Value.String(), platform+"/fulcio"; got != want {
+		t.Fatalf("signer-fulcio-url = %q, want platform /fulcio subpath %q", got, want)
 	}
 	if got := audience(); got != "sigstore" {
 		t.Fatalf("minted OIDC audience = %q, want %q", got, "sigstore")

@@ -64,10 +64,10 @@ func TestResolvePlatformDefaults_WorkflowIdentityKeyless(t *testing.T) {
 	if got := cmd.Flags().Lookup("signer-fulcio-token").Value.String(); got != fakeWorkflowOIDC {
 		t.Fatalf("signer-fulcio-token = %q, want the minted GHA OIDC token %q", got, fakeWorkflowOIDC)
 	}
-	// The signer needs the platform's Fulcio URL (platform root) or it fails with
-	// "fulcio URL must include a host".
-	if got := cmd.Flags().Lookup("signer-fulcio-url").Value.String(); got != platform {
-		t.Fatalf("signer-fulcio-url = %q, want platform root %q", got, platform)
+	// The signer needs the platform's Fulcio URL (the /fulcio subpath) or it fails
+	// with "fulcio URL must include a host".
+	if got, want := cmd.Flags().Lookup("signer-fulcio-url").Value.String(), platform+"/fulcio"; got != want {
+		t.Fatalf("signer-fulcio-url = %q, want platform /fulcio subpath %q", got, want)
 	}
 	// The OIDC token must carry the Fulcio signing audience, not the archivista or
 	// login audience (confused-deputy hazard).
@@ -110,8 +110,8 @@ func TestResolvePlatformDefaults_WorkflowIdentityKeylessNoLogin(t *testing.T) {
 	if got := cmd.Flags().Lookup("signer-fulcio-token").Value.String(); got != fakeWorkflowOIDC {
 		t.Fatalf("signer-fulcio-token = %q, want the minted GHA OIDC token (bare run, no login)", got)
 	}
-	if got := cmd.Flags().Lookup("signer-fulcio-url").Value.String(); got != platform {
-		t.Fatalf("signer-fulcio-url = %q, want platform root %q", got, platform)
+	if got, want := cmd.Flags().Lookup("signer-fulcio-url").Value.String(), platform+"/fulcio"; got != want {
+		t.Fatalf("signer-fulcio-url = %q, want platform /fulcio subpath %q", got, want)
 	}
 	if got, _ := gotAudience.Load().(string); got != "sigstore" {
 		t.Fatalf("minted OIDC audience = %q, want sigstore", got)

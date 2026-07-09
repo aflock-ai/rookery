@@ -88,10 +88,13 @@ func Derive(platformURL string) PlatformConfig {
 	return PlatformConfig{
 		PlatformURL: platformURL,
 		Archivista:  platformURL + "/archivista",
-		// Fulcio's gRPC-gateway REST API is mounted at the platform root
-		// (/api/v2/signingCert); the fulcio signer appends the /api/v2 path
-		// itself, so the base URL is the platform root, NOT a /fulcio subpath.
-		Fulcio:            platformURL,
+		// Fulcio's gRPC-gateway REST API is mounted under the platform's /fulcio
+		// prefix (/fulcio/api/v2/signingCert), sharing the namespace with the
+		// embedded Fulcio OIDC server (/fulcio/oidc/). The fulcio signer appends
+		// the /api/v2/signingCert path itself, so the base URL is <platform>/fulcio.
+		// The platform keeps a transitional /api/v2/ alias at the root for older
+		// clients during the migration. See issue #5122.
+		Fulcio:            platformURL + "/fulcio",
 		TSA:               platformURL + "/api/v1/timestamp",
 		OIDCAudience:      platformURL + "/archivista",
 		OIDCLoginAudience: platformURL + "/login",

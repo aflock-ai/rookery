@@ -220,7 +220,7 @@ func TestSignResolvePlatformDefaults_ExplicitTokenNotLoggedInDerivesURL(t *testi
 	}
 	so.ResolvePlatformDefaults(cmd)
 
-	if got, want := cmd.Flags().Lookup("signer-fulcio-url").Value.String(), "https://platform.example"; got != want {
+	if got, want := cmd.Flags().Lookup("signer-fulcio-url").Value.String(), "https://platform.example/fulcio"; got != want {
 		t.Fatalf("explicit-token sign must derive fulcio url from the platform, got %q want %q", got, want)
 	}
 	if got := cmd.Flags().Lookup("signer-fulcio-token").Value.String(); got != "ci-oidc-token" {
