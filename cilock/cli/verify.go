@@ -56,9 +56,16 @@ func VerifyCmd() *cobra.Command {
 		Use:   "verify [artifact-path]",
 		Short: "Verifies a witness policy",
 		Long: "Verifies a policy provided key source and exits with code 0 if verification succeeds.\n\n" +
-			"The artifact to verify may be given as a positional argument — `cilock verify ./app -p policy.json` —\n" +
-			"as a shorthand for --artifactfile (a regular file) or --directory-path (a directory).",
-		Example: `  # Verify a binary against a signed policy (positional artifact)
+			"Point verify at the artifact itself — `cilock verify ./my-binary` — and its SHA-256 subject\n" +
+			"is computed for you; no digest to extract or paste. The positional path is shorthand for\n" +
+			"--artifactfile (a regular file) or --directory-path (a directory). With a platform session,\n" +
+			"trust and the product's bound policy resolve automatically, so the flagless form needs no\n" +
+			"other arguments. To verify by digest instead, pass --subjects sha256:<hex>.",
+		Example: `  # Verify a binary flagless: sha256 computed from the file, trust + bound
+  # policy resolved from your platform session (cilock login)
+  cilock verify ./my-binary
+
+  # Verify a binary against a signed policy (positional artifact)
   cilock verify ./judge-api -p policy.json.signed --policy-ca-roots fulcio-root.pem
 
   # Verify a policy against local attestation files
@@ -89,17 +96,8 @@ func VerifyCmd() *cobra.Command {
 			// or --directory-path (directory). Explicit flags win; a positional
 			// arg alongside a conflicting flag is a usage error.
 			if len(args) == 1 {
-				if vo.ArtifactFilePath != "" || vo.ArtifactDirectoryPath != "" {
-					return fmt.Errorf("artifact given both positionally (%q) and via --artifactfile/--directory-path; use one", args[0])
-				}
-				info, statErr := os.Stat(args[0])
-				switch {
-				case statErr != nil:
-					return fmt.Errorf("artifact path %q: %w", args[0], statErr)
-				case info.IsDir():
-					vo.ArtifactDirectoryPath = args[0]
-				default:
-					vo.ArtifactFilePath = args[0]
+				if err := adoptPositionalArtifact(&vo, args[0]); err != nil {
+					return err
 				}
 			}
 
@@ -192,6 +190,14 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	if !vo.ArchivistaOptions.Enable && len(vo.AttestationFilePaths) == 0 && len(vo.BundlePaths) == 0 {
+		// Name the subject we already computed for the operator's artifact, so
+		// the flagless journey's dead-end tells the WHOLE story: the digest is
+		// ready — only the evidence source is missing.
+		if vo.ArtifactFilePath != "" {
+			if ds, derr := cryptoutil.CalculateDigestSetFromFile(vo.ArtifactFilePath, []cryptoutil.DigestValue{{Hash: crypto.SHA256, GitOID: false}}); derr == nil {
+				return fmt.Errorf("subject sha256:%s computed from %s, but there is no attestation source to verify it against: pass -a/--attestations or --bundle, or enable archivista (log in with `cilock login`, or --enable-archivista)", suppliedSHA256(ds), vo.ArtifactFilePath)
+			}
+		}
 		return fmt.Errorf("must specify attestation file paths, attestation bundles, or enable archivista as an attestation source")
 	}
 
@@ -402,6 +408,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			return fmt.Errorf("failed to calculate dir digest: %w", err)
 		}
 
+		log.Infof("subject: sha256:%s (computed from directory %s)", suppliedSHA256(artifactDigestSet), vo.ArtifactDirectoryPath)
 		subjects = append(subjects, artifactDigestSet)
 		suppliedDigests = append(suppliedDigests, suppliedSHA256(artifactDigestSet))
 	}
@@ -414,6 +421,10 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		}
 
 		artifactFileDigestHex = artifactDigestSet[cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}]
+		// Loud provenance for the auto-computed subject: the operator pointed
+		// at a file, so say exactly which digest that became BEFORE any
+		// verification output — same doctrine as the bound-policy line.
+		log.Infof("subject: sha256:%s (computed from %s)", artifactFileDigestHex, vo.ArtifactFilePath)
 		subjects = append(subjects, artifactDigestSet)
 		suppliedDigests = append(suppliedDigests, artifactFileDigestHex)
 	}
@@ -973,6 +984,32 @@ func writeOutputBundle(path string, subjects []string, sourceKind, sourceURL str
 		return fmt.Errorf("close bundle: %w", err)
 	}
 	return f.Close()
+}
+
+// adoptPositionalArtifact maps `cilock verify <path>` onto the artifact flags:
+// a regular file becomes --artifactfile (its sha256 subject is computed later
+// in runVerify, with a loud provenance line), a directory becomes
+// --directory-path (tree subject). Explicit flags win — a positional arg
+// alongside either flag is a usage error, never silently ignored. A path that
+// does not exist fails immediately; if it LOOKS like a digest the error points
+// at --subjects, since digests are never accepted positionally.
+func adoptPositionalArtifact(vo *options.VerifyOptions, arg string) error {
+	if vo.ArtifactFilePath != "" || vo.ArtifactDirectoryPath != "" {
+		return fmt.Errorf("artifact given both positionally (%q) and via --artifactfile/--directory-path; use one", arg)
+	}
+	info, statErr := os.Stat(arg)
+	switch {
+	case statErr != nil:
+		if isValidHexDigest(arg) {
+			return fmt.Errorf("artifact path %q does not exist; digests are not accepted positionally — to verify by digest pass --subjects (e.g. --subjects sha256:<64-hex>): %w", arg, statErr)
+		}
+		return fmt.Errorf("artifact path %q: %w", arg, statErr)
+	case info.IsDir():
+		vo.ArtifactDirectoryPath = arg
+	default:
+		vo.ArtifactFilePath = arg
+	}
+	return nil
 }
 
 // subjectDigestAlgorithms maps the algorithm prefixes accepted by
