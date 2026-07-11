@@ -387,28 +387,28 @@ func TestReportSwallowsTransportError(t *testing.T) {
 
 // TestReportAttributesToResolvedPlatform pins the platform-awareness fix:
 // telemetry follows the platform the command actually used (CILOCK_PLATFORM_URL,
-// set by run/verify), not the hardcoded production default. Regression — staging
-// / self-hosted / --platform-url usage was silently dropped because Report only
+// set by run/verify), not the hardcoded production default. Regression:
+// self-hosted / --platform-url usage was silently dropped because Report only
 // ever looked up config.DefaultPlatformURL.
 func TestReportAttributesToResolvedPlatform(t *testing.T) {
 	clearTelemetryEnv(t)
 	isolateConfig(t)
-	const staging = "https://platform.aws-sandbox-staging.testifysec.dev"
+	const alternate = "https://platform.example.test"
 	require.NoError(t, auth.Save(auth.Credential{
-		PlatformURL: staging, // NOT config.DefaultPlatformURL
-		Token:       "staging-jwt",
+		PlatformURL: alternate, // NOT config.DefaultPlatformURL
+		Token:       "alternate-jwt",
 		Email:       "ci@testifysec.com",
-		TenantName:  "staging-tenant",
+		TenantName:  "alternate-tenant",
 		ExpiresAt:   time.Now().Add(time.Hour),
 	}))
-	t.Setenv("CILOCK_PLATFORM_URL", staging)
+	t.Setenv("CILOCK_PLATFORM_URL", alternate)
 	cs := newCaptureServer(t)
 
 	Report("run", "1.2.3", "success")
 
-	require.Equal(t, 1, cs.Hits(), "telemetry must emit attributed to the resolved (staging) platform")
-	assert.Equal(t, "Bearer staging-jwt", cs.auth)
-	assert.Equal(t, "staging-tenant", cs.payload["account"])
+	require.Equal(t, 1, cs.Hits(), "telemetry must emit attributed to the resolved non-default platform")
+	assert.Equal(t, "Bearer alternate-jwt", cs.auth)
+	assert.Equal(t, "alternate-tenant", cs.payload["account"])
 	assert.Equal(t, "ci@testifysec.com", cs.payload["user_ref"])
 }
 
@@ -419,7 +419,7 @@ func TestReportResolvedPlatformUnauthenticatedSendsNothing(t *testing.T) {
 	clearTelemetryEnv(t)
 	isolateConfig(t)
 	authenticate(t, auth.Credential{Token: "prod-jwt", Email: "a@b.com", TenantName: "prod"}) // default platform only
-	t.Setenv("CILOCK_PLATFORM_URL", "https://platform.aws-sandbox-staging.testifysec.dev")    // command targeted staging
+	t.Setenv("CILOCK_PLATFORM_URL", "https://platform.example.test")                          // command targeted another platform
 	cs := newCaptureServer(t)
 
 	Report("run", "1.2.3", "success")
@@ -464,22 +464,22 @@ func TestReportAmbientWorkflowOIDCSendsNothing(t *testing.T) {
 		"ambient workflow-identity marker (no bearer) must POST nothing — sending the raw GHA OIDC token would leak repo/org claims")
 }
 
-// Same as above but for a NON-default resolved platform (staging), as run/verify
+// Same as above but for a non-default resolved platform, as run/verify
 // export CILOCK_PLATFORM_URL at runtime. The ambient no-op must hold regardless
 // of which platform the command targeted.
 func TestReportAmbientResolvedPlatformSendsNothing(t *testing.T) {
 	clearTelemetryEnv(t)
 	isolateConfig(t)
-	const staging = "https://platform.aws-sandbox-staging.testifysec.dev"
+	const alternate = "https://platform.example.test"
 	t.Setenv("GITHUB_ACTIONS", "true")
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://token.actions.example/req")
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ambient-req-token")
-	t.Setenv("CILOCK_PLATFORM_URL", staging)
-	seedAmbientMarker(t, staging)
+	t.Setenv("CILOCK_PLATFORM_URL", alternate)
+	seedAmbientMarker(t, alternate)
 	cs := newCaptureServer(t)
 
 	Report("run", "1.2.3", "success")
-	assert.Equal(t, 0, cs.Hits(), "ambient marker for the resolved staging platform must POST nothing")
+	assert.Equal(t, 0, cs.Hits(), "ambient marker for the resolved non-default platform must POST nothing")
 }
 
 // Opt-out still short-circuits even in the ambient case (defense in depth: the
@@ -506,7 +506,7 @@ func TestReportAmbientMarkerElsewhereDoesNotSuppressAuthenticated(t *testing.T) 
 	// Real bearer for the default platform (the resolved target)...
 	authenticate(t, auth.Credential{Token: "real-jwt", Email: "a@b.com", TenantName: "acme"})
 	// ...and an ambient marker for some other platform.
-	seedAmbientMarker(t, "https://platform.aws-sandbox-staging.testifysec.dev")
+	seedAmbientMarker(t, "https://platform.example.test")
 	cs := newCaptureServer(t)
 
 	Report("verify", "1.2.3", "success")

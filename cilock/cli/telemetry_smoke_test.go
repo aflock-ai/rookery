@@ -112,7 +112,7 @@ func seedCredential(t *testing.T, homeDir string, c auth.Credential) {
 	seedCredentialFor(t, homeDir, config.DefaultPlatformURL, c)
 }
 
-// seedCredentialFor is seedCredential for an explicit platform URL (e.g. staging),
+// seedCredentialFor is seedCredential for an explicit platform URL,
 // so a smoke case can prove telemetry follows the platform the command targeted.
 func seedCredentialFor(t *testing.T, homeDir, platformURL string, c auth.Credential) {
 	t.Helper()
@@ -249,24 +249,24 @@ func TestTelemetryBinarySmoke(t *testing.T) {
 			"ambient keyless CI (workflow-identity marker, no bearer) must emit no telemetry — sending the GHA OIDC token would leak repo/org claims")
 	})
 
-	// Platform-awareness: a credential for a NON-default platform (staging) plus
+	// Platform-awareness: a credential for a non-default platform plus
 	// CILOCK_PLATFORM_URL pointing at it (as run/verify export at runtime) must
-	// emit, attributed to that platform. Regression guard for the dropped-staging
+	// emit, attributed to that platform. Regression guard for dropped non-default
 	// telemetry bug.
-	t.Run("resolved platform (staging) is attributed", func(t *testing.T) {
-		const staging = "https://platform.aws-sandbox-staging.testifysec.dev"
+	t.Run("resolved non-default platform is attributed", func(t *testing.T) {
+		const alternate = "https://platform.example.test"
 		home := t.TempDir()
-		seedCredentialFor(t, home, staging, auth.Credential{
-			Token:      "staging-bearer",
+		seedCredentialFor(t, home, alternate, auth.Credential{
+			Token:      "alternate-bearer",
 			Email:      "ci@testifysec.com",
-			TenantName: "staging-tenant",
+			TenantName: "alternate-tenant",
 		})
 		hub, url := newMockHub(t)
 
-		runVersion(t, bin, home, url, "CILOCK_PLATFORM_URL="+staging)
+		runVersion(t, bin, home, url, "CILOCK_PLATFORM_URL="+alternate)
 
-		require.Equal(t, 1, hub.hitCount(), "usage against the resolved staging platform must emit telemetry")
-		assert.Equal(t, "Bearer staging-bearer", hub.authHdr)
-		assert.Equal(t, "staging-tenant", hub.payload["account"])
+		require.Equal(t, 1, hub.hitCount(), "usage against the resolved non-default platform must emit telemetry")
+		assert.Equal(t, "Bearer alternate-bearer", hub.authHdr)
+		assert.Equal(t, "alternate-tenant", hub.payload["account"])
 	})
 }

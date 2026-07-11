@@ -52,7 +52,7 @@ func TestSignResolvePlatformDefaults_BareAmbientKeyless(t *testing.T) {
 	isolateCredentialStore(t) // no stored credential — pure ambient CI identity
 	minted, audience := stubGitHubOIDC(t)
 
-	const platform = "https://platform.aws-sandbox-staging.testifysec.dev"
+	const platform = "https://platform.example.test"
 	cmd, so := newSignCmd(t)
 	if err := cmd.ParseFlags([]string{"--platform-url", platform}); err != nil {
 		t.Fatal(err)

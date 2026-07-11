@@ -11,10 +11,10 @@ import (
 	"testing"
 )
 
-const sandbox = "https://platform.aws-sandbox-staging.testifysec.dev"
+const testPlatform = "https://platform.example.test"
 
 func TestResolve_GitHubSaaS(t *testing.T) {
-	o := &TrustOptions{PlatformURL: sandbox, Provider: "github", Slug: "testifysec/judge"}
+	o := &TrustOptions{PlatformURL: testPlatform, Provider: "github", Slug: "testifysec/judge"}
 	r, err := o.Resolve("tenant-123")
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +22,7 @@ func TestResolve_GitHubSaaS(t *testing.T) {
 	want := &ResolvedTrust{
 		Name:      "github:testifysec/judge",
 		Subject:   "repo:testifysec/judge:*",
-		Audience:  sandbox + "/archivista",
+		Audience:  testPlatform + "/archivista",
 		IssuerURL: "https://token.actions.githubusercontent.com",
 		Scopes:    []string{"attestation:upload"},
 		TenantID:  "tenant-123",
@@ -33,7 +33,7 @@ func TestResolve_GitHubSaaS(t *testing.T) {
 }
 
 func TestResolve_GitHubOnPrem(t *testing.T) {
-	o := &TrustOptions{PlatformURL: sandbox, Provider: "github", Slug: "acme/app", Host: "github.acme.com"}
+	o := &TrustOptions{PlatformURL: testPlatform, Provider: "github", Slug: "acme/app", Host: "github.acme.com"}
 	r, err := o.Resolve("t")
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestResolve_GitHubOnPrem(t *testing.T) {
 }
 
 func TestResolve_GitLabNestedGroup(t *testing.T) {
-	o := &TrustOptions{PlatformURL: sandbox, Provider: "gitlab", Slug: "acme/team/app"}
+	o := &TrustOptions{PlatformURL: testPlatform, Provider: "gitlab", Slug: "acme/team/app"}
 	r, err := o.Resolve("t")
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +61,7 @@ func TestResolve_GitLabNestedGroup(t *testing.T) {
 }
 
 func TestResolve_Generic(t *testing.T) {
-	o := &TrustOptions{PlatformURL: sandbox, Issuer: "https://oidc.corp.example/foo", Subject: "build:acme:*"}
+	o := &TrustOptions{PlatformURL: testPlatform, Issuer: "https://oidc.corp.example/foo", Subject: "build:acme:*"}
 	r, err := o.Resolve("t")
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestResolve_RejectsInsecureIssuer(t *testing.T) {
 	// non-https issuer is an insecure trust root / SSRF vector and must be
 	// rejected client-side (not just by the platform mutation).
 	for _, issuer := range []string{"http://oidc.corp.example/foo", "oidc.corp.example/foo", "ftp://oidc.corp.example"} {
-		o := &TrustOptions{PlatformURL: sandbox, Issuer: issuer, Subject: "build:acme:*"}
+		o := &TrustOptions{PlatformURL: testPlatform, Issuer: issuer, Subject: "build:acme:*"}
 		if _, err := o.Resolve("t"); err == nil {
 			t.Fatalf("expected rejection of insecure issuer %q, got nil", issuer)
 		}
@@ -87,7 +87,7 @@ func TestResolve_RejectsInsecureIssuer(t *testing.T) {
 }
 
 func TestResolve_VerifyAddsReadScope(t *testing.T) {
-	o := &TrustOptions{PlatformURL: sandbox, Provider: "github", Slug: "a/b", Verify: true}
+	o := &TrustOptions{PlatformURL: testPlatform, Provider: "github", Slug: "a/b", Verify: true}
 	r, err := o.Resolve("t")
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestResolve_VerifyAddsReadScope(t *testing.T) {
 }
 
 func TestResolve_AudienceOverride(t *testing.T) {
-	o := &TrustOptions{PlatformURL: sandbox, Provider: "github", Slug: "a/b", Audience: "custom-aud"}
+	o := &TrustOptions{PlatformURL: testPlatform, Provider: "github", Slug: "a/b", Audience: "custom-aud"}
 	r, _ := o.Resolve("t")
 	if r.Audience != "custom-aud" {
 		t.Fatalf("audience = %q", r.Audience)
@@ -107,7 +107,7 @@ func TestResolve_AudienceOverride(t *testing.T) {
 
 func TestResolve_RejectsManagementScopes(t *testing.T) {
 	for _, bad := range []string{"tenant:admin", "oidc:write", "supplychain:admin", "compliance:write"} {
-		o := &TrustOptions{PlatformURL: sandbox, Provider: "github", Slug: "a/b", Scopes: []string{bad}}
+		o := &TrustOptions{PlatformURL: testPlatform, Provider: "github", Slug: "a/b", Scopes: []string{bad}}
 		if _, err := o.Resolve("t"); err == nil {
 			t.Fatalf("expected rejection of scope %q", bad)
 		}
@@ -116,13 +116,13 @@ func TestResolve_RejectsManagementScopes(t *testing.T) {
 
 func TestResolve_Errors(t *testing.T) {
 	cases := map[string]*TrustOptions{
-		"unknown provider": {PlatformURL: sandbox, Provider: "bitbucket", Slug: "a/b"},
-		"no slug":          {PlatformURL: sandbox, Provider: "github"},
-		"bad slug url":     {PlatformURL: sandbox, Provider: "github", Slug: "https://github.com/a/b"},
-		"bad slug .git":    {PlatformURL: sandbox, Provider: "github", Slug: "a/b.git/"},
-		"github 3 segs":    {PlatformURL: sandbox, Provider: "github", Slug: "a/b/c"},
-		"nothing":          {PlatformURL: sandbox},
-		"no tenant":        {PlatformURL: sandbox, Provider: "github", Slug: "a/b"},
+		"unknown provider": {PlatformURL: testPlatform, Provider: "bitbucket", Slug: "a/b"},
+		"no slug":          {PlatformURL: testPlatform, Provider: "github"},
+		"bad slug url":     {PlatformURL: testPlatform, Provider: "github", Slug: "https://github.com/a/b"},
+		"bad slug .git":    {PlatformURL: testPlatform, Provider: "github", Slug: "a/b.git/"},
+		"github 3 segs":    {PlatformURL: testPlatform, Provider: "github", Slug: "a/b/c"},
+		"nothing":          {PlatformURL: testPlatform},
+		"no tenant":        {PlatformURL: testPlatform, Provider: "github", Slug: "a/b"},
 		"empty platform":   {Provider: "github", Slug: "a/b"},
 	}
 	for name, o := range cases {
@@ -173,13 +173,13 @@ func TestCreateOIDCCredential(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"createCredential":{"credential":{"id":"cred-1","name":"github:testifysec/judge","type":"OIDC","subject":"repo:testifysec/judge:*","audience":"` + sandbox + `/archivista","issuerURL":"https://token.actions.githubusercontent.com","scopes":["attestation:upload"]}}}}`))
+		_, _ = w.Write([]byte(`{"data":{"createCredential":{"credential":{"id":"cred-1","name":"github:testifysec/judge","type":"OIDC","subject":"repo:testifysec/judge:*","audience":"` + testPlatform + `/archivista","issuerURL":"https://token.actions.githubusercontent.com","scopes":["attestation:upload"]}}}}`))
 	}))
 	defer srv.Close()
 
 	r := &ResolvedTrust{
 		Name: "github:testifysec/judge", Subject: "repo:testifysec/judge:*",
-		Audience: sandbox + "/archivista", IssuerURL: "https://token.actions.githubusercontent.com",
+		Audience: testPlatform + "/archivista", IssuerURL: "https://token.actions.githubusercontent.com",
 		Scopes: []string{"attestation:upload"}, TenantID: "tenant-123",
 	}
 	cred, err := CreateOIDCCredential(context.Background(), srv.URL, "sess-tok", r)
