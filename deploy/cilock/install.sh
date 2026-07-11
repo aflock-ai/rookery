@@ -194,14 +194,17 @@ main() {
 
   log
   log "cilock ${version} installed."
-  log "  $ cilock --version"
+  log "  $ cilock version"
   log
   log "Verify provenance against the platform-signed release policy (no trust"
   log "flags — platform roots + signer identity are compiled into cilock):"
   log "  curl -fsSLO ${DIST_BASE}/policy/release-v1.policy.json"
-  log "  curl -fsSLO ${base}/${os}-${arch}.attestation.json"
+  log "  curl -fsSLO ${base}/cilock-${version_clean}-${os}-${arch}.build.att.json"
+  log "  curl -fsSLO ${base}/cilock-${version_clean}-${os}-${arch}.source-git.att.json"
   log "  cilock verify ${bin_dir}/cilock \\"
-  log "    --policy release-v1.policy.json --attestations ${os}-${arch}.attestation.json"
+  log "    --policy release-v1.policy.json \\"
+  log "    --attestations cilock-${version_clean}-${os}-${arch}.build.att.json \\"
+  log "    --attestations cilock-${version_clean}-${os}-${arch}.source-git.att.json"
 }
 
 main "$@"
