@@ -16,6 +16,7 @@ package options
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,8 +30,17 @@ import (
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
+	"github.com/aflock-ai/rookery/platformauth"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+)
+
+// bindingResolveFn / bindingMintLoginTokenFn are package vars so the run-entry
+// product-binding gate can be unit-tested without a real platform or GitHub
+// Actions OIDC endpoint.
+var (
+	bindingResolveFn        = platformauth.ResolveBinding
+	bindingMintLoginTokenFn = fetchGitHubOIDCToken
 )
 
 var DefaultAttestors = []string{"environment", "git", "platform"}
@@ -371,6 +381,14 @@ type RunOptions struct {
 	// cilock gets a clean tool-result instead of grepping logr text.
 	OutputFormat string
 
+	// NoProductBinding opts a platform-authenticated run out of the fail-closed
+	// product-binding gate, so a legitimate authenticated-but-no-product run (an
+	// org-level attestation not tied to a product) can proceed. Fail-closed by
+	// DEFAULT: without this flag, an authenticated run whose repo maps to zero or
+	// multiple products is a hard error. It does NOT disable the platform
+	// attestor — it only stops the gate from failing the run.
+	NoProductBinding bool
+
 	// Offline is a clear alias for --platform-url "": it runs cilock with
 	// no platform integration (no hosted Fulcio / TSA / Archivista, no
 	// session lookup). It exists so an operator signing with a local -k key
@@ -637,6 +655,178 @@ func (ro *RunOptions) PreflightIdentity(cmd *cobra.Command) error {
 		"or pass -k/--signer-file-key-path for a local key (or --offline to skip platform signing)", platformURL)
 }
 
+// EnforcePlatformBinding is the client-side fail-closed product-binding gate. It
+// runs at run START (before the wrapped command executes) so a misconfigured
+// pipeline wastes no build time and the error is unambiguous.
+//
+// Rule (matching the design):
+//   - Not platform-authenticated (no session, no ambient OIDC targeting the
+//     platform) → proceed unchanged (the platform attestor soft-skips).
+//   - --no-product-binding → proceed (explicit opt-out).
+//   - Authenticated + repo resolves to exactly ONE product → proceed; the
+//     resolved binding is threaded to the platform attestor.
+//   - Authenticated + repo maps to ZERO (repository_not_mapped) or is AMBIGUOUS
+//     (repo→multiple, no valid selector) from a REACHABLE endpoint → HARD FAIL
+//     with a machine-actionable message.
+//   - Endpoint unreachable / not deployed yet / 5xx / auth rejected → loud
+//     SOFT-skip (WARN), so a client that ships before the server is deployed
+//     never breaks the build (evidence just won't auto-link).
+//
+// Must run AFTER ResolvePlatformDefaults (which sets CILOCK_PLATFORM_URL for the
+// ambient path after its same-origin check).
+func (ro *RunOptions) EnforcePlatformBinding(cmd *cobra.Command) error {
+	platformDisabled := (cmd.Flags().Changed("platform-url") || ro.Offline) && ro.PlatformURL == ""
+	return ro.enforcePlatformBinding(platformDisabled)
+}
+
+// enforcePlatformBinding is EnforcePlatformBinding with the cobra-derived
+// "platform disabled" decision passed in, so the gate logic is unit-testable
+// without a live command.
+func (ro *RunOptions) enforcePlatformBinding(platformDisabled bool) error {
+	if ro.NoProductBinding || platformDisabled {
+		return nil
+	}
+	platformURL := ro.PlatformURL
+	if platformURL == "" {
+		platformURL = platformconfig.DefaultPlatformURL
+	}
+	pc := platformconfig.Derive(platformURL)
+
+	bearer, selector, ok := ro.bindingCredentials(platformURL, pc)
+	if !ok {
+		// Not platform-authenticated → nothing to bind; the attestor soft-skips.
+		return nil
+	}
+
+	binding, err := bindingResolveFn(platformURL, bearer, selector)
+	if err != nil {
+		return classifyBindingGateError(platformURL, err)
+	}
+
+	// Success: thread the resolved binding to the platform attestor (ambient
+	// path) and capture it for the run summary. Never persisted.
+	platformconfig.MarkResolvedBinding(platformconfig.ResolvedProductBinding{
+		PlatformURL: auth.NormalizeURL(platformURL),
+		TenantID:    binding.TenantID,
+		TenantName:  binding.TenantName,
+		ProductID:   binding.ProductID,
+		ProductName: binding.ProductName,
+	})
+	ro.resolvedTenantName = binding.TenantName
+	return nil
+}
+
+// bindingCredentials returns the bearer token and product selector the binding
+// exchange should use, and whether the run is platform-authenticated at all.
+//
+//   - A stored `cilock login` session (bearer-carrying) → the session bearer,
+//     with the login-bound product as the disambiguation selector.
+//   - Otherwise an ambient CI workflow OIDC identity that TARGETS the platform
+//     (CILOCK_PLATFORM_URL set by ResolvePlatformDefaults after its same-origin
+//     check) → a freshly-minted login-audience OIDC token, with any workflow
+//     marker's bound product as selector.
+//   - Neither → (”, ”, false): not authenticated.
+func (ro *RunOptions) bindingCredentials(platformURL string, pc platformconfig.PlatformConfig) (bearer, selector string, ok bool) {
+	if cred, err := auth.Lookup(platformURL); err == nil && cred != nil && cred.Token != "" {
+		return cred.Token, cred.ProductID, true
+	}
+	// Ambient path: only when the run actually targets the platform's own
+	// Archivista (ResolvePlatformDefaults set CILOCK_PLATFORM_URL after its
+	// same-origin + ambient-OIDC check). A raw CILOCK_PLATFORM_URL is not enough
+	// on its own, but here it only selects the login audience for a token we mint
+	// ourselves — the platform still authenticates the OIDC token server-side.
+	if auth.WorkflowOIDCAvailable() && os.Getenv(platformURLEnv) != "" {
+		token, err := bindingMintLoginTokenFn(pc.OIDCLoginAudience)
+		if err != nil {
+			// Can't mint a login token → treat as not-authenticated for binding
+			// (the run still proceeds; ambient upload auth is separate).
+			log.Warnf("product binding skipped: could not mint a login-audience OIDC token: %v", err)
+			return "", "", false
+		}
+		sel := ""
+		if cred, _ := auth.LookupAny(platformURL); cred != nil {
+			sel = cred.ProductID
+		}
+		return token, sel, true
+	}
+	return "", "", false
+}
+
+// classifyBindingGateError decides whether a binding-exchange error hard-fails
+// the run or degrades to a loud soft-skip. Only a genuine config error from a
+// REACHABLE endpoint (repository_not_mapped / ambiguous_product) hard-fails;
+// every transport/availability failure (endpoint not deployed yet, 5xx, auth
+// rejected) is a WARN + proceed, so a client that ships ahead of the server's
+// deploy never breaks the build.
+func classifyBindingGateError(platformURL string, err error) error {
+	var notMapped *platformauth.RepositoryNotMappedError
+	if errors.As(err, &notMapped) {
+		return errors.New(repoNotMappedMessage(platformURL, notMapped))
+	}
+	var ambiguous *platformauth.AmbiguousProductError
+	if errors.As(err, &ambiguous) {
+		return errors.New(ambiguousProductMessage(ambiguous))
+	}
+	// Soft-skip ONLY a genuinely-unavailable endpoint (server not deployed yet,
+	// transport failure, 5xx, non-JSON 200) so a client shipped ahead of the
+	// server's deploy never breaks the build. EVERY other error — invalid/absent
+	// product, 401, 403, malformed response — is a deterministic config/auth
+	// failure and MUST fail closed.
+	var unavailable *platformauth.BindingUnavailableError
+	if errors.As(err, &unavailable) {
+		log.Warnf("platform binding endpoint unavailable (the server may not be deployed yet) — "+
+			"proceeding without product binding; evidence will not auto-link to a product: %v", err)
+		return nil
+	}
+	return fmt.Errorf("platform binding failed (authenticated, but could not resolve a product binding): %w. "+
+		"Fix the configuration, or pass --no-product-binding to attest without a product binding", err)
+}
+
+// repoNotMappedMessage builds the machine-actionable failure for the zero-product
+// case. It names the repository (+ github_repository_id), the tenant, and the
+// exact remediation, so an automated agent reading the log can self-correct.
+func repoNotMappedMessage(platformURL string, e *platformauth.RepositoryNotMappedError) string {
+	repo, repoID := repoIdentifiers(e.Repository, e.RepositoryID)
+	return fmt.Sprintf("platform binding failed: repository %s (github_repository_id=%s) is authenticated to "+
+		"tenant %q (%s) but is not connected to any product. Fix: connect the repo to a product at %s/settings, "+
+		"or pass an explicit product (`cilock login --product <uuid>`). To intentionally attest without a product "+
+		"binding, pass --no-product-binding.",
+		repo, repoID, e.TenantName, e.TenantID, strings.TrimRight(auth.NormalizeURL(platformURL), "/"))
+}
+
+// ambiguousProductMessage builds the machine-actionable failure for the
+// multiple-product case, listing every candidate UUID + name so an agent can
+// choose exactly one.
+func ambiguousProductMessage(e *platformauth.AmbiguousProductError) string {
+	repo, _ := repoIdentifiers(e.Repository, e.RepositoryID)
+	parts := make([]string, 0, len(e.Candidates))
+	for _, c := range e.Candidates {
+		parts = append(parts, fmt.Sprintf("%s %q", c.ProductID, c.ProductName))
+	}
+	return fmt.Sprintf("platform binding is ambiguous: repository %s maps to %d products in tenant %q: [%s]. "+
+		"Pass exactly one: `cilock login --product <uuid>`.",
+		repo, len(e.Candidates), e.TenantName, strings.Join(parts, ", "))
+}
+
+// repoIdentifiers prefers the endpoint-supplied repository + id, falling back to
+// the ambient GitHub Actions env (GITHUB_REPOSITORY / GITHUB_REPOSITORY_ID) so
+// the message names the repo even when the typed error omits it.
+func repoIdentifiers(repo, repoID string) (string, string) {
+	if repo == "" {
+		repo = os.Getenv("GITHUB_REPOSITORY")
+	}
+	if repoID == "" {
+		repoID = os.Getenv("GITHUB_REPOSITORY_ID")
+	}
+	if repo == "" {
+		repo = "(unknown repository)"
+	}
+	if repoID == "" {
+		repoID = "(unknown)"
+	}
+	return repo, repoID
+}
+
 // applyPlatformCredential wires a stored login credential into the run: the
 // Archivista bearer (session credentials only), the keyless Fulcio signer, and
 // the logged-in Archivista-on default. Split out of ResolvePlatformDefaults to
@@ -703,6 +893,11 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 		"Run with no platform integration — a clear alias for --platform-url \"\". Drops the hosted "+
 			"Fulcio/TSA/Archivista defaults and skips the session lookup; signing continues with the "+
 			"configured local --signer-* key only (no third-party timestamp).")
+	cmd.Flags().BoolVar(&ro.NoProductBinding, "no-product-binding", false,
+		"Opt a platform-authenticated run out of the fail-closed product-binding gate. By default, "+
+			"when cilock is authenticated to the platform it resolves the repository's product and FAILS "+
+			"the run if the repo maps to zero or multiple products (so no unlinkable evidence is produced). "+
+			"Set this for a legitimate authenticated run not tied to a product (e.g. an org-level attestation).")
 	cmd.Flags().StringVarP(&ro.WorkingDir, "workingdir", "d", "", "Directory from which commands will run")
 	cmd.Flags().StringSliceVarP(&ro.Attestations, "attestations", "a", DefaultAttestors, "Attestations to record ('product' and 'material' are always recorded)")
 	cmd.Flags().StringSliceVar(&ro.DirHashGlobs, "dirhash-glob", []string{}, "Dirhash glob can be used to collapse material and product hashes on matching directory matches.")

@@ -76,6 +76,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/omnitrail => ../plugins/a
 
 replace github.com/aflock-ai/rookery/plugins/attestors/oscap => ../plugins/attestors/oscap
 
+replace github.com/aflock-ai/rookery/plugins/attestors/platform => ../plugins/attestors/platform
+
 replace github.com/aflock-ai/rookery/plugins/attestors/policyverify => ../plugins/attestors/policyverify
 
 replace github.com/aflock-ai/rookery/plugins/attestors/product => ../plugins/attestors/product
@@ -174,6 +176,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/omnitrail v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/oscap v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/pip-install v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/platform v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/policyverify v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/product v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/prowler v0.0.0-20260522233336-64c65b91ab8f

@@ -51,6 +51,7 @@ use (
 	./plugins/attestors/omnitrail
 	./plugins/attestors/oscap
 	./plugins/attestors/pip-install
+	./plugins/attestors/platform
 	./plugins/attestors/policyverify
 	./plugins/attestors/product
 	./plugins/attestors/prowler

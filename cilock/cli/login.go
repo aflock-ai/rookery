@@ -145,7 +145,9 @@ func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product stri
 	case tierToken:
 		return tokenCredential(cmd, url, token)
 	case tierWorkflow:
-		return auth.AmbientWorkflowLogin(url, config.Derive(url).OIDCLoginAudience)
+		// Pass the --product selector so a monorepo repository (repo→multiple
+		// products) can bind exactly one product at login.
+		return auth.AmbientWorkflowLogin(url, config.Derive(url).OIDCLoginAudience, product)
 	default: // tierBrowser
 		return auth.BrowserLogin(url, auth.LoginParams{
 			Tenant:     tenant,

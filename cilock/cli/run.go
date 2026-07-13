@@ -650,6 +650,14 @@ Exit-code policy (finding #221):
 				return err
 			}
 
+			// Fail-closed product-binding gate: when platform-authenticated,
+			// resolve the repository's product and HARD FAIL before the build runs
+			// if it maps to zero or multiple products (so no unlinkable evidence is
+			// produced). Not-authenticated / opt-out / endpoint-unavailable proceed.
+			if err := o.EnforcePlatformBinding(cmd); err != nil {
+				return err
+			}
+
 			signerProviders := providersFromFlags("signer", cmd.Flags())
 			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, signerProviders)
 			if err != nil {
