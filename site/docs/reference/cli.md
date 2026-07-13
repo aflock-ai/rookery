@@ -276,7 +276,7 @@ Wraps an arbitrary file in a DSSE envelope. Used most commonly to sign a policy 
 
 ## `cilock verify`
 
-> Verifies an **artifact (subject)** against a signed policy. You name the subject — an artifact file (`-f`) or a digest such as `sha1:$COMMIT` (`-s`) — and CI/lock uses the supplied **attestations as the evidence** that validates it. You verify the thing, not the attestation.
+> Verifies an **artifact (subject)** against a signed policy. You name the subject — an artifact file (`-f`) or a digest such as `sha256:$DIGEST` (`-s`) — and CI/lock uses the supplied **attestations as the evidence** that validates it. You verify the thing, not the attestation.
 
 Because v0.3 product/material attestations [inline their Merkle leaves](../attestors/product) by default, `cilock verify <artifact> -p policy -a <attestations>` resolves the artifact's digest to its signed tree with **no separate inclusion-proof envelope** — the inclusion-proof bridge maps the artifact's sha256 to the `tree:products` root directly from the signed attestation's inline leaves.
 
@@ -288,7 +288,7 @@ Because v0.3 product/material attestations [inline their Merkle leaves](../attes
 | `--publickey <path>` | `-k` | Path to the policy signer's public key (PEM). |
 | `--attestations <list>` | `-a` | Attestation envelope files (comma-separated; repeatable). |
 | `--artifactfile <path>` | `-f` | Path to the artifact subject to verify. |
-| `--subjects <list>` | `-s` | Additional subjects to use when looking up attestations (e.g. `sha1:$COMMIT`). More reliable than `--artifactfile` in multi-stage pipelines. |
+| `--subjects <list>` | `-s` | Additional subjects to use when looking up attestations (e.g. `sha256:<hex>`). Useful when the artifact file itself isn't available locally — verify by a known digest instead. **Do not** pass `sha1:$COMMIT` to anchor a match: sha1-commit anchoring was rejected (chosen-prefix collision, CVE-2026-22703) — `--artifactfile` (see above) already resolves the multi-stage-pipeline product/material mismatch that anchoring on the commit hash used to work around, via the inline-leaf inclusion-proof bridge. |
 | `--directory-path <path>` | (none) | Path to a directory subject (for material/product matching). |
 | `--enable-archivista` + `--archivista-server` | (none) | Pull collections from Archivista by subject digest instead of (or in addition to) file paths. |
 | `--policy-ca-roots <list>` | (none) | X.509 roots for verifying a policy signed via x.509 cert (replaces the deprecated `--policy-ca`). |

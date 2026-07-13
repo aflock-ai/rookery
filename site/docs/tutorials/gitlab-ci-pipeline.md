@@ -138,16 +138,22 @@ verify:
   script:
     - |
       ATTESTATIONS=$(ls attestation-*.json | paste -sd,)
+      # Anchor the match on the build's own product-tree sha256 subject,
+      # pulled straight out of its attestation, not the git commit's sha1
+      # (see below for why commit-sha1 anchoring is rejected).
+      SUBJECT_SHA256=$(jq -r '.payload | @base64d | fromjson | .subject[0].digest.sha256' attestation-build.json)
       cilock verify \
         --policy ./policy-signed.json \
         --publickey ./policy-pubkey.pem \
         --attestations "$ATTESTATIONS" \
-        --subjects "sha1:$CI_COMMIT_SHA"
+        --subjects "sha256:$SUBJECT_SHA256"
 ```
 
 The `--attestations` flag takes a comma-separated list, so the snippet above globs every `attestation-*.json` artifact carried forward via `dependencies:`/`needs:` and joins them. You can equally pass `--attestations a.json,b.json,c.json` literally, or repeat `-a` per file.
 
-The `--subjects "sha1:$CI_COMMIT_SHA"` flag tells CI/lock to match attestations whose subject list includes the git commit (every CI/lock attestation records the commit hash as a subject via the git attestor). Use that instead of `--artifactfile bin/myapp`: when multi-stage pipelines carry artifacts forward via `needs:`, the build's output binary often ends up in the build job's *materials* (because the prior stage's artifact made it visible to the material attestor before the build command ran) rather than its *products*, so `--artifactfile` won't find a matching subject. The git-commit subject is reliably present, end-to-end verified against the demo-cilock GitLab pipeline.
+Earlier versions of this tutorial anchored the match on `--subjects "sha1:$CI_COMMIT_SHA"` — the git commit hash, which every CI/lock attestation records as a subject via the `git` attestor — instead of `--artifactfile bin/myapp`, because in multi-stage pipelines the build's output binary can arrive in a later job classified as a *material* rather than a *product* (GitLab's `needs:`/`dependencies:` can make the prior stage's artifact visible before the current job's own command runs, and cilock's product/material attestors classify by presence-at-step-start, not provenance).
+
+**sha1-commit anchoring is rejected for security** (CVE-2026-22703): a chosen-prefix collision lets an attacker forge a second artifact that shares a legitimate build's git-commit sha1 subject, so a policy trusting the real build's signature would also accept the attacker's substitute — no compromised key required. The fix isn't a different identifier, it's a collision-resistant one: since cilock v0.3, product **and** material tree attestations inline their full per-file Merkle leaves, so `cilock verify`'s inclusion-proof bridge resolves a plain sha256 file digest against either tree — the materials-vs-products mismatch that originally motivated the commit-hash workaround is fixed at the verify layer itself. If the artifact file is present in the job, point at it directly (`--artifactfile bin/myapp`, or the flagless positional form `cilock verify bin/myapp`) and let cilock compute the sha256 for you. When it isn't — as in the `verify` job above, which only pulls `publish`'s own artifacts — pull the sha256 subject straight out of an already-fetched attestation, as shown above.
 
 ## Configurable `CILOCK_*` variables
 

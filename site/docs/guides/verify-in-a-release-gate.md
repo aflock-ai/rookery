@@ -33,7 +33,7 @@ cilock verify \
   --policy ./policy-signed.json \
   --publickey ./policy-pubkey.pem \
   --attestations build.attestation.json,sbom.attestation.json \
-  --subjects "sha1:$RELEASE_COMMIT_SHA"
+  --artifactfile ./bin/myapp
 ```
 
 Exit code 0 = pass, anything else = fail.
@@ -41,7 +41,7 @@ Exit code 0 = pass, anything else = fail.
 Two flag traps worth knowing:
 
 - `--attestations` is comma-separated (cobra `StringSlice`), not space-separated. Multiple files on one flag must be joined with commas, or you pass `-a` repeatedly.
-- Prefer `--subjects "sha1:$COMMIT"` over `--artifactfile bin/myapp` when the gate runs in a different job than the build. In multi-job pipelines, the build artifact often arrives in the gate job's working directory via `needs:`/`dependencies:` *before* its build-side attestation was produced, which can leave the artifact in the build's *materials* (not products) and break the digest-to-subject match. The git commit hash is recorded by the `git` attestor on every collection, so it's a reliable subject. (This trap is covered end-to-end in the [GitLab CI tutorial](../tutorials/gitlab-ci-pipeline).)
+- `--artifactfile bin/myapp` (or the flagless positional shorthand, `cilock verify bin/myapp`) is the right way to name the subject even when the gate runs in a different job than the build. cilock computes the file's sha256 and the verifier's inclusion-proof bridge resolves that digest against the build's signed `tree:products`/`tree:materials` Merkle root from its inlined leaves — so it matches whether the artifact reached this job as a *product* of the build step or as a *material* carried forward via `needs:`/`dependencies:`. **Do not** anchor the match on `--subjects sha1:$COMMIT` instead: sha1-commit anchoring was rejected (chosen-prefix collision, CVE-2026-22703) because an attacker can craft a second artifact that shares a trusted build's git-commit sha1 subject, so a signature vouching for the legitimate build would also validate the attacker's substitute with no key of their own. When the artifact file genuinely isn't available in the gate job, pull a `sha256:<hex>` subject out of the already-fetched attestation instead (see the [GitLab CI tutorial](../tutorials/gitlab-ci-pipeline) for that shape end-to-end) — never fall back to the commit hash.
 
 ## Soft-fail vs fail-closed
 
@@ -91,7 +91,7 @@ The verification result *is itself useful evidence*. CI/lock has two patterns fo
 cilock verify \
   --policy ./policy-signed.json --publickey ./policy-pubkey.pem \
   --attestations "$ATTESTATIONS" \
-  --subjects "sha1:$RELEASE_COMMIT_SHA" \
+  --artifactfile ./bin/myapp \
   --enable-archivista \
   --archivista-server "$ARCHIVISTA_URL"
 ```
@@ -108,7 +108,7 @@ cilock run --step promote-verify \
   -- cilock verify \
        --policy policy-signed.json --publickey policy-pubkey.pem \
        --attestations "$ATTESTATIONS" \
-       --subjects "sha1:$RELEASE_COMMIT_SHA"
+       --artifactfile ./bin/myapp
 ```
 
 The outer `cilock run` records the gate runner's identity and environment + the command-run output of the verify call. The inner `cilock verify` produces the SLSA VSA via `policyverify` as described above. Stored together, you have a signed record of *who verified what*, with what policy, at what time. Useful for audit ("show me every release that was promoted to prod last quarter, with the verification evidence").

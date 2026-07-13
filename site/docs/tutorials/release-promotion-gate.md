@@ -203,8 +203,11 @@ jobs:
           # Archivista exposes a GraphQL endpoint (/v1/query) for searching
           # by subject digest, and /v1/download/<gitoid> to fetch a specific
           # DSSE envelope. The shape below queries by the source commit SHA
-          # recorded by the `git` attestor as a subject. Replace with your
-          # client of choice (archivistactl, the Aflock platform client, etc).
+          # recorded by the `git` attestor as a subject — a lookup key to
+          # FIND the right attestation, not what `cilock verify` itself
+          # anchors its policy match on (see the note below the next step).
+          # Replace with your client of choice (archivistactl, the Aflock
+          # platform client, etc).
           curl -sS -H 'Content-Type: application/json' \
             --data @<(jq -n --arg sha "${{ inputs.sha }}" '{
               query: "query($sha: String!) { dsses(where: {hasStatementWith: {hasSubjectsWith: {hasSubjectDigestsWith: {value: $sha}}}}) { edges { node { gitoidSha256 } } } }",
@@ -214,15 +217,28 @@ jobs:
             | jq -r '.data.dsses.edges[0].node.gitoidSha256' \
             | xargs -I{} curl -sSfL "$ARCHIVISTA_URL/v1/download/{}" -o build.attestation.json
 
+          # Pull the build's own product-tree sha256 subject out of the
+          # fetched attestation so `cilock verify` anchors the policy match
+          # on a collision-resistant digest, not the commit's sha1.
+          echo "SUBJECT_SHA256=$(jq -r '.payload | @base64d | fromjson | .subject[0].digest.sha256' build.attestation.json)" >> "$GITHUB_ENV"
+
       - name: Run cilock verify
         id: gate
         continue-on-error: ${{ inputs.mode == 'soft-fail' }}
         run: |
+          # Anchoring on --subjects "sha1:${{ inputs.sha }}" (the commit
+          # hash) was rejected: sha1-commit anchoring is vulnerable to a
+          # chosen-prefix collision (CVE-2026-22703) — an attacker can craft
+          # an artifact that shares a trusted build's commit-sha1 subject,
+          # so a signature vouching for the real build would also validate
+          # the attacker's substitute with no key of their own. sha256
+          # doesn't have a known practical collision attack, which is why
+          # the digest above (not the commit hash) is what gates the policy.
           if cilock verify \
               --policy ./policy-signed.json \
               --publickey ./policy-pubkey.pem \
               --attestations build.attestation.json \
-              --subjects "sha1:${{ inputs.sha }}" ; then
+              --subjects "sha256:${SUBJECT_SHA256}" ; then
             echo "passed=true" >> "$GITHUB_OUTPUT"
             echo "✅ policy passed"
           else
