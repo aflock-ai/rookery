@@ -245,6 +245,18 @@ func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) 
 	if !tokenHash.Available() {
 		return time.Time{}, fmt.Errorf("timestamp token uses unavailable hash algorithm: %v", tokenHash)
 	}
+	// Reject a non-collision-resistant messageImprint hash (SHA-1, MD5, ...).
+	// The imprint binds the timestamp to the payload by digest equality; if an
+	// attacker can craft two payloads sharing that digest (SHA-1 has practical
+	// chosen-prefix collisions), a legitimately issued timestamp over one can be
+	// rebound to the other, forging proof-of-signing-time. This mirrors the
+	// subject-match collision-resistance rule (cryptoutil.IsMatchableSubjectDigest,
+	// finding S1) and makes the guarantee explicit at the verification boundary
+	// rather than relying on the issuing TSA/library refusing to mint weak hashes.
+	// Finding TS3 (#5749).
+	if !isCollisionResistantTimestampHash(tokenHash) {
+		return time.Time{}, fmt.Errorf("timestamp token messageImprint uses non-collision-resistant hash %v; only SHA-256/384/512 are accepted", tokenHash)
+	}
 
 	hashedData, err := cryptoutil.Digest(signedData, tokenHash)
 	if err != nil {
@@ -320,4 +332,18 @@ func timestampingIsSoleEKU(cert *x509.Certificate) bool {
 	return len(cert.ExtKeyUsage) == 1 &&
 		cert.ExtKeyUsage[0] == x509.ExtKeyUsageTimeStamping &&
 		len(cert.UnknownExtKeyUsage) == 0
+}
+
+// isCollisionResistantTimestampHash reports whether h is acceptable as the
+// RFC 3161 messageImprint hash. Only SHA-2 (256/384/512) is allowed: SHA-1 and
+// MD5 have practical collisions, and a collision on the imprint lets a
+// legitimately issued timestamp be rebound to a different payload. The platform
+// TSA mints SHA-256, so this rejects no legitimately issued token.
+func isCollisionResistantTimestampHash(h crypto.Hash) bool {
+	switch h {
+	case crypto.SHA256, crypto.SHA384, crypto.SHA512:
+		return true
+	default:
+		return false
+	}
 }
