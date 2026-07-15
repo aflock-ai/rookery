@@ -1,0 +1,144 @@
+/* /free — the free authenticated-tier landing page. Reuses index.module.css for
+   the shared shell (hero, section, cta*, platform*); this module adds only the
+   free-tier-specific bits: the consent note, the feature grid, the paid-column
+   list marker, and the accent-band text link. */
+
+.consentNote {
+  margin-top: 1.5rem;
+  padding: 0.9rem 1.25rem;
+  border-left: 3px solid var(--ifm-color-primary);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ifm-color-primary) 6%, transparent);
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  max-width: 60ch;
+}
+
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+}
+
+.feature {
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 12px;
+  padding: 1.5rem 1.6rem;
+  background: var(--ifm-background-color);
+}
+
+.featureTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: var(--ifm-color-emphasis-1000);
+}
+
+.featureBody {
+  margin: 0;
+  color: var(--ifm-color-emphasis-800);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+/* Paid column: neutral "→ available on paid" marker, NOT the free column's
+   green check (which would misleadingly imply you already have these). */
+.paidList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.paidList li {
+  position: relative;
+  padding: 0.4rem 0 0.4rem 1.4rem;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--ifm-color-emphasis-900);
+}
+
+.paidList li::before {
+  content: '→';
+  position: absolute;
+  left: 0;
+  color: var(--ifm-color-primary);
+  font-weight: 700;
+}
+
+/* Text link on the accent (blue) band, where the tertiary style's primary-blue
+   text would be too low-contrast. */
+.accentLink,
+.accentLink:hover {
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 0.7rem 0.5rem;
+}
+
+.accentLink:hover {
+  text-decoration: underline;
+}
+
+/* ---------- persona lanes (GRC / CI-CD) ---------- */
+
+.laneGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+@media (max-width: 768px) {
+  .laneGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.laneRole {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ifm-color-primary);
+  margin-bottom: 0.4rem;
+}
+
+/* Lane first-command block — the hero terminal's palette at card scale. */
+.laneCmd {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  margin: 1rem 0 0;
+}
+
+.laneCmd code {
+  background: transparent;
+  color: inherit;
+  border: none;
+  padding: 0;
+  font-family: var(--ifm-font-family-monospace);
+}
+
+/* Deliberately secondary browser-first path below the lanes. */
+.browserPath {
+  margin: 1.75rem 0 0;
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.browserPathLink,
+.browserPathLink:hover {
+  color: var(--ifm-color-primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.browserPathLink:hover {
+  text-decoration: underline;
+}

@@ -48,3 +48,19 @@
   background: var(--ifm-color-primary-dark);
   text-decoration: none;
 }
+
+/* "Start free" CTA — the free-tier funnel entry. Outlined so it pairs with the
+   filled Download button (primary action + free-tier entry, clear hierarchy). */
+.navbar-signup-cta {
+  color: var(--ifm-color-primary) !important;
+  border: 1px solid var(--ifm-color-primary);
+  border-radius: 6px;
+  padding: 0.32rem 0.85rem !important;
+  margin: 0 0.15rem 0 0.4rem;
+  font-weight: 600;
+}
+.navbar-signup-cta:hover {
+  color: #fff !important;
+  background: var(--ifm-color-primary);
+  text-decoration: none;
+}

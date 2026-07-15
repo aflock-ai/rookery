@@ -353,6 +353,12 @@ const config = {
             label: 'Reference',
           },
           {
+            to: '/free',
+            position: 'right',
+            label: 'Start for free',
+            className: 'navbar-signup-cta',
+          },
+          {
             to: '/download',
             position: 'right',
             label: 'Download',

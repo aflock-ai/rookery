@@ -4,6 +4,7 @@ import Head from '@docusaurus/Head';
 import Heading from '@theme/Heading';
 import Link from '@docusaurus/Link';
 import {fireConversion} from '../lib/adsConversions';
+import {PLATFORM_SIGNUP_URL} from '../lib/platform';
 import dl from './download.module.css';
 import styles from './from-witness.module.css';
 
@@ -67,6 +68,12 @@ function FromWitnessInner(): React.ReactElement {
         </p>
         <InstallCmd />
         <div className={styles.ctaRow}>
+          <Link
+            className={styles.secondaryCta}
+            to={PLATFORM_SIGNUP_URL}
+            onClick={() => fireConversion('platformSignup', 100)}>
+            Start for free on the platform →
+          </Link>
           <a
             className={styles.secondaryCta}
             href={GITHUB_URL}
@@ -110,19 +117,21 @@ function FromWitnessInner(): React.ReactElement {
 
           <div className={styles.block}>
             <Heading as="h3" className={styles.blockTitle}>
-              Same ecosystem, more attestors
+              Free hosted tier
             </Heading>
             <p className={styles.blockBody}>
-              50+ attestors via the{' '}
-              <Link to="/ecosystem/rookery">rookery</Link> factory, all{' '}
-              <a href={`${GITHUB_URL}/blob/main/LICENSE`} target="_blank" rel="noopener noreferrer">
-                Apache-2.0
+              Already signing with Witness? Point CI/lock at the{' '}
+              <a
+                href={PLATFORM_SIGNUP_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => fireConversion('platformSignup', 100)}>
+                hosted TestifySec Platform
               </a>{' '}
-              and self-hostable — with an optional managed{' '}
-              <a href="https://platform.testifysec.com" target="_blank" rel="noopener noreferrer">
-                TestifySec Platform
-              </a>{' '}
-              if you'd rather not run the trust infrastructure yourself.
+              and sign in — keyless Fulcio signing, hosted Archivista storage,
+              and attestation verification are free with an account. Your
+              envelopes verify unchanged; you just stop operating the trust
+              infrastructure. <Link to="/free">What's free →</Link>
             </p>
           </div>
         </div>

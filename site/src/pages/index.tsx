@@ -6,6 +6,8 @@ import Heading from '@theme/Heading';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import CastPlayer from '../components/CastPlayer';
 import UseCaseCarousel from '../components/UseCaseCarousel';
+import {fireConversion} from '../lib/adsConversions';
+import {PLATFORM_SIGNUP_URL} from '../lib/platform';
 import styles from './index.module.css';
 
 function Hero() {
@@ -25,8 +27,14 @@ function Hero() {
             produced. Verifiable, policy-checkable, portable.
           </p>
           <div className={styles.heroCtas}>
-            <Link to="/getting-started/installation" className={styles.ctaPrimary}>
-              Get started
+            <Link
+              to={PLATFORM_SIGNUP_URL}
+              className={styles.ctaPrimary}
+              onClick={() => fireConversion('platformSignup', 100)}>
+              Start for free →
+            </Link>
+            <Link to="/getting-started/installation" className={styles.ctaSecondary}>
+              Install CI/lock
             </Link>
             <Link
               to="https://github.com/aflock-ai/rookery"
@@ -304,13 +312,14 @@ brew install aflock-ai/tap/cilock          # macOS / Linux
 cilock run --step build \\
            --signer-file-key-path cosign.key \\
            --outfile build.attestation.json \\
-           -- go build ./...
+           -- go build -o ./my-service .
 
-# 3. Verify an artifact against a signed policy
-#    (-s/-f names the subject; the attestations are the evidence)
-cilock verify --policy release.policy.json \\
+# 3. Verify the artifact against a signed policy — point at the
+#    file; its sha256 subject is computed for you (the
+#    attestations are the evidence)
+cilock verify ./my-service \\
+              --policy release.policy.json \\
               --publickey policy-pubkey.pem \\
-              --subjects sha1:$COMMIT \\
               --attestations build.attestation.json`}
           </code>
         </pre>
@@ -450,6 +459,12 @@ function ManagedPlatform() {
           policy distribution, and audit reporting are operated by TestifySec
           and mapped to the compliance frameworks your auditors actually use.
         </p>
+        <p className={styles.sectionLede}>
+          Keyless signing, hosted evidence storage, and verification are{' '}
+          <Link to="/free">free with an account</Link> — no card. The compliance
+          frameworks, frontier model classes, and multi-team operation are the
+          paid tier.
+        </p>
         <div className={styles.platformGrid}>
           <div className={styles.platformCol}>
             <div className={styles.platformColTitle}>CI/lock + rookery (OSS)</div>
@@ -489,10 +504,19 @@ function ManagedPlatform() {
           </div>
         </div>
         <div className={styles.platformCtas}>
-          <Link to="https://testifysec.com/#contact" className={styles.ctaPrimary}>
+          <Link
+            to={PLATFORM_SIGNUP_URL}
+            className={styles.ctaPrimary}
+            onClick={() => fireConversion('platformSignup', 100)}>
+            Start for free →
+          </Link>
+          <Link
+            to="https://testifysec.com/#contact"
+            className={styles.ctaSecondary}
+            onClick={() => fireConversion('platformSignup', 100)}>
             See it live in a demo →
           </Link>
-          <Link to="https://testifysec.com/pricing" className={styles.ctaSecondary}>
+          <Link to="https://testifysec.com/pricing" className={styles.ctaTertiary}>
             Pricing
           </Link>
           <Link

@@ -32,7 +32,7 @@ export const CONVERSION_LABELS = {
   downloadStart: '', // user started a binary download.
   docsGettingStarted: '', // reached the getting-started / quickstart page.
   githubOutbound: '', // clicked through to the GitHub repo.
-  platformSignup: '', // managed-platform signup / demo request.
+  platformSignup: '1vDfCLLS3c0cELmQjdw9', // managed-platform signup / demo request.
 } as const;
 
 export type ConversionKey = keyof typeof CONVERSION_LABELS;
