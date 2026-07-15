@@ -357,8 +357,8 @@ func WithEmbedData(b bool) func(*Attestor)       { return func(a *Attestor) { a.
 // shapes (arrays, objects, nil) so the caller skips them.
 //
 // JSON numbers always decode to float64 from encoding/json; we render
-// whole numbers as integers ("123" not "123.0", "339150376714" not
-// "3.39150376714e+11") so identity strings from numeric ids in JSON
+// whole numbers as integers ("123" not "123.0", "123456789012" not
+// "1.23456789012e+11") so identity strings from numeric ids in JSON
 // round-trip through cross-attestation digest joins. Booleans render as
 // "true" / "false".
 //

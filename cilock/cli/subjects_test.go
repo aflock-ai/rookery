@@ -85,7 +85,7 @@ func TestParseSubjectFlags_ExplicitDigest(t *testing.T) {
 func TestParseSubjectFlags_Mixed(t *testing.T) {
 	got, err := parseSubjectFlags([]string{
 		"product:62ee1b9d",
-		"aws:account:339150376714",
+		"aws:account:123456789012",
 		"binary=sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 	})
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestParseSubjectFlags_Mixed(t *testing.T) {
 	// Bare names synthesise sha256 of themselves, preserving colons in the name.
 	_, ok := got["product:62ee1b9d"]
 	assert.True(t, ok)
-	_, ok = got["aws:account:339150376714"]
+	_, ok = got["aws:account:123456789012"]
 	assert.True(t, ok, "colon inside subject name is not a digest separator")
 	_, ok = got["binary"]
 	assert.True(t, ok)
@@ -161,7 +161,7 @@ func TestRunFlag_SubjectsAppearInStatement(t *testing.T) {
 		"--outfile", outfile,
 		"--attestations", "environment",
 		"--subjects", "product:62ee1b9d-aaaa-bbbb-cccc-dddddddddddd",
-		"--subjects", "aws:account:339150376714",
+		"--subjects", "aws:account:123456789012",
 		"--subjects", "binary=sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		"--", "echo", "hello",
 	)
@@ -180,7 +180,7 @@ func TestRunFlag_SubjectsAppearInStatement(t *testing.T) {
 	expected := sha256.Sum256([]byte("product:62ee1b9d-aaaa-bbbb-cccc-dddddddddddd"))
 	assert.Equal(t, hex.EncodeToString(expected[:]), prod.Digest["sha256"])
 
-	aws, ok := names["aws:account:339150376714"]
+	aws, ok := names["aws:account:123456789012"]
 	require.True(t, ok)
 	assert.NotEmpty(t, aws.Digest["sha256"])
 

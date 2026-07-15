@@ -142,10 +142,10 @@ func TestSubjectDigest_IsIdentitySha256(t *testing.T) {
 // attestor that has the same id as a string-typed value (e.g. coming
 // from an env var) still converge.
 func TestNumericIdentityRendersAsInteger(t *testing.T) {
-	body := `{"users":[{"id":339150376714}]}`
+	body := `{"users":[{"id":123456789012}]}`
 	subs := runAgainst(t, body, "$.users[*].id", "github:userid:")
 
-	const want = "github:userid:339150376714"
+	const want = "github:userid:123456789012"
 	if _, ok := subs[want]; !ok {
 		t.Errorf("expected %q. got: %v", want, keys(subs))
 	}

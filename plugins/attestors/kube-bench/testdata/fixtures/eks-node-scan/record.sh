@@ -10,10 +10,11 @@
 # hermetically. This script is the operator recipe for refreshing it.
 #
 # Requires:
-#   - kubectl + admin on the testifysec-demo demo EKS cluster
-#       AWS_PROFILE=testifysec-demo
-#       CTX=arn:aws:eks:us-east-1:898769392027:cluster/dropbox-clone-dev
-#       aws eks update-kubeconfig --name dropbox-clone-dev --region us-east-1 --profile testifysec-demo
+#   - kubectl + admin on a live EKS cluster (any cluster works — this fixture
+#     just needs one real CIS Kubernetes Benchmark run; set CTX to its context).
+#     The cluster originally used to record this fixture (dropbox-clone-dev, in
+#     the testifysec-demo account) was torn down 2026-07-08 — the CTX default
+#     below is stale and will fail; pass CTX explicitly for any future re-record.
 #   - a cilock built with the kube-bench attestor (e.g. `go build ./presets/all/cmd/cilock-all`)
 #   CILOCK=/path/to/cilock-all CTX=<eks-context> ./record.sh
 #
@@ -43,7 +44,13 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CILOCK="${CILOCK:-cilock}"
-CTX="${CTX:-arn:aws:eks:us-east-1:898769392027:cluster/dropbox-clone-dev}"
+# No default: the cluster originally used here (dropbox-clone-dev) was torn
+# down 2026-07-08. Pass CTX explicitly for whatever live cluster you're
+# re-recording against.
+if [ -z "${CTX:-}" ]; then
+  echo "CTX is required (an EKS kubectl context) — no default cluster available" >&2
+  exit 2
+fi
 WORK="$HERE/.record-work"; rm -rf "$WORK"; mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT
 
 # 1. Run the REAL CIS Kubernetes Benchmark as a Job on a live worker node.
