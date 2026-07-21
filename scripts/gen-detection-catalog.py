@@ -410,6 +410,42 @@ ENTRIES: list[tuple[str, dict]] = [
         recommended_trace="light",
         on_match="Kustomize build observed. Generated manifests captured by the product attestor."
     )),
+    # zarf — air-gap package manager for Kubernetes. `zarf package create`
+    # ASSEMBLES the package tarball (the primary build artifact); `zarf init`
+    # / `zarf package deploy` apply it to a cluster. Categories are picked from
+    # docs/lexicon-v1.md: `build` = "Produce the primary build artifact" fits
+    # `zarf package create` (the validated + flagship command) and is primary;
+    # `deploy` = "Apply a release to a target environment" covers `zarf init` /
+    # `zarf package deploy`. REJECTED `package-publish`: the lexicon defines it
+    # as "Publish a LIBRARY to a package registry" (npm publish / twine / cargo
+    # publish / gem push) — zarf packages are air-gap deployment bundles, not
+    # language libraries, and `create` publishes nothing. Precedent: apko
+    # (build+publish) is categorized by its build role; helm (package+deploy)
+    # is `deploy`. emits_formats=[]: zarf writes SBOMs as native syft-json
+    # (descriptor.name "zarf", syft schema) via --sbom-out, NOT SPDX/CycloneDX,
+    # so cilock's sbom attestor SKIPS them ("no SBOM file found in product
+    # set") — empirically confirmed, so we do not claim sbom.
+    ("zarf", dict(
+        desc="Zarf — air-gap-native package manager for Kubernetes; `zarf package create` assembles a self-contained deploy bundle (declared in zarf.yaml), `zarf init` / `zarf package deploy` apply it to a cluster.",
+        categories=["build", "deploy"],
+        primary="build",
+        upstream=dict(name="Zarf", source="https://github.com/zarf-dev/zarf",
+                      license="Apache-2.0", vendor="Zarf project (zarf-dev, TSC-governed; created by Defense Unicorns)"),
+        emits_formats=[],
+        # [zarf, package, create] is listed FIRST even though it is a strict
+        # subset of [zarf, package] (matching semantics are unchanged): the
+        # site generator derives the copy-pasteable runExample from the first
+        # pre-gate argv_prefix + " .", and `zarf package create .` is a valid
+        # invocation while bare `zarf package .` is not.
+        match=dict(any_of=[
+            dict(argv_prefix=["zarf", "package", "create"]),
+            dict(argv_prefix=["zarf", "package"]),
+            dict(argv_prefix=["zarf", "init"]),
+            dict(argv_prefix=["zarf", "dev"]),
+        ]),
+        recommended_trace="light",
+        on_match="zarf invocation observed. `zarf package create` output tarball (zarf-package-*.tar.zst) + zarf.yaml captured by product/material attestors; command-run records the literal zarf argv."
+    )),
 
     # ===== CHAINGUARD BUILD TOOLS (SBOM-emitting; e2e validation via test-catalog-tools.py pending local tool install) =====
     ("apko", dict(

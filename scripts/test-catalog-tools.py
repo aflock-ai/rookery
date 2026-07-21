@@ -45,10 +45,13 @@ LOGS = WORKDIR / "logs"
 FIXTURES = WORKDIR / "fixtures"
 CILOCK = os.environ.get("CILOCK_BIN", "/tmp/cilock-all-cat")
 
-# Predicate URIs we look for. The catalog test verifies that running
-# the wrapped tool produces (at minimum) commandrun + product, and that
-# detected tool-specific attestors fire.
-URI_COMMANDRUN = "https://aflock.ai/attestations/command-run/v0.1"
+# Predicate URIs we look for. Each recipe asserts exactly the URIs it
+# lists in expect_uris (default: command-run alone proves cilock wrapped
+# the tool); recipes that pin tool-specific attestors list theirs too.
+# command-run's PRODUCER emits v0.2 (plugins/attestors/commandrun: Type =
+# V02PredicateType); v0.1 is a verify-only legacy decoder. Match the live
+# producer so the wrapping check reflects what cilock actually writes today.
+URI_COMMANDRUN = "https://aflock.ai/attestations/command-run/v0.2"
 URI_PRODUCT = "https://aflock.ai/attestations/product/v0.3"
 URI_MATERIAL = "https://aflock.ai/attestations/material/v0.3"
 # SBOM attestor emits the underlying spec's namespace (SPDX or CycloneDX),
@@ -248,6 +251,26 @@ def make_maven(fix: Path):
     )
 
 
+def make_zarf_pkg(fix: Path):
+    # File-only Zarf package: no container images, no cluster, no network.
+    # `zarf package create` assembles a tarball and runs syft over the file.
+    (fix / "hello.txt").write_text(
+        "hello from the zarf file-only catalog fixture\n")
+    (fix / "zarf.yaml").write_text(
+        "kind: ZarfPackageConfig\n"
+        "metadata:\n"
+        "  name: catalog-file-only\n"
+        "  version: 0.0.1\n"
+        "  description: File-only Zarf package for cilock catalog validation.\n"
+        "components:\n"
+        "  - name: local-file\n"
+        "    required: true\n"
+        "    files:\n"
+        "      - source: hello.txt\n"
+        "        target: hello.txt\n"
+    )
+
+
 # ---- Invocation builders ----
 
 def args_only(parts: list[str]):
@@ -427,6 +450,22 @@ RECIPES: list[Recipe] = [
            fixture=make_chart, expect_uris=[URI_COMMANDRUN],
            allow_nonzero=True,
            invoke=args_only(["kustomize", "version"])),
+    # zarf `package create` assembles an air-gap package tarball from a
+    # file-only zarf.yaml (no images / cluster / network). Validated offline:
+    #   - attestors=["environment"] pins an explicit set so the run does not
+    #     drag in the git attestor (the fixture is not a git repo).
+    #   - --platform-url "" runs fully offline (no hosted TSA to block signing).
+    # The zarf tarball + zarf.yaml are captured as product/material; command-run
+    # records the literal zarf argv. No SBOM attestor: zarf writes syft-json
+    # SBOMs, which cilock's sbom attestor does not ingest (it wants
+    # *.cdx.json / *.spdx.json), so emits_formats=[] in the catalog entry.
+    Recipe(name="zarf", need="zarf", category="build",
+           fixture=make_zarf_pkg,
+           expect_uris=[URI_COMMANDRUN, URI_MATERIAL, URI_PRODUCT],
+           attestors=["environment"],
+           cilock_flags=["--platform-url", ""],
+           invoke=args_only(["zarf", "package", "create", ".", "--confirm",
+                             "-o", ".", "--sbom-out", "sboms", "--no-color"])),
 
     # --- CI env-detectors ---
     Recipe(name="azure-devops", need=None, category="build",

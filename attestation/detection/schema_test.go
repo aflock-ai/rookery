@@ -403,6 +403,47 @@ func TestEmbeddedCatalogParses(t *testing.T) {
 	}
 }
 
+// TestZarfCatalogEntry pins the zarf detection-only entry: it must be
+// registered + parse, carry primary_category=build with emits_formats=[] (zarf
+// SBOMs are syft-json, which the sbom attestor does not ingest), and its matcher
+// must fire on `zarf package create .`.
+func TestZarfCatalogEntry(t *testing.T) {
+	parsed, failures := Default().LookupAll()
+	if e, bad := failures["zarf"]; bad {
+		t.Fatalf("zarf catalog entry failed to parse: %v", e)
+	}
+	z, ok := parsed["zarf"]
+	if !ok {
+		t.Fatalf("expected zarf in catalog, names=%v", Default().Names())
+	}
+	if !z.DetectionOnly {
+		t.Errorf("zarf should be detection_only=true")
+	}
+	if z.PrimaryCategory != CategoryBuild {
+		t.Errorf("zarf primary_category=%q, want %q", z.PrimaryCategory, CategoryBuild)
+	}
+	if len(z.EmitsFormats) != 0 {
+		t.Errorf("zarf emits_formats=%v, want [] (zarf SBOMs are syft-json, not ingested by the sbom attestor)", z.EmitsFormats)
+	}
+
+	// Matcher-level: `zarf package create .` must fire the zarf detector.
+	res := RunPrePlanWith(Default(), PrePlan{
+		Argv: []string{"zarf", "package", "create", "."},
+		Env:  map[string]string{},
+		Cwd:  t.TempDir(),
+	})
+	fired := false
+	for _, f := range res.Fire {
+		if f.Attestor == "zarf" {
+			fired = true
+			break
+		}
+	}
+	if !fired {
+		t.Fatalf("expected zarf detector to fire for `zarf package create .`, fired=%+v", res.Fire)
+	}
+}
+
 func sliceEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

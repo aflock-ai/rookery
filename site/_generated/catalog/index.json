@@ -1,7 +1,7 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 131,
-  "withDoc": 55,
+  "count": 132,
+  "withDoc": 56,
   "emittedBy": {
     "sbom": [
       "apko",
@@ -1749,6 +1749,20 @@
       "emitsFormats": [
         "sarif"
       ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": true
+    },
+    {
+      "name": "zarf",
+      "source": "catalog-only",
+      "categories": [
+        "build",
+        "deploy"
+      ],
+      "primaryCategory": "build",
+      "description": "Run Zarf under cilock so `zarf package create` — the air-gap package build — is captured as a signed run where the package tarball becomes a real v0.3 product and the literal zarf argv is recorded in command-run/v0.2.",
+      "emitsFormats": [],
       "predicateType": null,
       "runType": null,
       "hasDoc": true
