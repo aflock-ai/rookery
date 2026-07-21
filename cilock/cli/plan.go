@@ -103,7 +103,8 @@ list above.`,
 			case "json":
 				return writePlanJSON(cmd.OutOrStdout(), env)
 			case "", formatText, "human":
-				return writePlanHuman(cmd.OutOrStdout(), env, verbose)
+				return writePlanHuman(cmd.OutOrStdout(), env, verbose,
+					registeredAttestorNames(), detection.Default())
 			default:
 				return fmt.Errorf("unknown --format %q (want text|json)", format)
 			}
@@ -125,6 +126,45 @@ func buildPlanSummary(plan detection.PlanResult) planSummary {
 		Skipped:  len(plan.Skip),
 		Warnings: len(plan.Warnings),
 	}
+}
+
+// suggestedRunAttestors maps fired detectors to runnable attestor names for
+// human suggestions. Registered names are checked first because dual-nature
+// entries such as go-build have real attestors, while the detection-only
+// catalog loads in init before plugins and wins the registry's first-write
+// race. Unregistered detection-only names are replaced by their emits_formats
+// attestors or omitted when none are declared. The helper is pure (registered
+// set and registry injected), so it can be unit-tested without a fully linked
+// plugin set. The result is deduplicated and sorted.
+func suggestedRunAttestors(fire []detection.FireDecision, registered map[string]bool, reg *detection.Registry) []string {
+	var out []string
+	seen := make(map[string]bool)
+	add := func(name string) {
+		if name != "" && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	for _, f := range fire {
+		if registered[f.Attestor] {
+			add(f.Attestor)
+			continue
+		}
+		if reg == nil {
+			add(f.Attestor)
+			continue
+		}
+		d, ok, err := reg.Lookup(f.Attestor)
+		if err != nil || !ok || d == nil || !d.DetectionOnly {
+			add(f.Attestor)
+			continue
+		}
+		for _, format := range d.EmitsFormats {
+			add(format)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func envSliceToMap(env []string) map[string]string {
@@ -156,7 +196,9 @@ func asWriter(w interface{ Write([]byte) (int, error) }) interface {
 }
 
 //nolint:gocognit,gocyclo // Output formatting branches are inherently linear.
-func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope, verbose bool) error {
+func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope, verbose bool,
+	registered map[string]bool, reg *detection.Registry,
+) error {
 	plan := env.Plan
 	var b strings.Builder
 	fmt.Fprintf(&b, "cilock plan — %d attestor(s) would fire\n", len(plan.Fire))
@@ -167,7 +209,7 @@ func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope,
 		fmt.Fprintln(&b, "         Hint: run from inside a project (`.git/`, `Dockerfile`, `package.json`, etc.)")
 		fmt.Fprintln(&b, "         or pass attestors explicitly with `-a <name>`.")
 	} else {
-		writePlanFireSection(&b, env)
+		writePlanFireSection(&b, env, registered, reg)
 	}
 
 	// TODO(#220): when 'cilock run --trace=<mode>' lands, re-emit a
@@ -211,7 +253,7 @@ func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope,
 // writePlanFireSection renders the matched-attestor list plus the
 // copy-pasteable `cilock run` suggestion(s). Split out of writePlanHuman so
 // the empty-vs-fired branch there stays flat (nestif).
-func writePlanFireSection(b *strings.Builder, env planEnvelope) {
+func writePlanFireSection(b *strings.Builder, env planEnvelope, registered map[string]bool, reg *detection.Registry) {
 	plan := env.Plan
 	fmt.Fprintln(b, "  fire:")
 	for _, f := range plan.Fire {
@@ -223,11 +265,13 @@ func writePlanFireSection(b *strings.Builder, env planEnvelope) {
 	// TODO(#220): once 'cilock run --auto' lands, replace this
 	// explicit -a list with a '--auto' suggestion. Until then '-a'
 	// is the only working way to actually fire the planned set.
-	fired := make([]string, 0, len(plan.Fire))
-	for _, f := range plan.Fire {
-		fired = append(fired, f.Attestor)
+	// Detection-only names are mapped to their format attestors or
+	// omitted so the suggestion is actually runnable (issue #7212).
+	suggested := suggestedRunAttestors(plan.Fire, registered, reg)
+	aFlag := ""
+	if len(suggested) > 0 {
+		aFlag = "-a " + strings.Join(suggested, ",") + " "
 	}
-	sort.Strings(fired)
 	// A fired tool that exits non-zero on findings (osv-scanner, gosec, …)
 	// would abort the run despite writing its report; surface the escape hatch
 	// in the suggested command so an agent pasting it verbatim still captures it.
@@ -243,8 +287,8 @@ func writePlanFireSection(b *strings.Builder, env planEnvelope) {
 	// a cryptic `--step is required` (or an unsigned run) when the step can't be
 	// inferred from the command (e.g. `echo`).
 	runPrereqs := "-s <step> --signer-file-key-path <key.pem> "
-	fmt.Fprintf(b, "  to run: cilock run %s%s-a %s -- %s\n",
-		runPrereqs, ignoreExit, strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
+	fmt.Fprintf(b, "  to run: cilock run %s%s%s-- %s\n",
+		runPrereqs, ignoreExit, aFlag, strings.Join(plan.Inputs.Argv, " "))
 
 	// Fix F7: when tracing would benefit at least one of the fired
 	// attestors (per detector's recommended_trace field), also emit
@@ -257,7 +301,7 @@ func writePlanFireSection(b *strings.Builder, env planEnvelope) {
 	// against the fired list because RecommendTrace already only
 	// reports modes for matched detectors.
 	if env.TraceRecommendation.Mode != "" && env.TraceRecommendation.Mode != detection.TraceOff {
-		fmt.Fprintf(b, "  to run (with tracing): cilock run --trace %s%s-a %s -- %s\n",
-			runPrereqs, ignoreExit, strings.Join(fired, ","), strings.Join(plan.Inputs.Argv, " "))
+		fmt.Fprintf(b, "  to run (with tracing): cilock run --trace %s%s%s-- %s\n",
+			runPrereqs, ignoreExit, aFlag, strings.Join(plan.Inputs.Argv, " "))
 	}
 }
