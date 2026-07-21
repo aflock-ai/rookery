@@ -491,7 +491,9 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// treat that as "no platform" and skip all derivation.
 	platformExplicitlyDisabled := (cmd.Flags().Changed("platform-url") || ro.Offline) && ro.PlatformURL == ""
 	if platformExplicitlyDisabled {
-		// User opted out of the platform. Don't derive anything.
+		// User opted out of the platform. Don't derive anything — and drop the
+		// auto-added platform attestor, since there is no platform to bind to.
+		ro.dropDefaultPlatformAttestor(cmd)
 		return
 	}
 
@@ -534,9 +536,39 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	// LookupAny (not Lookup) so a workflow-identity marker — which carries no
 	// stored token — is returned too; its keyless signing comes from a freshly
 	// minted ambient OIDC token, not a stored bearer.
+	// platformActive tracks whether this run has a real platform identity — a
+	// stored session or an ambient CI workflow identity. The platform attestor
+	// exists to bind a run to that identity; when it's absent we trim the
+	// attestor from the auto defaults below.
+	platformActive := ro.resolvePlatformIdentity(cmd, pc)
+
+	// The platform attestor binds a run to a logged-in platform tenant; with no
+	// session and no CI identity it has nothing to record, so trim it from the
+	// auto defaults. This keeps an offline/local-key run — or a preset binary
+	// that never registered the platform attestor — from dead-ending on a
+	// platform attestor it never opted into. An explicit -a is left untouched.
+	if !platformActive {
+		ro.dropDefaultPlatformAttestor(cmd)
+	}
+
+	// Give a selected fulcio signer a URL if it lacks one — whether it was
+	// selected by the keyless exchange above or by an explicit --signer-fulcio-token
+	// (a CI OIDC token). Runs outside the login block so the explicit-token path
+	// works without `cilock login`. No-op for local/KMS signing (fulcio unselected).
+	ensureFulcioURL(cmd, pc.Fulcio)
+}
+
+// resolvePlatformIdentity resolves the run's platform identity — a stored
+// login session or an ambient CI workflow identity — and wires it into the
+// run (Archivista bearer, keyless Fulcio token, platform-attestor binding).
+// Returns true when such an identity exists; false means the run has no
+// platform identity to bind (offline / logged out / local key).
+func (ro *RunOptions) resolvePlatformIdentity(cmd *cobra.Command, pc platformconfig.PlatformConfig) bool {
 	if cred, lookupErr := auth.LookupAny(ro.PlatformURL); lookupErr == nil && cred != nil {
 		ro.applyPlatformCredential(cmd, cred, pc)
-	} else if auth.WorkflowOIDCAvailable() {
+		return true
+	}
+	if auth.WorkflowOIDCAvailable() {
 		// Not logged in, but running in CI with an ambient OIDC identity
 		// (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN present ⇒ `permissions: id-token:
 		// write`). Sign keyless with the workflow identity directly, so a bare
@@ -567,7 +599,9 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 			// step exports CILOCK_PLATFORM_URL to forge a platform binding.
 			platformconfig.MarkTrustedPlatformBinding(normalized)
 		}
-	} else if !cmd.Flags().Changed("platform-url") {
+		return true
+	}
+	if !cmd.Flags().Changed("platform-url") {
 		// No platform session, no ambient CI identity, and the operator never
 		// changed --platform-url — so cilock is silently using the compiled-in
 		// HOSTED platform defaults (TSA, Archivista) while signing with whatever
@@ -577,12 +611,35 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 		// --offline (or --platform-url "") to drop the hosted defaults entirely.
 		log.Info("no platform session — running offline (signing with the local key; pass --offline to drop hosted platform defaults)")
 	}
+	return false
+}
 
-	// Give a selected fulcio signer a URL if it lacks one — whether it was
-	// selected by the keyless exchange above or by an explicit --signer-fulcio-token
-	// (a CI OIDC token). Runs outside the login block so the explicit-token path
-	// works without `cilock login`. No-op for local/KMS signing (fulcio unselected).
-	ensureFulcioURL(cmd, pc.Fulcio)
+// dropDefaultPlatformAttestor removes the "platform" attestor from the AUTO
+// attestor defaults when there is no platform identity to bind to (offline, not
+// logged in, or platform disabled). The platform attestor records a run's
+// binding to a logged-in platform tenant; with no session it has nothing to
+// emit, and demanding it would break a build that never opted into the platform
+// — e.g. an offline local-key run, or a preset binary (cilock-all) that does not
+// register the platform attestor at all.
+//
+// Only the auto defaults are trimmed. If the operator explicitly passed
+// -a/--attestations, that is their exact set and is honored verbatim — an
+// explicit `-a platform` still asks for the platform attestor.
+func (ro *RunOptions) dropDefaultPlatformAttestor(cmd *cobra.Command) {
+	if cmd.Flags().Changed("attestations") {
+		return
+	}
+	// Build a fresh slice: ro.Attestations may share DefaultAttestors' backing
+	// array (cobra's default), so an in-place filter would corrupt the package
+	// default for later invocations.
+	out := make([]string, 0, len(ro.Attestations))
+	for _, a := range ro.Attestations {
+		if a == "platform" { // matches the "platform" entry in DefaultAttestors
+			continue
+		}
+		out = append(out, a)
+	}
+	ro.Attestations = out
 }
 
 // explicitFulcioTokenSource reports whether the operator already supplied a
