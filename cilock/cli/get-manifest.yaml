@@ -1,0 +1,69 @@
+# Copyright 2026 TestifySec, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Zarf SHA-256 provenance:
+# https://github.com/zarf-dev/zarf/releases/download/v0.81.1/checksums.txt
+#
+# Syft release-archive SHA-256 provenance:
+# https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_checksums.txt
+# Syft executable pins were derived by hashing the named executable extracted
+# from each archive after the archive matched the official release pin above.
+
+zarf:
+  v0.81.1:
+    darwin/amd64:
+      url: https://github.com/zarf-dev/zarf/releases/download/v0.81.1/zarf_v0.81.1_Darwin_amd64
+      sha256: 0402df8265179bebfcbd08bd89b0c8a67929e9749647a231bc0ef053b8dee784
+    darwin/arm64:
+      url: https://github.com/zarf-dev/zarf/releases/download/v0.81.1/zarf_v0.81.1_Darwin_arm64
+      sha256: cfec151a45cbbb7be85236047c45ecaf83b308580e7d92912451957e2a474bed
+    linux/amd64:
+      url: https://github.com/zarf-dev/zarf/releases/download/v0.81.1/zarf_v0.81.1_Linux_amd64
+      sha256: eabd687b956b621a0e0f9e1889dc68f6b589baea7932c4ecb020da7fe81d13f6
+    linux/arm64:
+      url: https://github.com/zarf-dev/zarf/releases/download/v0.81.1/zarf_v0.81.1_Linux_arm64
+      sha256: 05bef4bca65e08c730b208f0c4bf100451ae641aff2555f65ed92d50b3b5ddaf
+    windows/amd64:
+      url: https://github.com/zarf-dev/zarf/releases/download/v0.81.1/zarf_v0.81.1_Windows_amd64.exe
+      sha256: c6662fa9b3407e347b5b6981682960fbf94fbb952c3c8c9ee4ef20f144adbeb8
+    windows/arm64:
+      url: https://github.com/zarf-dev/zarf/releases/download/v0.81.1/zarf_v0.81.1_Windows_arm64.exe
+      sha256: 8481d5aa910001296d89f0c3d8ea4fc2dffb6b8087bc201b67e9cc6e5c9b3f98
+
+syft:
+  v1.49.0:
+    darwin/amd64:
+      url: https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_darwin_amd64.tar.gz
+      sha256: a18ba5c48a4e75d0d87cae7b36b93bdfc04ddd5ea69b87bec9f7cd9431a8cdb9
+      executable_sha256: 69e1fcf7867f331b454d4ca609ffee3219356cb0dc00a5669708434fa43e9b67
+    darwin/arm64:
+      url: https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_darwin_arm64.tar.gz
+      sha256: 4d137302fb3e049cb1b124b1cbd840a77280dc9f50a45a5a4389250a2228b3cb
+      executable_sha256: edcfa80da9767f12a670721bc542b8a0d25c5d61e90a5ce06128cf4d68679ac5
+    linux/amd64:
+      url: https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_linux_amd64.tar.gz
+      sha256: 7aa2f03ee92739cf643279ba3990548b9925d4e22cae13f46831ee62821147fe
+      executable_sha256: 6368bf376b578991192e2e94f5e276e6c70d313d6368ad8c249866f020a86cb0
+    linux/arm64:
+      url: https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_linux_arm64.tar.gz
+      sha256: c7c32de183c32368de197edba75e8dba7632915f7761bacd55149a9ca7fe0fa4
+      executable_sha256: 2db8d39bafe1cba4d432cdfc41a985ddcd905cc0f0dfde28eea93ff13f296cd8
+    windows/amd64:
+      url: https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_windows_amd64.zip
+      sha256: 6edff6c6e06ddd43ae3b779099653f499a856009786b5375a7cf23aed6b67b1a
+      executable_sha256: 7dffcb0f27322622830074ead19948e79f7741e417d949a3334d820180802ef2
+    windows/arm64:
+      url: https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_windows_arm64.zip
+      sha256: ec62dd8fe827113f70fc8fe856067f2b8686b2f037533ae05c89b39cb9a6af90
+      executable_sha256: d0c5616cfacf98dbb497a8475bba6c950c3d6f8f3b0a6d1e156c70a80443c529

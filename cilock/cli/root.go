@@ -94,6 +94,7 @@ func New() *cobra.Command {
 	cmd.AddCommand(BundleCmd())
 	cmd.AddCommand(PlanCmd())
 	cmd.AddCommand(ToolsCmd())
+	cmd.AddCommand(GetCmd())
 	return cmd
 }
 

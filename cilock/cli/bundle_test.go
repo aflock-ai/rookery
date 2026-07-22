@@ -28,6 +28,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation/bundle"
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/gitoid"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -102,6 +103,12 @@ func TestBundleInspect_JSONOutput(t *testing.T) {
 func TestBundleCreate_PullsFromArchivista(t *testing.T) {
 	envA := envelopeWithSubjectDigests(t, []string{"d-1", "d-2"})
 	envB := envelopeWithSubjectDigests(t, []string{"d-2"})
+	bodyA, err := json.Marshal(envA)
+	require.NoError(t, err)
+	bodyB, err := json.Marshal(envB)
+	require.NoError(t, err)
+	gitoidA := bundleTestGitoid(bodyA)
+	gitoidB := bundleTestGitoid(bodyB)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/query", func(w http.ResponseWriter, r *http.Request) {
@@ -126,15 +133,15 @@ func TestBundleCreate_PullsFromArchivista(t *testing.T) {
 		for _, sub := range req.Variables.SubjectDigests {
 			switch sub {
 			case "d-1":
-				if _, ok := excluded["g-a"]; !ok {
+				if _, ok := excluded[gitoidA]; !ok {
 					e := edge{}
-					e.Node.Gitoid = "g-a"
+					e.Node.Gitoid = gitoidA
 					edges = append(edges, e)
 				}
 			case "d-2":
-				if _, ok := excluded["g-b"]; !ok {
+				if _, ok := excluded[gitoidB]; !ok {
 					e := edge{}
-					e.Node.Gitoid = "g-b"
+					e.Node.Gitoid = gitoidB
 					edges = append(edges, e)
 				}
 			}
@@ -147,10 +154,12 @@ func TestBundleCreate_PullsFromArchivista(t *testing.T) {
 	})
 	mux.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasSuffix(r.URL.Path, "/g-a"):
-			require.NoError(t, json.NewEncoder(w).Encode(envA))
-		case strings.HasSuffix(r.URL.Path, "/g-b"):
-			require.NoError(t, json.NewEncoder(w).Encode(envB))
+		case strings.HasSuffix(r.URL.Path, "/"+gitoidA):
+			_, err := w.Write(bodyA)
+			require.NoError(t, err)
+		case strings.HasSuffix(r.URL.Path, "/"+gitoidB):
+			_, err := w.Write(bodyB)
+			require.NoError(t, err)
 		default:
 			http.NotFound(w, r)
 		}
@@ -162,7 +171,7 @@ func TestBundleCreate_PullsFromArchivista(t *testing.T) {
 	dir := t.TempDir()
 	outPath := filepath.Join(dir, "out.bundle.tar.gz")
 
-	err := runBundleCreate(context.Background(), bundleCreateOptions{
+	err = runBundleCreate(context.Background(), bundleCreateOptions{
 		Subjects:      []string{"d-1"},
 		ArchivistaURL: srv.URL,
 		Output:        outPath,
@@ -182,6 +191,17 @@ func TestBundleCreate_PullsFromArchivista(t *testing.T) {
 	assert.Len(t, envs, 2, "should have walked the subject graph from d-1 to d-2")
 	assert.Equal(t, bundle.SourceArchivista, r.Manifest().Source)
 	assert.Equal(t, srv.URL, r.Manifest().SourceURL)
+}
+
+func bundleTestGitoid(content []byte) string {
+	// Shared implementation — the same one the Archivista client uses for
+	// mismatch checks — so the test can't drift from the real gitoid rules
+	// (header format, hash options, content-length handling).
+	g, err := gitoid.New(bytes.NewReader(content), gitoid.WithSha256(), gitoid.WithContentLength(int64(len(content))))
+	if err != nil {
+		panic(err)
+	}
+	return g.String()
 }
 
 func TestBundleCreate_RequiresFlags(t *testing.T) {
