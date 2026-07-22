@@ -1,6 +1,6 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 133,
+  "attestor_count": 134,
   "attestors": [
     {
       "name": "aws",
@@ -4028,6 +4028,57 @@
         "pre": {
           "argv_prefix": [
             "zap-baseline.py"
+          ]
+        }
+      }
+    },
+    {
+      "name": "zarf",
+      "category": [
+        "build",
+        "deploy"
+      ],
+      "primary_category": "build",
+      "upstream": {
+        "name": "Zarf",
+        "source": "https://github.com/zarf-dev/zarf",
+        "license": "Apache-2.0",
+        "vendor": "Zarf project (zarf-dev, TSC-governed; created by Defense Unicorns)"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[zarf dev], argv_prefix:[zarf init], argv_prefix:[zarf package create], argv_prefix:[zarf package])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "zarf",
+                "dev"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "zarf",
+                "init"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "zarf",
+                "package",
+                "create"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "zarf",
+                "package"
+              ]
+            }
           ]
         }
       }
