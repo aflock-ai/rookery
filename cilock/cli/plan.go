@@ -39,9 +39,18 @@ type planEnvelope struct {
 }
 
 type planSummary struct {
-	Fired    []string `json:"fired"`
-	Skipped  int      `json:"skipped"`
-	Warnings int      `json:"warnings"`
+	Fired []string `json:"fired"`
+	// SuggestedAttestations is the runnable -a set — comma-join the
+	// array (or repeat -a per element) for `cilock run`. It is the same
+	// suggestedRunAttestors mapping the human "to run:" hint uses
+	// (attestor-backed names pass through, detection-only catalog
+	// entries remap to their emits_formats attestors or drop). Fired
+	// stays the truthful detector list; passing it to -a fails with
+	// "attestor not found" for catalog-only tools (issue #7212).
+	// Always a JSON array, never null.
+	SuggestedAttestations []string `json:"suggested_attestations"`
+	Skipped               int      `json:"skipped"`
+	Warnings              int      `json:"warnings"`
 }
 
 // PlanCmd is the `cilock plan` subcommand. It evaluates the pre-gate
@@ -63,7 +72,7 @@ func PlanCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "plan -- <command> [args...]",
-		Short: "Show which attestors detection would fire for a command, without executing it",
+		Short: "Show what detection would fire for a command, without executing it",
 		// TODO(#220): once 'cilock run --auto' lands, restore the
 		// auto-run suggestion here. Until then we point users at the
 		// explicit -a form, which is the only flag that actually exists
@@ -72,10 +81,13 @@ func PlanCmd() *cobra.Command {
 invocation and prints what would fire, what would be skipped (with reasons),
 and any warnings with rendered suggested_command strings.
 
-It does NOT execute the command. Use 'cilock run -a <attestor>,...' to
-actually run the planned set; pass the attestor names from the 'fire'
-list above.`,
-		Example: `  # Show which attestors would fire for a build, without running it
+It does NOT execute the command. To actually run the planned set, paste
+the rendered "to run:" suggestion (or, in --format=json, comma-join the
+summary.suggested_attestations array for 'cilock run -a <a>,<b>,...').
+The 'fire' list names the matched DETECTORS — for detection-only catalog
+tools those names are not runnable attestors; the suggestion already
+maps them to the format attestors that capture their evidence.`,
+		Example: `  # Show what detection would fire for a build, without running it
   cilock plan -- go build ./...
 
   # Machine-readable plan for an agent to consume
@@ -93,18 +105,19 @@ list above.`,
 				Env:  envSliceToMap(os.Environ()),
 				Cwd:  cwd,
 			})
+			registered := registeredAttestorNames()
+			reg := detection.Default()
 			env := planEnvelope{
 				Plan:                      plan,
-				TraceRecommendation:       detection.RecommendTrace(detection.Default(), plan),
-				IgnoreExitCodeRecommended: detection.RecommendIgnoreExitCode(detection.Default(), plan),
-				Summary:                   buildPlanSummary(plan),
+				TraceRecommendation:       detection.RecommendTrace(reg, plan),
+				IgnoreExitCodeRecommended: detection.RecommendIgnoreExitCode(reg, plan),
+				Summary:                   buildPlanSummary(plan, registered, reg),
 			}
 			switch strings.ToLower(format) {
 			case "json":
 				return writePlanJSON(cmd.OutOrStdout(), env)
 			case "", formatText, "human":
-				return writePlanHuman(cmd.OutOrStdout(), env, verbose,
-					registeredAttestorNames(), detection.Default())
+				return writePlanHuman(cmd.OutOrStdout(), env, verbose)
 			default:
 				return fmt.Errorf("unknown --format %q (want text|json)", format)
 			}
@@ -115,16 +128,23 @@ list above.`,
 	return cmd
 }
 
-func buildPlanSummary(plan detection.PlanResult) planSummary {
+func buildPlanSummary(plan detection.PlanResult, registered map[string]bool, reg *detection.Registry) planSummary {
 	fired := make([]string, 0, len(plan.Fire))
 	for _, f := range plan.Fire {
 		fired = append(fired, f.Attestor)
 	}
 	sort.Strings(fired)
+	suggested := suggestedRunAttestors(plan.Fire, registered, reg)
+	if suggested == nil {
+		// Keep suggested_attestations an array ([] not null) when nothing
+		// resolves — machine consumers shouldn't need null-handling.
+		suggested = []string{}
+	}
 	return planSummary{
-		Fired:    fired,
-		Skipped:  len(plan.Skip),
-		Warnings: len(plan.Warnings),
+		Fired:                 fired,
+		SuggestedAttestations: suggested,
+		Skipped:               len(plan.Skip),
+		Warnings:              len(plan.Warnings),
 	}
 }
 
@@ -196,9 +216,7 @@ func asWriter(w interface{ Write([]byte) (int, error) }) interface {
 }
 
 //nolint:gocognit,gocyclo // Output formatting branches are inherently linear.
-func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope, verbose bool,
-	registered map[string]bool, reg *detection.Registry,
-) error {
+func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope, verbose bool) error {
 	plan := env.Plan
 	var b strings.Builder
 	fmt.Fprintf(&b, "cilock plan — %d attestor(s) would fire\n", len(plan.Fire))
@@ -209,7 +227,7 @@ func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope,
 		fmt.Fprintln(&b, "         Hint: run from inside a project (`.git/`, `Dockerfile`, `package.json`, etc.)")
 		fmt.Fprintln(&b, "         or pass attestors explicitly with `-a <name>`.")
 	} else {
-		writePlanFireSection(&b, env, registered, reg)
+		writePlanFireSection(&b, env)
 	}
 
 	// TODO(#220): when 'cilock run --trace=<mode>' lands, re-emit a
@@ -253,7 +271,7 @@ func writePlanHuman(w interface{ Write([]byte) (int, error) }, env planEnvelope,
 // writePlanFireSection renders the matched-attestor list plus the
 // copy-pasteable `cilock run` suggestion(s). Split out of writePlanHuman so
 // the empty-vs-fired branch there stays flat (nestif).
-func writePlanFireSection(b *strings.Builder, env planEnvelope, registered map[string]bool, reg *detection.Registry) {
+func writePlanFireSection(b *strings.Builder, env planEnvelope) {
 	plan := env.Plan
 	fmt.Fprintln(b, "  fire:")
 	for _, f := range plan.Fire {
@@ -267,7 +285,9 @@ func writePlanFireSection(b *strings.Builder, env planEnvelope, registered map[s
 	// is the only working way to actually fire the planned set.
 	// Detection-only names are mapped to their format attestors or
 	// omitted so the suggestion is actually runnable (issue #7212).
-	suggested := suggestedRunAttestors(plan.Fire, registered, reg)
+	// Reuse the summary's precomputed set — recomputing here risked the JSON
+	// and the human hint diverging if either mapping call drifted.
+	suggested := env.Summary.SuggestedAttestations
 	aFlag := ""
 	if len(suggested) > 0 {
 		aFlag = "-a " + strings.Join(suggested, ",") + " "

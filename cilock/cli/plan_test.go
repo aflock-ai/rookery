@@ -70,7 +70,8 @@ func TestWritePlanHuman_NoTraceRecommendationLine(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, writePlanHuman(&buf, env, false, nil, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, nil, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	// Whole "recommended tracing" block must be gone — both the string
@@ -99,7 +100,8 @@ func TestWritePlanHuman_FireSet_EmitsRunnableCilockRunCommand(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, writePlanHuman(&buf, env, false, nil, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, nil, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	// Users should get a copy-pasteable next step that uses the
@@ -142,7 +144,8 @@ func TestWritePlanHuman_RecommendsTraceWhenAttestorBenefits(t *testing.T) {
 	// go-build is dual-nature: its catalog entry is detection-only, but the
 	// real binary links a go-build attestor.
 	registered := map[string]bool{"go-build": true}
-	require.NoError(t, writePlanHuman(&buf, env, false, registered, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, registered, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	// Plain line still there (back-compat for operators who don't care
@@ -175,7 +178,8 @@ func TestWritePlanHuman_NoTraceVariantWhenNoneBenefits(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, writePlanHuman(&buf, env, false, nil, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, nil, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-a environment -- true")
@@ -201,7 +205,8 @@ func TestWritePlanHuman_RecommendsIgnoreExitCodeWhenToolGatesOnFindings(t *testi
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, writePlanHuman(&buf, env, false, nil, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, nil, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	// osv-scanner is a detection-only catalog entry (no backing attestor)
@@ -228,7 +233,8 @@ func TestWritePlanHuman_NoIgnoreExitCodeWhenToolDoesNotGate(t *testing.T) {
 	// go-build is dual-nature: its catalog entry is detection-only, but the
 	// real binary links a go-build attestor.
 	registered := map[string]bool{"go-build": true}
-	require.NoError(t, writePlanHuman(&buf, env, false, registered, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, registered, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-a go-build -- go build ./...")
@@ -250,7 +256,8 @@ func TestWritePlanHuman_ToRunIncludesStepAndSigner(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, writePlanHuman(&buf, env, false, nil, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, nil, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "-s <step>",
@@ -275,7 +282,8 @@ func TestWritePlanHuman_TraceOff_OmitsRecommendationLine(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, writePlanHuman(&buf, env, false, nil, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, nil, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	// When nothing recommends tracing, the recommendation line is
@@ -297,7 +305,8 @@ func TestWritePlanHuman_DetectionOnlyWithoutFormatsOmitsAttestor(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, writePlanHuman(&buf, env, false, nil, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, nil, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-- zarf package create .")
@@ -316,7 +325,8 @@ func TestWritePlanHuman_DetectionOnlyUsesFormatAttestor(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, writePlanHuman(&buf, env, false, nil, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, nil, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-a sbom -- syft scan dir:.")
@@ -335,7 +345,8 @@ func TestWritePlanHuman_RegisteredAttestorPassesThrough(t *testing.T) {
 
 	var buf bytes.Buffer
 	registered := map[string]bool{"git": true}
-	require.NoError(t, writePlanHuman(&buf, env, false, registered, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, registered, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-a git -- git status")
@@ -357,7 +368,8 @@ func TestWritePlanHuman_MixedDetectionOnlyAttestors(t *testing.T) {
 
 	var buf bytes.Buffer
 	registered := map[string]bool{"git": true}
-	require.NoError(t, writePlanHuman(&buf, env, false, registered, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, registered, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-a git,sbom -- syft scan dir:.")
@@ -377,9 +389,33 @@ func TestWritePlanHuman_DeduplicatesFormatAttestors(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, writePlanHuman(&buf, env, false, nil, detection.Default()))
+	env.Summary = buildPlanSummary(env.Plan, nil, detection.Default())
+	require.NoError(t, writePlanHuman(&buf, env, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "to run: cilock run "+runPrereqsWant+"-a sarif -- gosec ./...")
 	assert.Equal(t, 1, strings.Count(out, "-a sarif"))
+}
+
+// TestBuildPlanSummary_SuggestedAttestations pins the JSON contract added on
+// top of #7217: the summary carries both the truthful fired detector list AND
+// the runnable suggested_attestations list, so machine consumers don't
+// rebuild the broken `-a` from `fired` (#7212). It must always be a JSON
+// array — [] when nothing resolves, never null.
+func TestBuildPlanSummary_SuggestedAttestations(t *testing.T) {
+	sum := buildPlanSummary(detection.PlanResult{
+		Fire: []detection.FireDecision{
+			{Attestor: "zarf"}, // detection-only, emits nothing → dropped
+			{Attestor: "syft"}, // detection-only, emits sbom → remapped
+		},
+	}, registeredAttestorNames(), detection.Default())
+	assert.Equal(t, []string{"syft", "zarf"}, sum.Fired, "fired stays the truthful detector list")
+	assert.Equal(t, []string{"sbom"}, sum.SuggestedAttestations,
+		"suggested_attestations is the runnable -a set: syft→sbom, zarf dropped")
+
+	empty := buildPlanSummary(detection.PlanResult{
+		Fire: []detection.FireDecision{{Attestor: "zarf"}},
+	}, registeredAttestorNames(), detection.Default())
+	assert.NotNil(t, empty.SuggestedAttestations, "must encode as [] not null")
+	assert.Empty(t, empty.SuggestedAttestations)
 }
