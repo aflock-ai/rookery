@@ -38,6 +38,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock attestors list` | List every attestor compiled into the binary. |
 | `cilock attestors schema <name>` | Print the JSON schema of a specific attestor's predicate. |
 | `cilock tools list` / `show` / `test-plan` | List supported detectors, show one, or emit per-tool test plans. |
+| `cilock get <tool>` | Install a trusted tool only if its release artifact matches the SHA-256 pin embedded in this binary. |
 | `cilock completion <shell>` | Emit shell completion script (bash, zsh, fish, powershell). |
 | `cilock version` | Print the `cilock` version. |
 
@@ -506,6 +507,33 @@ Emit a structured test plan describing how to validate each detector (what trigg
 cilock tools test-plan
 cilock tools test-plan --only sarif --format json
 ```
+
+## `cilock get <tool>`
+
+Install a supporting tool from a **SHA-256 pin embedded in this `cilock` binary**. The pinned URL, release-artifact digest, and (for archives) the extracted-executable digest all live in one reviewable manifest compiled into the binary, so "which build of syft did CI run?" is answered by the cilock version alone — not by whatever a package manager or `curl | sh` happened to resolve that day.
+
+The command **fails closed**: an unknown tool, a missing or malformed pin, or a digest mismatch aborts before anything is installed. Archives (`.tar.gz`, `.zip`) are verified *before* extraction and the extracted executable is hashed again against its own pin.
+
+| Flag | Default | Description |
+|---|---|---|
+| `<tool>` | (required) | Tool to install. Passing an unknown name fails and prints the available tools (today: `syft`, `zarf`). |
+| `--dest <dir>` | `$HOME/.cilock/bin` | Installation directory. |
+| `--verify` | `false` | Hash the already-installed executable against its embedded pin and exit — no download, no write. |
+
+```bash
+# Install the pinned Syft release to $HOME/.cilock/bin
+cilock get syft
+
+# Install Zarf into a repo-local bin directory
+cilock get zarf --dest ./bin
+
+# Confirm an existing installation still matches its pin
+cilock get syft --verify
+```
+
+The install path is printed on success, along with the `export PATH=…` line needed to use it (on Windows, the directory to add to `PATH`). An existing installation is replaced atomically; on Windows the previous binary is backed up and **restored** if the swap fails, so a failed upgrade never destroys a working tool.
+
+Upgrading a pin is a deliberate, reviewable change to the manifest in the `cilock` source tree — there is no `--version` flag, because a version selected at runtime would defeat the point of pinning.
 
 ## `cilock completion <shell>`
 
