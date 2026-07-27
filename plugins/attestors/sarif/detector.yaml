@@ -36,8 +36,25 @@ contract:
       - "runs[].invocations[].endTimeUtc"
       - "runs[].results[].provenance.firstDetectionTimeUtc"
       - "runs[].results[].provenance.lastDetectionTimeUtc"
+  # Subjecter/BackReffer: image-scan SARIF ONLY. Container image scanners
+  # (trivy image --format sarif) stamp the scanned image's identity into
+  # runs[0].properties; the attestor derives image subjects from it so the
+  # report self-links to the image's build attestations at upload time.
+  # Non-image SARIF (gosec, golangci-lint, ...) has no properties bag and
+  # emits zero subjects. runs[0].properties.imageID is deliberately NOT read —
+  # it is the image config digest, not the manifest digest.
+  subjects:
+    - prefix: "imagedigest:"
+      description: "scanned-image manifest digest from runs[0].properties.repoDigests (bare hex as the DigestSet value, matching the oci attestor's manifestdigest subjects so shared edges connect); image-scan SARIF only"
+      digest_algs: ["sha256"]
+    - prefix: "imageref:"
+      description: "scanned-image name from runs[0].properties.imageName (key tail is the literal name, digest is the sha256 of the string, mirroring oci's imagetag subjects); image-scan SARIF only"
+  backref_subjects:
+    - "imagedigest:"
   schema_required: true
   credentials: []
   fixtures:
     - name: gosec
       role: canonical
+    - name: trivy-image
+      role: variant

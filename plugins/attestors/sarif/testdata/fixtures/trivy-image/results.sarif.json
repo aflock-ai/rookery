@@ -1,0 +1,90 @@
+{
+	"version": "2.1.0",
+	"$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+	"runs": [
+		{
+			"tool": {
+				"driver": {
+					"fullName": "Trivy Vulnerability Scanner",
+					"informationUri": "https://github.com/aquasecurity/trivy",
+					"name": "Trivy",
+					"rules": [
+						{
+							"id": "CVE-2023-44487",
+							"name": "OsPackageVulnerability",
+							"shortDescription": {
+								"text": "HTTP/2: Multiple HTTP/2 enabled web servers are vulnerable to a DDoS attack (Rapid Reset Attack)"
+							},
+							"fullDescription": {
+								"text": "The HTTP/2 protocol allows a denial of service (server resource consumption) because request cancellation can reset many streams quickly, as exploited in the wild in August through October 2023."
+							},
+							"defaultConfiguration": {
+								"level": "warning"
+							},
+							"helpUri": "https://avd.aquasec.com/nvd/cve-2023-44487",
+							"help": {
+								"text": "Vulnerability CVE-2023-44487\nSeverity: MEDIUM\nPackage: nginx\nFixed Version: \nLink: [CVE-2023-44487](https://avd.aquasec.com/nvd/cve-2023-44487)",
+								"markdown": "**Vulnerability CVE-2023-44487**\n| Severity | Package | Fixed Version | Link |\n| --- | --- | --- | --- |\n|MEDIUM|nginx||[CVE-2023-44487](https://avd.aquasec.com/nvd/cve-2023-44487)|"
+							},
+							"properties": {
+								"precision": "very-high",
+								"security-severity": "5.5",
+								"tags": [
+									"vulnerability",
+									"security",
+									"MEDIUM"
+								]
+							}
+						}
+					],
+					"version": "0.58.1"
+				}
+			},
+			"results": [
+				{
+					"ruleId": "CVE-2023-44487",
+					"ruleIndex": 0,
+					"level": "warning",
+					"message": {
+						"text": "Package: nginx\nInstalled Version: 1.27.0-1~bookworm\nVulnerability CVE-2023-44487\nSeverity: MEDIUM\nFixed Version: \nLink: [CVE-2023-44487](https://avd.aquasec.com/nvd/cve-2023-44487)"
+					},
+					"locations": [
+						{
+							"physicalLocation": {
+								"artifactLocation": {
+									"uri": "nginx",
+									"uriBaseId": "ROOTPATH"
+								},
+								"region": {
+									"startLine": 1,
+									"startColumn": 1,
+									"endLine": 1,
+									"endColumn": 1
+								}
+							},
+							"message": {
+								"text": "nginx: nginx@1.27.0-1~bookworm"
+							}
+						}
+					]
+				}
+			],
+			"columnKind": "utf16CodeUnits",
+			"originalUriBaseIds": {
+				"ROOTPATH": {
+					"uri": "file:///"
+				}
+			},
+			"properties": {
+				"imageID": "sha256:1531e4d7ec818745f966295556366eeab7f32a76c78f5d7821d88abd68407f6a",
+				"imageName": "nginx:1.27.0",
+				"repoDigests": [
+					"nginx@sha256:bf8b47d9f90f4c0d1572f26848eec08ea3d2f8b3816cbda42e4c8ec791d350ea"
+				],
+				"repoTags": [
+					"nginx:1.27.0"
+				]
+			}
+		}
+	]
+}

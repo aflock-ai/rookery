@@ -15,12 +15,14 @@
 package sarif
 
 import (
+	"crypto"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -41,7 +43,9 @@ const (
 // This is a hacky way to create a compile time error in case the attestor
 // doesn't implement the expected interfaces.
 var (
-	_ attestation.Attestor = &Attestor{}
+	_ attestation.Attestor   = &Attestor{}
+	_ attestation.Subjecter  = &Attestor{}
+	_ attestation.BackReffer = &Attestor{}
 
 	mimeTypes = []string{"text/plain", "application/json"}
 )
@@ -170,4 +174,104 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error { //n
 		return nil
 	}
 	return fmt.Errorf("no sarif file found")
+}
+
+// imageProperties is the minimal view of a SARIF run's properties bag used to
+// derive image subjects. Container image scanners (trivy's `trivy image
+// --format sarif`) stamp the scanned image's identity there: imageName,
+// repoDigests ("repo@sha256:<hex>"), repoTags, and imageID. Only imageName and
+// repoDigests are read — imageID is the image CONFIG digest (a platform-local
+// identity), not the manifest digest, so it would not connect to the manifest
+// edges the oci/docker attestors emit.
+type imageProperties struct {
+	ImageName   string   `json:"imageName"`
+	RepoDigests []string `json:"repoDigests"`
+}
+
+// reportImageProperties extracts runs[0].properties from the recorded report.
+// Returns the zero value when the report is absent, not the expected shape, or
+// carries no properties bag (gosec, golangci-lint, and other non-image SARIF).
+func (a *Attestor) reportImageProperties() imageProperties {
+	var doc struct {
+		Runs []struct {
+			Properties imageProperties `json:"properties"`
+		} `json:"runs"`
+	}
+	if len(a.Report) == 0 || json.Unmarshal(a.Report, &doc) != nil || len(doc.Runs) == 0 {
+		return imageProperties{}
+	}
+	return doc.Runs[0].Properties
+}
+
+// isSHA256Hex reports whether s is exactly 64 lowercase hex characters — the
+// strict digest form an OCI repo digest reference carries after "@sha256:".
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// Subjects exposes the scanned container image's identity when the recorded
+// SARIF is an image scan (trivy stamps runs[0].properties on `trivy image`),
+// so the report self-links to the image's build attestations at upload time.
+// Non-image SARIF (gosec, golangci-lint, ...) carries no properties bag and
+// yields no subjects. Key/value conventions follow the oci attestor:
+//
+//   - imagedigest:<hex>       the REAL manifest digest from repoDigests as the
+//     DigestSet value (bare hex, oci's manifestdigest style — NOT a hash of
+//     the string), so shared edges connect across collections
+//   - imageref:<imageName>    label subject; DigestSet is the sha256 of the
+//     literal string, mirroring how oci hashes imagetag strings
+//
+// Malformed repoDigests entries (missing "@sha256:", non-hex or wrong-length
+// digest, empty repo) are skipped silently — a scanner bug must not fail the
+// attestation, it just contributes no edge.
+func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
+	subjects := make(map[string]cryptoutil.DigestSet)
+	props := a.reportImageProperties()
+
+	for _, repoDigest := range props.RepoDigests {
+		repo, digest, found := strings.Cut(repoDigest, "@sha256:")
+		if !found || repo == "" || !isSHA256Hex(digest) {
+			log.Debugf("(attestation/sarif) skipping malformed repo digest %q", repoDigest)
+			continue
+		}
+		subjects[fmt.Sprintf("imagedigest:%s", digest)] = cryptoutil.DigestSet{
+			cryptoutil.DigestValue{Hash: crypto.SHA256}: digest,
+		}
+	}
+
+	if props.ImageName != "" {
+		hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
+		if ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(props.ImageName), hashes); err == nil {
+			subjects[fmt.Sprintf("imageref:%s", props.ImageName)] = ds
+		} else {
+			log.Debugf("(attestation/sarif) error hashing imageref subject %q: %v", props.ImageName, err)
+		}
+	}
+
+	return subjects
+}
+
+// BackRefs anchors the scan verdict to the scanned image's manifest digest —
+// the cross-collection identity — so the platform graph can walk from this
+// report to the image's build attestations. Only the imagedigest subjects are
+// backreffed (BackRefs ⊆ Subjects, per the contract rules): the imageref label
+// stays a subject only, since names are mutable and re-tagging would fan the
+// edge out across unrelated builds.
+func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
+	refs := make(map[string]cryptoutil.DigestSet)
+	for key, ds := range a.Subjects() {
+		if strings.HasPrefix(key, "imagedigest:") {
+			refs[key] = ds
+		}
+	}
+	return refs
 }

@@ -21,8 +21,11 @@ recording:
 expect:
   predicate_type: https://aflock.ai/attestations/sarif/v0.1
   run_type: postproduct
-  # sarif is NOT a Subjecter — it records the report bytes + file path + digest
-  # and emits ZERO subjects. The empty keys list asserts exactly that contract.
+  # sarif IS a Subjecter, but its image subjects (imagedigest:/imageref:) are
+  # derived from runs[0].properties — container image-scan metadata (trivy's
+  # repoDigests/imageName) that gosec SARIF does not carry — so THIS fixture
+  # still emits ZERO subjects. The trivy-image fixture proves the
+  # subject-emitting case.
   subjects:
     match: prefix
     keys: []

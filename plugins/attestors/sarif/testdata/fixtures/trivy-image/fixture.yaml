@@ -1,0 +1,21 @@
+schema_version: "0.1"
+attestor: sarif
+description: "trivy image-scan SARIF (trivy image --format sarif) — SYNTHETIC sample modeled 1:1 on trivy 0.58's SARIF writer output, NOT a recorded run (an image scan needs a registry pull; no recording block). Proves the image-subject contract: runs[0].properties.repoDigests/imageName become imagedigest:/imageref: subjects; properties.imageID (the config digest) is deliberately ignored."
+setup:
+  mode: product
+  input: results.sarif.json
+  mime_type: application/json
+expect:
+  predicate_type: https://aflock.ai/attestations/sarif/v0.1
+  run_type: postproduct
+  # exact match: the imagedigest subject's key tail AND DigestSet value must be
+  # the REAL manifest digest lifted from repoDigests (oci-style bare hex, not a
+  # hash of the string); imageref's key tail is the literal imageName. The
+  # imageID config digest (1531e4d7…) must NOT appear as a subject — asserted
+  # by the unit tests (sarif_subjects_test.go), which check the exact full
+  # subject set; this expect block asserts presence of the two contract keys.
+  subjects:
+    match: exact
+    keys:
+      - "imagedigest:bf8b47d9f90f4c0d1572f26848eec08ea3d2f8b3816cbda42e4c8ec791d350ea"
+      - "imageref:nginx:1.27.0"
