@@ -11,7 +11,7 @@ require (
 	github.com/sigstore/sigstore v1.10.6
 	github.com/stretchr/testify v1.11.1
 	go.step.sm/crypto v0.81.0
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/go-jose/go-jose.v2 v2.6.3
 )
