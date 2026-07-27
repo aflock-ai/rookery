@@ -1,0 +1,16 @@
+schema_version: "0.1"
+attestor: trivy
+description: "Trivy registry image scan with Metadata.RepoDigests — HERMETIC variant (hand-modeled on trivy's documented container_image output shape, no recording). Proves the container_image path emits an imagedigest:<hex> subject carrying the REAL manifest digest (oci convention), not a hash of the name string."
+setup:
+  mode: product
+  input: trivy-results.json
+  mime_type: application/json
+expect:
+  predicate_type: https://aflock.ai/attestations/trivy/v0.1
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys:
+      - "trivy:artifact:registry.example.com/acme/api:1.4.2"
+      - "trivy:cve:CVE-2024-6119"
+      - "imagedigest:e2f2d2eb1c8b1c4e9c7a09a5b83d1e2f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d"

@@ -37,9 +37,10 @@ llm_hints:
   on_match: "Trivy scan captured. Vulnerabilities, misconfigurations, and secrets findings preserved."
 
 # Output contract — proven by the verification loop (testkit + fixtures + CI).
-# See testdata/fixtures/. The trivy attestor is a Subjecter only (no Materials/
-# Products/Export): it signs the scan report and fans out subjects per artifact
-# and per CVE / misconfig resource.
+# See testdata/fixtures/. The trivy attestor is a Subjecter + BackReffer (no
+# Materials/Products/Export): it signs the scan report and fans out subjects
+# per artifact, per CVE / misconfig resource, and — for container image scans
+# — per real image manifest digest from Metadata.RepoDigests.
 contract:
   predicate_type: https://aflock.ai/attestations/trivy/v0.1
   run_type: postproduct
@@ -59,19 +60,22 @@ contract:
       description: "each unique vulnerability id across failed findings"
     - prefix: "trivy:resource:"
       description: "each misconfiguration resource id across failed findings"
+    - prefix: "imagedigest:"
+      description: "scan-target image manifest digest from Metadata.RepoDigests on container_image scans (bare hex; the DigestSet carries the REAL digest, matching the docker/oci imagedigest convention so shared edges connect)"
   # BackReffer: the attestor backrefs its SCAN TARGET. backrefs: is the
-  # complete BackRefs() declaration — imagedigest:/imagereference: (from
-  # Metadata.RepoDigests/RepoTags) are NOT subjects and live only here;
-  # backref_subjects keeps the subjects-constrained subset (the
-  # trivy:artifact: fallback) for the legacy ⊆-subjects view.
+  # complete BackRefs() declaration. imagedigest: entries are exactly the
+  # imagedigest subjects Subjects() emits for container_image scans (subset
+  # rule — see backref_subjects); imagereference: (from Metadata.RepoTags)
+  # is NOT a subject and lives only here.
   backrefs:
     - prefix: "imagedigest:"
-      description: "scan-target image digest from Metadata.RepoDigests (bare hex, matches the docker attestor's imagedigest subjects so shared edges connect)"
+      description: "scan-target image manifest digest from Metadata.RepoDigests (bare hex, matches the docker attestor's imagedigest subjects so shared edges connect)"
     - prefix: "imagereference:"
       description: "scan-target image reference from Metadata.RepoTags (repo:tag, sha256-of-string, matching docker)"
     - prefix: "trivy:artifact:"
       description: "fallback anchor for filesystem/repo scans when no image metadata is present"
   backref_subjects:
+    - "imagedigest:"
     - "trivy:artifact:"
   schema_required: true
   validated_invocation:
@@ -82,3 +86,5 @@ contract:
   fixtures:
     - name: fs-vuln
       role: canonical
+    - name: image-repodigest
+      role: variant   # proves the container_image imagedigest subject path

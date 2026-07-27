@@ -15,12 +15,15 @@
 package trivy
 
 import (
+	"crypto"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -290,6 +293,109 @@ func TestSubjects_IncludesMisconfigResources(t *testing.T) {
 	assert.Contains(t, subs, "trivy:artifact:kustomize-overlay")
 	assert.Contains(t, subs, "trivy:resource:Deployment/web")
 	assert.Contains(t, subs, "trivy:cve:CVE-2024-1234")
+}
+
+// TestSubjects_ImageScanEmitsRepoDigest proves the container_image path:
+// every well-formed Metadata.RepoDigests entry becomes an imagedigest:<hex>
+// subject whose DigestSet carries the REAL manifest digest (oci convention)
+// — not a sha256 of the name string like the trivy:* label subjects — so
+// the verdict shares graph edges with the docker/oci attestors.
+func TestSubjects_ImageScanEmitsRepoDigest(t *testing.T) {
+	report := loadReport(t, "testdata/fixtures/image-repodigest/trivy-results.json")
+	require.Equal(t, "container_image", report.ArtifactType)
+
+	a := New()
+	a.Summary = buildSummary(report)
+	subs := a.Subjects()
+
+	const manifestHex = "e2f2d2eb1c8b1c4e9c7a09a5b83d1e2f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d"
+	key := "imagedigest:" + manifestHex
+	require.Contains(t, subs, key)
+	assert.Equal(t,
+		cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA256}: manifestHex},
+		subs[key],
+		"imagedigest subject must carry the raw manifest digest as its value")
+
+	// ImageID is the image CONFIG digest, not the manifest digest — it must
+	// never become an imagedigest subject.
+	const configHex = "0d17b565c37bcbd895e9d92315a05c1c3c9a29f762b011a10c54a66cd53c9b31"
+	assert.NotContains(t, subs, "imagedigest:"+configHex,
+		"Metadata.ImageID (config digest) must not be emitted as an imagedigest subject")
+
+	// The join-by-name label subjects are unchanged.
+	assert.Contains(t, subs, "trivy:artifact:registry.example.com/acme/api:1.4.2")
+	assert.Contains(t, subs, "trivy:cve:CVE-2024-6119")
+}
+
+// TestSubjects_NonImageScansEmitNoImageDigest: filesystem and repository
+// scans have no image identity — they must not emit imagedigest subjects.
+func TestSubjects_NonImageScansEmitNoImageDigest(t *testing.T) {
+	for _, path := range []string{
+		"testdata/trivy-fs-vuln.json",          // ArtifactType: filesystem
+		"testdata/trivy-config-misconfig.json", // ArtifactType: repository
+	} {
+		report := loadReport(t, path)
+		require.NotEqual(t, "container_image", report.ArtifactType)
+
+		a := New()
+		a.Summary = buildSummary(report)
+		for k := range a.Subjects() {
+			assert.False(t, strings.HasPrefix(k, "imagedigest:"),
+				"%s: non-image scan must not emit imagedigest subject %q", path, k)
+		}
+	}
+}
+
+// TestSubjects_StrayRepoDigestsOnNonImageScanIgnored: even if a non-image
+// report carries RepoDigests metadata, no imagedigest subjects are emitted —
+// the gate is ArtifactType, not the mere presence of the field.
+func TestSubjects_StrayRepoDigestsOnNonImageScanIgnored(t *testing.T) {
+	a := New()
+	a.Summary = Summary{
+		ArtifactName: ".",
+		ArtifactType: "filesystem",
+		Metadata: MetadataSummary{
+			RepoDigests: []string{"acme/api@sha256:" + strings.Repeat("ab", 32)},
+		},
+	}
+	for k := range a.Subjects() {
+		assert.False(t, strings.HasPrefix(k, "imagedigest:"),
+			"filesystem scan must not emit imagedigest subject %q", k)
+	}
+}
+
+// TestSubjects_RepoDigestStrictValidation: only entries whose payload is
+// exactly 64 lowercase hex chars after "@sha256:" (the OCI digest grammar)
+// become subjects; everything malformed is skipped, never mangled.
+func TestSubjects_RepoDigestStrictValidation(t *testing.T) {
+	valid := strings.Repeat("ab", 32) // 64 lowercase hex chars
+	a := New()
+	a.Summary = Summary{
+		ArtifactName: "acme/api:1",
+		ArtifactType: "container_image",
+		Metadata: MetadataSummary{
+			RepoDigests: []string{
+				"acme/api@sha256:" + valid,                  // well-formed → kept
+				"acme/api@sha256:" + valid[:63],             // too short → skipped
+				"acme/api@sha256:" + valid + "ab",           // too long → skipped
+				"acme/api@sha256:" + strings.ToUpper(valid), // uppercase → skipped (OCI is lowercase)
+				"acme/api@sha256:" + valid[:63] + "g",       // non-hex char → skipped
+				"acme/api@md5:abc",                          // wrong algorithm → skipped
+				"@sha256:" + valid,                          // empty repo → skipped
+				"noseparator",                               // no @sha256: → skipped
+			},
+		},
+	}
+
+	subs := a.Subjects()
+	var digestKeys []string
+	for k := range subs {
+		if strings.HasPrefix(k, "imagedigest:") {
+			digestKeys = append(digestKeys, k)
+		}
+	}
+	require.Len(t, digestKeys, 1, "exactly one well-formed RepoDigests entry must survive")
+	assert.Equal(t, "imagedigest:"+valid, digestKeys[0])
 }
 
 func loadReport(t *testing.T, path string) *Report {

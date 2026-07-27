@@ -74,6 +74,11 @@ const (
 	RunType = attestation.PostProductRunType
 )
 
+// artifactTypeContainerImage is Trivy's ArtifactType for image scans — the
+// only artifact type whose Metadata.RepoDigests entries carry a real
+// registry manifest digest.
+const artifactTypeContainerImage = "container_image"
+
 // Compile-time interface checks.
 var (
 	_ attestation.Attestor  = &Attestor{}
@@ -314,9 +319,15 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 //   - trivy:artifact:<artifactName> for the scan target
 //   - trivy:cve:<vulnID>            for each unique CVE / vuln id
 //   - trivy:resource:<resourceArn>  for each unique misconfig resource id
+//   - imagedigest:<hex>             for each well-formed Metadata.RepoDigests
+//     entry when the scan targeted a container image
 //
-// All subject digests are SHA-256 of the identifier string, matching the
-// aws-codebuild / prowler pattern Archivista already indexes on.
+// trivy:* subject digests are SHA-256 of the identifier string —
+// join-by-name labels matching the aws-codebuild / prowler pattern
+// Archivista already indexes on. imagedigest: subjects instead carry the
+// REAL manifest digest as the DigestSet value (oci convention), giving the
+// verdict true artifact identity: they share graph edges with the docker /
+// oci attestors' subjects for the same image.
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 	subjects := make(map[string]cryptoutil.DigestSet)
@@ -357,7 +368,59 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 		}
 	}
 
+	// Container-image scans additionally get real-digest subjects for the
+	// scanned image so the verdict is anchored to the artifact itself, not
+	// just its name label.
+	for key, ds := range a.imageDigestSubjects() {
+		subjects[key] = ds
+	}
+
 	return subjects
+}
+
+// imageDigestSubjects builds the imagedigest:<hex> entries for a container
+// image scan target — one per well-formed Metadata.RepoDigests entry
+// ("repo@sha256:<hex>"). The DigestSet carries the REAL manifest digest as
+// its value (bare hex, matching the docker attestor's imagedigest subjects
+// so shared-(kind,value) graph edges connect) — NOT a sha256 of the name
+// string like the trivy:* subjects. Entries are strictly validated: no
+// @sha256: separator, an empty repo, or a payload that is not exactly 64
+// lowercase hex characters (the OCI digest grammar) → skipped.
+// Metadata.ImageID is deliberately ignored — it is the image CONFIG digest,
+// not the manifest digest registries serve and other attestors anchor on.
+// Non-image scans (filesystem/repository/config) never emit imagedigest
+// entries, even if a report carries stray RepoDigests metadata.
+func (a *Attestor) imageDigestSubjects() map[string]cryptoutil.DigestSet {
+	out := make(map[string]cryptoutil.DigestSet)
+	if a.Summary.ArtifactType != artifactTypeContainerImage {
+		return out
+	}
+	for _, repoDigest := range a.Summary.Metadata.RepoDigests {
+		repo, digest, found := strings.Cut(repoDigest, "@sha256:")
+		if !found || repo == "" || !isSHA256Hex(digest) {
+			log.Debugf("(attestation/trivy) skipping malformed RepoDigests entry %q", repoDigest)
+			continue
+		}
+		out[fmt.Sprintf("imagedigest:%s", digest)] = cryptoutil.DigestSet{
+			cryptoutil.DigestValue{Hash: crypto.SHA256}: digest,
+		}
+	}
+	return out
+}
+
+// isSHA256Hex reports whether s is a well-formed sha256 payload per the OCI
+// digest grammar: exactly 64 lowercase hex characters.
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // BackRefs declares the artifact this scan targeted — the provenance anchors
@@ -366,23 +429,18 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 // subjects only: they are claims, not provenance edges, and backreffing them
 // would cross-link every unrelated product sharing a vulnerability.
 //
-//   - imagedigest:<hex>          raw manifest digest from Metadata.RepoDigests;
-//     value format matches the docker attestor's imagedigest subjects (bare
-//     hex, raw digest as the DigestSet value) so shared edges connect
+//   - imagedigest:<hex>          raw manifest digest from Metadata.RepoDigests
+//     on container_image scans; exactly the imagedigest subjects Subjects()
+//     emits (subset rule), so the backref edge and the subject edge carry the
+//     same (kind, value) and connect to the docker/oci attestors
 //   - imagereference:<repo:tag>  sha256-of-string, matching docker
 //   - trivy:artifact:<name>      fallback anchor for filesystem/repo scans
 func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 	refs := make(map[string]cryptoutil.DigestSet)
 
-	for _, repoDigest := range a.Summary.Metadata.RepoDigests {
-		_, digest, found := strings.Cut(repoDigest, "@sha256:")
-		if !found || digest == "" {
-			continue
-		}
-		refs[fmt.Sprintf("imagedigest:%s", digest)] = cryptoutil.DigestSet{
-			cryptoutil.DigestValue{Hash: crypto.SHA256}: digest,
-		}
+	for key, ds := range a.imageDigestSubjects() {
+		refs[key] = ds
 	}
 
 	for _, tag := range a.Summary.Metadata.RepoTags {

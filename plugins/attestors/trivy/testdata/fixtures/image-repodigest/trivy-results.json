@@ -1,0 +1,50 @@
+{
+  "SchemaVersion": 2,
+  "CreatedAt": "2026-07-20T10:15:00.000000000Z",
+  "ArtifactName": "registry.example.com/acme/api:1.4.2",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "alpine",
+      "Name": "3.20.1"
+    },
+    "ImageID": "sha256:0d17b565c37bcbd895e9d92315a05c1c3c9a29f762b011a10c54a66cd53c9b31",
+    "DiffIDs": [
+      "sha256:94e5f06ff8e3d4441dc3cd8b090ff38dfc17d9ea2a19b5a49a2280a2cbc4dda4"
+    ],
+    "RepoTags": [
+      "registry.example.com/acme/api:1.4.2"
+    ],
+    "RepoDigests": [
+      "registry.example.com/acme/api@sha256:e2f2d2eb1c8b1c4e9c7a09a5b83d1e2f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d"
+    ],
+    "ImageConfig": {
+      "architecture": "amd64",
+      "os": "linux"
+    }
+  },
+  "Results": [
+    {
+      "Target": "registry.example.com/acme/api:1.4.2 (alpine 3.20.1)",
+      "Class": "os-pkgs",
+      "Type": "alpine",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2024-6119",
+          "PkgID": "libcrypto3@3.3.1-r0",
+          "PkgName": "libcrypto3",
+          "PkgIdentifier": {
+            "PURL": "pkg:apk/alpine/libcrypto3@3.3.1-r0?arch=x86_64&distro=3.20.1",
+            "UID": "8a25c33dfe3f1c26"
+          },
+          "InstalledVersion": "3.3.1-r0",
+          "FixedVersion": "3.3.1-r3",
+          "Status": "fixed",
+          "Severity": "MEDIUM",
+          "Title": "openssl: Possible denial of service in X.509 name checks",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2024-6119"
+        }
+      ]
+    }
+  ]
+}

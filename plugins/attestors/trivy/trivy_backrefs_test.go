@@ -16,6 +16,7 @@ package trivy
 
 import (
 	"crypto"
+	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -83,7 +84,8 @@ func TestBackRefs_FilesystemScanFallsBackToArtifact(t *testing.T) {
 	assert.Len(t, refs, 1)
 }
 
-// TestBackRefs_MalformedRepoDigestSkipped: entries without @sha256: must be
+// TestBackRefs_MalformedRepoDigestSkipped: entries without @sha256:, or
+// whose payload fails the strict 64-lowercase-hex validation, must be
 // skipped rather than emitting a garbage edge.
 func TestBackRefs_MalformedRepoDigestSkipped(t *testing.T) {
 	a := New()
@@ -91,7 +93,13 @@ func TestBackRefs_MalformedRepoDigestSkipped(t *testing.T) {
 		ArtifactName: "weird:latest",
 		ArtifactType: "container_image",
 		Metadata: MetadataSummary{
-			RepoDigests: []string{"weird@md5:abc", "noseparator"},
+			RepoDigests: []string{
+				"weird@md5:abc",
+				"noseparator",
+				"weird@sha256:abc", // too short
+				"weird@sha256:" + strings.Repeat("g", 64),  // non-hex
+				"weird@sha256:" + strings.Repeat("AB", 32), // uppercase hex — OCI digests are lowercase
+			},
 		},
 	}
 
@@ -99,4 +107,34 @@ func TestBackRefs_MalformedRepoDigestSkipped(t *testing.T) {
 	for key := range refs {
 		assert.NotContains(t, key, "imagedigest:", "malformed repo digests must not produce digest backrefs")
 	}
+}
+
+// TestBackRefs_ImageDigestsAreSubsetOfSubjects pins the subset rule: the
+// imagedigest backrefs are exactly the imagedigest subjects — same keys,
+// same DigestSets — so the backref edge and the subject edge carry the same
+// (kind, value) in the graph.
+func TestBackRefs_ImageDigestsAreSubsetOfSubjects(t *testing.T) {
+	a := New()
+	a.Summary = Summary{
+		ArtifactName: "nginx:1.27",
+		ArtifactType: "container_image",
+		Metadata: MetadataSummary{
+			RepoTags:    []string{"nginx:1.27"},
+			RepoDigests: []string{"nginx@sha256:" + trivyTestManifestDigest},
+		},
+	}
+
+	subs := a.Subjects()
+	refs := a.BackRefs()
+
+	found := 0
+	for key, ds := range refs {
+		if !strings.HasPrefix(key, "imagedigest:") {
+			continue
+		}
+		found++
+		require.Contains(t, subs, key, "every imagedigest backref must also be a subject")
+		assert.Equal(t, subs[key], ds, "backref and subject must carry the same DigestSet")
+	}
+	assert.Equal(t, 1, found, "the well-formed RepoDigests entry must produce exactly one imagedigest backref")
 }
