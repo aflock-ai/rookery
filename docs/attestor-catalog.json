@@ -1485,6 +1485,19 @@
         "format_only": true
       },
       "registered": true,
+      "subjects": [
+        {
+          "prefix": "imagedigest:",
+          "description": "scanned-image manifest digest from runs[0].properties.repoDigests (bare hex as the DigestSet value, matching the oci attestor's manifestdigest subjects so shared edges connect); image-scan SARIF only",
+          "digest_algs": [
+            "sha256"
+          ]
+        },
+        {
+          "prefix": "imageref:",
+          "description": "scanned-image name from runs[0].properties.imageName (key tail is the literal name, digest is the sha256 of the string, mirroring oci's imagetag subjects); image-scan SARIF only"
+        }
+      ],
       "has_contract": true,
       "applies_when": {
         "post": "product_glob:[*.sarif, **/*.sarif, *.sarif.json, **/*.sarif.json]"
