@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/cilock/internal/keyguard"
 )
 
@@ -128,6 +129,15 @@ type RunSummary struct {
 	// acr the platform minted the signing identity at, e.g. "aal2"), when a
 	// platform session supplied one. Empty for offline / local-key runs.
 	AssuranceLevel string `json:"assurance_level,omitempty"`
+
+	// Capture is the capture-completeness delta: which subjects an attestor's
+	// contract said SHOULD have been captured but the run did not produce,
+	// each with the remedy. Advisory — it never changes the exit code. This is
+	// the machine-readable half of the CILOCK_CAPTURE_INCOMPLETE warnings, so
+	// "where are we blind?" is answerable from capture-time data instead of by
+	// querying the evidence store months later. nil when no attestor in the run
+	// declared a capture expectation.
+	Capture *detection.CaptureReport `json:"capture,omitempty"`
 }
 
 // ComputeSLSA derives the achieved SLSA Build level + verdict from the EVIDENCE

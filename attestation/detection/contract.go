@@ -187,6 +187,76 @@ type SubjectClaim struct {
 	// DigestAlgs lists digest algorithms expected in the DigestSet for this
 	// subject (e.g. ["sha256"]). Optional; checked when present.
 	DigestAlgs []string `yaml:"digest_algs,omitempty" json:"digest_algs,omitempty"`
+
+	// Capture turns this claim from DESCRIPTIVE ("here is what the attestor
+	// emits") into PRESCRIPTIVE ("here is what SHOULD be captured, and what to
+	// do when it isn't"). nil — the default for every claim authored before
+	// this field existed — means the subject carries NO capture expectation and
+	// can never produce a run-time warning. Opt-in per subject; see
+	// CaptureExpectation.
+	Capture *CaptureExpectation `yaml:"capture,omitempty" json:"capture,omitempty"`
+}
+
+// CaptureExpectation declares that a subject SHOULD be captured, under what
+// condition, and what the user can do when it wasn't. It is the vocabulary the
+// run-time completeness check (CheckCapture) reads to turn a silent coverage
+// hole into an actionable warning.
+//
+// The default is deliberately "no expectation": a SubjectClaim without a
+// capture block never warns. A capture warning that fires on every run is
+// noise, and noise gets filtered out — which is exactly how this class of
+// signal dies. Attestors opt in one subject at a time.
+type CaptureExpectation struct {
+	// Expectation is the strength of the claim:
+	//
+	//   always         — the attestor should produce this subject on every
+	//                    successful run. Its absence means the evidence is
+	//                    incomplete no matter how the step was invoked.
+	//   when-available — the subject is only producible when a precondition
+	//                    holds (AvailableWhen). Its absence is a coverage gap
+	//                    the user can usually close by changing the invocation
+	//                    (Remedy) — not a defect.
+	//
+	// Both warn; they differ in wording and in the machine-readable severity,
+	// because "the attestor is broken" and "your invocation could not yield
+	// this" are different actions for the reader.
+	Expectation string `yaml:"expectation" json:"expectation"`
+
+	// AvailableWhen states the precondition, in user-facing terms, under which
+	// the subject CAN be captured (e.g. "the image is resolved from a registry
+	// reference rather than loaded from a local tar"). Required for
+	// when-available; must be empty for always.
+	AvailableWhen string `yaml:"available_when,omitempty" json:"available_when,omitempty"`
+
+	// Remedy OVERRIDES the derived guidance. Leave it EMPTY in the normal case:
+	// the remedy is derived from this detector's own pre/post match block (see
+	// deriveRemedy), which already declares the commands that produce the
+	// evidence. Derived text cannot drift when someone edits a match pattern,
+	// and it states exactly what cilock looks for instead of a paraphrase
+	// written once and forgotten.
+	//
+	// Set it ONLY when the subject's capture precondition is NARROWER than the
+	// detector's overall match block, so the derived list would name a command
+	// that cannot in fact produce this subject.
+	//
+	// Whatever you write must describe a WORKFLOW change ("attest the push step
+	// too"), never a flag to paste. cilock's value is that you wrap your build
+	// and it captures everything; every flag a user has to remember is a
+	// failure of the tool. A catalog-wide test enforces this.
+	Remedy string `yaml:"remedy,omitempty" json:"remedy,omitempty"`
+}
+
+// Capture expectation strengths (CaptureExpectation.Expectation).
+const (
+	// CaptureAlways: the subject should be present on every successful run.
+	CaptureAlways = "always"
+	// CaptureWhenAvailable: the subject is only producible when a documented
+	// precondition holds.
+	CaptureWhenAvailable = "when-available"
+)
+
+var validCaptureExpectations = map[string]bool{
+	CaptureAlways: true, CaptureWhenAvailable: true,
 }
 
 // BackRefClaim is one declared back-reference key family — what
@@ -368,6 +438,29 @@ var fixtureDriveableRunTypes = map[string]bool{
 	ContractRunPostProduct: true,
 }
 
+// validateCaptureExpectation enforces the internal consistency of one
+// subject's capture block. nil is always valid — the block is opt-in, and
+// every contract authored before it existed must keep validating unchanged.
+func validateCaptureExpectation(ce *CaptureExpectation, name string, i int, prefix string) error {
+	if ce == nil {
+		return nil
+	}
+	if !validCaptureExpectations[ce.Expectation] {
+		return fmt.Errorf("detector.yaml %q: contract.subjects[%d] (%q): capture.expectation %q must be one of always|when-available", name, i, prefix, ce.Expectation)
+	}
+	switch ce.Expectation {
+	case CaptureWhenAvailable:
+		if strings.TrimSpace(ce.AvailableWhen) == "" {
+			return fmt.Errorf("detector.yaml %q: contract.subjects[%d] (%q): capture.available_when is required for expectation when-available — state the precondition that makes the subject capturable", name, i, prefix)
+		}
+	case CaptureAlways:
+		if strings.TrimSpace(ce.AvailableWhen) != "" {
+			return fmt.Errorf("detector.yaml %q: contract.subjects[%d] (%q): capture.available_when is meaningless for expectation always (it claims no precondition) — use when-available or drop the field", name, i, prefix)
+		}
+	}
+	return nil
+}
+
 // validateOutputContract enforces the internal consistency of a Contract
 // block. Like validateDetectorYAML, a returned error is a developer-side bug:
 // the contract is authored and embedded at build time.
@@ -415,6 +508,9 @@ func validateOutputContract(c *OutputContract, name string) error { //nolint:goc
 			return fmt.Errorf("detector.yaml %q: contract.subjects[%d].prefix is required", name, i)
 		}
 		prefixes[s.Prefix] = true
+		if err := validateCaptureExpectation(s.Capture, name, i, s.Prefix); err != nil {
+			return err
+		}
 	}
 	for _, br := range c.BackRefSubjects {
 		if !prefixes[br] {

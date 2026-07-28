@@ -55,6 +55,13 @@ const (
 	// apiVersion the current binary does not understand. The detector is
 	// skipped; the run continues without it.
 	CodeSchemaUnsupported = "CILOCK_SCHEMA_UNSUPPORTED"
+
+	// CodeCaptureIncomplete is emitted when an attestor ran successfully but
+	// did not produce a subject its contract declares a capture expectation
+	// for (see capture.go). Advisory and NEVER fatal: a missing subject is a
+	// coverage gap, not a build error. Carries the remedy so the user can
+	// close the gap on the next run.
+	CodeCaptureIncomplete = "CILOCK_CAPTURE_INCOMPLETE"
 )
 
 // IsCoreCode reports whether the given code is one of the cilock-emitted
@@ -67,7 +74,8 @@ func IsCoreCode(code string) bool {
 		CodeDetectionDrift,
 		CodeMutationConflict,
 		CodeProbeTimeout,
-		CodeSchemaUnsupported:
+		CodeSchemaUnsupported,
+		CodeCaptureIncomplete:
 		return true
 	}
 	return false

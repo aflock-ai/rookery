@@ -15,6 +15,7 @@
 package catalogtest
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -129,4 +130,50 @@ func TestContractMatchesLiveInterfaces(t *testing.T) {
 	if declared == 0 {
 		t.Skip("no output contracts declared yet")
 	}
+}
+
+// TestCaptureGuidanceIsWorkflowNotFlags enforces cilock's core product
+// principle across the WHOLE catalog as capture expectations roll out
+// attestor-by-attestor: you wrap your build command and it captures
+// everything. Every flag a user has to remember is a failure of the tool, not
+// a feature of it.
+//
+// So a capture remedy must describe a WORKFLOW change ("attest the push step
+// too") — never a flag to paste with a 64-character hex string the user has to
+// go find. That guidance gets skipped, mistyped, or done once and forgotten,
+// and it turns the CLI into exactly the thing it must not become. The
+// --subjects escape hatch still exists for exotic cases; it must never be the
+// recommended answer.
+func TestCaptureGuidanceIsWorkflowNotFlags(t *testing.T) {
+	all, failures := detection.Default().LookupAll()
+	for name, err := range failures {
+		t.Errorf("detector %q failed to parse: %v", name, err)
+	}
+
+	// Substrings that mean "the user must remember and type something".
+	banned := []string{"--subjects", "--attestor-", "export CILOCK_"}
+
+	withGuidance := 0
+	for name, d := range all {
+		if d.Contract == nil {
+			continue
+		}
+		for _, s := range d.Contract.Subjects {
+			if s.Capture == nil {
+				continue
+			}
+			withGuidance++
+			for _, bad := range banned {
+				if strings.Contains(s.Capture.Remedy, bad) {
+					t.Errorf("%s: subject %q capture.remedy tells the user to paste %q — describe the workflow change instead (wrap the step that produces the value): %q",
+						name, s.Prefix, bad, s.Capture.Remedy)
+				}
+				if strings.Contains(s.Capture.AvailableWhen, bad) {
+					t.Errorf("%s: subject %q capture.available_when references %q — state the real-world precondition, not a flag: %q",
+						name, s.Prefix, bad, s.Capture.AvailableWhen)
+				}
+			}
+		}
+	}
+	t.Logf("capture guidance: %d subject(s) across the catalog declare a capture expectation", withGuidance)
 }

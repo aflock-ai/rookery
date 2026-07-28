@@ -314,6 +314,37 @@ func validateDetectorYAML(d *DetectorYAML) error {
 	if err := validateOutputContract(d.Contract, d.Name); err != nil {
 		return err
 	}
+	if err := validateCaptureGuidance(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateCaptureGuidance enforces that every declared capture expectation can
+// actually PRODUCE guidance — either derived from this detector's own match
+// block (the default and overwhelmingly common path) or from a hand-written
+// override. A warning with no action is noise, and noise gets ignored; this is
+// the build-time gate that keeps that from shipping.
+//
+// It lives here rather than in validateOutputContract because derivation needs
+// the parent DetectorYAML (the pre/post match blocks), which the contract
+// validator does not see.
+func validateCaptureGuidance(d *DetectorYAML) error {
+	if d == nil || d.Contract == nil {
+		return nil
+	}
+	derived := ""
+	for _, s := range d.Contract.Subjects {
+		if s.Capture == nil || s.Capture.Remedy != "" {
+			continue // no expectation, or an explicit override supplies the guidance
+		}
+		if derived == "" {
+			derived = deriveRemedy(d)
+		}
+		if derived == "" {
+			return fmt.Errorf("detector.yaml %q: contract.subjects %q declares a capture expectation but no guidance can be derived — the match block either has no argv_prefix/product_glob to derive from, or uses all_of (a conjunction cannot be rendered as a flat or-joined list without recommending an action that still won't match); set capture.remedy explicitly", d.Name, s.Prefix)
+		}
+	}
 	return nil
 }
 

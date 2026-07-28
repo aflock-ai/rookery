@@ -150,6 +150,12 @@ type Subject struct {
 	Prefix      string   `json:"prefix"`
 	Description string   `json:"description,omitempty"`
 	DigestAlgs  []string `json:"digest_algs,omitempty"`
+	// Capture is the subject's capture GUIDANCE: whether it should always be
+	// captured or only when a documented precondition holds, and the action
+	// the user takes when it wasn't. This is what makes the catalog tell a
+	// user what to capture rather than only describing what came out. nil for
+	// subjects that carry no expectation.
+	Capture *detection.CaptureExpectation `json:"capture,omitempty"`
 }
 
 // AppliesWhen summarizes the detection gates in flat human-readable lines.
@@ -346,6 +352,7 @@ func applyContract(e *Entry, c *detection.OutputContract) {
 			Prefix:      s.Prefix,
 			Description: s.Description,
 			DigestAlgs:  sortedCopy(s.DigestAlgs),
+			Capture:     s.Capture,
 		})
 	}
 	sort.Slice(e.Subjects, func(i, j int) bool { return e.Subjects[i].Prefix < e.Subjects[j].Prefix })

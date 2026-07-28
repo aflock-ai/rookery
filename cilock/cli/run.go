@@ -889,6 +889,16 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// failure into a loud one. (Fixes blind Linux UX test Bug 1.)
 	warnEmptyProductBundle(attestors)
 
+	// Capture-completeness warning. Each attestor's detector.yaml contract can
+	// declare that a subject SHOULD be captured (always, or when a documented
+	// precondition holds). Compare that against what the attestors actually
+	// emitted and TELL the user about the delta — with the remedy — instead of
+	// exiting 0 and letting them discover months later that their evidence is
+	// unfindable by the identifier they'd actually search with. Advisory only:
+	// this never changes the exit code.
+	captureReport := collectCaptureGaps(attestors, runErr, additionalSubjects)
+	warnCaptureGaps(captureReport)
+
 	// When multiple results are produced (e.g. MultiExporter attestors), an output
 	// file path is required — otherwise exported attestors would create files named
 	// "-<name>.json" in the current directory instead of writing to stdout.
@@ -1003,6 +1013,10 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		(summary.WrappedCommand != nil && summary.WrappedCommand.ExitCode != 0)
 	summary.ComputeSLSA(ro.PlatformURL, runFailed)
 	summary.AssuranceLevel = ro.ResolvedAssuranceLevel()
+	// Carry the capture delta (already warned about above) into the structured
+	// summary so a CI job can consume it. nil when nothing declared an
+	// expectation — an empty report would falsely read as "capture verified".
+	summary.Capture = captureReport
 	summary.WriteHuman(os.Stderr)
 	// Non-upload warning: when a platform is configured (--platform-url set)
 	// and signing succeeded but Archivista upload was never enabled, the signed
@@ -1549,6 +1563,90 @@ func indexByte(s string, c byte) int {
 // genuinely ran a no-op or non-build command. The warning prints
 // before the bundle is written, on stderr; the run still completes
 // (the attestation is the real artifact, even if empty).
+// collectCaptureGaps compares what each attestor ACTUALLY emitted against the
+// capture expectations its detector.yaml contract declares, returning the
+// run-level delta (nil when no attestor in the run declared any expectation).
+//
+// Attestors that failed or were skipped are excluded: when an attestor errored
+// the error is the signal, and stacking "you didn't capture X" on top of "the
+// attestor blew up" is noise that buries both. The subject keys read here are
+// the attestor's own un-namespaced keys — the same form the contract prefixes
+// are written against, NOT the "<predicate-type>/<key>" form Collection.Subjects
+// produces.
+//
+// additionalSubjects are the operator's own --subjects entries (the
+// pre-existing escape hatch — never the recommended remedy; guidance text
+// points at workflow changes, not flags). They are passed through with their
+// PROVENANCE intact rather than merged into each attestor's keys: a
+// when-available expectation is about whether the RUN's evidence is findable
+// by that identifier, so a supplied subject closes it (warning past a closed
+// gap trains people to ignore the signal) — but an always expectation is a
+// claim about what THE ATTESTOR emits on every run, and a pasted value must
+// not mask an attestor that failed to emit it (a false Complete() report).
+func collectCaptureGaps(attestors []attestation.Attestor, runErr error, additionalSubjects map[string]cryptoutil.DigestSet) *detection.CaptureReport {
+	supplied := make([]string, 0, len(additionalSubjects))
+	for k := range additionalSubjects {
+		supplied = append(supplied, k)
+	}
+
+	unhealthy := map[string]bool{}
+	var aggregate *workflow.AttestorRunErrors
+	if errors.As(runErr, &aggregate) && aggregate != nil {
+		for _, leg := range aggregate.SoftLegs() {
+			unhealthy[leg.Attestor] = true
+		}
+		for _, leg := range aggregate.FatalLegs() {
+			unhealthy[leg.Attestor] = true
+		}
+	}
+
+	emitted := map[string][]string{}
+	for _, a := range attestors {
+		name := a.Name()
+		if unhealthy[name] {
+			continue
+		}
+		subjecter, ok := a.(attestation.Subjecter)
+		if !ok {
+			continue
+		}
+		subjects := subjecter.Subjects()
+		keys := make([]string, 0, len(subjects))
+		for k := range subjects {
+			keys = append(keys, k)
+		}
+		emitted[name] = keys
+	}
+
+	report := detection.BuildCaptureReportSupplemented(emitted, supplied)
+	if len(report.Attestors) == 0 {
+		// Nothing declared an expectation, so there is nothing to report. Return
+		// nil rather than an empty report: an empty report in the JSON summary
+		// would read as "capture verified, no gaps", which is a stronger claim
+		// than "nobody checked".
+		return nil
+	}
+	return report
+}
+
+// warnCaptureGaps prints one actionable warning per gap at NORMAL verbosity —
+// a capture gap the user never sees is the failure this whole mechanism exists
+// to fix, so it must not sit behind -v. It never returns an error and never
+// influences the exit code.
+func warnCaptureGaps(report *detection.CaptureReport) {
+	if report == nil || len(report.Gaps) == 0 {
+		return
+	}
+	for _, gap := range report.Gaps {
+		// One log call per line: the structured logger collapses an embedded
+		// newline into a literal "\n" inside a single logfmt field, which buries
+		// the remedy. Same shape as warnEmptyProductBundle below.
+		for _, line := range gap.WarningLines() {
+			log.Warnf("%s", line)
+		}
+	}
+}
+
 func warnEmptyProductBundle(attestors []attestation.Attestor) {
 	var prod *product.Attestor
 	var cmd *commandrun.CommandRun
