@@ -31,3 +31,25 @@ func TestDetectorPostGateFiresOnExec(t *testing.T) {
 func TestDetectorPostGateFiresOnProduct(t *testing.T) {
 	detectiontest.AssertPostGateFiresOnProduct(t, Name, detectorYAML, "index.json")
 }
+
+// TestDetectorGatesCoverEveryTrustedPushForm pins detector.yaml to
+// isRegistryPushCommand: every push invocation the registry-digest parser
+// trusts must also select the oci attestor via BOTH the pre gate (argv) and
+// the post gate (observed exec). A form the parser accepts but the detector
+// misses — `docker image push` was exactly that — means a push-only run never
+// runs this attestor and silently produces no registrydigest evidence at all.
+func TestDetectorGatesCoverEveryTrustedPushForm(t *testing.T) {
+	for _, argv := range [][]string{
+		{"docker", "push", "registry.example.com/app:v1"},
+		{"docker", "image", "push", "registry.example.com/app:v1"},
+		{"crane", "push", "app.tar", "registry.example.com/app:v1"},
+		{"crane", "copy", "src.example.com/app:v1", "dst.example.com/app:v1"},
+		{"crane", "cp", "src.example.com/app:v1", "dst.example.com/app:v1"},
+	} {
+		if !isRegistryPushCommand(argv) {
+			t.Fatalf("test premise broken: %v is not a trusted push command", argv)
+		}
+		detectiontest.AssertPreGateFiresOnArgv(t, Name, detectorYAML, argv)
+		detectiontest.AssertPostGateFiresOnExec(t, Name, detectorYAML, argv)
+	}
+}

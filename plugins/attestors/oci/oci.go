@@ -21,6 +21,7 @@ import (
 	"crypto"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -80,7 +81,14 @@ type Attestor struct {
 	ImageID        cryptoutil.DigestSet   `json:"imageid"`
 	ManifestRaw    []byte                 `json:"manifestraw"`
 	ManifestDigest cryptoutil.DigestSet   `json:"manifestdigest"`
-	tarFilePath    string                 `json:"-"`
+
+	// RegistryDigests are the registry-assigned manifest digests observed in
+	// the output of the push/copy commands this run executed. Unlike every
+	// other field here they are not derived from the tarball — see
+	// registry.go for why that distinction matters.
+	RegistryDigests []RegistryDigest `json:"registrydigests,omitempty"`
+
+	tarFilePath string `json:"-"`
 }
 
 type Manifest struct {
@@ -151,7 +159,24 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 }
 
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
+	// Registry digests come from observed push output, never from the
+	// tarball, so they are collected before the tar path runs. A run that
+	// only pushes (docker push, crane push) produces no tar product at all,
+	// and the tar path below would abort before reaching this.
+	a.RegistryDigests = collectRegistryDigests(ctx)
+
 	if err := a.getCandidate(ctx); err != nil {
+		// A push-only run legitimately has nothing to unpack. The observed
+		// registry digests are the entire attestation in that case, so this
+		// is a complete result rather than a failure. ONLY the explicit
+		// no-candidate outcome qualifies: a tarball that exists but is
+		// unreadable or fails its integrity check is a real failure, and
+		// letting parsed digests mask it would turn a corrupted product
+		// into a successful partial attestation.
+		if errors.Is(err, errNoCandidate) && len(a.RegistryDigests) > 0 {
+			log.Debugf("(attestation/oci) no image tarball found; attesting %d observed registry digest(s) only", len(a.RegistryDigests))
+			return nil
+		}
 		log.Debugf("(attestation/oci) error getting candidate: %v", err)
 		return err
 	}
@@ -183,13 +208,25 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	return nil
 }
 
+// errNoCandidate is the explicit "nothing to unpack" outcome from
+// getCandidate: no products at all, or no product with the tarball MIME
+// type. It is the ONLY getCandidate failure Attest may treat as benign on a
+// push-only run — every other failure means a tarball candidate existed and
+// something is wrong with it.
+var errNoCandidate = errors.New("no image tarball candidate found")
+
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
 
 	if len(products) == 0 {
-		return fmt.Errorf("no products to attest")
+		return fmt.Errorf("%w: no products to attest", errNoCandidate)
 	}
 
+	// A candidate that exists but cannot be validated is remembered and
+	// reported if no other candidate succeeds. It must not collapse into
+	// errNoCandidate: an unreadable or tampered tarball is a failure, not
+	// an absence.
+	var candidateErr error
 	for path, product := range products {
 		if product.MimeType != mimeTypes {
 			continue
@@ -198,11 +235,20 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
 		if newDigestSet == nil || err != nil {
 			log.Debugf("(attestation/oci) error calculating digest set from file %s: %v", path, err)
+			if candidateErr == nil {
+				if err == nil {
+					err = errors.New("calculated digest set is nil")
+				}
+				candidateErr = fmt.Errorf("error calculating digest set from candidate %s: %w", path, err)
+			}
 			continue
 		}
 
 		if !newDigestSet.Equal(product.Digest) {
 			log.Debugf("(attestation/oci) integrity error for %s: product digest does not match candidate", path)
+			if candidateErr == nil {
+				candidateErr = fmt.Errorf("integrity error for candidate %s: product digest does not match", path)
+			}
 			continue
 		}
 
@@ -211,7 +257,10 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 		a.tarFilePath = path
 		return nil
 	}
-	return fmt.Errorf("no tar file found")
+	if candidateErr != nil {
+		return candidateErr
+	}
+	return fmt.Errorf("%w: no tar file found", errNoCandidate)
 }
 
 func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
@@ -265,10 +314,32 @@ func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
 
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
+	sha256Key := cryptoutil.DigestValue{Hash: crypto.SHA256}
 	subj := make(map[string]cryptoutil.DigestSet)
-	subj[fmt.Sprintf("manifestdigest:%s", a.ManifestDigest[cryptoutil.DigestValue{Hash: crypto.SHA256}])] = a.ManifestDigest
-	subj[fmt.Sprintf("tardigest:%s", a.TarDigest[cryptoutil.DigestValue{Hash: crypto.SHA256}])] = a.TarDigest
-	subj[fmt.Sprintf("imageid:%s", a.ImageID[cryptoutil.DigestValue{Hash: crypto.SHA256}])] = a.ImageID
+
+	// These three are tar-derived. On a push-only run there is no tarball, so
+	// they are empty and must be skipped — a bare "manifestdigest:" key
+	// carrying no digest is not evidence of anything.
+	if d := a.ManifestDigest[sha256Key]; d != "" {
+		subj[fmt.Sprintf("manifestdigest:%s", d)] = a.ManifestDigest
+	}
+	if d := a.TarDigest[sha256Key]; d != "" {
+		subj[fmt.Sprintf("tardigest:%s", d)] = a.TarDigest
+	}
+	if d := a.ImageID[sha256Key]; d != "" {
+		subj[fmt.Sprintf("imageid:%s", d)] = a.ImageID
+	}
+
+	// Registry manifest digests, keyed by the pinned reference they belong
+	// to. The key tail is a directly pullable "repo:tag@sha256:..." string
+	// and the digest set carries the registry's value for policy matching.
+	for _, rd := range a.RegistryDigests {
+		d := rd.Digest[sha256Key]
+		if d == "" || rd.Reference == "" {
+			continue
+		}
+		subj[fmt.Sprintf("registrydigest:%s@sha256:%s", rd.Reference, d)] = rd.Digest
+	}
 
 	// image tags
 	for _, tag := range a.ImageTags {
@@ -313,6 +384,17 @@ func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
 		} else {
 			log.Debugf("(attestation/oci) error calculating image tag backref: %v", err)
 		}
+	}
+	// The registry digest is the image's strongest cross-collection identity:
+	// it is what a deployed workload reports and what a pinned reference
+	// names, so it is the key other collections are most likely to arrive
+	// with. Backreffing it is the whole point of capturing it.
+	for _, rd := range a.RegistryDigests {
+		digest := rd.Digest[cryptoutil.DigestValue{Hash: crypto.SHA256}]
+		if digest == "" || rd.Reference == "" {
+			continue
+		}
+		refs[fmt.Sprintf("registrydigest:%s@sha256:%s", rd.Reference, digest)] = rd.Digest
 	}
 
 	return refs

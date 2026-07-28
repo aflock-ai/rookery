@@ -1209,14 +1209,18 @@
           "description": "sha256 of the raw manifest.json bytes extracted from the tar"
         },
         {
+          "prefix": "registrydigest:",
+          "description": "registry-assigned manifest digest for one pushed image, parsed from the push/copy output this run already captured (docker push, crane push, crane copy). The key is the pinned reference <ref>@sha256:<hex>; the digest is the registry's own value, taken verbatim and never recomputed. This is NOT manifestdigest: — that one is a local sha256 over the docker-save tarball's manifest.json bytes and does not match any value a registry or Kubernetes reports. One subject per pushed reference; a digest that cannot be tied to a reference is dropped."
+        },
+        {
           "prefix": "tardigest:",
           "description": "digest of the docker-save tar product file"
         }
       ],
       "has_contract": true,
       "applies_when": {
-        "pre": "any_of(argv_prefix:[crane], argv_prefix:[docker save], argv_prefix:[skopeo copy])",
-        "post": "any_of(exec_observed(argv_prefix:[crane]), exec_observed(argv_prefix:[docker save]), exec_observed(argv_prefix:[skopeo copy]), product_glob:[*.oci.tar, **/*.oci.tar, oci-image.tar, **/oci-image.tar], product_glob:[index.json, **/index.json, oci-layout, **/oci-layout])"
+        "pre": "any_of(argv_prefix:[crane], argv_prefix:[docker image push], argv_prefix:[docker push], argv_prefix:[docker save], argv_prefix:[skopeo copy])",
+        "post": "any_of(exec_observed(argv_prefix:[crane]), exec_observed(argv_prefix:[docker image push]), exec_observed(argv_prefix:[docker push]), exec_observed(argv_prefix:[docker save]), exec_observed(argv_prefix:[skopeo copy]), product_glob:[*.oci.tar, **/*.oci.tar, oci-image.tar, **/oci-image.tar], product_glob:[index.json, **/index.json, oci-layout, **/oci-layout])"
       },
       "detection": {
         "pre": {
@@ -1224,6 +1228,19 @@
             {
               "argv_prefix": [
                 "crane"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "docker",
+                "image",
+                "push"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "docker",
+                "push"
               ]
             },
             {
@@ -1246,6 +1263,23 @@
               "exec_observed": {
                 "argv_prefix": [
                   "crane"
+                ]
+              }
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "docker",
+                  "image",
+                  "push"
+                ]
+              }
+            },
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "docker",
+                  "push"
                 ]
               }
             },
