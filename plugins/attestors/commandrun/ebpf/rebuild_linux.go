@@ -66,8 +66,24 @@ func rebuildBPFAgainstHostKernel() ([]byte, error) {
 		return nil, fmt.Errorf("write bpf source: %w", werr)
 	}
 
-	// vmlinux.h matched to the running kernel.
-	vmlinuxPath := filepath.Join(dir, "vmlinux.h")
+	// vmlinux.h matched to the running kernel. It goes in a SEPARATE
+	// include/ subdir (not next to the source) so clang resolves it via
+	// -isystem and treats it as a system header: the dump is machine-
+	// generated from the host kernel's BTF and its shape is outside our
+	// control — newer kernels/bpftools emit constructs that trip -Wall
+	// warnings (e.g. "declaration does not declare anything",
+	// -Wmissing-declarations), which under -Werror hard-failed the whole
+	// rebuild (v4.1.1 release fan-out, 2026-07-28). System-header
+	// warnings are suppressed by default, so -Wall -Werror keeps gating
+	// OUR openat_kprobe.bpf.c while the generated header can't sink the
+	// build. NB: the source's `#include "vmlinux.h"` quote-include
+	// searches the source's own directory first — the header must NOT
+	// live beside the source or the -isystem classification is bypassed.
+	incDir := filepath.Join(dir, "include")
+	if merr := os.Mkdir(incDir, 0o755); merr != nil {
+		return nil, fmt.Errorf("mkdir include dir: %w", merr)
+	}
+	vmlinuxPath := filepath.Join(incDir, "vmlinux.h")
 	fmt.Fprintf(os.Stderr, "cilock-ebpf: using bpftool at %s\n", bpftool)
 	dumpStderr := &strings.Builder{}
 	dumpCmd := exec.Command("sudo", bpftool, "btf", "dump", "file",
@@ -107,27 +123,47 @@ func rebuildBPFAgainstHostKernel() ([]byte, error) {
 	}
 
 	objPath := filepath.Join(dir, "openat_kprobe.bpf.o")
-	// -ffile-prefix-map / -fdebug-compilation-dir canonicalize the embedded
-	// DWARF comp-dir and source filename to a relative "." so the absolute
-	// tempdir path (and, on a dev machine, the home tree) is never baked into
-	// the rebuilt object. Mirrors bpf/Makefile and scripts/bpf-lint.sh; keeps
-	// a host-rebuilt .bpf.o reproducible and free of leaked build paths.
-	cmd := exec.Command(clang,
-		"-g", "-O2", "-Wall", "-Werror",
-		"-target", "bpf",
-		archDef,
-		"-ffile-prefix-map="+dir+"=.",
-		"-fdebug-compilation-dir=.",
-		"-I", dir,
-		"-I", multiarchInc,
-		"-c", srcPath,
-		"-o", objPath,
-	)
+	args := clangBPFArgs(archDef, dir, incDir, multiarchInc, srcPath, objPath)
+	// Log the exact invocation so the NEXT environment drift (kernel BTF,
+	// bpftool, clang) is diagnosable straight from CI logs — the v4.1.1
+	// fan-out failure took log archaeology to reconstruct what ran.
+	fmt.Fprintf(os.Stderr, "cilock-ebpf: rebuilding: %s %s\n",
+		clang, strings.Join(args, " "))
+	cmd := exec.Command(clang, args...)
 	cmd.Stderr = os.Stderr
 	if cerr := cmd.Run(); cerr != nil {
 		return nil, fmt.Errorf("clang -target bpf failed: %w", cerr)
 	}
 	return os.ReadFile(objPath)
+}
+
+// clangBPFArgs is the single source of truth for the runtime-rebuild
+// clang invocation. Split out so the test suite can pin the flag
+// contract (notably: generated/third-party headers behind -isystem,
+// -Wall -Werror still gating our own source) with the REAL args.
+//
+//   - -ffile-prefix-map / -fdebug-compilation-dir canonicalize the
+//     embedded DWARF comp-dir and source filename to a relative "." so
+//     the absolute tempdir path (and, on a dev machine, the home tree)
+//     is never baked into the rebuilt object. Mirrors bpf/Makefile and
+//     scripts/bpf-lint.sh; keeps a host-rebuilt .bpf.o reproducible and
+//     free of leaked build paths.
+//   - -isystem (not -I) for the generated vmlinux.h dir and the libbpf
+//     multiarch dir: warnings from headers we don't control must not be
+//     promoted to errors by our -Werror — see the incDir comment in
+//     rebuildBPFAgainstHostKernel.
+func clangBPFArgs(archDef, dir, incDir, multiarchInc, srcPath, objPath string) []string {
+	return []string{
+		"-g", "-O2", "-Wall", "-Werror",
+		"-target", "bpf",
+		archDef,
+		"-ffile-prefix-map=" + dir + "=.",
+		"-fdebug-compilation-dir=.",
+		"-isystem", incDir,
+		"-isystem", multiarchInc,
+		"-c", srcPath,
+		"-o", objPath,
+	}
 }
 
 // findBpftool returns a usable bpftool path. /usr/sbin/bpftool on
