@@ -9,13 +9,15 @@ Captures an OpenVEX document discovered among the step's product files and attac
 
 ## What it captures
 
-The attestor walks `ctx.Products()`, recomputes each file's digest, verifies it matches the recorded product digest, then attempts to `json.Unmarshal` the bytes into the inlined `openvex.VEX` type. The first product whose bytes decode cleanly into a VEX document is captured. The serialized predicate has three fields:
+The attestor walks `ctx.Products()`, recomputes each file's digest, verifies it matches the recorded product digest, then attempts to `json.Unmarshal` the bytes into the inlined `openvex.VEX` type and validates the result. The first product that both decodes **and** validates is captured; one that decodes into something that isn't a usable VEX document is skipped. Decoding alone proves nothing — every VEX field is optional to `encoding/json` and unknown keys are ignored, so `{}` and any unrelated JSON object decode into an empty document. Validation is the OpenVEX required set (`@context`, `@id`, `author`, `timestamp`, `version`, at least one statement; per statement a vulnerability, at least one identifiable product, and a known status) plus the spec's status rules: `not_affected` needs a justification or an impact statement, `affected` needs an action statement, and no other status may carry a justification. The serialized predicate has three fields:
 
 - `vexDocument` (`openvex.VEX`) — the full parsed OpenVEX document (see types below).
 - `reportFileName` (`string`) — path of the source product file.
 - `reportDigestSet` (`cryptoutil.DigestSet`) — digest set carried over from the product, recorded so verifiers can re-anchor the document to the step's product attestor.
 
-The `openvex` types are **inlined** at `plugins/attestors/vex/internal/openvex/types.go` from `github.com/openvex/go-vex` commit `3185a64ed27703fc3fe4af8cd5e1ce0ed2fa2569` (tag `v0.2.7`, Apache-2.0). Only the type definitions and constants required for JSON decode/encode are present — no upstream methods (`Validate`, `Matches`, `Builder`, etc.) are reproduced. The inlined surface:
+`--attestor-vex-file <path>` pins the attestor to a specific document instead of scanning the product set — use it when the document already existed when the step started (so it is a material, not a product). On that path the recorded `reportDigestSet` is computed from the same bytes that were decoded, and an unreadable, unparseable, or invalid document is a hard error rather than a skip: the operator named this file, so attesting an empty predicate instead would be the wrong answer. `cilock attest vex` authors a document and wires this flag for you.
+
+The `openvex` types are **inlined** at `plugins/attestors/vex/openvex/types.go` from `github.com/openvex/go-vex` commit `3185a64ed27703fc3fe4af8cd5e1ce0ed2fa2569` (tag `v0.2.7`, Apache-2.0). Only the type definitions and constants required for JSON decode/encode are present — no upstream methods (`Validate`, `Matches`, `Builder`, etc.) are reproduced. The `Build` and `Validate` helpers that sit beside the types in that package are rookery's own, written against the spec rather than ported. The inlined surface:
 
 - `VEX` — embeds `Metadata` plus `Statements []Statement`. Has a custom `MarshalJSON` that normalizes `timestamp` / `last_updated` to UTC RFC3339 (no nanoseconds), byte-compatible with upstream go-vex output.
 - `Metadata` — `@context`, `@id`, `author`, `role`, `timestamp`, `last_updated`, `version`, `tooling`, `supplier`.
@@ -35,7 +37,11 @@ Pair with the `sbom` attestor to deliver SBOM + VEX evidence in a single step: t
 
 ## Flags
 
-None. The attestor takes no configuration — selection is implicit via product unmarshal probing.
+| Flag | Default | What it does |
+|---|---|---|
+| `--attestor-vex-file <path>` | (none) | Attest this document directly instead of probing the product set. Relative paths resolve against the working directory. Use it when the document was authored before the wrapped command ran — it is then a material, not a product, so probing would find nothing |
+
+With no flags, selection is implicit: the first product that decodes into a valid OpenVEX document is captured.
 
 ## Output shape
 

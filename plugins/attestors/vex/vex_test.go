@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/plugins/attestors/vex/internal/openvex"
+	"github.com/aflock-ai/rookery/plugins/attestors/vex/openvex"
 )
 
 // NOTE(nick): examples https://github.com/openvex/vexctl/tree/main/examples/openvex

@@ -25,6 +25,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock doctor` | Read-only preflight: is the environment sane to attest + upload against the platform? |
 | `cilock run [cmd]` | Run a command and record signed attestations about its execution. |
 | `cilock attest` | Record attestations without wrapping a command (sugar for `run -- true`; for consultative/at-rest attestors). |
+| `cilock attest vex` | Author a signed OpenVEX document from a triage decision (validated against the spec before it is signed). |
 | `cilock sign [file]` | Sign an arbitrary file (typically a policy) with the configured signer. |
 | `cilock verify` | Verify an artifact (subject) against a signed policy using attestations as evidence. |
 | `cilock policy from-bundles` | Generate a starter Witness policy from one or more signed attestation bundles. |
@@ -343,6 +344,45 @@ cilock verify ./app -p policy.signed.json -k pub.pem --bundle evidence.tar.gz --
 
 ```bash
 cilock attest -a github-review -k key.pem -o review.bundle.json -s review-head
+```
+
+### `cilock attest vex`
+
+Authors an **OpenVEX** document from a triage decision, validates it against the spec's own rules, writes it to disk, and attests it with the same signer, timestamper, and Archivista destination every other command uses. Before this, cilock could only *consume* a VEX document, so producing one meant hand-written JSON that nothing checked.
+
+Validation is fail-closed — a statement that suppresses a finding has to say why. Unknown statuses, unknown justifications, and malformed vulnerability IDs are rejected rather than recorded. Product digests are canonicalized to bare lowercase hex, which is how the platform stores an image digest at ingest, so a statement authored here joins to the image it is about.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--product <ref>` | (required) | Product the statement is about. Repeatable. An OCI reference with a digest (`ghcr.io/org/img@sha256:<hex>`), a package URL (`pkg:…`), or a bare sha256 digest. |
+| `--vuln <id>` | (required) | Vulnerability the statement is about (`CVE-YYYY-NNNN` or `GHSA-xxxx-xxxx-xxxx`). Repeatable; each becomes its own statement carrying every `--product`. |
+| `--status <status>` | (required) | `not_affected`, `affected`, `fixed`, or `under_investigation`. |
+| `--justification <j>` | (none) | Why the product is not affected. **Required** with `--status not_affected`, rejected otherwise. One of `component_not_present`, `vulnerable_code_not_present`, `vulnerable_code_not_in_execute_path`, `vulnerable_code_cannot_be_controlled_by_adversary`, `inline_mitigations_already_exist`. |
+| `--impact-statement <text>` | (none) | Free-text elaboration on the justification — where a human (or an agent) explains the reasoning a reviewer will read. |
+| `--action-statement <text>` | (none) | What is being done about it. **Required** with `--status affected`: an affected statement with no remediation plan is a finding, not triage. |
+| `--author <name>` | `cilock` | Author recorded in the OpenVEX metadata. The cryptographic identity is the signer; this is the human-readable attribution. |
+| `--author-role <role>` | (none) | Optional role of the author (OpenVEX `role`). |
+| `--vex-out <path>` | `vex.openvex.json` | Where the OpenVEX document lands. The signed bundle still goes to `--outfile`. |
+
+Every [`cilock run`](#cilock-run-cmd) flag applies — signer selection, `--outfile`, `--platform-url`, Archivista upload.
+
+```bash
+# Triage a CVE as unreachable in a specific image, signed keyless
+cilock attest vex \
+  --product ghcr.io/acme/api@sha256:2f3c50f223e2c4e30b100dbcbaa5ff5e2f4bffd09b57ff0a687e766e79a76d1f \
+  --vuln CVE-2024-12345 \
+  --status not_affected \
+  --justification vulnerable_code_not_in_execute_path \
+  --impact-statement "the vulnerable parser is never reached from the request path" \
+  -s vex-triage -o vex.bundle.json
+
+# Accept a finding with a remediation plan, signed with a local key
+cilock attest vex \
+  --product pkg:golang/github.com/example/mod@v1.2.3 \
+  --vuln CVE-2024-99999 \
+  --status affected \
+  --action-statement "upgrade to v1.2.4 in the next release train" \
+  -k cosign.key -s vex-triage -o vex.bundle.json
 ```
 
 ## `cilock policy from-bundles`

@@ -29,6 +29,16 @@
     {
       "gate": "pre",
       "kind": "argv_prefix",
+      "value": "docker push"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "docker image push"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
       "value": "skopeo copy"
     },
     {
@@ -40,6 +50,16 @@
       "gate": "post",
       "kind": "exec_observed_argv_prefix",
       "value": "docker save"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "docker push"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "docker image push"
     },
     {
       "gate": "post",

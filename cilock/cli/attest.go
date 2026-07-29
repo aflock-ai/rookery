@@ -94,5 +94,11 @@ flag accepted by ` + "`cilock run`" + ` works identically here.`,
 	}
 
 	o.AddFlags(cmd)
+	// Authoring a VEX document is recording an attestation without
+	// wrapping a command, so it nests under attest rather than becoming
+	// a verb of its own. attest's own flag-driven, no-subcommand
+	// invocation is unaffected — cobra only routes to `vex` when that
+	// literal first argument is present.
+	cmd.AddCommand(AttestVexCmd())
 	return cmd
 }

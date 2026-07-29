@@ -4,7 +4,7 @@
   "upstream_url": "https://raw.githubusercontent.com/openvex/go-vex/3185a64ed27703fc3fe4af8cd5e1ce0ed2fa2569/pkg/vex/product.go",
   "license_spdx": "Apache-2.0",
   "license_url": "https://github.com/openvex/go-vex/blob/3185a64ed27703fc3fe4af8cd5e1ce0ed2fa2569/LICENSE",
-  "local_path": "plugins/attestors/vex/internal/openvex/types.go",
+  "local_path": "plugins/attestors/vex/openvex/types.go",
   "sha256_of_inlined_content": "4c5b24f71a27d488d947ffaa6c04045d50e743720c727c5969a40653ccce02a5",
   "sha256_of_upstream_content": "92eb4a9c6743ee98698f17763edafd4d91a085082f0c849ba33172c31866dfde",
   "kind": "inlined-source",

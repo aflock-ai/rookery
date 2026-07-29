@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aflock-ai/rookery/plugins/attestors/vex/openvex"
 	"github.com/invopop/jsonschema"
-	"github.com/aflock-ai/rookery/plugins/attestors/vex/internal/openvex"
 )
 
 // ============================================================================
