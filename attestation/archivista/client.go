@@ -65,9 +65,10 @@ func readLimitedErrorBody(body io.Reader) string {
 
 // Client communicates with an Archivista server over HTTP.
 type Client struct {
-	url     string
-	headers http.Header
-	client  *http.Client
+	url         string
+	headers     http.Header
+	client      *http.Client
+	tokenSource func() (string, error)
 }
 
 // Option configures a Client.
@@ -79,6 +80,26 @@ func WithHeaders(h http.Header) Option {
 		if h != nil {
 			c.headers = h.Clone()
 		}
+	}
+}
+
+// WithAuthTokenSource sets a PER-REQUEST bearer-token source: fn is invoked on
+// every request and its result sent as "Authorization: Bearer <token>".
+//
+// This exists because a token frozen at client-construction time outlives its
+// validity on long operations: the v4.1.2 release verify minted a GitHub
+// Actions OIDC token (≈5-minute expiry) once, then a single policyverify ran
+// >5 minutes and every later graphql call 401'd. A source lets the caller
+// re-mint/refresh so the credential is live for each request.
+//
+// Precedence: an explicit Authorization header from WithHeaders WINS — the
+// source is only consulted when no static Authorization is set (mirrors the
+// "explicit headers override OIDC" contract in cilock's ArchivistaOptions).
+// A source error fails the request closed: sending no credential where one
+// was configured would demote authenticated reads to anonymous ones.
+func WithAuthTokenSource(fn func() (string, error)) Option {
+	return func(c *Client) {
+		c.tokenSource = fn
 	}
 }
 
@@ -123,7 +144,9 @@ func (c *Client) Store(ctx context.Context, env dsse.Envelope) (string, error) {
 		return "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	c.applyHeaders(req)
+	if err := c.applyHeaders(req); err != nil {
+		return "", err
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -148,7 +171,9 @@ func (c *Client) Download(ctx context.Context, gitoidArg string) (dsse.Envelope,
 	if err != nil {
 		return dsse.Envelope{}, fmt.Errorf("create request: %w", err)
 	}
-	c.applyHeaders(req)
+	if err := c.applyHeaders(req); err != nil {
+		return dsse.Envelope{}, err
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -336,12 +361,22 @@ func (c *Client) SearchGitoidsByPredicate(ctx context.Context, vars SearchGitoid
 	return gitoids, nil
 }
 
-func (c *Client) applyHeaders(req *http.Request) {
+func (c *Client) applyHeaders(req *http.Request) error {
 	for key, values := range c.headers {
 		for _, v := range values {
 			req.Header.Add(key, v)
 		}
 	}
+	// Static Authorization (WithHeaders) wins; the token source is only
+	// consulted when none is set — see WithAuthTokenSource.
+	if c.tokenSource != nil && req.Header.Get("Authorization") == "" {
+		token, err := c.tokenSource()
+		if err != nil {
+			return fmt.Errorf("archivista auth token source: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return nil
 }
 
 func (c *Client) graphqlQuery(ctx context.Context, query string, variables any, result any) error {
@@ -359,7 +394,9 @@ func (c *Client) graphqlQuery(ctx context.Context, query string, variables any, 
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	c.applyHeaders(req)
+	if err := c.applyHeaders(req); err != nil {
+		return err
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {

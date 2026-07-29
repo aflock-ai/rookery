@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -1115,23 +1116,37 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 
 	headers := http.Header{}
 
-	// OIDC auth: fetch a GitHub Actions OIDC token for Archivista uploads.
+	opts := make([]archivista.Option, 0)
+
+	// OIDC auth: mint GitHub Actions OIDC tokens for Archivista requests.
 	// Same pattern as Fulcio signing — requests a token from the GitHub Actions
 	// OIDC endpoint with a custom audience scoped to Archivista.
+	//
+	// The token is installed as a PER-REQUEST source, NOT a frozen header:
+	// GitHub OIDC tokens expire ~5 minutes after issue, and a token pinned at
+	// client construction outlives its validity on long operations. The v4.1.2
+	// release verify hit exactly this — one policyverify ran >5 minutes and
+	// every archivista graphql call after the 5-minute mark 401'd
+	// ("Invalid API credential"). The source re-mints before expiry, so the
+	// credential is live however long the client is used. The eager mint here
+	// keeps the fail-fast behavior (a misconfigured runner errors at client
+	// construction, not mid-operation) and the log line.
 	if o.OIDC {
 		audience := o.Audience
 		if audience == "" {
 			audience = o.Url
 		}
-		token, err := fetchGitHubOIDCToken(audience)
-		if err != nil {
+		source := newGitHubOIDCTokenSource(audience, fetchGitHubOIDCToken)
+		if _, err := source(); err != nil {
 			return nil, fmt.Errorf("archivista OIDC auth: %w", err)
 		}
-		headers.Set("Authorization", "Bearer "+token)
+		opts = append(opts, archivista.WithAuthTokenSource(source))
 		log.Infof("Using GitHub Actions OIDC token for Archivista (audience: %s)", audience)
 	}
 
-	// Static headers (can override OIDC if both set — explicit headers win)
+	// Static headers (can override OIDC if both set — explicit headers win: an
+	// explicit Authorization header suppresses the token source per the
+	// archivista client's WithAuthTokenSource contract)
 	for _, hString := range o.Headers {
 		hParts := strings.SplitN(hString, ":", 2)
 		if len(hParts) != 2 {
@@ -1140,12 +1155,44 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 		headers.Set(strings.TrimSpace(hParts[0]), strings.TrimSpace(hParts[1]))
 	}
 
-	opts := make([]archivista.Option, 0)
 	if len(headers) > 0 {
 		opts = append(opts, archivista.WithHeaders(headers))
 	}
 
 	return archivista.New(o.Url, opts...), nil
+}
+
+// githubOIDCRefreshAfter is how long a minted GitHub Actions OIDC token is
+// served from cache before the source re-mints. GitHub issues these tokens
+// with a ~5-minute exp; refreshing at 4 minutes keeps a >=1-minute liveness
+// margin on every request while staying far from per-request mint chatter.
+const githubOIDCRefreshAfter = 4 * time.Minute
+
+// newGitHubOIDCTokenSource returns a concurrency-safe token source that mints
+// a GitHub Actions OIDC token for audience via fetch and re-mints once the
+// cached token is older than githubOIDCRefreshAfter.
+//
+// A refresh failure is returned as an error, NOT papered over with the stale
+// token: the stale token is at/near expiry, and sending it would reproduce
+// the confusing mid-operation 401 this source exists to prevent. fetch is a
+// parameter for testability.
+func newGitHubOIDCTokenSource(audience string, fetch func(string) (string, error)) func() (string, error) {
+	var mu sync.Mutex
+	var token string
+	var mintedAt time.Time
+	return func() (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if token != "" && time.Since(mintedAt) < githubOIDCRefreshAfter {
+			return token, nil
+		}
+		t, err := fetch(audience)
+		if err != nil {
+			return "", fmt.Errorf("mint github actions oidc token: %w", err)
+		}
+		token, mintedAt = t, time.Now()
+		return token, nil
+	}
 }
 
 // fetchGitHubOIDCToken requests an OIDC token from GitHub Actions with the
