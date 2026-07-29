@@ -106,6 +106,13 @@ func TestRed_F12_NoDuplicatePassedAcrossDepthIterations(t *testing.T) {
 				Attestations: []attestation.CollectionAttestation{
 					{Type: noopStepAttType, Attestation: &dummyAttestor{name: "build-att", typeStr: noopStepAttType}},
 				},
+				// A back-reference is required to reach a SECOND depth iteration
+				// at all: verifySteps stops early when an iteration discovers no
+				// new digests, because the next iteration would then issue
+				// byte-identical queries (judge#7551). Without this the merge
+				// path would only ever run once and the F12 invariant below
+				// would be unreachable.
+				RecordedBackRefs: map[string]cryptoutil.DigestSet{"ref": newDigestSet("sha256:depth1")},
 			},
 			Statement: intoto.Statement{PredicateType: attestation.CollectionType},
 		},
@@ -119,6 +126,19 @@ func TestRed_F12_NoDuplicatePassedAcrossDepthIterations(t *testing.T) {
 		Steps: map[string]Step{
 			stepName: {
 				Name:          stepName,
+				Functionaries: []Functionary{{PublicKeyID: keyID}},
+				Attestations:  []Attestation{{Type: noopStepAttType}},
+			},
+			// An intentionally unsatisfiable second step. verifySteps also stops
+			// early once EVERY step is satisfied (judge#7551), so a policy whose
+			// only step passes at depth 0 never reaches the cross-depth merge.
+			// Keeping one step unsatisfied holds the depth loop open so the
+			// dedup invariant is actually exercised. The source returns only a
+			// collection named "build", which validateAttestations skips for
+			// this step on the step-name check, so it never gains a passed
+			// collection.
+			"never-satisfied": {
+				Name:          "never-satisfied",
 				Functionaries: []Functionary{{PublicKeyID: keyID}},
 				Attestations:  []Attestation{{Type: noopStepAttType}},
 			},

@@ -635,6 +635,25 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 		// subjects are NOT added here. Only Collection BackRefs expand the
 		// seed set. This preserves Collection-graph semantics.
 		vo.subjectDigests = append(vo.subjectDigests, nextDepthDigests...)
+
+		// Stop expanding once a further iteration cannot change the verdict.
+		// Depth expansion exists to REACH evidence the seed digests do not name
+		// directly; it is not an evidence-quantity requirement. Continuing past
+		// the point where the answer is settled costs a full re-search of every
+		// step against the accumulated digest set — on a monorepo that is
+		// hundreds of envelope fetches per artifact (judge#7551).
+		//
+		// Case 1: no new digests were discovered, so the next iteration would
+		// issue byte-identical queries. Unconditionally safe.
+		if len(nextDepthDigests) == 0 {
+			break
+		}
+
+		// Case 2: every step is already satisfied. Safe only when widening the
+		// search cannot subtract from the verdict — see searchExpansionIsMonotone.
+		if p.searchExpansionIsMonotone() && p.allStepsSatisfied(ctx, vo, resultsByStep) {
+			break
+		}
 	}
 
 	resultsByStep, err = p.verifyArtifacts(ctx, vo, resultsByStep)
@@ -651,6 +670,79 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 	}
 
 	return resultsByStep, nil
+}
+
+// searchExpansionIsMonotone reports whether widening the back-reference search
+// set can only ADD to the verification verdict and never subtract from it.
+// When it holds, the depth loop may stop as soon as the policy is satisfied,
+// because no collection discovered later could turn a satisfied step back into
+// an unsatisfied one.
+//
+// Every part of step verification is monotone in the discovered-collection set:
+//
+//   - validateAttestations judges each collection independently (step.go); with
+//     no cross-step context, one collection's verdict cannot be changed by the
+//     presence of another.
+//   - mergePassedCollections only appends, so StepResult.Passed grows monotonically.
+//   - StepResult.Analyze is `len(Passed) > 0`. Its "errors lurking in a passed
+//     collection" branch cannot fire, because validateAttestations routes any
+//     collection carrying Errors to Rejected rather than Passed.
+//   - verifyArtifacts accepts a step if ANY passed collection verifies, and
+//     verifyCollectionArtifacts satisfies an artifactsFrom edge if ANY upstream
+//     passed collection matches. Both are existential.
+//   - Rejected collections never affect the verdict.
+//
+// The one exception is Step.AttestationsFrom. It feeds upstream steps' passed
+// collections into Rego as evaluation input (buildStepRegoContext), and an
+// arbitrary Rego module over that set need not be monotone — a rule asserting
+// "exactly one upstream collection" flips from pass to fail as more collections
+// are discovered. A policy that uses it must run the full search.
+//
+// Step.ExternalFrom is NOT an exception: external attestations are verified once,
+// before the depth loop, against the policy's seed digests only, and verifySteps
+// never mutates externalResults — so that Rego context is depth-invariant.
+func (p Policy) searchExpansionIsMonotone() bool {
+	for _, step := range p.Steps {
+		if len(step.AttestationsFrom) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// allStepsSatisfied reports whether every step currently has at least one passed
+// collection whose artifacts also verify — i.e. whether the step-verification
+// phase would already return a passing verdict.
+//
+// This mirrors the accept logic of verifyArtifacts without its side effects:
+// verifyArtifacts records rejections and clears Passed on failure, which must
+// only happen once, after the depth loop has finished. Nothing here mutates
+// resultsByStep; verifyCollectionArtifacts takes its collection by value and its
+// only writes are to that copy's Warnings.
+func (p Policy) allStepsSatisfied(ctx context.Context, vo *verifyOptions, resultsByStep map[string]StepResult) bool {
+	if len(p.Steps) == 0 {
+		return false
+	}
+
+	for _, step := range p.Steps {
+		result, ok := resultsByStep[step.Name]
+		if !ok || !result.Analyze() {
+			return false
+		}
+
+		accepted := false
+		for _, passed := range result.Passed {
+			if err := verifyCollectionArtifacts(ctx, vo, step, passed.Collection, resultsByStep); err == nil {
+				accepted = true
+				break
+			}
+		}
+		if !accepted {
+			return false
+		}
+	}
+
+	return true
 }
 
 // mergePassedCollections appends src onto dst while skipping any collection
