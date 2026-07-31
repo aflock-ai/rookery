@@ -30,6 +30,8 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/signer"
 	"github.com/aflock-ai/rookery/attestation/signer/kms"
@@ -581,57 +583,81 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 		for _, stepName := range stepOrder {
 			step := p.Steps[stepName]
 
-			// Use search to get all the attestations that match the supplied step name and subjects
-			collections, err := vo.verifiedSource.Search(ctx, stepName, vo.subjectDigests, attestationsByStep[stepName])
-			if err != nil {
-				return nil, err
-			}
-
-			if len(collections) == 0 {
-				// Distinguish "no envelope loaded for this step" from
-				// "envelope IS loaded but operator's artifact digest
-				// isn't a subject of it." Without this the operator
-				// chases a phantom 'did I load my attestation?' issue
-				// when the real problem is digest mismatch / scoping.
-				// (Fixes blind Linux UX test Bug 2.)
-				diag := diagnoseEmptyCollectionResult(ctx, vo.verifiedSource, stepName, vo.subjectDigests, attestationsByStep[stepName])
-				collections = append(collections, source.CollectionVerificationResult{Errors: []error{diag}})
-			}
-
-			// Verify the functionaries
-			functionaryCheckResults := step.checkFunctionaries(collections, trustBundles)
-
-			// Subject fan-out guard: confine this verify to the dispatch
-			// subject's evidence closure — candidates connected only through
-			// hub digests are dropped before the gate's attestation checks.
-			// Applied to the FUNCTIONARY-AUTHORIZED set, never the raw
-			// candidates: only evidence the policy authorizes for THIS step
-			// may classify a digest as a hub, or a signer trusted for some
-			// other step could flood a victim digest and suppress this step's
-			// legitimate evidence. False-reject-only; see filterHubOnlyPassed.
-			var hubRejected []RejectedCollection
-			if vo.maxSubjectFanout > 0 {
-				functionaryCheckResults.Passed, hubRejected = filterHubOnlyPassed(functionaryCheckResults.Passed, vo.subjectDigests, vo.maxSubjectFanout)
-			}
-
-			passedCollections := make([]source.CollectionVerificationResult, len(functionaryCheckResults.Passed))
-			for i, pc := range functionaryCheckResults.Passed {
-				passedCollections[i] = pc.Collection
-			}
-
 			// Build cross-step context from already-verified dependencies
 			// AND external-attestation context (input.external.<name>) from
 			// this step's ExternalFrom list. When either AttestationsFrom or
 			// ExternalFrom is non-empty, Rego input is wrapped; otherwise
-			// input is the raw attestor JSON (backward compat).
+			// input is the raw attestor JSON (backward compat). Built BEFORE
+			// the search: its inputs (resultsByStep + externalResults) cannot
+			// change while this step's candidates are fetched.
 			stepCtx := buildStepRegoContext(step, resultsByStep, externalResults)
 
-			stepResult := step.validateAttestations(passedCollections, vo.aiServerURL, stepCtx)
-			stepResult.Rejected = append(stepResult.Rejected, functionaryCheckResults.Rejected...)
-			// Hub-suppressed candidates are reported, never silently dropped:
-			// an operator whose expected evidence was demoted as a hub sees
-			// the exact digests and the limit that fired.
-			stepResult.Rejected = append(stepResult.Rejected, hubRejected...)
+			var stepResult StepResult
+			//nolint:nestif // the streamed-vs-batch dispatch is two parallel arms by design; hoisting either arm would separate it from the fallback it must stay verdict-identical to
+			if streamer, ok := vo.verifiedSource.(source.StreamingVerifiedSourcer); ok {
+				// INTERLEAVED path (#7572): consume candidates one at a time —
+				// verify, triage, gate, compact — so at most one decoded
+				// envelope body is in flight per turn, instead of
+				// materializing the full matching set before evaluation.
+				streamed, candidates, serr := p.verifyStepStreamed(ctx, streamer, step, vo, trustBundles, stepCtx, attestationsByStep[stepName])
+				if serr != nil {
+					return nil, serr
+				}
+				stepResult = streamed
+				if candidates == 0 {
+					// Same empty-result diagnosis as the batch path below.
+					diag := diagnoseEmptyCollectionResult(ctx, vo.verifiedSource, stepName, vo.subjectDigests, attestationsByStep[stepName])
+					placeholder := source.CollectionVerificationResult{Errors: []error{diag}}
+					if _, rejected := step.triageOne(placeholder, trustBundles); rejected != nil {
+						stepResult.Rejected = append(stepResult.Rejected, *rejected)
+					}
+				}
+			} else {
+				// Use search to get all the attestations that match the supplied step name and subjects
+				collections, err := vo.verifiedSource.Search(ctx, stepName, vo.subjectDigests, attestationsByStep[stepName])
+				if err != nil {
+					return nil, err
+				}
+
+				if len(collections) == 0 {
+					// Distinguish "no envelope loaded for this step" from
+					// "envelope IS loaded but operator's artifact digest
+					// isn't a subject of it." Without this the operator
+					// chases a phantom 'did I load my attestation?' issue
+					// when the real problem is digest mismatch / scoping.
+					// (Fixes blind Linux UX test Bug 2.)
+					diag := diagnoseEmptyCollectionResult(ctx, vo.verifiedSource, stepName, vo.subjectDigests, attestationsByStep[stepName])
+					collections = append(collections, source.CollectionVerificationResult{Errors: []error{diag}})
+				}
+
+				// Verify the functionaries
+				functionaryCheckResults := step.checkFunctionaries(collections, trustBundles)
+
+				// Subject fan-out guard: confine this verify to the dispatch
+				// subject's evidence closure — candidates connected only through
+				// hub digests are dropped before the gate's attestation checks.
+				// Applied to the FUNCTIONARY-AUTHORIZED set, never the raw
+				// candidates: only evidence the policy authorizes for THIS step
+				// may classify a digest as a hub, or a signer trusted for some
+				// other step could flood a victim digest and suppress this step's
+				// legitimate evidence. False-reject-only; see filterHubOnlyPassed.
+				var hubRejected []RejectedCollection
+				if vo.maxSubjectFanout > 0 {
+					functionaryCheckResults.Passed, hubRejected = filterHubOnlyPassed(functionaryCheckResults.Passed, vo.subjectDigests, vo.maxSubjectFanout)
+				}
+
+				passedCollections := make([]source.CollectionVerificationResult, len(functionaryCheckResults.Passed))
+				for i, pc := range functionaryCheckResults.Passed {
+					passedCollections[i] = pc.Collection
+				}
+
+				stepResult = step.validateAttestations(passedCollections, vo.aiServerURL, stepCtx)
+				stepResult.Rejected = append(stepResult.Rejected, functionaryCheckResults.Rejected...)
+				// Hub-suppressed candidates are reported, never silently dropped:
+				// an operator whose expected evidence was demoted as a hub sees
+				// the exact digests and the limit that fired.
+				stepResult.Rejected = append(stepResult.Rejected, hubRejected...)
+			}
 
 			// We perform many searches against the same step (once per depth
 			// iteration), so we merge results across depths. The SAME collection
@@ -710,6 +736,233 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 	return resultsByStep, nil
 }
 
+// streamedVerdict labels the outcome recorded for one functionary-AUTHORIZED
+// candidate while the stream was in flight.
+type streamedVerdict int
+
+const (
+	streamedGatePassed streamedVerdict = iota
+	streamedGateRejected
+	// streamedWrongName: the gate skipped the candidate entirely — it is not
+	// named for this step (F10; see gateOne).
+	streamedWrongName
+	// streamedHubSkip: the gate never ran — the fan-out tracker proved
+	// mid-stream that the candidate can only be hub-rejected (fan-out counts
+	// are monotone), so its gate verdict would be discarded anyway.
+	streamedHubSkip
+	// streamedDeferredGate: the gate has not run YET. Used when the step
+	// declares AI policies and the fan-out guard is active: gate evaluation
+	// makes external AI-server calls, and a provisional evaluation of a
+	// candidate the final classification then hub-rejects would be an AI
+	// request the batch path never makes. The candidate holds only its raw
+	// signed payload (decoded bodies dropped); the gate runs post-admission
+	// on a rehydrated copy. See verifyStepStreamed.
+	streamedDeferredGate
+)
+
+// stepHasAiPolicies reports whether any of the step's required attestations
+// carries AI policies — the side-effecting gate evaluations whose execution
+// must wait for final fan-out admission on the streamed path.
+func stepHasAiPolicies(step Step) bool {
+	for _, att := range step.Attestations {
+		if len(att.AiPolicies) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// compactAwaitingGate strips the decoded bodies from a functionary-authorized
+// candidate whose gate evaluation is deferred until fan-out admission. The
+// raw signed payload (Envelope.Payload) is kept — it is the rehydration
+// source the deferred gate decodes from — and Statement.Predicate is already
+// nil (the source releases it once the payload is retained). Only the typed
+// Collection is dropped, so a deferred candidate costs O(raw payload), not
+// O(decoded bodies).
+func compactAwaitingGate(c source.CollectionVerificationResult) source.CollectionVerificationResult {
+	c.Collection = attestation.Collection{Name: c.Collection.Name}
+	return c
+}
+
+// rehydrateAwaitingGate re-decodes the typed Collection from the retained
+// signed payload — same bytes, same in-process registry, therefore the same
+// typed result the inline gate would have seen. The stored Statement is kept
+// as-is (Subject/Type/PredicateType from the source decode; Predicate nil),
+// matching the inline gate's input exactly.
+func rehydrateAwaitingGate(c source.CollectionVerificationResult) (source.CollectionVerificationResult, error) {
+	stmt := intoto.Statement{}
+	if err := json.Unmarshal(c.Envelope.Payload, &stmt); err != nil {
+		return c, fmt.Errorf("rehydrate %s for deferred gate: failed to unmarshal statement: %w", c.Reference, err)
+	}
+	coll := attestation.Collection{}
+	if err := json.Unmarshal(stmt.Predicate, &coll); err != nil {
+		return c, fmt.Errorf("rehydrate %s for deferred gate: failed to unmarshal collection: %w", c.Reference, err)
+	}
+	c.Collection = coll
+	return c, nil
+}
+
+// verifyStepStreamed is the INTERLEAVED per-candidate form of the step
+// pipeline (#7572). For each candidate, as it streams from the source:
+// signature verification (inside StreamingVerifiedSourcer), functionary
+// triage (triageOne), the step gate (gateOne) and pass/reject compaction all
+// complete before the next candidate's decoded body is materialized, so the
+// verify peak is O(largest envelope) + O(compact results), not O(matching
+// corpus). It produces the same StepResult as the batch path —
+// checkFunctionaries → filterHubOnlyPassed → validateAttestations — with the
+// same entry ordering (gate rejections, then functionary rejections, then
+// hub rejections).
+//
+// Subject fan-out guard equivalence: the batch guard classifies hubs over
+// the FULL functionary-authorized candidate set before any gate runs. Here
+// candidates are gated as they arrive — before the full set is known — so
+// gate verdicts are provisional: the final hub classification runs at end of
+// stream over exactly the same authorized set (per-candidate closure
+// intersections + counts accumulated by fanoutTracker), and a candidate it
+// demotes has its gate verdict DISCARDED and replaced by the hub rejection,
+// exactly as if the gate had never seen it. BackRef harvesting is unaffected:
+// the caller reads BackRefs from the final Passed set (compacted with
+// RecordedBackRefs stamped at gate time, before the body was released), so
+// depth expansion sees frontiers identical to the batch path.
+//
+// The one deliberate delta vs the batch order is COST, not output: a
+// candidate whose hub-only status is not yet provable when it arrives is
+// gate-evaluated even though the final classification may demote it. The
+// tracker's provably-rejected fast path bounds that extra work at
+// ~maxFanout gate evaluations per hub digest — and it is PURE work only:
+// for steps carrying AI policies (external server calls) the entire gate is
+// deferred until admission is final (deferGateForAI), so a hub-rejected
+// candidate never triggers an AI request the batch path would not have made.
+func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.StreamingVerifiedSourcer, step Step, vo *verifyOptions, trustBundles map[string]TrustBundle, stepCtx map[string]interface{}, attestations []string) (StepResult, int, error) { //nolint:gocognit,gocyclo // one candidate's verify-triage-gate-compact lifecycle reads as a single pipeline; splitting it would scatter the per-candidate memory contract this function exists to enforce
+	// authorizedCandidate is the compact per-candidate state retained while
+	// the stream is in flight: the gate verdict, the closure-intersection
+	// digests for the final fan-out classification, and the compacted
+	// rejection material a hub demotion would need (captured post-triage,
+	// exactly what the batch guard's compactHubReject reads). No decoded
+	// bodies and no raw envelope bytes are retained here beyond what the
+	// compacted verdicts themselves carry.
+	type authorizedCandidate struct {
+		verdict     streamedVerdict
+		pc          PassedCollection
+		gateReject  RejectedCollection
+		hubMaterial source.CollectionVerificationResult
+		digests     map[string]struct{}
+		// deferred holds the candidate awaiting its gate run (raw payload
+		// kept, decoded bodies dropped) when verdict == streamedDeferredGate.
+		deferred source.CollectionVerificationResult
+	}
+
+	var authorized []authorizedCandidate
+	var funcRejected []RejectedCollection
+	tracker := newFanoutTracker(vo.subjectDigests, vo.maxSubjectFanout)
+	// AI policies make external server calls from inside the gate. With the
+	// guard active, a provisional gate run on a candidate the final
+	// classification later hub-rejects would be an AI request the batch path
+	// never makes — so for AI-bearing steps the whole gate is deferred until
+	// admission is final. Hub-rejected candidates make ZERO AI calls. The
+	// cost is holding the raw payload of each not-provably-rejected
+	// candidate until end of stream — bounded by ~(maxFanout+1) candidates
+	// per hub digest plus the genuine closure evidence.
+	deferGateForAI := tracker != nil && stepHasAiPolicies(step)
+	candidates := 0
+
+	err := streamer.SearchStream(ctx, step.Name, vo.subjectDigests, attestations, func(cvr source.CollectionVerificationResult) error {
+		candidates++
+		triaged, rejected := step.triageOne(cvr, trustBundles)
+		if rejected != nil {
+			funcRejected = append(funcRejected, *rejected)
+			return nil
+		}
+
+		ac := authorizedCandidate{hubMaterial: compactRejected(triaged)}
+		provablyRejected := false
+		if tracker != nil {
+			ac.digests, provablyRejected = tracker.add(triaged.Statement.Subject)
+		}
+		switch {
+		case provablyRejected:
+			ac.verdict = streamedHubSkip
+		case deferGateForAI:
+			ac.verdict = streamedDeferredGate
+			ac.deferred = compactAwaitingGate(triaged)
+		default:
+			switch outcome, pc, rc := step.gateOne(triaged, vo.aiServerURL, stepCtx); outcome {
+			case gatePassed:
+				ac.verdict, ac.pc = streamedGatePassed, pc
+			case gateRejected:
+				ac.verdict, ac.gateReject = streamedGateRejected, rc
+			case gateWrongName:
+				ac.verdict = streamedWrongName
+			}
+		}
+		authorized = append(authorized, ac)
+		return nil
+	})
+	if err != nil {
+		return StepResult{}, 0, err
+	}
+
+	// End of stream: final hub classification over the full authorized set,
+	// then assembly in the batch path's entry order.
+	result := StepResult{Step: step.Name}
+	var hubRejected []RejectedCollection
+	var hubs map[string]struct{}
+	if tracker != nil {
+		hubs = tracker.hubs()
+	}
+	for _, ac := range authorized {
+		admitted := true
+		var hubOnly []string
+		if tracker != nil {
+			admitted, hubOnly = classifyAdmission(ac.digests, hubs)
+		}
+		if !admitted {
+			// Hub-suppressed candidates are reported, never silently
+			// dropped, whichever provisional verdict they carried.
+			hubRejected = append(hubRejected, RejectedCollection{
+				Collection: compactHubReject(ac.hubMaterial),
+				Reason:     hubRejectReason(hubOnly, vo.maxSubjectFanout),
+			})
+			continue
+		}
+		switch ac.verdict {
+		case streamedGatePassed:
+			result.Passed = append(result.Passed, ac.pc)
+		case streamedGateRejected:
+			result.Rejected = append(result.Rejected, ac.gateReject)
+		case streamedWrongName:
+			// Admitted but not named for this step: skipped, as in the batch
+			// gate (F10).
+		case streamedDeferredGate:
+			// Admission is final — run the deferred gate (including its AI
+			// evaluations) on the rehydrated candidate, in stream order,
+			// exactly as the batch path gates its admitted set.
+			full, rerr := rehydrateAwaitingGate(ac.deferred)
+			if rerr != nil {
+				// Fail closed: the payload decoded successfully at the
+				// source, so this is unreachable for a real candidate.
+				return StepResult{}, 0, rerr
+			}
+			switch outcome, pc, rc := step.gateOne(full, vo.aiServerURL, stepCtx); outcome {
+			case gatePassed:
+				result.Passed = append(result.Passed, pc)
+			case gateRejected:
+				result.Rejected = append(result.Rejected, rc)
+			case gateWrongName:
+				// Skipped, as in the batch gate (F10).
+			}
+		case streamedHubSkip:
+			// Impossible: a provably-rejected candidate cannot be admitted by
+			// the final classification (counts are monotone). Fail closed
+			// rather than silently dropping a candidate whose gate never ran.
+			return StepResult{}, 0, fmt.Errorf("internal: hub-skipped candidate %s admitted by final fan-out classification", ac.hubMaterial.Reference)
+		}
+	}
+	result.Rejected = append(result.Rejected, funcRejected...)
+	result.Rejected = append(result.Rejected, hubRejected...)
+	return result, candidates, nil
+}
+
 // searchExpansionIsMonotone reports whether widening the back-reference search
 // set can only ADD to the verification verdict and never subtract from it.
 // When it holds, the depth loop may stop as soon as the policy is satisfied,
@@ -770,7 +1023,7 @@ func (p Policy) allStepsSatisfied(ctx context.Context, vo *verifyOptions, result
 
 		accepted := false
 		for _, passed := range result.Passed {
-			if err := verifyCollectionArtifacts(ctx, vo, step, passed.Collection, resultsByStep); err == nil {
+			if err := verifyCollectionArtifacts(ctx, vo, step, passed, resultsByStep); err == nil {
 				accepted = true
 				break
 			}
@@ -793,10 +1046,10 @@ func (p Policy) allStepsSatisfied(ctx context.Context, vo *verifyOptions, result
 func mergePassedCollections(dst, src []PassedCollection) []PassedCollection {
 	seen := make(map[string]struct{}, len(dst))
 	for _, pc := range dst {
-		seen[passedCollectionKey(pc)] = struct{}{}
+		seen[passedCollectionKeyOf(pc)] = struct{}{}
 	}
 	for _, pc := range src {
-		key := passedCollectionKey(pc)
+		key := passedCollectionKeyOf(pc)
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -804,6 +1057,20 @@ func mergePassedCollections(dst, src []PassedCollection) []PassedCollection {
 		dst = append(dst, pc)
 	}
 	return dst
+}
+
+// passedCollectionKeyOf returns the collection's content identity: the
+// pass-time payload key stamped at the gate (payloadContentKey — the raw
+// signed payload bound to the verified-signer set), or, for collections that
+// did not travel the byte-retaining gate path (direct construction in tests,
+// legacy sources), the legacy statement-marshal key. The two are namespaced
+// apart so they can never collide; within one verify every gate-produced
+// collection carries the same key form, so dedup semantics are uniform.
+func passedCollectionKeyOf(pc PassedCollection) string {
+	if pc.contentKey != "" {
+		return pc.contentKey
+	}
+	return passedCollectionKey(pc)
 }
 
 // passedCollectionKey returns a stable content identity for a passed
@@ -877,6 +1144,16 @@ func passedCollectionFallbackKey(cvr source.CollectionVerificationResult) string
 	for _, s := range env.Signatures {
 		writeFramed(&buf, []byte(s.KeyID))
 		writeFramed(&buf, s.Signature)
+	}
+	// When the envelope bytes were released upstream (VerifiedSource drops
+	// payload/signatures from results), the hash above is content-free and
+	// every exceptional candidate would collapse to ONE near-common key —
+	// silently deduplicating DISTINCT collections. Bind the source reference
+	// in that case: it may under-deduplicate across sources, which is the
+	// safe direction (a duplicate survives; a distinct collection is never
+	// swallowed).
+	if len(env.Payload) == 0 && len(env.Signatures) == 0 {
+		writeFramed(&buf, []byte(cvr.Reference))
 	}
 	sum := sha256.Sum256(buf.Bytes())
 	return "fallback:" + hex.EncodeToString(sum[:])
@@ -1041,6 +1318,152 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 	return results, nil
 }
 
+// compactRejected strips the retained bodies from a REJECTED verification
+// result before it is stored in StepResult.Rejected. On the prod corpus the
+// step results held the full parsed Statement (multi-MB predicate
+// json.RawMessage) AND the typed Collection (decoded material leaves) for
+// every rejected candidate — ~85% of candidates on the incident corpus —
+// making durable verify memory proportional to the corpus rather than to the
+// evidence that passed (#7572).
+//
+// Rejected results are WRITE-ONLY downstream of the rejection decision. The
+// audited reader set (every non-test consumer of StepResult.Rejected /
+// RejectedCollection as of this change) reads ONLY:
+//
+//   - Reason                       — deny reasons, readiness classification
+//     (errors.As on typed errors), trust-mismatch carriers, tests
+//   - Collection.Reference         — deny reasons, step_results, VSA descriptors
+//   - Collection.Collection.Name   — deny reasons, CLI failure rendering
+//   - Collection.Warnings          — functionary-validate diagnostics surfaced
+//     as supplementary deny reasons
+//   - Collection.Errors            — envelope-level verification errors
+//   - Collection.PayloadDigests    — the VSA's inputAttestations descriptors
+//     for rejected evidence on a non-accepted verify
+//
+// (judge-api's leafFromRejection also probes Collection.Envelope.Signatures,
+// but VerifiedSource releases those bytes before any rejection is recorded —
+// verified.go releaseEnvelopeBytes — so that fallback is already nil on every
+// policy-engine path; its live carrier is the typed error in Reason.)
+//
+// Everything else — Statement, the parsed Collection members, the Envelope —
+// is dropped. A FRESH struct is built rather than niling fields on the copy
+// so no retained slice can alias a larger backing allocation.
+//
+// The rejection Reason must be fully constructed BEFORE compaction: reasons
+// routinely render statement subjects and collection contents, and those
+// reads are part of the rejection decision, not post-decision consumption.
+func compactRejected(c source.CollectionVerificationResult) source.CollectionVerificationResult {
+	return source.CollectionVerificationResult{
+		Errors:   c.Errors,
+		Warnings: c.Warnings,
+		CollectionEnvelope: source.CollectionEnvelope{
+			Reference:      c.Reference,
+			PayloadDigests: c.PayloadDigests,
+			Collection:     attestation.Collection{Name: c.Collection.Name},
+		},
+	}
+}
+
+// compactPassed strips the DECODED bodies from a PASSED verification result,
+// keeping the RAW signed payload (moved to PassedCollection.rawPayload by the
+// caller) as the single rehydration source. On the prod corpus the decoded
+// form — typed material leaves plus the raw predicate message — is ~2.9x the
+// raw payload bytes, and a passing verify retained it for every passed
+// candidate for the whole verify lifetime (#7572).
+//
+// KEPT (the audited post-decision reader set for passed collections):
+//
+//   - Verifiers / ValidFunctionaries / VerifiedTimestampsByKeyID — step
+//     results, timestamp constraints, VSA construction, callers
+//   - Warnings / Errors — StepResult.Analyze and deny-reason surfacing
+//   - Reference / PayloadDigests — step results, VSA inputAttestations
+//   - Statement.Type/Subject/PredicateType — diagnostics and the subject
+//     fan-out guard's closure intersection (Predicate is already nil: the
+//     source releases it once the payload is retained)
+//   - Collection.Name — gate identity, deny reasons, callers
+//   - Collection.RecordedBackRefs — normalized to the collection's full
+//     BackRefs() so depth expansion reads identical edges post-compaction
+//     (Collection.BackRefs prefers RecordedBackRefs)
+//
+// DROPPED: Collection.Attestations (typed attestors incl. decoded material
+// leaves) and the Envelope (payload moves to rawPayload; signatures are
+// already released). The three post-decision readers of the dropped data —
+// verifyCollectionArtifacts' inline-leaf/materials checks, buildStepContext's
+// cross-step Rego input, and the merge identity — rehydrate from rawPayload
+// (hydratedCollection) or use the pass-time content key.
+//
+// A fresh struct is built rather than niling fields on the copy so no
+// retained slice aliases a larger backing allocation.
+func compactPassed(c source.CollectionVerificationResult) source.CollectionVerificationResult {
+	return source.CollectionVerificationResult{
+		Verifiers:                 c.Verifiers,
+		ValidFunctionaries:        c.ValidFunctionaries,
+		VerifiedTimestampsByKeyID: c.VerifiedTimestampsByKeyID,
+		Errors:                    c.Errors,
+		Warnings:                  c.Warnings,
+		CollectionEnvelope: source.CollectionEnvelope{
+			Reference:      c.Reference,
+			PayloadDigests: c.PayloadDigests,
+			// PayloadType survives compaction: the payload/signature BYTES
+			// were already released upstream (VerifiedSource), but the type
+			// string is part of the serialized result contract
+			// (PassedCollection.MarshalJSON reproduces the pre-compaction
+			// JSON byte-identically, and dsse.Envelope serializes
+			// payloadType unconditionally).
+			Envelope: dsse.Envelope{PayloadType: c.Envelope.PayloadType},
+			Statement: intoto.Statement{
+				Type:          c.Statement.Type,
+				Subject:       c.Statement.Subject,
+				PredicateType: c.Statement.PredicateType,
+			},
+			Collection: attestation.Collection{
+				Name:             c.Collection.Name,
+				RecordedBackRefs: c.Collection.BackRefs(),
+			},
+		},
+	}
+}
+
+// payloadContentKey is the pass-time content identity of a passed collection:
+// the RAW SIGNED PAYLOAD bytes bound to the set of verified signer key IDs,
+// length-prefix framed and namespaced apart from the legacy statement-marshal
+// key. The payload IS the signed statement (subject + predicateType +
+// predicate), so this binds strictly more than the legacy key's re-marshal of
+// the parsed Statement — and it costs a hash instead of a multi-MB
+// json.Marshal per merge (#7572; the passedCollectionKey re-marshal was a
+// post-decision body re-reader). Computed BEFORE compaction while the
+// verified payload is in hand; malleability reasoning is unchanged from
+// passedCollectionKey (GHSA-c346-qp3r-53vf): signatures and source reference
+// do not participate.
+func payloadContentKey(cvr source.CollectionVerificationResult) string {
+	seen := make(map[string]struct{}, len(cvr.ValidFunctionaries))
+	keyIDs := make([]string, 0, len(cvr.ValidFunctionaries))
+	for _, v := range cvr.ValidFunctionaries {
+		if v == nil {
+			continue
+		}
+		kid, err := v.KeyID()
+		if err != nil {
+			// Deterministic, content-derived degradation: bind the payload
+			// alone. Never a per-instance key.
+			continue
+		}
+		if _, ok := seen[kid]; ok {
+			continue
+		}
+		seen[kid] = struct{}{}
+		keyIDs = append(keyIDs, kid)
+	}
+	sort.Strings(keyIDs)
+	var buf bytes.Buffer
+	writeFramed(&buf, cvr.Envelope.Payload)
+	for _, kid := range keyIDs {
+		writeFramed(&buf, []byte(kid))
+	}
+	sum := sha256.Sum256(buf.Bytes())
+	return "payload:" + hex.EncodeToString(sum[:])
+}
+
 // checkFunctionaries checks to make sure the signature on each statement corresponds to a trusted functionary for
 // the step the statement corresponds to
 // triageTrustedCollection decides whether a signature-verified collection is
@@ -1083,65 +1506,80 @@ func (step Step) triageTrustedCollection(statement source.CollectionVerification
 	return nil
 }
 
-func (step Step) checkFunctionaries(statements []source.CollectionVerificationResult, trustBundles map[string]TrustBundle) StepResult { //nolint:gocognit
+func (step Step) checkFunctionaries(statements []source.CollectionVerificationResult, trustBundles map[string]TrustBundle) StepResult {
 	result := StepResult{Step: step.Name}
-	for i, statement := range statements {
-		// If the caller supplied a placeholder result carrying an authoritative
-		// error (e.g. ErrNoCollections when the source returned zero matches),
-		// surface that error directly instead of misclassifying the empty
-		// statement as a bad predicate type. The predicate-type check below
-		// would otherwise swallow the real reason and produce a misleading
-		// "predicate type  is not a collection predicate type" error.
-		if len(statement.Errors) > 0 && len(statement.Verifiers) == 0 && len(statement.Envelope.Payload) == 0 && statement.Statement.PredicateType == "" {
-			reason := errors.Join(statement.Errors...)
-			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statement, Reason: reason})
-			continue
-		}
-
-		// Check that the statement contains a predicate type that we accept.
-		// A statement with the wrong predicate type must be rejected and must
-		// NOT proceed to functionary validation — otherwise it could appear in
-		// both the Passed and Rejected lists.
-		if statement.Statement.PredicateType != attestation.CollectionType && statement.Statement.PredicateType != attestation.LegacyCollectionType {
-			log.Debugf("policy: rejecting collection ref=%s: predicateType=%q (expected %q or %q), payload len=%d, errors=%v",
-				statement.Reference, statement.Statement.PredicateType, attestation.CollectionType, attestation.LegacyCollectionType, len(statement.Envelope.Payload), statement.Errors)
-			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statement, Reason: fmt.Errorf("predicate type %v is not a collection predicate type", statement.Statement.PredicateType)})
-			continue
-		}
-
-		if len(statement.Verifiers) > 0 { //nolint:nestif
-			for _, verifier := range statement.Verifiers {
-				for _, functionary := range step.Functionaries {
-					if err := functionary.Validate(verifier, trustBundles); err != nil {
-						statements[i].Warnings = append(statements[i].Warnings, fmt.Sprintf("failed to validate functionary of KeyID %s in step %s: %s", functionary.PublicKeyID, step.Name, err.Error()))
-						continue
-					} else {
-						statements[i].ValidFunctionaries = append(statements[i].ValidFunctionaries, verifier)
-					}
-				}
-			}
-
-			if reason := step.triageTrustedCollection(statements[i]); reason != nil {
-				result.Rejected = append(result.Rejected, RejectedCollection{Collection: statements[i], Reason: reason})
-			} else {
-				result.Passed = append(result.Passed, PassedCollection{Collection: statements[i]})
-			}
+	for i := range statements {
+		triaged, rejected := step.triageOne(statements[i], trustBundles)
+		statements[i] = triaged
+		if rejected != nil {
+			result.Rejected = append(result.Rejected, *rejected)
 		} else {
-			// No verifiers means the envelope's signature(s) failed to verify
-			// upstream (source.VerifiedSource records the cause in Errors). Carry
-			// those underlying errors into the rejection Reason so a typed
-			// diagnostic — e.g. dsse.TrustNameKeyMismatchError wrapped in
-			// ErrNoMatchingSigs — survives errors.As at the top-level CLI error
-			// instead of being flattened to the bare "no verifiers present" text.
-			reason := fmt.Errorf("no verifiers present to validate against collection verifiers")
-			if len(statements[i].Errors) > 0 {
-				reason = errors.Join(reason, errors.Join(statements[i].Errors...))
-			}
-			result.Rejected = append(result.Rejected, RejectedCollection{Collection: statements[i], Reason: reason})
+			result.Passed = append(result.Passed, PassedCollection{Collection: triaged})
 		}
 	}
 
 	return result
+}
+
+// triageOne runs the per-candidate functionary triage — placeholder-error
+// surfacing, predicate-type check, functionary validation (accumulating
+// per-functionary failure warnings and ValidFunctionaries on the returned
+// copy), and triageTrustedCollection. Extracted from the checkFunctionaries
+// loop body so the interleaved per-candidate pipeline (verifyStepStreamed)
+// and the batch path share one triage implementation. Exactly one outcome
+// applies: a non-nil rejection, or the returned statement is
+// functionary-AUTHORIZED for this step.
+func (step Step) triageOne(statement source.CollectionVerificationResult, trustBundles map[string]TrustBundle) (source.CollectionVerificationResult, *RejectedCollection) { //nolint:gocognit
+	// If the caller supplied a placeholder result carrying an authoritative
+	// error (e.g. ErrNoCollections when the source returned zero matches),
+	// surface that error directly instead of misclassifying the empty
+	// statement as a bad predicate type. The predicate-type check below
+	// would otherwise swallow the real reason and produce a misleading
+	// "predicate type  is not a collection predicate type" error.
+	if len(statement.Errors) > 0 && len(statement.Verifiers) == 0 && len(statement.Envelope.Payload) == 0 && statement.Statement.PredicateType == "" {
+		reason := errors.Join(statement.Errors...)
+		return statement, &RejectedCollection{Collection: compactRejected(statement), Reason: reason}
+	}
+
+	// Check that the statement contains a predicate type that we accept.
+	// A statement with the wrong predicate type must be rejected and must
+	// NOT proceed to functionary validation — otherwise it could appear in
+	// both the Passed and Rejected lists.
+	if statement.Statement.PredicateType != attestation.CollectionType && statement.Statement.PredicateType != attestation.LegacyCollectionType {
+		log.Debugf("policy: rejecting collection ref=%s: predicateType=%q (expected %q or %q), payload len=%d, errors=%v",
+			statement.Reference, statement.Statement.PredicateType, attestation.CollectionType, attestation.LegacyCollectionType, len(statement.Envelope.Payload), statement.Errors)
+		return statement, &RejectedCollection{Collection: compactRejected(statement), Reason: fmt.Errorf("predicate type %v is not a collection predicate type", statement.Statement.PredicateType)}
+	}
+
+	if len(statement.Verifiers) == 0 {
+		// No verifiers means the envelope's signature(s) failed to verify
+		// upstream (source.VerifiedSource records the cause in Errors). Carry
+		// those underlying errors into the rejection Reason so a typed
+		// diagnostic — e.g. dsse.TrustNameKeyMismatchError wrapped in
+		// ErrNoMatchingSigs — survives errors.As at the top-level CLI error
+		// instead of being flattened to the bare "no verifiers present" text.
+		reason := fmt.Errorf("no verifiers present to validate against collection verifiers")
+		if len(statement.Errors) > 0 {
+			reason = errors.Join(reason, errors.Join(statement.Errors...))
+		}
+		return statement, &RejectedCollection{Collection: compactRejected(statement), Reason: reason}
+	}
+
+	for _, verifier := range statement.Verifiers {
+		for _, functionary := range step.Functionaries {
+			if err := functionary.Validate(verifier, trustBundles); err != nil {
+				statement.Warnings = append(statement.Warnings, fmt.Sprintf("failed to validate functionary of KeyID %s in step %s: %s", functionary.PublicKeyID, step.Name, err.Error()))
+				continue
+			} else {
+				statement.ValidFunctionaries = append(statement.ValidFunctionaries, verifier)
+			}
+		}
+	}
+
+	if reason := step.triageTrustedCollection(statement); reason != nil {
+		return statement, &RejectedCollection{Collection: compactRejected(statement), Reason: reason}
+	}
+	return statement, nil
 }
 
 // verifyArtifacts will check the artifacts (materials+products) of the step referred to by `ArtifactsFrom` against the
@@ -1167,7 +1605,7 @@ func (p Policy) verifyArtifacts(ctx context.Context, vo *verifyOptions, resultsB
 
 		reasons := []error{}
 		for _, collection := range resultsByStep[step.Name].Passed {
-			if err := verifyCollectionArtifacts(ctx, vo, step, collection.Collection, resultsByStep); err == nil {
+			if err := verifyCollectionArtifacts(ctx, vo, step, collection, resultsByStep); err == nil {
 				accepted = true
 			} else {
 				reasons = append(reasons, err)
@@ -1193,19 +1631,29 @@ func (p Policy) verifyArtifacts(ctx context.Context, vo *verifyOptions, resultsB
 	return resultsByStep, nil
 }
 
-func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, collection source.CollectionVerificationResult, collectionsByStep map[string]StepResult) error { //nolint:gocognit // inline-leaf chain compare shares a reason-tracking trail across the artifactsFrom loop; splitting obscures the failure-reason trail
+func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, passedCollection PassedCollection, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo // inline-leaf chain compare shares a reason-tracking trail across the artifactsFrom loop; splitting obscures the failure-reason trail
 	reasons := []string{}
+	collection := passedCollection.Collection
+	// Rehydrate the downstream collection's typed attestors from the retained
+	// raw signed payload (gate-time compaction dropped the decoded bodies).
+	// Uncompacted collections come back as stored. Fail CLOSED on a
+	// rehydration error: an artifact chain that cannot re-read its own signed
+	// materials must not pass.
+	downstream, err := passedCollection.hydratedCollection()
+	if err != nil {
+		return ErrVerifyArtifactsFailed{Reasons: []string{err.Error()}}
+	}
 	// Verify + cap the downstream collection's inline leaves BEFORE rehydrating
 	// its materials map. For v0.3 inline predicates the materials are
 	// attacker-supplied until the leaves reconstruct to the signed root, and the
 	// MaxLeaves cap inside VerifyInlineLeaves must fire before any O(N)
 	// allocation (Materials() builds an N-entry map). Doing it once up-front also
 	// guarantees compareArtifacts only ever runs on signed-root-consistent data.
-	if err := collection.Collection.VerifyInlineLeaves(); err != nil {
+	if err := downstream.VerifyInlineLeaves(); err != nil {
 		reasons = append(reasons, fmt.Sprintf("step %s inline leaves: %v", step.Name, err))
 		return ErrVerifyArtifactsFailed{Reasons: reasons}
 	}
-	mats := collection.Collection.Materials()
+	mats := downstream.Materials()
 	for _, artifactsFrom := range step.ArtifactsFrom {
 		refResult, ok := collectionsByStep[artifactsFrom]
 		if !ok {
@@ -1230,7 +1678,13 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 			// signer (or bug) committing a root that doesn't match the leaves,
 			// which would otherwise let the chain compare run on attacker-chosen
 			// data.
-			if err := testCollection.Collection.Collection.VerifyInlineLeaves(); err != nil {
+			upstream, uerr := testCollection.hydratedCollection()
+			if uerr != nil {
+				collection.Warnings = append(collection.Warnings, fmt.Sprintf("upstream step %s for step %s: %v", artifactsFrom, step.Name, uerr))
+				reasons = append(reasons, fmt.Sprintf("upstream step %s: %v", artifactsFrom, uerr))
+				continue
+			}
+			if err := upstream.VerifyInlineLeaves(); err != nil {
 				collection.Warnings = append(collection.Warnings, fmt.Sprintf("upstream step %s inline leaves for step %s: %v", artifactsFrom, step.Name, err))
 				reasons = append(reasons, fmt.Sprintf("upstream step %s inline leaves: %v", artifactsFrom, err))
 				continue
@@ -1247,12 +1701,12 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 			// satisfies the chain without any flag. This lets an isolated-workingdir
 			// build step (which records no materials) verify while a leaf-less
 			// attestation always fails closed.
-			if len(mats) == 0 && !collection.Collection.HasInlineMaterials() {
+			if len(mats) == 0 && !downstream.HasInlineMaterials() {
 				reasons = append(reasons, fmt.Sprintf("step %s carries no verified chain: the collection is leaf-less (no inline material leaves), so its empty material set is unverified and cannot satisfy artifactsFrom %s", step.Name, artifactsFrom))
 				continue
 			}
 
-			arts := testCollection.Collection.Collection.Artifacts()
+			arts := upstream.Artifacts()
 			if err := compareArtifacts(mats, arts); err != nil {
 				collection.Warnings = append(collection.Warnings, fmt.Sprintf("failed to verify artifacts for step %s: %v", step.Name, err))
 				reasons = append(reasons, err.Error())

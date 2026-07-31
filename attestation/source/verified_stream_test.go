@@ -126,7 +126,16 @@ func TestVerifiedSearch_StreamedAndSlicePathsAreEquivalent(t *testing.T) {
 			assert.Equal(t, a.Errors[j].Error(), b.Errors[j].Error(), "error text must be identical for %s", a.Reference)
 		}
 		assert.Equal(t, a.PayloadDigests, b.PayloadDigests, "recorded evidence digests must be identical for %s", a.Reference)
-		assert.Empty(t, b.Envelope.Payload, "streamed results must have released raw payload bytes")
+		// #7572 pass-time compaction contract: byte retention must be
+		// identical across the slice and streamed paths — payload retained
+		// iff the candidate VERIFIED (it is the gate's rehydration source),
+		// signatures always released.
+		assert.Equal(t, a.Envelope.Payload, b.Envelope.Payload, "payload retention must be identical across paths for %s", a.Reference)
+		if len(b.Verifiers) > 0 {
+			assert.NotEmpty(t, b.Envelope.Payload, "verified streamed result must retain the raw payload for the gate's rehydration")
+		} else {
+			assert.Empty(t, b.Envelope.Payload, "unverified streamed result must not retain raw payload bytes")
+		}
 		assert.Empty(t, b.Envelope.Signatures, "streamed results must have released signature bytes")
 	}
 

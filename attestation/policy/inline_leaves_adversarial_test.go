@@ -96,7 +96,7 @@ func TestInlineLeaves_PassesFromInlineLeaves(t *testing.T) {
 	d := digest("aa")
 	step, build, byStep := inlineChainSetup(d, d, nil)
 	vo := &verifyOptions{}
-	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
+	err := verifyCollectionArtifacts(context.Background(), vo, step, PassedCollection{Collection: build}, byStep)
 	require.NoError(t, err, "verified inline leaves with matching material must satisfy the chain with no sidecar")
 }
 
@@ -107,7 +107,7 @@ func TestInlineLeaves_ForgedLeafRejected(t *testing.T) {
 	d := digest("aa")
 	step, build, byStep := inlineChainSetup(d, d, errors.New("inline leaves reconstruct to a different root"))
 	vo := &verifyOptions{}
-	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
+	err := verifyCollectionArtifacts(context.Background(), vo, step, PassedCollection{Collection: build}, byStep)
 	require.Error(t, err, "downstream inline leaves that fail reconstruction must be rejected")
 }
 
@@ -116,7 +116,7 @@ func TestInlineLeaves_ForgedLeafRejected(t *testing.T) {
 func TestInlineLeaves_MismatchedMaterialRejected(t *testing.T) {
 	step, build, byStep := inlineChainSetup(digest("aa"), digest("bb"), nil)
 	vo := &verifyOptions{}
-	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
+	err := verifyCollectionArtifacts(context.Background(), vo, step, PassedCollection{Collection: build}, byStep)
 	require.Error(t, err, "downstream material whose digest disagrees with the upstream product must be rejected")
 }
 
@@ -134,7 +134,7 @@ func TestInlineLeaves_VacuousAlwaysFailsClosed(t *testing.T) {
 		"source": {Step: "source", Passed: []PassedCollection{{Collection: inlineCollection("source", up)}}},
 	}
 	vo := &verifyOptions{}
-	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
+	err := verifyCollectionArtifacts(context.Background(), vo, step, PassedCollection{Collection: build}, byStep)
 	require.Error(t, err, "a leaf-less collection (empty materials, no inline leaves) must always fail closed")
 }
 
@@ -153,6 +153,6 @@ func TestInlineLeaves_AuthoritativeEmptyPasses(t *testing.T) {
 		"source": {Step: "source", Passed: []PassedCollection{{Collection: inlineCollection("source", up)}}},
 	}
 	vo := &verifyOptions{}
-	err := verifyCollectionArtifacts(context.Background(), vo, step, build, byStep)
+	err := verifyCollectionArtifacts(context.Background(), vo, step, PassedCollection{Collection: build}, byStep)
 	require.NoError(t, err, "an inline, authoritatively-empty material set must satisfy the chain with no sidecar and no flag")
 }

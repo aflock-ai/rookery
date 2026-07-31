@@ -22,6 +22,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/source"
 )
@@ -143,15 +144,107 @@ type StepResult struct {
 type PassedCollection struct {
 	Collection  source.CollectionVerificationResult
 	AiResponses []AiResponse `json:"AiResponses,omitempty"`
+
+	// rawPayload is the verified raw signed payload (the DSSE payload bytes),
+	// retained at gate time when the decoded bodies are compacted away
+	// (compactPassed). It is the single rehydration source for the
+	// post-decision re-readers: verifyCollectionArtifacts' inline-leaf /
+	// materials checks and buildStepContext's cross-step Rego input
+	// (hydratedCollection). Unexported by design: it never serializes, so the
+	// step-results JSON shape is unchanged. Empty for collections that did
+	// not travel the byte-retaining VerifiedSource path (e.g. direct test
+	// construction) — those keep their full decoded bodies and never
+	// rehydrate.
+	rawPayload []byte
+
+	// contentKey is the pass-time content identity (payloadContentKey),
+	// computed while the verified payload and signer set are in hand so the
+	// cross-depth merge never has to re-marshal a multi-MB statement — and
+	// never falls into the released-bytes fallback identity. Empty for
+	// directly-constructed collections; passedCollectionKeyOf then computes
+	// the legacy statement-marshal key instead.
+	contentKey string
 }
 
-// MarshalJSON implements the json.Marshaler interface for PassedCollection
+// hydratedCollection returns the full parsed Collection for this passed
+// collection. A compacted collection (bodies dropped at gate time) is
+// re-decoded from the retained raw signed payload — the same bytes, the same
+// in-process attestor registry, therefore the same typed result as the
+// original decode. An uncompacted collection is returned as stored.
+func (p PassedCollection) hydratedCollection() (attestation.Collection, error) {
+	if len(p.Collection.Collection.Attestations) > 0 || len(p.rawPayload) == 0 {
+		return p.Collection.Collection, nil
+	}
+	stmt := intoto.Statement{}
+	if err := json.Unmarshal(p.rawPayload, &stmt); err != nil {
+		return attestation.Collection{}, fmt.Errorf("rehydrate %s: failed to unmarshal statement: %w", p.Collection.Reference, err)
+	}
+	coll := attestation.Collection{}
+	if err := json.Unmarshal(stmt.Predicate, &coll); err != nil {
+		return attestation.Collection{}, fmt.Errorf("rehydrate %s: failed to unmarshal collection: %w", p.Collection.Reference, err)
+	}
+	return coll, nil
+}
+
+// HydratedCollection is the public form of hydratedCollection: the COMPLETE
+// typed Collection for this passed collection, re-decoded on demand from the
+// retained raw signed payload when pass-time compaction dropped the decoded
+// bodies. Callers that read passed-evidence content beyond the compact set
+// (subjects, name, references, verifiers) — e.g. inline-leaf inclusion
+// proofs, attestor inspection — must go through this accessor rather than
+// reading Collection.Collection directly. Lazy by design: the decode cost is
+// paid per call, only by consumers that need the bodies, so the verify-time
+// memory profile is unchanged.
+func (p PassedCollection) HydratedCollection() (attestation.Collection, error) {
+	return p.hydratedCollection()
+}
+
+// hydratedResult returns the CollectionVerificationResult as it looked
+// BEFORE pass-time compaction: full Statement (including the raw Predicate
+// message) and full typed Collection, with the envelope bytes still released
+// (VerifiedSource dropped payload/signatures from results upstream of the
+// gate — that predates compaction and is not undone here). Used by
+// MarshalJSON so serialized passed evidence is byte-identical to the
+// pre-compaction contract. An uncompacted collection returns as stored.
+func (p PassedCollection) hydratedResult() (source.CollectionVerificationResult, error) {
+	if len(p.Collection.Collection.Attestations) > 0 || len(p.rawPayload) == 0 {
+		return p.Collection, nil
+	}
+	stmt := intoto.Statement{}
+	if err := json.Unmarshal(p.rawPayload, &stmt); err != nil {
+		return source.CollectionVerificationResult{}, fmt.Errorf("rehydrate %s: failed to unmarshal statement: %w", p.Collection.Reference, err)
+	}
+	coll := attestation.Collection{}
+	if err := json.Unmarshal(stmt.Predicate, &coll); err != nil {
+		return source.CollectionVerificationResult{}, fmt.Errorf("rehydrate %s: failed to unmarshal collection: %w", p.Collection.Reference, err)
+	}
+	full := p.Collection
+	full.Statement = stmt
+	full.Collection = coll
+	return full, nil
+}
+
+// MarshalJSON implements the json.Marshaler interface for PassedCollection.
+// A compacted collection serializes from its retained raw payload
+// (hydratedResult), so the JSON a caller receives — step results persisted
+// by the workflow engine, UI/GraphQL consumers, anything downstream of
+// Policy.Verify — carries the FULL statement and typed collection,
+// byte-identical to the pre-compaction contract. Compaction is an internal
+// memory representation; it must never leak into serialized output.
 func (p PassedCollection) MarshalJSON() ([]byte, error) {
+	full, err := p.hydratedResult()
+	if err != nil {
+		// Fail closed: emitting silently-gutted evidence would be worse than
+		// a loud serialization error, and the payload decoded successfully
+		// once at verification time so this path is not reachable for any
+		// collection the gate actually passed.
+		return nil, err
+	}
 	return json.Marshal(&struct {
 		Collection  source.CollectionVerificationResult `json:"Collection"`
 		AiResponses []AiResponse                        `json:"AiResponses,omitempty"`
 	}{
-		Collection:  p.Collection,
+		Collection:  full,
 		AiResponses: p.AiResponses,
 	})
 }
@@ -371,7 +464,16 @@ func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepRe
 
 		stepData := make(map[string]interface{})
 		for _, pc := range result.Passed {
-			for _, att := range pc.Collection.Collection.Attestations {
+			// A gate-compacted collection rehydrates its typed attestors from
+			// the retained raw payload; an uncompacted one is returned as
+			// stored. A rehydration failure is treated exactly like the
+			// pre-existing marshal/decode failure modes below: log and skip.
+			coll, err := pc.hydratedCollection()
+			if err != nil {
+				log.Debugf("failed to rehydrate collection %s from step %s for rego context: %v", pc.Collection.Reference, depStep, err)
+				continue
+			}
+			for _, att := range coll.Attestations {
 				// Marshal the attestor to a generic map so Rego can traverse it.
 				b, err := json.Marshal(att.Attestation)
 				if err != nil {
@@ -522,137 +624,181 @@ func checkDependencies(attestationsFrom []string, resultsByStep map[string]StepR
 
 // validateAttestations will test each collection against to ensure the expected attestations
 // appear in the collection as well as that any rego policies pass for the step.
-func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult { //nolint:gocognit,gocyclo,funlen
+func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult {
 	result := StepResult{Step: s.Name}
 	if len(collectionResults) <= 0 {
 		return result
 	}
 
 	for _, collection := range collectionResults {
-		// F10 (#5746): require EXACT step-name equality. An empty collection
-		// name must NOT match every step — previously `name == ""` was treated
-		// as a wildcard, letting a name-less collection bypass the step-name
-		// filter. Fail closed: only a collection explicitly named for this step
-		// is considered.
-		if collection.Collection.Name != s.Name {
-			log.Debugf("Skipping collection %s as it is not for step %s", collection.Collection.Name, s.Name)
+		switch outcome, pc, rc := s.gateOne(collection, aiServerURL, stepContext); outcome {
+		case gatePassed:
+			result.Passed = append(result.Passed, pc)
+		case gateRejected:
+			result.Rejected = append(result.Rejected, rc)
+		case gateWrongName:
+			// Skipped entirely (F10): the collection is not named for this
+			// step, so it is neither passed nor rejected here.
+		}
+	}
+
+	return result
+}
+
+// gateOutcome is the per-collection verdict of the step gate (gateOne).
+type gateOutcome int
+
+const (
+	// gateWrongName: the collection is not named for this step and is skipped
+	// entirely — neither passed nor rejected (F10, #5746).
+	gateWrongName gateOutcome = iota
+	gatePassed
+	gateRejected
+)
+
+// gateOne runs the step gate's attestation checks against ONE
+// functionary-authorized collection: exact step-name match, required
+// attestation presence, and Rego/AI policy evaluation, followed by pass-time
+// compaction (raw payload retained as the rehydration source, decoded bodies
+// dropped) or rejection compaction. Extracted from the validateAttestations
+// loop body so the interleaved per-candidate pipeline (verifyStepStreamed)
+// and the batch path share one gate implementation and can never diverge on
+// a verdict. The returned PassedCollection is valid only for gatePassed, the
+// RejectedCollection only for gateRejected.
+func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) (gateOutcome, PassedCollection, RejectedCollection) { //nolint:gocognit,gocyclo,funlen
+	// F10 (#5746): require EXACT step-name equality. An empty collection
+	// name must NOT match every step — previously `name == ""` was treated
+	// as a wildcard, letting a name-less collection bypass the step-name
+	// filter. Fail closed: only a collection explicitly named for this step
+	// is considered.
+	if collection.Collection.Name != s.Name {
+		log.Debugf("Skipping collection %s as it is not for step %s", collection.Collection.Name, s.Name)
+		return gateWrongName, PassedCollection{}, RejectedCollection{}
+	}
+
+	found := make(map[string][]attestation.Attestor)
+	reasons := make([]string, 0)
+	passed := true
+	var allAiResponses []AiResponse
+
+	// F9 (#5746): a step with NO required attestations is a misconfigured
+	// no-op gate. It must NOT silently pass an arbitrary collection — that
+	// is fail-open (a gate with no requirements rubber-stamps anything).
+	// Reject the collection rather than accept it.
+	if len(s.Attestations) == 0 {
+		passed = false
+		reasons = append(reasons, fmt.Sprintf(
+			"step %q declares no required attestations; a gate with no requirements rejects all collections (fail closed)",
+			s.Name))
+	}
+
+	if len(collection.Errors) > 0 {
+		passed = false
+		for _, err := range collection.Errors {
+			reasons = append(reasons, fmt.Sprintf("collection verification failed: %s", err.Error()))
+		}
+	}
+
+	// G (#5747): collect ALL attestors per type, not just the last one. A
+	// last-writer-wins map let a passing attestor shadow a failing attestor
+	// of the same type, so a malicious duplicate could bypass the policy.
+	for _, att := range collection.Collection.Attestations {
+		found[att.Type] = append(found[att.Type], att.Attestation)
+		// Also register under the alternate URI so that policies
+		// written with witness.dev URIs match aflock.ai attestations and
+		// vice versa.
+		if alt := attestation.LegacyAlternate(att.Type); alt != "" {
+			found[alt] = append(found[alt], att.Attestation)
+		}
+	}
+
+	for _, expected := range s.Attestations {
+		// Try both the original and alternate URI for the expected type.
+		attestors, ok := found[expected.Type]
+		if !ok {
+			if alt := attestation.LegacyAlternate(expected.Type); alt != "" {
+				attestors, ok = found[alt]
+			}
+		}
+		if !ok || len(attestors) == 0 {
+			passed = false
+			reasons = append(reasons, ErrMissingAttestation{
+				Step:        s.Name,
+				Attestation: expected.Type,
+			}.Error())
+			// Skip policy evaluation — the attestation is missing so there is
+			// nothing to evaluate. Continuing would pass a nil attestor to the
+			// Rego/AI evaluators.
 			continue
 		}
 
-		found := make(map[string][]attestation.Attestor)
-		reasons := make([]string, 0)
-		passed := true
-		var allAiResponses []AiResponse
-
-		// F9 (#5746): a step with NO required attestations is a misconfigured
-		// no-op gate. It must NOT silently pass an arbitrary collection — that
-		// is fail-open (a gate with no requirements rubber-stamps anything).
-		// Reject the collection rather than accept it.
-		if len(s.Attestations) == 0 {
-			passed = false
-			reasons = append(reasons, fmt.Sprintf(
-				"step %q declares no required attestations; a gate with no requirements rejects all collections (fail closed)",
-				s.Name))
-		}
-
-		if len(collection.Errors) > 0 {
-			passed = false
-			for _, err := range collection.Errors {
-				reasons = append(reasons, fmt.Sprintf("collection verification failed: %s", err.Error()))
-			}
-		}
-
-		// G (#5747): collect ALL attestors per type, not just the last one. A
-		// last-writer-wins map let a passing attestor shadow a failing attestor
-		// of the same type, so a malicious duplicate could bypass the policy.
-		for _, att := range collection.Collection.Attestations {
-			found[att.Type] = append(found[att.Type], att.Attestation)
-			// Also register under the alternate URI so that policies
-			// written with witness.dev URIs match aflock.ai attestations and
-			// vice versa.
-			if alt := attestation.LegacyAlternate(att.Type); alt != "" {
-				found[alt] = append(found[alt], att.Attestation)
-			}
-		}
-
-		for _, expected := range s.Attestations {
-			// Try both the original and alternate URI for the expected type.
-			attestors, ok := found[expected.Type]
-			if !ok {
-				if alt := attestation.LegacyAlternate(expected.Type); alt != "" {
-					attestors, ok = found[alt]
-				}
-			}
-			if !ok || len(attestors) == 0 {
+		// G (#5747): evaluate EVERY attestor of this type. If ANY fails, the
+		// collection fails — a passing duplicate must not shadow a failing
+		// one (no last-writer-wins bypass).
+		for _, attestor := range attestors {
+			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies, stepContext); err != nil {
 				passed = false
-				reasons = append(reasons, ErrMissingAttestation{
-					Step:        s.Name,
-					Attestation: expected.Type,
-				}.Error())
-				// Skip policy evaluation — the attestation is missing so there is
-				// nothing to evaluate. Continuing would pass a nil attestor to the
-				// Rego/AI evaluators.
-				continue
+				reasons = append(reasons, err.Error())
 			}
 
-			// G (#5747): evaluate EVERY attestor of this type. If ANY fails, the
-			// collection fails — a passing duplicate must not shadow a failing
-			// one (no last-writer-wins bypass).
-			for _, attestor := range attestors {
-				if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies, stepContext); err != nil {
-					passed = false
-					reasons = append(reasons, err.Error())
-				}
+			aiResponses, err := EvaluateAIPolicy(attestor, expected.AiPolicies, aiServerURL)
+			if err != nil {
+				passed = false
+				reasons = append(reasons, err.Error())
+			}
 
-				aiResponses, err := EvaluateAIPolicy(attestor, expected.AiPolicies, aiServerURL)
-				if err != nil {
-					passed = false
-					reasons = append(reasons, err.Error())
-				}
+			if len(aiResponses) > 0 { //nolint:nestif
+				allAiResponses = append(allAiResponses, aiResponses...)
 
-				if len(aiResponses) > 0 { //nolint:nestif
-					allAiResponses = append(allAiResponses, aiResponses...)
-
-					if err == nil {
-						for i, resp := range aiResponses {
-							if resp.Status == AiStatusFail {
-								policyName := ""
-								if i < len(expected.AiPolicies) {
-									policyName = expected.AiPolicies[i].Name
-								}
-								if policyName == "" {
-									policyName = fmt.Sprintf("AI Policy %d", i+1)
-								}
-
-								reason := fmt.Sprintf("AI Policy '%s': %s - %s",
-									policyName,
-									resp.Status,
-									resp.Reason)
-
-								passed = false
-								reasons = append(reasons, reason)
+				if err == nil {
+					for i, resp := range aiResponses {
+						if resp.Status == AiStatusFail {
+							policyName := ""
+							if i < len(expected.AiPolicies) {
+								policyName = expected.AiPolicies[i].Name
 							}
+							if policyName == "" {
+								policyName = fmt.Sprintf("AI Policy %d", i+1)
+							}
+
+							reason := fmt.Sprintf("AI Policy '%s': %s - %s",
+								policyName,
+								resp.Status,
+								resp.Reason)
+
+							passed = false
+							reasons = append(reasons, reason)
 						}
 					}
 				}
 			}
 		}
-
-		if passed {
-			result.Passed = append(result.Passed, PassedCollection{
-				Collection:  collection,
-				AiResponses: allAiResponses,
-			})
-		} else {
-			r := strings.Join(reasons, ",\n - ")
-			reason := fmt.Sprintf("collection validation failed:\n - %s", r)
-			result.Rejected = append(result.Rejected, RejectedCollection{
-				Collection:  collection,
-				Reason:      fmt.Errorf("%s", reason),
-				AiResponses: allAiResponses,
-			})
-		}
 	}
 
-	return result
+	if passed {
+		pc := PassedCollection{
+			Collection:  collection,
+			AiResponses: allAiResponses,
+		}
+		// Pass-time compaction: when the collection traveled the
+		// byte-retaining VerifiedSource path, move the raw payload aside,
+		// stamp the content identity, and drop the decoded bodies. A
+		// collection without retained payload (direct construction, legacy
+		// sources) keeps its full decoded form — no rehydration source, no
+		// compaction.
+		if len(collection.Envelope.Payload) > 0 {
+			pc.contentKey = payloadContentKey(collection)
+			pc.rawPayload = collection.Envelope.Payload
+			pc.Collection = compactPassed(collection)
+		}
+		return gatePassed, pc, RejectedCollection{}
+	}
+
+	r := strings.Join(reasons, ",\n - ")
+	reason := fmt.Sprintf("collection validation failed:\n - %s", r)
+	return gateRejected, PassedCollection{}, RejectedCollection{
+		Collection:  compactRejected(collection),
+		Reason:      fmt.Errorf("%s", reason),
+		AiResponses: allAiResponses,
+	}
 }

@@ -106,6 +106,19 @@ type VerifiedSourcer interface {
 	SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error)
 }
 
+// StreamingVerifiedSourcer is an optional extension of VerifiedSourcer: it
+// yields VERIFIED candidates one at a time, in the same order Search would
+// return them, with per-candidate verdicts identical to Search's. The policy
+// engine prefers this path (#7572): consuming — and compacting — each
+// candidate's verification result before the next envelope's decoded body is
+// materialized makes the verify peak O(largest envelope), not O(matching
+// corpus). Search itself cannot deliver that: it must materialize every
+// result before returning, so even with a streaming underlying Sourcer the
+// full decoded candidate set is simultaneously resident.
+type StreamingVerifiedSourcer interface {
+	SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionVerificationResult) error) error
+}
+
 type VerifiedSource struct {
 	source     Sourcer
 	verifyOpts []dsse.VerificationOption
@@ -178,6 +191,35 @@ func releaseEnvelopeBytes(ce *CollectionEnvelope) {
 	ce.Envelope.Signatures = nil
 }
 
+// retainPayloadReleaseRest is the release applied to candidates whose
+// signature verification and subject guard SUCCEEDED — candidates that may
+// yet become PASSED collections. The policy gate's pass-time compaction
+// (policy.compactPassed) drops the decoded Statement.Predicate + typed
+// Collection and keeps the RAW payload as the single rehydration source for
+// the post-decision re-readers (artifactsFrom chain checks, cross-step Rego
+// context, the content-identity merge key). For that to work the payload
+// must survive to the gate, so here we:
+//
+//   - KEEP Envelope.Payload (the signed statement bytes — the rehydration
+//     source and the strongest content identity for the merge key)
+//   - release Envelope.Signatures (certificate PEMs; everything signature-
+//     derived that later stages read is carried by Verifiers /
+//     ValidFunctionaries / VerifiedTimestampsByKeyID)
+//   - release Statement.Predicate (a full second copy of the predicate that
+//     Payload already contains; the gate reads the parsed Collection and
+//     Statement.Subject, never this raw message)
+//
+// Net batch effect vs the previous full release: +Payload −Predicate ≈ the
+// envelope framing overhead, so the per-depth transient peak is unchanged
+// within noise while pass-time compaction becomes possible. Candidates with
+// no verification future (signature failure, subject-guard failure) still
+// get the FULL releaseEnvelopeBytes + predicate drop — their bytes have no
+// reader at all.
+func retainPayloadReleaseRest(ce *CollectionEnvelope) {
+	ce.Envelope.Signatures = nil
+	ce.Statement.Predicate = nil
+}
+
 func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionVerificationResult, error) {
 	// STREAMING: when the source can yield candidates one at a time, verify
 	// each as it arrives and retain only the compact (bytes-released) result.
@@ -218,6 +260,38 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 	return results, nil
 }
 
+// SearchStream implements StreamingVerifiedSourcer. When the underlying
+// Sourcer streams, each candidate is verified and yielded before the next is
+// fetched — at most one raw envelope in flight on this side. Otherwise the
+// materialized Search result is replayed through yield: no memory win, but
+// callers get ONE consumption path with verdicts identical to Search either
+// way (both funnel through verifyCandidate).
+func (s *VerifiedSource) SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionVerificationResult) error) error {
+	if streamer, ok := s.source.(StreamingSourcer); ok {
+		count := 0
+		err := streamer.SearchStream(ctx, collectionName, subjectDigests, attestations, func(toVerify CollectionEnvelope) error {
+			count++
+			return yield(s.verifyCandidate(toVerify, subjectDigests))
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "[verified-source] verified %d candidate envelope(s) for collection %q (streamed, interleaved)\n", count, collectionName)
+		return nil
+	}
+
+	results, err := s.Search(ctx, collectionName, subjectDigests, attestations)
+	if err != nil {
+		return err
+	}
+	for i := range results {
+		if err := yield(results[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // verifyCandidate runs the full per-candidate pipeline — DSSE signature
 // verification, verifier accounting, the artifact-substitution subject guard,
 // digest recording and byte release — and returns the compact result. It is
@@ -229,6 +303,7 @@ func (s *VerifiedSource) verifyCandidate(toVerify CollectionEnvelope, subjectDig
 		fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature verification FAILED: %v\n", toVerify.Reference, err)
 		s.recordPayloadDigests(&toVerify)
 		releaseEnvelopeBytes(&toVerify)
+		toVerify.Statement.Predicate = nil
 		return CollectionVerificationResult{
 			Errors:             []error{fmt.Errorf("failed to verify envelope: %w", err)},
 			CollectionEnvelope: toVerify,
@@ -283,10 +358,17 @@ func (s *VerifiedSource) verifyCandidate(toVerify CollectionEnvelope, subjectDig
 		timestampsByKeyID = nil
 	}
 
-	// Verification + subject guard are complete: the raw bytes have served
-	// their only purpose. Release them from the result copy.
+	// Verification + subject guard are complete. A candidate that PASSED both
+	// keeps its raw payload for the policy gate's pass-time compaction +
+	// rehydration (see retainPayloadReleaseRest); a candidate with no
+	// verification future releases everything.
 	s.recordPayloadDigests(&toVerify)
-	releaseEnvelopeBytes(&toVerify)
+	if len(passedVerifiers) > 0 {
+		retainPayloadReleaseRest(&toVerify)
+	} else {
+		releaseEnvelopeBytes(&toVerify)
+		toVerify.Statement.Predicate = nil
+	}
 	return CollectionVerificationResult{
 		Verifiers:                 passedVerifiers,
 		VerifiedTimestampsByKeyID: timestampsByKeyID,

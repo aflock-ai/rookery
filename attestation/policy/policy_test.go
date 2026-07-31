@@ -1118,7 +1118,7 @@ func TestVerifyCollectionArtifacts_NoArtifactsFrom(t *testing.T) {
 			Collection: attestation.Collection{Name: "build"},
 		},
 	}
-	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, cvr, nil)
+	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, PassedCollection{Collection: cvr}, nil)
 	assert.NoError(t, err, "no artifactsFrom means nothing to verify")
 }
 
@@ -1139,7 +1139,7 @@ func TestVerifyCollectionArtifacts_ArtifactsFromNoPassed(t *testing.T) {
 		"build": {Step: "build"},
 	}
 
-	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, cvr, collectionsByStep)
+	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, PassedCollection{Collection: cvr}, collectionsByStep)
 	assert.Error(t, err)
 	var artErr ErrVerifyArtifactsFailed
 	assert.ErrorAs(t, err, &artErr)
@@ -1161,7 +1161,7 @@ func TestVerifyCollectionArtifacts_ArtifactsFromNotInResults(t *testing.T) {
 	// The "build" step is not in collectionsByStep at all.
 	collectionsByStep := map[string]StepResult{}
 
-	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, cvr, collectionsByStep)
+	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, PassedCollection{Collection: cvr}, collectionsByStep)
 	assert.Error(t, err)
 	var artErr ErrVerifyArtifactsFailed
 	assert.ErrorAs(t, err, &artErr)
@@ -1200,7 +1200,7 @@ func TestVerifyCollectionArtifacts_ArtifactsFromWithPassedCollections(t *testing
 		},
 	}
 
-	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, deployCVR, collectionsByStep)
+	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, PassedCollection{Collection: deployCVR}, collectionsByStep)
 	assert.Error(t, err, "a leaf-less collection with an empty material set must fail closed")
 	var artErr ErrVerifyArtifactsFailed
 	assert.ErrorAs(t, err, &artErr)
@@ -1622,7 +1622,7 @@ func TestVerifyCollectionArtifacts_ContinuesAfterMismatch(t *testing.T) {
 	}
 
 	// With the continue fix, this should pass (at least one collection matches).
-	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, collection, collectionsByStep)
+	err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, PassedCollection{Collection: collection}, collectionsByStep)
 	assert.NoError(t, err, "should pass when at least one source collection matches")
 }
 
@@ -1678,14 +1678,14 @@ func TestVerifyCollectionArtifacts_StrictRequireAllArtifacts(t *testing.T) {
 	}
 
 	t.Run("default off — extra artifact tolerated (warn only)", func(t *testing.T) {
-		err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, build, collectionsByStep)
+		err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, step, PassedCollection{Collection: build}, collectionsByStep)
 		assert.NoError(t, err, "default verification must ignore the unconsumed malicious.bin (backward compat)")
 	})
 
 	t.Run("strict on — extra artifact fails closed", func(t *testing.T) {
 		vo := &verifyOptions{}
 		WithRequireAllArtifacts()(vo)
-		err := verifyCollectionArtifacts(context.Background(), vo, step, build, collectionsByStep)
+		err := verifyCollectionArtifacts(context.Background(), vo, step, PassedCollection{Collection: build}, collectionsByStep)
 		require.Error(t, err, "strict mode must reject the unconsumed malicious.bin")
 		// The reason is surfaced through the aggregated ErrVerifyArtifactsFailed.
 		var artErr ErrVerifyArtifactsFailed

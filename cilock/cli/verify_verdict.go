@@ -25,6 +25,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/policy"
 )
 
@@ -133,7 +134,17 @@ func appendCollectionBindings(out []subjectBinding, seen, want map[string]struct
 	// Trust product/material leaves only when they provably reconstruct the
 	// signed Merkle root — otherwise a tampered or inconsistent leaf set could
 	// forge a binding for an artifact the producer never actually built.
-	coll := pc.Collection.Collection
+	//
+	// HydratedCollection, not Collection.Collection: pass-time compaction
+	// (#7572) drops the decoded bodies from the stored result, and the leaf
+	// set lives in those bodies — reading the compact form would silently
+	// skip every leaf binding. The accessor re-decodes from the retained
+	// signed payload on demand.
+	coll, err := pc.HydratedCollection()
+	if err != nil {
+		log.Debugf("failed to hydrate collection %s for leaf bindings: %v", pc.Collection.Reference, err)
+		return out
+	}
 	if coll.VerifyInlineLeaves() == nil {
 		for path, ds := range coll.Artifacts() {
 			if h := suppliedSHA256(ds); h != "" {

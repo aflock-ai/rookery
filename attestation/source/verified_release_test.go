@@ -27,15 +27,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// R1 part 3 (#7611, #7590): once DSSE PAE verification has consumed the raw
-// payload bytes — signature check + the artifact-substitution subject guard —
-// the envelope bytes are dead weight on the result. Everything downstream
-// reads the PARSED forms: the policy gate reads Statement/Collection, rego
-// reads the attestor (Statement.Predicate stays retained), the dedup key
-// hashes the Statement + verified-signer set, and the diagnostic paths read
-// Statement.Subject. Retaining Payload (a full copy of statement+predicate)
-// and Signatures (certs, KBs each) per result multiplied resident bytes per
-// candidate across the whole traversal (#7572).
+// R1 part 3 (#7611, #7590), amended by the #7572 pass-time compaction: after
+// DSSE PAE verification + the artifact-substitution subject guard, Signatures
+// (certs, KBs each) and the raw Statement.Predicate message are dead weight
+// on every result and are released. The raw PAYLOAD is retained only on
+// candidates that VERIFIED: it is the policy gate's single rehydration source
+// (artifactsFrom chain checks, cross-step rego input) and the content
+// identity for the merge key; the gate moves it aside and drops the decoded
+// bodies at pass time (policy.compactPassed). Candidates with no
+// verification future release everything.
 
 // TestVerifiedSearch_ReleasesEnvelopeBytesOnPass: a verified, subject-matched
 // result must carry no raw envelope bytes.
@@ -54,10 +54,19 @@ func TestVerifiedSearch_ReleasesEnvelopeBytesOnPass(t *testing.T) {
 	r := results[0]
 
 	require.NotEmpty(t, r.Verifiers, "control: the candidate must verify")
-	assert.Empty(t, r.Envelope.Payload,
-		"verified result must not retain raw payload bytes — verification and the subject guard already consumed them; the parsed Statement is the retained form")
+	// #7572 pass-time compaction contract: a VERIFIED candidate KEEPS its raw
+	// payload — it is the policy gate's rehydration source (artifactsFrom
+	// chain checks, cross-step rego input) and the content-identity input for
+	// the merge key; the gate moves it aside and drops the decoded bodies at
+	// pass time (policy.compactPassed). Signatures and the raw
+	// Statement.Predicate (a second copy of what Payload carries) are
+	// released here.
+	assert.NotEmpty(t, r.Envelope.Payload,
+		"verified result must retain the raw payload — it is the gate's rehydration source and merge-key input")
 	assert.Empty(t, r.Envelope.Signatures,
 		"verified result must not retain signature/cert bytes — ValidFunctionaries/Verifiers carry the verified identities")
+	assert.Empty(t, r.Statement.Predicate,
+		"verified result must not retain the raw predicate message — Payload already carries those bytes")
 
 	// The parsed, verdict-bearing forms MUST survive the release.
 	assert.NotEmpty(t, r.Statement.Subject, "parsed statement must be retained")

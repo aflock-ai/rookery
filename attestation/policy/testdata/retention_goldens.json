@@ -1,0 +1,11 @@
+{
+  "_comment": "Golden verification-outcome fingerprints for the retention-invariant suite (retention_invariants_test.go). Each entry pins one end-to-end Policy.Verify scenario's outcome, captured from unmodified verification code. Any retention/perf change must reproduce every entry bit-identically. Add new scenarios freely; this set is expected to grow large.",
+  "captured": "2026-07-30",
+  "goldens": {
+    "A-pass": "33708186ccb151a548447d1e05279033794c77f1eb4ea9ccc6e0dc9846423651",
+    "B-merge": "e7cd11796b3ad8a741dc5078e89685eecc978aef230bba7c1ba7a4feee68a4e1",
+    "C-rego": "8dfa21a6802cd05e3ee87d21de49db13402ddda095a25e96af31f1b45dd7ab82",
+    "D-artifacts": "2af5a380d5f1492e32b0117f2c19ca967a256e714ddf5e2c46c7ddd84a9134ec",
+    "D-mismatch": "a2d1225337198e9438a1605f98744a0c0bc6846d66401bcd8fbf4eee9a43fa42"
+  }
+}

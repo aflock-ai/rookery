@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/source"
 )
 
@@ -103,23 +104,93 @@ func closureIntersections(passed []PassedCollection, closure []string) ([]map[st
 	admittingDigests := make([]map[string]struct{}, len(passed))
 	fanout := make(map[string]int)
 	for i, pc := range passed {
-		ds := make(map[string]struct{})
-		for _, sub := range pc.Collection.Statement.Subject {
-			for algorithm, digest := range sub.Digest {
-				if !cryptoutil.IsMatchableSubjectDigest(algorithm, digest) {
-					continue
-				}
-				if _, ok := closureSet[digest]; ok {
-					ds[digest] = struct{}{}
-				}
-			}
-		}
+		ds := closureIntersectOne(pc.Collection.Statement.Subject, closureSet)
 		admittingDigests[i] = ds
 		for d := range ds {
 			fanout[d]++
 		}
 	}
 	return admittingDigests, fanout
+}
+
+// closureIntersectOne returns one candidate's matchable subject digests that
+// intersect the closure set — the shared extraction behind the batch guard's
+// closureIntersections and the streamed pipeline's fanoutTracker, so the two
+// paths can never disagree on what counts as a candidate's closure
+// connection.
+func closureIntersectOne(subjects []intoto.Subject, closureSet map[string]struct{}) map[string]struct{} {
+	ds := make(map[string]struct{})
+	for _, sub := range subjects {
+		for algorithm, digest := range sub.Digest {
+			if !cryptoutil.IsMatchableSubjectDigest(algorithm, digest) {
+				continue
+			}
+			if _, ok := closureSet[digest]; ok {
+				ds[digest] = struct{}{}
+			}
+		}
+	}
+	return ds
+}
+
+// fanoutTracker is the streaming counterpart of the guard's counting pass
+// (closureIntersections): it accumulates per-digest fan-out counts as
+// functionary-AUTHORIZED candidates arrive, so the interleaved step pipeline
+// can (a) skip gate evaluation for candidates that are ALREADY provably
+// hub-only — counts only grow, so a candidate whose every closure digest has
+// exceeded maxFanout can never be admitted by the final classification — and
+// (b) reproduce the batch guard's end-of-set hub classification exactly
+// (classifyAdmission over the final counts). The authorization precondition
+// documented on filterHubOnlyPassed applies unchanged: only candidates that
+// passed this step's functionary triage may be added.
+type fanoutTracker struct {
+	maxFanout  int
+	closureSet map[string]struct{}
+	fanout     map[string]int
+}
+
+// newFanoutTracker returns nil when the guard is disabled (non-positive
+// limit or empty closure), mirroring filterHubOnlyPassed's no-op condition.
+func newFanoutTracker(closure []string, maxFanout int) *fanoutTracker {
+	if maxFanout <= 0 || len(closure) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(closure))
+	for _, d := range closure {
+		set[d] = struct{}{}
+	}
+	return &fanoutTracker{maxFanout: maxFanout, closureSet: set, fanout: map[string]int{}}
+}
+
+// add records one authorized candidate's subjects, returning its
+// closure-intersection set and whether the candidate is already PROVABLY
+// hub-only or closure-disjoint — a verdict later candidates can only confirm
+// (fan-out counts are monotone), never reverse. Provably-rejected candidates
+// need no gate evaluation: their gate verdict would be discarded by the
+// final classification anyway, and skipping it bounds the guard-active
+// pipeline's extra gate work at ~maxFanout evaluations per hub digest.
+func (ft *fanoutTracker) add(subjects []intoto.Subject) (map[string]struct{}, bool) {
+	ds := closureIntersectOne(subjects, ft.closureSet)
+	provablyRejected := true
+	for d := range ds {
+		ft.fanout[d]++
+		if ft.fanout[d] <= ft.maxFanout {
+			provablyRejected = false
+		}
+	}
+	return ds, provablyRejected
+}
+
+// hubs returns the final hub-digest set, valid once every authorized
+// candidate has been added.
+func (ft *fanoutTracker) hubs() map[string]struct{} {
+	hubs := make(map[string]struct{})
+	for d, n := range ft.fanout {
+		if n > ft.maxFanout {
+			hubs[d] = struct{}{}
+		}
+	}
+	return hubs
 }
 
 // classifyAdmission reports whether any of the candidate's closure digests is
@@ -147,18 +218,10 @@ func hubRejectReason(hubOnly []string, maxFanout int) error {
 }
 
 // compactHubReject strips the retained bodies from a hub-rejected result.
-// Rejected results are WRITE-ONLY downstream — judge's step_results reads
-// only Reference and Reason, and the VSA's inputAttestations digests come
-// from PayloadDigests — so carrying the parsed Statement/Collection (two
-// full copies of the document per candidate) would keep per-turn memory
-// proportional to the corpus the guard just excluded. Reference, Errors and
-// PayloadDigests survive; the bodies do not.
+// Delegates to compactRejected (policy.go), the shared write-only-downstream
+// compaction now applied to EVERY rejection path; relative to the original
+// hub-only compaction it additionally preserves Collection.Name and Warnings,
+// which judge's deny-reason extraction reads.
 func compactHubReject(c source.CollectionVerificationResult) source.CollectionVerificationResult {
-	return source.CollectionVerificationResult{
-		Errors: c.Errors,
-		CollectionEnvelope: source.CollectionEnvelope{
-			Reference:      c.Reference,
-			PayloadDigests: c.PayloadDigests,
-		},
-	}
+	return compactRejected(c)
 }
