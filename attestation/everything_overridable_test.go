@@ -132,6 +132,20 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// prewalk_override_test.go.
 	"DefaultPrewalkSkipDirs": {},
 
+	// DefaultManifestURL (cilock/internal/updatecheck) IS overridable via
+	// Config.ManifestURL; the env coupling (CILOCK_DIST_BASE, the same
+	// override install.sh honors) lives in cilock/cli/updatecheck.go — a
+	// different package by design, so the update-check library stays free
+	// of process-global reads. Same-package heuristic misses it.
+	"DefaultManifestURL": {},
+
+	// defaultTimeout (cilock/internal/updatecheck) is the update check's
+	// hard safety deadline and IS overridable via Config.Timeout at the
+	// API layer (same pattern as defaultHTTPTimeout). Deliberately not an
+	// operator knob: the check must never be tunable into blocking a
+	// build; the operator-facing control is CILOCK_SKIP_VERSION_CHECK=1.
+	"defaultTimeout": {},
+
 	// DefaultTrustScopes IS overridable via the `--scope` flag (and `--verify`)
 	// on `cilock trust`. The flag binds in cilock/cli/trust.go (different
 	// package from the default in cilock/internal/options/trust.go), so the

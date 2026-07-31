@@ -40,8 +40,14 @@ func New() *cobra.Command {
 	logger := newLogger()
 
 	cmd := &cobra.Command{
-		Use:               "cilock",
-		Short:             "Collect and verify attestations about your build environments",
+		Use:   "cilock",
+		Short: "Collect and verify attestations about your build environments",
+		Long: `Collect and verify attestations about your build environments.
+
+cilock checks cilock.dev at most once a day for a newer release and prints a
+notice when one exists (never prompting, never blocking, never changing exit
+codes). Set CILOCK_SKIP_VERSION_CHECK=1 to disable the check, e.g. in
+air-gapped environments.`,
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -99,8 +105,22 @@ func New() *cobra.Command {
 }
 
 func Execute() {
-	if err := New().Execute(); err != nil && !errors.Is(err, errHelpAdvanced) {
+	// Best-effort new-version check: runs concurrently with the command and
+	// reports (stderr only) after the real output. It can neither prompt nor
+	// change the exit code — see internal/updatecheck.
+	upd := startUpdateCheck(os.Args[1:])
+	err := New().Execute()
+	failed := err != nil && !errors.Is(err, errHelpAdvanced)
+	if failed {
+		// Log the command's real error BEFORE waiting on / printing the
+		// update notice, so a failure is never delayed or visually buried
+		// by version-check output.
 		log.Error(err)
+	}
+	if notice := upd.Notice(); notice != "" {
+		fmt.Fprintln(os.Stderr, notice) //nolint:gosec // G705: CLI notice to stderr, not an HTTP/HTML sink; every interpolated part is semver-validated or constant.
+	}
+	if failed {
 		os.Exit(1)
 	}
 }
