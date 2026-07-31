@@ -60,6 +60,7 @@ type Attestor struct {
 	collectionSource   source.Sourcer
 	subjectDigestSets  []cryptoutil.DigestSet
 	aiServerURL        string
+	maxSubjectFanout   int
 	kmsProviderOptions map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 }
 
@@ -134,6 +135,12 @@ func (a *Attestor) SetKMSProviderOptions(opts map[string][]func(signer.SignerPro
 	a.kmsProviderOptions = opts
 }
 
+// SetMaxSubjectFanout enables the policy engine's subject fan-out guard for
+// this verification (policy.WithMaxSubjectFanout). n <= 0 leaves it off.
+func (a *Attestor) SetMaxSubjectFanout(n int) {
+	a.maxSubjectFanout = n
+}
+
 // PolicyVerifyResult interface methods
 
 func (a *Attestor) StepResults() map[string]policy.StepResult {
@@ -206,18 +213,27 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 		timestampVerifiers = append(timestampVerifiers, timestamp.NewVerifier(timestamp.VerifyWithCerts(certs)))
 	}
 
+	// WithEvidenceHashes: the source releases raw payload bytes from results
+	// after verification, so it must record their digests (with THIS context's
+	// hash set) for the VSA's inputAttestations — the digest is the evidence
+	// identity once the bytes are gone.
 	verifiedSource := source.NewVerifiedSource(
 		a.collectionSource,
 		dsse.VerifyWithVerifiers(pubkeys...),
 		dsse.VerifyWithRoots(roots...),
 		dsse.VerifyWithIntermediates(intermediates...),
 		dsse.VerifyWithTimestampVerifiers(timestampVerifiers...),
-	)
+	).WithEvidenceHashes(ctx.Hashes())
 
 	verifyOpts := []policy.VerifyOption{
 		policy.WithSubjectDigests(a.seedDigestStrings()),
-		policy.WithVerifiedSource(verifiedSource),
 	}
+	if a.maxSubjectFanout > 0 {
+		verifyOpts = append(verifyOpts, policy.WithMaxSubjectFanout(a.maxSubjectFanout))
+	}
+	verifyOpts = append(verifyOpts,
+		policy.WithVerifiedSource(verifiedSource),
+	)
 	if a.aiServerURL != "" {
 		verifyOpts = append(verifyOpts, policy.WithAiServerURL(a.aiServerURL))
 	}
@@ -244,13 +260,35 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 	return nil
 }
 
+// evidenceDigest resolves the digest of the exact signed payload bytes a
+// result was verified against. VerifiedSource releases raw payload bytes
+// from results after verification, recording their digest set first
+// (PayloadDigests) — prefer that. A result that still carries its payload
+// (a source that does not release bytes) is digested directly, exactly as
+// before. Never digest released (nil) bytes: that would record the digest
+// of EMPTY input as the identity of real evidence.
+func evidenceDigest(ctx *attestation.AttestationContext, ce source.CollectionEnvelope) (cryptoutil.DigestSet, bool) {
+	if len(ce.PayloadDigests) > 0 {
+		return ce.PayloadDigests, true
+	}
+	if len(ce.Envelope.Payload) == 0 {
+		log.Debugf("skipping evidence descriptor for %s: payload released and no recorded digest", ce.Reference)
+		return nil, false
+	}
+	digest, err := cryptoutil.CalculateDigestSetFromBytes(ce.Envelope.Payload, ctx.Hashes())
+	if err != nil {
+		log.Debugf("failed to calculate evidence hash: %v", err)
+		return nil, false
+	}
+	return digest, true
+}
+
 func verificationSummaryFromResults(ctx *attestation.AttestationContext, policyEnvelope dsse.Envelope, stepResults map[string]policy.StepResult, accepted bool) (slsa.VerificationSummary, error) {
 	inputAttestations := make([]slsa.ResourceDescriptor, 0, len(stepResults))
 	for _, step := range stepResults {
 		for _, collection := range step.Passed {
-			digest, err := cryptoutil.CalculateDigestSetFromBytes(collection.Collection.Envelope.Payload, ctx.Hashes())
-			if err != nil {
-				log.Debugf("failed to calculate evidence hash: %v", err)
+			digest, ok := evidenceDigest(ctx, collection.Collection.CollectionEnvelope)
+			if !ok {
 				continue
 			}
 
@@ -262,9 +300,8 @@ func verificationSummaryFromResults(ctx *attestation.AttestationContext, policyE
 
 		if !accepted {
 			for _, collection := range step.Rejected {
-				digest, err := cryptoutil.CalculateDigestSetFromBytes(collection.Collection.Envelope.Payload, ctx.Hashes())
-				if err != nil {
-					log.Debugf("failed to calculate evidence hash: %v", err)
+				digest, ok := evidenceDigest(ctx, collection.Collection.CollectionEnvelope)
+				if !ok {
 					continue
 				}
 

@@ -109,10 +109,41 @@ type VerifiedSourcer interface {
 type VerifiedSource struct {
 	source     Sourcer
 	verifyOpts []dsse.VerificationOption
+	// evidenceHashes, when non-empty, makes Search record each candidate's
+	// payload DigestSet on the result (CollectionEnvelope.PayloadDigests)
+	// before releaseEnvelopeBytes drops the bytes. The VSA's inputAttestations
+	// must digest the exact signed payload of each evidence collection; once
+	// the bytes are released, the digest is the only faithful carrier of that
+	// identity. Callers that produce a VSA (the policyverify attestor) set
+	// this to their attestation context's hash set so stored digests match
+	// what the summary would have computed from the live bytes.
+	evidenceHashes []cryptoutil.DigestValue
 }
 
 func NewVerifiedSource(source Sourcer, verifyOpts ...dsse.VerificationOption) *VerifiedSource {
-	return &VerifiedSource{source, verifyOpts}
+	return &VerifiedSource{source: source, verifyOpts: verifyOpts}
+}
+
+// WithEvidenceHashes returns the same source configured to record payload
+// digests (computed with the given hash set) on every Search result before
+// the raw envelope bytes are released. See the evidenceHashes field doc.
+func (s *VerifiedSource) WithEvidenceHashes(hashes []cryptoutil.DigestValue) *VerifiedSource {
+	s.evidenceHashes = hashes
+	return s
+}
+
+// recordPayloadDigests captures the payload's digest set on the result copy
+// prior to byte release. Best-effort by design: a digest failure leaves
+// PayloadDigests empty, and the VSA summary then behaves exactly as it does
+// for a nil payload today (the descriptor is skipped with a debug log) —
+// never a wrong digest.
+func (s *VerifiedSource) recordPayloadDigests(ce *CollectionEnvelope) {
+	if len(s.evidenceHashes) == 0 || len(ce.Envelope.Payload) == 0 {
+		return
+	}
+	if ds, err := cryptoutil.CalculateDigestSetFromBytes(ce.Envelope.Payload, s.evidenceHashes); err == nil {
+		ce.PayloadDigests = ds
+	}
 }
 
 // truncLogField returns s truncated to n bytes for log-field display. It is
@@ -126,7 +157,50 @@ func truncLogField(s string) string {
 	return s[:n]
 }
 
-func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionVerificationResult, error) { //nolint:gocognit,gocyclo // per-candidate verify loop with per-verifier pass/fail accounting plus the artifact-substitution subject guard; the branches enumerate signature-verification states, which is the function's purpose.
+// releaseEnvelopeBytes drops the raw DSSE bytes from a result-bound copy of a
+// candidate envelope AFTER verification has consumed them (R1 part 3, #7611 /
+// #7590). PAE signature verification and the artifact-substitution subject
+// guard are the only readers of Envelope.Payload, and Verifiers /
+// ValidFunctionaries / VerifiedTimestampsByKeyID carry everything signature-
+// derived that later stages read. Downstream, the policy gate reads the
+// parsed Statement/Collection, rego reads the attestor (Statement.Predicate
+// is retained untouched), the passed-collection dedup key hashes the
+// Statement + verified-signer set, and diagnostics read Statement.Subject —
+// none of them read the bytes. Retaining Payload (a full duplicate of
+// statement+predicate) and Signatures (certificate PEMs) per candidate per
+// step per depth multiplied resident verify memory (#7572).
+//
+// Operates on the RESULT copy only: CollectionEnvelope is a value, so the
+// underlying Sourcer's stored envelope (e.g. MemorySource) keeps its bytes
+// and later searches still verify (TestVerifiedSearch_ReleaseDoesNotCorruptTheSource).
+func releaseEnvelopeBytes(ce *CollectionEnvelope) {
+	ce.Envelope.Payload = nil
+	ce.Envelope.Signatures = nil
+}
+
+func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionVerificationResult, error) {
+	// STREAMING: when the source can yield candidates one at a time, verify
+	// each as it arrives and retain only the compact (bytes-released) result.
+	// The slice path below materializes EVERY candidate's full envelope
+	// simultaneously before the first verification runs — against a large
+	// matching corpus that transient set, not any retained state, IS the heap
+	// peak (#7572: two concurrent 220-candidate searches drove 168→4,140 MiB
+	// in 14s; byte release after the fact moved the peak by only 4%). One
+	// candidate's raw bytes in flight at a time makes the peak O(largest
+	// envelope), not O(corpus).
+	if streamer, ok := s.source.(StreamingSourcer); ok {
+		results := make([]CollectionVerificationResult, 0)
+		streamErr := streamer.SearchStream(ctx, collectionName, subjectDigests, attestations, func(toVerify CollectionEnvelope) error {
+			results = append(results, s.verifyCandidate(toVerify, subjectDigests))
+			return nil
+		})
+		if streamErr != nil {
+			return nil, streamErr
+		}
+		fmt.Fprintf(os.Stderr, "[verified-source] verified %d candidate envelope(s) for collection %q (streamed)\n", len(results), collectionName)
+		return results, nil
+	}
+
 	candidates, err := s.source.Search(ctx, collectionName, subjectDigests, attestations)
 	if err != nil {
 		return nil, err
@@ -138,75 +212,87 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 	// as a verdict when it just means "fetched, pending verification".
 	fmt.Fprintf(os.Stderr, "[verified-source] verifying %d candidate envelope(s) for collection %q\n", len(candidates), collectionName)
 	for _, toVerify := range candidates {
-		envelopeVerifiers, err := toVerify.Envelope.Verify(s.verifyOpts...)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature verification FAILED: %v\n", toVerify.Reference, err)
-			results = append(results,
-				CollectionVerificationResult{
-					Errors:             []error{fmt.Errorf("failed to verify envelope: %w", err)},
-					CollectionEnvelope: toVerify,
-				},
-			)
-			continue
-		}
-
-		// Log each checked verifier with an explicit pass/fail verdict rather
-		// than a raw "error=<nil>", which reads as cryptic to an operator.
-		for _, cv := range envelopeVerifiers {
-			kid := "unknown"
-			if cv.Verifier != nil {
-				if k, err := cv.Verifier.KeyID(); err == nil {
-					kid = truncLogField(k)
-				}
-			}
-			if cv.Error == nil {
-				fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature OK (verifier kid=%s)\n", truncLogField(toVerify.Reference), kid)
-			} else {
-				fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature rejected (verifier kid=%s): %v\n", truncLogField(toVerify.Reference), kid, cv.Error)
-			}
-		}
-
-		passedVerifiers := make([]cryptoutil.Verifier, 0)
-		timestampsByKeyID := make(map[string][]time.Time)
-		for _, verifier := range envelopeVerifiers {
-			if verifier.Error == nil {
-				passedVerifiers = append(passedVerifiers, verifier.Verifier)
-				if len(verifier.VerifiedTimestamps) > 0 && verifier.Verifier != nil {
-					// Bind the verified TSA times to THIS verifier's key so
-					// downstream policy checks can scope them to the
-					// functionary-matched signature. A KeyID failure drops the
-					// timestamps (fail-closed) rather than misattributing them.
-					if kid, kerr := verifier.Verifier.KeyID(); kerr == nil {
-						timestampsByKeyID[kid] = append(timestampsByKeyID[kid], verifier.VerifiedTimestamps...)
-					}
-				}
-			}
-		}
-
-		var Errors []error
-		if len(passedVerifiers) == 0 {
-			Errors = append(Errors, fmt.Errorf("no verifiers passed"))
-		} else if matches, merr := payloadMatchesSubjects(toVerify.Envelope.Payload, subjectDigests); merr != nil || !matches {
-			// Artifact-substitution guard: signature(s) verified, so the payload
-			// bytes are authentic — require the SIGNED payload's subjects to match
-			// the requested artifact. Read from Envelope.Payload, never the
-			// source-populated Statement field (which can differ from what was
-			// signed). Fail closed on a malformed payload.
-			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s REJECTED: signed subject does not match requested artifact digest(s) (artifact-substitution guard)\n", truncLogField(toVerify.Reference))
-			Errors = append(Errors, fmt.Errorf("collection subject does not match requested artifact digest(s): artifact-substitution guard"))
-			passedVerifiers = nil
-			timestampsByKeyID = nil
-		}
-
-		results = append(results, CollectionVerificationResult{
-			Verifiers:                 passedVerifiers,
-			VerifiedTimestampsByKeyID: timestampsByKeyID,
-			CollectionEnvelope:        toVerify,
-			Errors:                    Errors,
-		})
+		results = append(results, s.verifyCandidate(toVerify, subjectDigests))
 	}
 
 	return results, nil
+}
+
+// verifyCandidate runs the full per-candidate pipeline — DSSE signature
+// verification, verifier accounting, the artifact-substitution subject guard,
+// digest recording and byte release — and returns the compact result. It is
+// the single implementation behind both the streamed and slice Search paths,
+// so the two can never diverge on a verdict.
+func (s *VerifiedSource) verifyCandidate(toVerify CollectionEnvelope, subjectDigests []string) CollectionVerificationResult { //nolint:gocognit,gocyclo // per-candidate verify with per-verifier pass/fail accounting plus the artifact-substitution subject guard; the branches enumerate signature-verification states, which is the function's purpose.
+	envelopeVerifiers, err := toVerify.Envelope.Verify(s.verifyOpts...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature verification FAILED: %v\n", toVerify.Reference, err)
+		s.recordPayloadDigests(&toVerify)
+		releaseEnvelopeBytes(&toVerify)
+		return CollectionVerificationResult{
+			Errors:             []error{fmt.Errorf("failed to verify envelope: %w", err)},
+			CollectionEnvelope: toVerify,
+		}
+	}
+
+	// Log each checked verifier with an explicit pass/fail verdict rather
+	// than a raw "error=<nil>", which reads as cryptic to an operator.
+	for _, cv := range envelopeVerifiers {
+		kid := "unknown"
+		if cv.Verifier != nil {
+			if k, err := cv.Verifier.KeyID(); err == nil {
+				kid = truncLogField(k)
+			}
+		}
+		if cv.Error == nil {
+			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature OK (verifier kid=%s)\n", truncLogField(toVerify.Reference), kid)
+		} else {
+			fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature rejected (verifier kid=%s): %v\n", truncLogField(toVerify.Reference), kid, cv.Error)
+		}
+	}
+
+	passedVerifiers := make([]cryptoutil.Verifier, 0)
+	timestampsByKeyID := make(map[string][]time.Time)
+	for _, verifier := range envelopeVerifiers {
+		if verifier.Error == nil {
+			passedVerifiers = append(passedVerifiers, verifier.Verifier)
+			if len(verifier.VerifiedTimestamps) > 0 && verifier.Verifier != nil {
+				// Bind the verified TSA times to THIS verifier's key so
+				// downstream policy checks can scope them to the
+				// functionary-matched signature. A KeyID failure drops the
+				// timestamps (fail-closed) rather than misattributing them.
+				if kid, kerr := verifier.Verifier.KeyID(); kerr == nil {
+					timestampsByKeyID[kid] = append(timestampsByKeyID[kid], verifier.VerifiedTimestamps...)
+				}
+			}
+		}
+	}
+
+	var Errors []error
+	if len(passedVerifiers) == 0 {
+		Errors = append(Errors, fmt.Errorf("no verifiers passed"))
+	} else if matches, merr := payloadMatchesSubjects(toVerify.Envelope.Payload, subjectDigests); merr != nil || !matches {
+		// Artifact-substitution guard: signature(s) verified, so the payload
+		// bytes are authentic — require the SIGNED payload's subjects to match
+		// the requested artifact. Read from Envelope.Payload, never the
+		// source-populated Statement field (which can differ from what was
+		// signed). Fail closed on a malformed payload.
+		fmt.Fprintf(os.Stderr, "[verified-source] envelope %s REJECTED: signed subject does not match requested artifact digest(s) (artifact-substitution guard)\n", truncLogField(toVerify.Reference))
+		Errors = append(Errors, fmt.Errorf("collection subject does not match requested artifact digest(s): artifact-substitution guard"))
+		passedVerifiers = nil
+		timestampsByKeyID = nil
+	}
+
+	// Verification + subject guard are complete: the raw bytes have served
+	// their only purpose. Release them from the result copy.
+	s.recordPayloadDigests(&toVerify)
+	releaseEnvelopeBytes(&toVerify)
+	return CollectionVerificationResult{
+		Verifiers:                 passedVerifiers,
+		VerifiedTimestampsByKeyID: timestampsByKeyID,
+		CollectionEnvelope:        toVerify,
+		Errors:                    Errors,
+	}
 }
 
 // SearchByPredicateType delegates to the underlying Sourcer and then runs

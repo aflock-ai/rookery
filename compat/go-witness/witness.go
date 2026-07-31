@@ -47,3 +47,4 @@ var VerifyWithPolicyCARoots = workflow.VerifyWithPolicyCARoots
 var VerifyWithPolicyCAIntermediates = workflow.VerifyWithPolicyCAIntermediates
 var VerifyWithAiServerURL = workflow.VerifyWithAiServerURL
 var VerifyWithKMSProviderOptions = workflow.VerifyWithKMSProviderOptions
+var VerifyWithMaxSubjectFanout = workflow.VerifyWithMaxSubjectFanout

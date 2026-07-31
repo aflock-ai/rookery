@@ -186,6 +186,7 @@ type verifyOptions struct {
 	verifiedSource      source.VerifiedSourcer
 	subjectDigests      []string
 	searchDepth         int
+	maxSubjectFanout    int
 	aiServerURL         string
 	clockSkewTolerance  time.Duration
 	requireAllArtifacts bool
@@ -206,6 +207,25 @@ func WithSubjectDigests(subjectDigests []string) VerifyOption {
 func WithSearchDepth(depth int) VerifyOption {
 	return func(vo *verifyOptions) {
 		vo.searchDepth = depth
+	}
+}
+
+// WithMaxSubjectFanout enables the subject fan-out guard: during step
+// verification, a closure digest matched by more than n candidates in one
+// search is treated as a HUB (shared base-image layer, runner image,
+// toolchain blob — digests that connect every build in a tenant), and
+// candidates whose ONLY intersection with the search closure is a hub digest
+// are rejected before the step gate. This confines a verify to the dispatch
+// subject's own evidence closure (order ~10 attestations per commit) instead
+// of the whole tenant corpus.
+//
+// SOUNDNESS: the guard only ever drops candidates, and admitted candidates
+// still undergo per-envelope signature verification and the step gate, so
+// its failure mode is a false REJECT, never a false PASS. n <= 0 disables
+// the guard entirely (legacy behavior).
+func WithMaxSubjectFanout(n int) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.maxSubjectFanout = n
 	}
 }
 
@@ -580,6 +600,20 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 
 			// Verify the functionaries
 			functionaryCheckResults := step.checkFunctionaries(collections, trustBundles)
+
+			// Subject fan-out guard: confine this verify to the dispatch
+			// subject's evidence closure — candidates connected only through
+			// hub digests are dropped before the gate's attestation checks.
+			// Applied to the FUNCTIONARY-AUTHORIZED set, never the raw
+			// candidates: only evidence the policy authorizes for THIS step
+			// may classify a digest as a hub, or a signer trusted for some
+			// other step could flood a victim digest and suppress this step's
+			// legitimate evidence. False-reject-only; see filterHubOnlyPassed.
+			var hubRejected []RejectedCollection
+			if vo.maxSubjectFanout > 0 {
+				functionaryCheckResults.Passed, hubRejected = filterHubOnlyPassed(functionaryCheckResults.Passed, vo.subjectDigests, vo.maxSubjectFanout)
+			}
+
 			passedCollections := make([]source.CollectionVerificationResult, len(functionaryCheckResults.Passed))
 			for i, pc := range functionaryCheckResults.Passed {
 				passedCollections[i] = pc.Collection
@@ -594,6 +628,10 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 
 			stepResult := step.validateAttestations(passedCollections, vo.aiServerURL, stepCtx)
 			stepResult.Rejected = append(stepResult.Rejected, functionaryCheckResults.Rejected...)
+			// Hub-suppressed candidates are reported, never silently dropped:
+			// an operator whose expected evidence was demoted as a hub sees
+			// the exact digests and the limit that fired.
+			stepResult.Rejected = append(stepResult.Rejected, hubRejected...)
 
 			// We perform many searches against the same step (once per depth
 			// iteration), so we merge results across depths. The SAME collection

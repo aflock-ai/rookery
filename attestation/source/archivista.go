@@ -50,6 +50,24 @@ func NewArchvistSource(client *archivista.Client) *ArchivistaSource {
 }
 
 func (s *ArchivistaSource) Search(ctx context.Context, collectionName string, subjectDigests, attestations []string) ([]CollectionEnvelope, error) {
+	envelopes := make([]CollectionEnvelope, 0)
+	err := s.SearchStream(ctx, collectionName, subjectDigests, attestations, func(ce CollectionEnvelope) error {
+		envelopes = append(envelopes, ce)
+		return nil
+	})
+	if err != nil {
+		return []CollectionEnvelope{}, err
+	}
+	return envelopes, nil
+}
+
+// SearchStream is the streaming form of Search (source.StreamingSourcer):
+// each matching envelope is downloaded, parsed and yielded one at a time, so
+// a caller that compacts candidates as they arrive (VerifiedSource) never
+// holds the whole matching corpus in memory at once — Search's accumulated
+// []CollectionEnvelope was the verify-path heap peak against a large corpus
+// (#7572). Search delegates here; there is one download/parse implementation.
+func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionEnvelope) error) error {
 	s.mu.Lock()
 	excludeGitoids := make([]string, len(s.seenGitoids))
 	copy(excludeGitoids, s.seenGitoids)
@@ -62,10 +80,9 @@ func (s *ArchivistaSource) Search(ctx context.Context, collectionName string, su
 		ExcludeGitoids: excludeGitoids,
 	})
 	if err != nil {
-		return []CollectionEnvelope{}, err
+		return err
 	}
 
-	envelopes := make([]CollectionEnvelope, 0, len(gitoids))
 	processedGitoids := make([]string, 0, len(gitoids))
 	for _, gitoid := range gitoids {
 		env, err := s.client.Download(ctx, gitoid)
@@ -85,7 +102,11 @@ func (s *ArchivistaSource) Search(ctx context.Context, collectionName string, su
 		}
 
 		processedGitoids = append(processedGitoids, gitoid)
-		envelopes = append(envelopes, collectionEnv)
+		if err := yield(collectionEnv); err != nil {
+			// Aborted mid-iteration: mark NOTHING as seen, exactly like a
+			// failed batch — the next search must be able to retry the run.
+			return err
+		}
 	}
 
 	// Only mark gitoids as seen after ALL were successfully processed.
@@ -95,7 +116,7 @@ func (s *ArchivistaSource) Search(ctx context.Context, collectionName string, su
 	s.seenGitoids = append(s.seenGitoids, processedGitoids...)
 	s.mu.Unlock()
 
-	return envelopes, nil
+	return nil
 }
 
 // SearchByPredicateType queries Archivista for DSSE envelopes whose statement

@@ -30,6 +30,28 @@ type CollectionEnvelope struct {
 	Statement  intoto.Statement
 	Collection attestation.Collection
 	Reference  string
+	// PayloadDigests is the digest set of the exact signed Envelope.Payload
+	// bytes, recorded by VerifiedSource before it releases those bytes from
+	// the result (see VerifiedSource.WithEvidenceHashes). It preserves the
+	// evidence identity the VSA's inputAttestations must carry after the
+	// payload itself is gone. Empty when the producing source was not
+	// configured to record it.
+	PayloadDigests cryptoutil.DigestSet
+}
+
+// StreamingSourcer is an optional extension of Sourcer: it yields matching
+// candidates ONE AT A TIME instead of materializing the whole matching set.
+// VerifiedSource prefers this path when available, verifying and releasing
+// each candidate's raw bytes before the next is fetched, so peak memory is
+// O(largest envelope) instead of O(matching corpus) (#7572).
+//
+// Contract: yield is called once per candidate, in the same order Search
+// would have returned them; a yield error aborts the iteration and must be
+// returned unwrapped enough to surface, and the source must NOT mark aborted
+// candidates as seen (retry semantics identical to Search's all-or-nothing
+// seen-marking).
+type StreamingSourcer interface {
+	SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionEnvelope) error) error
 }
 
 // StatementEnvelope carries a non-Collection DSSE envelope (bare predicate)

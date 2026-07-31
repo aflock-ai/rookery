@@ -70,6 +70,7 @@ type verifyOptions struct {
 	subjectDigests               []cryptoutil.DigestSet
 	collectionSource             source.Sourcer
 	aiServerURL                  string
+	maxSubjectFanout             int
 	kmsProviderOptions           map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 }
 
@@ -148,6 +149,16 @@ func VerifyWithKMSProviderOptions(opts map[string][]func(signer.SignerProvider) 
 	}
 }
 
+// VerifyWithMaxSubjectFanout enables the policy engine's subject fan-out
+// guard (policy.WithMaxSubjectFanout): closure digests matched by more than n
+// candidates are hubs, and candidates connected to the verification closure
+// only through hubs are rejected before the step gate. n <= 0 disables.
+func VerifyWithMaxSubjectFanout(n int) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.maxSubjectFanout = n
+	}
+}
+
 type VerifyResult struct {
 	RunResult
 	VerificationSummary slsa.VerificationSummary
@@ -191,6 +202,13 @@ func Verify(ctx context.Context, policyEnvelope dsse.Envelope, policyVerifiers [
 	}
 	if vo.aiServerURL != "" {
 		configurer.SetAiServerURL(vo.aiServerURL)
+	}
+	if vo.maxSubjectFanout > 0 {
+		// Optional capability: asserted rather than added to the configurer
+		// interface so third-party attestor implementations keep compiling.
+		if mf, ok := att.(interface{ SetMaxSubjectFanout(int) }); ok {
+			mf.SetMaxSubjectFanout(vo.maxSubjectFanout)
+		}
 	}
 
 	if len(vo.signers) > 0 {
