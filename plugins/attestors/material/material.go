@@ -648,7 +648,21 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 // also the back-ref. This matches the planned reshape that the product
 // attestor follows in #127 — both attestors now hand exactly one
 // back-ref to Archivista per attestation, keyed on the tree root.
+//
+// An EMPTY tree is the exception, and note that the `MerkleRoot == ""` guard in
+// Subjects does NOT catch it: the empty-tree path computes and stores a real
+// root (the RFC 6962 empty-tree root, sha256("")). Every material-less step
+// computes that same value, so as a back-reference it is an edge joining all of
+// them into one clique — 1,923 such back-references across a 16,939-envelope
+// production corpus. TreeSize is the sound discriminator.
+//
+// Subjects() still asserts the root: "this step provably consumed nothing" is a
+// real claim and must stay distinguishable from an absent attestation. Only the
+// graph EDGE is withheld.
 func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
+	if a.TreeSize == 0 {
+		return map[string]cryptoutil.DigestSet{}
+	}
 	return a.Subjects()
 }
 

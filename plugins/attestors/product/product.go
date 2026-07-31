@@ -856,7 +856,22 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 // BackRefs mirrors Subjects per the v0.3 spec: the tree:products subject
 // is the only chainable subject the attestor produces. (Issue #126
 // intentionally narrowed BackRefs to the tree subject only.)
+//
+// An EMPTY tree is the one exception. Its root is the RFC 6962 empty-tree
+// root — sha256("") — which every product-less step computes, so it names no
+// particular step. Emitted as a back-reference it becomes a graph edge joining
+// all of them into a single clique: measured across a 16,939-envelope
+// production corpus, this one value accounts for 2,050 product back-references
+// and inflates a depth-3 verify from 9 reachable envelopes to 7,141.
+//
+// Subjects() deliberately still carries it. The statement's CLAIM ("this step
+// provably produced nothing") is worth asserting and distinguishable from an
+// absent attestation; it is only the EDGE that is meaningless. TreeSize is the
+// sound discriminator here — MerkleRoot is never "" for an empty tree.
 func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
+	if a.TreeSize == 0 {
+		return map[string]cryptoutil.DigestSet{}
+	}
 	return map[string]cryptoutil.DigestSet{
 		TreeSubjectName: a.rootDigestSet(),
 	}
