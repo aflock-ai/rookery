@@ -247,7 +247,7 @@ func TestSecurity_R3_260_Vault_HardcodedPKCS1v15(t *testing.T) {
 		"input":               "base64-encoded-digest",
 		"prehashed":           true,
 		"key_version":         int32(1),
-		"signature_algorithm": "pkcs1v15",
+		"signature_algorithm": algoPKCS1v15,
 	}
 
 	algo, ok := signData["signature_algorithm"].(string)
@@ -255,20 +255,20 @@ func TestSecurity_R3_260_Vault_HardcodedPKCS1v15(t *testing.T) {
 		t.Fatal("signature_algorithm should be a string")
 	}
 
-	if algo != "pkcs1v15" {
+	if algo != algoPKCS1v15 {
 		t.Fatalf("expected pkcs1v15, got %q", algo)
 	}
 
 	// The same hardcoded value appears in verify().
 	verifyData := map[string]interface{}{
-		"signature_algorithm": "pkcs1v15",
+		"signature_algorithm": algoPKCS1v15,
 		"input":               "base64-encoded-digest",
 		"signature":           "vault:v1:...",
 		"prehashed":           true,
 	}
 
 	verifyAlgo, _ := verifyData["signature_algorithm"].(string)
-	if verifyAlgo != "pkcs1v15" {
+	if verifyAlgo != algoPKCS1v15 {
 		t.Fatalf("verify also uses %q, not pkcs1v15", verifyAlgo)
 	}
 

@@ -43,6 +43,67 @@ import (
 const PolicyPredicate = "https://aflock.ai/policy/v0.1"
 const LegacyPolicyPredicate = "https://witness.testifysec.com/policy/v0.1"
 
+// sha256OfEmpty is sha256(""), which is also the RFC 6962 root of an EMPTY
+// Merkle tree. The material and product attestors compute exactly this value as
+// their tree root whenever a step consumed or produced nothing, so as a tree
+// root it is shared by every such step rather than identifying any one of them.
+const sha256OfEmpty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// The back-reference names whose CONTRACT defines sha256("") as the
+// empty-tree sentinel. Back-reference names are namespaced by the producing
+// attestor's type — "<type>/<name>" — so the suffix is what identifies the
+// contract regardless of attestor version or vendor prefix.
+//
+// Spelled literally rather than imported from plugins/attestors/{material,
+// product}: the attestation core must not depend on the plugin modules, and
+// those packages already import this one transitively.
+const (
+	materialTreeBackRefName = "/tree:materials"
+	productTreeBackRefName  = "/tree:products"
+)
+
+// isEmptyTreeHubBackRef reports whether a back-reference is the empty-MERKLE-TREE
+// sentinel — the one case where sha256("") is not an identity claim but a
+// "this step consumed/produced nothing" marker that every such step emits
+// identically. Expanding on it joins them all into a single clique.
+//
+// Measured on a 16,939-envelope production corpus: sha256("") appears as a
+// back-reference 3,973 times, and 100.0000% of those are material/product tree
+// roots (product 2,050, material 1,923). Non-tree back-reference emissions of
+// this value: zero. Guarding it cuts depth-3 reach by 87-100% depending on
+// dispatch shape (a build dispatch goes from 7,141 reachable envelopes to 9).
+//
+// SCOPED BY NAMESPACE, NOT BY VALUE ALONE. sha256("") is also the legitimate
+// content digest of a genuine zero-byte artifact, and a value-blind filter
+// would drop that edge too — falsely rejecting a collection reachable ONLY
+// through it (raised in review on #7689 and reproduced: the collection was
+// never searched). Restricting to the tree contracts removes that false-reject
+// class while dropping exactly the same 3,973 edges on real data.
+//
+// Why namespace scoping is safe rather than a concession: the EMISSION-side fix
+// stops new attestations from recording this edge at all, so this consumer-side
+// check exists solely for back-references already baked into signed payloads
+// that can never be re-signed — and every one of those is a tree root. Nothing
+// is given up.
+//
+// Laundering (relabelling sha256("") under, say, "commithash:") is deliberately
+// NOT defended here. Back-references are only harvested from collections that
+// PASS the step gate, so such an adversary is already a policy-authorized
+// functionary for the step and can emit any high-fanout digest they like — a
+// shared base-image layer, a toolchain blob. The bound on that adversary is
+// WithMaxSubjectFanout (production default VERIFY_SUBJECT_FANOUT_LIMIT=32),
+// not this check.
+//
+// FALSE-REJECT-ONLY: this may only decline to WIDEN the search. It never removes
+// a collection that some other digest makes reachable.
+func isEmptyTreeHubBackRef(backRefName, digest string) bool {
+	if digest != sha256OfEmpty {
+		return false
+	}
+	return strings.HasSuffix(backRefName, materialTreeBackRefName) ||
+		strings.HasSuffix(backRefName, productTreeBackRefName)
+}
+
 // +kubebuilder:object:generate=true
 type Policy struct {
 	Expires              metav1.Time                    `json:"expires" jsonschema:"title=Expires,description=Timestamp when this policy expires and should no longer be used for verification"`
@@ -682,8 +743,15 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 			// — otherwise a throwaway rejected collection can make an unrelated
 			// downstream collection reachable.
 			for _, pc := range stepResult.Passed {
-				for _, digestSet := range pc.Collection.Collection.BackRefs() {
+				for backRefName, digestSet := range pc.Collection.Collection.BackRefs() {
 					for _, digest := range digestSet {
+						// Empty-merkle-tree sentinel: shared identically by every
+						// step that consumed or produced nothing, so it names no
+						// particular collection and must not widen the search.
+						// See isEmptyTreeHubBackRef.
+						if isEmptyTreeHubBackRef(backRefName, digest) {
+							continue
+						}
 						if _, seen := knownDigests[digest]; !seen {
 							knownDigests[digest] = struct{}{}
 							nextDepthDigests = append(nextDepthDigests, digest)
@@ -833,7 +901,7 @@ func rehydrateAwaitingGate(c source.CollectionVerificationResult) (source.Collec
 // for steps carrying AI policies (external server calls) the entire gate is
 // deferred until admission is final (deferGateForAI), so a hub-rejected
 // candidate never triggers an AI request the batch path would not have made.
-func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.StreamingVerifiedSourcer, step Step, vo *verifyOptions, trustBundles map[string]TrustBundle, stepCtx map[string]interface{}, attestations []string) (StepResult, int, error) { //nolint:gocognit,gocyclo // one candidate's verify-triage-gate-compact lifecycle reads as a single pipeline; splitting it would scatter the per-candidate memory contract this function exists to enforce
+func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.StreamingVerifiedSourcer, step Step, vo *verifyOptions, trustBundles map[string]TrustBundle, stepCtx map[string]interface{}, attestations []string) (StepResult, int, error) { //nolint:gocognit,gocyclo,funlen // one candidate's verify-triage-gate-compact lifecycle reads as a single pipeline; splitting it would scatter the per-candidate memory contract this function exists to enforce
 	// authorizedCandidate is the compact per-candidate state retained while
 	// the stream is in flight: the gate verdict, the closure-intersection
 	// digests for the final fan-out classification, and the compacted

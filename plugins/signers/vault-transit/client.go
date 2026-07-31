@@ -41,6 +41,11 @@ func init() {
 const (
 	ReferenceScheme = "hashivault://"
 	providerName    = "kms-hashivault"
+
+	// algoPKCS1v15 is Vault Transit's signature_algorithm value for RSA keys.
+	// Named rather than repeated so the wire value has one definition the
+	// tests assert against instead of each restating the literal.
+	algoPKCS1v15 = "pkcs1v15"
 )
 
 var (
@@ -172,7 +177,7 @@ func signatureAlgorithmFor(keyType string) (algo string, send bool) {
 	switch {
 	case strings.HasPrefix(keyType, "rsa-"):
 		// Back-compat: Vault Transit RSA keys default to pkcs1v15 padding.
-		return "pkcs1v15", true
+		return algoPKCS1v15, true
 	default:
 		// ecdsa-p256/p384/p521, ed25519, and anything else we don't know
 		// about: let Vault decide.

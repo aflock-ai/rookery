@@ -180,7 +180,7 @@ func TestSign_RSA_KeepsPKCS1v15(t *testing.T) {
 				t.Fatalf("sign returned error: %v", err)
 			}
 			algo, ok := m.signReq["signature_algorithm"].(string)
-			if !ok || algo != "pkcs1v15" {
+			if !ok || algo != algoPKCS1v15 {
 				t.Errorf("expected signature_algorithm=pkcs1v15 for %s, got %v", kt, m.signReq["signature_algorithm"])
 			}
 		})
@@ -211,7 +211,7 @@ func TestVerify_RSA_KeepsPKCS1v15(t *testing.T) {
 		t.Fatalf("verify returned error: %v", err)
 	}
 	algo, ok := m.verifyReq["signature_algorithm"].(string)
-	if !ok || algo != "pkcs1v15" {
+	if !ok || algo != algoPKCS1v15 {
 		t.Errorf("expected verify signature_algorithm=pkcs1v15 for rsa-2048, got %v", m.verifyReq["signature_algorithm"])
 	}
 }
@@ -251,9 +251,9 @@ func TestSignatureAlgorithmFor_TableDriven(t *testing.T) {
 		wantAlgo string
 		wantSend bool
 	}{
-		{"rsa-2048", "pkcs1v15", true},
-		{"rsa-3072", "pkcs1v15", true},
-		{"rsa-4096", "pkcs1v15", true},
+		{"rsa-2048", algoPKCS1v15, true},
+		{"rsa-3072", algoPKCS1v15, true},
+		{"rsa-4096", algoPKCS1v15, true},
 		{"ecdsa-p256", "", false},
 		{"ecdsa-p384", "", false},
 		{"ecdsa-p521", "", false},
