@@ -3,8 +3,9 @@
 The detection catalog ships with attestation recipes for AWS data-plane
 services. Each recipe issues a real API call against a real AWS account
 and verifies that cilock produces a signed bundle. The current
-validation account is `testifysec-demo` (898769392027), profile
-`testifysec-demo`.
+validation account is a dedicated demo account, reached through the
+`testifysec-demo` profile. Point that profile at whichever account you
+validate against.
 
 ## Setup
 
@@ -143,7 +144,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::898769392027:role/CIlockAttestor
+          role-to-assume: arn:aws:iam::<your-account-id>:role/CIlockAttestor
           aws-region: us-east-1
       - name: Attest cloud posture
         run: |

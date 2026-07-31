@@ -513,7 +513,7 @@ RECIPES: list[Recipe] = [
            invoke=args_only(["go", "test", "./..."])),
 
     # --- Cloud audit log queries ---
-    # Real data-plane validation: hit AWS account 898769392027 (testifysec-demo).
+    # Real data-plane validation: hits the account behind the testifysec-demo profile.
     # Previously this recipe ran `aws cloudtrail help` (no data); now it
     # actually queries the live CloudTrail audit log.
     Recipe(name="cloudtrail", need="aws", category="posture-scan",
@@ -654,7 +654,7 @@ RECIPES: list[Recipe] = [
            # --version to validate cilock wraps the binary.
            expect_uris=[URI_COMMANDRUN],
            invoke=args_only(["jest", "--version"])),
-    # ===== AWS data-plane validation (testifysec-demo account 898769392027) =====
+    # ===== AWS data-plane validation (testifysec-demo profile) =====
     # prowler is a plugin attestor; this exercises a real account scan
     # restricted to a single cheap check (--check ec2_instance_account_imdsv2_enabled).
     Recipe(name="prowler", need="prowler", category="posture-scan",
@@ -686,9 +686,9 @@ RECIPES: list[Recipe] = [
                {"AWS_PROFILE": "testifysec-demo"},
                fix,
            )),
-    # AWS Security Hub — query real findings from testifysec-demo
-    # (account 898769392027). The recipe is bounded to 5 findings so it
-    # stays fast and produces a small JSON blob.
+    # AWS Security Hub — query real findings from testifysec-demo.
+    # The recipe is bounded to 5 findings so it stays fast and produces
+    # a small JSON blob.
     Recipe(name="aws-security-hub", need="aws", category="posture-scan",
            expect_uris=[URI_COMMANDRUN],
            allow_nonzero=True,
