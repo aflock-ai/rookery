@@ -83,7 +83,20 @@ type Sourcer interface {
 	SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error)
 }
 
-func envelopeToCollectionEnvelope(reference string, env dsse.Envelope) (CollectionEnvelope, error) {
+// EnvelopeToCollectionEnvelope decodes a DSSE envelope into a
+// CollectionEnvelope: the in-toto Statement out of the envelope payload, and
+// the attestation Collection out of the Statement predicate.
+//
+// Exported so callers outside this package can decode envelopes the same way
+// its own Sourcers do, instead of maintaining a parallel copy that drifts
+// (judge-api's EntSource previously hand-copied this and lost the empty
+// payload / empty predicateType guards below).
+//
+// It validates before decoding: an empty payload and an empty or
+// non-collection predicateType are rejected with a named error rather than
+// producing a zero-valued Collection that later reads as "a collection with
+// no attestations".
+func EnvelopeToCollectionEnvelope(reference string, env dsse.Envelope) (CollectionEnvelope, error) {
 	if len(env.Payload) == 0 {
 		return CollectionEnvelope{}, fmt.Errorf("envelope %s has empty payload", reference)
 	}

@@ -93,7 +93,7 @@ func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName stri
 			continue
 		}
 
-		collectionEnv, err := envelopeToCollectionEnvelope(gitoid, env)
+		collectionEnv, err := EnvelopeToCollectionEnvelope(gitoid, env)
 		if err != nil {
 			// Skip non-collection envelopes (policy DSSEs, VSAs, etc.)
 			log.Debugf("archivista source: skipping gitoid %s: %v", gitoid, err)

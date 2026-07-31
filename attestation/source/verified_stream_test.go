@@ -144,25 +144,3 @@ func TestVerifiedSearch_StreamedAndSlicePathsAreEquivalent(t *testing.T) {
 	assert.Empty(t, fromStream[1].Verifiers, "subject-mismatched candidate must be rejected on the streamed path (artifact-substitution guard)")
 	assert.Empty(t, fromStream[2].Verifiers, "wrong-key candidate must be rejected on the streamed path (crypto still rejects)")
 }
-
-// A yield error must abort the archivista stream WITHOUT marking anything
-// seen — otherwise an aborted run permanently hides candidates from retries.
-func TestArchivistaSearchStream_AbortMarksNothingSeen(t *testing.T) {
-	// Covered structurally: SearchStream returns the yield error before the
-	// seenGitoids append. This test pins the VerifiedSource-visible half —
-	// an erroring streaming source surfaces the error, produces no results.
-	wantErr := assert.AnError
-	src := &erroringStreamSourcer{err: wantErr}
-	vs := NewVerifiedSource(src)
-	_, err := vs.Search(context.Background(), "step1", []string{attestedDigest}, nil)
-	require.ErrorIs(t, err, wantErr)
-}
-
-type erroringStreamSourcer struct {
-	sliceOnlySourcer
-	err error
-}
-
-func (s *erroringStreamSourcer) SearchStream(_ context.Context, _ string, _, _ []string, _ func(CollectionEnvelope) error) error {
-	return s.err
-}

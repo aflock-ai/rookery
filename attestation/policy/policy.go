@@ -803,8 +803,17 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 			break
 		}
 
-		// Case 2: every step is already satisfied. Safe only when widening the
-		// search cannot subtract from the verdict — see searchExpansionIsMonotone.
+		// Case 2: every step is already satisfied, and the policy shape has no
+		// AttestationsFrom (the only construct that makes verification
+		// arbitrarily non-monotone). Safe because the break fires ONLY on an
+		// already-passing verdict, so it can never skip evidence that would
+		// rescue a failing step — see searchExpansionIsMonotone for why the
+		// fan-out guard's non-monotonicity does not break this.
+		//
+		// NOTE: a multi-step policy that is only PARTIALLY satisfied never
+		// takes either break and runs the full depth walk, re-searching every
+		// step — including the already-satisfied ones — on every iteration.
+		// That is the dominant cost shape in practice, not attestationsFrom.
 		if p.searchExpansionIsMonotone() && p.allStepsSatisfied(ctx, vo, resultsByStep) {
 			break
 		}
@@ -1053,13 +1062,37 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 	return result, candidates, nil
 }
 
-// searchExpansionIsMonotone reports whether widening the back-reference search
-// set can only ADD to the verification verdict and never subtract from it.
-// When it holds, the depth loop may stop as soon as the policy is satisfied,
-// because no collection discovered later could turn a satisfied step back into
-// an unsatisfied one.
+// searchExpansionIsMonotone reports whether the POLICY SHAPE is free of the
+// one construct that makes step verification arbitrarily non-monotone in the
+// discovered-collection set: Step.AttestationsFrom. It gates the depth loop's
+// "already satisfied" early break.
 //
-// Every part of step verification is monotone in the discovered-collection set:
+// SCOPE — read this before relying on the name. It is a statement about the
+// policy's shape, NOT a guarantee that widening the search cannot subtract
+// from a verdict. The subject fan-out guard (filterHubOnlyPassed) makes
+// verification non-monotone in the CANDIDATE set for every policy shape:
+// admitting more authorized evidence can push a closure digest over the
+// fan-out limit, classify it as a hub, and demote evidence that previously
+// passed. Measured: the same subject and policy verify PASS with one
+// envelope present and FAIL with six.
+//
+// The early break remains sound anyway, for a reason the original enumeration
+// did not state. It fires only when every step is ALREADY satisfied, so it
+// can never skip evidence that would rescue a failing step. What further
+// expansion could do is demote a passing step — and only via the guard, whose
+// demotions are false rejects by construction. Stopping early therefore
+// preserves a verdict reached on evidence that was crypto-verified,
+// functionary-authorized and gate-passed on its own merits; it cannot
+// manufacture a pass.
+//
+// CONSEQUENCE, worth stating plainly: a verdict is no longer a pure function
+// of (subject, policy). It depends on what else the corpus holds, in the
+// false-reject direction. That is the accepted cost of bounding fan-out, and
+// it is why a verdict cannot be safely cached and replayed against a
+// different corpus state.
+//
+// The components below are monotone in the discovered-collection set, which
+// is what makes AttestationsFrom the only shape-level exception:
 //
 //   - validateAttestations judges each collection independently (step.go); with
 //     no cross-step context, one collection's verdict cannot be changed by the

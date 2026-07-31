@@ -44,7 +44,7 @@ func TestVerifiedSearch_ReleasesEnvelopeBytesOnPass(t *testing.T) {
 	// Parse through the real source pipeline so Collection is populated the
 	// way EntSource/MemorySource populate it (signedCollectionForSubject
 	// leaves it empty).
-	ce, err := envelopeToCollectionEnvelope("rel-ref-1", signed.Envelope)
+	ce, err := EnvelopeToCollectionEnvelope("rel-ref-1", signed.Envelope)
 	require.NoError(t, err)
 	vs := NewVerifiedSource(&lyingSourcer{env: ce}, dsse.VerifyWithVerifiers(verifier))
 

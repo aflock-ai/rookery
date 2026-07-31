@@ -42,7 +42,7 @@ import (
 // to the baseline committed alongside it.
 //
 // FIDELITY, stated plainly: this drives the real corpus through the real
-// decode + release path (envelopeToCollectionEnvelope + releaseEnvelopeBytes),
+// decode + release path (EnvelopeToCollectionEnvelope + releaseEnvelopeBytes),
 // which is where the transient allocation lives. It does NOT run
 // Policy.Verify with the prod policy's Fulcio functionaries — the prod policy
 // envelope is not in hand. So it reproduces the DECODE-side peak, not the
@@ -113,7 +113,7 @@ func decodeTurn(t *testing.T, files []string) ([]CollectionVerificationResult, i
 		if err := json.Unmarshal(raw, &env); err != nil {
 			continue
 		}
-		ce, err := envelopeToCollectionEnvelope(filepath.Base(f), env)
+		ce, err := EnvelopeToCollectionEnvelope(filepath.Base(f), env)
 		if err != nil {
 			continue
 		}

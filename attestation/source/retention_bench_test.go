@@ -30,7 +30,7 @@ import (
 // loop. It reproduces the prod-observed ~4.7x amplification (17.8 MiB heap per
 // 3.76 MiB stored) so a fix can be measured against it.
 //
-// Faithful to CURRENT main: envelopeToCollectionEnvelope decodes, then
+// Faithful to CURRENT main: EnvelopeToCollectionEnvelope decodes, then
 // releaseEnvelopeBytes drops the raw Envelope.Payload/Signatures from the
 // retained copy (already live). What remains retained is Statement (including
 // its ~3.5 MiB Predicate json.RawMessage) plus the parsed Collection (whose
@@ -70,7 +70,7 @@ func TestRetentionAmplificationAgainstRealCorpus(t *testing.T) {
 		if err := json.Unmarshal(raw, &env); err != nil {
 			continue // not a DSSE envelope
 		}
-		ce, err := envelopeToCollectionEnvelope(filepath.Base(f), env)
+		ce, err := EnvelopeToCollectionEnvelope(filepath.Base(f), env)
 		if err != nil {
 			continue
 		}

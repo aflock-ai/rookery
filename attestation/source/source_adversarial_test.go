@@ -1400,13 +1400,13 @@ func TestAdversarial_CollectionEnvelope_JSONRoundTrip(t *testing.T) {
 	}
 
 	// Now verify that envelopeToCollectionEnvelope produces the same result
-	ce1, err1 := envelopeToCollectionEnvelope("ref1", originalEnv)
-	ce2, err2 := envelopeToCollectionEnvelope("ref2", restored)
+	ce1, err1 := EnvelopeToCollectionEnvelope("ref1", originalEnv)
+	ce2, err2 := EnvelopeToCollectionEnvelope("ref2", restored)
 	if err1 != nil {
-		t.Fatalf("envelopeToCollectionEnvelope(original) failed: %v", err1)
+		t.Fatalf("EnvelopeToCollectionEnvelope(original) failed: %v", err1)
 	}
 	if err2 != nil {
-		t.Fatalf("envelopeToCollectionEnvelope(restored) failed: %v", err2)
+		t.Fatalf("EnvelopeToCollectionEnvelope(restored) failed: %v", err2)
 	}
 
 	if ce1.Collection.Name != ce2.Collection.Name {
@@ -1541,7 +1541,7 @@ func TestAdversarial_EnvelopeToCollectionEnvelope_EmptyPayload(t *testing.T) {
 		PayloadType: intoto.PayloadType,
 	}
 
-	_, err := envelopeToCollectionEnvelope("ref1", env)
+	_, err := EnvelopeToCollectionEnvelope("ref1", env)
 	if err == nil {
 		t.Error("BUG: empty payload should be rejected by envelopeToCollectionEnvelope")
 	} else {
@@ -1569,7 +1569,7 @@ func TestAdversarial_EnvelopeToCollectionEnvelope_NullPredicate(t *testing.T) {
 		PayloadType: intoto.PayloadType,
 	}
 
-	ce, err := envelopeToCollectionEnvelope("ref1", env)
+	ce, err := EnvelopeToCollectionEnvelope("ref1", env)
 	if err != nil {
 		t.Logf("OK: null predicate rejected: %v", err)
 	} else {

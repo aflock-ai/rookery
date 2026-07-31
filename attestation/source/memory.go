@@ -86,7 +86,7 @@ func (s *MemorySource) LoadEnvelope(reference string, env dsse.Envelope) error {
 		return ErrDuplicateReference(reference)
 	}
 
-	collEnv, err := envelopeToCollectionEnvelope(reference, env)
+	collEnv, err := EnvelopeToCollectionEnvelope(reference, env)
 	if err != nil {
 		return err
 	}

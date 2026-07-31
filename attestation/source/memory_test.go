@@ -121,7 +121,7 @@ func TestLoadEnvelope(t *testing.T) {
 			// Initialize a new MemorySource
 			memorySource := NewMemorySource()
 			if tt.wantReferenceExistErr {
-				collEnv, err := envelopeToCollectionEnvelope(tt.reference, envelope)
+				collEnv, err := EnvelopeToCollectionEnvelope(tt.reference, envelope)
 				if err != nil {
 					t.Fatalf("Invalid intotoStatment, err = %v", err)
 				}
@@ -316,7 +316,7 @@ func TestSearch(t *testing.T) {
 				}
 
 				if _, ok := tt.wantReferences["ref"+fmt.Sprint(i)]; ok {
-					collEnv, _ := envelopeToCollectionEnvelope("ref"+fmt.Sprint(i), dsseEnv)
+					collEnv, _ := EnvelopeToCollectionEnvelope("ref"+fmt.Sprint(i), dsseEnv)
 					expectedResult = append(expectedResult, collEnv)
 				}
 			}
