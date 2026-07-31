@@ -278,6 +278,15 @@ func TestHangingServerBoundedByTimeout(t *testing.T) {
 	if elapsed > 1500*time.Millisecond {
 		t.Errorf("Notice blocked %v; must stay within the ~%v deadline", elapsed, cfg.Timeout)
 	}
+
+	// Drain the goroutine before TempDir cleanup: its HTTP client gives up
+	// at cfg.Timeout and performs a final cache write, which must not race
+	// the test directory removal.
+	select {
+	case <-c.ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fetch goroutine never finished")
+	}
 }
 
 func TestTimedOutFetchIsCachedAcrossInvocations(t *testing.T) {
@@ -315,6 +324,15 @@ func TestTimedOutFetchIsCachedAcrossInvocations(t *testing.T) {
 	}
 	if got := hits.Load(); got != 1 {
 		t.Errorf("endpoint hit %d times, want 1 (timed-out attempt must be cached)", got)
+	}
+
+	// Drain the first invocation's goroutine before TempDir cleanup: its
+	// HTTP client gives up at cfg.Timeout and performs a final cache write,
+	// which must not race the test directory removal.
+	select {
+	case <-c1.ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first goroutine never finished")
 	}
 }
 

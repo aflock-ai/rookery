@@ -66,6 +66,11 @@ const (
 
 	// maxManifestBytes caps the response read (the live manifest is ~200KB).
 	maxManifestBytes = 4 << 20
+
+	// maxCacheFileBytes caps the cache-file read. Our own writes are ~150
+	// bytes; anything bigger is corruption and is treated as a cache miss,
+	// so a damaged file can never balloon the synchronous read at startup.
+	maxCacheFileBytes = 64 << 10
 )
 
 // Config parameterizes a check. The caller resolves all environment inputs
@@ -93,20 +98,22 @@ type cacheEntry struct {
 	CheckedAt   time.Time `json:"checked_at"`
 }
 
-// Check is an in-flight (or cache-resolved) version check.
+// Check is an in-flight version check.
 type Check struct {
-	cfg       Config
-	deadline  time.Time
-	ch        chan string // receives the fetched latest tag ("" on failure)
-	cached    string      // resolved synchronously from a fresh cache entry
-	fromCache bool
+	cfg      Config
+	deadline time.Time
+	ch       chan string // receives the resolved latest tag ("" when unknown)
 }
 
 // Start begins the check. It returns nil — meaning "never notify" — when the
 // running build should not be compared at all: unstamped dev builds, dirty or
-// pre-release versions, or anything that is not a plain semver release. When
-// the cache is fresh it resolves synchronously with no goroutine and no
-// network; otherwise it kicks off a background fetch bounded by cfg.Timeout.
+// pre-release versions, or anything that is not a plain semver release.
+//
+// ALL I/O — the cache read, the attempt pre-write, the fetch, and the result
+// write — happens in one background goroutine, so no stalled filesystem (a
+// network-mounted cache dir, a FIFO planted as the cache file) or network can
+// ever block the command itself; Notice() bounds the only wait. A fresh cache
+// entry resolves in that goroutine near-instantly with no network.
 func Start(cfg Config) *Check {
 	if canonicalRelease(cfg.Current) == "" {
 		return nil
@@ -118,27 +125,31 @@ func Start(cfg Config) *Check {
 		cfg.Timeout = defaultTimeout
 	}
 
-	c := &Check{cfg: cfg}
-	if latest, ok := readCache(cfg.CacheDir, cfg.ManifestURL); ok {
-		c.cached = latest
-		c.fromCache = true
-		return c
+	c := &Check{
+		cfg:      cfg,
+		deadline: time.Now().Add(cfg.Timeout),
+		ch:       make(chan string, 1),
 	}
-
-	// Record the attempt BEFORE the fetch starts — synchronously, not in the
-	// goroutine and not deferred: when the endpoint hangs, Notice() gives up
-	// at its deadline, the CLI exits, and the fetch goroutine dies before
-	// client.Get() ever returns, so nothing later in the goroutine (including
-	// fetchLatest's deferred write) is guaranteed to run. This pre-write is
-	// what makes even a killed/timed-out attempt count against the TTL, so a
-	// CI fleet against a broken endpoint pays the wait once, not per run.
-	// A fetch that completes overwrites this marker with the real result.
-	writeCache(cfg.CacheDir, cfg.ManifestURL, "")
-
-	c.deadline = time.Now().Add(cfg.Timeout)
-	c.ch = make(chan string, 1)
-	go func() { c.ch <- fetchLatest(cfg) }()
+	go func() { c.ch <- resolve(cfg) }()
 	return c
+}
+
+// resolve is the background pipeline: serve from a fresh cache entry, or
+// record the attempt and fetch.
+//
+// The attempt marker is written BEFORE the fetch, not after (and not only in
+// a defer): when the endpoint hangs, Notice() gives up at its deadline, the
+// CLI exits, and this goroutine dies before client.Get() ever returns — so
+// nothing after the fetch is guaranteed to run. The pre-write makes even a
+// killed, timed-out attempt count against the TTL: a CI fleet against a
+// broken endpoint pays the bounded wait once per TTL, not on every run. A
+// fetch that completes overwrites the marker with the real result.
+func resolve(cfg Config) string {
+	if latest, ok := readCache(cfg.CacheDir, cfg.ManifestURL); ok {
+		return latest
+	}
+	writeCache(cfg.CacheDir, cfg.ManifestURL, "")
+	return fetchLatest(cfg)
 }
 
 // Notice returns the message to print to stderr, or "" when there is nothing
@@ -148,28 +159,26 @@ func (c *Check) Notice() string {
 	if c == nil {
 		return ""
 	}
-	latest := c.cached
-	if !c.fromCache {
-		// A ready result always wins: when the command ran longer than the
-		// deadline, both the recv and the (immediately-firing) timer would be
-		// ready and select would pick randomly — so try non-blocking first.
-		// Otherwise wait only the small residual grace (never beyond the
-		// overall deadline): the fetch overlapped the command's real work, so
-		// a fast command on a cache-miss day pays at most ~noticeGrace, and a
-		// still-unfinished fetch is simply dropped (the attempt is already
-		// recorded in the cache by Start's pre-write).
-		wait := time.Until(c.deadline)
-		if wait > noticeGrace {
-			wait = noticeGrace
-		}
+	var latest string
+	// A ready result always wins: when the command ran longer than the
+	// deadline, both the recv and the (immediately-firing) timer would be
+	// ready and select would pick randomly — so try non-blocking first.
+	// Otherwise wait only the small residual grace (never beyond the overall
+	// deadline): the resolution overlapped the command's real work, so a
+	// fast command on a cache-miss day pays at most ~noticeGrace, and a
+	// still-unfinished resolution is simply dropped (a started fetch has
+	// already recorded its attempt in the cache).
+	wait := time.Until(c.deadline)
+	if wait > noticeGrace {
+		wait = noticeGrace
+	}
+	select {
+	case latest = <-c.ch:
+	default:
 		select {
 		case latest = <-c.ch:
-		default:
-			select {
-			case latest = <-c.ch:
-			case <-time.After(wait):
-				return "" // still in flight — drop it
-			}
+		case <-time.After(wait):
+			return "" // still in flight — drop it
 		}
 	}
 
@@ -251,8 +260,21 @@ func readCache(dir, manifestURL string) (string, bool) {
 	if dir == "" {
 		return "", false
 	}
-	b, err := os.ReadFile(filepath.Join(dir, cacheFileName)) //nolint:gosec // G304: dir is our own user-cache directory joined with a constant file name
+	// Open once and fstat the HANDLE: a stat-then-read pair could be raced
+	// by file replacement, and special files (a symlink to /dev/zero) can
+	// report one size and produce another. Only regular files within the
+	// size cap are read, and the read itself is capped too.
+	f, err := os.Open(filepath.Join(dir, cacheFileName)) //nolint:gosec // G304: dir is our own user-cache directory joined with a constant file name
 	if err != nil {
+		return "", false
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil || fi == nil || !fi.Mode().IsRegular() || fi.Size() > maxCacheFileBytes {
+		return "", false // missing, non-regular, or implausibly large (corrupt) — cache miss
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxCacheFileBytes+1))
+	if err != nil || int64(len(b)) > maxCacheFileBytes {
 		return "", false
 	}
 	var e cacheEntry
@@ -268,7 +290,10 @@ func readCache(dir, manifestURL string) (string, bool) {
 	return e.Latest, true
 }
 
-// writeCache records an attempt. All errors are swallowed.
+// writeCache records an attempt. All errors are swallowed. The write is
+// atomic (temp file + rename) so a concurrent invocation reading the cache
+// can never observe a torn/truncated entry — it sees either the old record
+// or the new one, both valid.
 func writeCache(dir, manifestURL, latest string) {
 	if dir == "" {
 		return
@@ -280,5 +305,21 @@ func writeCache(dir, manifestURL, latest string) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(filepath.Join(dir, cacheFileName), b, 0o600)
+	tmp, err := os.CreateTemp(dir, cacheFileName+".tmp-*") //nolint:gosec // G703: dir is our own user-cache directory, not user-controlled input
+	if err != nil {
+		return
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }() //nolint:gosec // G703: temp file we just created inside our own user-cache directory; no-op after a successful rename
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		return
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		return
+	}
+	_ = os.Rename(tmp.Name(), filepath.Join(dir, cacheFileName)) //nolint:gosec // G703: both paths live in our own user-cache directory; the file name is a constant
 }
