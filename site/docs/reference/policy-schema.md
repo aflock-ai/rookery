@@ -181,7 +181,7 @@ A two-step policy where `clone` produces source files, `build` produces a binary
       "name": "clone",
       "attestations": [
         { "type": "https://aflock.ai/attestations/material/v0.3" },
-        { "type": "https://aflock.ai/attestations/command-run/v0.1" },
+        { "type": "https://aflock.ai/attestations/command-run/v0.2" },
         { "type": "https://aflock.ai/attestations/product/v0.3" }
       ],
       "functionaries": [
@@ -194,7 +194,7 @@ A two-step policy where `clone` produces source files, `build` produces a binary
       "attestations": [
         { "type": "https://aflock.ai/attestations/material/v0.3" },
         {
-          "type": "https://aflock.ai/attestations/command-run/v0.1",
+          "type": "https://aflock.ai/attestations/command-run/v0.2",
           "regopolicies": [
             {
               "name": "expected command",
@@ -255,7 +255,7 @@ A release-gate policy that pulls a build step's products through to a release st
       "name": "build",
       "attestations": [
         { "type": "https://aflock.ai/attestations/product/v0.3" },
-        { "type": "https://aflock.ai/attestations/command-run/v0.1" }
+        { "type": "https://aflock.ai/attestations/command-run/v0.2" }
       ],
       "functionaries": [{ "type": "publickey", "publickeyid": "ae2dcc..." }]
     },
@@ -265,7 +265,7 @@ A release-gate policy that pulls a build step's products through to a release st
       "externalFrom": ["binaryInclusionProof"],
       "attestations": [
         {
-          "type": "https://aflock.ai/attestations/command-run/v0.1",
+          "type": "https://aflock.ai/attestations/command-run/v0.2",
           "regopolicies": [{ "name": "inclusion-proof binds build artifact", "module": "<base64>" }]
         }
       ],

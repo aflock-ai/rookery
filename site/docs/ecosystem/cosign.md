@@ -111,7 +111,7 @@ This produces a cilock collection envelope. The pipeline keeps both the cosign e
       "attestations": [
         { "type": "https://aflock.ai/attestations/material/v0.3" },
         { "type": "https://aflock.ai/attestations/product/v0.3" },
-        { "type": "https://aflock.ai/attestations/command-run/v0.1" }
+        { "type": "https://aflock.ai/attestations/command-run/v0.2" }
       ]
     }
   },

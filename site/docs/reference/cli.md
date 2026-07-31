@@ -477,7 +477,7 @@ Prints a box-drawn table of every attestor compiled into the binary:
 │ git (default)            │ https://aflock.ai/attestations/git/v0.1             │ prematerial │
 │ environment (default)    │ https://aflock.ai/attestations/environment/v0.1     │ prematerial │
 │ material (always run)    │ https://aflock.ai/attestations/material/v0.3        │ material    │
-│ command-run (always run) │ https://aflock.ai/attestations/command-run/v0.1     │ execute     │
+│ command-run (always run) │ https://aflock.ai/attestations/command-run/v0.2     │ execute     │
 │ product (always run)     │ https://aflock.ai/attestations/product/v0.3         │ product     │
 │ inclusion-proof          │ https://aflock.ai/attestations/inclusion-proof/v0.1 │ postproduct │
 │ material-v0.1            │ https://aflock.ai/attestations/material/v0.1        │ material    │

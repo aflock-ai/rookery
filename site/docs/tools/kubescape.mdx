@@ -42,7 +42,7 @@ cilock run --step kubescape-cluster-snapshot-scan \
   -- sh -c 'kubectl get all,networkpolicies,roles,rolebindings,serviceaccounts -A -o yaml > cluster-snapshot.yaml && kubescape scan framework nsa --format sarif --output kubescape-cluster.sarif cluster-snapshot.yaml'
 ```
 
-`command-run/v0.1` records the literal `["sh", "-c", "kubectl get … && kubescape scan …"]` argv, so the dump-then-scan recipe is fully captured.
+`command-run/v0.2` records the literal `["sh", "-c", "kubectl get … && kubescape scan …"]` argv, so the dump-then-scan recipe is fully captured.
 
 ## What gets captured
 
@@ -50,7 +50,7 @@ Both flows produce the **same predicate type set**:
 
 | Predicate type | Source |
 |---|---|
-| `https://aflock.ai/attestations/command-run/v0.1` | The argv cilock actually exec'd |
+| `https://aflock.ai/attestations/command-run/v0.2` | The argv cilock actually exec'd |
 | `https://aflock.ai/attestations/environment/v0.1` | Host + env at scan time |
 | `https://aflock.ai/attestations/git/v0.1` | Commit, remote, dirty state |
 | `https://aflock.ai/attestations/material/v0.3` | Pre-run digests of `manifests/` (or the snapshot file) |
@@ -61,7 +61,7 @@ Both flows produce the **same predicate type set**:
 
 Kubescape supports `--format sarif --output FILE` directly. Letting cilock exec Kubescape as its **direct child** — no `bash -c "cp …"` glue — gives four properties the old `cp`-based pattern broke:
 
-1. `command-run/v0.1` records the real argv (`["kubescape", "scan", "framework", "nsa", ...]`), not `cp`.
+1. `command-run/v0.2` records the real argv (`["kubescape", "scan", "framework", "nsa", ...]`), not `cp`.
 2. The `tracing` spy (when enabled) traces the real Kubescape syscalls.
 3. `product/v0.3` hashes the SARIF file Kubescape itself produced — not a copy laundered through `cp`.
 4. `sarif/v0.1` parses that same file for rego gating.
@@ -85,7 +85,7 @@ jq -r '.payload' attestation.json | base64 -d \
 # command-run captured the real argv (not bash -c / cp).
 jq -r '.payload' attestation.json | base64 -d \
   | jq '.predicate.attestations[]
-        | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+        | select(.type=="https://aflock.ai/attestations/command-run/v0.2")
         | .attestation.cmd'
 
 # Count SARIF findings the rego gate would see.
@@ -108,7 +108,7 @@ jq -r '.payload' attestation.json | base64 -d \
 Yes. Kubescape's SARIF output flows through cilock's `sarif` attestor — no rookery code change required. Both static-manifest and live-cluster-snapshot flows are validated end-to-end in [`tool-kubescape-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-kubescape-sarif).
 
 **Can Kubescape scan my live cluster under cilock?**
-Yes, via the snapshot pattern: `sh -c 'kubectl get … -o yaml > snapshot.yaml && kubescape scan … snapshot.yaml'`. The kubectl dump captures real cluster state (live `SecurityContext`, RBAC, NetworkPolicies); Kubescape then scans the YAML dump as a local-file context and emits SARIF. `command-run/v0.1` records the full `sh -c` argv so the recipe is auditable.
+Yes, via the snapshot pattern: `sh -c 'kubectl get … -o yaml > snapshot.yaml && kubescape scan … snapshot.yaml'`. The kubectl dump captures real cluster state (live `SecurityContext`, RBAC, NetworkPolicies); Kubescape then scans the YAML dump as a local-file context and emits SARIF. `command-run/v0.2` records the full `sh -c` argv so the recipe is auditable.
 
 **Why can't I use `--format sarif` directly against the cluster?**
 Upstream Kubescape excludes the live-cluster context from its SARIF emitter. See [`core/pkg/resultshandling/results.go`](https://github.com/kubescape/kubescape/blob/master/core/pkg/resultshandling/results.go) — `ContextCluster` is missing from the SARIF-allowed contexts. Run `kubescape scan framework nsa --format sarif` against a live cluster and you'll get JSON (or an error), not SARIF. The snapshot pattern is the documented workaround.

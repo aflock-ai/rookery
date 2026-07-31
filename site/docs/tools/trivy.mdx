@@ -30,13 +30,13 @@ cilock run --step trivy-scan \
 
 This is the exact line validated end-to-end in [`tool-trivy-sarif`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-trivy-sarif) — don't paraphrase it.
 
-Trivy exits non-zero when it finds vulnerabilities at or above its severity threshold. The validated example uses Trivy's default exit-code behavior; cilock surfaces that exit code in the `command-run/v0.1` predicate, so policies can reason about scan results without re-parsing.
+Trivy exits non-zero when it finds vulnerabilities at or above its severity threshold. The validated example uses Trivy's default exit-code behavior; cilock surfaces that exit code in the `command-run/v0.2` predicate, so policies can reason about scan results without re-parsing.
 
 ## What gets captured
 
 A single run with `--attestations sarif,environment,git` produces these predicate types in the signed envelope:
 
-- `https://aflock.ai/attestations/command-run/v0.1` — the actual `argv`, exit code, and traced syscalls of `trivy`.
+- `https://aflock.ai/attestations/command-run/v0.2` — the actual `argv`, exit code, and traced syscalls of `trivy`.
 - `https://aflock.ai/attestations/material/v0.3` — Merkle hashes of every input file Trivy read.
 - `https://aflock.ai/attestations/product/v0.3` — Merkle hash of `trivy.sarif` as written by the run.
 - `https://aflock.ai/attestations/sarif/v0.1` — structured parse of the SARIF report, ready for policy.
@@ -77,7 +77,7 @@ jq -r '.payload' attestation.json | base64 -d \
 Expected output (order may vary):
 
 ```
-https://aflock.ai/attestations/command-run/v0.1
+https://aflock.ai/attestations/command-run/v0.2
 https://aflock.ai/attestations/environment/v0.1
 https://aflock.ai/attestations/material/v0.3
 https://aflock.ai/attestations/product/v0.3

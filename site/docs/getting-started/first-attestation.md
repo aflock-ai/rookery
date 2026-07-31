@@ -118,7 +118,7 @@ cat build.attestation.json | jq -r .payload | base64 -d | jq '.predicate.name, (
 #   "https://aflock.ai/attestations/environment/v0.1",
 #   "https://aflock.ai/attestations/git/v0.1",
 #   "https://aflock.ai/attestations/material/v0.3",
-#   "https://aflock.ai/attestations/command-run/v0.1",
+#   "https://aflock.ai/attestations/command-run/v0.2",
 #   "https://aflock.ai/attestations/product/v0.3"
 # ]
 ```
@@ -141,7 +141,7 @@ The policy lists which attestations each step must produce and which keys are tr
       "name": "build",
       "attestations": [
         {"type": "https://aflock.ai/attestations/material/v0.3", "regopolicies": []},
-        {"type": "https://aflock.ai/attestations/command-run/v0.1", "regopolicies": []},
+        {"type": "https://aflock.ai/attestations/command-run/v0.2", "regopolicies": []},
         {"type": "https://aflock.ai/attestations/product/v0.3", "regopolicies": []}
       ],
       "functionaries": [{"type": "publickey", "publickeyid": "{{PUBLIC_KEY_ID}}"}]

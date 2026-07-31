@@ -36,7 +36,7 @@ Each cilock run emits an in-toto envelope whose predicate carries the following 
 
 | Attestor type                                          | Captures                                                  |
 | ------------------------------------------------------ | --------------------------------------------------------- |
-| `https://aflock.ai/attestations/command-run/v0.1`      | Real `checkov ...` argv, env, exit code, stdout/stderr   |
+| `https://aflock.ai/attestations/command-run/v0.2`      | Real `checkov ...` argv, env, exit code, stdout/stderr   |
 | `https://aflock.ai/attestations/material/v0.3`         | Merkle tree of the IaC inputs (the `-d` directory)        |
 | `https://aflock.ai/attestations/product/v0.3`          | Merkle tree of outputs, including `results_sarif.sarif`   |
 | `https://aflock.ai/attestations/sarif/v0.1`            | Parsed SARIF report + `reportDigestSet.sha256`            |
@@ -77,7 +77,7 @@ jq -r '.payload' attestation.json | base64 -d \
 # Confirm Checkov's real argv ended up in command-run.
 jq -r '.payload' attestation.json | base64 -d \
   | jq '.predicate.attestations[]
-        | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+        | select(.type=="https://aflock.ai/attestations/command-run/v0.2")
         | .attestation.cmd'
 
 # Confirm the SARIF report and its findings landed in the sarif attestor.

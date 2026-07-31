@@ -32,7 +32,7 @@ A successful run emits a DSSE envelope with six predicate entries:
 | `https://aflock.ai/attestations/environment/v0.1` | OS, arch, env vars (filtered), CI hints |
 | `https://aflock.ai/attestations/git/v0.1` | repo state — head SHA, branch, dirty bit |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle tree of files Semgrep read |
-| `https://aflock.ai/attestations/command-run/v0.1` | the literal semgrep argv + exit code + stdout/stderr digests |
+| `https://aflock.ai/attestations/command-run/v0.2` | the literal semgrep argv + exit code + stdout/stderr digests |
 | `https://aflock.ai/attestations/product/v0.3` | Merkle tree of files Semgrep produced (the SARIF report) |
 | `https://aflock.ai/attestations/sarif/v0.1` | parsed SARIF — driver name, version, ruleset, structured findings |
 
@@ -61,7 +61,7 @@ jq -r '.payload' attestation.json | base64 -d \
 # Confirm command-run captured the real semgrep argv (not bash -c)
 jq -r '.payload' attestation.json | base64 -d \
   | jq '.predicate.attestations[]
-        | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+        | select(.type=="https://aflock.ai/attestations/command-run/v0.2")
         | .attestation.cmd'
 
 # Inspect SARIF findings count + tool driver

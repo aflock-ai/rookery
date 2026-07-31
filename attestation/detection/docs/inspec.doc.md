@@ -24,7 +24,7 @@ cilock run --step inspec-scan \
 Three InSpec-specific quirks are baked into that command — each matters for clean attestations:
 
 - **`--reporter json:inspec-results.json`** — InSpec writes the machine-readable JSON to a file in cwd. The `inspec` attestor (a `postproduct` lifecycle attestor) reads that file out of cilock's product set, integrity-checks it against the recorded digest, and parses the profile / platform / per-control results into the predicate.
-- **`--no-distinct-exit`** — InSpec normally exits `100` when controls fail and `101` when only skipped controls remain. Without this flag, the very fact that you ran the scan to surface a finding makes `command-run/v0.1` record a non-zero exit code. `--no-distinct-exit` folds both into a clean `0` while the failed control IDs stay in the JSON (and in the signed `inspec/v0.1` predicate).
+- **`--no-distinct-exit`** — InSpec normally exits `100` when controls fail and `101` when only skipped controls remain. Without this flag, the very fact that you ran the scan to surface a finding makes `command-run/v0.2` record a non-zero exit code. `--no-distinct-exit` folds both into a clean `0` while the failed control IDs stay in the JSON (and in the signed `inspec/v0.1` predicate).
 - **`--chef-license=accept-silent`** — InSpec 5+ refuses to run interactively until the license is accepted. Passing the flag silently accepts the community license on the same invocation; without it, the run blocks on a TTY prompt that doesn't exist inside cilock.
 
 ## What gets captured
@@ -33,7 +33,7 @@ Each cilock run emits an in-toto envelope whose predicate carries the following 
 
 | Attestor type                                          | Captures                                                              |
 | ------------------------------------------------------ | --------------------------------------------------------------------- |
-| `https://aflock.ai/attestations/command-run/v0.1`      | Real `inspec exec ...` argv, env, exit code, stdout/stderr            |
+| `https://aflock.ai/attestations/command-run/v0.2`      | Real `inspec exec ...` argv, env, exit code, stdout/stderr            |
 | `https://aflock.ai/attestations/material/v0.3`         | Merkle tree of inputs (profile sources, custom Ruby controls, fixtures) |
 | `https://aflock.ai/attestations/product/v0.3`          | Merkle tree of outputs, including `inspec-results.json`               |
 | `https://aflock.ai/attestations/inspec/v0.1`           | Profile name, platform `<name>-<release>`, pass/fail/skip counts, failed control IDs |
@@ -83,7 +83,7 @@ Expected output:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://aflock.ai/attestations/inspec/v0.1"
 ]
@@ -93,7 +93,7 @@ Expected output:
 # Confirm InSpec's real argv ended up in command-run.
 jq -r '.payload' attestation.json | base64 -d \
   | jq '.predicate.attestations[]
-        | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+        | select(.type=="https://aflock.ai/attestations/command-run/v0.2")
         | .attestation.cmd'
 ```
 
@@ -203,7 +203,7 @@ Yes — custom controls work exactly as they do without cilock. Drop your `contr
 
 ### Why `--no-distinct-exit`?
 
-InSpec exits `100` when any control fails and `101` when only skipped controls remain. Without `--no-distinct-exit`, `command-run/v0.1` records a non-zero exit code on every scan that surfaces a real finding — which makes downstream tooling treat the scan itself as broken. The flag folds 100/101 back to 0; the failed control IDs still ride in the signed `inspec/v0.1` attestation, and the gate belongs at `cilock verify` time (a Rego policy over `failedControls`), not at scan time.
+InSpec exits `100` when any control fails and `101` when only skipped controls remain. Without `--no-distinct-exit`, `command-run/v0.2` records a non-zero exit code on every scan that surfaces a real finding — which makes downstream tooling treat the scan itself as broken. The flag folds 100/101 back to 0; the failed control IDs still ride in the signed `inspec/v0.1` attestation, and the gate belongs at `cilock verify` time (a Rego policy over `failedControls`), not at scan time.
 
 ### How does InSpec compare to OpenSCAP / `oscap`?
 

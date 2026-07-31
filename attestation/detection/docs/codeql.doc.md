@@ -1,6 +1,6 @@
 ---
 title: CodeQL
-description: Run GitHub CodeQL under cilock — the SARIF report from `codeql database analyze` becomes a signed v0.3 attestation parsed by the rookery sarif attestor, with the literal codeql argv captured in command-run/v0.1.
+description: Run GitHub CodeQL under cilock — the SARIF report from `codeql database analyze` becomes a signed v0.3 attestation parsed by the rookery sarif attestor, with the literal codeql argv captured in command-run/v0.2.
 sidebar_position: 11
 examples_repo: tool-codeql-sarif
 ---
@@ -39,7 +39,7 @@ This is the exact command exercised in [`tool-codeql-sarif`](https://github.com/
 | `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
 | `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, tags, dirty status, parents |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle root over the source tree + CodeQL database before analyze runs |
-| `https://aflock.ai/attestations/command-run/v0.1` | literal `codeql database analyze …` argv + exit code + ptrace |
+| `https://aflock.ai/attestations/command-run/v0.2` | literal `codeql database analyze …` argv + exit code + ptrace |
 | `https://aflock.ai/attestations/product/v0.3` | Merkle root over `codeql.sarif` as a real product file |
 | `https://aflock.ai/attestations/sarif/v0.1` | parsed SARIF (rules + results from CodeQL's query pack) |
 
@@ -69,7 +69,7 @@ Expected output:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://aflock.ai/attestations/sarif/v0.1"
 ]
@@ -79,7 +79,7 @@ Confirm `command-run.cmd` carries the literal codeql argv (proof the cp antipatt
 
 ```bash
 jq -r '.payload' attestation.json | base64 -d \
-  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.1") | .attestation.cmd'
+  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.2") | .attestation.cmd'
 # ["codeql","database","analyze","codeql-db","--format=sarif-latest",
 #  "--output=codeql.sarif",
 #  "codeql/python-queries:codeql-suites/python-security-and-quality.qls"]
@@ -96,14 +96,14 @@ jq '.runs[0].results | length' codeql.sarif
 
 - **Query suite selection.** `python-security-and-quality.qls` includes security queries (CWE-78/89/94/611/etc.) plus code-quality lints (unused imports, dead code). For the narrower set GitHub Advanced Security ships by default, use `python-code-scanning.qls`. Reference the suite you actually want in CI to keep finding counts stable.
 - **Multi-language repos.** Build one database per language: `codeql database create db-python --language=python` then `--language=javascript`, etc. Wrap each analyze step under its own cilock step so per-language attestations stay independent.
-- **Database as a separate cilock step.** Wrapping `codeql database create` under cilock too gives you a `command-run/v0.1` recording the extraction step + `product/v0.3` digest over the database directory. Useful if you want to verify the analyze step ran against the database that `create` actually produced — pair with [`attestationsFrom`](../reference/policy-schema#step-object) on the release-gate Rego.
+- **Database as a separate cilock step.** Wrapping `codeql database create` under cilock too gives you a `command-run/v0.2` recording the extraction step + `product/v0.3` digest over the database directory. Useful if you want to verify the analyze step ran against the database that `create` actually produced — pair with [`attestationsFrom`](../reference/policy-schema#step-object) on the release-gate Rego.
 - **Exit codes.** `codeql database analyze` always exits 0 when the query suite runs to completion. Gate findings in policy Rego over the captured SARIF, not on the tool exit code.
 
 ## FAQ
 
 ### Does cilock support CodeQL?
 
-Yes. Wrap `codeql database analyze ... --output=codeql.sarif` with `cilock run --attestations sarif,environment,git`. The SARIF becomes a signed v0.3 attestation under `https://aflock.ai/attestations/sarif/v0.1`, the literal codeql argv is captured in `command-run/v0.1`, and the SARIF file is hashed into the v0.3 Merkle tree as a real product.
+Yes. Wrap `codeql database analyze ... --output=codeql.sarif` with `cilock run --attestations sarif,environment,git`. The SARIF becomes a signed v0.3 attestation under `https://aflock.ai/attestations/sarif/v0.1`, the literal codeql argv is captured in `command-run/v0.2`, and the SARIF file is hashed into the v0.3 Merkle tree as a real product.
 
 ### Do I need to wrap `codeql database create` too?
 

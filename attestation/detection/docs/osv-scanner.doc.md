@@ -29,7 +29,7 @@ The DSSE envelope wraps six predicates from the cilock run:
 
 | Predicate type | Source attestor | What it carries |
 |---|---|---|
-| `https://aflock.ai/attestations/command-run/v0.1` | `command-run` | The real `osv-scanner` argv, exit code, working dir, env subset |
+| `https://aflock.ai/attestations/command-run/v0.2` | `command-run` | The real `osv-scanner` argv, exit code, working dir, env subset |
 | `https://aflock.ai/attestations/material/v0.3` | `material` | Merkle digests of every input file the scanner read |
 | `https://aflock.ai/attestations/product/v0.3` | `product` | Merkle digest of `osv.sarif` as the scanner wrote it |
 | `https://aflock.ai/attestations/sarif/v0.1` | `sarif` | Parsed report — rules, results, locations, severities |
@@ -76,14 +76,14 @@ jq -r '.payload' attestation.json | base64 -d \
 # https://aflock.ai/attestations/environment/v0.1
 # https://aflock.ai/attestations/git/v0.1
 # https://aflock.ai/attestations/material/v0.3
-# https://aflock.ai/attestations/command-run/v0.1
+# https://aflock.ai/attestations/command-run/v0.2
 # https://aflock.ai/attestations/product/v0.3
 # https://aflock.ai/attestations/sarif/v0.1
 
 # 4. Confirm command-run captured the real osv-scanner argv.
 jq -r '.payload' attestation.json | base64 -d \
   | jq '[.predicate.attestations[]
-         | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+         | select(.type=="https://aflock.ai/attestations/command-run/v0.2")
         ][0].attestation.cmd'
 # [ "osv-scanner", "--format", "sarif", "--output-file", "osv.sarif", "fixtures/" ]
 

@@ -153,9 +153,9 @@ PASSED
 | **Source identity** | `github/v0.1` | `repository` == `aflock-ai/rookery` AND `reftype` starts with `tag` |
 | **Source integrity** | `git/v0.1` | Working tree clean AND commit hash present |
 | **Environment hardening** | `environment/v0.1` | `CGO_ENABLED=0` AND `GOFIPS140` set (not empty, not `off`) — required so the binary embeds the [FIPS 140-3 module](https://go.dev/doc/security/fips140) |
-| **Build hygiene** | `command-run/v0.1` | argv contains `-trimpath` AND `cli.Version=` ldflags injection |
-| **Hermeticity** | `command-run/v0.1` | Every traced TCP/TLS connection's SNI hostname is in the allowlist: `vuln.go.dev`, `storage.googleapis.com`. Anything else fails. Build uses `-mod=vendor`, so no proxy.golang.org. |
-| **Vendor command** | `command-run/v0.1` (vendor step only) | Vendor step must literally invoke `go mod vendor` — catches a tampered workflow that runs `cp /tmp/poison-vendor cilock/vendor` |
+| **Build hygiene** | `command-run/v0.2` | argv contains `-trimpath` AND `cli.Version=` ldflags injection |
+| **Hermeticity** | `command-run/v0.2` | Every traced TCP/TLS connection's SNI hostname is in the allowlist: `vuln.go.dev`, `storage.googleapis.com`. Anything else fails. Build uses `-mod=vendor`, so no proxy.golang.org. |
+| **Vendor command** | `command-run/v0.2` (vendor step only) | Vendor step must literally invoke `go mod vendor` — catches a tampered workflow that runs `cp /tmp/poison-vendor cilock/vendor` |
 | **No secrets** | `secretscan/v0.1` | gitleaks-scanned product set + every prior envelope; allowlist narrow FP class (Go module pseudo-version SHAs match the sourcegraph-access-token regex) |
 | **No reachable vulns** | `govulncheck/v0.1` | govulncheck `summary.reachableCount == 0` AND `summary.bySeverity.{critical,high} == 0` |
 | **Artifact identity** | `product/v0.3` (subject digest) | Verifier hashes the binary you pass via `--artifactfile`; if the digest doesn't match a subject in the envelope, no collection is found |
@@ -230,7 +230,7 @@ A break anywhere in the chain — wrong commit, tampered vendor file, bad build 
 |---|---|
 | `git/v0.1` | "What was the commit hash + branch + tag at the time of build, and was the working tree clean?" |
 | `github/v0.1` | "Which GitHub workflow ran this, on which repo, on which trigger, with which OIDC identity?" |
-| `command-run/v0.1` | "What was the literal `go build` argv? What was its exit code? **What network endpoints did the build contact** (via `--trace` ptrace capture of every `connect`/`sendto`/`bind` syscall + TLS SNI)?" |
+| `command-run/v0.2` | "What was the literal `go build` argv? What was its exit code? **What network endpoints did the build contact** (via `--trace` ptrace capture of every `connect`/`sendto`/`bind` syscall + TLS SNI)?" |
 | `product/v0.3` | "What is the SHA-256 of the binary archive CI/lock produced?" |
 | `environment/v0.1` | "What OS, kernel, and env vars did the build see?" |
 | `sbom/v0.1` | "What dependencies were linked into the binary? (SPDX, byte-identical to the published SBOM)" |

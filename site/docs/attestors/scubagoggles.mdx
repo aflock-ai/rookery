@@ -41,7 +41,7 @@ ScubaGoggles is a **Python package** (`pip install scubagoggles`), not a standal
 
 A single run with `--attestations scubagoggles,environment` produces these predicate types in the signed envelope:
 
-- `https://aflock.ai/attestations/command-run/v0.1` — the actual `argv` and exit code of `scubagoggles`.
+- `https://aflock.ai/attestations/command-run/v0.2` — the actual `argv` and exit code of `scubagoggles`.
 - `https://aflock.ai/attestations/material/v0.3` — Merkle hashes of every input file the run read.
 - `https://aflock.ai/attestations/product/v0.3` — Merkle hash of the `ScubaResults*.json` the run wrote.
 - `https://aflock.ai/attestations/scubagoggles/v0.1` — the **raw Google Workspace provider configuration** (policies, super-admins, OU layout, DNS records, group settings), ready for policy. **Not** a verdict.
@@ -72,7 +72,7 @@ jq -r '.payload' attestation.json | base64 -d \
 
 ```json
 [
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
   "https://aflock.ai/attestations/product/v0.3",

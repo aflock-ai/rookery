@@ -30,7 +30,7 @@ The DSSE envelope contains an `https://aflock.ai/attestations/collection/v0.1` p
 | `https://aflock.ai/attestations/environment/v0.1`       | OS, arch, env vars (scrubbed), user — pins where the scan ran. |
 | `https://aflock.ai/attestations/git/v0.1`               | Commit SHA, branch, signing identity — pins what the scan ran against. |
 | `https://aflock.ai/attestations/material/v0.3`          | SHA-256 digests of every input file gosec saw. |
-| `https://aflock.ai/attestations/command-run/v0.1`       | The literal argv (`gosec -no-fail -fmt=sarif -out=gosec.sarif ./...`), exit code, stdout, stderr. |
+| `https://aflock.ai/attestations/command-run/v0.2`       | The literal argv (`gosec -no-fail -fmt=sarif -out=gosec.sarif ./...`), exit code, stdout, stderr. |
 | `https://aflock.ai/attestations/product/v0.3`           | Digest of `gosec.sarif` after the run — the *product* the next step's `material` attestor can chain on. |
 | `https://aflock.ai/attestations/sarif/v0.1`             | The parsed SARIF document — findings, rule IDs, levels, locations. Policy reads this. |
 
@@ -68,7 +68,7 @@ Expected output:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://aflock.ai/attestations/sarif/v0.1"
 ]

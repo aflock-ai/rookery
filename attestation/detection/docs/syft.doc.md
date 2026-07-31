@@ -5,7 +5,7 @@ sidebar_position: 2
 examples_repo: tool-syft-sbom
 ---
 
-[Syft](https://github.com/anchore/syft) is Anchore's open-source CLI that scans a directory or container image and writes a Software Bill of Materials in CycloneDX or SPDX. Running it under `cilock run` turns that throwaway report file into a signed in-toto envelope: cilock records syft's literal argv as a `command-run/v0.1` attestation, hashes the SBOM file into the `product/v0.3` Merkle root, and the `sbom` attestor parses the document and re-emits it under its native standard URI so downstream policy engines key off `https://cyclonedx.org/bom` directly.
+[Syft](https://github.com/anchore/syft) is Anchore's open-source CLI that scans a directory or container image and writes a Software Bill of Materials in CycloneDX or SPDX. Running it under `cilock run` turns that throwaway report file into a signed in-toto envelope: cilock records syft's literal argv as a `command-run/v0.2` attestation, hashes the SBOM file into the `product/v0.3` Merkle root, and the `sbom` attestor parses the document and re-emits it under its native standard URI so downstream policy engines key off `https://cyclonedx.org/bom` directly.
 
 ## Validated invocation
 
@@ -32,7 +32,7 @@ The resulting `attestation.json` is a DSSE envelope whose payload is an in-toto 
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://cyclonedx.org/bom"
 ]
@@ -42,7 +42,7 @@ Key insight: the SBOM predicate URI in the envelope is `https://cyclonedx.org/bo
 
 ## Why this shape
 
-Direct invocation matters. If you wrap syft in `bash -c 'cp …'` the `command-run/v0.1` attestor records `["bash","-c","cp …"]` — cilock is "running" cp, not syft, so the recorded argv lies about what produced the SBOM. The ptrace-based command trace also can't follow syft's syscalls because cilock isn't its parent process. Invoking syft as the wrapped command (`-- syft dir:. -o cyclonedx-json=syft.cdx.json`) fixes all three properties at once: the recorded argv is the real syft argv, ptrace traces syft directly, and the `product/v0.3` Merkle leaf binds the actual file syft wrote inside the wrapped step.
+Direct invocation matters. If you wrap syft in `bash -c 'cp …'` the `command-run/v0.2` attestor records `["bash","-c","cp …"]` — cilock is "running" cp, not syft, so the recorded argv lies about what produced the SBOM. The ptrace-based command trace also can't follow syft's syscalls because cilock isn't its parent process. Invoking syft as the wrapped command (`-- syft dir:. -o cyclonedx-json=syft.cdx.json`) fixes all three properties at once: the recorded argv is the real syft argv, ptrace traces syft directly, and the `product/v0.3` Merkle leaf binds the actual file syft wrote inside the wrapped step.
 
 | Antipattern (old) | Correct shape (this example) |
 |---|---|
@@ -66,7 +66,7 @@ Expected output:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://cyclonedx.org/bom"
 ]
@@ -76,7 +76,7 @@ Then confirm `command-run.cmd` is the literal syft argv (proof the `cp` antipatt
 
 ```bash
 jq -r '.payload' attestation.json | base64 -d \
-  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.1") | .attestation.cmd'
+  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.2") | .attestation.cmd'
 # ["syft","dir:.","-o","cyclonedx-json=syft.cdx.json"]
 ```
 
@@ -98,7 +98,7 @@ Yes. The `attestation.json` produced above is a standard DSSE envelope wrapping 
 
 - [`sbom` attestor](../attestors/sbom) — the underlying ingestion path, predicate-type switching, and SBOM format detection
 - [`product/v0.3` attestor](../attestors/product) — how syft's output file lands in the Merkle tree as a real product
-- [`command-run/v0.1` attestor](../attestors/command-run) — what records the literal syft argv
+- [`command-run/v0.2` attestor](../attestors/command-run) — what records the literal syft argv
 - [Validated example: tool-syft-sbom](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-syft-sbom) — the upstream README this page mirrors
 - [Anchore Syft on GitHub](https://github.com/anchore/syft) — upstream project
 - [Tools index](./index)

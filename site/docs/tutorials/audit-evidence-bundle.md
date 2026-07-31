@@ -132,14 +132,14 @@ BUNDLE_PUB="${3:?see usage}"
 tar xzf "$BUNDLE"
 
 # Confirm every bundled file's digest matches the audit-bundle attestation.
-# The material attestor stores entries as { "<path>": { "sha256": "..." }, ... }
-# directly under .attestation, no nested "materials" key.
+# material/v0.3 commits files into a Merkle tree: .attestation carries
+# { merkleRoot, treeSize, leaves: [ { path, fileDigest, leafHash }, ... ] } —
+# the per-file sha256 is each leaf's fileDigest.
 jq -r .payload < "$ATTESTATION" | base64 -d \
   | jq -r '.predicate.attestations[]
            | select(.type | test("material"))
-           | .attestation
-           | to_entries[]
-           | "\(.value.sha256)  \(.key)"' \
+           | .attestation.leaves[]
+           | "\(.fileDigest)  \(.path)"' \
   > expected.sha256
 sha256sum --check expected.sha256
 

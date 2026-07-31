@@ -31,7 +31,7 @@ FALCO_CLUSTER_NAME=<your-cluster> cilock run --step falco-capture \
 
 This is the recipe exercised in [`tool-falco-events`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-falco-events) — validated against the [`dropbox-clone-dev`](https://github.com/testifysec/dropbox-clone) EKS cluster with a deterministic "Read sensitive file untrusted" rule firing (a test pod `cat`'s `/etc/shadow`).
 
-The `sh -c` wrapper is necessary because `kubectl logs` writes to stdout — the shell redirect routes that stream to `falco-events.jsonl` so the `product/v0.3` Merkle tree can hash it. The `command-run/v0.1` predicate records the full `sh -c` argv; this is **not** the cp antipattern (you're not making a copy of a file written outside CI/lock's view, you're routing a streaming-only tool's stdout into a file). The grep filters out Falco's startup banner so only event lines are captured.
+The `sh -c` wrapper is necessary because `kubectl logs` writes to stdout — the shell redirect routes that stream to `falco-events.jsonl` so the `product/v0.3` Merkle tree can hash it. The `command-run/v0.2` predicate records the full `sh -c` argv; this is **not** the cp antipattern (you're not making a copy of a file written outside CI/lock's view, you're routing a streaming-only tool's stdout into a file). The grep filters out Falco's startup banner so only event lines are captured.
 
 `FALCO_CLUSTER_NAME` is the only env var the falco attestor reads — it stamps the captured envelope's `falco.cluster` field so policies can branch on which cluster the events came from. If unset, the field is empty but the attestation still signs.
 
@@ -46,7 +46,7 @@ The `falco` attestor is **available today via `rookery-builder --preset all`** (
 | `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
 | `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, dirty status |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle root over the working tree before the capture |
-| `https://aflock.ai/attestations/command-run/v0.1` | literal `sh -c 'kubectl logs … > falco-events.jsonl'` argv + exit code |
+| `https://aflock.ai/attestations/command-run/v0.2` | literal `sh -c 'kubectl logs … > falco-events.jsonl'` argv + exit code |
 | `https://aflock.ai/attestations/product/v0.3` | Merkle root over `falco-events.jsonl` as a real product file |
 | `https://aflock.ai/attestations/falco/v0.1` | parsed events + per-rule aggregation + priority counts + cluster name |
 
@@ -75,7 +75,7 @@ The `falco/v0.1` predicate body has this shape:
 | `command-run.cmd` records the `bash -c "... && cp ..."` chain | `command-run.cmd` records the single `sh -c` with the kubectl + redirect; no cp |
 | The product is a copy of a file written outside CI/lock's view | The product is `falco-events.jsonl` as the wrapped shell wrote it during the step |
 
-Three properties matter under the falco attestor: (1) `command-run/v0.1.cmd` records the real `sh -c` argv including the kubectl invocation — not a chained shell with a separate cp. (2) The ptrace spy traces the shell + kubectl child processes because CI/lock is `sh`'s direct parent. (3) `product/v0.3` captures `falco-events.jsonl` as written via the single redirect inside the wrapped step, then the falco attestor parses the same file to produce `falco/v0.1`.
+Three properties matter under the falco attestor: (1) `command-run/v0.2.cmd` records the real `sh -c` argv including the kubectl invocation — not a chained shell with a separate cp. (2) The ptrace spy traces the shell + kubectl child processes because CI/lock is `sh`'s direct parent. (3) `product/v0.3` captures `falco-events.jsonl` as written via the single redirect inside the wrapped step, then the falco attestor parses the same file to produce `falco/v0.1`.
 
 The single `sh -c` wrapper is the same pattern as [hadolint](./hadolint.mdx) and [govulncheck](./govulncheck.mdx) — tools (or in Falco's case, the `kubectl logs` consumer) that write structured output to stdout. The shell-redirect is the one-shot conversion from stdout to a file the product attestor can hash. The `command-run` predicate records the full argv; there's no copy of a file written outside CI/lock's view, so this is **not** the cp antipattern.
 
@@ -94,7 +94,7 @@ Expected output:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://aflock.ai/attestations/falco/v0.1"
 ]
@@ -104,7 +104,7 @@ Confirm `command-run.cmd` carries the literal `sh -c` argv:
 
 ```bash
 jq -r '.payload' attestation.json | base64 -d \
-  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.1") | .attestation.cmd'
+  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.2") | .attestation.cmd'
 # ["sh","-c","kubectl logs daemonset/falco -n <ns> --tail=500 | grep \"\\\"rule\\\"\" > falco-events.jsonl"]
 ```
 
@@ -149,7 +149,7 @@ Falco events have a richer schema than SARIF's locations-and-rules model — eve
 
 ### How does this differ from running Falco standalone?
 
-Standalone Falco emits a JSON event stream with no provenance — nothing binds it to a release, a cluster, a capture window, or a policy. CI/lock adds five predicates around the same events: `git/v0.1` (the commit), `environment/v0.1` (the host running the capture step), `material/v0.3` (the working tree), `command-run/v0.1` (the exact `sh -c` argv + exit code), and `product/v0.3` (the events file's content hash). The Falco events themselves are unchanged — same JSON, same downstream pipeline — but the surrounding evidence is now signed and policy-checkable.
+Standalone Falco emits a JSON event stream with no provenance — nothing binds it to a release, a cluster, a capture window, or a policy. CI/lock adds five predicates around the same events: `git/v0.1` (the commit), `environment/v0.1` (the host running the capture step), `material/v0.3` (the working tree), `command-run/v0.2` (the exact `sh -c` argv + exit code), and `product/v0.3` (the events file's content hash). The Falco events themselves are unchanged — same JSON, same downstream pipeline — but the surrounding evidence is now signed and policy-checkable.
 
 ## See also
 

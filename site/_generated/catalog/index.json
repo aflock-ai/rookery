@@ -407,7 +407,7 @@
         "vulnerability-scan"
       ],
       "primaryCategory": "vulnerability-scan",
-      "description": "Run GitHub CodeQL under cilock — the SARIF report from `codeql database analyze` becomes a signed v0.3 attestation parsed by the rookery sarif attestor, with the literal codeql argv captured in command-run/v0.1.",
+      "description": "Run GitHub CodeQL under cilock — the SARIF report from `codeql database analyze` becomes a signed v0.3 attestation parsed by the rookery sarif attestor, with the literal codeql argv captured in command-run/v0.2.",
       "emitsFormats": [
         "sarif"
       ],
@@ -1745,7 +1745,7 @@
         "vulnerability-scan"
       ],
       "primaryCategory": "vulnerability-scan",
-      "description": "Run OWASP ZAP DAST scans under cilock — the SARIF report from ZAP's automation framework becomes a signed v0.3 attestation parsed by the rookery sarif attestor, with the literal docker argv captured in command-run/v0.1.",
+      "description": "Run OWASP ZAP DAST scans under cilock — the SARIF report from ZAP's automation framework becomes a signed v0.3 attestation parsed by the rookery sarif attestor, with the literal docker argv captured in command-run/v0.2.",
       "emitsFormats": [
         "sarif"
       ],

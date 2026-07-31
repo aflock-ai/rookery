@@ -11,7 +11,7 @@ Grype accepts container images, directories, archives, and pre-existing Syft SBO
 
 [Grype](https://github.com/anchore/grype) is Anchore's vulnerability scanner. Point it at a container image, a directory tree, an archive, or an existing Syft SBOM and it returns the CVEs that match the packages it found. On its own, Grype writes a report file — a loose artifact that's easy to lose, easy to edit silently, and impossible to bind to "the image we actually shipped."
 
-Cilock wraps the same `grype` command you already run and turns the SARIF report into a **signed, linked attestation**. The wrapper records the literal `grype` argv into a `command-run/v0.1` predicate, the file Grype emits is captured as a `product/v0.3` Merkle root, and the `sarif` attestor parses the report directly out of that product. Nothing is re-encoded; nothing is copied; the bytes the policy verifies are the bytes Grype produced.
+Cilock wraps the same `grype` command you already run and turns the SARIF report into a **signed, linked attestation**. The wrapper records the literal `grype` argv into a `command-run/v0.2` predicate, the file Grype emits is captured as a `product/v0.3` Merkle root, and the `sarif` attestor parses the report directly out of that product. Nothing is re-encoded; nothing is copied; the bytes the policy verifies are the bytes Grype produced.
 
 ## Validated invocation
 
@@ -51,7 +51,7 @@ Six attestations end up in the envelope's predicate:
 | `environment` | `https://aflock.ai/attestations/environment/v0.1` | OS, arch, working dir, env vars |
 | `git` | `https://aflock.ai/attestations/git/v0.1` | commit SHA, branch, remotes, tag |
 | `material/v0.3` | `https://aflock.ai/attestations/material/v0.3` | Merkle root of pre-execution files |
-| `command-run/v0.1` | `https://aflock.ai/attestations/command-run/v0.1` | literal grype argv + exit code + stdio digests |
+| `command-run/v0.2` | `https://aflock.ai/attestations/command-run/v0.2` | literal grype argv + exit code + stdio digests |
 | `product/v0.3` | `https://aflock.ai/attestations/product/v0.3` | Merkle root of files Grype created (the SARIF) |
 | `sarif/v0.1` | `https://aflock.ai/attestations/sarif/v0.1` | the SARIF document, byte-identical, under `.report` |
 
@@ -83,7 +83,7 @@ Expected:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://aflock.ai/attestations/sarif/v0.1"
 ]
@@ -93,7 +93,7 @@ Then confirm `command-run.cmd` is the literal Grype argv (proof the antipattern 
 
 ```bash
 jq -r '.payload' attestation.json | base64 -d \
-  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.1") | .attestation.cmd'
+  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.2") | .attestation.cmd'
 # ["grype","dir:.","-o","sarif=grype.sarif"]
 ```
 
@@ -133,6 +133,6 @@ See the [`sarif` attestor reference](../attestors/sarif) for the full predicate 
 
 - [`sarif` attestor reference](../attestors/sarif) — predicate schema, Rego patterns, the `.report` wrapper
 - [`product/v0.3` attestor](../attestors/product) — how Grype's SARIF gets captured as a real product
-- [`command-run/v0.1` attestor](../attestors/command-run) — how the literal `grype` argv is recorded
+- [`command-run/v0.2` attestor](../attestors/command-run) — how the literal `grype` argv is recorded
 - [Tools index](./) — full catalog of validated tool integrations
 - [`tool-grype-sarif` validated example](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-grype-sarif) — the upstream example this page mirrors

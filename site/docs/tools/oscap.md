@@ -33,7 +33,7 @@ This is the [`29-oscap`](https://github.com/aflock-ai/attestor-compliance-exampl
 
 A few things to know about this invocation:
 
-- **No soft-fail flag needed.** `oscap xccdf eval` exits 0 when the scan completes, regardless of how many rules failed — the rule outcomes live inside the XCCDF results XML. `command-run/v0.1` records exit 0 even when `failCount > 0`. The gate belongs at `cilock verify` time over the parsed `oscap/v0.1` predicate, not at scan time.
+- **No soft-fail flag needed.** `oscap xccdf eval` exits 0 when the scan completes, regardless of how many rules failed — the rule outcomes live inside the XCCDF results XML. `command-run/v0.2` records exit 0 even when `failCount > 0`. The gate belongs at `cilock verify` time over the parsed `oscap/v0.1` predicate, not at scan time.
 - **`--results <file>` is required.** Without it `oscap` only prints to stdout and there is no XML file for CI/lock's `product/v0.3` and `oscap` attestors to ingest.
 - **Datastream path is distribution-specific.** AL2023 ships SSG content at `/usr/share/xml/scap/ssg/content/ssg-amzn2023-ds.xml`; RHEL 9 uses `ssg-rhel9-ds.xml`, Ubuntu 22.04 uses `ssg-ubuntu2204-ds.xml`, etc. The `scap-security-guide` package (RHEL/Fedora) or `ssg-base` (Debian/Ubuntu) installs them.
 
@@ -43,7 +43,7 @@ Each `cilock` run emits an in-toto envelope whose predicate carries the followin
 
 | Attestor type                                          | Captures                                                                  |
 | ------------------------------------------------------ | ------------------------------------------------------------------------- |
-| `https://aflock.ai/attestations/command-run/v0.1`      | Real `oscap xccdf eval ...` argv, env, exit code, stdout/stderr           |
+| `https://aflock.ai/attestations/command-run/v0.2`      | Real `oscap xccdf eval ...` argv, env, exit code, stdout/stderr           |
 | `https://aflock.ai/attestations/material/v0.3`         | Merkle tree of inputs (the SSG datastream XML is read, not in cwd)        |
 | `https://aflock.ai/attestations/product/v0.3`          | Merkle tree of outputs, including `oscap-results.xml`                     |
 | `https://aflock.ai/attestations/oscap/v0.1`            | Parsed XCCDF: profile, benchmark, target host, per-result counts, failed-rule list, `reportDigestSet.sha256` |
@@ -92,7 +92,7 @@ Expected output:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://aflock.ai/attestations/oscap/v0.1"
 ]
@@ -103,7 +103,7 @@ Confirm `oscap`'s real argv ended up in `command-run`:
 ```bash
 jq -r '.payload' attestation.json | base64 -d \
   | jq '.predicate.attestations[]
-        | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+        | select(.type=="https://aflock.ai/attestations/command-run/v0.2")
         | .attestation.cmd'
 ```
 
@@ -164,7 +164,7 @@ Yes. The raw XCCDF results XML lands in `product/v0.3` as a Merkle leaf, so it's
 
 ### Does `oscap` exit non-zero on findings?
 
-No — unlike SARIF tools like Checkov or gosec, `oscap xccdf eval` exits 0 whenever the scan completes successfully, even if many rules failed. The rule outcomes are inside the XCCDF XML, not in the process exit code. That means CI/lock's `command-run/v0.1` records exit 0 and no soft-fail flag is needed. Enforce thresholds in policy (e.g., `failCount == 0` in Rego against the `oscap/v0.1` predicate at `cilock verify` time).
+No — unlike SARIF tools like Checkov or gosec, `oscap xccdf eval` exits 0 whenever the scan completes successfully, even if many rules failed. The rule outcomes are inside the XCCDF XML, not in the process exit code. That means CI/lock's `command-run/v0.2` records exit 0 and no soft-fail flag is needed. Enforce thresholds in policy (e.g., `failCount == 0` in Rego against the `oscap/v0.1` predicate at `cilock verify` time).
 
 ## See also
 

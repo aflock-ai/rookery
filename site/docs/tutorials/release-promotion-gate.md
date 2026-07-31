@@ -35,7 +35,7 @@ Write `policy.json` declaring what every promoted release must satisfy. This exa
       "name": "build",
       "attestations": [
         { "type": "https://aflock.ai/attestations/material/v0.3" },
-        { "type": "https://aflock.ai/attestations/command-run/v0.1" },
+        { "type": "https://aflock.ai/attestations/command-run/v0.2" },
         { "type": "https://aflock.ai/attestations/product/v0.3" },
         { "type": "https://cyclonedx.org/bom" },
         {

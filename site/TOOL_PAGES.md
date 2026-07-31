@@ -34,7 +34,7 @@ A bullet list or short table of the predicate types emitted. The complete list f
 - `https://aflock.ai/attestations/environment/v0.1`
 - `https://aflock.ai/attestations/git/v0.1`
 - `https://aflock.ai/attestations/material/v0.3`
-- `https://aflock.ai/attestations/command-run/v0.1`
+- `https://aflock.ai/attestations/command-run/v0.2`
 - `https://aflock.ai/attestations/product/v0.3`
 - `https://aflock.ai/attestations/sarif/v0.1`
 
@@ -73,7 +73,7 @@ Expected output:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://aflock.ai/attestations/sarif/v0.1"
 ]

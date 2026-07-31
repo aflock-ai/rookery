@@ -44,7 +44,7 @@ On its own, `govulncheck` writes a report file. That's an artifact you have to r
 Each arrow is a cryptographic subject digest match. No human reads logs, no copy-paste between systems. The same digest links the scan to the artifact to the deploy decision.
 
 ## Validated invocation
-cilock invokes govulncheck directly so `command-run/v0.1` records the literal govulncheck argv. govulncheck has no `-o`/`--output` flag (it writes SARIF to stdout), so a single shell redirect routes its output to a file the product attestor can hash — that's not the `cp` antipattern, it's the only way govulncheck exposes file output today:
+cilock invokes govulncheck directly so `command-run/v0.2` records the literal govulncheck argv. govulncheck has no `-o`/`--output` flag (it writes SARIF to stdout), so a single shell redirect routes its output to a file the product attestor can hash — that's not the `cp` antipattern, it's the only way govulncheck exposes file output today:
 
 ```bash
 cilock run --step govulncheck-scan \
@@ -62,7 +62,7 @@ The wrapped `sh -c` records `["sh","-c","govulncheck -format sarif ./... > govul
 | `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
 | `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, tags, dirty status, parents |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle root over the Go module before govulncheck runs |
-| `https://aflock.ai/attestations/command-run/v0.1` | the literal `sh -c 'govulncheck …'` argv + exit code + ptrace |
+| `https://aflock.ai/attestations/command-run/v0.2` | the literal `sh -c 'govulncheck …'` argv + exit code + ptrace |
 | `https://aflock.ai/attestations/product/v0.3` | Merkle root over `govulncheck.sarif` as a real product file |
 | `https://aflock.ai/attestations/sarif/v0.1` | the parsed SARIF document (driver = `govulncheck`, rules + results) |
 
@@ -92,7 +92,7 @@ Expected output:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://aflock.ai/attestations/sarif/v0.1"
 ]
@@ -102,7 +102,7 @@ Confirm `command-run.cmd` carries the literal shell-redirect argv (proof the cp 
 
 ```bash
 jq -r '.payload' attestation.json | base64 -d \
-  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.1") | .attestation.cmd'
+  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.2") | .attestation.cmd'
 # ["sh","-c","govulncheck -format sarif ./... > govulncheck.sarif"]
 ```
 
@@ -114,7 +114,7 @@ The exact invocation above runs end-to-end against real infrastructure in CI. Th
 
 ### Does cilock support govulncheck?
 
-Yes. Wrap `govulncheck -format sarif ./... > govulncheck.sarif` with `cilock run --attestations sarif,environment,git`. The SARIF report becomes a signed v0.3 attestation under `https://aflock.ai/attestations/sarif/v0.1`, the literal govulncheck argv is captured in `command-run/v0.1`, and the report file is hashed into the v0.3 Merkle tree.
+Yes. Wrap `govulncheck -format sarif ./... > govulncheck.sarif` with `cilock run --attestations sarif,environment,git`. The SARIF report becomes a signed v0.3 attestation under `https://aflock.ai/attestations/sarif/v0.1`, the literal govulncheck argv is captured in `command-run/v0.2`, and the report file is hashed into the v0.3 Merkle tree.
 
 ### Why does cilock wrap govulncheck in `sh -c`?
 

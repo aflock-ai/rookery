@@ -26,7 +26,7 @@ What lands in the signed envelope:
 
 | Predicate | Source |
 |---|---|
-| `command-run/v0.1` | The literal tool argv + exit code + opened-file traces via the ptrace spy |
+| `command-run/v0.2` | The literal tool argv + exit code + opened-file traces via the ptrace spy |
 | `material/v0.3` | Merkle root over the working tree before the tool runs |
 | `product/v0.3` | Merkle root over files the tool produced (the SARIF, the SBOM, the metadata file) |
 | Tool-specific | The matching attestor (`sarif`, `sbom`, `vex`, `docker`, `oci`, etc.) parses the captured output and emits its own predicate alongside |
@@ -120,11 +120,11 @@ If the tool emits SARIF 2.1.0, CycloneDX, SPDX, or OpenVEX — yes, today, via t
 
 ### Why must the tool be invoked directly by CI/lock?
 
-So `command-run/v0.1` records the tool's real argv, the ptrace spy can trace the tool's syscalls, and `product/v0.3` captures the tool's real output file. A `bash -c "cp tool-output.sarif product.sarif"` shim records `bash` in `command-run`, hides the tool from the spy, and binds an indirect copy as the product — defeating the per-step provenance graph.
+So `command-run/v0.2` records the tool's real argv, the ptrace spy can trace the tool's syscalls, and `product/v0.3` captures the tool's real output file. A `bash -c "cp tool-output.sarif product.sarif"` shim records `bash` in `command-run`, hides the tool from the spy, and binds an indirect copy as the product — defeating the per-step provenance graph.
 
 ### What if the tool exits non-zero on findings?
 
-Most security tools do (gosec, hadolint, trivy with `--exit-code`, checkov, etc.). Use the tool's native "soft-fail" flag (`-no-fail`, `-s`, `--exit-code 0`) so CI/lock's `command-run/v0.1` stays green. Enforce the finding-count gate in your policy's Rego over the captured SARIF, not at the tool exit code.
+Most security tools do (gosec, hadolint, trivy with `--exit-code`, checkov, etc.). Use the tool's native "soft-fail" flag (`-no-fail`, `-s`, `--exit-code 0`) so CI/lock's `command-run/v0.2` stays green. Enforce the finding-count gate in your policy's Rego over the captured SARIF, not at the tool exit code.
 
 ### What if the tool writes its output to stdout, not a file?
 

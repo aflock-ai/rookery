@@ -20,7 +20,7 @@ Both are post-product attestors, they run after the wrapped command finishes and
 
 ## Pattern 1: SBOM from a Go build with syft
 
-Use two CI/lock steps — build then SBOM — so each tool's argv lands in its own `command-run/v0.1` attestation, and the SBOM step's `material/v0.3` Merkle root captures the build artifact as input to the SBOM:
+Use two CI/lock steps — build then SBOM — so each tool's argv lands in its own `command-run/v0.2` attestation, and the SBOM step's `material/v0.3` Merkle root captures the build artifact as input to the SBOM:
 
 ```yaml
 - name: build
@@ -44,7 +44,7 @@ Use two CI/lock steps — build then SBOM — so each tool's argv lands in its o
 
 What happens:
 
-1. **build step:** material attestor records source-file digests. `go build` runs as CI/lock's direct child — its argv is recorded by `command-run/v0.1`. `bin/myapp` lands in `product/v0.3` as a Merkle leaf.
+1. **build step:** material attestor records source-file digests. `go build` runs as CI/lock's direct child — its argv is recorded by `command-run/v0.2`. `bin/myapp` lands in `product/v0.3` as a Merkle leaf.
 2. **sbom step:** material attestor digests the working tree *after* build, so `bin/myapp` is captured as the SBOM step's input. `syft` runs as CI/lock's direct child. The CycloneDX SBOM lands in `product/v0.3`; the `sbom` attestor parses it and emits a `https://cyclonedx.org/bom` predicate.
 3. A release-gate Rego policy can now verify that the SBOM was generated against the exact binary the build step produced — the SBOM step's `material/v0.3.merkleRoot` must contain the same digest as the build step's `product/v0.3.merkleRoot` for `bin/myapp`. See [verify-in-a-release-gate](../guides/verify-in-a-release-gate) for the worked policy.
 
@@ -64,7 +64,7 @@ Same shape, different attestor. The trick is letting the SAST tool fail without 
     cilock-args: --attestor-product-include-glob "*.sarif"
 ```
 
-The `-no-fail` flag tells gosec to return 0 even when it finds issues — without it, CI/lock's `command-run/v0.1` attestor records a failed step and downstream attestors skip. The SARIF still carries the findings; the policy gate is the Rego over the captured SARIF, not the tool's exit code. (See [tools/gosec](../tools/gosec) for the full per-tool walkthrough.)
+The `-no-fail` flag tells gosec to return 0 even when it finds issues — without it, CI/lock's `command-run/v0.2` attestor records a failed step and downstream attestors skip. The SARIF still carries the findings; the policy gate is the Rego over the captured SARIF, not the tool's exit code. (See [tools/gosec](../tools/gosec) for the full per-tool walkthrough.)
 
 Adapting for other SAST tools — each has a comparable "don't fail on findings" flag so CI/lock's argv stays clean:
 
@@ -111,7 +111,7 @@ The whole point is making absence a build-blocker. A policy fragment that requir
       "name": "build",
       "attestations": [
         { "type": "https://aflock.ai/attestations/material/v0.3" },
-        { "type": "https://aflock.ai/attestations/command-run/v0.1" },
+        { "type": "https://aflock.ai/attestations/command-run/v0.2" },
         { "type": "https://aflock.ai/attestations/product/v0.3" },
         { "type": "https://aflock.ai/attestations/sbom/v0.1" }
       ],
@@ -120,7 +120,7 @@ The whole point is making absence a build-blocker. A policy fragment that requir
     "sast": {
       "name": "sast",
       "attestations": [
-        { "type": "https://aflock.ai/attestations/command-run/v0.1" },
+        { "type": "https://aflock.ai/attestations/command-run/v0.2" },
         { "type": "https://aflock.ai/attestations/sarif/v0.1" }
       ],
       "functionaries": [{ "type": "publickey", "publickeyid": "<your-key>" }]

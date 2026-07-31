@@ -50,7 +50,7 @@ The signed envelope's payload (`.payload`, base64-decoded) carries one in-toto S
 https://aflock.ai/attestations/environment/v0.1
 https://aflock.ai/attestations/git/v0.1
 https://aflock.ai/attestations/material/v0.3
-https://aflock.ai/attestations/command-run/v0.1
+https://aflock.ai/attestations/command-run/v0.2
 https://aflock.ai/attestations/product/v0.3
 https://aflock.ai/attestations/sarif/v0.1
 ```
@@ -68,7 +68,7 @@ jq -r '.payload' attestation.json | base64 -d \
 # show the recorded command-run argv — should be the real hadolint shell invocation
 jq -r '.payload' attestation.json | base64 -d \
   | jq '.predicate.attestations[]
-        | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+        | select(.type=="https://aflock.ai/attestations/command-run/v0.2")
         | .attestation.cmd'
 
 # count findings parsed by the sarif attestor

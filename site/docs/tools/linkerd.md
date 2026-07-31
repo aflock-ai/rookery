@@ -28,7 +28,7 @@ LINKERD_CLUSTER_NAME=<your-cluster> cilock run --step linkerd-mesh-check \
             linkerd viz edges deploy -A -o json > linkerd-edges.json'
 ```
 
-This is the exact command exercised in [`tool-linkerd-check`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-linkerd-check). The single `sh -c` wrapper writes both JSON files into the working directory in one shot: CI/lock's product attestor hashes both, the linkerd-check attestor parses both. The `command-run/v0.1` predicate records the full `sh -c` argv.
+This is the exact command exercised in [`tool-linkerd-check`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-linkerd-check). The single `sh -c` wrapper writes both JSON files into the working directory in one shot: CI/lock's product attestor hashes both, the linkerd-check attestor parses both. The `command-run/v0.2` predicate records the full `sh -c` argv.
 
 `LINKERD_CLUSTER_NAME` is read by the attestor and stamped into the predicate's `cluster_name` field so cluster-aware Rego can branch on it. Optional; if unset the field is empty but the attestation still signs.
 
@@ -39,7 +39,7 @@ This is the exact command exercised in [`tool-linkerd-check`](https://github.com
 | `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
 | `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, dirty status |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle root over the working tree before the capture |
-| `https://aflock.ai/attestations/command-run/v0.1` | literal `sh -c 'linkerd check ...; linkerd viz edges ...'` argv |
+| `https://aflock.ai/attestations/command-run/v0.2` | literal `sh -c 'linkerd check ...; linkerd viz edges ...'` argv |
 | `https://aflock.ai/attestations/product/v0.3` | Merkle root over `linkerd-check.json` + `linkerd-edges.json` |
 | `https://aflock.ai/attestations/linkerd-check/v0.1` | parsed reports with per-category pass/warn/error counts, edges summary with secured/insecure counts, cluster name |
 
@@ -74,7 +74,7 @@ The `linkerd-check/v0.1` predicate body has this shape:
 | `command-run.cmd` records `["bash","-c","... && cp ..."]` | `command-run.cmd` records the literal `sh -c` argv invoking the two linkerd subcommands |
 | The product is a copy of a file written outside CI/lock's view | The product is the JSON file as `linkerd` wrote it during the wrapped step |
 
-Three properties matter: (1) `command-run/v0.1.cmd` records the real argv (the `sh -c` invoking the two linkerd subcommands), not a chained shell with a separate cp. (2) The ptrace spy traces the shell + linkerd child processes because CI/lock is `sh`'s direct parent. (3) `product/v0.3` captures `linkerd-check.json` and `linkerd-edges.json` as written via the single redirects inside the wrapped step, and the linkerd-check attestor parses those exact files.
+Three properties matter: (1) `command-run/v0.2.cmd` records the real argv (the `sh -c` invoking the two linkerd subcommands), not a chained shell with a separate cp. (2) The ptrace spy traces the shell + linkerd child processes because CI/lock is `sh`'s direct parent. (3) `product/v0.3` captures `linkerd-check.json` and `linkerd-edges.json` as written via the single redirects inside the wrapped step, and the linkerd-check attestor parses those exact files.
 
 The single `sh -c` wrapper is the same pattern as [hadolint](./hadolint.mdx), [govulncheck](./govulncheck.mdx), and [falco](./falco.md) — tools that need stdout-to-file conversion to be hashed by the product attestor. The shell redirect is a one-shot conversion, not the cp antipattern.
 
@@ -121,7 +121,7 @@ Expected output:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://aflock.ai/attestations/linkerd-check/v0.1"
 ]
@@ -131,7 +131,7 @@ Confirm `command-run.cmd` carries the literal `sh -c` argv:
 
 ```bash
 jq -r '.payload' attestation.json | base64 -d \
-  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.1") | .attestation.cmd'
+  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.2") | .attestation.cmd'
 # ["sh","-c","linkerd check -o json > linkerd-check.json; linkerd viz edges deploy -A -o json > linkerd-edges.json"]
 ```
 
@@ -179,7 +179,7 @@ For the mTLS gate, yes — `linkerd viz edges` is what provides per-edge mTLS bo
 
 ### How does this differ from running Linkerd standalone?
 
-Standalone `linkerd check` and `linkerd viz edges` give you JSON outputs with no provenance — nothing binds them to a release, a cluster (modulo the kubeconfig that ran the command), or a policy. CI/lock adds five predicates around the same JSON: `git/v0.1` (the commit that defined the policy), `environment/v0.1` (the host running the capture), `material/v0.3` (the working tree), `command-run/v0.1` (the exact `sh -c` argv + exit code), and `product/v0.3` (the JSON files' content hashes). The linkerd JSON is unchanged — same bytes, same downstream pipeline — but the surrounding evidence is now signed and policy-checkable.
+Standalone `linkerd check` and `linkerd viz edges` give you JSON outputs with no provenance — nothing binds them to a release, a cluster (modulo the kubeconfig that ran the command), or a policy. CI/lock adds five predicates around the same JSON: `git/v0.1` (the commit that defined the policy), `environment/v0.1` (the host running the capture), `material/v0.3` (the working tree), `command-run/v0.2` (the exact `sh -c` argv + exit code), and `product/v0.3` (the JSON files' content hashes). The linkerd JSON is unchanged — same bytes, same downstream pipeline — but the surrounding evidence is now signed and policy-checkable.
 
 ## See also
 

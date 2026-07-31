@@ -30,7 +30,7 @@ cilock run --step prowler-scan \
 
 This is the exact line validated end-to-end in [`tool-prowler-ocsf`](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/tool-prowler-ocsf) — don't paraphrase it.
 
-Prowler exits with code `3` when failures are found. The `-z` / `--ignore-exit-code-3` flag keeps `command-run/v0.1.exitcode == 0` so the postproduct stage runs cleanly even when the scan finds problems — the findings themselves are still recorded inside the `prowler/v0.1` predicate, so downstream policy still sees them. Drop `-z` if you want the runner to abort on any non-zero from the scanner.
+Prowler exits with code `3` when failures are found. The `-z` / `--ignore-exit-code-3` flag keeps `command-run/v0.2.exitcode == 0` so the postproduct stage runs cleanly even when the scan finds problems — the findings themselves are still recorded inside the `prowler/v0.1` predicate, so downstream policy still sees them. Drop `-z` if you want the runner to abort on any non-zero from the scanner.
 
 AWS authentication is read from the surrounding shell. For SSO-backed profiles run `aws sso login --profile <profile>` first; for keys export `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`; for instance roles nothing extra is needed.
 
@@ -43,7 +43,7 @@ A single run with `--attestations prowler,environment,git` produces these predic
 | `https://aflock.ai/attestations/environment/v0.1` | host OS, kernel, env vars (sensitive ones obfuscated) |
 | `https://aflock.ai/attestations/git/v0.1` | commit hash, branch, tags, dirty status, parents |
 | `https://aflock.ai/attestations/material/v0.3` | Merkle root over the working directory before prowler runs |
-| `https://aflock.ai/attestations/command-run/v0.1` | literal `["prowler","aws",…]` argv, exit code, ptrace |
+| `https://aflock.ai/attestations/command-run/v0.2` | literal `["prowler","aws",…]` argv, exit code, ptrace |
 | `https://aflock.ai/attestations/product/v0.3` | Merkle root over `output/prowler-iam.json` as a real product file |
 | `https://aflock.ai/attestations/prowler/v0.1` | the parsed Prowler report — account, provider, totalChecks/passCount/failCount, severity rollup, failedChecks list (checkId, severity, resourceArn, statusExtended), report digest |
 
@@ -74,7 +74,7 @@ Expected output:
 
 ```json
 [
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
@@ -87,7 +87,7 @@ Confirm `command-run.cmd` carries the literal Prowler argv (proof the cp antipat
 
 ```bash
 jq -r '.payload' attestation.json | base64 -d \
-  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.1") | .attestation.cmd'
+  | jq '.predicate.attestations[] | select(.type=="https://aflock.ai/attestations/command-run/v0.2") | .attestation.cmd'
 # ["prowler","aws","--services","iam","-M","json","-o","output","-F","prowler-iam","-z"]
 ```
 
@@ -183,7 +183,7 @@ The summary lets policy gate on failure counts or specific failed `checkId`s wit
 
 ### Does cilock support Prowler?
 
-Yes. Wrap `prowler aws --services <svc> -M json -o output -F <prefix> -z` with `cilock run --attestations prowler,environment,git`. Prowler's report becomes a signed v0.3 attestation under `https://aflock.ai/attestations/prowler/v0.1`, the literal Prowler argv is captured in `command-run/v0.1`, and the report file is hashed into the v0.3 Merkle tree.
+Yes. Wrap `prowler aws --services <svc> -M json -o output -F <prefix> -z` with `cilock run --attestations prowler,environment,git`. Prowler's report becomes a signed v0.3 attestation under `https://aflock.ai/attestations/prowler/v0.1`, the literal Prowler argv is captured in `command-run/v0.2`, and the report file is hashed into the v0.3 Merkle tree.
 
 ### Which clouds does Prowler scan under cilock?
 

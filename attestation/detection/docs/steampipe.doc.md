@@ -21,7 +21,7 @@ cilock run --step steampipe-query \
 Two Steampipe-specific quirks are baked into that command — both matter for clean attestations:
 
 - **`--output json` is required.** The `steampipe` rookery attestor consumes the query's JSON product in `PostProductRunType`. The default `--output table` writes ANSI-formatted text that the attestor will skip (it filters on `application/json` MIME type or `.json` suffix). Pass `--output json` (or `--output csv` and reformat; `json` is the supported shape).
-- **`sh -c '... > out.json'` is a single-shell-redirect.** Steampipe writes query output to stdout, not to a file. Wrapping the run in `sh -c` routes that stdout into `steampipe.json` so the `product/v0.3` attestor can hash it. `command-run/v0.1` records the full `sh -c` argv — that's a tool-output limitation (stdout-only), NOT the `cp` antipattern.
+- **`sh -c '... > out.json'` is a single-shell-redirect.** Steampipe writes query output to stdout, not to a file. Wrapping the run in `sh -c` routes that stdout into `steampipe.json` so the `product/v0.3` attestor can hash it. `command-run/v0.2` records the full `sh -c` argv — that's a tool-output limitation (stdout-only), NOT the `cp` antipattern.
 
 ## What gets captured
 
@@ -29,7 +29,7 @@ Each cilock run emits an in-toto envelope whose predicate carries the following 
 
 | Attestor type                                          | Captures                                                                |
 | ------------------------------------------------------ | ----------------------------------------------------------------------- |
-| `https://aflock.ai/attestations/command-run/v0.1`      | Real `sh -c 'steampipe query ...'` argv, env, exit code, stdout/stderr  |
+| `https://aflock.ai/attestations/command-run/v0.2`      | Real `sh -c 'steampipe query ...'` argv, env, exit code, stdout/stderr  |
 | `https://aflock.ai/attestations/material/v0.3`         | Merkle tree of working-directory inputs (`.sql` files, mod definitions) |
 | `https://aflock.ai/attestations/product/v0.3`          | Merkle tree of outputs, including `steampipe.json`                      |
 | `https://aflock.ai/attestations/steampipe/v0.1`        | Parsed query rows, `resultHash` (SHA-256 of raw JSON), frontmatter (id, KSI, NIST, plugin, severity), per-row subjects |
@@ -47,7 +47,7 @@ The `steampipe/v0.1` predicate's `results[].resultHash` matches the SHA-256 of t
 | Product attestor digests the `cp` destination                     | Product attestor digests Steampipe's actual stdout-redirect target |
 | Tool execution happens outside the attestation                    | Steampipe runs as cilock's grandchild via `sh -c`; spy still traces |
 
-Steampipe writes its query results to **stdout**, not to a file the binary owns. That's an upstream limitation — `--output json` controls the format but there's no `--output-file` option. A single `sh -c '... > out.json'` is the minimum-glue redirect that gets the bytes into a file the `product/v0.3` Merkle tree can hash. `command-run/v0.1` records the full `["sh", "-c", "steampipe query --output json ... > steampipe.json"]` argv, so the recipe is auditable end-to-end — no shell logic, no string concatenation, no `cp` laundering.
+Steampipe writes its query results to **stdout**, not to a file the binary owns. That's an upstream limitation — `--output json` controls the format but there's no `--output-file` option. A single `sh -c '... > out.json'` is the minimum-glue redirect that gets the bytes into a file the `product/v0.3` Merkle tree can hash. `command-run/v0.2` records the full `["sh", "-c", "steampipe query --output json ... > steampipe.json"]` argv, so the recipe is auditable end-to-end — no shell logic, no string concatenation, no `cp` laundering.
 
 ## Validate it locally
 
@@ -79,7 +79,7 @@ Expected output:
   "https://aflock.ai/attestations/environment/v0.1",
   "https://aflock.ai/attestations/git/v0.1",
   "https://aflock.ai/attestations/material/v0.3",
-  "https://aflock.ai/attestations/command-run/v0.1",
+  "https://aflock.ai/attestations/command-run/v0.2",
   "https://aflock.ai/attestations/product/v0.3",
   "https://aflock.ai/attestations/steampipe/v0.1"
 ]
@@ -89,7 +89,7 @@ Expected output:
 # Confirm the real argv (including the steampipe query string) landed in command-run.
 jq -r '.payload' attestation.json | base64 -d \
   | jq '.predicate.attestations[]
-        | select(.type=="https://aflock.ai/attestations/command-run/v0.1")
+        | select(.type=="https://aflock.ai/attestations/command-run/v0.2")
         | .attestation.cmd'
 ```
 
