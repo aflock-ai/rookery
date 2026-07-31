@@ -46,25 +46,35 @@ func payloadMatchesSubjects(payload []byte, subjectDigests []string) (bool, erro
 	if len(subjectDigests) == 0 {
 		return true, nil
 	}
-	var stmt intoto.Statement
+	// Decode ONLY the subject list. The guard never reads the predicate, and
+	// decoding the full intoto.Statement copies the predicate body into a
+	// fresh json.RawMessage — for a prod SBOM/SARIF collection that is a
+	// multi-MB allocation per candidate per Search call (per step per search
+	// depth). The narrow struct still reads the signed payload bytes, so the
+	// artifact-substitution guarantee is unchanged; the decoder scans (and
+	// syntax-validates) the whole payload either way but retains only the
+	// subjects. A malformed payload still fails closed.
+	var stmt struct {
+		Subject []intoto.Subject `json:"subject"`
+	}
 	if err := json.Unmarshal(payload, &stmt); err != nil {
 		return false, fmt.Errorf("decode signed payload for subject check: %w", err)
 	}
-	return statementMatchesSubjects(stmt, subjectDigests), nil
+	return subjectsMatchDigests(stmt.Subject, subjectDigests), nil
 }
 
-// statementMatchesSubjects reports whether stmt attests at least one of the
-// requested subject digests. An EMPTY request matches any statement (a
+// subjectsMatchDigests reports whether the subject list attests at least one of
+// the requested subject digests. An EMPTY request matches any statement (a
 // subject-agnostic query — whole-policy walks, probes). A NON-EMPTY request
 // requires the statement to actually carry one of the digests. Mirrors
-// MemorySource's index-build digest matchability filter. Only call this on a
-// statement decoded from signature-verified bytes (see payloadMatchesSubjects).
-func statementMatchesSubjects(stmt intoto.Statement, subjectDigests []string) bool {
+// MemorySource's index-build digest matchability filter. Only call this on
+// subjects decoded from signature-verified bytes (see payloadMatchesSubjects).
+func subjectsMatchDigests(subjects []intoto.Subject, subjectDigests []string) bool {
 	if len(subjectDigests) == 0 {
 		return true
 	}
 	have := make(map[string]struct{})
-	for _, sub := range stmt.Subject {
+	for _, sub := range subjects {
 		for algorithm, digest := range sub.Digest {
 			if !cryptoutil.IsMatchableSubjectDigest(algorithm, digest) {
 				continue

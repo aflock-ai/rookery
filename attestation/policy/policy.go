@@ -681,6 +681,17 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 				}
 
 				if len(collections) == 0 {
+					// An empty result at a LATER depth for a step that already has
+					// adjudicated collections (or an earlier diagnosis) adds no
+					// information: the depth loop only ever widens the digest set,
+					// so emptiness here means "nothing NEW", not "nothing at all".
+					// Re-diagnosing would fire the UNFILTERED probe below — which
+					// on prod sources downloads every collection for the step name
+					// — once per depth, and append one identical multi-line
+					// diagnostic rejection per depth (#7572).
+					if prior, adjudicated := resultsByStep[stepName]; adjudicated && (len(prior.Passed) > 0 || len(prior.Rejected) > 0) {
+						continue
+					}
 					// Distinguish "no envelope loaded for this step" from
 					// "envelope IS loaded but operator's artifact digest
 					// isn't a subject of it." Without this the operator
@@ -728,7 +739,18 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 			// signals and the step_results UI with phantom passing collections.
 			if result, ok := resultsByStep[stepName]; ok && result.Step != "" {
 				result.Passed = mergePassedCollections(result.Passed, stepResult.Passed)
-				result.Rejected = append(result.Rejected, stepResult.Rejected...)
+				// Rejected entries get the same cross-depth de-duplication as
+				// Passed (#7572): a source without seen-envelope exclusion
+				// (judge-api's EntSource) re-returns the same envelope every
+				// depth, and each RejectedCollection retains the FULL parsed
+				// envelope — payload bytes, statement subject tree, collection
+				// attestor tree. Appending raw retained one multi-MB parse
+				// tree per depth per rejection. Identity is content-based
+				// (statement + reason), so distinct rejections — including the
+				// same collection rejected for a different reason at a later
+				// depth — are all preserved. Rejected entries never affect the
+				// verdict (see searchExpansionIsMonotone).
+				result.Rejected = mergeRejectedCollections(result.Rejected, stepResult.Rejected)
 				resultsByStep[stepName] = result
 			} else {
 				resultsByStep[stepName] = stepResult
@@ -1139,6 +1161,51 @@ func passedCollectionKeyOf(pc PassedCollection) string {
 		return pc.contentKey
 	}
 	return passedCollectionKey(pc)
+}
+
+// mergeRejectedCollections appends src onto dst while skipping entries already
+// present in dst — the Rejected-side counterpart of mergePassedCollections
+// (#7572). Identity is rejectedCollectionKey: the statement/envelope content
+// key PLUS the rejection reason, so the same collection rejected for a
+// DIFFERENT reason at a later depth is preserved, while the byte-identical
+// re-rejection an exclusion-less source produces every depth collapses to one
+// entry. Rejected entries are diagnostic only — they never affect the verdict
+// (see searchExpansionIsMonotone) — so de-duplication cannot change a
+// verification outcome, only stop retaining searchDepth copies of a fully
+// parsed envelope per rejection.
+func mergeRejectedCollections(dst, src []RejectedCollection) []RejectedCollection {
+	seen := make(map[string]struct{}, len(dst))
+	for _, rc := range dst {
+		seen[rejectedCollectionKey(rc)] = struct{}{}
+	}
+	for _, rc := range src {
+		key := rejectedCollectionKey(rc)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		dst = append(dst, rc)
+	}
+	return dst
+}
+
+// rejectedCollectionKey returns a stable content identity for a rejected
+// collection. The collection identity reuses the passed-collection key
+// derivation (statement + verified-signer set, with the deterministic
+// envelope-content fallback for entries that never parsed a statement), and
+// the rejection REASON is framed in so distinct failure modes never collapse.
+// A nil reason (not produced today, but the type allows it) frames as empty.
+func rejectedCollectionKey(rc RejectedCollection) string {
+	collectionKey := passedCollectionKey(PassedCollection{Collection: rc.Collection})
+	reason := ""
+	if rc.Reason != nil {
+		reason = rc.Reason.Error()
+	}
+	var buf bytes.Buffer
+	writeFramed(&buf, []byte(collectionKey))
+	writeFramed(&buf, []byte(reason))
+	sum := sha256.Sum256(buf.Bytes())
+	return hex.EncodeToString(sum[:])
 }
 
 // passedCollectionKey returns a stable content identity for a passed

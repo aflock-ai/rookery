@@ -23,6 +23,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -293,18 +295,58 @@ func hasAllowAll(in []string) bool {
 	return false
 }
 
+// globWarnSeen suppresses byte-identical repeats of the advisory "matched via
+// GLOB" warning. The warning fired once per glob-carrying field per
+// functionary per candidate collection per search depth — ~1,500 lines/sec on
+// the #7572 leader — and every call boxes its args even when the sink drops
+// the line. The FIRST occurrence per (site, attribute, pattern) still warns,
+// so the security-visibility signal ("this policy matches identities by glob")
+// is preserved per process. Bounded: past globWarnCap distinct keys, new keys
+// warn WITHOUT being recorded — fail-open to visibility, never to silence,
+// and never unbounded growth.
+var (
+	globWarnSeen  sync.Map
+	globWarnCount atomic.Int64
+)
+
+const globWarnCap = 4096
+
+func warnGlobOnce(key, format string, args ...interface{}) {
+	if _, seen := globWarnSeen.Load(key); seen {
+		return
+	}
+	if globWarnCount.Load() < globWarnCap {
+		if _, loaded := globWarnSeen.LoadOrStore(key, struct{}{}); loaded {
+			return
+		}
+		globWarnCount.Add(1)
+	}
+	log.Warnf(format, args...)
+}
+
+// certExtensionFields caches the reflected field list of the FIXED
+// certificate.Extensions type. checkExtensions runs once per functionary per
+// candidate collection per search depth; recomputing reflect.VisibleFields
+// (and boxing a debug-log argument per empty field) on every call was pure
+// allocation churn at exactly the wrong moment — the prod #7572 leader
+// emitted ~1,500 lines/sec from this file while OOM-crashlooping. See
+// TestCheckExtensions_NoConstraintFastPathAllocs.
+var certExtensionFields = sync.OnceValue(func() []reflect.StructField {
+	return reflect.VisibleFields(reflect.TypeOf(certificate.Extensions{}))
+})
+
 func (cc CertConstraint) checkExtensions(ext []pkix.Extension) error {
 	extensions, err := certificate.ParseExtensions(ext)
 	if err != nil {
 		return fmt.Errorf("error parsing fulcio cert extensions: %w", err)
 	}
 
-	fields := reflect.VisibleFields(reflect.TypeOf(cc.Extensions))
-	for _, field := range fields {
-		constraintField := reflect.ValueOf(cc.Extensions).FieldByName(field.Name)
-		constraint := constraintField.String()
+	constraintValue := reflect.ValueOf(cc.Extensions)
+	extensionsValue := reflect.ValueOf(extensions)
+	for _, field := range certExtensionFields() {
+		constraint := constraintValue.FieldByIndex(field.Index).String()
 		if constraint == "" {
-			log.Debugf("No constraint for field %s, allowing all values", field.Name)
+			// No constraint for this field: all values allowed.
 			continue
 		}
 
@@ -314,8 +356,7 @@ func (cc CertConstraint) checkExtensions(ext []pkix.Extension) error {
 			return fmt.Errorf("cert field %s constraint %+q contains a non-printable byte; failing closed", field.Name, constraint)
 		}
 
-		extensionsField := reflect.ValueOf(extensions).FieldByName(field.Name)
-		value := extensionsField.String()
+		value := extensionsValue.FieldByIndex(field.Index).String()
 
 		// Guard the glob engine the same way checkCertConstraintGlob does (#5756):
 		// only invoke gobwas when the constraint actually contains a glob
@@ -332,7 +373,7 @@ func (cc CertConstraint) checkExtensions(ext []pkix.Extension) error {
 		if err != nil {
 			return fmt.Errorf("invalid glob pattern %+q for cert field %s: %w", constraint, field.Name, err)
 		}
-		log.Warnf("cert field %s matched via GLOB pattern %+q (not exact match); confirm this is intended", field.Name, constraint)
+		warnGlobOnce("ext|"+field.Name+"|"+constraint, "cert field %s matched via GLOB pattern %+q (not exact match); confirm this is intended", field.Name, constraint)
 		matched, matchErr := boundedGlobMatch(fieldGlob, value)
 		if matchErr != nil {
 			return fmt.Errorf("glob match error for cert field %s with pattern %+q: %w", field.Name, constraint, matchErr)
@@ -390,7 +431,7 @@ func checkCertConstraintGlob(attribute, constraint, value string) error {
 		if err != nil {
 			return fmt.Errorf("invalid glob pattern %q for cert %s: %w", constraint, attribute, err)
 		}
-		log.Warnf("cert %s constraint %q is being matched via GLOB (not exact match); confirm this is intended", attribute, constraint)
+		warnGlobOnce("single|"+attribute+"|"+constraint, "cert %s constraint %q is being matched via GLOB (not exact match); confirm this is intended", attribute, constraint)
 		matched, matchErr := boundedGlobMatch(g, normalizeGlobValue(value))
 		if matchErr != nil {
 			return fmt.Errorf("glob match error for cert %s with pattern %q: %w", attribute, constraint, matchErr)
@@ -556,7 +597,7 @@ func matchGlobConstraints(attribute string, globs, values, allConstraints, allVa
 func compileGlobs(attribute string, globs []string) ([]glob.Glob, error) {
 	compiled := make([]glob.Glob, len(globs))
 	for i, pattern := range globs {
-		log.Warnf("cert %s constraint %q is being matched via GLOB (not exact match); confirm this is intended", attribute, pattern)
+		warnGlobOnce("multi|"+attribute+"|"+pattern, "cert %s constraint %q is being matched via GLOB (not exact match); confirm this is intended", attribute, pattern)
 		g, err := glob.Compile(normalizeGlobValue(pattern))
 		if err != nil {
 			return nil, fmt.Errorf("invalid glob pattern %q for cert %s: %w", pattern, attribute, err)
