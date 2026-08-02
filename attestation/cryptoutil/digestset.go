@@ -24,6 +24,8 @@ import (
 	"os"
 
 	"golang.org/x/mod/sumdb/dirhash"
+
+	"github.com/aflock-ai/rookery/attestation/gitoid"
 )
 
 var (
@@ -348,7 +350,41 @@ func CalculateDigestSet(r io.Reader, digestValues []DigestValue) (DigestSet, err
 }
 
 func CalculateDigestSetFromBytes(data []byte, hashes []DigestValue) (DigestSet, error) {
-	return CalculateDigestSet(bytes.NewReader(data), hashes)
+	// GitOID digests need the content length BEFORE hashing (git's header is
+	// "blob <len>\0"), which forces the streaming path's gitoidHasher to
+	// buffer the whole input. Here the input is already an in-memory slice
+	// with a known length, so compute gitoids directly over it — zero
+	// buffering, zero copies (#7572 wall-time follow-up). Non-gitoid hashes
+	// take the streaming path unchanged. Values are byte-identical to the
+	// streaming path for both kinds.
+	digestSet := make(DigestSet)
+	rest := make([]DigestValue, 0, len(hashes))
+	for _, dv := range hashes {
+		if !dv.GitOID {
+			rest = append(rest, dv)
+			continue
+		}
+		opts := []gitoid.Option{gitoid.WithContentLength(int64(len(data)))}
+		if dv.Hash == crypto.SHA256 {
+			opts = append(opts, gitoid.WithSha256())
+		}
+		g, err := gitoid.New(bytes.NewReader(data), opts...)
+		if err != nil {
+			return digestSet, err
+		}
+		digestSet[dv] = g.URI()
+	}
+	if len(rest) == 0 {
+		return digestSet, nil
+	}
+	restSet, err := CalculateDigestSet(bytes.NewReader(data), rest)
+	if err != nil {
+		return digestSet, err
+	}
+	for dv, digest := range restSet {
+		digestSet[dv] = digest
+	}
+	return digestSet, nil
 }
 
 func CalculateDigestSetFromFile(path string, hashes []DigestValue) (DigestSet, error) {

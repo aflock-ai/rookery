@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/archivista"
@@ -67,6 +68,84 @@ func (s *ArchivistaSource) Search(ctx context.Context, collectionName string, su
 // holds the whole matching corpus in memory at once — Search's accumulated
 // []CollectionEnvelope was the verify-path heap peak against a large corpus
 // (#7572). Search delegates here; there is one download/parse implementation.
+// ArchivistaDecodeWorkers bounds the download+decode pipeline behind
+// SearchStream. Per-candidate fetch+parse is the serial critical path of a
+// large verify (the crypto and policy gate consume candidates faster than one
+// goroutine can download and JSON-decode them, #7572 wall-time follow-up), so
+// up to this many candidates are fetched and decoded concurrently while the
+// YIELD ORDER — and therefore every downstream verification outcome — remains
+// exactly the serial order. The window also caps decoded-but-not-yet-consumed
+// envelopes, keeping the streaming path's peak O(workers × largest envelope),
+// not O(corpus).
+//
+// Tuning (338-envelope prod hot-set harness, judge-api/pkg/policybench,
+// GOMAXPROCS=8): W=1 wall ~29.6s peak 52.6 MiB · W=2 16.5s / 91.4 MiB ·
+// W=3 11.4s / 107 MiB. W=2 holds the #7673 one-turn peak budget (≤~100 MiB);
+// raise only with a re-measured peak.
+const ArchivistaDecodeWorkers = 2
+
+// decodedSlot is one candidate's decode outcome. ok=false is a SKIP (see
+// fetchCollectionEnvelope), never an error — the zero value is a skipped slot.
+type decodedSlot struct {
+	env CollectionEnvelope
+	ok  bool
+}
+
+// drainInOrder consumes the decode window strictly in candidate order, so the
+// caller observes exactly the sequence the serial loop produced regardless of
+// the order workers finished in. Slot i is awaited before i+1 is looked at.
+//
+// Once yield returns an error no further yields happen, but the remaining slots
+// are still drained: their workers must be allowed to finish so the pool can be
+// joined. `aborted` short-circuits those remaining downloads, which is a waste
+// optimisation only — every candidate is still reported as processed, and the
+// caller marks NOTHING seen on a yield error, keeping a failed batch fully
+// retryable.
+func drainInOrder(
+	gitoids []string,
+	results []chan decodedSlot,
+	window chan struct{},
+	yield func(CollectionEnvelope) error,
+	aborted *atomic.Bool,
+) ([]string, error) {
+	processed := make([]string, 0, len(gitoids))
+	var yieldErr error
+	for i := range gitoids {
+		r := <-results[i]
+		processed = append(processed, gitoids[i])
+		if yieldErr == nil && r.ok {
+			if yieldErr = yield(r.env); yieldErr != nil {
+				aborted.Store(true)
+			}
+		}
+		<-window
+	}
+	return processed, yieldErr
+}
+
+// fetchCollectionEnvelope downloads one gitoid and converts it into a
+// collection envelope. Both failure modes are SKIPS rather than errors, which
+// is the serial loop's original semantics: a gitoid that will not download, and
+// a DSSE that is not a collection (policy envelopes, VSAs), are each logged and
+// dropped so one bad candidate cannot fail the batch.
+//
+// Split out of SearchStream's worker so the concurrency there reads as the
+// pipeline it is; folded back inline it also pushes the function past the
+// cognitive-complexity gate.
+func (s *ArchivistaSource) fetchCollectionEnvelope(ctx context.Context, gitoid string) (CollectionEnvelope, bool) {
+	env, err := s.client.Download(ctx, gitoid)
+	if err != nil {
+		log.Debugf("archivista source: skipping gitoid %s: download failed: %v", gitoid, err)
+		return CollectionEnvelope{}, false
+	}
+	collectionEnv, err := EnvelopeToCollectionEnvelope(gitoid, env)
+	if err != nil {
+		log.Debugf("archivista source: skipping gitoid %s: %v", gitoid, err)
+		return CollectionEnvelope{}, false
+	}
+	return collectionEnv, true
+}
+
 func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionEnvelope) error) error {
 	s.mu.Lock()
 	excludeGitoids := make([]string, len(s.seenGitoids))
@@ -83,30 +162,55 @@ func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName stri
 		return err
 	}
 
-	processedGitoids := make([]string, 0, len(gitoids))
-	for _, gitoid := range gitoids {
-		env, err := s.client.Download(ctx, gitoid)
-		if err != nil {
-			// Skip envelopes that can't be downloaded (may be non-collection DSSEs)
-			log.Debugf("archivista source: skipping gitoid %s: download failed: %v", gitoid, err)
-			processedGitoids = append(processedGitoids, gitoid) // still mark as seen to avoid retrying
-			continue
+	// Bounded parallel download+decode, strictly ordered yield. The feeder
+	// admits at most ArchivistaDecodeWorkers candidates into the window; the
+	// consumer yields candidate i only after i-1, so results are identical
+	// to the serial loop this replaces. Failed candidates keep the serial
+	// skip semantics (logged, marked processed, never yielded). A yield
+	// error stops further yields; the remaining in-flight slots are drained
+	// (bounded waste) and NOTHING is marked seen, preserving the
+	// all-or-nothing retry semantics of a failed batch.
+	results := make([]chan decodedSlot, len(gitoids))
+	for i := range results {
+		results[i] = make(chan decodedSlot, 1)
+	}
+	window := make(chan struct{}, ArchivistaDecodeWorkers)
+	jobs := make(chan int)
+	// aborted flips once the consumer sees a yield error: workers then
+	// short-circuit their remaining slots without downloading. Invisible to
+	// semantics — the abort path marks NOTHING as seen regardless — it only
+	// stops the drain from fetching a potentially huge remaining candidate
+	// list nobody will consume.
+	var aborted atomic.Bool
+	var wg sync.WaitGroup
+	for k := 0; k < ArchivistaDecodeWorkers; k++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				if aborted.Load() {
+					results[i] <- decodedSlot{}
+					continue
+				}
+				env, ok := s.fetchCollectionEnvelope(ctx, gitoids[i])
+				results[i] <- decodedSlot{env: env, ok: ok}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for i := range gitoids {
+			window <- struct{}{}
+			jobs <- i
 		}
+	}()
 
-		collectionEnv, err := EnvelopeToCollectionEnvelope(gitoid, env)
-		if err != nil {
-			// Skip non-collection envelopes (policy DSSEs, VSAs, etc.)
-			log.Debugf("archivista source: skipping gitoid %s: %v", gitoid, err)
-			processedGitoids = append(processedGitoids, gitoid)
-			continue
-		}
-
-		processedGitoids = append(processedGitoids, gitoid)
-		if err := yield(collectionEnv); err != nil {
-			// Aborted mid-iteration: mark NOTHING as seen, exactly like a
-			// failed batch — the next search must be able to retry the run.
-			return err
-		}
+	processedGitoids, yieldErr := drainInOrder(gitoids, results, window, yield, &aborted)
+	wg.Wait()
+	if yieldErr != nil {
+		// Aborted mid-iteration: mark NOTHING as seen, exactly like a
+		// failed batch — the next search must be able to retry the run.
+		return yieldErr
 	}
 
 	// Only mark gitoids as seen after ALL were successfully processed.

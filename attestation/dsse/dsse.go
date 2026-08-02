@@ -131,7 +131,17 @@ type SignatureTimestamp struct {
 // preauthEncode wraps the data to be signed or verified and it's type in the DSSE protocol's
 // pre-authentication encoding as detailed at https://github.com/secure-systems-lab/dsse/blob/master/protocol.md
 // PAE(type, body) = "DSSEv1" + SP + LEN(type) + SP + type + SP + LEN(body) + SP + body
+//
+// Built with one exact-size allocation rather than fmt.Sprintf: Sprintf routes
+// the multi-megabyte body through fmt's growing internal buffer plus a final
+// []byte conversion copy, which on a large evidence corpus contributed
+// gigabytes of transient allocations per verify (#7572 wall-time follow-up).
+// Output is byte-identical to the Sprintf form.
 func preauthEncode(bodyType string, body []byte) []byte {
 	const dsseVersion = "DSSEv1"
-	return []byte(fmt.Sprintf("%s %d %s %d %s", dsseVersion, len(bodyType), bodyType, len(body), body))
+	head := fmt.Sprintf("%s %d %s %d ", dsseVersion, len(bodyType), bodyType, len(body))
+	out := make([]byte, 0, len(head)+len(body))
+	out = append(out, head...)
+	out = append(out, body...)
+	return out
 }

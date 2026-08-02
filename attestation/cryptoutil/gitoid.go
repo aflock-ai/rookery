@@ -41,7 +41,13 @@ func (gh *gitoidHasher) Write(p []byte) (n int, err error) {
 // Sum appends the current hash to b and returns the resulting slice.
 // It does not change the underlying hash state.
 func (gh *gitoidHasher) Sum(b []byte) []byte {
-	opts := []gitoid.Option{}
+	// The buffered length is known here, so pass it: without an asserted
+	// content length gitoid.New copies the ENTIRE buffer into a second
+	// bytes.Buffer just to measure it — a full extra copy (plus growth
+	// reallocations) of every payload hashed, which on a large evidence
+	// corpus was gigabytes of transient allocations per verify (#7572
+	// wall-time follow-up). Output is identical; the copy was pure waste.
+	opts := []gitoid.Option{gitoid.WithContentLength(int64(gh.buf.Len()))}
 	if gh.hash == crypto.SHA256 {
 		opts = append(opts, gitoid.WithSha256())
 	}
