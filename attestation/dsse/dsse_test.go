@@ -21,6 +21,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -386,4 +387,44 @@ func TestTimestamp(t *testing.T) {
 	assert.Len(t, approvedVerifiers, 1)
 	assert.Len(t, approvedVerifiers[0].TimestampVerifiers, len(expectedTimestampers))
 	assert.ElementsMatch(t, approvedVerifiers[0].TimestampVerifiers, expectedTimestampers)
+}
+
+// TestErrNoMatchingSigs_EmptyKeyidListExplainsItself pins the diagnostic for the
+// confusing case: an EMPTY keyid list does not mean "every verifier failed", it
+// means no verifier was ever attempted, so none had a failure to report. Printing
+// only the "found for keyids:" header with nothing after it reads like a
+// verification failure whose detail went missing, and sends readers hunting for a
+// key mismatch that is not there.
+//
+// The dominant cause is working-as-designed: with timestamp verifiers configured,
+// a signature carrying no RFC3161 timestamp is skipped without recording a
+// per-verifier error.
+func TestErrNoMatchingSigs_EmptyKeyidListExplainsItself(t *testing.T) {
+	msg := ErrNoMatchingSigs{Verifiers: nil}.Error()
+
+	// The existing header is preserved — callers match on it (judge-api's
+	// policyverify/sync.go and the policy verify workflow both substring-match it).
+	assert.Contains(t, msg, "no valid signatures for the provided verifiers found for keyids:",
+		"the established header must not change; consumers substring-match it")
+	assert.Contains(t, msg, "no verifier was attempted",
+		"an empty keyid list must say that nothing ran, not imply everything failed")
+	assert.Contains(t, msg, "RFC3161 timestamp",
+		"it must name the dominant cause so the reader stops hunting for a key mismatch")
+}
+
+// TestErrNoMatchingSigs_PopulatedListOmitsEmptyExplanation proves the explanation
+// is scoped to the empty case: when a verifier DID report an error, that error is
+// the diagnostic and the "nothing ran" note must not be appended — it would be
+// actively wrong there.
+func TestErrNoMatchingSigs_PopulatedListOmitsEmptyExplanation(t *testing.T) {
+	msg := ErrNoMatchingSigs{
+		Verifiers: []CheckedVerifier{
+			{Verifier: nil, Error: errors.New("x509: certificate signed by unknown authority")},
+		},
+	}.Error()
+
+	assert.Contains(t, msg, "certificate signed by unknown authority",
+		"a real per-verifier failure must still be reported")
+	assert.NotContains(t, msg, "no verifier was attempted",
+		"the empty-list explanation must NOT appear when a verifier actually reported a failure")
 }

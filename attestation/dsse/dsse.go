@@ -39,6 +39,7 @@ type ErrNoMatchingSigs struct {
 
 func (e ErrNoMatchingSigs) Error() string {
 	mess := "no valid signatures for the provided verifiers found for keyids:\n"
+	reported := 0
 	for _, v := range e.Verifiers {
 		if v.Error != nil {
 			kid := "<nil verifier>"
@@ -52,7 +53,28 @@ func (e ErrNoMatchingSigs) Error() string {
 
 			s := fmt.Sprintf("  %s: %v\n", kid, v.Error)
 			mess += s
+			reported++
 		}
+	}
+
+	// An EMPTY keyid list is not "every verifier failed" — it means no verifier
+	// ever ran, so none had a failure to report. Saying only "no valid signatures
+	// ... for keyids:" followed by nothing reads like a verification failure with
+	// the detail missing, and sends readers hunting for a key mismatch that is not
+	// there.
+	//
+	// The dominant cause is working-as-designed: when timestamp verifiers ARE
+	// configured, Verify only attempts a cert-based signature once one of that
+	// signature's RFC3161 timestamps verifies. A signature carrying NO timestamp
+	// never enters that loop, so it is skipped without recording a per-verifier
+	// error and the list comes back empty. (Platform-internal signers that attach
+	// no TSA timestamp are a known source of this — see the ingest-time notes in
+	// judge-api's evidencetrust package.)
+	if reported == 0 {
+		mess += "  (empty: no verifier was attempted for any signature, so none reported an error.\n" +
+			"  Most often this means timestamp verifiers are configured but the signature\n" +
+			"  carries no RFC3161 timestamp, so it is skipped rather than failed. Check\n" +
+			"  whether the signature has a timestamp before hunting for a key mismatch.)\n"
 	}
 
 	// Lead with the trust-mismatch block when present: it is the actionable
