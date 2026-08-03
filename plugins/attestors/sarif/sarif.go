@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -101,6 +102,153 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	return nil
 }
 
+// sarifVersion is the only value the SARIF 2.1.0 spec permits in the log's
+// `version` member (§3.13.2), and the only one this attestor's predicate type
+// (…/attestations/sarif/v0.1) claims to carry. It is pinned rather than merely
+// required-non-empty: "garbage" is not a SARIF version, and a genuinely new
+// SARIF major needs a new predicate version — not a silently widened check
+// here that would let an unreadable document be signed as if we understood it.
+// All 240 well-formed SARIF bodies in the recorded production corpus carry
+// exactly this value.
+const sarifVersion = "2.1.0"
+
+// jsonObject decodes b as a JSON object, naming what it got instead. Decoding
+// into a map is what rejects null, scalars and arrays: `null` unmarshals into
+// a map as a nil map without error, so the raw bytes are checked first.
+func jsonObject(b []byte, what string) (map[string]json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil, fmt.Errorf("%s must be an object: %w", what, err)
+	}
+	if obj == nil {
+		return nil, fmt.Errorf("%s must be an object, got null", what)
+	}
+	return obj, nil
+}
+
+// isSARIFLog reports whether b is a SARIF log document, returning a reason
+// when it is not.
+//
+// This is the invariant that makes a sarif-typed attestation structurally
+// incapable of carrying a foreign format. It keys purely on SHAPE — the
+// members the SARIF 2.1.0 spec marks REQUIRED — and deliberately never on
+// file names, step names or tool names: producers ship formats we have never
+// seen under names we do not control, and a name-based check would wave those
+// straight through.
+//
+// Enforced, all fail-closed:
+//
+//   - a top-level JSON OBJECT (§3.13), so a bare findings array cannot pass;
+//   - `version` exactly sarifVersion (§3.13.2);
+//   - `runs` present and an ARRAY (§3.13.4) — `[]` is accepted, that is a
+//     genuine clean scan, but missing or null is not: it is a structurally
+//     incomplete log, and a consumer reading it as "zero findings" turns it
+//     into a silent false negative on vulnerability evidence;
+//   - every run an OBJECT carrying `tool` (§3.14.6), itself carrying `driver`
+//     (§3.18.1) with a non-empty `name` (§3.19.8) — all spec-REQUIRED. This is
+//     what rejects `runs:[null]`, `runs:[{}]` and `driver:{}`, documents that
+//     parse as JSON and satisfy a shallower check while carrying no
+//     attributable scanner identity at all.
+//
+// `results` is deliberately NOT required: the spec marks it OPTIONAL, and a
+// run that legitimately omits it must not be turned into a failed step. The
+// platform-side parser already fails closed on an absent results array rather
+// than projecting it as "no findings".
+//
+// This is typed structural validation rather than JSON-schema validation
+// against the published SARIF schema. That is a deliberate trade: this
+// attestor's whole reason for holding the report as json.RawMessage was to
+// shed the go-sarif library "plus its jsonschema validation tree" (see the
+// Attestor doc comment), and rookery gates linked-dependency growth through
+// .dep-budget.yaml. The checks above cover every member the spec marks
+// required on the path this attestor actually depends on.
+func isSARIFLog(b []byte) error {
+	// Unmarshaling into a map both rejects non-object top levels (a bare
+	// array, a scalar) and validates the document's syntax end to end.
+	fields, err := jsonObject(b, "a SARIF log")
+	if err != nil {
+		return fmt.Errorf("not a SARIF log: %w", err)
+	}
+
+	rawVersion, ok := fields["version"]
+	if !ok {
+		return fmt.Errorf("not a SARIF log: missing required %q member", "version")
+	}
+	var version string
+	if err := json.Unmarshal(rawVersion, &version); err != nil {
+		return fmt.Errorf("not a SARIF log: %q must be a string: %w", "version", err)
+	}
+	if version != sarifVersion {
+		return fmt.Errorf("not a SARIF log: %q is %q, want %q", "version", version, sarifVersion)
+	}
+
+	rawRuns, ok := fields["runs"]
+	if !ok {
+		return fmt.Errorf("not a SARIF log: missing required %q member", "runs")
+	}
+	// A POINTER to the slice distinguishes `"runs": null` (nil pointer — an
+	// incomplete log) from `"runs": []` (non-nil, empty — a clean scan).
+	var runs *[]json.RawMessage
+	if err := json.Unmarshal(rawRuns, &runs); err != nil {
+		return fmt.Errorf("not a SARIF log: %q must be an array: %w", "runs", err)
+	}
+	if runs == nil {
+		return fmt.Errorf("not a SARIF log: %q must be an array, got null", "runs")
+	}
+
+	for i, rawRun := range *runs {
+		if err := validateSARIFRun(rawRun, i); err != nil {
+			return fmt.Errorf("not a SARIF log: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateSARIFRun checks one element of a log's `runs` array against the
+// members the spec marks REQUIRED on a run: the run itself an object
+// (§3.14.6) carrying `tool`, the tool carrying `driver` (§3.18.1), and the
+// driver carrying a non-empty `name` (§3.19.8).
+//
+// `name` earns its check: it is the field the platform's evidence classifier
+// keys on to identify the producing scanner. A blank name does not degrade to
+// "unrecognized tool" — it reads as NO SIGNAL, a different state the platform
+// keeps deliberately distinct. Rejecting a nameless driver at the producer is
+// what keeps that distinction meaningful for every downstream consumer.
+func validateSARIFRun(raw json.RawMessage, i int) error {
+	run, err := jsonObject(raw, fmt.Sprintf("runs[%d]", i))
+	if err != nil {
+		return err
+	}
+	rawTool, ok := run["tool"]
+	if !ok {
+		return fmt.Errorf("runs[%d] is missing required %q member", i, "tool")
+	}
+	tool, err := jsonObject(rawTool, fmt.Sprintf("runs[%d].tool", i))
+	if err != nil {
+		return err
+	}
+	rawDriver, ok := tool["driver"]
+	if !ok {
+		return fmt.Errorf("runs[%d].tool is missing required %q member", i, "driver")
+	}
+	driver, err := jsonObject(rawDriver, fmt.Sprintf("runs[%d].tool.driver", i))
+	if err != nil {
+		return err
+	}
+	rawName, ok := driver["name"]
+	if !ok {
+		return fmt.Errorf("runs[%d].tool.driver is missing required %q member", i, "name")
+	}
+	var name string
+	if err := json.Unmarshal(rawName, &name); err != nil {
+		return fmt.Errorf("runs[%d].tool.driver.name must be a string: %w", i, err)
+	}
+	if name == "" {
+		return fmt.Errorf("runs[%d].tool.driver.name must be non-empty", i)
+	}
+	return nil
+}
+
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error { //nolint:gocognit // SARIF candidate selection requires complex matching
 	products := ctx.Products()
 
@@ -108,7 +256,26 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error { //n
 		return fmt.Errorf("no products to attest")
 	}
 
-	for path, product := range products {
+	// Products is a MAP, and ranging a Go map is randomized. Selecting the
+	// first match off an unordered walk made the recorded report a coin flip
+	// whenever a step left more than one JSON product in its workdir — which
+	// is exactly how the prod TLS lane, emitting both testssl.json and the
+	// converted testssl-results.sarif, attested the raw testssl report in 4
+	// of 5 observed runs. Walk paths in sorted order so selection is
+	// reproducible from the product set alone.
+	paths := make([]string, 0, len(products))
+	for path := range products {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	// Candidates rejected for shape are reported in the terminal error: the
+	// bare "no sarif file found" left an operator with a failing step and no
+	// clue which product was wrong or why.
+	var rejected []string
+
+	for _, path := range paths {
+		product := products[path]
 		if product.MimeType == "" {
 			log.Debugf("(attestation/sarif) skipping %s: empty MIME type (run product attestor first or write a recognized format)", path)
 			continue
@@ -159,11 +326,15 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error { //n
 			continue
 		}
 
-		// Validate that the bytes are JSON — a SARIF report is a JSON
-		// document by definition. Anything else is the wrong product even
-		// if the mime sniffer guessed application/json.
-		if !json.Valid(reportBytes) {
-			log.Debugf("(attestation/sarif) %s is not valid JSON", path)
+		// Validate that the bytes are a SARIF LOG, not merely valid JSON. The
+		// MIME sniffer only tells us the product is text/JSON; it cannot tell
+		// a SARIF log from a scanner's native report. Recording the latter
+		// under this attestor's predicate type publishes a signed statement
+		// that claims to be SARIF and is not — evidence no consumer can read
+		// and no verifier can reject on shape. Skip it and say why.
+		if err := isSARIFLog(reportBytes); err != nil {
+			log.Debugf("(attestation/sarif) rejecting %s: %v", path, err)
+			rejected = append(rejected, fmt.Sprintf("%s: %v", path, err))
 			continue
 		}
 
@@ -172,6 +343,10 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error { //n
 		a.ReportDigestSet = product.Digest
 
 		return nil
+	}
+	if len(rejected) > 0 {
+		return fmt.Errorf("no sarif file found (rejected %d candidate(s): %s)",
+			len(rejected), strings.Join(rejected, "; "))
 	}
 	return fmt.Errorf("no sarif file found")
 }
