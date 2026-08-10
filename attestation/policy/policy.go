@@ -666,11 +666,18 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 				}
 				stepResult = streamed
 				if candidates == 0 {
-					// Same empty-result diagnosis as the batch path below.
-					diag := diagnoseEmptyCollectionResult(ctx, vo.verifiedSource, stepName, vo.subjectDigests, attestationsByStep[stepName])
-					placeholder := source.CollectionVerificationResult{Errors: []error{diag}}
-					if _, rejected := step.triageOne(placeholder, trustBundles); rejected != nil {
-						stepResult.Rejected = append(stepResult.Rejected, *rejected)
+					// Same empty-result diagnosis as the batch path below,
+					// under the same once-per-verify depth guard (#7572) —
+					// see diagnoseEmptyResultOnce. A nil diag means "already
+					// adjudicated at an earlier depth"; nothing is appended
+					// and nothing else in this iteration has work to do,
+					// since a zero-candidate stream leaves stepResult with no
+					// Passed and no Rejected entries to merge or expand from.
+					if diag := diagnoseEmptyResultOnce(ctx, vo.verifiedSource, stepName, resultsByStep[stepName], vo.subjectDigests, attestationsByStep[stepName]); diag != nil {
+						placeholder := source.CollectionVerificationResult{Errors: []error{diag}}
+						if _, rejected := step.triageOne(placeholder, trustBundles); rejected != nil {
+							stepResult.Rejected = append(stepResult.Rejected, *rejected)
+						}
 					}
 				}
 			} else {
@@ -681,24 +688,22 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 				}
 
 				if len(collections) == 0 {
-					// An empty result at a LATER depth for a step that already has
-					// adjudicated collections (or an earlier diagnosis) adds no
-					// information: the depth loop only ever widens the digest set,
-					// so emptiness here means "nothing NEW", not "nothing at all".
-					// Re-diagnosing would fire the UNFILTERED probe below — which
-					// on prod sources downloads every collection for the step name
-					// — once per depth, and append one identical multi-line
-					// diagnostic rejection per depth (#7572).
-					if prior, adjudicated := resultsByStep[stepName]; adjudicated && (len(prior.Passed) > 0 || len(prior.Rejected) > 0) {
-						continue
-					}
 					// Distinguish "no envelope loaded for this step" from
 					// "envelope IS loaded but operator's artifact digest
 					// isn't a subject of it." Without this the operator
 					// chases a phantom 'did I load my attestation?' issue
 					// when the real problem is digest mismatch / scoping.
 					// (Fixes blind Linux UX test Bug 2.)
-					diag := diagnoseEmptyCollectionResult(ctx, vo.verifiedSource, stepName, vo.subjectDigests, attestationsByStep[stepName])
+					//
+					// A nil diag means the step was already adjudicated at an
+					// earlier depth, so this empty result carries no new
+					// information — see diagnoseEmptyResultOnce (#7572).
+					// Nothing below can act on an empty collection set, so
+					// skip the rest of the iteration.
+					diag := diagnoseEmptyResultOnce(ctx, vo.verifiedSource, stepName, resultsByStep[stepName], vo.subjectDigests, attestationsByStep[stepName])
+					if diag == nil {
+						continue
+					}
 					collections = append(collections, source.CollectionVerificationResult{Errors: []error{diag}})
 				}
 
@@ -1220,6 +1225,54 @@ func mergeRejectedCollections(dst, src []RejectedCollection) []RejectedCollectio
 		dst = append(dst, rc)
 	}
 	return dst
+}
+
+// diagnoseEmptyResultOnce is the depth loop's ONLY route to
+// diagnoseEmptyCollectionResult, and the single place the #7572
+// once-per-verify rule lives. It returns nil — diagnose nothing — when the
+// step already carries results from an earlier depth.
+//
+// WHY THE RULE IS SOUND. The depth loop only ever WIDENS the digest set
+// (vo.subjectDigests is appended to at the end of each iteration, never
+// reset), so a step that matched something at depth N still matches it at
+// depth N+1. An empty result at a later depth therefore means "nothing NEW
+// was reached", not "this step has no evidence" — and re-answering the
+// question the diagnostic asks would produce the same answer at a real cost.
+// The probe is an UNFILTERED search: on a prod source it re-fetches and
+// re-verifies every collection ever recorded under the step name (806
+// candidate envelopes in the incident that opened #7572), and each repeat
+// also appends another multi-line diagnostic rejection.
+//
+// WHY IT LIVES HERE RATHER THAN AT THE CALL SITES. It used to be inline at
+// the batch call site only, and the streamed arm — which is the arm every
+// PRODUCTION verify takes, because *source.VerifiedSource always satisfies
+// StreamingVerifiedSourcer — silently had no guard at all: three probes per
+// verify at the default search depth, against the batch arm's one. Nothing in
+// the code made that second, unguarded call site visible. Routing both arms
+// through one guarded function makes the un-guarded probe unreachable rather
+// than merely discouraged; TestDiagnosticProbeIsReachableOnlyThroughTheDepthGuard
+// fails if a third call site is ever added.
+//
+// It is verdict-safe by construction: it can only suppress a REJECTED entry,
+// and rejections never contribute to a verdict (only StepResult.Passed does —
+// see allStepsSatisfied and searchExpansionIsMonotone). It cannot suppress the
+// FIRST diagnosis for a step, so every consumer that needs an ErrNoCollections
+// to be present — judge-api's readiness classifier, most sharply — still sees
+// exactly one.
+//
+// prior is resultsByStep[stepName] read WITHOUT the comma-ok. A step not yet
+// in the map yields the zero StepResult, which has no Passed and no Rejected
+// entries and so fails the predicate on its own; a separate "was it present"
+// boolean would be a parameter no input can distinguish, and it is precisely
+// that first-encounter case the batch arm's `continue` depends on — a step
+// reaching verifyArtifacts with no entry in the results map is a hard error
+// ("failed to find step %s in step results map"), so the guard MUST NOT be
+// able to fire before a step has been recorded even once.
+func diagnoseEmptyResultOnce(ctx context.Context, src source.VerifiedSourcer, stepName string, prior StepResult, suppliedDigests, attestations []string) error {
+	if len(prior.Passed) > 0 || len(prior.Rejected) > 0 {
+		return nil
+	}
+	return diagnoseEmptyCollectionResult(ctx, src, stepName, suppliedDigests, attestations)
 }
 
 // rejectedCollectionKey returns a stable content identity for a rejected
