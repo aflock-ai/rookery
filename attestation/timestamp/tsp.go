@@ -308,6 +308,35 @@ func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) 
 		return time.Time{}, fmt.Errorf("timestamp token signer certificate must carry id-kp-timeStamping as its only extended key usage")
 	}
 
+	// Validate the TSA chain AT the token's genTime — the value this function
+	// RETURNS as the trusted signing time.
+	//
+	// A token carries two independently signed time fields: the TSTInfo genTime
+	// (RFC 3161 §2.4.2, returned below) and the PKCS#9 signingTime authenticated
+	// attribute. Left to itself, pkcs7 builds the chain at signingTime when that
+	// attribute is present (verify.go:192-204) and at wall clock otherwise. Either
+	// way it never checks genTime, so a token whose signingTime sits inside the
+	// signer certificate's validity but whose genTime lies far outside it verifies
+	// — and the out-of-window genTime is what the caller receives and what anchors
+	// evidence-certificate validation downstream. Finding TS4 (#5747 follow-up).
+	//
+	// Pinning CurrentTime routes pkcs7 through verifySignatureAtTime, which
+	// RETAINS the signingTime-vs-validity check (verify.go:137-146) while building
+	// the chain at the time we supply. Net effect: BOTH genTime and signingTime
+	// must fall inside the signer certificate's validity window.
+	//
+	// This is chain validity only. It adds no resistance to TSA key compromise:
+	// an attacker holding the TSA key chooses both fields, and detecting that
+	// needs revocation checking, which this package does not do.
+	genTime := ts.Time
+	if genTime.IsZero() {
+		// pkcs7 treats a zero CurrentTime as "unset" and falls back to the
+		// wall-clock path, which would reopen exactly the gap closed above.
+		// timestamp.Parse copies TSTInfo.genTime through without a zero check,
+		// so fail closed here rather than silently downgrade.
+		return time.Time{}, fmt.Errorf("timestamp token has a zero genTime")
+	}
+
 	intermediates := x509.NewCertPool()
 	for _, cert := range p7.Certificates {
 		intermediates.AddCert(cert)
@@ -316,12 +345,13 @@ func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) 
 		Roots:         v.certChain,
 		Intermediates: intermediates,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
+		CurrentTime:   genTime,
 	}
 	if err := p7.VerifyWithOpts(verifyOpts); err != nil {
 		return time.Time{}, err
 	}
 
-	return ts.Time, nil
+	return genTime, nil
 }
 
 // timestampingIsSoleEKU reports whether id-kp-timeStamping is the certificate's
