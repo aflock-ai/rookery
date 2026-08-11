@@ -71,6 +71,7 @@ type verifyOptions struct {
 	collectionSource             source.Sourcer
 	aiServerURL                  string
 	maxSubjectFanout             int
+	lazyWitness                  bool
 	kmsProviderOptions           map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 }
 
@@ -159,10 +160,46 @@ func VerifyWithMaxSubjectFanout(n int) VerifyOption {
 	}
 }
 
+// VerifyWithLazyWitness enables the policy engine's minimum-witness Phase 1
+// behaviour (policy.WithLazyStepSatisfaction): a step's candidate stream stops
+// at the first collection that passes the step gate, instead of verifying
+// every candidate the search matched.
+//
+// DEFAULT OFF, and verdict-invariant by construction — see
+// policy.WithLazyStepSatisfaction for the three exclusions (AttestationsFrom
+// policy shapes, an active subject fan-out guard, and any step the demand
+// valve has pulled back).
+func VerifyWithLazyWitness(enabled bool) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.lazyWitness = enabled
+	}
+}
+
 type VerifyResult struct {
 	RunResult
 	VerificationSummary slsa.VerificationSummary
 	StepResults         map[string]policy.StepResult
+}
+
+// applyOptionalVerifyCapabilities configures the policy-engine knobs that are
+// asserted on the attestor rather than declared in PolicyVerifyConfigurer, so
+// third-party attestor implementations keep compiling when a new one is added.
+//
+// The failure mode of that pattern is silence: rename the method and the
+// assertion stops matching, the option reads as "on" in config, and the engine
+// never sees it. Each knob below is pinned by a test in the policyverify plugin
+// that asserts the attestor satisfies the EXACT anonymous interface used here.
+func applyOptionalVerifyCapabilities(att attestation.Attestor, vo *verifyOptions) {
+	if vo.maxSubjectFanout > 0 {
+		if mf, ok := att.(interface{ SetMaxSubjectFanout(int) }); ok {
+			mf.SetMaxSubjectFanout(vo.maxSubjectFanout)
+		}
+	}
+	if vo.lazyWitness {
+		if lw, ok := att.(interface{ SetLazyWitness(bool) }); ok {
+			lw.SetLazyWitness(true)
+		}
+	}
 }
 
 // Verify verifies a set of attestations against a provided policy. The set of attestations that satisfy the policy will be returned
@@ -203,13 +240,7 @@ func Verify(ctx context.Context, policyEnvelope dsse.Envelope, policyVerifiers [
 	if vo.aiServerURL != "" {
 		configurer.SetAiServerURL(vo.aiServerURL)
 	}
-	if vo.maxSubjectFanout > 0 {
-		// Optional capability: asserted rather than added to the configurer
-		// interface so third-party attestor implementations keep compiling.
-		if mf, ok := att.(interface{ SetMaxSubjectFanout(int) }); ok {
-			mf.SetMaxSubjectFanout(vo.maxSubjectFanout)
-		}
-	}
+	applyOptionalVerifyCapabilities(att, &vo)
 
 	if len(vo.signers) > 0 {
 		vo.runOptions = append(vo.runOptions, RunWithSigners(vo.signers...))

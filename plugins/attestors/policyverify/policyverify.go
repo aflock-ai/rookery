@@ -61,6 +61,7 @@ type Attestor struct {
 	subjectDigestSets  []cryptoutil.DigestSet
 	aiServerURL        string
 	maxSubjectFanout   int
+	lazyWitness        bool
 	kmsProviderOptions map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 }
 
@@ -139,6 +140,15 @@ func (a *Attestor) SetKMSProviderOptions(opts map[string][]func(signer.SignerPro
 // this verification (policy.WithMaxSubjectFanout). n <= 0 leaves it off.
 func (a *Attestor) SetMaxSubjectFanout(n int) {
 	a.maxSubjectFanout = n
+}
+
+// SetLazyWitness enables within-step stop-at-first-pass for this verification
+// (policy.WithLazyStepSatisfaction — the minimum-witness Phase 1 option).
+// DEFAULT OFF; see that option's doc for the soundness argument and the three
+// exclusions. Note it is INERT whenever the subject fan-out guard is active,
+// which is judge's production default.
+func (a *Attestor) SetLazyWitness(enabled bool) {
+	a.lazyWitness = enabled
 }
 
 // PolicyVerifyResult interface methods
@@ -230,6 +240,9 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 	}
 	if a.maxSubjectFanout > 0 {
 		verifyOpts = append(verifyOpts, policy.WithMaxSubjectFanout(a.maxSubjectFanout))
+	}
+	if a.lazyWitness {
+		verifyOpts = append(verifyOpts, policy.WithLazyStepSatisfaction(true))
 	}
 	verifyOpts = append(verifyOpts,
 		policy.WithVerifiedSource(verifiedSource),

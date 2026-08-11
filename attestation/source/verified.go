@@ -129,6 +129,37 @@ type StreamingVerifiedSourcer interface {
 	SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionVerificationResult) error) error
 }
 
+// CanonicalOrderSourcer is implemented by a source that guarantees its search
+// results are yielded in a STABLE, CONTENT-DERIVED order — the same order, for
+// the same corpus and the same query, on every call, in every process, on every
+// replica.
+//
+// It exists for the minimum-witness stop-at-first-pass
+// (policy.WithLazyStepSatisfaction). Stopping at the first passing collection
+// makes StepResult.Passed — and therefore the SIGNED policy-verification
+// attestation built from it — a function of DELIVERY ORDER. That is only
+// acceptable if delivery order is itself a function of the corpus, which is a
+// promise only the source can make.
+//
+// The bar is deliberately high, and "stable" is not enough on its own:
+//
+//   - Ordering by an unindexed column, or leaving it to the query planner, is
+//     NOT canonical. judge-api's EntSource shipped with no ORDER BY at all,
+//     which let Postgres return rows in any order it liked.
+//   - Ordering by a value derived from ingestion (row id, insertion time) is
+//     stable within one database but differs across replicas and re-imports,
+//     so it is not content-derived and does not qualify.
+//   - Ordering chosen by a REMOTE server is that server's contract, not this
+//     source's. ArchivistaSource deliberately does not implement this.
+//
+// A source that does not implement this interface, or that returns false, is
+// excluded from the lazy stop and verifies exhaustively. Failing to declare
+// costs performance; declaring falsely costs determinism of a signed artifact,
+// so the default is the safe one.
+type CanonicalOrderSourcer interface {
+	CanonicalStreamOrder() bool
+}
+
 type VerifiedSource struct {
 	source     Sourcer
 	verifyOpts []dsse.VerificationOption
@@ -145,6 +176,20 @@ type VerifiedSource struct {
 
 func NewVerifiedSource(source Sourcer, verifyOpts ...dsse.VerificationOption) *VerifiedSource {
 	return &VerifiedSource{source: source, verifyOpts: verifyOpts}
+}
+
+// CanonicalStreamOrder FORWARDS the wrapped Sourcer's declaration. VerifiedSource
+// never reorders: the streaming path yields in the underlying stream's order and
+// the fallback path replays Search's slice in order, so its ordering guarantee is
+// exactly whatever it wraps — no stronger, and no weaker.
+//
+// Forwarding is what makes the declaration reach the policy engine at all: the
+// engine holds a VerifiedSourcer, and in production that is always a
+// *VerifiedSource wrapping the real source (EntSource, ArchivistaSource, …).
+// Without this, no production source could ever qualify for the lazy stop.
+func (s *VerifiedSource) CanonicalStreamOrder() bool {
+	c, ok := s.source.(CanonicalOrderSourcer)
+	return ok && c.CanonicalStreamOrder()
 }
 
 // WithEvidenceHashes returns the same source configured to record payload

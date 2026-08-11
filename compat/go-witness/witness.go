@@ -48,3 +48,4 @@ var VerifyWithPolicyCAIntermediates = workflow.VerifyWithPolicyCAIntermediates
 var VerifyWithAiServerURL = workflow.VerifyWithAiServerURL
 var VerifyWithKMSProviderOptions = workflow.VerifyWithKMSProviderOptions
 var VerifyWithMaxSubjectFanout = workflow.VerifyWithMaxSubjectFanout
+var VerifyWithLazyWitness = workflow.VerifyWithLazyWitness

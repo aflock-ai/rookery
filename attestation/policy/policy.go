@@ -253,6 +253,10 @@ type verifyOptions struct {
 	aiServerURL         string
 	clockSkewTolerance  time.Duration
 	requireAllArtifacts bool
+	// lazyStepSatisfaction enables within-step stop-at-first-pass on the
+	// streamed arm. Default false — see WithLazyStepSatisfaction (lazy.go) for
+	// the soundness argument and the three exclusions.
+	lazyStepSatisfaction bool
 }
 
 func WithVerifiedSource(verifiedSource source.VerifiedSourcer) VerifyOption {
@@ -483,12 +487,22 @@ func (p Policy) topologicalSort() ([]string, error) {
 	}
 
 	// Seed the queue with steps that have no dependencies.
+	//
+	// DETERMINISM (#7958): Go randomizes map iteration, so seeding straight
+	// from inDegree gives a different step order on every run. Step order
+	// decides the order in which BackRefs widen the search set, which decides
+	// the order candidates are returned in, which — under the minimum-witness
+	// stop — decides WHICH collection becomes the witness and gets signed.
+	// AttestationsFrom only constrains dependencies; among independent steps
+	// the tie-break has to come from somewhere, and a name sort is the only
+	// one available that is a function of the policy rather than of the run.
 	queue := make([]string, 0)
 	for name, deg := range inDegree {
 		if deg == 0 {
 			queue = append(queue, name)
 		}
 	}
+	sort.Strings(queue)
 
 	var sorted []string
 	for len(queue) > 0 {
@@ -496,12 +510,17 @@ func (p Policy) topologicalSort() ([]string, error) {
 		queue = queue[1:]
 		sorted = append(sorted, curr)
 
+		// dependents[curr] was built by ranging p.Steps, so it too carries a
+		// random order; sort the newly-ready set before enqueueing it.
+		ready := make([]string, 0, len(dependents[curr]))
 		for _, dep := range dependents[curr] {
 			inDegree[dep]--
 			if inDegree[dep] == 0 {
-				queue = append(queue, dep)
+				ready = append(ready, dep)
 			}
 		}
+		sort.Strings(ready)
+		queue = append(queue, ready...)
 	}
 
 	if len(sorted) != len(p.Steps) {
@@ -599,6 +618,12 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 // verifySteps runs the step-verification loop. Extracted from the old
 // Policy.Verify body to make room for external-attestation verification
 // ordering without ballooning the single function.
+// VERBATIM frozen copy of the pre-lazy engine, which exists precisely so a
+// mutation here cannot move the oracle with it. dupl is exempted for _test.go
+// but reports the pair anchored on this side. Any OTHER duplicate of this body
+// would be a real finding — check the reported partner before re-suppressing.
+//
+//nolint:dupl // the only clone of this body is lazy_frozen_oracle_test.go's
 func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles map[string]TrustBundle, externalResults map[string]ExternalResult) (map[string]StepResult, error) { //nolint:gocognit,gocyclo,funlen // loop body mixes search / functionary / context-build / backref-expansion on shared per-iteration state; splitting would require threading state through extra parameters
 	// Validate that all artifactsFrom references point to steps defined in the policy.
 	// This catches configuration errors early rather than producing confusing
@@ -626,20 +651,53 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 	}
 
 	resultsByStep := make(map[string]StepResult)
-	// Track all known subject digests to prevent duplicates across depth
-	// iterations. Without de-duplication, the search set can grow
-	// exponentially as back-references are re-discovered each iteration.
-	knownDigests := make(map[string]struct{})
-	for _, d := range vo.subjectDigests {
-		knownDigests[d] = struct{}{}
+
+	// LOGICAL DEPTH, per digest. digestDepth records the hop count at which
+	// each subject digest becomes searchable: seeds are 0, and a digest
+	// harvested while searching at logical depth L is L+1. It also serves the
+	// de-duplication the search set has always needed — without it the set
+	// grows exponentially as back-references are re-discovered each iteration.
+	//
+	// Logical depth is deliberately NOT the wall-clock iteration count. What
+	// searchDepth bounds is REACHABILITY — how many hops from the seeds the
+	// verify may travel — and the minimum-witness valve (below) can replay an
+	// iteration. Counting iterations instead would let a replay search one hop
+	// further out than an eager verify ever does, which is a FAIL→PASS
+	// divergence, not merely extra work.
+	//
+	// allDigests preserves the caller's seed slice verbatim, duplicates
+	// included, and only ever grows; digests are appended in non-decreasing
+	// depth order.
+	allDigests := append([]string(nil), vo.subjectDigests...)
+	digestDepth := make(map[string]int, len(allDigests))
+	for _, d := range allDigests {
+		if _, dup := digestDepth[d]; !dup {
+			digestDepth[d] = 0
+		}
 	}
 
-	for depth := 0; depth < vo.searchDepth; depth++ {
-		// Collect back-reference digests discovered during this depth
-		// iteration. They will be added to the search set for the NEXT
-		// depth iteration, not the current one, to prevent a single
-		// collection from widening the scope of its own depth.
-		var nextDepthDigests []string
+	// Minimum-witness Phase 1 (default OFF). lazyWitnessEligible is the
+	// policy-shape gate; the valve tracks steps whose truncated stream has been
+	// DEMANDED back. A valve firing REPLAYS the current logical depth rather
+	// than advancing it, so the repair pass re-searches exactly the frontier
+	// the truncated pass under-used and reaches no further. Firings are bounded
+	// by the step count (each marks at least one new step and marks are never
+	// cleared), so the loop runs at most searchDepth + len(p.Steps) times.
+	lazyEligible := p.lazyWitnessEligible(vo)
+	valve := newDemandValve()
+
+	for depth := 0; depth < vo.searchDepth; {
+		// Steps whose candidate stream stopped at their first passing
+		// collection during THIS iteration — the valve's input.
+		var truncatedSteps []string
+
+		// The search set for THIS logical depth: every digest within `depth`
+		// hops of the seeds. In an EAGER verify this is always the entire
+		// accumulated set — a digest discovered at iteration j carries depth
+		// j+1 <= depth — so the bound is a no-op and the slice handed back is
+		// the original. It only bites on a valve replay, where the previous
+		// pass already harvested digests belonging to the NEXT level.
+		vo.subjectDigests = searchableDigests(allDigests, digestDepth, depth)
 
 		for _, stepName := range stepOrder {
 			step := p.Steps[stepName]
@@ -660,11 +718,14 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 				// verify, triage, gate, compact — so at most one decoded
 				// envelope body is in flight per turn, instead of
 				// materializing the full matching set before evaluation.
-				streamed, candidates, serr := p.verifyStepStreamed(ctx, streamer, step, vo, trustBundles, stepCtx, attestationsByStep[stepName])
+				streamed, candidates, truncated, serr := p.verifyStepStreamed(ctx, streamer, step, vo, trustBundles, stepCtx, attestationsByStep[stepName], lazyEligible && valve.lazyAllowedFor(stepName))
 				if serr != nil {
 					return nil, serr
 				}
 				stepResult = streamed
+				if truncated {
+					truncatedSteps = append(truncatedSteps, stepName)
+				}
 				if candidates == 0 {
 					// Same empty-result diagnosis as the batch path below,
 					// under the same once-per-verify depth guard (#7572) —
@@ -770,6 +831,15 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 			// — otherwise a throwaway rejected collection can make an unrelated
 			// downstream collection reachable.
 			for _, pc := range stepResult.Passed {
+				// DETERMINISM (#7958): BackRefs() is a map of name → DigestSet
+				// and DigestSet is itself a map, so ranging them yields a
+				// different order every run. That order becomes the order of
+				// allDigests, which becomes the order the source returns
+				// candidates in, which under the minimum-witness stop decides
+				// which collection is signed as the witness. Collect first,
+				// sort, then admit — so the search frontier is a function of
+				// the evidence and not of the map seed.
+				harvested := make([]string, 0)
 				for backRefName, digestSet := range pc.Collection.Collection.BackRefs() {
 					for _, digest := range digestSet {
 						// Empty-merkle-tree sentinel: shared identically by every
@@ -779,21 +849,67 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 						if isEmptyTreeHubBackRef(backRefName, digest) {
 							continue
 						}
-						if _, seen := knownDigests[digest]; !seen {
-							knownDigests[digest] = struct{}{}
-							nextDepthDigests = append(nextDepthDigests, digest)
-						}
+						harvested = append(harvested, digest)
+					}
+				}
+				sort.Strings(harvested)
+				for _, digest := range harvested {
+					// A digest harvested while searching at logical depth
+					// `depth` sits one hop further out, so it becomes
+					// searchable at depth+1 — never in the current
+					// iteration, which is what stops a single collection
+					// from widening the scope of its own depth.
+					if _, seen := digestDepth[digest]; !seen {
+						digestDepth[digest] = depth + 1
+						allDigests = append(allDigests, digest)
 					}
 				}
 			}
 		}
 
-		// Expand search scope for the next depth iteration only.
+		// Search scope for the next depth iteration is derived from
+		// digestDepth at the top of that iteration; the harvest above has
+		// already recorded every newly reachable digest at depth+1.
 		//
 		// Subject-graph isolation rule (issue #39): external-attestation
-		// subjects are NOT added here. Only Collection BackRefs expand the
+		// subjects are NOT added there. Only Collection BackRefs expand the
 		// seed set. This preserves Collection-graph semantics.
-		vo.subjectDigests = append(vo.subjectDigests, nextDepthDigests...)
+
+		// DEMAND VALVE (minimum-witness Phase 1, lazy only; no-op when the
+		// option is off because truncatedSteps is then always empty).
+		//
+		// A step that stopped at its first passing collection produced a
+		// WITNESS, not a survey. If the verify is globally satisfied on that
+		// witness, the skipped candidates cannot change the verdict (every
+		// verdict component is existential over Passed) and we fall through to
+		// the ordinary breaks below. If it is NOT satisfied, the skipped
+		// evidence is now DEMANDED — for either of two reasons, both covered by
+		// the same coarse response:
+		//
+		//   - an artifactsFrom edge is unsatisfied because the one witness this
+		//     step kept is not the collection the consumer needed, or
+		//   - a downstream step never found its evidence because the BackRef
+		//     frontier the skipped candidates would have contributed was never
+		//     harvested.
+		//
+		// Both are repaired by re-running the truncated steps EXHAUSTIVELY, so
+		// the valve does not try to tell them apart (per-candidate cursors are
+		// Phase 2). Marked steps never stop early again in this verify, so the
+		// loop cannot livelock.
+		//
+		// The repair pass REPLAYS the current logical depth — `depth` is not
+		// incremented. That is the whole safety property: the pass re-searches
+		// exactly the digest set the truncated pass was entitled to and reaches
+		// no further, so it can recover evidence eager would have found without
+		// ever finding evidence eager could not. Granting an extra ITERATION
+		// instead (the first implementation) advanced the accumulated subject
+		// graph one hop past searchDepth and turned an eager FAIL into a PASS.
+		if len(truncatedSteps) > 0 && !p.allStepsSatisfied(ctx, vo, resultsByStep) && valve.demand(truncatedSteps) {
+			// Skip BOTH breaks below: the demanded evidence has not been
+			// examined yet, so neither "nothing new is reachable" nor "not
+			// satisfied" is a verdict this loop is entitled to settle on.
+			continue
+		}
 
 		// Stop expanding once a further iteration cannot change the verdict.
 		// Depth expansion exists to REACH evidence the seed digests do not name
@@ -802,9 +918,16 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 		// step against the accumulated digest set — on a monorepo that is
 		// hundreds of envelope fetches per artifact (judge#7551).
 		//
-		// Case 1: no new digests were discovered, so the next iteration would
-		// issue byte-identical queries. Unconditionally safe.
-		if len(nextDepthDigests) == 0 {
+		// Case 1: nothing is reachable at the NEXT logical depth, so the next
+		// iteration would issue byte-identical queries. Unconditionally safe.
+		//
+		// This is a question about the accumulated graph, not about what THIS
+		// pass happened to harvest. In an eager verify the two coincide exactly
+		// — every depth+1 digest was discovered by this iteration. After a
+		// valve replay they do not: the earlier pass at this same depth already
+		// recorded the frontier, so a replay that harvests nothing new would
+		// strand it if the break looked only at its own harvest.
+		if countDigestsAtDepth(digestDepth, depth+1) == 0 {
 			break
 		}
 
@@ -822,7 +945,14 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 		if p.searchExpansionIsMonotone() && p.allStepsSatisfied(ctx, vo, resultsByStep) {
 			break
 		}
+
+		depth++
 	}
+
+	// Restore the full accumulated set. The loop searched a depth-bounded view
+	// of it; everything downstream (and any caller reading vo back) sees the
+	// same thing it always has: seeds plus every digest the walk discovered.
+	vo.subjectDigests = allDigests
 
 	resultsByStep, err = p.verifyArtifacts(ctx, vo, resultsByStep)
 	if err != nil {
@@ -937,7 +1067,24 @@ func rehydrateAwaitingGate(c source.CollectionVerificationResult) (source.Collec
 // for steps carrying AI policies (external server calls) the entire gate is
 // deferred until admission is final (deferGateForAI), so a hub-rejected
 // candidate never triggers an AI request the batch path would not have made.
-func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.StreamingVerifiedSourcer, step Step, vo *verifyOptions, trustBundles map[string]TrustBundle, stepCtx map[string]interface{}, attestations []string) (StepResult, int, error) { //nolint:gocognit,gocyclo,funlen // one candidate's verify-triage-gate-compact lifecycle reads as a single pipeline; splitting it would scatter the per-candidate memory contract this function exists to enforce
+//
+// LAZY STOP (minimum-witness Phase 1, lazyAllowed; default off). When the
+// caller allows it AND the fan-out guard is inactive for this search, the
+// stream is ABORTED at the first candidate the gate passes: one passing
+// collection is all StepResult.Analyze, verifyArtifacts and allStepsSatisfied
+// ever need (they are existential over Passed), so the remaining candidates
+// are fetched, DSSE-verified and gated for nothing. The third return value
+// reports the truncation so the depth loop's demand valve can un-truncate the
+// step if the verify does not settle on that witness.
+//
+// The guard exclusion is not a convenience: hub classification counts
+// candidates and counts only grow, so a truncated stream sees a SMALLER hub
+// set and would admit candidates the full stream demotes. Those demotions are
+// false rejects, so the divergence is FAIL→PASS — the direction a Phase whose
+// contract is bit-identical verdicts must not take. It also means
+// deferGateForAI (tracker-dependent) and streamedHubSkip are unreachable
+// whenever the lazy stop is live.
+func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.StreamingVerifiedSourcer, step Step, vo *verifyOptions, trustBundles map[string]TrustBundle, stepCtx map[string]interface{}, attestations []string, lazyAllowed bool) (StepResult, int, bool, error) { //nolint:gocognit,gocyclo,funlen // one candidate's verify-triage-gate-compact lifecycle reads as a single pipeline; splitting it would scatter the per-candidate memory contract this function exists to enforce
 	// authorizedCandidate is the compact per-candidate state retained while
 	// the stream is in flight: the gate verdict, the closure-intersection
 	// digests for the final fan-out classification, and the compacted
@@ -969,6 +1116,12 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 	// per hub digest plus the genuine closure evidence.
 	deferGateForAI := tracker != nil && stepHasAiPolicies(step)
 	candidates := 0
+	// The fan-out guard and the lazy stop are mutually exclusive: see the
+	// function doc. tracker == nil is the guard's own no-op condition
+	// (newFanoutTracker), read here rather than recomputed so the two can
+	// never drift apart.
+	lazyStop := lazyAllowed && tracker == nil
+	truncated := false
 
 	err := streamer.SearchStream(ctx, step.Name, vo.subjectDigests, attestations, func(cvr source.CollectionVerificationResult) error {
 		candidates++
@@ -1000,10 +1153,19 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 			}
 		}
 		authorized = append(authorized, ac)
+		// LAZY STOP: the step is satisfied — abort the stream. Everything the
+		// verdict reads is existential over Passed, so the untouched
+		// candidates cannot change it unless the verify fails to settle, in
+		// which case the depth loop's demand valve re-runs this step
+		// exhaustively.
+		if lazyStop && ac.verdict == streamedGatePassed {
+			truncated = true
+			return errStepSatisfied
+		}
 		return nil
 	})
-	if err != nil {
-		return StepResult{}, 0, err
+	if err != nil && !errors.Is(err, errStepSatisfied) {
+		return StepResult{}, 0, false, err
 	}
 
 	// End of stream: final hub classification over the full authorized set,
@@ -1045,7 +1207,7 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 			if rerr != nil {
 				// Fail closed: the payload decoded successfully at the
 				// source, so this is unreachable for a real candidate.
-				return StepResult{}, 0, rerr
+				return StepResult{}, 0, false, rerr
 			}
 			switch outcome, pc, rc := step.gateOne(full, vo.aiServerURL, stepCtx); outcome {
 			case gatePassed:
@@ -1059,12 +1221,12 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 			// Impossible: a provably-rejected candidate cannot be admitted by
 			// the final classification (counts are monotone). Fail closed
 			// rather than silently dropping a candidate whose gate never ran.
-			return StepResult{}, 0, fmt.Errorf("internal: hub-skipped candidate %s admitted by final fan-out classification", ac.hubMaterial.Reference)
+			return StepResult{}, 0, false, fmt.Errorf("internal: hub-skipped candidate %s admitted by final fan-out classification", ac.hubMaterial.Reference)
 		}
 	}
 	result.Rejected = append(result.Rejected, funcRejected...)
 	result.Rejected = append(result.Rejected, hubRejected...)
-	return result, candidates, nil
+	return result, candidates, truncated, nil
 }
 
 // searchExpansionIsMonotone reports whether the POLICY SHAPE is free of the

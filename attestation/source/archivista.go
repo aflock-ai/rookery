@@ -146,6 +146,15 @@ func (s *ArchivistaSource) fetchCollectionEnvelope(ctx context.Context, gitoid s
 	return collectionEnv, true
 }
 
+// NOTE ON CANONICAL ORDERING. ArchivistaSource deliberately does NOT implement
+// source.CanonicalOrderSourcer. drainInOrder faithfully preserves the order of
+// client.SearchGitoids, but that order is chosen by a REMOTE server's query
+// plan — it is that server's contract, not this source's, and this client
+// cannot promise it is stable, let alone content-derived. Not declaring costs
+// only performance: verifies through this source run the step gate
+// exhaustively instead of stopping at the first passing collection. Declaring
+// falsely would cost determinism of a SIGNED artifact. See
+// source.CanonicalOrderSourcer.
 func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionEnvelope) error) error {
 	s.mu.Lock()
 	excludeGitoids := make([]string, len(s.seenGitoids))
