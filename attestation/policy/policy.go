@@ -1295,30 +1295,41 @@ func (p Policy) searchExpansionIsMonotone() bool {
 // collection whose artifacts also verify — i.e. whether the step-verification
 // phase would already return a passing verdict.
 //
-// This mirrors the accept logic of verifyArtifacts without its side effects:
-// verifyArtifacts records rejections and clears Passed on failure, which must
-// only happen once, after the depth loop has finished. Nothing here mutates
-// resultsByStep; verifyCollectionArtifacts takes its collection by value and its
-// only writes are to that copy's Warnings.
+// It answers exactly the question the final verdict will answer, by running the
+// SAME convergence (convergeArtifactPruning) the verdict runs — on a CLONE, so
+// nothing here mutates resultsByStep. That sharing is load-bearing rather than
+// tidy: a predicate that judged the UNPRUNED results could see a step satisfied
+// by a collection the verdict is about to prune, stop the depth loop, and then
+// return FAIL — a false FAIL, because the next depth may hold a legitimate
+// replacement for exactly that collection. Settlement and verdict must be
+// decided on one view.
+//
+// The depth loop deliberately continues with the UNPRUNED results: a collection
+// that cannot satisfy its artifact edge at this depth may still be the upstream
+// that a later depth's evidence hangs off, so pruning must not be made
+// permanent until the search is over.
+//
+// Cost: one clone plus one convergence per depth iteration, O(collections ×
+// artifactsFrom edges). Bounded by the same cap as the verdict path.
 func (p Policy) allStepsSatisfied(ctx context.Context, vo *verifyOptions, resultsByStep map[string]StepResult) bool {
 	if len(p.Steps) == 0 {
 		return false
 	}
 
+	// Cheap pre-check: a step with no adjudicated evidence at all can never be
+	// settled, and this skips the clone for the common not-yet-satisfied case.
 	for _, step := range p.Steps {
 		result, ok := resultsByStep[step.Name]
 		if !ok || !result.Analyze() {
 			return false
 		}
+	}
 
-		accepted := false
-		for _, passed := range result.Passed {
-			if err := verifyCollectionArtifacts(ctx, vo, step, passed, resultsByStep); err == nil {
-				accepted = true
-				break
-			}
-		}
-		if !accepted {
+	pruned := cloneStepResults(resultsByStep)
+	p.convergeArtifactPruning(ctx, vo, p.sortedStepNames(), pruned)
+
+	for _, step := range p.Steps {
+		if len(pruned[step.Name].Passed) == 0 {
 			return false
 		}
 	}
@@ -1973,45 +1984,212 @@ func (step Step) triageOne(statement source.CollectionVerificationResult, trustB
 // chain sidecar — inline leaves are the sole trust path, and a leaf-less
 // collection with no inline materials fails closed.
 func (p Policy) verifyArtifacts(ctx context.Context, vo *verifyOptions, resultsByStep map[string]StepResult) (map[string]StepResult, error) { //nolint:gocognit
-	for _, step := range p.Steps {
-		accepted := false
-		if len(resultsByStep[step.Name].Passed) == 0 {
-			if result, ok := resultsByStep[step.Name]; ok {
-				result.Rejected = append(result.Rejected, RejectedCollection{Reason: fmt.Errorf("failed to verify artifacts for step %s: no passed collections present", step.Name)})
-				resultsByStep[step.Name] = result
-			} else {
-				return nil, fmt.Errorf("failed to find step %s in step results map", step.Name)
-			}
+	// Deterministic step order (#7572 read, design §10.6). This loop CLEARS
+	// result.Passed for a step whose artifacts fail, and a step whose
+	// artifactsFrom edge points at a cleared step reads a DIFFERENT upstream
+	// depending on which of the two was processed first: with the upstream
+	// intact it compares digests and can be accepted, after the clear it fails
+	// with "has no passed collections". Ranging a Go map therefore made
+	// FAIL-path step_results differ from run to run on the same corpus — a
+	// downstream step could be recorded as passed on one run and rejected on
+	// the next. Verdicts were never affected (the AND over Analyze() forces
+	// FAIL either way, because the step that failed its own artifacts is
+	// always cleared), but the recorded content was not reproducible.
+	//
+	// The order comes from sortedStepNames — a name sort, not topologicalSort;
+	// see that function for why.
+	stepNames := p.sortedStepNames()
 
+	// Steps that arrived with nothing to check. Recorded ONCE, before the fixed
+	// point, so the "no passed collections present" message stays reserved for
+	// evidence that was never there — a step the fixed point CLEARS below gets
+	// the richer "failed to verify artifacts: <reasons>" rejection instead, and
+	// never both.
+	for _, stepName := range stepNames {
+		step := p.Steps[stepName]
+		if len(resultsByStep[step.Name].Passed) > 0 {
+			continue
+		}
+		result, ok := resultsByStep[step.Name]
+		if !ok {
+			return nil, fmt.Errorf("failed to find step %s in step results map", step.Name)
+		}
+		result.Rejected = append(result.Rejected, RejectedCollection{Reason: fmt.Errorf("failed to verify artifacts for step %s: no passed collections present", step.Name)})
+		resultsByStep[step.Name] = result
+	}
+
+	p.convergeArtifactPruning(ctx, vo, stepNames, resultsByStep)
+
+	return resultsByStep, nil
+}
+
+// sortedStepNames returns the step-map keys in a total, stable order.
+//
+// A NAME SORT, deliberately, not topologicalSort. topologicalSort orders by
+// AttestationsFrom, while the edge that governs artifact verification is
+// artifactsFrom — which is NOT cycle-checked (the DFS walks only
+// AttestationsFrom), so a mutually-referencing artifactsFrom pair is legal
+// today and has no topological order at all.
+//
+// What this order protects is REASON determinism, and that needs only SOME
+// fixed total order, not a dependency-correct one: the artifact fixed point
+// converges the passed/rejected classification regardless of order, but the
+// recorded rejection TEXT differs depending on whether a step was judged before
+// or after its provider was cleared. A sort over the step-map keys is total,
+// always defined, and cheaper than a topological walk.
+//
+// (topologicalSort was also unstable until #7958 gave it name tie-breaks; that
+// was a second reason and is now moot. The reason above is the one that
+// survives. TestVerifyArtifacts_TopologicalSortIsStable pins the #7958 fix.)
+//
+// Keys, not Step.Name: keys are unique by construction, so the order has no
+// ties.
+func (p Policy) sortedStepNames() []string {
+	stepNames := make([]string, 0, len(p.Steps))
+	for name := range p.Steps {
+		stepNames = append(stepNames, name)
+	}
+	sort.Strings(stepNames)
+	return stepNames
+}
+
+// convergeArtifactPruning runs pruneInvalidArtifactCollections over
+// resultsByStep until nothing reclassifies, MUTATING it in place.
+//
+// This is the single definition of "which collections survive artifact
+// verification", and it has exactly two callers on purpose: verifyArtifacts,
+// which computes the final verdict, and allStepsSatisfied, which decides
+// whether the depth loop may stop early. Those two MUST agree — a predicate
+// that settles on a view the verdict is about to prune stops the search on
+// evidence that is about to be discarded, manufacturing a false FAIL when a
+// later depth held a legitimate replacement. Sharing the convergence rather
+// than mirroring its logic makes that drift unrepresentable.
+//
+// Termination: Passed sets only ever shrink (nothing re-populates them), so
+// each pass that changes anything permanently removes at least one COLLECTION.
+// The total number of passed collections is therefore the upper bound on
+// reaching the fixed point, and the cap makes that structural — a
+// mutually-referencing artifactsFrom pair can never spin. The +1 pays for the
+// final pass that observes no change.
+func (p Policy) convergeArtifactPruning(ctx context.Context, vo *verifyOptions, stepNames []string, resultsByStep map[string]StepResult) {
+	totalPassed := 0
+	for _, stepName := range stepNames {
+		totalPassed += len(resultsByStep[p.Steps[stepName].Name].Passed)
+	}
+
+	for i := 0; i <= totalPassed; i++ {
+		if !p.pruneInvalidArtifactCollections(ctx, vo, stepNames, resultsByStep) {
+			return
+		}
+	}
+}
+
+// cloneStepResults copies the map and the Passed/Rejected slices of each entry
+// so a caller can run the pruning convergence speculatively without touching
+// the real results. The slices are re-allocated rather than shared: the
+// convergence appends to Rejected, and append into a shared backing array would
+// scribble past the original's length.
+//
+// The collections themselves are shared — the convergence never mutates a
+// collection, only which of them a step holds.
+func cloneStepResults(src map[string]StepResult) map[string]StepResult {
+	out := make(map[string]StepResult, len(src))
+	for name, r := range src {
+		clone := r
+		clone.Passed = append([]PassedCollection(nil), r.Passed...)
+		clone.Rejected = append([]RejectedCollection(nil), r.Rejected...)
+		out[name] = clone
+	}
+	return out
+}
+
+// pruneInvalidArtifactCollections runs ONE pass of verifyArtifacts' fixed point
+// and reports whether it reclassified anything.
+//
+// It MUTATES resultsByStep, and verifyCollectionArtifacts reads the Passed sets
+// of the steps named in artifactsFrom, which is what makes a single pass
+// unsound in two distinct ways:
+//
+//   - STEP ordering. A consumer visited before its provider validates against
+//     the provider's still-populated evidence, is accepted, and then stays
+//     accepted after the provider is rejected — recorded evidence whose
+//     provenance chain is broken. Sorting the steps made that reproducible but
+//     not correct: it merely fixed WHICH policies lose, namely every one whose
+//     lexical order opposes its artifactsFrom order. Only re-running to
+//     convergence removes the order dependence from the outcome.
+//
+//   - SIBLING collections. Judging a step as a whole is fail-open for its own
+//     siblings: one valid collection would keep the step accepted while the
+//     invalid ones rode along inside Passed, where a downstream artifactsFrom
+//     edge could match against them and satisfy itself off a collection whose
+//     own chain is broken — and because the step's classification never
+//     changed, the fixed point would never revisit it. So each collection is
+//     judged on its own and individually-invalid ones leave Passed even when a
+//     sibling keeps the step accepted. Downstream edges therefore only ever see
+//     surviving collections.
+//
+// The caller's name sort fixes the order WITHIN a pass, which is what keeps the
+// recorded reason text reproducible (the outcome converges either way, but the
+// reason a collection was rejected does not).
+func (p Policy) pruneInvalidArtifactCollections(ctx context.Context, vo *verifyOptions, stepNames []string, resultsByStep map[string]StepResult) bool {
+	changed := false
+
+	for _, stepName := range stepNames {
+		// step.Name (not stepName) stays the lookup key, exactly as the
+		// original map-range form did.
+		step := p.Steps[stepName]
+		result := resultsByStep[step.Name]
+
+		// Already settled: an empty Passed set cannot recover, and its
+		// rejection is already recorded.
+		if len(result.Passed) == 0 {
 			continue
 		}
 
+		surviving := make([]PassedCollection, 0, len(result.Passed))
+		perCollection := []RejectedCollection{}
 		reasons := []error{}
-		for _, collection := range resultsByStep[step.Name].Passed {
-			if err := verifyCollectionArtifacts(ctx, vo, step, collection, resultsByStep); err == nil {
-				accepted = true
-			} else {
-				reasons = append(reasons, err)
+		for _, collection := range result.Passed {
+			err := verifyCollectionArtifacts(ctx, vo, step, collection, resultsByStep)
+			if err == nil {
+				surviving = append(surviving, collection)
+				continue
 			}
+			reasons = append(reasons, err)
+			perCollection = append(perCollection, RejectedCollection{
+				Collection: compactRejected(collection.Collection),
+				Reason:     fmt.Errorf("failed to verify artifacts for step %s: %w", step.Name, err),
+			})
 		}
 
-		if !accepted {
-			// can't address the map fields directly so have to make a copy and overwrite
-			if result, ok := resultsByStep[step.Name]; ok {
-				reject := RejectedCollection{Reason: fmt.Errorf("failed to verify artifacts for step %s: ", step.Name)}
-				for _, reason := range reasons {
-					reject.Reason = errors.Join(reject.Reason, reason)
-				}
-
-				result.Rejected = append(result.Rejected, reject)
-				result.Passed = []PassedCollection{}
-				resultsByStep[step.Name] = result
-			}
+		if len(surviving) == len(result.Passed) {
+			continue
 		}
 
+		// can't address the map fields directly so have to make a copy and overwrite
+		if len(surviving) > 0 {
+			// The step stands on its remaining evidence; only the invalid
+			// collections are pruned, each recorded with its own reason.
+			result.Passed = surviving
+			result.Rejected = append(result.Rejected, perCollection...)
+		} else {
+			// Nothing survives. Keep the aggregate step-level rejection this
+			// function has always produced in that case, rather than N
+			// per-collection entries, so the message consumers already parse
+			// is unchanged.
+			reject := RejectedCollection{Reason: fmt.Errorf("failed to verify artifacts for step %s: ", step.Name)}
+			for _, reason := range reasons {
+				reject.Reason = errors.Join(reject.Reason, reason)
+			}
+			result.Rejected = append(result.Rejected, reject)
+			result.Passed = []PassedCollection{}
+		}
+
+		resultsByStep[step.Name] = result
+		changed = true
 	}
 
-	return resultsByStep, nil
+	return changed
 }
 
 func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, passedCollection PassedCollection, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo // inline-leaf chain compare shares a reason-tracking trail across the artifactsFrom loop; splitting obscures the failure-reason trail
