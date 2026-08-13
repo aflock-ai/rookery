@@ -197,7 +197,12 @@ type V02Predicate struct {
 	// v0.2 for audit/debugging. Serialized AFTER the heavy interned tables so
 	// an agent reading the _meta prefix isn't forced through them.
 	Stdout string `json:"stdout,omitempty"`
-	Stderr string `json:"stderr,omitempty"`
+
+	// Scripts carries the resolved script/makefile identities. Included in the
+	// signed predicate: a script digest that did not survive marshalling would
+	// be evidence the attestor collected and then discarded.
+	Scripts []ScriptRef `json:"scripts,omitempty"`
+	Stderr  string      `json:"stderr,omitempty"`
 }
 
 // v02Interner holds the dedup tables shared by ToV02. Each intern* returns an
@@ -330,6 +335,7 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 		Cmd:      rc.Cmd,
 		ExitCode: rc.ExitCode,
 		Stdout:   rc.Stdout,
+		Scripts:  rc.Scripts,
 		Stderr:   rc.Stderr,
 		Summary:  rc.Summary,
 	}
@@ -483,6 +489,7 @@ func FromV02(p *V02Predicate) *CommandRun {
 	rc.Cmd = p.Cmd
 	rc.ExitCode = p.ExitCode
 	rc.Stdout = p.Stdout
+	rc.Scripts = p.Scripts
 	rc.Stderr = p.Stderr
 	rc.Summary = p.Summary
 	rc.keyGuard = p.Meta.KeyGuard
@@ -578,6 +585,7 @@ func MarshalV02WithSections(p *V02Predicate) ([]byte, *V02Predicate, error) {
 	// inclusion gate mirrors the struct's omitempty: emit only when non-zero).
 	specs := []sectionSpec{
 		{"summary", p.Summary, p.Summary != nil},
+		{"scripts", p.Scripts, len(p.Scripts) > 0},
 		{"digests", p.Digests, true},
 		{"paths", p.Paths, true},
 		{"comms", p.Comms, true},

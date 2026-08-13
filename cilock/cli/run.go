@@ -714,6 +714,10 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// visible (on stderr) and still captured into the attestation. Nothing is
 	// lost — only the destination of the passthrough changes.
 	jsonOutput := ro.OutputJSON()
+	scriptCapture, err := commandrun.ParseScriptCaptureMode(ro.ScriptCapture)
+	if err != nil {
+		return fmt.Errorf("--script-capture: %w", err)
+	}
 	if len(args) > 0 {
 		cmdOpts := []commandrun.Option{
 			commandrun.WithCommand(args),
@@ -722,6 +726,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 			commandrun.WithPrewalkSkipDirs(ro.PrewalkSkipDirs),
 			commandrun.WithPrewalkIncludeDirs(ro.PrewalkIncludeDirs),
 			commandrun.WithRequireZeroDrops(ro.RequireZeroDrops),
+			commandrun.WithScriptCapture(scriptCapture),
 		}
 		if jsonOutput {
 			cmdOpts = append(cmdOpts, commandrun.WithSilent(true))

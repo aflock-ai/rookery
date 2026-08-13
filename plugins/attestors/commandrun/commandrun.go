@@ -108,6 +108,18 @@ func WithTracing(enabled bool) Option {
 	}
 }
 
+// WithScriptCapture selects how much of an executed script or makefile is
+// recorded. Defaults to ScriptCaptureIdentity (path + digest, no bytes).
+//
+// ScriptCaptureContent embeds the script body and is opt-in per step: scripts
+// routinely inline credentials, and an attestation is signed, immutable and
+// broadly readable.
+func WithScriptCapture(mode ScriptCaptureMode) Option {
+	return func(cr *CommandRun) {
+		cr.scriptCapture = mode
+	}
+}
+
 func WithSilent(silent bool) Option {
 	return func(cr *CommandRun) {
 		cr.silent = silent
@@ -705,6 +717,13 @@ type CommandRun struct {
 	Stderr    string        `json:"stderr,omitempty"`
 	Processes []ProcessInfo `json:"processes,omitempty"`
 
+	// Scripts are the interpreted scripts and makefiles this command executes,
+	// resolved from argv and hashed BEFORE the command runs. Independent of
+	// tracing: it works on every platform, including those where no kernel
+	// tracing backend exists, and it survives the caller deleting a temp
+	// wrapper script once the step completes.
+	Scripts []ScriptRef `json:"scripts,omitempty"`
+
 	// keyGuard is the signer's anti-tamper state read back at Attest time
 	// (see readHardening). It is copied into the v0.2 `_meta.keyGuard` block
 	// by ToV02 and restored by FromV02, so it travels INSIDE the signed
@@ -715,6 +734,12 @@ type CommandRun struct {
 	silent        bool
 	materials     map[string]cryptoutil.DigestSet
 	enableTracing bool
+
+	// scriptCapture selects script/makefile capture depth. The zero value is
+	// the empty string rather than a valid mode, so scriptCaptureMode()
+	// resolves it to the identity default instead of silently disabling
+	// capture for every caller that predates this option.
+	scriptCapture ScriptCaptureMode
 
 	// traceeWorkdir is the working directory the tracee actually ran
 	// with — populated by runCmd just before exec.Command starts.
@@ -897,9 +922,43 @@ func (rc *CommandRun) Attest(ctx *attestation.AttestationContext) error {
 		}
 	}
 
+	// Capture script identity BEFORE running: wrapper scripts written to a
+	// temp dir are commonly removed by the caller once the step finishes, and
+	// a post-run capture would report every one of them as non-existent.
+	//
+	// SCOPE OF THE CLAIM. Scripts records the identity of the file the argv
+	// NAMED, measured at capture time. It does not, and cannot here, assert
+	// that those exact bytes are the bytes the kernel executed: the path can
+	// be rewritten or the symlink re-pointed between this measurement and
+	// exec. Binding the two would mean executing from a captured snapshot
+	// (which changes the command's semantics) or taking the digest from
+	// execution tracing of the opened inode.
+	//
+	// This is the measurement model the whole attestor family already uses,
+	// not a gap introduced here: the material attestor walks the working
+	// directory and publishes a path -> DigestSet map before the command
+	// runs, with the same time-of-measurement property. For an in-workdir
+	// script the digest published here matches material's pre-run entry for
+	// the same path; what this field adds is WHICH of those files was the one
+	// invoked. Consumers must read it as "the identity of the named script",
+	// and a policy needing execution-bound bytes wants tracing, not this
+	// field.
+	//
+	// The other half of the same limit: the INTERPRETER is identified by the
+	// basename of argv[0] alone, never by inspecting the binary. See
+	// resolveScriptOperands for the full statement of what a ScriptRef does
+	// and does not assert.
+	rc.Scripts = captureScriptRefs(ctx.Context(), rc.Cmd, rc.scriptWorkdir(ctx), rc.scriptCaptureMode())
+
 	if err := rc.runCmd(ctx); err != nil {
 		return err
 	}
+
+	// Now that the command has run, the trace can say which of those captured
+	// files were actually opened, and with what bytes. Anything it cannot speak
+	// to stays unverified — including everything on this path when runCmd
+	// returned an error above, which is the safe direction.
+	rc.bindScriptsToTrace()
 
 	// Record the signer's anti-tamper state (read back from the kernel, never
 	// asserted) so the non-forgeability evidence travels inside the signed
@@ -960,6 +1019,7 @@ func (rc *CommandRun) UnmarshalJSON(data []byte) error {
 	rc.Stderr = decoded.Stderr
 	rc.Summary = decoded.Summary
 	rc.Processes = decoded.Processes
+	rc.Scripts = decoded.Scripts
 	rc.keyGuard = decoded.keyGuard
 	return nil
 }
@@ -2158,5 +2218,53 @@ func redactArgv(argv []string) {
 func redactProcessCmdlines(processes []ProcessInfo) {
 	for i := range processes {
 		processes[i].Cmdline = redactSensitiveEnvValues(processes[i].Cmdline)
+	}
+}
+
+// scriptWorkdir resolves the directory relative script operands are read
+// against, mirroring what runCmd will set c.Dir to.
+//
+// It must return an ABSOLUTE directory. Leaving it empty still resolves to the
+// same place (Go resolves a relative path against the process CWD, which is
+// exactly runCmd's own fallback), but it records a bare relative path such as
+// "scan.sh" into signed evidence — a claim a verifier cannot resolve later
+// without guessing which directory it meant.
+func (rc *CommandRun) scriptWorkdir(ctx *attestation.AttestationContext) string {
+	if dir := ctx.WorkingDir(); dir != "" {
+		// NOT filepath.Abs. Abs calls Clean, and Clean removes `..` LEXICALLY —
+		// it deletes the preceding component from the string without knowing
+		// what that component was. runCmd hands this same value to exec.Cmd.Dir
+		// verbatim, and the kernel does the opposite: it follows the component
+		// first and applies `..` to wherever it landed. With `work/link/..`
+		// where link is a symlink, those are two different directories, and
+		// capture then hashed a real file with a real digest that the command
+		// never opened.
+		//
+		// Making it absolute WITHOUT cleaning keeps the `..` intact all the way
+		// into hydrateScriptRef, which already hands such paths to EvalSymlinks
+		// — the one place in this attestor that resolves `..`, and the same fix
+		// an earlier round applied to operands. This is that fix applied to the
+		// class rather than to the instance.
+		if abs, ok := absoluteAttemptedPath(dir, ""); ok {
+			return abs
+		}
+		return dir
+	}
+	if cwd, err := getwd(); err == nil {
+		return cwd
+	}
+	return rc.traceeWorkdir
+}
+
+// scriptCaptureMode resolves the configured capture mode, defaulting to
+// identity. An unset field means "caller predates this option", not "caller
+// asked for nothing" — defaulting to off would leave every existing caller
+// with no script evidence and no indication that any was available.
+func (rc *CommandRun) scriptCaptureMode() ScriptCaptureMode {
+	switch rc.scriptCapture {
+	case ScriptCaptureOff, ScriptCaptureIdentity, ScriptCaptureContent:
+		return rc.scriptCapture
+	default:
+		return ScriptCaptureIdentity
 	}
 }
