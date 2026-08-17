@@ -54,10 +54,18 @@ func (e ErrNoCollections) Error() string {
 // intentionally a []string (not a typed digest set) so the error message
 // can be read at a glance; debugging needs to see "what was actually in the
 // envelope vs what I asked for", not parse a structured payload.
+//
+// ObservedTruncated reports that ObservedSubjects is a SAMPLE, not the whole
+// union — the streaming probe stopped the source early. It exists because the
+// hint below is chosen by scanning for a "tree:" subject, and that scan is
+// only sound in one direction: finding "tree:" in a sample proves it is there,
+// while not finding it proves nothing. Without this flag a "tree:" subject
+// past the sample bound made the message confidently recommend the wrong fix.
 type ErrSubjectDigestMismatch struct {
-	Step             string
-	SuppliedDigests  []string
-	ObservedSubjects []string
+	Step              string
+	SuppliedDigests   []string
+	ObservedSubjects  []string
+	ObservedTruncated bool
 }
 
 func (e ErrSubjectDigestMismatch) Error() string {
@@ -77,14 +85,29 @@ func (e ErrSubjectDigestMismatch) Error() string {
 	// its products in a Merkle tree (a "tree:" subject), and even then second.
 	hint := "If you expected this artifact to match, the file was likely modified after it was " +
 		"attested, or you pointed at a different artifact than the one this step covers."
+	sawTree := false
 	for _, s := range e.ObservedSubjects {
 		if strings.Contains(s, "tree:") {
-			hint = "This step commits its products in a Merkle tree (a \"tree:\" subject), so a " +
-				"plain file digest never equals the tree root. If you expected this artifact to " +
-				"match, the file was likely modified after it was attested; only if it is " +
-				"genuinely a member of that tree do you need its inclusion proof to bridge the file to the tree."
+			sawTree = true
 			break
 		}
+	}
+	switch {
+	case sawTree:
+		// Sound in a sample too: seeing "tree:" proves it is there.
+		hint = "This step commits its products in a Merkle tree (a \"tree:\" subject), so a " +
+			"plain file digest never equals the tree root. If you expected this artifact to " +
+			"match, the file was likely modified after it was attested; only if it is " +
+			"genuinely a member of that tree do you need its inclusion proof to bridge the file to the tree."
+	case e.ObservedTruncated:
+		// NOT sound: the subjects above are a sample, so "no tree: subject"
+		// is unknown rather than false. Say so instead of confidently steering
+		// the operator at the wrong cause.
+		hint = "If you expected this artifact to match, the file was likely modified after it was " +
+			"attested, or you pointed at a different artifact than the one this step covers. " +
+			"Note: the subjects listed are a sample of this step's collections, not the complete " +
+			"set — if this step commits its products in a Merkle tree, the \"tree:\" subject may " +
+			"simply not appear above, and you would need an inclusion proof rather than a plain file digest."
 	}
 	return fmt.Sprintf(
 		"supplied artifact digest(s) [%s] not present in any subject of step %q collection. Subjects observed: [%s]. %s",
