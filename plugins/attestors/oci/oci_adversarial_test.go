@@ -590,10 +590,14 @@ func TestEmptyTarArchive(t *testing.T) {
 
 	t.Run("getLayerDIFFIDs_empty", func(t *testing.T) {
 		m := Manifest{Config: "config.json", Layers: []string{"layer.tar"}}
-		layerDiffIDs, err := m.getLayerDIFFIDs(ctx, tarPath)
-		// No matching layers found, but no error either
-		assert.NoError(t, err)
-		assert.Empty(t, layerDiffIDs)
+		_, err := m.getLayerDIFFIDs(ctx, tarPath)
+		// This used to return (nil, nil): a manifest could name layers that
+		// the archive did not contain and the attestor would emit zero
+		// layerdiffid subjects while still reporting success — an attestation
+		// asserting it measured an image it had not actually read. A named
+		// layer missing from the tar is corrupt evidence and now says so.
+		assert.Error(t, err, "a layer named in the manifest but absent from the tar must be loud")
+		assert.Contains(t, err.Error(), "layer.tar")
 	})
 }
 
