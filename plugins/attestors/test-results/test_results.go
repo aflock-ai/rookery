@@ -330,6 +330,12 @@ type junitTestsuites struct {
 	Skipped  int              `xml:"skipped,attr"`
 	Time     float64          `xml:"time,attr"`
 	Suites   []junitTestsuite `xml:"testsuite"`
+	// Testcases directly under <testsuites>, with no intervening <testsuite>.
+	// Node's built-in runner emits exactly this, so a JS project using the
+	// runner that ships with the language produces a report in this shape.
+	// Only DIRECT children match here, so a nested document still populates
+	// Suites and leaves this empty.
+	Cases []junitTestcase `xml:"testcase"`
 }
 
 // junitTestsuite handles both the nested case (under <testsuites>) and
@@ -362,12 +368,46 @@ type junitMessage struct {
 	Body    string `xml:",chardata"`
 }
 
+// stripIllegalXMLBytes removes bytes that XML 1.0 forbids outright: everything
+// below U+0020 except tab, newline and carriage return.
+//
+// Test runners embed the failing assertion's text in <failure>, and that text
+// routinely arrives with ANSI colour escapes still in it — Node's built-in JUnit
+// reporter writes the error's `cause` verbatim, ESC bytes and all. The result is
+// a document no conforming parser will read, so a run with failing tests
+// produced no test-results attestation at all: the attestor reported "no JUnit
+// XML found in products" while a perfectly good report sat on disk.
+//
+// The consequence was worse than a missing message. A policy asking for passing
+// tests was satisfied only by runs that PASSED, and refused runs that failed
+// with "no evidence" rather than "these tests failed" — the same answer it gives
+// when no tests ran at all. Those are different facts and a gate should not
+// conflate them.
+//
+// Only the illegal bytes are dropped. Nothing is re-encoded and no structure is
+// repaired: a document that is malformed for any other reason still fails, and
+// still fails loudly.
+func stripIllegalXMLBytes(b []byte) []byte {
+	out := make([]byte, 0, len(b))
+	for _, c := range b {
+		if c < 0x20 && c != '\t' && c != '\n' && c != '\r' {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 func parseJUnit(b []byte) (Predicate, []string, error) {
+	b = stripIllegalXMLBytes(b)
 	// Try the <testsuites> root first; fall back to a bare <testsuite>.
 	var root junitTestsuites
 	if err := xml.Unmarshal(b, &root); err != nil || len(root.Suites) == 0 {
 		var single junitTestsuite
-		if err2 := xml.Unmarshal(b, &single); err2 == nil && single.Name != "" {
+		// Cases, not just a name, qualify a bare <testsuite> root. Requiring a
+		// name rejected unnamed suites full of real results — the emitter's
+		// choice about an optional attribute decided whether the run counted.
+		if err2 := xml.Unmarshal(b, &single); err2 == nil && (single.Name != "" || len(single.Cases) > 0) {
 			root.Suites = []junitTestsuite{single}
 			root.Tests = single.Tests
 			root.Failures = single.Failures
@@ -379,6 +419,22 @@ func parseJUnit(b []byte) (Predicate, []string, error) {
 		}
 	}
 
+	// A flat <testsuites> whose testcases hang directly off the root. Wrap them
+	// in one synthetic suite so the accounting below has something to walk. The
+	// suite is left unnamed rather than given an invented one: the document did
+	// not name it, and a fabricated name would appear in the attestation as
+	// though the emitter had supplied it.
+	if len(root.Suites) == 0 && len(root.Cases) > 0 {
+		root.Suites = []junitTestsuite{{
+			Name:  root.Name,
+			Cases: root.Cases,
+			Time:  root.Time,
+		}}
+	}
+
+	// Still rejected when there is genuinely nothing: widening the shapes we
+	// accept must not turn "no tests ran" into a passing report, which is the
+	// one reading that would make this attestor worse than useless.
 	if len(root.Suites) == 0 {
 		return Predicate{}, nil, fmt.Errorf("JUnit document contains no testsuite elements")
 	}
