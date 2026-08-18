@@ -128,11 +128,15 @@ gtag('config', '${AW_ID}', { send_page_view: false });`,
         var b = { t: type, p: path, r: document.referrer || '', ms: Math.round(now() - t0), sd: maxScroll, vw: window.innerWidth, vh: window.innerHeight };
         if (extra) { for (var k in extra) b[k] = extra[k]; }
         if (navigator.sendBeacon) navigator.sendBeacon(ep, JSON.stringify(b));
-        // Cross-property analytics hub (analytics.testifysec.com): mirror this event in the
-        // hub's schema so cilock.dev shows up alongside testifysec.com. This runs only after
-        // the client-side consent gate, so cl_consent:'granted' is truthful; the key is a
-        // public anti-noise token (matches the hub's INGEST_WRITE_KEY).
-        var HUB = 'https://analytics.testifysec.com/ingest/web', fu = fuid(), cp = camp();
+        // Cross-property analytics sink (salespot.testifysec.com/ingest/web): mirror this
+        // event so cilock.dev shows up alongside testifysec.com. salespot accepts this exact
+        // wire shape and keeps only the high-intent slice; the retired standalone hub's raw
+        // page-view warehouse is deliberately not reproduced. This runs only after the
+        // client-side consent gate, so cl_consent:'granted' is truthful; the key is a public
+        // anti-noise token (webingest.PublicBeaconKey). cilock.dev serves no CSP
+        // (site/static/_headers), so this host needs no connect-src entry — testifysec.com
+        // DOES, and has one.
+        var HUB = 'https://salespot.testifysec.com/ingest/web', fu = fuid(), cp = camp();
         var hub = { source: 'cilock.dev', kind: 'event', key: 'clk-web-ingest-pub-2026', cl_consent: 'granted', type: type, path: path, referer: b.r, dwell_ms: b.ms, scroll: b.sd, vw: b.vw, vh: b.vh, query: (extra && (extra.q || extra.d)) || '', visitor_id: getCookie('cl_vid') || '', session_id: getCookie('cl_sid') || '', factors_uid: fu, campaign: cp };
         if (navigator.sendBeacon) navigator.sendBeacon(HUB, JSON.stringify(hub));
         // First page view also emits a hub visit row so cilock.dev populates the visits

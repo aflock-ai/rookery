@@ -26,8 +26,9 @@ export interface Env {
 
 /**
  * Canonical cross-property analytics ingest endpoint (see logDownload).
- * salespot IS the hub: the standalone analytics.testifysec.com property was
- * scaffolded but never deployed, so relays to it fired into the void. salespot's
+ * salespot IS the sink — every producer (this relay, the testifysec.com and
+ * cilock.dev page beacons, and the cilock CLI) now reports here, so the
+ * standalone analytics.testifysec.com property can be retired. salespot's
  * /ingest/web accepts this exact wire shape (kind=event/type=dl) and lands
  * downloads as per-day WebMetric counters.
  */
@@ -123,13 +124,13 @@ export async function resolveKey(env: Env, tail: string): Promise<string | null>
 }
 
 /**
- * Log a download event to the canonical cross-property analytics hub
- * (analytics.testifysec.com/ingest/web), best-effort and non-blocking. Downloads no
- * longer go to a local D1 table; the hub is the single source of truth for
+ * Log a download event to the canonical cross-property analytics sink
+ * (salespot.testifysec.com/ingest/web), best-effort and non-blocking. Downloads no
+ * longer go to a local D1 table; salespot is the single source of truth for
  * cross-property analytics.
  *
  * A download is an AGGREGATE functional count — we send NO visitor PII (no cookies, no
- * visitor_id/session_id). The hub treats type='dl' as a consent-exempt aggregate, derives
+ * visitor_id/session_id). The sink treats type='dl' as a consent-exempt aggregate, derives
  * country from request.cf of this POST, and parses the asset filename
  * (cilock-<version>-<os>-<arch>.tar.gz) for version/os/arch display. Failures are
  * swallowed (logged) so a hub outage never breaks a download.

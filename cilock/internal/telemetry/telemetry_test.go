@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -533,4 +534,30 @@ func TestReportTokenBearingMarkerStillEmits(t *testing.T) {
 	Report("verify", "1.2.3", "success")
 	require.Equal(t, 1, cs.Hits(), "a credential with a usable bearer must emit regardless of its AuthMode label")
 	assert.Equal(t, "Bearer real-jwt", cs.auth)
+}
+
+// TestShippedEndpointIsTheHub pins the compiled-in destination, in the direction
+// that is currently load-bearing: NOT salespot.
+//
+// Every other test in this file reassigns `endpoint` to an httptest server, so
+// they all stay green no matter where the shipped binary actually reports. That
+// makes a one-line change to the default invisible — and the tempting one-line
+// change is repointing at salespot's /ingest/cli, which is closed (it cannot
+// authenticate its callers; see salespot/crm-api/internal/cliusage/ingest.go).
+// Making that change would send this binary's telemetry to a 503 while the hub
+// went on answering for every older build. When the salespot edge gains real
+// origin authentication, update this expectation in the same change.
+func TestShippedEndpointIsTheHub(t *testing.T) {
+	assert.Equal(t, "https://analytics.testifysec.com/cli/t", endpoint,
+		"shipped telemetry endpoint must stay on the hub until salespot's edge can authenticate callers")
+}
+
+// TestShippedEndpointIsHTTPS guards the bearer. postEvent refuses to send over
+// cleartext to a non-loopback host, so a plain-http default would not leak the
+// token — it would silently disable telemetry entirely, which is worse because
+// nothing errors. Assert the property directly instead of trusting that
+// downstream refusal.
+func TestShippedEndpointIsHTTPS(t *testing.T) {
+	assert.True(t, strings.HasPrefix(endpoint, "https://"),
+		"telemetry carries a platform bearer and must never default to cleartext")
 }

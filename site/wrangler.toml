@@ -23,8 +23,8 @@ database_id = "629a819f-a221-4d47-8d60-1403a92b538b"
 
 # R2 — release artifact distribution (functions/dl, functions/install.sh, functions/policy).
 # The bucket is PRIVATE; the only public read path is through these Pages Functions,
-# which gate on the manifest and relay every download to the cross-property analytics hub
-# (analytics.testifysec.com/ingest/web; see functions/_lib/dist.ts logDownload — overridable
+# which gate on the manifest and relay every download to the cross-property analytics sink
+# (salespot.testifysec.com/ingest/web; see functions/_lib/dist.ts logDownload — overridable
 # via CILOCK_ANALYTICS_HUB). Publishing is done by scripts/publish-release.mjs
 # (verify-then-upload) — never write to this bucket by hand.
 #

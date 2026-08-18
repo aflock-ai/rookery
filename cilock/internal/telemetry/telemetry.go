@@ -53,6 +53,21 @@ import (
 // endpoint is the cross-property analytics hub URL. It is a var rather than a
 // const purely so tests can redirect it to a local httptest server; production
 // builds never reassign it.
+//
+// IT STAYS ON THE HUB, ON PURPOSE. The obvious next move is to repoint this at
+// salespot's /ingest/cli so CLI usage lands in the CRM directly instead of being
+// drained back out of the hub's Cloudflare D1. That edge exists and is CLOSED:
+// salespot cannot authenticate a caller here, because judge-api publishes no
+// JWKS and no introspection endpoint for the platform session token this package
+// sends, so any string satisfies a bearer check there and the resulting usage
+// number is one an anonymous stranger can both inflate and, once a cap is hit,
+// switch off. Repointing at it would silently drop the telemetry of every binary
+// built afterwards while the hub kept answering for older ones.
+//
+// Move this the same day salespot's edge gains verifiable origin authentication
+// — see salespot/crm-api/internal/cliusage/ingest.go for what has to land, and
+// note the cheapest shape is routing through judge-api, which already verifies
+// this exact token.
 var endpoint = "https://analytics.testifysec.com/cli/t"
 
 func optedOut() bool {
