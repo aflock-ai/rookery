@@ -243,6 +243,35 @@ var lookupIssuerHost = func(ctx context.Context, host string) ([]string, error) 
 // only in the platform's private view. That combination cannot succeed anyway:
 // such a name resolves to a private address, which the platform's SSRF
 // blocklist rejects regardless.
+// shellQuote renders s as a single POSIX shell word.
+//
+// Every message in this file that suggests a command is a message a human is
+// expected to COPY AND PASTE into a shell, and the issuer inside it is
+// attacker-influenced input. A URL path may legally contain shell syntax, so
+// "curl https://host/$(id)" pasted into a terminal RUNS id. The operator would
+// be attacking themselves, which sounds like a non-issue until you remember
+// what this particular message says: your setup instructions are out of date.
+// Those instructions came from somewhere else. Whoever wrote them chooses the
+// issuer string, and the remedy we print is the thing the operator is most
+// likely to paste — so the hostile-instructions case is the EXPECTED case here,
+// not an exotic one.
+//
+// Single quotes are used because inside them the shell expands nothing at all.
+// The only byte that cannot appear within them is the single quote itself, so
+// each one closes the literal, contributes an escaped quote, and reopens it.
+// Callers pair this with "curl --" so that a value beginning with a dash is
+// read as an operand rather than a flag.
+//
+// NOT a duplicate of shellQuoteArgs (stepinfer.go), and the two must not be
+// merged. That one renders argv for DISPLAY using %q, which emits DOUBLE
+// quotes, and a shell still expands $(...) and backticks inside those. It is
+// correct for its job — making an observed command unambiguous in a diagnostic
+// dump nobody is invited to run. This one is for the opposite job: a string a
+// human is explicitly told to paste. Similar name, different guarantee.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func preflightIssuerResolvable(ctx context.Context, issuerURL string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -271,10 +300,11 @@ func preflightIssuerResolvable(ctx context.Context, issuerURL string) error {
 					"an issuer that has since been renamed or retired. Regenerate your setup instructions and "+
 					"re-run `cilock trust` with the issuer they name now.\n\n"+
 					"If you believe this hostname is correct, confirm it from a network that can reach it:\n"+
-					"  curl %s/.well-known/openid-configuration\n\n"+
+					"  curl -- %s\n\n"+
 					"On-prem with split-horizon DNS (the issuer resolves from the platform but not from here)? "+
 					"Re-run with --skip-issuer-check",
-				issuerURL, host, strings.TrimRight(issuerURL, "/"),
+				issuerURL, host,
+				shellQuote(strings.TrimRight(issuerURL, "/")+"/.well-known/openid-configuration"),
 			)
 		}
 		// Inconclusive — say nothing and let the platform decide.
