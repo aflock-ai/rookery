@@ -113,6 +113,69 @@ func IsSoftError(err error) bool {
 	return errors.As(err, &s)
 }
 
+// DetectionError marks an attestor error as a VERDICT on a successful
+// observation — "I looked, and what I found matches a condition the operator
+// configured me to reject" — rather than a failure to observe.
+//
+// Attestors OBSERVE AND RECORD; they do not gate. The gating decision belongs
+// to policy (witness policy / rego), which reads the attestation afterwards.
+// A plain error returned from Attest() therefore means exactly one thing:
+// "I COULD NOT OBSERVE" — the tool is missing, the file is unreadable,
+// permission was denied, the output would not parse. It must NEVER mean
+// "I observed something bad."
+//
+// The distinction is not cosmetic. The workflow drops errored attestors from
+// the signed collection, so an attestor that returns a plain error on a
+// finding DELETES ITS OWN EVIDENCE: a findings-positive scan and a scan that
+// never ran become indistinguishable downstream, and the run fails OPEN in
+// the direction of silence.
+//
+// Some attestors still expose an opt-in run-time guard (secretscan's
+// --attestor-secretscan-fail-on-detection) so an operator can choose to stop
+// the build at run time instead of at verify time. That guard must still
+// produce a non-zero exit code, but it must not cost the collection its
+// evidence. DetectionError is how both hold at once:
+//
+//   - the workflow KEEPS a DetectionError attestor's payload in the
+//     collection (see workflow.evidenceIsRecordable), so the findings are
+//     recorded and policy can still gate on them at verify time; and
+//   - a DetectionError is NOT a SoftError, so it remains a fatal leg and the
+//     CLI still exits non-zero for operators who asked to fail closed.
+//
+// Use this ONLY for an operator-configured verdict on a successful
+// observation. If the attestor could not look, return a plain error.
+type DetectionError struct {
+	// Reason is the short operator-facing message describing what was
+	// detected. Kept as a string so attestors don't have to define a typed
+	// error just to be classified as a detection.
+	Reason string
+}
+
+// Error implements error. The "detected:" prefix is for log readers only; the
+// classification itself is by type, not string match.
+func (e DetectionError) Error() string {
+	if e.Reason == "" {
+		return "detected: attestor recorded a finding the operator configured as fatal"
+	}
+	return "detected: " + e.Reason
+}
+
+// NewDetectionError returns a DetectionError wrapping the given reason string.
+func NewDetectionError(reason string) error {
+	return DetectionError{Reason: reason}
+}
+
+// IsDetectionError reports whether err (or any error in its unwrap chain) is a
+// DetectionError — i.e. the attestor observed successfully and is reporting a
+// verdict, so its evidence is still trustworthy and must be recorded.
+func IsDetectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var d DetectionError
+	return errors.As(err, &d)
+}
+
 type AttestationContextOption func(ctx *AttestationContext)
 
 func WithOutputWriters(w []io.Writer) AttestationContextOption {

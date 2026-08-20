@@ -440,13 +440,38 @@ func (a *Attestor) getAbsolutePath(path, workingDir string) string {
 
 // Attest scans attestations and products for potential secrets.
 //
-// When failOnDetection is true, the attestor fails closed: it returns an
-// error not only when secrets are found, but ALSO when any per-file or
-// per-attestor scan errored. Previously, scan errors were silently
-// swallowed (logged at Debug level), which meant an attacker who could
-// induce a scanner crash could bypass this protective guard with an
-// empty findings list — the caller had no way to tell a clean scan
-// apart from a failed one.
+// ERROR CONTRACT — secretscan OBSERVES AND RECORDS; it does not decide.
+// The gating decision belongs to policy (witness policy / rego), which reads
+// this attestation afterwards. So the two error classes mean different things
+// and are deliberately typed differently:
+//
+//	plain error              "I COULD NOT OBSERVE" — temp dir, detector init,
+//	                         or any accumulated per-file/per-attestor scan
+//	                         failure. The findings list is incomplete by
+//	                         definition, so nothing here may be trusted. The
+//	                         workflow drops the attestor from the collection.
+//
+//	attestation.DetectionError
+//	                         "I OBSERVED, and what I found matches the
+//	                         condition the operator configured me to reject."
+//	                         The scan SUCCEEDED. The findings are real evidence
+//	                         and the workflow KEEPS them in the signed
+//	                         collection; the error only drives the exit code.
+//
+// A finding must never be reported as a plain error. The workflow filters the
+// collection on `completed.Error != nil`, so an attestor that plain-errors on
+// a finding DELETES ITS OWN EVIDENCE — a findings-positive scan and a scan
+// that never ran become indistinguishable downstream, and the guard fails OPEN
+// in the direction of silence. That was the bug; DetectionError is the fix.
+//
+// Note the ordering below: scan errors are checked BEFORE findings. If any
+// scan errored the findings list is incomplete, so the stricter "could not
+// observe" classification wins — otherwise an attacker who could induce a
+// gitleaks crash would downgrade a blind scan into a trustworthy-looking
+// verdict.
+//
+// Without failOnDetection (the default) findings are not an error at all:
+// they are simply recorded, and policy gates at verify time.
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	// Store the attestation context for later use
 	a.ctx = ctx
@@ -479,16 +504,25 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	if a.failOnDetection {
-		// Fail closed on scan errors — an empty findings list after a
-		// crashed scan is indistinguishable from a clean scan, and we
-		// must not let that pass when the caller opted into the guard.
+		// COULD NOT OBSERVE. Fail closed on scan errors — an empty findings
+		// list after a crashed scan is indistinguishable from a clean scan,
+		// and we must not let that pass when the caller opted into the guard.
+		// This stays a plain error: the scan is untrustworthy, so the workflow
+		// is right to keep it out of the collection.
 		if len(a.scanErrors) > 0 {
 			return fmt.Errorf("secret scanning failed: %d scan error(s), first: %w",
 				len(a.scanErrors), a.scanErrors[0])
 		}
 
+		// OBSERVED. The scan completed and found secrets. This is a verdict on
+		// good evidence, not a failure to look, so it is reported as a
+		// DetectionError: still fatal (the operator asked to fail closed, and
+		// DetectionError is not a SoftError, so the CLI still exits non-zero),
+		// but the workflow keeps a.Findings in the signed collection instead of
+		// discarding the only record that the secrets were ever seen.
 		if len(a.Findings) > 0 {
-			return fmt.Errorf("secret scanning failed: found %d secrets", len(a.Findings))
+			return attestation.NewDetectionError(
+				fmt.Sprintf("secret scanning failed: found %d secrets", len(a.Findings)))
 		}
 	}
 

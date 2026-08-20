@@ -114,3 +114,66 @@ func TestSoftError_IsErrorsAsCompatible(t *testing.T) {
 	assert.True(t, errors.As(wrapped, &s))
 	assert.Equal(t, "nothing to do", s.Reason)
 }
+
+// TestRunExitCode_DetectionError_StillExitsOne is the exit-code half of the
+// secretscan error-contract fix, and it exists to be unambiguous about a
+// change that is easy to read backwards.
+//
+// secretscan used to return a PLAIN error when it FOUND secrets. That looked
+// like a strong failure signal, but workflow.run() drops any attestor with a
+// non-nil Error from the collection, so "I found secrets" deleted its own
+// evidence — a findings-positive scan became indistinguishable from a scan
+// that never ran. THAT was the fail-open. The fix reports a detection as
+// attestation.DetectionError so the findings stay in the signed collection.
+//
+// The obvious worry about that change is "you softened the failure — does
+// --attestor-secretscan-fail-on-detection still fail the build?" This test
+// answers it in the classifier that actually decides the process exit code:
+// a DetectionError is NOT a SoftError, so it lands in FatalLegs and
+// classifyAttestorRunError still returns non-nil. Exit 1, unchanged.
+func TestRunExitCode_DetectionError_StillExitsOne(t *testing.T) {
+	detection := attestation.NewDetectionError("secret scanning failed: found 2 secrets")
+	wrapped := fmt.Errorf("attestor secretscan failed: %w", detection)
+	agg := &workflow.AttestorRunErrors{
+		Legs: []workflow.AttestorErrorLeg{
+			{Attestor: "secretscan", Err: wrapped},
+		},
+	}
+
+	got := classifyAttestorRunError(agg)
+	assert.Error(t, got,
+		"a detected secret must still fail the build — preserving the evidence "+
+			"must not downgrade --attestor-secretscan-fail-on-detection to exit 0")
+
+	assert.False(t, attestation.IsSoftError(wrapped),
+		"a detection is not a 'nothing to do' outcome; if it were classified soft the CLI would exit 0")
+	assert.NotEmpty(t, agg.FatalLegs(), "the detection leg must be fatal")
+	assert.Empty(t, agg.SoftLegs(), "the detection leg must not be demoted to a warning")
+}
+
+// TestDetectionError_IsErrorsAsCompatible pins the classification contract
+// itself: DetectionError must survive fmt.Errorf wrapping (the workflow wraps
+// every leg as "attestor X failed: %w"), and must be kept strictly distinct
+// from both plain errors and SoftErrors. Collapsing any two of those three
+// channels reintroduces the bug.
+func TestDetectionError_IsErrorsAsCompatible(t *testing.T) {
+	detection := attestation.NewDetectionError("found 2 secrets")
+	wrapped := fmt.Errorf("attestor secretscan failed: %w", detection)
+
+	assert.True(t, attestation.IsDetectionError(wrapped),
+		"wrapped DetectionError must be detectable — the workflow only ever sees the wrapped form")
+
+	// A failure to OBSERVE is not a detection. This is the distinction that
+	// keeps a crashed scanner's partial payload out of the collection.
+	bare := errors.New("gitleaks crashed: could not observe")
+	assert.False(t, attestation.IsDetectionError(bare),
+		"a plain error means 'I could not observe' and must never be read as a finding")
+
+	// A detection is not soft, and a soft error is not a detection.
+	assert.False(t, attestation.IsSoftError(wrapped))
+	assert.False(t, attestation.IsDetectionError(attestation.NewSoftError("nothing to do")))
+
+	var d attestation.DetectionError
+	assert.True(t, errors.As(wrapped, &d))
+	assert.Equal(t, "found 2 secrets", d.Reason)
+}

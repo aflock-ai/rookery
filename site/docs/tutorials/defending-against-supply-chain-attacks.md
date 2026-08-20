@@ -204,7 +204,7 @@ Trace adds roughly **36% overhead** on an `npm install` workload (5.1s → 6.9s 
 
 ## A secretscan policy as an alternative to fail-on-detection
 
-If you'd rather have the secretscan finding land in the attestation but reject the build at *verify* time (instead of at run time via `--attestor-secretscan-fail-on-detection`), use this Rego rule:
+The finding lands in the attestation either way — `--attestor-secretscan-fail-on-detection` only decides *when* the build is rejected, never *whether* the evidence is recorded. If you'd rather reject at *verify* time than at run time, drop the flag and use this Rego rule instead:
 
 ```rego
 # policy-secretscan.rego (verbatim from 43-trivy-attack-detection)

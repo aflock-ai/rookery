@@ -340,6 +340,9 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	// Build and sign the collection even when attestors failed. This ensures
 	// forensic data (e.g. secretscan findings) is captured in the attestation
 	// file so it can be used for post-incident analysis and policy verification.
+	// See evidenceIsRecordable for which failures still carry usable evidence —
+	// the collection filter below is what decides whether that forensic data
+	// actually survives.
 	//
 	// Errors are returned as a typed AttestorRunErrors so callers (the
 	// `cilock run` CLI) can split soft errors (attestor had nothing to do)
@@ -352,7 +355,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	// Filter attestors for collection - exclude those that are exported separately
 	var attestorsForCollection []attestation.CompletedAttestor
 	for _, completed := range runCtx.CompletedAttestors() {
-		if completed.Error != nil {
+		if !evidenceIsRecordable(completed.Error) {
 			continue
 		}
 
@@ -407,10 +410,39 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 // subjects users pass to `cilock verify -s <commit>`, and
 // ExternalAttestation lookups fail with "not found" even though the
 // envelope is loaded and trusted.
+// evidenceIsRecordable reports whether a completed attestor's payload belongs
+// in the signed collection, given the error (if any) it returned.
+//
+// Attestors observe and record; policy gates. That makes an attestor's error
+// return a statement about the OBSERVATION, not about the subject:
+//
+//   - nil — observed cleanly. Record it.
+//   - attestation.DetectionError — observed successfully, and reported a
+//     verdict the operator configured (e.g. secretscan's
+//     --attestor-secretscan-fail-on-detection firing on a real secret). The
+//     scan SUCCEEDED, so the payload is the only record that the finding ever
+//     happened. Record it. The error still counts as a fatal leg, so the CLI
+//     exit code is unchanged.
+//   - any other error — could not observe (tool missing, unreadable file,
+//     unparseable output). The payload is partial, and recording it would
+//     assert a clean result that was never established. Drop it.
+//
+// The third case is why this is a predicate and not just `err == nil`: before
+// it existed, secretscan returned a plain error when it FOUND secrets, so
+// "I found secrets" removed its own evidence from the collection and a
+// findings-positive scan became indistinguishable from one that never ran.
+// The guard failed OPEN, in the direction of silence.
+func evidenceIsRecordable(err error) bool {
+	return err == nil || attestation.IsDetectionError(err)
+}
+
 func collectParentSubjects(runCtx *attestation.AttestationContext, additional map[string]cryptoutil.DigestSet) map[string]cryptoutil.DigestSet {
 	pool := make(map[string]cryptoutil.DigestSet)
 	for _, completed := range runCtx.CompletedAttestors() {
-		if completed.Error != nil {
+		// Same predicate as the collection filter: an attestor whose evidence
+		// is recorded must also contribute its subjects, or the collection
+		// would carry an attestation whose subjects the envelope never anchors.
+		if !evidenceIsRecordable(completed.Error) {
 			continue
 		}
 		// Skip attestors that emit their own sidecar — we're computing
