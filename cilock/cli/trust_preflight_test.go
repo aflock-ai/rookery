@@ -6,6 +6,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -82,6 +83,13 @@ func TestRunTrust_RejectsSessionWithoutOIDCWrite(t *testing.T) {
 // returns nil (no network, no error).
 func TestRunTrust_AllowsSessionWithOIDCWrite(t *testing.T) {
 	platformURL := seedSession(t, sessionJWT(t, []string{"attestation:upload", "attestation:read", "sign", "oidc:write"}))
+
+	// runTrust also pre-flights that the issuer hostname resolves. Stub the DNS
+	// seam so this test stays hermetic: a sandboxed runner whose resolver
+	// NXDOMAINs everything would otherwise fail here for the wrong reason.
+	stubIssuerLookup(t, func(_ context.Context, _ string) ([]string, error) {
+		return []string{"140.82.112.22"}, nil
+	})
 
 	// dryRun=true: resolve + print the plan, then return before any GraphQL call.
 	if err := runTrust(quietTrustCmd(), []string{"github", "acme/app"}, &options.TrustOptions{}, platformURL, true, true); err != nil {

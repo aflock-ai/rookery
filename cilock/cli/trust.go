@@ -7,10 +7,15 @@ package cli
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	"github.com/aflock-ai/rookery/cilock/internal/config"
@@ -69,6 +74,7 @@ func TrustCmd() *cobra.Command {
 	f.StringVar(&o.Audience, "audience", "", "OIDC audience (default ${platform-url}/archivista — matches `cilock run`)")
 	f.StringSliceVar(&o.Scopes, "scope", nil, "Scope to grant (repeatable; default attestation:upload). Only attestation:{upload,read,verify} allowed")
 	f.BoolVar(&o.Verify, "verify", false, "Also grant attestation:read (for `cilock verify --enable-archivista`)")
+	f.BoolVar(&o.SkipIssuerCheck, "skip-issuer-check", false, "Skip the local check that the issuer hostname resolves (for split-horizon/on-prem DNS)")
 	f.StringSliceVar(&o.AllowedIPs, "allowed-ip", nil, "Source IP/CIDR allowlist (repeatable; e.g. the runner egress). Empty = any IP")
 	f.StringSliceVar(&o.Tags, "tag", nil, "Tag for categorization (repeatable, e.g. tag:ci)")
 	f.StringVar(&o.Name, "name", "", "Credential name (default <provider>:<slug>)")
@@ -125,29 +131,24 @@ func runTrust(cmd *cobra.Command, args []string, o *options.TrustOptions, platfo
 		}
 	}
 
-	// Require a real (token-bearing) admin session.
-	cred, err := auth.Lookup(o.PlatformURL)
+	cred, err := requireTrustSession(o.PlatformURL)
 	if err != nil {
-		return fmt.Errorf("read session: %w", err)
-	}
-	if cred == nil || cred.Token == "" {
-		return fmt.Errorf("not logged in to %s — run `cilock login` first (trust needs an admin session)", auth.NormalizeURL(o.PlatformURL))
-	}
-
-	// Pre-flight the scope: registering CI trust needs the narrow oidc:write
-	// capability, which a session only carries when the user opted in at login.
-	// The platform would otherwise reject createCredential with an opaque
-	// "missing required scope" error — surface the exact remedy here instead.
-	if !auth.TokenAuthorizedForScope(cred.Token, trustScope) {
-		return fmt.Errorf("this session can't register CI trust — it lacks the %q permission.\n"+
-			"Re-authenticate with the trust opt-in, then run `cilock trust` again:\n\n"+
-			"  cilock login --platform-url %s --allow-trust",
-			trustScope, auth.NormalizeURL(o.PlatformURL))
+		return err
 	}
 
 	resolved, err := o.Resolve(cred.TenantID)
 	if err != nil {
 		return err
+	}
+
+	// Pre-flight the ISSUER before the plan is printed and before the user is
+	// asked to confirm. A trust registration naming a hostname that does not
+	// exist cannot ever work, and round-tripping it only to have the platform
+	// refuse wastes the user's confirmation on a doomed request.
+	if !o.SkipIssuerCheck {
+		if err := preflightIssuerResolvable(cmd.Context(), resolved.IssuerURL); err != nil {
+			return err
+		}
 	}
 
 	// Interactive confirmation (skipped with --yes or when non-TTY+explicit).
@@ -177,6 +178,107 @@ func runTrust(cmd *cobra.Command, args []string, o *options.TrustOptions, platfo
 	_, _ = fmt.Fprintf(out, "\nWorkflows matching %q can now upload attestations. Verify with:\n"+
 		"  cilock run --platform-url %s -- <build>\n",
 		created.Subject, auth.NormalizeURL(o.PlatformURL))
+	return nil
+}
+
+// requireTrustSession loads the stored session for platformURL and enforces
+// that it is a real, token-bearing session carrying the narrow oidc:write
+// capability.
+//
+// The scope pre-flight is the sibling of preflightIssuerResolvable and exists
+// for the same reason: a session only carries oidc:write when the user opted in
+// at login, and without this check the platform rejects createCredential with
+// an opaque error the user cannot act on. Both checks run locally, before any
+// mutation, and name the exact remedy.
+func requireTrustSession(platformURL string) (*auth.Credential, error) {
+	cred, err := auth.Lookup(platformURL)
+	if err != nil {
+		return nil, fmt.Errorf("read session: %w", err)
+	}
+	if cred == nil || cred.Token == "" {
+		return nil, fmt.Errorf("not logged in to %s — run `cilock login` first (trust needs an admin session)", auth.NormalizeURL(platformURL))
+	}
+	if !auth.TokenAuthorizedForScope(cred.Token, trustScope) {
+		return nil, fmt.Errorf("this session can't register CI trust — it lacks the %q permission.\n"+
+			"Re-authenticate with the trust opt-in, then run `cilock trust` again:\n\n"+
+			"  cilock login --platform-url %s --allow-trust",
+			trustScope, auth.NormalizeURL(platformURL))
+	}
+	return cred, nil
+}
+
+// issuerPreflightTimeout bounds the pre-flight lookup. It is short on purpose:
+// the check is advisory, so a slow or wedged resolver must cost the operator a
+// moment, never the command.
+const issuerPreflightTimeout = 3 * time.Second
+
+// lookupIssuerHost is the DNS seam the issuer pre-flight resolves through.
+// A package var so tests can drive every DNS outcome hermetically; production
+// always uses the system resolver.
+var lookupIssuerHost = func(ctx context.Context, host string) ([]string, error) {
+	return net.DefaultResolver.LookupHost(ctx, host)
+}
+
+// preflightIssuerResolvable refuses, locally and before any platform call, an
+// issuer whose hostname authoritatively does not exist.
+//
+// IT FAILS OPEN, AND THAT IS THE DESIGN. This is a usability check, not a
+// security control — the authority over which issuers may be registered is and
+// stays the platform's server-side safehttp gate. Two facts force fail-open:
+//
+//  1. The CLI resolves from the OPERATOR'S network; the platform resolves from
+//     ITS OWN. They are different vantage points, so a local lookup failure is
+//     not evidence about what the platform will see.
+//  2. Blocking on any lookup error would break an operator behind a captive
+//     portal, a flaky VPN resolver, or a restricted-egress runner, for an
+//     issuer the platform resolves perfectly well.
+//
+// So ONLY an authoritative "this name does not exist" blocks. Go reports that
+// as *net.DNSError with IsNotFound for both NXDOMAIN and NODATA (NOERROR with
+// zero answers — the shape a live zone returns for a retired label, and
+// precisely the customer's case). Timeouts, temporary failures, a missing
+// resolver, and a cancelled context are all INCONCLUSIVE and proceed.
+//
+// The one case this can get wrong is split-horizon DNS, where a name exists
+// only in the platform's private view. That combination cannot succeed anyway:
+// such a name resolves to a private address, which the platform's SSRF
+// blocklist rejects regardless.
+func preflightIssuerResolvable(ctx context.Context, issuerURL string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	u, err := url.Parse(issuerURL)
+	if err != nil || u.Hostname() == "" {
+		// A malformed issuer is the platform's to judge, with its own message.
+		return nil
+	}
+	host := u.Hostname()
+	if net.ParseIP(host) != nil {
+		// A literal IP has nothing to resolve.
+		return nil
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, issuerPreflightTimeout)
+	defer cancel()
+
+	if _, lookupErr := lookupIssuerHost(lookupCtx, host); lookupErr != nil {
+		var dnsErr *net.DNSError
+		if errors.As(lookupErr, &dnsErr) && dnsErr.IsNotFound {
+			return fmt.Errorf(
+				"issuer %q cannot be trusted: its hostname %q does not resolve, so the platform can never "+
+					"fetch its OpenID configuration to verify tokens from it.\n\n"+
+					"This almost always means the setup instructions you are following are out of date and name "+
+					"an issuer that has since been renamed or retired. Regenerate your setup instructions and "+
+					"re-run `cilock trust` with the issuer they name now.\n\n"+
+					"If you believe this hostname is correct, confirm it from a network that can reach it:\n"+
+					"  curl %s/.well-known/openid-configuration\n\n"+
+					"On-prem with split-horizon DNS (the issuer resolves from the platform but not from here)? "+
+					"Re-run with --skip-issuer-check",
+				issuerURL, host, strings.TrimRight(issuerURL, "/"),
+			)
+		}
+		// Inconclusive — say nothing and let the platform decide.
+	}
 	return nil
 }
 

@@ -124,6 +124,17 @@ type TrustOptions struct {
 	Description string
 	TenantID    string
 	Verify      bool // also grant attestation:read
+
+	// SkipIssuerCheck disables the client-side pre-flight that refuses an
+	// issuer hostname DNS says does not exist.
+	//
+	// The escape hatch exists for split-horizon DNS: an on-prem issuer (GHES,
+	// self-hosted GitLab) can be resolvable from the platform's network and
+	// NXDOMAIN from the operator's laptop off-VPN. The pre-flight would then
+	// refuse a registration that would in fact succeed. The platform's own
+	// validation is unaffected either way — it, not this flag, is the
+	// authority on which issuers may be registered.
+	SkipIssuerCheck bool
 }
 
 // ResolvedTrust is the validated, fully-derived credential to create.
