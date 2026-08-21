@@ -63,18 +63,28 @@ func (e ErrNoMatchingSigs) Error() string {
 	// the detail missing, and sends readers hunting for a key mismatch that is not
 	// there.
 	//
-	// The dominant cause is working-as-designed: when timestamp verifiers ARE
-	// configured, Verify only attempts a cert-based signature once one of that
-	// signature's RFC3161 timestamps verifies. A signature carrying NO timestamp
-	// never enters that loop, so it is skipped without recording a per-verifier
-	// error and the list comes back empty. (Platform-internal signers that attach
-	// no TSA timestamp are a known source of this — see the ingest-time notes in
-	// judge-api's evidencetrust package.)
+	// The cause is working-as-designed: when timestamp verifiers ARE configured,
+	// Verify only attempts a cert-based signature once one of that signature's
+	// RFC3161 timestamps verifies. A signature that never clears that gate is
+	// skipped without recording a per-verifier error, so the list comes back
+	// empty.
+	//
+	// TWO different things clear that gate, and they need OPPOSITE fixes:
+	// a signature carrying no timestamp at all (the signer is not stamping),
+	// and a signature whose timestamp is present but issued by a TSA the policy
+	// does not trust (the policy is missing a timestamp root). This message used
+	// to assert the first as the likely cause, which sent anyone hitting the
+	// second to go looking for a missing timestamp that was in fact right there.
+	// Naming both is longer and correct; naming one is shorter and sometimes a
+	// wild goose chase.
 	if reported == 0 {
 		mess += "  (empty: no verifier was attempted for any signature, so none reported an error.\n" +
-			"  Most often this means timestamp verifiers are configured but the signature\n" +
-			"  carries no RFC3161 timestamp, so it is skipped rather than failed. Check\n" +
-			"  whether the signature has a timestamp before hunting for a key mismatch.)\n"
+			"  With timestamp verifiers configured, a cert-based signature is only attempted\n" +
+			"  once one of its RFC3161 timestamps verifies. Two things prevent that, and they\n" +
+			"  need opposite fixes: the signature carries NO timestamp (the signer is not\n" +
+			"  stamping), or it carries one issued by a TSA this policy does not trust (the\n" +
+			"  policy is missing that timestamp root). Check which before hunting for a key\n" +
+			"  mismatch — enable debug logging to see the per-signature TSA result.)\n"
 	}
 
 	// Lead with the trust-mismatch block when present: it is the actionable

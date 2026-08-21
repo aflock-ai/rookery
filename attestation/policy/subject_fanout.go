@@ -19,8 +19,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aflock-ai/rookery/attestation/cryptoutil"
-	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/source"
 )
 
@@ -104,7 +102,7 @@ func closureIntersections(passed []PassedCollection, closure []string) ([]map[st
 	admittingDigests := make([]map[string]struct{}, len(passed))
 	fanout := make(map[string]int)
 	for i, pc := range passed {
-		ds := closureIntersectOne(pc.Collection.Statement.Subject, closureSet)
+		ds := closureIntersectOne(pc.Collection.CollectionEnvelope, closureSet)
 		admittingDigests[i] = ds
 		for d := range ds {
 			fanout[d]++
@@ -118,11 +116,41 @@ func closureIntersections(passed []PassedCollection, closure []string) ([]map[st
 // closureIntersections and the streamed pipeline's fanoutTracker, so the two
 // paths can never disagree on what counts as a candidate's closure
 // connection.
-func closureIntersectOne(subjects []intoto.Subject, closureSet map[string]struct{}) map[string]struct{} {
+//
+// TRUST BOUNDARY. This is a VERIFICATION verdict input, so the subjects and the
+// git-attested scope MUST come from the SIGNATURE-VERIFIED payload — the same
+// source of truth the artifact-substitution guard (payloadMatchesSubjects) uses
+// — never from ce.Statement / ce.SubjectMatchScope(), which read the
+// Statement/Collection struct fields the UNTRUSTED source populates. A malicious
+// source can pass the substitution guard on real signed evidence and then
+// project DIFFERENT subjects/types into the envelope to skew hub classification
+// (inflate a victim digest's fan-out to demote genuine evidence, or shift which
+// digests connect a candidate to the closure). Reading from the signed payload
+// closes that.
+//
+// The envelope-projected fallback is reached ONLY when no signed payload is
+// retained — a directly-constructed envelope with no untrusted source behind it
+// (tests, legacy non-VerifiedSource paths). A candidate that passed signature
+// verification always retains its payload, so the verified path never falls
+// through to the projection (see VerifiedSubjectScope).
+//
+// Getting the scope/subject pairing wrong here is not a fail-open — this guard
+// only ever REMOVES candidates, so it costs at most a false reject of real
+// evidence — but it must not disagree with the index and the substitution guard
+// about which digests connect a candidate to the closure.
+func closureIntersectOne(ce source.CollectionEnvelope, closureSet map[string]struct{}) map[string]struct{} {
+	subjects, scope, verified := ce.VerifiedSubjectScope()
+	if !verified {
+		// No signed payload retained: no untrusted source projected these, so the
+		// envelope-decoded fields are the only — and safe — source. Never reached
+		// for a production candidate that passed signature verification.
+		subjects = ce.Statement.Subject
+		scope = ce.SubjectMatchScope()
+	}
 	ds := make(map[string]struct{})
 	for _, sub := range subjects {
 		for algorithm, digest := range sub.Digest {
-			if !cryptoutil.IsMatchableSubjectDigest(algorithm, digest) {
+			if !scope.IsMatchableSubjectDigest(sub.Name, algorithm, digest) {
 				continue
 			}
 			if _, ok := closureSet[digest]; ok {
@@ -169,8 +197,8 @@ func newFanoutTracker(closure []string, maxFanout int) *fanoutTracker {
 // need no gate evaluation: their gate verdict would be discarded by the
 // final classification anyway, and skipping it bounds the guard-active
 // pipeline's extra gate work at ~maxFanout evaluations per hub digest.
-func (ft *fanoutTracker) add(subjects []intoto.Subject) (map[string]struct{}, bool) {
-	ds := closureIntersectOne(subjects, ft.closureSet)
+func (ft *fanoutTracker) add(ce source.CollectionEnvelope) (map[string]struct{}, bool) {
+	ds := closureIntersectOne(ce, ft.closureSet)
 	provablyRejected := true
 	for d := range ds {
 		ft.fanout[d]++

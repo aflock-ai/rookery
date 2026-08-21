@@ -22,6 +22,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"strings"
 
 	"golang.org/x/mod/sumdb/dirhash"
 
@@ -135,6 +136,63 @@ func HashFromString(name string) (crypto.Hash, error) {
 //     a digest, a collection legitimately signed over one can be replayed to
 //     "verify" the other. SHA-1 is omitted for exactly this reason — it has
 //     practical chosen-prefix collisions and must NOT anchor a subject match.
+//     The single exception — a git commit id, carried by a statement whose
+//     signed predicate holds a HARDENED git attestation (exact current type
+//     plus the verified-commit-hash marker) — is handled outside this map by
+//     isGitCommitSubject under a SubjectMatchScope, so that widening the map
+//     can never accidentally admit generic SHA-1 artifact digests.
+//
+//     Be clear about what that exception is: a RISK ACCEPTANCE, not a preserved
+//     control. It is NOT safe because "the repository produced the value rather
+//     than the attestor choosing it" — a commit's tree, parents, message and
+//     timestamps are entirely author-chosen.
+//
+//     What DOES bound it is not in this function: the git implementations
+//     around it use collision-DETECTING SHA-1. go-git registers sha1cd as its
+//     SHA-1 (plumbing/hash/hash.go: algos[crypto.SHA1] = sha1cd.New), and git
+//     itself has shipped sha1dc since 2.13, so an object carrying the
+//     near-collision blocks a chosen-prefix attack requires is rejected rather
+//     than hashed. An attacker therefore has to land a colliding commit through
+//     tooling that would detect it, which is a materially higher bar than "a
+//     chosen-prefix collision is purchasable".
+//
+//     This matcher compares digest strings and never re-hashes a commit, so it
+//     INHERITS that mitigation from the git attestor — and the mitigation is
+//     EXERCISED there, not merely available: commithash subjects are no longer
+//     copied from go-git's head.Hash() (the repository's storage CLAIM), they
+//     are the output of computeVerifiedCommitHash
+//     (plugins/attestors/git/git.go), which re-hashes the commit's canonical
+//     object bytes with the collision-detecting hasher at attestation time and
+//     FAILS the attestation on a claimed/computed mismatch or a detected
+//     collision. A crafted repository whose storage carries a tampered or
+//     colliding object under a benign id is refused, not attested. A PIN TEST
+//     at that hashing site — TestGitObjectHashIsCollisionDetecting in
+//     plugins/attestors/git/sha1cd_pin_test.go — asserts go-git's SHA-1 object
+//     hasher is the collision-detecting sha1cd implementation, not plain
+//     crypto/sha1 (a go-git downgrade or RegisterHash swap breaks it), and the
+//     production code additionally type-asserts the same capability at
+//     runtime. The reliance is therefore an ENFORCED AND EXERCISED invariant —
+//     and the exception is BOUND to it: the hardened producer emits the
+//     "commithashverified" marker in the same signed predicate, and the
+//     matcher grants the SHA-1 arm only to evidence carrying that marker
+//     under the exact current type (SubjectMatchScope.HardenedGitAttested).
+//     Evidence signed before the hardening — which recorded head.Hash()
+//     unverified — has no marker and stays unmatchable, so the invariant the
+//     exception depends on cannot be presumed onto evidence that never had it.
+//
+//     What the exception actually buys is narrower and still worth having:
+//     generic SHA-1 stays out. `cilock run --hashes` accepts "sha1", so a
+//     wholesale widening would make every file: subject a match anchor, and
+//     colliding two arbitrary files is far cheaper than colliding two git
+//     commits. Binding the subject NAME to the VALUE, and the whole arm to a
+//     statement that attests git (SubjectMatchScope), keeps that door shut
+//     while opening the one commit-shaped case that has no alternative — on a
+//     SHA-1 repository the commit id is the only identifier the evidence
+//     carries, and already-signed collections can never be re-signed to add
+//     another.
+//
+//     The controls that actually bound this are elsewhere: WHO may sign (the
+//     policy's functionary) and whether the upstream host runs sha1dc.
 //
 //  2. A known fixed value length, so a malformed or wrong-length value can be
 //     rejected before it is indexed. The value is the number of hex characters
@@ -163,12 +221,312 @@ func isHexString(s string) bool {
 	return true
 }
 
-// IsMatchableSubjectDigest reports whether a subject digest under the given
-// algorithm name, with the given value, may be used as a subject-match key.
+// gitCommitSubjectInfix is the subject-name relation rookery's git attestor
+// writes for "this collection is ABOUT this commit"
+// (plugins/attestors/git/git.go Subjects()). It appears bare as
+// "commithash:<sha>" and namespaced as
+// ".../attestations/git/v0.1/commithash:<sha>" once Collection.Subjects()
+// prefixes it with the attestation type, so it is matched as a SUFFIX.
+//
+// Deliberately NOT included: "parenthash:". A parenthash subject carries the
+// sha1 of a DIFFERENT commit and exists only so collections can be chained
+// along the commit graph; it is not a claim about that parent. Treating it as
+// a match key is a policy bypass — commit X introduces a secret, commit Y
+// removes it, the scan runs at Y and its collection carries {sha1: X} as a
+// parenthash, so pushing X would be admitted on evidence that never examined
+// X. jade/factory/edge/git/envelopecheck.go documents and denies exactly this
+// at the edge; the matcher must not re-open it underneath.
+const gitCommitSubjectInfix = "commithash:"
+
+// sha1HexLen is the hex-character length of a well-formed SHA-1 digest.
+const sha1HexLen = 2 * (160 / 8)
+
+// gitNullOID is git's all-zero object id, written for the "no such commit"
+// side of a branch create or delete. It is valid 40-char hex and would
+// otherwise satisfy the commit-subject arm, so it is refused explicitly: a
+// subject named "commithash:000…0" names no commit and must never anchor a
+// match.
+const gitNullOID = "0000000000000000000000000000000000000000"
+
+// hardenedGitAttestationType is the ONE predicate type whose git attestations
+// may open the SHA-1 commit exception: the type the CURRENT git attestor
+// publishes (plugins/attestors/git/git.go Type) — the producer that computes
+// its commithash via computeVerifiedCommitHash and emits the
+// "commithashverified" capability marker in the same signed predicate.
+//
+// This is an exact string, not a namespace + version pattern, and that is the
+// point of the fix it belongs to. The exception's justification is a
+// PRODUCER-side invariant — the attested id is the canonical commit bytes
+// re-hashed with a collision-detecting hasher at attestation time — so the
+// exception may be granted only to evidence provably produced by that path.
+// A namespace pattern granted it to every version that ever existed or will
+// exist:
+//
+//   - legacy witness.dev evidence, which never received the verification;
+//   - pre-hardening aflock.ai/v0.1 evidence, likewise (it SHARES this type
+//     string, which is why type alone never grants anything — the in-payload
+//     marker is the discriminator, see HasGitCommitVerifiedMarker);
+//   - arbitrary FUTURE versions (".../git/v0.2"), whose producers have made
+//     no promise at all yet.
+//
+// The trade this reverses was deliberate, so state the cost plainly: when the
+// git attestor's version bumps, SHA-1 commit anchoring FAILS CLOSED for the
+// new version until this constant and the marker contract are consciously
+// carried forward. That failure is loud — verification stops finding evidence
+// for commits on SHA-1 repositories — and it is the correct direction:
+// granting the exception to formats that never promised the invariant is how
+// the exception stops being an exception.
+const hardenedGitAttestationType = "https://aflock.ai/attestations/git/v0.1"
+
+// IsHardenedGitAttestationType reports whether uri is the exact predicate type
+// of the hardened git attestor — the only type whose attestations may carry
+// the verified-commit-hash capability marker legitimately.
+//
+// It is exported because the fact it establishes has to be derived from two
+// different representations of the same bytes — the typed collection a source
+// decoded, and a narrow decode of the signature-verified payload — and those
+// two derivations must never disagree about what counts as hardened git
+// evidence. One predicate, two readers.
+//
+// Comparison is case-exact: predicate-type URIs are identifiers, and
+// ".../attestations/GIT/v0.1" is a DIFFERENT type nothing here vouches for.
+//
+// Type alone NEVER grants the SHA-1 arm — pre-hardening evidence shares this
+// exact string. Scope derivation additionally requires the in-payload marker
+// (HasGitCommitVerifiedMarker); this predicate is used on its own only where
+// no attestation body exists to consult: the subject-name namespace binding
+// in isGitCommitSubject, which the marker-gated scope still sits in front of.
+func IsHardenedGitAttestationType(uri string) bool {
+	return uri == hardenedGitAttestationType
+}
+
+// HasGitCommitVerifiedMarker reports whether a git attestation body — the JSON
+// of one attestations[].attestation entry, read from the same bytes the
+// subjects came from — carries the verified-commit-hash capability marker,
+// "commithashverified": true.
+//
+// The marker is the discriminator between hardened and legacy evidence under
+// the SAME predicate type. Only the hardened producer writes it, and it writes
+// it in the same signed predicate as the CommitHash it vouches for
+// (plugins/attestors/git/git.go: the field is set at the same site as the
+// verified hash), so a marker cannot be paired with an unverified hash by
+// recombining legacy parts — that would require re-signing. Already-signed
+// legacy evidence lacks the key and fails closed here; a body that is absent
+// or not a JSON object fails closed the same way — no marker, no exception.
+func HasGitCommitVerifiedMarker(attestationBody []byte) bool {
+	var att struct {
+		CommitHashVerified bool `json:"commithashverified"`
+	}
+	if err := json.Unmarshal(attestationBody, &att); err != nil {
+		return false
+	}
+	return att.CommitHashVerified
+}
+
+// SubjectMatchScope carries the one fact about the STATEMENT a subject was read
+// from that the (name, algorithm, value) triple cannot carry itself.
+//
+// It exists because scoping the git-commit SHA-1 exception by subject name
+// alone made the exception self-service. Subject names are producer-controlled,
+// so anything able to write a statement could label an arbitrary SHA-1
+// "commithash:<that same value>" and re-open collision-prone matching for a
+// digest no repository ever produced. Binding name to value stops RELABELLING
+// (naming one commit while carrying another's digest); it does nothing about
+// MINTING, where the attacker simply makes both halves agree.
+//
+// Be precise about what the scope fixes, because it is not a cryptographic
+// bind: the predicate is producer-controlled exactly like the subject name, so
+// a producer that can sign a fake commithash subject can sign a fake git
+// attestation next to it. What changes is where the arm can ride. Before, a
+// collection presenting itself as an sbom, a scan, or anything else at all
+// could carry a matchable SHA-1; now the collection has to CLAIM to be git
+// evidence, which is a claim the policy already gates on per step
+// (Step.Attestations) and rego can read. The exception therefore inherits the
+// step's attestor scoping instead of sitting underneath it.
+//
+// The claim is deliberately NARROWER than "carries a git attestation". The
+// SHA-1 exception's whole justification is a producer-side invariant — the
+// attested commithash is the output of computeVerifiedCommitHash, which
+// re-hashes the commit's canonical bytes with a collision-detecting hasher
+// and fails on a mismatch or detected collision — and evidence signed BEFORE
+// that hardening carries the same predicate type without the invariant.
+// Deriving the scope from the type alone granted the exception RETROACTIVELY
+// to that legacy evidence. So the scope is granted only to the hardened
+// format: an attestation of the exact current type
+// (IsHardenedGitAttestationType) whose signed body carries the
+// verified-commit-hash capability marker (HasGitCommitVerifiedMarker).
+// Legacy evidence — pre-hardening v0.1, witness.dev forms, and any unknown
+// or future git type — derives the zero scope and keeps exactly the status
+// it had before the exception existed: unmatchable via SHA-1. Fail-closed:
+// unknown means no exception.
+//
+// The controls that actually bound this are unchanged and live elsewhere: WHO
+// may sign for the step — every candidate clears checkFunctionaries before it
+// can satisfy anything — and whether the upstream host runs sha1dc.
+//
+// NOT done, deliberately: requiring the git attestation's own commithash field
+// to equal the subject value. It would add internal consistency but no new
+// trust (same producer, same signature), and it is not derivable at all three
+// call sites — two of them hold the predicate as a typed attestation.Attestor
+// interface that neither cryptoutil nor source can introspect without importing
+// the git plugin. A fact only two of three sites can compute is a fact the
+// third silently disagrees with, which is the failure this whole type exists to
+// avoid.
+//
+// The zero value is the STRICT scope. A caller that cannot establish the fact
+// loses the git arm and never gains it by accident.
+type SubjectMatchScope struct {
+	// HardenedGitAttested reports that the statement's predicate carries a
+	// HARDENED git attestation: an entry whose type is the exact current git
+	// attestor type (IsHardenedGitAttestationType) AND whose attestation body
+	// carries the verified-commit-hash capability marker
+	// (HasGitCommitVerifiedMarker). A git attestation that fails either half —
+	// legacy v0.1 without the marker, a witness.dev type, an unknown future
+	// version — does NOT set it; that evidence never received the
+	// verification the SHA-1 exception depends on, so it forfeits the arm.
+	//
+	// Derive both halves from the SAME bytes the subjects came from — never
+	// from a field the caller could have populated independently of what was
+	// signed, which is the mistake payloadMatchesSubjects documents for
+	// subjects themselves.
+	HardenedGitAttested bool
+}
+
+// isGitCommitSubject reports whether (name, algorithm, value) is a git COMMIT
+// reference — the one narrowly-scoped case in which a SHA-1 digest may anchor
+// a subject match.
+//
+// Why this exception exists. A git object id IS a digest, produced by the
+// repository's object model, not chosen by the attestor. On a SHA-1
+// repository the commit id is a SHA-1 and no sha256 restatement of it exists
+// in already-signed evidence, which can never be re-signed. Refusing it did
+// not make verification stronger — it made commit-anchored verification
+// impossible, so every consumer silently fell back to matching on subjects
+// that do not identify the commit at all (authoremail, refnameshort, remote —
+// identical across every commit in the repo). The honest trade is therefore
+// NOT "collision resistance vs. convenience"; it is "a chosen-prefix SHA-1
+// collision on a git commit object" vs. "no commit scoping whatsoever". The
+// first adversary must already have broken the repository's own object model,
+// at which point the attestation layer cannot be stronger than the thing it
+// names. The second is unconditional.
+//
+// This answers only the SUBJECT-shaped half of the question. The other half —
+// does the statement carrying this subject actually carry a HARDENED git
+// attestation (exact current type plus the verified-commit-hash marker) — is
+// SubjectMatchScope.HardenedGitAttested, checked by the caller before this
+// function is reached. Neither half is sufficient alone: without the scope,
+// "commithash:" is a free label any producer can mint (and legacy evidence
+// that never received the verification would regain the arm); without the
+// name/value binding, a genuinely git-attested collection could relabel an
+// unrelated SHA-1.
+//
+// Three conditions, all required:
+//
+//  1. Algorithm is exactly "sha1". Not "gitoid:sha1" — a gitoid addresses
+//     blob/tree CONTENT, not a commit, so it keeps no exception.
+//  2. The value is well-formed (40 hex) and is not the null object id.
+//  3. The subject NAME is exactly "commithash:<that same value>" (the bare form
+//     the attestor writes), or "<hardened-git-type>/commithash:<that same
+//     value>" where the PREFIX is the exact hardened git attestation type. The
+//     namespaced form is what a collection carries once Collection.Subjects()
+//     prefixes each subject with the attestation type that produced it —
+//     REQUIRING that prefix to be the hardened git type is what stops a mixed
+//     collection substitution: a hardened git entry makes
+//     SubjectMatchScope.HardenedGitAttested true, so without the namespace
+//     check a NON-git attestor's subject, prefixed with e.g. the sbom type as
+//     "<sbom-type>/commithash:<sha1>", would back into the SHA-1 arm and make
+//     a collision-prone digest matchable. Binding the name to the VALUE stops
+//     relabelling; binding the namespace to the hardened git type stops the
+//     cross-attestor substitution. Requiring a segment boundary stops
+//     "…notacommithash:<v>" from backing into the exception on a bare suffix.
+//     The name is compared EXACTLY as attested — no folding, no trimming —
+//     except the digest characters themselves, which are hex and so case-free.
+//     Folding anything more than the digest would canonicalize a case-variant
+//     attestation type (".../attestations/GIT/v0.1", a DIFFERENT type) into
+//     the trusted git namespace.
+func isGitCommitSubject(subjectName, algorithm, value string) bool {
+	if algorithm != "sha1" {
+		return false
+	}
+	if len(value) != sha1HexLen || !isHexString(value) {
+		return false
+	}
+	v := strings.ToLower(value)
+	if v == gitNullOID {
+		return false
+	}
+	// Normalization is scoped PER COMPONENT, never applied to the whole name.
+	// The trailing digest is hexadecimal, where case carries no meaning, so it
+	// alone is compared folded ("…3D7B" names the same commit as "…3d7b").
+	// Everything BEFORE it — the "commithash:" relation and, in the namespaced
+	// form, the attestation-type URI — is an identifier the attestor writes
+	// exactly, and predicate-type URIs are case-sensitive:
+	// ".../attestations/GIT/v0.1" is a DIFFERENT type from the git attestor's
+	// ".../attestations/git/v0.1", one nothing here vouches for. Folding (or
+	// whitespace-trimming) the whole name would canonicalize such a name into
+	// the trusted form and hand its SHA-1 subject the exception, so the name is
+	// matched exactly as attested and only the digest characters are folded.
+	if len(subjectName) < sha1HexLen {
+		return false
+	}
+	digest := subjectName[len(subjectName)-sha1HexLen:]
+	if strings.ToLower(digest) != v {
+		// Includes the multibyte-tail case: a non-ASCII byte in the digest
+		// position can change length under ToLower and simply never equals the
+		// pure-hex v. Fail closed.
+		return false
+	}
+	rest := subjectName[:len(subjectName)-sha1HexLen]
+	if rest == gitCommitSubjectInfix {
+		return true // bare form, straight from the git attestor
+	}
+	// Namespaced form: "<attestationType>/commithash:<value>". Accept ONLY when
+	// the attestation-type prefix is the exact hardened git attestation type —
+	// otherwise a non-git attestor's subject in a git-attested (mixed)
+	// collection would gain the SHA-1 arm it must never have.
+	// IsHardenedGitAttestationType is the SAME predicate the scope derivations
+	// use for the type half of HardenedGitAttested — both case-exact — so the
+	// namespace here and the scope there cannot disagree about what counts as
+	// git. Legacy witness.dev prefixes and unknown future versions fail here by
+	// construction, matching the scope side: evidence they came from cannot set
+	// the scope either, so the exception is closed to them at both layers.
+	sep := "/" + gitCommitSubjectInfix // "/commithash:"
+	if !strings.HasSuffix(rest, sep) {
+		return false
+	}
+	prefix := rest[:len(rest)-len(sep)]
+	return IsHardenedGitAttestationType(prefix)
+}
+
+// IsMatchableSubjectDigest reports whether a subject digest — identified by
+// its subject NAME, algorithm name and value — may be used as a subject-match
+// key, for a caller that has established NOTHING about the statement the
+// subject came from.
+//
+// That is the strict scope: the git-commit SHA-1 arm is unavailable here. A
+// caller that holds the statement and wants that arm must say so explicitly
+// via SubjectMatchScope, so a site that forgets fails CLOSED (evidence is not
+// found) rather than open (a minted SHA-1 becomes matchable).
+func IsMatchableSubjectDigest(subjectName, algorithm, value string) bool {
+	return SubjectMatchScope{}.IsMatchableSubjectDigest(subjectName, algorithm, value)
+}
+
+// IsMatchableSubjectDigest reports whether a subject digest — identified by
+// its subject NAME, algorithm name and value, read from a statement described
+// by s — may be used as a subject-match key.
+//
+// The subject name is load-bearing, not decoration: matchability is a property
+// of the whole (scope, name, algorithm, value) tuple, because one algorithm can
+// be safe for a value the repository itself produced and unsafe for a value an
+// attacker chose. Callers must pass the name from the SAME subject the digest
+// came from, and a scope derived from the SAME statement; passing "" for the
+// name, or the zero scope, is safe and simply forfeits the git arm.
 //
 // It returns false for:
 //   - unknown algorithm names,
 //   - non-collision-resistant algorithms (notably "sha1" / "gitoid:sha1"),
+//     EXCEPT a git commit reference in a statement carrying a HARDENED git
+//     attestation — see isGitCommitSubject and SubjectMatchScope,
 //   - plain-hex algorithms whose value is not the exact expected hex length OR
 //     contains non-hex characters (a 64-char string of "z" is the right length
 //     but is not a real sha256 — it must not anchor a match).
@@ -176,10 +534,15 @@ func isHexString(s string) bool {
 // Callers that build a subject index (e.g. attestation/source) use this to keep
 // SHA-1 and malformed digests out of the matchable set, closing a subject /
 // artifact-substitution avenue. See finding S1.
-func IsMatchableSubjectDigest(algorithm, value string) bool {
+func (s SubjectMatchScope) IsMatchableSubjectDigest(subjectName, algorithm, value string) bool {
 	wantHexLen, ok := matchableSubjectAlgorithms[algorithm]
 	if !ok {
-		return false
+		// Not on the value-blind allowlist. One narrowly-scoped arm remains:
+		// a SHA-1 commit id, in a statement carrying a HARDENED git
+		// attestation (exact current type + verified-commit-hash marker),
+		// vouched for by its own subject name. Everything else — including
+		// legacy git evidence that predates the marker — is unmatchable.
+		return s.HardenedGitAttested && isGitCommitSubject(subjectName, algorithm, value)
 	}
 	if wantHexLen != 0 {
 		// Plain-hex algorithm: enforce exact length AND hex-ness.

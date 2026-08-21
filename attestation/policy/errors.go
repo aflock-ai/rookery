@@ -30,6 +30,55 @@ func (e ErrVerifyArtifactsFailed) Error() string {
 	return fmt.Sprintf("failed to verify artifacts: %v", strings.Join(e.Reasons, ", "))
 }
 
+// ErrNoPassedCollections is the step-level summary recorded when a step ends
+// with nothing in its Passed list.
+//
+// It is an UMBRELLA over causes that are also reported individually — a
+// subject-digest mismatch, a functionary rejection, a rego deny — so a consumer
+// rendering a refusal usually wants to suppress it and show the specific
+// reasons instead. Typed rather than a bare fmt.Errorf precisely so that
+// suppression can be done with errors.As, instead of by matching this
+// sentence and silently breaking the next time it is reworded.
+//
+// The message is unchanged from the untyped error it replaces; two published
+// troubleshooting tables key off this wording (site/docs/getting-started).
+// ErrCollectionValidationFailed gathers every reason one collection was
+// rejected, AS ERRORS rather than as strings.
+//
+// The rendered message is byte-identical to the fmt.Sprintf it replaces, and
+// deliberately so — operators and two published troubleshooting tables know
+// this wording. What changes is that the chain SURVIVES: this used to be built
+// by calling .Error() on each cause and joining the strings, then wrapping the
+// result with %s, which severed every typed error at the point a consumer most
+// needs it. A caller doing errors.As(err, &ErrPolicyDenied{}) got false, and
+// the rego message that says WHICH rule denied — the only part a developer can
+// act on — was unreachable. Downstream that surfaced as a git push refused with
+// "collection validation failed:" and nothing else.
+//
+// Unwrap returns the slice (Go 1.20+ multi-error), so errors.As and errors.Is
+// traverse to every cause. Same shape as ErrExternalAttestationRejected below.
+type ErrCollectionValidationFailed struct {
+	Reasons []error
+}
+
+func (e ErrCollectionValidationFailed) Error() string {
+	parts := make([]string, 0, len(e.Reasons))
+	for _, r := range e.Reasons {
+		parts = append(parts, r.Error())
+	}
+	return fmt.Sprintf("collection validation failed:\n - %s", strings.Join(parts, ",\n - "))
+}
+
+func (e ErrCollectionValidationFailed) Unwrap() []error { return e.Reasons }
+
+type ErrNoPassedCollections struct {
+	Step string
+}
+
+func (e ErrNoPassedCollections) Error() string {
+	return fmt.Sprintf("failed to verify artifacts for step %s: no passed collections present", e.Step)
+}
+
 type ErrNoCollections struct {
 	Step string
 }

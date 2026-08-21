@@ -1134,7 +1134,7 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 		ac := authorizedCandidate{hubMaterial: compactRejected(triaged)}
 		provablyRejected := false
 		if tracker != nil {
-			ac.digests, provablyRejected = tracker.add(triaged.Statement.Subject)
+			ac.digests, provablyRejected = tracker.add(triaged.CollectionEnvelope)
 		}
 		switch {
 		case provablyRejected:
@@ -2014,7 +2014,7 @@ func (p Policy) verifyArtifacts(ctx context.Context, vo *verifyOptions, resultsB
 		if !ok {
 			return nil, fmt.Errorf("failed to find step %s in step results map", step.Name)
 		}
-		result.Rejected = append(result.Rejected, RejectedCollection{Reason: fmt.Errorf("failed to verify artifacts for step %s: no passed collections present", step.Name)})
+		result.Rejected = append(result.Rejected, RejectedCollection{Reason: ErrNoPassedCollections{Step: step.Name}})
 		resultsByStep[step.Name] = result
 	}
 

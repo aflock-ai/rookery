@@ -412,7 +412,7 @@ func frozenEagerVerifyStepStreamed(p Policy, ctx context.Context, streamer sourc
 		ac := authorizedCandidate{hubMaterial: compactRejected(triaged)}
 		provablyRejected := false
 		if tracker != nil {
-			ac.digests, provablyRejected = tracker.add(triaged.Statement.Subject)
+			ac.digests, provablyRejected = tracker.add(triaged.CollectionEnvelope)
 		}
 		switch {
 		case provablyRejected:

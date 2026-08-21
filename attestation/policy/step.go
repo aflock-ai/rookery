@@ -677,7 +677,9 @@ func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerUR
 	}
 
 	found := make(map[string][]attestation.Attestor)
-	reasons := make([]string, 0)
+	// []error, not []string: calling .Error() here is what severed every typed
+	// cause from the consumer. See ErrCollectionValidationFailed.
+	reasons := make([]error, 0)
 	passed := true
 	var allAiResponses []AiResponse
 
@@ -687,7 +689,7 @@ func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerUR
 	// Reject the collection rather than accept it.
 	if len(s.Attestations) == 0 {
 		passed = false
-		reasons = append(reasons, fmt.Sprintf(
+		reasons = append(reasons, fmt.Errorf(
 			"step %q declares no required attestations; a gate with no requirements rejects all collections (fail closed)",
 			s.Name))
 	}
@@ -695,7 +697,7 @@ func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerUR
 	if len(collection.Errors) > 0 {
 		passed = false
 		for _, err := range collection.Errors {
-			reasons = append(reasons, fmt.Sprintf("collection verification failed: %s", err.Error()))
+			reasons = append(reasons, fmt.Errorf("collection verification failed: %w", err))
 		}
 	}
 
@@ -725,7 +727,7 @@ func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerUR
 			reasons = append(reasons, ErrMissingAttestation{
 				Step:        s.Name,
 				Attestation: expected.Type,
-			}.Error())
+			})
 			// Skip policy evaluation — the attestation is missing so there is
 			// nothing to evaluate. Continuing would pass a nil attestor to the
 			// Rego/AI evaluators.
@@ -738,13 +740,13 @@ func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerUR
 		for _, attestor := range attestors {
 			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies, stepContext); err != nil {
 				passed = false
-				reasons = append(reasons, err.Error())
+				reasons = append(reasons, err)
 			}
 
 			aiResponses, err := EvaluateAIPolicy(attestor, expected.AiPolicies, aiServerURL)
 			if err != nil {
 				passed = false
-				reasons = append(reasons, err.Error())
+				reasons = append(reasons, err)
 			}
 
 			if len(aiResponses) > 0 { //nolint:nestif
@@ -761,7 +763,7 @@ func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerUR
 								policyName = fmt.Sprintf("AI Policy %d", i+1)
 							}
 
-							reason := fmt.Sprintf("AI Policy '%s': %s - %s",
+							reason := fmt.Errorf("AI Policy '%s': %s - %s",
 								policyName,
 								resp.Status,
 								resp.Reason)
@@ -794,11 +796,9 @@ func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerUR
 		return gatePassed, pc, RejectedCollection{}
 	}
 
-	r := strings.Join(reasons, ",\n - ")
-	reason := fmt.Sprintf("collection validation failed:\n - %s", r)
 	return gateRejected, PassedCollection{}, RejectedCollection{
 		Collection:  compactRejected(collection),
-		Reason:      fmt.Errorf("%s", reason),
+		Reason:      ErrCollectionValidationFailed{Reasons: reasons},
 		AiResponses: allAiResponses,
 	}
 }

@@ -23,7 +23,6 @@ import (
 	"sync"
 
 	"github.com/aflock-ai/rookery/attestation"
-	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 )
 
@@ -101,14 +100,22 @@ func (s *MemorySource) LoadEnvelope(reference string, env dsse.Envelope) error {
 	// matchable set, so they cannot anchor a subject match and enable artifact
 	// substitution. See cryptoutil.IsMatchableSubjectDigest and finding S1.
 	//
+	// The scope comes from the SAME decoded envelope as the subjects, so the
+	// git-commit SHA-1 arm is available only to a collection that actually
+	// carries a git attestation — not to anything that merely names a subject
+	// "commithash:<sha1>". This index is built BEFORE any signature check, so
+	// nothing here is trusted; the same pairing is re-derived from the signed
+	// payload in VerifiedSource, which is the decision that counts.
+	//
 	// NOTE: the index is keyed by the raw value (not algorithm:value) because
 	// Search callers pass bare digest values. Keying by algorithm:value would
 	// require a coordinated change to every Sourcer caller (policy engine) and
 	// is tracked as a follow-up.
+	scope := collEnv.SubjectMatchScope()
 	subDigestIndex := make(map[string]struct{})
 	for _, sub := range collEnv.Statement.Subject {
 		for algorithm, digest := range sub.Digest {
-			if !cryptoutil.IsMatchableSubjectDigest(algorithm, digest) {
+			if !scope.IsMatchableSubjectDigest(sub.Name, algorithm, digest) {
 				continue
 			}
 			subDigestIndex[digest] = struct{}{}

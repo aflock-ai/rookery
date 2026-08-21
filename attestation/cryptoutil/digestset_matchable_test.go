@@ -27,10 +27,11 @@ func TestIsMatchableSubjectDigest(t *testing.T) {
 	validSHA256 := strings.Repeat("a", 64)
 
 	tests := []struct {
-		name      string
-		algorithm string
-		value     string
-		want      bool
+		name        string
+		subjectName string
+		algorithm   string
+		value       string
+		want        bool
 	}{
 		{
 			name:      "valid sha256 is matchable",
@@ -39,10 +40,14 @@ func TestIsMatchableSubjectDigest(t *testing.T) {
 			want:      true,
 		},
 		{
-			name:      "sha1 is NOT matchable (collision-vulnerable)",
-			algorithm: "sha1",
-			value:     strings.Repeat("a", 40), // a well-formed sha1 hex value
-			want:      false,
+			// A generic artifact digest under sha1 stays unmatchable: the
+			// collision control survives intact for everything that is not a
+			// git commit reference.
+			name:        "sha1 artifact subject is NOT matchable (collision-vulnerable)",
+			subjectName: "artifact",
+			algorithm:   "sha1",
+			value:       strings.Repeat("a", 40), // a well-formed sha1 hex value
+			want:        false,
 		},
 		{
 			name:      "gitoid:sha1 is NOT matchable",
@@ -117,9 +122,9 @@ func TestIsMatchableSubjectDigest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IsMatchableSubjectDigest(tt.algorithm, tt.value); got != tt.want {
-				t.Fatalf("IsMatchableSubjectDigest(%q, %q) = %v, want %v",
-					tt.algorithm, tt.value, got, tt.want)
+			if got := IsMatchableSubjectDigest(tt.subjectName, tt.algorithm, tt.value); got != tt.want {
+				t.Fatalf("IsMatchableSubjectDigest(%q, %q, %q) = %v, want %v",
+					tt.subjectName, tt.algorithm, tt.value, got, tt.want)
 			}
 		})
 	}

@@ -46,21 +46,161 @@ func payloadMatchesSubjects(payload []byte, subjectDigests []string) (bool, erro
 	if len(subjectDigests) == 0 {
 		return true, nil
 	}
-	// Decode ONLY the subject list. The guard never reads the predicate, and
-	// decoding the full intoto.Statement copies the predicate body into a
-	// fresh json.RawMessage — for a prod SBOM/SARIF collection that is a
-	// multi-MB allocation per candidate per Search call (per step per search
-	// depth). The narrow struct still reads the signed payload bytes, so the
-	// artifact-substitution guarantee is unchanged; the decoder scans (and
-	// syntax-validates) the whole payload either way but retains only the
-	// subjects. A malformed payload still fails closed.
-	var stmt struct {
-		Subject []intoto.Subject `json:"subject"`
-	}
-	if err := json.Unmarshal(payload, &stmt); err != nil {
+	// Decode ONLY the subject list, plus the one predicate FACT that decides
+	// whether a SHA-1 commit subject may anchor a match. Decoding the full
+	// intoto.Statement copies the predicate body into a fresh json.RawMessage —
+	// for a prod SBOM/SARIF collection that is a multi-MB allocation per
+	// candidate per Search call (per step per search depth). The narrow struct
+	// still reads the signed payload bytes, so the artifact-substitution
+	// guarantee is unchanged; the decoder scans (and syntax-validates) the
+	// whole payload either way but retains only the subjects and a bool. A
+	// malformed payload still fails closed.
+	//
+	// The git claim MUST be read here, from the signed bytes, and not lifted
+	// off CollectionEnvelope.Collection: that field is populated by the
+	// untrusted source and can be set independently of what was signed, so
+	// trusting it would let a source hand a non-git statement the SHA-1 arm —
+	// exactly the substitution bypass this function's subject rule closes.
+	subjects, scope, err := decodeSignedSubjectScope(payload)
+	if err != nil {
 		return false, fmt.Errorf("decode signed payload for subject check: %w", err)
 	}
-	return subjectsMatchDigests(stmt.Subject, subjectDigests), nil
+	return subjectsMatchDigests(scope, subjects, subjectDigests), nil
+}
+
+// decodeSignedSubjectScope decodes the subject list and the git-attested scope
+// from a SIGNATURE-VERIFIED payload. It is the SINGLE source of truth for every
+// verification verdict that must read subjects/scope from the signed bytes
+// rather than the source-populated Statement/Collection projection — the
+// artifact-substitution subject guard here, and the subject fan-out guard via
+// CollectionEnvelope.VerifiedSubjectScope — so those cannot disagree about what
+// a candidate's signed subjects and git-attested-ness are.
+//
+// BIND THE GIT ARM TO A COLLECTION. gitAttestedClaim reads an attestations[]
+// entry out of the predicate BODY, which a bare external predicate (SLSA, VSA,
+// cosign) can hand-add to a plain object. The SHA-1 commit arm exists only for
+// attestation collections, so the claim is granted only when the SIGNED
+// statement's outer predicateType actually is the collection type. Reading the
+// type from the predicate body instead would let the attacker-shaped body vouch
+// for itself — exactly the bypass.
+func decodeSignedSubjectScope(payload []byte) ([]intoto.Subject, cryptoutil.SubjectMatchScope, error) {
+	var stmt struct {
+		PredicateType string           `json:"predicateType"`
+		Subject       []intoto.Subject `json:"subject"`
+		Predicate     gitAttestedClaim `json:"predicate"`
+	}
+	if err := json.Unmarshal(payload, &stmt); err != nil {
+		return nil, cryptoutil.SubjectMatchScope{}, err
+	}
+	gitAttested := bool(stmt.Predicate) && isCollectionPredicateType(stmt.PredicateType)
+	return stmt.Subject, cryptoutil.SubjectMatchScope{HardenedGitAttested: gitAttested}, nil
+}
+
+// VerifiedSubjectScope derives a candidate's subjects and git-attested scope
+// from its SIGNATURE-VERIFIED payload — the same source of truth
+// payloadMatchesSubjects uses — for a caller making a VERIFICATION verdict (the
+// subject fan-out guard). It exists because the Statement/Collection struct
+// fields on a CollectionEnvelope are populated by the UNTRUSTED source and can
+// be set independently of what was signed: a source can pass the substitution
+// guard on the real signed evidence, then project DIFFERENT subjects/types into
+// the envelope to skew a downstream classification. A verification verdict must
+// never read those projected fields.
+//
+// The bool is false ONLY when no signed payload is retained — a
+// directly-constructed envelope (a test, a legacy non-VerifiedSource path) that
+// has no untrusted source behind it, where the envelope fields ARE the source of
+// truth. A candidate that passed signature verification always retains its
+// payload (VerifiedSource.retainPayloadReleaseRest), so on the real verified
+// path this returns true and the caller never falls through to the projection.
+// A retained-but-undecodable payload fails closed: true with no subjects, so the
+// candidate is treated as closure-disjoint rather than read off the projection.
+func (ce CollectionEnvelope) VerifiedSubjectScope() (subjects []intoto.Subject, scope cryptoutil.SubjectMatchScope, verified bool) {
+	if len(ce.Envelope.Payload) == 0 {
+		return nil, cryptoutil.SubjectMatchScope{}, false
+	}
+	subjects, scope, err := decodeSignedSubjectScope(ce.Envelope.Payload)
+	if err != nil {
+		return nil, cryptoutil.SubjectMatchScope{}, true
+	}
+	return subjects, scope, true
+}
+
+// gitAttestedClaim is "this predicate carries a HARDENED git attestation" —
+// an attestations[] entry of the exact current git type whose body carries the
+// verified-commit-hash capability marker — decoded straight out of a
+// statement's predicate.
+//
+// Both halves are required, from the SAME entry. The type alone would grant
+// the SHA-1 commit arm retroactively to legacy evidence that shares the type
+// string but was signed before the producer verified commit hashes
+// (computeVerifiedCommitHash); the marker alone, under a non-git or unknown
+// type, is a producer-controlled key on an attestation nothing here vouches
+// for. Legacy witness.dev types and unknown future git versions yield false —
+// fail closed, exactly the derivation CollectionEnvelope.SubjectMatchScope
+// makes from the typed collection. One predicate, two readers.
+//
+// It is a json.Unmarshaler rather than an inline struct field because the
+// predicate is NOT always a collection. SearchByPredicateType runs bare
+// predicates through the same guard — SLSA provenance, a VSA, a cosign
+// attestation — and against those an inline `attestations` field is a type
+// mismatch. payloadMatchesSubjects fails CLOSED on a decode error, so that
+// would reject every external attestation outright: a guard widening into an
+// outage. Here a predicate of any other shape simply yields false — no git
+// claim, no SHA-1 arm, subjects checked exactly as before.
+//
+// It also costs nothing to read: encoding/json hands UnmarshalJSON a SUBSLICE
+// of the payload, so the predicate body is never copied (#7572).
+type gitAttestedClaim bool
+
+func (g *gitAttestedClaim) UnmarshalJSON(predicate []byte) error {
+	// RESET AT ENTRY. encoding/json calls this once per `predicate` key, and a
+	// statement with DUPLICATE predicate keys (git-shaped first, non-git second)
+	// would otherwise leave the flag latched true from the first call even though
+	// the effective — last — predicate is non-git. Normal statement decoding is
+	// last-wins, so this must be too, or the matcher grants the SHA-1 arm to a
+	// statement whose real predicate attests no git. Zeroing here makes each call
+	// reflect only its own predicate; the last one wins.
+	*g = false
+	var collection struct {
+		Attestations []struct {
+			Type        string                 `json:"type"`
+			Attestation gitVerifiedMarkerClaim `json:"attestation"`
+		} `json:"attestations"`
+	}
+	if err := json.Unmarshal(predicate, &collection); err != nil {
+		// Not collection-shaped. The CLAIM fails closed (no git arm); the
+		// statement does not, because the subject check is the point.
+		return nil //nolint:nilerr // swallowing IS the contract: a bare predicate (SLSA, VSA, cosign) is not a decode failure of the statement, and propagating it would make payloadMatchesSubjects reject every external attestation
+	}
+	for _, att := range collection.Attestations {
+		if cryptoutil.IsHardenedGitAttestationType(att.Type) && bool(att.Attestation) {
+			*g = true
+			return nil
+		}
+	}
+	return nil
+}
+
+// gitVerifiedMarkerClaim is "this attestation body carries the
+// verified-commit-hash capability marker", decoded from one
+// attestations[].attestation entry of the narrow scope decode above.
+//
+// It is a json.Unmarshaler for the same two reasons gitAttestedClaim is: an
+// attestation body is arbitrary producer JSON (a RawAttestation body can be an
+// array, a string, null), and an inline struct field would turn any such body
+// into a decode error that fails the WHOLE collection claim — including for
+// hardened git evidence sitting next to it. A body of any other shape simply
+// yields false: no marker, no SHA-1 arm (fail closed, per entry). And
+// encoding/json hands it a SUBSLICE of the payload, so large sibling bodies
+// (sboms, scan reports) are scanned in place, never copied (#7572).
+//
+// Duplicate keys inside one entry stay last-wins: each call resets the flag
+// before reading its own body, mirroring gitAttestedClaim's entry reset.
+type gitVerifiedMarkerClaim bool
+
+func (m *gitVerifiedMarkerClaim) UnmarshalJSON(body []byte) error {
+	*m = gitVerifiedMarkerClaim(cryptoutil.HasGitCommitVerifiedMarker(body))
+	return nil
 }
 
 // subjectsMatchDigests reports whether the subject list attests at least one of
@@ -68,15 +208,16 @@ func payloadMatchesSubjects(payload []byte, subjectDigests []string) (bool, erro
 // subject-agnostic query — whole-policy walks, probes). A NON-EMPTY request
 // requires the statement to actually carry one of the digests. Mirrors
 // MemorySource's index-build digest matchability filter. Only call this on
-// subjects decoded from signature-verified bytes (see payloadMatchesSubjects).
-func subjectsMatchDigests(subjects []intoto.Subject, subjectDigests []string) bool {
+// subjects decoded from signature-verified bytes, with a scope decoded from
+// those same bytes (see payloadMatchesSubjects).
+func subjectsMatchDigests(scope cryptoutil.SubjectMatchScope, subjects []intoto.Subject, subjectDigests []string) bool {
 	if len(subjectDigests) == 0 {
 		return true
 	}
 	have := make(map[string]struct{})
 	for _, sub := range subjects {
 		for algorithm, digest := range sub.Digest {
-			if !cryptoutil.IsMatchableSubjectDigest(algorithm, digest) {
+			if !scope.IsMatchableSubjectDigest(sub.Name, algorithm, digest) {
 				continue
 			}
 			have[digest] = struct{}{}

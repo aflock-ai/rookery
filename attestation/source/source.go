@@ -39,6 +39,64 @@ type CollectionEnvelope struct {
 	PayloadDigests cryptoutil.DigestSet
 }
 
+// SubjectMatchScope returns the scope in which THIS envelope's subjects may be
+// judged matchable (cryptoutil.SubjectMatchScope).
+//
+// It is a method on the envelope, not a free function over a type list, so the
+// fact and the subjects it qualifies can only be read off the same object.
+// Both halves come from Envelope.Payload — EnvelopeToCollectionEnvelope decodes
+// Statement and Collection from those same bytes — so a source cannot
+// contribute subjects from the signed payload while contributing the
+// git-attested claim from somewhere else.
+//
+// Callers on the VERIFIED path must not use this: they have to read the claim
+// out of the signature-verified payload itself, for the same reason
+// payloadMatchesSubjects reads subjects there rather than from Statement.
+func (ce CollectionEnvelope) SubjectMatchScope() cryptoutil.SubjectMatchScope {
+	// The git arm (a SHA-1 commit subject) is claimable ONLY by an attestation
+	// COLLECTION. A non-collection statement whose predicate merely decodes into
+	// a Collection shape (an attestations[] a hand-crafted external predicate can
+	// carry) must NOT get it, or the SHA-1 restriction is bypassed — so gate on
+	// the statement's own predicateType, in agreement with the verified path.
+	if !isCollectionPredicateType(ce.Statement.PredicateType) {
+		return cryptoutil.SubjectMatchScope{}
+	}
+	for _, att := range ce.Collection.Attestations {
+		// The scope needs BOTH halves of the hardened-git fact: the exact
+		// current git type AND the verified-commit-hash marker inside the
+		// attestation body. Type alone would grant the SHA-1 arm
+		// retroactively to legacy evidence that shares the type string but
+		// never received the producer-side verification.
+		if !cryptoutil.IsHardenedGitAttestationType(att.Type) {
+			continue
+		}
+		// Re-marshal the entry to read the marker uniformly: a typed
+		// *git.Attestor round-trips its commithashverified field, and a
+		// RawAttestation (no factory registered) returns the exact decoded
+		// bytes — both are the same bytes EnvelopeToCollectionEnvelope took
+		// from Envelope.Payload, so the claim and the subjects still come
+		// from one object. Any marshal failure, or a nil/absent body, fails
+		// CLOSED: no marker, no SHA-1 arm.
+		body, err := json.Marshal(att.Attestation)
+		if err != nil {
+			continue
+		}
+		if cryptoutil.HasGitCommitVerifiedMarker(body) {
+			return cryptoutil.SubjectMatchScope{HardenedGitAttested: true}
+		}
+	}
+	return cryptoutil.SubjectMatchScope{}
+}
+
+// isCollectionPredicateType reports whether a statement's outer predicateType is
+// rookery's attestation-collection type (current or legacy). The git subject arm
+// is bound to this: only a signed collection may make a SHA-1 commit subject
+// matchable. Read from the SIGNED statement's predicateType, never inferred from
+// the predicate body — the body is what an attacker shapes.
+func isCollectionPredicateType(predicateType string) bool {
+	return predicateType == attestation.CollectionType || predicateType == attestation.LegacyCollectionType
+}
+
 // StreamingSourcer is an optional extension of Sourcer: it yields matching
 // candidates ONE AT A TIME instead of materializing the whole matching set.
 // VerifiedSource prefers this path when available, verifying and releasing

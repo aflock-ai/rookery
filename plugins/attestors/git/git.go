@@ -18,6 +18,7 @@ import (
 	"crypto"
 	_ "embed"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -87,25 +88,38 @@ type Tag struct {
 }
 
 type Attestor struct {
-	GitTool        string               `json:"gittool"`
-	GitBinPath     string               `json:"gitbinpath,omitempty"`
-	GitBinHash     cryptoutil.DigestSet `json:"gitbinhash,omitempty"`
-	CommitHash     string               `json:"commithash"`
-	Author         string               `json:"author"`
-	AuthorEmail    string               `json:"authoremail"`
-	CommitterName  string               `json:"committername"`
-	CommitterEmail string               `json:"committeremail"`
-	CommitDate     string               `json:"commitdate"`
-	CommitMessage  string               `json:"commitmessage"`
-	Status         map[string]Status    `json:"status,omitempty"`
-	CommitDigest   cryptoutil.DigestSet `json:"commitdigest,omitempty"`
-	Signature      string               `json:"signature,omitempty"`
-	ParentHashes   []string             `json:"parenthashes,omitempty"`
-	TreeHash       string               `json:"treehash,omitempty"`
-	Refs           []string             `json:"refs,omitempty"`
-	Remotes        []string             `json:"remotes,omitempty"`
-	Tags           []Tag                `json:"tags,omitempty"`
-	RefNameShort   string               `json:"branch,omitempty"`
+	GitTool    string               `json:"gittool"`
+	GitBinPath string               `json:"gitbinpath,omitempty"`
+	GitBinHash cryptoutil.DigestSet `json:"gitbinhash,omitempty"`
+	CommitHash string               `json:"commithash"`
+	// CommitHashVerified is the verified-commit-hash capability marker: it
+	// records, inside the same signed predicate as CommitHash, that CommitHash
+	// is the output of computeVerifiedCommitHash — the commit's canonical
+	// object bytes re-hashed with the collision-detecting hasher, refused on a
+	// claimed/computed mismatch or a detected collision — rather than a hash
+	// the repository's storage merely claimed. The subject matcher grants the
+	// SHA-1 commit-anchoring exception ONLY to collections whose git
+	// attestation carries this marker (cryptoutil.HasGitCommitVerifiedMarker);
+	// evidence signed before the hardening lacks it and stays unmatchable via
+	// sha1. Because marker and hash travel in one signed unit, a marker cannot
+	// be combined with an unverified hash without re-signing. Only Attest may
+	// set it, and only at the same site that records the verified hash.
+	CommitHashVerified bool                 `json:"commithashverified,omitempty"`
+	Author             string               `json:"author"`
+	AuthorEmail        string               `json:"authoremail"`
+	CommitterName      string               `json:"committername"`
+	CommitterEmail     string               `json:"committeremail"`
+	CommitDate         string               `json:"commitdate"`
+	CommitMessage      string               `json:"commitmessage"`
+	Status             map[string]Status    `json:"status,omitempty"`
+	CommitDigest       cryptoutil.DigestSet `json:"commitdigest,omitempty"`
+	Signature          string               `json:"signature,omitempty"`
+	ParentHashes       []string             `json:"parenthashes,omitempty"`
+	TreeHash           string               `json:"treehash,omitempty"`
+	Refs               []string             `json:"refs,omitempty"`
+	Remotes            []string             `json:"remotes,omitempty"`
+	Tags               []Tag                `json:"tags,omitempty"`
+	RefNameShort       string               `json:"branch,omitempty"`
 }
 
 func New() *Attestor {
@@ -130,6 +144,115 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 	return jsonschema.Reflect(&a)
 }
 
+// collisionDetectingHash is the capability that separates collision-DETECTING
+// SHA-1 (github.com/pjbgf/sha1cd, which go-git registers for object hashing)
+// from plain crypto/sha1: sha1cd's digest reports whether the input carried
+// the near-collision blocks a chosen-prefix attack requires. crypto/sha1 does
+// not implement this method, so it is a precise discriminator. Production
+// asserts it in computeVerifiedCommitHash; TestGitObjectHashIsCollisionDetecting
+// pins that go-git's hasher keeps satisfying it.
+//
+// The plain hash.Hash Sum() is NOT enough: sha1cd's Sum returns the real
+// SHA-1 digest even when a collision was detected — the detection flag is
+// only exposed through CollisionResistantSum. A colliding object hashes to
+// its "correct" id, so a mismatch check alone would never see it.
+type collisionDetectingHash interface {
+	CollisionResistantSum(in []byte) ([]byte, bool)
+}
+
+// computeVerifiedCommitHash recomputes the object id of a commit's canonical
+// bytes — the standard git object header "commit <len>\x00" plus content —
+// with go-git's collision-detecting hasher, and returns the computed id only
+// when it equals the id the repository's storage claims for the object.
+//
+// This is the ONLY path by which a commit hash may reach the attested record.
+// head.Hash() and ref hashes are the repository's CLAIM about what its
+// storage contains; a crafted repository can store arbitrary bytes under any
+// name. Attesting the claim would make every downstream protection —
+// collision-detecting hashing, the verifier's SHA-1 commit-subject gates —
+// a statement about an object nobody ever hashed.
+//
+// It fails, never falls back, in three cases:
+//  1. the hasher is not collision-detecting (a go-git downgrade or hash
+//     re-registration — the pin test catches this in CI; this check catches
+//     it at runtime),
+//  2. the collision detector reports the object carries near-collision
+//     blocks (the object is an artifact of a chosen-prefix attack),
+//  3. the computed id differs from the claimed id (storage lies about what
+//     it holds).
+func computeVerifiedCommitHash(claimed plumbing.Hash, content []byte) (string, error) {
+	h := plumbing.NewHasher(plumbing.CommitObject, int64(len(content)))
+	if _, err := h.Write(content); err != nil {
+		return "", fmt.Errorf("hashing canonical bytes of commit %s: %w", claimed, err)
+	}
+
+	cd, ok := h.Hash.(collisionDetectingHash)
+	if !ok {
+		return "", fmt.Errorf("git object hasher %T is not collision-detecting; refusing to attest a SHA-1 commit id without collision detection", h.Hash)
+	}
+
+	sum, collision := cd.CollisionResistantSum(nil)
+	if collision {
+		return "", fmt.Errorf("commit object claimed as %s carries the near-collision blocks of a SHA-1 chosen-prefix attack; refusing to attest it", claimed)
+	}
+
+	var computed plumbing.Hash
+	if len(sum) != len(computed) {
+		return "", fmt.Errorf("git object hasher produced a %d-byte digest, want %d; refusing to attest", len(sum), len(computed))
+	}
+	copy(computed[:], sum)
+
+	if computed != claimed {
+		return "", fmt.Errorf("repository storage claims commit %s but its canonical object bytes hash to %s; refusing to attest the claimed id", claimed, computed)
+	}
+
+	return computed.String(), nil
+}
+
+// verifiedCommitObject reads the canonical bytes of the commit the repository
+// claims as `claimed` ONCE, verifies them via computeVerifiedCommitHash, and
+// decodes the commit FROM THOSE VERIFIED BYTES. Every attested field derived
+// from the returned commit — tree hash, parent hashes, author, committer,
+// message, signature — is therefore bound to the same bytes the verified id
+// covers, not to a second, unverified read of storage.
+func verifiedCommitObject(repo *git.Repository, claimed plumbing.Hash) (*object.Commit, string, error) {
+	encoded, err := repo.Storer.EncodedObject(plumbing.CommitObject, claimed)
+	if err != nil {
+		return nil, "", err
+	}
+
+	reader, err := encoded.Reader()
+	if err != nil {
+		return nil, "", err
+	}
+	content, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return nil, "", readErr
+	}
+	if closeErr != nil {
+		return nil, "", closeErr
+	}
+
+	verifiedHash, err := computeVerifiedCommitHash(claimed, content)
+	if err != nil {
+		return nil, "", err
+	}
+
+	verified := &plumbing.MemoryObject{}
+	verified.SetType(plumbing.CommitObject)
+	if _, err := verified.Write(content); err != nil {
+		return nil, "", err
+	}
+
+	commit, err := object.DecodeCommit(repo.Storer, verified)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return commit, verifiedHash, nil
+}
+
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:gocognit,gocyclo,funlen // git attestation involves multiple data sources
 	repo, err := git.PlainOpenWithOptions(ctx.WorkingDir(), &git.PlainOpenOptions{
 		DetectDotGit: true,
@@ -146,7 +269,12 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 		return err
 	}
 
-	commit, err := repo.CommitObject(head.Hash())
+	// Re-hash the canonical commit object and refuse the attestation on any
+	// mismatch or detected collision: only the COMPUTED, collision-checked id
+	// may be attested, never the id storage merely claims. The commit fields
+	// recorded below (tree, parents, author, message, signature) are decoded
+	// from the same verified bytes.
+	commit, verifiedHash, err := verifiedCommitObject(repo, head.Hash())
 	if err != nil {
 		return err
 	}
@@ -155,7 +283,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 		{
 			Hash:   crypto.SHA1,
 			GitOID: false,
-		}: commit.Hash.String(),
+		}: verifiedHash,
 	}
 
 	remotes, err := repo.Remotes()
@@ -198,7 +326,13 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 		return err
 	}
 
-	a.CommitHash = head.Hash().String()
+	// The marker travels with the hash it vouches for: verifiedHash is the
+	// output of computeVerifiedCommitHash (via verifiedCommitObject above), so
+	// this is the ONE site allowed to assert the capability. Setting it
+	// anywhere else — or from any hash that did not come through the verified
+	// path — would let the SHA-1 matcher exception ride on an unverified claim.
+	a.CommitHash = verifiedHash
+	a.CommitHashVerified = true
 	a.Author = commit.Author.Name
 	a.AuthorEmail = commit.Author.Email
 	a.CommitterName = commit.Committer.Name
