@@ -29,6 +29,7 @@ Regenerate after adding or renaming an attestor:
 | `lockfiles` | `plugins/attestors/lockfiles` | `https://aflock.ai/attestations/lockfiles/v0.1` |
 | `maven` | `plugins/attestors/maven` | `https://aflock.ai/attestations/maven/v0.1` |
 | `omnitrail` | `plugins/attestors/omnitrail` | `https://aflock.ai/attestations/omnitrail/v0.1` |
+| `platform` | `plugins/attestors/platform` | `https://testifysec.com/attestations/platform/v0.1` |
 | `system-packages` | `plugins/attestors/system-packages` | `https://aflock.ai/attestations/system-packages/v0.1` |
 
 ## Material (input snapshot)
