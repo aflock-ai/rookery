@@ -192,7 +192,25 @@ type V02Predicate struct {
 	Cmdlines  []string         `json:"cmdlines,omitempty"`
 	Processes []V02Process     `json:"processes"`
 	Cmd       []string         `json:"cmd,omitempty"`
-	ExitCode  int              `json:"exitcode,omitempty"`
+	// ExitCode is ALWAYS recorded, deliberately without omitempty.
+	//
+	// omitempty on an int drops ZERO — which is precisely the success case, and
+	// the only case that ever reaches this marshaller: a non-zero exit fails
+	// the attestor outright ("attestor command-run failed: exit status 3") and
+	// produces no attestation at all. Between the two, the exit status was
+	// never written to the wire under ANY outcome.
+	//
+	// Verified against cilock 3.1.3 before the change: a real successful
+	// attestation body carried keys _meta, cmd, comms, digests, paths,
+	// processes — and nothing matching exit, status or code anywhere in it.
+	//
+	// That left every consumer inferring success from the attestation merely
+	// EXISTING. Pushgate's policy asked "did the command exit 0?", found no
+	// field to answer with, and refused every honest push — in both its rego
+	// and its JavaScript evaluator, which agreed with each other and were both
+	// wrong. An attestation should state what it observed rather than leave it
+	// to be deduced from its own existence.
+	ExitCode int `json:"exitcode"`
 	// Stdout/Stderr are the wrapped command's captured build logs — kept in
 	// v0.2 for audit/debugging. Serialized AFTER the heavy interned tables so
 	// an agent reading the _meta prefix isn't forced through them.
@@ -581,8 +599,15 @@ func MarshalV02WithSections(p *V02Predicate) ([]byte, *V02Predicate, error) {
 	}
 	// NOTE: the section encoder emits ONLY the sections listed here — any
 	// top-level V02Predicate field missing from this list is silently dropped
-	// from the signed body. exitcode/stdout/stderr MUST be present (their
-	// inclusion gate mirrors the struct's omitempty: emit only when non-zero).
+	// from the signed body.
+	//
+	// THIS IS THE PRODUCTION PATH. MarshalJSON calls it, so these inclusion
+	// gates — not the struct tags — decide what a verifier actually receives.
+	// Removing `omitempty` from V02Predicate.ExitCode did NOT change the wire,
+	// because the gate below mirrored it and was left behind. The result was
+	// worse than the original bug: the exit code was still absent, and a policy
+	// that had learned to DENY an absent exit code then refused every honest
+	// push. A struct-tag change here is not a fix until this list agrees.
 	specs := []sectionSpec{
 		{"summary", p.Summary, p.Summary != nil},
 		{"scripts", p.Scripts, len(p.Scripts) > 0},
@@ -592,7 +617,13 @@ func MarshalV02WithSections(p *V02Predicate) ([]byte, *V02Predicate, error) {
 		{"cmdlines", p.Cmdlines, len(p.Cmdlines) > 0},
 		{"processes", p.Processes, true},
 		{"cmd", p.Cmd, len(p.Cmd) > 0},
-		{"exitcode", p.ExitCode, p.ExitCode != 0},
+		// ALWAYS emitted, including zero. Zero is the only value that ever
+		// reaches here — a non-zero exit fails the attestor and produces no
+		// attestation at all — so gating on non-zero meant the field never
+		// shipped under ANY outcome, and every consumer was left inferring
+		// success from the attestation merely existing. Stating what was
+		// observed is the entire point of an attestation.
+		{"exitcode", p.ExitCode, true},
 		{"stdout", p.Stdout, p.Stdout != ""},
 		{"stderr", p.Stderr, p.Stderr != ""},
 	}

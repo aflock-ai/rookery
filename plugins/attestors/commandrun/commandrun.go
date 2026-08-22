@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -312,13 +313,247 @@ type SocketInfo struct {
 	FD       int    `json:"fd"`       // file descriptor returned
 }
 
+// The socket-family vocabulary carried in SocketInfo.Family and
+// NetworkConnection.Family. These names are part of the WIRE CONTRACT — they
+// travel inside the signed predicate and a verifier reads them — so the whole
+// vocabulary lives here beside the structs that carry it rather than inside one
+// backend.
+const (
+	// FamilyIPv4 and FamilyIPv6 are IP sockets whose version the observer read
+	// from the kernel.
+	FamilyIPv4 = "AF_INET"
+	FamilyIPv6 = "AF_INET6"
+
+	// FamilyUnix is a local socket named by filesystem path.
+	FamilyUnix = "AF_UNIX"
+
+	// FamilyNetlink is a Linux kernel-configuration socket. It reaches the
+	// local kernel and cannot name a remote host.
+	FamilyNetlink = "AF_NETLINK"
+
+	// FamilyInetUnspecified means "an IP socket, but the observer could not
+	// tell IPv4 from IPv6". It is NOT a guess at AF_INET: it classifies as IP
+	// networking, so an un-versioned observation still breaks hermeticity.
+	FamilyInetUnspecified = "AF_INET_UNSPECIFIED"
+
+	// FamilyUnspecified is a sockaddr the observer READ and whose sa_family
+	// was AF_UNSPEC. On connect() that is the DISCONNECT idiom: it dissolves a
+	// connected UDP socket's association, and glibc's resolver issues one on
+	// every hostname lookup. The operation is fully described and what it
+	// describes reaches nothing, so it is non-remote.
+	//
+	// It carries no claim about operations the observer could NOT describe.
+	// That is FamilyNotObservable, which is a different fact with a different
+	// class, because "this reached nothing" and "I could not see what this
+	// reached" must never collapse into one value.
+	FamilyUnspecified = "AF_UNSPEC"
+
+	// FamilyVSock is a VM socket. It is REMOTE-CAPABLE and it is NOT IP: a
+	// guest reaches its hypervisor host through one, and the host reaches the
+	// guest, so a build can pull an undeclared input over AF_VSOCK exactly as
+	// it can over TCP. Naming it here is what stops it arriving at a consumer
+	// as the Linux tracer's numeric "AF_40" fallback, which no table
+	// classifies and which cilock's egress filter therefore dropped — signing
+	// a hermetic claim over a build that talked to its host.
+	FamilyVSock = "AF_VSOCK"
+)
+
+// Values a tracer records when it observed a network operation but the
+// observation channel did not name part of it.
+//
+// The distinction they preserve is the one this attestor exists to keep: an
+// endpoint we could not name is NOT an endpoint that was not there. A backend
+// that dropped such a connection would hand cilock an empty egress list, and
+// `Hermetic = len(NetworkEgress) == 0` would turn "we did not look" into "there
+// was none" — the exact projection of absence as an authoritative value that
+// SLSA L3's hermeticity claim must never rest on.
+const (
+	// HostNotObservable is the Address of an endpoint whose PORT was observed
+	// and whose HOST the platform cannot report. The parentheses are the
+	// point: they are legal in neither a DNS name nor an IP literal, so this
+	// value cannot be misread as a resolved host, cannot parse as a loopback
+	// address, and cannot be dialled. An operator reading
+	// "(host-not-observable):443" learns both facts at once — something was
+	// fetched over 443, and this platform cannot say from where.
+	HostNotObservable = "(host-not-observable)"
+
+	// FDNotObservable is the FD of a connection observed through a channel
+	// that does not report file descriptors. Zero would be a real fd (stdin),
+	// so an out-of-range value is used to mean "unknown" instead.
+	FDNotObservable = -1
+
+	// FamilyNotObservable is the Family of an outbound operation the observer
+	// SAW and could not describe: the sockaddr could not be read, or the
+	// channel reported the syscall without its arguments. It is a synthetic
+	// name, not a kernel domain, and it is deliberately distinct from
+	// FamilyUnspecified — AF_UNSPEC is a family that WAS read and reaches
+	// nothing, this is a family that was never read at all.
+	//
+	// It classifies as FamilyClassUnobservable, which a consumer counts as
+	// egress. That is the conservative reading and the only honest one: a
+	// channel nobody could look at cannot be certified as one that reached
+	// nothing, and `Hermetic = len(NetworkEgress) == 0` would otherwise turn
+	// "we did not look" into "there was none".
+	FamilyNotObservable = "AF_UNOBSERVED"
+)
+
+// UnobservedConnection describes an outbound operation a backend SAW and could
+// not read the arguments of, so the operation lands in the predicate instead of
+// vanishing from it.
+//
+// Dropping such an event is the fail-open this vocabulary exists to prevent:
+// the syscall happened, the attestor is the only witness, and an empty
+// Connections list is what `Hermetic = len(NetworkEgress) == 0` reads as proof
+// that nothing was reached. Recorded through here it reaches a consumer as
+// egress that nobody can name, which is a verdict a policy can waive with its
+// eyes open.
+func UnobservedConnection(syscall string, fd int) NetworkConnection {
+	return NetworkConnection{
+		Syscall:   syscall,
+		Family:    FamilyNotObservable,
+		Address:   HostNotObservable,
+		FD:        fd,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+}
+
+// SocketFamilyClass is what a Family value denotes to a consumer deciding
+// whether a connection is a channel through which a build can pull undeclared
+// inputs.
+type SocketFamilyClass int
+
+const (
+	// FamilyClassUndefined is the class of a Family value this vocabulary does
+	// not define: the numeric "AF_<n>" a Linux tracer writes for a domain it
+	// has no name for, or an empty string from an observer that recorded no
+	// family at all.
+	//
+	// It means "I do not know what this reaches", and the ONLY safe reading of
+	// that is that it MIGHT reach a remote host — so a consumer must count it
+	// as egress, never drop it. AF_VSOCK is why: it is remote-capable, and
+	// before this vocabulary named it, it arrived here as "AF_40", fell into
+	// this class, and cilock's filter dropped it. `Hermetic =
+	// len(NetworkEgress) == 0` then signed "reached nothing" over a build that
+	// reached its hypervisor host.
+	//
+	// It is the zero value on purpose: a family the vocabulary has not learned
+	// yet lands in the conservative class rather than in a permissive one.
+	// TestUnclassifiedRuntimeFamilyBreaksHermeticity in cilock pins the
+	// consumer half.
+	FamilyClassUndefined SocketFamilyClass = iota
+
+	// FamilyClassIP is IP networking: the family through which a build reaches
+	// a remote host, and the class that breaks hermeticity. It includes
+	// FamilyInetUnspecified, because an IP socket whose version the observer
+	// could not read is an OBSERVATION of IP egress, not the absence of one.
+	FamilyClassIP
+
+	// FamilyClassUnix is a local socket named by filesystem path, judged by
+	// the path rather than by the family.
+	FamilyClassUnix
+
+	// FamilyClassNonRemote is a family in this vocabulary that cannot name a
+	// remote host, so it is never egress.
+	FamilyClassNonRemote
+
+	// FamilyClassRemoteNonIP is a family that reaches a host OUTSIDE this
+	// kernel without being IP — AF_VSOCK's guest<->host channel. It is egress:
+	// a build can pull an undeclared input through it. It is a separate class
+	// from FamilyClassIP rather than a member of it because the Family names
+	// travel in the signed predicate, and calling a VM socket "IP" on the wire
+	// would be false.
+	FamilyClassRemoteNonIP
+
+	// FamilyClassUnobservable is an outbound operation the observer SAW and
+	// could not describe — FamilyNotObservable. A consumer counts it as
+	// egress.
+	//
+	// It is separate from FamilyClassNonRemote because those two answer
+	// different questions. Non-remote answers "what does this channel reach?"
+	// with "nothing outside this kernel". Unobservable answers it with "I
+	// cannot say", and the only safe reading of "I cannot say" is that it
+	// might have reached anything. Collapsing the second into the first is how
+	// a build that fetched over a channel nobody could see gets signed
+	// hermetic.
+	//
+	// It is also separate from FamilyClassUndefined, which is about the
+	// VOCABULARY not defining a string. This one is a defined member of the
+	// vocabulary whose meaning IS "unobservable", so a backend has a name to
+	// report the fact with instead of a blank field or a silent drop. Both
+	// classes count as egress; they differ in what a reader is being told.
+	FamilyClassUnobservable
+)
+
+// socketFamilyClasses is the ONE place that decides what each family name in
+// this vocabulary denotes. Consumers — cilock's hermeticity filter above all —
+// ask ClassifySocketFamily rather than comparing Family against a hand-written
+// list of strings, so a family added to the vocabulary is classified once here
+// instead of once in every reader that happens to get updated. A reader that
+// silently fails to recognise an IP family drops that connection from the
+// egress list, and `Hermetic = len(NetworkEgress) == 0` then publishes "there
+// was no egress" for a build that fetched over the network.
+//
+// TestEverySocketFamilyConstantIsClassified fails the build when a family
+// constant in this package is missing from this table.
+var socketFamilyClasses = map[string]SocketFamilyClass{
+	FamilyIPv4:            FamilyClassIP,
+	FamilyIPv6:            FamilyClassIP,
+	FamilyInetUnspecified: FamilyClassIP,
+	FamilyUnix:            FamilyClassUnix,
+	FamilyNetlink:         FamilyClassNonRemote,
+	FamilyUnspecified:     FamilyClassNonRemote,
+	FamilyNotObservable:   FamilyClassUnobservable,
+	FamilyVSock:           FamilyClassRemoteNonIP,
+}
+
+// ClassifySocketFamily reports what a SocketInfo.Family or
+// NetworkConnection.Family value denotes.
+//
+// It is TOTAL over its runtime input, not just over the constants declared
+// here: any string a tracer can put in Family — "AF_42", "" — gets a class,
+// and a value outside the vocabulary gets FamilyClassUndefined, which a
+// consumer must treat as possible egress. That distinction is the whole point.
+// A compile-time gate over the declared constants (see
+// TestEverySocketFamilyConstantIsClassified) cannot see "AF_42", because no
+// constant declares it; only the runtime default can.
+func ClassifySocketFamily(family string) SocketFamilyClass {
+	return socketFamilyClasses[family]
+}
+
+// FamilyIsIP reports whether a Family value denotes IP networking — the single
+// question cilock's egress filter asks of a family.
+func FamilyIsIP(family string) bool {
+	return ClassifySocketFamily(family) == FamilyClassIP
+}
+
+// FamilyIsUnix reports whether a Family value denotes a path-named local socket.
+func FamilyIsUnix(family string) bool {
+	return ClassifySocketFamily(family) == FamilyClassUnix
+}
+
+// SocketFamilyClassifications returns a copy of the classification table, so a
+// consumer in another module can assert its own filter handles every family
+// this attestor can emit rather than the subset its author had in mind.
+func SocketFamilyClassifications() map[string]SocketFamilyClass {
+	return maps.Clone(socketFamilyClasses)
+}
+
 // NetworkConnection records a connect or bind syscall.
+//
+// Syscall names the operation the observer saw — "connect" (the only value
+// cilock counts against hermeticity), "bind", "sendto" or "dns_query" from the
+// Linux backends. Family/Address/Port are the
+// destination as the observer saw it; where an observer could not see part of
+// it, the constants above say so explicitly rather than leaving a zero value to
+// be read as fact. A report-based observer that is told a port and never a host
+// therefore records HostNotObservable with a real port, and a consumer reads
+// that as egress it cannot name — never as egress that did not happen.
 type NetworkConnection struct {
-	Syscall   string `json:"syscall"`             // "connect" or "bind"
-	Family    string `json:"family"`              // AF_INET, AF_INET6, AF_UNIX
-	Address   string `json:"address"`             // IP address or Unix socket path
-	Port      int    `json:"port,omitempty"`      // TCP/UDP port (0 for AF_UNIX)
-	FD        int    `json:"fd"`                  // socket file descriptor
+	Syscall   string `json:"syscall"`             // "connect", "bind", "sendto", "dns_query"
+	Family    string `json:"family"`              // AF_INET, AF_INET6, AF_UNIX, AF_INET_UNSPECIFIED, AF_UNSPEC
+	Address   string `json:"address"`             // IP address, Unix socket path, or HostNotObservable
+	Port      int    `json:"port,omitempty"`      // TCP/UDP port (0 for AF_UNIX or when unobserved)
+	FD        int    `json:"fd"`                  // socket file descriptor; FDNotObservable when unknown
 	Timestamp string `json:"timestamp,omitempty"` // when the syscall was observed
 	Hostname  string `json:"hostname,omitempty"`  // TLS SNI hostname (extracted from ClientHello)
 }

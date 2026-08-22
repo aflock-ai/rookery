@@ -1497,28 +1497,54 @@ func opName(op uint32) string {
 // NetworkConnection. Returns a connection with zero Address/Port
 // when the family is unsupported (e.g., AF_NETLINK), still appending
 // to the predicate so the syscall is observable.
+//
+// A family this decoder has no case for is NAMED (socketFamilyName) instead of
+// being left blank. Blank was the fail-open: the kernel reported the domain,
+// the decoder threw the number away, and a consumer that cannot classify a
+// family drops the connection — which is how an AF_VSOCK connect() could leave
+// cilock's NetworkEgress empty and the build signed hermetic. Named, it is
+// either a family the vocabulary classifies or an "AF_<n>" the consumer
+// conservatively counts as egress.
+//
+// A TRUNCATED sockaddr of a KNOWN family (the length guards below) still
+// leaves Family empty, and that is also deliberate: unclassified, so
+// conservatively counted, because a connect() whose destination bytes could
+// not be read must not vanish either.
 func parseSockaddrEBPF(family uint32, raw []byte, syscall string) *NetworkConnection {
 	conn := &NetworkConnection{Syscall: syscall}
 	switch family {
 	case 2: // AF_INET — sockaddr_in: family(2) + port(2 big-endian) + addr(4) + pad
 		if len(raw) >= 8 {
-			conn.Family = afInet
+			conn.Family = FamilyIPv4
 			conn.Port = int(uint16(raw[2])<<8 | uint16(raw[3]))
 			conn.Address = net.IP(raw[4:8]).String()
 		}
 	case 10: // AF_INET6 — sockaddr_in6: family(2) + port(2) + flowinfo(4) + addr(16) + scope(4)
 		if len(raw) >= 28 {
-			conn.Family = afInet6
+			conn.Family = FamilyIPv6
 			conn.Port = int(uint16(raw[2])<<8 | uint16(raw[3]))
 			conn.Address = net.IP(raw[8:24]).String()
 		}
 	case 1: // AF_UNIX — sockaddr_un: family(2) + path(...)
-		conn.Family = afUnix
+		conn.Family = FamilyUnix
 		end := 2
 		for end < len(raw) && raw[end] != 0 {
 			end++
 		}
 		conn.Address = string(raw[2:end])
+	default:
+		// The kernel-reported domain, named. Domain 0 arrives here as
+		// FamilyUnspecified — the AF_UNSPEC disconnect idiom — and that is
+		// what it is on every build that resolves a hostname.
+		//
+		// KNOWN LIMIT, narrower than it looks and not closable from Go: the
+		// probe zero-initialises the event and fills the family from the
+		// sockaddr only when it has one to read, so a connect() whose sockaddr
+		// the probe could not read also arrives as domain 0 and is
+		// indistinguishable here from a real AF_UNSPEC. Closing it needs the
+		// probe to report "read failed" as a value of its own; until then the
+		// ptrace backend is the one that reports FamilyNotObservable.
+		conn.Family = socketFamilyName(int(family))
 	}
 	return conn
 }

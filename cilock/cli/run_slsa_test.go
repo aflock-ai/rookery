@@ -93,9 +93,15 @@ func TestExternalEgress(t *testing.T) {
 			want: []string{"1.1.1.1:53", "proxy.golang.org:443"},
 		},
 		{
-			name:  "address-less, hostname-less connect is skipped (no nameable endpoint)",
+			// An IP connect() whose destination the observer could not name is
+			// still an OBSERVED IP connect(). It used to be skipped, which made
+			// "we could not look" indistinguishable from "there was nothing
+			// there" — the same projection of absence the family default now
+			// closes. HostNotObservable is the name that cannot be misread as
+			// a host, so there is no longer a reason to drop it.
+			name:  "address-less, hostname-less IP connect is named, not skipped",
 			procs: connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_INET", Address: "", Port: 443}),
-			want:  nil,
+			want:  []string{commandrun.HostNotObservable + ":443"},
 		},
 		{
 			name:  "nil network is harmless",

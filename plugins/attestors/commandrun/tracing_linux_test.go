@@ -94,7 +94,17 @@ func Test_socketFamilyName(t *testing.T) {
 		{2, "AF_INET"},   // unix.AF_INET
 		{10, "AF_INET6"}, // unix.AF_INET6
 		{1, "AF_UNIX"},   // unix.AF_UNIX
+		// unix.AF_UNSPEC. connect() with one is the UDP-disconnect idiom
+		// glibc's resolver uses; it reaches nothing, so it must carry a
+		// CLASSIFIED name. As the numeric "AF_0" it would be unclassified and a
+		// consumer would conservatively count it on every build that resolves a
+		// hostname.
+		{0, "AF_UNSPEC"},
 		{16, "AF_NETLINK"},
+		// unix.AF_VSOCK. Named on purpose: it is remote-capable (guest to
+		// hypervisor host), and while it arrived at cilock as the numeric
+		// "AF_40" nothing classified it and the egress filter dropped it.
+		{40, "AF_VSOCK"},
 		{99, "AF_99"},
 	}
 	for _, tt := range tests {
@@ -102,6 +112,33 @@ func Test_socketFamilyName(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("socketFamilyName(%d) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+// Test_socketFamilyNameOutputIsClassifiable is the seam between the tracer and
+// the vocabulary, checked in the direction that matters.
+//
+// Whatever socketFamilyName returns lands in NetworkConnection.Family and is
+// read by cilock's egress filter. A name the vocabulary CLASSIFIES gets the
+// classification; a name it does not gets FamilyClassUndefined, which a
+// consumer must count as egress. Both are safe. What is NOT safe is a domain
+// that the vocabulary defines but this function reports numerically instead —
+// AF_NETLINK reported as "AF_16" would be unclassified, so every Linux build
+// with a netlink connect() would go non-hermetic and hermeticity would become
+// unreachable rather than merely honest.
+func Test_socketFamilyNameOutputIsClassifiable(t *testing.T) {
+	for _, domain := range []int{0, 1, 2, 10, 16, 40} {
+		name := socketFamilyName(domain)
+		if ClassifySocketFamily(name) == FamilyClassUndefined {
+			t.Errorf("socketFamilyName(%d) = %q, which the vocabulary does not classify; a "+
+				"consumer must then treat every one of these as possible egress", domain, name)
+		}
+	}
+	// The other direction: a domain nobody named must stay numeric, so the
+	// consumer's conservative default is what decides it.
+	if got := ClassifySocketFamily(socketFamilyName(99)); got != FamilyClassUndefined {
+		t.Errorf("an unnamed domain classified as %v; it must be undefined so the consumer "+
+			"counts it rather than inventing a classification here", got)
 	}
 }
 

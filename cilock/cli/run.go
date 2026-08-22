@@ -1234,40 +1234,147 @@ func externalEgress(procs []commandrun.ProcessInfo) []string {
 // fetched nothing undeclared, so we conservatively count the channels through
 // which a build CAN pull undeclared inputs:
 //
-//   - External IP egress — AF_INET/AF_INET6 connect() to a non-loopback host.
+//   - External IP egress — an IP-family connect() to a non-loopback host.
 //   - Loopback IP — a connect() to 127.0.0.0/8 or ::1 reaches a localhost
 //     service or proxy, which can itself fetch external inputs. We cannot prove
 //     it didn't, so it breaks hermeticity (labelled "loopback:<host>:<port>").
 //   - Container-runtime UNIX sockets — an AF_UNIX connect() to docker.sock /
 //     containerd / podman / crio can pull images or run commands that fetch
 //     undeclared inputs (labelled "unix:<path>").
+//   - Remote-capable non-IP families — AF_VSOCK reaches the hypervisor host
+//     from a guest, so a build can pull an undeclared input over one exactly as
+//     it can over TCP (labelled "<family>:<host>:<port>").
+//   - Any family the vocabulary does NOT classify — see THE DEFAULT IS TO
+//     COUNT below (labelled "unclassified-family:<family>:<host>:<port>").
+//   - An operation the observer SAW and could not describe, which the
+//     vocabulary names FamilyNotObservable (labelled
+//     "unclassified-family:(family-not-observable):<host>:<port>"). An
+//     unwatched channel is one a build could have fetched through, and no
+//     amount of not looking turns that into proof it did not.
 //
 // Ordinary AF_UNIX IPC (D-Bus, NSS, journald, …) and bind()/listen() are NOT
 // counted: they are pervasive in any build and are not input-fetch vectors, so
 // counting them would make L3 unreachable without improving honesty.
+//
+// WHICH FAMILIES REACH WHAT IS NOT DECIDED HERE. commandrun owns that
+// vocabulary and classifies it in one table (commandrun.ClassifySocketFamily),
+// because this filter is the place where an unrecognised family turns into a
+// signed lie: a family this function fails to count drops out of
+// externalEgress, and `Hermetic = len(NetworkEgress) == 0` then publishes
+// "reached nothing" for a build that reached the network. Asking the vocabulary
+// means a family the attestor learns to emit — an IP socket whose version a
+// backend could not read, say — is counted here without this file being edited.
+//
+// THE DEFAULT IS TO COUNT, NOT TO SKIP, and that is the difference between a
+// classifier that is total over its COMPILE-TIME constants and one that is
+// total over its RUNTIME input. commandrun's constants are all classified and a
+// gate proves it — but the Linux tracer writes "AF_<n>" for any domain it has
+// no name for, and no constant declares "AF_42". Such a string reached this
+// switch, matched nothing, and was dropped. AF_VSOCK is the case that makes it
+// a hole rather than a nuisance: it is remote-capable, so a build could talk to
+// its host over one and still be signed hermetic with an empty egress list.
+//
+// So an unclassified family COUNTS as egress, labelled
+// "unclassified-family:<family>:…" so the reason is legible in the signed
+// summary rather than silent. Counting (rather than erroring) is deliberate:
+// this is an attestation, and the honest report of "a channel I cannot vouch
+// for was used" is a NON-HERMETIC verdict a verifier can read and a policy can
+// waive — not a failed build on a kernel we have never seen. The cost is
+// bounded because the tracer names every domain the vocabulary knows
+// (AF_NETLINK, on every Linux build, included), so ordinary builds never reach
+// this default.
 func egressEndpoint(c commandrun.NetworkConnection) (string, bool) {
 	if c.Syscall != "connect" {
 		return "", false // bind()/listen() is serving, not fetching
 	}
 
-	// AF_UNIX: only container-runtime control sockets are a fetch vector.
-	if c.Family == "AF_UNIX" {
+	switch commandrun.ClassifySocketFamily(c.Family) {
+	case commandrun.FamilyClassUnix:
+		// AF_UNIX: only container-runtime control sockets are a fetch vector.
 		if isContainerRuntimeSocket(c.Address) {
 			return "unix:" + c.Address, true
 		}
 		return "", false
-	}
 
-	if !isInetFamily(c.Family) {
+	case commandrun.FamilyClassNonRemote:
+		// Classified, DESCRIBED, and unable to name a remote host — AF_NETLINK
+		// reaches the local kernel, AF_UNSPEC on connect() dissolves a UDP
+		// socket's association and reaches nothing at all. The ONLY class that
+		// is skipped on the strength of the family alone, and it is skipped
+		// because the observer SAW what the operation was.
 		return "", false
-	}
 
+	case commandrun.FamilyClassUnobservable:
+		// The observer saw an outbound operation and could not describe it.
+		// That is not the same fact as the case above and it does not get the
+		// same answer: an unwatched channel is one a build could have fetched
+		// through, so it counts, labelled with WHY rather than with a family.
+		return labelledEndpoint(unclassifiedFamilyLabel(c.Family), c), true
+
+	case commandrun.FamilyClassIP:
+		return ipEgressEndpoint(c)
+
+	case commandrun.FamilyClassRemoteNonIP:
+		return labelledEndpoint(c.Family, c), true
+
+	default:
+		// FamilyClassUndefined, and any class added to the vocabulary that this
+		// switch has not learned yet. Both mean "this consumer cannot say what
+		// the channel reaches", and the conservative reading of that is egress.
+		return labelledEndpoint(unclassifiedFamilyLabel(c.Family), c), true
+	}
+}
+
+// unclassifiedFamilyLabel names the channel in an egress entry for a family
+// this consumer cannot vouch for, so a reader of the signed summary sees WHY
+// hermeticity broke instead of an unexplained endpoint. The entry has to say
+// "something was reached and nothing about it could be named", which is a
+// different statement from "nothing was reached".
+//
+// Two inputs mean the family was never read: the empty string an observer
+// leaves when it records no family, and commandrun.FamilyNotObservable, the
+// name a backend reports the same fact under. Both get the one label, because
+// they are one fact.
+func unclassifiedFamilyLabel(family string) string {
+	if family == "" || family == commandrun.FamilyNotObservable {
+		return "unclassified-family:(family-not-observable)"
+	}
+	return "unclassified-family:" + family
+}
+
+// labelledEndpoint joins a channel label to the destination as far as the
+// observer could see it, so one egress entry names both WHAT channel the build
+// used and WHERE it went. An unnameable destination becomes
+// commandrun.HostNotObservable rather than disappearing.
+func labelledEndpoint(label string, c commandrun.NetworkConnection) string {
+	where := c.Address
+	if c.Hostname != "" {
+		where = c.Hostname
+	}
+	if where == "" {
+		where = commandrun.HostNotObservable
+	}
+	if c.Port != 0 {
+		return fmt.Sprintf("%s:%s:%d", label, where, c.Port)
+	}
+	return label + ":" + where
+}
+
+// ipEgressEndpoint names an IP-family connect(). Loopback is called out
+// because it reaches a localhost service or proxy that can itself fetch
+// external inputs, which is a different fact for an operator than a direct
+// external fetch — but both break hermeticity.
+func ipEgressEndpoint(c commandrun.NetworkConnection) (string, bool) {
 	host := c.Address
 	if c.Hostname != "" {
 		host = c.Hostname // prefer the TLS SNI hostname when known
 	}
 	if host == "" {
-		return "", false // no nameable endpoint — skip rather than emit ":port"
+		// An IP connect() the observer could not name a destination for. It is
+		// still an OBSERVED IP connect(), so it counts: "we could not look" must
+		// never be published as "there was nothing there". HostNotObservable
+		// exists precisely so this has a name that cannot be misread as a host.
+		host = commandrun.HostNotObservable
 	}
 	endpoint := host
 	if c.Port != 0 {
@@ -1279,11 +1386,6 @@ func egressEndpoint(c commandrun.NetworkConnection) (string, bool) {
 		return "loopback:" + endpoint, true
 	}
 	return endpoint, true
-}
-
-// isInetFamily reports whether a socket family denotes IP networking.
-func isInetFamily(family string) bool {
-	return family == "AF_INET" || family == "AF_INET6"
 }
 
 // isLoopbackAddr reports whether an address is an IP loopback address.

@@ -36,13 +36,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const (
-	MAX_PATH_LEN = 4096
-
-	afInet  = "AF_INET"
-	afInet6 = "AF_INET6"
-	afUnix  = "AF_UNIX"
-)
+const MAX_PATH_LEN = 4096
 
 type ptraceContext struct {
 	parentPid           int
@@ -624,14 +618,27 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 
 		conn, err := p.parseSockaddr(pid, argArray[1], argArray[2], "connect")
 		if err != nil {
+			// The connect() HAPPENED. Dropping it here is the one loss this
+			// backend cannot afford: cilock reads an empty connection list as
+			// `Hermetic = true`, so a sockaddr this tracer could not read —
+			// an addrlen outside the accepted range, a ProcessVMReadv that
+			// failed — would publish "reached nothing" over a build that
+			// reached something. Recorded as unobservable, it reaches the
+			// consumer as egress nobody can name.
+			//
+			// connect() specifically, because it is the syscall whose ABSENCE
+			// becomes a hermeticity claim; bind() and sendto() below are not
+			// counted as egress either way.
 			log.Debugf("(tracing) failed to parse connect sockaddr: %v", err)
+			procInfo.Network.Connections = append(procInfo.Network.Connections,
+				UnobservedConnection("connect", int(argArray[0])))
 			return nil // non-fatal
 		}
 		conn.FD = int(argArray[0])
 		procInfo.Network.Connections = append(procInfo.Network.Connections, *conn)
 
 		// Track TLS connections for SNI extraction on next write
-		if conn.Port == 443 && (conn.Family == afInet || conn.Family == afInet6) {
+		if conn.Port == 443 && (conn.Family == FamilyIPv4 || conn.Family == FamilyIPv6) {
 			key := fmt.Sprintf("%d:%d", pid, conn.FD)
 			p.tlsPendingFDs[key] = len(procInfo.Network.Connections) - 1
 		}
@@ -979,7 +986,7 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 		}
 		port := binary.BigEndian.Uint16(data[2:4])
 		ip := net.IPv4(data[4], data[5], data[6], data[7])
-		conn.Family = afInet
+		conn.Family = FamilyIPv4
 		conn.Address = ip.String()
 		conn.Port = int(port)
 
@@ -989,7 +996,7 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 		}
 		port := binary.BigEndian.Uint16(data[2:4])
 		ip := net.IP(data[8:24])
-		conn.Family = afInet6
+		conn.Family = FamilyIPv6
 		conn.Address = ip.String()
 		conn.Port = int(port)
 
@@ -999,11 +1006,17 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 		if pathEnd < 0 {
 			pathEnd = len(data) - 2
 		}
-		conn.Family = afUnix
+		conn.Family = FamilyUnix
 		conn.Address = string(data[2 : 2+pathEnd])
 
 	default:
-		conn.Family = fmt.Sprintf("AF_%d", family)
+		// socketFamilyName, not a bare "AF_%d": a domain the kernel names and
+		// this vocabulary classifies (AF_NETLINK, AF_VSOCK) must arrive at the
+		// consumer under that name. A numeric fallback is unclassifiable, and
+		// an unclassifiable family conservatively breaks hermeticity — correct
+		// for a domain nobody can vouch for, but wrong for AF_NETLINK, which
+		// appears on every Linux build and reaches only the local kernel.
+		conn.Family = socketFamilyName(int(family))
 		conn.Address = fmt.Sprintf("raw:%x", data)
 	}
 
@@ -1013,14 +1026,39 @@ func (p *ptraceContext) parseSockaddr(pid int, addrPtr uintptr, addrLen uintptr,
 func socketFamilyName(family int) string {
 	switch family {
 	case unix.AF_INET:
-		return afInet
+		return FamilyIPv4
 	case unix.AF_INET6:
-		return afInet6
+		return FamilyIPv6
 	case unix.AF_UNIX:
-		return afUnix
+		return FamilyUnix
+	case unix.AF_UNSPEC:
+		// connect() with an AF_UNSPEC sockaddr is the DISCONNECT idiom — it
+		// dissolves a connected UDP socket's association, and glibc's resolver
+		// uses it. It reaches nothing, so it maps to FamilyUnspecified
+		// (classed non-remote) rather than to the numeric fallback. Left as
+		// "AF_0" it would be unclassified, a consumer would conservatively
+		// count it, and every build that resolves a hostname would go
+		// non-hermetic.
+		//
+		// The contract this name rests on is that the CALLER read the domain.
+		// ptrace honours it: parseSockaddr takes sa_family out of the tracee's
+		// own memory and errors when it cannot, and that error path records
+		// FamilyNotObservable instead. The eBPF connect decoder cannot yet —
+		// see parseSockaddrEBPF, which documents the gap and why it is not
+		// closable from Go.
+		return FamilyUnspecified
 	case unix.AF_NETLINK:
-		return "AF_NETLINK"
+		return FamilyNetlink
+	case unix.AF_VSOCK:
+		// Remote-capable: a guest reaches its hypervisor host over AF_VSOCK.
+		// Naming it keeps it out of the numeric fallback, where it was
+		// unclassifiable and cilock's egress filter dropped it.
+		return FamilyVSock
 	default:
+		// A domain this vocabulary has no name for. It stays numeric ON
+		// PURPOSE: the predicate reports what the kernel said, and a consumer
+		// reading a family it cannot classify must treat it as possible egress
+		// rather than invent a classification here.
 		return fmt.Sprintf("AF_%d", family)
 	}
 }
