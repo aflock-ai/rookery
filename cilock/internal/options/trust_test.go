@@ -181,6 +181,7 @@ func TestCreateOIDCCredential(t *testing.T) {
 		Name: "github:testifysec/judge", Subject: "repo:testifysec/judge:*",
 		Audience: testPlatform + "/archivista", IssuerURL: "https://token.actions.githubusercontent.com",
 		Scopes: []string{"attestation:upload"}, TenantID: "tenant-123",
+		Description: "Pushgate evidence upload for testifysec/judge",
 	}
 	cred, err := CreateOIDCCredential(context.Background(), srv.URL, "sess-tok", r)
 	if err != nil {
@@ -206,6 +207,9 @@ func TestCreateOIDCCredential(t *testing.T) {
 	}
 	if sent.Variables.Input["tenantID"] != "tenant-123" || sent.Variables.Input["issuerURL"] != "https://token.actions.githubusercontent.com" {
 		t.Fatalf("input = %v", sent.Variables.Input)
+	}
+	if sent.Variables.Input["description"] != r.Description {
+		t.Fatalf("description = %v, want %q", sent.Variables.Input["description"], r.Description)
 	}
 }
 

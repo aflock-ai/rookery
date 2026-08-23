@@ -139,14 +139,15 @@ type TrustOptions struct {
 
 // ResolvedTrust is the validated, fully-derived credential to create.
 type ResolvedTrust struct {
-	Name       string
-	Subject    string
-	Audience   string
-	IssuerURL  string
-	Scopes     []string
-	Tags       []string
-	AllowedIPs []string
-	TenantID   string
+	Name        string
+	Description string
+	Subject     string
+	Audience    string
+	IssuerURL   string
+	Scopes      []string
+	Tags        []string
+	AllowedIPs  []string
+	TenantID    string
 }
 
 // resolveIdentity fills r.IssuerURL, r.Subject and o.Name from either the
@@ -192,8 +193,9 @@ func (o *TrustOptions) resolveIdentity(r *ResolvedTrust) error {
 // (used when --tenant is not given). It does not perform any network call.
 func (o *TrustOptions) Resolve(defaultTenantID string) (*ResolvedTrust, error) {
 	r := &ResolvedTrust{
-		Tags:       o.Tags,
-		AllowedIPs: o.AllowedIPs,
+		Tags:        o.Tags,
+		AllowedIPs:  o.AllowedIPs,
+		Description: o.Description,
 	}
 
 	if err := o.resolveIdentity(r); err != nil {
@@ -392,6 +394,9 @@ func CreateOIDCCredential(ctx context.Context, graphqlURL, sessionToken string, 
 		"audience":  r.Audience,
 		"issuerURL": r.IssuerURL,
 		"scopes":    r.Scopes,
+	}
+	if r.Description != "" {
+		input["description"] = r.Description
 	}
 	if len(r.AllowedIPs) > 0 {
 		input["allowedIps"] = r.AllowedIPs
