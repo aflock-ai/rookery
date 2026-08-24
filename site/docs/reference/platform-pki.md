@@ -79,22 +79,29 @@ timestamps (and to validate a keyless signature after its short-lived leaf expir
 `$PLATFORM_URL` is `https://platform.testifysec.com` for the hosted platform, or your
 own host for a self-hosted / `--standalone` instance.
 
-## Signing needs no login; uploading does
+## Signing and uploading use separate authority
 
 This is the single most useful distinction to internalize:
 
-| What you're doing | What it proves | Login? |
+| What you're doing | What it proves | Authority |
 |---|---|---|
-| **Sign** (Fulcio + TSA) | this identity made this evidence at this time | **No** — keyless |
-| **Upload** (Archivista) | this evidence belongs to this tenant/product | **Yes** — a session |
+| **Sign** (Fulcio + TSA) | the certificate principal signed these exact bytes at this time | Workload OIDC, or today's AAL1 stored-session exchange naming the credential creator's email; the explicit human/agent ceremony is a target |
+| **Upload** (Archivista) | this evidence belongs to this tenant/subject | A separate purpose-scoped tenant credential |
 
 **Signing is keyless.** In CI, with `id-token: write`, the runner mints an ambient
 OIDC token; the platform Fulcio exchanges it for a leaf that lives ~10 minutes —
 long enough to sign, too short to be worth stealing. The TSA timestamps the
-signature so it stays verifiable long after the leaf expires.
+signature so it stays verifiable long after the leaf expires. A workflow OIDC
+request is a workload principal. Today's local client may instead exchange a
+stored API credential non-interactively for an AAL1 token naming its creator's
+email. That is not proof a person was present and not a stable agent identity;
+agents must not use that compatibility path. The platform's explicit,
+server-observed human/agent ceremony remains a target.
 
-**Uploading binds evidence to your tenant**, so it needs a session.
-`cilock login` (or `cilock login --workflow-identity` in CI) sets that up.
+**Uploading binds evidence to your tenant**, so it needs a different credential.
+`cilock login` supplies a human tenant session;
+`cilock login --workflow-identity` exchanges exact workload identity in CI.
+Neither path changes the principal already bound into the signing certificate.
 
 ```mermaid
 sequenceDiagram
@@ -112,8 +119,8 @@ sequenceDiagram
     CI->>CI: sign DSSE envelope with the leaf
     CI->>TSA: RFC 3161 timestamp the signature
     TSA-->>CI: timestamp token
-    Note over CI,ARCH: Signing is done — no session needed yet.
-    CI->>ARCH: cilock login --workflow-identity, then upload (session-bound)
+    Note over CI,ARCH: Signing is done — no upload credential needed yet.
+    CI->>ARCH: exchange exact workflow identity, then upload (tenant-bound)
     ARCH-->>CI: stored — addressable by subject digest
 ```
 

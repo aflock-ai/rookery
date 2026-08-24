@@ -6,6 +6,35 @@ Humans: this is a quick map of where things live, what to run, and what trips ag
 
 ---
 
+## Pushgate and Cilock identity boundary
+
+Changes to Cilock policy, signing, attestation, catalog, or agent-facing command
+flows must also follow the repository-wide
+[`Pushgate agent, policy, and provenance contract`](../../docs/architecture/pushgate-agent-policy-contract.md).
+
+- Target invariant: headless/workflow signing is agent signing. Never exchange a stored human
+  session or reuse a human email identity as a non-interactive fallback.
+- Current local `cilock run` and `cilock sign` still have that stored-session
+  compatibility path, and `cilock policy push` uses the same token-bearing
+  session. Agents must hand those commands to the human until stable local-agent
+  and explicit human ceremonies are implemented; do not describe the current
+  exchange as either one.
+- TTY detection may open a browser but does not prove human presence. Only the
+  explicit server-observed interactive ceremony may attribute a human.
+- Agent context is observational metadata, not an authenticated identity,
+  signer, or policy-satisfying attestor.
+- Policy authorship/publishing, Product binding, and Pushgate repository
+  activation are separate capabilities. Do not let a broad policy-write path
+  imply all three.
+- Machine instructions must use commands that exist in this checkout. The
+  target `policy list`, `show`, `explain`, policy-only `sign`, and
+  `bind pushgate` interfaces are not runnable until their implementations and
+  help contracts land.
+- Policy signing and evidence upload are keyless; do not add or recommend a raw
+  RSA private-key path.
+
+---
+
 ## What this repo is
 
 Rookery is a Go monorepo that produces **`cilock`** — a witness-compatible CLI for emitting and verifying SLSA / in-toto attestations — plus the underlying library and 50+ attestor plugins. Read `README.md` first if you have no context.
