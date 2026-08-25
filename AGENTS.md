@@ -14,11 +14,12 @@ flows must also follow the repository-wide
 
 - Target invariant: headless/workflow signing is agent signing. Never exchange a stored human
   session or reuse a human email identity as a non-interactive fallback.
-- Current local `cilock run` and `cilock sign` still have that stored-session
-  compatibility path, and `cilock policy push` uses the same token-bearing
-  session. Agents must hand those commands to the human until stable local-agent
-  and explicit human ceremonies are implemented; do not describe the current
-  exchange as either one.
+- Native Git commit signing may exchange the current stored platform session
+  for a short-lived Fulcio credential. Treat the certificate identity as the
+  authenticated session principal at its advertised assurance level, never as
+  proof of human presence. Other identity-bearing local `cilock run`, policy
+  signing, and authenticated policy publishing flows retain their documented
+  handoff until stable local-agent and explicit human ceremonies land.
 - TTY detection may open a browser but does not prove human presence. Only the
   explicit server-observed interactive ceremony may attribute a human.
 - Agent context is observational metadata, not an authenticated identity,

@@ -26,6 +26,38 @@ type SignTokenResult struct {
 	AssuranceLevel string
 }
 
+// ResolveSigningToken returns a short-lived OIDC token for the identity that
+// should sign in the current environment. A local session is exchanged through
+// the platform's purpose-specific sign-token endpoint; a registered CI workflow
+// uses a fresh ambient OIDC token. Neither token is persisted here.
+//
+// audience is the Fulcio OIDC audience (normally "sigstore"), not a platform
+// API audience. Keeping the argument explicit prevents a token minted for login
+// or Archivista from being replayed into the signer.
+func ResolveSigningToken(platformURL, audience string) (SignTokenResult, error) {
+	cred, err := LookupAny(platformURL)
+	if err != nil {
+		return SignTokenResult{}, fmt.Errorf("resolve platform session: %w", err)
+	}
+	if cred != nil && cred.AuthMode != AuthModeWorkflowOIDC {
+		if cred.Token == "" {
+			return SignTokenResult{}, fmt.Errorf("platform session carries no signing credential")
+		}
+		return ExchangeSignTokenResult(platformURL, cred.Token)
+	}
+	if cred != nil && cred.AuthMode == AuthModeWorkflowOIDC && WorkflowOIDCAvailable() {
+		token, err := workflowOIDCFetcher(audience)
+		if err != nil {
+			return SignTokenResult{}, fmt.Errorf("mint workflow signing token: %w", err)
+		}
+		if token == "" {
+			return SignTokenResult{}, fmt.Errorf("workflow signing token was empty")
+		}
+		return SignTokenResult{Token: token, AssuranceLevel: "workload"}, nil
+	}
+	return SignTokenResult{}, fmt.Errorf("no CI/lock platform signing identity; run 'cilock login' or register this workflow and grant permissions: id-token: write")
+}
+
 // ExchangeSignToken trades a stored platform session credential for a
 // short-lived OIDC token suitable for keyless Fulcio signing. It POSTs to
 // <platformURL>/auth/oauth/sign-token with the session credential as a bearer

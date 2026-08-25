@@ -41,6 +41,22 @@ If HEAD cannot be resolved (`reference not found` — e.g. a brand-new repo with
 
 Almost every CI step that runs inside a git checkout. The captured `commithash` is the canonical SLSA source identifier most release policies pin against, and the `parenthash` subjects make the resulting collection traversable along the commit-graph during policy evaluation.
 
+## Keyless commit and tag signing
+
+The same `cilock` binary implements Git's standard X.509 signing protocol. Configure the current repository once:
+
+```bash
+cilock git configure
+git commit -S -m "feat: signed by CI/lock"
+git tag -s v1.2.3 -m "v1.2.3"
+git verify-commit HEAD
+git verify-tag v1.2.3
+```
+
+CI/lock defaults to the hosted TestifySec platform. It exchanges the current stored session or registered workflow identity for a short-lived Fulcio certificate, signs with an ephemeral in-memory key, and requires an RFC 3161 timestamp from the platform TSA. Private installations use the same protocol with the organization's TestifySec appliance. No signing flag, platform flag, separate `gitsign` executable, or credential-cache daemon is required.
+
+This covers the everyday gitsign-compatible Git surface: signed commits, signed annotated tags, `git log --show-signature`, `git verify-commit`, and `git verify-tag`. CI/lock is designed for an organization's private trust infrastructure, so it uses platform discovery and pinned private trust instead of gitsign's public-community TUF/Rekor configuration. CI/lock's existing `run`, `attest`, and `verify` commands remain the attestation and policy interface; it does not duplicate gitsign's source-predicate subcommands.
+
 ## Flags
 
 None. The attestor is configured entirely by the working directory; there are no cobra flag registrations.
@@ -81,6 +97,7 @@ Emitted subjects: `commithash:<sha1>`, `authoremail:<email>`, `committeremail:<e
 - **Submodules** are not traversed — only the outer repo's HEAD is recorded.
 - **Remote URL scrubbing.** URLs are parsed and `User` is cleared before recording, so `https://x-access-token:TOKEN@github.com/...` becomes `https://github.com/...`. If parsing fails the raw URL is recorded — review remotes if you've put credentials in non-URL syntax.
 - **Dirty trees still attest.** A non-empty `status` map does not fail the attestor; downstream policy must reject dirty builds explicitly if that is the requirement.
+- **Signing and attesting are distinct.** The Git signature authenticates the proposed commit or tag. The `git` attestor records repository state inside signed in-toto evidence. Pushgate policy can require both without treating either as a substitute for the other.
 
 ## CLI example
 

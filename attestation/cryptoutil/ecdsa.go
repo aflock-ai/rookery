@@ -53,6 +53,14 @@ func (s *ECDSASigner) Verifier() (Verifier, error) {
 	return NewECDSAVerifier(&s.priv.PublicKey, s.hash), nil
 }
 
+// CryptoSigner returns the same in-memory key capability used by Sign. It is
+// intentionally an interface, not the concrete private key, so protocol
+// adapters can produce standard signature containers without exporting key
+// material.
+func (s *ECDSASigner) CryptoSigner() crypto.Signer {
+	return &cryptoSignerCapability{signer: s.priv}
+}
+
 type ECDSAVerifier struct {
 	pub  *ecdsa.PublicKey
 	hash crypto.Hash

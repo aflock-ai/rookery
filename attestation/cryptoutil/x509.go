@@ -15,6 +15,7 @@
 package cryptoutil
 
 import (
+	"crypto"
 	"crypto/x509"
 	"encoding/pem"
 	"io"
@@ -167,6 +168,16 @@ func (s *X509Signer) Intermediates() []*x509.Certificate {
 
 func (s *X509Signer) Roots() []*x509.Certificate {
 	return s.roots
+}
+
+// CryptoSigner forwards the underlying in-memory capability when the signer
+// supports it. X.509Signer itself still exposes no private-key bytes.
+func (s *X509Signer) CryptoSigner() crypto.Signer {
+	provider, ok := s.signer.(CryptoSignerProvider)
+	if !ok {
+		return nil
+	}
+	return provider.CryptoSigner()
 }
 
 func certificatesToPool(certs []*x509.Certificate) *x509.CertPool {

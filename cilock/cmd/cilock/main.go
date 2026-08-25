@@ -4,6 +4,10 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"os"
+
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/cilock/cli"
 
@@ -75,6 +79,17 @@ import (
 )
 
 func main() {
+	// Git executes gpg.x509.program directly and cannot include a subcommand in
+	// that configuration value. Dispatch the narrow signing protocol before
+	// Cobra, update checks, logging, or telemetry can write to its streams.
+	if cli.IsGitSignerInvocation(os.Args[1:]) || cli.IsGitVerifyInvocation(os.Args[1:]) {
+		if err := cli.RunGitProtocol(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, "cilock git protocol:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Register legacy witness.dev type aliases so cilock can consume
 	// attestations produced by witness (and vice versa).
 	attestation.RegisterLegacyAliases()

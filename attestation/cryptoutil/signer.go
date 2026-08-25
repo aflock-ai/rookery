@@ -38,6 +38,24 @@ type Signer interface {
 	Verifier() (Verifier, error)
 }
 
+// CryptoSignerProvider exposes an in-memory signing capability to protocol
+// adapters that require crypto.Signer semantics (for example CMS/Git signing).
+// It never exports private-key bytes. Callers must keep the capability within
+// the short-lived signing process and must not persist or hand it to plugins.
+type CryptoSignerProvider interface {
+	CryptoSigner() crypto.Signer
+}
+
+// cryptoSignerCapability deliberately hides the concrete private-key type while
+// preserving the standard signing capability needed by protocol adapters.
+type cryptoSignerCapability struct{ signer crypto.Signer }
+
+func (c *cryptoSignerCapability) Public() crypto.PublicKey { return c.signer.Public() }
+
+func (c *cryptoSignerCapability) Sign(random io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	return c.signer.Sign(random, digest, opts)
+}
+
 type KeyIdentifier interface {
 	KeyID() (string, error)
 }

@@ -176,6 +176,45 @@ cilock attest -a github-review \
 
 ---
 
+## Git commit signing
+
+The same `cilock` binary can serve as Git's X.509 signing program. Configure it
+once in the repository (or add `--global` if that is your intended default):
+
+```bash
+git config gpg.format x509
+git config gpg.x509.program cilock
+git config commit.gpgsign true
+```
+
+Or configure the current repository in one step (add `--global` for the
+current user's global Git config):
+
+```bash
+cilock git configure
+```
+
+Normal use needs no platform flag. CI/lock defaults to
+`https://platform.testifysec.com`, exchanges the stored session for a
+short-lived Fulcio credential, creates an ephemeral signing key, and requires an
+RFC 3161 timestamp from the platform TSA. A TSA failure aborts the commit rather
+than emitting an untimestamped signature. Registered GitHub workflows use their
+ambient workload OIDC identity instead of a stored session.
+
+Enterprise and development installations can set `CILOCK_PLATFORM_URL` to the
+appliance origin. Git author and committer fields are unchanged; the X.509
+certificate records the authenticated platform principal. The same program
+verifies the CMS signature, pinned Fulcio chain, and mandatory platform TSA:
+
+```bash
+git commit -S -m "feat: signed with CI/lock"
+git tag -s v1.2.3 -m "v1.2.3"
+git verify-commit HEAD
+git verify-tag v1.2.3
+```
+
+---
+
 ## `cilock verify`
 
 ```
