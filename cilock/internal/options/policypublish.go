@@ -44,6 +44,23 @@ import (
 	"github.com/aflock-ai/rookery/cilock/internal/config"
 )
 
+// GraphQL variable and input-field names shared by the platform mutations in
+// this package (policy publishing here, credential registration in trust.go).
+// These are wire names the server defines — naming them once keeps the two
+// files from drifting apart on a rename, and makes a schema change one edit
+// rather than a hunt through map literals.
+const (
+	// gqlVarInput is the variables-map key every `mutation(...$input: XInput!)`
+	// is invoked under.
+	gqlVarInput = "input"
+	// gqlFieldName is the `name` argument, used both as a lookup-query variable
+	// and as an input field on create mutations.
+	gqlFieldName = "name"
+	// gqlFieldTenantID is the `tenantID` input field the schema requires on
+	// every tenant-scoped create mutation.
+	gqlFieldTenantID = "tenantID"
+)
+
 // PolicyClient is the minimal platform GraphQL client for policy publishing. It
 // is constructed with a fully-resolved GraphQL endpoint URL (the caller resolves
 // discovery → ${platform}/query) and the session bearer token.
@@ -214,7 +231,7 @@ func (c *PolicyClient) ResolvePolicyDefinitionByName(ctx context.Context, name s
 			} `json:"edges"`
 		} `json:"policyDefinitions"`
 	}
-	if err := c.post(ctx, policyDefinitionByNameQuery, map[string]any{"name": name}, &out); err != nil {
+	if err := c.post(ctx, policyDefinitionByNameQuery, map[string]any{gqlFieldName: name}, &out); err != nil {
 		return nil, fmt.Errorf("resolve policy definition %q: %w", name, err)
 	}
 	if len(out.PolicyDefinitions.Edges) == 0 {
@@ -259,7 +276,7 @@ func (c *PolicyClient) ResolveProduct(ctx context.Context, idOrName string) (*Pr
 			} `json:"edges"`
 		} `json:"products"`
 	}
-	if err := c.post(ctx, productByNameQuery, map[string]any{"name": idOrName}, &out); err != nil {
+	if err := c.post(ctx, productByNameQuery, map[string]any{gqlFieldName: idOrName}, &out); err != nil {
 		return nil, fmt.Errorf("resolve product %q: %w", idOrName, err)
 	}
 	switch len(out.Products.Edges) {
@@ -491,15 +508,15 @@ func (c *PolicyClient) CreatePolicyDefinition(ctx context.Context, tenantID, nam
 		description = "Published via cilock policy push"
 	}
 	input := map[string]any{
-		"tenantID":    tenantID,
-		"name":        name,
-		"description": description,
-		"isActive":    true,
+		gqlFieldTenantID: tenantID,
+		gqlFieldName:     name,
+		"description":    description,
+		"isActive":       true,
 	}
 	var out struct {
 		CreatePolicyDefinition PolicyDefinitionRef `json:"createPolicyDefinition"`
 	}
-	if err := c.post(ctx, createPolicyDefinitionMutation, map[string]any{"input": input}, &out); err != nil {
+	if err := c.post(ctx, createPolicyDefinitionMutation, map[string]any{gqlVarInput: input}, &out); err != nil {
 		return nil, fmt.Errorf("create policy definition %q: %w", name, err)
 	}
 	if out.CreatePolicyDefinition.ID == "" {
@@ -518,7 +535,7 @@ const createPolicyReleaseMutation = `mutation CilockCreatePolicyRelease($input: 
 // the edges that make the release point at the published policy.
 func (c *PolicyClient) CreatePolicyRelease(ctx context.Context, tenantID, definitionID, dsseID, tag string) (*PolicyReleaseRef, error) {
 	input := map[string]any{
-		"tenantID":           tenantID,
+		gqlFieldTenantID:     tenantID,
 		"tag":                tag,
 		"policyDefinitionID": definitionID,
 		"dsseID":             dsseID,
@@ -526,7 +543,7 @@ func (c *PolicyClient) CreatePolicyRelease(ctx context.Context, tenantID, defini
 	var out struct {
 		CreatePolicyRelease PolicyReleaseRef `json:"createPolicyRelease"`
 	}
-	if err := c.post(ctx, createPolicyReleaseMutation, map[string]any{"input": input}, &out); err != nil {
+	if err := c.post(ctx, createPolicyReleaseMutation, map[string]any{gqlVarInput: input}, &out); err != nil {
 		return nil, fmt.Errorf("create policy release %q: %w", tag, err)
 	}
 	if out.CreatePolicyRelease.ID == "" {
@@ -557,7 +574,7 @@ type PolicyBindingResult struct {
 // bound. releaseID may be empty (bind the definition, latest release applies).
 func (c *PolicyClient) CreatePolicyBinding(ctx context.Context, tenantID, definitionID, releaseID, productID string) (*PolicyBindingResult, error) {
 	input := map[string]any{
-		"tenantID":           tenantID,
+		gqlFieldTenantID:     tenantID,
 		"policyDefinitionID": definitionID,
 		"productID":          productID,
 	}
@@ -567,7 +584,7 @@ func (c *PolicyClient) CreatePolicyBinding(ctx context.Context, tenantID, defini
 	var out struct {
 		CreatePolicyBinding PolicyBindingResult `json:"createPolicyBinding"`
 	}
-	if err := c.post(ctx, createPolicyBindingMutation, map[string]any{"input": input}, &out); err != nil {
+	if err := c.post(ctx, createPolicyBindingMutation, map[string]any{gqlVarInput: input}, &out); err != nil {
 		return nil, fmt.Errorf("create policy binding: %w", err)
 	}
 	if out.CreatePolicyBinding.ID == "" {

@@ -13,6 +13,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// goSubcmdTest is the `go` tool subcommand the test runners shell out to. It
+// is deliberately NOT shared with this cobra command's own "test" name or with
+// the "test" check label below: those are lockctl's vocabulary, this one is the
+// Go toolchain's, and they are free to diverge.
+const goSubcmdTest = "test"
+
 var testCmd = &cobra.Command{
 	Use:   "test",
 	Short: "Run CI checks locally",
@@ -473,7 +479,7 @@ func runGoTests(module string, short, audit, verbose bool) checkResult {
 
 	modules := workspaceModules(module)
 	for _, dir := range modules {
-		args := []string{"test", "--failfast", "-count=1"}
+		args := []string{goSubcmdTest, "--failfast", "-count=1"}
 		if short {
 			args = append(args, "-short")
 		}
@@ -515,7 +521,7 @@ func runGoTestsRace(module string, verbose bool) checkResult {
 
 	modules := workspaceModules(module)
 	for _, dir := range modules {
-		args := []string{"test", "-race", "--failfast", "-count=1"}
+		args := []string{goSubcmdTest, "-race", "--failfast", "-count=1"}
 		if verbose {
 			args = append(args, "-v")
 		}
@@ -731,7 +737,7 @@ func ensureGolangciLint() error {
 }
 
 func installGolangciLint() error {
-	c := exec.Command("go", "install", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1")
+	c := exec.Command("go", "install", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1")
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()

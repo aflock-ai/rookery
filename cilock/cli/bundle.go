@@ -154,7 +154,7 @@ func bundleInspectCmd() *cobra.Command {
 			return runBundleInspect(args[0], jsonOut, cmd.OutOrStdout())
 		},
 	}
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit the manifest as JSON (suppresses the per-envelope summary)")
+	cmd.Flags().BoolVar(&jsonOut, flagJSON, false, "Emit the manifest as JSON (suppresses the per-envelope summary)")
 	return cmd
 }
 

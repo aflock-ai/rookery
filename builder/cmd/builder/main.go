@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,43 +32,40 @@ import (
 
 const fipsModeOff = "off"
 
-// Preset plugin sets. Each entry is a full import path.
-var presets = map[string][]string{
-	"minimal": {
+// The presets NEST: minimal is contained in cicd, which is contained in all.
+// Expressing that containment structurally, rather than repeating the shared
+// import paths across three literal lists, means each path is written exactly
+// once and a plugin added to a narrower preset cannot be forgotten in a wider
+// one.
+var (
+	presetMinimalPlugins = []string{
 		"github.com/aflock-ai/rookery/plugins/attestors/commandrun",
 		"github.com/aflock-ai/rookery/plugins/attestors/environment",
 		"github.com/aflock-ai/rookery/plugins/attestors/git",
 		"github.com/aflock-ai/rookery/plugins/attestors/material",
 		"github.com/aflock-ai/rookery/plugins/attestors/product",
 		"github.com/aflock-ai/rookery/plugins/signers/file",
-	},
-	"cicd": {
-		"github.com/aflock-ai/rookery/plugins/attestors/commandrun",
-		"github.com/aflock-ai/rookery/plugins/attestors/environment",
-		"github.com/aflock-ai/rookery/plugins/attestors/git",
+	}
+
+	// cicd adds the forge-provenance attestors on top of minimal.
+	presetCICDPlugins = withPlugins(presetMinimalPlugins,
 		"github.com/aflock-ai/rookery/plugins/attestors/github",
 		"github.com/aflock-ai/rookery/plugins/attestors/gitlab",
-		"github.com/aflock-ai/rookery/plugins/attestors/material",
-		"github.com/aflock-ai/rookery/plugins/attestors/product",
 		"github.com/aflock-ai/rookery/plugins/attestors/slsa",
-		"github.com/aflock-ai/rookery/plugins/signers/file",
-	},
-	"all": {
+	)
+
+	// all is every attestor and signer rookery ships, on top of cicd.
+	presetAllPlugins = withPlugins(presetCICDPlugins,
 		"github.com/aflock-ai/rookery/plugins/attestors/asff",
 		"github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild",
 		"github.com/aflock-ai/rookery/plugins/attestors/aws-config",
 		"github.com/aflock-ai/rookery/plugins/attestors/aws-iid",
-		"github.com/aflock-ai/rookery/plugins/attestors/commandrun",
 		"github.com/aflock-ai/rookery/plugins/attestors/configuration",
 		"github.com/aflock-ai/rookery/plugins/attestors/docker",
 		"github.com/aflock-ai/rookery/plugins/attestors/docker-bench",
-		"github.com/aflock-ai/rookery/plugins/attestors/environment",
 		"github.com/aflock-ai/rookery/plugins/attestors/gcp-iit",
-		"github.com/aflock-ai/rookery/plugins/attestors/git",
-		"github.com/aflock-ai/rookery/plugins/attestors/github",
 		"github.com/aflock-ai/rookery/plugins/attestors/githubaction",
 		"github.com/aflock-ai/rookery/plugins/attestors/githubwebhook",
-		"github.com/aflock-ai/rookery/plugins/attestors/gitlab",
 		"github.com/aflock-ai/rookery/plugins/attestors/govulncheck",
 		"github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof",
 		"github.com/aflock-ai/rookery/plugins/attestors/inspec",
@@ -77,20 +75,17 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/attestors/kube-bench",
 		"github.com/aflock-ai/rookery/plugins/attestors/link",
 		"github.com/aflock-ai/rookery/plugins/attestors/lockfiles",
-		"github.com/aflock-ai/rookery/plugins/attestors/material",
 		"github.com/aflock-ai/rookery/plugins/attestors/maven",
 		"github.com/aflock-ai/rookery/plugins/attestors/oci",
 		"github.com/aflock-ai/rookery/plugins/attestors/omnitrail",
 		"github.com/aflock-ai/rookery/plugins/attestors/oscap",
 		"github.com/aflock-ai/rookery/plugins/attestors/pip-install",
 		"github.com/aflock-ai/rookery/plugins/attestors/policyverify",
-		"github.com/aflock-ai/rookery/plugins/attestors/product",
 		"github.com/aflock-ai/rookery/plugins/attestors/prowler",
 		"github.com/aflock-ai/rookery/plugins/attestors/sarif",
 		"github.com/aflock-ai/rookery/plugins/attestors/sbom",
 		"github.com/aflock-ai/rookery/plugins/attestors/secretscan",
 		"github.com/aflock-ai/rookery/plugins/attestors/sinkhole-flows",
-		"github.com/aflock-ai/rookery/plugins/attestors/slsa",
 		"github.com/aflock-ai/rookery/plugins/attestors/steampipe",
 		"github.com/aflock-ai/rookery/plugins/attestors/structured-data",
 		"github.com/aflock-ai/rookery/plugins/attestors/system-packages",
@@ -99,7 +94,6 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/attestors/vex",
 		"github.com/aflock-ai/rookery/plugins/attestors/vsa",
 		"github.com/aflock-ai/rookery/plugins/signers/debug-signer",
-		"github.com/aflock-ai/rookery/plugins/signers/file",
 		"github.com/aflock-ai/rookery/plugins/signers/fulcio",
 		"github.com/aflock-ai/rookery/plugins/signers/kms/aws",
 		"github.com/aflock-ai/rookery/plugins/signers/kms/azure",
@@ -107,7 +101,23 @@ var presets = map[string][]string{
 		"github.com/aflock-ai/rookery/plugins/signers/spiffe",
 		"github.com/aflock-ai/rookery/plugins/signers/vault",
 		"github.com/aflock-ai/rookery/plugins/signers/vault-transit",
-	},
+	)
+)
+
+// Preset plugin sets. Each entry is a full import path.
+var presets = map[string][]string{
+	"minimal": presetMinimalPlugins,
+	"cicd":    presetCICDPlugins,
+	"all":     presetAllPlugins,
+}
+
+// withPlugins returns base plus extra as a new sorted, de-duplicated slice.
+// It never aliases base's backing array, so a wider preset cannot mutate a
+// narrower one.
+func withPlugins(base []string, extra ...string) []string {
+	out := slices.Concat(base, extra)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // resolvedPlugin is a plugin ready for the build stage.

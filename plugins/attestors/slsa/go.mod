@@ -43,7 +43,6 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/oci v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/product v0.0.0-00010101000000-000000000000
 	github.com/invopop/jsonschema v0.13.0
-	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f
 )
 
 require (

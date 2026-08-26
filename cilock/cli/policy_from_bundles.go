@@ -530,7 +530,7 @@ func extractTSARoots(timestamps []bundleSigTimestamp) []tsaRoot {
 			}
 			out = append(out, tsaRoot{
 				keyID: kid,
-				pem:   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}),
+				pem:   pem.EncodeToMemory(&pem.Block{Type: pemTypeCertificate, Bytes: cert.Raw}),
 			})
 		}
 	}

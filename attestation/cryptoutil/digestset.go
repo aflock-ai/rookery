@@ -29,57 +29,70 @@ import (
 	"github.com/aflock-ai/rookery/attestation/gitoid"
 )
 
+// The canonical wire names for the digest algorithms a DigestSet can carry.
+// These strings are part of the attestation format: they are the map keys in
+// serialized DigestSets and the values `cilock run --hashes` accepts, so they
+// are a stable vocabulary rather than incidental literals. Tests deliberately
+// spell the literals out so a rename here cannot silently move the wire format.
+const (
+	digestNameSHA256       = "sha256"
+	digestNameSHA1         = "sha1"
+	digestNameGitOIDSHA256 = "gitoid:sha256"
+	digestNameGitOIDSHA1   = "gitoid:sha1"
+	digestNameDirHash      = "dirHash"
+)
+
 var (
 	hashNames = map[DigestValue]string{
 		{
 			Hash:    crypto.SHA256,
 			GitOID:  false,
 			DirHash: false,
-		}: "sha256",
+		}: digestNameSHA256,
 		{
 			Hash:    crypto.SHA1,
 			GitOID:  false,
 			DirHash: false,
-		}: "sha1",
+		}: digestNameSHA1,
 		{
 			Hash:    crypto.SHA256,
 			GitOID:  true,
 			DirHash: false,
-		}: "gitoid:sha256",
+		}: digestNameGitOIDSHA256,
 		{
 			Hash:    crypto.SHA1,
 			GitOID:  true,
 			DirHash: false,
-		}: "gitoid:sha1",
+		}: digestNameGitOIDSHA1,
 		{
 			Hash:    crypto.SHA256,
 			GitOID:  false,
 			DirHash: true,
-		}: "dirHash",
+		}: digestNameDirHash,
 	}
 
 	hashesByName = map[string]DigestValue{
-		"sha256": {
+		digestNameSHA256: {
 			crypto.SHA256,
 			false,
 			false,
 		},
-		"sha1": {
+		digestNameSHA1: {
 			crypto.SHA1,
 			false,
 			false,
 		},
-		"gitoid:sha256": {
+		digestNameGitOIDSHA256: {
 			crypto.SHA256,
 			true,
 			false,
 		},
-		"gitoid:sha1": {
+		digestNameGitOIDSHA1: {
 			crypto.SHA1,
 			true,
 			false,
 		},
-		"dirHash": {
+		digestNameDirHash: {
 			crypto.SHA256,
 			false,
 			true,
@@ -200,9 +213,9 @@ func HashFromString(name string) (crypto.Hash, error) {
 //     digest (e.g. a gitoid URI or a dirhash "h1:..." string) and only the
 //     algorithm allowlist applies.
 var matchableSubjectAlgorithms = map[string]int{
-	"sha256":        2 * (256 / 8), // 64 hex chars
-	"gitoid:sha256": 0,             // gitoid URI string, not plain hex
-	"dirHash":       0,             // dirhash h1: string, not plain hex
+	digestNameSHA256:       2 * (256 / 8), // 64 hex chars
+	digestNameGitOIDSHA256: 0,             // gitoid URI string, not plain hex
+	digestNameDirHash:      0,             // dirhash h1: string, not plain hex
 }
 
 // isHexString reports whether s is non-empty and composed solely of hex
@@ -445,7 +458,7 @@ type SubjectMatchScope struct {
 //     attestation type (".../attestations/GIT/v0.1", a DIFFERENT type) into
 //     the trusted git namespace.
 func isGitCommitSubject(subjectName, algorithm, value string) bool {
-	if algorithm != "sha1" {
+	if algorithm != digestNameSHA1 {
 		return false
 	}
 	if len(value) != sha1HexLen || !isHexString(value) {
@@ -814,7 +827,7 @@ func CalculateDigestSetFromDir(dir string, hashes []DigestValue) (DigestSet, err
 	}
 
 	digestSetByName := make(map[string]string)
-	digestSetByName["dirHash"] = dirHash
+	digestSetByName[digestNameDirHash] = dirHash
 
 	return NewDigestSet(digestSetByName)
 }

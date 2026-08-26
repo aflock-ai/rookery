@@ -35,6 +35,20 @@ const (
 	doctorSkip = "skip"
 )
 
+// Doctor check NAMES. These are the stable identifiers an agent selects on in
+// the JSON report (`.checks[] | select(.name=="upload-auth")`), so they are a
+// published interface, not display strings — several are emitted from more
+// than one branch and must agree exactly for a consumer to see one check
+// rather than two.
+const (
+	checkNameLoggedIn          = "logged-in"
+	checkNamePlatformReachable = "platform-reachable"
+	checkNameFulcio            = "fulcio"
+	checkNameTSA               = "tsa"
+	checkNameArchivista        = "archivista"
+	checkNameUploadAuth        = "upload-auth"
+)
+
 // DoctorCheck is one preflight check in the doctor report.
 type DoctorCheck struct {
 	Name   string `json:"name"`
@@ -116,7 +130,7 @@ for a machine-readable report an agent can gate on (report.ok).`,
 	}
 	cmd.Flags().StringVar(&platformURL, "platform-url", "", "TestifySec platform URL to probe (default "+platformconfig.DefaultPlatformURL+")")
 	cmd.Flags().StringVar(&archivistaServer, "archivista-server", "", "Archivista server you intend to upload to (defaults to the platform's own); the upload-auth check compares its origin to your login session")
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit the preflight report as a single JSON object (report.ok is the rollup to gate on)")
+	cmd.Flags().BoolVar(&jsonOut, flagJSON, false, "Emit the preflight report as a single JSON object (report.ok is the rollup to gate on)")
 	return cmd
 }
 
@@ -170,12 +184,12 @@ func runDoctorChecks(platformURL, archivistaServer string) *DoctorReport {
 
 func checkLoggedIn(report *DoctorReport, platformURL string, cred *auth.Credential, posture string, err error) {
 	if err != nil {
-		report.add(DoctorCheck{Name: "logged-in", Status: doctorWarn, Detail: fmt.Sprintf("could not read credential store: %v", err)})
+		report.add(DoctorCheck{Name: checkNameLoggedIn, Status: doctorWarn, Detail: fmt.Sprintf("could not read credential store: %v", err)})
 		return
 	}
 	if cred == nil {
 		report.add(DoctorCheck{
-			Name:   "logged-in",
+			Name:   checkNameLoggedIn,
 			Status: doctorWarn,
 			Detail: "no stored session for this platform",
 			Hint:   fmt.Sprintf("run: cilock login --platform-url %s (a signed upload to a multi-tenant Archivista needs a tenant-scoped session token)", auth.NormalizeURL(platformURL)),
@@ -184,7 +198,7 @@ func checkLoggedIn(report *DoctorReport, platformURL string, cred *auth.Credenti
 	}
 	if cred.Expired() {
 		report.add(DoctorCheck{
-			Name:   "logged-in",
+			Name:   checkNameLoggedIn,
 			Status: doctorFail,
 			Detail: "stored session is EXPIRED",
 			Hint:   fmt.Sprintf("run: cilock login --platform-url %s", auth.NormalizeURL(platformURL)),
@@ -206,25 +220,25 @@ func checkLoggedIn(report *DoctorReport, platformURL string, cred *auth.Credenti
 	if posture != "" {
 		detail += " — " + posture
 	}
-	report.add(DoctorCheck{Name: "logged-in", Status: doctorPass, Detail: detail})
+	report.add(DoctorCheck{Name: checkNameLoggedIn, Status: doctorPass, Detail: detail})
 }
 
 func checkPlatformReachable(report *DoctorReport, err error) {
 	if err != nil {
 		report.add(DoctorCheck{
-			Name:   "platform-reachable",
+			Name:   checkNamePlatformReachable,
 			Status: doctorFail,
 			Detail: fmt.Sprintf("discovery failed: %v", err),
 			Hint:   "confirm the platform URL is correct and reachable; discovery is served at /.well-known/judge-configuration (https required except on loopback)",
 		})
 		return
 	}
-	report.add(DoctorCheck{Name: "platform-reachable", Status: doctorPass, Detail: "discovery document fetched"})
+	report.add(DoctorCheck{Name: checkNamePlatformReachable, Status: doctorPass, Detail: "discovery document fetched"})
 }
 
 func checkDestinations(report *DoctorReport, pc platformconfig.PlatformConfig, disc *platformconfig.Discovery) {
-	report.add(DoctorCheck{Name: "fulcio", Status: doctorPass, Detail: pc.Fulcio})
-	report.add(DoctorCheck{Name: "tsa", Status: doctorPass, Detail: pc.TSA})
+	report.add(DoctorCheck{Name: checkNameFulcio, Status: doctorPass, Detail: pc.Fulcio})
+	report.add(DoctorCheck{Name: checkNameTSA, Status: doctorPass, Detail: pc.TSA})
 
 	archivistaDetail := pc.Archivista
 	status := doctorPass
@@ -235,7 +249,7 @@ func checkDestinations(report *DoctorReport, pc platformconfig.PlatformConfig, d
 		status = doctorWarn
 		archivistaDetail = fmt.Sprintf("%s (discovery advertises %s — they differ; pass --archivista-server to match)", pc.Archivista, disc.ArchivistaURL)
 	}
-	report.add(DoctorCheck{Name: "archivista", Status: status, Detail: archivistaDetail})
+	report.add(DoctorCheck{Name: checkNameArchivista, Status: status, Detail: archivistaDetail})
 }
 
 func checkUploadAuth(report *DoctorReport, cred *auth.Credential, archivistaTarget, platformArchivista string) {
@@ -246,7 +260,7 @@ func checkUploadAuth(report *DoctorReport, cred *auth.Credential, archivistaTarg
 		// (which would 401 just like a missing one; checkLoggedIn already
 		// flagged the expiry as a hard fail).
 		report.add(DoctorCheck{
-			Name:   "upload-auth",
+			Name:   checkNameUploadAuth,
 			Status: doctorWarn,
 			Detail: "no session bearer to attach to an Archivista upload",
 			Hint:   "a multi-tenant Archivista upload needs a tenant-scoped Judge API token — get one via 'cilock login' (the Fulcio signing token will 401 on /archivista/upload)",
@@ -256,13 +270,13 @@ func checkUploadAuth(report *DoctorReport, cred *auth.Credential, archivistaTarg
 		// is withheld (fail-closed) when the target origin differs — the
 		// silent sameOrigin footgun the spec calls out.
 		report.add(DoctorCheck{
-			Name:   "upload-auth",
+			Name:   checkNameUploadAuth,
 			Status: doctorWarn,
 			Detail: fmt.Sprintf("Archivista target %s differs from platform origin %s — the login session bearer will be WITHHELD (fail-closed 401)", archivistaTarget, platformArchivista),
 			Hint:   "upload to the platform's own Archivista, or pass an explicit --archivista-headers Authorization for the third-party target",
 		})
 	default:
-		report.add(DoctorCheck{Name: "upload-auth", Status: doctorPass, Detail: "login session will authorize uploads to " + archivistaTarget})
+		report.add(DoctorCheck{Name: checkNameUploadAuth, Status: doctorPass, Detail: "login session will authorize uploads to " + archivistaTarget})
 	}
 }
 

@@ -186,7 +186,7 @@ func (g GeminiCLIProvider) Inspect(_ context.Context, r InspectRequest) Inspecti
 	out.Environment = mergeEnv(agentEnvObs, selfEnvObs)
 
 	if v, ok := argvValue(r.Process.Argv, "--model", "-m"); ok {
-		out.Model = &Observation{Value: v, Source: "process.argv:--model", Assurance: AssuranceProcessObserved}
+		out.Model = &Observation{Value: v, Source: sourceArgvModelFlag, Assurance: AssuranceProcessObserved}
 		out.ArgvFields["model"] = v
 	}
 	modelBlocked := false
@@ -323,7 +323,7 @@ func (c CopilotCLIProvider) Inspect(_ context.Context, r InspectRequest) Inspect
 	// ClaudeCodeProvider.resolveModel: cilock's inherited copy describes
 	// cilock's launch, not the agent's.
 	if v, ok := argvValue(r.Process.Argv, "--model"); ok {
-		out.Model = &Observation{Value: v, Source: "process.argv:--model", Assurance: AssuranceProcessObserved}
+		out.Model = &Observation{Value: v, Source: sourceArgvModelFlag, Assurance: AssuranceProcessObserved}
 		out.ArgvFields["model"] = v
 	} else {
 		v, blocked := resolveEnvValue("COPILOT_MODEL", agentEnv)
@@ -349,21 +349,35 @@ func (c CopilotCLIProvider) Inspect(_ context.Context, r InspectRequest) Inspect
 	return out
 }
 
+// Product identifiers for the providers matched by executable basename. Each
+// value is at once the product name, the detection fingerprint prefix, and the
+// binary's basename, because these tools ship a single self-named executable —
+// tying them to one constant is what keeps a rename from silently splitting
+// detection from the recorded product.
+//
+// Vendor() deliberately does NOT use these: vendor and product are different
+// axes and only coincide by accident here (goose's vendor is "block").
+const (
+	productAider    = "aider"
+	productGoose    = "goose"
+	productOpenCode = "opencode"
+)
+
 // AiderProvider identifies aider.
 type AiderProvider struct{}
 
 func (AiderProvider) Vendor() string         { return "aider" }
-func (AiderProvider) Product() string        { return "aider" }
+func (AiderProvider) Product() string        { return productAider }
 func (AiderProvider) EnvAllowlist() []EnvKey { return nil }
 
 func (AiderProvider) Match(p ProcessInfo) MatchResult {
-	return basenameProvider{fpPrefix: "aider", names: []string{"aider", "aider.exe"}}.Match(p)
+	return basenameProvider{fpPrefix: productAider, names: []string{productAider, productAider + ".exe"}}.Match(p)
 }
 
 func (AiderProvider) Inspect(_ context.Context, r InspectRequest) Inspection {
 	out := Inspection{ArgvFields: map[string]string{}}
 	if v, ok := argvValue(r.Process.Argv, "--model"); ok {
-		out.Model = &Observation{Value: v, Source: "process.argv:--model", Assurance: AssuranceProcessObserved}
+		out.Model = &Observation{Value: v, Source: sourceArgvModelFlag, Assurance: AssuranceProcessObserved}
 		out.ArgvFields["model"] = v
 	} else {
 		out.Warnings = append(out.Warnings, "aider: effective model not observable")
@@ -375,7 +389,7 @@ func (AiderProvider) Inspect(_ context.Context, r InspectRequest) Inspection {
 type GooseProvider struct{}
 
 func (GooseProvider) Vendor() string  { return "block" }
-func (GooseProvider) Product() string { return "goose" }
+func (GooseProvider) Product() string { return productGoose }
 func (GooseProvider) EnvAllowlist() []EnvKey {
 	return []EnvKey{
 		{Name: "GOOSE_MODEL", RecordValue: true, Scopes: []EnvScope{EnvScopeAgent}},
@@ -384,7 +398,7 @@ func (GooseProvider) EnvAllowlist() []EnvKey {
 }
 
 func (GooseProvider) Match(p ProcessInfo) MatchResult {
-	return basenameProvider{fpPrefix: "goose", names: []string{"goose", "goose.exe"}}.Match(p)
+	return basenameProvider{fpPrefix: productGoose, names: []string{productGoose, productGoose + ".exe"}}.Match(p)
 }
 
 func (g GooseProvider) Inspect(_ context.Context, r InspectRequest) Inspection {
@@ -408,17 +422,17 @@ func (g GooseProvider) Inspect(_ context.Context, r InspectRequest) Inspection {
 type OpenCodeProvider struct{}
 
 func (OpenCodeProvider) Vendor() string         { return "opencode" }
-func (OpenCodeProvider) Product() string        { return "opencode" }
+func (OpenCodeProvider) Product() string        { return productOpenCode }
 func (OpenCodeProvider) EnvAllowlist() []EnvKey { return nil }
 
 func (OpenCodeProvider) Match(p ProcessInfo) MatchResult {
-	return basenameProvider{fpPrefix: "opencode", names: []string{"opencode", "opencode.exe"}}.Match(p)
+	return basenameProvider{fpPrefix: productOpenCode, names: []string{productOpenCode, productOpenCode + ".exe"}}.Match(p)
 }
 
 func (OpenCodeProvider) Inspect(_ context.Context, r InspectRequest) Inspection {
 	out := Inspection{ArgvFields: map[string]string{}}
 	if v, ok := argvValue(r.Process.Argv, "--model", "-m"); ok {
-		out.Model = &Observation{Value: v, Source: "process.argv:--model", Assurance: AssuranceProcessObserved}
+		out.Model = &Observation{Value: v, Source: sourceArgvModelFlag, Assurance: AssuranceProcessObserved}
 		out.ArgvFields["model"] = v
 	} else {
 		out.Warnings = append(out.Warnings, "opencode: effective model not observable")
@@ -451,12 +465,12 @@ func userScopedSettings(workingDir, dir, file, label string) (candidates []setti
 	out := make([]settingsCandidate, 0, 2)
 	if known && root != "" {
 		out = append(out, settingsCandidate{
-			path: filepath.Join(root, dir, file), scope: "project", label: label,
+			path: filepath.Join(root, dir, file), scope: configScopeProject, label: label,
 		})
 	}
 	if home := userHomeDir(); home != "" {
 		out = append(out, settingsCandidate{
-			path: filepath.Join(home, dir, file), scope: "user", label: label,
+			path: filepath.Join(home, dir, file), scope: configScopeUser, label: label,
 		})
 	}
 	return out, known

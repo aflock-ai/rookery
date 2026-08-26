@@ -275,7 +275,7 @@ func (c ClaudeCodeProvider) resolveModel(r InspectRequest, agentEnv, selfEnv env
 // lower-precedence settings files are BLOCKED from answering.
 func claudeModelFromArgvOrEnv(r InspectRequest, agentEnv, selfEnv envScope) (*Observation, bool, []string) {
 	if v, ok := argvValue(r.Process.Argv, "--model"); ok {
-		return &Observation{Value: v, Source: "process.argv:--model", Assurance: AssuranceProcessObserved}, false, nil
+		return &Observation{Value: v, Source: sourceArgvModelFlag, Assurance: AssuranceProcessObserved}, false, nil
 	}
 	// The AGENT's own environment is the only one that can establish the
 	// model. cilock's inherited copy is set by whatever sits between the
@@ -399,16 +399,16 @@ func claudeSettingsPaths(repoRoot string) []settingsCandidate {
 	for _, managed := range managedClaudeSettingsPaths() {
 		// The managed path is a fixed system location that carries no user or
 		// repository segment, so the path is its own scope-relative label.
-		out = append(out, settingsCandidate{path: managed, scope: "managed", label: managed})
+		out = append(out, settingsCandidate{path: managed, scope: configScopeManaged, label: managed})
 	}
 	if repoRoot != "" {
 		out = append(out,
-			settingsCandidate{path: filepath.Join(repoRoot, ".claude", "settings.local.json"), scope: "project-local", label: ".claude/settings.local.json"},
-			settingsCandidate{path: filepath.Join(repoRoot, ".claude", "settings.json"), scope: "project", label: ".claude/settings.json"},
+			settingsCandidate{path: filepath.Join(repoRoot, ".claude", "settings.local.json"), scope: configScopeProjectLocal, label: ".claude/settings.local.json"},
+			settingsCandidate{path: filepath.Join(repoRoot, ".claude", "settings.json"), scope: configScopeProject, label: ".claude/settings.json"},
 		)
 	}
 	if home := userHomeDir(); home != "" {
-		out = append(out, settingsCandidate{path: filepath.Join(home, ".claude", "settings.json"), scope: "user", label: ".claude/settings.json"})
+		out = append(out, settingsCandidate{path: filepath.Join(home, ".claude", "settings.json"), scope: configScopeUser, label: ".claude/settings.json"})
 	}
 	return out
 }

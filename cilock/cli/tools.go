@@ -34,6 +34,37 @@ const (
 	attestorCommandRun   = "command-run"
 )
 
+// Trigger kinds reported by `cilock tools list` and `cilock tools test-plan`.
+// Each value mirrors a detector.yaml predicate tag verbatim, so the vocabulary
+// this command documents is the one the matcher actually accepts — with one
+// deliberate exception: triggerProbe is cilock's OWN grouping for the four
+// reachability predicates (imds_reachable, gcp_metadata_reachable,
+// azure_metadata_reachable, socket_listening). Those are separate tags in the
+// schema but one concept to a human reading the tool output, so the tool
+// collapses them and puts the specific predicate in the trigger's Value.
+//
+// Keep these in sync with the matcher tags in attestation/detection; a value
+// that drifts here misdocuments the schema rather than failing loudly.
+const (
+	triggerArgvPrefix      = "argv_prefix"
+	triggerArgvContains    = "argv_contains"
+	triggerArgvRegex       = "argv_regex"
+	triggerEnvSet          = "env_set"
+	triggerEnvEquals       = "env_equals"
+	triggerFileExists      = "file_exists"
+	triggerFileGlob        = "file_glob"
+	triggerProbe           = "probe"
+	triggerProductGlob     = "product_glob"
+	triggerProductMime     = "product_mime"
+	triggerMaterialChanged = "material_changed"
+	triggerExitCode        = "exit_code"
+
+	// triggerExecObservedPrefix is prepended to a nested trigger's kind when
+	// the predicate matched against an observed child exec rather than at the
+	// pre-gate, e.g. "exec_observed_argv_prefix".
+	triggerExecObservedPrefix = "exec_observed_"
+)
+
 // ToolsCmd is `cilock tools` — discoverability surface for what cilock
 // detects and how to test each detector.
 //
@@ -336,42 +367,42 @@ func predicateTriggers(gate string, p *detection.Predicate) []toolTrigger {
 		// Negative predicates aren't surfaced as triggers (they describe
 		// what *prevents* a match, not what causes one).
 	case len(p.ArgvPrefix) > 0:
-		out = append(out, toolTrigger{Gate: gate, Kind: "argv_prefix", Value: strings.Join(p.ArgvPrefix, " ")})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerArgvPrefix, Value: strings.Join(p.ArgvPrefix, " ")})
 	case p.ArgvContains != "":
-		out = append(out, toolTrigger{Gate: gate, Kind: "argv_contains", Value: p.ArgvContains})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerArgvContains, Value: p.ArgvContains})
 	case p.ArgvRegex != "":
-		out = append(out, toolTrigger{Gate: gate, Kind: "argv_regex", Value: p.ArgvRegex})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerArgvRegex, Value: p.ArgvRegex})
 	case p.EnvSet != "":
-		out = append(out, toolTrigger{Gate: gate, Kind: "env_set", Value: p.EnvSet})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerEnvSet, Value: p.EnvSet})
 	case p.EnvEquals != nil:
-		out = append(out, toolTrigger{Gate: gate, Kind: "env_equals", Value: p.EnvEquals.Var + "=" + p.EnvEquals.Value})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerEnvEquals, Value: p.EnvEquals.Var + "=" + p.EnvEquals.Value})
 	case p.FileExists != "":
-		out = append(out, toolTrigger{Gate: gate, Kind: "file_exists", Value: p.FileExists})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerFileExists, Value: p.FileExists})
 	case len(p.FileGlob) > 0:
-		out = append(out, toolTrigger{Gate: gate, Kind: "file_glob", Value: strings.Join(p.FileGlob, " | ")})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerFileGlob, Value: strings.Join(p.FileGlob, " | ")})
 	case p.IMDSReachable != nil:
-		out = append(out, toolTrigger{Gate: gate, Kind: "probe", Value: fmt.Sprintf("imds_reachable=%v", *p.IMDSReachable)})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerProbe, Value: fmt.Sprintf("imds_reachable=%v", *p.IMDSReachable)})
 	case p.GCPMetadataReachable != nil:
-		out = append(out, toolTrigger{Gate: gate, Kind: "probe", Value: fmt.Sprintf("gcp_metadata_reachable=%v", *p.GCPMetadataReachable)})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerProbe, Value: fmt.Sprintf("gcp_metadata_reachable=%v", *p.GCPMetadataReachable)})
 	case p.AzureMetadataReachable != nil:
-		out = append(out, toolTrigger{Gate: gate, Kind: "probe", Value: fmt.Sprintf("azure_metadata_reachable=%v", *p.AzureMetadataReachable)})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerProbe, Value: fmt.Sprintf("azure_metadata_reachable=%v", *p.AzureMetadataReachable)})
 	case p.SocketListening != nil:
-		out = append(out, toolTrigger{Gate: gate, Kind: "probe", Value: fmt.Sprintf("socket_listening=%d", *p.SocketListening)})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerProbe, Value: fmt.Sprintf("socket_listening=%d", *p.SocketListening)})
 	case p.ExecObserved != nil:
 		// exec_observed nests a pre-gate-style predicate against
 		// observed child execs. Surface the nested triggers as
 		// "exec_observed: <inner>".
 		for _, t := range predicateTriggers(gate, p.ExecObserved) {
-			out = append(out, toolTrigger{Gate: gate, Kind: "exec_observed_" + t.Kind, Value: t.Value})
+			out = append(out, toolTrigger{Gate: gate, Kind: triggerExecObservedPrefix + t.Kind, Value: t.Value})
 		}
 	case len(p.ProductGlob) > 0:
-		out = append(out, toolTrigger{Gate: gate, Kind: "product_glob", Value: strings.Join(p.ProductGlob, " | ")})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerProductGlob, Value: strings.Join(p.ProductGlob, " | ")})
 	case p.ProductMime != "":
-		out = append(out, toolTrigger{Gate: gate, Kind: "product_mime", Value: p.ProductMime})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerProductMime, Value: p.ProductMime})
 	case p.MaterialChanged != "":
-		out = append(out, toolTrigger{Gate: gate, Kind: "material_changed", Value: p.MaterialChanged})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerMaterialChanged, Value: p.MaterialChanged})
 	case p.ExitCode != nil:
-		out = append(out, toolTrigger{Gate: gate, Kind: "exit_code", Value: "(see detector.yaml)"})
+		out = append(out, toolTrigger{Gate: gate, Kind: triggerExitCode, Value: "(see detector.yaml)"})
 	}
 	return out
 }
@@ -522,31 +553,31 @@ func buildTestPlan(entries []toolEntry) testPlan {
 
 func describePositive(detector string, t toolTrigger) (setup, assertion, command string) {
 	switch t.Kind {
-	case "argv_prefix":
+	case triggerArgvPrefix:
 		setup = fmt.Sprintf("Invoke cilock with argv starting %q", t.Value)
 		command = fmt.Sprintf("cilock plan --format=json -- %s [...]", t.Value)
-	case "argv_contains":
+	case triggerArgvContains:
 		setup = fmt.Sprintf("Invoke cilock with argv containing %q", t.Value)
 		command = fmt.Sprintf("cilock plan --format=json -- <cmd> %s", t.Value)
-	case "env_set":
+	case triggerEnvSet:
 		setup = fmt.Sprintf("Set env var %s (any value)", t.Value)
 		command = fmt.Sprintf("%s=1 cilock plan --format=json -- echo hi", t.Value)
-	case "env_equals":
+	case triggerEnvEquals:
 		setup = fmt.Sprintf("Set env: %s", t.Value)
 		command = fmt.Sprintf("%s cilock plan --format=json -- echo hi", t.Value)
-	case "file_exists":
+	case triggerFileExists:
 		setup = fmt.Sprintf("Create file %q in cwd", t.Value)
 		command = fmt.Sprintf("touch %s && cilock plan --format=json -- echo hi", t.Value)
-	case "file_glob":
+	case triggerFileGlob:
 		setup = fmt.Sprintf("Create any file matching %q", t.Value)
 		command = "touch <matching-file> && cilock plan --format=json -- echo hi"
-	case "probe":
+	case triggerProbe:
 		setup = fmt.Sprintf("Probe must return: %s. Run on the actual cloud (EC2/GCE/Azure); unit-test via detection.InjectProbeResult.", t.Value)
 		command = "(real cloud only) cilock plan --format=json -- echo hi"
-	case "exec_observed_argv_prefix":
+	case triggerExecObservedPrefix + triggerArgvPrefix:
 		setup = fmt.Sprintf("Run cilock as a wrapper that observes the child exec %q via the eBPF trace", t.Value)
 		command = fmt.Sprintf("cilock run --tracing -- make build  # where make invokes %q internally", strings.Split(t.Value, " ")[0])
-	case "product_glob":
+	case triggerProductGlob:
 		setup = fmt.Sprintf("After the wrapped command runs, expect a product file matching %q to be present", t.Value)
 		command = fmt.Sprintf("cilock run -o out.bundle -- <cmd-that-produces> %s", t.Value)
 	default:
@@ -559,15 +590,15 @@ func describePositive(detector string, t toolTrigger) (setup, assertion, command
 
 func describeNegative(detector string, t toolTrigger) (setup, assertion string) {
 	switch t.Kind {
-	case "argv_prefix":
+	case triggerArgvPrefix:
 		setup = "Invoke cilock with unrelated argv (e.g. `echo unrelated`)"
-	case "env_set", "env_equals":
+	case triggerEnvSet, triggerEnvEquals:
 		setup = fmt.Sprintf("Run with env var %s UNSET", strings.SplitN(t.Value, "=", 2)[0])
-	case "file_exists":
+	case triggerFileExists:
 		setup = "Run in a tempdir without that file"
-	case "probe":
+	case triggerProbe:
 		setup = "Off-cloud / no metadata endpoint"
-	case "product_glob":
+	case triggerProductGlob:
 		setup = "Run a command that does NOT produce the matching file"
 	default:
 		setup = "Inputs not matching the predicate"

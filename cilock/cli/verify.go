@@ -44,6 +44,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// pemTypeCertificate is the PEM block Type for an X.509 certificate (RFC 7468
+// §5). Both the verify path (which refuses any other block type) and the
+// policy-from-bundles encoder must agree on it, or a policy would be built
+// around blocks the verifier will not accept.
+const pemTypeCertificate = "CERTIFICATE"
+
 func VerifyCmd() *cobra.Command {
 	vo := options.VerifyOptions{
 		ArchivistaOptions:          options.ArchivistaOptions{},
@@ -274,7 +280,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			if block == nil {
 				break
 			}
-			if block.Type != "CERTIFICATE" {
+			if block.Type != pemTypeCertificate {
 				continue
 			}
 			cert, err := x509.ParseCertificate(block.Bytes)
@@ -869,7 +875,7 @@ func parsePEMCerts(data []byte) ([]*x509.Certificate, error) {
 		if block == nil {
 			break
 		}
-		if block.Type != "CERTIFICATE" {
+		if block.Type != pemTypeCertificate {
 			continue
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)

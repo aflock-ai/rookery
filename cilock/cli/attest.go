@@ -40,6 +40,13 @@ import (
 //
 // Cobra positional args: attest takes no positional args. If you want
 // a wrapped command, use `cilock run` instead.
+// noopCommand is the POSIX no-op command cilock synthesizes as the wrapped
+// argv for the command-less attest paths (`cilock attest`, `cilock attest
+// vex`). The command_run attestor still records this exec, which is the point:
+// it stamps the moment of attestation. Not to be confused with the string
+// "true" used as a git config boolean value.
+const noopCommand = "true"
+
 func AttestCmd() *cobra.Command {
 	o := options.RunOptions{
 		AttestorOptSetters:       make(map[string][]func(attestation.Attestor) (attestation.Attestor, error)),
@@ -87,9 +94,9 @@ flag accepted by ` + "`cilock run`" + ` works identically here.`,
 			// runRun path will exec the local `true` if available, or
 			// fall back to whatever the shell resolves.
 			userSetFlags := map[string]bool{
-				"attestor-product-include-glob": cmd.Flags().Changed("attestor-product-include-glob"),
+				flagAttestorProductIncludeGlob: cmd.Flags().Changed(flagAttestorProductIncludeGlob),
 			}
-			return runRun(cmd.Context(), o, []string{"true"}, userSetFlags, signerProviders, signers...)
+			return runRun(cmd.Context(), o, []string{noopCommand}, userSetFlags, signerProviders, signers...)
 		},
 	}
 

@@ -121,6 +121,12 @@ const (
 
 	defaultIncludeGlob = "*"
 	defaultExcludeGlob = ""
+
+	// mimeTypeUnknown is the MIME type recorded when content sniffing could
+	// not run or could not classify the bytes — a path that vanished before
+	// exit, or a file getFileContentType failed to read. It is a truthful
+	// "not determined", not a claim about the content.
+	mimeTypeUnknown = "unknown"
 )
 
 // ProductAttestor is the interface in-repo consumers (the link and slsa
@@ -659,7 +665,7 @@ func fromCaptureEntries(entries map[string]attestation.CaptureEntry, requireExis
 			}
 			// Path is gone — emit witness-only entry (nil digest,
 			// unknown mime).
-			out[path] = attestation.Product{MimeType: "unknown", Digest: nil}
+			out[path] = attestation.Product{MimeType: mimeTypeUnknown, Digest: nil}
 			continue
 		}
 		out[path] = productForSurvivor(path, entry, fi)
@@ -672,7 +678,7 @@ func fromCaptureEntries(entries map[string]attestation.CaptureEntry, requireExis
 // the tracer captured, but falls back to hashing the surviving file
 // directly when the trace digest is missing or unparseable.
 func productForSurvivor(path string, entry attestation.CaptureEntry, fi os.FileInfo) attestation.Product {
-	mimeType := "unknown"
+	mimeType := mimeTypeUnknown
 	if mt, mtErr := getFileContentType(path); mtErr == nil {
 		mimeType = mt
 	}
@@ -1145,7 +1151,7 @@ func fromDigestMap(workingDir string, digestMap map[string]cryptoutil.DigestSet)
 		full := filepath.Join(workingDir, name)
 		mimeType, err := getFileContentType(full)
 		if err != nil {
-			mimeType = "unknown"
+			mimeType = mimeTypeUnknown
 		}
 		if mimeType == "application/octet-stream" {
 			if info, err := os.Stat(full); err == nil && info.IsDir() {

@@ -17,6 +17,7 @@ package slsa
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -36,7 +37,6 @@ import (
 	"github.com/aflock-ai/rookery/plugins/attestors/oci"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
 	"github.com/invopop/jsonschema"
-	"golang.org/x/exp/maps"
 )
 
 const (

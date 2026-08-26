@@ -387,13 +387,13 @@ func CreateOIDCCredential(ctx context.Context, graphqlURL, sessionToken string, 
 		return nil, err
 	}
 	input := map[string]any{
-		"name":      r.Name,
-		"type":      TrustCredentialType,
-		"tenantID":  r.TenantID,
-		"subject":   r.Subject,
-		"audience":  r.Audience,
-		"issuerURL": r.IssuerURL,
-		"scopes":    r.Scopes,
+		gqlFieldName:     r.Name,
+		"type":           TrustCredentialType,
+		gqlFieldTenantID: r.TenantID,
+		"subject":        r.Subject,
+		"audience":       r.Audience,
+		"issuerURL":      r.IssuerURL,
+		"scopes":         r.Scopes,
 	}
 	if r.Description != "" {
 		input["description"] = r.Description
@@ -406,7 +406,7 @@ func CreateOIDCCredential(ctx context.Context, graphqlURL, sessionToken string, 
 	}
 	body, err := json.Marshal(map[string]any{
 		"query":     createCredentialMutation,
-		"variables": map[string]any{"input": input},
+		"variables": map[string]any{gqlVarInput: input},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal trust request: %w", err)

@@ -81,7 +81,7 @@ func runValidatePolicy(ctx context.Context, pvo options.PolicyValidateOptions) e
 		result = policy.ValidateRawPolicy(ctx, policyBytes)
 	}
 
-	if pvo.OutputFormat == "json" {
+	if pvo.OutputFormat == formatJSON {
 		return outputJSON(result)
 	}
 

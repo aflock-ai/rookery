@@ -358,7 +358,7 @@ func loadCodexProjectTier(workingDir string) codexProjectTierState {
 		switch {
 		case snap != nil:
 			state.present = true
-			state.sources = append(state.sources, *snap.describe("project"))
+			state.sources = append(state.sources, *snap.describe(configScopeProject))
 		case denied:
 			state.present = true
 			state.unreadable = true
@@ -400,10 +400,10 @@ func loadCodexHomeTier(codexHome, profile string, loadProfile bool) codexHomeTie
 func (h codexHomeTierState) layers() []codexConfigLayer {
 	layers := make([]codexConfigLayer, 0, 2)
 	if h.profileSnap != nil {
-		layers = append(layers, codexConfigLayer{snap: h.profileSnap, label: codexProfileConfigLabel, scope: "profile"})
+		layers = append(layers, codexConfigLayer{snap: h.profileSnap, label: codexProfileConfigLabel, scope: configScopeProfile})
 	}
 	if h.userSnap != nil {
-		layers = append(layers, codexConfigLayer{snap: h.userSnap, label: codexUserConfigLabel, scope: "user"})
+		layers = append(layers, codexConfigLayer{snap: h.userSnap, label: codexUserConfigLabel, scope: configScopeUser})
 	}
 	return layers
 }
@@ -414,15 +414,15 @@ func (h codexHomeTierState) describeObservedOnly() []ConfigSource {
 	var sources []ConfigSource
 	switch {
 	case h.profileSnap != nil:
-		sources = append(sources, *h.profileSnap.describe("profile"))
+		sources = append(sources, *h.profileSnap.describe(configScopeProfile))
 	case h.profileDenied:
 		sources = append(sources, *describeUnreadableConfig(h.profilePath, "profile"))
 	}
 	switch {
 	case h.userSnap != nil:
-		sources = append(sources, *h.userSnap.describe("user"))
+		sources = append(sources, *h.userSnap.describe(configScopeUser))
 	case h.userDenied:
-		sources = append(sources, *describeUnreadableConfig(h.userPath, "user"))
+		sources = append(sources, *describeUnreadableConfig(h.userPath, configScopeUser))
 	}
 	return sources
 }
@@ -615,7 +615,7 @@ var codexPostureKeys = []string{"model_reasoning_effort", "approval_policy", "sa
 
 func codexModelFromArgv(argv []string) *Observation {
 	if v, ok := argvValue(argv, "--model", "-m"); ok {
-		return &Observation{Value: v, Source: "process.argv:--model", Assurance: AssuranceProcessObserved}
+		return &Observation{Value: v, Source: sourceArgvModelFlag, Assurance: AssuranceProcessObserved}
 	}
 	if v, ok := codexConfigOverrideFromArgv(argv, "model"); ok {
 		return &Observation{Value: v, Source: "process.argv:-c model=", Assurance: AssuranceProcessObserved}

@@ -81,7 +81,7 @@ func CalculateDigestSetFromDirWithinRoot(dir, root string, _ []DigestValue) (Dig
 		return nil, err
 	}
 
-	return NewDigestSet(map[string]string{"dirHash": dirHash})
+	return NewDigestSet(map[string]string{digestNameDirHash: dirHash})
 }
 
 // openWithinRoot resolves fullPath (following in-tree symlinks) to its canonical

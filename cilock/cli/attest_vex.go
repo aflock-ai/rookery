@@ -247,9 +247,9 @@ func (vo *vexAuthorOptions) run(cmd *cobra.Command, o *options.RunOptions) error
 	}
 
 	userSetFlags := map[string]bool{
-		"attestor-product-include-glob": cmd.Flags().Changed("attestor-product-include-glob"),
+		flagAttestorProductIncludeGlob: cmd.Flags().Changed(flagAttestorProductIncludeGlob),
 	}
-	return runRun(cmd.Context(), *o, []string{"true"}, userSetFlags, signerProviders, signers...)
+	return runRun(cmd.Context(), *o, []string{noopCommand}, userSetFlags, signerProviders, signers...)
 }
 
 // appendAttestor adds name to the attestor set if it isn't already there.

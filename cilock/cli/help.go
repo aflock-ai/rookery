@@ -32,6 +32,26 @@ import (
 // never set.
 const helpAdvancedFlag = "help-advanced"
 
+// Flag NAMES that are referenced away from their own registration site — in
+// the essentialFlags curation below, in `cmd.Flags().Changed(...)` probes, and
+// in the userSetFlags maps that decide whether a value was explicitly set.
+// Those references are what make a rename silently wrong: the flag keeps
+// working, but the help view stops curating it and the "did the user set
+// this?" probe starts answering false forever. Naming them ties every
+// reference to one spelling.
+//
+// Deliberately NOT the same as a same-spelled value elsewhere: flagJSON is the
+// `--json` boolean flag, whereas formatJSON is the "json" value of
+// `--output-format`. They are free to diverge.
+const (
+	flagJSON                       = "json"
+	flagStep                       = "step"
+	flagAttestations               = "attestations"
+	flagOutfile                    = "outfile"
+	flagSignerFileKeyPath          = "signer-file-key-path"
+	flagAttestorProductIncludeGlob = "attestor-product-include-glob"
+)
+
 // essentialFlags lists, per command name, the flags that belong in the
 // default (concise) help view. Everything else for that command is
 // treated as advanced. Commands absent from this map show all of their
@@ -42,19 +62,19 @@ const helpAdvancedFlag = "help-advanced"
 // name here only affects rendering, but a stale example fails CI.
 var essentialFlags = map[string][]string{
 	"run": {
-		"step", "attestations", "outfile", "signer-file-key-path",
+		flagStep, flagAttestations, flagOutfile, flagSignerFileKeyPath,
 		"trace", "capture-mode", "enable-archivista", "workingdir", "workload",
-		"output-format", "json",
+		"output-format", flagJSON,
 	},
 	"verify": {
-		"policy", "publickey", "attestations", "artifactfile", "bundle",
+		"policy", "publickey", flagAttestations, "artifactfile", "bundle",
 		"enable-archivista", "platform-url", "directory-path",
 	},
 	"attest": {
-		"step", "attestations", "outfile", "signer-file-key-path", "subjects",
+		flagStep, flagAttestations, flagOutfile, flagSignerFileKeyPath, "subjects",
 	},
 	"sign": {
-		"signer-file-key-path", "outfile", "datatype",
+		flagSignerFileKeyPath, flagOutfile, "datatype",
 	},
 }
 

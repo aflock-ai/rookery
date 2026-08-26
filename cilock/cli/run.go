@@ -579,7 +579,7 @@ Exit-code policy (finding #221):
 			// over this default (--workload=auto forces detection even
 			// alongside -a; --workload=manual disables it).
 			autoDetect := shouldAutoDetect(
-				cmd.Flags().Changed("attestations"),
+				cmd.Flags().Changed(flagAttestations),
 				cmd.Flags().Changed("workload"),
 				o.Workload,
 			)
@@ -673,7 +673,7 @@ Exit-code policy (finding #221):
 			// from "default *". cobra is the only layer that has
 			// this signal.
 			userSetFlags := map[string]bool{
-				"attestor-product-include-glob": cmd.Flags().Changed("attestor-product-include-glob"),
+				flagAttestorProductIncludeGlob: cmd.Flags().Changed(flagAttestorProductIncludeGlob),
 			}
 
 			return runRun(cmd.Context(), o, args, userSetFlags, signerProviders, signers...)
@@ -778,7 +778,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// the default. The precedence table in product.Attest needs the
 	// Changed() bit to decide whether to treat the include-glob as a
 	// rescue signal (operator intent) or just a filter (default).
-	if userSetFlags["attestor-product-include-glob"] {
+	if userSetFlags[flagAttestorProductIncludeGlob] {
 		for i, attestor := range attestors {
 			prod, ok := attestor.(*product.Attestor)
 			if !ok {

@@ -52,14 +52,27 @@ const (
 	StateTraceUnavailable
 )
 
+// The structured cause codes recorded in SkipDecision.Cause. CauseNoMatch and
+// CauseTraceUnavailable double as the names PredicateState.String reports: a
+// predicate that evaluated to one of those states is skipped under that exact
+// code, so the two vocabularies are deliberately the same strings. The
+// remaining codes describe skips decided before any predicate ran.
+const (
+	CauseNoMatch          = "no-match"
+	CauseTraceUnavailable = "trace-unavailable"
+	CauseSchemaError      = "schema-error"
+	CausePreGateOnly      = "pre-gate-only"
+	CausePostGateOnly     = "post-gate-only"
+)
+
 func (s PredicateState) String() string {
 	switch s {
 	case StateMatch:
 		return "match"
 	case StateNoMatch:
-		return "no-match"
+		return CauseNoMatch
 	case StateTraceUnavailable:
-		return "trace-unavailable"
+		return CauseTraceUnavailable
 	default:
 		return "unknown"
 	}

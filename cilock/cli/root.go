@@ -28,6 +28,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// binaryName is the program's own name. It is the cobra root's Use (so it
+// drives every usage string), the cache-directory name, the update-check tool
+// id, and the program git is told to invoke for x509 signing — all of which
+// must agree, because a user who renames the binary breaks the git config and
+// a mismatched cache dir silently re-downloads the update manifest.
+const binaryName = "cilock"
+
 // errHelpAdvanced is returned from PersistentPreRunE when the user passed
 // --help-advanced (without -h). It signals "help has been printed; stop
 // without running the command and without treating this as a failure".
@@ -40,7 +47,7 @@ func New() *cobra.Command {
 	logger := newLogger()
 
 	cmd := &cobra.Command{
-		Use:   "cilock",
+		Use:   binaryName,
 		Short: "Collect and verify attestations about your build environments",
 		Long: `Collect and verify attestations about your build environments.
 

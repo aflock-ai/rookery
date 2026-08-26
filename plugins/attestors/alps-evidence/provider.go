@@ -81,6 +81,26 @@ const (
 	basisNodeScriptArg  = "node-script-arg"
 )
 
+// sourceArgvModelFlag is the Observation.Source recorded when a model was read
+// from the agent's own `--model` argv flag. Unlike the other Source labels —
+// which name a provider-specific env var or config path and appear once each —
+// this one is shared, because every CLI agent that accepts `--model` reports
+// its model from the same place and a policy should be able to match them
+// uniformly.
+const sourceArgvModelFlag = "process.argv:--model"
+
+// Config-layer scope names recorded in Inspection.Configuration[].Scope. This
+// is ONE vocabulary shared by every provider, so a policy can select "whatever
+// the user-scope config said" without knowing which agent produced the
+// evidence. Keep new scopes here rather than spelling them at the call site.
+const (
+	configScopeManaged      = "managed"
+	configScopeProject      = "project"
+	configScopeProjectLocal = "project-local"
+	configScopeUser         = "user"
+	configScopeProfile      = "profile"
+)
+
 // EnvScope names where an environment value was read from.
 type EnvScope string
 

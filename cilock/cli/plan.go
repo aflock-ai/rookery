@@ -114,7 +114,7 @@ maps them to the format attestors that capture their evidence.`,
 				Summary:                   buildPlanSummary(plan, registered, reg),
 			}
 			switch strings.ToLower(format) {
-			case "json":
+			case formatJSON:
 				return writePlanJSON(cmd.OutOrStdout(), env)
 			case "", formatText, "human":
 				return writePlanHuman(cmd.OutOrStdout(), env, verbose)

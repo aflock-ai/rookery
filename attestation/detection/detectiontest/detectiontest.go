@@ -30,6 +30,12 @@ import (
 	"github.com/aflock-ai/rookery/attestation/detection"
 )
 
+// postGatePreArgv0 is the placeholder pre-gate argv these post-gate helpers
+// synthesize. Post-gate assertions are about the exec trace or the product
+// set, never about how cilock itself was invoked, so argv only has to be a
+// non-empty command that matches no detector's pre-gate rules.
+const postGatePreArgv0 = "shell"
+
 // AssertParses checks the embedded detector.yaml round-trips through
 // the schema and that its declared name matches the plugin's Name
 // constant. Every plugin's TestDetectorYAMLParses delegates here.
@@ -122,7 +128,7 @@ func AssertPostGateFiresOnExec(t *testing.T, pluginName string, yaml []byte, obs
 	t.Helper()
 	reg := detection.NewRegistry()
 	reg.Register(pluginName, yaml)
-	pre := &detection.PlanResult{Inputs: detection.InputSnapshot{Argv: []string{"shell"}}}
+	pre := &detection.PlanResult{Inputs: detection.InputSnapshot{Argv: []string{postGatePreArgv0}}}
 	res := detection.RunPostPlanWith(reg, detection.PostPlan{
 		Pre:       pre,
 		ExecTrace: []detection.ExecEvent{{Argv: observedArgv}},
@@ -139,7 +145,7 @@ func AssertPostGateFiresOnProduct(t *testing.T, pluginName string, yaml []byte, 
 	t.Helper()
 	reg := detection.NewRegistry()
 	reg.Register(pluginName, yaml)
-	pre := &detection.PlanResult{Inputs: detection.InputSnapshot{Argv: []string{"shell"}}}
+	pre := &detection.PlanResult{Inputs: detection.InputSnapshot{Argv: []string{postGatePreArgv0}}}
 	res := detection.RunPostPlanWith(reg, detection.PostPlan{
 		Pre:       pre,
 		Products:  map[string]detection.ProductRef{productPath: {Path: productPath}},
@@ -157,14 +163,14 @@ func AssertPostGateTraceUnavailable(t *testing.T, pluginName string, yaml []byte
 	t.Helper()
 	reg := detection.NewRegistry()
 	reg.Register(pluginName, yaml)
-	pre := &detection.PlanResult{Inputs: detection.InputSnapshot{Argv: []string{"shell"}}}
+	pre := &detection.PlanResult{Inputs: detection.InputSnapshot{Argv: []string{postGatePreArgv0}}}
 	res := detection.RunPostPlanWith(reg, detection.PostPlan{
 		Pre:       pre,
 		TraceMode: detection.TraceUnsupported,
 		Cwd:       t.TempDir(),
 	})
 	for _, s := range res.Skip {
-		if s.Attestor == pluginName && s.Cause == "trace-unavailable" {
+		if s.Attestor == pluginName && s.Cause == detection.CauseTraceUnavailable {
 			return
 		}
 	}

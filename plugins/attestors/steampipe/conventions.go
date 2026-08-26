@@ -32,6 +32,21 @@ type columnExtractor struct {
 	prefix string
 }
 
+// The Google Workspace subject namespace. Two DIFFERENT Steampipe plugins —
+// turbot/googledirectory (directory objects) and turbot/googleworkspace
+// (content + activity) — deliberately emit subjects under these same
+// prefixes, because that is what makes their attestations converge in
+// policyverify's digest-value graph join. Naming the prefixes once keeps the
+// two plugin blocks below from drifting apart on a typo, which would silently
+// break that join rather than fail loudly.
+const (
+	gwsPrefixCustomer = "googleworkspace:customer:"
+	gwsPrefixUser     = "googleworkspace:user:"
+	gwsPrefixGroup    = "googleworkspace:group:"
+	gwsPrefixDomain   = "googleworkspace:domain:"
+	gwsPrefixOrgUnit  = "googleworkspace:orgunit:"
+)
+
 // pluginConvention bundles the subject extractors for one Steampipe
 // plugin. Lookup keyed by `Frontmatter.Plugin`.
 //
@@ -90,11 +105,11 @@ var pluginConventions = map[string]pluginConvention{
 	// github.com/turbot/steampipe-plugin-googledirectory.
 	"googledirectory": {
 		subjectExtractors: []columnExtractor{
-			{column: "customer_id", prefix: "googleworkspace:customer:"},
-			{column: "primary_email", prefix: "googleworkspace:user:"}, // googledirectory_user
-			{column: "email", prefix: "googleworkspace:group:"},        // googledirectory_group
-			{column: "domain_name", prefix: "googleworkspace:domain:"}, // googledirectory_domain
-			{column: "org_unit_path", prefix: "googleworkspace:orgunit:"},
+			{column: "customer_id", prefix: gwsPrefixCustomer},
+			{column: "primary_email", prefix: gwsPrefixUser}, // googledirectory_user
+			{column: "email", prefix: gwsPrefixGroup},        // googledirectory_group
+			{column: "domain_name", prefix: gwsPrefixDomain}, // googledirectory_domain
+			{column: "org_unit_path", prefix: gwsPrefixOrgUnit},
 		},
 	},
 	// googleworkspace is the turbot/googleworkspace plugin — Workspace *content/
@@ -104,9 +119,9 @@ var pluginConventions = map[string]pluginConvention{
 	// github.com/turbot/steampipe-plugin-googleworkspace.
 	"googleworkspace": {
 		subjectExtractors: []columnExtractor{
-			{column: "customer_id", prefix: "googleworkspace:customer:"}, // googleworkspace_activity_report
-			{column: "user_email", prefix: "googleworkspace:user:"},      // googleworkspace_gmail_settings
-			{column: "actor_email", prefix: "googleworkspace:user:"},     // googleworkspace_activity_report
+			{column: "customer_id", prefix: gwsPrefixCustomer}, // googleworkspace_activity_report
+			{column: "user_email", prefix: gwsPrefixUser},      // googleworkspace_gmail_settings
+			{column: "actor_email", prefix: gwsPrefixUser},     // googleworkspace_activity_report
 		},
 	},
 	// slack is the turbot/slack plugin — workspace security posture (members,

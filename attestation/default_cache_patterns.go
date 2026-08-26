@@ -189,49 +189,53 @@ func SystemCachePathsFromEnv() []string {
 		key    string
 		suffix string // appended after env value (e.g., "/cache/**" for sub-cache)
 	}
+	// suffixWholeTree marks an env var whose ENTIRE directory is cache, as
+	// opposed to the entries below that point at one cache subdirectory of an
+	// otherwise-meaningful root (e.g. CARGO_HOME "/registry/cache/**").
+	const suffixWholeTree = "/**"
 	entries := []envEntry{
 		// ─── Generic POSIX / XDG ───
-		{"XDG_CACHE_HOME", "/**"},
-		{"XDG_RUNTIME_DIR", "/**"},
-		{"TMPDIR", "/**"},
-		{"TMP", "/**"}, // Windows
-		{"TEMP", "/**"},
+		{"XDG_CACHE_HOME", suffixWholeTree},
+		{"XDG_RUNTIME_DIR", suffixWholeTree},
+		{"TMPDIR", suffixWholeTree},
+		{"TMP", suffixWholeTree}, // Windows
+		{"TEMP", suffixWholeTree},
 
 		// ─── Go ───
-		{"GOCACHE", "/**"},
-		{"GOMODCACHE", "/**"}, // whole module cache is build-internal: download cache + extracted source
-		{"GOTMPDIR", "/**"},
+		{"GOCACHE", suffixWholeTree},
+		{"GOMODCACHE", suffixWholeTree}, // whole module cache is build-internal: download cache + extracted source
+		{"GOTMPDIR", suffixWholeTree},
 
 		// ─── Rust / Cargo ───
 		{"CARGO_HOME", "/registry/cache/**"},
 		{"CARGO_HOME", "/registry/src/**"},
-		{"CARGO_TARGET_DIR", "/**"},
+		{"CARGO_TARGET_DIR", suffixWholeTree},
 
 		// ─── Python ───
-		{"PIP_CACHE_DIR", "/**"},
-		{"PYTHONPYCACHEPREFIX", "/**"},
-		{"POETRY_CACHE_DIR", "/**"},
+		{"PIP_CACHE_DIR", suffixWholeTree},
+		{"PYTHONPYCACHEPREFIX", suffixWholeTree},
+		{"POETRY_CACHE_DIR", suffixWholeTree},
 
 		// ─── Node.js ecosystem ───
-		{"NPM_CONFIG_CACHE", "/**"},
-		{"YARN_CACHE_FOLDER", "/**"},
+		{"NPM_CONFIG_CACHE", suffixWholeTree},
+		{"YARN_CACHE_FOLDER", suffixWholeTree},
 		{"PNPM_HOME", "/store/**"},
-		{"BUN_INSTALL_CACHE_DIR", "/**"},
+		{"BUN_INSTALL_CACHE_DIR", suffixWholeTree},
 
 		// ─── Java / Gradle ───
 		{"GRADLE_USER_HOME", "/caches/**"},
 		{"GRADLE_USER_HOME", "/daemon/**"},
 
 		// ─── C / C++ ───
-		{"CCACHE_DIR", "/**"},
-		{"SCCACHE_DIR", "/**"},
+		{"CCACHE_DIR", suffixWholeTree},
+		{"SCCACHE_DIR", suffixWholeTree},
 
 		// ─── Container / image build ───
-		{"DOCKER_BUILDKIT_CACHE_DIR", "/**"},
-		{"BUILDAH_CACHE_DIR", "/**"},
+		{"DOCKER_BUILDKIT_CACHE_DIR", suffixWholeTree},
+		{"BUILDAH_CACHE_DIR", suffixWholeTree},
 
 		// ─── Ruby ───
-		{"BUNDLE_CACHE_PATH", "/**"},
+		{"BUNDLE_CACHE_PATH", suffixWholeTree},
 		{"GEM_HOME", "/cache/**"},
 	}
 	seen := make(map[string]bool, len(entries))

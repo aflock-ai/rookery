@@ -49,10 +49,10 @@ func startUpdateCheck(args []string) *updatecheck.Check {
 	}
 	cacheDir := ""
 	if d, err := os.UserCacheDir(); err == nil {
-		cacheDir = filepath.Join(d, "cilock")
+		cacheDir = filepath.Join(d, binaryName)
 	}
 	return updatecheck.Start(updatecheck.Config{
-		Tool:          "cilock",
+		Tool:          binaryName,
 		Current:       Version,
 		ManifestURL:   base + "/dl/manifest.json",
 		CacheDir:      cacheDir,

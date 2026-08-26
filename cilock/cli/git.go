@@ -21,6 +21,11 @@ var runGitConfig = func(ctx context.Context, args ...string) error {
 	return nil
 }
 
+// gitConfigTrue is git's boolean-true config VALUE. It is a git literal, not a
+// Go bool rendered as text and not the POSIX `true` command cilock synthesizes
+// elsewhere — those are separate concepts that happen to be spelled the same.
+const gitConfigTrue = "true"
+
 // GitCmd groups the Git-facing CI/lock integration. Signing and verification
 // use Git's standard gpg.x509.program protocol and are intercepted before
 // Cobra; this command provides the human-friendly configuration step.
@@ -66,9 +71,9 @@ protocol against their configured TestifySec appliance.`,
 			}
 			settings := [][2]string{
 				{"gpg.format", "x509"},
-				{"gpg.x509.program", "cilock"},
-				{"commit.gpgsign", "true"},
-				{"tag.gpgsign", "true"},
+				{"gpg.x509.program", binaryName},
+				{"commit.gpgsign", gitConfigTrue},
+				{"tag.gpgsign", gitConfigTrue},
 			}
 			for _, setting := range settings {
 				if err := runGitConfig(cmd.Context(), "config", scope, setting[0], setting[1]); err != nil {

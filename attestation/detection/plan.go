@@ -68,7 +68,7 @@ func runPlanWith(reg *Registry, p PrePlan, postCtx *EvalContext) PlanResult {
 			result.Skip = append(result.Skip, SkipDecision{
 				Attestor: name,
 				Gate:     GatePre,
-				Cause:    "schema-error",
+				Cause:    CauseSchemaError,
 				Reason:   err.Error(),
 			})
 			continue
@@ -80,7 +80,7 @@ func runPlanWith(reg *Registry, p PrePlan, postCtx *EvalContext) PlanResult {
 			result.Skip = append(result.Skip, SkipDecision{
 				Attestor: name,
 				Gate:     GatePre,
-				Cause:    "post-gate-only",
+				Cause:    CausePostGateOnly,
 			})
 			continue
 		}
@@ -104,14 +104,14 @@ func runPlanWith(reg *Registry, p PrePlan, postCtx *EvalContext) PlanResult {
 			result.Skip = append(result.Skip, SkipDecision{
 				Attestor: name,
 				Gate:     GatePre,
-				Cause:    "trace-unavailable",
+				Cause:    CauseTraceUnavailable,
 				Reason:   r.Rule,
 			})
 		default:
 			result.Skip = append(result.Skip, SkipDecision{
 				Attestor: name,
 				Gate:     GatePre,
-				Cause:    "no-match",
+				Cause:    CauseNoMatch,
 				Reason:   r.Rule,
 			})
 		}
