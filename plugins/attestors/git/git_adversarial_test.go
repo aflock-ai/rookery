@@ -275,6 +275,16 @@ func TestAdversarial_MaliciousAuthorEmail(t *testing.T) {
 			subjects := attestor.Subjects()
 			key := fmt.Sprintf("authoremail:%v", tc.email)
 			_, exists := subjects[key]
+
+			if attestor.AuthorEmail == "" {
+				// FIXED: an unobserved author contributes no subject. Emitting
+				// "authoremail:" would carry SHA256(""), identical in every
+				// repository — see TestAdversarial_EmptyEmailDigestCollision.
+				assert.False(t, exists,
+					"BUG: an empty author email must not become a subject carrying SHA256(\"\")")
+				return
+			}
+
 			assert.True(t, exists,
 				"Malicious email becomes an attestation subject without validation")
 		})
@@ -655,21 +665,25 @@ func TestAdversarial_EmptyEmailDigestCollision(t *testing.T) {
 	s1 := a1.Subjects()
 	s2 := a2.Subjects()
 
-	// authoremail: subjects should have the same digest (SHA256 of "")
-	key := "authoremail:"
-	ds1, exists1 := s1[key]
-	ds2, exists2 := s2[key]
+	// FIXED: an unobserved component contributes no subject at all, so the
+	// universal SHA256("") digest is never emitted and cannot collide.
+	for _, key := range []string{"authoremail:", "committeremail:"} {
+		_, exists1 := s1[key]
+		_, exists2 := s2[key]
+		assert.False(t, exists1,
+			"BUG: empty author/committer email still emits subject %q carrying "+
+				"SHA256(\"\"), which is identical in every repository.", key)
+		assert.False(t, exists2,
+			"BUG: empty author/committer email still emits subject %q carrying "+
+				"SHA256(\"\"), which is identical in every repository.", key)
+	}
 
-	assert.True(t, exists1 && exists2)
-
-	// Check that the digests are identical (both SHA256 of empty string)
-	for dv, hash1 := range ds1 {
-		hash2, ok := ds2[dv]
-		if ok {
-			assert.Equal(t, hash1, hash2,
-				"BUG: Empty author emails produce identical subject digests. "+
-					"SHA256('') = %s. This could cause policy collisions between "+
-					"unrelated repos.", hash1)
+	// No subject key may end in a bare colon: that is the signature of an
+	// empty value, and therefore of a cross-repository policy collision.
+	for _, subjects := range []map[string]cryptoutil.DigestSet{s1, s2} {
+		for name := range subjects {
+			assert.False(t, strings.HasSuffix(name, ":"),
+				"BUG: subject %q carries an empty value and a universal digest.", name)
 		}
 	}
 }

@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -30,6 +29,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/invopop/jsonschema"
 )
 
@@ -253,6 +253,63 @@ func verifiedCommitObject(repo *git.Repository, claimed plumbing.Hash) (*object.
 	return commit, verifiedHash, nil
 }
 
+// repositoryIsProvablyUnborn reports whether the repository has genuinely never
+// had a commit, as opposed to merely having a HEAD this attestor cannot resolve.
+//
+// The failure alone cannot tell those apart: go-git reports both as "reference
+// not found", and `git rev-parse --verify --quiet HEAD` exits 1 for both. A
+// repository whose .git/HEAD names a branch that does not exist produces the
+// same signal as `git init` with no commits, while still holding every ref and
+// object it ever had. Inferring "unborn" from that signal is how an attestor
+// comes to report "I looked and found nothing" when the truth is "I could not
+// look".
+//
+// So unborn is PROVEN here, never inferred: an unborn repository has no refs
+// besides the symbolic HEAD, and no objects at all. Anything else — a surviving
+// branch ref, a loose commit, even a blob staged by `git add` — means there is
+// repository state that HEAD failed to name, and the attestation must fail
+// closed rather than emit an empty one.
+func repositoryIsProvablyUnborn(repo *git.Repository) (bool, error) {
+	refs, err := repo.References()
+	if err != nil {
+		return false, fmt.Errorf("enumerate references: %w", err)
+	}
+	defer func() { refs.Close() }()
+
+	hasRef := false
+	if err := refs.ForEach(func(ref *plumbing.Reference) error {
+		// HEAD itself is the reference that failed to resolve; a symbolic ref
+		// carries no history on its own. Only a ref that names an object is
+		// evidence that this repository has a commit.
+		if ref.Name() == plumbing.HEAD || ref.Type() != plumbing.HashReference {
+			return nil
+		}
+		hasRef = true
+		return storer.ErrStop
+	}); err != nil {
+		return false, fmt.Errorf("enumerate references: %w", err)
+	}
+	if hasRef {
+		return false, nil
+	}
+
+	objs, err := repo.Storer.IterEncodedObjects(plumbing.AnyObject)
+	if err != nil {
+		return false, fmt.Errorf("enumerate objects: %w", err)
+	}
+	defer func() { objs.Close() }()
+
+	hasObject := false
+	if err := objs.ForEach(func(plumbing.EncodedObject) error {
+		hasObject = true
+		return storer.ErrStop
+	}); err != nil {
+		return false, fmt.Errorf("enumerate objects: %w", err)
+	}
+
+	return !hasObject, nil
+}
+
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:gocognit,gocyclo,funlen // git attestation involves multiple data sources
 	repo, err := git.PlainOpenWithOptions(ctx.WorkingDir(), &git.PlainOpenOptions{
 		DetectDotGit:          true,
@@ -264,10 +321,17 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 
 	head, err := repo.Head()
 	if err != nil {
-		if strings.Contains(err.Error(), "reference not found") {
-			return nil
+		unborn, proveErr := repositoryIsProvablyUnborn(repo)
+		if proveErr != nil {
+			return fmt.Errorf("could not resolve HEAD (%v) and could not establish whether the repository is unborn (%v); refusing to attest a repository whose history could not be observed", err, proveErr)
 		}
-		return err
+		if !unborn {
+			return fmt.Errorf("could not resolve HEAD (%v) but the repository still holds refs or objects, so its HEAD is unresolvable rather than unborn; refusing to attest a repository whose history could not be observed", err)
+		}
+
+		// The one benign case: a repository that has genuinely never had a
+		// commit. Nothing was observed because there is nothing to observe.
+		return nil
 	}
 
 	// Re-hash the canonical commit object and refuse the attestation on any
@@ -439,75 +503,66 @@ func (a *Attestor) Data() *Attestor {
 	return a
 }
 
+// addHashedSubject records "<prefix>:<value>" with a digest OF the value, and
+// records NOTHING when value is empty.
+//
+// The guard is the point, and it lives here rather than at each call site so a
+// subject added later cannot forget it. An empty component is not a fact about
+// this repository — it is the absence of an observation — and emitting it
+// produces a subject literally named e.g. "authoremail:" whose digest is
+// SHA256(""), byte-identical in every attestation that ever failed to observe
+// an author. A policy matching on that subject matches every such attestation
+// from every repository, which is a cross-repository authorization collision.
+func addHashedSubject(subjects map[string]cryptoutil.DigestSet, prefix, value string, hashes []cryptoutil.DigestValue) {
+	if value == "" {
+		return
+	}
+
+	ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(value), hashes)
+	if err != nil {
+		log.Debugf("(attestation/git) failed to record %s subject: %v", prefix, err)
+		return
+	}
+
+	subjects[fmt.Sprintf("%s:%v", prefix, value)] = ds
+}
+
+// addCommitSubject records "<prefix>:<sha>" with the raw sha1=<commit SHA>
+// encoding shared by commithash and parenthash, and records NOTHING when sha
+// is empty. Sharing one encoding is what lets a downstream collection's
+// parenthash digest equal the upstream collection's commithash digest for the
+// same commit, so subject-graph traversal can cross the parent linkage.
+// See https://github.com/aflock-ai/rookery/issues/34.
+func addCommitSubject(subjects map[string]cryptoutil.DigestSet, prefix, sha string) {
+	if sha == "" {
+		return
+	}
+
+	subjects[fmt.Sprintf("%s:%v", prefix, sha)] = cryptoutil.DigestSet{
+		{
+			Hash:   crypto.SHA1,
+			GitOID: false,
+		}: sha,
+	}
+}
+
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	subjects := make(map[string]cryptoutil.DigestSet)
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 
-	if a.CommitHash != "" {
-		subjectName := fmt.Sprintf("commithash:%v", a.CommitHash)
-		subjects[subjectName] = cryptoutil.DigestSet{
-			{
-				Hash:   crypto.SHA1,
-				GitOID: false,
-			}: a.CommitHash,
-		}
-	}
+	addCommitSubject(subjects, "commithash", a.CommitHash)
+	addHashedSubject(subjects, "authoremail", a.AuthorEmail, hashes)
+	addHashedSubject(subjects, "committeremail", a.CommitterEmail, hashes)
 
-	// add author email
-	subjectName := fmt.Sprintf("authoremail:%v", a.AuthorEmail)
-	ds, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.AuthorEmail), hashes)
-	if err != nil {
-		log.Debugf("(attestation/git) failed to record author email subject: %v", err)
-	} else {
-		subjects[subjectName] = ds
-	}
-
-	// add committer email
-	subjectName = fmt.Sprintf("committeremail:%v", a.CommitterEmail)
-	ds, err = cryptoutil.CalculateDigestSetFromBytes([]byte(a.CommitterEmail), hashes)
-	if err != nil {
-		log.Debugf("(attestation/git) failed to record committer email subject: %v", err)
-	} else {
-		subjects[subjectName] = ds
-	}
-
-	// add parent hashes
-	// Use sha1=<raw parent commit SHA> — mirrors commithash encoding so that a
-	// downstream collection's parenthash subject digest matches the upstream
-	// collection's commithash subject digest for the same commit, enabling
-	// subject-graph traversal across the parent-commit linkage.
-	// See https://github.com/aflock-ai/rookery/issues/34.
 	for _, parentHash := range a.ParentHashes {
-		if parentHash == "" {
-			continue
-		}
-		subjectName = fmt.Sprintf("parenthash:%v", parentHash)
-		subjects[subjectName] = cryptoutil.DigestSet{
-			{
-				Hash:   crypto.SHA1,
-				GitOID: false,
-			}: parentHash,
-		}
+		addCommitSubject(subjects, "parenthash", parentHash)
 	}
 
-	// add refname short
-	subjectName = fmt.Sprintf("refnameshort:%v", a.RefNameShort)
-	ds, err = cryptoutil.CalculateDigestSetFromBytes([]byte(a.RefNameShort), hashes)
-	if err != nil {
-		log.Debugf("(attestation/git) failed to record refname short subject: %v", err)
-	} else {
-		subjects[subjectName] = ds
-	}
+	addHashedSubject(subjects, "refnameshort", a.RefNameShort, hashes)
 
-	// add remote URLs — enables discovery of attestations by repository URL
+	// remote URLs — enables discovery of attestations by repository URL
 	for _, remote := range a.Remotes {
-		subjectName = fmt.Sprintf("remote:%v", remote)
-		ds, err = cryptoutil.CalculateDigestSetFromBytes([]byte(remote), hashes)
-		if err != nil {
-			log.Debugf("(attestation/git) failed to record remote subject: %v", err)
-			continue
-		}
-		subjects[subjectName] = ds
+		addHashedSubject(subjects, "remote", remote, hashes)
 	}
 
 	return subjects
@@ -515,32 +570,18 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 
 func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
 	backrefs := make(map[string]cryptoutil.DigestSet)
-	if a.CommitHash != "" {
-		subjectName := fmt.Sprintf("commithash:%v", a.CommitHash)
-		backrefs[subjectName] = cryptoutil.DigestSet{
-			{
-				Hash:   crypto.SHA1,
-				GitOID: false,
-			}: a.CommitHash,
-		}
-	}
+
+	addCommitSubject(backrefs, "commithash", a.CommitHash)
+
 	// Include parenthash BackRefs with the same sha1 encoding as commithash.
 	// This way, given a downstream collection, the reverse-lookup surface
 	// exposes both "I am this commit" and "my parent is that commit" — so an
 	// upstream collection whose commithash matches any of our parenthashes is
 	// discoverable from the downstream side during BackRef expansion.
 	for _, parentHash := range a.ParentHashes {
-		if parentHash == "" {
-			continue
-		}
-		subjectName := fmt.Sprintf("parenthash:%v", parentHash)
-		backrefs[subjectName] = cryptoutil.DigestSet{
-			{
-				Hash:   crypto.SHA1,
-				GitOID: false,
-			}: parentHash,
-		}
+		addCommitSubject(backrefs, "parenthash", parentHash)
 	}
+
 	return backrefs
 }
 
