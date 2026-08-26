@@ -261,7 +261,7 @@ func TestFromCommit_AuthorOnlyWritesPureJSONToStdout(t *testing.T) {
 }
 
 // TestFromCommit_NoAttestationsGivesActionableError covers the empty-result
-// case: the user is told CI must have run `cilock run --enable-archivista`.
+// case: the user is told CI must have run an authenticated `cilock run`.
 func TestFromCommit_NoAttestationsGivesActionableError(t *testing.T) {
 	installFakeCommitFetcher(t, &fakeCommitFetcher{byGitoid: map[string]dsse.Envelope{}})
 
@@ -271,8 +271,10 @@ func TestFromCommit_NoAttestationsGivesActionableError(t *testing.T) {
 	_, err := runCmd(t, PolicyFromCommitCmd(), testCommitSHA, "--platform-url", srv.URL)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no attestations found for commit")
-	assert.Contains(t, err.Error(), "cilock run --enable-archivista",
+	assert.Contains(t, err.Error(), "authenticated `cilock run`",
 		"the error must steer the user to the CI requirement")
+	assert.NotContains(t, err.Error(), "--enable-archivista",
+		"platform-authenticated runs upload by default; do not prescribe a redundant flag")
 }
 
 // TestFromCommit_ProductWithoutTagErrors covers the half-typed one-shot guard.

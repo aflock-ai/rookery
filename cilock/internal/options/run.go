@@ -1099,7 +1099,8 @@ type ArchivistaOptions struct {
 }
 
 func (o *ArchivistaOptions) AddFlags(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(&o.Enable, "enable-archivista", false, "Use Archivista to store or retrieve attestations")
+	cmd.Flags().BoolVar(&o.Enable, "enable-archivista", false,
+		"Use Archivista to store or retrieve attestations (automatic for authenticated platform runs)")
 	cmd.Flags().BoolVar(&o.Enable, "enable-archivist", false, "Use Archivista to store or retrieve attestations (deprecated)")
 	if err := cmd.Flags().MarkHidden("enable-archivist"); err != nil {
 		log.Errorf("failed to hide enable-archivist flag: %v", err)

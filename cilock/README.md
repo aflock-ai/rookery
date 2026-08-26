@@ -124,6 +124,7 @@ Key flags:
     --capture-mode string           Where material/product attestors get their digests
                                     (auto | walk | trace[:ebpf|:ptrace|:auto] | ima) (default "auto")
     --enable-archivista             Use Archivista to store or retrieve attestations
+                                    (automatic for authenticated platform runs)
 ```
 
 **Attestor selection:** with `--workload auto` (the default), cilock auto-detects

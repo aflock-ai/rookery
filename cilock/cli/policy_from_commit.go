@@ -51,7 +51,7 @@ type commitFetcher interface {
 
 // newCommitFetcher is a seam over the real Archivista client construction so
 // tests can substitute an in-memory fetcher. It builds the same client
-// `cilock policy push` / `cilock run --enable-archivista` use (Bearer auth).
+// `cilock policy push` and authenticated `cilock run` use (Bearer auth).
 var newCommitFetcher = func(archivistaURL, bearer string) commitFetcher {
 	headers := http.Header{}
 	if bearer != "" {
@@ -68,8 +68,8 @@ var fullCommitSHA = regexp.MustCompile(`^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$`)
 
 // PolicyFromCommitCmd is `cilock policy from-commit <commit>`. Where
 // from-bundles reads LOCAL DSSE files, from-commit authors a policy from the CI
-// attestations the platform already holds: in real CI, `cilock run
-// --enable-archivista` uploads collections to Archivista keyed by SUBJECTS (the
+// attestations the platform already holds: in real CI, an authenticated
+// `cilock run` uploads collections to Archivista keyed by SUBJECTS (the
 // git attestor records the commit as a subject), so the developer never has the
 // bundle files locally. from-commit points at the commit instead.
 //
@@ -93,7 +93,7 @@ func PolicyFromCommitCmd() *cobra.Command {
 		Long: `from-commit authors a starter Witness policy from the CI attestations the
 platform already holds for a commit — no local bundle files needed.
 
-In real CI, ` + "`cilock run --enable-archivista`" + ` runs in the pipeline and uploads
+In real CI, an authenticated ` + "`cilock run`" + ` runs in the pipeline and uploads
 attestation collections to the platform's Archivista, keyed by SUBJECTS (the git
 attestor records the commit as a subject). The developer who wants to gate on
 that evidence never has the ` + "`cilock run -o`" + ` bundle files locally — they only
@@ -292,7 +292,7 @@ func derivePolicyFromCommit(ctx context.Context, stderr io.Writer, o policyFromC
 	}
 	if len(gitoids) == 0 {
 		return nil, 0, fmt.Errorf("no attestations found for commit %s on the platform.\n"+
-			"CI must have run `cilock run --enable-archivista` for this commit so the\n"+
+			"CI must have run an authenticated `cilock run` for this commit so the\n"+
 			"git attestor records it as a subject the platform can index. Confirm the\n"+
 			"pipeline ran for this exact commit, and that you're logged in to the tenant\n"+
 			"that owns the evidence:\n\n  cilock whoami", shortID(commit))
