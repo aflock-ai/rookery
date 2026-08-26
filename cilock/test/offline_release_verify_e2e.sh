@@ -76,8 +76,29 @@ ls "$SRC_ATT" >/dev/null
 # --- Step build: produce the cilock binary in an isolated workdir. The `-o`
 # envelope is written OUTSIDE the build workingdir (here, the parent $WORK) so it
 # isn't captured as a spurious build product (the same reason the fan-out writes
-# to /tmp/att, not /tmp/build). ---
+# to /tmp/att, not /tmp/build).
+#
+# CORRELATION (load-bearing — read before touching this copy). Verify is seeded
+# with ONE digest, the binary's, and reaches the source-git collection only by
+# expanding on a subject the two steps SHARE. The real fan-out shares the github
+# attestor's `pipelineurl:` subject (both `cilock run` calls pass
+# --attestations github inside one workflow run; see the _comment in
+# deploy/dist/release-policy-platform.json). That attestor cannot run here, so
+# this fixture correlates the two steps the other real way: the build step
+# CONSUMES the source-git step's product, making build's tree:materials root
+# equal source-git's tree:products root. v0.3 leaf hashes are content-only and
+# path-independent, so the single-leaf roots match.
+#
+# It must be a REAL shared digest. Before this copy existed the two steps shared
+# only the RFC 6962 EMPTY-tree root, sha256("") — which every step that consumed
+# or produced nothing emits identically, so it names no particular collection.
+# The verifier deliberately refuses to widen the search on it (policy.go's
+# isEmptyTreeHubBackRef, plus the TreeSize==0 guards in the product/material
+# attestors' BackRefs), and once that landed this fixture could no longer reach
+# source-git and blocked the v4.2.0-rc.1 release. Do not "fix" a future failure
+# here by reintroducing that hub. ---
 mkdir -p build
+cp "$WORK/src/SOURCE" "$WORK/build/SOURCE"
 "$CILOCK" run --step build --workingdir "$WORK/build" \
   --attestations environment --signer-file-key-path key.pem \
   --platform-url "" --enable-archivista=false \
@@ -86,10 +107,11 @@ mkdir -p build
 BIN="$WORK/build/cilock"
 ls "$BUILD_ATT" "$BIN" >/dev/null
 
-# --- Two independent steps, mirroring the REAL release policy
+# --- Two steps, mirroring the REAL release policy
 # (deploy/dist/release-policy-platform.json): source-git + build, correlated by
-# shared subjects, NOT artifactsFrom. Verify binds the binary to the build step's
-# product/v0.3 subject. ---
+# a shared SUBJECT, NOT artifactsFrom. Verify binds the binary to the build
+# step's product/v0.3 subject, then reaches source-git across the shared
+# material/product tree root established above. ---
 python3 - "$KEYID" >policy.json <<'PY'
 import json, sys, base64
 k = sys.argv[1]
