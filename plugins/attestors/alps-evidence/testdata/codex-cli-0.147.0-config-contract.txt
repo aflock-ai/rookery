@@ -1,0 +1,63 @@
+Codex CLI configuration contract, MEASURED — not read from documentation.
+
+  codex-cli 0.147.0 · macos-aarch64 · captured 2026-08-26
+
+This file exists because a code review asserted a different contract than the
+one the installed CLI implements, and prose could not settle it. Everything
+below is either verbatim CLI output or the resolved-model readout of a
+purpose-built fixture. hardening_round8_test.go asserts the observer's
+implemented precedence against these bytes.
+
+
+1. PROFILE SELECTION — verbatim from `codex --help`
+---------------------------------------------------
+
+  -p, --profile <CONFIG_PROFILE_V2>
+          Layer $CODEX_HOME/<name>.config.toml on top of the base user config
+
+Two things this settles:
+
+  * `-p` is the short alias for `--profile`; both select the same thing.
+  * The selection is an OVERLAY FILE, $CODEX_HOME/<name>.config.toml — not a
+    [profiles.<name>] table inside config.toml. The value type is literally
+    named CONFIG_PROFILE_V2 because the table is the V1 shape it replaced.
+
+Reading the legacy table for a current run is the unsafe direction: a stale
+[profiles.unsafe] table saying sandbox_mode = "read-only" would be signed for
+a run whose selected unsafe.config.toml granted danger-full-access.
+
+
+2. BASE USER CONFIGURATION — verbatim from `codex --help`
+---------------------------------------------------------
+
+  -c, --config <key=value>
+          Override a configuration value that would otherwise be loaded from
+          `~/.codex/config.toml`.
+
+$CODEX_HOME/config.toml (default ~/.codex/config.toml) is the base layer.
+
+
+3. PROJECT CONFIGURATION — measured, `codex doctor` model readout
+-----------------------------------------------------------------
+
+Method: write a distinctive `model` into one candidate location at a time,
+run `codex doctor` from a working directory inside a git repository, and read
+back the "model" line of its Configuration section. The user config's model is
+gpt-5.6-sol, so any other value proves the candidate was loaded.
+
+  candidate location                     cwd            resolved model
+  -------------------------------------  -------------  --------------------
+  <cwd>/.codex/config.toml               <repo>/zzprobe cwd-dotcodex-model
+  <repo-root>/.codex/config.toml         <repo>/zzprobe project-layer-model
+  <cwd>/config.toml                      <repo>/zzprobe gpt-5.6-sol  (IGNORED)
+  <repo-root>/config.toml                <repo>/zzprobe gpt-5.6-sol  (IGNORED)
+
+Conclusion: the project tier is `.codex/config.toml` in each directory from
+the working directory up to the project root. A BARE `config.toml` is not a
+Codex configuration file at any level.
+
+That distinction is load-bearing for this attestor. A bare config.toml is an
+ordinary repository file in many ecosystems; treating one as Codex project
+configuration both digested an unrelated file into signed evidence as Codex
+configuration and suppressed resolution of the user tier that did describe
+the run.

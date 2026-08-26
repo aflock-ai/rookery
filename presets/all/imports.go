@@ -17,6 +17,7 @@ package all
 
 import (
 	// attestors
+	_ "github.com/aflock-ai/rookery/plugins/attestors/alps-evidence"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/asff"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/aws-config"

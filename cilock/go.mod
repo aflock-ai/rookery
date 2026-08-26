@@ -8,6 +8,8 @@ replace github.com/aflock-ai/rookery/attestation => ../attestation
 replace github.com/aflock-ai/rookery/platformauth => ../platformauth
 
 // Attestor plugins
+replace github.com/aflock-ai/rookery/plugins/attestors/alps-evidence => ../plugins/attestors/alps-evidence
+
 replace github.com/aflock-ai/rookery/plugins/attestors/asff => ../plugins/attestors/asff
 
 replace github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild => ../plugins/attestors/aws-codebuild
@@ -142,6 +144,7 @@ replace github.com/wk8/go-ordered-map/v2 => ../security-patches/wk8-orderedmap/v
 require (
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/platformauth v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/alps-evidence v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/asff v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-config v0.0.0-00010101000000-000000000000

@@ -15,6 +15,7 @@ Regenerate after adding or renaming an attestor:
 
 | Name | Import path | Predicate type |
 |---|---|---|
+| `alps-evidence` | `plugins/attestors/alps-evidence` | `https://aflock.ai/attestations/alps-evidence/v0.1` |
 | `aws-codebuild` | `plugins/attestors/aws-codebuild` | `https://aflock.ai/attestations/aws-codebuild/v0.1` |
 | `aws` | `plugins/attestors/aws-iid` | `https://aflock.ai/attestations/aws/v0.1` |
 | `configuration` | `plugins/attestors/configuration` | `https://aflock.ai/attestations/configuration/v0.2` |

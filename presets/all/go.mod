@@ -12,6 +12,8 @@ replace github.com/aflock-ai/rookery/platformauth => ../../platformauth
 replace github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof => ../../plugins/attestors/inclusion-proof
 
 // Attestor plugins
+replace github.com/aflock-ai/rookery/plugins/attestors/alps-evidence => ../../plugins/attestors/alps-evidence
+
 replace github.com/aflock-ai/rookery/plugins/attestors/asff => ../../plugins/attestors/asff
 
 replace github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild => ../../plugins/attestors/aws-codebuild
@@ -39,6 +41,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/gcp-iit => ../../plugins/
 replace github.com/aflock-ai/rookery/plugins/attestors/git => ../../plugins/attestors/git
 
 replace github.com/aflock-ai/rookery/plugins/attestors/github => ../../plugins/attestors/github
+
+replace github.com/aflock-ai/rookery/plugins/attestors/github-review => ../../plugins/attestors/github-review
 
 replace github.com/aflock-ai/rookery/plugins/attestors/githubaction => ../../plugins/attestors/githubaction
 
@@ -130,6 +134,7 @@ replace github.com/aflock-ai/rookery/plugins/signers/vault-transit => ../../plug
 require (
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/cilock v0.0.0-20260526030653-bb247c9ce799
+	github.com/aflock-ai/rookery/plugins/attestors/alps-evidence v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/asff v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-codebuild v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-config v0.0.0-00010101000000-000000000000
@@ -143,7 +148,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/gcp-iit v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/git v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/github v0.0.0-00010101000000-000000000000
-	github.com/aflock-ai/rookery/plugins/attestors/github-review v0.0.0-20260526031329-c5a7d8b6c1d3
+	github.com/aflock-ai/rookery/plugins/attestors/github-review v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/githubaction v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/githubwebhook v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gitlab v0.0.0-00010101000000-000000000000

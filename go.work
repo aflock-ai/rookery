@@ -16,6 +16,7 @@ use (
 	./lockctl
 
 	// Attestor plugins
+	./plugins/attestors/alps-evidence
 	./plugins/attestors/asff
 	./plugins/attestors/aws-codebuild
 	./plugins/attestors/aws-config

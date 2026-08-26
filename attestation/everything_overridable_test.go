@@ -118,6 +118,22 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// docs/configuration.md as an "advanced runtime tuning" case.
 	"DefaultProbeTimeout": {},
 
+	// alps-evidence's digest cap IS overridable at the API layer
+	// (WithDigestSizeLimit), which this test's flag/env heuristic cannot
+	// see. Deliberately NOT an env var: the cap exists because coding-agent
+	// binaries measure 310-317MB and hashing one on every attestation is a
+	// cost with no evidentiary payoff — and an env override would hand the
+	// AGENT UNDER OBSERVATION a knob over its own observer, in the one
+	// attestor whose whole design assumes the surrounding process is
+	// adversarial.
+	"DefaultDigestSizeLimit": {},
+
+	// Same posture: the vendor-chain walk bound (the exported
+	// Detector.MaxVendorChain field, alps-evidence/detector.go) is a safety
+	// bound on ancestry traversal, not a tuning knob. An env override would
+	// let the observed process decide how far its observer may look.
+	"DefaultMaxVendorChain": {},
+
 	// defaultHTTPTimeout bounds the Archivista client's HTTP requests. It IS
 	// overridable via the WithHTTPClient(*http.Client) per-call option (the same
 	// API-layer override pattern as DefaultProbeTimeout) — cilock injects a client

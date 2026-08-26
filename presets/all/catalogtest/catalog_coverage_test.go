@@ -55,6 +55,7 @@ var provenExempt = map[string]string{}
 // fails the gate. Unlike provenExempt this need not shrink — these are
 // genuinely live-only.
 var liveOnly = map[string]string{
+	"alps-evidence":  "live process observer: Attest() reads cilock's current process ancestry, executable snapshots, selected argv/config values, and allowlisted environment values. There is no stable artifact to replay hermetically; proven by examples/alps-evidence/ and the platform-specific live process tests in the plugin.",
 	"pip-install":    "live introspector: Attest() shells out to the running python3/pip interpreter (pip list/show, site.getsitepackages, walks site-packages, execs python on pickle files) AND makes live PyPI HTTP calls for PEP 740 provenance; it ignores any injected Product and its PEP740 output varies with PyPI's live state. No recordable artifact ⇒ no hermetic replay. Proven by examples/pip-install/ (a real `cilock run -- pip install` capture).",
 	"sinkhole-flows": "live consumer: reads a hardcoded absolute /flows/out.jsonl emitted ONLY by the proprietary testifysec/pip-witness mitmproxy sidecar (private, unreachable in CI). No available tool emits the schema and no testkit mode can write that absolute path ⇒ no hermetic fixture. Proven by examples/sinkhole-flows/ (documented reproduction against the pip-witness sidecar).",
 }

@@ -1,0 +1,53 @@
+apiVersion: cilock.detection/v0.1
+name: alps-evidence
+description: "Observes coding-agent process context (Claude Code, Codex, Cursor, Gemini CLI, ...) in cilock's ancestry at collection time. This is forgeable attribution data, not authenticated identity or policy evidence."
+
+category: [ci-context]
+
+# No upstream block: this attestor describes whichever of several vendors'
+# agents invoked cilock. Picking one vendor as "the" upstream would be wrong
+# for the same reason the format-only attestors leave it empty.
+
+pre:
+  match:
+    # Heuristic only. The attestor's real detection is a process-ancestry walk
+    # at collection time, which a detector predicate cannot express. These
+    # environment markers are the footprint the priority agents leave in a
+    # child process's environment; they exist to let auto-planning enable the
+    # attestor cheaply. An agent that exports none of them is still detected
+    # by the walk whenever the attestor actually runs — and conversely a
+    # marker here proves nothing, because any process can export one. The
+    # walk, not this gate, decides what gets attested.
+    any_of:
+      - env_set: CLAUDECODE
+      - env_set: CLAUDE_CODE_SESSION_ID
+      - env_set: CODEX_SANDBOX
+      - env_set: CODEX_SANDBOX_NETWORK_DISABLED
+
+llm_hints:
+  on_match: "Coding-agent process context observed. Treat it as non-enforcing attribution, never as authenticated agent identity or proof of policy satisfaction."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/alps-evidence/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: >-
+      The whole predicate describes live machine state observed at collection
+      time, so almost nothing is byte-stable across runs: capture time, PIDs
+      and process start times, install paths and versions, session
+      identifiers, and the resolved model/posture all follow the developer
+      machine. What IS stable is the shape and the honesty contract — status
+      is one of detected/not-detected/incomplete/unavailable (not-detected is
+      only ever a COMPLETED walk; a cancelled, unreadable, looped, or
+      depth-truncated walk reports incomplete), the assurance statement is
+      emitted on every run, and every config file's sha256 is computed from
+      the exact bytes its values were parsed from.
+    volatile_fields: ["captured_at", "invoker", "model", "session", "settings", "configuration", "environment", "ancestry", "warnings"]
+  # Deliberately NO subjects, backrefs, materials, products, or exports:
+  # every field in this predicate is chosen by the process being described, so
+  # it must never contribute to what a policy resolves or verifies. The
+  # interface assertions in alps_evidence.go pin the same decision in code.
+  schema_required: true
+  credentials: []
