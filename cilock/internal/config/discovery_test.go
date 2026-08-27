@@ -43,7 +43,10 @@ func TestDiscover_RequiresHTTPS(t *testing.T) {
 				http.NotFound(w, r)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"archivista_url": "http://x/archivista"})
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"archivista_url": "http://x/archivista",
+				"pushgate_url":   "http://localhost:8081",
+			})
 		}))
 		defer srv.Close()
 
@@ -53,6 +56,9 @@ func TestDiscover_RequiresHTTPS(t *testing.T) {
 		}
 		if d == nil || d.ArchivistaURL == "" {
 			t.Fatalf("expected a parsed discovery doc, got %+v", d)
+		}
+		if d.PushgateURL != "http://localhost:8081" {
+			t.Fatalf("expected discovered Pushgate origin, got %+v", d)
 		}
 	})
 

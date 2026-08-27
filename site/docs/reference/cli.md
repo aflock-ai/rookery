@@ -23,6 +23,8 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock logout` | Remove the stored platform session credential. |
 | `cilock trust [provider] [owner/repo]` | Register an OIDC identity the platform trusts for keyless upload (CI). |
 | `cilock doctor` | Read-only preflight: is the environment sane to attest + upload against the platform? |
+| `cilock git configure` | Configure Git commit and tag signing through CI/lock's standard X.509 signing protocol. |
+| `cilock pushgate status` | Show whether the exact current ref and commit were accepted and delivered by Pushgate. |
 | `cilock run [cmd]` | Run a command and record signed attestations about its execution. |
 | `cilock attest` | Record attestations without wrapping a command (sugar for `run -- true`; for consultative/at-rest attestors). |
 | `cilock attest vex` | Author a signed OpenVEX document from a triage decision (validated against the spec before it is signed). |
@@ -180,6 +182,63 @@ cilock doctor
 
 # Check a self-hosted / standalone platform, machine-readable
 cilock doctor --platform-url https://judge.example.com --json
+```
+
+## `cilock git configure`
+
+Configure Git's standard X.509 signing protocol to use CI/lock for signed
+commits and tags. By default the command changes only the current repository;
+`--global` applies the same configuration to every repository for the current
+user. CI/lock obtains a short-lived Fulcio certificate from the selected
+TestifySec platform and requires its RFC 3161 timestamp authority, so no
+long-lived signing key is written into the repository.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--global` | `false` | Write the signing configuration to the current user's global Git configuration instead of this repository. |
+
+```bash
+# Configure this repository, then use ordinary Git signing commands
+cilock git configure
+git commit -S -m "feat: signed by CI/lock"
+git verify-commit HEAD
+
+# Configure all repositories for this user
+cilock git configure --global
+```
+
+## `cilock pushgate status`
+
+Read the exact Pushgate delivery record for a Git ref and commit. With no flags,
+CI/lock discovers the current branch, `HEAD` commit, selected platform, and the
+configured Pushgate Git remote. The platform discovery document pins the trusted
+Pushgate origin; the request uses the matched remote's repository-scoped
+credential and refuses redirects rather than forwarding that credential.
+
+Use `--wait` after `git push` to stay attached until delivery finishes. A
+delivered push exits successfully; a refusal, conflict, terminal delivery
+failure, or timeout exits non-zero with an actionable status. `--json` emits one
+machine-readable object when the command finishes.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--remote <name>` | inferred Pushgate remote | Select a Git remote explicitly when more than one matches the discovered Pushgate origin. |
+| `--ref <ref>` | current branch | Fully qualified `refs/heads/*` or `refs/tags/*` ref. Discovery reads `git symbolic-ref HEAD`, which resolves a branch only, so a checked-out tag — a detached `HEAD` — must pass `--ref` explicitly. |
+| `--commit <sha>` | `HEAD` | Exact lowercase 40-character commit to query. |
+| `--wait` | `false` | Poll until delivery succeeds or reaches a terminal failure. |
+| `--timeout <duration>` | `15m` | Maximum time to wait for delivery. |
+| `--json` | `false` | Emit the final status or stable error as JSON. |
+
+```bash
+# Inspect the current commit without changing anything
+cilock pushgate status
+
+# Push, then remain attached through asynchronous Git-provider delivery
+git push pushgate HEAD
+cilock pushgate status --wait
+
+# Agent-friendly output with an explicit wait budget
+cilock pushgate status --wait --timeout 20m --json
 ```
 
 ## `cilock run [cmd]`

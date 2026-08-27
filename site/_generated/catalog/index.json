@@ -1,7 +1,7 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 132,
-  "withDoc": 56,
+  "count": 133,
+  "withDoc": 57,
   "emittedBy": {
     "sbom": [
       "apko",
@@ -41,6 +41,19 @@
     ]
   },
   "tools": [
+    {
+      "name": "alps-evidence",
+      "source": "attestor-backed",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "Observe which coding-agent process appears in cilock's ancestry, with bounded version, model, sandbox, configuration, and environment context that is explicitly non-enforcing.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/alps-evidence/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
     {
       "name": "apko",
       "source": "catalog-only",

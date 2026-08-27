@@ -87,6 +87,7 @@ exposes the hidden signing-backend, attestor-tuning, cache, and env flags.
 | `policy` | Validate a policy, or generate a starter policy from signed bundles. |
 | `attestors` | List available attestors or print an attestor's JSON schema. |
 | `tools` | Introspect the in-binary detector registry (list / show / test-plan). |
+| `pushgate` | Inspect whether an accepted Git push is queued, delivered, refused, or failed. |
 | `keyid` | Inspect the canonical keyid derived from a public or private key. |
 | `login` / `logout` / `whoami` | Manage the stored TestifySec platform session. |
 | `version` | Print the cilock version. |
@@ -100,6 +101,25 @@ exposes the hidden signing-backend, attestor-tuning, cache, and env flags.
     --debug-cpu-profile-file string   Path to store the CPU profile (enables profiling when non-empty)
     --debug-mem-profile-file string   Path to store the Memory profile (enables profiling when non-empty)
 ```
+
+---
+
+## `cilock pushgate status`
+
+From a repository configured with a Pushgate Git remote, show the exact
+delivery state for the current branch and commit:
+
+```bash
+cilock pushgate status
+cilock pushgate status --wait
+cilock pushgate status --wait --timeout 20m --json
+```
+
+CI/lock infers the current ref, `HEAD`, and remote. It discovers the trusted
+Pushgate origin from the selected TestifySec platform and refuses to send the
+repository credential when the remote origin does not match. `--wait` exits
+successfully only after delivery; refusal, conflict, failed delivery, unknown
+ledger state, and timeout return non-zero.
 
 ---
 

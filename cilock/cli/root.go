@@ -109,6 +109,7 @@ air-gapped environments.`,
 	cmd.AddCommand(ToolsCmd())
 	cmd.AddCommand(GetCmd())
 	cmd.AddCommand(GitCmd())
+	cmd.AddCommand(PushgateCmd())
 	return cmd
 }
 

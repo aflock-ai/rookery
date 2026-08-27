@@ -38,6 +38,7 @@ type Discovery struct {
 	ArchivistaURL string            `json:"archivista_url"`
 	TSAURL        string            `json:"tsa_url"`
 	GraphQLURL    string            `json:"graphql_url"`
+	PushgateURL   string            `json:"pushgate_url"`
 	Signing       *SigningDiscovery `json:"signing"`
 }
 
