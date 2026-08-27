@@ -1,7 +1,39 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 134,
+  "attestor_count": 135,
   "attestors": [
+    {
+      "name": "alps-evidence",
+      "predicate_type": "https://aflock.ai/attestations/alps-evidence/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "ci-context"
+      ],
+      "tier": "recommended",
+      "registered": true,
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(env_set:CLAUDECODE, env_set:CLAUDE_CODE_SESSION_ID, env_set:CODEX_SANDBOX, env_set:CODEX_SANDBOX_NETWORK_DISABLED)"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "env_set": "CLAUDECODE"
+            },
+            {
+              "env_set": "CLAUDE_CODE_SESSION_ID"
+            },
+            {
+              "env_set": "CODEX_SANDBOX"
+            },
+            {
+              "env_set": "CODEX_SANDBOX_NETWORK_DISABLED"
+            }
+          ]
+        }
+      }
+    },
     {
       "name": "aws",
       "predicate_type": "https://aflock.ai/attestations/aws/v0.1",
@@ -235,8 +267,61 @@
       "name": "github-review",
       "predicate_type": "https://aflock.ai/attestations/github-review/v0.1",
       "run_type": "prematerial",
+      "category": [
+        "code-review"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "GitHub Pull Request Reviews API",
+        "source": "https://docs.github.com/en/rest/pulls/reviews",
+        "license": "commercial",
+        "vendor": "GitHub, Inc. / Microsoft"
+      },
       "registered": true,
-      "has_contract": false
+      "subjects": [
+        {
+          "prefix": "commitsha:",
+          "description": "the target commit SHA reviews were looked up for"
+        },
+        {
+          "prefix": "pr:",
+          "description": "each pull request associated with the commit, keyed pr:<repo>#<number>"
+        },
+        {
+          "prefix": "repo:",
+          "description": "the owner/name GitHub repository"
+        },
+        {
+          "prefix": "reviewer:",
+          "description": "each distinct reviewer login that submitted a review"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "all_of(any_of(env_set:GH_TOKEN, env_set:GITHUB_ACTIONS, env_set:GITHUB_TOKEN), file_exists:.git/HEAD)"
+      },
+      "detection": {
+        "pre": {
+          "all_of": [
+            {
+              "any_of": [
+                {
+                  "env_set": "GH_TOKEN"
+                },
+                {
+                  "env_set": "GITHUB_ACTIONS"
+                },
+                {
+                  "env_set": "GITHUB_TOKEN"
+                }
+              ]
+            },
+            {
+              "file_exists": ".git/HEAD"
+            }
+          ]
+        }
+      }
     },
     {
       "name": "gitlab",
@@ -4130,8 +4215,5 @@
         }
       }
     }
-  ],
-  "parse_errors": {
-    "github-review": "detector.yaml category \"statement\" must be one of [source-checkout ci-context dependency-resolve dependency-verify build unit-test integration-test code-review threat-model vulnerability-scan secret-scan compliance-scan sbom-generate sbom-consume provenance policy-eval sign publish deploy lint release-approve archive iac-plan iac-apply manifest-validate image-build image-scan image-sign package-publish runtime-event runtime-vulnerability-detect drift-detect asset-inventory vex-consume vulnerability-disclosure incident-response rollback key-ceremony api-surface-check model-train model-eval dataset-snapshot firmware-sign mobile-sign mobile-submit]"
-  }
+  ]
 }
