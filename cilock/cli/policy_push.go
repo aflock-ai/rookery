@@ -72,9 +72,10 @@ func PolicyPushCmd() *cobra.Command {
 			"The policy file must already be DSSE-signed — produce it with `cilock sign`\n" +
 			"against the platform's keyless Fulcio (a trusted root, so no trust-source\n" +
 			"registration is needed).\n\n" +
-			"Auth: the DSSE upload needs attestation:upload; createPolicyRelease needs\n" +
-			"policy:write. If the platform rejects the call for a missing scope, run\n" +
-			"`cilock login` again to pick up policy:write.",
+			"Auth: the DSSE upload needs attestation:upload; createPolicyDefinition and\n" +
+			"createPolicyRelease need policy:publish. Publication cannot bind a Product\n" +
+			"or assign a Pushgate repository. If the platform rejects the call for a\n" +
+			"missing scope, run `cilock login` again to pick up policy:publish.",
 		Example: "  # Publish a release tagged v1.0.0 (sign first: cilock sign -f policy.json -o policy.signed.json)\n" +
 			"  cilock policy push --file policy.signed.json --definition supply-chain --tag v1.0.0\n\n" +
 			"  # Publish to a specific platform\n" +

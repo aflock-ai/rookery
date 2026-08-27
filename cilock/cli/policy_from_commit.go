@@ -117,9 +117,11 @@ Two modes:
   - one-shot (--product AND --tag): derive → sign (keyless) → push → bind in one
     command. --definition names the PolicyDefinition (default: the product name).
 
-Auth: the Archivista query needs a logged-in session; createPolicyDefinition /
-createPolicyRelease / createPolicyBinding need policy:write. If the platform
-rejects a call for a missing scope, run ` + "`cilock login`" + ` again.`,
+Auth: the Archivista query needs a logged-in session. Immutable definition and
+release publication needs policy:publish. The optional one-shot Product binding
+also needs the legacy policy:write binding authority; neither capability assigns
+a Pushgate repository. If the platform rejects a call for a missing scope, run
+` + "`cilock login`" + ` again.`,
 		Example: `  # Author a policy from a commit's CI evidence, write it for review
   cilock policy from-commit 1a2b3c4d... -o policy.json
 

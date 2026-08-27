@@ -26,8 +26,8 @@ package options
 // Auth model: every call carries the stored session Bearer (Authorization:
 // Bearer <token>). The server enforces scope:
 //   - the DSSE upload to Archivista needs attestation:upload (the credential has it);
-//   - createPolicyRelease / createPolicyBinding need policy:write;
-//   - createPolicyDefinition is being extended to policy:write too.
+//   - createPolicyDefinition / createPolicyRelease need policy:publish;
+//   - createPolicyBinding retains legacy policy:write.
 // The client never enforces scope locally — it surfaces a clear, actionable
 // error when the server rejects a call for a missing scope (see classifyGQLErr).
 
@@ -157,18 +157,23 @@ func decodeGraphQLResponse(status int, raw []byte, out any) error {
 
 // classifyGQLErr turns a transport/GraphQL error into a user-actionable one. A
 // scope/permission denial is the common, recoverable case: the session predates
-// the policy:write grant, so the remedy is to re-authenticate. Everything else
+// the purpose-specific policy grant, so the remedy is to re-authenticate. Everything else
 // is passed through with its status for diagnosis.
 func classifyGQLErr(status int, msg string) error {
 	lower := strings.ToLower(msg)
+	requiredScope := "policy:write"
+	if strings.Contains(lower, "policy:publish") {
+		requiredScope = "policy:publish"
+	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden ||
 		strings.Contains(lower, "missing required scope") ||
 		strings.Contains(lower, "policy:write") ||
+		strings.Contains(lower, "policy:publish") ||
 		strings.Contains(lower, "permission denied") ||
 		strings.Contains(lower, "not authorized") {
 		return fmt.Errorf("platform denied this operation (likely missing the %q scope): %s\n"+
-			"Re-authenticate to pick up policy:write, then retry:\n\n"+
-			"  cilock login", "policy:write", msg)
+			"Re-authenticate to pick up %s, then retry:\n\n"+
+			"  cilock login", requiredScope, msg, requiredScope)
 	}
 	if status != http.StatusOK {
 		return fmt.Errorf("platform returned %d: %s", status, msg)

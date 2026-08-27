@@ -454,7 +454,7 @@ cilock policy from-bundles -k signer.pub build.bundle.json scan.bundle.json -o p
 
 ## `cilock policy from-commit <commit-sha>`
 
-> Authors a starter Witness policy from the CI attestations the platform already holds for a commit — no local bundle files needed. It resolves the commit, finds every DSSE whose subjects include it, groups them by witness collection name (one step per collection), populates functionaries from each collection's signers (raw keyid or Fulcio keyless cert with the leaf SAN email pinned), recovers TSA trust anchors so short-lived keyless leaves verify, and wires cross-step provenance edges. Author-only by default (write the policy, then `cilock sign` → [`policy push`](#cilock-policy-push---file--definition---tag) → [`policy bind`](#cilock-policy-bind---definition--product)); pass both `--product` and `--tag` for the one-shot derive → sign → push → bind flow. The Archivista query needs a logged-in session; the one-shot mutations need `policy:write`.
+> Authors a starter Witness policy from the CI attestations the platform already holds for a commit — no local bundle files needed. It resolves the commit, finds every DSSE whose subjects include it, groups them by witness collection name (one step per collection), populates functionaries from each collection's signers (raw keyid or Fulcio keyless cert with the leaf SAN email pinned), recovers TSA trust anchors so short-lived keyless leaves verify, and wires cross-step provenance edges. Author-only by default (write the policy, then `cilock sign` → [`policy push`](#cilock-policy-push---file--definition---tag) → [`policy bind`](#cilock-policy-bind---definition--product)); pass both `--product` and `--tag` for the one-shot derive → sign → push → bind flow. The Archivista query needs a logged-in session; publication needs `policy:publish`, and the optional Product binding additionally needs legacy `policy:write`.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -477,7 +477,7 @@ cilock policy from-commit 1a2b3c4d... --product my-service --tag v1
 
 ## `cilock policy push --file --definition --tag`
 
-> Publishes an author-signed Witness policy to the platform. It uploads the signed policy DSSE to the platform's Archivista (the same upload path as `cilock run --enable-archivista`), ensures the named PolicyDefinition exists (creating it if absent), then creates a PolicyRelease that pins the definition to the uploaded policy under `--tag`. The policy file must already be DSSE-signed — produce it with `cilock sign` against the platform's keyless Fulcio. The DSSE upload needs `attestation:upload`; creating the release needs `policy:write`.
+> Publishes an author-signed Witness policy to the platform. It uploads the signed policy DSSE to the platform's Archivista (the same upload path as `cilock run --enable-archivista`), ensures the named PolicyDefinition exists (creating it if absent), then creates a PolicyRelease that pins the definition to the uploaded policy under `--tag`. The policy file must already be DSSE-signed — produce it with `cilock sign` against the platform's keyless Fulcio. The DSSE upload needs `attestation:upload`; creating the immutable definition and release needs `policy:publish`. That scope cannot bind a Product or assign a Pushgate repository.
 
 | Flag | Default | Description |
 |---|---|---|

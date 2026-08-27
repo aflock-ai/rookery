@@ -250,7 +250,7 @@ func TestPolicyPush_ScopeDeniedSurfacesRemedy(t *testing.T) {
 		case strings.Contains(q, "CilockPolicyDefByName"):
 			_, _ = io.WriteString(w, `{"data":{"policyDefinitions":{"edges":[{"node":{"id":"def-1","name":"d"}}]}}}`)
 		case strings.Contains(q, "CilockCreatePolicyRelease"):
-			_, _ = io.WriteString(w, `{"errors":[{"message":"missing required scope \"policy:write\""}]}`)
+			_, _ = io.WriteString(w, `{"errors":[{"message":"missing required scope \"policy:publish\""}]}`)
 		default:
 			return false
 		}
@@ -262,7 +262,8 @@ func TestPolicyPush_ScopeDeniedSurfacesRemedy(t *testing.T) {
 
 	_, err := runCmd(t, PolicyPushCmd(),
 		"-f", file, "-d", "d", "-t", "v1", "--platform-url", srv.URL)
-	if err == nil || !strings.Contains(err.Error(), "cilock login") {
+	if err == nil || !strings.Contains(err.Error(), "cilock login") ||
+		!strings.Contains(err.Error(), "policy:publish") {
 		t.Fatalf("want scope-denied remedy, got %v", err)
 	}
 }
