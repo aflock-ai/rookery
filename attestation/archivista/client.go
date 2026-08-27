@@ -69,6 +69,10 @@ type Client struct {
 	headers     http.Header
 	client      *http.Client
 	tokenSource func() (string, error)
+	// retry, when non-nil, bounds automatic retry of Store on retryable
+	// failures. nil means a single attempt — see WithRetry for why retry is
+	// opt-in rather than the default.
+	retry *RetryPolicy
 }
 
 // Option configures a Client.
@@ -133,12 +137,32 @@ func New(url string, opts ...Option) *Client {
 }
 
 // Store uploads a DSSE envelope and returns its gitoid.
+//
+// When the client was built WithRetry, a retryable failure (any 5xx, a
+// timeout, a reset connection, a 429 honouring Retry-After) is retried with
+// bounded exponential backoff before the error is returned. Terminal failures
+// — 400/401/403/422 and friends — still fail on the first attempt. Without
+// WithRetry this is a single attempt, exactly as it always was.
+//
+// The envelope is marshalled ONCE, outside the retry loop, and every attempt
+// posts that same byte slice from a fresh reader. Marshalling per attempt
+// would be wasted work, and reusing a spent io.Reader would silently upload an
+// empty body on the second try.
 func (c *Client) Store(ctx context.Context, env dsse.Envelope) (string, error) {
 	body, err := json.Marshal(env)
 	if err != nil {
+		// Deterministic and local to this process: no server involvement, so
+		// nothing to retry. Returned before the retry loop is entered.
 		return "", fmt.Errorf("marshal envelope: %w", err)
 	}
 
+	return c.storeWithRetry(ctx, len(body), func(ctx context.Context) (string, error) {
+		return c.storeOnce(ctx, body)
+	})
+}
+
+// storeOnce performs a single upload attempt with the already-marshalled body.
+func (c *Client) storeOnce(ctx context.Context, body []byte) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url+"/upload", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
@@ -155,7 +179,12 @@ func (c *Client) Store(ctx context.Context, env dsse.Envelope) (string, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("archivista store returned %d: %s", resp.StatusCode, readLimitedErrorBody(resp.Body))
+		return "", &StatusError{
+			Op:         "store",
+			StatusCode: resp.StatusCode,
+			Body:       readLimitedErrorBody(resp.Body),
+			RetryAfter: resp.Header.Get("Retry-After"),
+		}
 	}
 
 	var result storeResponse
@@ -182,7 +211,12 @@ func (c *Client) Download(ctx context.Context, gitoidArg string) (dsse.Envelope,
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return dsse.Envelope{}, fmt.Errorf("archivista download returned %d: %s", resp.StatusCode, readLimitedErrorBody(resp.Body))
+		return dsse.Envelope{}, &StatusError{
+			Op:         "download",
+			StatusCode: resp.StatusCode,
+			Body:       readLimitedErrorBody(resp.Body),
+			RetryAfter: resp.Header.Get("Retry-After"),
+		}
 	}
 
 	// Read the raw body under a hard cap. Archivista content-addresses each
@@ -405,7 +439,12 @@ func (c *Client) graphqlQuery(ctx context.Context, query string, variables any, 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("archivista graphql returned %d: %s", resp.StatusCode, readLimitedErrorBody(resp.Body))
+		return &StatusError{
+			Op:         "graphql",
+			StatusCode: resp.StatusCode,
+			Body:       readLimitedErrorBody(resp.Body),
+			RetryAfter: resp.Header.Get("Retry-After"),
+		}
 	}
 
 	var gqlResp graphqlResponse

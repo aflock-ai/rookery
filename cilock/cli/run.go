@@ -21,12 +21,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
@@ -1067,20 +1069,44 @@ func shouldWarnNotUploaded(platformURL string, archivistaEnabled, runFailed, jso
 	return platformURL != "" && !archivistaEnabled && !runFailed && !jsonOutput
 }
 
-// uploadError wraps an Archivista store failure. Signing already succeeded, so a
-// platform upload 401/403 almost always means the repo/identity is not trusted
-// for upload yet — surface the one-time fix (`cilock trust`) instead of a raw
-// "Invalid API credential". Non-auth failures (network, 5xx) pass through.
+// uploadError wraps an Archivista store failure.
+//
+// Two distinct failure classes reach here, and they need different advice.
+//
+// A 401/403 means signing succeeded but the repo/identity is not trusted for
+// upload yet, so surface the one-time fix (`cilock trust`) instead of a raw
+// "Invalid API credential". This is decided on the TYPED status code, not by
+// running strings.Contains over the message: the error carries up to 500 bytes
+// of server response body, so a 503 whose body happened to mention 401 used to
+// be mis-advised as an auth problem.
+//
+// Anything else has already been through the bounded retry in the Archivista
+// client (see archivista.WithRetry), so by the time it lands here a transient
+// 5xx has been retried and is still failing. The signed envelope cannot be
+// stored out of band — an attestation is evidence of an execution, and
+// uploading a held bundle later would detach the evidence from the act that
+// produced it — so the recovery genuinely is to re-run `cilock run`. Say that
+// plainly rather than leaving the operator hunting for an upload command that
+// does not, and should not, exist.
 func uploadError(platformURL string, err error) error {
-	msg := err.Error()
-	if platformURL != "" && (strings.Contains(msg, "401") || strings.Contains(msg, "403") ||
-		strings.Contains(msg, "Invalid API credential")) {
+	var statusErr *archivista.StatusError
+	isAuth := errors.As(err, &statusErr) &&
+		(statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden)
+	if platformURL != "" && isAuth {
 		return fmt.Errorf("upload to %s rejected (%w)\n"+
 			"  this repo/identity is not trusted for upload yet — run `cilock trust` once,\n"+
 			"  or sign without uploading via --enable-archivista=false",
 			platformURL, err)
 	}
-	return fmt.Errorf("failed to store attestation on the platform: %w", err)
+	// Deliberately does not claim "after retrying": a terminal status (400, 404,
+	// 422) never entered the retry loop, and retry can be switched off. The
+	// wrapped error already reports "gave up after N attempts" when retries
+	// actually ran, so asserting it here would be wrong in exactly the cases
+	// where an operator most needs the message to be accurate.
+	return fmt.Errorf("failed to store attestation on the platform: %w\n"+
+		"  the attestation was signed but not stored, so this run produced no platform evidence — re-run `cilock run` to regenerate it\n"+
+		"  tune the retry with --archivista-upload-retries / --archivista-upload-retry-budget, or run with --log-level debug for per-attempt detail",
+		err)
 }
 
 // buildRunSummary assembles the structured RunSummary from data the run

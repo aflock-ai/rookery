@@ -1096,6 +1096,15 @@ type ArchivistaOptions struct {
 	Headers  []string
 	OIDC     bool   // Enable OIDC auth — fetch GitHub Actions OIDC token as Bearer
 	Audience string // OIDC audience (defaults to archivista server URL)
+
+	// UploadRetries is how many EXTRA attempts a retryable upload failure gets
+	// beyond the first. 0 restores the historical single-attempt behaviour.
+	UploadRetries int
+	// UploadRetryBudget caps the TOTAL wall-clock time the upload may take —
+	// the requests as well as the sleeps between them — so neither a server
+	// handing back long Retry-After values nor one that simply stops answering
+	// can park a CI job. An attempt still in flight when it expires is cut off.
+	UploadRetryBudget time.Duration
 }
 
 func (o *ArchivistaOptions) AddFlags(cmd *cobra.Command) {
@@ -1114,6 +1123,14 @@ func (o *ArchivistaOptions) AddFlags(cmd *cobra.Command) {
 	}
 
 	cmd.Flags().StringArrayVar(&o.Headers, "archivista-headers", []string{}, "Headers to provide to the Archivista client when making requests")
+
+	defaultRetry := archivista.DefaultRetryPolicy()
+	cmd.Flags().IntVar(&o.UploadRetries, "archivista-upload-retries", defaultRetry.MaxAttempts-1,
+		"Extra attempts for a retryable attestation upload failure (5xx, timeout, connection reset, 429). "+
+			"0 disables retry. Terminal failures (400/401/403/422) never retry.")
+	cmd.Flags().DurationVar(&o.UploadRetryBudget, "archivista-upload-retry-budget", defaultRetry.Budget,
+		"Total wall-clock time the attestation upload may take across all attempts, including the "+
+			"requests themselves, before giving up")
 	cmd.Flags().BoolVar(&o.OIDC, "archivista-oidc", os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "", "Use GitHub Actions OIDC token for Archivista auth (auto-enabled in GitHub Actions)")
 	cmd.Flags().StringVar(&o.Audience, "archivista-audience", "", "OIDC audience for Archivista token (defaults to archivista server URL)")
 }
@@ -1168,6 +1185,26 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 
 	if len(headers) > 0 {
 		opts = append(opts, archivista.WithHeaders(headers))
+	}
+
+	// Bounded upload retry. A transient Archivista 5xx used to abort the whole
+	// `cilock run` with the signed envelope already produced but never stored,
+	// which destroys the value of the entire gate execution — the only recovery
+	// was to re-run the wrapped command and re-attest (~6 minutes in the case
+	// that motivated this). Retrying HERE, inside the live run, is the correct
+	// and only place to absorb it: the execution context is still open, so the
+	// evidence stays attached to the act that produced it.
+	//
+	// The retry is deliberately NOT enabled inside archivista.New — this client
+	// is shared with judge-api and the policy-publish path, which should keep
+	// their existing single-attempt semantics.
+	if o.UploadRetries > 0 {
+		policy := archivista.DefaultRetryPolicy()
+		policy.MaxAttempts = o.UploadRetries + 1
+		if o.UploadRetryBudget > 0 {
+			policy.Budget = o.UploadRetryBudget
+		}
+		opts = append(opts, archivista.WithRetry(policy))
 	}
 
 	return archivista.New(o.Url, opts...), nil
