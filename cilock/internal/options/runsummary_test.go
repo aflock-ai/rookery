@@ -155,156 +155,105 @@ func TestRunSummary_AnchorIgnoresNonSegmentSubstring(t *testing.T) {
 	}
 }
 
-// TestRunSummary_SLSALocalKeyIsL1 proves a local file-key run is reported as
-// SLSA Build L1 (forgeable provenance) with an explicit upgrade hint naming the
-// platform — so a user who ran the slsa attestor does NOT assume a higher level.
-func TestRunSummary_SLSALocalKeyIsL1(t *testing.T) {
+// TestRunSummary_ProducerDoesNotSelfAssignStandardsLevels pins the core trust
+// boundary: signer kind, workflow OIDC, and a no-egress trace are useful facts,
+// but they do not let the producer assess its own SLSA Build or ALPS level.
+func TestRunSummary_ProducerDoesNotSelfAssignStandardsLevels(t *testing.T) {
 	s := sampleSummary()
-	s.Signer = "file"
-	s.ComputeSLSA("https://platform.example.com", false)
-	if s.SLSABuildLevel != 1 {
-		t.Fatalf("local file key should be SLSA Build L1, got L%d", s.SLSABuildLevel)
-	}
-	var buf bytes.Buffer
-	s.WriteHuman(&buf)
-	out := buf.String()
-	if !strings.Contains(out, "SLSA Build L1") {
-		t.Errorf("human summary missing SLSA Build L1 verdict:\n%s", out)
-	}
-	if !strings.Contains(out, "cilock login --workflow-identity --platform-url https://platform.example.com") {
-		t.Errorf("human summary missing the upgrade hint with the platform URL:\n%s", out)
-	}
-}
-
-// TestRunSummary_SLSAFulcioKindAloneIsNotL3 is the regression guard for the
-// over-claim a code review caught: the achieved level must derive from the
-// actual trusted workflow signing path, NOT the signer-kind string. A run whose
-// Signer contains "fulcio" but that did NOT take cilock's platform
-// workflow-identity path (e.g. an explicit --signer-fulcio-token, or an offline
-// run pointed at a Fulcio URL) is not attestable as isolated ⇒ stays at L1, even
-// if the build happened to be hermetic.
-func TestRunSummary_SLSAFulcioKindAloneIsNotL3(t *testing.T) {
-	s := sampleSummary()
-	s.Signer = "fulcio"        // signer KIND says fulcio …
-	s.WorkflowIdentity = false // … but cilock did NOT mint a platform workflow identity
-	s.Tracing = "ebpf"
-	s.Hermetic = true // a hermetic build cannot rescue a non-isolated identity
-	s.ComputeSLSA("https://platform.example.com", false)
-	if s.SLSABuildLevel != 1 {
-		t.Fatalf("fulcio signer kind WITHOUT the workflow-identity path must be L1, got L%d", s.SLSABuildLevel)
-	}
-}
-
-// TestRunSummary_SLSAWorkflowIdentityNoTraceIsL2 proves an isolated platform
-// workflow identity reaches L2 (non-forgeable provenance) but NOT L3 without
-// hermeticity evidence — an untraced build's hermeticity is unknown.
-func TestRunSummary_SLSAWorkflowIdentityNoTraceIsL2(t *testing.T) {
-	s := sampleSummary()
-	s.Signer = "fulcio"
-	s.WorkflowIdentity = true
-	s.Tracing = "" // not traced ⇒ hermeticity unknown
-	s.ComputeSLSA("https://platform.example.com", false)
-	if s.SLSABuildLevel != 2 {
-		t.Fatalf("workflow identity without tracing should be L2, got L%d", s.SLSABuildLevel)
-	}
-	if !strings.Contains(s.SLSAVerdict, "--trace") {
-		t.Errorf("L2 verdict should steer to --trace for L3, got: %q", s.SLSAVerdict)
-	}
-}
-
-// TestRunSummary_SLSAWorkflowIdentityWithEgressIsL2 proves a traced build that
-// reached the network is reported NOT hermetic and held at L2, with the egress
-// endpoint named as the evidence.
-func TestRunSummary_SLSAWorkflowIdentityWithEgressIsL2(t *testing.T) {
-	s := sampleSummary()
-	s.Signer = "fulcio"
 	s.WorkflowIdentity = true
 	s.Tracing = "ebpf"
-	s.Hermetic = false
-	s.NetworkEgress = []string{"proxy.golang.org:443"}
-	s.ComputeSLSA("https://platform.example.com", false)
-	if s.SLSABuildLevel != 2 {
-		t.Fatalf("traced build WITH network egress should be L2, got L%d", s.SLSABuildLevel)
-	}
-	if !strings.Contains(s.SLSAVerdict, "proxy.golang.org:443") {
-		t.Errorf("non-hermetic verdict should name the egress endpoint, got: %q", s.SLSAVerdict)
-	}
-}
+	s.NoExternalNetworkEgressObserved = true
+	s.ComputeStandardsAssessment(false)
 
-// TestRunSummary_SLSAWorkflowIdentityHermeticIsL3 proves the full L3 path:
-// isolated workflow identity + a traced build with zero external network egress.
-func TestRunSummary_SLSAWorkflowIdentityHermeticIsL3(t *testing.T) {
-	s := sampleSummary()
-	s.Signer = "fulcio"
-	s.WorkflowIdentity = true
-	s.Tracing = "ebpf"
-	s.Hermetic = true
-	s.ComputeSLSA("https://platform.example.com", false)
-	if s.SLSABuildLevel != 3 {
-		t.Fatalf("workflow identity + hermetic trace should be L3, got L%d", s.SLSABuildLevel)
-	}
-	var buf bytes.Buffer
-	s.WriteHuman(&buf)
-	out := buf.String()
-	if !strings.Contains(out, "SLSA Build L3") {
-		t.Errorf("human summary missing SLSA Build L3 verdict:\n%s", out)
-	}
-	if !strings.Contains(out, "hermetic") {
-		t.Errorf("human summary missing the hermetic build evidence line:\n%s", out)
-	}
-}
-
-// TestRunSummary_SLSAOfflineHintHasPlaceholder proves an offline run (no
-// platform) still emits an actionable upgrade hint, with a placeholder for the
-// platform the operator must supply.
-func TestRunSummary_SLSAOfflineHintHasPlaceholder(t *testing.T) {
-	s := sampleSummary()
-	s.Signer = "file"
-	s.ComputeSLSA("", false)
-	if !strings.Contains(s.SLSAVerdict, "<platform>") {
-		t.Errorf("offline verdict should carry a <platform> placeholder, got: %q", s.SLSAVerdict)
-	}
-}
-
-// TestRunSummary_SLSAFailedRunNotAssessed is the regression guard for the
-// overclaim a code review caught: ComputeSLSA must NOT hand back an L1+ floor
-// when the run failed to produce signed provenance (fatal signer/attestor error
-// or a non-zero wrapped command). The L1 floor is "a signed attestation EXISTS";
-// a failed run has none, so it is held at level 0 with an explicit not-assessed
-// verdict — even on the strongest would-be evidence (workflow identity + hermetic
-// trace). Without this, a release gate keying on slsa_build_level could trust
-// provenance the run never emitted.
-func TestRunSummary_SLSAFailedRunNotAssessed(t *testing.T) {
-	s := sampleSummary()
-	s.Signer = "fulcio"
-	s.WorkflowIdentity = true // would otherwise reach L3 …
-	s.Tracing = "ebpf"
-	s.Hermetic = true
-	s.ComputeSLSA("https://platform.example.com", true) // … but the run FAILED
 	if s.SLSABuildLevel != 0 {
-		t.Fatalf("a failed run must be SLSA level 0 (not assessed), got L%d", s.SLSABuildLevel)
+		t.Fatalf("producer must not self-assign a SLSA Build level, got L%d", s.SLSABuildLevel)
 	}
-	if !strings.Contains(s.SLSAVerdict, "not assessed") {
-		t.Errorf("failed-run verdict should say 'not assessed', got: %q", s.SLSAVerdict)
+	if s.SLSABuildAssessment != "not_assessed" || s.ALPSAssessment != "not_assessed" {
+		t.Fatalf("standards must remain not_assessed, got SLSA=%q ALPS=%q",
+			s.SLSABuildAssessment, s.ALPSAssessment)
 	}
+	if s.ALPSSpecVersion != "0.1" {
+		t.Fatalf("ALPS spec version = %q, want 0.1", s.ALPSSpecVersion)
+	}
+
 	var buf bytes.Buffer
 	s.WriteHuman(&buf)
-	if out := buf.String(); strings.Contains(out, "SLSA Build L") {
-		t.Errorf("failed run must not print any 'SLSA Build L<n>' claim:\n%s", out)
+	out := buf.String()
+	if strings.Contains(out, "SLSA Build L1") || strings.Contains(out, "SLSA Build L2") ||
+		strings.Contains(out, "SLSA Build L3") || strings.Contains(out, "ALPS-1") ||
+		strings.Contains(out, "ALPS-2") || strings.Contains(out, "ALPS-3") {
+		t.Errorf("producer summary self-assigned a standards level:\n%s", out)
+	}
+	if !strings.Contains(out, "SLSA Build: not assessed") ||
+		!strings.Contains(out, "ALPS 0.1: not assessed") {
+		t.Errorf("human summary missing explicit not-assessed results:\n%s", out)
 	}
 }
 
-// TestRunSummary_SLSAInJSON proves the achieved level + verdict + the evidence
-// fields are serialized so an agent can branch on slsa_build_level (and audit
-// WHY) without parsing prose.
-func TestRunSummary_SLSAInJSON(t *testing.T) {
+// TestRunSummary_NetworkTraceIsNotHermeticity proves that zero observed network
+// egress remains a narrow observation instead of being inflated into SLSA L3,
+// ALPS H-Complete, or a generic hermeticity claim.
+func TestRunSummary_NetworkTraceIsNotHermeticity(t *testing.T) {
 	s := sampleSummary()
-	s.Signer = "fulcio"
+	s.Tracing = "ebpf"
+	s.NoExternalNetworkEgressObserved = true
+	s.ComputeStandardsAssessment(false)
+
+	var buf bytes.Buffer
+	s.WriteHuman(&buf)
+	out := buf.String()
+	if !strings.Contains(out, "no external egress observed (ebpf trace); hermeticity not assessed") {
+		t.Errorf("human summary should report the narrow network observation:\n%s", out)
+	}
+	if strings.Contains(out, "H-Complete") || strings.Contains(out, "build is hermetic") {
+		t.Errorf("network trace must not become a hermeticity modifier:\n%s", out)
+	}
+}
+
+func TestRunSummary_ObservedEgressNamesEndpointsWithoutAssigningHermeticity(t *testing.T) {
+	s := sampleSummary()
+	s.Tracing = "ebpf"
+	s.NetworkEgress = []string{"proxy.golang.org:443"}
+	s.ComputeStandardsAssessment(false)
+
+	var buf bytes.Buffer
+	s.WriteHuman(&buf)
+	out := buf.String()
+	if !strings.Contains(out, "external egress observed (ebpf trace: proxy.golang.org:443)") {
+		t.Errorf("human summary missing observed endpoint:\n%s", out)
+	}
+	if !strings.Contains(out, "hermeticity not assessed") {
+		t.Errorf("human summary must keep hermeticity unassigned:\n%s", out)
+	}
+}
+
+func TestRunSummary_FailedRunStandardsNotAssessed(t *testing.T) {
+	s := sampleSummary()
 	s.WorkflowIdentity = true
 	s.Tracing = "ebpf"
-	s.Hermetic = true
-	s.ComputeSLSA("https://platform.example.com", false)
+	s.NoExternalNetworkEgressObserved = true
+	s.ComputeStandardsAssessment(true)
+
+	if s.SLSABuildLevel != 0 || s.SLSABuildAssessment != "not_assessed" || s.ALPSAssessment != "not_assessed" {
+		t.Fatalf("failed run must remain unassessed: %#v", s)
+	}
+	if !strings.Contains(s.SLSAVerdict, "did not complete") ||
+		!strings.Contains(s.ALPSVerdict, "did not produce complete evidence") {
+		t.Fatalf("failed-run reasons missing: SLSA=%q ALPS=%q", s.SLSAVerdict, s.ALPSVerdict)
+	}
+}
+
+// TestRunSummary_StandardsInJSON proves machine consumers get explicit status
+// fields and observations, while the obsolete numeric SLSA level and ambiguous
+// `hermetic` boolean are omitted.
+func TestRunSummary_StandardsInJSON(t *testing.T) {
+	s := sampleSummary()
+	s.WorkflowIdentity = true
+	s.Tracing = "ebpf"
+	s.NoExternalNetworkEgressObserved = true
+	s.ComputeStandardsAssessment(false)
 	s.AssuranceLevel = "aal2"
+
 	var buf bytes.Buffer
 	if err := s.WriteJSON(&buf); err != nil {
 		t.Fatalf("WriteJSON: %v", err)
@@ -313,18 +262,20 @@ func TestRunSummary_SLSAInJSON(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatalf("output is not valid JSON: %v\n%s", err, buf.String())
 	}
-	lvl, ok := got["slsa_build_level"].(float64)
-	if !ok || int(lvl) != 3 {
-		t.Errorf("slsa_build_level should be 3, got %#v", got["slsa_build_level"])
+	if _, ok := got["slsa_build_level"]; ok {
+		t.Errorf("unassessed summary must omit slsa_build_level, got %#v", got["slsa_build_level"])
 	}
-	if got["workflow_identity"] != true {
-		t.Errorf("JSON should carry workflow_identity=true, got %#v", got["workflow_identity"])
+	if got["slsa_build_assessment"] != "not_assessed" || got["alps_assessment"] != "not_assessed" {
+		t.Errorf("explicit assessment statuses missing: %s", buf.String())
 	}
-	if got["hermetic"] != true {
-		t.Errorf("JSON should carry hermetic=true, got %#v", got["hermetic"])
+	if got["alps_spec_version"] != "0.1" {
+		t.Errorf("alps_spec_version should be 0.1, got %#v", got["alps_spec_version"])
 	}
-	if _, ok := got["slsa_verdict"]; !ok {
-		t.Errorf("JSON missing slsa_verdict:\n%s", buf.String())
+	if got["workflow_identity"] != true || got["no_external_network_egress_observed"] != true {
+		t.Errorf("signed-path/network observations missing: %s", buf.String())
+	}
+	if _, ok := got["hermetic"]; ok {
+		t.Errorf("ambiguous legacy hermetic field must be omitted: %s", buf.String())
 	}
 	if got["assurance_level"] != "aal2" {
 		t.Errorf("assurance_level should echo aal2, got %#v", got["assurance_level"])

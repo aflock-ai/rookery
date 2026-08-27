@@ -29,9 +29,9 @@ func connectsTo(conns ...commandrun.NetworkConnection) []commandrun.ProcessInfo 
 	return []commandrun.ProcessInfo{{Network: &commandrun.NetworkActivity{Connections: conns}}}
 }
 
-// TestExternalEgress is the security-critical classifier behind the SLSA L2→L3
-// hermeticity gate: only a genuine EXTERNAL connect() may count as egress. A
-// false negative here would let a non-hermetic build claim L3.
+// TestExternalEgress pins the classifier behind the network observation. A
+// false negative would let the summary say no external egress was observed when
+// the trace recorded an external-input channel.
 func TestExternalEgress(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -49,12 +49,12 @@ func TestExternalEgress(t *testing.T) {
 			want:  []string{"github.com:443"},
 		},
 		{
-			name:  "loopback IPv4 connect breaks hermeticity (localhost proxy/service can fetch inputs)",
+			name:  "loopback IPv4 connect counts as egress because a localhost service can fetch inputs",
 			procs: connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_INET", Address: "127.0.0.1", Port: 8080}),
 			want:  []string{"loopback:127.0.0.1:8080"},
 		},
 		{
-			name:  "loopback IPv6 connect breaks hermeticity",
+			name:  "loopback IPv6 connect counts as egress",
 			procs: connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_INET6", Address: "::1", Port: 8080}),
 			want:  []string{"loopback:::1:8080"},
 		},
@@ -64,12 +64,12 @@ func TestExternalEgress(t *testing.T) {
 			want:  []string{"2606:4700:4700::1111:443"},
 		},
 		{
-			name:  "AF_UNIX docker.sock connect breaks hermeticity (can pull images/inputs)",
+			name:  "AF_UNIX docker.sock connect counts as egress because it can pull images",
 			procs: connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_UNIX", Address: "/var/run/docker.sock"}),
 			want:  []string{"unix:/var/run/docker.sock"},
 		},
 		{
-			name:  "ordinary AF_UNIX IPC (dbus) is NOT counted — keeps L3 reachable",
+			name:  "ordinary AF_UNIX IPC is not an external-input channel",
 			procs: connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_UNIX", Address: "/run/dbus/system_bus_socket"}),
 			want:  nil,
 		},
@@ -79,7 +79,7 @@ func TestExternalEgress(t *testing.T) {
 			want:  nil,
 		},
 		{
-			name:  "private-range egress still breaks hermeticity (undeclared network input)",
+			name:  "private-range connection still counts as external egress",
 			procs: connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_INET", Address: "10.0.0.5", Port: 443}),
 			want:  []string{"10.0.0.5:443"},
 		},
@@ -119,35 +119,33 @@ func TestExternalEgress(t *testing.T) {
 	}
 }
 
-// TestStampHermeticity_UntracedMakesNoClaim proves that without an active trace
-// cilock makes NO hermeticity claim (Tracing == "") — so ComputeSLSA holds the
-// run at L2 rather than assuming a hermetic build it never observed.
-func TestStampHermeticity_UntracedMakesNoClaim(t *testing.T) {
+// TestStampNetworkObservation_UntracedMakesNoClaim proves that without an
+// active trace cilock reports no network observation.
+func TestStampNetworkObservation_UntracedMakesNoClaim(t *testing.T) {
 	cr := commandrun.New() // tracing OFF
 	cr.Processes = connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_INET", Address: "140.82.112.3", Port: 443})
 	s := &options.RunSummary{}
-	stampHermeticity(s, []attestation.Attestor{cr})
+	stampNetworkObservation(s, []attestation.Attestor{cr})
 	if s.Tracing != "" {
 		t.Errorf("untraced run must leave Tracing empty (unknown), got %q", s.Tracing)
 	}
-	if s.Hermetic {
-		t.Errorf("untraced run must not claim Hermetic=true")
+	if s.NoExternalNetworkEgressObserved {
+		t.Errorf("untraced run must not claim no external egress was observed")
 	}
 }
 
-// TestStampHermeticity_RequestedButNoCaptureMakesNoClaim proves that when
+// TestStampNetworkObservation_RequestedButNoCaptureMakesNoClaim proves that when
 // tracing was REQUESTED but the attestor captured nothing — an unsupported
 // platform or a failed trace backend, so Summary is nil or carries no capture
-// mode — cilock makes NO hermeticity claim. Without this, a build whose trace
-// silently captured zero connections would falsely read as hermetic (caught by
-// an end-to-end run on a platform without tracing support).
-func TestStampHermeticity_RequestedButNoCaptureMakesNoClaim(t *testing.T) {
+// mode — cilock makes no network claim. Without this, a failed trace would read
+// as an affirmative observation of zero connections.
+func TestStampNetworkObservation_RequestedButNoCaptureMakesNoClaim(t *testing.T) {
 	// Tracing on, but no Summary at all (trace never produced a result).
 	crNil := commandrun.New(commandrun.WithTracing(true))
 	sNil := &options.RunSummary{}
-	stampHermeticity(sNil, []attestation.Attestor{crNil})
-	if sNil.Tracing != "" || sNil.Hermetic {
-		t.Errorf("nil-summary trace must make no claim, got Tracing=%q Hermetic=%v", sNil.Tracing, sNil.Hermetic)
+	stampNetworkObservation(sNil, []attestation.Attestor{crNil})
+	if sNil.Tracing != "" || sNil.NoExternalNetworkEgressObserved {
+		t.Errorf("nil-summary trace must make no claim, got Tracing=%q NoExternalNetworkEgressObserved=%v", sNil.Tracing, sNil.NoExternalNetworkEgressObserved)
 	}
 
 	// Tracing on, Summary present but no capture mode recorded.
@@ -155,42 +153,41 @@ func TestStampHermeticity_RequestedButNoCaptureMakesNoClaim(t *testing.T) {
 	crEmpty.Summary = &commandrun.TraceSummary{CaptureMode: ""}
 	crEmpty.Processes = connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_INET", Address: "140.82.112.3", Port: 443})
 	sEmpty := &options.RunSummary{}
-	stampHermeticity(sEmpty, []attestation.Attestor{crEmpty})
-	if sEmpty.Tracing != "" || sEmpty.Hermetic {
-		t.Errorf("empty-capture-mode trace must make no claim, got Tracing=%q Hermetic=%v", sEmpty.Tracing, sEmpty.Hermetic)
+	stampNetworkObservation(sEmpty, []attestation.Attestor{crEmpty})
+	if sEmpty.Tracing != "" || sEmpty.NoExternalNetworkEgressObserved {
+		t.Errorf("empty-capture-mode trace must make no claim, got Tracing=%q NoExternalNetworkEgressObserved=%v", sEmpty.Tracing, sEmpty.NoExternalNetworkEgressObserved)
 	}
 }
 
-// TestStampHermeticity_TracedHermetic proves a traced build with no external
-// egress is recorded hermetic, with the capture-mode label surfaced.
-func TestStampHermeticity_TracedHermetic(t *testing.T) {
+// TestStampNetworkObservation_TracedNoEgress proves a traced build with no
+// external egress records that narrow fact with the capture-mode label.
+func TestStampNetworkObservation_TracedNoEgress(t *testing.T) {
 	cr := commandrun.New(commandrun.WithTracing(true))
 	cr.Summary = &commandrun.TraceSummary{CaptureMode: "ebpf-readtap"}
 	cr.Processes = connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_UNIX", Address: "/var/run/nscd.sock"})
 	s := &options.RunSummary{}
-	stampHermeticity(s, []attestation.Attestor{cr})
+	stampNetworkObservation(s, []attestation.Attestor{cr})
 	if s.Tracing != "ebpf" {
 		t.Errorf("Tracing label = %q, want ebpf", s.Tracing)
 	}
-	if !s.Hermetic {
-		t.Errorf("local-only traced build should be hermetic; egress=%v", s.NetworkEgress)
+	if !s.NoExternalNetworkEgressObserved {
+		t.Errorf("local-only traced build should report no observed external egress; egress=%v", s.NetworkEgress)
 	}
 }
 
-// TestStampHermeticity_TracedEgressBreaksHermetic proves a traced build that
-// reached the network is recorded NOT hermetic, with the egress endpoint kept as
-// evidence for the verdict.
-func TestStampHermeticity_TracedEgressBreaksHermetic(t *testing.T) {
+// TestStampNetworkObservation_TracedEgress proves a traced build that reached
+// the network retains the endpoint as evidence.
+func TestStampNetworkObservation_TracedEgress(t *testing.T) {
 	cr := commandrun.New(commandrun.WithTracing(true))
 	cr.Summary = &commandrun.TraceSummary{CaptureMode: "ptrace"}
 	cr.Processes = connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_INET", Address: "140.82.112.3", Port: 443, Hostname: "github.com"})
 	s := &options.RunSummary{}
-	stampHermeticity(s, []attestation.Attestor{cr})
+	stampNetworkObservation(s, []attestation.Attestor{cr})
 	if s.Tracing != "ptrace" {
 		t.Errorf("Tracing label = %q, want ptrace", s.Tracing)
 	}
-	if s.Hermetic {
-		t.Errorf("build with external egress must not be hermetic")
+	if s.NoExternalNetworkEgressObserved {
+		t.Errorf("build with external egress must not claim no observed egress")
 	}
 	if len(s.NetworkEgress) != 1 || s.NetworkEgress[0] != "github.com:443" {
 		t.Errorf("NetworkEgress = %#v, want [github.com:443]", s.NetworkEgress)

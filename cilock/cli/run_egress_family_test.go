@@ -60,7 +60,7 @@ func TestEveryIPFamilyCountsAsEgress(t *testing.T) {
 			})
 			if !ok {
 				t.Fatalf("egressEndpoint dropped a connect() on IP family %q; a build that "+
-					"fetched over it would be signed hermetic with an empty egress list", family)
+					"fetched over it would be reported with an empty egress list", family)
 			}
 			if ep != "140.82.112.3:443" {
 				t.Errorf("endpoint = %q, want 140.82.112.3:443", ep)
@@ -107,11 +107,11 @@ func TestEveryRemoteCapableFamilyCountsAsEgress(t *testing.T) {
 			})
 			if !ok {
 				t.Fatalf("egressEndpoint dropped a connect() on remote-capable family %q; a "+
-					"build that fetched over it would be signed hermetic with an empty egress list", family)
+					"build that fetched over it would be reported with an empty egress list", family)
 			}
 			if !strings.Contains(ep, family) {
 				t.Errorf("endpoint %q does not name the family, so the signed summary does not "+
-					"say what channel broke hermeticity", ep)
+					"say which external-input channel was observed", ep)
 			}
 		})
 	}
@@ -121,22 +121,22 @@ func TestEveryRemoteCapableFamilyCountsAsEgress(t *testing.T) {
 	}
 }
 
-// TestUnclassifiedRuntimeFamilyBreaksHermeticity is the gate the compile-time
-// one cannot be.
+// TestUnclassifiedRuntimeFamilyCountsAsEgress is the gate the compile-time one
+// cannot be.
 //
 // commandrun's TestEverySocketFamilyConstantIsClassified proves every family
 // CONSTANT is classified — by scanning the sources with go/parser. It is
 // blind by construction to the families that only exist at RUNTIME: the Linux
 // tracer writes fmt.Sprintf("AF_%d", domain) for any domain it has no name for,
 // and no constant declares "AF_42". Such a string was in no table, so
-// egressEndpoint dropped the connection, externalEgress returned empty, and
-// `Hermetic = len(NetworkEgress) == 0` signed "this build reached nothing" over
-// a build that reached the network. AF_VSOCK arriving as "AF_40" is that hole
-// with a remote-capable family in it.
+// egressEndpoint dropped the connection and externalEgress returned empty,
+// publishing "no external egress observed" over a build that reached the
+// network. AF_VSOCK arriving as "AF_40" is that hole with a remote-capable
+// family in it.
 //
 // Asserted end-to-end on the summary cilock signs, not on the classifier: the
 // claim under test is about what gets SIGNED.
-func TestUnclassifiedRuntimeFamilyBreaksHermeticity(t *testing.T) {
+func TestUnclassifiedRuntimeFamilyCountsAsEgress(t *testing.T) {
 	cases := []struct {
 		name   string
 		family string
@@ -174,29 +174,29 @@ func TestUnclassifiedRuntimeFamilyBreaksHermeticity(t *testing.T) {
 			})
 
 			s := &options.RunSummary{}
-			stampHermeticity(s, []attestation.Attestor{cr})
+			stampNetworkObservation(s, []attestation.Attestor{cr})
 
 			if s.Tracing == "" {
 				t.Fatal("a captured trace must publish a capture mode, or the verdict below is vacuous")
 			}
-			if s.Hermetic {
+			if s.NoExternalNetworkEgressObserved {
 				t.Errorf("a build that connect()ed on family %q — which nothing classifies, so "+
-					"nobody can say it is not remote-capable — was signed HERMETIC; egress=%#v",
+					"nobody can say it is not remote-capable — was reported with no egress; egress=%#v",
 					tc.family, s.NetworkEgress)
 			}
 			if len(s.NetworkEgress) != 1 || s.NetworkEgress[0] != tc.want {
-				t.Errorf("NetworkEgress = %#v, want [%q] — the reason hermeticity broke has to be "+
+				t.Errorf("NetworkEgress = %#v, want [%q] — the reason it was counted has to be "+
 					"legible in the signed summary, not silent", s.NetworkEgress, tc.want)
 			}
 		})
 	}
 }
 
-// TestVSockConnectBreaksHermeticity pins the concrete case, on the name the
+// TestVSockConnectCountsAsEgress pins the concrete case, on the name the
 // tracer emits now that the vocabulary has learned it. AF_VSOCK is
 // remote-capable — guest to hypervisor host and back — so counting it is right
 // on the merits, not merely as a conservative default.
-func TestVSockConnectBreaksHermeticity(t *testing.T) {
+func TestVSockConnectCountsAsEgress(t *testing.T) {
 	cr := commandrun.New(commandrun.WithTracing(true))
 	cr.Summary = &commandrun.TraceSummary{CaptureMode: "trace"}
 	cr.Processes = connectsTo(commandrun.NetworkConnection{
@@ -204,21 +204,20 @@ func TestVSockConnectBreaksHermeticity(t *testing.T) {
 	})
 
 	s := &options.RunSummary{}
-	stampHermeticity(s, []attestation.Attestor{cr})
+	stampNetworkObservation(s, []attestation.Attestor{cr})
 
 	want := commandrun.FamilyVSock + ":2:1024"
 	if len(s.NetworkEgress) != 1 || s.NetworkEgress[0] != want {
 		t.Errorf("NetworkEgress = %#v, want [%q]", s.NetworkEgress, want)
 	}
-	if s.Hermetic {
-		t.Error("a build that connect()ed to its hypervisor host over AF_VSOCK was signed HERMETIC")
+	if s.NoExternalNetworkEgressObserved {
+		t.Error("a build that connect()ed to its hypervisor host over AF_VSOCK was reported with no egress")
 	}
 }
 
 // TestNonRemoteFamiliesAreNotEgress is the other pole. A family the observer
-// DESCRIBED and which cannot name a remote host must not be counted, or
-// hermeticity becomes unreachable: AF_NETLINK appears on every Linux build, and
-// AF_UNSPEC on every build that resolves a hostname.
+// DESCRIBED and which cannot name a remote host must not be counted. AF_NETLINK
+// appears on every Linux build and AF_UNSPEC on every hostname resolution.
 func TestNonRemoteFamiliesAreNotEgress(t *testing.T) {
 	for family, class := range commandrun.SocketFamilyClassifications() {
 		if class != commandrun.FamilyClassNonRemote {
@@ -232,15 +231,14 @@ func TestNonRemoteFamiliesAreNotEgress(t *testing.T) {
 	}
 }
 
-// TestUnnamedIPEndpointBreaksHermeticity is the end of the chain, asserted on
+// TestUnnamedIPEndpointCountsAsEgress is the end of the chain, asserted on
 // the summary cilock signs.
 //
 // The connection is the shape a report-based observer produces — an IP socket
 // whose version and host the kernel never named — and the requirement is that
-// it lands in NetworkEgress and drives Hermetic to false. The unit tests above
-// cover the classifier; this one covers the two lines that turn a classifier
-// result into an SLSA L3 hermeticity assertion.
-func TestUnnamedIPEndpointBreaksHermeticity(t *testing.T) {
+// it lands in NetworkEgress and prevents the no-egress observation. The unit
+// tests above cover the classifier; this one covers the signed summary fields.
+func TestUnnamedIPEndpointCountsAsEgress(t *testing.T) {
 	cr := commandrun.New(commandrun.WithTracing(true))
 	cr.Summary = &commandrun.TraceSummary{CaptureMode: "trace"}
 	cr.Processes = connectsTo(commandrun.NetworkConnection{
@@ -252,7 +250,7 @@ func TestUnnamedIPEndpointBreaksHermeticity(t *testing.T) {
 	})
 
 	s := &options.RunSummary{}
-	stampHermeticity(s, []attestation.Attestor{cr})
+	stampNetworkObservation(s, []attestation.Attestor{cr})
 
 	if s.Tracing == "" {
 		t.Fatal("a captured trace must publish a capture mode, or the verdict below is vacuous")
@@ -261,28 +259,26 @@ func TestUnnamedIPEndpointBreaksHermeticity(t *testing.T) {
 	if len(s.NetworkEgress) != 1 || s.NetworkEgress[0] != want {
 		t.Errorf("NetworkEgress = %#v, want [%q]", s.NetworkEgress, want)
 	}
-	if s.Hermetic {
+	if s.NoExternalNetworkEgressObserved {
 		t.Error("a build that opened a TCP connection to an endpoint the observer " +
-			"could not name was signed HERMETIC — the SLSA L3 hermeticity assertion is inverted")
+			"could not name was reported with no external egress")
 	}
 }
 
-// TestResolverNoiseStaysHermetic guards the direction that makes the gate worth
-// having, on the one case that earns it.
+// TestResolverNoiseIsNotEgress guards the direction that makes the observation
+// useful, on a non-remote operation.
 //
 // glibc's resolver dissolves its UDP socket's association with
 // connect(fd, {sa_family = AF_UNSPEC}, …) on every hostname lookup. A ptrace
 // census of `getent hosts` + `curl https://` counts exactly one such event per
 // run. It is a FULLY DESCRIBED operation — the observer read sa_family — and
-// what it describes reaches nothing, so counting it would put every build that
-// resolves a name over the line and make SLSA L3 unreachable while teaching
-// nobody anything.
+// what it describes reaches nothing, so counting it would report egress for
+// every build that resolves a name while teaching nobody anything.
 //
 // The scope here is exactly that: a family the observer READ. An operation the
-// observer could NOT read carries FamilyNotObservable instead and must break
-// hermeticity — TestUnobservedConnectBreaksHermeticity is that half, and the
-// two together are the split this test does not get to blur.
-func TestResolverNoiseStaysHermetic(t *testing.T) {
+// observer could NOT read carries FamilyNotObservable instead and must count as
+// egress — TestUnobservedConnectCountsAsEgress is that half.
+func TestResolverNoiseIsNotEgress(t *testing.T) {
 	if got := commandrun.ClassifySocketFamily(commandrun.FamilyUnspecified); got != commandrun.FamilyClassNonRemote {
 		t.Fatalf("AF_UNSPEC classifies as %v, not FamilyClassNonRemote; this test no longer "+
 			"describes the resolver-disconnect case it exists to protect", got)
@@ -295,25 +291,24 @@ func TestResolverNoiseStaysHermetic(t *testing.T) {
 	)
 
 	s := &options.RunSummary{}
-	stampHermeticity(s, []attestation.Attestor{cr})
+	stampNetworkObservation(s, []attestation.Attestor{cr})
 
-	if !s.Hermetic {
-		t.Errorf("name resolution alone made the build non-hermetic; egress=%v", s.NetworkEgress)
+	if !s.NoExternalNetworkEgressObserved {
+		t.Errorf("resolver disconnect was counted as external egress; egress=%v", s.NetworkEgress)
 	}
 }
 
-// TestUnobservedConnectBreaksHermeticity is the sibling of the test above and
+// TestUnobservedConnectCountsAsEgress is the sibling of the test above and
 // the reason the two cases cannot share one family value.
 //
 // A backend that saw a connect() and could not read its sockaddr reports
 // FamilyNotObservable. The build reached SOMETHING; the attestor is the only
-// witness and it did not see what. Signing Hermetic over that publishes "we did
-// not look" as "there was none" — absence projected as an authoritative value,
-// which is the single failure this whole filter exists to prevent.
+// witness and it did not see what. Reporting no egress over that publishes "we
+// did not look" as "there was none," the failure this filter prevents.
 //
 // Asserted on the summary cilock signs, not on the classifier, because the
 // claim under test is about what gets SIGNED.
-func TestUnobservedConnectBreaksHermeticity(t *testing.T) {
+func TestUnobservedConnectCountsAsEgress(t *testing.T) {
 	cr := commandrun.New(commandrun.WithTracing(true))
 	cr.Summary = &commandrun.TraceSummary{CaptureMode: "trace"}
 	cr.Processes = connectsTo(
@@ -321,19 +316,19 @@ func TestUnobservedConnectBreaksHermeticity(t *testing.T) {
 	)
 
 	s := &options.RunSummary{}
-	stampHermeticity(s, []attestation.Attestor{cr})
+	stampNetworkObservation(s, []attestation.Attestor{cr})
 
 	if s.Tracing == "" {
 		t.Fatal("a captured trace must publish a capture mode, or the verdict below is vacuous")
 	}
-	if s.Hermetic {
-		t.Errorf("a build that made a connect() the observer could not describe was signed "+
-			"HERMETIC; egress=%#v — 'I could not look' was published as 'there was nothing there'",
+	if s.NoExternalNetworkEgressObserved {
+		t.Errorf("a build that made a connect() the observer could not describe was reported with "+
+			"no egress; egress=%#v — 'I could not look' was published as 'there was nothing there'",
 			s.NetworkEgress)
 	}
 	want := "unclassified-family:(family-not-observable):" + commandrun.HostNotObservable
 	if len(s.NetworkEgress) != 1 || s.NetworkEgress[0] != want {
-		t.Errorf("NetworkEgress = %#v, want [%q] — the reason hermeticity broke has to be legible "+
+		t.Errorf("NetworkEgress = %#v, want [%q] — the reason it was counted has to be legible "+
 			"in the signed summary, not silent", s.NetworkEgress, want)
 	}
 }
@@ -355,7 +350,7 @@ func TestEveryUnobservableFamilyCountsAsEgress(t *testing.T) {
 			})
 			if !ok {
 				t.Fatalf("egressEndpoint dropped a connect() on unobservable family %q; a build "+
-					"that fetched through it would be signed hermetic with an empty egress list", family)
+					"that fetched through it would be reported with an empty egress list", family)
 			}
 			want := "unclassified-family:(family-not-observable):" + commandrun.HostNotObservable + ":443"
 			if ep != want {

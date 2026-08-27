@@ -661,7 +661,12 @@ Exit-code policy (finding #221):
 			}
 
 			signerProviders := providersFromFlags("signer", cmd.Flags())
-			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, signerProviders)
+			// The refresher is what keeps a long wrapped command from outliving
+			// its signing identity: the certificate is already deferred to first
+			// signature, and this re-mints the token that buys it at the same
+			// moment. Nil for CI, offline, local-key and explicit-token runs.
+			signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, signerProviders,
+				withFulcioTokenRefresh(o.FulcioTokenRefresher()))
 			if err != nil {
 				return fmt.Errorf("failed to load signers: %w", err)
 			}
@@ -1005,20 +1010,13 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// scope — no extra server round-trips. Emitted before the deferred error
 	// return so the summary is present even when an attestor fails.
 	summary := buildRunSummary(ro, args, attestors, results, signerProviders, uploadedGitoid, runErr)
-	// Stamp the achieved SLSA Build level + verdict onto the summary. This is
-	// the headline a user needs to NOT over-trust a local-key signature: running
-	// the slsa attestor does not by itself make a build L3 — the signing trust
-	// model does. ComputeSLSA derives it from the run's evidence + platform.
-	//
-	// Gate it on a SUCCESSFUL run: a fatal signer/attestor error (the kind
-	// classifyAttestorRunError keeps as exit 1) or a non-zero wrapped command
-	// means no completed signed provenance was emitted, so there is no SLSA
-	// floor to claim — ComputeSLSA reports level 0 / not-assessed instead of
-	// overstating evidence the run never produced. A soft error (e.g. sbom found
-	// nothing, demoted to exit 0) leaves signing intact and keeps the claim.
+	// Report standards without self-certification. SLSA Build levels require an
+	// assessment of the producer and build platform; ALPS levels require an
+	// independent verifier of identity and boundary evidence. This local producer
+	// summary records observations and leaves both levels unassigned.
 	runFailed := classifyAttestorRunError(runErr) != nil ||
 		(summary.WrappedCommand != nil && summary.WrappedCommand.ExitCode != 0)
-	summary.ComputeSLSA(ro.PlatformURL, runFailed)
+	summary.ComputeStandardsAssessment(runFailed)
 	summary.AssuranceLevel = ro.ResolvedAssuranceLevel()
 	// Carry the capture delta (already warned about above) into the structured
 	// summary so a CI job can consume it. nil when nothing declared an
@@ -1159,38 +1157,30 @@ func buildRunSummary(
 	}
 	// Record the in-process anti-tamper state that was in effect while the
 	// signing key was live (read back from the kernel by keyguard.Protect in
-	// preRoot, never asserted). This is the non-forgeability evidence a verifier
-	// gates an L3 verdict on. keyguard.Current() returns the cached State.
+	// preRoot, never asserted). This is a scoped runtime observation, not by
+	// itself proof of SLSA or ALPS conformance.
 	if kp := keyguard.Current(); kp.Applied {
 		s.KeyProtection = &kp
 	}
-	// SLSA evidence: the isolated-builder signal (did a platform workflow
-	// identity sign this run?) and the hermeticity signal (did a traced build
-	// reach the network?). ComputeSLSA (called by the caller) derives the
-	// achieved Build level from these — never from the signer-kind string.
+	// Signing-path and network observations are carried independently. Neither
+	// is promoted into a SLSA Build or ALPS level by this producer-side summary.
 	//
 	// Require BOTH that cilock installed a workflow OIDC token AND that the
 	// fulcio signer was the one actually used: the workflow flag alone could be
 	// stale if an explicit signer override won at sign time, so we confirm the
-	// signer kind before claiming the isolated-builder signal.
+	// signer kind before reporting the workflow-identity path.
 	s.WorkflowIdentity = ro.SignerIsWorkflowIdentity() && s.Signer == "fulcio"
-	stampHermeticity(s, attestors)
+	stampNetworkObservation(s, attestors)
 	return s
 }
 
-// stampHermeticity records the wrapped build's network-hermeticity evidence on
-// the summary from the commandrun attestor. It is meaningful ONLY when tracing
-// actually CAPTURED — the attestor recorded a capture mode. Tracing that was
-// requested but produced nothing (an unsupported platform, or a failed trace
-// backend) leaves Tracing empty / Hermetic false, so ComputeSLSA treats
-// hermeticity as UNKNOWN rather than "hermetic by absence of evidence". A build
-// whose trace silently captured zero syscalls must never read as hermetic.
+// stampNetworkObservation records the wrapped command's observed network
+// behavior. It is meaningful ONLY when tracing actually captured. It never
+// labels the build hermetic: network is only one part of that assessment.
 //
-// "Hermetic" means the traced command made zero EXTERNAL network egress — a
-// connect() to a non-loopback IP. AF_UNIX sockets and loopback (a local daemon
-// or proxy) are local IPC, not undeclared network inputs, so they don't break
-// it; bind()/listen() (serving, not fetching) is ignored.
-func stampHermeticity(s *options.RunSummary, attestors []attestation.Attestor) {
+// This observation conservatively counts channels that can fetch external
+// inputs. Ordinary local IPC and bind/listen operations are excluded.
+func stampNetworkObservation(s *options.RunSummary, attestors []attestation.Attestor) {
 	for _, a := range attestors {
 		cr, ok := a.(*commandrun.CommandRun)
 		if !ok || !cr.TracingEnabled() {
@@ -1199,22 +1189,20 @@ func stampHermeticity(s *options.RunSummary, attestors []attestation.Attestor) {
 		mode := traceModeLabel(cr)
 		if mode == "" {
 			// Tracing was requested but captured nothing (unsupported platform or a
-			// failed backend) — no evidence, so make no hermeticity claim.
+			// failed backend) — no evidence, so make no network claim.
 			return
 		}
 		s.Tracing = mode
 		s.NetworkEgress = externalEgress(cr.Processes)
-		s.Hermetic = len(s.NetworkEgress) == 0
+		s.NoExternalNetworkEgressObserved = len(s.NetworkEgress) == 0
 		return
 	}
 }
 
 // traceModeLabel returns the commandrun capture mode that actually observed the
 // build ("ebpf", "ptrace", or the raw mode string), or "" when the attestor
-// recorded NO capture — i.e. tracing did not actually run. The empty return is
-// load-bearing: stampHermeticity uses it to withhold a hermeticity claim when
-// nothing was captured, so an unsupported or failed trace never reads as a
-// hermetic build.
+// recorded NO capture. The empty return prevents an unsupported or failed trace
+// from being rendered as an observation of no egress.
 func traceModeLabel(cr *commandrun.CommandRun) string {
 	if cr.Summary == nil {
 		return ""
@@ -1229,9 +1217,8 @@ func traceModeLabel(cr *commandrun.CommandRun) string {
 	}
 }
 
-// externalEgress returns the sorted, de-duplicated set of external network
-// destinations the traced processes connected to — the evidence that breaks
-// hermeticity. See egressEndpoint for the per-connection classification.
+// externalEgress returns the sorted, de-duplicated set of network destinations
+// the traced processes connected to. See egressEndpoint for classification.
 func externalEgress(procs []commandrun.ProcessInfo) []string {
 	seen := make(map[string]struct{})
 	var out []string
@@ -1255,15 +1242,13 @@ func externalEgress(procs []commandrun.ProcessInfo) []string {
 	return out
 }
 
-// egressEndpoint classifies one observed connect() as a hermeticity-breaking
-// channel, returning a named endpoint and true. A build is only hermetic if it
-// fetched nothing undeclared, so we conservatively count the channels through
-// which a build CAN pull undeclared inputs:
+// egressEndpoint classifies one observed connect() as a channel through which
+// a command can pull an external input, returning a named endpoint and true:
 //
 //   - External IP egress — an IP-family connect() to a non-loopback host.
 //   - Loopback IP — a connect() to 127.0.0.0/8 or ::1 reaches a localhost
 //     service or proxy, which can itself fetch external inputs. We cannot prove
-//     it didn't, so it breaks hermeticity (labelled "loopback:<host>:<port>").
+//     it didn't, so it is counted (labelled "loopback:<host>:<port>").
 //   - Container-runtime UNIX sockets — an AF_UNIX connect() to docker.sock /
 //     containerd / podman / crio can pull images or run commands that fetch
 //     undeclared inputs (labelled "unix:<path>").
@@ -1279,15 +1264,14 @@ func externalEgress(procs []commandrun.ProcessInfo) []string {
 //     amount of not looking turns that into proof it did not.
 //
 // Ordinary AF_UNIX IPC (D-Bus, NSS, journald, …) and bind()/listen() are NOT
-// counted: they are pervasive in any build and are not input-fetch vectors, so
-// counting them would make L3 unreachable without improving honesty.
+// counted: they are pervasive in any build and are not input-fetch vectors.
 //
 // WHICH FAMILIES REACH WHAT IS NOT DECIDED HERE. commandrun owns that
 // vocabulary and classifies it in one table (commandrun.ClassifySocketFamily),
 // because this filter is the place where an unrecognised family turns into a
-// signed lie: a family this function fails to count drops out of
-// externalEgress, and `Hermetic = len(NetworkEgress) == 0` then publishes
-// "reached nothing" for a build that reached the network. Asking the vocabulary
+// false observation: a family this function fails to count drops out of
+// externalEgress and publishes "no external egress observed" for a command that
+// used an unclassified channel. Asking the vocabulary
 // means a family the attestor learns to emit — an IP socket whose version a
 // backend could not read, say — is counted here without this file being edited.
 //
@@ -1297,15 +1281,15 @@ func externalEgress(procs []commandrun.ProcessInfo) []string {
 // gate proves it — but the Linux tracer writes "AF_<n>" for any domain it has
 // no name for, and no constant declares "AF_42". Such a string reached this
 // switch, matched nothing, and was dropped. AF_VSOCK is the case that makes it
-// a hole rather than a nuisance: it is remote-capable, so a build could talk to
-// its host over one and still be signed hermetic with an empty egress list.
+// a hole rather than a nuisance: it is remote-capable, so a command could talk
+// to its host over one while the summary reported an empty egress list.
 //
 // So an unclassified family COUNTS as egress, labelled
 // "unclassified-family:<family>:…" so the reason is legible in the signed
 // summary rather than silent. Counting (rather than erroring) is deliberate:
 // this is an attestation, and the honest report of "a channel I cannot vouch
-// for was used" is a NON-HERMETIC verdict a verifier can read and a policy can
-// waive — not a failed build on a kernel we have never seen. The cost is
+// for was used" is an observation a verifier can read and a policy can waive —
+// not a failed build on a kernel we have never seen. The cost is
 // bounded because the tracer names every domain the vocabulary knows
 // (AF_NETLINK, on every Linux build, included), so ordinary builds never reach
 // this default.
@@ -1352,8 +1336,8 @@ func egressEndpoint(c commandrun.NetworkConnection) (string, bool) {
 }
 
 // unclassifiedFamilyLabel names the channel in an egress entry for a family
-// this consumer cannot vouch for, so a reader of the signed summary sees WHY
-// hermeticity broke instead of an unexplained endpoint. The entry has to say
+// this consumer cannot vouch for, so a reader of the signed summary sees why
+// it was counted instead of an unexplained endpoint. The entry has to say
 // "something was reached and nothing about it could be named", which is a
 // different statement from "nothing was reached".
 //
@@ -1389,7 +1373,7 @@ func labelledEndpoint(label string, c commandrun.NetworkConnection) string {
 // ipEgressEndpoint names an IP-family connect(). Loopback is called out
 // because it reaches a localhost service or proxy that can itself fetch
 // external inputs, which is a different fact for an operator than a direct
-// external fetch — but both break hermeticity.
+// external fetch — but both are external-input channels for this observation.
 func ipEgressEndpoint(c commandrun.NetworkConnection) (string, bool) {
 	host := c.Address
 	if c.Hostname != "" {
@@ -1407,7 +1391,7 @@ func ipEgressEndpoint(c commandrun.NetworkConnection) (string, bool) {
 		endpoint = fmt.Sprintf("%s:%d", host, c.Port)
 	}
 	// Loopback reaches a localhost service/proxy that can fetch external inputs;
-	// label it so the verdict is explicit about why hermeticity didn't hold.
+	// label it so the observation identifies the indirect external-input path.
 	if isLoopbackAddr(c.Address) {
 		return "loopback:" + endpoint, true
 	}
@@ -1425,7 +1409,7 @@ func isLoopbackAddr(addr string) bool {
 // isContainerRuntimeSocket reports whether a UNIX socket path is a container
 // runtime control socket (docker / containerd / podman / cri-o). Connecting to
 // one during a build can pull images or exec commands that fetch undeclared
-// inputs, so it breaks hermeticity. Matched by basename to tolerate the varied
+// inputs, so it is counted. Matched by basename to tolerate the varied
 // host paths these sockets live at (/var/run, /run, rootless dirs, …).
 func isContainerRuntimeSocket(path string) bool {
 	if path == "" {

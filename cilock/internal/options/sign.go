@@ -108,6 +108,18 @@ func (so *SignOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 // ambient/stored login, unless an explicit non-fulcio signer (--signer-file-key-path
 // / KMS / SPIFFE / vault) was chosen — that wins over ambient/stored login. Early
 // returns keep the precedence flat; see ResolvePlatformDefaults for the full rationale.
+//
+// Every apply helper below also returns a signing-time token refresher, and this
+// function deliberately discards all of them. The refresher exists because
+// `cilock run` mints the token during option resolution and then requests the
+// Fulcio certificate AFTER the wrapped command, a gap that can outlive a
+// short-lived token. `cilock sign` wraps no command: the signature is produced
+// in the same option-resolution window that minted the token, so there is
+// nothing to refresh. If a wrapped or otherwise long-running step is ever added
+// between here and the signature, wire the refresher through the way cli/run.go
+// does (withFulcioTokenRefresh). The keyless-refresher sweep in
+// run_keyless_refresher_sweep_test.go pins this split and fails if a new call
+// site appears in neither category.
 func (so *SignOptions) applyKeylessPlatformSigner(cmd *cobra.Command, pc platformconfig.PlatformConfig) {
 	if nonFulcioSignerSelected(cmd) {
 		return
@@ -120,14 +132,17 @@ func (so *SignOptions) applyKeylessPlatformSigner(cmd *cobra.Command, pc platfor
 		// write). Sign keyless with the workflow identity directly — this is the
 		// path the release pipeline takes (no `cilock login` step).
 		if auth.WorkflowOIDCAvailable() {
-			applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+			// Signing-time refresher deliberately discarded; see the note above.
+			_, _ = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
 		}
 		return
 	}
 
 	if cred.AuthMode == auth.AuthModeWorkflowOIDC {
-		applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+		// Signing-time refresher deliberately discarded; see the note above.
+		_, _ = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
 		return
 	}
-	applyKeylessFulcioToken(cmd, so.PlatformURL, pc.Fulcio, cred.Token)
+	// Signing-time refresher deliberately discarded; see the note above.
+	_, _ = applyKeylessFulcioToken(cmd, so.PlatformURL, pc.Fulcio, cred.Token)
 }

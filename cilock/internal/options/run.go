@@ -192,23 +192,53 @@ func ensureFulcioURL(cmd *cobra.Command, fulcioURL string) {
 // proceeds exactly as before — CI, offline, and local/KMS paths are unaffected.
 //
 // Returns the platform-reported assurance level (acr) when the exchange
-// succeeded, so the caller can surface it in the run summary; empty otherwise.
-func applyKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL, sessionToken string) string {
+// succeeded, so the caller can surface it in the run summary; nil otherwise.
+// The refresher updates that same cell, so a caller that keeps the pointer
+// always reads the level of the token that actually bought the certificate.
+func applyKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL, sessionToken string) (*keylessAssurance, func() error) {
 	if !fulcioSignerNeedsToken(cmd) {
-		return ""
+		return nil, nil
 	}
 	if cur := fulcioFlagURL(cmd); cur != "" && !sameOrigin(cur, fulcioURL) {
-		return ""
+		return nil, nil
 	}
 	res, err := auth.ExchangeSignTokenResult(platformURL, sessionToken)
 	if err != nil {
 		log.Debugf("keyless sign-token exchange skipped: %v", err)
-		return ""
+		return nil, nil
 	}
 	// Setting the token selects the fulcio signer; ensureFulcioURL (called right
 	// after this by the caller) gives it the platform URL.
 	_ = cmd.Flags().Set("signer-fulcio-token", res.Token)
-	return res.AssuranceLevel
+	assurance := &keylessAssurance{level: res.AssuranceLevel}
+
+	// The same exchange, replayable at signing time. This pre-run call still has
+	// to happen -- setting the token is what SELECTS the fulcio signer, so it
+	// cannot simply be deferred -- but the value it installs is short lived, and
+	// the certificate it feeds is now requested after the wrapped command. The
+	// refresher replaces the token with a fresh one at that moment, and records
+	// the assurance level THAT token was minted at: the summary must describe
+	// the credential that bought the certificate, not the one that was thrown
+	// away, or a downgraded re-exchange would be reported at the old, stronger
+	// level.
+	//
+	// It fails CLOSED, unlike the pre-run path above. Before the command a failed
+	// exchange means "this run is not keyless after all" and signing continues by
+	// another route; at signing time the run is already committed to Fulcio, so a
+	// stale token must surface as an error rather than a confusing HTTP 400 from
+	// the certificate authority.
+	refresh := func() error {
+		fresh, err := auth.ExchangeSignTokenResult(platformURL, sessionToken)
+		if err != nil {
+			return fmt.Errorf("re-exchanging the platform signing token: %w", err)
+		}
+		if err := cmd.Flags().Set("signer-fulcio-token", fresh.Token); err != nil {
+			return fmt.Errorf("installing the refreshed platform signing token: %w", err)
+		}
+		assurance.level = fresh.AssuranceLevel
+		return nil
+	}
+	return assurance, refresh
 }
 
 // applyWorkflowKeylessFulcioToken wires the fulcio signer for ambient CI
@@ -229,27 +259,51 @@ func applyKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL, session
 // selects the fulcio signer). Every fail-open path returns false: an explicit
 // signer override, a foreign --signer-fulcio-url, no ambient OIDC server, or a
 // flag-set error. Callers gate signerWorkflowIdentity on this result so the
-// SLSA level is never claimed for a run that did not actually sign keyless with
-// the platform workflow identity.
-func applyWorkflowKeylessFulcioToken(cmd *cobra.Command, fulcioURL, audience string) bool {
+// summary reports the workflow signing path only when it was actually used.
+//
+// The second return is the signing-time refresher, non-nil exactly when the
+// first return is true. A minted GitHub Actions OIDC token is short lived just
+// like an exchanged session token, and the Fulcio certificate is now requested
+// AFTER the wrapped command, so the workflow-OIDC path needs the same deferred
+// re-mint the session path gets (applyKeylessFulcioToken). Without it a build
+// longer than the OIDC token lifetime presents an expired token to Fulcio.
+// Callers that sign immediately -- no wrapped command between resolution and
+// signature -- may discard it.
+//
+// Like the session refresher it fails CLOSED: before the command a failed mint
+// means "this run is not keyless after all", but at signing time the run is
+// already committed to Fulcio, so a stale token must surface as an error rather
+// than a confusing HTTP 400 from the certificate authority.
+func applyWorkflowKeylessFulcioToken(cmd *cobra.Command, fulcioURL, audience string) (bool, func() error) {
 	if !fulcioSignerNeedsToken(cmd) {
-		return false
+		return false, nil
 	}
 	if cur := fulcioFlagURL(cmd); cur != "" && !sameOrigin(cur, fulcioURL) {
-		return false
+		return false, nil
 	}
 	oidcToken, err := fetchGitHubOIDCToken(audience)
 	if err != nil {
 		log.Debugf("workflow keyless OIDC mint skipped: %v", err)
-		return false
+		return false, nil
 	}
 	// Setting the token selects the fulcio signer; ensureFulcioURL (called by the
 	// caller right after) gives it the platform's Fulcio URL.
 	if err := cmd.Flags().Set("signer-fulcio-token", oidcToken); err != nil {
 		log.Debugf("workflow keyless token set failed: %v", err)
-		return false
+		return false, nil
 	}
-	return true
+
+	refresh := func() error {
+		fresh, mintErr := fetchGitHubOIDCToken(audience)
+		if mintErr != nil {
+			return fmt.Errorf("re-minting the workflow OIDC signing token: %w", mintErr)
+		}
+		if setErr := cmd.Flags().Set("signer-fulcio-token", fresh); setErr != nil {
+			return fmt.Errorf("installing the refreshed workflow OIDC signing token: %w", setErr)
+		}
+		return nil
+	}
+	return true, refresh
 }
 
 type RunOptions struct {
@@ -407,21 +461,42 @@ type RunOptions struct {
 	// can report the tenant / identity / destinations cilock actually bound
 	// to without re-deriving or re-reading the credential store. They are
 	// not flags.
-	resolvedTenantName     string
-	resolvedSignerEmail    string
-	resolvedFulcioURL      string
-	resolvedAssuranceLevel string
+	resolvedTenantName  string
+	resolvedSignerEmail string
+	resolvedFulcioURL   string
+
+	// keylessAssurance is the assurance level of the platform-minted signing
+	// token as of its MOST RECENT mint -- see the type for why it is a pointer.
+	// nil for workflow-identity, offline, local-key and explicit-token runs.
+	keylessAssurance *keylessAssurance
 
 	// signerWorkflowIdentity records that cilock minted the signing identity from
-	// the platform's WORKFLOW-identity path — the ambient-CI OIDC exchange or a
-	// stored workflow-identity marker — i.e. an isolated, hosted builder signed
-	// this run with a non-forgeable ephemeral identity. It is the SLSA Build L2
-	// evidence gate (see RunSummary.ComputeSLSA), and is deliberately NOT set for
-	// a browser/token session (the build ran on a developer's machine), an
-	// explicit --signer-fulcio-token (provenance cilock cannot attest), or any
-	// offline/local-key run.
+	// the platform's workflow-identity path — the ambient-CI OIDC exchange or a
+	// stored workflow-identity marker. It records the signing path only; it does
+	// not establish build-platform isolation or a SLSA/ALPS level. It is not set
+	// for browser/token sessions, explicit --signer-fulcio-token overrides, or
+	// offline/local-key runs.
 	signerWorkflowIdentity bool
+
+	// refreshFulcioToken re-runs the /oauth/sign-token exchange and reinstalls
+	// the result on --signer-fulcio-token. It is set ONLY when the pre-run
+	// exchange succeeded, so CI, offline, local-key and explicit-token runs
+	// carry a nil refresher and are completely unaffected.
+	//
+	// It exists because the pre-run exchange alone is not enough. The token is
+	// minted during option resolution, BEFORE the wrapped command; the Fulcio
+	// certificate is now minted lazily at first signature, AFTER it. A command
+	// that runs longer than the token's lifetime therefore presents an expired
+	// token to Fulcio and gets HTTP 400 "There was an error processing the
+	// identity token" -- measured on a 295.7s run. Deferring the certificate
+	// without also refreshing the token just moves the expiry one layer down.
+	refreshFulcioToken func() error
 }
+
+// FulcioTokenRefresher returns the signing-time token refresher, or nil when
+// this run has no platform session to re-exchange. Callers must treat nil as
+// "nothing to refresh", never as an error.
+func (ro *RunOptions) FulcioTokenRefresher() func() error { return ro.refreshFulcioToken }
 
 // OutputJSON reports whether the run result should be emitted as a structured
 // JSON object on stdout (set via --json or --output-format json).
@@ -442,14 +517,34 @@ func (ro *RunOptions) ResolvedSignerEmail() string { return ro.resolvedSignerEma
 func (ro *RunOptions) ResolvedFulcioURL() string { return ro.resolvedFulcioURL }
 
 // ResolvedAssuranceLevel returns the assurance level (acr) the platform minted
-// the keyless signing identity at, as reported by the sign-token exchange.
-// Empty for offline / local-key runs or when the platform supplied none.
-func (ro *RunOptions) ResolvedAssuranceLevel() string { return ro.resolvedAssuranceLevel }
+// the keyless signing identity at, as reported by the sign-token exchange that
+// bought the certificate -- the signing-time re-exchange when one ran, not the
+// pre-command one. Empty for offline / local-key runs or when the platform
+// supplied none.
+func (ro *RunOptions) ResolvedAssuranceLevel() string {
+	if ro.keylessAssurance == nil {
+		return ""
+	}
+	return ro.keylessAssurance.level
+}
+
+// keylessAssurance is the assurance level (acr) of the platform-minted keyless
+// signing token, as of its most recent mint.
+//
+// It is a heap cell shared by pointer rather than a string field on RunOptions
+// because cli/run.go hands RunOptions to runRun BY VALUE, while the signing-time
+// refresher installed by applyKeylessFulcioToken re-mints the token AFTER the
+// wrapped command and may be handed a different level than the pre-command
+// exchange was. A value field would leave the summary -- built from the copy,
+// after signing -- reporting the level of the initial, unused token.
+type keylessAssurance struct {
+	level string
+}
 
 // SignerIsWorkflowIdentity reports whether the run signed with a platform
 // workflow identity (ambient CI OIDC or a stored workflow-identity marker), as
-// captured during ResolvePlatformDefaults. It is the isolated-builder evidence
-// the SLSA Build-level computation requires for L2+.
+// captured during ResolvePlatformDefaults. It is a signing-path observation,
+// not a build-platform or standards assessment.
 func (ro *RunOptions) SignerIsWorkflowIdentity() bool { return ro.signerWorkflowIdentity }
 
 var RequiredRunFlags = []string{
@@ -582,8 +677,8 @@ func (ro *RunOptions) resolvePlatformIdentity(cmd *cobra.Command, pc platformcon
 		// is presented to the platform's own Fulcio (derived from --platform-url).
 		// Only claim workflow identity when the token was ACTUALLY installed —
 		// the helper fails open (no CI OIDC, explicit override, foreign Fulcio),
-		// and an over-claimed identity would inflate the SLSA level.
-		ro.signerWorkflowIdentity = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+		// and an over-claimed identity would misstate the signing path.
+		ro.signerWorkflowIdentity, ro.refreshFulcioToken = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
 
 		// Expose the platform URL to the platform attestor so it binds the run to
 		// the tenant even with no prior `cilock login`: in CI the ambient GitHub
@@ -920,10 +1015,10 @@ func (ro *RunOptions) applyPlatformCredential(cmd *cobra.Command, cred *auth.Cre
 	if cred.AuthMode == auth.AuthModeWorkflowOIDC {
 		// Only claim workflow identity when the token was ACTUALLY installed —
 		// the helper fails open (no CI OIDC, explicit override, foreign Fulcio),
-		// and an over-claimed identity would inflate the SLSA level.
-		ro.signerWorkflowIdentity = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+		// and an over-claimed identity would misstate the signing path.
+		ro.signerWorkflowIdentity, ro.refreshFulcioToken = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
 	} else {
-		ro.resolvedAssuranceLevel = applyKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred.Token)
+		ro.keylessAssurance, ro.refreshFulcioToken = applyKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred.Token)
 	}
 
 	// Archivista on by default whenever we have a platform identity — a SESSION
