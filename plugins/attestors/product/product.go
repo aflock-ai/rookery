@@ -122,6 +122,23 @@ const (
 	defaultIncludeGlob = "*"
 	defaultExcludeGlob = ""
 
+	// DefaultMaxProducts bounds how many files one run may record as
+	// products. It is a USABILITY limit, not a security one: past a few
+	// thousand leaves the envelope stops being readable by the things that
+	// have to read it, and the operator finds out at push time with an
+	// error that points nowhere near the cause.
+	//
+	// The number is derived from measurement, not taste. A real runaway
+	// (PR #8339) recorded 83,272 leaves in a ~25 MiB envelope — about 315
+	// bytes per leaf. The evidence edge refuses reads over 4 MiB, which is
+	// ~13,300 leaves. 10,000 sits under that with room for the rest of the
+	// collection (~3 MiB of product predicate), and far above any plausible
+	// set of real deliverables: a build emitting more than ten thousand
+	// shipped files is recording its inputs or its scratch space.
+	//
+	// Raise it with --max-products=<n>, or set 0 to disable the check.
+	DefaultMaxProducts = 10000
+
 	// mimeTypeUnknown is the MIME type recorded when content sniffing could
 	// not run or could not classify the bytes — a path that vanished before
 	// exit, or a file getFileContentType failed to read. It is a truthful
@@ -181,6 +198,8 @@ type Attestor struct {
 	compiledIncludeGlob glob.Glob
 	excludeGlob         string
 	compiledExcludeGlob glob.Glob
+	// maxProducts bounds the recorded product count; 0 disables the check.
+	maxProducts int
 
 	// includeGlobUserSet tracks whether the include-glob came from
 	// explicit user intent (cobra Changed()) or from the default. Only
@@ -318,12 +337,21 @@ func WithRequireExistsAtExit(require bool) Option {
 	return func(a *Attestor) { a.requireExistsAtExit = require }
 }
 
-// New constructs an Attestor with default globs (include="*", exclude="").
+// WithMaxProducts bounds how many products a run may record. Zero disables
+// the check entirely — the documented escape hatch for a build that really
+// does ship more files than DefaultMaxProducts.
+func WithMaxProducts(n int) Option {
+	return func(a *Attestor) { a.maxProducts = n }
+}
+
+// New constructs an Attestor with default globs (include="*", exclude="")
+// and the default product cap.
 func New(opts ...Option) *Attestor {
 	a := &Attestor{
 		includeGlob:         defaultIncludeGlob,
 		excludeGlob:         defaultExcludeGlob,
 		requireExistsAtExit: true, // strict by default; explicit opt-out
+		maxProducts:         DefaultMaxProducts,
 		HashAlgorithmField:  HashAlgorithm,
 		ConstructionField:   Construction,
 	}
@@ -358,6 +386,19 @@ func configOptions() []registry.Configurer {
 					return a, fmt.Errorf("unexpected attestor type: %T is not a product attestor", a)
 				}
 				WithExcludeGlob(excludeGlob)(prod)
+				return prod, nil
+			},
+		),
+		registry.IntConfigOption(
+			"max-products",
+			"Maximum number of files this attestor will record as products. A run that exceeds it fails with the directories responsible, rather than producing an attestation too large for the evidence store to read. Set 0 to disable the check.",
+			DefaultMaxProducts,
+			func(a attestation.Attestor, n int) (attestation.Attestor, error) {
+				prod, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("unexpected attestor type: %T is not a product attestor", a)
+				}
+				WithMaxProducts(n)(prod)
 				return prod, nil
 			},
 		),
@@ -733,6 +774,14 @@ func hashSurvivorOrWitness(path, mimeType string, fi os.FileInfo) attestation.Pr
 // BuildSidecar and material.buildLeaves also route through.
 func (a *Attestor) buildTree() error {
 	pairs := a.includedProductPairs()
+
+	// Counted AFTER the include/exclude globs, so the remedy the error
+	// recommends (--exclude-glob) is measured against the same set the
+	// check rejects. Counting before filtering would print an error whose
+	// own suggested fix could not clear it.
+	if err := a.checkProductCount(pairs); err != nil {
+		return err
+	}
 
 	// Collect (path, digest) for every product that carries a sha256 digest,
 	// then dedup+sort via the shared helper so all three production tree-build
