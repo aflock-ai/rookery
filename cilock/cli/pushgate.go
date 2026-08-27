@@ -642,10 +642,13 @@ func validPushgateRef(value string) bool {
 // the name rather than which characters it may contain. git rejects each of
 // these itself, so a ref failing here was never one git could have pushed.
 func validRefShape(name string) bool {
-	// Lead with an alphanumeric, so a ref can never arrive looking like a flag
-	// to anything downstream that forgets to use "--".
+	// Lead with an alphanumeric or an underscore. The restriction exists so a
+	// ref can never arrive looking like a FLAG to anything downstream that
+	// forgets to use "--", which is a property of a leading "-", not of
+	// punctuation in general: refs/heads/_release is an ordinary ref git
+	// accepts, and refusing it bought nothing.
 	first := rune(name[0])
-	if !(first >= 'a' && first <= 'z' || first >= 'A' && first <= 'Z' || first >= '0' && first <= '9') {
+	if !(first >= 'a' && first <= 'z' || first >= 'A' && first <= 'Z' || first >= '0' && first <= '9' || first == '_') {
 		return false
 	}
 	if strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") {

@@ -392,6 +392,7 @@ func TestPushgateRefTableMatchesTheEdge(t *testing.T) {
 		{"refs/heads/a(b)", false},
 		{"refs/heads/ünïcode", false},
 		{"refs/heads/-flag", false},
+		{"refs/heads/_release", true},
 
 		// --- refused: length ---------------------------------------------
 		{"refs/heads/" + strings.Repeat("a", 245), true},
