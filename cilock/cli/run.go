@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -1194,6 +1195,20 @@ func stampNetworkObservation(s *options.RunSummary, attestors []attestation.Atte
 		}
 		s.Tracing = mode
 		s.NetworkEgress = externalEgress(cr.Processes)
+		// AN EMPTY EGRESS LIST MEANS NOTHING UNLESS THE CHANNEL THAT WOULD
+		// HAVE REPORTED EGRESS IS KNOWN TO WORK. The check above already
+		// refuses a trace that captured NOTHING; the macOS backend adds a
+		// case it does not reach — the trace succeeds, has a capture mode,
+		// records execs and files, and its NETWORK reports specifically were
+		// never proven to arrive. Without this, a backend that accepted the
+		// sandbox profile and then emitted no network reports at all handed
+		// back an empty list for a build that could have fetched anything,
+		// and it was stamped as an observation of no egress.
+		//
+		// Any egress that DID arrive stays in the list either way: a report
+		// that came back is evidence regardless of whether the channel was
+		// proven complete. It is only the NEGATIVE claim that needs the
+		// capability, because only the negative claim rests on absence.
 		s.NoExternalNetworkEgressObserved = len(s.NetworkEgress) == 0
 		return
 	}
@@ -1293,18 +1308,130 @@ func externalEgress(procs []commandrun.ProcessInfo) []string {
 // bounded because the tracer names every domain the vocabulary knows
 // (AF_NETLINK, on every Linux build, included), so ordinary builds never reach
 // this default.
+// isInboundSyscall reports whether an operation ACCEPTED an inbound
+// connection, under any of the names a backend might use for it.
+//
+// The kernel has more than one accept entry point and backends differ: Linux
+// commonly reports accept4 where the darwin sandbox channel reports a plain
+// inbound accept. Matching one spelling would let the other fall through as
+// "not connect" and be dropped — an inbound input channel silently producing a
+// no-egress summary — which is a spelling bug with the consequence of a
+// security hole.
+func isInboundSyscall(name string) bool {
+	switch name {
+	case "accept", "accept4":
+		return true
+	}
+	return false
+}
+
+// isServingSyscall reports the operations that are the build OFFERING a
+// service rather than reaching for input. These are the only operations
+// dropped by name; everything unrecognised is counted instead.
+func isServingSyscall(name string) bool {
+	switch name {
+	case "bind", "listen":
+		return true
+	}
+	return false
+}
+
 func egressEndpoint(c commandrun.NetworkConnection) (string, bool) {
+	// An ACCEPTED inbound connection is an undeclared input channel. The peer
+	// was already running — its own outbound report is a stranger's and is
+	// dropped — so if the build's inbound is ignored too, a helper outside
+	// the tree can feed the build and the run still reads hermetic. The peer
+	// is not observable from this channel, so the operation itself is the
+	// evidence; it is labelled "inbound:" rather than a destination, the way
+	// the resolver channel is labelled, so a policy that accepts a build
+	// serving its own tests can waive precisely this and nothing else.
+	if isInboundSyscall(c.Syscall) {
+		// The PORT is part of the channel's identity. macOS often cannot
+		// observe the peer host but does report the port, and collapsing
+		// every accept onto "inbound:(host-not-observable)" meant a waiver
+		// written for one intended test listener waived every inbound
+		// channel on the machine.
+		// THE FAMILY IS PART OF THE IDENTITY. Without it an AF_UNIX accept on
+		// a socket someone created at the path "127.0.0.1:8080" is
+		// indistinguishable from an AF_INET accept on 127.0.0.1:8080, and
+		// these labels are waivers.
+		// The family AS REPORTED, not its class: the class collapses AF_INET
+		// and AF_INET6 together, and the whole point here is that two channels
+		// must not share a label. An unobservable family gets a name that
+		// cannot be mistaken for one.
+		fam := c.Family
+		if fam == "" {
+			fam = commandrun.FamilyNotObservable
+		}
+		if c.Port != 0 {
+			return "inbound:" + fam + ":" + joinHostPort(c.Address, c.Port), true
+		}
+		return "inbound:" + fam + ":" + c.Address, true
+	}
+	// EVERY OPERATION IS ACCOUNTED FOR, and an unrecognised one is COUNTED.
+	//
+	// bind and listen really are serving rather than fetching, so they are
+	// dropped by name. But dropping everything that is merely not "connect"
+	// was a fail-open of the same shape this file already rejects for socket
+	// FAMILIES: an op the decoder did not have a case for vanished, and a
+	// vanished operation reads downstream as "there was nothing there". The
+	// linux backend's opName already returns "unknown" for an op it cannot
+	// name, and a future backend will add operations before this consumer
+	// learns about them.
+	//
+	// So: known-serving is dropped, known-fetching is classified, and anything
+	// else is counted under a label that says plainly it was not understood.
+	if isServingSyscall(c.Syscall) {
+		return "", false
+	}
 	if c.Syscall != "connect" {
-		return "", false // bind()/listen() is serving, not fetching
+		return labelledEndpoint("unclassified-syscall:"+c.Syscall, c), true
 	}
 
 	switch commandrun.ClassifySocketFamily(c.Family) {
 	case commandrun.FamilyClassUnix:
-		// AF_UNIX: only container-runtime control sockets are a fetch vector.
+		// AF_UNIX: container-runtime control sockets and the system resolver
+		// are fetch vectors; ordinary local IPC is not.
 		if isContainerRuntimeSocket(c.Address) {
 			return "unix:" + c.Address, true
 		}
-		return "", false
+		// NO PATH-BASED LABEL, and that includes the resolver. Labelling
+		// mDNSResponder "resolver:" made the label a WAIVER a policy could
+		// accept, resting on the pathname alone — and this channel cannot
+		// authenticate a peer, so a privileged build or a prearranged helper
+		// replacing that path inherits the waiver. Resolution really is
+		// remote I/O by proxy and really should count; it counts as ordinary
+		// unix egress, named by its path, and a policy that wants to accept
+		// DNS waives that exact path knowing it is trusting a name.
+
+		// A UNIX socket is a channel like any other. The OS's own IPC
+		// endpoints (/var/run, systemd's, the system D-Bus, /dev/log) are
+		// how a process talks to the system and do not count — counting them
+		// would put hermeticity out of reach on every machine. Anything ELSE
+		// — a socket under /tmp, under $HOME, in the workspace — is a peer
+		// somebody set up, and a build can fetch undeclared inputs through a
+		// local proxy at such a path exactly as it could over TCP. Those
+		// count, labelled unix:<path>. A socket the tree itself bound counts
+		// TOO: the report channel carries no unlink and no socket identity,
+		// so "the tree bound this path earlier" cannot prove the listener
+		// the connect reached was still the tree's — a stranger can rebind
+		// an unlinked path between the two. A build that talks to its own
+		// local server over a UNIX socket is therefore not hermetic under
+		// this rule, and the endpoint says exactly which socket.
+		// NO PATH IS EXEMPT. This channel reports a pathname and nothing
+		// about the peer — no pid, no uid, no socket identity — so "this
+		// path is the OS's own logging socket" is a claim about a NAME, not
+		// about who answered. A privileged build, or a helper arranged
+		// before the build ran, can replace /dev/log or /var/run/syslog and
+		// the connection is then a bidirectional channel wearing a trusted
+		// label. Three rounds of narrowing this allowlist (dropping the bind
+		// exemption, then directory prefixes, then nscd) each ended with
+		// another way to abuse a name; the honest end of that sequence is
+		// that a name cannot carry the exemption at all. Every AF_UNIX
+		// connect counts, and the endpoint says which socket, so a policy
+		// that accepts a build talking to syslog waives exactly that path
+		// and nothing else.
+		return "unix:" + c.Address, true
 
 	case commandrun.FamilyClassNonRemote:
 		// Classified, DESCRIBED, and unable to name a remote host — AF_NETLINK
@@ -1356,6 +1483,22 @@ func unclassifiedFamilyLabel(family string) string {
 // observer could see it, so one egress entry names both WHAT channel the build
 // used and WHERE it went. An unnameable destination becomes
 // commandrun.HostNotObservable rather than disappearing.
+// joinHostPort renders a host and port so the two cannot run together.
+//
+// An endpoint label is a POLICY WAIVER, so two different channels must never
+// produce the same string. The ambiguity is specifically a field FOLLOWED BY
+// another field: an IPv6 address contains ':', so "fd00::1" with port 443 and
+// the bare address "fd00::1:443" both render as "fd00::1:443" when joined
+// naively, and a waiver for one covers the other. net.JoinHostPort brackets a
+// host containing ':' — the same rule URLs use — which keeps a legitimate
+// IPv6 address readable instead of escaping it into noise.
+//
+// A field that ENDS the label (a unix path, an address with no port) needs
+// nothing: it is the remainder, so there is nothing for it to run into.
+func joinHostPort(host string, port int) string {
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
 func labelledEndpoint(label string, c commandrun.NetworkConnection) string {
 	where := c.Address
 	if c.Hostname != "" {
@@ -1365,7 +1508,7 @@ func labelledEndpoint(label string, c commandrun.NetworkConnection) string {
 		where = commandrun.HostNotObservable
 	}
 	if c.Port != 0 {
-		return fmt.Sprintf("%s:%s:%d", label, where, c.Port)
+		return label + ":" + joinHostPort(where, c.Port)
 	}
 	return label + ":" + where
 }
@@ -1386,9 +1529,12 @@ func ipEgressEndpoint(c commandrun.NetworkConnection) (string, bool) {
 		// exists precisely so this has a name that cannot be misread as a host.
 		host = commandrun.HostNotObservable
 	}
+	// Escaped for the same reason as every other label field: a hostname or an
+	// IPv6 address contains ':' and would otherwise run into the port, letting
+	// two different destinations render as one waiver.
 	endpoint := host
 	if c.Port != 0 {
-		endpoint = fmt.Sprintf("%s:%d", host, c.Port)
+		endpoint = joinHostPort(host, c.Port)
 	}
 	// Loopback reaches a localhost service/proxy that can fetch external inputs;
 	// label it so the observation identifies the indirect external-input path.

@@ -145,17 +145,17 @@ func TestUnclassifiedRuntimeFamilyCountsAsEgress(t *testing.T) {
 		{
 			name:   "numeric fallback for a domain the tracer cannot name",
 			family: "AF_42",
-			want:   "unclassified-family:AF_42:raw:2a00:1024",
+			want:   "unclassified-family:AF_42:[raw:2a00]:1024",
 		},
 		{
 			name:   "AF_VSOCK arriving before the vocabulary named it",
 			family: "AF_40",
-			want:   "unclassified-family:AF_40:raw:2a00:1024",
+			want:   "unclassified-family:AF_40:[raw:2a00]:1024",
 		},
 		{
 			name:   "an observer that recorded no family at all",
 			family: "",
-			want:   "unclassified-family:(family-not-observable):raw:2a00:1024",
+			want:   "unclassified-family:(family-not-observable):[raw:2a00]:1024",
 		},
 	}
 	for _, tc := range cases {
@@ -285,9 +285,14 @@ func TestResolverNoiseIsNotEgress(t *testing.T) {
 	}
 	cr := commandrun.New(commandrun.WithTracing(true))
 	cr.Summary = &commandrun.TraceSummary{CaptureMode: "trace"}
+	// ONLY the disconnect idiom. The resolver's own socket is a separate
+	// question and this branch answers it differently from main's older
+	// rule: a connect to mDNSResponder IS egress here (labelled "resolver:",
+	// covered by TestSystemResolverSocketCountsAsEgress), because the names a
+	// build resolves leave the machine and the answers come back as inputs.
+	// Including it here would be asserting the opposite of that.
 	cr.Processes = connectsTo(
 		commandrun.NetworkConnection{Syscall: "connect", Family: commandrun.FamilyUnspecified, FD: commandrun.FDNotObservable},
-		commandrun.NetworkConnection{Syscall: "connect", Family: commandrun.FamilyUnix, Address: "/var/run/mDNSResponder"},
 	)
 
 	s := &options.RunSummary{}

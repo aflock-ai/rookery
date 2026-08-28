@@ -56,12 +56,12 @@ func TestExternalEgress(t *testing.T) {
 		{
 			name:  "loopback IPv6 connect counts as egress",
 			procs: connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_INET6", Address: "::1", Port: 8080}),
-			want:  []string{"loopback:::1:8080"},
+			want:  []string{"loopback:[::1]:8080"},
 		},
 		{
 			name:  "public IPv6 connect is egress",
 			procs: connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_INET6", Address: "2606:4700:4700::1111", Port: 443}),
-			want:  []string{"2606:4700:4700::1111:443"},
+			want:  []string{"[2606:4700:4700::1111]:443"},
 		},
 		{
 			name:  "AF_UNIX docker.sock connect counts as egress because it can pull images",
@@ -69,9 +69,14 @@ func TestExternalEgress(t *testing.T) {
 			want:  []string{"unix:/var/run/docker.sock"},
 		},
 		{
-			name:  "ordinary AF_UNIX IPC is not an external-input channel",
+			name:  "the system D-Bus broker is a peer with inputs (PackageKit, NetworkManager…), and counts",
 			procs: connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_UNIX", Address: "/run/dbus/system_bus_socket"}),
-			want:  nil,
+			want:  []string{"unix:/run/dbus/system_bus_socket"},
+		},
+		{
+			name:  "even the OS's own logging socket counts — the channel names a path, not a peer",
+			procs: connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_UNIX", Address: "/dev/log"}),
+			want:  []string{"unix:/dev/log"},
 		},
 		{
 			name:  "bind/listen is serving, not egress",
@@ -164,7 +169,11 @@ func TestStampNetworkObservation_RequestedButNoCaptureMakesNoClaim(t *testing.T)
 func TestStampNetworkObservation_TracedNoEgress(t *testing.T) {
 	cr := commandrun.New(commandrun.WithTracing(true))
 	cr.Summary = &commandrun.TraceSummary{CaptureMode: "ebpf-readtap"}
-	cr.Processes = connectsTo(commandrun.NetworkConnection{Syscall: "connect", Family: "AF_UNIX", Address: "/var/run/nscd.sock"})
+	// Nothing is exempt by PATH any more, and loopback is reported as its own
+	// endpoint class, so the build that reads hermetic is the one that made
+	// no outbound connection at all — it still binds and serves, which is
+	// not fetching.
+	cr.Processes = connectsTo(commandrun.NetworkConnection{Syscall: "bind", Family: "AF_INET", Address: "0.0.0.0", Port: 8080})
 	s := &options.RunSummary{}
 	stampNetworkObservation(s, []attestation.Attestor{cr})
 	if s.Tracing != "ebpf" {

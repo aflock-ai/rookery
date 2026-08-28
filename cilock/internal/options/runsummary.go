@@ -70,6 +70,12 @@ type WrappedCommand struct {
 // Every field is populated from what cilock already knows after the run — no
 // extra server round-trips. Fields that don't apply to a given run (e.g.
 // Gitoid/ArchivistaURL when the upload is disabled) are omitted.
+// assessmentNotAssessed is what this producer reports for BOTH standards.
+// cilock observes; it never self-certifies a SLSA Build level or an ALPS
+// level, because both require assessing the producer and build platform,
+// which a command-side tool cannot do.
+const assessmentNotAssessed = "not_assessed"
+
 type RunSummary struct {
 	Step               string            `json:"step"`
 	WorkingDir         string            `json:"working_dir,omitempty"`
@@ -102,6 +108,14 @@ type RunSummary struct {
 	// Without a trace, network behavior is unknown. Set by buildRunSummary from
 	// the commandrun attestor.
 	Tracing string `json:"tracing,omitempty"`
+	// NOT A SIGNED PREDICATE FIELD. This struct is cilock's run summary,
+	// written to stdout/stderr for an operator and a CI job; nothing in this
+	// repo signs it, stores it, or verifies against it. So widening what
+	// counts as egress cannot retroactively change the meaning of any evidence
+	// already in a store — there is none of it — and there is nothing here to
+	// version. What DOES carry versioned semantics is the command-run
+	// predicate, whose URI rules are stated beside V02PredicateType.
+	//
 	// NoExternalNetworkEgressObserved reports the narrow fact established by the
 	// commandrun trace. It is not a hermeticity claim: filesystem inputs, ambient
 	// descriptors, caches, time, randomness, local services, and the observer's
@@ -153,9 +167,9 @@ type RunSummary struct {
 // boundary evidence. The local process must never grade its own isolation.
 func (s *RunSummary) ComputeStandardsAssessment(runFailed bool) {
 	s.SLSABuildLevel = 0 // clear any value left by a reused summary
-	s.SLSABuildAssessment = "not_assessed"
+	s.SLSABuildAssessment = assessmentNotAssessed
 	s.ALPSSpecVersion = "0.1"
-	s.ALPSAssessment = "not_assessed"
+	s.ALPSAssessment = assessmentNotAssessed
 	if runFailed {
 		s.SLSAVerdict = "SLSA Build: not assessed — the run did not complete successfully."
 		s.ALPSVerdict = "ALPS 0.1: not assessed — the run did not produce complete evidence for an independent verifier."
