@@ -167,8 +167,35 @@ func (CursorProvider) Inspect(_ context.Context, r InspectRequest) Inspection {
 // GeminiCLIProvider identifies Google's Gemini CLI.
 type GeminiCLIProvider struct{}
 
+// The npm install layout, measured on a real install (@google/gemini-cli
+// 0.57.0): the bin entry is a symlink to bundle/gemini.js inside the package.
+// Whole path elements are compared for exact equality, the rule isCodexNpmShim
+// spells out.
+const (
+	geminiNpmNamespace = "@google"
+	geminiNpmPackage   = "gemini-cli"
+	geminiNpmBundleDir = "bundle"
+	geminiNpmScript    = "gemini.js"
+
+	// Same vocabulary as fpCodexNpmShim: the element naming Gemini came out of
+	// the one argv slot node was told to run.
+	fpGeminiNpmScript = basisNodeScriptArg + ":" + geminiNpmNamespace + "/" + geminiNpmPackage
+	// The script slot carried the npm bin symlink; only its resolved target
+	// names the package, and the basis says the resolution happened. NOT a
+	// ViaResolution match — the detector revalidates those against the digested
+	// executable image, and here the image is node, not the script.
+	//
+	// Like every node-script rule, this is match-time identity in the argv
+	// trust class, not proof of executed bytes: the resolution cannot know
+	// what node loaded, and a process retargeting its own symlink forges this
+	// exactly as cheaply as fabricating the direct package path or setting
+	// argv[0] — the self-misrepresentation the predicate's assurance block
+	// already disclaims.
+	fpGeminiResolvedScript = basisNodeScriptArg + ":resolved-symlink:" + geminiNpmNamespace + "/" + geminiNpmPackage
+)
+
 func (GeminiCLIProvider) Vendor() string  { return "google" }
-func (GeminiCLIProvider) Product() string { return "gemini-cli" }
+func (GeminiCLIProvider) Product() string { return geminiNpmPackage }
 func (GeminiCLIProvider) EnvAllowlist() []EnvKey {
 	return []EnvKey{
 		{Name: "GEMINI_MODEL", RecordValue: true, Scopes: []EnvScope{EnvScopeAgent, EnvScopeSelf}},
@@ -176,7 +203,48 @@ func (GeminiCLIProvider) EnvAllowlist() []EnvKey {
 }
 
 func (GeminiCLIProvider) Match(p ProcessInfo) MatchResult {
-	return matchByName(p, "gemini-cli", "gemini", "gemini.exe", "gemini-cli")
+	if m := matchByName(p, geminiNpmPackage, "gemini", "gemini.exe", "gemini-cli"); m.Matched {
+		return m
+	}
+	return matchGeminiNodeScript(p)
+}
+
+// matchGeminiNodeScript recognizes the npm install's node process, which the
+// name matchers never fire on: the kernel records executable=node, comm=node,
+// argv=["node", ".../bin/gemini", ...] — no slot ever says gemini.
+//
+// The direct rule matches the exact package tail in the script slot. The
+// measured everyday case carries only the bin SYMLINK there — a basename argv
+// cannot be trusted for — so it matches nothing until match-time resolution
+// shows the script IS the package file. An argv nodeScriptArg cannot read
+// unambiguously is a missed detection, never a false positive.
+func matchGeminiNodeScript(p ProcessInfo) MatchResult {
+	if base := executableBase(p); base != "node" && base != "node.exe" {
+		return MatchResult{}
+	}
+	script := nodeScriptArg(p.Argv)
+	if script == "" {
+		return MatchResult{}
+	}
+	if hasGeminiPackageTail(pathElements(script)) {
+		return matched(fpGeminiNpmScript)
+	}
+	if resolved := matchTimeResolve(script); resolved.differsFrom(script) && resolved.hasGeminiPackageTail() {
+		return matched(fpGeminiResolvedScript)
+	}
+	return MatchResult{}
+}
+
+// hasGeminiPackageTail reports whether a path ends in the @google/gemini-cli
+// package's bin target. Every element is compared for exact equality.
+func hasGeminiPackageTail(elements []string) bool {
+	const tailLen = 4
+	if len(elements) < tailLen {
+		return false
+	}
+	tail := elements[len(elements)-tailLen:]
+	return tail[0] == geminiNpmNamespace && tail[1] == geminiNpmPackage &&
+		tail[2] == geminiNpmBundleDir && tail[3] == geminiNpmScript
 }
 
 func (g GeminiCLIProvider) Inspect(_ context.Context, r InspectRequest) Inspection {
@@ -276,8 +344,15 @@ func geminiModelFromSettings(candidates []settingsCandidate, model *Observation,
 			}
 			continue
 		}
-		value, found := snap.jsonString("model")
-		configs = append(configs, *snap.describe(candidate.scope, "model"))
+		// Settings v2 nests the model at `model.name` (per the CLI's own
+		// reference); the flat `model` string is the v1 shape it migrates
+		// from. The reads are disjoint — an object fails the string read and
+		// vice versa — so this is a precedence, not a merge.
+		value, found := snap.jsonString("model.name")
+		if !found {
+			value, found = snap.jsonString("model")
+		}
+		configs = append(configs, *snap.describe(candidate.scope, "model.name", "model"))
 		if model != nil || modelBlocked {
 			continue
 		}

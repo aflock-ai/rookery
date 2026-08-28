@@ -149,8 +149,6 @@ func (s *configSnapshot) jsonObjectParseable() bool {
 
 // jsonString reads a dotted path out of the snapshot's JSON object and returns
 // it only if the value is a string.
-//
-//nolint:unparam // every current caller reads "model"; the dotted-path walk is the general shape these settings files share
 func (s *configSnapshot) jsonString(dotted string) (string, bool) {
 	if s.data == nil {
 		return "", false

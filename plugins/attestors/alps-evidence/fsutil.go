@@ -352,6 +352,12 @@ func (f fingerprintPath) isCodexReleaseBinary() bool {
 	return ok
 }
 
+// hasGeminiPackageTail answers Gemini's npm-package fingerprint against the
+// resolved path. The zero value has no elements and answers false.
+func (f fingerprintPath) hasGeminiPackageTail() bool {
+	return hasGeminiPackageTail(pathElements(f.path))
+}
+
 // ---------------------------------------------------------------------------
 // The executable snapshot — the one place evidence about an image is made
 // ---------------------------------------------------------------------------
