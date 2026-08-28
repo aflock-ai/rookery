@@ -121,6 +121,37 @@ type RunSummary struct {
 	// descriptors, caches, time, randomness, local services, and the observer's
 	// own coverage are separate parts of that assessment.
 	NoExternalNetworkEgressObserved bool `json:"no_external_network_egress_observed,omitempty"`
+	// UnattributedExecs counts execs the trace OBSERVED but could not tie to
+	// the wrapped command's process tree — a child that exited before its
+	// kernel facts could be read, so its ancestry is undecidable.
+	//
+	// It is surfaced here because these gaps carry NO IMAGE IDENTITY in the
+	// attestation, deliberately: the report stream is machine-wide and an
+	// unproven pid's owner is unknown by construction, so naming an image
+	// would attribute a stranger's program to this build. The consequence is
+	// that an image-deny policy has nothing to match on, and a forbidden
+	// short-lived child reads as a bare pid-and-timestamp gap. A count an
+	// operator can see is what keeps that from being silent; the attestation
+	// carries the full list.
+	//
+	// Non-zero does NOT mean something is wrong. It is the measured residual
+	// of a report-channel tracer on a loaded machine, which is why it is
+	// reported rather than refused — refusing every trace that lost a race
+	// with a fast child would make this backend unusable.
+	UnattributedExecs int `json:"unattributed_execs,omitempty"`
+	// ForgedReportRecords counts log records that LOOKED like kernel sandbox
+	// reports but did not come from the kernel — something on the machine was
+	// writing sandbox-shaped messages into the unified log while the build ran.
+	//
+	// The records themselves were rejected, so no evidence of this build is
+	// missing and the trace is still attestable; that is why this reports
+	// rather than refuses. It also must not refuse: the log stream is
+	// machine-wide and os_log is an ordinary unprivileged API, so any local
+	// process could otherwise break every build on the machine by emitting one
+	// line. But a non-zero value is either a bug or an attempt to fabricate
+	// evidence, and it reaches an operator here instead of sitting in a
+	// counter nothing reads.
+	ForgedReportRecords uint64 `json:"forged_report_records,omitempty"`
 	// NetworkEgress lists the external destinations the trace observed
 	// (hostname/address with port). Empty can mean no observed egress or no trace;
 	// Tracing and NoExternalNetworkEgressObserved disambiguate those states.

@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !linux
+//go:build !linux && !darwin
+
+// Platforms with no tracing backend at all. darwin left this file when the
+// sandbox-report tracer landed (tracing_darwin.go): until then enableTracing
+// was an empty stub there, so a macOS attestation carried only cmd and
+// exitcode and could not contradict a command that did nothing.
 
 package commandrun
 

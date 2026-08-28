@@ -541,15 +541,16 @@ func SocketFamilyClassifications() map[string]SocketFamilyClass {
 // NetworkConnection records a connect or bind syscall.
 //
 // Syscall names the operation the observer saw — "connect" (the only value
-// cilock counts against hermeticity), "bind", "sendto" or "dns_query" from the
-// Linux backends. Family/Address/Port are the
+// cilock counts against hermeticity), "bind", "accept" from the macOS
+// sandbox-report backend, "sendto" or "dns_query" from the Linux backends.
+// Family/Address/Port are the
 // destination as the observer saw it; where an observer could not see part of
 // it, the constants above say so explicitly rather than leaving a zero value to
 // be read as fact. A report-based observer that is told a port and never a host
 // therefore records HostNotObservable with a real port, and a consumer reads
 // that as egress it cannot name — never as egress that did not happen.
 type NetworkConnection struct {
-	Syscall   string `json:"syscall"`             // "connect", "bind", "sendto", "dns_query"
+	Syscall   string `json:"syscall"`             // "connect", "bind", "accept", "sendto", "dns_query"
 	Family    string `json:"family"`              // AF_INET, AF_INET6, AF_UNIX, AF_INET_UNSPECIFIED, AF_UNSPEC
 	Address   string `json:"address"`             // IP address, Unix socket path, or HostNotObservable
 	Port      int    `json:"port,omitempty"`      // TCP/UDP port (0 for AF_UNIX or when unobserved)
@@ -629,6 +630,55 @@ type SyscallEvent struct {
 	//     no prior fanotify hash; zero-copy syscall).
 	// Verifiers use this to set their trust threshold per syscall.
 	DigestSource string `json:"digestSource,omitempty"`
+	// Outcome says whether the backend OBSERVED THIS SYSCALL SUCCEED, or only
+	// observed it being ATTEMPTED. Empty means the backend does not
+	// distinguish (the Linux backends observe the call itself, so an event
+	// there is an event that happened).
+	//
+	// It exists because `Syscall: "execve"` and a populated Program read as
+	// "this image ran" to every consumer, and on the macOS sandbox-report
+	// backend that is a claim the channel cannot support: an ALLOW report
+	// proves the sandbox PERMITTED the exec, not that execve then returned.
+	// A permitted exec can still fail with ENOENT or ENOEXEC after the report,
+	// and the return value is not observable. Saying so only in a free-text
+	// limitations note leaves a policy no MACHINE-READABLE way to tell the
+	// weaker semantics from the stronger, which is the same failure that left
+	// ProgramDigest, ExeDigest and OpenedFiles empty on that backend.
+	//
+	// The field is additive and omitempty, so an older consumer sees exactly
+	// the document it saw before; a consumer that needs "did it run" checks
+	// this before treating an execve event as an execution.
+	Outcome string `json:"outcome,omitempty"`
+
+	// PathDigestAtCollectorOpen is the bytes found AT THE REPORTED PATH WHEN
+	// THE COLLECTOR OPENED IT. It is NOT proof of what executed, and the name
+	// says so because a shorter one would not.
+	//
+	// A field called "Digest" beside an exec event reads as "the bytes that
+	// ran" to every consumer — which is precisely why this backend leaves
+	// ProgramDigest and ExeDigest EMPTY. The same reasoning applies here, so
+	// the claim is narrowed in the NAME rather than in a note a policy author
+	// may never read: an image-deny policy matching on this is matching an
+	// observation of a path, not of an execution.
+	//
+	// What defeats it, stated rather than implied: the collector opens the
+	// path AFTER report delivery, and it follows symlinks. A tracee can exec
+	// image A through a symlink, retarget that symlink to a PRE-EXISTING image
+	// B before the open, and B is measured for A's event — B's ctime predates
+	// the report, so the replacement check passes, and B is unchanged
+	// afterwards, so the end-of-run content check passes too. Binding the
+	// vnode the kernel actually loaded needs Endpoint Security, which the
+	// install-nothing constraint rules out. DigestSource carries the same
+	// statement in machine-readable form ("collector-open-path-hash").
+	//
+	// It is published at all because the per-process fields cannot carry it:
+	// ProgramDigest keeps the first exec and ExeDigest the last, and
+	// OpenedFiles is path-keyed, so a path exec'd repeatedly over different
+	// bytes retains only its final measurement and every intermediate image
+	// (A→B→C hides B) is unmeasured anywhere else. Empty when nothing was
+	// captured; DigestSource is then "" as well, so an absent measurement
+	// reads as a stated gap rather than a borrowed one.
+	PathDigestAtCollectorOpen cryptoutil.DigestSet `json:"pathDigestAtCollectorOpen,omitempty"`
 }
 
 // FileActivity aggregates all file mutation operations for a process.
@@ -934,6 +984,312 @@ type TraceDiagnostics struct {
 	// reasons other than "FS doesn't support" (which is the probe
 	// path). Non-zero suggests a real issue worth investigating.
 	FsVeritySealFailures uint64 `json:"fsVeritySealFailures,omitempty"`
+
+	// Darwin carries the macOS sandbox-report backend's data-quality
+	// counters. Nil on every other platform (and on darwin runs that were
+	// not traced), so it costs a Linux attestation nothing.
+	Darwin *DarwinTraceDiagnostics `json:"darwin,omitempty"`
+}
+
+// UnprovenExec is one observed exec whose process could not be tied to the
+// traced root: see DarwinTraceDiagnostics.UnprovenExecs.
+//
+// It is a GAP — a pid and a time — and carries NO image identity of any
+// kind. The report stream is machine-wide and an unproven pid's owner is
+// unknown by construction (unproven means "we could not read whose it is"),
+// so publishing the image's path hash or its content digest would disclose
+// that another user of this machine ran something. Being able to read a
+// world-readable binary is not permission to say who executed it. A policy
+// that forbids an image fails closed on a non-empty list instead.
+type UnprovenExec struct {
+	PID       int    `json:"pid"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// DarwinTraceDiagnostics reports what the macOS sandbox-report tracer saw and,
+// more importantly, what it could NOT prove. The backend observes a
+// machine-wide report stream and admits a process only on kernel-read
+// evidence, so a verifier needs the size of the discard pile to judge whether
+// a small tree means "little work" or "little attribution".
+type DarwinTraceDiagnostics struct {
+	// ExecReports / ForkReports are the reports attributed to this build.
+	ExecReports uint64 `json:"execReports,omitempty"`
+	ForkReports uint64 `json:"forkReports,omitempty"`
+
+	// UnattributedReports counts exec/fork reports DROPPED because this
+	// build's ownership of the process could not be proven — most often
+	// another sandbox user on the same machine. Dropping is deliberate:
+	// counting a stranger's work as this build's is the failure that would
+	// let an agent pass a gate by starting a decoy build.
+	UnattributedReports uint64 `json:"unattributedReports,omitempty"`
+
+	// UnprovenPIDs counts processes whose kernel facts could not be read
+	// before they disappeared. Each one is a process this attestation does
+	// NOT describe in the tree; what it was seen to exec is in UnprovenExecs.
+	UnprovenPIDs uint64 `json:"unprovenPids,omitempty"`
+
+	// UnprovenExecs lists the exec reports of those unproven pids: the image
+	// the kernel says was loaded, the digest pinned at report time when the
+	// image could be pinned, and the pid — but NO parent edge, because none
+	// was read. This is the third bucket between "this build's" and
+	// "dropped". A child that execs and exits inside the report channel's
+	// delivery latency loses the kernel-fact poll — measured 2026-08-27 on
+	// macOS 15/arm64 under load at 25–38% of the children of a 1,500-way
+	// fork storm — and dropping those reports would let exactly such a child
+	// make its exec vanish from the evidence. Listing them without
+	// attribution states what was observed and what was not: the exec
+	// happened under this machine's sandbox report channel, and it MAY be
+	// another sandbox user's. A policy that forbids an image anywhere in the
+	// tree must fail closed on this list too; a policy that needs a complete
+	// tree requires unprovenPids == 0. Capped at maxUnprovenExecs, with the
+	// overflow counted in UnprovenExecsOmitted.
+	UnprovenExecs []UnprovenExec `json:"unprovenExecs,omitempty"`
+
+	// UnprovenExecsOmitted counts unproven exec reports past the cap, so a
+	// bounded list cannot read as a complete one.
+	UnprovenExecsOmitted uint64 `json:"unprovenExecsOmitted,omitempty"`
+
+	// ExecDigestBinding states what an exec digest on this backend is bound
+	// to: "path-at-collector-open-time" — the bytes at the reported path when the
+	// report arrived, verified unchanged at the end of the run — and never
+	// the vnode the kernel loaded. A verifier that needs the executed bytes
+	// proven must not read programDigest here as that proof.
+	ExecDigestBinding string `json:"execDigestBinding,omitempty"`
+
+	// CollectorRecordsUnreadable counts NDJSON records from `log stream` that
+	// could not be decoded AT ALL — the line was not valid JSON, so neither
+	// its pid nor whether it was even a sandbox report could be read.
+	//
+	// It is kept separate from UnparsedRecords, which means "unreadable and
+	// PROVABLY a stranger's". Ownership here is not proven foreign; it is
+	// UNKNOWN, and unknown fails toward ours everywhere else in this backend.
+	// A malformed record also usually means the stream was truncated, which
+	// is a data-loss event whoever it belonged to. Non-zero refuses the
+	// trace: this build's exec or connection may be inside the record nobody
+	// could read.
+	CollectorRecordsUnreadable uint64 `json:"collectorRecordsUnreadable,omitempty"`
+
+	// UnparseableOwnReports counts kernel sandbox reports the parser could
+	// not read whose pid is this build's or undecidable. Non-zero refuses
+	// the trace: an exec or a connection may be missing from the evidence.
+	// (A stranger's unreadable report is counted in UnparsedRecords.)
+	UnparseableOwnReports uint64 `json:"unparseableOwnReports,omitempty"`
+
+	// UnresolvedAncestry counts processes whose own facts were read but
+	// whose parent chain runs into a process nothing could be read about —
+	// an intermediate that exited before its poll, or an unseen ancestor
+	// that appeared after the root started. Readable facts prove one edge,
+	// not non-descent, so these are UNPROVEN rather than foreign: network
+	// fails toward non-hermetic, execs are listed in unprovenExecs.
+	UnresolvedAncestry uint64 `json:"unresolvedAncestry,omitempty"`
+
+	// UnobservedDescendants counts processes the kernel process table showed
+	// attached to this build at exit — started after the root, parented by
+	// a tree member or in the root's process group — that never produced a
+	// report: a forked child that neither exec'd nor touched the network.
+	// They are not in the tree (nothing was observed of them) and one still
+	// running when the command exits refuses the attestation. A detached
+	// child whose parent already exited hangs off launchd and cannot be told
+	// from an app launched mid-build; that residual is stated in the note.
+	UnobservedDescendants uint64 `json:"unobservedDescendants,omitempty"`
+
+	// ReparentedAfterRoot counts processes that appeared after the root
+	// started and hang off launchd: a descendant whose intermediate parent
+	// exited before its facts were read (double-fork, setsid), or an app the
+	// user launched mid-build. A readable ppid of 1 does not prove
+	// non-descent, so these are classified UNPROVEN rather than foreign —
+	// their network fails toward non-hermetic and their execs are listed in
+	// unprovenExecs — and one still running when the command exits refuses
+	// the attestation outright.
+	ReparentedAfterRoot uint64 `json:"reparentedAfterRoot,omitempty"`
+
+	// GroupOnlyPIDs counts processes that shared the traced root's process
+	// group while their kernel-read parent chain never reached the root, and
+	// were therefore EXCLUDED from the tree.
+	//
+	// Process-group membership is not proof of descent: POSIX setpgid lets any
+	// process in the same session join an existing group, so admitting a pid on
+	// group equality alone would let a helper an agent controls put its execs
+	// and its network connections into a signed tree with one syscall and no
+	// parent edge. Excluding them makes the tree smaller than reality in one
+	// legitimate case — a process whose parent exited before the poll, leaving
+	// it reparented to launchd — so the number is published rather than
+	// dropped: it is the size of what this attestation declines to claim.
+	GroupOnlyPIDs uint64 `json:"groupOnlyPids,omitempty"`
+
+	// CoalescedDuplicates counts repeats the kernel folded into a single
+	// report ("N duplicate reports for ..."). The events happened; only the
+	// per-occurrence detail was collapsed by the logging layer.
+	CoalescedDuplicates uint64 `json:"coalescedDuplicates,omitempty"`
+
+	// ImagesUnhashed counts exec'd images whose bytes could not be pinned or
+	// digested, so their Program/Exe digests are absent rather than guessed.
+	ImagesUnhashed uint64 `json:"imagesUnhashed,omitempty"`
+
+	// Argv0Normalized is true when the sandbox wrapper handed the traced
+	// command its RESOLVED PATH as argv[0] where the caller had asked for a
+	// bare name — the ordinary shape of exec.Command, and not refusable
+	// without refusing nearly every invocation, but visible because a
+	// program can read argv[0] to choose behaviour or find its resources.
+	// An argv[0] naming a different executable, or an empty one, is refused
+	// outright rather than recorded here.
+	Argv0Normalized bool `json:"argv0Normalized,omitempty"`
+
+	// ObservedChildren counts the distinct non-root pids this build was seen
+	// to have: members, pids whose facts could not be read, and the ones the
+	// exit sweep found. It is published BESIDE ForkReports, never subtracted
+	// from it — a posix_spawn child emits no fork report and would cancel a
+	// genuinely missing one, so the difference is not exact. A policy that
+	// needs a complete tree compares the two itself: disagreement proves
+	// incompleteness, agreement proves nothing.
+	ObservedChildren uint64 `json:"observedChildren,omitempty"`
+
+	// AttributedExecsUndigested counts execs INSIDE the tree that carry no
+	// image digest: the image was gone before its report arrived, exceeded
+	// the pin bound, or was rewritten in place after it ran. Non-zero refuses
+	// the attestation — an exec that is signed without a digest is a hole an
+	// image-deny policy walks straight through — so a verifier only ever
+	// sees zero here; the field documents the rule.
+	AttributedExecsUndigested uint64 `json:"attributedExecsUndigested,omitempty"`
+
+	// UnparsedRecords counts log records that did not decode. Non-zero means
+	// the report format moved under us and this backend needs revisiting.
+	UnparsedRecords uint64 `json:"unparsedRecords,omitempty"`
+
+	// NetworkObserved states that the network report channel was ASKED FOR and
+	// PROVEN TO DELIVER, for both operation classes a verdict keys on. cilock
+	// refuses to derive hermeticity from a backend that answers false, because
+	// an empty egress list from an observer that never watched is not evidence
+	// of anything.
+	//
+	// BOTH HALVES ARE REQUIRED, and each answers a different way of being
+	// wrong:
+	//
+	//  1. The profile THIS RUN applied asked the kernel to narrate network
+	//     operations. Computed from the applied profile at run time, never
+	//     asserted, so deleting the report rule flips this to false and the
+	//     claim is withheld rather than silently inherited.
+	//  2. A live probe pair actually got reports back — an ACCEPTED INBOUND
+	//     connection from a listener probe and an OUTBOUND connect from a
+	//     connector probe, both registered so neither one's traffic is ever
+	//     booked as the build's. The profile text proves intent, not delivery:
+	//     a backend that accepted the profile and then emitted no network
+	//     events would otherwise hand back an empty egress list for a build
+	//     that fetched the world.
+	//
+	// Proving ONE class is not enough and that was a live gap until the pair
+	// existed: cilock counts an outbound connect as a fetch AND an accepted
+	// inbound connection as an undeclared input channel, so an outbound-only
+	// proof let this field be true while inbound reports never arrived at all.
+	//
+	// Emitted even when false: a missing field must not be readable as "true".
+	NetworkObserved bool `json:"networkObserved"`
+
+	// NetworkHostsObservable is FALSE on this backend, always, and says the
+	// single most important thing a verifier needs in order to read the
+	// endpoint list correctly: IT IS PORT-ONLY BY CONSTRUCTION.
+	//
+	// The Seatbelt report names the filter that matched, not the destination.
+	// Measured on macOS 15.7.7/arm64: a connection to the literal IP
+	// 93.184.215.14 with no DNS in the path still reports `remote:*:443`, an
+	// IPv6 connection reports the same shape as IPv4, and a loopback
+	// connection is indistinguishable from an external one. Every IP endpoint
+	// in processes[].network.connections therefore carries the address
+	// "(host-not-observable)" with a real port. A verifier must not read that
+	// as a resolved name, and must not read a short endpoint list as a
+	// narrowly-scoped build. Emitted even when false.
+	NetworkHostsObservable bool `json:"networkHostsObservable"`
+
+	// NetworkReports counts network operations attributed to this build.
+	NetworkReports uint64 `json:"networkReports,omitempty"`
+
+	// NetworkReportsUnattributed counts network reports DROPPED because the
+	// reporting process was PROVEN foreign: its kernel facts were read and
+	// its parent chain does not reach this build's root. The stream is
+	// machine-wide and every other sandboxed process on the Mac narrates its
+	// own traffic, so this pile is normally large and is normally other
+	// people's connections — which is exactly why they must not be counted as
+	// this build's egress.
+	NetworkReportsUnattributed uint64 `json:"networkReportsUnattributed,omitempty"`
+
+	// NetworkReportsUnprovenOwnership counts network reports whose OWNERSHIP
+	// COULD NOT BE DECIDED: the reporting pid's kernel facts were gone before
+	// the poll (a child that connected and exited inside the delivery
+	// window), or the pid was a recycled canary pid. These are the opposite
+	// of the pile above and get the opposite treatment: "might be ours" must
+	// not become "was not ours", so each OUTBOUND one is also recorded on the
+	// root as a FamilyNotObservable connection — egress nobody could describe
+	// — which cilock's filter counts against hermeticity. A verifier reading
+	// a non-zero value here knows the verdict failed closed on attribution,
+	// not that a destination was seen.
+	NetworkReportsUnprovenOwnership uint64 `json:"networkReportsUnprovenOwnership,omitempty"`
+
+	// NetworkReportsWithoutDestination counts IN-TREE outbound reports for
+	// which the kernel named no destination at all — a bare `network-outbound`
+	// line. Measured: a process that called getaddrinfo() and never connected
+	// produced exactly this line plus the mDNSResponder socket connect, so in
+	// the benign case the shape is the name-RESOLUTION path.
+	//
+	// These COUNT as egress, recorded under FamilyNotObservable: the kernel
+	// proved an outbound operation happened and named nothing about it, and an
+	// operation nobody could describe cannot be certified as one that reached
+	// nothing. The benign reading does not rescue it either — name resolution
+	// is a two-way remote channel (queried names leave the machine, answers
+	// arrive as undeclared inputs). The consequence is that a macOS build
+	// which resolves a hostname is non-hermetic HERE, exactly as a Linux
+	// build whose resolver traffic is observed as real sockets is; a policy
+	// that accepts resolution can waive the labelled entry with its eyes
+	// open. The counter sizes this pile separately so a verifier can tell
+	// resolver-shaped noise from format drift (the counter below).
+	NetworkReportsWithoutDestination uint64 `json:"networkReportsWithoutDestination,omitempty"`
+
+	// NetworkReportsUnrecognizedDestination counts in-tree reports whose
+	// destination field this parser did not understand. Unlike the bare shape
+	// above these DO count as egress, with an unnameable host: an unrecognized
+	// shape is precisely the case where absence of understanding must not
+	// become absence of egress. Non-zero means the report format moved and
+	// this backend needs revisiting.
+	NetworkReportsUnrecognizedDestination uint64 `json:"networkReportsUnrecognizedDestination,omitempty"`
+
+	// PidReuseDetected counts pids observed to change INCARNATION (kernel
+	// start time) mid-session. A recycled pid's cached ancestry belongs to a
+	// dead process, so its facts are poisoned to unproven the moment the new
+	// incarnation is seen: the new process cannot inherit the old chain (that
+	// would let a pid-wrapping build put a stranger's work in the signed
+	// tree), and events under that pid thereafter fail toward non-hermetic
+	// (network) or toward a smaller tree (exec). Non-zero means the pid space
+	// wrapped while the build ran — rare, and worth a verifier's attention.
+	PidReuseDetected uint64 `json:"pidReuseDetected,omitempty"`
+
+	// DeniedReports counts in-tree operations the sandbox REFUSED — deny(N)
+	// reports. A denied exec loaded no bytes and a denied connect reached
+	// nothing, so these enter no tree node and no egress list; recording a
+	// refused attempt as an executed image would let a no-op build imitate an
+	// expected process tree by running its "work" under a deny-everything
+	// nested profile. The count is published so a verifier can see that
+	// something tried. The observation profile itself allows everything, so
+	// denies here come from a nested sandbox a descendant applied.
+	DeniedReports uint64 `json:"deniedReports,omitempty"`
+
+	// ForgedRecords counts log records that PARSED as sandbox reports but did
+	// not come from the kernel, and were therefore refused.
+	//
+	// os_log is an ordinary API: any process can emit a line whose text reads
+	// like a sandbox report. Provenance — processID 0, userID 0, /kernel, the
+	// Sandbox kext as sender — is what separates a real report from an imitation,
+	// and a user process cannot forge processID 0 because the logging system
+	// stamps it from the emitter's real identity.
+	//
+	// Surfaced in the SIGNED predicate rather than merely logged, because a
+	// non-zero value means something was writing sandbox-shaped messages while
+	// this build ran. That is a bug or an attack, and a verifier should be able
+	// to see it without access to the machine.
+	ForgedRecords uint64 `json:"forgedRecords,omitempty"`
+
+	// Note states the backend's blind spots inside the signed predicate, so
+	// a verifier reading a stored attestation does not have to consult our
+	// source to know what an absent field means here.
+	Note string `json:"note,omitempty"`
 }
 
 type CommandRun struct {
@@ -1111,6 +1467,12 @@ type CommandRun struct {
 	// derivation needs to know the backend (and that a trace actually ran),
 	// so this is set from the resolved mode, not the request.
 	resolvedTraceBackend string
+
+	// darwinTraceDiag is stashed by the macOS sandbox-report tracer during
+	// trace() and folded into the Summary afterwards. It cannot be written
+	// to r.Summary directly because Summary is (re)built AFTER trace()
+	// returns, which would clobber anything set here. Nil on other platforms.
+	darwinTraceDiag *DarwinTraceDiagnostics
 
 	// ebpfConsumer holds an open eBPF consumer when the eBPF tracing
 	// path is active. Opened BEFORE the child process starts so
@@ -2276,6 +2638,9 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			r.Summary.Diagnostics.UnhashedOpensTotal = unhashedTotal
 			r.Summary.Diagnostics.HashFailureSilentDrops = r.hashSilentByDigest + r.hashSilentByDedup
 			r.Summary.Diagnostics.CacheReadsSkipped = r.cacheReadsSkipped
+			// macOS sandbox-report counters, including the size of the
+			// discard pile. Nil (and absent from the wire) everywhere else.
+			r.Summary.Diagnostics.Darwin = r.darwinTraceDiag
 			// Fanotify integrity-gate stats. FanotifyAvailable is
 			// true iff any events were hashed (the handler was active);
 			// merged-count tells verifiers how many BPF digests got

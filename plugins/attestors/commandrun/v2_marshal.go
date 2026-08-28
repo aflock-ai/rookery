@@ -64,6 +64,24 @@ import (
 // V02PredicateType is the in-toto predicate URI for v0.2 attestations.
 // Discoverable separately from the v0.1 type so verifiers can route
 // envelopes to the correct decoder.
+// V02PredicateType is the predicate URI.
+//
+// ADDITIVE OPTIONAL FIELDS DO NOT BUMP IT, and that is the project's
+// convention rather than an omission — it has been asked about repeatedly, so
+// the answer lives here instead of in a review thread. Every field added to
+// this predicate is `omitempty`, so an older consumer sees exactly the
+// document it saw before and a newer one sees more; nothing it previously
+// relied on changes meaning. Precedent, both from the repo owner: #7822
+// (a71c21c6ae) added the signed `scripts` field and #8232 (5695466244) added
+// the exit code and the socket-family vocabulary — both edited this file and
+// neither changed this constant.
+//
+// What WOULD require a new URI: removing a field, renaming one that has
+// shipped, or changing what an existing field MEANS. A consumer cannot detect
+// those by inspection, which is the whole point of the version. The structural
+// guard is TestEverySignedFieldHasASection, which derives the expected set by
+// reflection so a field added here but forgotten in the section spec fails the
+// build rather than being silently dropped from the signed body.
 const V02PredicateType = "https://aflock.ai/attestations/command-run/v0.2"
 
 // V02KeyGuard records the in-process anti-tamper hardening that was in

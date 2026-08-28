@@ -1209,9 +1209,43 @@ func stampNetworkObservation(s *options.RunSummary, attestors []attestation.Atte
 		// that came back is evidence regardless of whether the channel was
 		// proven complete. It is only the NEGATIVE claim that needs the
 		// capability, because only the negative claim rests on absence.
-		s.NoExternalNetworkEgressObserved = len(s.NetworkEgress) == 0
+		// An empty egress list means nothing unless the channel that would have
+		// reported egress is known to work. The check above already refuses a
+		// trace that captured NOTHING; the darwin backend adds a case it does
+		// not reach — the trace succeeds, has a capture mode, records execs and
+		// files, and only its NETWORK reports were never proven to arrive.
+		s.NoExternalNetworkEgressObserved = len(s.NetworkEgress) == 0 && networkChannelProven(cr)
+		// Surfaced, not refused. These execs were observed but could not be
+		// tied to the tree, and they carry no image identity in the
+		// attestation by design — so an image policy cannot match them and a
+		// forbidden fast child would otherwise read as a bare pid gap that
+		// nothing an operator looks at mentions.
+		if d := cr.Summary.Diagnostics.Darwin; d != nil {
+			s.UnattributedExecs = len(d.UnprovenExecs)
+			// Rejected records, so nothing of the build's is missing — but
+			// something was writing kernel-shaped messages into the log while
+			// it ran, and a counter nobody reads does not tell an operator.
+			s.ForgedReportRecords = d.ForgedRecords
+		}
 		return
 	}
+}
+
+// networkChannelProven reports whether the backend established that its
+// network reports actually arrive, rather than assuming it from the capture
+// request it made.
+//
+// Only the darwin sandbox-report backend can answer: its report channel is a
+// separate capability from the exec one, so it proves the channel with a live
+// probe and records the result. Every other backend derives network events
+// from the same instrumentation as everything else it captured — there is no
+// separate channel to lose — so a nil block means "not applicable", never
+// "unproven", and must not cost those platforms their verdict.
+func networkChannelProven(cr *commandrun.CommandRun) bool {
+	if cr.Summary == nil || cr.Summary.Diagnostics.Darwin == nil {
+		return true
+	}
+	return cr.Summary.Diagnostics.Darwin.NetworkObserved
 }
 
 // traceModeLabel returns the commandrun capture mode that actually observed the
