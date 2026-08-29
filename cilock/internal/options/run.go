@@ -448,6 +448,20 @@ type RunOptions struct {
 	// attestor — it only stops the gate from failing the run.
 	NoProductBinding bool
 
+	// RequireProducts refuses to persist or upload a collection whose product
+	// attestor recorded nothing. A step wrapped to prove WHICH artifact it
+	// produced — a build, an image promote — has no meaning without that
+	// subject: the envelope still names the commit and the pipeline, so it
+	// reads as a successful, well-formed record of a deploy while answering
+	// none of the questions it was minted to answer. Callers that intend a
+	// specific artifact (they passed --attestor-product-include-glob) should
+	// set this so a glob that stops matching, a working directory that moves,
+	// or a build whose output never lands fails LOUDLY at mint time instead of
+	// filling the evidence store with subjectless collections.
+	//
+	// Off by default: plenty of legitimate runs produce no files.
+	RequireProducts bool
+
 	// Offline is a clear alias for --platform-url "": it runs cilock with
 	// no platform integration (no hosted Fulcio / TSA / Archivista, no
 	// session lookup). It exists so an operator signing with a local -k key
@@ -1171,6 +1185,11 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 		"Drop the named always-on attestor (product, material) from the run. Repeatable. "+
 			"Disabling BOTH product and material is a fatal error: the attestation collection "+
 			"would have no body to attest. Use sparingly — these defaults exist for a reason.")
+	cmd.Flags().BoolVar(&ro.RequireProducts, "require-products", false,
+		"Refuse to write or upload the attestation when the product attestor recorded nothing. "+
+			"Use on steps that exist to prove which artifact they produced: without a product "+
+			"subject the envelope still names the commit and the pipeline, so a silently empty "+
+			"product set reads as a complete record of a build that in fact proves no artifact.")
 	cmd.Flags().StringSliceVar(&ro.EnvCaptureAllowlist, "env-capture-allowlist", []string{},
 		"Positive allowlist for environment capture. When set, only env keys matching one of the patterns "+
 			"(exact key like PATH, or glob like GITHUB_*) are captured. Everything else is dropped — not obfuscated, not recorded. "+

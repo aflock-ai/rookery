@@ -902,6 +902,23 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// failure into a loud one. (Fixes blind Linux UX test Bug 1.)
 	warnEmptyProductBundle(attestors)
 
+	// The enforcing form of the warning above, for callers that told us this
+	// step exists to prove which artifact it produced. It runs BEFORE the
+	// envelope is written or uploaded, so a collection with no product subject
+	// never reaches a file or Archivista. It deliberately does NOT stand down
+	// when the wrapped command failed: a failed command is exactly the case
+	// that leaves the product set empty, and cilock stores evidence for failed
+	// runs too — which is how a subjectless collection ends up in the evidence
+	// store looking like a completed build.
+	if ro.RequireProducts {
+		if err := requireProductSubject(attestors); err != nil {
+			if runErr != nil {
+				return fmt.Errorf("%w; the wrapped run also failed: %w", err, runErr)
+			}
+			return err
+		}
+	}
+
 	// Capture-completeness warning. Each attestor's detector.yaml contract can
 	// declare that a subject SHOULD be captured (always, or when a documented
 	// precondition holds). Compare that against what the attestors actually
@@ -1976,4 +1993,31 @@ func warnEmptyProductBundle(attestors []attestation.Attestor) {
 	log.Warnf("command exited 0 and traced %d file write(s), but all were classified as cache or filtered out.", dropped)
 	log.Warnf("products set is empty — the signed envelope will NOT include any binary subject.")
 	log.Warnf("Check: build output path vs --workingdir, --attestor-product-include-glob, --cache-allow-pattern <pattern>")
+}
+
+// requireProductSubject reports whether the run produced a product subject,
+// for --require-products.
+//
+// The test is the attestor's Merkle LEAVES, not its product map: the leaves are
+// exactly what the tree root commits to, and the tree root is what becomes the
+// product subject of the collection. A product the tree could not carry (an
+// entry with no content digest) is not a subject, so counting the map instead
+// would pass a run whose subject digest is still the hash of nothing.
+func requireProductSubject(attestors []attestation.Attestor) error {
+	for _, a := range attestors {
+		p, ok := a.(*product.Attestor)
+		if !ok {
+			continue
+		}
+		if len(p.Leaves()) > 0 {
+			return nil
+		}
+		return fmt.Errorf("--require-products: the product attestor recorded no artifact, "+
+			"so this attestation would carry no product subject and could not identify what the step produced "+
+			"(%d file(s) were dropped by cache/glob classification). "+
+			"Refusing to write or upload it. Check the command's output path against --workingdir, "+
+			"--attestor-product-include-glob and --cache-allow-pattern", p.DroppedByClassification())
+	}
+	return fmt.Errorf("--require-products: no product attestor ran, so nothing could record a product subject " +
+		"(was it dropped with --no-default-attestor product?)")
 }
