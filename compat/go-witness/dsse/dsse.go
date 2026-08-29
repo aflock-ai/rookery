@@ -18,6 +18,7 @@ type ErrNoMatchingSigs = rookery.ErrNoMatchingSigs
 type ErrThresholdNotMet = rookery.ErrThresholdNotMet
 type ErrInvalidThreshold = rookery.ErrInvalidThreshold
 type ErrNoTimestamp = rookery.ErrNoTimestamp
+type ErrCertNotValidAtSigningTime = rookery.ErrCertNotValidAtSigningTime
 
 // Constants
 const (

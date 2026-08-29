@@ -15,7 +15,10 @@
 package dsse
 
 import (
+	"crypto/x509"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/log"
 )
@@ -133,6 +136,71 @@ type ErrNoTimestamp struct{}
 
 func (e ErrNoTimestamp) Error() string {
 	return "cert-based signature rejected: no trusted timestamp verifier configured and current-time fallback not enabled (proof-of-signing-time required)"
+}
+
+// ErrCertNotValidAtSigningTime is the per-signature error recorded when a
+// cert-based signature carries an RFC3161 timestamp that VERIFIED, but the
+// certificate's validity window did not contain that timestamped time. The
+// common shape is a short-lived leaf (a Fulcio cert lives about ten minutes)
+// that expired before a slow step got round to signing: the timestamp is
+// trustworthy and says so. This is a DEFINITIVE failure — the envelope will
+// never verify, however often it is re-read — and it must be told apart from
+// "no timestamp could be verified", which is what this branch used to report.
+// SignedAt is the timestamped time; NotBefore/NotAfter are the certificate's.
+type ErrCertNotValidAtSigningTime struct {
+	SignedAt  time.Time
+	NotBefore time.Time
+	NotAfter  time.Time
+	Err       error
+}
+
+func (e ErrCertNotValidAtSigningTime) Error() string {
+	if e.SignedAt.After(e.NotAfter) {
+		return fmt.Sprintf("certificate expired at %s, before signing at %s",
+			e.NotAfter.UTC().Format(time.RFC3339), e.SignedAt.UTC().Format(time.RFC3339))
+	}
+	return fmt.Sprintf("certificate not yet valid until %s when signed at %s",
+		e.NotBefore.UTC().Format(time.RFC3339), e.SignedAt.UTC().Format(time.RFC3339))
+}
+
+func (e ErrCertNotValidAtSigningTime) Unwrap() error { return e.Err }
+
+// timestampedSignatureError names why a cert-based signature failed at its
+// verified timestamped time. A certificate outside its validity window at
+// that time is ErrCertNotValidAtSigningTime; anything else (an untrusted
+// chain, signature bytes that do not match) keeps its own cause, stated
+// against the time it was checked at.
+//
+// THE DATES COME FROM THE CERTIFICATE THAT ACTUALLY FAILED, not from the leaf.
+// x509.CertificateInvalidError carries the offending certificate in .Cert, and
+// for a chain it may be an INTERMEDIATE that expired while the leaf is still
+// inside its own window. Reporting the leaf's dates there states a falsehood
+// about which certificate died and when — and because Error() picks between
+// "expired" and "not yet valid" by comparing SignedAt to those dates, the
+// wrong pair can also invert the DIAGNOSIS.
+//
+// A STRUCTURED ERROR IS ONLY PRODUCED WHEN ITS OWN FIELDS EXPLAIN THE FAILURE.
+// If signedAt lies inside [NotBefore, NotAfter] of the certificate we are
+// about to name, then those dates do not account for an Expired verdict —
+// x509 reached it some other way, or .Cert is absent — and the honest answer
+// is the original cause rather than a confidently wrong pair of timestamps.
+func timestampedSignatureError(cert *x509.Certificate, signedAt time.Time, err error) error {
+	var invalid x509.CertificateInvalidError
+	if errors.As(err, &invalid) && invalid.Reason == x509.Expired {
+		culprit := invalid.Cert
+		if culprit == nil {
+			culprit = cert
+		}
+		if culprit != nil && (signedAt.Before(culprit.NotBefore) || signedAt.After(culprit.NotAfter)) {
+			return ErrCertNotValidAtSigningTime{
+				SignedAt:  signedAt,
+				NotBefore: culprit.NotBefore,
+				NotAfter:  culprit.NotAfter,
+				Err:       err,
+			}
+		}
+	}
+	return fmt.Errorf("signature invalid at its timestamped signing time %s: %w", signedAt.UTC().Format(time.RFC3339), err)
 }
 
 const PemTypeCertificate = "CERTIFICATE"

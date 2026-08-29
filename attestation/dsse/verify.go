@@ -249,6 +249,10 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 					passedTimestampVerifiers := []timestamp.TimestampVerifier{}
 					failedTimestampVerifiers := []timestamp.TimestampVerifier{}
 					passedTimestamps := []time.Time{}
+					// lastFailure is why the most recent verified timestamp did not
+					// carry the signature: the certificate's state at that time,
+					// not the timestamp's. Reported on the failed verifiers below.
+					var lastFailure error
 
 					// Surface the artifact issuer's key fingerprint and the
 					// trusted-root key fingerprint(s) so a same-CN/different-key
@@ -285,6 +289,7 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 									failed = append(failed, verifier)
 								}
 								failedTimestampVerifiers = append(failedTimestampVerifiers, timestampVerifier)
+								lastFailure = timestampedSignatureError(cert, tsTime, err)
 								log.Debugf("failed to verify with timestamp verifier: %v", err)
 							}
 
@@ -299,11 +304,14 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 							VerifiedTimestamps: passedTimestamps,
 						})
 					} else {
+						// A verifier lands in `failed` only when a timestamp DID verify
+						// and the certificate failed at that time, so the cause to
+						// report is the certificate's, never "no valid timestamps".
 						for _, v := range failed {
 							checkedVerifiers = append(checkedVerifiers, CheckedVerifier{
 								Verifier:           v,
 								TimestampVerifiers: failedTimestampVerifiers,
-								Error:              fmt.Errorf("no valid timestamps found"),
+								Error:              lastFailure,
 							})
 						}
 					}
