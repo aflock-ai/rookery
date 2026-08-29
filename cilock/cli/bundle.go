@@ -30,6 +30,8 @@ import (
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/cilock/internal/auth"
+	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -49,6 +51,7 @@ func BundleCmd() *cobra.Command {
 
 type bundleCreateOptions struct {
 	Subjects       []string
+	PlatformURL    string
 	ArchivistaURL  string
 	ArchivistaHdrs []string
 	Output         string
@@ -72,14 +75,29 @@ func bundleCreateCmd() *cobra.Command {
 			if len(o.Subjects) == 0 {
 				return fmt.Errorf("at least one --subject is required")
 			}
+			// Default to the platform's own Archivista, exactly like run,
+			// verify and login do — an operator on the hosted platform should
+			// never have to know the Archivista path. --archivista-url stays
+			// for third-party servers. Platform resolution mirrors
+			// resolvePolicySession: explicit flag, else the logged-in
+			// platform, else the compiled default — so the credential looked
+			// up below belongs to the SAME platform the URL was derived from.
+			if o.PlatformURL == "" {
+				if active := auth.ActivePlatformURL(); active != "" {
+					o.PlatformURL = active
+				} else {
+					o.PlatformURL = platformconfig.DefaultPlatformURL
+				}
+			}
 			if o.ArchivistaURL == "" {
-				return fmt.Errorf("--archivista-url is required")
+				o.ArchivistaURL = resolveArchivistaURL(o.PlatformURL)
 			}
 			return runBundleCreate(cmd.Context(), o)
 		},
 	}
 	cmd.Flags().StringSliceVarP(&o.Subjects, "subject", "s", nil, "Subject digest(s) to seed the graph walk (e.g. sha256:abc...). Repeatable.")
-	cmd.Flags().StringVar(&o.ArchivistaURL, "archivista-url", "", "Archivista server URL")
+	cmd.Flags().StringVar(&o.PlatformURL, "platform-url", "", "TestifySec platform URL (default "+platformconfig.DefaultPlatformURL+")")
+	cmd.Flags().StringVar(&o.ArchivistaURL, "archivista-url", "", "Archivista server URL (default: the platform's own Archivista)")
 	cmd.Flags().StringArrayVar(&o.ArchivistaHdrs, "archivista-headers", nil, "Headers to send with each Archivista request (e.g. Authorization: Bearer ...)")
 	cmd.Flags().StringVarP(&o.Output, "output", "o", "", "Path to write the bundle (tar.gz)")
 	cmd.Flags().IntVar(&o.MaxEnvelopes, "max-envelopes", 10000, "Maximum envelopes to fetch before aborting")
@@ -99,6 +117,22 @@ func runBundleCreate(ctx context.Context, o bundleCreateOptions) error {
 		headers.Add(name, value)
 	}
 
+	// A logged-in operator's session authorizes reads against the platform's
+	// own Archivista, the same way `cilock run` authorizes uploads
+	// (applyPlatformCredential): attach the bearer only when no Authorization
+	// header was passed explicitly AND the target shares the PLATFORM's origin
+	// — never leak the session JWT to a third-party --archivista-url.
+	//
+	// auth.Lookup, not LookupAny: Lookup is Resolve(url, ForBearer) — the
+	// token-obtaining path — while LookupAny is the status/display shim whose
+	// own doc forbids using it for a bearer. No session is not an error here;
+	// the server answers 401 and that message names `cilock login`, which is
+	// the accurate remediation.
+	if headers.Get("Authorization") == "" && sameOriginDoctor(o.ArchivistaURL, platformconfig.Derive(o.PlatformURL).Archivista) {
+		if cred, err := auth.Lookup(o.PlatformURL); err == nil && cred != nil && cred.Token != "" {
+			headers.Set("Authorization", "Bearer "+cred.Token)
+		}
+	}
 	client := archivista.New(o.ArchivistaURL, archivista.WithHeaders(headers))
 	log.Infof("walking Archivista subject graph (%d seed subjects, max depth %d)", len(o.Subjects), o.MaxDepth)
 

@@ -220,11 +220,6 @@ func TestBundleCreate_RequiresFlags(t *testing.T) {
 			opts: bundleCreateOptions{Output: "o", ArchivistaURL: "u"},
 			want: "--subject is required",
 		},
-		{
-			name: "missing archivista url",
-			opts: bundleCreateOptions{Output: "o", Subjects: []string{"x"}},
-			want: "--archivista-url is required",
-		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -270,4 +265,99 @@ func envelopeWithSubjectDigests(t *testing.T, digests []string) dsse.Envelope {
 		Payload:     payload,
 		PayloadType: "application/vnd.in-toto+json",
 	}
+}
+
+// An absent --archivista-url is not an error any more: it defaults to the
+// platform's own Archivista, the same derivation every sibling command uses
+// (run, verify, policy push, policy from-commit). The operator-visible failure
+// this pins against is the one measured on 2026-08-28: `cilock bundle create`
+// demanded a URL and then 401ed against the platform, for a command whose
+// sibling commands authenticate automatically.
+func TestBundleCreate_DefaultsToPlatformArchivista(t *testing.T) {
+	cmd := BundleCmd()
+	cmd.SetArgs([]string{"create", "--output", filepath.Join(t.TempDir(), "b.tgz"), "--subject", "sha256:" + strings.Repeat("a", 64)})
+	err := cmd.Execute()
+	// The fetch against the real default platform fails in a unit test — the
+	// property under test is only that the missing flag is no longer refused
+	// up front.
+	if err != nil {
+		require.NotContains(t, err.Error(), "--archivista-url is required")
+	}
+}
+
+// The login-session bearer must reach the platform's own Archivista and must
+// NOT leak to a third-party --archivista-url. Asserted through the header the
+// server actually receives, not through any intermediate state.
+func TestBundleCreate_SessionBearerIsSameOriginOnly(t *testing.T) {
+	var got []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/query", func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("Authorization"))
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"dsses": map[string]any{"edges": []any{}}}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Explicit --archivista-headers always win and always attach.
+	cmd := BundleCmd()
+	cmd.SetArgs([]string{"create",
+		"--output", filepath.Join(t.TempDir(), "b.tgz"),
+		"--subject", "sha256:" + strings.Repeat("b", 64),
+		"--archivista-url", srv.URL,
+		"--archivista-headers", "Authorization: Bearer explicit-token"})
+	require.NoError(t, cmd.Execute())
+	require.NotEmpty(t, got)
+	require.Equal(t, "Bearer explicit-token", got[0],
+		"an explicit Authorization header must be sent verbatim")
+
+	// A third-party target with no explicit header gets NO bearer: the stored
+	// session (if any exists on this machine) must not leak off-platform.
+	got = nil
+	cmd = BundleCmd()
+	cmd.SetArgs([]string{"create",
+		"--output", filepath.Join(t.TempDir(), "c.tgz"),
+		"--subject", "sha256:" + strings.Repeat("c", 64),
+		"--archivista-url", srv.URL})
+	require.NoError(t, cmd.Execute())
+	require.NotEmpty(t, got)
+	require.Equal(t, "", got[0],
+		"a session bearer must never be attached to a non-platform archivista URL")
+}
+
+// THE SAME-ORIGIN HALF, which the leak test cannot cover on its own.
+//
+// TestBundleCreate_SessionBearerIsSameOriginOnly asserts that a third-party
+// archivista receives NO bearer — but in a unit test there is normally no
+// stored credential at all, so that assertion holds whether or not the lookup
+// exists. Deleting the auth.Lookup block would leave it green.
+//
+// This stores a real credential FOR THE SERVER'S OWN ORIGIN and requires the
+// bearer to arrive. Now the two tests bracket the rule from both sides: the
+// session reaches its own platform, and it reaches nowhere else.
+func TestBundleCreate_SessionBearerReachesItsOwnPlatform(t *testing.T) {
+	var got []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/query", func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("Authorization"))
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"dsses": map[string]any{"edges": []any{}}}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// The credential is stored for THIS server, and the command is pointed at
+	// the same origin — the one case where the bearer must be attached.
+	stubSession(t, srv.URL)
+
+	cmd := BundleCmd()
+	cmd.SetArgs([]string{"create",
+		"--output", filepath.Join(t.TempDir(), "same-origin.tgz"),
+		"--subject", "sha256:" + strings.Repeat("d", 64),
+		"--platform-url", srv.URL,
+		"--archivista-url", srv.URL})
+	require.NoError(t, cmd.Execute())
+
+	require.NotEmpty(t, got, "the archivista query must have been made")
+	require.Equal(t, "Bearer test-session-token", got[0],
+		"a stored session must authenticate the platform's own archivista; without this the "+
+			"command 401s against the platform the user is already logged in to")
 }
