@@ -1,0 +1,41 @@
+apiVersion: cilock.detection/v0.1
+name: base-ancestry
+description: "Records where the tested commit sits relative to its base branch: head, the base commit the clone could see, their merge-base, and whether the head includes that base. A verifier joins it with the provider's current base to enforce 'current with base'."
+
+category: [source-checkout]
+
+upstream:
+  name: Git
+  source: "https://git-scm.com/"
+  license: GPL-2.0-only
+  vendor: Software Freedom Conservancy
+
+pre:
+  match:
+    file_exists: ".git/HEAD"
+
+llm_hints:
+  on_match: "Base-ancestry observation captured (head, base, merge-base, relationship). It records the LOCAL graph; the platform compares it with the provider's current base."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/base-ancestry/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: >-
+      head, base, merge_base and relationship are deterministic for a given
+      checkout and base ref: all three hashes are immutable commit ids and the
+      relationship is a pure function of them. What varies is observed_at (the
+      wall clock), remotes (host configuration), and any warnings, whose text
+      names local refs. A shallow clone always yields relationship unknown.
+    volatile_fields: ["observed_at", "remotes", "warnings"]
+  # Deliberately NO subjects or backrefs. The git attestor beside this one
+  # binds the collection to the head commit with a verified commithash
+  # subject; a second, unverified binding here would only give a verifier a
+  # weaker one to be tempted by.
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: current-with-base
+      role: canonical

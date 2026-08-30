@@ -117,6 +117,31 @@
       }
     },
     {
+      "name": "base-ancestry",
+      "predicate_type": "https://aflock.ai/attestations/base-ancestry/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "source-checkout"
+      ],
+      "tier": "recommended",
+      "upstream": {
+        "name": "Git",
+        "source": "https://git-scm.com/",
+        "license": "GPL-2.0-only",
+        "vendor": "Software Freedom Conservancy"
+      },
+      "registered": true,
+      "has_contract": true,
+      "applies_when": {
+        "pre": "file_exists:.git/HEAD"
+      },
+      "detection": {
+        "pre": {
+          "file_exists": ".git/HEAD"
+        }
+      }
+    },
+    {
       "name": "configuration",
       "predicate_type": "https://aflock.ai/attestations/configuration/v0.2",
       "run_type": "prematerial",

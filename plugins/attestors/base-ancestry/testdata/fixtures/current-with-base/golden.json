@@ -1,0 +1,11 @@
+{
+  "base": "2d10d913ef101a931fdc3e222d180ffc0608c2df",
+  "base_ref": "main",
+  "base_ref_source": "remote-head",
+  "base_resolved_from": "refs/remotes/origin/main",
+  "head": "fbe0ea226a70bce7027cdd6189ba80fc8529ea4a",
+  "merge_base": "2d10d913ef101a931fdc3e222d180ffc0608c2df",
+  "observed_at": null,
+  "relationship": "current",
+  "shallow": false
+}

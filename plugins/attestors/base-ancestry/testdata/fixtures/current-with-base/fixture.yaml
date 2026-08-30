@@ -1,0 +1,38 @@
+schema_version: "0.1"
+attestor: base-ancestry
+description: >-
+  A REAL two-commit git repository captured as the working-dir input: a base
+  commit that refs/remotes/origin/main points at, and one feature commit on top
+  of it checked out as HEAD, with refs/remotes/origin/HEAD recorded as a
+  symbolic ref to origin/main the way `git clone` writes it. No --base-ref is
+  passed, so the fixture proves the DEFAULT path: the base is taken from the
+  remote's recorded HEAD, resolved through the remote-tracking ref, and the
+  head includes it — relationship `current`. Stored under dot-git/ because git
+  refuses to track a nested .git/; the testkit workdir materializer renames it.
+  The six objects are stored PACKED, not loose: a loose zlib object that
+  happens to contain no NUL byte is sniffed as TEXT by git and by the AI
+  review pipeline alike, so its raw deflate bytes land in the PR diff and
+  `codex exec` rejects the whole prompt as invalid UTF-8. A packfile always
+  carries NULs, so it is unambiguously binary. See README.md for how it was
+  produced.
+setup:
+  mode: workdir
+  workdir:
+    - dot-git/HEAD
+    - dot-git/config
+    - dot-git/index
+    - dot-git/refs/heads/feature
+    - dot-git/refs/remotes/origin/HEAD
+    - dot-git/refs/remotes/origin/main
+    - dot-git/objects/pack/pack-4857e3e4dd064f263d81f51308c43d3bcb296b90.idx
+    - dot-git/objects/pack/pack-4857e3e4dd064f263d81f51308c43d3bcb296b90.pack
+    - README.md
+    - CHANGE.md
+expect:
+  predicate_type: https://aflock.ai/attestations/base-ancestry/v0.1
+  run_type: prematerial
+  # The relationship and every hash are pinned by the golden; only the wall
+  # clock is volatile.
+  golden: golden.json
+  redact:
+    - observed_at

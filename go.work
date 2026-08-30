@@ -21,6 +21,7 @@ use (
 	./plugins/attestors/aws-codebuild
 	./plugins/attestors/aws-config
 	./plugins/attestors/aws-iid
+	./plugins/attestors/base-ancestry
 	./plugins/attestors/commandrun
 	./plugins/attestors/commandrun/ebpf
 	./plugins/attestors/configuration

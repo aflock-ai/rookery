@@ -35,6 +35,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock policy push` | Upload a signed policy DSSE to the platform and create a release. |
 | `cilock policy bind` | Bind a published policy definition/release to a product on the platform. |
 | `cilock policy validate` | Validate a Witness/cilock policy document (schema only, no signature check). |
+| `cilock policy draft` | Hydrate a hand-authored policy with the tenant's platform trust roots. Returns it UNSIGNED. |
 | `cilock keyid` | Print the canonical keyid (`hex(sha256(PEM(pub)))`) derived from a public or private key. |
 | `cilock bundle create` / `inspect` | Build or inspect a portable attestation bundle (tar.gz of DSSE envelopes). |
 | `cilock plan -- <cmd>` | Show which attestors detection would fire for a command, without executing it. |
@@ -442,6 +443,28 @@ cilock attest vex \
   --status affected \
   --action-statement "upgrade to v1.2.4 in the next release train" \
   -k cosign.key -s vex-triage -o vex.bundle.json
+```
+
+## `cilock policy draft`
+
+> Turns a hand-authored policy source into a complete, verifiable policy document without you looking up a trust root. You write the part that expresses intent — the steps, the functionaries, the rego — and leave the trust material out; draft sends that source to the platform, which fills in the tenant's platform Fulcio roots and timestamp authorities, validates the result, and returns it. draft then verifies the returned digest against the bytes it actually received before writing to `--output`.
+>
+> **draft never signs.** The hydrated document is inert until a human signs it, and that is deliberate: signing is what makes a policy authoritative, so it stays an explicit human act with a human identity. draft prints the exact `cilock sign` command rather than running it. Needs a logged-in session with the `policy:validate` scope — if the platform rejects the call for a missing scope, run `cilock login` again to pick it up.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--datatype, -t <uri>` | `https://aflock.ai/policy/v0.1` | Policy payload type sent for hydration. |
+| `--file, -f <path>` | (required) | Path to the hand-authored policy source. |
+| `--force` | `false` | Overwrite `--output` if it already exists. |
+| `--output, -o <path>` | the source path with a `.hydrated.json` suffix | Where to write the hydrated, UNSIGNED policy. |
+| `--platform-url <url>` | the logged-in platform | TestifySec platform URL. |
+
+```bash
+# Hydrate a hand-authored policy — writes policy.hydrated.json, UNSIGNED
+cilock policy draft -f policy.json
+
+# Then sign it yourself; cilock never signs a policy for you:
+cilock sign -f policy.hydrated.json -o policy.hydrated.signed.json
 ```
 
 ## `cilock policy from-bundles`

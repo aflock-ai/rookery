@@ -265,6 +265,19 @@
       "hasDoc": false
     },
     {
+      "name": "base-ancestry",
+      "source": "attestor-backed",
+      "categories": [
+        "source-checkout"
+      ],
+      "primaryCategory": "source-checkout",
+      "description": "Record where the tested commit sits relative to its base branch — head, the base the clone saw, their merge-base, and whether the head includes that base — so a gate can enforce \"current with base\" against the provider's live base.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/base-ancestry/v0.1",
+      "runType": "prematerial",
+      "hasDoc": true
+    },
+    {
       "name": "bitbucket-pipelines",
       "source": "catalog-only",
       "categories": [
