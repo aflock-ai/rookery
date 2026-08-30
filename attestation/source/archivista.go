@@ -18,6 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -32,6 +35,18 @@ type ArchivistaSource struct {
 	client      *archivista.Client
 	mu          sync.Mutex
 	seenGitoids []string
+	// completedSearches memoizes fully-processed digest-filtered searches by
+	// input fingerprint. The policy depth loop re-searches every step on
+	// every iteration; when a step's inputs did not change, the repeat
+	// query's whole result is already excluded by seenGitoids — the memo
+	// skips the GraphQL round trip (and the server-side candidate sieve, the
+	// dominant consumer of the platform's database) whose empty answer is
+	// known. Marked only after a batch completes and marks its gitoids seen,
+	// so an aborted batch stays fully retryable. The one semantics change —
+	// evidence uploaded mid-verify no longer surfaces on an identical repeat
+	// within the same verify — is pinned in archivista_memo_test.go: a
+	// verify is a snapshot evaluation. Guarded by mu.
+	completedSearches map[string]struct{}
 }
 
 // NewArchivistaSource creates a new source backed by an Archivista client.
@@ -156,7 +171,16 @@ func (s *ArchivistaSource) fetchCollectionEnvelope(ctx context.Context, gitoid s
 // falsely would cost determinism of a SIGNED artifact. See
 // source.CanonicalOrderSourcer.
 func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionEnvelope) error) error {
+	// A digest-filtered search this source already fully processed yields
+	// nothing new by construction (see completedSearches) — skip the round
+	// trip outright. Searches with an empty digest set are diagnostics and
+	// never consult the memo.
+	fingerprint := searchFingerprint(collectionName, subjectDigests, attestations)
 	s.mu.Lock()
+	if _, done := s.completedSearches[fingerprint]; done && len(subjectDigests) > 0 {
+		s.mu.Unlock()
+		return nil
+	}
 	excludeGitoids := make([]string, len(s.seenGitoids))
 	copy(excludeGitoids, s.seenGitoids)
 	s.mu.Unlock()
@@ -227,9 +251,48 @@ func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName stri
 	// download fails mid-batch, no gitoids are excluded on the next search.
 	s.mu.Lock()
 	s.seenGitoids = append(s.seenGitoids, processedGitoids...)
+	// The memo follows the same all-or-nothing rule: a batch that reached
+	// this point marked every candidate seen, so its identical repeat is
+	// provably empty and the query can be skipped.
+	if len(subjectDigests) > 0 {
+		if s.completedSearches == nil {
+			s.completedSearches = make(map[string]struct{})
+		}
+		s.completedSearches[fingerprint] = struct{}{}
+	}
 	s.mu.Unlock()
 
 	return nil
+}
+
+// searchFingerprint canonicalizes a search's inputs into an INJECTIVE
+// encoding: sorted copies, so the caller's slice order (which the policy
+// depth loop does not guarantee) cannot make identical searches look
+// distinct, and every element length-prefixed (netstring-style), so element
+// content can never imitate a separator — ["a", "b"] and ["a\x01b"] must not
+// share a fingerprint, or completing the first search would silently
+// suppress the second. The digest count is encoded too, so a value cannot
+// migrate across the digest/attestation boundary.
+func searchFingerprint(collectionName string, subjectDigests, attestations []string) string {
+	digests := append([]string(nil), subjectDigests...)
+	atts := append([]string(nil), attestations...)
+	sort.Strings(digests)
+	sort.Strings(atts)
+	var b strings.Builder
+	writeField := func(v string) {
+		b.WriteString(strconv.Itoa(len(v)))
+		b.WriteByte(':')
+		b.WriteString(v)
+	}
+	writeField(collectionName)
+	writeField(strconv.Itoa(len(digests)))
+	for _, d := range digests {
+		writeField(d)
+	}
+	for _, a := range atts {
+		writeField(a)
+	}
+	return b.String()
 }
 
 // SearchByPredicateType queries Archivista for DSSE envelopes whose statement
