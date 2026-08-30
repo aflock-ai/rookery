@@ -39,6 +39,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/govulncheck"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/inspec"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/instruction-file"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/jenkins"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/k8smanifest"

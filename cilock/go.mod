@@ -52,6 +52,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/govulncheck => ../plugins
 
 replace github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof => ../plugins/attestors/inclusion-proof
 
+replace github.com/aflock-ai/rookery/plugins/attestors/instruction-file => ../plugins/attestors/instruction-file
+
 replace github.com/aflock-ai/rookery/plugins/attestors/inspec => ../plugins/attestors/inspec
 
 replace github.com/aflock-ai/rookery/plugins/attestors/jenkins => ../plugins/attestors/jenkins
@@ -166,6 +168,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/govulncheck v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/inspec v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/instruction-file v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/jenkins v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/jwt v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/k8smanifest v0.0.0-00010101000000-000000000000

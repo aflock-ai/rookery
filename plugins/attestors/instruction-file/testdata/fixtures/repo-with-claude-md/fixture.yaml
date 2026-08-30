@@ -1,0 +1,13 @@
+schema_version: "0.1"
+attestor: instruction-file
+description: "instruction-file attestation of a real agent instruction file — NO EXTERNAL TOOL. The attestor walks the working directory in pure Go, so there is no scanner to run, record, or re-run; the CLAUDE.md IS the real artifact. Exercises workdir mode (the attestor searches '.', so the testkit chdirs into the materialized workdir) and the basename match kind."
+setup:
+  mode: workdir
+  input: CLAUDE.md   # a root-level agent instruction file; the attestor walks the working dir and digests it
+expect:
+  predicate_type: https://aflock.ai/attestations/instruction-file/v0.1
+  run_type: prematerial
+  subjects:
+    match: prefix
+    keys:
+      - "instructionfile:"   # instructionfile:CLAUDE.md — each recognized file, digested

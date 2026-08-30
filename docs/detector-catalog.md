@@ -3,7 +3,7 @@
 Auto-generated from `plugins/attestors/*/detector.yaml`. Run
 `./scripts/gen-detector-catalog.sh` to refresh.
 
-Total: 33 detectors.
+Total: 34 detectors.
 
 | Name | Gates | Trace | Description |
 |------|-------|-------|-------------|
@@ -23,6 +23,7 @@ Total: 33 detectors.
 | `go-build` | pre | `full` | Captures Go build provenance (module graph, vcs.revision, build settings) and persists a .gobuild.json sidecar per binary that survives strip(1). |
 | `govulncheck` | pre + post | `off` | Captures Go call-graph-aware vulnerability scan results from `govulncheck`. |
 | `inspec` | pre + post | `off` | Captures Chef InSpec compliance scan results. |
+| `instruction-file` | pre | `off` | Captures the digests of agent instruction files (CLAUDE.md, AGENTS.md, SKILLS.md, .cursorrules, copilot-instructions.md) present in the workspace, plus the principal class of the credential that will sign the attestation. |
 | `jenkins` | pre | `off` | Captures Jenkins runner context (job name, node, build ID, URL) when running inside a Jenkins pipeline. |
 | `kube-bench` | pre + post | `off` | Captures kube-bench Kubernetes CIS benchmark results. |
 | `linkerd-check` | pre + post | `off` | Captures Linkerd service mesh health checks (output of `linkerd check`). |

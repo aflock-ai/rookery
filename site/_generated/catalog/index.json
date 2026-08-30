@@ -1,7 +1,7 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 133,
-  "withDoc": 57,
+  "count": 134,
+  "withDoc": 58,
   "emittedBy": {
     "sbom": [
       "apko",
@@ -853,6 +853,19 @@
       "emitsFormats": [],
       "predicateType": "https://aflock.ai/attestations/inspec/v0.1",
       "runType": "postproduct",
+      "hasDoc": true
+    },
+    {
+      "name": "instruction-file",
+      "source": "attestor-backed",
+      "categories": [
+        "ci-context"
+      ],
+      "primaryCategory": "ci-context",
+      "description": "The cilock instruction-file attestor signs the digests of agent instruction files (CLAUDE.md, AGENTS.md, SKILLS.md, .cursorrules) and records whether the signing credential belongs to a workload or to a human's interactive session.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/instruction-file/v0.1",
+      "runType": "prematerial",
       "hasDoc": true
     },
     {

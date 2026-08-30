@@ -1,0 +1,27 @@
+module github.com/aflock-ai/rookery/plugins/attestors/instruction-file
+
+go 1.26.3
+
+replace github.com/aflock-ai/rookery/attestation => ../../../attestation
+
+require (
+	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
+	github.com/invopop/jsonschema v0.13.0
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+	golang.org/x/sys v0.46.0
+	golang.org/x/term v0.44.0
+)
+
+require (
+	filippo.io/edwards25519 v1.2.0 // indirect
+	github.com/bahlo/generic-list-go v0.2.0 // indirect
+	github.com/buger/jsonparser v1.1.2 // indirect
+	github.com/gobwas/glob v0.2.3 // indirect
+	github.com/mailru/easyjson v0.9.0 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
+	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
+	go.step.sm/crypto v0.81.0 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
+	golang.org/x/mod v0.36.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)

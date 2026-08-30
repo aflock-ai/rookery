@@ -1,0 +1,179 @@
+---
+title: instruction-file
+description: The cilock instruction-file attestor signs the digests of agent instruction files (CLAUDE.md, AGENTS.md, SKILLS.md, .cursorrules) and records whether the signing credential belongs to a workload or to a human's interactive session.
+sidebar_position: 9
+---
+
+Captures the SHA-256 digest of every recognized agent instruction file in the workspace, so a verifier can pin exactly which standing instructions an autonomous agent was operating under when it produced an artifact — and records, as a machine-checkable field, whether the credential about to sign that claim belongs to a workload or to a human's interactive session.
+
+## Validated invocation
+
+The attestor takes no tool invocation. It runs at `prematerial` time against the working directory:
+
+```bash
+cilock run --step build --attestor instruction-file -o build.json -- make build
+```
+
+## What gets captured
+
+A `files` array, sorted by path, with one entry per recognized instruction file:
+
+- `path` — relative to the search root, always slash-separated so a predicate produced on Windows is byte-identical to one produced on Unix.
+- `digest` — a `DigestSet` holding the SHA-256 of the file's bytes.
+- `sizeBytes` — the file's size on disk.
+- `convention` — the agent product or ecosystem the file belongs to (`claude-code`, `agents-md`, `github-copilot`, …).
+- `scope` — `repository` for a root-level file, `directory` for a nested one.
+- `skipReason` — present only when the file was found but not digested.
+
+Plus `signer` (see below), `status`, `warnings`, and `caveat`.
+
+**File content is deliberately NOT captured.** Instruction files routinely carry internal hostnames, ticket numbers and occasionally credentials, and a signed attestation is a durable, widely readable artifact. The subject digest pins the bytes exactly; a verifier who legitimately holds the file can confirm the match, and one who does not learns nothing.
+
+Recognized conventions:
+
+| Pattern | Match | Convention |
+| --- | --- | --- |
+| `CLAUDE.md` | base name | `claude-code` |
+| `AGENTS.md` | base name | `agents-md` |
+| `SKILLS.md` | base name | `skills-md` |
+| `GEMINI.md` | base name | `gemini-cli` |
+| `.cursorrules` | base name | `cursor` |
+| `.windsurfrules` | base name | `windsurf` |
+| `.aider.conf.yml` | base name | `aider` |
+| `.github/copilot-instructions.md` | declared path | `github-copilot` |
+| `.cursor/rules` | declared path | `cursor` |
+
+This is an allowlist, not a heuristic. A file it does not recognize is not attested — silently digesting every Markdown file in a tree would produce a predicate nobody could reason about.
+
+**A declared path matches the file at that path, or every file beneath it when the path is a directory.** Cursor ships both shapes — `.cursor/rules` was a single file and is now a `.cursor/rules/` directory of `.mdc` rule files — and the directory form is not optional to support. Auto-detection stats the declared path, and a stat succeeds on a directory, so a directory there *activates* the attestor. If matching then found nothing, the run would emit `status: complete` with no subjects while live instructions sat inside it.
+
+**Base names are recognized outside hidden directories only.** `docs/CLAUDE.md` is captured, `.hidden/CLAUDE.md` is not. This is a scope boundary, not an oversight: auto-detection's recursive glob does not descend hidden directories, so recognizing base names there would mean the same file became evidence or did not depending on whether something *else* in the tree happened to trip the pre-gate. Declared paths under `.github` and `.cursor` are unaffected — the pre-gate reaches those by exact path rather than by glob — and so is everything *beneath* a declared directory convention: `.cursor/rules/.private/rule.mdc` is captured, because the boundary being drawn here is about the glob's reach and that subtree was never found through the glob.
+
+Each digested file is emitted as an in-toto subject named `` `instructionfile:<path>` `` keyed by the **file's own** digest, so the subject joins by content: an approved instruction file can be pinned by digest across repositories.
+
+## Why this shape
+
+### The signer axis that matters is not keyed-versus-keyless
+
+The closest prior art is [`nono`](https://github.com/nolabs-ai/nono), whose `signer.kind` is exactly `"keyed"` or `"keyless"` — a closed set, with any other value a hard parse error (`crates/nono/src/trust/dsse.rs:286-336`). That axis grades **key material**, not principal.
+
+Read carefully, nono's `keyless` arm is workload-*shaped*: it hard-requires `issuer`, `repository`, `workflow_ref`, `subject` and `build_signer_uri` (`dsse.rs:299-331`), which a browser-OIDC session could not satisfy. So the problem is **not** that nono lets humans in through the keyless door. It is that the vocabulary cannot *name* a principal, and two things follow:
+
+- A human's interactive session is unrepresentable. Signing locally lands in `keyed`, which conflates "a static keystore key" with "a person signed this".
+- "Is this a workload?" can only be approximated as "is this keyless?" — which couples the check to GitHub-Actions-shaped fields, cannot express a workload on another platform, and cannot say "not a human session" at all.
+
+The case that matters is the ALPS 0.1 gap: an agent launched from a signed-in human's shell inherits that human's platform session and signs with it — no ceremony, no human in the loop at the moment of signing. In cilock's own keyless browser-OIDC flow that credential is *keyless and human* and carries no `workflow_ref`, so a keyed/keyless axis cannot classify it at all.
+
+So this predicate carries two independent fields:
+
+- `signer.keyMaterial` — `keyed` | `keyless` | `unknown`. nono's axis, kept for interop. **This attestor always emits `unknown`**, because key material is chosen at *signing* time, after this predicate exists — a runner with a complete OIDC token environment can still sign with a long-lived static key from a secret.
+- `signer.kind` — the **observed principal class**.
+
+### The whole signer block is observational, and says so
+
+`signer.policyUse` is pinned by the schema to the constant `observational-only`. A predicate that omits it or claims anything else is schema-invalid.
+
+That field exists because the alternative is not reachable. Binding these values to the credential that actually signs would mean reading the signing certificate, and this attestor is `prematerial` — it runs **before any signing has happened**, so there is no certificate to read. Everything in the block is an observation of environment variables and process state, and any ancestor process can set an environment variable.
+
+Two concrete defeats, both real:
+
+- Two `export` lines (`GITHUB_ACTIONS=true`, `GITHUB_REPOSITORY=…`) in any shell.
+- A genuine CI job, with every runner variable legitimately present, that signs with a static key from a secret. Nothing observable here distinguishes it from a keyless workload signature.
+
+So **do not gate on this block.** Gate on the DSSE signing certificate — its SAN, its issuer, and the Fulcio extensions carrying repository and workflow — through the policy's functionary constraint. Use `signer` as the defense-in-depth cross-check that catches a *mismatch* between what the environment claimed and what the certificate proves. The `signer.kind != "workload-identity"` rule below is written as that cross-check, not as the gate.
+
+### `signer.kind` is a closed enum, and `unknown` is a member
+
+| `kind` | Meaning |
+| --- | --- |
+| `workload-identity` | Federated, non-interactive machine identity minted for a single run. No natural person's session in the chain. |
+| `interactive-human-session` | The credential derives from a person's interactive login — browser OIDC, device grant, stored platform session — regardless of whether a person or an agent is driving it right now. |
+| `long-lived-key` | A static private key with neither an interactive session nor a federated identity. |
+| `unknown` | Not established. **Deny.** |
+
+`unknown` is an explicit member rather than an empty string so that absence is representable and a policy can name it. It is the common case on a developer machine, and it is *not* a synonym for "no human involved": an ALPS-style agent inheriting a human session runs with no TTY and no CI variables, and lands here.
+
+**This attestor emits only three of the four.** `long-lived-key` is part of the predicate's vocabulary — the type is a shared contract, and other producers (and later cilock versions, which will see the signing configuration) need to express it — but nothing observable at prematerial time distinguishes "a static key is about to be used" from "we could not tell", so this attestor reports `unknown` instead of guessing. A policy allowlisting `workload-identity` denies both regardless. The gap is pinned by a test, so teaching the detector to emit it is a deliberate change rather than a silent one.
+
+### The strong claim cannot travel without its evidence
+
+`workload-identity` is the only kind that earns anything, so the JSON Schema makes it structurally inseparable from the evidence that would substantiate it:
+
+```json
+"allOf": [
+  { "if":   { "properties": { "kind": { "const": "workload-identity" } }, "required": ["kind"] },
+    "then": { "required": ["federated"] } }
+]
+```
+
+A predicate claiming `workload-identity` with no `federated` block is **schema-invalid**, not merely policy-denied. The conditional is generated by iterating the attestor's own signer-kind table, so a future kind marked as requiring federated evidence acquires the constraint automatically.
+
+`kind`, `keyMaterial` and `assurance` are all **required** — none carries `omitempty`. An omitted field reads to a policy as an absent constraint, so a signer-less predicate would sail straight past a `signer.kind != "interactive-human-session"` check. Requiring them makes a signer-less predicate malformed rather than permissive.
+
+## How a verifier consumes this
+
+Write the gate as an **allowlist**, never a denylist. A denylist silently admits any kind added later:
+
+```rego
+package instructionfile
+
+# The signer must be a workload. `unknown` and every future kind deny by default.
+deny contains msg if {
+    input.predicate.signer.kind != "workload-identity"
+    msg := sprintf("instruction attestation signed by principal class %v; workload identity required", [input.predicate.signer.kind])
+}
+
+# A partial scan makes no claim about what it did not read.
+deny contains msg if {
+    input.predicate.status != "complete"
+    msg := sprintf("instruction-file scan status %v; nothing is claimed about the unexamined remainder", [input.predicate.status])
+}
+
+# Pin the reviewed instruction files by digest.
+approved := {"9f2b...c1", "44ae...07"}
+
+deny contains msg if {
+    some f in input.predicate.files
+    not f.digest.sha256 in approved
+    msg := sprintf("unapproved instruction file %v (sha256 %v)", [f.path, f.digest.sha256])
+}
+```
+
+**Gate on the certificate too.** The `signer` block is derived from environment variables and process state at prematerial time, *before* any signing has happened, and any ancestor process can set an environment variable. It is corroborating context, not proof: a policy that gates on `signer.kind` alone can be defeated by setting `GITHUB_ACTIONS=true`. The authoritative check is the DSSE signing certificate — its SAN, its issuer, and the Fulcio extensions carrying the workload's repository and workflow — enforced by the policy's **functionary constraint**. Use `signer.kind` as the defense-in-depth cross-check that catches a mismatch between what the environment claimed and what the certificate proves.
+
+## Notes
+
+- **Run type is `prematerial`.** Instruction files are inputs that shape the run, so they are captured before anything acts on them.
+- **`status` is fail-closed.** `complete` means the whole tree under the search root was examined *and every recognized file in it was digested*, so an empty `files` list is a positive claim ("this workspace has no recognized instruction files"). `incomplete` means either that part of the tree could not be read, or that a recognized file was found and refused — in both cases *nothing* is claimed about what was not examined. `unavailable` means the walk could not be performed. A policy requiring "no unreviewed instruction files" must treat `incomplete` the way it treats `unavailable`.
+- **A file found but not digested is recorded**, with a `skipReason`, rather than dropped. Present-but-refused and never-there are different facts, and collapsing them is how a policy comes to believe a file it never saw was clean. Such a file contributes no subject, because a subject with no digest anchors to nothing — **which is exactly why it also forces `status: incomplete`.** Otherwise the two behaviours compose into the worst available predicate: a workspace whose only `CLAUDE.md` is a symlink would report `complete` with an empty subject list, asserting the tree was fully examined and held nothing. The `status != "complete"` rule above is what catches it, so a policy that omits that rule and inspects only `files` will still miss the case.
+- **Vendored trees are skipped** (`node_modules`, `vendor`, `.git`, `target`, `dist`, …). A dependency's instruction file is not this workspace's evidence. **The exception is a declared convention subtree**: everything under a declared path such as `.cursor/rules` is walked in full, ignore list and hidden-directory rule included, so `.cursor/rules/vendor/rule.mdc` and `.cursor/rules/.private/rule.mdc` are both captured. Those two rules exist to keep the walk in agreement with auto-detection's recursive glob — a statement about where the scan goes *looking* — and a subtree the pre-gate named by exact path was never reached through that glob. Pruning it anyway produced `status: complete` for a workspace whose rule files had been silently skipped.
+- **Symlinks are not followed at any path component.** A symlinked instruction file is recorded with a skip reason, and so is one reached through a symlinked *parent* directory: every component is opened with no-follow semantics against the descriptor of the component before it. Containment is not the property under test — a link that stays inside the workspace still means the bytes published under a path are not that path's bytes — so an in-workspace link is refused exactly like an escaping one.
+- **On platforms without an atomic no-follow open, nothing is digested.** The traversal above needs `openat(O_NOFOLLOW)`; where that is unavailable the attestor refuses the file with a skip reason and the scan reports `incomplete`, rather than publishing a path-to-digest binding it cannot guarantee. A missing subject is visible; a wrong one is not.
+- **Files over 4 MiB are recorded but not digested.**
+
+## Gotchas
+
+- **`assurance` never exceeds `environment-observed`.** This attestor runs before signing, so it cannot observe a verified OIDC token. The vocabulary deliberately has no stronger grade — inventing one would be the exact failure it exists to prevent.
+- **CI variables without the token-minting machinery are what spoofed CI looks like.** `federated.tokenEndpointPresent` reports whether the ambient workload-OIDC endpoint was actually reachable. `false` alongside a full set of CI variables is a signal worth denying on.
+- **A self-hosted runner can be a developer machine.** When the platform publishes it, `federated.runnerEnvironment` carries `self-hosted`, which weakens the workload claim considerably.
+- **`unknown` is the default on a laptop.** That is intended. If a local `cilock run` is being denied by an ALPS-style policy, the policy is working.
+
+## FAQ
+
+**Why a first-class aflock predicate rather than adopting nono's type or using in-toto SCAI?**
+There is no ratified in-toto predicate for prompts, instructions or agent inputs — the spec's predicates directory holds provenance, VSA, SCAI, runtime-trace, test-result, release, reference, link, SPDX, CycloneDX, vuln and SVR, and nothing covering this. No standard is being ignored. Adopting nono's vendor type would have meant inheriting an axis (`keyed`/`keyless`) that cannot express the distinction this predicate exists for. The Statement envelope stays in-toto v1 either way.
+
+**Can cilock verify nono's own attestations?**
+The code path exists and needs no change, though this has not been demonstrated end-to-end against a real `.nono-trust.bundle`. An envelope whose `predicateType` has no registered attestor factory is wrapped as a `RawAttestation` holding the exact decoded predicate bytes (`attestation/source/memory.go:245-253`, `attestation/source/archivista.go:298-303`), and rego `input` is built by marshalling that attestor directly (`attestation/policy/rego.go:66,86`) — so a third-party predicate's JSON reaches a policy verbatim. Policies also carry an `ExternalAttestations` map for evidence produced outside the run. Emitting our predicate and consuming theirs are separable, and only the emitting half is implemented here.
+
+**Is nono's instruction-file attestation multi-subject?**
+No. `new_instruction_statement` builds a statement with exactly one subject (`dsse.rs:388-419`). Multi-subject signing is a *separate* predicate type, `https://nono.sh/attestation/multi-file/v1` (`dsse.rs:34`, `new_multi_subject_statement`). Our predicate is multi-subject in a single statement, one subject per discovered file.
+
+**Does this attestor decide whether an instruction file is acceptable?**
+No. It records facts; policy renders the verdict. That separation is why the raw digests are reusable ground truth that any policy can evaluate.
+
+## See also
+
+- [`alps-evidence`](./alps-evidence.doc.md) — observes which coding agent invoked cilock, as forgeable attribution data.
+- [`lockfiles`](./lockfiles.doc.md) — the same capture shape for dependency lockfiles.
+- [`policyverify`](./policyverify.doc.md) — renders the verdict over this evidence.

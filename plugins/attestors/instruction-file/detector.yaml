@@ -1,0 +1,80 @@
+apiVersion: cilock.detection/v0.1
+name: instruction-file
+description: "Captures the digests of agent instruction files (CLAUDE.md, AGENTS.md, SKILLS.md, .cursorrules, copilot-instructions.md) present in the workspace, plus the principal class of the credential that will sign the attestation."
+
+category: [ci-context]
+
+# No upstream block: this attestor describes instruction files belonging to
+# several vendors' agents. Naming one as "the" upstream would be wrong for the
+# same reason alps-evidence leaves it empty.
+
+# These triggers must cover EVERY entry in the conventions table in
+# instruction_file.go, in both placements the scan recognizes. The pre-gate
+# decides whether this attestor runs at all, so a convention the scan would
+# digest but no trigger fires on does not produce an error — it produces a
+# clean run with no evidence in it, which is the failure that stops anyone
+# looking. TestSweep_EveryConventionActivatesTheDetector and its nested
+# counterpart derive their cases from that table and fail the day a convention
+# is added here without a trigger; the reverse sweep fails if a trigger names
+# a file the scan does not recognize.
+pre:
+  match:
+    any_of:
+      # Base-name conventions. Each is listed TWICE on purpose. The scan
+      # matches a base name anywhere in the tree — matchConvention compares
+      # against the base name, and scopeFor exists solely to promote a nested
+      # match to directory scope — so nested instruction files are a designed
+      # case, not an accident. A bare "CLAUDE.md" glob matches only the
+      # workspace root, which would leave a repository whose only CLAUDE.md
+      # sits in a subdirectory producing no predicate at all.
+      - file_glob:
+          - "CLAUDE.md"
+          - "**/CLAUDE.md"
+          - "AGENTS.md"
+          - "**/AGENTS.md"
+          - "SKILLS.md"
+          - "**/SKILLS.md"
+          - "GEMINI.md"
+          - "**/GEMINI.md"
+          - ".cursorrules"
+          - "**/.cursorrules"
+          - ".windsurfrules"
+          - "**/.windsurfrules"
+          - ".aider.conf.yml"
+          - "**/.aider.conf.yml"
+      # Exact-path conventions. These stay file_exists rather than joining the
+      # glob above: both live under a DOT-directory, and the recursive glob
+      # walk deliberately does not descend hidden directories (shouldDescend in
+      # attestation/detection/preds_static.go). A direct stat is both correct
+      # and cheaper here, and it is the only form that finds them at all.
+      - file_exists: ".github/copilot-instructions.md"
+      - file_exists: ".cursor/rules"
+
+llm_hints:
+  on_match: "Agent instruction files captured by digest. Content is deliberately NOT recorded. The signer block is environment-derived corroboration, never proof of who signed — the certificate decides that."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/instruction-file/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: >-
+      The files section is byte-stable for a given tree: paths are relative and
+      slash-normalized, entries are sorted by path, and each digest is the
+      SHA-256 of the file's exact bytes. No content, timestamps, or host-derived
+      values appear there. The signer section is NOT stable — it is derived from
+      environment variables and process state (TTY, CI provider variables) and
+      follows the machine, which is precisely why the predicate grades it with
+      an assurance level and carries a standing caveat naming the signing
+      certificate as the authority on signer identity.
+    volatile_fields: ["signer", "warnings"]
+  subjects:
+    - prefix: "instructionfile:"
+      description: "each recognized instruction file, keyed instructionfile:<path> (path relative to the search root, slash-separated); the digest is the SHA-256 of the FILE's bytes, so the subject joins by content and an approved instruction file can be pinned by digest across repositories"
+      digest_algs: ["sha256"]
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: repo-with-claude-md
+      role: canonical

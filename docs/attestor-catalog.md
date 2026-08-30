@@ -25,6 +25,7 @@ Regenerate after adding or renaming an attestor:
 | `github` | `plugins/attestors/github` | `https://aflock.ai/attestations/github/v0.1` |
 | `gitlab` | `plugins/attestors/gitlab` | `https://aflock.ai/attestations/gitlab/v0.1` |
 | `git` | `plugins/attestors/git` | `https://aflock.ai/attestations/git/v0.1` |
+| `instruction-file` | `plugins/attestors/instruction-file` | `https://aflock.ai/attestations/instruction-file/v0.1` |
 | `jenkins` | `plugins/attestors/jenkins` | `https://aflock.ai/attestations/jenkins/v0.1` |
 | `jwt` | `plugins/attestors/jwt` | `https://aflock.ai/attestations/jwt/v0.1` |
 | `lockfiles` | `plugins/attestors/lockfiles` | `https://aflock.ai/attestations/lockfiles/v0.1` |

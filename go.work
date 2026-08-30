@@ -39,6 +39,7 @@ use (
 	./plugins/attestors/govulncheck
 	./plugins/attestors/inclusion-proof
 	./plugins/attestors/inspec
+	./plugins/attestors/instruction-file
 	./plugins/attestors/jenkins
 	./plugins/attestors/jwt
 	./plugins/attestors/k8smanifest

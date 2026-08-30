@@ -1,6 +1,6 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 135,
+  "attestor_count": 136,
   "attestors": [
     {
       "name": "alps-evidence",
@@ -359,6 +359,59 @@
       "detection": {
         "pre": {
           "env_equals": "GITLAB_CI=true"
+        }
+      }
+    },
+    {
+      "name": "instruction-file",
+      "predicate_type": "https://aflock.ai/attestations/instruction-file/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "ci-context"
+      ],
+      "tier": "recommended",
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "instructionfile:",
+          "description": "each recognized instruction file, keyed instructionfile:<path> (path relative to the search root, slash-separated); the digest is the SHA-256 of the FILE's bytes, so the subject joins by content and an approved instruction file can be pinned by digest across repositories",
+          "digest_algs": [
+            "sha256"
+          ]
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(file_exists:.cursor/rules, file_exists:.github/copilot-instructions.md, file_glob:[CLAUDE.md, **/CLAUDE.md, AGENTS.md, **/AGENTS.md, SKILLS.md, **/SKILLS.md, GEMINI.md, **/GEMINI.md, .cursorrules, **/.cursorrules, .windsurfrules, **/.windsurfrules, .aider.conf.yml, **/.aider.conf.yml])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "file_exists": ".cursor/rules"
+            },
+            {
+              "file_exists": ".github/copilot-instructions.md"
+            },
+            {
+              "file_glob": [
+                "CLAUDE.md",
+                "**/CLAUDE.md",
+                "AGENTS.md",
+                "**/AGENTS.md",
+                "SKILLS.md",
+                "**/SKILLS.md",
+                "GEMINI.md",
+                "**/GEMINI.md",
+                ".cursorrules",
+                "**/.cursorrules",
+                ".windsurfrules",
+                "**/.windsurfrules",
+                ".aider.conf.yml",
+                "**/.aider.conf.yml"
+              ]
+            }
+          ]
         }
       }
     },
