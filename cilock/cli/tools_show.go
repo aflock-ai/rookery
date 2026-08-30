@@ -108,6 +108,18 @@ func writeToolSection(w io.Writer, name string, doc *detection.DetectorDoc, slug
 	return fmt.Errorf("no section %q for %q; available: %s", slug, name, strings.Join(avail, ", "))
 }
 
+// writePredicateTypes prints the primary predicate type and, for attestors
+// that select among several at run time (sbom: SPDX vs CycloneDX), the full
+// set — a policy keys on whichever one the run actually emitted.
+func writePredicateTypes(pr func(format string, a ...any), e toolEntry) {
+	if e.PredicateType != "" {
+		pr("  predicate type:    %s\n", e.PredicateType)
+	}
+	if len(e.PredicateTypes) > 1 {
+		pr("  emits one of:      %s (chosen from the input at run time)\n", strings.Join(e.PredicateTypes, ", "))
+	}
+}
+
 func writeToolSummary(w io.Writer, e toolEntry, doc *detection.DetectorDoc) error {
 	desc := e.Description
 	if doc != nil && doc.Description != "" {
@@ -130,9 +142,7 @@ func writeToolSummary(w io.Writer, e toolEntry, doc *detection.DetectorDoc) erro
 	if len(e.Categories) > 0 {
 		pr("  category:          %s\n", joinCategories(e.Categories))
 	}
-	if e.PredicateType != "" {
-		pr("  predicate type:    %s\n", e.PredicateType)
-	}
+	writePredicateTypes(pr, e)
 	if len(e.EmitsFormats) > 0 {
 		pr("  emits format:      %s\n", strings.Join(e.EmitsFormats, ", "))
 	}

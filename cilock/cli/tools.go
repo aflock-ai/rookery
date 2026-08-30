@@ -110,8 +110,9 @@ func defaultOnAttestor(name string) bool {
 type toolEntry struct {
 	Name             string                  `json:"name"`
 	PredicateType    string                  `json:"predicate_type,omitempty"`
-	RunType          string                  `json:"run_type,omitempty"` // attestor lifecycle: prematerial|material|...|postproduct
-	DefaultOn        bool                    `json:"default_on"`         // part of the default binary's always-run/default set
+	PredicateTypes   []string                `json:"predicate_types,omitempty"` // every type the attestor may emit, when it selects at run time (sbom: SPDX or CycloneDX)
+	RunType          string                  `json:"run_type,omitempty"`        // attestor lifecycle: prematerial|material|...|postproduct
+	DefaultOn        bool                    `json:"default_on"`                // part of the default binary's always-run/default set
 	Description      string                  `json:"description,omitempty"`
 	Categories       []detection.Category    `json:"categories,omitempty"`
 	Upstream         *detection.UpstreamInfo `json:"upstream,omitempty"`
@@ -279,6 +280,9 @@ func buildToolEntries() []toolEntry {
 		// and the website doesn't need a second data source.
 		f := ent.Factory()
 		te.PredicateType = f.Type()
+		if d != nil && d.Contract != nil && len(d.Contract.PredicateTypes) > 1 {
+			te.PredicateTypes = d.Contract.PredicateTypes
+		}
 		te.RunType = fmt.Sprintf("%v", f.RunType())
 		te.DefaultOn = defaultOnAttestor(name)
 		out = append(out, te)

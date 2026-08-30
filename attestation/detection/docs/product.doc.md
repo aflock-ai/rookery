@@ -112,11 +112,11 @@ The predicate is fixed-size regardless of how many files were in the working dir
 
 ## Inline leaves
 
-Since v0.3 is the sole producer, the signed envelope always carries the full `leaves` array — every `(path, fileDigest, leafHash)` triple — inline. This means the product attestation is self-contained: a verifier can confirm any specific file's inclusion by matching its digest to a leaf, reconstructing the leaf hash via `inclusionproof.LeafHash`, and confirming it folds to the signed `tree:products` root. No sidecar, no separate inclusion-proof envelope, no additional round-trip.
+Since v0.3 is the sole producer, the signed envelope always carries the full `leaves` array — every `(path, fileDigest, leafHash)` triple, plus the content-sniffed `mimeType` (e.g. `application/x-mach-binary`) and, for well-known attestation/SBOM formats, a `kind` — inline. `mimeType` and `kind` are metadata only and are not part of the leaf hash. This means the product attestation is self-contained: a verifier can confirm any specific file's inclusion by matching its digest to a leaf, reconstructing the leaf hash via `inclusionproof.LeafHash`, and confirming it folds to the signed `tree:products` root. No sidecar, no separate inclusion-proof envelope, no additional round-trip.
 
 ## Per-file verification
 
-The product attestation's inline `leaves` array exposes every `(path, fileDigest, leafHash)` triple, so per-file claims are verified directly from the product attestation:
+The product attestation's inline `leaves` array exposes every `(path, fileDigest, leafHash)` triple (with `mimeType`, so a policy can also require that an output IS a Mach-O / ELF / PE binary rather than only that its path is present), so per-file claims are verified directly from the product attestation:
 
 1. Find the leaf whose `fileDigest` equals the file digest being verified.
 2. Confirm the leaf's `leafHash` equals `sha256(leafPath-bytes || 0x00 || fileDigest-bytes-raw32)` (the canonical `inclusionproof.LeafHash` encoder).

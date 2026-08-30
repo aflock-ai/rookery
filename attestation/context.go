@@ -176,6 +176,22 @@ func IsDetectionError(err error) bool {
 	return errors.As(err, &d)
 }
 
+// EvidenceIsRecordable reports whether a completed attestor's payload belongs
+// in the signed collection, given the error (if any) it returned. It is THE
+// rule the workflow applies (attestation/workflow.evidenceIsRecordable
+// delegates here), exported so attestors can assert in their own tests that a
+// failure mode really does keep — or really does drop — its evidence, instead
+// of re-implementing the predicate and drifting from it.
+//
+//   - nil — observed cleanly. Recorded.
+//   - DetectionError — observed successfully and reported an
+//     operator-configured verdict. Recorded (and still a fatal leg).
+//   - any other error — could not observe. DROPPED, because recording a
+//     partial payload would assert a clean result that was never established.
+func EvidenceIsRecordable(err error) bool {
+	return err == nil || IsDetectionError(err)
+}
+
 type AttestationContextOption func(ctx *AttestationContext)
 
 func WithOutputWriters(w []io.Writer) AttestationContextOption {

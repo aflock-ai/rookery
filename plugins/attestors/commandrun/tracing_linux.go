@@ -384,7 +384,7 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 	r.ExitCode = pctx.exitCode
 
 	if pctx.exitCode != 0 {
-		return pctx.procInfoArray(), fmt.Errorf("exit status %v", pctx.exitCode)
+		return pctx.procInfoArray(), &exitStatusError{Code: pctx.exitCode}
 	}
 
 	return pctx.procInfoArray(), nil

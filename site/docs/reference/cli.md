@@ -475,6 +475,29 @@ cilock policy from-commit 1a2b3c4d... -o policy.json
 cilock policy from-commit 1a2b3c4d... --product my-service --tag v1
 ```
 
+## `cilock policy draft --file`
+
+> Turns a hand-authored policy source into a complete, verifiable policy document without you looking up a trust root. You write the part that expresses intent — the steps, the functionaries, the rego — and leave the trust material out; `draft` sends that source to the platform, which fills in the tenant's platform Fulcio roots and timestamp authorities, validates the result, and returns it. `draft` then verifies the returned digest against the bytes it actually received and writes the hydrated document to `--output`. It does **not** sign: the hydrated document is inert until a human signs it, so `draft` never invokes [`cilock sign`](#cilock-sign-file) for you — it prints the exact command to run. Needs a logged-in session with the `policy:validate` scope; if the platform rejects the call for a missing scope, run `cilock login` again to pick it up.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--file, -f <path>` | (required) | Path to the hand-authored policy source. |
+| `--output, -o <path>` | the source path with a `.hydrated.json` suffix | Where to write the hydrated, UNSIGNED policy. |
+| `--force` | `false` | Overwrite `--output` if it already exists. |
+| `--datatype, -t <url>` | `https://aflock.ai/policy/v0.1` | Policy payload type sent for hydration. |
+| `--platform-url <url>` | the logged-in platform | TestifySec platform URL. |
+
+```bash
+# Hydrate a hand-authored policy — writes policy.hydrated.json, UNSIGNED
+cilock policy draft -f policy.json
+
+# Then sign it yourself; cilock never signs a policy for you:
+cilock sign -f policy.hydrated.json -o policy.hydrated.signed.json
+
+# Explicit output, overwriting a previous draft
+cilock policy draft -f policy.json -o hydrated.json --force
+```
+
 ## `cilock policy push --file --definition --tag`
 
 > Publishes an author-signed Witness policy to the platform. It uploads the signed policy DSSE to the platform's Archivista (the same upload path as `cilock run --enable-archivista`), ensures the named PolicyDefinition exists (creating it if absent), then creates a PolicyRelease that pins the definition to the uploaded policy under `--tag`. The policy file must already be DSSE-signed — produce it with `cilock sign` against the platform's keyless Fulcio. The DSSE upload needs `attestation:upload`; creating the immutable definition and release needs `policy:publish`. That scope cannot bind a Product or assign a Pushgate repository.

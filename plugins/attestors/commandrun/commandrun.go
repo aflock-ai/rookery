@@ -2428,7 +2428,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	// context is plumbed the command simply never cancels and Cancel never
 	// fires; WaitDelay remains the sole anti-hang guarantee on that path.
 	c := exec.CommandContext(ctx.Context(), r.Cmd[0], r.Cmd[1:]...) //nolint:gosec // G204: command is user-specified by design
-	c.Dir = ctx.WorkingDir()
+	c.Dir = resolvedWorkdir(ctx.WorkingDir())
 	// Snapshot the dir the tracee will actually run in, before any
 	// post-exec cwd changes happen on the parent. Used by TraceOutputs
 	// to resolve relative paths in fileOps.Writes / Renames.
@@ -2577,6 +2577,15 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		traceStart := time.Now()
 		r.Processes, err = r.trace(c, ctx)
 		traceDuration := time.Since(traceStart)
+		// The tracers report a clean-but-non-zero exit as an
+		// *exitStatusError. Route it through the same outcome as the
+		// untraced path so trace mode records the exit code as evidence
+		// (and honours --ignore-command-exit-code) instead of dropping
+		// the whole predicate.
+		var xs *exitStatusError
+		if errors.As(err, &xs) {
+			err = r.exitOutcome(xs.Code, err)
+		}
 		// Wait for I/O copying goroutines to complete before reading buffers.
 		// trace() uses ptrace to detect process exit, but exec's I/O goroutines
 		// may still be flushing pipe data into stdoutBuffer/stderrBuffer.
@@ -2707,13 +2716,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	} else {
 		err = c.Wait()
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			r.ExitCode = exitErr.ExitCode()
-			if r.ignoreExitCode {
-				// Record the exit code in the predicate but don't propagate
-				// the error. This lets postproduct attestors (sarif/sbom/vex/
-				// etc.) still fire for tools that exit non-zero on findings.
-				err = nil
-			}
+			err = r.exitOutcome(exitErr.ExitCode(), exitErr)
 		} else if errors.Is(err, exec.ErrWaitDelay) {
 			// The wrapped command itself exited cleanly; WaitDelay only fired
 			// because a lingering descendant kept the inherited stdout/stderr
@@ -2745,6 +2748,82 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	redactArgv(r.Cmd)
 	redactProcessCmdlines(r.Processes)
 	return err
+}
+
+// exitStatusError is how the tracers report "the wrapped command ran to
+// completion and exited non-zero". It is distinct from a trace failure (which
+// stays a plain error) so runCmd can tell an observed outcome from a failure
+// to observe. Message matches exec.ExitError's for log continuity.
+type exitStatusError struct{ Code int }
+
+func (e *exitStatusError) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
+
+// exitOutcome records a non-zero exit and decides what Attest returns for it.
+//
+// The command RAN and WAS OBSERVED — the exit code is the observation, and
+// stdout/stderr/products are real. Before this, Attest returned the raw
+// exec error, which the workflow reads as "could not observe" and DROPS the
+// command-run predicate from the signed collection: the one run a policy most
+// wants to read (`exitcode == 0`, the failing test output) had no command-run
+// attestation at all. A DetectionError keeps the payload in the collection
+// while remaining a fatal leg, so `cilock run` itself still exits non-zero
+// (attestation.DetectionError, workflow.evidenceIsRecordable).
+//
+// With --ignore-command-exit-code the exit code is recorded and no error is
+// returned, so postproduct attestors (sarif/sbom/vex/...) still fire for tools
+// that exit non-zero on findings. Policy Rego still sees the real code via
+// `exitcode`.
+func (r *CommandRun) exitOutcome(code int, cause error) error {
+	r.ExitCode = code
+	if r.ignoreExitCode {
+		return nil
+	}
+	verdict := attestation.NewDetectionError(fmt.Sprintf("command exited with status %d", code))
+	if cause == nil {
+		return verdict
+	}
+	return fmt.Errorf("%w (%w)", verdict, cause)
+}
+
+// resolvedWorkdir returns the directory the wrapped command should run in,
+// resolved through the OS: absolute, symlink-free. An empty workdir (no
+// --workingdir) resolves the inherited process cwd the same way, so the
+// child always gets a kernel path in both cwd and $PWD (os/exec sets PWD to
+// Dir when Dir is absolute).
+//
+// Why: `cilock run -- syft dir:.` from a checkout under /tmp — a symlink to
+// /private/tmp on macOS — walked /private/tmp for twenty minutes. syft reads
+// `.` through $PWD, gets the symlinked spelling, resolves it to a path that
+// is not "under" that spelling, and re-roots at the parent. cilock already
+// resolves its own bookkeeping through the OS (script operands, workdir
+// hashing); the tracee must see the same directory, so `.` means the
+// repository root. Falls back to the raw value if resolution fails; the
+// exec will surface that error itself.
+func resolvedWorkdir(workdir string) string {
+	dir := workdir
+	if dir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return workdir
+		}
+		dir = cwd
+	}
+	if !filepath.IsAbs(dir) {
+		// Concatenate, do NOT filepath.Abs/Join: those Clean lexically, and
+		// `work/link/..` must reach the kernel with the symlink intact so
+		// EvalSymlinks answers `other`, not `work` (see
+		// TestAttestResolvesSymlinkedWorkingDirectoryThroughTheOS).
+		cwd, err := os.Getwd()
+		if err != nil {
+			return workdir
+		}
+		dir = cwd + string(os.PathSeparator) + dir
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return workdir
+	}
+	return resolved
 }
 
 // redactedOutputValue replaces a sensitive value found in captured output.

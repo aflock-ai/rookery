@@ -1427,7 +1427,7 @@
       "primaryCategory": "sbom-generate",
       "description": "The cilock sbom attestor picks up SPDX-JSON or CycloneDX-JSON files from the product set, stores each document byte-preservingly, and signs it into in-toto evidence under the SBOM's native predicate type.",
       "emitsFormats": [],
-      "predicateType": "https://aflock.ai/attestations/sbom/v0.1",
+      "predicateType": "https://spdx.dev/Document",
       "runType": "postproduct",
       "hasDoc": true
     },
@@ -1593,7 +1593,7 @@
       "source": "attestor-backed",
       "categories": [],
       "primaryCategory": null,
-      "description": "Captures JUnit XML test reports and CTRF JSON reports produced by test runners (go test -junit, pytest, jest, gradle, surefire, etc.).",
+      "description": "Captures JUnit XML test reports and CTRF JSON reports produced by test runners (Go: gotestsum --junitfile junit.xml -- ./... or go-junit-report — plain go test has no JUnit flag; pytest --junitxml, jest-junit, gradle, surefire, etc.).",
       "emitsFormats": [],
       "predicateType": "https://aflock.ai/attestations/test-results/v0.1",
       "runType": "postproduct",

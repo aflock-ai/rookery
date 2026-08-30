@@ -43,6 +43,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -101,6 +102,20 @@ type Attestor struct {
 	APIBaseURL  string `json:"api_base_url"`
 	TokenSource string `json:"token_source"` // flag | gh-token-env | github-token-env | gh-auth-token | anonymous
 	PRs         []PR   `json:"prs"`
+}
+
+// commitNotFoundError is GitHub's 422 "No commit found for SHA" on the
+// commits/{sha}/pulls endpoint — the API has not seen the commit, so there is
+// no review state to observe. That is a FAILURE TO OBSERVE, not a verdict, so
+// Attest returns it as a plain error and the workflow drops the payload (see
+// attestation.EvidenceIsRecordable).
+type commitNotFoundError struct {
+	URL     string
+	Message string
+}
+
+func (e *commitNotFoundError) Error() string {
+	return fmt.Sprintf("GET %s: 422 — GitHub has no such commit (%q); it has not been pushed to GitHub yet", e.URL, e.Message)
 }
 
 // PR is one pull request associated with the target commit, with the
@@ -298,8 +313,34 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	prs, err := client.fetchPRsForCommit(ctx.Context(), a.Repo, a.CommitSHA)
+	var notFound *commitNotFoundError
+	if errors.As(err, &notFound) {
+		// Push-time: GitHub has not received this commit, so no PR (and no
+		// review) can exist for it yet. There is nothing to observe.
+		//
+		// This must NOT be recorded as evidence. Recording ANY
+		// github-review/v0.1 payload here ships a signed attestation whose
+		// `prs` is empty, and "every PR is approved" is vacuously true over
+		// an empty list — so a verifier reading the signed collection later
+		// would clear a commit whose review state was never observed. The
+		// fatal leg below protects only THIS run; the signed attestation
+		// outlives it and is checked by someone else, later.
+		//
+		// A plain error is what attestation/context.go mandates:
+		// DetectionError is only for "an operator-configured verdict on a
+		// successful observation", and "if the attestor could not look,
+		// return a plain error". The workflow then drops the payload
+		// (attestation.EvidenceIsRecordable), the leg stays fatal, and the
+		// operator still gets the reason verbatim right here. A policy step
+		// requiring github-review evidence fails closed on a MISSING
+		// attestation instead of passing on an empty one.
+		return fmt.Errorf("github-review: %w — review state cannot be attested before the commit reaches GitHub; no attestation is recorded for %s", notFound, a.CommitSHA)
+	}
 	if err != nil {
 		return fmt.Errorf("github-review: list PRs for %s: %w", a.CommitSHA, err)
+	}
+	if prs == nil {
+		prs = []PR{}
 	}
 	a.PRs = prs
 	return nil
@@ -427,6 +468,9 @@ func (c *ghClient) get(ctx context.Context, path string) (body []byte, linkHeade
 	}
 
 	if resp.StatusCode >= 400 {
+		if notFound := commitNotFoundFromResponse(resp, body, full); notFound != nil {
+			return nil, "", notFound
+		}
 		return nil, "", buildHTTPError(resp, body, full)
 	}
 
@@ -531,6 +575,22 @@ GitHub said: %q`, urlStr, gerr.Message)
 	default:
 		return fmt.Errorf("GET %s: HTTP %d (response: %s)", urlStr, resp.StatusCode, snippet)
 	}
+}
+
+// commitNotFoundFromResponse recognises GitHub's 422 "No commit found for
+// SHA: …" from commits/{sha}/pulls — GitHub has never seen the commit — and
+// returns it typed so Attest can record it. Any other response returns nil
+// and falls through to buildHTTPError.
+func commitNotFoundFromResponse(resp *http.Response, body []byte, urlStr string) error {
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		return nil
+	}
+	var gerr githubErrorBody
+	_ = json.Unmarshal(body, &gerr) // best-effort; non-JSON bodies leave fields empty
+	if !strings.Contains(strings.ToLower(gerr.Message), "no commit found") {
+		return nil
+	}
+	return &commitNotFoundError{URL: urlStr, Message: gerr.Message}
 }
 
 // rateLimitHint adapts the rate-limit error message to the runtime

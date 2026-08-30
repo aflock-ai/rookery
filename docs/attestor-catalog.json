@@ -1634,9 +1634,8 @@
     },
     {
       "name": "sbom",
-      "predicate_type": "https://aflock.ai/attestations/sbom/v0.1",
+      "predicate_type": "https://spdx.dev/Document",
       "predicate_types": [
-        "https://aflock.ai/attestations/sbom/v0.1",
         "https://cyclonedx.org/bom",
         "https://spdx.dev/Document"
       ],

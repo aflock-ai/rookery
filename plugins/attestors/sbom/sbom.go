@@ -144,7 +144,14 @@ type SBOMAttestor struct {
 
 func NewSBOMAttestor() *SBOMAttestor {
 	return &SBOMAttestor{
-		predicateType: Type,
+		// The attestor never signs anything under Type (sbom/v0.1): that
+		// URI is only the registration alias that makes `--attestations
+		// sbom` resolve here. Attest always replaces predicateType with
+		// the sniffed SPDX or CycloneDX type, so a fresh instance reports
+		// the SPDX type — `cilock tools show sbom` / `attestors list`
+		// print Type() of a fresh instance, and a policy written from
+		// what they print must match what gets emitted.
+		predicateType: SPDXPredicateType,
 	}
 }
 

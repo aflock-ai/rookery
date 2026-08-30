@@ -61,6 +61,22 @@ var (
 //
 // The attestor runs after all product attestors to analyze both products and
 // attestations, adding scanned products as subjects for verifiability.
+// ConsumedReport records one scanner report (a SARIF product) that the
+// attestor parsed. The report is still SCANNED like every other product —
+// nothing in it is trusted, driver.name included — but a finding inside it
+// that is the report's own record of a secret the scanner also found
+// elsewhere is dropped as an echo rather than double-counted. SHA256 is the
+// digest of the bytes actually parsed, checked against the product digest;
+// Driver is what the report claims; Results is how many results it lists;
+// Deduplicated is how many echoes were dropped.
+type ConsumedReport struct {
+	Path         string `json:"path"`
+	SHA256       string `json:"sha256"`
+	Driver       string `json:"driver"`
+	Results      int    `json:"results"`
+	Deduplicated int    `json:"deduplicated"`
+}
+
 type Attestor struct {
 	// Configuration options
 	failOnDetection bool        // Whether to fail the attestation when secrets are found
@@ -73,6 +89,18 @@ type Attestor struct {
 	// Results and state
 	Findings []Finding                       `json:"findings"` // List of detected secrets
 	subjects map[string]cryptoutil.DigestSet // Products that were scanned
+
+	// ConsumedReports are the secret-scanner reports this attestor read and
+	// deliberately did NOT re-scan: a product whose CONTENT is a SARIF
+	// document from a secret scanner (gitleaks, trufflehog, ...). Such a
+	// report quotes every secret it found, so scanning it again would
+	// report each one a second time. Identified by parsing the product,
+	// never by filename, and recorded (path + digest) so the signed
+	// evidence states exactly which bytes were excluded and why.
+	ConsumedReports []ConsumedReport `json:"consumedReports,omitempty"`
+	// reportRules maps a parsed report's product path to the lower-cased
+	// rule ids its results declare; used by dedupeReportEchoes.
+	reportRules map[string]map[string]bool
 
 	// scanErrors accumulates per-file / per-attestor scan failures that
 	// would otherwise be silently swallowed. When failOnDetection is set,

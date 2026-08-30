@@ -178,9 +178,10 @@ var (
 // (which returns the canonical inclusionproof.Sidecar) to capture the
 // full tree contents.
 type Attestor struct {
-	// Predicate fields. These are the bytes any verifier needs to refuse
-	// or accept the attestation; nothing else from this struct ends up in
-	// the signed DSSE statement.
+	// Predicate fields. MarshalJSON copies these into Predicate, which is
+	// the authoritative shape of the signed bytes — it ALSO inlines the
+	// per-file `leaves`, so this struct is not by itself the predicate.
+	// Change Predicate, not just these fields, when the signed shape moves.
 	MerkleRoot         string `json:"merkleRoot"`
 	TreeSize           uint64 `json:"treeSize"`
 	HashAlgorithmField string `json:"hashAlgorithm"`
@@ -237,6 +238,17 @@ type ProductLeaf struct {
 	Path       string `json:"path"`
 	FileDigest string `json:"fileDigest"`
 	LeafHash   string `json:"leafHash"`
+	// MimeType is the content-sniffed media type of the product
+	// (e.g. "application/x-mach-binary", "text/plain; charset=utf-8").
+	// The attestor already sniffs it for the Products() map every sibling
+	// attestor reads; carrying it on the signed leaf lets a policy say
+	// "the output is a Mach-O binary" rather than only "caddy-darwin is
+	// among the outputs". Metadata only — NOT part of the leaf hash, so
+	// the Merkle commitment and predicate type are unchanged (v0.3
+	// additive field). omitempty so attestations from before this field
+	// landed, and products whose type could not be sniffed, round-trip
+	// byte-identically.
+	MimeType string `json:"mimeType,omitempty"`
 	// Kind hints what KIND of file this product is, by filename suffix.
 	// Empty when the file's kind isn't one of the well-known
 	// attestation/SBOM formats. omitempty so v0.3 attestations from
@@ -445,8 +457,12 @@ func (a *Attestor) RunType() attestation.RunType { return RunType }
 // Schema is the JSON schema for the predicate as it ships in the DSSE
 // Statement. It reflects the struct fields with json tags, which excludes
 // the run-time leaves slice. MarshalJSON honours the same exclusion.
+// Schema describes what this attestor SIGNS, so it reflects Predicate rather
+// than Attestor. Reflecting Attestor omitted the inlined `leaves` array while
+// still emitting additionalProperties:false, which made every real product
+// attestation fail validation against its own declared schema.
 func (a *Attestor) Schema() *jsonschema.Schema {
-	return jsonschema.Reflect(&Attestor{})
+	return jsonschema.Reflect(&Predicate{})
 }
 
 // collectTracedFileSet inspects completed attestors for any traced
@@ -787,10 +803,16 @@ func (a *Attestor) buildTree() error {
 	// then dedup+sort via the shared helper so all three production tree-build
 	// sites stay byte-identical.
 	entries := make([]inclusionproof.LeafEntry, 0, len(pairs))
+	// Sniffed media type per normalized path, carried onto the leaf as
+	// metadata after dedup (LeafEntry is digest+path only by design).
+	mimeByPath := make(map[string]string, len(pairs))
 	for _, p := range pairs {
 		prod, ok := a.products[p.originalKey]
 		if !ok {
 			continue
+		}
+		if prod.MimeType != "" && prod.MimeType != mimeTypeUnknown {
+			mimeByPath[p.normalized] = prod.MimeType
 		}
 		// Trace mode now emits witness-only entries with nil Digest
 		// when a write was observed but the file couldn't be hashed
@@ -828,6 +850,7 @@ func (a *Attestor) buildTree() error {
 			Path:       e.Path,
 			FileDigest: e.DigestHex,
 			LeafHash:   hex.EncodeToString(leafPreHash),
+			MimeType:   mimeByPath[e.Path],
 			Kind:       detectProductKind(e.Path),
 		})
 		preHashes = append(preHashes, leafPreHash)
@@ -938,17 +961,30 @@ func (a *Attestor) rootDigestSet() cryptoutil.DigestSet {
 	}
 }
 
-// MarshalJSON publishes only the predicate fields. The leaves slice is
-// kept out of the signed Statement; sidecar consumers use BuildSidecar.
+// Predicate is the EXACT shape product/v0.3 signs. It is deliberately a named
+// type used by all three of MarshalJSON, UnmarshalJSON and Schema(), because
+// those three drifting apart is a silent, high-consequence bug: Schema() used
+// to reflect the Attestor struct instead, where `leaves` is `json:"-"`, so the
+// declared schema said additionalProperties:false and omitted the leaves array
+// that MarshalJSON always inlines. Every real v0.3 predicate therefore failed
+// validation against its own published schema. Declare the predicate once and
+// that class of drift cannot recur.
+//
+// Field-level compatibility notes live on ProductLeaf; the whole struct is
+// additive within v0.3 (leaves and the optional per-leaf metadata are all
+// `omitempty`), so attestations recorded before a field existed still validate.
+type Predicate struct {
+	MerkleRoot    string        `json:"merkleRoot"`
+	TreeSize      uint64        `json:"treeSize"`
+	HashAlgorithm string        `json:"hashAlgorithm"`
+	Construction  string        `json:"construction"`
+	Leaves        []ProductLeaf `json:"leaves,omitempty"`
+}
+
+// MarshalJSON publishes the predicate fields, with the per-file leaves inlined
+// (v0.3 forces inline leaves — see below).
 func (a *Attestor) MarshalJSON() ([]byte, error) {
-	type predicate struct {
-		MerkleRoot    string        `json:"merkleRoot"`
-		TreeSize      uint64        `json:"treeSize"`
-		HashAlgorithm string        `json:"hashAlgorithm"`
-		Construction  string        `json:"construction"`
-		Leaves        []ProductLeaf `json:"leaves,omitempty"`
-	}
-	p := predicate{
+	p := Predicate{
 		MerkleRoot:    a.MerkleRoot,
 		TreeSize:      a.TreeSize,
 		HashAlgorithm: a.HashAlgorithmField,
@@ -969,14 +1005,7 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 // from the sidecar (if it was retained) or recompute them from the build
 // outputs.
 func (a *Attestor) UnmarshalJSON(data []byte) error {
-	type predicate struct {
-		MerkleRoot    string        `json:"merkleRoot"`
-		TreeSize      uint64        `json:"treeSize"`
-		HashAlgorithm string        `json:"hashAlgorithm"`
-		Construction  string        `json:"construction"`
-		Leaves        []ProductLeaf `json:"leaves,omitempty"`
-	}
-	var p predicate
+	var p Predicate
 	if err := json.Unmarshal(data, &p); err != nil {
 		return err
 	}

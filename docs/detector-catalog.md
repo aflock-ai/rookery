@@ -3,10 +3,11 @@
 Auto-generated from `plugins/attestors/*/detector.yaml`. Run
 `./scripts/gen-detector-catalog.sh` to refresh.
 
-Total: 32 detectors.
+Total: 33 detectors.
 
 | Name | Gates | Trace | Description |
 |------|-------|-------|-------------|
+| `alps-evidence` | pre | `off` | Observes coding-agent process context (Claude Code, Codex, Cursor, Gemini CLI, ...) in cilock's ancestry at collection time. This is forgeable attribution data, not authenticated identity or policy evidence. |
 | `asff` | pre + post | `off` | Captures AWS Security Finding Format (ASFF) reports from AWS Security Hub (typically the output of `aws securityhub get-findings`). |
 | `aws` | pre | `off` | Captures the AWS Instance Identity Document when running on EC2 (or any host that can reach the EC2 IMDS endpoint). |
 | `aws-codebuild` | pre | `off` | Captures AWS CodeBuild context (project name, build ID, batch build ID, region) when running inside an AWS CodeBuild job. |
@@ -36,7 +37,7 @@ Total: 32 detectors.
 | `scubagoggles` | pre + post | `off` | Captures the raw Google Workspace configuration collected by CISA ScubaGoggles (provider settings, not the verdict). |
 | `sinkhole-flows` | pre | `off` | Captures HTTP(S) flows collected by the pip-witness sinkhole proxy (intended for pip install observability). |
 | `steampipe` | pre + post | `off` | Captures Steampipe SQL-against-cloud-API scan results. |
-| `test-results` | post | `off` | Captures JUnit XML test reports and CTRF JSON reports produced by test runners (go test -junit, pytest, jest, gradle, surefire, etc.). |
+| `test-results` | post | `off` | Captures JUnit XML test reports and CTRF JSON reports produced by test runners (Go: gotestsum --junitfile junit.xml -- ./... or go-junit-report — plain go test has no JUnit flag; pytest --junitxml, jest-junit, gradle, surefire, etc.). |
 | `trivy` | pre + post | `off` | Captures Trivy vulnerability and misconfiguration scan results. |
 | `vex` | post | `off` | Captures OpenVEX documents asserting vulnerability statuses (affected, not_affected, fixed, under_investigation). |
 

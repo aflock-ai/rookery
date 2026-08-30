@@ -17,6 +17,9 @@
 package secretscan
 
 import (
+	"crypto"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	"github.com/zricethezav/gitleaks/v8/detect"
@@ -386,8 +390,12 @@ func (a *Attestor) scanProducts(ctx *attestation.AttestationContext, _ string, d
 		// Get absolute path for scanning while preserving original path for records
 		absPath := a.getAbsolutePath(path, ctx.WorkingDir())
 
-		// Scan the file for secrets
-		findings, err := a.ScanFile(absPath, detector)
+		// Read once; the same bytes are classified (digested + parsed) and
+		// scanned, so what the dedup reasons about is exactly what was
+		// scanned. EVERY product is scanned regardless of what it claims
+		// to be — a scanner report is only additionally eligible for echo
+		// dedup (see dedupeReportEchoes).
+		findings, err := a.scanProductBytes(path, absPath, product, detector)
 		if err != nil {
 			log.Debugf("(attestation/secretscan) error scanning file %s: %s", path, err)
 			a.scanErrors = append(a.scanErrors, fmt.Errorf("scanning product %s: %w", path, err))
@@ -410,6 +418,30 @@ func (a *Attestor) scanProducts(ctx *attestation.AttestationContext, _ string, d
 	return nil
 }
 
+// scanProductBytes reads a product once, records it as a parsed report when
+// classifyReport says so, and scans the same bytes for secrets.
+func (a *Attestor) scanProductBytes(path, absPath string, product attestation.Product, detector *detect.Detector) ([]Finding, error) {
+	if detector == nil {
+		return nil, fmt.Errorf("nil detector provided")
+	}
+	if exceeds, err := a.exceedsMaxFileSize(absPath); err != nil || exceeds {
+		return nil, err
+	}
+	content, err := a.readFileContent(absPath)
+	if err != nil {
+		return nil, err
+	}
+	if rep, rules, ok := classifyReport(path, content, product); ok {
+		log.Debugf("(attestation/secretscan) %s parses as a %q report (%d results, sha256 %s); scanning it and deduplicating echoes", path, rep.Driver, rep.Results, rep.SHA256)
+		if a.reportRules == nil {
+			a.reportRules = map[string]map[string]bool{}
+		}
+		a.reportRules[path] = rules
+		a.ConsumedReports = append(a.ConsumedReports, rep)
+	}
+	return a.scanBytes(content, absPath, detector, make(map[string]struct{}), 0)
+}
+
 // shouldSkipProduct determines if a product should be skipped during scanning
 // based on its type and other characteristics
 func (a *Attestor) shouldSkipProduct(path string, product attestation.Product) bool {
@@ -426,6 +458,109 @@ func (a *Attestor) shouldSkipProduct(path string, product attestation.Product) b
 	}
 
 	return false
+}
+
+// classifyReport decides whether the bytes just read for a product are a
+// scanner report (a SARIF document) whose own findings may echo secrets the
+// scanner finds elsewhere. Nothing in the document is trusted — driver.name
+// is attacker-controlled, so it is recorded, never acted on — and the
+// product is scanned regardless. What classification buys is dedup only
+// (see dedupeReportEchoes).
+//
+// The digest is of the bytes PARSED, computed here at read time, and must
+// equal the product attestor's recorded SHA-256. A mismatch means the file
+// changed between the product snapshot and this read; a missing digest means
+// nothing pins what was parsed. Either way the product is treated as an
+// ordinary file: scanned, never deduplicated.
+func classifyReport(path string, content []byte, product attestation.Product) (ConsumedReport, map[string]bool, bool) {
+	if product.Digest == nil {
+		return ConsumedReport{}, nil, false
+	}
+	recorded, ok := product.Digest[cryptoutil.DigestValue{Hash: crypto.SHA256}]
+	if !ok || recorded == "" {
+		return ConsumedReport{}, nil, false
+	}
+	sum := sha256.Sum256(content)
+	parsed := hex.EncodeToString(sum[:])
+	if parsed != recorded {
+		log.Warnf("(attestation/secretscan) %s changed between product snapshot (%s) and scan (%s); treating as an ordinary product", path, recorded, parsed)
+		return ConsumedReport{}, nil, false
+	}
+	var doc struct {
+		Version string `json:"version"`
+		Runs    []struct {
+			Tool struct {
+				Driver struct {
+					Name string `json:"name"`
+				} `json:"driver"`
+			} `json:"tool"`
+			Results []struct {
+				RuleID string `json:"ruleId"`
+			} `json:"results"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(content, &doc); err != nil || doc.Version == "" || len(doc.Runs) == 0 {
+		return ConsumedReport{}, nil, false
+	}
+	rep := ConsumedReport{Path: path, SHA256: parsed}
+	rules := map[string]bool{}
+	for _, run := range doc.Runs {
+		if rep.Driver == "" {
+			rep.Driver = strings.ToLower(strings.TrimSpace(run.Tool.Driver.Name))
+		}
+		rep.Results += len(run.Results)
+		for _, r := range run.Results {
+			if id := strings.ToLower(strings.TrimSpace(r.RuleID)); id != "" {
+				rules[id] = true
+			}
+		}
+	}
+	return rep, rules, true
+}
+
+// dedupeReportEchoes drops, from each parsed report product, the findings
+// that are that report's own record of a secret the scanner ALSO found in
+// some other location, so the report neither hides a secret nor
+// double-counts one. A finding is an echo only when all three hold: it sits
+// inside a parsed report, the report declares a result with the same rule
+// id, and the same (rule id, secret sha256) was found by this scan outside
+// that report. A secret that exists only inside a "report" — however the
+// report labels itself — is a real finding and stays; --fail-on-detection
+// fires on it like any other.
+func (a *Attestor) dedupeReportEchoes() {
+	if len(a.reportRules) == 0 {
+		return
+	}
+	key := func(f Finding) string {
+		return f.RuleID + "|" + f.Secret[cryptoutil.DigestValue{Hash: crypto.SHA256}]
+	}
+	reportLoc := func(f Finding) (string, bool) {
+		p := strings.TrimPrefix(f.Location, "product:")
+		if p == f.Location {
+			return "", false
+		}
+		_, ok := a.reportRules[p]
+		return p, ok
+	}
+	elsewhere := map[string]bool{}
+	for _, f := range a.Findings {
+		if _, inReport := reportLoc(f); !inReport {
+			elsewhere[key(f)] = true
+		}
+	}
+	dropped := map[string]int{}
+	kept := a.Findings[:0]
+	for _, f := range a.Findings {
+		if p, inReport := reportLoc(f); inReport && a.reportRules[p][f.RuleID] && elsewhere[key(f)] {
+			dropped[p]++
+			continue
+		}
+		kept = append(kept, f)
+	}
+	a.Findings = kept
+	for i := range a.ConsumedReports {
+		a.ConsumedReports[i].Deduplicated = dropped[a.ConsumedReports[i].Path]
+	}
 }
 
 // getAbsolutePath converts a path to absolute if it's relative and we have a working directory
@@ -502,6 +637,10 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	if err := a.scanProducts(ctx, tempDir, detector); err != nil {
 		log.Debugf("(attestation/secretscan) error scanning products: %s", err)
 	}
+
+	// After everything is scanned: a scanner report's own record of a
+	// secret found elsewhere is an echo, not a second leak.
+	a.dedupeReportEchoes()
 
 	if a.failOnDetection {
 		// COULD NOT OBSERVE. Fail closed on scan errors — an empty findings

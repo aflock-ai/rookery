@@ -403,7 +403,7 @@ func (rc *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) (
 		diag.NetworkReportsWithoutDestination)
 
 	if rc.ExitCode != 0 {
-		return procs, fmt.Errorf("exit status %v", rc.ExitCode)
+		return procs, &exitStatusError{Code: rc.ExitCode}
 	}
 	return procs, nil
 }

@@ -432,8 +432,11 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 // "I found secrets" removed its own evidence from the collection and a
 // findings-positive scan became indistinguishable from one that never ran.
 // The guard failed OPEN, in the direction of silence.
+//
+// The rule itself lives in attestation.EvidenceIsRecordable so an attestor's
+// own tests can assert against the real predicate rather than a copy of it.
 func evidenceIsRecordable(err error) bool {
-	return err == nil || attestation.IsDetectionError(err)
+	return attestation.EvidenceIsRecordable(err)
 }
 
 func collectParentSubjects(runCtx *attestation.AttestationContext, additional map[string]cryptoutil.DigestSet) map[string]cryptoutil.DigestSet {

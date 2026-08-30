@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	invopopschema "github.com/invopop/jsonschema"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
@@ -170,24 +171,38 @@ func (r *Result) assertRecording(t *testing.T, fx *Fixture) {
 // introduces (the struct and Schema() falling out of sync).
 func assertPredicateMatchesSchema(t *testing.T, fx *Fixture, r *Result) {
 	t.Helper()
-	schemaJSON, err := json.Marshal(r.Schema)
+	AssertPredicateMatchesSchema(t, fx.Attestor, r.Schema, r.Predicate)
+}
+
+// AssertPredicateMatchesSchema validates one emitted predicate against the
+// schema its attestor publishes. Exported so attestors WITHOUT a recorded
+// fixture — the harness only reaches fixture-backed ones — can still assert the
+// property from their own package or from the catalog tests.
+//
+// This is not a formality. product/v0.3 inlines a `leaves` array that its
+// Schema() (reflected off the wrong struct) did not mention, and because
+// invopop emits additionalProperties:false, every real product predicate
+// failed validation against its own published schema.
+func AssertPredicateMatchesSchema(t *testing.T, name string, schema *invopopschema.Schema, predicate json.RawMessage) {
+	t.Helper()
+	schemaJSON, err := json.Marshal(schema)
 	if err != nil {
-		t.Fatalf("marshal Schema() for %q: %v", fx.Attestor, err)
+		t.Fatalf("marshal Schema() for %q: %v", name, err)
 	}
 	c := jsonschema.NewCompiler()
 	if err := c.AddResource("attestor.schema.json", bytes.NewReader(schemaJSON)); err != nil {
-		t.Fatalf("add schema resource for %q: %v", fx.Attestor, err)
+		t.Fatalf("add schema resource for %q: %v", name, err)
 	}
 	sch, err := c.Compile("attestor.schema.json")
 	if err != nil {
-		t.Fatalf("compile Schema() for %q: %v", fx.Attestor, err)
+		t.Fatalf("compile Schema() for %q: %v", name, err)
 	}
 	var pred any
-	if err := json.Unmarshal(r.Predicate, &pred); err != nil {
-		t.Fatalf("unmarshal predicate for %q: %v", fx.Attestor, err)
+	if err := json.Unmarshal(predicate, &pred); err != nil {
+		t.Fatalf("unmarshal predicate for %q: %v", name, err)
 	}
 	if err := sch.Validate(pred); err != nil {
-		t.Errorf("attestor %q predicate does not validate against its own Schema(): %v", fx.Attestor, err)
+		t.Errorf("attestor %q predicate does not validate against its own Schema(): %v", name, err)
 	}
 }
 

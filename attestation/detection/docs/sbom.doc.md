@@ -95,7 +95,7 @@ cilock run --step sbom-capture \
   -- syft dir:. -o cyclonedx-json=app.cdx.json
 ```
 
-The emitted predicate type in the resulting Collection is `https://cyclonedx.org/bom`, **not** `https://aflock.ai/attestations/sbom/v0.1` — policies should match on `cyclonedx.org/bom` (or `spdx.dev/Document` for SPDX). The aflock namespace registration is what makes `--attestations sbom` resolve to this attestor at runtime.
+The emitted predicate type in the resulting Collection is `https://cyclonedx.org/bom`, **not** `https://aflock.ai/attestations/sbom/v0.1` — policies should match on `cyclonedx.org/bom` (or `https://spdx.dev/Document` for SPDX). Nothing is ever signed under `sbom/v0.1`: that URI is only the registration alias that makes `--attestations sbom` resolve to this attestor at runtime, which is why `cilock tools show sbom` prints `https://spdx.dev/Document` as the predicate type and lists `https://cyclonedx.org/bom` under *also emits*. A policy step naming `sbom/v0.1` matches no attestation.
 
 Validated with a real CycloneDX SBOM from syft. See the full real-data example at [https://github.com/aflock-ai/attestor-compliance-examples/tree/main/09-sbom](https://github.com/aflock-ai/attestor-compliance-examples/tree/main/09-sbom).
 

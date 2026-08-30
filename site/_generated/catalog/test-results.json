@@ -1,7 +1,7 @@
 {
   "name": "test-results",
   "source": "attestor-backed",
-  "description": "Captures JUnit XML test reports and CTRF JSON reports produced by test runners (go test -junit, pytest, jest, gradle, surefire, etc.).",
+  "description": "Captures JUnit XML test reports and CTRF JSON reports produced by test runners (Go: gotestsum --junitfile junit.xml -- ./... or go-junit-report — plain go test has no JUnit flag; pytest --junitxml, jest-junit, gradle, surefire, etc.).",
   "title": "test-results",
   "sidebarPosition": null,
   "examplesRepo": null,

@@ -30,10 +30,17 @@ func TestName(t *testing.T) {
 	}
 }
 
+// TestType: a fresh attestor reports a type it can actually emit. Type
+// (sbom/v0.1) is only the registration alias for `--attestations sbom`; no
+// attestation is ever signed under it, and `cilock tools show sbom` prints
+// what a fresh instance reports — so that must be a real emitted type.
 func TestType(t *testing.T) {
 	provenance := NewSBOMAttestor()
-	if provenance.Type() != Type {
-		t.Errorf("expected %s, got %s", Type, provenance.Type())
+	if provenance.Type() != SPDXPredicateType {
+		t.Errorf("expected %s, got %s", SPDXPredicateType, provenance.Type())
+	}
+	if provenance.Type() == Type {
+		t.Errorf("a fresh sbom attestor must not report the never-emitted registration alias %s", Type)
 	}
 }
 
@@ -71,9 +78,11 @@ func TestAttest(t *testing.T) {
 		{"SPDX 2.2", "./boms/spdx-2.2/", "alpine.spdx-2-2.json", SPDXPredicateType, ""},
 		{"SPDX 2.3", "./boms/spdx-2.3/", "alpine.spdx-2-3.json", SPDXPredicateType, ""},
 		{"CycloneDx", "./boms/cyclonedx-json/", "alpine.cyclonedx.json", CycloneDxPredicateType, ""},
-		{"CycloneDx XML", "./boms/cyclonedx-xml/", "alpine.cyclonedx.xml", Type, "soft: no SBOM file found"},
-		{"Bad JSON", "./boms/bad-json/", "bad.json", Type, "soft: no SBOM file found"},
-		{"No JSON", "./boms/emptyDir", "no.json", Type, "soft: no products to attest"},
+		// No SBOM found: the (unrecorded) type stays at the constructor default,
+		// which is the SPDX type — never the sbom/v0.1 registration alias.
+		{"CycloneDx XML", "./boms/cyclonedx-xml/", "alpine.cyclonedx.xml", SPDXPredicateType, "soft: no SBOM file found"},
+		{"Bad JSON", "./boms/bad-json/", "bad.json", SPDXPredicateType, "soft: no SBOM file found"},
+		{"No JSON", "./boms/emptyDir", "no.json", SPDXPredicateType, "soft: no products to attest"},
 	}
 
 	err := os.Mkdir("emptyDir", 0777)

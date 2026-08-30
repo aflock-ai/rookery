@@ -765,7 +765,7 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 	}
 
 	if pctx.exitCode != 0 {
-		return pctx.procInfoArray(), fmt.Errorf("exit status %v", pctx.exitCode)
+		return pctx.procInfoArray(), &exitStatusError{Code: pctx.exitCode}
 	}
 	return pctx.procInfoArray(), nil
 }

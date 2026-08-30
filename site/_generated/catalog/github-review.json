@@ -45,7 +45,7 @@
   "emittedBy": [],
   "warnings": [],
   "llmHints": {
-    "on_match": "GitHub PR review state captured. Subjects include commit SHA, repo, PR numbers, and every distinct reviewer login. Use policyverify to gate on `state == APPROVED` from required reviewers."
+    "on_match": "GitHub PR review state captured. Subjects include commit SHA, repo, PR numbers, and every distinct reviewer login. Use policyverify to gate on `state == APPROVED` from required reviewers. At push time GitHub has not seen the commit yet: the attestor then FAILS with a plain error and records NO attestation, because a signed payload with an empty prs list would satisfy an 'all PRs approved' rule vacuously at verify time. A policy requiring github-review evidence fails closed on the missing attestation; the reason is in the run error."
   },
   "predicateType": "https://aflock.ai/attestations/github-review/v0.1",
   "runType": "prematerial",

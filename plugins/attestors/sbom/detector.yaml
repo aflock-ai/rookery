@@ -40,9 +40,13 @@ llm_hints:
 
 contract:
   tier: recommended
-  predicate_type: https://aflock.ai/attestations/sbom/v0.1
+  # The primary/canonical type is what `cilock tools show sbom` and the
+  # website print, so it must be one the attestor actually signs under.
+  # https://aflock.ai/attestations/sbom/v0.1 is only the registration alias
+  # behind `--attestations sbom`; nothing is ever emitted under it, so it is
+  # deliberately NOT listed here.
+  predicate_type: https://spdx.dev/Document
   predicate_types:
-    - https://aflock.ai/attestations/sbom/v0.1
     - https://spdx.dev/Document
     - https://cyclonedx.org/bom
   run_type: postproduct
