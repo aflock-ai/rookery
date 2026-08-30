@@ -1,7 +1,7 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 134,
-  "withDoc": 58,
+  "count": 135,
+  "withDoc": 59,
   "emittedBy": {
     "sbom": [
       "apko",
