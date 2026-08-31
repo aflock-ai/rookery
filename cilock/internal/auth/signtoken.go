@@ -35,6 +35,62 @@ type SignTokenResult struct {
 // API audience. Keeping the argument explicit prevents a token minted for login
 // or Archivista from being replayed into the signer.
 func ResolveSigningToken(platformURL, audience string) (SignTokenResult, error) {
+	// AN ENROLLED AGENT TAKES PRECEDENCE, AND FAILS CLOSED.
+	//
+	// This is the same rule applyAgentKeylessFulcioToken already applies on the
+	// attestation path, and the same one `cilock agent status` already promises
+	// the operator ("runs against this platform sign as this agent, taking
+	// precedence over `cilock login`"). Until this branch existed the promise was
+	// kept for attestations and silently broken for GIT SIGNING: with an agent
+	// enrolled, resolution fell straight through to the human session and
+	// ExchangeSignToken minted a certificate for the credential creator's EMAIL.
+	// The agent's own commits were therefore signed by the human it exists to
+	// stop borrowing from — while the run summary said an agent signed.
+	//
+	// Both failure modes below refuse rather than continue. An unreadable store
+	// or a refused exchange leaves exactly one identity to fall through to, the
+	// human's, which is the borrowed-identity result this whole path removes. A
+	// missing certificate is a visible, fixable error; a certificate naming the
+	// wrong principal is a false attestation nobody notices.
+	agentCred, agentErr := LookupAgent(platformURL)
+	if agentErr != nil {
+		return SignTokenResult{}, fmt.Errorf("read the enrolled agent credential: %w", agentErr)
+	}
+	if agentCred != nil {
+		// REFUSE AN AUDIENCE THIS PATH CANNOT SERVE, BEFORE MINTING ANYTHING.
+		//
+		// The agent credential-exchange endpoint mints ONE kind of token: a
+		// short-lived signing identity for the platform's embedded Fulcio. But
+		// Derive carries three distinct audiences — OIDCClientID ("sigstore") for
+		// signing, OIDCAudience for Archivista, and OIDCLoginAudience for login —
+		// and this function's own contract says the argument exists to "prevent a
+		// token minted for login or Archivista from being replayed into the
+		// signer".
+		//
+		// Returning the signing token for whatever audience was asked would break
+		// that separation in the direction that matters: a caller requesting the
+		// Archivista or login audience would receive a credential that Fulcio
+		// accepts. Refusing is checkable locally, costs no round trip, and cannot
+		// hand out a token for a purpose nobody authorized.
+		if want := config.Derive(platformURL).OIDCClientID; audience != want {
+			return SignTokenResult{}, fmt.Errorf(
+				"the enrolled agent credential mints signing tokens for the %q audience only, "+
+					"but %q was requested; the agent exchange cannot serve login or Archivista audiences",
+				want, audience)
+		}
+		id, exchangeErr := ExchangeAgentCredential(platformURL, *agentCred)
+		if exchangeErr != nil {
+			return SignTokenResult{}, fmt.Errorf(
+				"an agent principal is enrolled for %s, so this signature must be the agent's, "+
+					"but exchanging its credential failed: %w", NormalizeURL(platformURL), exchangeErr)
+		}
+		// "agent" rather than an AAL: no human ceremony produced this identity,
+		// and reporting an assurance level nobody demonstrated is the confusion
+		// the agent path exists to remove. The workflow branch below reports
+		// "workload" for the same reason.
+		return SignTokenResult{Token: id.Token, AssuranceLevel: "agent"}, nil
+	}
+
 	cred, err := LookupAny(platformURL)
 	if err != nil {
 		return SignTokenResult{}, fmt.Errorf("resolve platform session: %w", err)
