@@ -105,6 +105,16 @@ func keylessPathCases() []keylessPathCase {
 			},
 		},
 		{
+			// resolvePlatformIdentity → applyAgentCredential → applyAgentKeylessFulcioToken
+			name: "enrolled agent credential exchanged at /api/agent/credential-exchange",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				srv := agentExchangeServer(t)
+				seedAgent(t, srv.URL)
+				return srv.URL
+			},
+		},
+		{
 			// resolvePlatformIdentity → applyWorkflowKeylessFulcioToken
 			name: "no login, ambient CI OIDC only",
 			setup: func(t *testing.T) string {
@@ -196,6 +206,7 @@ func TestKeylessFulcioTokenInstallersAreAllSwept(t *testing.T) {
 	deferredSigningCallers := map[string]bool{
 		"applyPlatformCredential": true, // RunOptions: session and workflow-identity
 		"resolvePlatformIdentity": true, // RunOptions: ambient CI, no login
+		"applyAgentCredential":    true, // RunOptions: enrolled agent principal
 	}
 	// immediateSigningCallers sign inside the same option-resolution window that
 	// minted the token — no wrapped command, so nothing can expire in between and
@@ -208,6 +219,7 @@ func TestKeylessFulcioTokenInstallersAreAllSwept(t *testing.T) {
 	sweptInstallers := map[string]bool{
 		"applyKeylessFulcioToken":         true,
 		"applyWorkflowKeylessFulcioToken": true,
+		"applyAgentKeylessFulcioToken":    true,
 	}
 
 	fset := token.NewFileSet()

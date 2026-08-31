@@ -77,12 +77,21 @@ type WrappedCommand struct {
 const assessmentNotAssessed = "not_assessed"
 
 type RunSummary struct {
-	Step               string            `json:"step"`
-	WorkingDir         string            `json:"working_dir,omitempty"`
-	PlatformURL        string            `json:"platform_url,omitempty"`
-	Tenant             string            `json:"tenant,omitempty"`
-	Signer             string            `json:"signer,omitempty"` // signer kind: file | fulcio | kms | spiffe...
-	SignerEmail        string            `json:"signer_email,omitempty"`
+	Step        string `json:"step"`
+	WorkingDir  string `json:"working_dir,omitempty"`
+	PlatformURL string `json:"platform_url,omitempty"`
+	Tenant      string `json:"tenant,omitempty"`
+	Signer      string `json:"signer,omitempty"` // signer kind: file | fulcio | kms | spiffe...
+	SignerEmail string `json:"signer_email,omitempty"`
+	// AgentPrincipal is the SPIFFE ID of the enrolled agent that signed, as the
+	// platform's credential exchange reported it. Set only for an agent run, and
+	// mutually exclusive with SignerEmail: a reader never has to work out which
+	// of two identities produced the signature.
+	AgentPrincipal string `json:"agent_principal,omitempty"`
+	// PrincipalKind names the kind of principal that signed ("agent"), per the
+	// pushgate agent-policy contract's principal split. Empty when cilock has no
+	// server-confirmed principal to report, which is every non-agent run today.
+	PrincipalKind      string            `json:"principal_kind,omitempty"`
 	TimestampAuthority []string          `json:"timestamp_authority,omitempty"`
 	FulcioURL          string            `json:"fulcio_url,omitempty"`
 	ArchivistaURL      string            `json:"archivista_url,omitempty"`
@@ -289,7 +298,15 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 	if s.Tenant != "" {
 		fmt.Fprintf(&b, "  tenant:     %s\n", sanitizeForTerminal(s.Tenant))
 	}
-	if s.SignerEmail != "" {
+	// The acting principal. An agent run names its SPIFFE ID and says plainly
+	// that it is the agent and not the operator's own account, because the whole
+	// point of the enrolled principal is that a reader never has to guess which
+	// identity signed. buildRunSummary guarantees the two are exclusive.
+	switch {
+	case s.AgentPrincipal != "":
+		fmt.Fprintf(&b, "  identity:   %s\n", sanitizeForTerminal(s.AgentPrincipal))
+		fmt.Fprintf(&b, "  principal:  %s (enrolled agent — NOT the human session)\n", orNone(s.PrincipalKind))
+	case s.SignerEmail != "":
 		fmt.Fprintf(&b, "  identity:   %s\n", sanitizeForTerminal(s.SignerEmail))
 	}
 	fmt.Fprintf(&b, "  signer:     %s\n", orNone(s.Signer))

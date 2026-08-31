@@ -239,6 +239,11 @@ func (vo *vexAuthorOptions) run(cmd *cobra.Command, o *options.RunOptions) error
 	o.Attestations = appendAttestor(o.Attestations, vex.Name)
 
 	o.ResolvePlatformDefaults(cmd)
+	// The enrolled-agent signing path fails closed: a refused credential
+	// exchange must end the command, never continue on the human session.
+	if err := o.AgentIdentityError(); err != nil {
+		return err
+	}
 
 	signerProviders := providersFromFlags("signer", cmd.Flags())
 	signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, signerProviders)

@@ -615,6 +615,11 @@ Exit-code policy (finding #221):
 			// Apply platform-derived defaults (archivista, TSA URLs) for any
 			// flags not explicitly set by the user.
 			o.ResolvePlatformDefaults(cmd)
+			// The enrolled-agent signing path fails closed: a refused credential
+			// exchange must end the command, never continue on the human session.
+			if err := o.AgentIdentityError(); err != nil {
+				return err
+			}
 
 			// Warn loudly if operators are still using legacy diagnostic env
 			// vars; tell them how to migrate. Then translate --diagnose into
@@ -1218,6 +1223,16 @@ func buildRunSummary(
 		OutFile:            ro.OutFilePath,
 		Subjects:           collectionSubjects(results),
 		Attestors:          attestorOutcomes(attestors, runErr),
+	}
+	// An agent run names the SPIFFE principal the platform issued and drops the
+	// human email outright. The drop is belt-and-braces — the agent path never
+	// populates the email — and it is what makes "the summary cannot name a
+	// human for an agent signature" a property of this function rather than of
+	// every future edit to the resolution path.
+	if principal := ro.ResolvedAgentPrincipal(); principal != "" {
+		s.AgentPrincipal = principal
+		s.PrincipalKind = "agent"
+		s.SignerEmail = ""
 	}
 	// Only report a platform-derived Fulcio/TSA/Archivista when the platform
 	// is actually in play. Offline runs (--platform-url "" / --offline) leave

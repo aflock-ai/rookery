@@ -484,6 +484,21 @@ type RunOptions struct {
 	// nil for workflow-identity, offline, local-key and explicit-token runs.
 	keylessAssurance *keylessAssurance
 
+	// agentPrincipal is the enrolled agent principal that signed, as of the
+	// signing token's MOST RECENT exchange -- see the type for why it is a
+	// pointer. nil for every non-agent run.
+	agentPrincipal *agentPrincipal
+
+	// agentIdentityErr is a FAIL-CLOSED failure on the enrolled-agent path: an
+	// unreadable agent store, a refused credential exchange, or a Fulcio origin
+	// the agent token is not valid at. Callers of ResolvePlatformDefaults must
+	// check AgentIdentityError and abort.
+	//
+	// Even an unchecked caller cannot sign as the human by accident: a failure
+	// here returns BEFORE the session lookup, so no session token is installed
+	// and the run has no keyless identity at all.
+	agentIdentityErr error
+
 	// signerWorkflowIdentity records that cilock minted the signing identity from
 	// the platform's workflow-identity path — the ambient-CI OIDC exchange or a
 	// stored workflow-identity marker. It records the signing path only; it does
@@ -555,6 +570,22 @@ type keylessAssurance struct {
 	level string
 }
 
+// ResolvedAgentPrincipal returns the SPIFFE ID of the enrolled agent principal
+// that signed, as reported by the credential exchange that bought the
+// certificate. Empty for every run that did not sign as an agent.
+func (ro *RunOptions) ResolvedAgentPrincipal() string {
+	if ro.agentPrincipal == nil {
+		return ""
+	}
+	return ro.agentPrincipal.spiffeID
+}
+
+// AgentIdentityError returns the fail-closed error from the enrolled-agent
+// signing path, or nil. Every caller of ResolvePlatformDefaults must check it
+// and abort the command: continuing means running without the principal the
+// operator configured.
+func (ro *RunOptions) AgentIdentityError() error { return ro.agentIdentityErr }
+
 // SignerIsWorkflowIdentity reports whether the run signed with a platform
 // workflow identity (ambient CI OIDC or a stored workflow-identity marker), as
 // captured during ResolvePlatformDefaults. It is a signing-path observation,
@@ -566,7 +597,9 @@ var RequiredRunFlags = []string{
 }
 
 // ResolvePlatformDefaults applies platform-derived defaults to any options
-// that weren't explicitly set. Call this after flag parsing but before use.
+// that weren't explicitly set. Call this after flag parsing but before use,
+// then check AgentIdentityError and abort on a non-nil result — the
+// enrolled-agent signing path fails closed and reports through that accessor.
 //
 // To run cilock fully offline (no platform integration), users pass
 // `--platform-url ""`. That sets ro.PlatformURL to the empty string AND
@@ -672,12 +705,31 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 	ensureFulcioURL(cmd, pc.Fulcio)
 }
 
-// resolvePlatformIdentity resolves the run's platform identity — a stored
-// login session or an ambient CI workflow identity — and wires it into the
-// run (Archivista bearer, keyless Fulcio token, platform-attestor binding).
-// Returns true when such an identity exists; false means the run has no
-// platform identity to bind (offline / logged out / local key).
+// resolvePlatformIdentity resolves the run's platform identity — an enrolled
+// agent principal, a stored login session, or an ambient CI workflow identity —
+// and wires it into the run (Archivista bearer, keyless Fulcio token,
+// platform-attestor binding). Returns true when such an identity exists; false
+// means the run has no platform identity to bind (offline / logged out / local
+// key).
+//
+// PRECEDENCE: an enrolled agent credential for this platform WINS over the
+// human session, and the human session is not reachable behind it. Both an
+// agent failure and an unreadable agent store return before the session lookup,
+// so no failure on the agent path can end in a signature attributed to the
+// human. The chosen principal is named in the run summary.
 func (ro *RunOptions) resolvePlatformIdentity(cmd *cobra.Command, pc platformconfig.PlatformConfig) bool {
+	agentCred, agentErr := auth.LookupAgent(ro.PlatformURL)
+	if agentErr != nil {
+		ro.agentIdentityErr = fmt.Errorf("read the enrolled agent credential for %s: %w", ro.PlatformURL, agentErr)
+		return false
+	}
+	if agentCred != nil {
+		if err := ro.applyAgentCredential(cmd, *agentCred, pc); err != nil {
+			ro.agentIdentityErr = err
+			return false
+		}
+		return true
+	}
 	if cred, lookupErr := auth.LookupAny(ro.PlatformURL); lookupErr == nil && cred != nil {
 		ro.applyPlatformCredential(cmd, cred, pc)
 		return true

@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -53,9 +54,21 @@ type fakeFulcio struct {
 type fakeFulcioRequest struct {
 	At       time.Time
 	Observed bool
+	// Body is the raw certificate request, so a test can prove what did — and
+	// did not — travel to the certificate authority.
+	Body string
 }
 
 func newFakeFulcio(t *testing.T, observe func() bool) *fakeFulcio {
+	return newFakeFulcioShaped(t, observe, nil)
+}
+
+// newFakeFulcioShaped is newFakeFulcio with control over the leaf it mints.
+// shape runs after the defaults are filled in and receives the OIDC token the
+// request presented, so a test can make the certificate depend on the token
+// that bought it — which is how an agent run's SPIFFE subject is proven to come
+// from the exchanged token rather than from the fake's own imagination.
+func newFakeFulcioShaped(t *testing.T, observe func() bool, shape func(leaf *x509.Certificate, token string)) *fakeFulcio {
 	t.Helper()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
@@ -81,18 +94,26 @@ func newFakeFulcio(t *testing.T, observe func() bool) *fakeFulcio {
 			return
 		}
 		observed := observe != nil && observe()
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		f.mu.Lock()
-		f.requests = append(f.requests, fakeFulcioRequest{At: time.Now(), Observed: observed})
+		f.requests = append(f.requests, fakeFulcioRequest{At: time.Now(), Observed: observed, Body: string(raw)})
 		f.mu.Unlock()
 
 		var body struct {
+			Credentials struct {
+				OIDCIdentityToken string `json:"oidcIdentityToken"`
+			} `json:"credentials"`
 			PublicKeyRequest struct {
 				PublicKey struct {
 					Content string `json:"content"`
 				} `json:"publicKey"`
 			} `json:"publicKeyRequest"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := json.Unmarshal(raw, &body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -114,6 +135,9 @@ func newFakeFulcio(t *testing.T, observe func() bool) *fakeFulcio {
 			NotAfter:       time.Now().Add(10 * time.Minute),
 			KeyUsage:       x509.KeyUsageDigitalSignature,
 			ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
+		}
+		if shape != nil {
+			shape(leaf, body.Credentials.OIDCIdentityToken)
 		}
 		leafDER, err := x509.CreateCertificate(rand.Reader, leaf, caCert, pub, caKey)
 		if err != nil {

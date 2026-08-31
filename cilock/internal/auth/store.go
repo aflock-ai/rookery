@@ -223,21 +223,45 @@ func StorePath() (string, error) {
 	return filepath.Join(dir, "cilock", "credentials.json"), nil
 }
 
+// readStoreFile reads one of cilock's secret-bearing JSON store files into dst.
+//
+// A MISSING FILE IS NOT AN ERROR — it leaves dst at its zero value and returns
+// nil, because "no store yet" is the ordinary state before first login and must
+// not be reported as a failure. A file that cannot be READ, or that is present
+// but unparseable, IS an error: that is a store which exists and could not be
+// understood, and treating it as empty would silently discard a credential the
+// operator believes they still have.
+//
+// It exists because the human session store and the agent credential store had
+// byte-identical read paths, which `dupl` correctly flagged. The WRITE side was
+// already unified in writeStoreFile0600 for the same reason — this is the
+// matching half, so both stores now read and write through one implementation
+// and cannot drift in their handling of a missing or corrupt file.
+//
+// `what` names the store in errors ("credential store"), so a caller's message
+// still says which of the two failed.
+func readStoreFile(path, what string, dst any) error {
+	data, err := os.ReadFile(path) //nolint:gosec // path is under the user's own config dir
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read %s: %w", what, err)
+	}
+	if err := json.Unmarshal(data, dst); err != nil {
+		return fmt.Errorf("parse %s %s: %w", what, path, err)
+	}
+	return nil
+}
+
 func load() (*legacyFileStore, error) {
 	path, err := StorePath()
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path) //nolint:gosec // path is under the user's own config dir
-	if os.IsNotExist(err) {
-		return &legacyFileStore{Credentials: map[string]Credential{}}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read credential store: %w", err)
-	}
 	var s legacyFileStore
-	if err := json.Unmarshal(data, &s); err != nil {
-		return nil, fmt.Errorf("parse credential store %s: %w", path, err)
+	if err := readStoreFile(path, "credential store", &s); err != nil {
+		return nil, err
 	}
 	if s.Credentials == nil {
 		s.Credentials = map[string]Credential{}
@@ -245,14 +269,15 @@ func load() (*legacyFileStore, error) {
 	return &s, nil
 }
 
-// writeLegacyStore writes the legacy cleartext store to path with mode 0600,
+// writeStoreFile0600 writes a secret-bearing store file (the human session store
+// and the agent credential store both use it) to path with mode 0600,
 // ENFORCED even when path already exists at a looser mode. os.WriteFile alone
 // does NOT tighten a pre-existing 0644 file, which would leave the cleartext
 // bearer token world-readable. It writes a sibling temp file (created 0600,
 // chmod-pinned against a permissive umask), then atomically renames it over the
 // target so a concurrent reader never sees a partial or looser-mode file; a
 // pre-existing target is also chmod-tightened first as a belt-and-suspenders step.
-func writeLegacyStore(path string, data []byte) error {
+func writeStoreFile0600(path string, data []byte) error {
 	if _, statErr := os.Stat(path); statErr == nil {
 		if err := os.Chmod(path, 0o600); err != nil {
 			return fmt.Errorf("tighten credential store perms: %w", err)
@@ -311,7 +336,7 @@ func Save(c Credential) error {
 	if err != nil {
 		return err
 	}
-	return writeLegacyStore(path, data)
+	return writeStoreFile0600(path, data)
 }
 
 // SetScope updates only the working tenant/product binding on the stored
@@ -446,7 +471,7 @@ func Delete(platformURL string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := writeLegacyStore(path, data); err != nil {
+	if err := writeStoreFile0600(path, data); err != nil {
 		return false, err
 	}
 	return true, nil
