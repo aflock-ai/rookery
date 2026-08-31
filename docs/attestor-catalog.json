@@ -1,6 +1,6 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 136,
+  "attestor_count": 137,
   "attestors": [
     {
       "name": "alps-evidence",
