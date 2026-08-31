@@ -444,12 +444,16 @@ func warnLegacyDiagnosticEnv() {
 	}
 }
 
-// user disables every default attestor — the attestation collection
-// would have no body to attest.
-func applyNoDefaultAttestors(base []attestation.Attestor, disabled []string) ([]attestation.Attestor, error) {
-	if len(disabled) == 0 {
-		return base, nil
-	}
+// parseDisabledDefaultAttestors validates the --no-default-attestor values and
+// returns them as a set. Empty entries are ignored (a bare flag is not a
+// request to drop anything); an unrecognised name is an error rather than a
+// silent no-op, so a typo can never quietly leave an attestor enabled.
+//
+// It also holds the refusal that gives applyNoDefaultAttestors its reason to
+// exist: if the operator disables EVERY default attestor, the resulting
+// collection would have no body to attest, so we refuse rather than mint an
+// evidence-free bundle.
+func parseDisabledDefaultAttestors(disabled []string) (map[string]struct{}, error) {
 	disabledSet := make(map[string]struct{}, len(disabled))
 	for _, name := range disabled {
 		if name == "" {
@@ -475,20 +479,79 @@ func applyNoDefaultAttestors(base []attestation.Attestor, disabled []string) ([]
 				"refusing to proceed. Drop one of the --no-default-attestor flags",
 			strings.Join(defaultAttestorNames, ", "))
 	}
+	return disabledSet, nil
+}
+
+// warnDroppedDefaultAttestor emits the operator-facing warnings for one
+// always-on attestor being dropped. It warns; it never refuses — the refusal
+// for dropping ALL of them lives in parseDisabledDefaultAttestors.
+func warnDroppedDefaultAttestor(name string) {
+	log.Warnf("--no-default-attestor: dropping always-on attestor %q (operator override)", name)
+	// Dropping material (or product) leaves the collection unable to
+	// serve as a build step downstream: `cilock policy from-bundles`
+	// build steps require BOTH material/v0.3 (inputs) and product/v0.3
+	// (outputs) to wire + verify the chain. Spell out the consequence so
+	// the operator isn't surprised when a from-bundles policy built on
+	// this bundle won't verify.
+	if name == material.Name || name == product.Name {
+		log.Warnf("--no-default-attestor: build-step policies require material/v0.3 + product/v0.3; "+
+			"a `cilock policy from-bundles` build step built from this bundle (missing %s/v0.3) won't verify end-to-end.", name)
+	}
+	// Dropping product specifically is usually a size decision, and it
+	// is the wrong lever for that job. Material records what went IN;
+	// product is the only record of what the run PRODUCED, so a bundle
+	// without it cannot answer "what did this build emit?" at all — the
+	// question attestation exists to answer. Trading that away to avoid
+	// walking a node_modules tree spends evidence to buy seconds.
+	//
+	// So the warning names the cheaper lever rather than only
+	// disapproving: narrowing the capture keeps the record and skips the
+	// bytes. A message that says "this is discouraged" and stops sends
+	// the reader straight back to the flag.
+	//
+	// SINGULAR "a single ... glob" is load-bearing, not style. The flag
+	// is a registry.StringConfigOption, bound by cmd.Flags().String
+	// (cilock/internal/options/options.go) — pflag semantics are
+	// last-one-wins, so repeating it applies only the final occurrence
+	// while parsing cleanly and reporting nothing. Advising a repeat
+	// would hand the operator a silent no-op. Several trees go in one
+	// pattern via brace alternation, and the `{**/,}` prefix is required
+	// to match a top-level directory: `**/node_modules/**` alone matches
+	// nothing at the root of the working directory (measured).
+	//
+	// The example names DEPENDENCY trees only. It deliberately does not
+	// say `dist` or `target`, the way the material-oriented advice in
+	// attestation/archivista/size_advice.go does: build output is
+	// exactly what the product attestor exists to record, so an example
+	// that excluded it would teach the reader to drop their own
+	// deliverable — the failure this warning is here to prevent.
+	if name == product.Name {
+		log.Warnf("--no-default-attestor product: the bundle will carry no record of what the build produced — " +
+			"material attests the inputs, product is the only attestation of the outputs, and nothing downstream " +
+			"can recover it. If the goal is a smaller envelope, measure first: product records only what the run " +
+			"actually emitted and is usually a tiny share of the bytes. To shrink it, keep the attestor and narrow " +
+			"what it captures with a single --attestor-product-exclude-glob (the flag takes ONE pattern; repeating " +
+			"it silently keeps only the last). Brace alternation covers several dependency trees at once, e.g. " +
+			"--attestor-product-exclude-glob '{**/,}{node_modules,.venv}/**' — exclude dependencies, not build output.")
+	}
+}
+
+// applyNoDefaultAttestors removes the operator-disabled always-on attestors
+// from base, warning on each drop. It refuses (via
+// parseDisabledDefaultAttestors) when the user disables every default attestor
+// — the attestation collection would have no body to attest.
+func applyNoDefaultAttestors(base []attestation.Attestor, disabled []string) ([]attestation.Attestor, error) {
+	if len(disabled) == 0 {
+		return base, nil
+	}
+	disabledSet, err := parseDisabledDefaultAttestors(disabled)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]attestation.Attestor, 0, len(base))
 	for _, a := range base {
 		if _, drop := disabledSet[a.Name()]; drop {
-			log.Warnf("--no-default-attestor: dropping always-on attestor %q (operator override)", a.Name())
-			// Dropping material (or product) leaves the collection unable to
-			// serve as a build step downstream: `cilock policy from-bundles`
-			// build steps require BOTH material/v0.3 (inputs) and product/v0.3
-			// (outputs) to wire + verify the chain. Spell out the consequence so
-			// the operator isn't surprised when a from-bundles policy built on
-			// this bundle won't verify.
-			if a.Name() == material.Name || a.Name() == product.Name {
-				log.Warnf("--no-default-attestor: build-step policies require material/v0.3 + product/v0.3; "+
-					"a `cilock policy from-bundles` build step built from this bundle (missing %s/v0.3) won't verify end-to-end.", a.Name())
-			}
+			warnDroppedDefaultAttestor(a.Name())
 			continue
 		}
 		out = append(out, a)

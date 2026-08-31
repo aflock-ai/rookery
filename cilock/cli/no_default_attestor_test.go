@@ -103,3 +103,72 @@ func TestApplyNoDefaultAttestors_DropProduct_WarnsBuildStepConsequence(t *testin
 		t.Errorf("drop-product warning should explain the build-step requirement, got:\n%s", joined)
 	}
 }
+
+// TestApplyNoDefaultAttestors_DropProduct_WarnsEvidenceLostAndNamesRemedy is the
+// product-specific counterpart to the build-step note above, and it exists
+// because a doc fix cannot reach a binary someone already installed.
+//
+// Dropping product to save envelope bytes trades evidence for convenience: the
+// bundle keeps material (what went IN) and loses the only record of what the
+// build produced. The warning has to name the cheaper remedy — narrowing the
+// capture — or it is just a scolding, and the reader goes back to the flag.
+//
+// The remedy string is asserted in its SINGULAR form on purpose. The flag is
+// registered as registry.StringConfigOption -> cmd.Flags().String
+// (cilock/internal/options/options.go), i.e. pflag last-one-wins, NOT
+// repeatable: passing it three times parses cleanly and silently applies only
+// the third. A warning that told the operator to repeat the flag would hand
+// them a fix that no-ops, which is worse than the flag it replaces.
+func TestApplyNoDefaultAttestors_DropProduct_WarnsEvidenceLostAndNamesRemedy(t *testing.T) {
+	c := useCaptureLogger(t)
+	defaults := []attestation.Attestor{product.New(), material.New()}
+	if _, err := applyNoDefaultAttestors(defaults, []string{product.Name}); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	joined := strings.Join(c.snapshot(), "\n")
+
+	// What is lost.
+	if !strings.Contains(joined, "no record of what the build produced") {
+		t.Errorf("drop-product warning must name the evidence lost, got:\n%s", joined)
+	}
+	// What to do instead.
+	if !strings.Contains(joined, "--attestor-product-exclude-glob") {
+		t.Errorf("drop-product warning must name the narrower remedy, got:\n%s", joined)
+	}
+	// The remedy must be described as a single glob, not a repeatable flag.
+	if !strings.Contains(joined, "a single") {
+		t.Errorf("drop-product warning must say the exclude-glob flag takes ONE pattern "+
+			"(it is last-one-wins, not repeatable), got:\n%s", joined)
+	}
+}
+
+// TestApplyNoDefaultAttestors_DropMaterial_OmitsProductRemedy is the control for
+// the test above: it varies the attestor dropped and asserts the product-specific
+// advice does NOT fire. Without it, a warning emitted unconditionally for every
+// dropped attestor would pass the assertions above while being wrong — the
+// product remedy is meaningless advice when the operator dropped material.
+func TestApplyNoDefaultAttestors_DropMaterial_OmitsProductRemedy(t *testing.T) {
+	c := useCaptureLogger(t)
+	defaults := []attestation.Attestor{product.New(), material.New()}
+	if _, err := applyNoDefaultAttestors(defaults, []string{material.Name}); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	joined := strings.Join(c.snapshot(), "\n")
+	if strings.Contains(joined, "--attestor-product-exclude-glob") {
+		t.Errorf("dropping material must not advise the product exclude-glob remedy, got:\n%s", joined)
+	}
+}
+
+// TestApplyNoDefaultAttestors_DropProduct_StillWarnsAndDoesNotRefuse pins the
+// boundary the brief drew: this is a WARNING, not a new gate. The flag stays
+// legitimate for genuine cases, and only dropping BOTH defaults is an error.
+func TestApplyNoDefaultAttestors_DropProduct_StillWarnsAndDoesNotRefuse(t *testing.T) {
+	defaults := []attestation.Attestor{product.New(), material.New()}
+	got, err := applyNoDefaultAttestors(defaults, []string{product.Name})
+	if err != nil {
+		t.Fatalf("dropping product alone must remain permitted, got err: %v", err)
+	}
+	if len(got) != 1 || got[0].Name() != material.Name {
+		t.Fatalf("expected material to survive, got %+v", got)
+	}
+}
