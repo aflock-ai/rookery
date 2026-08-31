@@ -467,8 +467,12 @@ func (r *uploadRetrier) next(callerCtx, attemptCtx context.Context, n int, err e
 			// returned error says so in its own words. Returning the bare
 			// transport error would report a context deadline the CALLER never
 			// set, and the attempt error stays reachable as secondary context.
-			return 0, fmt.Errorf("%w after %d attempts in %s: %w",
-				ErrRetryBudgetExhausted, n, elapsed.Round(time.Millisecond), err)
+			// Both %w verbs stay: callers match ErrRetryBudgetExhausted with
+			// errors.Is, and the attempt error remains reachable as secondary
+			// context. The advice is appended as trailing text precisely so it
+			// cannot disturb the error chain.
+			return 0, fmt.Errorf("%w after %d attempts in %s: %w%s",
+				ErrRetryBudgetExhausted, n, elapsed.Round(time.Millisecond), err, sizeAdviceSuffix(r.size))
 		}
 		return 0, err
 	}
@@ -484,8 +488,8 @@ func (r *uploadRetrier) next(callerCtx, attemptCtx context.Context, n int, err e
 	if r.policy.Budget > 0 && retryNow().Add(delay).After(r.deadline) {
 		log.Errorf("archivista upload failed: host=%s classification=%s reason=%s outcome=budget_exhausted %s attempts=%d elapsed=%s next_backoff=%s budget=%s bytes=%d",
 			r.host, classRetryable, reason, errFields(err), n, elapsed, delay, r.policy.Budget, r.size)
-		return 0, fmt.Errorf("%w: gave up after %d attempts; next backoff %s would exceed the %s retry budget: %w",
-			ErrRetryBudgetExhausted, n, delay.Round(time.Millisecond), r.policy.Budget, err)
+		return 0, fmt.Errorf("%w: gave up after %d attempts; next backoff %s would exceed the %s retry budget: %w%s",
+			ErrRetryBudgetExhausted, n, delay.Round(time.Millisecond), r.policy.Budget, err, sizeAdviceSuffix(r.size))
 	}
 
 	log.Warnf("archivista upload retrying: host=%s classification=%s reason=%s %s attempt=%d/%d backoff=%s elapsed=%s",
@@ -547,6 +551,14 @@ func (r *uploadRetrier) abort(callerCtx, attemptCtx context.Context, n int, uplo
 // value the loop happens to look at into an actual bound on wall-clock time.
 func (c *Client) storeWithRetry(ctx context.Context, size int, attemptFn func(context.Context) (string, error)) (string, error) {
 	r := c.newUploadRetrier(size)
+
+	// Say it BEFORE the upload, not only after it fails. An oversized envelope
+	// takes minutes to fail, and the operator who hears "this is 18 MiB and
+	// here is why that happens" up front can kill the run and fix the cause
+	// instead of waiting out the retry budget to be told about a timeout.
+	if advice := sizeAdvice(size); advice != "" {
+		log.Warnf("archivista upload: %s", advice)
+	}
 
 	attemptCtx := ctx
 	if r.policy.Budget > 0 {
