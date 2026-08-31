@@ -71,10 +71,18 @@ type VerifyOptions struct {
 	PolicyTSAChainPEM      []byte
 	PolicyTimestampServers []string
 	PolicyCommonName       string
-	PolicyDNSNames         []string
-	PolicyEmails           []string
-	PolicyOrganizations    []string
-	PolicyURIs             []string
+	// ClientSide forces LOCAL verification under the platform-bound policy
+	// even when a platform session could answer. The default for a
+	// flagless-policy verify with a session is PLATFORM mode (verify-on-
+	// demand): the platform verifies inline and answers with a VSA.
+	ClientSide bool
+	// CommitHash is the commit anchor for a platform verify — the immutable
+	// name pipelines hold at their end. Unused in local mode.
+	CommitHash          string
+	PolicyDNSNames      []string
+	PolicyEmails        []string
+	PolicyOrganizations []string
+	PolicyURIs          []string
 
 	// OutputFormat selects how the verify verdict is reported. "text"
 	// (default) prints the human-readable evidence + binding line to
@@ -360,6 +368,8 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&vo.ArtifactFilePath, "artifactfile", "f", "", "Path to the artifact subject to verify")
 	cmd.Flags().StringVarP(&vo.ArtifactDirectoryPath, "directory-path", "", "", "Path to the directory subject to verify")
 	cmd.Flags().StringSliceVarP(&vo.AdditionalSubjects, "subjects", "s", []string{}, "Additional subjects to lookup attestations")
+	cmd.Flags().BoolVar(&vo.ClientSide, "client", false, "Verify locally under the platform-bound policy instead of asking the platform's verify door (which answers with a VSA)")
+	cmd.Flags().StringVar(&vo.CommitHash, "commit", "", "Commit anchor for a platform verify: the commit whose evidence the bound policy is evaluated against")
 	cmd.Flags().StringSliceVarP(&vo.PolicyCARootPaths, "policy-ca-roots", "", []string{}, "Paths to CA root certificates to use for verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVarP(&vo.PolicyCAIntermediatePaths, "policy-ca-intermediates", "", []string{}, "Paths to CA intermediate certificates to use for verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVarP(&vo.PolicyTimestampServers, "policy-timestamp-servers", "", []string{}, "Paths to the CA certificates for Timestamp Authority Servers to use when verifying policy signed with x.509")

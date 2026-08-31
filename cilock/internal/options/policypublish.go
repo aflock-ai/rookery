@@ -381,6 +381,7 @@ const latestReleaseForDefinitionQuery = `query CilockLatestRelease($defID: ID!) 
 // provenance a user needs to see WHICH policy their flagless verify trusted
 // and who put it there.
 type BoundPolicy struct {
+	BindingID      string // policy binding id — the handle the platform verify door is addressed by
 	DefinitionName string
 	ReleaseTag     string
 	Gitoid         string // Archivista gitoid (sha256) of the signed policy DSSE
@@ -465,7 +466,7 @@ func (c *PolicyClient) ResolveBoundPolicy(ctx context.Context, productID string)
 		return nil, fmt.Errorf("product has %d policy bindings (%s) — cilock verify cannot pick one for you; pass -p with the policy to verify against", len(edges), strings.Join(names, ", "))
 	}
 	node := edges[0].Node
-	bp := &BoundPolicy{BoundBy: node.binder(), BoundAt: node.CreatedAt}
+	bp := &BoundPolicy{BindingID: node.ID, BoundBy: node.binder(), BoundAt: node.CreatedAt}
 	if node.PolicyDefinition != nil {
 		bp.DefinitionName = node.PolicyDefinition.Name
 	}

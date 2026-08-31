@@ -115,6 +115,15 @@ func VerifyCmd() *cobra.Command {
 				return err
 			}
 
+			// PLATFORM MODE (verify-on-demand): a flagless-policy verify with
+			// a platform session asks the platform's verify door — this
+			// command IS the trigger, and the answer is a VSA. `-p` (a local
+			// policy the platform cannot evaluate), `--client`, and
+			// `--platform-url ""` all keep the local verifier below.
+			if platformVerifyMode(&vo) {
+				return runPlatformVerify(cmd.Context(), vo)
+			}
+
 			verifiers, err := loadVerifiers(cmd.Context(), vo.VerifierOptions, vo.KMSVerifierProviderOptions, providersFromFlags("verifier", cmd.Flags()))
 			if err != nil {
 				return fmt.Errorf("failed to load verifier: %w", err)
