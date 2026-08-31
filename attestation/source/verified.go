@@ -427,6 +427,7 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 	// candidate's raw bytes in flight at a time makes the peak O(largest
 	// envelope), not O(corpus).
 	if streamer, ok := s.source.(StreamingSourcer); ok {
+		started := time.Now()
 		results := make([]CollectionVerificationResult, 0)
 		streamErr := streamer.SearchStream(ctx, collectionName, subjectDigests, attestations, func(toVerify CollectionEnvelope) error {
 			results = append(results, s.verifyCandidate(toVerify, subjectDigests))
@@ -435,10 +436,11 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 		if streamErr != nil {
 			return nil, streamErr
 		}
-		fmt.Fprintf(os.Stderr, "[verified-source] verified %d candidate envelope(s) for collection %q (streamed)\n", len(results), collectionName)
+		fmt.Fprintln(os.Stderr, searchSummary(collectionName, "streamed", len(subjectDigests), len(results), verifiedOKCount(results), started))
 		return results, nil
 	}
 
+	started := time.Now()
 	candidates, err := s.source.Search(ctx, collectionName, subjectDigests, attestations)
 	if err != nil {
 		return nil, err
@@ -448,10 +450,10 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 	// These envelopes are candidates matched by subject/attestation — their
 	// signatures are checked below; "candidate" (not "unverified") avoids reading
 	// as a verdict when it just means "fetched, pending verification".
-	fmt.Fprintf(os.Stderr, "[verified-source] verifying %d candidate envelope(s) for collection %q\n", len(candidates), collectionName)
 	for _, toVerify := range candidates {
 		results = append(results, s.verifyCandidate(toVerify, subjectDigests))
 	}
+	fmt.Fprintln(os.Stderr, searchSummary(collectionName, "slice", len(subjectDigests), len(candidates), verifiedOKCount(results), started))
 
 	return results, nil
 }
@@ -464,15 +466,20 @@ func (s *VerifiedSource) Search(ctx context.Context, collectionName string, subj
 // way (both funnel through verifyCandidate).
 func (s *VerifiedSource) SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionVerificationResult) error) error {
 	if streamer, ok := s.source.(StreamingSourcer); ok {
-		count := 0
+		started := time.Now()
+		count, okCount := 0, 0
 		err := streamer.SearchStream(ctx, collectionName, subjectDigests, attestations, func(toVerify CollectionEnvelope) error {
 			count++
-			return yield(s.verifyCandidate(toVerify, subjectDigests))
+			r := s.verifyCandidate(toVerify, subjectDigests)
+			if len(r.Errors) == 0 {
+				okCount++
+			}
+			return yield(r)
 		})
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "[verified-source] verified %d candidate envelope(s) for collection %q (streamed, interleaved)\n", count, collectionName)
+		fmt.Fprintln(os.Stderr, searchSummary(collectionName, "interleaved", len(subjectDigests), count, okCount, started))
 		return nil
 	}
 
