@@ -27,7 +27,20 @@ import "sync"
 
 // State records the anti-tamper protections actually in effect, read back from
 // the kernel after Protect() runs. Serialized into the run summary so a verifier
-// can gate on it (e.g. require Dumpable==false for an L3 verdict).
+// can gate on it — via Protected(), NOT by reading a field directly.
+//
+// Why Protected() and not `Dumpable == false`: this struct's ZERO VALUE has
+// Dumpable false, and false is the PROTECTED reading. A State that was never
+// populated — Current() before Protect() ran, a decoded summary that omitted the
+// object, a zero value from any future code path — therefore satisfies
+// "Dumpable == false" while describing a process that was never hardened at all.
+// Absence would read as protection, which is the wrong direction for a control
+// whose entire job is to make a signing key unextractable.
+//
+// Applied is the discriminator, so the safe predicate needs both fields. It is a
+// method rather than a documented convention because a convention has to be
+// re-derived correctly by every future caller, and this one is easy to get
+// backwards.
 type State struct {
 	// Applied is true when at least the dumpable protection took effect
 	// (Linux). False on platforms without support (e.g. macOS dev).
@@ -61,8 +74,26 @@ func Protect() State {
 
 // Current returns the protection state from the last Protect() call (zero value
 // if Protect was never called).
+//
+// A zero value here is NOT "protected" — see State and Protected(). Callers
+// gating on hardening must use Protected(), never a bare field read.
 func Current() State {
 	mu.Lock()
 	defer mu.Unlock()
 	return current
+}
+
+// Protected reports whether the process was actually hardened: the protection
+// was applied AND the kernel read-back confirms the process is non-dumpable.
+//
+// This is the ONE predicate a verifier or policy should use. Both terms are
+// required, and the reason is the zero value: State{} has Dumpable false, which
+// on its own reads as protected, so a state that was never populated would pass
+// a Dumpable-only check. Applied is what distinguishes "the kernel told us the
+// process is non-dumpable" from "nobody ever asked".
+//
+// Fails closed by construction: every way of not knowing — never called, absent
+// from a decoded summary, an unsupported platform — yields false.
+func (s State) Protected() bool {
+	return s.Applied && !s.Dumpable
 }
