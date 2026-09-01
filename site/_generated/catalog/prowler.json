@@ -5,23 +5,51 @@
   "title": "Prowler",
   "sidebarPosition": 14,
   "examplesRepo": "tool-prowler-ocsf",
-  "categories": [],
-  "primaryCategory": null,
-  "upstream": null,
-  "gates": [],
+  "categories": [
+    "compliance-scan"
+  ],
+  "primaryCategory": "compliance-scan",
+  "upstream": {
+    "name": "Prowler",
+    "source": "https://github.com/prowler-cloud/prowler",
+    "license": "Apache-2.0",
+    "vendor": "Prowler Pro / community"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
   "recommendedTrace": "off",
-  "triggers": [],
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "prowler"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "prowler"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "prowler-output-*.json | **/prowler-output-*.json | prowler*.ocsf.json | **/prowler*.ocsf.json"
+    }
+  ],
   "emitsFormats": [],
   "emittedBy": [],
   "warnings": [],
-  "llmHints": {},
+  "llmHints": {
+    "on_match": "Prowler findings captured (OCSF or ASFF format)."
+  },
   "predicateType": "https://aflock.ai/attestations/prowler/v0.1",
   "runType": "postproduct",
   "defaultOn": false,
-  "runExample": null,
-  "detectionCommand": null,
-  "positiveSetup": "no detector.yaml; this attestor is always-on or user-driven",
-  "negativeSetup": null,
+  "runExample": "cilock run -- prowler .",
+  "detectionCommand": "cilock plan --format=json -- prowler [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"prowler\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
   "docSections": [
     {
       "slug": "overview",

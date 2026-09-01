@@ -1384,8 +1384,10 @@
     {
       "name": "prowler",
       "source": "attestor-backed",
-      "categories": [],
-      "primaryCategory": null,
+      "categories": [
+        "compliance-scan"
+      ],
+      "primaryCategory": "compliance-scan",
       "description": "Scan AWS, GCP, Azure, Kubernetes, and Microsoft 365 against CIS, NIST, ISO 27001, HIPAA, and PCI-DSS with Prowler under cilock — findings become a signed v0.3 attestation parsed by the native prowler attestor.",
       "emitsFormats": [],
       "predicateType": "https://aflock.ai/attestations/prowler/v0.1",

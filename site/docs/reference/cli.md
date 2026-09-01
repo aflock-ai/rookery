@@ -179,6 +179,46 @@ Show the agent principal this machine would sign as against one platform. Like `
 cilock agent status --platform-url https://platform.example.com
 ```
 
+### `cilock agent login`
+
+Store the refresh credential a human minted for this agent at enrollment. The credential is read from **STDIN by default** so it never lands in shell history or a process listing; it is written `0600` to cilock's own agent store, kept apart from the `cilock login` session, and never printed again. Once stored, runs against that platform sign as the **agent principal**, taking precedence over any human `cilock login` session. The tenant and agent ids are not secret — they are the SPIFFE path segments (`spiffe://<trust-domain>/tenant/<tenant-id>/agent/<agent-id>`) every certificate this credential buys will carry.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform the agent is enrolled with. |
+| `--tenant-id <uuid>` | (none) | Tenant UUID this agent is enrolled in (SPIFFE path segment). |
+| `--agent-id <uuid>` | (none) | Agent principal UUID minted at enrollment (SPIFFE path segment). |
+
+```bash
+# Read the credential from stdin (preferred)
+cilock agent login --platform-url https://platform.example.com \
+  --tenant-id <uuid> --agent-id <uuid> < credential.txt
+```
+
+### `cilock agent logout`
+
+Remove this machine's copy of the agent credential. This is a **local delete, not a revocation**: the principal stays valid on the platform until a human revokes it there.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose agent credential to remove. |
+
+```bash
+cilock agent logout
+```
+
+### `cilock agent status`
+
+Show the agent principal this machine would sign as.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform to report the enrolled agent for. |
+
+```bash
+cilock agent status
+```
+
 ### `cilock trust`
 
 Register an OIDC **federated** identity the platform will trust for keyless attestation upload — the CI complement to [`cilock run`](#cilock-run-cmd). It creates an OIDC credential only; cilock never mints a long-lived API-token secret. Run it as a tenant admin after `cilock login --allow-trust` (the `oidc:write` scope is opt-in). The audience defaults to the same `${platform}/archivista` that `cilock run` uploads to, and the subject is templated from the provider's claim convention, so trust and run can't drift. Providers: `github`, `gitlab` (or `--issuer` + `--subject` for any other); on-prem GHES / self-hosted GitLab add `--host`.
