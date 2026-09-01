@@ -967,6 +967,13 @@ func TestLoadOutfileInvalidPath(t *testing.T) {
 }
 
 func TestLoadOutfileReadOnlyDir(t *testing.T) {
+	// Root ignores directory permission bits, so the 0555 directory below is
+	// writable and the expected open failure never happens. The CI large-pool
+	// docker runners execute jobs as root (#6896), which turned this test into
+	// a deterministic failure the day cilock tests were first gated (#8691).
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory write permissions are not enforced")
+	}
 	dir := t.TempDir()
 	roDir := filepath.Join(dir, "readonly")
 	require.NoError(t, os.MkdirAll(roDir, 0555))
