@@ -427,7 +427,10 @@ func resolveCommitSHA(arg string) (string, error) {
 	if fullCommitSHA.MatchString(arg) {
 		return arg, nil
 	}
-	repo, err := git.PlainOpenWithOptions(".", &git.PlainOpenOptions{DetectDotGit: true})
+	// EnableDotGitCommonDir: in a linked worktree (`git worktree add`), HEAD's
+	// branch refs live in the main repository's common dir; without it the open
+	// succeeds but every revision resolves to "reference not found" (judge#8290).
+	repo, err := git.PlainOpenWithOptions(".", &git.PlainOpenOptions{DetectDotGit: true, EnableDotGitCommonDir: true})
 	if err != nil {
 		return "", fmt.Errorf("%q is not a full commit sha and there is no local git repo to resolve it "+
 			"against (pass the full commit hash, or run from inside the repository): %w", arg, err)
