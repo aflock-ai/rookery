@@ -64,7 +64,10 @@ Use rookery-builder for offline or bring-your-own-verifier workflows until it ha
 
 ```bash
 go install github.com/aflock-ai/rookery/builder/cmd/builder@latest
-# Installed as `rookery-builder`
+# The binary installs as `builder` (into GOBIN, or GOPATH/bin when GOBIN is unset);
+# give it the name these docs use:
+BIN="$(go env GOBIN)"; BIN="${BIN:-$(go env GOPATH)/bin}"
+mv "$BIN/builder" "$BIN/rookery-builder"
 rookery-builder --help
 ```
 

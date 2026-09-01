@@ -14,12 +14,13 @@ The verifier's question is always:
 
 ## Signers in the `cilock` binary
 
-Nine signer providers exist as Go modules in rookery. The default prebuilt `cilock` binary ships two of them (`file`, `fulcio`); the other seven are opt-in via [`rookery-builder`](../guides/build-a-custom-cilock).
+Ten signer providers exist as Go modules in rookery. The default prebuilt `cilock` binary ships three of them (`file`, `fulcio`, `piv`); the other seven are opt-in via [`rookery-builder`](../guides/build-a-custom-cilock).
 
 | Signer | Type | In default binary? | When to pick it |
 |---|---|---|---|
 | **`fulcio`** | Keyless (Sigstore) | ✅ default | CI runs in a hosted system with an OIDC token (GitHub Actions, GitLab CI). Default for most teams. |
 | **`file`** | Local key file | ✅ default | Local development, CI without OIDC. Not recommended for production releases. |
+| **`piv`** | Hardware token (PIV smart card / YubiKey) | ✅ default | Signing with a key held on a PIV hardware token. |
 | **`debug-signer`** | Debug | builder opt-in | Development and integration testing. |
 | **`spiffe`** | Keyless (SPIFFE/SPIRE) | builder opt-in | Workloads in a SPIFFE-enabled mesh that already have SVID identities. |
 | **`kms/aws`** | Cloud KMS | builder opt-in | Long-lived AWS-managed identity, HSM-backed keys. |

@@ -35,7 +35,7 @@ The attestor opens the repo with `go-git` (using `DetectDotGit`, so it walks up 
 - **`gittool`** — `"go-git+git-bin"` when the `git` binary is on `PATH`, else `"go-git"`.
 - **`gitbinpath` / `gitbinhash`** — path and digest of the `git` binary (only when present). Hash uses the attestation context's configured hashes.
 
-If HEAD cannot be resolved (`reference not found` — e.g. a brand-new repo with no commits), the attestor returns no error and emits an empty predicate rather than failing the run.
+If HEAD cannot be resolved, the attestor fails closed — unless the repository is provably unborn (no refs and no objects: a brand-new repo with no commits), in which case it emits an empty predicate rather than failing the run.
 
 ## When to use
 

@@ -55,7 +55,7 @@ This is deliberate. The release binary is the one users verify; shipping debug h
 curl -fsSL https://cilock.dev/install.sh | bash
 ```
 
-The script auto-detects your OS/arch, resolves the latest stable version from `cilock.dev/dl/manifest.json`, downloads the matching archive, and verifies its SHA-256 against the published `checksums-sha256.txt` before installing. Knobs:
+The script auto-detects your OS/arch, resolves the latest stable version from `cilock.dev/dl/manifest.json`, downloads the matching archive, and verifies its SHA-256 against the manifest's per-file digest (falling back to the published `checksums-sha256.txt`) before installing. Knobs:
 
 | Variable | Default | Purpose |
 |---|---|---|

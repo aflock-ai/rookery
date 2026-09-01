@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # `cilock` CLI reference
 
-> Source of truth: [`rookery/cilock/cmd/cilock/main.go`](https://github.com/aflock-ai/rookery/blob/main/cilock/cmd/cilock/main.go) and [`rookery/cilock/internal/cmd/`](https://github.com/aflock-ai/rookery/tree/main/cilock/internal/cmd). Defaults and flag names below track the released `cilock` and are completeness-gated against the binary in CI (`scripts/check-cli-coverage.mjs`) — every command has a section here.
+> Source of truth: [`rookery/cilock/cmd/cilock/main.go`](https://github.com/aflock-ai/rookery/blob/main/cilock/cmd/cilock/main.go) and [`rookery/cilock/cli/`](https://github.com/aflock-ai/rookery/tree/main/cilock/cli). Defaults and flag names below track the released `cilock` and are completeness-gated against the binary in CI (`scripts/check-cli-coverage.mjs`) — every command has a section here.
 
 ```
 cilock - Collect and verify attestations about your build environments
@@ -21,6 +21,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock use` | Switch the working tenant/product the stored session binds attestations to. |
 | `cilock whoami` | Show the current platform session (tenant, product, expiry). |
 | `cilock logout` | Remove the stored platform session credential. |
+| `cilock agent login` / `logout` / `status` | Manage this machine's enrolled agent principal (signs in place of the human session when present). |
 | `cilock trust [provider] [owner/repo]` | Register an OIDC identity the platform trusts for keyless upload (CI). |
 | `cilock doctor` | Read-only preflight: is the environment sane to attest + upload against the platform? |
 | `cilock git configure` | Configure Git commit and tag signing through CI/lock's standard X.509 signing protocol. |
@@ -55,12 +56,13 @@ These persistent flags are accepted on every subcommand:
 | `--log-level, -l <level>` | `info` | One of `debug`, `info`, `warn`, `error`. |
 | `--debug-cpu-profile-file <path>` | (none) | Write a CPU pprof profile to this path. Profiling enabled when non-empty. |
 | `--debug-mem-profile-file <path>` | (none) | Write a heap pprof profile to this path. Profiling enabled when non-empty. |
+| `--policy-hardening <mode>` | `enforce` | Policy-verification hardening: `enforce` rejects dangerous policy configurations; `warn` downgrades them to loud warnings. Also settable via `CILOCK_POLICY_HARDENING`. |
 
 ## Platform session & CI trust
 
 These commands establish and inspect the platform session that attestation **upload** (and keyless signing-token exchange) need. Signing itself is keyless and needs no login; uploading to Archivista binds the evidence to your tenant/product, which is what the session carries. The onboarding path is `login` → (`use` to switch scope) → `trust` to let CI upload → `doctor` to preflight.
 
-The platform is derived from a single `--platform-url` (default `https://platform.testifysec.com`); it auto-resolves Fulcio, TSA, and Archivista from that host's discovery document. After login, bare commands default to the platform you logged into.
+The platform is derived from a single `--platform-url` (default `https://platform.testifysec.com`); it auto-resolves Fulcio, TSA, and Archivista from that host's discovery document. After login, the commands that *consume* a session — `run`, `trust`, `bundle`, `policy …`, `pushgate status` — default to the platform you logged into. The commands that *manage* sessions (`use`, `whoami`, `logout`, and `agent login`/`logout`/`status`) do not: with no flag they act on `https://platform.testifysec.com`, so against any other platform pass the same `--platform-url` you gave `login` to every one of them.
 
 ### `cilock login`
 
@@ -98,7 +100,7 @@ Switch the working tenant + product the stored session binds attestations to, so
 | `--product-id <uuid>` / `--tenant-id <uuid>` | (none) | Bind directly (no browser). |
 | `--product-name` / `--tenant-name <str>` | (none) | Label recorded alongside the id. |
 | `--product <id\|name>` / `--tenant <id\|name>` | (none) | Select by name on the approve page (re-opens the browser to resolve names → ids, auto-creating a default tenant/product if you have none). |
-| `--platform-url <url>` | active session's platform | Platform whose session to rebind. |
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose session to rebind. Must match the `login`. |
 
 ```bash
 # Switch the working product by id (no browser)
@@ -113,26 +115,68 @@ cilock use --tenant acme --product acme-web
 
 ### `cilock whoami`
 
-Show the current platform session — the logged-in tenant, bound product, and expiry — for the given (or active) platform.
+Show the platform session — the logged-in tenant, bound product, and expiry — for one platform.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--platform-url <url>` | active session's platform | Platform whose session to show. |
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose session to show. Must match the `login`. |
 
 ```bash
 cilock whoami
+cilock whoami --platform-url https://platform.example.com
 ```
 
 ### `cilock logout`
 
-Remove the stored platform session credential.
+Remove the stored platform session credential for one platform. It does not look up which platform you logged into: with no flag it removes the public-platform session, and a session on any other platform stays on disk while the command exits 0.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose session to remove. |
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose session to remove. Must match the `login`. |
 
 ```bash
 cilock logout
+cilock logout --platform-url https://platform.example.com
+```
+
+### `cilock agent login`
+
+Store the refresh credential a human minted for this agent at enrollment. The credential is read from **STDIN by default** so it never lands in shell history or a process listing; it is written `0600` to cilock's own agent store, kept apart from the `cilock login` session, and never printed again. Once stored, runs against that platform sign as the **agent principal**, taking precedence over any human `cilock login` session. The tenant and agent ids are not secret — they are the SPIFFE path segments (`spiffe://<trust-domain>/tenant/<tenant-id>/agent/<agent-id>`) every certificate this credential buys will carry.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform the agent is enrolled with. |
+| `--tenant-id <uuid>` | (none) | Tenant UUID this agent is enrolled in (SPIFFE path segment). |
+| `--agent-id <uuid>` | (none) | Agent principal UUID minted at enrollment (SPIFFE path segment). |
+
+```bash
+# Read the credential from stdin (preferred)
+cilock agent login --platform-url https://platform.example.com \
+  --tenant-id <uuid> --agent-id <uuid> < credential.txt
+```
+
+### `cilock agent logout`
+
+Remove this machine's copy of the agent credential. This is a **local delete, not a revocation**: the principal stays valid on the platform until a human revokes it there. The credential is keyed by platform, and `logout` does not look up which platform you enrolled with — it removes the credential for `--platform-url`, defaulting to the public platform. Pass the same `--platform-url` you gave `cilock agent login`, or a non-default enrollment stays on disk while the command prints `No agent credential stored for …` and exits 0.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose agent credential to remove. Must match the `login`. |
+
+```bash
+cilock agent logout --platform-url https://platform.example.com
+```
+
+### `cilock agent status`
+
+Show the agent principal this machine would sign as against one platform. Like `logout`, it reads the credential for `--platform-url` only; with no flag it reports the public platform, so a non-default enrollment shows as absent unless you name it.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform to report the enrolled agent for. Must match the `login`. |
+
+```bash
+cilock agent status --platform-url https://platform.example.com
 ```
 
 ### `cilock trust`
@@ -248,7 +292,7 @@ cilock pushgate status --wait --timeout 20m --json
 
 Always-run attestors (cannot be omitted): `material`, `product`, and (when args are provided) `command-run`. Trying to pass `command-run` via `--attestations` is rejected.
 
-Only **one signer** is supported per `run` invocation (enforced at `cilock/internal/cmd/run.go:71-73`).
+Only **one signer** is supported per `run` invocation (enforced in `cilock/cli/signer_error.go`).
 
 ### Common flags
 
@@ -690,7 +734,7 @@ Prints `cilock <version>`. The version string is injected at build time via `-ld
 
 ## `cilock license`
 
-Prints the license under which this binary is distributed, plus any branded-distribution metadata baked in at build time. The **stock `cilock` CLI** is **Apache 2.0**, so a stock binary shows the Apache 2.0 statement. Binaries produced by the [`rookery-builder`](../guides/build-a-custom-cilock) are licensed under the **Business Source License 1.1** and report BUSL instead (see [licensing](../ecosystem/rookery#licensing)). Custom binaries built with `--customer X --tenant Y` additionally show:
+Prints the license under which this binary is distributed, plus any branded-distribution metadata baked in at build time. The **stock `cilock` CLI** is **Apache 2.0**, so a stock binary shows the Apache 2.0 statement. Binaries produced by the [`rookery-builder`](../guides/build-a-custom-cilock) link the same CLI and likewise print the Apache 2.0 statement (the builder's own distribution terms are covered under [licensing](../ecosystem/rookery#licensing)). Custom binaries built with `--customer X --tenant Y` additionally show:
 
 ```
 Built for: X

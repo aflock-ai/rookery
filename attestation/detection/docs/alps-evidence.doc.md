@@ -127,6 +127,6 @@ and where observation was incomplete.
 
 ## See also
 
-- [Agent, policy, and provenance contract](../../../../../docs/architecture/pushgate-agent-policy-contract.md)
+- [Agent, policy, and provenance contract](https://pushgate.dev/docs/agent-sandbox)
 - [`environment`](./environment)
 - [`git`](./git)

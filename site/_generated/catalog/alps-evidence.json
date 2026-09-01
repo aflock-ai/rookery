@@ -98,7 +98,7 @@
     {
       "slug": "see-also",
       "title": "See also",
-      "markdown": "## See also\n\n- [Agent, policy, and provenance contract](../../../../../docs/architecture/pushgate-agent-policy-contract.md)\n- [`environment`](./environment)\n- [`git`](./git)"
+      "markdown": "## See also\n\n- [Agent, policy, and provenance contract](https://pushgate.dev/docs/agent-sandbox)\n- [`environment`](./environment)\n- [`git`](./git)"
     }
   ],
   "hasDoc": true
