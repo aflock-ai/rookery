@@ -60,6 +60,7 @@ func TestParseGitVerifyArgs(t *testing.T) {
 }
 
 func TestRunGitSignerDefaultsToPlatformAndRequiresTimestamp(t *testing.T) {
+	isolateStores(t) // agent-first resolution reads the real stores otherwise
 	signer := newTestGitSigner(t)
 	oldResolve, oldLoad, oldTimestamp := resolveGitSigningToken, loadGitSigningSigner, addGitSignatureTimestamp
 	t.Cleanup(func() {

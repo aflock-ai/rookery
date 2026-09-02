@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -296,6 +297,39 @@ func DeletePendingAgentIf(expect AgentCredential) (bool, error) {
 // human session: an unreadable agent store is exactly the case where falling
 // through would sign as the human while the operator believes they are signing
 // as the agent.
+// EnrolledAgentPlatforms returns the normalized platform URLs this machine
+// holds ANY agent credential for — redeemed or still pending — sorted for
+// stable messages. A pending credential counts: the next exchange against its
+// platform will redeem it, so for "which platform should this signature target"
+// it is as enrolled as an active one.
+//
+// This exists so signing paths can resolve their platform agent-first instead
+// of env-first (judge#8738): a signer that consults only an env var or the
+// compiled default silently falls through to the human session whenever the
+// enrolled platform is anything else.
+func EnrolledAgentPlatforms() ([]string, error) {
+	s, err := loadAgents()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	var urls []string
+	for u := range s.Agents {
+		if _, ok := seen[u]; !ok {
+			seen[u] = struct{}{}
+			urls = append(urls, u)
+		}
+	}
+	for u := range s.Pending {
+		if _, ok := seen[u]; !ok {
+			seen[u] = struct{}{}
+			urls = append(urls, u)
+		}
+	}
+	sort.Strings(urls)
+	return urls, nil
+}
+
 func LookupAgent(platformURL string) (*AgentCredential, error) {
 	s, err := loadAgents()
 	if err != nil {

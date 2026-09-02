@@ -37,6 +37,65 @@ const (
 
 var oidAttributeTimeStampToken = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 14}
 
+// gitSignerPlatformURL resolves the platform this Git signature is exchanged
+// against — agent store first, then the env override, then the active login,
+// then "" for the compiled default (judge#8738).
+//
+// Before this, the env var was the ONLY input: unset, it meant the compiled
+// default, so a machine whose agent was enrolled anywhere else looked up the
+// agent at the wrong platform, found nothing, and fell through to the human
+// session — a valid signature naming the wrong principal, which this file's
+// own precedence comment calls a false attestation nobody notices. Resolution
+// now refuses the two states that used to produce that: an env override
+// naming a platform with no agent while agents are enrolled elsewhere, and
+// multiple enrolled agents with no selector.
+func gitSignerPlatformURL(envURL string) (string, error) {
+	enrolled, err := auth.EnrolledAgentPlatforms()
+	if err != nil {
+		// Fail closed: an unreadable agent store must not demote the
+		// signature to the human session (same rule as ResolveSigningToken).
+		return "", fmt.Errorf("read the enrolled agent store: %w", err)
+	}
+	if envURL != "" {
+		norm := auth.NormalizeURL(envURL)
+		for _, u := range enrolled {
+			if u == norm {
+				return norm, nil
+			}
+		}
+		if len(enrolled) > 0 {
+			return "", fmt.Errorf("%s names %s, but this machine's enrolled agent principal is at %s; "+
+				"unset it or point it at the enrolled platform, or `cilock agent logout` before signing as anything else",
+				platformconfig.PlatformURLEnv, norm, strings.Join(enrolled, ", "))
+		}
+		return envURL, nil
+	}
+	switch len(enrolled) {
+	case 0:
+		return auth.ActivePlatformURL(), nil
+	case 1:
+		return enrolled[0], nil
+	default:
+		return "", fmt.Errorf("multiple agent principals are enrolled (%s); set %s to select the platform this signature targets",
+			strings.Join(enrolled, ", "), platformconfig.PlatformURLEnv)
+	}
+}
+
+// resolveGitSignerPlatform is the one place the signer decides which platform
+// it targets: agent-first URL resolution, the derived endpoints, and the
+// cleartext refusal, together so RunGitSigner has a single failure branch.
+func resolveGitSignerPlatform() (platformconfig.PlatformConfig, error) {
+	platformURL, err := gitSignerPlatformURL(os.Getenv(platformconfig.PlatformURLEnv))
+	if err != nil {
+		return platformconfig.PlatformConfig{}, err
+	}
+	pc := platformconfig.Derive(platformURL)
+	if err := platformconfig.RequireSecurePlatformURL(pc.PlatformURL); err != nil {
+		return platformconfig.PlatformConfig{}, err
+	}
+	return pc, nil
+}
+
 var (
 	resolveGitSigningToken = auth.ResolveSigningToken
 	loadGitSigningSigner   = func(ctx context.Context, fulcioURL, token string) (cryptoutil.Signer, error) {
@@ -118,9 +177,8 @@ func RunGitSigner(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		return err
 	}
 
-	platformURL := os.Getenv(platformconfig.PlatformURLEnv)
-	pc := platformconfig.Derive(platformURL)
-	if err := platformconfig.RequireSecurePlatformURL(pc.PlatformURL); err != nil {
+	pc, err := resolveGitSignerPlatform()
+	if err != nil {
 		return err
 	}
 	identity, err := resolveGitSigningToken(pc.PlatformURL, pc.OIDCClientID)
