@@ -76,6 +76,16 @@ func runPlanWith(reg *Registry, p PrePlan, postCtx *EvalContext) PlanResult {
 		if d == nil {
 			continue
 		}
+		if d.AlwaysOn {
+			// No gate by design: cilock attaches the attestor regardless, and
+			// firing it here would re-add one the operator disabled.
+			result.Skip = append(result.Skip, SkipDecision{
+				Attestor: name,
+				Gate:     GatePre,
+				Cause:    CauseAlwaysOn,
+			})
+			continue
+		}
 		if d.Pre == nil {
 			result.Skip = append(result.Skip, SkipDecision{
 				Attestor: name,

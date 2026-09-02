@@ -1,0 +1,18 @@
+{
+  "construction": "RFC6962",
+  "hashAlgorithm": "sha256",
+  "leaves": [
+    {
+      "fileDigest": "285daba937f400ec48ded0a4b9fae3086e422e655459020642770bfc642834b4",
+      "leafHash": "26c0a6e14b580a6b523c383a1aa039d3d3ae374658f97b08d742ab29fd0f2a39",
+      "path": "go.mod"
+    },
+    {
+      "fileDigest": "55a60bb97151b2b4b680462447ce60ec34511b14fa10d77440c97b9777101566",
+      "leafHash": "004c512206147361ca768697a2db723539a93fe46d206ee8dd506c9cbeea97b4",
+      "path": "src/main.go"
+    }
+  ],
+  "merkleRoot": "3e863efc5523861ce0dc735b505c2eac914ba439affd46eb08c72e270d4dc99f",
+  "treeSize": 2
+}

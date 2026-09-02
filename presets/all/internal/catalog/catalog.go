@@ -110,6 +110,12 @@ type Entry struct {
 	// embedded catalog/*.yaml entries.
 	DetectionOnly bool `json:"detection_only,omitempty"`
 
+	// AlwaysOn marks a foundation attestor cilock attaches on every run
+	// (detector.yaml always_on). Such an entry has no applies_when/detection
+	// by design — it is never detected — and carries a detector.yaml only for
+	// its output contract.
+	AlwaysOn bool `json:"always_on,omitempty"`
+
 	// Registered is true when a live Go attestor backs this name. It is the
 	// inverse of "this is purely a detector.yaml catalog entry" and lets a
 	// consumer tell a real attestor (callable via --attestations) from a
@@ -302,6 +308,7 @@ func buildEntry(name, livePredicate, liveRunType string, registered bool, d *det
 	// When a live Go attestor backs the name, it is authoritative: the tool is
 	// NOT detection-only regardless of which detector.yaml won the registry key.
 	e.DetectionOnly = d.DetectionOnly && !registered
+	e.AlwaysOn = d.AlwaysOn
 	e.PrimaryCategory = string(d.PrimaryCategory)
 	e.EmitsFormats = sortedCopy(d.EmitsFormats)
 	if len(d.Category) > 0 {

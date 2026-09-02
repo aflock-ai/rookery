@@ -1,0 +1,25 @@
+schema_version: "0.1"
+attestor: material
+description: >-
+  A two-file input tree (go.mod + src/main.go) materialized as the working
+  directory — NO EXTERNAL TOOL. material walks the working directory in pure
+  Go, digests every file, and commits to one RFC 6962 sha256 root over the
+  deduplicated, digest-sorted leaf set, so the committed bytes ARE the real
+  input and the predicate is byte-deterministic: the golden pins merkleRoot,
+  treeSize, the pinned algorithm constants, and the inline leaves.
+setup:
+  mode: workdir
+  workdir:
+    - go.mod
+    - src/main.go
+expect:
+  predicate_type: https://aflock.ai/attestations/material/v0.3
+  run_type: material
+  subjects:
+    match: exact
+    keys:
+      - "tree:materials"
+  materials:
+    - "go.mod"
+    - "src/main.go"
+  golden: golden.json

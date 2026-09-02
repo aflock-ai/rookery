@@ -56,6 +56,14 @@ func RunPostPlanWith(reg *Registry, p PostPlan) PlanResult {
 		if d == nil {
 			continue
 		}
+		if d.AlwaysOn {
+			result.Skip = append(result.Skip, SkipDecision{
+				Attestor: name,
+				Gate:     GatePost,
+				Cause:    CauseAlwaysOn,
+			})
+			continue
+		}
 		if d.Post == nil {
 			result.Skip = append(result.Skip, SkipDecision{
 				Attestor: name,

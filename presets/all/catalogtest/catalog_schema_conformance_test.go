@@ -15,12 +15,17 @@
 package catalogtest
 
 import (
+	"crypto"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/testkit"
+	"github.com/aflock-ai/rookery/plugins/attestors/material"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
 	_ "github.com/aflock-ai/rookery/presets/all"
 )
@@ -128,4 +133,59 @@ func TestSecretscanPredicateWithConsumedReportsValidatesAgainstSchema(t *testing
 	// published schema (invopop emits additionalProperties:false).
 	predicate := []byte(`{"findings":[],"consumedReports":[{"path":"gitleaks.sarif","sha256":"aa11","driver":"gitleaks","results":3,"deduplicated":2}]}`)
 	testkit.AssertPredicateMatchesSchema(t, "secretscan", a.Schema(), predicate)
+}
+
+// TestMaterialPredicateShapesValidateAgainstSchema is product's regression,
+// for material. material/v0.3 has inlined `leaves` since the version cut while
+// Schema() reflected the Attestor struct, where `leaves` is `json:"-"` — so
+// every real material predicate failed validation against its own published
+// schema. Schema() now reflects the single predicate type MarshalJSON and
+// UnmarshalJSON share. Both shapes are checked: the populated inline predicate
+// a real run mints, and the authoritative-empty one ("leaves":[]) decoded and
+// re-encoded.
+func TestMaterialPredicateShapesValidateAgainstSchema(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []struct{ path, body string }{
+		{"a.txt", "alpha\n"},
+		{"sub/b.txt", "beta\n"},
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, f.path)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f.path), []byte(f.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	a := material.New()
+	ctx, err := attestation.NewContext("schema", []attestation.Attestor{a},
+		attestation.WithHashes([]cryptoutil.DigestValue{{Hash: crypto.SHA256}}),
+		attestation.WithWorkingDir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ctx.RunAttestors(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"leaves":[{`) {
+		t.Fatalf("the populated predicate must inline leaves for this test to mean anything: %s", raw)
+	}
+	testkit.AssertPredicateMatchesSchema(t, "material", a.Schema(), raw)
+
+	const emptyRoot = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	var empty material.Attestor
+	body := `{"merkleRoot":"` + emptyRoot + `","treeSize":0,"hashAlgorithm":"sha256","construction":"RFC6962","leaves":[]}`
+	if err := json.Unmarshal([]byte(body), &empty); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	raw, err = json.Marshal(&empty)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	testkit.AssertPredicateMatchesSchema(t, "material", empty.Schema(), raw)
 }

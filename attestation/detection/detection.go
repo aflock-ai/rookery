@@ -63,6 +63,10 @@ const (
 	CauseSchemaError      = "schema-error"
 	CausePreGateOnly      = "pre-gate-only"
 	CausePostGateOnly     = "post-gate-only"
+	// CauseAlwaysOn: the detector.yaml is always_on — the attestor is
+	// attached on every run and carries no gate, so neither planner ever
+	// fires it (see DetectorYAML.AlwaysOn).
+	CauseAlwaysOn = "always-on"
 )
 
 func (s PredicateState) String() string {

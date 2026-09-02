@@ -67,17 +67,27 @@ package material
 
 import (
 	"crypto"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/file"
 	"github.com/aflock-ai/rookery/attestation/merkle"
 	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	"github.com/invopop/jsonschema"
 )
+
+// detectorYAML is the attestor's OUTPUT contract (predicate type, run type,
+// subjects, back-refs), registered so the catalog's static gate can check it
+// against the live interfaces. It carries no detection gate: material is
+// always on (see always_on in the file).
+//
+//go:embed detector.yaml
+var detectorYAML []byte
 
 // cryptoSha256 is the DigestSet key the v0.3 attestor uses to publish the
 // Merkle root. Pulled out as a package-level value so the Subjects() and
@@ -156,6 +166,7 @@ func init() {
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return New()
 	})
+	detection.Register(Name, detectorYAML)
 }
 
 // Option configures the attestor at construction time. Kept as a typed
@@ -242,12 +253,27 @@ func (a *Attestor) Name() string                 { return Name }
 func (a *Attestor) Type() string                 { return Type }
 func (a *Attestor) RunType() attestation.RunType { return RunType }
 
-// Schema reflects the SIGNED predicate shape — just the four scalar
-// fields. The per-file leaves are not in the predicate, so they are not
-// in the schema either. Keeping the schema in sync with MarshalJSON is
-// what keeps Archivista's predicate validator from rejecting v0.3 data.
+// Schema describes what this attestor SIGNS, so it reflects the predicate
+// type MarshalJSON and UnmarshalJSON share rather than the Attestor struct.
+// Reflecting Attestor — where `leaves` is `json:"-"` — published a schema with
+// additionalProperties:false that omitted the leaves array every v0.3
+// predicate inlines, so every real material attestation failed validation
+// against its own declared schema (product/v0.3 had the identical drift). One
+// definition of the signed body, used by all three, is what keeps them from
+// drifting again; the catalog harness validates a minted predicate against
+// this schema on every run.
 func (a *Attestor) Schema() *jsonschema.Schema {
-	return jsonschema.Reflect(&Attestor{})
+	return jsonschema.Reflect(&predicate{})
+}
+
+// predicate is the single definition of the signed v0.3 body, shared by
+// MarshalJSON, UnmarshalJSON and Schema so the three cannot drift.
+type predicate struct {
+	MerkleRoot         string          `json:"merkleRoot"`
+	TreeSize           uint64          `json:"treeSize"`
+	HashAlgorithmField string          `json:"hashAlgorithm"`
+	ConstructionField  string          `json:"construction"`
+	Leaves             *[]MaterialLeaf `json:"leaves,omitempty"`
 }
 
 // Attest walks the working directory, builds a Merkle tree over the
@@ -519,13 +545,7 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 		ls = []MaterialLeaf{}
 	}
 	leaves := &ls
-	return json.Marshal(struct {
-		MerkleRoot         string          `json:"merkleRoot"`
-		TreeSize           uint64          `json:"treeSize"`
-		HashAlgorithmField string          `json:"hashAlgorithm"`
-		ConstructionField  string          `json:"construction"`
-		Leaves             *[]MaterialLeaf `json:"leaves,omitempty"`
-	}{
+	return json.Marshal(predicate{
 		MerkleRoot:         a.MerkleRoot,
 		TreeSize:           a.TreeSize,
 		HashAlgorithmField: a.HashAlgorithmField,
@@ -537,13 +557,7 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON reads the four exported scalar fields. Materials and
 // leaves are not reconstructed — they live in the sidecar.
 func (a *Attestor) UnmarshalJSON(data []byte) error {
-	aux := struct {
-		MerkleRoot         string          `json:"merkleRoot"`
-		TreeSize           uint64          `json:"treeSize"`
-		HashAlgorithmField string          `json:"hashAlgorithm"`
-		ConstructionField  string          `json:"construction"`
-		Leaves             *[]MaterialLeaf `json:"leaves,omitempty"`
-	}{}
+	aux := predicate{}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}

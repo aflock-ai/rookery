@@ -1,0 +1,44 @@
+apiVersion: cilock.detection/v0.1
+name: material
+description: "Snapshots the working directory before the wrapped command runs and signs one RFC 6962 Merkle root over every input file's digest, with the per-file leaves inline."
+
+# No category and no pre/post gate: material is a foundation attestor that
+# cilock attaches on EVERY run (`cilock run` builds it with the product
+# attestor before any detection happens). A detection gate would be worse than
+# none — a pre-gate match would re-add the attestor after the operator dropped
+# it with --no-default-attestor. always_on says so, and both planners skip this
+# file under the "always-on" cause. The file exists for the OUTPUT contract
+# below, which is what lets the catalog's static gate check what the attestor
+# signs against the live interfaces.
+always_on: true
+
+# No llm_hints: on_match would describe a match that cannot happen.
+
+contract:
+  tier: foundation
+  predicate_type: https://aflock.ai/attestations/material/v0.3
+  run_type: material
+  stability:
+    level: stable
+    notes: >-
+      The root is a deterministic RFC 6962 sha256 tree over the deduplicated,
+      digest-sorted set of input-file content digests, so the same tree yields
+      byte-identical merkleRoot, treeSize, hashAlgorithm, construction and
+      inline leaves; nothing clock- or host-derived is emitted.
+    volatile_fields: []
+  subjects:
+    - prefix: "tree:materials"
+      description: "the single tree subject; its sha256 value is the Merkle root over the input set (an empty input set still commits to the RFC 6962 empty-tree root)"
+      digest_algs: ["sha256"]
+  # BackRefs mirrors Subjects except for an EMPTY tree: every material-less
+  # step computes the same empty-tree root, so the graph edge is withheld
+  # when treeSize is 0 while the subject is still asserted.
+  backref_subjects:
+    - "tree:materials"
+  emits_materials: true
+  finalizes: true
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: two-inputs
+      role: canonical

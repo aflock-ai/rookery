@@ -146,6 +146,83 @@ name: foo
 	}
 }
 
+// An always-on attestor (material, product, command-run: cilock attaches it
+// on every run) has no detection moment, so it has no gate — but it still has
+// an output contract the catalog must be able to check. always_on: true is the
+// honest spelling of "no gate, on purpose"; it is rejected when a gate is also
+// declared (the two claims contradict) and when no contract is declared (an
+// always-on detector.yaml with no contract describes nothing at all).
+func TestAlwaysOnDetectorNeedsNoGateButNeedsAContract(t *testing.T) {
+	const contract = `
+contract:
+  predicate_type: https://example.test/attestations/foo/v0.1
+  run_type: material
+`
+	ok := `
+apiVersion: cilock.detection/v0.1
+name: foo
+always_on: true
+` + contract
+	d, err := ParseDetectorYAML([]byte(ok))
+	if err != nil {
+		t.Fatalf("always_on with a contract and no gate should parse, got %v", err)
+	}
+	if !d.AlwaysOn {
+		t.Fatalf("always_on not decoded: %+v", d)
+	}
+
+	withGate := `
+apiVersion: cilock.detection/v0.1
+name: foo
+always_on: true
+pre:
+  match:
+    argv_prefix: ["foo"]
+` + contract
+	if _, err := ParseDetectorYAML([]byte(withGate)); err == nil || !strings.Contains(err.Error(), "always_on") {
+		t.Errorf("always_on plus a gate should be rejected as contradictory, got %v", err)
+	}
+
+	noContract := `
+apiVersion: cilock.detection/v0.1
+name: foo
+always_on: true
+`
+	if _, err := ParseDetectorYAML([]byte(noContract)); err == nil || !strings.Contains(err.Error(), "contract") {
+		t.Errorf("always_on without a contract should be rejected, got %v", err)
+	}
+}
+
+// Both planners must skip an always-on detector under its own cause: it never
+// fires (cilock attaches the attestor regardless, and firing it would re-add an
+// attestor the operator disabled with --no-default-attestor), and reporting it
+// as "post-gate-only" / "pre-gate-only" would name a gate that does not exist.
+func TestAlwaysOnDetectorIsSkippedByBothPlansUnderItsOwnCause(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register("foo", []byte(`
+apiVersion: cilock.detection/v0.1
+name: foo
+always_on: true
+contract:
+  predicate_type: https://example.test/attestations/foo/v0.1
+  run_type: material
+`))
+	pre := RunPrePlanWith(reg, PrePlan{Argv: []string{"anything"}})
+	if len(pre.Fire) != 0 {
+		t.Fatalf("an always-on detector must never fire at pre-gate, got %+v", pre.Fire)
+	}
+	if len(pre.Skip) != 1 || pre.Skip[0].Attestor != "foo" || pre.Skip[0].Cause != CauseAlwaysOn {
+		t.Fatalf("pre-gate skip = %+v, want one skip of foo under %q", pre.Skip, CauseAlwaysOn)
+	}
+	post := RunPostPlanWith(reg, PostPlan{Pre: &pre})
+	if len(post.Fire) != 0 {
+		t.Fatalf("an always-on detector must never fire at post-gate, got %+v", post.Fire)
+	}
+	if len(post.Skip) != 1 || post.Skip[0].Attestor != "foo" || post.Skip[0].Cause != CauseAlwaysOn {
+		t.Fatalf("post-gate skip = %+v, want one skip of foo under %q", post.Skip, CauseAlwaysOn)
+	}
+}
+
 func TestRejectPostPredicateInPre(t *testing.T) {
 	yaml := `
 apiVersion: cilock.detection/v0.1

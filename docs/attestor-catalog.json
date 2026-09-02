@@ -600,8 +600,19 @@
       "name": "material",
       "predicate_type": "https://aflock.ai/attestations/material/v0.3",
       "run_type": "material",
+      "tier": "foundation",
+      "always_on": true,
       "registered": true,
-      "has_contract": false
+      "subjects": [
+        {
+          "prefix": "tree:materials",
+          "description": "the single tree subject; its sha256 value is the Merkle root over the input set (an empty input set still commits to the RFC 6962 empty-tree root)",
+          "digest_algs": [
+            "sha256"
+          ]
+        }
+      ],
+      "has_contract": true
     },
     {
       "name": "material-v0.1",

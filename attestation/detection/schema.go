@@ -115,6 +115,22 @@ type DetectorYAML struct {
 	// agent pasting it verbatim captures the report instead of failing the run.
 	ExitsNonzeroOnFindings bool `yaml:"exits_nonzero_on_findings,omitempty" json:"exits_nonzero_on_findings,omitempty"`
 
+	// AlwaysOn marks a foundation attestor cilock attaches on EVERY run
+	// (material, product, command-run): there is no detection moment, so
+	// there is no gate — and a gate would be worse than none, because a
+	// pre-gate match re-adds the attestor to the run's list after the
+	// operator removed it with --no-default-attestor, and constructs it
+	// without the options the default path applies. What an always-on
+	// attestor DOES have is an output contract, and that is the only reason
+	// it registers a detector.yaml at all: without one the catalog's static
+	// contract gate never examines it, so an envelope it signs (the material
+	// attestor's companion leaf manifest) is described by nothing checkable.
+	//
+	// Validation therefore requires: always_on and a pre/post gate are
+	// mutually exclusive, and always_on requires a contract. Both planners
+	// skip an always-on detector under CauseAlwaysOn.
+	AlwaysOn bool `yaml:"always_on,omitempty" json:"always_on,omitempty"`
+
 	Pre      *GateBlock `yaml:"pre,omitempty"`
 	Post     *GateBlock `yaml:"post,omitempty"`
 	LLMHints LLMHints   `yaml:"llm_hints,omitempty"`
@@ -280,6 +296,22 @@ func ParseDetectorYAML(raw []byte) (*DetectorYAML, error) {
 	return &d, nil
 }
 
+// validateGatePresence decides whether the file declares WHEN its attestor
+// fires: a pre/post gate, or always_on (never detected, attached on every
+// run) — which then needs a contract, because with no gate and no contract the
+// file describes nothing at all. The two are mutually exclusive.
+func validateGatePresence(d *DetectorYAML) error {
+	switch {
+	case d.AlwaysOn && (d.Pre != nil || d.Post != nil):
+		return fmt.Errorf("detector.yaml %q: always_on contradicts a pre/post gate — an always-on attestor is attached on every run and is never detected; drop the gate or drop always_on", d.Name)
+	case d.AlwaysOn && d.Contract == nil:
+		return fmt.Errorf("detector.yaml %q: always_on requires a contract — with no gate and no contract the file describes nothing", d.Name)
+	case !d.AlwaysOn && d.Pre == nil && d.Post == nil:
+		return fmt.Errorf("detector.yaml must declare at least one of pre or post (or always_on: true with a contract, for an attestor cilock attaches on every run)")
+	}
+	return nil
+}
+
 func validateDetectorYAML(d *DetectorYAML) error {
 	if d.APIVersion != SchemaVersion {
 		return fmt.Errorf("detector.yaml apiVersion %q is unsupported (want %q)", d.APIVersion, SchemaVersion)
@@ -287,8 +319,8 @@ func validateDetectorYAML(d *DetectorYAML) error {
 	if !pluginNamePattern.MatchString(d.Name) {
 		return fmt.Errorf("detector.yaml name %q must match %s", d.Name, pluginNamePattern)
 	}
-	if d.Pre == nil && d.Post == nil {
-		return fmt.Errorf("detector.yaml must declare at least one of pre or post")
+	if err := validateGatePresence(d); err != nil {
+		return err
 	}
 	switch d.RecommendedTrace {
 	case "", TraceOff, TraceLight, TraceFull:
