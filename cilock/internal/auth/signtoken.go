@@ -52,7 +52,7 @@ func ResolveSigningToken(platformURL, audience string) (SignTokenResult, error) 
 	// human's, which is the borrowed-identity result this whole path removes. A
 	// missing certificate is a visible, fixable error; a certificate naming the
 	// wrong principal is a false attestation nobody notices.
-	agentCred, agentErr := LookupAgent(platformURL)
+	agentCred, agentErr := ResolveAgentCredential(platformURL)
 	if agentErr != nil {
 		return SignTokenResult{}, fmt.Errorf("read the enrolled agent credential: %w", agentErr)
 	}

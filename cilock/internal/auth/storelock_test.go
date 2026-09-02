@@ -94,10 +94,11 @@ func TestConcurrentFirstUsePinsExactlyOneTrustDomain(t *testing.T) {
 	isolateConfig(t)
 
 	const platform = "https://platform.example.com"
-	if err := SaveAgent(AgentCredential{
+	seeded := AgentCredential{
 		PlatformURL: platform, TenantID: "t-1", AgentID: "a-1",
 		RefreshCredential: "s3cret",
-	}); err != nil {
+	}
+	if err := SaveAgent(seeded); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -122,7 +123,7 @@ func TestConcurrentFirstUsePinsExactlyOneTrustDomain(t *testing.T) {
 		go func(td string) {
 			defer wg.Done()
 			<-start // release them together, to actually contend
-			err := PinAgentTrustDomain(platform, td)
+			err := PinAgentTrustDomain(seeded, td)
 			mu.Lock()
 			defer mu.Unlock()
 			if err == nil {

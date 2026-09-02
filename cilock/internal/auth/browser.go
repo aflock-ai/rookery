@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -64,7 +63,7 @@ func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
 
 	resultCh := make(chan *Credential, 1)
 	mux := http.NewServeMux()
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := newLoopbackServer(mux) // bounded read and drain: loopback.go
 
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -93,7 +92,7 @@ func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
 	})
 
 	go func() { _ = srv.Serve(listener) }()
-	defer srv.Shutdown(context.Background()) //nolint:errcheck // best-effort cleanup
+	defer shutdownLoopback(srv)
 
 	loginURL := cliAuthURL(judgeURL, callbackURL, state, params)
 	fmt.Printf("Opening browser to sign in to %s ...\n", judgeURL)
@@ -200,6 +199,14 @@ func cliAuthURL(judgeURL, callbackURL, state string, params LoginParams) string 
 }
 
 func openBrowserURL(rawURL string) {
+	// BROWSER=none is the conventional way to say "print the URL, do not open
+	// anything" — a harness that drives its own browser (the UAT lane) sets
+	// it so the ceremony URL goes only where the harness reads it. Any other
+	// value of $BROWSER is deliberately not honoured as an opener: it would be
+	// an executable name taken from the environment.
+	if os.Getenv("BROWSER") == "none" {
+		return
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "linux":

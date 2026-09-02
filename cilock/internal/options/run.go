@@ -718,7 +718,7 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 // so no failure on the agent path can end in a signature attributed to the
 // human. The chosen principal is named in the run summary.
 func (ro *RunOptions) resolvePlatformIdentity(cmd *cobra.Command, pc platformconfig.PlatformConfig) bool {
-	agentCred, agentErr := auth.LookupAgent(ro.PlatformURL)
+	agentCred, agentErr := auth.ResolveAgentCredential(ro.PlatformURL)
 	if agentErr != nil {
 		ro.agentIdentityErr = fmt.Errorf("read the enrolled agent credential for %s: %w", ro.PlatformURL, agentErr)
 		return false

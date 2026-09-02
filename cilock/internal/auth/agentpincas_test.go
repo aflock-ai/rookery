@@ -30,7 +30,7 @@ func TestPinRefusesWhenAnExistingPinDisagrees(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	err := PinAgentTrustDomain(platform, "attacker.example.com")
+	err := PinAgentTrustDomain(AgentCredential{PlatformURL: platform, TenantID: "t-1", AgentID: "a-1", RefreshCredential: "s3cret"}, "attacker.example.com")
 	if err == nil {
 		t.Fatal("a pin that disagrees with the stored one was accepted; that is the concurrent first-use hole")
 	}
@@ -61,7 +61,7 @@ func TestPinIsIdempotentForTheSameDomain(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := PinAgentTrustDomain(platform, "judge.testifysec.com"); err != nil {
+	if err := PinAgentTrustDomain(AgentCredential{PlatformURL: platform, TenantID: "t-1", AgentID: "a-1", RefreshCredential: "s3cret"}, "judge.testifysec.com"); err != nil {
 		t.Fatalf("re-pinning the same domain must be a no-op, got %v", err)
 	}
 }
@@ -78,7 +78,7 @@ func TestPinRecordsTheFirstAnswer(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if err := PinAgentTrustDomain(platform, "judge.testifysec.com"); err != nil {
+	if err := PinAgentTrustDomain(AgentCredential{PlatformURL: platform, TenantID: "t-1", AgentID: "a-1", RefreshCredential: "s3cret"}, "judge.testifysec.com"); err != nil {
 		t.Fatalf("first pin must succeed, got %v", err)
 	}
 	got, err := LookupAgent(platform)
@@ -95,7 +95,7 @@ func TestPinRecordsTheFirstAnswer(t *testing.T) {
 // already authorised for a logout that already happened.
 func TestPinIsANoOpWhenTheCredentialIsGone(t *testing.T) {
 	isolateConfig(t)
-	if err := PinAgentTrustDomain("https://platform.example.com", "judge.testifysec.com"); err != nil {
+	if err := PinAgentTrustDomain(AgentCredential{PlatformURL: "https://platform.example.com", TenantID: "t-1", AgentID: "a-1", RefreshCredential: "s3cret"}, "judge.testifysec.com"); err != nil {
 		t.Fatalf("pinning a platform with no stored credential must be a no-op, got %v", err)
 	}
 }

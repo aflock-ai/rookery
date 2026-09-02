@@ -123,9 +123,30 @@ var agentExchangeClient = &http.Client{
 // carry it as a typed field on this struct and match that — do not add Unwrap.
 type redactedError struct {
 	text string
+	// rejected is set when the PLATFORM answered and refused the credential
+	// (a 401/403), as opposed to the request not completing or the answer
+	// failing our own checks. Callers that decide whether a stored credential
+	// is worth keeping key on this, never on the text.
+	rejected bool
 }
 
 func (e *redactedError) Error() string { return e.text }
+
+// agentRejectedError marks an exchange the platform examined and refused.
+type agentRejectedError struct{ err error }
+
+func (e *agentRejectedError) Error() string { return e.err.Error() }
+func (e *agentRejectedError) Unwrap() error { return e.err }
+
+// IsAgentCredentialRejected reports whether err is the platform's own refusal
+// of the presented credential — the one outcome after which retrying with the
+// same credential cannot succeed. A network failure, a 5xx, a response that
+// failed our checks, or a locally-expired credential are NOT this: the
+// credential may still be good and must not be discarded on their account.
+func IsAgentCredentialRejected(err error) bool {
+	var r *redactedError
+	return errors.As(err, &r) && r.rejected
+}
 
 // ExchangeAgentCredential trades a stored agent credential for a short-lived
 // signing token at <platformURL>/api/agent/credential-exchange.
@@ -146,7 +167,11 @@ func ExchangeAgentCredential(platformURL string, cred AgentCredential) (AgentSig
 		// each of those is a place the refresh credential can come back at us. One
 		// wrapper here is what makes that structural rather than a rule each new
 		// error message has to remember.
-		return AgentSigningIdentity{}, &redactedError{text: redactCredential(err.Error(), cred)}
+		var rejected *agentRejectedError
+		return AgentSigningIdentity{}, &redactedError{
+			text:     redactCredential(err.Error(), cred),
+			rejected: errors.As(err, &rejected),
+		}
 	}
 	return id, nil
 }
@@ -157,47 +182,18 @@ func exchangeAgentCredential(platformURL string, cred AgentCredential) (AgentSig
 	if err := config.RequireSecurePlatformURL(platformURL); err != nil {
 		return AgentSigningIdentity{}, err
 	}
-	endpoint := strings.TrimRight(NormalizeURL(platformURL), "/") + agentExchangePath
-
-	body, err := json.Marshal(map[string]string{
-		"tenant_id":          cred.TenantID,
-		"agent_id":           cred.AgentID,
-		"refresh_credential": cred.RefreshCredential,
-	})
+	// A credential past the ceiling it recorded is not presented at all. The
+	// platform would refuse it anyway — this saves the round trip and, more to
+	// the point, replaces the uniform "not accepted" with the one cause this
+	// machine can actually name. Only a RECORDED ceiling counts: zero means the
+	// platform is the sole authority, and it answers for itself.
+	if now := time.Now(); cred.Expired(now) {
+		return AgentSigningIdentity{}, fmt.Errorf("the agent principal %s expired at %s (%s ago); its authority was time-bound at enrollment and cannot be extended — run `cilock enroll agent` for a new ceremony",
+			cred.AgentID, cred.ExpiresAt.Format(time.RFC3339), now.Sub(cred.ExpiresAt).Round(time.Second))
+	}
+	out, err := postAgentExchange(platformURL, cred)
 	if err != nil {
-		return AgentSigningIdentity{}, fmt.Errorf("build agent credential-exchange request: %w", err)
-	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return AgentSigningIdentity{}, fmt.Errorf("build agent credential-exchange request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := agentExchangeClient.Do(req)
-	if err != nil {
-		// The URL is safe to name; the request body is not, so it is never wrapped
-		// into an error. net/http keeps the URL out of the error it returns for a
-		// POST body, and there is no credential in the query string.
-		return AgentSigningIdentity{}, fmt.Errorf("agent credential exchange at %s: %w", endpoint, err)
-	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
-
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024)) //nolint:errcheck // diagnostic only
-		return AgentSigningIdentity{}, fmt.Errorf(
-			"agent credential exchange refused by %s (HTTP %d): %s\n%s",
-			endpoint, resp.StatusCode, redactCredential(strings.TrimSpace(string(msg)), cred),
-			agentRefusalDiagnosis(platformURL, cred))
-	}
-
-	var out struct {
-		Token     string `json:"token"`
-		TokenType string `json:"token_type"`
-		SPIFFEID  string `json:"spiffe_id"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		return AgentSigningIdentity{}, fmt.Errorf("decode agent credential-exchange response: %w", err)
+		return AgentSigningIdentity{}, err
 	}
 	if out.Token == "" {
 		return AgentSigningIdentity{}, fmt.Errorf("agent credential-exchange response carried no token")
@@ -233,6 +229,17 @@ func exchangeAgentCredential(platformURL string, cred AgentCredential) (AgentSig
 	if err != nil {
 		return AgentSigningIdentity{}, fmt.Errorf("internal: the validated principal %q did not re-parse: %w", out.SPIFFEID, err)
 	}
+	// RECORD THE AUTHORITATIVE CEILING. The enrollment callback's expires_at
+	// travelled in the clear across the loopback; the platform's answer here
+	// did not, and it is the copy the platform actually enforces. Every
+	// successful exchange overwrites the local copy with it, so what
+	// `agent status` reports and what the local pre-check refuses on is the
+	// platform's number. Absent (an older platform) leaves the local copy as
+	// it was; unparsable is a refusal, because a ceiling we cannot read is not
+	// one we can enforce.
+	if err := recordAnsweredExpiry(cred, out.ExpiresAt); err != nil {
+		return AgentSigningIdentity{}, err
+	}
 	if cred.TrustDomain == "" {
 		// THE PIN FAILING IS A REFUSAL, not a logged inconvenience.
 		//
@@ -242,13 +249,117 @@ func exchangeAgentCredential(platformURL string, cred AgentCredential) (AgentSig
 		// believe in is inert. And a CONCURRENT first-use exchange that already
 		// pinned a different authority is reported here as a mismatch; signing
 		// after ignoring that is exactly the outcome the pin exists to prevent.
-		if err := PinAgentTrustDomain(platformURL, td); err != nil {
+		if err := PinAgentTrustDomain(cred, td); err != nil {
 			return AgentSigningIdentity{}, fmt.Errorf("recording the agent trust domain: %w", err)
 		}
 	}
 	return AgentSigningIdentity{
 		Token: out.Token, TokenType: out.TokenType, SPIFFEID: out.SPIFFEID, TrustDomain: td,
 	}, nil
+}
+
+// agentExchangeAnswer is the platform's success body, before any of it is
+// trusted.
+type agentExchangeAnswer struct {
+	Token     string `json:"token"`
+	TokenType string `json:"token_type"`
+	SPIFFEID  string `json:"spiffe_id"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+// postAgentExchange performs the HTTP half of the exchange: build, send,
+// classify the status, decode. Everything about whether the ANSWER is
+// acceptable stays in exchangeAgentCredential.
+func postAgentExchange(platformURL string, cred AgentCredential) (agentExchangeAnswer, error) {
+	endpoint := strings.TrimRight(NormalizeURL(platformURL), "/") + agentExchangePath
+
+	body, err := json.Marshal(map[string]string{
+		"tenant_id":          cred.TenantID,
+		"agent_id":           cred.AgentID,
+		"refresh_credential": cred.RefreshCredential,
+	})
+	if err != nil {
+		return agentExchangeAnswer{}, fmt.Errorf("build agent credential-exchange request: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return agentExchangeAnswer{}, fmt.Errorf("build agent credential-exchange request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := agentExchangeClient.Do(req)
+	if err != nil {
+		// The URL is safe to name; the request body is not, so it is never wrapped
+		// into an error. net/http keeps the URL out of the error it returns for a
+		// POST body, and there is no credential in the query string.
+		return agentExchangeAnswer{}, fmt.Errorf("agent credential exchange at %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
+
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024)) //nolint:errcheck // diagnostic only
+		err := fmt.Errorf(
+			"agent credential exchange refused by %s (HTTP %d): %s\n%s",
+			endpoint, resp.StatusCode, redactCredential(strings.TrimSpace(string(msg)), cred),
+			agentRefusalDiagnosis(platformURL, cred))
+		// Only the platform's own examined refusal is a REJECTION: a 401 or
+		// 403 whose body is the constant verdict the exchange endpoint writes
+		// ({"error":"agent_credential_rejected", …}). A 5xx is the platform
+		// failing to answer; a 401/403 with any other body is an ingress, a
+		// WAF, or an unrelated authorization layer that never examined the
+		// credential — and a credential is not discarded because a proxy was
+		// misconfigured, any more than because the signer was down.
+		if isPlatformCredentialVerdict(resp.StatusCode, msg) {
+			return agentExchangeAnswer{}, &agentRejectedError{err: err}
+		}
+		return agentExchangeAnswer{}, err
+	}
+
+	var out agentExchangeAnswer
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return agentExchangeAnswer{}, fmt.Errorf("decode agent credential-exchange response: %w", err)
+	}
+	return out, nil
+}
+
+// agentRejectedVerdict is the `error` the exchange endpoint answers
+// with when it examined the credential and refused it (judge-api
+// handlers_agent_exchange.go: agentExchangeRefusal). One constant string for
+// every cause, by design; the point here is only that the PLATFORM wrote it.
+const agentRejectedVerdict = "agent_credential_rejected"
+
+// isPlatformCredentialVerdict reports whether a non-200 answer is the
+// platform's own refusal of the credential: the status the endpoint uses AND
+// the structured body it writes. Either alone is not enough — the status is
+// what every proxy speaks, and the body on a 200 is not a refusal.
+func isPlatformCredentialVerdict(status int, body []byte) bool {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return false
+	}
+	var verdict struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &verdict); err != nil {
+		return false
+	}
+	return verdict.Error == agentRejectedVerdict
+}
+
+// recordAnsweredExpiry stores the platform's expires_at from an exchange
+// response. Empty (an older platform) is a no-op; unreadable is a refusal.
+func recordAnsweredExpiry(cred AgentCredential, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	ceiling, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return fmt.Errorf("the platform answered with an unreadable expires_at: %w", err)
+	}
+	if err := RecordAgentExpiry(cred, ceiling); err != nil {
+		return fmt.Errorf("recording the agent's expiry: %w", err)
+	}
+	return nil
 }
 
 // checkSPIFFEIDNamesCredential requires the returned principal to be THE ONE

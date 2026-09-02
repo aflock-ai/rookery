@@ -193,3 +193,53 @@ func TestAgentLoginReadsStdinAndNeverEchoesTheCredential(t *testing.T) {
 		assert.Contains(t, text, "a-1", "the agent id is not secret and is what an operator needs to see")
 	}
 }
+
+// A stored credential is not an identity until the platform has redeemed it:
+// the store keeps an unredeemed credential across a transient refusal on
+// purpose, and `agent status` exiting 0 with "Agent principal for" over one
+// of those is what let an end-to-end run read a 503 as success. The trust
+// domain is pinned only by a successful exchange, so it is the record of
+// redemption, and status says which state the credential is in.
+func TestAgentStatusDistinguishesPendingFromRedeemed(t *testing.T) {
+	isolateAgentConfig(t)
+	pending := auth.AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-1", RefreshCredential: agentTestSecret}
+	require.NoError(t, auth.SaveAgent(pending))
+
+	run := func() string {
+		status := AgentStatusCmd()
+		var out bytes.Buffer
+		status.SetOut(&out)
+		status.SetArgs([]string{"--platform-url", "https://p.example.com"})
+		require.NoError(t, status.Execute())
+		return out.String()
+	}
+
+	before := run()
+	assert.Contains(t, before, "not yet redeemed", "an unpinned credential is pending, and status must say so: %s", before)
+	assert.NotContains(t, before, "spiffe://", "no identity can be named before the platform answered: %s", before)
+
+	require.NoError(t, auth.PinAgentTrustDomain(pending, "factory.example"))
+	after := run()
+	assert.Contains(t, after, "spiffe://factory.example/tenant/t-1/agent/a-1", "a redeemed credential names the whole identity, authority included: %s", after)
+	assert.NotContains(t, after, "not yet redeemed")
+}
+
+// A ceremony's delivery sits in the pending slot beside the credential that
+// signs; status names both, each as what it is, so an operator who sees a
+// stalled activation knows which identity their runs use meanwhile.
+func TestAgentStatusNamesAPendingDeliveryBesideTheActiveIdentity(t *testing.T) {
+	isolateAgentConfig(t)
+	active := auth.AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-active", RefreshCredential: agentTestSecret, TrustDomain: "p.example.com"}
+	require.NoError(t, auth.SaveAgent(active))
+	require.NoError(t, auth.SavePendingAgent(auth.AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-new", RefreshCredential: "new-" + agentTestSecret}))
+
+	status := AgentStatusCmd()
+	var out bytes.Buffer
+	status.SetOut(&out)
+	status.SetArgs([]string{"--platform-url", "https://p.example.com"})
+	require.NoError(t, status.Execute())
+	text := out.String()
+	assert.Contains(t, text, "Pending for https://p.example.com: agent a-new")
+	assert.Contains(t, text, "spiffe://p.example.com/tenant/t-1/agent/a-active", "the active identity is still the one named as signing")
+	assert.NotContains(t, text, agentTestSecret)
+}

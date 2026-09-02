@@ -7,9 +7,11 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Agent principal credentials live in their own file, their own type, and their
@@ -60,6 +62,21 @@ type AgentCredential struct {
 	// different authority — and it makes the pinned value visible in a file an
 	// operator can read and correct.
 	TrustDomain string `json:"trust_domain,omitempty"`
+	// ExpiresAt is the hard ceiling the platform answered with at enrollment —
+	// the TTL the human confirmed (8h by default, 7d at most). It is a COPY of
+	// the platform's decision, kept so `agent status` can say when this identity
+	// stops signing and so an exchange the platform would certainly refuse is
+	// not attempted. It is not authority: the platform re-checks its own copy
+	// at every exchange, and a zero value here means "not recorded", never
+	// "unbounded".
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
+}
+
+// Expired reports whether this credential is past the ceiling it recorded. A
+// credential with no recorded ceiling is NOT reported expired: the platform
+// holds the authoritative copy and answers for itself.
+func (c AgentCredential) Expired(now time.Time) bool {
+	return !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt)
 }
 
 // String renders the credential with the secret replaced, so a stray %v, %s or
@@ -74,8 +91,19 @@ func (c AgentCredential) String() string {
 // agentFileStore is the on-disk shape: agent credentials keyed by normalized
 // platform URL. There is no active-platform pointer — an agent is enrolled
 // against a specific platform and is selected by the URL the run targets.
+//
+// TWO SLOTS PER PLATFORM. Agents holds the credential this machine SIGNS
+// WITH: redeemed by the platform at least once. Pending holds a credential a
+// ceremony DELIVERED that the platform has not yet redeemed. They are kept
+// apart because redemption can fail transiently (the signer down, a proxy
+// in the way), and a delivery that overwrote the active slot turned that
+// outage into a lost identity: the new credential unredeemable once its
+// window closed, the old one gone. A pending credential is promoted into
+// the active slot by the exchange that redeems it, discarded by the
+// platform's own refusal, and otherwise left for the next run to try again.
 type agentFileStore struct {
-	Agents map[string]AgentCredential `json:"agents"`
+	Agents  map[string]AgentCredential `json:"agents"`
+	Pending map[string]AgentCredential `json:"pending,omitempty"`
 }
 
 // AgentStorePath is cilock's agent-credential file, a sibling of StorePath in
@@ -104,6 +132,9 @@ func loadAgents() (*agentFileStore, error) {
 	if s.Agents == nil {
 		s.Agents = map[string]AgentCredential{}
 	}
+	if s.Pending == nil {
+		s.Pending = map[string]AgentCredential{}
+	}
 	return &s, nil
 }
 
@@ -122,11 +153,31 @@ func saveAgents(s *agentFileStore) error {
 	return writeStoreFile0600(path, data)
 }
 
-// SaveAgent stores (or replaces) the agent credential for its platform URL.
-func SaveAgent(c AgentCredential) error {
+func normalizeStoredAgent(c AgentCredential) (AgentCredential, error) {
 	c.PlatformURL = NormalizeURL(c.PlatformURL)
 	if c.PlatformURL == "" || c.TenantID == "" || c.AgentID == "" || c.RefreshCredential == "" {
-		return fmt.Errorf("agent credential needs a platform URL, tenant id, agent id, and refresh credential")
+		return c, fmt.Errorf("agent credential needs a platform URL, tenant id, agent id, and refresh credential")
+	}
+	return c, nil
+}
+
+// SaveAgent stores (or replaces) the ACTIVE agent credential for its platform
+// URL — the one this machine signs with. `cilock agent login` (a credential
+// minted elsewhere and handed over) lands here; a ceremony's delivery does
+// not (SavePendingAgent), and a redeemed pending credential is moved here by
+// PromotePendingAgentIf.
+//
+// An explicit active write SUPERSEDES anything pending for the platform, in
+// the same locked write. The operator choosing an identity now is a later
+// decision than a ceremony that delivered earlier and never redeemed; left
+// in place, that older credential would be promoted over the login by the
+// next run, and a promotion racing the login would find its slot still
+// there. Clearing it here makes both impossible: the promotion's
+// compare-and-swap finds the slot gone and refuses.
+func SaveAgent(c AgentCredential) error {
+	c, err := normalizeStoredAgent(c)
+	if err != nil {
+		return err
 	}
 	path, err := AgentStorePath()
 	if err != nil {
@@ -142,8 +193,99 @@ func SaveAgent(c AgentCredential) error {
 			return err
 		}
 		s.Agents[c.PlatformURL] = c
+		delete(s.Pending, c.PlatformURL)
 		return saveAgents(s)
 	})
+}
+
+// SavePendingAgent stores (or replaces) the PENDING credential for its
+// platform URL: delivered by a ceremony, not yet redeemed. The active slot is
+// untouched — until the platform has answered for this credential, the
+// identity this machine signs with is whatever it was.
+func SavePendingAgent(c AgentCredential) error {
+	c, err := normalizeStoredAgent(c)
+	if err != nil {
+		return err
+	}
+	path, err := AgentStorePath()
+	if err != nil {
+		return err
+	}
+	return withStoreLock(path, func() error {
+		s, err := loadAgents()
+		if err != nil {
+			return err
+		}
+		s.Pending[c.PlatformURL] = c
+		return saveAgents(s)
+	})
+}
+
+// LookupPendingAgent returns the delivered-but-unredeemed credential for
+// platformURL, or nil when there is none. Same error contract as LookupAgent.
+func LookupPendingAgent(platformURL string) (*AgentCredential, error) {
+	s, err := loadAgents()
+	if err != nil {
+		return nil, err
+	}
+	c, ok := s.Pending[NormalizeURL(platformURL)]
+	if !ok {
+		return nil, nil
+	}
+	return &c, nil
+}
+
+// PromotePendingAgentIf moves the pending credential for expect's platform
+// into the active slot — pin, ceiling and all — only if what is pending IS
+// expect (sameIdentity). This is the one write that changes which identity
+// the machine signs with as a result of a ceremony, and it happens only
+// after the platform redeemed that exact credential. A pending slot that is
+// empty or holds another ceremony's credential is ErrAgentCredentialReplaced.
+func PromotePendingAgentIf(expect AgentCredential) error {
+	path, err := AgentStorePath()
+	if err != nil {
+		return err
+	}
+	return withStoreLock(path, func() error {
+		s, err := loadAgents()
+		if err != nil {
+			return err
+		}
+		key := NormalizeURL(expect.PlatformURL)
+		c, ok := s.Pending[key]
+		if !ok || !c.sameIdentity(expect) {
+			return ErrAgentCredentialReplaced
+		}
+		s.Agents[key] = c
+		delete(s.Pending, key)
+		return saveAgents(s)
+	})
+}
+
+// DeletePendingAgentIf removes the pending credential for expect's platform
+// only if it IS expect. Reports whether it was removed; an absent or
+// different pending credential is left alone and reported as not removed.
+func DeletePendingAgentIf(expect AgentCredential) (bool, error) {
+	path, err := AgentStorePath()
+	if err != nil {
+		return false, err
+	}
+	var removed bool
+	err = withStoreLock(path, func() error {
+		s, lerr := loadAgents()
+		if lerr != nil {
+			return lerr
+		}
+		key := NormalizeURL(expect.PlatformURL)
+		c, ok := s.Pending[key]
+		if !ok || !c.sameIdentity(expect) {
+			return nil
+		}
+		delete(s.Pending, key)
+		removed = true
+		return saveAgents(s)
+	})
+	return removed, err
 }
 
 // LookupAgent returns the enrolled agent credential for platformURL, or nil
@@ -164,6 +306,92 @@ func LookupAgent(platformURL string) (*AgentCredential, error) {
 		return nil, nil
 	}
 	return &c, nil
+}
+
+// sameIdentity reports whether two stored credentials are THE SAME
+// credential: same platform, tenant, agent, and bearer. Everything an
+// exchange derives — a pin, a ceiling — belongs to exactly the credential
+// that was presented, and a store entry that differs in any of these is a
+// different identity another command put there.
+func (c AgentCredential) sameIdentity(o AgentCredential) bool {
+	return NormalizeURL(c.PlatformURL) == NormalizeURL(o.PlatformURL) &&
+		c.TenantID == o.TenantID && c.AgentID == o.AgentID && c.RefreshCredential == o.RefreshCredential
+}
+
+// ErrAgentCredentialReplaced is returned by the compare-and-swap mutators when
+// the store no longer holds the credential the caller derived its update
+// from: another enroll or login replaced it in the meantime.
+var ErrAgentCredentialReplaced = errors.New("the stored agent credential was replaced by another command")
+
+// updateAgentIf applies fn to the stored credential for expect's platform, but
+// ONLY if what is stored is expect itself (sameIdentity) — in WHICHEVER slot
+// holds it: a pending credential is exchanged at redemption, and the pin and
+// ceiling that exchange answers belong to it just as they would to an active
+// one. Under the store lock, so the read and the write are one decision.
+// Absent from both slots is a no-op (the agent was logged out in between;
+// nothing left to protect); present-but-different in the slot that matches
+// its platform is ErrAgentCredentialReplaced, never a write onto someone
+// else's credential.
+func updateAgentIf(expect AgentCredential, fn func(c *AgentCredential) (changed bool)) error {
+	path, err := AgentStorePath()
+	if err != nil {
+		return err
+	}
+	return withStoreLock(path, func() error {
+		s, err := loadAgents()
+		if err != nil {
+			return err
+		}
+		key := NormalizeURL(expect.PlatformURL)
+		for _, slot := range []map[string]AgentCredential{s.Agents, s.Pending} {
+			c, ok := slot[key]
+			if !ok || !c.sameIdentity(expect) {
+				continue
+			}
+			if !fn(&c) {
+				return nil
+			}
+			slot[key] = c
+			return saveAgents(s)
+		}
+		// Neither slot holds this credential. Nothing at all for the platform
+		// is a logout in between — nothing left to protect. Anything else for
+		// the platform means the store moved under the caller.
+		_, active := s.Agents[key]
+		_, pending := s.Pending[key]
+		if active || pending {
+			return ErrAgentCredentialReplaced
+		}
+		return nil
+	})
+}
+
+// DeleteAgentIf removes the stored credential for expect's platform only if
+// it IS expect. Reports whether it was removed.
+func DeleteAgentIf(expect AgentCredential) (bool, error) {
+	path, err := AgentStorePath()
+	if err != nil {
+		return false, err
+	}
+	var removed bool
+	err = withStoreLock(path, func() error {
+		s, lerr := loadAgents()
+		if lerr != nil {
+			return lerr
+		}
+		key := NormalizeURL(expect.PlatformURL)
+		c, ok := s.Agents[key]
+		if !ok {
+			return nil
+		}
+		if !c.sameIdentity(expect) {
+			return ErrAgentCredentialReplaced
+		}
+		delete(s.Agents, key)
+		removed = true
+		return saveAgents(s)
+	})
+	return removed, err
 }
 
 // PinAgentTrustDomain is a COMPARE-AND-SET on the SPIFFE authority an enrolled
@@ -196,32 +424,46 @@ func LookupAgent(platformURL string) (*AgentCredential, error) {
 // same run — compares against it and refuses. The exposure is therefore one
 // exchange wide, and it requires two first-use runs concurrent against a
 // platform that answers them differently.
-func PinAgentTrustDomain(platformURL, trustDomain string) error {
-	path, err := AgentStorePath()
-	if err != nil {
-		return err
-	}
-	return withStoreLock(path, func() error {
-		s, err := loadAgents()
-		if err != nil {
-			return err
-		}
-		key := NormalizeURL(platformURL)
-		c, ok := s.Agents[key]
-		if !ok {
-			return nil
-		}
+//
+// It pins onto THE CREDENTIAL THAT WAS EXCHANGED (expect), never onto whatever
+// the store holds now: a concurrent enroll or login can have replaced the
+// entry during the exchange, and a pin derived from one identity's answer
+// must not land on another's.
+func PinAgentTrustDomain(expect AgentCredential, trustDomain string) error {
+	var mismatch error
+	err := updateAgentIf(expect, func(c *AgentCredential) bool {
 		if c.TrustDomain != "" {
 			if c.TrustDomain != trustDomain {
-				return fmt.Errorf(
+				mismatch = fmt.Errorf(
 					"this agent is pinned to the trust domain %q but the platform answered %q",
 					c.TrustDomain, trustDomain)
 			}
-			return nil
+			return false
 		}
 		c.TrustDomain = trustDomain
-		s.Agents[key] = c
-		return saveAgents(s)
+		return true
+	})
+	if err != nil {
+		return err
+	}
+	return mismatch
+}
+
+// RecordAgentExpiry overwrites the stored ceiling for platformURL with the one
+// the platform answered at exchange. Unlike the trust-domain pin this is not
+// first-use-only: the platform's copy is authoritative every time, and a
+// mismatch with what the callback carried is corrected, not refused. No
+// credential stored is a no-op.
+//
+// Same rule as the pin: the ceiling belongs to the credential that was
+// exchanged, and is written only if that credential is still what is stored.
+func RecordAgentExpiry(expect AgentCredential, expiresAt time.Time) error {
+	return updateAgentIf(expect, func(c *AgentCredential) bool {
+		if c.ExpiresAt.Equal(expiresAt) {
+			return false
+		}
+		c.ExpiresAt = expiresAt
+		return true
 	})
 }
 
@@ -240,10 +482,13 @@ func DeleteAgent(platformURL string) (bool, error) {
 			return lerr
 		}
 		key := NormalizeURL(platformURL)
-		if _, ok := s.Agents[key]; !ok {
+		_, active := s.Agents[key]
+		_, pending := s.Pending[key]
+		if !active && !pending {
 			return nil
 		}
 		delete(s.Agents, key)
+		delete(s.Pending, key)
 		existed = true
 		return saveAgents(s)
 	})

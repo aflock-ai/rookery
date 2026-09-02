@@ -89,6 +89,7 @@ air-gapped environments.`,
 	_ = cmd.PersistentFlags().MarkHidden(helpAdvancedFlag)
 	cmd.SetHelpFunc(conciseHelpFunc)
 	cmd.AddCommand(LoginCmd())
+	cmd.AddCommand(EnrollCmd())
 	cmd.AddCommand(AgentCmd())
 	cmd.AddCommand(LogoutCmd())
 	cmd.AddCommand(WhoamiCmd())

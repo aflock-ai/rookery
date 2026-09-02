@@ -9,11 +9,16 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	"github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/spf13/cobra"
 )
+
+// agentCommandName is the noun both `cilock agent …` and `cilock enroll agent`
+// spell: the same thing, from two directions.
+const agentCommandName = "agent"
 
 // AgentCmd groups the enrolled-agent principal commands. An agent principal is
 // a tenant-scoped, revocable identity a human enrolled at AAL2 on the platform;
@@ -21,14 +26,148 @@ import (
 // an agent never presents the operator's human account.
 func AgentCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "agent",
+		Use:               agentCommandName,
 		Short:             "Manage this machine's enrolled agent principal",
 		Long:              "Store and inspect the enrolled agent credential this machine signs with.\n\nAn agent principal is separate from `cilock login`: it has its own SPIFFE identity,\nits own credential file, and it takes precedence over the human session when both\nare present for a platform.",
 		DisableAutoGenTag: true,
 	}
+	cmd.AddCommand(AgentEnrollCmd())
 	cmd.AddCommand(AgentLoginCmd())
 	cmd.AddCommand(AgentStatusCmd())
 	cmd.AddCommand(AgentLogoutCmd())
+	return cmd
+}
+
+// browserEnroll and activateEnrolledAgent are the two halves of the ceremony
+// the command sequences: the browser approval (needs a human and a browser)
+// and the redemption exchange (needs the platform). Package variables so the
+// command's own decisions — flag validation, ordering, what it prints and
+// when — are executed by tests without either.
+var (
+	browserEnroll         = auth.BrowserEnroll
+	activateEnrolledAgent = auth.ActivateEnrolledAgent
+)
+
+// The platform's bounds on a principal's lifetime (judge-api's
+// createAgentPrincipal refuses the same). Checked here too so a value the
+// platform would refuse never opens a browser tab the human then approves for
+// nothing.
+const (
+	agentTTLMin = 15 * time.Minute
+	agentTTLMax = 7 * 24 * time.Hour
+)
+
+// EnrollCmd groups the enrollment ceremonies: `cilock enroll agent`.
+func EnrollCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:               "enroll",
+		Short:             "Enroll an identity on the platform — a human approves in the browser",
+		DisableAutoGenTag: true,
+	}
+	cmd.AddCommand(EnrollAgentCmd())
+	return cmd
+}
+
+// EnrollAgentCmd runs the whole enrollment ceremony in one command: a browser
+// opens, a human signs in and approves at AAL2, the minted credential lands in
+// the agent store without ever being displayed, and the command REDEEMS it
+// with the platform before it reports success.
+func EnrollAgentCmd() *cobra.Command {
+	var platformURL, displayName, repo string
+	var ttl time.Duration
+	cmd := &cobra.Command{
+		Use:   agentCommandName,
+		Short: "Enroll this machine's agent identity — a human approves in the browser",
+		Long: "Enroll an agent principal for this machine in one ceremony.\n\n" +
+			"A browser window opens on the platform's enrollment page. Your human signs in,\n" +
+			"reviews what is being minted — name, tenant, repository scope, lifetime —\n" +
+			"steps up to AAL2 (their passkey / second factor — required afresh for every\n" +
+			"ceremony, not once per session), and confirms. The passkey locks in exactly\n" +
+			"what was reviewed: the platform refuses anything else on that ceremony. It\n" +
+			"then mints the principal\n" +
+			"inside that very session and hands the one-time credential straight back to this\n" +
+			"command, which stores it 0600 in the agent store and then redeems it with the\n" +
+			"platform. Only that first exchange ACTIVATES the principal: a ceremony whose\n" +
+			"credential never arrives leaves nothing the platform will ever accept.\n\n" +
+			"The identity is TIME-BOUND. It stops signing at the lifetime the human confirmed\n" +
+			"(eight hours by default, seven days at most) and cannot be extended; a new\n" +
+			"ceremony mints a new principal. Nothing is pasted, nothing is printed, and\n" +
+			"afterwards `cilock run` signs as the agent, never as the human.\n\n" +
+			"An agent may run this command; it cannot complete it. The mutation only executes\n" +
+			"behind a human session whose assurance level the PLATFORM observed, so there is\n" +
+			"no flag, environment variable, or input that substitutes for the person.",
+		Example: "  # Enroll for a working day, with a browser approval by your human\n" +
+			"  cilock enroll agent\n\n" +
+			"  # Pre-fill the label, repository scope and lifetime shown on the approve page\n" +
+			"  cilock enroll agent --name claude-on-coles-mbp --repo testifysec/judge --ttl 4h",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			url := platformURL
+			if url == "" {
+				url = config.DefaultPlatformURL
+			}
+			// Same rule as login and agent login: refuse a cleartext non-loopback
+			// platform before any flow runs — the callback this ceremony opens
+			// will receive a long-lived signing secret.
+			if err := config.RequireSecurePlatformURL(url); err != nil {
+				return err
+			}
+			if cmd.Flags().Changed("ttl") && (ttl < agentTTLMin || ttl > agentTTLMax) {
+				return fmt.Errorf("--ttl %s is outside what the platform accepts: between %s and %s", ttl, agentTTLMin, agentTTLMax)
+			}
+			// The ceremony's callback stores the delivered credential PENDING,
+			// beside whatever this machine already signs with — never over it.
+			// A working identity is superseded only by one the platform has
+			// redeemed.
+			cred, err := browserEnroll(url, auth.EnrollParams{DisplayName: displayName, Repo: repo, TTL: ttl})
+			if err != nil {
+				return err
+			}
+			// REDEEM BEFORE CLAIMING. The platform created the principal pending;
+			// this exchange is what activates it, and only then is the delivered
+			// credential promoted to the one this machine signs with. A refusal
+			// means the ceremony did not produce an identity and the command
+			// fails, so nothing downstream believes otherwise; a transient
+			// failure keeps the credential pending for the next run to redeem.
+			activated, err := activateEnrolledAgent(url, *cred)
+			if err != nil {
+				return err
+			}
+			// Identifiers only — the credential was stored inside the callback
+			// and is deliberately not available here to print. What is printed
+			// is the identity the PLATFORM answered with at redemption, not the
+			// callback's claim about itself.
+			out := cmd.OutOrStdout()
+			_, _ = fmt.Fprintf(out, "Enrolled. Agent principal for %s\n", auth.NormalizeURL(url))
+			_, _ = fmt.Fprintf(out, "  tenant: %s\n  agent:  %s\n  spiffe: %s\n", cred.TenantID, cred.AgentID, activated.SPIFFEID)
+			if !cred.ExpiresAt.IsZero() {
+				_, _ = fmt.Fprintf(out, "  expires: %s (%s from now; not extendable — a new ceremony mints a new principal)\n",
+					cred.ExpiresAt.Local().Format("2006-01-02 15:04 MST"), time.Until(cred.ExpiresAt).Round(time.Minute))
+			}
+			_, _ = fmt.Fprintf(out, "`cilock run` against this platform now signs as this agent, not as your human's login.\n")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&platformURL, "platform-url", "", "TestifySec platform URL (default "+config.DefaultPlatformURL+")")
+	cmd.Flags().StringVar(&displayName, "name", "", "Pre-fill the principal's display label on the approve page")
+	cmd.Flags().StringVar(&repo, "repo", "", "Pre-select a repository scope on the approve page (owner/name)")
+	cmd.Flags().DurationVar(&ttl, "ttl", 0, "Pre-select the principal's lifetime on the approve page (15m to 168h; the platform defaults to 8h)")
+	return cmd
+}
+
+// AgentEnrollCmd is the pre-rename spelling, `cilock agent enroll`. Kept so a
+// setup document or a shell history that names it still works, hidden so
+// nothing new learns it.
+func AgentEnrollCmd() *cobra.Command {
+	cmd := EnrollAgentCmd()
+	cmd.Use = "enroll"
+	cmd.Hidden = true
+	cmd.Deprecated = "use `cilock enroll agent`"
+	// The examples belong to the canonical spelling; an alias that showed
+	// them would teach the very name it exists to retire.
+	cmd.Example = ""
 	return cmd
 }
 
@@ -122,14 +261,44 @@ func AgentStatusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			pending, err := auth.LookupPendingAgent(url)
+			if err != nil {
+				return err
+			}
 			out := cmd.OutOrStdout()
+			// A delivered credential the platform has not yet redeemed is not
+			// an identity this machine signs with; it is named as what it is,
+			// beside (or instead of) the one that does.
+			if pending != nil {
+				_, _ = fmt.Fprintf(out, "Pending for %s: agent %s (tenant %s) — delivered by a ceremony, not yet redeemed; the next `cilock run` (within ten minutes of enrollment) will try again.\n",
+					auth.NormalizeURL(url), pending.AgentID, pending.TenantID)
+			}
 			if cred == nil {
-				_, _ = fmt.Fprintf(out, "No agent principal enrolled for %s.\n", auth.NormalizeURL(url))
+				if pending == nil {
+					_, _ = fmt.Fprintf(out, "No agent principal enrolled for %s.\n", auth.NormalizeURL(url))
+				}
 				return nil
 			}
 			// Identifiers only. The refresh credential is never displayed.
 			_, _ = fmt.Fprintf(out, "Agent principal for %s\n", cred.PlatformURL)
 			_, _ = fmt.Fprintf(out, "  tenant: %s\n  agent:  %s\n", cred.TenantID, cred.AgentID)
+			// The active slot holds only what the platform has redeemed, and a
+			// redemption pins the trust domain; a credential handed over by
+			// `cilock agent login` has not been exchanged yet, and says so.
+			if cred.TrustDomain == "" {
+				_, _ = fmt.Fprintln(out, "  not yet redeemed: the platform has not answered this credential; the next `cilock run` will present it.")
+			} else {
+				_, _ = fmt.Fprintf(out, "  spiffe: spiffe://%s/tenant/%s/agent/%s\n", cred.TrustDomain, cred.TenantID, cred.AgentID)
+			}
+			switch {
+			case cred.Expired(time.Now()):
+				_, _ = fmt.Fprintf(out, "  EXPIRED at %s — this identity no longer signs; run `cilock enroll agent` for a new ceremony.\n",
+					cred.ExpiresAt.Local().Format("2006-01-02 15:04 MST"))
+				return nil
+			case !cred.ExpiresAt.IsZero():
+				_, _ = fmt.Fprintf(out, "  expires: %s (%s from now)\n",
+					cred.ExpiresAt.Local().Format("2006-01-02 15:04 MST"), time.Until(cred.ExpiresAt).Round(time.Minute))
+			}
 			_, _ = fmt.Fprintln(out, "  runs against this platform sign as this agent, taking precedence over `cilock login`.")
 			return nil
 		},

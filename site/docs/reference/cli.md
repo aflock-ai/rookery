@@ -21,6 +21,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock use` | Switch the working tenant/product the stored session binds attestations to. |
 | `cilock whoami` | Show the current platform session (tenant, product, expiry). |
 | `cilock logout` | Remove the stored platform session credential. |
+| `cilock enroll agent` | Enroll this machine's agent principal in one ceremony: a human approves in the browser with a fresh passkey step-up, cilock stores and redeems the credential. |
 | `cilock agent login` / `logout` / `status` | Manage this machine's enrolled agent principal (signs in place of the human session when present). |
 | `cilock trust [provider] [owner/repo]` | Register an OIDC identity the platform trusts for keyless upload (CI). |
 | `cilock doctor` | Read-only preflight: is the environment sane to attest + upload against the platform? |
@@ -139,9 +140,29 @@ cilock logout
 cilock logout --platform-url https://platform.example.com
 ```
 
+### `cilock enroll agent`
+
+Enroll an agent principal for this machine in one ceremony. A browser window opens on the platform's enrollment page; **your human** signs in, reviews what is being minted — name, organization, repository scope, lifetime — steps up with their passkey (required afresh for every ceremony — a session that stepped up this morning is not a person present now), and confirms. The passkey locks in exactly what was reviewed: the platform digests the review into the ceremony's challenge and refuses a mint that differs in any of those fields, so a browser an agent drives cannot take the gesture for one enrollment and submit another. The platform mints the principal inside that session and hands the one-time credential, sealed to this ceremony's ephemeral key, straight back to the command, which stores it `0600` and then **redeems it**. Only that first exchange activates the principal. The delivered credential is held *pending* beside whatever this machine already signs with, never over it: if the platform refuses it (its own structured verdict — a bare 401/403 from a proxy is not one), the command fails and discards only the pending credential, and the previously enrolled identity keeps signing; if the platform did not answer, both are kept and the next `cilock run` redeems the pending one first. A ceremony that did not complete leaves nothing that claims to be an identity, and costs nothing that was.
+
+The identity is **time-bound**: it stops signing at the lifetime the human confirmed (eight hours by default, seven days at most) and cannot be extended. Run the command again for a new principal. An agent may run this command; it cannot complete it — nothing on the command line substitutes for the person in the browser.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform to enroll with. |
+| `--name <label>` | (none) | Pre-fill the principal's display label on the approve page. |
+| `--repo <owner/name>` | (none) | Pre-select a repository scope on the approve page. |
+| `--ttl <duration>` | platform default (8h) | Pre-select the principal's lifetime on the approve page; 15m–168h. |
+
+```bash
+cilock enroll agent
+cilock enroll agent --name claude-on-coles-mbp --repo testifysec/judge --ttl 4h
+```
+
+`cilock agent enroll` is a hidden alias of the same command.
+
 ### `cilock agent login`
 
-Store the refresh credential a human minted for this agent at enrollment. The credential is read from **STDIN by default** so it never lands in shell history or a process listing; it is written `0600` to cilock's own agent store, kept apart from the `cilock login` session, and never printed again. Once stored, runs against that platform sign as the **agent principal**, taking precedence over any human `cilock login` session. The tenant and agent ids are not secret — they are the SPIFFE path segments (`spiffe://<trust-domain>/tenant/<tenant-id>/agent/<agent-id>`) every certificate this credential buys will carry.
+Store a refresh credential minted for this agent outside the `enroll agent` ceremony (for example by an administrator running the `createAgentPrincipal` mutation directly). The credential is read from **STDIN by default** so it never lands in shell history or a process listing; it is written `0600` to cilock's own agent store, kept apart from the `cilock login` session, and never printed again. Once stored, runs against that platform sign as the **agent principal**, taking precedence over any human `cilock login` session. The tenant and agent ids are not secret — they are the SPIFFE path segments (`spiffe://<trust-domain>/tenant/<tenant-id>/agent/<agent-id>`) every certificate this credential buys will carry.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -169,7 +190,7 @@ cilock agent logout --platform-url https://platform.example.com
 
 ### `cilock agent status`
 
-Show the agent principal this machine would sign as against one platform. Like `logout`, it reads the credential for `--platform-url` only; with no flag it reports the public platform, so a non-default enrollment shows as absent unless you name it.
+Show the agent principal this machine would sign as against one platform: the full SPIFFE ID once the platform has redeemed the credential, or `not yet redeemed` while it has not (an unredeemed credential is kept across a transient refusal and the next `cilock run` retries), and when its authority expires (or that it already has, in which case the remedy is `cilock enroll agent`). Like `logout`, it reads the credential for `--platform-url` only; with no flag it reports the public platform, so a non-default enrollment shows as absent unless you name it.
 
 | Flag | Default | Description |
 |---|---|---|
