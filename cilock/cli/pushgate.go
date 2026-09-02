@@ -116,11 +116,17 @@ type pushgateDeliveryStatus struct {
 	Remediation        *string `json:"remediation,omitempty"`
 }
 
+// pushgateDisplayName is how the product is named where a person reads it —
+// help text and printed headers — the same string as the site's wordmark, so
+// the reader knows where to go. Command names, remote names and error codes
+// stay "pushgate"; errors describing a mechanism keep "Pushgate" as a noun.
+const pushgateDisplayName = "Pushgate.dev"
+
 // PushgateCmd groups the read-only Pushgate delivery operations. Evidence
 // creation remains under run/attest; this domain answers what happened after
 // an authenticated Git push was admitted.
 func PushgateCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "pushgate", Short: "Inspect delivery of pushes accepted by Pushgate"}
+	cmd := &cobra.Command{Use: "pushgate", Short: "Inspect delivery of pushes accepted by " + pushgateDisplayName}
 	cmd.AddCommand(pushgateStatusCmd())
 	return cmd
 }
@@ -130,7 +136,7 @@ func pushgateStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show whether the current commit was accepted and delivered",
-		Long: `Read the exact Pushgate delivery record for a Git ref and commit.
+		Long: `Read the exact ` + pushgateDisplayName + ` delivery record for a Git ref and commit.
 
 By default CI/lock discovers the current branch, HEAD commit, selected platform,
 and configured Pushgate Git remote. A checked-out tag or any other detached HEAD
@@ -230,7 +236,7 @@ func reportPushgateProgress(cmd *cobra.Command, status *pushgateDeliveryStatus, 
 	if o.json || status.State == previous {
 		return previous, nil
 	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Pushgate: %s (attempts %d)\n", status.State, status.Attempts); err != nil {
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), pushgateDisplayName+": %s (attempts %d)\n", status.State, status.Attempts); err != nil {
 		return previous, err
 	}
 	return status.State, nil
@@ -568,7 +574,7 @@ func writePushgateStatus(w io.Writer, status *pushgateDeliveryStatus, jsonOut bo
 	if jsonOut {
 		return json.NewEncoder(w).Encode(status)
 	}
-	if _, err := fmt.Fprintf(w, "Pushgate delivery\n  ref:       %s\n  commit:    %s\n  state:     %s\n", status.Ref, status.Commit, status.State); err != nil {
+	if _, err := fmt.Fprintf(w, pushgateDisplayName+" delivery\n  ref:       %s\n  commit:    %s\n  state:     %s\n", status.Ref, status.Commit, status.State); err != nil {
 		return err
 	}
 	if status.Attempts > 0 {
