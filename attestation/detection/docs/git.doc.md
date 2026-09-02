@@ -12,6 +12,7 @@ Captures the state of the git repository at the working directory — HEAD commi
 The attestor opens the repo with `go-git` (using `DetectDotGit`, so it walks up from `--workingdir` to find `.git`) and records:
 
 - **`commithash`** — SHA-1 of HEAD commit. Also emitted as a `commitdigest` `DigestSet` (`sha1`).
+- **`commithashverified`** — `true` when the commit hash was **recomputed from the canonical commit bytes with a collision-detecting hasher** and only that computed value was recorded — never the id storage merely claims. This signed capability marker is what the SHA-1 match exception in policy digest matching requires (`cryptoutil/digestset.go`); legacy evidence without the marker cannot use that exception.
 - **`author` / `authoremail`** — `commit.Author.Name` / `.Email`.
 - **`committername` / `committeremail`** — `commit.Committer.Name` / `.Email`.
 - **`commitdate`** — author timestamp (`time.Time.String()` format).
@@ -61,6 +62,7 @@ None. The attestor is configured entirely by the working directory; there are no
   "gitbinpath": "/usr/bin/git",
   "gitbinhash": { "sha256": "..." },
   "commithash": "9f1c...",
+  "commithashverified": true,
   "author": "Jane Dev",
   "authoremail": "jane@example.com",
   "committername": "Jane Dev",
