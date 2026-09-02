@@ -489,6 +489,12 @@ type RunOptions struct {
 	// pointer. nil for every non-agent run.
 	agentPrincipal *agentPrincipal
 
+	// platformPrincipal is the stored credential this run signs as — the input
+	// to the fail-closed evidence gate (EnforceEvidenceStorage). Set by the
+	// agent and session credential paths; nil when no stored credential
+	// resolved. See the type for why it is its own field.
+	platformPrincipal *platformPrincipal
+
 	// agentIdentityErr is a FAIL-CLOSED failure on the enrolled-agent path: an
 	// unreadable agent store, a refused credential exchange, or a Fulcio origin
 	// the agent token is not valid at. Callers of ResolvePlatformDefaults must
@@ -1062,6 +1068,7 @@ func (ro *RunOptions) applyPlatformCredential(cmd *cobra.Command, cred *auth.Cre
 	// re-reading the credential store.
 	ro.resolvedTenantName = cred.TenantName
 	ro.resolvedSignerEmail = cred.Email
+	ro.platformPrincipal = &platformPrincipal{Kind: "session", Name: sessionPrincipalName(cred, ro.PlatformURL)}
 
 	// Only attach the platform bearer when uploading to the platform's own
 	// Archivista origin (never leak the JWT to a third-party --archivista-server),

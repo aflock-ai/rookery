@@ -710,22 +710,7 @@ Exit-code policy (finding #221):
 				log.Warnf("%v", cmdErr)
 			}
 
-			// First-run identity gate: a brand-new operator with no `cilock login`,
-			// no local --signer-* key, and no ambient CI OIDC identity would
-			// otherwise dead-end inside Fulcio signer construction with an opaque
-			// error ("failed to load any signers" / "no token provided") and never
-			// run the wrapped command. Catch it here with an actionable message that
-			// names 'cilock login'. Stands down for every path that CAN sign (local
-			// key, explicit token, CI ambient OIDC, logged-in session, --offline).
-			if err := o.PreflightIdentity(cmd); err != nil {
-				return err
-			}
-
-			// Fail-closed product-binding gate: when platform-authenticated,
-			// resolve the repository's product and HARD FAIL before the build runs
-			// if it maps to zero or multiple products (so no unlinkable evidence is
-			// produced). Not-authenticated / opt-out / endpoint-unavailable proceed.
-			if err := o.EnforcePlatformBinding(cmd); err != nil {
+			if err := preRunGates(cmd, &o); err != nil {
 				return err
 			}
 
@@ -759,6 +744,36 @@ Exit-code policy (finding #221):
 
 	o.AddFlags(cmd)
 	return cmd
+}
+
+// preRunGates runs the fail-closed checks that must refuse BEFORE the wrapped
+// command executes, in order. Each needs only what ResolvePlatformDefaults
+// already established, so a misconfigured pipeline wastes no build time and
+// the refusal is unambiguous.
+func preRunGates(cmd *cobra.Command, o *options.RunOptions) error {
+	// First-run identity gate: a brand-new operator with no `cilock login`,
+	// no local --signer-* key, and no ambient CI OIDC identity would
+	// otherwise dead-end inside Fulcio signer construction with an opaque
+	// error ("failed to load any signers" / "no token provided") and never
+	// run the wrapped command. Catch it here with an actionable message that
+	// names 'cilock login'. Stands down for every path that CAN sign (local
+	// key, explicit token, CI ambient OIDC, logged-in session, --offline).
+	if err := o.PreflightIdentity(cmd); err != nil {
+		return err
+	}
+	// Fail-closed evidence gate: a run that signs as a stored platform
+	// principal but would store nothing must not exit 0 — the exit code is
+	// what the next push is gated on (incident 2026-09-02). Refuse here,
+	// before the build, unless the operator explicitly passed
+	// --enable-archivista=false.
+	if err := o.EnforceEvidenceStorage(cmd); err != nil {
+		return err
+	}
+	// Fail-closed product-binding gate: when platform-authenticated, resolve
+	// the repository's product and HARD FAIL before the build runs if it maps
+	// to zero or multiple products (so no unlinkable evidence is produced).
+	// Not-authenticated / opt-out / endpoint-unavailable proceed.
+	return o.EnforcePlatformBinding(cmd)
 }
 
 func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFlags map[string]bool, signerProviders map[string]struct{}, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen

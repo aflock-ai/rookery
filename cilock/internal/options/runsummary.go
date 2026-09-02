@@ -322,7 +322,9 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 			fmt.Fprintf(&b, "  gitoid:     %s\n", sanitizeForTerminal(s.Gitoid))
 		}
 	} else if s.ArchivistaURL != "" {
-		fmt.Fprintf(&b, "  archivista: %s (upload DISABLED — pass --enable-archivista to store)\n", s.ArchivistaURL)
+		// Say the outcome, not the setting: what the next push is judged on is
+		// whether evidence exists on the platform, and here it does not.
+		fmt.Fprintf(&b, "  archivista: %s (upload DISABLED — NO evidence stored; pass --enable-archivista to store)\n", s.ArchivistaURL)
 	}
 	if len(s.Subjects) > 0 {
 		fmt.Fprintf(&b, "  subjects (%d): %s\n", len(s.Subjects), strings.Join(s.subjectNames(), ", "))

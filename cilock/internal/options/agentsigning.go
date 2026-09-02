@@ -132,6 +132,10 @@ func (ro *RunOptions) applyAgentCredential(cmd *cobra.Command, cred auth.AgentCr
 		return nil
 	}
 	ro.agentPrincipal = principal
+	// The evidence gate (EnforceEvidenceStorage) reads this, not agentPrincipal:
+	// a run that signs as the agent and stores nothing must not exit 0 — the
+	// 2026-09-02 incident — whatever this path decides about the upload below.
+	ro.platformPrincipal = &platformPrincipal{Kind: "agent", Name: principal.spiffeID}
 	ro.refreshFulcioToken = refresh
 	_ = os.Setenv(platformURLEnv, auth.NormalizeURL(ro.PlatformURL))
 
