@@ -34,6 +34,12 @@ type AgentSigningIdentity struct {
 	Token     string
 	TokenType string
 	SPIFFEID  string
+	// UploadToken is the bearer the platform hands the agent for Archivista,
+	// so the evidence it signs reaches the platform under its own identity.
+	// Empty when the platform minted none (an older platform, or one with no
+	// PKI): the run then has no upload authority and must say so rather than
+	// sign into the void. Never stored — re-minted on every exchange.
+	UploadToken string
 	// TrustDomain is the authority segment of SPIFFEID, already parsed and
 	// already validated by the checks below.
 	//
@@ -255,16 +261,19 @@ func exchangeAgentCredential(platformURL string, cred AgentCredential) (AgentSig
 	}
 	return AgentSigningIdentity{
 		Token: out.Token, TokenType: out.TokenType, SPIFFEID: out.SPIFFEID, TrustDomain: td,
+		UploadToken: out.UploadToken,
 	}, nil
 }
 
 // agentExchangeAnswer is the platform's success body, before any of it is
 // trusted.
 type agentExchangeAnswer struct {
-	Token     string `json:"token"`
-	TokenType string `json:"token_type"`
-	SPIFFEID  string `json:"spiffe_id"`
-	ExpiresAt string `json:"expires_at"`
+	Token           string `json:"token"`
+	TokenType       string `json:"token_type"`
+	SPIFFEID        string `json:"spiffe_id"`
+	ExpiresAt       string `json:"expires_at"`
+	UploadToken     string `json:"upload_token"`
+	UploadTokenType string `json:"upload_token_type"`
 }
 
 // postAgentExchange performs the HTTP half of the exchange: build, send,

@@ -49,9 +49,10 @@ func agentExchangePlatform(t *testing.T) *httptest.Server {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"token":      agentTestJWT(agentTestSPIFFEID),
-			"token_type": "oidc",
-			"spiffe_id":  agentTestSPIFFEID,
+			"token":        agentTestJWT(agentTestSPIFFEID),
+			"token_type":   "oidc",
+			"spiffe_id":    agentTestSPIFFEID,
+			"upload_token": "test-upload-bearer",
 		})
 	}))
 	t.Cleanup(srv.Close)

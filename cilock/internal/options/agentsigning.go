@@ -23,6 +23,9 @@ import (
 // the summary reporting the principal of the initial, unused token.
 type agentPrincipal struct {
 	spiffeID string
+	// uploadToken is the Archivista bearer the exchange handed back; "" when
+	// the platform minted none.
+	uploadToken string
 }
 
 // applyAgentKeylessFulcioToken exchanges this machine's enrolled agent
@@ -68,7 +71,7 @@ func applyAgentKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL str
 	if err := cmd.Flags().Set("signer-fulcio-token", id.Token); err != nil {
 		return nil, nil, fmt.Errorf("installing the agent signing token: %w", err)
 	}
-	principal := &agentPrincipal{spiffeID: id.SPIFFEID}
+	principal := &agentPrincipal{spiffeID: id.SPIFFEID, uploadToken: id.UploadToken}
 
 	// CARRY THE PIN INTO THE REFRESH, or the run defeats its own pin.
 	//
@@ -97,6 +100,7 @@ func applyAgentKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL str
 			return fmt.Errorf("installing the refreshed agent signing token: %w", err)
 		}
 		principal.spiffeID = fresh.SPIFFEID
+		principal.uploadToken = fresh.UploadToken
 		return nil
 	}
 	return principal, refresh, nil
@@ -109,10 +113,16 @@ func applyAgentKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL str
 // the human account's identity; leaving it untouched is what keeps the run
 // summary from naming a human for a signature the agent produced.
 //
-// It also does not attach an Archivista bearer or flip Archivista on. The agent
-// credential authenticates the credential exchange only, and the human session's
-// bearer is not the agent's to spend — so an agent run uploads when the operator
-// asks for it with --enable-archivista and the store accepts the identity.
+// Archivista: the human session's bearer is not the agent's to spend, so the
+// agent presents the UPLOAD TOKEN the exchange minted for it — its own
+// identity, scoped to attestation:upload — and uploads BY DEFAULT, exactly as
+// a human session does (ResolvePlatformDefaults). The first prod ceremony
+// (2026-09-02) signed as the agent, printed "upload DISABLED", exited 0, and
+// the push was refused for having no evidence: an agent whose evidence stays
+// on its own disk has not produced evidence. So a platform that hands back no
+// upload token is a FAILURE of the identity path, not a quieter success —
+// unless the operator explicitly asked for sign-only (--enable-archivista=false)
+// or supplied their own Archivista Authorization header.
 func (ro *RunOptions) applyAgentCredential(cmd *cobra.Command, cred auth.AgentCredential, pc platformconfig.PlatformConfig) error {
 	principal, refresh, err := applyAgentKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred)
 	if err != nil {
@@ -124,5 +134,21 @@ func (ro *RunOptions) applyAgentCredential(cmd *cobra.Command, cred auth.AgentCr
 	ro.agentPrincipal = principal
 	ro.refreshFulcioToken = refresh
 	_ = os.Setenv(platformURLEnv, auth.NormalizeURL(ro.PlatformURL))
+
+	explicitOff := (cmd.Flags().Changed("enable-archivista") || cmd.Flags().Changed("enable-archivist")) && !ro.ArchivistaOptions.Enable
+	if explicitOff {
+		return nil
+	}
+	if !hasAuthorizationHeader(ro.ArchivistaOptions.Headers) && sameOrigin(ro.ArchivistaOptions.Url, pc.Archivista) {
+		if principal.uploadToken == "" {
+			return fmt.Errorf("the platform at %s minted a signing token for agent %s but no upload token, so this run's evidence could not reach it; "+
+				"the platform must issue agent upload tokens (no JWT signer configured?), or pass --enable-archivista=false to sign without uploading",
+				ro.PlatformURL, principal.spiffeID)
+		}
+		ro.ArchivistaOptions.Headers = append(ro.ArchivistaOptions.Headers, "Authorization: Bearer "+principal.uploadToken)
+	}
+	if !cmd.Flags().Changed("enable-archivista") && !cmd.Flags().Changed("enable-archivist") {
+		ro.ArchivistaOptions.Enable = true
+	}
 	return nil
 }

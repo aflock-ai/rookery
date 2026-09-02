@@ -46,7 +46,7 @@ func TestRefreshCannotSwitchTrustDomainMidRun(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"token": testAgentJWT(id, i), "token_type": "oidc", "spiffe_id": id,
+			"token": testAgentJWT(id, i), "token_type": "oidc", "spiffe_id": id, "upload_token": "test-upload-bearer",
 		})
 	}))
 	defer srv.Close()

@@ -80,9 +80,10 @@ func agentExchangeServer(t *testing.T) *httptest.Server {
 			// counter varies the header so each exchange still yields a DISTINCT
 			// token and the refresher case can tell them apart.
 			_ = json.NewEncoder(w).Encode(map[string]string{
-				"token":      testAgentJWT(agentSPIFFEID, i),
-				"token_type": "oidc",
-				"spiffe_id":  agentSPIFFEID,
+				"token":        testAgentJWT(agentSPIFFEID, i),
+				"token_type":   "oidc",
+				"spiffe_id":    agentSPIFFEID,
+				"upload_token": "test-upload-bearer",
 			})
 			return
 		}
@@ -129,7 +130,7 @@ func TestAgentCredentialWinsOverTheHumanSession(t *testing.T) {
 		case "/api/agent/credential-exchange":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]string{
-				"token": testAgentJWT(agentSPIFFEID, 1), "token_type": "oidc", "spiffe_id": agentSPIFFEID,
+				"token": testAgentJWT(agentSPIFFEID, 1), "token_type": "oidc", "spiffe_id": agentSPIFFEID, "upload_token": "test-upload-bearer",
 			})
 		case "/oauth/sign-token":
 			atomic.AddInt64(&humanExchanges, 1)
