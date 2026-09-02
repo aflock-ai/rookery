@@ -16,7 +16,7 @@ func TestSizeAdviceSuffix_PreservesErrorChain(t *testing.T) {
 	attemptErr := errors.New("post https://example/upload: deadline exceeded")
 	for _, size := range []int{1024, 17988881} {
 		err := fmt.Errorf("%w after %d attempts in %s: %w%s",
-			ErrRetryBudgetExhausted, 2, "4m0s", attemptErr, sizeAdviceSuffix(size))
+			ErrRetryBudgetExhausted, 2, "4m0s", attemptErr, sizeAdviceSuffix(size, nil))
 
 		if !errors.Is(err, ErrRetryBudgetExhausted) {
 			t.Errorf("size=%d: errors.Is(err, ErrRetryBudgetExhausted) is false — callers' sentinel check broke", size)
@@ -41,15 +41,28 @@ func TestSizeAdvice_SilentBelowThreshold(t *testing.T) {
 // REMEDY. The measured incident (2026-08-30) was an 18MB envelope whose bulk
 // was an untracked node_modules tree; the operator saw only
 // "budget_exhausted", which points nowhere near the cause.
+//
+// This case passes NO payload, so it is the fallback arm. It used to assert
+// that --attestor-product-exclude-glob was offered as the remedy; that
+// assertion is deliberately inverted now. Measurement showed the flag cannot
+// move a material-dominated envelope (product was 414 bytes of ~4 MiB), so
+// prescribing it here sent operators to a lever that does nothing. Without a
+// decoded payload we have no measurement, so the message must say it is
+// GUESSING rather than name a remedy it cannot justify.
 func TestSizeAdvice_NamesSizeCauseAndRemedy(t *testing.T) {
-	got := sizeAdvice(17988881)
+	got := sizeAdviceMeasured(17988881, nil)
 	if got == "" {
 		t.Fatal("sizeAdvice returned nothing for an 18MB envelope")
 	}
-	for _, want := range []string{"17.2 MiB", "node_modules", "--attestor-product-exclude-glob"} {
+	for _, want := range []string{"17.2 MiB", "node_modules", "guess"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("advice missing %q; got:\n%s", want, got)
 		}
+	}
+	// The un-measured arm must not prescribe a flag it cannot justify.
+	if strings.Contains(got, "--attestor-product-exclude-glob") {
+		t.Errorf("the guessing arm must not prescribe the product exclude glob: it cannot move a "+
+			"material-dominated envelope, which is the common case; got:\n%s", got)
 	}
 	// It must cite the 4 MiB evidence-edge cap, which is the real cliff:
 	// past it the envelope stops being readable by the edge evaluator.
@@ -81,11 +94,11 @@ func TestHumanBytes(t *testing.T) {
 // failure an oversized envelope actually produces — a slow upload that runs
 // out of budget, not a rejection that names size.
 func TestBudgetExhaustedErrorCarriesSizeAdvice(t *testing.T) {
-	small := decorateWithSizeAdvice("upload failed", 1024)
+	small := decorateWithSizeAdvice("upload failed", 1024, nil)
 	if strings.Contains(small, "node_modules") {
 		t.Fatalf("small-envelope error must not carry size advice: %q", small)
 	}
-	big := decorateWithSizeAdvice("upload failed", 17988881)
+	big := decorateWithSizeAdvice("upload failed", 17988881, nil)
 	if !strings.Contains(big, "upload failed") {
 		t.Fatalf("decoration dropped the original message: %q", big)
 	}

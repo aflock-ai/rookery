@@ -400,15 +400,36 @@ func (c *Client) uploadHost() string {
 // Nothing derived from the envelope body or the request headers is logged —
 // only the endpoint host, the payload size, statuses, classifications and
 // timings. The bytes are evidence and the headers carry the bearer.
+// The logging rule above is now narrower than "nothing derived from the body",
+// and the narrowing is deliberate AND bounded: only the FAILURE path renders an
+// aggregated summary of the envelope's contents — attestor names, byte counts,
+// leaf counts, and directory PREFIXES, each quoted if it carries anything
+// unprintable. Nothing else crosses: no file contents, no digests, no per-file
+// names, no headers, no bearer.
+//
+// The up-front warning below deliberately uses the SIZE-ONLY sizeAdvice. It
+// fires on every oversized upload including ones that then SUCCEED, so putting
+// the breakdown there would log repository structure on the happy path — a
+// disclosure the success path never promised. Keeping the two forms apart is
+// what makes the sentence above true rather than aspirational.
+//
+// That trade is what makes the error diagnosable. The alternative measured
+// worse: the same message for two envelopes with opposite remedies, which cost
+// a diagnosis cycle every time. Directory prefixes are the minimum that tells
+// "delete these dependency trees" apart from "this is just the repository".
 type uploadRetrier struct {
-	policy   RetryPolicy
-	host     string
-	size     int
+	policy RetryPolicy
+	host   string
+	size   int
+	// body is the marshalled envelope, retained so a failure can REPORT what
+	// is in it instead of guessing. Read only while rendering an error.
+	body     []byte
 	start    time.Time
 	deadline time.Time
 }
 
-func (c *Client) newUploadRetrier(size int) *uploadRetrier {
+func (c *Client) newUploadRetrier(body []byte) *uploadRetrier {
+	size := len(body)
 	policy := DefaultRetryPolicy()
 	if c.retry != nil {
 		policy = *c.retry
@@ -431,6 +452,7 @@ func (c *Client) newUploadRetrier(size int) *uploadRetrier {
 		policy:   policy,
 		host:     c.uploadHost(),
 		size:     size,
+		body:     body,
 		start:    start,
 		deadline: start.Add(policy.Budget),
 	}
@@ -472,7 +494,7 @@ func (r *uploadRetrier) next(callerCtx, attemptCtx context.Context, n int, err e
 			// context. The advice is appended as trailing text precisely so it
 			// cannot disturb the error chain.
 			return 0, fmt.Errorf("%w after %d attempts in %s: %w%s",
-				ErrRetryBudgetExhausted, n, elapsed.Round(time.Millisecond), err, sizeAdviceSuffix(r.size))
+				ErrRetryBudgetExhausted, n, elapsed.Round(time.Millisecond), err, sizeAdviceSuffix(r.size, r.body))
 		}
 		return 0, err
 	}
@@ -489,7 +511,7 @@ func (r *uploadRetrier) next(callerCtx, attemptCtx context.Context, n int, err e
 		log.Errorf("archivista upload failed: host=%s classification=%s reason=%s outcome=budget_exhausted %s attempts=%d elapsed=%s next_backoff=%s budget=%s bytes=%d",
 			r.host, classRetryable, reason, errFields(err), n, elapsed, delay, r.policy.Budget, r.size)
 		return 0, fmt.Errorf("%w: gave up after %d attempts; next backoff %s would exceed the %s retry budget: %w%s",
-			ErrRetryBudgetExhausted, n, delay.Round(time.Millisecond), r.policy.Budget, err, sizeAdviceSuffix(r.size))
+			ErrRetryBudgetExhausted, n, delay.Round(time.Millisecond), r.policy.Budget, err, sizeAdviceSuffix(r.size, r.body))
 	}
 
 	log.Warnf("archivista upload retrying: host=%s classification=%s reason=%s %s attempt=%d/%d backoff=%s elapsed=%s",
@@ -549,14 +571,14 @@ func (r *uploadRetrier) abort(callerCtx, attemptCtx context.Context, n int, uplo
 // budget by a full request timeout no matter what number the budget was set to.
 // Narrowing the context the attempts run under is what turns the budget from a
 // value the loop happens to look at into an actual bound on wall-clock time.
-func (c *Client) storeWithRetry(ctx context.Context, size int, attemptFn func(context.Context) (string, error)) (string, error) {
-	r := c.newUploadRetrier(size)
+func (c *Client) storeWithRetry(ctx context.Context, body []byte, attemptFn func(context.Context) (string, error)) (string, error) {
+	r := c.newUploadRetrier(body)
 
 	// Say it BEFORE the upload, not only after it fails. An oversized envelope
 	// takes minutes to fail, and the operator who hears "this is 18 MiB and
 	// here is why that happens" up front can kill the run and fix the cause
 	// instead of waiting out the retry budget to be told about a timeout.
-	if advice := sizeAdvice(size); advice != "" {
+	if advice := sizeAdvice(r.size); advice != "" {
 		log.Warnf("archivista upload: %s", advice)
 	}
 

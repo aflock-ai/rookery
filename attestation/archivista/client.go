@@ -156,7 +156,7 @@ func (c *Client) Store(ctx context.Context, env dsse.Envelope) (string, error) {
 		return "", fmt.Errorf("marshal envelope: %w", err)
 	}
 
-	return c.storeWithRetry(ctx, len(body), func(ctx context.Context) (string, error) {
+	return c.storeWithRetry(ctx, body, func(ctx context.Context) (string, error) {
 		return c.storeOnce(ctx, body)
 	})
 }
