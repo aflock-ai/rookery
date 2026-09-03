@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +162,44 @@ func TestAgentRunSignsWithASPIFFECertificate(t *testing.T) {
 		assert.NotContains(t, req.Body, agentTestSecret,
 			"the refresh credential must never reach Fulcio; only the exchanged token does")
 	}
+}
+
+func TestSignPolicyRefusesEnrolledAgentButAllowsFileKey(t *testing.T) {
+	isolateAgentConfig(t)
+	const platformURL = "https://platform.example.com"
+	require.NoError(t, auth.SaveAgent(auth.AgentCredential{
+		PlatformURL:       platformURL,
+		TenantID:          "t-1",
+		AgentID:           "a-1",
+		RefreshCredential: agentTestSecret,
+	}))
+
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.json")
+	require.NoError(t, os.WriteFile(policyPath, []byte(`{"expires":"2030-01-01T00:00:00Z","steps":{}}`), 0o600))
+
+	agentOutput := filepath.Join(dir, "agent-signed.json")
+	agentCmd := SignCmd()
+	agentCmd.SetArgs([]string{"--platform-url", platformURL, "-f", policyPath, "-o", agentOutput})
+	err := agentCmd.Execute()
+	require.Error(t, err, "an enrolled agent must not sign a policy")
+	assert.Contains(t, err.Error(), "humans sign policies, agents sign attestations")
+	assert.NoFileExists(t, agentOutput, "the refusal must happen before signing creates output")
+
+	shapedOutput := filepath.Join(dir, "shaped-signed.json")
+	shapedCmd := SignCmd()
+	shapedCmd.SetArgs([]string{"--platform-url", platformURL, "--datatype", "application/json", "-f", policyPath, "-o", shapedOutput})
+	err = shapedCmd.Execute()
+	require.Error(t, err, "policy-shaped JSON must be recognized even with a non-policy payload type")
+	assert.Contains(t, err.Error(), "humans sign policies, agents sign attestations")
+	assert.NoFileExists(t, shapedOutput)
+
+	keyPath := generateTestKey(t, dir)
+	fileOutput := filepath.Join(dir, "file-signed.json")
+	fileCmd := SignCmd()
+	fileCmd.SetArgs([]string{"--platform-url", platformURL, "-k", keyPath, "-f", policyPath, "-o", fileOutput})
+	require.NoError(t, fileCmd.Execute(), "an explicit throwaway file key must remain available for offline policy proofs")
+	assert.FileExists(t, fileOutput)
 }
 
 // `cilock agent login` takes the credential on stdin so it never lands in shell

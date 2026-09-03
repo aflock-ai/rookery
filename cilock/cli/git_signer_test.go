@@ -111,6 +111,11 @@ func TestRunGitSignerDefaultsToPlatformAndRequiresTimestamp(t *testing.T) {
 }
 
 func TestRunGitSignerFailsClosedWhenTimestampFails(t *testing.T) {
+	// A sibling test leaves an httptest URL in CILOCK_PLATFORM_URL; on a machine
+	// with an enrolled agent, RunGitSigner compares that URL against the agent's
+	// platform and refuses before any stub below is reached. Pin it empty so the
+	// test exercises the timestamp path it is named for, wherever it runs.
+	t.Setenv(platformconfig.PlatformURLEnv, "")
 	signer := newTestGitSigner(t)
 	oldResolve, oldLoad, oldTimestamp := resolveGitSigningToken, loadGitSigningSigner, addGitSignatureTimestamp
 	t.Cleanup(func() {

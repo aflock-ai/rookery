@@ -44,7 +44,7 @@ const validRootPolicy = `{
     "build": {
       "name": "build",
       "functionaries": [
-        { "type": "root", "certConstraint": { "roots": ["rootA"], "emails": ["dev@example.com"] } }
+        { "type": "root", "certConstraint": { "roots": ["rootA"], "commonname": "*", "emails": ["dev@example.com"] } }
       ],
       "attestations": [ { "type": "https://aflock.ai/attestations/product/v0.3" } ]
     }

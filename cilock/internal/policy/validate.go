@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -246,6 +247,7 @@ func validateSteps(policy *policyDocument, result *ValidationResult) { //nolint:
 						}
 					}
 				}
+				validateRootFunctionaryConstraints(stepName, i, functionary.CertConstraint, result)
 			}
 		}
 
@@ -284,6 +286,52 @@ func validateSteps(policy *policyDocument, result *ValidationResult) { //nolint:
 	// Detect circular attestationsFrom dependencies
 	validateNoCircularDeps(policy, result, "attestationsFrom", func(s policyStep) []string { return s.AttestationsFrom })
 	validateNoCircularDeps(policy, result, "artifactsFrom", func(s policyStep) []string { return s.ArtifactsFrom })
+}
+
+func validateRootFunctionaryConstraints(stepName string, index int, constraint *certConstraint, result *ValidationResult) {
+	if constraint == nil || strings.TrimSpace(constraint.CommonName) == "" {
+		result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', functionary %d: root functionary certConstraint.commonname must not be empty; an empty commonname fails closed in every policy-hardening mode", stepName, index))
+		result.Valid = false
+	}
+	fields := []struct {
+		name  string
+		empty bool
+	}{
+		{name: "dnsnames", empty: constraint == nil || len(constraint.DNSNames) == 0},
+		{name: "emails", empty: constraint == nil || len(constraint.Emails) == 0},
+		{name: "organizations", empty: constraint == nil || len(constraint.Organizations) == 0},
+	}
+	for _, field := range fields {
+		if field.empty {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("Step '%s', functionary %d: certConstraint.%s is empty and fails closed under --policy-hardening enforce", stepName, index, field.name))
+		}
+	}
+	if constraint == nil {
+		return
+	}
+	for _, uri := range constraint.URIs {
+		if uriAdmitsEveryTenant(uri) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("Step '%s', functionary %d: certConstraint.uris entry %q admits every tenant; scope it to /tenant/<id>/ before using --policy-hardening enforce", stepName, index, uri))
+		}
+	}
+}
+
+// uriAdmitsEveryTenant reports whether a URI constraint matches agents of
+// any tenant: a bare star, a SPIFFE glob with no tenant segment, or a tenant
+// segment that is itself empty or a glob (`/tenant/*/agent/*`).
+func uriAdmitsEveryTenant(uri string) bool {
+	if uri == "*" {
+		return true
+	}
+	if !strings.HasPrefix(strings.ToLower(uri), "spiffe://") {
+		return false
+	}
+	_, after, found := strings.Cut(uri, "/tenant/")
+	if !found {
+		return strings.HasSuffix(uri, "/*")
+	}
+	tenant, _, _ := strings.Cut(after, "/")
+	return tenant == "" || strings.ContainsAny(tenant, "*?[")
 }
 
 func validatePublicKeys(policy *policyDocument, result *ValidationResult) {
