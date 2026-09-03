@@ -5,7 +5,7 @@
 # cilock release artifacts are built + signed against the TestifySec Platform's
 # keyless Fulcio + TSA (NOT public Sigstore) using the release workflow's GitHub
 # Actions OIDC identity. The release pipeline's publisher then runs `cilock verify`
-# against release-v1.policy.json and uploads ONLY artifacts that pass to
+# against release-policy.json and uploads ONLY artifacts that pass to
 # cilock.dev — so everything this script fetches has already been cryptographically
 # verified in a trusted CI context. Trust here is: TLS to cilock.dev (origin
 # authenticity) + that verify-then-upload gate, with SHA256 integrity on the
@@ -13,14 +13,22 @@
 #
 # NOTE: independent CLIENT-SIDE cryptographic verification (cosign against the
 # platform Fulcio root, before executing anything) is a deliberate fast-follow.
-# Until it lands, verify provenance after install with a cilock you already trust
-# (a release-built cilock embeds the platform Fulcio CA root, TSA root, and
-# policy-signer identity, so it needs no trust flags):
+# Until it lands, verify provenance after install with a cilock you already
+# trust (a prior install or a second channel) — a release-built cilock embeds
+# the platform Fulcio CA root, TSA root, and policy-signer identity, so it
+# needs no trust flags. The verifier must be a DIFFERENT binary from the one
+# just installed: after this script runs, `cilock` on PATH resolves to the new
+# install, and a compromised binary verifying itself simply reports success —
+# that is at most a functional smoke check, never provenance. With
+# TRUSTED_CILOCK pointing at a cilock obtained BEFORE this install:
 #
-#   curl -fsSLO https://cilock.dev/policy/release-v1.policy.json
-#   curl -fsSLO https://cilock.dev/dl/<version>/<os>-<arch>.attestation.json
-#   cilock verify "$(command -v cilock)" \
-#     --policy release-v1.policy.json --attestations <os>-<arch>.attestation.json
+#   TRUSTED_CILOCK=/path/to/a/cilock/you/already/trust   # not the one just installed
+#   curl -fsSLO https://cilock.dev/policy/release-policy.json
+#   curl -fsSLO https://cilock.dev/dl/<version>/cilock-<ver>-<os>-<arch>.build.att.json
+#   curl -fsSLO https://cilock.dev/dl/<version>/cilock-<ver>-<os>-<arch>.source-git.att.json
+#   "$TRUSTED_CILOCK" verify "$(command -v cilock)" --policy release-policy.json \
+#     --attestations <build.att.json> --attestations <source-git.att.json> \
+#     --platform-url ""
 #
 # Convenience (curl-pipe-bash):
 #
@@ -196,15 +204,20 @@ main() {
   log "cilock ${version} installed."
   log "  $ cilock version"
   log
-  log "Verify provenance against the platform-signed release policy (no trust"
-  log "flags — platform roots + signer identity are compiled into cilock):"
-  log "  curl -fsSLO ${DIST_BASE}/policy/release-v1.policy.json"
+  log "Verify provenance with an INDEPENDENTLY TRUSTED cilock — a DIFFERENT"
+  log "binary from the one just installed. 'cilock' on PATH now resolves to"
+  log "${bin_dir}/cilock, and a compromised binary verifying itself simply"
+  log "reports success. Point TRUSTED_CILOCK at a prior install or a build"
+  log "from a second channel (its embedded platform roots need no trust flags):"
+  log "  TRUSTED_CILOCK=/path/to/a/cilock/you/already/trust  # not ${bin_dir}/cilock"
+  log "  curl -fsSLO ${DIST_BASE}/policy/release-policy.json"
   log "  curl -fsSLO ${base}/cilock-${version_clean}-${os}-${arch}.build.att.json"
   log "  curl -fsSLO ${base}/cilock-${version_clean}-${os}-${arch}.source-git.att.json"
-  log "  cilock verify ${bin_dir}/cilock \\"
-  log "    --policy release-v1.policy.json \\"
+  log "  \"\${TRUSTED_CILOCK}\" verify ${bin_dir}/cilock \\"
+  log "    --policy release-policy.json \\"
   log "    --attestations cilock-${version_clean}-${os}-${arch}.build.att.json \\"
-  log "    --attestations cilock-${version_clean}-${os}-${arch}.source-git.att.json"
+  log "    --attestations cilock-${version_clean}-${os}-${arch}.source-git.att.json \\"
+  log "    --platform-url \"\""
 }
 
 main "$@"

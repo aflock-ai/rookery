@@ -34,6 +34,13 @@ For each release version the publisher uploads, under `https://cilock.dev/dl/<ve
 Both envelopes are needed — the policy declares a `source-git` step and a `build`
 step, so an offline verify must supply the evidence for both.
 
+The `fulcio-roots.pem`/`tsa-chain.pem` files are published for cross-checking
+and for verifiers **without** embedded trust. When used as trust anchors they
+must come from a channel you trust independently of cilock.dev: roots fetched
+from the same origin as the binary cannot authenticate that origin's output —
+a compromised origin would simply publish roots matching its forged evidence.
+The recipe below instead anchors on the roots embedded in your trusted verifier.
+
 The machine-readable index of all of this is the per-version `verification` block in
 [`/dl/manifest.json`](https://cilock.dev/manifest.json):
 
@@ -70,28 +77,30 @@ BASE="https://cilock.dev/dl/v${VERSION}"
 curl -fsSLO "${BASE}/cilock-${VERSION}-${PLAT}.tar.gz"
 curl -fsSLO "${BASE}/cilock-${VERSION}-${PLAT}.source-git.att.json"
 curl -fsSLO "${BASE}/cilock-${VERSION}-${PLAT}.build.att.json"
-curl -fsSLO "${BASE}/fulcio-roots.pem"
-curl -fsSLO "${BASE}/tsa-chain.pem"
 curl -fsSL  "https://cilock.dev/policy/release-policy.json" -o release-policy.json
 
 tar xzf "cilock-${VERSION}-${PLAT}.tar.gz" cilock
 ```
 
-You don't even need a pre-existing `cilock` to verify — the binary you just
-extracted can verify itself. (If you want an independent verifier, build one from
-[rookery](/ecosystem/rookery) or grab another release.)
+Do not run the binary you just extracted as its own verifier — a compromised
+origin can ship one that simply reports success, so a self-run is at most a
+functional smoke check, never provenance. Verify with a `cilock` you already
+trust: a prior install, a build from [rookery](/ecosystem/rookery), or another
+channel. A release-built cilock embeds the platform trust roots, so with a
+trusted one the root flags drop away.
 
 ## Step 2 — run the offline verify
 
 The key flag is `--platform-url ""`. It tells `cilock` to skip **all** platform
 access — no discovery doc, no Archivista lookup, no platform-derived timestamp
-verifier. Trust comes only from the files you downloaded:
+verifier. The downloaded files supply only the **evidence**; the trust anchors
+are the platform Fulcio + TSA roots **embedded in your trusted verifier** at
+release-build time (inspect them with `cilock version`):
 
 ```bash
-cilock verify ./cilock -p release-policy.json \
+TRUSTED_CILOCK=/path/to/a/cilock/you/already/trust   # a prior install — never ./cilock itself
+"$TRUSTED_CILOCK" verify ./cilock -p release-policy.json \
   --attestations cilock-${VERSION}-${PLAT}.source-git.att.json,cilock-${VERSION}-${PLAT}.build.att.json \
-  --policy-ca-roots fulcio-roots.pem \
-  --policy-timestamp-servers tsa-chain.pem \
   --policy-emails colek42@gmail.com \
   --policy-fulcio-oidc-issuer https://platform.testifysec.com/fulcio/oidc \
   --platform-url ""
@@ -103,8 +112,6 @@ What each flag does:
 |---|---|
 | `-p` / `--policy` | the signed release policy the binary must satisfy |
 | `-a` / `--attestations` | the two per-step DSSE envelopes (comma-separated — one file per envelope) |
-| `--policy-ca-roots` | `fulcio-roots.pem` — the CA the policy + attestation signing certs chain to. The bundle carries the Fulcio CA **and** the self-signed Root CA; `cilock` loads every cert and anchors on the self-signed Root. |
-| `--policy-timestamp-servers` | `tsa-chain.pem` — validates the RFC 3161 timestamps so the short-lived (~10 min) signing certs verify *as of signing time*, long after they expire |
 | `--policy-emails` | pins the keyless policy-signer identity so a policy signed by some other Fulcio cert can't be substituted |
 | `--policy-fulcio-oidc-issuer` | the platform Fulcio OIDC issuer that minted the signer cert |
 | `--platform-url ""` | **opt out of all platform access** — this is what makes it offline |
@@ -114,10 +121,8 @@ code**, never on grepped output:
 
 ```bash
 STEM="cilock-${VERSION}-${PLAT}"
-if cilock verify ./cilock -p release-policy.json \
+if "$TRUSTED_CILOCK" verify ./cilock -p release-policy.json \
      --attestations "${STEM}.source-git.att.json,${STEM}.build.att.json" \
-     --policy-ca-roots fulcio-roots.pem \
-     --policy-timestamp-servers tsa-chain.pem \
      --policy-emails colek42@gmail.com \
      --policy-fulcio-oidc-issuer https://platform.testifysec.com/fulcio/oidc \
      --platform-url ""; then
@@ -136,7 +141,7 @@ fi
 - The binary's SHA-256 matches a subject in the **build** step's signed product
   attestation — you have the exact bytes the release pipeline produced.
 - Both steps' DSSE signatures chain to the **TestifySec Platform Fulcio**, anchored
-  on the Platform Root CA you supplied.
+  on the Platform Root CA embedded in your trusted verifier.
 - The RFC 3161 timestamps place each signature **inside** its signing cert's validity
   window, so the proof holds years later even though Fulcio certs live ~10 minutes.
 - The signed release policy itself was signed by the pinned release-authority identity
@@ -150,8 +155,9 @@ having an account. The proof is self-contained.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `no passed collections present` | the binary doesn't match the envelopes (subject-digest mismatch) — usually mixed files from different releases | re-download the tarball **and** both `.att.json` files from the **same** `<version>` |
-| `failed to build chain` / cert chain errors | wrong or truncated `fulcio-roots.pem` | re-download `fulcio-roots.pem` for this version; it must contain **both** the Fulcio CA and the Root CA |
-| timestamp / `policy expired`-style errors | missing or wrong `tsa-chain.pem` | re-download `tsa-chain.pem`; without it the expired signing certs can't be validated as-of signing time |
+| `must supply a public key, CA certificates, a verifier, or a cilock built with embedded policy trust` | your verifier has no embedded trust (stock/source build — check `cilock version`) | verify with a release-built cilock you already trust, or pass `--policy-ca-roots` from an independently trusted channel |
+| `failed to build chain` / cert chain errors | a `--policy-ca-roots` bundle you supplied is wrong or truncated | the bundle must contain **both** the Fulcio CA and the Root CA — and come from a channel trusted independently of the download |
+| timestamp / `policy expired`-style errors | your verifier lacks embedded TSA roots and no `--policy-timestamp-servers` was given | without TSA roots the expired signing certs can't be validated as-of signing time; use a release-built trusted verifier or supply an independently trusted chain |
 | `functionary mismatch` | the policy expected a different signer identity | confirm `--policy-emails` / `--policy-fulcio-oidc-issuer` match the values published for this release (see the manifest / Download page) |
 
 ## See also

@@ -69,11 +69,11 @@ Each release publishes, under `https://cilock.dev/dl/<version>/`:
 
 | Family | Files | What it's for |
 |---|---|---|
-| **Binary** | `cilock-<version>-<os>-<arch>.tar.gz` + `.dsse.json` | The compressed binary + a cilock-signed DSSE envelope over the archive bytes (platform Fulcio + TSA). |
-| **Checksums** | `checksums-sha256.txt` + `.dsse.json` | SHA-256 of every archive, DSSE-signed. |
-| **Per-platform attestation** | `<os>-<arch>.attestation.json` | The build's signed evidence collection (environment, git, github, command-run, product) — the input to `cilock verify`. |
+| **Binary** | `cilock-<version>-<os>-<arch>.tar.gz` | The compressed binary archive. |
+| **Checksum** | `cilock-<version>-<os>-<arch>.tar.gz.sha256` | Per-archive SHA-256 sidecar (the same digest the signed manifest records). |
+| **Per-platform attestations** | `cilock-<version>-<os>-<arch>.build.att.json` + `.source-git.att.json` | The build and source-git steps' signed DSSE envelopes — the inputs to `cilock verify`. |
 | **VSA** | `cilock-<version>-<os>-<arch>.vsa.json` | Verification Summary Attestation — the verify result the release pipeline itself computed. |
-| **SBOM** | `cilock-<version>-sbom.spdx.json` | SPDX SBOM. |
+| **Trust roots** | `fulcio-roots.pem` + `tsa-chain.pem` | The platform Fulcio CA and RFC 3161 TSA chains, for fully offline verification. |
 | **Signed policy** | `release-policy.json` (at `https://cilock.dev/policy/`) | The DSSE-signed release policy, anchored to the **TestifySec Platform Root CA** and the release workflow identity. |
 
 ```bash
@@ -85,10 +85,11 @@ ARCHIVE="cilock-${VERSION#v}-${OS}-${ARCH}.tar.gz"
 BASE="https://cilock.dev/dl/${VERSION}"
 
 curl -fsSLO "${BASE}/${ARCHIVE}"
-curl -fsSLO "${BASE}/checksums-sha256.txt"
+curl -fsSLO "${BASE}/${ARCHIVE}.sha256"
 
-# Integrity: the bytes match what the publisher signed.
-grep " ${ARCHIVE}\$" checksums-sha256.txt | shasum -a 256 -c -   # or: sha256sum -c -
+# Integrity: the bytes match what the publisher signed. (The sidecar also
+# lists the release's attestation files — check the archive's line.)
+grep " ${ARCHIVE}\$" "${ARCHIVE}.sha256" | shasum -a 256 -c -   # or: sha256sum -c -
 
 tar xzf "${ARCHIVE}" cilock && chmod +x cilock && ./cilock version
 ```
