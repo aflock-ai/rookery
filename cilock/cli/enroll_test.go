@@ -157,7 +157,9 @@ func TestAgentStatusReportsExpiry(t *testing.T) {
 	assert.NotContains(t, out.String(), "s3cret")
 
 	// And once past the ceiling, status says so instead of claiming an identity
-	// that does not sign.
+	// that does not sign — and EXITS NON-ZERO, so a script can gate on a dead
+	// identity without parsing prose (the `cilock doctor` pattern: the human
+	// report on stdout, a terse rollup error for the exit code).
 	require.NoError(t, auth.SaveAgent(auth.AgentCredential{
 		PlatformURL: "https://platform.example.com", TenantID: "t-1", AgentID: "a-1",
 		RefreshCredential: "s3cret", ExpiresAt: time.Now().Add(-time.Minute),
@@ -166,7 +168,10 @@ func TestAgentStatusReportsExpiry(t *testing.T) {
 	cmd = AgentStatusCmd()
 	cmd.SetOut(&out)
 	cmd.SetArgs([]string{"--platform-url", "https://platform.example.com"})
-	require.NoError(t, cmd.Execute())
+	require.Error(t, cmd.Execute(), "an expired identity must set a non-zero exit code")
 	assert.Contains(t, out.String(), "EXPIRED")
 	assert.Contains(t, out.String(), "cilock enroll agent")
+	assert.Contains(t, out.String(), "cilock agent logout",
+		"the operator's other way out: sign as their own session, chosen by them and never taken silently")
+	assert.NotContains(t, out.String(), "s3cret")
 }

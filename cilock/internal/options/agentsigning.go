@@ -8,6 +8,7 @@ package options
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
@@ -56,6 +57,36 @@ func applyAgentKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL str
 		// silently borrows an identity here. The summary claims no agent
 		// principal, because none signed.
 		return nil, nil, nil
+	}
+	// REFUSE A DEAD IDENTITY BEFORE THE COMMAND, NOT AFTER IT.
+	//
+	// This is the earliest point at which the run has decided the agent
+	// principal is the identity that signs, and the credential's ceiling is a
+	// LOCAL fact — recorded at enrollment, readable with no network. Discovering
+	// it at signing time instead spends the whole wrapped command (a full test
+	// run, minutes to tens of minutes) to produce a refusal that was knowable
+	// before the first attestor ran. Observed three times on 2026-09-02.
+	//
+	// Two precedents make this the established shape rather than a new one:
+	// cli/run.go's preRunGates refuses BEFORE the build when a stored principal
+	// would store nothing (EnforceEvidenceStorage), and cli/keyloader.go refuses
+	// an already-expired identity token up front "so long builds cannot outlive
+	// their signing certificate". Same rule, one layer up: the credential that
+	// buys the token is checked on the same terms as the token.
+	//
+	// It does NOT fall back to the human session. An enrolled agent credential
+	// pre-empts the human session machine-wide; falling back would put a human's
+	// name on an agent's work, which is the borrowed-identity result the agent
+	// principal exists to remove. The error names both remedies instead and the
+	// operator picks one.
+	//
+	// CheckSigningEligibility is the same predicate `cilock agent status`
+	// reports, so the report and the gate cannot disagree. It runs after the
+	// fulcioSignerNeedsToken return above on purpose: when the operator supplied
+	// their own signer, no agent identity is claimed by this run, and a stale
+	// enrollment on the machine is not that run's business.
+	if err := cred.CheckSigningEligibility(time.Now()); err != nil {
+		return nil, nil, fmt.Errorf("this run would sign against %s as an enrolled agent, but %w", platformURL, err)
 	}
 	if cur := fulcioFlagURL(cmd); cur != "" && !sameOrigin(cur, fulcioURL) {
 		return nil, nil, fmt.Errorf(

@@ -190,7 +190,9 @@ cilock agent logout --platform-url https://platform.example.com
 
 ### `cilock agent status`
 
-Show the agent principal this machine would sign as against one platform: the full SPIFFE ID once the platform has redeemed the credential, or `not yet redeemed` while it has not (an unredeemed credential is kept across a transient refusal and the next `cilock run` retries), and when its authority expires (or that it already has, in which case the remedy is `cilock enroll agent`). Like `logout`, it reads the credential for `--platform-url` only; with no flag it reports the public platform, so a non-default enrollment shows as absent unless you name it.
+Show the agent principal this machine would sign as against one platform: the full SPIFFE ID once the platform has redeemed the credential, or `not yet redeemed` while it has not (an unredeemed credential is kept across a transient refusal and the next `cilock run` retries), and when its authority expires. Like `logout`, it reads the credential for `--platform-url` only; with no flag it reports the public platform, so a non-default enrollment shows as absent unless you name it.
+
+An **expired** credential prints `EXPIRED` and **exits non-zero**, so a script can gate on a dead identity without parsing the output. There are two ways out and cilock takes neither on its own: `cilock enroll agent` for a new ceremony, or `cilock agent logout` to sign as your own session. An enrolled agent credential pre-empts the human session machine-wide by design — falling back to it silently would put a human's name on an agent's work — so `cilock run` refuses the same way, **before** it executes the wrapped command, rather than spending the build on a refusal it could read locally.
 
 | Flag | Default | Description |
 |---|---|---|

@@ -290,11 +290,19 @@ func AgentStatusCmd() *cobra.Command {
 			} else {
 				_, _ = fmt.Fprintf(out, "  spiffe: spiffe://%s/tenant/%s/agent/%s\n", cred.TrustDomain, cred.TenantID, cred.AgentID)
 			}
+			// ONE READING OF ELIGIBILITY, TAKEN ONCE. CheckSigningEligibility is
+			// the same function the pre-command gate in `cilock run` refuses on,
+			// and its message is the same message, so the report an operator
+			// reads and the gate that stops their build cannot drift apart. One
+			// call, one clock read: two would be two verdicts.
+			ineligible := cred.CheckSigningEligibility(time.Now())
 			switch {
-			case cred.Expired(time.Now()):
-				_, _ = fmt.Fprintf(out, "  EXPIRED at %s — this identity no longer signs; run `cilock enroll agent` for a new ceremony.\n",
-					cred.ExpiresAt.Local().Format("2006-01-02 15:04 MST"))
-				return nil
+			// EXIT NON-ZERO, on the `cilock doctor` pattern: the human report
+			// goes to stdout and a terse rollup error sets the code, so a script
+			// can gate on a dead identity without parsing prose.
+			case ineligible != nil:
+				_, _ = fmt.Fprintf(out, "  EXPIRED: %s\n", ineligible)
+				return fmt.Errorf("cilock agent status: the enrolled agent principal for %s is expired", auth.NormalizeURL(url))
 			case !cred.ExpiresAt.IsZero():
 				_, _ = fmt.Fprintf(out, "  expires: %s (%s from now)\n",
 					cred.ExpiresAt.Local().Format("2006-01-02 15:04 MST"), time.Until(cred.ExpiresAt).Round(time.Minute))

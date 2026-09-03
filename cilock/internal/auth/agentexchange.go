@@ -174,10 +174,20 @@ func ExchangeAgentCredential(platformURL string, cred AgentCredential) (AgentSig
 		// wrapper here is what makes that structural rather than a rule each new
 		// error message has to remember.
 		var rejected *agentRejectedError
-		return AgentSigningIdentity{}, &redactedError{
-			text:     redactCredential(err.Error(), cred),
-			rejected: errors.As(err, &rejected),
+		isRejected := errors.As(err, &rejected)
+		text := redactCredential(err.Error(), cred)
+		// A PLATFORM REFUSAL ENDS THE SAME TWO WAYS A LOCAL EXPIRY DOES.
+		//
+		// Revocation and containment are not locally knowable, so this refusal
+		// stays where it is — after the round trip. But the operator's options
+		// are identical to the expired case, and the uniform refusal body the
+		// platform returns by design names none of them. The remedies are
+		// constant text appended AFTER redaction, so they cannot smuggle
+		// server-controlled content back in.
+		if isRejected {
+			text += " — " + AgentSigningRemedies
 		}
+		return AgentSigningIdentity{}, &redactedError{text: text, rejected: isRejected}
 	}
 	return id, nil
 }
@@ -193,9 +203,15 @@ func exchangeAgentCredential(platformURL string, cred AgentCredential) (AgentSig
 	// the point, replaces the uniform "not accepted" with the one cause this
 	// machine can actually name. Only a RECORDED ceiling counts: zero means the
 	// platform is the sole authority, and it answers for itself.
-	if now := time.Now(); cred.Expired(now) {
-		return AgentSigningIdentity{}, fmt.Errorf("the agent principal %s expired at %s (%s ago); its authority was time-bound at enrollment and cannot be extended — run `cilock enroll agent` for a new ceremony",
-			cred.AgentID, cred.ExpiresAt.Format(time.RFC3339), now.Sub(cred.ExpiresAt).Round(time.Second))
+	//
+	// CheckSigningEligibility is the same function `cilock agent status` reports
+	// and the same one the pre-command gate refuses on, so this is a re-check of
+	// a verdict already delivered, not a second opinion. It stays because this
+	// function is also called AFTER the wrapped command by the signing-time
+	// refresher, where a credential that was live at the pre-command gate may
+	// have died during the build.
+	if err := cred.CheckSigningEligibility(time.Now()); err != nil {
+		return AgentSigningIdentity{}, err
 	}
 	out, err := postAgentExchange(platformURL, cred)
 	if err != nil {
