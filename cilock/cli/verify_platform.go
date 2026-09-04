@@ -64,10 +64,60 @@ func platformVerifyMode(vo *options.VerifyOptions) bool {
 	return vo.PlatformURL != ""
 }
 
+// platformModeConflicts lists the local-evidence and local-output flags this
+// invocation set that the platform door would SILENTLY ignore. The door
+// evaluates the bound policy against platform-held evidence and answers with
+// an uploaded VSA — it reads no local envelopes and writes no local files, so
+// an invocation combining it with these flags is asking for two different
+// verifies at once. Refusing is the only honest answer: routing to the door
+// would exit 0 with (for example) no --vsa-outfile ever written, breaking the
+// pipeline stage that reads it (#8743).
+//
+// flagChanged distinguishes an operator's explicit choice from a session
+// default: ResolvePlatformDefaults turns ArchivistaOptions.Enable on for
+// every logged-in session — exactly the population that reaches platform
+// mode — so gating on the FIELD would refuse every logged-in platform verify.
+// Only an explicit --enable-archivista conflicts.
+func platformModeConflicts(vo *options.VerifyOptions, flagChanged func(string) bool) []string {
+	var conflicts []string
+	if len(vo.AttestationFilePaths) > 0 {
+		conflicts = append(conflicts, "-a/--attestations")
+	}
+	if len(vo.BundlePaths) > 0 {
+		conflicts = append(conflicts, "--bundle")
+	}
+	if vo.OutputBundlePath != "" {
+		conflicts = append(conflicts, "--output-bundle")
+	}
+	if vo.VSAOutFilePath != "" {
+		conflicts = append(conflicts, "--vsa-outfile")
+	}
+	if len(vo.VSATimestampServers) > 0 {
+		conflicts = append(conflicts, "--vsa-timestamp-servers")
+	}
+	if vo.ArchivistaOptions.Enable && (flagChanged("enable-archivista") || flagChanged("enable-archivist")) {
+		conflicts = append(conflicts, "--enable-archivista")
+	}
+	return conflicts
+}
+
 // runPlatformVerify asks the platform's verify door for a verdict and renders
 // the answer. Exit contract matches local verify: nil on PASSED, error (exit
 // 1) otherwise — gate on the exit code, never on grepped output.
-func runPlatformVerify(ctx context.Context, vo options.VerifyOptions) error {
+//
+// It refuses, before touching the platform, any invocation that also set
+// local-evidence/output flags the door cannot honor — silently ignoring them
+// exits 0 with (for example) no --vsa-outfile ever written (#8743).
+func runPlatformVerify(ctx context.Context, vo options.VerifyOptions, flagChanged func(string) bool) error {
+	if conflicts := platformModeConflicts(&vo, flagChanged); len(conflicts) > 0 {
+		return fmt.Errorf(
+			"platform verify cannot honor %s: the platform door evaluates the bound policy "+
+				"against platform-held evidence and answers with an uploaded VSA — it reads no "+
+				"local attestations and writes no local files. Pass --client to verify locally "+
+				"under the bound policy (honoring these flags), or -p <policy> to verify against "+
+				"a local policy",
+			strings.Join(conflicts, ", "))
+	}
 	session, err := resolvePolicySession(vo.PlatformURL)
 	if err != nil {
 		return fmt.Errorf("platform verify needs a session: %w (or pass -p for local verification)", err)

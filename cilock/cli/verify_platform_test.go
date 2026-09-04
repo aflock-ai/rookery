@@ -75,6 +75,106 @@ func TestPlatformVerifyMode(t *testing.T) {
 	}
 }
 
+// The door cannot honor local-evidence/output flags, so platform mode must
+// refuse them loudly instead of exiting 0 with (say) no --vsa-outfile written
+// (#8743). Enumerated per flag: a guard that checks only some of what it
+// admits is a hole, not a guard.
+func TestPlatformModeConflicts(t *testing.T) {
+	changed := func(names ...string) func(string) bool {
+		set := map[string]bool{}
+		for _, n := range names {
+			set[n] = true
+		}
+		return func(name string) bool { return set[name] }
+	}
+	cases := []struct {
+		name string
+		vo   options.VerifyOptions
+		flag func(string) bool
+		want []string
+	}{
+		{
+			name: "flagless platform verify — no conflicts",
+			vo:   options.VerifyOptions{PlatformURL: "https://platform.example"},
+			flag: changed(),
+			want: nil,
+		},
+		{
+			name: "-a local evidence is refused",
+			vo:   options.VerifyOptions{AttestationFilePaths: []string{"local.att.json"}},
+			flag: changed(),
+			want: []string{"-a/--attestations"},
+		},
+		{
+			name: "--bundle is refused",
+			vo:   options.VerifyOptions{BundlePaths: []string{"evidence.tar.gz"}},
+			flag: changed(),
+			want: []string{"--bundle"},
+		},
+		{
+			name: "--output-bundle is refused",
+			vo:   options.VerifyOptions{OutputBundlePath: "out.tar.gz"},
+			flag: changed(),
+			want: []string{"--output-bundle"},
+		},
+		{
+			name: "--vsa-outfile is refused — the issue's headline scenario",
+			vo:   options.VerifyOptions{VSAOutFilePath: "vsa.json"},
+			flag: changed(),
+			want: []string{"--vsa-outfile"},
+		},
+		{
+			name: "--vsa-timestamp-servers is refused",
+			vo:   options.VerifyOptions{VSATimestampServers: []string{"tsa.pem"}},
+			flag: changed(),
+			want: []string{"--vsa-timestamp-servers"},
+		},
+		{
+			name: "explicit --enable-archivista is refused",
+			vo:   options.VerifyOptions{ArchivistaOptions: options.ArchivistaOptions{Enable: true}},
+			flag: changed("enable-archivista"),
+			want: []string{"--enable-archivista"},
+		},
+		{
+			// ResolvePlatformDefaults enables Archivista for EVERY logged-in
+			// session — the exact population that reaches platform mode. The
+			// session default must not read as an operator conflict.
+			name: "session-defaulted archivista (flag not Changed) does NOT conflict",
+			vo:   options.VerifyOptions{ArchivistaOptions: options.ArchivistaOptions{Enable: true}},
+			flag: changed(),
+			want: nil,
+		},
+		{
+			name: "explicit --enable-archivista=false does NOT conflict",
+			vo:   options.VerifyOptions{ArchivistaOptions: options.ArchivistaOptions{Enable: false}},
+			flag: changed("enable-archivista"),
+			want: nil,
+		},
+		{
+			name: "multiple conflicts are all named",
+			vo: options.VerifyOptions{
+				AttestationFilePaths: []string{"a.json"},
+				VSAOutFilePath:       "vsa.json",
+			},
+			flag: changed(),
+			want: []string{"-a/--attestations", "--vsa-outfile"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := platformModeConflicts(&tc.vo, tc.flag)
+			if len(got) != len(tc.want) {
+				t.Fatalf("platformModeConflicts = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("platformModeConflicts = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestPlatformVerifyAnchors(t *testing.T) {
 	t.Run("no anchor refuses with the rule, not a shrug", func(t *testing.T) {
 		vo := options.VerifyOptions{}

@@ -120,8 +120,13 @@ func VerifyCmd() *cobra.Command {
 			// command IS the trigger, and the answer is a VSA. `-p` (a local
 			// policy the platform cannot evaluate), `--client`, and
 			// `--platform-url ""` all keep the local verifier below.
+			//
+			// Local-evidence/output flags do not decide the mode (that would
+			// change existing invocations' meaning) — but the door cannot
+			// honor them, so runPlatformVerify refuses the combination
+			// rather than silently ignoring the flags (#8743).
 			if platformVerifyMode(&vo) {
-				return runPlatformVerify(cmd.Context(), vo)
+				return runPlatformVerify(cmd.Context(), vo, cmd.Flags().Changed)
 			}
 
 			verifiers, err := loadVerifiers(cmd.Context(), vo.VerifierOptions, vo.KMSVerifierProviderOptions, providersFromFlags("verifier", cmd.Flags()))
