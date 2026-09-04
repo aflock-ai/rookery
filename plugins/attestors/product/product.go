@@ -1009,6 +1009,20 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return err
 	}
+	// Reset the state a previous decode (or a previous Attest run) derived
+	// before installing this predicate. A reused Attestor decoding a
+	// leaf-less predicate after an inline one must not keep the earlier
+	// products: they were derived from leaves THIS predicate did not sign,
+	// and Products() feeds artifactsFrom edge matching, so carrying them
+	// forward lets a verifier satisfy an edge with stale evidence. rootBytes
+	// is cleared for the same reason: it is populated only by Attest, never
+	// by a decode, so whatever it holds describes an earlier tree rather than
+	// this predicate, and RootBytes() would hand that out. Configuration set
+	// by options (globs, limits) is not derived from a predicate and is
+	// deliberately kept.
+	a.products = nil
+	a.leaves = nil
+	a.rootBytes = nil
 	a.MerkleRoot = p.MerkleRoot
 	a.TreeSize = p.TreeSize
 	a.HashAlgorithmField = p.HashAlgorithm
