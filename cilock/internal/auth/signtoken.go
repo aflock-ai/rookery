@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -136,6 +137,21 @@ func ExchangeSignToken(platformURL, sessionToken string) (string, error) {
 
 // ExchangeSignTokenResult is ExchangeSignToken plus the platform-reported
 // assurance level, for callers that surface it (the run summary).
+// withStepUpURL appends the absolute step-up URL to a refusal message. The
+// server returns a path (it cannot know the platform host the client used), so
+// resolving it here is what turns "go complete the step-up" into something a
+// human can click. A refusal that carries no path is returned unchanged.
+func withStepUpURL(remediation, platformURL, stepUpPath string) string {
+	if strings.TrimSpace(stepUpPath) == "" {
+		return remediation
+	}
+	target := stepUpPath
+	if !strings.HasPrefix(stepUpPath, "http://") && !strings.HasPrefix(stepUpPath, "https://") {
+		target = strings.TrimRight(NormalizeURL(platformURL), "/") + "/" + strings.TrimLeft(stepUpPath, "/")
+	}
+	return remediation + "\n\nStep up here: " + target
+}
+
 func ExchangeSignTokenResult(platformURL, sessionToken string) (SignTokenResult, error) {
 	// Refuse to attach the session bearer over cleartext to a non-loopback host
 	// (#5997): this bearer can mint Fulcio signing tokens, so it must never leak
@@ -161,6 +177,21 @@ func ExchangeSignTokenResult(platformURL, sessionToken string) (SignTokenResult,
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024)) //nolint:errcheck // diagnostic only
+		if resp.StatusCode == http.StatusForbidden {
+			var refusal struct {
+				Error       string `json:"error"`
+				Remediation string `json:"remediation"`
+				StepUpURL   string `json:"step_up_url"`
+			}
+			if json.Unmarshal(body, &refusal) == nil && refusal.Error != "" && refusal.Remediation != "" {
+				// The refusal's remediation says "at the URL below", so the URL
+				// has to reach the human. The server sends a PATH, since only
+				// the client knows which platform it is talking to; dropping it
+				// leaves the user reading about a URL that is not there, and
+				// `cilock login` alone never raises the session's level.
+				return SignTokenResult{}, errors.New(withStepUpURL(refusal.Remediation, platformURL, refusal.StepUpURL))
+			}
+		}
 		return SignTokenResult{}, fmt.Errorf("sign-token exchange returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 

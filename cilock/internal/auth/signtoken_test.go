@@ -176,3 +176,24 @@ func TestExchangeSignToken_DoesNotClobberEmail(t *testing.T) {
 		t.Fatalf("existing email must not be clobbered, got %v", cred)
 	}
 }
+
+func TestExchangeSignToken_SurfacesForbiddenRemediation(t *testing.T) {
+	const remediation = "signing requires a passkey session (AAL2): run `cilock login` again and complete the passkey step-up when the browser asks; add a passkey under Settings → Security if you have none."
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":       "aal2_required",
+			"remediation": remediation,
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := ExchangeSignTokenResult(srv.URL, "stored-session-credential")
+	if err == nil {
+		t.Fatal("expected the refused sign-token exchange to fail")
+	}
+	if err.Error() != remediation {
+		t.Fatalf("error = %q, want remediation verbatim %q", err, remediation)
+	}
+}
