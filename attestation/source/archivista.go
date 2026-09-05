@@ -171,19 +171,28 @@ func (s *ArchivistaSource) fetchCollectionEnvelope(ctx context.Context, gitoid s
 // falsely would cost determinism of a SIGNED artifact. See
 // source.CanonicalOrderSourcer.
 func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionEnvelope) error) error {
+	// An empty digest set is the DIAGNOSTIC PROBE, and a probe neither
+	// consults nor updates this source's seen-set — see IsDiagnosticProbe for
+	// why both halves must move together, and testifysec/judge#7592 for the
+	// verdict flip that happens when the marking half is missing. It never
+	// consults the memo either, for the same reason.
+	probe := IsDiagnosticProbe(subjectDigests)
+
 	// A digest-filtered search this source already fully processed yields
 	// nothing new by construction (see completedSearches) — skip the round
-	// trip outright. Searches with an empty digest set are diagnostics and
-	// never consult the memo.
+	// trip outright.
 	fingerprint := searchFingerprint(collectionName, subjectDigests, attestations)
-	s.mu.Lock()
-	if _, done := s.completedSearches[fingerprint]; done && len(subjectDigests) > 0 {
+	var excludeGitoids []string
+	if !probe {
+		s.mu.Lock()
+		if _, done := s.completedSearches[fingerprint]; done {
+			s.mu.Unlock()
+			return nil
+		}
+		excludeGitoids = make([]string, len(s.seenGitoids))
+		copy(excludeGitoids, s.seenGitoids)
 		s.mu.Unlock()
-		return nil
 	}
-	excludeGitoids := make([]string, len(s.seenGitoids))
-	copy(excludeGitoids, s.seenGitoids)
-	s.mu.Unlock()
 
 	gitoids, err := s.client.SearchGitoids(ctx, archivista.SearchGitoidVariables{
 		CollectionName: collectionName,
@@ -246,6 +255,14 @@ func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName stri
 		return yieldErr
 	}
 
+	// A PROBE leaves the source exactly as it found it: it matched every
+	// collection for the step name, so recording them would feed the
+	// exclusion above and permanently suppress that step's legitimate
+	// evidence from every later depth (#7592).
+	if probe {
+		return nil
+	}
+
 	// Only mark gitoids as seen after ALL were successfully processed.
 	// This prevents partial updates that break retry semantics: if a
 	// download fails mid-batch, no gitoids are excluded on the next search.
@@ -254,12 +271,10 @@ func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName stri
 	// The memo follows the same all-or-nothing rule: a batch that reached
 	// this point marked every candidate seen, so its identical repeat is
 	// provably empty and the query can be skipped.
-	if len(subjectDigests) > 0 {
-		if s.completedSearches == nil {
-			s.completedSearches = make(map[string]struct{})
-		}
-		s.completedSearches[fingerprint] = struct{}{}
+	if s.completedSearches == nil {
+		s.completedSearches = make(map[string]struct{})
 	}
+	s.completedSearches[fingerprint] = struct{}{}
 	s.mu.Unlock()
 
 	return nil
@@ -308,10 +323,22 @@ func searchFingerprint(collectionName string, subjectDigests, attestations []str
 //
 // See issue #39.
 func (s *ArchivistaSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
-	s.mu.Lock()
-	excludeGitoids := make([]string, len(s.seenGitoids))
-	copy(excludeGitoids, s.seenGitoids)
-	s.mu.Unlock()
+	// The seen-set is the SOURCE's, shared with SearchStream, so the probe
+	// rule is the source's too: an unfiltered search here neither consults
+	// nor updates it. The engine's own call site always supplies the
+	// policy's digests (policy.go passes vo.subjectDigests, and
+	// checkVerifyOpts rejects an empty set), so this gate costs the
+	// verification path nothing — it stops an unfiltered caller from
+	// consuming the corpus the way the diagnostic probe did (#7592).
+	probe := IsDiagnosticProbe(subjectDigests)
+
+	var excludeGitoids []string
+	if !probe {
+		s.mu.Lock()
+		excludeGitoids = make([]string, len(s.seenGitoids))
+		copy(excludeGitoids, s.seenGitoids)
+		s.mu.Unlock()
+	}
 
 	gitoids, err := s.client.SearchGitoidsByPredicate(ctx, archivista.SearchGitoidByPredicateVariables{
 		PredicateTypes: predicateTypes,
@@ -370,9 +397,11 @@ func (s *ArchivistaSource) SearchByPredicateType(ctx context.Context, predicateT
 		processedGitoids = append(processedGitoids, gitoid)
 	}
 
-	s.mu.Lock()
-	s.seenGitoids = append(s.seenGitoids, processedGitoids...)
-	s.mu.Unlock()
+	if !probe {
+		s.mu.Lock()
+		s.seenGitoids = append(s.seenGitoids, processedGitoids...)
+		s.mu.Unlock()
+	}
 
 	return envelopes, nil
 }

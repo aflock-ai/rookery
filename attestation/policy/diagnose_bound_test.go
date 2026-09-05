@@ -296,9 +296,18 @@ func TestProbeBound_ExactBoundary(t *testing.T) {
 			// which is what an unbounded probe did at EVERY size before this
 			// change. So n <= bound is inherited behaviour, asserted below
 			// against the legacy oracle, not a regression this bound
-			// introduces. Closing it belongs in the source (judge-api's
-			// EntSource already refuses to mark from a probe; ArchivistaSource
-			// has no such guard) and is tracked in testifysec/judge#8026.
+			// introduces.
+			//
+			// diagCorpus is deliberately a NAIVE seen-tracker — it marks
+			// whatever it delivered — because this table measures what the
+			// BOUND alone contributes, in isolation from any source-side
+			// guard. The real sources close the remainder separately: both
+			// gate their seen-set on source.IsDiagnosticProbe and so mark
+			// nothing for a probe at any size (judge-api's EntSource always
+			// did; ArchivistaSource since testifysec/judge#7592, pinned by
+			// TestArchivistaSource_ProbeDoesNotBuryEvidenceFromALaterFilteredSearch).
+			// Teaching diagCorpus that guard would make every row below read
+			// 0 and stop measuring the bound.
 			streamSeen := n
 			if n > maxDiagnosticProbeCollections {
 				streamSeen = 0

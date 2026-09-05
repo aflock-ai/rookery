@@ -64,11 +64,13 @@ const maxDiagnosticProbeCollections = 4
 // TestProbeBound_ExactBoundary asserts that size by size against the legacy
 // oracle, so the claim is checked rather than asserted here.
 //
-// Closing the remainder is the source's job, not the diagnostic's: judge-api's
-// EntSource already refuses to mark from a probe, while ArchivistaSource has no
-// equivalent guard (testifysec/judge#8026). A probe must not mutate what the
-// real search can still find, and only the source can promise that at every
-// size.
+// Closing the remainder is the source's job, not the diagnostic's, and it is
+// now closed: both seen-tracking sources gate their seen-set on
+// source.IsDiagnosticProbe — judge-api's EntSource always did, ArchivistaSource
+// does since testifysec/judge#7592 — so a probe mutates nothing at any corpus
+// size. A probe must not mutate what the real search can still find, and only
+// the source can promise that at every size; this bound only ever removes
+// fetches.
 //
 // It never escapes probeStepEvidence.
 var errDiagnosticProbeSatisfied = errors.New("diagnostic probe: sample bound reached")
