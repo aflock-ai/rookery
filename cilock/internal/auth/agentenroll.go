@@ -89,8 +89,9 @@ func BrowserEnroll(judgeURL string, params EnrollParams) (*AgentCredential, erro
 
 	enrollURL := agentEnrollURL(judgeURL, callbackURL, state, seal.PublicKeyB64(), params)
 	fmt.Printf("Opening browser to enroll this agent with %s ...\n", judgeURL)
-	fmt.Printf("Your human signs in and approves there. If it doesn't open, have them visit:\n  %s\n\n", enrollURL)
-	openBrowserURL(enrollURL)
+	fmt.Printf("Your human signs in and approves there.\n")
+	opened := openBrowserURL(enrollURL)
+	fmt.Print(ceremonyInvitation("have them visit the ceremony", enrollURL, opened))
 
 	select {
 	case o := <-resultCh:
@@ -129,6 +130,10 @@ type enrollOutcome struct {
 //   - a credential under a WRONG or missing state is refused (403) and nothing
 //     is stored — constant-time compare, so a local forger learns nothing from
 //     timing.
+//   - a callback arriving AFTER this ceremony has delivered is refused (409)
+//     before anything else about it is read. A delivered flow is examined
+//     against nothing further: its bytes never reach the private key and no
+//     identity is read off them.
 //   - a credential with NO tenant/agent identity is refused (400) and nothing
 //     is stored — a secret we cannot attribute is a liability, not an identity.
 //   - a valid POST is stored 0600 via SavePendingAgent INSIDE the handler —
@@ -148,8 +153,7 @@ func enrollCallbackHandler(judgeURL, state string, seal *enrollSealKey, resultCh
 		// in its URL would be a delivery — and a URL is the one shape a
 		// credential must never travel in (it lands in history and logs).
 		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
-			http.Error(w, "", http.StatusMethodNotAllowed)
+			refuseLoopbackProbe(w)
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -164,18 +168,30 @@ func enrollCallbackHandler(judgeURL, state string, seal *enrollSealKey, resultCh
 		// Nothing sealed (a GET liveness probe, a stray request, an empty POST):
 		// answer WITHOUT leaking anything. 405, no body, no Location, no state.
 		if sealed == "" {
-			w.Header().Set("Allow", http.MethodPost)
-			http.Error(w, "", http.StatusMethodNotAllowed)
+			refuseLoopbackProbe(w)
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(r.FormValue("state")), []byte(state)) != 1 {
 			http.Error(w, "invalid state", http.StatusForbidden)
 			return
 		}
+		// THE FLOW IS INVALIDATED BY ITS OWN DELIVERY. Once a callback has
+		// been accepted, a later one carrying the same state is refused HERE —
+		// before its bytes reach this ceremony's private key, before an
+		// identity is read off it, and before it can be told apart from the
+		// one that succeeded. The single-shot below still does the consuming
+		// (nothing spends the ceremony until a callback is wholly valid); this
+		// is the cheap read that keeps a spent ceremony from being examined
+		// against attacker input at all.
+		if consumed.Load() {
+			http.Error(w, flowAlreadyDelivered, http.StatusConflict)
+			return
+		}
 		// NOTHING BELOW CONSUMES THE CEREMONY UNTIL THE CALLBACK IS WHOLLY
 		// VALID. `state` and the sealing public key are printed in the terminal
-		// (the enroll URL carries both) and so are known to any local process
-		// that can read the agent's output; a callback that carried the right
+		// whenever nothing opened a browser (ceremonyInvitation withholds them
+		// otherwise — #8739) and are then known to any local process that can
+		// read the agent's output; a callback that carried the right
 		// state but garbage for everything else used to claim the one-shot and
 		// leave the genuine browser POST with a 409. Now a malformed callback
 		// is refused and consumes nothing; only a callback that opens, names an
@@ -207,7 +223,7 @@ func enrollCallbackHandler(judgeURL, state string, seal *enrollSealKey, resultCh
 		// POST — even with the right state — is refused rather than allowed to
 		// overwrite what the first one stored.
 		if !consumed.CompareAndSwap(false, true) {
-			http.Error(w, "already enrolled", http.StatusConflict)
+			http.Error(w, flowAlreadyDelivered, http.StatusConflict)
 			return
 		}
 		cred := AgentCredential{

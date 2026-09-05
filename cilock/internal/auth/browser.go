@@ -13,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -65,39 +67,15 @@ func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
 	mux := http.NewServeMux()
 	srv := newLoopbackServer(mux) // bounded read and drain: loopback.go
 
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		_ = r.ParseForm()
-		token := r.FormValue("token")
-		// Reject any callback whose state doesn't match the one we minted for
-		// this login. Constant-time compare avoids leaking the verifier via
-		// timing. Without this a forged POST could persist a rogue token.
-		if token != "" && subtle.ConstantTimeCompare([]byte(r.FormValue("state")), []byte(state)) != 1 {
-			http.Error(w, "invalid state", http.StatusForbidden)
-			return
-		}
-		if token != "" {
-			resultCh <- newBrowserCredential(judgeURL, token, map[string]string{
-				"tenant_id":  r.FormValue("tenant_id"),
-				"tenant":     r.FormValue("tenant"),
-				"product_id": r.FormValue("product_id"),
-				"product":    r.FormValue("product"),
-				"email":      r.FormValue("email"),
-			})
-			w.Header().Set("Content-Type", "text/html")
-			writeCallbackPage(w, r.FormValue("tenant"))
-			return
-		}
-		http.Redirect(w, r, cliAuthURL(judgeURL, callbackURL, state, params), http.StatusFound)
-	})
+	mux.HandleFunc("/callback", loginCallbackHandler(judgeURL, state, resultCh))
 
 	go func() { _ = srv.Serve(listener) }()
 	defer shutdownLoopback(srv)
 
 	loginURL := cliAuthURL(judgeURL, callbackURL, state, params)
 	fmt.Printf("Opening browser to sign in to %s ...\n", judgeURL)
-	fmt.Printf("If it doesn't open, visit:\n  %s\n\n", loginURL)
-	openBrowserURL(loginURL)
+	opened := openBrowserURL(loginURL)
+	fmt.Print(ceremonyInvitation("sign in", loginURL, opened))
 
 	select {
 	case c := <-resultCh:
@@ -105,6 +83,159 @@ func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
 	case <-time.After(5 * time.Minute):
 		return nil, fmt.Errorf("login timed out after 5 minutes")
 	}
+}
+
+// loginCallbackHandler is `cilock login`'s loopback endpoint. Extracted from
+// BrowserLogin for the same reason enrollCallbackHandler was extracted from
+// BrowserEnroll: buried in a server closure, the only way to reach these
+// decisions was a live browser ceremony, and a guard nothing can exercise is a
+// guard nothing can trust.
+//
+// It is the enrollment callback's decisions, in the same refusal-first order,
+// because it is the same loopback under the same threat — every local process
+// on the machine — and the three defects below were live here after being
+// closed there (#8739):
+//
+//   - A NON-POST REQUEST IS NOT A DELIVERY. ParseForm folds the query string in
+//     for a GET, so a GET carrying `token` and `state` in its URL used to be
+//     accepted — and a URL is the one shape a session token must never travel
+//     in: it lands in shell history, browser history and every proxy log.
+//   - A CREDENTIAL-LESS REQUEST LEAKS NOTHING. It used to be answered with a
+//     302 to the approve page, whose `Location` carries `state`, so any local
+//     process could GET the loopback, read the verifier out of the redirect,
+//     and POST a forged token that then passed the constant-time compare. Now
+//     it is a bare 405 with no body and no Location — the listener still
+//     answers, which is all a liveness probe needs.
+//   - ONE VALID CALLBACK ENDS THE FLOW. There was no single-shot at all here,
+//     so a racing or replayed POST overwrote what the browser had just
+//     delivered. A second callback is refused 409 and examined no further.
+func loginCallbackHandler(judgeURL, state string, resultCh chan<- *Credential) http.HandlerFunc {
+	var consumed atomic.Bool
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			refuseLoopbackProbe(w)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		// A ParseForm error is deliberately not inspected: it fails CLOSED.
+		// Every FormValue then returns "", so an oversized or malformed body
+		// falls into the credential-less path rather than reaching a decision.
+		_ = r.ParseForm()
+		token := r.FormValue("token")
+		if token == "" {
+			refuseLoopbackProbe(w)
+			return
+		}
+		// Reject any callback whose state doesn't match the one we minted for
+		// this login. Constant-time compare avoids leaking the verifier via
+		// timing. Without this a forged POST could persist a rogue token.
+		if subtle.ConstantTimeCompare([]byte(r.FormValue("state")), []byte(state)) != 1 {
+			http.Error(w, "invalid state", http.StatusForbidden)
+			return
+		}
+		// The flow is spent. Refuse BEFORE reading anything else off the
+		// request: a delivered ceremony is examined against nothing further.
+		if !consumed.CompareAndSwap(false, true) {
+			http.Error(w, flowAlreadyDelivered, http.StatusConflict)
+			return
+		}
+		resultCh <- newBrowserCredential(judgeURL, token, map[string]string{
+			"tenant_id":  r.FormValue("tenant_id"),
+			"tenant":     r.FormValue("tenant"),
+			"product_id": r.FormValue("product_id"),
+			"product":    r.FormValue("product"),
+			"email":      r.FormValue("email"),
+		})
+		w.Header().Set("Content-Type", "text/html")
+		writeCallbackPage(w, r.FormValue("tenant"))
+	}
+}
+
+// flowAlreadyDelivered is the one refusal both ceremonies give a second
+// callback. It is DISTINCT from every other refusal on the port (403 wrong
+// state, 400 unreadable payload) so an operator reading a terminal can tell
+// "someone raced this ceremony" from "someone guessed at it" — and it says
+// nothing a caller could not already infer from having been first or second.
+const flowAlreadyDelivered = "this ceremony has already delivered its credential"
+
+// refuseLoopbackProbe is the answer to anything that is not a credential
+// delivery: a bare 405 with NO body, NO Location and NO echo. Both loopbacks
+// share it so neither can drift into answering a probe with something the
+// probe did not already have.
+func refuseLoopbackProbe(w http.ResponseWriter) {
+	w.Header().Set("Allow", http.MethodPost)
+	http.Error(w, "", http.StatusMethodNotAllowed)
+}
+
+// secretCeremonyParams names the ceremony-URL query parameters that AUTHORIZE
+// rather than describe. Everything else in the URL — the platform, the
+// loopback port, the pre-fill hints — is discoverable or harmless.
+var secretCeremonyParams = []string{"state", "seal_pub"}
+
+// redactedParam is what a withheld parameter renders as. It is deliberately
+// not a plausible value: a human who pastes this URL gets the page's "Invalid
+// Request" card, not a ceremony that half-works.
+const redactedParam = "REDACTED"
+
+// redactCeremonyURL rewrites a ceremony URL for HUMAN EYES, replacing every
+// authorizing parameter with a placeholder. A URL that will not parse is
+// truncated at its query string rather than echoed: printing a value we could
+// not read is exactly how a secret escapes.
+func redactCeremonyURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		if i := strings.IndexByte(raw, '?'); i >= 0 {
+			return raw[:i]
+		}
+		return raw
+	}
+	q := u.Query()
+	for _, k := range secretCeremonyParams {
+		if q.Has(k) {
+			q.Set(k, redactedParam)
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// ceremonyInvitation is the block a browser ceremony prints AFTER it has tried
+// to open a browser, and the printing side of #8739.
+//
+// THE VERIFIER IS NOT PRINTED WHILE A BROWSER HOLDS IT. The ceremony URL
+// carries everything the loopback callback checks — `state` for both
+// ceremonies, and `seal_pub` too for enrollment. A local process that reads
+// this output therefore holds the whole inbound check: it can seal a
+// credential of its own to the published recipient key with the published
+// state bound in, POST it before the human finishes approving, and spend the
+// one-shot. The callback cannot tell that POST from the platform's, because
+// every value it compares is in it. So the fix is here: when a browser already
+// has the URL, the parts that AUTHORIZE are withheld from the terminal, and
+// what prints is enough to recognize the ceremony and nothing more.
+//
+// When NOTHING opened, the whole URL prints. That output is then the only
+// channel to the human (and to the UAT harness, which sets BROWSER=none and
+// reads the first URL line) — withholding it there would not be a control, it
+// would be a ceremony that cannot be completed. `verb` names what the reader
+// does there, which differs per ceremony.
+//
+// RESIDUAL, stated rather than claimed away: a process that can read this
+// process's MEMORY, or re-run the command with BROWSER=none, still obtains the
+// verifier. Same-UID isolation is not what this closes; it closes the
+// verifier's escape into transcripts, logs and scrollback, which outlive the
+// ceremony and are read by things that were never on this machine.
+func ceremonyInvitation(verb, ceremonyURL string, browserOpened bool) string {
+	if !browserOpened {
+		return fmt.Sprintf("Nothing opened a browser — %s at:\n  %s\n\n"+
+			"That URL carries this ceremony's one-time verifier. Paste it into a browser you\n"+
+			"trust and nowhere else.\n\n", verb, ceremonyURL)
+	}
+	return fmt.Sprintf("The ceremony is at:\n  %s\n\n"+
+		"Its authorizing parameters are withheld on purpose: anything that can read them —\n"+
+		"another local process, a saved transcript, a log — can deliver a credential of its\n"+
+		"own before the browser does. If no browser came up, re-run with BROWSER=none and\n"+
+		"copy the whole URL from a terminal only you can read.\n\n",
+		redactCeremonyURL(ceremonyURL))
 }
 
 // defaultSessionTTL bounds a session credential whose JWT carries no `exp`
@@ -198,14 +329,18 @@ func cliAuthURL(judgeURL, callbackURL, state string, params LoginParams) string 
 	return judgeURL + "/auth/cli?" + q.Encode()
 }
 
-func openBrowserURL(rawURL string) {
+// openBrowserURL launches the ceremony page and REPORTS WHETHER IT DID. The
+// bool is load-bearing, not informational: the ceremony URL carries this
+// flow's one-time verifier, so it is printed in full only when nothing opened
+// it — the one case where a human has no other way to reach the page.
+func openBrowserURL(rawURL string) bool {
 	// BROWSER=none is the conventional way to say "print the URL, do not open
 	// anything" — a harness that drives its own browser (the UAT lane) sets
 	// it so the ceremony URL goes only where the harness reads it. Any other
 	// value of $BROWSER is deliberately not honoured as an opener: it would be
 	// an executable name taken from the environment.
 	if os.Getenv("BROWSER") == "none" {
-		return
+		return false
 	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -214,5 +349,10 @@ func openBrowserURL(rawURL string) {
 	default:
 		cmd = exec.Command("open", rawURL) //nolint:gosec // G204: fixed opener binary; only the URL (built by cliAuthURL) varies
 	}
-	_ = cmd.Start()
+	// Start, not Run: the opener is fire-and-forget. A failure to START (no
+	// opener binary on this machine) is the honest "nothing opened" signal;
+	// what the browser does afterwards is not observable from here, which is
+	// why the printed text tells the human how to recover rather than
+	// claiming a browser is up.
+	return cmd.Start() == nil
 }
