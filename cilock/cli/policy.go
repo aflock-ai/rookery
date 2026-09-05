@@ -31,6 +31,7 @@ func PolicyCmd() *cobra.Command {
 	cmd.AddCommand(PolicyFromBundlesCmd())
 	cmd.AddCommand(PolicyFromCommitCmd())
 	cmd.AddCommand(PolicyPushCmd())
+	cmd.AddCommand(PolicyPublishCmd())
 	cmd.AddCommand(PolicyBindCmd())
 	return cmd
 }
