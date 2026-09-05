@@ -86,6 +86,12 @@ gtag('config', '${AW_ID}', { send_page_view: false });`,
           },
           {
             tagName: 'script',
+            // EVERYTHING BELOW UNTIL THE CLOSING BACKTICK IS ONE TEMPLATE LITERAL, so a
+            // backtick inside it — including inside a // comment, which is script text
+            // here and not a JS comment — ENDS THE STRING EARLY. That truncates the
+            // injected script at that point and then fails the docusaurus build with
+            // "ParseError: Unexpected token, expected ','". Quote identifiers in these
+            // comments with ' or nothing at all. Same for ${...}, which interpolates.
             innerHTML: `(function () {
   var TOKEN = '${FACTORS_TOKEN}';
   var REGULATED = ${JSON.stringify(REGULATED)};
@@ -116,36 +122,42 @@ gtag('config', '${AW_ID}', { send_page_view: false });`,
   }
   function startBeacon() {
     var ep = '/cl/e', now = function () { return (window.performance && performance.now) ? performance.now() : Date.now(); };
-    var path = location.pathname, t0 = now(), maxScroll = 0, sent = false, hubVisited = false;
-    // Factors anon user id: the _fuid cookie (set by faitracker) is base64 of a UUID, which
-    // == the Account Journey API user_id. Decoded + validated, it's the hub's hard join from
-    // a docs visitor to its Factors-identified company. Read lazily (set after first paint).
-    function fuid() { try { var v = getCookie('_fuid'); if (!v) return ''; var u = atob(v); return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u) ? u : ''; } catch (e) { return ''; } }
+    var path = location.pathname, t0 = now(), maxScroll = 0, sent = false;
     // Campaign first-touch: cl_cid (our slug) or utm_campaign from the URL, persisted 90d.
+    // Called for its COOKIE SIDE EFFECT below. Its return value used to ride the salespot
+    // hub mirror, which was removed with the public write key (judge#8086); persisting
+    // cl_camp is separate from that and still wanted, so the call stays.
+    //
+    // fuid() lived here too — it decoded the Factors _fuid cookie for the hub payload's
+    // hard join. Nothing reads it now that the mirror is gone, so it went with it rather
+    // than sitting as a dead reader of an identity cookie.
     function camp() { try { var q = new URLSearchParams(location.search); var cur = (q.get('cl_cid') || q.get('utm_campaign') || '').slice(0, 64); var ex = getCookie('cl_camp'); if (cur && !ex) { document.cookie = 'cl_camp=' + encodeURIComponent(cur) + '; Path=/; Max-Age=7776000; SameSite=Lax'; return cur; } return ex ? decodeURIComponent(ex) : cur; } catch (e) { return ''; } }
+    camp();
     function send(type, extra) {
       try {
         var b = { t: type, p: path, r: document.referrer || '', ms: Math.round(now() - t0), sd: maxScroll, vw: window.innerWidth, vh: window.innerHeight };
         if (extra) { for (var k in extra) b[k] = extra[k]; }
         if (navigator.sendBeacon) navigator.sendBeacon(ep, JSON.stringify(b));
-        // Cross-property analytics sink (salespot.testifysec.com/ingest/web): mirror this
-        // event so cilock.dev shows up alongside testifysec.com. salespot accepts this exact
-        // wire shape and keeps only the high-intent slice; the retired standalone hub's raw
-        // page-view warehouse is deliberately not reproduced. This runs only after the
-        // client-side consent gate, so cl_consent:'granted' is truthful; the key is a public
-        // anti-noise token (webingest.PublicBeaconKey). cilock.dev serves no CSP
-        // (site/static/_headers), so this host needs no connect-src entry — testifysec.com
-        // DOES, and has one.
-        var HUB = 'https://salespot.testifysec.com/ingest/web', fu = fuid(), cp = camp();
-        var hub = { source: 'cilock.dev', kind: 'event', key: 'clk-web-ingest-pub-2026', cl_consent: 'granted', type: type, path: path, referer: b.r, dwell_ms: b.ms, scroll: b.sd, vw: b.vw, vh: b.vh, query: (extra && (extra.q || extra.d)) || '', visitor_id: getCookie('cl_vid') || '', session_id: getCookie('cl_sid') || '', factors_uid: fu, campaign: cp };
-        if (navigator.sendBeacon) navigator.sendBeacon(HUB, JSON.stringify(hub));
-        // First page view also emits a hub visit row so cilock.dev populates the visits
-        // table (summary/series/ASN orgs + the factors_uid hard join), like testifysec.com.
-        if (type === 'pv' && !hubVisited) {
-          hubVisited = true;
-          var hv = { source: 'cilock.dev', kind: 'visit', key: 'clk-web-ingest-pub-2026', cl_consent: 'granted', path: path, referer: b.r, visitor_id: getCookie('cl_vid') || '', session_id: getCookie('cl_sid') || '', is_returning: getCookie('cl_seen') ? 1 : 0, user_agent: navigator.userAgent, factors_uid: fu, campaign: cp };
-          if (navigator.sendBeacon) navigator.sendBeacon(HUB, JSON.stringify(hv));
-        }
+        // THE salespot HUB MIRROR WAS REMOVED HERE (judge#8086).
+        //
+        // This used to also POST every event to salespot.testifysec.com/ingest/web with
+        // the field key: 'clk-web-ingest-pub-2026' — a token published in this open-source repo and
+        // in page source, described in the code as "a public anti-noise token". It was not
+        // anti-noise: it was the endpoint's whole authentication, so anyone could write CRM
+        // rows with it, and the "edge rate limiting" it deferred to did not exist on the
+        // zone.
+        //
+        // The mirror is deleted rather than re-credentialed because a browser cannot hold a
+        // secret, and because it never worked: salespot's sink only acts on kind='pv' (a
+        // signal) or kind='event'+type='dl' (a counter), and this block sends kind='event'
+        // with type pv/eng/search/click/copy, or kind='visit'. Every one of those was
+        // ignored on arrival — the only thing it contributed was a forgery vector. cilock.dev's
+        // own first-party beacon (ep, above) is untouched.
+        //
+        // Downloads DO still reach salespot, from functions/_lib/dist.ts logDownload, which
+        // runs server-side and signs with CILOCK_ANALYTICS_HUB_KEY. If cross-property page
+        // views are wanted here, they need the same shape: a same-origin Pages Function that
+        // holds the secret and signs, like testifysec.com's /api/beacon.
       } catch (e) {}
     }
     window.addEventListener('scroll', function () {

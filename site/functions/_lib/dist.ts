@@ -22,6 +22,12 @@ export interface Env {
   // Override for the canonical cross-property analytics hub ingest endpoint that
   // logDownload() POSTs download events to. Defaults to ANALYTICS_HUB_DEFAULT.
   CILOCK_ANALYTICS_HUB?: string;
+  // SECRET (`wrangler secret put CILOCK_ANALYTICS_HUB_KEY`): the shared HMAC key
+  // logDownload signs each event with. It must equal salespot's
+  // SALESPOT_INGEST_HMAC_KEY. Unset = download events are not reported at all,
+  // which is the correct failure: the hub refuses unsigned writes, so sending
+  // them would only produce 401s.
+  CILOCK_ANALYTICS_HUB_KEY?: string;
 }
 
 /**
@@ -34,11 +40,22 @@ export interface Env {
  */
 const ANALYTICS_HUB_DEFAULT = 'https://salespot.testifysec.com/ingest/web';
 /**
- * Anti-noise write key the hub expects on /ingest/web (low-security, not a secret —
- * it just keeps casual junk out; real abuse protection is edge rate-limiting). Must
- * match the hub's INGEST_WRITE_KEY.
+ * Header the hub reads the event signature from.
+ *
+ * WHAT REPLACED WHAT (judge#8086). This used to be a constant write key sent in
+ * the request BODY, described here as "low-security, not a secret — real abuse
+ * protection is edge rate-limiting". Both halves were wrong. The key was
+ * published in this open-source repository and in the page source of two
+ * websites, so it admitted anyone who could read a web page; and no
+ * rate-limiting ruleset existed on the hub's zone, so the protection it deferred
+ * to was not there either.
+ *
+ * The hub now requires an HMAC-SHA256 over "<unix seconds>.<body>" under a
+ * shared secret, presented as `t=<ts>,v1=<hex>`. This relay is a Pages Function
+ * — it runs server-side and CAN hold a secret, which is exactly why the browser
+ * beacons were moved behind their own signing proxy rather than given one.
  */
-const ANALYTICS_HUB_KEY = 'clk-web-ingest-pub-2026';
+const ANALYTICS_SIGNATURE_HEADER = 'X-Ingest-Signature';
 
 /** One published file inside a version, as recorded in the manifest. */
 export interface ManifestFile {
@@ -134,6 +151,11 @@ export async function resolveKey(env: Env, tail: string): Promise<string | null>
  * country from request.cf of this POST, and parses the asset filename
  * (cilock-<version>-<os>-<arch>.tar.gz) for version/os/arch display. Failures are
  * swallowed (logged) so a hub outage never breaks a download.
+ *
+ * Reporting is CREDENTIALED (judge#8086): each event is signed with
+ * CILOCK_ANALYTICS_HUB_KEY. Without that secret the event is not sent — the hub
+ * refuses unsigned writes, so an unsigned POST would be nothing but a 401 and a
+ * misleading log line.
  */
 export function logDownload(
   context: { env: Env; waitUntil: (p: Promise<unknown>) => void; request: Request },
@@ -146,22 +168,52 @@ export function logDownload(
     source: 'cilock.dev',
     kind: 'event',
     type: 'dl',
-    key: ANALYTICS_HUB_KEY,
     path: rec.path.slice(0, 256),
     query: asset,
   });
 
   console.log(`DOWNLOAD ${JSON.stringify({ asset, version: rec.version, endpoint })}`);
 
+  const secret = context.env.CILOCK_ANALYTICS_HUB_KEY;
+  if (!secret) {
+    console.log('DOWNLOAD_HUB_SKIP CILOCK_ANALYTICS_HUB_KEY unset; download not reported');
+    return;
+  }
+
   context.waitUntil(
-    fetch(endpoint, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body,
-    })
+    signHubEvent(secret, body)
+      .then((signature) =>
+        fetch(endpoint, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', [ANALYTICS_SIGNATURE_HEADER]: signature },
+          body,
+        }),
+      )
       .then(() => undefined)
       .catch((e) => console.log(`DOWNLOAD_HUB_ERR ${String(e)}`)),
   );
+}
+
+/**
+ * Signs one hub event: HMAC-SHA256 over "<unix seconds>.<body>", hex, in the
+ * `t=<ts>,v1=<hex>` shape the hub parses.
+ *
+ * The timestamp is INSIDE the signed string rather than merely alongside it, so
+ * an observed signature cannot be re-dated; the hub only accepts a few minutes
+ * of skew either way.
+ */
+export async function signHubEvent(secret: string, body: string, nowSeconds?: number): Promise<string> {
+  const ts = nowSeconds ?? Math.floor(Date.now() / 1000);
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${ts}.${body}`));
+  const hex = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `t=${ts},v1=${hex}`;
 }
 
 /**

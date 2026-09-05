@@ -25,7 +25,10 @@ database_id = "629a819f-a221-4d47-8d60-1403a92b538b"
 # The bucket is PRIVATE; the only public read path is through these Pages Functions,
 # which gate on the manifest and relay every download to the cross-property analytics sink
 # (salespot.testifysec.com/ingest/web; see functions/_lib/dist.ts logDownload — overridable
-# via CILOCK_ANALYTICS_HUB). Publishing is done by scripts/publish-release.mjs
+# via CILOCK_ANALYTICS_HUB). That relay is CREDENTIALED: the sink refuses unsigned
+# writes, so `wrangler secret put CILOCK_ANALYTICS_HUB_KEY` (matching salespot's
+# SALESPOT_INGEST_HMAC_KEY) is required or downloads simply are not reported.
+# Publishing is done by scripts/publish-release.mjs
 # (verify-then-upload) — never write to this bucket by hand.
 #
 # One-time bucket bootstrap (the bucket already exists in this account):

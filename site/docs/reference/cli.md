@@ -646,6 +646,28 @@ cilock sign -f policy.json -o policy.signed.json
 cilock policy push --file policy.signed.json --definition supply-chain --tag v1.0.0
 ```
 
+## `cilock policy publish --file --definition --tag`
+
+> `draft` + sign + `push` as a single ceremony, for a policy a **human** signs. It hydrates the hand-authored source against the platform (the same call `cilock policy draft` makes), then starts a sign-in whose approval names that exact hydrated document. Your human opens the printed URL, reads what the policy requires, and approves with a passkey; the platform signs those exact bytes **as them** — never as you, and never at a lower assurance level than the session it observed — then creates the PolicyRelease.
+>
+> You never hold a key, and your human never runs a second command. Before asking for the approval, cilock re-computes the digest of the hydrated bytes it holds, checks it against the source it sent and against the tenant that answered, and sends those same bytes at signing time — the platform refuses the pair if they disagree, so what is signed cannot drift from what was shown. Use `cilock policy push` instead when the policy is already DSSE-signed by an author key.
+>
+> The release is created **Off**. Turning it on for a repository stays a separate act on Pushgate.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--file, -f <path>` | (required) | Path to the hand-authored (unsigned) policy source. |
+| `--definition, -d <name>` | (required) | PolicyDefinition name; created if it does not exist. |
+| `--tag, -t <t>` | (required) | Release tag, e.g. `v1`. |
+| `--description <str>` | (none) | Description used only when the ceremony creates a new PolicyDefinition. |
+| `--platform-url <url>` | the logged-in platform | TestifySec platform URL. |
+| `--datatype <type>` | `https://aflock.ai/policy/v0.1` | Policy payload type. |
+
+```bash
+# Publish v1 of judge-gates from a hand-authored source
+cilock policy publish -f deploy/pushgate/judge-gates.policy.json -d judge-gates -t v1
+```
+
 ## `cilock policy bind --definition --product`
 
 > Binds a published policy to a product on the platform. It resolves the named PolicyDefinition and the target product, then creates a PolicyBinding linking them. Pass `--release` (a release id) or `--tag` (resolved to a release under the definition) to pin a specific release; omit both to bind the definition itself. Creating the binding needs `policy:write`.
