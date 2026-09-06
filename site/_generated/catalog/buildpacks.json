@@ -1,0 +1,105 @@
+{
+  "name": "buildpacks",
+  "source": "attestor-backed",
+  "description": "The cilock buildpacks attestor parses the CNB lifecycle's report.toml, the io.buildpacks.* label dump, and exported SBOM files, binding a pack build's image digest, run image, and buildpack group into signed in-toto evidence.",
+  "title": "buildpacks",
+  "sidebarPosition": 34,
+  "examplesRepo": null,
+  "categories": [
+    "image-build"
+  ],
+  "primaryCategory": "image-build",
+  "upstream": {
+    "name": "Cloud Native Buildpacks",
+    "source": "https://github.com/buildpacks/pack",
+    "license": "Apache-2.0",
+    "vendor": "Cloud Native Buildpacks (CNCF)"
+  },
+  "gates": [
+    "pre",
+    "post"
+  ],
+  "recommendedTrace": "full",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "pack build"
+    },
+    {
+      "gate": "post",
+      "kind": "exec_observed_argv_prefix",
+      "value": "pack build"
+    },
+    {
+      "gate": "post",
+      "kind": "product_glob",
+      "value": "**/report.toml"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [
+    {
+      "code": "BUILDPACKS_NO_REPORT",
+      "severity": "warn",
+      "message": "pack build invoked without --report-output-dir",
+      "suggested_example": "buildpacks '<args>' --report-output-dir=./out"
+    }
+  ],
+  "llmHints": {
+    "on_match": "Buildpacks build captured. Attestation includes the built image digest, run image reference, buildpack group, and SBOM digests.",
+    "on_observed_but_not_invoked": "pack build ran inside the step (likely via make/script). Post-gate captured it via exec_observed.",
+    "on_warn": "User ran pack build without --report-output-dir. Re-run with the suggested command so the lifecycle report exists to attest."
+  },
+  "predicateType": "https://aflock.ai/attestations/buildpacks/v0.1",
+  "runType": "postproduct",
+  "defaultOn": false,
+  "runExample": "cilock run -- pack build .",
+  "detectionCommand": "cilock plan --format=json -- pack build [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"pack build\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [
+    {
+      "slug": "overview",
+      "title": "Overview",
+      "markdown": "Parses the Cloud Native Buildpacks lifecycle's own outputs — `report.toml` from `pack build --report-output-dir`, a JSON dump of the `io.buildpacks.*` image labels, and the SBOM files from `--sbom-output-dir` — and binds them into one predicate whose subject is the built image's digest.\n\nkpack signs SLSA provenance for builds inside its Kubernetes controller; every other `pack` invocation (laptops, generic CI) produces no verifiable evidence. This attestor closes that gap wherever `cilock run -- pack build …` runs, and records the buildpacks-specific facts generic SLSA has no fields for."
+    },
+    {
+      "slug": "what-it-captures",
+      "title": "What it captures",
+      "markdown": "## What it captures\n\n- `imagedigest` — a `DigestSet` holding the SHA256 of the built image, from `report.toml [image].digest`. Present for registry (`--publish`) exports only; see Gotchas for daemon exports.\n- `imagetags`, `imageid`, `manifestsize` — the rest of the report's image section. Context, never identity.\n- `runimage` — the base image under the app from the `io.buildpacks.lifecycle.metadata` label: `reference` (digest-resolved by the lifecycle at export), `image`, and `toplayer`. The policy-pinnable field.\n- `buildpacks` — the group that ran (`id`, `version`, `homepage`) from `io.buildpacks.build.metadata`.\n- `launcher` — the lifecycle's own provenance from the same label: version plus the source repository and commit it was built from.\n- `basedistro`, `stackid` — run-image OS distribution and stack labels.\n- `sboms` — each exported SBOM file bound by path, format (`cyclonedx`/`spdx`/`syft`/`legacy`), and product digest. Contents are never inlined; the digest keeps a multi-megabyte SBOM verifiable without bloating the envelope.\n\nSubjects exported: `imagedigest:<hex>` (real content digest), `imagereference:<tag>` per tag, and `runimagedigest:<hex>` — the subject a run-image-pinning policy verifies against."
+    },
+    {
+      "slug": "when-to-use",
+      "title": "When to use",
+      "markdown": "## When to use\n\nAny step that runs `pack build`. Add both output flags so the lifecycle's evidence exists as products:\n\n```\ncilock run --step build -a buildpacks -- \\\n  pack build registry.example/app --publish \\\n    --report-output-dir ./out --sbom-output-dir ./out/sbom\n```\n\nTo capture run-image and buildpack-group facts, dump the image labels as a product after the build (the attestor reads files only — it never talks to a daemon):\n\n```\ndocker image inspect registry.example/app \\\n  --format '{{json .Config.Labels}}' > ./out/labels.json\n```"
+    },
+    {
+      "slug": "flags",
+      "title": "Flags",
+      "markdown": "## Flags\n\nNone. Detection is by product shape: any product named `report.toml` that parses as a lifecycle report, any JSON product whose keys carry the `io.buildpacks.` prefix, and SBOM files under the lifecycle's `sbom/{build,launch}` layout."
+    },
+    {
+      "slug": "output-shape",
+      "title": "Output shape",
+      "markdown": "## Output shape\n\n```json\n{\n  \"imagedigest\": {\"sha256\": \"0f067a8e…\"},\n  \"imagetags\": [\"localhost:5001/demo-app\"],\n  \"manifestsize\": 1538,\n  \"runimage\": {\n    \"image\": \"docker.io/heroku/heroku:24\",\n    \"reference\": \"index.docker.io/heroku/heroku@sha256:26197de1…\",\n    \"toplayer\": \"sha256:d72a839c…\"\n  },\n  \"buildpacks\": [{\"id\": \"heroku/go\", \"version\": \"4.1.0\", \"homepage\": \"…\"}],\n  \"launcher\": {\"version\": \"0.21.18\", \"repository\": \"github.com/buildpacks/lifecycle\", \"commit\": \"4bd4b13e\"},\n  \"basedistro\": {\"name\": \"ubuntu\", \"version\": \"24.04\"},\n  \"stackid\": \"heroku-24\",\n  \"sboms\": [{\"path\": \"out/sbom/sbom/launch/…/sbom.cdx.json\", \"format\": \"cyclonedx\", \"digest\": {\"sha256\": \"…\"}}]\n}\n```"
+    },
+    {
+      "slug": "gotchas",
+      "title": "Gotchas",
+      "markdown": "## Gotchas\n\n- **Daemon exports mint no identity.** Without `--publish`, `report.toml` carries only a daemon-local `image-id` — recorded for context, but no `imagedigest` subject exists and the attestor warns. A tag is repointable and an image-id is daemon-local; only a registry digest is durable identity.\n- **No report, no attestation.** Without `--report-output-dir` the lifecycle writes nothing on the host; the pre-gate warns and suggests the flag.\n- **amd64-only builders crash on arm64 hosts** under emulation (e.g. Paketo's jammy builders); multi-arch builders such as `heroku/builder:24` run natively. Relatedly, a stale single-arch run image cached in the daemon fails export with \"does not provide the specified platform\".\n- `sbom.legacy.json` can be the literal string `null`; its contents are never parsed, only digest-bound.\n- A file merely *named* `report.toml` that does not parse as a lifecycle report is skipped — a name is not evidence."
+    },
+    {
+      "slug": "cli-example",
+      "title": "CLI example",
+      "markdown": "## CLI example\n\n```\n$ cilock run --step build -a buildpacks --signer-file-key-path key.pem -o att.json -- \\\n    pack build localhost:5001/demo-app --publish --network host \\\n      --builder heroku/builder:24 --report-output-dir ./out --sbom-output-dir ./out/sbom\n$ jq '.payload | @base64d | fromjson | .predicate.attestations[] | select(.type | contains(\"buildpacks\"))' att.json\n```"
+    },
+    {
+      "slug": "see-also",
+      "title": "See also",
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- [`docker`](./docker) — the same identity rules for `docker buildx` builds\n- [`oci`](./oci) — attesting OCI image tarballs directly\n- Upstream: [buildpacks.io platform spec](https://buildpacks.io/docs/reference/spec/platform-api/)"
+    }
+  ],
+  "hasDoc": true
+}

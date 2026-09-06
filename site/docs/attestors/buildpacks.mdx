@@ -1,12 +1,21 @@
 ---
-title: buildpacks
-description: The cilock buildpacks attestor parses the CNB lifecycle's report.toml, the io.buildpacks.* label dump, and exported SBOM files, binding a pack build's image digest, run image, and buildpack group into signed in-toto evidence.
+title: "buildpacks"
+description: "The cilock buildpacks attestor parses the CNB lifecycle's report.toml, the io.buildpacks.* label dump, and exported SBOM files, binding a pack build's image digest, run image, and buildpack group into signed in-toto evidence."
 sidebar_position: 34
 ---
+
+{/* GENERATED — do not edit. Source: rookery attestation/detection/docs/buildpacks.doc.md. Regenerate: npm run gen */}
+import AttestorMeta from '@site/src/components/Catalog/AttestorMeta';
+import GeneratedFooter from '@site/src/components/Catalog/GeneratedFooter';
+import meta from '@catalog/buildpacks.json';
+
+# `buildpacks` attestor
 
 Parses the Cloud Native Buildpacks lifecycle's own outputs — `report.toml` from `pack build --report-output-dir`, a JSON dump of the `io.buildpacks.*` image labels, and the SBOM files from `--sbom-output-dir` — and binds them into one predicate whose subject is the built image's digest.
 
 kpack signs SLSA provenance for builds inside its Kubernetes controller; every other `pack` invocation (laptops, generic CI) produces no verifiable evidence. This attestor closes that gap wherever `cilock run -- pack build …` runs, and records the buildpacks-specific facts generic SLSA has no fields for.
+
+<AttestorMeta data={meta} />
 
 ## What it captures
 
@@ -80,7 +89,11 @@ $ jq '.payload | @base64d | fromjson | .predicate.attestations[] | select(.type 
 
 ## See also
 
-- [Catalog row](../reference/attestor-catalog)
-- [`docker`](./docker) — the same identity rules for `docker buildx` builds
-- [`oci`](./oci) — attesting OCI image tarballs directly
+- [Catalog row](../reference/attestor-catalog.md)
+- [`docker`](./docker.mdx) — the same identity rules for `docker buildx` builds
+- [`oci`](./oci.mdx) — attesting OCI image tarballs directly
 - Upstream: [buildpacks.io platform spec](https://buildpacks.io/docs/reference/spec/platform-api/)
+
+<script type="application/ld+json" dangerouslySetInnerHTML={{__html: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"buildpacks — cilock attestor\",\"description\":\"The cilock buildpacks attestor parses the CNB lifecycle's report.toml, the io.buildpacks.* label dump, and exported SBOM files, binding a pack build's image digest, run image, and buildpack group into signed in-toto evidence.\",\"url\":\"https://cilock.dev/attestors/buildpacks\"}"}} />
+
+<GeneratedFooter name="buildpacks" />
