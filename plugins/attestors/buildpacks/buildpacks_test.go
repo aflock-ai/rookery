@@ -80,7 +80,7 @@ func contextWithFiles(t *testing.T, files map[string][]byte) *attestation.Attest
 
 func fixtureBytes(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "fixtures", "pack-publish", name))
+	data, err := os.ReadFile(filepath.Join("testdata", "unit", name))
 	require.NoError(t, err)
 	return data
 }

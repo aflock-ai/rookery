@@ -1,4 +1,4 @@
 [image]
-  tags = ["localhost:5001/demo-app"]
-  digest = "sha256:0f067a8e564d23f4f8982ce47e3b1302b8ecba415bf433764b07b2eeb98576d3"
-  manifest-size = 1538
+  tags = ["localhost:5001/bp-fixture"]
+  digest = "sha256:d646f95363e35ce954edc95b3fed8e6ec27fb69569130963fbaf13862c2f73fc"
+  manifest-size = 1536

@@ -20,6 +20,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/aws-iid => ../plugins/att
 
 replace github.com/aflock-ai/rookery/plugins/attestors/base-ancestry => ../plugins/attestors/base-ancestry
 
+replace github.com/aflock-ai/rookery/plugins/attestors/buildpacks => ../plugins/attestors/buildpacks
+
 replace github.com/aflock-ai/rookery/plugins/attestors/commandrun => ../plugins/attestors/commandrun
 
 replace github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf => ../plugins/attestors/commandrun/ebpf
@@ -154,6 +156,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/aws-config v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/aws-iid v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/base-ancestry v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/buildpacks v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/commandrun v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/configuration v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/docker v0.0.0-00010101000000-000000000000

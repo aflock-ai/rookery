@@ -60,6 +60,7 @@ Regenerate after adding or renaming an attestor:
 |---|---|---|
 | `asff` | `plugins/attestors/asff` | `https://aflock.ai/attestations/asff/v0.1` |
 | `aws-config` | `plugins/attestors/aws-config` | `https://aflock.ai/attestations/aws-config/v0.1` |
+| `buildpacks` | `plugins/attestors/buildpacks` | `https://aflock.ai/attestations/buildpacks/v0.1` |
 | `docker-bench` | `plugins/attestors/docker-bench` | `https://aflock.ai/attestations/docker-bench/v0.1` |
 | `docker` | `plugins/attestors/docker` | `https://aflock.ai/attestations/docker/v0.1` |
 | `falco` | `plugins/attestors/falco` | `https://aflock.ai/attestations/falco/v0.1` |

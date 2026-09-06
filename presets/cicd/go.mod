@@ -6,6 +6,8 @@ replace github.com/aflock-ai/rookery/attestation => ../../attestation
 
 replace github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof => ../../plugins/attestors/inclusion-proof
 
+replace github.com/aflock-ai/rookery/plugins/attestors/buildpacks => ../../plugins/attestors/buildpacks
+
 replace github.com/aflock-ai/rookery/plugins/attestors/commandrun => ../../plugins/attestors/commandrun
 
 replace github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf => ../../plugins/attestors/commandrun/ebpf
@@ -57,11 +59,12 @@ replace github.com/aflock-ai/rookery/plugins/attestors/vex => ../../plugins/atte
 replace github.com/aflock-ai/rookery/plugins/signers/file => ../../plugins/signers/file
 
 require (
+	github.com/aflock-ai/rookery/plugins/attestors/base-ancestry v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/buildpacks v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/commandrun v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/configuration v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/docker v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/environment v0.0.0-00010101000000-000000000000
-	github.com/aflock-ai/rookery/plugins/attestors/base-ancestry v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/git v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/github v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/githubaction v0.0.0-00010101000000-000000000000

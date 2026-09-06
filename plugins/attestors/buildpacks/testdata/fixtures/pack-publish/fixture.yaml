@@ -1,0 +1,27 @@
+schema_version: "0.1"
+attestor: buildpacks
+description: >
+  A real `pack build --publish` (heroku/builder:24) recorded under cilock.
+  Report-only on purpose: the testkit's product mode injects exactly one
+  product on replay and the recorded-evidence cross-check requires replayed ==
+  recorded predicates; the labels/SBOM capture paths are covered by the unit
+  suite. --publish is what puts a durable registry digest in report.toml — a
+  daemon export mints no identity subject by design.
+setup:
+  mode: product
+  input: report.toml
+  mime_type: "text/plain; charset=utf-8"
+recording:
+  tool: pack
+  version: "0.40.9+git-8210eb1.build-6996"
+  binary_sha256: "7bc3f72d17573d46842ecec03e21e75b5830bbcbe92471d4eee661b461041653"
+  recorded_with: cilock
+  attestation: attestation.json
+  argv: ["pack", "build", "localhost:5001/bp-fixture", "--builder", "heroku/builder:24", "--publish", "--network", "host", "--report-output-dir", "."]
+  recorded_at: "2026-09-06"
+expect:
+  predicate_type: https://aflock.ai/attestations/buildpacks/v0.1
+  run_type: postproduct
+  subjects:
+    match: prefix
+    keys: ["imagedigest:", "imagereference:"]
