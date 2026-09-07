@@ -118,7 +118,7 @@ func TestCompatSourceSearchViaCombinedTypes(t *testing.T) {
 
 	subjects := map[string]cryptoutil.DigestSet{
 		"test-subject": {
-			cryptoutil.DigestValue{Hash: crypto.SHA256}: "abc123",
+			cryptoutil.DigestValue{Hash: crypto.SHA256}: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
 		},
 	}
 
@@ -159,7 +159,7 @@ func TestCompatSourceSearchViaCombinedTypes(t *testing.T) {
 	}
 
 	var s compatSource.Sourcer = ms
-	results, err := s.Search(context.Background(), "test-step", []string{"abc123"}, nil)
+	results, err := s.Search(context.Background(), "test-step", []string{"aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"}, nil)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
@@ -541,7 +541,7 @@ func TestCompatProductType(t *testing.T) {
 	p := compatAttestation.Product{
 		MimeType: "application/json",
 		Digest: cryptoutil.DigestSet{
-			cryptoutil.DigestValue{Hash: crypto.SHA256}: "abc123",
+			cryptoutil.DigestValue{Hash: crypto.SHA256}: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
 		},
 	}
 	var rookeryProduct attestation.Product = p
