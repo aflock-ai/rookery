@@ -9,7 +9,6 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"net"
 	"net/http"
@@ -410,18 +409,11 @@ func writeEnrollCallbackPage(w io.Writer, displayName, agentID string) {
 	if label == "" {
 		label = "agent"
 	}
-	//nolint:gosec // G705: both interpolations are html-escaped; loopback-only, state-gated page
-	_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="utf-8">`+
-		`<style>body{font-family:-apple-system,system-ui,sans-serif;background:#1e1b4b;color:#e2e8f0;`+
-		`display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}`+
-		`.card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:16px;`+
-		`padding:40px;max-width:420px;text-align:center}.ok{color:#34d399;font-size:48px}`+
-		`code{color:#a5b4fc}</style></head>`+
-		`<body><div class="card"><div class="ok">&#x2713;</div><h2>Agent enrolled</h2>`+
-		`<p><strong>%s</strong> now signs with its own identity<br><code>agent/%s</code></p>`+
-		`<p style="color:#94a3b8">You can close this window.</p></div>`+
-		`<script>setTimeout(function(){window.close()},3000)</script></body></html>`,
-		html.EscapeString(label), html.EscapeString(agentID))
+	writeCilockCallbackPage(w, callbackPage{
+		Title: "Agent credential received", Heading: "Agent credential received",
+		Label: "Agent", Value: label, Identity: "agent/" + agentID,
+		Message: "Return to your terminal. Cilock will confirm enrollment after activating the credential with the platform.",
+	})
 }
 
 // agentEnrollURL builds the /auth/agent-enroll URL. callback is the loopback

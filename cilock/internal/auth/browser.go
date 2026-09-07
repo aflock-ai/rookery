@@ -5,7 +5,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
-	"html"
 	"io"
 	"net"
 	"net/http"
@@ -289,15 +288,11 @@ func newBrowserCredential(judgeURL, token string, form map[string]string) *Crede
 // otherwise inject script into the page, and the loopback listener is reachable
 // by any other local process — so the value is escaped to neutralize XSS.
 func writeCallbackPage(w io.Writer, tenant string) {
-	//nolint:gosec // G705: tenant is the only interpolation and is html-escaped; loopback-only, state-gated page
-	_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="utf-8">`+
-		`<style>body{font-family:-apple-system,system-ui,sans-serif;background:#1e1b4b;color:#e2e8f0;`+
-		`display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}`+
-		`.card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:16px;`+
-		`padding:40px;max-width:400px;text-align:center}.ok{color:#34d399;font-size:48px}</style></head>`+
-		`<body><div class="card"><div class="ok">&#x2713;</div><h2>cilock authorized</h2>`+
-		`<p>Tenant: <strong>%s</strong></p><p style="color:#94a3b8">You can close this window.</p></div>`+
-		`<script>setTimeout(function(){window.close()},3000)</script></body></html>`, html.EscapeString(tenant))
+	writeCilockCallbackPage(w, callbackPage{
+		Title: "Cilock authorized", Heading: "Cilock authorized",
+		Label: "Tenant", Value: tenant,
+		Message: "The platform sent your sign-in credential to Cilock. Return to your terminal to continue.",
+	})
 }
 
 // cliAuthURL builds the /auth/cli URL. client=cilock scopes/brands the page;
