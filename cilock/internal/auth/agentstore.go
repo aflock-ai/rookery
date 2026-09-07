@@ -111,11 +111,11 @@ type agentFileStore struct {
 // the same cilock-owned config directory. A distinct filename so an operator
 // (and `ls -l`) can tell the agent principal from the human session.
 func AgentStorePath() (string, error) {
-	dir, err := os.UserConfigDir()
+	dir, err := cilockStateDirectory()
 	if err != nil {
 		return "", fmt.Errorf("resolve user config dir: %w", err)
 	}
-	return filepath.Join(dir, "cilock", "agent-credentials.json"), nil
+	return filepath.Join(dir, "agent-credentials.json"), nil
 }
 
 func loadAgents() (*agentFileStore, error) {

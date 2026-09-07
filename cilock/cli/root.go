@@ -54,7 +54,14 @@ func New() *cobra.Command {
 cilock checks cilock.dev at most once a day for a newer release and prints a
 notice when one exists (never prompting, never blocking, never changing exit
 codes). Set CILOCK_SKIP_VERSION_CHECK=1 to disable the check, e.g. in
-air-gapped environments.`,
+air-gapped environments.
+
+Set CILOCK_STATE_DIR to an existing canonical absolute 0700 directory to isolate
+Cilock human-session and agent-credential stores without changing HOME. Explicit
+state disables shared-session migration and jctl/keychain fallback, even when
+the path is invalid. An invalid path fails; it never selects the default store.
+Child Cilock processes (including Git signing) inherit this environment option.
+The directory is credential state, not a general filesystem or network sandbox.`,
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {

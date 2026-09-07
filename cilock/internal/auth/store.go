@@ -92,7 +92,7 @@ func sharedSessionFlagOn() bool {
 //
 // Once migration succeeds the legacy store is never consulted again.
 func useShared() bool {
-	if !sharedSessionFlagOn() {
+	if isolatedStateEnabled() || !sharedSessionFlagOn() {
 		return false
 	}
 	migrateLegacyOnce() // retryable; sets the guard only on success
@@ -216,11 +216,11 @@ type legacyFileStore struct {
 // on Linux; Application Support on macOS). cilock owns this file; it does not
 // write jctl's config.
 func StorePath() (string, error) {
-	dir, err := os.UserConfigDir()
+	dir, err := cilockStateDirectory()
 	if err != nil {
 		return "", fmt.Errorf("resolve user config dir: %w", err)
 	}
-	return filepath.Join(dir, "cilock", "credentials.json"), nil
+	return filepath.Join(dir, "credentials.json"), nil
 }
 
 // readStoreFile reads one of cilock's secret-bearing JSON store files into dst.
@@ -588,7 +588,14 @@ func (ctx jctlContext) credential(platformURL, token string) *Credential {
 // from there — otherwise the documented "jctl login works for cilock too" interop
 // is silently dead on macOS and desktop Linux, where the keychain is jctl's default.
 func lookupJctl(platformURL string) (*Credential, bool) {
-	home, err := os.UserHomeDir()
+	return lookupJctlWithHome(platformURL, os.UserHomeDir)
+}
+
+func lookupJctlWithHome(platformURL string, homeDir func() (string, error)) (*Credential, bool) {
+	if isolatedStateEnabled() {
+		return nil, false
+	}
+	home, err := homeDir()
 	if err != nil {
 		return nil, false
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/cilock/cli"
+	"github.com/aflock-ai/rookery/cilock/internal/loopbackhttp"
 
 	// cilock-native attestor: binds attestations to the TestifySec platform
 	// tenant/product when logged in (no-op otherwise).
@@ -82,6 +83,10 @@ import (
 )
 
 func main() {
+	if err := loopbackhttp.Install(); err != nil {
+		fmt.Fprintln(os.Stderr, "cilock HTTP transport:", err)
+		os.Exit(1)
+	}
 	// Git executes gpg.x509.program directly and cannot include a subcommand in
 	// that configuration value. Dispatch the narrow signing protocol before
 	// Cobra, update checks, logging, or telemetry can write to its streams.

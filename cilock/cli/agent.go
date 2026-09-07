@@ -246,6 +246,7 @@ func AgentLoginCmd() *cobra.Command {
 // AgentStatusCmd reports which agent principal this machine would sign as.
 func AgentStatusCmd() *cobra.Command {
 	var platformURL string
+	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:           "status",
 		Short:         "Show the agent principal this machine would sign as",
@@ -264,6 +265,9 @@ func AgentStatusCmd() *cobra.Command {
 			pending, err := auth.LookupPendingAgent(url)
 			if err != nil {
 				return err
+			}
+			if jsonOutput {
+				return writeAgentStatusJSON(cmd.OutOrStdout(), url, cred, pending, time.Now())
 			}
 			out := cmd.OutOrStdout()
 			// A delivered credential the platform has not yet redeemed is not
@@ -312,6 +316,7 @@ func AgentStatusCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&platformURL, "platform-url", "", "TestifySec platform URL (default "+config.DefaultPlatformURL+")")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit public local status as one JSON object; does not check platform revocation")
 	return cmd
 }
 

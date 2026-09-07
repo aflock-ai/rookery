@@ -80,6 +80,7 @@ var (
 )
 
 type pushgateStatusOptions struct {
+	platformURL  string
 	remote       string
 	ref          string
 	commit       string
@@ -164,6 +165,7 @@ command is read-only.`,
 		},
 	}
 	f := cmd.Flags()
+	f.StringVar(&o.platformURL, "platform-url", "", "Platform whose discovery names the trusted Pushgate origin (default: selected login)")
 	f.StringVar(&o.remote, "remote", "", "Git remote name (default: infer the configured Pushgate remote)")
 	// Default discovery is `git symbolic-ref HEAD`, which resolves a BRANCH and
 	// nothing else. A checked-out tag is a detached HEAD, so it needs --ref --
@@ -277,9 +279,15 @@ func resolvePushgateStatusTarget(ctx context.Context, o *pushgateStatusOptions) 
 		return "", "", "", "", "", errors.New("--commit must be an exact lowercase 40-character commit")
 	}
 
-	platformURL := auth.ActivePlatformURL()
+	platformURL := o.platformURL
+	if platformURL == "" {
+		platformURL = auth.ActivePlatformURL()
+	}
 	if platformURL == "" {
 		platformURL = platformconfig.DefaultPlatformURL
+	}
+	if err := platformconfig.RequireSecurePlatformURL(platformURL); err != nil {
+		return "", "", "", "", "", errors.New("invalid selected platform URL")
 	}
 	trustedOrigin, err := discoverPushgateOrigin(platformURL)
 	if err != nil {

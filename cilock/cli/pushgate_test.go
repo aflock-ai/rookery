@@ -25,6 +25,36 @@ import (
 
 const statusTestCommit = "0123456789abcdef0123456789abcdef01234567"
 
+func TestPushgateStatusExplicitPlatformWithoutHumanLogin(t *testing.T) {
+	isolateAgentConfig(t)
+	t.Setenv("APPDATA", t.TempDir())
+	originalGit, originalDiscover := runPushgateGit, discoverPushgateOrigin
+	t.Cleanup(func() { runPushgateGit, discoverPushgateOrigin = originalGit, originalDiscover })
+	discoveries := 0
+	discoverPushgateOrigin = func(platform string) (string, error) {
+		discoveries++
+		require.Equal(t, "http://localhost:8763", platform)
+		return "http://localhost:8879", nil
+	}
+	runPushgateGit = func(_ context.Context, args ...string) (string, error) {
+		require.Equal(t, []string{"remote", "get-url", "--push", "pushgate"}, args)
+		return "http://pushgate:repository-secret@localhost:8879/gh/acme/api.git", nil
+	}
+	cmd := pushgateStatusCmd()
+	require.NoError(t, cmd.ParseFlags([]string{"--platform-url", "http://localhost:8763"}))
+	platform, err := cmd.Flags().GetString("platform-url")
+	require.NoError(t, err)
+	o := &pushgateStatusOptions{platformURL: platform, remote: "pushgate", ref: "refs/heads/main", commit: statusTestCommit}
+	_, _, endpoint, _, _, err := resolvePushgateStatusTarget(context.Background(), o)
+	require.NoError(t, err)
+	require.Equal(t, "http://localhost:8879/gh/acme/api.git/delivery-status", endpoint)
+	require.Equal(t, 1, discoveries)
+	o.platformURL = "http://untrusted.example"
+	_, _, _, _, _, err = resolvePushgateStatusTarget(context.Background(), o)
+	require.ErrorContains(t, err, "invalid selected platform")
+	require.Equal(t, 1, discoveries, "unsafe platform must refuse before discovery")
+}
+
 func TestParsePushgateRemoteRequiresDiscoveredOrigin(t *testing.T) {
 	endpoint, user, password, err := parsePushgateRemote(
 		"https://pushgate:secret@edge.example/gh/acme/api.git",

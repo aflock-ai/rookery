@@ -121,7 +121,32 @@ repository credential when the remote origin does not match. `--wait` exits
 successfully only after delivery; refusal, conflict, failed delivery, unknown
 ledger state, and timeout return non-zero.
 
+Use `--platform-url https://your-platform.example` to select a private
+installation explicitly, including an agent-only environment with no human
+login. Without that flag, status uses the selected login's platform, then the
+hosted default. The selected platform's discovery response must still name the
+configured remote's exact origin; this flag does not bypass that check.
+
 ---
+
+## `cilock agent status`
+
+`cilock agent status --json --platform-url <platform>` prints one JSON object
+containing public identity and local eligibility only. The ordinary text output
+is unchanged without `--json`. No credential or signing token is exported.
+
+The fields `platform_url`, `principal_kind`, `tenant_id`, `agent_id`, and
+`spiffe_id` identify the stored active slot, or the pending delivery when there
+is no active slot. `active` means the local store records a redeemed identity;
+`pending` means a separate delivery awaits redemption. `eligible` means an
+active-slot credential is not locally expired, **not** that the platform will
+accept it. An unredeemed active-slot credential can be locally eligible while
+`active` is false and `spiffe_id` is empty. `status` distinguishes `not_enrolled`,
+`pending`, `unredeemed`, `eligible`, and `expired`; `expires_at` is omitted when
+the local ceiling is unknown, not unlimited. `source` is `local_store` and
+`platform_checked` is false: revocation and repository scope remain platform
+decisions. An absent identity still exits zero for compatibility; inspect the
+fields. Expired active-slot credentials still exit nonzero after printing JSON.
 
 ## `cilock run`
 
