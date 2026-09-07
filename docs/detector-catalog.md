@@ -3,7 +3,7 @@
 Auto-generated from `plugins/attestors/*/detector.yaml`. Run
 `./scripts/gen-detector-catalog.sh` to refresh.
 
-Total: 36 detectors.
+Total: 37 detectors.
 
 | Name | Gates | Trace | Description |
 |------|-------|-------|-------------|
@@ -13,6 +13,7 @@ Total: 36 detectors.
 | `aws-codebuild` | pre | `off` | Captures AWS CodeBuild context (project name, build ID, batch build ID, region) when running inside an AWS CodeBuild job. |
 | `aws-config` | pre + post | `off` | Captures AWS Config compliance state for resources (output of `aws configservice get-compliance-details-by-config-rule` and related calls). |
 | `base-ancestry` | pre | `off` | Records where the tested commit sits relative to its base branch: head, the base commit the clone could see, their merge-base, and whether the head includes that base. A verifier joins it with the provider's current base to enforce 'current with base'. |
+| `buildpacks` | pre + post | `full` | Captures Cloud Native Buildpacks build provenance: the built image digest, run image, buildpack group, and SBOM digests from the lifecycle's own outputs. |
 | `docker` | pre + post | `full` | Captures docker build provenance, image references, and layer materials. |
 | `docker-bench` | pre + post | `off` | Captures Docker Bench for Security CIS benchmark results. |
 | `falco` | pre + post | `off` | Captures runtime security events from Falco (Cloud Native Computing Foundation runtime threat detection). |
