@@ -172,7 +172,7 @@ func HashFromString(name string) (crypto.Hash, error) {
 //     This matcher compares digest strings and never re-hashes a commit, so it
 //     INHERITS that mitigation from the git attestor — and the mitigation is
 //     EXERCISED there, not merely available: commithash subjects are no longer
-//     read from go-git's head.Hash() (the repository's storage CLAIM), they
+//     copied from go-git's head.Hash() (the repository's storage CLAIM), they
 //     are the output of computeVerifiedCommitHash
 //     (plugins/attestors/git/git.go), which re-hashes the commit's canonical
 //     object bytes with the collision-detecting hasher at attestation time and

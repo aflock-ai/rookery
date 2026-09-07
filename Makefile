@@ -50,7 +50,7 @@ tidy: ## Tidy all module dependencies
 	done
 
 verify-isolated: ## Verify each module builds outside workspace
-	@for dir in $$(find . -name 'go.mod' -not -path './go.mod' -not -path '*/testdata/*' -exec dirname {} \;); do \
+	@for dir in $$(find . -name 'go.mod' -not -path './go.mod' -exec dirname {} \;); do \
 		echo "verifying $$dir"; \
 		(cd $$dir && GOWORK=off go build ./...) || exit 1; \
 	done

@@ -1,6 +1,6 @@
 module github.com/aflock-ai/rookery/plugins/attestors/go-build
 
-go 1.26.4
+go 1.26.3
 
 replace github.com/aflock-ai/rookery/attestation => ../../../attestation
 
