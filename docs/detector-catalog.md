@@ -3,7 +3,7 @@
 Auto-generated from `plugins/attestors/*/detector.yaml`. Run
 `./scripts/gen-detector-catalog.sh` to refresh.
 
-Total: 34 detectors.
+Total: 37 detectors.
 
 | Name | Gates | Trace | Description |
 |------|-------|-------|-------------|
@@ -12,6 +12,8 @@ Total: 34 detectors.
 | `aws` | pre | `off` | Captures the AWS Instance Identity Document when running on EC2 (or any host that can reach the EC2 IMDS endpoint). |
 | `aws-codebuild` | pre | `off` | Captures AWS CodeBuild context (project name, build ID, batch build ID, region) when running inside an AWS CodeBuild job. |
 | `aws-config` | pre + post | `off` | Captures AWS Config compliance state for resources (output of `aws configservice get-compliance-details-by-config-rule` and related calls). |
+| `base-ancestry` | pre | `off` | Records where the tested commit sits relative to its base branch: head, the base commit the clone could see, their merge-base, and whether the head includes that base. A verifier joins it with the provider's current base to enforce 'current with base'. |
+| `buildpacks` | pre + post | `full` | Captures Cloud Native Buildpacks build provenance: the built image digest, run image, buildpack group, and SBOM digests from the lifecycle's own outputs. |
 | `docker` | pre + post | `full` | Captures docker build provenance, image references, and layer materials. |
 | `docker-bench` | pre + post | `off` | Captures Docker Bench for Security CIS benchmark results. |
 | `falco` | pre + post | `off` | Captures runtime security events from Falco (Cloud Native Computing Foundation runtime threat detection). |
@@ -28,6 +30,7 @@ Total: 34 detectors.
 | `kube-bench` | pre + post | `off` | Captures kube-bench Kubernetes CIS benchmark results. |
 | `linkerd-check` | pre + post | `off` | Captures Linkerd service mesh health checks (output of `linkerd check`). |
 | `lockfiles` | pre | `off` | Captures dependency lockfile contents (npm/yarn/pnpm/go/Cargo/Python/Ruby) when present in the workspace. |
+| `material` |  | `off` | Snapshots the working directory before the wrapped command runs and signs one RFC 6962 Merkle root over every input file's digest, with the per-file leaves inline. |
 | `maven` | pre | `off` | Captures Maven project metadata (pom.xml coordinates, dependencies) when run in a Maven workspace. |
 | `oci` | pre + post | `light` | Captures OCI image / artifact provenance from docker save, skopeo copy, or OCI image layouts. |
 | `oscap` | pre + post | `off` | Captures OpenSCAP compliance / vulnerability scan results. |

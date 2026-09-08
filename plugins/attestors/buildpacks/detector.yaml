@@ -1,0 +1,70 @@
+apiVersion: cilock.detection/v0.1
+name: buildpacks
+description: "Captures Cloud Native Buildpacks build provenance: the built image digest, run image, buildpack group, and the image's own SBOM-layer digest from the lifecycle's own outputs."
+
+category: [image-build]
+
+upstream:
+  name: Cloud Native Buildpacks
+  source: "https://github.com/buildpacks/pack"
+  license: Apache-2.0
+  vendor: Cloud Native Buildpacks (CNCF)
+
+# Threat model: the predicate covers what the lifecycle *reports* — image
+# digest, run image, buildpack group, and the image's SBOM-layer digest. The
+# buildpack detect and build phases fetch dependencies over the network; only
+# full eBPF tracing can
+# defensibly claim those materials, so the report-level facts here are
+# complemented by tracing rather than a substitute for it.
+recommended_trace: full
+
+pre:
+  match:
+    any_of:
+      - argv_prefix: ["pack", "build"]
+  warn_unless:
+    argv_contains: "--report-output-dir"
+  warnings:
+    - code: BUILDPACKS_NO_REPORT
+      severity: warn
+      message: "pack build invoked without --report-output-dir"
+      summary: "Without --report-output-dir the lifecycle writes no report.toml on the host, so the attestor has no image digest to bind. Add the flag. Prefer --publish: registry exports carry a durable digest where daemon exports only carry a daemon-local image-id."
+      suggested_fix:
+        insert_arg:
+          value: "--report-output-dir=./out"
+          after_subcommand: ["build"]
+      doc_anchor: buildpacks#report
+      llm_hint: "User invoked pack build without --report-output-dir. Re-run with --report-output-dir=./out and --publish so the lifecycle report exists as a product. For run-image/buildpack labels, also export the image manifest and config by the report digest (crane manifest / crane config) so the attestor can read labels from the config the digest commits to. Loose --sbom-output-dir files are not read."
+
+post:
+  match:
+    any_of:
+      - exec_observed:
+          argv_prefix: ["pack", "build"]
+      - product_glob: ["**/report.toml"]
+
+llm_hints:
+  on_match: "Buildpacks build captured. Attestation includes the built image digest, run image reference, buildpack group, and the image's own SBOM-layer digest."
+  on_warn: "User ran pack build without --report-output-dir. Re-run with the suggested command so the lifecycle report exists to attest."
+  on_observed_but_not_invoked: "pack build ran inside the step (likely via make/script). Post-gate captured it via exec_observed."
+
+contract:
+  tier: recommended
+  predicate_type: https://aflock.ai/attestations/buildpacks/v0.1
+  run_type: postproduct
+  stability:
+    level: stable
+    notes: "Output is derived deterministically from the lifecycle's report.toml and the image's own OCI manifest + config blob, selected by content address (labels are read only from the config the report digest commits to; the SBOM record is that config's own layer digest, not loose files). The attestor introduces no timestamps or random data; subjects form a set, so map iteration order does not affect the result."
+    volatile_fields: []
+  subjects:
+    - prefix: "imagedigest:"
+      description: "sha256 digest of the built image (sha256: prefix trimmed) from report.toml [image].digest; registry (--publish) exports only"
+    - prefix: "imagereference:"
+      description: "each tag reference from report.toml [image].tags"
+    - prefix: "runimagedigest:"
+      description: "sha256 digest of the run (base) image, parsed from io.buildpacks.lifecycle.metadata runImage.reference"
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: pack-publish
+      role: canonical

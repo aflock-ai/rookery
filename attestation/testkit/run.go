@@ -70,6 +70,13 @@ func WithProductMime(m string) RunOption {
 // passes), digested, and injected as a Product before the attestor runs.
 func RunAttestorWithFixture(t *testing.T, fx *Fixture, opts ...RunOption) *Result {
 	t.Helper()
+	// Hermetic replay must not inherit the CI event's identity. On a
+	// pull_request runner GitHub sets GITHUB_BASE_REF, ambient state that
+	// env-sensitive attestors (base-ancestry) fold into their predicate — so a
+	// fixture that matches its golden on a push runner diverges on every PR
+	// runner. Cleared here, BEFORE the fixture's own setup.env is applied, so
+	// a fixture that deliberately wants the variable can still set it.
+	t.Setenv("GITHUB_BASE_REF", "")
 	cfg := &runConfig{mime: fx.MimeType}
 	for _, o := range opts {
 		o(cfg)

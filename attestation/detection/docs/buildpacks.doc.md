@@ -1,0 +1,90 @@
+---
+title: buildpacks
+description: The cilock buildpacks attestor parses the CNB lifecycle's report.toml and the io.buildpacks.* label dump, binding a pack build's image digest, run image, buildpack group, and SBOM-layer digest into signed in-toto evidence.
+sidebar_position: 34
+---
+
+Parses the Cloud Native Buildpacks lifecycle's own outputs — `report.toml` from `pack build --report-output-dir` and a JSON dump of the `io.buildpacks.*` image labels — and binds them into one predicate whose subject is the built image's digest.
+
+kpack signs SLSA provenance for builds inside its Kubernetes controller; every other `pack` invocation (laptops, generic CI) produces no verifiable evidence. This attestor closes that gap wherever `cilock run -- pack build …` runs, and records the buildpacks-specific facts generic SLSA has no fields for.
+
+## What it captures
+
+- `imagedigest` — a `DigestSet` holding the SHA256 of the built image, from `report.toml [image].digest`. Present for registry (`--publish`) exports only; see Gotchas for daemon exports.
+- `imagetags`, `imageid`, `manifestsize` — the rest of the report's image section. Context, never identity.
+- `runimage` — the base image under the app from the `io.buildpacks.lifecycle.metadata` label: `reference` (digest-resolved by the lifecycle at export), `image`, and `toplayer`. The policy-pinnable field.
+- `buildpacks` — the group that ran (`id`, `version`, `homepage`) from `io.buildpacks.build.metadata`.
+- `launcher` — the lifecycle's own provenance from the same label: version plus the source repository and commit it was built from.
+- `basedistro`, `stackid` — run-image OS distribution and stack labels.
+- `sbomlayer` — the digest (diffID) of the image's SBOM layer, from the `io.buildpacks.lifecycle.metadata` label. Loose `--sbom-output-dir` files are deliberately **not** read (see Gotchas).
+
+Every label-derived field (`runimage`, `buildpacks`, `launcher`, `basedistro`, `stackid`, `sbomlayer`) is read **only** from the image's own OCI config blob, reached by content address from the report: `report [image].digest` is the image manifest's digest, the manifest names the config blob's digest, and the config carries the labels. Each hop is checked by sha256, so a claim can never be hung on a digest it does not belong to.
+
+Subjects exported: `imagedigest:<hex>` (real content digest), `imagereference:<tag>` per tag, and `runimagedigest:<hex>` — the subject a run-image-pinning policy verifies against.
+
+## When to use
+
+Any step that runs `pack build`. The wrapped command must produce every input the attestor reads — the report, the image **manifest**, and the image **config** blob — so they are all products of the SAME signed run. Export the manifest and config by the report's immutable digest inside the wrapped script (the attestor itself never talks to a registry or daemon):
+
+```
+cilock run --step build -a buildpacks -- bash -c '
+  pack build registry.example/app --publish --report-output-dir ./out &&
+  DIGEST=$(sed -n "s/.*digest = \"\(sha256:[0-9a-f]*\)\".*/\1/p" ./out/report.toml) &&
+  crane manifest "registry.example/app@$DIGEST" > ./out/manifest.json &&
+  crane config   "registry.example/app@$DIGEST" > ./out/config.json
+'
+```
+
+The manifest and config are exported by the report's **immutable digest**, not a tag, so what the attestor reads is exactly what that digest commits to. `crane manifest` returns bytes that hash to the report digest and name the config blob's digest; `crane config` returns the config blob, which hashes to that name and carries the `io.buildpacks.*` labels. The attestor verifies both hops by sha256, so a fabricated dump that merely *claims* to be image A's labels is ignored rather than misattributed — this is why a plain `docker image inspect` dump (whose `RepoDigests` are self-declared and unverifiable) is **not** used. `skopeo inspect --raw` / `skopeo inspect --config --raw` are equivalent if `crane` is unavailable. A manifest/config exported *after* `cilock run` exits is NOT captured — it is not a product of the completed attestation.
+
+## Flags
+
+None. Detection is by product shape: any product named `report.toml` that parses as a lifecycle report, plus the image manifest and config blob, which are selected by content address (their sha256 must equal the report digest and the manifest's config digest). Loose SBOM files, and any JSON that matches no hop, are ignored.
+
+## Output shape
+
+```json
+{
+  "imagedigest": {"sha256": "0f067a8e…"},
+  "imagetags": ["localhost:5001/demo-app"],
+  "manifestsize": 1538,
+  "runimage": {
+    "image": "docker.io/heroku/heroku:24",
+    "reference": "index.docker.io/heroku/heroku@sha256:26197de1…",
+    "toplayer": "sha256:d72a839c…"
+  },
+  "buildpacks": [{"id": "heroku/go", "version": "4.1.0", "homepage": "…"}],
+  "launcher": {"version": "0.21.18", "repository": "github.com/buildpacks/lifecycle", "commit": "4bd4b13e"},
+  "basedistro": {"name": "ubuntu", "version": "24.04"},
+  "stackid": "heroku-24",
+  "sbomlayer": {"sha256": "fd794d63…"}
+}
+```
+
+## Gotchas
+
+- **Daemon exports mint no identity.** Without `--publish`, `report.toml` carries only a daemon-local `image-id` — recorded for context, but no `imagedigest` subject exists and the attestor warns. A tag is repointable and an image-id is daemon-local; only a registry digest is durable identity.
+- **No report, no attestation.** Without `--report-output-dir` the lifecycle writes nothing on the host; the pre-gate warns and suggests the flag.
+- **A `docker image inspect` dump is not trusted.** Its `RepoDigests` are a self-declared string a build script can fabricate — naming image A while carrying another image's `runImage.reference` — so it is not evidence of what image A actually is. Export the OCI manifest + config by digest instead; the attestor reads labels only from the config that the report digest cryptographically commits to.
+- **Multi-arch (image index) builds mint no labels.** If `report [image].digest` resolves to an OCI image index rather than a single image manifest, there is no one config to read, so the label-derived fields are left unset (identity still stands). Single-arch app images — pack's default — are unaffected. Relatedly, an amd64-only builder crashes on arm64 hosts under emulation (e.g. Paketo's jammy builders); multi-arch builders such as `heroku/builder:24` run natively.
+- **Loose `--sbom-output-dir` files are not attested.** A file exported by `--sbom-output-dir` carries no image identity, so nothing on the filesystem binds it to the reported image. The attestor records only `sbomlayer`, the image's own SBOM-layer digest from its content-chained config. To attest SBOM *contents*, run a dedicated SBOM attestor (e.g. `syft`/`trivy`) that binds them to the image itself; the SBOM layers are also inside the image the `imagedigest` subject already covers.
+- A file merely *named* `report.toml` that does not parse as a lifecycle report is skipped — a name is not evidence.
+
+## CLI example
+
+```
+$ cilock run --step build -a buildpacks --signer-file-key-path key.pem -o att.json -- bash -c '
+    pack build localhost:5001/demo-app --publish --network host \
+      --builder heroku/builder:24 --report-output-dir ./out &&
+    D=$(sed -n "s/.*digest = \"\(sha256:[0-9a-f]*\)\".*/\1/p" ./out/report.toml) &&
+    crane manifest "localhost:5001/demo-app@$D" > ./out/manifest.json &&
+    crane config   "localhost:5001/demo-app@$D" > ./out/config.json'
+$ jq '.payload | @base64d | fromjson | .predicate.attestations[] | select(.type | contains("buildpacks"))' att.json
+```
+
+## See also
+
+- [Catalog row](../reference/attestor-catalog)
+- [`docker`](./docker) — the same identity rules for `docker buildx` builds
+- [`oci`](./oci) — attesting OCI image tarballs directly
+- Upstream: [buildpacks.io platform spec](https://buildpacks.io/docs/reference/spec/platform-api/)

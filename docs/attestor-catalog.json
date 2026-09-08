@@ -1,6 +1,6 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 137,
+  "attestor_count": 138,
   "attestors": [
     {
       "name": "alps-evidence",
@@ -783,6 +783,70 @@
               "product_glob": [
                 "aws-config*.json",
                 "**/aws-config*.json"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "buildpacks",
+      "predicate_type": "https://aflock.ai/attestations/buildpacks/v0.1",
+      "run_type": "postproduct",
+      "category": [
+        "image-build"
+      ],
+      "tier": "recommended",
+      "upstream": {
+        "name": "Cloud Native Buildpacks",
+        "source": "https://github.com/buildpacks/pack",
+        "license": "Apache-2.0",
+        "vendor": "Cloud Native Buildpacks (CNCF)"
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "imagedigest:",
+          "description": "sha256 digest of the built image (sha256: prefix trimmed) from report.toml [image].digest; registry (--publish) exports only"
+        },
+        {
+          "prefix": "imagereference:",
+          "description": "each tag reference from report.toml [image].tags"
+        },
+        {
+          "prefix": "runimagedigest:",
+          "description": "sha256 digest of the run (base) image, parsed from io.buildpacks.lifecycle.metadata runImage.reference"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[pack build])",
+        "post": "any_of(exec_observed(argv_prefix:[pack build]), product_glob:[**/report.toml])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "pack",
+                "build"
+              ]
+            }
+          ]
+        },
+        "post": {
+          "any_of": [
+            {
+              "exec_observed": {
+                "argv_prefix": [
+                  "pack",
+                  "build"
+                ]
+              }
+            },
+            {
+              "product_glob": [
+                "**/report.toml"
               ]
             }
           ]

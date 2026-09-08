@@ -1,7 +1,7 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 135,
-  "withDoc": 59,
+  "count": 136,
+  "withDoc": 60,
   "emittedBy": {
     "sbom": [
       "apko",
@@ -317,6 +317,19 @@
       "predicateType": null,
       "runType": null,
       "hasDoc": false
+    },
+    {
+      "name": "buildpacks",
+      "source": "attestor-backed",
+      "categories": [
+        "image-build"
+      ],
+      "primaryCategory": "image-build",
+      "description": "The cilock buildpacks attestor parses the CNB lifecycle's report.toml and the io.buildpacks.* label dump, binding a pack build's image digest, run image, buildpack group, and SBOM-layer digest into signed in-toto evidence.",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/buildpacks/v0.1",
+      "runType": "postproduct",
+      "hasDoc": true
     },
     {
       "name": "cargo-audit",

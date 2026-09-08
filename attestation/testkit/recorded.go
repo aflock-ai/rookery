@@ -93,7 +93,9 @@ func loadRecordedAttestation(path string) (*recordedAttestation, error) {
 	}
 	for _, a := range stmt.Predicate.Attestations {
 		rec.ByType[a.Type] = a.Attestation
-		if strings.HasSuffix(a.Type, "command-run/v0.1") {
+		if strings.HasSuffix(a.Type, "command-run/v0.1") || strings.HasSuffix(a.Type, "command-run/v0.2") {
+			// v0.2 restructures per-process data but keeps top-level cmd; both
+			// versions answer the argv cross-check the same way.
 			var cr struct {
 				Cmd []string `json:"cmd"`
 			}
