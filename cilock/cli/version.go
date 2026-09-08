@@ -40,7 +40,13 @@ func VersionCmd() *cobra.Command {
 		DisableAutoGenTag: true,
 		Run: func(cmd *cobra.Command, args []string) {
 			// First line MUST stay exactly "cilock <Version>": the release-fanout
-			// and ci.yml cilock-version-stamp-guard both match it (via head -n1).
+			// and ci.yml cilock-version-stamp-guard both match it. Both extract it
+			// IN-SHELL (`got="${ver_out%%$'\n'*}"`); do NOT reintroduce `| head -n1`.
+			// Once this output outgrows head's single read, head exits first and our
+			// next write takes SIGPIPE (Go raises it on fd 1 rather than returning
+			// EPIPE), so the guard dies with 141 under `set -o pipefail` before it
+			// asserts. Adding lines here is what makes that pipe fatal, and it is
+			// how the whole public v3.0.1 distribution was lost; see #5551.
 			fmt.Printf("cilock %s\n", Version)
 			fmt.Printf("  Commit: %s\n", GitCommit)
 			fmt.Printf("  Built:  %s\n", BuildTime)
