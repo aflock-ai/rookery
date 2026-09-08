@@ -190,7 +190,8 @@ func runPolicyPush(cmd *cobra.Command, o policyPushOpts) error {
 	_, _ = fmt.Fprintf(out, "  definition: %s\n  release:    %s\n  dsse:       %s (gitoid %s)\n",
 		def.ID, rel.ID, dsseID, gitoid)
 	_, _ = fmt.Fprintf(out, "\nBind it to a product with:\n"+
-		"  cilock policy bind --definition %q --tag %q --product <id-or-name>\n",
+		"  cilock policy bind --definition %q --tag %q --product <id-or-name>\n"+
+		"  (--product matching is exact; an unmatched one lists the products you can bind to)\n",
 		def.Name, rel.Tag)
 	return nil
 }

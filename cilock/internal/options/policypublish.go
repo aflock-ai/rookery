@@ -35,11 +35,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/aflock-ai/rookery/cilock/internal/config"
 )
@@ -286,7 +291,7 @@ func (c *PolicyClient) ResolveProduct(ctx context.Context, idOrName string) (*Pr
 	}
 	switch len(out.Products.Edges) {
 	case 0:
-		return nil, fmt.Errorf("no product found matching %q (pass the product id or exact name)", idOrName)
+		return nil, c.productNotFoundError(ctx, idOrName)
 	case 1:
 		node := out.Products.Edges[0].Node
 		return &node, nil
@@ -312,6 +317,252 @@ func (c *PolicyClient) productByID(ctx context.Context, id string) (*ProductRef,
 	}
 	node := out.Products.Edges[0].Node
 	return &node, nil
+}
+
+// --- explaining a failed product lookup (#7566) ---
+//
+// The not-found error above names a remedy -- "pass the product id or exact
+// name" -- that cilock gives the user no way to obtain: there is no
+// product-listing subcommand, and the only product queries are byte-exact by
+// name and by id. So the failure path lists the candidates itself.
+//
+// Resolution stays exact. Nothing below loosens the lookup; it only explains a
+// failure that has already happened.
+
+// productListCap bounds how many products a failed lookup will name. A tenant
+// with hundreds of products must not turn one bad --product into hundreds of
+// terminal lines. Whatever the cap hides is stated exactly as "... and N more"
+// (see remainder), never left to be inferred from the truncated page.
+const productListCap = 20
+
+// productNearCap bounds the close-match block for the same reason. A close
+// match is normally one row; five is already generous.
+const productNearCap = 5
+
+// productListQuery fetches a bounded page of every product the session can see,
+// with the connection totalCount so a truncation can be stated exactly rather
+// than implied by the page length.
+//
+// Tenant scoping: this passes no tenant argument, and cannot. The platform
+// scopes every product query server-side from the session viewer
+// (judge-api/rule/tenant_filter_gen.go, `case *ent.ProductQuery`, which applies
+// the visibility-aware tenant predicate to the ent query -- and so to totalCount
+// as well). That is the same and only scoping productByNameQuery and
+// productByIDQuery above rely on, so this listing can reach nothing those two
+// could not already reach.
+const productListQuery = `query CilockProductList($first: Int!) {
+  products(first: $first) {
+    totalCount
+    edges { node { id name } }
+  }
+}`
+
+// productNearQuery finds the products whose name matches the request
+// case-insensitively, for the close-match hint.
+//
+// It is deliberately a second round trip rather than a second alias on
+// productListQuery. GraphQL validates a document as a whole, so an alias using
+// `nameEqualFold` against a platform that does not offer that predicate would
+// take the plain list down with it -- and the plain list is the answer the user
+// actually needs. The hint must not be able to cost them the listing.
+const productNearQuery = `query CilockProductNear($near: String!, $first: Int!) {
+  products(first: $first, where: {nameEqualFold: $near}) {
+    totalCount
+    edges { node { id name } }
+  }
+}`
+
+// productPage is one products connection: a bounded page of edges plus the
+// total the connection holds behind it.
+type productPage struct {
+	TotalCount int `json:"totalCount"`
+	Edges      []struct {
+		Node ProductRef `json:"node"`
+	} `json:"edges"`
+}
+
+// nodes returns at most limit refs from the page. The server-side `first` is
+// the primary cap; this enforces it locally too, so a server that ignores
+// `first` cannot flood a terminal.
+func (p productPage) nodes(limit int) []ProductRef {
+	refs := make([]ProductRef, 0, min(len(p.Edges), limit))
+	for _, e := range p.Edges[:min(len(p.Edges), limit)] {
+		refs = append(refs, e.Node)
+	}
+	return refs
+}
+
+// remainder is how many products the connection holds beyond the shown rows. It
+// takes the larger of the reported total and the page actually returned, so a
+// server that under-reports totalCount cannot make a truncated list look
+// complete -- a cap that silently feeds an exact-looking list is the bug.
+func (p productPage) remainder(shown int) int {
+	total := max(p.TotalCount, len(p.Edges))
+	if total <= shown {
+		return 0
+	}
+	return total - shown
+}
+
+// listProducts fetches the bounded page of products the session can see.
+func (c *PolicyClient) listProducts(ctx context.Context) (productPage, error) {
+	var out struct {
+		Products productPage `json:"products"`
+	}
+	if err := c.post(ctx, productListQuery, map[string]any{"first": productListCap}, &out); err != nil {
+		return productPage{}, err
+	}
+	return out.Products, nil
+}
+
+// nearProducts fetches the case-insensitive matches for the close-match hint.
+// The lookup is made on the trimmed request: an argument with stray surrounding
+// whitespace must still find its near miss.
+func (c *PolicyClient) nearProducts(ctx context.Context, requested string) (productPage, error) {
+	var out struct {
+		Products productPage `json:"products"`
+	}
+	vars := map[string]any{
+		"near":  strings.TrimSpace(requested),
+		"first": productNearCap,
+	}
+	if err := c.post(ctx, productNearQuery, vars, &out); err != nil {
+		return productPage{}, err
+	}
+	return out.Products, nil
+}
+
+// productNotFoundError renders the "no product found" failure with the products
+// the session can actually bind to, so the remedy the message names is
+// obtainable from the message itself.
+//
+// This costs up to two extra round trips, both on an already-failing path.
+// They are best effort: when the listing fails the user still gets the original
+// not-found error, with the listing failure noted rather than swallowed into a
+// misleading success and never replacing the real error.
+func (c *PolicyClient) productNotFoundError(ctx context.Context, requested string) error {
+	lines := []string{fmt.Sprintf("no product found matching %q (pass the product id or exact name)", requested)}
+
+	all, err := c.listProducts(ctx)
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("(could not list products: %v)", err))
+		return errors.New(strings.Join(lines, "\n"))
+	}
+
+	// The close-match hint is additive: it is fetched after the listing and a
+	// failure here drops the hint, never the list. Its absence is not a claim
+	// that there are no close matches -- it also reads that way when there
+	// genuinely are none -- so a dropped hint asserts nothing false, and the
+	// authoritative answer is the list printed below it either way.
+	if near, nerr := c.nearProducts(ctx, requested); nerr == nil {
+		if rows := productNearMatchLines(requested, near); len(rows) > 0 {
+			lines = append(lines, "close matches (name matching is exact - case and surrounding spaces count):")
+			lines = append(lines, rows...)
+		}
+	}
+	lines = append(lines, availableProductLines(all)...)
+	return errors.New(strings.Join(lines, "\n"))
+}
+
+// productNearMatchLines renders the close-match block. Every row the server
+// returned is re-checked here against the request: a row that does not actually
+// differ only by case or surrounding whitespace is dropped rather than repeated
+// back to the user as a "close match".
+func productNearMatchLines(requested string, near productPage) []string {
+	want := strings.TrimSpace(requested)
+	if want == "" {
+		return nil
+	}
+	fetched := near.nodes(productNearCap)
+	matches := make([]ProductRef, 0, len(fetched))
+	for _, ref := range fetched {
+		if strings.EqualFold(strings.TrimSpace(ref.Name), want) {
+			matches = append(matches, ref)
+		}
+	}
+	if len(matches) == 0 {
+		return nil
+	}
+	rows := productRows(matches)
+	// The remainder counts what was not fetched, so a row dropped above cannot
+	// inflate it.
+	if n := near.remainder(len(fetched)); n > 0 {
+		rows = append(rows, fmt.Sprintf("  ... and %d more", n))
+	}
+	return rows
+}
+
+// availableProductLines renders the "available products" block, or says plainly
+// that there are none.
+func availableProductLines(all productPage) []string {
+	shown := all.nodes(productListCap)
+	if len(shown) == 0 {
+		if n := all.remainder(0); n > 0 {
+			return []string{fmt.Sprintf("(%d products are visible to this session, but the platform listed none)", n)}
+		}
+		return []string{"no products are visible to this session"}
+	}
+	lines := append([]string{"available products:"}, productRows(shown)...)
+	if n := all.remainder(len(shown)); n > 0 {
+		lines = append(lines, fmt.Sprintf("  ... and %d more", n))
+	}
+	return lines
+}
+
+// productRows renders "  <name>  <id>" rows with the names in a common column.
+// The pad is capped so one pathologically long name cannot push every id off the
+// right edge of a terminal.
+//
+// Rows are sorted by name here rather than by the server. Which page comes back
+// is already deterministic -- the platform's default product order is id
+// ascending (judge-api/ent/generated/gql_pagination.go, DefaultProductOrder) --
+// but id order tells a reader nothing, and the connection exposes no NAME field
+// to order by (ProductOrderField is ID / CREATED_AT / UPDATED_AT / DELETED_AT).
+// So the page is stable, and this makes it scannable. What it cannot do is
+// reach a product in the "... and N more" tail; that wants a real listing
+// command, tracked separately.
+func productRows(refs []ProductRef) []string {
+	const maxPad = 40
+	sorted := slices.Clone(refs)
+	slices.SortStableFunc(sorted, func(a, b ProductRef) int {
+		// Case-insensitive first so "Api" and "api" sort together, then exact
+		// name and id so the order is total rather than merely close.
+		if n := strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)); n != 0 {
+			return n
+		}
+		if n := strings.Compare(a.Name, b.Name); n != 0 {
+			return n
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	names := make([]string, len(sorted))
+	width := 0
+	for i, ref := range sorted {
+		names[i] = terminalSafeField(ref.Name)
+		width = max(width, utf8.RuneCountInString(names[i]))
+	}
+	width = min(width, maxPad)
+	rows := make([]string, 0, len(sorted))
+	for i, ref := range sorted {
+		rows = append(rows, fmt.Sprintf("  %-*s  %s", width, names[i], terminalSafeField(ref.ID)))
+	}
+	return rows
+}
+
+// terminalSafeField renders a server-supplied string for a terminal. A product name
+// is untrusted text: a newline in it would forge a row in the listing above and
+// an ANSI escape would rewrite the screen, so anything not fully printable is
+// rendered escaped rather than pasted through.
+func terminalSafeField(s string) string {
+	if s == "" {
+		return `""`
+	}
+	for _, r := range s {
+		if !unicode.IsPrint(r) {
+			return strconv.Quote(s)
+		}
+	}
+	return s
 }
 
 const policyReleaseByTagQuery = `query CilockReleaseByTag($defID: ID!, $tag: String!) {

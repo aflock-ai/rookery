@@ -17,6 +17,7 @@ package options
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -346,5 +347,464 @@ func TestPost_RequiresTokenAndURL(t *testing.T) {
 	defer srv.Close()
 	if _, err := (&PolicyClient{GraphQLURL: srv.URL}).ResolveDsseIDByGitoid(context.Background(), "g"); err == nil {
 		t.Error("want error for missing token")
+	}
+}
+
+// --- #7566: a failed product lookup must name the products it could bind to ---
+//
+// The remedy the old error named ("pass the product id or exact name") was not
+// obtainable from cilock: there is no product-listing subcommand, so a CLI-only
+// user had nowhere to learn either the id or the exact name. These tests pin the
+// listing that closes that loop, and the bounds it must respect.
+
+// productNodeJSON builds one `{"node":{"id":..,"name":..}}` edge, JSON-escaping
+// the name so a test can feed in a hostile one.
+func productNodeJSON(t *testing.T, id, name string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"node": map[string]any{"id": id, "name": name}})
+	if err != nil {
+		t.Fatalf("marshal node: %v", err)
+	}
+	return string(b)
+}
+
+// productPageJSON builds a products-connection reply.
+func productPageJSON(total int, edges []string) string {
+	return fmt.Sprintf(`{"data":{"products":{"totalCount":%d,"edges":[%s]}}}`,
+		total, strings.Join(edges, ","))
+}
+
+// emptyPage is a connection holding nothing.
+func emptyPage() (int, string) { return http.StatusOK, productPageJSON(0, nil) }
+
+// candidateCalls records what the failure path asked the platform for.
+type candidateCalls struct {
+	list int
+	near int
+	// nearVar is the `near` variable the near lookup was made with.
+	nearVar string
+}
+
+// productLookupServer serves the by-id and by-name lookups as misses and routes
+// the two candidate queries to reply, which is told which one was asked ("list"
+// or "near"). The returned counts let a test assert that the extra round trips
+// happen only on the failure path.
+func productLookupServer(t *testing.T, byName string, reply func(kind string) (int, string)) (*httptest.Server, *candidateCalls) {
+	t.Helper()
+	calls := &candidateCalls{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req := readGQL(t, r)
+		kind := ""
+		switch {
+		case strings.Contains(req.Query, "CilockProductList"):
+			calls.list++
+			kind = "list"
+		case strings.Contains(req.Query, "CilockProductNear"):
+			calls.near++
+			calls.nearVar, _ = req.Variables["near"].(string)
+			kind = "near"
+		case strings.Contains(req.Query, "CilockProductByName"):
+			_, _ = io.WriteString(w, byName)
+			return
+		default: // CilockProductByID -- always a miss in these tests.
+			_, _ = io.WriteString(w, `{"data":{"products":{"edges":[]}}}`)
+			return
+		}
+		status, body := reply(kind)
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	return srv, calls
+}
+
+const noProductsJSON = `{"data":{"products":{"edges":[]}}}`
+
+func TestResolveProduct_NotFound_ListsAvailableProducts(t *testing.T) {
+	all := []string{
+		productNodeJSON(t, "prod-1", "api-gateway"),
+		productNodeJSON(t, "prod-2", "billing"),
+	}
+	srv, calls := productLookupServer(t, noProductsJSON, func(kind string) (int, string) {
+		if kind == "near" {
+			return emptyPage()
+		}
+		return http.StatusOK, productPageJSON(2, all)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		`no product found matching "svc" (pass the product id or exact name)`,
+		"available products:",
+		"  api-gateway  prod-1",
+		"  billing      prod-2",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error missing %q; got:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "close matches") {
+		t.Errorf("no near match here, so no close-match block belongs; got:\n%s", msg)
+	}
+	if calls.list != 1 {
+		t.Errorf("list query issued %d times, want exactly 1", calls.list)
+	}
+}
+
+func TestResolveProduct_NotFound_CaseNearMissIsCalledOut(t *testing.T) {
+	near := []string{productNodeJSON(t, "prod-1", "svc")}
+	all := []string{
+		productNodeJSON(t, "prod-1", "svc"),
+		productNodeJSON(t, "prod-2", "other"),
+	}
+	srv, calls := productLookupServer(t, noProductsJSON, func(kind string) (int, string) {
+		if kind == "near" {
+			return http.StatusOK, productPageJSON(1, near)
+		}
+		return http.StatusOK, productPageJSON(2, all)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "SVC")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "close matches") {
+		t.Errorf("a case-only miss must be called out as such; got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "  svc  prod-1") {
+		t.Errorf("close-match block must name the exact spelling; got:\n%s", msg)
+	}
+	if calls.nearVar != "SVC" {
+		t.Errorf("server saw near=%q, want SVC", calls.nearVar)
+	}
+}
+
+func TestResolveProduct_NotFound_WhitespaceNearMissIsCalledOut(t *testing.T) {
+	near := []string{productNodeJSON(t, "prod-1", "svc")}
+	srv, calls := productLookupServer(t, noProductsJSON, func(string) (int, string) {
+		return http.StatusOK, productPageJSON(1, near)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "  svc  ")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	if !strings.Contains(err.Error(), "close matches") {
+		t.Errorf("a whitespace-only miss must be called out as such; got:\n%s", err)
+	}
+	// The near lookup must be made on the trimmed name, or a padded argument
+	// can never match anything.
+	if calls.nearVar != "svc" {
+		t.Errorf("server saw near=%q, want the trimmed \"svc\"", calls.nearVar)
+	}
+}
+
+// TestResolveProduct_NotFound_UnrelatedNearRowIsDropped pins that the close-match
+// block is re-checked locally: a server that ignores the fold predicate must not
+// have its answer repeated back to the user as a "close match".
+func TestResolveProduct_NotFound_UnrelatedNearRowIsDropped(t *testing.T) {
+	rows := []string{productNodeJSON(t, "prod-9", "totally-different")}
+	srv, _ := productLookupServer(t, noProductsJSON, func(string) (int, string) {
+		return http.StatusOK, productPageJSON(1, rows)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	if strings.Contains(err.Error(), "close matches") {
+		t.Errorf("a row that is not a near miss must not be shown as one; got:\n%s", err)
+	}
+}
+
+// TestResolveProduct_NotFound_NearFailureStillLists pins the reason the close
+// match is a second round trip rather than a second alias: a platform that
+// cannot serve the fold predicate must still get the user their product list.
+func TestResolveProduct_NotFound_NearFailureStillLists(t *testing.T) {
+	all := []string{
+		productNodeJSON(t, "prod-1", "api-gateway"),
+		productNodeJSON(t, "prod-2", "billing"),
+	}
+	srv, calls := productLookupServer(t, noProductsJSON, func(kind string) (int, string) {
+		if kind == "near" {
+			return http.StatusOK, `{"errors":[{"message":"Unknown argument \"nameEqualFold\""}]}`
+		}
+		return http.StatusOK, productPageJSON(2, all)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "  api-gateway  prod-1") {
+		t.Errorf("a failed close-match hint must not cost the user the listing; got:\n%s", msg)
+	}
+	if strings.Contains(msg, "could not list products") {
+		t.Errorf("the listing succeeded, so it must not be reported as failed; got:\n%s", msg)
+	}
+	if calls.near != 1 || calls.list != 1 {
+		t.Errorf("want one list and one near call, got list=%d near=%d", calls.list, calls.near)
+	}
+}
+
+func TestResolveProduct_NotFound_TruncatesWithExactRemainder(t *testing.T) {
+	const page = 20
+	edges := make([]string, 0, page)
+	for i := range page {
+		edges = append(edges, productNodeJSON(t, fmt.Sprintf("prod-%d", i), fmt.Sprintf("p%d", i)))
+	}
+	srv, _ := productLookupServer(t, noProductsJSON, func(kind string) (int, string) {
+		if kind == "near" {
+			return emptyPage()
+		}
+		return http.StatusOK, productPageJSON(137, edges)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "... and 117 more") {
+		t.Errorf("truncation must state the exact remainder (137-20); got:\n%s", msg)
+	}
+	if rows := strings.Count(msg, "  prod-"); rows != page {
+		t.Errorf("listed %d product rows, want the %d-row cap; got:\n%s", rows, page, msg)
+	}
+}
+
+// TestResolveProduct_NotFound_OverLongPageIsStillBounded pins that the cap is
+// enforced locally too: a server that ignores `first` cannot flood the terminal,
+// and the remainder it implies is still stated.
+func TestResolveProduct_NotFound_OverLongPageIsStillBounded(t *testing.T) {
+	edges := make([]string, 0, 50)
+	for i := range 50 {
+		edges = append(edges, productNodeJSON(t, fmt.Sprintf("prod-%d", i), fmt.Sprintf("p%d", i)))
+	}
+	srv, _ := productLookupServer(t, noProductsJSON, func(kind string) (int, string) {
+		if kind == "near" {
+			return emptyPage()
+		}
+		// totalCount under-reports on purpose: the page itself proves there are 50.
+		return http.StatusOK, productPageJSON(0, edges)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	msg := err.Error()
+	if rows := strings.Count(msg, "  prod-"); rows != 20 {
+		t.Errorf("listed %d product rows, want 20; got:\n%s", rows, msg)
+	}
+	if !strings.Contains(msg, "... and 30 more") {
+		t.Errorf("a silent truncation is the bug; want \"... and 30 more\", got:\n%s", msg)
+	}
+}
+
+func TestResolveProduct_NotFound_ListFailureKeepsOriginalError(t *testing.T) {
+	srv, calls := productLookupServer(t, noProductsJSON, func(string) (int, string) {
+		return http.StatusInternalServerError, "boom"
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("a failed listing must not turn a not-found into a success")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `no product found matching "svc" (pass the product id or exact name)`) {
+		t.Errorf("the original not-found error must survive; got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "could not list products") {
+		t.Errorf("the listing failure must be noted, not swallowed; got:\n%s", msg)
+	}
+	if strings.Contains(msg, "\navailable products:") {
+		t.Errorf("no listing was obtained, so none may be claimed; got:\n%s", msg)
+	}
+	if calls.near != 0 {
+		t.Errorf("a failed listing should not go on to fetch a hint for it; near called %d times", calls.near)
+	}
+}
+
+func TestResolveProduct_NotFound_NoProductsVisible(t *testing.T) {
+	srv, _ := productLookupServer(t, noProductsJSON, func(string) (int, string) {
+		return emptyPage()
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no products are visible to this session") {
+		t.Errorf("an empty tenant must be said plainly; got:\n%s", err)
+	}
+}
+
+// TestResolveProduct_NotFound_EscapesHostileNames pins that a product name is
+// treated as untrusted text: a newline in it would forge a row in the listing
+// and an ANSI escape would rewrite the terminal.
+func TestResolveProduct_NotFound_EscapesHostileNames(t *testing.T) {
+	hostile := "evil\n  spoofed  prod-999\x1b[2J"
+	all := []string{productNodeJSON(t, "prod-1", hostile)}
+	srv, _ := productLookupServer(t, noProductsJSON, func(kind string) (int, string) {
+		if kind == "near" {
+			return emptyPage()
+		}
+		return http.StatusOK, productPageJSON(1, all)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, hostile) {
+		t.Errorf("hostile name pasted through verbatim; got:\n%q", msg)
+	}
+	if strings.Contains(msg, "\x1b") {
+		t.Errorf("ANSI escape reached the terminal; got:\n%q", msg)
+	}
+	if !strings.Contains(msg, `\n`) || !strings.Contains(msg, `\x1b`) {
+		t.Errorf("hostile name should be shown escaped, not dropped; got:\n%q", msg)
+	}
+}
+
+func TestResolveProduct_ExactMatch_IssuesNoListQuery(t *testing.T) {
+	byName := `{"data":{"products":{"edges":[{"node":{"id":"prod-1","name":"svc"}}]}}}`
+	srv, calls := productLookupServer(t, byName, func(string) (int, string) {
+		return emptyPage()
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	p, err := c.ResolveProduct(context.Background(), "svc")
+	if err != nil {
+		t.Fatalf("exact name must still resolve: %v", err)
+	}
+	if p == nil || p.ID != "prod-1" {
+		t.Fatalf("got %#v, want prod-1", p)
+	}
+	if calls.list != 0 || calls.near != 0 {
+		t.Errorf("the listing is a failure-path cost only; list=%d near=%d", calls.list, calls.near)
+	}
+}
+
+// TestResolveProduct_NotFound_VisibleButUnlisted pins the case where the
+// connection reports products the page did not carry. Saying "no products are
+// visible" there would be false, so the count is reported instead.
+func TestResolveProduct_NotFound_VisibleButUnlisted(t *testing.T) {
+	srv, _ := productLookupServer(t, noProductsJSON, func(kind string) (int, string) {
+		if kind == "near" {
+			return emptyPage()
+		}
+		return http.StatusOK, productPageJSON(4, nil)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "no products are visible to this session") {
+		t.Errorf("the connection reported 4 products, so claiming none is false; got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "4 products are visible to this session") {
+		t.Errorf("want the reported count surfaced; got:\n%s", msg)
+	}
+}
+
+// TestResolveProduct_NotFound_ManyCloseMatchesAreBounded pins that the
+// close-match block obeys its own cap -- here against a server that ignores
+// `first` and returns the whole set -- and states the remainder exactly.
+func TestResolveProduct_NotFound_ManyCloseMatchesAreBounded(t *testing.T) {
+	// Eight products fold-match "svc". The query asks for five; this server
+	// returns all eight anyway, so the cap has to hold locally.
+	rows := make([]string, 0, 8)
+	for i := range 8 {
+		rows = append(rows, productNodeJSON(t, fmt.Sprintf("near-%d", i), "SVC"))
+	}
+	srv, _ := productLookupServer(t, noProductsJSON, func(string) (int, string) {
+		return http.StatusOK, productPageJSON(8, rows)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	msg := err.Error()
+	// Five rows in the capped close-match block, eight in the available block
+	// (which is under its own cap of 20).
+	if rows := strings.Count(msg, "  near-"); rows != 5+8 {
+		t.Errorf("listed %d rows total, want 5 close matches + 8 available; got:\n%s", rows, msg)
+	}
+	if n := strings.Count(msg, "... and 3 more"); n != 1 {
+		t.Errorf("the close-match block must state the exact remainder (8-5); saw %d such lines in:\n%s", n, msg)
+	}
+}
+
+// TestResolveProduct_NotFound_ListIsSortedByName pins that the rows are ordered
+// for a human. The platform returns products in id order, which is stable but
+// unreadable, and the connection has no NAME field to order by, so the sort
+// happens client-side over the page that came back.
+func TestResolveProduct_NotFound_ListIsSortedByName(t *testing.T) {
+	// Deliberately returned in neither id nor name order.
+	all := []string{
+		productNodeJSON(t, "prod-3", "zebra"),
+		productNodeJSON(t, "prod-1", "Mango"),
+		productNodeJSON(t, "prod-2", "apple"),
+	}
+	srv, _ := productLookupServer(t, noProductsJSON, func(kind string) (int, string) {
+		if kind == "near" {
+			return emptyPage()
+		}
+		return http.StatusOK, productPageJSON(3, all)
+	})
+	defer srv.Close()
+
+	c := &PolicyClient{GraphQLURL: srv.URL, Token: "tok"}
+	_, err := c.ResolveProduct(context.Background(), "svc")
+	if err == nil {
+		t.Fatal("want not-found error, got nil")
+	}
+	msg := err.Error()
+	apple, mango, zebra := strings.Index(msg, "apple"), strings.Index(msg, "Mango"), strings.Index(msg, "zebra")
+	if apple < 0 || mango < 0 || zebra < 0 {
+		t.Fatalf("every product must be listed; got:\n%s", msg)
+	}
+	// Case-insensitive, so Mango sorts between apple and zebra rather than
+	// ahead of both on its capital M.
+	if !(apple < mango && mango < zebra) {
+		t.Errorf("rows must be name-sorted case-insensitively (apple, Mango, zebra); got:\n%s", msg)
 	}
 }
