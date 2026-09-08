@@ -689,15 +689,139 @@ type FileActivity struct {
 	PermChanges []FilePermChange `json:"permChanges,omitempty"`
 }
 
+// ExeDigestSource values. They say what ExeDigest is a digest OF, which a
+// consumer comparing it against an image allowlist has to know: a hash of
+// the bytes the kernel mapped is evidence of what executed; a hash of the
+// bytes found at the pathname the caller named is evidence of what was at
+// that path when we opened it, and those can differ (the file can be
+// replaced between exec and our open; a symlink can be retargeted).
+//
+// Before this field existed the Linux eBPF backend silently stored the path
+// hash as ExeDigest whenever /proc/<pid>/exe was already gone, so the signed
+// record compared a name on some execs and an image on others with no way to
+// tell (cilockd adversary review, 2026-09-07). The field is additive and
+// omitempty: an older consumer sees the document it saw before; a consumer
+// that needs "what executed" checks this and refuses anything but
+// ExeDigestSourceMappedImage.
+const (
+	// ExeDigestSourceMappedImage: ExeDigest is sha256 of /proc/<pid>/exe,
+	// the file the kernel mapped for this exec, read through a descriptor
+	// whose (device, inode) matched the file the execve event named, with
+	// no further exec of the pid in between (on Linux eBPF, see
+	// mappedImageDigest; the ptrace backend reads it while the tracee is
+	// stopped at the execve return). rename/unlink of the path cannot
+	// change it; an in-place write is ETXTBSY-denied on every kernel
+	// except v6.11 and v6.12.
+	ExeDigestSourceMappedImage = "mapped-image"
+	// ExeDigestSourcePathHash: the mapped image could not be read and
+	// bound to this exec - the process had already exited, or
+	// /proc/<pid>/exe no longer was the file the event named because the
+	// pid exec'd something else in between - and ExeDigest is a copy of
+	// ProgramDigest, the bytes at the pathname the caller passed to execve
+	// at the moment the tracer opened it. Not proof of what executed.
+	ExeDigestSourcePathHash = "path-hash"
+)
+
+// ExeDigestDowngradeReason values. They say WHY a backend that would
+// otherwise report a mapped image reported a path hash instead. A downgrade
+// is a deliberate act — the producer could not prove the claim, so it
+// declined to make it — and a verifier has to be able to tell that apart
+// from a producer that simply never populated the field. Empty means "no
+// downgrade": either ExeDigestSource is mapped-image, or the backend never
+// attempts a mapped-image read at all.
+const (
+	// ExeDigestDowngradeNotKernelBound: the backend cannot prove the file it
+	// measured is the image THIS exec mapped, because its exec event carries
+	// no kernel identity to bind to. The Linux eBPF backend emits execve from
+	// a syscall-ENTRY kprobe (ebpf/bpf/openat_kprobe.bpf.c), before the kernel
+	// has resolved or mapped anything, so ebpf.ExecveEvent carries only the
+	// pathname the caller passed. Every comparand available afterwards is
+	// re-derived from that mutable pathname, and a tracee that replaces it and
+	// execs again before the event is drained makes the re-derived identity
+	// agree with /proc/<pid>/exe while describing a DIFFERENT image. Binding
+	// this properly needs the executed inode captured in the kernel at exec
+	// (a kretprobe on sys_execve reading current->mm->exe_file) and carried in
+	// the event; until the event carries it, the claim is not available here.
+	ExeDigestDowngradeNotKernelBound = "not-kernel-bound"
+	// ExeDigestDowngradeUnprotected: the image could not be shown to have
+	// stayed write-protected across the whole measurement. Opening the image
+	// pins the inode but does not protect its CONTENTS: ETXTBSY forbids
+	// writing a file that is mapped executable by a live process, and it
+	// lapses as soon as the last executing reference goes away. A hash that
+	// completes after the tracee exits can therefore cover bytes that never
+	// executed, and a same-size in-place rewrite is invisible to a
+	// (device, inode, size) tuple, so the tuple cannot be what rules it out.
+	ExeDigestDowngradeUnprotected = "unprotected-measurement"
+)
+
+// setProgram records the pathname the caller named together with the digest of
+// the bytes at THAT pathname. Both fields always move, so a caller cannot
+// update one and leave the other describing something else.
+//
+// This exists because a caller did exactly that: the eBPF /proc/<pid>/exe
+// enrichment replaced Program unconditionally while ProgramDigest stayed
+// conditional, and a shell script exec then recorded the INTERPRETER's path
+// beside the SCRIPT's digest in signed evidence (Codex review of judge#9045,
+// round 4). Restoring the guard that used to hide it would leave the same
+// hazard one edit away; pairing the write removes it. Pass a nil digest to
+// mean "this path, digest not available" — that is still a consistent record,
+// which a stale digest is not.
+//
+// Every assignment to Program or ProgramDigest goes through here.
+func (pi *ProcessInfo) setProgram(path string, digest cryptoutil.DigestSet) {
+	pi.Program = path
+	pi.ProgramDigest = digest
+}
+
+// setExeDigest records the executed-image digest together with the label
+// saying what it measures and, when it is a downgrade, why. All three move
+// together for the same reason Program and its digest do: a digest whose
+// label describes a different measurement is worse than no digest, because
+// the label is what a policy trusts.
+//
+// It is also the per-exec RESET. execve replaces the pid's image outright, so
+// digests an earlier exec on this pid recorded describe an image that no
+// longer exists; setExeDigest(nil, "", "") at the top of an exec handler
+// drops them as a unit.
+//
+// That reset was missing on the ptrace backend, and the leak it left is the
+// one this labelling exists to prevent: exec 1 proves its mapped image and
+// writes ExeDigest + mapped-image; exec 2 fails the proof, so the guarded
+// write does not fire and the downgrade below it is skipped because ExeDigest
+// is non-nil. Exec 2 is then signed carrying exec 1's bytes under the
+// strongest label the attestor has. Clearing three fields at three call sites
+// by hand is what let that happen, so they move through here instead.
+//
+// Every assignment to ExeDigest, ExeDigestSource or ExeDigestDowngradeReason
+// goes through here.
+func (pi *ProcessInfo) setExeDigest(digest cryptoutil.DigestSet, source, downgradeReason string) {
+	pi.ExeDigest = digest
+	pi.ExeDigestSource = source
+	pi.ExeDigestDowngradeReason = downgradeReason
+}
+
 type ProcessInfo struct {
-	Program       string                          `json:"program,omitempty"`
-	ProcessID     int                             `json:"processid"`
-	ParentPID     int                             `json:"parentpid"`
-	ProgramDigest cryptoutil.DigestSet            `json:"programdigest,omitempty"`
-	Comm          string                          `json:"comm,omitempty"`
-	Cmdline       string                          `json:"cmdline,omitempty"`
-	ExeDigest     cryptoutil.DigestSet            `json:"exedigest,omitempty"`
-	OpenedFiles   map[string]cryptoutil.DigestSet `json:"openedfiles,omitempty"`
+	Program       string               `json:"program,omitempty"`
+	ProcessID     int                  `json:"processid"`
+	ParentPID     int                  `json:"parentpid"`
+	ProgramDigest cryptoutil.DigestSet `json:"programdigest,omitempty"`
+	Comm          string               `json:"comm,omitempty"`
+	Cmdline       string               `json:"cmdline,omitempty"`
+	ExeDigest     cryptoutil.DigestSet `json:"exedigest,omitempty"`
+	// ExeDigestSource says what ExeDigest measures; see the ExeDigestSource*
+	// constants. Empty when ExeDigest is empty, and on backends that
+	// predate the field or never populate ExeDigest (darwin). A consumer
+	// must treat "" beside a non-empty ExeDigest as "unlabelled", not as
+	// "mapped image".
+	ExeDigestSource string `json:"exedigestSource,omitempty"`
+	// ExeDigestDowngradeReason says why ExeDigestSource is path-hash on a
+	// backend that would otherwise have reported the mapped image; see the
+	// ExeDigestDowngrade* constants. Empty when no downgrade happened. It
+	// exists so a verifier can distinguish "the producer declined to claim
+	// what it could not prove" from "this producer never populated the
+	// field", which otherwise look identical in the signed record.
+	ExeDigestDowngradeReason string                          `json:"exedigestDowngradeReason,omitempty"`
+	OpenedFiles              map[string]cryptoutil.DigestSet `json:"openedfiles,omitempty"`
 	// WrittenDigests carries content digests for files the tracee
 	// WROTE during the trace, captured via the BPF write-tap (kretprobe
 	// on sys_write / pwrite64 returns the bytes the kernel actually

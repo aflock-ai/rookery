@@ -154,7 +154,7 @@ int main(void) { puts("hello %d"); return 0; }
 //
 // The kernel-compile capstone failed with exit=2 in <2s after we
 // changed the hasher pool design (e.g. recursive lock deadlock on
-// pctx.mu via cachedDigest). This test catches that class of bug
+// pctx.mu via the digest path). This test catches that class of bug
 // using a small workload — the build is trivially correct outside
 // cilock, so any failure under trace is cilock's fault.
 //

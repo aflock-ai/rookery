@@ -181,21 +181,34 @@ type V02UnhashedOpen struct {
 // not worth interning (network, file-ops, syscalls, environ, flags, exit
 // code) is carried inline, lossless.
 type V02Process struct {
-	ProcessID       int               `json:"processid"`
-	ParentPID       int               `json:"parentpid"`
-	CommID          int               `json:"commId"`
-	ExecPathID      int               `json:"execPathId"`
-	CmdlineID       int               `json:"cmdlineId"`
-	ProgramDigestID int               `json:"programDigestId"`
-	ExeDigestID     int               `json:"exeDigestId"`
-	OpenedFiles     []V02FileRef      `json:"openedFiles,omitempty"`
-	WrittenFiles    []V02FileRef      `json:"writtenFiles,omitempty"`
-	FsVerity        []V02FsVerity     `json:"fsVerity,omitempty"`
-	UnhashedOpens   []V02UnhashedOpen `json:"unhashedOpens,omitempty"`
-	Network         *NetworkActivity  `json:"network,omitempty"`
-	FileOps         *FileActivity     `json:"fileOps,omitempty"`
-	Syscalls        []SyscallEvent    `json:"syscalls,omitempty"`
-	ExitCode        int               `json:"exitcode,omitempty"`
+	ProcessID       int `json:"processid"`
+	ParentPID       int `json:"parentpid"`
+	CommID          int `json:"commId"`
+	ExecPathID      int `json:"execPathId"`
+	CmdlineID       int `json:"cmdlineId"`
+	ProgramDigestID int `json:"programDigestId"`
+	ExeDigestID     int `json:"exeDigestId"`
+	// ExeDigestSource and ExeDigestDowngradeReason are carried INLINE, not
+	// interned: they are short, low-cardinality labels, and interning them
+	// would buy nothing while adding a table.
+	//
+	// They must be carried at all, which is the point. V02Process is what
+	// every signed command-run attestation actually contains (Type =
+	// V02PredicateType), and it interned ExeDigest with no field for the
+	// label — so the producer dropped the label on the way to the wire and a
+	// verifier received a bare digest with nothing saying whether it measured
+	// the mapped image or a pathname. That is the exact "no way to tell" the
+	// label exists to end, so a round-trip test guards it.
+	ExeDigestSource    string            `json:"exeDigestSource,omitempty"`
+	ExeDigestDowngrade string            `json:"exeDigestDowngrade,omitempty"`
+	OpenedFiles        []V02FileRef      `json:"openedFiles,omitempty"`
+	WrittenFiles       []V02FileRef      `json:"writtenFiles,omitempty"`
+	FsVerity           []V02FsVerity     `json:"fsVerity,omitempty"`
+	UnhashedOpens      []V02UnhashedOpen `json:"unhashedOpens,omitempty"`
+	Network            *NetworkActivity  `json:"network,omitempty"`
+	FileOps            *FileActivity     `json:"fileOps,omitempty"`
+	Syscalls           []SyscallEvent    `json:"syscalls,omitempty"`
+	ExitCode           int               `json:"exitcode,omitempty"`
 }
 
 // V02Predicate is the top-level v0.2 attestation body. Field order in the
@@ -386,21 +399,23 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 	for i := range rc.Processes {
 		p := &rc.Processes[i]
 		vp := V02Process{
-			ProcessID:       p.ProcessID,
-			ParentPID:       p.ParentPID,
-			CommID:          in.comm(p.Comm),
-			ExecPathID:      in.path(p.Program),
-			CmdlineID:       in.cmdline(p.Cmdline),
-			ProgramDigestID: in.digest(p.ProgramDigest),
-			ExeDigestID:     in.digest(p.ExeDigest),
-			OpenedFiles:     in.fileRefs(p.OpenedFiles),
-			WrittenFiles:    in.fileRefs(p.WrittenDigests),
-			FsVerity:        in.fsVerity(p.FsVerityDigests),
-			UnhashedOpens:   in.unhashedOpens(p.UnhashedOpens),
-			Network:         p.Network,
-			FileOps:         p.FileOps,
-			Syscalls:        p.SyscallEvents,
-			ExitCode:        p.ExitCode,
+			ProcessID:          p.ProcessID,
+			ParentPID:          p.ParentPID,
+			CommID:             in.comm(p.Comm),
+			ExecPathID:         in.path(p.Program),
+			CmdlineID:          in.cmdline(p.Cmdline),
+			ProgramDigestID:    in.digest(p.ProgramDigest),
+			ExeDigestID:        in.digest(p.ExeDigest),
+			ExeDigestSource:    p.ExeDigestSource,
+			ExeDigestDowngrade: p.ExeDigestDowngradeReason,
+			OpenedFiles:        in.fileRefs(p.OpenedFiles),
+			WrittenFiles:       in.fileRefs(p.WrittenDigests),
+			FsVerity:           in.fsVerity(p.FsVerityDigests),
+			UnhashedOpens:      in.unhashedOpens(p.UnhashedOpens),
+			Network:            p.Network,
+			FileOps:            p.FileOps,
+			Syscalls:           p.SyscallEvents,
+			ExitCode:           p.ExitCode,
 		}
 		v02.Processes = append(v02.Processes, vp)
 	}
@@ -535,21 +550,23 @@ func FromV02(p *V02Predicate) *CommandRun {
 	for i := range p.Processes {
 		vp := &p.Processes[i]
 		pi := ProcessInfo{
-			Program:         de.path(vp.ExecPathID),
-			ProcessID:       vp.ProcessID,
-			ParentPID:       vp.ParentPID,
-			ProgramDigest:   de.digest(vp.ProgramDigestID),
-			Comm:            de.comm(vp.CommID),
-			Cmdline:         de.cmdline(vp.CmdlineID),
-			ExeDigest:       de.digest(vp.ExeDigestID),
-			OpenedFiles:     de.fileMap(vp.OpenedFiles),
-			WrittenDigests:  de.fileMap(vp.WrittenFiles),
-			FsVerityDigests: de.fsVerityMap(vp.FsVerity),
-			UnhashedOpens:   de.unhashedOpens(vp.UnhashedOpens),
-			Network:         vp.Network,
-			FileOps:         vp.FileOps,
-			SyscallEvents:   vp.Syscalls,
-			ExitCode:        vp.ExitCode,
+			Program:                  de.path(vp.ExecPathID),
+			ProcessID:                vp.ProcessID,
+			ParentPID:                vp.ParentPID,
+			ProgramDigest:            de.digest(vp.ProgramDigestID),
+			Comm:                     de.comm(vp.CommID),
+			Cmdline:                  de.cmdline(vp.CmdlineID),
+			ExeDigest:                de.digest(vp.ExeDigestID),
+			ExeDigestSource:          vp.ExeDigestSource,
+			ExeDigestDowngradeReason: vp.ExeDigestDowngrade,
+			OpenedFiles:              de.fileMap(vp.OpenedFiles),
+			WrittenDigests:           de.fileMap(vp.WrittenFiles),
+			FsVerityDigests:          de.fsVerityMap(vp.FsVerity),
+			UnhashedOpens:            de.unhashedOpens(vp.UnhashedOpens),
+			Network:                  vp.Network,
+			FileOps:                  vp.FileOps,
+			SyscallEvents:            vp.Syscalls,
+			ExitCode:                 vp.ExitCode,
 		}
 		rc.Processes = append(rc.Processes, pi)
 	}

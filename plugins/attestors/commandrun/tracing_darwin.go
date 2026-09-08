@@ -1746,7 +1746,12 @@ func recordDarwinExec(p *ProcessInfo, ev *sandboxEvent, digests map[pinID]crypto
 		// observable. ProgramDigest is deliberately left empty — see the note
 		// in buildDarwinTree: a digest in that field reads as "these bytes
 		// ran" to every consumer, and this channel cannot support it.
-		p.Program = ev.detail
+		//
+		// Written through setProgram with an explicit nil so the pairing
+		// invariant holds on every backend: these two fields are never
+		// assigned separately anywhere, which is what keeps a path and a
+		// digest of some other file from ever appearing together.
+		p.setProgram(ev.detail, nil)
 	}
 	// OPENEDFILES IS LEFT EMPTY ON THIS BACKEND, and that is a deliberate
 	// removal rather than an oversight.

@@ -121,9 +121,28 @@ func TestCodexVersionIgnoresTheUpdateCheckFile(t *testing.T) {
 		"latest_version": "0.147.0", "last_checked_at": "2026-08-18T21:51:09Z",
 	})
 
+	// The executable is a REAL file under t.TempDir(), not the literal
+	// "/usr/local/bin/codex" this fixture used to name.
+	//
+	// resolveVersion walks the resolved executable path looking for a package
+	// directory whose parent is @openai, and that walk reads the HOST
+	// filesystem. Naming a real system path therefore made the assertion below
+	// depend on whether the machine running the tests happens to have codex
+	// npm-installed: on a CI runner that did, the walk found a genuine
+	// @openai/codex/package.json and reported version 0.144.0, and this test
+	// failed for a reason that had nothing to do with $CODEX_HOME/version.json
+	// -- the file it exists to police. Measured on two separate runners after
+	// codex landed on the fleet.
+	//
+	// A path under t.TempDir() has no @openai ancestor and cannot acquire one,
+	// so the only version this test can observe is one read from version.json,
+	// which is exactly the thing that must not happen.
+	binPath := filepath.Join(t.TempDir(), "bin", "codex")
+	writeExecutable(t, binPath)
+
 	src := newFixtureSource(
 		ProcessInfo{PID: 100, PPID: 80, Executable: "/usr/local/bin/cilock"},
-		ProcessInfo{PID: 80, PPID: 1, Executable: "/usr/local/bin/codex", Comm: "codex",
+		ProcessInfo{PID: 80, PPID: 1, Executable: binPath, Comm: "codex",
 			Argv: []string{"codex"}, Env: map[string]string{"CODEX_HOME": codexHome}},
 	)
 	got := detect(t, src, 100)

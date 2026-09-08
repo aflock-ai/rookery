@@ -20,7 +20,7 @@
 //   - Zero nil-digest entries across the merged attestation.
 //   - All N output binaries appear in products or intermediates.
 //   - No ringbuf drops.
-//   - Userspace state (digestCache, openPaths, process map) growth
+//   - Userspace state (openPaths, process map) growth
 //     is BOUNDED — final size proportional to unique files, not to
 //     iteration count.
 //

@@ -1017,33 +1017,53 @@ func recordEBPFExecve(pctx *ptraceContext, ev *ebpf.ExecveEvent) {
 		procInfo.Comm = ev.Comm
 	}
 
-	// Hash the file the syscall caller named.
-	//nolint:nestif // four-level nest mirrors a deliberate fallback chain
-	// (digest cache → ProgramDigest → ExeDigest). Unrolling would scatter
-	// related decisions across helpers and obscure the intent.
+	// Every execve replaces the pid's image, so digests a previous event on
+	// this pid recorded describe an image that is gone. Reset them, as the
+	// ptrace backend does per SYS_EXECVE, so a record describes the pid's
+	// latest exec rather than accumulating across execs.
+	procInfo.setExeDigest(nil, "", "")
+	// Program and its digest are cleared as a PAIR. Clearing only the digest
+	// would leave the previous exec's pathname standing beside no digest, and
+	// then beside the next digest computed — the split this pairing exists to
+	// prevent.
+	procInfo.setProgram("", nil)
+
+	// Hash the file the syscall caller named. This is ProgramDigest: the
+	// bytes at the pathname at the moment we opened it. It is NOT the
+	// mapped image; that comes from /proc/<pid>/exe in enrichFromProc.
 	if ev.Filename != "" {
-		procInfo.Program = ev.Filename
-		if d, ok := pctx.digestForPath(ev.Filename); ok {
-			if procInfo.ProgramDigest == nil {
-				procInfo.ProgramDigest = d
-			}
-			// Fallback for ExeDigest: argv[0] hash. For 99% of execvees
-			// argv[0] resolves to the same binary that /proc/<pid>/exe
-			// would symlink to. enrichFromProc below will overwrite
-			// with the /proc-resolved digest when the process is still
-			// alive — but for sub-millisecond processes (Go's
-			// compile/asm subprocs) /proc may already be gone, and
-			// argv[0] is the only ExeDigest we'll get.
-			if procInfo.ExeDigest == nil {
-				procInfo.ExeDigest = d
-			}
-		}
+		// Paired: the path the caller named and the bytes at that path. A
+		// failed hash leaves the digest nil rather than leaving a digest of
+		// something else beside the name. The ExeDigest fallback that used to
+		// live here is now the labelled downgrade below: assigning a path
+		// hash to ExeDigest without saying so is the exact confusion
+		// ExeDigestSource exists to end.
+		d, _ := pctx.digestForPath(ev.Filename)
+		procInfo.setProgram(ev.Filename, d)
 	}
 
 	// /proc enrichment for the actually-loaded binary + environ + cmdline.
-	// Best-effort; the fallback above keeps ExeDigest populated when /proc
-	// is gone.
+	// Best-effort: for sub-millisecond processes (Go's compile/asm
+	// subprocs) /proc may already be gone.
 	enrichFromProc(pctx, procInfo)
+
+	// The only digest this backend can stand behind is of the pathname the
+	// caller named. Publish it as ExeDigest so consumers that predate
+	// ExeDigestSource keep seeing a value, but LABEL it, and say WHY it is
+	// not the mapped image: a verifier comparing ExeDigest against an image
+	// allowlist must be able to refuse a path hash, because the path's bytes
+	// can differ from the image the kernel mapped (the file can be replaced
+	// between exec and our open; a symlink can be retargeted).
+	//
+	// The downgrade is unconditional here, not a fallback for a read that
+	// failed. It is a property of where the event comes from — a syscall-
+	// entry kprobe with no kernel identity in it — so it holds even when
+	// /proc/<pid>/exe is perfectly readable. Recording the reason is what
+	// keeps this distinguishable from a producer that simply never populated
+	// the field.
+	if procInfo.ExeDigest == nil && procInfo.ProgramDigest != nil {
+		procInfo.setExeDigest(procInfo.ProgramDigest, ExeDigestSourcePathHash, ExeDigestDowngradeNotKernelBound)
+	}
 }
 
 // recordEBPFFileOp handles EVT_UNLINKAT, EVT_RENAMEAT, EVT_FCHMODAT.
@@ -1606,23 +1626,46 @@ func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
 		}
 	}
 
-	// /proc/<pid>/exe is a symlink to the current binary. Resolve +
-	// hash via the trace's digest cache for the same per-trace
-	// dedup that the ptrace path gets.
+	// NO mapped-image read here. The eBPF backend cannot prove the BOUND
+	// property, so under the rule in exec_binding_linux.go it does not get to
+	// claim the label.
+	//
+	// Its execve event comes from a syscall-ENTRY kprobe
+	// (SEC("kprobe/__x64_sys_execve"), ebpf/bpf/openat_kprobe.bpf.c), fired
+	// before the kernel has resolved, opened or mapped anything. So
+	// ebpf.ExecveEvent carries the caller's pathname STRING and nothing else
+	// — no device, no inode, no kernel identity of any kind. Every comparand
+	// available by the time the event is drained is therefore a fresh
+	// observation of a mutable pathname, and a tracee that replaces that path
+	// and execs again before the drain makes the observation agree with
+	// /proc/<pid>/exe while describing a DIFFERENT image. A userspace exec
+	// counter cannot close it either: it counts events already DRAINED, so a
+	// queued exec is invisible to it (Codex review of judge#9045, round 3).
+	//
+	// Fixing this properly means capturing the executed inode IN THE KERNEL
+	// at exec — a kretprobe on sys_execve reading current->mm->exe_file,
+	// carried in the event beside the filename — and then comparing against a
+	// value the tracee could not have changed after the fact. Until the event
+	// carries it, the honest record here is the path hash, labelled, with the
+	// reason stated.
+	//
+	// /proc/<pid>/exe fills Program in only when the event carried no
+	// filename, and then it sets the path and its digest TOGETHER.
+	//
+	// It must not overwrite a filename the event did carry. Program means "the
+	// pathname the caller named" and ProgramDigest means "the bytes at that
+	// pathname"; for a script exec the caller named the SCRIPT while
+	// /proc/<pid>/exe is the INTERPRETER, so overwriting recorded the
+	// interpreter's path beside the script's digest — two fields describing
+	// different bytes in signed evidence (Codex review of judge#9045, round 4;
+	// my regression from round 3, which lifted this out of a guard and left
+	// the digest conditional). Pairing the write through setProgram is what
+	// makes that unrepresentable rather than merely absent.
 	exePath := procDir + "/exe"
-	if procInfo.ExeDigest == nil {
-		if d, ok := pctx.digestForPath(exePath); ok {
-			procInfo.ExeDigest = d
-		}
-		// Resolve the symlink so Program can be set to the actual
-		// path, mirroring ptrace's argv[0] field.
+	if procInfo.Program == "" {
 		if resolved, err := os.Readlink(exePath); err == nil {
-			procInfo.Program = resolved
-			if procInfo.ProgramDigest == nil {
-				if d, ok := pctx.digestForPath(resolved); ok {
-					procInfo.ProgramDigest = d
-				}
-			}
+			d, _ := pctx.digestForPath(resolved)
+			procInfo.setProgram(resolved, d)
 		}
 	}
 }

@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -69,6 +70,12 @@ type ptraceContext struct {
 	// "no digest memo" note above digestForPath: every open this attestor
 	// hashes at all, it hashes afresh, which costs roughly 3.5-4x on the
 	// hashing path (measured; see that note for the workload).
+
+	// testDuringHashedRead, when set, runs inside digestOpenFile between the
+	// pre-read fstat and the hash -- the window a write has to land in to be
+	// invisible to a bracket that is not settled. Tests use it to mutate the
+	// world mid-measurement; production leaves it nil.
+	testDuringHashedRead func()
 
 	// mu guards the processes map and the ProcessInfo entries within
 	// it. Required for the eBPF tracing path, where multiple hash
@@ -262,8 +269,27 @@ func observedUnchanged(before, after os.FileInfo) error {
 // open and read it -- draining a pipe the tracee was waiting on, or reading
 // a character device without end.
 func openForHashing(path string) (*os.File, error) {
+	pathResolutions.Add(1)
 	return os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: hashing a path the tracee named is this attestor's whole job
 }
+
+// pathResolutions counts name resolutions performed for hashing. Every open
+// in this package's measurement path goes through openForHashing, so it is
+// the number of times a pathname was turned into a file.
+//
+// It exists so the ONE-RESOLUTION rule can be ASSERTED rather than merely
+// asserted-in-prose. "Resolve once, then use the descriptor" cannot be tested
+// by observing behaviour: any hook a test can install fires inside
+// digestOpenFile, which is after every open, so an implementation that
+// resolves the name twice and one that resolves it once produce identical
+// bytes and identical stats. The count is the only thing that differs, and
+// without it a measurement rewritten to re-resolve the path passes the whole
+// suite (verified: a mutation replacing provenMappedImage's descriptor read
+// with a by-name read survived every other test in this package).
+//
+// Cost is one relaxed atomic add per file hashed, against a full SHA-256 of
+// that file.
+var pathResolutions atomic.Int64
 
 // digestOpenFile hashes an already-open descriptor: settle, fstat, hash
 // through f, fstat again, compare. Every failure is an error and NO digest.
@@ -287,6 +313,14 @@ func (p *ptraceContext) digestOpenFile(f *os.File) (cryptoutil.DigestSet, error)
 	}
 	if !before.Mode().IsRegular() {
 		return nil, errNotRegularFile
+	}
+	// The only window in which a test can act on the file BETWEEN the
+	// pre-read fstat and the hash. It lives here, in the one function that
+	// turns a descriptor into a digest, rather than in a caller: a hook in a
+	// caller can only reach the outside of the bracket, which is the part
+	// that is not interesting.
+	if p.testDuringHashedRead != nil {
+		p.testDuringHashedRead()
 	}
 	d, err := cryptoutil.CalculateDigestSet(f, p.hash)
 	if err != nil {
@@ -574,7 +608,10 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 	}
 
 	procInfo := p.getProcInfo(p.parentPid)
-	procInfo.Program = p.mainProgram
+	// Paired write: the main program's path with no digest yet (nothing has
+	// exec'd). setProgram is the only way these two fields move, so "no digest
+	// available" is spelled explicitly rather than left to whatever was there.
+	procInfo.setProgram(p.mainProgram, nil)
 	if err := unix.PtraceSyscall(p.parentPid, 0); err != nil {
 		return err
 	}
@@ -676,9 +713,14 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 	case unix.SYS_EXECVE:
 		procInfo := p.getProcInfo(pid)
 
+		// A read that fails yields "", which measureExecutedImage treats as
+		// "argv[0] unknown for this exec" and records as such. Program and
+		// ProgramDigest are NOT written here: measureExecutedImage owns that
+		// pair for the whole exec, and a second writer is how the reset came
+		// to be conditional in the first place.
 		program, err := p.readSyscallReg(pid, argArray[0], MAX_PATH_LEN)
-		if err == nil {
-			procInfo.Program = program
+		if err != nil {
+			program = ""
 		}
 
 		exeLocation := fmt.Sprintf("/proc/%d/exe", procInfo.ProcessID)
@@ -720,24 +762,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			procInfo.Cmdline = cleanString(string(cmdline))
 		}
 
-		// SYS_EXECVE hashes the new program's bytes both via
-		// /proc/<pid>/exe (post-execve) and via the literal argv[0]
-		// path (the file the user named). For 99% of execve calls
-		// these are the same file, so this hashes the same bytes
-		// twice. That duplication is deliberate now: the two are
-		// separate resolutions of separate names, and a memo that
-		// collapsed them would be keyed on stat fields a tracee can
-		// hold still through a writable mapping. See the no-memo note
-		// above digestForPath.
-		if d, ok := p.digestForPath(exeLocation); ok {
-			procInfo.ExeDigest = d
-		}
-
-		if program != "" {
-			if d, ok := p.digestForPath(program); ok {
-				procInfo.ProgramDigest = d
-			}
-		}
+		p.measureExecutedImage(procInfo, exeLocation, program)
 
 	case unix.SYS_OPENAT:
 		file, err := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
@@ -1099,6 +1124,81 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 }
 
 // ensureNetwork initializes the NetworkActivity struct if nil.
+// measureExecutedImage runs the whole executed-image lifecycle for ONE execve
+// on the ptrace backend: drop the previous exec's answer, measure the new
+// image, pair the named path with its own digest, and downgrade with a reason
+// when the mapped image could not be proven.
+//
+// It is one function because the four steps are only correct in this order and
+// only as a set. Spread across the syscall handler they were not: the reset
+// was missing entirely, so a second exec that failed its proof kept the FIRST
+// exec's digest -- the guarded write did not fire, and the downgrade below it
+// is conditional on ExeDigest being nil, so it did not fire either. The record
+// for exec 2 was signed carrying exec 1's bytes under the mapped-image label.
+// Having it in one testable place is what lets a test drive two execs in a row
+// (see TestMeasureExecutedImage_ASecondExecNeverInheritsTheFirstsDigest);
+// the handler itself needs a live traced process and a real ptrace stop, so
+// nothing was able to cover the sequence while it lived inline.
+//
+// SYS_EXECVE hashes the new program's bytes both via /proc/<pid>/exe
+// (post-execve) and via the literal argv[0] path (the file the user named).
+// For 99% of execve calls these are the same file, so this hashes the same
+// bytes twice. That duplication is deliberate: the two are separate
+// resolutions of separate names, and a memo that collapsed them would be
+// keyed on stat fields a tracee can hold still through a writable mapping.
+// See the no-memo note above digestForPath.
+//
+// This backend HAS the BOUND property: it reads /proc/<pid>/exe while the
+// tracee is stopped at the execve return, so the pid cannot exec again
+// underneath the measurement. That is a kernel-enforced stop, not a fact
+// re-derived from a mutable pathname, which is exactly what the eBPF backend
+// lacks.
+//
+// PROTECTED still has to be proven rather than assumed. A stopped tracee can
+// still be killed by an unrelated process, and once the last executing
+// reference is gone ETXTBSY lapses and the same inode can be rewritten in
+// place under our descriptor. So measure through one descriptor and require
+// the image to still be mapped on both sides of the read.
+func (p *ptraceContext) measureExecutedImage(procInfo *ProcessInfo, exeLocation, program string) {
+	// Every execve replaces the pid's image, so a digest an earlier exec on
+	// this pid recorded describes an image that is gone. Drop it WITH its
+	// label before measuring the new one. The eBPF backend has always done
+	// this; the ptrace backend did not.
+	procInfo.setExeDigest(nil, "", "")
+
+	// The program pair belongs to the previous exec for exactly the same
+	// reason, and it is reset UNCONDITIONALLY -- including when program is
+	// "" because argv[0] could not be read out of the tracee.
+	//
+	// Resetting only when a new path is known was the same omission one field
+	// over. With program == "" the pair kept the previous exec's path and
+	// digest; the mapped-image proof then failed, and the downgrade below --
+	// which reads ProgramDigest, not program -- copied the PREVIOUS program's
+	// digest into THIS exec's ExeDigest and signed it. An empty Program is an
+	// honest "argv[0] could not be read"; the previous exec's path is a false
+	// statement about this one.
+	procInfo.setProgram(program, nil)
+
+	if d, ok := p.provenMappedImage(exeLocation, stillMapping(exeLocation)); ok {
+		procInfo.setExeDigest(d, ExeDigestSourceMappedImage, "")
+	}
+
+	if program != "" {
+		// Re-pairs the same path with the digest of that path.
+		d, _ := p.digestForPath(program)
+		procInfo.setProgram(program, d)
+	}
+
+	// When the measurement could not be proven, fall back to the named path's
+	// bytes, LABELLED and with the reason recorded, rather than leaving
+	// ExeDigest empty. An empty field and a downgraded one are both honest,
+	// but the downgrade carries more: it tells a verifier the producer looked,
+	// could not prove the claim, and said so.
+	if procInfo.ExeDigest == nil && procInfo.ProgramDigest != nil {
+		procInfo.setExeDigest(procInfo.ProgramDigest, ExeDigestSourcePathHash, ExeDigestDowngradeUnprotected)
+	}
+}
+
 func (p *ptraceContext) ensureNetwork(procInfo *ProcessInfo) {
 	if procInfo.Network == nil {
 		procInfo.Network = &NetworkActivity{}
