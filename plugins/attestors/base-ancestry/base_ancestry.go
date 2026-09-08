@@ -245,10 +245,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	a.ObservedAt = a.now().UTC()
 	a.Relationship = RelationshipUnknown
 
-	repo, err := git.PlainOpenWithOptions(ctx.WorkingDir(), &git.PlainOpenOptions{
-		DetectDotGit:          true,
-		EnableDotGitCommonDir: true,
-	})
+	repo, err := openRepository(ctx.WorkingDir())
 	if err != nil {
 		return fmt.Errorf("base-ancestry: open repository at %s: %w", ctx.WorkingDir(), err)
 	}

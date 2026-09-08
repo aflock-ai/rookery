@@ -26,13 +26,13 @@ import (
 	"sort"
 	"time"
 
-	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/spf13/cobra"
 
 	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/policy"
+	gitattestor "github.com/aflock-ai/rookery/plugins/attestors/git"
 )
 
 // commitFetcher is the slice of the Archivista client `from-commit` needs: find
@@ -427,10 +427,12 @@ func resolveCommitSHA(arg string) (string, error) {
 	if fullCommitSHA.MatchString(arg) {
 		return arg, nil
 	}
-	// EnableDotGitCommonDir: in a linked worktree (`git worktree add`), HEAD's
-	// branch refs live in the main repository's common dir; without it the open
-	// succeeds but every revision resolves to "reference not found" (judge#8290).
-	repo, err := git.PlainOpenWithOptions(".", &git.PlainOpenOptions{DetectDotGit: true, EnableDotGitCommonDir: true})
+	// OpenRepository detects the .git dir and enables the common dir: in a
+	// linked worktree (`git worktree add`), HEAD's branch refs live in the main
+	// repository's common dir; without it the open succeeds but every revision
+	// resolves to "reference not found" (judge#8290). It also tolerates the
+	// worktreeConfig extension go-git v5.19.2 mis-cases and refuses.
+	repo, err := gitattestor.OpenRepository(".")
 	if err != nil {
 		return "", fmt.Errorf("%q is not a full commit sha and there is no local git repo to resolve it "+
 			"against (pass the full commit hash, or run from inside the repository): %w", arg, err)

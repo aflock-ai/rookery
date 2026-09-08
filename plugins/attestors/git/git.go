@@ -311,10 +311,7 @@ func repositoryIsProvablyUnborn(repo *git.Repository) (bool, error) {
 }
 
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:gocognit,gocyclo,funlen // git attestation involves multiple data sources
-	repo, err := git.PlainOpenWithOptions(ctx.WorkingDir(), &git.PlainOpenOptions{
-		DetectDotGit:          true,
-		EnableDotGitCommonDir: true,
-	})
+	repo, err := OpenRepository(ctx.WorkingDir())
 	if err != nil {
 		return err
 	}
