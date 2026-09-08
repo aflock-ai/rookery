@@ -19,6 +19,7 @@ package commandrun
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -33,6 +34,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf"
 	"golang.org/x/sys/unix"
 )
 
@@ -63,101 +65,268 @@ type ptraceContext struct {
 	// failures that would otherwise count as drops/gaps. nil = hash all.
 	cacheMatcher *attestation.CachePathMatcher
 
-	// digestCache memoizes per-file sha digests across the trace. Without
-	// it, a `go build` of any non-trivial project re-hashes the same
-	// stdlib + dep .go files thousands of times — each SYS_OPENAT and
-	// SYS_EXECVE in the hot path otherwise calls
-	// CalculateDigestSetFromFile() which sha256s the whole file.
-	//
-	// Cache key is (path, size, mtimeNs) — cheap to compute (one stat),
-	// safe for the trace's lifetime, and invalidated naturally if the
-	// file is ever rewritten mid-build. Benchmarked at ~40% wall-time
-	// reduction on a tiny build (92% hit rate) and substantially more
-	// on larger builds.
-	digestCache map[string]cryptoutil.DigestSet
-
-	// digestCacheMu guards digestCache. SEPARATE from mu so the
-	// dispatcher's recordEBPF* helpers (which hold mu) can safely
-	// call cachedDigest without recursive-lock deadlock — sync.Mutex
-	// is not reentrant in Go.
-	digestCacheMu sync.Mutex
+	// There is deliberately NO per-file digest memo here. See the
+	// "no digest memo" note above digestForPath: every open this attestor
+	// hashes at all, it hashes afresh, which costs roughly 3.5-4x on the
+	// hashing path (measured; see that note for the workload).
 
 	// mu guards the processes map and the ProcessInfo entries within
 	// it. Required for the eBPF tracing path, where multiple hash
 	// workers update process state concurrently. Uncontended in the
-	// serial ptrace path. NOT used to guard digestCache — see
-	// digestCacheMu above.
+	// serial ptrace path.
 	mu sync.Mutex
 }
 
-// digestCacheKey returns a (path,size,mtime)-based cache key for the
-// per-trace digest cache. A bare stat-then-Format is hot in the trace
-// loop; the format string is intentionally simple and the call sites
-// avoid keeping an os.FileInfo alive.
-func digestCacheKey(path string) (string, bool) {
-	st, err := os.Stat(path)
-	if err != nil || st.IsDir() {
-		return "", false
-	}
-	return fmt.Sprintf("%s|%d|%d", path, st.Size(), st.ModTime().UnixNano()), true
+// No digest memo, and no sound way to reintroduce one here
+// --------------------------------------------------------
+//
+// Earlier revisions of this file memoised digests for the life of a trace.
+// The key was first (path, size, mtime), then -- after four review rounds --
+// the kernel's own (dev, ino, ctime, size) guarded by an age rule. Every one
+// of those keys rests on a single premise: that some field the kernel
+// maintains moves whenever the file's contents move. That premise is false,
+// and no key built on stat(2) can repair it.
+//
+// A tracee that holds a writable MAP_SHARED mapping of a file changes the
+// file's bytes by storing into memory. The kernel stamps ctime and mtime in
+// the write FAULT that first makes a clean page writable -- not in the
+// stores that follow, while the page is already dirty and the PTE already
+// writable. Once that one fault is taken, the tracee can rewrite the file as
+// often as it likes with ctime, mtime, dev, ino and size all unchanged. Two
+// stats cannot see it, and waiting longer before the first stat does not
+// help: waiting changes WHEN a stamp is read, not WHETHER one was ever
+// written. mapped_write_linux_test.go stages exactly this and asserts the
+// invisibility rather than assuming it.
+//
+// So a memo keyed on anything stat(2) reports can be made to serve one
+// file's digest for another file's bytes, for the remainder of the trace, by
+// an unprivileged same-uid tracee. That is precisely the failure this
+// repository has shipped once before: an attestation binding a digest that
+// never corresponded to the bytes that ran. The answer is not a cleverer
+// key. It is to hash on every read, so an attacker has to win a race on each
+// one instead of poisoning a map once (Codex review of judge#9044, round 8).
+//
+// THE PRICE, measured on the path this change actually alters. Replaying a
+// build-shaped open sequence -- 5000 opens over 400 real Go source files
+// (mean 8.6 KB), a 92% repeat rate, every file aged past the settle window so
+// neither arm pays it -- the hashing path went from a median of 34-40 ms to
+// 136-142 ms across two independent five-run samples. Roughly 3.5-4x, on the
+// repeat rate most favourable to a memo. Larger materials would widen the
+// absolute gap, since the memo's saving scales with bytes hashed.
+//
+// That figure is the HASHING PATH, not trace wall clock. Hashing sits
+// alongside ptrace/BPF event handling and record keeping in a real trace, so
+// the whole-trace cost is smaller -- and this change did not measure it. An
+// earlier draft of this note quoted "18-23% of trace wall clock"; that came
+// from outside this change and was never reproduced against this repo's
+// workload, so it is not repeated here. Two things are certain and they are
+// enough: the memo is the difference between hashing once and hashing every
+// time, and a memo that can return a digest for bytes that were never
+// executed is not worth any amount of it.
+//
+// The price is stated here rather than amortised into a footnote because it
+// is the whole trade. Buying it back needs an actual content-stability
+// mechanism rather than a better observation: a reflink or filesystem
+// snapshot taken before the read, or fs-verity, which
+// makes the contents immutable and kernel-checked on every read. (An IMA
+// measurement alone is not one -- it records a hash, it does not hold the
+// bytes still.) None is available on the filesystems this runs on today;
+// judge#9054 tracks carrying the distinction on the wire if one becomes so.
+//
+// SCOPE. "No memo" is about digests, and it is exact: no digest this
+// attestor produces is ever served from a previous read. It is NOT a claim
+// that every openat is hashed. Both trace backends keep a per-process
+// short-circuit -- a path a process has already recorded is not recorded
+// again (see handleSyscall's SYS_OPENAT arm and recordEBPFOpenat) -- so a
+// second open of the same path by the same process is skipped rather than
+// answered from a memo. That is pre-existing, it is a decision about what to
+// RECORD rather than a cache of what was measured, and it is deliberately
+// not changed here: hashing every repeat open of every path costs far more
+// than the measurement above, and recordEBPFOpenat already keeps the FIRST
+// digest and raises a SyscallEvent when a later read of a path disagrees.
+
+// fileIdentity is the kernel's identity of an open file: device, inode,
+// ctime and size. It is what the bracketing fstats around a read are
+// compared on.
+//
+// It is a comparison, not a content version. ctime is written by the kernel
+// on data and metadata changes made through the write(2) family and cannot
+// be set from user space without CAP_SYS_TIME, which is why it beats mtime
+// (utimensat(2)) and size (truncate(2)) -- the fields the original cache key
+// used, and the forgery digest_binding_linux_test.go reproduces. It does NOT
+// cover stores through an established writable mapping; see the note above.
+type fileIdentity struct {
+	dev, ino  uint64
+	ctimeSec  int64
+	ctimeNsec int64
+	size      int64
 }
 
-// cachedDigest returns the digest set for `path`, hashing it on cache
-// miss and remembering the result keyed by (path,size,mtime). Returns
-// (nil, false) if the file is missing, unreadable, or a directory.
-//
-// Concurrent access (eBPF path): the hasher pool calls this from
-// multiple worker goroutines. pctx.mu serializes both the cache
-// lookup and the (rare) cache fill on miss.
-func (p *ptraceContext) cachedDigest(path string) (cryptoutil.DigestSet, bool) {
-	key, ok := digestCacheKey(path)
+// identityFromInfo extracts the kernel identity from a stat result. Callers
+// that mean to bind a digest to bytes must pass an fstat of the descriptor
+// the bytes were read through, never a fresh resolution of a name: statting
+// a path and then opening it are two resolutions, and a symlink flipped
+// between them describes one file with another file's stat (Codex review of
+// judge#9044, round 4).
+func identityFromInfo(st os.FileInfo) (fileIdentity, bool) {
+	sys, ok := st.Sys().(*syscall.Stat_t)
 	if !ok {
-		return nil, false
+		return fileIdentity{}, false
 	}
-	p.digestCacheMu.Lock()
-	d, hit := p.digestCache[key]
-	p.digestCacheMu.Unlock()
-	if hit {
-		return d, true
+	//nolint:unconvert // Stat_t field widths differ across GOARCH; the conversions are load-bearing on 32-bit targets.
+	return fileIdentity{
+		dev:       uint64(sys.Dev),
+		ino:       uint64(sys.Ino),
+		ctimeSec:  int64(sys.Ctim.Sec),
+		ctimeNsec: int64(sys.Ctim.Nsec),
+		size:      st.Size(),
+	}, true
+}
+
+// A read is REFUSED when the bracketing fstats disagree, or cannot be
+// compared at all, or the descriptor is not a regular file. Each is a
+// refusal that yields NO digest: a digest whose bytes were never a single
+// state of a file is worse than no digest, because it is signed as evidence
+// and nothing downstream can tell it from a good one.
+var (
+	// errTornRead: the descriptor's identity moved across the read. The
+	// bytes may be a mix of two states of the file, or the change may have
+	// been metadata-only (a chmod moves ctime and touches no content) -- the
+	// stats cannot tell those apart, so the digest cannot be attributed to
+	// one observed state and is refused rather than guessed at.
+	errTornRead = errors.New("the descriptor's identity moved while it was being hashed, so the digest cannot be attributed to one observed state")
+	// errUncomparableRead: a stat needed to compare the read against the
+	// descriptor's identity could not be taken. "Could not check" is not
+	// "checked and fine"; the repo rule is that an error is never a
+	// permissive answer.
+	errUncomparableRead = errors.New("read could not be compared against the descriptor's identity")
+	// errNotRegularFile: a directory, pipe, socket or device has no stable
+	// content to hash, and its bytes are the tracee's rather than ours to
+	// consume.
+	errNotRegularFile = errors.New("not a regular file")
+)
+
+// observedUnchanged compares the two fstats that bracket a read and reports
+// whether anything changed between them THAT A STAT CAN SHOW.
+//
+// Read the name literally. It does not verify the read, and nothing in this
+// package does:
+//
+//   - What it establishes: none of (device, inode, ctime, size) moved
+//     between the two fstats. Because ebpf.SettleForRead takes the first one
+//     only once the file's ctime is outside the coarse-clock window, that
+//     covers any write(2) that BEGINS after it -- such a write is stamped
+//     later and shows up here. Without the wait, a same-size rewrite inside
+//     one tick would leave both stats identical.
+//   - What it does NOT establish: that the bytes hashed are one state of the
+//     file. Two writers move nothing this compares. Stores through a
+//     writable mapping the tracee already holds never stamp at all. And a
+//     write(2) already in flight has stamped ctime before copying its bytes
+//     (ext4 does this in file_modified() during ext4_write_checks), so it
+//     can deliver them during the read with no second stamp. Neither is
+//     closable with stat(2), and they are why no digest is memoised (see the
+//     note above). What dropping the memo buys is that a bad read stays
+//     confined to the single read it occurred in, instead of being latched
+//     into an answer served for the rest of the trace.
+//
+// A nil error therefore means "the compared fields did not move", which is
+// strictly weaker than "the read was verified" and is the only claim the
+// code is entitled to make.
+func observedUnchanged(before, after os.FileInfo) error {
+	if before == nil || after == nil {
+		return errUncomparableRead
 	}
-	d, err := cryptoutil.CalculateDigestSetFromFile(path, p.hash)
+	if !before.Mode().IsRegular() {
+		return errNotRegularFile
+	}
+	ib, okBefore := identityFromInfo(before)
+	ia, okAfter := identityFromInfo(after)
+	if !okBefore || !okAfter {
+		return errUncomparableRead
+	}
+	if ia != ib {
+		return errTornRead
+	}
+	return nil
+}
+
+// openForHashing resolves `path` EXACTLY ONCE and hands back the descriptor
+// that resolution produced. Every stat afterwards is an fstat of this
+// descriptor, so a name swapped after the open cannot change what is hashed
+// or what the digest is reported for.
+//
+// O_NONBLOCK keeps the open of a FIFO from blocking on a writer that will
+// never come; digestOpenFile then refuses it, because the descriptor's fstat
+// says it is not a regular file. That is stricter than the code this
+// replaces, which stat'd the name, saw "not a directory", and went on to
+// open and read it -- draining a pipe the tracee was waiting on, or reading
+// a character device without end.
+func openForHashing(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: hashing a path the tracee named is this attestor's whole job
+}
+
+// digestOpenFile hashes an already-open descriptor: settle, fstat, hash
+// through f, fstat again, compare. Every failure is an error and NO digest.
+// The error is returned rather than folded into a weaker success, because
+// the caller cannot tell the two apart once a digest is in hand, and a
+// digest of a torn read that reaches attestation is signed evidence for
+// bytes that were never a state of the file.
+//
+// The digest it returns is a fresh measurement every time; see the no-memo
+// note above for why there is nothing here to hit.
+func (p *ptraceContext) digestOpenFile(f *os.File) (cryptoutil.DigestSet, error) {
+	// Settle first: the bracket below can only show a write landing during
+	// the read if the file's ctime is already outside the coarse-clock
+	// window when the pre-read fstat is taken. See ebpf.SettleWindow.
+	before, err := ebpf.SettleForRead(f)
+	if err != nil {
+		if errors.Is(err, ebpf.ErrWillNotSettle) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: pre-read fstat: %w", errUncomparableRead, err)
+	}
+	if !before.Mode().IsRegular() {
+		return nil, errNotRegularFile
+	}
+	d, err := cryptoutil.CalculateDigestSet(f, p.hash)
+	if err != nil {
+		return nil, fmt.Errorf("hash: %w", err)
+	}
+	after, err := f.Stat()
+	if err != nil {
+		// Nothing to compare the read against. Refuse: this is the
+		// fail-open shape the repo has a standing rule against, and the
+		// answer is not a digest with a weaker label.
+		return nil, fmt.Errorf("%w: post-read fstat: %w", errUncomparableRead, err)
+	}
+	if err := observedUnchanged(before, after); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// digestForPath returns the digest set for `path`, hashing it on every call.
+// Returns (nil, false) when the file is missing, unreadable, not a regular
+// file, or -- the case that matters -- when a change WAS observed across the
+// read. A false here means the caller records NO digest for this path, which
+// is the same contract the eBPF side gives a TOCTOUError: a refusal records
+// nothing rather than a placeholder a verifier cannot tell from a real
+// entry. It does not mean the digests it does return are proven; see
+// observedUnchanged for what the checks cover and what they miss.
+//
+// The path is resolved once, by the open, and never again: the bytes and the
+// stats both come from that one descriptor.
+//
+// Concurrent access (eBPF path): the hasher pool calls this from multiple
+// worker goroutines. It holds no shared state, so it needs no lock.
+func (p *ptraceContext) digestForPath(path string) (cryptoutil.DigestSet, bool) {
+	f, err := openForHashing(path)
 	if err != nil {
 		return nil, false
 	}
-	p.digestCacheMu.Lock()
-	p.digestCache[key] = d
-	p.digestCacheMu.Unlock()
-	return d, true
-}
-
-// cacheDigest stores a digest under (path, size, mtime) for future
-// lookups. Used by the eBPF hasher pool to record HashOpenatEvent
-// results so subsequent opens of the same unchanged file hit the
-// cache instead of re-reading.
-func (p *ptraceContext) cacheDigest(path string, d cryptoutil.DigestSet) {
-	key, ok := digestCacheKey(path)
-	if !ok {
-		return
-	}
-	p.digestCacheMu.Lock()
-	p.digestCache[key] = d
-	p.digestCacheMu.Unlock()
-}
-
-// lookupCachedDigest is the LOOKUP-ONLY variant of cachedDigest —
-// returns (digest, true) on hit, (nil, false) on miss. Does NOT
-// compute on miss. Used by the eBPF hasher pool to short-circuit
-// before calling HashOpenatEvent (which is the canonical race-
-// tight compute path).
-func (p *ptraceContext) lookupCachedDigest(path string) (cryptoutil.DigestSet, bool) {
-	key, ok := digestCacheKey(path)
-	if !ok {
-		return nil, false
-	}
-	p.digestCacheMu.Lock()
-	d, hit := p.digestCache[key]
-	p.digestCacheMu.Unlock()
-	if !hit {
+	defer func() { _ = f.Close() }()
+	d, err := p.digestOpenFile(f)
+	if err != nil {
 		return nil, false
 	}
 	return d, true
@@ -343,7 +512,6 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		tlsPendingFDs:       make(map[string]int),
 		fsVerityState:       r.fsVerityState,
 		cacheMatcher:        r.cacheMatcher,
-		digestCache:         make(map[string]cryptoutil.DigestSet, 8192),
 	}
 
 	// Resolve the tracing backend. preStartTracingSetup() (called
@@ -555,16 +723,18 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		// SYS_EXECVE hashes the new program's bytes both via
 		// /proc/<pid>/exe (post-execve) and via the literal argv[0]
 		// path (the file the user named). For 99% of execve calls
-		// these are the same file, so hashing twice is pure waste.
-		// Use the trace-wide digest cache: the first call hashes,
-		// every subsequent call (and the second hash in this branch
-		// when paths match) is a stat+map-lookup.
-		if d, ok := p.cachedDigest(exeLocation); ok {
+		// these are the same file, so this hashes the same bytes
+		// twice. That duplication is deliberate now: the two are
+		// separate resolutions of separate names, and a memo that
+		// collapsed them would be keyed on stat fields a tracee can
+		// hold still through a writable mapping. See the no-memo note
+		// above digestForPath.
+		if d, ok := p.digestForPath(exeLocation); ok {
 			procInfo.ExeDigest = d
 		}
 
 		if program != "" {
-			if d, ok := p.cachedDigest(program); ok {
+			if d, ok := p.digestForPath(program); ok {
 				procInfo.ProgramDigest = d
 			}
 		}
@@ -584,10 +754,13 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 			return nil
 		}
 
-		// Cross-process cached digest: same (path, size, mtime) → same
-		// digest. Avoids re-hashing files that multiple traced processes
-		// (compile workers in `go build`'s build graph) open in parallel.
-		digestSet, ok := p.cachedDigest(file)
+		// Hashed on every first-open-per-process. Files that several
+		// traced processes open in parallel (compile workers in `go
+		// build`'s graph) are therefore hashed several times; the
+		// per-process short-circuit above is the only de-duplication
+		// left, because it keys on "this process already recorded this
+		// path" rather than on any claim about the file's contents.
+		digestSet, ok := p.digestForPath(file)
 		if !ok {
 			// Best-effort: a missing/unreadable file still records as
 			// "opened" with nil digest so the --trace product filter can

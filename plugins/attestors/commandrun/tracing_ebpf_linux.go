@@ -626,21 +626,15 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 					})
 					continue
 				}
-				// Per-trace digest cache: most files in a build are
-				// opened many times. Cache by (path, size, mtime);
-				// hit means the same bytes are on disk → same digest.
-				if cached, ok := pctx.lookupCachedDigest(ev.Path); ok {
-					hashedTotal.Add(1)
-					recordEBPFOpenat(pctx, ev, ebpf.HashResult{
-						Path:   ev.Path,
-						Digest: cached,
-						Status: ebpf.TOCTOUStable,
-					})
-					if ph.file != nil {
-						_ = ph.file.Close()
-					}
-					continue
-				}
+				// There is no per-trace digest memo to consult here, and
+				// reintroducing one is the change a reviewer should
+				// refuse: every key it could use is a stat field a
+				// tracee can hold still through a writable mapping while
+				// the contents change. See the no-memo note above
+				// digestForPath in tracing_linux.go. Files a build opens
+				// many times are hashed many times; that note carries the
+				// measured cost and the workload it was measured on.
+				//
 				// Race-tight capture branch: if the dispatcher
 				// successfully held the inode via /proc/<pid>/fd/<fd>,
 				// hash from THAT — works even when the tracee has
@@ -660,9 +654,10 @@ func (r *CommandRun) runEBPFTrace(c *exec.Cmd, actx *attestation.AttestationCont
 				hashedTotal.Add(1)
 				switch res.Status {
 				case ebpf.TOCTOUStable:
-					if res.Digest != nil {
-						pctx.cacheDigest(ev.Path, res.Digest)
-					}
+					// Nothing to do. The digest travels in res and is
+					// recorded below; there is no memo to fill, so this
+					// arm exists only to keep "stable" out of the error
+					// and suspect counters.
 				case ebpf.TOCTOUSuspect:
 					suspectTotal.Add(1)
 				case ebpf.TOCTOUError, ebpf.TOCTOUMissing:
@@ -825,11 +820,15 @@ func recordEBPFOpenat(pctx *ptraceContext, ev *ebpf.OpenatEvent, res ebpf.HashRe
 	}
 
 	// Digest write rules:
-	//   - TOCTOUStable: we have a verified digest. Store it on first
+	//   - TOCTOUStable: we have a digest across which no change was
+	//     observed -- not a verified one; see ebpf.TOCTOUStable for what
+	//     the bracket does and does not cover. Store it on first
 	//     observation. On subsequent observations, if the digest
 	//     matches the stored one, no-op. If it DIFFERS, the file was
 	//     mutated between the two opens — keep the FIRST digest (the
-	//     bytes the tracee saw earlier are what we attest) and surface
+	//     earlier of the two observations is what we attest; the hash
+	//     happens after the openat it is attributed to, so neither
+	//     digest is the bytes the tracee itself read) and surface
 	//     a SyscallEvent so verifiers can find the divergence.
 	//     Silently overwriting would lose the signal that the file
 	//     changed during the build, which is exactly the adversarial
@@ -1024,7 +1023,7 @@ func recordEBPFExecve(pctx *ptraceContext, ev *ebpf.ExecveEvent) {
 	// related decisions across helpers and obscure the intent.
 	if ev.Filename != "" {
 		procInfo.Program = ev.Filename
-		if d, ok := pctx.cachedDigest(ev.Filename); ok {
+		if d, ok := pctx.digestForPath(ev.Filename); ok {
 			if procInfo.ProgramDigest == nil {
 				procInfo.ProgramDigest = d
 			}
@@ -1612,7 +1611,7 @@ func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
 	// dedup that the ptrace path gets.
 	exePath := procDir + "/exe"
 	if procInfo.ExeDigest == nil {
-		if d, ok := pctx.cachedDigest(exePath); ok {
+		if d, ok := pctx.digestForPath(exePath); ok {
 			procInfo.ExeDigest = d
 		}
 		// Resolve the symlink so Program can be set to the actual
@@ -1620,7 +1619,7 @@ func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
 		if resolved, err := os.Readlink(exePath); err == nil {
 			procInfo.Program = resolved
 			if procInfo.ProgramDigest == nil {
-				if d, ok := pctx.cachedDigest(resolved); ok {
+				if d, ok := pctx.digestForPath(resolved); ok {
 					procInfo.ProgramDigest = d
 				}
 			}
