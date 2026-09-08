@@ -26,10 +26,10 @@ Subjects exported: `imagedigest:<hex>` (real content digest), `imagereference:<t
 
 Any step that runs `pack build`. The wrapped command must produce every input the attestor reads — the report, the image **manifest**, and the image **config** blob — so they are all products of the SAME signed run. Export the manifest and config by the report's immutable digest inside the wrapped script (the attestor itself never talks to a registry or daemon):
 
-```
+```bash
 cilock run --step build -a buildpacks -- bash -c '
   pack build registry.example/app --publish --report-output-dir ./out &&
-  DIGEST=$(sed -n "s/.*digest = \"\(sha256:[0-9a-f]*\)\".*/\1/p" ./out/report.toml) &&
+  DIGEST=$(grep -oE "sha256:[0-9a-f]{64}" ./out/report.toml | head -1) &&
   crane manifest "registry.example/app@$DIGEST" > ./out/manifest.json &&
   crane config   "registry.example/app@$DIGEST" > ./out/config.json
 '
@@ -72,14 +72,23 @@ None. Detection is by product shape: any product named `report.toml` that parses
 
 ## CLI example
 
+Build and sign — this writes the attestation to `att.json`:
+
+```bash
+cilock run --step build -a buildpacks --signer-file-key-path key.pem -o att.json -- bash -c '
+  pack build localhost:5001/demo-app --publish --network host \
+    --builder heroku/builder:24 --report-output-dir ./out &&
+  D=$(grep -oE "sha256:[0-9a-f]{64}" ./out/report.toml | head -1) &&
+  crane manifest "localhost:5001/demo-app@$D" > ./out/manifest.json &&
+  crane config   "localhost:5001/demo-app@$D" > ./out/config.json'
 ```
-$ cilock run --step build -a buildpacks --signer-file-key-path key.pem -o att.json -- bash -c '
-    pack build localhost:5001/demo-app --publish --network host \
-      --builder heroku/builder:24 --report-output-dir ./out &&
-    D=$(sed -n "s/.*digest = \"\(sha256:[0-9a-f]*\)\".*/\1/p" ./out/report.toml) &&
-    crane manifest "localhost:5001/demo-app@$D" > ./out/manifest.json &&
-    crane config   "localhost:5001/demo-app@$D" > ./out/config.json'
-$ jq '.payload | @base64d | fromjson | .predicate.attestations[] | select(.type | contains("buildpacks"))' att.json
+
+Then read the buildpacks predicate back out of `att.json`:
+
+```bash
+jq '.payload | @base64d | fromjson
+      | .predicate.attestations[]
+      | select(.type | contains("buildpacks"))' att.json
 ```
 
 ## See also
