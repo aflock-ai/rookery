@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -395,6 +396,80 @@ func (c *Client) SearchGitoidsByPredicate(ctx context.Context, vars SearchGitoid
 	return gitoids, nil
 }
 
+// ErrCredentialUnavailable marks a token-source failure as PERMANENT: the grant
+// this run needs is missing or has been withdrawn, so re-asking the same source
+// cannot change the answer.
+//
+// It exists because the WRAPPER TYPE CANNOT CARRY THAT JUDGEMENT.
+// AuthTokenError wraps every token-source failure, and the reasons a source
+// fails are not one kind of thing. An enrolled agent whose upload grant the
+// platform withdrew has answered permanently; a GitHub Actions OIDC mint that
+// timed out, or that got a 503 from the runner's token endpoint, has answered
+// "not right now" — which is the same saturation symptom the upload retry
+// exists to absorb. Treating the wrapper as uniformly terminal gives the second
+// case ZERO retries and throws away a whole gate run's signed evidence on a
+// blip; treating it as uniformly retryable spends the budget re-asking for a
+// grant that is gone. Only the SOURCE knows which of the two it is, so the
+// source says so by wrapping this sentinel and the classifier reads the answer
+// instead of inferring it from the wrapper.
+//
+// A source declares permanence with %w:
+//
+//	if p.uploadToken == "" {
+//		return "", fmt.Errorf("the platform issued no upload token: %w", archivista.ErrCredentialUnavailable)
+//	}
+var ErrCredentialUnavailable = errors.New("archivista credential unavailable")
+
+// AuthTokenError reports that the per-request token source (WithAuthTokenSource)
+// could not produce a credential. The request was never sent.
+//
+// It is a distinct type so the classifier can tell "the request never left the
+// process" apart from a transport failure — NOT because every instance is
+// terminal. Whether re-asking can succeed is a property of the CAUSE, and it is
+// read with Permanent().
+type AuthTokenError struct{ Err error }
+
+// Error guards the nil receiver and nil cause the same way StatusError.Retryable
+// does: this type is exported, so a caller can construct one by hand, and an
+// error type that panics while being printed turns a clean refusal into a crash.
+func (e *AuthTokenError) Error() string {
+	if e == nil || e.Err == nil {
+		return "archivista auth token source: no credential"
+	}
+	return "archivista auth token source: " + e.Err.Error()
+}
+
+func (e *AuthTokenError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// Permanent reports whether the cause says the credential is GONE, as opposed
+// to momentarily unobtainable.
+//
+// The default is RETRYABLE, on the same asymmetry the rest of the classifier is
+// built on (see IsRetryable): a wrongly-retried failure costs at most the retry
+// budget and then surfaces the identical error, while a wrongly-terminal one
+// discards an entire gate run's evidence, silently, in production, while every
+// unit test still passes. So a cause that says nothing about permanence —
+// including a hand-constructed AuthTokenError carrying no cause at all — is not
+// permanent.
+//
+// Sniffing for transient SHAPES instead (net.Error, *url.Error,
+// context.DeadlineExceeded) is the losing alternative, and it loses the same way
+// enumerating 502/503/504 loses in StatusError.Retryable: a source that reports
+// "OIDC token request returned 503" as a plain fmt.Errorf carries none of those
+// shapes, so the enumeration would re-create the fail-closed bug at a new line
+// number. Permanence is declared, never guessed.
+func (e *AuthTokenError) Permanent() bool {
+	if e == nil {
+		return false
+	}
+	return errors.Is(e.Err, ErrCredentialUnavailable)
+}
+
 func (c *Client) applyHeaders(req *http.Request) error {
 	for key, values := range c.headers {
 		for _, v := range values {
@@ -406,7 +481,7 @@ func (c *Client) applyHeaders(req *http.Request) error {
 	if c.tokenSource != nil && req.Header.Get("Authorization") == "" {
 		token, err := c.tokenSource()
 		if err != nil {
-			return fmt.Errorf("archivista auth token source: %w", err)
+			return &AuthTokenError{Err: err}
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

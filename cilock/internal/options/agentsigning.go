@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/spf13/cobra"
@@ -25,8 +26,48 @@ import (
 type agentPrincipal struct {
 	spiffeID string
 	// uploadToken is the Archivista bearer the exchange handed back; "" when
-	// the platform minted none.
+	// the platform minted none. The refresher rewrites it, and every upload
+	// reads it through archivistaTokenSource rather than a copy taken at
+	// option-resolution time.
 	uploadToken string
+}
+
+// archivistaTokenSource is the per-request Archivista bearer for this
+// principal. It reads uploadToken at CALL time, so an upload that happens
+// after the signing-time refresh presents the token that refresh minted.
+//
+// The frozen alternative was the #8740 defect: applyAgentCredential baked the
+// FIRST exchange's token into ArchivistaOptions.Headers, the refresher updated
+// only principal.uploadToken, and a wrapped command outliving the upload
+// token's lifetime (min(2h, principal expiry)) uploaded with a credential that
+// had been silently renewed underneath it. A 401 is terminal — the upload retry
+// added for 5xx cannot rescue it — so the run produced signed evidence and then
+// threw it away.
+//
+// An empty token is an ERROR, never an anonymous request. Reaching here with
+// none means the platform withdrew the agent's upload authority on the
+// re-exchange (applyAgentCredential already refuses a FIRST exchange that mints
+// none). "Could not renew" is not "renewed": failing the request is what keeps
+// a withdrawn grant from reading as a successful upload.
+//
+// That refusal is marked archivista.ErrCredentialUnavailable, which is what
+// makes it TERMINAL to the upload retry rather than merely a failure. This is
+// the one token source in the tree whose failure is genuinely permanent: the
+// check is a local read of a field the exchange already wrote, so no amount of
+// re-asking produces a token, and an unmarked error would spend the whole retry
+// budget re-reading the same empty string. Every OTHER source failure here —
+// the ambient CI OIDC mint, which is an HTTP call — stays unmarked and
+// therefore retryable, because a mint that timed out can succeed on the next
+// attempt.
+func (p *agentPrincipal) archivistaTokenSource() func() (string, error) {
+	return func() (string, error) {
+		if p.uploadToken == "" {
+			return "", fmt.Errorf("the platform issued no upload token for agent %s on the most recent credential exchange, "+
+				"so this run's evidence cannot be stored; re-enroll the agent, or pass --enable-archivista=false to sign without uploading: %w",
+				p.spiffeID, archivista.ErrCredentialUnavailable)
+		}
+		return p.uploadToken, nil
+	}
 }
 
 // applyAgentKeylessFulcioToken exchanges this machine's enrolled agent
@@ -180,7 +221,10 @@ func (ro *RunOptions) applyAgentCredential(cmd *cobra.Command, cred auth.AgentCr
 				"the platform must issue agent upload tokens (no JWT signer configured?), or pass --enable-archivista=false to sign without uploading",
 				ro.PlatformURL, principal.spiffeID)
 		}
-		ro.ArchivistaOptions.Headers = append(ro.ArchivistaOptions.Headers, "Authorization: Bearer "+principal.uploadToken)
+		// Installed as a per-request SOURCE, not a header: the refresher
+		// re-exchanges this token after the wrapped command, and a header
+		// frozen here would still be the first exchange's (#8740).
+		ro.ArchivistaOptions.AuthTokenSource = principal.archivistaTokenSource()
 	}
 	if !cmd.Flags().Changed("enable-archivista") && !cmd.Flags().Changed("enable-archivist") {
 		ro.ArchivistaOptions.Enable = true

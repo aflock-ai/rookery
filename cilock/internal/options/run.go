@@ -1270,6 +1270,25 @@ type ArchivistaOptions struct {
 	OIDC     bool   // Enable OIDC auth — fetch GitHub Actions OIDC token as Bearer
 	Audience string // OIDC audience (defaults to archivista server URL)
 
+	// AuthTokenSource supplies the Archivista bearer PER REQUEST instead of
+	// freezing one into Headers. Set by an identity path whose credential is
+	// RENEWED after option resolution — today the enrolled agent principal,
+	// whose upload token is re-exchanged at first signature, after the wrapped
+	// command (agentsigning.go).
+	//
+	// A frozen header cannot express that. cli/run.go hands RunOptions to
+	// runRun BY VALUE and builds the Archivista client from the copy, so a
+	// refresher that rewrote Headers would either reallocate the backing array
+	// (the update invisible to the copy) or depend on element aliasing that any
+	// later append silently breaks. A func value survives the copy and reads
+	// the live credential on every request, which is the same reason the OIDC
+	// path below uses a source rather than a header.
+	//
+	// It is only consulted when no static Authorization header is set — see
+	// archivista.WithAuthTokenSource — so an operator's explicit
+	// --archivista-headers still wins outright.
+	AuthTokenSource func() (string, error)
+
 	// UploadRetries is how many EXTRA attempts a retryable upload failure gets
 	// beyond the first. 0 restores the historical single-attempt behaviour.
 	UploadRetries int
@@ -1332,7 +1351,13 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 	// credential is live however long the client is used. The eager mint here
 	// keeps the fail-fast behavior (a misconfigured runner errors at client
 	// construction, not mid-operation) and the log line.
-	if o.OIDC {
+	//
+	// AuthTokenSource suppresses it entirely rather than merely outranking it.
+	// An enrolled agent running on a GitHub Actions runner has both set, and
+	// the agent's own bearer is the one that uploads — so minting the ambient
+	// token anyway would let a runner whose OIDC endpoint is unhappy fail an
+	// upload that was never going to use it.
+	if o.OIDC && o.AuthTokenSource == nil {
 		audience := o.Audience
 		if audience == "" {
 			audience = o.Url
@@ -1343,6 +1368,16 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 		}
 		opts = append(opts, archivista.WithAuthTokenSource(source))
 		log.Infof("Using GitHub Actions OIDC token for Archivista (audience: %s)", audience)
+	}
+
+	// A caller-supplied source wins over ambient CI OIDC, which is the same
+	// precedence the frozen agent header had: an enrolled agent credential
+	// pre-empts every other identity for the run, so its upload bearer — not
+	// the runner's ambient workflow token — is the one that must reach
+	// Archivista. The OIDC branch above stands down for it, so this is the only
+	// token source installed rather than merely the last one.
+	if o.AuthTokenSource != nil {
+		opts = append(opts, archivista.WithAuthTokenSource(o.AuthTokenSource))
 	}
 
 	// Static headers (can override OIDC if both set — explicit headers win: an

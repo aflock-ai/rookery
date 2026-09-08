@@ -264,8 +264,10 @@ var (
 //
 // The terminal set is a closed allowlist:
 //   - the caller's context is done — the whole operation is being abandoned,
-//     so another attempt is pointless work against a dying deadline; and
-//   - a StatusError whose code says the request itself is the problem.
+//     so another attempt is pointless work against a dying deadline;
+//   - a StatusError whose code says the request itself is the problem; and
+//   - a token source that declared its credential permanently unavailable
+//     (ErrCredentialUnavailable) — a missing or withdrawn grant.
 //
 // EVERYTHING ELSE RETRIES. That default is the opposite of the intuitive one,
 // and it is chosen because the two failure modes are wildly asymmetric. A
@@ -296,6 +298,23 @@ func IsRetryable(ctx context.Context, err error) bool {
 	if errors.As(err, &se) {
 		return se.Retryable()
 	}
+	// A token-source failure is terminal ONLY when the source declared the
+	// credential permanently unavailable — a missing or withdrawn grant, which
+	// re-asking cannot produce. See ErrCredentialUnavailable.
+	//
+	// Every other token-source failure is a source that could not answer RIGHT
+	// NOW: an OIDC endpoint that timed out, a 5xx from the runner's token
+	// service, a reset connection. Those are indistinguishable in kind from the
+	// transport failures below, and the sources are re-asked on every attempt
+	// (applyHeaders runs inside storeOnce), so a retry can genuinely succeed.
+	// Collapsing the two under the wrapper type gave the transient half zero
+	// retries and aborted uploads the retry budget was funded to absorb.
+	var ae *AuthTokenError
+	if errors.As(err, &ae) {
+		return !ae.Permanent()
+	}
+	// Everything else — transport errors, bare client timeouts — stays
+	// retryable by default.
 	return true
 }
 
@@ -311,6 +330,14 @@ const (
 	reasonCallerDone      = "caller_context_done"
 	reasonBudgetExhausted = "budget_exhausted"
 	reasonTransport       = "transport_error"
+	// reasonAuthSource is a token source that could not answer THIS TIME, so
+	// the upload retries and re-asks it.
+	reasonAuthSource = "auth_token_source"
+	// reasonAuthUnavailable is a token source that declared the credential
+	// permanently gone. The two labels are distinct on purpose: an operator
+	// grepping a log must be able to tell "the mint blipped" from "the grant
+	// was withdrawn" without also having to read the classification field.
+	reasonAuthUnavailable = "auth_credential_unavailable"
 )
 
 // classify returns the bucket label and the reason, for logging.
@@ -344,6 +371,13 @@ func classify(callerCtx, attemptCtx context.Context, err error) (bucket, reason 
 			return classRetryable, se.reason()
 		}
 		return classTerminal, se.reason()
+	}
+	var ae *AuthTokenError
+	if errors.As(err, &ae) {
+		if ae.Permanent() {
+			return classTerminal, reasonAuthUnavailable
+		}
+		return classRetryable, reasonAuthSource
 	}
 	var ue *url.Error
 	if errors.As(err, &ue) {

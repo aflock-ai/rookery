@@ -66,13 +66,25 @@ func TestAgentRunUploadsWithTheAgentsOwnBearerByDefault(t *testing.T) {
 	if got := ro.ArchivistaOptions.Url; got != srv.URL+"/archivista" {
 		t.Fatalf("archivista url = %q, want the platform's own store", got)
 	}
-	var bearer string
+	// The bearer is installed as a PER-REQUEST source, not a frozen header, so
+	// it tracks the signing-time re-exchange (#8740). A static Authorization
+	// header would also SUPPRESS the source per the archivista client contract,
+	// so assert both halves: none frozen, and the source yields the agent's own
+	// upload token.
 	for _, h := range ro.ArchivistaOptions.Headers {
 		if strings.HasPrefix(strings.ToLower(h), "authorization:") {
-			bearer = h
+			t.Fatalf("the agent bearer was frozen into a header (%q); a header cannot track the signing-time refresh", h)
 		}
 	}
-	if bearer != "Authorization: Bearer "+agentUploadBearer {
+	src := ro.ArchivistaOptions.AuthTokenSource
+	if src == nil {
+		t.Fatal("an agent run must install its own Archivista bearer; without one the upload is anonymous and 401s")
+	}
+	bearer, err := src()
+	if err != nil {
+		t.Fatalf("agent upload token source: %v", err)
+	}
+	if bearer != agentUploadBearer {
 		t.Fatalf("archivista bearer = %q, want the agent's upload token", bearer)
 	}
 	if strings.Contains(bearer, "stored-human-session") {
@@ -133,5 +145,33 @@ func TestAgentRunRespectsAnExplicitAuthorizationHeader(t *testing.T) {
 	joined := strings.Join(ro.ArchivistaOptions.Headers, "\n")
 	if strings.Contains(joined, agentUploadBearer) {
 		t.Fatalf("the exchanged bearer must not be added beside an explicit Authorization header: %q", joined)
+	}
+	// The token source is the other half of the same rule. The archivista
+	// client would let the explicit header win anyway, but installing a source
+	// the operator never asked for makes the precedence depend on a contract
+	// two modules away instead of on this decision.
+	if ro.ArchivistaOptions.AuthTokenSource != nil {
+		t.Fatal("no agent upload token source may be installed beside an explicit Authorization header")
+	}
+}
+
+// TestAgentSignOnlyRunInstallsNoUploadBearer pins the explicit opt-out: with
+// --enable-archivista=false the operator asked to sign without uploading, so
+// nothing wires an upload credential at all.
+func TestAgentSignOnlyRunInstallsNoUploadBearer(t *testing.T) {
+	isolateCredentialStore(t)
+	srv := agentExchangeServerWithUpload(t, agentUploadBearer)
+	seedAgent(t, srv.URL)
+
+	cmd, ro := newRunCmd(t)
+	if err := cmd.ParseFlags([]string{"--platform-url", srv.URL, "--enable-archivista=false"}); err != nil {
+		t.Fatal(err)
+	}
+	ro.ResolvePlatformDefaults(cmd)
+	if err := ro.AgentIdentityError(); err != nil {
+		t.Fatalf("an explicit sign-only run is the operator's choice and must proceed: %v", err)
+	}
+	if ro.ArchivistaOptions.AuthTokenSource != nil {
+		t.Fatal("a sign-only run wires no upload credential")
 	}
 }
