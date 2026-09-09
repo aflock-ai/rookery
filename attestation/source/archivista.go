@@ -32,28 +32,53 @@ import (
 
 // ArchivistaSource implements Sourcer backed by an Archivista server.
 type ArchivistaSource struct {
-	client      *archivista.Client
-	mu          sync.Mutex
-	seenGitoids []string
-	// completedSearches memoizes fully-processed digest-filtered searches by
-	// input fingerprint. The policy depth loop re-searches every step on
+	client *archivista.Client
+	mu     sync.Mutex
+	// seenCollectionGitoids and seenPredicateGitoids are the exclusion sets
+	// of this source's TWO search kinds, kept SEPARATE on purpose.
+	//
+	// SearchStream searches attestation COLLECTIONS by step name;
+	// SearchByPredicateType searches bare DSSE statements by predicate type.
+	// They are different queries over different result spaces, and a gitoid
+	// one kind has already returned says nothing about whether the other
+	// kind has returned it. Sharing one set therefore made a collection
+	// search suppress a later predicate search's results and vice versa —
+	// the external-attestation flow (SLSA provenance, VSAs, cosign
+	// attestations) came back empty for evidence that exists and had merely
+	// been handed to a different kind of query (testifysec/judge#8976). The
+	// per-kind isolation is swept over the full product of search kinds in
+	// archivista_seen_isolation_test.go.
+	//
+	// Each set is still the #7572 re-download guard for its OWN kind: a
+	// repeat search of that kind excludes what that kind already returned.
+	// Both are gated on IsDiagnosticProbe, so the #7592 rule ("a probe
+	// neither consults nor updates the seen set") now holds per kind.
+	// Guarded by mu.
+	seenCollectionGitoids []string
+	seenPredicateGitoids  []string
+	// completedSearches memoizes fully-processed digest-filtered COLLECTION
+	// searches by input fingerprint; it belongs to the SearchStream path
+	// alone, as does seenCollectionGitoids, which is what makes its
+	// invariant hold. The policy depth loop re-searches every step on
 	// every iteration; when a step's inputs did not change, the repeat
-	// query's whole result is already excluded by seenGitoids — the memo
-	// skips the GraphQL round trip (and the server-side candidate sieve, the
-	// dominant consumer of the platform's database) whose empty answer is
-	// known. Marked only after a batch completes and marks its gitoids seen,
-	// so an aborted batch stays fully retryable. The one semantics change —
-	// evidence uploaded mid-verify no longer surfaces on an identical repeat
-	// within the same verify — is pinned in archivista_memo_test.go: a
-	// verify is a snapshot evaluation. Guarded by mu.
+	// query's whole result is already excluded by seenCollectionGitoids —
+	// the memo skips the GraphQL round trip (and the server-side candidate
+	// sieve, the dominant consumer of the platform's database) whose empty
+	// answer is known. Marked only after a batch completes and marks its
+	// gitoids seen, so an aborted batch stays fully retryable. The one
+	// semantics change — evidence uploaded mid-verify no longer surfaces on
+	// an identical repeat within the same verify — is pinned in
+	// archivista_memo_test.go: a verify is a snapshot evaluation. Guarded
+	// by mu.
 	completedSearches map[string]struct{}
 }
 
 // NewArchivistaSource creates a new source backed by an Archivista client.
 func NewArchivistaSource(client *archivista.Client) *ArchivistaSource {
 	return &ArchivistaSource{
-		client:      client,
-		seenGitoids: make([]string, 0),
+		client:                client,
+		seenCollectionGitoids: make([]string, 0),
+		seenPredicateGitoids:  make([]string, 0),
 	}
 }
 
@@ -172,10 +197,10 @@ func (s *ArchivistaSource) fetchCollectionEnvelope(ctx context.Context, gitoid s
 // source.CanonicalOrderSourcer.
 func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName string, subjectDigests, attestations []string, yield func(CollectionEnvelope) error) error {
 	// An empty digest set is the DIAGNOSTIC PROBE, and a probe neither
-	// consults nor updates this source's seen-set — see IsDiagnosticProbe for
-	// why both halves must move together, and testifysec/judge#7592 for the
-	// verdict flip that happens when the marking half is missing. It never
-	// consults the memo either, for the same reason.
+	// consults nor updates the COLLECTION seen-set — see IsDiagnosticProbe
+	// for why both halves must move together, and testifysec/judge#7592 for
+	// the verdict flip that happens when the marking half is missing. It
+	// never consults the memo either, for the same reason.
 	probe := IsDiagnosticProbe(subjectDigests)
 
 	// A digest-filtered search this source already fully processed yields
@@ -189,8 +214,8 @@ func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName stri
 			s.mu.Unlock()
 			return nil
 		}
-		excludeGitoids = make([]string, len(s.seenGitoids))
-		copy(excludeGitoids, s.seenGitoids)
+		excludeGitoids = make([]string, len(s.seenCollectionGitoids))
+		copy(excludeGitoids, s.seenCollectionGitoids)
 		s.mu.Unlock()
 	}
 
@@ -266,8 +291,10 @@ func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName stri
 	// Only mark gitoids as seen after ALL were successfully processed.
 	// This prevents partial updates that break retry semantics: if a
 	// download fails mid-batch, no gitoids are excluded on the next search.
+	// They are marked in the COLLECTION set only: a predicate-type search
+	// over the same envelope is a different query and must still find it.
 	s.mu.Lock()
-	s.seenGitoids = append(s.seenGitoids, processedGitoids...)
+	s.seenCollectionGitoids = append(s.seenCollectionGitoids, processedGitoids...)
 	// The memo follows the same all-or-nothing rule: a batch that reached
 	// this point marked every candidate seen, so its identical repeat is
 	// provably empty and the query can be skipped.
@@ -323,9 +350,14 @@ func searchFingerprint(collectionName string, subjectDigests, attestations []str
 //
 // See issue #39.
 func (s *ArchivistaSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
-	// The seen-set is the SOURCE's, shared with SearchStream, so the probe
-	// rule is the source's too: an unfiltered search here neither consults
-	// nor updates it. The engine's own call site always supplies the
+	// This kind's own seen-set. It is NOT SearchStream's: a predicate-type
+	// query and a collection query range over different result spaces, so
+	// sharing one set let either kind suppress the other's results
+	// (testifysec/judge#8976).
+	//
+	// The probe rule is the SOURCE's, not one method's, so it applies here
+	// too — per kind: an unfiltered search neither consults nor updates the
+	// predicate seen-set. The engine's own call site always supplies the
 	// policy's digests (policy.go passes vo.subjectDigests, and
 	// checkVerifyOpts rejects an empty set), so this gate costs the
 	// verification path nothing — it stops an unfiltered caller from
@@ -335,8 +367,8 @@ func (s *ArchivistaSource) SearchByPredicateType(ctx context.Context, predicateT
 	var excludeGitoids []string
 	if !probe {
 		s.mu.Lock()
-		excludeGitoids = make([]string, len(s.seenGitoids))
-		copy(excludeGitoids, s.seenGitoids)
+		excludeGitoids = make([]string, len(s.seenPredicateGitoids))
+		copy(excludeGitoids, s.seenPredicateGitoids)
 		s.mu.Unlock()
 	}
 
@@ -399,7 +431,7 @@ func (s *ArchivistaSource) SearchByPredicateType(ctx context.Context, predicateT
 
 	if !probe {
 		s.mu.Lock()
-		s.seenGitoids = append(s.seenGitoids, processedGitoids...)
+		s.seenPredicateGitoids = append(s.seenPredicateGitoids, processedGitoids...)
 		s.mu.Unlock()
 	}
 

@@ -303,7 +303,7 @@ func TestArchivistaSource_PartialDownloadFailure(t *testing.T) {
 	}
 
 	// KEY BUG: When download of gitoid-2 fails, we get partial results
-	// AND gitoid-1 is added to seenGitoids. On a retry, gitoid-1 would be
+	// AND gitoid-1 is added to seenCollectionGitoids. On a retry, gitoid-1 would be
 	// excluded even though the overall Search failed.
 	if len(results) > 0 {
 		t.Errorf("BUG: partial results returned (%d envelopes) despite error. "+
@@ -311,15 +311,15 @@ func TestArchivistaSource_PartialDownloadFailure(t *testing.T) {
 			"This is because `return envelopes, err` returns the accumulated slice.", len(results))
 	}
 
-	// Check seenGitoids state
-	if len(source.seenGitoids) > 0 {
-		t.Errorf("BUG: seenGitoids was partially updated (%v) despite Search returning an error. "+
+	// Check seenCollectionGitoids state
+	if len(source.seenCollectionGitoids) > 0 {
+		t.Errorf("BUG: seenCollectionGitoids was partially updated (%v) despite Search returning an error. "+
 			"On retry, gitoid-1 will be excluded even though the caller didn't get a successful result. "+
-			"This breaks the retry semantics.", source.seenGitoids)
+			"This breaks the retry semantics.", source.seenCollectionGitoids)
 	}
 }
 
-// TestArchivistaSource_SeenGitoidsAccumulate verifies that seenGitoids
+// TestArchivistaSource_SeenGitoidsAccumulate verifies that seenCollectionGitoids
 // persists across calls, filtering already-seen results.
 func TestArchivistaSource_SeenGitoidsAccumulate(t *testing.T) {
 	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
@@ -377,12 +377,12 @@ func TestArchivistaSource_SeenGitoidsAccumulate(t *testing.T) {
 	if len(results2) != 0 {
 		t.Errorf("BUG: second search should return 0 (gitoid-1 excluded), got %d", len(results2))
 	} else {
-		t.Logf("OK: seenGitoids correctly excludes already-seen gitoids on second search")
+		t.Logf("OK: seenCollectionGitoids correctly excludes already-seen gitoids on second search")
 	}
 }
 
 // TestArchivistaSource_ConcurrentSearch verifies that concurrent Search calls
-// on the same ArchivistaSource will race on seenGitoids.
+// on the same ArchivistaSource will race on seenCollectionGitoids.
 func TestArchivistaSource_ConcurrentSearch(t *testing.T) {
 	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
 	envJSON, _ := json.Marshal(env)
@@ -425,10 +425,10 @@ func TestArchivistaSource_ConcurrentSearch(t *testing.T) {
 	}
 	wg.Wait()
 
-	// FIXED: ArchivistaSource.Search now uses a mutex to protect seenGitoids.
+	// FIXED: ArchivistaSource.Search now uses a mutex to protect seenCollectionGitoids.
 	// The race detector should not flag any issues.
 	source.mu.Lock()
-	t.Logf("FIXED: ArchivistaSource concurrent access completed without race. seenGitoids has %d entries.", len(source.seenGitoids))
+	t.Logf("FIXED: ArchivistaSource concurrent access completed without race. seenCollectionGitoids has %d entries.", len(source.seenCollectionGitoids))
 	source.mu.Unlock()
 }
 
@@ -886,14 +886,14 @@ func TestAdversarial_ArchivistaSource_DownloadMalformedEnvelope(t *testing.T) {
 		t.Logf("OK: malformed envelope payload correctly rejected: %v", err)
 	}
 
-	// Verify seenGitoids was NOT updated since the search failed
+	// Verify seenCollectionGitoids was NOT updated since the search failed
 	source.mu.Lock()
-	seen := len(source.seenGitoids)
+	seen := len(source.seenCollectionGitoids)
 	source.mu.Unlock()
 	if seen > 0 {
-		t.Errorf("BUG: seenGitoids updated (%d) despite failed search; retry will skip these gitoids", seen)
+		t.Errorf("BUG: seenCollectionGitoids updated (%d) despite failed search; retry will skip these gitoids", seen)
 	} else {
-		t.Log("OK: seenGitoids not updated on failed search")
+		t.Log("OK: seenCollectionGitoids not updated on failed search")
 	}
 }
 
@@ -938,7 +938,7 @@ func TestAdversarial_ArchivistaSource_EmptyGitoidString(t *testing.T) {
 		// silently collide with other empty-gitoid results.
 		t.Logf("CONCERN: empty gitoid string was accepted as valid (reference=%q). "+
 			"ArchivistaSource does not validate gitoid values. An empty gitoid "+
-			"will add an empty string to seenGitoids, and if the server returns "+
+			"will add an empty string to seenCollectionGitoids, and if the server returns "+
 			"multiple empty gitoids they will all get the same reference.", results[0].Reference)
 	} else {
 		t.Log("OK: empty gitoid returned 0 results")
@@ -946,7 +946,7 @@ func TestAdversarial_ArchivistaSource_EmptyGitoidString(t *testing.T) {
 }
 
 // TestAdversarial_ArchivistaSource_ContextCancelledDuringDownload verifies
-// that context cancellation mid-download does not corrupt seenGitoids state.
+// that context cancellation mid-download does not corrupt seenCollectionGitoids state.
 func TestAdversarial_ArchivistaSource_ContextCancelledDuringDownload(t *testing.T) {
 	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
 	envJSON, _ := json.Marshal(env)
@@ -998,20 +998,20 @@ func TestAdversarial_ArchivistaSource_ContextCancelledDuringDownload(t *testing.
 		t.Logf("OK: context cancellation during download returned error: %v", err)
 	}
 
-	// Verify seenGitoids was not partially updated
+	// Verify seenCollectionGitoids was not partially updated
 	source.mu.Lock()
-	seen := len(source.seenGitoids)
+	seen := len(source.seenCollectionGitoids)
 	source.mu.Unlock()
 	if seen > 0 {
-		t.Errorf("BUG: seenGitoids partially updated (%d entries) despite cancelled search; "+
+		t.Errorf("BUG: seenCollectionGitoids partially updated (%d entries) despite cancelled search; "+
 			"retry will skip already-processed gitoids", seen)
 	} else {
-		t.Log("OK: seenGitoids not updated on cancelled search")
+		t.Log("OK: seenCollectionGitoids not updated on cancelled search")
 	}
 }
 
 // TestRace_ArchivistaSource_ConcurrentSearchMutexCorrectness runs many concurrent
-// searches and verifies no duplicates appear in seenGitoids (each gitoid should
+// searches and verifies no duplicates appear in seenCollectionGitoids (each gitoid should
 // appear exactly once).
 func TestRace_ArchivistaSource_ConcurrentSearchMutexCorrectness(t *testing.T) {
 	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
@@ -1054,23 +1054,23 @@ func TestRace_ArchivistaSource_ConcurrentSearchMutexCorrectness(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Check for duplicates in seenGitoids
+	// Check for duplicates in seenCollectionGitoids
 	source.mu.Lock()
 	seen := make(map[string]int)
-	for _, g := range source.seenGitoids {
+	for _, g := range source.seenCollectionGitoids {
 		seen[g]++
 	}
 	source.mu.Unlock()
 
 	for gitoid, count := range seen {
 		if count > 1 {
-			t.Errorf("BUG: gitoid %q appears %d times in seenGitoids (should be 1). "+
+			t.Errorf("BUG: gitoid %q appears %d times in seenCollectionGitoids (should be 1). "+
 				"This means the same gitoid was processed by multiple concurrent searches. "+
-				"The seenGitoids snapshot is taken before downloads start, so two concurrent "+
+				"The seenCollectionGitoids snapshot is taken before downloads start, so two concurrent "+
 				"searches can both see the same gitoid as 'not yet excluded'.", gitoid, count)
 		}
 	}
-	t.Logf("OK: %d unique gitoids in seenGitoids after %d concurrent searches", len(seen), concurrency)
+	t.Logf("OK: %d unique gitoids in seenCollectionGitoids after %d concurrent searches", len(seen), concurrency)
 }
 
 // =============================================================================

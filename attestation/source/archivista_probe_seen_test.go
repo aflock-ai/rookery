@@ -25,8 +25,8 @@ import (
 	"github.com/aflock-ai/rookery/attestation/archivista"
 )
 
-// THE DEFECT (testifysec/judge#7592). ArchivistaSource excluded and marked
-// seenGitoids on EVERY search, the unfiltered diagnostic probe included. The
+// THE DEFECT (testifysec/judge#7592). ArchivistaSource excluded and marked its
+// seen-set on EVERY search, the unfiltered diagnostic probe included. The
 // probe matches every collection for a step name, so one diagnostic consumed
 // the step's whole corpus; a later depth iteration — which is where evidence
 // reached only through a back-referenced subject digest first becomes
@@ -40,11 +40,16 @@ import (
 // never removes anything. probeCorpusServer below refuses to be that fake.
 
 // probeCorpusEntry is one envelope in the fake server's corpus, indexed the
-// way Archivista indexes it: by collection name and subject digest.
+// way Archivista indexes it: by collection name, statement predicate type and
+// subject digest. One envelope carries all three, because one envelope really
+// does: a collection DSSE has a collection name AND a predicate type, so both
+// search kinds can reach it — which is what makes one kind's exclusion leaking
+// into the other observable at all.
 type probeCorpusEntry struct {
 	gitoid         string
 	body           []byte
 	collectionName string
+	predicateType  string
 	subjectDigest  string
 }
 
@@ -57,12 +62,12 @@ type probeSearchVars struct {
 	PredicateTypes []string `json:"predicateTypes"`
 }
 
-// probeCorpusServer serves a fixed corpus and — crucially — HONOURS the three
-// filters the real server applies: collectionName, subjectDigests (empty means
-// "no subject filter", exactly like the GraphQL `valueIn: null`), and
-// excludeGitoids. searchVars records every variables block it was sent so a
-// test can assert on the query the source actually issued, not just on what
-// came back.
+// probeCorpusServer serves a fixed corpus and — crucially — HONOURS the four
+// filters the real server applies: collectionName, predicateTypes,
+// subjectDigests (empty means "no subject filter", exactly like the GraphQL
+// `valueIn: null`), and excludeGitoids. searchVars records every variables
+// block it was sent so a test can assert on the query the source actually
+// issued, not just on what came back.
 type probeCorpusServer struct {
 	*httptest.Server
 	mu         sync.Mutex
@@ -80,6 +85,18 @@ func (s *probeCorpusServer) lastSearchVars(t *testing.T) probeSearchVars {
 		t.Fatal("no search reached the server")
 	}
 	return s.searchVars[len(s.searchVars)-1]
+}
+
+// searchCount is how many /query requests this server has answered. A test
+// that asserts on lastSearchVars needs it: when a search never reaches the
+// server (the SearchStream memo short-circuits an identical repeat),
+// lastSearchVars silently returns the PREVIOUS search's variables and every
+// assertion about "the query this search issued" becomes a claim about a
+// different query.
+func (s *probeCorpusServer) searchCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.searchVars)
 }
 
 func newProbeCorpusServer(t *testing.T, corpus []probeCorpusEntry) *probeCorpusServer {
@@ -107,6 +124,10 @@ func newProbeCorpusServer(t *testing.T, corpus []probeCorpusEntry) *probeCorpusS
 		for _, d := range req.Variables.SubjectDigests {
 			wanted[d] = struct{}{}
 		}
+		wantedPredicates := make(map[string]struct{}, len(req.Variables.PredicateTypes))
+		for _, p := range req.Variables.PredicateTypes {
+			wantedPredicates[p] = struct{}{}
+		}
 
 		edges := make([]map[string]any, 0, len(corpus))
 		for _, e := range corpus {
@@ -115,6 +136,15 @@ func newProbeCorpusServer(t *testing.T, corpus []probeCorpusEntry) *probeCorpusS
 			}
 			if req.Variables.CollectionName != "" && req.Variables.CollectionName != e.collectionName {
 				continue
+			}
+			// An absent predicate list is NO predicate filter: the
+			// collection query (SearchGitoids) has no predicateTypes
+			// variable at all, while the predicate query
+			// (SearchGitoidsByPredicate) always sends a non-empty one.
+			if len(wantedPredicates) > 0 {
+				if _, ok := wantedPredicates[e.predicateType]; !ok {
+					continue
+				}
 			}
 			// An empty digest list is NO subject filter, matching the
 			// GraphQL `valueIn: $subjectDigests` with a null binding.
@@ -147,6 +177,12 @@ func newProbeCorpusServer(t *testing.T, corpus []probeCorpusEntry) *probeCorpusS
 	return s
 }
 
+// collectionPredicateType is the predicate type memoEnvelope stamps on a
+// collection statement. Naming it here lets a predicate-type search reach the
+// same corpus entry a collection search reaches, which is the precondition for
+// observing one search kind's exclusions inside the other's results.
+const collectionPredicateType = "https://aflock.ai/attestation-collection/v0.1"
+
 // probeCorpus builds a one-collection corpus: collection `name`, subject
 // digest `digest`, content-addressed the way the client re-hashes it.
 func probeCorpus(t *testing.T, name, digest string) []probeCorpusEntry {
@@ -160,6 +196,7 @@ func probeCorpus(t *testing.T, name, digest string) []probeCorpusEntry {
 		gitoid:         envelopeGitoid(t, body),
 		body:           body,
 		collectionName: name,
+		predicateType:  collectionPredicateType,
 		subjectDigest:  digest,
 	}}
 }
@@ -191,6 +228,37 @@ func TestProbeCorpusServer_AppliesTheExclusionServerSide(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Fatalf("control: the fake must honour excludeGitoids server-side, got %d", len(none))
+	}
+}
+
+// PRECONDITION for every predicate-type test: the fake must actually apply the
+// predicate filter. Without this control a predicate search "matching" the
+// corpus proves nothing — it would match against a fake that ignores
+// predicateTypes and hands back everything, so a test could assert on results
+// the real server would never have returned.
+func TestProbeCorpusServer_AppliesThePredicateFilterServerSide(t *testing.T) {
+	corpus := probeCorpus(t, "build", "abc")
+	srv := newProbeCorpusServer(t, corpus)
+	client := archivista.New(srv.URL)
+
+	hit, err := client.SearchGitoidsByPredicate(context.Background(), archivista.SearchGitoidByPredicateVariables{
+		PredicateTypes: []string{collectionPredicateType},
+	})
+	if err != nil {
+		t.Fatalf("matching predicate search: %v", err)
+	}
+	if len(hit) != 1 {
+		t.Fatalf("control: the corpus entry must be reachable by its own predicate type, got %d", len(hit))
+	}
+
+	miss, err := client.SearchGitoidsByPredicate(context.Background(), archivista.SearchGitoidByPredicateVariables{
+		PredicateTypes: []string{"https://slsa.dev/provenance/v1"},
+	})
+	if err != nil {
+		t.Fatalf("non-matching predicate search: %v", err)
+	}
+	if len(miss) != 0 {
+		t.Fatalf("control: the fake must honour predicateTypes server-side, got %d", len(miss))
 	}
 }
 
@@ -299,29 +367,39 @@ func TestArchivistaSource_FilteredSearchStillExcludesAndMarks(t *testing.T) {
 	}
 }
 
-// SearchByPredicateType is the sibling instance of the same mechanism: it
-// shares this source's one seen-set, and on main it excluded and marked on
-// every call regardless of whether a subject filter was supplied. The rule is
-// the source's, not one method's — an unfiltered search neither consults nor
-// updates the seen set.
+// SearchByPredicateType is the sibling instance of the same mechanism: on main
+// it excluded and marked on every call regardless of whether a subject filter
+// was supplied. The rule is the source's, not one method's — an unfiltered
+// search neither consults nor updates the seen set — and since the two search
+// kinds now keep SEPARATE seen sets, the rule has to hold PER KIND. So both
+// halves below are exercised WITHIN the predicate kind: a probe that only
+// looked harmless because its marks landed in some other kind's set would be a
+// probe-gate regression this test must still catch.
+//
+// The orthogonal property — that a predicate search's marks never reach the
+// collection kind's set — is swept in archivista_seen_isolation_test.go.
 func TestArchivistaSource_UnfilteredPredicateSearchIsSeenNeutral(t *testing.T) {
 	corpus := probeCorpus(t, "build", "abc")
 	srv := newProbeCorpusServer(t, corpus)
 	src := NewArchivistaSource(archivista.New(srv.URL))
 	ctx := context.Background()
 
-	if _, err := src.SearchByPredicateType(ctx, []string{"https://slsa.dev/provenance/v1"}, nil); err != nil {
+	probe, err := src.SearchByPredicateType(ctx, []string{collectionPredicateType}, nil)
+	if err != nil {
 		t.Fatalf("unfiltered predicate search: %v", err)
+	}
+	if len(probe) != 1 {
+		t.Fatalf("precondition: the unfiltered predicate search must see the corpus it is asked about, got %d", len(probe))
 	}
 	if last := srv.lastSearchVars(t); len(last.ExcludeGitoids) != 0 {
 		t.Errorf("an unfiltered predicate search sent %d excludeGitoids; it must query the whole corpus", len(last.ExcludeGitoids))
 	}
 
-	filtered, err := src.Search(ctx, "build", []string{"abc"}, nil)
+	filtered, err := src.SearchByPredicateType(ctx, []string{collectionPredicateType}, []string{"abc"})
 	if err != nil {
-		t.Fatalf("filtered search: %v", err)
+		t.Fatalf("filtered predicate search: %v", err)
 	}
 	if len(filtered) != 1 {
-		t.Errorf("an unfiltered predicate search consumed the corpus: the later digest-filtered search returned %d collections, want 1", len(filtered))
+		t.Errorf("an unfiltered predicate search consumed the corpus: the later digest-filtered predicate search returned %d envelopes, want 1", len(filtered))
 	}
 }

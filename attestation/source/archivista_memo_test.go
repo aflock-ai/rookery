@@ -39,7 +39,7 @@ func memoEnvelope(t *testing.T, collectionName string, subjectDigests map[string
 	stmt := intoto.Statement{
 		Type:          "https://in-toto.io/Statement/v0.1",
 		Subject:       []intoto.Subject{{Name: "test", Digest: subjectDigests}},
-		PredicateType: "https://aflock.ai/attestation-collection/v0.1",
+		PredicateType: collectionPredicateType,
 		Predicate:     json.RawMessage(predicate),
 	}
 	payload, err := json.Marshal(stmt)
