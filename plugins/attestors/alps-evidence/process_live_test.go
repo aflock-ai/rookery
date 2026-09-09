@@ -16,6 +16,7 @@ package alpsevidence
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -235,11 +236,44 @@ func TestLiveAttestProducesASerializablePredicate(t *testing.T) {
 // macOS, the process arguments have all ceased to exist. Measured on this
 // machine, the pre-fix source answered err=nil with an empty executable and no
 // argv — a failed read wearing the shape of a successful one.
+//
+// The exit is observed through the child's own stdout reaching EOF, and that
+// choice is the fixture's whole correctness argument. Start closes the parent's
+// copy of the write end, so the child holds the only one, and the kernel closes
+// it as the process exits — the signal comes from OUTSIDE the code under test.
+//
+// It must NOT be inferred from what the source reports, which is what this
+// replaces: poll until ReadProcess answers err == nil with an empty Executable.
+// That predicate reads as if it names a zombie and does not. An empty
+// Executable means the source COULD NOT READ the identity, and a zombie is only
+// one of the states that produces it — the same conflation, one layer up, that
+// identityCoverage exists to refuse.
+//
+// The state it actually admitted was a process still being EXEC'd. On Linux the
+// identity reads are bracketed by the execution generation (process_linux.go),
+// and /proc/<pid>/auxv reads back empty between the execve that lets
+// exec.Cmd.Start return — the cloexec pipe closes early in begin_new_exec — and
+// the kernel filling the new mm's saved auxv. Inside that window the source
+// correctly refuses to publish any identity field, and testify's Eventually
+// evaluates its condition once IMMEDIATELY rather than after a first tick, so
+// on a loaded machine it lands there. The fixture then returned a pid naming a
+// RUNNING process, and the assertions read it a moment later as the healthy,
+// fully examined process it was.
+//
+// Measured on Linux under cpu contention, old fixture, 250 spawns: it fired on
+// a running process 20 times, 17 of those on the immediate first evaluation at
+// 50–140µs after Start, and those 17 reproduced the CI assertion failure
+// exactly. Idle it never fired early, which is why this reached the merge queue
+// as a shard that ejected #9141 (#9144) rather than as a failing test. macOS
+// never showed it: that source takes exe and argv from one procargs2 snapshot,
+// so it has no bracket and no window (process_darwin.go).
 func startZombieChild(t *testing.T) int {
 	t.Helper()
 
 	cmd := exec.Command(os.Args[0], "-test.run=^TestALPSEvidenceHelperProcessExitsImmediately$")
 	cmd.Env = append(os.Environ(), helperEnvKey+"=exit")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
 	pid := cmd.Process.Pid
 
@@ -247,11 +281,17 @@ func startZombieChild(t *testing.T) int {
 	// never called before the assertions.
 	t.Cleanup(func() { _ = cmd.Wait() })
 
-	src := NewOSProcessSource()
-	require.Eventually(t, func() bool {
-		p, err := src.ReadProcess(pid)
-		return err == nil && p.Executable == ""
-	}, 10*time.Second, 20*time.Millisecond, "child never became a readable zombie")
+	drained := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(io.Discard, stdout)
+		drained <- copyErr
+	}()
+	select {
+	case copyErr := <-drained:
+		require.NoError(t, copyErr, "reading the helper child's output")
+	case <-time.After(30 * time.Second):
+		t.Fatal("the helper child never exited")
+	}
 	return pid
 }
 
