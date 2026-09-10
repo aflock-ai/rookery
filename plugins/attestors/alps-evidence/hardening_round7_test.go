@@ -20,6 +20,9 @@ package alpsevidence
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,15 +202,115 @@ func TestSymlinkedExecutableIsStillDigested(t *testing.T) {
 // default — with no trace that a file that could override it existed.
 // ---------------------------------------------------------------------------
 
-func requireNonRoot(t *testing.T) {
+// makeUnreadableConfig plants an entry at path that this package's opener
+// refuses to read, and PROVES that it refused.
+//
+// The lever is a DIRECTORY rather than chmod 000, because chmod is not a lever
+// against the user CI runs as. The three regressions below used to gate
+// themselves on os.Geteuid() != 0 for exactly that reason, and the merge queue
+// runs as root: every run scheduled all three and every one of them opted out
+// (merge_group run 34315460281, job "test attestor-alps-evidence"). A
+// fail-open regression that never executes is not a regression test.
+//
+// openAgentPathState (fsutil.go) is the single opener every config read in this
+// package goes through, and it collapses EACCES, a refused symlink and a
+// NON-REGULAR entry into the same denied state. loadConfigSnapshot's own
+// comment already names the case: "a pipe, a device or a directory is recorded
+// as a present but unresolved tier and never lets lower-precedence config
+// win." A directory therefore reaches the identical precedence outcome as an
+// unreadable file, and reaches it for root exactly as for anyone else.
+//
+// The require below is the POSITIVE CONTROL, and it is why this is a helper
+// rather than one MkdirAll per test. It asserts the opener actually refused --
+// no handle, denied set -- so a platform on which a directory turns out to be
+// readable-as-a-file fails HERE, by name, instead of leaving the three tests
+// quietly asserting precedence over a tier that was never blocked. That silent
+// mode is the defect being fixed; it must not come back one layer down.
+func makeUnreadableConfig(t *testing.T, path string) {
 	t.Helper()
-	if os.Geteuid() == 0 {
-		t.Skip("chmod-000 unreadability does not apply to root")
+	require.NoError(t, os.MkdirAll(path, 0o750))
+
+	f, _, denied := openAgentPathState(path)
+	if f != nil {
+		_ = f.Close()
 	}
+	require.Nil(t, f, "the lever must leave the opener with no handle: %s", path)
+	require.True(t, denied,
+		"the lever must make %s a DENIED tier; a tier that can be read pins nothing about fail-open behavior", path)
+}
+
+// TestNoTestSkipsItselfOnTheUserItRunsAs guards the CLASS, not the instance.
+//
+// Deleting the euid gate fixes the three tests that called it and does nothing
+// about the fourth. A uid check is what someone reaches for in good faith when
+// a permission-based fixture misbehaves under sudo, and the cost is invisible:
+// the run stays green and the coverage silently leaves. This package measured
+// that cost once already, so the shape is made inexpressible instead of
+// discouraged.
+//
+// Scoped to the PAIR -- one function that reads a uid AND skips -- on purpose.
+// Four tests here skip for reasons that are correct: the three helper-process
+// bodies (process_reexec_test.go, process_live_test.go) must return
+// immediately in the parent, and the live walk skips an unsupported GOOS. None
+// consults a uid, so none is flagged, and a uid read for some other purpose is
+// not flagged either. Splitting the read and the skip across two functions
+// would evade this; the guard is against the honest mistake, not an adversary.
+//
+// guards_test.go's packageFiles deliberately excludes _test.go files -- it
+// guards the production surface -- so the walk is repeated here over the
+// population this guard is about. Files are parsed regardless of build tags,
+// so a gate behind a GOOS constraint is still caught.
+func TestNoTestSkipsItselfOnTheUserItRunsAs(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	require.NoError(t, err)
+
+	fset := token.NewFileSet()
+	var parsed, offenders []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, perr := parser.ParseFile(fset, name, nil, 0)
+		require.NoErrorf(t, perr, "parse %s", name)
+		parsed = append(parsed, name)
+
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			var readsUID, skips bool
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				sel, isSel := n.(*ast.SelectorExpr)
+				if !isSel {
+					return true
+				}
+				switch sel.Sel.Name {
+				case "Geteuid", "Getuid":
+					readsUID = true
+				case "Skip", "Skipf", "SkipNow":
+					skips = true
+				}
+				return true
+			})
+			if readsUID && skips {
+				offenders = append(offenders, fset.Position(fn.Pos()).String()+" "+fn.Name.Name)
+			}
+		}
+	}
+
+	// An empty population is the one way a universal quantifier passes while
+	// proving nothing, and this one reads its population off the working
+	// directory. Naming a file that must be in it makes that mode fail loudly.
+	require.Contains(t, parsed, "hardening_round7_test.go",
+		"the sweep read no test files, so it quantified over nothing")
+
+	assert.Empty(t, offenders,
+		"a test that skips itself on the uid it happens to be running under does not run in CI, which runs as root; make the fixture unreadable in a way that binds root too (see makeUnreadableConfig)")
 }
 
 func TestUnreadableClaudeSettingsBlocksLowerPrecedence(t *testing.T) {
-	requireNonRoot(t)
 	home := t.TempDir()
 	withHomeDir(t, home)
 	writeJSON(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{"model": "user-model"})
@@ -218,9 +321,7 @@ func TestUnreadableClaudeSettingsBlocksLowerPrecedence(t *testing.T) {
 	repo, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	projectPath := filepath.Join(repo, ".claude", "settings.json")
-	writeJSON(t, projectPath, map[string]any{"model": "project-model"})
-	require.NoError(t, os.Chmod(projectPath, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(projectPath, 0o600) })
+	makeUnreadableConfig(t, projectPath)
 
 	got := detectWithRepo(t, claudeUnderCilock(), 100, repo)
 
@@ -240,16 +341,13 @@ func TestUnreadableClaudeSettingsBlocksLowerPrecedence(t *testing.T) {
 }
 
 func TestUnreadableCodexProjectConfigDegradesUserConfig(t *testing.T) {
-	requireNonRoot(t)
 	home := t.TempDir()
 	withHomeDir(t, home)
 	writeFile(t, filepath.Join(home, ".codex", "config.toml"), "model = \"user-model\"\n")
 
 	repo := t.TempDir()
 	projectPath := filepath.Join(repo, ".codex", "config.toml")
-	writeFile(t, projectPath, "model = \"project-model\"\n")
-	require.NoError(t, os.Chmod(projectPath, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(projectPath, 0o600) })
+	makeUnreadableConfig(t, projectPath)
 
 	got := detectWithRepo(t, codexUnderCilock(), 100, repo)
 
@@ -291,16 +389,13 @@ func TestGeminiMalformedProjectSettingsBlocksUserModel(t *testing.T) {
 }
 
 func TestGeminiUnreadableProjectSettingsBlocksUserModel(t *testing.T) {
-	requireNonRoot(t)
 	home := t.TempDir()
 	withHomeDir(t, home)
 	writeJSON(t, filepath.Join(home, ".gemini", "settings.json"), map[string]any{"model": "user-gemini-model"})
 
 	repo := t.TempDir()
 	projectPath := filepath.Join(repo, ".gemini", "settings.json")
-	writeJSON(t, projectPath, map[string]any{"model": "project-gemini-model"})
-	require.NoError(t, os.Chmod(projectPath, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(projectPath, 0o600) })
+	makeUnreadableConfig(t, projectPath)
 
 	got := detectWithRepo(t, geminiUnderCilock(), 100, repo)
 
