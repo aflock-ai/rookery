@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/aflock-ai/rookery/attestation/registry"
 )
 
 // maxContributorsShown bounds the "largest contributors" list. Three is enough
@@ -80,7 +82,16 @@ func (a *Attestor) checkProductCount(pairs []productPair) error {
 				c.count, c.dir)
 		}
 		if glob := suggestedExcludeGlob(contributors); glob != "" {
-			fmt.Fprintf(&b, "\nExclude them with:\n  --exclude-glob '%s'\n", glob)
+			// The flag NAME is derived, never typed. An attestor registers
+			// "exclude-glob"; the CLI is the thing that namespaces it, and the
+			// parser only ever accepts the namespaced spelling. See #9230.
+			//
+			// One pattern, not one per directory: the option is bound by
+			// cmd.Flags().String, so pflag keeps the LAST occurrence and
+			// silently discards the rest. suggestedExcludeGlob already emits a
+			// single brace alternation for exactly that reason.
+			fmt.Fprintf(&b, "\nExclude them with (one pattern -- the flag is not repeatable):\n  --%s '%s'\n",
+				registry.AttestorFlagName(Name, optExcludeGlob), glob)
 		}
 		if unsafe > 0 {
 			fmt.Fprintf(&b, "\n%d of these contain characters a shell would act on, so no ready-made\n"+
@@ -88,7 +99,8 @@ func (a *Attestor) checkProductCount(pairs []productPair) error {
 		}
 	}
 
-	b.WriteString("\nOr raise the limit deliberately with --max-products=<n> (0 disables it).")
+	fmt.Fprintf(&b, "\nOr raise the limit deliberately with --%s=<n> (0 disables it).",
+		registry.AttestorFlagName(Name, optMaxProducts))
 	return fmt.Errorf("%s", b.String())
 }
 

@@ -29,6 +29,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/aflock-ai/rookery/platformauth"
@@ -1282,7 +1283,7 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.MarkFlagsRequiredTogether(RequiredRunFlags...)
 
 	attestationRegistrations := attestation.RegistrationEntries()
-	ro.AttestorOptSetters = addFlagsFromRegistry("attestor", attestationRegistrations, cmd)
+	ro.AttestorOptSetters = addFlagsFromRegistry(registry.AttestorFlagPrefix, attestationRegistrations, cmd)
 
 	ro.KMSSignerProviderOptions.AddFlags(cmd)
 }

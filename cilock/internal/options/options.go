@@ -15,7 +15,6 @@
 package options
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation/log"
@@ -29,7 +28,10 @@ type Interface interface {
 
 func addFlags[T any](prefix string, regName string, options []registry.Configurer, optSettersMap map[string][]func(T) (T, error), cmd *cobra.Command) map[string][]func(T) (T, error) {
 	for _, opt := range options {
-		name := fmt.Sprintf("%s-%s-%s", prefix, regName, opt.Name())
+		// registry.FlagName is the ONE spelling of this rule. Attestors that
+		// print a flag name for the operator to paste call it too, so the
+		// message and the parser cannot disagree the way they did in #9230.
+		name := registry.FlagName(prefix, regName, opt.Name())
 		switch optT := opt.(type) {
 		case *registry.ConfigOption[T, int]:
 			{

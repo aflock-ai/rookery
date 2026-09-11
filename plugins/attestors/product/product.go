@@ -119,6 +119,18 @@ const (
 	// without copying the literal string.
 	TreeSubjectName = "tree:products"
 
+	// optIncludeGlob, optExcludeGlob and optMaxProducts are the names this
+	// attestor registers its config options under. They are constants rather
+	// than literals in configOptions() because operator-facing text must name
+	// the SAME option the CLI registered, run through
+	// registry.AttestorFlagName to get the namespaced spelling the parser
+	// actually accepts. Typing the flag by hand is how #9230 happened: the
+	// overflow remediation printed `--exclude-glob`, and the very run that
+	// printed it rejected that flag as unknown.
+	optIncludeGlob = "include-glob"
+	optExcludeGlob = "exclude-glob"
+	optMaxProducts = "max-products"
+
 	defaultIncludeGlob = "*"
 	defaultExcludeGlob = ""
 
@@ -136,7 +148,8 @@ const (
 	// set of real deliverables: a build emitting more than ten thousand
 	// shipped files is recording its inputs or its scratch space.
 	//
-	// Raise it with --max-products=<n>, or set 0 to disable the check.
+	// Raise it with --attestor-product-max-products=<n>, or set 0 to disable
+	// the check.
 	DefaultMaxProducts = 10000
 
 	// mimeTypeUnknown is the MIME type recorded when content sniffing could
@@ -376,7 +389,7 @@ func New(opts ...Option) *Attestor {
 func configOptions() []registry.Configurer {
 	return []registry.Configurer{
 		registry.StringConfigOption(
-			"include-glob",
+			optIncludeGlob,
 			"Pattern to use when recording products. Files that match this pattern will be included as subjects on the attestation.",
 			defaultIncludeGlob,
 			func(a attestation.Attestor, includeGlob string) (attestation.Attestor, error) {
@@ -389,7 +402,7 @@ func configOptions() []registry.Configurer {
 			},
 		),
 		registry.StringConfigOption(
-			"exclude-glob",
+			optExcludeGlob,
 			"Pattern to use when recording products. Files that match this pattern will be excluded as subjects on the attestation.",
 			defaultExcludeGlob,
 			func(a attestation.Attestor, excludeGlob string) (attestation.Attestor, error) {
@@ -402,7 +415,7 @@ func configOptions() []registry.Configurer {
 			},
 		),
 		registry.IntConfigOption(
-			"max-products",
+			optMaxProducts,
 			"Maximum number of files this attestor will record as products. A run that exceeds it fails with the directories responsible, rather than producing an attestation too large for the evidence store to read. Set 0 to disable the check.",
 			DefaultMaxProducts,
 			func(a attestation.Attestor, n int) (attestation.Attestor, error) {
@@ -792,9 +805,9 @@ func (a *Attestor) buildTree() error {
 	pairs := a.includedProductPairs()
 
 	// Counted AFTER the include/exclude globs, so the remedy the error
-	// recommends (--exclude-glob) is measured against the same set the
-	// check rejects. Counting before filtering would print an error whose
-	// own suggested fix could not clear it.
+	// recommends (--attestor-product-exclude-glob) is measured against the
+	// same set the check rejects. Counting before filtering would print an
+	// error whose own suggested fix could not clear it.
 	if err := a.checkProductCount(pairs); err != nil {
 		return err
 	}

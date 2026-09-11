@@ -96,13 +96,22 @@ file from `cilock run` is the inclusion-proof attestor's responsibility.
 
 ## Configuration
 
-| Option           | Default | Purpose                                                  |
-|------------------|---------|----------------------------------------------------------|
-| `--include-glob` | `*`     | Only paths matching this glob are recorded as products.  |
-| `--exclude-glob` | (none)  | Paths matching this glob are removed from the product set.|
+The CLI namespaces every attestor option, so the flag the parser accepts is
+`--attestor-product-<option>`. The bare option name is the internal registration
+name and is **not** a flag.
+
+| Flag                                | Default | Purpose                                                    |
+|-------------------------------------|---------|------------------------------------------------------------|
+| `--attestor-product-include-glob`   | `*`     | Only paths matching this glob are recorded as products.    |
+| `--attestor-product-exclude-glob`   | (none)  | Paths matching this glob are removed from the product set. |
+| `--attestor-product-max-products`   | `10000` | Refuse a run recording more products than this; `0` disables. |
 
 Filtering happens before tree construction, so the root reflects only the
 products that survive filtering.
+
+`--attestor-product-exclude-glob` takes **one** pattern and is not repeatable —
+it is bound by `cmd.Flags().String`, so pflag keeps the last occurrence and
+discards the rest. Put every tree in a single brace alternation.
 
 ## Determinism guarantees
 

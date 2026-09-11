@@ -22,6 +22,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/gobwas/glob"
 )
 
@@ -104,7 +105,13 @@ func TestMaxProducts_OverTheCapIsRefusedAndNamesTheCause(t *testing.T) {
 		"403",          // what the count actually was
 		"100",          // what the limit is
 		"node_modules", // WHICH directory caused it — the actionable part
-		"--exclude-glob",
+
+		// The flag the message offers must be the one the CLI's parser takes,
+		// derived rather than typed. #9230: the message named the attestor's
+		// internal option ("--exclude-glob"), the run that printed it rejected
+		// that flag as unknown, and following the advice cost a gate cycle.
+		"--" + registry.AttestorFlagName(Name, optExcludeGlob),
+		"--" + registry.AttestorFlagName(Name, optMaxProducts),
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error must mention %q so the operator can act on it; got:\n%s", want, msg)
@@ -123,13 +130,14 @@ func TestMaxProducts_ZeroDisablesTheCap(t *testing.T) {
 	SetProductsForTesting(a, productSet(t, map[string]int{"node_modules": 500}))
 
 	if err := a.buildTree(); err != nil {
-		t.Fatalf("--max-products=0 is the documented opt-out and must impose no limit, got: %v", err)
+		t.Fatalf("--attestor-product-max-products=0 is the documented opt-out and must impose no limit, got: %v", err)
 	}
 }
 
 // The cap is counted AFTER the include/exclude globs are applied, which is what
-// makes --exclude-glob the actual remedy the error recommends. Counting before
-// filtering would print an error whose own suggested fix could not clear it.
+// makes --attestor-product-exclude-glob the actual remedy the error recommends.
+// Counting before filtering would print an error whose own suggested fix could
+// not clear it.
 func TestMaxProducts_CountedAfterExclusion(t *testing.T) {
 	products := productSet(t, map[string]int{"node_modules": 400, "dist": 3})
 

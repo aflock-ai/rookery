@@ -17,6 +17,8 @@ package product
 import (
 	"strings"
 	"testing"
+
+	"github.com/aflock-ai/rookery/attestation/registry"
 )
 
 // THE ERROR MESSAGE IS A COMMAND THE OPERATOR IS INVITED TO PASTE INTO A SHELL,
@@ -57,11 +59,19 @@ var hostileDirNames = []string{
 // re-deriving it from the implementation.
 const shellMetacharacters = "'\"`$;&|<>(){}[]*?!\\\n\r\t\x00"
 
-// suggestionLine returns the `--exclude-glob '...'` line from an error message,
-// or "" when the message offers no command.
+// excludeGlobFlag is the flag the remediation actually prints, derived the same
+// way the message derives it so this harness cannot pin a stale spelling.
+//
+// That is not hypothetical: every caller below treats "no suggestion line" as an
+// ACCEPTABLE outcome, so a matcher that quietly stopped matching would leave the
+// adversarial sweep green while asserting nothing at all (#9230).
+var excludeGlobFlag = "--" + registry.AttestorFlagName(Name, optExcludeGlob)
+
+// suggestionLine returns the `--attestor-product-exclude-glob '...'` line from
+// an error message, or "" when the message offers no command.
 func suggestionLine(msg string) string {
 	for _, l := range strings.Split(msg, "\n") {
-		if strings.Contains(l, "--exclude-glob") {
+		if strings.Contains(l, excludeGlobFlag) {
 			return l
 		}
 	}
@@ -83,12 +93,18 @@ func TestErrorMessageNeverEmitsAnUnsafePathIntoACommand(t *testing.T) {
 		if line == "" {
 			// Refusing to offer a command for an unsafe path is a correct
 			// outcome — the operator still gets the directory in the report.
+			// Assert the message SAYS it withheld the command, so a matcher
+			// that silently stopped matching cannot pass this sweep vacuously.
+			if !strings.Contains(err.Error(), "no ready-made") {
+				t.Errorf("%q: no suggested command and no explanation of why — either the "+
+					"suggestion line moved or the message lost its fallback:\n%s", name, err.Error())
+			}
 			continue
 		}
 		// A command WAS offered, so it must contain nothing that a shell would
 		// act on beyond the glob we intend.
 		payload := line
-		payload = strings.TrimPrefix(strings.TrimSpace(payload), "--exclude-glob")
+		payload = strings.TrimPrefix(strings.TrimSpace(payload), excludeGlobFlag)
 		for _, r := range shellMetacharacters {
 			// The wrapping quotes and the glob's own {,} / ** are ours, so strip
 			// the parts we generate before checking what came from the path.

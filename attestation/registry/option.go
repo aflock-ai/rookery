@@ -25,6 +25,32 @@ type Configurer interface {
 	SetPrefix(string)
 }
 
+// AttestorFlagPrefix is the namespace a CLI gives an attestor's config options
+// when it turns them into command-line flags.
+const AttestorFlagPrefix = "attestor"
+
+// FlagName returns the command-line flag name a CLI registers for entity
+// entityName's option optionName under prefix — e.g.
+// ("attestor", "product", "exclude-glob") -> "attestor-product-exclude-glob".
+//
+// It exists so there is exactly ONE spelling of this rule. An option's
+// registered Name() is the INTERNAL name; the parser only ever sees the
+// namespaced one, and code that prints a flag name for the operator to paste
+// must print the namespaced one. #9230 is what happens otherwise: the product
+// attestor's overflow remediation offered `--exclude-glob`, the same run's
+// parser rejected it as an unknown flag, and the operator paid a full gate
+// cycle to find out.
+func FlagName(prefix, entityName, optionName string) string {
+	return fmt.Sprintf("%s-%s-%s", prefix, entityName, optionName)
+}
+
+// AttestorFlagName returns the command-line flag an attestor's config option is
+// registered under. Attestors building remediation text should call this rather
+// than typing the flag, so the text cannot drift from the parser.
+func AttestorFlagName(attestorName, optionName string) string {
+	return FlagName(AttestorFlagPrefix, attestorName, optionName)
+}
+
 type Option interface {
 	int | string | []string | bool | time.Duration
 }
