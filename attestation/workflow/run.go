@@ -287,6 +287,54 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 			wrappedErr := fmt.Errorf("attestor %s failed: %w", r.Attestor.Name(), r.Error)
 			legs = append(legs, AttestorErrorLeg{Attestor: r.Attestor.Name(), Err: wrappedErr})
 		} else {
+			// Companions (attestation.CompanionExporter) FIRST, and as its own
+			// statement rather than a branch of the export chain below.
+			//
+			// Two reasons for both choices. A companion exporter stays IN the
+			// collection, so it is not an alternative to Exporter/MultiExporter
+			// — an attestor can be a companion exporter and neither, or both.
+			// And the Exporter branch below can `continue` (when Export() is
+			// false), which would silently skip a companion if this sat after
+			// it. Running first makes the companion independent of whatever
+			// else the attestor happens to implement.
+			//
+			// Ordering: companions are appended here, ahead of the collection
+			// result appended after this loop, which is what makes a consumer
+			// storing results in order store the manifest BEFORE the envelope
+			// that references it — and abort on a failed manifest store before
+			// the collection is ever stored.
+			if companionExporter, ok := r.Attestor.(attestation.CompanionExporter); ok {
+				for _, companion := range companionExporter.Companions() {
+					// Same nil guard as the MultiExporter path: this code has no
+					// recover(), so a nil entry would crash the process.
+					if companion == nil {
+						log.Warnf("CompanionExporter %s returned a nil companion, skipping", r.Attestor.Name())
+						continue
+					}
+
+					var envelope dsse.Envelope
+					var ownSubjects map[string]cryptoutil.DigestSet
+					if subjecter, ok := companion.(attestation.Subjecter); ok {
+						ownSubjects = subjecter.Subjects()
+					}
+
+					if !ro.insecure {
+						// OWN SUBJECTS ONLY — parentSubjects is deliberately not
+						// merged in here. See the CompanionExporter doc comment:
+						// a companion must not be reachable from a commit-keyed
+						// lookup, only by one subject-graph hop from the tree
+						// root it carries.
+						envelope, err = createAndSignEnvelope(companion, companion.Type(), ownSubjects, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						if err != nil {
+							return result, fmt.Errorf("failed to sign companion envelope for %s/%s: %w", r.Attestor.Name(), companion.Name(), err)
+						}
+					}
+
+					attestorName := fmt.Sprintf("%s/%s", r.Attestor.Name(), companion.Name())
+					result = append(result, RunResult{SignedEnvelope: envelope, AttestorName: attestorName})
+				}
+			}
+
 			// Check if this is a MultiExporter first
 			if multiExporter, ok := r.Attestor.(attestation.MultiExporter); ok {
 				// Create individual attestations for each exported attestor

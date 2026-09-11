@@ -494,8 +494,16 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// expandSubjectsWithInclusionProofs for the CVE-2026-22703 / RFC 6962 notes.
 	subjects = expandSubjectsWithInclusionProofs(subjects, loadedEnvelopes, vo.ArtifactFilePath, artifactFileDigestHex)
 
+	// Detached material manifests carried by the envelopes we just loaded. The
+	// engine matches each to its collection by the digest that collection's
+	// SIGNED predicate names, so an unrelated manifest in the same bundle can
+	// never stand in for the right one. Empty for every inline collection,
+	// which is today's default.
+	materialManifests := indexMaterialManifests(loadedEnvelopes)
+
 	verifyOpts := []workflow.VerifyOption{
 		workflow.VerifyWithSubjectDigests(subjects),
+		workflow.VerifyWithMaterialManifests(materialManifests),
 		workflow.VerifyWithCollectionSource(collectionSource),
 		workflow.VerifyWithPolicyTimestampAuthorities(ptsVerifiers),
 		workflow.VerifyWithPolicyCARoots(policyRoots),
@@ -594,9 +602,13 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// Confirm WHICH supplied artifact bound, and to which step's subject — a
 	// green verify otherwise leaves the binding implicit. Written to stderr
 	// alongside the evidence log.
-	writeVerifyBindingLines(os.Stderr, suppliedDigests, verifiedEvidence.StepResults)
+	// Detached material manifests carried by the envelopes this verify already
+	// loaded. Used only to restore leaf-level binding DETAIL; the pass/fail
+	// decision was made above and does not depend on it.
+	verdictManifests := indexMaterialManifests(loadedEnvelopes)
+	writeVerifyBindingLines(os.Stderr, suppliedDigests, verifiedEvidence.StepResults, verdictManifests)
 	if vo.OutputJSON() {
-		if werr := writeVerifyVerdictJSON(os.Stdout, buildVerifyVerdict(suppliedDigests, verifiedEvidence.StepResults)); werr != nil {
+		if werr := writeVerifyVerdictJSON(os.Stdout, buildVerifyVerdict(suppliedDigests, verifiedEvidence.StepResults, verdictManifests)); werr != nil {
 			log.Errorf("failed to emit JSON verify verdict: %v", werr)
 		}
 	}

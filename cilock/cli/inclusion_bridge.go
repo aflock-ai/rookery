@@ -35,11 +35,17 @@ const (
 type treeCommitment struct {
 	rootHex  string
 	treeSize uint64
-	// leaves is the per-file (path → fileDigest) set carried inline in the
-	// product/material v0.3 predicate (always inlined in v0.3). The single-leaf
-	// reconstruct and inclusion-proof paths remain as fallbacks for a
-	// predicate that happens to carry no leaves. NEVER trusted without first
-	// reconstructing the tree and confirming it folds back to rootHex.
+	// leaves is the per-file (path → fileDigest) set for this tree. Product
+	// leaves are always inlined in the v0.3 predicate; material leaves are
+	// inlined by default but may be detached into a companion manifest, in
+	// which case they are resolved by the digest the signed predicate names —
+	// and only when that predicate also signed manifestUploaded:true
+	// (companionPublished). A predicate that signed false, or predates the
+	// field, is bridged as leaf-less even when a matching companion is loaded.
+	// The single-leaf reconstruct and inclusion-proof paths remain as
+	// fallbacks for a predicate that carries neither. NEVER trusted without
+	// first reconstructing the tree and confirming it folds back to rootHex —
+	// that check is identical whichever home the leaves came from.
 	leaves map[string]string
 }
 
@@ -90,6 +96,11 @@ func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelope
 		return subjects
 	}
 
+	// Index any detached material manifests carried alongside the collections.
+	// Built from the SAME envelope set the bridge already trusts as input; this
+	// adds no fetch path, only a second place the leaves may legitimately live.
+	manifests := indexMaterialManifests(envelopes)
+
 	var (
 		commitments []treeCommitment
 		proofs      []*inclusionproof.Attestor
@@ -120,17 +131,56 @@ func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelope
 				var tree struct {
 					MerkleRoot string `json:"merkleRoot"`
 					TreeSize   uint64 `json:"treeSize"`
-					Leaves     []struct {
+					// A POINTER so presence survives the decode (as in
+					// material.Attestor's predicate): "leaves": [] is a signed
+					// inline commitment to an EMPTY tree, not a missing set,
+					// and must never send the bridge to a companion.
+					Leaves *[]struct {
 						Path       string `json:"path"`
 						FileDigest string `json:"fileDigest"`
 					} `json:"leaves"`
+					// Detached-manifest reference. Read so a leaf-less material
+					// predicate can still be bridged when the manifest it names
+					// is among the envelopes we were handed.
+					Manifest *struct {
+						Digest map[string]string `json:"digest"`
+					} `json:"manifest"`
+					// The producer's SIGNED statement about the reference above.
+					// Three-state on purpose (see companionPublished): only an
+					// explicit true lets the reference be followed.
+					ManifestUploaded *bool `json:"manifestUploaded"`
 				}
 				if err := json.Unmarshal(a.Attestation, &tree); err == nil && tree.MerkleRoot != "" && tree.TreeSize > 0 {
 					tc := treeCommitment{rootHex: tree.MerkleRoot, treeSize: tree.TreeSize}
-					if len(tree.Leaves) > 0 {
-						tc.leaves = make(map[string]string, len(tree.Leaves))
-						for _, lf := range tree.Leaves {
+					switch {
+					case tree.Leaves != nil:
+						// Inline leaves are present — the authoritative home,
+						// even when the array is empty (nothing to bridge, and
+						// nothing to go looking for elsewhere).
+						tc.leaves = make(map[string]string, len(*tree.Leaves))
+						for _, lf := range *tree.Leaves {
 							tc.leaves[lf.Path] = lf.FileDigest
+						}
+					case companionPublished(tree.ManifestUploaded) && tree.Manifest != nil:
+						// Leaves are detached AND the producer signed that it
+						// published them. Resolve them by the digest THIS
+						// signed predicate names, and accept only a manifest
+						// that rebuilds to THIS commitment's root. The
+						// downstream inline-leaf check re-derives the root once
+						// more from the same data, so a manifest gets no more
+						// trust here than an inline leaf list would.
+						//
+						// A predicate that signed manifestUploaded:false (or
+						// carries no such key) falls through with no leaves:
+						// a companion that happens to match is not evidence
+						// against the producer's own statement, so it is never
+						// opened. The single-leaf and inclusion-proof paths
+						// below are all that remain for such a tree.
+						if side, ok := manifests.sidecarFor(tree.Manifest.Digest["sha256"], tree.MerkleRoot); ok {
+							tc.leaves = make(map[string]string, len(side.Leaves))
+							for _, lf := range side.Leaves {
+								tc.leaves[lf.Path] = lf.FileDigest
+							}
 						}
 					}
 					commitments = append(commitments, tc)

@@ -75,6 +75,49 @@ type MultiExporter interface {
 	ExportedAttestations() []Attestor
 }
 
+// CompanionExporter is implemented by attestors that stay IN the collection and
+// ALSO emit separate companion envelopes.
+//
+// This is the distinction from Exporter/MultiExporter, both of which mean "take
+// me out of the collection and sign me on my own". A companion is a second home
+// for bulky proof material whose parent's claim must remain in the collection —
+// the material attestor's detached leaf manifest is the motivating case: the
+// Merkle ROOT stays in the collection where every consumer expects it, while
+// the leaves move to an object that is fetched only when something actually
+// needs to walk them.
+//
+// Two rules the workflow enforces for companions, both deliberate:
+//
+//   - The parent is NOT excluded from the collection (see the collection filter
+//     in workflow.run, which skips only Exporter/MultiExporter).
+//   - A companion is signed with its OWN subjects only, never merged with the
+//     collection's parent subjects. Exported sidecars inherit parent subjects so
+//     that `cilock verify -s <commit>` can find them; a companion must NOT be
+//     findable that way. Inheriting the commit subject would make every
+//     companion a hit on a commit-keyed lookup and consume the small number of
+//     envelope-examination slots the push gate spends per sha — which is the
+//     opposite of the reason the companion exists.
+//
+// Companion results are appended before the collection result, so a consumer
+// storing results in order stores the companion first and a failed companion
+// store aborts before the envelope that references it is ever stored.
+type CompanionExporter interface {
+	Companions() []Attestor
+}
+
+// CompanionTyper is the STATIC half of CompanionExporter: the predicate types
+// Companions() may emit, answerable from a freshly constructed instance with
+// no run behind it. Companions() answers only after Attest and only when the
+// producer opted in, so it cannot feed a catalog; this can. The attestor
+// catalog (presets/all/internal/catalog) introspects it the same way it reads
+// Type(), and a detector.yaml contract's `companions` claim is cross-checked
+// against it. Every CompanionExporter must implement it — the catalog test
+// enforces that — so a companion envelope is never evidence the catalog
+// cannot describe.
+type CompanionTyper interface {
+	CompanionTypes() []string
+}
+
 // BackReffer allows attestors to indicate which of their subjects are good candidates
 // to find related attestations.  For example the git attestor's commit hash subject
 // is a good candidate to find all attestation collections that also refer to a specific

@@ -119,6 +119,21 @@ func TestContractMatchesLiveInterfaces(t *testing.T) {
 					t.Errorf("contract declares multi_exported but attestor does not implement MultiExporter")
 				}
 			}
+			// Companions cut both ways: a declared companion must be emitted,
+			// and an emitted companion must be declared — otherwise the
+			// catalog describes the collection envelope and omits a second
+			// signed envelope the run stores next to it.
+			_, exportsCompanions := a.(attestation.CompanionExporter)
+			if len(c.Companions) > 0 {
+				ct, ok := a.(attestation.CompanionTyper)
+				if !ok || !exportsCompanions {
+					t.Errorf("contract declares companions %v but attestor does not implement CompanionExporter+CompanionTyper", c.Companions)
+				} else if !sameSet(ct.CompanionTypes(), c.Companions) {
+					t.Errorf("contract companions %v != live CompanionTypes() %v", c.Companions, ct.CompanionTypes())
+				}
+			} else if exportsCompanions {
+				t.Errorf("attestor implements CompanionExporter but its contract declares no companions — the catalog would omit an envelope the run signs")
+			}
 			if c.SchemaRequired && a.Schema() == nil {
 				t.Errorf("contract says schema_required but Schema() returned nil")
 			}
@@ -130,6 +145,50 @@ func TestContractMatchesLiveInterfaces(t *testing.T) {
 	if declared == 0 {
 		t.Skip("no output contracts declared yet")
 	}
+}
+
+// TestCompanionExportersCarryAContract closes the hole the per-contract gate
+// above cannot see: TestContractMatchesLiveInterfaces iterates CONTRACTS, so
+// an attestor with no detector.yaml at all is never examined, and its
+// companion envelope — a second signed object the run stores next to the
+// collection — is described by nothing static. The catalog then reports
+// "has_contract": false for the one attestor whose output is the most
+// unusual. This test iterates the LIVE registry instead: every registered
+// attestor that implements CompanionExporter must carry a contract whose
+// companions equal its CompanionTypes(); the contract-side checks then apply.
+func TestCompanionExportersCarryAContract(t *testing.T) {
+	reg := detection.Default()
+	all, failures := reg.LookupAll()
+	for name, err := range failures {
+		t.Errorf("detector %q failed to parse: %v", name, err)
+	}
+
+	exporters := 0
+	for _, e := range attestation.RegistrationEntries() {
+		a := e.Factory()
+		if _, ok := a.(attestation.CompanionExporter); !ok {
+			continue
+		}
+		exporters++
+		name := a.Name()
+		t.Run(name, func(t *testing.T) {
+			d, ok := all[name]
+			if !ok || d == nil {
+				t.Fatalf("attestor %q implements CompanionExporter but registers no detector.yaml — the companion envelope it signs is outside the catalog's static contract", name)
+			}
+			if d.Contract == nil {
+				t.Fatalf("attestor %q implements CompanionExporter but its detector.yaml carries no contract — declare contract.companions", name)
+			}
+			ct, ok := a.(attestation.CompanionTyper)
+			if !ok {
+				t.Fatalf("attestor %q implements CompanionExporter but not CompanionTyper, so the catalog cannot describe its companions statically", name)
+			}
+			if !sameSet(ct.CompanionTypes(), d.Contract.Companions) {
+				t.Errorf("contract companions %v != live CompanionTypes() %v", d.Contract.Companions, ct.CompanionTypes())
+			}
+		})
+	}
+	t.Logf("companion exporters in the live registry: %d", exporters)
 }
 
 // TestCaptureGuidanceIsWorkflowNotFlags enforces cilock's core product
@@ -176,4 +235,21 @@ func TestCaptureGuidanceIsWorkflowNotFlags(t *testing.T) {
 		}
 	}
 	t.Logf("capture guidance: %d subject(s) across the catalog declare a capture expectation", withGuidance)
+}
+
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, s := range a {
+		seen[s]++
+	}
+	for _, s := range b {
+		if seen[s] == 0 {
+			return false
+		}
+		seen[s]--
+	}
+	return true
 }

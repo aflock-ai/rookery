@@ -257,6 +257,39 @@ type verifyOptions struct {
 	// streamed arm. Default false — see WithLazyStepSatisfaction (lazy.go) for
 	// the soundness argument and the three exclusions.
 	lazyStepSatisfaction bool
+
+	// materialManifests indexes detached material-manifest predicate bodies by
+	// their sha256, supplied by the caller from the envelopes it ALREADY holds
+	// (--attestations, --bundle, an Archivista subject walk). The engine never
+	// fetches: a manifest is matched to its collection by the digest the signed
+	// predicate names, not by filename or adjacency, so an unrelated manifest
+	// sitting in the same bundle can never be substituted for the right one.
+	materialManifests map[string][]byte
+}
+
+// WithMaterialManifests supplies detached material-manifest predicate bodies,
+// keyed by the sha256 of their compact JSON encoding.
+//
+// Callers build this from whatever envelopes they loaded. Supplying nothing is
+// valid and is the norm: a collection whose leaves are inline never consults it.
+func WithMaterialManifests(manifests map[string][]byte) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.materialManifests = manifests
+	}
+}
+
+// manifestLookup adapts the verify options into the lookup Collection.HydrateManifests
+// expects. A nil vo or an empty index yields a lookup that finds nothing, which
+// the hydrator reports as ErrManifestNotResolved — "the producer said it
+// published this and we do not have it" — rather than as a silent pass.
+func manifestLookup(vo *verifyOptions) func(string) ([]byte, bool) {
+	return func(digest string) ([]byte, bool) {
+		if vo == nil || len(vo.materialManifests) == 0 {
+			return nil, false
+		}
+		body, ok := vo.materialManifests[digest]
+		return body, ok
+	}
 }
 
 func WithVerifiedSource(verifiedSource source.VerifiedSourcer) VerifyOption {
@@ -2192,9 +2225,16 @@ func (p Policy) pruneInvalidArtifactCollections(ctx context.Context, vo *verifyO
 	return changed
 }
 
-func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, passedCollection PassedCollection, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo // inline-leaf chain compare shares a reason-tracking trail across the artifactsFrom loop; splitting obscures the failure-reason trail
-	reasons := []string{}
-	collection := passedCollection.Collection
+// hydrateDownstreamMaterials prepares the downstream collection for the
+// artifactsFrom chain compare: it rehydrates the typed attestors from the
+// retained signed payload, verifies the inline leaves against the signed root,
+// resolves any detached leaf manifest, and returns the collection alongside its
+// materials map.
+//
+// Every step fails CLOSED, and the returned error is already the
+// ErrVerifyArtifactsFailed the caller would have built, so the reason strings
+// reaching a verdict are unchanged.
+func hydrateDownstreamMaterials(vo *verifyOptions, step Step, passedCollection PassedCollection) (attestation.Collection, map[string]cryptoutil.DigestSet, error) {
 	// Rehydrate the downstream collection's typed attestors from the retained
 	// raw signed payload (gate-time compaction dropped the decoded bodies).
 	// Uncompacted collections come back as stored. Fail CLOSED on a
@@ -2202,7 +2242,7 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 	// materials must not pass.
 	downstream, err := passedCollection.hydratedCollection()
 	if err != nil {
-		return ErrVerifyArtifactsFailed{Reasons: []string{err.Error()}}
+		return downstream, nil, ErrVerifyArtifactsFailed{Reasons: []string{err.Error()}}
 	}
 	// Verify + cap the downstream collection's inline leaves BEFORE rehydrating
 	// its materials map. For v0.3 inline predicates the materials are
@@ -2211,10 +2251,39 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 	// allocation (Materials() builds an N-entry map). Doing it once up-front also
 	// guarantees compareArtifacts only ever runs on signed-root-consistent data.
 	if err := downstream.VerifyInlineLeaves(); err != nil {
-		reasons = append(reasons, fmt.Sprintf("step %s inline leaves: %v", step.Name, err))
-		return ErrVerifyArtifactsFailed{Reasons: reasons}
+		return downstream, nil, ErrVerifyArtifactsFailed{
+			Reasons: []string{fmt.Sprintf("step %s inline leaves: %v", step.Name, err)},
+		}
 	}
-	mats := downstream.Materials()
+	// Resolve any DETACHED leaf manifest before reading the materials map.
+	//
+	// This runs only when the downstream predicate actually says it published
+	// one (ManifestsPending is decided from the signed predicate alone, with no
+	// network access). An inline collection — today's default, and every v0.3
+	// envelope minted so far — never enters this branch at all.
+	//
+	// The three failure modes are kept apart deliberately, because collapsing
+	// them is how "the store was briefly unreachable" and "someone signed a
+	// root that does not match its leaves" end up looking the same in a
+	// verdict. `vo.materialManifests` supplies candidates from the envelopes the
+	// verifier ALREADY holds; there is no new fetch path.
+	if downstream.ManifestsPending() {
+		if err := downstream.HydrateManifests(manifestLookup(vo)); err != nil {
+			return downstream, nil, ErrVerifyArtifactsFailed{
+				Reasons: []string{fmt.Sprintf("step %s material manifest: %v", step.Name, err)},
+			}
+		}
+	}
+	return downstream, downstream.Materials(), nil
+}
+
+func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, passedCollection PassedCollection, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo // inline-leaf chain compare shares a reason-tracking trail across the artifactsFrom loop; splitting obscures the failure-reason trail
+	reasons := []string{}
+	collection := passedCollection.Collection
+	downstream, mats, err := hydrateDownstreamMaterials(vo, step, passedCollection)
+	if err != nil {
+		return err
+	}
 	for _, artifactsFrom := range step.ArtifactsFrom {
 		refResult, ok := collectionsByStep[artifactsFrom]
 		if !ok {
@@ -2263,7 +2332,16 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 			// build step (which records no materials) verify while a leaf-less
 			// attestation always fails closed.
 			if len(mats) == 0 && !downstream.HasInlineMaterials() {
-				reasons = append(reasons, fmt.Sprintf("step %s carries no verified chain: the collection is leaf-less (no inline material leaves), so its empty material set is unverified and cannot satisfy artifactsFrom %s", step.Name, artifactsFrom))
+				// Same fail-closed verdict either way; only the diagnosis
+				// differs. State (a) — the producer SIGNED that it withheld the
+				// leaves — is an expected, benign condition with a one-line
+				// remedy, and reporting it as generic "leaf-less" would send the
+				// reader hunting for corruption that is not there.
+				if downstream.MaterialManifestWithheld() {
+					reasons = append(reasons, fmt.Sprintf("step %s carries no verified chain: the producer signed manifestUploaded=false, so its material leaves were deliberately not published and cannot satisfy artifactsFrom %s. Re-run the producing step with `cilock run --material-manifest`.", step.Name, artifactsFrom))
+				} else {
+					reasons = append(reasons, fmt.Sprintf("step %s carries no verified chain: the collection is leaf-less (no inline material leaves), so its empty material set is unverified and cannot satisfy artifactsFrom %s", step.Name, artifactsFrom))
+				}
 				continue
 			}
 

@@ -1,15 +1,16 @@
 apiVersion: cilock.detection/v0.1
 name: material
-description: "Snapshots the working directory before the wrapped command runs and signs one RFC 6962 Merkle root over every input file's digest, with the per-file leaves inline."
+description: "Snapshots the working directory before the wrapped command runs and signs one RFC 6962 Merkle root over every input file's digest; the per-file leaves stay inline by default or move to a companion manifest with --material-manifest."
 
 # No category and no pre/post gate: material is a foundation attestor that
 # cilock attaches on EVERY run (`cilock run` builds it with the product
 # attestor before any detection happens). A detection gate would be worse than
 # none — a pre-gate match would re-add the attestor after the operator dropped
-# it with --no-default-attestor. always_on says so, and both planners skip this
-# file under the "always-on" cause. The file exists for the OUTPUT contract
-# below, which is what lets the catalog's static gate check what the attestor
-# signs against the live interfaces.
+# it with --no-default-attestor, and would construct it without the
+# --material-manifest option the default path applies. always_on says so, and
+# both planners skip this file under the "always-on" cause. The file exists
+# for the OUTPUT contract below, which is what lets the catalog's static gate
+# check the envelopes the attestor signs — including the companion manifest.
 always_on: true
 
 # No llm_hints: on_match would describe a match that cannot happen.
@@ -23,8 +24,11 @@ contract:
     notes: >-
       The root is a deterministic RFC 6962 sha256 tree over the deduplicated,
       digest-sorted set of input-file content digests, so the same tree yields
-      byte-identical merkleRoot, treeSize, hashAlgorithm, construction and
-      inline leaves; nothing clock- or host-derived is emitted.
+      byte-identical merkleRoot, treeSize, hashAlgorithm and construction. The
+      additive manifestUploaded / manifest fields are a function of the same
+      tree (the manifest digest is sha256 over the compact companion predicate)
+      plus the producer's --material-manifest choice; nothing clock- or
+      host-derived is emitted.
     volatile_fields: []
   subjects:
     - prefix: "tree:materials"
@@ -37,6 +41,16 @@ contract:
     - "tree:materials"
   emits_materials: true
   finalizes: true
+  # The detached leaf manifest: a second, separately signed DSSE envelope the
+  # run stores BEFORE the collection when the producer opts in with
+  # `cilock run --material-manifest`. Its predicate is the inclusion-proof
+  # sidecar shape verbatim, its only subject is tree:materials, and the
+  # material predicate binds it by content digest (manifest.digest.sha256).
+  # The attestor stays in the collection either way (this is a companion,
+  # not a multi-export); the static gate requires this list to equal the
+  # live CompanionTypes().
+  companions:
+    - https://aflock.ai/attestations/material-manifest/v0.1
   schema_required: true
   credentials: []
   fixtures:

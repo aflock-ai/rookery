@@ -1,0 +1,23 @@
+{
+  "merkleRoot": "c21e8d5883134b98699ff951d232bec2e992075a3ea572fd646e6c1cd2d33446",
+  "treeSize": 3,
+  "hashAlgorithm": "sha256",
+  "construction": "RFC6962",
+  "leaves": [
+    {
+      "path": "README.md",
+      "fileDigest": "1c8eb85217cc5b8ddd7e3c488a20efce3b958d59199f3b51b503c57c7b7c3828",
+      "leafHash": "fa0fd41e02af1862282f7aae0054db4958b284d59b9f11f0ae60ba5a6ef1d0b2"
+    },
+    {
+      "path": "main.go",
+      "fileDigest": "a774e3c1f96c0cb6e9acc84245f2cc3f7a03e298a4848f957bd0b4828d929631",
+      "leafHash": "2706acfb4730f5ae57fb129000dbdbc62b2b6ef1573a8bb4bbda34683dc6ca22"
+    },
+    {
+      "path": "go.mod",
+      "fileDigest": "dc24392ec197905bd009c38027f45c587acf612f7f692e27e06fddf672633b5d",
+      "leafHash": "9806d4944ce53cb327240d5506877475f12e94ae3ef861497b8b76095681f7b1"
+    }
+  ]
+}

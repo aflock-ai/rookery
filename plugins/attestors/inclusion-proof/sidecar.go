@@ -44,6 +44,23 @@ const SidecarSchemaVersion = "rookery.inclusion-proof.sidecar/v0.1"
 // it never causes a wrong PASS, only a clean rejection.
 const MaxLeaves = 1 << 20
 
+// MaxManifestBytes bounds the COMPACT JSON encoding of a sidecar that is
+// published as a detached leaf manifest (`cilock run --material-manifest`),
+// and it binds BOTH ends of the wire: the material attestor refuses to publish
+// a manifest that encodes above it, and a consumer refuses to read a body
+// above it before spending any work on it. One constant, so the two cannot
+// disagree — a consumer-only limit the producer does not honour would let a
+// perfectly valid manifest be minted that every verifier then rejects, and
+// the producer would never hear about it.
+//
+// MaxLeaves bounds the leaf COUNT; this bounds the BYTES, which the count
+// alone cannot (paths are unbounded), and bytes are what a verifier can check
+// before parsing. 512 MiB is MaxLeaves leaves at 512 encoded bytes each — far
+// above any real tree, and numerically the same ceiling the consumer enforced
+// alone before the limit was shared, so nothing previously valid became
+// invalid. Like MaxLeaves it is a resource guard, not a soundness control.
+const MaxManifestBytes = 512 << 20
+
 // SidecarLeaf is one entry in the sidecar's leaf list. Paths are stored
 // in their portable (forward-slash) form so the sidecar is OS-independent;
 // FileDigest is the lowercase hex SHA-256 of the file's content.

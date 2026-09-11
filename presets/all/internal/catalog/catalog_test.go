@@ -142,3 +142,75 @@ func TestCatalogParses(t *testing.T) {
 		}
 	}
 }
+
+// TestCompanionExportersAreDescribedByTheCatalog asserts (e): every attestor
+// that emits companion envelopes (attestation.CompanionExporter) declares
+// their predicate types statically (attestation.CompanionTyper), and the
+// catalog carries exactly that list under `companions`. Without this, an
+// attestor could sign an envelope type the catalog never mentions — which is
+// how the material manifest shipped before this test existed.
+func TestCompanionExportersAreDescribedByTheCatalog(t *testing.T) {
+	cat, err := Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	byName := make(map[string]Entry, len(cat.Attestors))
+	for _, e := range cat.Attestors {
+		byName[e.Name] = e
+	}
+
+	described := 0
+	for _, re := range attestation.RegistrationEntries() {
+		a := re.Factory()
+		name := a.Name()
+		_, exporter := a.(attestation.CompanionExporter)
+		typer, typed := a.(attestation.CompanionTyper)
+		switch {
+		case exporter && !typed:
+			t.Errorf("attestor %q implements CompanionExporter but not CompanionTyper — the catalog cannot describe the envelopes it signs", name)
+			continue
+		case typed && !exporter:
+			t.Errorf("attestor %q declares CompanionTypes but does not implement CompanionExporter — it declares envelopes it never emits", name)
+			continue
+		case !exporter:
+			if len(byName[name].Companions) != 0 {
+				t.Errorf("attestor %q is not a CompanionExporter but the catalog lists companions %v", name, byName[name].Companions)
+			}
+			continue
+		}
+		declared := typer.CompanionTypes()
+		if len(declared) == 0 {
+			t.Errorf("attestor %q implements CompanionExporter but CompanionTypes() is empty", name)
+			continue
+		}
+		for _, ct := range declared {
+			if ct == "" || ct == a.Type() {
+				t.Errorf("attestor %q: companion type %q is empty or the attestor's own type", name, ct)
+			}
+		}
+		if got := byName[name].Companions; !sameStringSet(got, declared) {
+			t.Errorf("attestor %q: catalog companions %v != live CompanionTypes() %v", name, got, declared)
+		}
+		described++
+	}
+	if described == 0 {
+		t.Fatal("no CompanionExporter in the registry — the material attestor should be one; a zero here lets the assertion pass vacuously")
+	}
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, s := range a {
+		seen[s]++
+	}
+	for _, s := range b {
+		if seen[s] == 0 {
+			return false
+		}
+		seen[s]--
+	}
+	return true
+}

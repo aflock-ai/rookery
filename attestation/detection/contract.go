@@ -104,6 +104,17 @@ type OutputContract struct {
 	// for the common case; present-and-non-empty marks a MultiExporter.
 	MultiExported []string `yaml:"multi_exported,omitempty" json:"multi_exported,omitempty"`
 
+	// Companions lists the predicate types the attestor emits as COMPANION
+	// envelopes via CompanionExporter.Companions(): separately signed and
+	// stored alongside the collection while the attestor itself STAYS in it
+	// (contrast MultiExported, which takes the attestor out). The material
+	// attestor's detached leaf manifest is the motivating case. Empty for the
+	// common case; present-and-non-empty marks a CompanionExporter, and the
+	// static gate requires it to equal the live attestor's CompanionTypes().
+	// Entries are distinct envelopes, so none may be the attestor's own
+	// predicate_type or appear in predicate_types.
+	Companions []string `yaml:"companions,omitempty" json:"companions,omitempty"`
+
 	// BackRefSubjects lists the subject-key prefixes the attestor exposes via
 	// BackReffer.BackRefs(). Must be a subset of Subjects prefixes; empty means
 	// the attestor is not a BackReffer.
@@ -501,6 +512,25 @@ func validateOutputContract(c *OutputContract, name string) error { //nolint:goc
 		if !found {
 			return fmt.Errorf("detector.yaml %q: contract.predicate_type %q must appear in contract.predicate_types", name, c.PredicateType)
 		}
+	}
+	// Companions are separate envelopes with their own predicate types: each
+	// must be non-empty, unique, and NOT one of this attestor's own types.
+	ownTypes := map[string]bool{c.PredicateType: true}
+	for _, pt := range c.PredicateTypes {
+		ownTypes[pt] = true
+	}
+	seenCompanions := make(map[string]bool, len(c.Companions))
+	for i, ct := range c.Companions {
+		if strings.TrimSpace(ct) == "" {
+			return fmt.Errorf("detector.yaml %q: contract.companions[%d] is empty", name, i)
+		}
+		if ownTypes[ct] {
+			return fmt.Errorf("detector.yaml %q: contract.companions[%d] %q is the attestor's own predicate type; a companion is a separate envelope, not an alternate type", name, i, ct)
+		}
+		if seenCompanions[ct] {
+			return fmt.Errorf("detector.yaml %q: contract.companions %q is duplicated", name, ct)
+		}
+		seenCompanions[ct] = true
 	}
 	prefixes := make(map[string]bool, len(c.Subjects))
 	for i, s := range c.Subjects {

@@ -62,6 +62,7 @@ type Attestor struct {
 	aiServerURL        string
 	maxSubjectFanout   int
 	lazyWitness        bool
+	materialManifests  map[string][]byte
 	kmsProviderOptions map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 }
 
@@ -149,6 +150,17 @@ func (a *Attestor) SetMaxSubjectFanout(n int) {
 // which is judge's production default.
 func (a *Attestor) SetLazyWitness(enabled bool) {
 	a.lazyWitness = enabled
+}
+
+// SetMaterialManifests supplies detached material-manifest predicate bodies,
+// keyed by the sha256 of their compact JSON encoding
+// (policy.WithMaterialManifests).
+//
+// The caller builds this from envelopes it ALREADY holds; the engine never
+// fetches. A collection whose material leaves are inline — today's default —
+// never consults it.
+func (a *Attestor) SetMaterialManifests(manifests map[string][]byte) {
+	a.materialManifests = manifests
 }
 
 // PolicyVerifyResult interface methods
@@ -243,6 +255,9 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 	}
 	if a.lazyWitness {
 		verifyOpts = append(verifyOpts, policy.WithLazyStepSatisfaction(true))
+	}
+	if len(a.materialManifests) > 0 {
+		verifyOpts = append(verifyOpts, policy.WithMaterialManifests(a.materialManifests))
 	}
 	verifyOpts = append(verifyOpts,
 		policy.WithVerifiedSource(verifiedSource),

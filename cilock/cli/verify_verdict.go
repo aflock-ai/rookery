@@ -87,7 +87,7 @@ func suppliedSet(supplied []string) map[string]struct{} {
 // matches neither a subject nor a verified leaf yields no binding (the previous
 // behaviour falsely reported any passing step as an inclusion-proof binding).
 // Bindings are sorted by step then digest for deterministic output.
-func matchedBindings(supplied []string, stepResults map[string]policy.StepResult) []subjectBinding {
+func matchedBindings(supplied []string, stepResults map[string]policy.StepResult, manifests manifestIndex) []subjectBinding {
 	want := suppliedSet(supplied)
 	if len(want) == 0 {
 		return nil
@@ -96,7 +96,7 @@ func matchedBindings(supplied []string, stepResults map[string]policy.StepResult
 	seen := make(map[string]struct{}, len(want))
 	for step, res := range stepResults {
 		for i := range res.Passed {
-			out = appendCollectionBindings(out, seen, want, step, res.Passed[i])
+			out = appendCollectionBindings(out, seen, want, step, res.Passed[i], manifests)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -114,7 +114,7 @@ func matchedBindings(supplied []string, stepResults map[string]policy.StepResult
 // (VerifyInlineLeaves) — its product/material leaf digests. The root check is
 // what makes a leaf binding a real inclusion proof rather than a guess: a leaf
 // set that does not fold to the signed root is ignored, never bound.
-func appendCollectionBindings(out []subjectBinding, seen, want map[string]struct{}, step string, pc policy.PassedCollection) []subjectBinding {
+func appendCollectionBindings(out []subjectBinding, seen, want map[string]struct{}, step string, pc policy.PassedCollection, manifests manifestIndex) []subjectBinding {
 	add := func(digestHex, name string, viaLeaf bool) {
 		if _, isWanted := want[digestHex]; !isWanted {
 			return
@@ -145,6 +145,21 @@ func appendCollectionBindings(out []subjectBinding, seen, want map[string]struct
 		log.Debugf("failed to hydrate collection %s for leaf bindings: %v", pc.Collection.Reference, err)
 		return out
 	}
+	// Bind material leaves ONLY from a tree we actually hold the leaves for.
+	//
+	// When the leaves are detached and the manifest is not among the loaded
+	// envelopes, Materials() is empty and nothing here binds — which is the
+	// correct outcome: the verdict must not report a leaf binding it cannot
+	// demonstrate. Hydration is attempted first so a manifest that IS present
+	// produces the same binding lines an inline attestation would.
+	if coll.ManifestsPending() {
+		if err := coll.HydrateManifests(manifests.lookup); err != nil {
+			// Not fatal to the verdict: verification itself already ran and
+			// reached its own conclusion about this collection. This only
+			// costs the binding DETAIL lines, so say so and bind what we can.
+			log.Debugf("collection %s: material manifest unresolved, leaf bindings omitted: %v", pc.Collection.Reference, err)
+		}
+	}
 	if coll.VerifyInlineLeaves() == nil {
 		for path, ds := range coll.Artifacts() {
 			if h := suppliedSHA256(ds); h != "" {
@@ -161,9 +176,9 @@ func appendCollectionBindings(out []subjectBinding, seen, want map[string]struct
 // the binding fields are left EMPTY — the policy still passed (Passed=true) on
 // its own subjects, but cilock does not claim the operator's artifact bound when
 // it did not.
-func buildVerifyVerdict(supplied []string, stepResults map[string]policy.StepResult) VerifyVerdict {
+func buildVerifyVerdict(supplied []string, stepResults map[string]policy.StepResult, manifests manifestIndex) VerifyVerdict {
 	v := VerifyVerdict{Passed: true}
-	if b := matchedBindings(supplied, stepResults); len(b) > 0 {
+	if b := matchedBindings(supplied, stepResults, manifests); len(b) > 0 {
 		v.Step = b[0].step
 		v.MatchedSubject = "sha256:" + b[0].digestHex
 		v.ObservedSubjectName = b[0].subjectName
@@ -178,12 +193,12 @@ func buildVerifyVerdict(supplied []string, stepResults map[string]policy.StepRes
 // neither gets an explicit "did NOT match" note instead of a fabricated binding
 // — falsely reporting an artifact binding in a supply-chain verifier is
 // evidence-integrity critical. Written to stderr alongside the evidence log.
-func writeVerifyBindingLines(w io.Writer, supplied []string, stepResults map[string]policy.StepResult) {
+func writeVerifyBindingLines(w io.Writer, supplied []string, stepResults map[string]policy.StepResult, manifests manifestIndex) {
 	if len(supplied) == 0 {
 		return
 	}
 	bound := make(map[string]struct{}, len(supplied))
-	for _, b := range matchedBindings(supplied, stepResults) {
+	for _, b := range matchedBindings(supplied, stepResults, manifests) {
 		bound[b.digestHex] = struct{}{}
 		if b.viaLeaf {
 			_, _ = fmt.Fprintf(w, "verified: sha256:%s bound to step %q as a product/material leaf %q (Merkle inclusion, root-verified)\n", b.digestHex, b.step, shortSubjectName(b.subjectName)) //nolint:gosec // CLI verdict to stderr, not an HTTP/HTML sink — G705 taint false positive.

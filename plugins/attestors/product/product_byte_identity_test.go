@@ -24,14 +24,18 @@ import (
 //
 // # WHY THIS TEST EXISTS
 //
-// The reuse guard in UnmarshalJSON clears derived in-memory state; it must not
-// move a single byte on the wire. The product predicate is the statement's
-// join key — the subjects downstream consumers reference a build by — so
-// "the wire shape is untouched" is a claim that deserves evidence rather than
-// assertion. A reviewer can read the diff and see only a decode-side reset;
-// what a diff CANNOT show is that a shared dependency (the inclusion-proof
-// leaf encoder, the merkle wrapper, a JSON helper) did not shift the bytes
-// underneath it.
+// Two independent changes converge on this package, and neither may move a
+// byte. The detached-manifest change reshapes where the MATERIAL attestor's
+// per-file leaves live: material is INPUT, products are OUTPUT and are the
+// statement's join key — the subjects downstream consumers reference a build
+// by — so products are deliberately untouched. The reuse guard in
+// UnmarshalJSON is the second: it clears derived in-memory state, and it too
+// must not move a single byte on the wire.
+//
+// Both are claims that deserve evidence rather than assertion. A reviewer can
+// diff the product package and see only a decode-side reset; what a diff
+// CANNOT show is that a shared dependency (the inclusion-proof leaf encoder,
+// the merkle wrapper, a JSON helper) did not shift the bytes underneath it.
 //
 // The literal below pins the shipped shape: field ORDER, the
 // "leaves,omitempty" behaviour, and every leaf field including the two
@@ -72,5 +76,32 @@ func TestProductPredicateBytesAreUnchanged(t *testing.T) {
 	}
 	if string(got) != want {
 		t.Fatalf("product predicate bytes CHANGED.\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// TestProductPredicateHasNoManifestFields is the narrower, semantic half of the
+// same claim: the detached-manifest fields must not have leaked onto the
+// product attestor. Products are small (a single leaf on a typical push) and
+// their leaves are the per-output identity; detaching them would buy nothing
+// and cost the join key.
+func TestProductPredicateHasNoManifestFields(t *testing.T) {
+	a := &Attestor{
+		MerkleRoot:         "aa",
+		TreeSize:           0,
+		HashAlgorithmField: HashAlgorithm,
+		ConstructionField:  Construction,
+	}
+	raw, err := json.Marshal(a)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, forbidden := range []string{"manifestUploaded", "manifest"} {
+		if _, present := got[forbidden]; present {
+			t.Errorf("product predicate grew a %q field; products are out of scope for the detached-manifest change", forbidden)
+		}
 	}
 }

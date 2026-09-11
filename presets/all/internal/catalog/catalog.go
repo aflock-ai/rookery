@@ -93,6 +93,13 @@ type Entry struct {
 	PredicateType  string   `json:"predicate_type,omitempty"`
 	PredicateTypes []string `json:"predicate_types,omitempty"`
 
+	// Companions lists the predicate types the attestor emits as separately
+	// signed COMPANION envelopes alongside the collection (the material
+	// attestor's detached leaf manifest). From the LIVE attestor
+	// (attestation.CompanionTyper) when one is registered, else from the
+	// detector contract. Absent for the common single-envelope attestor.
+	Companions []string `json:"companions,omitempty"`
+
 	// RunType is the live Attestor.RunType() when registered, else the
 	// contract's run_type (detection-only entries usually have neither).
 	RunType string `json:"run_type,omitempty"`
@@ -237,14 +244,22 @@ func Build() (*Catalog, error) {
 	type live struct {
 		predicateType string
 		runType       string
+		companions    []string
 	}
 	liveByName := map[string]live{}
 	for _, e := range attestation.RegistrationEntries() {
 		a := e.Factory()
-		liveByName[a.Name()] = live{
+		lv := live{
 			predicateType: a.Type(),
 			runType:       string(a.RunType()),
 		}
+		// Companion envelopes are declared statically (CompanionTyper) because
+		// Companions() only answers after a run; read them the same way Type()
+		// is read, so the catalog describes every envelope a run can sign.
+		if ct, ok := a.(attestation.CompanionTyper); ok {
+			lv.companions = sortedCopy(ct.CompanionTypes())
+		}
+		liveByName[a.Name()] = lv
 	}
 
 	// 2. Every detector.yaml (plugin + embedded catalog), already parsed by the
@@ -275,7 +290,7 @@ func Build() (*Catalog, error) {
 	entries := make([]Entry, 0, len(names))
 	for name := range names {
 		lv, registered := liveByName[name]
-		entries = append(entries, buildEntry(name, lv.predicateType, lv.runType, registered, detectors[name]))
+		entries = append(entries, buildEntry(name, lv.predicateType, lv.runType, lv.companions, registered, detectors[name]))
 	}
 
 	sortEntries(entries)
@@ -289,12 +304,14 @@ func Build() (*Catalog, error) {
 }
 
 // buildEntry assembles one catalog entry, joining the live attestor facts
-// (predicate type, run type) with the detector.yaml enrichment.
-func buildEntry(name, livePredicate, liveRunType string, registered bool, d *detection.DetectorYAML) Entry {
+// (predicate type, run type, companion types) with the detector.yaml
+// enrichment.
+func buildEntry(name, livePredicate, liveRunType string, liveCompanions []string, registered bool, d *detection.DetectorYAML) Entry {
 	e := Entry{
 		Name:          name,
 		PredicateType: livePredicate,
 		RunType:       liveRunType,
+		Companions:    liveCompanions,
 		Registered:    registered,
 	}
 
@@ -353,6 +370,9 @@ func applyContract(e *Entry, c *detection.OutputContract) {
 	}
 	if len(c.PredicateTypes) > 0 {
 		e.PredicateTypes = sortedCopy(c.PredicateTypes)
+	}
+	if len(e.Companions) == 0 && len(c.Companions) > 0 {
+		e.Companions = sortedCopy(c.Companions)
 	}
 	for _, s := range c.Subjects {
 		e.Subjects = append(e.Subjects, Subject{

@@ -432,6 +432,22 @@ type RunOptions struct {
 	// attestation collection would have no body to attest.
 	NoDefaultAttestors []string
 
+	// MaterialManifest opts in to publishing the material attestor's per-file
+	// leaves as a detached manifest: a companion DSSE envelope written next to
+	// --outfile and, when Archivista upload is on, stored BEFORE the collection
+	// that references it.
+	//
+	// Default off, per the ruling that uploading additional bulk must be an
+	// opt-in. It does not weaken the claim — the tree is always computed and
+	// the root always signed. It only decides where the proof material lives.
+	//
+	// Note this is about what the material attestor EMITS, not only about the
+	// upload: the companion file is useful with no platform at all, which is
+	// why the flag is not named --upload-material-manifest (that spelling would
+	// have to refuse when upload is off, stranding offline chain users).
+	// --no-default-attestor is unaffected and still drops the attestor outright.
+	MaterialManifest bool
+
 	// OutputFormat selects how the run result is reported. "text"
 	// (default) prints a human-readable self-explaining summary to
 	// stderr. "json" emits a single machine-readable RunSummary object
@@ -1244,6 +1260,14 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 		"Drop the named always-on attestor (product, material) from the run. Repeatable. "+
 			"Disabling BOTH product and material is a fatal error: the attestation collection "+
 			"would have no body to attest. Use sparingly — these defaults exist for a reason.")
+	cmd.Flags().BoolVar(&ro.MaterialManifest, "material-manifest", false,
+		"Publish the material attestor's per-file leaves as a detached manifest: a companion "+
+			"envelope written next to --outfile and, when Archivista upload is enabled, stored "+
+			"before the collection that references it. The signed predicate records "+
+			"manifestUploaded plus the manifest's content digest either way, so a manifest that "+
+			"arrives later can still be bound to the exact envelope that named it. Off by "+
+			"default; the Merkle root is signed regardless, so this changes only where the "+
+			"per-file proof material lives, never the claim.")
 	cmd.Flags().BoolVar(&ro.RequireProducts, "require-products", false,
 		"Refuse to write or upload the attestation when the product attestor recorded nothing. "+
 			"Use on steps that exist to prove which artifact they produced: without a product "+

@@ -792,7 +792,11 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 
 	// Create fresh attestor instances each time to avoid leaking state
 	// from prior invocations (alwaysRunAttestors holds shared singletons).
-	defaults := []attestation.Attestor{product.New(), material.New()}
+	// The product attestor is constructed with no manifest knob on purpose:
+	// products are OUTPUT and the statement's join key, and this change does
+	// not touch them. Only material — the INPUT side, and 99%+ of the payload
+	// on a large repository — gains the detached-manifest option.
+	defaults := []attestation.Attestor{product.New(), material.New(material.WithManifest(ro.MaterialManifest))}
 	attestors, err := applyNoDefaultAttestors(defaults, ro.NoDefaultAttestors)
 	if err != nil {
 		return err

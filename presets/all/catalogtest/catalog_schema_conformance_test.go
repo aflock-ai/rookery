@@ -139,10 +139,12 @@ func TestSecretscanPredicateWithConsumedReportsValidatesAgainstSchema(t *testing
 // for material. material/v0.3 has inlined `leaves` since the version cut while
 // Schema() reflected the Attestor struct, where `leaves` is `json:"-"` — so
 // every real material predicate failed validation against its own published
-// schema. Schema() now reflects the single predicate type MarshalJSON and
-// UnmarshalJSON share. Both shapes are checked: the populated inline predicate
-// a real run mints, and the authoritative-empty one ("leaves":[]) decoded and
-// re-encoded.
+// schema, and the manifest fields this change adds would have been the next
+// two. Schema() now reflects the single predicate type MarshalJSON and
+// UnmarshalJSON share. Every shape a producer can sign, and every decoded
+// shape that can be re-encoded, is checked: the populated inline predicate
+// (with and without a published manifest), the detached predicate (no leaves
+// key), and the authoritative-empty one ("leaves":[]).
 func TestMaterialPredicateShapesValidateAgainstSchema(t *testing.T) {
 	dir := t.TempDir()
 	for _, f := range []struct{ path, body string }{
@@ -157,35 +159,41 @@ func TestMaterialPredicateShapesValidateAgainstSchema(t *testing.T) {
 		}
 	}
 	t.Chdir(dir)
+	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
 
-	a := material.New()
-	ctx, err := attestation.NewContext("schema", []attestation.Attestor{a},
-		attestation.WithHashes([]cryptoutil.DigestValue{{Hash: crypto.SHA256}}),
-		attestation.WithWorkingDir(dir))
-	if err != nil {
-		t.Fatal(err)
+	for _, manifest := range []bool{false, true} {
+		a := material.New(material.WithManifest(manifest))
+		ctx, err := attestation.NewContext("schema", []attestation.Attestor{a},
+			attestation.WithHashes(hashes), attestation.WithWorkingDir(dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ctx.RunAttestors(); err != nil {
+			t.Fatalf("manifest=%v: %v", manifest, err)
+		}
+		raw, err := json.Marshal(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"leaves":[{`) {
+			t.Fatalf("manifest=%v: the populated predicate must inline leaves for this test to mean anything: %s", manifest, raw)
+		}
+		testkit.AssertPredicateMatchesSchema(t, "material", a.Schema(), raw)
 	}
-	if err := ctx.RunAttestors(); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := json.Marshal(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), `"leaves":[{`) {
-		t.Fatalf("the populated predicate must inline leaves for this test to mean anything: %s", raw)
-	}
-	testkit.AssertPredicateMatchesSchema(t, "material", a.Schema(), raw)
 
 	const emptyRoot = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	var empty material.Attestor
-	body := `{"merkleRoot":"` + emptyRoot + `","treeSize":0,"hashAlgorithm":"sha256","construction":"RFC6962","leaves":[]}`
-	if err := json.Unmarshal([]byte(body), &empty); err != nil {
-		t.Fatalf("decode: %v", err)
+	for name, body := range map[string]string{
+		"detached":            `{"merkleRoot":"` + emptyRoot + `","treeSize":0,"hashAlgorithm":"sha256","construction":"RFC6962","manifestUploaded":true,"manifest":{"digest":{"sha256":"00"},"bytes":2}}`,
+		"authoritative-empty": `{"merkleRoot":"` + emptyRoot + `","treeSize":0,"hashAlgorithm":"sha256","construction":"RFC6962","leaves":[]}`,
+	} {
+		var a material.Attestor
+		if err := json.Unmarshal([]byte(body), &a); err != nil {
+			t.Fatalf("%s: decode: %v", name, err)
+		}
+		raw, err := json.Marshal(&a)
+		if err != nil {
+			t.Fatalf("%s: encode: %v", name, err)
+		}
+		testkit.AssertPredicateMatchesSchema(t, "material", a.Schema(), raw)
 	}
-	raw, err = json.Marshal(&empty)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	testkit.AssertPredicateMatchesSchema(t, "material", empty.Schema(), raw)
 }

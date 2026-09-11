@@ -13,6 +13,13 @@
       "path": "src/main.go"
     }
   ],
+  "manifest": {
+    "bytes": 431,
+    "digest": {
+      "sha256": "3a1404798e77b5866e08e6a4918c0d6af9730546ce8d49dcc4b65b23365f36bd"
+    }
+  },
+  "manifestUploaded": false,
   "merkleRoot": "3e863efc5523861ce0dc735b505c2eac914ba439affd46eb08c72e270d4dc99f",
   "treeSize": 2
 }

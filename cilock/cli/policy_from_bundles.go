@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -350,6 +351,150 @@ func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummar
 // source it is the bundle path; for the Archivista source it is a synthetic
 // label (the gitoid) that effectively never overrides the recorded name.
 // sidecars are attached as-is (empty for the Archivista source).
+// bundleManifestRef is the detached leaf-manifest reference a v0.3 predicate
+// carries when its Merkle leaves are published outside the envelope.
+//
+// Without reading this, a leaf-less material predicate would leave
+// materialDigests EMPTY, digestSetsOverlap would find nothing, and every
+// inferred artifactsFrom edge would silently vanish while the edge tests stayed
+// green. That blind spot is the whole reason this field is parsed here.
+type bundleManifestRef struct {
+	Digest map[string]string `json:"digest"`
+}
+
+// bundleLeafRef is one inline Merkle leaf of a v0.3 predicate.
+type bundleLeafRef struct {
+	FileDigest string `json:"fileDigest"`
+}
+
+// bundleInnerPredicate is the decoded body of one inner attestation: its
+// committed root, its inline leaves (if any), and its detached-manifest
+// reference (if it published one instead).
+type bundleInnerPredicate struct {
+	MerkleRoot string `json:"merkleRoot"`
+	// Leaves is a POINTER so JSON presence survives the decode, exactly as
+	// material.Attestor's own predicate type does: a present "leaves" key —
+	// even "leaves": [] — is the producer's signed, authoritative inline set
+	// (an empty tree is a commitment that the step consumed nothing), and an
+	// absent key is a leaf-less predicate. Only the latter may ever consult a
+	// companion manifest. A plain slice would fold both into len()==0 and make
+	// a published empty tree demand a companion it never needed.
+	Leaves   *[]bundleLeafRef   `json:"leaves"`
+	Manifest *bundleManifestRef `json:"manifest"`
+	// ManifestUploaded is the producer's SIGNED statement about its leaves:
+	// true means "published, go and read it", false means "withheld", and an
+	// absent key is a legacy leaf-less predicate. Only the true case turns a
+	// manifest we cannot resolve into an error — see detachedLeafDigests.
+	ManifestUploaded *bool `json:"manifestUploaded"`
+}
+
+// leavesInline reports whether the predicate carries its leaves inline: the
+// "leaves" key is PRESENT, whatever its length. This is the same three-state
+// split the engine makes in material.Attestor.HasInlineLeaves, so the CLI and
+// the engine agree on which predicates are leaf-less.
+func (p bundleInnerPredicate) leavesInline() bool { return p.Leaves != nil }
+
+// inlineLeaves returns the inline leaves, or nil when the key is absent.
+func (p bundleInnerPredicate) inlineLeaves() []bundleLeafRef {
+	if p.Leaves == nil {
+		return nil
+	}
+	return *p.Leaves
+}
+
+// bundleInnerAttestation is one entry of a collection predicate's attestations[].
+type bundleInnerAttestation struct {
+	Type        string               `json:"type"`
+	Attestation bundleInnerPredicate `json:"attestation"`
+}
+
+// errManifestUnresolved is returned when a predicate signed
+// manifestUploaded:true and the manifest it names cannot be resolved from the
+// sidecars next to the bundle. Generating a policy anyway would silently drop
+// every artifactsFrom edge that manifest carries and emit an under-constrained
+// policy — the one outcome policy generation must never produce quietly.
+var errManifestUnresolved = errors.New("the material manifest this predicate says it published could not be resolved")
+
+// detachedLeafDigests resolves the manifest a predicate NAMES, from the
+// sidecars discovered next to the bundle, and returns its non-empty file
+// digests.
+//
+// It consults a sidecar ONLY when the predicate carries no "leaves" key at all
+// (leavesInline is false — a PRESENT key, even an empty array, is the
+// authoritative inline set, matching material.Attestor.HasInlineLeaves) AND it
+// signed manifestUploaded:true (companionPublished). An inline predicate —
+// today's default — never looks; neither does one that signed false, nor a
+// legacy one with no such key, EVEN WHEN a companion that hashes to the named
+// digest and rebuilds the committed root is sitting right there. The signed
+// value, not the presence of a matching file, is what says the leaves were
+// published; a companion is evidence about WHICH manifest, never WHETHER.
+// Matching is then by digest, never by filename, and sidecarFor additionally
+// requires the companion to rebuild this attestation's committed root.
+//
+// When the predicate signed manifestUploaded:true, a manifest that is missing,
+// unreadable or mismatched is an ERROR, not an empty set: the producer said the
+// leaves exist, and a policy generated without them is under-constrained. A
+// predicate that withheld its manifest (false) or predates the field (absent)
+// contributes nothing and no error, as before.
+func detachedLeafDigests(pred bundleInnerPredicate, sidecars []sidecarSummary) ([]string, error) {
+	if pred.leavesInline() {
+		// Present key, possibly empty: the signed inline set is the answer,
+		// and an empty one is a real answer (the step consumed nothing), not
+		// a gap a companion should fill.
+		return nil, nil
+	}
+	if !companionPublished(pred.ManifestUploaded) {
+		// false or absent: leaf-less by the producer's own account. Do not
+		// open a sidecar to find out whether one "would have" matched.
+		return nil, nil
+	}
+	if pred.Manifest == nil {
+		return nil, fmt.Errorf("%w: manifestUploaded is true but the predicate names no manifest digest", errManifestUnresolved)
+	}
+	digest := pred.Manifest.Digest["sha256"]
+	side, ok := sidecarManifests(sidecars).sidecarFor(digest, pred.MerkleRoot)
+	if !ok {
+		return nil, fmt.Errorf("%w: no sidecar next to the bundle hashes to %s and rebuilds root %s (missing, unreadable, or a manifest for a different tree)",
+			errManifestUnresolved, digest, pred.MerkleRoot)
+	}
+	out := make([]string, 0, len(side.Leaves))
+	for _, l := range side.Leaves {
+		if l.FileDigest != "" {
+			out = append(out, l.FileDigest)
+		}
+	}
+	return out, nil
+}
+
+// collectAttestationDigests adds one inner attestation's file digests to the
+// product or material sink, taking them from the inline leaves when present and
+// from the detached manifest when they were published separately. An
+// attestation that is neither a product nor a material contributes nothing.
+func collectAttestationDigests(a bundleInnerAttestation, sidecars []sidecarSummary, productDigests, materialDigests map[string]struct{}) error {
+	var sink map[string]struct{}
+	switch {
+	case strings.Contains(a.Type, "/product/"):
+		sink = productDigests
+	case strings.Contains(a.Type, "/material/"):
+		sink = materialDigests
+	default:
+		return nil
+	}
+	for _, l := range a.Attestation.inlineLeaves() {
+		if l.FileDigest != "" {
+			sink[l.FileDigest] = struct{}{}
+		}
+	}
+	detached, err := detachedLeafDigests(a.Attestation, sidecars)
+	if err != nil {
+		return fmt.Errorf("%s: %w", a.Type, err)
+	}
+	for _, d := range detached {
+		sink[d] = struct{}{}
+	}
+	return nil
+}
+
 func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix string, sidecars []sidecarSummary) (bundleSummary, error) {
 	var env struct {
 		Payload     string            `json:"payload"`
@@ -376,15 +521,8 @@ func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix s
 	var stmt struct {
 		PredicateType string `json:"predicateType"`
 		Predicate     struct {
-			Name         string `json:"name"`
-			Attestations []struct {
-				Type        string `json:"type"`
-				Attestation struct {
-					Leaves []struct {
-						FileDigest string `json:"fileDigest"`
-					} `json:"leaves"`
-				} `json:"attestation"`
-			} `json:"attestations"`
+			Name         string                   `json:"name"`
+			Attestations []bundleInnerAttestation `json:"attestations"`
 		} `json:"predicate"`
 	}
 	if err := json.Unmarshal(payloadBytes, &stmt); err != nil {
@@ -399,19 +537,8 @@ func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix s
 	materialDigests := make(map[string]struct{})
 	for _, a := range stmt.Predicate.Attestations {
 		innerTypes = append(innerTypes, a.Type)
-		var sink map[string]struct{}
-		switch {
-		case strings.Contains(a.Type, "/product/"):
-			sink = productDigests
-		case strings.Contains(a.Type, "/material/"):
-			sink = materialDigests
-		default:
-			continue
-		}
-		for _, l := range a.Attestation.Leaves {
-			if l.FileDigest != "" {
-				sink[l.FileDigest] = struct{}{}
-			}
+		if err := collectAttestationDigests(a, sidecars, productDigests, materialDigests); err != nil {
+			return bundleSummary{}, fmt.Errorf("%s: %w", nameHint, err)
 		}
 	}
 
@@ -621,7 +748,11 @@ func discoverSidecars(mainPath string) ([]sidecarSummary, error) {
 // doesn't fit (not JSON, not DSSE, missing fields) — the caller skips
 // it without error.
 func readSidecar(path, exportName string) (sidecarSummary, bool) {
-	raw, err := os.ReadFile(path) //nolint:gosec // adjacent-to-input by construction
+	// Companions are read through the size-bounded reader: a sidecar over
+	// inclusionproof.MaxManifestBytes is refused from its inode size before a
+	// byte of it is read, so an oversized file next to a bundle cannot exhaust
+	// memory during discovery.
+	raw, err := readCompanionFile(path)
 	if err != nil {
 		return sidecarSummary{}, false
 	}

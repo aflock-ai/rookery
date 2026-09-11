@@ -4,7 +4,14 @@ description: The cilock material attestor snapshots the working directory before
 sidebar_position: 2
 ---
 
-Snapshots the working directory **before** the step's command runs, computes a Merkle root over every input file's digest, and emits a single in-toto subject (`tree:materials`) whose digest is the root. The full per-file digest map is **not** carried in the predicate — it lives in a producer-side sidecar (`<outfile>.material.tree.json`) and is exposed to consumers via separate [inclusion-proof attestations](./inclusion-proof) on demand.
+Snapshots the working directory **before** the step's command runs, computes a Merkle root over every input file's digest, and emits a single in-toto subject (`tree:materials`) whose digest is the root.
+
+The root is the claim, and it is always computed and always signed. The per-file `leaves` array is the *proof material* one specific consumer needs (the `artifactsFrom` chain), and it has two possible homes:
+
+- **inline in the signed predicate** — the default, and the shape of every v0.3 attestation minted so far;
+- **detached into a companion manifest** — opt in with `cilock run --material-manifest`.
+
+Which home is in use is stated in the predicate itself, under signature, so a verifier never has to guess (see [Detached leaf manifest](#detached-leaf-manifest)).
 
 ## What it captures
 
@@ -108,17 +115,42 @@ The predicate is fixed-size regardless of how many files were in the working dir
 
 ## Inline leaves
 
-Since v0.3 is the sole producer, the signed envelope always carries the full `leaves` array — every `(path, fileDigest, leafHash)` triple — inline. The material attestation is self-contained: a verifier can confirm any specific input file's inclusion from the attestation alone.
+By default the signed envelope carries the full `leaves` array — every `(path, fileDigest, leafHash)` triple — inline, and the material attestation is self-contained: a verifier can confirm any specific input file's inclusion from the attestation alone.
+
+An empty-but-present `"leaves": []` is meaningful and is **not** the same as an absent key. It is a signed commitment that the step provably consumed nothing (for example a build in an isolated working directory), which the engine trusts rather than failing closed on. An absent key means the leaves are not in the predicate at all.
+
+## Detached leaf manifest
+
+Envelope size is a function of the repository's file count, not the diff, so on a large repository the inline leaves can be well over 99% of the payload — while the policies evaluated on a push typically never read them. `cilock run --material-manifest` publishes a **companion copy** of the leaves. In this rollout the signed predicate **keeps its inline `leaves` as well** (`material.go`, `MarshalJSON`): the manifest is additive, the envelope does not shrink yet, and making the manifest the *only* home for the leaves is a separate, sequenced change that lands after the chain-consuming producers have opted in. What the flag does today:
+
+- the leaves are published as a **companion DSSE envelope** with predicate type `https://aflock.ai/attestations/material-manifest/v0.1`, written next to `--outfile` as `<outfile>-material-manifest.json` and, when Archivista upload is on, stored *before* the collection that references it;
+- the manifest's predicate is the [inclusion-proof sidecar](./inclusion-proof) shape verbatim, so it needs no new schema and no server change;
+- its only subject is `tree:materials`, so it is reachable from the collection by one subject-graph hop but never appears in a commit-keyed lookup.
+
+Two fields in the material predicate describe the arrangement, and both are emitted by any producer new enough to have them:
+
+| Field | Meaning |
+|---|---|
+| `manifestUploaded: true` | The producer published the leaves. A verifier that cannot resolve the manifest has a **finding**, not a benign absence. |
+| `manifestUploaded: false` | A signed statement that the producer chose **not** to publish the leaves. Expected and benign; chain verification fails closed with an actionable message. |
+| key absent | The predicate predates the feature, or the field was stripped. Treated as "legacy shape — decide from `leaves`", **never** as `false`. |
+| `manifest.digest.sha256` | Content digest of the manifest predicate bytes. Emitted **unconditionally**, even when `manifestUploaded` is false, so a manifest arriving later by any route can still be bound to this exact envelope. |
+
+The reference is a digest, never a URL: Archivista may serve the object from any path, so the envelope names the content. A consumer binds a manifest by hashing its compact predicate bytes and comparing to `manifest.digest.sha256`, then **rebuilds the tree** from the manifest's leaves and compares the recomputed root to the signed `merkleRoot`. Comparing two stored root strings would prove nothing.
+
+**Size limit.** A manifest's compact JSON encoding is bounded by `inclusionproof.MaxManifestBytes` (512 MiB), and that one constant binds both ends: `cilock run --material-manifest` refuses to publish a manifest above it — the run fails with an error naming the limit and nothing is signed — and a verifier refuses to read a predicate above it before parsing a byte of it. The limit is stated in *compact predicate bytes*; a verifier's ceiling for the companion **file** is that same limit carried through the encoding a manifest passes on its way to disk (statement framing, base64, the DSSE envelope with its signatures), so every manifest a conforming producer emits is readable and nothing larger is. `MaxLeaves` bounds the leaf *count*; this bounds the *bytes*, which the count cannot (paths are unbounded). A producer that is not publishing (`manifestUploaded: false`) is not size-checked, since its digest reference is a binding, not a publication. The store's own upload cap applies separately, at upload time.
+
+Nothing about the flag changes the claim — only where the proof material lives.
 
 ## Per-file verification
 
-The material attestation's inline `leaves` array exposes every `(path, fileDigest, leafHash)` triple, so per-file input claims are verified directly from the attestation:
+When the `leaves` array is available (inline, or hydrated from a resolved manifest), per-file input claims are verified directly:
 
 1. Find the leaf whose `fileDigest` equals the file digest being verified.
-2. Confirm the leaf's `leafHash` equals `sha256(leafPath-bytes || 0x00 || fileDigest-bytes-raw32)` (the canonical `inclusionproof.LeafHash` encoder).
+2. Confirm the leaf's `leafHash` equals `sha256(fileDigest-bytes-raw32)`. **v0.3 binds file CONTENT only — the path is not part of the leaf hash.** Path authentication comes from the signature over the leaf list, not from the Merkle commitment. (Because the leaf binds content alone, two paths sharing a digest are deduplicated to a single leaf, so `treeSize` can be smaller than the file count.)
 3. Fold the leaf hash through the tree's RFC 6962 structure and confirm the result equals the `tree:materials` subject digest.
 
-Inline leaves are always present in v0.3 attestations. See [verify a specific file](../guides/verify-a-specific-file) for the full check sequence.
+See [verify a specific file](../guides/verify-a-specific-file) for the full check sequence.
 
 ## Gotchas
 

@@ -72,6 +72,7 @@ type verifyOptions struct {
 	aiServerURL                  string
 	maxSubjectFanout             int
 	lazyWitness                  bool
+	materialManifests            map[string][]byte
 	kmsProviderOptions           map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 }
 
@@ -175,6 +176,19 @@ func VerifyWithLazyWitness(enabled bool) VerifyOption {
 	}
 }
 
+// VerifyWithMaterialManifests supplies detached material-manifest predicate
+// bodies to the policy engine (policy.WithMaterialManifests), keyed by the
+// sha256 of their compact JSON encoding.
+//
+// Callers build the map from envelopes they already loaded — there is no fetch
+// path. A collection whose material leaves are inline (the default) never
+// consults it, so passing nothing is both valid and the norm.
+func VerifyWithMaterialManifests(manifests map[string][]byte) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.materialManifests = manifests
+	}
+}
+
 type VerifyResult struct {
 	RunResult
 	VerificationSummary slsa.VerificationSummary
@@ -189,16 +203,26 @@ type VerifyResult struct {
 // assertion stops matching, the option reads as "on" in config, and the engine
 // never sees it. Each knob below is pinned by a test in the policyverify plugin
 // that asserts the attestor satisfies the EXACT anonymous interface used here.
+//
+// Every knob is written on every call, INCLUDING its zero value. A setter that
+// runs only when the option is set leaves the previous call's value on a
+// reused attestor: one configured with detached material manifests and then
+// without would keep the first call's manifests and hydrate a verification
+// from evidence that verification never loaded. The workflow owns the
+// attestor's option state, so an unsupplied option means "none", not "as
+// before"; the zero values are the engine's defaults (no fan-out cap, lazy
+// witness off, no manifests).
 func applyOptionalVerifyCapabilities(att attestation.Attestor, vo *verifyOptions) {
-	if vo.maxSubjectFanout > 0 {
-		if mf, ok := att.(interface{ SetMaxSubjectFanout(int) }); ok {
-			mf.SetMaxSubjectFanout(vo.maxSubjectFanout)
-		}
+	if mf, ok := att.(interface{ SetMaxSubjectFanout(int) }); ok {
+		mf.SetMaxSubjectFanout(vo.maxSubjectFanout)
 	}
-	if vo.lazyWitness {
-		if lw, ok := att.(interface{ SetLazyWitness(bool) }); ok {
-			lw.SetLazyWitness(true)
-		}
+	if lw, ok := att.(interface{ SetLazyWitness(bool) }); ok {
+		lw.SetLazyWitness(vo.lazyWitness)
+	}
+	if mm, ok := att.(interface {
+		SetMaterialManifests(map[string][]byte)
+	}); ok {
+		mm.SetMaterialManifests(vo.materialManifests)
 	}
 }
 

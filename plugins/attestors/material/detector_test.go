@@ -26,9 +26,9 @@ func TestDetectorYAMLParses(t *testing.T) {
 }
 
 // The contract is the reason the file exists: it must describe THIS attestor —
-// the predicate type it signs and the phase it runs in — and it must never
-// grow a detection gate, because a gate would re-add an always-on attestor the
-// operator disabled with --no-default-attestor.
+// the predicate type it signs, the phase it runs in, the companion envelope it
+// emits — and it must never grow a detection gate, because a gate would re-add
+// an always-on attestor the operator disabled with --no-default-attestor.
 func TestDetectorContractDescribesTheLiveAttestor(t *testing.T) {
 	d, err := detection.ParseDetectorYAML(detectorYAML)
 	if err != nil {
@@ -47,6 +47,9 @@ func TestDetectorContractDescribesTheLiveAttestor(t *testing.T) {
 	}
 	if c.RunType != string(a.RunType()) {
 		t.Errorf("contract run_type %q != live RunType() %q", c.RunType, a.RunType())
+	}
+	if len(c.Companions) != 1 || c.Companions[0] != ManifestType {
+		t.Errorf("contract companions %v != live CompanionTypes() %v", c.Companions, a.CompanionTypes())
 	}
 	if len(c.Subjects) != 1 || c.Subjects[0].Prefix != TreeSubjectName {
 		t.Errorf("contract subjects %+v, want exactly %q", c.Subjects, TreeSubjectName)

@@ -16,6 +16,7 @@ package attestation
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -227,6 +228,104 @@ func (c *Collection) VerifyInlineLeaves() error {
 // Collection.HasInlineMaterials.
 type InlineLeafReporter interface {
 	HasInlineLeaves() bool
+}
+
+// ManifestHydrator is implemented by attestors whose per-file leaves may live
+// in a DETACHED manifest object rather than inline in the signed predicate.
+//
+// The contract has three parts and the separation between them is the point:
+//
+//   - ManifestPending reports, FROM THE SIGNED PREDICATE ALONE, whether a
+//     resolution should even be attempted. No network access. This is what
+//     keeps "the producer chose not to publish" from ever being confused with
+//     "the producer published and we could not read it" — a store outage
+//     cannot move an attestation between those two states.
+//   - ManifestDigest names the content to look for. A digest, not a URL.
+//   - HydrateFromManifest binds candidate bytes and populates the leaves only
+//     after the digest matches AND the tree rebuilds to the signed root. It
+//     returns distinct errors for "unreadable" and "mismatch" so a re-signed
+//     root is never filed as a missing object.
+type ManifestHydrator interface {
+	ManifestPending() bool
+	ManifestDigest() string
+	HydrateFromManifest(predicate []byte) error
+}
+
+// HydrateManifests resolves any detached leaf manifests this collection's
+// attestors reference, using lookup to supply candidate predicate bytes by
+// sha256.
+//
+// lookup returns (bytes, true) when it holds a candidate. Returning false is
+// "not found", which the hydrator turns into a distinct unreadable error — it
+// is NOT silently treated as "there was nothing to fetch".
+//
+// Attestors with nothing pending are left completely untouched, so this is a
+// no-op for every inline (today's default) and legacy attestation.
+func (c *Collection) HydrateManifests(lookup func(sha256 string) ([]byte, bool)) error {
+	for _, attestation := range c.Attestations {
+		hydrator, ok := attestation.Attestation.(ManifestHydrator)
+		if !ok || !hydrator.ManifestPending() {
+			continue
+		}
+		digest := hydrator.ManifestDigest()
+		body, found := lookup(digest)
+		if !found {
+			return fmt.Errorf("%s: %w: no manifest with digest %s among the loaded envelopes", attestation.Type, ErrManifestNotResolved, digest)
+		}
+		if err := hydrator.HydrateFromManifest(body); err != nil {
+			return fmt.Errorf("%s: %w", attestation.Type, err)
+		}
+	}
+	return nil
+}
+
+// ErrManifestNotResolved is returned by HydrateManifests when a predicate
+// states its manifest was published but no candidate with that digest is among
+// the envelopes the verifier holds.
+//
+// Deliberately NOT the same as "the producer did not publish": that is a
+// benign, signed statement, whereas this is a claim the verifier could not
+// stand up, and the two must remain distinguishable in a verdict.
+var ErrManifestNotResolved = errors.New("referenced material manifest was not found")
+
+// ManifestWithholder is implemented by attestors that can state, under
+// signature, that they deliberately did not publish their leaves.
+type ManifestWithholder interface {
+	ManifestWithheld() bool
+}
+
+// MaterialManifestWithheld reports whether the collection's material attestor
+// signed a statement that it did not publish its leaves.
+//
+// This exists purely so a leaf-less chain failure can say WHICH kind of
+// leaf-less it is. "The producer opted out, re-run it with --material-manifest"
+// is an actionable, expected condition; "this attestation predates the feature
+// or had its leaves stripped" is not the same thing and gets its own message.
+// Both still fail closed — the distinction is in the diagnosis, never in the
+// verdict.
+func (c *Collection) MaterialManifestWithheld() bool {
+	for _, attestation := range c.Attestations {
+		if _, isMaterialer := attestation.Attestation.(Materialer); !isMaterialer {
+			continue
+		}
+		if w, ok := attestation.Attestation.(ManifestWithholder); ok && w.ManifestWithheld() {
+			return true
+		}
+	}
+	return false
+}
+
+// ManifestsPending reports whether any attestor in the collection is waiting on
+// a detached manifest. Callers use it to decide whether to spend a lookup at
+// all — an entirely inline collection (today's default) answers false and skips
+// the resolution path completely.
+func (c *Collection) ManifestsPending() bool {
+	for _, attestation := range c.Attestations {
+		if hydrator, ok := attestation.Attestation.(ManifestHydrator); ok && hydrator.ManifestPending() {
+			return true
+		}
+	}
+	return false
 }
 
 // HasInlineMaterials reports whether the collection's MATERIAL set is committed

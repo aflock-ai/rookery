@@ -50,6 +50,51 @@ func TestValidateOutputContract(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "companions: a separate envelope type is accepted",
+			c: &OutputContract{
+				PredicateType: "https://aflock.ai/attestations/material/v0.3",
+				RunType:       ContractRunMaterial,
+				Companions:    []string{"https://aflock.ai/attestations/material-manifest/v0.1"},
+			},
+		},
+		{
+			name: "companions: the attestor's own predicate type rejected",
+			c: &OutputContract{
+				PredicateType: "https://aflock.ai/attestations/material/v0.3",
+				RunType:       ContractRunMaterial,
+				Companions:    []string{"https://aflock.ai/attestations/material/v0.3"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "companions: a predicate_types member rejected",
+			c: &OutputContract{
+				PredicateType:  "https://cyclonedx.org/bom",
+				PredicateTypes: []string{"https://cyclonedx.org/bom", "https://spdx.dev/Document"},
+				RunType:        ContractRunProduct,
+				Companions:     []string{"https://spdx.dev/Document"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "companions: empty entry rejected",
+			c: &OutputContract{
+				PredicateType: "x",
+				RunType:       ContractRunProduct,
+				Companions:    []string{" "},
+			},
+			wantErr: true,
+		},
+		{
+			name: "companions: duplicate rejected",
+			c: &OutputContract{
+				PredicateType: "x",
+				RunType:       ContractRunProduct,
+				Companions:    []string{"y", "y"},
+			},
+			wantErr: true,
+		},
+		{
 			name: "valid tier + stability",
 			c:    &OutputContract{PredicateType: "x", RunType: ContractRunProduct, Tier: TierRecommended, Stability: &OutputStability{Level: StabilityBestEffort}},
 		},
@@ -257,6 +302,8 @@ contract:
   backref_subjects:
     - "demo:thing:"
   emits_materials: true
+  companions:
+    - https://aflock.ai/attestations/demo-manifest/v0.1
   schema_required: true
   fixtures:
     - name: canonical
@@ -280,6 +327,9 @@ contract:
 	}
 	if len(d.Contract.BackRefSubjects) != 1 || d.Contract.BackRefSubjects[0] != "demo:thing:" {
 		t.Errorf("backref_subjects = %+v", d.Contract.BackRefSubjects)
+	}
+	if len(d.Contract.Companions) != 1 || d.Contract.Companions[0] != "https://aflock.ai/attestations/demo-manifest/v0.1" {
+		t.Errorf("companions = %+v", d.Contract.Companions)
 	}
 	if len(d.Contract.Fixtures) != 1 || d.Contract.Fixtures[0].Name != "canonical" || d.Contract.Fixtures[0].Role != FixtureCanonical {
 		t.Errorf("fixtures = %+v", d.Contract.Fixtures)

@@ -82,9 +82,9 @@ import (
 )
 
 // detectorYAML is the attestor's OUTPUT contract (predicate type, run type,
-// subjects, back-refs), registered so the catalog's static gate can check it
-// against the live interfaces. It carries no detection gate: material is
-// always on (see always_on in the file).
+// subjects, back-refs, the companion manifest envelope), registered so the
+// catalog's static gate can check it against the live interfaces. It carries
+// no detection gate: material is always on (see always_on in the file).
 //
 //go:embed detector.yaml
 var detectorYAML []byte
@@ -138,6 +138,15 @@ var (
 	_ attestation.Materialer = &Attestor{}
 	_ attestation.BackReffer = &Attestor{}
 	_ MaterialAttestor       = &Attestor{}
+
+	// The detached-manifest contract. Both are checked here so that a
+	// signature change in attestation/ breaks the build rather than silently
+	// turning the type assertions in workflow.run and Collection.HydrateManifests
+	// into no-ops — a companion that stops being emitted, or a manifest that
+	// stops being resolved, would otherwise look exactly like "nothing to do".
+	_ attestation.CompanionExporter = &Attestor{}
+	_ attestation.CompanionTyper    = &Attestor{}
+	_ attestation.ManifestHydrator  = &Attestor{}
 )
 
 // MaterialAttestor is the consumer-facing interface preserved across the
@@ -200,6 +209,38 @@ type Attestor struct {
 	// ConstructionField pins the tree construction. v0.3 only ever
 	// emits "RFC6962". Same hardening rationale as HashAlgorithmField.
 	ConstructionField string `json:"construction"`
+
+	// ManifestUploaded records whether the producer published this tree's
+	// leaves as a detached manifest object (see manifest.go). A POINTER, and
+	// the three-way distinction is the whole point:
+	//
+	//   true  — published; a consumer that cannot resolve it has a finding.
+	//   false — a SIGNED statement that the producer chose not to publish.
+	//   nil   — no such key in the predicate. This is how a pre-change
+	//           producer looks, and it is also how a stripped field looks.
+	//           Readers MUST NOT collapse nil into false: absence means
+	//           "legacy shape, decide from leaves", never "not uploaded".
+	//
+	// A new-shape producer always sets this (see finishManifestRef), so the
+	// key is always present on anything minted after this change. It is left
+	// nil when decoding an older predicate so a round-trip cannot fabricate a
+	// claim the signer never made.
+	ManifestUploaded *bool `json:"manifestUploaded,omitempty"`
+
+	// Manifest references the detached leaf manifest BY CONTENT DIGEST.
+	//
+	// Emitted unconditionally by a new-shape producer — including when
+	// ManifestUploaded is false. It costs ~120 bytes and is what lets a
+	// manifest arriving by any later route (a companion file, a bundle, an
+	// Archivista subject walk) be bound to this exact envelope. A URL would
+	// not do: Archivista may serve the object from any path, so the envelope
+	// names the content, not a location.
+	Manifest *ManifestRef `json:"manifest,omitempty"`
+
+	// emitManifest is the producer-side opt-in set by WithManifest. It
+	// governs only what a RUNNING attestor emits; it is never decoded from a
+	// predicate. Not marshaled.
+	emitManifest bool
 
 	// leaves carries the per-file (path, fileDigest, leafHash) triples
 	// that built the tree. JSON-elided with "-" so the signed
@@ -266,16 +307,6 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 	return jsonschema.Reflect(&predicate{})
 }
 
-// predicate is the single definition of the signed v0.3 body, shared by
-// MarshalJSON, UnmarshalJSON and Schema so the three cannot drift.
-type predicate struct {
-	MerkleRoot         string          `json:"merkleRoot"`
-	TreeSize           uint64          `json:"treeSize"`
-	HashAlgorithmField string          `json:"hashAlgorithm"`
-	ConstructionField  string          `json:"construction"`
-	Leaves             *[]MaterialLeaf `json:"leaves,omitempty"`
-}
-
 // Attest walks the working directory, builds a Merkle tree over the
 // recorded materials, and stores the root + size on the attestor. The
 // walk uses the same RecordArtifacts call the v0.1 attestor used — only
@@ -308,7 +339,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		// of empty string) so verifiers expecting the attestation type
 		// still find a well-formed structure.
 		a.materials = map[string]cryptoutil.DigestSet{}
-		a.leaves = nil
+		// A non-nil EMPTY slice, not nil: this placeholder is a produced
+		// (authoritative-empty) commitment and must marshal as "leaves":[],
+		// exactly as before. nil is reserved for a predicate decoded without
+		// the key — see MarshalJSON.
+		a.leaves = []MaterialLeaf{}
 		emptyTree, treeErr := merkle.NewTree(nil)
 		if treeErr != nil {
 			return fmt.Errorf("material attestor: empty tree: %w", treeErr)
@@ -317,7 +352,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		a.TreeSize = emptyTree.Size()
 		a.HashAlgorithmField = HashAlgorithm
 		a.ConstructionField = Construction
-		return nil
+		return a.finishManifestRef()
 	}
 
 	// Walk mode (default + auto-when-trace-unavailable). Same walk
@@ -364,7 +399,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	a.HashAlgorithmField = HashAlgorithm
 	a.ConstructionField = Construction
 
-	return nil
+	return a.finishManifestRef()
 }
 
 // Finalize implements attestation.Finalizer. In trace mode the
@@ -421,7 +456,7 @@ func (a *Attestor) Finalize(ctx *attestation.AttestationContext) error {
 	}
 	a.MerkleRoot = hex.EncodeToString(tree.Root())
 	a.TreeSize = tree.Size()
-	return nil
+	return a.finishManifestRef()
 }
 
 // buildLeaves turns the walker output into the canonical deduped leaf
@@ -518,40 +553,73 @@ func decodeLeafHashes(leaves []MaterialLeaf) ([][]byte, error) {
 	return out, nil
 }
 
-// MarshalJSON serializes ONLY the four exported scalar fields. The
-// leaves slice and materials map have json:"-" tags so they are
-// excluded automatically; we still implement MarshalJSON explicitly so
-// the schema remains a stable, documented contract independent of
-// struct-field reordering.
+// MarshalJSON serializes the four commitment scalars plus the two additive
+// detached-manifest fields. The materials map has a json:"-" tag and is never
+// emitted; the leaves are emitted through the shared `predicate` type below, so
+// MarshalJSON and UnmarshalJSON cannot drift and the wire shape stays a stable,
+// documented contract independent of struct-field reordering.
 func (a *Attestor) MarshalJSON() ([]byte, error) {
-	// Inline the per-file leaves into the signed predicate ALWAYS (v0.3 forces
-	// inline leaves — there is no opt-out). This makes the attestation
-	// self-sufficient for inclusion + artifactsFrom chain verification without a
-	// separate sidecar. Only the Merkle root is a subject, so the leaves add no
-	// subject re-indexing cost.
+	// Inline the per-file leaves into the signed predicate. This is still the
+	// DEFAULT and, in this change, the only shape a producer emits: the
+	// detached manifest is additive and does not yet suppress the inline
+	// leaves. Detaching them by default is a separate, sequenced change, after
+	// the chain-consuming producers have opted in — three shipped
+	// artifactsFrom policies read these leaves.
 	//
-	// The leaves pointer is ALWAYS non-nil here, but the nil->empty-slice
-	// collapse below is load-bearing and MUST stay: it distinguishes
-	//   - has materials  -> "leaves":[...]
-	//   - zero materials  -> "leaves":[]  (authoritative empty)
-	// The empty-but-present case is the key one: it is a SIGNED commitment that
-	// the step consumed nothing (e.g. a build in an isolated workingdir), which
-	// the engine must trust rather than fail closed on. With omitempty, an empty
-	// set would serialize identically to a leaf-less v0.3 attestation, and the
-	// verifier could not tell "provably empty" from "materials hidden" (vacuous-
-	// pass defense, #189).
-	ls := a.leaves
-	if ls == nil {
-		ls = []MaterialLeaf{}
+	// Inline leaves make the attestation self-sufficient for inclusion +
+	// artifactsFrom chain verification. Only the Merkle root is a subject, so
+	// the leaves add no subject re-indexing cost.
+	//
+	// Three states, and the encoding must keep all three apart:
+	//   - has materials   -> "leaves":[...]
+	//   - zero materials  -> "leaves":[]   (authoritative empty)
+	//   - no leaves field -> key ABSENT    (leaf-less: detached or legacy)
+	// a.leaves is nil ONLY for the third: every producing path installs a
+	// non-nil slice (buildLeaves, setLeaves, and the trace-mode placeholder in
+	// Attest), so a nil here means the predicate was DECODED without the key.
+	// Re-emitting it as "leaves":[] would turn a detached predicate into an
+	// authoritative-empty one on the way back out — a re-signed copy would
+	// then skip manifest resolution and hide every artifactsFrom edge the
+	// manifest carries. The empty-but-present case is equally load-bearing in
+	// the other direction: it is a SIGNED commitment that the step consumed
+	// nothing (e.g. a build in an isolated workingdir), which the engine must
+	// trust rather than fail closed on; with omitempty it would serialize
+	// identically to a leaf-less attestation (vacuous-pass defense, #189).
+	var leaves *[]MaterialLeaf
+	if a.leaves != nil {
+		ls := a.leaves
+		leaves = &ls
 	}
-	leaves := &ls
 	return json.Marshal(predicate{
 		MerkleRoot:         a.MerkleRoot,
 		TreeSize:           a.TreeSize,
 		HashAlgorithmField: a.HashAlgorithmField,
 		ConstructionField:  a.ConstructionField,
+		ManifestUploaded:   a.ManifestUploaded,
+		Manifest:           a.Manifest,
 		Leaves:             leaves,
 	})
+}
+
+// predicate is the single definition of the signed v0.3 body, shared by
+// MarshalJSON and UnmarshalJSON so the two cannot drift. (Previously each
+// side declared its own anonymous struct.)
+//
+// manifestUploaded and manifest are additive on v0.3 — deliberately NOT a
+// version bump. A bump would touch every exact-URI consumer: the shipped
+// policies that pin material/v0.3 by type, judge-api's exact-URI parser
+// registry, the attestor-tuple tables mirrored in the platform and the edge,
+// the inclusion bridge, the catalog and the tool docs. Go, the edge evaluator
+// and the platform parsers all ignore unknown keys, and `leaves` was already
+// optional to the parser, so additive fields touch none of them.
+type predicate struct {
+	MerkleRoot         string          `json:"merkleRoot"`
+	TreeSize           uint64          `json:"treeSize"`
+	HashAlgorithmField string          `json:"hashAlgorithm"`
+	ConstructionField  string          `json:"construction"`
+	ManifestUploaded   *bool           `json:"manifestUploaded,omitempty"`
+	Manifest           *ManifestRef    `json:"manifest,omitempty"`
+	Leaves             *[]MaterialLeaf `json:"leaves,omitempty"`
 }
 
 // UnmarshalJSON reads the four exported scalar fields. Materials and
@@ -561,10 +629,24 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
+	// Reset EVERYTHING before installing the new predicate. An Attestor may be
+	// decoded into more than once, and every field below — the commitment
+	// scalars, the manifest fields, the leaves and the DERIVED materials map —
+	// must describe THIS predicate only. Without this, a leaf-less (detached
+	// or withheld) predicate decoded after an inline one would keep the
+	// previous predicate's materials, and artifactsFrom would be satisfied by
+	// digests this predicate never signed. emitManifest is producer-side
+	// configuration, never decoded, and is the one thing kept.
+	*a = Attestor{emitManifest: a.emitManifest}
 	a.MerkleRoot = aux.MerkleRoot
 	a.TreeSize = aux.TreeSize
 	a.HashAlgorithmField = aux.HashAlgorithmField
 	a.ConstructionField = aux.ConstructionField
+	// Carried through verbatim, INCLUDING nil. A missing manifestUploaded key
+	// must stay nil so ManifestState() can report "legacy shape" rather than
+	// inventing an unsigned "false".
+	a.ManifestUploaded = aux.ManifestUploaded
+	a.Manifest = aux.Manifest
 
 	// Restore inline leaves and rehydrate the materials map so a verifier
 	// loading this attestation from JSON can match artifactsFrom edges by
@@ -572,18 +654,12 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 	// the materials are inline and authoritative; an absent key means the
 	// attestation is leaf-less (suppressed / legacy v0.3) and the sidecar
 	// fallback applies. HasInlineLeaves() distinguishes the two via a.leaves
-	// being non-nil, so we keep an empty present set as a non-nil empty slice.
+	// being non-nil, so we keep an empty present set as a non-nil empty slice
+	// — and an absent key leaves both leaves and materials at the nil the
+	// reset above installed, so MarshalJSON re-emits the key exactly as
+	// present or absent as it was decoded.
 	if aux.Leaves != nil {
-		a.leaves = *aux.Leaves
-		if a.leaves == nil {
-			a.leaves = []MaterialLeaf{}
-		}
-		a.materials = make(map[string]cryptoutil.DigestSet, len(a.leaves))
-		for _, lf := range a.leaves {
-			a.materials[lf.Path] = cryptoutil.DigestSet{{Hash: crypto.SHA256}: lf.FileDigest}
-		}
-	} else {
-		a.leaves = nil
+		a.setLeaves(*aux.Leaves)
 	}
 	return nil
 }

@@ -6,7 +6,9 @@ description: >-
   Go, digests every file, and commits to one RFC 6962 sha256 root over the
   deduplicated, digest-sorted leaf set, so the committed bytes ARE the real
   input and the predicate is byte-deterministic: the golden pins merkleRoot,
-  treeSize, the pinned algorithm constants, and the inline leaves.
+  treeSize, the pinned algorithm constants, the inline leaves, and the
+  additive manifestUploaded:false + manifest.digest fields a producer emits
+  when it has not opted into --material-manifest.
 setup:
   mode: workdir
   workdir:

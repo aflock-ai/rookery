@@ -391,6 +391,7 @@ Only **one signer** is supported per `run` invocation (enforced in `cilock/cli/s
 | `--workload <mode>` | `auto` | Attestor selection. `auto` detects (only when `-a` absent, unless forced); `manual` uses `-a`/defaults exactly. See [auto-detection](../concepts/auto-detection-and-defaults). |
 | `--validate-only` | `false` | Run pre-flight workload + tool checks, print the planned attestor set, exit without running the command. |
 | `--no-default-attestor <name>` | (none) | Drop an always-on attestor (`product`, `material`). Repeatable. |
+| `--material-manifest` | `false` | Publish the material attestor's per-file leaves as a detached companion envelope (`<outfile>-material-manifest.json`), stored before the collection when Archivista upload is on. The predicate records `manifestUploaded` and the manifest's content digest either way. The Merkle root is signed regardless — this changes only where the proof material lives. |
 | `--diagnose` | `false` | Verbose internal logging (eBPF load, fanotify, ringbuf drops, fs-verity). Sets `CILOCK_DIAGNOSE=1`. |
 | `--cache-add-pattern <glob>` | (none) | Add a glob to the build-cache classification set (cache files aren't products). Repeatable. |
 | `--cache-allow-pattern <glob>` | (none) | Remove a glob from the cache set (treat as a product). Repeatable. |

@@ -77,7 +77,7 @@ func TestVerifyVerdict_DirectSubjectBinding(t *testing.T) {
 		}),
 	}
 
-	v := buildVerifyVerdict([]string{digest}, results)
+	v := buildVerifyVerdict([]string{digest}, results, nil)
 	if !v.Passed {
 		t.Fatal("verdict should be passed")
 	}
@@ -92,7 +92,7 @@ func TestVerifyVerdict_DirectSubjectBinding(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	writeVerifyBindingLines(&buf, []string{digest}, results)
+	writeVerifyBindingLines(&buf, []string{digest}, results, nil)
 	out := buf.String()
 	if !strings.Contains(out, "verified: sha256:"+digest) {
 		t.Errorf("binding line missing supplied digest:\n%s", out)
@@ -124,7 +124,7 @@ func TestVerifyVerdict_UnboundArtifactMakesNoFalseClaim(t *testing.T) {
 		}),
 	}
 
-	v := buildVerifyVerdict([]string{unboundDigest}, results)
+	v := buildVerifyVerdict([]string{unboundDigest}, results, nil)
 	if !v.Passed {
 		t.Fatal("policy still passed on its own subjects; Passed must stay true")
 	}
@@ -134,7 +134,7 @@ func TestVerifyVerdict_UnboundArtifactMakesNoFalseClaim(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	writeVerifyBindingLines(&buf, []string{unboundDigest}, results)
+	writeVerifyBindingLines(&buf, []string{unboundDigest}, results, nil)
 	out := buf.String()
 	if strings.Contains(out, "verified:") || strings.Contains(out, "inclusion proof") {
 		t.Errorf("must not print a fabricated binding line for an unbound artifact:\n%s", out)
@@ -157,7 +157,7 @@ func TestVerifyVerdict_VerifiedLeafBinding(t *testing.T) {
 		"build": passedStepWithProducts(t, "build", digests, ""),
 	}
 
-	v := buildVerifyVerdict([]string{leafDigest}, results)
+	v := buildVerifyVerdict([]string{leafDigest}, results, nil)
 	if v.Step != "build" {
 		t.Errorf("verified leaf should bind to its step, got %q", v.Step)
 	}
@@ -166,7 +166,7 @@ func TestVerifyVerdict_VerifiedLeafBinding(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	writeVerifyBindingLines(&buf, []string{leafDigest}, results)
+	writeVerifyBindingLines(&buf, []string{leafDigest}, results, nil)
 	out := buf.String()
 	if !strings.Contains(out, "verified: sha256:"+leafDigest) {
 		t.Errorf("should print a verified binding line for the real leaf:\n%s", out)
@@ -186,7 +186,7 @@ func TestVerifyVerdict_TamperedLeafDoesNotBind(t *testing.T) {
 	const bogusRoot = "deadbeef00000000000000000000000000000000000000000000000000000000"
 	results := map[string]policy.StepResult{"build": passedStepWithProducts(t, "build", digests, bogusRoot)}
 
-	v := buildVerifyVerdict([]string{leafDigest}, results)
+	v := buildVerifyVerdict([]string{leafDigest}, results, nil)
 	if v.Step != "" || v.MatchedSubject != "" {
 		t.Errorf("a leaf that fails root verification must NOT bind, got step=%q subject=%q", v.Step, v.MatchedSubject)
 	}
@@ -203,7 +203,7 @@ func TestVerifyVerdict_JSONShape(t *testing.T) {
 		}),
 	}
 	var buf bytes.Buffer
-	if err := writeVerifyVerdictJSON(&buf, buildVerifyVerdict([]string{digest}, results)); err != nil {
+	if err := writeVerifyVerdictJSON(&buf, buildVerifyVerdict([]string{digest}, results, nil)); err != nil {
 		t.Fatalf("writeVerifyVerdictJSON: %v", err)
 	}
 	var got map[string]any
@@ -246,7 +246,7 @@ func TestVerifyVerdict_FailedShape(t *testing.T) {
 // when no artifact digest was supplied (e.g. policy-only checks).
 func TestVerifyVerdict_NoSuppliedDigestsNoOp(t *testing.T) {
 	var buf bytes.Buffer
-	writeVerifyBindingLines(&buf, nil, map[string]policy.StepResult{"build": passedStep("build")})
+	writeVerifyBindingLines(&buf, nil, map[string]policy.StepResult{"build": passedStep("build")}, nil)
 	if buf.Len() != 0 {
 		t.Errorf("expected no output with no supplied digests, got:\n%s", buf.String())
 	}
