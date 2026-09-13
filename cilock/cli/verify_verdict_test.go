@@ -15,7 +15,72 @@ import (
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/policy"
 	"github.com/aflock-ai/rookery/attestation/source"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestVerifyVerdict_DigestAlgorithms(t *testing.T) {
+	const name = "https://aflock.ai/attestations/git/v0.1/commithash:" + gitSHA1Hex
+	for _, tc := range []struct {
+		name      string
+		supplied  string
+		algorithm string
+		digest    string
+		matched   bool
+	}{
+		{"sha1 commit", "sha1:" + gitSHA1Hex, "sha1", gitSHA1Hex, true},
+		{"unmatched sha1", "sha1:" + gitSHA1Hex, "sha1", strings.Repeat("a", 40), false},
+		{"sha1 must not bind sha256 with same hex", "sha1:" + gitSHA1Hex, "sha256", gitSHA1Hex, false},
+		{"sha256 must not bind sha1 with same hex", "sha256:" + gitSHA1Hex, "sha1", gitSHA1Hex, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			results := map[string]policy.StepResult{
+				"source": passedStep("source", intoto.Subject{Name: name, Digest: map[string]string{tc.algorithm: tc.digest}}),
+			}
+			var jsonOut, stderr bytes.Buffer
+			require.NoError(t, writeVerifyVerdictJSON(&jsonOut, buildVerifyVerdict([]string{tc.supplied}, results, nil)))
+			var verdict VerifyVerdict
+			require.NoError(t, json.Unmarshal(jsonOut.Bytes(), &verdict))
+			assert.True(t, verdict.Passed, "rendering must not change the policy result")
+			writeVerifyBindingLines(&stderr, []string{tc.supplied}, results, nil)
+			if tc.matched {
+				assert.Equal(t, "source", verdict.Step)
+				assert.Equal(t, tc.supplied, verdict.MatchedSubject)
+				assert.Equal(t, name, verdict.ObservedSubjectName)
+				assert.Contains(t, stderr.String(), "verified: "+tc.supplied+` bound to step "source" subject "git/v0.1/commithash:`+gitSHA1Hex+`"`)
+				assert.NotContains(t, stderr.String(), "did NOT match")
+			} else {
+				assert.Empty(t, verdict.Step)
+				assert.Empty(t, verdict.MatchedSubject)
+				assert.Empty(t, verdict.ObservedSubjectName)
+				assert.NotContains(t, stderr.String(), "verified:")
+				assert.Contains(t, stderr.String(), "supplied artifact "+tc.supplied+" did NOT match")
+			}
+		})
+	}
+}
+
+func TestVerifyVerdict_SameHexDifferentAlgorithmsRemainDistinct(t *testing.T) {
+	results := map[string]policy.StepResult{
+		"source": passedStep("source", intoto.Subject{
+			Name: "commithash:" + gitSHA1Hex, Digest: map[string]string{"sha1": gitSHA1Hex},
+		}),
+	}
+	var stderr bytes.Buffer
+	writeVerifyBindingLines(&stderr, []string{"sha1:" + gitSHA1Hex, "sha256:" + gitSHA1Hex}, results, nil)
+	assert.Contains(t, stderr.String(), "verified: sha1:"+gitSHA1Hex)
+	assert.Contains(t, stderr.String(), "supplied artifact sha256:"+gitSHA1Hex+" did NOT match")
+	assert.NotContains(t, stderr.String(), "verified: sha256:")
+
+	results["source"] = passedStep("source", intoto.Subject{
+		Name: "both", Digest: map[string]string{"sha1": gitSHA1Hex, "sha256": gitSHA1Hex},
+	})
+	stderr.Reset()
+	writeVerifyBindingLines(&stderr, []string{"sha1:" + gitSHA1Hex, "sha256:" + gitSHA1Hex}, results, nil)
+	assert.Contains(t, stderr.String(), "verified: sha1:"+gitSHA1Hex)
+	assert.Contains(t, stderr.String(), "verified: sha256:"+gitSHA1Hex)
+	assert.NotContains(t, stderr.String(), "did NOT match")
+}
 
 // passedStep builds a StepResult with one passing collection carrying the given
 // in-toto subjects, for verdict-binding tests.
@@ -77,7 +142,7 @@ func TestVerifyVerdict_DirectSubjectBinding(t *testing.T) {
 		}),
 	}
 
-	v := buildVerifyVerdict([]string{digest}, results, nil)
+	v := buildVerifyVerdict([]string{"sha256:" + digest}, results, nil)
 	if !v.Passed {
 		t.Fatal("verdict should be passed")
 	}
@@ -92,7 +157,7 @@ func TestVerifyVerdict_DirectSubjectBinding(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	writeVerifyBindingLines(&buf, []string{digest}, results, nil)
+	writeVerifyBindingLines(&buf, []string{"sha256:" + digest}, results, nil)
 	out := buf.String()
 	if !strings.Contains(out, "verified: sha256:"+digest) {
 		t.Errorf("binding line missing supplied digest:\n%s", out)
@@ -124,7 +189,7 @@ func TestVerifyVerdict_UnboundArtifactMakesNoFalseClaim(t *testing.T) {
 		}),
 	}
 
-	v := buildVerifyVerdict([]string{unboundDigest}, results, nil)
+	v := buildVerifyVerdict([]string{"sha256:" + unboundDigest}, results, nil)
 	if !v.Passed {
 		t.Fatal("policy still passed on its own subjects; Passed must stay true")
 	}
@@ -134,7 +199,7 @@ func TestVerifyVerdict_UnboundArtifactMakesNoFalseClaim(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	writeVerifyBindingLines(&buf, []string{unboundDigest}, results, nil)
+	writeVerifyBindingLines(&buf, []string{"sha256:" + unboundDigest}, results, nil)
 	out := buf.String()
 	if strings.Contains(out, "verified:") || strings.Contains(out, "inclusion proof") {
 		t.Errorf("must not print a fabricated binding line for an unbound artifact:\n%s", out)
@@ -157,7 +222,7 @@ func TestVerifyVerdict_VerifiedLeafBinding(t *testing.T) {
 		"build": passedStepWithProducts(t, "build", digests, ""),
 	}
 
-	v := buildVerifyVerdict([]string{leafDigest}, results, nil)
+	v := buildVerifyVerdict([]string{"sha256:" + leafDigest}, results, nil)
 	if v.Step != "build" {
 		t.Errorf("verified leaf should bind to its step, got %q", v.Step)
 	}
@@ -166,7 +231,7 @@ func TestVerifyVerdict_VerifiedLeafBinding(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	writeVerifyBindingLines(&buf, []string{leafDigest}, results, nil)
+	writeVerifyBindingLines(&buf, []string{"sha256:" + leafDigest}, results, nil)
 	out := buf.String()
 	if !strings.Contains(out, "verified: sha256:"+leafDigest) {
 		t.Errorf("should print a verified binding line for the real leaf:\n%s", out)
@@ -174,6 +239,13 @@ func TestVerifyVerdict_VerifiedLeafBinding(t *testing.T) {
 	if !strings.Contains(out, "root-verified") {
 		t.Errorf("leaf binding line should flag it was root-verified:\n%s", out)
 	}
+	// Identical hex under another algorithm must not inherit the SHA-256 leaf
+	// binding. This deliberately bypasses CLI length validation to test the renderer.
+	assert.Empty(t, buildVerifyVerdict([]string{"sha1:" + leafDigest}, results, nil).MatchedSubject)
+	buf.Reset()
+	writeVerifyBindingLines(&buf, []string{"sha1:" + leafDigest}, results, nil)
+	assert.NotContains(t, buf.String(), "verified:")
+	assert.Contains(t, buf.String(), "supplied artifact sha1:"+leafDigest+" did NOT match")
 }
 
 // TestVerifyVerdict_TamperedLeafDoesNotBind proves a leaf set that does NOT
@@ -186,10 +258,14 @@ func TestVerifyVerdict_TamperedLeafDoesNotBind(t *testing.T) {
 	const bogusRoot = "deadbeef00000000000000000000000000000000000000000000000000000000"
 	results := map[string]policy.StepResult{"build": passedStepWithProducts(t, "build", digests, bogusRoot)}
 
-	v := buildVerifyVerdict([]string{leafDigest}, results, nil)
+	v := buildVerifyVerdict([]string{"sha256:" + leafDigest}, results, nil)
 	if v.Step != "" || v.MatchedSubject != "" {
 		t.Errorf("a leaf that fails root verification must NOT bind, got step=%q subject=%q", v.Step, v.MatchedSubject)
 	}
+	var stderr bytes.Buffer
+	writeVerifyBindingLines(&stderr, []string{"sha256:" + leafDigest}, results, nil)
+	assert.NotContains(t, stderr.String(), "verified:")
+	assert.Contains(t, stderr.String(), "supplied artifact sha256:"+leafDigest+" did NOT match")
 }
 
 // TestVerifyVerdict_JSONShape proves the JSON verdict serializes the keys the
@@ -203,7 +279,7 @@ func TestVerifyVerdict_JSONShape(t *testing.T) {
 		}),
 	}
 	var buf bytes.Buffer
-	if err := writeVerifyVerdictJSON(&buf, buildVerifyVerdict([]string{digest}, results, nil)); err != nil {
+	if err := writeVerifyVerdictJSON(&buf, buildVerifyVerdict([]string{"sha256:" + digest}, results, nil)); err != nil {
 		t.Fatalf("writeVerifyVerdictJSON: %v", err)
 	}
 	var got map[string]any

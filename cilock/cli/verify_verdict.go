@@ -41,7 +41,7 @@ type VerifyVerdict struct {
 	// passing step's subject (e.g. the policy passed on a subject the operator
 	// did not name on the command line).
 	Step string `json:"step,omitempty"`
-	// MatchedSubject is the sha256 digest (sha256:<hex>) of the supplied
+	// MatchedSubject is the algorithm-qualified digest (<algorithm>:<hex>) of the supplied
 	// artifact that bound, paired with the observed subject name it matched.
 	MatchedSubject string `json:"matchedSubject,omitempty"`
 	// ObservedSubjectName is the in-toto subject name in the passing
@@ -52,15 +52,13 @@ type VerifyVerdict struct {
 // subjectBinding records one supplied-artifact → passing-step binding for the
 // human + JSON verdict.
 type subjectBinding struct {
-	digestHex   string // raw sha256 hex of the supplied artifact
+	digest      string // algorithm:hex of the supplied artifact
 	step        string // passing step whose collection it bound to
 	subjectName string // observed subject name, or product/material leaf path
 	viaLeaf     bool   // true when bound as a root-verified Merkle leaf, not a top-level subject
 }
 
-// suppliedSHA256 extracts the raw sha256 hex from a DigestSet, if present. The
-// supplied-artifact and --subjects digest sets are sha256 by construction, so
-// this is the digest the operator asked cilock to bind.
+// suppliedSHA256 extracts the raw sha256 hex from a DigestSet, if present.
 func suppliedSHA256(ds cryptoutil.DigestSet) string {
 	if h, ok := ds[cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}]; ok {
 		return h
@@ -68,7 +66,7 @@ func suppliedSHA256(ds cryptoutil.DigestSet) string {
 	return ""
 }
 
-// suppliedSet returns the non-empty supplied digests as a lookup set.
+// suppliedSet returns the non-empty algorithm-qualified digests as a lookup set.
 func suppliedSet(supplied []string) map[string]struct{} {
 	want := make(map[string]struct{}, len(supplied))
 	for _, h := range supplied {
@@ -103,7 +101,7 @@ func matchedBindings(supplied []string, stepResults map[string]policy.StepResult
 		if out[i].step != out[j].step {
 			return out[i].step < out[j].step
 		}
-		return out[i].digestHex < out[j].digestHex
+		return out[i].digest < out[j].digest
 	})
 	return out
 }
@@ -115,20 +113,22 @@ func matchedBindings(supplied []string, stepResults map[string]policy.StepResult
 // what makes a leaf binding a real inclusion proof rather than a guess: a leaf
 // set that does not fold to the signed root is ignored, never bound.
 func appendCollectionBindings(out []subjectBinding, seen, want map[string]struct{}, step string, pc policy.PassedCollection, manifests manifestIndex) []subjectBinding {
-	add := func(digestHex, name string, viaLeaf bool) {
-		if _, isWanted := want[digestHex]; !isWanted {
+	add := func(digest, name string, viaLeaf bool) {
+		if _, isWanted := want[digest]; !isWanted {
 			return
 		}
-		key := step + "\x00" + digestHex
+		key := step + "\x00" + digest
 		if _, dup := seen[key]; dup {
 			return
 		}
 		seen[key] = struct{}{}
-		out = append(out, subjectBinding{digestHex: digestHex, step: step, subjectName: name, viaLeaf: viaLeaf})
+		out = append(out, subjectBinding{digest: digest, step: step, subjectName: name, viaLeaf: viaLeaf})
 	}
 	for _, subj := range pc.Collection.Statement.Subject {
-		if h := subj.Digest["sha256"]; h != "" {
-			add(h, subj.Name, false)
+		for algorithm, h := range subj.Digest {
+			if h != "" {
+				add(algorithm+":"+h, subj.Name, false)
+			}
 		}
 	}
 	// Trust product/material leaves only when they provably reconstruct the
@@ -163,7 +163,7 @@ func appendCollectionBindings(out []subjectBinding, seen, want map[string]struct
 	if coll.VerifyInlineLeaves() == nil {
 		for path, ds := range coll.Artifacts() {
 			if h := suppliedSHA256(ds); h != "" {
-				add(h, path, true)
+				add("sha256:"+h, path, true)
 			}
 		}
 	}
@@ -180,7 +180,7 @@ func buildVerifyVerdict(supplied []string, stepResults map[string]policy.StepRes
 	v := VerifyVerdict{Passed: true}
 	if b := matchedBindings(supplied, stepResults, manifests); len(b) > 0 {
 		v.Step = b[0].step
-		v.MatchedSubject = "sha256:" + b[0].digestHex
+		v.MatchedSubject = b[0].digest
 		v.ObservedSubjectName = b[0].subjectName
 	}
 	return v
@@ -199,11 +199,11 @@ func writeVerifyBindingLines(w io.Writer, supplied []string, stepResults map[str
 	}
 	bound := make(map[string]struct{}, len(supplied))
 	for _, b := range matchedBindings(supplied, stepResults, manifests) {
-		bound[b.digestHex] = struct{}{}
+		bound[b.digest] = struct{}{}
 		if b.viaLeaf {
-			_, _ = fmt.Fprintf(w, "verified: sha256:%s bound to step %q as a product/material leaf %q (Merkle inclusion, root-verified)\n", b.digestHex, b.step, shortSubjectName(b.subjectName)) //nolint:gosec // CLI verdict to stderr, not an HTTP/HTML sink — G705 taint false positive.
+			_, _ = fmt.Fprintf(w, "verified: %s bound to step %q as a product/material leaf %q (Merkle inclusion, root-verified)\n", b.digest, b.step, shortSubjectName(b.subjectName)) //nolint:gosec // CLI verdict to stderr, not an HTTP/HTML sink — G705 taint false positive.
 		} else {
-			_, _ = fmt.Fprintf(w, "verified: sha256:%s bound to step %q subject %q\n", b.digestHex, b.step, shortSubjectName(b.subjectName)) //nolint:gosec // CLI verdict to stderr, not an HTTP/HTML sink — G705 taint false positive.
+			_, _ = fmt.Fprintf(w, "verified: %s bound to step %q subject %q\n", b.digest, b.step, shortSubjectName(b.subjectName)) //nolint:gosec // CLI verdict to stderr, not an HTTP/HTML sink — G705 taint false positive.
 		}
 	}
 	for _, h := range supplied {
@@ -213,7 +213,7 @@ func writeVerifyBindingLines(w io.Writer, supplied []string, stepResults map[str
 		if _, ok := bound[h]; ok {
 			continue
 		}
-		_, _ = fmt.Fprintf(w, "note: supplied artifact sha256:%s did NOT match any verified subject or product/material leaf — verify passed on the policy's other evidence; confirm you are verifying the intended file\n", h) //nolint:gosec // CLI verdict to stderr, not an HTTP/HTML sink — G705 taint false positive.
+		_, _ = fmt.Fprintf(w, "note: supplied artifact %s did NOT match any verified subject or product/material leaf — verify passed on the policy's other evidence; confirm you are verifying the intended file\n", h) //nolint:gosec // CLI verdict to stderr, not an HTTP/HTML sink — G705 taint false positive.
 	}
 }
 

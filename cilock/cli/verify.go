@@ -416,7 +416,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	subjects := []cryptoutil.DigestSet{}
-	// suppliedDigests records the sha256 hexes the operator asked cilock to
+	// suppliedDigests records the algorithm:hex digests the operator asked cilock to
 	// bind (from --directory-path / --artifactfile / --subjects), in supply
 	// order. On a passing verify these drive the "verified: <digest> bound to
 	// step ... subject ..." binding line so a green run confirms the binding
@@ -430,7 +430,9 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 
 		log.Infof("subject: sha256:%s (computed from directory %s)", suppliedSHA256(artifactDigestSet), vo.ArtifactDirectoryPath)
 		subjects = append(subjects, artifactDigestSet)
-		suppliedDigests = append(suppliedDigests, suppliedSHA256(artifactDigestSet))
+		if h := suppliedSHA256(artifactDigestSet); h != "" {
+			suppliedDigests = append(suppliedDigests, "sha256:"+h)
+		}
 	}
 
 	var artifactFileDigestHex string
@@ -446,16 +448,20 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		// verification output — same doctrine as the bound-policy line.
 		log.Infof("subject: sha256:%s (computed from %s)", artifactFileDigestHex, vo.ArtifactFilePath)
 		subjects = append(subjects, artifactDigestSet)
-		suppliedDigests = append(suppliedDigests, artifactFileDigestHex)
+		suppliedDigests = append(suppliedDigests, "sha256:"+artifactFileDigestHex)
 	}
 
 	for _, subDigest := range vo.AdditionalSubjects {
-		digestSet, digestHex, err := parseSubjectDigest(subDigest)
+		digestSet, _, err := parseSubjectDigest(subDigest)
 		if err != nil {
 			return err
 		}
 		subjects = append(subjects, digestSet)
-		suppliedDigests = append(suppliedDigests, digestHex)
+		for algorithm, spec := range subjectDigestAlgorithms {
+			if h := digestSet[spec.value]; h != "" {
+				suppliedDigests = append(suppliedDigests, algorithm+":"+h)
+			}
+		}
 	}
 
 	if len(subjects) == 0 {

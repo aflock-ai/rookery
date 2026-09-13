@@ -15,11 +15,28 @@
 package cli
 
 import (
+	"bytes"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/intoto"
+	"github.com/aflock-ai/rookery/attestation/policy"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/policyverify"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -104,5 +121,138 @@ func TestParseSubjectDigest_NonHexRejected(t *testing.T) {
 		if _, _, err := parseSubjectDigest(bad); err == nil {
 			t.Fatalf("want an error for %q", bad)
 		}
+	}
+}
+
+// This exercises the real command and verifier with local, ephemeral-key DSSE
+// fixtures. Set CILOCK_VERIFY_TEST_BINARY to replay through a built CLI instead.
+func TestVerifyCmd_OfflineSubjectAlgorithms(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	stateDir, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	t.Setenv("CILOCK_STATE_DIR", stateDir)
+	t.Setenv("CILOCK_SKIP_VERSION_CHECK", "1")
+	t.Setenv("CILOCK_NO_TELEMETRY", "1")
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	signer, err := cryptoutil.NewSigner(key, cryptoutil.SignWithHash(crypto.SHA256))
+	require.NoError(t, err)
+	verifier, err := signer.Verifier()
+	require.NoError(t, err)
+	keyID, err := verifier.KeyID()
+	require.NoError(t, err)
+	publicKey, err := verifier.Bytes()
+	require.NoError(t, err)
+	keyPath := filepath.Join(dir, "test.pub")
+	require.NoError(t, os.WriteFile(keyPath, publicKey, 0o600))
+	writeSigned := func(name, payloadType string, payload []byte) string {
+		env, err := dsse.Sign(payloadType, bytes.NewReader(payload), dsse.SignWithSigners(signer))
+		require.NoError(t, err)
+		data, err := json.Marshal(env)
+		require.NoError(t, err)
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, data, 0o600))
+		return path
+	}
+	const gitType = "https://aflock.ai/attestations/git/v0.1"
+	payload := fmt.Sprintf(`{
+		"_type": "https://in-toto.io/Statement/v0.1",
+		"predicateType": "https://aflock.ai/attestation-collection/v0.1",
+		"subject": [
+			{"name": "%s/commithash:%s", "digest": {"sha1": "%s"}},
+			{"name": "artifact", "digest": {"sha256": "%s"}}
+		],
+		"predicate": {"name": "source", "attestations": [{
+			"type": "%s", "attestation": {"commithash": "%s", "commithashverified": true},
+			"starttime": "2026-01-01T00:00:00Z", "endtime": "2026-01-01T00:00:01Z"
+		}]}
+	}`, gitType, gitSHA1Hex, gitSHA1Hex, sha256Hex, gitType, gitSHA1Hex)
+	evidencePath := writeSigned("evidence.dsse.json", intoto.PayloadType, []byte(payload))
+	p := policy.Policy{
+		Expires:    metav1.Time{Time: time.Now().Add(time.Hour)},
+		PublicKeys: map[string]policy.PublicKey{keyID: {KeyID: keyID, Key: publicKey}},
+		Steps: map[string]policy.Step{"source": {
+			Name:          "source",
+			Functionaries: []policy.Functionary{{Type: "PublicKey", PublicKeyID: keyID}},
+			Attestations:  []policy.Attestation{{Type: gitType}},
+		}},
+	}
+	policyJSON, err := json.Marshal(p)
+	require.NoError(t, err)
+	policyPath := writeSigned("policy.dsse.json", policy.PolicyPredicate, policyJSON)
+	for _, tc := range []struct {
+		name      string
+		subjects  []string
+		matched   string
+		unmatched string
+		wantErr   bool
+	}{
+		{"sha1 verified commit", []string{"sha1:" + gitSHA1Hex}, "sha1:" + gitSHA1Hex, "", false},
+		{"sha256 explicit", []string{"sha256:" + sha256Hex}, "sha256:" + sha256Hex, "", false},
+		{"sha256 bare", []string{sha256Hex}, "sha256:" + sha256Hex, "", false},
+		{"unmatched sha1", []string{"sha1:" + strings.Repeat("a", 40), sha256Hex}, "sha256:" + sha256Hex, "sha1:" + strings.Repeat("a", 40), false},
+		{"bare 40 hex remains sha256", []string{gitSHA1Hex, sha256Hex}, "sha256:" + sha256Hex, "sha256:" + gitSHA1Hex, false},
+		{"wrong commit fails", []string{"sha1:" + strings.Repeat("a", 40)}, "", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := os.CreateTemp(dir, "stdout-")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = out.Close() })
+			stderr, err := os.CreateTemp(dir, "stderr-")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = stderr.Close() })
+			args := []string{"-p", policyPath, "-k", keyPath, "-a", evidencePath,
+				"--platform-url", "", "--enable-archivista=false", "--no-embedded-trust", "-o", "json"}
+			for _, subject := range tc.subjects {
+				args = append(args, "--subjects", subject)
+			}
+			if bin := os.Getenv("CILOCK_VERIFY_TEST_BINARY"); bin != "" {
+				cmd := exec.CommandContext(t.Context(), bin, append([]string{"verify"}, args...)...)
+				cmd.Stdout, cmd.Stderr = out, stderr
+				err = cmd.Run()
+			} else {
+				cmd := VerifyCmd()
+				cmd.SetArgs(args)
+				err = func() error {
+					oldOut, oldErr := os.Stdout, os.Stderr
+					os.Stdout, os.Stderr = out, stderr
+					defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
+					return cmd.ExecuteContext(t.Context())
+				}()
+			}
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			data, err := os.ReadFile(out.Name())
+			require.NoError(t, err)
+			var verdict VerifyVerdict
+			require.NoError(t, json.Unmarshal(data, &verdict), "%s", data)
+			assert.Equal(t, !tc.wantErr, verdict.Passed)
+			assert.Equal(t, tc.matched, verdict.MatchedSubject)
+			data, err = os.ReadFile(stderr.Name())
+			require.NoError(t, err)
+			if tc.matched != "" {
+				assert.Equal(t, "source", verdict.Step)
+				assert.Contains(t, string(data), "verified: "+tc.matched+` bound to step "source"`)
+				if strings.HasPrefix(tc.matched, "sha1:") {
+					assert.Equal(t, gitType+"/commithash:"+gitSHA1Hex, verdict.ObservedSubjectName)
+				} else {
+					assert.Equal(t, "artifact", verdict.ObservedSubjectName)
+				}
+			} else {
+				assert.Empty(t, verdict.Step)
+				assert.Empty(t, verdict.ObservedSubjectName)
+			}
+			if tc.unmatched != "" {
+				assert.Contains(t, string(data), "supplied artifact "+tc.unmatched+" did NOT match")
+				assert.NotContains(t, string(data), "verified: "+tc.unmatched)
+			} else {
+				assert.NotContains(t, string(data), "did NOT match")
+			}
+		})
 	}
 }
