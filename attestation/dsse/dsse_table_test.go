@@ -1793,12 +1793,13 @@ func TestTableVerifierKeyIDFunction(t *testing.T) {
 			},
 		},
 		{
-			name: "fallback prefix for error KeyID verifier",
+			name: "public key identity survives a KeyID error",
 			check: func(t *testing.T) {
 				errV := &tableErrorKeyIDVerifier{inner: v1}
 				kid := verifierKeyID(errV)
-				assert.True(t, strings.HasPrefix(kid, "fallback:"),
-					"error KeyID verifier should use fallback: prefix")
+				want, err := v1.KeyID()
+				require.NoError(t, err)
+				assert.Equal(t, want, kid)
 			},
 		},
 		{

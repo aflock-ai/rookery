@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/invopop/jsonschema"
 )
@@ -25,7 +26,6 @@ import (
 var (
 	attestorRegistry   = registry.New[Attestor]()
 	attestationsByType = map[string]registry.Entry[Attestor]{}
-	attestationsByRun  = map[RunType]registry.Entry[Attestor]{}
 )
 
 type Attestor interface {
@@ -138,18 +138,27 @@ func (e ErrAttestorNotFound) Error() string {
 	return fmt.Sprintf("attestor not found: %v", string(e))
 }
 
-func RegisterAttestation(name, predicateType string, run RunType, factoryFunc registry.FactoryFunc[Attestor], opts ...registry.Configurer) {
-	registrationEntry := attestorRegistry.Register(name, factoryFunc, opts...)
-	attestationsByType[predicateType] = registrationEntry
-	attestationsByRun[run] = registrationEntry
+func registerAttestor(name string, factoryFunc registry.FactoryFunc[Attestor], opts ...registry.Configurer) registry.Entry[Attestor] {
+	if factoryFunc == nil {
+		panic("nil attestation factory")
+	}
+	if _, exists := attestorRegistry.Entry(name); exists {
+		log.Warnf("replacing attestation registration %q", name)
+	}
+	return attestorRegistry.Register(name, factoryFunc, opts...)
 }
 
-func RegisterAttestationWithTypes(name string, predicateTypes []string, run RunType, factoryFunc registry.FactoryFunc[Attestor], opts ...registry.Configurer) {
-	registrationEntry := attestorRegistry.Register(name, factoryFunc, opts...)
+// Registration preserves name replacement; execution uses each instance's RunType.
+func RegisterAttestation(name, predicateType string, _ RunType, factoryFunc registry.FactoryFunc[Attestor], opts ...registry.Configurer) {
+	registrationEntry := registerAttestor(name, factoryFunc, opts...)
+	attestationsByType[predicateType] = registrationEntry
+}
+
+func RegisterAttestationWithTypes(name string, predicateTypes []string, _ RunType, factoryFunc registry.FactoryFunc[Attestor], opts ...registry.Configurer) {
+	registrationEntry := registerAttestor(name, factoryFunc, opts...)
 	for _, predicateType := range predicateTypes {
 		attestationsByType[predicateType] = registrationEntry
 	}
-	attestationsByRun[run] = registrationEntry
 }
 
 func FactoryByType(uri string) (registry.FactoryFunc[Attestor], bool) {

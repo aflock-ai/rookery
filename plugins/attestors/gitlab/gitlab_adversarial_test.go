@@ -291,6 +291,12 @@ func TestAdversarial_EnvVar_MaliciousURLs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GITLAB_CI", "true")
 			t.Setenv("CI_SERVER_URL", "https://gitlab.com")
+			if strings.ContainsRune(tc.value, 0) {
+				if err := os.Setenv(tc.envVar, tc.value); err == nil {
+					t.Fatal("the OS accepted a NUL-containing environment value")
+				}
+				return // This value cannot reach an environment-backed attestor.
+			}
 			t.Setenv(tc.envVar, tc.value)
 			require.NoError(t, os.Unsetenv("CI_JOB_JWT"))
 

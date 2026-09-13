@@ -24,7 +24,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -156,8 +159,24 @@ func (a *Attestor) Schema() *jsonschema.Schema {
 
 // Attest performs the attestation for the github environment.
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
+	*a = Attestor{jwksURL: a.jwksURL, tokenURL: a.tokenURL, aud: a.aud}
 	if os.Getenv("GITHUB_ACTIONS") != "true" {
 		return ErrNotGitHub{}
+	}
+	server := os.Getenv("GITHUB_SERVER_URL")
+	u, err := url.Parse(server)
+	if err != nil || len(server) > 2048 || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return fmt.Errorf("invalid GITHUB_SERVER_URL")
+	}
+	repository := os.Getenv("GITHUB_REPOSITORY")
+	parts := strings.Split(repository, "/")
+	if len(repository) > 256 || !repositoryPath.MatchString(repository) || len(parts) != 2 || parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+		return fmt.Errorf("invalid GITHUB_REPOSITORY")
+	}
+	runID := os.Getenv("GITHUB_RUN_ID")
+	run, err := strconv.ParseUint(runID, 10, 64)
+	if err != nil || run == 0 || strconv.FormatUint(run, 10) != runID {
+		return fmt.Errorf("invalid GITHUB_RUN_ID")
 	}
 
 	jwtString, err := fetchToken(a.tokenURL, os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN"), "witness")
@@ -173,20 +192,29 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	if err := a.JWT.Attest(ctx); err != nil {
 		return fmt.Errorf("failed to attest github jwt: %w", err)
 	}
+	if claim, ok := a.JWT.Claims["repository"].(string); !ok || claim != repository {
+		return fmt.Errorf("github JWT repository claim does not match GITHUB_REPOSITORY")
+	}
+	if claim, ok := a.JWT.Claims["run_id"].(string); !ok || claim != runID {
+		return fmt.Errorf("github JWT run_id claim does not match GITHUB_RUN_ID")
+	}
 
-	a.CIServerUrl = os.Getenv("GITHUB_SERVER_URL")
+	a.CIServerUrl = strings.TrimSuffix(server, "/")
+	a.CIHost = u.Hostname()
 	a.CIConfigPath = os.Getenv("GITHUB_ACTION_PATH")
 
-	a.PipelineID = os.Getenv("GITHUB_RUN_ID")
+	a.PipelineID = runID
 	a.PipelineName = os.Getenv("GITHUB_WORKFLOW")
 
-	a.ProjectUrl = fmt.Sprintf("%s/%s", a.CIServerUrl, os.Getenv("GITHUB_REPOSITORY"))
+	a.ProjectUrl = fmt.Sprintf("%s/%s", a.CIServerUrl, repository)
 	a.RunnerID = os.Getenv("RUNNER_NAME")
 	a.RunnerArch = os.Getenv("RUNNER_ARCH")
 	a.RunnerOS = os.Getenv("RUNNER_OS")
 	a.PipelineUrl = fmt.Sprintf("%s/actions/runs/%s", a.ProjectUrl, a.PipelineID)
 	return nil
 }
+
+var repositoryPath = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
 func (a *Attestor) Data() *Attestor {
 	return a
@@ -196,16 +224,20 @@ func (a *Attestor) Data() *Attestor {
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	subjects := make(map[string]cryptoutil.DigestSet)
 	hashes := []cryptoutil.DigestValue{{Hash: crypto.SHA256}}
-	if pipelineSubj, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.PipelineUrl), hashes); err == nil {
-		subjects[fmt.Sprintf("pipelineurl:%v", a.PipelineUrl)] = pipelineSubj
-	} else {
-		log.Debugf("(attestation/github) failed to record github pipelineurl subject: %v", err)
+	if a.PipelineUrl != "" {
+		if pipelineSubj, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.PipelineUrl), hashes); err == nil {
+			subjects[fmt.Sprintf("pipelineurl:%v", a.PipelineUrl)] = pipelineSubj
+		} else {
+			log.Debugf("(attestation/github) failed to record github pipelineurl subject: %v", err)
+		}
 	}
 
-	if projectSubj, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ProjectUrl), hashes); err == nil {
-		subjects[fmt.Sprintf("projecturl:%v", a.ProjectUrl)] = projectSubj
-	} else {
-		log.Debugf("(attestation/github) failed to record github projecturl subject: %v", err)
+	if a.ProjectUrl != "" {
+		if projectSubj, err := cryptoutil.CalculateDigestSetFromBytes([]byte(a.ProjectUrl), hashes); err == nil {
+			subjects[fmt.Sprintf("projecturl:%v", a.ProjectUrl)] = projectSubj
+		} else {
+			log.Debugf("(attestation/github) failed to record github projecturl subject: %v", err)
+		}
 	}
 
 	return subjects
@@ -224,18 +256,25 @@ func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
 	return backRefs
 }
 
+var tokenHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 // fetchToken fetches the token from the given URL.
 func fetchToken(tokenURL string, bearer string, audience string) (string, error) {
-	client := &http.Client{}
-
-	// add audience "&audience=witness" to the end of the tokenURL, parse it, and then add it to the query
 	u, err := url.Parse(tokenURL)
 	if err != nil {
 		return "", fmt.Errorf("error on parsing token url %w", err)
 	}
+	if u.Scheme != "https" || !strings.HasSuffix(strings.ToLower(u.Hostname()), ".actions.githubusercontent.com") || u.User != nil || (u.Port() != "" && u.Port() != "443") || u.Fragment != "" {
+		return "", fmt.Errorf("invalid GitHub Actions token endpoint")
+	}
 
 	q := u.Query()
-	q.Add("audience", audience)
+	q.Set("audience", audience)
 	u.RawQuery = q.Encode()
 
 	reqURL := u.String()
@@ -245,7 +284,7 @@ func fetchToken(tokenURL string, bearer string, audience string) (string, error)
 		return "", fmt.Errorf("error on creating request %w", err)
 	}
 	req.Header.Add("Authorization", "bearer "+bearer)
-	resp, err := client.Do(req)
+	resp, err := tokenHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("error on request %w", err)
 	}
@@ -281,9 +320,12 @@ const maxResponseBodySize = 1 << 20 // 1MB
 
 func readResponseBody(body io.Reader) ([]byte, error) {
 	var buf bytes.Buffer
-	_, err := buf.ReadFrom(io.LimitReader(body, maxResponseBodySize))
+	_, err := buf.ReadFrom(io.LimitReader(body, maxResponseBodySize+1))
 	if err != nil {
 		return nil, err
+	}
+	if buf.Len() > maxResponseBodySize {
+		return nil, fmt.Errorf("token response exceeds %d bytes", maxResponseBodySize)
 	}
 	return buf.Bytes(), nil
 }

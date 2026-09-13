@@ -24,6 +24,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -212,13 +213,8 @@ deny[msg] {
 //         is now at input.attestation.fieldName.
 // ===========================================================================
 
-func TestSecurity_R3_201_CrossStepContextBreaksExistingRegoPolicy(t *testing.T) {
-	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_201). Warn-only BY
-	// DESIGN — there is no enforcement flag (see hardening.go). Making input.name
-	// resolve again would mean a top-level compat-shim that undoes the intended
-	// {attestation, steps} shaping, and statically rejecting legacy input refs is
-	// hard; the issue itself blesses the warning as the fix. Stays RED to track
-	// the un-taken compat-shim option.
+func TestSecurity_R3_201_CrossStepInputShapeContract(t *testing.T) {
+	warnings := installWarnCapture(t)
 	attType := "https://example.com/scan/v1"
 
 	// A backward-compatible Rego policy that checks input.name directly.
@@ -249,20 +245,13 @@ deny[msg] {
 	emptyStepCtx := map[string]interface{}{}
 	err = EvaluateRegoPolicy(attestor, []RegoPolicy{{Module: regoModule, Name: "r3_201.rego"}}, emptyStepCtx)
 
-	if err == nil {
-		// BUG CONFIRMED: The policy silently passed because the input
-		// structure changed and the deny rule body didn't match.
-		t.Error("SECURITY BUG R3-201: When stepContext is non-nil (even empty), " +
-			"the Rego input is wrapped as {attestation: ..., steps: ...}. " +
-			"A Rego policy checking input.name no longer matches because the " +
-			"field moved to input.attestation.name. The deny rule fails silently, " +
-			"and the policy PASSES a vulnerable build. This is a silent policy " +
-			"bypass triggered by adding AttestationsFrom to a step.")
-	} else {
-		assert.Contains(t, err.Error(), "vulnerable build detected",
-			"policy should still deny, proving the input structure was preserved")
-		t.Log("FIXED: Rego input structure is consistent regardless of stepContext.")
-	}
+	require.NoError(t, err, "the legacy input shape is warn-only, not repaired by an implicit compatibility layer")
+	require.True(t, warnings.sawContaining("cross-step rego input shape active"), "the input-shape warning must be observable")
+	corrected := RegoPolicy{Name: "cross-step.rego", Module: []byte(strings.ReplaceAll(string(regoModule), "input.name", "input.attestation.name"))}
+	require.ErrorContains(t, EvaluateRegoPolicy(attestor, []RegoPolicy{corrected}, emptyStepCtx), "vulnerable build detected")
+	attestor.AttName = "approved-build"
+	require.NoError(t, EvaluateRegoPolicy(attestor, []RegoPolicy{corrected}, emptyStepCtx), "a correct policy must allow the benign counterexample")
+	require.NoError(t, EvaluateRegoPolicy(attestor, []RegoPolicy{{Module: regoModule, Name: "legacy.rego"}}))
 }
 
 // ===========================================================================
@@ -781,10 +770,8 @@ deny[msg] {
 // ===========================================================================
 
 func TestSecurity_R3_209_ValidateDoesNotCheckStepNameMatchesKey(t *testing.T) {
-	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_185_187_209); opt-in
-	// enforcement via HardeningOptions.EnforceStepNameCoherence, proven by
-	// TestEnforce_R3_185_187_209. Stays RED to track the default-OFF gap
-	// (warn-first).
+	withHardening(t, HardeningOptions{})
+	warnings := installWarnCapture(t)
 	p := Policy{
 		Steps: map[string]Step{
 			"map-key": {
@@ -793,17 +780,17 @@ func TestSecurity_R3_209_ValidateDoesNotCheckStepNameMatchesKey(t *testing.T) {
 		},
 	}
 
-	err := p.Validate()
-	if err == nil {
-		t.Error("SECURITY BUG R3-209: Policy.Validate() does not check that " +
-			"step.Name matches its map key. A step stored under key 'map-key' " +
-			"with Name='different-name' passes validation. This creates a split-brain " +
-			"between the search (uses map key), name filter (uses step.Name), and " +
-			"artifact verification (uses step.Name for lookup but results are stored " +
-			"under map key). Validate() should reject policies where step.Name != map key.")
-	} else {
-		t.Logf("FIXED: Validate catches name vs key mismatch: %v", err)
-	}
+	require.NoError(t, p.Validate())
+	require.True(t, warnings.sawContaining("mismatched Name"))
+	withHardening(t, HardeningOptions{EnforceStepNameCoherence: true})
+	var incoherent ErrStepNameIncoherent
+	require.ErrorAs(t, p.Validate(), &incoherent)
+	assert.Equal(t, "map-key", incoherent.Key)
+	assert.Equal(t, "different-name", incoherent.Name)
+	step := p.Steps["map-key"]
+	step.Name = "map-key"
+	p.Steps["map-key"] = step
+	require.NoError(t, p.Validate())
 }
 
 // ===========================================================================

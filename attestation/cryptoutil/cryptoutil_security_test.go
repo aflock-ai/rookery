@@ -330,18 +330,12 @@ func TestSecurity_R3_254_RSA_PKCS1v15_FallbackAccepted(t *testing.T) {
 		t.Fatalf("SignPKCS1v15 failed: %v", err)
 	}
 
-	// The verifier should accept this via fallback even though PSS is the
-	// expected scheme.
+	// The default verifier must not silently downgrade from PSS.
 	verifier := NewRSAVerifier(&priv.PublicKey, crypto.SHA256)
 	err = verifier.Verify(bytes.NewReader(data), pkcs1Sig)
-	if err != nil {
-		t.Fatalf("PKCS1v15 signature was rejected: %v", err)
+	if err == nil {
+		t.Fatal("default verifier accepted a PKCS1v15 signature")
 	}
-
-	t.Log("SECURITY BUG R3-254: RSAVerifier.Verify silently accepts PKCS1v15 " +
-		"signatures as a fallback when PSS verification fails. This is an " +
-		"unconditional security downgrade. The fallback should be opt-in, " +
-		"not a default behavior on every RSA verification.")
 }
 
 func TestSecurity_R3_254_RSA_PKCS1v15_FallbackWrongKeyStillRejects(t *testing.T) {

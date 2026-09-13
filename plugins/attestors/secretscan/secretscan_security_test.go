@@ -448,6 +448,8 @@ func TestSecurity_R3_164_GlobCacheUnboundedGrowth(t *testing.T) {
 	}
 
 	finalCount := countEntries()
+	assert.True(t, isEnvironmentVariableSensitive("NEW_SECRET", map[string]struct{}{"NEW_*": {}}),
+		"a full cache must still evaluate an uncached sensitive pattern")
 
 	// The cache should have been bounded (e.g., LRU eviction, or scoped
 	// to an attestation run). Instead, it grows without limit.

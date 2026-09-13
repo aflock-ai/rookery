@@ -917,16 +917,12 @@ func TestFunctionIdentity_SignerKMS(t *testing.T) {
 // ============================================================================
 
 func TestMissingExports_Attestation(t *testing.T) {
-	// Symbols that exist in rookery attestation but are NOT in the compat shim.
-	// Each entry here is a gap that could break go-witness users.
-	missing := []string{
-		"LegacyAlternate", // New function not exposed in compat
+	const current = "https://aflock.ai/attestations/git/v0.1"
+	if got := compatAttestation.LegacyAlternate(current); got == "" || got != attestation.LegacyAlternate(current) {
+		t.Fatalf("LegacyAlternate differs from the native mapping: %q", got)
 	}
-
-	for _, sym := range missing {
-		t.Run("MISSING_"+sym, func(t *testing.T) {
-			t.Errorf("MISSING EXPORT: rookery attestation.%s is not re-exported by compat/go-witness/attestation", sym)
-		})
+	if got := compatAttestation.LegacyAlternate("https://example.com/unknown"); got != "" {
+		t.Fatalf("an unrelated URI acquired a legacy alias: %q", got)
 	}
 }
 
@@ -948,15 +944,11 @@ func TestMissingExports_Policy(t *testing.T) {
 }
 
 func TestMissingExports_SignerKMS(t *testing.T) {
-	// ParseHashFunc exists in rookery signer/kms but is NOT in compat.
-	missing := []string{
-		"ParseHashFunc",
+	if hash, err := compatSignerKMS.ParseHashFunc("SHA256"); err != nil || hash != crypto.SHA256 {
+		t.Fatalf("SHA256 parser mismatch: %v, %v", hash, err)
 	}
-
-	for _, sym := range missing {
-		t.Run("MISSING_"+sym, func(t *testing.T) {
-			t.Errorf("MISSING EXPORT: rookery signer/kms.%s is not re-exported by compat/go-witness/signer/kms", sym)
-		})
+	if _, err := compatSignerKMS.ParseHashFunc("not-a-hash"); err == nil {
+		t.Fatal("unknown algorithms must not silently select a default")
 	}
 }
 
@@ -1396,7 +1388,7 @@ func TestBehavioralDrift_MemorySourceCrossLayer(t *testing.T) {
 
 	subjects := map[string]cryptoutil.DigestSet{
 		"binary": {
-			cryptoutil.DigestValue{Hash: crypto.SHA256}: "deadbeef",
+			cryptoutil.DigestValue{Hash: crypto.SHA256}: strings.Repeat("d", 64),
 		},
 	}
 
@@ -1429,7 +1421,7 @@ func TestBehavioralDrift_MemorySourceCrossLayer(t *testing.T) {
 
 	// Search through rookery Sourcer interface.
 	var s source.Sourcer = ms
-	results, err := s.Search(context.Background(), "cross-layer-search", []string{"deadbeef"}, nil)
+	results, err := s.Search(context.Background(), "cross-layer-search", []string{strings.Repeat("d", 64)}, nil)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

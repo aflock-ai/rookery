@@ -33,6 +33,9 @@ import (
 // pattern length and allocates; caching avoids redundant work when the same
 // sensitive-env-var list is checked against many environment variables.
 var compiledGlobCache sync.Map
+var compiledGlobCacheWrite sync.Mutex
+
+const maxCompiledGlobs = 100
 
 // safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob library
 // can panic on certain patterns that compile successfully but trigger out-of-bounds
@@ -63,7 +66,18 @@ func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]stru
 				if err != nil {
 					continue
 				}
-				compiledGlobCache.Store(upperPattern, compiled)
+				// The cache is optional: after its bound, evaluate new patterns
+				// without retaining them. Never omit a sensitivity check.
+				compiledGlobCacheWrite.Lock()
+				count := 0
+				compiledGlobCache.Range(func(_, _ any) bool {
+					count++
+					return count < maxCompiledGlobs
+				})
+				if count < maxCompiledGlobs {
+					compiledGlobCache.Store(upperPattern, compiled)
+				}
+				compiledGlobCacheWrite.Unlock()
 				cached = compiled
 			}
 			g, ok := cached.(glob.Glob)

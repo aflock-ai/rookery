@@ -17,6 +17,7 @@
 package git
 
 import (
+	"github.com/go-git/go-git/v5/plumbing"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,19 +251,24 @@ func TestSecurity_R3_212_DetectDotGitParentTraversal(t *testing.T) {
 	err = ctx.RunAttestors()
 	require.NoError(t, err)
 
-	// The attestor should ideally NOT attest a parent repo, but it does.
-	if attestor.AuthorEmail == "attacker@evil.com" {
-		t.Errorf("R3-212 BUG PROVEN: DetectDotGit walked up to parent directory.\n"+
-			"WorkingDir: %s\n"+
-			"Attested repo found at: %s\n"+
-			"Author email: %s (from parent repo)\n"+
-			"Commit message: %s\n"+
-			"An attacker who controls any parent directory can substitute the entire\n"+
-			"git attestation. All commit data, refs, and remotes come from the\n"+
-			"attacker's repo instead of the intended project.\n"+
-			"Fix: validate that the discovered .git is inside or adjacent to workingDir.",
-			childDir, parentDir, attestor.AuthorEmail, attestor.CommitMessage)
-	}
+	require.Equal(t, "attacker@evil.com", attestor.AuthorEmail, "subdirectory execution discovers the enclosing repository")
+	parentHash := attestor.CommitHash
+	childRepo, err := gogit.PlainInit(childDir, false)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(childDir, "child.txt"), []byte("child"), 0600))
+	childTree, err := childRepo.Worktree()
+	require.NoError(t, err)
+	_, err = childTree.Add("child.txt")
+	require.NoError(t, err)
+	childHash, err := childTree.Commit("child repository", &gogit.CommitOptions{Author: &object.Signature{Name: "Child", Email: "child@example.invalid", When: time.Now()}})
+	require.NoError(t, err)
+	childAttestor := New()
+	childContext, err := attestation.NewContext("child", []attestation.Attestor{childAttestor}, attestation.WithWorkingDir(childDir))
+	require.NoError(t, err)
+	require.NoError(t, childContext.RunAttestors())
+	require.Equal(t, childHash.String(), childAttestor.CommitHash, "discovery must stop at the nearest repository")
+	require.NotEqual(t, parentHash, childAttestor.CommitHash)
+	require.Equal(t, "child@example.invalid", childAttestor.AuthorEmail)
 }
 
 // =============================================================================
@@ -283,31 +289,37 @@ func TestSecurity_R3_212_DetectDotGitParentTraversal(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_213_PGPSignatureNotVerified(t *testing.T) {
-	// Directly construct an attestor with a fake PGP signature to show
-	// the field is stored verbatim without any verification.
-	attestor := &Attestor{
-		CommitHash: "abc123def456abc123def456abc123def456abc1",
-		Signature: `-----BEGIN PGP SIGNATURE-----
+	const observedSignature = `-----BEGIN PGP SIGNATURE-----
 FAKE_INVALID_PGP_SIGNATURE_THAT_PROVES_NO_VERIFICATION
 This is completely fabricated garbage data that would never
 pass any PGP verification, but it will appear in the attestation
 as if it were a real signature.
------END PGP SIGNATURE-----`,
-	}
-
-	// The attestor stores whatever is in commit.PGPSignature
-	if attestor.Signature != "" {
-		t.Errorf("R3-213 BUG PROVEN: PGP signature field stores unverified data.\n"+
-			"Signature content: %.80s...\n"+
-			"The git attestor includes commit PGP signatures without verification.\n"+
-			"Downstream consumers may treat the presence of this field as proof of\n"+
-			"authenticity, but the signature is never checked against any keyring.\n"+
-			"An attacker can create commits with fake PGP signatures that appear\n"+
-			"in the attestation as if they were genuine.\n"+
-			"Fix: either verify signatures and add a signatureVerified boolean,\n"+
-			"or omit unverified signatures entirely.",
-			attestor.Signature)
-	}
+-----END PGP SIGNATURE-----`
+	repo, dir, cleanup := createTestRepo(t, true)
+	defer cleanup()
+	head, err := repo.Head()
+	require.NoError(t, err)
+	commit, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+	commit.PGPSignature = observedSignature
+	encoded := repo.Storer.NewEncodedObject()
+	require.NoError(t, commit.Encode(encoded))
+	hash, err := repo.Storer.SetEncodedObject(encoded)
+	require.NoError(t, err)
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(head.Name(), hash)))
+	attestor := New()
+	ctx, err := attestation.NewContext("observed-signature", []attestation.Attestor{attestor}, attestation.WithWorkingDir(dir))
+	require.NoError(t, err)
+	require.NoError(t, ctx.RunAttestors())
+	require.Equal(t, hash.String(), attestor.CommitHash)
+	stored, err := repo.CommitObject(hash)
+	require.NoError(t, err)
+	require.Contains(t, stored.PGPSignature, observedSignature)
+	require.Equal(t, stored.PGPSignature, attestor.Signature, "record serialized commit data without claiming PGP verification")
+	subjects, refs := attestor.Subjects(), attestor.BackRefs()
+	attestor.Signature = ""
+	require.Equal(t, subjects, attestor.Subjects(), "raw signature text must not create identity subjects")
+	require.Equal(t, refs, attestor.BackRefs(), "raw signature text must not become an evidence lookup anchor")
 }
 
 // =============================================================================

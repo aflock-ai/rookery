@@ -17,8 +17,8 @@ package policy
 // Warn-first hardening tests for issue #6266. Each of the five dangerous
 // configurations surfaced by the -tags audit detector sweep now emits a loud
 // WARN via the attestation/log package WITHOUT any enforcement/behavior change.
-// The audit detector tests (which assert enforcement) deliberately stay red;
-// these tests assert only that the WARN fires on the dangerous config and does
+// The audit regressions exercise both warn and enforce modes. These tests
+// assert that the WARN fires on the dangerous config and does
 // NOT fire on a clean config. They capture logger output by swapping in a
 // recording Logger via log.SetLogger.
 

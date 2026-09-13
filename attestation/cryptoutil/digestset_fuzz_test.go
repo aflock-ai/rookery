@@ -166,16 +166,15 @@ func TestDigestSet_DS002_EmptyAndNilEquality(t *testing.T) {
 // ==========================================================================
 
 func TestDigestSet_DS003_UnsupportedHashAlgorithms(t *testing.T) {
-	t.Run("unsupported_hash_in_digestset_equal_works", func(t *testing.T) {
+	t.Run("unsupported_hash_cannot_establish_equality", func(t *testing.T) {
 		// SHA512 is not in hashNames, but it works as a DigestValue key
 		sha512Key := DigestValue{Hash: crypto.SHA512}
 
 		ds1 := DigestSet{sha512Key: "abc123"}
 		ds2 := DigestSet{sha512Key: "abc123"}
 
-		// Equal works because it just compares map keys + string values
-		assert.True(t, ds1.Equal(ds2),
-			"Equal should work with unsupported hash algorithms")
+		assert.False(t, ds1.Equal(ds2),
+			"unrecognized algorithms cannot establish policy equality")
 	})
 
 	t.Run("unsupported_hash_marshal_fails", func(t *testing.T) {
@@ -573,8 +572,8 @@ func TestDigestSet_DS008_SubsetSemantics(t *testing.T) {
 
 		// BUG: This returns true because sha1 matches.
 		// An attacker who can collide sha1 can bypass sha256 verification.
-		assert.True(t, fullSet.Equal(weakSubset),
-			"BUG: subset with ONLY weak sha1 is considered Equal to full set")
+		assert.False(t, fullSet.Equal(weakSubset),
+			"a SHA1-only subset must not satisfy a set requiring SHA256")
 	})
 
 	t.Run("no_overlapping_hashes", func(t *testing.T) {

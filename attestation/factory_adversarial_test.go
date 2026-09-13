@@ -3,11 +3,23 @@
 package attestation
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/invopop/jsonschema"
+	"github.com/stretchr/testify/require"
 )
+
+type registrationWarningLog struct {
+	log.Logger
+	warnings []string
+}
+
+func (l *registrationWarningLog) Warnf(format string, args ...interface{}) {
+	l.warnings = append(l.warnings, fmt.Sprintf(format, args...))
+}
 
 // --- Test helpers ---
 
@@ -71,6 +83,14 @@ func TestGetAttestor_UnknownSingle(t *testing.T) {
 // TestRegisterAttestation_DuplicateName verifies that registering the same
 // name twice silently overwrites the first registration.
 func TestRegisterAttestation_DuplicateName(t *testing.T) {
+	previousRegistry, previousTypes := attestorRegistry, attestationsByType
+	attestorRegistry = registry.New[Attestor]()
+	attestationsByType = map[string]registry.Entry[Attestor]{}
+	t.Cleanup(func() { attestorRegistry, attestationsByType = previousRegistry, previousTypes })
+	previousLogger := log.GetLogger()
+	warnings := &registrationWarningLog{Logger: previousLogger}
+	log.SetLogger(warnings)
+	t.Cleanup(func() { log.SetLogger(previousLogger) })
 	first := &adversarialAttestor{
 		name:          "adv-dup-test",
 		predicateType: "https://test/adv-dup-1",
@@ -83,6 +103,7 @@ func TestRegisterAttestation_DuplicateName(t *testing.T) {
 	}
 
 	RegisterAttestation(first.name, first.predicateType, first.runType, func() Attestor { return first })
+	require.Empty(t, warnings.warnings, "a new registration must not report replacement")
 	RegisterAttestation(second.name, second.predicateType, second.runType, func() Attestor { return second })
 
 	factory, ok := FactoryByName("adv-dup-test")
@@ -90,20 +111,13 @@ func TestRegisterAttestation_DuplicateName(t *testing.T) {
 		t.Fatalf("FactoryByName should find 'adv-dup-test'")
 	}
 
-	att := factory()
-	if att.Type() != second.predicateType {
-		t.Logf("OK: duplicate registration overwrites by name (last wins). "+
-			"First type=%q, second type=%q, got type=%q", first.predicateType, second.predicateType, att.Type())
-	} else {
-		t.Errorf("BUG: duplicate registration silently overwrites by name without warning. "+
-			"The first registration for name %q is lost. This could cause subtle bugs if two plugins "+
-			"register under the same name.", first.name)
-	}
+	require.Same(t, second, factory(), "preserve the registry's replacement contract")
+	require.Len(t, warnings.warnings, 1, "replacement must not be silent")
+	require.Contains(t, warnings.warnings[0], first.name)
 }
 
-// TestRegisterAttestation_SameRunType_LastWins verifies that the
-// attestationsByRun map only holds one entry per RunType (last writer wins).
-func TestRegisterAttestation_SameRunType_LastWins(t *testing.T) {
+// Scheduling must preserve every selected attestor, including shared stages.
+func TestRegisterAttestation_SameRunTypePreservesAll(t *testing.T) {
 	a1 := &adversarialAttestor{
 		name:          "adv-run-first",
 		predicateType: "https://test/run-first",
@@ -118,21 +132,15 @@ func TestRegisterAttestation_SameRunType_LastWins(t *testing.T) {
 	RegisterAttestation(a1.name, a1.predicateType, a1.runType, func() Attestor { return a1 })
 	RegisterAttestation(a2.name, a2.predicateType, a2.runType, func() Attestor { return a2 })
 
-	// attestationsByRun[PostProductRunType] should only hold one entry
-	entry, ok := attestationsByRun[PostProductRunType]
-	if !ok {
-		t.Fatalf("attestationsByRun should contain PostProductRunType")
-	}
-
-	// The entry should be the last registered
-	if entry.Name != a2.name {
-		t.Logf("OK: attestationsByRun last-writer-wins (got %q, expected %q)", entry.Name, a2.name)
-	}
-
-	t.Errorf("BUG: attestationsByRun only stores one entry per RunType (last-writer-wins). " +
-		"If two attestors register with the same RunType, the first is silently dropped from attestationsByRun. " +
-		"While FactoryByName still works, attestationsByRun is effectively useless for RunTypes with multiple attestors. " +
-		"This map is declared but appears to have no consumers -- it may be dead code.")
+	attestors, err := GetAttestors([]string{a1.name, a2.name})
+	require.NoError(t, err)
+	require.Len(t, attestors, 2)
+	ctx, err := NewContext("same-stage", attestors)
+	require.NoError(t, err)
+	require.NoError(t, ctx.RunAttestors())
+	completed := ctx.CompletedAttestors()
+	require.Len(t, completed, 2, "both attestors in one stage must execute")
+	require.ElementsMatch(t, []string{a1.name, a2.name}, []string{completed[0].Attestor.Name(), completed[1].Attestor.Name()})
 }
 
 // TestRegisterAttestationWithTypes_MultiplePredicateTypes verifies that
@@ -255,35 +263,22 @@ func TestAttestorOptions_UnknownName(t *testing.T) {
 // TestRegisterAttestation_NilFactory verifies behavior when registering
 // a nil factory function (not the return value, the function itself).
 func TestRegisterAttestation_NilFactory(t *testing.T) {
-	// This should ideally panic or return an error, but it's a silent nil registration
-	defer func() {
-		if r := recover(); r != nil {
-			t.Logf("OK: nil factory registration panics: %v", r)
-		}
-	}()
-
-	RegisterAttestation("adv-nil-factory", "https://test/nil", ExecuteRunType, nil)
-
-	factory, ok := FactoryByName("adv-nil-factory")
-	if !ok {
-		t.Logf("OK: nil factory not registered")
-		return
+	require.PanicsWithValue(t, "nil attestation factory", func() {
+		RegisterAttestation("adv-nil-factory", "https://test/nil", ExecuteRunType, nil)
+	})
+	_, ok := FactoryByName("adv-nil-factory")
+	require.False(t, ok)
+	_, ok = FactoryByType("https://test/nil")
+	require.False(t, ok)
+	require.PanicsWithValue(t, "nil attestation factory", func() {
+		RegisterAttestationWithTypes("adv-nil-types", []string{"https://test/nil-a", "https://test/nil-b"}, ExecuteRunType, nil)
+	})
+	_, ok = FactoryByName("adv-nil-types")
+	require.False(t, ok)
+	for _, predicate := range []string{"https://test/nil-a", "https://test/nil-b"} {
+		_, ok = FactoryByType(predicate)
+		require.False(t, ok)
 	}
-
-	if factory == nil {
-		t.Errorf("BUG: nil factory registered successfully. Calling it will panic. " +
-			"RegisterAttestation does not validate that the factory function is non-nil.")
-		return
-	}
-
-	// If we get here, calling factory() with a nil function will panic
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("BUG: calling factory registered with nil panics: %v. "+
-				"RegisterAttestation should validate factory is non-nil.", r)
-		}
-	}()
-	_ = factory()
 }
 
 // TestRegisterLegacyAliases_AfterRegistration verifies that legacy aliases

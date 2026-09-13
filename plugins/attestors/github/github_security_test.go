@@ -17,6 +17,7 @@
 package github
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -69,6 +70,7 @@ func securityJWTInfra(t *testing.T, claims map[string]interface{}) (jwksServer *
 		json.NewEncoder(w).Encode(resp)
 	}))
 
+	routeTokenServer(t, tokenServer)
 	return jwksServer, tokenServer
 }
 
@@ -131,7 +133,9 @@ func TestSecurity_R3_216_JWTEnvVarCrossValidationBypass(t *testing.T) {
 	require.NoError(t, err)
 
 	err = a.Attest(ctx)
-	require.NoError(t, err, "Attest should succeed -- JWT is cryptographically valid")
+	require.ErrorContains(t, err, "repository claim")
+	require.Empty(t, a.ProjectUrl)
+	require.Empty(t, a.PipelineUrl)
 
 	// The JWT says "attacker/evil-repo" but ProjectUrl says "victim-org/critical-infrastructure"
 	jwtRepo, _ := a.JWT.Claims["repository"].(string)
@@ -208,7 +212,9 @@ func TestSecurity_R3_217_SSRFTokenURLExfiltratesBearer(t *testing.T) {
 	// Actually invoke fetchToken to prove the bearer is exfiltrated
 	secretBearer := "ghs_RealGitHubActionsToken1234567890"
 	_, err := fetchToken(a.tokenURL, secretBearer, "witness")
-	require.NoError(t, err, "fetchToken should succeed (attacker returns valid JSON)")
+	require.ErrorContains(t, err, "invalid GitHub Actions token endpoint")
+	require.Empty(t, capturedBearer)
+	require.Empty(t, capturedPath)
 
 	if capturedBearer == "bearer "+secretBearer {
 		t.Errorf("R3-217 BUG PROVEN: Bearer token exfiltrated via SSRF.\n"+
@@ -244,54 +250,27 @@ func TestSecurity_R3_217_SSRFTokenURLExfiltratesBearer(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_218_FetchTokenNoClientTimeout(t *testing.T) {
-	// This test verifies that fetchToken creates an http.Client without a
-	// timeout, making it vulnerable to DoS via slow/hanging endpoints.
-	//
-	// We CANNOT spin up a hanging server and call fetchToken directly because
-	// that would leak a goroutine that blocks until the test binary exits.
-	// Instead, we prove the bug by:
-	// 1. Starting a server that delays response for 2 seconds
-	// 2. Calling fetchToken with a short per-test deadline
-	// 3. If fetchToken has no internal timeout, it waits the full 2s
-	//    (which demonstrates it would wait forever for a truly hanging server)
-
-	requestReceived := make(chan struct{}, 1)
-
-	// Server that responds after 2 seconds -- enough to prove no timeout,
-	// short enough to not hang the test suite.
+	require.Equal(t, 30*time.Second, tokenHTTPClient.Timeout)
+	previous := tokenHTTPClient
+	client := *previous
+	client.Timeout = 100 * time.Millisecond
+	tokenHTTPClient = &client
+	t.Cleanup(func() { tokenHTTPClient = previous })
+	requestReceived := make(chan struct{})
 	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case requestReceived <- struct{}{}:
-		default:
-		}
-		// Delay 2 seconds. If fetchToken had a sub-second timeout, it would
-		// abort before the server responds.
-		time.Sleep(2 * time.Second)
-		resp := GithubTokenResponse{Count: 1, Value: "delayed-jwt"}
-		json.NewEncoder(w).Encode(resp)
+		close(requestReceived)
+		<-r.Context().Done()
 	}))
 	defer slowServer.Close()
-
-	start := time.Now()
+	routeTokenServer(t, slowServer)
 	token, err := fetchToken(slowServer.URL+"/token", "bearer", "witness")
-	elapsed := time.Since(start)
-
-	// If fetchToken waited the full 2 seconds for the server, it has no
-	// internal timeout shorter than that. A properly-timed client with,
-	// say, a 500ms timeout would have aborted.
-	if err == nil && token == "delayed-jwt" && elapsed >= 2*time.Second {
-		t.Errorf("R3-218 BUG PROVEN: fetchToken has no client timeout.\n"+
-			"fetchToken waited %.1fs for a deliberately slow server and succeeded.\n"+
-			"The http.Client{} in fetchToken has no Timeout field set.\n"+
-			"A truly hanging endpoint would block the attestor process indefinitely.\n"+
-			"Combined with SSRF (R3-217), an attacker can DoS the attestation.\n\n"+
-			"Compare: JWT attestor uses http.Client{Timeout: 30 * time.Second}\n"+
-			"Fix: add Timeout to the http.Client in fetchToken, e.g. 30s.",
-			elapsed.Seconds())
-	} else if err != nil {
-		// fetchToken returned an error quickly -- a timeout may have been added
-		t.Logf("R3-218: fetchToken returned error in %.1fs: %v (timeout may be applied)",
-			elapsed.Seconds(), err)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Empty(t, token)
+	select {
+	case <-requestReceived:
+	default:
+		t.Fatal("request did not reach the slow endpoint")
 	}
 }
 
@@ -315,7 +294,7 @@ func TestSecurity_R3_218_FetchTokenNoClientTimeout(t *testing.T) {
 // =============================================================================
 
 func TestSecurity_R3_219_CIHostNeverPopulated(t *testing.T) {
-	jwtClaims := map[string]interface{}{"sub": "test"}
+	jwtClaims := map[string]interface{}{"sub": "test", "repository": "org/repo", "run_id": "1"}
 	jwksServer, tokenServer := securityJWTInfra(t, jwtClaims)
 	defer jwksServer.Close()
 	defer tokenServer.Close()
@@ -468,7 +447,16 @@ func TestSecurity_R3_220_EnvVarURLConcatenationInjection(t *testing.T) {
 			require.NoError(t, err)
 
 			err = a.Attest(ctx)
-			require.NoError(t, err)
+			switch {
+			case tc.serverURL != "https://github.com":
+				require.ErrorContains(t, err, "invalid GITHUB_SERVER_URL")
+			case tc.repository != "org/repo":
+				require.ErrorContains(t, err, "invalid GITHUB_REPOSITORY")
+			default:
+				require.ErrorContains(t, err, "invalid GITHUB_RUN_ID")
+			}
+			require.Empty(t, a.ProjectUrl)
+			require.Empty(t, a.PipelineUrl)
 
 			if desc := tc.wantCheck(a); desc != "" {
 				t.Errorf("R3-220 BUG PROVEN: %s\n"+

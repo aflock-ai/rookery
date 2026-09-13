@@ -218,25 +218,13 @@ func TestAdversarial_KeyIDCollisionReducesThreshold(t *testing.T) {
 	wrapped1 := &fixedKeyIDVerifier{inner: realVerifier1, keyID: collisionID}
 	wrapped2 := &fixedKeyIDVerifier{inner: realVerifier2, keyID: collisionID}
 
-	// Both verifiers successfully verify their respective signatures,
-	// but they report the same KeyID. The dedup map will only count 1.
+	// Distinct cryptographic keys remain distinct even if their display IDs collide.
 	_, err = env.Verify(
 		VerifyWithVerifiers(wrapped1, wrapped2),
 		VerifyWithThreshold(2),
 	)
 
-	// This SHOULD fail because the dedup map sees "colliding-key-id" twice
-	// and only counts it once.
-	if err == nil {
-		t.Errorf("KeyID collision unexpectedly passed threshold=2. Two distinct keys " +
-			"with colliding KeyIDs should still be counted as 1 (by design? or bug?)")
-	} else {
-		// Documenting this as a design concern: if two legitimately different
-		// keys happen to have the same KeyID (e.g., a malicious CA reissues),
-		// the threshold count is reduced. This may or may not be desired behavior.
-		t.Logf("DESIGN NOTE: KeyID collision reduced verified count from 2 to 1. "+
-			"Error: %v", err)
-	}
+	require.NoError(t, err, "two distinct verified keys must satisfy threshold two")
 }
 
 // TestAdversarial_AlwaysPassVerifierMeetsThreshold tests that a verifier
@@ -466,7 +454,9 @@ func TestAdversarial_VerifierKeyIDFallbackStability(t *testing.T) {
 
 	assert.Equal(t, kid1, kid2, "fallback KeyID should be stable across calls")
 	assert.Equal(t, kid2, kid3, "fallback KeyID should be stable across calls")
-	assert.Contains(t, kid1, "fallback:", "should use fallback prefix")
+	want, err := realVerifier.KeyID()
+	require.NoError(t, err)
+	assert.Equal(t, want, kid1, "use available key material rather than a pointer identity")
 }
 
 // TestAdversarial_VerifierKeyIDFallbackUniqueness tests that different verifier

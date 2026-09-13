@@ -165,6 +165,12 @@ func TestAdversarial_MaliciousURLValues(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("JENKINS_URL", "https://jenkins.com")
+			if strings.ContainsRune(tc.value, 0) {
+				if err := os.Setenv(tc.envVar, tc.value); err == nil {
+					t.Fatal("the OS accepted a NUL-containing environment value")
+				}
+				return // This value cannot reach an environment-backed attestor.
+			}
 			t.Setenv(tc.envVar, tc.value)
 
 			a := New()

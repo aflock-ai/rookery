@@ -434,46 +434,19 @@ func TestSecurity_R3_306_GetAttestorsPartialOnError(t *testing.T) {
 // factory is silently stored in three separate locations, creating three
 // independent panic sources.
 // File: factory.go:98-102
-func TestSecurity_R3_307_NilFactoryPropagatesAcrossAllMaps(t *testing.T) {
+func TestSecurity_R3_307_NilFactoryRejectedBeforeRegistration(t *testing.T) {
 	name := "r3-307-nil-factory"
 	predType := "https://test/r3-307-nil"
 
-	RegisterAttestation(name, predType, VerifyRunType, nil)
-
-	// Nil factory is in name registry
-	factoryByName, okName := FactoryByName(name)
-	require.True(t, okName, "name should be registered")
-	assert.Nil(t, factoryByName,
-		"nil factory stored in name registry")
-
-	// Nil factory is in type map
-	factoryByType, okType := FactoryByType(predType)
-	require.True(t, okType, "type should be registered")
-	assert.Nil(t, factoryByType,
-		"nil factory stored in type map")
-
-	// Nil factory is in run map
-	entry, okRun := attestationsByRun[VerifyRunType]
-	require.True(t, okRun, "run type should be registered")
-	assert.Nil(t, entry.Factory,
-		"nil factory stored in run map")
-
-	// All three panic when called
-	assert.Panics(t, func() { factoryByName() },
-		"BUG [HIGH]: nil factory from name registry panics on call")
-	assert.Panics(t, func() { factoryByType() },
-		"BUG [HIGH]: nil factory from type map panics on call")
-	assert.Panics(t, func() { entry.Factory() },
-		"BUG [HIGH]: nil factory from run map panics on call")
-
-	// GetAttestors also panics
-	assert.Panics(t, func() {
-		_, _ = GetAttestors([]string{name})
-	}, "BUG [HIGH]: GetAttestors panics when nil factory is in registry")
-
-	t.Logf("BUG [HIGH]: RegisterAttestation with nil factory silently propagates " +
-		"nil to all three maps. Three independent panic sources, all traceable " +
-		"to a single unvalidated registration call. File: factory.go:98-102")
+	require.PanicsWithValue(t, "nil attestation factory", func() {
+		RegisterAttestation(name, predType, VerifyRunType, nil)
+	})
+	_, okName := FactoryByName(name)
+	require.False(t, okName)
+	_, okType := FactoryByType(predType)
+	require.False(t, okType)
+	_, err := GetAttestors([]string{name})
+	require.Error(t, err, "an invalid registration must not poison later lookups")
 }
 
 // ==========================================================================
@@ -594,7 +567,7 @@ func TestSecurity_R3_309_GetAttestorsNameAndTypeBothResolve(t *testing.T) {
 // PreMaterial attestors like git, environment). The map can only store
 // one per RunType. It appears to be dead code or a design mistake.
 // File: factory.go:28, 101, 109
-func TestSecurity_R3_310_AttestationsByRunSingleSlot(t *testing.T) {
+func TestSecurity_R3_310_SameRunTypeAllExecute(t *testing.T) {
 	// Register three attestors with the same RunType
 	for i := 1; i <= 3; i++ {
 		name := "r3-310-" + string(rune('a'+i-1))
@@ -611,26 +584,26 @@ func TestSecurity_R3_310_AttestationsByRunSingleSlot(t *testing.T) {
 		)
 	}
 
-	// attestationsByRun[ProductRunType] only has the LAST one
-	entry, ok := attestationsByRun[ProductRunType]
-	require.True(t, ok, "ProductRunType should have an entry")
-
-	att := entry.Factory()
-	sa := att.(*securityAttestor)
-	assert.Equal(t, "r3-310-c", sa.Name(),
-		"BUG [MEDIUM]: attestationsByRun only stores last-writer for each RunType. "+
-			"First two attestors (a, b) were silently dropped from the run map.")
-
 	// All three are still in the name registry
 	for _, suffix := range []string{"a", "b", "c"} {
 		_, ok := FactoryByName("r3-310-" + suffix)
 		assert.True(t, ok, "attestor %s should be in name registry", suffix)
 	}
 
-	t.Logf("BUG [MEDIUM]: attestationsByRun[ProductRunType] stores exactly one entry. " +
-		"Three attestors registered with ProductRunType, only the last survives. " +
-		"This map is structurally incapable of storing multiple attestors per RunType. " +
-		"File: factory.go:28, 101, 109")
+	attestors, err := GetAttestors([]string{"r3-310-a", "r3-310-b", "r3-310-c"})
+	require.NoError(t, err)
+	require.Len(t, attestors, 3)
+	ctx, err := NewContext("three-products", attestors)
+	require.NoError(t, err)
+	require.NoError(t, ctx.RunAttestors())
+	completed := ctx.CompletedAttestors()
+	require.Len(t, completed, 3)
+	names := make([]string, 0, 3)
+	for _, result := range completed {
+		require.NoError(t, result.Error)
+		names = append(names, result.Attestor.Name())
+	}
+	require.ElementsMatch(t, []string{"r3-310-a", "r3-310-b", "r3-310-c"}, names)
 }
 
 // ==========================================================================

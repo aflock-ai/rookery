@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -95,7 +96,11 @@ func TestStartHTTPMockOptionEndpointBinding(t *testing.T) {
 		},
 	}
 
+	original := http.DefaultTransport
 	bindings := startHTTPMock(t, fx)
+	if http.DefaultTransport != original {
+		t.Fatal("ordinary mock changed DefaultTransport")
+	}
 	base, ok := bindings["api-url"].(string)
 	if !ok || base == "" {
 		t.Fatalf("expected api-url option bound to stub base URL, got %v", bindings)
@@ -119,6 +124,12 @@ func TestDecodeEndpointsRejectsBadBinding(t *testing.T) {
 		"neither-env-nor-option": {"file": "x.json", "path": "/x"},
 		"both-env-and-option":    {"env": "X_URL", "option": "api-url", "file": "x.json", "path": "/x"},
 		"missing-file":           {"option": "api-url", "path": "/x"},
+		"url-with-option":        {"option": "api-url", "file": "x.json", "url": "https://example.com/x"},
+		"url-http":               {"env": "X_URL", "file": "x.json", "url": "http://example.com/x"},
+		"url-relative":           {"env": "X_URL", "file": "x.json", "url": "/x"},
+		"url-userinfo":           {"env": "X_URL", "file": "x.json", "url": "https://user@example.com/x"},
+		"url-fragment":           {"env": "X_URL", "file": "x.json", "url": "https://example.com/x#fragment"},
+		"url-query":              {"env": "X_URL", "file": "x.json", "url": "https://example.com/x?q=1"},
 	}
 	for name, ep := range bad {
 		t.Run(name, func(t *testing.T) {
@@ -141,6 +152,87 @@ func TestDecodeEndpointsRejectsBadBinding(t *testing.T) {
 			t.Fatalf("decoded endpoint = %+v, want {Option:api-url File:pull.json}", eps[0])
 		}
 	})
+}
+
+func TestStartHTTPMockLogicalEndpoint(t *testing.T) {
+	original := http.DefaultTransport
+	t.Run("replay", func(t *testing.T) {
+		dir := t.TempDir()
+		mustWrite(t, filepath.Join(dir, "token.json"), []byte(`{"value":"recorded-token"}`))
+		const logical = "https://fixture.actions.githubusercontent.com/token"
+		fx := &Fixture{Name: "logical", Dir: dir, Options: map[string]any{
+			optEndpoints: []any{
+				map[string]any{"env": "TEST_TOKEN_URL", "file": "token.json", "path": "/replay-token", "url": logical},
+				map[string]any{"env": "TEST_LOCAL_URL", "file": "token.json", "path": "/local"},
+			},
+		}}
+		startHTTPMock(t, fx)
+		if got := os.Getenv("TEST_TOKEN_URL"); got != logical {
+			t.Fatalf("endpoint = %q, want logical URL %q", got, logical)
+		}
+		for _, endpoint := range []string{logical + "?audience=witness", os.Getenv("TEST_LOCAL_URL")} {
+			if got := mustGet(t, endpoint); got != `{"value":"recorded-token"}` {
+				t.Fatalf("replay body = %q", got)
+			}
+		}
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, logical+"?audience=witness", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "bearer mock")
+		resp, err := http.DefaultTransport.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if req.URL.String() != logical+"?audience=witness" || req.Host != "fixture.actions.githubusercontent.com" {
+			t.Fatal("replay mutated caller's request")
+		}
+		if resp.Request.URL.Query().Get("audience") != "witness" || resp.Request.Header.Get("Authorization") != "bearer mock" {
+			t.Fatal("replay lost query or authorization header")
+		}
+		t.Run("nested-replay", func(t *testing.T) {
+			startHTTPMock(t, fx)
+			if got := mustGet(t, logical); got != `{"value":"recorded-token"}` {
+				t.Fatalf("nested replay body = %q", got)
+			}
+		})
+		if got := mustGet(t, logical); got != `{"value":"recorded-token"}` {
+			t.Fatalf("restored replay body = %q", got)
+		}
+		for _, endpoint := range []string{logical + "/unknown", "https://unrecorded.invalid/token", "http://fixture.actions.githubusercontent.com/token"} {
+			resp, err := http.Get(endpoint)
+			if err == nil {
+				_ = resp.Body.Close()
+				t.Fatalf("unexpected endpoint %q was not refused", endpoint)
+			}
+		}
+	})
+	if http.DefaultTransport != original {
+		t.Fatal("logical replay leaked DefaultTransport after cleanup")
+	}
+}
+
+func TestDecodeEndpointsRejectsConflictingLogicalRoutes(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "first.json"), []byte(`{"value":"first"}`))
+	mustWrite(t, filepath.Join(dir, "second.json"), []byte(`{"value":"second"}`))
+	fx := &Fixture{Name: "conflicting-routes", Dir: dir, Options: map[string]any{
+		optEndpoints: []any{
+			map[string]any{"env": "FIRST_URL", "file": "first.json", "path": "/first", "url": "https://fixture.actions.githubusercontent.com/token"},
+			map[string]any{"env": "SECOND_URL", "file": "second.json", "path": "/second", "url": "https://fixture.actions.githubusercontent.com/token"},
+		},
+	}}
+	if _, err := decodeEndpoints(fx); err == nil || !strings.Contains(err.Error(), "duplicates logical URL") {
+		t.Fatalf("two different recorded responses for one URL: got %v, want duplicate route rejection", err)
+	}
+	fx.Options[optEndpoints].([]any)[1].(map[string]any)["url"] = "https://fixture.actions.githubusercontent.com/second"
+	startHTTPMock(t, fx)
+	for env, want := range map[string]string{"FIRST_URL": `{"value":"first"}`, "SECOND_URL": `{"value":"second"}`} {
+		if got := mustGet(t, os.Getenv(env)); got != want {
+			t.Errorf("distinct logical endpoint %s = %q, want %q", env, got, want)
+		}
+	}
 }
 
 func mustGet(t *testing.T, url string) string {

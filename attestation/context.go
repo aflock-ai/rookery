@@ -267,6 +267,7 @@ type AttestationContext struct {
 	materials           map[string]cryptoutil.DigestSet
 	stepName            string
 	mutex               sync.RWMutex
+	ran                 bool
 	environmentCapturer EnvironmentCapturer
 	outputWriters       []io.Writer
 
@@ -320,6 +321,13 @@ func NewContext(stepName string, attestors []Attestor, opts ...AttestationContex
 }
 
 func (ctx *AttestationContext) RunAttestors() error {
+	ctx.mutex.Lock()
+	if ctx.ran {
+		ctx.mutex.Unlock()
+		return errors.New("attestation context has already run; create a new context for new evidence")
+	}
+	ctx.ran = true
+	ctx.mutex.Unlock()
 	attestors := make(map[RunType][]Attestor)
 	for _, attestor := range ctx.attestors {
 		if attestor.RunType() == "" {

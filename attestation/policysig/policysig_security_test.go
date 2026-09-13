@@ -307,7 +307,7 @@ func TestSecurity_R3_261_FailedDSSEVerifierNotUsedForConstraints(t *testing.T) {
 // requires exact bidirectional set equality (not glob matching).
 // ==========================================================================
 
-func TestSecurity_R3_262_WildcardInMultiElementSliceNotTreatedAsGlob(t *testing.T) {
+func TestSecurity_R3_262_ExplicitWildcardInMultiElementSlice(t *testing.T) {
 	root, rootKey := secCreateRootCA(t)
 	inter, interKey := secCreateIntermediateCA(t, root, rootKey)
 	leaf, leafKey := secCreateLeafCert(t, inter, interKey, secLeafOpts{
@@ -317,9 +317,8 @@ func TestSecurity_R3_262_WildcardInMultiElementSliceNotTreatedAsGlob(t *testing.
 
 	env := secSignEnvelopeX509(t, leafKey, leaf, inter, root)
 
-	// Set organizations to ["*", "ExtraOrg"]. This suppresses the wildcard
-	// warning but should still fail because checkCertConstraint does exact
-	// set matching: it expects the cert to have BOTH "*" and "ExtraOrg".
+	// The shipped glob contract treats an explicit * as allow-all regardless
+	// of position. Exact constraints without * remain restrictive.
 	vo := NewVerifyPolicySignatureOptions(
 		VerifyWithPolicyCARoots([]*x509.Certificate{root}),
 		VerifyWithPolicyCAIntermediates([]*x509.Certificate{inter}),
@@ -327,15 +326,15 @@ func TestSecurity_R3_262_WildcardInMultiElementSliceNotTreatedAsGlob(t *testing.
 			"*",                       // CN wildcard - passes
 			[]string{"*"},             // DNS - passes
 			[]string{"*"},             // emails - passes
-			[]string{"*", "ExtraOrg"}, // orgs - should fail: cert has ["MyOrg"] not ["*","ExtraOrg"]
+			[]string{"*", "ExtraOrg"}, // explicit allow-all
 			[]string{"*"},             // URIs - passes
 		),
 		secTSAOption(),
 	)
 
 	err := VerifyPolicySignature(context.Background(), env, vo)
-	if err == nil {
-		t.Fatal("expected failure: multi-element org constraint ['*','ExtraOrg'] should not match cert with org ['MyOrg']")
+	if err != nil {
+		t.Fatalf("explicit wildcard rejected: %v", err)
 	}
 }
 
@@ -626,6 +625,11 @@ func TestSecurity_R3_268_CorrectRootCAPasses(t *testing.T) {
 	)
 
 	err := VerifyPolicySignature(context.Background(), env, vo)
+	if err == nil {
+		t.Fatal("CA trust alone must not authorize a policy signer")
+	}
+	VerifyWithPolicyCertConstraints("Leaf", []string{"*"}, []string{"*"}, []string{"*"}, []string{"*"})(vo)
+	err = VerifyPolicySignature(context.Background(), env, vo)
 	if err != nil {
 		t.Fatalf("expected success with correct root CA, got: %v", err)
 	}

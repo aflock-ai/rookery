@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,7 +119,7 @@ func TestCompatSourceSearchViaCombinedTypes(t *testing.T) {
 
 	subjects := map[string]cryptoutil.DigestSet{
 		"test-subject": {
-			cryptoutil.DigestValue{Hash: crypto.SHA256}: "abc123",
+			cryptoutil.DigestValue{Hash: crypto.SHA256}: strings.Repeat("a", 64),
 		},
 	}
 
@@ -159,7 +160,7 @@ func TestCompatSourceSearchViaCombinedTypes(t *testing.T) {
 	}
 
 	var s compatSource.Sourcer = ms
-	results, err := s.Search(context.Background(), "test-step", []string{"abc123"}, nil)
+	results, err := s.Search(context.Background(), "test-step", []string{strings.Repeat("a", 64)}, nil)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}

@@ -91,19 +91,8 @@ func TestSecurity_R3_260_KMS_PrefixNondeterminism(t *testing.T) {
 		results[keyID]++
 	}
 
-	// Document the finding regardless of whether nondeterminism triggered.
-	if len(results) > 1 {
-		t.Errorf("BUG PROVEN: Signer() returned different providers across %d calls: %v. "+
-			"Overlapping prefixes cause nondeterministic provider selection due to "+
-			"Go map iteration order. Reference 'aws://kms/my-key' matched both "+
-			"'aws://' and 'aws://kms/' prefixes.", iterations, results)
-	} else {
-		t.Logf("Got consistent results in this run (%v), but map iteration "+
-			"order is inherently nondeterministic. Two prefixes match, so the "+
-			"wrong provider CAN be selected. "+
-			"Fix: sort providers by prefix length (longest first) before matching.",
-			results)
-	}
+	require.Equal(t, map[string]int{"provider-aws-kms": iterations}, results,
+		"the most specific provider must win on every call")
 }
 
 // =============================================================================

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,6 +57,9 @@ const (
 // {env|option, file, path} entries: the driver serves each committed `file` at
 // `path` on the stub server and then routes the attestor at the stub via ONE of
 // two binding kinds:
+// An env endpoint may also declare `url`: an HTTPS logical URL retained for
+// producer endpoint validation. Only the test transport routes it to the stub;
+// recorded response bytes and production validation are unchanged.
 //
 //   - env:    set the env var named `env` to the stub base URL + `path`. For
 //     attestors that read a FULL service URL from an env var — github's OIDC
@@ -86,6 +90,7 @@ type mockEndpoint struct {
 	Option string `yaml:"option"` // attestor config option the stub BASE URL binds to
 	File   string `yaml:"file"`   // committed response file, relative to the fixture dir
 	Path   string `yaml:"path"`   // path served on the stub (defaults to "/" + File's base)
+	URL    string `yaml:"url"`    // optional logical HTTPS URL, env bindings only
 }
 
 // startHTTPMock stands up the http-mock server for a fixture and applies all
@@ -132,6 +137,7 @@ func startHTTPMock(t *testing.T, fx *Fixture) map[string]any {
 	type envBinding struct {
 		env  string
 		path string
+		url  string
 	}
 	var envBindings []envBinding
 	var optionNames []string
@@ -152,7 +158,7 @@ func startHTTPMock(t *testing.T, fx *Fixture) map[string]any {
 		if ep.Option != "" {
 			optionNames = append(optionNames, ep.Option)
 		} else {
-			envBindings = append(envBindings, envBinding{env: ep.Env, path: path})
+			envBindings = append(envBindings, envBinding{env: ep.Env, path: path, url: ep.URL})
 		}
 	}
 
@@ -160,8 +166,43 @@ func startHTTPMock(t *testing.T, fx *Fixture) map[string]any {
 	t.Cleanup(srv.Close)
 
 	// Point each declared env var at the stub base URL + that endpoint's path.
+	routes := make(map[string]string)
 	for _, b := range envBindings {
-		t.Setenv(b.env, srv.URL+b.path)
+		endpoint := srv.URL + b.path
+		if b.url != "" {
+			endpoint = b.url
+			routes[b.url] = b.path
+		}
+		t.Setenv(b.env, endpoint)
+	}
+	if len(routes) > 0 {
+		// Setenv above rejects parallel tests/ancestors. The serial fixture
+		// harness scopes this process-global hook to t.Cleanup (including nested
+		// determinism replays). Never use it alongside background HTTP clients.
+		previous := http.DefaultTransport
+		local := &http.Transport{} // no ambient proxy; only the replay server
+		stub, err := url.Parse(srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		http.DefaultTransport = replayTransport(func(req *http.Request) (*http.Response, error) {
+			u := *req.URL
+			key := u
+			key.RawQuery, key.ForceQuery = "", false
+			if path, ok := routes[key.String()]; ok {
+				u.Scheme, u.Host, u.Path, u.RawPath = stub.Scheme, stub.Host, path, ""
+			} else if u.Scheme != stub.Scheme || u.Host != stub.Host {
+				return nil, fmt.Errorf("testkit: request has no recorded replay endpoint")
+			}
+			cloned := req.Clone(req.Context())
+			cloned.URL = &u
+			cloned.Host = u.Host
+			return local.RoundTrip(cloned)
+		})
+		t.Cleanup(func() {
+			http.DefaultTransport = previous
+			local.CloseIdleConnections()
+		})
 	}
 
 	// Bind each declared attestor option to the stub BASE URL (the attestor
@@ -175,6 +216,12 @@ func startHTTPMock(t *testing.T, fx *Fixture) map[string]any {
 		optBindings[name] = srv.URL
 	}
 	return optBindings
+}
+
+type replayTransport func(*http.Request) (*http.Response, error)
+
+func (f replayTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 // startMetadataMock stands up an httptest server that replays the fixture's
@@ -242,6 +289,7 @@ func decodeEndpoints(fx *Fixture) ([]mockEndpoint, error) {
 		return nil, fmt.Errorf("http-mock fixture %q setup.options.endpoints must be a list", fx.Name)
 	}
 	var out []mockEndpoint
+	logicalURLs := make(map[string]bool)
 	for i, item := range list {
 		m, ok := item.(map[string]any)
 		if !ok {
@@ -252,6 +300,7 @@ func decodeEndpoints(fx *Fixture) ([]mockEndpoint, error) {
 			Option: asString(m["option"]),
 			File:   asString(m["file"]),
 			Path:   asString(m["path"]),
+			URL:    asString(m["url"]),
 		}
 		if ep.File == "" {
 			return nil, fmt.Errorf("http-mock fixture %q endpoints[%d] requires non-empty file", fx.Name, i)
@@ -262,6 +311,17 @@ func decodeEndpoints(fx *Fixture) ([]mockEndpoint, error) {
 			return nil, fmt.Errorf("http-mock fixture %q endpoints[%d] requires exactly one of env (URL→env var) or option (base URL→attestor option); got neither", fx.Name, i)
 		case ep.Env != "" && ep.Option != "":
 			return nil, fmt.Errorf("http-mock fixture %q endpoints[%d] sets both env=%q and option=%q — choose one binding kind", fx.Name, i, ep.Env, ep.Option)
+		}
+		if ep.URL != "" {
+			u, err := url.Parse(ep.URL)
+			if err != nil || ep.Env == "" || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" || u.ForceQuery {
+				return nil, fmt.Errorf("http-mock fixture %q endpoints[%d] url requires an env binding and an absolute HTTPS URL without userinfo, query or fragment", fx.Name, i)
+			}
+			ep.URL = u.String()
+			if logicalURLs[ep.URL] {
+				return nil, fmt.Errorf("http-mock fixture %q endpoints[%d] duplicates logical URL %q", fx.Name, i, ep.URL)
+			}
+			logicalURLs[ep.URL] = true
 		}
 		out = append(out, ep)
 	}

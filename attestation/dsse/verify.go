@@ -17,6 +17,7 @@ package dsse
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -29,10 +30,29 @@ import (
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 )
 
-// verifierKeyID returns a stable identifier for a verifier. If KeyID() fails,
-// it falls back to a SHA-256 hash of the verifier's type and address to ensure
-// the verification still counts toward the threshold.
+// verifierKeyID uses canonical public-key material where available, so aliases
+// for one key cannot count as multiple parties toward a signature threshold.
+func verifierPublicKeyID(v cryptoutil.Verifier) string {
+	if raw, err := v.Bytes(); err == nil {
+		pub, err := cryptoutil.UnmarshalPEMToPublicKey(raw)
+		if err != nil {
+			if cert, certErr := cryptoutil.TryParseCertificate(raw); certErr == nil {
+				pub, err = cert.PublicKey, nil
+			}
+		}
+		if err == nil {
+			if id, err := cryptoutil.GeneratePublicKeyID(pub, crypto.SHA256); err == nil {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
 func verifierKeyID(v cryptoutil.Verifier) string {
+	if id := verifierPublicKeyID(v); id != "" {
+		return id
+	}
 	if kid, err := v.KeyID(); err == nil {
 		return kid
 	}
@@ -73,9 +93,11 @@ func VerifyWithIntermediates(intermediates ...*x509.Certificate) VerificationOpt
 	}
 }
 
+// VerifyWithVerifiers adds trusted verifiers. Thresholds above one require
+// parseable public-key material and count distinct keys, not caller-supplied IDs.
 func VerifyWithVerifiers(verifiers ...cryptoutil.Verifier) VerificationOption {
 	return func(vo *verificationOptions) {
-		vo.verifiers = verifiers
+		vo.verifiers = append(vo.verifiers, verifiers...)
 	}
 }
 
@@ -164,7 +186,14 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 	stableKeyIDs := make(map[int]string, len(options.verifiers))
 	for i, v := range options.verifiers {
 		if v != nil {
-			stableKeyIDs[i] = verifierKeyID(v)
+			id := verifierPublicKeyID(v)
+			if options.threshold > 1 && id == "" {
+				return nil, fmt.Errorf("verifier %d has no parseable public key; cannot establish distinct keys for threshold %d", i, options.threshold)
+			}
+			if id == "" {
+				id = verifierKeyID(v)
+			}
+			stableKeyIDs[i] = id
 		}
 	}
 

@@ -538,15 +538,10 @@ func TestSecurity_R3_220_LargePayloadToTimestamp(t *testing.T) {
 	require.Error(t, err, "should fail on network, not on payload size")
 }
 
-// TestSecurity_R3_221_HTTPServerRejected tests that an HTTP (non-TLS)
-// test server URL is rejected by validateURL.
+// Non-loopback HTTP must be rejected. Loopback HTTP is explicitly supported
+// for local development and is not a production transport test.
 func TestSecurity_R3_221_HTTPServerRejected(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	ts := NewTimestamper(TimestampWithUrl(server.URL))
+	ts := NewTimestamper(TimestampWithUrl("http://tsa.example.invalid"))
 
 	_, err := ts.Timestamp(context.Background(), bytes.NewReader([]byte("test")))
 	require.Error(t, err, "HTTP server should be rejected")

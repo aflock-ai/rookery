@@ -2076,7 +2076,7 @@ func TestSecurity_R3_210_CompareArtifactsHashDowngrade(t *testing.T) {
 			},
 		}
 
-		err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, consumerStep, consumerCVR, collectionsByStep)
+		err := verifyCollectionArtifacts(context.Background(), &verifyOptions{}, consumerStep, PassedCollection{Collection: consumerCVR}, collectionsByStep)
 		assert.Error(t, err,
 			"FIXED (hash downgrade): the full artifact flow rejects the downgrade. The "+
 				"producer omits SHA256 from its products while the consumer's materials carry "+

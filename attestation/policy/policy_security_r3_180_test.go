@@ -35,6 +35,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/source"
 	"github.com/invopop/jsonschema"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -193,12 +194,8 @@ func TestSecurity_R3_180_CompareArtifactsIgnoresExtraUpstreamArtifacts(t *testin
 // ===========================================================================
 
 func TestSecurity_R3_181_EmptyConstraintMatchesEmptyCertFields(t *testing.T) {
-	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_181); opt-in
-	// enforcement via HardeningOptions.RejectEmptyConstraintEmptyField, proven by
-	// TestEnforce_R3_181. This detector intentionally stays RED to track that
-	// enforcement is NOT the default (warn-first). It is also internally
-	// inconsistent — it asserts empty+empty both PASSES ("dns name") and FAILS
-	// ("organization") — so it can only go green once enforcement is the default.
+	withHardening(t, HardeningOptions{})
+	warnings := installWarnCapture(t)
 	// Verify that nil constraints + nil values = pass
 	err := checkCertConstraint("dns name", nil, nil)
 	if err != nil {
@@ -256,27 +253,14 @@ func TestSecurity_R3_181_EmptyConstraintMatchesEmptyCertFields(t *testing.T) {
 		t.Logf("Correct: mismatched DNS names rejected: %v", err)
 	}
 
-	// The REAL vulnerability is the combination of all-empty CertConstraint
-	// with a real cert that has no SANs. This has already been documented in
-	// R3-155, but the root cause is HERE in checkCertConstraint: the semantics
-	// of "empty constraint = accept anything including nothing" are inherently
-	// dangerous for a supply-chain security tool.
-	//
-	// A safer default would be fail-closed: empty constraints should mean
-	// "no valid value exists that satisfies this constraint" rather than
-	// "any value (including none) satisfies this constraint."
-
-	// Test that empty constraints + empty values = pass (the dangerous case)
+	// Warn mode preserves the legacy result but must surface the weak constraint.
 	err = checkCertConstraint("organization", []string{}, []string{})
-	if err != nil {
-		t.Log("FIXED: Empty constraints no longer trivially pass for empty values.")
-		return
-	}
-	t.Error("SECURITY BUG R3-181: Empty constraint + empty cert value = pass. " +
-		"A CertConstraint with no Organization requirement accepts ANY cert " +
-		"that also has no Organization. Combined with Roots=[\"*\"], this makes " +
-		"identity verification a no-op. The safe default should require at least " +
-		"one identity constraint field to be non-empty.")
+	require.NoError(t, err)
+	require.True(t, warnings.sawContaining("empty constraint matched empty cert field"))
+	withHardening(t, HardeningOptions{RejectEmptyConstraintEmptyField: true})
+	require.Error(t, checkCertConstraint("organization", nil, nil))
+	require.NoError(t, checkCertConstraint("organization", []string{"GoodCorp"}, []string{"GoodCorp"}))
+	require.Error(t, checkCertConstraint("organization", []string{"GoodCorp"}, []string{"OtherCorp"}))
 }
 
 // ===========================================================================
@@ -353,9 +337,8 @@ func TestSecurity_R3_182_EmptyMaterialsBypassesArtifactCheck(t *testing.T) {
 // ===========================================================================
 
 func TestSecurity_R3_183_RegoPackageNameCollisionEnablesShadowing(t *testing.T) {
-	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_183); opt-in
-	// enforcement via HardeningOptions.RejectDuplicateRegoPackage, proven by
-	// TestEnforce_R3_183. Stays RED to track the default-OFF gap (warn-first).
+	withHardening(t, HardeningOptions{})
+	warnings := installWarnCapture(t)
 	// Legitimate policy: denies if "approved" is not true.
 	legitimateModule := RegoPolicy{
 		Name: "legitimate.rego",
@@ -410,21 +393,13 @@ is_approved {
 	// body matches. The attacker's rule has body "true", so is_approved is
 	// always true, and the deny rule never fires.
 	err = EvaluateRegoPolicy(attestor, []RegoPolicy{legitimateModule, attackerModule})
-	if err == nil {
-		// The attacker's module successfully shadowed the legitimate is_approved.
-		t.Error("SECURITY BUG R3-183: Rego package name collision allows an " +
-			"attacker to inject a module that redefines helper rules (is_approved) " +
-			"in the same package. OPA merges the rules, and the attacker's " +
-			"always-true is_approved causes the deny rule to never fire. " +
-			"The build with approved=false PASSED the policy check. " +
-			"The fix should reject duplicate package names across modules " +
-			"or namespace them by policy name.")
-	} else {
-		t.Logf("Policy still denied with both modules: %v", err)
-		t.Log("The attacker's module did not fully shadow the legitimate " +
-			"is_approved rule. OPA may have different merging semantics " +
-			"than expected.")
-	}
+	require.NoError(t, err, "warn mode retains OPA's module-merging semantics")
+	require.True(t, warnings.sawContaining("duplicate rego package name"))
+	withHardening(t, HardeningOptions{RejectDuplicateRegoPackage: true})
+	require.Error(t, EvaluateRegoPolicy(attestor, []RegoPolicy{legitimateModule, attackerModule}))
+	require.ErrorContains(t, EvaluateRegoPolicy(attestor, []RegoPolicy{legitimateModule}), "build not approved")
+	attestor.inner.(map[string]interface{})["approved"] = true
+	require.NoError(t, EvaluateRegoPolicy(attestor, []RegoPolicy{legitimateModule}), "enforcement must not reject every policy")
 }
 
 // ===========================================================================
@@ -449,11 +424,8 @@ is_approved {
 // ===========================================================================
 
 func TestSecurity_R3_184_PublicKeyIDMatchBypassesCertConstraint(t *testing.T) {
-	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_184); opt-in
-	// enforcement via HardeningOptions.EnforceCertConstraintOnKeyIDMatch, proven
-	// by TestEnforce_R3_184. Stays RED to track that enforcing the constraint on a
-	// key-ID match is NOT the default (warn-first — the issue flags this a PRODUCT
-	// CALL because both-set policies would start failing closed).
+	withHardening(t, HardeningOptions{})
+	warnings := installWarnCapture(t)
 	// Create a CA and leaf cert.
 	caPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -528,21 +500,13 @@ func TestSecurity_R3_184_PublicKeyIDMatchBypassesCertConstraint(t *testing.T) {
 
 	err = f.Validate(x509Verifier, trustBundles)
 
-	if err == nil {
-		// The PublicKeyID matched, so CertConstraint was never checked.
-		t.Error("SECURITY BUG R3-184: Functionary.Validate returned nil for " +
-			"an X.509 cert with CN='attacker', Org='EvilCorp' because the " +
-			"verifier's computed KeyID matched the functionary's PublicKeyID. " +
-			"The CertConstraint requiring CN='builder', Org='GoodCorp' was " +
-			"completely bypassed. Any X.509 certificate whose derived KeyID " +
-			"matches the PublicKeyID skips ALL certificate constraint checks. " +
-			"The fix should apply CertConstraint checks regardless of KeyID " +
-			"match when the verifier is an X509Verifier.")
-	} else {
-		t.Logf("CertConstraint was checked despite KeyID match: %v", err)
-		t.Log("FIXED: Functionary.Validate now applies CertConstraint even " +
-			"when PublicKeyID matches for X.509 verifiers.")
-	}
+	require.NoError(t, err, "warn mode preserves the key-ID match")
+	require.True(t, warnings.sawContaining("certificate constraint is IGNORED"))
+	withHardening(t, HardeningOptions{EnforceCertConstraintOnKeyIDMatch: true})
+	require.Error(t, f.Validate(x509Verifier, trustBundles), "the matching key must not bypass certificate constraints in enforce mode")
+	f.CertConstraint.CommonName = "attacker"
+	f.CertConstraint.Organizations = []string{"EvilCorp"}
+	require.NoError(t, f.Validate(x509Verifier, trustBundles), "a certificate matching both requirements must pass")
 }
 
 // ===========================================================================
@@ -563,12 +527,8 @@ func TestSecurity_R3_184_PublicKeyIDMatchBypassesCertConstraint(t *testing.T) {
 // ===========================================================================
 
 func TestSecurity_R3_185_ValidateAcceptsEmptyStepName(t *testing.T) {
-	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_185_187_209); opt-in
-	// enforcement via HardeningOptions.EnforceStepNameCoherence, proven by
-	// TestEnforce_R3_185_187_209. Stays RED to track the default-OFF gap. Kept
-	// warn-first rather than fixed-outright because #6276 (Cole co-authored)
-	// already locked in "no behavior change" for these, and a post-F10 empty-name
-	// step + empty-name collection is a degenerate case that can still pass verify.
+	withHardening(t, HardeningOptions{})
+	warnings := installWarnCapture(t)
 	p := Policy{
 		Expires: metav1.Time{Time: time.Now().Add(1 * time.Hour)},
 		Steps: map[string]Step{
@@ -578,17 +538,15 @@ func TestSecurity_R3_185_ValidateAcceptsEmptyStepName(t *testing.T) {
 		},
 	}
 
-	err := p.Validate()
-	if err != nil {
-		t.Logf("FIXED: Validate rejects empty step names: %v", err)
-		return
-	}
-
-	t.Error("SECURITY BUG R3-185: Policy.Validate() accepts a step with " +
-		"Name=\"\" (empty string). An empty step name combined with the " +
-		"empty-collection-name bypass means validateAttestations will accept " +
-		"ANY collection whose Name is also empty. Validate() should reject " +
-		"steps with empty Name fields.")
+	require.NoError(t, p.Validate())
+	require.True(t, warnings.sawContaining("empty Name"))
+	withHardening(t, HardeningOptions{EnforceStepNameCoherence: true})
+	var incoherent ErrStepNameIncoherent
+	require.ErrorAs(t, p.Validate(), &incoherent)
+	step := p.Steps["build"]
+	step.Name = "build"
+	p.Steps["build"] = step
+	require.NoError(t, p.Validate())
 }
 
 // ===========================================================================
@@ -696,11 +654,8 @@ func TestSecurity_R3_186_NoAttestationsRequiredAutoPassesAnyCollection(t *testin
 // ===========================================================================
 
 func TestSecurity_R3_187_StepNameVsMapKeyBreaksArtifactVerification(t *testing.T) {
-	// #6266 disposition: WARN shipped in #6276 (TestWarn_R3_185_187_209); opt-in
-	// enforcement via HardeningOptions.EnforceStepNameCoherence, proven by
-	// TestEnforce_R3_185_187_209. Stays RED to track the default-OFF gap
-	// (warn-first). The mismatch already fails closed at verify today — enforcing
-	// only turns that misleading verify-time error into a clear load-time error.
+	withHardening(t, HardeningOptions{})
+	warnings := installWarnCapture(t)
 	verifier, keyID := r3MakeVerifierAndKeyID(t)
 	attType := "https://example.com/att/v1"
 
@@ -716,12 +671,8 @@ func TestSecurity_R3_187_StepNameVsMapKeyBreaksArtifactVerification(t *testing.T
 		},
 	}
 
-	// Validate should catch this misconfiguration.
-	err := p.Validate()
-	if err != nil {
-		t.Logf("FIXED: Validate catches step name vs map key mismatch: %v", err)
-		return
-	}
+	require.NoError(t, p.Validate())
+	require.True(t, warnings.sawContaining("mismatched Name"))
 
 	// The source returns a collection named "step-a" (the map key used in search).
 	cvr := r3MakeCVR("step-a", verifier, attestation.CollectionAttestation{
@@ -740,14 +691,14 @@ func TestSecurity_R3_187_StepNameVsMapKeyBreaksArtifactVerification(t *testing.T
 		WithSubjectDigests([]string{"sha256:abc"}),
 	)
 
-	if verifyErr != nil {
-		// The split-brain manifests as a verification failure.
-		t.Errorf("SECURITY BUG R3-187: Verify failed due to step name vs map "+
-			"key mismatch that Validate() did not catch. The verifyArtifacts phase "+
-			"looks up results by step.Name ('wrong-name') but results were stored "+
-			"under the map key ('step-a'). Validate() should reject policies where "+
-			"step.Name != map key. Error: %v", verifyErr)
-	}
+	require.ErrorContains(t, verifyErr, "wrong-name", "warn mode must still fail verification rather than silently accept the wrong step")
+	withHardening(t, HardeningOptions{EnforceStepNameCoherence: true})
+	var incoherent ErrStepNameIncoherent
+	require.ErrorAs(t, p.Validate(), &incoherent)
+	step := p.Steps["step-a"]
+	step.Name = "step-a"
+	p.Steps["step-a"] = step
+	require.NoError(t, p.Validate())
 }
 
 // ===========================================================================

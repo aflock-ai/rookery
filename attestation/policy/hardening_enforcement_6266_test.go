@@ -16,14 +16,12 @@ package policy
 
 // Enforcement tests for the #6266 policy-verification hardening flags.
 //
-// #6276 shipped the loud WARNs for these findings with zero behavior change, and
-// the -tags audit detector tests (TestSecurity_R3_181/183/184/185/187/209)
-// deliberately stay RED to track that enforcement is NOT the default. This file
-// proves the OTHER half: when an embedder opts in via SetHardening, each finding
+// #6276 shipped warnings without changing defaults. The audit regressions now
+// test both explicit modes and benign counterexamples rather than remaining
+// deliberately red. When an embedder opts in via SetHardening, each finding
 // is actually enforced (fails closed), and with the default (all-off) options the
 // pre-#6266 behavior is preserved. The default remains warn-first per Cole's
-// direction on #6266; flipping a HardeningOptions default is the one-line change
-// that would make enforcement the default and turn the matching detector green.
+// direction on #6266; these tests do not change that product decision.
 //
 // R3_201 has no flag (warn-only by design — see hardening.go) so it has no
 // enforcement test here; its warning is covered by TestWarn_R3_201.

@@ -69,6 +69,7 @@ var RegistrationEntries = rookery.RegistrationEntries
 var RegisterLegacyAlias = rookery.RegisterLegacyAlias
 var RegisterLegacyAliases = rookery.RegisterLegacyAliases
 var ResolveLegacyType = rookery.ResolveLegacyType
+var LegacyAlternate = rookery.LegacyAlternate
 var DefaultSensitiveEnvList = rookery.DefaultSensitiveEnvList
 
 // RawAttestation type for unregistered attestor types

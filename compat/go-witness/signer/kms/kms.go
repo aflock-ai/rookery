@@ -18,6 +18,7 @@ type KMSClientOptions = rookery.KMSClientOptions
 var New = rookery.New
 var WithRef = rookery.WithRef
 var WithHash = rookery.WithHash
+var ParseHashFunc = rookery.ParseHashFunc
 var WithKeyVersion = rookery.WithKeyVersion
 var AddProvider = rookery.AddProvider
 var SupportedProviders = rookery.SupportedProviders

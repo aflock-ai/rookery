@@ -527,7 +527,7 @@ func TestCompat_MemorySource_LoadCompatSearchRookery(t *testing.T) {
 
 	subjects := map[string]cryptoutil.DigestSet{
 		"artifact.bin": {
-			cryptoutil.DigestValue{Hash: crypto.SHA256}: "deadbeef",
+			cryptoutil.DigestValue{Hash: crypto.SHA256}: strings.Repeat("d", 64),
 		},
 	}
 
@@ -569,7 +569,7 @@ func TestCompat_MemorySource_LoadCompatSearchRookery(t *testing.T) {
 
 	// Search through rookery interface
 	var rookerySrc source.Sourcer = ms
-	results, err := rookerySrc.Search(context.Background(), "test-step", []string{"deadbeef"}, nil)
+	results, err := rookerySrc.Search(context.Background(), "test-step", []string{strings.Repeat("d", 64)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,8 +586,8 @@ func TestCompat_MemorySource_LoadCompatSearchRookery(t *testing.T) {
 func TestCompat_MemorySource_DuplicateReference(t *testing.T) {
 	ms := compatSource.NewMemorySource()
 	env := dsse.Envelope{
-		Payload:     []byte(`{}`),
-		PayloadType: "test",
+		Payload:     []byte(`{"_type":"https://in-toto.io/Statement/v0.1","predicateType":"` + attestation.CollectionType + `","subject":[],"predicate":{"name":"duplicate","attestations":[]}}`),
+		PayloadType: "application/vnd.in-toto+json",
 	}
 
 	if err := ms.LoadEnvelope("dup-ref", env); err != nil {
@@ -740,8 +740,8 @@ func TestCompat_Collection_JSONBidirectional(t *testing.T) {
 func TestCompat_DigestSet_InterchangeableOperations(t *testing.T) {
 	// Create through compat
 	compatDS := compatCrypto.DigestSet{
-		compatCrypto.DigestValue{Hash: crypto.SHA256}: "abc123",
-		compatCrypto.DigestValue{Hash: crypto.SHA512}: "def456",
+		compatCrypto.DigestValue{Hash: crypto.SHA256}: strings.Repeat("a", 64),
+		compatCrypto.DigestValue{Hash: crypto.SHA1}:   strings.Repeat("b", 40),
 	}
 
 	// Must be directly assignable to rookery type

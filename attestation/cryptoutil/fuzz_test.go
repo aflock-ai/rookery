@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 )
@@ -945,7 +946,7 @@ func FuzzCalculateDigestSetFromBytes(f *testing.F) {
 		if err != nil {
 			t.Fatalf("second call failed: %v", err)
 		}
-		if !ds.Equal(ds2) {
+		if !maps.Equal(ds, ds2) {
 			t.Error("CalculateDigestSetFromBytes is not deterministic")
 		}
 
@@ -1338,7 +1339,7 @@ func FuzzDigestValueDirHash(f *testing.F) {
 		if err != nil {
 			t.Fatalf("second CalculateDigestSetFromBytes failed: %v", err)
 		}
-		if !ds.Equal(ds2) {
+		if !maps.Equal(ds, ds2) {
 			t.Error("CalculateDigestSetFromBytes is not deterministic")
 		}
 	})

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,12 @@ import (
 )
 
 // --- Test helpers ---
+
+const (
+	auditSubjectDigest  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	auditSubjectDigestA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	auditSubjectDigestB = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+)
 
 // makeTestEnvelope creates a valid collection envelope for testing.
 func makeTestEnvelope(t *testing.T, collectionName string, subjectDigests map[string]string) dsse.Envelope {
@@ -107,7 +114,7 @@ func TestMemorySource_DuplicateReference(t *testing.T) {
 // TestMemorySource_SearchWithNilContext verifies behavior with nil context.
 func TestMemorySource_SearchWithNilContext(t *testing.T) {
 	ms := NewMemorySource()
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 
 	if err := ms.LoadEnvelope("ref1", env); err != nil {
 		t.Fatalf("LoadEnvelope failed: %v", err)
@@ -117,7 +124,7 @@ func TestMemorySource_SearchWithNilContext(t *testing.T) {
 	// This documents the contract mismatch: the interface requires context
 	// but MemorySource ignores it.
 	//nolint:staticcheck // testing nil context deliberately
-	results, err := ms.Search(nil, "step1", []string{"abc"}, nil)
+	results, err := ms.Search(nil, "step1", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Errorf("BUG: MemorySource.Search with nil context failed: %v", err)
 	} else {
@@ -125,11 +132,10 @@ func TestMemorySource_SearchWithNilContext(t *testing.T) {
 	}
 }
 
-// TestMemorySource_SearchEmptySubjectDigests verifies that empty subject
-// digests returns no matches (not all matches).
+// An empty digest query is a subject-agnostic probe, not artifact verification.
 func TestMemorySource_SearchEmptySubjectDigests(t *testing.T) {
 	ms := NewMemorySource()
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 
 	if err := ms.LoadEnvelope("ref1", env); err != nil {
 		t.Fatalf("LoadEnvelope failed: %v", err)
@@ -140,10 +146,14 @@ func TestMemorySource_SearchEmptySubjectDigests(t *testing.T) {
 		t.Fatalf("Search failed: %v", err)
 	}
 
-	if len(results) != 0 {
-		t.Errorf("BUG: empty subject digests should return no matches, got %d", len(results))
-	} else {
-		t.Logf("OK: empty subject digests correctly returns no matches")
+	if len(results) != 1 {
+		t.Errorf("subject-agnostic query should find the stored collection, got %d", len(results))
+	}
+	for _, digest := range []string{auditSubjectDigestB, "abc"} {
+		results, err = ms.Search(context.Background(), "step1", []string{digest}, nil)
+		if err != nil || len(results) != 0 {
+			t.Fatalf("unrelated or malformed artifact digest matched: %d results, %v", len(results), err)
+		}
 	}
 }
 
@@ -151,13 +161,13 @@ func TestMemorySource_SearchEmptySubjectDigests(t *testing.T) {
 // means "match any attestations" (vacuously true).
 func TestMemorySource_SearchNilAttestations(t *testing.T) {
 	ms := NewMemorySource()
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 
 	if err := ms.LoadEnvelope("ref1", env); err != nil {
 		t.Fatalf("LoadEnvelope failed: %v", err)
 	}
 
-	results, err := ms.Search(context.Background(), "step1", []string{"abc"}, nil)
+	results, err := ms.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
@@ -172,13 +182,13 @@ func TestMemorySource_SearchNilAttestations(t *testing.T) {
 // TestMemorySource_SearchWrongCollectionName verifies collection name filtering.
 func TestMemorySource_SearchWrongCollectionName(t *testing.T) {
 	ms := NewMemorySource()
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 
 	if err := ms.LoadEnvelope("ref1", env); err != nil {
 		t.Fatalf("LoadEnvelope failed: %v", err)
 	}
 
-	results, err := ms.Search(context.Background(), "wrong-name", []string{"abc"}, nil)
+	results, err := ms.Search(context.Background(), "wrong-name", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
@@ -251,8 +261,13 @@ func TestMemorySource_ConcurrentSearchAndLoad(t *testing.T) {
 // SearchGitoids returns multiple gitoids but downloading one of them fails.
 func TestArchivistaSource_PartialDownloadFailure(t *testing.T) {
 	// Build test envelopes for the server to serve
-	env1 := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env1 := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 	env1JSON, _ := json.Marshal(env1)
+	// Distinct raw envelopes may encode the same collection. Address exactly
+	// the bytes served; otherwise Download rejects the fixture before parsing.
+	env3JSON := append(append([]byte{}, env1JSON...), '\n')
+	gid1, gid3 := envelopeGitoid(t, env1JSON), envelopeGitoid(t, env3JSON)
+	gid2 := strings.Repeat("1", 64)
 
 	downloadCount := int32(0)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -263,9 +278,9 @@ func TestArchivistaSource_PartialDownloadFailure(t *testing.T) {
 				"data": map[string]interface{}{
 					"dsses": map[string]interface{}{
 						"edges": []map[string]interface{}{
-							{"node": map[string]interface{}{"gitoidSha256": "gitoid-1"}},
-							{"node": map[string]interface{}{"gitoidSha256": "gitoid-2"}},
-							{"node": map[string]interface{}{"gitoidSha256": "gitoid-3"}},
+							{"node": map[string]interface{}{"gitoidSha256": gid1}},
+							{"node": map[string]interface{}{"gitoidSha256": gid2}},
+							{"node": map[string]interface{}{"gitoidSha256": gid3}},
 						},
 					},
 				},
@@ -273,21 +288,21 @@ func TestArchivistaSource_PartialDownloadFailure(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(resp)
 
-		case r.URL.Path == "/download/gitoid-1":
+		case r.URL.Path == "/download/"+gid1:
 			atomic.AddInt32(&downloadCount, 1)
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(env1JSON)
 
-		case r.URL.Path == "/download/gitoid-2":
+		case r.URL.Path == "/download/"+gid2:
 			// Simulate failure on the second download
 			atomic.AddInt32(&downloadCount, 1)
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte("server error"))
 
-		case r.URL.Path == "/download/gitoid-3":
+		case r.URL.Path == "/download/"+gid3:
 			atomic.AddInt32(&downloadCount, 1)
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(env1JSON)
+			w.Write(env3JSON)
 		}
 	}))
 	defer srv.Close()
@@ -295,34 +310,23 @@ func TestArchivistaSource_PartialDownloadFailure(t *testing.T) {
 	client := archivista.New(srv.URL)
 	source := NewArchivistaSource(client)
 
-	results, err := source.Search(context.Background(), "step1", []string{"abc"}, nil)
-	if err == nil {
-		t.Errorf("BUG: Search should have returned error when one download fails, but returned %d results", len(results))
-	} else {
-		t.Logf("OK: Search correctly returned error on partial download failure: %v", err)
+	results, err := source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
+	if err != nil || len(results) != 2 || atomic.LoadInt32(&downloadCount) != 3 {
+		t.Fatalf("healthy candidates must survive one unavailable candidate: %d results, %d downloads, %v", len(results), downloadCount, err)
 	}
-
-	// KEY BUG: When download of gitoid-2 fails, we get partial results
-	// AND gitoid-1 is added to seenCollectionGitoids. On a retry, gitoid-1 would be
-	// excluded even though the overall Search failed.
-	if len(results) > 0 {
-		t.Errorf("BUG: partial results returned (%d envelopes) despite error. "+
-			"ArchivistaSource.Search returns partial envelopes slice when a download in the middle fails. "+
-			"This is because `return envelopes, err` returns the accumulated slice.", len(results))
+	if results[0].Reference != gid1 || results[1].Reference != gid3 {
+		t.Fatalf("unexpected candidates or order: %+v", results)
 	}
-
-	// Check seenCollectionGitoids state
-	if len(source.seenCollectionGitoids) > 0 {
-		t.Errorf("BUG: seenCollectionGitoids was partially updated (%v) despite Search returning an error. "+
-			"On retry, gitoid-1 will be excluded even though the caller didn't get a successful result. "+
-			"This breaks the retry semantics.", source.seenCollectionGitoids)
+	results, err = source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
+	if err != nil || len(results) != 0 || atomic.LoadInt32(&downloadCount) != 3 {
+		t.Fatal("a processed snapshot must not repeatedly download a bad candidate", err)
 	}
 }
 
 // TestArchivistaSource_SeenGitoidsAccumulate verifies that seenCollectionGitoids
 // persists across calls, filtering already-seen results.
 func TestArchivistaSource_SeenGitoidsAccumulate(t *testing.T) {
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 	envJSON, _ := json.Marshal(env)
 	// The client re-hashes the download body and rejects gitoid mismatches
 	// (#5990), so advertise and serve the envelope under its real gitoid.
@@ -361,7 +365,7 @@ func TestArchivistaSource_SeenGitoidsAccumulate(t *testing.T) {
 	source := NewArchivistaSource(client)
 
 	// First search
-	results1, err := source.Search(context.Background(), "step1", []string{"abc"}, nil)
+	results1, err := source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Fatalf("first Search failed: %v", err)
 	}
@@ -370,7 +374,7 @@ func TestArchivistaSource_SeenGitoidsAccumulate(t *testing.T) {
 	}
 
 	// Second search - gitoid-1 should be in ExcludeGitoids
-	results2, err := source.Search(context.Background(), "step1", []string{"abc"}, nil)
+	results2, err := source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Fatalf("second Search failed: %v", err)
 	}
@@ -384,7 +388,7 @@ func TestArchivistaSource_SeenGitoidsAccumulate(t *testing.T) {
 // TestArchivistaSource_ConcurrentSearch verifies that concurrent Search calls
 // on the same ArchivistaSource will race on seenCollectionGitoids.
 func TestArchivistaSource_ConcurrentSearch(t *testing.T) {
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 	envJSON, _ := json.Marshal(env)
 
 	requestCount := int32(0)
@@ -420,7 +424,7 @@ func TestArchivistaSource_ConcurrentSearch(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = source.Search(context.Background(), "step1", []string{"abc"}, nil)
+			_, _ = source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 		}()
 	}
 	wg.Wait()
@@ -451,7 +455,7 @@ func TestArchivistaSource_EmptyGitoidResults(t *testing.T) {
 	client := archivista.New(srv.URL)
 	source := NewArchivistaSource(client)
 
-	results, err := source.Search(context.Background(), "step1", []string{"abc"}, nil)
+	results, err := source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Errorf("BUG: Search with no results should not error, got: %v", err)
 	}
@@ -471,7 +475,7 @@ func TestMultiSource_OneSourceErrors(t *testing.T) {
 	sentinel := errors.New("source failed")
 
 	ms := NewMemorySource()
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 	if err := ms.LoadEnvelope("ref1", env); err != nil {
 		t.Fatalf("LoadEnvelope failed: %v", err)
 	}
@@ -481,7 +485,7 @@ func TestMultiSource_OneSourceErrors(t *testing.T) {
 		&errSourcer{err: sentinel},
 	)
 
-	results, err := multi.Search(context.Background(), "step1", []string{"abc"}, nil)
+	results, err := multi.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err == nil {
 		t.Errorf("BUG: MultiSource.Search should return error when one source fails")
 	} else {
@@ -503,7 +507,7 @@ func TestMultiSource_AllSourcesError(t *testing.T) {
 		&errSourcer{err: errors.New("error-2")},
 	)
 
-	_, err := multi.Search(context.Background(), "step1", []string{"abc"}, nil)
+	_, err := multi.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err == nil {
 		t.Errorf("BUG: expected error when all sources fail")
 	} else {
@@ -517,7 +521,7 @@ func TestMultiSource_AllSourcesError(t *testing.T) {
 func TestMultiSource_EmptySources(t *testing.T) {
 	multi := NewMultiSource()
 
-	results, err := multi.Search(context.Background(), "step1", []string{"abc"}, nil)
+	results, err := multi.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Errorf("BUG: empty MultiSource should not error, got: %v", err)
 	}
@@ -547,7 +551,7 @@ func TestMultiSource_ContextCancellation(t *testing.T) {
 		close(gate)
 	}()
 
-	results, err := multi.Search(ctx, "step1", []string{"abc"}, nil)
+	results, err := multi.Search(ctx, "step1", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Logf("OK: MultiSource propagated error on cancelled context: %v", err)
 	} else {
@@ -563,7 +567,7 @@ func TestMultiSource_ContextCancellation(t *testing.T) {
 // in the Errors field.
 func TestVerifiedSource_NoVerifiersPass(t *testing.T) {
 	ms := NewMemorySource()
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 	if err := ms.LoadEnvelope("ref1", env); err != nil {
 		t.Fatalf("LoadEnvelope failed: %v", err)
 	}
@@ -571,7 +575,7 @@ func TestVerifiedSource_NoVerifiersPass(t *testing.T) {
 	// No verifiers provided -- envelope has no signatures either
 	vs := NewVerifiedSource(ms)
 
-	results, err := vs.Search(context.Background(), "step1", []string{"abc"}, nil)
+	results, err := vs.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Fatalf("VerifiedSource.Search failed: %v", err)
 	}
@@ -596,7 +600,7 @@ func TestVerifiedSource_UnderlyingSourceError(t *testing.T) {
 	sentinel := errors.New("underlying source error")
 	vs := NewVerifiedSource(&errSourcer{err: sentinel})
 
-	_, err := vs.Search(context.Background(), "step1", []string{"abc"}, nil)
+	_, err := vs.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err == nil {
 		t.Errorf("BUG: expected error propagation from underlying source")
 	} else if !errors.Is(err, sentinel) {
@@ -707,8 +711,8 @@ func TestRace_MemorySource_ConcurrentSearchPartialState(t *testing.T) {
 func TestAdversarial_MemorySource_StoreSameCollectionTwice(t *testing.T) {
 	src := NewMemorySource()
 
-	env1 := makeTestEnvelope(t, "shared-step", map[string]string{"sha256": "digest-a"})
-	env2 := makeTestEnvelope(t, "shared-step", map[string]string{"sha256": "digest-b"})
+	env1 := makeTestEnvelope(t, "shared-step", map[string]string{"sha256": auditSubjectDigestA})
+	env2 := makeTestEnvelope(t, "shared-step", map[string]string{"sha256": auditSubjectDigestB})
 
 	if err := src.LoadEnvelope("ref-1", env1); err != nil {
 		t.Fatalf("first LoadEnvelope failed: %v", err)
@@ -718,7 +722,7 @@ func TestAdversarial_MemorySource_StoreSameCollectionTwice(t *testing.T) {
 	}
 
 	// Search for digest-a should find ref-1
-	results, err := src.Search(context.Background(), "shared-step", []string{"digest-a"}, nil)
+	results, err := src.Search(context.Background(), "shared-step", []string{auditSubjectDigestA}, nil)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
@@ -729,7 +733,7 @@ func TestAdversarial_MemorySource_StoreSameCollectionTwice(t *testing.T) {
 	}
 
 	// Search for digest-b should find ref-2
-	results, err = src.Search(context.Background(), "shared-step", []string{"digest-b"}, nil)
+	results, err = src.Search(context.Background(), "shared-step", []string{auditSubjectDigestB}, nil)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
@@ -740,7 +744,7 @@ func TestAdversarial_MemorySource_StoreSameCollectionTwice(t *testing.T) {
 	}
 
 	// Search for either digest should find both
-	results, err = src.Search(context.Background(), "shared-step", []string{"digest-a", "digest-b"}, nil)
+	results, err = src.Search(context.Background(), "shared-step", []string{auditSubjectDigestA, auditSubjectDigestB}, nil)
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
@@ -771,7 +775,7 @@ func TestAdversarial_MemorySource_LoadEnvelopeWithValidPayloadButInvalidPredicat
 
 	stmt := intoto.Statement{
 		Type:          intoto.StatementType,
-		Subject:       []intoto.Subject{{Name: "test", Digest: map[string]string{"sha256": "abc"}}},
+		Subject:       []intoto.Subject{{Name: "test", Digest: map[string]string{"sha256": auditSubjectDigest}}},
 		PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 		Predicate:     json.RawMessage(`"this is a string, not a collection object"`),
 	}
@@ -810,7 +814,7 @@ func TestAdversarial_ArchivistaSource_MalformedGraphQLResponse(t *testing.T) {
 	client := archivista.New(srv.URL)
 	source := NewArchivistaSource(client)
 
-	results, err := source.Search(context.Background(), "step1", []string{"abc"}, nil)
+	results, err := source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Logf("OK: malformed GraphQL response returned error: %v", err)
 	} else if len(results) == 0 {
@@ -837,7 +841,7 @@ func TestAdversarial_ArchivistaSource_GraphQLErrorResponse(t *testing.T) {
 	client := archivista.New(srv.URL)
 	source := NewArchivistaSource(client)
 
-	_, err := source.Search(context.Background(), "step1", []string{"abc"}, nil)
+	_, err := source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err == nil {
 		t.Error("BUG: GraphQL error response should propagate as error")
 	} else {
@@ -848,6 +852,12 @@ func TestAdversarial_ArchivistaSource_GraphQLErrorResponse(t *testing.T) {
 // TestAdversarial_ArchivistaSource_DownloadMalformedEnvelope verifies behavior
 // when the downloaded envelope is valid JSON but doesn't match dsse.Envelope schema.
 func TestAdversarial_ArchivistaSource_DownloadMalformedEnvelope(t *testing.T) {
+	data, err := json.Marshal(dsse.Envelope{Payload: []byte(`{"not":"an intoto statement"}`), PayloadType: "application/vnd.in-toto+json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid := envelopeGitoid(t, data)
+	var downloads int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/query":
@@ -855,7 +865,7 @@ func TestAdversarial_ArchivistaSource_DownloadMalformedEnvelope(t *testing.T) {
 				"data": map[string]interface{}{
 					"dsses": map[string]interface{}{
 						"edges": []map[string]interface{}{
-							{"node": map[string]interface{}{"gitoidSha256": "gitoid-1"}},
+							{"node": map[string]interface{}{"gitoidSha256": gid}},
 						},
 					},
 				},
@@ -863,15 +873,12 @@ func TestAdversarial_ArchivistaSource_DownloadMalformedEnvelope(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(resp)
 
-		case r.URL.Path == "/download/gitoid-1":
+		case r.URL.Path == "/download/"+gid:
 			// Return valid JSON that represents a DSSE envelope, but whose
 			// payload is not a valid intoto.Statement
 			w.Header().Set("Content-Type", "application/json")
-			env := dsse.Envelope{
-				Payload:     []byte(`{"not": "an intoto statement"}`),
-				PayloadType: "application/vnd.in-toto+json",
-			}
-			json.NewEncoder(w).Encode(env)
+			atomic.AddInt32(&downloads, 1)
+			_, _ = w.Write(data)
 		}
 	}))
 	defer srv.Close()
@@ -879,28 +886,24 @@ func TestAdversarial_ArchivistaSource_DownloadMalformedEnvelope(t *testing.T) {
 	client := archivista.New(srv.URL)
 	source := NewArchivistaSource(client)
 
-	_, err := source.Search(context.Background(), "step1", []string{"abc"}, nil)
-	if err == nil {
-		t.Error("BUG: download of envelope with invalid intoto statement payload should fail")
-	} else {
-		t.Logf("OK: malformed envelope payload correctly rejected: %v", err)
+	for range 2 {
+		found, err := source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
+		if err != nil || len(found) != 0 {
+			t.Fatalf("malformed candidate must never be yielded: %+v, %v", found, err)
+		}
 	}
-
-	// Verify seenCollectionGitoids was NOT updated since the search failed
-	source.mu.Lock()
-	seen := len(source.seenCollectionGitoids)
-	source.mu.Unlock()
-	if seen > 0 {
-		t.Errorf("BUG: seenCollectionGitoids updated (%d) despite failed search; retry will skip these gitoids", seen)
-	} else {
-		t.Log("OK: seenCollectionGitoids not updated on failed search")
+	if atomic.LoadInt32(&downloads) != 1 {
+		t.Fatalf("expected one verified download, followed by a memoized snapshot, got %d", downloads)
+	}
+	if len(source.seenCollectionGitoids) != 1 || source.seenCollectionGitoids[0] != gid {
+		t.Fatalf("malformed candidate was not recorded as processed: %v", source.seenCollectionGitoids)
 	}
 }
 
 // TestAdversarial_ArchivistaSource_EmptyGitoidString verifies behavior when
 // the server returns an empty string gitoid.
 func TestAdversarial_ArchivistaSource_EmptyGitoidString(t *testing.T) {
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 	envJSON, _ := json.Marshal(env)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -929,7 +932,7 @@ func TestAdversarial_ArchivistaSource_EmptyGitoidString(t *testing.T) {
 	client := archivista.New(srv.URL)
 	source := NewArchivistaSource(client)
 
-	results, err := source.Search(context.Background(), "step1", []string{"abc"}, nil)
+	results, err := source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Logf("OK: empty gitoid returned error: %v", err)
 	} else if len(results) > 0 {
@@ -948,7 +951,7 @@ func TestAdversarial_ArchivistaSource_EmptyGitoidString(t *testing.T) {
 // TestAdversarial_ArchivistaSource_ContextCancelledDuringDownload verifies
 // that context cancellation mid-download does not corrupt seenCollectionGitoids state.
 func TestAdversarial_ArchivistaSource_ContextCancelledDuringDownload(t *testing.T) {
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 	envJSON, _ := json.Marshal(env)
 
 	queryHandled := make(chan struct{})
@@ -991,7 +994,7 @@ func TestAdversarial_ArchivistaSource_ContextCancelledDuringDownload(t *testing.
 		cancel()
 	}()
 
-	_, err := source.Search(ctx, "step1", []string{"abc"}, nil)
+	_, err := source.Search(ctx, "step1", []string{auditSubjectDigest}, nil)
 	if err == nil {
 		t.Error("BUG: expected error when context is cancelled during download")
 	} else {
@@ -1014,7 +1017,7 @@ func TestAdversarial_ArchivistaSource_ContextCancelledDuringDownload(t *testing.
 // searches and verifies no duplicates appear in seenCollectionGitoids (each gitoid should
 // appear exactly once).
 func TestRace_ArchivistaSource_ConcurrentSearchMutexCorrectness(t *testing.T) {
-	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": "abc"})
+	env := makeTestEnvelope(t, "step1", map[string]string{"sha256": auditSubjectDigest})
 	envJSON, _ := json.Marshal(env)
 
 	var counter int32
@@ -1049,7 +1052,7 @@ func TestRace_ArchivistaSource_ConcurrentSearchMutexCorrectness(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func() {
 			defer wg.Done()
-			_, _ = source.Search(context.Background(), "step1", []string{"abc"}, nil)
+			_, _ = source.Search(context.Background(), "step1", []string{auditSubjectDigest}, nil)
 		}()
 	}
 	wg.Wait()
@@ -1077,18 +1080,33 @@ func TestRace_ArchivistaSource_ConcurrentSearchMutexCorrectness(t *testing.T) {
 // intoto Statement construction adversarial tests
 // =============================================================================
 
-// TestAdversarial_IntotoStatement_EmptySubjects verifies that NewStatement
-// rejects an empty subjects map.
+// Subjectless metadata is allowed but must never satisfy an artifact query.
 func TestAdversarial_IntotoStatement_EmptySubjects(t *testing.T) {
-	_, err := intoto.NewStatement(
-		"https://example.com/predicate/v1",
-		[]byte(`{"key": "value"}`),
-		map[string]cryptoutil.DigestSet{},
-	)
-	if err == nil {
-		t.Error("BUG: NewStatement should reject empty subjects map")
-	} else {
-		t.Logf("OK: empty subjects correctly rejected: %v", err)
+	assertSubjectlessCollection(t, map[string]cryptoutil.DigestSet{})
+}
+
+func assertSubjectlessCollection(t *testing.T, subjects map[string]cryptoutil.DigestSet) {
+	t.Helper()
+	stmt, err := intoto.NewStatement(attestation.CollectionType, []byte(`{"name":"metadata","attestations":[]}`), subjects)
+	if err != nil || len(stmt.Subject) != 0 {
+		t.Fatalf("subjectless statement: %+v, %v", stmt, err)
+	}
+	data, err := json.Marshal(stmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := NewMemorySource()
+	if err := src.LoadEnvelope("metadata", dsse.Envelope{PayloadType: "application/vnd.in-toto+json", Payload: data}); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []struct {
+		digests []string
+		want    int
+	}{{nil, 1}, {[]string{auditSubjectDigest}, 0}} {
+		found, err := src.Search(context.Background(), "metadata", query.digests, nil)
+		if err != nil || len(found) != query.want {
+			t.Fatalf("subjectless query %v: %d matches, %v", query.digests, len(found), err)
+		}
 	}
 }
 
@@ -1271,14 +1289,9 @@ func TestAdversarial_IntotoStatement_EmptyPredicate(t *testing.T) {
 	}
 }
 
-// TestAdversarial_IntotoStatement_NilSubjects verifies that nil subjects map is rejected.
+// Nil and empty subject maps have the same metadata-only contract.
 func TestAdversarial_IntotoStatement_NilSubjects(t *testing.T) {
-	_, err := intoto.NewStatement("https://example.com/v1", []byte(`{}`), nil)
-	if err == nil {
-		t.Error("BUG: NewStatement should reject nil subjects map")
-	} else {
-		t.Logf("OK: nil subjects correctly rejected: %v", err)
-	}
+	assertSubjectlessCollection(t, nil)
 }
 
 // TestAdversarial_IntotoStatement_SubjectWithEmptyDigestSet verifies behavior
@@ -1438,7 +1451,7 @@ func TestAdversarial_CollectionEnvelope_NilAttestationInCollection(t *testing.T)
 
 	stmt := intoto.Statement{
 		Type:          intoto.StatementType,
-		Subject:       []intoto.Subject{{Name: "test", Digest: map[string]string{"sha256": "abc"}}},
+		Subject:       []intoto.Subject{{Name: "test", Digest: map[string]string{"sha256": auditSubjectDigest}}},
 		PredicateType: attestation.CollectionType,
 		Predicate:     json.RawMessage(predicate),
 	}
@@ -1462,7 +1475,7 @@ func TestAdversarial_CollectionEnvelope_NilAttestationInCollection(t *testing.T)
 	}
 
 	// If it loaded, verify we can search for it
-	results, err := src.Search(context.Background(), "test-step", []string{"abc"}, nil)
+	results, err := src.Search(context.Background(), "test-step", []string{auditSubjectDigest}, nil)
 	if err != nil {
 		t.Errorf("BUG: search failed after loading envelope with nil attestation: %v", err)
 	} else {
@@ -1491,7 +1504,7 @@ func TestAdversarial_CollectionEnvelope_DuplicateAttestationTypes(t *testing.T) 
 
 	stmt := intoto.Statement{
 		Type:          intoto.StatementType,
-		Subject:       []intoto.Subject{{Name: "test", Digest: map[string]string{"sha256": "abc"}}},
+		Subject:       []intoto.Subject{{Name: "test", Digest: map[string]string{"sha256": auditSubjectDigest}}},
 		PredicateType: attestation.CollectionType,
 		Predicate:     json.RawMessage(predicate),
 	}
@@ -1513,7 +1526,7 @@ func TestAdversarial_CollectionEnvelope_DuplicateAttestationTypes(t *testing.T) 
 	}
 
 	// Search with the git attestation type
-	results, err := src.Search(context.Background(), "test-step", []string{"abc"},
+	results, err := src.Search(context.Background(), "test-step", []string{auditSubjectDigest},
 		[]string{"https://aflock.ai/attestation/git/v0.1"})
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
@@ -1554,7 +1567,7 @@ func TestAdversarial_EnvelopeToCollectionEnvelope_EmptyPayload(t *testing.T) {
 func TestAdversarial_EnvelopeToCollectionEnvelope_NullPredicate(t *testing.T) {
 	stmt := intoto.Statement{
 		Type:          intoto.StatementType,
-		Subject:       []intoto.Subject{{Name: "test", Digest: map[string]string{"sha256": "abc"}}},
+		Subject:       []intoto.Subject{{Name: "test", Digest: map[string]string{"sha256": auditSubjectDigest}}},
 		PredicateType: attestation.CollectionType,
 		Predicate:     json.RawMessage(`null`),
 	}
@@ -1604,7 +1617,7 @@ func TestAdversarial_MemorySource_AttestationSearchWithLegacyURI(t *testing.T) {
 
 	stmt := intoto.Statement{
 		Type:          intoto.StatementType,
-		Subject:       []intoto.Subject{{Name: "test", Digest: map[string]string{"sha256": "abc"}}},
+		Subject:       []intoto.Subject{{Name: "test", Digest: map[string]string{"sha256": auditSubjectDigest}}},
 		PredicateType: attestation.CollectionType,
 		Predicate:     json.RawMessage(predicate),
 	}
@@ -1625,7 +1638,7 @@ func TestAdversarial_MemorySource_AttestationSearchWithLegacyURI(t *testing.T) {
 	}
 
 	// Search with the modern URI
-	results, err := src.Search(context.Background(), "test-step", []string{"abc"},
+	results, err := src.Search(context.Background(), "test-step", []string{auditSubjectDigest},
 		[]string{"https://aflock.ai/attestation/git/v0.1"})
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
@@ -1637,7 +1650,7 @@ func TestAdversarial_MemorySource_AttestationSearchWithLegacyURI(t *testing.T) {
 	// Search with the legacy URI (if one exists)
 	legacyURI := attestation.LegacyAlternate("https://aflock.ai/attestation/git/v0.1")
 	if legacyURI != "" {
-		results, err = src.Search(context.Background(), "test-step", []string{"abc"},
+		results, err = src.Search(context.Background(), "test-step", []string{auditSubjectDigest},
 			[]string{legacyURI})
 		if err != nil {
 			t.Fatalf("Search failed: %v", err)
@@ -1658,8 +1671,8 @@ func TestAdversarial_MemorySource_AttestationSearchWithLegacyURI(t *testing.T) {
 // subjects with multiple digest algorithms are all indexed.
 func TestAdversarial_MemorySource_MultipleDigestAlgorithms(t *testing.T) {
 	env := makeTestEnvelope(t, "step1", map[string]string{
-		"sha256": "aaaa",
-		"sha1":   "bbbb",
+		"sha256": auditSubjectDigestA,
+		"sha1":   strings.Repeat("b", 40),
 	})
 
 	src := NewMemorySource()
@@ -1668,7 +1681,7 @@ func TestAdversarial_MemorySource_MultipleDigestAlgorithms(t *testing.T) {
 	}
 
 	// Search by sha256 digest
-	results, err := src.Search(context.Background(), "step1", []string{"aaaa"}, nil)
+	results, err := src.Search(context.Background(), "step1", []string{auditSubjectDigestA}, nil)
 	if err != nil {
 		t.Fatalf("Search by sha256 failed: %v", err)
 	}
@@ -1676,13 +1689,14 @@ func TestAdversarial_MemorySource_MultipleDigestAlgorithms(t *testing.T) {
 		t.Errorf("BUG: expected 1 result for sha256 digest, got %d", len(results))
 	}
 
-	// Search by sha1 digest
-	results, err = src.Search(context.Background(), "step1", []string{"bbbb"}, nil)
+	// A generic SHA1 artifact digest cannot anchor a match. Git commit evidence
+	// has a separate, explicitly checked subject scope.
+	results, err = src.Search(context.Background(), "step1", []string{strings.Repeat("b", 40)}, nil)
 	if err != nil {
 		t.Fatalf("Search by sha1 failed: %v", err)
 	}
-	if len(results) != 1 {
-		t.Errorf("BUG: expected 1 result for sha1 digest, got %d", len(results))
+	if len(results) != 0 {
+		t.Errorf("weak artifact digest established a match: %d results", len(results))
 	}
 
 	// Search by non-existent digest
@@ -1694,5 +1708,5 @@ func TestAdversarial_MemorySource_MultipleDigestAlgorithms(t *testing.T) {
 		t.Errorf("BUG: expected 0 results for non-existent digest, got %d", len(results))
 	}
 
-	t.Log("OK: all digest algorithms are indexed and searchable")
+	t.Log("strong artifact digest matches; weak and unrelated digests do not")
 }

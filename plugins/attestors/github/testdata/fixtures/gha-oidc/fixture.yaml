@@ -28,6 +28,9 @@ setup:
   options:
     endpoints:
       - env: ACTIONS_ID_TOKEN_REQUEST_URL
+        # Preserve production HTTPS/host validation; only the test transport
+        # maps this logical endpoint to the recorded response on the local stub.
+        url: https://fixture.actions.githubusercontent.com/token
         file: oidc-token.json
         path: /token
       - env: WITNESS_GITHUB_JWKS_URL
@@ -48,6 +51,18 @@ recording:
 expect:
   predicate_type: https://aflock.ai/attestations/github/v0.1
   run_type: prematerial
+  # Historical-output migration, not volatility and not a new recording.
+  # The signed May 2026 source above remains unchanged. Assert its old value
+  # exactly, then require the full replay to match this one documented bugfix.
+  recorded_changes:
+    - path: cihost
+      before: ""
+      after: github.com
+      reason: >-
+        The recorded producer left CIHost unset. The corrected producer derives
+        it from the validated GITHUB_SERVER_URL (https://github.com). This
+        expectation proves current replay behavior against historical input;
+        it does not claim the recorded binary emitted the corrected value.
   subjects:
     match: prefix
     keys:

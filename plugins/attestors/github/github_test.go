@@ -25,12 +25,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func createMockServer() *httptest.Server {
+func createMockServer(t *testing.T) *httptest.Server {
 	type Response struct {
 		Count int    `json:"count"`
 		Value string `json:"value"`
 	}
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/valid" && r.Header.Get("Authorization") == "bearer validBearer" {
 			resp, _ := json.Marshal(Response{Count: 1, Value: "validJWTToken"})
 			_, _ = w.Write(resp)
@@ -38,6 +38,8 @@ func createMockServer() *httptest.Server {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		}
 	}))
+	routeTokenServer(t, server)
+	return server
 }
 
 func TestFetchToken(t *testing.T) {
@@ -83,7 +85,7 @@ func TestFetchToken(t *testing.T) {
 		},
 	}
 
-	server := createMockServer()
+	server := createMockServer(t)
 	defer server.Close()
 
 	for _, testCase := range testCases {
@@ -137,12 +139,11 @@ func TestJWKSURLOverride(t *testing.T) {
 }
 
 func TestSubjects(t *testing.T) {
-	tokenServer := createMockServer()
-	defer tokenServer.Close()
+	require.Empty(t, (&Attestor{}).Subjects())
+	require.Empty(t, (&Attestor{}).BackRefs())
 	attestor := &Attestor{
-		aud:      "projecturl",
-		jwksURL:  tokenServer.URL,
-		tokenURL: os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL"),
+		PipelineUrl: "https://github.com/org/repo/actions/runs/123",
+		ProjectUrl:  "https://github.com/org/repo",
 	}
 
 	subjects := attestor.Subjects()

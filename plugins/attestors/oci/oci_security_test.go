@@ -85,6 +85,8 @@ func TestSecurity_R3_165_SubjectsEmptyHashOnNonSHA256(t *testing.T) {
 
 	subjects := a.Subjects()
 	require.NotNil(t, subjects)
+	require.Len(t, subjects, 1, "only the tag has a usable SHA256 identity")
+	require.Contains(t, subjects, "imagetag:test:latest")
 
 	// With SHA512-only digest sets, the hardcoded SHA256 lookup returns "".
 	// This means subject keys will be:
@@ -114,6 +116,9 @@ func TestSecurity_R3_165_SubjectsEmptyHashOnNonSHA256(t *testing.T) {
 				"the hash algorithm as a parameter.",
 			key)
 	}
+	valid := strings.Repeat("a", 64)
+	a.LayerDiffIDs = []cryptoutil.DigestSet{{{Hash: crypto.SHA256}: valid}}
+	require.Contains(t, a.Subjects(), "layerdiffid00:"+valid, "valid layer evidence must still be emitted")
 }
 
 // =============================================================================
@@ -178,6 +183,13 @@ func TestSecurity_R3_166_UnsanitizedRepoTagsInSubjectKeys(t *testing.T) {
 
 	subjects := a.Subjects()
 	require.NotNil(t, subjects)
+	require.Contains(t, subjects, "imagetag:normal:latest")
+	refs := a.BackRefs()
+	require.Contains(t, refs, "imagetag:normal:latest")
+	for _, bad := range []string{"", "tag\nwith\nnewlines", "tag\x00with\x00nulls", strings.Repeat("A", 10000)} {
+		require.NotContains(t, subjects, "imagetag:"+bad)
+		require.NotContains(t, refs, "imagetag:"+bad)
+	}
 
 	// Validate that all subject keys are well-formed.
 	for key := range subjects {
@@ -441,16 +453,7 @@ func TestSecurity_R3_169_MultipleFileOpensAllowTOCTOU(t *testing.T) {
 
 	// Phase 2: getImageID opens the file AGAIN -- now it reads the evil tar.
 	evilImageID, err := a.Manifest[0].getImageID(ctx, tarPath)
-	require.NoError(t, err)
-
-	// The image IDs should be the same if the code maintained a single file handle.
-	// But because it opens the file independently each time, the evil tar's
-	// config produces a DIFFERENT image ID.
-	equal := origImageID.Equal(evilImageID)
-	assert.True(t, equal,
-		"TOCTOU: getImageID produced a different image ID after the tar file "+
-			"was replaced between parseMaifest and getImageID calls. "+
-			"Manifest was parsed from the original file, but config was read from "+
-			"the replaced file. The three sequential os.Open calls create a race "+
-			"window. Fix: open the tar file once and pass the reader to all phases.")
+	require.ErrorIs(t, err, errArchiveChanged, "an in-place rewrite must not be combined with the prior manifest")
+	require.Nil(t, evilImageID)
+	require.NotEmpty(t, origImageID, "the unchanged archive must have produced actual image evidence")
 }

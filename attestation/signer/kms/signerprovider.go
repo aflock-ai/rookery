@@ -214,28 +214,26 @@ func AddProvider(keyResourceID string, opts KMSClientOptions, init ProviderInit)
 }
 
 func (ksp *KMSSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, error) {
+	var selected ProviderInit
+	longest := -1
 	for ref, pi := range providersMap {
-		if strings.HasPrefix(ksp.Reference, ref) {
-			return pi(ctx, ksp)
+		if strings.HasPrefix(ksp.Reference, ref) && len(ref) > longest {
+			selected, longest = pi, len(ref)
 		}
+	}
+	if selected != nil {
+		return selected(ctx, ksp)
 	}
 	return nil, &ProviderNotFoundError{ref: ksp.Reference}
 }
 
 // NOTE: This is a temprorary implementation until we have a SignerVerifier interface
 func (ksp *KMSSignerProvider) Verifier(ctx context.Context) (cryptoutil.Verifier, error) {
-	for ref, pi := range providersMap {
-		if strings.HasPrefix(ksp.Reference, ref) {
-			p, err := pi(ctx, ksp)
-			if err != nil {
-				return nil, err
-			}
-
-			// we need to conver this into a cryptoutil.Verifier
-			return p.Verifier()
-		}
+	p, err := ksp.Signer(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return nil, &ProviderNotFoundError{ref: ksp.Reference}
+	return p.Verifier()
 }
 
 var providersMap = map[string]ProviderInit{}

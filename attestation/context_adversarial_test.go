@@ -234,19 +234,39 @@ func TestRunAttestors_CalledTwice(t *testing.T) {
 	}
 
 	// Run again on the same context
-	if err := actx.RunAttestors(); err != nil {
-		t.Fatalf("second RunAttestors failed: %v", err)
+	if err := actx.RunAttestors(); err == nil {
+		t.Fatal("a context must reject a second execution")
 	}
 
 	second := actx.CompletedAttestors()
-	if len(second) != 2 {
-		t.Fatalf("expected 2 completed attestors after second run, got %d", len(second))
+	if len(second) != 1 {
+		t.Fatalf("second execution changed completed evidence: got %d entries", len(second))
 	}
+}
 
-	// This is a potential bug: running attestors twice accumulates results.
-	// The workflow layer (run.go) iterates CompletedAttestors() and would see duplicates.
-	t.Errorf("BUG: RunAttestors can be called multiple times on the same context, accumulating completed attestors (got %d). "+
-		"There is no guard preventing re-use, and downstream consumers (workflow.run) will see duplicate attestors.", len(second))
+func TestRunAttestors_ConcurrentReuseIsRejected(t *testing.T) {
+	actx, err := NewContext("concurrent-run", []Attestor{&slowAttestor{name: "once", runType: ExecuteRunType}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			results <- actx.RunAttestors()
+		}()
+	}
+	close(start)
+	passed := 0
+	for range 2 {
+		if <-results == nil {
+			passed++
+		}
+	}
+	if passed != 1 || len(actx.CompletedAttestors()) != 1 {
+		t.Fatalf("expected one execution and one evidence record, got %d successes and %d records", passed, len(actx.CompletedAttestors()))
+	}
 }
 
 // TestRunAttestors_EmptyRunType verifies that an attestor with no RunType returns an error.
@@ -406,25 +426,13 @@ func TestWithDirHashGlob_InvalidPattern(t *testing.T) {
 	}
 
 	globs := actx.DirHashGlob()
-	if len(globs) != 2 {
-		t.Fatalf("expected 2 globs in slice, got %d", len(globs))
+	if len(globs) != 1 || globs[0] == nil {
+		t.Fatalf("expected only the valid compiled glob, got %v", globs)
+	}
+	if !globs[0].Match("valid-file") || globs[0].Match("other-file") {
+		t.Fatal("the valid pattern must retain its matching semantics")
 	}
 
-	// The invalid glob position should contain nil because the error was discarded
-	if globs[0] == nil {
-		t.Errorf("BUG: WithDirHashGlob silently stores nil for invalid glob pattern '[invalid'. " +
-			"The compile error is discarded (line 107: dirHashGlobItemCompiled, _ := glob.Compile(...)). " +
-			"Downstream code calling glob.Match on this nil will panic.")
-	} else {
-		t.Logf("OK: invalid glob pattern was handled (unexpectedly compiled successfully)")
-	}
-
-	// The valid pattern should be fine
-	if globs[1] == nil {
-		t.Errorf("BUG: valid glob pattern 'valid-*' compiled to nil")
-	} else {
-		t.Logf("OK: valid glob pattern compiled correctly")
-	}
 }
 
 // TestSetEnvironmentCapturer_MutexProtected verifies that

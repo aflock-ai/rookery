@@ -25,6 +25,7 @@
 package testkit
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -102,14 +103,79 @@ type setupSpec struct {
 }
 
 type expectSpec struct {
-	PredicateType string       `yaml:"predicate_type"`
-	RunType       string       `yaml:"run_type"`
-	Subjects      subjectsSpec `yaml:"subjects"`
-	Materials     []string     `yaml:"materials"` // subject/material keys (or prefixes) expected
-	Products      []string     `yaml:"products"`
-	Exit          *exitSpec    `yaml:"exit"`
-	Golden        string       `yaml:"golden"` // relative golden predicate path; "" = assertion-only
-	Redact        []string     `yaml:"redact"` // dotted paths zeroed before golden compare
+	PredicateType   string           `yaml:"predicate_type"`
+	RunType         string           `yaml:"run_type"`
+	Subjects        subjectsSpec     `yaml:"subjects"`
+	Materials       []string         `yaml:"materials"` // subject/material keys (or prefixes) expected
+	Products        []string         `yaml:"products"`
+	Exit            *exitSpec        `yaml:"exit"`
+	Golden          string           `yaml:"golden"` // relative golden predicate path; "" = assertion-only
+	Redact          []string         `yaml:"redact"` // dotted paths zeroed before golden compare
+	RecordedChanges []recordedChange `yaml:"recorded_changes"`
+}
+
+// recordedChange is an explicit historical-output migration, NOT a new real
+// recording or a volatile-field exemption. Only the expected recorded predicate
+// is changed in memory after checking Before exactly. The full replay must equal
+// that expectation, including After; signed source bytes and provenance remain
+// untouched. Paths address object scalar leaves, never arrays or whole objects.
+type recordedChange struct {
+	Path   string    `yaml:"path"`
+	Before yaml.Node `yaml:"before"`
+	After  yaml.Node `yaml:"after"`
+	Reason string    `yaml:"reason"`
+}
+
+func recordedScalar(n yaml.Node) (json.RawMessage, error) {
+	if n.Kind != yaml.ScalarNode || (n.Tag != "!!str" && n.Tag != "!!bool" && n.Tag != "!!int" && n.Tag != "!!float" && n.Tag != "!!null") {
+		return nil, fmt.Errorf("before and after must be explicit JSON scalars")
+	}
+	if n.Tag == "!!int" || n.Tag == "!!float" {
+		// Keep the literal, not YAML's float64 approximation. Non-JSON numeric
+		// spellings (hex, underscores, .inf, etc.) have no exact replay spelling.
+		raw, err := json.Marshal(json.Number(n.Value))
+		if err != nil {
+			return nil, fmt.Errorf("recorded_changes numbers must use JSON numeric syntax: %w", err)
+		}
+		return raw, nil
+	}
+	var v any
+	if err := n.Decode(&v); err != nil {
+		return nil, err
+	}
+	return json.Marshal(v)
+}
+
+func validateRecordedChanges(e expectSpec) error {
+	overlaps := func(a, b string) bool {
+		return a == b || strings.HasPrefix(a, b+".") || strings.HasPrefix(b, a+".")
+	}
+	for i, change := range e.RecordedChanges {
+		if strings.TrimSpace(change.Reason) == "" {
+			return fmt.Errorf("recorded_changes[%d]: reason is required", i)
+		}
+		for _, part := range strings.Split(change.Path, ".") {
+			if strings.TrimSpace(part) == "" || strings.ContainsAny(part, "[]") {
+				return fmt.Errorf("recorded_changes[%d]: path must name an object scalar leaf", i)
+			}
+		}
+		for _, node := range []yaml.Node{change.Before, change.After} {
+			if _, err := recordedScalar(node); err != nil {
+				return fmt.Errorf("recorded_changes[%d]: %w", i, err)
+			}
+		}
+		for _, prev := range e.RecordedChanges[:i] {
+			if overlaps(change.Path, prev.Path) {
+				return fmt.Errorf("recorded_changes: overlapping paths %q and %q", change.Path, prev.Path)
+			}
+		}
+		for _, redact := range e.Redact {
+			if overlaps(change.Path, redact) {
+				return fmt.Errorf("recorded_changes path %q overlaps redact %q", change.Path, redact)
+			}
+		}
+	}
+	return nil
 }
 
 type subjectsSpec struct {
@@ -168,6 +234,12 @@ func LoadFixture(dir string) (*Fixture, error) {
 	}
 	if strings.TrimSpace(m.Expect.PredicateType) == "" {
 		return nil, fmt.Errorf("%s: expect.predicate_type is required", mpath)
+	}
+	if err := validateRecordedChanges(m.Expect); err != nil {
+		return nil, fmt.Errorf("%s: %w", mpath, err)
+	}
+	if len(m.Expect.RecordedChanges) > 0 && (m.Recording == nil || m.Recording.Attestation == "" || m.Expect.Exit != nil) {
+		return nil, fmt.Errorf("%s: recorded_changes requires a recording and a non-exit predicate comparison", mpath)
 	}
 	switch m.Expect.Subjects.Match {
 	case "", MatchExact, MatchPrefix:

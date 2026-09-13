@@ -115,15 +115,20 @@ func TestRunWorksWithCommits(t *testing.T) {
 	require.NoError(t, err, "Expected no error from RunAttestors")
 
 	require.Empty(t, attestor.ParentHashes, "Expected the parent hashes to be set")
+	firstCommit := attestor.CommitHash
 
 	createTestCommit(t, dir, "Test commit")
 	createTestRefs(t, dir)
 	createAnnotatedTagOnHead(t, dir)
+	attestor = New()
+	ctx, err = attestation.NewContext("test", []attestation.Attestor{attestor}, attestation.WithWorkingDir(dir))
+	require.NoError(t, err)
 	err = ctx.RunAttestors()
 
 	// Check that the attestor has the expected values
 
 	require.NoError(t, err, "Expected no error from attestation")
+	require.NotEqual(t, firstCommit, attestor.CommitHash, "a new run must observe the new commit")
 	require.NotEmpty(t, attestor.CommitHash, "Expected the commit hash to be set")
 	require.NotEmpty(t, attestor.Author, "Expected the author to be set")
 	require.NotEmpty(t, attestor.AuthorEmail, "Expected the author's email to be set")

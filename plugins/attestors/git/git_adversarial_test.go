@@ -252,7 +252,7 @@ func TestAdversarial_MaliciousAuthorEmail(t *testing.T) {
 			_, err = wt.Add("test.txt")
 			require.NoError(t, err)
 
-			_, err = wt.Commit("test commit", &gogit.CommitOptions{
+			commitHash, err := wt.Commit("test commit", &gogit.CommitOptions{
 				Author: &object.Signature{
 					Name:  "Attacker",
 					Email: tc.email,
@@ -267,13 +267,15 @@ func TestAdversarial_MaliciousAuthorEmail(t *testing.T) {
 			err = ctx.RunAttestors()
 			require.NoError(t, err)
 
-			assert.Equal(t, tc.email, attestor.AuthorEmail,
-				"BUG: Author email %q stored without validation. "+
-					"This becomes a subject key in Subjects().", tc.email)
+			commit, err := repo.CommitObject(commitHash)
+			require.NoError(t, err)
+			assert.Equal(t, commit.Author.Email, attestor.AuthorEmail,
+				"record Git's serialized author value, not the input before Git normalization")
+			assert.Equal(t, commitHash.String(), attestor.CommitHash)
 
 			// Verify it appears in subjects
 			subjects := attestor.Subjects()
-			key := fmt.Sprintf("authoremail:%v", tc.email)
+			key := fmt.Sprintf("authoremail:%v", commit.Author.Email)
 			_, exists := subjects[key]
 
 			if attestor.AuthorEmail == "" {
@@ -285,8 +287,7 @@ func TestAdversarial_MaliciousAuthorEmail(t *testing.T) {
 				return
 			}
 
-			assert.True(t, exists,
-				"Malicious email becomes an attestation subject without validation")
+			assert.True(t, exists, "the observed author value must retain its subject mapping; it is not authenticated identity")
 		})
 	}
 }

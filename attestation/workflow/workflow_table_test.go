@@ -1197,7 +1197,7 @@ func TestTableRunStoreVerifyRoundtrip(t *testing.T) {
 					name: "my-att", typeName: "https://test/my-att",
 					runType: attestation.ExecuteRunType,
 					subjects: map[string]cryptoutil.DigestSet{
-						"artifact": {{Hash: crypto.SHA256}: "abc123"},
+						"artifact": {{Hash: crypto.SHA256}: strings.Repeat("a", 64)},
 					},
 				},
 			},
@@ -1211,14 +1211,14 @@ func TestTableRunStoreVerifyRoundtrip(t *testing.T) {
 					name: "att1", typeName: "https://test/att1",
 					runType: attestation.ExecuteRunType,
 					subjects: map[string]cryptoutil.DigestSet{
-						"art1": {{Hash: crypto.SHA256}: "hash1"},
+						"art1": {{Hash: crypto.SHA256}: strings.Repeat("b", 64)},
 					},
 				},
 				&tableAttestor{
 					name: "att2", typeName: "https://test/att2",
 					runType: attestation.ExecuteRunType,
 					subjects: map[string]cryptoutil.DigestSet{
-						"art2": {{Hash: crypto.SHA256}: "hash2"},
+						"art2": {{Hash: crypto.SHA256}: strings.Repeat("c", 64)},
 					},
 				},
 			},
@@ -1293,6 +1293,12 @@ func TestTableRunStoreVerifyRoundtrip(t *testing.T) {
 			found, err := ms.Search(context.Background(), "wrong-step-name", searchDigests, nil)
 			require.NoError(t, err)
 			assert.Empty(t, found, "should not find collection with wrong step name")
+			found, err = ms.Search(context.Background(), tc.stepName, []string{strings.Repeat("f", 64)}, nil)
+			require.NoError(t, err)
+			assert.Empty(t, found, "a different artifact must not match, including a subjectless collection")
+			found, err = ms.Search(context.Background(), tc.stepName, nil, nil)
+			require.NoError(t, err)
+			assert.Len(t, found, 1, "a subject-agnostic query must find the stored collection")
 		})
 	}
 }

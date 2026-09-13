@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -143,17 +144,15 @@ func (r *Result) assertRecording(t *testing.T, fx *Fixture) {
 
 	// THE recorded-evidence cross-check: the predicate the attestor produced in
 	// the real recorded run must match what it produces on hermetic replay
-	// (after redacting the documented volatile fields). Without this the
+	// (after explicit historical-output migrations and documented redactions). Without this the
 	// recorded half proves nothing — a tampered or mismatched recording would
 	// ride green. Both sides are canonicalized with the same redaction.
 	recPred, ok := rec.ByType[r.PredType]
 	if !ok {
 		t.Errorf("recorded attestation has no predicate of type %q (recorded types: %v)", r.PredType, rec.types())
-	} else if r.RunErr == nil && len(r.Predicate) > 0 {
-		recCanon, errR := canonicalize(recPred, fx.Expect.Redact)
-		replayCanon, errP := canonicalize(r.Predicate, fx.Expect.Redact)
-		if errR == nil && errP == nil && string(recCanon) != string(replayCanon) {
-			t.Errorf("replayed predicate != recorded real-run predicate for %q (after redacting %v) — the fixture's replay source does not match the recorded evidence; re-record or widen volatile_fields/redact\n--- recorded ---\n%s\n--- replayed ---\n%s", r.PredType, fx.Expect.Redact, truncForDiff(recCanon), truncForDiff(replayCanon))
+	} else if r.RunErr == nil {
+		if err := compareRecordedPredicate(recPred, r.Predicate, fx.Expect); err != nil {
+			t.Errorf("recorded predicate comparison for %q: %v", r.PredType, err)
 		}
 	}
 
@@ -161,6 +160,73 @@ func (r *Result) assertRecording(t *testing.T, fx *Fixture) {
 	if fx.Recording.Version == "" || fx.Recording.BinarySHA256 == "" {
 		t.Errorf("recording provenance incomplete: version=%q binary_sha256=%q", fx.Recording.Version, fx.Recording.BinarySHA256)
 	}
+}
+
+func compareRecordedPredicate(recorded, replay json.RawMessage, expect expectSpec) error {
+	if err := validateRecordedChanges(expect); err != nil {
+		return err
+	}
+	if len(expect.RecordedChanges) > 0 {
+		for side, raw := range []json.RawMessage{recorded, replay} {
+			label := "recorded"
+			if side == 1 {
+				label = "replay"
+			}
+			root, err := decodeExactJSON(raw)
+			if err != nil {
+				return fmt.Errorf("decode %s predicate: %w", label, err)
+			}
+			for _, change := range expect.RecordedChanges {
+				node := root
+				parts := strings.Split(change.Path, ".")
+				for _, part := range parts[:len(parts)-1] {
+					object, ok := node.(map[string]any)
+					if !ok {
+						return fmt.Errorf("recorded_changes path %q is not an object leaf in %s", change.Path, label)
+					}
+					node = object[part]
+				}
+				object, ok := node.(map[string]any)
+				if !ok {
+					return fmt.Errorf("recorded_changes path %q is not an object leaf in %s", change.Path, label)
+				}
+				leaf := parts[len(parts)-1]
+				actual, exists := object[leaf]
+				want, _ := recordedScalar(change.Before) // validated above
+				assertion := "before"
+				after, _ := recordedScalar(change.After)
+				if side == 1 {
+					want, assertion = after, "after"
+				}
+				actualJSON, err := json.Marshal(actual)
+				if !exists || err != nil || !bytes.Equal(actualJSON, want) {
+					return fmt.Errorf("recorded_changes %q: %s value does not equal %s (reason: %s)", change.Path, label, assertion, change.Reason)
+				}
+				if side == 0 {
+					object[leaf] = after
+				}
+			}
+			if side == 0 {
+				var err error
+				recorded, err = json.Marshal(root)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	recCanon, err := canonicalize(recorded, expect.Redact)
+	if err != nil {
+		return fmt.Errorf("canonicalize recorded predicate: %w", err)
+	}
+	replayCanon, err := canonicalize(replay, expect.Redact)
+	if err != nil {
+		return fmt.Errorf("canonicalize replay predicate: %w", err)
+	}
+	if !bytes.Equal(recCanon, replayCanon) {
+		return fmt.Errorf("replayed predicate != recorded predicate expectation (historical changes: %d, redactions: %v)\n--- expected ---\n%s\n--- replayed ---\n%s", len(expect.RecordedChanges), expect.Redact, truncForDiff(recCanon), truncForDiff(replayCanon))
+	}
+	return nil
 }
 
 // assertPredicateMatchesSchema validates the produced predicate against the
@@ -300,9 +366,10 @@ func (r *Result) assertGolden(t *testing.T, fx *Fixture) {
 
 // canonicalize parses the predicate JSON, zeroes the redact paths, and
 // re-marshals with sorted keys + 2-space indent so goldens are reproducible.
+// Numeric literals stay exact; even unlisted fields must not lose precision.
 func canonicalize(raw json.RawMessage, redact []string) ([]byte, error) {
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	v, err := decodeExactJSON(raw)
+	if err != nil {
 		return nil, err
 	}
 	for _, path := range redact {
@@ -313,6 +380,58 @@ func canonicalize(raw json.RawMessage, redact []string) ([]byte, error) {
 		return nil, err
 	}
 	return append(out, '\n'), nil
+}
+
+// decodeExactJSON rejects duplicate decoded keys before a map can overwrite
+// them, including escaped-equivalent names, and never converts numbers to floats.
+func decodeExactJSON(raw json.RawMessage) (any, error) {
+	if !json.Valid(raw) {
+		return nil, fmt.Errorf("invalid JSON")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var readValue func() (any, error)
+	readValue = func() (any, error) {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		switch token {
+		case json.Delim('{'):
+			object := make(map[string]any)
+			for decoder.More() {
+				key, err := decoder.Token()
+				if err != nil {
+					return nil, err
+				}
+				name := key.(string) // valid JSON object keys are strings
+				if _, exists := object[name]; exists {
+					return nil, fmt.Errorf("duplicate JSON key %q", name)
+				}
+				value, err := readValue()
+				if err != nil {
+					return nil, err
+				}
+				object[name] = value
+			}
+			_, err = decoder.Token() // closing delimiter; syntax checked above
+			return object, err
+		case json.Delim('['):
+			array := make([]any, 0)
+			for decoder.More() {
+				value, err := readValue()
+				if err != nil {
+					return nil, err
+				}
+				array = append(array, value)
+			}
+			_, err = decoder.Token()
+			return array, err
+		default:
+			return token, nil
+		}
+	}
+	return readValue()
 }
 
 // applyRedact walks a dotted path and sets the leaf to nil. A "[]" segment

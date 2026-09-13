@@ -75,6 +75,7 @@ func testJWTInfra(t *testing.T, claims map[string]interface{}) (jwksServer *http
 		json.NewEncoder(w).Encode(resp)
 	}))
 
+	routeTokenServer(t, tokenServer)
 	return jwksServer, tokenServer
 }
 
@@ -110,9 +111,8 @@ func TestAdversarial_SSRF_TokenURLRedirect(t *testing.T) {
 
 	// Actually invoke fetchToken to prove the bearer is sent to the attacker
 	_, err := fetchToken(a.tokenURL, "secret-bearer-abc123", "witness")
-	require.NoError(t, err)
-	assert.Equal(t, "bearer secret-bearer-abc123", capturedBearer,
-		"SSRF confirmed: bearer token sent to attacker-controlled endpoint")
+	require.ErrorContains(t, err, "invalid GitHub Actions token endpoint")
+	require.Empty(t, capturedBearer)
 }
 
 // =============================================================================
@@ -187,25 +187,10 @@ func TestAdversarial_FullAttestationForgery(t *testing.T) {
 	require.NoError(t, err)
 
 	err = a.Attest(ctx)
-	require.NoError(t, err, "Full attestation forgery: Attest() succeeded")
-
-	// JWT says "attacker/evil-repo" but env vars say "legit-org/legit-repo"
-	assert.Equal(t, "https://github.com/legit-org/legit-repo", a.ProjectUrl,
-		"BUG: ProjectUrl from env var says 'legit-org/legit-repo' "+
-			"but JWT claims say 'attacker/evil-repo'. "+
-			"No cross-validation between JWT claims and env vars.")
-
-	assert.Equal(t, "https://github.com", a.CIServerUrl)
-	assert.Equal(t, "12345", a.PipelineID)
-	assert.Equal(t, "Build and Deploy", a.PipelineName)
-
-	// Subjects are from the spoofed env vars, not the JWT
-	subjects := a.Subjects()
-	legitimateKey := "projecturl:https://github.com/legit-org/legit-repo"
-	_, exists := subjects[legitimateKey]
-	assert.True(t, exists,
-		"CRITICAL: Subjects match the forged env vars, not the JWT claims. "+
-			"Policy evaluation using these subjects is completely broken.")
+	require.ErrorContains(t, err, "repository claim")
+	require.Empty(t, a.ProjectUrl)
+	require.Empty(t, a.PipelineUrl)
+	require.NotContains(t, a.Subjects(), "projecturl:https://github.com/legit-org/legit-repo")
 }
 
 // =============================================================================
@@ -280,10 +265,13 @@ func TestAdversarial_EnvVar_URLInjectionInProjectUrl(t *testing.T) {
 			require.NoError(t, err)
 
 			err = a.Attest(ctx)
-			require.NoError(t, err)
-
-			assert.Equal(t, tc.wantProjectUrl, a.ProjectUrl,
-				"BUG: %s. ProjectUrl = %q", tc.description, a.ProjectUrl)
+			if tc.serverURL != "https://github.com" {
+				require.ErrorContains(t, err, "invalid GITHUB_SERVER_URL")
+			} else {
+				require.ErrorContains(t, err, "invalid GITHUB_REPOSITORY")
+			}
+			require.Empty(t, a.ProjectUrl)
+			require.Empty(t, a.PipelineUrl)
 		})
 	}
 }
@@ -297,7 +285,7 @@ func TestAdversarial_EnvVar_URLInjectionInProjectUrl(t *testing.T) {
 // =============================================================================
 
 func TestAdversarial_CIHostNotSet(t *testing.T) {
-	claims := map[string]interface{}{"sub": "test"}
+	claims := map[string]interface{}{"sub": "test", "repository": "org/repo", "run_id": "123"}
 	jwksServer, tokenServer := testJWTInfra(t, claims)
 	defer jwksServer.Close()
 	defer tokenServer.Close()
@@ -321,8 +309,7 @@ func TestAdversarial_CIHostNotSet(t *testing.T) {
 	err = a.Attest(ctx)
 	require.NoError(t, err)
 
-	assert.Empty(t, a.CIHost,
-		"BUG: CIHost is never populated. GitLab sets it from CI_SERVER_HOST.")
+	assert.Equal(t, "github.com", a.CIHost)
 }
 
 // =============================================================================
@@ -391,10 +378,9 @@ func TestAdversarial_FetchToken_BearerSentToHTTP(t *testing.T) {
 		"Test server is HTTP, not HTTPS")
 
 	token, err := fetchToken(server.URL+"/token", "secret-bearer-token", "witness")
-	require.NoError(t, err)
-	assert.Equal(t, "jwt", token)
-	assert.Equal(t, "bearer secret-bearer-token", capturedAuth,
-		"BUG: Bearer token sent over plain HTTP without scheme validation.")
+	require.ErrorContains(t, err, "invalid GitHub Actions token endpoint")
+	require.Empty(t, token)
+	require.Empty(t, capturedAuth)
 }
 
 // =============================================================================
@@ -414,6 +400,7 @@ func TestAdversarial_FetchToken_NoRetryOnTransientFailure(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
+	routeTokenServer(t, server)
 
 	_, err := fetchToken(server.URL+"/token", "bearer", "witness")
 	require.Error(t, err)
@@ -450,6 +437,7 @@ func TestAdversarial_FetchToken_DuplicateAudienceParam(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
+	routeTokenServer(t, server)
 
 	tokenURL := server.URL + "/token?audience=witness"
 	_, err := fetchToken(tokenURL, "bearer", "witness")
@@ -502,9 +490,10 @@ func TestAdversarial_ReadResponseBody_TruncationProducesInvalidJSON(t *testing.T
 		w.Write([]byte(fullJSON))
 	}))
 	defer server.Close()
+	routeTokenServer(t, server)
 
 	_, err := fetchToken(server.URL+"/token", "bearer", "witness")
-	require.Error(t, err, "Should error because 1MB truncation produces invalid JSON")
+	require.ErrorContains(t, err, "token response exceeds")
 }
 
 // =============================================================================
@@ -519,6 +508,7 @@ func TestAdversarial_FetchToken_HTMLResponseNotDetected(t *testing.T) {
 		fmt.Fprint(w, "<html><body>Captive Portal Login</body></html>")
 	}))
 	defer server.Close()
+	routeTokenServer(t, server)
 
 	_, err := fetchToken(server.URL+"/token", "bearer", "witness")
 	require.Error(t, err)
@@ -552,7 +542,7 @@ func TestAdversarial_EnvVarIsolation(t *testing.T) {
 // =============================================================================
 
 func TestAdversarial_StructFieldCoverage(t *testing.T) {
-	claims := map[string]interface{}{"sub": "test"}
+	claims := map[string]interface{}{"sub": "test", "repository": "org/repo", "run_id": "1"}
 	jwksServer, tokenServer := testJWTInfra(t, claims)
 	defer jwksServer.Close()
 	defer tokenServer.Close()
@@ -590,5 +580,5 @@ func TestAdversarial_StructFieldCoverage(t *testing.T) {
 	assert.NotEmpty(t, a.RunnerOS, "RunnerOS should be set")
 	assert.NotEmpty(t, a.PipelineUrl, "PipelineUrl should be set")
 	assert.NotNil(t, a.JWT, "JWT should be set")
-	assert.Empty(t, a.CIHost, "CIHost is never populated (inconsistency)")
+	assert.Equal(t, "github.com", a.CIHost)
 }

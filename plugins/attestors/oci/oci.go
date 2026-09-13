@@ -19,15 +19,18 @@ import (
 	"bufio"
 	"compress/gzip"
 	"crypto"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"os"
 	"path"
 	"strings"
+	"unicode"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -164,12 +167,34 @@ type Attestor struct {
 	RegistryDigests []RegistryDigest `json:"registrydigests,omitempty"`
 
 	tarFilePath string `json:"-"`
+	tarSHA256   string
 }
 
 type Manifest struct {
-	Config   string   `json:"Config"`
-	RepoTags []string `json:"RepoTags"`
-	Layers   []string `json:"Layers"`
+	Config    string   `json:"Config"`
+	RepoTags  []string `json:"RepoTags"`
+	Layers    []string `json:"Layers"`
+	tarSHA256 string
+}
+
+var errArchiveChanged = errors.New("image archive changed between reads")
+
+// Hash the same byte stream that supplied each parsing phase, including bytes
+// beyond the selected entry. Equal digests bind the phases without buffering a
+// potentially multi-gigabyte image in memory.
+func finishArchiveDigest(r io.Reader, h hash.Hash, expected string) (string, error) {
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return "", err
+	}
+	digest := fmt.Sprintf("%x", h.Sum(nil))
+	if expected != "" && digest != expected {
+		return "", errArchiveChanged
+	}
+	return digest, nil
+}
+
+func safeSubjectIdentifier(value string) bool {
+	return value != "" && len(value) <= 1000 && strings.IndexFunc(value, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) < 0
 }
 
 func (m *Manifest) getImageID(ctx *attestation.AttestationContext, tarFilePath string) (cryptoutil.DigestSet, error) {
@@ -179,7 +204,9 @@ func (m *Manifest) getImageID(ctx *attestation.AttestationContext, tarFilePath s
 	}
 	defer func() { _ = tarFile.Close() }()
 
-	tarReader := tar.NewReader(tarFile)
+	hasher := sha256.New()
+	stream := io.TeeReader(tarFile, hasher)
+	tarReader := tar.NewReader(stream)
 	for {
 		h, err := tarReader.Next()
 		if err == io.EOF {
@@ -207,6 +234,9 @@ func (m *Manifest) getImageID(ctx *attestation.AttestationContext, tarFilePath s
 				return nil, err
 			}
 
+			if _, err := finishArchiveDigest(stream, hasher, m.tarSHA256); err != nil {
+				return nil, err
+			}
 			return imageID, nil
 		}
 	}
@@ -307,7 +337,16 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 			continue
 		}
 
-		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, ctx.Hashes())
+		hashes := append([]cryptoutil.DigestValue{}, ctx.Hashes()...)
+		sha256Key := cryptoutil.DigestValue{Hash: crypto.SHA256}
+		hasSHA256 := false
+		for _, hash := range hashes {
+			hasSHA256 = hasSHA256 || hash == sha256Key
+		}
+		if !hasSHA256 {
+			hashes = append(hashes, sha256Key)
+		}
+		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, hashes)
 		if newDigestSet == nil || err != nil {
 			log.Debugf("(attestation/oci) error calculating digest set from file %s: %v", path, err)
 			if candidateErr == nil {
@@ -328,6 +367,7 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 		}
 
 		a.TarDigest = product.Digest
+		a.tarSHA256 = newDigestSet[sha256Key]
 
 		a.tarFilePath = path
 		return nil
@@ -339,6 +379,7 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 }
 
 func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
+	a.Manifest, a.ManifestRaw, a.ManifestDigest = nil, nil, nil
 	f, err := os.Open(a.tarFilePath)
 	if err != nil {
 		err = fmt.Errorf("error opening tar file: %w", err)
@@ -346,7 +387,9 @@ func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
 	}
 	defer func() { _ = f.Close() }()
 
-	tarReader := tar.NewReader(f)
+	hasher := sha256.New()
+	stream := io.TeeReader(f, hasher)
+	tarReader := tar.NewReader(stream)
 	for {
 		h, err := tarReader.Next()
 		if err == io.EOF {
@@ -372,17 +415,27 @@ func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
 		}
 	}
 
+	if len(a.ManifestRaw) == 0 {
+		return errors.New("manifest.json is missing or empty")
+	}
+	var manifests []Manifest
+	if err := json.Unmarshal(a.ManifestRaw, &manifests); err != nil {
+		return err
+	}
+	digest, err := finishArchiveDigest(stream, hasher, a.tarSHA256)
+	if err != nil {
+		return err
+	}
+	for i := range manifests {
+		manifests[i].tarSHA256 = digest
+	}
 	manifestDigest, err := cryptoutil.CalculateDigestSetFromBytes(a.ManifestRaw, ctx.Hashes())
 	if err != nil {
 		return err
 	}
 
 	a.ManifestDigest = manifestDigest
-
-	err = json.Unmarshal(a.ManifestRaw, &a.Manifest)
-	if err != nil {
-		return err
-	}
+	a.Manifest = manifests
 
 	return nil
 }
@@ -418,6 +471,9 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 
 	// image tags
 	for _, tag := range a.ImageTags {
+		if !safeSubjectIdentifier(tag) {
+			continue
+		}
 		hash, err := cryptoutil.CalculateDigestSetFromBytes([]byte(tag), hashes)
 		if err != nil {
 			log.Debugf("(attestation/oci) error calculating image tag: %v", err)
@@ -428,7 +484,9 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 
 	// diff ids
 	for layer := range a.LayerDiffIDs {
-		subj[fmt.Sprintf("layerdiffid%02d:%s", layer, a.LayerDiffIDs[layer][cryptoutil.DigestValue{Hash: crypto.SHA256}])] = a.LayerDiffIDs[layer]
+		if digest := a.LayerDiffIDs[layer][sha256Key]; digest != "" {
+			subj[fmt.Sprintf("layerdiffid%02d:%s", layer, digest)] = a.LayerDiffIDs[layer]
+		}
 	}
 	return subj
 }
@@ -451,6 +509,9 @@ func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
 		refs[fmt.Sprintf("imageid:%s", digest)] = a.ImageID
 	}
 	for _, tag := range a.ImageTags {
+		if !safeSubjectIdentifier(tag) {
+			continue
+		}
 		if tag == "" {
 			continue
 		}
@@ -534,8 +595,9 @@ func (m *Manifest) getLayerDIFFIDs(ctx *attestation.AttestationContext, tarFileP
 	}
 
 	scan := &layerScan{
-		hashes: hashes,
-		budget: &decompressionBudget{limit: maxDecompressedImageSize},
+		hashes:    hashes,
+		budget:    &decompressionBudget{limit: maxDecompressedImageSize},
+		tarSHA256: m.tarSHA256,
 	}
 
 	byName, err := digestTarEntries(tarFilePath, wanted, scan)
@@ -615,7 +677,9 @@ func digestTarEntries(
 	defer func() { _ = tarFile.Close() }()
 
 	byName := make(map[string]cryptoutil.DigestSet, len(wanted))
-	tarReader := tar.NewReader(tarFile)
+	hasher := sha256.New()
+	stream := io.TeeReader(tarFile, hasher)
+	tarReader := tar.NewReader(stream)
 	for {
 		h, err := tarReader.Next()
 		if err == io.EOF {
@@ -653,6 +717,9 @@ func digestTarEntries(
 		}
 		byName[key] = digest
 	}
+	if _, err := finishArchiveDigest(stream, hasher, scan.tarSHA256); err != nil {
+		return nil, err
+	}
 	return byName, nil
 }
 
@@ -661,8 +728,9 @@ func digestTarEntries(
 // decompression budget they all draw from. Both are per-image, which is the
 // whole point of the budget — a per-layer allowance is not a bomb defence.
 type layerScan struct {
-	hashes []cryptoutil.DigestValue
-	budget *decompressionBudget
+	hashes    []cryptoutil.DigestValue
+	budget    *decompressionBudget
+	tarSHA256 string
 }
 
 // decompressionBudget is the image-wide allowance every layer draws down. It

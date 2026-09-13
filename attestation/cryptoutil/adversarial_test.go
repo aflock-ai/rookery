@@ -499,9 +499,8 @@ func TestAdversarial_SignerVerifier_NilPayload(t *testing.T) {
 }
 
 func TestAdversarial_RSAVerifier_PKCS1v15Fallback(t *testing.T) {
-	// RSAVerifier has a PKCS1v15 fallback for AWS KMS compatibility.
-	// Let's verify this actually works, since it's a security-relevant
-	// code path that silently accepts a weaker scheme.
+	// Legacy KMS compatibility requires an explicit opt-in, never a downgrade
+	// of the default PSS verifier.
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 
@@ -515,11 +514,10 @@ func TestAdversarial_RSAVerifier_PKCS1v15Fallback(t *testing.T) {
 	pkcs1Sig, err := rsa.SignPKCS1v15(rand.Reader, privKey, crypto.SHA256, digest)
 	require.NoError(t, err)
 
-	// The RSAVerifier should accept this via its fallback path.
 	err = verifier.Verify(bytes.NewReader(data), pkcs1Sig)
-	assert.NoError(t, err,
-		"DESIGN NOTE: RSAVerifier silently accepts PKCS1v15 signatures as a "+
-			"fallback for AWS KMS. This is a weaker scheme than PSS.")
+	assert.Error(t, err, "default verifier must reject PKCS1v15")
+	legacy := NewRSAVerifierWithOptions(&privKey.PublicKey, crypto.SHA256, WithPKCS1v15Fallback())
+	assert.NoError(t, legacy.Verify(bytes.NewReader(data), pkcs1Sig))
 }
 
 func TestAdversarial_RSAVerifier_WrongKeyRejects(t *testing.T) {
