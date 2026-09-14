@@ -1,0 +1,14 @@
+{
+  "construction": "RFC6962",
+  "hashAlgorithm": "sha256",
+  "leaves": [
+    {
+      "fileDigest": "9aff6ba4b042b9d09991a9fbf8c80ddbd2a9c433638339cd831bed955e39f106",
+      "leafHash": "f52e3858d94d64101c63f29cfbe832b0b80e9fcb353b9348973374e4d0b6aafa",
+      "mimeType": "text/plain; charset=utf-8",
+      "path": "out.txt"
+    }
+  ],
+  "merkleRoot": "cf5c4ecfee2476a523bb7070cffbb4578b3dc4c56ab29a3b8bd2d666e222a44e",
+  "treeSize": 1
+}

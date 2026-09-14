@@ -26,6 +26,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/archivista"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	log "github.com/sirupsen/logrus"
 )
@@ -350,6 +351,9 @@ func searchFingerprint(collectionName string, subjectDigests, attestations []str
 //
 // See issue #39.
 func (s *ArchivistaSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
+	if len(predicateTypes) == 1 && predicateTypes[0] == fileinventory.Type && len(subjectDigests) == 1 && validInventoryDigest(subjectDigests[0]) {
+		return s.searchInventory(ctx, subjectDigests[0])
+	}
 	// This kind's own seen-set. It is NOT SearchStream's: a predicate-type
 	// query and a collection query range over different result spaces, so
 	// sharing one set let either kind suppress the other's results

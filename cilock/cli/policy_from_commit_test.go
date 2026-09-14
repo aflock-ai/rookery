@@ -80,6 +80,10 @@ func (f *fakeCommitFetcher) Download(_ context.Context, gitoid string) (dsse.Env
 	return env, nil
 }
 
+func (f *fakeCommitFetcher) DownloadBounded(ctx context.Context, gitoid string, _ int64) (dsse.Envelope, error) {
+	return f.Download(ctx, gitoid)
+}
+
 // installFakeCommitFetcher swaps newCommitFetcher for the test and restores it.
 func installFakeCommitFetcher(t *testing.T, f *fakeCommitFetcher) {
 	t.Helper()

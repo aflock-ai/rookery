@@ -17,8 +17,10 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/aflock-ai/rookery/cilock/internal/updatecheck"
 )
 
@@ -36,6 +38,12 @@ const skipVersionCheckEnv = "CILOCK_SKIP_VERSION_CHECK"
 // reads in run.go for the established pattern) — the Viper-only registry rule
 // applies to judge-api configuration, not to this standalone CLI module.
 func startUpdateCheck(args []string) *updatecheck.Check {
+	// Execute starts this worker before command validation. Invalid compiled
+	// defaults must not start network I/O; command gates report the error while
+	// help and version remain usable.
+	if _, _, err := config.EvidenceDefaults(); err != nil {
+		return nil
+	}
 	if v := os.Getenv(skipVersionCheckEnv); v == "1" || strings.EqualFold(v, "true") {
 		return nil
 	}
@@ -65,7 +73,7 @@ func startUpdateCheck(args []string) *updatecheck.Check {
 
 // skipUpdateCheckForArgs suppresses the check for shell-completion plumbing,
 // where any stray stderr output pollutes the completion machinery, and for
-// bare help rendering.
+// bare help rendering or an explicitly disabled platform (offline invocation).
 //
 // Cobra permits persistent flags BEFORE the subcommand (`cilock --log-level
 // debug completion bash`), so this scans every bare (non-flag) token rather
@@ -75,9 +83,31 @@ func startUpdateCheck(args []string) *updatecheck.Check {
 // sensitive word suppresses a nicety, never breaks a command.
 func skipUpdateCheckForArgs(args []string) bool {
 	sawCommandWord := false
-	for _, a := range args {
+	offline := false
+	offlineAlias := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if a == "--" {
 			break
+		}
+		// Match both pflag spellings and last-value-wins semantics without
+		// changing the command's endpoint or explicit trust overrides.
+		if a == "--platform-url" && i+1 < len(args) {
+			i++
+			offline = args[i] == ""
+			continue
+		}
+		if value, ok := strings.CutPrefix(a, "--platform-url="); ok {
+			offline = value == ""
+			continue
+		}
+		if a == "--offline" {
+			offlineAlias = true
+			continue
+		}
+		if value, ok := strings.CutPrefix(a, "--offline="); ok {
+			offlineAlias, _ = strconv.ParseBool(value)
+			continue
 		}
 		// Help flags anywhere before "--" mean help rendering, not real work
 		// (`cilock verify --help`) — checked before the generic flag skip.
@@ -95,7 +125,7 @@ func skipUpdateCheckForArgs(args []string) bool {
 		sawCommandWord = true
 	}
 	// No bare token at all (bare `cilock`): help rendering only.
-	return !sawCommandWord
+	return offline || offlineAlias || !sawCommandWord
 }
 
 // Cobra's hidden completion entry points (cobra.ShellCompRequestCmd /

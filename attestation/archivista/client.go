@@ -197,6 +197,21 @@ func (c *Client) storeOnce(ctx context.Context, body []byte) (string, error) {
 
 // Download retrieves a DSSE envelope by its gitoid.
 func (c *Client) Download(ctx context.Context, gitoidArg string) (dsse.Envelope, error) {
+	return c.download(ctx, gitoidArg, MaxDownloadBytes)
+}
+
+// DownloadBounded retrieves an envelope under a caller's tighter wire-byte cap.
+// The URL, credentials, redirect rules and exact gitoid verification are the
+// same as Download. Successful replies with a declared overflow are refused
+// before reading; streams are capped before hashing or JSON/base64 decoding.
+func (c *Client) DownloadBounded(ctx context.Context, gitoidArg string, maxBytes int64) (dsse.Envelope, error) {
+	if maxBytes <= 0 || maxBytes > MaxDownloadBytes {
+		return dsse.Envelope{}, fmt.Errorf("invalid download byte limit %d", maxBytes)
+	}
+	return c.download(ctx, gitoidArg, maxBytes)
+}
+
+func (c *Client) download(ctx context.Context, gitoidArg string, maxBytes int64) (dsse.Envelope, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/download/"+url.PathEscape(gitoidArg), nil)
 	if err != nil {
 		return dsse.Envelope{}, fmt.Errorf("create request: %w", err)
@@ -215,22 +230,26 @@ func (c *Client) Download(ctx context.Context, gitoidArg string) (dsse.Envelope,
 		return dsse.Envelope{}, &StatusError{
 			Op:         "download",
 			StatusCode: resp.StatusCode,
-			Body:       readLimitedErrorBody(resp.Body),
+			Body:       readLimitedErrorBody(io.LimitReader(resp.Body, maxBytes)),
 			RetryAfter: resp.Header.Get("Retry-After"),
 		}
+	}
+
+	if resp.ContentLength > maxBytes {
+		return dsse.Envelope{}, fmt.Errorf("archivista download exceeds %d byte limit", maxBytes)
 	}
 
 	// Read the raw body under a hard cap. Archivista content-addresses each
 	// envelope by the git-blob-sha256 of the exact bytes it stored, so we must
 	// re-hash the raw bytes (not a re-marshaled struct, whose key order and
 	// dropped unknown fields would not reproduce the stored bytes) and decode
-	// from those same bytes. Reading MaxDownloadBytes+1 lets us detect overflow.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxDownloadBytes+1))
+	// from those same bytes. Reading maxBytes+1 lets us detect overflow.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return dsse.Envelope{}, fmt.Errorf("read envelope: %w", err)
 	}
-	if int64(len(raw)) > MaxDownloadBytes {
-		return dsse.Envelope{}, fmt.Errorf("archivista download exceeds %d byte limit", MaxDownloadBytes)
+	if int64(len(raw)) > maxBytes {
+		return dsse.Envelope{}, fmt.Errorf("archivista download exceeds %d byte limit", maxBytes)
 	}
 
 	// Verify the content address: the returned bytes must hash to the requested

@@ -24,9 +24,10 @@ import (
 // capabilityRecorder is an attestor that latches every optional verify
 // capability the workflow can set, the way policyverify does.
 type capabilityRecorder struct {
-	fanout    int
-	lazy      bool
-	manifests map[string][]byte
+	fanout          int
+	lazy            bool
+	manifests       map[string][]byte
+	inventoryLookup func(string) ([]byte, bool)
 }
 
 func (c *capabilityRecorder) Name() string                                 { return "recorder" }
@@ -37,6 +38,9 @@ func (c *capabilityRecorder) Schema() *jsonschema.Schema                   { ret
 func (c *capabilityRecorder) SetMaxSubjectFanout(n int)                    { c.fanout = n }
 func (c *capabilityRecorder) SetLazyWitness(enabled bool)                  { c.lazy = enabled }
 func (c *capabilityRecorder) SetMaterialManifests(m map[string][]byte)     { c.manifests = m }
+func (c *capabilityRecorder) SetInventoryLookup(lookup func(string) ([]byte, bool)) {
+	c.inventoryLookup = lookup
+}
 
 // A verify option that is NOT supplied must clear the attestor's state, not
 // leave the previous call's value in place. The setters used to run only when
@@ -52,9 +56,10 @@ func TestApplyOptionalVerifyCapabilitiesClearsStateTheSecondCallDoesNotSupply(t 
 		maxSubjectFanout:  7,
 		lazyWitness:       true,
 		materialManifests: map[string][]byte{"deadbeef": []byte(`{}`)},
+		inventoryLookup:   func(string) ([]byte, bool) { return nil, false },
 	}
 	applyOptionalVerifyCapabilities(rec, &first)
-	if rec.fanout != 7 || !rec.lazy || len(rec.manifests) != 1 {
+	if rec.fanout != 7 || !rec.lazy || len(rec.manifests) != 1 || rec.inventoryLookup == nil {
 		t.Fatalf("first call did not apply every knob: %+v", rec)
 	}
 
@@ -68,5 +73,8 @@ func TestApplyOptionalVerifyCapabilitiesClearsStateTheSecondCallDoesNotSupply(t 
 	}
 	if len(rec.manifests) != 0 {
 		t.Errorf("material manifests survived a call that did not supply any: %v", rec.manifests)
+	}
+	if rec.inventoryLookup != nil {
+		t.Error("inventory lookup survived a call that did not supply it")
 	}
 }

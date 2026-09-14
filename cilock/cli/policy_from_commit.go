@@ -32,6 +32,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/policy"
+	"github.com/aflock-ai/rookery/attestation/source"
 	gitattestor "github.com/aflock-ai/rookery/plugins/attestors/git"
 )
 
@@ -47,6 +48,7 @@ type commitFetcher interface {
 	SearchGitoidsBySubjects(ctx context.Context, subjectDigests, excludeGitoids []string) ([]string, error)
 	// Download fetches one DSSE envelope by its gitoid.
 	Download(ctx context.Context, gitoid string) (dsse.Envelope, error)
+	DownloadBounded(ctx context.Context, gitoid string, maxBytes int64) (dsse.Envelope, error)
 }
 
 // newCommitFetcher is a seam over the real Archivista client construction so
@@ -58,6 +60,41 @@ var newCommitFetcher = func(archivistaURL, bearer string) commitFetcher {
 		headers.Set("Authorization", "Bearer "+bearer)
 	}
 	return archivista.New(archivistaURL, archivista.WithHeaders(headers))
+}
+
+// Adapt the same tenant-scoped fetcher for digest-addressed companions. No
+// location or credential comes from an inventory descriptor.
+type commitInventorySource struct {
+	source.Sourcer
+	fetcher commitFetcher
+}
+
+func (s commitInventorySource) SearchByPredicateType(ctx context.Context, _ []string, subjects []string) ([]source.StatementEnvelope, error) {
+	if len(subjects) != 1 {
+		return nil, fmt.Errorf("inventory lookup requires one digest")
+	}
+	ids, err := s.fetcher.SearchGitoidsBySubjects(ctx, subjects, nil)
+	if err != nil {
+		return nil, err
+	}
+	// The existing discovery API returns the full ID list (under its response
+	// byte cap); bound downloads and stop at the first verified content match.
+	for _, id := range ids[:min(len(ids), source.MaxInventoryCandidates)] {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		env, err := s.fetcher.DownloadBounded(ctx, id, source.MaxInventoryEnvelopeBytes)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil {
+			continue
+		}
+		if _, ok := source.InventoryPredicate(env, subjects[0]); ok {
+			return []source.StatementEnvelope{{Envelope: env, Reference: id}}, nil
+		}
+	}
+	return nil, fmt.Errorf("no exact inventory match among %d inspected candidates (limit %d)", min(len(ids), source.MaxInventoryCandidates), source.MaxInventoryCandidates)
 }
 
 // fullCommitSHA matches a full-length git object id (sha1: 40 hex, sha256: 64
@@ -283,6 +320,7 @@ func printDerivedTrustSurface(stderr io.Writer, pol *policy.Policy) {
 // number of distinct collections found (drives the no-evidence error).
 func derivePolicyFromCommit(ctx context.Context, stderr io.Writer, o policyFromCommitOpts, commit, archivistaURL, bearer string) (*policy.Policy, int, error) {
 	fetcher := newCommitFetcher(archivistaURL, bearer)
+	inventories := source.InventoryLookup(ctx, commitInventorySource{fetcher: fetcher})
 
 	// The git attestor's commit subject digest VALUE is the raw commit sha
 	// (sha1=<commit> for sha1 repos). SearchGitoidsBySubjects filters subject
@@ -320,7 +358,7 @@ func derivePolicyFromCommit(ctx context.Context, stderr io.Writer, o policyFromC
 		// nameHint = gitoid: only a filename fallback if the predicate has no
 		// `name`. Collection envelopes from `cilock run -s <step>` always record
 		// the name, so the step name comes from the recorded collection name.
-		s, serr := summarizeEnvelopeBytes(stderr, raw, gitoid, o.stepPrefix, nil)
+		s, serr := summarizeEnvelopeBytes(stderr, raw, gitoid, o.stepPrefix, nil, inventories)
 		if serr != nil {
 			return nil, 0, fmt.Errorf("summarize attestation %s: %w", shortID(gitoid), serr)
 		}

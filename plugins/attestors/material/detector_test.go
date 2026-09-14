@@ -19,6 +19,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/detection/detectiontest"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 )
 
 func TestDetectorYAMLParses(t *testing.T) {
@@ -48,7 +49,7 @@ func TestDetectorContractDescribesTheLiveAttestor(t *testing.T) {
 	if c.RunType != string(a.RunType()) {
 		t.Errorf("contract run_type %q != live RunType() %q", c.RunType, a.RunType())
 	}
-	if len(c.Companions) != 1 || c.Companions[0] != ManifestType {
+	if len(c.Companions) != 2 || c.Companions[0] != ManifestType || c.Companions[1] != fileinventory.Type {
 		t.Errorf("contract companions %v != live CompanionTypes() %v", c.Companions, a.CompanionTypes())
 	}
 	if len(c.Subjects) != 1 || c.Subjects[0].Prefix != TreeSubjectName {

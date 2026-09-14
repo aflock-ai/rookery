@@ -26,6 +26,7 @@ import (
 	"os"
 
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/log"
 	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
@@ -122,8 +123,8 @@ func readBounded(r io.Reader, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-// manifestIndex maps the sha256 of a detached material-manifest predicate to
-// its compact bytes.
+// manifestIndex maps a legacy manifest or modern inventory SHA-256 to its body.
+// Legacy bodies use compact JSON; modern inventory bytes must stay exact.
 //
 // KEYED BY CONTENT, deliberately. A manifest is matched to the collection that
 // references it by the digest inside that collection's SIGNED predicate — never
@@ -180,6 +181,13 @@ func manifestPredicateFromEnvelope(env dsse.Envelope) (body []byte, digest strin
 	if err := json.Unmarshal(payload, &stmt); err != nil {
 		return nil, "", false
 	}
+	if stmt.PredicateType == fileinventory.Type {
+		if len(stmt.Predicate) > fileinventory.MaxBytes {
+			return nil, "", false
+		}
+		sum := sha256.Sum256(stmt.Predicate)
+		return stmt.Predicate, hex.EncodeToString(sum[:]), true
+	}
 	if stmt.PredicateType != material.ManifestType {
 		return nil, "", false
 	}
@@ -207,7 +215,7 @@ func manifestPredicateFromEnvelope(env dsse.Envelope) (body []byte, digest strin
 func sidecarManifests(sidecars []sidecarSummary) manifestIndex {
 	ix := manifestIndex{}
 	for _, s := range sidecars {
-		if s.predicateType != material.ManifestType {
+		if s.predicateType != material.ManifestType && s.predicateType != fileinventory.Type {
 			continue
 		}
 		raw, err := readCompanionFile(s.path)

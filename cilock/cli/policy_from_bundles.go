@@ -35,8 +35,10 @@ import (
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/policy"
 )
 
@@ -336,7 +338,7 @@ func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummar
 	// has no sidecars — each export is its own DSSE the subject search already
 	// returns — so discovery is done here, in the file adapter, not the core.
 	sidecars, _ := discoverSidecars(path)
-	return summarizeEnvelopeBytes(stderr, raw, path, stepPrefix, sidecars)
+	return summarizeEnvelopeBytes(stderr, raw, path, stepPrefix, sidecars, sidecarManifests(sidecars).lookup)
 }
 
 // summarizeEnvelopeBytes is the shared envelope-summary core. It parses a
@@ -371,7 +373,9 @@ type bundleLeafRef struct {
 // committed root, its inline leaves (if any), and its detached-manifest
 // reference (if it published one instead).
 type bundleInnerPredicate struct {
-	MerkleRoot string `json:"merkleRoot"`
+	MerkleRoot string                   `json:"merkleRoot"`
+	TreeSize   uint64                   `json:"treeSize"`
+	Inventory  *fileinventory.Reference `json:"inventory"`
 	// Leaves is a POINTER so JSON presence survives the decode, exactly as
 	// material.Attestor's own predicate type does: a present "leaves" key —
 	// even "leaves": [] — is the producer's signed, authoritative inline set
@@ -406,6 +410,38 @@ func (p bundleInnerPredicate) inlineLeaves() []bundleLeafRef {
 type bundleInnerAttestation struct {
 	Type        string               `json:"type"`
 	Attestation bundleInnerPredicate `json:"attestation"`
+}
+
+func (a *bundleInnerAttestation) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Type        string          `json:"type"`
+		Attestation json.RawMessage `json:"attestation"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	a.Type = raw.Type
+	if len(raw.Attestation) == 0 {
+		return nil
+	}
+	kind := ""
+	canonicalType := attestation.ResolveLegacyType(a.Type)
+	if canonicalType == materialTreeType {
+		kind = string(attestation.MaterialRunType)
+	}
+	if canonicalType == productTreeType {
+		kind = string(attestation.ProductRunType)
+	}
+	if kind != "" {
+		return fileinventory.DecodeParent(raw.Attestation, kind, &a.Attestation)
+	}
+	// These fields were added for v0.3 inventories. In older predicates they
+	// may be filenames, so retain the pre-inventory decoder's ignored fields.
+	return json.Unmarshal(raw.Attestation, &struct {
+		*bundleInnerPredicate
+		Inventory json.RawMessage `json:"inventory"`
+		TreeSize  json.RawMessage `json:"treeSize"`
+	}{bundleInnerPredicate: &a.Attestation})
 }
 
 // errManifestUnresolved is returned when a predicate signed
@@ -470,15 +506,21 @@ func detachedLeafDigests(pred bundleInnerPredicate, sidecars []sidecarSummary) (
 // product or material sink, taking them from the inline leaves when present and
 // from the detached manifest when they were published separately. An
 // attestation that is neither a product nor a material contributes nothing.
-func collectAttestationDigests(a bundleInnerAttestation, sidecars []sidecarSummary, productDigests, materialDigests map[string]struct{}) error {
+func collectAttestationDigests(a bundleInnerAttestation, sidecars []sidecarSummary, productDigests, materialDigests map[string]struct{}, inventories func(string) ([]byte, bool)) error {
 	var sink map[string]struct{}
+	kind := ""
 	switch {
 	case strings.Contains(a.Type, "/product/"):
 		sink = productDigests
+		kind = string(attestation.ProductRunType)
 	case strings.Contains(a.Type, "/material/"):
 		sink = materialDigests
+		kind = string(attestation.MaterialRunType)
 	default:
 		return nil
+	}
+	if a.Attestation.Inventory != nil {
+		return collectInventoryDigests(a, kind, sink, inventories)
 	}
 	for _, l := range a.Attestation.inlineLeaves() {
 		if l.FileDigest != "" {
@@ -495,7 +537,34 @@ func collectAttestationDigests(a bundleInnerAttestation, sidecars []sidecarSumma
 	return nil
 }
 
-func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix string, sidecars []sidecarSummary) (bundleSummary, error) {
+func collectInventoryDigests(a bundleInnerAttestation, kind string, sink map[string]struct{}, inventories func(string) ([]byte, bool)) error {
+	ref := a.Attestation.Inventory
+	pred := a.Attestation
+	if pred.Leaves != nil || pred.Manifest != nil || pred.ManifestUploaded != nil {
+		return fmt.Errorf("%s: inventory cannot coexist with leaves or legacy manifest fields", a.Type)
+	}
+	if err := ref.Validate(kind); err != nil {
+		return fmt.Errorf("%s inventory: %w", a.Type, err)
+	}
+	var body []byte
+	var found bool
+	if ref.State == fileinventory.StateDetached && inventories != nil {
+		body, found = inventories(ref.Digest)
+	}
+	if ref.State == fileinventory.StateOmitted || !found {
+		return fmt.Errorf("%s: required %s inventory is %s or unavailable; cannot infer artifact edges", a.Type, kind, ref.State)
+	}
+	entries, err := fileinventory.Verify(ref, body, kind, pred.MerkleRoot, pred.TreeSize)
+	if err != nil {
+		return fmt.Errorf("%s inventory: %w", a.Type, err)
+	}
+	for _, entry := range entries {
+		sink[entry.FileDigest] = struct{}{}
+	}
+	return nil
+}
+
+func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix string, sidecars []sidecarSummary, inventories func(string) ([]byte, bool)) (bundleSummary, error) {
 	var env struct {
 		Payload     string            `json:"payload"`
 		PayloadType string            `json:"payloadType"`
@@ -537,7 +606,7 @@ func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix s
 	materialDigests := make(map[string]struct{})
 	for _, a := range stmt.Predicate.Attestations {
 		innerTypes = append(innerTypes, a.Type)
-		if err := collectAttestationDigests(a, sidecars, productDigests, materialDigests); err != nil {
+		if err := collectAttestationDigests(a, sidecars, productDigests, materialDigests, inventories); err != nil {
 			return bundleSummary{}, fmt.Errorf("%s: %w", nameHint, err)
 		}
 	}
@@ -905,6 +974,9 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 	}
 
 	for _, s := range summaries {
+		if s.outerPredicateType == fileinventory.Type {
+			continue
+		}
 		// #5989: we intentionally do NOT register the bundle's own RFC3161 TSA
 		// leaf as a trust anchor here. Embedding the evidence's own TSA cert
 		// lets whoever supplied the attestation also supply its proof-of-
@@ -931,13 +1003,9 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 
 			// Attach sidecars as ExternalAttestations, linked via
 			// ExternalFrom so the step's Rego (if any) can read them.
-			extFrom := make([]string, 0, len(s.sidecars))
-			for _, sc := range s.sidecars {
-				extName := s.stepName + "-" + sc.name
-				if err := addExternalAttestation(p, extName, sc.predicateType, sc.signingKeyIDs, pubKeys); err != nil {
-					return nil, err
-				}
-				extFrom = append(extFrom, extName)
+			extFrom, err := addSidecarAttestations(p, s, pubKeys)
+			if err != nil {
+				return nil, err
 			}
 
 			p.Steps[s.stepName] = policy.Step{
@@ -958,6 +1026,10 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 		}
 	}
 
+	if len(summaries) > 0 && len(p.Steps) == 0 && len(p.ExternalAttestations) == 0 {
+		return nil, fmt.Errorf("inventory companions cannot define a policy without parent evidence")
+	}
+
 	// Wire cross-step provenance edges where a step's materials consumed
 	// another step's product output, then warn if a multi-step policy still
 	// has no cross-step integrity — the linker can't recover that from the
@@ -975,6 +1047,23 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 	warnMissingTimestampAuthorities(stderr, p, summaries)
 
 	return p, nil
+}
+
+func addSidecarAttestations(p *policy.Policy, s bundleSummary, pubKeys map[string][]byte) ([]string, error) {
+	extFrom := make([]string, 0, len(s.sidecars))
+	for _, sc := range s.sidecars {
+		// Inventories are authenticated by the parent reference, not by
+		// an independent functionary or an inherited commit subject.
+		if sc.predicateType == fileinventory.Type {
+			continue
+		}
+		extName := s.stepName + "-" + sc.name
+		if err := addExternalAttestation(p, extName, sc.predicateType, sc.signingKeyIDs, pubKeys); err != nil {
+			return nil, err
+		}
+		extFrom = append(extFrom, extName)
+	}
+	return extFrom, nil
 }
 
 // warnMissingTimestampAuthorities emits a one-line warning when the policy has

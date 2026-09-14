@@ -11,9 +11,9 @@
  *   3. Writes a per-version `verification` block into manifest.json indexing the
  *      OFFLINE-verification material the release publishes alongside the binaries
  *      (the signed policy, the Fulcio CA + Root CA `fulcio-roots.pem`, the TSA
- *      `tsa-chain.pem`, and each binary's two per-step DSSE envelopes with
- *      sha256s). This is what lets a PUBLIC downloader run `cilock verify
- *      --platform-url ""` with no platform/tenant/Archivista access.
+ *      `tsa-chain.pem`, and each binary's per-step DSSE envelopes and required
+ *      inventory companions with sha256s). This lets a PUBLIC downloader run
+ *      `cilock verify --platform-url ""` with no platform/tenant/Archivista access.
  *
  * VERIFICATION (the publish gate) is still the CALLER's responsibility. In the
  * release fan-out (.github/workflows/release-fanout.yml) the `verify` job verifies
@@ -88,6 +88,70 @@ function sha256Hex(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+function inventoryStatement(payload) {
+  // Native parsing validates grammar first. Scan byte offsets, not a reserialized
+  // object: internal whitespace, escapes and UTF-8 are part of the commitment.
+  const statement = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(payload));
+  if (!statement || Array.isArray(statement) || typeof statement !== 'object') throw new Error('expected statement object');
+  let i = 0;
+  let predicateBytes;
+  const whitespace = () => {
+    while ([0x20, 0x09, 0x0a, 0x0d].includes(payload[i])) i++;
+  };
+  const string = () => {
+    const start = i++;
+    while (payload[i] !== 0x22) {
+      if (payload[i] === 0x5c) i++;
+      i++;
+    }
+    const value = JSON.parse(payload.subarray(start, ++i).toString('utf8'));
+    for (const char of value) {
+      const code = char.codePointAt(0);
+      if (code >= 0xd800 && code <= 0xdfff) throw new Error('unpaired Unicode surrogate');
+    }
+    return value;
+  };
+  const value = (depth) => {
+    if (depth > 128) throw new Error('JSON nesting exceeds 128');
+    whitespace();
+    const token = payload[i];
+    if (token === 0x22) { string(); return; }
+    if (token === 0x7b || token === 0x5b) {
+      const object = token === 0x7b;
+      const end = object ? 0x7d : 0x5d;
+      const keys = new Set();
+      i++;
+      whitespace();
+      while (payload[i] !== end) {
+        let key;
+        if (object) {
+          key = string();
+          if (keys.has(key)) throw new Error('duplicate JSON key');
+          keys.add(key);
+          whitespace();
+          i++; // Colon; grammar has already been checked by JSON.parse.
+          whitespace();
+        }
+        const start = i;
+        value(depth + 1);
+        if (depth === 0 && key === 'predicate') predicateBytes = payload.subarray(start, i);
+        whitespace();
+        if (payload[i] === end) break;
+        i++; // Comma.
+        whitespace();
+      }
+      i++;
+      return;
+    }
+    while (i < payload.length && ![0x20, 0x09, 0x0a, 0x0d, 0x2c, 0x7d, 0x5d].includes(payload[i])) i++;
+  };
+  value(0);
+  if (!predicateBytes || !statement.predicate || Array.isArray(statement.predicate) || typeof statement.predicate !== 'object') {
+    throw new Error('expected inventory predicate object');
+  }
+  return { statement, predicateBytes };
+}
+
 // Tools published through this lane (release-fanout.yml builds + verifies both).
 // The download UIs and install.sh stay cilock-only by design — they filter by
 // the cilock- name prefix; jctl's front door is the platform /tools page.
@@ -110,13 +174,6 @@ function isPrerelease(version) {
   return version.includes('-');
 }
 
-// tool/os/arch parsed from a per-step envelope name
-// <tool>-<version>-<os>-<arch>.<step>.att.json. Returns {tool, os, arch, step} or nulls.
-function parseAttestationName(name) {
-  const m = new RegExp(`^(${TOOL_ALT})-.+-(\\w+)-(\\w+)\\.(source-git|build)\\.att\\.json$`).exec(name);
-  return m ? { tool: m[1], os: m[2], arch: m[3], step: m[4] } : { tool: null, os: null, arch: null, step: null };
-}
-
 // buildVerification assembles the per-version `verification` block that lets a
 // downloader run `cilock verify --platform-url ""` FULLY OFFLINE — no platform,
 // tenant, or Archivista access. It references the published trust material and
@@ -126,53 +183,65 @@ function parseAttestationName(name) {
 //   policy      — canonical root key for the signed release policy.
 //   fulcioRoots — <version>/fulcio-roots.pem (Fulcio CA + platform Root CA).
 //   tsaChain    — <version>/tsa-chain.pem (RFC3161 TSA cert chain).
-//   attestations[] — one entry per binary, with the matching tarball name and
-//                    BOTH per-step envelope files (sourceGit + build) + sha256s.
+//   attestations[] — one entry per binary, with source-git + build, optional sign,
+//                    and all required inventory envelopes + sha256s.
 //
-// Any piece that isn't present in --dir is omitted, so the block degrades
-// gracefully (e.g. an older publisher dir without envelopes still publishes).
+// Required envelopes and detached companions fail closed before any upload.
+// This checks transport completeness, not signatures or policy: those remain
+// the caller's verification gate. A local file is never proof of Archivista upload.
 function buildVerification(dir, allFiles, version, policyName) {
   const v = {};
   if (allFiles.includes(policyName)) v.policy = `policy/${policyName}`;
   if (allFiles.includes('fulcio-roots.pem')) v.fulcioRoots = `${version}/fulcio-roots.pem`;
   if (allFiles.includes('tsa-chain.pem')) v.tsaChain = `${version}/tsa-chain.pem`;
 
-  // Group the per-step envelopes by tool-os-arch so each binary references both.
-  // The tool is part of the key: cilock AND jctl ship the same os-arch matrix,
-  // and an os-arch-only key would let one tool's envelopes clobber the other's.
-  const byBinary = {};
-  for (const name of allFiles) {
-    const { tool, os, arch, step } = parseAttestationName(name);
-    if (!os) continue;
-    const key = `${tool}-${os}-${arch}`;
-    byBinary[key] ??= {};
-    byBinary[key][step] = {
-      file: `${version}/${name}`,
-      sha256: sha256Hex(join(dir, name)),
-    };
-  }
-
   const binaries = allFiles.filter(isBinaryTarball);
   const attestations = [];
   for (const tarball of binaries) {
-    const { tool, os, arch } = parseBinaryName(tarball);
-    const env = byBinary[`${tool}-${os}-${arch}`];
-    // Offline verify needs BOTH the source-git AND build envelopes. A binary
-    // with only one would get a manifest entry whose published verify command
-    // can't pass — so omit a partial set (and warn) rather than advertise an
-    // unverifiable binary.
-    if (!env || !env['source-git'] || !env.build) {
-      if (env && (env['source-git'] || env.build)) {
-        console.warn(`   ! ${tarball}: incomplete attestation envelopes (need source-git AND build) — omitting from the verification block`);
+    const { os, arch } = parseBinaryName(tarball);
+    const prefix = tarball.replace(/\.(tar\.gz|tgz|zip)$/, '');
+    const envelopes = [];
+    const steps = ['source-git', 'build'];
+    if (allFiles.includes(`${prefix}.sign.att.json`)) steps.push('sign');
+    for (const step of steps) {
+      const name = `${prefix}.${step}.att.json`;
+      if (!allFiles.includes(name)) die(`${tarball}: missing required envelope ${name}`);
+      envelopes.push({ step, file: `${version}/${name}`, sha256: sha256Hex(join(dir, name)) });
+      const parent = JSON.parse(Buffer.from(JSON.parse(readFileSync(join(dir, name), 'utf8')).payload, 'base64').toString('utf8'));
+      for (const kind of ['material', 'product']) {
+        const att = parent.predicate?.attestations?.find((a) => a.type === `https://aflock.ai/attestations/${kind}/v0.3`);
+        const ref = att?.attestation?.inventory;
+        if (!ref) continue; // Inline or empty captured set.
+        const inventoryType = 'https://aflock.ai/attestations/file-inventory/v0.1';
+        if (ref.schema !== inventoryType || ref.kind !== kind || ref.state !== 'detached') {
+          die(`${name}: invalid ${kind} inventory; release chain details must be retained`);
+        }
+        const companion = `${name}-${kind}-inventory.json`;
+        if (!allFiles.includes(companion)) die(`${name}: missing required inventory ${companion}`);
+        let statement, predicateBytes;
+        try {
+          ({ statement, predicateBytes } = inventoryStatement(Buffer.from(JSON.parse(readFileSync(join(dir, companion), 'utf8')).payload, 'base64')));
+        } catch (error) {
+          die(`${companion}: invalid inventory statement: ${error.message}`);
+        }
+        if (statement.predicateType !== inventoryType || statement.predicate?.schema !== inventoryType || statement.predicate?.kind !== kind ||
+            !Number.isSafeInteger(ref.bytes) || ref.bytes < 1 || ref.bytes > 64 * 1024 * 1024 || predicateBytes.length !== ref.bytes ||
+            createHash('sha256').update(predicateBytes).digest('hex') !== ref.digest ||
+            !Number.isSafeInteger(ref.fileCount) || ref.fileCount < 1 || ref.fileCount > 1000000 ||
+            !Array.isArray(statement.predicate.entries) || statement.predicate.entries.length !== ref.fileCount ||
+            !statement.subject?.some((s) => s.name === `inventory:${kind}` && s.digest?.sha256 === ref.digest)) {
+          die(`${companion}: inventory does not match its parent reference`);
+        }
+        // Existing download consumers fetch every envelopes[] entry. Keep the
+        // companion here, not in an optional field that older consumers ignore.
+        envelopes.push({ step, kind, predicateType: inventoryType, file: `${version}/${companion}`, sha256: sha256Hex(join(dir, companion)) });
       }
-      continue;
     }
     const entry = {
       binary: tarball,
       os,
       arch,
-      // source-git first, then build (readability only).
-      envelopes: ['source-git', 'build'].map((step) => ({ step, file: env[step].file, sha256: env[step].sha256 })),
+      envelopes,
     };
     attestations.push(entry);
   }

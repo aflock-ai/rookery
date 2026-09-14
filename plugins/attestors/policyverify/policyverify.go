@@ -63,6 +63,7 @@ type Attestor struct {
 	maxSubjectFanout   int
 	lazyWitness        bool
 	materialManifests  map[string][]byte
+	inventoryLookup    func(string) ([]byte, bool)
 	kmsProviderOptions map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 }
 
@@ -152,15 +153,18 @@ func (a *Attestor) SetLazyWitness(enabled bool) {
 	a.lazyWitness = enabled
 }
 
-// SetMaterialManifests supplies detached material-manifest predicate bodies,
-// keyed by the sha256 of their compact JSON encoding
-// (policy.WithMaterialManifests).
+// SetMaterialManifests supplies legacy manifests and modern inventories to
+// policy.WithMaterialManifests. Only legacy manifest JSON is normalized.
 //
 // The caller builds this from envelopes it ALREADY holds; the engine never
 // fetches. A collection whose material leaves are inline — today's default —
 // never consults it.
 func (a *Attestor) SetMaterialManifests(manifests map[string][]byte) {
 	a.materialManifests = manifests
+}
+
+func (a *Attestor) SetInventoryLookup(lookup func(string) ([]byte, bool)) {
+	a.inventoryLookup = lookup
 }
 
 // PolicyVerifyResult interface methods
@@ -247,8 +251,13 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 		dsse.VerifyWithTimestampVerifiers(timestampVerifiers...),
 	).WithEvidenceHashes(ctx.Hashes())
 
+	lookup := a.inventoryLookup
+	if lookup == nil {
+		lookup = source.InventoryLookup(ctx.Context(), a.collectionSource)
+	}
 	verifyOpts := []policy.VerifyOption{
 		policy.WithSubjectDigests(a.seedDigestStrings()),
+		policy.WithInventoryLookup(lookup),
 	}
 	if a.maxSubjectFanout > 0 {
 		verifyOpts = append(verifyOpts, policy.WithMaxSubjectFanout(a.maxSubjectFanout))

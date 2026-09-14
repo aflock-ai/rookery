@@ -62,6 +62,19 @@ type WrappedCommand struct {
 	ExitCode int      `json:"exit_code"`
 }
 
+// RunInventory reports representation and actual storage outcomes, not a signed
+// claim. Path and upload fields are set only after successful persistence.
+type RunInventory struct {
+	Kind      string `json:"kind"`
+	State     string `json:"state"`
+	Path      string `json:"path,omitempty"`
+	Digest    string `json:"digest,omitempty"`
+	Bytes     int    `json:"bytes,omitempty"`
+	FileCount int    `json:"fileCount"`
+	Uploaded  bool   `json:"uploaded"`
+	Gitoid    string `json:"gitoid,omitempty"`
+}
+
 // RunSummary is the machine-readable result of a `cilock run`. It is emitted
 // as a single JSON object to stdout under --json so an agent never has to grep
 // "Stored in archivista as <gitoid>" out of interleaved logr text, and is the
@@ -101,6 +114,7 @@ type RunSummary struct {
 	Subjects           []RunSubject      `json:"subjects,omitempty"`
 	Attestors          []AttestorOutcome `json:"attestors,omitempty"`
 	WrappedCommand     *WrappedCommand   `json:"wrapped_command,omitempty"`
+	Inventories        []RunInventory    `json:"inventories,omitempty"`
 
 	// KeyProtection records the in-process anti-tamper hardening that was in
 	// effect during the run (read back from the kernel, never asserted). Its
@@ -324,11 +338,15 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 	} else if s.ArchivistaURL != "" {
 		// Say the outcome, not the setting: what the next push is judged on is
 		// whether evidence exists on the platform, and here it does not.
-		fmt.Fprintf(&b, "  archivista: %s (upload DISABLED — NO evidence stored; pass --enable-archivista to store)\n", s.ArchivistaURL)
+		fmt.Fprintf(&b, "  archivista: %s (NO evidence stored for the collection)\n", s.ArchivistaURL)
 	}
 	if len(s.Subjects) > 0 {
 		fmt.Fprintf(&b, "  subjects (%d): %s\n", len(s.Subjects), strings.Join(s.subjectNames(), ", "))
 	}
+	if s.OutFile != "" {
+		fmt.Fprintf(&b, "  outfile:    %s\n", sanitizeForTerminal(s.OutFile))
+	}
+	s.writeInventoryLines(&b)
 	for _, a := range s.Attestors {
 		// Name and Status are internal registry constants (the attestor's own
 		// Name() and the ran/skipped/failed vocabulary), so they're trusted. The
@@ -361,6 +379,27 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 			sanitizeForTerminal(s.AssuranceLevel))
 	}
 	_, _ = io.WriteString(w, b.String())
+}
+
+func (s *RunSummary) writeInventoryLines(b *strings.Builder) {
+	for _, inv := range s.Inventories {
+		fmt.Fprintf(b, "  inventory:  %s: %s (%d files)", sanitizeForTerminal(inv.Kind), sanitizeForTerminal(inv.State), inv.FileCount)
+		switch {
+		case inv.State == "omitted":
+			b.WriteString("; details not retained (not an empty capture)")
+		case inv.Path != "":
+			fmt.Fprintf(b, "; local: %s", sanitizeForTerminal(inv.Path))
+			if !inv.Uploaded {
+				b.WriteString(" (not uploaded)")
+			}
+		case inv.State == "detached":
+			b.WriteString("; not saved")
+		}
+		b.WriteByte('\n')
+		if inv.Uploaded {
+			fmt.Fprintf(b, "  inventory uploaded: %s\n", sanitizeForTerminal(inv.Gitoid))
+		}
+	}
 }
 
 // writeKeyGuardLine appends the non-forgeability evidence line when the signer

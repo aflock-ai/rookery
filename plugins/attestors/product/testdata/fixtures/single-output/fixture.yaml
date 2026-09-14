@@ -1,0 +1,20 @@
+schema_version: "0.1"
+attestor: product
+description: >-
+  A committed output file captured by the real pure-Go workdir walk without
+  a material baseline or external tool. The golden pins the content root and
+  inline leaf metadata. Compact companion emission is tested separately.
+setup:
+  mode: workdir
+  workdir:
+    - out.txt
+expect:
+  predicate_type: https://aflock.ai/attestations/product/v0.3
+  run_type: product
+  subjects:
+    match: exact
+    keys:
+      - "tree:products"
+  products:
+    - "out.txt"
+  golden: golden.json

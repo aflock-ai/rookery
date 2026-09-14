@@ -1,0 +1,36 @@
+apiVersion: cilock.detection/v0.1
+name: product
+description: "Signs an RFC 6962 content root over captured products. Compact profiles retain small inventories inline and detach larger or path-lossy inventories."
+
+# The CLI attaches product as a default attestor. This output contract must
+# not add a detection gate that re-enables an explicitly removed default.
+always_on: true
+
+contract:
+  tier: foundation
+  predicate_type: https://aflock.ai/attestations/product/v0.3
+  run_type: product
+  stability:
+    level: stable
+    notes: >-
+      The root commits to the deduplicated, digest-sorted product content set.
+      Inline leaves or the exact-byte detached inventory reference bind paths
+      and metadata. Detached inventories preserve every captured content path;
+      their fileCount is distinct from the content treeSize. Neither the root
+      nor the inventory reference claims upload success or hermetic capture.
+    volatile_fields: []
+  subjects:
+    - prefix: "tree:products"
+      description: "The SHA-256 content root, including the RFC 6962 empty-tree root for an empty captured product set."
+      digest_algs: ["sha256"]
+  # Empty trees remain subjects but are not shared graph edges.
+  backref_subjects:
+    - "tree:products"
+  emits_products: true
+  companions:
+    - https://aflock.ai/attestations/file-inventory/v0.1
+  schema_required: true
+  credentials: []
+  fixtures:
+    - name: single-output
+      role: canonical

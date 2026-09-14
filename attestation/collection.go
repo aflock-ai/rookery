@@ -15,12 +15,15 @@
 package attestation
 
 import (
+	"crypto"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/invopop/jsonschema"
 )
 
@@ -75,6 +78,81 @@ func (r *RawAttestation) Attest(*AttestationContext) error {
 func (r *RawAttestation) Schema() *jsonschema.Schema   { return nil }
 func (r *RawAttestation) MarshalJSON() ([]byte, error) { return r.data, nil }
 
+// A consumer without plugin factories still verifies modern inventory bindings.
+// The embedded raw marshaler preserves the parent's signed representation.
+type rawInventoryAttestation struct {
+	*RawAttestation
+	root    string
+	size    uint64
+	ref     *fileinventory.Reference
+	entries []fileinventory.Entry
+}
+
+func (r *rawInventoryAttestation) InventoryReference() *fileinventory.Reference { return r.ref }
+func (r *rawInventoryAttestation) HydrateInventory(body []byte) error {
+	entries, err := fileinventory.Verify(r.ref, body, r.ref.Kind, r.root, r.size)
+	if err != nil {
+		return err
+	}
+	r.entries = entries
+	return nil
+}
+func (r *rawInventoryAttestation) Materials() map[string]cryptoutil.DigestSet {
+	out := map[string]cryptoutil.DigestSet{}
+	if r.ref.Kind == string(MaterialRunType) {
+		for _, e := range r.entries {
+			out[e.Path] = cryptoutil.DigestSet{{Hash: crypto.SHA256}: e.FileDigest}
+		}
+	}
+	return out
+}
+func (r *rawInventoryAttestation) Products() map[string]Product {
+	out := map[string]Product{}
+	if r.ref.Kind == string(ProductRunType) {
+		for _, e := range r.entries {
+			out[e.Path] = Product{Digest: cryptoutil.DigestSet{{Hash: crypto.SHA256}: e.FileDigest}, MimeType: e.MIMEType}
+		}
+	}
+	return out
+}
+
+func withRawInventory(a Attestor) (Attestor, error) {
+	r, ok := a.(*RawAttestation)
+	if !ok {
+		return a, nil
+	}
+	kind := ""
+	switch ResolveLegacyType(r.Type()) {
+	case "https://aflock.ai/attestations/material/v0.3":
+		kind = string(MaterialRunType)
+	case "https://aflock.ai/attestations/product/v0.3":
+		kind = string(ProductRunType)
+	default:
+		return a, nil
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(r.data, &keys); err != nil {
+		// This is only a probe for modern predicates; leave legacy data raw.
+		keys = nil
+	}
+	modern := false
+	for key := range keys {
+		modern = modern || strings.EqualFold(key, "inventory")
+	}
+	if !modern {
+		return a, nil
+	}
+	var p struct {
+		MerkleRoot string                   `json:"merkleRoot"`
+		TreeSize   uint64                   `json:"treeSize"`
+		Inventory  *fileinventory.Reference `json:"inventory"`
+	}
+	if err := fileinventory.DecodeParent(r.data, kind, &p); err != nil {
+		return nil, err
+	}
+	return &rawInventoryAttestation{RawAttestation: r, root: p.MerkleRoot, size: p.TreeSize, ref: p.Inventory}, nil
+}
+
 func NewCollection(name string, attestors []CompletedAttestor) Collection {
 	collection := Collection{
 		Name:         name,
@@ -128,6 +206,11 @@ func (c *CollectionAttestation) UnmarshalJSON(data []byte) error {
 		c.Attestation = &RawAttestation{
 			typeName: proposed.Type,
 			data:     proposed.Attestation,
+		}
+		var err error
+		c.Attestation, err = withRawInventory(c.Attestation)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -249,6 +332,69 @@ type ManifestHydrator interface {
 	ManifestPending() bool
 	ManifestDigest() string
 	HydrateFromManifest(predicate []byte) error
+}
+
+var ErrInventoryNotResolved = errors.New("required file inventory is unavailable")
+
+// ResolveInventories verifies available modern inventories before exposing file
+// maps. requiredKind is material, product, all, or empty (optional). Missing
+// optional data is not an empty-set claim; consumers of file maps must require
+// the relevant kind. Legacy HydrateManifests behavior is deliberately separate.
+func (c *Collection) ResolveInventories(lookup func(string) ([]byte, bool), requiredKind string) error {
+	if requiredKind != "" && requiredKind != string(MaterialRunType) && requiredKind != string(ProductRunType) && requiredKind != "all" {
+		return fmt.Errorf("invalid required inventory kind %q", requiredKind)
+	}
+	for i := range c.Attestations {
+		if err := c.Attestations[i].resolveInventory(lookup, requiredKind); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *CollectionAttestation) resolveInventory(lookup func(string) ([]byte, bool), requiredKind string) error {
+	resolved, err := withRawInventory(a.Attestation)
+	if err != nil {
+		return fmt.Errorf("%s inventory: %w", a.Type, err)
+	}
+	a.Attestation = resolved
+	reporter, ok := a.Attestation.(InventoryReporter)
+	if !ok || reporter.InventoryReference() == nil {
+		return nil
+	}
+	ref := reporter.InventoryReference()
+	if err := ref.Validate(ref.Kind); err != nil {
+		return fmt.Errorf("%s inventory: %w", a.Type, err)
+	}
+	required := requiredKind == "all" || requiredKind == ref.Kind
+	if requiredKind != "" && !required {
+		return nil
+	}
+	if ref.State == fileinventory.StateOmitted {
+		if required {
+			return fmt.Errorf("%s: %w: %s details were omitted", a.Type, ErrInventoryNotResolved, ref.Kind)
+		}
+		return nil
+	}
+	var body []byte
+	var found bool
+	if lookup != nil {
+		body, found = lookup(ref.Digest)
+	}
+	if !found {
+		if required {
+			return fmt.Errorf("%s: %w: %s", a.Type, ErrInventoryNotResolved, ref.Digest)
+		}
+		return nil
+	}
+	hydrator, ok := a.Attestation.(InventoryHydrator)
+	if !ok {
+		return fmt.Errorf("%s: cannot verify referenced file inventory", a.Type)
+	}
+	if err := hydrator.HydrateInventory(body); err != nil {
+		return fmt.Errorf("%s inventory: %w", a.Type, err)
+	}
+	return nil
 }
 
 // HydrateManifests resolves any detached leaf manifests this collection's

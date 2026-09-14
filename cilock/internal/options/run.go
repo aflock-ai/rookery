@@ -433,21 +433,12 @@ type RunOptions struct {
 	// attestation collection would have no body to attest.
 	NoDefaultAttestors []string
 
-	// MaterialManifest opts in to publishing the material attestor's per-file
-	// leaves as a detached manifest: a companion DSSE envelope written next to
-	// --outfile and, when Archivista upload is on, stored BEFORE the collection
-	// that references it.
-	//
-	// Default off, per the ruling that uploading additional bulk must be an
-	// opt-in. It does not weaken the claim — the tree is always computed and
-	// the root always signed. It only decides where the proof material lives.
-	//
-	// Note this is about what the material attestor EMITS, not only about the
-	// upload: the companion file is useful with no platform at all, which is
-	// why the flag is not named --upload-material-manifest (that spelling would
-	// have to refuse when upload is off, stranding offline chain users).
-	// --no-default-attestor is unaffected and still drops the attestor outright.
+	// MaterialManifest retains the complete material inventory in the compact
+	// distribution. The legacy profile keeps its detached-manifest behavior.
 	MaterialManifest bool
+	// UploadInventories is consent from an explicit flag or the compiled chain
+	// profile. Normal collection upload and local retention alone never imply it.
+	UploadInventories bool
 
 	// OutputFormat selects how the run result is reported. "text"
 	// (default) prints a human-readable self-explaining summary to
@@ -644,6 +635,14 @@ func (ro *RunOptions) applyActivePlatformDefault(cmd *cobra.Command) {
 }
 
 func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
+	// Resolve consent against the final store setting, including explicit store
+	// opt-outs with a configured platform. Explicit upload requests still fail
+	// the run gate without a store instead of being silently ignored.
+	defer func() {
+		if !ro.ArchivistaOptions.Enable && !cmd.Flags().Changed("upload-inventories") {
+			ro.UploadInventories = false
+		}
+	}()
 	// --offline is a clear alias for --platform-url "". Clear the platform URL
 	// up front so the explicit-disable path below takes over; cmd.Flags() is
 	// also patched so the Changed("platform-url") check sees the opt-out even
@@ -1228,6 +1227,10 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	// any existing hook so this stays self-contained to the flag registration.
 	prev := cmd.PreRunE
 	cmd.PreRunE = func(c *cobra.Command, args []string) error {
+		// Also covers command-less attest entry points before identity lookup.
+		if _, _, err := platformconfig.EvidenceDefaults(); err != nil {
+			return err
+		}
 		if jsonShorthand && !c.Flags().Changed("output-format") {
 			ro.OutputFormat = "json"
 		}
@@ -1261,14 +1264,18 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 		"Drop the named always-on attestor (product, material) from the run. Repeatable. "+
 			"Disabling BOTH product and material is a fatal error: the attestation collection "+
 			"would have no body to attest. Use sparingly — these defaults exist for a reason.")
-	cmd.Flags().BoolVar(&ro.MaterialManifest, "material-manifest", false,
-		"Publish the material attestor's per-file leaves as a detached manifest: a companion "+
-			"envelope written next to --outfile and, when Archivista upload is enabled, stored "+
-			"before the collection that references it. The signed predicate records "+
-			"manifestUploaded plus the manifest's content digest either way, so a manifest that "+
-			"arrives later can still be bound to the exact envelope that named it. Off by "+
-			"default; the Merkle root is signed regardless, so this changes only where the "+
-			"per-file proof material lives, never the claim.")
+	// Registration keeps help usable for invalid builds; PreRunE validates the
+	// same compiled defaults before any command or identity resolution.
+	retainMaterial, uploadInventories, _ := platformconfig.EvidenceRetentionDefaults()
+	cmd.Flags().BoolVar(&ro.MaterialManifest, "material-manifest", retainMaterial,
+		"Retain complete material details locally (enabled by default in compact-chain builds). "+
+			"Inventories are saved beside --outfile, or in the private cilock evidence directory. "+
+			"Upload follows the separate --upload-inventories setting. Legacy builds retain the old detached-manifest "+
+			"behavior, including upload when Archivista is enabled.")
+	cmd.Flags().BoolVar(&ro.UploadInventories, "upload-inventories", uploadInventories,
+		"Upload retained file inventories before the collection (enabled by default in compact-chain builds). "+
+			"Requires Archivista upload to be enabled; does not enable material retention. "+
+			"Set false to keep modern inventories local even when the collection is uploaded.")
 	cmd.Flags().BoolVar(&ro.RequireProducts, "require-products", false,
 		"Refuse to write or upload the attestation when the product attestor recorded nothing. "+
 			"Use on steps that exist to prove which artifact they produced: without a product "+

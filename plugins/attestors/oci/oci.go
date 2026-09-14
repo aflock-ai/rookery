@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -219,26 +220,27 @@ func (m *Manifest) getImageID(ctx *attestation.AttestationContext, tarFilePath s
 			continue
 		}
 
-		if h.Name == m.Config {
-			if h.Size < 0 || h.Size > maxTarEntrySize {
-				return nil, fmt.Errorf("config entry has invalid size: %d", h.Size)
-			}
-			b := make([]byte, h.Size)
-			if _, err := io.ReadFull(tarReader, b); err != nil {
-				return nil, fmt.Errorf("failed to read config: %w", err)
-			}
-
-			imageID, err := cryptoutil.CalculateDigestSetFromBytes(b, ctx.Hashes())
-			if err != nil {
-				log.Debugf("(attestation/oci) error calculating image id: %v", err)
-				return nil, err
-			}
-
-			if _, err := finishArchiveDigest(stream, hasher, m.tarSHA256); err != nil {
-				return nil, err
-			}
-			return imageID, nil
+		if h.Name != m.Config {
+			continue
 		}
+		if h.Size < 0 || h.Size > maxTarEntrySize {
+			return nil, fmt.Errorf("config entry has invalid size: %d", h.Size)
+		}
+		b := make([]byte, h.Size)
+		if _, err := io.ReadFull(tarReader, b); err != nil {
+			return nil, fmt.Errorf("failed to read config: %w", err)
+		}
+
+		imageID, err := cryptoutil.CalculateDigestSetFromBytes(b, ctx.Hashes())
+		if err != nil {
+			log.Debugf("(attestation/oci) error calculating image id: %v", err)
+			return nil, err
+		}
+
+		if _, err := finishArchiveDigest(stream, hasher, m.tarSHA256); err != nil {
+			return nil, err
+		}
+		return imageID, nil
 	}
 	return nil, fmt.Errorf("could not find config in tar file")
 }
@@ -326,6 +328,11 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	if len(products) == 0 {
 		return fmt.Errorf("%w: no products to attest", errNoCandidate)
 	}
+	hashes := append([]cryptoutil.DigestValue{}, ctx.Hashes()...)
+	sha256Key := cryptoutil.DigestValue{Hash: crypto.SHA256}
+	if !slices.Contains(hashes, sha256Key) {
+		hashes = append(hashes, sha256Key)
+	}
 
 	// A candidate that exists but cannot be validated is remembered and
 	// reported if no other candidate succeeds. It must not collapse into
@@ -337,22 +344,13 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 			continue
 		}
 
-		hashes := append([]cryptoutil.DigestValue{}, ctx.Hashes()...)
-		sha256Key := cryptoutil.DigestValue{Hash: crypto.SHA256}
-		hasSHA256 := false
-		for _, hash := range hashes {
-			hasSHA256 = hasSHA256 || hash == sha256Key
-		}
-		if !hasSHA256 {
-			hashes = append(hashes, sha256Key)
-		}
 		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(path, hashes)
 		if newDigestSet == nil || err != nil {
 			log.Debugf("(attestation/oci) error calculating digest set from file %s: %v", path, err)
+			if err == nil {
+				err = errors.New("calculated digest set is nil")
+			}
 			if candidateErr == nil {
-				if err == nil {
-					err = errors.New("calculated digest set is nil")
-				}
 				candidateErr = fmt.Errorf("error calculating digest set from candidate %s: %w", path, err)
 			}
 			continue
@@ -403,16 +401,17 @@ func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
 		if h.FileInfo().IsDir() {
 			continue
 		}
-		if h.Name == "manifest.json" {
-			if h.Size < 0 || h.Size > maxTarEntrySize {
-				return fmt.Errorf("manifest entry has invalid size: %d", h.Size)
-			}
-			a.ManifestRaw = make([]byte, h.Size)
-			if _, err = io.ReadFull(tarReader, a.ManifestRaw); err != nil {
-				return fmt.Errorf("failed to read manifest: %w", err)
-			}
-			break
+		if h.Name != "manifest.json" {
+			continue
 		}
+		if h.Size < 0 || h.Size > maxTarEntrySize {
+			return fmt.Errorf("manifest entry has invalid size: %d", h.Size)
+		}
+		a.ManifestRaw = make([]byte, h.Size)
+		if _, err = io.ReadFull(tarReader, a.ManifestRaw); err != nil {
+			return fmt.Errorf("failed to read manifest: %w", err)
+		}
+		break
 	}
 
 	if len(a.ManifestRaw) == 0 {

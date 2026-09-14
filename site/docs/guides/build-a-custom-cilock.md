@@ -50,6 +50,81 @@ Keeping the custom main inside the `github.com/aflock-ai/rookery/cilock` module 
 
 If your fork adds a new predicate type, confirm that Judge recognizes the exact URI through the compiled registry or tenant-observed evidence, then test the Fulcio-signed, timestamped evidence path before activating a policy that requires it.
 
+## Compiled evidence defaults
+
+Choose evidence defaults once for your distribution. Users and agents then need no per-run profile arguments. The stock main uses these string variables from `github.com/aflock-ai/rookery/cilock/internal/config`:
+
+| Variable | Source default | Meaning |
+|---|---|---|
+| `DefaultEvidenceProfile` | `"compact"` | Compact material/product representation. `"compact-chain"` also enables material retention and inventory upload consent. `"legacy"` preserves the previous representation. |
+| `DefaultProductInlineBytes` | `"131072"` | Maximum serialized product predicate size for inline encoding in compact builds, in bytes. |
+
+These are build-time operator choices, not runtime profile flags. The CLI validates them before a run. The valid profiles are `compact`, `compact-chain`, and `legacy`. The budget must be a base-10 integer from `0` through `2147483647`, including in a legacy build. Invalid compiled values cause an error rather than a silent fallback. A successful `go build` alone does not validate those values.
+
+For artifact-chain producers, compile `compact-chain` once rather than give users or agents a per-run inventory flag list. This profile retains materials and uploads retained inventories before the collection when Archivista is enabled. It does not enable a store or grant credentials.
+
+From your fork's `cilock` module:
+
+```bash
+go build -trimpath \
+  -ldflags "-X github.com/aflock-ai/rookery/cilock/internal/config.DefaultEvidenceProfile=compact-chain" \
+  -o ../bin/cilock-chain ./cmd/cilock
+../bin/cilock-chain version
+../bin/cilock-chain run --help-advanced
+```
+
+Check that the help reports `--material-manifest` and `--upload-inventories` with `(default true)`. Then distribute that binary under your chosen command name. These are source-build instructions, not a claim that an installed release has compact support. Before requiring compact inventories remotely, verify support in the deployed consumer too.
+
+From your fork's `cilock` module, build the stock main with the legacy representation:
+
+```bash
+go build -trimpath \
+  -ldflags "-X github.com/aflock-ai/rookery/cilock/internal/config.DefaultEvidenceProfile=legacy" \
+  -o ../bin/cilock-legacy ./cmd/cilock
+```
+
+For a compact build with a 64 KiB inline product budget:
+
+```bash
+go build -trimpath \
+  -ldflags "-X github.com/aflock-ai/rookery/cilock/internal/config.DefaultProductInlineBytes=65536" \
+  -o ../bin/cilock-compact ./cmd/cilock
+```
+
+The 64 KiB example keeps the source default `compact` profile. A budget of `0` detaches every nonempty product inventory. Changing only the budget does not change attestor selection, capture, signing identity, or upload consent. These instructions describe source builds, not the behavior of a deployed release.
+
+### Compact representation
+
+- With `compact`, a nonempty material set keeps its v0.3 root commitment and an `inventory` reference with `state: "omitted"`. With `compact-chain`, the CLI retains the details in a signed local companion and the reference has `state: "detached"`.
+- Products remain inline when the complete serialized product predicate fits the budget and the inline encoding preserves every captured path. Duplicate-content paths require detachment even below the budget. Otherwise, the CLI retains the complete product inventory in a signed local companion.
+- Confirmed empty sets retain the existing empty commitment encoding. Omitted or missing details are not empty sets.
+
+The default 131072-byte (128 KiB) budget applies to the inline product predicate, not the whole signed envelope. Capture and the before-command baseline remain unchanged. Compact encoding does not establish reduced scan CPU cost, isolation, or hermeticity.
+
+The `material` and `product` names and their `https://aflock.ai/attestations/material/v0.3` and `https://aflock.ai/attestations/product/v0.3` URIs do not change. Existing material/product v0.3 evidence remains readable, with legacy manifest fields retaining their original meaning. Direct library `material.New()` and `product.New()` calls keep their legacy inline defaults. The CLI applies the compiled profile separately.
+
+The root commits to distinct file contents, not every path or duplicate-content occurrence. The signed `inventory.digest` binds the exact inventory manifest bytes, including all retained paths and metadata.
+
+### Local retention and upload
+
+In a `compact` build, `--material-manifest` retains full material details as a signed local companion. The `compact-chain` profile enables this retention by default. Product inventories that cannot stay inline are retained automatically. Companions are private files beside an explicit `--outfile`.
+
+Without `--outfile`, a run that needs companions creates a private persistent `evidence/run-*` directory under the Cilock auth-state directory. The CLI prints its location and stores the collection and companions there. On Unix, automatic directories use mode `0700`, and evidence files use `0600`. On Windows, Cilock creates and verifies protected current-user-only ACLs and rejects reparse points. Compact builds refuse existing evidence files instead of overwriting them. Headless inventory retention and upload never prompt.
+
+The `compact` profile keeps inventory upload off unless `--upload-inventories` explicitly permits it. The `compact-chain` profile supplies that consent at build time. Upload still requires an enabled Archivista store. Retention does not enable upload, and upload consent does not enable retention or Archivista itself. Inline product details travel with the collection. Local retention does not imply remote availability. Legacy builds retain their previous material-manifest behavior, including upload when Archivista is enabled.
+
+Explicit `--material-manifest=false` disables material retention. Explicit `--upload-inventories=false` keeps detached inventories local even when the collection uploads. These overrides are independent. Offline runs without an enabled store keep retained inventories local instead of applying the compiled upload default. An explicit upload request without an enabled store fails.
+
+A command-only policy can pass without optional inventory details. Artifact-chain checks require complete input data and the relevant product evidence. Omitted, missing, or invalid required inventories fail explicitly. Policy generation also refuses to infer artifact links from unavailable details. Use a `compact-chain` distribution for those workflows. Keep required companions with local evidence, and verify upload before relying on a remote verifier.
+
+See the normative [Cilock compact inventories architecture contract](https://github.com/testifysec/judge/blob/main/docs/architecture/cilock-compact-inventories.md) for the signed schema, retention boundary, and consumer requirements.
+
+### Platform and trust defaults are separate
+
+The existing `config.DefaultPlatformURL` build override and your distribution's trust configuration remain separate from these evidence defaults. Selecting a platform, logging in, or changing trust roots does not select an evidence profile. No evidence profile authorizes signing or changes trusted identities. Only `compact-chain` supplies default inventory-upload consent, and it still requires an enabled store. Keep the stock platform adapter and Fulcio signer required by the Pushgate contract.
+
+Agents produce evidence as enrolled agent principals. They can start `cilock enroll agent`, but the human must approve enrollment. A stored human login is not a substitute. Humans sign authoritative policies and approve exact repository assignments separately. A custom binary does not authorize an agent to sign as a human. Product `policy bind` is not Pushgate activation.
+
 ## `rookery-builder`: generic and offline distributions
 
 The released `cilock` uses a curated attestor set plus the `file`, `fulcio`, and `piv` signers. If you need an opt-in signer (`debug-signer`, `kms/aws`, `kms/gcp`, `kms/azure`, `spiffe`, `vault`, `vault-transit`), a smaller offline binary, or a custom plugin for a verifier you control, **rookery-builder** can generate the generic `run` / `verify` / `sign` CLI with the selected plugins.
@@ -188,7 +263,7 @@ The `CustomerID` and `TenantID` get baked into the binary via `-ldflags` and sur
 
 These checks verify the binary's local surface only. For a Judge-compatible fork, also test that:
 
-1. a logged-in or workflow-OIDC run emits the `platform` predicate without `attestor not found` or a no-binding soft skip;
+1. an enrolled-agent or registered workflow-OIDC run emits the `platform` predicate without `attestor not found` or a no-binding soft skip;
 2. the DSSE signature chains to the Fulcio roots configured by Pushgate and includes the required platform timestamp;
 3. the signed collection contains the exact commit subject; and
 4. every policy-required predicate URI is present in Judge's compiled-or-tenant-observed attestation library.

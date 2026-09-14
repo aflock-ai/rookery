@@ -32,6 +32,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/bundle"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/slsa"
@@ -472,6 +473,10 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// portable replay artifact at the end. Archivista-fetched envelopes are
 	// captured separately via the RecordingSource wrapper above.
 	var loadedEnvelopes []dsse.Envelope
+	explicitPaths := make(map[string]bool, len(vo.AttestationFilePaths))
+	for _, path := range vo.AttestationFilePaths {
+		explicitPaths[path] = true
+	}
 
 	for _, path := range vo.AttestationFilePaths {
 		env, err := loadEnvelopeFromFile(path)
@@ -482,6 +487,26 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			return fmt.Errorf("failed to load attestation file: %w", err)
 		}
 		loadedEnvelopes = append(loadedEnvelopes, env)
+		// Local inventory retention is independent of upload consent. Filename
+		// adjacency discovers candidates; only the signed digest authorizes them.
+		sidecars, _ := discoverSidecars(path)
+		for _, sidecar := range sidecars {
+			if sidecar.predicateType != fileinventory.Type || explicitPaths[sidecar.path] {
+				continue
+			}
+			raw, err := readCompanionFile(sidecar.path)
+			if err != nil {
+				continue
+			}
+			var companion dsse.Envelope
+			if err := json.Unmarshal(raw, &companion); err != nil {
+				continue
+			}
+			if err := memSource.LoadEnvelope(sidecar.path, companion); err != nil {
+				continue
+			}
+			loadedEnvelopes = append(loadedEnvelopes, companion)
+		}
 	}
 
 	for _, path := range vo.BundlePaths {
@@ -492,24 +517,34 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		loadedEnvelopes = append(loadedEnvelopes, envs...)
 	}
 
-	// Bridge a primary artifact (plain file digest) to a Merkle-tree product
-	// collection so the collection matches by subject. Resolved from the
-	// collection's inline leaves (default), a single-leaf reconstruct, or a
-	// signed inclusion-proof envelope — whichever applies. Trust is still
-	// enforced by the engine's downstream functionary/signature checks. See
-	// expandSubjectsWithInclusionProofs for the CVE-2026-22703 / RFC 6962 notes.
-	subjects = expandSubjectsWithInclusionProofs(subjects, loadedEnvelopes, vo.ArtifactFilePath, artifactFileDigestHex)
-
 	// Detached material manifests carried by the envelopes we just loaded. The
 	// engine matches each to its collection by the digest that collection's
 	// SIGNED predicate names, so an unrelated manifest in the same bundle can
 	// never stand in for the right one. Empty for every inline collection,
 	// which is today's default.
 	materialManifests := indexMaterialManifests(loadedEnvelopes)
+	remoteInventories := source.InventoryLookup(ctx, collectionSource)
+	inventoryLookup := func(digest string) ([]byte, bool) {
+		if body, found := materialManifests.lookup(digest); found {
+			return body, true
+		}
+		body, found := remoteInventories(digest)
+		if found {
+			materialManifests[digest] = body
+		}
+		return body, found
+	}
+
+	// Resolve compact companions before matching a file to its tree subject.
+	// Discovery, chain hydration and final binding share one bounded cache and
+	// the configured source, which is memory-only when Archivista is disabled.
+	// The bridge validates the parent commitment; the engine verifies its signer.
+	subjects = expandSubjectsWithInventoryLookup(subjects, loadedEnvelopes, vo.ArtifactFilePath, artifactFileDigestHex, inventoryLookup)
 
 	verifyOpts := []workflow.VerifyOption{
 		workflow.VerifyWithSubjectDigests(subjects),
 		workflow.VerifyWithMaterialManifests(materialManifests),
+		workflow.VerifyWithInventoryLookup(inventoryLookup),
 		workflow.VerifyWithCollectionSource(collectionSource),
 		workflow.VerifyWithPolicyTimestampAuthorities(ptsVerifiers),
 		workflow.VerifyWithPolicyCARoots(policyRoots),
@@ -522,6 +557,16 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	verifiedEvidence, verifyErr := workflow.Verify(ctx, policyEnvelope, verifiers, verifyOpts...)
+	if archivistaRec != nil {
+		for digest, body := range indexMaterialManifests(archivistaRec.Envelopes()) {
+			materialManifests[digest] = body
+		}
+	}
+	var artifactBindingErr error
+	if verifyErr == nil && artifactFileDigestHex != "" {
+		artifactBindingErr = requireInventoryArtifactBinding(artifactFileDigestHex, verifiedEvidence.StepResults, materialManifests, inventoryLookup)
+		verifyErr = artifactBindingErr
+	}
 
 	// Write the bundle BEFORE the VSA so a single verify can emit both even on
 	// failure. Like the VSA, a bundle is useful on a FAILED verify — it lets
@@ -537,7 +582,9 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// Write the VSA to disk BEFORE returning — on both pass and fail. A failed
 	// VSA is still valuable diagnostic evidence and can legitimately be the
 	// input to a downstream policy that must know the previous stage failed.
-	if vo.VSAOutFilePath != "" {
+	// A structural artifact-binding failure has no VSA verdict. The workflow's
+	// earlier PASSED summary must not escape as a successful artifact decision.
+	if vo.VSAOutFilePath != "" && artifactBindingErr == nil {
 		if writeErr := writeVSAOutfile(vo.VSAOutFilePath, verifiedEvidence, signers, vo.VSATimestampServers); writeErr != nil {
 			// Prefer reporting the verification failure (the more important
 			// signal) but always surface the write failure as well so it is
@@ -611,7 +658,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// Detached material manifests carried by the envelopes this verify already
 	// loaded. Used only to restore leaf-level binding DETAIL; the pass/fail
 	// decision was made above and does not depend on it.
-	verdictManifests := indexMaterialManifests(loadedEnvelopes)
+	verdictManifests := materialManifests
 	writeVerifyBindingLines(os.Stderr, suppliedDigests, verifiedEvidence.StepResults, verdictManifests)
 	if vo.OutputJSON() {
 		if werr := writeVerifyVerdictJSON(os.Stdout, buildVerifyVerdict(suppliedDigests, verifiedEvidence.StepResults, verdictManifests)); werr != nil {

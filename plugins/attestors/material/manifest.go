@@ -24,6 +24,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/log"
 	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	"github.com/invopop/jsonschema"
@@ -301,6 +302,11 @@ func WithManifest(enabled bool) Option {
 // producer chose not to publish" from "this predicate predates the feature, or
 // the field was stripped" without a network round trip.
 func (a *Attestor) finishManifestRef() error {
+	a.Inventory, a.inventoryBytes = nil, nil
+	if a.compactInventory && a.TreeSize != 0 {
+		a.Manifest, a.ManifestUploaded = nil, nil
+		return a.finishInventory()
+	}
 	side, err := a.buildManifestSidecar()
 	if err != nil {
 		return err
@@ -334,6 +340,12 @@ func (a *Attestor) finishManifestRef() error {
 // It returns the manifest envelope when — and only when — the producer opted
 // in. Returning nil is the default and leaves the workflow untouched.
 func (a *Attestor) Companions() []attestation.Attestor {
+	if a.Inventory != nil {
+		if a.Inventory.State != "detached" || len(a.inventoryBytes) == 0 {
+			return nil
+		}
+		return []attestation.Attestor{attestation.NewInventoryCompanion("material", a.inventoryBytes)}
+	}
 	if !a.emitManifest {
 		return nil
 	}
@@ -371,7 +383,7 @@ func (a *Attestor) Companions() []attestation.Attestor {
 // it. This is what lets the attestor catalog describe the companion envelope
 // (Companions() itself answers only after Attest, and only when opted in).
 func (a *Attestor) CompanionTypes() []string {
-	return []string{ManifestType}
+	return []string{ManifestType, fileinventory.Type}
 }
 
 // HydrateFromManifest binds a detached manifest to this predicate and, only on
@@ -392,6 +404,9 @@ func (a *Attestor) CompanionTypes() []string {
 // Each failure carries a distinct error so a mismatch is never filed as a
 // missing object.
 func (a *Attestor) HydrateFromManifest(predicate []byte) error {
+	if a.Inventory != nil {
+		return fmt.Errorf("material: inventory references require HydrateInventory")
+	}
 	want := a.Manifest.SHA256()
 	if want == "" {
 		return fmt.Errorf("%w: the predicate carries no manifest digest to bind against", ErrMaterialManifestUnreadable)
@@ -460,7 +475,12 @@ func (a *Attestor) HydrateFromManifest(predicate []byte) error {
 
 // ManifestDigest reports the sha256 of the manifest this predicate references,
 // or "" when it references none. Part of attestation.ManifestHydrator.
-func (a *Attestor) ManifestDigest() string { return a.Manifest.SHA256() }
+func (a *Attestor) ManifestDigest() string {
+	if a.Inventory != nil {
+		return ""
+	}
+	return a.Manifest.SHA256()
+}
 
 // manifestByteLimit is the most bytes HydrateFromManifest will look at for a
 // manifest whose signed reference records signedBytes of compact JSON. A
@@ -490,13 +510,13 @@ func manifestByteLimit(signedBytes int) int {
 // what guarantees no fetch is attempted for a "not published" or legacy
 // predicate and therefore that a store outage cannot reclassify one.
 func (a *Attestor) ManifestPending() bool {
-	return a.ManifestState() == ManifestPublished
+	return a.Inventory == nil && a.ManifestState() == ManifestPublished
 }
 
 // ManifestWithheld reports state (a): the producer signed manifestUploaded:false.
 // Part of attestation.ManifestWithholder.
 func (a *Attestor) ManifestWithheld() bool {
-	return a.ManifestState() == ManifestNotPublished
+	return a.Inventory == nil && a.ManifestState() == ManifestNotPublished
 }
 
 // ManifestState classifies what the signed predicate says about its leaves,

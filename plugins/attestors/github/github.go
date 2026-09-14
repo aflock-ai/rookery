@@ -164,14 +164,13 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		return ErrNotGitHub{}
 	}
 	server := os.Getenv("GITHUB_SERVER_URL")
-	u, err := url.Parse(server)
-	if err != nil || len(server) > 2048 || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return fmt.Errorf("invalid GITHUB_SERVER_URL")
+	u, err := parseServerURL(server)
+	if err != nil {
+		return err
 	}
 	repository := os.Getenv("GITHUB_REPOSITORY")
-	parts := strings.Split(repository, "/")
-	if len(repository) > 256 || !repositoryPath.MatchString(repository) || len(parts) != 2 || parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
-		return fmt.Errorf("invalid GITHUB_REPOSITORY")
+	if err := validateRepository(repository); err != nil {
+		return err
 	}
 	runID := os.Getenv("GITHUB_RUN_ID")
 	run, err := strconv.ParseUint(runID, 10, 64)
@@ -214,7 +213,23 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	return nil
 }
 
+func parseServerURL(server string) (*url.URL, error) {
+	u, err := url.Parse(server)
+	if err != nil || len(server) > 2048 || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return nil, fmt.Errorf("invalid GITHUB_SERVER_URL")
+	}
+	return u, nil
+}
+
 var repositoryPath = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+func validateRepository(repository string) error {
+	parts := strings.Split(repository, "/")
+	if len(repository) > 256 || !repositoryPath.MatchString(repository) || len(parts) != 2 || parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+		return fmt.Errorf("invalid GITHUB_REPOSITORY")
+	}
+	return nil
+}
 
 func (a *Attestor) Data() *Attestor {
 	return a

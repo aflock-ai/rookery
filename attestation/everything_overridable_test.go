@@ -182,6 +182,13 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// different package from where the const is declared).
 	"DefaultPlatformURL": {},
 
+	// Distribution policy is overridden by go build -ldflags -X, not by the
+	// runtime environment of the command being observed. The custom-build
+	// guide and release-fanout build wire these variables; evidence_test.go
+	// validates the compiled profiles and byte budget.
+	"DefaultEvidenceProfile":    {},
+	"DefaultProductInlineBytes": {},
+
 	// DefaultAttestors is the always-on attestor list; users
 	// override via --attestations and --no-default-attestor. The
 	// CLI flag wiring lives in a different package

@@ -87,7 +87,7 @@ func (e ErrNoCollections) Error() string {
 	return fmt.Sprintf("no collection passed verification for step %v. Likely causes, in order: "+
 		"(1) the attestation wasn't loaded — pass it with --attestations/--bundle or --enable-archivista; "+
 		"(2) a collection loaded but its signature or functionary check failed — see the \"collection rejected\" reason(s) logged above for the specific cause (e.g. a certConstraint that doesn't match the signer's identity); "+
-		"(3) the artifact is a product committed in a Merkle tree (subject \"tree:products\") whose root won't equal the plain file digest — load the attestation carrying the v0.3 tree leaves and pass that envelope via --attestations/--bundle. Product leaves are always inlined in the DSSE-signed predicate. Material leaves are inlined by default, but a producer may detach them into a companion manifest (cilock run --material-manifest): in that case the predicate carries manifestUploaded plus the manifest's content digest, and the manifest envelope must be loaded alongside the collection", e.Step)
+		"(3) the artifact is a product committed in a Merkle tree (subject \"tree:products\") whose root differs from the file digest. Load the parent envelope and required inventory companions via --attestations/--bundle. Product and material details can be inline or detached; omitted details are not empty sets. Compact-chain producers retain the inventories needed for artifact checks. Legacy material manifests must also accompany their parent collection", e.Step)
 }
 
 // ErrSubjectDigestMismatch fires when a collection IS loaded for the step

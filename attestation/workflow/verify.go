@@ -73,6 +73,7 @@ type verifyOptions struct {
 	maxSubjectFanout             int
 	lazyWitness                  bool
 	materialManifests            map[string][]byte
+	inventoryLookup              func(string) ([]byte, bool)
 	kmsProviderOptions           map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
 }
 
@@ -176,9 +177,9 @@ func VerifyWithLazyWitness(enabled bool) VerifyOption {
 	}
 }
 
-// VerifyWithMaterialManifests supplies detached material-manifest predicate
-// bodies to the policy engine (policy.WithMaterialManifests), keyed by the
-// sha256 of their compact JSON encoding.
+// VerifyWithMaterialManifests supplies legacy manifests and modern inventories
+// to policy.WithMaterialManifests. Legacy digests bind compact JSON; modern
+// digests bind exact predicate bytes.
 //
 // Callers build the map from envelopes they already loaded — there is no fetch
 // path. A collection whose material leaves are inline (the default) never
@@ -187,6 +188,13 @@ func VerifyWithMaterialManifests(manifests map[string][]byte) VerifyOption {
 	return func(vo *verifyOptions) {
 		vo.materialManifests = manifests
 	}
+}
+
+// VerifyWithInventoryLookup shares a caller's content-addressed inventory
+// resolver with policy verification, for example to retain bodies for replay.
+// If absent, the policy attestor uses the configured collection source.
+func VerifyWithInventoryLookup(lookup func(string) ([]byte, bool)) VerifyOption {
+	return func(vo *verifyOptions) { vo.inventoryLookup = lookup }
 }
 
 type VerifyResult struct {
@@ -223,6 +231,11 @@ func applyOptionalVerifyCapabilities(att attestation.Attestor, vo *verifyOptions
 		SetMaterialManifests(map[string][]byte)
 	}); ok {
 		mm.SetMaterialManifests(vo.materialManifests)
+	}
+	if inv, ok := att.(interface {
+		SetInventoryLookup(func(string) ([]byte, bool))
+	}); ok {
+		inv.SetInventoryLookup(vo.inventoryLookup)
 	}
 }
 

@@ -265,10 +265,29 @@ type verifyOptions struct {
 	// predicate names, not by filename or adjacency, so an unrelated manifest
 	// sitting in the same bundle can never be substituted for the right one.
 	materialManifests map[string][]byte
+	inventoryLookup   func(string) ([]byte, bool)
 }
 
-// WithMaterialManifests supplies detached material-manifest predicate bodies,
-// keyed by the sha256 of their compact JSON encoding.
+// WithInventoryLookup resolves modern companions through the caller's existing
+// evidence source. Exact parent bindings are checked by the inventory hydrator.
+func WithInventoryLookup(lookup func(string) ([]byte, bool)) VerifyOption {
+	return func(vo *verifyOptions) { vo.inventoryLookup = lookup }
+}
+
+func inventoryLookup(vo *verifyOptions) func(string) ([]byte, bool) {
+	return func(digest string) ([]byte, bool) {
+		if body, ok := manifestLookup(vo)(digest); ok {
+			return body, true
+		}
+		if vo != nil && vo.inventoryLookup != nil {
+			return vo.inventoryLookup(digest)
+		}
+		return nil, false
+	}
+}
+
+// WithMaterialManifests supplies legacy manifests and modern inventories by
+// SHA-256. Legacy bodies use compact JSON; modern bodies use exact predicate bytes.
 //
 // Callers build this from whatever envelopes they loaded. Supplying nothing is
 // valid and is the norm: a collection whose leaves are inline never consults it.
@@ -2274,6 +2293,11 @@ func hydrateDownstreamMaterials(vo *verifyOptions, step Step, passedCollection P
 			}
 		}
 	}
+	if len(step.ArtifactsFrom) > 0 {
+		if err := downstream.ResolveInventories(inventoryLookup(vo), "material"); err != nil {
+			return downstream, nil, ErrVerifyArtifactsFailed{Reasons: []string{fmt.Sprintf("step %s inventory: %v", step.Name, err)}}
+		}
+	}
 	return downstream, downstream.Materials(), nil
 }
 
@@ -2317,6 +2341,12 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 			if err := upstream.VerifyInlineLeaves(); err != nil {
 				collection.Warnings = append(collection.Warnings, fmt.Sprintf("upstream step %s inline leaves for step %s: %v", artifactsFrom, step.Name, err))
 				reasons = append(reasons, fmt.Sprintf("upstream step %s inline leaves: %v", artifactsFrom, err))
+				continue
+			}
+			// Artifacts merges materials and products in BOTH modes. Dropping
+			// unavailable materials could hide a mismatch behind a matching product.
+			if err := upstream.ResolveInventories(inventoryLookup(vo), "all"); err != nil {
+				reasons = append(reasons, fmt.Sprintf("upstream step %s inventory: %v", artifactsFrom, err))
 				continue
 			}
 

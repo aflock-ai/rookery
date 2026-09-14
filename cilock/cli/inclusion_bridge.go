@@ -14,8 +14,10 @@ import (
 	"encoding/json"
 	"path/filepath"
 
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/log"
 	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 )
@@ -83,7 +85,11 @@ type treeCommitment struct {
 //     the policy engine still verifies the matched collection's signature
 //     against the step functionary. A bogus collection+proof pair is rejected
 //     downstream at signature verification.
-func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelopes []dsse.Envelope, artifactPath, artifactDigestHex string) []cryptoutil.DigestSet { //nolint:gocognit,gocyclo,funlen // single-pass primary-artifact→tree bridge: collection-commitment parse, inclusion-proof verify, and single-leaf reconstruct share the CVE-2026-22703 treeSize/root checks; splitting would fragment the trust trail
+func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelopes []dsse.Envelope, artifactPath, artifactDigestHex string) []cryptoutil.DigestSet {
+	return expandSubjectsWithInventoryLookup(subjects, envelopes, artifactPath, artifactDigestHex, indexMaterialManifests(envelopes).lookup)
+}
+
+func expandSubjectsWithInventoryLookup(subjects []cryptoutil.DigestSet, envelopes []dsse.Envelope, artifactPath, artifactDigestHex string, inventoryLookup func(string) ([]byte, bool)) []cryptoutil.DigestSet { //nolint:gocognit,gocyclo,funlen // single-pass primary-artifact→tree bridge: collection-commitment parse, inclusion-proof verify, and single-leaf reconstruct share the CVE-2026-22703 treeSize/root checks; splitting would fragment the trust trail
 	requested := map[string]bool{}
 	for _, ds := range subjects {
 		for dv, h := range ds {
@@ -125,12 +131,14 @@ func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelope
 				continue
 			}
 			for _, a := range coll.Attestations {
-				if a.Type != productTreeType && a.Type != materialTreeType {
+				canonicalType := attestation.ResolveLegacyType(a.Type)
+				if canonicalType != productTreeType && canonicalType != materialTreeType {
 					continue
 				}
 				var tree struct {
-					MerkleRoot string `json:"merkleRoot"`
-					TreeSize   uint64 `json:"treeSize"`
+					MerkleRoot string                   `json:"merkleRoot"`
+					TreeSize   uint64                   `json:"treeSize"`
+					Inventory  *fileinventory.Reference `json:"inventory"`
 					// A POINTER so presence survives the decode (as in
 					// material.Attestor's predicate): "leaves": [] is a signed
 					// inline commitment to an EMPTY tree, not a missing set,
@@ -150,9 +158,28 @@ func expandSubjectsWithInclusionProofs(subjects []cryptoutil.DigestSet, envelope
 					// explicit true lets the reference be followed.
 					ManifestUploaded *bool `json:"manifestUploaded"`
 				}
-				if err := json.Unmarshal(a.Attestation, &tree); err == nil && tree.MerkleRoot != "" && tree.TreeSize > 0 {
+				kind := string(attestation.ProductRunType)
+				if canonicalType == materialTreeType {
+					kind = string(attestation.MaterialRunType)
+				}
+				if err := fileinventory.DecodeParent(a.Attestation, kind, &tree); err == nil && tree.MerkleRoot != "" && tree.TreeSize > 0 {
 					tc := treeCommitment{rootHex: tree.MerkleRoot, treeSize: tree.TreeSize}
 					switch {
+					case tree.Inventory != nil:
+						// Share the verifier's scoped, bounded lookup before subject
+						// matching; chain hydration cannot discover a multi-file root.
+						body, found := inventoryLookup(tree.Inventory.Digest)
+						if !found {
+							continue
+						}
+						entries, err := fileinventory.Verify(tree.Inventory, body, kind, tree.MerkleRoot, tree.TreeSize)
+						if err != nil {
+							continue
+						}
+						tc.leaves = make(map[string]string, len(entries))
+						for _, entry := range entries {
+							tc.leaves[entry.Path] = entry.FileDigest
+						}
 					case tree.Leaves != nil:
 						// Inline leaves are present — the authoritative home,
 						// even when the array is empty (nothing to bridge, and

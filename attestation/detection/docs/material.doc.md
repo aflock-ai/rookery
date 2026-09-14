@@ -6,21 +6,22 @@ sidebar_position: 2
 
 Snapshots the working directory **before** the step's command runs, computes a Merkle root over every input file's digest, and emits a single in-toto subject (`tree:materials`) whose digest is the root.
 
-The root is the claim, and it is always computed and always signed. The per-file `leaves` array is the *proof material* one specific consumer needs (the `artifactsFrom` chain), and it has two possible homes:
+The attestor name remains `material`. Its predicate type remains `https://aflock.ai/attestations/material/v0.3`. The content-root construction does not change with inventory retention.
 
-- **inline in the signed predicate** — the default, and the shape of every v0.3 attestation minted so far;
-- **detached into a companion manifest** — opt in with `cilock run --material-manifest`.
+- Generic library constructors retain the existing inline leaves and legacy manifest fields.
+- The compact profile omits material details by default. The signed `inventory.state` is `omitted`, not empty.
+- With complete retention, the compact profile emits a `detached` inventory reference and a full inventory companion.
 
-Which home is in use is stated in the predicate itself, under signature, so a verifier never has to guess (see [Detached leaf manifest](#detached-leaf-manifest)).
+The signed reference describes capture and retention, not upload success. Capture and the in-memory material baseline remain unchanged.
 
 ## What it captures
 
-The v0.3 material predicate is small and fixed-size. The schema:
+Every representation carries these commitment fields:
 
 | JSON field | Type | Source |
 |---|---|---|
 | `merkleRoot` | string (hex) | The Merkle root over the sorted material list, computed via [RFC 6962 §2.1](https://datatracker.ietf.org/doc/html/rfc6962#section-2.1). |
-| `treeSize` | integer | Number of files that contributed to the root. |
+| `treeSize` | integer | Number of distinct content digests that contributed to the root, not the full path count. |
 | `hashAlgorithm` | string | Always `sha256` for v0.3. |
 | `construction` | string | Always `RFC6962` for v0.3. |
 
@@ -35,13 +36,13 @@ The DSSE statement's subject array carries one entry:
 ]
 ```
 
-That is the entire surface area of the predicate. The full per-file list lives in the `<outfile>.material.tree.json` sidecar `cilock run` writes adjacent to the signed envelope.
+The predicate also carries either the legacy fields or a compact `inventory` reference. A new reference cannot coexist with `leaves`, `manifest`, or `manifestUploaded`.
 
 ## Why v0.3 looks like this
 
 v0.1 emitted a flat `map[path]DigestSet` directly as the predicate body, with one `file:<path>` subject per material. For source trees the cardinality was fine — a Go module produces a few dozen materials. For container builds (`COPY . /app` over a JS project's `node_modules`) the per-file subject count blew through Archivista's placeholder budget and inflated the signed envelope to multi-megabyte territory.
 
-v0.3 publishes a single subject (the Merkle root) and moves per-file claims into separate inclusion-proof attestations.
+v0.3 publishes a single subject. Inline leaves or an exact-byte inventory binding authenticate paths. The content root alone does not authenticate paths.
 
 ## How the material set is captured
 
@@ -75,22 +76,22 @@ The `material` attestor itself registers no flags. Its behavior is controlled by
 Walk the working directory per attestation/file.RecordArtifacts (regular files only,
 symlinks bounded to the workingdir, dirhash globs honoured).
 Filter to entries that have a raw sha256 digest (dirhash/gitoid entries are skipped).
-Sort by inclusionproof.NormalizePath(path) (lexically).
-For each (path, file-digest) pair:
-  leafPreHash = sha256(path-bytes || 0x00 || file-digest-bytes-raw32)
+Deduplicate by content digest and sort by digest bytes.
+For each distinct file digest:
+  leafPreHash = sha256(file-digest-bytes-raw32)
 Pass the leafPreHash list into a merkle tree built per RFC 6962 §2.1.
 The wrapper applies its own 0x00 leaf-domain prefix and 0x01 interior prefix,
 so the actual leaf the tree commits to is:
-  H(0x00 || leafPreHash) = H(0x00 || sha256(path || 0x00 || file-digest))
+  H(0x00 || leafPreHash) = H(0x00 || sha256(file-digest))
 ```
 
 The leaf encoder is `inclusionproof.LeafHash` — the same canonical function the product attestor uses. Any drift between the two would mean a file recorded as a product in one step could not be matched against the same file recorded as a material in the next step. There is exactly one implementation; both attestors call it.
 
-If the working directory has no regular files with a sha256 digest, `Subjects()` returns an empty map. (Unlike product, the material attestor does **not** emit an empty-tree root: an empty material set is treated as absent, since "the workingdir was empty before this step" is a less interesting claim than "the step produced nothing.")
+A captured empty set retains the existing `"leaves": []` encoding and the RFC 6962 empty-root subject. It emits no new inventory reference. Empty trees emit no back-reference.
 
 ## Output shape
 
-The full DSSE statement for a v0.3 material attestation:
+Commitment fields in a v0.3 material statement (representation fields omitted from this illustration):
 
 ```json
 {
@@ -111,23 +112,47 @@ The full DSSE statement for a v0.3 material attestation:
 }
 ```
 
-The predicate is fixed-size regardless of how many files were in the working directory.
+The compact parent grows with its counters, not with its leaf list. A retained inventory has a separate byte budget.
 
 ## Inline leaves
 
-By default the signed envelope carries the full `leaves` array — every `(path, fileDigest, leafHash)` triple — inline, and the material attestation is self-contained: a verifier can confirm any specific input file's inclusion from the attestation alone.
+Generic library constructors retain inline `(path, fileDigest, leafHash)` triples. The legacy tree deduplicates equal content, so these leaves do not preserve every captured path.
 
-An empty-but-present `"leaves": []` is meaningful and is **not** the same as an absent key. It is a signed commitment that the step provably consumed nothing (for example a build in an isolated working directory), which the engine trusts rather than failing closed on. An absent key means the leaves are not in the predicate at all.
+An empty-but-present `"leaves": []` describes an empty captured set. An absent key does not mean empty. A walk does not prove actual command reads, isolation, or hermeticity.
+
+## Compact inventories
+
+`material.WithCompactInventory(retain)` changes representation, not capture. Nonempty captures omit inline leaves and both legacy manifest fields.
+
+The reference schema is `https://aflock.ai/attestations/file-inventory/v0.1`. Its `kind` is `material`, and `fileCount` counts all captured paths.
+
+| Reference field | Meaning |
+|---|---|
+| `state: omitted` | Details were not retained. The reference has no `digest` or `bytes`. |
+| `state: detached` | Complete retained details have an exact raw SHA-256 `digest` and a `bytes` count. |
+| `captureMode: walk` | Scope is `working-directory`. |
+| `captureMode: trace` | Scope is `trace-provider`. |
+| `captureMode: unknown` | Scope is `unspecified`. |
+
+A retained payload has `schema`, `kind`, and path-sorted `entries`. Each entry contains an opaque `path` and a lowercase SHA-256 `fileDigest`. Distinct paths remain distinct even when their content matches. Paths are metadata, never filesystem instructions.
+
+The limits are 64 MiB of predicate bytes and one million entries. Consumers reject invalid digests, invalid paths, duplicate paths, unknown fields, duplicate keys, and case aliases.
+
+A consumer verifies exact bytes, the reference count, the reconstructed content root, and `treeSize` before it uses the entries. A matching root alone cannot authenticate paths or metadata. Hydration preserves the compact serialized parent shape.
+
+The companion uses the inventory predicate type and the subject `inventory:material`. Its subject digest is the raw SHA-256 of its predicate bytes. It does not inherit a commit subject. The signed parent reference supplies the integrity binding, not the storage location or companion signer.
+
+Retention does not authorize upload. The CLI controls local storage and explicit inventory-upload consent separately. Missing or corrupt required details are not an empty input set.
 
 ## Detached leaf manifest
 
-Envelope size is a function of the repository's file count, not the diff, so on a large repository the inline leaves can be well over 99% of the payload — while the policies evaluated on a push typically never read them. `cilock run --material-manifest` publishes a **companion copy** of the leaves. In this rollout the signed predicate **keeps its inline `leaves` as well** (`material.go`, `MarshalJSON`): the manifest is additive, the envelope does not shrink yet, and making the manifest the *only* home for the leaves is a separate, sequenced change that lands after the chain-consuming producers have opted in. What the flag does today:
+This section describes the legacy profile only. `cilock run --material-manifest` retains its existing companion behavior. Legacy producers keep inline leaves as well as the legacy manifest reference:
 
 - the leaves are published as a **companion DSSE envelope** with predicate type `https://aflock.ai/attestations/material-manifest/v0.1`, written next to `--outfile` as `<outfile>-material-manifest.json` and, when Archivista upload is on, stored *before* the collection that references it;
 - the manifest's predicate is the [inclusion-proof sidecar](./inclusion-proof) shape verbatim, so it needs no new schema and no server change;
 - its only subject is `tree:materials`, so it is reachable from the collection by one subject-graph hop but never appears in a commit-keyed lookup.
 
-Two fields in the material predicate describe the arrangement, and both are emitted by any producer new enough to have them:
+Two legacy fields describe this arrangement. Compact nonempty predicates do not emit or reinterpret either field:
 
 | Field | Meaning |
 |---|---|
@@ -157,7 +182,8 @@ See [verify a specific file](../guides/verify-a-specific-file) for the full chec
 - **The leaf set excludes dirhash and gitoid entries.** `--dirhash-glob` directories still appear in the in-memory `Materials()` map (so downstream attestors that walk `ctx.Materials()` continue to see them), but they do not contribute to the Merkle root because the dirhash isn't a raw file sha256.
 - **Symlinks pointing outside `--workingdir` are silently dropped, not errored.** If you depend on a linked tree being recorded, place it inside the working directory.
 - **`material` runs before the command.** Files created by the step appear only in `product`, never here.
-- **Empty material set → no subject.** Verifiers must handle the no-`tree:materials` case (typically: a step that adds no inputs is allowed; the policy gate is elsewhere).
+- **Empty material sets still have a subject.** Only the empty tree's graph back-reference is absent.
+- **Omitted details do not change the product baseline.** The in-memory captured material map remains available to the product attestor.
 
 ## CLI example
 
@@ -169,7 +195,7 @@ cilock run --step my-step \
   -- make build
 ```
 
-The signed `attestation.json` carries the Merkle root and all inline leaves in the predicate.
+The signed parent carries the Merkle root and the representation selected by the distribution profile. Generic library constructors remain legacy-inline.
 
 ## See also
 

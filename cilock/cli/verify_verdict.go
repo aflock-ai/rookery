@@ -23,11 +23,58 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/policy"
 )
+
+// The single-leaf root is a discovery hint, not permission to bypass a modern
+// inventory requirement. A file-targeted verification needs an actual binding.
+func requireInventoryArtifactBinding(digest string, results map[string]policy.StepResult, manifests manifestIndex, lookup func(string) ([]byte, bool)) error {
+	supplied := []string{"sha256:" + digest}
+	if len(matchedBindings(supplied, results, manifests)) > 0 {
+		return nil
+	}
+	modern := false
+	for _, result := range results {
+		for _, pc := range result.Passed {
+			coll, err := pc.HydratedCollection()
+			if err != nil {
+				return err
+			}
+			modern = loadCollectionInventories(coll, manifests, lookup) || modern
+		}
+	}
+	if modern && len(matchedBindings(supplied, results, manifests)) == 0 {
+		return fmt.Errorf("artifact inclusion requires a matching verified file inventory; details are omitted, unavailable, invalid, or do not contain the artifact")
+	}
+	return nil
+}
+
+func loadCollectionInventories(coll attestation.Collection, manifests manifestIndex, lookup func(string) ([]byte, bool)) bool {
+	modern := false
+	for _, a := range coll.Attestations {
+		reporter, ok := a.Attestation.(attestation.InventoryReporter)
+		if !ok || reporter.InventoryReference() == nil {
+			continue
+		}
+		modern = true
+		ref := reporter.InventoryReference()
+		if ref.State != fileinventory.StateDetached || lookup == nil {
+			continue
+		}
+		if _, present := manifests[ref.Digest]; present {
+			continue
+		}
+		if body, found := lookup(ref.Digest); found {
+			manifests[ref.Digest] = body
+		}
+	}
+	return modern
+}
 
 // VerifyVerdict is the machine-readable result of a passing `cilock verify`,
 // emitted as a single JSON object on stdout under --format json. It answers the
@@ -160,11 +207,16 @@ func appendCollectionBindings(out []subjectBinding, seen, want map[string]struct
 			log.Debugf("collection %s: material manifest unresolved, leaf bindings omitted: %v", pc.Collection.Reference, err)
 		}
 	}
-	if coll.VerifyInlineLeaves() == nil {
-		for path, ds := range coll.Artifacts() {
-			if h := suppliedSHA256(ds); h != "" {
-				add("sha256:"+h, path, true)
-			}
+	if err := coll.ResolveInventories(manifests.lookup, ""); err != nil {
+		log.Debugf("collection %s: inventory invalid, leaf bindings omitted: %v", pc.Collection.Reference, err)
+		return out
+	}
+	if coll.VerifyInlineLeaves() != nil {
+		return out
+	}
+	for path, ds := range coll.Artifacts() {
+		if h := suppliedSHA256(ds); h != "" {
+			add("sha256:"+h, path, true)
 		}
 	}
 	return out

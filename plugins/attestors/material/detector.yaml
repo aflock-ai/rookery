@@ -1,6 +1,6 @@
 apiVersion: cilock.detection/v0.1
 name: material
-description: "Snapshots the working directory before the wrapped command runs and signs one RFC 6962 Merkle root over every input file's digest; the per-file leaves stay inline by default or move to a companion manifest with --material-manifest."
+description: "Signs an RFC 6962 content root over captured materials. Generic constructors retain inline leaves. The compact profile omits details unless retention is requested."
 
 # No category and no pre/post gate: material is a foundation attestor that
 # cilock attaches on EVERY run (`cilock run` builds it with the product
@@ -25,10 +25,11 @@ contract:
       The root is a deterministic RFC 6962 sha256 tree over the deduplicated,
       digest-sorted set of input-file content digests, so the same tree yields
       byte-identical merkleRoot, treeSize, hashAlgorithm and construction. The
-      additive manifestUploaded / manifest fields are a function of the same
-      tree (the manifest digest is sha256 over the compact companion predicate)
-      plus the producer's --material-manifest choice; nothing clock- or
-      host-derived is emitted.
+      legacy manifestUploaded / manifest fields retain their original meaning.
+      Compact nonempty captures instead carry an inventory reference with the
+      path count and capture scope. Retained inventories bind exact predicate
+      bytes including every path and metadata field. No inventory field claims
+      publication or upload success.
     volatile_fields: []
   subjects:
     - prefix: "tree:materials"
@@ -51,6 +52,7 @@ contract:
   # live CompanionTypes().
   companions:
     - https://aflock.ai/attestations/material-manifest/v0.1
+    - https://aflock.ai/attestations/file-inventory/v0.1
   schema_required: true
   credentials: []
   fixtures:

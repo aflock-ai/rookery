@@ -10,6 +10,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf => ../com
 
 replace github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof => ../inclusion-proof
 
+replace github.com/aflock-ai/rookery/plugins/attestors/material => ../material
+
 require (
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/commandrun v0.0.0-00010101000000-000000000000
@@ -18,6 +20,7 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.13
 	github.com/gobwas/glob v0.2.3
 	github.com/invopop/jsonschema v0.13.0
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/stretchr/testify v1.11.1
 )
 

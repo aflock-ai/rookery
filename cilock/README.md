@@ -22,6 +22,8 @@ go install github.com/aflock-ai/rookery/cilock/cmd/cilock@latest
 
 The default binary ships every attestor and a sensible signer set. To build a
 slimmer binary with only the plugins you need, see the [`builder`](../builder/).
+For a Judge-compatible distribution with compiled evidence defaults, see
+[Build a custom CI/lock](../site/docs/guides/build-a-custom-cilock.md#compiled-evidence-defaults).
 
 Check the version:
 
@@ -33,9 +35,12 @@ cilock version
 
 ## Quick start (local key, offline)
 
-This sequence wraps a build, signs with a local key, generates a starter policy
-from the resulting evidence, signs the policy, and verifies the built binary —
-all without contacting the platform (`--platform-url ""`).
+This sequence requires a source build with compact inventory support. Check
+`cilock run --help-advanced` before using it. An installed release can predate
+these defaults. It wraps a build, signs evidence with a local key, generates and
+signs a starter policy, and verifies the built binary. All steps stay offline
+with `--platform-url ""`. This is a human-run local demonstration, not a Pushgate
+enrollment or authoritative policy-signing flow.
 
 ```bash
 # 1. Generate a local signing key pair
@@ -47,6 +52,7 @@ cilock run \
   --step build \
   --workload manual \
   --attestations environment \
+  --material-manifest \
   --signer-file-key-path cosign.key \
   --outfile build.att.json \
   --platform-url "" \
@@ -65,9 +71,12 @@ cilock verify ./app \
 # → "Verification succeeded" (exit 0)
 ```
 
-`product` and `material` attestations are always recorded, so even with
-`--attestations environment` the collection still binds the build's inputs and
-outputs.
+`product` and `material` attestations are present by default, even with
+`--attestations environment`. In compact builds, `--material-manifest` retains
+the full input details needed to infer artifact links for the starter policy.
+Keep the signed inventory companions beside `build.att.json` for local policy
+generation and verification. The CLI discovers them there and verifies their
+content against the signed collection's inventory references.
 
 ---
 
@@ -170,6 +179,8 @@ Key flags:
                                     (auto | walk | trace[:ebpf|:ptrace|:auto] | ima) (default "auto")
     --enable-archivista             Use Archivista to store or retrieve attestations
                                     (automatic for authenticated platform runs)
+    --material-manifest             Retain complete material details locally in compact builds
+    --upload-inventories            Permit retained inventory upload when Archivista is enabled
 ```
 
 **Attestor selection:** with `--workload auto` (the default), cilock auto-detects
@@ -199,6 +210,79 @@ cilock run --step build -k cosign.key --workload manual \
 cilock run --step unit-test -k cosign.key --workload manual \
   -a environment -o test.att.json -- go test ./...
 ```
+
+### Compact evidence defaults
+
+Source builds use `config.DefaultEvidenceProfile="compact"` and
+`config.DefaultProductInlineBytes="131072"`. These are compiled distribution
+defaults, independent of login and the selected platform. Ordinary runs need no
+profile arguments. There is no runtime profile flag. Build operators can select
+`compact-chain`, `legacy`, or a different product budget through validated
+`-ldflags -X` values in the
+[custom-build guide](../site/docs/guides/build-a-custom-cilock.md#compiled-evidence-defaults).
+This describes the source contract, not the version of an installed binary.
+
+For artifact-chain producers, distribute a `compact-chain` build. It retains
+material details and enables inventory upload by default when Archivista is
+enabled. It uses the same product budget and detachment rules as `compact`.
+Users and agents then run ordinary commands without a per-run inventory flag
+list. The operator must also verify that the deployed verifier supports compact
+inventories before requiring them in a policy.
+
+- **Materials (`compact`):** a nonempty captured set keeps its v0.3 root commitment and an
+  `inventory` reference with `state: "omitted"`. Per-file details are not retained
+  by default. Omitted details do not mean an empty input set.
+- **Products:** the complete serialized product predicate stays inline at or
+  below the budget, provided the inline representation preserves every captured
+  path. Duplicate-content paths require a detached inventory even below the
+  budget. Larger predicates also use a complete signed local inventory companion,
+  not a truncated list.
+- **Empty sets:** confirmed empty captures keep the existing empty commitment
+  encoding. They are distinct from omitted or unavailable details.
+
+The default budget is 131072 bytes (128 KiB) for the inline product predicate,
+not the collection or DSSE envelope. Other attestations, signatures, and encoding
+add bytes. Capture and the before-command baseline remain unchanged. Compact
+encoding does not establish lower scan CPU cost, isolation, or hermeticity.
+
+### Retention and upload
+
+In a `compact` build, `--material-manifest` retains complete material details as a
+signed local inventory companion. It does not permit upload. Product inventories
+that cannot stay inline are retained automatically.
+
+With `--outfile build.att.json`, companions use names such as
+`build.att.json-material-inventory.json` and
+`build.att.json-product-inventory.json`. Without `--outfile`, a run that needs
+companions creates a private persistent `evidence/run-*` directory under the
+Cilock auth-state directory. The CLI prints that directory and stores the
+collection as `attestation.json` beside its companions. On Unix, automatic
+directories use mode `0700`, and evidence files use `0600`. On Windows, Cilock
+creates and verifies protected current-user-only ACLs and rejects reparse points.
+Compact builds refuse existing
+evidence files instead of overwriting them. Headless inventory retention and
+upload never prompt.
+
+In a `compact` build, `--upload-inventories` explicitly permits bulk inventory
+upload when Archivista upload is enabled. It does not enable material retention
+or Archivista itself. Without this flag, detached inventories remain local even
+when the normal collection automatically uploads during an authenticated platform run. Inline
+product details travel with that collection. A local companion is not evidence
+of remote availability. The run summary reports local paths and upload outcomes
+separately from the signed inventory reference.
+
+In a `compact-chain` build, the compiled profile enables retention and upload
+consent separately. Explicit `--material-manifest=false` disables material
+retention. `--upload-inventories=false` keeps detached inventories local. Neither
+flag changes the other setting. Offline runs without an enabled store keep
+retained inventories local instead of applying the compiled upload default.
+An explicit upload request without an enabled store fails.
+
+Legacy builds retain their previous material-manifest behavior, including
+upload when Archivista is enabled.
+
+The normative details are in the
+[Cilock compact inventories architecture contract](../../../docs/architecture/cilock-compact-inventories.md).
 
 ---
 
@@ -296,6 +380,26 @@ cilock verify -p policy.json -k policy-pub.pem -a build.att.json -a test.att.jso
 # Fully offline verify from a bundle (no platform lookup)
 cilock verify -p policy.json -k policy-pub.pem --bundle evidence.tar.gz --platform-url ""
 ```
+
+Existing material/product v0.3 evidence remains readable. The `material` and `product`
+names and predicate URIs are unchanged:
+`https://aflock.ai/attestations/material/v0.3` and
+`https://aflock.ai/attestations/product/v0.3`. Existing legacy manifest fields
+retain their original meaning. Generic library `material.New()` and
+`product.New()` constructors still use legacy inline behavior.
+
+A command-only policy can pass without optional inventories. That result does
+not prove artifact inclusion or a complete artifact chain. Artifact-chain checks
+require the complete input data and relevant product evidence. Omitted, missing,
+or invalid required inventories fail explicitly, including during policy
+generation. For those workflows, use a `compact-chain` distribution and make the
+required companions available to the verifier. Remote verification cannot read
+companions that exist only on the producer's disk.
+
+The v0.3 Merkle root commits to a set of distinct file contents, not every path
+or duplicate-content occurrence. The signed `inventory.digest` binds the exact
+inventory manifest bytes, including all retained paths and metadata. A matching
+content root alone is not a complete path inventory.
 
 ---
 
@@ -436,6 +540,18 @@ For a private key, the public half is extracted before hashing. Output is one
 ---
 
 ## Platform login
+
+For agent-produced evidence, use `cilock enroll agent`, not a stored human
+session. The agent can start enrollment, but the human must approve it in the
+browser. Read `cilock agent status` before producing evidence. Never fall back
+to human-session signing when enrollment is missing, expired, or refused.
+
+The login commands below manage human sessions or registered workflow identity.
+Humans sign authoritative policies and perform authenticated policy publication
+from a human signing context. Agents prepare policy drafts and sign attestations
+as their enrolled agent principals. The human separately reviews and approves
+the exact Pushgate repository assignment. Product `policy bind` is not Pushgate
+activation.
 
 ```bash
 # Interactive browser login to the default TestifySec platform

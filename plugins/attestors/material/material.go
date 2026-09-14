@@ -19,11 +19,9 @@
 // is bumped to "https://aflock.ai/attestations/material/v0.3" and the
 // per-file subjects emitted by v0.1 are replaced with a single deterministic
 // RFC 6962 Merkle root over the input file set. The per-file (path, digest)
-// pairs are no longer embedded in the signed predicate — they are written
-// to a separate tree sidecar file alongside the attestation. The predicate
-// carries only the Merkle root, the tree size, and the two pinned algorithm
-// constants ("sha256" / "RFC6962"). Verifiers reconstruct the leaves from
-// the sidecar and recompute the root to check inclusion.
+// pairs use inline leaves in generic library constructors. WithCompactInventory
+// replaces nonempty inline details with an omitted or detached inventory reference.
+// The Merkle root, tree size, and algorithm constants remain unchanged.
 //
 // Historical v0.1 attestations remain verify-only via the LegacyDecoder
 // (see legacy.go), registered under the distinct attestor name
@@ -34,7 +32,8 @@
 //
 // v0.3 clean break: each leaf commits to the file CONTENT only — the path
 // is NOT part of the leaf hash. Path authentication comes from the DSSE
-// signature over the always-inline leaves, not from the Merkle commitment.
+// signature over inline leaves or an exact-byte inventory reference, not from
+// the Merkle commitment.
 // The encoding is:
 //
 //	leafContent := file-digest-bytes   (RAW 32-byte sha256, not hex)
@@ -76,6 +75,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/file"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/merkle"
 	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 	"github.com/invopop/jsonschema"
@@ -235,7 +235,12 @@ type Attestor struct {
 	// Archivista subject walk) be bound to this exact envelope. A URL would
 	// not do: Archivista may serve the object from any path, so the envelope
 	// names the content, not a location.
-	Manifest *ManifestRef `json:"manifest,omitempty"`
+	Manifest         *ManifestRef             `json:"manifest,omitempty"`
+	Inventory        *fileinventory.Reference `json:"inventory,omitempty"`
+	compactInventory bool
+	retainInventory  bool
+	captureMode      string
+	inventoryBytes   []byte
 
 	// emitManifest is the producer-side opt-in set by WithManifest. It
 	// governs only what a RUNNING attestor emits; it is never decoded from a
@@ -278,10 +283,7 @@ type MaterialLeaf struct {
 	LeafHash string `json:"leafHash"`
 }
 
-// New constructs an unpopulated Attestor. Options are applied in order;
-// none are defined yet — the parameter is reserved for the same shape as
-// the product attestor so future knobs (e.g., include/exclude globs) can
-// be added without an API change.
+// New constructs a legacy-inline Attestor. Options are applied in order.
 func New(opts ...Option) *Attestor {
 	a := &Attestor{}
 	for _, opt := range opts {
@@ -304,7 +306,7 @@ func (a *Attestor) RunType() attestation.RunType { return RunType }
 // drifting again; the catalog harness validates a minted predicate against
 // this schema on every run.
 func (a *Attestor) Schema() *jsonschema.Schema {
-	return jsonschema.Reflect(&predicate{})
+	return fileinventory.ParentSchema(jsonschema.Reflect(&predicate{}), "material")
 }
 
 // Attest walks the working directory, builds a Merkle tree over the
@@ -333,6 +335,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	if err != nil {
 		return fmt.Errorf("material attestor: %w", err)
 	}
+	a.captureMode = "walk"
 
 	if resolved == attestation.CaptureTrace {
 		// Emit an empty Merkle tree (RFC 6962 §2.1: empty input → sha256
@@ -456,6 +459,7 @@ func (a *Attestor) Finalize(ctx *attestation.AttestationContext) error {
 	}
 	a.MerkleRoot = hex.EncodeToString(tree.Root())
 	a.TreeSize = tree.Size()
+	a.captureMode = "trace"
 	return a.finishManifestRef()
 }
 
@@ -559,16 +563,8 @@ func decodeLeafHashes(leaves []MaterialLeaf) ([][]byte, error) {
 // MarshalJSON and UnmarshalJSON cannot drift and the wire shape stays a stable,
 // documented contract independent of struct-field reordering.
 func (a *Attestor) MarshalJSON() ([]byte, error) {
-	// Inline the per-file leaves into the signed predicate. This is still the
-	// DEFAULT and, in this change, the only shape a producer emits: the
-	// detached manifest is additive and does not yet suppress the inline
-	// leaves. Detaching them by default is a separate, sequenced change, after
-	// the chain-consuming producers have opted in — three shipped
-	// artifactsFrom policies read these leaves.
-	//
-	// Inline leaves make the attestation self-sufficient for inclusion +
-	// artifactsFrom chain verification. Only the Merkle root is a subject, so
-	// the leaves add no subject re-indexing cost.
+	// A modern inventory reference always suppresses inline leaves, including
+	// verified leaves installed by hydration. Generic constructors stay inline.
 	//
 	// Three states, and the encoding must keep all three apart:
 	//   - has materials   -> "leaves":[...]
@@ -586,7 +582,7 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 	// trust rather than fail closed on; with omitempty it would serialize
 	// identically to a leaf-less attestation (vacuous-pass defense, #189).
 	var leaves *[]MaterialLeaf
-	if a.leaves != nil {
+	if a.leaves != nil && a.Inventory == nil {
 		ls := a.leaves
 		leaves = &ls
 	}
@@ -598,6 +594,7 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 		ManifestUploaded:   a.ManifestUploaded,
 		Manifest:           a.Manifest,
 		Leaves:             leaves,
+		Inventory:          a.Inventory,
 	})
 }
 
@@ -613,20 +610,21 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 // and the platform parsers all ignore unknown keys, and `leaves` was already
 // optional to the parser, so additive fields touch none of them.
 type predicate struct {
-	MerkleRoot         string          `json:"merkleRoot"`
-	TreeSize           uint64          `json:"treeSize"`
-	HashAlgorithmField string          `json:"hashAlgorithm"`
-	ConstructionField  string          `json:"construction"`
-	ManifestUploaded   *bool           `json:"manifestUploaded,omitempty"`
-	Manifest           *ManifestRef    `json:"manifest,omitempty"`
-	Leaves             *[]MaterialLeaf `json:"leaves,omitempty"`
+	MerkleRoot         string                   `json:"merkleRoot"`
+	TreeSize           uint64                   `json:"treeSize"`
+	HashAlgorithmField string                   `json:"hashAlgorithm"`
+	ConstructionField  string                   `json:"construction"`
+	ManifestUploaded   *bool                    `json:"manifestUploaded,omitempty"`
+	Manifest           *ManifestRef             `json:"manifest,omitempty"`
+	Leaves             *[]MaterialLeaf          `json:"leaves,omitempty"`
+	Inventory          *fileinventory.Reference `json:"inventory,omitempty"`
 }
 
 // UnmarshalJSON reads the four exported scalar fields. Materials and
 // leaves are not reconstructed — they live in the sidecar.
 func (a *Attestor) UnmarshalJSON(data []byte) error {
 	aux := predicate{}
-	if err := json.Unmarshal(data, &aux); err != nil {
+	if err := fileinventory.DecodeParent(data, "material", &aux); err != nil {
 		return err
 	}
 	// Reset EVERYTHING before installing the new predicate. An Attestor may be
@@ -637,7 +635,7 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 	// previous predicate's materials, and artifactsFrom would be satisfied by
 	// digests this predicate never signed. emitManifest is producer-side
 	// configuration, never decoded, and is the one thing kept.
-	*a = Attestor{emitManifest: a.emitManifest}
+	*a = Attestor{emitManifest: a.emitManifest, compactInventory: a.compactInventory, retainInventory: a.retainInventory}
 	a.MerkleRoot = aux.MerkleRoot
 	a.TreeSize = aux.TreeSize
 	a.HashAlgorithmField = aux.HashAlgorithmField
@@ -647,6 +645,7 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 	// inventing an unsigned "false".
 	a.ManifestUploaded = aux.ManifestUploaded
 	a.Manifest = aux.Manifest
+	a.Inventory = aux.Inventory
 
 	// Restore inline leaves and rehydrate the materials map so a verifier
 	// loading this attestation from JSON can match artifactsFrom edges by
@@ -669,7 +668,7 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 // to tell a signed empty-material commitment (trustworthy: the step provably
 // consumed nothing) from a leaf-less attestation whose empty Materials() is
 // merely unknown (the vacuous-pass surface that must fail closed under strict).
-func (a *Attestor) HasInlineLeaves() bool { return a.leaves != nil }
+func (a *Attestor) HasInlineLeaves() bool { return a.Inventory == nil && a.leaves != nil }
 
 // Materials returns the per-file (path → DigestSet) map. Preserved for
 // the Materialer interface so slsa and link attestors keep working

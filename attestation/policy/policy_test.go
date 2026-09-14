@@ -1029,6 +1029,9 @@ func TestErrorTypes(t *testing.T) {
 	t.Run("ErrNoCollections", func(t *testing.T) {
 		e := ErrNoCollections{Step: "build"}
 		assert.Contains(t, e.Error(), "build")
+		assert.Contains(t, e.Error(), "required inventory companions")
+		assert.Contains(t, e.Error(), "omitted details are not empty sets")
+		assert.NotContains(t, e.Error(), "always inlined")
 	})
 
 	t.Run("ErrMissingAttestation", func(t *testing.T) {

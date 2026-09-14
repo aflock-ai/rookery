@@ -20,14 +20,15 @@
 // `tree:products` whose digest is the SHA-256 Merkle root of the product set.
 // The predicate JSON carries the root, the tree size, and the algorithm /
 // construction identifiers so verifiers can refuse anything that claims
-// another shape. Per-file data is NOT in the predicate — it lives in a
-// sidecar file for the inclusion-proof attestor to consume later.
+// another shape. Generic constructors inline per-file leaves. Compact producers
+// detach inventories that exceed the byte budget or cannot preserve all paths.
 //
 // # Leaf encoding (coordinate with the inclusion-proof attestor)
 //
 // v0.3 clean break: the leaf hash binds CONTENT only — the file path is NOT
 // part of the leaf hash. Path authentication comes from the DSSE signature
-// over the always-inline leaves, not from the Merkle commitment.
+// over inline leaves or an exact-byte inventory reference, not from the Merkle
+// commitment.
 //
 // Two-step hashing keeps the attestation/merkle wrapper API contract clean
 // (every leaf is exactly HashSize bytes):
@@ -60,6 +61,7 @@ package product
 import (
 	"bytes"
 	"crypto"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -71,7 +73,9 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/file"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/merkle"
 	"github.com/aflock-ai/rookery/attestation/registry"
@@ -81,6 +85,9 @@ import (
 	"github.com/gobwas/glob"
 	"github.com/invopop/jsonschema"
 )
+
+//go:embed detector.yaml
+var detectorYAML []byte
 
 const (
 	// Name is the canonical attestor name registered with the attestation
@@ -195,10 +202,15 @@ type Attestor struct {
 	// the authoritative shape of the signed bytes — it ALSO inlines the
 	// per-file `leaves`, so this struct is not by itself the predicate.
 	// Change Predicate, not just these fields, when the signed shape moves.
-	MerkleRoot         string `json:"merkleRoot"`
-	TreeSize           uint64 `json:"treeSize"`
-	HashAlgorithmField string `json:"hashAlgorithm"`
-	ConstructionField  string `json:"construction"`
+	MerkleRoot           string                   `json:"merkleRoot"`
+	TreeSize             uint64                   `json:"treeSize"`
+	HashAlgorithmField   string                   `json:"hashAlgorithm"`
+	ConstructionField    string                   `json:"construction"`
+	Inventory            *fileinventory.Reference `json:"inventory,omitempty"`
+	compactInventory     bool
+	inlineInventoryBytes int
+	captureMode          string
+	inventoryBytes       []byte
 
 	// Internal state — NOT part of the predicate. The `json:"-"` tags
 	// keep them out of MarshalJSON so the signed Statement never carries
@@ -456,6 +468,7 @@ func init() {
 		func() attestation.Attestor { return New() },
 		configOptions()...,
 	)
+	detection.Register(Name, detectorYAML)
 }
 
 // Name returns the attestor's registered name.
@@ -475,7 +488,7 @@ func (a *Attestor) RunType() attestation.RunType { return RunType }
 // still emitting additionalProperties:false, which made every real product
 // attestation fail validation against its own declared schema.
 func (a *Attestor) Schema() *jsonschema.Schema {
-	return jsonschema.Reflect(&Predicate{})
+	return fileinventory.ParentSchema(jsonschema.Reflect(&Predicate{}), "product")
 }
 
 // collectTracedFileSet inspects completed attestors for any traced
@@ -575,8 +588,10 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	if err != nil {
 		return fmt.Errorf("product attestor: %w", err)
 	}
+	a.captureMode = "walk"
 
 	if resolved == attestation.CaptureTrace && probe != nil { //nolint:nestif // trace-integration block has inherent nesting over probe outputs
+		a.captureMode = "trace"
 		// Build cache-pattern matchers used by the precedence table
 		// below. Two matchers, two roles:
 		//
@@ -881,6 +896,10 @@ func (a *Attestor) buildTree() error {
 	a.TreeSize = tree.Size()
 	a.HashAlgorithmField = HashAlgorithm
 	a.ConstructionField = Construction
+	a.Inventory, a.inventoryBytes = nil, nil
+	if a.compactInventory {
+		return a.finishInventory(pairs)
+	}
 	return nil
 }
 
@@ -987,29 +1006,27 @@ func (a *Attestor) rootDigestSet() cryptoutil.DigestSet {
 // additive within v0.3 (leaves and the optional per-leaf metadata are all
 // `omitempty`), so attestations recorded before a field existed still validate.
 type Predicate struct {
-	MerkleRoot    string        `json:"merkleRoot"`
-	TreeSize      uint64        `json:"treeSize"`
-	HashAlgorithm string        `json:"hashAlgorithm"`
-	Construction  string        `json:"construction"`
-	Leaves        []ProductLeaf `json:"leaves,omitempty"`
+	MerkleRoot    string                   `json:"merkleRoot"`
+	TreeSize      uint64                   `json:"treeSize"`
+	HashAlgorithm string                   `json:"hashAlgorithm"`
+	Construction  string                   `json:"construction"`
+	Leaves        []ProductLeaf            `json:"leaves,omitempty"`
+	Inventory     *fileinventory.Reference `json:"inventory,omitempty"`
 }
 
-// MarshalJSON publishes the predicate fields, with the per-file leaves inlined
-// (v0.3 forces inline leaves — see below).
+// MarshalJSON preserves the selected inline or compact representation.
 func (a *Attestor) MarshalJSON() ([]byte, error) {
 	p := Predicate{
 		MerkleRoot:    a.MerkleRoot,
 		TreeSize:      a.TreeSize,
 		HashAlgorithm: a.HashAlgorithmField,
 		Construction:  a.ConstructionField,
+		Inventory:     a.Inventory,
 	}
-	// Inline the per-file leaves into the signed predicate ALWAYS (v0.3 forces
-	// inline leaves — there is no opt-out). This makes the attestation
-	// self-sufficient: a verifier can confirm any product's inclusion (and the
-	// policy engine can match artifactsFrom edges) without a separate
-	// inclusion-proof envelope. It is cheap: only the Merkle ROOT is a subject
-	// (one index entry), so the leaves add no subject-graph re-indexing cost.
-	p.Leaves = a.leaves
+	// Hydrated leaves are derived data, never a replacement for a signed reference.
+	if a.Inventory == nil {
+		p.Leaves = a.leaves
+	}
 	return json.Marshal(p)
 }
 
@@ -1019,7 +1036,7 @@ func (a *Attestor) MarshalJSON() ([]byte, error) {
 // outputs.
 func (a *Attestor) UnmarshalJSON(data []byte) error {
 	var p Predicate
-	if err := json.Unmarshal(data, &p); err != nil {
+	if err := fileinventory.DecodeParent(data, "product", &p); err != nil {
 		return err
 	}
 	// Reset the state a previous decode (or a previous Attest run) derived
@@ -1036,6 +1053,8 @@ func (a *Attestor) UnmarshalJSON(data []byte) error {
 	a.products = nil
 	a.leaves = nil
 	a.rootBytes = nil
+	a.inventoryBytes = nil
+	a.Inventory = p.Inventory
 	a.MerkleRoot = p.MerkleRoot
 	a.TreeSize = p.TreeSize
 	a.HashAlgorithmField = p.HashAlgorithm

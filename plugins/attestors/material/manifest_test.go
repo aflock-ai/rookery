@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	inclusionproof "github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof"
 )
 
@@ -703,8 +704,8 @@ func TestManifestSizeLimitIsEnforcedOnBothSides(t *testing.T) {
 // (Companions()[i].Type()), and distinct from the attestor's own type.
 func TestCompanionTypesMatchWhatCompanionsEmit(t *testing.T) {
 	declared := New().CompanionTypes()
-	if len(declared) != 1 || declared[0] != ManifestType {
-		t.Fatalf("CompanionTypes() = %v, want exactly [%s]", declared, ManifestType)
+	if len(declared) != 2 || declared[0] != ManifestType || declared[1] != fileinventory.Type {
+		t.Fatalf("CompanionTypes() = %v, want [%s, %s]", declared, ManifestType, fileinventory.Type)
 	}
 	if declared[0] == Type {
 		t.Fatal("a companion type must not be the attestor's own predicate type")
@@ -716,6 +717,10 @@ func TestCompanionTypesMatchWhatCompanionsEmit(t *testing.T) {
 	}
 	if got := companions[0].Type(); got != declared[0] {
 		t.Fatalf("the emitted companion is %q but CompanionTypes() declares %q — the catalog would describe evidence that is never signed", got, declared[0])
+	}
+	compact := makeMaterialAttestor(t, map[string]string{"a": "content"}, WithCompactInventory(true))
+	if companions := compact.Companions(); len(companions) != 1 || companions[0].Type() != declared[1] {
+		t.Fatalf("compact companion does not match declared inventory type: %v", companions)
 	}
 }
 

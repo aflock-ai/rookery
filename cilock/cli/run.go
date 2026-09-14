@@ -16,6 +16,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,10 +35,15 @@ import (
 	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/detection"
+	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
+	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 	"github.com/aflock-ai/rookery/attestation/workflow"
+	"github.com/aflock-ai/rookery/cilock/internal/auth"
+	"github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/aflock-ai/rookery/cilock/internal/keyguard"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
@@ -584,6 +592,19 @@ Platform & trust:
   Additional key/signer providers can be compiled in; see
   https://github.com/aflock-ai/rookery/blob/main/docs/signers.md.
 
+Evidence defaults:
+  The evidence profile is compiled into this binary, independent of login.
+  Stock compact builds omit per-file material details and keep small product sets inline.
+  Large product sets and duplicate-content paths use private local inventories.
+  Without --outfile, retained inventories select a persistent cilock evidence directory.
+  Compact builds refuse existing evidence files instead of overwriting them.
+  --material-manifest retains complete material details. --upload-inventories
+  separately permits inventory upload when Archivista is enabled.
+  Compact-chain builds enable both flags by default for artifact-chain evidence.
+  Explicit false flags override these defaults. Offline runs without an enabled
+  store retain inventories locally instead of applying the compiled upload default.
+  Legacy builds keep the previous inline and material-manifest behavior.
+
 Exit-code policy (finding #221):
   Attestor errors are split into two classes:
 
@@ -612,9 +633,17 @@ Exit-code policy (finding #221):
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Compiled representation errors must refuse before identity resolution
+			// can contact any platform or execute the wrapped command.
+			if _, _, err := config.EvidenceDefaults(); err != nil {
+				return err
+			}
 			// Apply platform-derived defaults (archivista, TSA URLs) for any
 			// flags not explicitly set by the user.
 			o.ResolvePlatformDefaults(cmd)
+			if o.UploadInventories && !o.ArchivistaOptions.Enable {
+				return fmt.Errorf("--upload-inventories requires --enable-archivista")
+			}
 			// The enrolled-agent signing path fails closed: a refused credential
 			// exchange must end the command, never continue on the human session.
 			if err := o.AgentIdentityError(); err != nil {
@@ -687,20 +716,7 @@ Exit-code policy (finding #221):
 			preflightWarned := preflightAttestorTooling(o.WorkingDir, o.Attestations)
 
 			if o.ValidateOnly {
-				fmt.Fprintln(os.Stderr, "cilock pre-flight:")
-				fmt.Fprintf(os.Stderr, "  attestations (operator + detected): %v\n", o.Attestations)
-				if len(detectedNames) > 0 {
-					fmt.Fprintf(os.Stderr, "  workload auto-added: %v\n", detectedNames)
-				}
-				fmt.Fprintf(os.Stderr, "  hardening: %s\n", o.Hardening)
-				fmt.Fprintf(os.Stderr, "  capture-mode: %s\n", o.CaptureMode)
-				if cmdErr != nil {
-					fmt.Fprintf(os.Stderr, "  WARN: %v\n", cmdErr)
-				}
-				if preflightWarned {
-					fmt.Fprintln(os.Stderr, "  (see WARN lines above — at least one attestor's prerequisite is missing)")
-				}
-				fmt.Fprintln(os.Stderr, "  (--validate-only — exiting without running the command)")
+				writeRunPreflight(o, detectedNames, cmdErr, preflightWarned)
 				return nil
 			}
 			if cmdErr != nil {
@@ -777,6 +793,13 @@ func preRunGates(cmd *cobra.Command, o *options.RunOptions) error {
 }
 
 func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFlags map[string]bool, signerProviders map[string]struct{}, signers ...cryptoutil.Signer) error { //nolint:gocognit,gocyclo,funlen
+	compact, inlineBytes, err := config.EvidenceDefaults()
+	if err != nil {
+		return err
+	}
+	if ro.UploadInventories && !ro.ArchivistaOptions.Enable {
+		return fmt.Errorf("--upload-inventories requires --enable-archivista")
+	}
 	if len(signers) > 1 {
 		return onlyOneSignerError()
 	}
@@ -790,12 +813,8 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		timestampers = append(timestampers, timestamp.NewTimestamper(timestamp.TimestampWithUrl(url)))
 	}
 
-	// Create fresh attestor instances each time to avoid leaking state
-	// from prior invocations (alwaysRunAttestors holds shared singletons).
-	// The product attestor is constructed with no manifest knob on purpose:
-	// products are OUTPUT and the statement's join key, and this change does
-	// not touch them. Only material — the INPUT side, and 99%+ of the payload
-	// on a large repository — gains the detached-manifest option.
+	// Keep generic constructors legacy and create fresh instances per run.
+	// Compiled representation options are applied after registry setters below.
 	defaults := []attestation.Attestor{product.New(), material.New(material.WithManifest(ro.MaterialManifest))}
 	attestors, err := applyNoDefaultAttestors(defaults, ro.NoDefaultAttestors)
 	if err != nil {
@@ -865,6 +884,19 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 			return fmt.Errorf("failed to set attestor option for %v: %w", attestor.Type(), err)
 		}
 		attestors[i] = updated
+	}
+	if compact {
+		for _, a := range attestors {
+			switch a := a.(type) {
+			case *material.Attestor:
+				// Retention selects the modern inventory, never a legacy export
+				// (including the confirmed-empty capture case).
+				material.WithManifest(false)(a)
+				material.WithCompactInventory(ro.MaterialManifest)(a)
+			case *product.Attestor:
+				product.WithCompactInventory(inlineBytes)(a)
+			}
+		}
 	}
 
 	// Stamp user-intent flags on the product attestor AFTER the
@@ -1016,89 +1048,9 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	captureReport := collectCaptureGaps(attestors, runErr, additionalSubjects)
 	warnCaptureGaps(captureReport)
 
-	// When multiple results are produced (e.g. MultiExporter attestors), an output
-	// file path is required — otherwise exported attestors would create files named
-	// "-<name>.json" in the current directory instead of writing to stdout.
-	hasExported := false
-	for _, result := range results {
-		if result.AttestorName != "" {
-			hasExported = true
-			break
-		}
-	}
-	if hasExported && ro.OutFilePath == "" {
-		return fmt.Errorf("--outfile is required when attestors export multiple attestations")
-	}
-
-	// uploadedGitoid records the gitoid of the collection envelope once it is
-	// stored in Archivista, for the structured/human run summary below.
-	var uploadedGitoid string
-
-	for _, result := range results {
-		signedBytes, err := json.Marshal(&result.SignedEnvelope)
-		if err != nil {
-			return fmt.Errorf("failed to marshal envelope: %w", err)
-		}
-
-		outfile := ro.OutFilePath
-		if result.AttestorName != "" {
-			// Sanitize attestor name: MultiExporter uses "parent/child" format
-			// which would create unintended subdirectories in the output path.
-			safeName := strings.ReplaceAll(result.AttestorName, "/", "-")
-			outfile += "-" + safeName + ".json"
-		}
-
-		// Under --json, stdout is reserved for the machine-readable run summary.
-		// When no --outfile is given the envelope would otherwise default to
-		// stdout (loadOutfile("") == os.Stdout) and corrupt that JSON object, so
-		// route it to stderr instead. Pass --outfile to persist it to a file.
-		var out *os.File
-		if jsonOutput && outfile == "" {
-			out = os.Stderr
-		} else {
-			out, err = loadOutfile(outfile)
-			if err != nil {
-				return fmt.Errorf("failed to open out file: %w", err)
-			}
-		}
-
-		_, writeErr := out.Write(signedBytes)
-		if out != os.Stderr {
-			closeOutfile(out)
-		}
-		if writeErr != nil {
-			return fmt.Errorf("failed to write envelope to out file: %w", writeErr)
-		}
-
-		if ro.ArchivistaOptions.Enable {
-			archivistaClient, err := ro.ArchivistaOptions.Client()
-			if err != nil {
-				return fmt.Errorf("failed to create archivista client: %w", err)
-			}
-
-			gitoid, err := archivistaClient.Store(ctx, result.SignedEnvelope)
-			if err != nil {
-				return uploadError(ro.PlatformURL, err)
-			}
-			log.Infof("Stored in archivista as %q\n", gitoid)
-			// The collection envelope (AttestorName == "") carries the
-			// collection subjects — it is the correlation anchor we report
-			// in the run summary. Per-attestor sidecar gitoids are not the
-			// anchor, so only the collection gitoid is surfaced.
-			if result.AttestorName == "" {
-				uploadedGitoid = gitoid
-			}
-		}
-	}
-
-	// v0.3 forces inline leaves into the signed predicate, so the full
-	// leaf set the Merkle root commits to travels inside the signed
-	// envelope itself — there is no separate off-envelope tree sidecar to
-	// write (the `cilock prove` off-envelope subsystem was removed).
-	//
-	// If --outfile was empty (stdout), no detection sidecar is written:
-	// there is no on-disk anchor to derive the path from.
-	if ro.OutFilePath != "" {
+	summary := buildRunSummary(ro, args, attestors, results, signerProviders, "", runErr)
+	storageErr := persistRunResults(ctx, &ro, results, summary, compact)
+	if storageErr == nil && ro.OutFilePath != "" {
 		// Shadow-mode detection: emit <outfile>.detection.json with the
 		// pre-gate plan. This is informational only — it does NOT change
 		// which attestors fired in this run. Verifiers may inspect the
@@ -1114,12 +1066,11 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// single structured result object to stdout. Built from data already in
 	// scope — no extra server round-trips. Emitted before the deferred error
 	// return so the summary is present even when an attestor fails.
-	summary := buildRunSummary(ro, args, attestors, results, signerProviders, uploadedGitoid, runErr)
 	// Report standards without self-certification. SLSA Build levels require an
 	// assessment of the producer and build platform; ALPS levels require an
 	// independent verifier of identity and boundary evidence. This local producer
 	// summary records observations and leaves both levels unassigned.
-	runFailed := classifyAttestorRunError(runErr) != nil ||
+	runFailed := storageErr != nil || classifyAttestorRunError(runErr) != nil ||
 		(summary.WrappedCommand != nil && summary.WrappedCommand.ExitCode != 0)
 	summary.ComputeStandardsAssessment(runFailed)
 	summary.AssuranceLevel = ro.ResolvedAssuranceLevel()
@@ -1155,8 +1106,233 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// SBOM file, etc.) are demoted to warnings and the process exits 0;
 	// only contract violations (signer failure, tracing unsupported,
 	// command exit, etc.) propagate to exit 1. See finding #221.
-	if runErr != nil {
-		return classifyAttestorRunError(runErr)
+	return errors.Join(storageErr, classifyAttestorRunError(runErr))
+}
+
+func writeRunPreflight(o options.RunOptions, detectedNames []string, cmdErr error, preflightWarned bool) {
+	fmt.Fprintln(os.Stderr, "cilock pre-flight:")
+	fmt.Fprintf(os.Stderr, "  attestations (operator + detected): %v\n", o.Attestations)
+	if len(detectedNames) > 0 {
+		fmt.Fprintf(os.Stderr, "  workload auto-added: %v\n", detectedNames)
+	}
+	fmt.Fprintf(os.Stderr, "  hardening: %s\n", o.Hardening)
+	fmt.Fprintf(os.Stderr, "  capture-mode: %s\n", o.CaptureMode)
+	if cmdErr != nil {
+		fmt.Fprintf(os.Stderr, "  WARN: %v\n", cmdErr)
+	}
+	if preflightWarned {
+		fmt.Fprintln(os.Stderr, "  (see WARN lines above — at least one attestor's prerequisite is missing)")
+	}
+	fmt.Fprintln(os.Stderr, "  (--validate-only — exiting without running the command)")
+}
+
+// persistRunResults preserves workflow-signed bytes. Modern inventories are
+// identified by predicate type, saved before any upload, and uploaded only by
+// flag or compiled-profile consent. The parent is never persisted ahead of its
+// inventories.
+func persistRunResults(ctx context.Context, ro *options.RunOptions, results []workflow.RunResult, summary *options.RunSummary, compact bool) error { //nolint:gocognit,gocyclo,funlen
+	summary.OutFile = ""
+	statements := make([]intoto.Statement, len(results))
+	inventories := make(map[int]int) // result index -> unsigned summary entry
+	hasExported := false
+	for i, result := range results {
+		if err := json.Unmarshal(result.SignedEnvelope.Payload, &statements[i]); err != nil {
+			return fmt.Errorf("decode signed run statement: %w", err)
+		}
+		if statements[i].PredicateType != fileinventory.Type {
+			hasExported = hasExported || result.AttestorName != ""
+			continue
+		}
+		var payload struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(statements[i].Predicate, &payload); err != nil {
+			return fmt.Errorf("decode signed inventory: %w", err)
+		}
+		entries, err := fileinventory.Decode(statements[i].Predicate, payload.Kind)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(statements[i].Predicate)
+		digest := hex.EncodeToString(sum[:])
+		found := false
+		for j, inv := range summary.Inventories {
+			if inv.State == fileinventory.StateDetached && inv.Kind == payload.Kind && inv.Digest == digest && inv.Bytes == len(statements[i].Predicate) && inv.FileCount == len(entries) {
+				for _, previous := range inventories {
+					if previous == j {
+						return fmt.Errorf("ambiguous duplicate %s inventory", inv.Kind)
+					}
+				}
+				inventories[i], found = j, true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("signed %s inventory has no matching parent reference", payload.Kind)
+		}
+	}
+	for j, inv := range summary.Inventories {
+		if inv.State != fileinventory.StateDetached {
+			continue
+		}
+		found := false
+		for _, index := range inventories {
+			found = found || index == j
+		}
+		if !found {
+			return fmt.Errorf("missing signed %s inventory companion", inv.Kind)
+		}
+	}
+	if ro.OutFilePath == "" && len(inventories) == 0 && hasExported {
+		return fmt.Errorf("--outfile is required when attestors export multiple attestations")
+	}
+	if ro.OutFilePath == "" && len(inventories) > 0 {
+		runDir, err := newRunEvidenceDir()
+		if err != nil {
+			return err
+		}
+		ro.OutFilePath = filepath.Join(runDir, "attestation.json")
+		fmt.Fprintf(os.Stderr, "cilock evidence directory: %q\n", runDir)
+	}
+
+	paths := make([]string, len(results))
+	seenPaths := make(map[string]bool)
+	for i, result := range results {
+		path := ro.OutFilePath
+		if j, modern := inventories[i]; modern {
+			path += "-" + summary.Inventories[j].Kind + "-inventory.json"
+		} else if result.AttestorName != "" {
+			name := strings.ReplaceAll(result.AttestorName, "/", "-")
+			if strings.ContainsAny(name, "\\\x00\r\n") || name == "." || name == ".." {
+				return fmt.Errorf("ambiguous exported attestor name %q", result.AttestorName)
+			}
+			path += "-" + name + ".json"
+		}
+		paths[i] = path
+		if path == "" {
+			continue
+		}
+		key, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		key = strings.ToLower(key) // refuse aliases even on case-insensitive filesystems
+		if seenPaths[key] {
+			return fmt.Errorf("ambiguous run output path %q", path)
+		}
+		seenPaths[key] = true
+		if compact || len(inventories) > 0 {
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				return fmt.Errorf("refuse existing or inaccessible evidence path %q; select a new --outfile", path)
+			}
+		}
+	}
+	// Retain ALL modern inventories first. Upload failure must not strand a
+	// second, already-signed inventory that had not reached its turn in the loop.
+	for i, result := range results {
+		j, modern := inventories[i]
+		if !modern {
+			continue
+		}
+		body, err := json.Marshal(result.SignedEnvelope)
+		if err != nil {
+			return err
+		}
+		if err := writePrivateRunEnvelope(paths[i], body); err != nil {
+			return fmt.Errorf("save %s inventory: %w", summary.Inventories[j].Kind, err)
+		}
+		summary.Inventories[j].Path = paths[i]
+	}
+	// Workflow emits companions before the parent. Keep that ordering for
+	// legacy exporters, but explicitly move modern companions ahead of parents.
+	order := make([]int, 0, len(results))
+	for i := range results {
+		if _, modern := inventories[i]; modern {
+			order = append(order, i)
+		}
+	}
+	for i := range results {
+		if _, modern := inventories[i]; !modern {
+			order = append(order, i)
+		}
+	}
+	for _, i := range order {
+		result := results[i]
+		j, modern := inventories[i]
+		if !modern {
+			if err := saveRunEnvelope(result.SignedEnvelope, paths[i], compact || len(inventories) > 0, ro.OutputJSON()); err != nil {
+				return err
+			}
+			if statements[i].PredicateType == attestation.CollectionType {
+				summary.OutFile = paths[i]
+			}
+		}
+		if !ro.ArchivistaOptions.Enable || (modern && !ro.UploadInventories) {
+			continue
+		}
+		client, err := ro.ArchivistaOptions.Client()
+		if err != nil {
+			return fmt.Errorf("create archivista client: %w", err)
+		}
+		gitoid, err := client.Store(ctx, result.SignedEnvelope)
+		if err == nil && gitoid == "" {
+			err = fmt.Errorf("upload response has no gitoid")
+		}
+		if err != nil {
+			return uploadError(ro.PlatformURL, err)
+		}
+		log.Infof("Stored in archivista as %q", gitoid)
+		if modern {
+			summary.Inventories[j].Uploaded, summary.Inventories[j].Gitoid = true, gitoid
+		} else if statements[i].PredicateType == attestation.CollectionType {
+			summary.Uploaded, summary.Gitoid = true, gitoid
+			for j := range summary.Inventories {
+				if summary.Inventories[j].State == "inline" {
+					summary.Inventories[j].Uploaded, summary.Inventories[j].Gitoid = true, gitoid
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func newRunEvidenceDir() (string, error) {
+	store, err := auth.StorePath() // Resolves location only; never reads a credential.
+	if err != nil {
+		return "", fmt.Errorf("resolve inventory evidence directory: %w", err)
+	}
+	dir := filepath.Join(filepath.Dir(store), "evidence")
+	runDir, err := newPrivateRunDir(dir)
+	if err != nil {
+		return "", fmt.Errorf("create run evidence directory: %w", err)
+	}
+	return runDir, nil
+}
+
+func saveRunEnvelope(envelope dsse.Envelope, path string, private, jsonOutput bool) error {
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	if path != "" && private {
+		if err := writePrivateRunEnvelope(path, body); err != nil {
+			return fmt.Errorf("save run envelope: %w", err)
+		}
+		return nil
+	}
+	out, err := loadOutfile(path)
+	if err != nil {
+		return err
+	}
+	if jsonOutput && path == "" {
+		out = os.Stderr
+	}
+	_, err = out.Write(body)
+	if out != os.Stderr {
+		closeOutfile(out)
+	}
+	if err != nil {
+		return fmt.Errorf("write run envelope: %w", err)
 	}
 	return nil
 }
@@ -1285,8 +1461,39 @@ func buildRunSummary(
 	// stale if an explicit signer override won at sign time, so we confirm the
 	// signer kind before reporting the workflow-identity path.
 	s.WorkflowIdentity = ro.SignerIsWorkflowIdentity() && s.Signer == "fulcio"
+	s.Inventories = runInventorySummaries(results)
 	stampNetworkObservation(s, attestors)
 	return s
+}
+
+func runInventorySummaries(results []workflow.RunResult) []options.RunInventory {
+	var inventories []options.RunInventory
+	for _, result := range results {
+		for _, captured := range result.Collection.Attestations {
+			inv := options.RunInventory{State: "inline"}
+			var ref *fileinventory.Reference
+			switch a := captured.Attestation.(type) {
+			case *material.Attestor:
+				if a.InventoryReference() == nil && a.ManifestUploaded != nil && *a.ManifestUploaded {
+					continue // Legacy manifests keep their existing storage behavior.
+				}
+				inv.Kind, inv.FileCount = string(attestation.MaterialRunType), len(a.Leaves())
+				ref = a.InventoryReference()
+			case *product.Attestor:
+				inv.Kind, inv.FileCount = string(attestation.ProductRunType), len(a.Leaves())
+				ref = a.InventoryReference()
+			default:
+				continue
+			}
+			if ref != nil {
+				inv.State, inv.Digest, inv.Bytes, inv.FileCount = ref.State, ref.Digest, ref.Bytes, ref.FileCount
+			} else if inv.FileCount == 0 {
+				inv.State = "empty"
+			}
+			inventories = append(inventories, inv)
+		}
+	}
+	return inventories
 }
 
 // stampNetworkObservation records the wrapped command's observed network
