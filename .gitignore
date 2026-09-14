@@ -21,6 +21,7 @@ MORNING_REPORT.md
 
 # Test binaries
 *.test
+cilock/.bin/commandrun-verdict/
 
 # Go build cache
 vendor/

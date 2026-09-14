@@ -30,23 +30,26 @@ import (
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 )
 
-// verifierKeyID uses canonical public-key material where available, so aliases
+// verifierPublicKeyID uses canonical public-key material where available, so aliases
 // for one key cannot count as multiple parties toward a signature threshold.
 func verifierPublicKeyID(v cryptoutil.Verifier) string {
-	if raw, err := v.Bytes(); err == nil {
-		pub, err := cryptoutil.UnmarshalPEMToPublicKey(raw)
-		if err != nil {
-			if cert, certErr := cryptoutil.TryParseCertificate(raw); certErr == nil {
-				pub, err = cert.PublicKey, nil
-			}
-		}
-		if err == nil {
-			if id, err := cryptoutil.GeneratePublicKeyID(pub, crypto.SHA256); err == nil {
-				return id
-			}
-		}
+	raw, err := v.Bytes()
+	if err != nil {
+		return ""
 	}
-	return ""
+	pub, err := cryptoutil.UnmarshalPEMToPublicKey(raw)
+	if err != nil {
+		cert, certErr := cryptoutil.TryParseCertificate(raw)
+		if certErr != nil {
+			return ""
+		}
+		pub = cert.PublicKey
+	}
+	id, err := cryptoutil.GeneratePublicKeyID(pub, crypto.SHA256)
+	if err != nil {
+		return ""
+	}
+	return id
 }
 
 func verifierKeyID(v cryptoutil.Verifier) string {

@@ -404,7 +404,10 @@ func decodeExactJSON(raw json.RawMessage) (any, error) {
 				if err != nil {
 					return nil, err
 				}
-				name := key.(string) // valid JSON object keys are strings
+				name, ok := key.(string)
+				if !ok {
+					return nil, fmt.Errorf("JSON object key is not a string")
+				}
 				if _, exists := object[name]; exists {
 					return nil, fmt.Errorf("duplicate JSON key %q", name)
 				}

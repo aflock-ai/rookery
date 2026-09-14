@@ -31,12 +31,14 @@
 package commandrun
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -45,6 +47,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // cilockVerdict is the hermeticity slice of `cilock run --json`.
@@ -60,14 +65,15 @@ type cilockVerdict struct {
 
 var (
 	cilockBuildOnce sync.Once
-	cilockBinPath   string
+	cilockBinary    []byte
 	cilockBuildErr  error
 )
 
 // cilockModuleDir is the sibling module that owns the hermeticity verdict.
 const cilockModuleDir = "../../../cilock"
 
-// buildCilock compiles the CLI once per test binary.
+// buildCilock invokes Go once per test process, then stages a private executable
+// for each test. Go checks the inputs even when its linked output can be reused.
 //
 // A missing module or toolchain SKIPS (this package is also consumed standalone,
 // where cilock is simply not present). A module that is present and fails to
@@ -84,15 +90,9 @@ func buildCilock(t *testing.T) string {
 			cilockBuildErr = errSkip
 			return
 		}
-		out := filepath.Join(os.TempDir(), "cilock-hermeticity-test-"+strconv.Itoa(os.Getpid()))
-		// #nosec G204 -- fixed arguments; the only variable is a temp path we chose.
-		cmd := exec.Command("go", "build", "-o", out, "./cmd/...")
-		cmd.Dir = cilockModuleDir
-		if b, err := cmd.CombinedOutput(); err != nil {
-			cilockBuildErr = errors.New("building cilock: " + err.Error() + "\n" + string(b))
-			return
-		}
-		cilockBinPath = out
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+		defer cancel()
+		cilockBinary, cilockBuildErr = buildCilockBytes(ctx, cilockModuleDir)
 	})
 	if errors.Is(cilockBuildErr, errSkip) {
 		t.Skip("cilock module or Go toolchain unavailable; the end-to-end hermeticity verdict cannot be exercised")
@@ -100,7 +100,85 @@ func buildCilock(t *testing.T) string {
 	if cilockBuildErr != nil {
 		t.Fatal(cilockBuildErr)
 	}
-	return cilockBinPath
+	out := filepath.Join(t.TempDir(), "cilock")
+	if err := os.WriteFile(out, cilockBinary, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// The worktree-local output saves relinking, not input checks or test execution.
+// Hold the lock through the byte read: another test process may build different
+// flags next. Tests execute private copies, never this shared output path.
+func buildCilockBytes(ctx context.Context, moduleDir string) ([]byte, error) {
+	moduleDir, err := filepath.Abs(moduleDir)
+	if err != nil {
+		return nil, err
+	}
+	binDir := filepath.Join(moduleDir, ".bin")
+	cacheDir := filepath.Join(binDir, "commandrun-verdict")
+	for _, dir := range []string{binDir, cacheDir} {
+		if err := os.Mkdir(dir, 0o700); err != nil && !os.IsExist(err) {
+			return nil, err
+		}
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() || info.Mode().Perm()&0o022 != 0 {
+			return nil, fmt.Errorf("test binary cache must be an owner-writable directory, not a link: %s", dir)
+		}
+	}
+	lock, err := os.OpenFile(filepath.Join(cacheDir, "lock"), os.O_CREATE|os.O_RDWR|unix.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = lock.Close() }()
+	info, err := lock.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("test binary cache lock is not a regular file")
+	}
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		err = unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-tick.C:
+		}
+	}
+	out := filepath.Join(cacheDir, "cilock")
+	if info, err := os.Lstat(out); err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("test binary cache output is not a regular file")
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	// #nosec G204 -- fixed build target in the test's selected source module.
+	cmd := exec.CommandContext(ctx, "go", "build", "-n=false", "-o", out, "./cmd/...")
+	cmd.Dir = moduleDir
+	configureProcessReaping(cmd)
+	cmd.WaitDelay = 250 * time.Millisecond
+	b, buildErr := cmd.CombinedOutput()
+	// Also reap on a post-exit pipe timeout before releasing the build lock.
+	if err := errors.Join(buildErr, cmd.Cancel(), ctx.Err()); err != nil {
+		return nil, fmt.Errorf("building cilock: %w\n%s", err, b)
+	}
+	return os.ReadFile(out)
 }
 
 var errSkip = errors.New("skip")
