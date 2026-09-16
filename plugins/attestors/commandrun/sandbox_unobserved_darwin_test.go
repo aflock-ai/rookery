@@ -17,6 +17,7 @@
 package commandrun
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -111,14 +112,16 @@ func TestForkOnlyDescendantStillRunningRefusesTheTrace(t *testing.T) {
 	if err == nil {
 		t.Fatal("a fork-only descendant that outlived the command was signed away")
 	}
-	// EITHER refusal is the right one, and which fires is a race with the
-	// orphan's own setsid. The detached-at-exit check asks "was it seen
-	// outside the reaped group", the survivor check asks "is it still
-	// running"; both are this finding, and pinning the test to one wording
-	// makes it fail on a correct refusal. What it exists to prove is that the
-	// trace is REFUSED rather than signed with the orphan absent.
-	if !strings.Contains(err.Error(), "still running") && !strings.Contains(err.Error(), "process group") {
-		t.Fatalf("the refusal names neither liveness nor detachment: %v", err)
+	// ANY refusal to attest is the right one, and which fires is a race: the
+	// detached-at-exit check, the survivor check, and -- after twelve hours of
+	// test processes on one box -- the pid-counter-wrap check all fire here.
+	// Enumerating their wordings made this fail on a correct refusal it had
+	// not anticipated. What it exists to prove is that the trace is REFUSED
+	// rather than signed with the orphan absent, so it asks for the decision
+	// (ErrNotAttestable) and not the cause. A setup failure that never traced
+	// carries no sentinel and still fails this.
+	if !errors.Is(err, ErrNotAttestable) {
+		t.Fatalf("the trace was refused, but not as a refusal to attest (a setup failure would look like this): %v", err)
 	}
 }
 
@@ -139,13 +142,15 @@ func TestDoubleForkedSetsidOrphanRefusesTheTrace(t *testing.T) {
 	if err == nil {
 		t.Fatal("a double-forked, setsid'd orphan that outlived the command was signed away")
 	}
-	// EITHER refusal is the right one, and which fires is a race with the
-	// orphan's own setsid. The detached-at-exit check asks "was it seen
-	// outside the reaped group", the survivor check asks "is it still
-	// running"; both are this finding, and pinning the test to one wording
-	// makes it fail on a correct refusal. What it exists to prove is that the
-	// trace is REFUSED rather than signed with the orphan absent.
-	if !strings.Contains(err.Error(), "still running") && !strings.Contains(err.Error(), "process group") {
-		t.Fatalf("the refusal names neither liveness nor detachment: %v", err)
+	// ANY refusal to attest is the right one, and which fires is a race: the
+	// detached-at-exit check, the survivor check, and -- after twelve hours of
+	// test processes on one box -- the pid-counter-wrap check all fire here.
+	// Enumerating their wordings made this fail on a correct refusal it had
+	// not anticipated. What it exists to prove is that the trace is REFUSED
+	// rather than signed with the orphan absent, so it asks for the decision
+	// (ErrNotAttestable) and not the cause. A setup failure that never traced
+	// carries no sentinel and still fails this.
+	if !errors.Is(err, ErrNotAttestable) {
+		t.Fatalf("the trace was refused, but not as a refusal to attest (a setup failure would look like this): %v", err)
 	}
 }

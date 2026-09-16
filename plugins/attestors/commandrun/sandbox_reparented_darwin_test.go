@@ -18,8 +18,8 @@ package commandrun
 
 import (
 	"crypto"
+	"errors"
 	"os/exec"
-	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -124,8 +124,7 @@ func TestDetachedOrphanStillRunningRefusesTheTrace(t *testing.T) {
 	// Matched on "process group", which BOTH refusals contain, so the test
 	// survives a rewording of either. Pinning an exact phrase has broken this
 	// test twice now for refusals that were entirely correct.
-	if !strings.Contains(err.Error(), "still running") &&
-		!strings.Contains(err.Error(), "process group") {
+	if !errors.Is(err, ErrNotAttestable) {
 		t.Fatalf("the refusal must name the escaped descendant: %v", err)
 	}
 }

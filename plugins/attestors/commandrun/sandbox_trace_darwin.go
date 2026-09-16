@@ -2047,7 +2047,7 @@ func (s *sandboxSession) awaitQuiet(deadline time.Time) error {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	return fmt.Errorf("macOS process tracing: reports attributable to this build were still arriving %s after "+
+	return notAttestablef("macOS process tracing: reports attributable to this build were still arriving %s after "+
 		"the command exited and its process group was reaped — something the command started is still acting, "+
 		"so the process tree cannot be captured completely and this run is not attestable", drainDeadline)
 }
@@ -2106,7 +2106,7 @@ func (s *sandboxSession) harvestAndSnapshot(hashes []cryptoutil.DigestValue) ([]
 // harvestLocked is harvest's body. Caller holds s.mu.
 func (s *sandboxSession) harvestLocked() ([]sandboxEvent, error) {
 	if s.endedEarly.Load() {
-		return nil, fmt.Errorf("macOS process tracing: the %s stream ended before the command did "+
+		return nil, notAttestablef("macOS process tracing: the %s stream ended before the command did "+
 			"(stderr: %q) — the process tree is truncated by an unknown amount, so this run is not attestable",
 			logToolPath, strings.TrimSpace(s.stderr.String()))
 	}
@@ -2123,18 +2123,18 @@ func (s *sandboxSession) harvestLocked() ([]sandboxEvent, error) {
 			"could have gone unnoticed and no pid-keyed claim in this run is provable: %w", s.wrapWatchErr)
 	}
 	if s.ambiguous > 0 {
-		return nil, fmt.Errorf("macOS process tracing: %d kernel sandbox report(s) can be read two ways — a process "+
+		return nil, notAttestablef("macOS process tracing: %d kernel sandbox report(s) can be read two ways — a process "+
 			"named so that its own name contains a second \"(pid) decision operation\" header — so which process the "+
 			"report describes cannot be decided, and one of the readings may be this build's exec; this run is not attestable",
 			s.ambiguous)
 	}
 	if s.unattributable > 0 {
-		return nil, fmt.Errorf("macOS process tracing: %d kernel sandbox report(s) could not be attributed to any process "+
+		return nil, notAttestablef("macOS process tracing: %d kernel sandbox report(s) could not be attributed to any process "+
 			"(no pid could be read from them) — one may be this build's exec or connection, so this run is not attestable",
 			s.unattributable)
 	}
 	if s.pidWrapped {
-		return nil, errors.New("macOS process tracing: the kernel's pid counter wrapped while the command ran — " +
+		return nil, notAttestable("macOS process tracing: the kernel's pid counter wrapped while the command ran — " +
 			"a pid can now name two different processes within this session, so ancestry, probe exclusion and " +
 			"late-report attribution are all unprovable and this run is not attestable; re-run the step")
 	}

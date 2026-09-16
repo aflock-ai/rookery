@@ -187,7 +187,7 @@ func (rc *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) (
 	rootSid, err := sidOf(rootPid)
 	if err != nil {
 		_ = c.Wait()
-		return nil, fmt.Errorf("macOS process tracing: the root's session id could not be read (%v); the exit sweep for "+
+		return nil, notAttestablef("macOS process tracing: the root's session id could not be read (%v); the exit sweep for "+
 			"unreported descendants keys on it, so this run is not attestable", err)
 	}
 	// Publish the root to the collector so the drain's quiet detection can
@@ -199,7 +199,7 @@ func (rc *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) (
 		// rules silently decide nothing, and a detached descendant would be
 		// read as a stranger. Refuse instead.
 		_ = c.Wait()
-		return nil, errors.New("macOS process tracing: the root's kernel facts could not be read at start; " +
+		return nil, notAttestable("macOS process tracing: the root's kernel facts could not be read at start; " +
 			"nothing that hangs off launchd can be told from a detached descendant without them, so this run is not attestable")
 	}
 	// Sample the pid counter for as long as the command runs (see
@@ -245,11 +245,11 @@ func (rc *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) (
 	// root. (setsid does; that child is a stated residual.)
 	table, err := listAllProcs()
 	if err != nil {
-		return nil, fmt.Errorf("macOS process tracing: the kernel process table could not be read at exit (%v); an "+
+		return nil, notAttestablef("macOS process tracing: the kernel process table could not be read at exit (%v); an "+
 			"unreported descendant could not be looked for, so this run is not attestable", err)
 	}
 	if preReapErr != nil {
-		return nil, fmt.Errorf("macOS process tracing: the kernel process table could not be read before the "+
+		return nil, notAttestablef("macOS process tracing: the kernel process table could not be read before the "+
 			"command's process group was reaped (%v); a forked child that never exec'd would have been killed "+
 			"before it could be counted, so this run is not attestable", preReapErr)
 	}
@@ -304,7 +304,7 @@ func (rc *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) (
 		}
 	}
 	if detached := detachedMembersAtExit(bothSnapshots, possiblyOurs, rootPid, rootPgid); len(detached) > 0 {
-		return nil, fmt.Errorf("macOS process tracing: %d process(es) this trace could not rule out as the "+
+		return nil, notAttestablef("macOS process tracing: %d process(es) this trace could not rule out as the "+
 			"command's (pids %v) had left its process group before it exited — the group reap cannot reach them, "+
 			"so they could act after the report stream was drained and be gone before anything could check, and "+
 			"this run is not attestable", len(detached), detached)
@@ -329,7 +329,7 @@ func (rc *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) (
 		return nil, err
 	}
 	if len(orphans) > 0 {
-		return nil, fmt.Errorf("macOS process tracing: %d process(es) that appeared after the command started and "+
+		return nil, notAttestablef("macOS process tracing: %d process(es) that appeared after the command started and "+
 			"were reparented to launchd are still running after it exited (pids %v) — whether they are the "+
 			"command's own detached descendants cannot be decided from here, and a process that may be the "+
 			"build's can keep acting after the evidence is signed, so this run is not attestable", len(orphans), orphans)
@@ -456,7 +456,7 @@ const execDigestBindingCollectorOpen = "path-at-collector-open-time"
 func refuseUnobservedRoot(procs []ProcessInfo, rootPid int) error {
 	p := findProcess(procs, rootPid)
 	if p == nil {
-		return fmt.Errorf("macOS process tracing: the traced command (pid %d) produced no report at all — the "+
+		return notAttestablef("macOS process tracing: the traced command (pid %d) produced no report at all — the "+
 			"report channel delivered nothing for the process this attestation is about, so an empty tree would "+
 			"be signed as an observation of a command that did nothing, and this run is not attestable", rootPid)
 	}
@@ -465,7 +465,7 @@ func refuseUnobservedRoot(procs []ProcessInfo, rootPid int) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("macOS process tracing: no exec was observed for the traced command (pid %d) — its own "+
+	return notAttestablef("macOS process tracing: no exec was observed for the traced command (pid %d) — its own "+
 		"exec report never arrived or could not be attributed, so nothing establishes that the command this "+
 		"attestation describes ever ran, and this run is not attestable", rootPid)
 }
@@ -513,7 +513,7 @@ func refuseIncompleteTree(diag *DarwinTraceDiagnostics) error {
 		// A bounded list that overflowed is not a complete account of what
 		// was observed, and an image-deny policy reading it could approve a
 		// run whose forbidden exec sits past the cap. Refuse.
-		return fmt.Errorf("macOS process tracing: %d unattributed exec report(s) beyond the %d the attestation "+
+		return notAttestablef("macOS process tracing: %d unattributed exec report(s) beyond the %d the attestation "+
 			"can carry — the list a policy would inspect is incomplete, so this run is not attestable; "+
 			"a build producing this many unattributable execs needs its fork storm looked at", diag.UnprovenExecsOmitted, maxUnprovenExecs)
 	}
@@ -522,7 +522,7 @@ func refuseIncompleteTree(diag *DarwinTraceDiagnostics) error {
 		// that the evidence cannot name. Signing it would let a digest
 		// policy approve a run whose forbidden image simply vanished — or
 		// was rewritten — before it could be measured. Refuse.
-		return fmt.Errorf("macOS process tracing: %d exec(s) attributed to this build carry no image digest — the "+
+		return notAttestablef("macOS process tracing: %d exec(s) attributed to this build carry no image digest — the "+
 			"image was gone before its report arrived, exceeded the %d-byte pin bound, or was rewritten in place "+
 			"after it ran — so an image policy could not be evaluated against the bytes that executed, and this "+
 			"run is not attestable", diag.AttributedExecsUndigested, maxImageBytes)
@@ -542,7 +542,7 @@ func refuseIncompleteTree(diag *DarwinTraceDiagnostics) error {
 			"attestable", diag.CollectorRecordsUnreadable)
 	}
 	if diag.UnparseableOwnReports > 0 {
-		return fmt.Errorf("macOS process tracing: %d sandbox report(s) from this build (or from a process whose "+
+		return notAttestablef("macOS process tracing: %d sandbox report(s) from this build (or from a process whose "+
 			"ownership could not be decided) could not be interpreted — a path with a newline, or a report format "+
 			"this version does not know — and an exec or connection may be missing from the evidence, so this run "+
 			"is not attestable", diag.UnparseableOwnReports)
@@ -808,7 +808,7 @@ func refuseLateDescendants(rootPid, rootPgid, rootSid int, sess *sandboxSession,
 	list func() ([]kinfoFacts, error), sid func(int) (int, error)) error {
 	table, err := list()
 	if err != nil {
-		return fmt.Errorf("macOS process tracing: the kernel process table could not be re-read after the evidence "+
+		return notAttestablef("macOS process tracing: the kernel process table could not be re-read after the evidence "+
 			"was built (%v); a descendant forked while the images were hashed could not be looked for, so this "+
 			"run is not attestable", err)
 	}
@@ -878,18 +878,18 @@ func refuseLateDescendants(rootPid, rootPgid, rootSid int, sess *sandboxSession,
 		return err
 	}
 	if len(loose) > 0 {
-		return fmt.Errorf("macOS process tracing: %d process(es) (pids %v) reported during the run, are still "+
+		return notAttestablef("macOS process tracing: %d process(es) (pids %v) reported during the run, are still "+
 			"running, and their parent chain no longer reaches the command — detached or orphaned behind an "+
 			"intermediate that exited — so a process this trace cannot rule out as the build's can rewrite what "+
 			"was just measured, and this run is not attestable", len(loose), loose)
 	}
 	if len(stragglers) > 0 {
-		return fmt.Errorf("macOS process tracing: %d descendant(s) (pids %v) were still running when the evidence "+
+		return notAttestablef("macOS process tracing: %d descendant(s) (pids %v) were still running when the evidence "+
 			"finished being built — including any that first reported after the tree was resolved — so a process "+
 			"of this build's could act after it is signed and this run is not attestable", len(stragglers), stragglers)
 	}
 	if len(live) > 0 {
-		return fmt.Errorf("macOS process tracing: %d process(es) appeared after the command's exit was swept and are "+
+		return notAttestablef("macOS process tracing: %d process(es) appeared after the command's exit was swept and are "+
 			"still running (pids %v) — a member that forked a successor and exited while the evidence was being "+
 			"built leaves a process able to rewrite what was just measured, so this run is not attestable",
 			len(live), live)
