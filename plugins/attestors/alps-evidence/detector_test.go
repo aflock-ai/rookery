@@ -28,9 +28,31 @@ import (
 func detect(t *testing.T, src ProcessSource, selfPID int) Detection {
 	t.Helper()
 	d := NewDetector(src, DefaultProviders())
-	got, err := d.Detect(context.Background(), selfPID, t.TempDir())
+	got, err := d.Detect(context.Background(), selfPID, tempWorkingDir(t))
 	require.NoError(t, err)
 	return got
+}
+
+// tempWorkingDir returns an empty working directory for a detection, carrying
+// the default `.git` project-root marker so the project-configuration walk
+// (codexProjectConfigPaths, projectRootFromWorkingDir) stops at it.
+//
+// Without the marker the walk runs to the filesystem root — the attestor's
+// documented, conservative behaviour, since a real run may well have been
+// configured by a .codex or .claude above the checkout — and every ancestor
+// of $TMPDIR becomes a candidate project tier. On a host whose TMPDIR sits
+// under $HOME that set includes the developer's own ~/.codex/config.toml,
+// which is then read into the fixture as a higher-precedence project layer
+// and degrades the user tier the test set up through $CODEX_HOME
+// (TestCodexConfigAboveTheTemporaryWorkingDirectoryIsNotRead reproduces the
+// layout). The marker is the attestor's own stop condition, not a test-only
+// switch: it makes the fixture look like what it stands for, a checkout, so
+// the walk ends where it would for a real project.
+func tempWorkingDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o750))
+	return dir
 }
 
 // TestFirstRecognizedAgentWins pins the central invariant. Codex is nearer than

@@ -183,6 +183,62 @@ sandbox_mode = "workspace-write"
 	assert.NotEmpty(t, got.Inspection.Configuration[0].SHA256)
 }
 
+// TestCodexConfigAboveTheTemporaryWorkingDirectoryIsNotRead pins the test
+// fixtures against the host they run on.
+//
+// codexProjectConfigPaths walks from the working directory to the default
+// `.git` project-root marker and, when none is visible, all the way to the
+// filesystem root — conservative for a real run, where an unseen .codex above
+// the checkout may well have configured the agent. The detect helper hands
+// every detection a working directory under $TMPDIR, and on a host whose
+// TMPDIR sits under $HOME (other lanes on this box run with
+// TMPDIR=~/proj/wt/...) that walk passes through $HOME, where the developer's
+// own ~/.codex/config.toml is a syntactically perfect project tier. The user
+// tier the test set up through $CODEX_HOME is then, by design, recorded but
+// not resolved, and the assertion on the model fails for a reason that has
+// nothing to do with the code under test.
+//
+// The layout is reproduced here exactly: a HOME this test owns, TMPDIR inside
+// it, a Codex config at ~/.codex/config.toml above the temp root. That file
+// must not appear among the sources, and the model must resolve from the
+// $CODEX_HOME the fixture named.
+func TestCodexConfigAboveTheTemporaryWorkingDirectoryIsNotRead(t *testing.T) {
+	// os.MkdirTemp rather than t.TempDir: t.TempDir creates its per-test
+	// parent under the TMPDIR in force at its FIRST call and reuses it, so
+	// the fake HOME has to exist before TMPDIR is pointed underneath it.
+	home, err := os.MkdirTemp("", "codex-home-above-temp-root")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	t.Setenv("HOME", home)
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "tmp"), 0o750))
+	t.Setenv("TMPDIR", filepath.Join(home, "tmp"))
+	hostConfig := filepath.Join(home, ".codex", "config.toml")
+	writeFile(t, hostConfig, "model = \"the-developers-own-model\"\n")
+	// The walk records symlink-resolved paths (physicalDir), and macOS's
+	// TMPDIR is reached through one.
+	resolvedHostConfig, err := filepath.EvalSymlinks(hostConfig)
+	require.NoError(t, err)
+
+	codexHome := t.TempDir() // under $HOME/tmp, so the walk up crosses $HOME
+	writeFile(t, filepath.Join(codexHome, "config.toml"), "model = \"gpt-5.6-luna\"\n")
+
+	src := newFixtureSource(
+		ProcessInfo{PID: 100, PPID: 80, Executable: "/usr/local/bin/cilock"},
+		ProcessInfo{PID: 80, PPID: 1, Executable: "/usr/local/bin/codex", Comm: "codex",
+			Argv: []string{"codex"}, Env: map[string]string{"CODEX_HOME": codexHome}},
+	)
+	got := detect(t, src, 100)
+
+	require.Equal(t, StatusDetected, got.Status)
+	for _, cfg := range got.Inspection.Configuration {
+		assert.NotEqual(t, "project", cfg.Scope,
+			"a config above the temporary working directory was read as a project tier: %s", cfg.Path)
+		assert.NotEqual(t, resolvedHostConfig, cfg.Path, "the host's ~/.codex/config.toml leaked into the fixture")
+	}
+	require.NotNil(t, got.Inspection.Model, "the $CODEX_HOME model must resolve; a host config above the temp root degraded it")
+	assert.Equal(t, "gpt-5.6-luna", got.Inspection.Model.Value)
+}
+
 func TestCodexProfileOverlayWins(t *testing.T) {
 	codexHome := t.TempDir()
 	writeFile(t, filepath.Join(codexHome, "config.toml"), `
@@ -262,7 +318,7 @@ func TestCodexConfigOverrideDecodesTOMLStrings(t *testing.T) {
 // project file overrode any of it.
 func TestCodexUnresolvedProjectConfigDegradesUserConfig(t *testing.T) {
 	codexHome := t.TempDir()
-	repo := t.TempDir()
+	repo := tempWorkingDir(t)
 	writeFile(t, filepath.Join(codexHome, "config.toml"),
 		"model = \"user-model\"\nsandbox_mode = \"read-only\"\n")
 	writeFile(t, filepath.Join(repo, ".codex", "config.toml"), "model = \"project-model\"\n")
@@ -305,7 +361,7 @@ func TestCodexUnresolvedProjectConfigDegradesUserConfig(t *testing.T) {
 // evidence even while a project config exists.
 func TestCodexCLIValuesUnaffectedByUnresolvedProjectConfig(t *testing.T) {
 	codexHome := t.TempDir()
-	repo := t.TempDir()
+	repo := tempWorkingDir(t)
 	writeFile(t, filepath.Join(codexHome, "config.toml"), "model = \"user-model\"\n")
 	writeFile(t, filepath.Join(repo, ".codex", "config.toml"), "model = \"project-model\"\n")
 
