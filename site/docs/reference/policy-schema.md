@@ -131,7 +131,60 @@ A bare-predicate DSSE envelope (not wrapped in a `Collection`) that the policy t
 | `name` | string | Name of the rego policy. Reported on failure. |
 | `module` | string | Base64-encoded Rego module. |
 
-The Rego module must export a `deny` rule. `deny` should be a string or array of strings, populated only when the policy fails. Anything else the module outputs is ignored.
+The Rego module must export a `deny` rule. `deny` should be a string or array of strings, populated only when the policy fails. Anything else the module outputs is ignored. Modules are parsed as Rego v0 by default; add `import rego.v1` at the top of a module that uses the `if`, `contains` or `in` keywords.
+
+### What `input` looks like
+
+`input` is the attestor's own JSON: the predicate body the attestor registered, marshaled as-is. For a step with neither `attestationsFrom` nor `externalFrom` there is no wrapper of any kind, so a command-run policy reads `input.cmd` and `input.exitcode` at the top level:
+
+```rego
+package commandrun.exitcode
+
+deny[msg] {
+    input.exitcode != 0
+    msg := sprintf("build exited with status %d", [input.exitcode])
+}
+```
+
+As soon as a step lists anything in `attestationsFrom` or `externalFrom`, the verifier re-shapes `input` for every Rego policy on that step into three keys:
+
+| Key | Contents |
+|---|---|
+| `input.attestation` | The step's own attestor JSON: the object that was the whole `input` in the plain shape. |
+| `input.steps.<step>.<predicateType>` | Every attestor from every passed collection of each step in `attestationsFrom`, keyed by step name, then by predicate type URI. |
+| `input.external.<name>` | The predicate body of each envelope in `externalFrom` that passed. An external that was skipped or never supplied is absent, so `not input.external.<name>` fires. |
+
+The switch is keyed on the step *declaring* the lists, not on the referenced data being present: a dependency that has not verified yet still produces the wrapped shape, with an empty `input.steps`. A top-level path such as `input.exitcode` is undefined under the wrapped shape, so a module written for the plain shape silently stops matching the moment its step gains an `attestationsFrom` entry. Move its reads under `input.attestation`. The verifier logs a warning whenever the wrapped shape is active.
+
+```rego
+package deploy.provenance
+
+# The deploy step's own command-run attestation moved under input.attestation.
+deny[msg] {
+    input.attestation.exitcode != 0
+    msg := sprintf("deploy exited with status %d", [input.attestation.exitcode])
+}
+
+# Steps named in attestationsFrom: input.steps.<step>.<predicateType>.
+deny[msg] {
+    build := input.steps.build["https://aflock.ai/attestations/command-run/v0.2"]
+    build.cmd[0] != "go"
+    msg := sprintf("build step ran %v, expected a go build", [build.cmd])
+}
+
+deny[msg] {
+    not input.steps.build["https://aflock.ai/attestations/command-run/v0.2"]
+    msg := "build step provided no command-run attestation"
+}
+
+# Envelopes named in externalFrom: input.external.<name>, absent when not supplied.
+deny[msg] {
+    not input.external.releaseApproval.approved
+    msg := "release approval missing or not granted"
+}
+```
+
+Both modules above are extracted from this page and run through the real verifier by `attestation/policy/rego_input_shape_doc_test.go`, so they cannot drift from what `cilock verify` actually passes in.
 
 ## `aipolicy` object
 
@@ -143,15 +196,6 @@ The Rego module must export a `deny` rule. `deny` should be a string or array of
 
 The AI server URL is configured via `--ai-server-url`. SSRF protection limits the URL to `http`/`https` schemes with a non-empty host. Each policy gets one shot — a non-`PASS` response counts as a failure.
 
-```rego
-package commandrun.exitcode
-
-deny[msg] {
-    input.exitcode != 0
-    msg := "exitcode not 0"
-}
-```
-
 ## Verification process
 
 `cilock verify` runs the following checks in order, all must pass:
@@ -160,10 +204,12 @@ deny[msg] {
 2. **Map signers to functionaries:** each collection's signer must satisfy a functionary entry for the step. Same for each external envelope's functionaries.
 3. **Verify timestamps** (if present) against `policy.timestampauthorities`. The signing certificate must have been valid at the timestamped time.
 4. **Verify materials/products consistency:** the materials of each step must match the products of any step in `artifactsFrom`. (Per-file digest match, independent of Rego.)
-5. **Lift cross-step + external evidence into Rego context.** For each step:
-   - The step's own collection attestations land at `input.attestations.<predicateType>`.
-   - Every step named in `attestationsFrom` is lifted to `input.steps.<step>.<predicateType>`.
-   - Every external envelope named in `externalFrom` is lifted to `input.external.<name>` (the predicate body itself, not the surrounding Statement).
+5. **Lift cross-step + external evidence into Rego context.** For a step with neither `attestationsFrom` nor `externalFrom`, each Rego policy's `input` is the attestor it is attached to, unwrapped. For a step that declares either list, `input` becomes:
+   - `input.attestation`: the step's own attestor (the one the policy is attached to), as a single object.
+   - `input.steps.<step>.<predicateType>`: every attestor from each step named in `attestationsFrom`.
+   - `input.external.<name>`: the predicate body of each envelope named in `externalFrom` (not the surrounding Statement); absent when the envelope was skipped or missing.
+
+   See [What `input` looks like](#what-input-looks-like) for both shapes with runnable examples.
 6. **Evaluate every embedded Rego policy** against its target. All `deny` rules must be empty.
 7. **Evaluate every embedded AI policy** against its target. All must return `{"status":"PASS"}`. The AI server must be reachable; AI policies fail closed.
 

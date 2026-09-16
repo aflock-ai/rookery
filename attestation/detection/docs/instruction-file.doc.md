@@ -112,32 +112,68 @@ A predicate claiming `workload-identity` with no `federated` block is **schema-i
 
 ## How a verifier consumes this
 
+`cilock verify` hands the policy this attestor's JSON as `input`, unwrapped: `input.signer`, `input.status` and `input.files` are top-level fields, and there is no `input.predicate`. The module needs `import rego.v1` for the `contains`, `if` and `in` keywords, because cilock parses Rego v0 by default.
+
+**That flat shape holds only while the step asks for no cross-step context.** The moment a step declares `attestationsFrom` or `externalFrom`, `buildRegoInput` (`attestation/policy/rego.go`) re-shapes the input to `{attestation, steps, external}` and this attestor's fields move under `input.attestation`. The flat module below then reads undefined paths, every `deny` body fails, and the policy **admits everything it was written to refuse** — silently, because an undefined path in Rego is not an error. Write for the shape your step actually produces, and check `attestationsFrom`/`externalFrom` before copying either example.
+
 Write the gate as an **allowlist**, never a denylist. A denylist silently admits any kind added later:
 
 ```rego
 package instructionfile
 
+import rego.v1
+
 # The signer must be a workload. `unknown` and every future kind deny by default.
 deny contains msg if {
-    input.predicate.signer.kind != "workload-identity"
-    msg := sprintf("instruction attestation signed by principal class %v; workload identity required", [input.predicate.signer.kind])
+    input.signer.kind != "workload-identity"
+    msg := sprintf("instruction attestation signed by principal class %v; workload identity required", [input.signer.kind])
 }
 
 # A partial scan makes no claim about what it did not read.
 deny contains msg if {
-    input.predicate.status != "complete"
-    msg := sprintf("instruction-file scan status %v; nothing is claimed about the unexamined remainder", [input.predicate.status])
+    input.status != "complete"
+    msg := sprintf("instruction-file scan status %v; nothing is claimed about the unexamined remainder", [input.status])
 }
 
 # Pin the reviewed instruction files by digest.
 approved := {"9f2b...c1", "44ae...07"}
 
 deny contains msg if {
-    some f in input.predicate.files
+    some f in input.files
     not f.digest.sha256 in approved
     msg := sprintf("unapproved instruction file %v (sha256 %v)", [f.path, f.digest.sha256])
 }
 ```
+
+This module is extracted from this page and run against real attestor output by `plugins/attestors/instruction-file/rego_input_test.go`, so it cannot drift from the shape the attestor emits.
+
+**The same gate for a step that declares `attestationsFrom` or `externalFrom`.** Identical rules, one level deeper. Nothing else changes:
+
+```rego
+package instructionfile
+
+import rego.v1
+
+deny contains msg if {
+    input.attestation.signer.kind != "workload-identity"
+    msg := sprintf("instruction attestation signed by principal class %v; workload identity required", [input.attestation.signer.kind])
+}
+
+deny contains msg if {
+    input.attestation.status != "complete"
+    msg := sprintf("instruction-file scan status %v; nothing is claimed about the unexamined remainder", [input.attestation.status])
+}
+
+approved := {"9f2b...c1", "44ae...07"}
+
+deny contains msg if {
+    some f in input.attestation.files
+    not f.digest.sha256 in approved
+    msg := sprintf("unapproved instruction file %v (sha256 %v)", [f.path, f.digest.sha256])
+}
+```
+
+Both modules are extracted from this page and evaluated against real attestor output, the flat one without step context and the wrapped one with it, so neither can drift from the shape the attestor emits. The same test also pins the failure this section warns about: the flat module, given step context, denies nothing.
 
 **Gate on the certificate too.** The `signer` block is derived from environment variables and process state at prematerial time, *before* any signing has happened, and any ancestor process can set an environment variable. It is corroborating context, not proof: a policy that gates on `signer.kind` alone can be defeated by setting `GITHUB_ACTIONS=true`. The authoritative check is the DSSE signing certificate — its SAN, its issuer, and the Fulcio extensions carrying the workload's repository and workflow — enforced by the policy's **functionary constraint**. Use `signer.kind` as the defense-in-depth cross-check that catches a mismatch between what the environment claimed and what the certificate proves.
 
