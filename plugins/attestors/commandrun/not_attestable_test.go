@@ -41,6 +41,54 @@ func TestNotAttestableIsTheDecisionNotTheWording(t *testing.T) {
 	}
 }
 
+// The pid-wrap refusal names its cause for errors.Is while keeping the
+// operator's wording, and it is still the decision.
+func TestPIDWrapRefusalNamesItsCause(t *testing.T) {
+	err := notAttestableFor(ErrPIDCounterWrapped, "macOS process tracing: the kernel's pid counter wrapped while the command ran")
+	if !errors.Is(err, ErrPIDCounterWrapped) || !errors.Is(err, ErrNotAttestable) {
+		t.Fatalf("the pid-wrap refusal must satisfy both sentinels: %v", err)
+	}
+	if got := err.Error(); got != "macOS process tracing: the kernel's pid counter wrapped while the command ran" {
+		t.Fatalf("message changed: %q", got)
+	}
+	if errors.Is(notAttestable("macOS process tracing: 3 descendant(s) were still running"), ErrPIDCounterWrapped) {
+		t.Fatal("a different refusal must not read as the pid wrap")
+	}
+}
+
+// A pid-counter wrap says nothing about the property a Darwin trace test is
+// checking, so every such test asks whether its run was testable before it
+// asserts anything: each Attest in a Darwin test is followed by
+// skipIfUntestable within two lines. Three ring gates were lost to this on
+// 2026-09-16 in three different files; the next file must not be a fourth.
+func TestEveryDarwinTraceAsksWhetherTheRunWasTestable(t *testing.T) {
+	files, err := filepath.Glob("*darwin*_test.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no darwin test files found: %v", err)
+	}
+	var bare []string
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(src), "\n")
+		for i, line := range lines {
+			if !strings.Contains(line, ".Attest(") {
+				continue
+			}
+			window := strings.Join(lines[i:min(i+3, len(lines))], "\n")
+			if !strings.Contains(window, "skipIfUntestable(t, ") {
+				bare = append(bare, fmt.Sprintf("%s:%d", f, i+1))
+			}
+		}
+	}
+	if len(bare) > 0 {
+		t.Fatalf("Attest calls in Darwin tests that never ask whether the run was testable (call skipIfUntestable(t, err) right after):\n  %s",
+			strings.Join(bare, "\n  "))
+	}
+}
+
 // Every refusal to sign in this package goes through the sentinel. A new
 // site written as a bare fmt.Errorf(... "not attestable") would be a refusal
 // the decision cannot see, and the first test to enumerate its wording would

@@ -2134,8 +2134,8 @@ func (s *sandboxSession) harvestLocked() ([]sandboxEvent, error) {
 			s.unattributable)
 	}
 	if s.pidWrapped {
-		return nil, notAttestable("macOS process tracing: the kernel's pid counter wrapped while the command ran — " +
-			"a pid can now name two different processes within this session, so ancestry, probe exclusion and " +
+		return nil, notAttestableFor(ErrPIDCounterWrapped, "macOS process tracing: the kernel's pid counter wrapped while the command ran — "+
+			"a pid can now name two different processes within this session, so ancestry, probe exclusion and "+
 			"late-report attribution are all unprovable and this run is not attestable; re-run the step")
 	}
 	out := make([]sandboxEvent, len(s.events))

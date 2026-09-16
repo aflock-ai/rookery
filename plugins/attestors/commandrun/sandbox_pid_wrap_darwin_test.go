@@ -43,6 +43,9 @@ func TestPidCounterWrapFailsClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("a session whose probe pids went backwards harvested a tree — pid identity was unprovable")
 	}
+	if !errors.Is(err, ErrPIDCounterWrapped) {
+		t.Fatalf("the refusal must carry ErrPIDCounterWrapped so a test can tell an untestable run from a wrong answer: %v", err)
+	}
 	if !strings.Contains(err.Error(), "pid counter wrapped") {
 		t.Fatalf("the refusal must name the wrap so the operator re-runs the step: %v", err)
 	}

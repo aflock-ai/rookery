@@ -18,6 +18,7 @@ package commandrun
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -43,7 +44,23 @@ func traceScript(t *testing.T, cmd []string) (*CommandRun, error) {
 		t.Fatalf("NewContext: %v", err)
 	}
 	rc := New(WithCommand(cmd), WithTracing(true), WithSilent(true))
-	return rc, rc.Attest(actx)
+	err = rc.Attest(actx)
+	skipIfUntestable(t, err)
+	return rc, err
+}
+
+// skipIfUntestable ends the test as skipped when the trace refused because
+// the kernel's pid counter wrapped during the run. That refusal is the tracer
+// being right about the machine, not about the command, and the test has
+// learned nothing about the property it set out to check; failing it would
+// fail a whole ring on a fact about the box. Every other refusal, and every
+// setup failure, goes back to the caller to judge. The skip is loud so a run
+// that skips this way is visible in the suite's counts.
+func skipIfUntestable(t *testing.T, err error) {
+	t.Helper()
+	if errors.Is(err, ErrPIDCounterWrapped) {
+		t.Skipf("untestable in this run, not a verdict on the property: %v", err)
+	}
 }
 
 // execedImages is the set of image paths the attestation says ran, taken from
@@ -458,7 +475,9 @@ func TestDarwinTraceScale(t *testing.T) {
 	}
 	rc := New(WithCommand([]string{"/bin/sh", script}), WithTracing(true), WithSilent(true))
 	start := time.Now()
-	if err := rc.Attest(actx); err != nil {
+	err = rc.Attest(actx)
+	skipIfUntestable(t, err)
+	if err != nil {
 		t.Fatalf("Attest: %v", err)
 	}
 	elapsed := time.Since(start)
