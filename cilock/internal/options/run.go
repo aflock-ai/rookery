@@ -436,6 +436,12 @@ type RunOptions struct {
 	// attestation collection would have no body to attest.
 	NoDefaultAttestors []string
 
+	// MaxAttestationBytes is the largest in-toto statement this run will
+	// sign (--max-attestation-bytes, CILOCK_MAX_ATTESTATION_BYTES, default
+	// 4 MiB; 0 = unlimited). RunE resolves the precedence into this field
+	// before the command runs; see internal/options/attestation_size.go.
+	MaxAttestationBytes ByteSize
+
 	// MaterialManifest retains the complete material inventory in the compact
 	// distribution. The legacy profile keeps its detached-manifest behavior.
 	MaterialManifest bool
@@ -1285,6 +1291,7 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 			"Use on steps that exist to prove which artifact they produced: without a product "+
 			"subject the envelope still names the commit and the pipeline, so a silently empty "+
 			"product set reads as a complete record of a build that in fact proves no artifact.")
+	AddMaxAttestationBytesFlag(cmd, &ro.MaxAttestationBytes)
 	cmd.Flags().StringSliceVar(&ro.EnvCaptureAllowlist, "env-capture-allowlist", []string{},
 		"Positive allowlist for environment capture. When set, only env keys matching one of the patterns "+
 			"(exact key like PATH, or glob like GITHUB_*) are captured. Everything else is dropped — not obfuscated, not recorded. "+

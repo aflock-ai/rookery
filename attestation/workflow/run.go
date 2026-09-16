@@ -38,6 +38,9 @@ type runOptions struct {
 	additionalSubjects map[string]cryptoutil.DigestSet
 	insecure           bool
 	ignoreErrors       bool
+	// maxStatementBytes refuses any statement JSON larger than this before it
+	// is signed; zero is unlimited. See RunWithMaxStatementBytes.
+	maxStatementBytes int
 }
 
 type RunOption func(ro *runOptions)
@@ -324,7 +327,14 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 						// a companion must not be reachable from a commit-keyed
 						// lookup, only by one subject-graph hop from the tree
 						// root it carries.
-						envelope, err = createAndSignEnvelope(companion, companion.Type(), ownSubjects, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						// Companions are exempt from maxStatementBytes (0 here): by the
+						// contract above they are never reached from a commit-keyed
+						// lookup, so a push evaluation never opens one, and each kind
+						// carries its own ceiling (fileinventory.MaxBytes, the material
+						// manifest's inclusionproof.MaxManifestBytes) and its own upload
+						// consent. A 4 MiB ceiling here would refuse --material-manifest
+						// on any repository with a few thousand files.
+						envelope, err = createAndSignEnvelope(companion, companion.Type(), ownSubjects, 0, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 						if err != nil {
 							return result, fmt.Errorf("failed to sign companion envelope for %s/%s: %w", r.Attestor.Name(), companion.Name(), err)
 						}
@@ -356,7 +366,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 					}
 
 					if !ro.insecure {
-						envelope, err = createAndSignEnvelope(exportedAttestor, exportedAttestor.Type(), mergeCollectionSubjects(parentSubjects, ownSubjects), dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						envelope, err = createAndSignEnvelope(exportedAttestor, exportedAttestor.Type(), mergeCollectionSubjects(parentSubjects, ownSubjects), ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 						if err != nil {
 							return result, fmt.Errorf("failed to sign envelope for %s: %w", exportedAttestor.Name(), err)
 						}
@@ -375,7 +385,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 				if subjecter, ok := r.Attestor.(attestation.Subjecter); ok {
 					var envelope dsse.Envelope
 					if !ro.insecure {
-						envelope, err = createAndSignEnvelope(r.Attestor, r.Attestor.Type(), mergeCollectionSubjects(parentSubjects, subjecter.Subjects()), dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						envelope, err = createAndSignEnvelope(r.Attestor, r.Attestor.Type(), mergeCollectionSubjects(parentSubjects, subjecter.Subjects()), ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 						if err != nil {
 							return result, fmt.Errorf("failed to sign envelope: %w", err)
 						}
@@ -430,7 +440,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	// CollectionSubjects see the same set the signed path would have used.
 	collectionResult.CollectionSubjects = mergeCollectionSubjects(collectionResult.Collection.Subjects(), ro.additionalSubjects)
 	if !ro.insecure {
-		collectionResult.SignedEnvelope, err = createAndSignEnvelope(collectionResult.Collection, attestation.CollectionType, collectionResult.CollectionSubjects, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+		collectionResult.SignedEnvelope, err = createAndSignEnvelope(collectionResult.Collection, attestation.CollectionType, collectionResult.CollectionSubjects, ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 		if err != nil {
 			return result, fmt.Errorf("failed to sign collection: %w", err)
 		}
@@ -545,7 +555,11 @@ func validateRunOpts(ro runOptions) error {
 	return nil
 }
 
-func createAndSignEnvelope(predicate interface{}, predType string, subjects map[string]cryptoutil.DigestSet, opts ...dsse.SignOption) (dsse.Envelope, error) {
+// createAndSignEnvelope frames predicate in an in-toto statement and signs
+// it. maxStatementBytes is checked on the exact statement bytes handed to
+// dsse.Sign, so an oversized statement is refused before any signature or
+// timestamp exists for it (zero disables the check).
+func createAndSignEnvelope(predicate interface{}, predType string, subjects map[string]cryptoutil.DigestSet, maxStatementBytes int, opts ...dsse.SignOption) (dsse.Envelope, error) {
 	data, err := json.Marshal(&predicate)
 	if err != nil {
 		return dsse.Envelope{}, err
@@ -558,6 +572,9 @@ func createAndSignEnvelope(predicate interface{}, predType string, subjects map[
 
 	stmtJSON, err := json.Marshal(&stmt)
 	if err != nil {
+		return dsse.Envelope{}, err
+	}
+	if err := CheckStatementSize(stmtJSON, predType, maxStatementBytes); err != nil {
 		return dsse.Envelope{}, err
 	}
 

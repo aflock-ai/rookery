@@ -368,6 +368,7 @@ Only **one signer** is supported per `run` invocation (enforced in `cilock/cli/s
 | `--trace` | `-r` | `false` | Enable syscall tracing (Linux). Backend is ptrace+seccomp or eBPF — see [capture modes](../concepts/capture-modes). No-op on non-Linux. |
 | `--ignore-command-exit-code` | (none) | `false` | Exit 0 from cilock even when the wrapped command exits non-zero. The exit code is recorded and signed in `command-run/v0.2` either way (and the envelope is written and uploaded either way), so a policy rule on `input.exitcode` can deny the run; without the flag a non-zero exit also fails `cilock run` itself. Useful for tools that signal findings via exit code (e.g. `oscap` exits 2, scanners exit 1). |
 | `--hashes <list>` | (none) | `sha256` | Hash algorithms used in digests (comma-separated). |
+| `--max-attestation-bytes <size>` | (none) | `4MiB` | Largest in-toto statement CI/lock will sign, as plain bytes (`4194304`) or with a unit (`4MiB`, `512KiB`, `4MB` — binary units are 1024-based, `KB`/`MB`/`GB` are 1000-based). A statement over this is refused **before** it is signed, written or uploaded, and the error names the total, the limit and the five largest attestors with a remedy for each. Also settable via `CILOCK_MAX_ATTESTATION_BYTES` (the flag wins). `0` disables the limit and warns once on stderr. See [why 4 MiB](#why-the-attestation-size-limit-is-4-mib). |
 | `--dirhash-glob <list>` | (none) | (none) | Globs for which directories should be hashed as a single unit. |
 | `--timestamp-servers <list>` | `-t` | (none) | RFC 3161 TSA URLs (comma-separated; repeatable). |
 | `--enable-archivista` | (none) | `false` | Push the signed envelope to Archivista. |
@@ -443,8 +444,55 @@ Wraps an arbitrary file in a DSSE envelope. Used most commonly to sign a policy 
 | `--infile <path>` | `-f` | (required) | File to sign (typically the policy JSON). |
 | `--outfile <path>` | `-o` | stdout | Destination for the signed DSSE envelope. |
 | `--datatype <uri>` | `-t` | `https://witness.testifysec.com/policy/v0.1` | DSSE `payloadType`. Default is the witness policy type for backward compatibility; CI/lock also accepts `https://aflock.ai/policy/v0.1`. |
+| `--max-attestation-bytes <size>` | (none) | `4MiB` | Largest input `sign` will wrap, measured on the bytes read from `--infile` — for `sign` the input *is* the payload, so nothing is framed around it. Refused before a signer is loaded, so an oversized file fails even with no key configured. Same grammar, env var and `0` opt-out as [`run`](#cilock-run-cmd). |
 | `--platform-url <url>` | (none) | `https://platform.testifysec.com` | Platform whose session is exchanged for a keyless Fulcio certificate. Pass `""` to sign with `--signer-*` only. |
 | `--offline` | (none) | `false` | Alias for `--platform-url ""`, the same opt-out `run` and `verify` take: no session lookup, no keyless exchange, no platform TSA. Needs a local signer (`-k` or a `--signer-kms-*`/`--signer-vault-*`/`--signer-spiffe-*` provider); without one the command says so instead of failing with "no signers found". |
+
+### Why the attestation size limit is 4 MiB
+
+The number comes from what the platform can afford to *read*, not from what a signer
+can produce.
+
+On each push evaluation the platform downloads and JSON-parses **every** envelope
+matching the commit, three times, and caches nothing above 512 KiB. Measured
+2026-09-15 on the evaluate-release path: about **0.4 s per MB**. A commit with no
+large envelope evaluates in 0.95 s median; one 45 MB envelope takes 18.6 s; two take
+32 s. A single evaluation is timed out at the edge after **25 s**, under Envoy's 30 s
+route timeout — so a pair of oversized envelopes does not merely make a push slow, it
+makes the platform report itself unreachable.
+
+That is not hypothetical. A command-run attestor that captured a whole `go test -json`
+stream produced 45.6 MB and 47.1 MB envelopes and took pushes over the edge budget.
+A 4 MiB ceiling keeps a commit carrying several envelopes inside roughly two seconds
+of parse time. The edge has 4 MiB constants of its own, but they are not a per-envelope
+read cap and this limit is not derived from them: that number is the git push *prefix*
+cap (the ref-update section, push certificate and push-options), and the edge's
+whole-body cap is 16 MiB. The agreement is a coincidence, and the parse-time
+measurement above is the only thing this default rests on.
+
+For scale on the other side: a real `push-tests` mint of this repository — `-a git -a
+alps-evidence` with the product exclude glob, compact evidence profile — measured
+**17,023 bytes** of statement on 2026-09-15. The default leaves about 240x headroom
+for ordinary evidence, so a run that trips it has a stdout-capture or a
+material/product-scope problem, which is what the refusal's per-attestor breakdown
+points at.
+
+The margin is narrower on a **legacy**-profile build, where the material attestor's
+per-file leaves stay inline. The same repository measured a 4.95 MiB envelope — about
+3.7 MiB of statement, 17,152 leaves — before compact inventories detached them, which
+is 88% of this limit rather than 0.4% of it. That is the intended behaviour: a legacy
+build really is producing the envelopes push evaluation struggles with. Raise the
+limit deliberately with the flag or the env var if you need it, or move to a compact
+build.
+
+`verify` has no such flag, deliberately. The limit is a **mint-time** guardrail;
+evidence already signed — including envelopes minted before the limit existed — must
+stay verifiable forever.
+
+Companion envelopes (`--material-manifest`, detached file inventories) are exempt.
+They are keyed by tree root and unreachable from a commit-keyed lookup, so a push
+evaluation never opens one, and each carries its own ceiling and its own upload
+consent.
 
 ## `cilock verify`
 

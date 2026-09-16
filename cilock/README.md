@@ -183,7 +183,34 @@ Key flags:
                                     (automatic for authenticated platform runs)
     --material-manifest             Retain complete material details locally in compact builds
     --upload-inventories            Permit retained inventory upload when Archivista is enabled
+    --max-attestation-bytes bytes   Largest in-toto statement cilock will sign (default 4MiB)
 ```
+
+**Attestation size limit:** `--max-attestation-bytes` (env
+`CILOCK_MAX_ATTESTATION_BYTES`, default `4MiB`, `0` to disable) caps the in-toto
+statement JSON — the bytes a consumer base64-decodes and parses. A statement over
+the limit is refused *before* it is signed, written or uploaded, and the error
+names the total, the limit, and the five largest attestors with a remedy for each.
+Sizes take plain bytes (`4194304`) or a unit; `KiB`/`MiB`/`GiB` are 1024-based and
+`KB`/`MB`/`GB` are 1000-based, so `4MB` is not silently rounded up to `4MiB`.
+
+The number is set by what the platform can afford to read, not by what a signer can
+produce: push evaluation downloads and JSON-parses every envelope matching the
+commit three times, caching nothing above 512 KiB, at about **0.4 s per MB**
+(measured 2026-09-15). One 45 MB envelope costs 18.6 s and two cost 32 s against a
+**25 s** edge timeout — which is how a `go test -json` stream captured into
+command-run turned into "the platform is unreachable" on push. A real `push-tests`
+mint of the Judge repo measured 17,023 bytes on the same day, so the default leaves
+roughly 240x headroom for ordinary evidence. The margin is much thinner on a
+**legacy**-profile build, where material's per-file leaves stay inline: the same
+repository measured a 4.95 MiB envelope (~3.7 MiB of statement, 17,152 leaves) before
+compact inventories detached them — 88% of this limit. That is intended; raise the
+limit deliberately if you need it.
+
+`verify` has no such flag: the limit is a mint-time guardrail, and evidence signed
+before it existed must stay verifiable. Companion envelopes (`--material-manifest`,
+detached inventories) are exempt — they are keyed by tree root, never opened by a
+commit-keyed evaluation, and carry their own ceilings.
 
 **Attestor selection:** with `--workload auto` (the default), cilock auto-detects
 attestors only when you do *not* pass `-a` — it inspects the workspace (go-build
@@ -433,7 +460,13 @@ cilock sign -k cosign.key -f policy.json -o policy.signed.json --offline
                                     --signer-kms-*/--signer-vault-*/--signer-spiffe-* provider)
 -t, --datatype string               URI for the data type being signed
                                     (default "https://witness.testifysec.com/policy/v0.1")
+    --max-attestation-bytes bytes   Largest input cilock will sign (default 4MiB)
 ```
+
+`sign` frames nothing around its input, so `--max-attestation-bytes` is measured on
+the bytes read from `--infile`. The check runs before a signer is loaded, so an
+oversized file is refused even when no key is configured, and the output file is
+never created or truncated.
 
 ---
 

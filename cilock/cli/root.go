@@ -17,9 +17,11 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/cilock/internal/keyguard"
@@ -133,7 +135,7 @@ func Execute() {
 		// Log the command's real error BEFORE waiting on / printing the
 		// update notice, so a failure is never delayed or visually buried
 		// by version-check output.
-		log.Error(err)
+		reportCommandError(err, func(line string) { log.Error(line) }, os.Stderr)
 	}
 	if notice := upd.Notice(); notice != "" {
 		fmt.Fprintln(os.Stderr, notice) //nolint:gosec // G705: CLI notice to stderr, not an HTTP/HTML sink; every interpolated part is semver-validated or constant.
@@ -141,6 +143,31 @@ func Execute() {
 	if failed {
 		os.Exit(1)
 	}
+}
+
+// reportCommandError writes a command failure to the terminal.
+//
+// Most cilock errors are one line and go through the logger, which stamps them
+// level=error like every other failure. But a good number are structured —
+// the attestation-size refusal lists the largest attestors with a remedy for
+// each, and upload rejection, CI-trust registration and subject-candidate
+// errors all end in an indented block of what to do next. logrus quotes the
+// whole message, so a multi-line error arrives as one line with literal \n in
+// it, which is the one rendering an operator cannot read. Since the block IS
+// the message's value, the first line goes through the logger and the rest is
+// written raw, unchanged and in order.
+//
+// logf and raw are injected so the split is testable without capturing the
+// process's stderr; production passes log.Error and os.Stderr.
+func reportCommandError(err error, logf func(string), raw io.Writer) {
+	first, rest, found := strings.Cut(err.Error(), "\n")
+	logf(first)
+	if !found {
+		return
+	}
+	// Best effort: stderr is already the failure channel, and a write error
+	// here has nowhere left to be reported.
+	_, _ = fmt.Fprintln(raw, rest)
 }
 
 func preRoot(cmd *cobra.Command, ro *options.RootOptions, logger *logrusLogger, cpuProfileFile **os.File) error {

@@ -61,6 +61,18 @@ func SignCmd() *cobra.Command {
 			if err := refuseAgentPolicySigning(cmd, so, data); err != nil {
 				return err
 			}
+			limit, err := resolveMaxAttestationBytes(cmd, so.MaxAttestationBytes)
+			if err != nil {
+				return err
+			}
+			so.MaxAttestationBytes = options.ByteSize(limit)
+			// Refuse an oversized input here, before a signer is loaded or a
+			// platform session is exchanged: the size of the bytes is already
+			// known, and an operator who is over the limit should learn it
+			// without first being told their key is missing.
+			if err := checkAttestationSize(data, so.DataType, limit); err != nil {
+				return err
+			}
 			// Derive Fulcio/TSA from --platform-url and, if logged in, exchange the
 			// stored session for a short-lived Fulcio token — so `cilock sign` can
 			// sign a policy keyless after `cilock login`, with minimal flags.
@@ -146,6 +158,13 @@ func runSign(ctx context.Context, so options.SignOptions, signers ...cryptoutil.
 }
 
 func signBytes(_ context.Context, so options.SignOptions, data []byte, signers ...cryptoutil.Signer) error {
+	// The input IS the statement payload here (sign frames nothing), so the
+	// limit is measured on the bytes read, before a signer is consulted or
+	// the output is opened. Direct callers that leave the field zero are
+	// unlimited, matching the workflow library's default.
+	if err := checkAttestationSize(data, so.DataType, int(so.MaxAttestationBytes)); err != nil {
+		return err
+	}
 	if len(signers) > 1 {
 		return onlyOneSignerError()
 	}

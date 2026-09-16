@@ -645,6 +645,14 @@ Exit-code policy (finding #221):
 			if _, _, err := config.EvidenceDefaults(); err != nil {
 				return err
 			}
+			// The attestation size limit is resolved (flag > env > 4 MiB)
+			// before anything runs, so a malformed value refuses up front
+			// rather than after a long build; it is enforced at signing time.
+			limit, err := resolveMaxAttestationBytes(cmd, o.MaxAttestationBytes)
+			if err != nil {
+				return err
+			}
+			o.MaxAttestationBytes = options.ByteSize(limit)
 			// Apply platform-derived defaults (archivista, TSA URLs) for any
 			// flags not explicitly set by the user.
 			o.ResolvePlatformDefaults(cmd)
@@ -1003,12 +1011,22 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		workflow.RunWithAttestors(attestors),
 		workflow.RunWithAttestationOpts(attestationOpts...),
 		workflow.RunWithTimestampers(timestampers...),
+		workflow.RunWithMaxStatementBytes(int(ro.MaxAttestationBytes)),
 	}
 	if len(additionalSubjects) > 0 {
 		runOpts = append(runOpts, workflow.RunWithAdditionalSubjects(additionalSubjects))
 	}
 
 	results, runErr := workflow.RunWithExports(ro.StepName, runOpts...)
+	// A statement over --max-attestation-bytes is the one error that must
+	// NOT fall through to the write-what-we-have path below: the refused
+	// statement was never signed, and any sibling envelope already signed in
+	// the same run (an exported attestor, a companion) must not be written or
+	// uploaded either, or the evidence store gets half a run that looks whole.
+	var tooLarge *workflow.StatementTooLargeError
+	if errors.As(runErr, &tooLarge) {
+		return formatStatementTooLarge(tooLarge)
+	}
 	// Don't return immediately on error — write whatever results were
 	// produced first (e.g. secretscan findings), then return the error.
 	// This ensures attestation files are always written for forensic

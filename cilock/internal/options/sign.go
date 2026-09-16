@@ -29,6 +29,10 @@ type SignOptions struct {
 	InFilePath               string
 	TimestampServers         []string
 	PlatformURL              string // TestifySec platform URL — derives fulcio + tsa URLs for keyless signing
+	// MaxAttestationBytes is the largest input `cilock sign` will sign
+	// (--max-attestation-bytes, CILOCK_MAX_ATTESTATION_BYTES, default 4 MiB;
+	// 0 = unlimited). RunE resolves the precedence into this field.
+	MaxAttestationBytes ByteSize
 	// Offline is a clear alias for --platform-url "": sign with the configured
 	// --signer-* key only, no session lookup, no keyless exchange, no platform
 	// TSA. Mirrors RunOptions.Offline and VerifyOptions.Offline so a script
@@ -56,6 +60,8 @@ func (so *SignOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&so.Offline, "offline", false,
 		"Sign with no platform integration — a clear alias for --platform-url \"\". No session lookup, "+
 			"no keyless exchange, no platform timestamp; requires a local signer such as -k/--signer-file-key-path.")
+
+	AddMaxAttestationBytesFlag(cmd, &so.MaxAttestationBytes)
 
 	cmd.MarkFlagsRequiredTogether(RequiredSignFlags...)
 }
