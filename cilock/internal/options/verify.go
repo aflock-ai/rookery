@@ -88,7 +88,9 @@ type VerifyOptions struct {
 	// (default) prints the human-readable evidence + binding line to
 	// stderr. "json" additionally emits a single machine-readable verdict
 	// object {passed, step, matchedSubject, slsaLevel?} to stdout so a CI
-	// gate can branch without parsing logr prose. Set via --format / -o json.
+	// gate can branch without parsing logr prose. Set via --format; the -o
+	// shorthand is a deprecated alias (#9311: -o is an output path on every
+	// other command, so `verify -o out.json` read a path as a format).
 	OutputFormat string
 
 	// Offline is a clear alias for --platform-url "": fully offline verify
@@ -114,9 +116,22 @@ type VerifyOptions struct {
 }
 
 // OutputJSON reports whether the verify verdict should be emitted as a
-// structured JSON object on stdout (set via --format json or -o json).
+// structured JSON object on stdout (set via --format json).
 func (vo *VerifyOptions) OutputJSON() bool {
 	return strings.EqualFold(vo.OutputFormat, "json")
+}
+
+// ValidateOutputFormat rejects a --format value that is neither text nor json.
+// Before this, an unknown value fell through to the text verdict, so a path
+// passed where the format is read (`-o out.json`, the #9311 repro) verified
+// as if nothing had been asked for. The message names the flag that does
+// write a file.
+func (vo *VerifyOptions) ValidateOutputFormat() error {
+	if strings.EqualFold(vo.OutputFormat, "text") || strings.EqualFold(vo.OutputFormat, "json") {
+		return nil
+	}
+	return fmt.Errorf("unknown --format %q (want text|json); --format selects how the verdict is reported, "+
+		"not where it is written — to write the verification summary attestation to a file use --vsa-outfile", vo.OutputFormat)
 }
 
 // ResolvePlatformDefaults derives verification trust from the configured
@@ -429,6 +444,12 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 			"{passed, step, matchedSubject, slsaLevel} to stdout so a CI gate can branch without parsing logs. "+
 			"Branch on cilock's EXIT CODE, never on grepped output: `if cilock verify ...; then`. Piping to "+
 			"tail/grep replaces the exit code with the pipe's and masks a verification failure.")
+	// -o is an output PATH on every other command (run, sign, bundle create,
+	// policy draft/from-bundles/from-commit). Here it selected a format, so
+	// `verify -o out.json` silently chose an unknown format instead of failing
+	// (#9311). The shorthand keeps working for existing scripts, prints a
+	// one-line notice, and is gone from --help; spell --format.
+	_ = cmd.Flags().MarkShorthandDeprecated("format", "use --format")
 
 	cmd.MarkFlagsRequiredTogether("policy")
 	// NOTE: policy-trust sources (publickey / policy-ca* / verifier-kms-ref) are

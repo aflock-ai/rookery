@@ -621,7 +621,14 @@ Exit-code policy (finding #221):
     - any attestor that ran successfully but had nothing to do
 
   CI should gate on cilock's exit code — only a fatal class produces
-  a non-zero exit.`,
+  a non-zero exit.
+
+  A non-zero command exit is fatal for cilock's exit status but not for the
+  evidence: the envelope is still signed, written to --outfile and uploaded
+  when Archivista is enabled, with command-run/v0.2 carrying the real exit
+  code, so a policy rule on input.exitcode can deny the run and print its
+  remediation. --ignore-command-exit-code makes cilock exit 0 in that case;
+  the recorded exit code is unchanged.`,
 		Example: `  # Wrap a build, sign with a local key, capture Go build provenance
   cilock run --step build -k cosign.key --workload manual -a environment,git,go-build -o build.att.json -- go build ./...
 

@@ -36,7 +36,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock policy from-commit` | Author a Witness policy from a commit's CI attestations already in the platform's Archivista. |
 | `cilock policy push` | Upload a signed policy DSSE to the platform and create a release. |
 | `cilock policy bind` | Bind a published policy definition/release to a product on the platform. |
-| `cilock policy validate` | Validate a Witness/cilock policy document (schema only, no signature check). |
+| `cilock policy validate` | Validate a Witness/cilock policy document (schema; signature only with `-k` or `--require-signed`). |
 | `cilock policy draft` | Hydrate a hand-authored policy with the tenant's platform trust roots. Returns it UNSIGNED. |
 | `cilock keyid` | Print the canonical keyid (`hex(sha256(PEM(pub)))`) derived from a public or private key. |
 | `cilock bundle create` / `inspect` | Build or inspect a portable attestation bundle (tar.gz of DSSE envelopes). |
@@ -366,7 +366,7 @@ Only **one signer** is supported per `run` invocation (enforced in `cilock/cli/s
 | `--workingdir <dir>` | `-d` | current dir | Working directory for material/product capture. |
 | `--outfile <path>` | `-o` | stdout | Path for the signed DSSE envelope. |
 | `--trace` | `-r` | `false` | Enable syscall tracing (Linux). Backend is ptrace+seccomp or eBPF — see [capture modes](../concepts/capture-modes). No-op on non-Linux. |
-| `--ignore-command-exit-code` | (none) | `false` | Still record (and sign) the attestation when the wrapped command exits non-zero, instead of aborting. Useful for tools that signal findings via exit code (e.g. `oscap` exits 2, scanners exit 1). |
+| `--ignore-command-exit-code` | (none) | `false` | Exit 0 from cilock even when the wrapped command exits non-zero. The exit code is recorded and signed in `command-run/v0.2` either way (and the envelope is written and uploaded either way), so a policy rule on `input.exitcode` can deny the run; without the flag a non-zero exit also fails `cilock run` itself. Useful for tools that signal findings via exit code (e.g. `oscap` exits 2, scanners exit 1). |
 | `--hashes <list>` | (none) | `sha256` | Hash algorithms used in digests (comma-separated). |
 | `--dirhash-glob <list>` | (none) | (none) | Globs for which directories should be hashed as a single unit. |
 | `--timestamp-servers <list>` | `-t` | (none) | RFC 3161 TSA URLs (comma-separated; repeatable). |
@@ -443,6 +443,8 @@ Wraps an arbitrary file in a DSSE envelope. Used most commonly to sign a policy 
 | `--infile <path>` | `-f` | (required) | File to sign (typically the policy JSON). |
 | `--outfile <path>` | `-o` | stdout | Destination for the signed DSSE envelope. |
 | `--datatype <uri>` | `-t` | `https://witness.testifysec.com/policy/v0.1` | DSSE `payloadType`. Default is the witness policy type for backward compatibility; CI/lock also accepts `https://aflock.ai/policy/v0.1`. |
+| `--platform-url <url>` | (none) | `https://platform.testifysec.com` | Platform whose session is exchanged for a keyless Fulcio certificate. Pass `""` to sign with `--signer-*` only. |
+| `--offline` | (none) | `false` | Alias for `--platform-url ""`, the same opt-out `run` and `verify` take: no session lookup, no keyless exchange, no platform TSA. Needs a local signer (`-k` or a `--signer-kms-*`/`--signer-vault-*`/`--signer-spiffe-*` provider); without one the command says so instead of failing with "no signers found". |
 
 ## `cilock verify`
 
@@ -467,6 +469,9 @@ Because v0.3 product/material attestations [inline their Merkle leaves](../attes
 | `--policy-fulcio-oidc-issuer`, `--policy-fulcio-build-trigger`, `--policy-fulcio-build-config-uri`, `--policy-fulcio-runner-environment`, `--policy-fulcio-run-invocation-uri`, `--policy-fulcio-source-repository-{ref,identifier,digest}` | (none) | Fulcio cert-constraint fields pinning a **keyless** policy signer — e.g. `--policy-fulcio-build-config-uri https://github.com/org/repo/.github/workflows/release.yml@*` pins which workflow may sign a trusted policy without pinning the ref; `--policy-fulcio-runner-environment github-hosted`. |
 | `--policy-timestamp-servers <list>` | (none) | Trusted TSA CA cert paths for verifying timestamped policies. |
 | `--verifier-kms-*` | (none) | Same shape as `--signer-kms-*`, used when the policy's public key is referenced by a KMS URI. |
+| `--offline` | (none) | Alias for `--platform-url ""`: fully offline verify. |
+| `--format <fmt>` | (none) | `text` (default) or `json`, which also emits one machine-readable verdict object on stdout. An unknown value is an error. `-o` is a **deprecated** alias for `--format` on this command only (it prints a notice); on every other command `-o` is an output path. |
+| `--vsa-outfile <path>` | (none) | Write the Verification Summary Attestation to a file. This, not `-o`, is where verify writes a file. |
 
 Full verifier flag list is in [`cilock/internal/options/verify.go`](https://github.com/aflock-ai/rookery/blob/main/cilock/internal/options/verify.go).
 
@@ -730,9 +735,16 @@ Markers: `(always run)` means the attestor runs on every `cilock run`; `(default
 
 Prints the JSON Schema document for the named attestor's predicate. Useful for writing Rego policies against a specific schema.
 
-## `cilock policy validate <path>`
+## `cilock policy validate -p <path>`
 
-Validates a Witness/cilock policy document for schema correctness. Does not perform signature verification.
+Validates a Witness/cilock policy document for schema correctness. An unsigned policy is the normal input (validate, then `cilock sign`) and produces no signature warning; a DSSE envelope that carries no signatures does.
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--policy <path>` | `-p` | (required) | Policy to validate: raw JSON or a signed DSSE envelope. |
+| `--publickey <path>` | `-k` | (none) | Verify the envelope's signature against this key. Requires a DSSE envelope. |
+| `--require-signed` | (none) | `false` | Fail unless the policy is a DSSE envelope with at least one signature (presence only; add `-k` to verify it). |
+| `--format <fmt>` | (none) | `text` | `text` or `json`. `--output`/`-o` are deprecated aliases that print a notice. |
 
 ## `cilock tools`
 

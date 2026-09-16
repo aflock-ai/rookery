@@ -409,12 +409,15 @@ func TestSecurity_R3_270_CircularAttestationsFromNotDetected(t *testing.T) {
 }
 
 // ===========================================================================
-// R3-270: ValidateRawPolicy accepts unsigned/unwrapped policy JSON
-// with only a warning, providing no signature assurance.
+// R3-270: ValidateRawPolicy accepts unsigned/unwrapped policy JSON,
+// providing no signature assurance. The fact is carried by
+// ValidationResult.Signature (a typed status), not by a warning string:
+// the warning fired on every correct validate-then-sign use (#9311), and a
+// consumer that needs the assurance can branch on the field.
 // ===========================================================================
 
-// TestSecurity_R3_270_RawPolicyNoSignatureAssurance proves that
-// ValidateRawPolicy only warns about the missing DSSE envelope.
+// TestSecurity_R3_270_RawPolicyNoSignatureAssurance proves that a raw policy
+// reports Valid without claiming any signature assurance.
 func TestSecurity_R3_270_RawPolicyNoSignatureAssurance(t *testing.T) {
 	rawJSON := `{
 		"expires": "2030-01-01T00:00:00Z",
@@ -432,14 +435,8 @@ func TestSecurity_R3_270_RawPolicyNoSignatureAssurance(t *testing.T) {
 
 	result := ValidateRawPolicy(context.Background(), []byte(rawJSON))
 	require.True(t, result.Valid, "raw policy is reported as valid despite no DSSE envelope")
-
-	foundDSSEWarning := false
-	for _, w := range result.Warnings {
-		if w != "" {
-			foundDSSEWarning = true
-		}
-	}
-	require.True(t, foundDSSEWarning, "should warn about missing DSSE envelope")
+	require.Equal(t, SignatureUnsigned, result.Signature, "Valid must never imply a signature was checked")
+	require.Empty(t, result.Warnings, "an unsigned raw policy is the documented validate-then-sign input; the status is a field, not a warning")
 }
 
 // ===========================================================================

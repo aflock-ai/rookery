@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -34,15 +35,18 @@ func PolicyValidateCmd() *cobra.Command {
 		Use:   "validate",
 		Short: "Validate a Witness policy file",
 		Long:  "Validates a Witness policy file for correct schema, structure, and optionally verifies signatures",
-		Example: `  # Validate a policy's schema and structure
+		Example: `  # Validate a policy's schema and structure (unsigned input is the normal case)
   cilock policy validate -p policy.json
 
   # Also verify the policy signature against a public key, as JSON
-  cilock policy validate -p policy.json -k policy-pub.pem -o json`,
+  cilock policy validate -p policy.json -k policy-pub.pem --format json
+
+  # Refuse a policy that was never signed
+  cilock policy validate -p policy.signed.json --require-signed`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValidatePolicy(cmd.Context(), pvo)
+			return runValidatePolicy(cmd.Context(), pvo, cmd.OutOrStdout())
 		},
 	}
 
@@ -50,7 +54,7 @@ func PolicyValidateCmd() *cobra.Command {
 	return cmd
 }
 
-func runValidatePolicy(ctx context.Context, pvo options.PolicyValidateOptions) error {
+func runValidatePolicy(ctx context.Context, pvo options.PolicyValidateOptions, out io.Writer) error {
 	policyBytes, err := os.ReadFile(pvo.PolicyFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to read policy file: %w", err)
@@ -69,27 +73,42 @@ func runValidatePolicy(ctx context.Context, pvo options.PolicyValidateOptions) e
 		}
 	}
 
-	var result *policy.ValidationResult
-
-	policyEnvelope, err := policy.LoadPolicy(ctx, pvo.PolicyFilePath, nil)
-	if err == nil && len(policyEnvelope.Payload) > 0 {
-		result = policy.ValidatePolicy(ctx, policyEnvelope, verifier)
-	} else {
-		if pvo.PublicKeyPath != "" {
-			return fmt.Errorf("cannot verify signature on raw (non-DSSE) policy file - policy must be wrapped in DSSE envelope for signature verification")
-		}
-		result = policy.ValidateRawPolicy(ctx, policyBytes)
+	result, err := validatePolicyInput(ctx, pvo, policyBytes, verifier)
+	if err != nil {
+		return err
 	}
 
 	if pvo.OutputFormat == formatJSON {
-		return outputJSON(result)
+		return outputJSON(out, result)
 	}
 
-	return outputText(result)
+	return outputText(out, result)
 }
 
-func outputJSON(result *policy.ValidationResult) error {
-	encoder := json.NewEncoder(os.Stdout)
+// validatePolicyInput validates either form of input. A signature is expected
+// only when the caller says so (-k, --require-signed) or the input is already
+// in the signed form (a DSSE envelope, which ValidatePolicy warns about when it
+// carries no signatures). A raw policy is the documented validate-then-sign
+// input and gets no warning (#9311).
+func validatePolicyInput(ctx context.Context, pvo options.PolicyValidateOptions, policyBytes []byte, verifier cryptoutil.Verifier) (*policy.ValidationResult, error) {
+	policyEnvelope, err := policy.LoadPolicy(ctx, pvo.PolicyFilePath, nil)
+	if err != nil || len(policyEnvelope.Payload) == 0 {
+		if pvo.RequireSigned {
+			return nil, fmt.Errorf("--require-signed: the policy is not signed (not a DSSE envelope); sign it with `cilock sign -f %s -o policy.signed.json`", pvo.PolicyFilePath)
+		}
+		if pvo.PublicKeyPath != "" {
+			return nil, fmt.Errorf("cannot verify signature on raw (non-DSSE) policy file - policy must be wrapped in DSSE envelope for signature verification")
+		}
+		return policy.ValidateRawPolicy(ctx, policyBytes), nil
+	}
+	if pvo.RequireSigned && len(policyEnvelope.Signatures) == 0 {
+		return nil, fmt.Errorf("--require-signed: the DSSE envelope carries no signatures; sign it with `cilock sign -f policy.json -o policy.signed.json`")
+	}
+	return policy.ValidatePolicy(ctx, policyEnvelope, verifier), nil
+}
+
+func outputJSON(out io.Writer, result *policy.ValidationResult) error {
+	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(result); err != nil {
 		return fmt.Errorf("failed to encode JSON output: %w", err)
@@ -101,35 +120,36 @@ func outputJSON(result *policy.ValidationResult) error {
 	return nil
 }
 
-func outputText(result *policy.ValidationResult) error {
+func outputText(out io.Writer, result *policy.ValidationResult) error {
 	if result.Valid {
-		fmt.Println("Policy validation: PASSED")
+		_, _ = fmt.Fprintln(out, "Policy validation: PASSED")
+		_, _ = fmt.Fprintf(out, "  signature: %s\n", result.Signature)
 
 		if len(result.Warnings) > 0 {
-			fmt.Println()
-			fmt.Println("Warnings:")
+			_, _ = fmt.Fprintln(out)
+			_, _ = fmt.Fprintln(out, "Warnings:")
 			for i, warn := range result.Warnings {
-				fmt.Printf("  %d. %s\n", i+1, warn)
+				_, _ = fmt.Fprintf(out, "  %d. %s\n", i+1, warn)
 			}
 		}
 		return nil
 	}
 
-	fmt.Println("Policy validation: FAILED")
-	fmt.Println()
+	_, _ = fmt.Fprintln(out, "Policy validation: FAILED")
+	_, _ = fmt.Fprintln(out)
 
 	if len(result.Errors) > 0 {
-		fmt.Println("Validation errors:")
+		_, _ = fmt.Fprintln(out, "Validation errors:")
 		for i, err := range result.Errors {
-			fmt.Printf("  %d. %q\n", i+1, err)
+			_, _ = fmt.Fprintf(out, "  %d. %q\n", i+1, err)
 		}
 	}
 
 	if len(result.Warnings) > 0 {
-		fmt.Println()
-		fmt.Println("Warnings:")
+		_, _ = fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out, "Warnings:")
 		for i, warn := range result.Warnings {
-			fmt.Printf("  %d. %q\n", i+1, warn)
+			_, _ = fmt.Fprintf(out, "  %d. %q\n", i+1, warn)
 		}
 	}
 

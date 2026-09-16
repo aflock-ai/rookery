@@ -339,15 +339,18 @@ type RunOptions struct {
 	CacheAllowPatterns   []string // patterns to remove from the effective set
 	CacheDisableDefaults bool     // drop DefaultCachePatterns entirely
 	CacheDisableEnvProbe bool     // skip SystemCachePathsFromEnv discovery
-	// IgnoreCommandExitCode tells cilock to record the wrapped command's
-	// exit code in `command-run/v0.1.exitcode` but NOT abort the cilock run
-	// when the command exits non-zero. Without this flag, every postproduct
-	// attestor (sarif/sbom/vex/etc.) is skipped on non-zero exit, which
-	// breaks integration with tools that exit non-zero on findings
+	// IgnoreCommandExitCode makes a non-zero wrapped-command exit non-fatal
+	// for cilock's own exit status. It does not change what is recorded: the
+	// exit code is signed into `command-run/v0.2.exitcode` either way, the
+	// envelope is written (and uploaded when Archivista is enabled) either
+	// way, and postproduct attestors (sarif/sbom/vex/etc.) run either way —
+	// a non-zero exit is an observed outcome, not a failure to observe
+	// (commandrun.exitOutcome). What the flag changes is that `cilock run`
+	// exits 0 instead of 1, for tools that exit non-zero on findings
 	// (semgrep, gosec, hadolint, checkov, trivy `--exit-code`, prowler v3,
-	// govulncheck) unless each tool's own soft-fail flag is known and used.
-	// Policy Rego still has access to the recorded exit code via
-	// `input.attestation.exitcode` if a deny rule wants to gate on it.
+	// govulncheck) so CI gates on the policy verdict rather than on the
+	// tool's exit status. Policy Rego reads the real code via
+	// `input.exitcode` in both modes (#9308).
 	IgnoreCommandExitCode bool
 
 	// Diagnose enables verbose internal logging across cilock subsystems:
@@ -1182,11 +1185,12 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 		"Skip env-var discovery of cache paths (XDG_CACHE_HOME, GOCACHE, CARGO_HOME, etc.). "+
 			"Use in containerized builds where host env vars should not influence classification.")
 	cmd.Flags().BoolVar(&ro.IgnoreCommandExitCode, "ignore-command-exit-code", false,
-		"Record the wrapped command's exit code in command-run/v0.1 but do NOT abort the cilock run "+
-			"on non-zero exit. Use with tools that exit non-zero on findings (semgrep, gosec, hadolint, "+
-			"checkov, trivy --exit-code, prowler v3, govulncheck) so postproduct attestors still fire and "+
-			"the SARIF/JSON output is captured. Policy Rego retains access to the real exit code via "+
-			"input.attestation.exitcode for gating.")
+		"Exit 0 from cilock even when the wrapped command exits non-zero. The command's exit code is "+
+			"recorded and signed in command-run/v0.2 either way, so a policy rule on input.exitcode can "+
+			"deny the run; without this flag a non-zero exit also fails cilock run itself (exit 1) after "+
+			"the envelope is written. Use with tools that exit non-zero on findings (semgrep, gosec, "+
+			"hadolint, checkov, trivy --exit-code, prowler v3, govulncheck) so CI reads the policy verdict "+
+			"instead of the tool's exit status.")
 	cmd.Flags().BoolVar(&ro.Diagnose, "diagnose", false,
 		"Enable verbose internal logging across cilock subsystems (eBPF program loading, "+
 			"fanotify event traces, ringbuf drop reporting, fs-verity probe results). "+

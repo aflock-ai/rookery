@@ -87,13 +87,14 @@ func VerifyCmd() *cobra.Command {
   # Gate on the EXIT CODE, never on grepped output:
   if cilock verify ./app -p policy.json.signed; then echo deploy; else echo blocked; fi
   # Machine-readable verdict for an agent (stdout = pure JSON, exit code = gate):
-  cilock verify ./app -p policy.json.signed -o json
+  cilock verify ./app -p policy.json.signed --format json
   # WARNING: piping to tail/grep replaces the exit code with the pipe's and
   # MASKS a verification failure — 'cilock verify ... | grep ...' is unsafe in a gate.`,
 		Args:              cobra.MaximumNArgs(1),
 		SilenceErrors:     true,
 		SilenceUsage:      true,
 		DisableAutoGenTag: true,
+		PreRunE:           func(*cobra.Command, []string) error { return vo.ValidateOutputFormat() }, // #9311, before any I/O
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Lookup("policy-ca").Changed {
 				log.Warn("The flag `--policy-ca` is deprecated and will be removed in a future release. Please use `--policy-ca-roots` and `--policy-ca-intermediates` instead.")

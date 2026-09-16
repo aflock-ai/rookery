@@ -15,6 +15,7 @@
 package options
 
 import (
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/spf13/cobra"
@@ -28,6 +29,11 @@ type SignOptions struct {
 	InFilePath               string
 	TimestampServers         []string
 	PlatformURL              string // TestifySec platform URL — derives fulcio + tsa URLs for keyless signing
+	// Offline is a clear alias for --platform-url "": sign with the configured
+	// --signer-* key only, no session lookup, no keyless exchange, no platform
+	// TSA. Mirrors RunOptions.Offline and VerifyOptions.Offline so a script
+	// can pass one common flag set to run, sign and verify (#9311).
+	Offline bool
 }
 
 var RequiredSignFlags = []string{
@@ -47,6 +53,9 @@ func (so *SignOptions) AddFlags(cmd *cobra.Command) {
 			"(default "+platformconfig.DefaultPlatformURL+"). Run 'cilock login' first to sign a "+
 			"policy keyless as yourself; the stored session is exchanged for a short-lived Fulcio "+
 			"certificate. Pass --platform-url \"\" to opt out (sign with --signer-* only, no platform).")
+	cmd.Flags().BoolVar(&so.Offline, "offline", false,
+		"Sign with no platform integration — a clear alias for --platform-url \"\". No session lookup, "+
+			"no keyless exchange, no platform timestamp; requires a local signer such as -k/--signer-file-key-path.")
 
 	cmd.MarkFlagsRequiredTogether(RequiredSignFlags...)
 }
@@ -62,6 +71,17 @@ func (so *SignOptions) AddFlags(cmd *cobra.Command) {
 // --signer-* only). Best-effort and fail-open: a missing/expired session, or an
 // explicit --signer-fulcio-* choice, leaves signing exactly as it was.
 func (so *SignOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
+	// --offline is a clear alias for --platform-url "": no session lookup, no
+	// keyless exchange, no platform TSA. With a local signer the derivation
+	// below would already skip all three, so the early return is the
+	// documented contract rather than a behaviour change for -k users; what
+	// it guarantees is that no future platform derivation added below can
+	// reach an offline sign.
+	if so.Offline {
+		so.PlatformURL = ""
+		log.Info("--offline: signing with no platform (no session lookup, no keyless exchange, no platform TSA)")
+		return
+	}
 	// Explicit-disable: the user passed --platform-url "" (changed + empty).
 	if cmd.Flags().Changed("platform-url") && so.PlatformURL == "" {
 		return

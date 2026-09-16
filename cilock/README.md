@@ -173,6 +173,8 @@ Key flags:
 -k, --signer-file-key-path string   Path to the file containing the private key
 -r, --trace                         Enable tracing for the command (Linux; eBPF, falls back to ptrace)
 -d, --workingdir string             Directory from which commands will run
+    --ignore-command-exit-code      Exit 0 from cilock even when the wrapped command exits non-zero;
+                                    the exit code is recorded and signed in command-run/v0.2 either way
     --workload string               How attestors are picked: 'auto' (default — detects when you
                                     don't pass -a) or 'manual' (disables detection)
     --capture-mode string           Where material/product attestors get their digests
@@ -198,6 +200,13 @@ gate on the exit code:
   `Errors:`.
 - **Soft (exit 0)** — an attestor ran fine but had nothing to do (e.g. `sbom`
   with no products, `go-build` with no Go binaries). Logged under `Warnings:`.
+
+A non-zero command exit fails cilock's exit status but not the evidence: the
+envelope is still signed, written to `--outfile` and uploaded when Archivista is
+enabled, with `command-run/v0.2` carrying the real exit code, so a policy rule
+on `input.exitcode` can deny the run and print its remediation.
+`--ignore-command-exit-code` makes cilock exit 0 in that case (for tools that
+exit non-zero on findings); the recorded exit code is unchanged.
 
 Examples (from `cilock run --help`):
 
@@ -366,6 +375,11 @@ the subject digest can be supplied directly with `--subjects`.
     --enable-archivista     Use Archivista to store or retrieve attestations
     --platform-url string   Platform URL (derives archivista + TSA URLs). Pass "" for fully
                             offline verify (default "https://platform.testifysec.com")
+    --offline               Fully offline verify — alias for --platform-url ""
+    --format string         How to report the verdict: text (default) or json (machine-readable
+                            verdict on stdout). `-o` is a deprecated alias for --format on this
+                            command; everywhere else -o is an output path.
+    --vsa-outfile string    Write the Verification Summary Attestation to this file
 ```
 
 Examples (from `cilock verify --help`):
@@ -406,7 +420,7 @@ content root alone is not a complete path inventory.
 ## `cilock sign`
 
 ```bash
-cilock sign -k cosign.key -f policy.json -o policy.signed.json --platform-url ""
+cilock sign -k cosign.key -f policy.json -o policy.signed.json --offline
 ```
 
 ```
@@ -414,6 +428,9 @@ cilock sign -k cosign.key -f policy.json -o policy.signed.json --platform-url ""
 -f, --infile string                 File to sign
 -o, --outfile string                File to write signed data; defaults to stdout
     --platform-url string          Hosted platform URL; pass "" for local/offline signing
+    --offline                       Alias for --platform-url "": no session lookup, no keyless
+                                    exchange, no platform TSA; needs a local signer (-k or a
+                                    --signer-kms-*/--signer-vault-*/--signer-spiffe-* provider)
 -t, --datatype string               URI for the data type being signed
                                     (default "https://witness.testifysec.com/policy/v0.1")
 ```
@@ -441,11 +458,14 @@ the names from the `fire:` list into `cilock run -a <names> -- <command>`.
 ## `cilock policy`
 
 ```bash
-# Validate a policy's schema and structure
+# Validate a policy's schema and structure (an unsigned policy is the normal input here)
 cilock policy validate -p policy.json
 
-# Also verify the policy signature, as JSON
-cilock policy validate -p policy.json -k policy-pub.pem -o json
+# Also verify the policy signature, as JSON (`-o`/`--output` are deprecated aliases for --format)
+cilock policy validate -p policy.json -k policy-pub.pem --format json
+
+# Refuse a policy that was never signed
+cilock policy validate -p policy.signed.json --require-signed
 
 # Generate a starter policy template from signed bundles
 cilock policy from-bundles -k signer.pub *.bundle.json > policy.json

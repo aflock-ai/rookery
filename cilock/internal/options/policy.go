@@ -22,6 +22,11 @@ type PolicyValidateOptions struct {
 	PolicyFilePath string
 	PublicKeyPath  string
 	OutputFormat   string
+	// RequireSigned makes an unsigned policy a validation failure instead of
+	// an accepted input. Off by default: validate-then-sign is the documented
+	// flow, so the raw policy is the normal input and gets no signature
+	// warning. Set it (or pass -k) when a signature is expected (#9311).
+	RequireSigned bool
 }
 
 var RequiredPolicyValidateFlags = []string{
@@ -31,7 +36,18 @@ var RequiredPolicyValidateFlags = []string{
 func (pvo *PolicyValidateOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&pvo.PolicyFilePath, "policy", "p", "", "Path to policy file to validate (required)")
 	cmd.Flags().StringVarP(&pvo.PublicKeyPath, "publickey", "k", "", "Path to public key for signature verification (optional)")
-	cmd.Flags().StringVarP(&pvo.OutputFormat, "output", "o", "text", "Output format: text or json")
+	cmd.Flags().StringVar(&pvo.OutputFormat, "format", "text", "Output format: text or json")
+	// --output / -o used to be this format flag. -o is an output PATH on every
+	// other command that binds it (#9311), so the old spellings stay as
+	// deprecated aliases of --format: they still work, print a one-line
+	// notice, and are hidden from --help.
+	// MarkDeprecated alone: pflag prints the flag notice on the shorthand path
+	// too, so marking the shorthand as well would print two lines for `-o`.
+	cmd.Flags().StringVarP(&pvo.OutputFormat, "output", "o", "text", "Deprecated alias for --format")
+	_ = cmd.Flags().MarkDeprecated("output", "use --format")
+	cmd.Flags().BoolVar(&pvo.RequireSigned, "require-signed", false,
+		"Fail unless the policy is a DSSE envelope carrying at least one signature (the form `cilock sign` "+
+			"produces). Presence only; pass -k/--publickey to verify the signature.")
 
 	cmd.MarkFlagsRequiredTogether(RequiredPolicyValidateFlags...)
 }

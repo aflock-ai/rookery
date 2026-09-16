@@ -55,6 +55,9 @@ func SignCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to read file to sign: %w", err)
 			}
+			if err := refuseOfflineWithoutLocalSigner(cmd, so); err != nil {
+				return err
+			}
 			if err := refuseAgentPolicySigning(cmd, so, data); err != nil {
 				return err
 			}
@@ -74,6 +77,18 @@ func SignCmd() *cobra.Command {
 
 	so.AddFlags(cmd)
 	return cmd
+}
+
+// refuseOfflineWithoutLocalSigner names the reason an offline sign cannot
+// proceed when no --signer-* flag was given: the only signer that needs no
+// flag is the platform's keyless Fulcio path, and --offline is precisely the
+// promise not to use the platform. Without this the run died later with the
+// generic "no signers found".
+func refuseOfflineWithoutLocalSigner(cmd *cobra.Command, so options.SignOptions) error {
+	if !so.Offline || len(providersFromFlags("signer", cmd.Flags())) > 0 {
+		return nil
+	}
+	return fmt.Errorf("--offline needs a local signer: pass -k/--signer-file-key-path <key> (or a --signer-kms-*/--signer-vault-*/--signer-spiffe-* provider); keyless signing exchanges a platform session for a Fulcio certificate, which is what --offline opts out of")
 }
 
 // refuseAgentPolicySigning classifies the exact bytes that will be signed. It

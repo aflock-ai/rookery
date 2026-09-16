@@ -65,16 +65,20 @@ var essentialFlags = map[string][]string{
 		flagStep, flagAttestations, flagOutfile, flagSignerFileKeyPath,
 		"trace", "capture-mode", "enable-archivista", "workingdir", "workload",
 		"output-format", flagJSON,
+		// Gate-shaping: whether a non-zero wrapped-command exit fails the
+		// cilock run. The exit code is signed either way, but an operator
+		// deciding how CI reads the run has to be able to find this (#9308).
+		"ignore-command-exit-code",
 	},
 	"verify": {
 		"policy", "publickey", flagAttestations, "artifactfile", "bundle",
-		"enable-archivista", "platform-url", "directory-path",
+		"enable-archivista", "platform-url", "directory-path", "offline", "format",
 	},
 	"attest": {
 		flagStep, flagAttestations, flagOutfile, flagSignerFileKeyPath, "subjects",
 	},
 	"sign": {
-		flagSignerFileKeyPath, flagOutfile, "datatype",
+		flagSignerFileKeyPath, flagOutfile, "datatype", "offline",
 	},
 }
 

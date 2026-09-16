@@ -33,10 +33,29 @@ const (
 	functionaryTypePublicKey = "publickey"
 )
 
+// Signature status values reported in ValidationResult.Signature.
+const (
+	// SignatureUnsigned: raw policy JSON, or a DSSE envelope with no signatures.
+	SignatureUnsigned = "unsigned"
+	// SignaturePresent: the envelope carries at least one signature that was
+	// not checked (no verifier supplied).
+	SignaturePresent = "present"
+	// SignatureVerified: the envelope's signature verified against the
+	// supplied key.
+	SignatureVerified = "verified"
+)
+
 type ValidationResult struct {
 	Valid    bool     `json:"valid"`
 	Errors   []string `json:"errors,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
+	// Signature is the signature-assurance status of the input, as a fact a
+	// consumer can branch on rather than a warning string to grep for. A raw
+	// policy is "unsigned" and that is the normal validate-then-sign input,
+	// so it is reported here and not as a warning (#9311); an envelope that
+	// carries no signatures is also "unsigned" and does warn, because the
+	// signed form was presented without the signature.
+	Signature string `json:"signature"`
 }
 
 type policyDocument struct {
@@ -95,9 +114,13 @@ type timestampAuthority struct {
 
 func ValidatePolicy(ctx context.Context, envelope dsse.Envelope, verifier cryptoutil.Verifier) *ValidationResult {
 	result := &ValidationResult{
-		Valid:    true,
-		Errors:   []string{},
-		Warnings: []string{},
+		Valid:     true,
+		Errors:    []string{},
+		Warnings:  []string{},
+		Signature: SignaturePresent,
+	}
+	if len(envelope.Signatures) == 0 {
+		result.Signature = SignatureUnsigned
 	}
 
 	validateEnvelopeStructure(&envelope, result)
@@ -120,12 +143,18 @@ func ValidatePolicy(ctx context.Context, envelope dsse.Envelope, verifier crypto
 
 func ValidateRawPolicy(ctx context.Context, policyJSON []byte) *ValidationResult {
 	result := &ValidationResult{
-		Valid:    true,
-		Errors:   []string{},
-		Warnings: []string{},
+		Valid:     true,
+		Errors:    []string{},
+		Warnings:  []string{},
+		Signature: SignatureUnsigned,
 	}
 
-	result.Warnings = append(result.Warnings, "Policy is not wrapped in a DSSE envelope - signatures cannot be verified")
+	// No "not wrapped in a DSSE envelope" warning here: a raw policy is the
+	// documented validate-then-sign input, so the warning fired on every
+	// correct use (#9311). The fact is carried by Signature instead. A
+	// signature is expected only when the caller says so (-k,
+	// --require-signed) or the input is already an envelope; the CLI enforces
+	// the former and ValidatePolicy warns on the latter.
 
 	var policy policyDocument
 	if err := json.Unmarshal(policyJSON, &policy); err != nil {
@@ -425,7 +454,9 @@ func validateSignature(_ context.Context, envelope *dsse.Envelope, verifier cryp
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("Signature verification failed: %v", err))
 		result.Valid = false
+		return
 	}
+	result.Signature = SignatureVerified
 }
 
 func validateNoCircularDeps(policy *policyDocument, result *ValidationResult, fieldName string, getRefs func(policyStep) []string) {

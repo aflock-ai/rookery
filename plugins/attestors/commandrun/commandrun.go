@@ -128,15 +128,17 @@ func WithSilent(silent bool) Option {
 }
 
 // WithIgnoreExitCode tells the attestor to record the wrapped command's
-// exit code in the predicate but NOT propagate the exit-error up to the
-// cilock run pipeline. Use when the wrapped tool exits non-zero on
-// findings (semgrep, gosec, hadolint, checkov, trivy --exit-code, prowler
-// v3, govulncheck) — without this option, the postproduct stage skips
-// every downstream attestor (sarif/sbom/vex/etc.) and the tool's output
-// never gets parsed into the envelope.
+// exit code in the predicate but NOT return an error for it, so `cilock run`
+// exits 0. Use when the wrapped tool exits non-zero on findings (semgrep,
+// gosec, hadolint, checkov, trivy --exit-code, prowler v3, govulncheck).
 //
-// Policy Rego still has access to the real exit code via
-// `input.attestation.exitcode` and can deny on it.
+// Without this option a non-zero exit is returned as a DetectionError (see
+// exitOutcome): the predicate — exit code, stdout, stderr — is still kept in
+// the signed collection and downstream attestors still run; only cilock's own
+// exit status is non-zero. So the option changes the run's exit status, never
+// the evidence. Policy Rego reads the real exit code via `input.exitcode` in
+// both modes and can deny on it. Exposed on the CLI as
+// --ignore-command-exit-code.
 func WithIgnoreExitCode(ignore bool) Option {
 	return func(cr *CommandRun) {
 		cr.ignoreExitCode = ignore
