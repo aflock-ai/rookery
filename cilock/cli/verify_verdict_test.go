@@ -327,3 +327,53 @@ func TestVerifyVerdict_NoSuppliedDigestsNoOp(t *testing.T) {
 		t.Errorf("expected no output with no supplied digests, got:\n%s", buf.String())
 	}
 }
+
+// TestVerifyVerdict_CommitSubjectNote pins testifysec/judge#9310 with the
+// issue's own commit digest. A "sha1:<commit>" subject that bound to a
+// passing step's commithash subject is reported as exactly that — echoing
+// the algorithm the operator passed, never relabeled sha256, and with no
+// "did NOT match" note. When the commit genuinely bound to nothing, the note
+// still echoes the declared algorithm and tells the operator to confirm the
+// COMMIT, not "the intended file": a commit id is not a file digest, and the
+// file hint sent the reporter looking at the wrong thing.
+func TestVerifyVerdict_CommitSubjectNote(t *testing.T) {
+	const commit = "e71ffe912a93eee23e5c8bf4b5fb167a1e594dea"
+	const name = "https://aflock.ai/attestations/git/v0.1/commithash:" + commit
+	results := map[string]policy.StepResult{
+		"secrets": passedStep("secrets", intoto.Subject{Name: name, Digest: map[string]string{"sha1": commit}}),
+	}
+
+	t.Run("matched commit is reported as sha1 and never as unmatched", func(t *testing.T) {
+		var stderr, jsonOut bytes.Buffer
+		writeVerifyBindingLines(&stderr, []string{"sha1:" + commit}, results, nil)
+		assert.Equal(t, `verified: sha1:`+commit+` bound to step "secrets" subject "git/v0.1/commithash:`+commit+`"`+"\n", stderr.String())
+		assert.NotContains(t, stderr.String(), "sha256:"+commit)
+		assert.NotContains(t, stderr.String(), "did NOT match")
+
+		require.NoError(t, writeVerifyVerdictJSON(&jsonOut, buildVerifyVerdict([]string{"sha1:" + commit}, results, nil)))
+		var verdict VerifyVerdict
+		require.NoError(t, json.Unmarshal(jsonOut.Bytes(), &verdict))
+		assert.Equal(t, "sha1:"+commit, verdict.MatchedSubject)
+		assert.Equal(t, "secrets", verdict.Step)
+		assert.Equal(t, name, verdict.ObservedSubjectName)
+	})
+
+	t.Run("unmatched commit note names the algorithm and the commit, not a file", func(t *testing.T) {
+		const other = "0123456789abcdef0123456789abcdef01234567"
+		var stderr bytes.Buffer
+		writeVerifyBindingLines(&stderr, []string{"sha1:" + other}, results, nil)
+		out := stderr.String()
+		assert.NotContains(t, out, "verified:")
+		assert.Contains(t, out, "supplied artifact sha1:"+other+" did NOT match")
+		assert.NotContains(t, out, "sha256:"+other, "the declared algorithm must be echoed back, not relabeled")
+		assert.Contains(t, out, "confirm you are verifying the intended commit")
+		assert.NotContains(t, out, "intended file", "a commit id is not a file digest; the file hint is the wrong call to action")
+	})
+
+	t.Run("unmatched file digest keeps the file hint", func(t *testing.T) {
+		var stderr bytes.Buffer
+		writeVerifyBindingLines(&stderr, []string{"sha256:" + strings.Repeat("ab", 32)}, results, nil)
+		assert.Contains(t, stderr.String(), "confirm you are verifying the intended file")
+		assert.NotContains(t, stderr.String(), "intended commit")
+	})
+}

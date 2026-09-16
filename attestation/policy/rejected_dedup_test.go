@@ -213,8 +213,12 @@ func TestVerify_MissingStepDiagnosedOncePerVerify(t *testing.T) {
 	}
 	assert.Equal(t, 1, diag,
 		"a step with no evidence must carry ONE diagnostic rejection, not one per depth iteration")
-	assert.Equal(t, 1, src.probes,
-		"the unfiltered diagnostic probe must run once per verify for a missing step, not once per depth")
+	// Two probes, ONE diagnosis: the filtered probe finds nothing, so the
+	// diagnostic asks once more without the attestation filter to tell
+	// "nothing loaded" from "loaded but filtered" (#9309). Both happen inside
+	// the single guarded call; a per-depth repeat would show as 2×depth.
+	assert.Equal(t, 2, src.probes,
+		"the diagnostic probes must run once per verify for a missing step, not once per depth")
 }
 
 // BenchmarkVerify_DepthLoopWithDupSource measures one full Verify over the

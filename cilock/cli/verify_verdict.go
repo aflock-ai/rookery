@@ -265,8 +265,22 @@ func writeVerifyBindingLines(w io.Writer, supplied []string, stepResults map[str
 		if _, ok := bound[h]; ok {
 			continue
 		}
-		_, _ = fmt.Fprintf(w, "note: supplied artifact %s did NOT match any verified subject or product/material leaf — verify passed on the policy's other evidence; confirm you are verifying the intended file\n", h) //nolint:gosec // CLI verdict to stderr, not an HTTP/HTML sink — G705 taint false positive.
+		_, _ = fmt.Fprintf(w, "note: supplied artifact %s did NOT match any verified subject or product/material leaf — verify passed on the policy's other evidence; confirm you are verifying the intended %s\n", h, suppliedSubjectKind(h)) //nolint:gosec // CLI verdict to stderr, not an HTTP/HTML sink — G705 taint false positive.
 	}
+}
+
+// suppliedSubjectKind names what an operator-supplied digest identifies, for
+// the unmatched note's call to action. A digest declared sha1 is a git commit
+// id — the only sha1 subject --subjects accepts (subjectDigestAlgorithms) and
+// the only one the git attestor records — so the operator should confirm the
+// COMMIT they meant. Telling them to confirm "the intended file" sent the
+// reporter of #9310 looking for a file that never existed. Everything else
+// cilock computes or accepts is a file or directory digest.
+func suppliedSubjectKind(digest string) string {
+	if strings.HasPrefix(digest, "sha1:") {
+		return "commit"
+	}
+	return "file"
 }
 
 // shortSubjectName trims the common attestation predicate-URI prefix from a

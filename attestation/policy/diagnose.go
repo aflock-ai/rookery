@@ -19,7 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/source"
 )
@@ -77,134 +79,230 @@ var errDiagnosticProbeSatisfied = errors.New("diagnostic probe: sample bound rea
 
 // diagnoseEmptyCollectionResult is called when the subject-filtered Search
 // for (stepName, subjectDigests) returns zero collections. It re-probes the
-// source with an empty subject filter to figure out whether the step has
-// ANY loaded collections at all:
+// source to find out WHY, asking at most two bounded questions:
 //
-//   - 0 collections after the empty-subject probe   → ErrNoCollections.
-//     The step legitimately has no envelope loaded — the operator forgot
-//     to pass --attestations, the file didn't load, etc.
-//   - >0 collections after the empty-subject probe → ErrSubjectDigestMismatch.
-//     The envelope IS loaded; the operator's --artifactfile / --subjects
-//     digest just doesn't match anything in the collection. Surface the
+//   - With an empty subject filter and the step's attestation filter:
+//     >0 collections → ErrSubjectDigestMismatch. An envelope carrying every
+//     required attestation type IS loaded; the operator's --artifactfile /
+//     --subjects digest just doesn't match anything in it. Surface the
 //     observed subjects so the operator can see what they ARE asked to
 //     verify against.
+//   - Otherwise, and only when the step requires attestation types, with
+//     NEITHER filter: >0 collections → ErrIneligibleCollections. The step's
+//     envelope(s) were loaded and then dropped by the source's
+//     attestation-type filter (and possibly its subject filter too). Each is
+//     named with the predicate that dropped it: the generic list below opens
+//     with "the attestation wasn't loaded", and for this case not one of its
+//     causes applies (testifysec/judge#9309).
+//   - 0 collections either way → ErrNoCollections. The step legitimately has
+//     no envelope loaded — the operator forgot to pass --attestations, the
+//     file didn't load, etc.
 //
-// The probe is unverified-search-aware: it performs the SAME signature
+// The probes are unverified-search-aware: they perform the SAME signature
 // verification the original Search did (via the same VerifiedSourcer), so
 // envelopes with bad signatures don't fool the diagnostic into reporting a
 // digest mismatch on something that wouldn't have verified anyway.
 //
-// Errors from the probe itself collapse back to ErrNoCollections — we don't
+// Errors from a probe itself collapse back to ErrNoCollections — we don't
 // want a diagnostic helper to surface a different error class than the
 // original failure mode.
 func diagnoseEmptyCollectionResult(ctx context.Context, src source.VerifiedSourcer, stepName string, suppliedDigests, attestations []string) error {
 	present, observed, truncated, err := probeStepEvidence(ctx, src, stepName, attestations)
-	if err != nil || !present {
+	if err != nil {
 		return ErrNoCollections{Step: stepName}
 	}
-
-	// Collection loaded but subject set doesn't intersect supplied digests.
-	// The observed subjects are already a stable, sorted, deduplicated list
-	// so the error message is reproducible across runs.
-	return ErrSubjectDigestMismatch{
-		Step:              stepName,
-		SuppliedDigests:   append([]string(nil), suppliedDigests...),
-		ObservedSubjects:  observed,
-		ObservedTruncated: truncated,
+	if present {
+		// Collection loaded but subject set doesn't intersect supplied digests.
+		// The observed subjects are already a stable, sorted, deduplicated list
+		// so the error message is reproducible across runs.
+		return ErrSubjectDigestMismatch{
+			Step:              stepName,
+			SuppliedDigests:   append([]string(nil), suppliedDigests...),
+			ObservedSubjects:  observed,
+			ObservedTruncated: truncated,
+		}
 	}
+	// With no attestation filter to relax, the second probe would be the
+	// first one repeated verbatim: the step has no envelope, full stop.
+	if len(attestations) == 0 {
+		return ErrNoCollections{Step: stepName}
+	}
+	ineligible, truncated, err := probeIneligibleCollections(ctx, src, stepName, suppliedDigests, attestations)
+	if err != nil || len(ineligible) == 0 {
+		return ErrNoCollections{Step: stepName}
+	}
+	return ErrIneligibleCollections{Step: stepName, Collections: ineligible, Truncated: truncated}
 }
 
-// probeStepEvidence answers the only two questions the empty-collection
-// diagnostic asks of the source — "does this step have ANY collection?" and
-// "name a few of the subjects they carry" — reading at most
-// maxDiagnosticProbeCollections collections to do it.
+// probeStepEvidence answers the two questions the subject-mismatch diagnosis
+// asks of the source — "does this step have ANY collection carrying its
+// required attestation types?" and "name a few of the subjects they carry" —
+// reading at most maxDiagnosticProbeCollections collections to do it.
 //
-// STRUCTURAL CONTAINMENT. The bound is safe to apply here, and ONLY here,
-// because of what this function returns: a bool and a list of rendered
-// strings. It hands back no CollectionVerificationResult, no envelope, no
-// statement and no verifier, so its truncated view cannot become — or
-// silently shrink — the evidence a policy is judged on. A caller on the
-// verification path could not use it even if one existed; there is nothing
-// here to verify. That is the property, not a naming convention: see
-// TestBoundedProbeIsStructurallyContained, which fails if any function other
-// than diagnoseEmptyCollectionResult reaches the bound, and
-// TestBoundedProbeReturnsNoEvidence, which fails if this signature ever grows
-// a channel through which candidates could escape.
+// STRUCTURAL CONTAINMENT. The bound is safe to apply to the diagnostic, and
+// ONLY to the diagnostic, because of what its probes return: a bool and a
+// list of rendered strings here, a list of string-only IneligibleCollection
+// records in probeIneligibleCollections. Neither hands back a
+// CollectionVerificationResult, an envelope, a statement or a verifier, so a
+// truncated view cannot become — or silently shrink — the evidence a policy
+// is judged on. A caller on the verification path could not use them even if
+// one existed; there is nothing here to verify. That is the property, not a
+// naming convention: see TestBoundedProbeIsStructurallyContained, which
+// fails if any function outside the diagnostic path reaches the bound, and
+// TestBoundedProbeReturnsNoEvidence, which fails if a probe's signature ever
+// grows a channel through which candidates could escape.
 //
-// The engine itself can never issue the unfiltered search this performs:
-// checkVerifyOpts rejects a Verify with no subject digests, so every search
-// on the verification path is digest-filtered. This probe is the only
-// unfiltered search in the package.
 // The third return reports whether the subject set is a TRUNCATED SAMPLE.
 // It matters because ObservedSubjects drives hint selection: finding a
 // "tree:" subject in a sample is sound, but concluding there is NONE from a
 // sample is not. The caller must not turn absence-in-a-sample into a claim.
 func probeStepEvidence(ctx context.Context, src source.VerifiedSourcer, stepName string, attestations []string) (bool, []string, bool, error) {
-	// STREAMING: stop the source mid-iteration once the sample is full, so a
-	// remote source never downloads the rest of the step's history.
+	observed := make(map[string]struct{})
+	sampled, truncated, err := probeStepCollections(ctx, src, stepName, attestations, func(cvr source.CollectionVerificationResult) {
+		collectSubjectReprs(cvr.Statement.Subject, observed)
+	})
+	if err != nil {
+		return false, nil, false, err
+	}
+	return sampled > 0, sortedSubjectReprs(observed), truncated, nil
+}
+
+// probeIneligibleCollections answers the question the diagnostic asks once
+// NO collection carries the step's required attestation types: "which
+// envelopes ARE loaded under this step name, and what dropped each one?" It
+// searches with neither filter and renders, per sampled collection, the
+// required types it lacks, whether it carries any supplied subject digest,
+// and whether its signature verified. Strings only — the same containment
+// as probeStepEvidence, for the same reason.
+func probeIneligibleCollections(ctx context.Context, src source.VerifiedSourcer, stepName string, suppliedDigests, attestations []string) ([]IneligibleCollection, bool, error) {
+	var out []IneligibleCollection
+	_, truncated, err := probeStepCollections(ctx, src, stepName, nil, func(cvr source.CollectionVerificationResult) {
+		out = append(out, describeIneligibleCollection(cvr, suppliedDigests, attestations))
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return out, truncated, nil
+}
+
+// probeStepCollections is the ONE bounded, subject-unfiltered walk over a
+// step's collections, shared by both probes: it is the only search in the
+// package issued with a nil subject-digest set (TestOnlyTheDiagnosticIssues
+// AnUnfilteredSearch), and the only function that applies the bound. It calls
+// visit for each sampled collection and returns how many it sampled and
+// whether the source had more. visit is package-private and its two callers
+// render strings; nothing they retain can reach the verification path.
+//
+// STREAMING: stop the source mid-iteration once the sample is full, so a
+// remote source never downloads the rest of the step's history. It reads ONE
+// PAST the bound before stopping: aborting at exactly the bound cannot
+// distinguish "there were exactly N" from "there were more than N", and
+// reporting truncation for the former is a false positive that would hedge a
+// hint on a complete observation. The extra collection is never visited —
+// its only job is to prove that more existed.
+//
+// NON-STREAMING: the source can only hand back the whole slice, so the bound
+// cannot save the fetch — and the union is computed over the COMPLETE slice,
+// deliberately. Truncating here saved no fetch; it only decided which
+// subjects the operator got to see, and ObservedSubjects is NOT merely
+// illustrative: the mismatch hint scans it for a "tree:" subject. Truncating
+// first made a "tree:" subject in the fifth collection invisible, and the
+// operator was told to go looking for a file modified after attestation
+// instead. This branch has the whole set, so it answers exactly.
+func probeStepCollections(ctx context.Context, src source.VerifiedSourcer, stepName string, attestations []string, visit func(source.CollectionVerificationResult)) (int, bool, error) {
 	if streamer, ok := src.(source.StreamingVerifiedSourcer); ok {
-		observed := make(map[string]struct{})
 		sampled := 0
 		err := streamer.SearchStream(ctx, stepName, nil, attestations, func(cvr source.CollectionVerificationResult) error {
 			sampled++
-			// Read ONE PAST the bound before stopping. Aborting at exactly the
-			// bound cannot distinguish "there were exactly N" from "there were
-			// more than N", and reporting truncation for the former is a false
-			// positive that would hedge the hint on a complete observation. The
-			// extra collection is never rendered — its only job is to prove that
-			// more existed.
 			if sampled > maxDiagnosticProbeCollections {
 				return errDiagnosticProbeSatisfied
 			}
-			collectSubjectReprs(cvr.Statement.Subject, observed)
+			visit(cvr)
 			return nil
 		})
 		// Only OUR abort is swallowed. A genuine source error still collapses
 		// to the caller's ErrNoCollections fallback, exactly as before.
 		if err != nil && !errors.Is(err, errDiagnosticProbeSatisfied) {
-			return false, nil, false, err
+			return 0, false, err
 		}
 		// Truncated exactly when our abort fired: the stream had more to give.
-		return sampled > 0, sortedSubjectReprs(observed), errors.Is(err, errDiagnosticProbeSatisfied), nil
+		return sampled, errors.Is(err, errDiagnosticProbeSatisfied), nil
 	}
 
-	// NON-STREAMING: the source can only hand back the whole slice, so the
-	// bound cannot save the fetch — it still caps what the message renders and
-	// what the diagnostic retains.
 	allForStep, err := src.Search(ctx, stepName, nil, attestations)
 	if err != nil {
-		return false, nil, false, err
+		return 0, false, err
 	}
-	if len(allForStep) == 0 {
-		return false, nil, false, nil
+	for _, cvr := range allForStep {
+		visit(cvr)
 	}
-	// The union is computed over the COMPLETE slice, deliberately. The source
-	// already handed back everything, so truncating here saved no fetch — it
-	// only decided which subjects the operator got to see, and ObservedSubjects
-	// is NOT merely illustrative: ErrNoCollections.Error scans it for a "tree:"
-	// subject to choose the remediation hint. Truncating first made a "tree:"
-	// subject in the fifth collection invisible, and the operator was told to
-	// go looking for a file modified after attestation instead.
-	//
-	// Finding a "tree:" subject in a sample is sound; NOT finding one in a
-	// sample is not. This branch has the whole set, so it answers exactly.
-	return true, observedCollectionSubjects(allForStep), false, nil
+	return len(allForStep), false, nil
 }
 
-// observedCollectionSubjects walks a list of CollectionVerificationResults
-// and returns the union of subject entries (rendered as "<name>"). The
-// in-toto statement's Subject slice is the authoritative source — that's
-// what subject-digest matching runs against in source.Search. Each subject
-// is rendered with its first available digest so the operator sees both
-// the symbolic name (e.g. "file:dist/argocd") AND the digest they would
-// need to match against. Sorted + deduped for stable output.
-func observedCollectionSubjects(results []source.CollectionVerificationResult) []string {
-	seen := make(map[string]struct{})
-	for _, r := range results {
-		// Statement.Subject is the canonical list source.Search filters on.
-		collectSubjectReprs(r.Statement.Subject, seen)
+// describeIneligibleCollection renders why one loaded collection was not a
+// candidate for the step, mirroring the predicates the sources filter on:
+// every required attestation type must be present — as-is or as its
+// registered legacy alternate, which is how MemorySource indexes them — and,
+// when the verify names subjects, at least one must be a matchable subject
+// digest of the collection. Matchable under the collection's OWN
+// SubjectMatchScope, so a SHA-1 commit id counts exactly where the source
+// would count it and nowhere else.
+func describeIneligibleCollection(cvr source.CollectionVerificationResult, suppliedDigests, required []string) IneligibleCollection {
+	present := make(map[string]struct{}, 2*len(cvr.Collection.Attestations))
+	has := make([]string, 0, len(cvr.Collection.Attestations))
+	for _, att := range cvr.Collection.Attestations {
+		present[att.Type] = struct{}{}
+		if alt := attestation.LegacyAlternate(att.Type); alt != "" {
+			present[alt] = struct{}{}
+		}
+		has = append(has, shortAttestationType(att.Type))
 	}
-	return sortedSubjectReprs(seen)
+	desc := IneligibleCollection{Reference: cvr.Reference, PresentAttestations: has}
+	for _, req := range required {
+		if _, ok := present[req]; !ok {
+			desc.MissingAttestations = append(desc.MissingAttestations, req)
+		}
+	}
+	if len(suppliedDigests) > 0 && !carriesAnySubject(cvr, suppliedDigests) {
+		desc.SubjectMismatch = true
+		desc.SuppliedDigests = append([]string(nil), suppliedDigests...)
+		observed := make(map[string]struct{})
+		collectSubjectReprs(cvr.Statement.Subject, observed)
+		desc.ObservedSubjects = sortedSubjectReprs(observed)
+	}
+	for _, err := range cvr.Errors {
+		desc.SignatureErrors = append(desc.SignatureErrors, err.Error())
+	}
+	return desc
+}
+
+// carriesAnySubject reports whether at least one supplied digest is a
+// matchable subject digest of the collection — matchable under the
+// collection's OWN SubjectMatchScope, the same predicate the sources index
+// on, so a SHA-1 commit id counts exactly where the source would count it.
+func carriesAnySubject(cvr source.CollectionVerificationResult, suppliedDigests []string) bool {
+	scope := cvr.SubjectMatchScope()
+	matchable := make(map[string]struct{})
+	for _, subj := range cvr.Statement.Subject {
+		for algorithm, digest := range subj.Digest {
+			if scope.IsMatchableSubjectDigest(subj.Name, algorithm, digest) {
+				matchable[digest] = struct{}{}
+			}
+		}
+	}
+	for _, d := range suppliedDigests {
+		if _, ok := matchable[d]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// shortAttestationType trims the aflock predicate-URI prefix so the has-list
+// reads "git/v0.1, material/v0.3" rather than a row of full URIs. The
+// MISSING type is always rendered in full: it is what the policy says.
+func shortAttestationType(uri string) string {
+	return strings.TrimPrefix(uri, "https://aflock.ai/attestations/")
 }
 
 // collectSubjectReprs adds each subject's rendering to seen. Shared by the

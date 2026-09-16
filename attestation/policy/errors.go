@@ -363,3 +363,103 @@ func (e ErrExternalAttestationRejected) Error() string {
 }
 
 func (e ErrExternalAttestationRejected) Unwrap() []error { return e.Rejections }
+
+// ErrIneligibleCollections fires when the source holds at least one envelope
+// under the step's collection name, but every one of them was dropped before
+// verification by the source's own filters: it lacks an attestation type the
+// step requires, or carries none of the supplied subject digests. It is
+// distinct from ErrNoCollections — whose "likely causes" list opens with "the
+// attestation wasn't loaded" — because here it WAS loaded, and the operator
+// needs the envelope named with the predicate that dropped it, not a list of
+// causes that do not apply (testifysec/judge#9309).
+//
+// It unwraps to ErrNoCollections, so a consumer that classifies a step by
+// that type through errors.As — judge-api's readiness classifier, which reads
+// it as "evidence has not arrived" and reports PENDING — keeps reading it the
+// same way: an envelope without the required attestation is evidence that has
+// not arrived yet, not a substantive verification failure.
+type ErrIneligibleCollections struct {
+	Step        string
+	Collections []IneligibleCollection
+	// Truncated reports that Collections is a bounded SAMPLE of the step's
+	// loaded envelopes rather than all of them, so the count renders as a
+	// floor ("at least N").
+	Truncated bool
+}
+
+// IneligibleCollection is one loaded-but-filtered envelope and why. Strings
+// only, on purpose: it is a rendering for the operator, never evidence, and
+// the bounded diagnostic probe that builds it must not be able to hand a
+// collection back (see probeStepCollections).
+type IneligibleCollection struct {
+	Reference string
+	// MissingAttestations are the step's required attestation type URIs the
+	// collection does not carry (neither as-is nor as a registered legacy
+	// alternate, which is how the sources index them).
+	MissingAttestations []string
+	// PresentAttestations are the types it does carry, short form.
+	PresentAttestations []string
+	// SubjectMismatch reports that the verify named subject digests and none
+	// of them is a matchable subject of this collection.
+	SubjectMismatch  bool
+	SuppliedDigests  []string
+	ObservedSubjects []string
+	// SignatureErrors carry the source's verification errors, when the
+	// envelope would have failed signature verification as well.
+	SignatureErrors []string
+}
+
+func (e ErrIneligibleCollections) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "step %q: ", e.Step)
+	if e.Truncated {
+		b.WriteString("at least ")
+	}
+	if len(e.Collections) == 1 {
+		b.WriteString("1 envelope loaded but not eligible: ")
+	} else {
+		fmt.Fprintf(&b, "%d envelopes loaded but none eligible: ", len(e.Collections))
+	}
+	for i, c := range e.Collections {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(c.describe())
+	}
+	return b.String()
+}
+
+// Unwrap keeps the evidence-not-arrived reading for errors.As consumers.
+func (e ErrIneligibleCollections) Unwrap() error { return ErrNoCollections{Step: e.Step} }
+
+// describe renders "<reference> <reason> and <reason>" for one envelope.
+func (c IneligibleCollection) describe() string {
+	reasons := make([]string, 0, 3)
+	if len(c.MissingAttestations) > 0 {
+		has := "none"
+		if len(c.PresentAttestations) > 0 {
+			has = strings.Join(c.PresentAttestations, ", ")
+		}
+		noun := "attestation"
+		if len(c.MissingAttestations) > 1 {
+			noun = "attestations"
+		}
+		reasons = append(reasons, fmt.Sprintf("is missing required %s %s (has: %s)", noun, strings.Join(c.MissingAttestations, ", "), has))
+	}
+	if c.SubjectMismatch {
+		observed := "none"
+		if len(c.ObservedSubjects) > 0 {
+			observed = strings.Join(c.ObservedSubjects, ", ")
+		}
+		reasons = append(reasons, fmt.Sprintf("carries none of the supplied digest(s) [%s] (subjects present: %s)", strings.Join(c.SuppliedDigests, ", "), observed))
+	}
+	if len(c.SignatureErrors) > 0 {
+		reasons = append(reasons, fmt.Sprintf("its signature did not verify (%s)", strings.Join(c.SignatureErrors, "; ")))
+	}
+	if len(reasons) == 0 {
+		// The source dropped it on a predicate this rendering does not model.
+		// Say so rather than fabricate a cause.
+		reasons = append(reasons, "was filtered by the attestation source for a reason it did not report")
+	}
+	return c.Reference + " " + strings.Join(reasons, " and ")
+}

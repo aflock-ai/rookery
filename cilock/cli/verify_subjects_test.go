@@ -26,12 +26,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/intoto"
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/policy"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/policyverify"
 	"github.com/stretchr/testify/assert"
@@ -124,9 +126,21 @@ func TestParseSubjectDigest_NonHexRejected(t *testing.T) {
 	}
 }
 
-// This exercises the real command and verifier with local, ephemeral-key DSSE
-// fixtures. Set CILOCK_VERIFY_TEST_BINARY to replay through a built CLI instead.
-func TestVerifyCmd_OfflineSubjectAlgorithms(t *testing.T) {
+// offlineVerifyFixture is the scaffolding for tests that exercise the real
+// `cilock verify` command with local, ephemeral-key DSSE fixtures: an isolated
+// state dir, an ECDSA key the policy trusts, and a signer for evidence and
+// policy envelopes. Set CILOCK_VERIFY_TEST_BINARY to replay a run through a
+// built CLI instead of the in-process command.
+type offlineVerifyFixture struct {
+	dir       string
+	keyPath   string
+	keyID     string
+	publicKey []byte
+	signer    cryptoutil.Signer
+}
+
+func newOfflineVerifyFixture(t *testing.T) *offlineVerifyFixture {
+	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
@@ -147,41 +161,142 @@ func TestVerifyCmd_OfflineSubjectAlgorithms(t *testing.T) {
 	require.NoError(t, err)
 	keyPath := filepath.Join(dir, "test.pub")
 	require.NoError(t, os.WriteFile(keyPath, publicKey, 0o600))
-	writeSigned := func(name, payloadType string, payload []byte) string {
-		env, err := dsse.Sign(payloadType, bytes.NewReader(payload), dsse.SignWithSigners(signer))
-		require.NoError(t, err)
-		data, err := json.Marshal(env)
-		require.NoError(t, err)
-		path := filepath.Join(dir, name)
-		require.NoError(t, os.WriteFile(path, data, 0o600))
-		return path
+	return &offlineVerifyFixture{dir: dir, keyPath: keyPath, keyID: keyID, publicKey: publicKey, signer: signer}
+}
+
+// writeSigned signs payload into a DSSE envelope at <dir>/<name> and returns
+// the path.
+func (f *offlineVerifyFixture) writeSigned(t *testing.T, name, payloadType string, payload []byte) string {
+	t.Helper()
+	env, err := dsse.Sign(payloadType, bytes.NewReader(payload), dsse.SignWithSigners(f.signer))
+	require.NoError(t, err)
+	data, err := json.Marshal(env)
+	require.NoError(t, err)
+	path := filepath.Join(f.dir, name)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	return path
+}
+
+// collection writes a signed single-step collection envelope carrying the
+// given attestation types and in-toto subjects.
+func (f *offlineVerifyFixture) collection(t *testing.T, name, step string, types []string, subjects string) string {
+	t.Helper()
+	atts := make([]string, 0, len(types))
+	for _, typ := range types {
+		atts = append(atts, fmt.Sprintf(`{"type": %q, "attestation": {"commithash": %q, "commithashverified": true}, "starttime": "2026-01-01T00:00:00Z", "endtime": "2026-01-01T00:00:01Z"}`, typ, gitSHA1Hex))
 	}
-	const gitType = "https://aflock.ai/attestations/git/v0.1"
 	payload := fmt.Sprintf(`{
 		"_type": "https://in-toto.io/Statement/v0.1",
 		"predicateType": "https://aflock.ai/attestation-collection/v0.1",
-		"subject": [
-			{"name": "%s/commithash:%s", "digest": {"sha1": "%s"}},
-			{"name": "artifact", "digest": {"sha256": "%s"}}
-		],
-		"predicate": {"name": "source", "attestations": [{
-			"type": "%s", "attestation": {"commithash": "%s", "commithashverified": true},
-			"starttime": "2026-01-01T00:00:00Z", "endtime": "2026-01-01T00:00:01Z"
-		}]}
-	}`, gitType, gitSHA1Hex, gitSHA1Hex, sha256Hex, gitType, gitSHA1Hex)
-	evidencePath := writeSigned("evidence.dsse.json", intoto.PayloadType, []byte(payload))
+		"subject": [%s],
+		"predicate": {"name": %q, "attestations": [%s]}
+	}`, subjects, step, strings.Join(atts, ","))
+	return f.writeSigned(t, name, intoto.PayloadType, []byte(payload))
+}
+
+// policy writes a signed policy trusting the fixture key, with one step per
+// entry requiring the listed attestation types.
+func (f *offlineVerifyFixture) policy(t *testing.T, name string, steps map[string][]string) string {
+	t.Helper()
 	p := policy.Policy{
 		Expires:    metav1.Time{Time: time.Now().Add(time.Hour)},
-		PublicKeys: map[string]policy.PublicKey{keyID: {KeyID: keyID, Key: publicKey}},
-		Steps: map[string]policy.Step{"source": {
-			Name:          "source",
-			Functionaries: []policy.Functionary{{Type: "PublicKey", PublicKeyID: keyID}},
-			Attestations:  []policy.Attestation{{Type: gitType}},
-		}},
+		PublicKeys: map[string]policy.PublicKey{f.keyID: {KeyID: f.keyID, Key: f.publicKey}},
+		Steps:      map[string]policy.Step{},
+	}
+	for step, types := range steps {
+		atts := make([]policy.Attestation, 0, len(types))
+		for _, typ := range types {
+			atts = append(atts, policy.Attestation{Type: typ})
+		}
+		p.Steps[step] = policy.Step{
+			Name:          step,
+			Functionaries: []policy.Functionary{{Type: "PublicKey", PublicKeyID: f.keyID}},
+			Attestations:  atts,
+		}
 	}
 	policyJSON, err := json.Marshal(p)
 	require.NoError(t, err)
-	policyPath := writeSigned("policy.dsse.json", policy.PolicyPredicate, policyJSON)
+	return f.writeSigned(t, name, policy.PolicyPredicate, policyJSON)
+}
+
+// verifyLogCapture records every line the cilock logger emits during one
+// in-process verify. The command's evidence report ("Step: ...",
+// "verification failure: Reason: ...") goes through the log package, whose
+// global logger another test may have left silent, so the fixture installs
+// this and folds the lines into the stderr it returns.
+type verifyLogCapture struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (c *verifyLogCapture) add(format string, args ...interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lines = append(c.lines, fmt.Sprintf(format, args...))
+}
+func (c *verifyLogCapture) Errorf(format string, args ...interface{}) { c.add(format, args...) }
+func (c *verifyLogCapture) Error(args ...interface{})                 { c.add("%s", fmt.Sprint(args...)) }
+func (c *verifyLogCapture) Warnf(format string, args ...interface{})  { c.add(format, args...) }
+func (c *verifyLogCapture) Warn(args ...interface{})                  { c.add("%s", fmt.Sprint(args...)) }
+func (c *verifyLogCapture) Debugf(format string, args ...interface{}) { c.add(format, args...) }
+func (c *verifyLogCapture) Debug(args ...interface{})                 { c.add("%s", fmt.Sprint(args...)) }
+func (c *verifyLogCapture) Infof(format string, args ...interface{})  { c.add(format, args...) }
+func (c *verifyLogCapture) Info(args ...interface{})                  { c.add("%s", fmt.Sprint(args...)) }
+
+func (c *verifyLogCapture) text() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Join(c.lines, "\n")
+}
+
+// verify runs `cilock verify` offline with the fixture key against policyPath
+// and returns stdout, stderr (with the logger's lines appended, for the
+// in-process path) and the command error.
+func (f *offlineVerifyFixture) verify(t *testing.T, policyPath string, args ...string) (string, string, error) {
+	t.Helper()
+	logs := &verifyLogCapture{}
+	prev := log.GetLogger()
+	log.SetLogger(logs)
+	t.Cleanup(func() { log.SetLogger(prev) })
+	out, err := os.CreateTemp(f.dir, "stdout-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = out.Close() })
+	stderr, err := os.CreateTemp(f.dir, "stderr-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stderr.Close() })
+	args = append([]string{"-p", policyPath, "-k", f.keyPath,
+		"--platform-url", "", "--enable-archivista=false", "--no-embedded-trust", "-o", "json"}, args...)
+	var runErr error
+	if bin := os.Getenv("CILOCK_VERIFY_TEST_BINARY"); bin != "" {
+		cmd := exec.CommandContext(t.Context(), bin, append([]string{"verify"}, args...)...)
+		cmd.Stdout, cmd.Stderr = out, stderr
+		runErr = cmd.Run()
+	} else {
+		cmd := VerifyCmd()
+		cmd.SetArgs(args)
+		runErr = func() error {
+			oldOut, oldErr := os.Stdout, os.Stderr
+			os.Stdout, os.Stderr = out, stderr
+			defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
+			return cmd.ExecuteContext(t.Context())
+		}()
+	}
+	stdoutData, err := os.ReadFile(out.Name())
+	require.NoError(t, err)
+	stderrData, err := os.ReadFile(stderr.Name())
+	require.NoError(t, err)
+	return string(stdoutData), string(stderrData) + "\n" + logs.text(), runErr
+}
+
+// This exercises the real command and verifier with local, ephemeral-key DSSE
+// fixtures. Set CILOCK_VERIFY_TEST_BINARY to replay through a built CLI instead.
+func TestVerifyCmd_OfflineSubjectAlgorithms(t *testing.T) {
+	f := newOfflineVerifyFixture(t)
+	const gitType = "https://aflock.ai/attestations/git/v0.1"
+	evidencePath := f.collection(t, "evidence.dsse.json", "source", []string{gitType}, fmt.Sprintf(
+		`{"name": "%s/commithash:%s", "digest": {"sha1": "%s"}}, {"name": "artifact", "digest": {"sha256": "%s"}}`,
+		gitType, gitSHA1Hex, gitSHA1Hex, sha256Hex))
+	policyPath := f.policy(t, "policy.dsse.json", map[string][]string{"source": {gitType}})
 	for _, tc := range []struct {
 		name      string
 		subjects  []string
@@ -197,47 +312,23 @@ func TestVerifyCmd_OfflineSubjectAlgorithms(t *testing.T) {
 		{"wrong commit fails", []string{"sha1:" + strings.Repeat("a", 40)}, "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := os.CreateTemp(dir, "stdout-")
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = out.Close() })
-			stderr, err := os.CreateTemp(dir, "stderr-")
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = stderr.Close() })
-			args := []string{"-p", policyPath, "-k", keyPath, "-a", evidencePath,
-				"--platform-url", "", "--enable-archivista=false", "--no-embedded-trust", "-o", "json"}
+			args := []string{"-a", evidencePath}
 			for _, subject := range tc.subjects {
 				args = append(args, "--subjects", subject)
 			}
-			if bin := os.Getenv("CILOCK_VERIFY_TEST_BINARY"); bin != "" {
-				cmd := exec.CommandContext(t.Context(), bin, append([]string{"verify"}, args...)...)
-				cmd.Stdout, cmd.Stderr = out, stderr
-				err = cmd.Run()
-			} else {
-				cmd := VerifyCmd()
-				cmd.SetArgs(args)
-				err = func() error {
-					oldOut, oldErr := os.Stdout, os.Stderr
-					os.Stdout, os.Stderr = out, stderr
-					defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
-					return cmd.ExecuteContext(t.Context())
-				}()
-			}
+			stdout, stderr, err := f.verify(t, policyPath, args...)
 			if tc.wantErr {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
 			}
-			data, err := os.ReadFile(out.Name())
-			require.NoError(t, err)
 			var verdict VerifyVerdict
-			require.NoError(t, json.Unmarshal(data, &verdict), "%s", data)
+			require.NoError(t, json.Unmarshal([]byte(stdout), &verdict), "%s", stdout)
 			assert.Equal(t, !tc.wantErr, verdict.Passed)
 			assert.Equal(t, tc.matched, verdict.MatchedSubject)
-			data, err = os.ReadFile(stderr.Name())
-			require.NoError(t, err)
 			if tc.matched != "" {
 				assert.Equal(t, "source", verdict.Step)
-				assert.Contains(t, string(data), "verified: "+tc.matched+` bound to step "source"`)
+				assert.Contains(t, stderr, "verified: "+tc.matched+` bound to step "source"`)
 				if strings.HasPrefix(tc.matched, "sha1:") {
 					assert.Equal(t, gitType+"/commithash:"+gitSHA1Hex, verdict.ObservedSubjectName)
 				} else {
@@ -248,11 +339,58 @@ func TestVerifyCmd_OfflineSubjectAlgorithms(t *testing.T) {
 				assert.Empty(t, verdict.ObservedSubjectName)
 			}
 			if tc.unmatched != "" {
-				assert.Contains(t, string(data), "supplied artifact "+tc.unmatched+" did NOT match")
-				assert.NotContains(t, string(data), "verified: "+tc.unmatched)
+				assert.Contains(t, stderr, "supplied artifact "+tc.unmatched+" did NOT match")
+				assert.NotContains(t, stderr, "verified: "+tc.unmatched)
 			} else {
-				assert.NotContains(t, string(data), "did NOT match")
+				assert.NotContains(t, stderr, "did NOT match")
 			}
 		})
 	}
+}
+
+// TestVerifyCmd_LoadedButFilteredEnvelopeIsNamed pins testifysec/judge#9309
+// at the command level: an envelope passed with -a whose collection matches
+// the step but lacks a required attestation type — or carries none of the
+// supplied subjects — is named in the failure, with the predicate that
+// dropped it, instead of the generic "Likely causes" block that opens with
+// "the attestation wasn't loaded". The generic block is kept, and pinned,
+// for the step nothing was loaded for.
+func TestVerifyCmd_LoadedButFilteredEnvelopeIsNamed(t *testing.T) {
+	f := newOfflineVerifyFixture(t)
+	const (
+		gitType    = "https://aflock.ai/attestations/git/v0.1"
+		cmdRunType = "https://aflock.ai/attestations/command-run/v0.2"
+	)
+	// Minted like the issue's pt.json: git only, no command-run.
+	evidencePath := f.collection(t, "pt.json", "push-tests", []string{gitType}, fmt.Sprintf(
+		`{"name": "%s/commithash:%s", "digest": {"sha1": "%s"}}`, gitType, gitSHA1Hex, gitSHA1Hex))
+	needsCmdRun := f.policy(t, "policy-cmdrun.dsse.json", map[string][]string{"push-tests": {gitType, cmdRunType}})
+
+	t.Run("missing attestation type", func(t *testing.T) {
+		stdout, stderr, err := f.verify(t, needsCmdRun, "-a", evidencePath, "--subjects", "sha1:"+gitSHA1Hex)
+		require.Error(t, err)
+		assert.Contains(t, stdout, `"passed": false`)
+		assert.Contains(t, stderr, "pt.json is missing required attestation "+cmdRunType+" (has: git/v0.1)")
+		assert.Contains(t, stderr, "1 envelope loaded but not eligible")
+		assert.NotContains(t, stderr, "Likely causes")
+		assert.NotContains(t, stderr, "wasn't loaded")
+	})
+
+	t.Run("missing attestation type and subject", func(t *testing.T) {
+		other := strings.Repeat("a", 40)
+		_, stderr, err := f.verify(t, needsCmdRun, "-a", evidencePath, "--subjects", "sha1:"+other)
+		require.Error(t, err)
+		assert.Contains(t, stderr, "pt.json is missing required attestation "+cmdRunType)
+		assert.Contains(t, stderr, "carries none of the supplied digest(s) ["+other+"]")
+		assert.Contains(t, stderr, "subjects present: "+gitType+"/commithash:"+gitSHA1Hex+" (sha1:"+gitSHA1Hex+")")
+		assert.NotContains(t, stderr, "Likely causes")
+	})
+
+	t.Run("nothing loaded for the step keeps the generic causes", func(t *testing.T) {
+		nothing := f.policy(t, "policy-nothing.dsse.json", map[string][]string{"nothing": {gitType}})
+		_, stderr, err := f.verify(t, nothing, "-a", evidencePath, "--subjects", "sha1:"+gitSHA1Hex)
+		require.Error(t, err)
+		assert.Contains(t, stderr, "no collection passed verification for step nothing. Likely causes, in order:")
+		assert.NotContains(t, stderr, "not eligible")
+	})
 }

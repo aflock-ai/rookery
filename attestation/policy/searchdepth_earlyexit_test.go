@@ -283,10 +283,12 @@ func TestEarlyExit_StopsWhenNoNewDigestsAreDiscovered(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, pass, "source-git has no evidence anywhere; the verdict must be FAIL")
 
-	// One search per step for the single depth iteration, plus the one
-	// empty-result diagnostic re-probe that source-git's zero-result search
-	// triggers. A second depth iteration would add two more.
-	assert.Equal(t, 3, src.searches,
+	// One search per step for the single depth iteration, plus the two
+	// empty-result diagnostic re-probes that source-git's zero-result search
+	// triggers (filtered, then unfiltered to tell "nothing loaded" from
+	// "loaded but filtered" — #9309). A second depth iteration would add two
+	// more searches and two more probes.
+	assert.Equal(t, 4, src.searches,
 		"the seed iteration discovered no back-references, so a second identical iteration must not run")
 }
 

@@ -634,7 +634,9 @@ func TestBoundedProbeIsStructurallyContained(t *testing.T) {
 	guarded := map[string]bool{
 		"maxDiagnosticProbeCollections": true,
 		"errDiagnosticProbeSatisfied":   true,
+		"probeStepCollections":          true,
 		"probeStepEvidence":             true,
+		"probeIneligibleCollections":    true,
 	}
 
 	referencedBy := map[string]map[string]bool{}
@@ -668,64 +670,83 @@ func TestBoundedProbeIsStructurallyContained(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	assert.Equal(t, []string{"diagnoseEmptyCollectionResult", "probeStepEvidence"}, got,
+	// The diagnostic and its three probe functions — and nothing else. The
+	// second probe (#9309) reaches the bound only through the shared walk.
+	assert.Equal(t, []string{"diagnoseEmptyCollectionResult", "probeIneligibleCollections", "probeStepCollections", "probeStepEvidence"}, got,
 		"the diagnostic bound leaked outside the diagnostic path: %v", referencedBy)
 
-	// And the two that ARE allowed must genuinely be there, so the equality
+	// And the ones that ARE allowed must genuinely be there, so the equality
 	// above cannot be satisfied by a rename that silently removed the bound.
-	require.Contains(t, referencedBy, "probeStepEvidence")
-	assert.True(t, referencedBy["probeStepEvidence"]["maxDiagnosticProbeCollections"],
-		"probeStepEvidence no longer applies the bound")
-	assert.True(t, referencedBy["probeStepEvidence"]["errDiagnosticProbeSatisfied"],
-		"probeStepEvidence no longer aborts the stream")
-	assert.True(t, referencedBy["diagnoseEmptyCollectionResult"]["probeStepEvidence"],
-		"the diagnostic no longer goes through the bounded probe")
+	require.Contains(t, referencedBy, "probeStepCollections")
+	assert.True(t, referencedBy["probeStepCollections"]["maxDiagnosticProbeCollections"],
+		"probeStepCollections no longer applies the bound")
+	assert.True(t, referencedBy["probeStepCollections"]["errDiagnosticProbeSatisfied"],
+		"probeStepCollections no longer aborts the stream")
+	for _, probe := range []string{"probeStepEvidence", "probeIneligibleCollections"} {
+		assert.True(t, referencedBy[probe]["probeStepCollections"],
+			"%s no longer goes through the one bounded walk", probe)
+		assert.False(t, referencedBy[probe]["maxDiagnosticProbeCollections"],
+			"%s applies the bound itself — the walk is the only place it may live", probe)
+		assert.True(t, referencedBy["diagnoseEmptyCollectionResult"][probe],
+			"the diagnostic no longer goes through %s", probe)
+	}
 }
 
-// TestBoundedProbeReturnsNoEvidence is the type-level half of containment: the
-// bounded probe's signature must not be able to hand a collection back. As
-// long as it returns only (bool, []string, error), a truncated probe result
+// TestBoundedProbeReturnsNoEvidence is the type-level half of containment: no
+// bounded probe's signature may be able to hand a collection back. As long as
+// each returns only scalars and rendered strings, a truncated probe result
 // cannot become — or silently shrink — the evidence a policy is judged on,
 // whoever calls it.
 //
-// NOT VACUOUS: it locates the declaration by name and fails if absent, then
-// asserts the exact rendered result list, so widening the signature to return
+// NOT VACUOUS: it locates each declaration by name and fails if absent, then
+// asserts the exact rendered result list, so widening a signature to return
 // []source.CollectionVerificationResult reddens it.
+//
+// Still an EXACT pin per function, not a growing allow-list. The bool on
+// probeStepEvidence reports whether the subject sample was truncated;
+// []IneligibleCollection (#9309) is a record of strings and bools about each
+// dropped envelope; the int on the shared walk is a sample count. Each is a
+// fact ABOUT the probe, not a channel for evidence — no
+// CollectionVerificationResult, envelope, statement or verifier can travel
+// through any of them. Widening this to "anything scalar is fine" would be
+// the inverted guard; changing a pin once, deliberately, with the reason
+// recorded, is not.
 func TestBoundedProbeReturnsNoEvidence(t *testing.T) {
 	fset, files := parsePolicyPackage(t)
 
-	var decl *ast.FuncDecl
-	for _, f := range files {
-		for _, d := range f.Decls {
-			fn, ok := d.(*ast.FuncDecl)
-			if ok && fn.Name.Name == "probeStepEvidence" {
-				decl = fn
+	want := map[string][]string{
+		"probeStepEvidence":          {"bool", "[]string", "bool", "error"},
+		"probeIneligibleCollections": {"[]IneligibleCollection", "bool", "error"},
+		"probeStepCollections":       {"int", "bool", "error"},
+	}
+	for name, wantResults := range want {
+		t.Run(name, func(t *testing.T) {
+			var decl *ast.FuncDecl
+			for _, f := range files {
+				for _, d := range f.Decls {
+					fn, ok := d.(*ast.FuncDecl)
+					if ok && fn.Name.Name == name {
+						decl = fn
+					}
+				}
 			}
-		}
-	}
-	require.NotNil(t, decl, "probeStepEvidence not found — containment check would be vacuous")
+			require.NotNil(t, decl, "%s not found — containment check would be vacuous", name)
 
-	results := make([]string, 0, 3)
-	for _, field := range decl.Type.Results.List {
-		var buf strings.Builder
-		require.NoError(t, printer.Fprint(&buf, fset, field.Type))
-		n := len(field.Names)
-		if n == 0 {
-			n = 1
-		}
-		for i := 0; i < n; i++ {
-			results = append(results, buf.String())
-		}
+			results := make([]string, 0, 4)
+			for _, field := range decl.Type.Results.List {
+				var buf strings.Builder
+				require.NoError(t, printer.Fprint(&buf, fset, field.Type))
+				n := len(field.Names)
+				if n == 0 {
+					n = 1
+				}
+				for i := 0; i < n; i++ {
+					results = append(results, buf.String())
+				}
+			}
+			assert.Equal(t, wantResults, results, "the bounded probe must not be able to return evidence")
+		})
 	}
-
-	// Still an EXACT pin, not a growing allow-list. The added bool reports
-	// whether the subject sample was truncated; it is a scalar fact ABOUT the
-	// probe, not a channel for evidence — no CollectionVerificationResult,
-	// envelope, statement or verifier can travel through it. Widening this to
-	// "anything scalar is fine" would be the inverted guard; changing the pin
-	// once, deliberately, with the reason recorded, is not.
-	assert.Equal(t, []string{"bool", "[]string", "bool", "error"}, results,
-		"the bounded probe must not be able to return evidence")
 }
 
 // TestOnlyTheDiagnosticIssuesAnUnfilteredSearch pins the complementary fact
@@ -780,8 +801,8 @@ func TestOnlyTheDiagnosticIssuesAnUnfilteredSearch(t *testing.T) {
 
 	for _, s := range sites {
 		if s.digestArg == "nil" {
-			assert.Equal(t, "probeStepEvidence", s.fn,
-				"%s issues an UNFILTERED %s — only the bounded diagnostic probe may do that", s.fn, s.method)
+			assert.Equal(t, "probeStepCollections", s.fn,
+				"%s issues an UNFILTERED %s — only the bounded diagnostic walk may do that", s.fn, s.method)
 			continue
 		}
 		assert.Equal(t, "subjectDigests", s.digestArg,

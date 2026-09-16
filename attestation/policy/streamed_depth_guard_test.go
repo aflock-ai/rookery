@@ -167,7 +167,9 @@ type depthGuardShape struct {
 	// wantProbes is the number of unfiltered probes ONE verify may issue,
 	// independent of searchDepth. It is a LITERAL, not a value derived from
 	// the code under test: "diagnose a step's absence once per verify" is the
-	// specification, and 1 is what it means.
+	// specification. One diagnosis issues one probe, or two when the first
+	// finds nothing and the step has an attestation filter to relax (#9309);
+	// it never issues any per depth.
 	wantProbes int
 	// wantDiagnoses is the number of diagnostic rejections the step carries
 	// after the verify.
@@ -192,9 +194,14 @@ type depthGuardShape struct {
 func depthGuardShapes() []depthGuardShape {
 	return []depthGuardShape{
 		{
-			name:          "missing",
-			desc:          "audit step has no evidence at all -> ErrNoCollections",
-			wantProbes:    1,
+			name: "missing",
+			desc: "audit step has no evidence at all -> ErrNoCollections",
+			// Two probes, ONE diagnosis: the filtered probe finds nothing, so
+			// the diagnostic asks once more without the attestation filter to
+			// tell "nothing loaded" from "loaded but filtered" (#9309). Both
+			// happen inside the single guarded call — the per-depth repeat
+			// this test exists to catch would show as 2×depth, not 2.
+			wantProbes:    2,
 			wantDiagnoses: 1,
 			diagStep:      "audit",
 			build: func(t *testing.T, v cryptoutil.Verifier) *depthGuardSource {
