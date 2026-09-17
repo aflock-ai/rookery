@@ -722,11 +722,26 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 
 	// The platform attestor binds a run to a logged-in platform tenant; with no
 	// session and no CI identity it has nothing to record, so trim it from the
-	// auto defaults. This keeps an offline/local-key run — or a preset binary
-	// that never registered the platform attestor — from dead-ending on a
+	// auto defaults. This keeps an offline/local-key run from dead-ending on a
 	// platform attestor it never opted into. An explicit -a is left untouched.
-	if !platformActive {
+	//
+	// Identity is only half the question. A preset binary such as cilock-all
+	// never registers the attestor at all, so a LOGGED-IN run there reaches the
+	// factory with a name nothing can build and dies with "failed to create
+	// attestor: attestor not found: platform" — the auto default demanding
+	// evidence the binary cannot produce. Trim it for that reason too, and say
+	// so, because the resulting attestation silently lacks its tenant binding.
+	switch {
+	case !platformActive:
 		ro.dropDefaultPlatformAttestor(cmd)
+	case !platformAttestorRegistered():
+		// Warn only on an actual drop. An explicit -a platform is honored
+		// verbatim, so nothing was trimmed and the run is about to fail at the
+		// factory with the real reason; announcing a drop that did not happen
+		// would describe the opposite of what the operator is about to see.
+		if ro.dropDefaultPlatformAttestor(cmd) {
+			log.Warnf("platform attestor is not built into this binary — dropping it from the default attestor set; this run records no platform/tenant binding")
+		}
 	}
 
 	// Give a selected fulcio signer a URL if it lacks one — whether it was
@@ -811,32 +826,65 @@ func (ro *RunOptions) resolvePlatformIdentity(cmd *cobra.Command, pc platformcon
 	return false
 }
 
+// platformAttestorName is the "platform" entry in DefaultAttestors. Every place
+// that reasons about that entry compares against this constant, so the default
+// set and the code that trims it cannot drift apart under a rename.
+const platformAttestorName = "platform"
+
+// platformAttestorRegistered reports whether THIS binary registered the platform
+// attestor.
+//
+// It is not the same answer in every binary that links these options. cilock's
+// own main imports the internal adapter that supplies the session/ambient
+// binding resolver and registers the attestor; a preset binary such as
+// cilock-all links only the public rookery plugins, and the public platform
+// package deliberately has no init() — it is a library the adapter drives — so
+// nothing registers the name there.
+//
+// Indirected through a var so a test can exercise both binaries' behaviour
+// without linking two different import sets.
+var platformAttestorRegistered = func() bool {
+	_, ok := attestation.FactoryByName(platformAttestorName)
+	return ok
+}
+
 // dropDefaultPlatformAttestor removes the "platform" attestor from the AUTO
-// attestor defaults when there is no platform identity to bind to (offline, not
-// logged in, or platform disabled). The platform attestor records a run's
-// binding to a logged-in platform tenant; with no session it has nothing to
-// emit, and demanding it would break a build that never opted into the platform
-// — e.g. an offline local-key run, or a preset binary (cilock-all) that does not
-// register the platform attestor at all.
+// attestor defaults when the run cannot produce that attestation: either there
+// is no platform identity to bind to (offline, not logged in, or platform
+// disabled), or this binary never registered the attestor.
+//
+// The platform attestor records a run's binding to a logged-in platform tenant.
+// With no session it has nothing to emit, and with no registration the factory
+// answers ErrAttestorNotFound — which `cilock run` turns into a fatal
+// "failed to create attestor". Either way, demanding it would break a build
+// that never opted into the platform.
 //
 // Only the auto defaults are trimmed. If the operator explicitly passed
 // -a/--attestations, that is their exact set and is honored verbatim — an
-// explicit `-a platform` still asks for the platform attestor.
-func (ro *RunOptions) dropDefaultPlatformAttestor(cmd *cobra.Command) {
+// explicit `-a platform` still asks for the platform attestor, and still fails
+// loudly when the binary cannot provide it. Asking for evidence that cannot be
+// produced is an error; silently inheriting that demand from a default is not.
+//
+// Reports whether the entry was actually removed, so a caller can log a reason
+// for a drop that happened rather than one it merely attempted.
+func (ro *RunOptions) dropDefaultPlatformAttestor(cmd *cobra.Command) bool {
 	if cmd.Flags().Changed("attestations") {
-		return
+		return false
 	}
 	// Build a fresh slice: ro.Attestations may share DefaultAttestors' backing
 	// array (cobra's default), so an in-place filter would corrupt the package
 	// default for later invocations.
 	out := make([]string, 0, len(ro.Attestations))
+	dropped := false
 	for _, a := range ro.Attestations {
-		if a == "platform" { // matches the "platform" entry in DefaultAttestors
+		if a == platformAttestorName {
+			dropped = true
 			continue
 		}
 		out = append(out, a)
 	}
 	ro.Attestations = out
+	return dropped
 }
 
 // explicitFulcioTokenSource reports whether the operator already supplied a
