@@ -1,0 +1,208 @@
+{
+  "merkleRoot": "cb6717c024b465c5b59cd839169d1f010f88e917c8c7937c2f6737c496004aa6",
+  "treeSize": 24181,
+  "hashAlgorithm": "sha256",
+  "construction": "RFC6962",
+  "leaves": [
+    {
+      "path": "staging/src/k8s.io/kube-aggregator/pkg/client/applyconfiguration/apiregistration/v1beta1/apiservicecondition.go",
+      "fileDigest": "0001e30445869c3725ca81435f2b4bf413ee8d845107ba4be415e5b78a844ebb",
+      "leafHash": "cdb8b9175f9dcf9b1a77a9ba7141113a1edffc001895df592fc4f33d08386a0c"
+    },
+    {
+      "path": "pkg/controller/OWNERS",
+      "fileDigest": "00047f1bcbf3638cf883b97dca266223f4feadf1fd62b77d83eb5e14570eff2a",
+      "leafHash": "61037d169929d55524cf20742ce0b86ce95cb8a43c0379230fdac261f31a1617"
+    },
+    {
+      "path": "test/fuzz/cbor/testdata/fuzz/FuzzDecodeAllocations/000807b52481dae3",
+      "fileDigest": "000807b52481dae33e238224830cd374bf1625e3ac2044cb849bfd83282e8be7",
+      "leafHash": "8da68dcb9f52e6ebbebd0d3b91d68960b2c3586bb612d7eec454a8e8a403d0d7"
+    },
+    {
+      "path": "staging/src/k8s.io/kubectl/pkg/cmd/edit/testdata/testcase-create-list/1.request",
+      "fileDigest": "00083153000ea162e926115752fa5a6903076741195e82649a362a2a8d1ab485",
+      "leafHash": "057b2032d0bc16cdc547fff6f5cf7c21fa26e2f7932132084ec0d06f2df8f3a3"
+    },
+    {
+      "path": "staging/src/k8s.io/api/testdata/v1.33.0/resource.k8s.io.v1beta1.DeviceClass.pb",
+      "fileDigest": "001250ea8f0a09700898b4ad422cdfb8828c9f9da45b61dd2dd989676d1a9f3f",
+      "leafHash": "b812811adf17ac204ec50d0e4782483233c17432af3142fd90d1d9339379f5fa"
+    },
+    {
+      "path": "staging/src/k8s.io/client-go/informers/policy/v1beta1/poddisruptionbudget.go",
+      "fileDigest": "0012a58f5d0e08556a3e462297a80664d2c6f7f8dad894dd9056ee3658ca7235",
+      "leafHash": "62d0c6bcba3bb108eb160cb37bf5c64d0496e9050667580405fdbadb909f3bc3"
+    },
+    {
+      "path": "staging/src/k8s.io/client-go/kubernetes/typed/storage/v1alpha1/fake/fake_volumeattachment.go",
+      "fileDigest": "001ae58b71cc18c95020b863d33d72e75ee30a7460f822cab0c3ed0a3fc308c2",
+      "leafHash": "1c1d94284464d74885f513aab40a0a93e490a352a036a1a50950ec2ea6280ff4"
+    },
+    {
+      "path": "vendor/golang.org/x/sys/unix/zsysnum_linux_ppc64le.go",
+      "fileDigest": "001da7eaee2de15767540b7fdd979dba555c57f1714a52885777249725fc79b7",
+      "leafHash": "b1407123f2d4c7468786560ed1b26ba7f7deaad684fe312e176c16bcf8435f63"
+    },
+    {
+      "path": "staging/src/k8s.io/cli-runtime/pkg/genericclioptions/print_flags_test.go",
+      "fileDigest": "001f1d655d859d37e48ed569eab21d904480e213ee8dc36d01ff97926fda030b",
+      "leafHash": "073b51e5623fab93669a2318b7915d1a52376008b853bf493efce2eea342e486"
+    },
+    {
+      "path": "staging/src/k8s.io/kubectl/pkg/explain/fields_printer.go",
+      "fileDigest": "002108de8ae1a28dc35636f428558e5407b0e659204aa5250843e556d46ff76d",
+      "leafHash": "89b6b3f1871abe5fa64c0e166128774fc3a798ef77b190c6b281d56600045afb"
+    },
+    {
+      "path": "vendor/sigs.k8s.io/structured-merge-diff/v6/fieldpath/pathelementmap.go",
+      "fileDigest": "0024ac01898592a0944a408261dec45b6fd0da61a15a54dabe0b5838a96746f8",
+      "leafHash": "96c1a9715c05816eace18e504fe857486c158dc0131bc7aed273da8ee896ade1"
+    },
+    {
+      "path": "build/pause/windows/pause.c",
+      "fileDigest": "0028c2f78748af07c3b652fb76d15f8d0a47e2dbd902d4eea710bb55657def27",
+      "leafHash": "c1a429b507c3e9e9cc56586b0b7b26dd77d41af99242776874868a09037f06f3"
+    },
+    {
+      "path": "test/integration/logs/benchmark/data/error.log",
+      "fileDigest": "00347e27c0a642da9adf31b1db629316b9639c143404c7617d40854758540dde",
+      "leafHash": "958cdbfb3bf6631ba89774ad72e97afe4c3042f8d0606dff2ac6b04f33b90560"
+    },
+    {
+      "path": "pkg/kubelet/cm/memorymanager/policy_static_restore_test.go",
+      "fileDigest": "0035d366b2bd1429799259790dad895ad356d1e84d486c3e9241ddf50a3d4422",
+      "leafHash": "b686c36ea33c4bec61056cd01bda00fbda4cd72348c36cbe6b915c96ceeff0c6"
+    },
+    {
+      "path": "vendor/github.com/gogo/protobuf/protoc-gen-gogo/plugin/Makefile",
+      "fileDigest": "003c0ff92ea7bcadd1bd28037f93cf0d66c2aaaa98635b5cf47e2987b7b3bce7",
+      "leafHash": "8597e7cab971a973814927dd29015a07b80d2b923b57f05c3275033cacb0b78f"
+    },
+    {
+      "path": "staging/src/k8s.io/apimachinery/pkg/util/runtime/runtime_stack_test.go",
+      "fileDigest": "003d70dd74124156d35c1507db0d61c0e07efa2959c46afe160d6f216efd5cfe",
+      "leafHash": "379d71f4bb60a20ce84dd15b8995710167e8f3f1b42eb952ee63ed3be551e59f"
+    },
+    {
+      "path": "test/e2e_node_windows/util.go",
+      "fileDigest": "00476514374ac8a446f7d9e38668062d7b5900a7d04b77229c0441fe55e211f4",
+      "leafHash": "b4460f7623ea9cefc33b177473461fe1d0651bdd8ad5100fb5a268ba37db85eb"
+    },
+    {
+      "path": "staging/src/k8s.io/kube-controller-manager/go.sum",
+      "fileDigest": "004c51d38a06cf7ff0f853d14011e3b319665a9c548389041727586269b7b5a6",
+      "leafHash": "b7d71a6a4c054aec90753730a76b1d303d889f3ff2b306f615d30cc66d07566e"
+    },
+    {
+      "path": "staging/src/k8s.io/kubectl/testdata/openapi/v3/apis/apps/v1.json",
+      "fileDigest": "00552f83ee31b567d11904f25ec72a01a825c24621203d421541304a2de0d813",
+      "leafHash": "c1be1a8c5af91fe062bea84e53d56b02fd2f42dbadbd53741d7314beb6180a55"
+    },
+    {
+      "path": "hack/ginkgo-e2e.sh",
+      "fileDigest": "0055a6acc357fc4d8e8a00d5e19eee092d38a0d825d79af1e7f53c4b1c8653d3",
+      "leafHash": "df23b2ec69ce77e41db4405dcb7350398bc5f221bde4a6038ba89d7a616f0ad1"
+    },
+    {
+      "path": "staging/src/k8s.io/code-generator/cmd/defaulter-gen/output_tests/empty/type.go",
+      "fileDigest": "00570adf4921d8d3dd262252120b2c031b6bbc64918bb4c9b1ac69d807f062a8",
+      "leafHash": "10fb737a836b7fd21f1b976c2ba195a7053a69f7fe1161e9f58e232243f5c84e"
+    },
+    {
+      "path": "vendor/sigs.k8s.io/structured-merge-diff/v6/merge/conflict.go",
+      "fileDigest": "005c3822d0e643ce59b2b6231d83aa684fadca4fd9702c3f59fc04839f42a056",
+      "leafHash": "2cad7aa7b5180edb8c746aa3b2ae83be2b341d7b661d2a819237d6e8c6937eb2"
+    },
+    {
+      "path": "vendor/golang.org/x/sys/cpu/endian_big.go",
+      "fileDigest": "005d2761cef8d501304f73be92a7f43174bf738a380c9d5d7bc0cac926075f57",
+      "leafHash": "e8439ea7e5b4fbaf08d3d1c27dd68fa914702f668fda46aaad6101c88469bd4b"
+    },
+    {
+      "path": "staging/src/k8s.io/api/testdata/v1.33.0/storage.k8s.io.v1.CSINode.after_roundtrip.pb",
+      "fileDigest": "00613906794be52b5159f693bde875cc4f22eac9f255be9c28f5bb2b64421baa",
+      "leafHash": "0c2dafd5027c9d00702f5d8b447319de2be15a55e06eeb8e6b1995186e0d34a3"
+    },
+    {
+      "path": "test/fuzz/cbor/testdata/fuzz/FuzzDecodeAllocations/0061fa19679be87a",
+      "fileDigest": "0061fa19679be87ab1983e340ebef726a42c0bea223b62266e9637dcb41608f9",
+      "leafHash": "eed87396da2d0ccca4f6e65390b5d71da2d2c93f135e86e38e30b8dda86fae45"
+    },
+    {
+      "path": "staging/src/k8s.io/kubelet/pkg/apis/pluginregistration/v1/api_grpc.pb.go",
+      "fileDigest": "0064586a5319f7b7b3712236f81fefc0de510f4516e3746f6d36bf8d6b795d3d",
+      "leafHash": "21abdb1a676f81565059a0aae8687a8bfb004c4a2a16d14ab2e082427c523c69"
+    },
+    {
+      "path": "test/declarative_validation/core/service/zz_generated.validations.main_test.go",
+      "fileDigest": "0066ea5923e8f07748b671e995c8313eaf33bc5a20ef6af77a16f2d7d24b4a91",
+      "leafHash": "addf2d0144433a559a6e36539debc575417f6906a0c742b0ebc4812992ca6703"
+    },
+    {
+      "path": "pkg/controller/apis/config/register.go",
+      "fileDigest": "006776b19aaf15f34f8fe8030d49611a833ffcd92d4d9da3da66e0c6f6457430",
+      "leafHash": "9e4d661f2c97f4066a94249bcf5e471a807ea36e9f3ec797ea7f3646a987d550"
+    },
+    {
+      "path": "staging/src/k8s.io/api/testdata/v1.33.0/resource.k8s.io.v1alpha3.ResourceClaimTemplate.yaml",
+      "fileDigest": "0067c0db1eccc8638914cca43b8c20445ffff01edd139e66b0cc6c502a5d3e0b",
+      "leafHash": "2a8291aa261ad6cc0ac5721579fb588da551e0684425eb87e730a3f62b815867"
+    },
+    {
+      "path": "pkg/apis/flowcontrol/v1beta3/doc.go",
+      "fileDigest": "006a5b07eb72db05966f86691cbe17462b0d37e2f3489716a5a136eeece86248",
+      "leafHash": "e42b3a9c3af6ca2e7d56b8340cd30d5e9c47dd8fa7e58fc82d64062a0ff890a8"
+    },
+    {
+      "path": "staging/src/k8s.io/pod-security-admission/test/testdata/restricted/v1.19/pass/selinuxoptions1.yaml",
+      "fileDigest": "006b227d9ed309b97f24569af3104c6ae32762b996a92d5e745e779ec8cf405b",
+      "leafHash": "343eab40d61049e0bd3de51c723f45d3474dc96eb0318678447571060bd7fc18"
+    },
+    {
+      "path": "LICENSES/vendor/github.com/modern-go/concurrent/LICENSE",
+      "fileDigest": "006f752e1b73c0273c12dab18dbb69b5aed9683343849167bb5f868712b860c8",
+      "leafHash": "edba9f78949886eca4cacadcc2d8d32bf49489a3275c30dba0a0c6e7674ae76a"
+    },
+    {
+      "path": "test/declarative_validation/resource/deviceclass/zz_generated.validations.v1beta1_test.go",
+      "fileDigest": "007032a40f03997192343ffe0dce999ce125e4f7c9cbb2682625a0f43e86eef0",
+      "leafHash": "c2f53af8e81754c4248e41ce22dcd96f507dfda86f2f77aa9e672e7a0105e3fa"
+    },
+    {
+      "path": "pkg/controller/certificates/signer/config/doc.go",
+      "fileDigest": "0072014b3ca3678e6f02308bfe9e356cb7b0a8bc6d8a30c8e97ef0672a7056b6",
+      "leafHash": "ed9bcc174dd75755c6c9e352d77d0c63660bbe4d104e99afe0c9f87be95aa4f0"
+    },
+    {
+      "path": "vendor/golang.org/x/sys/unix/zerrors_freebsd_386.go",
+      "fileDigest": "007480fe44b8d12f4048903351e35d4d6a3eab0889aac620dcd33cfde0b36faa",
+      "leafHash": "109a1a397a081dbd6ad4896d7cb576f3ba6c21d9319a27c0341b39ee4ba57503"
+    },
+    {
+      "path": "staging/src/k8s.io/component-base/metrics/testutil/promlint_test.go",
+      "fileDigest": "007a42e15a2d3ec7857c3d6c9098acdd2bd49e298eb7d71708a70394b9501ff0",
+      "leafHash": "3e835456585611367f4087c47d6656c4b30067c0e1923d984980842bd70943c2"
+    },
+    {
+      "path": "staging/src/k8s.io/code-generator/examples/single/informers/externalversions/api/v1/testtype.go",
+      "fileDigest": "007c657333efb783e3ee7316a41ae12bf0b34e68fcf40db47e813f8fa6d01292",
+      "leafHash": "b944951d9a27e53f0369b559a77b11d245cc17415aa26c9d6cebd7220bf6674c"
+    },
+    {
+      "path": "api/discovery/apis__scheduling.k8s.io.json",
+      "fileDigest": "007cd064577156824b3cb43c6ec4ce6a251267eba8b4e98f3c828c04bba75533",
+      "leafHash": "b27e072cef6cfcf1b1d340ff971aaf3160ded0db47b2da312a64faeb4adaebfd"
+    },
+    {
+      "path": "test/e2e_node/perf/workloads/utils.go",
+      "fileDigest": "007d17d3711b4e0f4b48cbdf6140167a460999246aa82a25bb267325dc8d63ce",
+      "leafHash": "9f8d28e634da98721d680d51fe1c1089a5562e74986615a5eef1856730ca605e"
+    },
+    {
+      "path": "vendor/go.etcd.io/etcd/client/pkg/v3/fileutil/preallocate_darwin.go",
+      "fileDigest": "00802bf9fcf7361974228eb8241d7f0724ae061b3ad157988bdae650d872095d",
+      "leafHash": "fdf47723fcc731187d0df4e488690a2fef2d392bb57a2324982979be43301ebd"
+    }
+  ]
+}

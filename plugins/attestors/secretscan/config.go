@@ -83,13 +83,17 @@ func WithMaxDecodeLayers(maxDecodeLayers int) Option {
 // It initializes the attestor with default values and applies any provided options
 func New(opts ...Option) *Attestor {
 	a := &Attestor{
-		failOnDetection: defaultFailOnDetection,
-		maxFileSizeMB:   defaultMaxFileSizeMB,
-		filePerm:        defaultFilePerm,
-		allowList:       nil,
-		configPath:      defaultConfigPath,
-		maxDecodeLayers: defaultMaxDecodeLayers,
-		subjects:        make(map[string]cryptoutil.DigestSet),
+		failOnDetection:       defaultFailOnDetection,
+		maxFileSizeMB:         defaultMaxFileSizeMB,
+		filePerm:              defaultFilePerm,
+		allowList:             nil,
+		configPath:            defaultConfigPath,
+		maxDecodeLayers:       defaultMaxDecodeLayers,
+		scope:                 defaultScope,
+		scanPriorAttestations: defaultScanAttestations,
+		includeGlob:           defaultIncludeGlob,
+		excludeGlob:           defaultExcludeGlob,
+		subjects:              make(map[string]cryptoutil.DigestSet),
 		// Initialize Findings so empty scans marshal as "findings": []
 		// rather than "findings": null — downstream JSON-Schema consumers
 		// (and Go's encoding/json default for nil slices) otherwise see
@@ -132,8 +136,15 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 
 // init registers the attestor with the attestation registry
 // This makes it available to the attestation CLI and API
-func init() { //nolint:funlen // registration requires many options
+func init() {
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor { return New() },
+		append(baseConfigOptions(), scopeConfigOptions()...)...)
+}
+
+// baseConfigOptions are the detection options: what counts as a secret and
+// what to do about one. Scope options (which files are read) live in scope.go.
+func baseConfigOptions() []registry.Configurer { //nolint:funlen // one entry per option
+	return []registry.Configurer{
 		// Option: Fail when secrets are detected (default: false)
 		registry.BoolConfigOption(
 			"fail-on-detection",
@@ -253,5 +264,5 @@ func init() { //nolint:funlen // registration requires many options
 				return secretscanAttestor, nil
 			},
 		),
-	)
+	}
 }

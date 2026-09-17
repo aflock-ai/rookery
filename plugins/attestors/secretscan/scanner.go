@@ -23,8 +23,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -316,7 +318,12 @@ func (a *Attestor) scanSingleAttestor(attestor attestation.Attestor, _ string, d
 	return a.scanBytes(attestorJSON, sourceIdentifier, detector, processedInThisScan, 0)
 }
 
-// scanCommandRunAttestor specifically handles scanning the stdout/stderr of command run attestors
+// scanCommandRunAttestor specifically handles scanning the stdout/stderr of
+// command run attestors. It returns whatever it managed to scan and records
+// every failure in scanErrors rather than returning early, so a crash on
+// stdout does not cost the findings from stderr — and, because any scanError
+// is fatal in Attest, cannot be mistaken for output that was read and was
+// clean.
 func (a *Attestor) scanCommandRunAttestor(attestor commandrun.CommandRunAttestor, detector *detect.Detector) ([]Finding, error) {
 	// Access the CommandRun data
 	cmdData := attestor.Data()
@@ -334,7 +341,11 @@ func (a *Attestor) scanCommandRunAttestor(attestor commandrun.CommandRunAttestor
 		stdoutID := "attestation:commandrun:stdout"
 		stdoutFindings, err := a.scanBytes([]byte(cmdRun.Stdout), stdoutID, detector, processedInThisScan, 0)
 		if err != nil {
+			// Recorded, not just logged. Command stdout is where secrets leak
+			// most often; dropping the error here returned (findings, nil) and
+			// the caller signed an empty result for output nobody scanned.
 			log.Debugf("(attestation/secretscan) error scanning command stdout: %s", err)
+			a.scanErrors = append(a.scanErrors, fmt.Errorf("scanning command stdout: %w", err))
 		} else {
 			findings = append(findings, stdoutFindings...)
 		}
@@ -347,6 +358,7 @@ func (a *Attestor) scanCommandRunAttestor(attestor commandrun.CommandRunAttestor
 		stderrFindings, err := a.scanBytes([]byte(cmdRun.Stderr), stderrID, detector, processedInThisScan, 0)
 		if err != nil {
 			log.Debugf("(attestation/secretscan) error scanning command stderr: %s", err)
+			a.scanErrors = append(a.scanErrors, fmt.Errorf("scanning command stderr: %w", err))
 		} else {
 			findings = append(findings, stderrFindings...)
 		}
@@ -356,12 +368,14 @@ func (a *Attestor) scanCommandRunAttestor(attestor commandrun.CommandRunAttestor
 	cmdRunJSON, err := json.MarshalIndent(cmdRun, "", "  ")
 	if err != nil {
 		log.Debugf("(attestation/secretscan) error marshaling command run data: %s", err)
+		a.scanErrors = append(a.scanErrors, fmt.Errorf("marshaling command run data: %w", err))
 	} else {
 		processedInThisScan := make(map[string]struct{})
 		cmdRunID := "attestation:commandrun:json"
 		cmdRunFindings, err := a.scanBytes(cmdRunJSON, cmdRunID, detector, processedInThisScan, 0)
 		if err != nil {
 			log.Debugf("(attestation/secretscan) error scanning command run JSON: %s", err)
+			a.scanErrors = append(a.scanErrors, fmt.Errorf("scanning command run JSON: %w", err))
 		} else {
 			findings = append(findings, cmdRunFindings...)
 		}
@@ -381,9 +395,16 @@ func (a *Attestor) scanProducts(ctx *attestation.AttestationContext, _ string, d
 
 	log.Debugf("(attestation/secretscan) scanning %d products", len(products))
 
+	wd := workingDirSpellings(ctx.WorkingDir())
 	for path, product := range products {
-		// Skip files that should not be scanned
-		if a.shouldSkipProduct(path, product) {
+		// Honour the operator's path globs. A product left out here is not
+		// a subject either: the evidence names only what was read. The globs
+		// are relative to the working directory and the product key may be
+		// absolute, so both are reduced to one spelling first — see
+		// productScopePath for what an unnormalized key cost.
+		scopePath := productScopePath(path, wd)
+		if !a.pathInScope(scopePath) {
+			log.Debugf("(attestation/secretscan) skipping product outside scope: %s", path)
 			continue
 		}
 
@@ -395,41 +416,124 @@ func (a *Attestor) scanProducts(ctx *attestation.AttestationContext, _ string, d
 		// scanned. EVERY product is scanned regardless of what it claims
 		// to be — a scanner report is only additionally eligible for echo
 		// dedup (see dedupeReportEchoes).
-		findings, err := a.scanProductBytes(path, absPath, product, detector)
+		read, scanned, err := a.scanProductBytes(ctx, path, scopePath, absPath, product, detector)
 		if err != nil {
 			log.Debugf("(attestation/secretscan) error scanning file %s: %s", path, err)
 			a.scanErrors = append(a.scanErrors, fmt.Errorf("scanning product %s: %w", path, err))
 			continue
 		}
+		if !scanned {
+			// Nothing was read, so nothing is claimed: no subject, no count.
+			continue
+		}
 
 		// Set location for all findings to identify which product they came from
-		a.setProductLocation(findings, path)
+		a.setProductLocation(read.Findings, path)
 
 		// Add findings to collection (if any)
-		if len(findings) > 0 { // Keep the log statement conditional
-			log.Debugf("(attestation/secretscan) found %d findings in product: %s", len(findings), path)
+		if len(read.Findings) > 0 { // Keep the log statement conditional
+			log.Debugf("(attestation/secretscan) found %d findings in product: %s", len(read.Findings), path)
 		}
-		a.Findings = append(a.Findings, findings...) // Append regardless (appending empty slice is ok)
+		a.Findings = append(a.Findings, read.Findings...) // Append regardless (appending empty slice is ok)
 
-		// Add product to subjects map using the original path format (regardless of findings)
-		a.subjects[fmt.Sprintf("product:%s", path)] = product.Digest
+		// The subject is the digest of the bytes THIS attestor read, not the
+		// digest the product attestor recorded. A signed claim binds to what
+		// was observed; publishing someone else's digest beside our findings
+		// meant that when the file changed between the product snapshot and
+		// this read, the subject named bytes nobody scanned.
+		//
+		// When the two agree — the common case — this is byte-identical to
+		// what was always published, so correlation with the product attestor
+		// is unchanged. When they do not, the disagreement is stated in the
+		// predicate rather than resolved silently in either direction.
+		a.subjects[fmt.Sprintf("product:%s", path)] = read.Digests
+		if !productDigestAgrees(product.Digest, read.Digests) {
+			log.Warnf("(attestation/secretscan) %s is not the bytes the product attestor recorded; publishing the scanned digest and recording the disagreement", path)
+			a.productDigestMismatches = append(a.productDigestMismatches, ProductDigestMismatch{
+				Path:     path,
+				Recorded: product.Digest,
+				Scanned:  read.Digests,
+			})
+		}
+		a.filesScanned++
 	}
 
 	return nil
 }
 
+// scanScopedFiles scans the working-tree files a diff or tree scope adds on
+// top of the products, returning the resolved base commit for a diff scope.
+// Listing the files can fail (not a repository, unknown base ref) and that
+// failure is returned: a diff scan that silently read nothing would satisfy
+// a no-secrets policy with a scan of nothing.
+func (a *Attestor) scanScopedFiles(ctx *attestation.AttestationContext, spec scopeSpec, detector *detect.Detector) (string, error) {
+	workingDir := ctx.WorkingDir()
+	if workingDir == "" {
+		workingDir = "."
+	}
+	switch spec.Files {
+	case ScopeDiff:
+		// Before any listing: if the repository's view of its own history is
+		// altered, produce no evidence rather than narrower evidence.
+		if err := refuseAlteredHistoryView(ctx, workingDir); err != nil {
+			return "", err
+		}
+		diff, err := diffFiles(ctx, workingDir, spec.BaseRef)
+		if err != nil {
+			return "", err
+		}
+		log.Debugf("(attestation/secretscan) diff scope: %d files and %d committed blobs changed since %s (%s)",
+			len(diff.Files), len(diff.Blobs), spec.BaseRef, diff.Base)
+		a.scanFiles(ctx, diff.Files, detector)
+		a.scanCommittedBlobs(ctx, workingDir, diff.Blobs, detector)
+		return diff.Base, nil
+	case ScopeTree:
+		files, err := treeFiles(workingDir)
+		if err != nil {
+			return "", err
+		}
+		log.Debugf("(attestation/secretscan) tree scope: %d files under %s", len(files), workingDir)
+		a.scanFiles(ctx, files, detector)
+	case ScopeProducts:
+		// Products only; already scanned.
+	}
+	return "", nil
+}
+
 // scanProductBytes reads a product once, records it as a parsed report when
 // classifyReport says so, and scans the same bytes for secrets.
-func (a *Attestor) scanProductBytes(path, absPath string, product attestation.Product, detector *detect.Detector) ([]Finding, error) {
+func (a *Attestor) scanProductBytes(ctx *attestation.AttestationContext, path, scopePath, absPath string, product attestation.Product, detector *detect.Detector) (productScan, bool, error) {
 	if detector == nil {
-		return nil, fmt.Errorf("nil detector provided")
+		return productScan{}, false, fmt.Errorf("nil detector provided")
+	}
+	// A directory has no bytes of its own, and reading one is an error that
+	// would fail the whole scan. Decided on this attestor's own stat, not on
+	// the mime type another attestor recorded. Stat follows symlinks on
+	// purpose: a symlinked product still yields its target's bytes, exactly
+	// as it did before.
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return productScan{}, false, err
+	}
+	if info.IsDir() {
+		log.Debugf("(attestation/secretscan) skipping directory product: %s", path)
+		return productScan{}, false, nil
 	}
 	if exceeds, err := a.exceedsMaxFileSize(absPath); err != nil || exceeds {
-		return nil, err
+		return productScan{}, false, err
 	}
 	content, err := a.readFileContent(absPath)
 	if err != nil {
-		return nil, err
+		return productScan{}, false, err
+	}
+	// Binary-ness is decided from the BYTES THAT WERE READ. product.MimeType
+	// is another attestor's claim about this file, and trusting it cut both
+	// ways: a text file holding a secret could be labelled binary and never
+	// read at all, and a binary could be labelled text and recorded as a
+	// scanned subject it had no business being.
+	if isBinaryFile(http.DetectContentType(content)) {
+		log.Debugf("(attestation/secretscan) skipping binary product: %s", path)
+		return productScan{}, false, nil
 	}
 	if rep, rules, ok := classifyReport(path, content, product); ok {
 		log.Debugf("(attestation/secretscan) %s parses as a %q report (%d results, sha256 %s); scanning it and deduplicating echoes", path, rep.Driver, rep.Results, rep.SHA256)
@@ -439,25 +543,63 @@ func (a *Attestor) scanProductBytes(path, absPath string, product attestation.Pr
 		a.reportRules[path] = rules
 		a.ConsumedReports = append(a.ConsumedReports, rep)
 	}
-	return a.scanBytes(content, absPath, detector, make(map[string]struct{}), 0)
+	findings, err := a.scanBytes(content, absPath, detector, make(map[string]struct{}), 0)
+	if err != nil {
+		return productScan{}, false, err
+	}
+	// The digest of the bytes JUST SCANNED. It becomes the subject, and it is
+	// what a later reader of the same path — the file on disk, the committed
+	// blob, the staged blob — compares against to tell it would be rescanning
+	// identical bytes. Computed only after a successful scan: a failed read
+	// covered nothing.
+	digests, err := cryptoutil.CalculateDigestSetFromBytes(content, ctx.Hashes())
+	if err != nil {
+		return productScan{}, false, fmt.Errorf("digesting: %w", err)
+	}
+	a.recordScannedDigests(scopePath, digests)
+	return productScan{Findings: findings, Digests: digests}, true, nil
 }
 
-// shouldSkipProduct determines if a product should be skipped during scanning
-// based on its type and other characteristics
-func (a *Attestor) shouldSkipProduct(path string, product attestation.Product) bool {
-	// Skip directories
-	if product.MimeType == "text/directory" {
-		log.Debugf("(attestation/secretscan) skipping directory: %s", path)
+// productScan is what reading one product produced: its findings, and the
+// digest of the exact bytes they came from.
+type productScan struct {
+	Findings []Finding
+	Digests  cryptoutil.DigestSet
+}
+
+// productDigestAgrees reports whether the product attestor's record and the
+// bytes this attestor read POSITIVELY agree. It compares only algorithms both
+// sides computed, because the two need not use the same set — the product
+// attestor has a fallback path that records SHA-256 alone — and it requires at
+// least one such algorithm: an overlap of nothing is not agreement, it is an
+// inability to check, which is exactly what must not pass silently.
+//
+// A product recorded with no digest at all is not a disagreement. Nothing was
+// claimed, so there is nothing to disagree with; the subject simply gains the
+// digest of what was read, where it used to publish nothing.
+func productDigestAgrees(recorded, scanned cryptoutil.DigestSet) bool {
+	if len(recorded) == 0 {
 		return true
 	}
-
-	// Skip binary files
-	if isBinaryFile(product.MimeType) {
-		log.Debugf("(attestation/secretscan) skipping binary file: %s (mime: %s)", path, product.MimeType)
+	if len(scanned) == 0 {
+		// No hash algorithms were configured, so THIS attestor computed
+		// nothing to compare with — and neither did any other attestor in the
+		// run, whose subjects are equally empty. Asserting a disagreement here
+		// would manufacture one for every product in a degenerate config.
 		return true
 	}
-
-	return false
+	shared := 0
+	for value, hex := range recorded {
+		ours, ok := scanned[value]
+		if !ok {
+			continue
+		}
+		shared++
+		if ours != hex {
+			return false
+		}
+	}
+	return shared > 0
 }
 
 // classifyReport decides whether the bytes just read for a product are a
@@ -585,6 +727,8 @@ func (a *Attestor) getAbsolutePath(path, workingDir string) string {
 //	                         failure. The findings list is incomplete by
 //	                         definition, so nothing here may be trusted. The
 //	                         workflow drops the attestor from the collection.
+//	                         This is returned REGARDLESS of fail-on-detection:
+//	                         see the two axes spelled out at the check itself.
 //
 //	attestation.DetectionError
 //	                         "I OBSERVED, and what I found matches the
@@ -605,8 +749,10 @@ func (a *Attestor) getAbsolutePath(path, workingDir string) string {
 // gitleaks crash would downgrade a blind scan into a trustworthy-looking
 // verdict.
 //
-// Without failOnDetection (the default) findings are not an error at all:
-// they are simply recorded, and policy gates at verify time.
+// Without failOnDetection (the default) FINDINGS are not an error at all:
+// they are simply recorded, and policy gates at verify time. Scan ERRORS are
+// a different axis and are always fatal; a scan that could not read what it
+// was asked to read has no clean result to record.
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	// Store the attestation context for later use
 	a.ctx = ctx
@@ -628,9 +774,24 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		return fmt.Errorf("error initializing gitleaks detector: %w", err)
 	}
 
-	// Scan attestations first (non-critical)
-	if err := a.scanAttestations(ctx, tempDir, detector); err != nil {
-		log.Debugf("(attestation/secretscan) error scanning attestations: %s", err)
+	// Resolve what this scan covers before reading anything. A bad scope or
+	// glob is a failure to observe, not a narrower scan.
+	spec, err := a.compileScope()
+	if err != nil {
+		return err
+	}
+	a.filesScanned = 0
+	a.scannedDigests = nil
+	a.productDigestMismatches = nil
+	a.Scope = nil
+
+	// Scan attestations first (non-critical). Skipped when the operator
+	// confined the scan to files: the material inventory and command-run
+	// output are the bulk of what lives here.
+	if a.scanPriorAttestations {
+		if err := a.scanAttestations(ctx, tempDir, detector); err != nil {
+			log.Debugf("(attestation/secretscan) error scanning attestations: %s", err)
+		}
 	}
 
 	// Scan products (primary objective)
@@ -638,31 +799,79 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		log.Debugf("(attestation/secretscan) error scanning products: %s", err)
 	}
 
+	// Scan working-tree files beyond the products when asked to.
+	baseCommit, err := a.scanScopedFiles(ctx, spec, detector)
+	if err != nil {
+		return err
+	}
+
+	// Say what was covered whenever it is not the default, so the evidence
+	// never claims more than it looked at.
+	// Products are iterated from a map, so the disagreements come out in
+	// whatever order Go felt like. This goes into a SIGNED predicate, which
+	// must not differ run to run over the same inputs.
+	sort.Slice(a.productDigestMismatches, func(i, j int) bool {
+		return a.productDigestMismatches[i].Path < a.productDigestMismatches[j].Path
+	})
+
+	// A disagreement has to be reportable even on a wholly default scan, or the
+	// one configuration where nobody set an option is the one where the
+	// evidence of a changed file goes missing.
+	if !a.scopeIsDefault() || len(a.productDigestMismatches) > 0 {
+		a.Scope = &ScanScope{
+			Files:        spec.Files,
+			BaseRef:      spec.BaseRef,
+			BaseCommit:   baseCommit,
+			Attestations: a.scanPriorAttestations,
+			IncludeGlob:  a.includeGlob,
+			ExcludeGlob:  a.excludeGlob,
+
+			ProductDigestMismatches: a.productDigestMismatches,
+
+			FilesScanned: a.filesScanned,
+		}
+	}
+
 	// After everything is scanned: a scanner report's own record of a
 	// secret found elsewhere is an echo, not a second leak.
 	a.dedupeReportEchoes()
 
-	if a.failOnDetection {
-		// COULD NOT OBSERVE. Fail closed on scan errors — an empty findings
-		// list after a crashed scan is indistinguishable from a clean scan,
-		// and we must not let that pass when the caller opted into the guard.
-		// This stays a plain error: the scan is untrustworthy, so the workflow
-		// is right to keep it out of the collection.
-		if len(a.scanErrors) > 0 {
-			return fmt.Errorf("secret scanning failed: %d scan error(s), first: %w",
-				len(a.scanErrors), a.scanErrors[0])
-		}
+	// COULD NOT OBSERVE. This is checked BEFORE findings and WITHOUT regard to
+	// failOnDetection, because the two are DIFFERENT AXES and collapsing them
+	// is what made "could not read" indistinguishable from "read and clean":
+	//
+	//   failOnDetection decides whether a FINDING fails the run. It is the
+	//   operator's policy choice about verdicts, and it is legitimately off by
+	//   default — policy gates at verify time instead.
+	//
+	//   A scan error fails the run either way, because it is not a verdict at
+	//   all. It says the findings list below is INCOMPLETE, so nothing
+	//   downstream may read the absence of a finding as evidence of absence.
+	//   An operator who turned the gate off asked not to be blocked by secrets
+	//   he was told about. He did not ask to be handed signed evidence for
+	//   files nobody managed to read. Gating that on failOnDetection made the
+	//   default configuration the unsafe one.
+	//
+	// It stays a plain error, never a DetectionError: the scan is
+	// untrustworthy, so the workflow is right to keep it out of the collection
+	// entirely rather than sign a partial result.
+	if len(a.scanErrors) > 0 {
+		return fmt.Errorf("secret scanning failed: %d scan error(s), first: %w",
+			len(a.scanErrors), a.scanErrors[0])
+	}
 
-		// OBSERVED. The scan completed and found secrets. This is a verdict on
-		// good evidence, not a failure to look, so it is reported as a
-		// DetectionError: still fatal (the operator asked to fail closed, and
-		// DetectionError is not a SoftError, so the CLI still exits non-zero),
-		// but the workflow keeps a.Findings in the signed collection instead of
-		// discarding the only record that the secrets were ever seen.
-		if len(a.Findings) > 0 {
-			return attestation.NewDetectionError(
-				fmt.Sprintf("secret scanning failed: found %d secrets", len(a.Findings)))
-		}
+	// OBSERVED. The scan completed and found secrets. This is a verdict on
+	// good evidence, not a failure to look, so it is reported as a
+	// DetectionError: still fatal (the operator asked to fail closed, and
+	// DetectionError is not a SoftError, so the CLI still exits non-zero),
+	// but the workflow keeps a.Findings in the signed collection instead of
+	// discarding the only record that the secrets were ever seen.
+	//
+	// Without failOnDetection findings are not an error at all: they are
+	// recorded, and policy gates at verify time.
+	if a.failOnDetection && len(a.Findings) > 0 {
+		return attestation.NewDetectionError(
+			fmt.Sprintf("secret scanning failed: found %d secrets", len(a.Findings)))
 	}
 
 	return nil

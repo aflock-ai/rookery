@@ -19,6 +19,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/gobwas/glob"
 	_ "github.com/invopop/jsonschema" // Used for schema generation
 )
 
@@ -86,9 +87,23 @@ type Attestor struct {
 	configPath      string      // Path to custom Gitleaks config file
 	maxDecodeLayers int         // Maximum layers of encoding to decode
 
+	// Scope (#9313): which files and attestations the scan reads. See scope.go.
+	scope                 string    // "products" (default), "tree", or "diff:<base-ref>"
+	scanPriorAttestations bool      // Whether prior attestors' JSON is scanned (default true)
+	includeGlob           string    // Only scan paths matching this glob ("" means all)
+	excludeGlob           string    // Never scan paths matching this glob ("" means none)
+	compiledIncludeGlob   glob.Glob // Compiled in Attest from includeGlob
+	compiledExcludeGlob   glob.Glob // Compiled in Attest from excludeGlob
+	filesScanned          int       // Files read by the detector this run
+
 	// Results and state
 	Findings []Finding                       `json:"findings"` // List of detected secrets
-	subjects map[string]cryptoutil.DigestSet // Products that were scanned
+	subjects map[string]cryptoutil.DigestSet // Products and files that were scanned
+
+	// Scope records what the scan covered whenever the operator changed it
+	// from the default; it is absent on a default scan so existing
+	// predicates keep their shape. See ScanScope.
+	Scope *ScanScope `json:"scope,omitempty"`
 
 	// ConsumedReports are the secret-scanner reports this attestor read and
 	// deliberately did NOT re-scan: a product whose CONTENT is a SARIF
@@ -103,11 +118,30 @@ type Attestor struct {
 	reportRules map[string]map[string]bool
 
 	// scanErrors accumulates per-file / per-attestor scan failures that
-	// would otherwise be silently swallowed. When failOnDetection is set,
-	// the attestor must fail closed if ANY scan errored — otherwise a
-	// crash in gitleaks or an unreadable product lets a malicious release
-	// pass the guard with an empty findings list.
+	// would otherwise be silently swallowed. ANY entry here fails Attest
+	// with a plain error, whatever failOnDetection says: a crash in
+	// gitleaks, an unreadable product or a file that vanished mid-scan
+	// leaves the findings list incomplete, and incomplete findings must
+	// never be signed as a clean result. failOnDetection governs findings,
+	// not coverage — see the Attest error contract.
 	scanErrors []error
+
+	// scannedDigests maps a working-directory-relative path to the digests of
+	// every byte-buffer THIS attestor actually read and scanned for it, by any
+	// route: as a product, as a working-tree file, or as a committed blob. It
+	// is how a later reader of the same path knows it would be rescanning
+	// identical bytes, so one blob yields one scan, one finding and one count.
+	// Only digests of buffers this attestor read itself go in here — never a
+	// digest another attestor recorded — so nothing external can suppress a
+	// scan by claiming content was already covered.
+	scannedDigests map[string][]cryptoutil.DigestSet
+
+	// productDigestMismatches accumulates products whose bytes at scan time
+	// were not the bytes the product attestor recorded. Surfaced in the
+	// predicate's scope object rather than swallowed: the subject binds to
+	// what was read, and a verifier is told the record it would have
+	// correlated against disagreed.
+	productDigestMismatches []ProductDigestMismatch
 
 	// Context for the attestation
 	ctx *attestation.AttestationContext // Reference to attestation context
@@ -124,7 +158,9 @@ type Finding struct {
 	Description string `json:"description"`
 
 	// Location indicates where the secret was found in the form:
-	// "attestation:attestor-name" or "product:/path/to/file"
+	// "attestation:attestor-name", "product:/path/to/file", or
+	// "file:path/to/file" for a working-tree file read under a diff or tree
+	// scope that is not a product
 	Location string `json:"location"`
 
 	// Line indicates the line number where the secret was found

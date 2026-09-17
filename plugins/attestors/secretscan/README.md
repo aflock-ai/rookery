@@ -100,14 +100,52 @@ For each location, it searches for the actual values of sensitive environment va
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `fail-on-detection` | `false` | If true, the attestation process will fail if secrets are detected |
+| `fail-on-detection` | `false` | If true, the attestation process will fail if secrets are detected. It governs FINDINGS only: a file the scan could not read fails the run regardless, because an empty findings list over unread files is not a clean result |
 | `max-file-size-mb` | `10` | Maximum file size in MB to scan (prevents resource exhaustion) |
 | `config-path` | `""` | Path to custom Gitleaks configuration file in TOML format |
 | `allowlist-regex` | `""` | Regex pattern for content to ignore (can be specified multiple times) |
 | `allowlist-stopword` | `""` | Specific string to ignore (can be specified multiple times) |
 | `max-decode-layers` | `3` | Maximum number of encoding layers to decode (prevents resource exhaustion) |
+| `scope` | `products` | Which files to scan: `products` (the files earlier attestors recorded), `tree` (every file under the working directory, `.git` excluded), or `diff:<base-ref>` (products plus every file changed since the merge-base of `<base-ref>` and HEAD, including untracked files) |
+| `scan-attestations` | `true` | Scan the JSON of attestors that ran earlier in the step (this is where command-run stdout/stderr and the material inventory live). Set `false` to scan files only |
+| `include-glob` | `""` | Only scan paths matching this glob, relative to the working directory (product keys recorded as absolute paths are made relative before matching). One pattern; use brace alternation for several (`{src,cmd}/**`) |
+| `exclude-glob` | `""` | Never scan paths matching this glob; exclude wins over include. One pattern; use brace alternation for several (`{**/,}{vendor,node_modules}/**`) |
 
 > **Important Note on Allowlists**: When `config-path` is provided, the `allowlist-regex` and `allowlist-stopword` options are ignored. All allowlisting must be defined within the Gitleaks TOML configuration file. The `max-file-size-mb` setting still applies and will override any value in the TOML configuration.
+
+## Scan Scope
+
+By default the attestor scans every recorded product and every prior attestation, and records nothing about that choice. The four scope options narrow or widen it, and whenever any of them is set the predicate gains a `scope` object saying exactly what was covered:
+
+```json
+{
+  "findings": [],
+  "scope": {
+    "files": "diff",
+    "baseRef": "origin/main",
+    "baseCommit": "7f3e1a85b8ea1c084c92d924d90a5fd872df43dc",
+    "attestations": false,
+    "excludeGlob": "{**/,}{vendor,node_modules}/**",
+    "filesScanned": 3
+  }
+}
+```
+
+- `scope=diff:<base-ref>` is the push-gate shape. It answers "did this push introduce a secret": **every commit newly reachable from `HEAD`**, not just the difference between the two end trees — add a secret and delete it in the next commit and the endpoint diff is clean while the push still carries it. Every blob each newly reachable commit introduces (relative to all of its parents, not just the first, and recursively so nested files are not missed) is read and attributed to the commit that introduced it. Ancestry is read from the commit objects themselves — their parent lines, never their dates, and never `git rev-list`: `.git/info/grafts` rewrites what git reports for a commit's parents and `--no-replace-objects` does not disable it, so a graft could otherwise hide a secret-bearing commit from the scan while the pushed history still carried it. A grafted or shallow repository is refused outright — no attestation rather than one that quietly covers less. On top of that, every tracked file that changed in any way that leaves a file to read — added, modified, and type-changed, such as a symlink replaced by a regular file — plus untracked files that are not ignored, relative to the merge-base of `<base-ref>` and `HEAD`. Only deletions are left out, because there is nothing to read. **What the COMMIT contains is read from the git object store, not from disk** — every changed blob, unconditionally, in one `git cat-file --batch`. Committing a secret and then restoring, deleting or overwriting the file does not remove it from the scan, and neither does `git update-index --assume-unchanged` / `--skip-worktree`: git's own verdict on whether a path is dirty is not consulted, because it is exactly what an attacker would change. Git object replacement (`refs/replace/*`) is disabled on every git command the attestor runs, so a replace ref pointing at a clean substitute cannot stand in for the object a push would actually carry. When the committed bytes turn out to be identical to the file on disk the content is reported once, under `file:<path>`; when they differ, the committed bytes get their own subject and findings under `commit:<sha>:<path>`, naming the commit that introduced them. Uncommitted work is scanned on top, since it is about to become a commit, and the INDEX is read as its own source: staging a secret and then restoring the working copy leaves bytes that neither the commit nor the file on disk has, and those are recorded under `index:<path>`. Product metadata never decides what gets read — a file another attestor labelled binary is still read, and binary-ness is decided from its bytes. A file already recorded as a product is scanned once, as a product. The base is resolved with `git`, and a base that cannot be resolved (unknown ref, not a repository) fails the run rather than scanning nothing.
+- `scope=tree` reads every regular file under the working directory except anything under `.git`; a symlinked working directory is resolved first, and a root that cannot be walked fails the run rather than reporting an empty, clean tree. This is the explicit whole-tree scan; it can be slow on a large checkout, which is what the globs are for.
+- `scan-attestations=false` leaves prior attestations alone. Pair it with `scope=diff:...` for the cheapest meaningful gate; leave it on when the wrapped command's stdout/stderr must be covered.
+- Working-tree files that are not products are recorded as subjects under `file:<path>` with the digest of the bytes read, and their findings use the same `file:<path>` location.
+- **Every subject is the digest of the bytes this attestor read** — `product:<path>` included. A signed claim binds to what was observed, not to another attestor's record. When the bytes are what the product attestor recorded, which is the normal case, the subject is identical to what it always was and correlation between the two attestations is unchanged. When they differ, the scanned digest is published and the disagreement is listed in `scope.productDigestMismatches` with the path, the recorded digest and the scanned one; that alone is enough to make a default scan emit a `scope` object, because a file that changed between the product snapshot and the scan is something a policy may want to deny on.
+
+Example, gating a push on the changed files only:
+
+```sh
+cilock run -a git -a secretscan \
+  --attestor-secretscan-scope=diff:origin/main \
+  --attestor-secretscan-scan-attestations=false \
+  --attestor-secretscan-fail-on-detection \
+  -k key.pem -s secrets -- true
+```
 
 ## Execution Order and Coverage
 
@@ -165,7 +203,7 @@ The attestor provides enhanced environment variable protection:
    - Attestation data from earlier attestors (e.g., command run outputs, git info)
    - Decoded content from encoded data
 2. **Encoded Environment Variable Detection**: Detects environment variable values hidden through encoding
-3. **Partial Value Matching**: Can detect partial matches of sensitive values (useful for truncated secrets)
+3. **Partial Value Matching**: Can detect partial matches of sensitive values (useful for truncated secrets). A partial match must carry at least half of the value and at least 8 characters of it; see [Partial Match Support](#partial-match-support) below
 4. **Custom Match Redaction**: Securely redacts sensitive values in match context displays
 5. **Pattern Matching**: Supports both exact matches and pattern-based matching for variable names
 6. **Value-based Detection**: Focuses on the actual values of variables rather than just their names
@@ -203,8 +241,9 @@ The attestor has a powerful capability to detect sensitive environment variable 
 
 3. **Partial Match Support:**
    - The attestor can detect partial matches of encoded environment variable values
-   - This catches cases where only a portion of a secret was encoded
-   - For example, detecting just the beginning of an API token that was partially encoded
+   - This catches cases where only a leading portion of a secret was encoded, such as `echo ${TOKEN:0:24} | base64`
+   - A partial match is reported only when the decoded content carries **at least half of the value, and at least 8 characters of it**. Decoded content is mostly not text (every sha256 in a material inventory, every `h1:` line in `go.sum`, every lockfile integrity hash decodes to 32 bytes of noise), so a shorter prefix turns up by chance in any large tree, and which environment value it "matched" depends on the caller's environment. The half rule also keeps a prefix that every secret of a kind shares (the HS256 JWT header, PEM armor, `ghp_`, `AKIA`) from matching a different secret of the same kind
+   - Findings from partial matches carry the `-partial` rule-id suffix and digest the matched prefix, not the whole value
 
 4. **Context Awareness:**
    - Special handling for common patterns like newlines often introduced by `echo` commands
@@ -446,6 +485,9 @@ The attestor produces findings with the following fields:
 The `location` field clearly identifies where the secret was found:
 - `product:/path/to/file.txt` - For secrets found in products
 - `attestation:attestor-name` - For secrets found in attestations
+- `file:path/to/file.txt` - For secrets found in working-tree files read under a `diff` or `tree` scope that are not products
+- `commit:<sha>:path/to/file.txt` - For secrets found in bytes a newly reachable COMMIT introduced at a path, read from the git object store under a `diff` scope. `<sha>` is the commit that introduced them, which may be an intermediate commit whose content never reaches `HEAD` at all
+- `index:path/to/file.txt` - For secrets found in the content STAGED for a path, read from the git object store under a `diff` scope when the staged bytes are neither what the commit holds nor what is on disk
 
 ## Internal Architecture
 

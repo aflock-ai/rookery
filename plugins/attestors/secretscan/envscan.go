@@ -268,31 +268,35 @@ func (a *Attestor) checkDecodedContentForSensitiveValues( //nolint:gocognit,gocy
 		// Next check with possible trailing newline (common in echo output)
 		exactMatchWithNewline := strings.Contains(decodedContent, value+"\n")
 
-		// Also check for a partial match with the beginning of the string (at least 3 chars)
-		// This catches cases where only a prefix of the token was encoded
-		minPartialLength := 3
+		// Partial match: the decoded bytes carry a leading part of the value.
+		// This exists for truncated leaks (`echo ${TOKEN:0:24} | base64`).
+		//
+		// It used to accept any prefix down to 3 characters, which made it a
+		// lottery (#9315): decoded content is mostly not text — every sha256 in
+		// a material inventory, every h1: line in go.sum, every lockfile
+		// integrity hash decodes to 32 bytes of noise — and a 3-byte prefix of
+		// SOME sensitive value in the caller's environment turns up in enough
+		// noise every time. Which value hit depended on the environment, so the
+		// same commit was refused once and accepted on re-mint.
+		//
+		// A partial match therefore has to carry most of the secret: at least
+		// half of it, and never fewer than minPartialMatchLength characters.
+		// Half is what rules out the structural prefix every secret of a kind
+		// shares (the 36-character HS256 JWT header, PEM armor, "ghp_", "AKIA"),
+		// which no fixed length floor can; the floor is what rules out short
+		// values whose half is still guessable. Longer prefixes are tried first
+		// so the recorded digest is of the longest leaked part.
 		partialMatch := false
 		partialValue := ""
 
-		if len(value) >= minPartialLength { //nolint:nestif // partial match logic requires nested checks
-			// First try the most likely case with short tokens - check with newline
-			// This is the most common pattern with echo output: "ghp\n"
-			if strings.Contains(decodedContent, value[:minPartialLength]+"\n") {
+		for prefixLen := len(value) - 1; prefixLen >= partialMatchFloor(len(value)); prefixLen-- {
+			prefix := value[:prefixLen]
+			if strings.Contains(decodedContent, prefix) {
 				partialMatch = true
-				partialValue = value[:minPartialLength] + "\n"
+				partialValue = prefix
 				// Do NOT log secret values — even partial prefixes can aid brute-force attacks
-				log.Debugf("(attestation/secretscan) found partial match with newline for env var %s", key)
-			} else {
-				// Check different lengths of the prefix, starting from longer to shorter
-				for prefixLen := len(value) - 1; prefixLen >= minPartialLength; prefixLen-- {
-					prefix := value[:prefixLen]
-					if strings.Contains(decodedContent, prefix) {
-						partialMatch = true
-						partialValue = prefix
-						log.Debugf("(attestation/secretscan) found partial match for env var %s (prefix length %d)", key, prefixLen)
-						break
-					}
-				}
+				log.Debugf("(attestation/secretscan) found partial match for env var %s (prefix length %d)", key, prefixLen)
+				break
 			}
 		}
 
@@ -382,6 +386,15 @@ func (a *Attestor) checkDecodedContentForSensitiveValues( //nolint:gocognit,gocy
 	}
 
 	return findings
+}
+
+// partialMatchFloor is the shortest prefix of a sensitive value of length n
+// that the decoded-content path reports as a partial match: half of the value,
+// rounded up, and never below minPartialMatchLength. See the comment at the
+// partial-match loop in checkDecodedContentForSensitiveValues for why both
+// terms are needed.
+func partialMatchFloor(n int) int {
+	return max(minPartialMatchLength, (n+1)/2)
 }
 
 // redactSensitiveValuesExcept replaces every sensitive environment-variable value

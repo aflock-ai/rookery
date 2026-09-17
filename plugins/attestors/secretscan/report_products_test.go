@@ -174,17 +174,17 @@ func TestReportChangedBetweenSnapshotAndScanIsNotAReport(t *testing.T) {
 
 	t.Run("digest mismatch", func(t *testing.T) {
 		scan := New()
-		findings, err := scan.scanProductBytes("gitleaks.sarif", path, attestation.Product{MimeType: "application/json", Digest: snapshot}, detector)
+		read, _, err := scan.scanProductBytes(&attestation.AttestationContext{}, "gitleaks.sarif", "gitleaks.sarif", path, attestation.Product{MimeType: "application/json", Digest: snapshot}, detector)
 		require.NoError(t, err)
-		require.NotEmpty(t, findings, "the product is still scanned")
+		require.NotEmpty(t, read.Findings, "the product is still scanned")
 		require.Empty(t, scan.ConsumedReports, "a file whose parsed bytes do not match the recorded digest must not be treated as a report")
 	})
 
 	t.Run("digest missing", func(t *testing.T) {
 		scan := New()
-		findings, err := scan.scanProductBytes("gitleaks.sarif", path, attestation.Product{MimeType: "application/json"}, detector)
+		read, _, err := scan.scanProductBytes(&attestation.AttestationContext{}, "gitleaks.sarif", "gitleaks.sarif", path, attestation.Product{MimeType: "application/json"}, detector)
 		require.NoError(t, err)
-		require.NotEmpty(t, findings)
+		require.NotEmpty(t, read.Findings)
 		require.Empty(t, scan.ConsumedReports, "without a recorded digest nothing pins the parsed bytes")
 	})
 
@@ -192,7 +192,7 @@ func TestReportChangedBetweenSnapshotAndScanIsNotAReport(t *testing.T) {
 		current, err := cryptoutil.CalculateDigestSetFromFile(path, []cryptoutil.DigestValue{{Hash: crypto.SHA256}})
 		require.NoError(t, err)
 		scan := New()
-		_, err = scan.scanProductBytes("gitleaks.sarif", path, attestation.Product{MimeType: "application/json", Digest: current}, detector)
+		_, _, err = scan.scanProductBytes(&attestation.AttestationContext{}, "gitleaks.sarif", "gitleaks.sarif", path, attestation.Product{MimeType: "application/json", Digest: current}, detector)
 		require.NoError(t, err)
 		require.Len(t, scan.ConsumedReports, 1)
 		require.Equal(t, current[cryptoutil.DigestValue{Hash: crypto.SHA256}], scan.ConsumedReports[0].SHA256)

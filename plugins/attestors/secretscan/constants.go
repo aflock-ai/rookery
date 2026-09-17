@@ -23,11 +23,20 @@ const (
 	defaultConfigPath      = ""    // No default custom Gitleaks config path
 	defaultMaxDecodeLayers = 3     // Maximum recursion depth for decoding encoded content
 
+	// Scope defaults (#9313). Together they are exactly the behaviour the
+	// attestor had before scope existed: scan every product and every prior
+	// attestation, filter nothing.
+	defaultScope            = string(ScopeProducts)
+	defaultScanAttestations = true
+	defaultIncludeGlob      = ""
+	defaultExcludeGlob      = ""
+
 	// Content matching and display constants
 	defaultMatchContextSize     = 10                  // Characters before/after match in pattern matches
 	redactionMatchContextSize   = 15                  // Characters before/after match in redacted output
 	redactedValuePlaceholder    = "[SENSITIVE-VALUE]" // Placeholder for redacted sensitive values
 	minSensitiveValueLength     = 4                   // Minimum length for sensitive values to be scanned
+	minPartialMatchLength       = 8                   // Shortest prefix of a sensitive value reportable as a partial match on decoded content
 	maxMatchDisplayLength       = 40                  // Maximum length of match string in findings
 	truncatedMatchSegmentLength = 8                   // Length of prefix/suffix shown in truncated matches
 	maxScanRecursionDepth       = 3                   // Safety limit for recursive scanning to prevent stack overflow

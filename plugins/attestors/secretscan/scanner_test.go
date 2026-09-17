@@ -346,19 +346,28 @@ func TestAttest_FailOnDetection_PassesOnCleanScan(t *testing.T) {
 	assert.NoError(t, err, "clean scan with no errors must pass even with failOnDetection=true")
 }
 
-// TestAttest_ScanError_WithoutFailOnDetection_StillPasses preserves the
-// existing best-effort behavior when the caller did NOT opt into the
-// guard. Scan errors are still recorded on the attestor (useful for
-// telemetry) but do not cause Attest to fail.
-func TestAttest_ScanError_WithoutFailOnDetection_StillPasses(t *testing.T) {
+// TestAttest_ScanError_WithoutFailOnDetection_StillFails INVERTS what this
+// test used to assert, deliberately. It previously pinned "best-effort mode":
+// with the guard off, an unreadable product was recorded for telemetry and
+// Attest returned success. That is the defect — the DEFAULT configuration
+// signed evidence with an empty findings list for files nobody read, and
+// downstream cannot tell that apart from a clean tree.
+//
+// fail-on-detection decides whether a FINDING fails the run. It must not also
+// decide whether a NON-OBSERVATION does; those are separate axes. Coverage
+// failures are now always fatal, and always a plain error so the workflow
+// drops the partial attestation instead of signing it.
+func TestAttest_ScanError_WithoutFailOnDetection_StillFails(t *testing.T) {
 	att := New() // defaultFailOnDetection = false
 
 	att.scanErrors = append(att.scanErrors, errors.New("simulated product read failure"))
 
 	ctx := &attestation.AttestationContext{}
 	err := att.Attest(ctx)
-	assert.NoError(t, err, "scan errors must not fail Attest when failOnDetection=false (best-effort mode)")
-	assert.NotEmpty(t, att.scanErrors, "scan errors should still be tracked for telemetry")
+	require.Error(t, err, "an unreadable file must fail the scan even with the detection guard off")
+	assert.False(t, attestation.IsDetectionError(err),
+		"a failure to read is not a verdict; it must not be classified as a detection")
+	assert.NotEmpty(t, att.scanErrors, "scan errors are still tracked")
 }
 
 // TestNew_FindingsSerializesAsEmptyArrayNotNull is the regression test
