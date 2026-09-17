@@ -129,6 +129,15 @@ func TestRunMissingStepFlag(t *testing.T) {
 }
 
 func TestRunMissingSignerFlag(t *testing.T) {
+	// "No signer flag" is only "no signer" when the host has no enrolled
+	// agent principal: cilock resolves that credential from the user's home
+	// and config dirs and signs with it silently (it outranks every flag).
+	// On a developer box with an enrolled agent this test passed a run that
+	// must fail; isolate the credential stores as agent_signing_test does.
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("APPDATA", dir)
 	err := executeCmd("run", "--step", "test-step", "--", "echo", "hello")
 	require.Error(t, err, "run without any signer must fail")
 }

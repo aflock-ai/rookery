@@ -600,6 +600,7 @@
       "name": "material",
       "predicate_type": "https://aflock.ai/attestations/material/v0.3",
       "companions": [
+        "https://aflock.ai/attestations/file-inventory/v0.1",
         "https://aflock.ai/attestations/material-manifest/v0.1"
       ],
       "run_type": "material",
@@ -648,9 +649,23 @@
     {
       "name": "product",
       "predicate_type": "https://aflock.ai/attestations/product/v0.3",
+      "companions": [
+        "https://aflock.ai/attestations/file-inventory/v0.1"
+      ],
       "run_type": "product",
+      "tier": "foundation",
+      "always_on": true,
       "registered": true,
-      "has_contract": false
+      "subjects": [
+        {
+          "prefix": "tree:products",
+          "description": "The SHA-256 content root, including the RFC 6962 empty-tree root for an empty captured product set.",
+          "digest_algs": [
+            "sha256"
+          ]
+        }
+      ],
+      "has_contract": true
     },
     {
       "name": "product-v0.1",
