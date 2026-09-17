@@ -148,7 +148,14 @@ func runPolicyPush(cmd *cobra.Command, o policyPushOpts) error {
 	// (attestation:upload). This is the same path `cilock run` uses.
 	_, _ = fmt.Fprintf(out, "Uploading signed policy to %s ...\n", archivistaURL)
 	uploader := newArchivistaUploader(archivistaURL, sess.cred.Token)
-	gitoid, err := uploader.Store(ctx, env)
+	// Same choke point as `cilock run`: a policy is signed before it is stored,
+	// so a store failure here loses a signed artifact exactly as an attestation
+	// upload does, and must raise the same distinct signal rather than one more
+	// red job.
+	gitoid, err := storeEvidence(ctx, uploader, env, evidenceRef{
+		Step:     "policy push",
+		Subjects: []string{"policy DSSE for " + archivistaURL},
+	})
 	if err != nil {
 		return fmt.Errorf("upload policy DSSE to archivista: %w", err)
 	}

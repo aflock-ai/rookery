@@ -1299,10 +1299,11 @@ func persistRunResults(ctx context.Context, ro *options.RunOptions, results []wo
 		if err != nil {
 			return fmt.Errorf("create archivista client: %w", err)
 		}
-		gitoid, err := client.Store(ctx, result.SignedEnvelope)
-		if err == nil && gitoid == "" {
-			err = fmt.Errorf("upload response has no gitoid")
-		}
+		gitoid, err := storeEvidence(ctx, client, result.SignedEnvelope, evidenceRef{
+			Step:     summary.Step,
+			Subjects: lostSubjectNames(summary.Subjects),
+			Outfile:  paths[i],
+		})
 		if err != nil {
 			return uploadError(ro.PlatformURL, err)
 		}
