@@ -806,6 +806,33 @@ func CalculateDigestSetFromFileInRoot(root *os.Root, name string, hashes []Diges
 	return calculateDigestSetFromOpenFile(file, name, hashes)
 }
 
+// CalculateDigestSetFromOpenFile hashes an already-open regular file. The
+// caller owns the descriptor; name is only for error text. It exists so a
+// caller can fstat the very descriptor it hashes (the digest cache keys on
+// that identity, never on an earlier lstat of the path).
+func CalculateDigestSetFromOpenFile(file *os.File, name string, hashes []DigestValue) (DigestSet, error) {
+	return calculateDigestSetFromOpenFile(file, name, hashes)
+}
+
+// OpenRegularInRoot opens name beneath root the way the digest helpers do:
+// refusing symlink escapes and non-regular files.
+func OpenRegularInRoot(root *os.Root, name string) (*os.File, error) {
+	if root == nil {
+		return nil, fmt.Errorf("nil root")
+	}
+	return openRegularInRoot(root, name)
+}
+
+// CalculateDigestSetFromOpenFileInfo is CalculateDigestSetFromOpenFile for a
+// caller that already holds fstat of the descriptor: hashability is decided
+// from info, so the file is stat'ed once, not twice.
+func CalculateDigestSetFromOpenFileInfo(file *os.File, info os.FileInfo, name string, hashes []DigestValue) (DigestSet, error) {
+	if !isHashableInfo(info) {
+		return DigestSet{}, fmt.Errorf("%s is not a hashable file", name)
+	}
+	return CalculateDigestSet(file, hashes)
+}
+
 func calculateDigestSetFromOpenFile(file *os.File, name string, hashes []DigestValue) (DigestSet, error) {
 	hashable, err := isHashableFile(file)
 	if err != nil {
@@ -862,26 +889,30 @@ func isHashableFile(f *os.File) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return isHashableInfo(stat), nil
+}
 
+// isHashableInfo is isHashableFile on a FileInfo the caller already holds.
+func isHashableInfo(stat os.FileInfo) bool {
 	mode := stat.Mode()
 
 	isSpecial := stat.Mode()&os.ModeCharDevice != 0
 
 	if isSpecial {
-		return false, nil
+		return false
 	}
 
 	if mode.IsRegular() {
-		return true, nil
+		return true
 	}
 
 	if mode.Perm().IsDir() {
-		return true, nil
+		return true
 	}
 
 	if mode&os.ModeSymlink != 0 {
-		return true, nil
+		return true
 	}
 
-	return false, nil
+	return false
 }

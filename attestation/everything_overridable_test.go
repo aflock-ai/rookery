@@ -118,6 +118,17 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// docs/configuration.md as an "advanced runtime tuning" case.
 	"DefaultProbeTimeout": {},
 
+	// The digest cache's racy-clean margin is a CORRECTNESS boundary, not a
+	// tuning knob: it is the window within which a file's mtime/ctime cannot
+	// be distinguished from the moment its digest was stored, so a shorter
+	// one trusts a cached digest for bytes that may have changed. It is
+	// deliberately not an env var for the same reason DefaultDigestSizeLimit
+	// is not — the build under observation would get a knob over its own
+	// observer, and widening this one silently widens what the product walk
+	// will sign without reading. Tests set the field on their own Cache
+	// instance; production has no override.
+	"defaultRacyMargin": {},
+
 	// alps-evidence's digest cap IS overridable at the API layer
 	// (WithDigestSizeLimit), which this test's flag/env heuristic cannot
 	// see. Deliberately NOT an env var: the cap exists because coding-agent
