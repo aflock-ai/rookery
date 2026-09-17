@@ -186,6 +186,8 @@ deny[msg] {
 
 Both modules above are extracted from this page and run through the real verifier by `attestation/policy/rego_input_shape_doc_test.go`, so they cannot drift from what `cilock verify` actually passes in.
 
+**What `input` is.** With no `attestationsFrom`/`externalFrom` on the step, `input` is the JSON of the registered attestor struct, the same bytes signed inside the collection. For most attestors that puts the predicate's fields at the top level: `input.exitcode` (command-run), `input.commithash` (git), `input.findings` (secretscan). Four attestors register a struct that wraps the predicate in a `predicate` field, so their fields are one level down: `test-results`, `steampipe`, `scubagoggles`, and `structured-data` are read as `input.predicate.<field>`, for example `input.predicate.summary.failed`, not `input.summary.failed`. Rego treats an undefined path in a `deny` body as "this rule does not fire", never as an error, so a flat read against a wrapped attestor passes a failing suite silently. Check the shape with `cilock tools show <name>` (the attestor page states it under "Rego input shape") or by base64-decoding the attestation in a real collection; `cilock policy validate` warns when a module bound to `test-results/v0.1` reads a top-level predicate field.
+
 ## `aipolicy` object
 
 | Key | Type | Description |

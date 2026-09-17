@@ -16,7 +16,9 @@ package policy
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -357,4 +359,131 @@ func TestValidateRawPolicy_InvalidFunctionaryType(t *testing.T) {
 
 	result := ValidateRawPolicy(context.Background(), []byte(rawJSON))
 	assert.False(t, result.Valid, "invalid functionary type should be rejected")
+}
+
+// TestValidateRawPolicy_TestResultsFlatInputWarns covers #9312: the
+// test-results attestor marshals as {"predicate": {...}}, so a rego module
+// bound to that predicate type which reads input.summary.* (the flat form
+// every other attestor uses) evaluates against an undefined path and never
+// denies. The lint flags it at authoring time; it is a warning, not an
+// error, because a module can legitimately read nothing from input.
+func TestValidateRawPolicy_TestResultsFlatInputWarns(t *testing.T) {
+	mk := func(module string) []byte {
+		policy := policyDocument{
+			Expires: "2030-01-01T00:00:00Z",
+			Steps: map[string]policyStep{
+				"test": {
+					Name:          "test",
+					Functionaries: []functionary{{Type: "publickey", PublicKeyID: "key-1"}},
+					Attestations: []attestation{{
+						Type: "https://aflock.ai/attestations/test-results/v0.1",
+						RegoPolicies: []regoPolicy{{
+							Name:   "tests-passed",
+							Module: base64.StdEncoding.EncodeToString([]byte(module)),
+						}},
+					}},
+				},
+			},
+			PublicKeys: map[string]publicKeyEntry{"key-1": {KeyID: "key-1", Key: ""}},
+		}
+		data, err := json.Marshal(policy)
+		require.NoError(t, err)
+		return data
+	}
+
+	flat := "package testresults\n\ndeny[msg] {\n\tinput.summary.failed > 0\n\tmsg := \"failed\"\n}\n"
+	res := ValidateRawPolicy(context.Background(), mk(flat))
+	assert.True(t, res.Valid, "a flat read is a warning, not an error: %v", res.Errors)
+	require.NotEmpty(t, res.Warnings)
+	found := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "tests-passed") && strings.Contains(w, "input.summary") && strings.Contains(w, "input.predicate.summary") {
+			found = true
+		}
+	}
+	assert.True(t, found, "warning must name the policy, the flat path read, and the wrapped path to use; got %v", res.Warnings)
+
+	wrapped := "package testresults\n\ndeny[msg] {\n\tinput.predicate.summary.failed > 0\n\tmsg := \"failed\"\n}\n"
+	res = ValidateRawPolicy(context.Background(), mk(wrapped))
+	assert.True(t, res.Valid)
+	for _, w := range res.Warnings {
+		assert.NotContains(t, w, "input.predicate.summary", "the correct shape must not warn: %v", res.Warnings)
+	}
+
+	// The lint is keyed on the predicate type: the same flat module bound
+	// to command-run (whose fields ARE top-level) must not warn.
+	other := policyDocument{
+		Expires: "2030-01-01T00:00:00Z",
+		Steps: map[string]policyStep{
+			"build": {
+				Name:          "build",
+				Functionaries: []functionary{{Type: "publickey", PublicKeyID: "key-1"}},
+				Attestations: []attestation{{
+					Type:         "https://aflock.ai/attestations/command-run/v0.1",
+					RegoPolicies: []regoPolicy{{Name: "flat-elsewhere", Module: base64.StdEncoding.EncodeToString([]byte(flat))}},
+				}},
+			},
+		},
+		PublicKeys: map[string]publicKeyEntry{"key-1": {KeyID: "key-1", Key: ""}},
+	}
+	data, err := json.Marshal(other)
+	require.NoError(t, err)
+	res = ValidateRawPolicy(context.Background(), data)
+	for _, w := range res.Warnings {
+		assert.NotContains(t, w, "flat-elsewhere", "lint must be scoped to the test-results predicate type: %v", res.Warnings)
+	}
+}
+
+// A comment or a string literal that merely NAMES the flat path is not a read
+// of it. The lint used to match the module's raw bytes, so a policy that warns
+// its own reader away from `input.summary` was told it read it (#9312 review).
+func TestWrappedPredicateLintReadsReferencesNotText(t *testing.T) {
+	const wrapped = "https://aflock.ai/attestations/test-results/v0.1"
+	cases := []struct {
+		name   string
+		module string
+		warn   bool
+	}{
+		{
+			name: "a real flat read warns",
+			module: `package p
+deny[msg] { input.summary.failed > 0; msg := "x" }`,
+			warn: true,
+		},
+		{
+			name: "a bracket read warns",
+			module: `package p
+deny[msg] { input["summary"].failed > 0; msg := "x" }`,
+			warn: true,
+		},
+		{
+			name: "a comment naming the flat path does not warn",
+			module: `package p
+# Do not write input.summary.failed here: it is undefined at verify time.
+deny[msg] { input.predicate.summary.failed > 0; msg := "x" }`,
+			warn: false,
+		},
+		{
+			name: "a string literal naming the flat path does not warn",
+			module: `package p
+deny[msg] { input.predicate.summary.failed > 0; msg := "read input.predicate.summary, never input.summary" }`,
+			warn: false,
+		},
+		{
+			name: "the wrapped read alone does not warn",
+			module: `package p
+deny[msg] { input.predicate.summary.failed > 0; msg := "x" }`,
+			warn: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result := &ValidationResult{}
+			lintWrappedPredicateReads("s", 0, wrapped, "pol", []byte(c.module), result)
+			warned := len(result.Warnings) > 0
+			if warned != c.warn {
+				t.Fatalf("warned=%v want %v; warnings=%v", warned, c.warn, result.Warnings)
+			}
+		})
+	}
 }

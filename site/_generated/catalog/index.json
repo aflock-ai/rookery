@@ -1,7 +1,7 @@
 {
   "generatedFrom": "cilock tools show --format json",
   "count": 136,
-  "withDoc": 60,
+  "withDoc": 61,
   "emittedBy": {
     "sbom": [
       "apko",
@@ -1634,11 +1634,11 @@
       "source": "attestor-backed",
       "categories": [],
       "primaryCategory": null,
-      "description": "Captures JUnit XML test reports and CTRF JSON reports produced by test runners (Go: gotestsum --junitfile junit.xml -- ./... or go-junit-report — plain go test has no JUnit flag; pytest --junitxml, jest-junit, gradle, surefire, etc.).",
+      "description": "Sign JUnit XML or CTRF JSON test reports as a normalized test-results attestation under cilock, and gate on pass/fail counts with Rego that reads input.predicate.summary.",
       "emitsFormats": [],
       "predicateType": "https://aflock.ai/attestations/test-results/v0.1",
       "runType": "postproduct",
-      "hasDoc": false
+      "hasDoc": true
     },
     {
       "name": "testssl",

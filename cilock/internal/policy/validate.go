@@ -420,6 +420,8 @@ func validateRegoPolicies(policy *policyDocument, result *ValidationResult) { //
 					result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', attestation %d, rego policy '%s': invalid Rego syntax: %v", stepName, attIdx, regoPol.Name, err))
 					result.Valid = false
 				}
+
+				lintWrappedPredicateReads(stepName, attIdx, att.Type, regoPol.Name, moduleBytes, result)
 			}
 		}
 	}
@@ -506,4 +508,70 @@ func validateNoCircularDeps(policy *policyDocument, result *ValidationResult, fi
 func validateRegoSyntax(module string, name string) error {
 	_, err := ast.ParseModule(name, module)
 	return err
+}
+
+// wrappedPredicateFields lists, per predicate type whose registered attestor
+// marshals as {"predicate": {...}}, the predicate's top-level field names.
+// Rego's input is json.Marshal of the attestor struct
+// (attestation/policy/rego.go EvaluateRegoPolicy), so for these types a
+// module that reads input.<field> walks a path that does not exist on the
+// wire. Rego treats an undefined path in a deny body as "rule does not
+// fire", never as an error, so the mistake fails open: a failing suite
+// passes the gate silently (#9312). The field list mirrors the attestor's
+// Predicate struct; keep it in sync with
+// plugins/attestors/test-results/test_results.go when fields are added.
+var wrappedPredicateFields = map[string][]string{
+	"https://aflock.ai/attestations/test-results/v0.1":   {"format", "toolName", "toolVersion", "summary", "failedTests", "reportFile", "reportDigest"},
+	"https://witness.dev/attestations/test-results/v0.1": {"format", "toolName", "toolVersion", "summary", "failedTests", "reportFile", "reportDigest"},
+}
+
+// flatInputReads returns the top-level input fields a module actually READS,
+// in either dotted (input.summary) or bracket (input["summary"]) form — the
+// two spell the same reference, and the parser normalises both.
+//
+// It walks the module's parsed references rather than its bytes. Matching raw
+// text cannot tell a read from a mention, so a policy whose comment warns its
+// own reader away from `input.summary`, or whose deny message quotes the path,
+// was told it read the path it was warning about (#9312 review round 2).
+// A module that does not parse yields nothing: validateRegoSyntax has already
+// reported that as an error, and a lint on top of it would be noise.
+func flatInputReads(module []byte) map[string]bool {
+	parsed, err := ast.ParseModule("lint", string(module))
+	if err != nil || parsed == nil {
+		return nil
+	}
+	read := map[string]bool{}
+	ast.WalkRefs(parsed, func(ref ast.Ref) bool {
+		// input.<field> is a two-term reference: the var "input" and a
+		// string. Anything longer (input.predicate.summary) has "predicate"
+		// in that position, which is the correct shape and not a finding.
+		if len(ref) < 2 || !ref[0].Equal(ast.InputRootDocument) {
+			return false
+		}
+		if field, ok := ref[1].Value.(ast.String); ok {
+			read[string(field)] = true
+		}
+		return false
+	})
+	return read
+}
+
+// lintWrappedPredicateReads appends a warning for each top-level predicate
+// field a module reads when the bound predicate type wraps its predicate.
+// A warning, not an error: a module may legitimately read nothing from
+// input, and the verifier will still evaluate the module as written.
+func lintWrappedPredicateReads(stepName string, attIdx int, predicateType, policyName string, module []byte, result *ValidationResult) {
+	fields, ok := wrappedPredicateFields[predicateType]
+	if !ok {
+		return
+	}
+	read := flatInputReads(module)
+	for _, field := range fields {
+		if !read[field] {
+			continue
+		}
+		result.Warnings = append(result.Warnings, fmt.Sprintf(
+			"Step '%s', attestation %d, rego policy '%s': reads input.%s, but %s marshals its fields under a 'predicate' wrapper, so that path is undefined at verify time and the rule never fires; read input.predicate.%s instead (#9312)",
+			stepName, attIdx, policyName, field, predicateType, field))
+	}
 }
