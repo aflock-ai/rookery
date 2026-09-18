@@ -19,6 +19,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -93,6 +95,7 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 		if err != nil {
 			return err
 		}
+		warnLegacyStepsShape(policy.Name, policyString)
 
 		packageDenyPathStr := fmt.Sprintf("%v.deny", parsedModule.Package.Path)
 		// if packages share the same name we only want the package to show up once in our query.  rego will merge their deny results
@@ -246,4 +249,23 @@ func splitStepAndExternalContext(ctx map[string]interface{}) (stepsData, externa
 		stepsData[k] = v
 	}
 	return stepsData, externalData
+}
+
+// legacyStepsAccess matches input.steps.<step>.<something> and input.steps.<step>[...]. The
+// bare form `input.steps.<step>` (an existence check) is not matched.
+var legacyStepsAccess = regexp.MustCompile(`input\.steps\.[A-Za-z0-9_-]+(\[[^\]]*\]|\.[A-Za-z0-9_]+)`)
+
+// warnLegacyStepsShape logs a deprecation warning when a rego module reads the per-type
+// object input.steps.<step>.<type> instead of input.steps.<step>.collections. The old key
+// exposes only one collection (the first in reference order); with several passed
+// collections a rule written against it cannot see the others. Warn-only: the old shape
+// keeps working. One warning per module.
+func warnLegacyStepsShape(moduleName, module string) {
+	for _, m := range legacyStepsAccess.FindAllStringSubmatch(module, -1) {
+		if strings.HasPrefix(m[1], "."+stepCollectionsKey) {
+			continue
+		}
+		log.Warnf("rego module %q: input.steps.<step>.<type> is deprecated; it shows only the first passed collection (by reference). Read input.steps.<step>.collections[] to see every passed collection.", moduleName)
+		return
+	}
 }

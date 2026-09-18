@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -448,8 +449,19 @@ func (f Functionary) enforceCertConstraintAfterKeyIDMatch(verifier cryptoutil.Ve
 }
 
 // buildStepContext extracts attestation data from already-verified steps referenced
-// by AttestationsFrom. The result is a map[stepName]->map[attestationType]->attestorJSON
-// that gets passed into Rego policy evaluation as input.steps.
+// by AttestationsFrom. The result is a map[stepName]->stepData passed into Rego policy
+// evaluation as input.steps, where stepData carries two views of the same evidence:
+//
+//   - input.steps.<step>.collections: a list with one entry per passed collection,
+//     {reference, name, attestations{<type>: attestorJSON}}, ordered by collection
+//     reference (ties keep discovery order). This is the shape new rules should read;
+//     it is complete and its order does not depend on which source answered first.
+//   - input.steps.<step>.<type>: the attestor of that type from the FIRST collection in
+//     that same order. Kept for existing policies (deprecated; see warnLegacyStepsShape).
+//     Before 2026-09-18 "first" meant first discovered, so a step with several passed
+//     collections could yield a different value from one verify to the next. F17 (#5746)
+//     ruled out last-writer-wins because a later collection could shadow the legitimate
+//     one; ordering by reference keeps that property and adds determinism.
 func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepResult) map[string]interface{} { //nolint:gocognit
 	if len(attestationsFrom) == 0 {
 		return nil
@@ -462,8 +474,15 @@ func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepRe
 			continue
 		}
 
+		ordered := make([]PassedCollection, len(result.Passed))
+		copy(ordered, result.Passed)
+		sort.SliceStable(ordered, func(i, j int) bool {
+			return ordered[i].Collection.Reference < ordered[j].Collection.Reference
+		})
+
 		stepData := make(map[string]interface{})
-		for _, pc := range result.Passed {
+		collections := make([]interface{}, 0, len(ordered))
+		for _, pc := range ordered {
 			// A gate-compacted collection rehydrates its typed attestors from
 			// the retained raw payload; an uncompacted one is returned as
 			// stored. A rehydration failure is treated exactly like the
@@ -473,6 +492,7 @@ func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepRe
 				log.Debugf("failed to rehydrate collection %s from step %s for rego context: %v", pc.Collection.Reference, depStep, err)
 				continue
 			}
+			attestors := make(map[string]interface{})
 			for _, att := range coll.Attestations {
 				// Marshal the attestor to a generic map so Rego can traverse it.
 				b, err := json.Marshal(att.Attestation)
@@ -487,19 +507,28 @@ func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepRe
 					log.Debugf("failed to decode attestation %s from step %s: %v", att.Type, depStep, err)
 					continue
 				}
-				// F17 (#5746): do NOT last-writer-win on a duplicated type. A
-				// second passed collection presenting the same attestation type
-				// must not silently overwrite the first (legitimate) one in the
-				// cross-step Rego context — that is a shadowing vector. Preserve
-				// the first writer; ignore later duplicates of the same type.
+				if _, exists := attestors[att.Type]; !exists {
+					attestors[att.Type] = data
+				}
+				// Legacy per-type key: first collection in reference order wins; later
+				// collections never overwrite it (F17, #5746).
 				if _, exists := stepData[att.Type]; exists {
-					log.Debugf("ignoring duplicate attestation type %s from step %s (first-writer-wins to prevent shadowing)", att.Type, depStep)
+					log.Debugf("input.steps.%s[%s]: keeping the first collection in reference order, ignoring %s (use .collections for all of them)", depStep, att.Type, pc.Collection.Reference)
 					continue
 				}
 				stepData[att.Type] = data
 			}
+			collections = append(collections, map[string]interface{}{
+				"reference":    pc.Collection.Reference,
+				"name":         coll.Name,
+				"attestations": attestors,
+			})
 		}
+		// Backward compatibility: a dependency whose passed collections carry no decodable
+		// attestor has never appeared under input.steps, so `not input.steps.<step>` rules
+		// keep firing for it. The list is attached only when the step key exists at all.
 		if len(stepData) > 0 {
+			stepData[stepCollectionsKey] = collections
 			ctx[depStep] = stepData
 		}
 	}
@@ -509,6 +538,11 @@ func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepRe
 	}
 	return ctx
 }
+
+// stepCollectionsKey is the key under input.steps.<step> that carries the complete,
+// deterministically ordered list of passed collections. Attestation types are URIs, so
+// the key cannot collide with a type.
+const stepCollectionsKey = "collections"
 
 // buildStepRegoContext combines buildStepContext (for AttestationsFrom) and
 // an external-attestation context (for ExternalFrom) into the shape the

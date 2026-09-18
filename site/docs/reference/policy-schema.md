@@ -151,7 +151,8 @@ As soon as a step lists anything in `attestationsFrom` or `externalFrom`, the ve
 | Key | Contents |
 |---|---|
 | `input.attestation` | The step's own attestor JSON: the object that was the whole `input` in the plain shape. |
-| `input.steps.<step>.<predicateType>` | Every attestor from every passed collection of each step in `attestationsFrom`, keyed by step name, then by predicate type URI. |
+| `input.steps.<step>.collections` | One entry per passed collection of each step in `attestationsFrom`: `{reference, name, attestations}` with `attestations` keyed by predicate type URI. Ordered by collection reference, so a rule sees every passed collection and its order does not depend on which source answered first. Read this. |
+| `input.steps.<step>.<predicateType>` | **Deprecated.** The attestor of that type from the first collection in `collections` order only. Kept so existing policies keep verifying; the verifier logs a deprecation warning per module that reads it. A rule that must hold for every run of a step cannot be written against this key. |
 | `input.external.<name>` | The predicate body of each envelope in `externalFrom` that passed. An external that was skipped or never supplied is absent, so `not input.external.<name>` fires. |
 
 The switch is keyed on the step *declaring* the lists, not on the referenced data being present: a dependency that has not verified yet still produces the wrapped shape, with an empty `input.steps`. A top-level path such as `input.exitcode` is undefined under the wrapped shape, so a module written for the plain shape silently stops matching the moment its step gains an `attestationsFrom` entry. Move its reads under `input.attestation`. The verifier logs a warning whenever the wrapped shape is active.
@@ -165,7 +166,14 @@ deny[msg] {
     msg := sprintf("deploy exited with status %d", [input.attestation.exitcode])
 }
 
-# Steps named in attestationsFrom: input.steps.<step>.<predicateType>.
+# Steps named in attestationsFrom: input.steps.<step>.collections[] (preferred) or the
+# deprecated input.steps.<step>.<predicateType> (first passed collection only).
+deny[msg] {
+    c := input.steps.build.collections[_]
+    c.attestations["https://aflock.ai/attestations/command-run/v0.2"].exitcode != 0
+    msg := sprintf("build collection %v exited non-zero", [c.reference])
+}
+
 deny[msg] {
     build := input.steps.build["https://aflock.ai/attestations/command-run/v0.2"]
     build.cmd[0] != "go"
