@@ -322,7 +322,8 @@ type RunOptions struct {
 	// ScriptCapture selects how much of an executed script or makefile is
 	// recorded: "identity" (default — path + digest), "content" (also embeds
 	// the body), or "off". Empty means identity.
-	ScriptCapture string
+	ScriptCapture    string
+	TraceFileContent bool
 	// CaptureMode controls where the material + product attestors get
 	// their digests. "auto" (default) picks the fastest available source
 	// — trace events when --trace is on, otherwise directory walk.
@@ -1208,6 +1209,8 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&ro.OutFilePath, "outfile", "o", "", "File to write signed data to")
 	cmd.Flags().StringVarP(&ro.StepName, "step", "s", "", "Name of the step being run")
 	cmd.Flags().BoolVarP(&ro.Tracing, "trace", "r", false, "Enable tracing for the command")
+	cmd.Flags().BoolVar(&ro.TraceFileContent, "trace-file-content", false,
+		"On macOS with --trace, capture bounded workspace text snapshots from file-access reports. Collector-time observations, not proof of consumed bytes. May include secrets; opt in only for approved capture scope.")
 	cmd.Flags().StringVar(&ro.ScriptCapture, "script-capture", "identity",
 		"How much of an executed script or makefile to record: 'identity' (default — "+
 			"resolved path, size and sha256, no bytes), 'content' (additionally embeds "+

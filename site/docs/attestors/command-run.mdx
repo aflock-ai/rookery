@@ -39,13 +39,15 @@ Each `ProcessInfo` carries: `program`, `processid`, `parentpid`, `programdigest`
 
 ## When to use
 
-Always — it's the spine of every `cilock run`. The only knob is `--trace`, which turns the attestor from "I ran this command and here is its stdio" into a forensic record of what the process did at the syscall level.
+Always — it's the spine of every `cilock run`. `--trace` turns the attestor from "I ran this command and here is its stdio" into a forensic record of what the process did at the syscall level.
 
 ## Flags
 
 | Flag | Shorthand | Default | What it does |
 |---|---|---|---|
-| `--trace` | `-r` | `false` | Sets `SysProcAttr.Ptrace = true` on the child and enables the ptrace loop in `tracing_linux.go`. No-op as a syscall hook on non-Linux but causes `trace()` to error. |
+| `--trace` | `-r` | `false` | Sets `SysProcAttr.Ptrace = true` on the child and enables the ptrace loop in `tracing_linux.go`. On macOS, enables the sandbox-report tracer. Unsupported platforms refuse tracing. |
+
+| `--trace-file-content` | — | `false` | With tracing on macOS, records bounded workspace text snapshots from file-access reports. Requires explicit opt-in. |
 
 There are no `--attestor-commandrun-*` flags — `commandrun.init()` registers with no `registry.Configurer` options.
 
@@ -87,7 +89,7 @@ There are no `--attestor-commandrun-*` flags — `commandrun.init()` registers w
 ## Gotchas
 
 - **`stdout` / `stderr` are raw bytes, not digests.** The attestor stores `stdoutBuffer.String()` and `stderrBuffer.String()` verbatim into the predicate. Large or sensitive output goes into the signed envelope as-is.
-- **`--trace` is Linux-only.** On macOS / Windows, `tracing_unsupported.go` returns `errors.New("tracing not supported on this platform")` from `trace()` and the attestation fails. Don't pass `--trace` off-Linux.
+- **Trace capabilities differ by backend.** Linux supports eBPF/ptrace; macOS uses sandbox reports with the limitations below. Unsupported platforms refuse tracing.
 - **Tracing needs `ptrace(2)`.** Default Docker drops it; you need `--cap-add=SYS_PTRACE` (and to not be under a restrictive seccomp profile). Kubernetes pods need an equivalent `securityContext.capabilities.add: [SYS_PTRACE]`.
 - **`openedfiles` is populated from `openat`** — and digested at open time, with a retry pass at trace end (`retryOpenedFiles`) for files that didn't exist yet. Files opened-but-never-read still appear.
 - **TLS SNI extraction is best-effort.** The tracer peeks the first write on any fd that connected to port 443 and parses the ClientHello for the `server_name` extension. Only one peek per fd; non-printable hostnames are discarded.
@@ -111,6 +113,57 @@ Validated. Always part of every cilock run. See the full real-data example at [h
 - [Catalog row](../reference/attestor-catalog.md)
 - [Defending against supply-chain attacks](../tutorials/defending-against-supply-chain-attacks.md)
 - Upstream: [witness/command-run.md](https://github.com/in-toto/witness/blob/main/docs/attestors/command-run.md)
+
+## macOS traced file content (opt-in)
+
+`cilock run --trace --trace-file-content` extends the `sandbox-exec+oslog`
+backend with kernel `file-read-data` reports scoped to the working directory
+using a sandbox `subpath` filter. System and toolchain reads outside that scope
+are not requested; they are not collected and then discarded in Go. A startup canary must demonstrate
+that this channel delivers file-access reports; otherwise requested capture
+refuses before the workload starts. Ordinary tracing and `--script-capture`
+retain their existing defaults. The flag currently requires macOS.
+
+The scope is deliberately incomplete for reads outside the workspace, including
+external dependencies and symlink targets outside it. The startup probe uses a
+separate literal-path reporting rule for its private temporary file; that rule
+is not applied to the workload.
+
+This captures observed access to workspace files including scripts, Makefiles,
+includes, and files read by child processes. Each attributed event appears in
+`processes[].syscalls[]` in v0.2 (`syscallEvents[]` in the expanded representation),
+with `syscall: "file-read-data"`, a path, timestamp, and
+`outcome: "permitted-not-confirmed"`. The sandbox reports permission to access,
+not a successful read or its returned bytes.
+
+`fileAtCollectorOpen` holds a snapshot with `status`, optional `content`,
+`digest`, and `sizeBytes`. `captured-at-collector-open` means the collector read
+those bytes after delivery of the report. It is **not execution binding** or
+proof of what the process consumed. Generated files deleted before delivery
+may be unavailable; a replacement before collector access can yield different
+bytes. Nothing is promoted into `openedfiles` or verified `scripts` from these
+observations. Absence of an event does not establish absence of access.
+
+Content is opt-in separately from script operand capture. Only regular UTF-8
+text without NUL bytes under the run's working directory is eligible. Scoped
+opens refuse symlink escapes; FIFOs/devices are not read. Limits are 64 KiB per
+file, 4 MiB read per run, and 256 attempted workspace snapshots. Repeated reads
+consume the same budget because the contents may have changed. No partial body
+is emitted when a size/budget limit is reached. Status records distinguish
+outside-workspace, unavailable, binary, non-regular, oversize, changed-during-
+capture, and exhausted-budget cases. Policies requiring full coverage must
+refuse these omissions rather than treat them as negative findings.
+
+`summary.diagnostics.darwin.fileReadsObserved` records the capability probe,
+`fileContentScope` names the workspace, `fileReadReports` counts attributed
+reports, and `unprovenFileReadReports` counts reports whose process ownership
+was not established. No content is opened for a process lacking capture-time
+attribution. These are observations, not a completeness guarantee.
+
+Captured content can contain credentials. Review the capture scope and secret
+handling before publishing the signed evidence; this flag does not redact
+source bytes or authorize uploading them. For Jev, use these snapshots as
+context, not proof that an adversarial build consumed the pictured bytes.
 
 </VersionPane>
 

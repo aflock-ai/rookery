@@ -28,7 +28,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation"
 )
 
-func enableTracing(c *exec.Cmd) {
+func enableTracing(c *exec.Cmd, _ ...bool) {
 }
 
 // applyTraceePrivilegeDrop is a no-op on non-Linux platforms. The

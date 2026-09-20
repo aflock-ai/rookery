@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -119,6 +120,12 @@ func WithScriptCapture(mode ScriptCaptureMode) Option {
 	return func(cr *CommandRun) {
 		cr.scriptCapture = mode
 	}
+}
+
+// WithTraceFileContent opts into workspace content snapshots from macOS file-access reports.
+// It requires tracing and does not establish consumed-byte identity.
+func WithTraceFileContent(enabled bool) Option {
+	return func(cr *CommandRun) { cr.traceFileContent = enabled }
 }
 
 func WithSilent(silent bool) Option {
@@ -605,6 +612,10 @@ type FilePermChange struct {
 
 // SyscallEvent records a notable syscall that doesn't fit other categories.
 type SyscallEvent struct {
+	// FileAtCollectorOpen is a bounded snapshot taken after a file-access report.
+	// It does not identify the bytes consumed by the reporting process.
+	FileAtCollectorOpen *FileSnapshot `json:"fileAtCollectorOpen,omitempty"`
+
 	Syscall   string `json:"syscall"`          // "memfd_create", "ptrace", "mount", "clone"
 	Detail    string `json:"detail,omitempty"` // human-readable detail
 	Args      []int  `json:"args,omitempty"`   // raw syscall arguments
@@ -1138,6 +1149,11 @@ type UnprovenExec struct {
 // evidence, so a verifier needs the size of the discard pile to judge whether
 // a small tree means "little work" or "little attribution".
 type DarwinTraceDiagnostics struct {
+	FileReadsObserved       bool   `json:"fileReadsObserved"`
+	FileReadReports         uint64 `json:"fileReadReports,omitempty"`
+	UnprovenFileReadReports uint64 `json:"unprovenFileReadReports,omitempty"`
+	FileContentScope        string `json:"fileContentScope,omitempty"`
+
 	// ExecReports / ForkReports are the reports attributed to this build.
 	ExecReports uint64 `json:"execReports,omitempty"`
 	ForkReports uint64 `json:"forkReports,omitempty"`
@@ -1456,7 +1472,8 @@ type CommandRun struct {
 	// the empty string rather than a valid mode, so scriptCaptureMode()
 	// resolves it to the identity default instead of silently disabling
 	// capture for every caller that predates this option.
-	scriptCapture ScriptCaptureMode
+	scriptCapture    ScriptCaptureMode
+	traceFileContent bool
 
 	// traceeWorkdir is the working directory the tracee actually ran
 	// with — populated by runCmd just before exec.Command starts.
@@ -1627,6 +1644,9 @@ func (a *CommandRun) Schema() *jsonschema.Schema {
 }
 
 func (rc *CommandRun) Attest(ctx *attestation.AttestationContext) error {
+	if rc.traceFileContent && (!rc.enableTracing || runtime.GOOS != "darwin") {
+		return fmt.Errorf("trace file content requires --trace on macOS")
+	}
 	// Snapshot the AttestationContext's workdir before any early
 	// return so that downstream consumers (TraceOutputs's relative-
 	// path resolution, the stat-fallback's pre-existence checks) have
@@ -2611,7 +2631,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	configureProcessReaping(c)
 
 	if r.enableTracing {
-		enableTracing(c)
+		enableTracing(c, r.traceFileContent)
 		// For the eBPF mode we MUST attach kprobes before the child
 		// runs, otherwise we race the child's first openat. This
 		// helper opens the consumer (attaching kprobes) when eBPF

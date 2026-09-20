@@ -243,6 +243,8 @@ func darwinNetworkSyscall(op string) string {
 // /usr/bin/true`). It is real observed data, but it is NOT the process's own
 // name, which is why it never lands in ProcessInfo.Comm. See buildDarwinTree.
 type sandboxEvent struct {
+	fileSnapshot *FileSnapshot
+
 	pid        int
 	comm       string
 	op         string
@@ -404,9 +406,11 @@ func (b *syncBuffer) String() string {
 
 // sandboxSession owns the out-of-sandbox log collector for one traced command.
 type sandboxSession struct {
-	collector *exec.Cmd
-	stdout    io.ReadCloser
-	stderr    syncBuffer
+	profile     string
+	readCapture *darwinReadCapture
+	collector   *exec.Cmd
+	stdout      io.ReadCloser
+	stderr      syncBuffer
 
 	readerDone chan struct{}
 	stopping   atomic.Bool
@@ -573,7 +577,7 @@ func (s *sandboxSession) noteUnobservedDescendants(found map[int]procFacts) {
 // the caller is allowed to run anything. Every failure returns an error; there
 // is no partial-success path, because a session that "mostly" started produces
 // a tree with an unknowable hole in the front.
-func startSandboxSession() (*sandboxSession, error) {
+func startSandboxSession(configs ...darwinReadConfig) (*sandboxSession, error) {
 	if _, err := os.Stat(sandboxExecPath); err != nil {
 		return nil, fmt.Errorf("macOS process tracing needs %s (sandbox-exec), which is not usable: %w",
 			sandboxExecPath, err)
@@ -594,13 +598,18 @@ func startSandboxSession() (*sandboxSession, error) {
 		ourPids:    make(map[int]bool, 64),
 		collector:  col,
 	}
+	if err := s.configureReadCapture(configs); err != nil {
+		return nil, err
+	}
 	col.Stderr = &s.stderr
 	pipe, err := col.StdoutPipe()
 	if err != nil {
+		s.closeReadCapture()
 		return nil, fmt.Errorf("macOS process tracing: log stream stdout: %w", err)
 	}
 	s.stdout = pipe
 	if err := col.Start(); err != nil {
+		s.closeReadCapture()
 		return nil, fmt.Errorf("macOS process tracing: could not start %s stream: %w", logToolPath, err)
 	}
 	go s.read()
@@ -617,6 +626,12 @@ func startSandboxSession() (*sandboxSession, error) {
 	// Exec reports are proven; network reports are a SEPARATE capability and
 	// are proven separately. See networkCanary.
 	s.networkCanary()
+	if s.readCapture != nil {
+		if err := s.readCanary(); err != nil {
+			s.shutdown()
+			return nil, err
+		}
+	}
 	return s, nil
 }
 
@@ -661,7 +676,7 @@ func (s *sandboxSession) canary(phase string) error {
 // of the two happened.
 func (s *sandboxSession) publishProbe(phase string) (int, error) {
 	// #nosec G204 -- fixed binary, fixed profile constant, fixed /usr/bin/true.
-	c := exec.Command(sandboxExecPath, "-p", sandboxProfile, "--", "/usr/bin/true")
+	c := exec.Command(sandboxExecPath, "-p", s.profileForRun(), "--", "/usr/bin/true")
 	var probeErr bytes.Buffer
 	c.Stderr = &probeErr
 	if err := c.Start(); err != nil {
@@ -809,13 +824,17 @@ type heldProbe struct {
 // comes back non-hermetic on scheduler luck. `exec` replaces the shell in the
 // SAME pid, so the pid registered here is the pid that acts, and the
 // incarnation read at registration survives the exec.
-func (s *sandboxSession) startHeldProbe(script string) (heldProbe, bool) {
+func (s *sandboxSession) startHeldProbe(script string, profiles ...string) (heldProbe, bool) {
+	profile := s.profileForRun()
+	if len(profiles) > 0 {
+		profile = profiles[0]
+	}
 	r, w, err := os.Pipe()
 	if err != nil {
 		return heldProbe{}, false
 	}
 	// #nosec G204 -- fixed binary, fixed profile constant, fixed loopback arguments.
-	c := exec.Command(sandboxExecPath, "-p", sandboxProfile, "--", "/bin/sh", "-c", script, networkProbePath)
+	c := exec.Command(sandboxExecPath, "-p", profile, "--", "/bin/sh", "-c", script, networkProbePath)
 	c.Stdout, c.Stderr = nil, nil
 	c.Stdin = r
 	if err := c.Start(); err != nil {
@@ -1052,7 +1071,7 @@ func (s *sandboxSession) wrap(c *exec.Cmd) {
 	// alias this wrapper cannot preserve; enableTracing refuses it before the
 	// session exists rather than trace behavior the caller did not ask for.
 	args := make([]string, 0, len(c.Args)+4)
-	args = append(args, sandboxExecPath, "-p", sandboxProfile, "--", c.Path)
+	args = append(args, sandboxExecPath, "-p", s.profileForRun(), "--", c.Path)
 	// os/exec treats a nil or single-element Args as "argv is just Path", and
 	// argv0Preserved accepts that shape — so there may be nothing to carry
 	// through. c.Args[1:] on a nil slice panics, inside enableTracing, before
@@ -1120,7 +1139,7 @@ func (s *sandboxSession) read() {
 			s.mu.Unlock()
 			continue
 		}
-		ev, ok := parseSandboxReport(rec.EventMessage)
+		ev, ok := parseSandboxReport(rec.EventMessage, s.readCapture != nil)
 		if !ok {
 			// A kernel-originated sandbox report this parser could not read
 			// is NOT silently gone: a path with a newline defeats the
@@ -1135,7 +1154,7 @@ func (s *sandboxSession) read() {
 			// irrelevant and must not become a refusal of this build — but a
 			// report about an op we do trace that the strict grammar could
 			// not read is evidence going missing, and takes the path below.
-			if irrelevantReport(rec.EventMessage) {
+			if irrelevantReport(rec.EventMessage, s.readCapture != nil) {
 				continue
 			}
 			if pid, isReport := unparseableReportPid(rec.EventMessage); isReport {
@@ -1152,6 +1171,9 @@ func (s *sandboxSession) read() {
 			continue
 		}
 		ev.timestamp = rec.Timestamp
+		if ev.op == opFileRead && s.readCapture == nil {
+			continue
+		}
 		s.record(ev)
 	}
 	if err := sc.Err(); err != nil {
@@ -1192,8 +1214,11 @@ func (s *sandboxSession) record(ev sandboxEvent) {
 		at, ok := reportTime(ev.timestamp)
 		ev.pin = s.pin(ev.detail, at, ok)
 	}
-	s.events = append(s.events, ev)
 	s.noteActivity(ev.pid)
+	if ev.op == opFileRead && !ev.denied && !ev.canary && s.readCapture != nil {
+		ev.fileSnapshot = s.captureReadEvent(ev)
+	}
+	s.events = append(s.events, ev)
 }
 
 // noteActivity refreshes the drain's quiet clock for a report that could be
@@ -1636,7 +1661,7 @@ func factsOfKinfo(kp *unix.KinfoProc) procFacts {
 // dropping those lines would silently lose events instead of counting them.
 var sandboxReportRe = regexp.MustCompile(
 	`^(?:(\d+) duplicate reports? for )?Sandbox: ` + boundedComm + `\((\d+)\) (allow|deny\(\d+\)) ` +
-		`(process-exec\*?|process-exec-interpreter|process-fork|network-outbound|network-inbound|network-bind)(?: (.*))?$`)
+		`(process-exec\*?|process-exec-interpreter|process-fork|network-outbound|network-inbound|network-bind|file-read-data)(?: (.*))?$`)
 
 // boundedComm is the comm field: at most 2*MAXCOMLEN+1 bytes — XNU's
 // p_name, the widest name this channel can print (a 22-byte
@@ -1664,7 +1689,7 @@ const greedyComm = `([^\n]{0,33})`
 // triple. See ambiguousHeader.
 var sandboxReportGreedyRe = regexp.MustCompile(
 	`^(?:(\d+) duplicate reports? for )?Sandbox: ` + greedyComm + `\((\d+)\) (allow|deny\(\d+\)) ` +
-		`(process-exec\*?|process-exec-interpreter|process-fork|network-outbound|network-inbound|network-bind)(?: (.*))?$`)
+		`(process-exec\*?|process-exec-interpreter|process-fork|network-outbound|network-inbound|network-bind|file-read-data)(?: (.*))?$`)
 
 // ambiguousHeader reports whether a line carries more than one reading of
 // the kernel's header — the earliest candidate triple and the latest
@@ -1716,8 +1741,8 @@ var sandboxReportAnyOpGreedyRe = regexp.MustCompile(
 // of ours: a report naming an operation we DO trace, which the strict grammar
 // nonetheless could not read (a path with a newline), is evidence going
 // missing and must reach the unparseable path instead of being skipped here.
-func irrelevantReport(msg string) bool {
-	if sandboxReportRe.MatchString(msg) {
+func irrelevantReport(msg string, files ...bool) bool {
+	if _, ok := parseSandboxReport(msg, files...); ok {
 		// The strict grammar can read it as one of ours. Not irrelevant,
 		// whatever the first triple on the line says — this is the check
 		// that makes the function safe no matter what order it is asked in.
@@ -1739,7 +1764,7 @@ func irrelevantReport(msg string) bool {
 		return false
 	}
 	op := m[2]
-	return !isExecOp(op) && op != opFork && !isNetworkOp(op)
+	return !isExecOp(op) && op != opFork && !isNetworkOp(op) && !(op == opFileRead && len(files) > 0 && files[0])
 }
 
 // acceptedFromKernel reports whether a log record genuinely came from the
@@ -1801,13 +1826,13 @@ var duplicateReportPrefixRe = regexp.MustCompile(`^\d+ duplicate reports? for Sa
 // triple, and the first triple within the bound is the kernel's.
 var unparseableReportPidRe = regexp.MustCompile(
 	`^(?:\d+ duplicate reports? for )?Sandbox: ` + boundedComm + `\((\d+)\) (?:allow|deny\(\d+\)) ` +
-		`(?:process-exec\*?|process-exec-interpreter|process-fork|network-outbound|network-inbound|network-bind)\b`)
+		`(?:process-exec\*?|process-exec-interpreter|process-fork|network-outbound|network-inbound|network-bind|file-read-data)\b`)
 
 // unparseableReportPidGreedyRe reads the same line preferring the LAST
 // candidate header, so a pid is only recovered when both readings agree.
 var unparseableReportPidGreedyRe = regexp.MustCompile(
 	`^(?:\d+ duplicate reports? for )?Sandbox: ` + greedyComm + `\((\d+)\) (?:allow|deny\(\d+\)) ` +
-		`(?:process-exec\*?|process-exec-interpreter|process-fork|network-outbound|network-inbound|network-bind)\b`)
+		`(?:process-exec\*?|process-exec-interpreter|process-fork|network-outbound|network-inbound|network-bind|file-read-data)\b`)
 
 // unparseableReportPid reports whether msg is a sandbox report the grammar
 // rejected but whose pid is still readable, and that pid.
@@ -1837,13 +1862,13 @@ func unparseableReportPid(msg string) (int, bool) {
 	return pid, true
 }
 
-func parseSandboxReport(msg string) (sandboxEvent, bool) {
+func parseSandboxReport(msg string, files ...bool) (sandboxEvent, bool) {
 	m := sandboxReportRe.FindStringSubmatch(msg)
 	if m == nil {
 		return sandboxEvent{}, false
 	}
 	op := m[5]
-	if !isExecOp(op) && op != opFork && !isNetworkOp(op) {
+	if !isExecOp(op) && op != opFork && !isNetworkOp(op) && !(op == opFileRead && len(files) > 0 && files[0]) {
 		// An operation the profile never asked to be reported (another
 		// sandbox user's file-read-data, say). Readable, irrelevant, not a
 		// loss — distinct from a line the grammar could not read at all.
@@ -2069,6 +2094,7 @@ func (s *sandboxSession) shutdown() {
 	for _, img := range s.pinned {
 		_ = img.file.Close()
 	}
+	s.closeReadCapture()
 }
 
 // harvest returns the captured events after checking the two conditions that

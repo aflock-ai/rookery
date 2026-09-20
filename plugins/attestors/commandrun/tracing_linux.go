@@ -371,7 +371,7 @@ func (p *ptraceContext) digestForPath(path string) (cryptoutil.DigestSet, bool) 
 // startup log) — promote to a const to satisfy goconst.
 const traceModeNamePtrace = "ptrace"
 
-func enableTracing(c *exec.Cmd) {
+func enableTracing(c *exec.Cmd, _ ...bool) {
 	// Only set Ptrace=true if the user explicitly opted into ptrace
 	// mode. eBPF mode (the default) tracks the child via in-kernel
 	// kprobes and does NOT ptrace it.

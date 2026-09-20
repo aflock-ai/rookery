@@ -58,12 +58,12 @@ var darwinSessions sync.Map // *exec.Cmd -> *sandboxSession
 // the attestor fails without the command ever executing. That ordering is the
 // point: the alternative shape, where the command runs and tracing quietly
 // didn't, is the exact failure this attestor exists to prevent.
-func enableTracing(c *exec.Cmd) {
+func enableTracing(c *exec.Cmd, captureFiles ...bool) {
 	if err := argv0Preserved(c); err != nil {
 		c.Err = err
 		return
 	}
-	sess, err := startSandboxSession()
+	sess, err := startSandboxSession(darwinReadConfig{workdir: c.Dir, enabled: len(captureFiles) > 0 && captureFiles[0]})
 	if err != nil {
 		c.Err = err
 		return
@@ -375,6 +375,10 @@ func (rc *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) (
 		NetworkHostsObservable: false,
 	}
 
+	if sess.readCapture != nil {
+		diag.FileReadsObserved = sess.readCapture.proven
+		diag.FileContentScope = sess.readCapture.workdir
+	}
 	procs := buildDarwinTree(in, diag)
 	if err := refuseUnobservedRoot(procs, rootPid); err != nil {
 		return nil, err
@@ -554,8 +558,10 @@ func refuseIncompleteTree(diag *DarwinTraceDiagnostics) error {
 // learns this backend's blind spots from the attestation itself rather than
 // from our source tree.
 const darwinTraceLimitations = "sandbox report channel: exec'd image paths are observed, and openedFiles " +
-	"carries those images only; argv, per-process exit codes and file reads are NOT observable here and are " +
-	"omitted rather than reconstructed, so an absent path is not evidence a file was untouched. When " +
+	"does not establish file-read contents; argv and per-process exit codes are not observable. " +
+	"When fileReadsObserved is true, file-read-data events report permitted access, not successful reads. " +
+	"fileAtCollectorOpen contains bounded workspace snapshots taken after report delivery, never proven consumed bytes. " +
+	"Missing, changed, generated, or deleted files and cached accesses may escape this observation; absence is not proof of no access. When " +
 	"argv0Normalized is true the wrapper supplied the executable's RESOLVED PATH as argv[0] where the caller had " +
 	"asked for a bare name (the ordinary shape of exec.Command); a program that reads argv[0] to locate its " +
 	"resources therefore saw the path, not the name. An argv[0] naming a DIFFERENT executable, and an empty one, " +
@@ -1491,6 +1497,8 @@ func buildDarwinTree(in darwinTreeInput, diag *DarwinTraceDiagnostics) []Process
 		// DECIDED fails toward non-hermetic instead.
 		if !in.members[ev.pid] {
 			switch {
+			case ev.op == opFileRead && !in.facts[ev.pid].ok:
+				diag.UnprovenFileReadReports++
 			case isNetworkOp(ev.op) && in.facts[ev.pid].ok:
 				diag.NetworkReportsUnattributed++
 			case isNetworkOp(ev.op):
@@ -1520,6 +1528,12 @@ func buildDarwinTree(in darwinTreeInput, diag *DarwinTraceDiagnostics) []Process
 			order = append(order, ev.pid)
 		}
 		switch {
+		case ev.op == opFileRead:
+			diag.FileReadReports++
+			p.SyscallEvents = append(p.SyscallEvents, SyscallEvent{
+				Syscall: opFileRead, Path: ev.detail, Timestamp: ev.timestamp,
+				Outcome: execOutcomePermittedNotConfirmed, FileAtCollectorOpen: ev.fileSnapshot,
+			})
 		case ev.op == opFork:
 			diag.ForkReports++
 		case isNetworkOp(ev.op):

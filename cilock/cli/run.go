@@ -856,6 +856,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 			commandrun.WithPrewalkIncludeDirs(ro.PrewalkIncludeDirs),
 			commandrun.WithRequireZeroDrops(ro.RequireZeroDrops),
 			commandrun.WithScriptCapture(scriptCapture),
+			commandrun.WithTraceFileContent(ro.TraceFileContent),
 		}
 		if jsonOutput {
 			cmdOpts = append(cmdOpts, commandrun.WithSilent(true))
