@@ -139,6 +139,19 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// adversarial.
 	"DefaultDigestSizeLimit": {},
 
+	// defaultAiProvider is not a tunable value, it is the seam a second AI
+	// backend plugs into (attestation/policy/ai.go). At this commit there is
+	// exactly one implementation, so there is nothing to override. It is
+	// deliberately NOT an env var, for the same reason as the two entries
+	// above, and that stays true once a second backend exists: a provider
+	// decides where the evidence under evaluation is sent and carries the
+	// credential for that service, so choosing it from ambient process state
+	// would let the environment being verified pick its own judge and its own
+	// egress. The signed policy names WHAT to ask; a backend is chosen by the
+	// Go caller that owns the verification, never by a flag or variable this
+	// test's heuristic would recognise.
+	"defaultAiProvider": {},
+
 	// Same posture: the vendor-chain walk bound (the exported
 	// Detector.MaxVendorChain field, alps-evidence/detector.go) is a safety
 	// bound on ancestry traversal, not a tuning knob. An env override would

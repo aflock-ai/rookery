@@ -420,6 +420,60 @@ func checkVerifyOpts(vo *verifyOptions) error {
 //   - References to non-existent steps
 //   - Circular dependencies in AttestationsFrom chains
 //   - Step.ExternalFrom entries referencing undefined external attestations
+//
+// validateStepShape checks one step's references and the policies it declares:
+// self-references and unknown steps in attestationsFrom, unknown names in
+// externalFrom, a malformed timestamp constraint, and every attestation's own
+// validation (which covers its AI policies).
+//
+// Split out of Policy.Validate so that function stays under the funlen ceiling;
+// the cycle detection that needs the whole step graph stays there.
+func (p Policy) validateStepShape(name string, step Step) error {
+	for _, dep := range step.AttestationsFrom {
+		if dep == name {
+			return ErrSelfReference{Step: name}
+		}
+		if _, ok := p.Steps[dep]; !ok {
+			return fmt.Errorf("step %q references unknown step %q in attestationsFrom", name, dep)
+		}
+	}
+
+	// Flat existence check for external-attestation references. External
+	// attestations cannot reference each other (Collection-graph semantics
+	// do not apply to them), so no cycle/DFS logic is needed here.
+	for _, extName := range step.ExternalFrom {
+		if _, ok := p.ExternalAttestations[extName]; !ok {
+			return ErrUnknownExternalAttestation{Step: name, Name: extName}
+		}
+	}
+
+	// Reject malformed timestamp constraints at load time so an unparseable
+	// maxAge or inverted window fails policy validation instead of rejecting
+	// every collection at verify time.
+	if err := step.TimestampConstraint.Validate(); err != nil {
+		return fmt.Errorf("step %q: %w", name, err)
+	}
+
+	for _, att := range step.Attestations {
+		if err := att.Validate(); err != nil {
+			return fmt.Errorf("step %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// validateExternalAiPolicies validates the AI policies on every external
+// attestation. External attestations carry AI policies exactly as steps do, so
+// an unasserted or duplicate-named question must be refused on both paths.
+func (p Policy) validateExternalAiPolicies() error {
+	for name, external := range p.ExternalAttestations {
+		if err := validateAiPolicySet(external.AiPolicies, fmt.Sprintf("external attestation %q", name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p Policy) Validate() error { //nolint:gocognit,gocyclo
 	// Check self-references and unknown steps.
 	for name, step := range p.Steps {
@@ -441,30 +495,12 @@ func (p Policy) Validate() error { //nolint:gocognit,gocyclo
 			}
 		}
 
-		for _, dep := range step.AttestationsFrom {
-			if dep == name {
-				return ErrSelfReference{Step: name}
-			}
-			if _, ok := p.Steps[dep]; !ok {
-				return fmt.Errorf("step %q references unknown step %q in attestationsFrom", name, dep)
-			}
+		if err := p.validateStepShape(name, step); err != nil {
+			return err
 		}
-
-		// Flat existence check for external-attestation references. External
-		// attestations cannot reference each other (Collection-graph semantics
-		// do not apply to them), so no cycle/DFS logic is needed here.
-		for _, extName := range step.ExternalFrom {
-			if _, ok := p.ExternalAttestations[extName]; !ok {
-				return ErrUnknownExternalAttestation{Step: name, Name: extName}
-			}
-		}
-
-		// Reject malformed timestamp constraints at load time so an
-		// unparseable maxAge or inverted window fails policy validation
-		// instead of rejecting every collection at verify time.
-		if err := step.TimestampConstraint.Validate(); err != nil {
-			return fmt.Errorf("step %q: %w", name, err)
-		}
+	}
+	if err := p.validateExternalAiPolicies(); err != nil {
+		return err
 	}
 
 	// DFS cycle detection.
@@ -586,6 +622,9 @@ func (p Policy) topologicalSort() ([]string, error) {
 // attestation results alongside step results. Policy.Verify is preserved for
 // backward compatibility and internally delegates to VerifyWithExternals.
 func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (bool, map[string]StepResult, map[string]ExternalResult, error) { //nolint:gocognit,gocyclo,funlen // canonical top-level verification entry point; linear flow (opts → validate → externals → steps → aggregate) benefits from locality
+	if err := ctx.Err(); err != nil {
+		return false, nil, nil, err
+	}
 	vo := &verifyOptions{
 		searchDepth: 3,
 	}
@@ -621,11 +660,19 @@ func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (
 	// running seed set. This keeps Collection-graph semantics independent
 	// from external-verification semantics (see issue #39 non-goals).
 	externalResults, err := p.verifyExternalAttestations(ctx, vo, trustBundles)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, nil, externalResults, ctxErr
+	}
 	if err != nil {
 		return false, nil, externalResults, err
 	}
 
 	stepResults, err := p.verifySteps(ctx, vo, trustBundles, externalResults)
+	// Candidate rejection records are not a completed verdict when the
+	// caller's evaluation budget expired while a provider was answering.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, stepResults, externalResults, ctxErr
+	}
 	if err != nil {
 		return false, stepResults, externalResults, err
 	}
@@ -841,7 +888,7 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 					passedCollections[i] = pc.Collection
 				}
 
-				stepResult = step.validateAttestations(passedCollections, vo.aiServerURL, stepCtx)
+				stepResult = step.validateAttestationsContext(ctx, passedCollections, vo.aiServerURL, stepCtx)
 				stepResult.Rejected = append(stepResult.Rejected, functionaryCheckResults.Rejected...)
 				// Hub-suppressed candidates are reported, never silently dropped:
 				// an operator whose expected evidence was demoted as a hub sees
@@ -1195,7 +1242,7 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 			ac.verdict = streamedDeferredGate
 			ac.deferred = compactAwaitingGate(triaged)
 		default:
-			switch outcome, pc, rc := step.gateOne(triaged, vo.aiServerURL, stepCtx); outcome {
+			switch outcome, pc, rc := step.gateOneContext(ctx, triaged, vo.aiServerURL, stepCtx); outcome {
 			case gatePassed:
 				ac.verdict, ac.pc = streamedGatePassed, pc
 			case gateRejected:
@@ -1261,7 +1308,7 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 				// source, so this is unreachable for a real candidate.
 				return StepResult{}, 0, false, rerr
 			}
-			switch outcome, pc, rc := step.gateOne(full, vo.aiServerURL, stepCtx); outcome {
+			switch outcome, pc, rc := step.gateOneContext(ctx, full, vo.aiServerURL, stepCtx); outcome {
 			case gatePassed:
 				result.Passed = append(result.Passed, pc)
 			case gateRejected:
@@ -1698,7 +1745,7 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 				continue
 			}
 
-			aiResponses, err := EvaluateAIPolicy(env.Attestor, ext.AiPolicies, vo.aiServerURL)
+			aiResponses, err := EvaluateAIPolicyContext(ctx, env.Attestor, ext.AiPolicies, vo.aiServerURL)
 			if err != nil {
 				er.Rejected = append(er.Rejected, RejectedExternal{
 					Envelope:    env,

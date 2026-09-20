@@ -54,4 +54,6 @@ var WithAiServerURL = rookery.WithAiServerURL
 var WithClockSkewTolerance = rookery.WithClockSkewTolerance
 var EvaluateRegoPolicy = rookery.EvaluateRegoPolicy
 var EvaluateAIPolicy = rookery.EvaluateAIPolicy
+var EvaluateAIPolicyContext = rookery.EvaluateAIPolicyContext
 var ExecuteAiPolicy = rookery.ExecuteAiPolicy
+var ExecuteAiPolicyContext = rookery.ExecuteAiPolicyContext

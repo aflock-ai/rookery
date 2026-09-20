@@ -448,11 +448,17 @@ func TestSecurity_R3_204_AIPolicyShortCircuitsOnFirstFailure(t *testing.T) {
 	assert.Nil(t, responses)
 
 	// Verify that EvaluateAIPolicy with an invalid server URL fails fast.
+	//
+	// The policies carry an explicit Model because EvaluateAIPolicy now
+	// validates the whole batch before the first round trip, and a policy with
+	// no model is refused there. Without it the refusal would come from
+	// validation rather than from the URL, and this test would no longer be
+	// exercising the short-circuit it documents. The finding below is unchanged.
 	responses, err = EvaluateAIPolicy(
 		&auditAttestor{AttName: "test", AttType: "test"},
 		[]AiPolicy{
-			{Name: "policy1", Prompt: "check something"},
-			{Name: "policy2", Prompt: "check something else"},
+			{Name: "policy1", Prompt: "check something", Model: "test-model"},
+			{Name: "policy2", Prompt: "check something else", Model: "test-model"},
 		},
 		"invalid://bad-url",
 	)

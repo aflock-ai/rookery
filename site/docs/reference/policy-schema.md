@@ -109,7 +109,7 @@ Every attribute must match the certificate exactly. A certificate must satisfy a
 |---|---|---|
 | `type` | string | Attestation predicate type URL. Cilock-native types use `https://aflock.ai/attestations/<name>/v0.1`; legacy witness types `https://witness.dev/attestations/<name>/v0.1` are also accepted via aliases. SBOM attestations use the native CycloneDX (`https://cyclonedx.org/bom`) or SPDX (`https://spdx.dev/Document`) URI. See [attestor catalog](./attestor-catalog). |
 | `regopolicies` | array&lt;`regopolicy`&gt; | OPA Rego policies that will be run against the attestation. **All must pass.** |
-| `aipolicies` | array&lt;`aipolicy`&gt; | AI-evaluated policies that will be run against the attestation predicate. Each policy sends the predicate body to the AI server configured via `--ai-server-url` and expects `\{"status":"PASS","reason":"..."\}` back. **All must return `PASS`.** See [§aipolicy](#aipolicy-object). |
+| `aipolicies` | array&lt;`aipolicy`&gt; | AI-evaluated policies that will be run against the attestation predicate. In the generative form, each policy sends the predicate body to the AI server configured via `--ai-server-url` and expects `\{"status":"PASS","reason":"..."\}` back; in the typed `decision` form the model answers a constrained question and the policy derives the verdict. **All must return `PASS`.** Names must be unique within this attestation. See [§aipolicy](#aipolicy-object). |
 
 ## `externalAttestation` object
 
@@ -198,13 +198,123 @@ Both modules above are extracted from this page and run through the real verifie
 
 ## `aipolicy` object
 
+An `aipolicy` has two mutually exclusive forms. **Exactly one of `prompt` or `decision` must be set** — both, or neither, is a policy error and verification refuses before any request leaves the process.
+
 | Key | Type | Description |
 |---|---|---|
-| `name` | string | Human-readable name; reported on failure. |
-| `prompt` | string | Prompt sent to the AI model along with the predicate body. The AI is required to reply with a JSON object `\{"status":"PASS\|FAIL","reason":"..."\}`. |
-| `model` | string | AI model name to evaluate the prompt against. |
+| `name` | string | Human-readable name; reported on failure. Must be non-empty and **unique within an `attestation`** — it is the question id when several questions go to the model in one request. |
+| `model` | string | AI model name to evaluate against. Required; there is no default. |
+| `prompt` | string | **Generative form.** Free text sent to the AI model along with the predicate body. The AI is required to reply with a JSON object `\{"status":"PASS\|FAIL","reason":"..."\}`. Mutually exclusive with `decision`. |
+| `decision` | `decision` | **Typed form.** The model answers a constrained question; the POLICY decides PASS/FAIL from the answer. Mutually exclusive with `prompt`. See [§decision](#decision-object). |
 
 The AI server URL is configured via `--ai-server-url`. SSRF protection limits the URL to `http`/`https` schemes with a non-empty host. Each policy gets one shot — a non-`PASS` response counts as a failure.
+
+### Generative example
+
+```json
+{
+  "name": "no-secrets-in-diff",
+  "model": "llama3",
+  "prompt": "Does this diff introduce a hardcoded credential? Return PASS if it does not."
+}
+```
+
+## `decision` object
+
+The generative form asks the model to be the judge: it returns the verdict, and the policy takes its word for it. The typed form splits those jobs. The model answers a **constrained question** — a probability, a choice from a fixed list, an ordinal score — and the **policy** turns that answer into PASS/FAIL using assertions written into the signed policy. What the gate accepts is therefore readable from the policy alone.
+
+Exactly one of `yesNo`, `choice` or `score` must be set.
+
+| Key | Type | Description |
+|---|---|---|
+| `state` | `regopolicy` | Optional Rego projection selecting the part of the attestor the question is about. Omitted means the whole attestor is the question's state. |
+| `yesNo` | `yesNo` | A boolean question scored as a probability. |
+| `choice` | `choice` | A single selection from a fixed set of named options. |
+| `score` | `score` | An ordinal score over a fixed ladder of levels. |
+
+### `yesNo`
+
+| Key | Type | Description |
+|---|---|---|
+| `instructions` | string | The yes/no question put to the model. |
+| `criteria` | map&lt;string,string&gt; | Named clarifications the model must weigh. |
+| `minProbability` | number | The probability of "yes" must be at least this, in `[0,1]`. |
+| `maxProbability` | number | The probability of "yes" must be at most this, in `[0,1]`. `0` asserts impossibility. |
+
+### `choice`
+
+| Key | Type | Description |
+|---|---|---|
+| `instructions` | string | The question put to the model. |
+| `options` | map&lt;string,string&gt; | The selectable options as `id` → description. Must be non-empty; the model answers with one `id`. |
+| `allow` | array&lt;string&gt; | Option ids that PASS. Every entry must be a key of `options`. |
+| `deny` | array&lt;string&gt; | Option ids that FAIL. Every entry must be a key of `options`. |
+| `minConfidence` | number | The chosen option's confidence must be at least this, in `[0,1]`. |
+
+### `score`
+
+| Key | Type | Description |
+|---|---|---|
+| `instructions` | string | The question put to the model. |
+| `levels` | array&lt;string&gt; | The ordered ladder of levels, lowest first. Must be non-empty; the score is an **index** into this list. |
+| `minScore` | number | The score must be at least this. Within `[0, len(levels)-1]`. |
+| `maxScore` | number | The score must be at most this. Within `[0, len(levels)-1]`. |
+
+### Decision example
+
+```json
+{
+  "name": "tamper-risk",
+  "model": "llama3",
+  "decision": {
+    "yesNo": {
+      "instructions": "Does this command-run attestation show the build step executing a command it did not declare?",
+      "criteria": {
+        "undeclared": "a process in the trace whose argv is absent from the declared step command"
+      },
+      "maxProbability": 0.05
+    }
+  }
+}
+```
+
+And with a choice:
+
+```json
+{
+  "name": "change-risk-tier",
+  "model": "llama3",
+  "decision": {
+    "choice": {
+      "instructions": "Classify the risk of this diff.",
+      "options": {
+        "routine": "docs, tests, comments",
+        "behavioural": "changes runtime behaviour",
+        "security": "touches auth, crypto, or a trust boundary"
+      },
+      "deny": ["security"],
+      "minConfidence": 0.7
+    }
+  }
+}
+```
+
+### Rules the verifier enforces
+
+Every rule below fails **closed**, and all of them are checked before any AI request is made.
+
+1. Exactly one of `prompt` / `decision`.
+2. Exactly one of `decision.yesNo` / `.choice` / `.score`.
+3. `model` is required.
+4. Every decision kind sets **at least one assertion** (`minProbability`/`maxProbability`, `allow`/`deny`/`minConfidence`, `minScore`/`maxScore`). A decision that asserts nothing about the answer would pass whatever the model said — an unasserted gate reads as coverage while providing none.
+5. `choice.options` and `score.levels` are non-empty.
+6. Every `choice.allow` / `choice.deny` entry is a key of `choice.options`. An assertion naming an option the model can never return never fires.
+7. Probabilities and confidences are in `[0,1]`; `minProbability <= maxProbability`; `minScore <= maxScore`; score bounds within `[0, len(levels)-1]`.
+8. `name` is non-empty and unique within its `attestation`.
+
+:::caution Decision policies are not evaluated yet
+The typed shape is accepted, validated and signed, but no backend answers a constrained question today. A policy carrying `decision` is **refused** at verification time with `no provider configured for decision policies` — it is never silently treated as a pass. Only the generative `prompt` form is evaluated by the shipped Ollama-compatible provider.
+:::
 
 ## Verification process
 

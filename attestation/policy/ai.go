@@ -2,6 +2,7 @@ package policy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -48,22 +49,85 @@ const (
 )
 
 // AiResponse represents the result of an AI policy evaluation.
+//
+// Status and Reason are the verdict. Model and Answer are AUDIT members: they
+// record what actually answered and what it actually said, so a verdict can be
+// re-examined later. They carry `jsonschema:"-"` deliberately — the reflected
+// schema of this type is the structured-output contract sent to the AI server
+// as `format`, and that contract is frozen at {status, reason}. Letting audit
+// members leak into it would both change the bytes a signed policy's
+// evaluation depends on and invite the model to populate its own audit record.
 type AiResponse struct {
-	Status string `json:"status"` // Pass/Fail status of the policy evaluation
-	Reason string `json:"reason"` // Explanation of the evaluation result
+	Status string    `json:"status"`                          // Pass/Fail status of the policy evaluation
+	Reason string    `json:"reason"`                          // Explanation of the evaluation result
+	Model  string    `json:"model,omitempty" jsonschema:"-"`  // The resolved model that produced this verdict
+	Answer *AiAnswer `json:"answer,omitempty" jsonschema:"-"` // The raw typed result, retained for audit
 }
+
+// AiAnswer is the model's raw answer to a typed decision, kept verbatim so the
+// PASS/FAIL the policy derived from it can be audited against what was
+// actually said. It is never the verdict itself.
+//
+// +kubebuilder:object:generate=true
+type AiAnswer struct {
+	Type          string             `json:"type"` // "yesNo" | "choice" | "score"
+	YesNo         *float64           `json:"yesNo,omitempty"`
+	Choice        string             `json:"choice,omitempty"`
+	Score         *float64           `json:"score,omitempty"`
+	Probabilities map[string]float64 `json:"probabilities,omitempty"`
+	Confidence    *float64           `json:"confidence,omitempty"`
+}
+
+// aiGenerativeResult is the exact shape the generative path decodes out of the
+// model's reply. It is deliberately NOT AiResponse: decoding straight into
+// AiResponse would let a compromised or merely creative AI server populate the
+// audit members (Model, Answer) by echoing them, and an audit record the
+// subject can write is not an audit record.
+type aiGenerativeResult struct {
+	Status string `json:"status"`
+	Reason string `json:"reason"`
+}
+
+// AiProvider evaluates one AI policy against one attestor. It is the seam a
+// second backend plugs into: the generative Ollama path and any future
+// decision backend differ entirely in how they ask the question, and not at
+// all in what the caller does with the answer.
+type AiProvider interface {
+	Evaluate(ctx context.Context, attestor attestation.Attestor, pol AiPolicy, serverURL string) (AiResponse, error)
+}
+
+// defaultAiProvider is the provider used by EvaluateAIPolicy and
+// ExecuteAiPolicy. Today there is exactly one.
+var defaultAiProvider AiProvider = ollamaProvider{}
 
 // EvaluateAIPolicy evaluates if the given attestor passes the provided AI policies.
 // Returns an array of AI responses and an error if any policy evaluation fails.
+//
+// The whole batch is validated BEFORE the first round trip. A malformed batch
+// is a policy bug, and spending inference on the well-formed prefix of one
+// tells the author less than refusing the lot.
 func EvaluateAIPolicy(attestor attestation.Attestor, policies []AiPolicy, serverURL string) ([]AiResponse, error) {
+	return EvaluateAIPolicyContext(context.Background(), attestor, policies, serverURL)
+}
+
+// EvaluateAIPolicyContext shares the caller's cancellation and deadline across
+// the entire batch; starting a new request must not reset that budget.
+func EvaluateAIPolicyContext(ctx context.Context, attestor attestation.Attestor, policies []AiPolicy, serverURL string) ([]AiResponse, error) {
 	if len(policies) == 0 {
 		return nil, nil
+	}
+
+	if err := validateAiPolicySet(policies, "this attestation's aipolicies"); err != nil {
+		return nil, err
 	}
 
 	responses := make([]AiResponse, 0, len(policies))
 
 	for _, policy := range policies {
-		result, err := ExecuteAiPolicy(attestor, policy, serverURL)
+		if err := ctx.Err(); err != nil {
+			return responses, err
+		}
+		result, err := ExecuteAiPolicyContext(ctx, attestor, policy, serverURL)
 		responses = append(responses, result)
 
 		if err != nil {
@@ -84,10 +148,44 @@ func generateSchema[T any]() interface{} {
 	return schema
 }
 
-// ExecuteAiPolicy evaluates a single AI policy against an attestor using an Ollama-compatible API.
-func ExecuteAiPolicy(attestor attestation.Attestor, pol AiPolicy, serverURL string) (AiResponse, error) { //nolint:funlen
+// ExecuteAiPolicy evaluates a single AI policy against an attestor. It
+// delegates to the configured provider; it stays exported and keeps its
+// signature because it is part of the go-witness compatibility surface
+// (compat/go-witness/policy/policy.go binds it as a function value).
+func ExecuteAiPolicy(attestor attestation.Attestor, pol AiPolicy, serverURL string) (AiResponse, error) {
+	return ExecuteAiPolicyContext(context.Background(), attestor, pol, serverURL)
+}
+
+// ExecuteAiPolicyContext keeps provider work inside the verifier's request budget.
+func ExecuteAiPolicyContext(ctx context.Context, attestor attestation.Attestor, pol AiPolicy, serverURL string) (AiResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return AiResponse{}, err
+	}
+	if pol.Decision != nil {
+		if err := pol.Validate(); err != nil {
+			return AiResponse{}, err
+		}
+	}
+	return defaultAiProvider.Evaluate(ctx, attestor, pol, serverURL)
+}
+
+// ollamaProvider evaluates a generative (prompt-only) AI policy against an
+// Ollama-compatible /api/generate endpoint. Its behaviour — prompt template,
+// request body, structured-output schema, response parsing, error strings and
+// timeout — is pinned by ai_characterisation_test.go.
+type ollamaProvider struct{}
+
+func (ollamaProvider) Evaluate(ctx context.Context, attestor attestation.Attestor, pol AiPolicy, serverURL string) (AiResponse, error) { //nolint:funlen
 	if attestor == nil {
 		return AiResponse{}, fmt.Errorf("attestor must not be nil")
+	}
+
+	// The typed-decision shape is accepted and validated by this package, but
+	// no backend can answer a constrained question yet. Refuse loudly rather
+	// than fall through to the generative path with an empty prompt, which
+	// would ask the model to evaluate nothing and take its word for PASS.
+	if pol.Decision != nil {
+		return AiResponse{}, fmt.Errorf("AI policy %q: no provider configured for decision policies", pol.Name)
 	}
 
 	data, err := json.Marshal(attestor)
@@ -138,7 +236,7 @@ In the response, the Status field MUST be exactly 'PASS' or 'FAIL', and include 
 		return AiResponse{}, fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", serverURL+"/api/generate", bytes.NewBuffer(reqBodyBytes))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL+"/api/generate", bytes.NewBuffer(reqBodyBytes))
 	if err != nil {
 		return AiResponse{}, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
@@ -158,23 +256,33 @@ In the response, the Status field MUST be exactly 'PASS' or 'FAIL', and include 
 		return AiResponse{}, fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	return parseOllamaGenerateResponse(bodyBytes, model)
+}
+
+// parseOllamaGenerateResponse decodes an /api/generate envelope into a verdict.
+// A FAIL is returned WITH an error, because a failing policy is both a result
+// worth recording and a reason to stop.
+func parseOllamaGenerateResponse(bodyBytes []byte, model string) (AiResponse, error) {
 	var res struct {
 		Response string `json:"response"`
 	}
 
-	err = json.Unmarshal(bodyBytes, &res)
-	if err != nil {
+	if err := json.Unmarshal(bodyBytes, &res); err != nil {
 		return AiResponse{}, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	var aiResponse AiResponse
-	if err := json.Unmarshal([]byte(res.Response), &aiResponse); err != nil {
+	var parsed aiGenerativeResult
+	if err := json.Unmarshal([]byte(res.Response), &parsed); err != nil {
 		return AiResponse{}, fmt.Errorf("failed to parse AI response: %w", err)
 	}
 
-	if aiResponse.Status != AiStatusPass && aiResponse.Status != AiStatusFail {
-		return AiResponse{}, fmt.Errorf("invalid status in AI response: %s", aiResponse.Status)
+	if parsed.Status != AiStatusPass && parsed.Status != AiStatusFail {
+		return AiResponse{}, fmt.Errorf("invalid status in AI response: %s", parsed.Status)
 	}
+
+	// Model is OUR record of what answered, taken from the resolved policy
+	// model rather than anything the server said about itself.
+	aiResponse := AiResponse{Status: parsed.Status, Reason: parsed.Reason, Model: model}
 
 	if aiResponse.Status == AiStatusFail {
 		return aiResponse, fmt.Errorf("AI policy evaluation failed: %s", aiResponse.Reason)

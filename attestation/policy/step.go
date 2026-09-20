@@ -14,8 +14,15 @@
 
 package policy
 
+// zz_generated.deepcopy.go covers every type in this package marked
+// `+kubebuilder:object:generate=true`. Nothing in CI regenerates it, so it is
+// on the author to re-run controller-gen after changing one of those types — a
+// pointer field added to a type whose generated DeepCopyInto is still
+// `*out = *in` produces a copy that ALIASES the original.
+
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -112,11 +119,95 @@ type Functionary struct {
 	PublicKeyID    string         `json:"publickeyid,omitempty" jsonschema:"title=Public Key ID,description=ID of a public key from the policy's publickeys map"`
 }
 
+// AiPolicy is a single AI-evaluated assertion about one attestation.
+//
+// It has two mutually exclusive forms, and a policy MUST pick exactly one:
+//
+//   - GENERATIVE (Prompt): free text is sent to the model, which answers with
+//     {"status":"PASS|FAIL","reason":"..."}. This is the original and only
+//     shape the engine can evaluate today.
+//   - TYPED DECISION (Decision): the model answers a constrained question —
+//     yes/no, a choice from a fixed option set, or an ordinal score — and the
+//     POLICY, not the model, decides PASS/FAIL from that answer against
+//     explicit assertions.
+//
+// Field order and JSON tags are load-bearing: policies are SIGNED, so a
+// generative policy written before Decision existed must serialize to exactly
+// the same bytes afterwards. Everything added here is additive and omitempty.
+//
 // +kubebuilder:object:generate=true
 type AiPolicy struct {
-	Name   string `json:"name" jsonschema:"title=Name,description=Human-readable name for this AI policy"`
-	Prompt string `json:"prompt" jsonschema:"title=Prompt,description=Prompt text sent to the AI model for evaluation"`
-	Model  string `json:"model,omitempty" jsonschema:"title=Model,description=AI model to use for evaluation"`
+	Name string `json:"name" jsonschema:"title=Name,description=Human-readable name for this AI policy; must be unique within an attestation"`
+	// Prompt is the generative form. Mutually exclusive with Decision.
+	// It gained omitempty when Decision was introduced, so a decision policy
+	// does not carry an empty "prompt" key.
+	Prompt   string      `json:"prompt,omitempty" jsonschema:"title=Prompt,description=Prompt text sent to the AI model for evaluation; mutually exclusive with decision"`
+	Model    string      `json:"model,omitempty" jsonschema:"title=Model,description=AI model to use for evaluation"`
+	Decision *AiDecision `json:"decision,omitempty" jsonschema:"title=Decision,description=Typed decision form; the model answers a constrained question and the policy decides PASS/FAIL from the answer. Mutually exclusive with prompt."`
+}
+
+// AiDecision is the typed-decision form of an AI policy. Exactly one of YesNo,
+// Choice or Score must be set — the three are different question shapes, not
+// composable clauses.
+//
+// +kubebuilder:object:generate=true
+type AiDecision struct {
+	// State optionally projects the attestor down to the subset of its data
+	// the question is about, using the same Rego machinery as regopolicies.
+	// Omitted means the whole attestor is the question's state.
+	State *RegoPolicy `json:"state,omitempty" jsonschema:"title=State,description=Optional Rego projection selecting the attestor data the question is asked about; omitted means the whole attestor"`
+
+	YesNo  *AiYesNo  `json:"yesNo,omitempty" jsonschema:"title=Yes/No,description=A boolean question scored as a probability"`
+	Choice *AiChoice `json:"choice,omitempty" jsonschema:"title=Choice,description=A single selection from a fixed set of named options"`
+	Score  *AiScore  `json:"score,omitempty" jsonschema:"title=Score,description=An ordinal score over a fixed ladder of levels"`
+}
+
+// AiYesNo asks a boolean question and asserts on the probability of "yes".
+//
+// The probability bounds are POINTERS on purpose. `maxProbability: 0.0` is the
+// meaningful assertion "this must be impossible"; a bare float64 with omitempty
+// would serialize it away and silently turn the strictest assertion in the
+// language into no assertion at all.
+//
+// +kubebuilder:object:generate=true
+type AiYesNo struct {
+	Instructions   string            `json:"instructions" jsonschema:"title=Instructions,description=The yes/no question put to the model"`
+	Criteria       map[string]string `json:"criteria,omitempty" jsonschema:"title=Criteria,description=Named clarifications the model must weigh when answering"`
+	MinProbability *float64          `json:"minProbability,omitempty" jsonschema:"title=Min Probability,description=The answer's probability of yes must be at least this (0..1)"`
+	MaxProbability *float64          `json:"maxProbability,omitempty" jsonschema:"title=Max Probability,description=The answer's probability of yes must be at most this (0..1); 0 asserts impossibility"`
+}
+
+// AiChoice asks the model to pick exactly one of a fixed set of named options
+// and asserts on which option may be picked, and with what confidence.
+//
+// +kubebuilder:object:generate=true
+type AiChoice struct {
+	Instructions string            `json:"instructions" jsonschema:"title=Instructions,description=The question put to the model"`
+	Options      map[string]string `json:"options" jsonschema:"title=Options,description=The selectable options as id -> description; the model must answer with one id"`
+	Allow        []string          `json:"allow,omitempty" jsonschema:"title=Allow,description=Option ids that PASS; every entry must be a key of options"`
+	Deny         []string          `json:"deny,omitempty" jsonschema:"title=Deny,description=Option ids that FAIL; every entry must be a key of options"`
+
+	// MinConfidence lives on AiChoice and NOT on AiYesNo, and that is a
+	// constraint rather than a style choice: a confidence value comes back
+	// only with a choice or a score answer, never with a yes/no. A yes/no
+	// answer IS a probability, which is what AiYesNo's minProbability and
+	// maxProbability assert on. A policy that writes `minConfidence` under a
+	// yesNo is refused at decode time (see ai_decode.go) rather than silently
+	// dropped, because a dropped assertion reads as a confidence floor while
+	// asserting nothing at all.
+	MinConfidence *float64 `json:"minConfidence,omitempty" jsonschema:"title=Min Confidence,description=The chosen option's confidence must be at least this (0..1). Only choice and score answers carry a confidence; a yes/no never does."`
+}
+
+// AiScore asks the model for an ordinal score over a fixed ladder of levels.
+// The score is the INDEX of the chosen level, so valid bounds run from 0 to
+// len(Levels)-1.
+//
+// +kubebuilder:object:generate=true
+type AiScore struct {
+	Instructions string   `json:"instructions" jsonschema:"title=Instructions,description=The question put to the model"`
+	Levels       []string `json:"levels" jsonschema:"title=Levels,description=The ordered ladder of levels, lowest first; the score is an index into this list"`
+	MinScore     *float64 `json:"minScore,omitempty" jsonschema:"title=Min Score,description=The score must be at least this; within [0, len(levels)-1]"`
+	MaxScore     *float64 `json:"maxScore,omitempty" jsonschema:"title=Max Score,description=The score must be at most this; within [0, len(levels)-1]"`
 }
 
 // +kubebuilder:object:generate=true
@@ -659,13 +750,17 @@ func checkDependencies(attestationsFrom []string, resultsByStep map[string]StepR
 // validateAttestations will test each collection against to ensure the expected attestations
 // appear in the collection as well as that any rego policies pass for the step.
 func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult {
+	return s.validateAttestationsContext(context.Background(), collectionResults, aiServerURL, stepContext)
+}
+
+func (s Step) validateAttestationsContext(ctx context.Context, collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult {
 	result := StepResult{Step: s.Name}
 	if len(collectionResults) <= 0 {
 		return result
 	}
 
 	for _, collection := range collectionResults {
-		switch outcome, pc, rc := s.gateOne(collection, aiServerURL, stepContext); outcome {
+		switch outcome, pc, rc := s.gateOneContext(ctx, collection, aiServerURL, stepContext); outcome {
 		case gatePassed:
 			result.Passed = append(result.Passed, pc)
 		case gateRejected:
@@ -699,7 +794,11 @@ const (
 // and the batch path share one gate implementation and can never diverge on
 // a verdict. The returned PassedCollection is valid only for gatePassed, the
 // RejectedCollection only for gateRejected.
-func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) (gateOutcome, PassedCollection, RejectedCollection) { //nolint:gocognit,gocyclo,funlen
+func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) (gateOutcome, PassedCollection, RejectedCollection) {
+	return s.gateOneContext(context.Background(), collection, aiServerURL, stepContext)
+}
+
+func (s Step) gateOneContext(ctx context.Context, collection source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) (gateOutcome, PassedCollection, RejectedCollection) { //nolint:gocognit,gocyclo,funlen
 	// F10 (#5746): require EXACT step-name equality. An empty collection
 	// name must NOT match every step — previously `name == ""` was treated
 	// as a wildcard, letting a name-less collection bypass the step-name
@@ -775,9 +874,12 @@ func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerUR
 			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies, stepContext); err != nil {
 				passed = false
 				reasons = append(reasons, err)
+				// A deterministic rejection cannot be repaired by inference;
+				// do not disclose the rejected predicate to an AI provider.
+				continue
 			}
 
-			aiResponses, err := EvaluateAIPolicy(attestor, expected.AiPolicies, aiServerURL)
+			aiResponses, err := EvaluateAIPolicyContext(ctx, attestor, expected.AiPolicies, aiServerURL)
 			if err != nil {
 				passed = false
 				reasons = append(reasons, err)
