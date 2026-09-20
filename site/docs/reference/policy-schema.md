@@ -207,7 +207,11 @@ An `aipolicy` has two mutually exclusive forms. **Exactly one of `prompt` or `de
 | `prompt` | string | **Generative form.** Free text sent to the AI model along with the predicate body. The AI is required to reply with a JSON object `\{"status":"PASS\|FAIL","reason":"..."\}`. Mutually exclusive with `decision`. |
 | `decision` | `decision` | **Typed form.** The model answers a constrained question; the POLICY decides PASS/FAIL from the answer. Mutually exclusive with `prompt`. See [§decision](#decision-object). |
 
-The AI server URL is configured via `--ai-server-url`. SSRF protection limits the URL to `http`/`https` schemes with a non-empty host. Each policy gets one shot — a non-`PASS` response counts as a failure.
+Library callers configure the endpoint with `WithAiServerURL` and select the typed Jev backend with `WithAiProvider(NewJevProvider(apiKey))`. Credentials are operator configuration, never policy fields. The default provider remains the legacy generative backend. This library API does not enable AI policies in Pushgate or introduce a CLI flag.
+
+The Jev backend sends all questions with the same projected state and pinned model in one request to `/v1/systemone`. It requires an exact version such as `jev-1.13.0`; a different resolved response model refuses evaluation. Remote endpoints require HTTPS; HTTP is allowed only for numeric loopback addresses. Redirects and retries are disabled. Each request has a one-second timeout within a two-second batch budget, also bounded by the caller's context. Input encoding is limited to 8 MiB, requests and responses to 1 MiB, and each batch to 128 questions. Oversized evidence is refused, never silently truncated.
+
+A well-formed answer is evaluated against the signed assertions locally. Provider errors, malformed answers, and `max_tokens_exceeded` produce `ErrAIEvaluationRefused`, not a negative finding or a completed PASS/FAIL verdict. Author-written instructions are supported; presets are optional. Authors must still qualify their questions against representative positive, negative, and adversarial evidence before relying on them.
 
 ### Generative example
 
@@ -227,7 +231,7 @@ Exactly one of `yesNo`, `choice` or `score` must be set.
 
 | Key | Type | Description |
 |---|---|---|
-| `state` | `regopolicy` | Optional Rego projection selecting the part of the attestor the question is about. Omitted means the whole attestor is the question's state. |
+| `state` | `regopolicy` | Optional Rego projection selecting the part of the attestor the question is about. For Jev, the module must define `state` in its declared package (`data.<package>.state`); the result must be a string, object, or array. Undefined or null results refuse evaluation. Network and nondeterministic builtins are unavailable. Omitted means the whole attestor is the question's state. |
 | `yesNo` | `yesNo` | A boolean question scored as a probability. |
 | `choice` | `choice` | A single selection from a fixed set of named options. |
 | `score` | `score` | An ordinal score over a fixed ladder of levels. |
@@ -237,7 +241,7 @@ Exactly one of `yesNo`, `choice` or `score` must be set.
 | Key | Type | Description |
 |---|---|---|
 | `instructions` | string | The yes/no question put to the model. |
-| `criteria` | map&lt;string,string&gt; | Named clarifications the model must weigh. |
+| `criteria` | map&lt;string,string&gt; | Named clarifications the model must weigh. Jev requires exactly `true` and `false`, each with a nonblank description. Jev yes/no answers have no confidence field; `minConfidence` is invalid for this type. |
 | `minProbability` | number | The probability of "yes" must be at least this, in `[0,1]`. |
 | `maxProbability` | number | The probability of "yes" must be at most this, in `[0,1]`. `0` asserts impossibility. |
 
@@ -256,7 +260,7 @@ Exactly one of `yesNo`, `choice` or `score` must be set.
 | Key | Type | Description |
 |---|---|---|
 | `instructions` | string | The question put to the model. |
-| `levels` | array&lt;string&gt; | The ordered ladder of levels, lowest first. Must be non-empty; the score is an **index** into this list. |
+| `levels` | array&lt;string&gt; | The ordered ladder of levels, lowest first. Must be non-empty. Jev requires at least two nonblank levels and returns a probability-weighted index, which can be fractional. |
 | `minScore` | number | The score must be at least this. Within `[0, len(levels)-1]`. |
 | `maxScore` | number | The score must be at most this. Within `[0, len(levels)-1]`. |
 
@@ -265,12 +269,13 @@ Exactly one of `yesNo`, `choice` or `score` must be set.
 ```json
 {
   "name": "tamper-risk",
-  "model": "llama3",
+  "model": "jev-1.13.0",
   "decision": {
     "yesNo": {
       "instructions": "Does this command-run attestation show the build step executing a command it did not declare?",
       "criteria": {
-        "undeclared": "a process in the trace whose argv is absent from the declared step command"
+        "true": "a process in the trace whose argv is absent from the declared step command",
+        "false": "every observed process is explained by the declared step command"
       },
       "maxProbability": 0.05
     }
@@ -283,7 +288,7 @@ And with a choice:
 ```json
 {
   "name": "change-risk-tier",
-  "model": "llama3",
+  "model": "jev-1.13.0",
   "decision": {
     "choice": {
       "instructions": "Classify the risk of this diff.",

@@ -750,17 +750,17 @@ func checkDependencies(attestationsFrom []string, resultsByStep map[string]StepR
 // validateAttestations will test each collection against to ensure the expected attestations
 // appear in the collection as well as that any rego policies pass for the step.
 func (s Step) validateAttestations(collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult {
-	return s.validateAttestationsContext(context.Background(), collectionResults, aiServerURL, stepContext)
+	return s.validateAttestationsContext(context.Background(), collectionResults, aiServerURL, stepContext, nil)
 }
 
-func (s Step) validateAttestationsContext(ctx context.Context, collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) StepResult {
+func (s Step) validateAttestationsContext(ctx context.Context, collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}, provider AiProvider) StepResult {
 	result := StepResult{Step: s.Name}
 	if len(collectionResults) <= 0 {
 		return result
 	}
 
 	for _, collection := range collectionResults {
-		switch outcome, pc, rc := s.gateOneContext(ctx, collection, aiServerURL, stepContext); outcome {
+		switch outcome, pc, rc := s.gateOneContext(ctx, collection, aiServerURL, stepContext, provider); outcome {
 		case gatePassed:
 			result.Passed = append(result.Passed, pc)
 		case gateRejected:
@@ -795,10 +795,10 @@ const (
 // a verdict. The returned PassedCollection is valid only for gatePassed, the
 // RejectedCollection only for gateRejected.
 func (s Step) gateOne(collection source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) (gateOutcome, PassedCollection, RejectedCollection) {
-	return s.gateOneContext(context.Background(), collection, aiServerURL, stepContext)
+	return s.gateOneContext(context.Background(), collection, aiServerURL, stepContext, nil)
 }
 
-func (s Step) gateOneContext(ctx context.Context, collection source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}) (gateOutcome, PassedCollection, RejectedCollection) { //nolint:gocognit,gocyclo,funlen
+func (s Step) gateOneContext(ctx context.Context, collection source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}, provider AiProvider) (gateOutcome, PassedCollection, RejectedCollection) { //nolint:gocognit,gocyclo,funlen
 	// F10 (#5746): require EXACT step-name equality. An empty collection
 	// name must NOT match every step — previously `name == ""` was treated
 	// as a wildcard, letting a name-less collection bypass the step-name
@@ -879,7 +879,7 @@ func (s Step) gateOneContext(ctx context.Context, collection source.CollectionVe
 				continue
 			}
 
-			aiResponses, err := EvaluateAIPolicyContext(ctx, attestor, expected.AiPolicies, aiServerURL)
+			aiResponses, err := EvaluateAIPolicyWithProvider(ctx, attestor, expected.AiPolicies, aiServerURL, provider)
 			if err != nil {
 				passed = false
 				reasons = append(reasons, err)

@@ -96,8 +96,14 @@ type AiProvider interface {
 	Evaluate(ctx context.Context, attestor attestation.Attestor, pol AiPolicy, serverURL string) (AiResponse, error)
 }
 
-// defaultAiProvider is the provider used by EvaluateAIPolicy and
-// ExecuteAiPolicy. Today there is exactly one.
+// AiBatchProvider lets a backend ask all questions about one state together.
+type AiBatchProvider interface {
+	AiProvider
+	EvaluateBatch(context.Context, attestation.Attestor, []AiPolicy, string) ([]AiResponse, error)
+}
+
+// defaultAiProvider preserves the legacy backend for callers that do not
+// explicitly select an operator-configured provider.
 var defaultAiProvider AiProvider = ollamaProvider{}
 
 // EvaluateAIPolicy evaluates if the given attestor passes the provided AI policies.
@@ -113,12 +119,27 @@ func EvaluateAIPolicy(attestor attestation.Attestor, policies []AiPolicy, server
 // EvaluateAIPolicyContext shares the caller's cancellation and deadline across
 // the entire batch; starting a new request must not reset that budget.
 func EvaluateAIPolicyContext(ctx context.Context, attestor attestation.Attestor, policies []AiPolicy, serverURL string) ([]AiResponse, error) {
+	return EvaluateAIPolicyWithProvider(ctx, attestor, policies, serverURL, nil)
+}
+
+// EvaluateAIPolicyWithProvider injects an operator-configured backend without
+// putting credentials in signed policy bytes or process-global state.
+func EvaluateAIPolicyWithProvider(ctx context.Context, attestor attestation.Attestor, policies []AiPolicy, serverURL string, provider AiProvider) ([]AiResponse, error) {
 	if len(policies) == 0 {
 		return nil, nil
 	}
 
 	if err := validateAiPolicySet(policies, "this attestation's aipolicies"); err != nil {
 		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if provider == nil {
+		provider = defaultAiProvider
+	}
+	if batch, ok := provider.(AiBatchProvider); ok {
+		return batch.EvaluateBatch(ctx, attestor, policies, serverURL)
 	}
 
 	responses := make([]AiResponse, 0, len(policies))
@@ -127,7 +148,7 @@ func EvaluateAIPolicyContext(ctx context.Context, attestor attestation.Attestor,
 		if err := ctx.Err(); err != nil {
 			return responses, err
 		}
-		result, err := ExecuteAiPolicyContext(ctx, attestor, policy, serverURL)
+		result, err := ExecuteAiPolicyWithProvider(ctx, attestor, policy, serverURL, provider)
 		responses = append(responses, result)
 
 		if err != nil {
@@ -158,6 +179,11 @@ func ExecuteAiPolicy(attestor attestation.Attestor, pol AiPolicy, serverURL stri
 
 // ExecuteAiPolicyContext keeps provider work inside the verifier's request budget.
 func ExecuteAiPolicyContext(ctx context.Context, attestor attestation.Attestor, pol AiPolicy, serverURL string) (AiResponse, error) {
+	return ExecuteAiPolicyWithProvider(ctx, attestor, pol, serverURL, nil)
+}
+
+// ExecuteAiPolicyWithProvider is the single-question operator-injected entry point.
+func ExecuteAiPolicyWithProvider(ctx context.Context, attestor attestation.Attestor, pol AiPolicy, serverURL string, provider AiProvider) (AiResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return AiResponse{}, err
 	}
@@ -166,7 +192,10 @@ func ExecuteAiPolicyContext(ctx context.Context, attestor attestation.Attestor, 
 			return AiResponse{}, err
 		}
 	}
-	return defaultAiProvider.Evaluate(ctx, attestor, pol, serverURL)
+	if provider == nil {
+		provider = defaultAiProvider
+	}
+	return provider.Evaluate(ctx, attestor, pol, serverURL)
 }
 
 // ollamaProvider evaluates a generative (prompt-only) AI policy against an

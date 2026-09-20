@@ -139,17 +139,17 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// adversarial.
 	"DefaultDigestSizeLimit": {},
 
-	// defaultAiProvider is not a tunable value, it is the seam a second AI
-	// backend plugs into (attestation/policy/ai.go). At this commit there is
-	// exactly one implementation, so there is nothing to override. It is
+	// defaultAiProvider is not a tunable value, it is the backend used when the
+	// Go caller injects none (attestation/policy/ai.go). An alternate backend
+	// IS selectable, but only by injection: policy.WithAiProvider on the verify
+	// call, or the *WithProvider entry points. This test's flag/env heuristic
+	// cannot see an injected interface value, hence the entry. It is
 	// deliberately NOT an env var, for the same reason as the two entries
-	// above, and that stays true once a second backend exists: a provider
-	// decides where the evidence under evaluation is sent and carries the
-	// credential for that service, so choosing it from ambient process state
-	// would let the environment being verified pick its own judge and its own
-	// egress. The signed policy names WHAT to ask; a backend is chosen by the
-	// Go caller that owns the verification, never by a flag or variable this
-	// test's heuristic would recognise.
+	// above: a provider decides where the evidence under evaluation is sent and
+	// carries the credential for that service, so choosing it from ambient
+	// process state would let the environment being verified pick its own
+	// judge and its own egress. The signed policy names WHAT to ask; only the
+	// caller that owns the verification decides WHO answers.
 	"defaultAiProvider": {},
 
 	// Same posture: the vendor-chain walk bound (the exported

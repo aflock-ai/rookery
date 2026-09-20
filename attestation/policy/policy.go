@@ -251,6 +251,7 @@ type verifyOptions struct {
 	searchDepth         int
 	maxSubjectFanout    int
 	aiServerURL         string
+	aiProvider          AiProvider
 	clockSkewTolerance  time.Duration
 	requireAllArtifacts bool
 	// lazyStepSatisfaction enables within-step stop-at-first-pass on the
@@ -346,6 +347,12 @@ func WithMaxSubjectFanout(n int) VerifyOption {
 	return func(vo *verifyOptions) {
 		vo.maxSubjectFanout = n
 	}
+}
+
+// WithAiProvider selects an operator-configured backend for this verification.
+// The signed policy never supplies the backend credential.
+func WithAiProvider(provider AiProvider) VerifyOption {
+	return func(vo *verifyOptions) { vo.aiProvider = provider }
 }
 
 func WithAiServerURL(url string) VerifyOption {
@@ -676,6 +683,9 @@ func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (
 	if err != nil {
 		return false, stepResults, externalResults, err
 	}
+	if err := refusedAIResults(stepResults, externalResults); err != nil {
+		return false, stepResults, externalResults, err
+	}
 
 	// A policy must affirmatively verify something to pass. A step imposes a real
 	// obligation; an external attestation only counts if it was actually
@@ -704,6 +714,34 @@ func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (
 	}
 
 	return pass, stepResults, externalResults, nil
+}
+
+// An alternate passing witness may satisfy an existential step. Without one,
+// an unanswered required question is a refusal, not a signed negative finding.
+func refusedAIResults(steps map[string]StepResult, externals map[string]ExternalResult) error {
+	for _, result := range steps {
+		if result.HasPassed() {
+			continue
+		}
+		for _, rejected := range result.Rejected {
+			var refusal ErrAIEvaluationRefused
+			if errors.As(rejected.Reason, &refusal) {
+				return refusal
+			}
+		}
+	}
+	for _, result := range externals {
+		if result.Skipped || len(result.Passed) > 0 {
+			continue
+		}
+		for _, rejected := range result.Rejected {
+			var refusal ErrAIEvaluationRefused
+			if errors.As(rejected.Reason, &refusal) {
+				return refusal
+			}
+		}
+	}
+	return nil
 }
 
 // Verify is the backward-compatible entry point; it discards the external
@@ -888,7 +926,7 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 					passedCollections[i] = pc.Collection
 				}
 
-				stepResult = step.validateAttestationsContext(ctx, passedCollections, vo.aiServerURL, stepCtx)
+				stepResult = step.validateAttestationsContext(ctx, passedCollections, vo.aiServerURL, stepCtx, vo.aiProvider)
 				stepResult.Rejected = append(stepResult.Rejected, functionaryCheckResults.Rejected...)
 				// Hub-suppressed candidates are reported, never silently dropped:
 				// an operator whose expected evidence was demoted as a hub sees
@@ -1242,7 +1280,7 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 			ac.verdict = streamedDeferredGate
 			ac.deferred = compactAwaitingGate(triaged)
 		default:
-			switch outcome, pc, rc := step.gateOneContext(ctx, triaged, vo.aiServerURL, stepCtx); outcome {
+			switch outcome, pc, rc := step.gateOneContext(ctx, triaged, vo.aiServerURL, stepCtx, vo.aiProvider); outcome {
 			case gatePassed:
 				ac.verdict, ac.pc = streamedGatePassed, pc
 			case gateRejected:
@@ -1308,7 +1346,7 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 				// source, so this is unreachable for a real candidate.
 				return StepResult{}, 0, false, rerr
 			}
-			switch outcome, pc, rc := step.gateOneContext(ctx, full, vo.aiServerURL, stepCtx); outcome {
+			switch outcome, pc, rc := step.gateOneContext(ctx, full, vo.aiServerURL, stepCtx, vo.aiProvider); outcome {
 			case gatePassed:
 				result.Passed = append(result.Passed, pc)
 			case gateRejected:
@@ -1745,7 +1783,7 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 				continue
 			}
 
-			aiResponses, err := EvaluateAIPolicyContext(ctx, env.Attestor, ext.AiPolicies, vo.aiServerURL)
+			aiResponses, err := EvaluateAIPolicyWithProvider(ctx, env.Attestor, ext.AiPolicies, vo.aiServerURL, vo.aiProvider)
 			if err != nil {
 				er.Rejected = append(er.Rejected, RejectedExternal{
 					Envelope:    env,
