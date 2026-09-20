@@ -40,6 +40,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock policy draft` | Hydrate a hand-authored policy with the tenant's platform trust roots. Returns it UNSIGNED. |
 | `cilock keyid` | Print the canonical keyid (`hex(sha256(PEM(pub)))`) derived from a public or private key. |
 | `cilock bundle create` / `inspect` | Build or inspect a portable attestation bundle (tar.gz of DSSE envelopes). |
+| `cilock fetch <gitoid>` | Download any attestation from Archivista by its gitoid, verified against that content address. |
 | `cilock plan -- <cmd>` | Show which attestors detection would fire for a command, without executing it. |
 | `cilock attestors list` | List every attestor compiled into the binary. |
 | `cilock attestors schema <name>` | Print the JSON schema of a specific attestor's predicate. |
@@ -557,6 +558,45 @@ Print a bundle's manifest and a per-envelope summary.
 cilock bundle inspect evidence.tar.gz
 # then verify offline against it:
 cilock verify ./app -p policy.signed.json -k pub.pem --bundle evidence.tar.gz --platform-url ""
+```
+
+## `cilock fetch <gitoid>`
+
+> Download **any** attestation from Archivista by its gitoid. `fetch` is generic over attestation type — it downloads whatever DSSE envelope the gitoid names and knows nothing about the predicate inside it.
+
+By default it writes the **exact stored bytes**, so re-hashing the saved file reproduces the gitoid it was fetched by. A decoded-then-re-marshalled envelope does not: JSON key order, whitespace and any member the struct has no field for are all lost, and the content address goes with them.
+
+**What this verifies, and what it does not.** `fetch` verifies the **content address**: the bytes it writes are re-hashed locally and must equal the gitoid you asked for, so a compromised or on-path Archivista cannot hand you different evidence under the name you requested. It **does not verify the signature**, and it does not verify who signed. An envelope that downloads cleanly may be signed by anyone, or carry a signature that does not validate at all — [`cilock verify`](#cilock-verify) is what establishes signer trust. `--payload` and `--predicate` output is content lifted out of an envelope whose signature `fetch` did not check.
+
+The argument is the 64-character lowercase hex sha256 gitoid Archivista stores — the same string `cilock policy push` prints and the `gitoidSha256` field carries. A `gitoid:blob:sha256:<hex>` URI is refused with the hex part to pass instead; nothing is normalized, because silently rewriting a content address turns "you asked for the wrong object" into "you got an object you did not ask for".
+
+| Flag | Default | Description |
+|---|---|---|
+| `<gitoid>...` | (required) | One or more gitoids to download. More than one requires `--outdir`. |
+| `--outfile, -o <path>` | stdout | Path to write the fetched attestation. A single gitoid only. |
+| `--outdir <dir>` | (none) | Existing directory to write one file per gitoid into, named `<gitoid>.dsse.json`. Required for more than one gitoid. |
+| `--payload` | `false` | Write the base64-decoded DSSE payload (the in-toto statement) instead of the envelope. |
+| `--predicate` | `false` | Write only the statement's `predicate` member instead of the envelope. |
+| `--force` | `false` | Overwrite the output if it already exists. |
+| `--platform-url <url>` | logged-in platform | Platform whose Archivista to read, and whose session authorizes the read. |
+| `--archivista-url <url>` | the platform's own Archivista | Third-party Archivista server. The session bearer is withheld from a different origin. |
+| `--archivista-headers <h>` | (none) | Headers to send with each request (e.g. `Authorization: Bearer ...`). Repeatable. |
+
+`--payload` and `--predicate` are mutually exclusive, as are `--outfile` and `--outdir`. Nothing is written to the destination unless the gitoid check passed: a mismatch, a 404 or an oversized body exits non-zero and leaves no partial or empty file behind, and `--force` stages the new bytes beside the destination so a failed fetch cannot destroy the file already there.
+
+```bash
+# Save an attestation's exact stored bytes; the saved file re-hashes to the gitoid
+# (git's blob address over the same bytes — `git hash-object -t blob` with sha256)
+cilock fetch <gitoid> -o evidence.json
+
+# Several at once, one file per gitoid
+cilock fetch --outdir ./evidence <gitoid> <gitoid>
+
+# Just the predicate, for a tool that only wants the payload's contents
+cilock fetch --predicate <gitoid> | jq .
+
+# Then establish signer trust — fetch never did
+cilock verify ./app -p policy.signed.json -k pub.pem
 ```
 
 ## `cilock attest`

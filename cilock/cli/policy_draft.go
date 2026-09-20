@@ -197,7 +197,7 @@ func runPolicyDraft(cmd *cobra.Command, o policyDraftOpts) error {
 	}
 	// Check the destination BEFORE the network call so an accidental clobber is
 	// refused without burning a hydration request.
-	if err := ensureWritableOutput(output, o.force); err != nil {
+	if err := ensureWritableOutput(output, "--output", o.force); err != nil {
 		return err
 	}
 
@@ -329,15 +329,21 @@ func defaultHydratedOutputPath(source string) string {
 	return strings.TrimSuffix(source, filepath.Ext(source)) + ".hydrated.json"
 }
 
-// ensureWritableOutput refuses to clobber an existing --output unless --force.
-// A draft is cheap to regenerate; a hand-edited or already-signed file at that
-// path is not.
-func ensureWritableOutput(path string, force bool) error {
+// ensureWritableOutput refuses to clobber an existing destination unless
+// --force. A draft is cheap to regenerate; a hand-edited or already-signed file
+// at that path is not.
+//
+// destFlag is the flag the caller's destination came from ("--output",
+// "--outfile", "--outdir"). It is a parameter rather than a constant because a
+// refusal that names a flag the command does not have sends the reader looking
+// for a flag that is not in its --help — which is exactly what this message did
+// when `cilock fetch` started sharing it.
+func ensureWritableOutput(path, destFlag string, force bool) error {
 	if force {
 		return nil
 	}
 	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("output %q already exists — pass --force to overwrite it, or choose another --output", path)
+		return fmt.Errorf("output %q already exists — pass --force to overwrite it, or choose another %s", path, destFlag)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat output %q: %w", path, err)
 	}
@@ -510,7 +516,7 @@ func verifyResponseTenant(resp *policyHydrateResponse, sessionTenant string) err
 // destination so a file that appeared between the pre-flight check and here is
 // still not clobbered.
 func writeHydratedPolicy(path, content string, force bool) error {
-	if err := ensureWritableOutput(path, force); err != nil {
+	if err := ensureWritableOutput(path, "--output", force); err != nil {
 		return err
 	}
 	// 0644: the hydrated policy is an unsigned, non-secret document — it carries

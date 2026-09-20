@@ -211,23 +211,69 @@ func (c *Client) DownloadBounded(ctx context.Context, gitoidArg string, maxBytes
 	return c.download(ctx, gitoidArg, maxBytes)
 }
 
+// DownloadRaw retrieves the EXACT stored bytes of a DSSE envelope by gitoid,
+// verified against that gitoid.
+//
+// It exists because Download hands back a decoded dsse.Envelope, and a decoded
+// envelope cannot be turned back into the bytes Archivista stored: json.Marshal
+// fixes the key order to the struct's, drops any member the struct has no field
+// for, and re-encodes whitespace. Re-hashing a re-marshalled envelope therefore
+// does NOT reproduce the gitoid, which makes it useless as the thing a caller
+// saves to disk and later re-verifies. Anything that must round-trip the
+// content address — `cilock fetch`, an evidence archive, a bundle writer that
+// preserves provenance — needs these bytes, not the struct.
+//
+// It verifies the CONTENT ADDRESS only: the bytes are the bytes the gitoid
+// names. It says nothing about the signature or the signer.
+func (c *Client) DownloadRaw(ctx context.Context, gitoidArg string) ([]byte, error) {
+	return c.downloadRaw(ctx, gitoidArg, MaxDownloadBytes)
+}
+
+// DownloadRawBounded is DownloadRaw under a caller's tighter wire-byte cap,
+// with the same bounds contract as DownloadBounded.
+func (c *Client) DownloadRawBounded(ctx context.Context, gitoidArg string, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 || maxBytes > MaxDownloadBytes {
+		return nil, fmt.Errorf("invalid download byte limit %d", maxBytes)
+	}
+	return c.downloadRaw(ctx, gitoidArg, maxBytes)
+}
+
+// download is the envelope-shaped view of downloadRaw. The fetch, the bounds
+// and the content-address check live in ONE place (downloadRaw) so a fix to the
+// verification cannot land in one copy and miss the other; all this adds is the
+// decode.
 func (c *Client) download(ctx context.Context, gitoidArg string, maxBytes int64) (dsse.Envelope, error) {
+	raw, err := c.downloadRaw(ctx, gitoidArg, maxBytes)
+	if err != nil {
+		return dsse.Envelope{}, err
+	}
+
+	var env dsse.Envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return dsse.Envelope{}, fmt.Errorf("decode envelope: %w", err)
+	}
+	return env, nil
+}
+
+// downloadRaw is the single fetch-and-verify path shared by every download
+// entry point. It returns bytes only after they content-address to gitoidArg.
+func (c *Client) downloadRaw(ctx context.Context, gitoidArg string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url+"/download/"+url.PathEscape(gitoidArg), nil)
 	if err != nil {
-		return dsse.Envelope{}, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	if err := c.applyHeaders(req); err != nil {
-		return dsse.Envelope{}, err
+		return nil, err
 	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return dsse.Envelope{}, fmt.Errorf("archivista download: %w", err)
+		return nil, fmt.Errorf("archivista download: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return dsse.Envelope{}, &StatusError{
+		return nil, &StatusError{
 			Op:         "download",
 			StatusCode: resp.StatusCode,
 			Body:       readLimitedErrorBody(io.LimitReader(resp.Body, maxBytes)),
@@ -236,7 +282,7 @@ func (c *Client) download(ctx context.Context, gitoidArg string, maxBytes int64)
 	}
 
 	if resp.ContentLength > maxBytes {
-		return dsse.Envelope{}, fmt.Errorf("archivista download exceeds %d byte limit", maxBytes)
+		return nil, fmt.Errorf("archivista download exceeds %d byte limit", maxBytes)
 	}
 
 	// Read the raw body under a hard cap. Archivista content-addresses each
@@ -246,10 +292,10 @@ func (c *Client) download(ctx context.Context, gitoidArg string, maxBytes int64)
 	// from those same bytes. Reading maxBytes+1 lets us detect overflow.
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
-		return dsse.Envelope{}, fmt.Errorf("read envelope: %w", err)
+		return nil, fmt.Errorf("read envelope: %w", err)
 	}
 	if int64(len(raw)) > maxBytes {
-		return dsse.Envelope{}, fmt.Errorf("archivista download exceeds %d byte limit", maxBytes)
+		return nil, fmt.Errorf("archivista download exceeds %d byte limit", maxBytes)
 	}
 
 	// Verify the content address: the returned bytes must hash to the requested
@@ -257,17 +303,13 @@ func (c *Client) download(ctx context.Context, gitoidArg string, maxBytes int64)
 	// different-but-signed envelope than the gitoid names.
 	gid, err := gitoid.New(bytes.NewReader(raw), gitoid.WithSha256(), gitoid.WithContentLength(int64(len(raw))))
 	if err != nil {
-		return dsse.Envelope{}, fmt.Errorf("compute gitoid: %w", err)
+		return nil, fmt.Errorf("compute gitoid: %w", err)
 	}
 	if !strings.EqualFold(gid.String(), gitoidArg) {
-		return dsse.Envelope{}, fmt.Errorf("archivista download gitoid mismatch: requested %s, got %s", gitoidArg, gid.String())
+		return nil, fmt.Errorf("archivista download gitoid mismatch: requested %s, got %s", gitoidArg, gid.String())
 	}
 
-	var env dsse.Envelope
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return dsse.Envelope{}, fmt.Errorf("decode envelope: %w", err)
-	}
-	return env, nil
+	return raw, nil
 }
 
 // SearchGitoidVariables are the parameters for a gitoid search query.

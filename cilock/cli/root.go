@@ -116,6 +116,7 @@ The directory is credential state, not a general filesystem or network sandbox.`
 	cmd.AddCommand(LicenseCmd())
 	cmd.AddCommand(KeyidCmd())
 	cmd.AddCommand(BundleCmd())
+	cmd.AddCommand(FetchCmd())
 	cmd.AddCommand(PlanCmd())
 	cmd.AddCommand(ToolsCmd())
 	cmd.AddCommand(GetCmd())

@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -106,32 +105,12 @@ func bundleCreateCmd() *cobra.Command {
 }
 
 func runBundleCreate(ctx context.Context, o bundleCreateOptions) error {
-	headers := http.Header{}
-	for _, h := range o.ArchivistaHdrs {
-		idx := strings.Index(h, ":")
-		if idx <= 0 {
-			return fmt.Errorf("invalid --archivista-headers entry %q (expected Name: Value)", h)
-		}
-		name := strings.TrimSpace(h[:idx])
-		value := strings.TrimSpace(h[idx+1:])
-		headers.Add(name, value)
-	}
-
-	// A logged-in operator's session authorizes reads against the platform's
-	// own Archivista, the same way `cilock run` authorizes uploads
-	// (applyPlatformCredential): attach the bearer only when no Authorization
-	// header was passed explicitly AND the target shares the PLATFORM's origin
-	// — never leak the session JWT to a third-party --archivista-url.
-	//
-	// auth.Lookup, not LookupAny: Lookup is Resolve(url, ForBearer) — the
-	// token-obtaining path — while LookupAny is the status/display shim whose
-	// own doc forbids using it for a bearer. No session is not an error here;
-	// the server answers 401 and that message names `cilock login`, which is
-	// the accurate remediation.
-	if headers.Get("Authorization") == "" && sameOriginDoctor(o.ArchivistaURL, platformconfig.Derive(o.PlatformURL).Archivista) {
-		if cred, err := auth.Lookup(o.PlatformURL); err == nil && cred != nil && cred.Token != "" {
-			headers.Set("Authorization", "Bearer "+cred.Token)
-		}
+	// Same header/credential rules as `cilock fetch` — one implementation, so
+	// the "never leak the session bearer off-origin" guard cannot be fixed in
+	// one reader and missed in the other.
+	headers, err := archivistaReadHeaders(o.ArchivistaHdrs, o.ArchivistaURL, o.PlatformURL)
+	if err != nil {
+		return err
 	}
 	client := archivista.New(o.ArchivistaURL, archivista.WithHeaders(headers))
 	log.Infof("walking Archivista subject graph (%d seed subjects, max depth %d)", len(o.Subjects), o.MaxDepth)
