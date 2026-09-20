@@ -103,6 +103,7 @@ replace github.com/aflock-ai/rookery/plugins/attestors/secretscan => ../plugins/
 replace github.com/aflock-ai/rookery/plugins/attestors/slsa => ../plugins/attestors/slsa
 
 replace github.com/aflock-ai/rookery/plugins/attestors/steampipe => ../plugins/attestors/steampipe
+replace github.com/aflock-ai/rookery/plugins/attestors/structured-data => ../plugins/attestors/structured-data
 
 replace github.com/aflock-ai/rookery/plugins/attestors/system-packages => ../plugins/attestors/system-packages
 
@@ -198,6 +199,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/secretscan v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/slsa v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/steampipe v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/structured-data v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/system-packages v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/test-results v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/trivy v0.0.0-00010101000000-000000000000
