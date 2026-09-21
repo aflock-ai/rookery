@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -259,7 +260,10 @@ func runPolicyPublish(cmd *cobra.Command, o policyPublishOpts) error {
 }
 
 // printPublishResult is the completion block: what was published, the
-// signature the PLATFORM reported, and the human's next step.
+// signature the PLATFORM reported, and the human's next step. The next step
+// names the Pushgate origin the platform advertises in discovery; with no such
+// origin there is nowhere to send the human, so the line is omitted rather
+// than pointing at a host derived from the platform's name.
 func printPublishResult(out io.Writer, res *policyPublishResult, platformURL string) {
 	verb := "published"
 	if res.Replayed {
@@ -268,8 +272,29 @@ func printPublishResult(out io.Writer, res *policyPublishResult, platformURL str
 	_, _ = fmt.Fprintf(out, "\n✓ %s %s %s\n", verb, res.Definition, res.Tag)
 	_, _ = fmt.Fprintf(out, "  release:  %s\n  policy:   sha256:%s\n  gitoid:   %s\n  signed:   %s\n",
 		res.ReleaseID, res.PolicySHA256, res.PolicyGitoid, publishSignedLine(res))
-	_, _ = fmt.Fprintf(out, "\nNext: your human turns it on for a repository at %s/policy (Warn first).\n",
-		strings.TrimSuffix(strings.Replace(platformURL, "platform.", "pushgate.", 1), "/"))
+	if origin := publishNextStepPushgateOrigin(platformURL); origin != "" {
+		_, _ = fmt.Fprintf(out, "\nNext: your human turns it on for a repository at %s/policy (Warn first).\n", origin)
+	}
+}
+
+// publishNextStepPushgateOrigin returns the scheme://host of the Pushgate the
+// platform advertises, or "" when discovery fails, advertises none, or
+// advertises something that is not a bare secure origin. The result is shown
+// to a person as a link, so a path, query or userinfo is refused rather than
+// printed.
+func publishNextStepPushgateOrigin(platformURL string) string {
+	advertised, err := discoverPushgateOrigin(platformURL)
+	if err != nil || advertised == "" {
+		return ""
+	}
+	if config.RequireSecurePlatformURL(advertised) != nil {
+		return ""
+	}
+	u, err := url.Parse(strings.TrimSpace(advertised))
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.Trim(u.Path, "/") != "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // publishSummaryLines renders the platform's summary as the lines the approve
