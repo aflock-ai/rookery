@@ -39,13 +39,19 @@ case "$SCENARIO" in
     PRE='setup_repo'
     ;;
   source-git)
-    INNER="/h/probe.sh /h/bin/cilock-linux run \
+    # SINGLE-quoted on purpose: $PLATFORM_URL must reach the container's `sh -c`
+    # payload as the literal text "$PLATFORM_URL" and be expanded THERE from the
+    # environment (-e PLATFORM_URL below), never pasted into the payload by this
+    # shell. The old '$PLATFORM_URL' spelling interpolated it here, so a single
+    # quote in the value closed the quoting and ran the rest of it as commands
+    # inside a --privileged container (CWE-78). Do not restore double quotes.
+    INNER='/h/probe.sh /h/bin/cilock-linux run \
       --step source-git --workingdir /work \
-      --platform-url '$PLATFORM_URL' \
-      --archivista-server '$PLATFORM_URL/archivista' \
+      --platform-url "$PLATFORM_URL" \
+      --archivista-server "$PLATFORM_URL/archivista" \
       --enable-archivista \
       --attestations environment,git \
-      -- /bin/true"
+      -- /bin/true'
     PRE='setup_repo'
     ;;
   stall)
@@ -71,6 +77,7 @@ echo "▶ scenario=$SCENARIO platform=$PLATFORM_URL watchdog=${WATCHDOG_SECS}s i
 
 docker run --rm --privileged \
   -e WATCHDOG_SECS="$WATCHDOG_SECS" -e LABEL="$SCENARIO" \
+  -e PLATFORM_URL="$PLATFORM_URL" \
   -v "$HERE:/h:ro" -w /work \
   "$IMAGE" \
   sh -c "

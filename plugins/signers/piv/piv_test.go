@@ -24,7 +24,12 @@ import (
 	"crypto/x509/pkix"
 	"errors"
 	"io"
+	"io/fs"
 	"math/big"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -228,4 +233,76 @@ func requirePINPrompt(cfg *signerConfig) error {
 		return errors.New("a PIN prompt is required")
 	}
 	return nil
+}
+
+// TestVendoredDefaultCredentialsAreNeverUsed keeps true the fact that makes the
+// vendored PIV applet defaults (DefaultPIN / DefaultPUK / DefaultManagementKey,
+// declared in internal/vendored/piv.go) harmless here: no code outside that
+// vendored package refers to them. The PIN reaches the card only through a
+// PINPrompter. Card.Signer returns an error when none is configured, and
+// InteractivePINPrompt refuses a non-TTY stdin, so nothing can silently fall
+// back to a default. If someone wires one in as a fallback, this test fails.
+//
+// See internal/vendored/NOTICE for why the declarations themselves stay
+// byte-identical to upstream go-piv rather than being edited away.
+func TestVendoredDefaultCredentialsAreNeverUsed(t *testing.T) {
+	_, self, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed; cannot exclude this file from the scan")
+	}
+	selfInfo, err := os.Stat(self)
+	if err != nil {
+		t.Fatalf("stat %s: %v", self, err)
+	}
+
+	banned := []string{"DefaultPIN", "DefaultPUK", "DefaultManagementKey"}
+	vendored := filepath.Join("internal", "vendored")
+
+	scanned, skippedSelf := 0, 0
+	walkErr := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			// internal/vendored is upstream go-piv source: it is where the
+			// defaults are declared and documented, so it is exempt by design.
+			if path == vendored {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if os.SameFile(selfInfo, info) {
+			// This file spells the identifiers out in order to search for them.
+			skippedSelf++
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		scanned++
+		for _, name := range banned {
+			if strings.Contains(string(src), name) {
+				t.Errorf("%s references %s: the vendored PIV defaults must never be reachable as a credential fallback (the PIN is interactive-only, DELEG-5)", path, name)
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walking the module: %v", walkErr)
+	}
+	// A walk that silently matched nothing would report green forever.
+	if scanned == 0 {
+		t.Fatal("scanned no .go files: the walk is broken, which says nothing about the invariant")
+	}
+	if skippedSelf != 1 {
+		t.Fatalf("self-exclusion matched %d files, want exactly 1 (this test file)", skippedSelf)
+	}
 }

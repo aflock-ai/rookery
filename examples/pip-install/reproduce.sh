@@ -62,8 +62,10 @@ docker exec "$CONTAINER" sh -c \
 #    --platform-url "" keeps the run fully offline (no TSA) — the only network
 #    is pip's own download + the attestor's PyPI provenance lookups.
 #    --workload manual makes --attestations the exact set (product is always on).
+#    PKG goes straight into cilock's argv -- no nested `sh -c` -- so it is always
+#    exactly one package argument and never reaches a shell as code.
 docker exec "$CONTAINER" mkdir -p /work
-docker exec -w /work "$CONTAINER" sh -c "cilock run \
+docker exec -w /work "$CONTAINER" cilock run \
   --step pip-install-capture \
   --workload manual \
   --platform-url '' \
@@ -71,7 +73,7 @@ docker exec -w /work "$CONTAINER" sh -c "cilock run \
   --attestations product,pip-install \
   --enable-archivista=false \
   --outfile /work/attestation.json \
-  -- pip install $PKG"
+  -- pip install "$PKG"
 
 # 5. Pull the real signed collection out.
 docker cp "$CONTAINER:/work/attestation.json" ./attestation.json

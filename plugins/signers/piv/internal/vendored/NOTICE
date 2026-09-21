@@ -60,3 +60,36 @@ key.go). Importing that subpackage does not compile any cgo file.
 
 Upstream LICENSE text: https://www.apache.org/licenses/LICENSE-2.0
 go-piv/piv-go LICENSE:  https://github.com/go-piv/piv-go/blob/master/LICENSE
+
+DEFAULT PIV CREDENTIALS (DefaultPIN / DefaultPUK / DefaultManagementKey):
+
+piv.go declares the PIV applet default credentials as package variables: PIN
+"123456", PUK "12345678", and a 24-byte management key of 01..08 repeated three
+times. Credential scanners flag them as hardcoded secrets (CWE-798). They are
+upstream's and are carried unchanged: that var block is byte-identical to
+piv/piv.go lines 31-45 of go-piv/piv-go/v2 v2.5.0, and the same block is
+unchanged in v2.6.0.
+
+No code reads them. Running
+
+    grep -rn -E "Default(PIN|PUK|ManagementKey)" .
+
+from plugins/signers/piv returns the declaration plus six comment lines and
+nothing else. Three of those comments are upstream's own usage examples passing
+a default as the OLD argument to SetManagementKey / SetPIN / SetPUK, i.e. the
+value being replaced.
+
+Nor can anything reach them. The PIN is supplied only by a PINPrompter:
+Card.Signer in ../../piv.go returns an error when no prompter is configured, and
+InteractivePINPrompt in ../../prompt.go refuses a non-TTY stdin, so a default
+cannot stand in for a user-entered PIN. No file outside this directory mentions
+ManagementKey at all, and authManagementKey here is unexported with no caller
+anywhere in the module.
+
+TestVendoredDefaultCredentialsAreNeverUsed in ../../piv_test.go holds the "no
+code reads them" half of that: it walks every .go file outside internal/vendored
+and fails if any of the three identifiers appears.
+
+Keep the block as upstream writes it. Editing these lines to quiet a scanner
+would desynchronize this directory from upstream and buy no security: the
+identical bytes are published in go-piv/piv-go's public Apache-2.0 source.
