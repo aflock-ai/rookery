@@ -72,6 +72,7 @@ type verifyOptions struct {
 	aiServerURL                  string
 	maxSubjectFanout             int
 	lazyWitness                  bool
+	commitBinding                string
 	materialManifests            map[string][]byte
 	inventoryLookup              func(string) ([]byte, bool)
 	kmsProviderOptions           map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
@@ -177,6 +178,23 @@ func VerifyWithLazyWitness(enabled bool) VerifyOption {
 	}
 }
 
+// VerifyWithCommitBinding binds every step witness to commit
+// (policy.WithCommitBinding): a collection counts for a step only when all of
+// its git attestations name commit. Pass it for every verify whose subject is
+// a commit.
+//
+// The zero value (no option, or "") is UNBOUND and keeps the historical
+// behaviour, which is right only for verifies whose subject is not a commit,
+// such as registry or image-digest gates. Unlike the other knobs, a non-empty
+// binding is refused rather than dropped when the policyverify attestor cannot
+// take it: an unbound verify is not a degraded commit-bound one, it can pass
+// on another commit's evidence.
+func VerifyWithCommitBinding(commit string) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.commitBinding = commit
+	}
+}
+
 // VerifyWithMaterialManifests supplies legacy manifests and modern inventories
 // to policy.WithMaterialManifests. Legacy digests bind compact JSON; modern
 // digests bind exact predicate bytes.
@@ -219,8 +237,13 @@ type VerifyResult struct {
 // from evidence that verification never loaded. The workflow owns the
 // attestor's option state, so an unsupplied option means "none", not "as
 // before"; the zero values are the engine's defaults (no fan-out cap, lazy
-// witness off, no manifests).
-func applyOptionalVerifyCapabilities(att attestation.Attestor, vo *verifyOptions) {
+// witness off, no manifests, no commit binding).
+//
+// The commit binding is the one knob whose absence is not a safe default: an
+// attestor that cannot take it would verify unbound while the caller believes
+// it asked for a commit-bound verdict. A non-empty binding on such an
+// attestor is an error.
+func applyOptionalVerifyCapabilities(att attestation.Attestor, vo *verifyOptions) error {
 	if mf, ok := att.(interface{ SetMaxSubjectFanout(int) }); ok {
 		mf.SetMaxSubjectFanout(vo.maxSubjectFanout)
 	}
@@ -237,6 +260,15 @@ func applyOptionalVerifyCapabilities(att attestation.Attestor, vo *verifyOptions
 	}); ok {
 		inv.SetInventoryLookup(vo.inventoryLookup)
 	}
+	cb, ok := att.(interface{ SetCommitBinding(string) })
+	if !ok {
+		if vo.commitBinding != "" {
+			return fmt.Errorf("policyverify attestor %T cannot bind a verify to commit %s; refusing to verify unbound", att, vo.commitBinding)
+		}
+		return nil
+	}
+	cb.SetCommitBinding(vo.commitBinding)
+	return nil
 }
 
 // Verify verifies a set of attestations against a provided policy. The set of attestations that satisfy the policy will be returned
@@ -277,7 +309,9 @@ func Verify(ctx context.Context, policyEnvelope dsse.Envelope, policyVerifiers [
 	if vo.aiServerURL != "" {
 		configurer.SetAiServerURL(vo.aiServerURL)
 	}
-	applyOptionalVerifyCapabilities(att, &vo)
+	if err := applyOptionalVerifyCapabilities(att, &vo); err != nil {
+		return VerifyResult{}, err
+	}
 
 	if len(vo.signers) > 0 {
 		vo.runOptions = append(vo.runOptions, RunWithSigners(vo.signers...))

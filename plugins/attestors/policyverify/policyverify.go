@@ -62,6 +62,7 @@ type Attestor struct {
 	aiServerURL        string
 	maxSubjectFanout   int
 	lazyWitness        bool
+	commitBinding      string
 	materialManifests  map[string][]byte
 	inventoryLookup    func(string) ([]byte, bool)
 	kmsProviderOptions map[string][]func(signer.SignerProvider) (signer.SignerProvider, error)
@@ -153,6 +154,13 @@ func (a *Attestor) SetLazyWitness(enabled bool) {
 	a.lazyWitness = enabled
 }
 
+// SetCommitBinding binds every step witness to commit
+// (policy.WithCommitBinding). Empty is the unbound zero value, for verifies
+// whose subject is not a commit.
+func (a *Attestor) SetCommitBinding(commit string) {
+	a.commitBinding = commit
+}
+
 // SetMaterialManifests supplies legacy manifests and modern inventories to
 // policy.WithMaterialManifests. Only legacy manifest JSON is normalized.
 //
@@ -190,6 +198,26 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 
 	subjects[fmt.Sprintf("policy:%v", a.Policy.URI)] = a.Policy.Digest
 	return subjects
+}
+
+// optionalVerifyOpts returns the verify options that apply only when the
+// caller set them. An unset commit binding adds nothing, so the verify stays
+// unbound (see policy.WithCommitBinding).
+func (a *Attestor) optionalVerifyOpts() []policy.VerifyOption {
+	var opts []policy.VerifyOption
+	if a.maxSubjectFanout > 0 {
+		opts = append(opts, policy.WithMaxSubjectFanout(a.maxSubjectFanout))
+	}
+	if a.lazyWitness {
+		opts = append(opts, policy.WithLazyStepSatisfaction(true))
+	}
+	if a.commitBinding != "" {
+		opts = append(opts, policy.WithCommitBinding(a.commitBinding))
+	}
+	if len(a.materialManifests) > 0 {
+		opts = append(opts, policy.WithMaterialManifests(a.materialManifests))
+	}
+	return opts
 }
 
 func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:funlen,gocyclo // policy verification requires extensive setup
@@ -259,15 +287,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 		policy.WithSubjectDigests(a.seedDigestStrings()),
 		policy.WithInventoryLookup(lookup),
 	}
-	if a.maxSubjectFanout > 0 {
-		verifyOpts = append(verifyOpts, policy.WithMaxSubjectFanout(a.maxSubjectFanout))
-	}
-	if a.lazyWitness {
-		verifyOpts = append(verifyOpts, policy.WithLazyStepSatisfaction(true))
-	}
-	if len(a.materialManifests) > 0 {
-		verifyOpts = append(verifyOpts, policy.WithMaterialManifests(a.materialManifests))
-	}
+	verifyOpts = append(verifyOpts, a.optionalVerifyOpts()...)
 	verifyOpts = append(verifyOpts,
 		policy.WithVerifiedSource(verifiedSource),
 	)

@@ -41,6 +41,7 @@ type ErrInvalidOption = rookery.ErrInvalidOption
 type ErrCircularDependency = rookery.ErrCircularDependency
 type ErrSelfReference = rookery.ErrSelfReference
 type ErrDependencyNotVerified = rookery.ErrDependencyNotVerified
+type ErrWitnessNotBoundToCommit = rookery.ErrWitnessNotBoundToCommit
 
 // Constants
 const (
@@ -53,6 +54,7 @@ const (
 var WithVerifiedSource = rookery.WithVerifiedSource
 var WithSubjectDigests = rookery.WithSubjectDigests
 var WithSearchDepth = rookery.WithSearchDepth
+var WithCommitBinding = rookery.WithCommitBinding
 var WithAiServerURL = rookery.WithAiServerURL
 var WithAiProvider = rookery.WithAiProvider
 var NewJevProvider = rookery.NewJevProvider

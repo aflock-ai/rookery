@@ -754,13 +754,30 @@ func (s Step) validateAttestations(collectionResults []source.CollectionVerifica
 }
 
 func (s Step) validateAttestationsContext(ctx context.Context, collectionResults []source.CollectionVerificationResult, aiServerURL string, stepContext map[string]interface{}, provider AiProvider) StepResult {
+	return s.collectGated(collectionResults, func(c source.CollectionVerificationResult) (gateOutcome, PassedCollection, RejectedCollection) {
+		return s.gateOneContext(ctx, c, aiServerURL, stepContext, provider)
+	})
+}
+
+// validateAttestationsBound is the batch arm's gate loop with the verify's
+// commit binding in its path (gateBound), so the batch and streamed arms
+// apply the same per-collection verdict.
+func (s Step) validateAttestationsBound(ctx context.Context, collectionResults []source.CollectionVerificationResult, vo *verifyOptions, stepContext map[string]interface{}) StepResult {
+	return s.collectGated(collectionResults, func(c source.CollectionVerificationResult) (gateOutcome, PassedCollection, RejectedCollection) {
+		return s.gateBound(ctx, c, vo, stepContext)
+	})
+}
+
+// collectGated runs gate over each collection and sorts the verdicts into a
+// StepResult.
+func (s Step) collectGated(collectionResults []source.CollectionVerificationResult, gate func(source.CollectionVerificationResult) (gateOutcome, PassedCollection, RejectedCollection)) StepResult {
 	result := StepResult{Step: s.Name}
 	if len(collectionResults) <= 0 {
 		return result
 	}
 
 	for _, collection := range collectionResults {
-		switch outcome, pc, rc := s.gateOneContext(ctx, collection, aiServerURL, stepContext, provider); outcome {
+		switch outcome, pc, rc := gate(collection); outcome {
 		case gatePassed:
 			result.Passed = append(result.Passed, pc)
 		case gateRejected:

@@ -267,6 +267,10 @@ type verifyOptions struct {
 	// sitting in the same bundle can never be substituted for the right one.
 	materialManifests map[string][]byte
 	inventoryLookup   func(string) ([]byte, bool)
+
+	// commitBinding, when non-empty, is the commit every step witness must be
+	// bound to. Empty is the unbound zero value; see WithCommitBinding.
+	commitBinding string
 }
 
 // WithInventoryLookup resolves modern companions through the caller's existing
@@ -417,6 +421,14 @@ func checkVerifyOpts(vo *verifyOptions) error {
 			Option: "clock skew tolerance",
 			Reason: "clock skew tolerance must be non-negative",
 		}
+	}
+
+	if vo.commitBinding != "" {
+		commit, err := normalizeCommitBinding(vo.commitBinding)
+		if err != nil {
+			return ErrInvalidOption{Option: "commit binding", Reason: err.Error()}
+		}
+		vo.commitBinding = commit
 	}
 
 	return nil
@@ -926,7 +938,7 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 					passedCollections[i] = pc.Collection
 				}
 
-				stepResult = step.validateAttestationsContext(ctx, passedCollections, vo.aiServerURL, stepCtx, vo.aiProvider)
+				stepResult = step.validateAttestationsBound(ctx, passedCollections, vo, stepCtx)
 				stepResult.Rejected = append(stepResult.Rejected, functionaryCheckResults.Rejected...)
 				// Hub-suppressed candidates are reported, never silently dropped:
 				// an operator whose expected evidence was demoted as a hub sees
@@ -1280,7 +1292,7 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 			ac.verdict = streamedDeferredGate
 			ac.deferred = compactAwaitingGate(triaged)
 		default:
-			switch outcome, pc, rc := step.gateOneContext(ctx, triaged, vo.aiServerURL, stepCtx, vo.aiProvider); outcome {
+			switch outcome, pc, rc := step.gateBound(ctx, triaged, vo, stepCtx); outcome {
 			case gatePassed:
 				ac.verdict, ac.pc = streamedGatePassed, pc
 			case gateRejected:
@@ -1346,7 +1358,7 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 				// source, so this is unreachable for a real candidate.
 				return StepResult{}, 0, false, rerr
 			}
-			switch outcome, pc, rc := step.gateOneContext(ctx, full, vo.aiServerURL, stepCtx, vo.aiProvider); outcome {
+			switch outcome, pc, rc := step.gateBound(ctx, full, vo, stepCtx); outcome {
 			case gatePassed:
 				result.Passed = append(result.Passed, pc)
 			case gateRejected:

@@ -49,3 +49,4 @@ var VerifyWithAiServerURL = workflow.VerifyWithAiServerURL
 var VerifyWithKMSProviderOptions = workflow.VerifyWithKMSProviderOptions
 var VerifyWithMaxSubjectFanout = workflow.VerifyWithMaxSubjectFanout
 var VerifyWithLazyWitness = workflow.VerifyWithLazyWitness
+var VerifyWithCommitBinding = workflow.VerifyWithCommitBinding

@@ -28,6 +28,7 @@ type capabilityRecorder struct {
 	lazy            bool
 	manifests       map[string][]byte
 	inventoryLookup func(string) ([]byte, bool)
+	commit          string
 }
 
 func (c *capabilityRecorder) Name() string                                 { return "recorder" }
@@ -38,6 +39,7 @@ func (c *capabilityRecorder) Schema() *jsonschema.Schema                   { ret
 func (c *capabilityRecorder) SetMaxSubjectFanout(n int)                    { c.fanout = n }
 func (c *capabilityRecorder) SetLazyWitness(enabled bool)                  { c.lazy = enabled }
 func (c *capabilityRecorder) SetMaterialManifests(m map[string][]byte)     { c.manifests = m }
+func (c *capabilityRecorder) SetCommitBinding(commit string)               { c.commit = commit }
 func (c *capabilityRecorder) SetInventoryLookup(lookup func(string) ([]byte, bool)) {
 	c.inventoryLookup = lookup
 }
@@ -57,14 +59,19 @@ func TestApplyOptionalVerifyCapabilitiesClearsStateTheSecondCallDoesNotSupply(t 
 		lazyWitness:       true,
 		materialManifests: map[string][]byte{"deadbeef": []byte(`{}`)},
 		inventoryLookup:   func(string) ([]byte, bool) { return nil, false },
+		commitBinding:     "3333333333333333333333333333333333333333",
 	}
-	applyOptionalVerifyCapabilities(rec, &first)
-	if rec.fanout != 7 || !rec.lazy || len(rec.manifests) != 1 || rec.inventoryLookup == nil {
+	if err := applyOptionalVerifyCapabilities(rec, &first); err != nil {
+		t.Fatal(err)
+	}
+	if rec.fanout != 7 || !rec.lazy || len(rec.manifests) != 1 || rec.inventoryLookup == nil || rec.commit != first.commitBinding {
 		t.Fatalf("first call did not apply every knob: %+v", rec)
 	}
 
 	second := verifyOptions{}
-	applyOptionalVerifyCapabilities(rec, &second)
+	if err := applyOptionalVerifyCapabilities(rec, &second); err != nil {
+		t.Fatal(err)
+	}
 	if rec.fanout != 0 {
 		t.Errorf("fan-out cap survived a call that did not set it: %d", rec.fanout)
 	}
@@ -76,5 +83,40 @@ func TestApplyOptionalVerifyCapabilitiesClearsStateTheSecondCallDoesNotSupply(t 
 	}
 	if rec.inventoryLookup != nil {
 		t.Error("inventory lookup survived a call that did not supply it")
+	}
+	if rec.commit != "" {
+		t.Errorf("commit binding survived a call that did not set it: %q", rec.commit)
+	}
+}
+
+// bareAttestor implements none of the optional capabilities: a third-party
+// policyverify implementation that predates them.
+type bareAttestor struct{}
+
+func (bareAttestor) Name() string                                 { return "bare" }
+func (bareAttestor) Type() string                                 { return "https://example.test/bare" }
+func (bareAttestor) RunType() attestation.RunType                 { return attestation.VerifyRunType }
+func (bareAttestor) Attest(*attestation.AttestationContext) error { return nil }
+func (bareAttestor) Schema() *jsonschema.Schema                   { return nil }
+
+// The other knobs degrade to "off" on an attestor that cannot take them. The
+// commit binding must not: a caller that asked for a commit-bound verify and
+// got an unbound one would sign a verdict over another commit's evidence
+// (HSEC1). Refuse instead. The zero value asks for nothing and is accepted.
+func TestApplyOptionalVerifyCapabilitiesRefusesAnUnsupportedCommitBinding(t *testing.T) {
+	if err := applyOptionalVerifyCapabilities(bareAttestor{}, &verifyOptions{}); err != nil {
+		t.Fatalf("an unbound verify must not require the capability: %v", err)
+	}
+	err := applyOptionalVerifyCapabilities(bareAttestor{}, &verifyOptions{commitBinding: "3333333333333333333333333333333333333333"})
+	if err == nil {
+		t.Fatal("a commit binding the attestor cannot take must be refused, not dropped")
+	}
+}
+
+func TestVerifyWithCommitBindingSetsTheOption(t *testing.T) {
+	vo := verifyOptions{}
+	VerifyWithCommitBinding("3333333333333333333333333333333333333333")(&vo)
+	if vo.commitBinding != "3333333333333333333333333333333333333333" {
+		t.Fatalf("VerifyWithCommitBinding did not set the option: %q", vo.commitBinding)
 	}
 }
