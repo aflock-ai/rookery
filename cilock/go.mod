@@ -92,6 +92,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/product => ../plugins/att
 
 replace github.com/aflock-ai/rookery/plugins/attestors/sarif => ../plugins/attestors/sarif
 
+replace github.com/aflock-ai/rookery/plugins/attestors/structured-data => ../plugins/attestors/structured-data
+
 replace github.com/aflock-ai/rookery/plugins/attestors/sbom => ../plugins/attestors/sbom
 
 replace github.com/aflock-ai/rookery/plugins/attestors/trivy => ../plugins/attestors/trivy
