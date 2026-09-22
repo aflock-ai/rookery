@@ -657,16 +657,26 @@ func TestVerify_VerifyMissingOptions(t *testing.T) {
 		assert.Contains(t, err.Error(), "subject digest")
 	})
 
-	t.Run("zero search depth uses default", func(t *testing.T) {
-		// Default searchDepth is 3, but setting it to 0 should be rejected
+	t.Run("search depth is accepted and ignored", func(t *testing.T) {
+		// Verification searches only the caller's seeds and never follows
+		// relationship edges, so there is no depth to validate: any value,
+		// zero and negative included, must give the verdict of no option at all.
 		src := &mockVerifiedSrc{resultsByStep: map[string][]source.CollectionVerificationResult{}}
-		_, _, err := p.Verify(context.Background(),
+		wantPass, wantResults, wantErr := p.Verify(context.Background(),
 			WithVerifiedSource(src),
 			WithSubjectDigests([]string{"sha256:abc"}),
-			WithSearchDepth(0),
 		)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "search depth")
+		require.NoError(t, wantErr)
+		for _, depth := range []int{0, 1, 3, -1} {
+			pass, results, err := p.Verify(context.Background(),
+				WithVerifiedSource(src),
+				WithSubjectDigests([]string{"sha256:abc"}),
+				WithSearchDepth(depth),
+			)
+			require.NoError(t, err, "depth %d", depth)
+			assert.Equal(t, wantPass, pass, "depth %d", depth)
+			assert.Equal(t, len(wantResults), len(results), "depth %d", depth)
+		}
 	})
 }
 
