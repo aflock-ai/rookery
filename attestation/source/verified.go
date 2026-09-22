@@ -17,6 +17,7 @@ package source
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -597,6 +598,12 @@ func (s *VerifiedSource) verifyCandidate(toVerify CollectionEnvelope, subjectDig
 	}
 }
 
+// ErrExternalSubjectNotRequested marks a bare statement whose SIGNED subjects
+// do not name any requested digest (the artifact-substitution guard). Such a
+// statement is not about the verify's subject at all, so the policy engine
+// treats it as no candidate rather than as a rejected one (errors.Is).
+var ErrExternalSubjectNotRequested = errors.New("external attestation subject does not match requested artifact digest(s): artifact-substitution guard")
+
 // SearchByPredicateType delegates to the underlying Sourcer and then runs
 // DSSE signature verification on every returned envelope, populating
 // StatementEnvelope.Verifiers with successfully-verified verifiers.
@@ -630,7 +637,7 @@ func (s *VerifiedSource) SearchByPredicateType(ctx context.Context, predicateTyp
 		} else if matches, merr := payloadMatchesSubjects(toVerify.Envelope.Payload, subjectDigests); merr != nil || !matches {
 			// Artifact-substitution guard: read subjects from the signature-verified
 			// payload, never the source-populated Statement field.
-			toVerify.Errors = append(toVerify.Errors, fmt.Errorf("external attestation subject does not match requested artifact digest(s): artifact-substitution guard"))
+			toVerify.Errors = append(toVerify.Errors, ErrExternalSubjectNotRequested)
 			passed = nil
 		}
 		toVerify.Verifiers = passed

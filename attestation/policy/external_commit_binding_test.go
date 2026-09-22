@@ -159,10 +159,18 @@ func externalCandidateRefs(er ExternalResult) []string {
 	return out
 }
 
-// externalUnbound maps each rejected external reference to its binding refusal.
+// externalUnbound maps each unbound external reference to its binding refusal.
+// A binding refusal is recorded in Unbound, never Rejected: a candidate not
+// about the commit is not evidence, so it cannot fail the external either.
 func externalUnbound(er ExternalResult) map[string]ErrExternalNotBoundToCommit {
 	out := map[string]ErrExternalNotBoundToCommit{}
 	for _, r := range er.Rejected {
+		var nb ErrExternalNotBoundToCommit
+		if errors.As(r.Reason, &nb) {
+			panic("a binding refusal was recorded as a rejection: " + r.Envelope.Reference)
+		}
+	}
+	for _, r := range er.Unbound {
 		var nb ErrExternalNotBoundToCommit
 		if errors.As(r.Reason, &nb) {
 			out[r.Envelope.Reference] = nb

@@ -329,13 +329,50 @@ func (e ErrUnknownExternalAttestation) Error() string {
 // ErrMissingExternalAttestation is returned when an external attestation is
 // declared as Required but no DSSE envelope matching the predicate type +
 // policy seed subjects could be found in the attestation source.
+//
+// Unbound counts candidates the search returned that are not about the
+// verify's subject (another commit, or a subject the caller did not ask for):
+// they are not evidence, so they do not turn "not found" into "rejected".
 type ErrMissingExternalAttestation struct {
 	Name          string
 	PredicateType string
+	Unbound       int
 }
 
 func (e ErrMissingExternalAttestation) Error() string {
+	if e.Unbound > 0 {
+		return fmt.Sprintf("required external attestation %q (predicateType=%v) not found (%d candidate(s) not about the evaluated subject were ignored)",
+			e.Name, e.PredicateType, e.Unbound)
+	}
 	return fmt.Sprintf("required external attestation %q (predicateType=%v) not found", e.Name, e.PredicateType)
+}
+
+// ErrExternalAssignmentsExceedBound refuses a verify in which not every
+// assignment of external candidates could be evaluated and none of those
+// tried made the policy pass. An untried assignment could have passed, so the
+// engine has no answer: this is a refusal, never a FAILED. Two causes reach
+// it: two or more externals with several candidates each whose product
+// exceeds maxExternalAssignments, and an evidence source that cannot be
+// forked for the next assignment (SourceNotForkable), which bounds the walk
+// at the assignments already run.
+type ErrExternalAssignmentsExceedBound struct {
+	// Externals are the external names whose candidates were combined, sorted.
+	Externals   []string
+	Assignments int
+	// Bound is how many assignments were tried.
+	Bound int
+	// SourceNotForkable: the walk stopped because the source could not give
+	// the next assignment a faithful fork, not at maxExternalAssignments.
+	SourceNotForkable bool
+}
+
+func (e ErrExternalAssignmentsExceedBound) Error() string {
+	if e.SourceNotForkable {
+		return fmt.Sprintf("external attestations %s have %d candidate combinations; the evidence source cannot be forked to try the rest, the first %d were tried and none passed, so the verify has no answer",
+			strings.Join(e.Externals, ", "), e.Assignments, e.Bound)
+	}
+	return fmt.Sprintf("external attestations %s have %d candidate combinations; the first %d were tried and none passed, so the verify has no answer",
+		strings.Join(e.Externals, ", "), e.Assignments, e.Bound)
 }
 
 // ErrExternalAttestationRejected is returned when an external attestation is

@@ -632,7 +632,9 @@ func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (
 		return false, nil, externalResults, err
 	}
 
-	stepResults, err := p.verifySteps(ctx, vo, trustBundles, externalResults)
+	// Once per assignment of the externals the steps read, when a choice of
+	// candidate exists; otherwise once, as before (external_assignments.go).
+	stepResults, err := p.verifyStepsOverExternals(ctx, vo, trustBundles, externalResults)
 	// Candidate rejection records are not a completed verdict when the
 	// caller's evaluation budget expired while a provider was answering.
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -676,8 +678,11 @@ func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (
 
 // An alternate passing witness may satisfy an existential step. Without one,
 // an unanswered required question is a refusal, not a signed negative finding.
+// Steps and externals are walked in name order so the refusal reported is the
+// same on every run.
 func refusedAIResults(steps map[string]StepResult, externals map[string]ExternalResult) error {
-	for _, result := range steps {
+	for _, name := range sortedNames(steps) {
+		result := steps[name]
 		if result.HasPassed() {
 			continue
 		}
@@ -688,7 +693,8 @@ func refusedAIResults(steps map[string]StepResult, externals map[string]External
 			}
 		}
 	}
-	for _, result := range externals {
+	for _, name := range sortedNames(externals) {
+		result := externals[name]
 		if result.Skipped || len(result.Passed) > 0 {
 			continue
 		}
@@ -1542,31 +1548,43 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 		return results, nil
 	}
 
-	for name, ext := range p.ExternalAttestations {
+	// One search per predicate type, shared by every external of that type: a
+	// source may return each statement once per verify (ArchivistaSource's
+	// predicate seen-set), so a second search for the same type would judge
+	// the second external on an empty candidate set.
+	searched := make(map[string][]source.StatementEnvelope, len(p.ExternalAttestations))
+
+	// Name order: the first failing required external is the one reported,
+	// and a map range named a different one on every run.
+	for _, name := range sortedNames(p.ExternalAttestations) {
+		ext := p.ExternalAttestations[name]
 		er := ExternalResult{Name: name}
 
-		envelopes, err := vo.verifiedSource.SearchByPredicateType(ctx, []string{ext.PredicateType}, vo.subjectDigests)
-		if err != nil {
-			return results, fmt.Errorf("failed to search external attestation %q: %w", name, err)
-		}
-
-		if len(envelopes) == 0 {
-			if ext.Required {
-				results[name] = er
-				return results, ErrMissingExternalAttestation{Name: name, PredicateType: ext.PredicateType}
+		envelopes, ok := searched[ext.PredicateType]
+		if !ok {
+			var err error
+			envelopes, err = vo.verifiedSource.SearchByPredicateType(ctx, []string{ext.PredicateType}, vo.subjectDigests)
+			if err != nil {
+				return results, fmt.Errorf("failed to search external attestation %q: %w", name, err)
 			}
-			er.Skipped = true
-			results[name] = er
-			continue
+			searched[ext.PredicateType] = envelopes
 		}
 
 		for _, env := range envelopes {
 			// If the source reported envelope-level errors (e.g. signature
-			// verification failure), surface them as a rejection.
+			// verification failure), surface them as a rejection. A statement
+			// whose signed subjects do not name the requested subject (the
+			// verified source's substitution guard) is not about this verify
+			// at all: it is unbound, not rejected.
 			if len(env.Errors) > 0 && len(env.Verifiers) == 0 {
+				reason := errors.Join(env.Errors...)
+				if errors.Is(reason, source.ErrExternalSubjectNotRequested) {
+					er.Unbound = append(er.Unbound, RejectedExternal{Envelope: env, Reason: reason})
+					continue
+				}
 				er.Rejected = append(er.Rejected, RejectedExternal{
 					Envelope: env,
-					Reason:   errors.Join(env.Errors...),
+					Reason:   reason,
 				})
 				continue
 			}
@@ -1575,9 +1593,11 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 			// envelope not bound to the commit under evaluation is not evidence
 			// for this verify, so it can neither satisfy the external nor reach
 			// a step's input.external (and is not disclosed to an AI provider).
+			// Nor can it FAIL the external: it is unbound, and an external
+			// whose every candidate is unbound is treated as not found.
 			if vo.commitBinding != "" {
 				if err := checkExternalCommitBinding(name, env, vo.commitBinding); err != nil {
-					er.Rejected = append(er.Rejected, RejectedExternal{Envelope: env, Reason: err})
+					er.Unbound = append(er.Unbound, RejectedExternal{Envelope: env, Reason: err})
 					continue
 				}
 			}
@@ -1660,14 +1680,27 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 			})
 		}
 
-		// Passed count = 0 AND required → hard failure. Two sub-cases:
-		// (a) no envelopes were ever found (already handled at line ~593
-		//     where we return ErrMissingExternalAttestation before the
-		//     envelope loop). If we're here, len(envelopes) > 0.
-		// (b) envelopes were found but every one was rejected (functionary
-		//     mismatch, rego deny, ai deny). Returning
-		//     ErrMissingExternalAttestation here would mask the real deny
-		//     reason. Surface the rejection reasons instead.
+		// Canonical order (external_assignments.go): the first passed
+		// candidate, the recorded lists and the rejection text are functions
+		// of content, not of the order the source returned rows in.
+		sortExternalResult(&er)
+
+		// Nothing about this verify's subject was found: every candidate, if
+		// any, was unbound. Optional → Skipped; required → missing.
+		if len(er.Passed) == 0 && len(er.Rejected) == 0 {
+			if ext.Required {
+				results[name] = er
+				return results, ErrMissingExternalAttestation{Name: name, PredicateType: ext.PredicateType, Unbound: len(er.Unbound)}
+			}
+			er.Skipped = true
+			results[name] = er
+			continue
+		}
+
+		// Passed count = 0 AND required, with candidates found and every one
+		// rejected (functionary mismatch, signature, rego deny, ai deny).
+		// Returning ErrMissingExternalAttestation here would mask the real
+		// deny reason. Surface the rejection reasons instead.
 		if len(er.Passed) == 0 && ext.Required {
 			results[name] = er
 			reasons := make([]error, 0, len(er.Rejected))

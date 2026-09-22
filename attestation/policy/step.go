@@ -426,10 +426,17 @@ type RejectedCollection struct {
 // Skipped is true when the external attestation was not required and no
 // matching envelope was found — a legitimate "pass" that nevertheless
 // contributes nothing to downstream Rego input.
+//
+// Unbound holds candidates the search returned that are not about the verify's
+// subject: refused by the commit binding or by the verified source's
+// substitution guard. They are kept for diagnostics and never count as found,
+// so an external whose every candidate is unbound is Skipped (or missing, when
+// required) exactly as if the search had returned nothing.
 type ExternalResult struct {
 	Name     string
 	Passed   []PassedExternal
 	Rejected []RejectedExternal
+	Unbound  []RejectedExternal `json:"Unbound,omitempty"`
 	Skipped  bool
 }
 

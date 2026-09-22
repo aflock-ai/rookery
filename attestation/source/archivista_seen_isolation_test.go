@@ -172,7 +172,9 @@ func TestArchivistaSource_EachSearchKindKeepsItsOwnExclusionSet(t *testing.T) {
 // NOT search entry points. It is empty today because every exported method is
 // one; it exists so the guard below can be exhaustive over the type rather
 // than over a name prefix.
-var notASearchKind = map[string]string{}
+var notASearchKind = map[string]string{
+	"Fork": "returns a new source with empty seen-sets and memo; it searches nothing (fork_test.go pins the empty state)",
+}
 
 // TestSearchKinds_CoverEverySearchEntryPoint is what makes the sweep above a
 // SWEEP rather than two hand-picked cases: it checks that searchKinds()

@@ -29,7 +29,11 @@ import (
 // Safe for concurrent use.
 type RecordingSource struct {
 	inner Sourcer
+	// sink is shared with every Fork, so a bundle holds what any run consulted.
+	sink *recordingSink
+}
 
+type recordingSink struct {
 	mu        sync.Mutex
 	seen      map[string]struct{}
 	envelopes []dsse.Envelope
@@ -38,7 +42,7 @@ type RecordingSource struct {
 func NewRecordingSource(inner Sourcer) *RecordingSource {
 	return &RecordingSource{
 		inner: inner,
-		seen:  make(map[string]struct{}),
+		sink:  &recordingSink{seen: make(map[string]struct{})},
 	}
 }
 
@@ -47,14 +51,14 @@ func (r *RecordingSource) Search(ctx context.Context, collectionName string, sub
 	if err != nil {
 		return out, err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.sink.mu.Lock()
+	defer r.sink.mu.Unlock()
 	for _, ce := range out {
-		if _, ok := r.seen[ce.Reference]; ok {
+		if _, ok := r.sink.seen[ce.Reference]; ok {
 			continue
 		}
-		r.seen[ce.Reference] = struct{}{}
-		r.envelopes = append(r.envelopes, ce.Envelope)
+		r.sink.seen[ce.Reference] = struct{}{}
+		r.sink.envelopes = append(r.sink.envelopes, ce.Envelope)
 	}
 	return out, nil
 }
@@ -64,23 +68,23 @@ func (r *RecordingSource) SearchByPredicateType(ctx context.Context, predicateTy
 	if err != nil {
 		return out, err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.sink.mu.Lock()
+	defer r.sink.mu.Unlock()
 	for _, se := range out {
-		if _, ok := r.seen[se.Reference]; ok {
+		if _, ok := r.sink.seen[se.Reference]; ok {
 			continue
 		}
-		r.seen[se.Reference] = struct{}{}
-		r.envelopes = append(r.envelopes, se.Envelope)
+		r.sink.seen[se.Reference] = struct{}{}
+		r.sink.envelopes = append(r.sink.envelopes, se.Envelope)
 	}
 	return out, nil
 }
 
 // Envelopes returns a copy of every envelope captured so far.
 func (r *RecordingSource) Envelopes() []dsse.Envelope {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]dsse.Envelope, len(r.envelopes))
-	copy(out, r.envelopes)
+	r.sink.mu.Lock()
+	defer r.sink.mu.Unlock()
+	out := make([]dsse.Envelope, len(r.sink.envelopes))
+	copy(out, r.sink.envelopes)
 	return out
 }
