@@ -18,8 +18,14 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/redact"
 	"github.com/gobwas/glob"
 )
+
+// obfuscatedValue is what a value whose key matches the sensitive list
+// becomes. It is the URL-credential marker too, so a reader has one token to
+// look for.
+const obfuscatedValue = redact.Marker
 
 // ObfuscateEnvironmentArray expects an array of strings representing environment variables.  Each element of the array is expected to be in the format of "KEY=VALUE".
 // obfuscateList is the list of elements to obfuscate from variables, and for each element of variables that does not appear in the obfuscateList onAllowed will be called.
@@ -51,7 +57,7 @@ func ObfuscateEnvironmentArray(variables []string, obfuscateList map[string]stru
 		if _, inExcludKeys := excludeKeys[key]; !inExcludKeys {
 			// Case-insensitive exact match for non-glob entries.
 			if _, inObfuscateList := obfuscateListUpper[strings.ToUpper(key)]; inObfuscateList {
-				val = "******"
+				val = obfuscatedValue
 			}
 
 			for _, g := range obfuscateGlobList {
@@ -62,11 +68,12 @@ func ObfuscateEnvironmentArray(variables []string, obfuscateList map[string]stru
 					continue
 				}
 				if matched {
-					val = "******"
+					val = obfuscatedValue
 				}
 			}
 		}
 
-		onAllowed(key, val, v)
+		// Outside the exclude check on purpose: see redact.URLCredentials.
+		onAllowed(key, redact.URLCredentials(val), v)
 	}
 }

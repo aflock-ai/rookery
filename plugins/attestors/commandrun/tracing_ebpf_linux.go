@@ -1608,7 +1608,7 @@ func enrichFromProc(pctx *ptraceContext, procInfo *ProcessInfo) {
 	// /proc/<pid>/cmdline: argv joined by NULs.
 	if procInfo.Cmdline == "" {
 		if data, err := os.ReadFile(procDir + "/cmdline"); err == nil { //nolint:gosec // G304: see above
-			procInfo.Cmdline = cleanString(string(data))
+			procInfo.Cmdline = procCmdline(string(data))
 		}
 	}
 

@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/redact"
 	"github.com/gobwas/glob"
 )
 
@@ -86,7 +87,8 @@ func FilterEnvironmentArray(variables []string, blockList map[string]struct{}, e
 		}
 
 		if !filterOut {
-			onAllowed(key, val, v)
+			// Outside the exclude check on purpose: see redact.URLCredentials.
+			onAllowed(key, redact.URLCredentials(val), v)
 		}
 	}
 }

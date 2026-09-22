@@ -27,6 +27,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/redact"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/codebuild"
@@ -172,7 +173,8 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 	a.BuildInfo.Initiator = os.Getenv(envCodeBuildInitiator)
 	a.BuildInfo.SourceVersion = os.Getenv(envCodeBuildResolvedSrcVer)
-	a.BuildInfo.SourceRepo = os.Getenv(envCodeBuildSourceRepo)
+	// A token in a clone URL is a credential; see redact.URLCredentials.
+	a.BuildInfo.SourceRepo = redact.URLCredentials(os.Getenv(envCodeBuildSourceRepo))
 	a.BuildInfo.BatchBuildID = os.Getenv(envCodeBuildBatchBuildID)
 	a.BuildInfo.WebhookEvent = os.Getenv(envCodeBuildWebhookEvent)
 	a.BuildInfo.WebhookHeadRef = os.Getenv(envCodeBuildWebhookHeadRef)

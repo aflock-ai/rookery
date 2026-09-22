@@ -32,6 +32,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/redact"
 	"github.com/invopop/jsonschema"
 )
 
@@ -2873,8 +2874,8 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		}
 	}
 
-	r.Stdout = redactSensitiveEnvValues(stdoutBuffer.String())
-	r.Stderr = redactSensitiveEnvValues(stderrBuffer.String())
+	r.Stdout = redactOutput(stdoutBuffer.String())
+	r.Stderr = redactOutput(stderrBuffer.String())
 	// Same leak via sibling SIGNED sinks. Two more env-derived string fields
 	// reach the v0.2 predicate (signed + uploaded to Archivista) verbatim:
 	//
@@ -3011,14 +3012,76 @@ func redactSensitiveEnvValues(s string) string {
 	if s == "" {
 		return s
 	}
+	for _, val := range sensitiveEnvValues() {
+		s = strings.ReplaceAll(s, val, redactedOutputValue)
+	}
+	return s
+}
+
+// sensitiveEnvValues returns the values redactSensitiveEnvValues masks, in
+// the order it masks them.
+func sensitiveEnvValues() []string {
+	var vals []string
 	for _, kv := range os.Environ() {
 		key, val, found := strings.Cut(kv, "=")
 		if !found || len(val) < minRedactableValueLen || !isSensitiveEnvKey(key) {
 			continue
 		}
-		s = strings.ReplaceAll(s, val, redactedOutputValue)
+		vals = append(vals, val)
 	}
-	return s
+	return vals
+}
+
+// redactSensitiveEnvValuesInCmdline is redactSensitiveEnvValues over the
+// bytes of /proc/<pid>/cmdline, argv joined by NULs, where a NUL matches a
+// space: it masks exactly what redactSensitiveEnvValues masks in the line
+// with its NULs turned into spaces, which is how a Cmdline was scrubbed
+// before its elements were read apart. A value the shell split into two
+// elements ("https://u:p@host tail" expanded unquoted) is masked whole, and
+// the elements it spans become one.
+func redactSensitiveEnvValuesInCmdline(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	spaced := strings.ReplaceAll(raw, "\x00", " ")
+	for _, val := range sensitiveEnvValues() {
+		if !strings.Contains(spaced, val) {
+			continue
+		}
+		var masked, maskedSpaced strings.Builder
+		pos := 0
+		for {
+			i := strings.Index(spaced[pos:], val)
+			if i < 0 {
+				break
+			}
+			i += pos
+			masked.WriteString(raw[pos:i])
+			masked.WriteString(redactedOutputValue)
+			maskedSpaced.WriteString(spaced[pos:i])
+			maskedSpaced.WriteString(redactedOutputValue)
+			pos = i + len(val)
+		}
+		masked.WriteString(raw[pos:])
+		maskedSpaced.WriteString(spaced[pos:])
+		raw, spaced = masked.String(), maskedSpaced.String()
+	}
+	return raw
+}
+
+// redactOutput is the scrub every recorded string of command text goes
+// through: stdout, stderr, the top-level argv and each traced Cmdline. It
+// takes out two things and changes no other byte:
+//
+//   - the value of a sensitive environment variable, found by the variable's
+//     NAME (redactSensitiveEnvValues);
+//   - the userinfo of a URL, found by its SHAPE (redact.URLCredentialsInText).
+//     A credentialed proxy lives under HTTP_PROXY, which is not a secret
+//     name, and a password typed into "curl -x http://u:pw@proxy" was never
+//     in the environment at all. This is the rule the environment attestor
+//     applies to the values it records, read word by word over text.
+func redactOutput(s string) string {
+	return redact.URLCredentialsInText(redactSensitiveEnvValues(s))
 }
 
 // redactArgv masks sensitive env-var values out of an argv slice in place. Used
@@ -3026,9 +3089,12 @@ func redactSensitiveEnvValues(s string) string {
 // starts and which ToV02 signs as the predicate's `cmd`. Element 0 is a program
 // path; the conservative helper leaves it untouched (a path won't equal a >=8
 // char secret value), so passing the whole slice is safe.
+//
+// An element that is a URL is read whole (redact.URLCredentialsInArg), so a
+// WHATWG userinfo with a space in it ("http://u:my pw@proxy:3128") goes too.
 func redactArgv(argv []string) {
 	for i := range argv {
-		argv[i] = redactSensitiveEnvValues(argv[i])
+		argv[i] = redact.URLCredentialsInArg(redactSensitiveEnvValues(argv[i]))
 	}
 }
 
@@ -3040,9 +3106,14 @@ func redactArgv(argv []string) {
 // evidence — the same leak the stdout/stderr redaction closes, via a sibling
 // sink. Applied to ALL processes, not just the top one. Uses the same
 // conservative helper for consistency.
+//
+// By here a Cmdline is one line of text, its argv elements joined by spaces.
+// The sensitive values were masked, and then the URL userinfo of each element
+// taken out, before that join, where the elements were still apart
+// (procCmdline); this pass reads the line as text.
 func redactProcessCmdlines(processes []ProcessInfo) {
 	for i := range processes {
-		processes[i].Cmdline = redactSensitiveEnvValues(processes[i].Cmdline)
+		processes[i].Cmdline = redactOutput(processes[i].Cmdline)
 	}
 }
 

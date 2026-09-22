@@ -25,6 +25,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/redact"
 	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/invopop/jsonschema"
 )
@@ -155,10 +156,14 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		return ErrNotGitlab{}
 	}
 
-	a.CIServerUrl = os.Getenv("CI_SERVER_URL")
+	// The recorded URLs lose a login in their userinfo (see
+	// redact.URLCredentials). The JWKS fetch is built from the server URL as
+	// given, and the jwt attestor redacts its own recorded copy.
+	serverURL := os.Getenv("CI_SERVER_URL")
+	a.CIServerUrl = redact.URLCredentials(serverURL)
 	jwksUrl := os.Getenv("WITNESS_GITLAB_JWKS_URL")
 	if jwksUrl == "" {
-		jwksUrl = fmt.Sprintf("%s/oauth/discovery/keys", a.CIServerUrl)
+		jwksUrl = fmt.Sprintf("%s/oauth/discovery/keys", serverURL)
 	}
 
 	var jwtString string
@@ -185,11 +190,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	a.JobImage = os.Getenv("CI_JOB_IMAGE")
 	a.JobName = os.Getenv("CI_JOB_NAME")
 	a.JobStage = os.Getenv("CI_JOB_STAGE")
-	a.JobUrl = os.Getenv("CI_JOB_URL")
+	a.JobUrl = redact.URLCredentials(os.Getenv("CI_JOB_URL"))
 	a.PipelineID = os.Getenv("CI_PIPELINE_ID")
-	a.PipelineUrl = os.Getenv("CI_PIPELINE_URL")
+	a.PipelineUrl = redact.URLCredentials(os.Getenv("CI_PIPELINE_URL"))
 	a.ProjectID = os.Getenv("CI_PROJECT_ID")
-	a.ProjectUrl = os.Getenv("CI_PROJECT_URL")
+	a.ProjectUrl = redact.URLCredentials(os.Getenv("CI_PROJECT_URL"))
 	a.RunnerID = os.Getenv("CI_RUNNER_ID")
 	a.CIHost = os.Getenv("CI_SERVER_HOST")
 

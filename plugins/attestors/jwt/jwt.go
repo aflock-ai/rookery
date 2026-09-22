@@ -16,12 +16,15 @@ package jwt
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/redact"
 	"github.com/invopop/jsonschema"
 	"gopkg.in/go-jose/go-jose.v2"
 	"gopkg.in/go-jose/go-jose.v2/jwt"
@@ -177,12 +180,12 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	jwksClient := &http.Client{Timeout: 30 * time.Second}
 	resp, err := jwksClient.Get(a.jwksUrl)
 	if err != nil {
-		return fmt.Errorf("error fetching jwks: %w", err)
+		return jwksFetchError(a.jwksUrl, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code from JWKS endpoint %s: %d", a.jwksUrl, resp.StatusCode)
+		return fmt.Errorf("unexpected status code from JWKS endpoint %s: %d", redact.URLCredentials(a.jwksUrl), resp.StatusCode)
 	}
 
 	// Limit JWKS response to 1MB to prevent OOM from a malicious endpoint.
@@ -222,11 +225,60 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	}
 
 	a.VerifiedBy = VerificationInfo{
-		JWKSUrl: a.jwksUrl,
+		// The fetch above used the URL as configured; the recorded copy
+		// loses a login in its userinfo (see redact.URLCredentials).
+		JWKSUrl: redact.URLCredentials(a.jwksUrl),
 		JWK:     possibleJwk[0],
 	}
 
 	return nil
+}
+
+// jwksFetchError is the error for a failed fetch of rawURL. It names the
+// endpoint by redact.URLCredentials: net/http's *url.Error takes out only the
+// password, so a token in the username slot would reach logs and the run's
+// failure output.
+//
+// The error net/http wraps is text taken from the URL too. url.Parse quotes
+// the bytes it refused ("invalid port \":SECRET\" after host" for
+// "https://ci:SECRET/part@host/keys", "invalid URL escape \"%zz\"" for a
+// password that holds one), and a dial names the host and port Go read, which,
+// where the parsers do not agree where a userinfo ends, is part of it
+// ("http://127.0.0.1:1/x@host" is user "127.0.0.1" and password "1/x" to
+// Python's proxy parser). So that error is kept only when it can name nothing
+// the redacted endpoint does not: when the URL holds no credential, or when Go
+// parsed the URL and dials the host the redacted endpoint still names.
+// Otherwise only its kind is said, and it is not wrapped, so no caller that
+// walks the chain prints it either.
+func jwksFetchError(rawURL string, err error) error {
+	endpoint := redact.URLCredentials(rawURL)
+	op := "Get"
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		op, err = urlErr.Op, urlErr.Err
+	}
+	if endpoint == rawURL || (op != "parse" && dialsNamedHost(rawURL, endpoint)) {
+		return fmt.Errorf("error fetching jwks: %s %q: %w", op, endpoint, err)
+	}
+	kind := "the request failed"
+	switch {
+	case op == "parse":
+		kind = "the URL does not parse"
+	case urlErr != nil && urlErr.Timeout():
+		kind = "the request timed out"
+	}
+	return fmt.Errorf("error fetching jwks: %s %q: %s (the detail is withheld because it can quote the URL's credential)", op, endpoint, kind)
+}
+
+// dialsNamedHost reports whether Go dials, for rawURL, the host that its
+// redacted form endpoint names.
+func dialsNamedHost(rawURL, endpoint string) bool {
+	dialed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	named, err := url.Parse(endpoint)
+	return err == nil && named.Host != "" && named.Host == dialed.Host
 }
 
 func (a *Attestor) Name() string {

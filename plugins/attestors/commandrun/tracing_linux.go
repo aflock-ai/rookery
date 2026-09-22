@@ -576,7 +576,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 
 		cmdline, err := os.ReadFile(cmdlineLocation) //nolint:gosec // G304: reading /proc/<pid>/cmdline
 		if err == nil {
-			procInfo.Cmdline = cleanString(string(cmdline))
+			procInfo.Cmdline = procCmdline(string(cmdline))
 		}
 
 		p.measureExecutedImage(procInfo, exeLocation, program)

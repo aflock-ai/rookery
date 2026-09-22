@@ -25,6 +25,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/redact"
 	"github.com/invopop/jsonschema"
 )
 
@@ -115,10 +116,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	a.BuildID = os.Getenv("BUILD_ID")
 	a.BuildNumber = os.Getenv("BUILD_NUMBER")
 	a.BuildTag = os.Getenv("BUILD_TAG")
-	a.PipelineUrl = os.Getenv("BUILD_URL")
+	// A login in a Jenkins URL is a credential; see redact.URLCredentials.
+	a.PipelineUrl = redact.URLCredentials(os.Getenv("BUILD_URL"))
 	a.ExecutorNumber = os.Getenv("EXECUTOR_NUMBER")
 	a.JavaHome = os.Getenv("JAVA_HOME")
-	a.JenkinsUrl = os.Getenv("JENKINS_URL")
+	a.JenkinsUrl = redact.URLCredentials(os.Getenv("JENKINS_URL"))
 	a.JobName = os.Getenv("JOB_NAME")
 	a.NodeName = os.Getenv("NODE_NAME")
 	a.Workspace = os.Getenv("WORKSPACE")

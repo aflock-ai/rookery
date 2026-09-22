@@ -21,7 +21,7 @@ The struct exposes two top-level JSON-tagged fields:
 
 - `claims` — the full set of decoded JWT claims, populated by `go-jose`'s `parsed.Claims(jwks, &a.Claims)` after signature verification. Stored as `map[string]interface{}`, so every claim in the token (standard registered claims plus any custom issuer-specific claims) lands here verbatim.
 - `verifiedBy` (omitempty) — the JWKS coordinates that verified the signature:
-  - `jwksUrl` — the URL the JWKS was fetched from.
+  - `jwksUrl` — the URL the JWKS was fetched from, with any userinfo in it recorded as `******` (the rule the environment attestor applies to its values). The fetch itself uses the URL as configured, so an endpoint behind basic auth still verifies.
   - `jwk` — the `jose.JSONWebKey` (kid, kty, alg, public key material, etc.) whose `kid` matched the token header.
 
 The token itself and the configured JWKS URL are kept as unexported fields (`token`, `jwksUrl`) and are deliberately not serialized.
@@ -65,6 +65,7 @@ None. The attestor is configured programmatically through functional options (`W
 
 - **Empty token fails fast.** `Attest()` returns `ErrInvalidToken("")` if no token was supplied via `WithToken`; no network call is made.
 - **JWKS fetch is hard-capped.** The fetch uses a `*http.Client` with a 30 s timeout, requires HTTP 200 (anything else errors with `unexpected status code from JWKS endpoint ...`), and the response body is wrapped in `io.LimitReader(resp.Body, 1<<20)` — a malicious or misconfigured JWKS endpoint cannot OOM the attestor; oversized responses fail at JSON decode.
+- **Fetch errors do not quote a credential.** An error names the endpoint with its userinfo as `******`. The error net/http wraps is text taken from the URL, so it is kept only when the URL holds no credential or Go dials the host the redacted endpoint still names; otherwise the error says only what kind of failure it was (`the URL does not parse`, `the request timed out`, `the request failed`). `https://ci:secret/part@host/keys`, whose password holds a `/`, fails to parse with `invalid port ":secret"`, and that text is withheld.
 - **Bad signature fails the attestation.** Signature verification is performed by `parsed.Claims(jwks, &a.Claims)`. If the token's signature does not validate against any key in the fetched JWKS, `Attest()` returns `error parsing claims: ...` and the attestation does not run. The `claims` field is only populated on successful verification.
 - **Missing `kid` is tolerated for `verifiedBy` only.** After successful claims verification, the attestor walks the token headers for the first non-empty `kid` and looks it up in the JWKS. If no key matches, `Attest()` returns `nil` with `verifiedBy` left zero-valued — claims are still captured, but the recorded JWK is absent. (Signature verification itself has already succeeded by this point; this lookup is purely to record which JWK matched.)
 - **No revocation, no expiration check, no audience check.** This attestor records what the token says; it does not enforce `exp`, `nbf`, `aud`, or issuer constraints. Policy evaluation is responsible for asserting on `claims.*`.
