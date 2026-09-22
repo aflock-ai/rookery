@@ -35,8 +35,9 @@ const (
 	defaultMatchContextSize     = 10                  // Characters before/after match in pattern matches
 	redactionMatchContextSize   = 15                  // Characters before/after match in redacted output
 	redactedValuePlaceholder    = "[SENSITIVE-VALUE]" // Placeholder for redacted sensitive values
-	minSensitiveValueLength     = 4                   // Minimum length for sensitive values to be scanned
-	minPartialMatchLength       = 8                   // Shortest prefix of a sensitive value reportable as a partial match on decoded content
+	minSensitiveValueLength     = 4                   // Shortest sensitive value redacted from a finding's context, and shortest decoded payload recursed into
+	minValueMatchLength         = 8                   // Shortest sensitive value reported when found whole; a literal match of fewer characters is a common word, not a leak
+	minPartialMatchLength       = minValueMatchLength // Shortest prefix of a sensitive value reportable as a partial match on decoded content
 	maxMatchDisplayLength       = 40                  // Maximum length of match string in findings
 	truncatedMatchSegmentLength = 8                   // Length of prefix/suffix shown in truncated matches
 	maxScanRecursionDepth       = 3                   // Safety limit for recursive scanning to prevent stack overflow

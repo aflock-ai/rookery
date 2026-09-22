@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -105,42 +106,61 @@ func isEnvironmentVariableSensitive(key string, sensitiveEnvVars map[string]stru
 	return false
 }
 
-// getSensitiveEnvVarsList returns a sensitive environment variables list
-// that respects the user's configuration in the attestation context
+// getSensitiveEnvVarsList returns the patterns that classify a key as
+// sensitive: the default list plus every key the operator added. It reads the
+// context's configuration rather than inferring "sensitive" from what the
+// environment capturer left out. Under --env-capture-allowlist the capturer
+// leaves out every key it was not asked to RECORD, so the inference turned each
+// ordinary value ("http" included) into a match rule, while in the default
+// obfuscation mode it left out nothing and --env-add-sensitive-key never
+// reached the scan. The default list stays in force when the operator disables
+// it for the environment attestor: a token recorded unmasked is still a secret,
+// and finding it elsewhere matters more, not less.
 func (a *Attestor) getSensitiveEnvVarsList() map[string]struct{} {
-	// Start with the default list
 	sensitiveEnvVars := attestation.DefaultSensitiveEnvList()
-
-	// If we have access to the attestation context, use it to respect user configuration
-	if a.ctx != nil && a.ctx.EnvironmentCapturer() != nil {
-		// Get all environment variables
-		allEnvVars := os.Environ()
-
-		// Use the environment capturer to filter/process environment variables
-		// according to user configuration
-		processedEnvVars := a.ctx.EnvironmentCapturer().Capture(allEnvVars)
-
-		// Create a map to track which environment variables were filtered out
-		processedKeys := make(map[string]struct{})
-		for key := range processedEnvVars {
-			processedKeys[key] = struct{}{}
-		}
-
-		// Find environment variables that were filtered out
-		// These are the ones the user considers sensitive
-		for _, envVar := range allEnvVars {
-			parts := strings.SplitN(envVar, "=", 2)
-			if len(parts) > 0 {
-				key := parts[0]
-				// If the key is not in the processed map, it was filtered due to being sensitive
-				if _, exists := processedKeys[key]; !exists {
-					sensitiveEnvVars[key] = struct{}{}
-				}
-			}
+	if a.ctx != nil {
+		for _, key := range a.ctx.EnvAdditionalKeys() {
+			sensitiveEnvVars[key] = struct{}{}
 		}
 	}
-
 	return sensitiveEnvVars
+}
+
+// nonSecretEnvKeys name variables whose values say where the process runs and
+// who runs it: locations and identities, never credentials. The obfuscation
+// globs are broad on purpose and catch several of them (*PWD* matches PWD and
+// OLDPWD, *PAT* matches PATH, *AUTH* matches SSH_AUTH_SOCK and GIT_AUTHOR_*).
+// That costs nothing when the action is to mask a value. It is wrong when the
+// action is to report every occurrence of the value as a leak, because these
+// values appear in every attestation by design: the working directory alone
+// denied every push under a no-findings policy. Any key ending in PATH is a
+// search path (GOPATH, MANPATH, LD_LIBRARY_PATH) and is treated the same way.
+var nonSecretEnvKeys = map[string]struct{}{
+	"PWD": {}, "OLDPWD": {}, "HOME": {}, "TMPDIR": {}, "TMP": {}, "TEMP": {}, "SHELL": {},
+	"USER": {}, "LOGNAME": {}, "SSH_AUTH_SOCK": {},
+	"GIT_AUTHOR_NAME": {}, "GIT_AUTHOR_EMAIL": {}, "GIT_AUTHOR_DATE": {},
+}
+
+func isNonSecretEnvKey(key string) bool {
+	upper := strings.ToUpper(key)
+	_, named := nonSecretEnvKeys[upper]
+	return named || strings.HasSuffix(upper, "PATH")
+}
+
+// isValueMatchCandidate decides whether an environment value becomes a literal
+// match rule. The key must be classified sensitive and not allowed by the
+// operator (--env-allow-sensitive-key, compared exactly as the environment
+// capturer compares it), it must not be a location or identity, and the value
+// must be long enough that finding it is evidence of a leak rather than of a
+// common word: CLOUDSDK_PROXY_TYPE=http under a *PROXY* key matched every URL.
+func (a *Attestor) isValueMatchCandidate(key, value string, sensitiveEnvVars map[string]struct{}) bool {
+	if len(value) < minValueMatchLength || isNonSecretEnvKey(key) {
+		return false
+	}
+	if a.ctx != nil && slices.Contains(a.ctx.EnvExcludeKeys(), key) {
+		return false
+	}
+	return isEnvironmentVariableSensitive(key, sensitiveEnvVars)
 }
 
 // findPatternMatchesWithRedaction finds all matches for a regex pattern
@@ -190,11 +210,7 @@ func (a *Attestor) ScanForEnvVarValues(content, filePath string, sensitiveEnvVar
 		key := parts[0]
 		value := parts[1]
 
-		if len(value) < minSensitiveValueLength {
-			continue
-		}
-
-		if !isEnvironmentVariableSensitive(key, sensitiveEnvVars) {
+		if !a.isValueMatchCandidate(key, value, sensitiveEnvVars) {
 			continue
 		}
 
@@ -252,12 +268,7 @@ func (a *Attestor) checkDecodedContentForSensitiveValues( //nolint:gocognit,gocy
 		key := parts[0]
 		value := parts[1]
 
-		if len(value) < minSensitiveValueLength {
-			continue
-		}
-
-		// Only check sensitive environment variables
-		if !isEnvironmentVariableSensitive(key, sensitiveEnvVars) {
+		if !a.isValueMatchCandidate(key, value, sensitiveEnvVars) {
 			continue
 		}
 

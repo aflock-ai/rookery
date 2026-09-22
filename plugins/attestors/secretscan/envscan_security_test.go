@@ -194,7 +194,7 @@ func TestSecurityDecodedContentLeaksDuplicateSecret(t *testing.T) {
 	a := New()
 
 	envKey := "TEST_SEC_DUP"
-	envVal := "LEAK_ME" // 7 chars, >= minSensitiveValueLength (4)
+	envVal := "LEAK_ME8" // 8 chars, >= minValueMatchLength
 	os.Setenv(envKey, envVal)
 	defer os.Unsetenv(envKey)
 
@@ -202,7 +202,7 @@ func TestSecurityDecodedContentLeaksDuplicateSecret(t *testing.T) {
 	processedMap := make(map[string]struct{})
 
 	// Line is < 40 chars and contains the secret twice
-	decodedContent := envVal + " " + envVal // "LEAK_ME LEAK_ME" = 15 chars < 40
+	decodedContent := envVal + " " + envVal // "LEAK_ME8 LEAK_ME8" = 17 chars < 40
 
 	findings := a.checkDecodedContentForSensitiveValues(
 		decodedContent,

@@ -38,8 +38,11 @@ import (
 
 // scanBytes is the core scanning function that handles both direct and recursive scanning
 // of content for secrets. It can decode encoded content and recursively search
-// through multiple layers of encoding.
-func (a *Attestor) scanBytes(contentBytes []byte, sourceIdentifier string, detector *detect.Detector, processedInThisScan map[string]struct{}, currentDepth int) ([]Finding, error) { //nolint:gocognit,gocyclo,funlen // multi-layer encoding detection requires complex control flow
+// through multiple layers of encoding. repoPath is the file's path relative to
+// the working directory, or "" for content that is not a repository file
+// (a prior attestation, command output), which no gitleaks path allowlist
+// may exempt.
+func (a *Attestor) scanBytes(contentBytes []byte, sourceIdentifier, repoPath string, detector *detect.Detector, processedInThisScan map[string]struct{}, currentDepth int) ([]Finding, error) { //nolint:gocognit,gocyclo,funlen // multi-layer encoding detection requires complex control flow
 	// Safety check to prevent infinite recursion
 	if currentDepth > maxScanRecursionDepth {
 		return nil, nil
@@ -58,8 +61,20 @@ func (a *Attestor) scanBytes(contentBytes []byte, sourceIdentifier string, detec
 		}
 	}
 
-	// Scan current layer with Gitleaks
-	gitleaksFindings := detector.DetectBytes(contentBytes)
+	// Scan current layer with Gitleaks. gitleaks decides [allowlist].paths,
+	// the paths of an [[allowlists]] entry (under either condition) and a
+	// rule's path from the fragment's FilePath; DetectBytes leaves it empty,
+	// so every path exception in an operator's config parsed and exempted
+	// nothing. The path is given only for an operator's config: gitleaks'
+	// built-in one skips lockfiles, vendored trees and node_modules by path,
+	// and the default scan must not narrow without anyone asking it to. A
+	// config that extends the built-in one does not inherit those skips
+	// either (dropInheritedPathExceptions).
+	fragment := detect.Fragment{Raw: contentStr}
+	if a.configPath != "" {
+		fragment.FilePath = repoPath
+	}
+	gitleaksFindings := detector.Detect(fragment)
 	log.Debugf("(attestation/secretscan) gitleaks found %d raw findings at depth %d for: %s",
 		len(gitleaksFindings), currentDepth, sourceIdentifier)
 
@@ -125,6 +140,7 @@ func (a *Attestor) scanBytes(contentBytes []byte, sourceIdentifier string, detec
 					recursiveFindings, recErr := a.scanBytes(
 						decodedBytes,
 						sourceIdentifier,
+						repoPath,
 						detector,
 						processedInThisScan,
 						currentDepth+1,
@@ -192,7 +208,7 @@ func (a *Attestor) ScanFile(filePath string, detector *detect.Detector) ([]Findi
 	processedInThisScan := make(map[string]struct{})
 
 	// Use scanBytes as the core implementation for scanning content
-	return a.scanBytes(content, filePath, detector, processedInThisScan, 0)
+	return a.scanBytes(content, filePath, filePath, detector, processedInThisScan, 0)
 }
 
 // exceedsMaxFileSize checks if a file exceeds the configured size limit
@@ -315,7 +331,7 @@ func (a *Attestor) scanSingleAttestor(attestor attestation.Attestor, _ string, d
 	processedInThisScan := make(map[string]struct{})
 
 	// Scan the JSON bytes directly without creating a temporary file
-	return a.scanBytes(attestorJSON, sourceIdentifier, detector, processedInThisScan, 0)
+	return a.scanBytes(attestorJSON, sourceIdentifier, "", detector, processedInThisScan, 0)
 }
 
 // scanCommandRunAttestor specifically handles scanning the stdout/stderr of
@@ -339,7 +355,7 @@ func (a *Attestor) scanCommandRunAttestor(attestor commandrun.CommandRunAttestor
 	if cmdRun.Stdout != "" {
 		processedInThisScan := make(map[string]struct{})
 		stdoutID := "attestation:commandrun:stdout"
-		stdoutFindings, err := a.scanBytes([]byte(cmdRun.Stdout), stdoutID, detector, processedInThisScan, 0)
+		stdoutFindings, err := a.scanBytes([]byte(cmdRun.Stdout), stdoutID, "", detector, processedInThisScan, 0)
 		if err != nil {
 			// Recorded, not just logged. Command stdout is where secrets leak
 			// most often; dropping the error here returned (findings, nil) and
@@ -355,7 +371,7 @@ func (a *Attestor) scanCommandRunAttestor(attestor commandrun.CommandRunAttestor
 	if cmdRun.Stderr != "" {
 		processedInThisScan := make(map[string]struct{})
 		stderrID := "attestation:commandrun:stderr"
-		stderrFindings, err := a.scanBytes([]byte(cmdRun.Stderr), stderrID, detector, processedInThisScan, 0)
+		stderrFindings, err := a.scanBytes([]byte(cmdRun.Stderr), stderrID, "", detector, processedInThisScan, 0)
 		if err != nil {
 			log.Debugf("(attestation/secretscan) error scanning command stderr: %s", err)
 			a.scanErrors = append(a.scanErrors, fmt.Errorf("scanning command stderr: %w", err))
@@ -372,7 +388,7 @@ func (a *Attestor) scanCommandRunAttestor(attestor commandrun.CommandRunAttestor
 	} else {
 		processedInThisScan := make(map[string]struct{})
 		cmdRunID := "attestation:commandrun:json"
-		cmdRunFindings, err := a.scanBytes(cmdRunJSON, cmdRunID, detector, processedInThisScan, 0)
+		cmdRunFindings, err := a.scanBytes(cmdRunJSON, cmdRunID, "", detector, processedInThisScan, 0)
 		if err != nil {
 			log.Debugf("(attestation/secretscan) error scanning command run JSON: %s", err)
 			a.scanErrors = append(a.scanErrors, fmt.Errorf("scanning command run JSON: %w", err))
@@ -543,7 +559,7 @@ func (a *Attestor) scanProductBytes(ctx *attestation.AttestationContext, path, s
 		a.reportRules[path] = rules
 		a.ConsumedReports = append(a.ConsumedReports, rep)
 	}
-	findings, err := a.scanBytes(content, absPath, detector, make(map[string]struct{}), 0)
+	findings, err := a.scanBytes(content, absPath, scopePath, detector, make(map[string]struct{}), 0)
 	if err != nil {
 		return productScan{}, false, err
 	}

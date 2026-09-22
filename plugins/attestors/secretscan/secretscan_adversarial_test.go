@@ -883,14 +883,14 @@ func TestScanBytesRecursionSafety(t *testing.T) {
 	processedInThisScan := make(map[string]struct{})
 
 	// Should not stack overflow even with deeply encoded content
-	findings, err := a.scanBytes([]byte(encoded), "test", detector, processedInThisScan, 0)
+	findings, err := a.scanBytes([]byte(encoded), "test", "", detector, processedInThisScan, 0)
 	require.NoError(t, err)
 	t.Logf("deep encoding findings: %d", len(findings))
 
 	// Verify max recursion depth is respected
 	a2 := New(WithMaxDecodeLayers(0))
 	processedInThisScan2 := make(map[string]struct{})
-	findings2, err := a2.scanBytes([]byte(encoded), "test", detector, processedInThisScan2, 0)
+	findings2, err := a2.scanBytes([]byte(encoded), "test", "", detector, processedInThisScan2, 0)
 	require.NoError(t, err)
 	t.Logf("zero decode layers findings: %d", len(findings2))
 }
@@ -934,7 +934,7 @@ func TestScanBytesConcurrent(t *testing.T) {
 			a := New()
 			processedInThisScan := make(map[string]struct{})
 			content := contents[idx%len(contents)]
-			_, err := a.scanBytes([]byte(content), fmt.Sprintf("test-%d", idx), detector, processedInThisScan, 0)
+			_, err := a.scanBytes([]byte(content), fmt.Sprintf("test-%d", idx), "", detector, processedInThisScan, 0)
 			if err != nil {
 				t.Errorf("scanBytes error: %v", err)
 			}

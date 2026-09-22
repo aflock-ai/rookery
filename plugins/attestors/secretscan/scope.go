@@ -1457,7 +1457,7 @@ func (a *Attestor) scanContent(ctx *attestation.AttestationContext, key, path, s
 		log.Debugf("(attestation/secretscan) skipping binary content: %s", key)
 		return nil
 	}
-	findings, err := a.scanBytes(content, sourceID, detector, make(map[string]struct{}), 0)
+	findings, err := a.scanBytes(content, sourceID, path, detector, make(map[string]struct{}), 0)
 	if err != nil {
 		return err
 	}

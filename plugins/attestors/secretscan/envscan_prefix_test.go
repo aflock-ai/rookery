@@ -76,7 +76,7 @@ func TestHexDigestsDoNotPartialMatchEnvValuePrefix(t *testing.T) {
 	require.NoError(t, err)
 	a := New()
 
-	findings, err := a.scanBytes(fixture, "attestation_material.json", detector, map[string]struct{}{}, 0)
+	findings, err := a.scanBytes(fixture, "attestation_material.json", "", detector, map[string]struct{}{}, 0)
 	require.NoError(t, err)
 
 	for _, f := range envValueFindings(findings) {
@@ -108,7 +108,7 @@ func TestGoSumHashesDoNotPartialMatchEnvValuePrefix(t *testing.T) {
 	require.NoError(t, err)
 	a := New()
 
-	findings, err := a.scanBytes([]byte(goSum), "go.sum", detector, map[string]struct{}{}, 0)
+	findings, err := a.scanBytes([]byte(goSum), "go.sum", "", detector, map[string]struct{}{}, 0)
 	require.NoError(t, err)
 
 	for _, f := range envValueFindings(findings) {

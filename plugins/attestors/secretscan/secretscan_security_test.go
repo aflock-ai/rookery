@@ -109,8 +109,9 @@ func TestSecurity_R3_161_RedactionLeaksLongLineContext(t *testing.T) {
 
 	const envKey = "TEST_R3_161_KEY"
 	// Use a short secret so two copies fit within the extraction window.
-	// The context extraction grabs matchValue+10 chars on each side.
-	const secretVal = "XYZZY" // 5 chars, above minimum
+	// The context extraction grabs matchValue+10 chars on each side, and a
+	// value is matched only from minValueMatchLength characters up.
+	const secretVal = "XYZZY123" // 8 chars: the shortest value matched, and it still fits twice
 
 	os.Setenv(envKey, secretVal)
 	defer os.Unsetenv(envKey)
@@ -123,7 +124,7 @@ func TestSecurity_R3_161_RedactionLeaksLongLineContext(t *testing.T) {
 	// encompass both copies.
 	padding := strings.Repeat("A", 20)
 	decodedContent := padding + secretVal + secretVal + padding
-	// Total: 20 + 5 + 5 + 20 = 50 chars >= 40
+	// Total: 20 + 8 + 8 + 20 = 56 chars >= 40
 
 	findings := a.checkDecodedContentForSensitiveValues(
 		decodedContent,
