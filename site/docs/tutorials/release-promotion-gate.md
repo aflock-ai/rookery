@@ -79,12 +79,17 @@ import rego.v1
 
 # Cilock's github attestor exposes the verified Actions OIDC token's
 # claims under `input.jwt.claims`. The `ref` claim is the workflow's
-# git ref (e.g. "refs/heads/main").
+# git ref (e.g. "refs/heads/main"). Read it with a default so a missing
+# claim denies too.
+ref := object.get(input, ["jwt", "claims", "ref"], "")
+
 deny contains msg if {
-    not endswith(input.jwt.claims.ref, "/main")
-    msg := sprintf("build did not come from main: %s", [input.jwt.claims.ref])
+    ref != "refs/heads/main"
+    msg := sprintf("build did not come from main: %q", [ref])
 }
 ```
+
+Do not write `not endswith(input.jwt.claims.ref, "/main")`. OPA reads `input.jwt.claims.ref` before it applies the `not`, so when the claim is missing the rule body stops there and the rule never denies. `cilock policy validate` warns about that shape, and verification logs the same warning; neither refuses the policy, so fix it when you see the warning. The exact comparison also closes a second gap: `endswith(ref, "/main")` accepts a branch named `feature/main`.
 
 Bind this Rego module to the `github` attestor's predicate type (`https://aflock.ai/attestations/github/v0.1`) in the policy's `steps[].attestations[].regopolicies` block (as shown in the JSON above) so it evaluates against the right attestation in the collection.
 

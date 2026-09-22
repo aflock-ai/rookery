@@ -18,9 +18,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
+	rpolicy "github.com/aflock-ai/rookery/attestation/policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -485,5 +488,146 @@ deny[msg] { input.predicate.summary.failed > 0; msg := "x" }`,
 				t.Fatalf("warned=%v want %v; warnings=%v", warned, c.warn, result.Warnings)
 			}
 		})
+	}
+}
+
+func regoPolicyDoc(t *testing.T, modules ...string) []byte {
+	t.Helper()
+	rps := make([]regoPolicy, 0, len(modules))
+	for i, m := range modules {
+		rps = append(rps, regoPolicy{Name: fmt.Sprintf("rule-%d", i), Module: base64.StdEncoding.EncodeToString([]byte(m))})
+	}
+	doc := policyDocument{
+		Expires: "2030-01-01T00:00:00Z",
+		Steps: map[string]policyStep{
+			"release": {
+				Name:          "release",
+				Functionaries: []functionary{{Type: "publickey", PublicKeyID: "key-1"}},
+				Attestations:  []attestation{{Type: "https://witness.dev/attestations/github/v0.1", RegoPolicies: rps}},
+			},
+		},
+		PublicKeys: map[string]publicKeyEntry{"key-1": {KeyID: "key-1", Key: ""}},
+	}
+	data, err := json.Marshal(doc)
+	require.NoError(t, err)
+	return data
+}
+
+// underEachHardening validates doc with no hardening option on and with every
+// one on (the cilock CLI's default), and returns both results. The fail-open
+// lint reads none of the options, so every assertion must hold for both.
+func underEachHardening(t *testing.T, doc []byte) []*ValidationResult {
+	t.Helper()
+	prev := rpolicy.Hardening()
+	t.Cleanup(func() { rpolicy.SetHardening(prev) })
+	var every rpolicy.HardeningOptions
+	v := reflect.ValueOf(&every).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		if v.Field(i).Kind() == reflect.Bool {
+			v.Field(i).SetBool(true)
+		}
+	}
+	modes := []rpolicy.HardeningOptions{{}, every}
+	out := make([]*ValidationResult, 0, len(modes))
+	for _, h := range modes {
+		rpolicy.SetHardening(h)
+		out = append(out, ValidateRawPolicy(context.Background(), doc))
+	}
+	return out
+}
+
+func joinedLines(ss []string) string { return strings.Join(ss, "\n") }
+
+const inlineNegation = "package tagged\n\ndeny[msg] {\n\tnot startswith(input.reftype, \"tag\")\n\tmsg := \"untagged\"\n}\n"
+
+// An inline negation over input never fires on a predicate without the field:
+// the compiler reads input.reftype outside the `not`. validate reports it as
+// a warning naming the path, and never fails the policy for it.
+func TestValidateRawPolicy_InlineNegationWarns(t *testing.T) {
+	for _, res := range underEachHardening(t, regoPolicyDoc(t, inlineNegation)) {
+		assert.True(t, res.Valid, "a lint finding is a warning, never a validation error: %v", res.Errors)
+		assert.Contains(t, joinedLines(res.Warnings), "input.reftype")
+		assert.Contains(t, joinedLines(res.Warnings), "rule-0")
+		assert.NotContains(t, joinedLines(res.Warnings), "rejected")
+	}
+}
+
+func TestValidateRawPolicy_GuardedNegationPasses(t *testing.T) {
+	guarded := "package tagged\n\ntagged { startswith(input.reftype, \"tag\") }\n\ndeny[msg] {\n\tnot tagged\n\tmsg := \"untagged\"\n}\n"
+	for _, res := range underEachHardening(t, regoPolicyDoc(t, guarded)) {
+		assert.True(t, res.Valid, "the helper-rule form fires on a missing field and must pass: %v", res.Errors)
+		assert.NotContains(t, joinedLines(res.Warnings), "empty predicate")
+		assert.NotContains(t, joinedLines(res.Warnings), "never fires")
+	}
+}
+
+// The probe catches what the negation lint cannot: a comparison over a
+// missing field (`input.repository != "x"`) is undefined, not true. It is a
+// warning, because some modules legitimately gate only on present data.
+func TestValidateRawPolicy_EmptyPredicateProbeWarns(t *testing.T) {
+	vacuous := "package repo\n\ndeny[msg] {\n\tinput.repository != \"aflock-ai/rookery\"\n\tmsg := \"foreign\"\n}\n"
+	for _, res := range underEachHardening(t, regoPolicyDoc(t, vacuous)) {
+		assert.True(t, res.Valid, "the probe is a warning: %v", res.Errors)
+		assert.Contains(t, joinedLines(res.Warnings), "empty predicate")
+		assert.Contains(t, joinedLines(res.Warnings), "release")
+	}
+}
+
+// The reviewer's reproduction: the negation sits in a helper that deny
+// consumes as `not ok`. On a missing field ok is undefined, so `not ok` is
+// true and deny fires. That is fail-closed, so there is nothing to report.
+func TestValidateRawPolicy_NegationInNegatedHelperPasses(t *testing.T) {
+	helper := "package branch\n\nok { not startswith(input.ref, \"refs/heads/evil\") }\n\ndeny[msg] {\n\tnot ok\n\tmsg := \"x\"\n}\n"
+	for _, res := range underEachHardening(t, regoPolicyDoc(t, helper)) {
+		assert.True(t, res.Valid, "a negation in a negated helper fails closed: %v", res.Errors)
+		assert.NotContains(t, joinedLines(res.Warnings), "input.ref")
+		assert.NotContains(t, joinedLines(res.Warnings), "empty predicate")
+	}
+}
+
+// Review round 2: a rule compared by value to its default is fail-closed.
+// A missing ref leaves ok at false, so `ok == false` holds and deny fires.
+const booleanComparisonOverDefault = "package p\ndefault ok = false\nok { not startswith(input.ref, \"refs/heads/evil\") }\ndeny[\"bad ref\"] { ok == false }\n"
+
+func TestValidateRawPolicy_BooleanComparisonOverDefaultPasses(t *testing.T) {
+	for _, res := range underEachHardening(t, regoPolicyDoc(t, booleanComparisonOverDefault)) {
+		assert.True(t, res.Valid, "ok == false over a false default fails closed: %v", res.Errors)
+		assert.NotContains(t, joinedLines(res.Warnings), "input.ref")
+	}
+}
+
+// The same comparison over a true default is fail-open: a missing ref leaves
+// ok at true, and deny never fires. validate warns and still passes.
+func TestValidateRawPolicy_BooleanComparisonOverTrueDefaultWarns(t *testing.T) {
+	mod := "package p\ndefault ok = true\nok = false { not startswith(input.ref, \"refs/heads/evil\") }\ndeny[\"bad ref\"] { ok == false }\n"
+	for _, res := range underEachHardening(t, regoPolicyDoc(t, mod)) {
+		assert.True(t, res.Valid, "a lint finding is a warning, never a validation error: %v", res.Errors)
+		assert.Contains(t, joinedLines(res.Warnings), "input.ref")
+		assert.NotContains(t, joinedLines(res.Warnings), "cannot decide")
+	}
+}
+
+// A comparison the lint does not model is a warning that says the lint could
+// not decide.
+func TestValidateRawPolicy_UndecidedPolarityWarns(t *testing.T) {
+	mod := "package p\ndefault ok = false\nok { not startswith(input.ref, \"refs/heads/evil\") }\nwant = false { true }\ndeny[\"bad ref\"] { ok == want }\n"
+	for _, res := range underEachHardening(t, regoPolicyDoc(t, mod)) {
+		assert.True(t, res.Valid, "an undecided finding must not fail validation: %v", res.Errors)
+		assert.Contains(t, joinedLines(res.Warnings), "input.ref")
+		assert.Contains(t, joinedLines(res.Warnings), "cannot decide")
+	}
+}
+
+// The evaluator loads an attestation's modules together, so validate lints
+// them together: a module calling a sibling module's function compiles, and
+// its fail-open negation is reported rather than skipped as a compile error.
+func TestValidateRawPolicy_LintsTheAttestationModuleSet(t *testing.T) {
+	caller := "package caller\n\ndeny[msg] {\n\tnot data.helpers.tagged(input.ref)\n\tmsg := \"untagged\"\n}\n"
+	helpers := "package helpers\n\ntagged(r) { startswith(r, \"refs/tags/\") }\n\ndeny[msg] {\n\tinput.never == true\n\tmsg := \"never\"\n}\n"
+	for _, res := range underEachHardening(t, regoPolicyDoc(t, caller, helpers)) {
+		assert.True(t, res.Valid, "a lint finding is a warning, never a validation error: %v", res.Errors)
+		assert.Contains(t, joinedLines(res.Warnings), "input.ref")
+		assert.Contains(t, joinedLines(res.Warnings), "rule-0")
+		assert.NotContains(t, joinedLines(res.Warnings), "does not compile")
 	}
 }

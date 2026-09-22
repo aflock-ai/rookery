@@ -453,6 +453,7 @@ func validateRoots(policy *policyDocument, result *ValidationResult) {
 func validateRegoPolicies(policy *policyDocument, result *ValidationResult) { //nolint:gocognit
 	for stepName, step := range policy.Steps {
 		for attIdx, att := range step.Attestations {
+			parsedModules := make([]attpolicy.RegoPolicy, 0, len(att.RegoPolicies))
 			for regoIdx, regoPol := range att.RegoPolicies {
 				if regoPol.Name == "" {
 					result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', attestation %d, rego policy %d: missing name", stepName, attIdx, regoIdx))
@@ -475,11 +476,51 @@ func validateRegoPolicies(policy *policyDocument, result *ValidationResult) { //
 				if err := validateRegoSyntax(string(moduleBytes), regoPol.Name); err != nil {
 					result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', attestation %d, rego policy '%s': invalid Rego syntax: %v", stepName, attIdx, regoPol.Name, err))
 					result.Valid = false
+					continue
 				}
 
 				lintWrappedPredicateReads(stepName, attIdx, att.Type, regoPol.Name, moduleBytes, result)
+				parsedModules = append(parsedModules, attpolicy.RegoPolicy{Name: regoPol.Name, Module: moduleBytes})
+			}
+			if len(parsedModules) == len(att.RegoPolicies) {
+				lintFailOpenNegations(stepName, attIdx, parsedModules, result)
+				probeEmptyPredicate(stepName, attIdx, att.Type, parsedModules, result)
 			}
 		}
+	}
+}
+
+// lintFailOpenNegations reports, as warnings, each negation whose input read
+// the OPA compiler hoists out of the `not` where that makes deny fire less,
+// so the deny never fires when the field is missing. The attestation's
+// modules are linted together, as the verifier loads them. The verifier runs
+// the same lint (attestation/policy regolint.go) and only logs it, under
+// every --policy-hardening mode, so a finding never fails validation either.
+func lintFailOpenNegations(stepName string, attIdx int, modules []attpolicy.RegoPolicy, result *ValidationResult) {
+	findings, err := attpolicy.LintRegoFailOpenSet(modules)
+	if err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Step '%s', attestation %d: the rego modules do not compile together, so the fail-open negation lint did not run: %v", stepName, attIdx, err))
+		return
+	}
+	for _, f := range findings {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Step '%s', attestation %d, rego policy '%s': %s", stepName, attIdx, f.Module, f))
+	}
+}
+
+// probeEmptyPredicate evaluates one attestation's modules against {} with the
+// verifier's evaluator. A set that denies nothing there passes any predicate
+// that omits the fields it reads, which is the fail-open shape the negation
+// lint cannot see (`input.repository != "x"` is undefined, not true, when the
+// field is missing). Always a warning: a module may legitimately gate only on
+// data that is present.
+func probeEmptyPredicate(stepName string, attIdx int, predicateType string, modules []attpolicy.RegoPolicy, result *ValidationResult) {
+	admits, err := attpolicy.ProbeRegoEmptyPredicate(modules)
+	if err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Step '%s', attestation %d (%s): could not probe the rego modules against an empty predicate: %v", stepName, attIdx, predicateType, err))
+		return
+	}
+	if admits {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Step '%s', attestation %d (%s): the rego modules deny nothing on an empty predicate {}, so a %s predicate missing the fields they read passes; make each rule fire when its field is absent (a helper rule with `not`, or object.get with a default)", stepName, attIdx, predicateType, predicateType))
 	}
 }
 

@@ -56,7 +56,7 @@ func restrictedCapabilities() *ast.Capabilities {
 	return caps
 }
 
-func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, stepContext ...map[string]interface{}) error { //nolint:gocognit,gocyclo,funlen
+func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, stepContext ...map[string]interface{}) error {
 	if len(policies) == 0 {
 		return nil
 	}
@@ -82,6 +82,23 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	// and external attestations via input.external.<name>.
 	input := buildRegoInput(attestorData, stepContext)
 
+	// A negation whose input read the compiler hoisted never fires on a
+	// missing field. Logged as a warning, never a refusal (regolint.go).
+	warnRegoFailOpen(policies)
+
+	// Use a timeout context to prevent DoS from malicious or poorly-written
+	// Rego policies that loop indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), regoEvalTimeout)
+	defer cancel()
+
+	return evaluateRegoInput(ctx, input, policies, attestor.Type())
+}
+
+// evaluateRegoInput runs the deny query of every module against input and
+// returns ErrPolicyDenied when any module denies. attestorType only labels
+// errors. ProbeRegoEmptyPredicate shares it so the probe is the verifier's own
+// evaluator, not a copy of it.
+func evaluateRegoInput(ctx context.Context, input interface{}, policies []RegoPolicy, attestorType string) error { //nolint:gocognit,gocyclo,funlen
 	query := ""
 	denyPaths := map[string]struct{}{}
 	regoOpts := []func(*rego.Rego){
@@ -134,14 +151,9 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	regoOpts = append(regoOpts, rego.Query(query))
 	r := rego.New(regoOpts...)
 
-	// Use a timeout context to prevent DoS from malicious or poorly-written
-	// Rego policies that loop indefinitely.
-	ctx, cancel := context.WithTimeout(context.Background(), regoEvalTimeout)
-	defer cancel()
-
 	rs, err := r.Eval(ctx)
 	if err != nil {
-		return fmt.Errorf("rego policy evaluation error for attestor type %s: %w", attestor.Type(), err)
+		return fmt.Errorf("rego policy evaluation error for attestor type %s: %w", attestorType, err)
 	}
 
 	// Security: if the result set is empty, one or more Rego modules didn't
@@ -150,7 +162,7 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	// passes — an attacker could supply a module with an irrelevant rule name
 	// to bypass policy enforcement entirely.
 	if len(rs) == 0 && len(denyPaths) > 0 {
-		return fmt.Errorf("rego policy evaluation returned no results for attestor type %s: one or more policy modules may be missing a 'deny' rule", attestor.Type())
+		return fmt.Errorf("rego policy evaluation returned no results for attestor type %s: one or more policy modules may be missing a 'deny' rule", attestorType)
 	}
 
 	allDenyReasons := []string{}
@@ -193,7 +205,7 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	}
 
 	if len(allDenyReasons) > 0 || sawDenyElement {
-		return fmt.Errorf("rego policy evaluation failed for attestor type %s: %w", attestor.Type(), ErrPolicyDenied{Reasons: allDenyReasons})
+		return fmt.Errorf("rego policy evaluation failed for attestor type %s: %w", attestorType, ErrPolicyDenied{Reasons: allDenyReasons})
 	}
 
 	return nil
