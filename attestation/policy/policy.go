@@ -1556,6 +1556,17 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 				continue
 			}
 
+			// Commit binding, before the functionary, Rego and AI checks: an
+			// envelope not bound to the commit under evaluation is not evidence
+			// for this verify, so it can neither satisfy the external nor reach
+			// a step's input.external (and is not disclosed to an AI provider).
+			if vo.commitBinding != "" {
+				if err := checkExternalCommitBinding(name, env, vo.commitBinding); err != nil {
+					er.Rejected = append(er.Rejected, RejectedExternal{Envelope: env, Reason: err})
+					continue
+				}
+			}
+
 			// Functionary validation — at least one verifier must match at
 			// least one functionary.
 			var validFunctionaries []cryptoutil.Verifier

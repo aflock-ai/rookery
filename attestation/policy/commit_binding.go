@@ -45,6 +45,17 @@ const gitAttestationType = "https://aflock.ai/attestations/git/v0.1"
 // digest is in the seed set" would admit a child of the evaluated commit at
 // depth 0.
 //
+// External attestations are bound the same way (checkExternalCommitBinding):
+// an envelope counts for an external only when it is an attestation
+// collection whose git attestations all name commit. Externals are searched
+// once, by predicate type and the seed subjects, outside the step gate, and a
+// passed external is what a step reads as input.external.<name>; without this
+// a collection whose git attestations name the commit AND another commit
+// passed the external and decided that step. A bare predicate (a SLSA
+// provenance, a verification summary) carries subjects, not a commit claim,
+// so under the binding it is refused like a collection with no git
+// attestation.
+//
 // THE ZERO VALUE IS UNBOUND. Without this option (or with an empty commit)
 // the engine keeps its historical behaviour: a step passes on any
 // functionary-authorized collection the seed digests match. That
@@ -194,4 +205,74 @@ func (c *commitHashClaim) UnmarshalJSON(body []byte) error {
 	}
 	*c = commitHashClaim(att.CommitHash)
 	return nil
+}
+
+// ErrExternalNotBoundToCommit is the rejection reason for an external
+// attestation envelope that is not bound to the commit the verify evaluates.
+// WitnessCommit is the first git commithash that differs from Commit, and is
+// empty when the envelope carries no git attestation at all.
+type ErrExternalNotBoundToCommit struct {
+	External      string
+	Reference     string
+	WitnessCommit string
+	Commit        string
+}
+
+func (e ErrExternalNotBoundToCommit) Error() string {
+	if e.WitnessCommit == "" {
+		return fmt.Sprintf("external attestation %q: envelope %s carries no git attestation, so it is not bound to commit %s", e.External, e.Reference, e.Commit)
+	}
+	return fmt.Sprintf("external attestation %q: envelope %s is bound to commit %s, not %s", e.External, e.Reference, e.WitnessCommit, e.Commit)
+}
+
+// checkExternalCommitBinding reports whether an external attestation envelope
+// is bound to commit (already normalized): it must be an attestation
+// collection that carries at least one git attestation, and every git
+// attestation's commithash must equal commit. This is checkCommitBinding's
+// rule for step collections, applied to an external candidate.
+func checkExternalCommitBinding(external string, env source.StatementEnvelope, commit string) error {
+	notBound := ErrExternalNotBoundToCommit{External: external, Reference: env.Reference, Commit: commit}
+	hashes := externalCommitHashes(env)
+	if len(hashes) == 0 {
+		return notBound
+	}
+	for _, h := range hashes {
+		if !strings.EqualFold(h, commit) {
+			notBound.WitnessCommit = h
+			if h == "" {
+				notBound.WitnessCommit = "(empty commithash)"
+			}
+			return notBound
+		}
+	}
+	return nil
+}
+
+// externalCommitHashes returns the git commithash claims of an external
+// envelope, read from the SIGNED payload when one is retained (the Statement
+// on a StatementEnvelope is populated by the source). Only a statement whose
+// outer predicateType is an attestation collection can carry them: a bare
+// predicate's body is producer JSON, and an "attestations" list inside it
+// would otherwise vouch for itself. A directly-constructed envelope with no
+// payload has no untrusted source behind it, so its Statement is the truth.
+// Anything that does not decode yields no claims (fail closed).
+func externalCommitHashes(env source.StatementEnvelope) []string {
+	payload := env.Envelope.Payload
+	if len(payload) == 0 {
+		b, err := json.Marshal(env.Statement)
+		if err != nil {
+			return nil
+		}
+		payload = b
+	}
+	var stmt struct {
+		PredicateType string `json:"predicateType"`
+	}
+	if err := json.Unmarshal(payload, &stmt); err != nil {
+		return nil
+	}
+	if stmt.PredicateType != attestation.CollectionType && stmt.PredicateType != attestation.LegacyCollectionType {
+		return nil
+	}
+	return signedCommitHashes(payload)
 }
