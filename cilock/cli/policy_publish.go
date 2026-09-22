@@ -163,7 +163,7 @@ Pushgate.`,
 	f.StringVarP(&o.tag, "tag", "t", "", "Release tag, e.g. v1 (required)")
 	f.StringVar(&o.description, "description", "", "Description used only when the ceremony creates a new PolicyDefinition")
 	f.StringVar(&o.platformURL, "platform-url", "", "TestifySec platform URL (default: the logged-in platform)")
-	f.StringVar(&o.datatype, "datatype", policy.PolicyPredicate, "Policy payload type")
+	f.StringVar(&o.datatype, datatypeFlag, policy.PolicyPredicate, "Policy payload type (unset: "+policy.PolicyPredicateV02+" when a step declares about)")
 	_ = cmd.MarkFlagRequired("file")
 	_ = cmd.MarkFlagRequired("definition")
 	_ = cmd.MarkFlagRequired("tag")
@@ -178,10 +178,11 @@ func runPolicyPublish(cmd *cobra.Command, o policyPublishOpts) error {
 	if err != nil {
 		return err
 	}
-	source, err := readPolicySource(o.file)
+	source, datatype, err := readTypedPolicySource(cmd, o.file, o.datatype)
 	if err != nil {
 		return err
 	}
+	o.datatype = datatype
 
 	// 1. HYDRATE — the same call `policy draft` makes, so what the human
 	// approves is the document the platform itself completed, and the summary

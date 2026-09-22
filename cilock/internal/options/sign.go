@@ -48,7 +48,7 @@ var RequiredSignFlags = []string{
 func (so *SignOptions) AddFlags(cmd *cobra.Command) {
 	so.SignerOptions.AddFlags(cmd)
 	so.KMSSignerProviderOptions.AddFlags(cmd)
-	cmd.Flags().StringVarP(&so.DataType, "datatype", "t", "https://witness.testifysec.com/policy/v0.1", "The URI reference to the type of data being signed. Defaults to the Witness policy type")
+	cmd.Flags().StringVarP(&so.DataType, "datatype", "t", "https://witness.testifysec.com/policy/v0.1", "The URI reference to the type of data being signed. Defaults to the Witness policy type, or https://aflock.ai/policy/v0.2 when unset and a policy step declares about")
 	cmd.Flags().StringVarP(&so.OutFilePath, "outfile", "o", "", "File to write signed data. Defaults to stdout")
 	cmd.Flags().StringVarP(&so.InFilePath, "infile", "f", "", "Witness policy file to sign")
 	cmd.Flags().StringSliceVar(&so.TimestampServers, "timestamp-servers", []string{}, "Timestamp Authority Servers to use when signing envelope")

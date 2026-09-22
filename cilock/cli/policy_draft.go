@@ -168,7 +168,7 @@ rejects the call for a missing scope, run ` + "`cilock login`" + ` again to pick
 	f.StringVarP(&o.output, "output", "o", "",
 		"Where to write the hydrated, UNSIGNED policy (default: the source path with a .hydrated.json suffix)")
 	f.StringVar(&o.platformURL, "platform-url", "", "TestifySec platform URL (default: the logged-in platform)")
-	f.StringVarP(&o.datatype, "datatype", "t", policy.PolicyPredicate, "Policy payload type sent for hydration")
+	f.StringVarP(&o.datatype, datatypeFlag, "t", policy.PolicyPredicate, "Policy payload type sent for hydration (unset: "+policy.PolicyPredicateV02+" when a step declares about)")
 	f.BoolVar(&o.force, "force", false, "Overwrite --output if it already exists")
 
 	_ = cmd.MarkFlagRequired("file")
@@ -186,10 +186,11 @@ func runPolicyDraft(cmd *cobra.Command, o policyDraftOpts) error {
 		return err
 	}
 
-	source, err := readPolicySource(o.file)
+	source, datatype, err := readTypedPolicySource(cmd, o.file, o.datatype)
 	if err != nil {
 		return err
 	}
+	o.datatype = datatype
 
 	output := o.output
 	if output == "" {

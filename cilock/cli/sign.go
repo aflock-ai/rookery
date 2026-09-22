@@ -58,6 +58,16 @@ func SignCmd() *cobra.Command {
 			if err := refuseOfflineWithoutLocalSigner(cmd, so); err != nil {
 				return err
 			}
+			// A policy with a step declaring about is signed as v0.2 unless
+			// the caller chose a type; an explicit v0.1 type on it is refused.
+			dataType, err := resolvePolicyPayloadType(cmd.Flags().Changed(datatypeFlag), so.DataType, data)
+			if err != nil {
+				return err
+			}
+			so.DataType = dataType
+			if err := refuseUndecodableV02Policy(so.DataType, data); err != nil {
+				return err
+			}
 			if err := refuseAgentPolicySigning(cmd, so, data); err != nil {
 				return err
 			}
@@ -134,7 +144,7 @@ func refuseAgentPolicySigning(cmd *cobra.Command, so options.SignOptions, data [
 // document is a JSON object carrying both `steps` and `expires`. Bytes that are
 // not a JSON object are simply not a policy.
 func isWitnessPolicyInput(data []byte, payloadType string) bool {
-	if payloadType == witnesspolicy.PolicyPredicate || payloadType == witnesspolicy.LegacyPolicyPredicate {
+	if witnesspolicy.IsPolicyV01Type(payloadType) || payloadType == witnesspolicy.PolicyPredicateV02 {
 		return true
 	}
 	var document map[string]json.RawMessage

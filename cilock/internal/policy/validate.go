@@ -19,18 +19,25 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	attpolicy "github.com/aflock-ai/rookery/attestation/policy"
 	"github.com/open-policy-agent/opa/ast"
 )
 
 const (
 	ExpectedPolicyType       = "https://witness.testifysec.com/policy/v0.1"
 	ExpectedPolicyTypeAflock = "https://aflock.ai/policy/v0.1"
-	functionaryTypePublicKey = "publickey"
+	// ExpectedPolicyTypeAflockV02 is the type of a policy whose steps may
+	// declare about (attestation/policy.PolicyPredicateV02).
+	ExpectedPolicyTypeAflockV02 = "https://aflock.ai/policy/v0.2"
+	functionaryTypePublicKey    = "publickey"
+	// stepAboutSource is the one accepted value of a step's about.
+	stepAboutSource = "source"
 )
 
 // Signature status values reported in ValidationResult.Signature.
@@ -72,6 +79,7 @@ type policyStep struct {
 	Attestations     []attestation `json:"attestations"`
 	ArtifactsFrom    []string      `json:"artifactsFrom,omitempty"`
 	AttestationsFrom []string      `json:"attestationsFrom,omitempty"`
+	About            string        `json:"about,omitempty"`
 }
 
 type functionary struct {
@@ -133,6 +141,8 @@ func ValidatePolicy(ctx context.Context, envelope dsse.Envelope, verifier crypto
 	}
 
 	validatePolicyContent(&policy, result)
+	validateStepAbout(&policy, envelope.PayloadType, true, result)
+	validateV02Decodes(envelope, result)
 
 	if verifier != nil {
 		validateSignature(ctx, &envelope, verifier, result)
@@ -164,6 +174,7 @@ func ValidateRawPolicy(ctx context.Context, policyJSON []byte) *ValidationResult
 	}
 
 	validatePolicyContent(&policy, result)
+	validateStepAbout(&policy, "", false, result)
 
 	return result
 }
@@ -179,8 +190,11 @@ func validatePolicyContent(policy *policyDocument, result *ValidationResult) {
 }
 
 func validateEnvelopeStructure(envelope *dsse.Envelope, result *ValidationResult) {
-	if envelope.PayloadType != ExpectedPolicyType && envelope.PayloadType != ExpectedPolicyTypeAflock {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Unexpected PayloadType: expected %s or %s, got %s", ExpectedPolicyType, ExpectedPolicyTypeAflock, envelope.PayloadType))
+	switch envelope.PayloadType {
+	case ExpectedPolicyType, ExpectedPolicyTypeAflock, ExpectedPolicyTypeAflockV02:
+	default:
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Unexpected PayloadType: expected %s, %s or %s, got %s",
+			ExpectedPolicyType, ExpectedPolicyTypeAflock, ExpectedPolicyTypeAflockV02, envelope.PayloadType))
 	}
 
 	if len(envelope.Payload) == 0 {
@@ -190,6 +204,48 @@ func validateEnvelopeStructure(envelope *dsse.Envelope, result *ValidationResult
 
 	if len(envelope.Signatures) == 0 {
 		result.Warnings = append(result.Warnings, "Policy is not signed - no signatures found in DSSE envelope")
+	}
+}
+
+// validateV02Decodes applies the verifier's own decoder to a v0.2 envelope.
+// The verify path decodes v0.2 strictly (attestation/policy
+// DecodePolicyEnvelope), so a member the Policy type does not know fails every
+// verify; this reports it where the author can fix it. v0.1 decodes leniently
+// there, so it is not checked here.
+func validateV02Decodes(envelope dsse.Envelope, result *ValidationResult) {
+	if envelope.PayloadType != ExpectedPolicyTypeAflockV02 {
+		return
+	}
+	if _, err := attpolicy.DecodePolicyEnvelope(envelope.PayloadType, envelope.Payload); err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("the verifier refuses this %s policy: %v", ExpectedPolicyTypeAflockV02, err))
+		result.Valid = false
+	}
+}
+
+// validateStepAbout applies the authoring rule for a step's about: source is
+// the only value, and a policy that declares it must be signed as exactly v0.2
+// (under either v0.1 spelling, or any other type, it is refused). typed
+// is false for a raw policy, which has no type until it is signed; signing
+// chooses v0.2 for it, so only the value is checked there.
+func validateStepAbout(policy *policyDocument, payloadType string, typed bool, result *ValidationResult) {
+	names := make([]string, 0, len(policy.Steps))
+	for name := range policy.Steps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		about := policy.Steps[name].About
+		if about == "" {
+			continue
+		}
+		if about != stepAboutSource {
+			result.Errors = append(result.Errors, fmt.Sprintf("Step '%s': about-unknown-value: about %q is not supported (the only value is %q)", name, about, stepAboutSource))
+			result.Valid = false
+		}
+		if typed && payloadType != ExpectedPolicyTypeAflockV02 {
+			result.Errors = append(result.Errors, fmt.Sprintf("Step '%s': about-needs-policy-v0.2: a step that declares about needs PayloadType %s, got %s; re-sign the policy without -t so cilock chooses it", name, ExpectedPolicyTypeAflockV02, payloadType))
+			result.Valid = false
+		}
 	}
 }
 

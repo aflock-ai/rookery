@@ -16,7 +16,6 @@ package policyverify
 
 import (
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -227,9 +226,12 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 
 	log.Info("policy signature verified")
 
-	pol := policy.Policy{}
-	if err := json.Unmarshal(a.policyEnvelope.Payload, &pol); err != nil {
-		return fmt.Errorf("failed to unmarshal policy from envelope: %w", err)
+	// The shared decoder, never json.Unmarshal: it refuses a policy type this
+	// verifier does not know, decodes v0.2 strictly, and stamps the version
+	// the engine checks before it honours Step.About.
+	pol, err := policy.DecodePolicyEnvelope(a.policyEnvelope.PayloadType, a.policyEnvelope.Payload)
+	if err != nil {
+		return fmt.Errorf("failed to decode policy from envelope: %w", err)
 	}
 
 	pubKeysById, err := pol.PublicKeyVerifiers(a.kmsProviderOptions)
@@ -340,6 +342,21 @@ func evidenceDigest(ctx *attestation.AttestationContext, ce source.CollectionEnv
 	return digest, true
 }
 
+// vsaPolicyURI is the policy type the VSA names: the signed envelope's own
+// PayloadType, so a consumer learns which predicate, and so which step
+// semantics, the verdict was reached under. The legacy witness v0.1 type is an
+// alias of aflock v0.1 and an envelope with no type predates types; both name
+// aflock v0.1, as every VSA did before, so a v0.1 policy's VSA is unchanged.
+// Attest writes a VSA only for a policy policy.DecodePolicyEnvelope accepted,
+// so in practice the input is one of the three allowlisted types; the other
+// arms keep this function total.
+func vsaPolicyURI(payloadType string) string {
+	if payloadType == "" || payloadType == policy.LegacyPolicyPredicate {
+		return policy.PolicyPredicate
+	}
+	return payloadType
+}
+
 func verificationSummaryFromResults(ctx *attestation.AttestationContext, policyEnvelope dsse.Envelope, stepResults map[string]policy.StepResult, accepted bool) (slsa.VerificationSummary, error) {
 	inputAttestations := make([]slsa.ResourceDescriptor, 0, len(stepResults))
 	for _, step := range stepResults {
@@ -386,7 +403,7 @@ func verificationSummaryFromResults(ctx *attestation.AttestationContext, policyE
 		},
 		TimeVerified: time.Now(),
 		Policy: slsa.ResourceDescriptor{
-			URI:    policy.PolicyPredicate,
+			URI:    vsaPolicyURI(policyEnvelope.PayloadType),
 			Digest: policyDigest,
 		},
 		InputAttestations:  inputAttestations,

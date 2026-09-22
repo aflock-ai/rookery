@@ -51,6 +51,14 @@ type Policy struct {
 	PublicKeys           map[string]PublicKey           `json:"publickeys,omitempty" jsonschema:"title=Public Keys,description=Trusted public keys keyed by their key ID"`
 	Steps                map[string]Step                `json:"steps" jsonschema:"title=Steps,description=Verification steps that must be satisfied,required"`
 	ExternalAttestations map[string]ExternalAttestation `json:"externalAttestations,omitempty" jsonschema:"title=External Attestations,description=Bare predicate DSSE envelopes (SLSA provenance, VSAs, cosign attestations) verified as first-class policy evidence"`
+
+	// payloadVersion is the predicate version DecodePolicyEnvelope decoded
+	// this policy under. Only the decoder sets it; it is never serialized.
+	// Its zero value is policyVersionUnknown, never v0.2, so a Policy built
+	// or decoded any other way (a struct literal, json.Unmarshal, a JSON
+	// round trip) cannot carry v0.2 semantics: Verify refuses Step.About on
+	// it (about-needs-policy-v0.2).
+	payloadVersion policyVersion
 }
 
 // +kubebuilder:object:generate=true
@@ -593,6 +601,13 @@ func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (
 
 	// Validate the policy structure (self-references, unknown steps, cycles).
 	if err := p.Validate(); err != nil {
+		return false, nil, nil, err
+	}
+
+	// Step.About is honoured only on a policy DecodePolicyEnvelope decoded
+	// from a v0.2 envelope, and only with the value it knows. Refused here,
+	// before any evidence is searched.
+	if err := p.checkStepAbout(); err != nil {
 		return false, nil, nil, err
 	}
 

@@ -70,6 +70,30 @@ type Step struct {
 	// without a verified TSA timestamp are rejected. This is the FedRAMP-20x
 	// "scan/evidence newer than N days" primitive.
 	TimestampConstraint *TimestampConstraint `json:"timestampConstraint,omitempty" jsonschema:"title=Timestamp Constraint,description=Time-interval requirement on the RFC3161 TSA-verified signing time of this step's evidence (notBefore/notAfter window and/or maxAge relative to verification time). Fail-closed when evidence carries no verified TSA timestamp."`
+
+	// About GRANTS the step reach; it is never a requirement. The one value,
+	// StepAboutSource, lets the step also take witnesses about the commit the
+	// verified artifact was built from, reached through a declared link from
+	// the image to the build that produced it and on to that build's commit.
+	//
+	// It only ever adds candidates. The step keeps every witness it accepts
+	// without About (the evidence the caller's seeds find, depth 0), and each
+	// candidate must still pass the step's functionaries, attestations and
+	// Rego. So About never admits a witness the same step without it would
+	// refuse, and never turns a passing step into a failing one.
+	//
+	// What it admits today: exactly what the step admits without it, the
+	// depth-0 witnesses. The link is not implemented yet, so About changes no
+	// verdict on its own; a policy that relies on source evidence must still
+	// seed the commit (cilock verify -s sha1:<commit>).
+	//
+	// Where it is refused, before any evidence is read: any value but
+	// StepAboutSource (about-unknown-value), and any About on a Policy that
+	// DecodePolicyEnvelope did not decode from a PolicyPredicateV02 envelope
+	// (about-needs-policy-v0.2), which includes a Policy built in code or
+	// decoded with json.Unmarshal. cilock's policy commands choose v0.2 when a
+	// step declares About. omitempty keeps every v0.1 document byte-identical.
+	About string `json:"about,omitempty" jsonschema:"title=About,enum=source,description=Grants this step reach; never a requirement. 'source' lets the step also accept evidence about the commit the verified artifact was built from; the step keeps every witness it accepts without it. Requires policy predicate type https://aflock.ai/policy/v0.2."`
 }
 
 // ExternalAttestation describes a bare-predicate DSSE envelope (non-Collection)
