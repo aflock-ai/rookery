@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "attestor": "https://aflock.ai/attestations/oci/v0.1",
+      "prefix": "imageid:",
+      "class": "anchor",
+      "kind": "image-config",
+      "role": "produced",
+      "basis": "measured",
+      "algorithm": "sha256",
+      "signed_path": "$.imageid.sha256",
+      "normalization": "bare-hex",
+      "measurement": "oci-config-blob",
+      "recompute_from": "predicate",
+      "evidence": "plugins/attestors/oci/oci.go:457",
+      "since": "4.5.0"
+    },
+    {
+      "attestor": "https://aflock.ai/attestations/oci/v0.1",
+      "prefix": "registrydigest:",
+      "class": "acceptor",
+      "kind": "image-registry-manifest",
+      "role": "about",
+      "basis": "observed",
+      "algorithm": "sha256",
+      "signed_path": "$.registrydigests[*].digest.sha256",
+      "normalization": "bare-hex",
+      "gate": "the command-run sibling exited 0, passes the push verb test and prints this digest",
+      "recompute_from": "https://aflock.ai/attestations/command-run/v0.2",
+      "evidence": "plugins/attestors/oci/oci.go:468",
+      "since": "4.5.0"
+    }
+  ]
+}
