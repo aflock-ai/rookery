@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # `cilock` CLI reference
 
-> Source of truth: [`rookery/cilock/cmd/cilock/main.go`](https://github.com/aflock-ai/rookery/blob/main/cilock/cmd/cilock/main.go) and [`rookery/cilock/cli/`](https://github.com/aflock-ai/rookery/tree/main/cilock/cli). Defaults and flag names below track the released `cilock` and are completeness-gated against the binary in CI (`scripts/check-cli-coverage.mjs`) — every command has a section here.
+> Source of truth: [`rookery/cilock/cmd/cilock/main.go`](https://github.com/aflock-ai/rookery/blob/main/cilock/cmd/cilock/main.go) and [`rookery/cilock/cli/`](https://github.com/aflock-ai/rookery/tree/main/cilock/cli). Defaults and flag names below track `cilock` as built from `main`, and are completeness-gated against that binary in CI (`scripts/check-cli-coverage.mjs`) — every command has a section here. A command that has not shipped in a release yet says so in its section; check `cilock version` before you rely on it.
 
 ```
 cilock - Collect and verify attestations about your build environments
@@ -40,7 +40,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock policy draft` | Hydrate a hand-authored policy with the tenant's platform trust roots. Returns it UNSIGNED. |
 | `cilock keyid` | Print the canonical keyid (`hex(sha256(PEM(pub)))`) derived from a public or private key. |
 | `cilock bundle create` / `inspect` | Build or inspect a portable attestation bundle (tar.gz of DSSE envelopes). |
-| `cilock fetch <gitoid>` | Download any attestation from Archivista by its gitoid, verified against that content address. |
+| `cilock fetch <gitoid>` | Download any attestation from Archivista by its gitoid, verified against that content address. Added after 4.4.0. |
 | `cilock plan -- <cmd>` | Show which attestors detection would fire for a command, without executing it. |
 | `cilock attestors list` | List every attestor compiled into the binary. |
 | `cilock attestors schema <name>` | Print the JSON schema of a specific attestor's predicate. |
@@ -561,6 +561,10 @@ cilock verify ./app -p policy.signed.json -k pub.pem --bundle evidence.tar.gz --
 ```
 
 ## `cilock fetch <gitoid>`
+
+:::caution Not in CI/lock 4.4.0
+`fetch` was added after the 4.4.0 release. On 4.4.0 and earlier, `cilock fetch` fails with `unknown command "fetch" for "cilock"`. It needs a `cilock` newer than 4.4.0.
+:::
 
 > Download **any** attestation from Archivista by its gitoid. `fetch` is generic over attestation type — it downloads whatever DSSE envelope the gitoid names and knows nothing about the predicate inside it.
 

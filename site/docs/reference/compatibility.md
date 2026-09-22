@@ -25,9 +25,9 @@ The official rookery release pipeline produces static binaries for:
 |---|---|---|
 | Linux | amd64, arm64 | Full feature set including `--trace` (ptrace) |
 | macOS (Darwin) | amd64, arm64 | All attestors except `--trace` (ptrace is Linux-only) |
-| Windows | (not shipped) | **Not shipped:** the `omnitrail` attestor has linux/darwin-only build constraints (per `release.yml` comment). |
+| Windows | amd64 | Shipped as a `.zip` since v3.2.0. No `omnitrail` attestor (not supported on Windows) and no `--trace` backend. |
 
-To build a Windows binary anyway, fork `cilock/cmd/cilock/main.go` and remove the `omnitrail` import.
+macOS and Windows binaries are not OS code-signed (no Apple Developer ID or notarization, no Authenticode); see [Verify the `cilock` binary](../getting-started/verify-the-cilock-binary#macos-and-windows-binaries-are-not-os-signed).
 
 ## Container image
 
@@ -115,4 +115,4 @@ CI/lock shares witness's DSSE + in-toto envelope format, but interop is **asymme
 
 - **Real-time network egress monitoring.** CI/lock observes file/syscall activity, not network traffic. Pair with [StepSecurity Harden-Runner](https://github.com/step-security/harden-runner) for that gap.
 - **Developer laptop or production server protection.** CI/lock operates in CI/CD only.
-- **Windows attestor coverage.** Until the `omnitrail` build constraint is relaxed or made conditional, Windows requires a custom build.
+- **Windows attestor coverage.** The released Windows binary has no `omnitrail` attestor and no `--trace` backend, so a Windows runner cannot produce evidence that needs either.

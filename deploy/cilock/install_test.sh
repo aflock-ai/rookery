@@ -23,8 +23,17 @@
 #      exits 0 on an "improperly formatted" line);
 # and, in every case, pass or fail, remove its staging directory.
 #
+# The docs also print copy-paste recipes for installing by hand, and they
+# must refuse the same archives. A reader pastes a recipe into an interactive
+# shell, where a failed line does not stop the next one. So these checks run
+# each recipe the way a paste runs it:
+#   7. the POSIX recipes (installation.md "Manual download",
+#      verify-the-cilock-binary.md Path 1), under bash without errexit;
+#   8. the Windows PowerShell recipe in installation.md: its shape on every
+#      run, and the recipe itself when INSTALL_TEST_PWSH names a pwsh.
+#
 # No cilock binary, no network, no secrets: curl, tar, sha256sum/shasum, dash
-# and shellcheck.
+# and shellcheck (plus pwsh and python3 for case 8p, which is opt-in).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -213,6 +222,197 @@ for sh in "${shells[@]}"; do
     pass "6/$sh" "refused a truncated manifest sha256"
   fi
 done
+
+# --- 7/8 shared: the documented recipes -----------------------------------------
+DOCS="$HERE/../../site/docs/getting-started"
+mark="$work/marks"
+
+# fence DOC LANG NEEDLE: print the one LANG fence in DOC with a line containing
+# NEEDLE. Fails unless exactly one fence matches.
+fence() {
+  awk -v open="\`\`\`$2" -v needle="$3" '
+    $0 == open { inblk = 1; body = ""; hit = 0; next }
+    inblk && $0 == "```" { if (hit) { printf "%s", body; found++ } inblk = 0; next }
+    inblk { body = body $0 "\n"; if (index($0, needle)) hit = 1 }
+    END { exit found == 1 ? 0 : 1 }' "$1"
+}
+
+# fake_bin PATH LABEL: a stand-in cilock that records that it ran, then prints
+# "cilock LABEL". Any marker other than the expected one is a failure.
+fake_bin() {
+  printf '#!/bin/sh\ntouch "%s/%s-ran"\necho "cilock %s"\n' "$mark" "$2" "$2" > "$1"
+  chmod +x "$1"
+}
+
+ran() { [ -n "$(ls -A "$mark")" ]; }
+ran_only() { [ -e "$mark/$1-ran" ] && [ "$(ls -A "$mark")" = "$1-ran" ]; }
+
+# stage_release DIST VERSION_DIR ARCHIVE MODE PACK_CMD BIN: write ARCHIVE,
+# holding one fake cilock named BIN, and its .sha256 sidecar under
+# DIST/dl/VERSION_DIR. MODE good: the sidecar matches. tamper: an archive
+# holding a "tampered" cilock replaces the one the sidecar names. no-line: the
+# sidecar has no line for the archive, and the archive is the tampered one.
+# PACK_CMD packs $work/r/pack into the archive path it is given.
+other_sha="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+stage_release() {
+  local dist="$1/dl/$2" archive="$3" mode="$4" pack="$5" bin="$6" sha
+  mkdir -p "$dist" "$work/r/pack"
+  rm -f "$work/r/pack/$bin"
+  fake_bin "$work/r/pack/$bin" good
+  "$pack" "$dist/$archive"
+  sha="$(sha_of "$dist/$archive")"
+  if [ "$mode" = no-line ]; then
+    printf '%s  %s\n' "$sha" "some-other-archive.tar.gz" > "$dist/$archive.sha256"
+  else
+    # The sidecar also lists attestation files; the recipe must pick its line.
+    printf '%s  %s\n%s  %s\n' "$other_sha" "${archive%.*}.build.att.json" \
+      "$sha" "$archive" > "$dist/$archive.sha256"
+  fi
+  if [ "$mode" != good ]; then
+    rm -f "$work/r/pack/$bin" "$dist/$archive"
+    fake_bin "$work/r/pack/$bin" tampered
+    "$pack" "$dist/$archive"
+  fi
+}
+pack_tgz() { tar -C "$work/r/pack" -czf "$1" cilock; }
+pack_zip() { (cd "$work/r/pack" && python3 -m zipfile -c "$1" cilock.exe); }
+
+# --- 7. POSIX recipes: a failed check stops before anything runs -----------------
+posix_recipe() { # $1 = label, $2 = doc
+  local label="$1" doc="$2" recipe="$work/recipe.sh" version archive mode rc
+  # shellcheck disable=SC2016 # the recipe's own text, matched literally
+  if ! fence "$doc" bash 'curl -fsSLO "${BASE}/${ARCHIVE}"' > "$recipe"; then
+    fail "$label" "$(basename "$doc") has no single bash fence that downloads \${ARCHIVE}"
+    return
+  fi
+  read -r version archive < <(bash -c "$(grep -E '^[A-Z]+=' "$recipe")"'
+    printf "%s %s\n" "$VERSION" "$ARCHIVE"')
+  for mode in good tamper no-line; do
+    rm -rf "$work/r" "$mark"; mkdir -p "$work/r/cwd" "$mark"
+    stage_release "$work/r/dist" "$version" "$archive" "$mode" pack_tgz cilock
+    fake_bin "$work/r/cwd/cilock" stale   # a cilock left in the directory
+    sed "s#https://cilock.dev#file://$work/r/dist#" "$recipe" > "$work/r/recipe.sh"
+    if ! grep -qF "file://$work/r/dist/dl/" "$work/r/recipe.sh"; then
+      fail "$label/$mode" "recipe no longer downloads from https://cilock.dev, so this harness cannot serve it"
+      continue
+    fi
+    if (cd "$work/r/cwd" && bash "$work/r/recipe.sh" > "$work/r/out" 2> "$work/err"); then rc=0; else rc=$?; fi
+    { cat "$work/r/out"; echo; } >> "$work/err"
+    if [ "$mode" = good ]; then
+      if [ "$rc" -ne 0 ] || ! ran_only good || ! grep -qx 'cilock good' "$work/r/out"; then
+        fail "$label/$mode" "a matching archive must run ITS cilock and only that (rc=$rc, ran: $(ls "$mark"))"
+      else
+        pass "$label/$mode" "ran the cilock from the archive that matched, not the one already there"
+      fi
+    elif [ ! -e "$work/r/cwd/$archive" ] || [ ! -e "$work/r/cwd/$archive.sha256" ]; then
+      fail "$label/$mode" "the recipe never downloaded the archive and sidecar, so this proved nothing"
+    elif ran || [ "$rc" -eq 0 ]; then
+      fail "$label/$mode" "the recipe ran a cilock the checksum did not cover (rc=$rc, ran: $(ls "$mark"))"
+    elif [ "$mode" = tamper ] && ! grep -qF 'FAILED' "$work/err"; then
+      fail "$label/$mode" "stopped, but not at the checksum (no FAILED line), so this proved nothing"
+    else
+      pass "$label/$mode" "stopped before extracting or running anything (rc=$rc)"
+    fi
+  done
+}
+posix_recipe 7/installation "$DOCS/installation.md"
+posix_recipe 7/verify-path-1 "$DOCS/verify-the-cilock-binary.md"
+
+# --- 8. the Windows recipe ------------------------------------------------------
+# Pasted into a console, each top-level PowerShell line runs even after the line
+# before it threw, and Expand-Archive that finds cilock.exe already present only
+# writes a non-terminating error. A flat recipe can therefore run a cilock.exe
+# the checksum never covered. It must be one `& { }` block that stops on the
+# first error and extracts into a directory the block itself creates.
+ps_recipe="$work/recipe.ps1"
+rm -f "$work/err"
+if ! fence "$DOCS/installation.md" powershell 'Expand-Archive' > "$ps_recipe"; then
+  fail 8s "installation.md has no single powershell fence that runs Expand-Archive"
+else
+  if [ "$(awk 'NF { print; exit }' "$ps_recipe")" != '& {' ] || [ "$(awk 'NF { l = $0 } END { print l }' "$ps_recipe")" != '}' ]; then
+    fail 8s "the recipe is not one & { } block, so a throw stops only its own line"
+  elif [ "$(awk 'NF && ++n == 2 { gsub(/^[ \t]+|[ \t]+$/, ""); print; exit }' "$ps_recipe")" != "\$ErrorActionPreference = 'Stop'" ]; then
+    fail 8s "the block's first statement must be \$ErrorActionPreference = 'Stop'"
+  elif ! awk '/Expand-Archive/ { n++; if (!/-ErrorAction Stop/) bad = 1 } END { exit !(n > 0 && !bad) }' "$ps_recipe"; then
+    fail 8s "Expand-Archive needs -ErrorAction Stop: it is a script-module function and does not see the block's preference"
+  elif grep -qE -- '-DestinationPath +\.( |$)' "$ps_recipe"; then
+    fail 8s "the recipe extracts into the current directory, where an older cilock.exe can already sit"
+  else
+    pass 8s "one & { } block, stops on the first error, extracts into its own directory"
+  fi
+fi
+
+# 8p runs the recipe itself, fed on stdin to `pwsh -Command -`, which executes it
+# the way a console paste does. Invoke-WebRequest is shadowed by a function that
+# serves the staged release from disk.
+ps_recipe_run() { # $1 = mode label; runs in $work/r/cwd
+  {
+    # shellcheck disable=SC2016 # PowerShell text, expanded by pwsh
+    printf '%s\n\n' 'function Invoke-WebRequest { param([Parameter(Position = 0)][string]$Uri, [string]$OutFile, [switch]$UseBasicParsing) Copy-Item -LiteralPath ($Uri -replace "^https://cilock\.dev", $env:RECIPE_DIST) -Destination $OutFile -ErrorAction Stop }'
+    cat "$ps_recipe"
+    printf '\n'
+  } > "$work/r/input.ps1"
+  (cd "$work/r/cwd" && RECIPE_DIST="$work/r/dist" TERM=dumb NO_COLOR=1 "$INSTALL_TEST_PWSH" -NoProfile -NonInteractive \
+    -Command - < "$work/r/input.ps1" > "$work/r/out" 2> "$work/err") || true
+  { cat "$work/r/out"; echo; } >> "$work/err"
+}
+if [ -z "${INSTALL_TEST_PWSH:-}" ]; then
+  echo "NOT RUN[8p]: set INSTALL_TEST_PWSH to a pwsh to run the PowerShell recipe (8s checked its shape only)"
+elif ! "$INSTALL_TEST_PWSH" -NoProfile -NonInteractive -Command 'exit 0' > /dev/null 2>&1; then
+  rm -f "$work/err"; fail 8p "INSTALL_TEST_PWSH=$INSTALL_TEST_PWSH does not run"
+elif ! command -v python3 > /dev/null 2>&1; then
+  rm -f "$work/err"; fail 8p "python3 is not on PATH; 8p zips the staged release with it"
+elif [ ! -s "$ps_recipe" ]; then
+  rm -f "$work/err"; fail 8p "no PowerShell recipe to run (see 8s)"
+else
+  # shellcheck disable=SC2016 # PowerShell text, expanded by pwsh
+  read -r ps_version ps_archive < <("$INSTALL_TEST_PWSH" -NoProfile -NonInteractive -Command \
+    "$(grep -E '^[[:space:]]*\$(VERSION|ARCHIVE) = ' "$ps_recipe"); \"\$VERSION \$ARCHIVE\"")
+  for mode in good tamper no-line rerun; do
+    rm -rf "$work/r" "$mark"; mkdir -p "$work/r/cwd" "$mark"
+    stage_release "$work/r/dist" "v$ps_version" "$ps_archive" "${mode/rerun/good}" pack_zip cilock.exe
+    fake_bin "$work/r/cwd/cilock.exe" stale   # a cilock.exe left in the directory
+    planted=0
+    if [ "$mode" = rerun ]; then
+      # A second run over the first run's directory must not run what it finds there.
+      ps_recipe_run first
+      rm -rf "$mark"; mkdir -p "$mark"
+      while IFS= read -r exe; do fake_bin "$exe" stale; planted=$((planted + 1)); done \
+        < <(find "$work/r/cwd" -mindepth 2 -name cilock.exe)
+    fi
+    ps_recipe_run "$mode"
+    case "$mode" in
+      tamper) want='SHA-256 mismatch' ;;
+      no-line) want='no single line' ;;
+      *) want='' ;;
+    esac
+    if [ "$mode" = rerun ]; then
+      # Refusing to reuse the directory and re-extracting over it are both safe;
+      # running what the earlier run left there is not.
+      if [ "$planted" -eq 0 ]; then
+        fail "8p/$mode" "the first run extracted no cilock.exe into a directory, so a rerun proves nothing"
+      elif ran && ! ran_only good; then
+        fail "8p/$mode" "the rerun ran a cilock.exe the earlier run left behind (ran: $(ls "$mark"))"
+      else
+        pass "8p/$mode" "the rerun did not run the cilock.exe the earlier run left behind"
+      fi
+    elif [ "$mode" = good ]; then
+      if ! ran_only good || ! grep -q 'cilock good' "$work/r/out"; then
+        fail "8p/$mode" "a matching archive must run ITS cilock.exe and only that (ran: $(ls "$mark"))"
+      else
+        pass "8p/$mode" "ran the cilock.exe from the archive that matched, not the one already there"
+      fi
+    elif [ ! -e "$work/r/cwd/$ps_archive" ]; then
+      fail "8p/$mode" "the recipe never downloaded the archive, so this proved nothing"
+    elif ran; then
+      fail "8p/$mode" "the recipe ran a cilock.exe it did not just extract from a checked archive (ran: $(ls "$mark"))"
+    elif ! grep -qF "$want" "$work/err"; then
+      fail "8p/$mode" "stopped, but not with '$want', so this proved nothing"
+    else
+      pass "8p/$mode" "stopped with '$want' before running anything"
+    fi
+  done
+fi
 
 if [ "$failed" -ne 0 ]; then
   echo "FAILED: $failed check(s)"

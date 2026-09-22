@@ -1,6 +1,6 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 136,
+  "count": 137,
   "withDoc": 61,
   "emittedBy": {
     "sbom": [
@@ -1560,6 +1560,17 @@
       "predicateType": "https://aflock.ai/attestations/steampipe/v0.1",
       "runType": "postproduct",
       "hasDoc": true
+    },
+    {
+      "name": "structured-data",
+      "source": "attestor-backed",
+      "categories": [],
+      "primaryCategory": null,
+      "description": "(no detector.yaml; user-driven or always-on)",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/structured-data/v0.1",
+      "runType": "postproduct",
+      "hasDoc": false
     },
     {
       "name": "syft",
