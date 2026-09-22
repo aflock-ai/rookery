@@ -222,6 +222,20 @@ func (vo *vexAuthorOptions) run(cmd *cobra.Command, o *options.RunOptions) error
 		return err
 	}
 
+	// Resolve the platform identity and run `cilock run`'s fail-closed start
+	// gates (H18) after the document is validated but BEFORE it is written: a
+	// refused identity, binding or evidence-storage check must leave no
+	// unsigned document on disk, and nothing reaches a signer.
+	o.ResolvePlatformDefaults(cmd)
+	// The enrolled-agent signing path fails closed: a refused credential
+	// exchange must end the command, never continue on the human session.
+	if err := o.AgentIdentityError(); err != nil {
+		return err
+	}
+	if err := preRunGates(cmd, o); err != nil {
+		return err
+	}
+
 	docPath, raw, err := vo.write(doc, o.WorkingDir)
 	if err != nil {
 		return err
@@ -237,13 +251,6 @@ func (vo *vexAuthorOptions) run(cmd *cobra.Command, o *options.RunOptions) error
 	// operator's copy.
 	o.AttestorOptSetters[vex.Name] = append(o.AttestorOptSetters[vex.Name], vexBytesSetter(raw, docPath))
 	o.Attestations = appendAttestor(o.Attestations, vex.Name)
-
-	o.ResolvePlatformDefaults(cmd)
-	// The enrolled-agent signing path fails closed: a refused credential
-	// exchange must end the command, never continue on the human session.
-	if err := o.AgentIdentityError(); err != nil {
-		return err
-	}
 
 	signerProviders := providersFromFlags("signer", cmd.Flags())
 	signers, err := loadSigners(cmd.Context(), o.SignerOptions, o.KMSSignerProviderOptions, signerProviders)

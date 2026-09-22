@@ -296,7 +296,9 @@ collection as `attestation.json` beside its companions. On Unix, automatic
 directories use mode `0700`, and evidence files use `0600`. On Windows, Cilock
 creates and verifies protected current-user-only ACLs and rejects reparse points.
 Compact builds refuse existing
-evidence files instead of overwriting them. Headless inventory retention and
+evidence files instead of overwriting them. The outfile and both inventory
+companion paths are checked before the wrapped command runs, so a taken path
+costs no build time. Headless inventory retention and
 upload never prompt.
 
 In a `compact` build, `--upload-inventories` explicitly permits bulk inventory

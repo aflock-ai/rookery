@@ -83,6 +83,13 @@ flag accepted by ` + "`cilock run`" + ` works identically here.`,
 			if err := o.AgentIdentityError(); err != nil {
 				return err
 			}
+			// The same fail-closed start gates `cilock run` applies (H18):
+			// attest signs and stores evidence exactly as run does, so an
+			// unlinkable product binding, or a stored principal that would
+			// store nothing, must refuse here too, before anything is signed.
+			if err := preRunGates(cmd, &o); err != nil {
+				return err
+			}
 
 			signerProviders := providersFromFlags("signer", cmd.Flags())
 			signers, err := loadSigners(cmd.Context(),

@@ -33,6 +33,7 @@ type recordedAttestation struct {
 	SignatureCount int                        // number of DSSE signatures (a genuine signed envelope has >=1)
 	Subjects       []string                   // collection subject names (namespaced: "<predType>/<key>")
 	Argv           []string                   // command-run argv
+	ExitCode       *int                       // command-run exitcode; nil when the predicate has none
 	ByType         map[string]json.RawMessage // attestor predicate-type -> its sub-attestation
 }
 
@@ -47,8 +48,8 @@ func (r *recordedAttestation) types() []string {
 }
 
 // loadRecordedAttestation decodes a DSSE envelope's payload into the in-toto
-// collection statement and extracts subjects, the command-run argv, and each
-// embedded attestation keyed by type.
+// collection statement and extracts subjects, the command-run argv and exit
+// code, and each embedded attestation keyed by type.
 func loadRecordedAttestation(path string) (*recordedAttestation, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // path from the fixture manifest
 	if err != nil {
@@ -97,10 +98,12 @@ func loadRecordedAttestation(path string) (*recordedAttestation, error) {
 			// v0.2 restructures per-process data but keeps top-level cmd; both
 			// versions answer the argv cross-check the same way.
 			var cr struct {
-				Cmd []string `json:"cmd"`
+				Cmd      []string `json:"cmd"`
+				ExitCode *int     `json:"exitcode"`
 			}
 			_ = json.Unmarshal(a.Attestation, &cr)
 			rec.Argv = cr.Cmd
+			rec.ExitCode = cr.ExitCode
 		}
 	}
 	return rec, nil

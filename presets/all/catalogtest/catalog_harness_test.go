@@ -28,9 +28,12 @@ package catalogtest
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/testkit"
+	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	_ "github.com/aflock-ai/rookery/presets/all" // register every attestor + signer
 )
 
@@ -55,11 +58,11 @@ func TestCatalogContracts(t *testing.T) {
 		for _, fx := range fxs {
 			total++
 			t.Run(fx.Attestor+"/"+fx.Name, func(t *testing.T) {
-				res := testkit.RunAttestorWithFixture(t, fx)
+				res := testkit.RunAttestorWithFixture(t, fx, withReplayedCommandRun)
 				res.AssertContract(t, fx)
 				// Signed evidence must be reproducible: re-run and assert the
 				// predicate is identical (catches nondeterministic output).
-				testkit.AssertDeterministic(t, fx, res)
+				testkit.AssertDeterministic(t, fx, res, withReplayedCommandRun)
 			})
 		}
 	}
@@ -71,4 +74,49 @@ func TestCatalogContracts(t *testing.T) {
 		t.Fatalf("no catalog fixtures found under %s — the fixture glob is broken (expected the committed proven fixtures); a skip here would be a false green", root)
 	}
 	t.Logf("verified %d catalog fixture(s) across %d attestor(s) with fixtures", total, len(fixtureDirs))
+}
+
+// withReplayedCommandRun lets a fixture that declares setup.command_run replay
+// with the command-run its recorded collection holds (the live gate passes its
+// re-run's instead). An attestor that reads the wrapped command's exit status
+// (govulncheck: an unknown status is never attested as a completed scan) sees
+// the argv and exit code the real run recorded, as it did inside that
+// `cilock run`. Fixtures that do not declare it replay with no command-run, as
+// before.
+var withReplayedCommandRun = testkit.WithCommandRun(func(cr testkit.CommandRun) attestation.Attestor {
+	run := commandrun.New(commandrun.WithCommand(cr.Argv))
+	run.ExitCode = cr.ExitCode
+	return replayedCommandRun{run}
+})
+
+// replayedCommandRun is a command-run that already completed in the recorded
+// run. Attest does nothing: re-executing the recorded argv (a real govulncheck
+// against the network) would break the hermetic replay, and its outcome is
+// already in the recording.
+type replayedCommandRun struct{ *commandrun.CommandRun }
+
+func (replayedCommandRun) Attest(*attestation.AttestationContext) error { return nil }
+
+// TestReplayedCommandRunCarriesTheExitStatus pins that the replay hands the
+// attestor the recorded exit status rather than a stand-in 0: the same
+// recorded govulncheck stream, replayed with a command-run that exited 1, is
+// refused. Without this, a builder that hard-coded a clean exit would keep the
+// canonical row green whatever the recording said.
+func TestReplayedCommandRunCarriesTheExitStatus(t *testing.T) {
+	// Resolved from pluginsRoot like every other catalogtest read of a plugin
+	// tree: presets/all imports the govulncheck plugin, so the ring's module
+	// graph selects this package for a change to that plugin's testdata.
+	fx, err := testkit.LoadFixture(filepath.Join(pluginsRoot(t), "govulncheck", "testdata", "fixtures", "vuln-found"))
+	if err != nil {
+		t.Fatalf("load vuln-found: %v", err)
+	}
+	if fx.CommandRun == nil || fx.CommandRun.ExitCode != 0 {
+		t.Fatalf("vuln-found must replay its recorded command-run with exit 0, got %+v", fx.CommandRun)
+	}
+	failed := *fx
+	failed.CommandRun = &testkit.CommandRun{Argv: fx.CommandRun.Argv, ExitCode: 1}
+	res := testkit.RunAttestorWithFixture(t, &failed, withReplayedCommandRun)
+	if res.RunErr == nil || !strings.Contains(res.RunErr.Error(), "exited with status 1") {
+		t.Fatalf("a recorded exit status of 1 must refuse the scan, got error %v", res.RunErr)
+	}
 }

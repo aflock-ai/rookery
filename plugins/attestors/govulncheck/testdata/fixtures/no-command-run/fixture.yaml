@@ -1,0 +1,18 @@
+schema_version: "0.1"
+attestor: govulncheck
+description: "The vuln-found stream (a complete govulncheck v1.3.0 scan, recorded from a real run) replayed with NO command-run in the collection. Nothing shows govulncheck's exit status, so the scan's completion cannot be established and the attestor must refuse it rather than attest it. Pins the refusal the vuln-found fixture avoids by replaying its recorded command-run."
+setup:
+  mode: product
+  # The same bytes as the canonical fixture, so the only difference between
+  # the two rows is the command-run. No setup.command_run: the replay context
+  # holds the product and the attestor, nothing else.
+  input: ../vuln-found/govulncheck.json
+  mime_type: "text/plain; charset=utf-8"
+expect:
+  predicate_type: https://aflock.ai/attestations/govulncheck/v0.1
+  run_type: postproduct
+  # "No evidence" here is no attestable evidence: Attest must return this
+  # error (a plain one, so the payload is dropped from a signed collection).
+  exit:
+    on_no_evidence: error
+    error_contains: "the collection has no command-run, so govulncheck's exit status is unknown"

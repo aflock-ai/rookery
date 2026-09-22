@@ -126,8 +126,13 @@ func liveReverify(t *testing.T, fx *testkit.Fixture, recInput string) {
 	fresh.InputPath = freshOut
 	fresh.Recording = nil
 	fresh.GoldenPath = ""
+	if fx.CommandRun != nil {
+		// The fresh output's command-run is the re-run above: the recorded
+		// argv, and exit 0 (a non-zero exit already failed the test).
+		fresh.CommandRun = &testkit.CommandRun{Argv: argv, ExitCode: 0}
+	}
 
-	res := testkit.RunAttestorWithFixture(t, &fresh)
+	res := testkit.RunAttestorWithFixture(t, &fresh, withReplayedCommandRun)
 	// Asserts predicate type + the contract's subject families + schema against
 	// the FRESHLY produced real-tool output. If today's tool no longer produces
 	// a conformant attestation, this is the contract breaking against reality.

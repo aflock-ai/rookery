@@ -9,6 +9,12 @@ setup:
   # application/json. The attestor matches the MIME by prefix; inject as
   # text/plain or the product is skipped ("no govulncheck JSON output found").
   mime_type: "text/plain; charset=utf-8"
+  # The attestor attests a scan only when the collection's command-run shows
+  # the wrapped command exited 0 (the -json stream has no terminal record, so
+  # the exit status is the proof the scan finished). Replay with the recorded
+  # command-run: argv `bash -c 'GOWORK=off govulncheck ...'`, exitcode 0.
+  # The no-command-run fixture pins the refusal without it.
+  command_run: recorded
 recording:
   tool: govulncheck
   version: "v1.3.0"

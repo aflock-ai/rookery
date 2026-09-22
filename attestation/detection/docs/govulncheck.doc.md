@@ -69,6 +69,26 @@ The wrapped `sh -c` records `["sh","-c","govulncheck -format sarif ./... > govul
 
 The `sh -c` wrapper is a tool-output limitation — govulncheck (as of v1.x) has no `-o` / `--output` flag and writes SARIF only to stdout. A single shell redirect routes its output to a file the product attestor can hash. This is NOT the cp antipattern — once [`golang/vuln`](https://github.com/golang/vuln) ships a file-output flag, the wrapper can be dropped.
 
+## Attesting the `-json` stream: run govulncheck inside `cilock run`
+
+The `govulncheck` attestor (`https://aflock.ai/attestations/govulncheck/v0.1`) reads govulncheck's own `-json` stream instead of SARIF. It only attests a scan that ran inside the same `cilock run`:
+
+```bash
+cilock run --step vulns -a git -a govulncheck \
+  -- sh -c 'govulncheck -json ./... > govulncheck.json'
+```
+
+The `-json` stream has no record that marks the end of a scan, so a stream alone cannot show that the scan finished. The attestor needs two things: the stream reaches govulncheck's `Checking ... against the vulnerabilities...` record (govulncheck v1.1.1 or later), and the collection's `command-run` shows the wrapped command exited 0. If either is missing, the attestor refuses the scan. The run exits 1, and the signed collection has no `govulncheck` predicate, so a failed scan is never stored as zero findings. These are refused:
+
+- The wrapped command exited non-zero. This includes runs with `--ignore-command-exit-code`.
+- Under `--trace`, a traced `govulncheck` process exited non-zero, even when a wrapper such as `|| true` exited 0.
+- The step produced more than one completed `-json` stream. The attestor signs one report per step and has no safe way to choose between them, so write one stream per step.
+- The collection has no `command-run`, so nothing shows how govulncheck exited. cilock-action's `action-ref` mode records `github-action` instead of `command-run`. Run govulncheck through the action's `command` input.
+
+`cilock attest -a govulncheck` does not attest a `govulncheck.json` written before the step. `cilock attest` wraps a no-op command, so that file is not a product of the step, and the attestor is skipped. Run the scan inside the step.
+
+Without `--trace`, cilock sees only the wrapped command's exit status. A wrapper that throws away govulncheck's status (`govulncheck -json ./... > govulncheck.json || true`) hides a failed scan.
+
 ## Validate it locally
 
 List the predicate types emitted into the Collection:

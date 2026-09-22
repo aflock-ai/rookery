@@ -100,6 +100,22 @@ type setupSpec struct {
 	Env      map[string]string `yaml:"env"`       // env mode
 	Workdir  []string          `yaml:"workdir"`   // workdir mode: files (relative) to materialize
 	Options  map[string]any    `yaml:"options"`   // attestor-specific (e.g. steampipe sql/frontmatter)
+	// CommandRun, product mode only: "recorded" places the recorded run's
+	// command-run (its argv and exit status) in the replay context, for an
+	// attestor that reads the wrapped command's exit status from the
+	// collection. The only accepted value; see Fixture.CommandRun.
+	CommandRun string `yaml:"command_run"`
+}
+
+// CommandRunRecorded is the only accepted setup.command_run value.
+const CommandRunRecorded = "recorded"
+
+// CommandRun is the wrapped command a fixture's replay context shows: the argv
+// and exit status a command-run attestor observed. Loaded from the recorded
+// collection (setup.command_run: recorded); nothing is executed on replay.
+type CommandRun struct {
+	Argv     []string
+	ExitCode int
 }
 
 type expectSpec struct {
@@ -202,6 +218,10 @@ type Fixture struct {
 	Expect     expectSpec
 	GoldenPath string     // abs; "" if none
 	Recording  *Recording // provenance of the real run; nil if the fixture was not recorded
+	// CommandRun is the command-run the product-mode replay places before the
+	// target (setup.command_run); nil means the context has none. A caller
+	// must pass WithCommandRun to build it.
+	CommandRun *CommandRun
 }
 
 // LoadFixture parses <dir>/fixture.yaml, validates it, and resolves all
@@ -291,7 +311,39 @@ func LoadFixture(dir string) (*Fixture, error) {
 			}
 		}
 	}
+	if m.Setup.CommandRun != "" {
+		cr, err := loadRecordedCommandRun(m.Setup, fx.Recording)
+		if err != nil {
+			return nil, fmt.Errorf("%s: setup.command_run: %w", mpath, err)
+		}
+		fx.CommandRun = cr
+	}
 	return fx, nil
+}
+
+// loadRecordedCommandRun resolves setup.command_run to the command-run the
+// recorded collection holds. Every failure is a load error: a fixture that
+// asks for the recorded exit status and cannot have it must not replay
+// without one (the attestor would then refuse for the wrong reason, or a
+// harness would paper over the gap).
+func loadRecordedCommandRun(setup setupSpec, rec *Recording) (*CommandRun, error) {
+	if setup.CommandRun != CommandRunRecorded {
+		return nil, fmt.Errorf("%q is not supported (the only value is %q)", setup.CommandRun, CommandRunRecorded)
+	}
+	if setup.Mode != ModeProduct {
+		return nil, fmt.Errorf("only product mode places a command-run in the replay context (mode is %q)", setup.Mode)
+	}
+	if rec == nil || rec.AttestationPath == "" {
+		return nil, fmt.Errorf("%q needs recording.attestation, the collection the command-run is read from", CommandRunRecorded)
+	}
+	ra, err := loadRecordedAttestation(rec.AttestationPath)
+	if err != nil {
+		return nil, fmt.Errorf("load %s: %w", rec.AttestationPath, err)
+	}
+	if len(ra.Argv) == 0 || ra.ExitCode == nil {
+		return nil, fmt.Errorf("%s has no command-run with a cmd and an exitcode", rec.AttestationPath)
+	}
+	return &CommandRun{Argv: ra.Argv, ExitCode: *ra.ExitCode}, nil
 }
 
 // LoadFixtures loads every <root>/*/fixture.yaml. Used by the harness to walk

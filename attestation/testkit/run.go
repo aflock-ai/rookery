@@ -44,9 +44,21 @@ type Result struct {
 type RunOption func(*runConfig)
 
 type runConfig struct {
-	attestor attestation.Attestor // pre-configured instance (overrides GetAttestor by name)
-	mime     string               // override product mime
+	attestor   attestation.Attestor // pre-configured instance (overrides GetAttestor by name)
+	mime       string               // override product mime
+	commandRun CommandRunBuilder    // builds the fixture's command-run (setup.command_run)
 }
+
+// CommandRunBuilder returns the command-run attestor a product-mode replay
+// places before the target, carrying cr's argv and exit status. It must not
+// execute anything: the recorded run already did, and the replay is hermetic.
+// testkit cannot build one itself, because the command-run attestor is a
+// plugin and this package sits below every plugin.
+type CommandRunBuilder func(cr CommandRun) attestation.Attestor
+
+// commandRunName is the command-run attestor's registered name, which is what
+// attestors reading the collection's exit status look it up by.
+const commandRunName = "command-run"
 
 // WithAttestor supplies a pre-configured attestor instead of resolving by
 // name. Needed for attestors requiring constructor options the fixture can't
@@ -58,6 +70,16 @@ func WithAttestor(a attestation.Attestor) RunOption {
 // WithProductMime overrides the injected product mime type (product mode).
 func WithProductMime(m string) RunOption {
 	return func(c *runConfig) { c.mime = m }
+}
+
+// WithCommandRun supplies the builder for a fixture that declares
+// setup.command_run. A fixture that declares it and a caller that does not
+// pass this option fail the test loudly: replaying without the command-run
+// would make an attestor that reads the wrapped command's exit status refuse
+// for a reason the fixture did not intend. The option has no effect on a
+// fixture that does not declare setup.command_run.
+func WithCommandRun(b CommandRunBuilder) RunOption {
+	return func(c *runConfig) { c.commandRun = b }
 }
 
 // RunAttestorWithFixture drives the attestor named by the fixture against the
@@ -123,6 +145,13 @@ func RunAttestorWithFixture(t *testing.T, fx *Fixture, opts ...RunOption) *Resul
 	switch fx.Mode {
 	case ModeProduct:
 		producer, dir := materializeProduct(t, fx, cfg.mime, hashes)
+		ctxAttestors := []attestation.Attestor{producer, target}
+		if cr := commandRunFor(t, fx, cfg); cr != nil {
+			// Execute run type, so RunAttestors completes it before the
+			// product and post-product stages, the order `cilock run` gives
+			// a real command-run.
+			ctxAttestors = append(ctxAttestors, cr)
+		}
 		// WorkingDir=dir + a RELATIVE product path + t.Chdir(dir) (in
 		// materializeProduct) make the product resolve for BOTH path
 		// conventions: attestors that filepath.Join(WorkingDir, path) it
@@ -130,7 +159,7 @@ func RunAttestorWithFixture(t *testing.T, fx *Fixture, opts ...RunOption) *Resul
 		// the process CWD (prowler, steampipe). This mirrors a real cilock run,
 		// where WorkingDir == process CWD == the run dir and products are
 		// relative paths.
-		ctx, err := attestation.NewContext(fx.Attestor, []attestation.Attestor{producer, target},
+		ctx, err := attestation.NewContext(fx.Attestor, ctxAttestors,
 			attestation.WithHashes(hashes), attestation.WithWorkingDir(dir))
 		if err != nil {
 			t.Fatalf("testkit: new context: %v", err)
@@ -204,6 +233,26 @@ func RunAttestorWithFixture(t *testing.T, fx *Fixture, opts ...RunOption) *Resul
 	}
 
 	return buildResult(t, target, runErr)
+}
+
+// commandRunFor builds the fixture's command-run, or returns nil when the
+// fixture declares none. It fails the test when the fixture declares one and
+// the caller cannot build it, or when the builder returns something that
+// attestors will not find as the collection's command-run.
+func commandRunFor(t *testing.T, fx *Fixture, cfg *runConfig) attestation.Attestor {
+	t.Helper()
+	if fx.CommandRun == nil {
+		return nil
+	}
+	if cfg.commandRun == nil {
+		t.Fatalf("testkit: fixture %q declares setup.command_run but the caller passed no testkit.WithCommandRun; "+
+			"replaying it without the command-run would test a different collection than the recorded one", fx.Name)
+	}
+	cr := cfg.commandRun(*fx.CommandRun)
+	if cr == nil || cr.Name() != commandRunName || cr.RunType() != attestation.ExecuteRunType {
+		t.Fatalf("testkit: the WithCommandRun builder must return the %q attestor (execute run type) for fixture %q", commandRunName, fx.Name)
+	}
+	return cr
 }
 
 // driverOnlyOptionKeys are setup.options keys consumed by the testkit DRIVER

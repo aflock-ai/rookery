@@ -812,6 +812,9 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	if err != nil {
 		return err
 	}
+	if err := refuseTakenEvidencePaths(ro.OutFilePath, compact); err != nil {
+		return err
+	}
 	if ro.UploadInventories && !ro.ArchivistaOptions.Enable {
 		return fmt.Errorf("--upload-inventories requires --enable-archivista")
 	}
@@ -1133,6 +1136,38 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	// only contract violations (signer failure, tracing unsupported,
 	// command exit, etc.) propagate to exit 1. See finding #221.
 	return errors.Join(storageErr, classifyAttestorRunError(runErr))
+}
+
+// inventoryCompanionKinds are the fileinventory kinds a compact run may write
+// beside --outfile, as <outfile>-<kind>-inventory.json (persistRunResults).
+var inventoryCompanionKinds = []string{"product", "material"}
+
+// refuseTakenEvidencePaths is persistRunResults' "refuse existing or
+// inaccessible evidence path" rule, applied at run START. Under the compact
+// profile cilock never overwrites evidence, and every path it could refuse on
+// (the outfile and its inventory companions) is known before the wrapped
+// command runs; checking only after the command wasted the whole build and
+// threw away a signed run (H6). The post-run check stays as the backstop for
+// a path created while the command ran, and for exported-attestor companions
+// whose names are only known after the run.
+//
+// A stale companion is refused even when this run may not write that
+// companion: the refused path sits where this run's evidence set would go,
+// and a mixed set is worse than a refusal naming the file to move.
+func refuseTakenEvidencePaths(outFile string, compact bool) error {
+	if outFile == "" || !compact {
+		return nil
+	}
+	paths := []string{outFile}
+	for _, kind := range inventoryCompanionKinds {
+		paths = append(paths, outFile+"-"+kind+"-inventory.json")
+	}
+	for _, path := range paths {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			return fmt.Errorf("refuse existing or inaccessible evidence path %q; select a new --outfile (checked before the command runs)", path)
+		}
+	}
+	return nil
 }
 
 func writeRunPreflight(o options.RunOptions, detectedNames []string, cmdErr error, preflightWarned bool) {

@@ -14,14 +14,15 @@ replace github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof => ../inc
 
 require (
 	github.com/aflock-ai/rookery/attestation v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/commandrun v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/product v0.0.0-00010101000000-000000000000
 	github.com/invopop/jsonschema v0.13.0
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/mod v0.38.0
 )
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/aflock-ai/rookery/plugins/attestors/commandrun v0.0.0-00010101000000-000000000000 // indirect
 	github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf v0.0.0-00010101000000-000000000000 // indirect
 	github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof v0.0.0-00010101000000-000000000000 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
@@ -37,7 +38,6 @@ require (
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	go.step.sm/crypto v0.81.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

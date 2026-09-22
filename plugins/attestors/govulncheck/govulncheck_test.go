@@ -241,7 +241,7 @@ func TestAttest_EndToEnd(t *testing.T) {
 	p := product.New()
 
 	ctx, err := attestation.NewContext("test",
-		[]attestation.Attestor{p, gv},
+		[]attestation.Attestor{exits("0"), p, gv},
 		attestation.WithWorkingDir(tmp))
 	require.NoError(t, err)
 	require.NoError(t, ctx.RunAttestors())
@@ -290,4 +290,72 @@ func loadFixture(t *testing.T, path string) []Message {
 	messages, err := parseStream(raw)
 	require.NoError(t, err)
 	return messages
+}
+
+// TestAttest_ConfigOnlyStreamIsFatalAndDropped pins VULN-FAIL: a govulncheck
+// run that failed after its config record (a build or package-load error;
+// govulncheck exits 1) leaves a stream with no SBOM and no findings. A failed
+// vulnerability database fetch is a later stage, covered by
+// TestAttest_ScanCompletionIsReadFromTheCheckingRecord. It
+// parses and validates like a clean scan, and before this guard it was signed
+// as totalFindings 0 with no scanRoots, which a no-reachable-vulns policy
+// admits. A scan that scanned nothing is not a scan with zero findings: the
+// attestor must fail hard (not a SoftError, so the run exits 1), the evidence
+// must be dropped from the collection, and the error must name the file.
+func TestAttest_ConfigOnlyStreamIsFatalAndDropped(t *testing.T) {
+	tmp := t.TempDir()
+	src, err := os.ReadFile(filepath.Join("testdata", "govulncheck-config-only.json"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "vulns.json"), src, 0o644))
+
+	gv := New()
+	ctx, err := attestation.NewContext("test",
+		[]attestation.Attestor{product.New(), gv},
+		attestation.WithWorkingDir(tmp))
+	require.NoError(t, err)
+	require.NoError(t, ctx.RunAttestors())
+
+	var gvErr error
+	for _, c := range ctx.CompletedAttestors() {
+		if c.Attestor.Name() == Name {
+			gvErr = c.Error
+		}
+	}
+	require.Error(t, gvErr, "a config-only stream must not be attested as a clean scan")
+	assert.False(t, attestation.IsSoftError(gvErr), "a failed scan must be fatal, not a soft skip")
+	assert.False(t, attestation.EvidenceIsRecordable(gvErr), "the failed scan's payload must be dropped from the collection")
+	assert.Contains(t, gvErr.Error(), "vulns.json", "the error must name the rejected candidate")
+	assert.Contains(t, gvErr.Error(), "SBOM", "the error must say what the stream lacks")
+	assert.Empty(t, gv.ReportFile, "no report may be recorded from a scan that scanned nothing")
+	assert.Empty(t, gv.Summary.ScanLevel)
+}
+
+// TestAttest_ValidStreamWinsOverConfigOnlyCandidate: a failed scan beside a
+// completed one must not break the completed one's attestation (the failed one
+// is logged as a warning). Products are a map, so on code without this rule
+// the test fails only when failed.json is iterated first: it is a regression
+// guard, not red-first evidence.
+func TestAttest_ValidStreamWinsOverConfigOnlyCandidate(t *testing.T) {
+	tmp := t.TempDir()
+	for name, fixture := range map[string]string{
+		"failed.json": "govulncheck-config-only.json",
+		"vulns.json":  "govulncheck-no-vulns.json",
+	} {
+		src, err := os.ReadFile(filepath.Join("testdata", fixture))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(tmp, name), src, 0o644))
+	}
+	gv := New()
+	ctx, err := attestation.NewContext("test",
+		[]attestation.Attestor{exits("0"), product.New(), gv},
+		attestation.WithWorkingDir(tmp))
+	require.NoError(t, err)
+	require.NoError(t, ctx.RunAttestors())
+	for _, c := range ctx.CompletedAttestors() {
+		if c.Attestor.Name() == Name {
+			require.NoError(t, c.Error)
+		}
+	}
+	assert.Equal(t, "vulns.json", gv.ReportFile)
+	assert.NotEmpty(t, gv.Summary.ScanRoots)
 }

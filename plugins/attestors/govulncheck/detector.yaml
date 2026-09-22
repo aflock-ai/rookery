@@ -53,3 +53,7 @@ contract:
   fixtures:
     - name: vuln-found
       role: canonical
+    # The vuln-found stream with no command-run in the collection: refused,
+    # because nothing shows govulncheck exited 0.
+    - name: no-command-run
+      role: negative

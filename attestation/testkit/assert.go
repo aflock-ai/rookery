@@ -288,13 +288,14 @@ func truncForDiff(b []byte) string {
 // catches the map-iteration / unsorted-output nondeterminism class (the bug
 // that let scubagoggles attest the wrong file) HERMETICALLY — no tool run, on
 // every PR. Negative/exit fixtures and errored runs have no predicate to
-// compare and are skipped.
-func AssertDeterministic(t *testing.T, fx *Fixture, first *Result) {
+// compare and are skipped. Pass the options the first run used, so the second
+// run replays the same context.
+func AssertDeterministic(t *testing.T, fx *Fixture, first *Result, opts ...RunOption) {
 	t.Helper()
 	if fx.Expect.Exit != nil || first == nil || first.RunErr != nil || len(first.Predicate) == 0 {
 		return
 	}
-	second := RunAttestorWithFixture(t, fx)
+	second := RunAttestorWithFixture(t, fx, opts...)
 	if second.RunErr != nil {
 		t.Errorf("determinism: second run of %q errored: %v", fx.Attestor, second.RunErr)
 		return

@@ -26,6 +26,14 @@
 // pretty-printed JSON objects (one Message per object) — NOT line-delimited
 // JSON. encoding/json.Decoder.Decode() naturally reads this stream by calling
 // Decode repeatedly until io.EOF.
+//
+// Minimum govulncheck: v1.1.1, and v1.1.4 or later is recommended. A stream is
+// attested only when the scan is shown to have completed: the stream carries
+// govulncheck's post-fetch "Checking ... against the vulnerabilities..." record
+// (see incompleteScan; older releases never emit it) AND the collection's
+// command-run shows the scanner exited 0 (see scannerExitRefusal). The -json
+// protocol has no terminal record, so the exit status is the only proof that
+// nothing failed after the checking record.
 package govulncheck
 
 import (
@@ -45,7 +53,9 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/plugins/attestors/commandrun"
 	"github.com/invopop/jsonschema"
+	"golang.org/x/mod/semver"
 )
 
 //go:embed detector.yaml
@@ -329,7 +339,6 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subjects
 }
 
-//nolint:gocognit // sequential candidate scan mirroring sarif/prowler shape
 func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	products := ctx.Products()
 	if len(products) == 0 {
@@ -339,53 +348,52 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 		return attestation.NewSoftError("no products to attest")
 	}
 
-	for path, product := range products {
-		if product.MimeType == "" {
-			continue
-		}
-		if !mimeMatches(product.MimeType) {
-			continue
-		}
+	completed, rejected := classifyCandidates(ctx, products)
 
-		fullPath := filepath.Join(ctx.WorkingDir(), path)
-
-		newDigestSet, err := cryptoutil.CalculateDigestSetFromFile(fullPath, ctx.Hashes())
-		if newDigestSet == nil || err != nil {
-			log.Debugf("(attestation/govulncheck) error calculating digest set from file %s: %v", fullPath, err)
-			continue
+	// Products are a map: keeping whichever completed stream came first would
+	// let iteration order choose which findings are signed, and drop the rest.
+	// There is no safe way to pick one, so two are refused.
+	if len(completed) > 1 {
+		paths := make([]string, 0, len(completed))
+		for _, c := range completed {
+			paths = append(paths, c.path)
 		}
-		if !newDigestSet.Equal(product.Digest) {
-			log.Debugf("(attestation/govulncheck) integrity error for %s: product digest does not match", path)
-			continue
+		sort.Strings(paths)
+		return fmt.Errorf("found %d completed govulncheck scans (%s); refusing to attest one and drop the others' findings: "+
+			"write a single govulncheck -json stream per step", len(paths), strings.Join(paths, ", "))
+	}
+	if len(completed) == 1 {
+		c := completed[0]
+		a.Summary = buildSummary(c.messages)
+		a.Report = c.raws
+		a.ReportFile = c.path
+		a.ReportDigestSet = c.digest
+		if reason := scannerExitRefusal(ctx); reason != "" {
+			path := a.ReportFile
+			*a = Attestor{}
+			return fmt.Errorf("govulncheck scan did not complete: %s: %s; refusing to attest a scan whose completion "+
+				"cannot be established", path, reason)
 		}
-
-		f, err := os.Open(fullPath) //nolint:gosec // G304: path from attestation context products
-		if err != nil {
-			log.Debugf("(attestation/govulncheck) error opening file %s: %v", fullPath, err)
-			continue
+		// Every candidate was classified, so a failed scan beside a completed
+		// one (one module of a multi-module scan) is reported whatever the map
+		// order, not silently dropped.
+		if len(rejected) > 0 {
+			sort.Strings(rejected)
+			log.Warnf("(attestation/govulncheck) attesting %s; ignoring govulncheck streams whose scan did not complete: %s",
+				a.ReportFile, strings.Join(rejected, "; "))
 		}
-		reportBytes, err := io.ReadAll(f)
-		_ = f.Close()
-		if err != nil {
-			log.Debugf("(attestation/govulncheck) error reading file %s: %v", fullPath, err)
-			continue
-		}
-
-		messages, raws, err := parseStreamWithRaw(reportBytes)
-		if err != nil {
-			log.Debugf("(attestation/govulncheck) parse failed for %s: %v", path, err)
-			continue
-		}
-		if err := validateStream(messages); err != nil {
-			log.Debugf("(attestation/govulncheck) validation failed for %s: %v", path, err)
-			continue
-		}
-
-		a.Summary = buildSummary(messages)
-		a.Report = raws
-		a.ReportFile = path
-		a.ReportDigestSet = product.Digest
 		return nil
+	}
+
+	// Fatal, not soft: the wrapped command DID run govulncheck and its
+	// stream shows the scan never completed. A plain error drops this
+	// attestor's payload from the signed collection
+	// (attestation.EvidenceIsRecordable) and fails the run, so a failed scan
+	// can never be stored as a clean one.
+	if len(rejected) > 0 {
+		sort.Strings(rejected)
+		return fmt.Errorf("govulncheck scan did not complete: %s; refusing to attest a failed scan as zero findings "+
+			"(check govulncheck's exit status and stderr)", strings.Join(rejected, "; "))
 	}
 
 	// Soft, not fatal: a build that simply didn't run `govulncheck -json`
@@ -394,6 +402,247 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 	// not a contract violation. Mirrors sbom/go-build so `--workload auto`
 	// stays usable without every Go build hard-failing. (closes #240)
 	return attestation.NewSoftError("no govulncheck JSON output file found in products — run `govulncheck -json` in the wrapped command to capture results")
+}
+
+// completedScan is a candidate product that is a govulncheck stream of a
+// completed scan.
+type completedScan struct {
+	path     string
+	messages []Message
+	raws     []json.RawMessage
+	digest   cryptoutil.DigestSet
+}
+
+// classifyCandidates reads every JSON product and sorts the govulncheck streams
+// into completed scans and, with a diagnosis each, scans that did not complete.
+// Every candidate is classified, so the caller's decision does not depend on
+// the map's iteration order.
+func classifyCandidates(ctx *attestation.AttestationContext, products map[string]attestation.Product) (completed []completedScan, rejected []string) {
+	for path, product := range products {
+		if product.MimeType == "" || !mimeMatches(product.MimeType) {
+			continue
+		}
+		messages, raws, reason, ok := readStream(ctx, path, product.Digest)
+		if !ok {
+			continue
+		}
+		if reason == "" {
+			reason = incompleteScan(messages)
+		}
+		if reason != "" {
+			log.Debugf("(attestation/govulncheck) %s is a govulncheck stream but not a completed scan: %s", path, reason)
+			rejected = append(rejected, path+": "+reason)
+			continue
+		}
+		completed = append(completed, completedScan{path: path, messages: messages, raws: raws, digest: product.Digest})
+	}
+	return completed, rejected
+}
+
+// openReport opens a candidate report. It is a variable so a test can serve
+// different bytes on each open, the way a file swapped mid-read would.
+var openReport = func(path string) (*os.File, error) {
+	return os.Open(path) //nolint:gosec // G304: path from attestation context products
+}
+
+// readStream reads the product at path and returns its parsed govulncheck
+// stream, or ok=false (logged) when the file changed since the product
+// attestor hashed it or is not a govulncheck stream. A non-empty cutOff means
+// the file IS a govulncheck stream (it opens with a valid config record) but
+// does not decode to its end: govulncheck stopped writing inside a record, or
+// something else (its stderr, via 2>&1) was written after it.
+func readStream(ctx *attestation.AttestationContext, path string, digest cryptoutil.DigestSet) (messages []Message, raws []json.RawMessage, cutOff string, ok bool) {
+	fullPath := filepath.Join(ctx.WorkingDir(), path)
+
+	// One open, one read: the digest checked against the product and the
+	// stream that is parsed and signed are the same bytes. Hashing the path and
+	// reopening it to parse would read two files if it were swapped between.
+	f, err := openReport(fullPath)
+	if err != nil {
+		log.Debugf("(attestation/govulncheck) error opening file %s: %v", fullPath, err)
+		return nil, nil, "", false
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		log.Debugf("(attestation/govulncheck) %s is not a regular file (%v)", fullPath, err)
+		return nil, nil, "", false
+	}
+	reportBytes, err := io.ReadAll(f)
+	if err != nil {
+		log.Debugf("(attestation/govulncheck) error reading file %s: %v", fullPath, err)
+		return nil, nil, "", false
+	}
+	newDigestSet, err := cryptoutil.CalculateDigestSetFromBytes(reportBytes, ctx.Hashes())
+	if newDigestSet == nil || err != nil {
+		log.Debugf("(attestation/govulncheck) error calculating digest set from file %s: %v", fullPath, err)
+		return nil, nil, "", false
+	}
+	if !newDigestSet.Equal(digest) {
+		log.Debugf("(attestation/govulncheck) integrity error for %s: product digest does not match", path)
+		return nil, nil, "", false
+	}
+
+	messages, raws, err = parseStreamWithRaw(reportBytes)
+	if err != nil {
+		if len(messages) > 0 && validateStream(messages) == nil {
+			return messages, nil, fmt.Sprintf("the stream is cut off after %d complete records (%v): govulncheck stopped "+
+				"writing mid-scan, or other output was written into the file", len(messages), err), true
+		}
+		log.Debugf("(attestation/govulncheck) parse failed for %s: %v", path, err)
+		return nil, nil, "", false
+	}
+	if err := validateStream(messages); err != nil {
+		log.Debugf("(attestation/govulncheck) validation failed for %s: %v", path, err)
+		return nil, nil, "", false
+	}
+	return messages, raws, "", true
+}
+
+// Progress texts golang.org/x/vuln emits (internal/vulncheck/vulncheck.go:20-22),
+// verified unchanged from v1.1.1 through v1.8.0. They are matched exactly; if
+// upstream rewords them, completed scans are refused loudly, never admitted.
+const (
+	fetchingVulnsMessage    = "Fetching vulnerabilities from the database..."
+	checkingSrcVulnsMessage = "Checking the code against the vulnerabilities..."
+	checkingBinVulnsMessage = "Checking the binary against the vulnerabilities..."
+
+	// firstCheckingRecordVersion is the first govulncheck that emits the
+	// checking record; firstSBOMVersion is the first that emits an SBOM record.
+	firstCheckingRecordVersion = "v1.1.1"
+	firstSBOMVersion           = "v1.1.4"
+)
+
+// incompleteScan returns why the stream is not a completed govulncheck scan,
+// or "" when it is.
+//
+// The proof of completion is the post-fetch checking record for the scan's
+// mode. govulncheck emits its SBOM record BEFORE it fetches the vulnerability
+// database (x/vuln internal/vulncheck/source.go:60 then :68, binary.go:59 then
+// :67), so SBOM roots do not prove a scan: a database fetch failure leaves roots
+// and nothing after them, and summarised it reads as totalFindings 0. The
+// checking record follows a successful fetch (source.go:78, binary.go:77) and
+// precedes every finding. Roots are not required: a binary with no main module
+// has none (binary.go:212), and no govulncheck before v1.1.4 emits an SBOM.
+//
+// This is necessary, not sufficient: a failure AFTER the checking record (a
+// failed call-graph build in symbol mode, a write error, a kill) leaves the
+// record in place. scannerExitRefusal covers that half.
+func incompleteScan(messages []Message) string {
+	cfg := messages[0].Config
+	var want []string
+	switch cfg.ScanMode {
+	case "source":
+		want = []string{checkingSrcVulnsMessage}
+	case "binary":
+		want = []string{checkingBinVulnsMessage}
+	case "":
+		want = []string{checkingSrcVulnsMessage, checkingBinVulnsMessage}
+	default:
+		return fmt.Sprintf("scan_mode %q scans no code; only source and binary scans are attested", cfg.ScanMode)
+	}
+
+	var sawSBOM, sawFetching bool
+	for _, m := range messages {
+		if m.SBOM != nil {
+			sawSBOM = true
+		}
+		msg := progressMessage(m.Progress)
+		if msg == fetchingVulnsMessage {
+			sawFetching = true
+		}
+		for _, w := range want {
+			if msg == w {
+				return ""
+			}
+		}
+	}
+
+	version := cfg.ScannerVersion
+	if !semver.IsValid(version) || semver.Compare(version, firstCheckingRecordVersion) < 0 {
+		return fmt.Sprintf("govulncheck %q emits no completion record (the %q progress record was added in %s), so cilock "+
+			"cannot tell a completed scan from a failed one; upgrade govulncheck to %s or later",
+			version, want[0], firstCheckingRecordVersion, firstSBOMVersion)
+	}
+	switch {
+	case sawFetching:
+		return fmt.Sprintf("the stream stops after %q: the vulnerability database fetch failed, so nothing was checked", fetchingVulnsMessage)
+	case !sawSBOM && semver.Compare(version, firstSBOMVersion) >= 0:
+		return "the stream has a config record but no SBOM record: govulncheck failed while loading packages, so no module was scanned"
+	default:
+		return fmt.Sprintf("the stream has no %q record: the scan never reached its check phase", want[0])
+	}
+}
+
+// scannerExitRefusal returns why the collection does not show that the scanner
+// exited 0, or "" when it does.
+//
+// The -json protocol has no terminal record (x/vuln internal/govulncheck: the
+// JSON handler has no Flush, and Progress is "informational only"), and a clean
+// source scan can end on the checking record itself (vulncheck/source.go:78-88).
+// A scan that fails after that record leaves the same prefix, so the stream
+// cannot prove completion; govulncheck's exit status can. In -json mode it is 0
+// whatever the scan found (exit 3 for findings is text mode only,
+// internal/scan/text.go:84) and non-zero on any error or panic.
+//
+// govulncheck writes its stream to stdout, so the file is always produced by a
+// redirect inside the wrapped command, and the status cilock observes is the
+// wrapped command's. It is read even under --ignore-command-exit-code, which
+// records the status without failing the run. A traced govulncheck process that
+// exited non-zero refuses the scan even when a wrapper (`|| true`) exited 0.
+// Without tracing, a wrapper that discards the status cannot be seen through.
+func scannerExitRefusal(ctx *attestation.AttestationContext) string {
+	observed := false
+	for _, c := range ctx.CompletedAttestors() {
+		if c.Attestor.Name() != commandrun.Name {
+			continue
+		}
+		cr, ok := c.Attestor.(commandrun.CommandRunAttestor)
+		if !ok || cr.Data() == nil {
+			return "the collection's command-run cannot be read, so govulncheck's exit status is unknown"
+		}
+		data := cr.Data()
+		if data.ExitCode != 0 {
+			return fmt.Sprintf("the wrapped command %q exited with status %d", strings.Join(data.Cmd, " "), data.ExitCode)
+		}
+		if c.Error != nil {
+			return fmt.Sprintf("command-run failed (%v), so govulncheck's exit status was never observed", c.Error)
+		}
+		for _, p := range data.Processes {
+			if isGovulncheckProcess(p) && p.ExitCode != 0 {
+				return fmt.Sprintf("the traced govulncheck process (pid %d, %q) exited with status %d", p.ProcessID, p.Cmdline, p.ExitCode)
+			}
+		}
+		observed = true
+	}
+	if !observed {
+		return "the collection has no command-run, so govulncheck's exit status is unknown; run govulncheck inside `cilock run`"
+	}
+	return ""
+}
+
+// scannerBinary is the executable name of the scanner, which is not the same
+// thing as this attestor's Name even though the two strings agree today.
+const scannerBinary = "govulncheck"
+
+func isGovulncheckProcess(p commandrun.ProcessInfo) bool {
+	if p.Program != "" {
+		return filepath.Base(p.Program) == scannerBinary
+	}
+	return p.Comm == scannerBinary
+}
+
+func progressMessage(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var p struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return ""
+	}
+	return p.Message
 }
 
 // parseStream reads the v1.0.0 wire format. The stream is a concatenation of
@@ -406,7 +655,9 @@ func parseStream(reportBytes []byte) ([]Message, error) {
 
 // parseStreamWithRaw is parseStream that also returns each message's verbatim
 // bytes. Used by the attestor to populate Report; tests can keep using the
-// simpler parseStream.
+// simpler parseStream. On a decode error the messages decoded before it are
+// returned with the error (and no raws), so a caller can tell a govulncheck
+// stream that was cut off from a file that was never one.
 func parseStreamWithRaw(reportBytes []byte) ([]Message, []json.RawMessage, error) {
 	// First pass: decode into typed Message values.
 	dec := json.NewDecoder(bytes.NewReader(reportBytes))
@@ -417,7 +668,7 @@ func parseStreamWithRaw(reportBytes []byte) ([]Message, []json.RawMessage, error
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, nil, fmt.Errorf("decode message %d: %w", len(messages), err)
+			return messages, nil, fmt.Errorf("decode message %d: %w", len(messages), err)
 		}
 		messages = append(messages, m)
 	}
