@@ -46,11 +46,16 @@ import (
 // HSEC1: a commit gate must only accept witnesses bound to the commit it
 // judges.
 //
-// The depth loop harvests BackRefs from every passing collection. The git
-// attestor signs a parenthash BackRef, so the evaluated commit C's own build
-// collection makes its PARENT P searchable at depth 1, and P's clean secrets
-// scan then satisfies C's secrets step while C's own scan has findings. Nothing
-// in the engine asked whether a witness belongs to C.
+// The depth loop used to harvest BackRefs from every passing collection. The
+// git attestor signs a parenthash BackRef, so the evaluated commit C's own
+// build collection made its PARENT P searchable at depth 1, and P's clean
+// secrets scan then satisfied C's secrets step while C's own scan had
+// findings. Nothing in the engine asked whether a witness belongs to C.
+//
+// Edges are no longer followed, so P is reached only when a caller SEEDS it
+// (as a RunSync request carrying extra subjects does). The cases below that
+// used to reach a foreign witness through an edge now seed its digest
+// explicitly, so the binding is still exercised on it.
 //
 // WithCommitBinding(C) adds that question to the step gate: a collection counts
 // only when it carries at least one git attestation and EVERY git
@@ -144,7 +149,7 @@ func (s hsecSpec) backRefs() map[string]cryptoutil.DigestSet {
 		}
 	}
 	if s.treeRoot != "" {
-		refs[hsecBuildType+productTreeBackRefName] = newDigestSet(s.treeRoot)
+		refs[hsecBuildType+"/tree:products"] = newDigestSet(s.treeRoot)
 	}
 	return refs
 }
@@ -392,6 +397,14 @@ func hsecVerify(t *testing.T, arm string, refs []string, opts ...VerifyOption) h
 	return hsecRun{accepted: accepted, results: results, src: src}
 }
 
+// hsecSeeds seeds C plus extra digests. Edges are no longer followed, so a
+// foreign witness is reached only by seeding a digest it is indexed under.
+// It overrides hsecVerify's default seed ({C}) because the last
+// WithSubjectDigests wins.
+func hsecSeeds(extra ...string) VerifyOption {
+	return WithSubjectDigests(append([]string{hsecC}, extra...))
+}
+
 func hsecPassedRefs(sr StepResult) []string {
 	out := make([]string, 0, len(sr.Passed))
 	for _, pc := range sr.Passed {
@@ -418,22 +431,34 @@ func unboundRejections(sr StepResult) map[string]ErrWitnessNotBoundToCommit {
 // registry or image-digest gate) and is exactly the HSEC1 exposure when the
 // subject IS a commit: C's secrets step is satisfied by a collection from its
 // parent, its sibling, its child, or an unrelated tree-root link.
+//
+// With edges no longer followed, only the child (it names C as a subject) is
+// reached from {C}. The parent, sibling and tree-root witnesses are reached
+// only when their digest is seeded too, and then unbound mode still accepts
+// on them.
 func TestCommitBinding_ZeroValueIsUnbound(t *testing.T) {
 	cases := []struct {
 		name        string
 		refs        []string
 		wantWitness string
+		// seed reaches the witness; "" means {C} alone reaches it.
+		seed string
 	}{
-		{"parent", []string{"C-build", "C-secrets-dirty", "P-build", "P-secrets-clean"}, "P-secrets-clean"},
-		{"sibling", []string{"C-build", "C-secrets-dirty", "S-secrets-clean"}, "S-secrets-clean"},
-		{"child", []string{"C-build", "C-secrets-dirty", "K-secrets-clean"}, "K-secrets-clean"},
-		{"tree-root link", []string{"C-build-tree", "C-secrets-dirty", "T-secrets-nogit"}, "T-secrets-nogit"},
+		{"parent", []string{"C-build", "C-secrets-dirty", "P-build", "P-secrets-clean"}, "P-secrets-clean", hsecP},
+		{"sibling", []string{"C-build", "C-secrets-dirty", "S-secrets-clean"}, "S-secrets-clean", hsecS},
+		{"child", []string{"C-build", "C-secrets-dirty", "K-secrets-clean"}, "K-secrets-clean", ""},
+		{"tree-root link", []string{"C-build-tree", "C-secrets-dirty", "T-secrets-nogit"}, "T-secrets-nogit", hsecTreeRoot},
 	}
 	for _, tc := range cases {
 		for _, arm := range hsecArms {
 			t.Run(tc.name+"/"+arm, func(t *testing.T) {
-				run := hsecVerify(t, arm, tc.refs)
-				require.True(t, run.accepted, "unbound mode accepts on a foreign witness (the documented zero-value behaviour)")
+				if tc.seed != "" {
+					seedOnly := hsecVerify(t, arm, tc.refs)
+					assert.False(t, seedOnly.accepted, "the witness is reachable from C only through an edge, which is no longer followed")
+					assert.NotContains(t, hsecPassedRefs(seedOnly.results["secrets"]), tc.wantWitness)
+				}
+				run := hsecVerify(t, arm, tc.refs, hsecSeeds(tc.seed))
+				require.True(t, run.accepted, "unbound mode accepts on a foreign witness the seeds reach (the documented zero-value behaviour)")
 				assert.Equal(t, []string{tc.wantWitness}, hsecPassedRefs(run.results["secrets"]))
 			})
 		}
@@ -441,7 +466,8 @@ func TestCommitBinding_ZeroValueIsUnbound(t *testing.T) {
 }
 
 // With the binding, every foreign witness is Rejected with
-// ErrWitnessNotBoundToCommit and C fails on its own evidence.
+// ErrWitnessNotBoundToCommit and C fails on its own evidence. A witness that
+// used to be reached through an edge is reached here by seeding its digest.
 func TestCommitBinding_RejectsWitnessesFromOtherCommits(t *testing.T) {
 	cases := []struct {
 		name string
@@ -450,26 +476,28 @@ func TestCommitBinding_RejectsWitnessesFromOtherCommits(t *testing.T) {
 		// refusal must name ("" = it carries no git attestation).
 		foreign       string
 		foreignCommit string
+		// seed is the extra digest that reaches foreign ("" = {C} reaches it).
+		seed string
 	}{
-		// (a) C's own scan has findings; P's clean scan is reachable at depth 1.
-		{"a parent", []string{"C-build", "C-secrets-dirty", "P-build", "P-secrets-clean"}, "P-secrets-clean", hsecP},
+		// (a) C's own scan has findings; P's clean scan is seeded.
+		{"a parent", []string{"C-build", "C-secrets-dirty", "P-build", "P-secrets-clean"}, "P-secrets-clean", hsecP, hsecP},
 		// (b) C has no secrets collection at all.
-		{"b omitted step", []string{"C-build", "P-build", "P-secrets-clean"}, "P-secrets-clean", hsecP},
-		// (c) S is another child of P, reached through the parenthash digest.
-		{"c sibling", []string{"C-build", "C-secrets-dirty", "S-secrets-clean"}, "S-secrets-clean", hsecS},
-		// (d) K names C as its parent, so it matches the SEED at depth 0.
-		{"d child of seed", []string{"C-build", "C-secrets-dirty", "K-secrets-clean"}, "K-secrets-clean", hsecK},
+		{"b omitted step", []string{"C-build", "P-build", "P-secrets-clean"}, "P-secrets-clean", hsecP, hsecP},
+		// (c) S is another child of P, reached through the seeded parent digest.
+		{"c sibling", []string{"C-build", "C-secrets-dirty", "S-secrets-clean"}, "S-secrets-clean", hsecS, hsecP},
+		// (d) K names C as its parent, so it matches the SEED.
+		{"d child of seed", []string{"C-build", "C-secrets-dirty", "K-secrets-clean"}, "K-secrets-clean", hsecK, ""},
 		// (e) linked through a shared product-tree root, no commit relation.
-		{"e tree-root link", []string{"C-build-tree", "C-secrets-dirty", "T-secrets-nogit"}, "T-secrets-nogit", ""},
+		{"e tree-root link", []string{"C-build-tree", "C-secrets-dirty", "T-secrets-nogit"}, "T-secrets-nogit", "", hsecTreeRoot},
 		// A collection under C's own digest with no git attestation.
-		{"no git attestation", []string{"C-build", "N-secrets-nogit"}, "N-secrets-nogit", ""},
+		{"no git attestation", []string{"C-build", "N-secrets-nogit"}, "N-secrets-nogit", "", ""},
 		// Two git attestations that disagree: one of them is not C.
-		{"two git commits", []string{"C-build", "D-secrets-twogit"}, "D-secrets-twogit", hsecP},
+		{"two git commits", []string{"C-build", "D-secrets-twogit"}, "D-secrets-twogit", hsecP, ""},
 	}
 	for _, tc := range cases {
 		for _, arm := range hsecArms {
 			t.Run(tc.name+"/"+arm, func(t *testing.T) {
-				run := hsecVerify(t, arm, tc.refs, WithCommitBinding(hsecC))
+				run := hsecVerify(t, arm, tc.refs, hsecSeeds(tc.seed), WithCommitBinding(hsecC))
 				sr := run.results["secrets"]
 				assert.False(t, run.accepted, "a commit gate must not accept on a witness bound to another commit")
 				assert.NotContains(t, hsecPassedRefs(sr), tc.foreign)
@@ -525,27 +553,28 @@ func TestCommitBinding_ComparesCaseFoldedHex(t *testing.T) {
 	}
 }
 
-// A refused witness goes to Rejected, and the depth loop harvests BackRefs
-// only from Passed, so P's own edges (its parent G) never enter the search.
-// The unbound control on the same shape proves the fixture can observe the
-// harvest: there P-build passes and G IS searched.
+// No edge widens the search, refused witness or not. The unbound control used
+// to show P-build passing and its parenthash edge making G searchable; now G is
+// never searched in either mode, and C's own parenthash edge does not make P
+// searchable either. With P seeded, P-build is reached and refused as not
+// bound to C, and its edges still widen nothing.
 func TestCommitBinding_RefusedWitnessBackRefsAreNotHarvested(t *testing.T) {
 	refs := []string{"C-build", "C-secrets-dirty", "P-build"}
 	for _, arm := range hsecArms {
 		t.Run(arm, func(t *testing.T) {
 			unbound := hsecVerify(t, arm, refs)
 			require.False(t, unbound.accepted)
+			_, pSearched := unbound.src.searched[hsecP]
+			assert.False(t, pSearched, "C's own parenthash edge must not make the parent searchable")
 			_, gSearched := unbound.src.searched[hsecG]
-			require.True(t, gSearched, "control: unbound, P-build passes and its parenthash edge makes G searchable")
+			assert.False(t, gSearched, "no edge may widen the search")
 
-			bound := hsecVerify(t, arm, refs, WithCommitBinding(hsecC))
+			bound := hsecVerify(t, arm, refs, hsecSeeds(hsecP), WithCommitBinding(hsecC))
 			require.False(t, bound.accepted)
-			_, pSearched := bound.src.searched[hsecP]
-			assert.True(t, pSearched, "C's own parenthash edge is still walked; the parent is reachable, never a witness")
 			_, gSearched = bound.src.searched[hsecG]
 			assert.False(t, gSearched, "a refused witness's BackRefs must not widen the search")
 			_, refused := unboundRejections(bound.results["build"])["P-build"]
-			assert.True(t, refused, "P-build must be in Rejected as not bound to C")
+			assert.True(t, refused, "P-build, reached through the seeded parent digest, must be in Rejected as not bound to C")
 		})
 	}
 }
@@ -611,8 +640,8 @@ func hsecVerifySigned(t *testing.T, key hsecKey, pol Policy, refs []string, opts
 // End to end through real signatures: throwaway-key DSSE envelopes, the
 // in-memory source, and VerifiedSource. The git attestation decodes as a
 // RawAttestation (no plugin factory in this package), the parent is reached
-// through the SIGNED backrefs, and the binding reads commithash from the
-// signed payload.
+// only by seeding its digest (the signed backrefs are no longer followed), and
+// the binding reads commithash from the signed payload.
 func TestCommitBinding_SignedCorpusThroughVerifiedSource(t *testing.T) {
 	key := newHsecKey(t)
 	pks := map[string]PublicKey{key.keyID: {KeyID: key.keyID, Key: key.pem}}
@@ -623,10 +652,14 @@ func TestCommitBinding_SignedCorpusThroughVerifiedSource(t *testing.T) {
 
 	parent := []string{"C-build", "C-secrets-dirty", "P-build", "P-secrets-clean"}
 	accepted, results := verify(t, parent)
-	require.True(t, accepted, "characterization: unbound, the signed parent scan satisfies C")
+	require.False(t, accepted, "unbound, seeded with C alone: the parent is reachable only through the signed parenthash edge, which is no longer followed")
+	require.Empty(t, hsecPassedRefs(results["secrets"]))
+
+	accepted, results = verify(t, parent, hsecSeeds(hsecP))
+	require.True(t, accepted, "characterization: unbound, with the parent seeded, the signed parent scan satisfies C")
 	require.Equal(t, []string{"P-secrets-clean"}, hsecPassedRefs(results["secrets"]))
 
-	accepted, results = verify(t, parent, WithCommitBinding(hsecC))
+	accepted, results = verify(t, parent, hsecSeeds(hsecP), WithCommitBinding(hsecC))
 	assert.False(t, accepted, "bound: C must fail on its own findings")
 	nb, ok := unboundRejections(results["secrets"])["P-secrets-clean"]
 	require.True(t, ok, "the parent scan must be refused as unbound; rejected=%v", results["secrets"].Rejected)
@@ -687,10 +720,12 @@ func TestCommitBinding_DeferredAIArmIsBound(t *testing.T) {
 	secrets.Attestations[0].AiPolicies = []AiPolicy{{Name: "stub", Prompt: "clean?", Model: "stub"}}
 	pol.Steps["secrets"] = secrets
 	refs := []string{"C-build", "C-secrets-dirty", "P-build", "P-secrets-clean"}
-	deferred := []VerifyOption{WithMaxSubjectFanout(50), WithAiProvider(hsecPassAI{})}
+	// The parent is reached only by seeding its digest: edges are no longer
+	// followed.
+	deferred := []VerifyOption{WithMaxSubjectFanout(50), WithAiProvider(hsecPassAI{}), hsecSeeds(hsecP)}
 
 	accepted, results := hsecVerifySigned(t, key, pol, refs, deferred...)
-	require.True(t, accepted, "characterization: unbound, the deferred arm accepts the parent's scan")
+	require.True(t, accepted, "characterization: unbound, the deferred arm accepts the seeded parent's scan")
 	require.Equal(t, []string{"P-secrets-clean"}, hsecPassedRefs(results["secrets"]))
 
 	accepted, results = hsecVerifySigned(t, key, pol, refs, append(deferred, WithCommitBinding(hsecC))...)

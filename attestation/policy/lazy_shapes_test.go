@@ -230,15 +230,17 @@ func lazyShapes() []lazyShape {
 		// -------------------------------------------------------------------
 		// 5. THE VALVE CASE, depth 1 — the design doc's execution-proven
 		//    counterexample (§3): the satisfying upstream collection is only
-		//    reachable through a BackRef discovered at depth 1.
+		//    reachable through a BackRef discovered at depth 1. Since the
+		//    seed-only cutover no BackRef is followed, so both arms FAIL; the
+		//    shape now pins that lazy and eager agree on that FAIL.
 		// -------------------------------------------------------------------
 		{
 			name:        "artifactsfrom-upstream-at-depth1",
 			wantExam:    lazyExamCompleteSet,
-			desc:        "the satisfying upstream collection is discovered only at depth 1 (doc §3 counterexample): must still PASS",
+			desc:        "the satisfying upstream collection is reachable only through a BackRef (doc §3 counterexample); edges are no longer followed, so it FAILS on both arms",
 			seeds:       []string{"sha256:seed"},
 			depth:       3,
-			wantVerdict: true,
+			wantVerdict: false,
 			build:       lazyArtifactsFromDepth1,
 		},
 
@@ -297,17 +299,17 @@ func lazyShapes() []lazyShape {
 
 		// -------------------------------------------------------------------
 		// 8. BackRef frontier. The passing step's LATER candidates carry the
-		//    back-reference the downstream step's evidence hangs off. A stop
-		//    that never harvested them would strand the second step — the
-		//    valve has to catch this too, and it is NOT an artifact edge.
+		//    back-reference the downstream step's evidence hangs off. Before
+		//    the seed-only cutover the valve had to recover that frontier;
+		//    edges are no longer followed, so both arms FAIL and must agree.
 		// -------------------------------------------------------------------
 		{
 			name:        "backref-frontier-behind-second-candidate",
 			wantExam:    lazyExamCompleteSet,
-			desc:        "the digest that reaches step two is a BackRef of the FIRST step's second candidate; truncation would strand it",
+			desc:        "the digest that reaches step two is a BackRef of the FIRST step's second candidate; edges are no longer followed, so it FAILS on both arms",
 			seeds:       []string{"sha256:seed"},
 			depth:       3,
-			wantVerdict: true,
+			wantVerdict: false,
 			build: func(_ testing.TB, v cryptoutil.Verifier, keyID string) (Policy, *lazySource) {
 				return lazyPolicy(keyID, lazyStep("build", keyID), lazyStep("audit", keyID)),
 					newLazySource(map[string][]source.CollectionVerificationResult{
@@ -331,10 +333,10 @@ func lazyShapes() []lazyShape {
 		{
 			name:        "backref-frontier-at-search-depth-2",
 			wantExam:    lazyExamCompleteSet,
-			desc:        "same frontier shape at searchDepth=2: the valve must buy back the iteration the truncated pass under-used",
+			desc:        "same frontier shape at searchDepth=2 (a no-op now): edges are no longer followed, so it FAILS on both arms",
 			seeds:       []string{"sha256:seed"},
 			depth:       2,
-			wantVerdict: true,
+			wantVerdict: false,
 			build: func(_ testing.TB, v cryptoutil.Verifier, keyID string) (Policy, *lazySource) {
 				return lazyPolicy(keyID, lazyStep("build", keyID), lazyStep("audit", keyID)),
 					newLazySource(map[string][]source.CollectionVerificationResult{

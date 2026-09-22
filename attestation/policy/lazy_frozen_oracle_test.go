@@ -30,6 +30,10 @@
 // with the pre-change engine and are not what Phase 1 mutates. Freezing them
 // too would vendor half the package.
 //
+// Re-frozen from policy.go at the seed-only cutover (relationship edges are no
+// longer followed): the depth loop and the BackRef harvest were removed here
+// exactly as they were removed from the live engine.
+//
 // ANTI-ROT: TestFrozenOracleMatchesLiveEagerEngine asserts this copy and the
 // live engine agree on every generated case with the flag OFF. If someone
 // changes eager verification, that test reddens and this file must be
@@ -47,9 +51,7 @@ import (
 )
 
 func frozenEagerVerifyWithExternals(p Policy, ctx context.Context, opts ...VerifyOption) (bool, map[string]StepResult, map[string]ExternalResult, error) {
-	vo := &verifyOptions{
-		searchDepth: 3,
-	}
+	vo := &verifyOptions{}
 
 	for _, opt := range opts {
 		opt(vo)
@@ -153,21 +155,9 @@ func frozenEagerVerifySteps(p Policy, ctx context.Context, vo *verifyOptions, tr
 	}
 
 	resultsByStep := make(map[string]StepResult)
-	// Track all known subject digests to prevent duplicates across depth
-	// iterations. Without de-duplication, the search set can grow
-	// exponentially as back-references are re-discovered each iteration.
-	knownDigests := make(map[string]struct{})
-	for _, d := range vo.subjectDigests {
-		knownDigests[d] = struct{}{}
-	}
-
-	for depth := 0; depth < vo.searchDepth; depth++ {
-		// Collect back-reference digests discovered during this depth
-		// iteration. They will be added to the search set for the NEXT
-		// depth iteration, not the current one, to prevent a single
-		// collection from widening the scope of its own depth.
-		var nextDepthDigests []string
-
+	// Re-frozen at the seed-only cutover: one pass over the caller's seeds,
+	// and no BackRef is ever turned into a new search seed.
+	{
 		for _, stepName := range stepOrder {
 			step := p.Steps[stepName]
 
@@ -247,7 +237,7 @@ func frozenEagerVerifySteps(p Policy, ctx context.Context, vo *verifyOptions, tr
 				// legitimate evidence. False-reject-only; see filterHubOnlyPassed.
 				var hubRejected []RejectedCollection
 				if vo.maxSubjectFanout > 0 {
-					functionaryCheckResults.Passed, hubRejected = filterHubOnlyPassed(functionaryCheckResults.Passed, vo.subjectDigests, vo.maxSubjectFanout)
+					functionaryCheckResults.Passed, hubRejected = filterHubOnlyPassed(functionaryCheckResults.Passed, vo.subjectDigests, vo.maxSubjectFanout, vo.commitBinding)
 				}
 
 				passedCollections := make([]source.CollectionVerificationResult, len(functionaryCheckResults.Passed))
@@ -287,67 +277,6 @@ func frozenEagerVerifySteps(p Policy, ctx context.Context, vo *verifyOptions, tr
 			} else {
 				resultsByStep[stepName] = stepResult
 			}
-
-			// Expand the reachable-subject set from the BackRefs of collections
-			// that PASSED THE STEP GATE (stepResult.Passed), NOT merely the
-			// functionary survivors (passedCollections) (#5747, finding B). A
-			// collection that clears the functionary check but is REJECTED by the
-			// gate (missing required attestation, failing rego, etc.) is not
-			// trusted, so its signer-asserted BackRefs must not widen the search
-			// — otherwise a throwaway rejected collection can make an unrelated
-			// downstream collection reachable.
-			for _, pc := range stepResult.Passed {
-				for backRefName, digestSet := range pc.Collection.Collection.BackRefs() {
-					for _, digest := range digestSet {
-						// Empty-merkle-tree sentinel: shared identically by every
-						// step that consumed or produced nothing, so it names no
-						// particular collection and must not widen the search.
-						// See isEmptyTreeHubBackRef.
-						if isEmptyTreeHubBackRef(backRefName, digest) {
-							continue
-						}
-						if _, seen := knownDigests[digest]; !seen {
-							knownDigests[digest] = struct{}{}
-							nextDepthDigests = append(nextDepthDigests, digest)
-						}
-					}
-				}
-			}
-		}
-
-		// Expand search scope for the next depth iteration only.
-		//
-		// Subject-graph isolation rule (issue #39): external-attestation
-		// subjects are NOT added here. Only Collection BackRefs expand the
-		// seed set. This preserves Collection-graph semantics.
-		vo.subjectDigests = append(vo.subjectDigests, nextDepthDigests...)
-
-		// Stop expanding once a further iteration cannot change the verdict.
-		// Depth expansion exists to REACH evidence the seed digests do not name
-		// directly; it is not an evidence-quantity requirement. Continuing past
-		// the point where the answer is settled costs a full re-search of every
-		// step against the accumulated digest set — on a monorepo that is
-		// hundreds of envelope fetches per artifact (judge#7551).
-		//
-		// Case 1: no new digests were discovered, so the next iteration would
-		// issue byte-identical queries. Unconditionally safe.
-		if len(nextDepthDigests) == 0 {
-			break
-		}
-
-		// Case 2: every step is already satisfied, and the policy shape has no
-		// AttestationsFrom (the only construct that makes verification
-		// arbitrarily non-monotone). Safe because the break fires ONLY on an
-		// already-passing verdict, so it can never skip evidence that would
-		// rescue a failing step — see searchExpansionIsMonotone for why the
-		// fan-out guard's non-monotonicity does not break this.
-		//
-		// NOTE: a multi-step policy that is only PARTIALLY satisfied never
-		// takes either break and runs the full depth walk, re-searching every
-		// step — including the already-satisfied ones — on every iteration.
-		// That is the dominant cost shape in practice, not attestationsFrom.
-		if p.searchExpansionIsMonotone() && p.allStepsSatisfied(ctx, vo, resultsByStep) {
-			break
 		}
 	}
 
@@ -389,7 +318,7 @@ func frozenEagerVerifyStepStreamed(p Policy, ctx context.Context, streamer sourc
 
 	var authorized []authorizedCandidate
 	var funcRejected []RejectedCollection
-	tracker := newFanoutTracker(vo.subjectDigests, vo.maxSubjectFanout)
+	tracker := newFanoutTracker(vo.subjectDigests, vo.maxSubjectFanout, vo.commitBinding)
 	// AI policies make external server calls from inside the gate. With the
 	// guard active, a provisional gate run on a candidate the final
 	// classification later hub-rejects would be an AI request the batch path

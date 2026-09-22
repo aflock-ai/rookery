@@ -301,7 +301,6 @@ func TestCheckVerifyOpts_Valid(t *testing.T) {
 	vo := &verifyOptions{
 		verifiedSource: &mockVerifiedSource{},
 		subjectDigests: []string{"sha256:abc"},
-		searchDepth:    3,
 	}
 	assert.NoError(t, checkVerifyOpts(vo))
 }
@@ -309,7 +308,6 @@ func TestCheckVerifyOpts_Valid(t *testing.T) {
 func TestCheckVerifyOpts_NilSource(t *testing.T) {
 	vo := &verifyOptions{
 		subjectDigests: []string{"sha256:abc"},
-		searchDepth:    3,
 	}
 	err := checkVerifyOpts(vo)
 	assert.Error(t, err)
@@ -321,7 +319,6 @@ func TestCheckVerifyOpts_NilSource(t *testing.T) {
 func TestCheckVerifyOpts_NoDigests(t *testing.T) {
 	vo := &verifyOptions{
 		verifiedSource: &mockVerifiedSource{},
-		searchDepth:    3,
 	}
 	err := checkVerifyOpts(vo)
 	assert.Error(t, err)
@@ -330,17 +327,15 @@ func TestCheckVerifyOpts_NoDigests(t *testing.T) {
 	assert.Equal(t, "subject digests", invalid.Option)
 }
 
+// Search depth is gone: WithSearchDepth(0) used to be rejected here and is now
+// an accepted no-op, because verification follows only what the seed matches.
 func TestCheckVerifyOpts_ZeroDepth(t *testing.T) {
 	vo := &verifyOptions{
 		verifiedSource: &mockVerifiedSource{},
 		subjectDigests: []string{"sha256:abc"},
-		searchDepth:    0,
 	}
-	err := checkVerifyOpts(vo)
-	assert.Error(t, err)
-	var invalid ErrInvalidOption
-	assert.ErrorAs(t, err, &invalid)
-	assert.Equal(t, "search depth", invalid.Option)
+	WithSearchDepth(0)(vo)
+	assert.NoError(t, checkVerifyOpts(vo))
 }
 
 // TestCheckVerifyOpts_NegativeClockSkewTolerance pins F20 (#5746): a negative
@@ -350,7 +345,6 @@ func TestCheckVerifyOpts_NegativeClockSkewTolerance(t *testing.T) {
 	vo := &verifyOptions{
 		verifiedSource:     &mockVerifiedSource{},
 		subjectDigests:     []string{"sha256:abc"},
-		searchDepth:        3,
 		clockSkewTolerance: -1 * time.Second,
 	}
 	err := checkVerifyOpts(vo)
@@ -367,7 +361,6 @@ func TestCheckVerifyOpts_ZeroClockSkewTolerance(t *testing.T) {
 	vo := &verifyOptions{
 		verifiedSource:     &mockVerifiedSource{},
 		subjectDigests:     []string{"sha256:abc"},
-		searchDepth:        3,
 		clockSkewTolerance: 0,
 	}
 	assert.NoError(t, checkVerifyOpts(vo))
@@ -390,10 +383,11 @@ func TestWithSubjectDigests(t *testing.T) {
 	assert.Equal(t, []string{"d1", "d2"}, vo.subjectDigests)
 }
 
+// WithSearchDepth is kept for API compatibility and changes nothing.
 func TestWithSearchDepth(t *testing.T) {
 	vo := &verifyOptions{}
 	WithSearchDepth(7)(vo)
-	assert.Equal(t, 7, vo.searchDepth)
+	assert.Equal(t, &verifyOptions{}, vo)
 }
 
 // ---------------------------------------------------------------------------

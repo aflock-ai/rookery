@@ -53,15 +53,24 @@ import (
 // SOUNDNESS: this runs before the step gate's attestation checks and only ever
 // removes candidates. Admitted candidates keep their verification results and
 // still face the gate, so the guard can cause a false REJECT but never a false
-// PASS. Evidence reachable through trust-gated BackRef expansion enters the
-// closure as ordinary digests on the next depth iteration and is admitted
-// unless it, too, exceeds the fan-out.
+// PASS. The closure is the caller's seed set: relationship edges (BackRefs) are
+// not followed, so nothing else ever joins it.
+//
+// BOUND-COMMIT EXEMPTION. boundCommit is the verify's commit binding (empty
+// when unbound). A closure digest equal to it is never a hub. With edges no
+// longer followed, a commit-seeded verify reaches its evidence only through
+// that one digest, and a commit re-run or re-released many times legitimately
+// carries more collections per step than the limit (measured on prod: up to 37
+// source-git collections for one commit). The exemption only admits candidates
+// to the gate: every one of them must still pass the commit binding there, so
+// a collection whose git commithash is another commit is rejected and the
+// exemption cannot admit another build's evidence.
 //
 // A candidate with NO closure intersection is rejected (fail closed): with the
 // guard active, an unmatched candidate is by definition outside the dispatch
 // subject's closure. An empty closure disables the guard for that search
 // (subject-agnostic whole-policy walks).
-func filterHubOnlyPassed(passed []PassedCollection, closure []string, maxFanout int) (admitted []PassedCollection, rejected []RejectedCollection) {
+func filterHubOnlyPassed(passed []PassedCollection, closure []string, maxFanout int, boundCommit string) (admitted []PassedCollection, rejected []RejectedCollection) {
 	if maxFanout <= 0 || len(closure) == 0 || len(passed) == 0 {
 		return passed, nil
 	}
@@ -70,7 +79,7 @@ func filterHubOnlyPassed(passed []PassedCollection, closure []string, maxFanout 
 
 	hubs := make(map[string]struct{})
 	for d, n := range fanout {
-		if n > maxFanout {
+		if n > maxFanout && !isBoundCommitDigest(d, boundCommit) {
 			hubs[d] = struct{}{}
 		}
 	}
@@ -172,14 +181,23 @@ func closureIntersectOne(ce source.CollectionEnvelope, closureSet map[string]str
 // documented on filterHubOnlyPassed applies unchanged: only candidates that
 // passed this step's functionary triage may be added.
 type fanoutTracker struct {
-	maxFanout  int
-	closureSet map[string]struct{}
-	fanout     map[string]int
+	maxFanout   int
+	boundCommit string
+	closureSet  map[string]struct{}
+	fanout      map[string]int
+}
+
+// isBoundCommitDigest reports whether a closure digest is the verify's commit
+// binding, which is never classified as a hub (see filterHubOnlyPassed). The
+// binding is normalized lower-case hex; the comparison folds case the way the
+// binding check itself does.
+func isBoundCommitDigest(digest, boundCommit string) bool {
+	return boundCommit != "" && strings.EqualFold(digest, boundCommit)
 }
 
 // newFanoutTracker returns nil when the guard is disabled (non-positive
 // limit or empty closure), mirroring filterHubOnlyPassed's no-op condition.
-func newFanoutTracker(closure []string, maxFanout int) *fanoutTracker {
+func newFanoutTracker(closure []string, maxFanout int, boundCommit string) *fanoutTracker {
 	if maxFanout <= 0 || len(closure) == 0 {
 		return nil
 	}
@@ -187,7 +205,7 @@ func newFanoutTracker(closure []string, maxFanout int) *fanoutTracker {
 	for _, d := range closure {
 		set[d] = struct{}{}
 	}
-	return &fanoutTracker{maxFanout: maxFanout, closureSet: set, fanout: map[string]int{}}
+	return &fanoutTracker{maxFanout: maxFanout, boundCommit: boundCommit, closureSet: set, fanout: map[string]int{}}
 }
 
 // add records one authorized candidate's subjects, returning its
@@ -202,7 +220,7 @@ func (ft *fanoutTracker) add(ce source.CollectionEnvelope) (map[string]struct{},
 	provablyRejected := true
 	for d := range ds {
 		ft.fanout[d]++
-		if ft.fanout[d] <= ft.maxFanout {
+		if ft.fanout[d] <= ft.maxFanout || isBoundCommitDigest(d, ft.boundCommit) {
 			provablyRejected = false
 		}
 	}
@@ -214,7 +232,7 @@ func (ft *fanoutTracker) add(ce source.CollectionEnvelope) (map[string]struct{},
 func (ft *fanoutTracker) hubs() map[string]struct{} {
 	hubs := make(map[string]struct{})
 	for d, n := range ft.fanout {
-		if n > ft.maxFanout {
+		if n > ft.maxFanout && !isBoundCommitDigest(d, ft.boundCommit) {
 			hubs[d] = struct{}{}
 		}
 	}

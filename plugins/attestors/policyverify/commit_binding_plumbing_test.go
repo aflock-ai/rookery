@@ -111,7 +111,7 @@ func pvSigned(t *testing.T, signer cryptoutil.Signer, step, commit, parent strin
 
 // pvAttest runs the real attestor over a signed corpus in which C's own
 // secrets scan has findings and its parent's scan is clean.
-func pvAttest(t *testing.T, binding *string) slsa.VerificationResult {
+func pvAttest(t *testing.T, binding *string, seeds ...string) slsa.VerificationResult {
 	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
@@ -155,7 +155,12 @@ deny[msg] {
 	a.SetPolicyEnvelope(polEnv)
 	a.SetPolicyVerificationOptions(policysig.NewVerifyPolicySignatureOptions(
 		policysig.VerifyWithPolicyVerifiers([]cryptoutil.Verifier{verifier})))
-	a.SetSubjectDigests([]cryptoutil.DigestSet{{cryptoutil.DigestValue{Hash: crypto.SHA1}: pvC}})
+	subjects := make([]cryptoutil.DigestSet, 0, 1+len(seeds))
+	subjects = append(subjects, cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA1}: pvC})
+	for _, s := range seeds {
+		subjects = append(subjects, cryptoutil.DigestSet{cryptoutil.DigestValue{Hash: crypto.SHA1}: s})
+	}
+	a.SetSubjectDigests(subjects)
 	a.SetCollectionSource(mem)
 	if binding != nil {
 		a.SetCommitBinding(*binding)
@@ -167,19 +172,24 @@ deny[msg] {
 	return a.VerificationResult
 }
 
-// End to end through the real attestor: unbound, C passes on its parent's
-// clean scan (the characterized HSEC1 behaviour); bound to C, it fails on
-// its own findings. A setter that latches but never reaches the engine
-// passes the interface test above and fails here.
+// End to end through the real attestor. Edges are no longer followed, so with
+// C alone seeded the parent's clean scan is never reached and C fails on its
+// own findings even unbound. With the parent seeded too: unbound, C passes on
+// the parent's clean scan (the characterized HSEC1 behaviour); bound to C, it
+// fails on its own findings. A setter that latches but never reaches the
+// engine passes the interface test above and fails here.
 func TestAttestor_CommitBindingReachesTheEngine(t *testing.T) {
-	require.Equal(t, slsa.PassedVerificationResult, pvAttest(t, nil),
-		"characterization: unbound, the parent's clean scan satisfies C")
+	require.Equal(t, slsa.FailedVerificationResult, pvAttest(t, nil),
+		"seeded with C alone, the parent is reachable only through an edge, which is no longer followed")
+
+	require.Equal(t, slsa.PassedVerificationResult, pvAttest(t, nil, pvP),
+		"characterization: unbound, with the parent seeded, the parent's clean scan satisfies C")
 
 	c := pvC
-	require.Equal(t, slsa.FailedVerificationResult, pvAttest(t, &c),
+	require.Equal(t, slsa.FailedVerificationResult, pvAttest(t, &c, pvP),
 		"bound to C, the parent's scan must not satisfy C's secrets step")
 
 	empty := ""
-	require.Equal(t, slsa.PassedVerificationResult, pvAttest(t, &empty),
+	require.Equal(t, slsa.PassedVerificationResult, pvAttest(t, &empty, pvP),
 		"an empty binding is the unbound zero value")
 }

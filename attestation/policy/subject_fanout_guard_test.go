@@ -223,13 +223,12 @@ func TestSubjectFanout_GuardNeverAcceptsBadCrypto(t *testing.T) {
 	}
 }
 
-// CLOSURE GROWTH: evidence the seed digests do not name directly enters the
-// closure via trust-gated BackRef expansion (verifySteps appends discovered
-// digests to vo.subjectDigests for the next depth). The guard must admit a
-// candidate through any non-hub CLOSURE digest — not only the original seed —
-// or depth expansion would be dead. Pinned at the filter level: the same
-// candidate is rejected against the bare seed and admitted once the closure
-// contains the digest a passed collection's BackRefs discovered.
+// CLOSURE = SEEDS: relationship edges are no longer followed, so the closure
+// is exactly the caller's seed set. A candidate is admitted through ANY seed
+// digest, not only the first one: rejected against a closure that lacks its
+// digest, admitted once the caller seeds that digest too. (This test used to
+// model the second digest joining through BackRef expansion; the caller's
+// second seed is now the only way it joins.)
 func TestSubjectFanout_ExpandedClosureAdmitsBackRefEvidence(t *testing.T) {
 	f := newFanoutFixture(t)
 	upstream := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" + "cc"
@@ -238,15 +237,15 @@ func TestSubjectFanout_ExpandedClosureAdmitsBackRefEvidence(t *testing.T) {
 	// The filter operates on the step's functionary-authorized set.
 	authorized := []PassedCollection{{Collection: source.CollectionVerificationResult{CollectionEnvelope: candidate}}}
 
-	// Before expansion: seed closure only — the candidate is outside it.
-	admitted, rejected := filterHubOnlyPassed(authorized, []string{fanoutCommitDigest}, 8)
+	// One seed: the candidate is outside the closure.
+	admitted, rejected := filterHubOnlyPassed(authorized, []string{fanoutCommitDigest}, 8, "")
 	assert.Empty(t, admitted, "a candidate outside the closure must not be admitted")
 	require.Len(t, rejected, 1)
 
-	// After expansion: the upstream digest joined the closure (as BackRef
-	// discovery does) — the candidate is admitted through it.
-	admitted, rejected = filterHubOnlyPassed(authorized, []string{fanoutCommitDigest, upstream}, 8)
-	assert.Len(t, admitted, 1, "closure-expanded digests must admit evidence exactly like seed digests")
+	// Two seeds: the caller seeded the upstream digest, and the candidate is
+	// admitted through it.
+	admitted, rejected = filterHubOnlyPassed(authorized, []string{fanoutCommitDigest, upstream}, 8, "")
+	assert.Len(t, admitted, 1, "every seed digest must admit evidence exactly like the first")
 	assert.Empty(t, rejected)
 }
 

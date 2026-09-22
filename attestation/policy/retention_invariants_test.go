@@ -341,19 +341,23 @@ func TestRetentionInvariant_BackRefExpansionAndMergeDedup(t *testing.T) {
 		// c-b1 matches the seed and carries a recorded BackRef to invDigestBackRef.
 		invCollection(t, f, "c-b1", "src-b", []string{invDigestSeed}, map[string]string{invAttType: `{"commithash":"b1"}`},
 			map[string]cryptoutil.DigestSet{"test/backref": {cryptoutil.DigestValue{Hash: crypto.SHA256}: invDigestBackRef}}),
-		// c-b2 is reachable ONLY via the BackRef digest — requires depth >= 1.
+		// c-b2 is reachable ONLY via the BackRef digest. It used to be found at
+		// depth >= 1; edges are no longer followed, so it is never found.
 		invCollection(t, f, "c-b2", "down-b", []string{invDigestBackRef}, map[string]string{invAttType: `{"commithash":"b2"}`}, nil),
 	}
 
 	pass, results, err := invVerify(t, f, pol, corpus, []string{invDigestSeed})
 	require.NoError(t, err)
-	require.True(t, pass, "scenario B must PASS via BackRef expansion")
-	// The MERGE discriminator: src-b is re-discovered at depth 1 (MemorySource
-	// has no seen-marking) and mergePassedCollections must dedup it to ONE
-	// passed collection. A broken merge identity yields 2+ and fails here and
-	// in the fingerprint.
-	require.Equal(t, 1, len(results["src-b"].Passed), "cross-depth rediscovery must dedup to one passed collection")
-	require.Equal(t, 1, len(results["down-b"].Passed), "BackRef-reachable evidence must be found at depth >= 1")
+	require.False(t, pass, "scenario B: down-b is reachable only through c-b1's back-reference, which is no longer followed")
+	require.Equal(t, 1, len(results["src-b"].Passed), "the seed-matched collection passes exactly once")
+	require.Empty(t, results["down-b"].Passed, "BackRef-only evidence must never be found")
+
+	// Seeding the second digest reaches it in the same single pass.
+	pass, results, err = invVerify(t, f, pol, corpus, []string{invDigestSeed, invDigestBackRef})
+	require.NoError(t, err)
+	require.True(t, pass, "scenario B with both digests seeded must PASS")
+	require.Equal(t, 1, len(results["src-b"].Passed), "one pass: src-b is found once")
+	require.Equal(t, 1, len(results["down-b"].Passed), "the seeded digest reaches down-b")
 	checkInvGolden(t, "B-merge", invFingerprint(f, pass, results, err), goldenInvariantMerge)
 }
 

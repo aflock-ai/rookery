@@ -15,6 +15,12 @@
 // ============================================================================
 // Degenerate-digest (hub) guard for backref expansion.
 //
+// SUPERSEDED BY THE SEED-ONLY CUTOVER. Verification no longer follows any
+// relationship edge (BackRef), so the empty-tree guard below was removed with
+// the walk it guarded. The tests keep their fixtures and now pin that NO edge,
+// degenerate or real, widens the search; seeding on a digest still works. The
+// history below explains why the edges these fixtures carry mattered.
+//
 // The RFC 6962 empty-tree root is sha256("") — the material and product
 // attestors emit it as their tree root whenever a step consumed or produced
 // nothing. Measured on a 16,939-envelope production corpus, that ONE value is
@@ -55,6 +61,12 @@ import (
 )
 
 const hubGuardAttType = "https://example.com/hub-guard-att/v1"
+
+// sha256OfEmpty is sha256(""), the RFC 6962 empty-tree root. The engine no
+// longer needs it: edges are not followed, so there is no empty-tree edge to
+// guard. The tests below keep it to prove no edge, this one included, widens
+// the search.
+const sha256OfEmpty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 // hubGuardFixture builds a two-step policy where "target" is reachable ONLY if
 // the seed collection's backref digest enters the search set. backRefs are the
@@ -139,8 +151,8 @@ func TestHubGuard_EmptyTreeDigestDoesNotWidenSearch(t *testing.T) {
 			"every step that produced nothing shares it, so it must not expand the search set")
 }
 
-// NEGATIVE CONTROL: a real tree root must still widen the search. Guards
-// against an over-broad filter that eats legitimate artifact-flow edges.
+// A real tree root used to widen the search (the negative control for the
+// empty-tree guard). Edges are no longer followed, so it does not either.
 func TestHubGuard_RealTreeDigestStillWidensSearch(t *testing.T) {
 	const realRoot = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
 	results := hubGuardFixture(t,
@@ -150,13 +162,12 @@ func TestHubGuard_RealTreeDigestStillWidensSearch(t *testing.T) {
 		realRoot,
 	)
 
-	assert.Len(t, results["target"].Passed, 1,
-		"a non-degenerate tree root is a real artifact-flow edge and must still expand the search set")
+	assert.Empty(t, results["target"].Passed,
+		"a tree root is a relationship edge; edges are not followed, so target is not reached")
 }
 
-// FALSE-REJECT-ONLY: a collection reachable through BOTH the empty root and a
-// real digest must still be reached, via the real digest. The guard drops the
-// valueless EDGE, never the collection.
+// A collection reachable through BOTH the empty root and a real digest used to
+// be reached via the real digest. Both are edges; neither is followed now.
 func TestHubGuard_IsFalseRejectOnly(t *testing.T) {
 	const realRoot = "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752"
 	results := hubGuardFixture(t,
@@ -167,8 +178,8 @@ func TestHubGuard_IsFalseRejectOnly(t *testing.T) {
 		realRoot,
 	)
 
-	assert.Len(t, results["target"].Passed, 1,
-		"dropping the degenerate edge must not remove a collection that a real digest makes reachable")
+	assert.Empty(t, results["target"].Passed,
+		"both links are relationship edges; edges are not followed, so target is not reached")
 }
 
 // A GENUINELY ZERO-BYTE ARTIFACT STILL VERIFIES.
@@ -177,8 +188,9 @@ func TestHubGuard_IsFalseRejectOnly(t *testing.T) {
 // artifact, so this can suppress valid evidence relationships unrelated to
 // empty merkle-tree roots and cause incorrect policy rejection."
 //
-// It does not. The guard has exactly ONE call site — the back-reference
-// EXPANSION loop in verifySteps. It is not consulted when seeding
+// It did not. The guard had exactly ONE call site — the back-reference
+// EXPANSION loop in verifySteps, removed at the seed-only cutover together
+// with the guard. It is not consulted when seeding
 // (WithSubjectDigests) and not consulted when matching (the Sourcer subject
 // index). So an operator verifying an artifact that really is empty seeds on
 // the digest and matches collections by subject, and both paths run untouched.
@@ -240,7 +252,11 @@ func TestHubGuard_ZeroByteArtifactStillVerifiesWhenSeededOnIt(t *testing.T) {
 		"the collection whose subject is the empty digest must still be found and pass its gate")
 }
 
-// A ZERO-BYTE ARTIFACT REACHED ONLY THROUGH EXPANSION STILL VERIFIES.
+// A ZERO-BYTE ARTIFACT REACHED ONLY THROUGH AN EDGE IS NO LONGER REACHED.
+//
+// Before the seed-only cutover it verified (the history follows). Now no edge
+// is followed, so the zero-byte artifact is reached only by seeding on it,
+// which TestHubGuard_ZeroByteArtifactStillVerifiesWhenSeededOnIt still pins.
 //
 // This is the case a value-blind guard got wrong, raised in review on #7689 and
 // reproduced before the fix: a collection whose ONLY path is another
@@ -260,10 +276,8 @@ func TestHubGuard_ZeroByteArtifactReachedViaExpansionStillVerifies(t *testing.T)
 		sha256OfEmpty,
 	)
 
-	assert.Len(t, results["target"].Passed, 1,
-		"sha256(\"\") is the real content digest of a zero-byte artifact outside the tree-root "+
-			"contract; an edge naming one must still widen the search, or evidence reachable "+
-			"only through it is falsely rejected")
+	assert.Empty(t, results["target"].Passed,
+		"an edge naming a zero-byte artifact is still an edge; edges are not followed")
 }
 
 // The empty-tree SENTINEL is still dropped — scoping is by back-reference
@@ -288,9 +302,8 @@ func TestHubGuard_EmptyTreeSentinelStillDroppedUnderMaterialAndProduct(t *testin
 	}
 }
 
-// LAUNDERING IS DELIBERATELY NOT DEFENDED — this test asserts the CURRENT
-// contract, which is the inverse of what an earlier revision of this file
-// asserted. Do not "fix" it back without reading this.
+// A relabelled empty digest used to widen the search (history below). With
+// edges no longer followed, it does not, and neither does any other edge.
 //
 // The earlier version pinned that relabelling sha256("") under a
 // legitimate-looking key (e.g. "commithash:") was still dropped, on the theory
@@ -315,9 +328,6 @@ func TestHubGuard_LaunderedEmptyDigestUnderNonTreeKeyIsNotDropped(t *testing.T) 
 		sha256OfEmpty,
 	)
 
-	assert.Len(t, results["target"].Passed, 1,
-		"outside the tree-root contract this guard does not filter by value; suppressing it "+
-			"here would re-introduce the zero-byte-artifact false-reject for no security gain, "+
-			"because the relabelling adversary is already gate-authorized and bounded by "+
-			"WithMaxSubjectFanout")
+	assert.Empty(t, results["target"].Passed,
+		"a relabelled edge is still an edge; edges are not followed")
 }

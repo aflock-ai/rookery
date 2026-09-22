@@ -145,10 +145,11 @@ func dupPolicy(keyID string) Policy {
 	}
 }
 
-// A collection rejected at depth 0 is re-returned by an exclusion-less source
-// at depths 1 and 2 and must NOT be re-appended: each Rejected entry retains
-// the full parsed envelope. Identity is content-based, so genuinely distinct
-// rejections are all preserved.
+// A collection rejected once must be retained once: each Rejected entry retains
+// the full parsed envelope. There is a single pass over the seeds now (the
+// depth loop that re-returned it at depths 1 and 2 is gone), so this pins
+// that the one pass records it once. Identity is content-based, so genuinely
+// distinct rejections are all preserved.
 func TestVerify_RejectedCollectionsDedupedAcrossDepths(t *testing.T) {
 	verifier, keyID := earlyExitVerifier(t)
 
@@ -170,8 +171,11 @@ func TestVerify_RejectedCollectionsDedupedAcrossDepths(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, pass, "audit step has no evidence; the verdict must be FAIL before and after the dedup change")
 
-	// Verdict-bearing state is untouched: both build collections pass, exactly once.
-	require.Len(t, results["build"].Passed, 2, "passed dedup (#5746 F12) must keep both distinct passing collections exactly once")
+	// Only the seed-reachable build collection passes: build-hop hangs off
+	// build-current's back-reference, and edges are no longer followed (it
+	// used to be found at depth 1, which made this count 2).
+	require.Len(t, results["build"].Passed, 1, "only the collection the seed names may pass; build-hop is reachable only through an edge")
+	require.Equal(t, "build-current", results["build"].Passed[0].Collection.Reference)
 
 	// The rejected envelope is re-returned at every depth; it must be retained once.
 	badsig := 0

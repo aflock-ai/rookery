@@ -36,9 +36,9 @@ const gitAttestationType = "https://aflock.ai/attestations/git/v0.1"
 // git attestation and EVERY git attestation's commithash equals commit
 // (full hex, sha1 or sha256, compared case-folded). Anything else is moved to
 // Rejected with ErrWitnessNotBoundToCommit, so it can neither satisfy the step
-// nor contribute BackRefs to the depth walk: the walk may still reach a parent
-// through the evaluated commit's own parenthash edge, but the parent can never
-// be a witness.
+// nor feed a dependant step's cross-step input. Relationship edges (BackRefs)
+// are no longer followed, so a parent is reached only when a caller seeds its
+// digest, and even then it can never be a witness.
 //
 // The binding reads the attestor's commithash FIELD, never the subject
 // digests. The git attestor's subjects include parenthash, so "some subject
@@ -47,7 +47,7 @@ const gitAttestationType = "https://aflock.ai/attestations/git/v0.1"
 //
 // THE ZERO VALUE IS UNBOUND. Without this option (or with an empty commit)
 // the engine keeps its historical behaviour: a step passes on any
-// functionary-authorized collection reachable within the search depth. That
+// functionary-authorized collection the seed digests match. That
 // is correct for verifies whose subject is not a commit, such as a registry
 // or image-digest gate, and it is the HSEC1 exposure for every verify whose
 // subject IS a commit. Callers that evaluate a commit must pass it.

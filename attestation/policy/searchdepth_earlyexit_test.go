@@ -178,13 +178,12 @@ func releaseShapedPolicy(keyID string) Policy {
 	}
 }
 
-// Once every step is satisfied, the depth loop must stop. Before judge#7551 the
-// loop ran a fixed 3 iterations and re-searched every step against the
-// accumulated digest set, pulling in every historical collection reachable from
-// the depth-1 back-references.
-//
-// Fails on revert: without the early exit the third depth iteration searches
-// sha256:commit and the source hands back all 200 historical collections.
+// Seed-only reach (the cutover that removed BackRef following). The release
+// shape used to be verified by following build's back-reference to reach
+// source-git; now only the seed is searched, so source-git has no evidence
+// the seed names and the verify FAILS. The cost invariant this test was
+// written for (judge#7551: never fetch the historical corpus) holds more
+// strongly: exactly the one collection the seed names is fetched.
 func TestEarlyExit_StopsExpandingOnceEveryStepIsSatisfied(t *testing.T) {
 	verifier, keyID := earlyExitVerifier(t)
 
@@ -198,50 +197,49 @@ func TestEarlyExit_StopsExpandingOnceEveryStepIsSatisfied(t *testing.T) {
 		WithSearchDepth(3),
 	)
 	require.NoError(t, err)
-	assert.True(t, pass, "both steps are satisfiable from the seed digest; the verdict must still be PASS")
+	assert.False(t, pass, "source-git is reachable only through build's back-reference, which is no longer followed")
 	require.Len(t, results["build"].Passed, 1)
-	require.Len(t, results["source-git"].Passed, 1)
+	require.Empty(t, results["source-git"].Passed)
 
-	// build is found at depth 0, source-git at depth 1 via build's back-reference.
-	// Both steps are then satisfied, so depth 2 — the one that would drag in the
-	// 200 historical collections — must never run.
-	assert.Equal(t, 2, src.candidate,
-		"only the two collections the policy actually needs may be fetched; a third depth iteration would fetch all %d historical ones", noisePerStep*2)
-
-	// The crisp invariant: source-git's own back-reference is added to the seed
-	// set at the end of depth 1, but the policy is satisfied by then, so it must
-	// never be submitted to a search.
-	_, expanded := src.searchedDigests["sha256:commit"]
-	assert.False(t, expanded,
-		"the depth-2 digest must never be searched once every step is already satisfied")
+	assert.Equal(t, 1, src.candidate,
+		"only the collection the seed names may be fetched; following edges would fetch all %d historical ones", noisePerStep*2)
+	for _, d := range []string{"sha256:pipeline", "sha256:commit"} {
+		_, expanded := src.searchedDigests[d]
+		assert.False(t, expanded, "back-reference %s must never be searched", d)
+	}
 }
 
-// Verdict preservation: a step that is only reachable at depth 2 must still be
-// found. This is the guard against "fixing" the fan-out by simply cutting the
-// search short — the loop may only stop when the policy is ALREADY satisfied.
+// A step reachable only two edges out (it used to be found at depth 2) now
+// FAILS. Seeding is how source evidence is reached: with the commit seeded
+// too, both steps pass at once.
 func TestEarlyExit_StillReachesEvidenceOnlyFoundAtDepthTwo(t *testing.T) {
 	verifier, keyID := earlyExitVerifier(t)
 
-	src := &reachableSource{byDigest: map[string][]source.CollectionVerificationResult{
-		"sha256:binary": {earlyExitCollection(verifier, "build-current", "build", "sha256:pipeline")},
-		// Nothing for source-git at depth 1 — only an intermediate hop that
-		// carries the back-reference onward.
-		"sha256:pipeline": {earlyExitCollection(verifier, "build-hop", "build", "sha256:commit")},
-		"sha256:commit":   {earlyExitCollection(verifier, "source-git-current", "source-git", "")},
-	}}
+	chain := func() *reachableSource {
+		return &reachableSource{byDigest: map[string][]source.CollectionVerificationResult{
+			"sha256:binary":   {earlyExitCollection(verifier, "build-current", "build", "sha256:pipeline")},
+			"sha256:pipeline": {earlyExitCollection(verifier, "build-hop", "build", "sha256:commit")},
+			"sha256:commit":   {earlyExitCollection(verifier, "source-git-current", "source-git", "")},
+		}}
+	}
 
-	pass, results, err := p7551Verify(t, releaseShapedPolicy(keyID), src)
+	pass, results, err := p7551Verify(t, releaseShapedPolicy(keyID), chain())
 	require.NoError(t, err)
-	assert.True(t, pass, "source-git is only reachable at depth 2; the early exit must not cut the search before the policy is satisfied")
+	assert.False(t, pass, "source-git is reachable only two edges out; edges are no longer followed, so the verify FAILS")
+	assert.Empty(t, results["source-git"].Passed)
+
+	pass, results, err = releaseShapedPolicy(keyID).Verify(context.Background(),
+		WithVerifiedSource(chain()),
+		WithSubjectDigests([]string{"sha256:binary", "sha256:commit"}),
+	)
+	require.NoError(t, err)
+	assert.True(t, pass, "seeding the commit reaches source-git directly")
 	assert.Len(t, results["source-git"].Passed, 1)
 }
 
-// A policy whose steps declare AttestationsFrom feeds upstream passed
-// collections into Rego, and arbitrary Rego over that set is not monotone in
-// the collection count. Such a policy must run the full search.
-//
-// Fails on revert of searchExpansionIsMonotone: the early exit would fire at
-// depth 1 and the depth-2 historical collections would never be searched.
+// AttestationsFrom used to force the full depth walk. There is no walk now:
+// a policy with AttestationsFrom searches the seeds exactly once like any
+// other, so the historical corpus behind the edges is never fetched.
 func TestEarlyExit_NotTakenWhenAPolicyUsesAttestationsFrom(t *testing.T) {
 	verifier, keyID := earlyExitVerifier(t)
 
@@ -262,9 +260,9 @@ func TestEarlyExit_NotTakenWhenAPolicyUsesAttestationsFrom(t *testing.T) {
 		WithSearchDepth(3),
 	)
 	require.NoError(t, err)
-	assert.True(t, pass)
-	assert.Greater(t, src.candidate, 2,
-		"a non-monotone policy must keep expanding; the full depth-2 search has to run")
+	assert.False(t, pass, "source-git is reachable only through an edge")
+	assert.Equal(t, 1, src.candidate,
+		"a non-monotone policy searches the seeds once too; no edge may pull in the historical corpus")
 }
 
 // The unconditional half of the fix: an iteration that discovers no new digests

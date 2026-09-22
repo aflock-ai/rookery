@@ -13,28 +13,16 @@
 // limitations under the License.
 //
 // ============================================================================
-// RED TEAM: envelope explosion against the back-reference expansion path.
+// RED TEAM: envelope explosion against the back-reference path.
 //
-// WHAT THE DEGENERATE-DIGEST GUARD DOES AND DOES NOT BOUND — read this before
-// treating it as an anti-explosion control:
-//
-//   It removes ONE specific valueless value (sha256 of empty input) from the
-//   expansion frontier. It is a de-hubbing fix for evidence that is already
-//   signed and cannot be re-signed. It is NOT a bound on frontier growth.
-//
-//   A collection that PASSES its step gate may still assert arbitrarily many
-//   back-references, and every one of them widens the next depth. The controls
-//   that actually bound the walk are, in order:
-//
-//     1. #5747 — only collections that pass the STEP GATE contribute backrefs
-//        (policy.go, verifySteps). An unauthorized signer expands nothing.
-//     2. WithMaxSubjectFanout / filterHubOnlyPassed — candidates whose only
-//        intersection with the closure is a high-fanout digest are rejected
-//        before the gate. Production default VERIFY_SUBJECT_FANOUT_LIMIT=32.
-//     3. searchDepth (default 3) — a hard cap on iterations.
-//
-//   These tests pin that division of labour so a future change cannot quietly
-//   reclassify the guard as the bound.
+// Verification follows only what the seed matches: relationship edges
+// (BackRefs) are no longer followed, so no asserted back-reference, from a
+// gate-passing collection or a gate-rejected one, ever enters the search
+// frontier. These tests used to pin the bounds on the old expansion walk
+// (the empty-tree guard, linear growth, the depth cap); they now pin the
+// stronger property that replaced all three: the frontier is the seed set.
+// WithMaxSubjectFanout (production default VERIFY_SUBJECT_FANOUT_LIMIT=32)
+// remains the bound on hub digests inside the seed set.
 // ============================================================================
 
 package policy
@@ -59,8 +47,10 @@ import (
 	"github.com/aflock-ai/rookery/attestation/source"
 )
 
-// redTeamCanaryDigest is an unguarded, non-degenerate digest added to every
-// red-team fixture so the depth loop always has something to expand on.
+// redTeamCanaryDigest is an ordinary, non-degenerate digest added to every
+// red-team fixture. Under the old walk it always expanded; it must now never
+// reach a search, which proves the fixture's collection passed its gate and
+// its edges were still not followed.
 const redTeamCanaryDigest = "c0ffee00000000000000000000000000000000000000000000000000deadbeef"
 
 // countingSource records every digest the policy engine ever searches on, so a
@@ -152,39 +142,29 @@ func redTeamVerify(t *testing.T, backRefs map[string]cryptoutil.DigestSet, gateP
 	)
 	require.NoError(t, err)
 
-	// Precondition (gate-passing fixtures only): the CANARY backref must have
-	// reached a search. That proves the depth loop iterated and the frontier
-	// was re-searched, so "digest X never appeared" is a fact about X and not
-	// an artifact of the loop stopping early.
-	if gatePasses {
-		_, canarySeen := src.seen[redTeamCanaryDigest]
-		require.True(t, canarySeen,
-			"fixture precondition: the canary backref must reach a search, otherwise the "+
-				"depth loop never re-searched and every frontier assertion here is vacuous")
-	}
+	// The canary is an ordinary edge; edges are not followed, so it never
+	// reaches a search whether or not the collection passed its gate.
+	_, canarySeen := src.seen[redTeamCanaryDigest]
+	require.False(t, canarySeen, "a back-reference must never become a search seed")
 	return src
 }
 
 // Every documented degenerate/low-entropy constant an attacker might use to
-// re-hub the graph. Only sha256("") is currently guarded — the rest are listed
-// so the test records exactly which values DO still expand the search, and a
-// future widening of the guard has a ready-made table.
+// re-hub the graph. Under the old walk only sha256("") under a tree key was
+// dropped and the rest expanded the search. Edges are no longer followed, so
+// none of them may enter the frontier.
 func TestRedTeam_DegenerateConstantsInFrontier(t *testing.T) {
 	cases := []struct {
-		name    string
-		digest  string
-		guarded bool
+		name   string
+		digest string
 	}{
-		// Guarded ONLY under the tree-root contract; this fixture emits it under
-		// an attacker-chosen key, so it is expected to pass through. See
-		// TestHubGuard_LaunderedEmptyDigestUnderNonTreeKeyIsNotDropped.
-		{"sha256 of empty input (non-tree key)", sha256OfEmpty, false},
-		{"all-zero sha256", "0000000000000000000000000000000000000000000000000000000000000000", false},
-		{"all-zero sha1 (branch create/delete sentinel)", "0000000000000000000000000000000000000000", false},
-		{`sha256("judge")`, "10e86c6514d40f2a3e861b31847340ee8c8ed181029a17b042f137121d28863e", false},
+		{"sha256 of empty input (non-tree key)", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+		{"all-zero sha256", "0000000000000000000000000000000000000000000000000000000000000000"},
+		{"all-zero sha1 (branch create/delete sentinel)", "0000000000000000000000000000000000000000"},
+		{`sha256("judge")`, "10e86c6514d40f2a3e861b31847340ee8c8ed181029a17b042f137121d28863e"},
 		// The real sha256("main") — this is the `refnameshort:main` digest, a
 		// measured hub carried as a subject by 1,269 production envelopes.
-		{`sha256("main")`, "0d6e4079e36703ebd37c00722f5891d28b0e2811dc114b129215123adcce3605", false},
+		{`sha256("main")`, "0d6e4079e36703ebd37c00722f5891d28b0e2811dc114b129215123adcce3605"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -192,23 +172,15 @@ func TestRedTeam_DegenerateConstantsInFrontier(t *testing.T) {
 				"https://example.com/attestations/attacker/v1/ref:x": newDigestSet(tc.digest),
 			}, true)
 			_, entered := src.seen[tc.digest]
-			if tc.guarded {
-				assert.False(t, entered,
-					"%s is guarded and must never enter the search frontier", tc.name)
-			} else {
-				assert.True(t, entered,
-					"%s is NOT currently guarded; this test records that fact. If a future "+
-						"change adds it to isEmptyTreeHubBackRef, flip guarded:true here.", tc.name)
-			}
+			assert.False(t, entered,
+				"%s is a back-reference; edges are not followed, so it must never enter the search frontier", tc.name)
 		})
 	}
 }
 
-// THE ACTUAL BOUND. A gate-passing collection asserting N backrefs widens the
-// frontier by N — the guard bounds nothing here, and pretending otherwise
-// would be the dangerous reading. What DOES hold: growth is linear in the
-// asserted backref count, never combinatorial, because knownDigests dedupes
-// and expansion is deferred to the next depth.
+// THE ACTUAL BOUND. A gate-passing collection asserting N backrefs used to
+// widen the frontier by N. Edges are no longer followed, so the frontier is
+// exactly the seed set however many back-references a collection asserts.
 func TestRedTeam_FrontierGrowthIsLinearNotCombinatorial(t *testing.T) {
 	const n = 500
 	refs := map[string]cryptoutil.DigestSet{}
@@ -218,16 +190,13 @@ func TestRedTeam_FrontierGrowthIsLinearNotCombinatorial(t *testing.T) {
 	}
 	src := redTeamVerify(t, refs, true)
 
-	// seed + n asserted backrefs, and NOT more: no depth may re-expand a digest
-	// already known, so the ceiling is exactly 1+n however many depths run.
-	// seed + n asserted backrefs + 1 canary.
-	assert.LessOrEqual(t, len(src.seen), 2+n,
-		"frontier must be bounded by seed+asserted backrefs+canary; anything larger means a "+
-			"digest was re-expanded across depths and growth is combinatorial")
+	assert.Equal(t, map[string]struct{}{"sha256:seed": {}}, src.seen,
+		"the search frontier must be the seed set; any asserted back-reference in it means edges are followed")
 
 	require.NotEmpty(t, src.perSearch)
-	assert.LessOrEqual(t, src.perSearch[len(src.perSearch)-1], 2+n,
-		"the final search must not carry more digests than seed+asserted backrefs+canary")
+	for i, n := range src.perSearch {
+		assert.Equal(t, 1, n, "search %d must carry only the one seed digest", i)
+	}
 }
 
 // The #5747 contract is what stops an UNAUTHORIZED signer from expanding at
@@ -249,14 +218,14 @@ func TestRedTeam_GateRejectedCollectionExpandsNothing(t *testing.T) {
 	}
 }
 
-// Depth amplification: a chain longer than searchDepth must stop at the cap,
-// not run to exhaustion.
+// Depth amplification: with no edge following there is no chain to amplify.
+// One pass over the seeds issues one search per step.
 func TestRedTeam_DepthCapStopsChainAmplification(t *testing.T) {
 	src := redTeamVerify(t, map[string]cryptoutil.DigestSet{
 		"https://example.com/attestations/attacker/v1/ref:0": newDigestSet(fmt.Sprintf("%064x", 1)),
 	}, true)
-	// The fixture policy has 2 steps and searchDepth 3, so verifySteps may
-	// issue at most 2*3 searches. More than that means the depth cap leaked.
-	assert.LessOrEqual(t, len(src.perSearch), 6,
-		"searches must not exceed steps*searchDepth; an unbounded loop here is an amplification vector")
+	// The fixture policy has 2 steps and verifySteps makes one pass, so it
+	// issues exactly 2 searches. More than that means a further pass ran.
+	assert.Equal(t, 2, len(src.perSearch),
+		"one pass over the seeds issues one search per step; a further pass is an amplification vector")
 }

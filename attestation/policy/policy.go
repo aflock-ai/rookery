@@ -43,67 +43,6 @@ import (
 const PolicyPredicate = "https://aflock.ai/policy/v0.1"
 const LegacyPolicyPredicate = "https://witness.testifysec.com/policy/v0.1"
 
-// sha256OfEmpty is sha256(""), which is also the RFC 6962 root of an EMPTY
-// Merkle tree. The material and product attestors compute exactly this value as
-// their tree root whenever a step consumed or produced nothing, so as a tree
-// root it is shared by every such step rather than identifying any one of them.
-const sha256OfEmpty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-// The back-reference names whose CONTRACT defines sha256("") as the
-// empty-tree sentinel. Back-reference names are namespaced by the producing
-// attestor's type — "<type>/<name>" — so the suffix is what identifies the
-// contract regardless of attestor version or vendor prefix.
-//
-// Spelled literally rather than imported from plugins/attestors/{material,
-// product}: the attestation core must not depend on the plugin modules, and
-// those packages already import this one transitively.
-const (
-	materialTreeBackRefName = "/tree:materials"
-	productTreeBackRefName  = "/tree:products"
-)
-
-// isEmptyTreeHubBackRef reports whether a back-reference is the empty-MERKLE-TREE
-// sentinel — the one case where sha256("") is not an identity claim but a
-// "this step consumed/produced nothing" marker that every such step emits
-// identically. Expanding on it joins them all into a single clique.
-//
-// Measured on a 16,939-envelope production corpus: sha256("") appears as a
-// back-reference 3,973 times, and 100.0000% of those are material/product tree
-// roots (product 2,050, material 1,923). Non-tree back-reference emissions of
-// this value: zero. Guarding it cuts depth-3 reach by 87-100% depending on
-// dispatch shape (a build dispatch goes from 7,141 reachable envelopes to 9).
-//
-// SCOPED BY NAMESPACE, NOT BY VALUE ALONE. sha256("") is also the legitimate
-// content digest of a genuine zero-byte artifact, and a value-blind filter
-// would drop that edge too — falsely rejecting a collection reachable ONLY
-// through it (raised in review on #7689 and reproduced: the collection was
-// never searched). Restricting to the tree contracts removes that false-reject
-// class while dropping exactly the same 3,973 edges on real data.
-//
-// Why namespace scoping is safe rather than a concession: the EMISSION-side fix
-// stops new attestations from recording this edge at all, so this consumer-side
-// check exists solely for back-references already baked into signed payloads
-// that can never be re-signed — and every one of those is a tree root. Nothing
-// is given up.
-//
-// Laundering (relabelling sha256("") under, say, "commithash:") is deliberately
-// NOT defended here. Back-references are only harvested from collections that
-// PASS the step gate, so such an adversary is already a policy-authorized
-// functionary for the step and can emit any high-fanout digest they like — a
-// shared base-image layer, a toolchain blob. The bound on that adversary is
-// WithMaxSubjectFanout (production default VERIFY_SUBJECT_FANOUT_LIMIT=32),
-// not this check.
-//
-// FALSE-REJECT-ONLY: this may only decline to WIDEN the search. It never removes
-// a collection that some other digest makes reachable.
-func isEmptyTreeHubBackRef(backRefName, digest string) bool {
-	if digest != sha256OfEmpty {
-		return false
-	}
-	return strings.HasSuffix(backRefName, materialTreeBackRefName) ||
-		strings.HasSuffix(backRefName, productTreeBackRefName)
-}
-
 // +kubebuilder:object:generate=true
 type Policy struct {
 	Expires              metav1.Time                    `json:"expires" jsonschema:"title=Expires,description=Timestamp when this policy expires and should no longer be used for verification"`
@@ -248,7 +187,6 @@ type VerifyOption func(*verifyOptions)
 type verifyOptions struct {
 	verifiedSource      source.VerifiedSourcer
 	subjectDigests      []string
-	searchDepth         int
 	maxSubjectFanout    int
 	aiServerURL         string
 	aiProvider          AiProvider
@@ -328,10 +266,12 @@ func WithSubjectDigests(subjectDigests []string) VerifyOption {
 	}
 }
 
-func WithSearchDepth(depth int) VerifyOption {
-	return func(vo *verifyOptions) {
-		vo.searchDepth = depth
-	}
+// WithSearchDepth is accepted for API compatibility and has no effect.
+// Verification follows only what the seed digests match; relationship edges
+// (BackRefs) are no longer followed, so there is no depth to bound. It stays
+// exported because callers, including compat/go-witness/policy, still pass it.
+func WithSearchDepth(_ int) VerifyOption {
+	return func(*verifyOptions) {}
 }
 
 // WithMaxSubjectFanout enables the subject fan-out guard: during step
@@ -402,13 +342,6 @@ func checkVerifyOpts(vo *verifyOptions) error {
 		return ErrInvalidOption{
 			Option: "subject digests",
 			Reason: "at least one subject digest is required",
-		}
-	}
-
-	if vo.searchDepth < 1 {
-		return ErrInvalidOption{
-			Option: "search depth",
-			Reason: "search depth must be at least 1",
 		}
 	}
 
@@ -644,9 +577,7 @@ func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (
 	if err := ctx.Err(); err != nil {
 		return false, nil, nil, err
 	}
-	vo := &verifyOptions{
-		searchDepth: 3,
-	}
+	vo := &verifyOptions{}
 
 	for _, opt := range opts {
 		opt(vo)
@@ -773,7 +704,7 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 // would be a real finding — check the reported partner before re-suppressing.
 //
 //nolint:dupl // the only clone of this body is lazy_frozen_oracle_test.go's
-func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles map[string]TrustBundle, externalResults map[string]ExternalResult) (map[string]StepResult, error) { //nolint:gocognit,gocyclo,funlen // loop body mixes search / functionary / context-build / backref-expansion on shared per-iteration state; splitting would require threading state through extra parameters
+func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles map[string]TrustBundle, externalResults map[string]ExternalResult) (map[string]StepResult, error) { //nolint:gocognit,gocyclo,funlen // loop body mixes search / functionary / context-build / demand-valve replay on shared per-pass state; splitting would require threading state through extra parameters
 	// Validate that all artifactsFrom references point to steps defined in the policy.
 	// This catches configuration errors early rather than producing confusing
 	// "failed to verify artifacts" errors during the artifact comparison phase.
@@ -801,52 +732,27 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 
 	resultsByStep := make(map[string]StepResult)
 
-	// LOGICAL DEPTH, per digest. digestDepth records the hop count at which
-	// each subject digest becomes searchable: seeds are 0, and a digest
-	// harvested while searching at logical depth L is L+1. It also serves the
-	// de-duplication the search set has always needed — without it the set
-	// grows exponentially as back-references are re-discovered each iteration.
+	// SEED-ONLY REACH. Verification searches exactly the caller's seed
+	// digests. A collection's relationship edges (its BackRefs: commithash,
+	// parenthash, pipeline URL, tree roots) are never turned into new search
+	// seeds: evidence a policy step relies on must be matched by a seed the
+	// caller supplied. There is no search depth; WithSearchDepth is accepted
+	// and ignored.
 	//
-	// Logical depth is deliberately NOT the wall-clock iteration count. What
-	// searchDepth bounds is REACHABILITY — how many hops from the seeds the
-	// verify may travel — and the minimum-witness valve (below) can replay an
-	// iteration. Counting iterations instead would let a replay search one hop
-	// further out than an eager verify ever does, which is a FAIL→PASS
-	// divergence, not merely extra work.
-	//
-	// allDigests preserves the caller's seed slice verbatim, duplicates
-	// included, and only ever grows; digests are appended in non-decreasing
-	// depth order.
-	allDigests := append([]string(nil), vo.subjectDigests...)
-	digestDepth := make(map[string]int, len(allDigests))
-	for _, d := range allDigests {
-		if _, dup := digestDepth[d]; !dup {
-			digestDepth[d] = 0
-		}
-	}
-
 	// Minimum-witness Phase 1 (default OFF). lazyWitnessEligible is the
 	// policy-shape gate; the valve tracks steps whose truncated stream has been
-	// DEMANDED back. A valve firing REPLAYS the current logical depth rather
-	// than advancing it, so the repair pass re-searches exactly the frontier
-	// the truncated pass under-used and reaches no further. Firings are bounded
-	// by the step count (each marks at least one new step and marks are never
-	// cleared), so the loop runs at most searchDepth + len(p.Steps) times.
+	// DEMANDED back. A valve firing REPLAYS the pass over the same seeds, so the
+	// repair pass re-searches exactly what the truncated pass under-used and
+	// reaches no further. Firings are bounded by the step count (each marks at
+	// least one new step and marks are never cleared), so the loop runs at most
+	// 1 + len(p.Steps) times.
 	lazyEligible := p.lazyWitnessEligible(vo)
 	valve := newDemandValve()
 
-	for depth := 0; depth < vo.searchDepth; {
+	for {
 		// Steps whose candidate stream stopped at their first passing
-		// collection during THIS iteration — the valve's input.
+		// collection during THIS pass — the valve's input.
 		var truncatedSteps []string
-
-		// The search set for THIS logical depth: every digest within `depth`
-		// hops of the seeds. In an EAGER verify this is always the entire
-		// accumulated set — a digest discovered at iteration j carries depth
-		// j+1 <= depth — so the bound is a no-op and the slice handed back is
-		// the original. It only bites on a valve replay, where the previous
-		// pass already harvested digests belonging to the NEXT level.
-		vo.subjectDigests = searchableDigests(allDigests, digestDepth, depth)
 
 		for _, stepName := range stepOrder {
 			step := p.Steps[stepName]
@@ -930,7 +836,7 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 				// legitimate evidence. False-reject-only; see filterHubOnlyPassed.
 				var hubRejected []RejectedCollection
 				if vo.maxSubjectFanout > 0 {
-					functionaryCheckResults.Passed, hubRejected = filterHubOnlyPassed(functionaryCheckResults.Passed, vo.subjectDigests, vo.maxSubjectFanout)
+					functionaryCheckResults.Passed, hubRejected = filterHubOnlyPassed(functionaryCheckResults.Passed, vo.subjectDigests, vo.maxSubjectFanout, vo.commitBinding)
 				}
 
 				passedCollections := make([]source.CollectionVerificationResult, len(functionaryCheckResults.Passed))
@@ -970,59 +876,7 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 			} else {
 				resultsByStep[stepName] = stepResult
 			}
-
-			// Expand the reachable-subject set from the BackRefs of collections
-			// that PASSED THE STEP GATE (stepResult.Passed), NOT merely the
-			// functionary survivors (passedCollections) (#5747, finding B). A
-			// collection that clears the functionary check but is REJECTED by the
-			// gate (missing required attestation, failing rego, etc.) is not
-			// trusted, so its signer-asserted BackRefs must not widen the search
-			// — otherwise a throwaway rejected collection can make an unrelated
-			// downstream collection reachable.
-			for _, pc := range stepResult.Passed {
-				// DETERMINISM (#7958): BackRefs() is a map of name → DigestSet
-				// and DigestSet is itself a map, so ranging them yields a
-				// different order every run. That order becomes the order of
-				// allDigests, which becomes the order the source returns
-				// candidates in, which under the minimum-witness stop decides
-				// which collection is signed as the witness. Collect first,
-				// sort, then admit — so the search frontier is a function of
-				// the evidence and not of the map seed.
-				harvested := make([]string, 0)
-				for backRefName, digestSet := range pc.Collection.Collection.BackRefs() {
-					for _, digest := range digestSet {
-						// Empty-merkle-tree sentinel: shared identically by every
-						// step that consumed or produced nothing, so it names no
-						// particular collection and must not widen the search.
-						// See isEmptyTreeHubBackRef.
-						if isEmptyTreeHubBackRef(backRefName, digest) {
-							continue
-						}
-						harvested = append(harvested, digest)
-					}
-				}
-				sort.Strings(harvested)
-				for _, digest := range harvested {
-					// A digest harvested while searching at logical depth
-					// `depth` sits one hop further out, so it becomes
-					// searchable at depth+1 — never in the current
-					// iteration, which is what stops a single collection
-					// from widening the scope of its own depth.
-					if _, seen := digestDepth[digest]; !seen {
-						digestDepth[digest] = depth + 1
-						allDigests = append(allDigests, digest)
-					}
-				}
-			}
 		}
-
-		// Search scope for the next depth iteration is derived from
-		// digestDepth at the top of that iteration; the harvest above has
-		// already recorded every newly reachable digest at depth+1.
-		//
-		// Subject-graph isolation rule (issue #39): external-attestation
-		// subjects are NOT added there. Only Collection BackRefs expand the
-		// seed set. This preserves Collection-graph semantics.
 
 		// DEMAND VALVE (minimum-witness Phase 1, lazy only; no-op when the
 		// option is off because truncatedSteps is then always empty).
@@ -1031,77 +885,23 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 		// WITNESS, not a survey. If the verify is globally satisfied on that
 		// witness, the skipped candidates cannot change the verdict (every
 		// verdict component is existential over Passed) and we fall through to
-		// the ordinary breaks below. If it is NOT satisfied, the skipped
-		// evidence is now DEMANDED — for either of two reasons, both covered by
-		// the same coarse response:
+		// the break below. If it is NOT satisfied, the skipped evidence is now
+		// DEMANDED: an artifactsFrom edge may be unsatisfied because the one
+		// witness this step kept is not the collection the consumer needed.
+		// The repair re-runs the truncated steps EXHAUSTIVELY. Marked steps
+		// never stop early again in this verify, so the loop cannot livelock.
 		//
-		//   - an artifactsFrom edge is unsatisfied because the one witness this
-		//     step kept is not the collection the consumer needed, or
-		//   - a downstream step never found its evidence because the BackRef
-		//     frontier the skipped candidates would have contributed was never
-		//     harvested.
-		//
-		// Both are repaired by re-running the truncated steps EXHAUSTIVELY, so
-		// the valve does not try to tell them apart (per-candidate cursors are
-		// Phase 2). Marked steps never stop early again in this verify, so the
-		// loop cannot livelock.
-		//
-		// The repair pass REPLAYS the current logical depth — `depth` is not
-		// incremented. That is the whole safety property: the pass re-searches
-		// exactly the digest set the truncated pass was entitled to and reaches
-		// no further, so it can recover evidence eager would have found without
-		// ever finding evidence eager could not. Granting an extra ITERATION
-		// instead (the first implementation) advanced the accumulated subject
-		// graph one hop past searchDepth and turned an eager FAIL into a PASS.
+		// The repair pass searches the same seeds as the truncated pass and
+		// reaches no further, so it can recover evidence eager would have found
+		// without ever finding evidence eager could not.
 		if len(truncatedSteps) > 0 && !p.allStepsSatisfied(ctx, vo, resultsByStep) && valve.demand(truncatedSteps) {
-			// Skip BOTH breaks below: the demanded evidence has not been
-			// examined yet, so neither "nothing new is reachable" nor "not
-			// satisfied" is a verdict this loop is entitled to settle on.
+			// The demanded evidence has not been examined yet, so "not
+			// satisfied" is not a verdict this loop is entitled to settle on.
 			continue
 		}
 
-		// Stop expanding once a further iteration cannot change the verdict.
-		// Depth expansion exists to REACH evidence the seed digests do not name
-		// directly; it is not an evidence-quantity requirement. Continuing past
-		// the point where the answer is settled costs a full re-search of every
-		// step against the accumulated digest set — on a monorepo that is
-		// hundreds of envelope fetches per artifact (judge#7551).
-		//
-		// Case 1: nothing is reachable at the NEXT logical depth, so the next
-		// iteration would issue byte-identical queries. Unconditionally safe.
-		//
-		// This is a question about the accumulated graph, not about what THIS
-		// pass happened to harvest. In an eager verify the two coincide exactly
-		// — every depth+1 digest was discovered by this iteration. After a
-		// valve replay they do not: the earlier pass at this same depth already
-		// recorded the frontier, so a replay that harvests nothing new would
-		// strand it if the break looked only at its own harvest.
-		if countDigestsAtDepth(digestDepth, depth+1) == 0 {
-			break
-		}
-
-		// Case 2: every step is already satisfied, and the policy shape has no
-		// AttestationsFrom (the only construct that makes verification
-		// arbitrarily non-monotone). Safe because the break fires ONLY on an
-		// already-passing verdict, so it can never skip evidence that would
-		// rescue a failing step — see searchExpansionIsMonotone for why the
-		// fan-out guard's non-monotonicity does not break this.
-		//
-		// NOTE: a multi-step policy that is only PARTIALLY satisfied never
-		// takes either break and runs the full depth walk, re-searching every
-		// step — including the already-satisfied ones — on every iteration.
-		// That is the dominant cost shape in practice, not attestationsFrom.
-		if p.searchExpansionIsMonotone() && p.allStepsSatisfied(ctx, vo, resultsByStep) {
-			break
-		}
-
-		depth++
+		break
 	}
-
-	// Restore the full accumulated set. The loop searched a depth-bounded view
-	// of it; everything downstream (and any caller reading vo back) sees the
-	// same thing it always has: seeds plus every digest the walk discovered.
-	vo.subjectDigests = allDigests
 
 	resultsByStep, err = p.verifyArtifacts(ctx, vo, resultsByStep)
 	if err != nil {
@@ -1203,10 +1003,10 @@ func rehydrateAwaitingGate(c source.CollectionVerificationResult) (source.Collec
 // stream over exactly the same authorized set (per-candidate closure
 // intersections + counts accumulated by fanoutTracker), and a candidate it
 // demotes has its gate verdict DISCARDED and replaced by the hub rejection,
-// exactly as if the gate had never seen it. BackRef harvesting is unaffected:
-// the caller reads BackRefs from the final Passed set (compacted with
-// RecordedBackRefs stamped at gate time, before the body was released), so
-// depth expansion sees frontiers identical to the batch path.
+// exactly as if the gate had never seen it. RecordedBackRefs are stamped at
+// gate time, before the body is released, so a consumer of the Passed set sees
+// the same edges as on the batch path (the engine itself no longer follows
+// them).
 //
 // The one deliberate delta vs the batch order is COST, not output: a
 // candidate whose hub-only status is not yet provable when it arrives is
@@ -1254,7 +1054,7 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 
 	var authorized []authorizedCandidate
 	var funcRejected []RejectedCollection
-	tracker := newFanoutTracker(vo.subjectDigests, vo.maxSubjectFanout)
+	tracker := newFanoutTracker(vo.subjectDigests, vo.maxSubjectFanout, vo.commitBinding)
 	// AI policies make external server calls from inside the gate. With the
 	// guard active, a provisional gate run on a candidate the final
 	// classification later hub-rejects would be an AI request the batch path
@@ -1531,7 +1331,7 @@ func passedCollectionKeyOf(pc PassedCollection) string {
 // re-rejection an exclusion-less source produces every depth collapses to one
 // entry. Rejected entries are diagnostic only — they never affect the verdict
 // (see searchExpansionIsMonotone) — so de-duplication cannot change a
-// verification outcome, only stop retaining searchDepth copies of a fully
+// verification outcome, only stop retaining one copy per replayed pass of a fully
 // parsed envelope per rejection.
 func mergeRejectedCollections(dst, src []RejectedCollection) []RejectedCollection {
 	seen := make(map[string]struct{}, len(dst))

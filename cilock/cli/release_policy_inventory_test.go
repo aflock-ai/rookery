@@ -240,7 +240,13 @@ func TestReleasePolicyInventoryWorkflow(t *testing.T) {
 			if !spec.chain && (mode == "missing-material" || mode == "tampered-material" || mode == "chain-mismatch") || mode == "missing-clone-material" && spec.steps[0] != "clone" {
 				continue
 			}
-			t.Run(spec.file+"/"+mode, func(t *testing.T) {
+			// Verification follows only what the seed matches; relationship
+			// edges are no longer followed. Seeded with the binary alone, the
+			// earlier steps hang off the shared workflow digest only through a
+			// BackRef, so EVERY mode fails. Seeding the shared digest as well
+			// (the release gates' second seed, `-s sha1:<commit>`) reaches
+			// them and restores each mode's own expectation.
+			check := func(t *testing.T, seeded bool) {
 				p := readReleaseInventoryPolicy(t, spec.file)
 				// Replace trust only in this fixture; keep every type, Rego rule,
 				// expiry and artifactsFrom edge from the unsigned template.
@@ -334,10 +340,18 @@ func TestReleasePolicyInventoryWorkflow(t *testing.T) {
 					digest = manifestTestDigest("unrelated binary")
 				}
 				subjects := expandSubjectsWithInclusionProofs([]cryptoutil.DigestSet{{{Hash: crypto.SHA256}: digest}}, envs, "artifact", digest)
+				if seeded {
+					subjects = append(subjects, cryptoutil.DigestSet{{Hash: crypto.SHA256}: manifestTestDigest("fixture-workflow")})
+				}
 				inventories := indexMaterialManifests(envs)
 				result, verifyErr := workflow.Verify(t.Context(), sign(policy.PolicyPredicate, p), []cryptoutil.Verifier{verifier}, workflow.VerifyWithCollectionSource(mem), workflow.VerifyWithSubjectDigests(subjects), workflow.VerifyWithMaterialManifests(inventories))
 				if verifyErr == nil {
 					verifyErr = requireInventoryArtifactBinding(digest, result.StepResults, inventories, inventories.lookup)
+				}
+				if !seeded {
+					require.Error(t, verifyErr, "seeded with the binary alone, steps reachable only through the shared BackRef must not be found")
+					require.Empty(t, result.StepResults[spec.steps[0]].Passed, "the first step is reachable only through the shared BackRef, which is no longer followed")
+					return
 				}
 				if mode == "inline-product" || mode == "detached-product" || mode == "empty-material" || mode == "omitted-material" && !spec.chain {
 					require.NoError(t, verifyErr, "%+v", result.StepResults)
@@ -360,7 +374,9 @@ func TestReleasePolicyInventoryWorkflow(t *testing.T) {
 						require.Contains(t, reasons, "keyGuard")
 					}
 				}
-			})
+			}
+			t.Run(spec.file+"/"+mode+"/unseeded", func(t *testing.T) { check(t, false) })
+			t.Run(spec.file+"/"+mode+"/seeded", func(t *testing.T) { check(t, true) })
 		}
 	}
 }

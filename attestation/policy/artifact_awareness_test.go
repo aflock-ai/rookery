@@ -150,19 +150,15 @@ func artifactChainFixtures(verifier cryptoutil.Verifier) (build, sourceWrong, so
 // ---------------------------------------------------------------------------
 
 // The artifact-satisfying upstream is reachable ONLY through the downstream
-// collection's back-reference, discovered at depth 1. A depth-0 decoy named for
-// the same step passes the step gate (Analyze() == true) but publishes a
-// MISMATCHING product digest.
+// collection's back-reference. A seed-reachable decoy named for the same step
+// passes the step gate (Analyze() == true) but publishes a MISMATCHING product
+// digest.
 //
-// With artifact awareness (HEAD): allStepsSatisfied runs
-// verifyCollectionArtifacts, sees build's chain unsatisfied by the decoy alone,
-// returns false, the loop proceeds to depth 1, finds source-v2, and the verdict
-// is PASS.
-//
-// Under the mutation (delete the verifyCollectionArtifacts block from
-// allStepsSatisfied): both steps report Analyze() == true at the end of depth 0,
-// the loop breaks early, source-v2 is never discovered, verifyArtifacts then
-// fails build on the digest mismatch — verdict FAIL. THIS TEST REDDENS.
+// Before the seed-only cutover the engine followed build's back-reference,
+// found source-v2 at depth 1 and PASSED. Edges are no longer followed, so
+// source-v2 is never searched, verifyArtifacts fails build on the mismatch,
+// and the verdict is FAIL. Seeding the pipeline digest reaches source-v2 in
+// the same single pass and PASSES.
 func TestArtifactAwareness_DepthDiscoveredUpstreamStillReached(t *testing.T) {
 	verifier, keyID := earlyExitVerifier(t)
 	build, sourceWrong, sourceRight := artifactChainFixtures(verifier)
@@ -170,39 +166,40 @@ func TestArtifactAwareness_DepthDiscoveredUpstreamStillReached(t *testing.T) {
 	// Fixture-collapse guard (design doc §10.7), asserted on the PRISTINE
 	// fixtures before the engine touches them: the two same-step candidates
 	// must carry distinct merge identities, or mergePassedCollections would
-	// drop source-v2 at depth 1 and this test would be measuring nothing.
+	// drop one of them and this test would be measuring nothing.
 	require.NotEqual(t,
 		passedCollectionKeyOf(PassedCollection{Collection: sourceWrong}),
 		passedCollectionKeyOf(PassedCollection{Collection: sourceRight}),
 		"the two source fixtures must NOT share a merge key; identical statements collapse in mergePassedCollections and vacuum out this test")
 
-	src := &reachableSource{byDigest: map[string][]source.CollectionVerificationResult{
-		"sha256:binary":   {build, sourceWrong},
-		"sha256:pipeline": {sourceRight},
-	}}
+	newSrc := func() *reachableSource {
+		return &reachableSource{byDigest: map[string][]source.CollectionVerificationResult{
+			"sha256:binary":   {build, sourceWrong},
+			"sha256:pipeline": {sourceRight},
+		}}
+	}
 
+	src := newSrc()
 	pass, results, err := artifactChainPolicy(keyID).Verify(context.Background(),
 		WithVerifiedSource(src),
 		WithSubjectDigests([]string{"sha256:binary"}),
 		WithSearchDepth(3),
 	)
 	require.NoError(t, err)
+	assert.False(t, pass, "source-v2 is reachable only through build's back-reference, which is no longer followed")
+	assert.False(t, refPresent(results["source"].Passed, "source-v2"), "the edge-only upstream must never be found")
+	_, searched := src.searchedDigests["sha256:pipeline"]
+	assert.False(t, searched, "build's back-reference must never become a search seed")
+	assert.Empty(t, results["build"].Passed, "build's chain is unsatisfied by the decoy, so verifyArtifacts prunes it")
 
-	// The load-bearing assertion, checked FIRST so its message is the one a
-	// future reader sees: source-v2 lives only behind build's back-reference,
-	// so its presence proves the depth loop kept searching past depth 0.
-	// (Fixture collapse is already ruled out by the merge-key guard above, so
-	// an absence here means the early break fired too soon — nothing else.)
-	require.True(t, refPresent(results["source"].Passed, "source-v2"),
-		"the depth-1 upstream was never discovered: the depth loop broke at depth 0 on Analyze() alone, without checking whether build's artifactsFrom edge was actually satisfied")
-
-	// And the depth-0 decoy is still retained alongside it — the search widened,
-	// it did not replace.
-	require.Len(t, results["source"].Passed, 2,
-		"both source candidates must survive the cross-depth merge (decoy from depth 0 + the real upstream from depth 1)")
-
-	assert.True(t, pass,
-		"the artifact-satisfying upstream is reachable at depth 1, so the depth loop must not break at depth 0 on Analyze() alone")
+	pass, results, err = artifactChainPolicy(keyID).Verify(context.Background(),
+		WithVerifiedSource(newSrc()),
+		WithSubjectDigests([]string{"sha256:binary", "sha256:pipeline"}),
+	)
+	require.NoError(t, err)
+	require.True(t, refPresent(results["source"].Passed, "source-v2"), "seeding the pipeline digest reaches the real upstream")
+	require.Len(t, results["source"].Passed, 2, "both source candidates are found in the one pass (decoy + real upstream)")
+	assert.True(t, pass, "with both seeds, build's artifactsFrom edge is satisfied by source-v2")
 	assert.Len(t, results["build"].Passed, 1, "build's chain is satisfied by source-v2, so its passed collection must survive verifyArtifacts")
 }
 
@@ -354,18 +351,14 @@ func prunableChainPolicy(keyID string) Policy {
 	}
 }
 
-// The early break must be decided on the PRUNED view — the same one the final
-// verdict uses — or it settles on evidence the verdict is about to discard.
+// The verdict is decided on the PRUNED view. At the seed, d is "satisfied"
+// only by s-c2, which verifyArtifacts prunes for failing its own artifact
+// check. The legitimate replacement s-c3 hangs off s-c1's back-reference.
 //
-// At depth 0, d is "satisfied" only by s-c2, which verifyArtifacts then prunes
-// for failing its own artifact check. A predicate reading the UNPRUNED results
-// sees d satisfied, breaks the depth loop, and the verdict then rejects d —
-// returning FAIL even though depth 1 holds s-c3, which satisfies d legitimately.
-// That is a false FAIL manufactured by evaluating settlement on a different view
-// than the verdict.
-//
-// RED against a predicate that reads unpruned results; MUTATION F restores that
-// and this reddens.
+// Before the seed-only cutover the engine followed that edge, found s-c3 and
+// PASSED. Edges are no longer followed, so s-c3 is never found and the verdict
+// is the same FAIL as the no-replacement mirror below. Seeding sha256:deeper
+// finds s-c3 in the same pass and PASSES, with s-c2 still pruned.
 func TestArtifactAwareness_PredicateUsesPrunedViewSoDeeperEvidenceIsStillFound(t *testing.T) {
 	verifier, keyID := earlyExitVerifier(t)
 	src := prunableChainSource(verifier, true)
@@ -376,13 +369,19 @@ func TestArtifactAwareness_PredicateUsesPrunedViewSoDeeperEvidenceIsStillFound(t
 		WithSearchDepth(3),
 	)
 	require.NoError(t, err)
+	require.False(t, pass, "s-c3 is reachable only through s-c1's back-reference, which is no longer followed")
+	require.False(t, refPresent(results["s"].Passed, "s-c3"), "the edge-only replacement must never be found")
+	require.False(t, refPresent(results["s"].Passed, "s-c2"), "the artifact-invalid sibling must still be pruned")
+	_, searched := src.searchedDigests["sha256:deeper"]
+	require.False(t, searched, "s-c1's back-reference must never become a search seed")
 
-	// The headline: the depth loop must not have stopped at depth 0.
-	require.True(t, pass,
-		"FALSE FAIL: the early-settlement predicate settled on s-c2 (which the verdict then prunes) and stopped the search before depth 1's s-c3 — the replacement that legitimately satisfies d")
-
-	// The mechanism: the replacement was discovered, the invalid sibling pruned.
-	require.True(t, refPresent(results["s"].Passed, "s-c3"), "the depth-1 replacement must have been discovered")
+	pass, results, err = prunableChainPolicy(keyID).Verify(context.Background(),
+		WithVerifiedSource(prunableChainSource(verifier, true)),
+		WithSubjectDigests([]string{"sha256:seed", "sha256:deeper"}),
+	)
+	require.NoError(t, err)
+	require.True(t, pass, "with the replacement seeded, d is satisfied by s-c3 on the pruned view")
+	require.True(t, refPresent(results["s"].Passed, "s-c3"), "the seeded replacement must be found")
 	require.False(t, refPresent(results["s"].Passed, "s-c2"), "the artifact-invalid sibling must still be pruned")
 	require.Len(t, results["s"].Passed, 2, "s keeps exactly s-c1 and s-c3; a count of 3 means pruning stopped, 1 means the fixtures collapsed (§10.7)")
 	require.Len(t, results["d"].Passed, 1, "d is satisfied by the replacement")

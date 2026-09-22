@@ -169,7 +169,10 @@ func TestLazyWitness_ValveTerminatesWithinItsBudget(t *testing.T) {
 func TestLazyWitness_DemandValveRescuesTheUpstreamEdge(t *testing.T) {
 	verifier, keyID := earlyExitVerifier(t)
 
-	for _, name := range []string{"artifactsfrom-second-upstream-candidate", "artifactsfrom-upstream-at-depth1"} {
+	// "artifactsfrom-upstream-at-depth1" was the second row here. Its upstream
+	// is reachable only through a BackRef, which is no longer followed, so it
+	// FAILS on both arms and is no longer a valve rescue.
+	for _, name := range []string{"artifactsfrom-second-upstream-candidate"} {
 		shape := lazyShapeByName(t, name)
 		t.Run(name, func(t *testing.T) {
 			lazy := runLazyShape(t, shape, lazyLazyMode(), verifier, keyID)

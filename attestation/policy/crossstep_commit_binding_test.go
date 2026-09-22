@@ -127,30 +127,33 @@ var hsecCrossStepCases = []struct {
 	name    string
 	refs    []string
 	foreign string
+	// seed is the extra digest that reaches foreign ("" = {C} reaches it).
+	// Edges are no longer followed, so the parent and sibling scans, which
+	// used to be reached through C's parenthash edge, are seeded explicitly.
+	seed string
 }{
-	// The parent's clean scan, reached at depth 1 through the parenthash edge
-	// of C's own (dirty) scan.
-	{"parent", []string{"C-build", "C-secrets-dirty", "P-build", "P-secrets-clean"}, "P-secrets-clean"},
+	// The parent's clean scan, reached through the seeded parent digest.
+	{"parent", []string{"C-build", "C-secrets-dirty", "P-build", "P-secrets-clean"}, "P-secrets-clean", hsecP},
 	// A sibling (another child of P), reached the same way.
-	{"sibling", []string{"C-build", "C-secrets-dirty", "S-secrets-clean"}, "S-secrets-clean"},
+	{"sibling", []string{"C-build", "C-secrets-dirty", "S-secrets-clean"}, "S-secrets-clean", hsecP},
 	// A child of C, which names C as its parent and so matches the seed.
-	{"child", []string{"C-build", "C-secrets-dirty", "K-secrets-clean"}, "K-secrets-clean"},
+	{"child", []string{"C-build", "C-secrets-dirty", "K-secrets-clean"}, "K-secrets-clean", ""},
 	// A clean scan findable under C's digest that is bound to no commit.
-	{"bound to no commit", []string{"C-build", "C-secrets-dirty", "N-secrets-nogit"}, "N-secrets-nogit"},
+	{"bound to no commit", []string{"C-build", "C-secrets-dirty", "N-secrets-nogit"}, "N-secrets-nogit", ""},
 	// A clean scan that carries git attestations for both C and P.
-	{"bound to C and P", []string{"C-build", "C-secrets-dirty", "D-secrets-twogit"}, "D-secrets-twogit"},
+	{"bound to C and P", []string{"C-build", "C-secrets-dirty", "D-secrets-twogit"}, "D-secrets-twogit", ""},
 }
 
 func TestCommitBinding_CrossStepInputIsBound(t *testing.T) {
 	for _, tc := range hsecCrossStepCases {
 		for _, arm := range hsecArms {
 			t.Run(tc.name+"/"+arm, func(t *testing.T) {
-				unbound := hsecCrossStepVerify(t, arm, tc.refs)
+				unbound := hsecCrossStepVerify(t, arm, tc.refs, hsecSeeds(tc.seed))
 				require.True(t, unbound.accepted, "control: unbound, build must pass on the foreign clean scan; build rejected=%v", unbound.results["build"].Rejected)
 				require.Contains(t, hsecPassedRefs(unbound.results["secrets"]), tc.foreign, "control: the foreign scan must be a passed secrets collection when unbound")
 				require.Contains(t, hsecPassedRefs(unbound.results["build"]), "C-build", "control: C's own build passes on the foreign scan when unbound")
 
-				bound := hsecCrossStepVerify(t, arm, tc.refs, WithCommitBinding(hsecC))
+				bound := hsecCrossStepVerify(t, arm, tc.refs, hsecSeeds(tc.seed), WithCommitBinding(hsecC))
 				assert.False(t, bound.accepted, "bound to C: build must be judged on C's own dirty scan")
 				assert.Equal(t, []string{"C-secrets-dirty"}, hsecPassedRefs(bound.results["secrets"]), "only C's own scan may be a passed secrets collection")
 				assert.Empty(t, hsecPassedRefs(bound.results["build"]), "no build collection may pass on evidence not bound to C")
@@ -189,10 +192,13 @@ func TestCommitBinding_CrossStepSignedCorpus(t *testing.T) {
 	pol := hsecCrossStepPolicy(key.keyID, pks)
 	refs := []string{"C-build", "C-secrets-dirty", "P-build", "P-secrets-clean"}
 
-	accepted, results := hsecVerifySigned(t, key, pol, refs, WithSearchDepth(3))
-	require.True(t, accepted, "control: unbound, build passes on the signed parent scan; rejected=%v", results["build"].Rejected)
+	accepted, _ := hsecVerifySigned(t, key, pol, refs, WithSearchDepth(3))
+	require.False(t, accepted, "unbound, seeded with C alone: the parent scan is reachable only through an edge, which is no longer followed")
 
-	accepted, results = hsecVerifySigned(t, key, pol, refs, WithSearchDepth(3), WithCommitBinding(hsecC))
+	accepted, results := hsecVerifySigned(t, key, pol, refs, hsecSeeds(hsecP))
+	require.True(t, accepted, "control: unbound, build passes on the seeded signed parent scan; rejected=%v", results["build"].Rejected)
+
+	accepted, results = hsecVerifySigned(t, key, pol, refs, hsecSeeds(hsecP), WithCommitBinding(hsecC))
 	assert.False(t, accepted, "bound to C: build must be judged on C's own dirty scan")
 	assert.Equal(t, []string{"C-secrets-dirty"}, hsecPassedRefs(results["secrets"]))
 	assert.Empty(t, hsecPassedRefs(results["build"]))

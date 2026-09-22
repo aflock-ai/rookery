@@ -120,52 +120,6 @@ func sourceHasCanonicalOrder(s source.VerifiedSourcer) bool {
 	return ok && c.CanonicalStreamOrder()
 }
 
-// searchableDigests returns the digests reachable within maxDepth hops of the
-// seeds, preserving the accumulated slice's order and its duplicates.
-//
-// This is the bound that makes the demand valve's replay sound. searchDepth
-// limits REACHABILITY, not iterations, so a replay must be handed the same
-// digest set the pass it is replaying was entitled to — never the widened set
-// the previous pass left behind.
-//
-// In an EAGER verify the bound never removes anything: a digest discovered at
-// iteration j carries depth j+1, and iteration `depth` only runs after j <
-// depth, so every accumulated digest is already within reach. The equal-length
-// fast path therefore returns the caller's slice untouched on every eager
-// iteration — no allocation, no copy, and no behavioural difference to the
-// pre-minimum-witness engine.
-func searchableDigests(all []string, depths map[string]int, maxDepth int) []string {
-	n := 0
-	for _, d := range all {
-		if depths[d] <= maxDepth {
-			n++
-		}
-	}
-	if n == len(all) {
-		return all
-	}
-	out := make([]string, 0, n)
-	for _, d := range all {
-		if depths[d] <= maxDepth {
-			out = append(out, d)
-		}
-	}
-	return out
-}
-
-// countDigestsAtDepth reports how many digests first became searchable at
-// exactly this logical depth — i.e. whether the next iteration would see
-// anything the current one did not.
-func countDigestsAtDepth(depths map[string]int, depth int) int {
-	n := 0
-	for _, d := range depths {
-		if d == depth {
-			n++
-		}
-	}
-	return n
-}
-
 // demandValve records the steps whose lazily-truncated stream must be re-run
 // exhaustively because the verify did not settle on the witness they produced.
 // It is monotone: a step marked demand-exhaustive never becomes lazy again

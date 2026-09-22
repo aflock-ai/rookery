@@ -213,12 +213,13 @@ func TestVerify(t *testing.T) {
 	})
 }
 
-// TestBackRefs exercises the policy engine's BackRef subject-expansion path:
-// the verifier starts with a "seed" subject that matches nothing directly, but
-// step02's collection has no subject index (so it matches any search) and
-// exposes a BackRef digest that covers step01's subject. After the first depth
-// iteration, the BackRef from step02 expands the search set, step01 is then
-// found, and both steps end up with passed collections.
+// TestBackRefs pins that the policy engine no longer follows BackRefs:
+// verification follows only what the seed matches. The verifier starts with a
+// "seed" subject that step02's collection carries; step02's collection also
+// exposes a BackRef digest that covers step01's subject. That edge used to be
+// followed at depth 1, which found step01 and passed the policy. Now step01 is
+// never found from the seed alone and the policy FAILS; seeding step01's
+// digest as well finds it directly and the policy passes.
 //
 // The test drives policy.Verify() directly (rather than workflow.Verify) to
 // avoid a circular module dependency with the policyverify plugin — the
@@ -253,51 +254,45 @@ func TestBackRefs(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	memorySource := source.NewMemorySource()
-	require.NoError(t, memorySource.LoadEnvelope("step01", step1Result.SignedEnvelope))
-	require.NoError(t, memorySource.LoadEnvelope("step02", step2Result.SignedEnvelope))
+	verify := func(seeds ...string) (bool, map[string]policy.StepResult) {
+		memorySource := source.NewMemorySource()
+		require.NoError(t, memorySource.LoadEnvelope("step01", step1Result.SignedEnvelope))
+		require.NoError(t, memorySource.LoadEnvelope("step02", step2Result.SignedEnvelope))
+		// Wrap the raw memory source with the DSSE-verifying source that
+		// policy.Verify expects. The functionary signer is also the envelope
+		// signer for these synthetic collections.
+		verifiedSource := source.NewVerifiedSource(
+			memorySource,
+			dsse.VerifyWithVerifiers(functionaryVerifier),
+		)
+		pass, stepResults, err := testPolicy.Verify(
+			context.Background(),
+			policy.WithVerifiedSource(verifiedSource),
+			policy.WithSubjectDigests(seeds),
+		)
+		require.NoError(t, err, fmt.Sprintf("policy.Verify returned error: results=%+v", stepResults))
+		return pass, stepResults
+	}
 
-	// Wrap the raw memory source with the DSSE-verifying source that
-	// policy.Verify expects. The functionary signer is also the envelope
-	// signer for these synthetic collections.
-	verifiedSource := source.NewVerifiedSource(
-		memorySource,
-		dsse.VerifyWithVerifiers(functionaryVerifier),
-	)
-
-	pass, stepResults, err := testPolicy.Verify(
-		context.Background(),
-		policy.WithVerifiedSource(verifiedSource),
-		// Seed digest that no collection directly advertises as a subject.
-		// Without BackRef expansion, step01 (which has subject backrefDigestHex)
-		// would never be located.
-		policy.WithSubjectDigests([]string{seedDigestHex}),
-	)
-	require.NoError(t, err, fmt.Sprintf("policy.Verify returned error: results=%+v", stepResults))
-	require.True(t, pass, fmt.Sprintf("policy did not pass: results=%+v", stepResults))
-
-	// Assert BOTH steps surfaced passed collections. step02 passes at depth 0
-	// because its collection carries the operator's seed digest
-	// seedDigestHex as a real subject (a genuine subject-digest match,
-	// not subjectless fail-open matching). step01 passes only after the
-	// BackRef digest backrefDigestHex — published by step02's dummyBackrefAttestor and
-	// also carried as one of its subjects per the BackReffer contract — is
-	// added to the search set for the next depth iteration. Without BackRef
-	// expansion, step01.Passed would be empty and this assertion would fail.
-	step1ResultEntry, ok := stepResults["step01"]
-	require.True(t, ok, "step01 missing from results")
-	require.NotEmpty(t, step1ResultEntry.Passed, "step01 must have passed collections — proves BackRef expansion found it via step02's back-reference digest")
-
+	// Seed alone: step02 matches the seed; step01 is reachable only through
+	// step02's BackRef, which is not followed.
+	pass, stepResults := verify(seedDigestHex)
+	require.False(t, pass, "step01 is reachable only through step02's back-reference, which is no longer followed")
+	require.Empty(t, stepResults["step01"].Passed, "step01 must not be found through a BackRef")
 	step2ResultEntry, ok := stepResults["step02"]
 	require.True(t, ok, "step02 missing from results")
-	require.NotEmpty(t, step2ResultEntry.Passed, "step02 must have passed collections")
+	require.NotEmpty(t, step2ResultEntry.Passed, "step02 must have passed collections: the seed names it")
 
-	// Also assert that step02's collection actually emits the BackRef we
-	// rely on — protects against the test silently turning into a no-op if
-	// the BackReffer interface is renamed or the attestor stops being
-	// registered.
+	// Non-vacuity: step02's collection really does emit the BackRef that
+	// covers step01, so the FAIL above is about the edge not being followed,
+	// not about a missing edge.
 	backRefs := step2ResultEntry.Passed[0].Collection.Collection.BackRefs()
-	require.NotEmpty(t, backRefs, "step02 collection must expose BackRefs for subject expansion to be exercised")
+	require.NotEmpty(t, backRefs, "step02 collection must expose BackRefs, or this test proves nothing")
+
+	// Seeding step01's digest finds it directly.
+	pass, stepResults = verify(seedDigestHex, backrefDigestHex)
+	require.True(t, pass, fmt.Sprintf("policy did not pass with both digests seeded: results=%+v", stepResults))
+	require.NotEmpty(t, stepResults["step01"].Passed, "step01 must be found through its seeded digest")
 }
 
 func makePolicy(functionary policy.Functionary, publicKey policy.PublicKey, roots map[string]policy.Root) policy.Policy {

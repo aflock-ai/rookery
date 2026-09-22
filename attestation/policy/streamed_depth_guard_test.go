@@ -348,19 +348,23 @@ func TestVerify_DepthGuardIsVerdictInvariant(t *testing.T) {
 
 	// want maps shape/depth to the verdict and the exact set of collection
 	// references that PASSED each step. Captured on the pre-change tree; must
-	// be identical after the guard is ported, on both arms.
+	// be identical after the guard is ported, on both arms. Rows 2-4 of
+	// "missing" and "mismatch" were re-captured at the seed-only cutover:
+	// build-hop is reachable only through build-current's back-reference,
+	// which is no longer followed, so every depth now equals depth 1
+	// (WithSearchDepth is a no-op).
 	want := map[string]struct {
 		pass   bool
 		passed map[string][]string
 	}{
 		"missing/1":   {pass: false, passed: map[string][]string{"build": {"build-current"}, "audit": {}}},
-		"missing/2":   {pass: false, passed: map[string][]string{"build": {"build-current", "build-hop"}, "audit": {}}},
-		"missing/3":   {pass: false, passed: map[string][]string{"build": {"build-current", "build-hop"}, "audit": {}}},
-		"missing/4":   {pass: false, passed: map[string][]string{"build": {"build-current", "build-hop"}, "audit": {}}},
+		"missing/2":   {pass: false, passed: map[string][]string{"build": {"build-current"}, "audit": {}}},
+		"missing/3":   {pass: false, passed: map[string][]string{"build": {"build-current"}, "audit": {}}},
+		"missing/4":   {pass: false, passed: map[string][]string{"build": {"build-current"}, "audit": {}}},
 		"mismatch/1":  {pass: false, passed: map[string][]string{"build": {"build-current"}, "audit": {}}},
-		"mismatch/2":  {pass: false, passed: map[string][]string{"build": {"build-current", "build-hop"}, "audit": {}}},
-		"mismatch/3":  {pass: false, passed: map[string][]string{"build": {"build-current", "build-hop"}, "audit": {}}},
-		"mismatch/4":  {pass: false, passed: map[string][]string{"build": {"build-current", "build-hop"}, "audit": {}}},
+		"mismatch/2":  {pass: false, passed: map[string][]string{"build": {"build-current"}, "audit": {}}},
+		"mismatch/3":  {pass: false, passed: map[string][]string{"build": {"build-current"}, "audit": {}}},
+		"mismatch/4":  {pass: false, passed: map[string][]string{"build": {"build-current"}, "audit": {}}},
 		"satisfied/1": {pass: true, passed: map[string][]string{"build": {"build-current"}, "audit": {"audit-current"}}},
 		"satisfied/2": {pass: true, passed: map[string][]string{"build": {"build-current"}, "audit": {"audit-current"}}},
 		"satisfied/3": {pass: true, passed: map[string][]string{"build": {"build-current"}, "audit": {"audit-current"}}},

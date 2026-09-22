@@ -315,8 +315,9 @@ func TestLazyWitness_IsStableAcrossRepeatedVerifies(t *testing.T) {
 					lazyPlain(verifier, "alpha-2", "alpha", "sha256:hopB"),
 					lazyPlain(verifier, "bravo-1", "bravo", "sha256:hopB"),
 				},
-				// charlie is reachable from EITHER hop, so which one enters the
-				// search set first decides which charlie becomes the witness.
+				// charlie is reachable from EITHER hop. BackRefs are no longer
+				// followed, so both hops are SEEDED below; the order the seeds
+				// match in still decides which charlie becomes the witness.
 				"sha256:hopA": {lazyPlain(verifier, "charlie-viaA", "charlie", "")},
 				"sha256:hopB": {lazyPlain(verifier, "charlie-viaB", "charlie", "")},
 			})
@@ -327,7 +328,7 @@ func TestLazyWitness_IsStableAcrossRepeatedVerifies(t *testing.T) {
 		pol, src := build()
 		pass, results, err := pol.Verify(context.Background(),
 			WithVerifiedSource(src),
-			WithSubjectDigests([]string{"sha256:seed"}),
+			WithSubjectDigests([]string{"sha256:seed", "sha256:hopB", "sha256:hopA"}),
 			WithSearchDepth(3),
 			WithLazyStepSatisfaction(true),
 		)
