@@ -495,12 +495,18 @@ func (s *VerifiedSource) SearchStream(ctx context.Context, collectionName string
 	return nil
 }
 
-// verifyCandidate runs the full per-candidate pipeline — DSSE signature
+// verifyCandidate runs the full per-candidate pipeline (DSSE signature
 // verification, verifier accounting, the artifact-substitution subject guard,
-// digest recording and byte release — and returns the compact result. It is
+// the decode of the signed payload into the result's Statement and
+// Collection, digest recording and byte release) and returns the compact
+// result. A passing result's Statement and Collection are always that decode,
+// and a signed payload that does not decode fails the candidate. It is
 // the single implementation behind both the streamed and slice Search paths,
 // so the two can never diverge on a verdict.
 func (s *VerifiedSource) verifyCandidate(toVerify CollectionEnvelope, subjectDigests []string) CollectionVerificationResult { //nolint:gocognit,gocyclo // per-candidate verify with per-verifier pass/fail accounting plus the artifact-substitution subject guard; the branches enumerate signature-verification states, which is the function's purpose.
+	// PayloadDigests is this type's record of the signed bytes; only
+	// recordPayloadDigests below may set it.
+	toVerify.PayloadDigests = nil
 	envelopeVerifiers, err := toVerify.Envelope.Verify(s.verifyOpts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[verified-source] envelope %s signature verification FAILED: %v\n", toVerify.Reference, err)
@@ -559,6 +565,17 @@ func (s *VerifiedSource) verifyCandidate(toVerify CollectionEnvelope, subjectDig
 		Errors = append(Errors, fmt.Errorf("collection subject does not match requested artifact digest(s): artifact-substitution guard"))
 		passedVerifiers = nil
 		timestampsByKeyID = nil
+	} else if decoded, derr := EnvelopeToCollectionEnvelope(toVerify.Reference, toVerify.Envelope); derr != nil {
+		fmt.Fprintf(os.Stderr, "[verified-source] envelope %s REJECTED: signed payload does not decode as a collection: %v\n", truncLogField(toVerify.Reference), derr)
+		Errors = append(Errors, fmt.Errorf("decode signed payload: %w", derr))
+		passedVerifiers = nil
+		timestampsByKeyID = nil
+	} else {
+		// The Statement and Collection a verdict reads are decoded here from
+		// the signed bytes, with the same decoder the sources use. The
+		// source's own decode is discarded, so a source can choose which
+		// signed evidence to return but not what that evidence says.
+		toVerify = decoded
 	}
 
 	// Verification + subject guard are complete. A candidate that PASSED both
