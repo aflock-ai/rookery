@@ -21,6 +21,9 @@
 #      else stops this);
 #   6. refuse a manifest sha256 that is not 64 hex digits (BSD `sha256sum -c`
 #      exits 0 on an "improperly formatted" line);
+#   9. print the provenance command with `-s sha1:<commit>` taken from THIS
+#      version's manifest "commit", never from another version's entry, and print a fill-in placeholder, not a guess,
+#      when this version records none or a malformed one;
 # and, in every case, pass or fail, remove its staging directory.
 #
 # The docs also print copy-paste recipes for installing by hand, and they
@@ -47,6 +50,8 @@ OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"; case "$ARCH" in x86_64|amd64) ARCH=amd64;; arm64|aarch64) ARCH=arm64;; esac
 ARCHIVE="cilock-${VERSION_CLEAN}-${OS}-${ARCH}.tar.gz"
 
+COMMIT="0123456789abcdef0123456789abcdef01234567"
+OTHER_COMMIT="fedcba9876543210fedcba9876543210fedcba98"
 sha_of() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | awk '{print $1}'; }
 
 failed=0
@@ -71,7 +76,8 @@ chmod +x "$work/shim/mktemp"
 
 build_dist() {
   # $1 = dist dir, $2 = with-manifest-sha | envelopes-block-first | no-manifest-sha
-  #                     | checksums-missing-line | manifest-bad-sha
+  #                     | checksums-missing-line | manifest-bad-sha | with-commit
+  #                     | other-version-commit | bad-commit
   local dist="$1" mode="$2"
   rm -rf "$dist"; mkdir -p "$dist/dl/$VERSION"
   tar -C "$work" -czf "$dist/dl/$VERSION/$ARCHIVE" cilock
@@ -107,6 +113,16 @@ JSON
       else
         printf '%s  %s\n' "$sha" "some-other-archive.tar.gz" > "$dist/dl/$VERSION/checksums-sha256.txt"
       fi
+      ;;
+    with-commit|other-version-commit|bad-commit)
+      # A newer version precedes this one, as in the real newest-first manifest,
+      # carrying its own commit: the installer must read THIS version's.
+      local mine="\"commit\":\"$COMMIT\","
+      [ "$mode" = other-version-commit ] && mine=""
+      [ "$mode" = bad-commit ] && mine="\"commit\":\"${COMMIT%????????}\","
+      cat > "$dist/dl/manifest.json" <<JSON
+{"schema":1,"latest":"$VERSION","versions":[{"version":"v9.9.10-test","commit":"$OTHER_COMMIT","files":[{"name":"x.tar.gz","sha256":"$sha"}]},{"version":"$VERSION",${mine}"files":[{"name":"$ARCHIVE","sha256":"$sha","os":"$OS","arch":"$ARCH"}]}]}
+JSON
       ;;
     *) echo "build_dist: unknown mode $mode"; exit 2;;
   esac
@@ -221,6 +237,29 @@ for sh in "${shells[@]}"; do
   else
     pass "6/$sh" "refused a truncated manifest sha256"
   fi
+
+  # --- 9. the provenance command seeds THIS version's full commit ---------------
+  for mode in with-commit other-version-commit bad-commit; do
+    dist="$d/dist9-$mode"; bin="$d/bin9-$mode"; mkdir -p "$bin"
+    build_dist "$dist" "$mode"
+    if ! run_install "$dist" "$bin"; then
+      fail "9/$mode/$sh" "install errored"
+    elif grep -qF "$OTHER_COMMIT" "$work/err"; then
+      fail "9/$mode/$sh" "printed another version's commit"
+    elif [ "$mode" = with-commit ]; then
+      if ! grep -qxF "    -s sha1:$COMMIT \\" "$work/err"; then
+        fail "9/$mode/$sh" "the verify command does not seed -s sha1:$COMMIT"
+      else
+        pass "9/$mode/$sh" "the verify command seeds this version's commit"
+      fi
+    elif grep -qE 'sha1:[0-9a-f]' "$work/err"; then
+      fail "9/$mode/$sh" "printed a commit this version's entry does not validly record"
+    elif ! grep -qxF "    -s sha1:<full 40-hex commit of $VERSION> \\" "$work/err"; then
+      fail "9/$mode/$sh" "no fill-in placeholder for the commit"
+    else
+      pass "9/$mode/$sh" "no valid commit recorded: printed a placeholder, not a guess"
+    fi
+  done
 done
 
 # --- 7/8 shared: the documented recipes -----------------------------------------

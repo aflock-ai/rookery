@@ -30,6 +30,10 @@
  * Options:
  *   --dir <path>        Directory of release artifacts (required).
  *   --version <vX.Y.Z>  Release version (required).
+ *   --commit <sha>      Full 40-hex source commit the release was built from
+ *                       (required). Recorded as the version's "commit" in
+ *                       manifest.json; install.sh prints it as the verify
+ *                       command's `-s sha1:<commit>` seed.
  *   --bucket <name>     R2 bucket (default: cilock-dist).
  *   --policy <file>     Release policy file in --dir to publish (default:
  *                       release-policy.json). Uploaded to policy/<file>.
@@ -59,6 +63,7 @@ function parseArgs(argv) {
     switch (a) {
       case '--dir': out.dir = argv[++i]; break;
       case '--version': out.version = argv[++i]; break;
+      case '--commit': out.commit = argv[++i]; break;
       case '--bucket': out.bucket = argv[++i]; break;
       case '--policy': out.policy = argv[++i]; break;
       case '--latest': out.latest = true; break;
@@ -258,6 +263,9 @@ if (!opts.dir) die('--dir is required');
 if (!opts.version) die('--version is required');
 if (!existsSync(opts.dir) || !statSync(opts.dir).isDirectory()) die(`--dir not a directory: ${opts.dir}`);
 if (!/^v?\d+\.\d+/.test(opts.version)) die(`--version does not look like a version: ${opts.version}`);
+// 4.5.0 verifies source checks from the commit, so a downloader's verify command
+// needs the full commit next to the binary; `cilock version` prints only 8 chars.
+if (!/^[0-9a-f]{40}$/.test(opts.commit ?? '')) die(`--commit must be the release's full 40-hex lowercase commit, got: ${JSON.stringify(opts.commit ?? null)}`);
 
 const policyPath = join(opts.dir, opts.policy);
 if (!existsSync(policyPath)) die(`release policy not found in --dir: ${policyPath}`);
@@ -294,7 +302,9 @@ const manifestFiles = allFiles.map((name) => {
 });
 
 const verification = buildVerification(opts.dir, allFiles, opts.version, opts.policy);
-const newVersion = { version: opts.version, released: new Date().toISOString(), files: manifestFiles };
+// `commit` is additive (schema stays 1; older consumers ignore it) and sits
+// before `files`: install.sh reads it from the version object's own text.
+const newVersion = { version: opts.version, commit: opts.commit, released: new Date().toISOString(), files: manifestFiles };
 // Per-version offline-verification material (trust roots + per-binary envelopes).
 // Backward-compatible: a consumer that doesn't know the field (install.sh reads
 // only `latest` + per-file sha256) ignores it. Omitted entirely when absent.
@@ -305,6 +315,7 @@ const promoteLatest = opts.latest === undefined ? !isPrerelease(opts.version) : 
 
 const attestedBinaries = verification?.attestations?.length ?? 0;
 console.log(`   version:       ${opts.version}`);
+console.log(`   commit:        ${opts.commit}`);
 console.log(`   files:         ${allFiles.length} -> ${opts.version}/<file>`);
 console.log(`   root promote:  ${Object.entries(rootPromotions).filter(([k]) => allFiles.includes(k)).map(([k, v]) => `${k}->${v}`).join(', ') || '(none present)'}`);
 console.log(`   verification:  ${verification ? `policy=${verification.policy ?? '-'} fulcioRoots=${verification.fulcioRoots ? 'yes' : 'no'} tsaChain=${verification.tsaChain ? 'yes' : 'no'} attestedBinaries=${attestedBinaries}` : '(none — no trust/envelopes in --dir)'}`);

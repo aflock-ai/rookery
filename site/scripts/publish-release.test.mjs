@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const inventoryType = 'https://aflock.ai/attestations/file-inventory/v0.1';
+const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const envelope = (statement) => JSON.stringify({ payloadType: 'application/vnd.in-toto+json', payload: Buffer.from(JSON.stringify(statement)).toString('base64'), signatures: [{ sig: 'fixture' }] });
 
@@ -37,7 +38,7 @@ test('offline manifest carries every required companion and refuses missing/misb
       }
       expected.set(`${prefix}.tar.gz`, names);
     }
-    const run = () => spawnSync(process.execPath, [new URL('./publish-release.mjs', import.meta.url).pathname, '--dir', dir, '--version', 'v1.2.3', '--dry-run'], { encoding: 'utf8' });
+    const run = () => spawnSync(process.execPath, [new URL('./publish-release.mjs', import.meta.url).pathname, '--dir', dir, '--version', 'v1.2.3', '--commit', COMMIT, '--dry-run'], { encoding: 'utf8' });
     const good = run();
     assert.equal(good.status, 0, good.stderr);
     const manifest = JSON.parse(good.stdout.split('Manifest entry that WOULD be written:\n')[1]);
@@ -113,7 +114,7 @@ test('companion transport binds exact raw predicate bytes and entry count, not c
       write(`${prefix}.source-git.att.json`, envelope({ predicate: { attestations: [] } }));
       write(`${prefix}.build.att.json`, envelope({ predicate: { attestations: [{ type: 'https://aflock.ai/attestations/material/v0.3', attestation: { inventory: ref } }] } }));
       write(`${prefix}.build.att.json-material-inventory.json`, JSON.stringify({ payload: payload.toString('base64'), signatures: [{ sig: 'not-a-real-signature' }] }));
-      const result = spawnSync(process.execPath, [new URL('./publish-release.mjs', import.meta.url).pathname, '--dir', dir, '--version', 'v1.2.3', '--dry-run'], { encoding: 'utf8' });
+      const result = spawnSync(process.execPath, [new URL('./publish-release.mjs', import.meta.url).pathname, '--dir', dir, '--version', 'v1.2.3', '--commit', COMMIT, '--dry-run'], { encoding: 'utf8' });
       if (c.ok) assert.equal(result.status, 0, result.stderr);
       else {
         assert.notEqual(result.status, 0, `${c.name} must fail with the original claimed subject intact`);
@@ -135,13 +136,46 @@ test('inline and empty inventories need no companions; incomplete parents fail c
     for (const step of ['source-git', 'build']) {
       writeFileSync(join(dir, `${prefix}.${step}.att.json`), envelope({ predicate: { attestations: [{ type: 'https://aflock.ai/attestations/product/v0.3', attestation: { leaves: [], treeSize: 0 } }] } }));
     }
-    const run = () => spawnSync(process.execPath, [new URL('./publish-release.mjs', import.meta.url).pathname, '--dir', dir, '--version', 'v1.2.3', '--dry-run'], { encoding: 'utf8' });
+    const run = () => spawnSync(process.execPath, [new URL('./publish-release.mjs', import.meta.url).pathname, '--dir', dir, '--version', 'v1.2.3', '--commit', COMMIT, '--dry-run'], { encoding: 'utf8' });
     const good = run();
     assert.equal(good.status, 0, good.stderr);
     const manifest = JSON.parse(good.stdout.split('Manifest entry that WOULD be written:\n')[1]);
     assert.equal(manifest.verification.attestations[0].envelopes.length, 2);
     rmSync(join(dir, `${prefix}.build.att.json`));
     assert.notEqual(run().status, 0, 'missing parent must fail before publication');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// install.sh reads the full source commit from the version entry and prints it as
+// the verify command's second seed (4.5.0 verifies source checks from the commit),
+// so the publisher must record exactly the 40-hex commit it was given, and refuse
+// to publish without one rather than ship a manifest the command cannot use.
+test('manifest entry records the release commit; a missing or malformed --commit refuses', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'release-commit-'));
+  try {
+    const prefix = 'cilock-1.2.3-linux-amd64';
+    writeFileSync(join(dir, 'release-policy.json'), '{}');
+    writeFileSync(join(dir, `${prefix}.tar.gz`), 'archive');
+    for (const step of ['source-git', 'build']) {
+      writeFileSync(join(dir, `${prefix}.${step}.att.json`), envelope({ predicate: { attestations: [{ type: 'https://aflock.ai/attestations/product/v0.3', attestation: { leaves: [], treeSize: 0 } }] } }));
+    }
+    const run = (...commit) => spawnSync(process.execPath, [new URL('./publish-release.mjs', import.meta.url).pathname, '--dir', dir, '--version', 'v1.2.3', ...commit, '--dry-run'], { encoding: 'utf8' });
+    const good = run('--commit', COMMIT);
+    assert.equal(good.status, 0, good.stderr);
+    const entry = JSON.parse(good.stdout.split('Manifest entry that WOULD be written:\n')[1]);
+    assert.equal(entry.commit, COMMIT);
+    // install.sh splits the served JSON on '{' and reads "commit" from the version
+    // object's own line, so the field must precede the first nested object.
+    const keys = Object.keys(entry);
+    assert.ok(keys.indexOf('commit') < keys.indexOf('files'), `commit must precede files: ${keys}`);
+    for (const bad of [[], ['--commit', ''], ['--commit', COMMIT.slice(0, 8)], ['--commit', COMMIT.toUpperCase()], ['--commit', `${COMMIT}0`], ['--commit', `sha1:${COMMIT}`]]) {
+      const r = run(...bad);
+      assert.notEqual(r.status, 0, `publisher accepted --commit ${JSON.stringify(bad)}`);
+      assert.match(r.stderr, /--commit/);
+      assert.doesNotMatch(r.stdout, /Manifest entry that WOULD be written/);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

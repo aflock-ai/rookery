@@ -28,7 +28,12 @@
 #   curl -fsSLO https://cilock.dev/dl/<version>/cilock-<ver>-<os>-<arch>.source-git.att.json
 #   "$TRUSTED_CILOCK" verify "$(command -v cilock)" --policy release-policy.json \
 #     --attestations <build.att.json> --attestations <source-git.att.json> \
-#     --platform-url ""
+#     -s sha1:<full 40-hex release commit> --platform-url ""
+#
+# cilock 4.5.0 and later verify source checks from the commit, so the command
+# seeds the release's full commit next to the binary. cilock.dev/dl/manifest.json
+# records it as the version's "commit" (`cilock version` prints only 8
+# characters), and this script prints the command with it filled in.
 #
 # Convenience (curl-pipe-sh). The script is POSIX sh, so the host's own `sh`
 # runs it (dash on Debian/Ubuntu, busybox ash on Alpine, bash on macOS), and
@@ -111,6 +116,27 @@ manifest_sha() {
     | grep -oE '"sha256"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' \
     | head -n 1 \
     | sed -E 's/.*"([0-9a-f]+)"$/\1/'; } || true
+}
+
+# is_commit succeeds only for exactly one full git commit id: 40 lowercase hex.
+is_commit() {
+  case "$1" in
+    *[!0123456789abcdef]*) return 1;;
+  esac
+  [ "${#1}" -eq 40 ]
+}
+
+# manifest_commit prints the full source commit that version $1's manifest entry
+# records as "commit". Splitting on '{' leaves each version object's own scalar
+# fields on one line that starts with its "version" key (the publisher writes
+# "commit" before "files"), so the match cannot read another version's commit.
+# An absent or duplicated entry yields empty or several lines, which is_commit
+# refuses.
+manifest_commit() {
+  { tr '{' '\n' \
+    | MANIFEST_VERSION="$1" awk 'index($0, "\"version\":\"" ENVIRON["MANIFEST_VERSION"] "\",") == 1' \
+    | grep -oE '"commit":"[0-9a-f]{40}"' \
+    | sed 's/.*:"\([0-9a-f]*\)"$/\1/'; } || true
 }
 
 # checksums_sha prints the sha256 that the sha256sum-format file on stdin lists
@@ -233,6 +259,13 @@ main() {
     sudo install -m 0755 "${tmpdir}/cilock" "${bin_dir}/cilock"
   fi
 
+  commit="$(printf '%s' "$manifest" | manifest_commit "$version")"
+  if is_commit "$commit"; then
+    seed="$commit"
+  else
+    seed="<full 40-hex commit of ${version}>"
+  fi
+
   log
   log "cilock ${version} installed."
   log "  $ cilock version"
@@ -246,10 +279,17 @@ main() {
   log "  curl -fsSLO ${DIST_BASE}/policy/release-policy.json"
   log "  curl -fsSLO ${base}/cilock-${version_clean}-${os}-${arch}.build.att.json"
   log "  curl -fsSLO ${base}/cilock-${version_clean}-${os}-${arch}.source-git.att.json"
+  log "cilock 4.5.0 and later verify source checks from the commit, so the command"
+  if is_commit "$commit"; then
+    log "seeds ${version}'s full commit, as the release manifest records it:"
+  else
+    log "seeds the release commit; ${version}'s manifest entry records none, so fill it in:"
+  fi
   log "  \"\${TRUSTED_CILOCK}\" verify ${bin_dir}/cilock \\"
   log "    --policy release-policy.json \\"
   log "    --attestations cilock-${version_clean}-${os}-${arch}.build.att.json \\"
   log "    --attestations cilock-${version_clean}-${os}-${arch}.source-git.att.json \\"
+  log "    -s sha1:${seed} \\"
   log "    --platform-url \"\""
 }
 
