@@ -79,6 +79,9 @@ func TestVerifyResolvePlatformDefaults_DerivesTrustFromDiscovery(t *testing.T) {
 	if vo.PolicyFulcioCertExtensions.Issuer != "https://platform.example.com/fulcio/oidc" {
 		t.Fatalf("issuer = %q, want the discovered issuer", vo.PolicyFulcioCertExtensions.Issuer)
 	}
+	if !vo.PolicyFulcioIssuerDiscovered {
+		t.Fatal("PolicyFulcioIssuerDiscovered = false, but discovery set the issuer")
+	}
 	if len(vo.PolicyEmails) != 1 || vo.PolicyEmails[0] != "alice@acme-corp.com" {
 		t.Fatalf("PolicyEmails = %v, want [alice@acme-corp.com] from the session", vo.PolicyEmails)
 	}
@@ -121,6 +124,9 @@ func TestVerifyResolvePlatformDefaults_ExplicitFlagsWin(t *testing.T) {
 	if vo.PolicyFulcioCertExtensions.Issuer != "https://my-issuer.example.com" {
 		t.Fatalf("explicit issuer should win, got %q", vo.PolicyFulcioCertExtensions.Issuer)
 	}
+	if vo.PolicyFulcioIssuerDiscovered {
+		t.Fatal("an explicit --policy-fulcio-oidc-issuer must not be recorded as discovered")
+	}
 	if len(vo.PolicyEmails) != 1 || vo.PolicyEmails[0] != "explicit@acme-corp.com" {
 		t.Fatalf("explicit --policy-emails should win, got %v", vo.PolicyEmails)
 	}
@@ -152,6 +158,9 @@ func TestVerifyResolvePlatformDefaults_NotLoggedInDoesNotSourceNetworkTrust(t *t
 	// OIDC issuer), never the platform's network-advertised issuer.
 	if vo.PolicyFulcioCertExtensions.Issuer == "https://platform.example.com/fulcio/oidc" {
 		t.Fatalf("not-logged-in verify must NOT adopt the discovered OIDC issuer, got %q", vo.PolicyFulcioCertExtensions.Issuer)
+	}
+	if vo.PolicyFulcioIssuerDiscovered {
+		t.Fatal("the GitHub Actions flag default must not be recorded as discovered")
 	}
 	if len(vo.PolicyEmails) != 0 {
 		t.Fatalf("not-logged-in verify must not default an expected signer, got %v", vo.PolicyEmails)

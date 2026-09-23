@@ -222,7 +222,9 @@ func swapEmbeddedTrustLoader(t *testing.T, fn func() (*embeddedtrust.Trust, erro
 	t.Cleanup(func() { loadEmbeddedTrust = orig })
 }
 
-func sandboxVerifyEnv(t *testing.T) {
+// sandboxVerifyEnv isolates HOME, XDG and the credential store, and returns
+// the canonical CILOCK_STATE_DIR it set.
+func sandboxVerifyEnv(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -233,6 +235,7 @@ func sandboxVerifyEnv(t *testing.T) {
 	t.Setenv("CILOCK_SKIP_VERSION_CHECK", "1")
 	t.Setenv("CILOCK_NO_TELEMETRY", "1")
 	t.Setenv("CILOCK_NO_EMBEDDED_TRUST", "")
+	return stateDir
 }
 
 const (

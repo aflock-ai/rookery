@@ -50,6 +50,7 @@ import (
 // around blocks the verifier will not accept.
 const pemTypeCertificate = "CERTIFICATE"
 
+//nolint:funlen // Long and Example are help-text literals; RunE only routes to the verify modes (as RunCmd)
 func VerifyCmd() *cobra.Command {
 	vo := options.VerifyOptions{
 		ArchivistaOptions:          options.ArchivistaOptions{},
@@ -79,6 +80,9 @@ func VerifyCmd() *cobra.Command {
 
   # Verify a subject artifact, pulling evidence from Archivista
   cilock verify ./dist/app.tar.gz -p policy.json -k policy-pub.pem --enable-archivista
+
+  # Verify a signed approval downloaded from Pushgate History (no policy)
+  cilock verify --envelope ./approval.json
 
   # Fully offline verify from a bundle (no platform lookup)
   cilock verify -p policy.json -k policy-pub.pem --bundle evidence.tar.gz --platform-url ""
@@ -114,6 +118,13 @@ func VerifyCmd() *cobra.Command {
 			// offline verify.
 			if err := vo.ResolvePlatformDefaults(cmd); err != nil {
 				return err
+			}
+
+			// ENVELOPE MODE is decided before platform mode: the History
+			// chip's command carries --platform-url and no -p, which is
+			// exactly the shape platform mode would otherwise claim.
+			if cmd.Flags().Changed("envelope") {
+				return runVerifyEnvelope(vo, cmd.Flags(), cmd.OutOrStdout())
 			}
 
 			// PLATFORM MODE (verify-on-demand): a flagless-policy verify with

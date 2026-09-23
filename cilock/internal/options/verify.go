@@ -113,6 +113,16 @@ type VerifyOptions struct {
 	// rotate a platform's policy-signer CA (GHSA #5988). Out-of-band
 	// --policy-ca-roots always wins and makes this moot.
 	TrustDiscovery bool
+
+	// PolicyFulcioIssuerDiscovered records that ResolvePlatformDefaults took
+	// PolicyFulcioCertExtensions.Issuer from the logged-in platform's discovery
+	// document, so envelope mode can enforce it while never applying the
+	// flag's GitHub Actions default.
+	PolicyFulcioIssuerDiscovered bool
+
+	// EnvelopePath selects envelope mode: verify one signed Pushgate approval
+	// (the .approval.json History downloads) instead of a policy.
+	EnvelopePath string
 }
 
 // OutputJSON reports whether the verify verdict should be emitted as a
@@ -250,6 +260,7 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) error { //n
 	}
 	if !cmd.Flags().Changed("policy-fulcio-oidc-issuer") && disc.Signing.FulcioOIDCIssuer != "" {
 		vo.PolicyFulcioCertExtensions.Issuer = disc.Signing.FulcioOIDCIssuer
+		vo.PolicyFulcioIssuerDiscovered = true
 	}
 	return nil
 }
@@ -380,6 +391,9 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&vo.OutputBundlePath, "output-bundle", "",
 		"After verify, write every envelope that was loaded (--attestations + --bundle + Archivista) to this path as a tar.gz bundle. Produces a portable evidence package for offline re-verify.")
 	cmd.Flags().StringVarP(&vo.PolicyFilePath, "policy", "p", "", "Path to the policy to verify")
+	cmd.Flags().StringVar(&vo.EnvelopePath, "envelope", "",
+		"Verify one signed Pushgate policy-assignment approval (the .approval.json History downloads) instead of a policy: "+
+			"its signature and RFC 3161 timestamp, that a human signed it, that it names its signer, and its sealed digest")
 	cmd.Flags().StringVarP(&vo.ArtifactFilePath, "artifactfile", "f", "", "Path to the artifact subject to verify")
 	cmd.Flags().StringVarP(&vo.ArtifactDirectoryPath, "directory-path", "", "", "Path to the directory subject to verify")
 	cmd.Flags().StringSliceVarP(&vo.AdditionalSubjects, "subjects", "s", []string{}, "Additional subjects to lookup attestations")
