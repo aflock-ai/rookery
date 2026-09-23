@@ -1,0 +1,62 @@
+{
+ "jwt": {
+  "claims": {
+   "actor": "synthetic_release_actor",
+   "actor_id": "0",
+   "aud": "witness",
+   "base_ref": "",
+   "check_run_id": "78858801284",
+   "event_name": "push",
+   "exp": 1780319599,
+   "head_ref": "",
+   "iat": 1780319299,
+   "iss": "https://token.actions.githubusercontent.com",
+   "job_workflow_ref": "aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v1.0.0-rc1",
+   "job_workflow_sha": "5786ed2d3b3dcc558030cbe2d0e561705975a985",
+   "jti": "62756ec5-c6ca-4dbe-9cff-9b37f020551c",
+   "nbf": 1780318999,
+   "ref": "refs/tags/v1.0.0-rc1",
+   "ref_protected": "true",
+   "ref_type": "tag",
+   "repository": "aflock-ai/rookery",
+   "repository_id": "1155066111",
+   "repository_owner": "aflock-ai",
+   "repository_owner_id": "255775567",
+   "repository_visibility": "public",
+   "run_attempt": "1",
+   "run_id": "26756800912",
+   "run_number": "78",
+   "runner_environment": "github-hosted",
+   "sha": "5786ed2d3b3dcc558030cbe2d0e561705975a985",
+   "sub": "repo:aflock-ai/rookery:ref:refs/tags/v1.0.0-rc1",
+   "workflow": "Release",
+   "workflow_ref": "aflock-ai/rookery/.github/workflows/release.yml@refs/tags/v1.0.0-rc1",
+   "workflow_sha": "5786ed2d3b3dcc558030cbe2d0e561705975a985"
+  },
+  "verifiedBy": {
+   "jwksUrl": "https://token.actions.githubusercontent.com/.well-known/jwks",
+   "jwk": {
+    "use": "sig",
+    "kty": "RSA",
+    "kid": "38826b17-6a30-5f9b-b169-8beb8202f723",
+    "alg": "RS256",
+    "n": "5Manmy-zwsk3wEftXNdKFZec4rSWENW4jTGevlvAcU9z3bgLBogQVvqYLtu9baVm2B3rfe5onadobq8po5UakJ0YsTiiEfXWdST7YI2Sdkvv-hOYMcZKYZ4dFvuSO1vQ2DgEkw_OZNiYI1S518MWEcNxnPU5u67zkawAGsLlmXNbOylgVfBRJrG8gj6scr-sBs4LaCa3kg5IuaCHe1pB-nSYHovGV_z0egE83C098FfwO1dNZBWeo4Obhb5Z-ZYFLJcZfngMY0zJnCVNmpHQWOgxfGikh3cwi4MYrFrbB4NTlxbrQ3bL-rGKR5X318veyDlo8Dyz2KWMobT4wB9U1Q",
+    "e": "AQAB",
+    "x5c": [
+     "MIIDKzCCAhOgAwIBAgIUDnwm6eRIqGFA3o/P1oBrChvx/nowDQYJKoZIhvcNAQELBQAwJTEjMCEGA1UEAwwaYWN0aW9ucy5zZWxmLXNpZ25lZC5naXRodWIwHhcNMjQwMTIzMTUyNTM2WhcNMzQwMTIwMTUyNTM2WjAlMSMwIQYDVQQDDBphY3Rpb25zLnNlbGYtc2lnbmVkLmdpdGh1YjCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAOTGp5svs8LJN8BH7VzXShWXnOK0lhDVuI0xnr5bwHFPc924CwaIEFb6mC7bvW2lZtgd633uaJ2naG6vKaOVGpCdGLE4ohH11nUk+2CNknZL7/oTmDHGSmGeHRb7kjtb0Ng4BJMPzmTYmCNUudfDFhHDcZz1Obuu85GsABrC5ZlzWzspYFXwUSaxvII+rHK/rAbOC2gmt5IOSLmgh3taQfp0mB6Lxlf89HoBPNwtPfBX8DtXTWQVnqODm4W+WfmWBSyXGX54DGNMyZwlTZqR0FjoMXxopId3MIuDGKxa2weDU5cW60N2y/qxikeV99fL3sg5aPA8s9iljKG0+MAfVNUCAwEAAaNTMFEwHQYDVR0OBBYEFIPALo5VanJ6E1B9eLQgGO+uGV65MB8GA1UdIwQYMBaAFIPALo5VanJ6E1B9eLQgGO+uGV65MA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAGS0hZE+DqKIRi49Z2KDOMOaSZnAYgqq6ws9HJHT09MXWlMHB8E/apvy2ZuFrcSu14ZLweJid+PrrooXEXEO6azEakzCjeUb9G1QwlzP4CkTcMGCw1Snh3jWZIuKaw21f7mp2rQ+YNltgHVDKY2s8AD273E8musEsWxJl80/MNvMie8Hfh4n4/Xl2r6t1YPmUJMoXAXdTBb0hkPy1fUu3r2T+1oi7Rw6kuVDfAZjaHupNHzJeDOg2KxUoK/GF2/M2qpVrd19Pv/JXNkQXRE4DFbErMmA7tXpp1tkXJRPhFui/Pv5H9cPgObEf9x6W4KnCXzT3ReeeRDKF8SqGTPELsc="
+    ],
+    "x5t": "ykNaY4qM_ta4k2TgZOCEYLkcYlA"
+   }
+  }
+ },
+ "ciconfigpath": "",
+ "pipelineid": "26756800912",
+ "pipelinename": "Release",
+ "pipelineurl": "https://github.com/aflock-ai/rookery/actions/runs/26756800912",
+ "projecturl": "https://github.com/aflock-ai/rookery",
+ "runnerid": "GitHub Actions 1000016959",
+ "cihost": "",
+ "ciserverurl": "https://github.com",
+ "runnerarch": "X64",
+ "runneros": "Linux"
+}
