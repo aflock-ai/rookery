@@ -792,6 +792,66 @@ func TestFromBundles_StripsAttJsonExtension(t *testing.T) {
 		"step name must not retain the .att fragment (would be the naive TrimSuffix(.json) bug)")
 }
 
+// testTSA is an RFC 3161 authority: a signing Leaf whose only extended key
+// usage is id-kp-timeStamping, issued by Root.
+type testTSA struct {
+	Root *x509.Certificate
+	Leaf *x509.Certificate
+	key  *ecdsa.PrivateKey
+}
+
+// newTestTSA mints a TSA valid from an hour before `from`. A nil ca gives the
+// TSA its own self-signed root; otherwise ca issues the leaf, which is the
+// platform's shape, where one root anchors both Fulcio and the TSA.
+func newTestTSA(t *testing.T, from time.Time, ca *x509.Certificate, caKey *ecdsa.PrivateKey) *testTSA {
+	t.Helper()
+	if ca == nil {
+		ca, caKey = issueTestCert(t, &x509.Certificate{
+			SerialNumber:          big.NewInt(100),
+			Subject:               pkix.Name{CommonName: "Test TSA Root CA", Organization: []string{"TestifySec"}},
+			NotBefore:             from.Add(-1 * time.Hour),
+			NotAfter:              from.Add(10 * 365 * 24 * time.Hour),
+			KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+		}, nil, nil)
+	}
+	leaf, key := issueTestCert(t, &x509.Certificate{
+		SerialNumber:          big.NewInt(101),
+		Subject:               pkix.Name{CommonName: "Test TSA", Organization: []string{"TestifySec"}},
+		NotBefore:             from.Add(-1 * time.Hour),
+		NotAfter:              from.Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
+		BasicConstraintsValid: true,
+	}, ca, caKey)
+	return &testTSA{Root: ca, Leaf: leaf, key: key}
+}
+
+// respond signs ts and embeds only the TSA leaf in the token, as the platform
+// TSA does, so a verifier must supply the root itself. It returns an error
+// rather than failing t because an httptest handler goroutine calls it.
+func (a *testTSA) respond(ts *tsp.Timestamp) ([]byte, error) {
+	ts.Policy = asn1.ObjectIdentifier{1, 2, 3, 4, 1} // TSTInfo requires a policy OID
+	ts.AddTSACertificate = true
+	return ts.CreateResponse(a.Leaf, a.key)
+}
+
+// issueTestCert signs tpl with parent, or self-signs it when parent is nil.
+func issueTestCert(t *testing.T, tpl, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	if parent == nil {
+		parent, parentKey = tpl, key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, parent, &key.PublicKey, parentKey)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert, key
+}
+
 // mintRFC3161Token issues a real RFC3161 timestamp token over `signed`,
 // signed by a freshly minted TSA leaf that chains to a TSA root CA. It
 // returns the bare token bytes (the TimeStampToken / PKCS7 SignedData) —
@@ -802,52 +862,13 @@ func TestFromBundles_StripsAttJsonExtension(t *testing.T) {
 // the TSA trust anchor from that embedded leaf.
 func mintRFC3161Token(t *testing.T, signed []byte) []byte {
 	t.Helper()
-
-	// TSA root CA.
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	caTpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(100),
-		Subject:               pkix.Name{CommonName: "Test TSA Root CA", Organization: []string{"TestifySec"}},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTpl, caTpl, &caKey.PublicKey, caKey)
-	require.NoError(t, err)
-	caCert, err := x509.ParseCertificate(caDER)
-	require.NoError(t, err)
-
-	// TSA signing leaf (EKU: timeStamping), issued by the root CA.
-	tsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	tsaTpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(101),
-		Subject:               pkix.Name{CommonName: "Test TSA", Organization: []string{"TestifySec"}},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
-		BasicConstraintsValid: true,
-	}
-	tsaDER, err := x509.CreateCertificate(rand.Reader, tsaTpl, caCert, &tsaKey.PublicKey, caKey)
-	require.NoError(t, err)
-	tsaCert, err := x509.ParseCertificate(tsaDER)
-	require.NoError(t, err)
-
-	// Build a timestamp request over `signed`, then have the TSA sign it.
 	h := sha256.Sum256(signed)
-	ts := &tsp.Timestamp{
-		HashAlgorithm:     crypto.SHA256,
-		HashedMessage:     h[:],
-		Time:              time.Now(),
-		Nonce:             big.NewInt(1234),
-		Policy:            asn1.ObjectIdentifier{1, 2, 3, 4, 1}, // TSA policy OID (required for TSTInfo)
-		AddTSACertificate: true,                                 // embed the TSA leaf cert in the token
-	}
-	respDER, err := ts.CreateResponse(tsaCert, tsaKey)
+	respDER, err := newTestTSA(t, time.Now(), nil, nil).respond(&tsp.Timestamp{
+		HashAlgorithm: crypto.SHA256,
+		HashedMessage: h[:],
+		Time:          time.Now(),
+		Nonce:         big.NewInt(1234),
+	})
 	require.NoError(t, err)
 	parsed, err := tsp.ParseResponse(respDER)
 	require.NoError(t, err)
