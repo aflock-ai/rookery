@@ -49,6 +49,7 @@ const (
 	flagAttestations               = "attestations"
 	flagOutfile                    = "outfile"
 	flagSignerFileKeyPath          = "signer-file-key-path"
+	flagOffline                    = "offline"
 	flagAttestorProductIncludeGlob = "attestor-product-include-glob"
 )
 
@@ -72,13 +73,13 @@ var essentialFlags = map[string][]string{
 	},
 	"verify": {
 		"policy", "publickey", flagAttestations, "artifactfile", "bundle",
-		"enable-archivista", "platform-url", "directory-path", "offline", "format",
+		"enable-archivista", "platform-url", "directory-path", flagOffline, "format",
 	},
 	"attest": {
 		flagStep, flagAttestations, flagOutfile, flagSignerFileKeyPath, "subjects",
 	},
 	"sign": {
-		flagSignerFileKeyPath, flagOutfile, "datatype", "offline",
+		flagSignerFileKeyPath, flagOutfile, "datatype", flagOffline,
 	},
 }
 

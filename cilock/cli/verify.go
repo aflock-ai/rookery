@@ -103,6 +103,13 @@ func VerifyCmd() *cobra.Command {
 				log.Warn("The flag `--policy-ca` is deprecated and will be removed in a future release. Please use `--policy-ca-roots` and `--policy-ca-intermediates` instead.")
 			}
 
+			// ENVELOPE MODE is decided first. The History chip's command
+			// carries --platform-url and no -p, which is exactly the shape
+			// platform mode would otherwise claim.
+			if cmd.Flags().Changed("envelope") {
+				return verifyEnvelopeMode(cmd, vo, args)
+			}
+
 			// Positional artifact path is shorthand for --artifactfile (file)
 			// or --directory-path (directory). Explicit flags win; a positional
 			// arg alongside a conflicting flag is a usage error.
@@ -118,13 +125,6 @@ func VerifyCmd() *cobra.Command {
 			// offline verify.
 			if err := vo.ResolvePlatformDefaults(cmd); err != nil {
 				return err
-			}
-
-			// ENVELOPE MODE is decided before platform mode: the History
-			// chip's command carries --platform-url and no -p, which is
-			// exactly the shape platform mode would otherwise claim.
-			if cmd.Flags().Changed("envelope") {
-				return runVerifyEnvelope(vo, cmd.Flags(), cmd.OutOrStdout())
 			}
 
 			// PLATFORM MODE (verify-on-demand): a flagless-policy verify with

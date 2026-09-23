@@ -16,7 +16,6 @@ package cli
 
 import (
 	"crypto/x509"
-	"encoding/asn1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,9 +29,11 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/intoto"
+	"github.com/aflock-ai/rookery/cilock/internal/assurance"
 	"github.com/aflock-ai/rookery/cilock/internal/canonicaljson"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/sigstore/fulcio/pkg/certificate"
+	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
@@ -48,9 +49,78 @@ const (
 		"this change, that the platform applied it, or that it is still current."
 )
 
-// oidApprovalAssurance is the platform Fulcio fork's assurance-level extension
-// (subtrees/fulcio/pkg/identity/email/principal.go), a DER UTF8String.
-var oidApprovalAssurance = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 100}
+// flagPublicKey is verify's --publickey (-k), the policy signer's key.
+const flagPublicKey = "publickey"
+
+// envelopeHonouredSignerFlags are the policy-signature flags envelope mode
+// applies: the trust anchors and the OIDC issuer (requireApprovalIssuer).
+var envelopeHonouredSignerFlags = map[string]bool{
+	"policy-ca-roots": true, "policy-ca": true, "policy-ca-intermediates": true,
+	"policy-timestamp-servers": true, "policy-fulcio-oidc-issuer": true,
+}
+
+// envelopeModeFlags are the verify flags envelope mode honours: the approval,
+// the trust to check it under (envelopeHonouredSignerFlags among them), and
+// the output format. It refuses every other verify flag by name, one added
+// later included, rather than ignore it.
+var envelopeModeFlags = func() map[string]bool {
+	m := map[string]bool{
+		"envelope": true, "format": true, "platform-url": true, flagOffline: true, "trust-discovery": true,
+		"no-embedded-trust": true,
+	}
+	for name := range envelopeHonouredSignerFlags {
+		m[name] = true
+	}
+	return m
+}()
+
+// envelopeModeConflicts refuses a positional artifact and every verify flag
+// set that envelope mode does not honour. It reads Changed, never a field: a
+// session turns Archivista on and defaults --policy-emails to the reader, and
+// neither is the operator's choice. An explicit --policy-emails is refused
+// (open question 2): ignored, it would read as an approver pin that never ran.
+func envelopeModeConflicts(flags *pflag.FlagSet, args []string) error {
+	var refused []string
+	if len(args) > 0 {
+		refused = append(refused, "a positional artifact")
+	}
+	flags.VisitAll(func(f *pflag.Flag) {
+		if !f.Changed || envelopeModeFlags[f.Name] {
+			return
+		}
+		name := "--" + f.Name
+		if f.Shorthand != "" {
+			name = "-" + f.Shorthand + "/" + name
+		}
+		refused = append(refused, name)
+	})
+	if len(refused) == 0 {
+		return nil
+	}
+	msg := "verify --envelope checks one signed approval and takes no policy-verification input; refusing " +
+		strings.Join(refused, ", ")
+	if flags.Changed("policy-emails") {
+		msg += ". --policy-emails does not pin an approver here: the signer is the certificate's one email SAN, " +
+			"which predicate.approver.email must name and the output prints"
+	}
+	return errors.New(msg)
+}
+
+// verifyEnvelopeMode refuses policy-verification input before any file,
+// session or platform is read (LocalFlags leaves out the root command's -l),
+// then resolves the platform defaults, for discovered trust, and verifies.
+// runVerifyEnvelope refuses signer pins again on its own (defence in depth):
+// both checks read Changed, and ResolvePlatformDefaults writes fields only,
+// so a session default is explicit to neither.
+func verifyEnvelopeMode(cmd *cobra.Command, vo options.VerifyOptions, args []string) error {
+	if err := envelopeModeConflicts(cmd.LocalFlags(), args); err != nil {
+		return err
+	}
+	if err := vo.ResolvePlatformDefaults(cmd); err != nil {
+		return err
+	}
+	return runVerifyEnvelope(vo, cmd.Flags(), cmd.OutOrStdout())
+}
 
 type approvalVerdict struct {
 	Passed        bool      `json:"passed"`
@@ -61,16 +131,9 @@ type approvalVerdict struct {
 	BeforePresets []string  `json:"beforePresets"`
 	AfterPresets  []string  `json:"afterPresets"`
 	SignedAt      time.Time `json:"signedAt"`
-}
-
-// flagPublicKey is verify's --publickey (-k), the policy signer's key.
-const flagPublicKey = "publickey"
-
-// envelopeHonouredSignerFlags are the policy-signature flags envelope mode
-// applies: the trust anchors and the OIDC issuer (requireApprovalIssuer).
-var envelopeHonouredSignerFlags = map[string]bool{
-	"policy-ca-roots": true, "policy-ca": true, "policy-ca-intermediates": true,
-	"policy-timestamp-servers": true, "policy-fulcio-oidc-issuer": true,
+	// recordedACR is predicate.approver.acr, nil when the predicate records
+	// none. It is compared with the leaf, never printed.
+	recordedACR *string
 }
 
 // runVerifyEnvelope never applies the embedded signer identity or the
@@ -114,7 +177,11 @@ func runVerifyEnvelope(vo options.VerifyOptions, flags *pflag.FlagSet, out io.Wr
 	if err := requireApprovalIssuer(leaf, vo, flags.Changed); err != nil {
 		return err
 	}
-	v.Passed, v.Signer, v.Assurance, v.SignedAt = true, signer, approvalAssurance(leaf), signedAt.UTC()
+	level, err := approvalAssurance(leaf, v.recordedACR)
+	if err != nil {
+		return err
+	}
+	v.Passed, v.Signer, v.Assurance, v.SignedAt = true, signer, level, signedAt.UTC()
 	if vo.OutputJSON() {
 		return json.NewEncoder(out).Encode(v)
 	}
@@ -230,19 +297,26 @@ func requireApprovalIssuer(leaf *x509.Certificate, vo options.VerifyOptions, fla
 	return nil
 }
 
-// approvalAssurance reports the level the leaf records. A leaf without the
+// approvalAssurance reports the level the leaf records. When the predicate
+// records one too (approver.acr, v5; the platform refuses it on earlier
+// versions), the two must name the same known level. A leaf without the
 // extension is "not recorded", never read as a level.
-func approvalAssurance(leaf *x509.Certificate) string {
-	for _, e := range leaf.Extensions {
-		if e.Id.Equal(oidApprovalAssurance) {
-			var level string
-			if rest, err := asn1.UnmarshalWithParams(e.Value, &level, "utf8"); err != nil || len(rest) > 0 {
-				return "unreadable"
-			}
-			return level
-		}
+func approvalAssurance(leaf *x509.Certificate, recorded *string) (string, error) {
+	acr, present, err := assurance.FromLeaf(leaf)
+	level := assurance.ShortAAL(acr)
+	shown := level
+	switch {
+	case err != nil:
+		shown = "unreadable"
+	case !present:
+		shown = "not recorded"
+	case level == "":
+		shown = fmt.Sprintf("unrecognised %q", acr)
 	}
-	return "not recorded"
+	if recorded != nil && (level == "" || *recorded != level) {
+		return "", fmt.Errorf("predicate.approver.acr records %q, but the approval certificate's assurance is %s", *recorded, shown)
+	}
+	return shown, nil
 }
 
 // parseApprovalStatement reads the payload by EXACT key (encoding/json
@@ -268,7 +342,12 @@ func parseApprovalStatement(payload []byte) (approvalVerdict, string, error) {
 	digest := x.object(subject["digest"], "subject digest")
 	name, sha := x.str(subject, "name"), x.str(digest, "sha256")
 	predicate := x.object(top["predicate"], "predicate")
-	approverEmail := x.str(x.object(predicate["approver"], "predicate.approver"), "email")
+	approver := x.object(predicate["approver"], "predicate.approver")
+	approverEmail := x.str(approver, "email")
+	if _, ok := approver["acr"]; ok {
+		acr := x.str(approver, "acr")
+		v.recordedACR = &acr
+	}
 	sealed := x.object(predicate["sealed"], "predicate.sealed")
 	v.Connection = x.str(sealed, "connection_id")
 	if x.err != nil {

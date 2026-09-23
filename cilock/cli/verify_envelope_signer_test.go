@@ -101,3 +101,33 @@ func TestVerifyEnvelope_OtherSignerConstraintsRefused(t *testing.T) {
 		})
 	}
 }
+
+// verify --envelope refuses signer pins twice: the envelope-mode allowlist
+// first, then runVerifyEnvelope itself. Through the command the allowlist
+// always answers, so this drives the inner layer directly; without it the
+// inner refusal could be deleted with every test still green.
+func TestRefuseEnvelopeSignerFlags_InnerLayer(t *testing.T) {
+	flags := VerifyCmd().Flags()
+	require.NoError(t, refuseEnvelopeSignerFlags(flags), "no flag set: nothing to refuse")
+
+	flags.VisitAll(func(f *pflag.Flag) {
+		if !envelopeHonouredPolicyFlags[f.Name] {
+			return
+		}
+		t.Run("honoured/"+f.Name, func(t *testing.T) {
+			fs := VerifyCmd().Flags()
+			require.NoError(t, fs.Set(f.Name, "https://issuer.example"))
+			require.NoError(t, refuseEnvelopeSignerFlags(fs), "--%s is applied, not refused", f.Name)
+		})
+	})
+	flags.VisitAll(func(f *pflag.Flag) {
+		if f.Name != "publickey" && (!strings.HasPrefix(f.Name, "policy-") || envelopeHonouredPolicyFlags[f.Name]) {
+			return
+		}
+		t.Run("refused/"+f.Name, func(t *testing.T) {
+			fs := VerifyCmd().Flags()
+			require.NoError(t, fs.Set(f.Name, "bob@example.com"))
+			require.ErrorContains(t, refuseEnvelopeSignerFlags(fs), "--"+f.Name)
+		})
+	})
+}
