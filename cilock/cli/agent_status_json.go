@@ -29,6 +29,57 @@ type agentStatusJSON struct {
 	ExpiresAt       time.Time `json:"expires_at,omitzero"`
 	Source          string    `json:"source"`
 	PlatformChecked bool      `json:"platform_checked"`
+	// Scope is ALWAYS emitted: an absent key must never be read as a scope.
+	Scope agentStatusScope `json:"scope"`
+}
+
+// agentStatusScope projects the recorded scope. "unknown" exists only here
+// and is never stored. It never changes the exit code.
+type agentStatusScope struct {
+	Mode         string                  `json:"mode"`
+	Repositories []auth.ScopedRepository `json:"repositories,omitzero"`
+	AnsweredAt   time.Time               `json:"answered_at,omitzero"`
+}
+
+// projectAgentScope reads only the ACTIVE credential's record: a pending
+// delivery has signed nothing, and not_enrolled has nothing to report. A
+// stored mode other than the two known ones reads unknown, and a listed
+// record without its list reads as listing none, never as all.
+func projectAgentScope(cred *auth.AgentCredential) agentStatusScope {
+	if cred == nil || cred.Scope == nil {
+		return agentStatusScope{Mode: "unknown"}
+	}
+	switch cred.Scope.Mode {
+	case auth.AgentScopeAll:
+		return agentStatusScope{Mode: auth.AgentScopeAll, AnsweredAt: cred.Scope.AnsweredAt}
+	case auth.AgentScopeListed:
+		repos := cred.Scope.Repositories
+		if repos == nil {
+			repos = []auth.ScopedRepository{}
+		}
+		return agentStatusScope{Mode: auth.AgentScopeListed, Repositories: repos, AnsweredAt: cred.Scope.AnsweredAt}
+	}
+	return agentStatusScope{Mode: "unknown"}
+}
+
+// writeAgentScopeText is the one human rendering of the scope, shared by
+// `agent status` and `enroll agent` so the two cannot disagree.
+func writeAgentScopeText(out io.Writer, cred *auth.AgentCredential) {
+	scope := projectAgentScope(cred)
+	answered := scope.AnsweredAt.UTC().Format("2006-01-02 15:04 UTC")
+	switch {
+	case scope.Mode == auth.AgentScopeAll:
+		_, _ = fmt.Fprintf(out, "  scope:  all repositories in the tenant, as answered %s\n", answered)
+	case scope.Mode == auth.AgentScopeListed && len(scope.Repositories) == 0:
+		_, _ = fmt.Fprintln(out, "  scope:  listed, NO repositories: every push this agent signs is refused (signer-out-of-scope)")
+	case scope.Mode == auth.AgentScopeListed:
+		_, _ = fmt.Fprintf(out, "  scope:  listed, as answered %s\n", answered)
+		for _, r := range scope.Repositories {
+			_, _ = fmt.Fprintf(out, "            repository %s  %s\n", r.ID, r.URL)
+		}
+	default:
+		_, _ = fmt.Fprintln(out, "  scope:  unknown: the platform has not answered one to this machine; the gate decides at push")
+	}
 }
 
 func writeAgentStatusJSON(out io.Writer, platformURL string, cred, pending *auth.AgentCredential, now time.Time) error {
@@ -37,6 +88,7 @@ func writeAgentStatusJSON(out io.Writer, platformURL string, cred, pending *auth
 		Pending:     pending != nil,
 		Status:      "not_enrolled",
 		Source:      "local_store",
+		Scope:       projectAgentScope(cred),
 	}
 	identity := cred
 	if identity == nil && pending != nil {

@@ -157,6 +157,16 @@ the local ceiling is unknown, not unlimited. `source` is `local_store` and
 decisions. An absent identity still exits zero for compatibility; inspect the
 fields. Expired active-slot credentials still exit nonzero after printing JSON.
 
+`scope` is always present. It is the repository scope the platform answered at
+this credential's last exchange (`answered_at`), not a live check, which is why
+`platform_checked` stays false; the gate re-resolves scope at every push and
+its answer decides. `mode` is `listed` (with `repositories`, each an immutable
+`id` and a display-only `url`; an empty list means every push is refused
+`signer-out-of-scope`), `all`, or `unknown`. `unknown` covers a pending or
+absent identity, a credential not yet exchanged, and a platform answer that was
+absent or unreadable; it never means `all`. The scope never changes the exit
+code, and it is also printed by `cilock enroll agent` and the text output.
+
 ## `cilock run`
 
 ```

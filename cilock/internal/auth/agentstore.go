@@ -71,6 +71,36 @@ type AgentCredential struct {
 	// at every exchange, and a zero value here means "not recorded", never
 	// "unbounded".
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
+	// Scope is the repository scope the platform answered at this
+	// credential's most recent successful exchange. A REPORT for `agent
+	// status`, never authority: nothing on this machine enforces it, and the
+	// gate re-resolves scope at every push. Nil means UNKNOWN (an older store,
+	// an older platform, a credential not yet exchanged, or an answer cilock
+	// could not read), never "all".
+	Scope *AgentScope `json:"scope,omitempty"`
+}
+
+// AgentScope is one answered repository scope. Mode is "listed" or "all";
+// Repositories is non-nil exactly when Mode is "listed" (empty means the
+// agent may sign for no repository). AnsweredAt dates the answer, so a stale
+// record says how stale it is.
+type AgentScope struct {
+	Mode         string             `json:"mode"`
+	Repositories []ScopedRepository `json:"repositories,omitzero"`
+	AnsweredAt   time.Time          `json:"answered_at"`
+}
+
+// The two scope modes the platform answers. "unknown" is never stored.
+const (
+	AgentScopeAll    = "all"
+	AgentScopeListed = "listed"
+)
+
+// ScopedRepository is one repository a listed scope names: the immutable
+// GitHub repository id the gate binds, and a display-only URL.
+type ScopedRepository struct {
+	ID  string `json:"id"`
+	URL string `json:"url,omitempty"`
 }
 
 // Expired reports whether this credential is past the ceiling it recorded. A
@@ -497,6 +527,19 @@ func RecordAgentExpiry(expect AgentCredential, expiresAt time.Time) error {
 			return false
 		}
 		c.ExpiresAt = expiresAt
+		return true
+	})
+}
+
+// RecordAgentScope overwrites the scope recorded for the credential that was
+// exchanged; nil records UNKNOWN. Same compare-and-swap as the pin and the
+// ceiling: an answer for one credential never lands on a replacement.
+func RecordAgentScope(expect AgentCredential, scope *AgentScope) error {
+	return updateAgentIf(expect, func(c *AgentCredential) bool {
+		if c.Scope == nil && scope == nil {
+			return false
+		}
+		c.Scope = scope
 		return true
 	})
 }

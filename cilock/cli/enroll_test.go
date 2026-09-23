@@ -61,6 +61,7 @@ func TestEnrollAgentIsTheCanonicalSpellingAndAgentEnrollIsHidden(t *testing.T) {
 }
 
 func TestEnrollAgentPassesTheTTLAndActivatesBeforeReportingSuccess(t *testing.T) {
+	isolateAgentConfig(t)
 	expires := time.Now().Add(90 * time.Minute)
 	params := stubEnrollCeremony(t, &auth.AgentCredential{
 		PlatformURL: "https://platform.example.com", TenantID: "t-1", AgentID: "a-1", ExpiresAt: expires,
@@ -174,4 +175,50 @@ func TestAgentStatusReportsExpiry(t *testing.T) {
 	assert.Contains(t, out.String(), "cilock agent logout",
 		"the operator's other way out: sign as their own session, chosen by them and never taken silently")
 	assert.NotContains(t, out.String(), "s3cret")
+}
+
+// Enroll prints the scope the redemption recorded, read back from the store,
+// so enroll and status share one source and cannot disagree.
+func TestEnrollAgentPrintsTheScopeTheRedemptionRecorded(t *testing.T) {
+	isolateAgentConfig(t)
+	const platform = "https://platform.example.com"
+	stubEnrollCeremony(t, &auth.AgentCredential{PlatformURL: platform, TenantID: "t-1", AgentID: "a-1"}, nil)
+	prev := activateEnrolledAgent
+	activateEnrolledAgent = func(string, auth.AgentCredential) (auth.AgentSigningIdentity, error) {
+		err := auth.SaveAgent(auth.AgentCredential{PlatformURL: platform, TenantID: "t-1", AgentID: "a-1", RefreshCredential: "s", TrustDomain: "platform.example.com",
+			Scope: &auth.AgentScope{Mode: "listed", Repositories: []auth.ScopedRepository{{ID: "1379794283"}}, AnsweredAt: time.Now()}})
+		return auth.AgentSigningIdentity{SPIFFEID: "spiffe://platform.example.com/tenant/t-1/agent/a-1"}, err
+	}
+	t.Cleanup(func() { activateEnrolledAgent = prev })
+
+	var out bytes.Buffer
+	cmd := EnrollAgentCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--platform-url", platform})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, out.String(), "scope:  listed, as answered")
+	assert.Contains(t, out.String(), "repository 1379794283")
+}
+
+// A store that now holds ANOTHER principal (a concurrent ceremony) is not this
+// enrollment's scope; enroll prints unknown rather than someone else's list.
+func TestEnrollAgentNeverPrintsAnotherPrincipalsScope(t *testing.T) {
+	isolateAgentConfig(t)
+	const platform = "https://platform.example.com"
+	stubEnrollCeremony(t, &auth.AgentCredential{PlatformURL: platform, TenantID: "t-1", AgentID: "a-1"}, nil)
+	prev := activateEnrolledAgent
+	activateEnrolledAgent = func(string, auth.AgentCredential) (auth.AgentSigningIdentity, error) {
+		err := auth.SaveAgent(auth.AgentCredential{PlatformURL: platform, TenantID: "t-1", AgentID: "a-other", RefreshCredential: "s",
+			Scope: &auth.AgentScope{Mode: "all", AnsweredAt: time.Now()}})
+		return auth.AgentSigningIdentity{SPIFFEID: "spiffe://platform.example.com/tenant/t-1/agent/a-1"}, err
+	}
+	t.Cleanup(func() { activateEnrolledAgent = prev })
+
+	var out bytes.Buffer
+	cmd := EnrollAgentCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--platform-url", platform})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, out.String(), "scope:  unknown")
+	assert.NotContains(t, out.String(), "all repositories")
 }

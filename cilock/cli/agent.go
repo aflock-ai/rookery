@@ -142,6 +142,15 @@ func EnrollAgentCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			_, _ = fmt.Fprintf(out, "Enrolled. Agent principal for %s\n", auth.NormalizeURL(url))
 			_, _ = fmt.Fprintf(out, "  tenant: %s\n  agent:  %s\n  spiffe: %s\n", cred.TenantID, cred.AgentID, activated.SPIFFEID)
+			// Read back from the store, as status reads it, and only if the
+			// store still holds THIS principal; a lookup failure reads unknown,
+			// because a report never fails an enrollment that succeeded.
+			var enrolled *auth.AgentCredential
+			if stored, lookErr := auth.LookupAgent(url); lookErr == nil && stored != nil &&
+				stored.TenantID == cred.TenantID && stored.AgentID == cred.AgentID {
+				enrolled = stored
+			}
+			writeAgentScopeText(out, enrolled)
 			if !cred.ExpiresAt.IsZero() {
 				_, _ = fmt.Fprintf(out, "  expires: %s (%s from now; not extendable — a new ceremony mints a new principal)\n",
 					cred.ExpiresAt.Local().Format("2006-01-02 15:04 MST"), time.Until(cred.ExpiresAt).Round(time.Minute))
@@ -294,6 +303,8 @@ func AgentStatusCmd() *cobra.Command {
 			} else {
 				_, _ = fmt.Fprintf(out, "  spiffe: spiffe://%s/tenant/%s/agent/%s\n", cred.TrustDomain, cred.TenantID, cred.AgentID)
 			}
+			// A report, as answered at the last exchange; it never sets the exit code.
+			writeAgentScopeText(out, cred)
 			// ONE READING OF ELIGIBILITY, TAKEN ONCE. CheckSigningEligibility is
 			// the same function the pre-command gate in `cilock run` refuses on,
 			// and its message is the same message, so the report an operator

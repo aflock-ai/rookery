@@ -14,8 +14,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/aflock-ai/rookery/cilock/internal/config"
 )
@@ -275,11 +277,28 @@ func exchangeAgentCredential(platformURL string, cred AgentCredential) (AgentSig
 			return AgentSigningIdentity{}, fmt.Errorf("recording the agent trust domain: %w", err)
 		}
 	}
+	// RECORD THE ANSWERED SCOPE, LAST: every check and every refusal above has
+	// passed, so a scope lands only for an exchange about to be handed to the
+	// signer. It is a report, so unlike the pin and the ceiling it can never
+	// refuse. An absent or unreadable answer records UNKNOWN over any previous
+	// record: a scope can shrink, and yesterday's list shown as current is the
+	// misleading outcome. A failed write (the store replaced under us, or I/O)
+	// keeps the previous record, whose answered_at dates it, and warns.
+	if err := recordAgentScope(cred, parseAnsweredScope(out.Scope, time.Now().UTC())); err != nil {
+		_, _ = fmt.Fprintf(agentWarnings, "cilock: warning: could not record the repository scope the platform answered (agent status keeps the previous answer): %v\n", err)
+	}
 	return AgentSigningIdentity{
 		Token: out.Token, TokenType: out.TokenType, SPIFFEID: out.SPIFFEID, TrustDomain: td,
 		UploadToken: out.UploadToken,
 	}, nil
 }
+
+// recordAgentScope and agentWarnings are seams: a test swaps the recorder to
+// make the write fail, and the sink to read the warning.
+var (
+	recordAgentScope           = RecordAgentScope
+	agentWarnings    io.Writer = os.Stderr
+)
 
 // agentExchangeAnswer is the platform's success body, before any of it is
 // trusted.
@@ -290,6 +309,54 @@ type agentExchangeAnswer struct {
 	ExpiresAt       string `json:"expires_at"`
 	UploadToken     string `json:"upload_token"`
 	UploadTokenType string `json:"upload_token_type"`
+	// Scope stays raw on purpose: a typed field would turn a malformed REPORT
+	// into a decode error, and a decode error fails the exchange and so the
+	// signing. parseAnsweredScope reads it after the fact, strictly.
+	Scope json.RawMessage `json:"scope"`
+}
+
+// parseAnsweredScope reads the exchange's scope answer. Only two shapes are
+// scopes: {"mode":"all"} with no list, and {"mode":"listed"} with a
+// repositories array (empty included) whose every entry has a printable,
+// non-empty string id. Everything else is nil, UNKNOWN: absent, null, an
+// unknown mode, listed without its list (the shape that could otherwise
+// degrade to "every repository"), or text that would drive a terminal when
+// status prints it. Nothing here ever yields "all" except the platform
+// writing it.
+func parseAnsweredScope(raw json.RawMessage, answeredAt time.Time) *AgentScope {
+	var answer struct {
+		Mode         *string            `json:"mode"`
+		Repositories *[]json.RawMessage `json:"repositories"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &answer) != nil || answer.Mode == nil {
+		return nil
+	}
+	switch {
+	case *answer.Mode == AgentScopeAll && answer.Repositories == nil:
+		return &AgentScope{Mode: AgentScopeAll, AnsweredAt: answeredAt}
+	case *answer.Mode == AgentScopeListed && answer.Repositories != nil && *answer.Repositories != nil:
+		repos := make([]ScopedRepository, 0, len(*answer.Repositories))
+		for _, entry := range *answer.Repositories {
+			var r ScopedRepository
+			if json.Unmarshal(entry, &r) != nil || r.ID == "" || !printable(r.ID) || !printable(r.URL) {
+				return nil
+			}
+			repos = append(repos, r)
+		}
+		return &AgentScope{Mode: AgentScopeListed, Repositories: repos, AnsweredAt: answeredAt}
+	}
+	return nil
+}
+
+// printable rejects control and format characters (escapes, bidi overrides):
+// status prints these strings to a terminal.
+func printable(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return false
+		}
+	}
+	return true
 }
 
 // postAgentExchange performs the HTTP half of the exchange: build, send,
