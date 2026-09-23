@@ -382,7 +382,13 @@ ambient workload OIDC identity instead of a stored session.
 Enterprise and development installations can set `CILOCK_PLATFORM_URL` to the
 appliance origin. Git author and committer fields are unchanged; the X.509
 certificate records the authenticated platform principal. The same program
-verifies the CMS signature, pinned Fulcio chain, and mandatory platform TSA:
+verifies the CMS signature, pinned Fulcio chain, and mandatory platform TSA.
+The pin is recorded on first use: on the enrolled agent credential when there
+is one, so an agent verifies its own commits without `cilock login` (even after
+the credential expires), else on the human session. A pin on the human session
+binds the agent too. `CILOCK_PLATFORM_URL` picks the platform to verify
+against. `GOODSIG` means the signature chains to that platform's CA at a
+trusted time, for any principal on it, so read the identity Git prints.
 
 ```bash
 git commit -S -m "feat: signed with CI/lock"

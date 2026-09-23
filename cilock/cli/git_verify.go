@@ -76,7 +76,10 @@ func RunGitVerifier(ctx context.Context, args []string, stdin io.Reader, stdout,
 		return err
 	}
 
-	platformURL := platformconfig.Derive(os.Getenv(platformconfig.PlatformURLEnv)).PlatformURL
+	platformURL, err := gitVerifierPlatformURL(os.Getenv(platformconfig.PlatformURLEnv))
+	if err != nil {
+		return err
+	}
 	fulcioRoots, tsaCerts, err := loadPinnedGitVerificationTrust(platformURL)
 	if err != nil {
 		return err
@@ -182,13 +185,58 @@ func readBoundedPath(path string, stdin io.Reader, limit int64) ([]byte, error) 
 	return raw, nil
 }
 
-func loadPinnedGitVerificationTrust(platformURL string) (*x509.CertPool, []*x509.Certificate, error) {
-	credential, err := auth.LookupAny(platformURL)
+// gitVerifierPlatformURL resolves the platform whose signatures Git asks this
+// program to verify. It is the signer's agent-first resolution with one
+// relaxation: an explicit CILOCK_PLATFORM_URL wins even when the agent is
+// enrolled elsewhere, because verifying another platform's signature is not
+// signing as anything else. An unreadable agent store still fails closed.
+func gitVerifierPlatformURL(envURL string) (string, error) {
+	enrolled, err := auth.EnrolledAgentPlatforms()
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve platform trust pin: %w", err)
+		return "", fmt.Errorf("read the enrolled agent store: %w", err)
 	}
-	if credential == nil {
-		return nil, nil, errors.New("git signature verification requires a CI/lock platform session; run 'cilock login'")
+	resolved := envURL
+	if envURL == "" {
+		switch len(enrolled) {
+		case 0:
+			resolved = auth.ActivePlatformURL()
+		case 1:
+			resolved = enrolled[0]
+		default:
+			return "", fmt.Errorf("multiple agent principals are enrolled (%s); set %s to select the platform whose Git signatures to verify",
+				strings.Join(enrolled, ", "), platformconfig.PlatformURLEnv)
+		}
+	}
+	platformURL := platformconfig.Derive(resolved).PlatformURL
+	if err := platformconfig.RequireSecurePlatformURL(platformURL); err != nil {
+		return "", err
+	}
+	return platformURL, nil
+}
+
+// pinAgentGitTrust is a seam so a test can remove the credential between the
+// verifier's lookup and the pin.
+var pinAgentGitTrust = auth.PinAgentTrustBundle
+
+// gitVerifyAgentPinner is the enrolled agent credential for platformURL,
+// active before pending, or nil. Expiry is deliberately not checked.
+func gitVerifyAgentPinner(platformURL string) (*auth.AgentCredential, error) {
+	agent, err := auth.LookupAgent(platformURL)
+	if err != nil || agent != nil {
+		return agent, err
+	}
+	return auth.LookupPendingAgent(platformURL)
+}
+
+// loadPinnedGitVerificationTrust returns the Fulcio roots and TSA certificates
+// for platformURL under a trust-on-first-use pin. The pin lives on the enrolled
+// agent credential when there is one, else on the human session. A pin in the
+// human store binds the agent path too, expired or not, so switching principal
+// can never adopt a bundle a stored pin already rejects.
+func loadPinnedGitVerificationTrust(platformURL string) (*x509.CertPool, []*x509.Certificate, error) {
+	agent, human, err := gitVerifyPinners(platformURL)
+	if err != nil {
+		return nil, nil, err
 	}
 	discovery, err := platformconfig.Discover(platformURL)
 	if err != nil {
@@ -201,18 +249,8 @@ func loadPinnedGitVerificationTrust(platformURL string) (*x509.CertPool, []*x509
 	// adopt network-delivered Fulcio or TSA roots independently of the stored pin.
 	// See VerifyOptions.applyDiscoveryTrust in internal/options/verify.go.
 	sum := sha256.Sum256([]byte(discovery.Signing.TrustBundlePEM))
-	pin := hex.EncodeToString(sum[:])
-	switch {
-	case credential.TrustBundleSPKI == "":
-		persisted, err := auth.SetTrustBundleSPKI(platformURL, pin)
-		if err != nil {
-			return nil, nil, fmt.Errorf("pin platform signing trust: %w", err)
-		}
-		if !persisted {
-			return nil, nil, errors.New("platform session cannot persist its signing trust pin")
-		}
-	case subtle.ConstantTimeCompare([]byte(credential.TrustBundleSPKI), []byte(pin)) != 1:
-		return nil, nil, errors.New("platform signing trust changed; run 'cilock verify --trust-discovery' after validating the rotation")
+	if err := applyGitVerifyPin(platformURL, agent, human, hex.EncodeToString(sum[:])); err != nil {
+		return nil, nil, err
 	}
 	fulcioCerts, _, err := splitPEMCertsBySelfSigned([]byte(discovery.Signing.TrustBundlePEM))
 	if err != nil {
@@ -234,6 +272,63 @@ func loadPinnedGitVerificationTrust(platformURL string) (*x509.CertPool, []*x509
 		return nil, nil, fmt.Errorf("parse platform TSA trust: %w", err)
 	}
 	return fulcioRoots, tsaCerts, nil
+}
+
+// gitVerifyPinners returns who holds the trust pin for platformURL: the
+// enrolled agent (active, then pending, expired or not) and the human session.
+// With an agent, the human session is read including expired, for comparison
+// only; without one, only a live session may pin, as before.
+func gitVerifyPinners(platformURL string) (*auth.AgentCredential, *auth.Credential, error) {
+	agent, err := gitVerifyAgentPinner(platformURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read the enrolled agent store: %w", err)
+	}
+	var human *auth.Credential
+	if agent != nil {
+		// Compared only, never used as a bearer and never written.
+		human, err = auth.LookupAnyIncludingExpired(platformURL)
+	} else {
+		human, err = auth.LookupAny(platformURL)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve platform trust pin: %w", err)
+	}
+	if agent == nil && human == nil {
+		return nil, nil, fmt.Errorf("git signature verification has no trust pin for %s: "+
+			"an agent enrolls with 'cilock enroll agent'; a human runs 'cilock login'", platformURL)
+	}
+	return agent, human, nil
+}
+
+// applyGitVerifyPin checks pin against every stored pin and records it on the
+// pinner when none is stored. A human pin binds the agent path too.
+func applyGitVerifyPin(platformURL string, agent *auth.AgentCredential, human *auth.Credential, pin string) error {
+	humanPinned := human != nil && human.TrustBundleSPKI != ""
+	switch {
+	case humanPinned && subtle.ConstantTimeCompare([]byte(human.TrustBundleSPKI), []byte(pin)) != 1:
+		if agent != nil {
+			return errors.New("platform signing trust changed since the human session on this machine pinned it; " +
+				"have your human validate the rotation before this agent verifies against it")
+		}
+		return errors.New("platform signing trust changed; run 'cilock verify --trust-discovery' after validating the rotation")
+	case agent != nil:
+		persisted, err := pinAgentGitTrust(*agent, pin)
+		if err != nil {
+			return fmt.Errorf("pin platform signing trust: %w", err)
+		}
+		if !persisted {
+			return errors.New("the enrolled agent credential changed during Git verification, so its signing trust pin was not stored; retry")
+		}
+	case !humanPinned:
+		persisted, err := auth.SetTrustBundleSPKI(platformURL, pin)
+		if err != nil {
+			return fmt.Errorf("pin platform signing trust: %w", err)
+		}
+		if !persisted {
+			return errors.New("platform session cannot persist its signing trust pin")
+		}
+	}
+	return nil
 }
 
 func gitTimestampToken(p7 *pkcs7.PKCS7) ([]byte, error) {

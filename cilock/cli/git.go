@@ -50,7 +50,13 @@ all repositories for the current user. CI/lock uses the hosted TestifySec
 platform automatically, exchanges the current CI/lock session or registered
 workflow identity for a short-lived Fulcio certificate, and always requires an
 RFC 3161 timestamp from the platform TSA. Private installations use the same
-protocol against their configured TestifySec appliance.`,
+protocol against their configured TestifySec appliance.
+
+Verification (git verify-commit, git log --show-signature) trusts the platform
+Fulcio and TSA roots pinned on first use. The pin is kept on this machine's
+enrolled agent credential when there is one, so an agent verifies without a
+human login, and on the human session otherwise. An expired agent credential
+still verifies. CILOCK_PLATFORM_URL selects the platform to verify against.`,
 		Example: `  # Configure only the current repository (default)
   cilock git configure
 

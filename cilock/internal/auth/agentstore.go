@@ -19,9 +19,12 @@ import (
 // own functions, deliberately separate from the human session store above. The
 // separation is the security property, not a filing convenience: the pushgate
 // agent-policy contract requires an agent to present an agent subject and never
-// borrow the human's email subject, so the two credentials share no lookup, no
-// type, and no fallback. Nothing here touches the human session store (legacy
-// file or shared keyring), and nothing in the human path reads this file.
+// borrow the human's email subject, so for every path that presents an
+// identity the two credentials share no lookup, no type, and no fallback.
+// Nothing here touches the human session store (legacy file or shared keyring).
+// The one reader of both stores is the Git verifier, and it reads them for a
+// trust pin only, never for a bearer or a principal: agent first, and a pin in
+// either store binds (cli/git_verify.go).
 //
 // The refresh credential is a bearer secret (RFC 6750 §5): stored 0600, sent
 // only to the platform's own credential-exchange endpoint over TLS, and never
@@ -71,6 +74,13 @@ type AgentCredential struct {
 	// at every exchange, and a zero value here means "not recorded", never
 	// "unbounded".
 	ExpiresAt time.Time `json:"expires_at,omitzero"`
+	// TrustBundleSPKI is the Git verifier's trust-on-first-use pin: the SHA-256
+	// hex of the platform's discovery trust_bundle_pem, the same value the human
+	// session pins (Credential.TrustBundleSPKI). It lets an enrolled agent verify
+	// platform Git signatures without a human login. Same TOFU limit as
+	// TrustDomain. A 4.4.x binary rewriting this file drops it, and the next
+	// verification pins again.
+	TrustBundleSPKI string `json:"trust_bundle_spki,omitempty"`
 	// Scope is the repository scope the platform answered at this
 	// credential's most recent successful exchange. A REPORT for `agent
 	// status`, never authority: nothing on this machine enforces it, and the
@@ -511,6 +521,55 @@ func PinAgentTrustDomain(expect AgentCredential, trustDomain string) error {
 		return err
 	}
 	return mismatch
+}
+
+// PinAgentTrustBundle is a COMPARE-AND-SET on the Git verifier's trust pin for
+// expect, in whichever slot holds it: empty records spki, equal is a no-op,
+// different refuses. persisted is false with a nil error when no credential
+// for the platform is stored (logged out in between); the caller MUST refuse
+// then, or it would adopt a network bundle with no pin on disk. That is why
+// this does not use updateAgentIf, which treats absence as success. Expiry is
+// not checked: verification is not signing authority.
+func PinAgentTrustBundle(expect AgentCredential, spki string) (persisted bool, err error) {
+	path, err := AgentStorePath()
+	if err != nil {
+		return false, err
+	}
+	err = withStoreLock(path, func() error {
+		s, lerr := loadAgents()
+		if lerr != nil {
+			return lerr
+		}
+		key := NormalizeURL(expect.PlatformURL)
+		for _, slot := range []map[string]AgentCredential{s.Agents, s.Pending} {
+			c, ok := slot[key]
+			if !ok || !c.sameIdentity(expect) {
+				continue
+			}
+			switch {
+			case c.TrustBundleSPKI == spki:
+				persisted = true
+				return nil
+			case c.TrustBundleSPKI != "":
+				return fmt.Errorf("this agent pinned platform signing trust %s but the platform now serves %s; "+
+					"have your human validate the rotation, then re-enroll (`cilock enroll agent`)", c.TrustBundleSPKI, spki)
+			}
+			c.TrustBundleSPKI = spki
+			slot[key] = c
+			if serr := saveAgents(s); serr != nil {
+				return serr
+			}
+			persisted = true
+			return nil
+		}
+		_, active := s.Agents[key]
+		_, pending := s.Pending[key]
+		if active || pending {
+			return ErrAgentCredentialReplaced
+		}
+		return nil
+	})
+	return persisted && err == nil, err
 }
 
 // RecordAgentExpiry overwrites the stored ceiling for platformURL with the one
