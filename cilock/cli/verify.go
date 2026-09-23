@@ -39,7 +39,6 @@ import (
 	"github.com/aflock-ai/rookery/attestation/source"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 	"github.com/aflock-ai/rookery/attestation/workflow"
-	"github.com/aflock-ai/rookery/cilock/internal/embeddedtrust"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/aflock-ai/rookery/cilock/internal/policy"
 	"github.com/spf13/cobra"
@@ -188,23 +187,13 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// auto-trusting its baked platform roots/signer and behaves like a stock build,
 	// so verify requires explicit --policy-ca-roots / --policy-timestamp-servers /
 	// --policy-* identity. Inspect what is baked in with `cilock version`.
-	var (
-		embTrust *embeddedtrust.Trust
-		err      error
-	)
-	if vo.NoEmbeddedTrust || os.Getenv("CILOCK_NO_EMBEDDED_TRUST") != "" {
-		log.Infof("ignoring embedded policy trust (--no-embedded-trust); supply --policy-ca-roots / --policy-* explicitly")
-	} else if embTrust, err = embeddedtrust.Load(); err != nil {
-		return fmt.Errorf("load embedded policy trust: %w", err)
+	emb, err := loadEmbeddedPolicyTrust(vo)
+	if err != nil {
+		return err
 	}
-	var embFulcioRoots, embTSARoots []*x509.Certificate
-	if embTrust != nil {
-		if embFulcioRoots, err = embTrust.FulcioRoots(); err != nil {
-			return err
-		}
-		if embTSARoots, err = embTrust.TSARoots(); err != nil {
-			return err
-		}
+	var embFulcioRoots []*x509.Certificate
+	if emb != nil {
+		embFulcioRoots = emb.fulcioRoots
 	}
 
 	if vo.KeyPath == "" && len(vo.PolicyCARootPaths) == 0 && len(vo.PolicyCARootsPEM) == 0 && len(verifiers) == 0 && len(embFulcioRoots) == 0 {
@@ -243,161 +232,11 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		verifiers = append(verifiers, v)
 	}
 
-	// --policy-ca-roots may point at a MULTI-cert PEM bundle (the platform's
-	// fulcio-roots.pem is the Fulcio CA + the self-signed Root CA, in that
-	// order). Parse every cert and bucket by self-signedness — the self-signed
-	// Root goes to policyRoots (the trust anchor), the rest to
-	// policyIntermediates — so the keyless signing leaf chains
-	// leaf -> Fulcio CA -> Root. This mirrors the discovered-trust
-	// (PolicyCARootsPEM) split below; without it, a single-file bundle would
-	// load only the first cert (the intermediate) and verify would fail to build
-	// a chain. This is what makes the published-trust offline command
-	// `cilock verify --policy-ca-roots fulcio-roots.pem ... --platform-url ""`
-	// work with one file.
-	var policyRoots []*x509.Certificate
-	var policyIntermediates []*x509.Certificate
-	for _, caPath := range vo.PolicyCARootPaths {
-		caFile, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is from CLI flags
-		if err != nil {
-			return fmt.Errorf("failed to read root CA certificate file: %w", err)
-		}
-		roots, intermediates, err := splitPEMCertsBySelfSigned(caFile)
-		if err != nil {
-			return fmt.Errorf("failed to parse root CA certificate file %q: %w", caPath, err)
-		}
-		policyRoots = append(policyRoots, roots...)
-		policyIntermediates = append(policyIntermediates, intermediates...)
+	trust, err := resolvePolicySignatureTrust(&vo, emb, !signerPinnedByFlags)
+	if err != nil {
+		return err
 	}
-
-	// --policy-ca-intermediates: load EVERY cert in each file as an intermediate
-	// (no self-signed split — the operator explicitly declared these as
-	// intermediates).
-	for _, caPath := range vo.PolicyCAIntermediatePaths {
-		caFile, err := os.ReadFile(caPath) //nolint:gosec // G304: caPath is from CLI flags
-		if err != nil {
-			return fmt.Errorf("failed to read intermediate CA certificate file: %w", err)
-		}
-		certs, err := parsePEMCerts(caFile)
-		if err != nil {
-			return fmt.Errorf("failed to parse intermediate CA certificate file %q: %w", caPath, err)
-		}
-		policyIntermediates = append(policyIntermediates, certs...)
-	}
-
-	// CA roots discovered from the platform (the inlined trust bundle in
-	// /.well-known/judge-configuration). Lets a logged-in `cilock verify` trust
-	// the platform's keyless signing CA without a --policy-ca-roots file. The
-	// bundle carries the self-signed root plus intermediates; split by
-	// self-signedness so each lands in the right pool, exactly as the file flags do.
-	if len(vo.PolicyCARootsPEM) > 0 { //nolint:nestif // PEM block-decode loop with a self-signed-vs-intermediate split; the nesting mirrors the parse structure.
-		for rest := vo.PolicyCARootsPEM; len(rest) > 0; {
-			var block *pem.Block
-			block, rest = pem.Decode(rest)
-			if block == nil {
-				break
-			}
-			if block.Type != pemTypeCertificate {
-				continue
-			}
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				return fmt.Errorf("failed to parse discovered CA certificate: %w", err)
-			}
-			if bytes.Equal(cert.RawSubject, cert.RawIssuer) {
-				policyRoots = append(policyRoots, cert)
-			} else {
-				policyIntermediates = append(policyIntermediates, cert)
-			}
-		}
-	}
-
-	ptsVerifiers := make([]timestamp.TimestampVerifier, 0)
-	var tsaRootCerts []*x509.Certificate // tracked only so we can display them
-	for _, server := range vo.PolicyTimestampServers {
-		f, err := os.ReadFile(server) //nolint:gosec // G304: server path is from CLI flags
-		if err != nil {
-			return fmt.Errorf("failed to open Timestamp Server CA certificate file: %w", err)
-		}
-
-		// A TSA chain file (the platform's tsa-chain.pem) holds the TSA leaf AND
-		// the self-signed Root CA. Load EVERY cert into one verifier pool so
-		// p7.VerifyWithChain can build TSA-leaf -> Root: the embedded token cert
-		// chains to the Root anchor in the pool. Parsing only the first cert (the
-		// old behavior) dropped the anchor and the timestamp failed to validate —
-		// which broke the single-file offline command
-		// `cilock verify --policy-timestamp-servers tsa-chain.pem ... --platform-url ""`.
-		certs, err := parsePEMCerts(f)
-		if err != nil {
-			return fmt.Errorf("failed to parse Timestamp Server CA certificate file %q: %w", server, err)
-		}
-		ptsVerifiers = append(ptsVerifiers, timestamp.NewVerifier(timestamp.VerifyWithCerts(certs)))
-		tsaRootCerts = append(tsaRootCerts, certs...)
-	}
-
-	// TSA roots discovered from the platform (the chain served at the discovery
-	// document's tsa_cert_chain_url). ResolvePlatformDefaults populates this
-	// ONLY when the operator passed no --policy-timestamp-servers AND the
-	// discovery CA trust bundle was adopted under its TOFU pin (GHSA #5988), so
-	// the timestamp-trust leg rides the same trust decision as the CA leg. Load
-	// the whole chain into ONE verifier pool, exactly like a
-	// --policy-timestamp-servers file, so p7.VerifyWithChain can build
-	// TSA-leaf -> Root. Additive to embedded trust below, mirroring how
-	// discovery CA roots coexist with embedded CA roots.
-	if len(vo.PolicyTSAChainPEM) > 0 {
-		certs, err := parsePEMCerts(vo.PolicyTSAChainPEM)
-		if err != nil {
-			return fmt.Errorf("failed to parse platform-discovered TSA certificate chain: %w", err)
-		}
-		if len(certs) > 0 {
-			ptsVerifiers = append(ptsVerifiers, timestamp.NewVerifier(timestamp.VerifyWithCerts(certs)))
-			tsaRootCerts = append(tsaRootCerts, certs...)
-		}
-	}
-
-	// Fill any policy-trust dimension the operator did not pass on the command
-	// line from embedded trust. Flags win wholesale per dimension; embedded
-	// fills the gaps. Covers ONLY policy-signature trust — attestation trust is
-	// untouched. Signer identity is applied ONLY when the operator set NO
-	// signer-identity constraint at all (CN/DNS/email/org/URIs/Fulcio
-	// extensions). Gating on --policy-uris alone would silently overwrite an
-	// operator who pinned the signer via --policy-emails / --policy-fulcio-*
-	// without --policy-uris, verifying under unintended trust.
-	if embTrust != nil { //nolint:nestif // per-dimension flag-vs-embedded precedence (ca-roots / tsa-roots / signer-identity); flattening obscures which dimension wins
-		applied := make([]string, 0, 3)
-		if len(vo.PolicyCARootPaths) == 0 && len(embFulcioRoots) > 0 {
-			policyRoots = append(policyRoots, embFulcioRoots...)
-			applied = append(applied, "ca-roots")
-		}
-		if len(vo.PolicyTimestampServers) == 0 && len(embTSARoots) > 0 {
-			for _, c := range embTSARoots {
-				ptsVerifiers = append(ptsVerifiers, timestamp.NewVerifier(timestamp.VerifyWithCerts([]*x509.Certificate{c})))
-				tsaRootCerts = append(tsaRootCerts, c)
-			}
-			applied = append(applied, "timestamp-roots")
-		}
-		if !signerPinnedByFlags && len(embTrust.PolicySigners) > 0 {
-			if len(embTrust.PolicySigners) > 1 {
-				return fmt.Errorf("embedded trust defines %d policy signers; selecting among multiple embedded signers is not yet supported — pass --policy-uris / --policy-fulcio-* to choose", len(embTrust.PolicySigners))
-			}
-			cc := embTrust.PolicySigners[0].CertConstraint
-			vo.PolicyCommonName = cc.CommonName
-			vo.PolicyDNSNames = cc.DNSNames
-			vo.PolicyEmails = cc.Emails
-			vo.PolicyOrganizations = cc.Organizations
-			vo.PolicyURIs = cc.URIs
-			vo.PolicyFulcioCertExtensions = cc.Extensions
-			applied = append(applied, "signer-identity")
-		}
-		if len(applied) > 0 {
-			src := embTrust.Source
-			if src == "" {
-				src = "this build"
-			}
-			log.Infof("using embedded policy trust from %s (%s); override with the corresponding --policy-* flags, or ignore it entirely with --no-embedded-trust", src, strings.Join(applied, ", "))
-		}
-	}
-
-	logPolicyTrust(policyRoots, tsaRootCerts, vo)
+	logPolicyTrust(trust.roots, trust.tsaCerts, vo)
 
 	// No -p/--policy given: resolve the policy the PLATFORM binds to this
 	// session's product (session -> bound product -> bound policy -> Archivista
@@ -547,9 +386,9 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		workflow.VerifyWithMaterialManifests(materialManifests),
 		workflow.VerifyWithInventoryLookup(inventoryLookup),
 		workflow.VerifyWithCollectionSource(collectionSource),
-		workflow.VerifyWithPolicyTimestampAuthorities(ptsVerifiers),
-		workflow.VerifyWithPolicyCARoots(policyRoots),
-		workflow.VerifyWithPolicyCAIntermediates(policyIntermediates),
+		workflow.VerifyWithPolicyTimestampAuthorities(trust.timestampVerifiers),
+		workflow.VerifyWithPolicyCARoots(trust.roots),
+		workflow.VerifyWithPolicyCAIntermediates(trust.intermediates),
 		workflow.VerifyWithPolicyCertConstraints(vo.PolicyCommonName, vo.PolicyDNSNames, vo.PolicyEmails, vo.PolicyOrganizations, vo.PolicyURIs),
 		workflow.VerifyWithPolicyFulcioCertExtensions(vo.PolicyFulcioCertExtensions),
 	}
