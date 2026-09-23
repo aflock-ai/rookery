@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -146,6 +147,10 @@ type agentRejectedError struct{ err error }
 func (e *agentRejectedError) Error() string { return e.err.Error() }
 func (e *agentRejectedError) Unwrap() error { return e.err }
 
+type agentExchangeTransportTimeout struct{ err error }
+
+func (e *agentExchangeTransportTimeout) Error() string { return e.err.Error() }
+
 // IsAgentCredentialRejected reports whether err is the platform's own refusal
 // of the presented credential — the one outcome after which retrying with the
 // same credential cannot succeed. A network failure, a 5xx, a response that
@@ -168,7 +173,21 @@ func IsAgentCredentialRejected(err error) bool {
 // Every failure is an error. There is no degraded return: a caller on a signing
 // path must fail the run rather than continue to another identity.
 func ExchangeAgentCredential(platformURL string, cred AgentCredential) (AgentSigningIdentity, error) {
-	id, err := exchangeAgentCredential(platformURL, cred)
+	var id AgentSigningIdentity
+	var err error
+	for attempt, delay := range []time.Duration{0, 250 * time.Millisecond, 750 * time.Millisecond} {
+		if attempt != 0 {
+			time.Sleep(delay)
+		}
+		id, err = exchangeAgentCredential(platformURL, cred)
+		if err == nil {
+			return id, nil
+		}
+		var transportTimeout *agentExchangeTransportTimeout
+		if !errors.As(err, &transportTimeout) {
+			break
+		}
+	}
 	if err != nil {
 		// THE SINGLE CHOKE POINT. Everything below can quote server-controlled
 		// text — a refusal body, a redirect target, `spiffe_id`, a JWT `sub` — and
@@ -385,7 +404,12 @@ func postAgentExchange(platformURL string, cred AgentCredential) (agentExchangeA
 		// The URL is safe to name; the request body is not, so it is never wrapped
 		// into an error. net/http keeps the URL out of the error it returns for a
 		// POST body, and there is no credential in the query string.
-		return agentExchangeAnswer{}, fmt.Errorf("agent credential exchange at %s: %w", endpoint, err)
+		wrapped := fmt.Errorf("agent credential exchange at %s: %w", endpoint, err)
+		var networkError net.Error
+		if errors.As(err, &networkError) && networkError.Timeout() {
+			return agentExchangeAnswer{}, &agentExchangeTransportTimeout{err: wrapped}
+		}
+		return agentExchangeAnswer{}, wrapped
 	}
 	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup
 
