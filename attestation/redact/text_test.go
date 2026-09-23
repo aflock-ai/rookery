@@ -115,6 +115,13 @@ var textCases = []struct {
 	// the punctuation is not read as the host.
 	{"dropped host before a comma", "see http://a@evil.example@github.com, ok", "see http://******@/, ok"},
 	{"dropped host before a quote", `{"url":"https://evil.example/x@github.com"}`, `{"url":"https://******@/"}`},
+	// Python's proxy parser reads "sec<ret/part" as the password. Only the
+	// unescaped byte closing the quote that opens a URL ends it in text, so
+	// the compact JSON log and the XML line below keep their email address.
+	{"password with a byte no url holds, json field", `{"proxy":"http://u:sec<ret/part@proxy:3128","n":1}`, `{"proxy":"http://******@/}`},
+	{"password with an escaped quote, json field", `{"proxy":"http://u:sec\"ret/part@proxy:3128","n":1}`, `{"proxy":"http://******@/}`},
+	{"password with a byte no url holds, glued", "proxy=http://u:sec`ret/part@proxy:3128,no_proxy=localhost", "proxy=http://******@"},
+	{"password with an unescaped quote, quoted", `echo "http://u:sec"ret/part@proxy:3128"`, `echo "http://******@/"`},
 
 	// A token in the username slot of "user@host:port" is sent by Go and
 	// curl with an empty password; a port says it is not an email address.
@@ -130,6 +137,7 @@ var textCases = []struct {
 	{"prose with a colon, in text", "Contact: help@example.com\n", "Contact: help@example.com\n"},
 	{"compact json log", `{"level":"info","url":"https://api.example.com/v1","author":"alice@example.com","status":"PASS"}`, `{"level":"info","url":"https://api.example.com/v1","author":"alice@example.com","status":"PASS"}`},
 	{"json email", `{"author":"alice@example.com"}`, `{"author":"alice@example.com"}`},
+	{"xml line with an email", "<url>https://h.example/x</url><email>a@b.example</email>", "<url>https://h.example/x</url><email>a@b.example</email>"},
 	{"url then an email on a later line", "https://jira.example/browse/ABC-1 fix\n\nSigned-off-by: Alice <alice@example.com>\n", "https://jira.example/browse/ABC-1 fix\n\nSigned-off-by: Alice <alice@example.com>\n"},
 	{"url then a bare email", "see https://example.com/x or mail alice@example.com", "see https://example.com/x or mail alice@example.com"},
 	{"scp-style git remote", "git@github.com:org/repo.git", "git@github.com:org/repo.git"},
@@ -281,7 +289,7 @@ func TestURLCredentialsInTextAgreesWithURLCredentialsOnOneWord(t *testing.T) {
 // No input may panic, the output must be stable under a second pass, and it
 // must name no host the input does not.
 func FuzzURLCredentialsInText(f *testing.F) {
-	for _, s := range []string{"HTTP_PROXY=http://u:p@h:1\n", `x="u:p@h:1";`, "a=b=c@d", "'", "=@", "\"@\"", "dG9rZW4=@proxy:3128", "k=http://@a?u:p@b:1"} {
+	for _, s := range []string{"HTTP_PROXY=http://u:p@h:1\n", `x="u:p@h:1";`, "a=b=c@d", "'", "=@", "\"@\"", "dG9rZW4=@proxy:3128", "k=http://@a?u:p@b:1", `{"p":"x://u:a\"<b/c@h:1","n":1}`} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
@@ -312,12 +320,14 @@ func TestURLCredentialsInTextIsLinearOnAdversarialLines(t *testing.T) {
 		"separators and spaces":         strings.Repeat("x://a@b ", n),
 		// The only at-sign starts an image digest, so no separator has a
 		// userinfo, and each one used to read the rest of the line to find
-		// that out: to the end for a byte of notInURL, and back from the
+		// that out: to the end for a closing quote, and back from the
 		// digest for an earlier at-sign.
 		"separators then an image digest":         strings.Repeat("x://", n) + "h/img@sha256:" + strings.Repeat("a", 64),
 		"escaped separators then an image digest": strings.Repeat(`x:\/\/`, n) + "h/img@sha256:" + strings.Repeat("a", 64),
 		"separators then a quoted at-sign":        strings.Repeat("x://", n) + `"@`,
 		"separators and quotes then an at-sign":   strings.Repeat(`x://"`, n) + "@",
+		"alternating framings then an at-sign":    strings.Repeat("\"x://`x://<x://>x://", n/4) + "@",
+		"escaped quotes then an at-sign":          `"x://` + strings.Repeat(`\"x://`, n) + "@",
 		// An empty userinfo sends each URL on to Python's reading, which
 		// runs to the next '/'.
 		"empty userinfos then queries":        strings.Repeat("x://@?", n),

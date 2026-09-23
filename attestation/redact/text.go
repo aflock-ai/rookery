@@ -51,8 +51,10 @@ import "strings"
 // the second word, "user@host:port", is redacted, and "u:my" is signed), and
 // a scheme-less credential with more text glued to it
 // ("u:p@proxy:3128,localhost", "proxy=u:p@proxy:3128&x=1") has no
-// host[:port] end. Both are the boundaries URLCredentials documents for a URL
-// inside text.
+// host[:port] end, and a password holding, unescaped, the quote its URL is
+// printed in, with text after the URL ("\"http://u:a\"b/c@proxy:3128\",x"),
+// ends at that quote (see redactAuthorityUserinfo). These are the boundaries
+// URLCredentials documents for a URL inside text.
 func URLCredentialsInText(text string) string {
 	if !strings.Contains(text, "@") {
 		return text // userinfo is delimited by an at-sign; there is none
@@ -213,7 +215,7 @@ func redactWordValue(value string) string {
 	// be all the host there is ("u:p@.").
 	for _, trailing := range [...]string{"\"'`;,.:)]}>", "\"'`;,)"} {
 		body := strings.TrimRight(core, trailing)
-		if redacted := URLCredentials(body); redacted != body {
+		if redacted := urlCredentials(body, lastByte(lead)); redacted != body {
 			if suffix := core[len(body):]; suffix != "" && strings.HasSuffix(redacted, Marker+"@") {
 				// The redaction named no host. A '/' ends the authority
 				// there, so the '.' or ',' taken off the end is not read as
@@ -224,6 +226,14 @@ func redactWordValue(value string) string {
 		}
 	}
 	return value
+}
+
+// lastByte returns the last byte of s, or 0.
+func lastByte(s string) int {
+	if s == "" {
+		return 0
+	}
+	return int(s[len(s)-1])
 }
 
 // keyEnd returns the length of the key at the start of s, through its

@@ -17,8 +17,12 @@
 package commandrun
 
 import (
+	"encoding/json"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -381,7 +385,7 @@ func TestAttestRedactsSchemelessArgvWithWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewContext: %v", err)
 	}
-	rc := New(WithCommand(argv), WithSilent(true))
+	rc := New(WithCommand(slices.Clone(argv)), WithSilent(true))
 	if err := rc.Attest(actx); err != nil {
 		t.Fatalf("Attest: %v", err)
 	}
@@ -450,7 +454,7 @@ func TestAttestRedactsWHATWGAndPythonUserinfoReadingsInArgvAndOutput(t *testing.
 	if err != nil {
 		t.Fatalf("NewContext: %v", err)
 	}
-	rc := New(WithCommand(argv), WithSilent(true))
+	rc := New(WithCommand(slices.Clone(argv)), WithSilent(true))
 	if err := rc.Attest(actx); err != nil {
 		t.Fatalf("Attest: %v", err)
 	}
@@ -523,7 +527,7 @@ func TestAttestRedactsEmptyUserinfoAndPaddedTokenReadings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewContext: %v", err)
 	}
-	rc := New(WithCommand(argv), WithSilent(true))
+	rc := New(WithCommand(slices.Clone(argv)), WithSilent(true))
 	if err := rc.Attest(actx); err != nil {
 		t.Fatalf("Attest: %v", err)
 	}
@@ -558,5 +562,62 @@ func TestAttestRedactsEmptyUserinfoAndPaddedTokenReadings(t *testing.T) {
 	}
 	if !strings.Contains(procs[0].Cmdline, "http://@proxy-a/tail@proxy-b:3128") {
 		t.Errorf("Cmdline lost a URL every parser reads the same way: %q", procs[0].Cmdline)
+	}
+}
+
+// Every value of the redact package's parser oracle
+// (attestation/redact/testdata/userinfo-oracle.json) as an argv element and a
+// line of stdout, through Attest, and in the traced Cmdline: no username or
+// password that Python's proxy parser, urlsplit or Go's net/url reads in it is
+// signed. Output is cut into words at URL space, so a value that holds one is
+// checked in cmd and the Cmdline only (see redact.URLCredentialsInText).
+func TestAttestSignsNoOracleUserinfo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses printf")
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "attestation", "redact", "testdata", "userinfo-oracle.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table struct {
+		Rows []struct {
+			Value       string
+			Credentials []string
+		}
+	}
+	if err := json.Unmarshal(raw, &table); err != nil || len(table.Rows) < 60 {
+		t.Fatalf("oracle table: %d rows, %v", len(table.Rows), err)
+	}
+	argv := make([]string, 0, 2+len(table.Rows))
+	argv = append(argv, "printf", `%s\n`)
+	for _, row := range table.Rows {
+		argv = append(argv, row.Value)
+	}
+	actx, err := attestation.NewContext("url-credentials-oracle", []attestation.Attestor{}, attestation.WithWorkingDir(t.TempDir()))
+	if err != nil {
+		t.Fatalf("NewContext: %v", err)
+	}
+	rc := New(WithCommand(slices.Clone(argv)), WithSilent(true))
+	if err := rc.Attest(actx); err != nil {
+		t.Fatalf("Attest: %v", err)
+	}
+	lines := strings.Split(rc.Stdout, "\n")
+	if len(rc.Cmd) != len(argv) || len(lines) != len(table.Rows)+1 {
+		t.Fatalf("cmd has %d elements and stdout %d lines for %d values", len(rc.Cmd), len(lines), len(table.Rows))
+	}
+	for i, row := range table.Rows {
+		procs := []ProcessInfo{{ProcessID: 120, Cmdline: procCmdline("printf\x00" + row.Value + "\x00")}}
+		redactProcessCmdlines(procs)
+		signed := []string{rc.Cmd[i+2], procs[0].Cmdline}
+		if !strings.ContainsFunc(row.Value, func(r rune) bool { return r <= ' ' }) {
+			signed = append(signed, lines[i])
+		}
+		for _, credential := range row.Credentials {
+			for _, s := range signed {
+				if strings.Contains(s, credential) {
+					t.Errorf("%q in %q is signed as %q", credential, row.Value, s)
+				}
+			}
+		}
 	}
 }

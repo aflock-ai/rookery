@@ -93,20 +93,30 @@ const Marker = "******"
 // The rule runs to a fixpoint, so its output is its own fixpoint; the bound
 // is a backstop.
 func URLCredentials(value string) string {
-	redacted := urlCredentialsFixpoint(value)
+	return urlCredentials(value, wholeValue)
+}
+
+// wholeValue is the opener of a value that is read whole (see
+// redactAuthorityUserinfo).
+const wholeValue = -1
+
+// urlCredentials is URLCredentials for a whole value, and for a word of text
+// when opener is the byte its quotes or brackets open with, or 0.
+func urlCredentials(value string, opener int) string {
+	redacted := urlCredentialsFixpoint(value, opener)
 	if strings.ContainsAny(redacted, "\t\n\r") {
 		// Checked on the output, so that a second pass finds it too.
 		stripped := withoutTabOrNewline(redacted)
-		if urlCredentialsFixpoint(stripped) != stripped {
+		if urlCredentialsFixpoint(stripped, opener) != stripped {
 			return Marker + "@"
 		}
 	}
 	return redacted
 }
 
-func urlCredentialsFixpoint(value string) string {
+func urlCredentialsFixpoint(value string, opener int) string {
 	for range strings.Count(value, "@") + 2 {
-		next := redactURLCredentialsOnce(value)
+		next := redactURLCredentialsOnce(value, opener)
 		if next == value {
 			break
 		}
@@ -115,14 +125,14 @@ func urlCredentialsFixpoint(value string) string {
 	return value
 }
 
-func redactURLCredentialsOnce(value string) string {
+func redactURLCredentialsOnce(value string, opener int) string {
 	if !strings.Contains(value, "@") {
 		return value // userinfo is delimited by an at-sign; there is none
 	}
 	if redacted, ok := redactSchemelessUserinfo(value); ok {
 		return redacted
 	}
-	return redactAuthorityUserinfo(value)
+	return redactAuthorityUserinfo(value, opener)
 }
 
 // redactAuthorityUserinfo handles every "://" in the value, and its JSON
@@ -135,14 +145,34 @@ func redactURLCredentialsOnce(value string) string {
 // address later in a commit message from being read as the end of a userinfo.
 // A URL inside one pair of matching quotes is still the value's own (see
 // valueCore), so a space in its password does not end it.
-func redactAuthorityUserinfo(value string) string {
+//
+// Python's proxy parser reads every byte before the at-sign as userinfo, so
+// "http://u:sec<ret/part@proxy:3128" sends password "sec<ret/part". In a
+// value read whole, no byte ends the search past an authority that holds no
+// at-sign. In a word of text, a URL that a quote or bracket of framing opens
+// ends at the unescaped byte that closes it: JSON escapes its quote inside a
+// string and XML its '<', so what follows that byte is the next field
+// ("\"https://h/v1\",\"author\":\"a@b\""), not a password. No other byte
+// ends it, and in a word whose last at-sign is followed by host[:port] that
+// one does not either: there a quote left unescaped inside the URL is the
+// likelier reading.
+func redactAuthorityUserinfo(value string, opener int) string {
 	valueStart, core := valueCore(value)
 	valueEnd := valueStart + len(core)
 	lastAt := strings.LastIndexByte(value, '@')
 	var out strings.Builder
 	var seps separatorScanner
 	written, pos, space := 0, 0, unknownIndex
-	past := pastAuthorityScan{notInURL: unknownIndex, limit: unknownIndex}
+	if isHostAndPort(value[lastAt+1:]) {
+		opener = wholeValue
+	}
+	var past [len(framing) + 1]pastAuthorityScan // one per closer, and one for none
+	for k := range past {
+		past[k] = pastAuthorityScan{next: -1, limit: unknownIndex}
+		if k < len(framing) {
+			past[k].closer, past[k].next = closing[k], unknownIndex
+		}
+	}
 	for {
 		separator, n := seps.next(value, pos)
 		start := separator + n
@@ -150,7 +180,7 @@ func redactAuthorityUserinfo(value string) string {
 			break // no at-sign after this separator, so no userinfo
 		}
 		end, from, compound := urlExtent(value, valueStart, valueEnd, separator, start, &space)
-		at, keepHost := readAuthority(value, start, end, &past)
+		at, keepHost := readAuthority(value, start, end, &past[framingOf(value, separator, opener)])
 		if at < 0 {
 			// No userinfo. A URL can start inside this one's authority
 			// ("http://0http://u:p@h"), so the search goes on after the
@@ -326,40 +356,39 @@ func pythonProxyUserinfoAt(url string, first int) int {
 	return strings.LastIndexByte(url[:end], '@')
 }
 
-// pastAuthorityScan answers, for the URLs of one value in the order the scan
-// meets them, the search readAuthority makes past an authority that holds no
-// at-sign: lastUserinfoAt of the URL up to its limit, the first byte of
-// notInURL or the end of the URL. A byte that no URL holds ('"', '<', '>',
-// '`') ends that search, so the next field of a JSON log line
-// ("https://h/v1","author":"a@b") is not read as a path.
+// pastAuthorityScan answers, for the URLs of one value that share a closer, in
+// the order the scan meets them, the search readAuthority makes past an
+// authority that holds no at-sign: lastUserinfoAt of the URL up to its limit,
+// the closer (see redactAuthorityUserinfo) or the end of the URL.
 //
 // That search reads the rest of the URL, and a URL whose authority holds no
 // at-sign is followed by the next one inside it, so reading it again for each
 // would be quadratic: "x://x://...h/img@sha256:<hex>" read to the digest, and
-// back from it for an earlier at-sign, once per separator. The next byte of
-// notInURL is kept until the scan passes it, as the next space is (see
-// urlExtent). The answer is kept for its limit too: every URL that starts
-// between two limits shares the later one, and the at-sign found from the
-// first of them is the answer for each that starts at or before it, and none
-// for the rest. The limits only grow after the first URL, so each byte is
-// read by one search.
+// back from it for an earlier at-sign, once per separator. The next closer is
+// kept until the scan passes it, as the next space is (see urlExtent). The
+// answer is kept for its limit too: every URL that starts between two limits
+// shares the later one, and the at-sign found from the first of them is the
+// answer for each that starts at or before it, and none for the rest. The
+// limits only grow after the first URL, so each byte is read by one search of
+// each scan.
 type pastAuthorityScan struct {
-	notInURL int // next byte of notInURL at or after the last start, -1 for none
-	limit    int // the limit found is for
-	from     int // the start found was searched from
-	found    int // index in value of the at-sign lastUserinfoAt returns, or -1
+	closer byte
+	next   int // next closer at or after the last start, -1 for none
+	limit  int // the limit found is for
+	from   int // the start found was searched from
+	found  int // index in value of the at-sign lastUserinfoAt returns, or -1
 }
 
 // userinfoAt returns lastUserinfoAt of value[start:limit] as an index into
-// value[start:end], or -1, where limit is the first byte of notInURL at or
+// value[start:end], or -1, where limit is the first unescaped closer at or
 // after start, or end.
 func (s *pastAuthorityScan) userinfoAt(value string, start, end int) int {
-	if s.notInURL != -1 && s.notInURL < start {
-		s.notInURL = indexFrom(value, start, func(rest string) int { return strings.IndexAny(rest, notInURL) })
+	if s.next != -1 && s.next < start {
+		s.next = indexFrom(value, start, func(rest string) int { return indexUnescaped(rest, s.closer) })
 	}
 	limit := end
-	if s.notInURL >= 0 && s.notInURL < end {
-		limit = s.notInURL
+	if s.next >= 0 && s.next < end {
+		limit = s.next
 	}
 	if limit != s.limit || start < s.from {
 		s.limit, s.from, s.found = limit, start, -1
@@ -373,9 +402,44 @@ func (s *pastAuthorityScan) userinfoAt(value string, start, end int) int {
 	return s.found - start
 }
 
-// notInURL is the bytes RFC 3986 allows nowhere in a URI, and that WHATWG
-// percent-encodes or refuses, which text puts around a URL.
-const notInURL = "\"<>`"
+// framing is the bytes RFC 3986 allows nowhere in a URI, and that WHATWG
+// percent-encodes or refuses, which text puts around a URL; closing is the
+// byte that closes each.
+const framing, closing = "\"`<>", "\"`><"
+
+// framingOf returns the index in framing of the byte that opens the URL whose
+// scheme separator is at value[separator]: the byte before its scheme, or
+// opener when the scheme starts the value. It is len(framing) for none, and
+// for a value read whole.
+func framingOf(value string, separator, opener int) int {
+	if opener == wholeValue {
+		return len(framing)
+	}
+	if scheme := urlStart(value, separator); scheme > 0 {
+		opener = int(value[scheme-1])
+	}
+	for k := range len(framing) {
+		if int(framing[k]) == opener {
+			return k
+		}
+	}
+	return len(framing)
+}
+
+// indexUnescaped returns the index of the first c in s that no '\' comes
+// right before, or -1.
+func indexUnescaped(s string, c byte) int {
+	for i := 0; ; {
+		j := strings.IndexByte(s[i:], c)
+		if j < 0 {
+			return -1
+		}
+		if i+j == 0 || s[i+j-1] != '\\' {
+			return i + j
+		}
+		i += j + 1
+	}
+}
 
 func indexAnyOrLen(s, chars string) int {
 	if i := strings.IndexAny(s, chars); i >= 0 {

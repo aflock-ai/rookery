@@ -17,10 +17,16 @@
 package aws_codebuild
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,4 +56,33 @@ func TestAttestRedactsSourceRepoCredentials(t *testing.T) {
 	predicate, err := json.Marshal(a)
 	require.NoError(t, err)
 	assert.NotContains(t, string(predicate), secret, "signed predicate carries a credential")
+}
+
+// The build-details lookup is an HTTP request the SDK makes, and its error is
+// logged. net/http's error quotes a redirect's Location and an endpoint's
+// username; the SDK today follows no redirect and drops the endpoint's
+// userinfo, and redact.HTTPError keeps the error clean if either changes.
+func TestBuildDetailsErrorCarriesNoURLCredential(t *testing.T) {
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+	endpoints := make([]string, 1, 3)
+	endpoints[0] = strings.Replace(closed.URL, "http://", "http://glpat-p14secret@", 1)
+	for _, location := range []string{"http://ci:p14secret-redirect@host:bad/", endpoints[0] + "/"} {
+		redirect := httptest.NewServer(http.RedirectHandler(location, http.StatusTemporaryRedirect))
+		defer redirect.Close()
+		endpoints = append(endpoints, redirect.URL)
+	}
+	for _, endpoint := range endpoints {
+		a := &Attestor{BuildInfo: BuildInfo{BuildID: "project:build-1"}, awsConfig: aws.Config{
+			Region: "us-east-1", BaseEndpoint: aws.String(endpoint), Retryer: func() aws.Retryer { return aws.NopRetryer{} },
+			Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+				return aws.Credentials{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "example"}, nil
+			}),
+		}}
+		err := a.getBuildDetails()
+		require.Error(t, err)
+		for e := err; e != nil; e = errors.Unwrap(e) {
+			assert.NotContains(t, e.Error(), "p14secret", "endpoint %s", endpoint)
+		}
+	}
 }

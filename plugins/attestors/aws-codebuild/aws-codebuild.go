@@ -223,7 +223,7 @@ func (a *Attestor) getBuildDetails() error {
 
 	result, err := svc.BatchGetBuilds(ctx, input)
 	if err != nil {
-		return fmt.Errorf("failed to get build details: %w", err)
+		return fmt.Errorf("failed to get build details: %w", redact.HTTPError("", err))
 	}
 
 	if len(result.Builds) == 0 {

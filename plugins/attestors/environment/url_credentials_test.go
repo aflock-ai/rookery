@@ -18,7 +18,10 @@ package environment
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -335,5 +338,38 @@ func TestAttestRedactsUserinfoTailPythonReadsPastAQuery(t *testing.T) {
 				checkNamesNoOtherHost(t, c.value, attestor.Variables[c.key])
 			}
 		})
+	}
+}
+
+// Every value of the redact package's parser oracle
+// (attestation/redact/testdata/userinfo-oracle.json) as the value of an
+// environment variable, through both capture paths: no username or password
+// that Python's proxy parser, urlsplit or Go's net/url reads in it is signed.
+func TestAttestSignsNoOracleUserinfo(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "attestation", "redact", "testdata", "userinfo-oracle.json"))
+	require.NoError(t, err)
+	type row struct {
+		Value       string
+		Credentials []string
+	}
+	var table struct{ Rows []row }
+	require.NoError(t, json.Unmarshal(raw, &table))
+	require.GreaterOrEqual(t, len(table.Rows), 60)
+	env := make([]string, len(table.Rows))
+	for i, r := range table.Rows {
+		env[i] = fmt.Sprintf("ORACLE_%d=%s", i, r.Value)
+	}
+	for _, opts := range [][]attestation.AttestationContextOption{nil, {attestation.WithEnvFilterVarsEnabled()}} {
+		attestor := New(WithCustomEnv(func() []string { return env }))
+		ctx, err := attestation.NewContext("env-userinfo-oracle", []attestation.Attestor{attestor}, opts...)
+		require.NoError(t, err)
+		require.NoError(t, attestor.Attest(ctx))
+		for i, r := range table.Rows {
+			got, ok := attestor.Variables[fmt.Sprintf("ORACLE_%d", i)]
+			require.True(t, ok, "ORACLE_%d is not recorded", i)
+			for _, credential := range r.Credentials {
+				assert.NotContains(t, got, credential, "%q is signed as %q", r.Value, got)
+			}
+		}
 	}
 }

@@ -100,6 +100,10 @@ var redactionCases = []struct {
 	// Go, WHATWG and curl read host "alice", port 123; Python's proxy
 	// parser sends password "123/ret" to host.
 	{"numeric password holding a slash", "https://alice:123/ret@host", "https://******@"},
+	// No byte ends a whole value's userinfo for Python's proxy parser, which
+	// sends "sec<ret/part", a JSON field after the URL included.
+	{"password holding a byte no url holds", "http://u:sec<ret/part@proxy:3128", "http://******@"},
+	{"json after a url", `https://h.example/v1","author":"a@b.example`, "https://******@"},
 
 	// A value that IS a URL is read whole by its consumer, which accepts
 	// spaces in userinfo and strips tabs and newlines.

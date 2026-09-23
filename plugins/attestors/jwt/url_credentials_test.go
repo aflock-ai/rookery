@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -213,5 +214,54 @@ func TestAttestWithholdsURLDerivedDetailInJWKSFetchError(t *testing.T) {
 				t.Errorf("the fetch error = %v, want it to name the endpoint as %s", err, tc.endpoint)
 			}
 		})
+	}
+}
+
+// A redirect from an endpoint that holds no credential put the Location's
+// credential into the fetch error: net/http quotes a Location that does not
+// parse whole, and the error was kept because the endpoint's own host
+// matched. Every error in the chain is read, to the bottom, together with the
+// predicate of a fetch that a redirect with a login let succeed.
+func TestAttestKeepsRedirectCredentialsOutOfJWKSErrorAndPredicate(t *testing.T) {
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwks := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &privKey.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"}}}
+	keys := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(jwks) }))
+	defer keys.Close()
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: privKey}, (&jose.SignerOptions{}).WithHeader(jose.HeaderKey("kid"), "k1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := josejwt.Signed(signer).Claims(josejwt.Claims{Subject: "s"}).CompactSerialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		location, secret string
+		fails            bool
+	}{
+		{"http://ci:p13secret-badport@host:bad/keys", "p13secret-badport", true},
+		{strings.Replace(keys.URL, "http://", "http://ci:p13secret-login@", 1) + "/keys", "p13secret-login", false},
+	} {
+		redirect := httptest.NewServer(http.RedirectHandler(tc.location, http.StatusFound))
+		a := New(WithToken(raw), WithJWKSUrl(redirect.URL+"/keys"))
+		err := a.Attest(nil)
+		redirect.Close()
+		if (err != nil) != tc.fails {
+			t.Fatalf("redirect to %s: Attest error = %v", tc.location, err)
+		}
+		predicate, marshalErr := json.Marshal(a)
+		if marshalErr != nil && !tc.fails {
+			t.Fatal(marshalErr)
+		}
+		signed := string(predicate)
+		for e := err; e != nil; e = errors.Unwrap(e) {
+			signed += "\n" + e.Error()
+		}
+		if strings.Contains(signed, tc.secret) || strings.Contains(signed, "ci:") {
+			t.Errorf("redirect to %s: the error chain or predicate carries its userinfo:\n%s", tc.location, signed)
+		}
 	}
 }
