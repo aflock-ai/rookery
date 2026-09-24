@@ -188,6 +188,12 @@ type bundleSummary struct {
 	// Policy.TimestampAuthorities so the generated policy is self-contained
 	// and verifies without manual patching.
 	tsaRoots []tsaRoot
+
+	// inventoryGaps names each product/material inventory this bundle's
+	// signed attestations commit to but did not carry (e.g. "material
+	// inventory omitted", the stock compact `cilock run` output). Edges into
+	// or out of this step cannot be inferred; see checkInventoryGaps.
+	inventoryGaps []string
 }
 
 // tsaRoot is one timestamp-authority trust anchor recovered from a bundle's
@@ -537,6 +543,24 @@ func collectAttestationDigests(a bundleInnerAttestation, sidecars []sidecarSumma
 	return nil
 }
 
+// inventoryUnavailableError marks a product or material attestation whose
+// producer signed that it OMITTED the per-file inventory (a compact build).
+// The signed Merkle root is still there, so the attestation's TYPE is known;
+// only the digests needed for cross-step edges are missing.
+// Whether that matters depends on how many steps are being generated, which
+// the envelope reader cannot know, so it is recorded on the summary and
+// judged in buildStarterPolicy.
+type inventoryUnavailableError struct {
+	attestationType string
+	kind            string
+	state           string
+}
+
+func (e *inventoryUnavailableError) Error() string {
+	return fmt.Sprintf("%s: required %s inventory is %s or unavailable; cannot infer artifact edges",
+		e.attestationType, e.kind, e.state)
+}
+
 func collectInventoryDigests(a bundleInnerAttestation, kind string, sink map[string]struct{}, inventories func(string) ([]byte, bool)) error {
 	ref := a.Attestation.Inventory
 	pred := a.Attestation
@@ -551,7 +575,14 @@ func collectInventoryDigests(a bundleInnerAttestation, kind string, sink map[str
 	if ref.State == fileinventory.StateDetached && inventories != nil {
 		body, found = inventories(ref.Digest)
 	}
-	if ref.State == fileinventory.StateOmitted || !found {
+	// Omitted is the producer's SIGNED statement that it withheld the
+	// inventory (the stock compact build): a known gap, judged per policy in
+	// checkInventoryGaps. A detached inventory that cannot be found was
+	// promised and is missing, which stays a hard refusal here.
+	if ref.State == fileinventory.StateOmitted {
+		return &inventoryUnavailableError{attestationType: a.Type, kind: kind, state: ref.State}
+	}
+	if !found {
 		return fmt.Errorf("%s: required %s inventory is %s or unavailable; cannot infer artifact edges", a.Type, kind, ref.State)
 	}
 	entries, err := fileinventory.Verify(ref, body, kind, pred.MerkleRoot, pred.TreeSize)
@@ -604,9 +635,15 @@ func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix s
 	innerTypes := make([]string, 0, len(stmt.Predicate.Attestations))
 	productDigests := make(map[string]struct{})
 	materialDigests := make(map[string]struct{})
+	var inventoryGaps []string
 	for _, a := range stmt.Predicate.Attestations {
 		innerTypes = append(innerTypes, a.Type)
 		if err := collectAttestationDigests(a, sidecars, productDigests, materialDigests, inventories); err != nil {
+			var unavailable *inventoryUnavailableError
+			if errors.As(err, &unavailable) {
+				inventoryGaps = append(inventoryGaps, unavailable.kind+" inventory "+unavailable.state)
+				continue
+			}
 			return bundleSummary{}, fmt.Errorf("%s: %w", nameHint, err)
 		}
 	}
@@ -629,6 +666,7 @@ func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix s
 		productDigests:     productDigests,
 		materialDigests:    materialDigests,
 		tsaRoots:           tsas,
+		inventoryGaps:      inventoryGaps,
 	}, nil
 }
 
@@ -964,7 +1002,76 @@ func deriveStepName(path string) string {
 // placeholder publickeys entry with empty Key material — the policy
 // file will still validate-as-JSON but fail signature verification
 // until the user fills in the PEM.
+// commandRunSucceededRego is attached to every command-run attestation a
+// starter policy requires. Requiring only that the attestation EXISTS admits
+// evidence of a failed run, which fails open for the most common goal ("the
+// tests pass"): a scratch-signed starter policy verified a `false` run. The
+// rule is guarded so a missing, null or non-numeric exit code is a refusal,
+// never an undefined comparison that denies nothing. RegoV0, as the verifier
+// parses it.
+var commandRunSucceededRego = policy.RegoPolicy{
+	Name: "command-succeeded",
+	Module: []byte(`package commandrun_succeeded
+
+readable_exit { is_number(input.exitcode) }
+
+deny[msg] {
+	not readable_exit
+	msg := "unreadable evidence: command-run has no numeric exitcode"
+}
+
+deny[msg] {
+	readable_exit
+	input.exitcode != 0
+	msg := sprintf("wrapped command exited %v, not 0", [input.exitcode])
+}
+`),
+}
+
+// checkInventoryGaps decides what a missing file inventory costs. One step has
+// no cross-step artifact edges to infer, so the gap is reported and the policy
+// is generated. With several steps, a missing inventory could hide an
+// artifactsFrom edge, and a starter policy missing an edge is weaker than the
+// evidence supports, so generation refuses and names every step to re-run.
+func checkInventoryGaps(stderr io.Writer, summaries []bundleSummary) error {
+	var missing []string
+	for _, s := range summaries {
+		if len(s.inventoryGaps) == 0 {
+			continue
+		}
+		missing = append(missing, fmt.Sprintf("%s (%s)", s.stepName, strings.Join(s.inventoryGaps, ", ")))
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if len(summaries) == 1 {
+		_, _ = fmt.Fprintf(stderr, "note: step %s: one step has no cross-step edges to infer, so the policy is generated without them\n", missing[0])
+		return nil
+	}
+	return fmt.Errorf("cannot infer artifact edges between steps: %s. Re-run each named step with "+
+		"--material-manifest so its material inventory is retained, or generate each step's policy on its own",
+		strings.Join(missing, "; "))
+}
+
+// stepAttestations lists the attestations a generated step requires. Every
+// command-run attestation also carries commandRunSucceededRego, so the
+// starter policy never admits evidence of a wrapped command that failed.
+func stepAttestations(predicateTypes []string) []policy.Attestation {
+	atts := make([]policy.Attestation, 0, len(predicateTypes))
+	for _, t := range predicateTypes {
+		att := policy.Attestation{Type: t}
+		if strings.Contains(t, "/attestations/command-run/") {
+			att.RegoPolicies = []policy.RegoPolicy{commandRunSucceededRego}
+		}
+		atts = append(atts, att)
+	}
+	return atts
+}
+
 func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map[string][]byte, expiresIn time.Duration) (*policy.Policy, error) {
+	if err := checkInventoryGaps(stderr, summaries); err != nil {
+		return nil, err
+	}
 	expires := time.Now().UTC().Add(expiresIn)
 	p := &policy.Policy{
 		Expires:              metav1.NewTime(expires),
@@ -993,10 +1100,7 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 
 		if s.outerPredicateType == "" || s.outerPredicateType == collectionPredicateURI {
 			// Collection envelope → a Step.
-			atts := make([]policy.Attestation, 0, len(s.predicateTypes))
-			for _, t := range s.predicateTypes {
-				atts = append(atts, policy.Attestation{Type: t})
-			}
+			atts := stepAttestations(s.predicateTypes)
 			if _, dup := p.Steps[s.stepName]; dup {
 				return nil, fmt.Errorf("duplicate step name %q (two bundles with the same basename — pass --step-prefix or rename inputs)", s.stepName)
 			}
