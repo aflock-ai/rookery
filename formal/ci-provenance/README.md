@@ -51,6 +51,31 @@ the interface in `docs/design/cilockd/cilockd.md` (PR #9042) and say so.
 | Subject binding | `provenance_subject_is_product_digest`, `seed_match_binds_product` | product attestor is the only producer; no other `file:` subject | proved, algorithm by algorithm |
 | Subject binding, broken assumptions | `file_key_collision_overwrites`, `second_producer_overwrites`, `value_match_crosses_algorithms` | | refuted |
 
+## SLSA L3 through the isolated provenance workflow (`SlsaL3Workflow.lean`)
+
+Designed, not implemented. `l3Accept` is the reference for
+`cilock verify --slsa-level 3`. The adversary controls every step and input of
+the caller workflow, any trigger event, and tags in the builder repository.
+
+| Claim | Theorem | Assumptions | Status |
+| --- | --- | --- | --- |
+| Accepted ⇒ signer is the pinned workflow commit on a hosted runner, writer-triggered; builder.id, repo, commit and run are its certificate's; every subject is in a build collection of the same run, repo and commit | `l3_sound`, `l3_signer_not_controlled` | trusted roots' CAs issue only for real jobs; GitHub event semantics | proved |
+| Platform Fulcio (default) / public Sigstore (option) | `l3_sound_platform`, `l3_sound_public` | that root's CA honest | proved |
+| Tag-pinned reusable workflow | `tag_pinned_swapped` | | refuted: the moved tag's code signs, accepted |
+| Caller inputs flow into builder/source fields | `caller_inputs_into_fields` | | refuted unless the verifier cross-checks every field against the certificate |
+| Outputs of another run mixed in | `other_run_outputs_mixed_in` | | refuted unless subjects are linked by run, repo and commit |
+| `pull_request_target` / fork run | `pull_request_target_accepted` | | refuted unless the trigger is writer-only |
+| Inline L2 provenance accepted as L3 | `inline_l2_accepted_as_l3` | | refuted |
+| builder.id compared without the extension | `builder_id_without_extension` | | refuted |
+| Self-hosted runner chosen by the caller | `self_hosted_runner_accepted` | | refuted unless `RunnerEnvironment` is checked |
+| Trusting both roots | `both_roots_need_both` | | refuted unless both CAs are honest |
+
+The soundness theorem does not assume the provenance workflow's code is
+faithful: the verifier's cross-checks force every field it proves. The
+workflow's code matters for the claim that only it signed, so it must never run
+caller-supplied code. The `l3Accept` differential (`TestL3AcceptStubMatchesLeanModel`)
+is PENDING: it compares against a Go stub until the verifier exists.
+
 ## Binding to the Go
 
 - **Citations are hashed.** Every citation of code in this tree is

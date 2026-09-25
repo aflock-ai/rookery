@@ -3,6 +3,7 @@ import CiProvenance.Alps
 import CiProvenance.Slsa
 import CiProvenance.Subjects
 import CiProvenance.Verdict
+import CiProvenance.SlsaL3Workflow
 
 /-!
 # JSON evaluation of the model's decision functions
@@ -54,6 +55,46 @@ def renderNamed (m : Named DigestSet) : Json :=
   Json.arr <| m.toArray.map fun (n, ds) =>
     Json.arr #[Json.str n, Json.arr (ds.toArray.map fun (a, v) => Json.arr #[Json.str a, Json.str v])]
 
+def nat (j : Json) (k : String) : Except String Nat := do (← field j k).getNat?
+
+def event : String → Except String L3.Event
+  | "push" => pure .push
+  | "release" => pure .release
+  | "workflow_dispatch" => pure .workflowDispatch
+  | "pull_request" => pure .pullRequest
+  | "pull_request_target" => pure .pullRequestTarget
+  | "workflow_run" => pure .workflowRun
+  | e => throw s!"unknown event {e}"
+
+def root : String → Except String L3.Root
+  | "platform" => pure .platform
+  | "public-sigstore" => pure .publicSigstore
+  | r => throw s!"unknown root {r}"
+
+def cert (j : Json) : Except String L3.Cert := do
+  let x ← field j "ext"
+  return { root := ← root (← str j "root"),
+           ext := { signerPath := ← str x "buildSignerPath", signerRef := ← str x "buildSignerRef",
+                    signerDigest := ← str x "buildSignerDigest", sourceRepo := ← str x "sourceRepository",
+                    sourceDigest := ← str x "sourceDigest", runInvocation := ← nat x "runId",
+                    trigger := ← event (← str x "trigger"), hosted := ← bool x "hosted" } }
+
+def l3Case (j : Json) : Except String Bool := do
+  let p ← field j "policy"
+  let roots ← (← (← field p "roots").getArr?).toList.mapM fun r => do root (← r.getStr?)
+  let pol : L3.Policy := ⟨roots, ← str p "path", ← str p "sha"⟩
+  let e ← field j "evidence"
+  let s ← field e "stmt"
+  let bid ← pair (← field s "builderId")
+  let builds ← (← (← field e "builds").getArr?).toList.mapM fun b => do
+    return ({ cert := ← cert (← field b "cert"), subjects := ← strs b "subjects" } : L3.Collection)
+  let ev : L3.Evidence :=
+    { signer := ← cert (← field e "signer"),
+      stmt := { builderId := bid, repo := ← str s "repo", commit := ← str s "commit",
+                runId := ← nat s "runId", subjects := ← strs s "subjects" },
+      builds := builds }
+  return L3.l3Accept pol ev
+
 def evalCase (j : Json) : Except String Json := do
   match ← str j "fn" with
   | "verdict" =>
@@ -75,6 +116,8 @@ def evalCase (j : Json) : Except String Json := do
         trustedBuilderSigner := ← bool j "trustedBuilderSigner", timestamped := ← bool j "timestamped",
         ephemeralRunner := ← bool j "ephemeralRunner", subjects := [] }
     return Json.mkObj [("level", Json.str (deriveSlsa p).name)]
+  | "l3Accept" =>
+    return Json.mkObj [("accept", Json.bool (← l3Case j))]
   | other => throw s!"unknown fn {other}"
 
 def evalLine (line : String) : String :=

@@ -3,6 +3,7 @@ import CiProvenance.Slsa
 import CiProvenance.Subjects
 import CiProvenance.Verdict
 import CiProvenance.Actors
+import CiProvenance.SlsaL3Workflow
 
 /-! Axiom audit: every headline theorem must depend only on Lean's core
 axioms (propext, Quot.sound, Classical.choice). No `native_decide`. -/
@@ -58,3 +59,18 @@ open CiProvenance
 #print axioms positive_verdict_needs_complete_walk
 #print axioms detected_iff
 #print axioms verdict_never_unavailable
+-- SLSA L3 provenance workflow (designed, not implemented)
+open CiProvenance.L3 in #print axioms l3_sound
+open CiProvenance.L3 in #print axioms l3_signer_not_controlled
+open CiProvenance.L3 in #print axioms l3_sound_platform
+open CiProvenance.L3 in #print axioms l3_sound_public
+open CiProvenance.L3 in #print axioms honest_accepted
+open CiProvenance.L3 in #print axioms honest_world_producible
+open CiProvenance.L3 in #print axioms tag_pinned_swapped
+open CiProvenance.L3 in #print axioms caller_inputs_into_fields
+open CiProvenance.L3 in #print axioms other_run_outputs_mixed_in
+open CiProvenance.L3 in #print axioms pull_request_target_accepted
+open CiProvenance.L3 in #print axioms inline_l2_accepted_as_l3
+open CiProvenance.L3 in #print axioms builder_id_without_extension
+open CiProvenance.L3 in #print axioms self_hosted_runner_accepted
+open CiProvenance.L3 in #print axioms both_roots_need_both

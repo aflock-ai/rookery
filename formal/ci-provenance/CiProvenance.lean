@@ -6,3 +6,4 @@ import CiProvenance.Verdict
 import CiProvenance.Actors
 import CiProvenance.Eval
 import CiProvenance.Audit
+import CiProvenance.SlsaL3Workflow
