@@ -133,3 +133,39 @@ func TestBuildStarterPolicy_WiresEdgesAndQuietsWarning(t *testing.T) {
 		t.Errorf("warning should be suppressed once an edge is wired, got: %q", stderr.String())
 	}
 }
+
+// TestBuildStarterPolicy_RefusesMutuallyConsumingBundles: two bundles that
+// each consume the other's product would be wired into an artifactsFrom cycle
+// (a -> b -> a). `cilock policy validate` refuses that policy, and so does the
+// engine once #9813 lands, so the generator must not emit it. It refuses and
+// names the cycle rather than guess which step is really upstream.
+func TestBuildStarterPolicy_RefusesMutuallyConsumingBundles(t *testing.T) {
+	summaries := []bundleSummary{
+		{stepName: "a", outerPredicateType: collectionPredicateURI, productDigests: digestSet("pa"), materialDigests: digestSet("pb")},
+		{stepName: "b", outerPredicateType: collectionPredicateURI, productDigests: digestSet("pb"), materialDigests: digestSet("pa")},
+	}
+	var stderr bytes.Buffer
+	p, err := buildStarterPolicy(&stderr, summaries, map[string][]byte{}, time.Hour)
+	if err == nil {
+		t.Fatalf("mutually consuming bundles must be refused; got a.artifactsFrom=%v b.artifactsFrom=%v",
+			p.Steps["a"].ArtifactsFrom, p.Steps["b"].ArtifactsFrom)
+	}
+	for _, want := range []string{"artifactsFrom", "a -> b -> a"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should name the cycle (%q), got: %v", want, err)
+		}
+	}
+}
+
+// A three-bundle ring is a cycle too, not just a mutual pair.
+func TestBuildStarterPolicy_RefusesThreeBundleRing(t *testing.T) {
+	summaries := []bundleSummary{
+		{stepName: "a", outerPredicateType: collectionPredicateURI, productDigests: digestSet("pa"), materialDigests: digestSet("pc")},
+		{stepName: "b", outerPredicateType: collectionPredicateURI, productDigests: digestSet("pb"), materialDigests: digestSet("pa")},
+		{stepName: "c", outerPredicateType: collectionPredicateURI, productDigests: digestSet("pc"), materialDigests: digestSet("pb")},
+	}
+	var stderr bytes.Buffer
+	if _, err := buildStarterPolicy(&stderr, summaries, map[string][]byte{}, time.Hour); err == nil || !strings.Contains(err.Error(), "a -> c -> b -> a") {
+		t.Fatalf("a three-bundle ring must be refused naming the cycle, got: %v", err)
+	}
+}

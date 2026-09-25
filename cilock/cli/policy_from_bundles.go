@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1212,6 +1213,18 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 	edgesEmitted := wireProvenanceEdges(p, summaries)
 	warnMissingProvenanceEdges(stderr, p, edgesEmitted)
 
+	// Digest overlap can wire bundles that consume each other's products into
+	// an artifactsFrom cycle. `cilock policy validate` refuses that shape, and
+	// so does the verifier (#9813), so the generator refuses it here rather
+	// than hand the operator a policy that can never verify. It does not
+	// guess which step is really upstream.
+	if cycle := artifactsFromCycle(p); cycle != "" {
+		return nil, fmt.Errorf("bundles consume each other's products, which would wire an artifactsFrom cycle %s; remove one of the bundles or edit the generated artifactsFrom by hand", cycle)
+	}
+	if err := p.Validate(); err != nil {
+		return nil, fmt.Errorf("generated policy does not validate: %w", err)
+	}
+
 	// A cert-signed (keyless) policy with no timestampauthorities[] cannot
 	// establish proof-of-signing-time for short-lived leaves and WILL fail
 	// verify. We recover the TSA from the bundle's RFC3161 token above; warn
@@ -1327,6 +1340,47 @@ func wireProvenanceEdges(p *policy.Policy, summaries []bundleSummary) int {
 		emitted += len(from)
 	}
 	return emitted
+}
+
+// artifactsFromCycle returns the first artifactsFrom cycle in step-name order,
+// rendered as "a -> b -> a" (each arrow reads "consumes the products of"), or
+// "" when there is none.
+func artifactsFromCycle(p *policy.Policy) string {
+	names := make([]string, 0, len(p.Steps))
+	for name := range p.Steps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	state := map[string]int{} // 0 unvisited, 1 on the current path, 2 done
+	var path []string
+	var visit func(name string) string
+	visit = func(name string) string {
+		state[name] = 1
+		path = append(path, name)
+		for _, dep := range p.Steps[name].ArtifactsFrom {
+			switch state[dep] {
+			case 1:
+				start := slices.Index(path, dep)
+				return strings.Join(append(append([]string(nil), path[start:]...), dep), " -> ")
+			case 0:
+				if cycle := visit(dep); cycle != "" {
+					return cycle
+				}
+			}
+		}
+		state[name] = 2
+		path = path[:len(path)-1]
+		return ""
+	}
+	for _, name := range names {
+		if state[name] == 0 {
+			if cycle := visit(name); cycle != "" {
+				return cycle
+			}
+		}
+	}
+	return ""
 }
 
 // digestSetsOverlap reports whether any digest in a is also in b. Iterates the
