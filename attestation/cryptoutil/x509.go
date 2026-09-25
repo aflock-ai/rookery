@@ -30,25 +30,32 @@ type X509Verifier struct {
 	intermediates []*x509.Certificate
 	verifier      Verifier
 	trustedTime   time.Time
+	// ctRoots are CT trust roots beyond the always-present Sigstore
+	// public-good root (see sct.go).
+	ctRoots []CTTrustRoot
 }
 
 // ErrCACertificateAsLeaf is returned when the certificate presented as the
 // signer is a CA (BasicConstraints cA=TRUE).
 var ErrCACertificateAsLeaf = errors.New("signing certificate is a CA certificate; a CA is never a signing leaf")
 
-func NewX509Verifier(cert *x509.Certificate, intermediates, roots []*x509.Certificate, trustedTime time.Time) (*X509Verifier, error) {
+func NewX509Verifier(cert *x509.Certificate, intermediates, roots []*x509.Certificate, trustedTime time.Time, opts ...X509VerifierOption) (*X509Verifier, error) {
 	verifier, err := NewVerifier(cert.PublicKey)
 	if err != nil {
 		return nil, err
 	}
 
-	return &X509Verifier{
+	v := &X509Verifier{
 		cert:          cert,
 		roots:         roots,
 		intermediates: intermediates,
 		verifier:      verifier,
 		trustedTime:   trustedTime,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(v)
+	}
+	return v, nil
 }
 
 func (v *X509Verifier) KeyID() (string, error) {
@@ -73,23 +80,34 @@ func (v *X509Verifier) Verify(body io.Reader, sig []byte) error {
 	if err := v.checkNotCA(); err != nil {
 		return err
 	}
-	rootPool := certificatesToPool(v.roots)
-	intermediatePool := certificatesToPool(v.intermediates)
-	if _, err := v.cert.Verify(x509.VerifyOptions{
+	chains, err := v.verifyChain()
+	if err != nil {
+		return err
+	}
+	// A CT-logging CA's leaf must carry an SCT that verifies (#10032).
+	ctRoots, err := v.ctTrustRoots()
+	if err != nil {
+		return err
+	}
+	if err := checkCertificateTransparency(v.cert, chains, ctRoots); err != nil {
+		return err
+	}
+
+	return v.verifier.Verify(body, sig)
+}
+
+func (v *X509Verifier) verifyChain() ([][]*x509.Certificate, error) {
+	return v.cert.Verify(x509.VerifyOptions{
 		CurrentTime:   v.trustedTime,
-		Roots:         rootPool,
-		Intermediates: intermediatePool,
+		Roots:         certificatesToPool(v.roots),
+		Intermediates: certificatesToPool(v.intermediates),
 		// Attestation/signing leaves are code-signing certs (our Fulcio CA
 		// stamps ExtKeyUsageCodeSigning). Require it so a cert chaining to a
 		// trusted root but issued for another purpose (e.g. TLS serverAuth)
 		// can't be substituted on the signature path. A leaf with no EKU
 		// extension stays valid (Go treats an absent EKU as unrestricted).
 		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
-	}); err != nil {
-		return err
-	}
-
-	return v.verifier.Verify(body, sig)
+	})
 }
 
 func (v *X509Verifier) BelongsToRoot(root *x509.Certificate) error {

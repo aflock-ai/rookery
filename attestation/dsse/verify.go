@@ -80,6 +80,10 @@ type verificationOptions struct {
 	// caller that knowingly accepts long-lived, non-Fulcio certs without a TSA
 	// should turn this on via VerifyWithCurrentTimeFallback().
 	allowCurrentTimeFallback bool
+	// ctTrustRoots are Certificate Transparency trust roots added to the
+	// Sigstore public-good root every cert-based signature is checked
+	// against (cryptoutil.WithCTTrustRoots, #10032).
+	ctTrustRoots []cryptoutil.CTTrustRoot
 }
 
 type VerificationOption func(*verificationOptions)
@@ -129,6 +133,15 @@ func VerifyWithTimestampVerifiers(verifiers ...timestamp.TimestampVerifier) Veri
 func VerifyWithCurrentTimeFallback() VerificationOption {
 	return func(vo *verificationOptions) {
 		vo.allowCurrentTimeFallback = true
+	}
+}
+
+// VerifyWithCTTrustRoots adds CT-logging CAs and their logs. A leaf chaining
+// through one of these CAs must embed an SCT that verifies against one of its
+// logs. The Sigstore public-good root is always present and needs no option.
+func VerifyWithCTTrustRoots(roots ...cryptoutil.CTTrustRoot) VerificationOption {
+	return func(vo *verificationOptions) {
+		vo.ctTrustRoots = append(vo.ctTrustRoots, roots...)
 	}
 }
 
@@ -255,12 +268,12 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 						// Preserve the same-CN/different-key trust diagnostic on this
 						// failure path too (diagnostic-only; never flips a verdict).
 						recordMismatch(detectTrustNameKeyMismatch(artifactIssuerChain, policyTrusted, false))
-						if verifier, verr := cryptoutil.NewX509Verifier(cert, sigIntermediates, options.roots, time.Time{}); verr == nil && verifier != nil {
+						if verifier, verr := cryptoutil.NewX509Verifier(cert, sigIntermediates, options.roots, time.Time{}, cryptoutil.WithCTTrustRoots(options.ctTrustRoots...)); verr == nil && verifier != nil {
 							checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier, Error: ErrNoTimestamp{}})
 						} else {
 							log.Debugf("failed to create x509 verifier for no-timestamp rejection: %v", verr)
 						}
-					} else if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, time.Now()); err == nil {
+					} else if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, time.Now(), options.ctTrustRoots); err == nil {
 						checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier})
 						verifiedKeyIDs[verifierKeyID(verifier)] = struct{}{}
 					} else if verifier != nil {
@@ -306,7 +319,7 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 							}
 							fmt.Fprintf(os.Stderr, "[dsse-verify] TSA verified, timestamp=%s\n", tsTime.Format(time.RFC3339))
 
-							if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, tsTime); err == nil {
+							if verifier, err := verifyX509Time(cert, sigIntermediates, options.roots, pae, sig.Signature, tsTime, options.ctTrustRoots); err == nil {
 								// NOTE: do we not want to save all the passed verifiers?
 								passedVerifier = verifier
 								passedTimestampVerifiers = append(passedTimestampVerifiers, timestampVerifier)
@@ -380,8 +393,8 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 	return checkedVerifiers, nil
 }
 
-func verifyX509Time(cert *x509.Certificate, sigIntermediates, roots []*x509.Certificate, pae, sig []byte, trustedTime time.Time) (cryptoutil.Verifier, error) {
-	verifier, err := cryptoutil.NewX509Verifier(cert, sigIntermediates, roots, trustedTime)
+func verifyX509Time(cert *x509.Certificate, sigIntermediates, roots []*x509.Certificate, pae, sig []byte, trustedTime time.Time, ctRoots []cryptoutil.CTTrustRoot) (cryptoutil.Verifier, error) {
+	verifier, err := cryptoutil.NewX509Verifier(cert, sigIntermediates, roots, trustedTime, cryptoutil.WithCTTrustRoots(ctRoots...))
 	if err != nil {
 		return nil, err
 	}
