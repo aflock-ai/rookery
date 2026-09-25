@@ -1028,6 +1028,71 @@ deny[msg] {
 `),
 }
 
+// govulncheckReachableRego is attached to every govulncheck attestation a
+// starter policy requires. It blocks on vulnerabilities the scanned code can
+// reach, the reading the catalog documents for this attestor: findings without
+// a call trace are advisory. Without a rule, an agent wrote its own that
+// counted every finding, and three imported-but-unreachable advisories refused
+// every push under an activated policy (fullblind49). Reachability exists only
+// in a symbol-level scan, and a summary that is unreadable or contradicts its
+// own findings list is a refusal. A deny message reads only fields its rule
+// already guarded: an undefined field inside sprintf makes the whole rule
+// undefined, which silently drops the denial. RegoV0, as the verifier parses it.
+var govulncheckReachableRego = policy.RegoPolicy{
+	Name: "govulncheck-no-reachable",
+	Module: []byte(`package govulncheck_no_reachable
+
+findings = [] { input.summary.findings == null }
+
+findings = fs {
+	is_array(input.summary.findings)
+	fs := input.summary.findings
+}
+
+readable {
+	is_number(input.summary.reachableCount)
+	is_number(input.summary.unreachableCount)
+	input.summary.reachableCount >= 0
+	input.summary.unreachableCount >= 0
+	input.summary.scanLevel == "symbol"
+	is_array(findings)
+}
+
+flagged(f) { is_boolean(f.reachable) }
+
+deny[msg] {
+	not readable
+	msg := "unreadable evidence: govulncheck needs a symbol-level scan with numeric counts and a findings list"
+}
+
+deny[msg] {
+	readable
+	input.summary.reachableCount > 0
+	msg := sprintf("govulncheck: %v vulnerabilities reachable from this code", [input.summary.reachableCount])
+}
+
+deny[msg] {
+	readable
+	f := findings[_]
+	not flagged(f)
+	msg := "unreadable evidence: a govulncheck finding has no reachable flag"
+}
+
+deny[msg] {
+	readable
+	f := findings[_]
+	f.reachable == true
+	msg := sprintf("govulncheck: %v is reachable from this code", [object.get(f, "osvId", "a finding with no osvId")])
+}
+
+deny[msg] {
+	readable
+	count(findings) != input.summary.reachableCount + input.summary.unreachableCount
+	msg := "inconsistent evidence: govulncheck counts disagree with its findings list"
+}
+`),
+}
+
 // checkInventoryGaps decides what a missing file inventory costs. One step has
 // no cross-step artifact edges to infer, so the gap is reported and the policy
 // is generated. With several steps, a missing inventory could hide an
@@ -1055,13 +1120,18 @@ func checkInventoryGaps(stderr io.Writer, summaries []bundleSummary) error {
 
 // stepAttestations lists the attestations a generated step requires. Every
 // command-run attestation also carries commandRunSucceededRego, so the
-// starter policy never admits evidence of a wrapped command that failed.
+// starter policy never admits evidence of a wrapped command that failed, and
+// every govulncheck attestation carries govulncheckReachableRego, so it blocks
+// on call-graph-reachable findings only.
 func stepAttestations(predicateTypes []string) []policy.Attestation {
 	atts := make([]policy.Attestation, 0, len(predicateTypes))
 	for _, t := range predicateTypes {
 		att := policy.Attestation{Type: t}
 		if strings.Contains(t, "/attestations/command-run/") {
 			att.RegoPolicies = []policy.RegoPolicy{commandRunSucceededRego}
+		}
+		if strings.Contains(t, "/attestations/govulncheck/") {
+			att.RegoPolicies = []policy.RegoPolicy{govulncheckReachableRego}
 		}
 		atts = append(atts, att)
 	}
