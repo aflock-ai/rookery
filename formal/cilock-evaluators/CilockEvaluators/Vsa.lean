@@ -122,7 +122,7 @@ theorem emit_sound (hash : String → Digest) (r : Run) (v : Vsa) (h : emit hash
 
 /-! ## Consumption -/
 
--- cite: attestation/policy/policy.go:1579-1579 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
+-- cite: attestation/policy/policy.go:1807-1807 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
 /-- A candidate VSA envelope in a downstream verify. `sigOk`: its DSSE
 signature verified against the downstream policy's roots/keys, naming
 `signer` (source/verified.go; policy.go). -/
@@ -132,11 +132,12 @@ structure Candidate where
   sigOk : Bool
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/policy.go:1579-1596 sha256:832e182f1533d64bb506d41810e1a0de826413a9c838bb69c8812fe316aec1c3
+-- cite: attestation/policy/policy.go:1807-1818 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
 /-- The consumer's view of a candidate as a `Gate.Envelope`: signature errors
 and subject-unbound both surface as envelope errors (policy.go);
-no commit binding; the consumer's Rego over the predicate; its AI policies
-(none, for the VSA gates modelled here). -/
+no commit binding and no declared `commitSubject`, so `commitUnbound` is
+false; the consumer's Rego over the predicate; its AI policies (none, for the
+VSA gates modelled here). -/
 def toEnvelope (allowed : VerifierIdentity → Bool) (requested : Subject) (consumer : Vsa → Verdict)
     (c : Candidate) : Gate.Envelope :=
   { sigErrors := !(c.sigOk && c.vsa.subjects.contains requested)
@@ -183,9 +184,9 @@ structure World where
 * `digestInjective`: collision resistance of the digest over exact bytes.
 
 AI provider honesty is NOT assumed anywhere: the AI side is modelled as
-fail-closed on every answer shape (Ai.lean), and the only provider-side
-premise, `Ai.Contract`, is about the in-process provider code and is proved
-for both in-tree providers. -/
+fail-closed on every answer shape (Ai.lean), and `Ai.Contract`, once a
+premise about the in-process provider code, is now enforced by
+`EvaluateAIPolicyWithProvider` for any provider (`Ai.checked_contract`). -/
 structure Assumptions (hash : String → Digest) (W : World) (allowed : VerifierIdentity → Bool) : Prop where
   unforgeable : ∀ c : Candidate, c.sigOk = true → W.produced c.signer c.vsa
   honestVerifier : ∀ id v, allowed id = true → W.produced id v → ∃ r, emit hash r = some v

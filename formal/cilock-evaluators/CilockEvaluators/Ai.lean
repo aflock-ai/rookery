@@ -1,14 +1,17 @@
--- cite: attestation/policy/step.go:930-955 sha256:97598156781efbb660f695af698b697563d26c089a6f6122458b000a417a935d
--- cite: attestation/policy/policy.go:1644-1677 sha256:141e115a6200a205ec3a9a4a7166a32bc1b17c1a61c5cfbbbbd81be63de056d3
+-- cite: attestation/policy/step.go:975-1008 sha256:4a82bc8ba27e36910bf5d1f993c9c14cb617eef4f12bfa663965a4b21e53306a
+-- cite: attestation/policy/ai.go:185-258 sha256:db02941e59cd22748f299c2103aa1dadbd3f00d4d1e85aa6c33086e3ca5c08e7
+-- cite: attestation/policy/policy.go:1886-1919 sha256:141e115a6200a205ec3a9a4a7166a32bc1b17c1a61c5cfbbbbd81be63de056d3
 -- cite: attestation/policy/ai_validate.go:176-187 sha256:392afbf6e077d0574a273d2fbc2893ef290ea0e724e7c64ccf3def0e2c93b428
 -- cite: attestation/policy/ai_validate.go:164-167 sha256:447e8d7f26779c15fb53befd274c89c3cdd67ff177d6e7617dc4233c128cb16e
 -- cite: attestation/policy/ai_jev.go:381-383 sha256:45be6524a4eee9715468946f5aadc435d43515c91229543ecf23b2fcd24fd4b3
 -- cite: attestation/policy/ai_jev.go:471-473 sha256:2fc4e630d5beab7962fd0845f1a28cead7cfad985fdd19b2036fe79345a6f27f
 /-
   CilockEvaluators.Ai: AI policies (attestation/policy/ai.go, ai_validate.go,
-  ai_decode.go, ai_jev.go, ai_jev_projection.go) and the way the step gate
-  turns a provider's answer into pass/fail (step.go,
-  policy.go).
+  ai_decode.go, ai_jev.go, ai_jev_projection.go), the checks
+  `EvaluateAIPolicyWithProvider` holds every provider to (ai.go: one answer
+  per policy, status exactly PASS or FAIL, answered by the policy's own
+  model), and the way the step gate turns the result into pass/fail
+  (step.go, policy.go).
 
   Numbers: Go uses float64. After validation every bound and every answer is
   finite and inside a closed range (ai_validate.go;
@@ -42,7 +45,7 @@ def ModelName.isPinned : ModelName → Bool
   | .pinned .. => true
   | .other _ => false
 
--- cite: attestation/policy/step.go:179-235 sha256:2d9a13e243a3d230b979ad187bf5b1280daea488c66073ccd1d0d9a504bfe27d
+-- cite: attestation/policy/step.go:224-280 sha256:2d9a13e243a3d230b979ad187bf5b1280daea488c66073ccd1d0d9a504bfe27d
 /-- The typed-decision body (step.go). Instructions and criteria are
 not modelled; their emptiness checks only add refusals. -/
 inductive Decision where
@@ -51,7 +54,7 @@ inductive Decision where
   | score (levels : Nat) (minS maxS : Option Num)
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/step.go:163-177 sha256:a12c36482dcf11d53827b9095ab7f45e7422abcee02011ae9b4c106d9891c803
+-- cite: attestation/policy/step.go:208-222 sha256:a12c36482dcf11d53827b9095ab7f45e7422abcee02011ae9b4c106d9891c803
 /-- `AiPolicy` (step.go). `prompt` and `decision` are both present in
 the Go struct; validation requires exactly one. -/
 structure AiPolicy where
@@ -139,30 +142,142 @@ structure Outcome where
   err : Option ErrKind
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/ai.go:127-160 sha256:aaddbdf45763b968c4fdcd7d6d346ec3be3931af7de448dc814d396a04276cd9
--- cite: attestation/policy/step.go:930-955 sha256:97598156781efbb660f695af698b697563d26c089a6f6122458b000a417a935d
--- cite: attestation/policy/policy.go:1644-1677 sha256:141e115a6200a205ec3a9a4a7166a32bc1b17c1a61c5cfbbbbd81be63de056d3
+-- cite: attestation/policy/ai.go:237-258 sha256:ec6fe684a211cce927dfb1881a2fbffee4c01828ec5a1aa88b6253e334118177
+/-- `checkAiResponseSchema` then `pinResolvedModel` for one answer (ai.go):
+a status other than exactly `PASS`/`FAIL` is an ordinary error; an answer
+whose recorded model is empty or is not the policy's model is a refusal
+(`model_mismatch`, #9871). -/
+def respCheck (p : AiPolicy) (r : Response) : Option ErrKind :=
+  if r.status != "PASS" && r.status != "FAIL" then some .other
+  else if r.model == .other "" || r.model != p.model then some .refusal
+  else none
+
+/-- The first failing check, in policy order (ai.go). -/
+def firstErr : List (AiPolicy × Response) → Option ErrKind
+  | [] => none
+  | (p, r) :: rest =>
+    match respCheck p r with
+    | some k => some k
+    | none => firstErr rest
+
+-- cite: attestation/policy/ai.go:211-235 sha256:a262d736d351aef709e5c956de738733ceb7664cbf2990586976ba287ecc0d11
+-- cite: attestation/policy/ai.go:185-209 sha256:25eebc694dafaaa5d4f7e04993d4891f589600e09ae43fbb9e5a79cc9fcdf335
+/-- What `EvaluateAIPolicyWithProvider` makes of a provider's `(responses,
+error)` (`evaluateAiBatch`, ai.go): a provider error is returned as is; a
+response count other than one per policy is an error; otherwise the first
+answer that fails `respCheck` decides. The non-batch loop runs the same
+`respCheck` per answer inside `ExecuteAiPolicyWithProvider` (ai.go); see
+`ollama` below. -/
+def checked (pols : List AiPolicy) (out : Outcome) : Outcome :=
+  match out.err with
+  | some _ => out
+  | none =>
+    if out.rs.length != pols.length then ⟨out.rs, some .other⟩
+    else ⟨out.rs, firstErr (pols.zip out.rs)⟩
+
+-- cite: attestation/policy/ai.go:125-160 sha256:6e5f5e41abaff02ce2e2f43a270573f6880b835ec3f6bb2d73d2faa8670435b5
+-- cite: attestation/policy/step.go:975-1008 sha256:4a82bc8ba27e36910bf5d1f993c9c14cb617eef4f12bfa663965a4b21e53306a
+-- cite: attestation/policy/policy.go:1886-1919 sha256:141e115a6200a205ec3a9a4a7166a32bc1b17c1a61c5cfbbbbd81be63de056d3
 -- cite: attestation/policy/ai.go:128-130 sha256:35238ce2c72621baa8719b56b25575d0ce1e52e3c423e1569961c83ebbde7bad
 -- cite: attestation/policy/ai.go:132-134 sha256:e66e602b851109d805e1aadba90ada8bcf3fef0c38a734f8adc02e8008e6503f
--- cite: attestation/policy/step.go:931-934 sha256:bcea2270ab37fdbeedce0db5603b97fa9ad9459a06f3cd622a638d24f54d7578
--- cite: attestation/policy/step.go:941-941 sha256:faf86499b43ebfca580c98101f39f7bd075e889c49c9ad488f36c4661ea90cb7
--- cite: attestation/policy/policy.go:1656-1656 sha256:b5df317369278e4c97d65388cf629257780d657c6c30beb90869014422f1f73c
-/-- The gate: `EvaluateAIPolicyWithProvider` (ai.go) as consumed by the
-step gate (step.go) and the external gate (policy.go).
+-- cite: attestation/policy/step.go:976-979 sha256:bcea2270ab37fdbeedce0db5603b97fa9ad9459a06f3cd622a638d24f54d7578
+-- cite: attestation/policy/step.go:986-989 sha256:21db4e5d5f096d80bdfffbb1ac140aadfaf09d6ed1213f185ac3a45d45e7772f
+-- cite: attestation/policy/policy.go:1898-1898 sha256:b5df317369278e4c97d65388cf629257780d657c6c30beb90869014422f1f73c
+/-- The gate: `EvaluateAIPolicyWithProvider` (ai.go) over a provider's raw
+outcome `out`, as consumed by the step gate (step.go) and the external gate
+(policy.go).
 
 * no policies: pass (ai.go);
 * invalid set: error before any provider call (ai.go);
-* any provider error: rejected (step.go);
-* otherwise: rejected iff some response has status exactly `"FAIL"`
-  (step.go, policy.go). -/
+* the provider's outcome goes through `checked` (ai.go);
+* any error left after that: rejected (step.go);
+* otherwise: rejected iff some response is not exactly `"PASS"` (step.go,
+  #9820). The external gate rejects on `== "FAIL"` (policy.go); after
+  `checked` every status is `PASS` or `FAIL`, so the two agree
+  (`checked_contract`). -/
 def gate (pols : List AiPolicy) (out : Outcome) : Verdict :=
   if pols.isEmpty then .pass
   else if !validSet pols then .error
-  else match out.err with
+  else match (checked pols out).err with
     | some .refusal => .refused
     | some .denied => .deny
     | some .other => .error
-    | none => if out.rs.any (fun r => r.status == "FAIL") then .deny else .pass
+    | none => if (checked pols out).rs.any (fun r => r.status != "PASS") then .deny else .pass
+
+/-! ## The checks on their own -/
+
+theorem checked_rs (pols : List AiPolicy) (out : Outcome) : (checked pols out).rs = out.rs := by
+  unfold checked
+  split
+  · rfl
+  · split <;> rfl
+
+theorem checked_err_some (pols : List AiPolicy) (out : Outcome) (k : ErrKind)
+    (h : out.err = some k) : (checked pols out).err = some k := by
+  simp [checked, h]
+
+theorem respCheck_none (p : AiPolicy) (r : Response) (h : respCheck p r = none) :
+    (r.status = "PASS" ∨ r.status = "FAIL") ∧ r.model = p.model := by
+  unfold respCheck at h
+  by_cases hs : (r.status != "PASS" && r.status != "FAIL") = true
+  · simp [hs] at h
+  · simp only [hs, Bool.false_eq_true, ↓reduceIte] at h
+    by_cases hm : (r.model == .other "" || r.model != p.model) = true
+    · simp [hm] at h
+    · simp only [Bool.or_eq_true, bne_iff_ne, ne_eq, beq_iff_eq, not_or, Decidable.not_not] at hm
+      simp only [Bool.and_eq_true, bne_iff_ne, ne_eq, not_and, Decidable.not_not] at hs
+      refine ⟨?_, hm.2⟩
+      by_cases hp : r.status = "PASS"
+      · exact Or.inl hp
+      · exact Or.inr (hs hp)
+
+theorem firstErr_none (l : List (AiPolicy × Response)) (h : firstErr l = none) :
+    ∀ x ∈ l, respCheck x.1 x.2 = none := by
+  induction l with
+  | nil => intro x hx; cases hx
+  | cons y ys ih =>
+    obtain ⟨p, r⟩ := y
+    simp only [firstErr] at h
+    cases hc : respCheck p r with
+    | some k => rw [hc] at h; cases h
+    | none =>
+      rw [hc] at h
+      intro x hx
+      simp only [List.mem_cons] at hx
+      rcases hx with hx | hx
+      · subst hx; exact hc
+      · exact ih h x hx
+
+theorem mem_zip_right {α β : Type} (ps : List α) (rs : List β) (hl : rs.length = ps.length)
+    (r : β) (hr : r ∈ rs) : ∃ p, (p, r) ∈ ps.zip rs := by
+  induction ps generalizing rs with
+  | nil => cases rs with
+    | nil => cases hr
+    | cons _ _ => simp at hl
+  | cons p ps ih =>
+    cases rs with
+    | nil => cases hr
+    | cons r' rs =>
+      simp only [List.length_cons, Nat.add_right_cancel_iff] at hl
+      simp only [List.mem_cons] at hr
+      rcases hr with hr | hr
+      · subst hr; exact ⟨p, by simp⟩
+      · obtain ⟨q, hq⟩ := ih rs hl hr
+        exact ⟨q, by simp [hq]⟩
+
+/-- What a clean `checked` outcome guarantees, whatever the provider did:
+the provider returned no error, one response per policy, and each response
+passed `respCheck`. -/
+theorem checked_none (pols : List AiPolicy) (out : Outcome) (h : (checked pols out).err = none) :
+    out.err = none ∧ out.rs.length = pols.length ∧ ∀ x ∈ pols.zip out.rs, respCheck x.1 x.2 = none := by
+  unfold checked at h
+  split at h
+  · rename_i k hk; rw [hk] at h; cases h
+  · rename_i hn
+    split at h
+    · cases h
+    · rename_i hl
+      refine ⟨hn, by simpa using hl, firstErr_none _ h⟩
 
 /-! ## The gate on its own -/
 
@@ -170,8 +285,9 @@ def gate (pols : List AiPolicy) (out : Outcome) : Verdict :=
 the provider. -/
 theorem gate_pass_iff (pols : List AiPolicy) (out : Outcome) :
     gate pols out = .pass ↔
-      pols = [] ∨ (validSet pols = true ∧ out.err = none ∧ ∀ r ∈ out.rs, r.status ≠ "FAIL") := by
+      pols = [] ∨ (validSet pols = true ∧ (checked pols out).err = none ∧ ∀ r ∈ out.rs, r.status = "PASS") := by
   unfold gate
+  rw [checked_rs]
   cases pols with
   | nil => simp
   | cons p ps =>
@@ -180,18 +296,20 @@ theorem gate_pass_iff (pols : List AiPolicy) (out : Outcome) :
     | false => simp
     | true =>
       simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte, true_and]
-      cases he : out.err with
+      cases he : (checked (p :: ps) out).err with
       | some k => cases k <;> simp
       | none =>
-        simp only [List.any_eq_true, beq_iff_eq, true_and]
-        by_cases h : ∃ x ∈ out.rs, x.status = "FAIL"
+        simp only [List.any_eq_true, bne_iff_ne, ne_eq, true_and]
+        by_cases h : ∃ x ∈ out.rs, ¬ x.status = "PASS"
         · simp only [h, ↓reduceIte, reduceCtorEq, false_iff]
           intro hall
           obtain ⟨x, hx, hs⟩ := h
-          exact hall x hx hs
+          exact hs (hall x hx)
         · simp only [h, ↓reduceIte, true_iff]
-          intro r hr hs
-          exact h ⟨r, hr, hs⟩
+          intro r hr
+          by_cases hs : r.status = "PASS"
+          · exact hs
+          · exact absurd ⟨r, hr, hs⟩ h
 
 /-- Every provider error rejects: refusal, completed FAIL, anything else. -/
 theorem provider_error_rejects (pols : List AiPolicy) (out : Outcome) (k : ErrKind)
@@ -199,7 +317,7 @@ theorem provider_error_rejects (pols : List AiPolicy) (out : Outcome) (k : ErrKi
   intro h
   rcases (gate_pass_iff pols out).1 h with h | ⟨_, h, _⟩
   · exact hne h
-  · rw [he] at h; cases h
+  · rw [checked_err_some pols out k he] at h; cases h
 
 /-- A malformed policy set rejects before any provider call. -/
 theorem invalid_set_rejects (pols : List AiPolicy) (out : Outcome)
@@ -210,62 +328,84 @@ theorem invalid_set_rejects (pols : List AiPolicy) (out : Outcome)
   · rw [hv] at h; cases h
 
 /-- The provider contract: on a nil error, one response per policy, each
-`PASS` or `FAIL`. A premise about the in-process provider code, stated as a
-hypothesis and never built into `gate`; `ollama_contract` and `jev_contract`
-discharge it for the two providers in this package. -/
+`PASS` or `FAIL`. Until #9873 it was a premise about the provider code;
+`EvaluateAIPolicyWithProvider` now enforces it (`checked_contract`), and
+`ollama_contract` and `jev_contract` show the two in-tree providers honour
+it on their own. -/
 def Contract (pols : List AiPolicy) (out : Outcome) : Prop :=
   out.err = none →
     out.rs.length = pols.length ∧ ∀ r ∈ out.rs, r.status = "PASS" ∨ r.status = "FAIL"
 
-/-- E1/E2 for AI under the contract: a gate pass means one `PASS` per policy. -/
-theorem gate_pass_all_pass (pols : List AiPolicy) (out : Outcome)
-    (hc : Contract pols out) (h : gate pols out = .pass) :
-    pols = [] ∨ (out.rs.length = pols.length ∧ ∀ r ∈ out.rs, r.status = "PASS") := by
-  rcases (gate_pass_iff pols out).1 h with h | ⟨_, he, hnf⟩
-  · exact Or.inl h
-  · obtain ⟨hl, hs⟩ := hc he
-    refine Or.inr ⟨hl, fun r hr => ?_⟩
-    rcases hs r hr with h | h
-    · exact h
-    · exact absurd h (hnf r hr)
+/-- The checks establish the contract for ANY provider (ai.go, #9873). -/
+theorem checked_contract (pols : List AiPolicy) (out : Outcome) : Contract pols (checked pols out) := by
+  intro h
+  obtain ⟨_, hl, hx⟩ := checked_none pols out h
+  rw [checked_rs]
+  refine ⟨hl, fun r hr => ?_⟩
+  obtain ⟨p, hp⟩ := mem_zip_right pols out.rs hl r hr
+  exact (respCheck_none p r (hx (p, r) hp)).1
 
--- cite: attestation/policy/ai.go:205-321 sha256:596562b3262f05dd6198bcd5be6719c8fc4b5d8d9d9919820e1d636a07747b83
+/-- E1/E2 for AI, with no premise on the provider: a gate pass means one
+`PASS` per policy, each answered by that policy's own model (E5). -/
+theorem gate_pass_all_pass (pols : List AiPolicy) (out : Outcome) (h : gate pols out = .pass) :
+    pols = [] ∨ (out.rs.length = pols.length ∧ (∀ r ∈ out.rs, r.status = "PASS") ∧
+      ∀ x ∈ pols.zip out.rs, x.2.model = x.1.model) := by
+  rcases (gate_pass_iff pols out).1 h with h | ⟨_, he, hp⟩
+  · exact Or.inl h
+  · obtain ⟨_, hl, hx⟩ := checked_none pols out he
+    exact Or.inr ⟨hl, hp, fun x hmem => (respCheck_none x.1 x.2 (hx x hmem)).2⟩
+
+-- cite: attestation/policy/ai.go:260-388 sha256:141b38532424a8781deaf3e64613efefa40c2fcfcdae1682948cf7a387a7bb3f
 /-! ## The generative provider (`ollamaProvider`, ai.go) -/
 
--- cite: attestation/policy/ai.go:299-306 sha256:0284dabd8426d708333958d5b40e33596d4085690c7f48d7924d574b016a18f2
+-- cite: attestation/policy/ai.go:353-377 sha256:1fe08b12cdd4fa103ad90da9cae68621f8327985d4ba32aa8e970e9511a981d1
 /-- What the remote Ollama-compatible server sends back, abstracted:
-a transport failure, or a body whose `response` field decodes to a status
-(`none`: it does not decode, ai.go). `served` is the model the server
-actually ran; nothing in the client can see it. -/
+a transport failure (including a body that is not a JSON envelope), or an
+envelope whose `response` field decodes to a status (`none`: it does not
+decode, ai.go) and whose `model` member names `served`, the model that
+answered (`.other ""` when absent). -/
 inductive GenReply where
   | transport
   | body (status : Option String) (reason : String) (served : ModelName)
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/ai.go:225-231 sha256:ddc78bac1f94ab75536ba2c87db748a2fe1bdaa8a79147b8cf0f3b71f3444837
+-- cite: attestation/policy/ai.go:284-290 sha256:ddc78bac1f94ab75536ba2c87db748a2fe1bdaa8a79147b8cf0f3b71f3444837
 /-- `ollamaProvider.Evaluate` + `parseOllamaGenerateResponse` for one policy.
 `urlOk` abstracts `serverURL != ""` and `validateAIServerURL` (ai.go). -/
 def ollamaOne (urlOk : Bool) (p : AiPolicy) (reply : GenReply) : Response × Option ErrKind :=
-  -- cite: attestation/policy/ai.go:216-218 sha256:ae6976c4d86442367b4a20d4451c9516c0e6af6d537ec346780aa2e53454277b
+  -- cite: attestation/policy/ai.go:275-277 sha256:ae6976c4d86442367b4a20d4451c9516c0e6af6d537ec346780aa2e53454277b
   if p.decision.isSome then (.empty, some .other)                 -- ai.go
-  -- cite: attestation/policy/ai.go:225-231 sha256:ddc78bac1f94ab75536ba2c87db748a2fe1bdaa8a79147b8cf0f3b71f3444837
+  -- cite: attestation/policy/ai.go:284-290 sha256:ddc78bac1f94ab75536ba2c87db748a2fe1bdaa8a79147b8cf0f3b71f3444837
   else if !urlOk then (.empty, some .other)                       -- ai.go
-  -- cite: attestation/policy/ai.go:249-252 sha256:e89cf8ec9495bee30c408b5b52bab3f3ea1ef19aaba7c3e258c84915b93c8b4e
+  -- cite: attestation/policy/ai.go:308-311 sha256:e89cf8ec9495bee30c408b5b52bab3f3ea1ef19aaba7c3e258c84915b93c8b4e
   else if p.model = .other "" then (.empty, some .other)          -- ai.go
   else match reply with
-    -- cite: attestation/policy/ai.go:277-286 sha256:d425045aedf34ceabc50e4b19a2e035c1cc8aa33f9ed37e47340e4219a44bcca
+    -- cite: attestation/policy/ai.go:336-345 sha256:d425045aedf34ceabc50e4b19a2e035c1cc8aa33f9ed37e47340e4219a44bcca
     | .transport => (.empty, some .other)                         -- ai.go
-    -- cite: attestation/policy/ai.go:299-306 sha256:0284dabd8426d708333958d5b40e33596d4085690c7f48d7924d574b016a18f2
-    | .body none _ _ => (.empty, some .other)                     -- ai.go
-    | .body (some st) rsn _ =>
-      -- cite: attestation/policy/ai.go:308-310 sha256:9c7dff8882289da3222bec34990ddb5d2832acb35d9b9bf773f10115000a7f91
-      if st != "PASS" && st != "FAIL" then (.empty, some .other)  -- ai.go
-      else
-        -- cite: attestation/policy/ai.go:312-314 sha256:1188c9846e79c7259e11cf8f49221255c64e2a9c4ad5326f6b94f7ee13acf748
-        -- Model is the POLICY's model, never the server's (ai.go).
-        let r : Response := ⟨st, rsn, p.model, none⟩
-        -- cite: attestation/policy/ai.go:316-320 sha256:e6c77a0a4a1f1f7eb8a2a5e0a41b26289dc264d0dff522676a5a80135f9ad781
-        if st == "FAIL" then (r, some .denied) else (r, none)     -- ai.go
+    | .body st rsn served =>
+      -- cite: attestation/policy/ai.go:363-368 sha256:22df572aa734b4cadd4f0efae6ed62de0abd211f995a25041abcd1437004c23e
+      -- The server's model is checked BEFORE the answer is read (#9871).
+      if served != p.model then (.empty, some .refusal)          -- ai.go
+      else match st with
+      -- cite: attestation/policy/ai.go:370-373 sha256:15c54a51c269be0a974d40011b44e61c81c036f41c4361dcdfaeae2eed5e5069
+      | none => (.empty, some .other)                             -- ai.go
+      | some st =>
+        -- cite: attestation/policy/ai.go:375-377 sha256:9c7dff8882289da3222bec34990ddb5d2832acb35d9b9bf773f10115000a7f91
+        if st != "PASS" && st != "FAIL" then (.empty, some .other)  -- ai.go
+        else
+          -- cite: attestation/policy/ai.go:379-381 sha256:a7685da59aa3febacb300f6ee4b19cbef2c0803de26e5aa12999c191f0176483
+          -- Model is the server's resolved model, already equal to the policy's.
+          let r : Response := ⟨st, rsn, served, none⟩
+          -- cite: attestation/policy/ai.go:383-387 sha256:e6c77a0a4a1f1f7eb8a2a5e0a41b26289dc264d0dff522676a5a80135f9ad781
+          if st == "FAIL" then (r, some .denied) else (r, none)   -- ai.go
+
+-- cite: attestation/policy/ai.go:198-208 sha256:fd2a23e9efb483cb472e768d584c8dab4a1c3396841929fcc8cd75cf2d96de4d
+/-- `ExecuteAiPolicyWithProvider` (ai.go): a provider error is returned as is;
+a nil-error answer still goes through `respCheck`. -/
+def execOne (urlOk : Bool) (p : AiPolicy) (reply : GenReply) : Response × Option ErrKind :=
+  match ollamaOne urlOk p reply with
+  | (resp, some k) => (resp, some k)
+  | (resp, none) => (resp, respCheck p resp)
 
 -- cite: attestation/policy/ai.go:145-159 sha256:4e51baf6828bde9126ea469405ab653be4a79691c3f6c2a8f8da927ed9b82275
 /-- The non-batch loop of `EvaluateAIPolicyWithProvider` (ai.go):
@@ -273,7 +413,7 @@ append each result, stop at the first error. -/
 def ollama (urlOk : Bool) : List (AiPolicy × GenReply) → Outcome
   | [] => ⟨[], none⟩
   | (p, r) :: rest =>
-    match ollamaOne urlOk p r with
+    match execOne urlOk p r with
     | (resp, some k) => ⟨[resp], some k⟩
     | (resp, none) =>
       let o := ollama urlOk rest
@@ -291,17 +431,34 @@ theorem ollamaOne_ok_pass (urlOk : Bool) (p : AiPolicy) (r : GenReply) (resp : R
   cases r with
   | transport => simp at h
   | body st rsn m =>
+    simp only at h
+    split at h
+    · simp at h
     cases st with
     | none => simp at h
     | some s =>
+      simp only at h
       by_cases hp : s = "PASS"
       · subst hp
-        simp only [Prod.mk.injEq] at h
         simp at h
-        rw [← h]
+        subst h
+        rfl
       · by_cases hf : s = "FAIL"
         · subst hf; simp at h
         · simp [hp, hf] at h
+
+theorem execOne_ok_pass (urlOk : Bool) (p : AiPolicy) (r : GenReply) (resp : Response)
+    (h : execOne urlOk p r = (resp, none)) : resp.status = "PASS" := by
+  unfold execOne at h
+  cases h1 : ollamaOne urlOk p r with
+  | mk r' k =>
+    rw [h1] at h
+    cases k with
+    | some k => simp at h
+    | none =>
+      simp only [Prod.mk.injEq] at h
+      obtain ⟨rfl, _⟩ := h
+      exact ollamaOne_ok_pass urlOk p r r' h1
 
 /-- The generative provider honours the contract, so its gate pass means
 every question was answered literally `PASS`. -/
@@ -313,7 +470,7 @@ theorem ollama_contract (urlOk : Bool) (items : List (AiPolicy × GenReply)) :
     obtain ⟨p, r⟩ := it
     intro he
     simp only [ollama] at he ⊢
-    cases h1 : ollamaOne urlOk p r with
+    cases h1 : execOne urlOk p r with
     | mk resp k =>
       cases k with
       | some k => simp [h1] at he
@@ -324,7 +481,7 @@ theorem ollama_contract (urlOk : Bool) (items : List (AiPolicy × GenReply)) :
         intro x hx
         simp only [List.mem_cons] at hx
         rcases hx with hx | hx
-        · subst hx; exact Or.inl (ollamaOne_ok_pass urlOk p r _ h1)
+        · subst hx; exact Or.inl (execOne_ok_pass urlOk p r _ h1)
         · exact hs x hx
 
 /-! ## The typed provider (`jevProvider`, ai_jev.go) -/
@@ -513,9 +670,6 @@ theorem jev_failures_refuse (keyOk endpointOk : Bool) (p : AiPolicy) (reply : Je
 
 /-! ## E4: boundaries, decided as the code decides them -/
 
-
-/-! ## E4: boundaries, decided as the code decides them -/
-
 theorem leOpt_self (t : Num) : leOpt (some t) (some t) = true := by
   simp [leOpt]
 
@@ -555,30 +709,64 @@ theorem choice_deny_wins (opts : List String) (c : String) (mc : Option Num) (co
   simp [decideAnswer]
 
 
-/-! ## E5 on the generative path: REFUTED -/
+/-! ## E5 on the generative path: refuted as built, fixed by #9871 -/
 
--- cite: attestation/policy/ai.go:312-314 sha256:1188c9846e79c7259e11cf8f49221255c64e2a9c4ad5326f6b94f7ee13acf748
-/-- The generative verdict records the POLICY's model and never learns which
-model the server ran: a server that served another model still yields `PASS`
-recorded against the named one (ai.go). -/
--- Tracked: testifysec/judge#9820
-theorem generative_model_not_verified :
+-- cite: attestation/policy/ai.go:363-368 sha256:22df572aa734b4cadd4f0efae6ed62de0abd211f995a25041abcd1437004c23e
+-- cite: attestation/policy/ai.go:249-258 sha256:201046ed20aff9fa38c12516b3904c557ab21832f80cc8a1da96eaac92c8ea70
+/-- A generative answer from a server that ran another model is REFUSED, and
+the gate refuses with it (ai.go).
+
+As built at the first version of this model (testifysec/judge#9820) the same
+trace PASSED, recorded against the policy's model
+(`generative_model_not_verified`, refuted as built); fixed by #9871. -/
+theorem generative_other_model_refused :
     let p : AiPolicy := ⟨"review", .other "llama3:8b", "is this safe?", none⟩
     let served := ModelName.other "some-other-model"
     let out := ollama true [(p, .body (some "PASS") "ok" served)]
-    gate [p] out = .pass ∧ out.rs = [⟨"PASS", "ok", .other "llama3:8b", none⟩] ∧
-      served ≠ p.model := by
+    out = ⟨[.empty], some .refusal⟩ ∧ gate [p] out = .refused := by
   decide
+
+/-- E5 on the generative path: a completed generative answer was produced by
+exactly the policy's model, as the server itself reported it (ai.go). -/
+theorem generative_model_pinned (urlOk : Bool) (p : AiPolicy) (reply : GenReply) (resp : Response)
+    (h : execOne urlOk p reply = (resp, none)) :
+    resp.model = p.model ∧ ∃ st rsn, reply = .body (some st) rsn p.model := by
+  unfold execOne at h
+  cases h1 : ollamaOne urlOk p reply with
+  | mk r k =>
+    rw [h1] at h
+    cases k with
+    | some k => simp at h
+    | none =>
+      simp only [Prod.mk.injEq] at h
+      obtain ⟨hr, hc⟩ := h
+      subst hr
+      refine ⟨(respCheck_none p r hc).2, ?_⟩
+      unfold ollamaOne at h1
+      split at h1; · simp at h1
+      split at h1; · simp at h1
+      split at h1; · simp at h1
+      cases reply with
+      | transport => simp at h1
+      | body st rsn m =>
+        simp only at h1
+        split at h1
+        · simp at h1
+        · rename_i hm
+          have hm' : m = p.model := by simpa using hm
+          cases st with
+          | none => simp at h1
+          | some s => exact ⟨s, rsn, by rw [hm']⟩
 
 /-- On the generative path the verdict IS model text: the server's own
 `status` string decides, so E4 holds only for typed decisions. -/
-theorem generative_status_is_model_output (p : AiPolicy) (st rsn : String) (m : ModelName)
+theorem generative_status_is_model_output (p : AiPolicy) (st rsn : String)
     (hd : p.decision = none) (hm : p.model ≠ .other "") (hst : st = "PASS") :
-    ollamaOne true p (.body (some st) rsn m) = (⟨"PASS", rsn, p.model, none⟩, none) := by
+    ollamaOne true p (.body (some st) rsn p.model) = (⟨"PASS", rsn, p.model, none⟩, none) := by
   subst hst
   simp [ollamaOne, hd, hm]
 
--- cite: attestation/policy/ai.go:212-218 sha256:9005840d1d62da40e6e2b2921f5253b3d512679423dd5adcef4dc2a9473d8efa
+-- cite: attestation/policy/ai.go:271-277 sha256:9005840d1d62da40e6e2b2921f5253b3d512679423dd5adcef4dc2a9473d8efa
 /-- A decision policy on the default provider is refused, not skipped
 (ai.go). -/
 theorem decision_without_provider_rejects (p : AiPolicy) (d : Decision) (r : GenReply) (u : Bool)

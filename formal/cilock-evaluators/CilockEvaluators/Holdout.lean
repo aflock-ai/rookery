@@ -73,13 +73,13 @@ theorem h3_optional_rejected_external_fails :
     Gate.verify true [] [accept, deny] = .accepted false := by
   decide
 
--- cite: attestation/policy/rego.go:207-208 sha256:8652ff077745e11f2003b1666ef3c4c0c42d5ff4e3db04531c39cb35eae5ae44
+-- cite: attestation/policy/rego.go:232-233 sha256:8652ff077745e11f2003b1666ef3c4c0c42d5ff4e3db04531c39cb35eae5ae44
 /-- H4: `deny[x] { x := 42 }`: a one-element set with a non-string member.
 The test expects an error; the model predicts `deny`, which the Go code
 returns as `ErrPolicyDenied` (rego.go). -/
 theorem h4_nonstring_deny :
-    let m : Rego.Module := ⟨"nonstring", "redgate_nonstring_deny", true⟩
-    Rego.eval false [m] ⟨false, fun _ => .collection 1, fun _ => none⟩ = .deny := by
+    let m : Rego.Module := ⟨"nonstring", "redgate_nonstring_deny", true, false⟩
+    Rego.eval false [m] ⟨false, false, fun _ => .collection 1, fun _ => none, .clean⟩ = .deny := by
   decide
 
 end CilockEvaluators.Holdout

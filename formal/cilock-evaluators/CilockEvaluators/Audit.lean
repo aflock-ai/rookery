@@ -25,7 +25,11 @@ open CilockEvaluators
 #print axioms Ai.invalid_set_rejects
 #print axioms Ai.jev_failures_refuse
 #print axioms Ai.decision_without_provider_rejects
-#print axioms Rego.hoisted_negation_admits_missing_field
+#print axioms Rego.hoisted_negation_missing_field_rejected
+#print axioms Rego.missing_read_never_passes
+#print axioms Rego.probe_unclean_rejects
+#print axioms Rego.allow_unread_rejects
+#print axioms Rego.refused_only_on_deadline
 -- E2
 #print axioms Rego.modules_conjunctive
 #print axioms Gate.gate_passed_iff
@@ -35,14 +39,17 @@ open CilockEvaluators
 #print axioms Gate.external_pass_has_witness
 #print axioms Gate.verify_accepts_iff
 #print axioms Gate.refusal_is_not_a_verdict
+#print axioms Gate.env_rego_deadline_refuses
+#print axioms Gate.optional_external_rego_deadline_is_refusal
 #print axioms Ai.gate_pass_all_pass
+#print axioms Ai.checked_contract
 #print axioms Ai.ollama_contract
 #print axioms Ai.jev_contract
 -- E3
 #print axioms Rego.only_deny_is_read
 #print axioms Rego.allow_is_inert
 #print axioms Rego.neither_rejects
-#print axioms Rego.both_defined_allow_false_passes
+#print axioms Rego.both_defined_allow_unread_rejected
 #print axioms Rego.duplicate_package_merged_by_default
 -- E4
 #print axioms Ai.jevOne_verdict
@@ -54,7 +61,8 @@ open CilockEvaluators
 #print axioms Ai.generative_status_is_model_output
 -- E5
 #print axioms Ai.jev_model_pinned
-#print axioms Ai.generative_model_not_verified
+#print axioms Ai.generative_model_pinned
+#print axioms Ai.generative_other_model_refused
 -- E6 / E7
 #print axioms Vsa.emit_refusal_none
 #print axioms Vsa.emit_sound

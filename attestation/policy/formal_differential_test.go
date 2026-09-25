@@ -146,9 +146,10 @@ func reportMismatches(t *testing.T, kind string, ms []diffMismatch, total int) {
 // ---------------------------------------------------------------------------
 
 type regoModJSON struct {
-	Name   string `json:"name"`
-	Pkg    string `json:"pkg"`
-	Parses bool   `json:"parses"`
+	Name        string `json:"name"`
+	Pkg         string `json:"pkg"`
+	Parses      bool   `json:"parses"`
+	AllowUnread bool   `json:"allowUnread"`
 }
 
 type denyJSON struct {
@@ -163,43 +164,62 @@ type regoCaseJSON struct {
 	Fault     bool          `json:"fault"`
 	Modules   []regoModJSON `json:"modules"`
 	Deny      []denyJSON    `json:"deny"`
+	Probe     string        `json:"probe"`
 }
 
 // denyKinds: the Rego text of a package's deny, and the value OPA returns for it
 // on the given input. hasRef says whether the input carries `reftype`.
+// allowUnread: the body defines `allow` and no deny reads it (regoallow.go).
+// missing: regostrict.go's missing-field probe fires on the given input.
 type denyKind struct {
-	name  string
-	body  string
-	value func(hasRef bool) denyJSON
-	fault bool
+	name        string
+	body        string
+	value       func(hasRef bool) denyJSON
+	fault       bool
+	allowUnread bool
+	missing     func(hasRef bool) bool
 }
 
 func coll(n int) func(bool) denyJSON {
 	return func(bool) denyJSON { return denyJSON{K: "collection", N: n} }
 }
 
+func never(bool) bool { return false }
+
 var denyKinds = []denyKind{
-	{"undefined", "allow := true", func(bool) denyJSON { return denyJSON{K: "undefined"} }, false},
-	{"completeNotFiring", "deny = [\"x\"] { false }", func(bool) denyJSON { return denyJSON{K: "undefined"} }, false},
-	{"emptySet", "deny[msg] { msg := \"x\"; false }", coll(0), false},
-	{"oneString", "deny[msg] { msg := \"a\" }", coll(1), false},
-	{"twoStrings", "deny[msg] { msg := \"a\" }\ndeny[msg] { msg := \"b\" }", coll(2), false},
-	{"number", "deny[x] { x := 42 }", coll(1), false},
-	{"scalarTrue", "deny := true", func(bool) denyJSON { return denyJSON{K: "scalar"} }, false},
-	{"scalarString", "deny := \"x\"", func(bool) denyJSON { return denyJSON{K: "scalar"} }, false},
-	{"scalarNumber", "deny := 7", func(bool) denyJSON { return denyJSON{K: "scalar"} }, false},
-	{"emptyArray", "deny := []", coll(0), false},
-	{"oneArray", "deny := [\"a\"]", coll(1), false},
-	{"emptyObject", "deny := {}", coll(0), false},
-	{"oneObject", "deny := {\"a\": 1}", coll(1), false},
-	{"divZero", "deny[msg] { x := 1 / 0; msg := sprintf(\"%v\", [x]) }", coll(0), true},
+	{"undefined", "allow := true", func(bool) denyJSON { return denyJSON{K: "undefined"} }, false, true, never},
+	{"completeNotFiring", "deny = [\"x\"] { false }", func(bool) denyJSON { return denyJSON{K: "undefined"} }, false, false, never},
+	{"emptySet", "deny[msg] { msg := \"x\"; false }", coll(0), false, false, never},
+	{"oneString", "deny[msg] { msg := \"a\" }", coll(1), false, false, never},
+	{"twoStrings", "deny[msg] { msg := \"a\" }\ndeny[msg] { msg := \"b\" }", coll(2), false, false, never},
+	{"number", "deny[x] { x := 42 }", coll(1), false, false, never},
+	{"scalarTrue", "deny := true", func(bool) denyJSON { return denyJSON{K: "scalar"} }, false, false, never},
+	{"scalarString", "deny := \"x\"", func(bool) denyJSON { return denyJSON{K: "scalar"} }, false, false, never},
+	{"scalarNumber", "deny := 7", func(bool) denyJSON { return denyJSON{K: "scalar"} }, false, false, never},
+	{"emptyArray", "deny := []", coll(0), false, false, never},
+	{"oneArray", "deny := [\"a\"]", coll(1), false, false, never},
+	{"emptyObject", "deny := {}", coll(0), false, false, never},
+	{"oneObject", "deny := {\"a\": 1}", coll(1), false, false, never},
+	{"divZero", "deny[msg] { x := 1 / 0; msg := sprintf(\"%v\", [x]) }", coll(0), true, false, never},
 	{"hoisted", "deny[msg] { not startswith(input.reftype, \"tag\"); msg := \"untagged\" }",
 		func(hasRef bool) denyJSON {
 			if hasRef {
 				return denyJSON{K: "collection", N: 1}
 			}
 			return denyJSON{K: "collection", N: 0}
-		}, false},
+		}, false, false, func(hasRef bool) bool { return !hasRef }},
+	// An allow no deny reads, over an empty deny: refused (#9870).
+	{"allowUnread", "default allow := false\ndeny := []", coll(0), false, true, never},
+	// An allow a deny reads: the canonical gate, allowed, and it denies.
+	{"allowGated", "default allow := false\ndeny[msg] { not allow; msg := \"not allowed\" }", coll(1), false, false, never},
+	// A positive read of a missing field in a deny body (regostrict.go).
+	{"positiveRead", "deny[msg] { input.reftype == \"branch\"; msg := \"branch\" }",
+		func(hasRef bool) denyJSON {
+			if hasRef {
+				return denyJSON{K: "collection", N: 1}
+			}
+			return denyJSON{K: "collection", N: 0}
+		}, false, false, func(hasRef bool) bool { return !hasRef }},
 }
 
 // genRegoModules builds 0-3 modules. The first module of a package owns its
@@ -218,12 +238,14 @@ func genRegoModules(r *rand.Rand, withEmpty bool) ([]RegoPolicy, []regoModJSON, 
 		pkg := pkgs[r.IntN(len(pkgs))]
 		name := fmt.Sprintf("m%d", i)
 		var body string
+		allowUnread := false
 		if _, ok := owner[pkg]; ok {
 			body = fmt.Sprintf("helper_%d := 1", i)
 		} else {
 			k := denyKinds[r.IntN(len(denyKinds))]
 			owner[pkg] = k
 			body = k.body
+			allowUnread = k.allowUnread
 		}
 		parses := r.IntN(12) != 0
 		src := fmt.Sprintf("package %s\n\n%s\n", pkg, body)
@@ -231,22 +253,28 @@ func genRegoModules(r *rand.Rand, withEmpty bool) ([]RegoPolicy, []regoModJSON, 
 			src = fmt.Sprintf("package %s\n\ndeny[msg] { msg := \n", pkg)
 		}
 		pols = append(pols, RegoPolicy{Name: name, Module: []byte(src)})
-		mods = append(mods, regoModJSON{Name: name, Pkg: pkg, Parses: parses})
+		mods = append(mods, regoModJSON{Name: name, Pkg: pkg, Parses: parses, AllowUnread: allowUnread})
 	}
 	return pols, mods, owner
 }
 
-func regoRunJSON(owner map[string]denyKind, hasRef bool) ([]denyJSON, bool) {
+// regoRunJSON returns the per-package deny values, the OPA fault flag, and what
+// the missing-field probe reports after an admit ("clean" or "missing").
+func regoRunJSON(owner map[string]denyKind, hasRef bool) ([]denyJSON, bool, string) {
 	deny := make([]denyJSON, 0, len(owner))
 	fault := false
+	probe := "clean"
 	for pkg, k := range owner {
 		d := k.value(hasRef)
 		d.Pkg = pkg
 		deny = append(deny, d)
 		fault = fault || k.fault
+		if k.missing(hasRef) {
+			probe = "missing"
+		}
 	}
 	sort.Slice(deny, func(i, j int) bool { return deny[i].Pkg < deny[j].Pkg })
-	return deny, fault
+	return deny, fault, probe
 }
 
 func regoAttestor(ref int, typ string, hasRef bool) attestation.Attestor {
@@ -262,8 +290,7 @@ func classifyGoErr(err error) string {
 	if err == nil {
 		return "pass"
 	}
-	var refusal ErrAIEvaluationRefused
-	if errors.As(err, &refusal) {
+	if evaluationRefusal(err) != nil {
 		return "refused"
 	}
 	var denied ErrPolicyDenied
@@ -289,8 +316,8 @@ func TestFormalDifferentialRego(t *testing.T) {
 		SetHardening(HardeningOptions{RejectDuplicateRegoPackage: rejectDup})
 		err := EvaluateRegoPolicy(regoAttestor(i, "https://example.com/t", hasRef), pols)
 		goV = append(goV, classifyGoErr(err))
-		deny, fault := regoRunJSON(owner, hasRef)
-		cases = append(cases, regoCaseJSON{Kind: "rego", RejectDup: rejectDup, Fault: fault, Modules: nonNilMods(mods), Deny: nonNilDeny(deny)})
+		deny, fault, probe := regoRunJSON(owner, hasRef)
+		cases = append(cases, regoCaseJSON{Kind: "rego", RejectDup: rejectDup, Fault: fault, Modules: nonNilMods(mods), Deny: nonNilDeny(deny), Probe: probe})
 		details = append(details, fmt.Sprintf("mods=%v deny=%v rejectDup=%v err=%v", mods, deny, rejectDup, err))
 	}
 	lean := runOracle(t, bin, cases)
@@ -681,9 +708,14 @@ type gateAttJSON struct {
 	Type string `json:"type"`
 }
 
+type gateRespJSON struct {
+	Status string     `json:"status"`
+	Model  *modelJSON `json:"model,omitempty"`
+}
+
 type gateOutcomeJSON struct {
-	Rs  []map[string]string `json:"rs"`
-	Err any                 `json:"err"`
+	Rs  []gateRespJSON `json:"rs"`
+	Err any            `json:"err"`
 }
 
 type gateRunJSON struct {
@@ -691,6 +723,7 @@ type gateRunJSON struct {
 	Type  string          `json:"type"`
 	Fault bool            `json:"fault"`
 	Deny  []denyJSON      `json:"deny"`
+	Probe string          `json:"probe"`
 	AI    gateOutcomeJSON `json:"ai"`
 }
 
@@ -725,11 +758,20 @@ func genStubOutcome(r *rand.Rand, npol int) (stubOutcome, gateOutcomeJSON) {
 		count = r.IntN(npol + 1) // a provider that breaks the contract
 	}
 	statuses := []string{AiStatusPass, AiStatusPass, AiStatusPass, AiStatusFail, "", "pass"}
-	j.Rs = []map[string]string{}
+	// The model the provider says answered: mostly the policies' own, but
+	// sometimes none or another one (pinResolvedModel, #9871).
+	models := []string{"jev-1.13.0", "jev-1.13.0", "jev-1.13.0", "jev-1.13.0", "", "jev-9.9.9"}
+	j.Rs = []gateRespJSON{}
 	for i := 0; i < count; i++ {
 		st := statuses[r.IntN(len(statuses))]
-		o.rs = append(o.rs, AiResponse{Status: st})
-		j.Rs = append(j.Rs, map[string]string{"status": st})
+		model := models[r.IntN(len(models))]
+		o.rs = append(o.rs, AiResponse{Status: st, Model: model})
+		rj := gateRespJSON{Status: st}
+		if model != "" {
+			m := modelOf(model)
+			rj.Model = &m
+		}
+		j.Rs = append(j.Rs, rj)
 	}
 	return o, j
 }
@@ -797,7 +839,7 @@ func TestFormalDifferentialGate(t *testing.T) {
 					attestation.CollectionAttestation{Type: typ, Attestation: regoAttestor(ref, typ, hasRef)})
 				c.Collection.Attestors = append(c.Collection.Attestors, gateAttJSON{Ref: ref, Type: typ})
 				owner := owners[typ]
-				deny, fault := regoRunJSON(owner, hasRef)
+				deny, fault, probe := regoRunJSON(owner, hasRef)
 				npol := 0
 				for _, a := range step.Attestations {
 					if a.Type == typ {
@@ -806,7 +848,7 @@ func TestFormalDifferentialGate(t *testing.T) {
 				}
 				so, oj := genStubOutcome(r, npol)
 				stub.out[fmt.Sprintf("%d|%s", ref, typ)] = so
-				c.Runs = append(c.Runs, gateRunJSON{Ref: ref, Type: typ, Fault: fault, Deny: nonNilDeny(deny), AI: oj})
+				c.Runs = append(c.Runs, gateRunJSON{Ref: ref, Type: typ, Fault: fault, Deny: nonNilDeny(deny), Probe: probe, AI: oj})
 			}
 		}
 		if c.Step.Expected == nil {
@@ -823,8 +865,7 @@ func TestFormalDifferentialGate(t *testing.T) {
 		case gatePassed:
 			v = "passed"
 		default:
-			var refusal ErrAIEvaluationRefused
-			v = fmt.Sprintf("rejected:%v", errors.As(rc.Reason, &refusal))
+			v = fmt.Sprintf("rejected:%v", evaluationRefusal(rc.Reason) != nil)
 		}
 		goV = append(goV, v)
 		cases = append(cases, c)
@@ -1002,8 +1043,7 @@ func TestFormalDifferentialVSA(t *testing.T) {
 		pass, _, _, err := p.VerifyWithExternals(context.Background(), WithVerifiedSource(src), WithSubjectDigests([]string{"sha256:" + requested}))
 		var v string
 		if err != nil {
-			var refusal ErrAIEvaluationRefused
-			v = fmt.Sprintf("failed:%v", errors.As(err, &refusal))
+			v = fmt.Sprintf("failed:%v", evaluationRefusal(err) != nil)
 		} else {
 			v = fmt.Sprintf("accepted:%v", pass)
 		}

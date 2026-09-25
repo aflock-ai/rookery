@@ -36,16 +36,19 @@ structure VerifierIdentity where
 abbrev Timestamp := Nat
 
 -- cite: attestation/policy/ai_jev.go:35-45 sha256:fa89c682b1b70931f3ec4609129ace3190a81aaa4ca9640609dda9f266197b8a
--- cite: attestation/policy/policy.go:683-706 sha256:a8588ac8fed5e41bd25bde0f7b6072643a83fc775baec4aa51eb402ac7230d2c
+-- cite: attestation/policy/policy.go:759-788 sha256:cfee072d06f1ff6ddf0165b79bb2d570d5a311aadd37c14c29a8bb7bfb4800cf
+-- cite: attestation/policy/regorefusal.go:19-44 sha256:51cefd7488b8b398e3a4d26166e15aa0eb3e9e548ff4e0cf5d65584b9f573a96
 /-- The outcome of one evaluator run.
 
 * `pass`    : the evaluator affirmatively admitted the input.
 * `deny`    : a completed negative finding (Rego deny, AI answered FAIL).
-* `error`   : no verdict (parse/compile/eval error, timeout, malformed reply).
-* `refused` : an AI provider produced no completed verdict
-              (`ErrAIEvaluationRefused`, `ai_jev.go`). Kept apart from
-              `error` because the verifier aggregates it differently
-              (`policy.go`, `refusedAIResults`).
+* `error`   : no verdict (parse/compile/eval error, malformed reply).
+* `refused` : no completed verdict because the evaluator refused to answer:
+              an AI refusal (`ErrAIEvaluationRefused`, `ai_jev.go`) or a
+              Rego evaluation that ran out of its deadline
+              (`ErrRegoEvaluationRefused`, `regorefusal.go`, #9872). Kept
+              apart from `error` because the verifier aggregates it
+              differently (`policy.go`, `refusedAIResults`).
 
 Fail-closed means: every constructor except `pass` rejects. -/
 inductive Verdict where

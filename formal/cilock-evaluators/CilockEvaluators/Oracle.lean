@@ -41,6 +41,11 @@ def optInt (j : Json) (k : String) : D (Option Int) :=
 def strs (j : Json) (k : String) : D (List String) := do
   (← arr j k).mapM (fun x => x.getStr?)
 
+def optBool (j : Json) (k : String) : D Bool :=
+  match j.getObjVal? k with
+  | .error _ => pure false
+  | .ok v => v.getBool?
+
 def verdictStr : Verdict → String
   | .pass => "pass"
   | .deny => "deny"
@@ -50,7 +55,18 @@ def verdictStr : Verdict → String
 /-! ## Rego -/
 
 def decodeModule (j : Json) : D Rego.Module := do
-  return ⟨← str j "name", ← str j "pkg", ← bool j "parses"⟩
+  return ⟨← str j "name", ← str j "pkg", ← bool j "parses", ← optBool j "allowUnread"⟩
+
+/-- The missing-field probe; absent means `clean`. -/
+def decodeProbe (j : Json) : D Rego.Probe :=
+  match j.getObjVal? "probe" with
+  | .error _ => pure .clean
+  | .ok v => do
+    match ← v.getStr? with
+    | "clean" => pure .clean
+    | "missing" => pure .missing
+    | "timeout" => pure .timeout
+    | k => throw s!"probe {k}"
 
 def decodeDeny (j : Json) : D Rego.DenyValue := do
   match ← str j "k" with
@@ -63,8 +79,9 @@ def decodeDeny (j : Json) : D Rego.DenyValue := do
 def decodeRun (j : Json) : D Rego.OpaRun := do
   let entries ← (← arr j "deny").mapM (fun e => do return (← str e "pkg", ← decodeDeny e))
   let fault ← bool j "fault"
-  return ⟨fault, fun p => (entries.find? (fun e => e.1 == p)).map Prod.snd |>.getD .undefined,
-    fun _ => none⟩
+  return ⟨fault, ← optBool j "timeout",
+    fun p => (entries.find? (fun e => e.1 == p)).map Prod.snd |>.getD .undefined,
+    fun _ => none, ← decodeProbe j⟩
 
 def regoCase (j : Json) : D String := do
   let mods ← (← arr j "modules").mapM decodeModule
@@ -143,9 +160,15 @@ def decodeErrKind (j : Json) : D (Option Ai.ErrKind) := do
   | Json.str "other" => pure (some .other)
   | _ => throw "err kind"
 
+/-- A response's recorded model; absent means the provider named none. -/
+def decodeRespModel (r : Json) : D Ai.ModelName :=
+  match r.getObjVal? "model" with
+  | .error _ | .ok Json.null => pure (.other "")
+  | .ok m => decodeModel m
+
 def decodeOutcome (j : Json) : D Ai.Outcome := do
   let rs ← (← arr j "rs").mapM (fun r => do
-    return (⟨← str r "status", "", .other "", none⟩ : Ai.Response))
+    return (⟨← str r "status", "", ← decodeRespModel r, none⟩ : Ai.Response))
   return ⟨rs, ← decodeErrKind ((j.getObjVal? "err").toOption.getD Json.null)⟩
 
 def decodeExpected (j : Json) : D Gate.Expected := do
