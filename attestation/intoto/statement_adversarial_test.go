@@ -30,32 +30,16 @@ func TestAdversarial_NewStatement_EmptySubjects(t *testing.T) {
 	assert.Empty(t, stmt.Subject)
 }
 
-// TestAdversarial_NewStatement_SubjectWithEmptyDigest tests that a subject
-// whose DigestSet is empty gets through NewStatement. DigestSetToSubject
-// calls ds.ToNameMap() which returns an empty map for an empty DigestSet.
-// The resulting Subject has an empty Digest map, which violates the in-toto
-// spec (subjects MUST have at least one digest).
-//
-// BUG: Empty digest sets on subjects are silently accepted.
+// TestAdversarial_NewStatement_SubjectWithEmptyDigest pins that a subject
+// whose DigestSet is empty is refused: in-toto statement.md says every
+// subject "MUST have digest set" (#10030).
 func TestAdversarial_NewStatement_SubjectWithEmptyDigest(t *testing.T) {
-	emptyDS := cryptoutil.DigestSet{}
 	subjects := map[string]cryptoutil.DigestSet{
-		"artifact.tar.gz": emptyDS,
+		"artifact.tar.gz": {},
 	}
 
-	stmt, err := NewStatement("https://example.com/predicate/v1", []byte(`{}`), subjects)
-	// This SHOULD error but currently does NOT.
-	if err != nil {
-		t.Logf("Good: empty digest set was rejected: %v", err)
-		return
-	}
-
-	// If we reach here, we have a bug.
-	require.Len(t, stmt.Subject, 1)
-	assert.Empty(t, stmt.Subject[0].Digest,
-		"BUG [MEDIUM]: Subject with empty digest set is accepted. "+
-			"In-toto spec requires at least one digest per subject. "+
-			"File: intoto/statement.go, DigestSetToSubject line ~80")
+	_, err := NewStatement("https://example.com/predicate/v1", []byte(`{}`), subjects)
+	require.Error(t, err, "a subject with an empty digest set must be refused")
 }
 
 // TestAdversarial_NewStatement_SubjectWithEmptyName tests that a subject
@@ -104,11 +88,12 @@ func TestAdversarial_NewStatement_InvalidPredicate(t *testing.T) {
 		{"not JSON", []byte("not json at all"), true},
 		{"truncated JSON", []byte(`{"key": `), true},
 		{"valid empty object", []byte(`{}`), false},
-		{"valid array", []byte(`[]`), false},
-		{"valid string", []byte(`"hello"`), false},
-		{"valid null", []byte(`null`), false},
-		{"valid number", []byte(`42`), false},
-		{"valid boolean", []byte(`true`), false},
+		// in-toto statement.md: predicate is an object (#10030).
+		{"array", []byte(`[]`), true},
+		{"string", []byte(`"hello"`), true},
+		{"null", []byte(`null`), true},
+		{"number", []byte(`42`), true},
+		{"boolean", []byte(`true`), true},
 	}
 
 	for _, tc := range tests {
@@ -123,11 +108,9 @@ func TestAdversarial_NewStatement_InvalidPredicate(t *testing.T) {
 	}
 }
 
-// TestAdversarial_NewStatement_EmptyPredicateType tests that an empty
-// predicate type string is accepted. This is arguably a bug since
-// predicateType is a required field in the in-toto spec.
-//
-// DESIGN NOTE: Empty predicateType is accepted without validation.
+// TestAdversarial_NewStatement_EmptyPredicateType pins that an empty
+// predicate type is refused: in-toto statement.md makes predicateType a
+// required TypeURI (#10030).
 func TestAdversarial_NewStatement_EmptyPredicateType(t *testing.T) {
 	ds := cryptoutil.DigestSet{
 		{Hash: crypto.SHA256}: "abc123",
@@ -136,16 +119,8 @@ func TestAdversarial_NewStatement_EmptyPredicateType(t *testing.T) {
 		"artifact": ds,
 	}
 
-	stmt, err := NewStatement("", []byte(`{}`), subjects)
-	if err != nil {
-		t.Logf("Good: empty predicate type was rejected: %v", err)
-		return
-	}
-
-	assert.Equal(t, "", stmt.PredicateType,
-		"DESIGN NOTE [LOW]: Empty predicateType is accepted. "+
-			"In-toto spec requires a non-empty predicateType URI. "+
-			"File: intoto/statement.go:42")
+	_, err := NewStatement("", []byte(`{}`), subjects)
+	require.Error(t, err, "an empty predicate type must be refused")
 }
 
 // ==========================================================================

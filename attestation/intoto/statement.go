@@ -15,6 +15,7 @@
 package intoto
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -44,6 +45,18 @@ func NewStatement(predicateType string, predicate []byte, subjects map[string]cr
 		return Statement{}, fmt.Errorf("predicate must be valid JSON")
 	}
 
+	// in-toto Attestation Framework v1, statement.md: predicateType is a
+	// required TypeURI and predicate is an object (optional, so a caller with
+	// nothing to say passes {}). This is the one constructor every signed
+	// statement goes through, so it refuses rather than signs what the spec
+	// forbids.
+	if predicateType == "" {
+		return Statement{}, fmt.Errorf("predicate type is required")
+	}
+	if trimmed := bytes.TrimLeft(predicate, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '{' {
+		return Statement{}, fmt.Errorf("predicate must be a JSON object")
+	}
+
 	statement := Statement{
 		Type:          StatementType,
 		PredicateType: predicateType,
@@ -62,6 +75,10 @@ func NewStatement(predicateType string, predicate []byte, subjects map[string]cr
 
 	for _, name := range names {
 		ds := subjects[name]
+		// statement.md: every subject "MUST have digest set".
+		if len(ds) == 0 {
+			return Statement{}, fmt.Errorf("subject %q has no digest", name)
+		}
 		subj, err := DigestSetToSubject(name, ds)
 		if err != nil {
 			return statement, err
