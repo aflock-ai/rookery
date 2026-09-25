@@ -28,7 +28,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -246,13 +245,9 @@ func requirePINPrompt(cfg *signerConfig) error {
 // See internal/vendored/NOTICE for why the declarations themselves stay
 // byte-identical to upstream go-piv rather than being edited away.
 func TestVendoredDefaultCredentialsAreNeverUsed(t *testing.T) {
-	_, self, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller(0) failed; cannot exclude this file from the scan")
-	}
-	selfInfo, err := os.Stat(self)
+	selfInfo, err := os.Stat("piv_test.go")
 	if err != nil {
-		t.Fatalf("stat %s: %v", self, err)
+		t.Fatalf("stat piv_test.go: %v", err)
 	}
 
 	banned := []string{"DefaultPIN", "DefaultPUK", "DefaultManagementKey"}
