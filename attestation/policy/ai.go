@@ -202,12 +202,16 @@ func ExecuteAiPolicyWithProvider(ctx context.Context, attestor attestation.Attes
 	if err := checkAiResponseSchema(pol, result); err != nil {
 		return result, err
 	}
+	if err := pinResolvedModel(pol, result); err != nil {
+		return result, err
+	}
 	return result, nil
 }
 
 // evaluateAiBatch asks a batch provider every question and requires one
-// well-formed verdict per policy: a missing or out-of-schema answer is a FAIL,
-// never a pass (#9820).
+// well-formed verdict per policy from the pinned model: a missing, surplus or
+// out-of-schema answer is a FAIL, never a pass, and a verdict from another
+// model is refused (#9820).
 func evaluateAiBatch(ctx context.Context, batch AiBatchProvider, attestor attestation.Attestor, policies []AiPolicy, serverURL string) ([]AiResponse, error) {
 	responses, err := batch.EvaluateBatch(ctx, attestor, policies, serverURL)
 	if err != nil {
@@ -223,6 +227,9 @@ func evaluateAiBatch(ctx context.Context, batch AiBatchProvider, attestor attest
 		if err := checkAiResponseSchema(pol, responses[i]); err != nil {
 			return responses, err
 		}
+		if err := pinResolvedModel(pol, responses[i]); err != nil {
+			return responses, err
+		}
 	}
 	return responses, nil
 }
@@ -235,6 +242,17 @@ func evaluateAiBatch(ctx context.Context, batch AiBatchProvider, attestor attest
 func checkAiResponseSchema(pol AiPolicy, resp AiResponse) error {
 	if resp.Status != AiStatusPass && resp.Status != AiStatusFail {
 		return fmt.Errorf("AI policy %q: provider returned status %q, not %q or %q; failing the policy", pol.Name, resp.Status, AiStatusPass, AiStatusFail)
+	}
+	return nil
+}
+
+// pinResolvedModel refuses a verdict that a model other than the policy's
+// produced (#9820 E5). Every provider records the model that answered in
+// AiResponse.Model; an empty one means the provider would not say, which is
+// refused too. It runs after checkAiResponseSchema, so resp carries a verdict.
+func pinResolvedModel(pol AiPolicy, resp AiResponse) error {
+	if resp.Model == "" || resp.Model != pol.Model {
+		return aiRefusal("model_mismatch")
 	}
 	return nil
 }
@@ -335,10 +353,18 @@ In the response, the Status field MUST be exactly 'PASS' or 'FAIL', and include 
 func parseOllamaGenerateResponse(bodyBytes []byte, model string) (AiResponse, error) {
 	var res struct {
 		Response string `json:"response"`
+		Model    string `json:"model"`
 	}
 
 	if err := json.Unmarshal(bodyBytes, &res); err != nil {
 		return AiResponse{}, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	// Ollama names the model that actually answered. A verdict from any other
+	// model, or from a server that will not say, is not the policy's verdict
+	// (#9820 E5): refuse before reading it, as the Jev path does.
+	if res.Model != model {
+		return AiResponse{}, aiRefusal("model_mismatch")
 	}
 
 	var parsed aiGenerativeResult
@@ -350,9 +376,9 @@ func parseOllamaGenerateResponse(bodyBytes []byte, model string) (AiResponse, er
 		return AiResponse{}, fmt.Errorf("invalid status in AI response: %s", parsed.Status)
 	}
 
-	// Model is OUR record of what answered, taken from the resolved policy
-	// model rather than anything the server said about itself.
-	aiResponse := AiResponse{Status: parsed.Status, Reason: parsed.Reason, Model: model}
+	// Model records what answered: the server's resolved model, which the
+	// check above has already required to equal the policy's.
+	aiResponse := AiResponse{Status: parsed.Status, Reason: parsed.Reason, Model: res.Model}
 
 	if aiResponse.Status == AiStatusFail {
 		return aiResponse, fmt.Errorf("AI policy evaluation failed: %s", aiResponse.Reason)

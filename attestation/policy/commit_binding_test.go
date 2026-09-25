@@ -704,8 +704,8 @@ func TestCommitBinding_ReadsTheSignedPayloadNotTheProjection(t *testing.T) {
 // and the binding is the only thing that can refuse the parent's scan.
 type hsecPassAI struct{}
 
-func (hsecPassAI) Evaluate(context.Context, attestation.Attestor, AiPolicy, string) (AiResponse, error) {
-	return AiResponse{Status: AiStatusPass, Reason: "stub"}, nil
+func (hsecPassAI) Evaluate(_ context.Context, _ attestation.Attestor, pol AiPolicy, _ string) (AiResponse, error) {
+	return AiResponse{Status: AiStatusPass, Reason: "stub", Model: pol.Model}, nil
 }
 
 // The deferred-AI arm: with a fan-out tracker set and an AI policy on the

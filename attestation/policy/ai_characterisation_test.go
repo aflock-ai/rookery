@@ -90,17 +90,34 @@ func newAiServer(t *testing.T, h func(w http.ResponseWriter, r *http.Request)) (
 	capture := &aiCapture{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capture.record(r)
-		h(w, r)
+		_, _, _, body, _ := capture.snapshot()
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &req)
+		h(&modelEchoWriter{ResponseWriter: w, model: req.Model}, r)
 	}))
 	t.Cleanup(srv.Close)
 	return srv, capture
 }
 
+// modelEchoWriter carries the model the request named, so ollamaGenerate can
+// answer the way Ollama does: naming the model that produced the response.
+type modelEchoWriter struct {
+	http.ResponseWriter
+	model string
+}
+
 // ollamaGenerate writes the Ollama /api/generate envelope: a JSON object whose
-// "response" member is the model's answer as a JSON *string*.
+// "response" member is the model's answer as a JSON *string*, and whose
+// "model" member names the requested model, as a real server resolves it.
 func ollamaGenerate(t *testing.T, w http.ResponseWriter, inner string) {
 	t.Helper()
-	body, err := json.Marshal(map[string]string{"response": inner})
+	env := map[string]string{"response": inner}
+	if mw, ok := w.(*modelEchoWriter); ok {
+		env["model"] = mw.model
+	}
+	body, err := json.Marshal(env)
 	require.NoError(t, err)
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(body)

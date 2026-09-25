@@ -242,7 +242,7 @@ An `aipolicy` has two mutually exclusive forms. **Exactly one of `prompt` or `de
 | Key | Type | Description |
 |---|---|---|
 | `name` | string | Human-readable name; reported on failure. Must be non-empty and **unique within an `attestation`** — it is the question id when several questions go to the model in one request. |
-| `model` | string | AI model name to evaluate against. Required; there is no default. |
+| `model` | string | AI model name to evaluate against. Required; there is no default. Pinned for every backend: the response must name this exact model as the one that answered (the generative backend reads `model` from the `/api/generate` response), and a different or missing model refuses evaluation with `ErrAIEvaluationRefused` (`model_mismatch`), never a PASS or FAIL. |
 | `prompt` | string | **Generative form.** Free text sent to the AI model along with the predicate body. The AI is required to reply with a JSON object `\{"status":"PASS\|FAIL","reason":"..."\}`. Mutually exclusive with `decision`. |
 | `decision` | `decision` | **Typed form.** The model answers a constrained question; the POLICY decides PASS/FAIL from the answer. Mutually exclusive with `prompt`. See [§decision](#decision-object). |
 

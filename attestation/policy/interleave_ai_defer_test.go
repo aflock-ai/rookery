@@ -37,9 +37,14 @@ func countingAIServer(t *testing.T) (*httptest.Server, *atomic.Int64) {
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
+		var req struct {
+			Model string `json:"model"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		inner, err := json.Marshal(AiResponse{Status: AiStatusPass, Reason: "ok"})
 		require.NoError(t, err)
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"response": string(inner)}))
+		// Name the model that answered, as Ollama does (#9820 E5).
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"response": string(inner), "model": req.Model}))
 	}))
 	t.Cleanup(srv.Close)
 	return srv, &calls

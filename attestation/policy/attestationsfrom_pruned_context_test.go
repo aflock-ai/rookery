@@ -560,14 +560,16 @@ type flipAI struct {
 
 func newFlipAI() *flipAI { return &flipAI{calls: map[string]int{}} }
 
-func (f *flipAI) Evaluate(_ context.Context, att attestation.Attestor, _ AiPolicy, _ string) (AiResponse, error) {
+func (f *flipAI) Evaluate(_ context.Context, att attestation.Attestor, pol AiPolicy, _ string) (AiResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls[att.Name()]++
+	// Echo the requested model the way Ollama does; #9820 E5 refuses a
+	// verdict that names no model.
 	if f.calls[att.Name()] == 1 {
-		return AiResponse{Status: AiStatusPass, Reason: "first answer"}, nil
+		return AiResponse{Status: AiStatusPass, Reason: "first answer", Model: pol.Model}, nil
 	}
-	return AiResponse{Status: AiStatusFail, Reason: "a later answer differs"}, nil
+	return AiResponse{Status: AiStatusFail, Reason: "a later answer differs", Model: pol.Model}, nil
 }
 
 func (f *flipAI) snapshot() map[string]int {

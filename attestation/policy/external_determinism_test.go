@@ -530,11 +530,15 @@ type scriptedAI struct {
 	err   error
 }
 
-func (s *scriptedAI) Evaluate(_ context.Context, _ attestation.Attestor, _ AiPolicy, _ string) (AiResponse, error) {
+func (s *scriptedAI) Evaluate(_ context.Context, _ attestation.Attestor, pol AiPolicy, _ string) (AiResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
-	return s.resp, s.err
+	resp := s.resp
+	if resp.Status != "" {
+		resp.Model = pol.Model // a provider names the model that answered (#9820 E5)
+	}
+	return resp, s.err
 }
 
 // AI runs once per attestor, only after that attestor's Rego passed under the
