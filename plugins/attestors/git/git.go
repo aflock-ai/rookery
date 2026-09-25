@@ -19,6 +19,8 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -27,6 +29,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -68,9 +71,22 @@ type GitAttestor interface {
 }
 
 func init() {
-	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
-		return New()
-	})
+	attestation.RegisterAttestation(Name, Type, RunType,
+		func() attestation.Attestor { return New() },
+		registry.BoolConfigOption(
+			allowSubdirectoryOption,
+			"Attest from a subdirectory of the worktree instead of failing; the non-empty workdirprefix is still signed and verifiers may refuse it",
+			false,
+			func(a attestation.Attestor, allow bool) (attestation.Attestor, error) {
+				gitAttestor, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("unexpected attestor type: %T is not a git attestor", a)
+				}
+				WithAllowSubdirectory(allow)(gitAttestor)
+				return gitAttestor, nil
+			},
+		),
+	)
 	detection.Register(Name, detectorYAML)
 }
 
@@ -146,6 +162,42 @@ type Attestor struct {
 	RemotesRefused []RefusedRemote `json:"remotesrefused,omitempty"`
 	Tags           []Tag           `json:"tags,omitempty"`
 	RefNameShort   string          `json:"branch,omitempty"`
+	// WorkdirPrefix is the attestation working directory relative to the
+	// worktree root, with forward slashes, and "" at the root
+	// (testifysec/judge#9856).
+	//
+	// The repository open walks UP from the working directory, so a mint run
+	// from a subdirectory still records the whole commit here, while the
+	// material attestor walks only that subdirectory: one such mint bound the
+	// right commit and attested 518 of 284,644 files. This field is the signed
+	// statement of where the mint ran, in the same collection as the material
+	// it qualifies, so a verifier can refuse a partial tree.
+	//
+	// NOT omitempty, on purpose: "" is the claim "minted at the root", and an
+	// absent field means a producer too old to say.
+	WorkdirPrefix string `json:"workdirprefix"`
+
+	// allowSubdirectory lets a mint proceed from a subdirectory. The prefix is
+	// still recorded, so the choice is visible to every verifier. Default
+	// false: a subdirectory mint fails fast (the early check; verifiers stay
+	// authoritative).
+	allowSubdirectory bool
+}
+
+// allowSubdirectoryOption is the config option (flag
+// --attestor-git-allow-subdirectory) that lets a mint run from a subdirectory
+// of the worktree.
+const allowSubdirectoryOption = "allow-subdirectory"
+
+// Option configures the git attestor.
+type Option func(*Attestor)
+
+// WithAllowSubdirectory lets the attestor run from a subdirectory of the
+// worktree instead of refusing. The non-empty WorkdirPrefix is still signed.
+func WithAllowSubdirectory(allow bool) Option {
+	return func(a *Attestor) {
+		a.allowSubdirectory = allow
+	}
 }
 
 func New() *Attestor {
@@ -1414,6 +1466,18 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 		return err
 	}
 
+	// Where the mint ran, relative to the worktree the open just resolved
+	// (#9856). Established before anything else is recorded: a mint from a
+	// subdirectory fails here, before it has attested a partial tree.
+	prefix, root, err := workdirPrefix(repo, ctx.WorkingDir())
+	if err != nil {
+		return fmt.Errorf("could not establish the working directory's position in the worktree (%w); refusing to attest a tree whose coverage cannot be stated", err)
+	}
+	if prefix != "" && !a.allowSubdirectory {
+		return fmt.Errorf("the working directory %s is %q inside the worktree root %s, so the material attested here would cover only that subdirectory; run from the worktree root, or pass --%s to record the partial coverage (verifiers may refuse it)", ctx.WorkingDir(), prefix, root, registry.AttestorFlagName(Name, allowSubdirectoryOption))
+	}
+	a.WorkdirPrefix = prefix
+
 	head, err := repo.Head()
 	if err != nil {
 		unborn, proveErr := repositoryIsProvablyUnborn(repo)
@@ -1726,4 +1790,60 @@ func statusCodeString(statusCode git.StatusCode) string {
 	default:
 		return string(statusCode)
 	}
+}
+
+// workdirPrefix returns the working directory's path relative to the root of
+// the worktree repo was opened from, with forward slashes and "" at the root,
+// plus that root (#9856).
+//
+// Both paths are made absolute and symlink-resolved before they are compared,
+// so the same worktree reached through a link is still the root. A working
+// directory that does not resolve INSIDE the worktree is an error, never a
+// guess: the prefix is a signed claim about coverage.
+func workdirPrefix(repo *git.Repository, workingDir string) (string, string, error) {
+	wt, err := repo.Worktree()
+	if err != nil {
+		return "", "", fmt.Errorf("repository has no worktree: %w", err)
+	}
+	root, err := resolvedDir(wt.Filesystem.Root())
+	if err != nil {
+		return "", "", fmt.Errorf("worktree root: %w", err)
+	}
+	if workingDir == "" {
+		workingDir = "."
+	}
+	dir, err := resolvedDir(workingDir)
+	if err != nil {
+		return "", root, fmt.Errorf("working directory: %w", err)
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return "", root, err
+	}
+	if rel == "." {
+		return "", root, nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", root, fmt.Errorf("working directory %s is outside the worktree root %s", dir, root)
+	}
+	return filepath.ToSlash(rel), root, nil
+}
+
+func resolvedDir(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return filepath.Dir(resolved), nil
+	}
+	return resolved, nil
 }
