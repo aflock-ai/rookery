@@ -285,6 +285,21 @@ func (s *RunSummary) WriteJSON(w io.Writer) error {
 	return nil
 }
 
+// commandExitHint explains the shell's two could-not-run exit codes, which
+// otherwise read like an ordinary test or build failure. cilock execs the
+// wrapped command directly, so these come from a shell somewhere inside it
+// (sh -c, an npm script, a Makefile recipe). An agent whose `npm run build`
+// exited 127 had never installed the package's dependencies.
+func commandExitHint(code int) string {
+	switch code {
+	case 127:
+		return " (usually a shell could not run a command: not found. Check the tool is installed and on PATH, and that the project's dependencies are installed before this step)"
+	case 126:
+		return " (usually a shell could not run a command: found but not executable. Check its permissions and interpreter line)"
+	}
+	return ""
+}
+
 // WriteHuman prints the self-explaining run summary: working dir, the subjects
 // being attested (especially the git remote anchor), the logged-in tenant and
 // signer, and the Fulcio/TSA/Archivista destinations. Written to stderr so it
@@ -360,7 +375,7 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 		b.WriteByte('\n')
 	}
 	if s.WrappedCommand != nil {
-		fmt.Fprintf(&b, "  command exit: %d\n", s.WrappedCommand.ExitCode)
+		fmt.Fprintf(&b, "  command exit: %d%s\n", s.WrappedCommand.ExitCode, commandExitHint(s.WrappedCommand.ExitCode))
 	}
 	s.writeKeyGuardLine(&b)
 	// Narrow network observations from command tracing. They are printed as
