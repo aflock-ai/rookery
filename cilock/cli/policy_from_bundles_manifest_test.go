@@ -66,7 +66,11 @@ func buildManifestSidecarBytes(t *testing.T, files map[string]string) (predicate
 	return compact.Bytes(), hex.EncodeToString(sum[:]), side.MerkleRoot
 }
 
-// writeEnvelope writes a minimally-valid DSSE envelope carrying stmt.
+// writeEnvelope writes a minimally-valid DSSE envelope carrying stmt. "sig" is
+// a REQUIRED key of every DSSE signature (envelope v1.0.2), and
+// dsse.Envelope's decoder refuses a signature without it, so a fixture that
+// omits it is not an envelope at all: the companion-manifest reader would skip
+// it as unreadable. The value is never verified here, only decoded.
 func writeEnvelope(t *testing.T, path string, stmt any) {
 	t.Helper()
 	payload, err := json.Marshal(stmt)
@@ -76,7 +80,10 @@ func writeEnvelope(t *testing.T, path string, stmt any) {
 	env := map[string]any{
 		"payloadType": "application/vnd.in-toto+json",
 		"payload":     base64.StdEncoding.EncodeToString(payload),
-		"signatures":  []map[string]any{{"keyid": "testkeyid"}},
+		"signatures": []map[string]any{{
+			"keyid": "testkeyid",
+			"sig":   base64.StdEncoding.EncodeToString([]byte("unverified-test-signature")),
+		}},
 	}
 	raw, err := json.MarshalIndent(env, "", "  ")
 	if err != nil {

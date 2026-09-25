@@ -225,6 +225,7 @@ func sidecarManifests(sidecars []sidecarSummary) manifestIndex {
 		}
 		var env dsse.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
+			log.Debugf("material manifest sidecar %s: not a DSSE envelope: %v", s.path, err)
 			continue
 		}
 		body, digest, ok := manifestPredicateFromEnvelope(env)
