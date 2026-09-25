@@ -450,7 +450,7 @@ func TestCheckExternalCommitBinding(t *testing.T) {
 		{"projection claims C, signed payload is P", projected, false, hsecP},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkExternalCommitBinding("scan", tc.env, hsecC)
+			err := checkExternalCommitBinding(ExternalAttestation{Name: "scan"}, tc.env, hsecC)
 			if tc.bound {
 				require.NoError(t, err)
 				return

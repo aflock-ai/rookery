@@ -1,0 +1,11 @@
+{
+  "name": "pushgate",
+  "description": "Push through Pushgate with cilock: enroll the agent, produce signed evidence, act on refusals, and draft policies for a human to sign.",
+  "author": {
+    "name": "The Aflock Authors"
+  },
+  "homepage": "https://cilock.dev",
+  "repository": "https://github.com/aflock-ai/rookery",
+  "license": "Apache-2.0",
+  "keywords": ["pushgate", "cilock", "attestation", "supply-chain", "in-toto"]
+}

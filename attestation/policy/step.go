@@ -112,6 +112,22 @@ type ExternalAttestation struct {
 	RegoPolicies  []RegoPolicy  `json:"regopolicies,omitempty" jsonschema:"title=Rego Policies,description=Rego policies evaluated against the bare predicate (input is the predicate itself)"`
 	AiPolicies    []AiPolicy    `json:"aipolicies,omitempty" jsonschema:"title=AI Policies,description=AI policies evaluated against the bare predicate"`
 	Required      bool          `json:"required" jsonschema:"title=Required,description=When true (default), verification fails if no envelope matches; when false, absence is tolerated"`
+
+	// CommitSubject is the exact subject-name prefix that names a commit for
+	// THIS external, e.g. "https://pushgate.dev/v0.1/commithash:" for a
+	// Pushgate VSA. It is an opt-in to the SHA-1 subject arm, scoped to this
+	// external alone: a signed subject named exactly <CommitSubject><sha>, with
+	// a sha1 digest of that same 40-hex, non-null value, may match a requested
+	// commit digest, and under commit binding it binds the envelope to <sha>.
+	// The prefix is compared case-exact; only the hex digest is case-folded.
+	// It never applies to an attestation collection, and a second external of
+	// the same predicate type without it does not inherit it.
+	//
+	// Shape (cryptoutil.ValidateCommitSubjectPrefix): printable ASCII with no
+	// whitespace, at most 256 bytes, ending in "/commithash:", after an
+	// absolute URL namespace with a lower-case scheme and a host. Empty (the
+	// default) keeps the strict guard: SHA-1 subjects never match.
+	CommitSubject string `json:"commitSubject,omitempty" jsonschema:"title=Commit Subject,description=Exact subject-name prefix naming a commit for this external (e.g. https://pushgate.dev/v0.1/commithash:). Opts this external alone into matching a SHA-1 commit subject spelled <prefix><40-hex sha> and binds it under commit binding. Must end in /commithash: after an absolute URL; no whitespace."`
 }
 
 // UnmarshalJSON applies the documented default for Required: when the "required"

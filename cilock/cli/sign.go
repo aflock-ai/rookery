@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -27,12 +28,20 @@ import (
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 	"github.com/aflock-ai/rookery/attestation/workflow"
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
+	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	"github.com/spf13/cobra"
 )
 
 func SignCmd() *cobra.Command {
-	so := options.SignOptions{
+	cmd, _ := newSignCmd()
+	return cmd
+}
+
+// newSignCmd returns the sign command and the options its flags bind to, so a
+// test can drive one step of the command without running the signer.
+func newSignCmd() (*cobra.Command, *options.SignOptions) {
+	so := &options.SignOptions{
 		SignerOptions:            options.SignerOptions{},
 		KMSSignerProviderOptions: options.KMSSignerProviderOptions{},
 	}
@@ -41,7 +50,10 @@ func SignCmd() *cobra.Command {
 		Use:   "sign [file]",
 		Short: "Signs a file",
 		Long:  "Signs a file with the provided key source and outputs the signed file to the specified destination",
-		Example: `  # Sign a policy file with a local key, write the signed envelope
+		Example: `  # Sign a policy as yourself: opens your browser to log in to the platform
+  cilock sign --human -f policy.json -o policy.signed.json
+
+  # Sign a policy file with a local key, write the signed envelope
   cilock sign -k cosign.key -f policy.json -o policy.signed.json`,
 		SilenceErrors:     true,
 		SilenceUsage:      true,
@@ -55,7 +67,10 @@ func SignCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to read file to sign: %w", err)
 			}
-			if err := refuseOfflineWithoutLocalSigner(cmd, so); err != nil {
+			if err := selectHumanBrowserSigner(cmd, so); err != nil {
+				return err
+			}
+			if err := refuseOfflineWithoutLocalSigner(cmd, *so); err != nil {
 				return err
 			}
 			// A policy with a step declaring about is signed as v0.2 unless
@@ -68,7 +83,7 @@ func SignCmd() *cobra.Command {
 			if err := refuseUndecodableV02Policy(so.DataType, data); err != nil {
 				return err
 			}
-			if err := refuseAgentPolicySigning(cmd, so, data); err != nil {
+			if err := refuseAgentPolicySigning(cmd, *so, data); err != nil {
 				return err
 			}
 			limit, err := resolveMaxAttestationBytes(cmd, so.MaxAttestationBytes)
@@ -93,12 +108,68 @@ func SignCmd() *cobra.Command {
 				return fmt.Errorf("failed to load signer: %w", err)
 			}
 
-			return signBytes(cmd.Context(), so, data, signers...)
+			return signBytes(cmd.Context(), *so, data, signers...)
 		},
 	}
 
 	so.AddFlags(cmd)
-	return cmd
+	cmd.Flags().Bool(humanFlag, false,
+		"Sign as yourself through the platform's browser login (keyless Fulcio, platform TSA), never with a stored or agent credential. "+
+			"Use it to sign a policy on a machine where an agent is enrolled.")
+	return cmd, so
+}
+
+const humanFlag = "human"
+
+// selectHumanBrowserSigner turns --human into the platform's interactive
+// (browser) Fulcio flow: Fulcio URL, OIDC issuer and client id derived from
+// --platform-url, and the platform TSA so the short-lived certificate still
+// verifies later. Setting the OIDC issuer explicitly is what keeps the keyless
+// exchange from filling the token with a stored credential
+// (options.fulcioSignerNeedsToken), so the person who logs in is the signer.
+func selectHumanBrowserSigner(cmd *cobra.Command, so *options.SignOptions) error {
+	if human, _ := cmd.Flags().GetBool(humanFlag); !human {
+		return nil
+	}
+	if so.Offline || (cmd.Flags().Changed("platform-url") && so.PlatformURL == "") {
+		return errors.New(`--human signs through the platform's browser login; it cannot be combined with --offline or --platform-url ""`)
+	}
+	if len(providersFromFlags("signer", cmd.Flags())) > 0 {
+		return errors.New("--human chooses the signer itself (you, logged in through your browser); drop the -k/--signer-* flag")
+	}
+	pc := platformconfig.Derive(so.PlatformURL)
+	for _, f := range [][2]string{
+		{"signer-fulcio-url", pc.Fulcio},
+		{"signer-fulcio-oidc-issuer", pc.PlatformURL + "/fulcio/oidc"},
+		{"signer-fulcio-oidc-client-id", pc.OIDCClientID},
+	} {
+		if err := cmd.Flags().Set(f[0], f[1]); err != nil {
+			return fmt.Errorf("--human: set %s: %w", f[0], err)
+		}
+	}
+	if len(so.TimestampServers) == 0 {
+		so.TimestampServers = []string{pc.TSA}
+	}
+	return nil
+}
+
+// explicitSignerIdentity reports whether the caller chose WHO signs: a
+// non-fulcio signer (file key, KMS, SPIFFE, vault), or a fulcio signer with its
+// own token source. A fulcio signer with only a URL is not a choice of identity:
+// the keyless exchange fills its token from the stored credential, which on a
+// machine with an enrolled agent is the agent.
+func explicitSignerIdentity(cmd *cobra.Command) bool {
+	for p := range providersFromFlags("signer", cmd.Flags()) {
+		if p != "fulcio" {
+			return true
+		}
+	}
+	for _, name := range []string{"signer-fulcio-token", "signer-fulcio-token-path", "signer-fulcio-oidc-issuer"} {
+		if f := cmd.Flags().Lookup(name); f != nil && f.Changed {
+			return true
+		}
+	}
+	return false
 }
 
 // refuseOfflineWithoutLocalSigner names the reason an offline sign cannot
@@ -122,7 +193,7 @@ func refuseAgentPolicySigning(cmd *cobra.Command, so options.SignOptions, data [
 	}
 	// Any explicitly selected signer wins over platform identity resolution.
 	// In particular, -k is the offline proof path used by the validator harness.
-	if len(providersFromFlags("signer", cmd.Flags())) > 0 || so.PlatformURL == "" {
+	if explicitSignerIdentity(cmd) || so.PlatformURL == "" {
 		return nil
 	}
 	active, err := auth.LookupAgent(so.PlatformURL)
@@ -134,7 +205,8 @@ func refuseAgentPolicySigning(cmd *cobra.Command, so options.SignOptions, data [
 		return fmt.Errorf("resolve pending agent before policy signing: %w", err)
 	}
 	if active != nil || pending != nil {
-		return fmt.Errorf("humans sign policies, agents sign attestations: this policy would use the enrolled agent for %s; have a human sign this policy", auth.NormalizeURL(so.PlatformURL))
+		return fmt.Errorf("humans sign policies, agents sign attestations: this policy would use the enrolled agent for %s. "+
+			"A human signs it with a browser login: cilock sign --human -f %s -o <signed.json>", auth.NormalizeURL(so.PlatformURL), so.InFilePath)
 	}
 	return nil
 }

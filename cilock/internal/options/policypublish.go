@@ -409,7 +409,7 @@ func (c *PolicyClient) listProducts(ctx context.Context) (productPage, error) {
 	var out struct {
 		Products productPage `json:"products"`
 	}
-	if err := c.post(ctx, productListQuery, map[string]any{"first": productListCap}, &out); err != nil {
+	if err := c.post(ctx, productListQuery, map[string]any{gqlVarFirst: productListCap}, &out); err != nil {
 		return productPage{}, err
 	}
 	return out.Products, nil
@@ -423,8 +423,8 @@ func (c *PolicyClient) nearProducts(ctx context.Context, requested string) (prod
 		Products productPage `json:"products"`
 	}
 	vars := map[string]any{
-		"near":  strings.TrimSpace(requested),
-		"first": productNearCap,
+		"near":      strings.TrimSpace(requested),
+		gqlVarFirst: productNearCap,
 	}
 	if err := c.post(ctx, productNearQuery, vars, &out); err != nil {
 		return productPage{}, err
@@ -698,7 +698,7 @@ func (c *PolicyClient) ResolveBoundPolicy(ctx context.Context, productID string)
 			} `json:"edges"`
 		} `json:"policyBindings"`
 	}
-	if err := c.post(ctx, policyBindingsByProductQuery, map[string]any{"productID": productID}, &out); err != nil {
+	if err := c.post(ctx, policyBindingsByProductQuery, map[string]any{gqlVarProductID: productID}, &out); err != nil {
 		return nil, fmt.Errorf("resolve bound policy for product %s: %w", productID, err)
 	}
 	edges := out.PolicyBindings.Edges
@@ -714,7 +714,7 @@ func (c *PolicyClient) ResolveBoundPolicy(ctx context.Context, productID string)
 				names = append(names, e.Node.ID)
 			}
 		}
-		return nil, fmt.Errorf("product has %d policy bindings (%s) — cilock verify cannot pick one for you; pass -p with the policy to verify against", len(edges), strings.Join(names, ", "))
+		return nil, fmt.Errorf("product has %d policy bindings (%s): a local verify (--client) checks one policy and cannot pick one for you; drop --client to have the platform verify every binding, or pass -p with the policy to verify against", len(edges), strings.Join(names, ", "))
 	}
 	node := edges[0].Node
 	bp := &BoundPolicy{BindingID: node.ID, BoundBy: node.binder(), BoundAt: node.CreatedAt}
@@ -833,7 +833,7 @@ func (c *PolicyClient) CreatePolicyBinding(ctx context.Context, tenantID, defini
 	input := map[string]any{
 		gqlFieldTenantID:     tenantID,
 		"policyDefinitionID": definitionID,
-		"productID":          productID,
+		gqlVarProductID:      productID,
 	}
 	if releaseID != "" {
 		input["policyReleaseID"] = releaseID

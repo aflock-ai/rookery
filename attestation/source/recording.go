@@ -64,7 +64,13 @@ func (r *RecordingSource) Search(ctx context.Context, collectionName string, sub
 }
 
 func (r *RecordingSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
-	out, err := r.inner.SearchByPredicateType(ctx, predicateTypes, subjectDigests)
+	return r.SearchByPredicateTypeWithOptions(ctx, predicateTypes, subjectDigests, PredicateSearchOptions{})
+}
+
+// SearchByPredicateTypeWithOptions forwards the options to the inner source
+// when it accepts them, and records what came back either way.
+func (r *RecordingSource) SearchByPredicateTypeWithOptions(ctx context.Context, predicateTypes []string, subjectDigests []string, opts PredicateSearchOptions) ([]StatementEnvelope, error) {
+	out, err := searchPredicateWithOptions(ctx, r.inner, predicateTypes, subjectDigests, opts)
 	if err != nil {
 		return out, err
 	}

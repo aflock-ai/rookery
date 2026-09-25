@@ -17,7 +17,7 @@ package cli
 import (
 	"context"
 	"crypto"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -131,34 +131,24 @@ func runPlatformVerify(ctx context.Context, vo options.VerifyOptions, flagChange
 	// (30s) is sized for metadata queries, not a verification.
 	pc.HTTPClient = &http.Client{Timeout: platformVerifyTimeout}
 
-	bound, err := pc.ResolveBoundPolicy(ctx, session.cred.ProductID)
-	if err != nil {
-		return err
-	}
 	productLabel := session.cred.ProductName
 	if productLabel == "" {
 		productLabel = session.cred.ProductID
 	}
-	if bound == nil {
-		return fmt.Errorf("no policy bound for product %q — bind one with `cilock policy bind`, or pass -p/--policy for local verification", productLabel)
-	}
-
-	// The loud provenance line, BEFORE any verdict output — same contract as
-	// the local bound-policy path: name what is about to be trusted, and on
-	// whose authority.
-	log.Infof("platform verify: policy %q release %q for product %q — bound by %s at %s; --client verifies locally instead",
-		bound.DefinitionName, bound.ReleaseTag, productLabel, bound.BoundBy, bound.BoundAt)
 
 	commit, subjects, err := platformVerifyAnchors(&vo)
 	if err != nil {
 		return err
 	}
 
-	eval, err := pc.VerifyComplianceSync(ctx, bound.BindingID, commit, subjects, false)
+	gate, err := evaluateAllBindings(ctx, pc, session.cred.ProductID, commit, subjects)
+	if errors.Is(err, errNoBoundPolicy) {
+		return fmt.Errorf("no policy bound for product %q: bind one with `cilock policy bind`, or pass -p/--policy for local verification", productLabel)
+	}
 	if err != nil {
 		return err
 	}
-	return renderPlatformEvaluation(vo, eval)
+	return renderPlatformGate(vo, gate, os.Stdout, os.Stderr)
 }
 
 // platformVerifyAnchors assembles the request's anchors from what the caller
@@ -204,77 +194,5 @@ func platformVerifyAnchors(vo *options.VerifyOptions) (commit string, subjects [
 // contract is "the answer is a VSA", and an answer without one is degraded
 // on every surface, not just one of them.
 func gateAccepts(eval *options.PlatformEvaluation) bool {
-	return eval.Passed() && eval.VsaGitoidSha256 != ""
-}
-
-// platformVerdictJSON is the machine-readable platform-mode verdict, the
-// sibling of the local mode's VerifyVerdict: `passed` for branching — and it
-// means "this gate accepts", never the raw platform verdict, so branching on
-// it and branching on the exit code are the same branch. Status carries the
-// platform's own verdict for consumers that need the distinction.
-type platformVerdictJSON struct {
-	Passed          bool     `json:"passed"`
-	Status          string   `json:"status"`
-	Reasons         []string `json:"reasons,omitempty"`
-	VsaGitoidSha256 string   `json:"vsaGitoidSha256,omitempty"`
-	EvaluationID    string   `json:"evaluationId,omitempty"`
-	CommitHash      string   `json:"commitHash,omitempty"`
-}
-
-// renderPlatformEvaluation reports the door's answer. The VSA gitoid is
-// printed on success AND failure when present: the signed claim exists either
-// way, and the failure VSA is exactly what an auditor wants.
-func renderPlatformEvaluation(vo options.VerifyOptions, eval *options.PlatformEvaluation) error {
-	if vo.OutputJSON() {
-		out := platformVerdictJSON{
-			Passed:          gateAccepts(eval),
-			Status:          strings.ToUpper(eval.Status),
-			Reasons:         eval.Reasons,
-			VsaGitoidSha256: eval.VsaGitoidSha256,
-			EvaluationID:    eval.ID,
-			CommitHash:      eval.CommitHash,
-		}
-		enc := json.NewEncoder(os.Stdout)
-		if err := enc.Encode(out); err != nil {
-			return fmt.Errorf("encode platform verdict: %w", err)
-		}
-	} else {
-		switch {
-		case eval.Passed():
-			log.Infof("PASSED — the platform's signed answer is VSA %s", orNoVSA(eval.VsaGitoidSha256))
-		case strings.EqualFold(eval.Status, "pending"):
-			log.Errorf("PENDING — the bound policy's evidence has not arrived for this anchor yet; " +
-				"if the pipeline just uploaded, confirm the upload returned before verifying")
-		default:
-			log.Errorf("FAILED — VSA %s", orNoVSA(eval.VsaGitoidSha256))
-		}
-		for _, r := range eval.Reasons {
-			log.Errorf("  reason: %s", r)
-		}
-	}
-	if gateAccepts(eval) {
-		return nil
-	}
-	// A PASSED verdict with no VSA is a degraded answer, and the gate fails
-	// CLOSED on it (Codex, #8666 rounds 1 and 3). RunSync deliberately
-	// preserves the verdict when the VSA upload fails — right for the ROW —
-	// but an answer nobody can independently re-verify is refused on EVERY
-	// surface: the exit code and the JSON `passed` field derive from the one
-	// predicate above, so they cannot drift again. The human-readable verdict
-	// still prints, so a retry for the evidence is an informed one.
-	if eval.Passed() {
-		return fmt.Errorf("the policy passed, but the platform could not record the VSA for it — " +
-			"the verdict is not independently verifiable, so this gate fails closed; re-run to mint one")
-	}
-	return fmt.Errorf("platform verification did not pass: status %s", strings.ToUpper(eval.Status))
-}
-
-// orNoVSA renders a missing VSA gitoid honestly rather than as an empty
-// string: an upload that failed leaves the verdict standing and the gitoid
-// blank, loudly, and hiding that would launder a degraded answer.
-func orNoVSA(gitoid string) string {
-	if gitoid == "" {
-		return "(none recorded — the VSA upload failed; the verdict stands but is not independently checkable)"
-	}
-	return gitoid
+	return eval != nil && eval.Passed() && eval.VsaGitoidSha256 != ""
 }

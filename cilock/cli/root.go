@@ -122,6 +122,7 @@ The directory is credential state, not a general filesystem or network sandbox.`
 	cmd.AddCommand(GetCmd())
 	cmd.AddCommand(GitCmd())
 	cmd.AddCommand(PushgateCmd())
+	cmd.AddCommand(SkillCmd())
 	return cmd
 }
 

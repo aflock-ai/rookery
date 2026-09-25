@@ -85,16 +85,11 @@ func payloadMatchesSubjects(payload []byte, subjectDigests []string) (bool, erro
 // type from the predicate body instead would let the attacker-shaped body vouch
 // for itself — exactly the bypass.
 func decodeSignedSubjectScope(payload []byte) ([]intoto.Subject, cryptoutil.SubjectMatchScope, error) {
-	var stmt struct {
-		PredicateType string           `json:"predicateType"`
-		Subject       []intoto.Subject `json:"subject"`
-		Predicate     gitAttestedClaim `json:"predicate"`
-	}
-	if err := json.Unmarshal(payload, &stmt); err != nil {
+	facts, err := decodeSignedStatementFacts(payload)
+	if err != nil {
 		return nil, cryptoutil.SubjectMatchScope{}, err
 	}
-	gitAttested := bool(stmt.Predicate) && isCollectionPredicateType(stmt.PredicateType)
-	return stmt.Subject, cryptoutil.SubjectMatchScope{HardenedGitAttested: gitAttested}, nil
+	return facts.subjects, facts.scope, nil
 }
 
 // VerifiedSubjectScope derives a candidate's subjects and git-attested scope
@@ -611,7 +606,17 @@ var ErrExternalSubjectNotRequested = errors.New("external attestation subject do
 // empty Verifiers slice + an error in Errors) so that callers can surface
 // the rejection reason rather than silently dropping them.
 func (s *VerifiedSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
-	candidates, err := s.source.SearchByPredicateType(ctx, predicateTypes, subjectDigests)
+	return s.SearchByPredicateTypeWithOptions(ctx, predicateTypes, subjectDigests, PredicateSearchOptions{})
+}
+
+// SearchByPredicateTypeWithOptions is SearchByPredicateType with per-search
+// opt-ins (PredicateSearchOptions). With the zero options it is exactly
+// SearchByPredicateType. With declared commit subjects, the substitution guard
+// additionally admits a SHA-1 commit subject spelled <prefix><sha> on a
+// non-collection statement of the keyed predicate type, read from the signed
+// payload.
+func (s *VerifiedSource) SearchByPredicateTypeWithOptions(ctx context.Context, predicateTypes []string, subjectDigests []string, opts PredicateSearchOptions) ([]StatementEnvelope, error) {
+	candidates, err := searchPredicateWithOptions(ctx, s.source, predicateTypes, subjectDigests, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -634,10 +639,11 @@ func (s *VerifiedSource) SearchByPredicateType(ctx context.Context, predicateTyp
 
 		if len(passed) == 0 {
 			toVerify.Errors = append(toVerify.Errors, fmt.Errorf("no verifiers passed"))
-		} else if matches, merr := payloadMatchesSubjects(toVerify.Envelope.Payload, subjectDigests); merr != nil || !matches {
+		} else if gerr := matchSignedExternalSubjects(toVerify.Envelope.Payload, subjectDigests, opts); gerr != nil {
 			// Artifact-substitution guard: read subjects from the signature-verified
-			// payload, never the source-populated Statement field.
-			toVerify.Errors = append(toVerify.Errors, ErrExternalSubjectNotRequested)
+			// payload, never the source-populated Statement field. The refusal
+			// matches ErrExternalSubjectNotRequested and says why.
+			toVerify.Errors = append(toVerify.Errors, gerr)
 			passed = nil
 		}
 		toVerify.Verifiers = passed

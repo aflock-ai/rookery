@@ -67,7 +67,10 @@ func VerifyCmd() *cobra.Command {
 			"is computed for you; no digest to extract or paste. The positional path is shorthand for\n" +
 			"--artifactfile (a regular file) or --directory-path (a directory). With a platform session,\n" +
 			"trust and the product's bound policy resolve automatically, so the flagless form needs no\n" +
-			"other arguments. To verify by digest instead, pass --subjects sha256:<hex>.",
+			"other arguments. To verify by digest instead, pass --subjects sha256:<hex>.\n\n" +
+			"With a session and no -p/--client, the platform verifies EVERY policy bound to the product\n" +
+			"and the command passes only when each one passes with its own VSA. One line per binding is\n" +
+			"printed; --format json carries a per-binding `bindings` array beside the overall verdict.",
 		Example: `  # Verify a binary flagless: sha256 computed from the file, trust + bound
   # policy resolved from your platform session (cilock login)
   cilock verify ./my-binary

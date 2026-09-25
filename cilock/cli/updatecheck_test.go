@@ -152,6 +152,10 @@ func TestSkipUpdateCheckForArgs(t *testing.T) {
 		// Tokens after "--" are the wrapped command's argv, not subcommands.
 		{"run wrapping sensitive word", []string{"run", "--", "help"}, false},
 		{"run wrapping completion", []string{"run", "-s", "build", "--", "make", "completion"}, false},
+		// `cilock skill` promises no network I/O.
+		{"skill is local", []string{"skill", "install", "--agent", "codex"}, true},
+		{"skill after flags", []string{"--log-level", "debug", "skill", "show"}, true},
+		{"run wrapping skill", []string{"run", "--", "skill"}, false},
 	}
 	for _, tc := range cases {
 		if got := skipUpdateCheckForArgs(tc.args); got != tc.want {

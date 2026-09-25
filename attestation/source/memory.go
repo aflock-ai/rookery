@@ -215,7 +215,17 @@ func (s *MemorySource) matchesAttestations(ref string, attestations []string) bo
 // This path does NOT verify the envelope — verification happens later in the
 // VerifiedSource path (or in the policy engine via external-attestation
 // flow). No Verifiers are populated by this implementation.
-func (s *MemorySource) SearchByPredicateType(_ context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
+func (s *MemorySource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
+	return s.SearchByPredicateTypeWithOptions(ctx, predicateTypes, subjectDigests, PredicateSearchOptions{})
+}
+
+// SearchByPredicateTypeWithOptions is SearchByPredicateType whose subject
+// pre-filter also keeps a statement that names a requested digest through a
+// declared commit subject (PredicateSearchOptions.CommitSubjects). The index
+// never holds SHA-1 values, so without this the VerifiedSource guard would
+// never see the candidate it is allowed to admit. Nothing here is trusted:
+// the verdict is re-derived from the signed payload in VerifiedSource.
+func (s *MemorySource) SearchByPredicateTypeWithOptions(_ context.Context, predicateTypes []string, subjectDigests []string, opts PredicateSearchOptions) ([]StatementEnvelope, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -229,7 +239,7 @@ func (s *MemorySource) SearchByPredicateType(_ context.Context, predicateTypes [
 		if _, ok := predicateSet[env.Statement.PredicateType]; !ok {
 			continue
 		}
-		if !s.matchesSubjects(ref, subjectDigests) {
+		if !s.matchesSubjects(ref, subjectDigests) && !declaredCommitSubjectPrefilter(env.Statement, subjectDigests, opts) {
 			continue
 		}
 

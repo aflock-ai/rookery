@@ -66,11 +66,27 @@ type ValidationResult struct {
 }
 
 type policyDocument struct {
-	Expires              string                        `json:"expires"`
-	Steps                map[string]policyStep         `json:"steps"`
-	PublicKeys           map[string]publicKeyEntry     `json:"publickeys,omitempty"`
-	Roots                map[string]rootEntry          `json:"roots,omitempty"`
-	TimestampAuthorities map[string]timestampAuthority `json:"timestampauthorities,omitempty"`
+	Expires              string                         `json:"expires"`
+	Steps                map[string]policyStep          `json:"steps"`
+	PublicKeys           map[string]publicKeyEntry      `json:"publickeys,omitempty"`
+	Roots                map[string]rootEntry           `json:"roots,omitempty"`
+	TimestampAuthorities map[string]timestampAuthority  `json:"timestampauthorities,omitempty"`
+	ExternalAttestations map[string]externalAttestation `json:"externalAttestations,omitempty"`
+}
+
+// externalAttestation is the part of a policy external attestation that
+// validation reads. Required is a pointer because an ABSENT key means required
+// (attestation/policy ExternalAttestation.UnmarshalJSON).
+type externalAttestation struct {
+	Name          string        `json:"name"`
+	PredicateType string        `json:"predicateType"`
+	Functionaries []functionary `json:"functionaries"`
+	Required      *bool         `json:"required,omitempty"`
+	CommitSubject string        `json:"commitSubject,omitempty"`
+}
+
+func (e externalAttestation) required() bool {
+	return e.Required == nil || *e.Required
 }
 
 type policyStep struct {
@@ -183,6 +199,7 @@ func validatePolicyContent(policy *policyDocument, result *ValidationResult) {
 	validatePolicySchema(policy, result)
 	validateExpiration(policy, result)
 	validateSteps(policy, result)
+	validateExternalAttestations(policy, result)
 	validatePublicKeys(policy, result)
 	validateRoots(policy, result)
 	validateRegoPolicies(policy, result)
@@ -255,14 +272,58 @@ func validatePolicySchema(policy *policyDocument, result *ValidationResult) {
 		result.Valid = false
 	}
 
-	if len(policy.Steps) == 0 {
-		result.Errors = append(result.Errors, "Policy must define at least one step")
+	// A policy whose whole gate is an external attestation (a VSA) has no
+	// steps; the verifier accepts that shape. It must still require something:
+	// optional externals alone verify nothing, and the verifier fails such a
+	// policy closed (GHSA-rgp5-33mp-jhfm), so it is refused here too.
+	if len(policy.Steps) == 0 && !hasRequiredExternal(policy) {
+		result.Errors = append(result.Errors, "Policy must define at least one step or one required external attestation")
 		result.Valid = false
 	}
 
 	if len(policy.PublicKeys) == 0 && len(policy.Roots) == 0 {
 		result.Errors = append(result.Errors, "Policy must define at least one public key or root certificate")
 		result.Valid = false
+	}
+}
+
+func hasRequiredExternal(policy *policyDocument) bool {
+	for _, ext := range policy.ExternalAttestations {
+		if ext.required() {
+			return true
+		}
+	}
+	return false
+}
+
+// validateExternalAttestations checks what the verifier would otherwise
+// refuse, or silently never satisfy, on each external attestation: a missing
+// predicate type, no functionary (no signer can ever match, so the external
+// can never pass), and a malformed or misapplied commitSubject.
+func validateExternalAttestations(policy *policyDocument, result *ValidationResult) {
+	names := make([]string, 0, len(policy.ExternalAttestations))
+	for name := range policy.ExternalAttestations {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ext := policy.ExternalAttestations[name]
+		if ext.PredicateType == "" {
+			result.Errors = append(result.Errors, fmt.Sprintf("External attestation '%s': missing predicateType", name))
+			result.Valid = false
+		}
+		if len(ext.Functionaries) == 0 {
+			result.Errors = append(result.Errors, fmt.Sprintf("External attestation '%s': must define at least one functionary", name))
+			result.Valid = false
+		}
+		if ext.CommitSubject == "" {
+			continue
+		}
+		probe := attpolicy.ExternalAttestation{PredicateType: ext.PredicateType, CommitSubject: ext.CommitSubject}
+		if err := probe.ValidateCommitSubject(); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("External attestation '%s': invalid commitSubject: %v", name, err))
+			result.Valid = false
+		}
 	}
 }
 

@@ -445,10 +445,32 @@ func (p Policy) validateStepShape(name string, step Step) error {
 // attestation. External attestations carry AI policies exactly as steps do, so
 // an unasserted or duplicate-named question must be refused on both paths.
 func (p Policy) validateExternalAiPolicies() error {
-	for name, external := range p.ExternalAttestations {
+	for _, name := range sortedNames(p.ExternalAttestations) {
+		external := p.ExternalAttestations[name]
 		if err := validateAiPolicySet(external.AiPolicies, fmt.Sprintf("external attestation %q", name)); err != nil {
 			return err
 		}
+		if err := external.ValidateCommitSubject(); err != nil {
+			return fmt.Errorf("external attestation %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// ValidateCommitSubject refuses a malformed commitSubject, and any
+// commitSubject on an external whose predicate type is an attestation
+// collection: collections keep only the hardened-git SHA-1 arm. An empty
+// commitSubject is valid. Policy.Validate runs it for every external;
+// cilock policy validate runs it too.
+func (e ExternalAttestation) ValidateCommitSubject() error {
+	if e.CommitSubject == "" {
+		return nil
+	}
+	if err := cryptoutil.ValidateCommitSubjectPrefix(e.CommitSubject); err != nil {
+		return err
+	}
+	if e.PredicateType == attestation.CollectionType || e.PredicateType == attestation.LegacyCollectionType {
+		return fmt.Errorf("commitSubject does not apply to predicateType %s: an attestation collection binds its commit through a hardened git attestation", e.PredicateType)
 	}
 	return nil
 }
@@ -1743,16 +1765,23 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 	// the second external on an empty candidate set.
 	searched := make(map[string][]source.StatementEnvelope, len(p.ExternalAttestations))
 
+	// Declared commit subjects, per predicate type. The shared search carries
+	// every prefix declared for its type, so it can return what any of those
+	// externals may admit; each external is then re-checked against its OWN
+	// prefix below, so one external's opt-in never reaches another.
+	commitSubjects := externalCommitSubjects(p.ExternalAttestations)
+
 	// Name order: the first failing required external is the one reported,
 	// and a map range named a different one on every run.
 	for _, name := range sortedNames(p.ExternalAttestations) {
 		ext := p.ExternalAttestations[name]
 		er := ExternalResult{Name: name}
+		declared := commitSubjects[ext.PredicateType]
 
 		envelopes, ok := searched[ext.PredicateType]
 		if !ok {
 			var err error
-			envelopes, err = vo.verifiedSource.SearchByPredicateType(ctx, []string{ext.PredicateType}, vo.subjectDigests)
+			envelopes, err = searchExternal(ctx, vo, ext.PredicateType, declared)
 			if err != nil {
 				return results, fmt.Errorf("failed to search external attestation %q: %w", name, err)
 			}
@@ -1778,6 +1807,18 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 				continue
 			}
 
+			// The shared search admitted this candidate under the prefixes of
+			// every external of this type. Hold it to THIS external's own
+			// declaration, from the signed payload; a candidate that only some
+			// other external's commitSubject admits is not about this verify
+			// for this external.
+			if len(declared) > 0 {
+				if err := source.MatchExternalSubjects(env.Envelope.Payload, vo.subjectDigests, ext.PredicateType, ext.CommitSubject); err != nil {
+					er.Unbound = append(er.Unbound, RejectedExternal{Envelope: env, Reason: err})
+					continue
+				}
+			}
+
 			// Commit binding, before the functionary, Rego and AI checks: an
 			// envelope not bound to the commit under evaluation is not evidence
 			// for this verify, so it can neither satisfy the external nor reach
@@ -1785,7 +1826,9 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 			// Nor can it FAIL the external: it is unbound, and an external
 			// whose every candidate is unbound is treated as not found.
 			if vo.commitBinding != "" {
-				if err := checkExternalCommitBinding(name, env, vo.commitBinding); err != nil {
+				bound := ext
+				bound.Name = name
+				if err := checkExternalCommitBinding(bound, env, vo.commitBinding); err != nil {
 					er.Unbound = append(er.Unbound, RejectedExternal{Envelope: env, Reason: err})
 					continue
 				}
@@ -1879,7 +1922,16 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 		if len(er.Passed) == 0 && len(er.Rejected) == 0 {
 			if ext.Required {
 				results[name] = er
-				return results, ErrMissingExternalAttestation{Name: name, PredicateType: ext.PredicateType, Unbound: len(er.Unbound)}
+				refused, omitted := externalCandidateDiagnostics(er.Unbound)
+				return results, ErrMissingExternalAttestation{
+					Name:              name,
+					PredicateType:     ext.PredicateType,
+					Unbound:           len(er.Unbound),
+					RequestedSubjects: source.LabelSubjectDigests(vo.subjectDigests),
+					Candidates:        len(envelopes),
+					Refused:           refused,
+					RefusedOmitted:    omitted,
+				}
 			}
 			er.Skipped = true
 			results[name] = er
@@ -1896,10 +1948,15 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 			for _, r := range er.Rejected {
 				reasons = append(reasons, r.Reason)
 			}
+			refused, omitted := externalCandidateDiagnostics(er.Rejected)
 			return results, ErrExternalAttestationRejected{
-				Name:          name,
-				PredicateType: ext.PredicateType,
-				Rejections:    reasons,
+				Name:              name,
+				PredicateType:     ext.PredicateType,
+				Rejections:        reasons,
+				RequestedSubjects: source.LabelSubjectDigests(vo.subjectDigests),
+				Candidates:        len(envelopes),
+				Refused:           refused,
+				RefusedOmitted:    omitted,
 			}
 		}
 

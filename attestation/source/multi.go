@@ -90,7 +90,14 @@ func (s *MultiSource) Search(ctx context.Context, collectionName string, subject
 // the scaffold PR) will propagate their "not implemented" error — callers
 // wiring MultiSource into external-attestation verification should be aware
 // of that until the follow-up PRs land.
-func (s *MultiSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) { //nolint:gocognit // mirrors Search's channels + WaitGroup fan-out; flattening loses parity with the existing pattern
+func (s *MultiSource) SearchByPredicateType(ctx context.Context, predicateTypes []string, subjectDigests []string) ([]StatementEnvelope, error) {
+	return s.SearchByPredicateTypeWithOptions(ctx, predicateTypes, subjectDigests, PredicateSearchOptions{})
+}
+
+// SearchByPredicateTypeWithOptions fans the search out like
+// SearchByPredicateType, handing the options to each sub-source that accepts
+// them (searchPredicateWithOptions).
+func (s *MultiSource) SearchByPredicateTypeWithOptions(ctx context.Context, predicateTypes []string, subjectDigests []string, opts PredicateSearchOptions) ([]StatementEnvelope, error) { //nolint:gocognit // mirrors Search's channels + WaitGroup fan-out; flattening loses parity with the existing pattern
 	results := []StatementEnvelope{}
 	errs := []error{}
 
@@ -118,7 +125,7 @@ func (s *MultiSource) SearchByPredicateType(ctx context.Context, predicateTypes 
 		wg.Add(1)
 		go func(src Sourcer) {
 			defer wg.Done()
-			res, err := src.SearchByPredicateType(ctx, predicateTypes, subjectDigests)
+			res, err := searchPredicateWithOptions(ctx, src, predicateTypes, subjectDigests, opts)
 			if err != nil {
 				errCh <- err
 			} else {

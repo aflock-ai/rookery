@@ -54,7 +54,8 @@ const gitAttestationType = "https://aflock.ai/attestations/git/v0.1"
 // passed the external and decided that step. A bare predicate (a SLSA
 // provenance, a verification summary) carries subjects, not a commit claim,
 // so under the binding it is refused like a collection with no git
-// attestation.
+// attestation, unless its external declares commitSubject and its signed
+// subjects name the commit through exactly that prefix (declaredCommitOf).
 //
 // THE ZERO VALUE IS UNBOUND. Without this option (or with an empty commit)
 // the engine keeps its historical behaviour: a step passes on any
@@ -237,9 +238,15 @@ type ErrExternalNotBoundToCommit struct {
 	Reference     string
 	WitnessCommit string
 	Commit        string
+	// CommitSubject is set when the external declares a commitSubject and the
+	// envelope names no commit through it.
+	CommitSubject string
 }
 
 func (e ErrExternalNotBoundToCommit) Error() string {
+	if e.WitnessCommit == "" && e.CommitSubject != "" {
+		return fmt.Sprintf("external attestation %q: envelope %s has no signed sha1 subject named %s<commit> and carries no git attestation, so it is not bound to commit %s", e.External, e.Reference, e.CommitSubject, e.Commit)
+	}
 	if e.WitnessCommit == "" {
 		return fmt.Sprintf("external attestation %q: envelope %s carries no git attestation, so it is not bound to commit %s", e.External, e.Reference, e.Commit)
 	}
@@ -247,12 +254,32 @@ func (e ErrExternalNotBoundToCommit) Error() string {
 }
 
 // checkExternalCommitBinding reports whether an external attestation envelope
-// is bound to commit (already normalized): it must be an attestation
-// collection that carries at least one git attestation, and every git
-// attestation's commithash must equal commit. This is checkCommitBinding's
-// rule for step collections, applied to an external candidate.
-func checkExternalCommitBinding(external string, env source.StatementEnvelope, commit string) error {
-	notBound := ErrExternalNotBoundToCommit{External: external, Reference: env.Reference, Commit: commit}
+// is bound to commit (already normalized). Two shapes bind:
+//
+//   - an attestation collection that carries at least one git attestation,
+//     every one of whose commithash equals commit (checkCommitBinding's rule
+//     for step collections, applied to an external candidate);
+//   - for an external that declares commitSubject, a bare statement of the
+//     external's own predicate type whose SIGNED subjects include
+//     <commitSubject><commit> with a sha1 digest of commit
+//     (declaredCommitOf). Nothing is read from the source-projected
+//     Statement for this shape: no signed payload, no binding.
+//
+// Any other envelope, including a bare predicate of an external that declares
+// no commitSubject, is refused as before.
+func checkExternalCommitBinding(ext ExternalAttestation, env source.StatementEnvelope, commit string) error {
+	notBound := ErrExternalNotBoundToCommit{External: ext.Name, Reference: env.Reference, Commit: commit}
+	if ext.CommitSubject != "" {
+		named, bound := declaredCommitOf(ext, env.Envelope.Payload, commit)
+		if bound {
+			return nil
+		}
+		if named != "" {
+			notBound.WitnessCommit = named
+			return notBound
+		}
+		notBound.CommitSubject = ext.CommitSubject
+	}
 	hashes := externalCommitHashes(env)
 	if len(hashes) == 0 {
 		return notBound

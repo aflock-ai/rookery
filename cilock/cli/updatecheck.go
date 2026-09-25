@@ -121,6 +121,10 @@ func skipUpdateCheckForArgs(args []string) bool {
 		switch a {
 		case "completion", cobraCompleteCmd, cobraCompleteNoDescCmd, "help":
 			return true
+		case "skill":
+			// `cilock skill` only reads its embedded files and writes local
+			// ones; it promises no network I/O, so no release check either.
+			return true
 		}
 		sawCommandWord = true
 	}

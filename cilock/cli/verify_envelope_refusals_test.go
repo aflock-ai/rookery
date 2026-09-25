@@ -310,7 +310,9 @@ func TestVerifyEnvelope_DoesNotRouteToPlatformDoor(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, f.JSON, 0o600))
 
 	// The instrument first: without --envelope, this session does go to the door.
-	_, _, err := executeCmdOutput("verify", "--platform-url", platformURL)
+	// It carries an anchor because an anchorless platform verify is refused
+	// before any request is made, which would leave the instrument reading 0.
+	_, _, err := executeCmdOutput("verify", "--platform-url", platformURL, "--commit", "0b7e9a52")
 	require.Error(t, err)
 	require.NotZero(t, strays.Load(), "the loopback platform must see a platform-mode verify")
 	strays.Store(0)

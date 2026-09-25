@@ -103,6 +103,10 @@ type policyDraftOpts struct {
 	platformURL string
 	datatype    string
 	force       bool
+	// hydrateLocal fills the platform sentinels from discovery on this machine
+	// instead of calling the platform's hydration endpoint. See
+	// policy_draft_local.go.
+	hydrateLocal bool
 }
 
 // PolicyDraftCmd is `cilock policy draft`. It takes a hand-authored policy
@@ -142,7 +146,24 @@ never invokes ` + "`cilock sign`" + ` for you — it prints the exact command fo
 to run.
 
 Auth: a logged-in session with the policy:validate scope. If the platform
-rejects the call for a missing scope, run ` + "`cilock login`" + ` again to pick it up.`,
+rejects the call for a missing scope, run ` + "`cilock login`" + ` again to pick it up.
+
+Local hydration (--hydrate-local): for the local verify loop, draft can fill the
+same two sentinels itself, with no login and no call to the hydration endpoint.
+An empty roots["fulcio-root"] (or a functionary that names fulcio-root with no
+such root and no "*" root elsewhere) gets the platform Fulcio CA chain from the
+discovery document's trust_bundle_pem; an empty timestampauthorities
+["platform-tsa"] gets the chain served at discovery's tsa_cert_chain_url. The
+self-signed certificate becomes the root and the rest become intermediates,
+exactly as the platform places them. Discovery must be https (http only for
+loopback), the TSA chain must be on the platform's own origin, and a trust
+bundle that differs from the one ` + "`cilock verify`" + ` pinned for this platform is
+refused. Each placed certificate is printed with its subject and sha256 so you
+can check it before signing. The output is still UNSIGNED, and a policy with no
+empty sentinel is written back byte-for-byte.
+
+Without --hydrate-local nothing is filled locally: the source goes to the
+platform unchanged and the platform does the hydration, as it does on publish.`,
 		Example: `  # Hydrate a hand-authored policy — writes policy.hydrated.json, UNSIGNED
   cilock policy draft -f policy.json
 
@@ -153,7 +174,12 @@ rejects the call for a missing scope, run ` + "`cilock login`" + ` again to pick
   cilock policy draft -f policy.json -o hydrated.json --force
 
   # Against a specific platform
-  cilock policy draft -f policy.json --platform-url https://platform.testifysec.com`,
+  cilock policy draft -f policy.json --platform-url https://platform.testifysec.com
+
+  # No login: fill fulcio-root / platform-tsa from platform discovery on this
+  # machine, e.g. to sign a scratch copy with a local key for cilock verify
+  cilock policy draft -f policy.json -o policy.local.json --hydrate-local \
+    --platform-url https://platform.testifysec.com`,
 		Args:              cobra.NoArgs,
 		SilenceErrors:     true,
 		SilenceUsage:      true,
@@ -170,6 +196,9 @@ rejects the call for a missing scope, run ` + "`cilock login`" + ` again to pick
 	f.StringVar(&o.platformURL, "platform-url", "", "TestifySec platform URL (default: the logged-in platform)")
 	f.StringVarP(&o.datatype, datatypeFlag, "t", policy.PolicyPredicate, "Policy payload type sent for hydration (unset: "+policy.PolicyPredicateV02+" when a step declares about)")
 	f.BoolVar(&o.force, "force", false, "Overwrite --output if it already exists")
+	f.BoolVar(&o.hydrateLocal, "hydrate-local", false,
+		"Fill the fulcio-root / platform-tsa sentinels from platform discovery on this machine instead of calling "+
+			"the platform hydration endpoint (no login needed; output stays UNSIGNED)")
 
 	_ = cmd.MarkFlagRequired("file")
 	return cmd
@@ -179,6 +208,9 @@ rejects the call for a missing scope, run ` + "`cilock login`" + ` again to pick
 // hydrate it on the platform, verify the returned digest locally, write the
 // hydrated document, then print the human-only next steps.
 func runPolicyDraft(cmd *cobra.Command, o policyDraftOpts) error {
+	if o.hydrateLocal {
+		return runPolicyDraftLocal(cmd, o)
+	}
 	out := cmd.OutOrStdout()
 
 	sess, err := resolvePolicySession(o.platformURL)

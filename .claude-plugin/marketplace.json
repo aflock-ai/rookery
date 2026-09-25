@@ -1,0 +1,14 @@
+{
+  "name": "rookery",
+  "description": "Agent plugins for rookery and cilock.",
+  "owner": {
+    "name": "The Aflock Authors"
+  },
+  "plugins": [
+    {
+      "name": "pushgate",
+      "source": "./cilock/agentplugin/pushgate",
+      "description": "Push through Pushgate with cilock: enroll the agent, produce signed evidence, act on refusals, and draft policies for a human to sign."
+    }
+  ]
+}

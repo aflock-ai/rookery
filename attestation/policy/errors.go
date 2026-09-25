@@ -359,18 +359,32 @@ func (e ErrUnknownExternalAttestation) Error() string {
 // Unbound counts candidates the search returned that are not about the
 // verify's subject (another commit, or a subject the caller did not ask for):
 // they are not evidence, so they do not turn "not found" into "rejected".
+//
+// RequestedSubjects, Candidates and Refused say what was searched and why
+// each candidate did not count; Refused is capped and RefusedOmitted counts
+// the rest. They are diagnostics only and are empty on an error built by hand.
 type ErrMissingExternalAttestation struct {
 	Name          string
 	PredicateType string
 	Unbound       int
+
+	// RequestedSubjects are the searched digests as algorithm:value (the
+	// algorithm inferred from the value, source.LabelSubjectDigest).
+	RequestedSubjects []string
+	// Candidates is how many envelopes the search returned.
+	Candidates     int
+	Refused        []ExternalCandidateDiagnostic
+	RefusedOmitted int
 }
 
 func (e ErrMissingExternalAttestation) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "required external attestation %q (predicateType=%v) not found", e.Name, e.PredicateType)
 	if e.Unbound > 0 {
-		return fmt.Sprintf("required external attestation %q (predicateType=%v) not found (%d candidate(s) not about the evaluated subject were ignored)",
-			e.Name, e.PredicateType, e.Unbound)
+		fmt.Fprintf(&b, " (%d candidate(s) not about the evaluated subject were ignored)", e.Unbound)
 	}
-	return fmt.Sprintf("required external attestation %q (predicateType=%v) not found", e.Name, e.PredicateType)
+	writeExternalSearchDiagnostics(&b, e.RequestedSubjects, e.Candidates, e.Refused, e.RefusedOmitted)
+	return b.String()
 }
 
 // ErrExternalAssignmentsExceedBound refuses a verify in which not every
@@ -407,13 +421,28 @@ func (e ErrExternalAssignmentsExceedBound) Error() string {
 // by functionary / signature validation failure. The Rejections slice carries
 // the per-envelope reasons so callers can surface the real deny message
 // instead of a misleading "not found" error.
+//
+// When the engine fills RequestedSubjects/Candidates/Refused, the message
+// lists at most a few refused candidates with their subjects and reasons
+// (bounded) instead of every rejection; Rejections still carries them all.
 type ErrExternalAttestationRejected struct {
 	Name          string
 	PredicateType string
 	Rejections    []error
+
+	RequestedSubjects []string
+	Candidates        int
+	Refused           []ExternalCandidateDiagnostic
+	RefusedOmitted    int
 }
 
 func (e ErrExternalAttestationRejected) Error() string {
+	if len(e.Refused) > 0 {
+		var b strings.Builder
+		fmt.Fprintf(&b, "required external attestation %q (predicateType=%v) rejected by all %d matching envelopes", e.Name, e.PredicateType, len(e.Rejections))
+		writeExternalSearchDiagnostics(&b, e.RequestedSubjects, e.Candidates, e.Refused, e.RefusedOmitted)
+		return b.String()
+	}
 	if len(e.Rejections) == 0 {
 		return fmt.Sprintf("required external attestation %q (predicateType=%v) was rejected", e.Name, e.PredicateType)
 	}
