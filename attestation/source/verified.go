@@ -20,8 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/intoto"
@@ -599,6 +601,26 @@ func (s *VerifiedSource) verifyCandidate(toVerify CollectionEnvelope, subjectDig
 // treats it as no candidate rather than as a rejected one (errors.Is).
 var ErrExternalSubjectNotRequested = errors.New("external attestation subject does not match requested artifact digest(s): artifact-substitution guard")
 
+// readVerifiedExternal decodes an external attestation's statement and
+// attestor from its signature-verified payload, typed as in-toto, and refuses
+// one whose SIGNED predicateType is not a type the caller searched for: the
+// source's filter is not what binds evidence to the external it satisfies.
+//
+// A typed decode that fails still yields a raw attestor, exactly as the
+// sources have always handed on, with the failure as typedErr; the policy's
+// rego decides on the raw predicate.
+func readVerifiedExternal(se StatementEnvelope, predicateTypes []string) (stmt intoto.Statement, att attestation.Attestor, typedErr, err error) {
+	stmt, err = decodeInTotoStatement(se.Reference, se.Envelope)
+	if err != nil {
+		return intoto.Statement{}, nil, nil, err
+	}
+	if !slices.Contains(predicateTypes, stmt.PredicateType) {
+		return intoto.Statement{}, nil, nil, fmt.Errorf("envelope %s: signed predicateType %q is not one of the requested %q", se.Reference, stmt.PredicateType, predicateTypes)
+	}
+	att, typedErr = attestorForStatement(stmt)
+	return stmt, att, typedErr, nil
+}
+
 // SearchByPredicateType delegates to the underlying Sourcer and then runs
 // DSSE signature verification on every returned envelope, populating
 // StatementEnvelope.Verifiers with successfully-verified verifiers.
@@ -645,6 +667,22 @@ func (s *VerifiedSource) SearchByPredicateTypeWithOptions(ctx context.Context, p
 			// matches ErrExternalSubjectNotRequested and says why.
 			toVerify.Errors = append(toVerify.Errors, gerr)
 			passed = nil
+		} else if stmt, att, typedErr, derr := readVerifiedExternal(toVerify, predicateTypes); derr != nil {
+			toVerify.Errors = append(toVerify.Errors, fmt.Errorf("decode signed payload: %w", derr))
+			passed = nil
+		} else {
+			// What the policy reads is what was signed: the source chose which
+			// evidence to return, not what that evidence says (DSSE: the same
+			// SERIALIZED_BODY that is verified is the one sent to the
+			// application). Its own decode, and any error it recorded making
+			// it, are discarded; a typed decode that fell back to raw is
+			// reported from this decode instead.
+			toVerify.Statement = stmt
+			toVerify.Attestor = att
+			toVerify.Errors = nil
+			if typedErr != nil {
+				toVerify.Errors = append(toVerify.Errors, typedErr)
+			}
 		}
 		toVerify.Verifiers = passed
 		results = append(results, toVerify)

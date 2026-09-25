@@ -194,19 +194,19 @@ func TestSearch(t *testing.T) {
 			name: "all match given query",
 			statements: []intoto.Statement{
 				{
-					Type:          "1",
+					Type:          intoto.StatementType,
 					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
-					Type:          "2",
+					Type:          intoto.StatementType,
 					Subject:       []intoto.Subject{{Name: "example2", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
-					Type:          "3",
+					Type:          intoto.StatementType,
 					Subject:       []intoto.Subject{{Name: "example3", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
@@ -224,25 +224,25 @@ func TestSearch(t *testing.T) {
 			name: "some match",
 			statements: []intoto.Statement{
 				{
-					Type:          "1",
+					Type:          intoto.StatementType,
 					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
-					Type:          "2",
+					Type:          intoto.StatementType,
 					Subject:       []intoto.Subject{{Name: "example2", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
-					Type:          "3",
+					Type:          intoto.StatementType,
 					Subject:       []intoto.Subject{{Name: "example3", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
-					Type:          "4",
+					Type:          intoto.StatementType,
 					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"sha256": testDigestB}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
@@ -267,19 +267,19 @@ func TestSearch(t *testing.T) {
 			name: "no matches",
 			statements: []intoto.Statement{
 				{
-					Type:          "1",
+					Type:          intoto.StatementType,
 					Subject:       []intoto.Subject{{Name: "example1", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
-					Type:          "2",
+					Type:          intoto.StatementType,
 					Subject:       []intoto.Subject{{Name: "example2", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),
 				},
 				{
-					Type:          "3",
+					Type:          intoto.StatementType,
 					Subject:       []intoto.Subject{{Name: "example3", Digest: map[string]string{"sha256": testDigestA}}},
 					PredicateType: "https://aflock.ai/attestation-collection/v0.1",
 					Predicate:     json.RawMessage(validPredicate),

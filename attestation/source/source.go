@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -155,14 +156,9 @@ type Sourcer interface {
 // producing a zero-valued Collection that later reads as "a collection with
 // no attestations".
 func EnvelopeToCollectionEnvelope(reference string, env dsse.Envelope) (CollectionEnvelope, error) {
-	if len(env.Payload) == 0 {
-		return CollectionEnvelope{}, fmt.Errorf("envelope %s has empty payload", reference)
-	}
-
-	statement := intoto.Statement{}
-	if err := json.Unmarshal(env.Payload, &statement); err != nil {
-		return CollectionEnvelope{}, fmt.Errorf("envelope %s: failed to unmarshal statement (payload length %d, first 50 bytes: %q): %w",
-			reference, len(env.Payload), truncate(env.Payload, 50), err)
+	statement, err := decodeInTotoStatement(reference, env)
+	if err != nil {
+		return CollectionEnvelope{}, err
 	}
 
 	if statement.PredicateType == "" {
@@ -180,6 +176,74 @@ func EnvelopeToCollectionEnvelope(reference string, env dsse.Envelope) (Collecti
 		Statement:  statement,
 		Collection: collection,
 	}, nil
+}
+
+const (
+	inTotoPredicatePayloadTypePrefix = "application/vnd.in-toto."
+	inTotoPredicatePayloadTypeSuffix = "+json"
+	inTotoStatementTypeV1            = "https://in-toto.io/Statement/v1"
+)
+
+// isInTotoPayloadType reports whether a DSSE payloadType names an in-toto
+// statement: application/vnd.in-toto+json, or the predicate-specific
+// application/vnd.in-toto.<predicate>+json with a non-empty predicate. DSSE
+// payload types are case-sensitive, so nothing is folded.
+func isInTotoPayloadType(t string) bool {
+	if t == intoto.PayloadType {
+		return true
+	}
+	return len(t) > len(inTotoPredicatePayloadTypePrefix)+len(inTotoPredicatePayloadTypeSuffix) &&
+		strings.HasPrefix(t, inTotoPredicatePayloadTypePrefix) &&
+		strings.HasSuffix(t, inTotoPredicatePayloadTypeSuffix)
+}
+
+// isInTotoStatementType reports whether a statement _type is one a verifier
+// reads: Statement v1, or the legacy v0.1 that deployed emitters still sign
+// (#9841).
+func isInTotoStatementType(t string) bool {
+	return t == inTotoStatementTypeV1 || t == intoto.StatementType
+}
+
+// decodeInTotoStatement reads a DSSE envelope's payload as an in-toto
+// statement, and only when the envelope says it is one. DSSE authenticates
+// payloadType precisely so a verifier can refuse bytes signed for another
+// purpose ("Reject if PAYLOAD_TYPE is not a supported type"); the _type check
+// refuses a payload of the right media type that is not a Statement.
+func decodeInTotoStatement(reference string, env dsse.Envelope) (intoto.Statement, error) {
+	if !isInTotoPayloadType(env.PayloadType) {
+		return intoto.Statement{}, fmt.Errorf("envelope %s: payloadType %q is not an in-toto statement type (%s or %s<predicate>%s)",
+			reference, env.PayloadType, intoto.PayloadType, inTotoPredicatePayloadTypePrefix, inTotoPredicatePayloadTypeSuffix)
+	}
+	if len(env.Payload) == 0 {
+		return intoto.Statement{}, fmt.Errorf("envelope %s has empty payload", reference)
+	}
+
+	statement := intoto.Statement{}
+	if err := json.Unmarshal(env.Payload, &statement); err != nil {
+		return intoto.Statement{}, fmt.Errorf("envelope %s: failed to unmarshal statement (payload length %d, first 50 bytes: %q): %w",
+			reference, len(env.Payload), truncate(env.Payload, 50), err)
+	}
+	if !isInTotoStatementType(statement.Type) {
+		return intoto.Statement{}, fmt.Errorf("envelope %s: _type %q is not an in-toto Statement (%s or %s)",
+			reference, statement.Type, inTotoStatementTypeV1, intoto.StatementType)
+	}
+	return statement, nil
+}
+
+// attestorForStatement decodes a statement's predicate with the attestor
+// registered for its predicateType, falling back to a raw attestation when
+// none is registered or the typed decode fails (the error says which).
+func attestorForStatement(stmt intoto.Statement) (attestation.Attestor, error) {
+	if factory, ok := attestation.FactoryByType(stmt.PredicateType); ok {
+		typed := factory()
+		err := json.Unmarshal(stmt.Predicate, typed)
+		if err == nil {
+			return typed, nil
+		}
+		return attestation.NewRawAttestation(stmt.PredicateType, stmt.Predicate),
+			fmt.Errorf("typed factory unmarshal failed for %s, falling back to raw: %w", stmt.PredicateType, err)
+	}
+	return attestation.NewRawAttestation(stmt.PredicateType, stmt.Predicate), nil
 }
 
 func truncate(b []byte, n int) []byte {

@@ -76,7 +76,7 @@ func TestCompactInventoryVerifyRemoteMultiProduct(t *testing.T) {
 			if mode == "wrong-root" {
 				root = manifestTestDigest("wrong root")
 			}
-			parent, err := json.Marshal(map[string]any{"predicateType": collectionPredicateURI, "subject": []any{map[string]any{"name": "tree:products", "digest": map[string]string{"sha256": root}}}, "predicate": map[string]any{"name": "build", "attestations": []any{map[string]any{"type": productTreeType, "starttime": "2026-01-01T00:00:00Z", "endtime": "2026-01-01T00:00:01Z", "attestation": map[string]any{"merkleRoot": root, "treeSize": 2, "hashAlgorithm": "sha256", "construction": "RFC6962", "inventory": ref}}}}})
+			parent, err := json.Marshal(map[string]any{"_type": intoto.StatementType, "predicateType": collectionPredicateURI, "subject": []any{map[string]any{"name": "tree:products", "digest": map[string]string{"sha256": root}}}, "predicate": map[string]any{"name": "build", "attestations": []any{map[string]any{"type": productTreeType, "starttime": "2026-01-01T00:00:00Z", "endtime": "2026-01-01T00:00:01Z", "attestation": map[string]any{"merkleRoot": root, "treeSize": 2, "hashAlgorithm": "sha256", "construction": "RFC6962", "inventory": ref}}}}})
 			require.NoError(t, err)
 			env, err := dsse.Sign(intoto.PayloadType, bytes.NewReader(parent), dsse.SignWithSigners(signer))
 			require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestCompactInventoryVerifyRemoteMultiProduct(t *testing.T) {
 			if mode == "tamper" {
 				remoteBody = bytes.Replace(body, []byte(`"path":"b"`), []byte(`"path":"c"`), 1)
 			}
-			payload, err := json.Marshal(map[string]any{"predicateType": fileinventory.Type, "subject": []any{map[string]any{"digest": map[string]string{"sha256": ref.Digest}}}, "predicate": json.RawMessage(remoteBody)})
+			payload, err := json.Marshal(map[string]any{"_type": intoto.StatementType, "predicateType": fileinventory.Type, "subject": []any{map[string]any{"digest": map[string]string{"sha256": ref.Digest}}}, "predicate": json.RawMessage(remoteBody)})
 			require.NoError(t, err)
 			remoteRaw, err := json.Marshal(dsse.Envelope{PayloadType: intoto.PayloadType, Payload: payload})
 			require.NoError(t, err)
@@ -205,14 +205,14 @@ func TestCompactInventorySignedWorkflow(t *testing.T) {
 					name = "test"
 				}
 				tp := "https://aflock.ai/attestations/" + kind + "/v0.3"
-				parent, err := json.Marshal(map[string]any{"predicateType": collectionPredicateURI, "subject": []any{map[string]any{"name": "tree:" + kind, "digest": map[string]string{"sha256": root}}}, "predicate": map[string]any{"name": name, "attestations": []any{map[string]any{"type": tp, "starttime": "2026-01-01T00:00:00Z", "endtime": "2026-01-01T00:00:01Z", "attestation": map[string]any{"merkleRoot": root, "treeSize": 1, "hashAlgorithm": "sha256", "construction": "RFC6962", "inventory": ref}}}}})
+				parent, err := json.Marshal(map[string]any{"_type": intoto.StatementType, "predicateType": collectionPredicateURI, "subject": []any{map[string]any{"name": "tree:" + kind, "digest": map[string]string{"sha256": root}}}, "predicate": map[string]any{"name": name, "attestations": []any{map[string]any{"type": tp, "starttime": "2026-01-01T00:00:00Z", "endtime": "2026-01-01T00:00:01Z", "attestation": map[string]any{"merkleRoot": root, "treeSize": 1, "hashAlgorithm": "sha256", "construction": "RFC6962", "inventory": ref}}}}})
 				require.NoError(t, err)
 				env, err := dsse.Sign(intoto.PayloadType, bytes.NewReader(parent), dsse.SignWithSigners(signer))
 				require.NoError(t, err)
 				require.NoError(t, mem.LoadEnvelope(name, env))
 				if mode == "cli" || mode == "cli-missing" {
 					write(name+".json", env)
-					payload, err := json.Marshal(map[string]any{"predicateType": fileinventory.Type, "predicate": json.RawMessage(body)})
+					payload, err := json.Marshal(map[string]any{"_type": intoto.StatementType, "predicateType": fileinventory.Type, "predicate": json.RawMessage(body)})
 					require.NoError(t, err)
 					companion, err := dsse.Sign(intoto.PayloadType, bytes.NewReader(payload), dsse.SignWithSigners(signer))
 					require.NoError(t, err)
@@ -234,7 +234,7 @@ func TestCompactInventorySignedWorkflow(t *testing.T) {
 				if mode != "source" {
 					manifests[ref.Digest] = body
 				} else {
-					payload, err := json.Marshal(map[string]any{"predicateType": fileinventory.Type, "subject": []any{map[string]any{"name": "inventory:" + kind, "digest": map[string]string{"sha256": ref.Digest}}}, "predicate": json.RawMessage(body)})
+					payload, err := json.Marshal(map[string]any{"_type": intoto.StatementType, "predicateType": fileinventory.Type, "subject": []any{map[string]any{"name": "inventory:" + kind, "digest": map[string]string{"sha256": ref.Digest}}}, "predicate": json.RawMessage(body)})
 					require.NoError(t, err)
 					require.NoError(t, mem.LoadEnvelope("inventory-"+kind, dsse.Envelope{PayloadType: intoto.PayloadType, Payload: payload}))
 				}
@@ -339,10 +339,10 @@ func TestCompactInventoryLocalInferenceAndInclusion(t *testing.T) {
 		kind, tp := tc.kind, tc.prefix+tc.kind+"/v0.3"
 		t.Run(tp, func(t *testing.T) {
 			ref, body, root, digest := compactInventoryFixture(t, kind)
-			parent := map[string]any{"predicateType": collectionPredicateURI, "predicate": map[string]any{"name": "build", "attestations": []any{map[string]any{"type": tp, "attestation": map[string]any{"merkleRoot": root, "treeSize": 1, "hashAlgorithm": "sha256", "construction": "RFC6962", "inventory": ref}}}}}
+			parent := map[string]any{"_type": intoto.StatementType, "predicateType": collectionPredicateURI, "predicate": map[string]any{"name": "build", "attestations": []any{map[string]any{"type": tp, "attestation": map[string]any{"merkleRoot": root, "treeSize": 1, "hashAlgorithm": "sha256", "construction": "RFC6962", "inventory": ref}}}}}
 			path := filepath.Join(t.TempDir(), "build.bundle.json")
 			writeEnvelope(t, path, parent)
-			writeEnvelope(t, path+"-inventory.json", map[string]any{"predicateType": fileinventory.Type, "predicate": json.RawMessage(body)})
+			writeEnvelope(t, path+"-inventory.json", map[string]any{"_type": intoto.StatementType, "predicateType": fileinventory.Type, "predicate": json.RawMessage(body)})
 			summary, err := summarizeOneBundle(io.Discard, path, "")
 			require.NoError(t, err)
 			companionSummary := bundleSummary{outerPredicateType: fileinventory.Type, stepName: "inventory", signingKeyIDs: []string{"unrelated-companion-signer"}}
@@ -360,7 +360,7 @@ func TestCompactInventoryLocalInferenceAndInclusion(t *testing.T) {
 			parentBytes, err := json.Marshal(parent)
 			require.NoError(t, err)
 			originalParent := bytes.Clone(parentBytes)
-			companionBytes, err := json.Marshal(map[string]any{"predicateType": fileinventory.Type, "predicate": json.RawMessage(body)})
+			companionBytes, err := json.Marshal(map[string]any{"_type": intoto.StatementType, "predicateType": fileinventory.Type, "predicate": json.RawMessage(body)})
 			require.NoError(t, err)
 			subjects := []cryptoutil.DigestSet{{{Hash: crypto.SHA256}: digest}}
 			envs := []dsse.Envelope{{PayloadType: intoto.PayloadType, Payload: parentBytes}, {PayloadType: intoto.PayloadType, Payload: companionBytes}}
@@ -389,7 +389,7 @@ func TestCompactInventoryInferenceLegacyFilenames(t *testing.T) {
 				factory, ok := attestation.FactoryByType(tp)
 				require.True(t, ok)
 				require.NoError(t, json.Unmarshal(predicate, factory()), "fixture must be valid legacy evidence")
-				parent := map[string]any{"predicateType": collectionPredicateURI, "predicate": map[string]any{"name": "build", "attestations": []any{map[string]any{"type": tp, "attestation": json.RawMessage(predicate)}}}}
+				parent := map[string]any{"_type": intoto.StatementType, "predicateType": collectionPredicateURI, "predicate": map[string]any{"name": "build", "attestations": []any{map[string]any{"type": tp, "attestation": json.RawMessage(predicate)}}}}
 				path := filepath.Join(t.TempDir(), "build.bundle.json")
 				writeEnvelope(t, path, parent)
 				t.Run("from-bundles", func(t *testing.T) {
@@ -458,6 +458,7 @@ func TestCompactInventoryInferenceRefusesUnknownEdges(t *testing.T) {
 				}
 				path := filepath.Join(t.TempDir(), "build.bundle.json")
 				writeEnvelope(t, path, map[string]any{
+					"_type":         intoto.StatementType,
 					"predicateType": collectionPredicateURI,
 					"predicate": map[string]any{"name": "build", "attestations": []any{map[string]any{
 						"type":        "https://aflock.ai/attestations/" + kind + "/v0.3",
@@ -514,7 +515,7 @@ func TestCompactInventoryFromCommitInference(t *testing.T) {
 							step, host = "test", materialHost
 						}
 						tp := "https://" + host + "/attestations/" + kind + "/v0.3"
-						parent := map[string]any{"predicateType": collectionPredicateURI, "predicate": map[string]any{"name": step, "attestations": []any{map[string]any{"type": tp, "attestation": map[string]any{"merkleRoot": root, "treeSize": 1, "hashAlgorithm": "sha256", "construction": "RFC6962", "inventory": ref}}}}}
+						parent := map[string]any{"_type": intoto.StatementType, "predicateType": collectionPredicateURI, "predicate": map[string]any{"name": step, "attestations": []any{map[string]any{"type": tp, "attestation": map[string]any{"merkleRoot": root, "treeSize": 1, "hashAlgorithm": "sha256", "construction": "RFC6962", "inventory": ref}}}}}
 						payload, err := json.Marshal(parent)
 						require.NoError(t, err)
 						originalPayload := bytes.Clone(payload)
@@ -531,7 +532,7 @@ func TestCompactInventoryFromCommitInference(t *testing.T) {
 						if failure == "corrupt-"+kind {
 							body = bytes.Replace(body, []byte(`"path":"b"`), []byte(`"path":"c"`), 1)
 						}
-						companion := map[string]any{"predicateType": fileinventory.Type, "subject": []any{map[string]any{"name": "inventory:" + kind, "digest": map[string]string{"sha256": ref.Digest}}}, "predicate": json.RawMessage(body)}
+						companion := map[string]any{"_type": intoto.StatementType, "predicateType": fileinventory.Type, "subject": []any{map[string]any{"name": "inventory:" + kind, "digest": map[string]string{"sha256": ref.Digest}}}, "predicate": json.RawMessage(body)}
 						companionBytes, err := json.Marshal(companion)
 						require.NoError(t, err)
 						f.byGitoid[ref.Digest] = dsse.Envelope{PayloadType: intoto.PayloadType, Payload: companionBytes}
@@ -578,7 +579,7 @@ func TestCompactInventoryFromCommitInference(t *testing.T) {
 
 func TestCompactInventoryFromCommitDuplicateCandidates(t *testing.T) {
 	ref, body, _, _ := compactInventoryFixture(t, "product")
-	payload, err := json.Marshal(map[string]any{"predicateType": fileinventory.Type, "subject": []any{map[string]any{"digest": map[string]string{"sha256": ref.Digest}}}, "predicate": json.RawMessage(body)})
+	payload, err := json.Marshal(map[string]any{"_type": intoto.StatementType, "predicateType": fileinventory.Type, "subject": []any{map[string]any{"digest": map[string]string{"sha256": ref.Digest}}}, "predicate": json.RawMessage(body)})
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name          string
@@ -597,7 +598,7 @@ func TestCompactInventoryFromCommitDuplicateCandidates(t *testing.T) {
 				id := fmt.Sprintf("wrapper-%02d", i)
 				env := dsse.Envelope{PayloadType: intoto.PayloadType, Payload: payload, Signatures: []dsse.Signature{{KeyID: id, Signature: []byte{byte(i)}}}}
 				if i < tc.invalidPrefix {
-					env.Payload = []byte(`{"predicateType":"` + fileinventory.Type + `","predicate":{}}`)
+					env.Payload = []byte(`{"_type":"https://in-toto.io/Statement/v0.1","predicateType":"` + fileinventory.Type + `","predicate":{}}`)
 				}
 				f.byGitoid[id] = env
 				f.bySubject[ref.Digest] = append(f.bySubject[ref.Digest], id)
@@ -638,7 +639,7 @@ func TestCompactInventorySharedLookupBudgets(t *testing.T) {
 			body := append([]byte(fmt.Sprintf(`{"case":%d,"padding":"`, i)), bytes.Repeat([]byte("x"), fileinventory.MaxBytes/2)...)
 			body = append(body, []byte(`"}`)...)
 			digest := manifestTestDigest(string(body))
-			payload := []byte(`{"predicateType":"` + fileinventory.Type + `","subject":[{"digest":{"sha256":"` + digest + `"}}],"predicate":` + string(body) + `}`)
+			payload := []byte(`{"_type":"https://in-toto.io/Statement/v0.1","predicateType":"` + fileinventory.Type + `","subject":[{"digest":{"sha256":"` + digest + `"}}],"predicate":` + string(body) + `}`)
 			f.byGitoid[digest] = dsse.Envelope{PayloadType: intoto.PayloadType, Payload: payload}
 			f.bySubject[digest] = []string{digest}
 			got, found := lookup(digest)
