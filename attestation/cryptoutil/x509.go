@@ -18,6 +18,8 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"io"
 	"time"
 )
@@ -29,6 +31,10 @@ type X509Verifier struct {
 	verifier      Verifier
 	trustedTime   time.Time
 }
+
+// ErrCACertificateAsLeaf is returned when the certificate presented as the
+// signer is a CA (BasicConstraints cA=TRUE).
+var ErrCACertificateAsLeaf = errors.New("signing certificate is a CA certificate; a CA is never a signing leaf")
 
 func NewX509Verifier(cert *x509.Certificate, intermediates, roots []*x509.Certificate, trustedTime time.Time) (*X509Verifier, error) {
 	verifier, err := NewVerifier(cert.PublicKey)
@@ -49,7 +55,24 @@ func (v *X509Verifier) KeyID() (string, error) {
 	return v.verifier.KeyID()
 }
 
+// checkNotCA refuses a CA certificate on the signing path. Chain building and
+// the codeSigning EKU check do not: an intermediate that carries codeSigning
+// (the platform Fulcio CA does) chains to its root, and a self-signed root
+// without EKU verifies against a pool holding itself. Either lets a CA key
+// sign attestations directly, bypassing the short-lived leaf and the identity
+// and SAN constraints it carries. Go sets IsCA only when the basicConstraints
+// extension is present.
+func (v *X509Verifier) checkNotCA() error {
+	if v.cert.BasicConstraintsValid && v.cert.IsCA {
+		return fmt.Errorf("%w: %q", ErrCACertificateAsLeaf, v.cert.Subject.String())
+	}
+	return nil
+}
+
 func (v *X509Verifier) Verify(body io.Reader, sig []byte) error {
+	if err := v.checkNotCA(); err != nil {
+		return err
+	}
 	rootPool := certificatesToPool(v.roots)
 	intermediatePool := certificatesToPool(v.intermediates)
 	if _, err := v.cert.Verify(x509.VerifyOptions{
@@ -70,6 +93,9 @@ func (v *X509Verifier) Verify(body io.Reader, sig []byte) error {
 }
 
 func (v *X509Verifier) BelongsToRoot(root *x509.Certificate) error {
+	if err := v.checkNotCA(); err != nil {
+		return err
+	}
 	rootPool := certificatesToPool([]*x509.Certificate{root})
 	intermediatePool := certificatesToPool(v.intermediates)
 	_, err := v.cert.Verify(x509.VerifyOptions{
