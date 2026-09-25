@@ -41,7 +41,7 @@ func (a Agent) DisplayName() string {
 	case AgentCodex:
 		return "Codex"
 	case AgentOpenCode:
-		return "opencode"
+		return string(AgentOpenCode)
 	default:
 		return "a custom directory"
 	}
@@ -57,7 +57,7 @@ func ParseAgent(s string) (Agent, error) {
 		return AgentClaude, nil
 	case "codex":
 		return AgentCodex, nil
-	case "opencode":
+	case string(AgentOpenCode):
 		return AgentOpenCode, nil
 	}
 	return "", fmt.Errorf("unknown agent %q: use claude, codex, opencode, or auto", s)
@@ -142,6 +142,10 @@ type Target struct {
 	AlsoReadBy []Agent
 }
 
+// skillsDir is the directory name every supported agent loads skills from,
+// under its own per-agent parent.
+const skillsDir = "skills"
+
 // discovery holds each agent's skill directory relative to the scope root
 // (the home directory, or the project root) and the documented rule. Each was
 // checked against the vendor's documentation on 2026-09-25; the Codex rows
@@ -153,16 +157,16 @@ var discovery = map[Agent]map[Scope]struct {
 	also []Agent
 }{
 	AgentClaude: {
-		ScopeUser:    {[]string{".claude", "skills"}, "Claude Code loads personal skills from ~/.claude/skills/<name>/SKILL.md (https://code.claude.com/docs/en/skills).", []Agent{AgentOpenCode}},
-		ScopeProject: {[]string{".claude", "skills"}, "Claude Code loads project skills from .claude/skills/<name>/SKILL.md in the repository (https://code.claude.com/docs/en/skills).", []Agent{AgentOpenCode}},
+		ScopeUser:    {[]string{".claude", skillsDir}, "Claude Code loads personal skills from ~/.claude/skills/<name>/SKILL.md (https://code.claude.com/docs/en/skills).", []Agent{AgentOpenCode}},
+		ScopeProject: {[]string{".claude", skillsDir}, "Claude Code loads project skills from .claude/skills/<name>/SKILL.md in the repository (https://code.claude.com/docs/en/skills).", []Agent{AgentOpenCode}},
 	},
 	AgentCodex: {
-		ScopeUser:    {[]string{".agents", "skills"}, "Codex loads user skills from $HOME/.agents/skills/<name>/SKILL.md (https://developers.openai.com/codex/skills).", []Agent{AgentOpenCode}},
-		ScopeProject: {[]string{".agents", "skills"}, "Codex loads repository skills from .agents/skills in the working directory and each parent up to the repository root (https://developers.openai.com/codex/skills).", []Agent{AgentOpenCode}},
+		ScopeUser:    {[]string{".agents", skillsDir}, "Codex loads user skills from $HOME/.agents/skills/<name>/SKILL.md (https://developers.openai.com/codex/skills).", []Agent{AgentOpenCode}},
+		ScopeProject: {[]string{".agents", skillsDir}, "Codex loads repository skills from .agents/skills in the working directory and each parent up to the repository root (https://developers.openai.com/codex/skills).", []Agent{AgentOpenCode}},
 	},
 	AgentOpenCode: {
-		ScopeUser:    {[]string{".config", "opencode", "skills"}, "opencode loads global skills from ~/.config/opencode/skills/<name>/SKILL.md (https://opencode.ai/docs/skills/).", nil},
-		ScopeProject: {[]string{".opencode", "skills"}, "opencode loads project skills from .opencode/skills/<name>/SKILL.md, walking up to the git worktree (https://opencode.ai/docs/skills/).", nil},
+		ScopeUser:    {[]string{".config", "opencode", skillsDir}, "opencode loads global skills from ~/.config/opencode/skills/<name>/SKILL.md (https://opencode.ai/docs/skills/).", nil},
+		ScopeProject: {[]string{".opencode", skillsDir}, "opencode loads project skills from .opencode/skills/<name>/SKILL.md, walking up to the git worktree (https://opencode.ai/docs/skills/).", nil},
 	},
 }
 
@@ -313,129 +317,221 @@ func Install(t Target, force bool, cilockVersion string) ([]Result, error) {
 		return nil, err
 	}
 
-	type op struct {
-		rel    string
-		data   []byte
-		action Action
-		note   string
+	ops, err := planInstall(t.Dir, files, rec, force)
+	if err != nil {
+		return nil, err
 	}
-	var ops []op
+	results, err := applyInstall(t.Dir, ops)
+	if err != nil {
+		return results, err
+	}
+	removed, err := removeStale(t.Dir, files, rec)
+	results = append(results, removed...)
+	if err != nil {
+		return results, err
+	}
+	recResult, err := writeRecord(t.Dir, files, cilockVersion)
+	if err != nil {
+		return results, err
+	}
+	return append(results, recResult), nil
+}
+
+// installOp is one planned file write (data == nil: nothing to write).
+type installOp struct {
+	rel    string
+	data   []byte
+	action Action
+	note   string
+}
+
+// planInstall decides every file's action before anything is written, so a
+// conflict refuses the whole install and leaves the directory untouched.
+func planInstall(dir string, files []File, rec *record, force bool) ([]installOp, error) {
+	var ops []installOp
 	var conflicts []string
-	embedded := map[string]bool{}
 	for _, f := range files {
-		embedded[f.Path] = true
-		dst, err := within(t.Dir, f.Path)
+		op, conflict, err := planFile(dir, f, rec, force)
 		if err != nil {
 			return nil, err
 		}
-		if err := checkParentsNotLinks(t.Dir, f.Path); err != nil {
-			return nil, err
-		}
-		info, err := os.Lstat(dst)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			ops = append(ops, op{f.Path, f.Data, ActionWrote, ""})
-			continue
-		case err != nil:
-			return nil, fmt.Errorf("inspect %s: %w", dst, err)
-		}
-		if !info.Mode().IsRegular() {
-			if !force {
-				conflicts = append(conflicts, f.Path+" (not a regular file)")
-				continue
-			}
-			ops = append(ops, op{f.Path, f.Data, ActionReplaced, "was not a regular file; --force"})
+		if conflict != "" {
+			conflicts = append(conflicts, conflict)
 			continue
 		}
-		current, err := os.ReadFile(dst)
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", dst, err)
-		}
-		switch {
-		case bytes.Equal(current, f.Data):
-			ops = append(ops, op{f.Path, nil, ActionUnchanged, ""})
-		case rec != nil && rec.Files[f.Path] == digest(current):
-			ops = append(ops, op{f.Path, f.Data, ActionUpdated, ""})
-		case force:
-			ops = append(ops, op{f.Path, f.Data, ActionReplaced, "not written by cilock, or edited since; --force"})
-		default:
-			conflicts = append(conflicts, f.Path)
-		}
+		ops = append(ops, op)
 	}
 	if len(conflicts) > 0 {
-		return nil, &ConflictError{Dir: t.Dir, Files: conflicts}
+		return nil, &ConflictError{Dir: dir, Files: conflicts}
 	}
+	return ops, nil
+}
 
-	// Files an older cilock wrote that this skill no longer has: remove them
-	// only when they are still byte-for-byte what cilock wrote.
-	var stale []string
-	if rec != nil {
-		for rel := range rec.Files {
-			if !embedded[rel] {
-				stale = append(stale, rel)
-			}
+// planFile decides one embedded file's action. A non-empty conflict names a
+// file that may not be replaced without force.
+func planFile(dir string, f File, rec *record, force bool) (installOp, string, error) {
+	dst, err := within(dir, f.Path)
+	if err != nil {
+		return installOp{}, "", err
+	}
+	if err := checkParentsNotLinks(dir, f.Path); err != nil {
+		return installOp{}, "", err
+	}
+	info, err := os.Lstat(dst)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return installOp{f.Path, f.Data, ActionWrote, ""}, "", nil
+	case err != nil:
+		return installOp{}, "", fmt.Errorf("inspect %s: %w", dst, err)
+	}
+	if !info.Mode().IsRegular() {
+		if !force {
+			return installOp{}, f.Path + " (not a regular file)", nil
 		}
-		sort.Strings(stale)
+		return installOp{f.Path, f.Data, ActionReplaced, "was not a regular file; --force"}, "", nil
 	}
+	current, err := readInDir(dir, f.Path)
+	if err != nil {
+		return installOp{}, "", fmt.Errorf("read %s: %w", dst, err)
+	}
+	switch {
+	case bytes.Equal(current, f.Data):
+		return installOp{f.Path, nil, ActionUnchanged, ""}, "", nil
+	case rec != nil && rec.Files[f.Path] == digest(current):
+		return installOp{f.Path, f.Data, ActionUpdated, ""}, "", nil
+	case force:
+		return installOp{f.Path, f.Data, ActionReplaced, "not written by cilock, or edited since; --force"}, "", nil
+	default:
+		return installOp{}, f.Path, nil
+	}
+}
 
+// applyInstall writes the planned files and reports each one.
+func applyInstall(dir string, ops []installOp) ([]Result, error) {
 	var results []Result
 	for _, o := range ops {
 		if o.data != nil {
-			dst, _ := within(t.Dir, o.rel)
+			dst, _ := within(dir, o.rel)
 			if err := writeFileAtomic(dst, o.data); err != nil {
 				return results, err
 			}
 		}
 		results = append(results, Result{Path: o.rel, Action: o.action, Note: o.note})
 	}
-	for _, rel := range stale {
-		dst, err := within(t.Dir, rel)
-		if err != nil {
-			results = append(results, Result{Path: rel, Action: ActionKept, Note: "listed in the install record with an invalid path; left alone"})
-			continue
-		}
-		info, err := os.Lstat(dst)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil || !info.Mode().IsRegular() {
-			results = append(results, Result{Path: rel, Action: ActionKept, Note: "no longer part of the skill; not a regular file, left alone"})
-			continue
-		}
-		current, err := os.ReadFile(dst)
-		if err != nil || digest(current) != rec.Files[rel] {
-			results = append(results, Result{Path: rel, Action: ActionKept, Note: "no longer part of the skill, but edited since cilock wrote it; left alone"})
-			continue
-		}
-		if err := os.Remove(dst); err != nil {
-			return results, fmt.Errorf("remove stale %s: %w", dst, err)
-		}
-		results = append(results, Result{Path: rel, Action: ActionRemoved, Note: "no longer part of the skill"})
-	}
+	return results, nil
+}
 
+// removeStale removes files an older cilock wrote that this skill no longer
+// has, but only when they are still byte-for-byte what cilock wrote.
+func removeStale(dir string, files []File, rec *record) ([]Result, error) {
+	if rec == nil {
+		return nil, nil
+	}
+	embedded := make(map[string]bool, len(files))
+	for _, f := range files {
+		embedded[f.Path] = true
+	}
+	var stale []string
+	for rel := range rec.Files {
+		if !embedded[rel] {
+			stale = append(stale, rel)
+		}
+	}
+	sort.Strings(stale)
+
+	var results []Result
+	for _, rel := range stale {
+		r, err := removeStaleFile(dir, rel, rec.Files[rel])
+		if err != nil {
+			return results, err
+		}
+		if r != nil {
+			results = append(results, *r)
+		}
+	}
+	return results, nil
+}
+
+// removeStaleFile removes one stale file whose bytes still match want. It
+// returns nil when the file is already gone. A file it cannot prove it wrote
+// is kept, never removed, and the result says why.
+func removeStaleFile(dir, rel, want string) (*Result, error) {
+	dst, gone, keep := staleFileVerdict(dir, rel, want)
+	switch {
+	case gone:
+		return nil, nil
+	case keep != "":
+		return &Result{Path: rel, Action: ActionKept, Note: keep}, nil
+	}
+	if err := os.Remove(dst); err != nil {
+		return nil, fmt.Errorf("remove stale %s: %w", dst, err)
+	}
+	return &Result{Path: rel, Action: ActionRemoved, Note: "no longer part of the skill"}, nil
+}
+
+// staleFileVerdict decides whether a stale file may be removed. gone is true
+// when it no longer exists. Otherwise keep is "" only when the file is a
+// regular file whose bytes are exactly what cilock recorded writing; any other
+// outcome, including one it could not check, is a reason to leave it alone.
+func staleFileVerdict(dir, rel, want string) (dst string, gone bool, keep string) {
+	dst, err := within(dir, rel)
+	if err != nil {
+		return "", false, "listed in the install record with an invalid path; left alone"
+	}
+	info, err := os.Lstat(dst)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return dst, true, ""
+	case err != nil:
+		return dst, false, fmt.Sprintf("no longer part of the skill, but could not be inspected (%v); left alone", err)
+	case !info.Mode().IsRegular():
+		return dst, false, "no longer part of the skill; not a regular file, left alone"
+	}
+	current, err := readInDir(dir, rel)
+	switch {
+	case err != nil:
+		return dst, false, fmt.Sprintf("no longer part of the skill, but could not be read (%v); left alone", err)
+	case digest(current) != want:
+		return dst, false, "no longer part of the skill, but edited since cilock wrote it; left alone"
+	}
+	return dst, false, ""
+}
+
+// writeRecord writes the install record naming every file this skill wrote.
+func writeRecord(dir string, files []File, cilockVersion string) (Result, error) {
 	next := record{Skill: SkillName, CilockVersion: cilockVersion, Files: map[string]string{}}
 	for _, f := range files {
 		next.Files[f.Path] = digest(f.Data)
 	}
 	data, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
-		return results, err
+		return Result{}, err
 	}
 	data = append(data, '\n')
-	recPath := filepath.Join(t.Dir, RecordName)
-	if old, err := os.ReadFile(recPath); err == nil && bytes.Equal(old, data) {
-		results = append(results, Result{Path: RecordName, Action: ActionUnchanged, Note: "install record"})
-	} else {
-		action := ActionWrote
-		if err == nil {
-			action = ActionUpdated
-		}
-		if err := writeFileAtomic(recPath, data); err != nil {
-			return results, err
-		}
-		results = append(results, Result{Path: RecordName, Action: action, Note: "install record"})
+	old, err := readInDir(dir, RecordName)
+	if err == nil && bytes.Equal(old, data) {
+		return Result{Path: RecordName, Action: ActionUnchanged, Note: "install record"}, nil
 	}
-	return results, nil
+	action := ActionWrote
+	if err == nil {
+		action = ActionUpdated
+	}
+	if err := writeFileAtomic(filepath.Join(dir, RecordName), data); err != nil {
+		return Result{}, err
+	}
+	return Result{Path: RecordName, Action: action, Note: "install record"}, nil
+}
+
+// readInDir reads a slash-separated path under dir through an os.Root, so the
+// read cannot resolve outside dir (through "..", an absolute path, or a
+// symbolic link) whatever rel says.
+func readInDir(dir, rel string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	return root.ReadFile(filepath.FromSlash(rel))
 }
 
 // State reports whether the skill at t.Dir matches this binary's copy.
@@ -465,8 +561,23 @@ func Inspect(t Target) (State, error) {
 		return "", err
 	}
 	for _, f := range files {
-		current, err := os.ReadFile(filepath.Join(t.Dir, filepath.FromSlash(f.Path)))
-		if err != nil || !bytes.Equal(current, f.Data) {
+		// Missing, or something other than a regular file, is a real
+		// difference. A regular file that cannot be read is not: report the
+		// failure rather than guess at its contents.
+		info, err := os.Lstat(filepath.Join(t.Dir, filepath.FromSlash(f.Path)))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return StateDiffers, nil
+		case err != nil:
+			return "", fmt.Errorf("inspect %s: %w", f.Path, err)
+		case !info.Mode().IsRegular():
+			return StateDiffers, nil
+		}
+		current, err := readInDir(t.Dir, f.Path)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", f.Path, err)
+		}
+		if !bytes.Equal(current, f.Data) {
 			return StateDiffers, nil
 		}
 	}
@@ -474,7 +585,7 @@ func Inspect(t Target) (State, error) {
 }
 
 func readRecord(dir string) (*record, error) {
-	data, err := os.ReadFile(filepath.Join(dir, RecordName))
+	data, err := readInDir(dir, RecordName)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -537,7 +648,7 @@ func checkParentsNotLinks(dir, rel string) error {
 // following it.
 func writeFileAtomic(dst string, data []byte) error {
 	dir := filepath.Dir(dst)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, ".cilock-skill-*")

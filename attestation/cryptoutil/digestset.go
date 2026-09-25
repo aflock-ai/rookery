@@ -457,7 +457,13 @@ func ValidateCommitSubjectPrefix(prefix string) error {
 	if !strings.HasSuffix(prefix, sep) {
 		return fmt.Errorf("commitSubject %q must end with %q", prefix, sep)
 	}
-	namespace := prefix[:len(prefix)-len(sep)]
+	return validateCommitSubjectNamespace(prefix, prefix[:len(prefix)-len(sep)])
+}
+
+// validateCommitSubjectNamespace checks the part of a commit-subject prefix
+// before "/commithash:": an absolute URL with a lower-case scheme and a host,
+// and no userinfo, query or fragment.
+func validateCommitSubjectNamespace(prefix, namespace string) error {
 	u, err := url.Parse(namespace)
 	if err != nil {
 		return fmt.Errorf("commitSubject %q: namespace is not a URL: %w", prefix, err)

@@ -661,31 +661,42 @@ func (s *VerifiedSource) SearchByPredicateTypeWithOptions(ctx context.Context, p
 
 		if len(passed) == 0 {
 			toVerify.Errors = append(toVerify.Errors, fmt.Errorf("no verifiers passed"))
-		} else if gerr := matchSignedExternalSubjects(toVerify.Envelope.Payload, subjectDigests, opts); gerr != nil {
-			// Artifact-substitution guard: read subjects from the signature-verified
-			// payload, never the source-populated Statement field. The refusal
-			// matches ErrExternalSubjectNotRequested and says why.
-			toVerify.Errors = append(toVerify.Errors, gerr)
-			passed = nil
-		} else if stmt, att, typedErr, derr := readVerifiedExternal(toVerify, predicateTypes); derr != nil {
-			toVerify.Errors = append(toVerify.Errors, fmt.Errorf("decode signed payload: %w", derr))
-			passed = nil
 		} else {
-			// What the policy reads is what was signed: the source chose which
-			// evidence to return, not what that evidence says (DSSE: the same
-			// SERIALIZED_BODY that is verified is the one sent to the
-			// application). Its own decode, and any error it recorded making
-			// it, are discarded; a typed decode that fell back to raw is
-			// reported from this decode instead.
-			toVerify.Statement = stmt
-			toVerify.Attestor = att
-			toVerify.Errors = nil
-			if typedErr != nil {
-				toVerify.Errors = append(toVerify.Errors, typedErr)
-			}
+			passed = adoptSignedExternal(&toVerify, passed, subjectDigests, predicateTypes, opts)
 		}
 		toVerify.Verifiers = passed
 		results = append(results, toVerify)
 	}
 	return results, nil
+}
+
+// adoptSignedExternal replaces a signature-verified candidate's statement with
+// the one its signed payload carries, and returns the verifiers that stand. It
+// returns nil verifiers, and records why, when the signed subjects are not the
+// requested ones or the signed payload does not decode.
+func adoptSignedExternal(toVerify *StatementEnvelope, passed []cryptoutil.Verifier, subjectDigests, predicateTypes []string, opts PredicateSearchOptions) []cryptoutil.Verifier {
+	// Artifact-substitution guard: read subjects from the signature-verified
+	// payload, never the source-populated Statement field. The refusal
+	// matches ErrExternalSubjectNotRequested and says why.
+	if gerr := matchSignedExternalSubjects(toVerify.Envelope.Payload, subjectDigests, opts); gerr != nil {
+		toVerify.Errors = append(toVerify.Errors, gerr)
+		return nil
+	}
+	stmt, att, typedErr, derr := readVerifiedExternal(*toVerify, predicateTypes)
+	if derr != nil {
+		toVerify.Errors = append(toVerify.Errors, fmt.Errorf("decode signed payload: %w", derr))
+		return nil
+	}
+	// What the policy reads is what was signed: the source chose which
+	// evidence to return, not what that evidence says (DSSE: the same
+	// SERIALIZED_BODY that is verified is the one sent to the application).
+	// Its own decode, and any error it recorded making it, are discarded; a
+	// typed decode that fell back to raw is reported from this decode instead.
+	toVerify.Statement = stmt
+	toVerify.Attestor = att
+	toVerify.Errors = nil
+	if typedErr != nil {
+		toVerify.Errors = append(toVerify.Errors, typedErr)
+	}
+	return passed
 }

@@ -237,7 +237,7 @@ func genRegoModules(r *rand.Rand, withEmpty bool) ([]RegoPolicy, []regoModJSON, 
 }
 
 func regoRunJSON(owner map[string]denyKind, hasRef bool) ([]denyJSON, bool) {
-	var deny []denyJSON
+	deny := make([]denyJSON, 0, len(owner))
 	fault := false
 	for pkg, k := range owner {
 		d := k.value(hasRef)
@@ -565,22 +565,22 @@ func TestFormalDifferentialAI(t *testing.T) {
 			gps = append(gps, genAiPolicy(r, name))
 		}
 		c := &jevCase{class: "ok", resolved: "echo", byName: map[string]genAnswer{}}
-		switch x := r.IntN(20); {
-		case x == 0:
+		switch r.IntN(20) {
+		case 0:
 			c.class = "transport"
-		case x == 1:
+		case 1:
 			c.class, c.code = "http", []int{400, 401, 429, 500}[r.IntN(4)]
-		case x == 2:
+		case 2:
 			c.class = "malformed"
 		}
-		switch x := r.IntN(20); {
-		case x == 0:
+		switch r.IntN(20) {
+		case 0:
 			c.resolved = "other"
-		case x == 1:
+		case 1:
 			c.resolved = "missing"
 		}
-		var pols []AiPolicy
-		var items []aiItemJSON
+		pols := make([]AiPolicy, 0, len(gps))
+		items := make([]aiItemJSON, 0, len(gps))
 		for _, g := range gps {
 			pols = append(pols, g.pol)
 			c.byName[g.pol.Name] = g.ans
@@ -931,12 +931,12 @@ func TestFormalDifferentialVSA(t *testing.T) {
 		var cands []vsaCandJSON
 		var envs []source.StatementEnvelope
 		for k := 0; k < r.IntN(4); k++ {
-			subj := []string{requested}
+			first := requested
 			if r.IntN(5) == 0 {
-				subj = []string{"elsewhere"}
+				first = "elsewhere"
 			}
 			digest := []string{"d1", "d2"}[r.IntN(2)]
-			subj = append(subj, digest) // the policy subject (policyverify.go Subjects)
+			subj := []string{first, digest} // digest: the policy subject (policyverify.go Subjects)
 			result := []string{"PASSED", "FAILED"}[r.IntN(2)]
 			tv := now - window*2 + r.Int64N(window*3)
 			if r.IntN(4) == 0 {
@@ -954,7 +954,7 @@ func TestFormalDifferentialVSA(t *testing.T) {
 				"inputAttestations":  []any{},
 				"verificationResult": result,
 			})
-			var subjects []intoto.Subject
+			subjects := make([]intoto.Subject, 0, len(subj))
 			for _, s := range subj {
 				subjects = append(subjects, intoto.Subject{Name: s, Digest: map[string]string{"sha256": s}})
 			}

@@ -131,23 +131,7 @@ func TestFormalStatementDifferential(t *testing.T) {
 		if err != nil {
 			got.Error = "refused"
 		} else {
-			out, merr := json.Marshal(&stmt)
-			if merr != nil {
-				t.Fatalf("case %d: marshal: %v", i, merr)
-			}
-			var wire struct {
-				Type          string           `json:"_type"`
-				Subject       []formalStmtSubj `json:"subject"`
-				PredicateType string           `json:"predicateType"`
-				Predicate     json.RawMessage  `json:"predicate"`
-			}
-			if uerr := json.Unmarshal(out, &wire); uerr != nil {
-				t.Fatalf("case %d: re-read %s: %v", i, out, uerr)
-			}
-			got = formalStmtOut{Type: wire.Type, Subject: wire.Subject, PredicateType: wire.PredicateType, Predicate: formalKind(wire.Predicate)}
-			if got.Subject == nil {
-				got.Subject = []formalStmtSubj{}
-			}
+			got = formalStmtWire(t, i, &stmt)
 		}
 		if want.Error != "" {
 			want = formalStmtOut{Error: "refused"}
@@ -165,4 +149,28 @@ func TestFormalStatementDifferential(t *testing.T) {
 		t.Fatalf("statement: %d of %d cases disagree with the %s model", bad, len(v.Statement), newStatementModel)
 	}
 	t.Logf("statement: %d cases agree with the %s model", len(v.Statement), newStatementModel)
+}
+
+// formalStmtWire marshals stmt and reads back the fields the formal model
+// predicts, as they appear on the wire.
+func formalStmtWire(t *testing.T, i int, stmt *Statement) formalStmtOut {
+	t.Helper()
+	out, err := json.Marshal(stmt)
+	if err != nil {
+		t.Fatalf("case %d: marshal: %v", i, err)
+	}
+	var wire struct {
+		Type          string           `json:"_type"`
+		Subject       []formalStmtSubj `json:"subject"`
+		PredicateType string           `json:"predicateType"`
+		Predicate     json.RawMessage  `json:"predicate"`
+	}
+	if err := json.Unmarshal(out, &wire); err != nil {
+		t.Fatalf("case %d: re-read %s: %v", i, out, err)
+	}
+	got := formalStmtOut{Type: wire.Type, Subject: wire.Subject, PredicateType: wire.PredicateType, Predicate: formalKind(wire.Predicate)}
+	if got.Subject == nil {
+		got.Subject = []formalStmtSubj{}
+	}
+	return got
 }

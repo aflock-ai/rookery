@@ -428,6 +428,60 @@ func TestInstallUpdatesAndPrunesWhatCilockWrote(t *testing.T) {
 	}
 }
 
+// A stale file cilock cannot read is kept, never removed, and the note says it
+// could not be read rather than claiming the user edited it.
+func TestInstallKeepsAnUnreadableStaleFileAndSaysWhy(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file")
+	}
+	env, _ := sandbox(t)
+	target, _ := ResolveTarget(AgentClaude, ScopeUser, "", env)
+	if _, err := Install(target, false, "old"); err != nil {
+		t.Fatal(err)
+	}
+	stale := []byte("dropped in a later release\n")
+	p := filepath.Join(target.Dir, "references", "unreadable.md")
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, stale, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := Files()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := record{Skill: SkillName, CilockVersion: "old", Files: map[string]string{"references/unreadable.md": digest(stale)}}
+	for _, f := range files {
+		rec.Files[f.Path] = digest(f.Data)
+	}
+	data, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(target.Dir, RecordName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+
+	results, err := Install(target, false, "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *Result
+	for i := range results {
+		if results[i].Path == "references/unreadable.md" {
+			got = &results[i]
+		}
+	}
+	if got == nil || got.Action != ActionKept || !strings.Contains(got.Note, "could not be read") {
+		t.Fatalf("unreadable stale file: result %+v, want kept with a 'could not be read' note", got)
+	}
+	if _, err := os.Lstat(p); err != nil {
+		t.Fatalf("unreadable stale file was removed: %v", err)
+	}
+}
+
 func TestInstallRefusesAnUnreadableRecord(t *testing.T) {
 	env, _ := sandbox(t)
 	target, _ := ResolveTarget(AgentClaude, ScopeUser, "", env)
@@ -554,6 +608,38 @@ func TestInspect(t *testing.T) {
 	}
 	if s, _ := Inspect(target); s != StateDiffers {
 		t.Errorf("after edit: %s", s)
+	}
+	// A directory where a skill file belongs is a difference, not a failure.
+	skill := filepath.Join(target.Dir, "SKILL.md")
+	if err := os.Remove(skill); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(skill, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Inspect(target); s != StateDiffers || err != nil {
+		t.Errorf("directory in place of SKILL.md: state %q err %v, want %q and no error", s, err, StateDiffers)
+	}
+}
+
+// A skill file that exists but cannot be read is reported as a failure, never
+// guessed to be "differs" (or "current").
+func TestInspectUnreadableFileIsAnError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file")
+	}
+	env, _ := sandbox(t)
+	target, _ := ResolveTarget(AgentClaude, ScopeUser, "", env)
+	if _, err := Install(target, false, "test"); err != nil {
+		t.Fatal(err)
+	}
+	skill := filepath.Join(target.Dir, "SKILL.md")
+	if err := os.Chmod(skill, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(skill, 0o600) })
+	if s, err := Inspect(target); err == nil {
+		t.Fatalf("unreadable SKILL.md: state %q with no error; want an error", s)
 	}
 }
 

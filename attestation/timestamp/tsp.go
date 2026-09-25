@@ -222,6 +222,44 @@ func NewVerifier(opts ...TSPVerifierOption) TSPVerifier {
 	return v
 }
 
+// checkTSASigner requires the token to have exactly one signer and that
+// signer's certificate to be a timestamping certificate named by the token's
+// signed ESS attribute. The comments inside give each rule's source.
+func checkTSASigner(p7 *pkcs7.PKCS7) error {
+	signer := p7.GetOnlySigner()
+	if signer == nil {
+		return fmt.Errorf("timestamp token must have exactly one signer")
+	}
+	// RFC 3161 §2.3: the TSA signing certificate must assert id-kp-timeStamping
+	// as its SOLE extended key usage. A multi-purpose leaf (e.g.
+	// timeStamping + serverAuth) must be rejected, otherwise a CA-issued cert
+	// that is not exclusively a timestamping cert could forge timestamps
+	// (GHSA-5qp5-ph6r-qj9f).
+	//
+	// NOTE: RFC 3161 §2.3 also says this extension "must be critical", but that
+	// is intentionally NOT enforced here. Go's x509.CreateCertificate marks the
+	// EKU extension non-critical when set via the ExtKeyUsage field, so the
+	// platform's own TSA cert — and most real-world TSA certs — carry a
+	// non-critical EKU. Enforcing criticality would reject every previously
+	// issued timestamp (the token embeds that cert) for no additional protection:
+	// requiring timeStamping to be the SOLE EKU already closes the dual-purpose
+	// cert vector.
+	if !timestampingIsSoleEKU(signer) {
+		return fmt.Errorf("timestamp token signer certificate must carry id-kp-timeStamping as its only extended key usage")
+	}
+	// The signer's keyUsage, when present, must permit signing
+	// (RFC 5280 §4.2.1.3). Go's chain check ignores a leaf's keyUsage bits.
+	if err := cryptoutil.CheckSigningKeyUsage(signer, true); err != nil {
+		return fmt.Errorf("timestamp token signer: %w", err)
+	}
+	// RFC 3161 §2.4.1 / RFC 5816 §2.2.1: the signed ESS attribute must name
+	// this signer certificate; the unsigned issuerAndSerialNumber cannot.
+	if err := verifySigningCertificate(p7, signer); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) (time.Time, error) {
 	if v.certChain == nil {
 		return time.Time{}, fmt.Errorf("timestamp verification requires certificate chain: use VerifyWithCerts option")
@@ -286,35 +324,7 @@ func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) 
 	//     treats a leaf with NO ExtKeyUsage extension as valid for any usage, so
 	//     the chain check alone would still accept an EKU-less signer; this
 	//     explicit presence check closes that loophole.
-	signer := p7.GetOnlySigner()
-	if signer == nil {
-		return time.Time{}, fmt.Errorf("timestamp token must have exactly one signer")
-	}
-	// RFC 3161 §2.3: the TSA signing certificate must assert id-kp-timeStamping
-	// as its SOLE extended key usage. A multi-purpose leaf (e.g.
-	// timeStamping + serverAuth) must be rejected, otherwise a CA-issued cert
-	// that is not exclusively a timestamping cert could forge timestamps
-	// (GHSA-5qp5-ph6r-qj9f).
-	//
-	// NOTE: RFC 3161 §2.3 also says this extension "must be critical", but that
-	// is intentionally NOT enforced here. Go's x509.CreateCertificate marks the
-	// EKU extension non-critical when set via the ExtKeyUsage field, so the
-	// platform's own TSA cert — and most real-world TSA certs — carry a
-	// non-critical EKU. Enforcing criticality would reject every previously
-	// issued timestamp (the token embeds that cert) for no additional protection:
-	// requiring timeStamping to be the SOLE EKU already closes the dual-purpose
-	// cert vector.
-	if !timestampingIsSoleEKU(signer) {
-		return time.Time{}, fmt.Errorf("timestamp token signer certificate must carry id-kp-timeStamping as its only extended key usage")
-	}
-	// The signer's keyUsage, when present, must permit signing
-	// (RFC 5280 §4.2.1.3). Go's chain check ignores a leaf's keyUsage bits.
-	if err := cryptoutil.CheckSigningKeyUsage(signer, true); err != nil {
-		return time.Time{}, fmt.Errorf("timestamp token signer: %w", err)
-	}
-	// RFC 3161 §2.4.1 / RFC 5816 §2.2.1: the signed ESS attribute must name
-	// this signer certificate; the unsigned issuerAndSerialNumber cannot.
-	if err := verifySigningCertificate(p7, signer); err != nil {
+	if err := checkTSASigner(p7); err != nil {
 		return time.Time{}, err
 	}
 

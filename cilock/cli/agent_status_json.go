@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
+	"github.com/aflock-ai/rookery/cilock/internal/options"
 )
 
 // An explicit public projection prevents credential-store additions from
@@ -96,7 +97,7 @@ func writeAgentStatusJSON(out io.Writer, platformURL string, cred, pending *auth
 		status.Status = "pending"
 	}
 	if identity != nil {
-		status.PrincipalKind = "agent"
+		status.PrincipalKind = options.PrincipalKindAgent
 		status.TenantID = identity.TenantID
 		status.AgentID = identity.AgentID
 		status.ExpiresAt = identity.ExpiresAt

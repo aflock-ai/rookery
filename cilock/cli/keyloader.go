@@ -41,6 +41,10 @@ type signerLoadConfig struct {
 	now func() time.Time
 }
 
+// signerProviderFulcio is the keyless signer provider's registered name, as
+// --signer-* flags and the run summary's Signer field spell it.
+const signerProviderFulcio = "fulcio"
+
 func (c signerLoadConfig) clock() time.Time {
 	if c.now != nil {
 		return c.now()
@@ -282,7 +286,7 @@ func loadSigners(ctx context.Context, so options.SignerOptions, ko options.KMSSi
 		// signer at signing time, after the wrapped command and attestors have
 		// finished, so long builds cannot outlive their signing certificate.
 		// Other providers retain fail-fast construction before command execution.
-		if signerProvider == "fulcio" {
+		if signerProvider == signerProviderFulcio {
 			// Fail fast on a static token that is ALREADY expired: deferring
 			// the certificate must not turn "refused before the build" into
 			// "refused after a 30-minute build". The same check runs again at

@@ -213,11 +213,11 @@ func TestFormalDifferentialVerifyBundle(t *testing.T) {
 		if c.Rekor == "v1" {
 			entity, err = vs.SignAtTime(formalSAN, formalIssuer, artifact, time.Now().Add(2*time.Second))
 			require.NoError(t, err)
+			verified := artifact
 			if c.Fault == "wrong-artifact" {
-				artifactPolicy = verify.WithArtifact(bytes.NewReader(wrong))
-			} else {
-				artifactPolicy = verify.WithArtifact(bytes.NewReader(artifact))
+				verified = wrong
 			}
+			artifactPolicy = verify.WithArtifact(bytes.NewReader(verified))
 		} else {
 			entity, err = vs.AttestAtTimeHashedRekordV2(formalSAN, formalIssuer, statement, time.Now().Add(2*time.Second))
 			require.NoError(t, err)

@@ -1498,7 +1498,7 @@ func buildRunSummary(
 	// every future edit to the resolution path.
 	if principal := ro.ResolvedAgentPrincipal(); principal != "" {
 		s.AgentPrincipal = principal
-		s.PrincipalKind = "agent"
+		s.PrincipalKind = options.PrincipalKindAgent
 		s.SignerEmail = ""
 	}
 	// Only report a platform-derived Fulcio/TSA/Archivista when the platform
@@ -1532,7 +1532,7 @@ func buildRunSummary(
 	// fulcio signer was the one actually used: the workflow flag alone could be
 	// stale if an explicit signer override won at sign time, so we confirm the
 	// signer kind before reporting the workflow-identity path.
-	s.WorkflowIdentity = ro.SignerIsWorkflowIdentity() && s.Signer == "fulcio"
+	s.WorkflowIdentity = ro.SignerIsWorkflowIdentity() && s.Signer == signerProviderFulcio
 	s.Inventories = runInventorySummaries(results)
 	stampNetworkObservation(s, attestors)
 	return s

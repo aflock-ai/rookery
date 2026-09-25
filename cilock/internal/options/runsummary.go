@@ -213,6 +213,10 @@ type RunSummary struct {
 	Capture *detection.CaptureReport `json:"capture,omitempty"`
 }
 
+// PrincipalKindAgent is the RunSummary.PrincipalKind (and `cilock agent status`
+// principal_kind) value for a signature made by an enrolled agent principal.
+const PrincipalKindAgent = "agent"
+
 // TraceCoverageSummary is the run-summary view of command-run
 // summary.coverage.
 type TraceCoverageSummary struct {

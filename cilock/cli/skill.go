@@ -131,7 +131,7 @@ skill directory and never through a symbolic link.`,
 
 func sessionName(a agentplugin.Agent) string {
 	if a == agentplugin.AgentCustom {
-		return "agent"
+		return agentCommandName
 	}
 	return a.DisplayName()
 }

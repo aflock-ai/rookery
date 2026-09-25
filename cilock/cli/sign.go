@@ -160,7 +160,7 @@ func selectHumanBrowserSigner(cmd *cobra.Command, so *options.SignOptions) error
 // machine with an enrolled agent is the agent.
 func explicitSignerIdentity(cmd *cobra.Command) bool {
 	for p := range providersFromFlags("signer", cmd.Flags()) {
-		if p != "fulcio" {
+		if p != signerProviderFulcio {
 			return true
 		}
 	}

@@ -69,8 +69,10 @@ The artifact is a file path, or its digest as <sha256|sha384|sha512>:<hex>.`,
 			if err := runVerifyBundle(o, args[0]); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Verified OK")
-			return nil
+			// A verifier's success line that failed to print must not exit 0
+			// silently: a caller reading stdout would see no verdict at all.
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), "Verified OK")
+			return err
 		},
 	}
 	cmd.Flags().StringVar(&o.bundle, "bundle", "", "Path to the Sigstore bundle")

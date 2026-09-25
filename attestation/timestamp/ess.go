@@ -126,6 +126,33 @@ func checkIssuerSerial(is essIssuerSerial, signer *x509.Certificate) error {
 	return fmt.Errorf("%w: issuerSerial does not name the signer's issuer", ErrSigningCertificate)
 }
 
+// verifySigningCertificateV2 checks a SigningCertificateV2 attribute: its first
+// ESSCertIDv2 must hash the signer certificate with SHA-256 (the default when
+// the algorithm is omitted), SHA-384 or SHA-512, and name its issuer and serial.
+func verifySigningCertificateV2(v2 []byte, signer *x509.Certificate) error {
+	var sc essSigningCertificateV2
+	if rest, err := asn1.Unmarshal(v2, &sc); err != nil || len(rest) != 0 || len(sc.Certs) == 0 {
+		return fmt.Errorf("%w: malformed SigningCertificateV2", ErrSigningCertificate)
+	}
+	id := sc.Certs[0]
+	h := crypto.SHA256
+	switch alg := id.HashAlgorithm.Algorithm; {
+	case len(alg) == 0 || alg.Equal(oidESSSHA256):
+	case alg.Equal(oidESSSHA384):
+		h = crypto.SHA384
+	case alg.Equal(oidESSSHA512):
+		h = crypto.SHA512
+	default:
+		return fmt.Errorf("%w: SigningCertificateV2 certHash algorithm %v is not SHA-256/384/512", ErrSigningCertificate, alg)
+	}
+	w := h.New()
+	w.Write(signer.Raw)
+	if !bytes.Equal(w.Sum(nil), id.CertHash) {
+		return fmt.Errorf("%w: SigningCertificateV2 certHash names another certificate", ErrSigningCertificate)
+	}
+	return checkIssuerSerial(id.IssuerSerial, signer)
+}
+
 // verifySigningCertificate requires the token's ESS attribute to identify the
 // signer certificate: SigningCertificateV2 (any SHA-2 certificate hash) when
 // present, else SigningCertificate (SHA-1), per RFC 5816 §2.2.1. The first
@@ -136,27 +163,7 @@ func verifySigningCertificate(p7 *pkcs7.PKCS7, signer *x509.Certificate) error {
 		return err
 	}
 	if hasV2 {
-		var sc essSigningCertificateV2
-		if rest, err := asn1.Unmarshal(v2, &sc); err != nil || len(rest) != 0 || len(sc.Certs) == 0 {
-			return fmt.Errorf("%w: malformed SigningCertificateV2", ErrSigningCertificate)
-		}
-		id := sc.Certs[0]
-		h := crypto.SHA256
-		switch alg := id.HashAlgorithm.Algorithm; {
-		case len(alg) == 0 || alg.Equal(oidESSSHA256):
-		case alg.Equal(oidESSSHA384):
-			h = crypto.SHA384
-		case alg.Equal(oidESSSHA512):
-			h = crypto.SHA512
-		default:
-			return fmt.Errorf("%w: SigningCertificateV2 certHash algorithm %v is not SHA-256/384/512", ErrSigningCertificate, alg)
-		}
-		w := h.New()
-		w.Write(signer.Raw)
-		if !bytes.Equal(w.Sum(nil), id.CertHash) {
-			return fmt.Errorf("%w: SigningCertificateV2 certHash names another certificate", ErrSigningCertificate)
-		}
-		return checkIssuerSerial(id.IssuerSerial, signer)
+		return verifySigningCertificateV2(v2, signer)
 	}
 	v1, hasV1, err := signedAttribute(p7, oidSigningCertificate)
 	if err != nil {

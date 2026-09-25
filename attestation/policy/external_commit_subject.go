@@ -149,26 +149,40 @@ func writeExternalSearchDiagnostics(b *strings.Builder, requested []string, cand
 // external declares no commitSubject, the payload is absent or undecodable, or
 // the signed predicateType is not the external's own or is an attestation
 // collection.
-func declaredCommitOf(ext ExternalAttestation, payload []byte, commit string) (named string, bound bool) {
+// externalStatementSubject is one in-toto subject as declaredCommitOf reads it.
+type externalStatementSubject struct {
+	Name   string            `json:"name"`
+	Digest map[string]string `json:"digest"`
+}
+
+// externalOwnSubjects decodes the statement's subjects when the external
+// declares a commitSubject and the signed predicateType is the external's own
+// (never an attestation collection). ok is false otherwise.
+func externalOwnSubjects(ext ExternalAttestation, payload []byte) ([]externalStatementSubject, bool) {
 	if ext.CommitSubject == "" || len(payload) == 0 {
-		return "", false
+		return nil, false
 	}
 	var stmt struct {
-		PredicateType string `json:"predicateType"`
-		Subject       []struct {
-			Name   string            `json:"name"`
-			Digest map[string]string `json:"digest"`
-		} `json:"subject"`
+		PredicateType string                     `json:"predicateType"`
+		Subject       []externalStatementSubject `json:"subject"`
 	}
 	if err := json.Unmarshal(payload, &stmt); err != nil {
-		return "", false
+		return nil, false
 	}
 	if stmt.PredicateType != ext.PredicateType ||
 		stmt.PredicateType == attestation.CollectionType || stmt.PredicateType == attestation.LegacyCollectionType {
+		return nil, false
+	}
+	return stmt.Subject, true
+}
+
+func declaredCommitOf(ext ExternalAttestation, payload []byte, commit string) (named string, bound bool) {
+	subjects, ok := externalOwnSubjects(ext, payload)
+	if !ok {
 		return "", false
 	}
 	sawCommit := false
-	for _, sub := range stmt.Subject {
+	for _, sub := range subjects {
 		if !strings.HasPrefix(sub.Name, ext.CommitSubject) {
 			continue
 		}

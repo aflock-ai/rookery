@@ -59,7 +59,7 @@ func TestSubjectsMatchLeanModel(t *testing.T) {
 	}
 	type pair = [2]any
 	encode := func(m map[string]map[string]string) []pair {
-		var out []pair
+		out := make([]pair, 0, len(m)) // non-nil: an empty map encodes as [], never null
 		for n, ds := range m {
 			var d [][2]string
 			for a, v := range ds {
@@ -69,9 +69,6 @@ func TestSubjectsMatchLeanModel(t *testing.T) {
 				d = [][2]string{}
 			}
 			out = append(out, pair{n, d})
-		}
-		if out == nil {
-			out = []pair{}
 		}
 		return out
 	}

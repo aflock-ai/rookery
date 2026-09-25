@@ -239,6 +239,29 @@ func runPolicyDraft(cmd *cobra.Command, o policyDraftOpts) error {
 	if err != nil {
 		return err
 	}
+	if err := checkHydrationResponse(cmd, o.file, resp, source, sess.cred.TenantID); err != nil {
+		return err
+	}
+
+	if err := writeHydratedPolicy(output, resp.HydratedSource, o.force); err != nil {
+		return err
+	}
+
+	_, _ = fmt.Fprintf(out, "\n✓ hydrated %s → %s (UNSIGNED)\n", o.file, output)
+	_, _ = fmt.Fprintf(out, "  tenant:   %s\n  source:   sha256:%s\n  hydrated: sha256:%s\n",
+		resp.TenantID, resp.SourceSHA256, resp.HydratedSHA256)
+	if !resp.EnforcementEligible {
+		_, _ = fmt.Fprintf(out, "  note:     not enforcement-eligible yet — it must be signed and published first\n")
+	}
+	printDraftSummary(out, resp.Summary)
+	printDraftNextSteps(out, output, o.datatype)
+	return nil
+}
+
+// checkHydrationResponse refuses a hydration response this build must not
+// write for signing: an unknown contract version, a refusal, an empty body, a
+// digest that does not match its bytes or our source, or another tenant's.
+func checkHydrationResponse(cmd *cobra.Command, file string, resp *policyHydrateResponse, source, tenantID string) error {
 	// REQUIRE the version, do not warn about it. This client can only interpret
 	// one contract, and it goes on to WRITE A DOCUMENT FOR SIGNING from fields
 	// whose meanings that contract defines. A warning printed to stderr does not
@@ -257,10 +280,10 @@ func runPolicyDraft(cmd *cobra.Command, o policyDraftOpts) error {
 			got, policyHydrationVersion)
 	}
 	if !resp.Valid {
-		return refusedHydrationError(cmd.ErrOrStderr(), o.file, resp)
+		return refusedHydrationError(cmd.ErrOrStderr(), file, resp)
 	}
 	if resp.HydratedSource == "" {
-		return fmt.Errorf("platform reported %s valid but returned no hydrated policy", o.file)
+		return fmt.Errorf("platform reported %s valid but returned no hydrated policy", file)
 	}
 	// Never trust a digest you can compute yourself: the bytes we are about to
 	// write must hash to the digest the platform claims for them.
@@ -276,22 +299,9 @@ func runPolicyDraft(cmd *cobra.Command, o policyDraftOpts) error {
 	}
 	// And that it was hydrated for OUR tenant. Both digest checks are about the
 	// policy bytes; neither says whose trust material was injected into them.
-	if err := verifyResponseTenant(resp, sess.cred.TenantID); err != nil {
+	if err := verifyResponseTenant(resp, tenantID); err != nil {
 		return err
 	}
-
-	if err := writeHydratedPolicy(output, resp.HydratedSource, o.force); err != nil {
-		return err
-	}
-
-	_, _ = fmt.Fprintf(out, "\n✓ hydrated %s → %s (UNSIGNED)\n", o.file, output)
-	_, _ = fmt.Fprintf(out, "  tenant:   %s\n  source:   sha256:%s\n  hydrated: sha256:%s\n",
-		resp.TenantID, resp.SourceSHA256, resp.HydratedSHA256)
-	if !resp.EnforcementEligible {
-		_, _ = fmt.Fprintf(out, "  note:     not enforcement-eligible yet — it must be signed and published first\n")
-	}
-	printDraftSummary(out, resp.Summary)
-	printDraftNextSteps(out, output, o.datatype)
 	return nil
 }
 

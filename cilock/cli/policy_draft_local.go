@@ -134,15 +134,7 @@ type localHydratePlaced struct {
 func runPolicyDraftLocal(cmd *cobra.Command, o policyDraftOpts) error {
 	out := cmd.OutOrStdout()
 
-	platformURL := o.platformURL
-	if platformURL == "" {
-		if active := auth.ActivePlatformURL(); active != "" {
-			platformURL = active
-		} else {
-			platformURL = config.DefaultPlatformURL
-		}
-	}
-	platformURL = config.NormalizeURL(platformURL)
+	platformURL := localDraftPlatformURL(o.platformURL)
 
 	source, datatype, err := readTypedPolicySource(cmd, o.file, o.datatype)
 	if err != nil {
@@ -209,6 +201,19 @@ func runPolicyDraftLocal(cmd *cobra.Command, o policyDraftOpts) error {
 	}
 	printDraftNextSteps(out, output, datatype)
 	return nil
+}
+
+// localDraftPlatformURL is the platform whose discovery document fills the
+// sentinels: the flag, else the active session's platform, else the default.
+func localDraftPlatformURL(flag string) string {
+	platformURL := flag
+	if platformURL == "" {
+		platformURL = auth.ActivePlatformURL()
+	}
+	if platformURL == "" {
+		platformURL = config.DefaultPlatformURL
+	}
+	return config.NormalizeURL(platformURL)
 }
 
 // hydrateFromDiscovery fetches the trust material the plan needs and injects
@@ -391,26 +396,43 @@ func localHydrateAssertReferencedRootsPresent(p *policy.Policy) error {
 	for _, stepName := range stepNames {
 		for i, fn := range p.Steps[stepName].Functionaries {
 			for _, rootID := range fn.CertConstraint.Roots {
-				switch rootID {
-				case "":
-					continue
-				case localHydrateWildcardRootID:
-					usesWildcard = true
-					continue
+				wildcard, err := localHydrateCheckRootRef(p, stepName, i, rootID)
+				if err != nil {
+					return err
 				}
-				root, ok := p.Roots[rootID]
-				if !ok {
-					return fmt.Errorf("steps.%s.functionaries[%d].certConstraint.roots references %q, but no such root is defined", stepName, i, rootID)
-				}
-				if len(root.Certificate) == 0 {
-					return fmt.Errorf("steps.%s.functionaries[%d].certConstraint.roots references %q, but roots[%q].certificate is empty", stepName, i, rootID, rootID)
-				}
+				usesWildcard = usesWildcard || wildcard
 			}
 		}
 	}
 	if !usesWildcard {
 		return nil
 	}
+	return localHydrateAssertWildcardRoots(p)
+}
+
+// localHydrateCheckRootRef checks one certConstraint root reference: it must
+// name a defined root with a certificate. It reports whether the reference is
+// the wildcard, which is checked against every root afterwards.
+func localHydrateCheckRootRef(p *policy.Policy, stepName string, i int, rootID string) (bool, error) {
+	switch rootID {
+	case "":
+		return false, nil
+	case localHydrateWildcardRootID:
+		return true, nil
+	}
+	root, ok := p.Roots[rootID]
+	if !ok {
+		return false, fmt.Errorf("steps.%s.functionaries[%d].certConstraint.roots references %q, but no such root is defined", stepName, i, rootID)
+	}
+	if len(root.Certificate) == 0 {
+		return false, fmt.Errorf("steps.%s.functionaries[%d].certConstraint.roots references %q, but roots[%q].certificate is empty", stepName, i, rootID, rootID)
+	}
+	return false, nil
+}
+
+// localHydrateAssertWildcardRoots: a wildcard reference trusts every root, so
+// there must be at least one and none may be empty.
+func localHydrateAssertWildcardRoots(p *policy.Policy) error {
 	if len(p.Roots) == 0 {
 		return fmt.Errorf("policy uses wildcard root %q but defines no roots; downstream verification would have an empty trust bundle", localHydrateWildcardRootID)
 	}

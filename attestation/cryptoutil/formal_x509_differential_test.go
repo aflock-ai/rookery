@@ -80,20 +80,7 @@ func FormalTemplate(base time.Time, c FormalCert) *x509.Certificate {
 		tmpl.MaxPathLenZero = *c.PathLen == 0
 	}
 	if c.KU != nil {
-		ku := x509.KeyUsage(0)
-		if c.KU.DS {
-			ku |= x509.KeyUsageDigitalSignature
-		}
-		if c.KU.CC {
-			ku |= x509.KeyUsageContentCommitment
-		}
-		if c.KU.CS {
-			ku |= x509.KeyUsageCertSign
-		}
-		if ku == 0 {
-			ku = x509.KeyUsageKeyEncipherment
-		}
-		tmpl.KeyUsage = ku
+		tmpl.KeyUsage = formalKeyUsage(c.KU.DS, c.KU.CC, c.KU.CS)
 	}
 	switch c.EKU {
 	case "codeSigning":
@@ -215,4 +202,23 @@ func TestFormalX509Differential(t *testing.T) {
 		t.Fatalf("x509: %d of %d cases disagree with the %s model", bad, len(v.X509), x509Model)
 	}
 	t.Logf("x509: %d cases (%d accepted) agree with the %s model", len(v.X509), accepted, x509Model)
+}
+
+// formalKeyUsage is the key usage a formal case's ku flags name. No flag set
+// means a certificate that asserts only keyEncipherment.
+func formalKeyUsage(ds, cc, cs bool) x509.KeyUsage {
+	ku := x509.KeyUsage(0)
+	if ds {
+		ku |= x509.KeyUsageDigitalSignature
+	}
+	if cc {
+		ku |= x509.KeyUsageContentCommitment
+	}
+	if cs {
+		ku |= x509.KeyUsageCertSign
+	}
+	if ku == 0 {
+		ku = x509.KeyUsageKeyEncipherment
+	}
+	return ku
 }

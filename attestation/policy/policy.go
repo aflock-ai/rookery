@@ -2515,6 +2515,19 @@ func hydrateDownstreamMaterials(vo *verifyOptions, step Step, passedCollection P
 	return downstream, downstream.Materials(), nil
 }
 
+// leaflessChainReason explains why a downstream collection with no inline
+// material leaves cannot satisfy artifactsFrom. The verdict is the same
+// fail-closed refusal either way; only the diagnosis differs. When the
+// producer SIGNED that it withheld the leaves, that is an expected, benign
+// condition with a one-line remedy, and reporting it as generic "leaf-less"
+// would send the reader hunting for corruption that is not there.
+func leaflessChainReason(downstream attestation.Collection, stepName, artifactsFrom string) string {
+	if downstream.MaterialManifestWithheld() {
+		return fmt.Sprintf("step %s carries no verified chain: the producer signed manifestUploaded=false, so its material leaves were deliberately not published and cannot satisfy artifactsFrom %s. Re-run the producing step with `cilock run --material-manifest`.", stepName, artifactsFrom)
+	}
+	return fmt.Sprintf("step %s carries no verified chain: the collection is leaf-less (no inline material leaves), so its empty material set is unverified and cannot satisfy artifactsFrom %s", stepName, artifactsFrom)
+}
+
 func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, passedCollection PassedCollection, collectionsByStep map[string]StepResult) error { //nolint:gocognit,gocyclo // inline-leaf chain compare shares a reason-tracking trail across the artifactsFrom loop; splitting obscures the failure-reason trail
 	reasons := []string{}
 	collection := passedCollection.Collection
@@ -2581,16 +2594,7 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 			// build step (which records no materials) verify while a leaf-less
 			// attestation always fails closed.
 			if len(mats) == 0 && !downstream.HasInlineMaterials() {
-				// Same fail-closed verdict either way; only the diagnosis
-				// differs. State (a) — the producer SIGNED that it withheld the
-				// leaves — is an expected, benign condition with a one-line
-				// remedy, and reporting it as generic "leaf-less" would send the
-				// reader hunting for corruption that is not there.
-				if downstream.MaterialManifestWithheld() {
-					reasons = append(reasons, fmt.Sprintf("step %s carries no verified chain: the producer signed manifestUploaded=false, so its material leaves were deliberately not published and cannot satisfy artifactsFrom %s. Re-run the producing step with `cilock run --material-manifest`.", step.Name, artifactsFrom))
-				} else {
-					reasons = append(reasons, fmt.Sprintf("step %s carries no verified chain: the collection is leaf-less (no inline material leaves), so its empty material set is unverified and cannot satisfy artifactsFrom %s", step.Name, artifactsFrom))
-				}
+				reasons = append(reasons, leaflessChainReason(downstream, step.Name, artifactsFrom))
 				continue
 			}
 
