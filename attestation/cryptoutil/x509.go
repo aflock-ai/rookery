@@ -62,22 +62,24 @@ func (v *X509Verifier) KeyID() (string, error) {
 	return v.verifier.KeyID()
 }
 
-// checkNotCA refuses a CA certificate on the signing path. Chain building and
-// the codeSigning EKU check do not: an intermediate that carries codeSigning
-// (the platform Fulcio CA does) chains to its root, and a self-signed root
-// without EKU verifies against a pool holding itself. Either lets a CA key
-// sign attestations directly, bypassing the short-lived leaf and the identity
-// and SAN constraints it carries. Go sets IsCA only when the basicConstraints
-// extension is present.
-func (v *X509Verifier) checkNotCA() error {
+// checkSigningLeaf refuses a certificate that is not a signing leaf. First, a
+// CA certificate on the signing path. Chain building and the codeSigning EKU
+// check do not: an intermediate that carries codeSigning (the platform Fulcio
+// CA does) chains to its root, and a self-signed root without EKU verifies
+// against a pool holding itself. Either lets a CA key sign attestations
+// directly, bypassing the short-lived leaf and the identity and SAN
+// constraints it carries. Go sets IsCA only when the basicConstraints
+// extension is present. Second, a leaf whose keyUsage does not assert
+// digitalSignature, which Go's chain check ignores (CheckSigningKeyUsage).
+func (v *X509Verifier) checkSigningLeaf() error {
 	if v.cert.BasicConstraintsValid && v.cert.IsCA {
 		return fmt.Errorf("%w: %q", ErrCACertificateAsLeaf, v.cert.Subject.String())
 	}
-	return nil
+	return CheckSigningKeyUsage(v.cert, false)
 }
 
 func (v *X509Verifier) Verify(body io.Reader, sig []byte) error {
-	if err := v.checkNotCA(); err != nil {
+	if err := v.checkSigningLeaf(); err != nil {
 		return err
 	}
 	chains, err := v.verifyChain()
@@ -111,7 +113,7 @@ func (v *X509Verifier) verifyChain() ([][]*x509.Certificate, error) {
 }
 
 func (v *X509Verifier) BelongsToRoot(root *x509.Certificate) error {
-	if err := v.checkNotCA(); err != nil {
+	if err := v.checkSigningLeaf(); err != nil {
 		return err
 	}
 	rootPool := certificatesToPool([]*x509.Certificate{root})

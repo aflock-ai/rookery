@@ -307,6 +307,11 @@ func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) 
 	if !timestampingIsSoleEKU(signer) {
 		return time.Time{}, fmt.Errorf("timestamp token signer certificate must carry id-kp-timeStamping as its only extended key usage")
 	}
+	// The signer's keyUsage, when present, must permit signing
+	// (RFC 5280 §4.2.1.3). Go's chain check ignores a leaf's keyUsage bits.
+	if err := cryptoutil.CheckSigningKeyUsage(signer, true); err != nil {
+		return time.Time{}, fmt.Errorf("timestamp token signer: %w", err)
+	}
 
 	// Validate the TSA chain AT the token's genTime — the value this function
 	// RETURNS as the trusted signing time.

@@ -1,0 +1,18 @@
+name = "signing-trust"
+version = "0.1.0"
+defaultTargets = ["SigningTrust"]
+
+# The committed differential vectors are a build INPUT: editing them re-runs
+# the staleness gate in SigningTrust/Vectors.lean, which fails when the file
+# is not exactly what the model generates.
+[[input_file]]
+name = "vectors"
+path = "vectors/signing-trust.json"
+text = true
+
+# Vectors defines `main` (the generator), so it is a separate root rather
+# than an import of SigningTrust.lean.
+[[lean_lib]]
+name = "SigningTrust"
+roots = ["SigningTrust", "SigningTrust.Vectors"]
+needs = ["vectors"]
