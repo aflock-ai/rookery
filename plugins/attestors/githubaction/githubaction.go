@@ -114,6 +114,13 @@ type Attestor struct {
 	// Steps are the composite `run:` steps, in execution order. (v0.2)
 	Steps []RunStep `json:"steps,omitempty"`
 
+	// ChildEnv records whether the action ran with the CI OIDC credentials
+	// withheld (the default) or inherited through an explicit opt-out, and
+	// which names were withheld. A verifier can refuse "inherited": such an
+	// action could mint the signer's workflow identity (#9822). Absent means
+	// the attestation predates the record.
+	ChildEnv *attestation.ChildEnvRecord `json:"childEnv,omitempty"`
+
 	// GitHub context (from env vars when available)
 	RunID        string `json:"runid,omitempty"`
 	WorkflowName string `json:"workflowname,omitempty"`
