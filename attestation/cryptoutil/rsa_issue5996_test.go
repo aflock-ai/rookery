@@ -42,7 +42,7 @@ func TestSecurity_Issue5996_RSAPKCS1Fallback(t *testing.T) {
 
 	// A signature produced with PSS (the expected scheme).
 	pssSig, err := rsa.SignPSS(rand.Reader, priv, crypto.SHA256, digest, &rsa.PSSOptions{
-		SaltLength: rsa.PSSSaltLengthAuto,
+		SaltLength: rsa.PSSSaltLengthEqualsHash,
 		Hash:       crypto.SHA256,
 	})
 	require.NoError(t, err)
@@ -61,7 +61,7 @@ func TestSecurity_Issue5996_RSAPKCS1Fallback(t *testing.T) {
 	})
 
 	t.Run("opt-in accepts PKCS1v15", func(t *testing.T) {
-		v := NewRSAVerifierWithOptions(&priv.PublicKey, crypto.SHA256, WithPKCS1v15Fallback())
+		v := NewRSAVerifierWithOptions(&priv.PublicKey, crypto.SHA256, WithPKCS1v15())
 		err := v.Verify(bytes.NewReader(data), pkcs1Sig)
 		require.NoError(t, err,
 			"opt-in verifier must accept PKCS#1 v1.5 (e.g. AWS KMS compatibility)")
