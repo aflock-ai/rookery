@@ -139,7 +139,7 @@ func EvaluateAIPolicyWithProvider(ctx context.Context, attestor attestation.Atte
 		provider = defaultAiProvider
 	}
 	if batch, ok := provider.(AiBatchProvider); ok {
-		return batch.EvaluateBatch(ctx, attestor, policies, serverURL)
+		return evaluateAiBatch(ctx, batch, attestor, policies, serverURL)
 	}
 
 	responses := make([]AiResponse, 0, len(policies))
@@ -195,7 +195,48 @@ func ExecuteAiPolicyWithProvider(ctx context.Context, attestor attestation.Attes
 	if provider == nil {
 		provider = defaultAiProvider
 	}
-	return provider.Evaluate(ctx, attestor, pol, serverURL)
+	result, err := provider.Evaluate(ctx, attestor, pol, serverURL)
+	if err != nil {
+		return result, err
+	}
+	if err := checkAiResponseSchema(pol, result); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// evaluateAiBatch asks a batch provider every question and requires one
+// well-formed verdict per policy: a missing or out-of-schema answer is a FAIL,
+// never a pass (#9820).
+func evaluateAiBatch(ctx context.Context, batch AiBatchProvider, attestor attestation.Attestor, policies []AiPolicy, serverURL string) ([]AiResponse, error) {
+	responses, err := batch.EvaluateBatch(ctx, attestor, policies, serverURL)
+	if err != nil {
+		return responses, err
+	}
+	if len(responses) != len(policies) {
+		return responses, fmt.Errorf("AI provider returned %d responses for %d policies; failing the policy", len(responses), len(policies))
+	}
+	for i, pol := range policies {
+		if i >= len(responses) {
+			break // unreachable: the lengths are equal above
+		}
+		if err := checkAiResponseSchema(pol, responses[i]); err != nil {
+			return responses, err
+		}
+	}
+	return responses, nil
+}
+
+// checkAiResponseSchema fails a verdict whose status is not exactly PASS or
+// FAIL (#9820). The gate rejects on FAIL and passes everything else, so an
+// injected provider that answered "pass", "", or anything outside the schema
+// would otherwise pass the step. The built-in providers already refuse such
+// answers; this holds every provider to the same contract.
+func checkAiResponseSchema(pol AiPolicy, resp AiResponse) error {
+	if resp.Status != AiStatusPass && resp.Status != AiStatusFail {
+		return fmt.Errorf("AI policy %q: provider returned status %q, not %q or %q; failing the policy", pol.Name, resp.Status, AiStatusPass, AiStatusFail)
+	}
+	return nil
 }
 
 // ollamaProvider evaluates a generative (prompt-only) AI policy against an

@@ -938,7 +938,10 @@ func (s Step) gateOneContext(ctx context.Context, collection source.CollectionVe
 
 				if err == nil {
 					for i, resp := range aiResponses {
-						if resp.Status == AiStatusFail {
+						// Anything but an exact PASS fails the step (#9820):
+						// the provider layer already refuses other statuses,
+						// and the gate must not pass one if it ever gets here.
+						if resp.Status != AiStatusPass {
 							policyName := ""
 							if i < len(expected.AiPolicies) {
 								policyName = expected.AiPolicies[i].Name
