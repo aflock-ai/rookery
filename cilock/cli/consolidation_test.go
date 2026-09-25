@@ -61,7 +61,11 @@ func TestApplyHardeningProfile_Standard(t *testing.T) {
 
 	var zeroDrops bool
 	require.NoError(t, applyHardeningProfile("standard", &zeroDrops, false))
-	assert.Equal(t, "1", os.Getenv("CILOCK_FANOTIFY"))
+	// standard USES fanotify when the kernel grants it and records the gap
+	// when it does not; only strict REQUIRES it. "1" here would make the
+	// default profile refuse every run without CAP_SYS_ADMIN (unprivileged
+	// containers, and the documented setcap cap_bpf,cap_perfmon setup).
+	assert.Equal(t, "auto", os.Getenv("CILOCK_FANOTIFY"))
 	assert.Equal(t, "auto", os.Getenv("CILOCK_FSVERITY"))
 	assert.False(t, zeroDrops, "standard profile must not flip require-zero-drops")
 }
@@ -124,7 +128,7 @@ func TestApplyHardeningProfile_EmptyDefaultsToStandard(t *testing.T) {
 
 	var zeroDrops bool
 	require.NoError(t, applyHardeningProfile("", &zeroDrops, false))
-	assert.Equal(t, "1", os.Getenv("CILOCK_FANOTIFY"), "empty profile must apply standard defaults")
+	assert.Equal(t, "auto", os.Getenv("CILOCK_FANOTIFY"), "empty profile must apply standard defaults")
 	assert.Equal(t, "auto", os.Getenv("CILOCK_FSVERITY"))
 }
 

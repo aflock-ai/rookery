@@ -158,7 +158,7 @@ func applyTraceePrivilegeDrop(_ *exec.Cmd) {}
 // started the collector and proved it live (it must run BEFORE the sandbox
 // exists, since `log` refuses to run inside one), and it reports failure
 // through c.Err.
-func (r *CommandRun) preStartTracingSetup() error { return nil }
+func (r *CommandRun) preStartTracingSetup(_ *exec.Cmd) error { return nil }
 
 // trace waits for the wrapped command, drains the report stream, and turns the
 // reports into the same ProcessInfo records the Linux tracer produces.

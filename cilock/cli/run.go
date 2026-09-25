@@ -363,8 +363,16 @@ var execLookPath = exec.LookPath
 // untouched. Recognised profiles:
 //
 //   - "off"      — fanotify off, fs-verity off, no require-zero-drops
-//   - "standard" — fanotify on,  fs-verity opportunistic, drops surfaced
+//   - "standard": fanotify used when available (CILOCK_FANOTIFY=auto): when
+//     the kernel refuses it, the run continues and warns; fs-verity
+//     opportunistic, drops surfaced
 //   - "strict"   — fanotify required, fs-verity required, drops fail
+//
+// standard used to seed CILOCK_FANOTIFY=1, which maybeStartFanotify treats as
+// REQUIRED, so the default refused every run without CAP_SYS_ADMIN
+// (unprivileged containers, and the documented setcap cap_bpf,cap_perfmon
+// eBPF setup), contradicting the documented profile and making standard and
+// strict identical for fanotify.
 //
 // requireZeroDrops is updated only when the operator didn't explicitly
 // pass --require-zero-drops on the command line (changed=false).
@@ -375,7 +383,7 @@ var execLookPath = exec.LookPath
 func applyHardeningProfile(profile string, requireZeroDrops *bool, requireZeroDropsExplicit bool) error {
 	switch profile {
 	case "", "standard":
-		setEnvIfUnset("CILOCK_FANOTIFY", "1")
+		setEnvIfUnset("CILOCK_FANOTIFY", "auto")
 		setEnvIfUnset("CILOCK_FSVERITY", "auto")
 		// standard: drops surfaced but not fatal (no override).
 	case "off":

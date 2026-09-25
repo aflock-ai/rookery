@@ -45,9 +45,9 @@ workloads, less on builds dominated by compile time). In exchange you get:
 
 | value | behavior |
 |-------|----------|
-| `` (unset) / `0` / `off` | Disabled. BPF-only capture (default). |
-| `auto` | Probe for fanotify availability; activate if probe succeeds, fall back to BPF silently otherwise. |
-| `1` / `on` | REQUIRE fanotify. Error if probe fails (e.g., CAP_SYS_ADMIN missing). |
+| `` (unset) / `auto` | Probe for fanotify; activate if the probe succeeds. Otherwise continue without it and print a warning. `--hardening standard` (the default) sets this. |
+| `0` / `off` | Disabled. `--hardening off` sets this. |
+| `1` / `on` | REQUIRE fanotify. Error if probe fails (e.g., CAP_SYS_ADMIN missing). `--hardening strict` sets this. |
 
 **Capabilities:** CAP_SYS_ADMIN required. cilock-action's sudo path
 provides this automatically on hosted GitHub Actions runners.

@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -28,7 +29,9 @@ import (
 //     GitHub's Azure 6.17 runner, where the eBPF tap silently dropped
 //     every product digest and shipped an empty product tree. Defaulting
 //     it ON means correct product capture out of the box.
-//   - "auto": enable if Probe succeeds; otherwise fall back silently
+//   - "auto": enable if Probe succeeds; otherwise continue without it and
+//     report the reason (fanotifyOutcome), which runCmd prints as a
+//     warning. Never silent.
 //   - "1" / "on": REQUIRE fanotify; error if Probe fails
 //   - "0" / "off" / "off-explicit": explicitly disable (BPF-only)
 const EnvVarFanotify = "CILOCK_FANOTIFY"
@@ -56,20 +59,28 @@ func (s *fanotifySession) setBuildPgid(pid int) {
 	s.h.SetBuildPgid(pid)
 }
 
+// fanotifyProbe and fanotifyNew are the capability probe and constructor
+// maybeStartFanotify uses; variables so tests can force "unavailable" on a
+// host that has CAP_SYS_ADMIN.
+var (
+	fanotifyProbe = fanotify.Probe
+	fanotifyNew   = fanotify.New
+)
+
 // maybeStartFanotify decides whether to enable the fanotify integrity
 // gate, probes capability, and starts the handler goroutine. Returns
-// (session, nil) on success, (nil, nil) when disabled or unavailable
-// in auto mode, or (nil, error) when explicitly required but
-// unavailable.
+// the session and an outcome saying whether it is active, disabled, or
+// unavailable (with the reason), or an error when fanotify was explicitly
+// REQUIRED ("1"/"on", i.e. --hardening strict) but unavailable.
 //
 // The probe + activate sequence costs a few syscalls and is safe to
 // call regardless of trace mode; we just gate on the env var.
-func maybeStartFanotify(workingDir string, skipHash func(string) bool) (*fanotifySession, error) {
+func maybeStartFanotify(workingDir string, skipHash func(string) bool) (*fanotifySession, fanotifyOutcome, error) {
 	mode := os.Getenv(EnvVarFanotify)
 	switch mode {
 	case "0", "off", "off-explicit":
 		// Explicit opt-out — operator chose BPF-only.
-		return nil, nil
+		return nil, fanotifyOutcome{State: fanotifyDisabled, Reason: EnvVarFanotify + "=" + mode}, nil
 	case "", "auto", "1", "on":
 		// Unset now defaults to auto (enable-if-available). "1"/"on"
 		// additionally REQUIRE it (see `required` below).
@@ -78,7 +89,7 @@ func maybeStartFanotify(workingDir string, skipHash func(string) bool) (*fanotif
 		// Unknown value — treat as disabled but log so operators can
 		// notice typos.
 		log.Debugf("(fanotify) unknown %s=%q; disabled", EnvVarFanotify, mode)
-		return nil, nil
+		return nil, fanotifyOutcome{State: fanotifyDisabled, Reason: fmt.Sprintf("unrecognised %s=%q", EnvVarFanotify, mode)}, nil
 	}
 
 	if workingDir == "" {
@@ -86,21 +97,21 @@ func maybeStartFanotify(workingDir string, skipHash func(string) bool) (*fanotif
 	}
 	required := mode == "1" || mode == "on"
 
-	if err := fanotify.Probe(workingDir); err != nil {
+	if err := fanotifyProbe(workingDir); err != nil {
 		if required {
-			return nil, &fanotifyUnavailableError{cause: err}
+			return nil, fanotifyOutcome{}, &fanotifyUnavailableError{cause: err}
 		}
-		log.Debugf("(fanotify) probe failed (auto-mode, falling back to BPF): %v", err)
-		return nil, nil
+		log.Debugf("(fanotify) probe failed (auto-mode, continuing without it): %v", err)
+		return nil, fanotifyOutcome{State: fanotifyUnavailable, Reason: err.Error()}, nil
 	}
 
-	h, err := fanotify.New(workingDir)
+	h, err := fanotifyNew(workingDir)
 	if err != nil {
 		if required {
-			return nil, &fanotifyUnavailableError{cause: err}
+			return nil, fanotifyOutcome{}, &fanotifyUnavailableError{cause: err}
 		}
-		log.Debugf("(fanotify) New failed (auto-mode, falling back): %v", err)
-		return nil, nil
+		log.Debugf("(fanotify) New failed (auto-mode, continuing without it): %v", err)
+		return nil, fanotifyOutcome{State: fanotifyUnavailable, Reason: err.Error()}, nil
 	}
 	// Skip synchronous hashing of build-internal cache/temp paths — the
 	// dominant open volume on cold builds, content-addressed by lockfiles,
@@ -128,7 +139,7 @@ func maybeStartFanotify(workingDir string, skipHash func(string) bool) (*fanotif
 	<-ready
 	time.Sleep(50 * time.Millisecond)
 	log.Debugf("(fanotify) integrity gate active on %s", workingDir)
-	return s, nil
+	return s, fanotifyOutcome{State: fanotifyActive}, nil
 }
 
 // stop drains the handler and harvests its digests. Safe to call on

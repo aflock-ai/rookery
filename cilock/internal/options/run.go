@@ -371,9 +371,13 @@ type RunOptions struct {
 	//   - "off"      — minimum overhead; no fanotify, no fs-verity,
 	//                  no zero-drops gate. Use when iterating on a
 	//                  CI policy locally.
-	//   - "standard" (default) — fanotify on, fs-verity opportunistic
-	//                  (sealed where supported, skipped silently
-	//                  elsewhere), drops surfaced as warnings.
+	//   - "standard" (default): fanotify used where the kernel grants
+	//                  it (CAP_SYS_ADMIN); where it does not, the run
+	//                  continues with a warning (use "strict" to
+	//                  require it).
+	//                  fs-verity opportunistic (sealed where supported,
+	//                  skipped silently elsewhere), drops surfaced as
+	//                  warnings.
 	//   - "strict"   — fanotify required, fs-verity required, drops
 	//                  fail the run. For release-grade attestations.
 	//
@@ -1255,7 +1259,8 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&ro.Hardening, "hardening", "standard",
 		"Bundle integrity toggles (fanotify, fs-verity, require-zero-drops) into a named profile. "+
 			"'off' = minimum overhead, no fanotify or fs-verity. "+
-			"'standard' (default) = fanotify on, fs-verity opportunistic, drops surfaced as warnings. "+
+			"'standard' (default) = fanotify when the kernel allows it (otherwise a warning), "+
+			"fs-verity opportunistic, drops surfaced as warnings. "+
 			"'strict' = fanotify required, fs-verity required, drops fail the run. "+
 			"Explicit CILOCK_FANOTIFY / CILOCK_FSVERITY env vars still win.")
 	cmd.Flags().BoolVar(&ro.RequireZeroDrops, "require-zero-drops", false,

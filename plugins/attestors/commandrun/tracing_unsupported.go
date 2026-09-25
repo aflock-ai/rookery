@@ -41,7 +41,7 @@ func applyTraceePrivilegeDrop(c *exec.Cmd) {
 // On Linux this opens the eBPF consumer before c.Start(); elsewhere
 // tracing is unsupported and the trace() method returns an error
 // after Start, so this helper has nothing to do.
-func (r *CommandRun) preStartTracingSetup() error {
+func (r *CommandRun) preStartTracingSetup(_ *exec.Cmd) error {
 	return nil
 }
 

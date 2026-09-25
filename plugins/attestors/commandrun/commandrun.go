@@ -287,7 +287,7 @@ func (r *CommandRun) zeroDropsGate() error {
 	// /opt/hostedtoolcache always have a few of these from
 	// startup-race / fast-fork-exec patterns; making them fail-closed
 	// turns require-zero-drops into a permanent red light.
-	if d.RingbufOpenatDrops > 0 || d.RingbufReadTapDrops > 0 ||
+	if d.RingbufOpenatDrops > 0 || d.RingbufReadTapDrops > 0 || d.PtraceSyscallStopsLost > 0 ||
 		d.FanotifyTimeouts > 0 || d.FanotifyQueueOverflows > 0 ||
 		d.FanotifyDigestsCapHit > 0 ||
 		d.FsVeritySealFailures > 0 {
@@ -1040,6 +1040,12 @@ type TraceDiagnostics struct {
 	// FallbackHashFailures means each failure became a verifiable gap.
 	HashFailureSilentDrops uint64 `json:"hashFailureSilentDrops,omitempty"`
 
+	// PtraceSyscallStopsLost counts ptrace syscall stops whose registers or
+	// arguments could not be read (the thread was killed while stopped).
+	// Each is an event missing from the trace; a hard drop for
+	// --require-zero-drops.
+	PtraceSyscallStopsLost uint64 `json:"ptraceSyscallStopsLost,omitempty"`
+
 	// FanotifyAvailable reports whether the fanotify integrity gate
 	// was active for this trace. true = every open under the workspace
 	// mount was synchronously hashed by the kernel-blocking handler;
@@ -1611,6 +1617,10 @@ type CommandRun struct {
 	// derivation needs to know the backend (and that a trace actually ran),
 	// so this is set from the resolved mode, not the request.
 	resolvedTraceBackend string
+
+	// ptraceSyscallStopsLost is copied from the ptrace tracer after the
+	// trace; surfaced as diagnostics.ptraceSyscallStopsLost.
+	ptraceSyscallStopsLost uint64
 
 	// darwinTraceDiag is stashed by the macOS sandbox-report tracer during
 	// trace() and folded into the Summary afterwards. It cannot be written
@@ -2639,7 +2649,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		// mode is selected, or returns the trace-mode error with
 		// remediation instructions when eBPF was requested but
 		// unavailable. ptrace mode is a no-op.
-		if err := r.preStartTracingSetup(); err != nil {
+		if err := r.preStartTracingSetup(c); err != nil {
 			return err
 		}
 		// Build the cache classifier up front so the trace can consult
@@ -2664,11 +2674,18 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 		// hashed by the kernel-blocking fanotify handler — zero drops
 		// by construction. Falls back to BPF-only if the env var
 		// requests auto-mode and fanotify is unavailable.
-		fanSession, err := maybeStartFanotify(c.Dir, cacheSkip)
+		fanSession, fanOutcome, err := maybeStartFanotify(c.Dir, cacheSkip)
 		if err != nil {
 			return err
 		}
 		r.fanotifySession = fanSession
+		if fanOutcome.State == fanotifyUnavailable {
+			// --hardening standard (the default) degrades here instead of
+			// refusing; say so where the operator will see it.
+			fmt.Fprintf(os.Stderr, "cilock-trace: fanotify unavailable (%s); file digests fall back to open-time "+
+				"path hashes. Use --hardening strict to require fanotify.\n",
+				fanOutcome.Reason)
+		}
 		// Optional fs-verity sealing of products. When the FS
 		// supports it, every write-only file gets Merkle-rooted at
 		// close time and the kernel refuses to read corrupted blocks
@@ -2830,6 +2847,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 				r.Summary.Diagnostics.FsVerityFilesSealed = r.fsVerityState.Sealed.Load()
 				r.Summary.Diagnostics.FsVeritySealFailures = r.fsVerityState.SealFailures.Load()
 			}
+			r.Summary.Diagnostics.PtraceSyscallStopsLost = r.ptraceSyscallStopsLost
 			if r.resolvedCaptureMode != "" {
 				r.Summary.CaptureMode = r.resolvedCaptureMode
 				// TraceModeDetail differentiates the backend within

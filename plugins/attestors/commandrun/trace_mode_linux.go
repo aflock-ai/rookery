@@ -67,6 +67,18 @@ func (m traceMode) String() string {
 	}
 }
 
+// traceModeFromBackend maps a recorded backend name (traceMode.String())
+// back to the mode. ok is false for anything else, including "".
+func traceModeFromBackend(name string) (traceMode, bool) {
+	switch name {
+	case traceModeEBPF.String():
+		return traceModeEBPF, true
+	case traceModePtrace.String():
+		return traceModePtrace, true
+	}
+	return 0, false
+}
+
 // selectTraceMode resolves the trace backend by inspecting the env
 // var and (for the default case) probing eBPF availability. Returns
 // the chosen mode, or a non-nil error if the requested backend is
@@ -85,7 +97,7 @@ func selectTraceMode() (traceMode, error) {
 
 	case "ebpf":
 		// Explicit eBPF: probe; FAIL loudly if unavailable.
-		probe := probeEBPFAvailable()
+		probe := ebpfProbe()
 		if probe.available {
 			return traceModeEBPF, nil
 		}
@@ -97,7 +109,7 @@ func selectTraceMode() (traceMode, error) {
 		// backend is logged in logTraceModeStartup and recorded in
 		// the attestation, so downstream verifiers can tell which
 		// path produced the data. Closes task #79.
-		probe := probeEBPFAvailable()
+		probe := ebpfProbe()
 		if probe.available {
 			return traceModeEBPF, nil
 		}
@@ -115,6 +127,11 @@ func selectTraceMode() (traceMode, error) {
 		return 0, fmt.Errorf("CILOCK_TRACE_MODE=%q is not recognized; valid values: ebpf, ptrace, auto", requested)
 	}
 }
+
+// ebpfProbe is the eBPF capability probe selectTraceMode consults. A variable
+// so tests can force the auto-mode ptrace fallback on a host that HAS eBPF,
+// which is the only way that path gets exercised on a privileged CI runner.
+var ebpfProbe = probeEBPFAvailable
 
 // ebpfProbeResult records why eBPF was or was not available, so the
 // error message can be specific.

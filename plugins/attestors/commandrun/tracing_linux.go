@@ -74,6 +74,19 @@ type ptraceContext struct {
 	// world mid-measurement; production leaves it nil.
 	testDuringHashedRead func()
 
+	// pendingExec holds the program path each thread passed to execve, read
+	// at syscall ENTRY (the only point the argument is in the tracee's
+	// memory), until the PTRACE_EVENT_EXEC stop confirms the exec succeeded
+	// and the new image is loaded. Keyed by the calling thread's tid.
+	pendingExec map[int]string
+
+	// syscallStopsLost counts syscall stops whose registers or arguments
+	// could not be read (typically: the thread was SIGKILLed while stopped).
+	// Each is an event this trace did not record. Published as
+	// diagnostics.ptraceSyscallStopsLost (a hard drop for
+	// --require-zero-drops); never fatal.
+	syscallStopsLost uint64
+
 	// mu guards the processes map and the ProcessInfo entries within
 	// it. Required for the eBPF tracing path, where multiple hash
 	// workers update process state concurrently. Uncontended in the
@@ -188,17 +201,24 @@ func (p *ptraceContext) digestForPath(path string) (cryptoutil.DigestSet, bool) 
 // startup log) — promote to a const to satisfy goconst.
 const traceModeNamePtrace = "ptrace"
 
-func enableTracing(c *exec.Cmd, _ ...bool) {
-	// Only set Ptrace=true if the user explicitly opted into ptrace
-	// mode. eBPF mode (the default) tracks the child via in-kernel
-	// kprobes and does NOT ptrace it.
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVarTraceMode)))
-	if mode == traceModeNamePtrace {
-		if c.SysProcAttr == nil {
-			c.SysProcAttr = &unix.SysProcAttr{}
-		}
-		c.SysProcAttr.Ptrace = true
+func enableTracing(_ *exec.Cmd, _ ...bool) {
+	// Deliberately empty on Linux. Whether the child starts under ptrace
+	// depends on the RESOLVED backend, which only preStartTracingSetup knows
+	// (auto mode probes eBPF first). Deciding here from the raw
+	// CILOCK_TRACE_MODE request was the bug: in auto mode with eBPF
+	// unavailable the tracer resolved to ptrace, but the child was started
+	// WITHOUT PTRACE_TRACEME, ran untraced to completion, and runTrace then
+	// hit ESRCH on the reaped pid ("attestor command-run failed: no such
+	// process") in every unprivileged container.
+}
+
+// configureTraceeForMode is the single place the child's ptrace flag is
+// decided, from the backend that was actually resolved.
+func configureTraceeForMode(c *exec.Cmd, mode traceMode) {
+	if c.SysProcAttr == nil {
+		c.SysProcAttr = &unix.SysProcAttr{}
 	}
+	c.SysProcAttr.Ptrace = mode == traceModePtrace
 }
 
 // applyTraceePrivilegeDrop ensures the traced child runs with the
@@ -290,11 +310,17 @@ func applyTraceePrivilegeDrop(c *exec.Cmd) {
 // Returns the human-readable trace-mode error if eBPF was requested
 // but unavailable so runCmd can short-circuit before forking the
 // child.
-func (r *CommandRun) preStartTracingSetup() error {
+func (r *CommandRun) preStartTracingSetup(c *exec.Cmd) error {
 	mode, err := selectTraceMode()
 	if err != nil {
 		return err
 	}
+	// Resolve ONCE. trace() dispatches on this recorded backend rather than
+	// probing again: a second probe both repeated the fallback warning and
+	// could disagree with the first, leaving the child started for one
+	// backend and traced by the other.
+	r.resolvedTraceBackend = mode.String()
+	configureTraceeForMode(c, mode)
 	if mode != traceModeEBPF {
 		return nil
 	}
@@ -365,17 +391,18 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		cacheMatcher:        r.cacheMatcher,
 	}
 
-	// Resolve the tracing backend. preStartTracingSetup() (called
-	// before c.Start()) already validated this and short-circuited
-	// on error, so by this point eBPF requested-and-available is
-	// known good — but we re-resolve to dispatch.
-	mode, modeErr := selectTraceMode()
-	if modeErr != nil {
+	// Dispatch on the backend preStartTracingSetup resolved before
+	// c.Start(): the child was started for THAT backend (under ptrace or
+	// not), so tracing it with any other would be tracing a different run.
+	// No recorded backend means the child's tracing was never configured;
+	// refuse rather than guess.
+	mode, ok := traceModeFromBackend(r.resolvedTraceBackend)
+	if !ok {
 		if c.Process != nil {
 			_ = c.Process.Kill()
 			_ = c.Wait()
 		}
-		return nil, modeErr
+		return nil, fmt.Errorf("tracing: backend %q was not resolved before the command started; refusing to trace an unconfigured child", r.resolvedTraceBackend)
 	}
 	requested := strings.ToLower(strings.TrimSpace(os.Getenv(EnvVarTraceMode)))
 	logTraceModeStartup(mode, requested)
@@ -387,7 +414,6 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 	// auto-select runs still name their backend ("ebpf"/"ptrace+seccomp"),
 	// which downstream hermeticity derivation needs.
 	r.resolvedCaptureMode = string(attestation.CaptureTrace)
-	r.resolvedTraceBackend = mode.String()
 
 	switch mode {
 	case traceModeEBPF:
@@ -396,7 +422,9 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		// Fall through to the existing ptrace path.
 	}
 
-	if err := pctx.runTrace(); err != nil {
+	err := pctx.runTrace()
+	r.ptraceSyscallStopsLost = pctx.syscallStopsLost
+	if err != nil {
 		return nil, err
 	}
 
@@ -419,16 +447,27 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 	if err != nil {
 		return err
 	}
+	// A child started with PTRACE_TRACEME stops with SIGTRAP after its
+	// execve. Anything else means it was never under ptrace and has already
+	// run (and been reaped) untraced: say so, instead of letting
+	// PtraceSetOptions surface a bare ESRCH for the reaped pid.
+	if !status.Stopped() {
+		return fmt.Errorf("ptrace: traced command (pid %d) was not stopped under ptrace at start (wait status %#x): "+
+			"it ran untraced, so there is no trace to attest", p.parentPid, uint32(status))
+	}
+	if p.pendingExec == nil {
+		p.pendingExec = make(map[int]string)
+	}
 
 	if err := unix.PtraceSetOptions(p.parentPid, unix.PTRACE_O_TRACESYSGOOD|unix.PTRACE_O_TRACEEXEC|unix.PTRACE_O_TRACEEXIT|unix.PTRACE_O_TRACEVFORK|unix.PTRACE_O_TRACEFORK|unix.PTRACE_O_TRACECLONE); err != nil {
 		return err
 	}
 
-	procInfo := p.getProcInfo(p.parentPid)
-	// Paired write: the main program's path with no digest yet (nothing has
-	// exec'd). setProgram is the only way these two fields move, so "no digest
-	// available" is spelled explicitly rather than left to whatever was there.
-	procInfo.setProgram(p.mainProgram, nil)
+	// The root's execve happened before tracing began, so no syscall stop
+	// will ever report it. The tracee is held at its post-exec stop right
+	// now with the new image loaded, which is exactly the state recordExec
+	// needs to bind the image it measures to this process.
+	p.recordExec(p.parentPid, p.mainProgram)
 	if err := unix.PtraceSyscall(p.parentPid, 0); err != nil {
 		return err
 	}
@@ -471,15 +510,122 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 		isPtraceTrap := (unix.SIGTRAP | unix.PTRACE_EVENT_STOP) == sig
 		if status.Stopped() && isPtraceTrap {
 			injectedSig = 0
-			if err := p.nextSyscall(pid); err != nil {
-				log.Debugf("(tracing) got error while processing syscall: %v", err)
-			}
+			p.handleSyscallStop(pid)
+		}
+		// PTRACE_EVENT_EXEC: the exec SUCCEEDED and the new image is mapped;
+		// the tracee is stopped, so /proc/<pid>/{exe,comm,cmdline} now
+		// describe the new program and cannot change under the measurement.
+		// Recording at execve ENTRY instead read the OLD image: the shell's
+		// digest was signed as cat's, labelled mapped-image.
+		if status.Stopped() && sig == unix.SIGTRAP && status.TrapCause() == unix.PTRACE_EVENT_EXEC {
+			injectedSig = 0
+			p.handleExecEvent(pid)
 		}
 
 		if err := unix.PtraceSyscall(pid, injectedSig); err != nil {
 			log.Debugf("(tracing) got error from ptrace syscall: %v", err)
 		}
 	}
+}
+
+// handleSyscallStop processes one syscall stop. A stop whose registers or
+// arguments cannot be read (ESRCH: the thread was killed while stopped;
+// EFAULT: an argument pointer the kernel will reject anyway) is COUNTED as a
+// lost event and the trace continues. One vanished process must never fail
+// the attestor, and must never vanish silently either.
+//
+// Every syscall stop first drops this thread's pending exec path. An exec's
+// stops run entry (path kept) -> PTRACE_EVENT_EXEC (path consumed) -> exit on
+// success, and entry -> exit on failure, so ANY later syscall stop from the
+// thread means the exec that kept the path is over. Dropping it here, before
+// the registers are read, holds even when this stop is itself lost: a failed
+// exec's path can never survive to name the thread's next exec.
+func (p *ptraceContext) handleSyscallStop(pid int) {
+	delete(p.pendingExec, pid)
+	if err := p.nextSyscall(pid); err != nil {
+		p.syscallStopsLost++
+		log.Debugf("(tracing) syscall stop for pid %d not recorded: %v", pid, err)
+	}
+}
+
+// handleExecEvent records a successful exec at its PTRACE_EVENT_EXEC stop.
+// The event message is the tid that called execve (it differs from pid when
+// a non-leader thread exec'd), which is where the entry-time path was kept.
+// Only the CALLER's path may name this exec. Any other thread's entry belongs
+// to a different exec attempt, so with no path from the caller the program is
+// recorded as unknown ("") rather than borrowed.
+func (p *ptraceContext) handleExecEvent(pid int) {
+	caller := pid
+	if msg, err := unix.PtraceGetEventMsg(pid); err == nil && msg != 0 {
+		caller = int(msg) //nolint:gosec // G115: a tid fits in int
+	}
+	program := p.pendingExec[caller]
+	delete(p.pendingExec, caller)
+	delete(p.pendingExec, pid)
+	p.recordExec(pid, program)
+}
+
+// recordExec reads the new program's kernel facts and measures its image.
+// Callers guarantee the tracee is STOPPED after a successful exec (its
+// initial post-exec stop, or PTRACE_EVENT_EXEC), which is what binds the
+// /proc reads and the mapped-image measurement to this exec.
+func (p *ptraceContext) recordExec(pid int, program string) {
+	procInfo := p.getProcInfo(pid)
+
+	exeLocation := fmt.Sprintf("/proc/%d/exe", pid)
+	commLocation := fmt.Sprintf("/proc/%d/comm", pid)
+	envinLocation := fmt.Sprintf("/proc/%d/environ", pid)
+	cmdlineLocation := fmt.Sprintf("/proc/%d/cmdline", pid)
+	status := fmt.Sprintf("/proc/%d/status", pid)
+
+	// read status file and set attributes on success
+	statusFile, err := os.ReadFile(status) //nolint:gosec
+	if err == nil {
+		procInfo.SpecBypassIsVuln = getSpecBypassIsVulnFromStatus(statusFile)
+		ppid, err := getPPIDFromStatus(statusFile)
+		if err == nil {
+			procInfo.ParentPID = ppid
+		}
+	}
+
+	// Reset, then read: a value that cannot be read for THIS exec must not
+	// be the previous program's.
+	procInfo.Comm = ""
+	comm, err := os.ReadFile(commLocation) //nolint:gosec
+	if err == nil {
+		procInfo.Comm = cleanString(string(comm))
+	}
+
+	environ, err := os.ReadFile(envinLocation) //nolint:gosec
+	if err == nil && p.environmentCapturer != nil {
+		allVars := strings.Split(string(environ), "\x00")
+
+		capturedEnv := p.environmentCapturer.Capture(allVars)
+		env := make([]string, 0, len(capturedEnv))
+		for k, v := range capturedEnv {
+			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		}
+
+		procInfo.Environ = strings.Join(env, " ")
+	}
+
+	procInfo.Cmdline = ""
+	cmdline, err := os.ReadFile(cmdlineLocation) //nolint:gosec // G304: reading /proc/<pid>/cmdline
+	if err == nil {
+		procInfo.Cmdline = procCmdline(string(cmdline))
+	}
+
+	p.measureExecutedImage(procInfo, exeLocation, program)
+}
+
+// keepExecPath holds the path an exec entry named until that exec's
+// PTRACE_EVENT_EXEC stop consumes it, or the thread's next syscall stop drops
+// it (handleSyscallStop).
+func (p *ptraceContext) keepExecPath(tid int, program string) {
+	if p.pendingExec == nil {
+		p.pendingExec = make(map[int]string)
+	}
+	p.pendingExec[tid] = program
 }
 
 func (p *ptraceContext) retryOpenedFiles() {
@@ -528,58 +674,31 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 
 	switch syscallId {
 	case unix.SYS_EXECVE:
-		procInfo := p.getProcInfo(pid)
-
-		// A read that fails yields "", which measureExecutedImage treats as
-		// "argv[0] unknown for this exec" and records as such. Program and
-		// ProgramDigest are NOT written here: measureExecutedImage owns that
-		// pair for the whole exec, and a second writer is how the reset came
-		// to be conditional in the first place.
+		// Entry only: the path argument lives in the tracee's memory now and
+		// is gone after the exec. Everything that describes the NEW program
+		// is read at the PTRACE_EVENT_EXEC stop (handleExecEvent); at entry
+		// /proc/<pid> still describes the image being replaced, and an exec
+		// that fails never produces that stop, so it records nothing. A read
+		// that fails is remembered as "" (argv[0] unknown for this exec).
 		program, err := p.readSyscallReg(pid, argArray[0], MAX_PATH_LEN)
 		if err != nil {
 			program = ""
 		}
+		p.keepExecPath(pid, program)
 
-		exeLocation := fmt.Sprintf("/proc/%d/exe", procInfo.ProcessID)
-		commLocation := fmt.Sprintf("/proc/%d/comm", procInfo.ProcessID)
-		envinLocation := fmt.Sprintf("/proc/%d/environ", procInfo.ProcessID)
-		cmdlineLocation := fmt.Sprintf("/proc/%d/cmdline", procInfo.ProcessID)
-		status := fmt.Sprintf("/proc/%d/status", procInfo.ProcessID)
-
-		// read status file and set attributes on success
-		statusFile, err := os.ReadFile(status) //nolint:gosec
-		if err == nil {
-			procInfo.SpecBypassIsVuln = getSpecBypassIsVulnFromStatus(statusFile)
-			ppid, err := getPPIDFromStatus(statusFile)
-			if err == nil {
-				procInfo.ParentPID = ppid
-			}
+	case unix.SYS_EXECVEAT:
+		// execveat(dirfd, pathname, argv, envp, flags). Handled for the same
+		// reason as execve: an exec with no entry record would otherwise be
+		// named by nothing, or by a path some earlier attempt left behind. An
+		// ABSOLUTE pathname names the program regardless of dirfd. A relative
+		// one resolves against a descriptor, and an empty one (AT_EMPTY_PATH,
+		// fexecve) names no path at all; both are kept as "" (program
+		// unknown) rather than as a guess at what the kernel resolved.
+		program := ""
+		if path, err := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN); err == nil && strings.HasPrefix(path, "/") {
+			program = path
 		}
-
-		comm, err := os.ReadFile(commLocation) //nolint:gosec
-		if err == nil {
-			procInfo.Comm = cleanString(string(comm))
-		}
-
-		environ, err := os.ReadFile(envinLocation) //nolint:gosec
-		if err == nil && p.environmentCapturer != nil {
-			allVars := strings.Split(string(environ), "\x00")
-
-			capturedEnv := p.environmentCapturer.Capture(allVars)
-			env := make([]string, 0, len(capturedEnv))
-			for k, v := range capturedEnv {
-				env = append(env, fmt.Sprintf("%s=%s", k, v))
-			}
-
-			procInfo.Environ = strings.Join(env, " ")
-		}
-
-		cmdline, err := os.ReadFile(cmdlineLocation) //nolint:gosec // G304: reading /proc/<pid>/cmdline
-		if err == nil {
-			procInfo.Cmdline = procCmdline(string(cmdline))
-		}
-
-		p.measureExecutedImage(procInfo, exeLocation, program)
+		p.keepExecPath(pid, program)
 
 	case unix.SYS_OPENAT:
 		file, err := p.readSyscallReg(pid, argArray[1], MAX_PATH_LEN)
