@@ -42,11 +42,10 @@ import (
 // works on the compiled module, so it follows the engine's own rewrite
 // instead of guessing at it from the source text.
 //
-// The lint is an authoring aid. Every finding is a warning: logged at
-// evaluation and reported by `cilock policy validate`, never a refusal. A
-// policy that reads a field the evidence lacks is for evaluation to refuse,
-// and object.get with a default is how an author declares a missing field
-// fine.
+// The lint is an authoring aid: every finding is logged at evaluation and
+// reported by `cilock policy validate`. Evaluation refuses an admit when a
+// finding's field is missing from that input (regostrict.go, #9820), and
+// object.get with a default is how an author declares a missing field fine.
 
 // RegoFailOpenFinding is one negated expression whose input read the compiler
 // hoisted out of the negation.
@@ -397,8 +396,8 @@ const failOpenLintCacheMax = 1024
 
 // warnRegoFailOpen lints the module set before evaluation, compiled together
 // the way the evaluator loads it, and logs each finding once per distinct
-// set. It never changes the verdict, under any hardening option. A set that
-// does not compile is logged once and left to the evaluator, which fails on
+// set. Logging never changes the verdict; regostrict.go uses the same
+// findings to refuse an admit on a missing field. A set that does not compile is logged once and left to the evaluator, which fails on
 // the same error.
 func warnRegoFailOpen(policies []RegoPolicy) {
 	findings, first := lintCached(policies)

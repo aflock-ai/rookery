@@ -77,7 +77,7 @@
     {
       "slug": "policy-gotcha",
       "title": "Policy gotcha",
-      "markdown": "## Policy gotcha\n\nThe cilock SARIF predicate **wraps** the SARIF document inside a `.report` field. Rego policies must reference `input.report.runs`, not `input.runs`:\n\n```rego\npackage cilock.verify\n\ndeny contains msg if {\n  some run in input.report.runs\n  some result in run.results\n  result.level == \"error\"\n  msg := sprintf(\"SAST found %s: %s\", [result.ruleId, result.message.text])\n}\n```\n\nA policy written against the raw SARIF schema (`input.runs[_].results[_]`) will silently match nothing."
+      "markdown": "## Policy gotcha\n\nThe cilock SARIF predicate **wraps** the SARIF document inside a `.report` field. Rego policies must reference `input.report.runs`, not `input.runs`:\n\n```rego\npackage cilock.verify\n\ndeny contains msg if {\n  some run in input.report.runs\n  some result in run.results\n  result.level == \"error\"\n  msg := sprintf(\"SAST found %s: %s\", [result.ruleId, result.message.text])\n}\n```\n\nA policy written against the raw SARIF schema (`input.runs[_].results[_]`) matches nothing, and since #9820 the verifier refuses that admit with an error naming the missing path."
     },
     {
       "slug": "flags",

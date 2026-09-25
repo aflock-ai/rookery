@@ -160,7 +160,7 @@ As soon as a step lists anything in `attestationsFrom` or `externalFrom`, the ve
 | `input.steps.<step>.<predicateType>` | **Deprecated.** The attestor of that type from the first collection in `collections` order only. Kept so existing policies keep verifying; the verifier logs a deprecation warning per module that reads it. A rule that must hold for every run of a step cannot be written against this key. |
 | `input.external.<name>` | The predicate body of each envelope in `externalFrom` that passed. An external that was skipped or never supplied is absent, so `not input.external.<name>` fires. |
 
-The switch is keyed on the step *declaring* the lists, not on the referenced data being present: a dependency that has not verified yet still produces the wrapped shape, with an empty `input.steps`. A top-level path such as `input.exitcode` is undefined under the wrapped shape, so a module written for the plain shape silently stops matching the moment its step gains an `attestationsFrom` entry. Move its reads under `input.attestation`. The verifier logs a warning whenever the wrapped shape is active.
+The switch is keyed on the step *declaring* the lists, not on the referenced data being present: a dependency that has not verified yet still produces the wrapped shape, with an empty `input.steps`. A top-level path such as `input.exitcode` is undefined under the wrapped shape, so a module written for the plain shape stops matching the moment its step gains an `attestationsFrom` entry, and the verifier refuses the collection rather than let the silent deny pass it (see "Missing fields" below). Move its reads under `input.attestation`. The verifier logs a warning whenever the wrapped shape is active.
 
 ```rego
 package deploy.provenance
@@ -199,7 +199,25 @@ deny[msg] {
 
 Both modules above are extracted from this page and run through the real verifier by `attestation/policy/rego_input_shape_doc_test.go`, so they cannot drift from what `cilock verify` actually passes in.
 
-**What `input` is.** With no `attestationsFrom`/`externalFrom` on the step, `input` is the JSON of the registered attestor struct, the same bytes signed inside the collection. For most attestors that puts the predicate's fields at the top level: `input.exitcode` (command-run), `input.commithash` (git), `input.findings` (secretscan). Four attestors register a struct that wraps the predicate in a `predicate` field, so their fields are one level down: `test-results`, `steampipe`, `scubagoggles`, and `structured-data` are read as `input.predicate.<field>`, for example `input.predicate.summary.failed`, not `input.summary.failed`. Rego treats an undefined path in a `deny` body as "this rule does not fire", never as an error, so a flat read against a wrapped attestor passes a failing suite silently. Check the shape with `cilock tools show <name>` (the attestor page states it under "Rego input shape") or by base64-decoding the attestation in a real collection; `cilock policy validate` warns when a module bound to `test-results/v0.1` reads a top-level predicate field.
+**What `input` is.** With no `attestationsFrom`/`externalFrom` on the step, `input` is the JSON of the registered attestor struct, the same bytes signed inside the collection. For most attestors that puts the predicate's fields at the top level: `input.exitcode` (command-run), `input.commithash` (git), `input.findings` (secretscan). Four attestors register a struct that wraps the predicate in a `predicate` field, so their fields are one level down: `test-results`, `steampipe`, `scubagoggles`, and `structured-data` are read as `input.predicate.<field>`, for example `input.predicate.summary.failed`, not `input.summary.failed`. Rego treats an undefined path in a `deny` body as "this rule does not fire", so the verifier refuses an admit that rests on such a read (see "Missing fields" below); a flat read against a wrapped attestor is refused, not passed. Check the shape with `cilock tools show <name>` (the attestor page states it under "Rego input shape") or by base64-decoding the attestation in a real collection; `cilock policy validate` warns when a module bound to `test-results/v0.1` reads a top-level predicate field.
+
+### Missing fields
+
+A `deny` rule whose body reads a field the attestation does not carry is undefined, so it never fires, and a deny-only engine would read that silence as a pass. The verifier does not. When no module denies, it checks the input paths the admit depended on, and it refuses the collection with an error naming the path if any is missing:
+
+- every input path a `deny` body reads in a comparison, call, or assignment, for example `input.reftype != "tag"` or `some f in input.findings` (an empty list is fine, a missing one is not);
+- every negation `cilock policy validate` reports as never firing on a missing field, for example `not startswith(input.reftype, "tag")`, including one in a helper rule that `deny` reaches.
+
+These spellings handle a missing field on purpose and are not refused:
+
+| You mean | Write |
+|---|---|
+| Treat a missing field as a value | `object.get(input, "reftype", "")` |
+| Deny when a field is missing | `not input.reftype` |
+| Deny only when a field is present | `input.reftype` alone as the first condition, then read it |
+| Tell input shapes apart | Read the optional field in a helper rule, and have `deny` read the helper |
+
+There is no setting that turns this off.
 
 ## `aipolicy` object
 

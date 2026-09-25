@@ -86,7 +86,8 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	input := buildRegoInput(attestorData, stepContext)
 
 	// A negation whose input read the compiler hoisted never fires on a
-	// missing field. Logged as a warning, never a refusal (regolint.go).
+	// missing field. Logged as a warning here, and refused below when the
+	// field is missing from this input (regolint.go, regostrict.go).
 	warnRegoFailOpen(policies)
 
 	// Use a timeout context to prevent DoS from malicious or poorly-written
@@ -94,7 +95,12 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	ctx, cancel := context.WithTimeout(context.Background(), regoEvalTimeout)
 	defer cancel()
 
-	return evaluateRegoInput(ctx, input, policies, attestor.Type())
+	if err := evaluateRegoInput(ctx, input, policies, attestor.Type()); err != nil {
+		return err
+	}
+	// An admit that rests on a deny body reading a missing field is not a
+	// pass (#9820 E1).
+	return refuseUndefinedDenyReads(ctx, policies, input)
 }
 
 // evaluateRegoInput runs the deny query of every module against input and

@@ -260,8 +260,9 @@ func TestRegoInputShape_DocCrossStepExampleEvaluates(t *testing.T) {
 
 // TestRegoInputShape_TopLevelPathsGoSilentUnderCrossStep is the warning the
 // doc now carries: once attestationsFrom/externalFrom is set, the plain
-// example's input.exitcode is undefined, so a failing deploy passes without
-// a sound. That silence is exactly why the doc must state the real shape.
+// example's input.exitcode is undefined, so a failing deploy passed without
+// a sound. That silence is why the doc must state the real shape; since #9820
+// it is a refusal instead.
 func TestRegoInputShape_TopLevelPathsGoSilentUnderCrossStep(t *testing.T) {
 	plain := []RegoPolicy{{Name: "policy-schema.md plain", Module: policySchemaDocFence(t, "commandrun.exitcode")}}
 	results := map[string]StepResult{"build": passedCommandRun("build", []string{"go", "build"}, 0)}
@@ -270,13 +271,17 @@ func TestRegoInputShape_TopLevelPathsGoSilentUnderCrossStep(t *testing.T) {
 
 	failing := &commandRunLike{Cmd: []string{"kubectl", "apply"}, ExitCode: 3}
 	require.Error(t, EvaluateRegoPolicy(failing, plain), "sanity: the plain example denies this attestor without context")
-	assert.NoError(t, EvaluateRegoPolicy(failing, plain, ctx),
-		"with cross-step context the plain example must NOT match; if it starts denying, the wrap changed and the doc must change with it")
+	// Since #9820 the silence is a refusal that names the path: an admit
+	// that rests on a deny reading a missing field is not a pass.
+	err := EvaluateRegoPolicy(failing, plain, ctx)
+	require.ErrorContains(t, err, "#9820", "with cross-step context the plain example no longer matches; the missing path is refused, not admitted")
+	require.ErrorContains(t, err, "input.exitcode")
 }
 
 // TestRegoInputShape_LegacyAttestationsPathNeverExisted pins the claim the
 // old doc made, negatively: input.attestations.<predicateType> is undefined
-// in both shapes, so a rule written against it can never fire.
+// in both shapes, so a rule written against it can never fire; since #9820 evaluating
+// one is refused rather than admitted.
 func TestRegoInputShape_LegacyAttestationsPathNeverExisted(t *testing.T) {
 	legacy := []RegoPolicy{{Name: "legacy.rego", Module: []byte(`package legacy
 
@@ -286,9 +291,9 @@ deny[msg] {
 }`)}}
 	failing := &commandRunLike{Cmd: []string{"go", "build"}, ExitCode: 1}
 
-	assert.NoError(t, EvaluateRegoPolicy(failing, legacy), "plain shape: input.attestations is undefined")
+	require.ErrorContains(t, EvaluateRegoPolicy(failing, legacy), "#9820", "plain shape: input.attestations is undefined, and since #9820 that is refused, not admitted")
 
 	results := map[string]StepResult{"build": passedCommandRun("build", []string{"go", "build"}, 0)}
 	ctx := buildStepRegoContext(deployStep(), results, map[string]ExternalResult{})
-	assert.NoError(t, EvaluateRegoPolicy(failing, legacy, ctx), "cross-step shape: input.attestations is still undefined")
+	require.ErrorContains(t, EvaluateRegoPolicy(failing, legacy, ctx), "#9820", "cross-step shape: input.attestations is still undefined, and refused")
 }

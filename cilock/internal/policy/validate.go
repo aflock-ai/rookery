@@ -661,8 +661,9 @@ func validateRegoPolicies(policy *policyDocument, result *ValidationResult) { //
 // the OPA compiler hoists out of the `not` where that makes deny fire less,
 // so the deny never fires when the field is missing. The attestation's
 // modules are linted together, as the verifier loads them. The verifier runs
-// the same lint (attestation/policy regolint.go) and only logs it, under
-// every --policy-hardening mode, so a finding never fails validation either.
+// the same lint (attestation/policy regolint.go) and refuses an admit when a
+// finding's field is missing from the evidence (regostrict.go, #9820).
+// Validation has no evidence to check, so here a finding is a warning.
 func lintFailOpenNegations(stepName string, attIdx int, modules []attpolicy.RegoPolicy, result *ValidationResult) {
 	findings, err := attpolicy.LintRegoFailOpenSet(modules)
 	if err != nil {

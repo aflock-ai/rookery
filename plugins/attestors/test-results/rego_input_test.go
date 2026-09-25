@@ -104,9 +104,9 @@ func TestRegoInput_DocumentedExampleEvaluates(t *testing.T) {
 // TestRegoInput_FlatFormDoesNotEvaluate is the negative that makes the
 // documentation necessary: the flat form every other attestor uses reads
 // nothing here. input.summary is undefined, so a deny that walks it never
-// fires — a failing suite passes the gate silently. This is the trap the
-// doc warns about; if it ever stops being a trap (flattening landed), the
-// doc text must change with it.
+// fires. That used to pass a failing suite silently; since #9820 the
+// verifier refuses it. This is the trap the doc warns about; if it ever
+// stops being a trap (flattening landed), the doc text must change with it.
 func TestRegoInput_FlatFormDoesNotEvaluate(t *testing.T) {
 	flat := []policy.RegoPolicy{{Name: "flat.rego", Module: []byte(`package testresults
 
@@ -116,8 +116,10 @@ deny[msg] {
 }`)}}
 
 	failing := attestFixture(t, "junit-failing.xml")
-	assert.NoError(t, policy.EvaluateRegoPolicy(failing, flat),
-		"the flat form must NOT see the summary; if this fails, the attestor was flattened and the doc + this test must be updated together")
+	// input.summary is undefined, so the flat form cannot see the summary.
+	// That used to admit silently; since #9820 the verifier refuses it.
+	assert.ErrorContains(t, policy.EvaluateRegoPolicy(failing, flat), "#9820",
+		"the flat form must NOT see the summary, and is refused; if it denies on the summary, the attestor was flattened and the doc + this test must be updated together")
 }
 
 var regoFenceRE = regexp.MustCompile("(?s)```rego\n(.*?)\n```")

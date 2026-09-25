@@ -16,6 +16,7 @@ package instructionfile
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -119,14 +120,18 @@ func TestRegoInput_CrossStepContextReshapesInput(t *testing.T) {
 	// Any non-nil step context activates the wrap; its contents do not matter here.
 	stepCtx := map[string]interface{}{"gomod-drift": map[string]interface{}{}}
 
-	t.Run("flat_module_silently_admits_once_context_is_present", func(t *testing.T) {
+	t.Run("flat_module_is_refused_once_context_is_present", func(t *testing.T) {
 		clearWorkloadEnv(t)
 		a := attestRoot(t, rootWithInstructionFile(t))
 		if err := policy.EvaluateRegoPolicy(a, documentedPolicy(t)); err == nil {
 			t.Fatal("fixture: the flat module must deny WITHOUT step context, or this test proves nothing")
 		}
-		if err := policy.EvaluateRegoPolicy(a, documentedPolicy(t), stepCtx); err != nil {
-			t.Fatalf("flat module denied under the wrapped shape; the hazard the doc describes has changed: %v", err)
+		// Under the wrapped shape the flat paths are undefined. That used to
+		// admit silently; since #9820 the verifier refuses it instead.
+		err := policy.EvaluateRegoPolicy(a, documentedPolicy(t), stepCtx)
+		var denied policy.ErrPolicyDenied
+		if err == nil || errors.As(err, &denied) || !strings.Contains(err.Error(), "#9820") {
+			t.Fatalf("flat module under the wrapped shape: want the #9820 missing-field refusal, got %v", err)
 		}
 	})
 
@@ -297,8 +302,12 @@ func TestRegoInput_PredicateFormDoesNotEvaluate(t *testing.T) {
 	if a.Signer.Kind == SignerKindWorkloadIdentity || a.Status == StatusComplete {
 		t.Fatalf("fixture: want a non-workload signer and an incomplete scan, got %q + %q", a.Signer.Kind, a.Status)
 	}
-	if err := policy.EvaluateRegoPolicy(a, pol); err != nil {
-		t.Fatalf("the input.predicate.* form must NOT see the attestor; if it does, the attestor grew a wrapper and the doc + this test must change together: %v", err)
+	// The input.predicate.* paths are undefined, so the form cannot see the
+	// attestor. That used to admit silently; since #9820 it is refused.
+	err := policy.EvaluateRegoPolicy(a, pol)
+	var denied policy.ErrPolicyDenied
+	if err == nil || errors.As(err, &denied) || !strings.Contains(err.Error(), "#9820") {
+		t.Fatalf("the input.predicate.* form must NOT see the attestor, and is now refused (#9820); if it denies, the attestor grew a wrapper and the doc + this test must change together: %v", err)
 	}
 }
 

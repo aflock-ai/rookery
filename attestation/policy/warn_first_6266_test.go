@@ -176,7 +176,7 @@ func TestWarn_R3_183_DuplicateRegoPackageName(t *testing.T) {
 	mod := func(pkg string) RegoPolicy {
 		return RegoPolicy{
 			Name:   pkg + "-module",
-			Module: []byte("package " + pkg + "\n\ndeny[msg] {\n\tinput.nonexistent == \"x\"\n\tmsg := \"unreachable\"\n}\n"),
+			Module: []byte("package " + pkg + "\n\ndeny[msg] {\n\tobject.get(input, \"nonexistent\", \"\") == \"x\"\n\tmsg := \"unreachable\"\n}\n"),
 		}
 	}
 
