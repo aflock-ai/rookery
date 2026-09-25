@@ -92,8 +92,6 @@ replace github.com/aflock-ai/rookery/plugins/attestors/product => ../plugins/att
 
 replace github.com/aflock-ai/rookery/plugins/attestors/sarif => ../plugins/attestors/sarif
 
-replace github.com/aflock-ai/rookery/plugins/attestors/structured-data => ../plugins/attestors/structured-data
-
 replace github.com/aflock-ai/rookery/plugins/attestors/sbom => ../plugins/attestors/sbom
 
 replace github.com/aflock-ai/rookery/plugins/attestors/trivy => ../plugins/attestors/trivy
@@ -105,6 +103,7 @@ replace github.com/aflock-ai/rookery/plugins/attestors/secretscan => ../plugins/
 replace github.com/aflock-ai/rookery/plugins/attestors/slsa => ../plugins/attestors/slsa
 
 replace github.com/aflock-ai/rookery/plugins/attestors/steampipe => ../plugins/attestors/steampipe
+
 replace github.com/aflock-ai/rookery/plugins/attestors/structured-data => ../plugins/attestors/structured-data
 
 replace github.com/aflock-ai/rookery/plugins/attestors/system-packages => ../plugins/attestors/system-packages
