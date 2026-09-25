@@ -11,6 +11,14 @@
   * attestation/source/source.go      `EnvelopeToCollectionEnvelope`
   * attestation/source/verified.go    `VerifiedSource.SearchByPredicateType`
   * attestation/dsse/dsse.go          `Envelope` / `Signature` JSON decoding
+    (attestation/dsse/envelope_json.go since #10057)
+
+  Each area has two definitions. The first (`newStatement`, `toCollection`,
+  `externalRead`, `decodes`) is the code as it was when this model was
+  written, before its fix; it is kept, and no longer cited, so the
+  counterexamples still state what each fix changed. The second (`...Req`)
+  is the behaviour the spec requires, and since #10058, #10060 and #10057 it
+  is also the code as built: the citations sit on it.
 
   The model works at the level the spec does: which fields are set, which
   JSON kind a value is, which base64 alphabet a string is in. It does not
@@ -104,12 +112,10 @@ theorem mem_foldr_insert (x : String × List (String × String)) (l : List (Stri
   | nil => simp
   | cons q qs ih => simp only [List.foldr_cons, mem_insertByName, ih, List.mem_cons]
 
-/-- `intoto.NewStatement` as built. `pred = none` is predicate bytes that are
-    not valid JSON; the only input it refuses. -/
--- cite: attestation/intoto/statement.go:25-28 sha256:71f553ef51eef1ba
--- cite: attestation/intoto/statement.go:42-52 sha256:d527dcd632b4abc6
--- cite: attestation/intoto/statement.go:57-73 sha256:574c359571940f63
--- cite: attestation/intoto/statement.go:76-88 sha256:cb7a2678df3b4656
+/-- `intoto.NewStatement` as built before #10058 (statement.go at
+    8d0f19a7ee, lines 42-52 and 57-73). `pred = none` is predicate bytes that
+    are not valid JSON; the only input it refused. Not cited: that code is
+    gone. The constructor as built now is `newStatementBuilt`. -/
 def newStatement (predType : String) (pred : Option JKind)
     (subs : List (String × List (String × String))) : Except MkErr Statement :=
   match pred with
@@ -128,6 +134,19 @@ def newStatementReq (ty predType : String) (pred : Option JKind)
     else if k ≠ .object then .error .predicateNotObject
     else if subs.any (fun p => p.2.isEmpty) then .error .subjectWithoutDigest
     else .ok ⟨ty, sortSubjects subs, predType, k⟩
+
+/-- `intoto.NewStatement` as built since #10058: the fixed constructor, with
+    `_type` still v0.1 (#9827 moved cilock's collections to v1 through
+    `NewStatementV1`; #9841 holds the platform-signed emitters on v0.1). It
+    refuses in the order the code checks: invalid JSON, empty predicateType,
+    non-object predicate, then the first subject, in sorted order, with no
+    digest. -/
+-- cite: attestation/intoto/statement.go:26-29 sha256:71f553ef51eef1ba
+-- cite: attestation/intoto/statement.go:43-91 sha256:9ac6f8d5201234e9
+-- cite: attestation/intoto/statement.go:93-105 sha256:cb7a2678df3b4656
+def newStatementBuilt (predType : String) (pred : Option JKind)
+    (subs : List (String × List (String × String))) : Except MkErr Statement :=
+  newStatementReq statementV01 predType pred subs
 
 theorem mem_sortSubjects (subs : List (String × List (String × String))) (s : Subject)
     (h : s ∈ sortSubjects subs) : (s.name, s.digest) ∈ subs := by
@@ -164,6 +183,13 @@ theorem newStatementReq_conforms (ty predType : String) (pred : Option JKind)
             exact ⟨(sub.name, sub.digest), hm, by simp [hnil]⟩
           exact ⟨body, fun hty => ⟨hty, body⟩⟩
 
+/-- What cilock's constructor signs now meets every body clause of the v1
+    spec; only `_type` still departs (`ce_type_v01`). -/
+theorem newStatementBuilt_conformsBody (predType : String) (pred : Option JKind)
+    (subs : List (String × List (String × String))) (s : Statement)
+    (h : newStatementBuilt predType pred subs = .ok s) : ConformsV1Body s :=
+  (newStatementReq_conforms statementV01 predType pred subs s h).1
+
 /-! ### What a verifier hands the application -/
 
 /-- What an envelope's payload bytes decode to, when they decode at all. -/
@@ -199,14 +225,19 @@ def knownStatementType (t : String) : Bool := t == statementV1 || t == statement
 def SpecReads (e : RawEnv) (d : Decoded) : Prop :=
   supportedPayloadType e.payloadType = true ∧ e.payload = some d ∧ knownStatementType d.ty = true
 
-/-- `EnvelopeToCollectionEnvelope` as built. -/
--- cite: attestation/source/source.go:157-182 sha256:c05ceee181a9c414
+/-- `EnvelopeToCollectionEnvelope` as built before #10060 (source.go at
+    bc45bf7c0d, lines 157-182): no payloadType or `_type` check. Not cited:
+    that code is gone. -/
 def toCollection (e : RawEnv) : Option Decoded :=
   match e.payload with
   | none => none
   | some d => if d.predicateType = "" then none else if d.collection then some d else none
 
-/-- The same, as it must be. -/
+/-- The same, as it must be, and as built since #10060
+    (`decodeInTotoStatement`, then the empty-predicateType check and the
+    collection decode). -/
+-- cite: attestation/source/source.go:158-179 sha256:6c70f6103630870b
+-- cite: attestation/source/source.go:187-231 sha256:cc290c1819826543
 def toCollectionReq (e : RawEnv) : Option Decoded :=
   if supportedPayloadType e.payloadType = false then none
   else match e.payload with
@@ -245,19 +276,28 @@ structure External where
   requested : List String  -- the `predicateTypes` passed to SearchByPredicateType
 deriving DecidableEq, Repr
 
-/-- `VerifiedSource.SearchByPredicateType` as built, for an envelope whose
-    signatures verified: the signed payload must decode far enough to show a
-    subject matching the request, and then it hands on the source's own
-    decode. Nothing binds the signed predicateType to `requested`. -/
--- cite: attestation/source/verified.go:46-70 sha256:d4955b29f8b91f0a
--- cite: attestation/source/verified.go:608-652 sha256:5ef62c1b381c6854
+/-- `VerifiedSource.SearchByPredicateType` as built before #10060
+    (verified.go at a2a6016cc7, lines 48-72 and 608-652), for an envelope
+    whose signatures verified: the signed payload had to decode far enough to
+    show a subject matching the request, and then it handed on the source's
+    own decode. Nothing bound the signed predicateType to `requested`. Not
+    cited: that code is gone. -/
 def externalRead (x : External) : Option Decoded :=
   match x.env.payload with
   | none => none
   | some _ => some x.sourceStmt
 
-/-- As it must be: decode the verified bytes, typed as in-toto, of a
-    requested predicate type. -/
+/-- As it must be, and as built since #10060: decode the verified bytes,
+    typed as in-toto, of a requested predicate type (`readVerifiedExternal`),
+    and hand on that decode, not the source's. The artifact-substitution
+    guard runs first on the same signed bytes (`matchSignedExternalSubjects`,
+    both inside `adoptSignedExternal` since #10168);
+    the model takes its subject match as given, as the differential does. -/
+-- cite: attestation/source/verified.go:612-622 sha256:ad934402e8b55a3f
+-- cite: attestation/source/verified.go:640-671 sha256:5d2e5dabf69cf5e3
+-- cite: attestation/source/verified.go:673-702 sha256:6d4c58f0e8917e9c
+-- cite: attestation/source/declared_commit_subject.go:125-148 sha256:9c08d16a936fd03f
+-- cite: attestation/source/source.go:187-231 sha256:cc290c1819826543
 def externalReadReq (x : External) : Option Decoded :=
   if supportedPayloadType x.env.payloadType = false then none
   else match x.env.payload with
@@ -323,12 +363,18 @@ def SpecDecodes (j : EnvJson) : Prop :=
   j.hasPayload = true ∧ j.hasPayloadType = true ∧ j.hasSignatures = true ∧
   b64Either j.payload = true ∧ ∀ s ∈ j.sigs, s.1 = true ∧ b64Either s.2 = true
 
-/-- `encoding/json` into `dsse.Envelope` as built: a missing key decodes to
-    the zero value; a `[]byte` field decodes with the standard alphabet only. -/
--- cite: attestation/dsse/dsse.go:208-229 sha256:124ced99c6c60f7e
+/-- `encoding/json` into `dsse.Envelope` as built before #10057 (the struct
+    tags alone): a missing key decoded to the zero value; a `[]byte` field
+    decoded with the standard alphabet only. Not cited: #10057 added
+    `UnmarshalJSON`, so the struct no longer decides this. -/
 def decodes (j : EnvJson) : Bool :=
   (!j.hasPayload || b64Std j.payload) && j.sigs.all (fun s => !s.1 || b64Std s.2)
 
+/-- The parsing rules, and as built since #10057: `Envelope.UnmarshalJSON`
+    and `Signature.UnmarshalJSON` require the keys and read either base64
+    alphabet. -/
+-- cite: attestation/dsse/dsse.go:208-229 sha256:124ced99c6c60f7e
+-- cite: attestation/dsse/envelope_json.go:30-110 sha256:7522b75c0709acdd
 def decodesReq (j : EnvJson) : Bool :=
   j.hasPayload && j.hasPayloadType && j.hasSignatures && b64Either j.payload &&
     j.sigs.all (fun s => s.1 && b64Either s.2)

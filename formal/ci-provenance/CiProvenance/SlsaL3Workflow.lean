@@ -27,8 +27,8 @@ vendor and the wrong predicate type (#9827):
 Policy functionaries can already constrain Fulcio extensions; an empty field
 allows every value, and a field containing a glob metacharacter is matched as
 a glob:
--- cite: attestation/policy/constraints.go:107-114 sha256:208a832ff24c03297e7d791ec31ee1f2efa73d9ea1d6f0c8ce23af7f9878beae
--- cite: attestation/policy/constraints.go:344-351 sha256:9dbd6b15aae6492a30ef0b4324fa51cfdfe95a344410a4b9634430422e4be58f
+-- cite: attestation/policy/constraints.go:109-116 sha256:208a832ff24c03297e7d791ec31ee1f2efa73d9ea1d6f0c8ce23af7f9878beae
+-- cite: attestation/policy/constraints.go:346-353 sha256:9dbd6b15aae6492a30ef0b4324fa51cfdfe95a344410a4b9634430422e4be58f
 `cilock verify --slsa-level` does not exist, so `l3Accept` is the reference.
 -/
 

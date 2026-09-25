@@ -14,7 +14,7 @@ the job environment in-process:
 -- cite: plugins/signers/fulcio/fulcio.go:262-275 sha256:3b9b18568ac0719a0db3bc52e3e2f8f2f9756818d2da1bd982c917b67ccaac14
 and runs the tenant's build step as a child with no `Env` set, so the child
 inherits that environment, token-request credential included:
--- cite: plugins/attestors/commandrun/commandrun.go:2577-2578 sha256:7e44ad486ef3ea87e769e144d2133f9624838d1a0ab8325427c5a3c420c75e46
+-- cite: plugins/attestors/commandrun/commandrun.go:2625-2626 sha256:7e44ad486ef3ea87e769e144d2133f9624838d1a0ab8325427c5a3c420c75e46
 Protecting the in-memory signing key does not change that: the build step
 does not need CI/lock's key when it can mint its own leaf for the same identity.
 -- cite: cilock/internal/keyguard/keyguard.go:7-13 sha256:6775c1d82f440150c325efd8cbe1d84f2331bda53dbad0ea26bac416af4eff95

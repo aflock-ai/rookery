@@ -13,6 +13,10 @@ namespace SigningTrust
 #print axioms x509Verify_never_ca_leaf
 #print axioms x509VerifyReq_never_ca_leaf
 #print axioms x509VerifyReq_leaf_signs
+#print axioms ct_ok_iff
+#print axioms x509VerifyCT_iff
+#print axioms x509VerifyCT_uncovered
+#print axioms x509VerifyCT_signing_leaf
 -- RFC 3161 / 5816 and the verify time
 #print axioms tspVerify_returns_genTime
 #print axioms tspVerify_now_irrelevant
@@ -22,9 +26,9 @@ namespace SigningTrust
 #print axioms reissue_keeps_verifying
 -- the code at the pin: what holds and what is refuted
 #print axioms ca_leaf_refused
-#print axioms ce_leaf_without_digitalSignature
-#print axioms ce_token_without_ess
-#print axioms ce_token_ess_names_other_cert
+#print axioms leaf_without_digitalSignature_refused
+#print axioms token_without_ess_refused
+#print axioms token_ess_naming_other_cert_refused
 #print axioms go_refuses_more_on_anchor
 #print axioms leaf_pinning_breaks_reissue
 

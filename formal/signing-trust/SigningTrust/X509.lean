@@ -9,8 +9,11 @@
   keyUsage, when present, asserts digitalSignature (RFC 5280 §4.2.1.3).
 
   As built: attestation/cryptoutil/x509.go `X509Verifier.Verify`, which is
-  `checkNotCA` (#9876) followed by Go's `x509.Certificate.Verify` with
-  KeyUsages = [codeSigning]. The Go semantics modeled here are those of
+  `checkSigningLeaf` (refuse a CA leaf, #9876; refuse a leaf whose keyUsage
+  forbids signing, #10097), then Go's `x509.Certificate.Verify` with
+  KeyUsages = [codeSigning] (`verifyChain`), then
+  `checkCertificateTransparency` (#10124: a leaf issued by a CT-logging CA
+  must embed an SCT that verifies; see `Ct` below). The Go semantics modeled here are those of
   go1.26.6 crypto/x509 (outside this repository, so not hash-cited):
   `isValid` (verify.go:443-510) checks unhandled critical extensions, the
   validity window at CurrentTime (inclusive), cA on intermediates, and
@@ -118,13 +121,42 @@ def goVerify (p : Path) (t : Time) (purpose : Purpose) : Bool :=
 def x509Verify (p : Path) (t : Time) : Bool :=
   !p.leaf.isCA && goVerify p t .codeSigning
 
-/-- `X509Verifier.Verify` as built now: also refuse a leaf whose keyUsage
-    does not assert digitalSignature or asserts a CA usage. -/
--- cite: attestation/cryptoutil/x509.go:58-72 sha256:d9d3f0fd484ca053
--- cite: attestation/cryptoutil/x509.go:74-95 sha256:03ba16c6e338f72a
+/-- The path half of `X509Verifier.Verify` as built (#10097): also refuse a
+    leaf whose keyUsage does not assert digitalSignature or asserts a CA
+    usage (`checkSigningLeaf`), then Go's chain check (`verifyChain`). The
+    whole verifier adds the CT check: `x509VerifyCT`. -/
+-- cite: attestation/cryptoutil/x509.go:65-79 sha256:d9d3f0fd484ca053
+-- cite: attestation/cryptoutil/x509.go:101-113 sha256:905682691cbbbae8
 -- cite: attestation/cryptoutil/x509_keyusage.go:27-54 sha256:8c93d0ffdb62bcf4
 def x509VerifyReq (p : Path) (t : Time) : Bool :=
   x509Verify p t && p.leaf.kuDigSig
+
+/-- What `checkCertificateTransparency` (#10124) reads, once the chain has
+    verified. `covered`: a CT trust root (the Sigstore public-good root,
+    always present, or one added with `WithCTTrustRoots`) holds, by public
+    key, a CA on one of the chains Go built. `hasScts`: the leaf carries the
+    SCT-list extension. `sctVerifies`: some embedded SCT verifies (signature,
+    SHA-256, inside its log's window) against a log of the covering roots
+    (of every root when none covers), over a built chain's issuer key. A
+    malformed or duplicated SCT-list extension is `hasScts` with
+    `sctVerifies = false`. None of it reads the verify time. -/
+structure Ct where
+  covered : Bool
+  hasScts : Bool
+  sctVerifies : Bool
+deriving DecidableEq, Repr
+
+/-- `checkCertificateTransparency` as built. -/
+-- cite: attestation/cryptoutil/sct.go:254-293 sha256:42b0c74dd5a48c36
+def Ct.ok (c : Ct) : Bool :=
+  if !c.covered && !c.hasScts then true else c.hasScts && c.sctVerifies
+
+/-- `X509Verifier.Verify` as built now: the path checks, then CT. (The code
+    runs CT only after the chain verified; a conjunction has the same
+    verdict.) The signature itself is a separate, ideal check. -/
+-- cite: attestation/cryptoutil/x509.go:81-99 sha256:2cb9726f265ed3f0
+def x509VerifyCT (p : Path) (t : Time) (c : Ct) : Bool :=
+  x509VerifyReq p t && c.ok
 
 /-! ### Spec -/
 
@@ -146,6 +178,17 @@ def specPath (p : Path) (t : Time) : Bool :=
   (p.cas.zipIdx.all (fun (c, j) => c.isCA && c.kuCertSign && c.plOk j)) &&
   p.leaf.eku.permits .codeSigning &&
   !p.leaf.isCA && p.leaf.kuDigSig
+
+/-- The CT signing profile (#10032): a leaf issued by a CT-logging CA must
+    embed an SCT from one of that CA's logs, and it must verify. Sigstore's
+    Fulcio embeds one in every leaf it issues. -/
+-- spec: #10032 signing profile: a leaf chaining through a CA whose CT logs are trusted must carry an embedded SCT from one of those logs that verifies (RFC 6962 §3.3 embeds SCTs in the certificate)
+def specCt (c : Ct) : Bool := !c.covered || (c.hasScts && c.sctVerifies)
+
+/-- What the code additionally demands: a leaf from a CA no CT root covers,
+    that embeds SCTs anyway, must have one verify against some trusted log.
+    The profile does not ask this; the code refuses more. -/
+def ctStrict (c : Ct) : Bool := c.covered || !c.hasScts || c.sctVerifies
 
 /-- What Go additionally demands of the anchor. RFC 5280 takes the anchor as
     input and checks none of this; Go refuses more. -/
@@ -184,6 +227,28 @@ theorem x509VerifyReq_iff (p : Path) (t : Time) :
       simp only [Bool.and_eq_true]
       grind
 
+theorem ct_ok_iff (c : Ct) : c.ok = (specCt c && ctStrict c) := by
+  cases c with
+  | mk cv hs sv => cases cv <;> cases hs <;> cases sv <;> rfl
+
+/-- The whole verifier as built: the RFC 5280 subset with the signing
+    profile and the CT profile, plus three extras that only refuse more
+    (Go's anchor checks and EKU nesting, and the code's check of SCTs a
+    non-CT leaf carries anyway). -/
+theorem x509VerifyCT_iff (p : Path) (t : Time) (c : Ct) :
+    x509VerifyCT p t c =
+      (specPath p t && anchorStrict p t && nestedEku p .codeSigning && specCt c && ctStrict c) := by
+  unfold x509VerifyCT
+  rw [x509VerifyReq_iff, ct_ok_iff]
+  simp only [Bool.and_assoc]
+
+/-- A chain no CT root covers, whose leaf embeds no SCT (every chain the
+    differential test mints: fresh roots, no SCT extension), is judged by
+    the path checks alone. -/
+theorem x509VerifyCT_uncovered (p : Path) (t : Time) (sv : Bool) :
+    x509VerifyCT p t ⟨false, false, sv⟩ = x509VerifyReq p t := by
+  simp [x509VerifyCT, Ct.ok]
+
 /-- #9842 holds as built: no path whose leaf is a CA verifies. -/
 theorem x509Verify_never_ca_leaf (p : Path) (t : Time) (h : x509Verify p t = true) : p.leaf.isCA = false := by
   unfold x509Verify at h
@@ -199,5 +264,11 @@ theorem x509VerifyReq_leaf_signs (p : Path) (t : Time) (h : x509VerifyReq p t = 
   unfold x509VerifyReq at h
   simp only [Bool.and_eq_true] at h
   exact h.2
+
+theorem x509VerifyCT_signing_leaf (p : Path) (t : Time) (c : Ct) (h : x509VerifyCT p t c = true) :
+    p.leaf.isCA = false ∧ p.leaf.kuDigSig = true := by
+  unfold x509VerifyCT at h
+  simp only [Bool.and_eq_true] at h
+  exact ⟨x509VerifyReq_never_ca_leaf p t h.1, x509VerifyReq_leaf_signs p t h.1⟩
 
 end SigningTrust

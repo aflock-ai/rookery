@@ -38,7 +38,9 @@ def sigVerifies (k : Key) (m : Bytes) (s : Sig) : Bool := s.signer == k && s.msg
 /-- A parsed signing certificate. -/
 structure Cert where
   key : Key
-  chains : Bool   -- a non-CA leaf (#9876) whose path to a configured root validates (../signing-trust)
+  chains : Bool   -- X509Verifier.Verify's time-independent verdict: a non-CA leaf (#9876) whose keyUsage permits
+                  -- signing (#10097), whose path to a configured root validates, and whose embedded SCT verifies
+                  -- when a CT-logging CA issued it (#10124); modeled in ../signing-trust (`x509VerifyCT`)
   nb : Time
   na : Time
 deriving DecidableEq, Repr
@@ -100,13 +102,13 @@ def SpecValid (o : Opts) (e : Envelope) : Prop :=
 def ins (k : Key) (acc : List Key) : List Key := if k ∈ acc then acc else acc ++ [k]
 
 /-- The key a certificate signature contributes, if it passes. -/
--- cite: attestation/dsse/verify.go:203-204 sha256:77839f1e0c0abea4
--- cite: attestation/dsse/verify.go:237-244 sha256:ec0b2f2eaf2dfcb9
--- cite: attestation/dsse/verify.go:263-265 sha256:2985c933b7a484e6
--- cite: attestation/dsse/verify.go:295-313 sha256:da8a333a5ce2f1b0
--- cite: attestation/dsse/verify.go:331-337 sha256:600eebabb9690009
--- cite: attestation/dsse/verify.go:383-392 sha256:faca2b53e5069c9b
--- cite: attestation/cryptoutil/x509.go:65-93 sha256:fe28db1e674c959d
+-- cite: attestation/dsse/verify.go:216-217 sha256:77839f1e0c0abea4
+-- cite: attestation/dsse/verify.go:250-257 sha256:ec0b2f2eaf2dfcb9
+-- cite: attestation/dsse/verify.go:276-278 sha256:5046a86c8fe59934
+-- cite: attestation/dsse/verify.go:308-326 sha256:15cc852dff7d9627
+-- cite: attestation/dsse/verify.go:344-350 sha256:600eebabb9690009
+-- cite: attestation/dsse/verify.go:396-405 sha256:b15fcde6aaa288b5
+-- cite: attestation/cryptoutil/x509.go:65-113 sha256:4b32c08e843dc66d
 def certPasses (o : Opts) (m : Bytes) (s : EnvSig) : Option Key :=
   match s.cert with
   | none => none
@@ -120,7 +122,7 @@ def certPasses (o : Opts) (m : Bytes) (s : EnvSig) : Option Key :=
           | none => false)) then some c.key else none
 
 /-- The raw verifier loop, run for every signature whatever the cert path did. -/
--- cite: attestation/dsse/verify.go:354-366 sha256:d734c1f0bfba150e
+-- cite: attestation/dsse/verify.go:367-379 sha256:d734c1f0bfba150e
 def rawStep (o : Opts) (m : Bytes) (acc : List Key) (s : EnvSig) : List Key :=
   o.verifiers.foldl (fun acc k => if sigVerifies k m s.sig then ins k acc else acc) acc
 
@@ -130,7 +132,7 @@ def sigStep (o : Opts) (m : Bytes) (acc : List Key) (s : EnvSig) : List Key :=
     | none => acc
   rawStep o m acc s
 
--- cite: attestation/dsse/verify.go:164-167 sha256:99797e46b3dc3fca
+-- cite: attestation/dsse/verify.go:177-180 sha256:99797e46b3dc3fca
 def verifiedIds (o : Opts) (e : Envelope) : List Key :=
   e.sigs.foldl (sigStep o (preauthEncode e.payloadType e.payload)) []
 
@@ -142,8 +144,8 @@ inductive Verdict where
   | ok (n : Nat)
 deriving DecidableEq, Repr
 
--- cite: attestation/dsse/verify.go:157-159 sha256:4bafdf7fb04492b9
--- cite: attestation/dsse/verify.go:369-380 sha256:9a4befc24a4f8d60
+-- cite: attestation/dsse/verify.go:170-172 sha256:4bafdf7fb04492b9
+-- cite: attestation/dsse/verify.go:382-393 sha256:9a4befc24a4f8d60
 def verify (o : Opts) (e : Envelope) : Verdict :=
   if o.threshold ≤ 0 then .invalidThreshold
   else if e.sigs = [] then .noSignatures

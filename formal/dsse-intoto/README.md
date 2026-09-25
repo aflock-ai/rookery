@@ -11,6 +11,16 @@ rookery-relative, because this directory syncs to aflock-ai/rookery.
 - **As built** definitions carry hashed `-- cite: path:a-b sha256:…` lines;
   `jade check formal-citations` fails when the cited code changes.
 - **Required** definitions are the fixed behaviour, proved to meet the spec.
+  Since #10058, #10060 and #10057 landed they are also the code as built,
+  so the citations sit on them (`newStatementBuilt` is `newStatementReq` at
+  `_type` v0.1, and `newStatementBuilt_conformsBody` proves what it signs
+  meets every v1 body clause). The as-built definitions `newStatement`,
+  `toCollection`, `externalRead` and `decodes` stay, uncited, as the code
+  before each fix. Each fixed counterexample is now a theorem named for
+  what the code does with that trace (for example
+  `empty_predicateType_refused`), which also carries the original
+  counterexample against the pre-fix definition. `ce_type_v01` still holds,
+  and is stated against the constructor as built now.
 
 ## Results
 
@@ -26,9 +36,9 @@ rookery-relative, because this directory syncs to aflock-ai/rookery.
 | `toCollectionReq_reads`, `externalReadReq_sameBytes` | proved | the fixed readers read in-toto only when it is typed so, from the verified bytes, of a requested type |
 | `decodesReq_iff` | proved | the fixed decoder accepts exactly the envelopes the parsing rules allow |
 | `ce_type_v01` | refuted as built | `NewStatement` signs `_type` v0.1 (known: #9827, #9841) |
-| `ce_empty_predicateType`, `ce_predicate_array`, `ce_subject_without_digest` | refuted as built; fixed by #10058 | #10030 |
-| `ce_foreign_payload_type`, `ce_external_not_from_verified_bytes`, `ce_external_unrequested_type` | refuted as built; fixed by #10060 | #10026 |
-| `ce_url_safe_refused`, `ce_missing_fields_decode` | refuted as built; fixed by #10057 | #10029 |
+| `empty_predicateType_refused`, `predicate_array_refused`, `subject_without_digest_refused` (formerly `ce_empty_predicateType`, `ce_predicate_array`, `ce_subject_without_digest`) | refuted as built; fixed by #10058; each also states the pre-fix counterexample | #10030 |
+| `foreign_payload_type_refused`, `external_source_decode_not_handed_on`, `external_unrequested_type_refused` (formerly `ce_foreign_payload_type`, `ce_external_not_from_verified_bytes`, `ce_external_unrequested_type`) | refuted as built; fixed by #10060; each also states the pre-fix counterexample | #10026 |
+| `url_safe_accepted`, `missing_fields_refused` (formerly `ce_url_safe_refused`, `ce_missing_fields_decode`) | refuted as built; fixed by #10057; each also states the pre-fix counterexample | #10029 |
 
 Every theorem depends only on Lean's core axioms (`propext`, `Quot.sound`,
 `Classical.choice`); `DsseIntoto/Audit.lean` prints them on every build.

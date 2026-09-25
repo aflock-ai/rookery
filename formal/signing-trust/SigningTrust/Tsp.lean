@@ -79,11 +79,12 @@ def Ess.identifiesSigner : Ess → Bool
 
 /-- As built now (both fixes): the ESS attribute must name the signer, and
     the signer's keyUsage, when present, must permit signing. -/
--- cite: attestation/timestamp/tsp.go:240-268 sha256:e8c158c268bc68cd
--- cite: attestation/timestamp/tsp.go:289-319 sha256:0615c97b06ee46e4
--- cite: attestation/timestamp/tsp.go:341-364 sha256:03d2f29ca3058550
--- cite: attestation/timestamp/tsp.go:367-389 sha256:9c0e7cd843e8b125
--- cite: attestation/timestamp/ess.go:81-177 sha256:e13357e5f69c4f1e
+-- cite: attestation/timestamp/tsp.go:278-306 sha256:e8c158c268bc68cd
+-- cite: attestation/timestamp/tsp.go:225-261 sha256:c20af25cd73b9869
+-- cite: attestation/timestamp/tsp.go:327-329 sha256:d19295fa2e418a39
+-- cite: attestation/timestamp/tsp.go:351-374 sha256:03d2f29ca3058550
+-- cite: attestation/timestamp/tsp.go:377-399 sha256:9c0e7cd843e8b125
+-- cite: attestation/timestamp/ess.go:81-184 sha256:55587e9d92d7a389
 -- cite: attestation/cryptoutil/x509_keyusage.go:27-54 sha256:8c93d0ffdb62bcf4
 def tspVerifyReq (anchors : List Nat) (tok : Token) (now : Time) : Option Time :=
   if tok.ess.identifiesSigner && tok.leaf.kuSigns then tspVerify anchors tok now else none
@@ -149,19 +150,21 @@ theorem tspVerifyReq_iff (A : List Nat) (tok : Token) (now : Time) :
       cases h4 : tok.imprintOk <;> cases h5 : tok.soleTimeStamping <;> cases h6 : tok.signingTimeOk <;>
       cases h7 : tok.sigOk <;> cases h8 : tsaChain A tok tok.genTime <;> simp [hz]
 
-/-- How dsse/verify.go uses a token: the signing certificate's path is
-    checked at the time the TSA verified. -/
--- cite: attestation/dsse/verify.go:295-313 sha256:da8a333a5ce2f1b0
--- cite: attestation/dsse/verify.go:383-392 sha256:faca2b53e5069c9b
-def dsseCertOk (tsaAnchors : List Nat) (tok : Token) (signer : Path) (now : Time) : Bool :=
+/-- How dsse/verify.go uses a token: the signing certificate goes through
+    the whole `X509Verifier.Verify` (path checks with keyUsage, #10097, and
+    CT, #10124, which `verifyX509Time` passes the configured CT roots to) at
+    the time the TSA verified. -/
+-- cite: attestation/dsse/verify.go:308-326 sha256:15cc852dff7d9627
+-- cite: attestation/dsse/verify.go:396-405 sha256:b15fcde6aaa288b5
+def dsseCertOk (tsaAnchors : List Nat) (tok : Token) (signer : Path) (ct : Ct) (now : Time) : Bool :=
   match tspVerify tsaAnchors tok now with
   | none => false
-  | some g => x509Verify signer (eff g now)
+  | some g => x509VerifyCT signer (eff g now) ct
 
 /-- Verify time IS the timestamp time: a timestamped certificate signature's
     verdict does not depend on the verifier's clock at all. -/
-theorem dsseCertOk_now_irrelevant (A : List Nat) (tok : Token) (signer : Path) (now now' : Time) :
-    dsseCertOk A tok signer now = dsseCertOk A tok signer now' := by
+theorem dsseCertOk_now_irrelevant (A : List Nat) (tok : Token) (signer : Path) (ct : Ct) (now now' : Time) :
+    dsseCertOk A tok signer ct now = dsseCertOk A tok signer ct now' := by
   unfold dsseCertOk
   rw [tspVerify_now_irrelevant A tok now now']
   cases h : tspVerify A tok now' with
@@ -170,8 +173,8 @@ theorem dsseCertOk_now_irrelevant (A : List Nat) (tok : Token) (signer : Path) (
     have := (tspVerify_returns_genTime A tok now' g h).2
     simp only [eff_ne_zero _ _ this]
 
-theorem dsseCertOk_at_genTime (A : List Nat) (tok : Token) (signer : Path) (now : Time)
-    (h : dsseCertOk A tok signer now = true) : x509Verify signer tok.genTime = true := by
+theorem dsseCertOk_at_genTime (A : List Nat) (tok : Token) (signer : Path) (ct : Ct) (now : Time)
+    (h : dsseCertOk A tok signer ct now = true) : x509VerifyCT signer tok.genTime ct = true := by
   unfold dsseCertOk at h
   cases hv : tspVerify A tok now with
   | none => rw [hv] at h; simp at h

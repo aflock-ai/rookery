@@ -21,18 +21,20 @@ namespace DsseIntoto
 #print axioms verify_ignores_keyid
 -- the fixed behaviour
 #print axioms newStatementReq_conforms
+#print axioms newStatementBuilt_conformsBody
 #print axioms toCollectionReq_reads
 #print axioms externalReadReq_sameBytes
 #print axioms decodesReq_iff
--- the code at the pin, refuted
+-- the code at the pin, refuted; still holds as built
 #print axioms ce_type_v01
-#print axioms ce_empty_predicateType
-#print axioms ce_predicate_array
-#print axioms ce_subject_without_digest
-#print axioms ce_foreign_payload_type
-#print axioms ce_external_not_from_verified_bytes
-#print axioms ce_external_unrequested_type
-#print axioms ce_url_safe_refused
-#print axioms ce_missing_fields_decode
+-- refuted at the pin, fixed since (each carries its original counterexample)
+#print axioms empty_predicateType_refused
+#print axioms predicate_array_refused
+#print axioms subject_without_digest_refused
+#print axioms foreign_payload_type_refused
+#print axioms external_source_decode_not_handed_on
+#print axioms external_unrequested_type_refused
+#print axioms url_safe_accepted
+#print axioms missing_fields_refused
 
 end DsseIntoto
