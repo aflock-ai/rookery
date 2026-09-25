@@ -354,6 +354,13 @@ type RunOptions struct {
 	// `input.exitcode` in both modes (#9308).
 	IgnoreCommandExitCode bool
 
+	// InheritCIOIDCCredentials lets the wrapped command inherit the CI OIDC
+	// token request variables (ACTIONS_ID_TOKEN_REQUEST_*, CI_JOB_JWT*,
+	// SIGSTORE_ID_TOKEN). Off by default: a step holding them can mint the
+	// signer's workflow identity and sign forged provenance (#9822). The
+	// choice is signed into command-run `_meta.childEnv`.
+	InheritCIOIDCCredentials bool
+
 	// Diagnose enables verbose internal logging across cilock subsystems:
 	// eBPF program loading, fanotify event traces, ringbuf drop reporting,
 	// fs-verity probe results, etc. Off by default — the normal run is
@@ -1252,6 +1259,14 @@ func (ro *RunOptions) AddFlags(cmd *cobra.Command) {
 			"the envelope is written. Use with tools that exit non-zero on findings (semgrep, gosec, "+
 			"hadolint, checkov, trivy --exit-code, prowler v3, govulncheck) so CI reads the policy verdict "+
 			"instead of the tool's exit status.")
+	cmd.Flags().BoolVar(&ro.InheritCIOIDCCredentials, "inherit-ci-oidc-credentials", false,
+		"Let the wrapped command inherit the CI OIDC token variables (ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN, "+
+			"CI_JOB_JWT, CI_JOB_JWT_V2, SIGSTORE_ID_TOKEN, and any variable whose value is a JWT issued by GitHub "+
+			"Actions, gitlab.com or the CI_SERVER_URL GitLab, such as a custom-named GitLab id_token). "+
+			"By default cilock withholds them from the command, "+
+			"because a step that holds them can obtain a signing certificate for the same workflow identity cilock "+
+			"signs with. Use only for a step that needs its own OIDC token (for example cosign keyless signing). "+
+			"The choice is recorded in the signed command-run attestation as _meta.childEnv.ciOidcCredentials.")
 	cmd.Flags().BoolVar(&ro.Diagnose, "diagnose", false,
 		"Enable verbose internal logging across cilock subsystems (eBPF program loading, "+
 			"fanotify event traces, ringbuf drop reporting, fs-verity probe results). "+

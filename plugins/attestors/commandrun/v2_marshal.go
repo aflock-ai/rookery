@@ -123,6 +123,7 @@ type V02Meta struct {
 	CaptureMode  string              `json:"captureMode,omitempty"`
 	TraceBackend string              `json:"traceBackend,omitempty"`
 	KeyGuard     *V02KeyGuard        `json:"keyGuard,omitempty"`
+	ChildEnv     *V02ChildEnv        `json:"childEnv,omitempty"`
 	Counts       V02MetaCounts       `json:"counts"`
 	Sections     map[string][2]int64 `json:"sections,omitempty"`
 }
@@ -380,7 +381,7 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 	}
 
 	v02 := &V02Predicate{
-		Meta:     V02Meta{Version: "v0.2", KeyGuard: rc.keyGuard},
+		Meta:     V02Meta{Version: "v0.2", KeyGuard: rc.keyGuard, ChildEnv: rc.childEnv},
 		Cmd:      rc.Cmd,
 		ExitCode: rc.ExitCode,
 		Stdout:   rc.Stdout,
@@ -544,6 +545,7 @@ func FromV02(p *V02Predicate) *CommandRun {
 	rc.Stderr = p.Stderr
 	rc.Summary = p.Summary
 	rc.keyGuard = p.Meta.KeyGuard
+	rc.childEnv = p.Meta.ChildEnv
 
 	de := v02Deinterner{p: p}
 	rc.Processes = make([]ProcessInfo, 0, len(p.Processes))

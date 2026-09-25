@@ -1471,6 +1471,13 @@ type CommandRun struct {
 	// unexported); the v0.1 wire shape never carried it.
 	keyGuard *V02KeyGuard
 
+	// childEnv records whether the wrapped command's environment had the CI
+	// OIDC credential variables withheld (see ci_oidc_env.go). Set by runCmd,
+	// carried in the v0.2 `_meta.childEnv` block like keyGuard.
+	childEnv *V02ChildEnv
+	// inheritCIOIDC is WithInheritCIOIDCCredentials: the explicit opt-out.
+	inheritCIOIDC bool
+
 	silent        bool
 	materials     map[string]cryptoutil.DigestSet
 	enableTracing bool
@@ -1775,6 +1782,7 @@ func (rc *CommandRun) UnmarshalJSON(data []byte) error {
 	rc.Processes = decoded.Processes
 	rc.Scripts = decoded.Scripts
 	rc.keyGuard = decoded.keyGuard
+	rc.childEnv = decoded.childEnv
 	return nil
 }
 
@@ -2586,6 +2594,12 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	// fires; WaitDelay remains the sole anti-hang guarantee on that path.
 	c := exec.CommandContext(ctx.Context(), r.Cmd[0], r.Cmd[1:]...) //nolint:gosec // G204: command is user-specified by design
 	c.Dir = resolvedWorkdir(ctx.WorkingDir())
+	// Explicit Env, never inherited: withhold the CI OIDC credential variables
+	// so the step cannot mint the signer's workflow identity (#9822). cilock's
+	// own environment is untouched, so the signer still reads its token.
+	// Built from c.Environ(), not os.Environ(): with Env still nil it applies
+	// os/exec's PWD=<Dir> rewrite, which a hand-built Env would lose.
+	c.Env = r.childEnviron(c.Environ())
 	// Snapshot the dir the tracee will actually run in, before any
 	// post-exec cwd changes happen on the parent. Used by TraceOutputs
 	// to resolve relative paths in fileOps.Writes / Renames.
