@@ -131,6 +131,11 @@ const (
 	// RoleMakefile is an explicit `make -f X` or the implicit makefile that
 	// GNU make would select in the working directory.
 	RoleMakefile ScriptRole = "makefile"
+	// RoleExecutable is argv[0] itself when it names a path to a regular file
+	// that starts with `#!`: `./build.sh` runs build.sh through its shebang, so
+	// no interpreter appears in argv for the operand rule to see. A file whose
+	// first two bytes are anything else (a compiled binary) is not recorded.
+	RoleExecutable ScriptRole = "executable"
 )
 
 // ScriptRef is one resolved script or makefile.
@@ -214,6 +219,11 @@ type ScriptRef struct {
 	// epistemic status, and a policy can require the value rather than infer it
 	// from the field being there.
 	ExecutionBinding ScriptExecutionBinding `json:"executionBinding"`
+
+	// notScript marks a RoleExecutable candidate that measurement showed is
+	// not a shebang script (or could not show is one). Such refs are dropped
+	// before capture returns; the role is a claim about program text.
+	notScript bool
 }
 
 // ScriptExecutionBinding is the answer to "were these the bytes that RAN?".
@@ -769,6 +779,13 @@ func resolveScriptPlan(argv []string, workdir string) scriptPlan {
 		refs, requireDir := makefileOperands(argv[1:], workdir)
 		return scriptPlan{refs: refs, requireDir: requireDir}
 	}
+	// argv[0] named by PATH (no separator) is resolved through the tracee's
+	// PATH, which this resolver does not model, so only a path is a candidate.
+	// Whether it is a script is a filesystem fact decided at measurement.
+	// Windows has no shebang execution.
+	if !windowsExecutableNames && strings.ContainsRune(argv[0], '/') {
+		return scriptPlan{refs: []ScriptRef{{Path: argv[0], Role: RoleExecutable}}}
+	}
 	return scriptPlan{}
 }
 
@@ -1225,7 +1242,13 @@ func captureScriptRefsWithBudget(ctx context.Context, argv []string, workdir str
 	for i := range plan.refs {
 		hydrateScriptRef(ctx, &plan.refs[i], workdir, mode, budget)
 	}
-	return plan.refs, budget
+	refs := plan.refs[:0]
+	for _, ref := range plan.refs {
+		if !ref.notScript {
+			refs = append(refs, ref)
+		}
+	}
+	return refs, budget
 }
 
 // chdirBlocksRead reports whether make's effective -C directory is one make
@@ -1337,6 +1360,8 @@ func budgetExhaustedReason() string {
 func hydrateScriptRef(ctx context.Context, ref *ScriptRef, workdir string, mode ScriptCaptureMode, budget *captureBudget) {
 	abs, ok := resolveCapturePath(ctx, ref, workdir)
 	if !ok {
+		// An executable candidate never read cannot be shown to be a script.
+		ref.notScript = ref.Role == RoleExecutable
 		return // resolveCapturePath recorded why
 	}
 
@@ -1455,6 +1480,16 @@ func resolveCapturePath(ctx context.Context, ref *ScriptRef, workdir string) (st
 // that can fail, so every abstain below reports the file it was about and this
 // function never has to assign it.
 func measureScriptRef(ctx context.Context, ref *ScriptRef, abs string, mode ScriptCaptureMode, budget *captureBudget) {
+	// An executable candidate is a script only once its `#!` has been read.
+	// Every exit before that point drops it rather than recording a failure
+	// about a file that may be a compiled binary.
+	shebangSeen := ref.Role != RoleExecutable
+	defer func() {
+		if !shebangSeen {
+			ref.notScript = true
+		}
+	}()
+
 	// Stop the pass BEFORE the I/O, not after it. Discovering exhaustion from
 	// the result of a read means the read was already paid for, and with the
 	// allowance at zero every further distinct operand still opened its file and
@@ -1524,8 +1559,30 @@ func measureScriptRef(ctx context.Context, ref *ScriptRef, abs string, mode Scri
 	// a stat-derived size can describe bytes neither the digest nor the
 	// content saw. Teeing the hash input is the only arrangement where all
 	// three provably describe the same bytes.
+	// Peek before hashing so a compiled binary named as argv[0] costs two
+	// bytes, not a full digest. The peek is advisory: the hashed stream below
+	// re-checks the same two bytes, so a rewrite between peek and hash cannot
+	// record a non-script under this role.
+	var head *cappedBuffer
+	if !shebangSeen {
+		var peek [2]byte
+		n, _ := io.ReadFull(f, peek[:])
+		budget.spend(int64(n))
+		if n < len(peek) || string(peek[:]) != "#!" {
+			return
+		}
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return
+		}
+		shebangSeen = true
+		head = &cappedBuffer{limit: 2}
+	}
+
 	counter := &byteCounter{}
 	sink := io.Writer(counter)
+	if head != nil {
+		sink = io.MultiWriter(counter, head)
+	}
 	var body *cappedBuffer
 	var text *utf8Validator
 	if mode == ScriptCaptureContent {
@@ -1535,7 +1592,7 @@ func measureScriptRef(ctx context.Context, ref *ScriptRef, abs string, mode Scri
 		// a whole-file claim out of a 256 KiB sample. Only content mode pays
 		// for this; identity mode's sink is unchanged.
 		text = &utf8Validator{valid: true}
-		sink = io.MultiWriter(counter, body, text)
+		sink = io.MultiWriter(sink, body, text)
 	}
 
 	// The read is bounded and interruptible. Both matter here and nowhere else
@@ -1576,6 +1633,12 @@ func measureScriptRef(ctx context.Context, ref *ScriptRef, abs string, mode Scri
 		default:
 			ref.Unresolved = fmt.Sprintf("digest failed: %v", err)
 		}
+		return
+	}
+	if head != nil && head.buf.String() != "#!" {
+		// The file changed between the peek and the hash: the measured bytes
+		// are not a shebang script, so nothing is recorded under this role.
+		shebangSeen = false
 		return
 	}
 	ref.Digest = digest

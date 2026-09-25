@@ -123,6 +123,17 @@ func WithScriptCapture(mode ScriptCaptureMode) Option {
 	}
 }
 
+// WithScriptGuard installs a check over the captured scripts. It runs after
+// capture and BEFORE the command starts; a non-nil error fails the attestation
+// and the command never runs. Use it to refuse embedding a body that holds a
+// credential: under ScriptCaptureContent the refs carry the exact bytes that
+// would be signed.
+func WithScriptGuard(guard func([]ScriptRef) error) Option {
+	return func(cr *CommandRun) {
+		cr.scriptGuard = guard
+	}
+}
+
 // WithTraceFileContent opts into workspace content snapshots from macOS file-access reports.
 // It requires tracing and does not establish consumed-byte identity.
 func WithTraceFileContent(enabled bool) Option {
@@ -1488,6 +1499,8 @@ type CommandRun struct {
 	// capture for every caller that predates this option.
 	scriptCapture    ScriptCaptureMode
 	traceFileContent bool
+	// scriptGuard, when set, vets the captured scripts before the command runs.
+	scriptGuard func([]ScriptRef) error
 
 	// traceeWorkdir is the working directory the tracee actually ran
 	// with — populated by runCmd just before exec.Command starts.
@@ -1710,6 +1723,12 @@ func (rc *CommandRun) Attest(ctx *attestation.AttestationContext) error {
 	// resolveScriptOperands for the full statement of what a ScriptRef does
 	// and does not assert.
 	rc.Scripts = captureScriptRefs(ctx.Context(), rc.Cmd, rc.scriptWorkdir(ctx), rc.scriptCaptureMode())
+
+	if rc.scriptGuard != nil {
+		if err := rc.scriptGuard(rc.Scripts); err != nil {
+			return fmt.Errorf("command not run: %w", err)
+		}
+	}
 
 	if err := rc.runCmd(ctx); err != nil {
 		return err

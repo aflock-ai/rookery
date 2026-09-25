@@ -27,7 +27,9 @@ import (
 func TestNew(t *testing.T) {
 	a := New()
 	assert.Equal(t, Name, a.Name())
-	assert.Equal(t, Type, a.Type())
+	// A bare attestor carries nothing v0.2 added, so it is a v0.1 body and
+	// says so; see TestTypeFollowsShape.
+	assert.Equal(t, LegacyV01Type, a.Type())
 	assert.Equal(t, RunType, a.RunType())
 	assert.NotNil(t, a.ActionInputs)
 	assert.NotNil(t, a.ActionOutputs)
@@ -152,5 +154,6 @@ func TestRegistration(t *testing.T) {
 	// This is implicitly tested by importing the package,
 	// but we verify the constants are correct.
 	assert.Equal(t, "github-action", Name)
-	assert.Equal(t, "https://aflock.ai/attestations/github-action/v0.1", Type)
+	assert.Equal(t, "https://aflock.ai/attestations/github-action/v0.2", Type)
+	assert.Equal(t, "https://aflock.ai/attestations/github-action/v0.1", LegacyV01Type)
 }

@@ -30,9 +30,15 @@ import (
 )
 
 const (
-	Name    = "github-action"
-	Type    = "https://aflock.ai/attestations/github-action/v0.1"
-	RunType = attestation.ExecuteRunType
+	Name = "github-action"
+	// Type is the current predicate: v0.1 plus the resolved action.yml digest
+	// and the composite `run:` steps that executed.
+	Type = "https://aflock.ai/attestations/github-action/v0.2"
+	// LegacyV01Type is the predicate before steps were recorded. It stays
+	// registered so every stored v0.1 envelope keeps decoding, and it is still
+	// EMITTED for a body that carries none of the v0.2 fields (see Type()).
+	LegacyV01Type = "https://aflock.ai/attestations/github-action/v0.1"
+	RunType       = attestation.ExecuteRunType
 )
 
 var (
@@ -41,7 +47,9 @@ var (
 )
 
 func init() {
-	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
+	// One attestor, two predicate URIs. v0.2 is v0.1 plus optional fields, so a
+	// v0.1 body decodes into the same struct unchanged.
+	attestation.RegisterAttestationWithTypes(Name, []string{Type, LegacyV01Type}, RunType, func() attestation.Attestor {
 		return New()
 	})
 }
@@ -61,6 +69,30 @@ type DockerContainerConfig struct {
 	Args       []string `json:"args,omitempty"`
 }
 
+// RunStep records one composite-action `run:` step, in execution order.
+type RunStep struct {
+	// Index is the step's position in its action's runs.steps.
+	Index int `json:"index"`
+	// Name is the step's name, or step-<n> when it has none.
+	Name string `json:"name,omitempty"`
+	// Action is the nested action the step belongs to; empty for a step of the
+	// wrapped action itself.
+	Action string `json:"action,omitempty"`
+	// Shell is the shell the step declared, or the default it ran under.
+	Shell string `json:"shell,omitempty"`
+	// WorkingDirectory is the step's working-directory, as declared.
+	WorkingDirectory string `json:"workingDirectory,omitempty"`
+	// Digest is the digest of the exact bytes handed to the interpreter.
+	// Absent for a skipped step, which handed nothing to anything.
+	Digest cryptoutil.DigestSet `json:"digest,omitempty"`
+	// Script is those bytes, present only under content capture.
+	Script string `json:"script,omitempty"`
+	// ExitCode is the interpreter's exit status.
+	ExitCode int `json:"exitCode"`
+	// Skipped reports that the step's `if:` evaluated false and it did not run.
+	Skipped bool `json:"skipped,omitempty"`
+}
+
 // Attestor captures metadata about a GitHub Action execution.
 type Attestor struct {
 	ActionRef     string            `json:"actionref"`
@@ -74,6 +106,13 @@ type Attestor struct {
 
 	// Docker container configuration (populated for docker actions)
 	Docker *DockerContainerConfig `json:"docker,omitempty"`
+
+	// ActionYAMLDigest is the digest of the resolved action.yml, the file that
+	// decided what ran. (v0.2)
+	ActionYAMLDigest cryptoutil.DigestSet `json:"actionyamldigest,omitempty"`
+
+	// Steps are the composite `run:` steps, in execution order. (v0.2)
+	Steps []RunStep `json:"steps,omitempty"`
 
 	// GitHub context (from env vars when available)
 	RunID        string `json:"runid,omitempty"`
@@ -145,6 +184,13 @@ func WithDockerConfig(cfg *DockerContainerConfig) Option {
 	}
 }
 
+// WithActionYAMLDigest records the digest of the resolved action.yml.
+func WithActionYAMLDigest(ds cryptoutil.DigestSet) Option {
+	return func(a *Attestor) {
+		a.ActionYAMLDigest = ds
+	}
+}
+
 // WithRefPinned records whether the action ref was pinned to a commit SHA.
 func WithRefPinned(pinned bool) Option {
 	return func(a *Attestor) {
@@ -182,7 +228,20 @@ func New(opts ...Option) *Attestor {
 
 func (a *Attestor) Name() string { return Name }
 
-func (a *Attestor) Type() string { return Type }
+// Type reports the predicate version of the body as it stands.
+//
+// It is v0.2 exactly when a v0.2 field is populated. The signed release
+// policies (deploy/dist/release-policy-*.signed.json) require github-action/v0.1
+// from `cilock run --attestations github-action`, which records no steps and no
+// action.yml; labelling that unchanged body v0.2 would fail every release
+// verification without the body changing at all. A body that does carry steps
+// is never labelled v0.1, so no v0.1 consumer sees a shape it cannot read.
+func (a *Attestor) Type() string {
+	if len(a.ActionYAMLDigest) > 0 || len(a.Steps) > 0 {
+		return Type
+	}
+	return LegacyV01Type
+}
 
 func (a *Attestor) RunType() attestation.RunType { return RunType }
 
