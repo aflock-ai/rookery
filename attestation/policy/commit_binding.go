@@ -108,7 +108,28 @@ func normalizeCommitBinding(commit string) (string, error) {
 // (and not disclosed to an AI provider) at all. A collection not named for the
 // step is left to the gate, which skips it. With no binding this is exactly
 // gateOneContext.
+//
+// With a step-scoped gate memo (vo.stepGate, set only by the attestationsFrom
+// fixed point) a collection already gated under the same step and context
+// replays its verdict instead of re-running Rego and AI. A verdict computed
+// while ctx was cancelled is not stored.
 func (s Step) gateBound(ctx context.Context, collection source.CollectionVerificationResult, vo *verifyOptions, stepCtx map[string]interface{}) (gateOutcome, PassedCollection, RejectedCollection) {
+	if vo.stepGate == nil {
+		return s.gateBoundFresh(ctx, collection, vo, stepCtx)
+	}
+	key := vo.stepGate.key(collection)
+	if v, ok := vo.stepGate.lookup(key); ok {
+		return v.outcome, v.passed, v.rejected
+	}
+	outcome, pc, rc := s.gateBoundFresh(ctx, collection, vo, stepCtx)
+	if ctx.Err() == nil {
+		vo.stepGate.store(key, gateVerdict{outcome: outcome, passed: pc, rejected: rc})
+	}
+	return outcome, pc, rc
+}
+
+// gateBoundFresh is gateBound without the memo.
+func (s Step) gateBoundFresh(ctx context.Context, collection source.CollectionVerificationResult, vo *verifyOptions, stepCtx map[string]interface{}) (gateOutcome, PassedCollection, RejectedCollection) {
 	if vo.commitBinding != "" && collection.Collection.Name == s.Name {
 		if err := checkCommitBinding(s.Name, collection, vo.commitBinding); err != nil {
 			return gateRejected, PassedCollection{}, RejectedCollection{Collection: compactRejected(collection), Reason: err}

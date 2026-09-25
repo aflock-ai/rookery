@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -217,6 +218,24 @@ type verifyOptions struct {
 	// commitBinding, when non-empty, is the commit every step witness must be
 	// bound to. Empty is the unbound zero value; see WithCommitBinding.
 	commitBinding string
+
+	// gateMemo, set by verifySteps for an attestationsFrom policy, replays gate
+	// verdicts across fixed-point rounds; stepGate is that memo scoped to the
+	// step and context currently being gated (withStepGate). Both nil means
+	// every gate is evaluated fresh.
+	gateMemo *gateMemo
+	stepGate *stepGate
+}
+
+// withStepGate returns vo scoped to gating step under stepCtx. With no memo it
+// returns vo itself.
+func (vo *verifyOptions) withStepGate(step string, stepCtx map[string]interface{}) *verifyOptions {
+	if vo.gateMemo == nil {
+		return vo
+	}
+	scoped := *vo
+	scoped.stepGate = vo.gateMemo.forStep(step, stepCtx)
+	return &scoped
 }
 
 // WithInventoryLookup resolves modern companions through the caller's existing
@@ -472,32 +491,38 @@ func (p Policy) Validate() error { //nolint:gocognit,gocyclo
 	color := make(map[string]int)
 	var path []string
 
+	// The graph is attestationsFrom ∪ artifactsFrom (#9813). Each relation alone
+	// may be acyclic while their union is not: `a artifactsFrom b` plus
+	// `b attestationsFrom a` lets a's artifact pruning depend on b's Rego verdict
+	// and b's Rego input depend on a's pruning. The attestationsFrom fixed point
+	// in verifySteps has a round bound only on an acyclic union, so such a
+	// policy is refused here instead of failing to converge at verify time.
+	// kinds[i] is the relation of the edge path[i] -> path[i+1].
+	var kinds []string
 	var dfs func(name string) error
 	dfs = func(name string) error {
 		color[name] = gray
 		path = append(path, name)
 
-		step := p.Steps[name]
-		for _, dep := range step.AttestationsFrom {
-			switch color[dep] {
+		for _, e := range stepDependencyEdges(p.Steps[name]) {
+			switch color[e.to] {
 			case gray:
-				// Found a cycle — build the cycle path.
-				cycle := []string{dep}
-				for i := len(path) - 1; i >= 0; i-- {
-					cycle = append(cycle, path[i])
-					if path[i] == dep {
-						break
-					}
+				start := slices.Index(path, e.to)
+				cycle := append(append([]string(nil), path[start:]...), e.to)
+				err := ErrCircularDependency{Steps: cycle}
+				edges := append(append([]string(nil), kinds[start:]...), e.kind)
+				// A cycle through attestationsFrom alone keeps the message it has
+				// always had; one through artifactsFrom names each relation.
+				if slices.Contains(edges, relArtifactsFrom) {
+					err.Edges = edges
 				}
-				// Reverse for readable order.
-				for i, j := 0, len(cycle)-1; i < j; i, j = i+1, j-1 {
-					cycle[i], cycle[j] = cycle[j], cycle[i]
-				}
-				return ErrCircularDependency{Steps: cycle}
+				return err
 			case white:
-				if err := dfs(dep); err != nil {
+				kinds = append(kinds, e.kind)
+				if err := dfs(e.to); err != nil {
 					return err
 				}
+				kinds = kinds[:len(kinds)-1]
 			}
 		}
 
@@ -506,7 +531,8 @@ func (p Policy) Validate() error { //nolint:gocognit,gocyclo
 		return nil
 	}
 
-	for name := range p.Steps {
+	// Name order, so the cycle reported for a policy is the same on every run.
+	for _, name := range p.sortedStepNames() {
 		if color[name] == white {
 			if err := dfs(name); err != nil {
 				return err
@@ -515,6 +541,28 @@ func (p Policy) Validate() error { //nolint:gocognit,gocyclo
 	}
 
 	return nil
+}
+
+const (
+	relAttestationsFrom = "attestationsFrom"
+	relArtifactsFrom    = "artifactsFrom"
+)
+
+type stepDependencyEdge struct {
+	to, kind string
+}
+
+// stepDependencyEdges lists step's outgoing dependency edges over both
+// relations, attestationsFrom first, in declaration order.
+func stepDependencyEdges(step Step) []stepDependencyEdge {
+	edges := make([]stepDependencyEdge, 0, len(step.AttestationsFrom)+len(step.ArtifactsFrom))
+	for _, dep := range step.AttestationsFrom {
+		edges = append(edges, stepDependencyEdge{to: dep, kind: relAttestationsFrom})
+	}
+	for _, dep := range step.ArtifactsFrom {
+		edges = append(edges, stepDependencyEdge{to: dep, kind: relArtifactsFrom})
+	}
+	return edges
 }
 
 // topologicalSort returns the step names in an order that respects AttestationsFrom
@@ -715,23 +763,161 @@ func (p Policy) Verify(ctx context.Context, opts ...VerifyOption) (bool, map[str
 	return pass, stepResults, err
 }
 
-// verifySteps runs the step-verification loop. Extracted from the old
-// Policy.Verify body to make room for external-attestation verification
-// ordering without ballooning the single function.
+// verifySteps runs step verification to a JOINT fixed point with artifact
+// pruning (#9813).
+//
+// One round (verifyStepsRound) verifies every step and then prunes collections
+// whose artifactsFrom chain fails. An attestationsFrom dependent's Rego input,
+// though, is built DURING the step loop, before pruning, so a dependency
+// collection the chain check later rejects would already have been judged by
+// the dependent's Rego. A policy could flip FAIL→PASS on evidence about a
+// different artifact.
+//
+// So the round is repeated with each dependent's Rego context taken from the
+// dependency's CONVERGED Passed set, until the context every dependent was
+// judged on equals what survived pruning. Every dependent collection, passed
+// or rejected, is re-gated, because an arbitrary Rego rule need not be
+// monotone in its input. Re-gating goes through gateMemo: a collection whose
+// step and input context are unchanged replays its earlier verdict instead of
+// re-running Rego and AI, so the outcome cannot depend on how many rounds ran.
+//
+// Each later round takes its context from the previous round's survivors, so
+// a dependency set can SHRINK (a pruned collection leaves) or GROW back (a
+// dependent Rego rule that rejected everything under a larger context passes
+// under the pruned one, and its evidence then satisfies an artifactsFrom edge
+// further down). Neither direction is ruled out, so there is no monotone
+// measure; the loop is bounded instead.
+//
+// Bound: a round settles at least one more attestationsFrom edge along every
+// dependency path, so on a policy whose combined attestationsFrom and
+// artifactsFrom graph is acyclic every context is final after at most
+// len(p.Steps) rounds, plus one to observe it (checked against the Lean policy
+// model, and tight: a chain of n attestationsFrom steps needs n+1). Validate
+// refuses a cycle in that union, because the bound is false there: an
+// artifactsFrom edge feeding back into a Rego context can oscillate or need
+// more rounds than any step-count bound. ErrAttestationsFromNotConverged stays
+// as the defensive fail-closed exit should the loop ever run out of rounds;
+// it never returns a verdict judged on evidence the verify rejected. The bound
+// also caps what an adversarial corpus can cost: at most len(p.Steps)+1 rounds.
+//
+// Policies without attestationsFrom, and those whose dependencies lose
+// nothing to pruning, converge after the first round, unchanged from before.
+// Only a policy with attestationsFrom can need a second round, so only that
+// shape pays for the memo.
+func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles map[string]TrustBundle, externalResults map[string]ExternalResult) (map[string]StepResult, error) {
+	if !p.searchExpansionIsMonotone() {
+		memoized := *vo
+		memoized.gateMemo = newGateMemo()
+		vo = &memoized
+	}
+	var override map[string][]PassedCollection // nil: the first round reads the live results
+	maxRounds := len(p.Steps) + 1
+	for round := 1; ; round++ {
+		results, used, err := p.verifyStepsRound(ctx, vo, trustBundles, externalResults, override)
+		if err != nil {
+			return nil, err
+		}
+		next, converged := convergedRegoContext(used, results)
+		if converged {
+			return results, nil
+		}
+		if round >= maxRounds {
+			return nil, ErrAttestationsFromNotConverged{Rounds: round}
+		}
+		override = next
+	}
+}
+
+// convergedRegoContext compares the dependency sets a round fed into Rego
+// (used) with what those dependencies hold after that round's artifact pruning
+// (results). converged is true when every set matches by content key, so every
+// dependent was judged on exactly the evidence that survived. next is the
+// surviving set per dependency: the context for the following round.
+func convergedRegoContext(used map[string][]PassedCollection, results map[string]StepResult) (next map[string][]PassedCollection, converged bool) {
+	converged = true
+	next = make(map[string][]PassedCollection, len(used))
+	for dep, ctxSet := range used {
+		survivors := results[dep].Passed
+		next[dep] = survivors
+		if !samePassedCollections(ctxSet, survivors) {
+			converged = false
+		}
+	}
+	return next, converged
+}
+
+// samePassedCollections reports whether a and b hold the same collections by
+// content key, ignoring order.
+func samePassedCollections(a, b []PassedCollection) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	keys := make(map[string]int, len(a))
+	for _, pc := range a {
+		keys[passedCollectionKeyOf(pc)]++
+	}
+	for _, pc := range b {
+		k := passedCollectionKeyOf(pc)
+		if keys[k] == 0 {
+			return false
+		}
+		keys[k]--
+	}
+	return true
+}
+
+// regoContextResults returns the view of resultsByStep that step's Rego
+// context is built from, and records into used the dependency sets it hands
+// out. With override nil the view is the live results (the first round); otherwise
+// each attestationsFrom dependency's Passed set is replaced by override's,
+// which holds the previous round's converged evidence.
+//
+// buildStepRegoContext reads only the step's attestationsFrom entries, so the
+// view carries only those.
+func regoContextResults(step Step, resultsByStep map[string]StepResult, override, used map[string][]PassedCollection) map[string]StepResult {
+	if len(step.AttestationsFrom) == 0 {
+		return resultsByStep
+	}
+	view := make(map[string]StepResult, len(step.AttestationsFrom))
+	for _, dep := range step.AttestationsFrom {
+		result, ok := resultsByStep[dep]
+		if ov, has := override[dep]; has {
+			result.Passed = ov
+			ok = true
+		}
+		if ok {
+			view[dep] = result
+		}
+		// First observation wins. A dependency is verified before all of its
+		// dependents and not touched again within a pass, and the only thing
+		// that replays a pass (the lazy demand valve) is disabled for any
+		// policy with attestationsFrom (lazyWitnessEligible).
+		if _, seen := used[dep]; !seen {
+			used[dep] = result.Passed
+		}
+	}
+	return view
+}
+
+// verifyStepsRound runs ONE round of the step-verification loop plus artifact
+// pruning, and returns the attestationsFrom dependency sets it fed to Rego.
+// Extracted from the old Policy.Verify body to make room for
+// external-attestation verification ordering without ballooning the single
+// function.
 // VERBATIM frozen copy of the pre-lazy engine, which exists precisely so a
 // mutation here cannot move the oracle with it. dupl is exempted for _test.go
 // but reports the pair anchored on this side. Any OTHER duplicate of this body
 // would be a real finding — check the reported partner before re-suppressing.
 //
 //nolint:dupl // the only clone of this body is lazy_frozen_oracle_test.go's
-func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles map[string]TrustBundle, externalResults map[string]ExternalResult) (map[string]StepResult, error) { //nolint:gocognit,gocyclo,funlen // loop body mixes search / functionary / context-build / demand-valve replay on shared per-pass state; splitting would require threading state through extra parameters
+func (p Policy) verifyStepsRound(ctx context.Context, vo *verifyOptions, trustBundles map[string]TrustBundle, externalResults map[string]ExternalResult, override map[string][]PassedCollection) (map[string]StepResult, map[string][]PassedCollection, error) { //nolint:gocognit,gocyclo,funlen // loop body mixes search / functionary / context-build / demand-valve replay on shared per-pass state; splitting would require threading state through extra parameters
 	// Validate that all artifactsFrom references point to steps defined in the policy.
 	// This catches configuration errors early rather than producing confusing
 	// "failed to verify artifacts" errors during the artifact comparison phase.
 	for stepName, step := range p.Steps {
 		for _, ref := range step.ArtifactsFrom {
 			if _, ok := p.Steps[ref]; !ok {
-				return nil, fmt.Errorf("step %q references unknown step %q in artifactsFrom", stepName, ref)
+				return nil, nil, fmt.Errorf("step %q references unknown step %q in artifactsFrom", stepName, ref)
 			}
 		}
 	}
@@ -747,10 +933,11 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 	// AttestationsFrom dependencies, enabling cross-step context.
 	stepOrder, err := p.topologicalSort()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	resultsByStep := make(map[string]StepResult)
+	used := make(map[string][]PassedCollection)
 
 	// SEED-ONLY REACH. Verification searches exactly the caller's seed
 	// digests. A collection's relationship edges (its BackRefs: commithash,
@@ -784,7 +971,10 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 			// input is the raw attestor JSON (backward compat). Built BEFORE
 			// the search: its inputs (resultsByStep + externalResults) cannot
 			// change while this step's candidates are fetched.
-			stepCtx := buildStepRegoContext(step, resultsByStep, externalResults)
+			stepCtx := buildStepRegoContext(step, regoContextResults(step, resultsByStep, override, used), externalResults)
+			// Gate verdicts replay across fixed-point rounds while this step's
+			// context is unchanged (gateMemo); vo itself when no memo is set.
+			gateVO := vo.withStepGate(step.Name, stepCtx)
 
 			var stepResult StepResult
 			//nolint:nestif // the streamed-vs-batch dispatch is two parallel arms by design; hoisting either arm would separate it from the fallback it must stay verdict-identical to
@@ -793,9 +983,9 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 				// verify, triage, gate, compact — so at most one decoded
 				// envelope body is in flight per turn, instead of
 				// materializing the full matching set before evaluation.
-				streamed, candidates, truncated, serr := p.verifyStepStreamed(ctx, streamer, step, vo, trustBundles, stepCtx, attestationsByStep[stepName], lazyEligible && valve.lazyAllowedFor(stepName))
+				streamed, candidates, truncated, serr := p.verifyStepStreamed(ctx, streamer, step, gateVO, trustBundles, stepCtx, attestationsByStep[stepName], lazyEligible && valve.lazyAllowedFor(stepName))
 				if serr != nil {
-					return nil, serr
+					return nil, nil, serr
 				}
 				stepResult = streamed
 				if truncated {
@@ -820,7 +1010,7 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 				// Use search to get all the attestations that match the supplied step name and subjects
 				collections, err := vo.verifiedSource.Search(ctx, stepName, vo.subjectDigests, attestationsByStep[stepName])
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 
 				if len(collections) == 0 {
@@ -864,7 +1054,7 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 					passedCollections[i] = pc.Collection
 				}
 
-				stepResult = step.validateAttestationsBound(ctx, passedCollections, vo, stepCtx)
+				stepResult = step.validateAttestationsBound(ctx, passedCollections, gateVO, stepCtx)
 				stepResult.Rejected = append(stepResult.Rejected, functionaryCheckResults.Rejected...)
 				// Hub-suppressed candidates are reported, never silently dropped:
 				// an operator whose expected evidence was demoted as a hub sees
@@ -925,7 +1115,7 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 
 	resultsByStep, err = p.verifyArtifacts(ctx, vo, resultsByStep)
 	if err != nil {
-		return nil, fmt.Errorf("failed to verify artifacts: %w", err)
+		return nil, nil, fmt.Errorf("failed to verify artifacts: %w", err)
 	}
 
 	// A policy is invalid when it declares nothing to verify — no steps AND no
@@ -933,10 +1123,10 @@ func (p Policy) verifySteps(ctx context.Context, vo *verifyOptions, trustBundles
 	// gates) are valid after #39; they're verified in verifyExternalAttestations
 	// which runs before this function returns control.
 	if len(resultsByStep) == 0 && len(p.ExternalAttestations) == 0 {
-		return nil, fmt.Errorf("policy has no steps or external attestations to verify")
+		return nil, nil, fmt.Errorf("policy has no steps or external attestations to verify")
 	}
 
-	return resultsByStep, nil
+	return resultsByStep, used, nil
 }
 
 // streamedVerdict labels the outcome recorded for one functionary-AUTHORIZED
@@ -2034,9 +2224,10 @@ func (p Policy) verifyArtifacts(ctx context.Context, vo *verifyOptions, resultsB
 //
 // A NAME SORT, deliberately, not topologicalSort. topologicalSort orders by
 // AttestationsFrom, while the edge that governs artifact verification is
-// artifactsFrom — which is NOT cycle-checked (the DFS walks only
-// AttestationsFrom), so a mutually-referencing artifactsFrom pair is legal
-// today and has no topological order at all.
+// artifactsFrom. Validate now refuses artifactsFrom cycles too (#9813), but
+// verifyArtifacts is also driven directly on unvalidated policies (tests,
+// allStepsSatisfied's clone), so it keeps an order that is defined for any
+// graph rather than depending on the validator having run.
 //
 // What this order protects is REASON determinism, and that needs only SOME
 // fixed total order, not a dependency-correct one: the artifact fixed point
@@ -2075,8 +2266,9 @@ func (p Policy) sortedStepNames() []string {
 // Termination: Passed sets only ever shrink (nothing re-populates them), so
 // each pass that changes anything permanently removes at least one COLLECTION.
 // The total number of passed collections is therefore the upper bound on
-// reaching the fixed point, and the cap makes that structural — a
-// mutually-referencing artifactsFrom pair can never spin. The +1 pays for the
+// reaching the fixed point, and the cap makes that structural: even a
+// mutually-referencing artifactsFrom pair, which Validate refuses, could never
+// spin. The +1 pays for the
 // final pass that observes no change.
 func (p Policy) convergeArtifactPruning(ctx context.Context, vo *verifyOptions, stepNames []string, resultsByStep map[string]StepResult) {
 	totalPassed := 0

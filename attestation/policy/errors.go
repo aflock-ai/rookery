@@ -273,10 +273,23 @@ func (e ErrInvalidOption) Error() string {
 
 type ErrCircularDependency struct {
 	Steps []string
+	// Edges, when set, names the relation (attestationsFrom or artifactsFrom)
+	// of each hop: Edges[i] links Steps[i] to Steps[i+1]. It is set for a cycle
+	// that runs through artifactsFrom, which is only a cycle in the union of
+	// the two relations (#9813).
+	Edges []string
 }
 
 func (e ErrCircularDependency) Error() string {
-	return fmt.Sprintf("circular dependency detected: %v", strings.Join(e.Steps, " -> "))
+	if len(e.Edges) == 0 || len(e.Edges) != len(e.Steps)-1 {
+		return fmt.Sprintf("circular dependency detected: %v", strings.Join(e.Steps, " -> "))
+	}
+	var b strings.Builder
+	b.WriteString(e.Steps[0])
+	for i, rel := range e.Edges {
+		fmt.Fprintf(&b, " -[%s]-> %s", rel, e.Steps[i+1])
+	}
+	return "circular dependency across attestationsFrom and artifactsFrom detected: " + b.String()
 }
 
 type ErrSelfReference struct {
@@ -312,6 +325,19 @@ type ErrDependencyNotVerified struct {
 
 func (e ErrDependencyNotVerified) Error() string {
 	return fmt.Sprintf("dependency '%v' not verified - cannot evaluate dependent step", e.Step)
+}
+
+// ErrAttestationsFromNotConverged is returned when step verification and
+// artifact pruning do not reach a joint fixed point: no Rego context could be
+// found that equals the attestationsFrom evidence surviving pruning. The
+// verify refuses to answer rather than return a verdict judged on evidence it
+// rejected (#9813).
+type ErrAttestationsFromNotConverged struct {
+	Rounds int
+}
+
+func (e ErrAttestationsFromNotConverged) Error() string {
+	return fmt.Sprintf("attestationsFrom context did not converge with artifact verification after %d rounds", e.Rounds)
 }
 
 // ErrUnknownExternalAttestation is returned by Policy.Validate when a step's

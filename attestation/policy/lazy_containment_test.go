@@ -78,7 +78,7 @@ func TestLazyStop_IsGuardedByTheLazyPredicate(t *testing.T) {
 // second, unreviewed un-truncation policy.
 func TestLazyStop_DemandValveHasOneCaller(t *testing.T) {
 	callers := callersOfMethodInPackage(t, ".", "demand")
-	assert.Equal(t, []string{"verifySteps"}, callers,
+	assert.Equal(t, []string{"verifyStepsRound"}, callers,
 		"demandValve.demand must be called from exactly one place — the depth loop. "+
 			"The valve's soundness argument (mark on an unsatisfied verify, monotone marks, one extra "+
 			"iteration per firing) is a property of that one call site.")

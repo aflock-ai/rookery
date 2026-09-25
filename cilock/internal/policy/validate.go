@@ -368,9 +368,115 @@ func validateSteps(policy *policyDocument, result *ValidationResult) { //nolint:
 		}
 	}
 
-	// Detect circular attestationsFrom dependencies
+	validateDependencyCycles(policy, result)
+}
+
+// validateDependencyCycles refuses a cycle in attestationsFrom, in
+// artifactsFrom, or in their union. Each relation can be acyclic while the
+// union is not, and the engine refuses a cycle in the union
+// (attestation/policy Policy.Validate, #9813). The union is checked only when
+// neither relation has a cycle of its own, so one cycle is reported once.
+func validateDependencyCycles(policy *policyDocument, result *ValidationResult) {
+	errsBefore := len(result.Errors)
 	validateNoCircularDeps(policy, result, "attestationsFrom", func(s policyStep) []string { return s.AttestationsFrom })
 	validateNoCircularDeps(policy, result, "artifactsFrom", func(s policyStep) []string { return s.ArtifactsFrom })
+	if len(result.Errors) != errsBefore {
+		return
+	}
+	if cycle := findCombinedCycle(policy); cycle != "" {
+		result.Errors = append(result.Errors, "Circular dependency across attestationsFrom and artifactsFrom detected: "+cycle)
+		result.Valid = false
+	}
+}
+
+type dependencyEdge struct{ to, kind string }
+
+// dependencyEdges lists a step's edges over both relations,
+// attestationsFrom first.
+func dependencyEdges(s policyStep) []dependencyEdge {
+	out := make([]dependencyEdge, 0, len(s.AttestationsFrom)+len(s.ArtifactsFrom))
+	for _, d := range s.AttestationsFrom {
+		out = append(out, dependencyEdge{d, "attestationsFrom"})
+	}
+	for _, d := range s.ArtifactsFrom {
+		out = append(out, dependencyEdge{d, "artifactsFrom"})
+	}
+	return out
+}
+
+// combinedCycleFinder is a DFS over attestationsFrom ∪ artifactsFrom.
+// kinds[i] is the relation of the edge path[i] -> path[i+1].
+type combinedCycleFinder struct {
+	steps map[string]policyStep
+	state map[string]int // 0 unvisited, 1 on the current path, 2 done
+	path  []string
+	kinds []string
+}
+
+// findCombinedCycle returns the first cycle in name order, rendered with the
+// relation of every hop (`a -[artifactsFrom]-> b -[attestationsFrom]-> a`),
+// or "" when the union is acyclic. Such a cycle lets a step's artifact pruning
+// depend on a Rego verdict whose input depends on that pruning, which the
+// engine has no convergence bound for.
+func findCombinedCycle(policy *policyDocument) string {
+	f := &combinedCycleFinder{steps: policy.Steps, state: map[string]int{}}
+	names := make([]string, 0, len(policy.Steps))
+	for name := range policy.Steps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if f.state[name] != 0 {
+			continue
+		}
+		if cycle := f.visit(name); cycle != "" {
+			return cycle
+		}
+	}
+	return ""
+}
+
+func (f *combinedCycleFinder) visit(name string) string {
+	f.state[name] = 1
+	f.path = append(f.path, name)
+	for _, e := range dependencyEdges(f.steps[name]) {
+		if _, ok := f.steps[e.to]; !ok {
+			continue // undefined references are reported separately
+		}
+		if f.state[e.to] == 1 {
+			return f.render(e)
+		}
+		if f.state[e.to] == 0 {
+			f.kinds = append(f.kinds, e.kind)
+			if cycle := f.visit(e.to); cycle != "" {
+				return cycle
+			}
+			f.kinds = f.kinds[:len(f.kinds)-1]
+		}
+	}
+	f.state[name] = 2
+	f.path = f.path[:len(f.path)-1]
+	return ""
+}
+
+// render formats the cycle closed by edge back, which points at a step on the
+// current path.
+func (f *combinedCycleFinder) render(back dependencyEdge) string {
+	start := 0
+	for i, n := range f.path {
+		if n == back.to {
+			start = i
+			break
+		}
+	}
+	hops := append(append([]string(nil), f.kinds[start:]...), back.kind)
+	nodes := append(append([]string(nil), f.path[start+1:]...), back.to)
+	var b strings.Builder
+	b.WriteString(f.path[start])
+	for i, rel := range hops {
+		fmt.Fprintf(&b, " -[%s]-> %s", rel, nodes[i])
+	}
+	return b.String()
 }
 
 func validateRootFunctionaryConstraints(stepName string, index int, constraint *certConstraint, result *ValidationResult) {

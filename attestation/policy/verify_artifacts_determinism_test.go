@@ -62,9 +62,10 @@
 // for a semantic one.
 //
 // Ordering choice — name sort, NOT topologicalSort. topologicalSort orders by
-// AttestationsFrom only, while the edge that matters here is artifactsFrom,
-// which is not cycle-checked at all (§10.5) — a mutually-referencing
-// artifactsFrom pair is legal today and has no topological order. A total order
+// AttestationsFrom only, while the edge that matters here is artifactsFrom.
+// Validate refuses artifactsFrom cycles since #9813, but these tests drive
+// verifyArtifacts directly on unvalidated policies, where a mutually-referencing
+// artifactsFrom pair has no topological order. A total order
 // over step names is always defined, and the fixed point's iteration cap —
 // bounded by the TOTAL number of passed collections, since that is what shrinks
 // — means even a cyclic artifactsFrom pair terminates.
@@ -561,9 +562,10 @@ func allAnalyzed(byStep map[string]StepResult) bool {
 // on topologicalSort being unstable:
 //
 //   - topologicalSort orders by AttestationsFrom. The edge that governs
-//     artifact verification is artifactsFrom, which is NOT cycle-checked (the
-//     DFS walks only AttestationsFrom), so a mutually-referencing artifactsFrom
-//     pair is legal today and has no topological order at all.
+//     artifact verification is artifactsFrom. Validate refuses cycles in
+//     attestationsFrom ∪ artifactsFrom since #9813, but verifyArtifacts is
+//     also driven on unvalidated policies, where such a pair has no
+//     topological order at all.
 //   - and the property being protected is REASON determinism, which needs only
 //     SOME fixed total order, not a dependency-correct one. See
 //     failShapedCorpus: step c records "mismatched digests for app.bin" when

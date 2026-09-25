@@ -307,6 +307,62 @@ func TestValidateRawPolicy_CircularAttestationsFrom(t *testing.T) {
 	}
 }
 
+func combinedCyclePolicy(aFrom, bFrom string) []byte {
+	return []byte(`{
+		"expires": "2030-01-01T00:00:00Z",
+		"steps": {
+			"a": {
+				"name": "a",
+				"functionaries": [{"type": "publickey", "publickeyid": "key-1"}],
+				"attestations": [{"type": "https://aflock.ai/attestations/command-run/v0.1"}],
+				` + aFrom + `
+			},
+			"b": {
+				"name": "b",
+				"functionaries": [{"type": "publickey", "publickeyid": "key-1"}],
+				"attestations": [{"type": "https://aflock.ai/attestations/command-run/v0.1"}],
+				` + bFrom + `
+			}
+		},
+		"publickeys": {
+			"key-1": {"keyid": "key-1"}
+		}
+	}`)
+}
+
+// #9813: each relation is acyclic, but a artifactsFrom b plus b
+// attestationsFrom a is a cycle in their union, which the engine refuses. The
+// static validator must refuse it too and name every hop.
+func TestValidateRawPolicy_CombinedAttestationsFromArtifactsFromCycle(t *testing.T) {
+	result := ValidateRawPolicy(context.Background(),
+		combinedCyclePolicy(`"artifactsFrom": ["b"]`, `"attestationsFrom": ["a"]`))
+	assert.False(t, result.Valid, "a cycle through artifactsFrom and attestationsFrom must be refused")
+	assert.Contains(t, result.Errors,
+		"Circular dependency across attestationsFrom and artifactsFrom detected: a -[artifactsFrom]-> b -[attestationsFrom]-> a")
+
+	// The same edges pointing one way are not a cycle.
+	ok := ValidateRawPolicy(context.Background(),
+		combinedCyclePolicy(`"artifactsFrom": ["b"]`, `"attestationsFrom": []`))
+	assert.True(t, ok.Valid, "an acyclic union must validate: %v", ok.Errors)
+	for _, e := range ok.Errors {
+		assert.NotContains(t, e, "Circular", "an acyclic union must not be reported as a cycle")
+	}
+
+	// A cycle within one relation keeps its existing message and is not
+	// reported a second time by the union check.
+	pair := ValidateRawPolicy(context.Background(),
+		combinedCyclePolicy(`"artifactsFrom": ["b"]`, `"artifactsFrom": ["a"]`))
+	assert.False(t, pair.Valid)
+	circular := 0
+	for _, e := range pair.Errors {
+		if strings.Contains(e, "Circular") {
+			circular++
+			assert.Contains(t, e, "Circular artifactsFrom dependency detected")
+		}
+	}
+	assert.Equal(t, 1, circular)
+}
+
 // ===========================================================================
 // Additional edge case tests for validate
 // ===========================================================================
