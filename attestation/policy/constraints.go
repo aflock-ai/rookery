@@ -38,7 +38,9 @@ const (
 	AllowAllConstraint = "*"
 
 	// globMatchTimeout bounds a single glob match against a ReDoS-style
-	// pathological pattern (#5756). gobwas/glob has no internal time bound, and
+	// pathological pattern (#5756). The matcher is now RE2 (certglob.go, #9826),
+	// which is linear-time, so this is defence in depth; it was added when
+	// gobwas/glob, which has no internal time bound, did the matching, and
 	// this PR EXPANDS glob usage to every multi-value SAN field, so an untrusted
 	// or hand-fat-fingered pattern (nested "{" + many "*") could spin. A match
 	// that exceeds this deadline is treated as a constraint FAILURE (fail closed),
@@ -359,7 +361,7 @@ func (cc CertConstraint) checkExtensions(ext []pkix.Extension) error {
 		value := extensionsValue.FieldByIndex(field.Index).String()
 
 		// Guard the glob engine the same way checkCertConstraintGlob does (#5756):
-		// only invoke gobwas when the constraint actually contains a glob
+		// only invoke the matcher when the constraint actually contains a glob
 		// metacharacter. A plain literal exact-matches, skipping the engine (and
 		// its ReDoS surface) entirely.
 		if !containsGlobMeta(constraint) {
@@ -369,7 +371,7 @@ func (cc CertConstraint) checkExtensions(ext []pkix.Extension) error {
 			continue
 		}
 
-		fieldGlob, err := glob.Compile(constraint)
+		fieldGlob, err := compileCertGlob(constraint)
 		if err != nil {
 			return fmt.Errorf("invalid glob pattern %+q for cert field %s: %w", constraint, field.Name, err)
 		}
@@ -427,7 +429,7 @@ func checkCertConstraintGlob(attribute, constraint, value string) error {
 	// single-value cert identity field (CommonName) is case-insensitive per RFC,
 	// so an author's "Example.COM" must accept a cert "example.com".
 	if containsGlobMeta(constraint) {
-		g, err := glob.Compile(normalizeGlobValue(constraint))
+		g, err := compileCertGlob(normalizeGlobValue(constraint))
 		if err != nil {
 			return fmt.Errorf("invalid glob pattern %q for cert %s: %w", constraint, attribute, err)
 		}
@@ -598,7 +600,7 @@ func compileGlobs(attribute string, globs []string) ([]glob.Glob, error) {
 	compiled := make([]glob.Glob, len(globs))
 	for i, pattern := range globs {
 		warnGlobOnce("multi|"+attribute+"|"+pattern, "cert %s constraint %q is being matched via GLOB (not exact match); confirm this is intended", attribute, pattern)
-		g, err := glob.Compile(normalizeGlobValue(pattern))
+		g, err := compileCertGlob(normalizeGlobValue(pattern))
 		if err != nil {
 			return nil, fmt.Errorf("invalid glob pattern %q for cert %s: %w", pattern, attribute, err)
 		}
@@ -651,9 +653,10 @@ func dropEmpty(in []string) []string {
 	return out
 }
 
-// safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob library
-// can panic on certain patterns that compile successfully but trigger out-of-bounds
-// access during matching (e.g., "0*,{*,"). We treat panics as match failures.
+// safeGlobMatch wraps glob.Match with panic recovery. The gobwas/glob matcher,
+// which did the matching before #9826, could panic on patterns that compile
+// but trigger out-of-bounds access (e.g., "0*,{*,"). The RE2 matcher does not,
+// but a panic is still treated as a match failure.
 func safeGlobMatch(g glob.Glob, s string) (matched bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
