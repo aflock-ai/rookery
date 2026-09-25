@@ -66,6 +66,7 @@ The `material` attestor itself registers no flags. Its behavior is controlled by
 |---|---|
 | `--workingdir` / `-d` | Root of the walk |
 | `--hashes` | Hash algorithms applied to every file (default `sha256`) — v0.3 commits only the sha256 leaf to the tree |
+| `--attestor-material-bind RECORDED_PATH=FILE` | Repeatable. Hashes `FILE` before the command runs and records it as a material under `RECORDED_PATH`, in both walk and trace mode. Policy `artifactsFrom` compares by path, so this lets a step consume an upstream product under the path the upstream step recorded it at, e.g. a release sign step recording the unsigned binary as `/tmp/build/cilock`. The digest is always of the file's bytes before the command; only the key is chosen. A missing file, a malformed spec, or a capture that recorded the same path with a different digest fails the attestor. |
 | `--dirhash-glob` | Glob patterns of directories to collapse into a single `dirhash` digest (excluded from the v0.3 leaf set because the dirhash key isn't a raw file content sha256) |
 
 ## Subject behavior

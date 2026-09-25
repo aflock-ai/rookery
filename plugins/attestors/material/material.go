@@ -174,7 +174,7 @@ func init() {
 	// the "material-v0.1" name + .../material/v0.1 predicate URI.
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return New()
-	})
+	}, configOptions()...)
 	detection.Register(Name, detectorYAML)
 }
 
@@ -259,6 +259,11 @@ type Attestor struct {
 	// the walker produced; consumers that need a portable form can
 	// use the leaves slice instead. Not marshaled.
 	materials map[string]cryptoutil.DigestSet `json:"-"`
+
+	// bindings are the --attestor-material-bind specs and bound their
+	// digests, taken in the material phase (see bind.go, #9946).
+	bindings []binding                       `json:"-"`
+	bound    map[string]cryptoutil.DigestSet `json:"-"`
 }
 
 // MaterialLeaf is one (path, file-digest, leaf-hash) triple. The leaf
@@ -336,6 +341,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		return fmt.Errorf("material attestor: %w", err)
 	}
 	a.captureMode = "walk"
+	// Bound files are hashed now, in both modes: this is the last point
+	// before the wrapped command can change them.
+	if err := a.hashBindings(ctx); err != nil {
+		return fmt.Errorf("material attestor: %w", err)
+	}
 
 	if resolved == attestation.CaptureTrace {
 		// Emit an empty Merkle tree (RFC 6962 §2.1: empty input → sha256
@@ -375,6 +385,9 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	)
 	if err != nil {
 		return fmt.Errorf("material attestor: record artifacts: %w", err)
+	}
+	if err := a.mergeBound(mats); err != nil {
+		return fmt.Errorf("material attestor: %w", err)
 	}
 
 	a.materials = mats
@@ -429,17 +442,20 @@ func (a *Attestor) Finalize(ctx *attestation.AttestationContext) error {
 	}
 
 	entries := probe.TraceInputs()
-	if len(entries) == 0 {
+	if len(entries) == 0 && len(a.bound) == 0 {
 		return nil
 	}
 
-	mats := make(map[string]cryptoutil.DigestSet, len(entries))
+	mats := make(map[string]cryptoutil.DigestSet, len(entries)+len(a.bound))
 	for path, e := range entries {
 		ds, err := cryptoutil.NewDigestSet(e.Digest)
 		if err != nil {
 			continue
 		}
 		mats[path] = ds
+	}
+	if err := a.mergeBound(mats); err != nil {
+		return fmt.Errorf("material attestor finalize: %w", err)
 	}
 	a.materials = mats
 

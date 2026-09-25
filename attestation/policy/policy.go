@@ -439,6 +439,10 @@ func (p Policy) validateStepShape(name string, step Step) error {
 		return fmt.Errorf("step %q: %w", name, err)
 	}
 
+	if err := validateRequiredArtifacts(step); err != nil {
+		return fmt.Errorf("step %q: %w", name, err)
+	}
+
 	for _, att := range step.Attestations {
 		if err := att.Validate(); err != nil {
 			return fmt.Errorf("step %q: %w", name, err)
@@ -2520,7 +2524,8 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 	}
 	// covered collects every artifact path of every upstream collection that
 	// passed the per-edge compare, across ALL artifactsFrom edges, for the
-	// AllowedUntracked check after the loop (#9815).
+	// AllowedUntracked (#9815) and RequiredArtifacts (#9946) checks after the
+	// loop.
 	covered := make(map[string]struct{})
 	for _, artifactsFrom := range step.ArtifactsFrom {
 		refResult, ok := collectionsByStep[artifactsFrom]
@@ -2622,7 +2627,10 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 		}
 	}
 
-	return checkAllowedUntracked(step, mats, covered)
+	if err := checkAllowedUntracked(step, mats, covered); err != nil {
+		return err
+	}
+	return checkRequiredArtifacts(step, mats, covered)
 }
 
 // The empty-collection diagnostic (diagnoseEmptyCollectionResult and its

@@ -499,6 +499,11 @@ func (in *Step) DeepCopyInto(out *Step) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.RequiredArtifacts != nil {
+		in, out := &in.RequiredArtifacts, &out.RequiredArtifacts
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.TimestampConstraint != nil {
 		in, out := &in.TimestampConstraint, &out.TimestampConstraint
 		*out = new(TimestampConstraint)

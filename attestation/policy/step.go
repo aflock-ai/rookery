@@ -76,6 +76,21 @@ type Step struct {
 	// ">= 1 shared path" overlap rule still applies.
 	AllowedUntracked []string `json:"allowedUntracked,omitempty" jsonschema:"title=Allowed Untracked,description=Glob patterns for material paths permitted without a chain-of-custody proof (e.g. '/usr/lib/**' for build toolchain). Each entry weakens chain integrity; use sparingly."`
 
+	// RequiredArtifacts names the artifacts this step MUST have consumed from
+	// its artifactsFrom steps (#9946). Each entry is a glob (gobwas/glob, '/'
+	// separator, matched against the lexically cleaned material path) that at
+	// least one of this step's materials must match, where that material's
+	// path is also an artifact of an accepted artifactsFrom collection. Such a
+	// path's digest was already compared by the artifactsFrom check, so a match
+	// proves this step consumed exactly the bytes the upstream step recorded.
+	//
+	// Without it, artifactsFrom is satisfied by ANY shared path. A release sign
+	// step that never recorded the binary, or signed a different one, passed on
+	// the shared system libraries alone. It is not gated by any hardening
+	// option: a policy that declares it always enforces it, and an
+	// absent match fails closed.
+	RequiredArtifacts []string `json:"requiredArtifacts,omitempty" jsonschema:"title=Required Artifacts,description=Glob patterns of which each must match a material that an artifactsFrom step produced with an equal digest (e.g. '/tmp/build/cilock{,.exe}'). Fails closed when no such material exists."`
+
 	// TimestampConstraint requires this step's collections to carry an
 	// RFC3161 TSA-verified signing time inside the declared window
 	// (notBefore/notAfter) and/or within maxAge of verification time.

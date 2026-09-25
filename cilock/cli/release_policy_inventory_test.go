@@ -257,6 +257,13 @@ func TestReleasePolicyInventoryWorkflow(t *testing.T) {
 				for i, name := range spec.steps {
 					step := p.Steps[name]
 					step.Functionaries = []policy.Functionary{{Type: "publickey", PublicKeyID: keyID}}
+					// The real requiredArtifacts name the release path
+					// (/tmp/build/cilock); the fixture records its binary as
+					// "artifact". Map the requirement onto the fixture path so it
+					// stays enforced here (#9946).
+					if len(step.RequiredArtifacts) > 0 {
+						step.RequiredArtifacts = []string{"artifact"}
+					}
 					p.Steps[name] = step
 					materialMode, budget := "detached", 0
 					if mode == "inline-product" {
@@ -351,6 +358,21 @@ func TestReleasePolicyInventoryWorkflow(t *testing.T) {
 				if !seeded {
 					require.Error(t, verifyErr, "seeded with the binary alone, steps reachable only through the shared BackRef must not be found")
 					require.Empty(t, result.StepResults[spec.steps[0]].Passed, "the first step is reachable only through the shared BackRef, which is no longer followed")
+					return
+				}
+				// A step whose policy pins requiredArtifacts cannot be satisfied by
+				// an empty material set: it consumed nothing, so it did not
+				// consume the artifact (#9946).
+				requires := len(p.Steps[spec.steps[len(spec.steps)-1]].RequiredArtifacts) > 0
+				if mode == "empty-material" && requires {
+					require.Error(t, verifyErr)
+					reasons := verifyErr.Error()
+					for _, step := range result.StepResults {
+						for _, rejected := range step.Rejected {
+							reasons += "\n" + rejected.Reason.Error()
+						}
+					}
+					require.Contains(t, reasons, "requiredArtifacts")
 					return
 				}
 				if mode == "inline-product" || mode == "detached-product" || mode == "empty-material" || mode == "omitted-material" && !spec.chain {
