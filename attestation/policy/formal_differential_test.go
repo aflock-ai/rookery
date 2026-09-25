@@ -62,12 +62,17 @@ import (
 
 const diffUnit = 10_000_000_000 // the Lean model's 1.0
 
+// cilockEvaluatorsModel is the Lean project the oracle is built from. It is a
+// path literal on purpose: `jade check formal-differential-inputs` reads it to
+// prove a change to the model selects this test.
+const cilockEvaluatorsModel = "../../formal/cilock-evaluators"
+
 func diffOracle(t *testing.T) string {
 	t.Helper()
 	if p := os.Getenv("CILOCK_EVALUATORS_ORACLE"); p != "" {
 		return p
 	}
-	p, err := filepath.Abs(filepath.Join("..", "..", "formal", "cilock-evaluators", ".lake", "build", "bin", "cilock-evaluators-oracle"))
+	p, err := filepath.Abs(filepath.Join(cilockEvaluatorsModel, ".lake", "build", "bin", "cilock-evaluators-oracle"))
 	require.NoError(t, err)
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("Lean oracle not built (%s); run `lake build` in formal/cilock-evaluators", p)

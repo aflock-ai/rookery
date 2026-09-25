@@ -127,7 +127,9 @@ func TestFormalDifferentialSigstoreDSSE(t *testing.T) {
 		if c.Timestamp != "absent" {
 			signOpts = append(signOpts, SignWithTimestampers(timestamp.FakeTimestamper{T: at}))
 		}
-		env, err := Sign("formal/sigstore", bytes.NewReader([]byte("payload")), signOpts...)
+		// The payload type must not read as a path into formal/: the
+		// formal-differential-inputs gate would take it for a model input.
+		env, err := Sign("application/vnd.formal-sigstore+json", bytes.NewReader([]byte("payload")), signOpts...)
 		require.NoError(t, err)
 		if !c.SigOK {
 			env.Signatures[0].Signature[0] ^= 0xff
