@@ -37,7 +37,9 @@ import (
 	"github.com/aflock-ai/rookery/attestation/intoto"
 )
 
-const consumeModel = "asbuilt"
+// The typed-read fix landed in #10060 (in-toto only when typed so, from the
+// verified bytes, of a requested type).
+const consumeModel = "required"
 
 type formalDecoded struct {
 	Type          string `json:"type"`

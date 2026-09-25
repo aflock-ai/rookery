@@ -26,9 +26,9 @@ rookery-relative, because this directory syncs to aflock-ai/rookery.
 | `toCollectionReq_reads`, `externalReadReq_sameBytes` | proved | the fixed readers read in-toto only when it is typed so, from the verified bytes, of a requested type |
 | `decodesReq_iff` | proved | the fixed decoder accepts exactly the envelopes the parsing rules allow |
 | `ce_type_v01` | refuted as built | `NewStatement` signs `_type` v0.1 (known: #9827, #9841) |
-| `ce_empty_predicateType`, `ce_predicate_array`, `ce_subject_without_digest` | refuted as built | #10030 |
-| `ce_foreign_payload_type`, `ce_external_not_from_verified_bytes`, `ce_external_unrequested_type` | refuted as built | #10026 |
-| `ce_url_safe_refused`, `ce_missing_fields_decode` | refuted as built | #10029 |
+| `ce_empty_predicateType`, `ce_predicate_array`, `ce_subject_without_digest` | refuted as built; fixed by #10058 | #10030 |
+| `ce_foreign_payload_type`, `ce_external_not_from_verified_bytes`, `ce_external_unrequested_type` | refuted as built; fixed by #10060 | #10026 |
+| `ce_url_safe_refused`, `ce_missing_fields_decode` | refuted as built; fixed by #10057 | #10029 |
 
 Every theorem depends only on Lean's core axioms (`propext`, `Quot.sound`,
 `Classical.choice`); `DsseIntoto/Audit.lean` prints them on every build.
@@ -70,7 +70,9 @@ real code. They skip when the vectors are not on disk and FAIL instead when
 
 Constants `envelopeDecodeModel`, `newStatementModel` and `consumeModel` name
 the model each area must match: `asbuilt` until its fix lands, then
-`required`.
+`required`. All three fixes have landed (#10057, #10058, #10060), so all
+three name `required`; the `ce_*` counterexamples stand as statements about
+the code before those fixes.
 
 Sabotage (measured on the pinned commit): PAE length taken mod 1000 gives
 24/96 PAE mismatches; dropping the #5237 no-timestamp gate gives 7/819

@@ -153,7 +153,11 @@ func buildStatementEnvelope(t *testing.T, predicateType string, subjectDigest st
 // type yields a structured Attestor (never RawAttestation).
 func TestArchivistaSource_SearchByPredicateType_HappyPath_Typed(t *testing.T) {
 	const (
-		predicateType = "https://slsa.dev/provenance/v1"
+		// A test-only URI: factories are process-global and never
+		// unregistered (unregisterTestAttestation is a no-op), so the real
+		// SLSA URI would make every later test in the package decode SLSA
+		// predicates through fakeSLSA (it broke TestFormalConsumeDifferential).
+		predicateType = "https://example.com/archivista-test/slsa-provenance/v1"
 		subjectDigest = "deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebab0"
 		label         = "gitoid-slsa-v1-typed"
 	)

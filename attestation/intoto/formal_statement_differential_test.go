@@ -30,7 +30,9 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 )
 
-const newStatementModel = "asbuilt"
+// The v1 body fix landed in #10058 (empty predicate type, non-object
+// predicate, subject without a digest).
+const newStatementModel = "required"
 
 type formalStmtOut struct {
 	Error         string           `json:"error"`

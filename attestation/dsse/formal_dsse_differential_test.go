@@ -45,7 +45,8 @@ import (
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 )
 
-const envelopeDecodeModel = "asbuilt"
+// The decode fix landed in #10057 (url-safe base64, required fields).
+const envelopeDecodeModel = "required"
 
 func formalVectorsPath() string {
 	return filepath.Join("..", "..", "formal", "dsse-intoto", "vectors", "dsse-intoto.json")
