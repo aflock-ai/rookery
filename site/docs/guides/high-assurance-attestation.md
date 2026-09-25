@@ -45,8 +45,8 @@ workloads, less on builds dominated by compile time). In exchange you get:
 
 | value | behavior |
 |-------|----------|
-| `` (unset) / `auto` | Probe for fanotify; activate if the probe succeeds. Otherwise continue without it and print a warning. `--hardening standard` (the default) sets this. |
-| `0` / `off` | Disabled. `--hardening off` sets this. |
+| `` (unset) / `auto` | Probe for fanotify; activate if the probe succeeds. Otherwise continue without it, print a warning, and record the gap as `summary.coverage` kind `fanotify-unavailable`. `--hardening standard` (the default) sets this. |
+| `0` / `off` | Disabled (recorded as coverage gap `fanotify-disabled`). `--hardening off` sets this. |
 | `1` / `on` | REQUIRE fanotify. Error if probe fails (e.g., CAP_SYS_ADMIN missing). `--hardening strict` sets this. |
 
 **Capabilities:** CAP_SYS_ADMIN required. cilock-action's sudo path
@@ -138,32 +138,89 @@ provenance per event:
 
 ## Recommended policy.rego snippet
 
+A step's rego policy receives the command-run attestation itself as `input`,
+so the trace summary is `input.summary` (not `input.predicate.summary`). The
+verifier evaluates each module's `deny` rule and refuses a module that has
+none. These snippets are evaluated against real command-run attestations by
+`cilock/cli/guide_rego_examples_test.go`, so a change here that
+stops them firing fails that test.
+
 ```rego
-package cilock
+package cilock.fanotify
 
-default allow := false
-
-allow if {
-  count(violations) == 0
+deny[msg] {
+  not input.summary.diagnostics.fanotifyAvailable
+  msg := "release-grade attestation requires fanotify (CILOCK_FANOTIFY=1); the trace does not record it as active"
 }
 
-violations[msg] {
-  diagnostics := input.predicate.summary.diagnostics
-  not diagnostics.fanotifyAvailable
-  msg := "release-grade attestation requires fanotify; CILOCK_FANOTIFY=1 not set or unavailable"
+deny[msg] {
+  timeouts := object.get(input.summary.diagnostics, "fanotifyTimeouts", 0)
+  timeouts > 0
+  msg := sprintf("fanotify handler timeouts > 0 (got %d): degraded attestation", [timeouts])
 }
 
-violations[msg] {
-  diagnostics := input.predicate.summary.diagnostics
-  diagnostics.fanotifyTimeouts > 0
-  msg := sprintf("fanotify handler timeouts > 0 (got %d) — degraded attestation",
-    [diagnostics.fanotifyTimeouts])
+deny[msg] {
+  drops := object.get(input.summary.diagnostics, "ringbufReadTapDrops", 0)
+  drops > 0
+  msg := sprintf("BPF read-tap drops > 0 (got %d)", [drops])
+}
+```
+
+Read each field from `input` inside the negation, as above. Binding
+`diagnostics := input.summary.diagnostics` first and then testing
+`not diagnostics.fanotifyAvailable` fails OPEN: when `diagnostics` is absent
+the binding is undefined, the rule body stops there, and nothing is denied.
+Counters the attestor omits when they are zero are read with `object.get`
+and a default: the verifier refuses a policy whose deny reads a field the
+attestation does not carry, because such a deny can never fire.
+
+### Requiring a complete trace: `summary.coverage`
+
+Every traced command-run predicate carries `summary.coverage`. It holds the
+tracer that ran (`ebpf`, `ptrace+seccomp`, or `sandbox-exec+oslog` on macOS),
+a `complete` boolean that is always written out, and one `gaps[]` entry for
+each known blind spot, each with a stable `kind`. The ptrace fallback that
+unprivileged containers get, and the macOS tracer, are never `complete`, and
+they say why. A predicate from an older cilock has no `coverage`, so the rule
+below refuses it as well:
+
+```rego
+package cilock.trace_complete
+
+deny[msg] {
+  not input.summary.coverage.complete
+  msg := "trace is incomplete or states no coverage"
+}
+```
+
+To accept specific known limits, allow the named gap kinds and deny every
+other kind. Denying unknown kinds means a gap kind added later is refused
+until someone reviews it. Iterating `gaps` finds nothing to deny when
+`coverage` is absent or states no gaps, so those cases need rules of their
+own. `object.get` supplies the optional fields, because a message built from
+an undefined field is itself undefined and would silently drop the denial:
+
+```rego
+package cilock.trace_gaps
+
+accepted_gaps := {"syscalls-untraced", "fanotify-unavailable"}
+
+deny[msg] {
+  not input.summary.coverage
+  msg := "trace states no coverage (untraced, or produced by an older cilock)"
 }
 
-violations[msg] {
-  diagnostics := input.predicate.summary.diagnostics
-  diagnostics.ringbufReadTapDrops > 0
-  msg := sprintf("BPF read-tap drops > 0 (got %d)", [diagnostics.ringbufReadTapDrops])
+deny[msg] {
+  input.summary.coverage.complete != true
+  count(object.get(input.summary.coverage, "gaps", [])) == 0
+  msg := "trace is incomplete but names no gaps"
+}
+
+deny[msg] {
+  gap := object.get(input.summary.coverage, "gaps", [])[_]
+  kind := object.get(gap, "kind", "")
+  not accepted_gaps[kind]
+  msg := sprintf("trace gap %q: %s", [kind, object.get(gap, "detail", "")])
 }
 ```
 

@@ -14,7 +14,8 @@ const EnvVarFanotify = "CILOCK_FANOTIFY"
 type fanotifySession struct{}
 
 // maybeStartFanotify: fanotify is Linux-only. The outcome is "disabled" so a
-// caller that asks is never told it ran.
+// caller that asks is never told it ran; coverage ignores it for non-Linux
+// backends.
 func maybeStartFanotify(workingDir string, skipHash func(string) bool) (*fanotifySession, fanotifyOutcome, error) {
 	return nil, fanotifyOutcome{State: fanotifyDisabled, Reason: "fanotify is Linux-only"}, nil
 }

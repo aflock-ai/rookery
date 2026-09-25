@@ -175,6 +175,10 @@ type RunSummary struct {
 	// evidence, and it reaches an operator here instead of sitting in a
 	// counter nothing reads.
 	ForgedReportRecords uint64 `json:"forged_report_records,omitempty"`
+	// TraceCoverage echoes the signed command-run summary.coverage: which
+	// tracer ran and the kinds of gap it recorded. Operator-facing only; the
+	// predicate is the evidence.
+	TraceCoverage *TraceCoverageSummary `json:"trace_coverage,omitempty"`
 	// NetworkEgress lists the external destinations the trace observed
 	// (hostname/address with port). Empty can mean no observed egress or no trace;
 	// Tracing and NoExternalNetworkEgressObserved disambiguate those states.
@@ -207,6 +211,14 @@ type RunSummary struct {
 	// querying the evidence store months later. nil when no attestor in the run
 	// declared a capture expectation.
 	Capture *detection.CaptureReport `json:"capture,omitempty"`
+}
+
+// TraceCoverageSummary is the run-summary view of command-run
+// summary.coverage.
+type TraceCoverageSummary struct {
+	Tracer   string   `json:"tracer"`
+	Complete bool     `json:"complete"`
+	Gaps     []string `json:"gaps,omitempty"`
 }
 
 // ComputeStandardsAssessment records the standards this producer-side summary
@@ -381,6 +393,7 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 	// Narrow network observations from command tracing. They are printed as
 	// observations, never promoted into a hermeticity or standards claim.
 	b.WriteString(s.buildEvidenceLine())
+	b.WriteString(s.traceCoverageLine())
 	// Standards assessments remain separate from authentication strength. AAL
 	// describes the platform session; it is not a SLSA or ALPS level.
 	if s.SLSAVerdict != "" {
@@ -442,6 +455,24 @@ func (s *RunSummary) buildEvidenceLine() string {
 	}
 	return fmt.Sprintf("  network:    external egress observed (%s trace: %s); hermeticity not assessed\n",
 		s.Tracing, networkEgressHint(s.NetworkEgress))
+}
+
+// traceCoverageLine states which tracer ran and whether its trace is
+// complete, naming the gap kinds when it is not. "" when there is no coverage.
+func (s *RunSummary) traceCoverageLine() string {
+	c := s.TraceCoverage
+	if c == nil {
+		return ""
+	}
+	if c.Complete {
+		return fmt.Sprintf("  trace:      %s, complete (no recorded gaps)\n", sanitizeForTerminal(c.Tracer))
+	}
+	gaps := make([]string, 0, len(c.Gaps))
+	for _, g := range c.Gaps {
+		gaps = append(gaps, sanitizeForTerminal(g))
+	}
+	return fmt.Sprintf("  trace:      %s, PARTIAL (gaps: %s; see summary.coverage in the attestation)\n",
+		sanitizeForTerminal(c.Tracer), strings.Join(gaps, ", "))
 }
 
 // subjectNames returns the (sorted) subject names for the compact human line,

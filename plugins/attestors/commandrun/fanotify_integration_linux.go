@@ -30,8 +30,8 @@ import (
 //     every product digest and shipped an empty product tree. Defaulting
 //     it ON means correct product capture out of the box.
 //   - "auto": enable if Probe succeeds; otherwise continue without it and
-//     report the reason (fanotifyOutcome), which runCmd prints as a
-//     warning. Never silent.
+//     report the reason (fanotifyOutcome), which runCmd prints and records
+//     as a summary.coverage gap. Never silent.
 //   - "1" / "on": REQUIRE fanotify; error if Probe fails
 //   - "0" / "off" / "off-explicit": explicitly disable (BPF-only)
 const EnvVarFanotify = "CILOCK_FANOTIFY"

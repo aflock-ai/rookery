@@ -84,7 +84,7 @@ type ptraceContext struct {
 	// could not be read (typically: the thread was SIGKILLed while stopped).
 	// Each is an event this trace did not record. Published as
 	// diagnostics.ptraceSyscallStopsLost (a hard drop for
-	// --require-zero-drops); never fatal.
+	// --require-zero-drops) and a coverage gap; never fatal.
 	syscallStopsLost uint64
 
 	// mu guards the processes map and the ProcessInfo entries within

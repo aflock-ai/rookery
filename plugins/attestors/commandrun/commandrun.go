@@ -956,6 +956,13 @@ type TraceSummary struct {
 	// process-tree provenance. Hex-encoded SHA-256.
 	FanotifyOnlyDigests map[string]string `json:"fanotifyOnlyDigests,omitempty"`
 
+	// Coverage names the tracer that ran and every known way this trace is
+	// incomplete, with the same meaning on every platform. A policy that
+	// requires a complete trace checks coverage.complete == true (absent
+	// coverage, from an older producer, must fail that check). See
+	// trace_coverage.go and docs/design/trace-coverage.md.
+	Coverage *TraceCoverage `json:"coverage,omitempty"`
+
 	// InterestingPaths is a short list of paths an agent should
 	// look at first — anything outside the "normal" build paths
 	// (/etc/passwd, /proc/self/environ, etc.) or anything in the
@@ -1641,6 +1648,10 @@ type CommandRun struct {
 	// ptraceSyscallStopsLost is copied from the ptrace tracer after the
 	// trace; surfaced as diagnostics.ptraceSyscallStopsLost.
 	ptraceSyscallStopsLost uint64
+
+	// fanotifyOutcome records whether the fanotify gate ran and, if not,
+	// why. Feeds summary.coverage.
+	fanotifyOutcome fanotifyOutcome
 
 	// darwinTraceDiag is stashed by the macOS sandbox-report tracer during
 	// trace() and folded into the Summary afterwards. It cannot be written
@@ -2712,12 +2723,14 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 			return err
 		}
 		r.fanotifySession = fanSession
+		r.fanotifyOutcome = fanOutcome
 		if fanOutcome.State == fanotifyUnavailable {
 			// --hardening standard (the default) degrades here instead of
-			// refusing; say so where the operator will see it.
+			// refusing; say so where the operator will see it, and the
+			// predicate records it as a coverage gap.
 			fmt.Fprintf(os.Stderr, "cilock-trace: fanotify unavailable (%s); file digests fall back to open-time "+
-				"path hashes. Use --hardening strict to require fanotify.\n",
-				fanOutcome.Reason)
+				"path hashes. Recorded as summary.coverage gap %q; use --hardening strict to require fanotify.\n",
+				fanOutcome.Reason, GapFanotifyUnavailable)
 		}
 		// Optional fs-verity sealing of products. When the FS
 		// supports it, every write-only file gets Merkle-rooted at
@@ -2881,6 +2894,13 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 				r.Summary.Diagnostics.FsVeritySealFailures = r.fsVerityState.SealFailures.Load()
 			}
 			r.Summary.Diagnostics.PtraceSyscallStopsLost = r.ptraceSyscallStopsLost
+			// Coverage is derived LAST, from the diagnostics just
+			// assembled, so it can never disagree with them.
+			r.Summary.Coverage = deriveTraceCoverage(traceCoverageInput{
+				Backend:     r.resolvedTraceBackend,
+				Diagnostics: r.Summary.Diagnostics,
+				Fanotify:    r.fanotifyOutcome,
+			})
 			if r.resolvedCaptureMode != "" {
 				r.Summary.CaptureMode = r.resolvedCaptureMode
 				// TraceModeDetail differentiates the backend within

@@ -364,8 +364,9 @@ var execLookPath = exec.LookPath
 //
 //   - "off"      — fanotify off, fs-verity off, no require-zero-drops
 //   - "standard": fanotify used when available (CILOCK_FANOTIFY=auto): when
-//     the kernel refuses it, the run continues and warns; fs-verity
-//     opportunistic, drops surfaced
+//     the kernel refuses it, the run continues, warns, and records the gap in
+//     summary.coverage (kind "fanotify-unavailable"); fs-verity opportunistic,
+//     drops surfaced
 //   - "strict"   — fanotify required, fs-verity required, drops fail
 //
 // standard used to seed CILOCK_FANOTIFY=1, which maybeStartFanotify treats as
@@ -1586,6 +1587,14 @@ func stampNetworkObservation(s *options.RunSummary, attestors []attestation.Atte
 			return
 		}
 		s.Tracing = mode
+		if cr.Summary != nil && cr.Summary.Coverage != nil {
+			cov := cr.Summary.Coverage
+			tc := &options.TraceCoverageSummary{Tracer: cov.Tracer, Complete: cov.Complete}
+			for _, g := range cov.Gaps {
+				tc.Gaps = append(tc.Gaps, g.Kind)
+			}
+			s.TraceCoverage = tc
+		}
 		s.NetworkEgress = externalEgress(cr.Processes)
 		// AN EMPTY EGRESS LIST MEANS NOTHING UNLESS THE CHANNEL THAT WOULD
 		// HAVE REPORTED EGRESS IS KNOWN TO WORK. The check above already

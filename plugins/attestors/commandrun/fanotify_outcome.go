@@ -23,7 +23,7 @@ const (
 
 // fanotifyOutcome records whether the fanotify gate ran, and if not, why.
 // The zero value (State "") means nothing recorded it; no consumer may read
-// that as "active".
+// that as "active" (deriveTraceCoverage records it as a gap).
 type fanotifyOutcome struct {
 	State  string
 	Reason string

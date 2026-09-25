@@ -188,6 +188,24 @@ func TestAutoFallbackToPtraceTracesTheTree(t *testing.T) {
 	if _, ok := findProgram(rc, "cat").OpenedFiles[input]; !ok {
 		t.Errorf("cat's open of %s was not recorded", input)
 	}
+
+	// Coverage states the tracer and that ptrace + fanotify-off is partial.
+	if rc.Summary == nil || rc.Summary.Coverage == nil {
+		t.Fatal("traced run carries no summary.coverage")
+	}
+	cov := rc.Summary.Coverage
+	if cov.Tracer != traceModePtrace.String() || cov.Complete {
+		t.Errorf("coverage = %+v, want tracer ptrace+seccomp, complete=false", cov)
+	}
+	kinds := map[string]bool{}
+	for _, g := range cov.Gaps {
+		kinds[g.Kind] = true
+	}
+	for _, k := range []string{GapFanotifyDisabled, GapSyscallsUntraced} {
+		if !kinds[k] {
+			t.Errorf("coverage gaps %v missing %q", cov.Gaps, k)
+		}
+	}
 }
 
 // TestRunTraceRefusesAnUntracedRoot: if the child was started WITHOUT ptrace
