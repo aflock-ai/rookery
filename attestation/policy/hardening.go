@@ -81,3 +81,16 @@ func Hardening() HardeningOptions { return hardening }
 // once at application startup to opt in to enforcement, and by tests. It is NOT
 // safe to call concurrently with verification.
 func SetHardening(h HardeningOptions) { hardening = h }
+
+// EnforcedHardening is the full #6266 enforcement set: every hardening flag this
+// package exposes, turned on. It is the single definition that embedders install
+// (the cilock CLI by default, Judge's in-process verifier at startup) so the two
+// cannot drift. A new HardeningOptions field must be enabled here.
+func EnforcedHardening() HardeningOptions {
+	return HardeningOptions{
+		EnforceCertConstraintOnKeyIDMatch: true, // R3_184
+		RejectEmptyConstraintEmptyField:   true, // R3_181
+		RejectDuplicateRegoPackage:        true, // R3_183
+		EnforceStepNameCoherence:          true, // R3_185/187/209
+	}
+}

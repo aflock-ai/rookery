@@ -87,7 +87,7 @@ func (rawPredicate) Schema() *jsonschema.Schema                     { return nil
 func releaseGithubDenials(t *testing.T, a attestation.Attestor) []string {
 	t.Helper()
 	resetHardeningAfter(t)
-	policy.SetHardening(enforcedHardening())
+	policy.SetHardening(policy.EnforcedHardening())
 	err := policy.EvaluateRegoPolicy(a, releaseGithubRule(t))
 	if err == nil {
 		return nil

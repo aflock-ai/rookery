@@ -240,7 +240,7 @@ func TestPolicyValidateReportsFailOpenAsWarnings(t *testing.T) {
 // verdict is the engine's.
 func TestVerifyUnderDefaultHardeningEvaluatesFailOpenNegation(t *testing.T) {
 	resetHardeningAfter(t)
-	policy.SetHardening(enforcedHardening())
+	policy.SetHardening(policy.EnforcedHardening())
 	mods := []policy.RegoPolicy{{Name: "tagged", Module: []byte(inlineNegationModule)}}
 	require.NoError(t, policy.EvaluateRegoPolicy(mapAttestor{"reftype": "tag"}, mods), "a lint finding must not refuse verification")
 	err := policy.EvaluateRegoPolicy(mapAttestor{"reftype": "branch"}, mods)

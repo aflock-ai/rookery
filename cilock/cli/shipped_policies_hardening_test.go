@@ -80,7 +80,7 @@ func TestShippedPoliciesAdmitGitHubKeylessLeafUnderEnforcedHardening(t *testing.
 	require.True(t, sawRelease, "release.policy.json was not discovered; the walk is broken")
 
 	resetHardeningAfter(t)
-	policy.SetHardening(enforcedHardening())
+	policy.SetHardening(policy.EnforcedHardening())
 
 	for _, f := range found {
 		t.Run(f.where, func(t *testing.T) {

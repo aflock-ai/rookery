@@ -41,7 +41,7 @@ func TestPolicyHardeningDefaultEnforces(t *testing.T) {
 	resetHardeningAfter(t)
 	policy.SetHardening(policy.HardeningOptions{}) // prove the command flips it
 	require.NoError(t, executeCmd("version"))
-	require.Equal(t, enforcedHardening(), policy.Hardening(),
+	require.Equal(t, policy.EnforcedHardening(), policy.Hardening(),
 		"running any cilock command must install the full #6266 enforcement set by default")
 }
 
@@ -51,7 +51,7 @@ func TestPolicyHardeningEnforcesEveryKnownFlag(t *testing.T) {
 	// struct directly (not reflection) so a new field breaks this test at
 	// compile time via the exhaustive comparison in DefaultEnforces above and
 	// loudly documents the expectation here.
-	h := enforcedHardening()
+	h := policy.EnforcedHardening()
 	require.True(t, h.EnforceCertConstraintOnKeyIDMatch, "R3_184 must be enforced by default")
 	require.True(t, h.RejectEmptyConstraintEmptyField, "R3_181 must be enforced by default")
 	require.True(t, h.RejectDuplicateRegoPackage, "R3_183 must be enforced by default")
@@ -83,7 +83,7 @@ func TestPolicyHardeningFlagBeatsEnv(t *testing.T) {
 	resetHardeningAfter(t)
 	t.Setenv(policyHardeningEnv, "warn")
 	require.NoError(t, executeCmd("version", "--policy-hardening=enforce"))
-	require.Equal(t, enforcedHardening(), policy.Hardening(),
+	require.Equal(t, policy.EnforcedHardening(), policy.Hardening(),
 		"an explicit --policy-hardening=enforce must beat the env downgrade")
 }
 

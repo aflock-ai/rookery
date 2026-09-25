@@ -42,25 +42,13 @@ const (
 	policyHardeningWarn    = "warn"
 )
 
-// enforcedHardening is the full #6266 enforcement set — every hardening flag
-// the policy library exposes. New HardeningOptions fields should be added here
-// so the CLI default stays "everything enforced".
-func enforcedHardening() policy.HardeningOptions {
-	return policy.HardeningOptions{
-		EnforceCertConstraintOnKeyIDMatch: true, // R3_184
-		RejectEmptyConstraintEmptyField:   true, // R3_181
-		RejectDuplicateRegoPackage:        true, // R3_183
-		EnforceStepNameCoherence:          true, // R3_185/187/209
-	}
-}
-
 // applyPolicyHardening installs the process-wide policy-hardening options for
 // the resolved mode. Called once from the root PersistentPreRunE, before any
 // command logic runs. An unknown mode fails closed.
 func applyPolicyHardening(mode string) error {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case policyHardeningEnforce:
-		policy.SetHardening(enforcedHardening())
+		policy.SetHardening(policy.EnforcedHardening())
 		return nil
 	case policyHardeningWarn:
 		policy.SetHardening(policy.HardeningOptions{})
