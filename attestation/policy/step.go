@@ -46,20 +46,34 @@ type Step struct {
 
 	// AllowedUntracked declares material paths that may appear in this
 	// step's collection WITHOUT a chain-of-custody proof binding them
-	// to an upstream step. Each entry is a gobwas/glob pattern matched
-	// against the material's absolute path. Use sparingly: every entry
-	// is a hole in the chain-of-custody guarantee.
+	// to an upstream step. Use sparingly: every entry is a hole in the
+	// chain-of-custody guarantee. It only has effect on a step with
+	// ArtifactsFrom.
 	//
-	// Typical use: build toolchain reads under '/usr/lib/**',
-	// '/opt/hostedtoolcache/**', or '/etc/**' that the policy does not
-	// model as separate steps. Without this allow-list, the verifier
-	// would refuse to confirm provenance for any consumed system file
-	// — accurate for hermetic builds but operationally painful for
-	// real CI runs.
+	// Pattern semantics: each entry is a gobwas/glob pattern compiled
+	// with '/' as the separator ('*' stays within one path segment, '**'
+	// crosses segments). It is matched against the material path exactly
+	// as the material attestor recorded it (usually relative to the
+	// step's working directory) after a lexical path.Clean, with no
+	// absolute/relative normalization: '/vendor/**' does not match
+	// 'vendor/a.go'. An invalid or empty pattern fails Policy.Validate.
+	//
+	// Typical use: toolchain or cache files the policy does not model as
+	// separate steps, e.g. 'vendor/**' or '/usr/lib/**' when the
+	// material attestor records absolute paths.
+	//
+	// Enforcement is gated by HardeningOptions.EnforceAllowedUntracked, part
+	// of EnforcedHardening (installed by the cilock CLI and by Judge at
+	// startup). Only an embedder that never calls SetHardening gets the
+	// WARN-only pre-#9815 behavior. When enforced:
 	//
 	// Empty (the default) means strict mode: every material the step
-	// claims to have consumed MUST be covered either by an ArtifactsFrom
-	// edge + chain sidecar, or by the legacy compareArtifacts fallback.
+	// claims to have consumed MUST have been produced by an accepted
+	// upstream ArtifactsFrom collection (same path, matching digest).
+	// A material that is absent upstream and matches no pattern rejects
+	// the collection (ErrUntrackedMaterials, #9815). A pattern never
+	// excuses a DIGEST MISMATCH on a path upstream did produce, and the
+	// ">= 1 shared path" overlap rule still applies.
 	AllowedUntracked []string `json:"allowedUntracked,omitempty" jsonschema:"title=Allowed Untracked,description=Glob patterns for material paths permitted without a chain-of-custody proof (e.g. '/usr/lib/**' for build toolchain). Each entry weakens chain integrity; use sparingly."`
 
 	// TimestampConstraint requires this step's collections to carry an

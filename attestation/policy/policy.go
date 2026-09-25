@@ -433,6 +433,12 @@ func (p Policy) validateStepShape(name string, step Step) error {
 		return fmt.Errorf("step %q: %w", name, err)
 	}
 
+	// Reject malformed AllowedUntracked globs at load time (#9815) so a typo
+	// cannot silently match nothing (strict) or be discovered only at verify.
+	if _, err := compileAllowedUntracked(step.AllowedUntracked); err != nil {
+		return fmt.Errorf("step %q: %w", name, err)
+	}
+
 	for _, att := range step.Attestations {
 		if err := att.Validate(); err != nil {
 			return fmt.Errorf("step %q: %w", name, err)
@@ -2512,6 +2518,10 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 	if err != nil {
 		return err
 	}
+	// covered collects every artifact path of every upstream collection that
+	// passed the per-edge compare, across ALL artifactsFrom edges, for the
+	// AllowedUntracked check after the loop (#9815).
+	covered := make(map[string]struct{})
 	for _, artifactsFrom := range step.ArtifactsFrom {
 		refResult, ok := collectionsByStep[artifactsFrom]
 		if !ok {
@@ -2601,6 +2611,9 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 				}
 			}
 
+			for p := range arts {
+				covered[p] = struct{}{}
+			}
 			accepted = append(accepted, testCollection.Collection)
 		}
 
@@ -2609,7 +2622,7 @@ func verifyCollectionArtifacts(_ context.Context, vo *verifyOptions, step Step, 
 		}
 	}
 
-	return nil
+	return checkAllowedUntracked(step, mats, covered)
 }
 
 // The empty-collection diagnostic (diagnoseEmptyCollectionResult and its

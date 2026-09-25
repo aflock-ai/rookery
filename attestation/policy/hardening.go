@@ -68,6 +68,19 @@ type HardeningOptions struct {
 	// Name == key (see cilock policy_from_bundles.go), so enforcement only rejects
 	// genuinely misconfigured policies.
 	EnforceStepNameCoherence bool
+
+	// EnforceAllowedUntracked (#9815) makes Step.AllowedUntracked a hard
+	// chain-of-custody check: in a step with artifactsFrom, a material that no
+	// accepted upstream collection produced and that matches no
+	// AllowedUntracked glob rejects the collection. With the flag off, the
+	// verifier keeps the pre-#9815 behavior (such materials are ignored) and
+	// only logs a WARN naming them. It is in EnforcedHardening, which the
+	// cilock CLI and Judge's in-process verifier both install at startup; only
+	// the library zero value leaves it off, because real chains carry materials
+	// the upstream step never produced (a build walks the whole checkout; trace
+	// mode records libc and the toolchain) and older policies never needed an
+	// allow-list.
+	EnforceAllowedUntracked bool
 }
 
 // hardening holds the process-wide hardening options. Its zero value is the
@@ -92,5 +105,6 @@ func EnforcedHardening() HardeningOptions {
 		RejectEmptyConstraintEmptyField:   true, // R3_181
 		RejectDuplicateRegoPackage:        true, // R3_183
 		EnforceStepNameCoherence:          true, // R3_185/187/209
+		EnforceAllowedUntracked:           true, // #9815
 	}
 }

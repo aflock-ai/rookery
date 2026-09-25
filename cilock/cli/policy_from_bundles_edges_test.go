@@ -169,3 +169,65 @@ func TestBuildStarterPolicy_RefusesThreeBundleRing(t *testing.T) {
 		t.Fatalf("a three-bundle ring must be refused naming the cycle, got: %v", err)
 	}
 }
+
+// TestWireProvenanceEdges_AllowedUntracked pins #9815 for generated policies:
+// cilock verify enforces allowedUntracked by default, so an edge wired on a
+// single shared digest must also allow-list every consumer material the linked
+// producers did not record, or the starter policy would fail against the very
+// bundles it was generated from. Globs are grouped by first path segment,
+// with glob metacharacters escaped.
+func TestWireProvenanceEdges_AllowedUntracked(t *testing.T) {
+	const widget = "6f42fdfbd2689cc842513fd88e27161d9b4fc765e5d0e291edc6483a50222720"
+	for _, tc := range []struct {
+		name          string
+		producerPaths []string
+		consumerPaths []string
+		want          []string
+	}{
+		{
+			name:          "fully covered consumer gets no allow-list",
+			producerPaths: []string{"widget.bin", "src/main.go"},
+			consumerPaths: []string{"widget.bin", "src/main.go"},
+			want:          nil,
+		},
+		{
+			name:          "uncovered paths grouped by first segment",
+			producerPaths: []string{"widget.bin"},
+			consumerPaths: []string{"widget.bin", "src/a/b.go", "src/c.go", "go.mod", "/usr/lib/libc.so", "/etc/ld.so.cache"},
+			want:          []string{"/etc/**", "/usr/**", "go.mod", "src/**"},
+		},
+		{
+			name:          "glob metacharacters are escaped",
+			producerPaths: []string{"widget.bin"},
+			consumerPaths: []string{"widget.bin", "a[1]/x", "b*.txt"},
+			want:          []string{`a\[1\]/**`, `b\*.txt`},
+		},
+		{
+			// The producer's MATERIALS count too: the verifier compares against
+			// upstream Artifacts() = materials + products.
+			name:          "producer materials cover consumer materials",
+			producerPaths: []string{"widget.bin", "go.sum"},
+			consumerPaths: []string{"widget.bin", "go.sum"},
+			want:          nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			summaries := []bundleSummary{
+				{stepName: "build", productDigests: digestSet(widget), productPaths: digestSet(tc.producerPaths[0]), materialPaths: digestSet(tc.producerPaths[1:]...)},
+				{stepName: "release", materialDigests: digestSet(widget), materialPaths: digestSet(tc.consumerPaths...)},
+			}
+			p := &policy.Policy{Steps: map[string]policy.Step{"build": {Name: "build"}, "release": {Name: "release"}}}
+			if n := wireProvenanceEdges(p, summaries); n != 1 {
+				t.Fatalf("expected 1 edge, got %d", n)
+			}
+			got := p.Steps["release"].AllowedUntracked
+			if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+				t.Errorf("allowedUntracked = %q, want %q", got, tc.want)
+			}
+			// Every emitted glob must compile and must pass policy validation.
+			if err := p.Validate(); err != nil {
+				t.Errorf("generated policy does not validate: %v", err)
+			}
+		})
+	}
+}

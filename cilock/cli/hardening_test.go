@@ -56,6 +56,7 @@ func TestPolicyHardeningEnforcesEveryKnownFlag(t *testing.T) {
 	require.True(t, h.RejectEmptyConstraintEmptyField, "R3_181 must be enforced by default")
 	require.True(t, h.RejectDuplicateRegoPackage, "R3_183 must be enforced by default")
 	require.True(t, h.EnforceStepNameCoherence, "R3_185/187/209 must be enforced by default")
+	require.True(t, h.EnforceAllowedUntracked, "#9815 allowedUntracked must be enforced by default")
 }
 
 func TestPolicyHardeningWarnFlagDowngrades(t *testing.T) {

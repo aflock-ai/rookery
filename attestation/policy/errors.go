@@ -214,6 +214,28 @@ func (e ErrMismatchArtifact) Error() string {
 // path in common between a step's materials and the referenced step's
 // artifacts. Nothing actually flowed between the steps, so the edge would
 // otherwise pass vacuously and must be rejected (GHSA-vmvj-p3hw-39q3).
+// ErrUntrackedMaterials is returned when a step with artifactsFrom consumed
+// materials that no accepted upstream step produced and that no
+// Step.AllowedUntracked glob admits (#9815).
+type ErrUntrackedMaterials struct {
+	Step  string
+	Paths []string
+}
+
+// untrackedPathsShown bounds how many paths ErrUntrackedMaterials prints; a
+// walk-mode build can carry tens of thousands of materials.
+const untrackedPathsShown = 20
+
+func (e ErrUntrackedMaterials) Error() string {
+	shown := e.Paths
+	suffix := ""
+	if len(shown) > untrackedPathsShown {
+		shown = shown[:untrackedPathsShown]
+		suffix = fmt.Sprintf(", ... and %d more", len(e.Paths)-untrackedPathsShown)
+	}
+	return fmt.Sprintf("step %q: %d material(s) not produced by any artifactsFrom step and not matched by allowedUntracked: %s%s", e.Step, len(e.Paths), strings.Join(shown, ", "), suffix)
+}
+
 type ErrNoArtifactOverlap struct{}
 
 func (e ErrNoArtifactOverlap) Error() string {

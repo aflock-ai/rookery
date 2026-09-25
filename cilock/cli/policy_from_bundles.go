@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -32,6 +33,7 @@ import (
 	"time"
 
 	"github.com/digitorus/pkcs7"
+	"github.com/gobwas/glob"
 	"github.com/sigstore/fulcio/pkg/certificate"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -178,6 +180,11 @@ type bundleSummary struct {
 	// (e.g. bare-predicate envelopes, legacy v0.1 collections).
 	productDigests  map[string]struct{}
 	materialDigests map[string]struct{}
+	// productPaths / materialPaths are the leaf paths of the same trees. The
+	// verifier's artifactsFrom check is by PATH, so these decide which
+	// consumer materials a wired edge leaves uncovered (allowedUntracked).
+	productPaths  map[string]struct{}
+	materialPaths map[string]struct{}
 
 	// tsaRoots holds the timestamp-authority trust anchors recovered from
 	// this bundle's RFC3161 timestamp tokens (signatures[].timestamps[]).
@@ -373,6 +380,7 @@ type bundleManifestRef struct {
 
 // bundleLeafRef is one inline Merkle leaf of a v0.3 predicate.
 type bundleLeafRef struct {
+	Path       string `json:"path"`
 	FileDigest string `json:"fileDigest"`
 }
 
@@ -479,7 +487,7 @@ var errManifestUnresolved = errors.New("the material manifest this predicate say
 // leaves exist, and a policy generated without them is under-constrained. A
 // predicate that withheld its manifest (false) or predates the field (absent)
 // contributes nothing and no error, as before.
-func detachedLeafDigests(pred bundleInnerPredicate, sidecars []sidecarSummary) ([]string, error) {
+func detachedLeafDigests(pred bundleInnerPredicate, sidecars []sidecarSummary) ([]bundleLeafRef, error) {
 	if pred.leavesInline() {
 		// Present key, possibly empty: the signed inline set is the answer,
 		// and an empty one is a real answer (the step consumed nothing), not
@@ -500,28 +508,45 @@ func detachedLeafDigests(pred bundleInnerPredicate, sidecars []sidecarSummary) (
 		return nil, fmt.Errorf("%w: no sidecar next to the bundle hashes to %s and rebuilds root %s (missing, unreadable, or a manifest for a different tree)",
 			errManifestUnresolved, digest, pred.MerkleRoot)
 	}
-	out := make([]string, 0, len(side.Leaves))
+	out := make([]bundleLeafRef, 0, len(side.Leaves))
 	for _, l := range side.Leaves {
 		if l.FileDigest != "" {
-			out = append(out, l.FileDigest)
+			out = append(out, bundleLeafRef{Path: l.Path, FileDigest: l.FileDigest})
 		}
 	}
 	return out, nil
+}
+
+// fileSink collects one side's (product or material) file digests, for edge
+// detection, and file paths, for the allowedUntracked coverage check.
+type fileSink struct {
+	digests map[string]struct{}
+	paths   map[string]struct{}
+}
+
+func (s fileSink) add(path, digest string) {
+	if digest == "" {
+		return
+	}
+	s.digests[digest] = struct{}{}
+	if path != "" {
+		s.paths[path] = struct{}{}
+	}
 }
 
 // collectAttestationDigests adds one inner attestation's file digests to the
 // product or material sink, taking them from the inline leaves when present and
 // from the detached manifest when they were published separately. An
 // attestation that is neither a product nor a material contributes nothing.
-func collectAttestationDigests(a bundleInnerAttestation, sidecars []sidecarSummary, productDigests, materialDigests map[string]struct{}, inventories func(string) ([]byte, bool)) error {
-	var sink map[string]struct{}
+func collectAttestationDigests(a bundleInnerAttestation, sidecars []sidecarSummary, products, materials fileSink, inventories func(string) ([]byte, bool)) error {
+	var sink fileSink
 	kind := ""
 	switch {
 	case strings.Contains(a.Type, "/product/"):
-		sink = productDigests
+		sink = products
 		kind = string(attestation.ProductRunType)
 	case strings.Contains(a.Type, "/material/"):
-		sink = materialDigests
+		sink = materials
 		kind = string(attestation.MaterialRunType)
 	default:
 		return nil
@@ -530,16 +555,14 @@ func collectAttestationDigests(a bundleInnerAttestation, sidecars []sidecarSumma
 		return collectInventoryDigests(a, kind, sink, inventories)
 	}
 	for _, l := range a.Attestation.inlineLeaves() {
-		if l.FileDigest != "" {
-			sink[l.FileDigest] = struct{}{}
-		}
+		sink.add(l.Path, l.FileDigest)
 	}
 	detached, err := detachedLeafDigests(a.Attestation, sidecars)
 	if err != nil {
 		return fmt.Errorf("%s: %w", a.Type, err)
 	}
-	for _, d := range detached {
-		sink[d] = struct{}{}
+	for _, l := range detached {
+		sink.add(l.Path, l.FileDigest)
 	}
 	return nil
 }
@@ -562,7 +585,7 @@ func (e *inventoryUnavailableError) Error() string {
 		e.attestationType, e.kind, e.state)
 }
 
-func collectInventoryDigests(a bundleInnerAttestation, kind string, sink map[string]struct{}, inventories func(string) ([]byte, bool)) error {
+func collectInventoryDigests(a bundleInnerAttestation, kind string, sink fileSink, inventories func(string) ([]byte, bool)) error {
 	ref := a.Attestation.Inventory
 	pred := a.Attestation
 	if pred.Leaves != nil || pred.Manifest != nil || pred.ManifestUploaded != nil {
@@ -591,7 +614,7 @@ func collectInventoryDigests(a bundleInnerAttestation, kind string, sink map[str
 		return fmt.Errorf("%s inventory: %w", a.Type, err)
 	}
 	for _, entry := range entries {
-		sink[entry.FileDigest] = struct{}{}
+		sink.add(entry.Path, entry.FileDigest)
 	}
 	return nil
 }
@@ -634,12 +657,12 @@ func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix s
 	// (input) file digests from the v0.3 Merkle attestations in a single pass.
 	// The digests drive cross-step provenance edge detection.
 	innerTypes := make([]string, 0, len(stmt.Predicate.Attestations))
-	productDigests := make(map[string]struct{})
-	materialDigests := make(map[string]struct{})
+	products := fileSink{digests: make(map[string]struct{}), paths: make(map[string]struct{})}
+	materials := fileSink{digests: make(map[string]struct{}), paths: make(map[string]struct{})}
 	var inventoryGaps []string
 	for _, a := range stmt.Predicate.Attestations {
 		innerTypes = append(innerTypes, a.Type)
-		if err := collectAttestationDigests(a, sidecars, productDigests, materialDigests, inventories); err != nil {
+		if err := collectAttestationDigests(a, sidecars, products, materials, inventories); err != nil {
 			var unavailable *inventoryUnavailableError
 			if errors.As(err, &unavailable) {
 				inventoryGaps = append(inventoryGaps, unavailable.kind+" inventory "+unavailable.state)
@@ -664,8 +687,10 @@ func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix s
 		outerPredicateType: stmt.PredicateType,
 		sidecars:           sidecars,
 		certSigners:        certs,
-		productDigests:     productDigests,
-		materialDigests:    materialDigests,
+		productDigests:     products.digests,
+		productPaths:       products.paths,
+		materialDigests:    materials.digests,
+		materialPaths:      materials.paths,
 		tsaRoots:           tsas,
 		inventoryGaps:      inventoryGaps,
 	}, nil
@@ -1212,6 +1237,7 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 	// complete but won't verify end-to-end. See wireProvenanceEdges.
 	edgesEmitted := wireProvenanceEdges(p, summaries)
 	warnMissingProvenanceEdges(stderr, p, edgesEmitted)
+	warnAllowedUntracked(stderr, p)
 
 	// Digest overlap can wire bundles that consume each other's products into
 	// an artifactsFrom cycle. `cilock policy validate` refuses that shape, and
@@ -1336,6 +1362,7 @@ func wireProvenanceEdges(p *policy.Policy, summaries []bundleSummary) int {
 		}
 		sort.Strings(from)
 		step.ArtifactsFrom = from
+		step.AllowedUntracked = untrackedGlobs(consumer, summaries, seen)
 		p.Steps[consumer.stepName] = step
 		emitted += len(from)
 	}
@@ -1381,6 +1408,82 @@ func artifactsFromCycle(p *policy.Policy) string {
 		}
 	}
 	return ""
+}
+
+// untrackedGlobs returns the allowedUntracked globs a wired consumer needs
+// (#9815): its material paths that no linked producer recorded as a product or
+// material (the verifier covers a material with the upstream Artifacts(),
+// which is both). cilock verify enforces allowedUntracked by default, so
+// without these a starter policy would reject the very bundles it came from.
+//
+// Uncovered paths are grouped by their first path segment ("src/a/b.go" ->
+// "src/**", "/usr/lib/x" -> "/usr/**"); a top-level file is listed exactly.
+// Segments are glob-escaped. Each entry is a deliberate, visible hole for the
+// author to narrow, and nil means the chain is fully covered.
+func untrackedGlobs(consumer bundleSummary, summaries []bundleSummary, producers map[string]struct{}) []string {
+	covered := make(map[string]struct{})
+	for _, s := range summaries {
+		if _, ok := producers[s.stepName]; !ok {
+			continue
+		}
+		for pth := range s.productPaths {
+			covered[pth] = struct{}{}
+		}
+		for pth := range s.materialPaths {
+			covered[pth] = struct{}{}
+		}
+	}
+	globs := make(map[string]struct{})
+	for pth := range consumer.materialPaths {
+		if _, ok := covered[pth]; ok {
+			continue
+		}
+		globs[untrackedGlobFor(pth)] = struct{}{}
+	}
+	if len(globs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(globs))
+	for g := range globs {
+		out = append(out, g)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// warnAllowedUntracked names every step that got generated allowedUntracked
+// globs, so the author reviews and narrows them instead of shipping them.
+func warnAllowedUntracked(stderr io.Writer, p *policy.Policy) {
+	names := make([]string, 0)
+	for name, s := range p.Steps {
+		if len(s.AllowedUntracked) > 0 {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		_, _ = fmt.Fprintf(stderr,
+			"warning: step %q consumed materials its artifactsFrom steps did not produce; generated allowedUntracked %q. "+
+				"Each entry is a gap in the chain of custody: narrow or remove it before signing.\n",
+			name, p.Steps[name].AllowedUntracked)
+	}
+}
+
+func untrackedGlobFor(pth string) string {
+	lead := ""
+	rest := path.Clean(pth) // the verifier matches globs against the cleaned path
+	if strings.HasPrefix(rest, "/") {
+		lead = "/"
+		rest = strings.TrimLeft(rest, "/")
+	}
+	first, _, nested := strings.Cut(rest, "/")
+	if !nested {
+		return lead + glob.QuoteMeta(first)
+	}
+	return lead + glob.QuoteMeta(first) + "/**"
 }
 
 // digestSetsOverlap reports whether any digest in a is also in b. Iterates the

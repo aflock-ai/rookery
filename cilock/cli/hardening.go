@@ -52,7 +52,7 @@ func applyPolicyHardening(mode string) error {
 		return nil
 	case policyHardeningWarn:
 		policy.SetHardening(policy.HardeningOptions{})
-		log.Warnf("policy-verification hardening DOWNGRADED to warn-only (--%s=%s / %s=%s): dangerous policy configurations (#6266 — vacuous empty cert constraints, certConstraint ignored on key-ID match, duplicate rego packages, incoherent step names) will be reported but will NOT fail verification. Fix or re-sign the policy and remove this downgrade.",
+		log.Warnf("policy-verification hardening DOWNGRADED to warn-only (--%s=%s / %s=%s): dangerous policy configurations (#6266 — vacuous empty cert constraints, certConstraint ignored on key-ID match, duplicate rego packages, incoherent step names; #9815 artifactsFrom materials outside allowedUntracked) will be reported but will NOT fail verification. Fix or re-sign the policy and remove this downgrade.",
 			policyHardeningFlag, policyHardeningWarn, policyHardeningEnv, policyHardeningWarn)
 		return nil
 	default:
