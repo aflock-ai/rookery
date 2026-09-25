@@ -156,8 +156,11 @@ func runPolicyDraftLocal(cmd *cobra.Command, o policyDraftOpts) error {
 		return err
 	}
 
-	var typed policy.Policy
-	if err := json.Unmarshal([]byte(source), &typed); err != nil {
+	// Decode through the one policy decoder: it applies the payload-type
+	// allowlist, the strict v0.2 decode and the version stamp the engine
+	// checks (TestPolicyIsDecodedOnlyByTheDecoder).
+	typed, err := policy.DecodePolicyEnvelope(datatype, []byte(source))
+	if err != nil {
 		return fmt.Errorf("parse policy source %s: %w", o.file, err)
 	}
 	plan, err := planLocalHydration(&typed)
