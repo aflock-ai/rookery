@@ -77,17 +77,19 @@ def Ess.identifiesSigner : Ess → Bool
   | .v2 | .v1 => true
   | _ => false
 
-/-- As it must be: the ESS attribute must name the signer, and the signer's
-    keyUsage, when present, must permit signing. -/
+/-- As built now (both fixes): the ESS attribute must name the signer, and
+    the signer's keyUsage, when present, must permit signing. -/
+-- cite: attestation/timestamp/tsp.go:240-268 sha256:e8c158c268bc68cd
+-- cite: attestation/timestamp/tsp.go:289-319 sha256:0615c97b06ee46e4
+-- cite: attestation/timestamp/tsp.go:341-364 sha256:03d2f29ca3058550
+-- cite: attestation/timestamp/tsp.go:367-389 sha256:9c0e7cd843e8b125
+-- cite: attestation/timestamp/ess.go:81-177 sha256:e13357e5f69c4f1e
+-- cite: attestation/cryptoutil/x509_keyusage.go:27-54 sha256:8c93d0ffdb62bcf4
 def tspVerifyReq (anchors : List Nat) (tok : Token) (now : Time) : Option Time :=
   if tok.ess.identifiesSigner && tok.leaf.kuSigns then tspVerify anchors tok now else none
 
-/-- As built now: the signer keyUsage fix, without the ESS fix. -/
--- cite: attestation/timestamp/tsp.go:240-268 sha256:e8c158c268bc68cd
--- cite: attestation/timestamp/tsp.go:289-314 sha256:9c14caae8846cf2d
--- cite: attestation/timestamp/tsp.go:336-359 sha256:03d2f29ca3058550
--- cite: attestation/timestamp/tsp.go:362-384 sha256:9c0e7cd843e8b125
--- cite: attestation/cryptoutil/x509_keyusage.go:27-54 sha256:8c93d0ffdb62bcf4
+/-- The signer keyUsage fix without the ESS fix: the state between the two
+    fixes landing. -/
 def tspVerifyKU (anchors : List Nat) (tok : Token) (now : Time) : Option Time :=
   if tok.leaf.kuSigns then tspVerify anchors tok now else none
 

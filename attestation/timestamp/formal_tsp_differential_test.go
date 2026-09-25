@@ -45,7 +45,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const tspModel = "kuonly"
+const tspModel = "required"
 
 type formalTSPCase struct {
 	Alg         string     `json:"alg"`

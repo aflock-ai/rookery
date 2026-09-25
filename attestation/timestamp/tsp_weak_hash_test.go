@@ -45,7 +45,7 @@ import (
 // NOT a live end-to-end exploit against the platform TSA today. To exercise the
 // VERIFIER in isolation (a trusted TSA that DID emit a weak-hash token, or a
 // future/external TSA added to the trust set), we sign the raw TSTInfo directly
-// via pkcs7, skipping the ESS attribute that Parse does not require.
+// via pkcs7. It carries the SigningCertificateV2 attribute, which Verify requires.
 
 // ess-free RFC 3161 TSTInfo structs (subset that timestamp.Parse consumes).
 type fixtureMessageImprint struct {
@@ -134,7 +134,10 @@ func forgeTimestampToken(t *testing.T, leaf *x509.Certificate, leafKey *ecdsa.Pr
 	sd, err := pkcs7.NewSignedData(tstDER)
 	require.NoError(t, err)
 	sd.SetContentType(oidTSTInfo)
-	require.NoError(t, sd.AddSigner(leaf, leafKey, pkcs7.SignerInfoConfig{}))
+	essOID, essVal := essV2For(leaf)
+	require.NoError(t, sd.AddSigner(leaf, leafKey, pkcs7.SignerInfoConfig{
+		ExtraSignedAttributes: []pkcs7.Attribute{{Type: essOID, Value: essVal}},
+	}))
 	token, err := sd.Finish()
 	require.NoError(t, err)
 	return token

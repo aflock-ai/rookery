@@ -312,6 +312,11 @@ func (v TSPVerifier) Verify(ctx context.Context, tsrData, signedData io.Reader) 
 	if err := cryptoutil.CheckSigningKeyUsage(signer, true); err != nil {
 		return time.Time{}, fmt.Errorf("timestamp token signer: %w", err)
 	}
+	// RFC 3161 §2.4.1 / RFC 5816 §2.2.1: the signed ESS attribute must name
+	// this signer certificate; the unsigned issuerAndSerialNumber cannot.
+	if err := verifySigningCertificate(p7, signer); err != nil {
+		return time.Time{}, err
+	}
 
 	// Validate the TSA chain AT the token's genTime — the value this function
 	// RETURNS as the trusted signing time.
