@@ -1,0 +1,18 @@
+name = "dsse-intoto"
+version = "0.1.0"
+defaultTargets = ["DsseIntoto"]
+
+# The committed differential vectors are a build INPUT: editing them re-runs
+# the staleness gate in DsseIntoto/Vectors.lean, which fails when the file is
+# not exactly what the model generates.
+[[input_file]]
+name = "vectors"
+path = "vectors/dsse-intoto.json"
+text = true
+
+# Vectors defines `main` (the generator), so it is a separate root rather
+# than an import of DsseIntoto.lean.
+[[lean_lib]]
+name = "DsseIntoto"
+roots = ["DsseIntoto", "DsseIntoto.Vectors"]
+needs = ["vectors"]
