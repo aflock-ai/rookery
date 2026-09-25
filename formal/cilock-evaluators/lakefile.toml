@@ -1,0 +1,10 @@
+name = "cilock_evaluators"
+version = "0.1.0"
+defaultTargets = ["CilockEvaluators", "cilock-evaluators-oracle"]
+
+[[lean_lib]]
+name = "CilockEvaluators"
+
+[[lean_exe]]
+name = "cilock-evaluators-oracle"
+root = "OracleMain"
