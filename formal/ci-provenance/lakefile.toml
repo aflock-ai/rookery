@@ -1,0 +1,10 @@
+name = "ci-provenance"
+version = "0.1.0"
+defaultTargets = ["CiProvenance", "ciprov-eval"]
+
+[[lean_lib]]
+name = "CiProvenance"
+
+[[lean_exe]]
+name = "ciprov-eval"
+root = "Main"
