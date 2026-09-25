@@ -85,6 +85,12 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	// and external attestations via input.external.<name>.
 	input := buildRegoInput(attestorData, stepContext)
 
+	// The engine only queries deny, so an `allow` no deny depends on would
+	// read as a gate while gating nothing (#9820 E3, regoallow.go).
+	if err := CheckRegoAllowUsed(policies); err != nil {
+		return err
+	}
+
 	// A negation whose input read the compiler hoisted never fires on a
 	// missing field. Logged as a warning here, and refused below when the
 	// field is missing from this input (regolint.go, regostrict.go).

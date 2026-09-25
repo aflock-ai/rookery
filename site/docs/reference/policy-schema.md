@@ -138,6 +138,22 @@ When a required external is not found, or every candidate is refused, the error 
 
 The Rego module must export a `deny` rule. `deny` should be a string or array of strings, populated only when the policy fails. Anything else the module outputs is ignored. Modules are parsed as Rego v0 by default; add `import rego.v1` at the top of a module that uses the `if`, `contains` or `in` keywords.
 
+**Deny-only.** The verifier queries `deny` and nothing else. A collection passes when no module denies it. An `allow` rule is never queried, so `default allow := false` over an empty `deny` passes everything. To gate on an `allow`-style condition, make `deny` depend on it:
+
+```rego
+package example.gate
+
+import rego.v1
+
+default allow := false
+
+allow if input.verificationResult == "PASSED"
+
+deny contains "verification did not pass" if not allow
+```
+
+A module that defines `allow` when no `deny` rule reaches it, directly or through helper rules, is refused at `cilock policy validate` and at verification.
+
 ### What `input` looks like
 
 `input` is the attestor's own JSON: the predicate body the attestor registered, marshaled as-is. For a step with neither `attestationsFrom` nor `externalFrom` there is no wrapper of any kind, so a command-run policy reads `input.cmd` and `input.exitcode` at the top level:

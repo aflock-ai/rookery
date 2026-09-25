@@ -650,6 +650,12 @@ func validateRegoPolicies(policy *policyDocument, result *ValidationResult) { //
 				parsedModules = append(parsedModules, attpolicy.RegoPolicy{Name: regoPol.Name, Module: moduleBytes})
 			}
 			if len(parsedModules) == len(att.RegoPolicies) {
+				// Deny-only engine: an allow no deny depends on gates nothing,
+				// and the verifier refuses it (#9820 E3).
+				if err := attpolicy.CheckRegoAllowUsed(parsedModules); err != nil {
+					result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', attestation %d: %v", stepName, attIdx, err))
+					result.Valid = false
+				}
 				lintFailOpenNegations(stepName, attIdx, parsedModules, result)
 				probeEmptyPredicate(stepName, attIdx, att.Type, parsedModules, result)
 			}
