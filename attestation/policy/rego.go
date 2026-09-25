@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -31,8 +32,10 @@ import (
 
 // regoEvalTimeout is the maximum duration allowed for a single Rego policy
 // evaluation. This prevents malicious or poorly-written policies from causing
-// denial of service through infinite loops or excessive computation.
-const regoEvalTimeout = 30 * time.Second
+// denial of service through infinite loops or excessive computation. Running
+// out of it produces no verdict: the evaluation is refused (ErrRegoEvaluationRefused,
+// #9820), never recorded as a denial. A var so a test can force the deadline.
+var regoEvalTimeout = 30 * time.Second
 
 // disallowedBuiltins lists OPA builtins that must not be available to policy
 // Rego code. http.send allows data exfiltration, net.lookup_ip_addr enables
@@ -153,6 +156,16 @@ func evaluateRegoInput(ctx context.Context, input interface{}, policies []RegoPo
 
 	rs, err := r.Eval(ctx)
 	if err != nil {
+		// Out of time (or cancelled) the engine answered nothing. That is a
+		// refusal to answer, which the verifier returns unsigned, not a FAILED
+		// verdict a warn-mode caller or a human override could admit (#9820 E8).
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			code := "timeout"
+			if errors.Is(ctxErr, context.Canceled) {
+				code = "cancelled"
+			}
+			return ErrRegoEvaluationRefused{Code: code, cause: fmt.Errorf("rego policy evaluation for attestor type %s: %w", attestorType, err)}
+		}
 		return fmt.Errorf("rego policy evaluation error for attestor type %s: %w", attestorType, err)
 	}
 

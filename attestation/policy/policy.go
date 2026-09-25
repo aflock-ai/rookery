@@ -677,7 +677,8 @@ func (p Policy) VerifyWithExternals(ctx context.Context, opts ...VerifyOption) (
 }
 
 // An alternate passing witness may satisfy an existential step. Without one,
-// an unanswered required question is a refusal, not a signed negative finding.
+// an unanswered required question, or a Rego evaluation that ran out of time
+// (#9820), is a refusal, not a signed negative finding.
 // Steps and externals are walked in name order so the refusal reported is the
 // same on every run.
 func refusedAIResults(steps map[string]StepResult, externals map[string]ExternalResult) error {
@@ -687,8 +688,7 @@ func refusedAIResults(steps map[string]StepResult, externals map[string]External
 			continue
 		}
 		for _, rejected := range result.Rejected {
-			var refusal ErrAIEvaluationRefused
-			if errors.As(rejected.Reason, &refusal) {
+			if refusal := evaluationRefusal(rejected.Reason); refusal != nil {
 				return refusal
 			}
 		}
@@ -699,8 +699,7 @@ func refusedAIResults(steps map[string]StepResult, externals map[string]External
 			continue
 		}
 		for _, rejected := range result.Rejected {
-			var refusal ErrAIEvaluationRefused
-			if errors.As(rejected.Reason, &refusal) {
+			if refusal := evaluationRefusal(rejected.Reason); refusal != nil {
 				return refusal
 			}
 		}

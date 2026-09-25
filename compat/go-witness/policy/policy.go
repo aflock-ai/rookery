@@ -36,6 +36,7 @@ type ErrMismatchArtifact = rookery.ErrMismatchArtifact
 type ErrRegoInvalidData = rookery.ErrRegoInvalidData
 type ErrPolicyDenied = rookery.ErrPolicyDenied
 type ErrAIEvaluationRefused = rookery.ErrAIEvaluationRefused
+type ErrRegoEvaluationRefused = rookery.ErrRegoEvaluationRefused
 type ErrConstraintCheckFailed = rookery.ErrConstraintCheckFailed
 type ErrInvalidOption = rookery.ErrInvalidOption
 type ErrCircularDependency = rookery.ErrCircularDependency
