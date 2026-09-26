@@ -1716,11 +1716,14 @@ func TestAdversarial_FilenamesWithUnicodeAndEmoji(t *testing.T) {
 	assert.Len(t, artifacts, recorded, "should record all successfully created files")
 }
 
-// TestAdversarial_UnicodeNormalizationCollision documents that macOS APFS
-// normalizes Unicode forms, so precomposed and decomposed versions of the
-// same character map to the same filename. This is a filesystem behavior,
-// not a bug in RecordArtifacts, but it can cause surprising results if an
-// attacker creates files with different Unicode representations.
+// TestAdversarial_UnicodeNormalizationCollision: precomposed and decomposed
+// spellings of the same character are one file on a normalizing filesystem
+// (macOS APFS) and two on a byte-exact one (Linux ext4, overlayfs, tmpfs).
+// That is filesystem behavior, not RecordArtifacts', so the test asks the
+// filesystem how many entries it holds and requires one artifact per entry:
+// never a phantom second artifact for a collapsed name, never a dropped one
+// for two real files. It asserted "exactly one" unconditionally, which held on
+// a laptop and failed on the Linux merge-queue runner.
 func TestAdversarial_UnicodeNormalizationCollision(t *testing.T) {
 	dir := t.TempDir()
 
@@ -1728,8 +1731,11 @@ func TestAdversarial_UnicodeNormalizationCollision(t *testing.T) {
 	decomposed := filepath.Join(dir, "cafe\u0301.txt") // e + U+0301
 
 	require.NoError(t, os.WriteFile(precomposed, []byte("precomposed"), 0644))
-	err := os.WriteFile(decomposed, []byte("decomposed"), 0644)
 	// On APFS, this overwrites the precomposed file (same normalized name).
+	require.NoError(t, os.WriteFile(decomposed, []byte("decomposed"), 0644))
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Contains(t, []int{1, 2}, len(entries), "the two spellings are one file or two, nothing else")
 
 	artifacts, err := RecordArtifacts(
 		dir,
@@ -1742,11 +1748,11 @@ func TestAdversarial_UnicodeNormalizationCollision(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// The key point: exactly one file should exist, not two.
-	// The exact normalization form in the artifact key depends on the OS.
-	assert.Len(t, artifacts, 1,
-		"macOS APFS normalizes precomposed/decomposed to same file; "+
-			"only one artifact should exist")
+	// One artifact per file the filesystem holds. The exact normalization
+	// form in the artifact key depends on the OS.
+	assert.Len(t, artifacts, len(entries),
+		"RecordArtifacts must record exactly the files the filesystem holds "+
+			"(1 on a normalizing filesystem, 2 on a byte-exact one)")
 }
 
 // TestAdversarial_EmptySubdirectories tests a directory tree where all leaf

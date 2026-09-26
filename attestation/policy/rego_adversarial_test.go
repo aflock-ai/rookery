@@ -633,46 +633,31 @@ deny[msg] {
 		assert.NoError(t, err, "correct build data should pass")
 	})
 
-	// Scenario 3: WITHOUT step context (nil) -- THIS IS THE BUG
-	// The policy silently passes because input.steps doesn't exist,
-	// so the rule body is never entered, so deny is empty.
-	t.Run("EXPLOIT_without_step_context_silently_passes", func(t *testing.T) {
+	// Scenario 3: WITHOUT step context (nil). input.steps doesn't exist, so
+	// the deny body can never be entered. This used to pass silently, letting
+	// an attacker who breaks a dependency step bypass every cross-step policy.
+	// Since #9869 an admit that rests on a missing input field is refused.
+	t.Run("without_step_context_refuses", func(t *testing.T) {
 		err := EvaluateRegoPolicy(
 			&marshalableAttestor{AttName: "deploy", AttType: "deploy-type"},
 			[]RegoPolicy{securityPolicy},
 			// No step context!
 		)
-		// This SHOULD fail -- but it silently passes.
-		if err == nil {
-			t.Log("CONFIRMED VULNERABILITY: Security policy that requires build step data " +
-				"silently passes when step context is missing. An attacker who can prevent " +
-				"step context from being built (e.g., by causing the dependency step to fail " +
-				"verification) can bypass ALL cross-step Rego policies.")
-		} else {
-			t.Log("GOOD: Policy correctly denied when step context was missing")
-		}
-		// Document the expected vs actual behavior
-		assert.NoError(t, err,
-			"This assertion documents the current (vulnerable) behavior: "+
-				"the policy silently passes without step context")
+		require.Error(t, err, "a missing step context must not silently pass")
+		assert.Contains(t, err.Error(), "does not carry")
 	})
 
 	// Scenario 4: With empty non-nil step context -- wrapping happens but
-	// input.steps is empty
-	t.Run("EXPLOIT_with_empty_step_context_silently_passes", func(t *testing.T) {
+	// input.steps is empty, so input.steps.build is undefined. Same refusal.
+	t.Run("with_empty_step_context_refuses", func(t *testing.T) {
 		emptyCtx := map[string]interface{}{}
 		err := EvaluateRegoPolicy(
 			&marshalableAttestor{AttName: "deploy", AttType: "deploy-type"},
 			[]RegoPolicy{securityPolicy},
 			emptyCtx,
 		)
-		if err == nil {
-			t.Log("CONFIRMED VULNERABILITY: Security policy silently passes with empty step context. " +
-				"input.steps exists but is empty, so input.steps.build is undefined, " +
-				"and the deny rule body is never entered.")
-		}
-		assert.NoError(t, err,
-			"Documents current behavior: empty step context also silently passes")
+		require.Error(t, err, "an empty step context must not silently pass")
+		assert.Contains(t, err.Error(), "does not carry")
 	})
 }
 
@@ -911,16 +896,11 @@ deny[msg] {
 		nil, // nil step context!
 	)
 
-	if len(result.Passed) > 0 && len(result.Rejected) == 0 {
-		t.Log("CONFIRMED VULNERABILITY: validateAttestations with nil step context " +
-			"causes security rego policy to silently pass. The deploy step would be " +
-			"marked as 'passed' even though the build approval check was never evaluated.")
-	}
-	// Document the vulnerable behavior
-	assert.Len(t, result.Passed, 1,
-		"Documents vulnerable behavior: nil context = silent pass")
-	assert.Empty(t, result.Rejected,
-		"Documents vulnerable behavior: no rejections")
+	// This used to mark deploy as passed without ever evaluating the build
+	// approval check. Since #9869 the missing input field is a refusal.
+	assert.Empty(t, result.Passed, "nil step context must not silently pass")
+	require.Len(t, result.Rejected, 1)
+	assert.Contains(t, result.Rejected[0].Reason.Error(), "does not carry")
 }
 
 // ===========================================================================

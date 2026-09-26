@@ -553,7 +553,8 @@ func TestDeep_RunWithNilSigner(t *testing.T) {
 		typeName: "https://test/nil-signer",
 		runType:  attestation.ExecuteRunType,
 		export:   true,
-		subjects: map[string]cryptoutil.DigestSet{"art": {}},
+		// A signed statement refuses a subject with no digest (#10058).
+		subjects: map[string]cryptoutil.DigestSet{"art": {{Hash: crypto.SHA256}: "deadbeef"}},
 	}
 
 	// Mix nil and valid signer.

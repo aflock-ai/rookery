@@ -245,7 +245,9 @@ deny[msg] {
 	emptyStepCtx := map[string]interface{}{}
 	err = EvaluateRegoPolicy(attestor, []RegoPolicy{{Module: regoModule, Name: "r3_201.rego"}}, emptyStepCtx)
 
-	require.NoError(t, err, "the legacy input shape is warn-only, not repaired by an implicit compatibility layer")
+	// That silent pass is gone: since #9869 a deny that cannot fire because
+	// it reads a field the input does not carry is a refusal, not an admit.
+	require.ErrorContains(t, err, "does not carry", "the legacy input shape under step context must refuse, not silently pass")
 	require.True(t, warnings.sawContaining("cross-step rego input shape active"), "the input-shape warning must be observable")
 	corrected := RegoPolicy{Name: "cross-step.rego", Module: []byte(strings.ReplaceAll(string(regoModule), "input.name", "input.attestation.name"))}
 	require.ErrorContains(t, EvaluateRegoPolicy(attestor, []RegoPolicy{corrected}, emptyStepCtx), "vulnerable build detected")

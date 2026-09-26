@@ -243,15 +243,26 @@ func TestSecurity_R3_212_DetectDotGitParentTraversal(t *testing.T) {
 	childDir := filepath.Join(parentDir, "build", "workspace", "project")
 	require.NoError(t, os.MkdirAll(childDir, 0755))
 
-	// Run the attestor from the child directory
-	attestor := New()
-	ctx, err := attestation.NewContext("test", []attestation.Attestor{attestor},
-		attestation.WithWorkingDir(childDir))
-	require.NoError(t, err)
-	err = ctx.RunAttestors()
-	require.NoError(t, err)
+	// Run the attestor from the child directory. Since #9995 a mint from a
+	// subdirectory of the discovered worktree is refused by default: nothing
+	// from the enclosing repository may be attested without the opt-in.
+	refused := New()
+	err = attestAt(t, childDir, refused)
+	require.Error(t, err, "a subdirectory mint must refuse rather than silently attest the enclosing repository")
+	require.Contains(t, err.Error(), "build/workspace/project")
+	resolvedParent, err2 := filepath.EvalSymlinks(parentDir)
+	require.NoError(t, err2)
+	require.Contains(t, err.Error(), resolvedParent, "the refusal names the enclosing worktree root it would have attested")
+	require.Empty(t, refused.CommitHash, "the refusal happens before any commit is recorded")
+	require.Empty(t, refused.AuthorEmail)
 
+	// With the explicit opt-in, discovery walks up to the enclosing repository
+	// and the partial coverage is signed so a verifier can refuse it.
+	attestor := New()
+	WithAllowSubdirectory(true)(attestor)
+	require.NoError(t, attestAt(t, childDir, attestor))
 	require.Equal(t, "attacker@evil.com", attestor.AuthorEmail, "subdirectory execution discovers the enclosing repository")
+	require.Equal(t, "build/workspace/project", attestor.WorkdirPrefix, "the subdirectory coverage is recorded")
 	parentHash := attestor.CommitHash
 	childRepo, err := gogit.PlainInit(childDir, false)
 	require.NoError(t, err)

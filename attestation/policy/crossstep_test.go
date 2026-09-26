@@ -1570,17 +1570,14 @@ deny[msg] {
 
 	t.Run("fails_without_step_context", func(t *testing.T) {
 		// Without step context, input is the attestor directly (not wrapped),
-		// so input.steps doesn't exist. The rego should error or the policy
-		// won't match. Rego handles missing paths by not entering the rule body.
+		// so input.steps doesn't exist and the deny body can never fire. That
+		// used to pass silently; since #9869 an admit that rests on a missing
+		// input field is refused.
 		result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
-		// When input.steps doesn't exist, the rule body is never entered,
-		// so deny is empty -> no deny reasons -> passes.
-		// This documents the EvaluateRegoPolicy behavior with nil context.
-		// NOTE: The Verify() method now ensures that steps with AttestationsFrom
-		// always receive a non-nil (possibly empty) stepCtx, preventing this
-		// silent-pass from occurring in practice.
-		assert.Len(t, result.Passed, 1,
-			"EvaluateRegoPolicy with nil context uses backward-compat path (no wrapping)")
+		assert.Empty(t, result.Passed)
+		require.Len(t, result.Rejected, 1)
+		assert.Contains(t, result.Rejected[0].Reason.Error(), "does not carry",
+			"a deny that cannot fire for a missing field must refuse, not admit")
 	})
 
 	t.Run("fails_with_empty_non_nil_step_context_defensive_policy", func(t *testing.T) {
@@ -2137,13 +2134,22 @@ deny[msg] {
 		policy := RegoPolicy{
 			Name: "nodeny.rego",
 			Module: []byte(`package nodeny
-allow { true }
+other { true }
 `),
 		}
 		err := EvaluateRegoPolicy(&marshalableAttestor{AttName: "test", AttType: "test"}, []RegoPolicy{policy})
 		require.Error(t, err, "policy without deny rule must be caught")
 		assert.Contains(t, err.Error(), "no results",
 			"error should indicate missing deny rule")
+
+		// An allow that no deny depends on is refused before evaluation
+		// (#9870): the engine only queries deny, so allow would be ignored.
+		policy.Module = []byte(`package nodeny
+allow { true }
+`)
+		err = EvaluateRegoPolicy(&marshalableAttestor{AttName: "test", AttType: "test"}, []RegoPolicy{policy})
+		require.Error(t, err, "an allow-only module must be caught")
+		assert.Contains(t, err.Error(), "no deny rule depends on it")
 	})
 
 	t.Run("data_exfiltration_via_deny_message", func(t *testing.T) {

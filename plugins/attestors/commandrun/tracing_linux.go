@@ -47,8 +47,17 @@ type ptraceContext struct {
 	environmentCapturer attestation.EnvironmentCapturer
 	// tlsPendingFDs tracks file descriptors that connected to port 443
 	// so we can extract TLS SNI from the first write on that fd.
-	// Key: "pid:fd", Value: index into the process's Connections slice.
-	tlsPendingFDs map[string]int
+	// Key: "pid:fd". The value names the RECORD the connection was filed
+	// under, not just an index: the fd survives an exec, and after one the
+	// pid's current record is a different image with its own Connections.
+	tlsPendingFDs map[string]pendingTLS
+
+	// replaced holds the records of images a later exec on the same pid
+	// replaced (see recordForExec). They ran; the record says so.
+	replaced []*ProcessInfo
+	// execRecorded marks pids whose current record already describes a
+	// successful exec.
+	execRecorded map[int]bool
 
 	// fsVerityState is the opportunistic fs-verity sealing state for
 	// the trace. Set by runCmd before tracing starts when
@@ -386,7 +395,7 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 		processes:           make(map[int]*ProcessInfo),
 		hash:                actx.Hashes(),
 		environmentCapturer: actx.EnvironmentCapturer(),
-		tlsPendingFDs:       make(map[string]int),
+		tlsPendingFDs:       make(map[string]pendingTLS),
 		fsVerityState:       r.fsVerityState,
 		cacheMatcher:        r.cacheMatcher,
 	}
@@ -570,7 +579,7 @@ func (p *ptraceContext) handleExecEvent(pid int) {
 // initial post-exec stop, or PTRACE_EVENT_EXEC), which is what binds the
 // /proc reads and the mapped-image measurement to this exec.
 func (p *ptraceContext) recordExec(pid int, program string) {
-	procInfo := p.getProcInfo(pid)
+	procInfo := p.recordForExec(pid)
 
 	exeLocation := fmt.Sprintf("/proc/%d/exe", pid)
 	commLocation := fmt.Sprintf("/proc/%d/comm", pid)
@@ -618,6 +627,46 @@ func (p *ptraceContext) recordExec(pid int, program string) {
 	p.measureExecutedImage(procInfo, exeLocation, program)
 }
 
+// recordForExec returns the record a successful exec on pid fills.
+//
+// A record describes ONE image. When the pid's record already describes an
+// earlier exec, that image ran, so its record is kept (with the opens,
+// network and file activity it made) and the new image gets a fresh record
+// under the same pid. Resetting the one record in place used to drop the
+// earlier image from the evidence entirely and file its activity under its
+// successor: `sh -c 'x; exec y'` was signed as a run in which sh never
+// executed. Only the ptrace backend calls this, and only at a stop the kernel
+// raises for an exec that SUCCEEDED, so a failed attempt never splits a
+// record.
+//
+// The kept record carries no exit code: that image did not exit, it was
+// replaced. The pid's exit is recorded on the image that was running.
+func (p *ptraceContext) recordForExec(pid int) *ProcessInfo {
+	if p.execRecorded == nil {
+		p.execRecorded = make(map[int]bool)
+	}
+	cur := p.getProcInfo(pid)
+	if !p.execRecorded[pid] {
+		p.execRecorded[pid] = true
+		return cur
+	}
+	p.replaced = append(p.replaced, cur)
+	next := &ProcessInfo{
+		ProcessID:   pid,
+		ParentPID:   cur.ParentPID,
+		OpenedFiles: make(map[string]cryptoutil.DigestSet),
+	}
+	p.processes[pid] = next
+	return next
+}
+
+// pendingTLS is a port-443 connection awaiting its ClientHello: the record
+// the connection is filed under and its index in that record's Connections.
+type pendingTLS struct {
+	rec  *ProcessInfo
+	conn int
+}
+
 // keepExecPath holds the path an exec entry named until that exec's
 // PTRACE_EVENT_EXEC stop consumes it, or the thread's next syscall stop drops
 // it (handleSyscallStop).
@@ -629,22 +678,30 @@ func (p *ptraceContext) keepExecPath(tid int, program string) {
 }
 
 func (p *ptraceContext) retryOpenedFiles() {
-	// after tracing, look through opened files to try to resolve any newly created files
-	procInfo := p.getProcInfo(p.parentPid)
-
-	for file, digestSet := range procInfo.OpenedFiles {
-		if digestSet != nil {
-			continue
+	// after tracing, look through opened files to try to resolve any newly
+	// created files. The root pid's records are every image it ran, not only
+	// the last: an image a later exec replaced keeps its own opens.
+	roots := []*ProcessInfo{p.getProcInfo(p.parentPid)}
+	for _, rec := range p.replaced {
+		if rec.ProcessID == p.parentPid {
+			roots = append(roots, rec)
 		}
+	}
+	for _, procInfo := range roots {
+		for file, digestSet := range procInfo.OpenedFiles {
+			if digestSet != nil {
+				continue
+			}
 
-		newDigest, err := cryptoutil.CalculateDigestSetFromFile(file, p.hash)
+			newDigest, err := cryptoutil.CalculateDigestSetFromFile(file, p.hash)
 
-		if err != nil {
-			delete(procInfo.OpenedFiles, file)
-			continue
+			if err != nil {
+				delete(procInfo.OpenedFiles, file)
+				continue
+			}
+
+			procInfo.OpenedFiles[file] = newDigest
 		}
-
-		procInfo.OpenedFiles[file] = newDigest
 	}
 }
 
@@ -774,7 +831,7 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		// Track TLS connections for SNI extraction on next write
 		if conn.Port == 443 && (conn.Family == FamilyIPv4 || conn.Family == FamilyIPv6) {
 			key := fmt.Sprintf("%d:%d", pid, conn.FD)
-			p.tlsPendingFDs[key] = len(procInfo.Network.Connections) - 1
+			p.tlsPendingFDs[key] = pendingTLS{rec: procInfo, conn: len(procInfo.Network.Connections) - 1}
 		}
 
 		// Heuristic: connect to port 53 is likely DNS
@@ -829,10 +886,10 @@ func (p *ptraceContext) handleSyscall(pid int, regs unix.PtraceRegs) error { //n
 		//nolint:nestif // three-level nesting is the shape of the SNI lookup
 		if byteCount > 11 && byteCount < 16384 {
 			key := fmt.Sprintf("%d:%d", pid, fd)
-			if connIdx, ok := p.tlsPendingFDs[key]; ok {
+			if pend, ok := p.tlsPendingFDs[key]; ok {
 				delete(p.tlsPendingFDs, key) // only try once per fd
 				if hostname := p.extractTLSSNI(pid, argArray[1], byteCount); hostname != "" {
-					procInfo := p.getProcInfo(pid)
+					procInfo, connIdx := pend.rec, pend.conn
 					if procInfo.Network != nil && connIdx < len(procInfo.Network.Connections) {
 						procInfo.Network.Connections[connIdx].Hostname = hostname
 						log.Debugf("(tracing) TLS SNI: pid %d fd %d → %s", pid, fd, hostname)
@@ -1304,8 +1361,11 @@ func (ctx *ptraceContext) getProcInfo(pid int) *ProcessInfo {
 }
 
 func (ctx *ptraceContext) procInfoArray() []ProcessInfo {
-	processes := make([]ProcessInfo, 0, len(ctx.processes))
+	processes := make([]ProcessInfo, 0, len(ctx.processes)+len(ctx.replaced))
 	for _, procInfo := range ctx.processes {
+		processes = append(processes, *procInfo)
+	}
+	for _, procInfo := range ctx.replaced {
 		processes = append(processes, *procInfo)
 	}
 

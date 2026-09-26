@@ -152,7 +152,7 @@ func TestSecurity_R3_203_DownloadResponseBodyIsBounded(t *testing.T) {
 	// Server sends a large but valid JSON response, well under the cap.
 	const payloadSize = 5 << 20 // 5MB
 	largePayload := strings.Repeat("A", payloadSize)
-	body := fmt.Appendf(nil, `{"payload":"%s","payloadType":"test"}`, largePayload)
+	body := fmt.Appendf(nil, `{"payload":"%s","payloadType":"test","signatures":[]}`, largePayload)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(body)
@@ -641,10 +641,13 @@ func TestSecurity_R3_217_DownloadMalformedEnvelope(t *testing.T) {
 		body    string
 		wantErr bool
 	}{
-		{"valid", `{"payload":"dGVzdA==","payloadType":"test"}`, false},
-		{"empty JSON", `{}`, false},
+		{"valid", `{"payload":"dGVzdA==","payloadType":"test","signatures":[]}`, false},
+		// DSSE v1.0.2 makes payload, payloadType and signatures REQUIRED keys;
+		// since #10057 the decoder refuses an envelope missing any of them.
+		{"missing signatures", `{"payload":"dGVzdA==","payloadType":"test"}`, true},
+		{"empty JSON", `{}`, true},
 		{"invalid JSON", `{corrupt`, true},
-		{"null", `null`, false},
+		{"null", `null`, true},
 		{"array", `[1,2,3]`, true},
 	}
 
