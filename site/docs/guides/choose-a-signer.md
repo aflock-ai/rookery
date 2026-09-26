@@ -11,7 +11,7 @@ CI/lock supports nine signer providers. This guide is the decision tree, pick th
 
 | Environment | Pick this | Ships in default binary? |
 |---|---|---|
-| Hosted CI with OIDC (GitHub Actions, GitLab CI) | **`fulcio`** (Sigstore keyless) | ✅ default |
+| Hosted CI with OIDC (GitHub Actions, GitLab.com, Buildkite, CircleCI; see [per CI platform](#keyless-signing-per-ci-platform)) | **`fulcio`** (Sigstore keyless) | ✅ default |
 | Local dev / smoke tests / CI without OIDC | **`file`** | ✅ default |
 | Internal CI/lock development | **`debug-signer`** | builder opt-in |
 | Workloads inside a SPIFFE/SPIRE service mesh | **`spiffe`** | builder opt-in |
@@ -74,6 +74,59 @@ cilock run --step build \
 In GitHub Actions, the `cilock-action` defaults all of this for you when `enable-sigstore: true` (the action's default). You only need `permissions: { id-token: write }` on the workflow.
 
 For self-hosted Fulcio, set `--signer-fulcio-url` to your instance. The client defaults to HTTP/REST (`--signer-fulcio-use-http=true`); set `--signer-fulcio-use-http=false` to switch to gRPC.
+
+### Keyless signing per CI platform
+
+A Fulcio CA issues a certificate only for an OIDC issuer it maps to an identity. The TestifySec platform Fulcio (the one `--platform-url` selects) maps the CI issuers below. For these issuers it stamps the same certificate extensions as public Sigstore (`fulcio.sigstore.dev`), so a policy constraint means the same thing with either CA.
+
+| CI | Token issuer | Platform Fulcio | Public Sigstore | CI/lock gets the token |
+|---|---|---|---|---|
+| GitHub Actions (github.com) | `https://token.actions.githubusercontent.com` | yes | yes | automatically (needs `id-token: write`) |
+| GitLab.com | `https://gitlab.com` | yes | yes | automatically, from the job's `id_tokens` variable |
+| Buildkite | `https://agent.buildkite.com` | yes | yes | automatically (`buildkite-agent oidc request-token`) |
+| CircleCI | `https://oidc.circleci.com/org/<org-id>` | yes | yes | automatically (`circleci run oidc get`) |
+| Self-managed GitLab | your GitLab host | **no** | no | not applicable |
+| GitHub Enterprise Server | your GHES host | **no** | no | not applicable |
+| Jenkins, Azure DevOps | none mapped | **no** | no | not applicable |
+| AWS CodeBuild | no workload OIDC token | **no** | no | not applicable |
+
+CI/lock gets the job's OIDC token by itself on all four, with the audience `sigstore` (a token with another audience is refused). With `--platform-url` and no other signer flag, it signs keyless against the platform Fulcio:
+
+- **GitLab.com:** the job must declare the token. CI/lock reads `$SIGSTORE_ID_TOKEN`, the name GitLab's Sigstore example uses; name another variable with `--signer-fulcio-token-env`. If the variable is empty, CI/lock stops and says how to declare it.
+- **Buildkite:** CI/lock runs `buildkite-agent oidc request-token --audience sigstore`.
+- **CircleCI:** CI/lock runs `circleci run oidc get --claims '{"aud":"sigstore"}'`. It does not use `$CIRCLE_OIDC_TOKEN` or `$CIRCLE_OIDC_TOKEN_V2`: their audience is your organization ID, which Fulcio refuses.
+
+CI/lock reads the token in its own process when it signs, after the wrapped command ends. `--signer-fulcio-token` and `--signer-fulcio-token-path` still take precedence. Uploading to the platform Archivista still needs `cilock login` on these CIs.
+
+```yaml
+# GitLab.com (.gitlab-ci.yml)
+build:
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  script:
+    - cilock run --step build --platform-url https://platform.testifysec.com -- make build
+```
+
+```bash
+# Buildkite (command step) or CircleCI (job step)
+cilock run --step build --platform-url https://platform.testifysec.com -- make build
+```
+
+To use public Sigstore instead, replace `--platform-url` with `--signer-fulcio-url https://fulcio.sigstore.dev --signer-fulcio-use-http=false`.
+
+What the certificate identifies differs per CI. Pin the fields that exist. A constraint on a field that the certificate does not carry fails.
+
+| CI | Subject (URI SAN) and Build Signer URI | Runner environment | Source Repository URI |
+|---|---|---|---|
+| GitHub Actions | the workflow file that runs the job (`job_workflow_ref`), so a reusable workflow is its own signer | `github-hosted` / `self-hosted` | yes |
+| GitLab.com | the top-level pipeline file (`ci_config_ref_uri`). Every job in the pipeline has this identity, so a separate signer job is not a separate signer | `gitlab-hosted` / `self-hosted` | yes |
+| Buildkite | SAN: the pipeline (`https://buildkite.com/<org>/<pipeline>`). No Build Signer URI | `buildkite-hosted` / `self-hosted` | **no** (the token names no repository; pin the Run Invocation URI and Source Repository Digest) |
+| CircleCI | the pipeline definition. Every job in the pipeline has this identity | **not recorded**: the value is `""` for cloud and self-hosted runners alike | yes (`vcs-origin`, without a scheme, for example `github.com/acme/widget`) |
+
+Always pin the issuer (`certConstraint.extensions.issuer`) together with the identity. The same repository path under a different issuer is a different identity.
+
+The `slsa` attestor names a CI builder (`builder.id`) only for GitHub Actions and GitLab.com jobs whose token came from the issuer in this table. Everywhere else it records the default builder, which claims nothing.
 
 ## SPIFFE/SPIRE specifics
 

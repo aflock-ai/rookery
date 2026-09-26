@@ -160,7 +160,11 @@ func (so *SignOptions) applyKeylessPlatformSigner(cmd *cobra.Command, pc platfor
 		if auth.WorkflowOIDCAvailable() {
 			// Signing-time refresher deliberately discarded; see the note above.
 			_, _ = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+			return
 		}
+		// GitLab CI / Buildkite / CircleCI: the signer fetches the job's OIDC
+		// token itself (#9839).
+		selectAmbientCIFulcio(cmd, pc.Fulcio, osGetenv)
 		return
 	}
 

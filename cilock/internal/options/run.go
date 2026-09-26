@@ -826,6 +826,13 @@ func (ro *RunOptions) resolvePlatformIdentity(cmd *cobra.Command, pc platformcon
 		}
 		return true
 	}
+	if selectAmbientCIFulcio(cmd, pc.Fulcio, osGetenv) {
+		// GitLab CI / Buildkite / CircleCI: sign keyless with the job's own
+		// OIDC token, fetched by the signer at signing time. No platform
+		// identity is bound: Archivista upload still needs `cilock login`.
+		log.Info("CI job OIDC detected: signing keyless against the platform Fulcio")
+		return false
+	}
 	if !cmd.Flags().Changed("platform-url") {
 		// No platform session, no ambient CI identity, and the operator never
 		// changed --platform-url — so cilock is silently using the compiled-in

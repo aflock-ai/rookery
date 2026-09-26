@@ -51,7 +51,7 @@ The tooling we built to secure the supply chain assumed a human doing the setup 
 
 Point your agent at a goal like "get this build to SLSA Level 3" and it can take you there. CI/lock is the engine: it emits SLSA Provenance and in-toto evidence at every step, signs it, and verifies it against Rego policy you write. The evidence then flows into the [TestifySec platform](https://testifysec.com), which maps it onto the frameworks you answer to — FedRAMP, SOC 2, NIST 800-53. A compliance report stops being a project you dread and becomes a read of evidence you already have.
 
-And the part people dread most is already done: you don't stand up Fulcio, a timestamp authority, or any Sigstore plumbing. The platform hosts it. In CI you don't even log in — signing uses your runner's ambient OIDC token, keyless, no secrets. `cilock login` only matters when you want attestations stored on the platform. No CA to operate, no keys to rotate.
+And the part people dread most is already done: you don't stand up Fulcio, a timestamp authority, or any Sigstore plumbing. The platform hosts it. In GitHub Actions you don't even log in: signing uses the runner's ambient OIDC token, keyless, no secrets. On GitLab.com, Buildkite and CircleCI it fetches the job's OIDC token too (on GitLab.com the job declares it with `id_tokens`) (see [keyless signing per CI platform](/guides/choose-a-signer#keyless-signing-per-ci-platform)). `cilock login` only matters when you want attestations stored on the platform. No CA to operate, no keys to rotate.
 
 ## If you're already running Witness
 

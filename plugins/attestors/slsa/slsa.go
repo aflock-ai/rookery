@@ -40,17 +40,52 @@ import (
 )
 
 const (
-	Name                  = "slsa"
-	Type                  = "https://slsa.dev/provenance/v1.0"
-	RunType               = attestation.PostProductRunType
-	defaultExport         = false
-	BuildType             = "https://aflock.ai/slsa-build@v0.1"
-	DefaultBuilderId      = "https://aflock.ai/attestation-default-builder@v0.1"
-	GHABuilderId          = "https://aflock.ai/attestation-github-action-builder@v0.1"
-	GLCBuilderId          = "https://aflock.ai/attestation-gitlab-component-builder@v0.1"
-	JenkinsBuilderId      = "https://aflock.ai/attestation-jenkins-component-builder@v0.1"
+	Name             = "slsa"
+	Type             = "https://slsa.dev/provenance/v1.0"
+	RunType          = attestation.PostProductRunType
+	defaultExport    = false
+	BuildType        = "https://aflock.ai/slsa-build@v0.1"
+	DefaultBuilderId = "https://aflock.ai/attestation-default-builder@v0.1"
+	GHABuilderId     = "https://aflock.ai/attestation-github-action-builder@v0.1"
+	GLCBuilderId     = "https://aflock.ai/attestation-gitlab-component-builder@v0.1"
+	// Deprecated: no longer emitted. Jenkins has no Fulcio issuer mapping, so
+	// a Jenkins build never reaches the level a named builder implies (#9839).
+	JenkinsBuilderId = "https://aflock.ai/attestation-jenkins-component-builder@v0.1"
+	// Deprecated: no longer emitted. CodeBuild issues no workload OIDC token,
+	// so a CodeBuild build never reaches the level a named builder implies (#9839).
 	AWSCodeBuildBuilderId = "https://aflock.ai/attestation-aws-codebuild-builder@v0.1"
 )
+
+// builderIssuers is the one OIDC issuer per CI attestor whose token a Fulcio
+// CA (public Sigstore and the TestifySec platform alike) maps to a build
+// identity. See builderIDFor.
+var builderIssuers = map[string]struct {
+	issuer    string
+	builderID string
+}{
+	github.Name: {"https://token.actions.githubusercontent.com", GHABuilderId},
+	gitlab.Name: {"https://gitlab.com", GLCBuilderId},
+}
+
+// builderIDFor returns the builder.id to stamp for a CI attestor whose
+// verified OIDC token carried claims (nil when it had none).
+//
+// A named builder.id is a claim a verifier may grant a level on, so it is
+// only emitted where the formal support matrix (formal/slsa-tracks) shows the
+// platform can reach that level: the token's issuer must be the one a Fulcio
+// CA maps to a build identity. GitHub Enterprise Server, self-managed GitLab,
+// Jenkins and AWS CodeBuild all fall back to DefaultBuilderId, which claims
+// nothing. The attestor's run data (invocation ID, commit) is still recorded.
+func builderIDFor(attestorName string, claims map[string]interface{}) string {
+	want, ok := builderIssuers[attestorName]
+	if !ok {
+		return DefaultBuilderId
+	}
+	if iss, _ := claims["iss"].(string); iss != want.issuer {
+		return DefaultBuilderId
+	}
+	return want.builderID
+}
 
 // This is a hacky way to create a compile time error in case the attestor
 // doesn't implement the expected interfaces.
@@ -171,13 +206,13 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 			if !ok {
 				continue
 			}
-			p.PbProvenance.RunDetails.Builder.ID = GHABuilderId
 			p.PbProvenance.RunDetails.Metadata.InvocationID = gh.Data().PipelineUrl
 
 			if gh.Data().JWT == nil {
 				log.Warn("No JWT found in GitHub attestor")
 				continue
 			}
+			p.PbProvenance.RunDetails.Builder.ID = builderIDFor(github.Name, gh.Data().JWT.Claims)
 
 			if sha, ok := gh.Data().JWT.Claims["sha"].(string); ok && sha != "" {
 				digest := make(map[string]string)
@@ -196,13 +231,13 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 			if !ok {
 				continue
 			}
-			p.PbProvenance.RunDetails.Builder.ID = GLCBuilderId
 			p.PbProvenance.RunDetails.Metadata.InvocationID = gl.Data().PipelineUrl
 
 			if gl.Data().JWT == nil {
 				log.Warn("No JWT found in GitLab attestor")
 				continue
 			}
+			p.PbProvenance.RunDetails.Builder.ID = builderIDFor(gitlab.Name, gl.Data().JWT.Claims)
 
 			if sha, ok := gl.Data().JWT.Claims["sha"].(string); ok && sha != "" {
 				digest := make(map[string]string)
@@ -221,7 +256,7 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 			if !ok {
 				continue
 			}
-			p.PbProvenance.RunDetails.Builder.ID = JenkinsBuilderId
+			// Builder stays DefaultBuilderId: see builderIDFor.
 			p.PbProvenance.RunDetails.Metadata.InvocationID = jks.Data().PipelineUrl
 
 		case aws_codebuild.Name:
@@ -229,7 +264,7 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 			if !ok {
 				continue
 			}
-			p.PbProvenance.RunDetails.Builder.ID = AWSCodeBuildBuilderId
+			// Builder stays DefaultBuilderId: see builderIDFor.
 			p.PbProvenance.RunDetails.Metadata.InvocationID = awsCodeBuild.Data().BuildInfo.BuildARN
 
 		// Material Attestors
@@ -294,7 +329,7 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 
 	// NOTE: We want to warn users that they can use build system attestors to enrich their provenance
 	if p.PbProvenance.RunDetails.Builder.ID == DefaultBuilderId {
-		log.Warn("No build system attestor invoked. Consider using github, gitlab, jenkins, or aws-codebuild attestors (if appropriate) to enrich your SLSA provenance")
+		log.Warn("SLSA provenance names the default builder: a named builder id is emitted only for GitHub Actions and GitLab.com jobs whose OIDC token the github or gitlab attestor verified")
 	}
 
 	p.PbProvenance.BuildDefinition.InternalParameters = internalParameters

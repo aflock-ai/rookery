@@ -18,7 +18,7 @@ Ten signer providers exist as Go modules in rookery. The default prebuilt `ciloc
 
 | Signer | Type | In default binary? | When to pick it |
 |---|---|---|---|
-| **`fulcio`** | Keyless (Sigstore) | ✅ default | CI runs in a hosted system with an OIDC token (GitHub Actions, GitLab CI). Default for most teams. |
+| **`fulcio`** | Keyless (Sigstore) | ✅ default | CI whose OIDC issuer a Fulcio CA maps: GitHub Actions, GitLab.com, Buildkite, CircleCI ([per CI platform](../guides/choose-a-signer#keyless-signing-per-ci-platform)). Default for most teams. |
 | **`file`** | Local key file | ✅ default | Local development, CI without OIDC. Not recommended for production releases. |
 | **`piv`** | Hardware token (PIV smart card / YubiKey) | ✅ default | Signing with a key held on a PIV hardware token. |
 | **`debug-signer`** | Debug | builder opt-in | Development and integration testing. |

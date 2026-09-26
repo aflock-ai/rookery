@@ -140,6 +140,20 @@ func init() { //nolint:funlen
 				return fsp, nil
 			},
 		),
+		registry.StringConfigOption(
+			"token-env",
+			"On GitLab CI, the id_tokens variable holding the Fulcio token (aud: sigstore); defaults to "+DefaultGitLabOIDCVariable,
+			"",
+			func(sp signer.SignerProvider, tokenEnv string) (signer.SignerProvider, error) {
+				fsp, ok := sp.(FulcioSignerProvider)
+				if !ok {
+					return sp, fmt.Errorf("provided signer provider is not a fulcio signer provider")
+				}
+
+				WithTokenEnv(tokenEnv)(&fsp)
+				return fsp, nil
+			},
+		),
 		registry.BoolConfigOption(
 			"use-http",
 			"Use HTTP/REST API for Fulcio (default: true, works behind any reverse proxy)",
@@ -165,6 +179,14 @@ type FulcioSignerProvider struct {
 	TokenPath       string
 	OidcRedirectUrl string
 	UseHTTP         bool
+	// TokenEnv names the GitLab id_tokens variable; "" means DefaultGitLabOIDCVariable.
+	TokenEnv string
+}
+
+func WithTokenEnv(name string) Option {
+	return func(fsp *FulcioSignerProvider) {
+		fsp.TokenEnv = name
+	}
 }
 
 type Option func(*FulcioSignerProvider)
@@ -259,7 +281,7 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 	var raw string
 
 	switch {
-	case fsp.Token == "" && fsp.TokenPath == "" && os.Getenv("GITHUB_ACTIONS") == "true":
+	case fsp.Token == "" && fsp.TokenPath == "" && os.Getenv("GITHUB_ACTIONS") == envTrue:
 		tokenURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
 		if tokenURL == "" {
 			return nil, errors.New("ACTIONS_ID_TOKEN_REQUEST_URL is not set")
@@ -276,6 +298,16 @@ func (fsp FulcioSignerProvider) Signer(ctx context.Context) (cryptoutil.Signer, 
 			return nil, fmt.Errorf("failed to fetch GitHub Actions OIDC token: %w", err)
 		}
 		log.Debugf("Successfully fetched GitHub Actions OIDC token")
+	case fsp.Token == "" && fsp.TokenPath == "" && AmbientCIDetected(os.Getenv):
+		// GitLab.com, Buildkite, CircleCI (#9839). Takes precedence over the
+		// interactive flow for the same reason the GitHub case does: a CI job
+		// has no browser.
+		tok, ci, ambientErr := ambientCIToken(ctx, osAmbientSource(), fsp.TokenEnv)
+		if ambientErr != nil {
+			return nil, ambientErr
+		}
+		log.Infof("Using the %s job's OIDC token (audience %s)", ci, fulcioAudience)
+		raw = tok
 	// we want to fail if both flags used (they're mutually exclusive)
 	case fsp.TokenPath != "" && fsp.Token != "":
 		return nil, errors.New("only one of --fulcio-token-path or --fulcio-raw-token can be used")

@@ -409,7 +409,7 @@ Plus the **signer flags** (see below) and **attestor-specific flags** prefixed `
 CI/lock loads signers based on which `--signer-*-*` flags are set. The **default binary** registers two signer providers plus a KMS provider:
 
 - **`file`:** `--signer-file-key-path`, `--signer-file-cert-path`, `--signer-file-intermediate-paths`, `--signer-file-key-passphrase`, `--signer-file-key-passphrase-path`
-- **`fulcio`:** `--signer-fulcio-url`, `--signer-fulcio-oidc-issuer`, `--signer-fulcio-oidc-client-id`, `--signer-fulcio-oidc-redirect-url`, `--signer-fulcio-token`, `--signer-fulcio-token-path`, `--signer-fulcio-use-http` (default `true`)
+- **`fulcio`:** `--signer-fulcio-url`, `--signer-fulcio-oidc-issuer`, `--signer-fulcio-oidc-client-id`, `--signer-fulcio-oidc-redirect-url`, `--signer-fulcio-token`, `--signer-fulcio-token-path`, `--signer-fulcio-token-env` (GitLab id_tokens variable, default `SIGSTORE_ID_TOKEN`), `--signer-fulcio-use-http` (default `true`)
 - **`kms`:** `--signer-kms-ref` (key reference URI, e.g. `awskms://`, `gcpkms://`, `azurekms://`, `hashivault://`), `--signer-kms-hashType` (default `sha256`), `--signer-kms-keyVersion`
 
 Additional providers (`spiffe`, `vault`, and per-cloud KMS broker clients with their extra sub-flags) are **not** compiled into the default release binary; add them via a custom build — see [build a custom CI/lock](../guides/build-a-custom-cilock). Run `cilock run --help-advanced` to see the exact signer flags your binary exposes.

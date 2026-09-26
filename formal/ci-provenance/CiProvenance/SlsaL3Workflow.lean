@@ -21,9 +21,12 @@ subtrees/fulcio/pkg/identity/github/principal.go:197-223, BuildSignerURI =
 job_workflow_ref, BuildSignerDigest = job_workflow_sha, SourceRepositoryDigest
 = sha, RunInvocationURI = run_id and attempt, BuildTrigger = event_name).
 
-What exists in code today: the SLSA attestor emits a constant builder id per CI
-vendor and the wrong predicate type (#9827):
--- cite: plugins/attestors/slsa/slsa.go:44-52 sha256:d04ac9e5aa5bf193db25fbb9d757113ed43a41eeefde583e190cae91d97e658b
+What exists in code today: the SLSA attestor emits a constant builder id, and
+the wrong predicate type (#9827). The id names a CI vendor only for a verified
+GitHub Actions or gitlab.com token, the issuers a Fulcio CA maps; every other
+CI gets the default id (#9839):
+-- cite: plugins/attestors/slsa/slsa.go:48-50 sha256:26f324cb42fd3b41502e639a01493ee6ee7adf65058745efc695077c1b0190f5
+-- cite: plugins/attestors/slsa/slsa.go:62-88 sha256:364e234bd882b351bf3101caf89f2baf07363100452ef0bac8d8789d16ee8dba
 Policy functionaries can already constrain Fulcio extensions; an empty field
 allows every value, and a field containing a glob metacharacter is matched as
 a glob:

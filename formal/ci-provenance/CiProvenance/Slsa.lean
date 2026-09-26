@@ -11,7 +11,11 @@ leaves L2 and L3 to a separate assessment:
 In CI, CI/lock signs keyless with the job's ambient OIDC identity, read from
 the job environment in-process:
 -- cite: cilock/internal/auth/workflow.go:26-29 sha256:ef9c2193fb3f22e14fb91086a17b4e60928e54b9551895c942b0d65805416b5f
--- cite: plugins/signers/fulcio/fulcio.go:262-275 sha256:3b9b18568ac0719a0db3bc52e3e2f8f2f9756818d2da1bd982c917b67ccaac14
+-- cite: plugins/signers/fulcio/fulcio.go:284-297 sha256:b6572c193dc1269f2fd9f58ae02237d5c1ba130432c734eb884ce680be96af66
+and, on GitLab CI, Buildkite and CircleCI, from the id_tokens variable or the
+vendor's token command (#9839); the GitLab variable is in the job
+environment too:
+-- cite: plugins/signers/fulcio/fulcio.go:301-310 sha256:65e0e25b096b1f251676a72d48b77dcbe12af624d4dd6ba24f77a51811082054
 and runs the tenant's build step as a child with no `Env` set, so the child
 inherits that environment, token-request credential included:
 -- cite: plugins/attestors/commandrun/commandrun.go:2625-2626 sha256:7e44ad486ef3ea87e769e144d2133f9624838d1a0ab8325427c5a3c420c75e46
