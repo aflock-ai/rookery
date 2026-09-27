@@ -100,6 +100,12 @@ bytes of lines `start..end`, each line including its trailing newline. When
 the code under a citation changes, the hash stops matching. Re-read the code,
 correct the model if its meaning changed, then re-stamp.
 
+The hash is the anchor and the line span is a hint. The checker searches the
+file for a span of the same length with that hash and passes when exactly one
+exists, wherever it now sits, so an edit that only moves the code fails
+nothing. `jade check formal-citations --fix` rewrites the hint. No match, or
+more than one, fails.
+
 ## Differential testing
 
 `attestation/policy/formal_differential_test.go` generates random cases, runs

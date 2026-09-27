@@ -82,7 +82,9 @@ is PENDING: it compares against a Go stub until the verifier exists.
   `-- cite: <path>:<start>-<end> sha256:<hash>`, with rookery-relative paths and
   the hash over the bytes `sed -n '<start>,<end>p' <path>` prints.
   `jade check formal-citations` (in the monorepo) re-hashes them and fails on
-  drift. The ALPS spec page, the design docs and the contract live outside this
+  drift. The hash anchors the citation and the span is a hint: code that only
+  moved still matches (exactly one span of that length may match), and
+  `--fix` rewrites the hint. The ALPS spec page, the design docs and the contract live outside this
   tree, so they appear as unhashed `-- see (monorepo, outside this tree)` references.
 - **Differential tests.** `TestVerdictMatchesLeanModel`
   (`plugins/attestors/alps-evidence`) and `TestSubjectsMatchLeanModel`
