@@ -6,9 +6,9 @@
 #   make stall           attest against a black-hole TCP endpoint
 #   make loop S=stall    rebuild + run in one shot (the iteration unit)
 #
-# Pair with the GitHub-Actions half: .github/workflows/cilock-hang-repro.yml
-# (workflow_dispatch) runs the same probe on the self-hosted runner where the
-# ambient-OIDC keyless path actually exists.
+# The GitHub-Actions half (testifysec/judge .github/workflows/cilock-hang-repro.yml)
+# was retired 2026-09-25 after the hang was fixed; recover it from that repo's
+# history to run the probe on a self-hosted runner with ambient OIDC.
 
 ROOKERY := $(abspath ../../cilock)
 HERE := $(shell pwd)

@@ -7,9 +7,10 @@ Two halves that reproduce the CI attest hang fast:
   kernel stack if it outlives the watchdog. `D` = uninterruptible
   (SIGKILL-immune), `S` = a network wait (the client lacks a deadline),
   `R` = busy loop.
-- **GitHub-Actions half** (`.github/workflows/cilock-hang-repro.yml`,
-  `workflow_dispatch`): runs the same probe on the self-hosted runner — the
-  only place the ambient GitHub OIDC → platform Fulcio keyless path exists.
+- **GitHub-Actions half** (`.github/workflows/cilock-hang-repro.yml` in
+  testifysec/judge, retired 2026-09-25 after the hang was fixed; recover it
+  from that repo's history): ran the same probe on the self-hosted runner —
+  the only place the ambient GitHub OIDC → platform Fulcio keyless path exists.
 
 ## What it found (2026-06-09)
 
