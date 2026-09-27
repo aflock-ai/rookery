@@ -32,6 +32,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock attest vex` | Author a signed OpenVEX document from a triage decision (validated against the spec before it is signed). |
 | `cilock sign [file]` | Sign an arbitrary file (typically a policy) with the configured signer. |
 | `cilock verify` | Verify an artifact (subject) against a signed policy using attestations as evidence. |
+| `cilock verify-bundle` | Verify a Sigstore bundle (`application/vnd.dev.sigstore.bundle*`) under the Sigstore client verification procedure. |
 | `cilock policy from-bundles` | Generate a starter Witness policy from one or more signed attestation bundles. |
 | `cilock policy from-commit` | Author a Witness policy from a commit's CI attestations already in the platform's Archivista. |
 | `cilock policy push` | Upload a signed policy DSSE to the platform and create a release. |
@@ -45,6 +46,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock attestors list` | List every attestor compiled into the binary. |
 | `cilock attestors schema <name>` | Print the JSON schema of a specific attestor's predicate. |
 | `cilock tools list` / `show` / `test-plan` | List supported detectors, show one, or emit per-tool test plans. |
+| `cilock skill install` / `path` / `show` | Install, locate or print the Pushgate skill embedded in this binary for a coding agent. |
 | `cilock get <tool>` | Install a trusted tool only if its release artifact matches the SHA-256 pin embedded in this binary. |
 | `cilock completion <shell>` | Emit shell completion script (bash, zsh, fish, powershell). |
 | `cilock version` | Print the `cilock` version. |
@@ -201,46 +203,6 @@ An **expired** credential prints `EXPIRED` and **exits non-zero**, so a script c
 
 ```bash
 cilock agent status --platform-url https://platform.example.com
-```
-
-### `cilock agent login`
-
-Store the refresh credential a human minted for this agent at enrollment. The credential is read from **STDIN by default** so it never lands in shell history or a process listing; it is written `0600` to cilock's own agent store, kept apart from the `cilock login` session, and never printed again. Once stored, runs against that platform sign as the **agent principal**, taking precedence over any human `cilock login` session. The tenant and agent ids are not secret — they are the SPIFFE path segments (`spiffe://<trust-domain>/tenant/<tenant-id>/agent/<agent-id>`) every certificate this credential buys will carry.
-
-| Flag | Default | Description |
-|---|---|---|
-| `--platform-url <url>` | `https://platform.testifysec.com` | Platform the agent is enrolled with. |
-| `--tenant-id <uuid>` | (none) | Tenant UUID this agent is enrolled in (SPIFFE path segment). |
-| `--agent-id <uuid>` | (none) | Agent principal UUID minted at enrollment (SPIFFE path segment). |
-
-```bash
-# Read the credential from stdin (preferred)
-cilock agent login --platform-url https://platform.example.com \
-  --tenant-id <uuid> --agent-id <uuid> < credential.txt
-```
-
-### `cilock agent logout`
-
-Remove this machine's copy of the agent credential. This is a **local delete, not a revocation**: the principal stays valid on the platform until a human revokes it there.
-
-| Flag | Default | Description |
-|---|---|---|
-| `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose agent credential to remove. |
-
-```bash
-cilock agent logout
-```
-
-### `cilock agent status`
-
-Show the agent principal this machine would sign as.
-
-| Flag | Default | Description |
-|---|---|---|
-| `--platform-url <url>` | `https://platform.testifysec.com` | Platform to report the enrolled agent for. |
-
-```bash
-cilock agent status
 ```
 
 ### `cilock trust`
@@ -525,6 +487,34 @@ Because v0.3 product/material attestations [inline their Merkle leaves](../attes
 Full verifier flag list is in [`cilock/internal/options/verify.go`](https://github.com/aflock-ai/rookery/blob/main/cilock/internal/options/verify.go).
 
 Exit code **0** on policy pass, non-zero on any verification failure or error.
+
+## `cilock verify-bundle`
+
+> Verifies a **Sigstore bundle** (`application/vnd.dev.sigstore.bundle*`, the JSON format cosign and the Sigstore clients emit) under the Sigstore client verification procedure. It is a different format from the tar.gz of DSSE envelopes that [`cilock bundle`](#cilock-bundle) builds and `cilock verify --bundle` reads. The flags are the sigstore-conformance CLI protocol's.
+
+A certificate-signed bundle must match both `--certificate-identity` (the exact SAN) and `--certificate-oidc-issuer` (the exact issuer); neither may be empty. A bundle signed by a managed key is verified with `--key` instead, and passing `--key` together with either identity flag is an error.
+
+Every check the trusted root can back is required. An SCT is required when the root distributes CT logs, and a transparency-log entry when it distributes Rekor logs. The signing time comes from a TSA timestamp or a log inclusion promise that the root can verify. Without `--trusted-root`, the public-good trusted root (or staging, with `--staging`) is fetched over TUF.
+
+The one positional argument is the artifact: a file path, or its digest as `<sha256|sha384|sha512>:<hex>`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--bundle <path>` | (required) | Path to the Sigstore bundle. |
+| `--certificate-identity <san>` | (none) | Expected certificate SAN, exact match. |
+| `--certificate-oidc-issuer <url>` | (none) | Expected certificate OIDC issuer, exact match. |
+| `--key <path>` | (none) | PEM public key, for a bundle signed by a managed key. |
+| `--trusted-root <path>` | public-good over TUF | Path to a `trusted_root.json`. |
+| `--staging` | `false` | Use the Sigstore staging trusted root (over TUF). |
+
+```bash
+cilock verify-bundle --bundle app.sigstore.json \
+  --certificate-identity https://github.com/org/repo/.github/workflows/release.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ./app
+```
+
+On success it prints `Verified OK` and exits **0**; any failed check exits non-zero with the reason.
 
 ## `cilock bundle`
 
@@ -885,6 +875,54 @@ Emit a structured test plan describing how to validate each detector (what trigg
 ```bash
 cilock tools test-plan
 cilock tools test-plan --only sarif --format json
+```
+
+## `cilock skill`
+
+> The Pushgate skill teaches a coding agent the cilock and Pushgate loop: enroll the agent, produce signed evidence, act on a refusal, and draft a policy that a human signs. It ships inside the binary, so it matches that binary's commands. Flags, predicate fields and rule templates stay in cilock's own help and output, where they cannot drift. Claude Code users can install the same skill as a plugin (`/plugin marketplace add aflock-ai/rookery`, then `/plugin install pushgate@rookery`); use one or the other, or the skill loads twice.
+
+### `cilock skill install`
+
+Write the skill where the chosen agent discovers skills:
+
+| Agent | `--scope user` | `--scope project` |
+|---|---|---|
+| `claude` | `~/.claude/skills/pushgate` | `.claude/skills/pushgate` |
+| `codex` | `~/.agents/skills/pushgate` | `.agents/skills/pushgate` |
+| `opencode` | `~/.config/opencode/skills/pushgate` | `.opencode/skills/pushgate` |
+
+Project scope installs at the root of the Git repository you are in. opencode also reads the claude and codex locations, so one install covers it.
+
+Re-running is safe. cilock records a SHA-256 digest of each file it writes (`.cilock-skill.json`) and replaces only files that still match that digest. It refuses to overwrite a file it did not write, or one edited since, unless you pass `--force`. It writes only inside the skill directory and never through a symbolic link.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--agent <name>` | `auto` | `claude`, `codex`, `opencode`, or `auto` (detect from the environment). |
+| `--scope <scope>` | `user` | `user` (every project on this machine) or `project` (this repository only). |
+| `--dir <path>` | (none) | Install into `<dir>/pushgate` instead of the agent's skills directory. |
+| `--force` | `false` | Replace files cilock did not write, or that were edited since. |
+
+```bash
+cilock skill install                              # detect the agent, install for this user
+cilock skill install --agent codex --scope project
+cilock skill install --dir ./vendor-skills
+```
+
+### `cilock skill path`
+
+Print the directory `cilock skill install` would write for the same flags, on the first line by itself, followed by whether the skill is installed there and the discovery rule that makes the agent find it. Writes nothing. Takes `--agent`, `--scope` and `--dir` with the same meaning as `install`.
+
+```bash
+cilock skill path --agent claude --scope project
+```
+
+### `cilock skill show`
+
+Print the skill embedded in this cilock to stdout. With no argument it prints `SKILL.md`; name a file, such as `references/refusals.md`, to print that one.
+
+```bash
+cilock skill show
+cilock skill show references/refusals.md
 ```
 
 ## `cilock get <tool>`
