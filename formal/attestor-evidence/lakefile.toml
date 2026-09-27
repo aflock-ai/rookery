@@ -1,0 +1,10 @@
+name = "attestor_evidence"
+version = "0.1.0"
+defaultTargets = ["AttestorEvidence", "attestor-evidence-eval"]
+
+[[lean_lib]]
+name = "AttestorEvidence"
+
+[[lean_exe]]
+name = "attestor-evidence-eval"
+root = "Main"
