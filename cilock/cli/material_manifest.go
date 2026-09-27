@@ -212,29 +212,26 @@ func manifestPredicateFromEnvelope(env dsse.Envelope) (body []byte, digest strin
 // bundle. Only entries whose predicate type is the manifest type are read, and
 // each is still keyed by its own content digest, so discovery-by-filename
 // narrows the candidate set without ever being what authorizes a match.
-func sidecarManifests(sidecars []sidecarSummary) manifestIndex {
+//
+// Each sidecar is indexed from the envelope discovery decoded (s.env), never
+// by opening its path again. A manifest-type sidecar whose predicate cannot be
+// indexed is returned as unread, with the reason, so a refusal can name it.
+func sidecarManifests(sidecars []sidecarSummary) (manifestIndex, []sidecarReject) {
 	ix := manifestIndex{}
+	var unread []sidecarReject
 	for _, s := range sidecars {
 		if s.predicateType != material.ManifestType && s.predicateType != fileinventory.Type {
 			continue
 		}
-		raw, err := readCompanionFile(s.path)
-		if err != nil {
-			log.Debugf("material manifest sidecar %s: %v", s.path, err)
-			continue
-		}
-		var env dsse.Envelope
-		if err := json.Unmarshal(raw, &env); err != nil {
-			log.Debugf("material manifest sidecar %s: not a DSSE envelope: %v", s.path, err)
-			continue
-		}
-		body, digest, ok := manifestPredicateFromEnvelope(env)
+		body, digest, ok := manifestPredicateFromEnvelope(s.env)
 		if !ok {
+			log.Debugf("material manifest sidecar %s: not an indexable manifest", s.path)
+			unread = append(unread, sidecarReject{path: s.path, reason: errors.New("its manifest predicate could not be read")})
 			continue
 		}
 		ix[digest] = body
 	}
-	return ix
+	return ix, unread
 }
 
 // companionPublished reports whether a leaf-less predicate's SIGNED

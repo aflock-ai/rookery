@@ -237,6 +237,25 @@ type sidecarSummary struct {
 	name          string // stable name for the ExternalAttestation entry
 	signingKeyIDs []string
 	predicateType string
+	// env is the envelope exactly as decoded at discovery. The manifest index
+	// reads it from here instead of opening the path a second time, so what
+	// discovery admitted is what gets indexed.
+	env dsse.Envelope
+}
+
+// sidecarReject is a candidate at a sidecar name next to the bundle that was
+// found and could not be read, with the reason. It is never used as evidence;
+// it only lets a refusal say what it could not read.
+type sidecarReject struct {
+	path   string
+	reason error
+}
+
+// sidecarSet is what discovery found next to one bundle: the envelopes it
+// could read and the candidates it could not.
+type sidecarSet struct {
+	found    []sidecarSummary
+	rejected []sidecarReject
 }
 
 func runPolicyFromBundles(stdout, stderr io.Writer, bundlePaths, pubKeyPaths []string, outputPath string, expiresIn time.Duration, stepPrefix string) error {
@@ -351,8 +370,9 @@ func summarizeOneBundle(stderr io.Writer, path, stepPrefix string) (bundleSummar
 	// emits `<mainPath>-<name>.json` next to the bundle). The Archivista source
 	// has no sidecars — each export is its own DSSE the subject search already
 	// returns — so discovery is done here, in the file adapter, not the core.
-	sidecars, _ := discoverSidecars(path)
-	return summarizeEnvelopeBytes(stderr, raw, path, stepPrefix, sidecars, sidecarManifests(sidecars).lookup)
+	sidecars, _ := discoverSidecarSet(path)
+	index, _ := sidecarManifests(sidecars.found)
+	return summarizeEnvelopeBytes(stderr, raw, path, stepPrefix, sidecars, index.lookup)
 }
 
 // summarizeEnvelopeBytes is the shared envelope-summary core. It parses a
@@ -487,7 +507,7 @@ var errManifestUnresolved = errors.New("the material manifest this predicate say
 // leaves exist, and a policy generated without them is under-constrained. A
 // predicate that withheld its manifest (false) or predates the field (absent)
 // contributes nothing and no error, as before.
-func detachedLeafDigests(pred bundleInnerPredicate, sidecars []sidecarSummary) ([]bundleLeafRef, error) {
+func detachedLeafDigests(pred bundleInnerPredicate, sidecars sidecarSet) ([]bundleLeafRef, error) {
 	if pred.leavesInline() {
 		// Present key, possibly empty: the signed inline set is the answer,
 		// and an empty one is a real answer (the step consumed nothing), not
@@ -503,9 +523,17 @@ func detachedLeafDigests(pred bundleInnerPredicate, sidecars []sidecarSummary) (
 		return nil, fmt.Errorf("%w: manifestUploaded is true but the predicate names no manifest digest", errManifestUnresolved)
 	}
 	digest := pred.Manifest.Digest["sha256"]
-	side, ok := sidecarManifests(sidecars).sidecarFor(digest, pred.MerkleRoot)
+	index, unindexed := sidecarManifests(sidecars.found)
+	side, ok := index.sidecarFor(digest, pred.MerkleRoot)
 	if !ok {
-		return nil, fmt.Errorf("%w: no sidecar next to the bundle hashes to %s and rebuilds root %s (missing, unreadable, or a manifest for a different tree)",
+		// "None hashes to X" is true only of candidates that were decoded and
+		// hashed. A candidate that could not be read was never hashed, so say
+		// which ones those are and why, rather than implying they were checked.
+		if unread := append(append([]sidecarReject(nil), sidecars.rejected...), unindexed...); len(unread) > 0 {
+			return nil, fmt.Errorf("%w: manifest %s (root %s) is not among the sidecars that could be read, and %s",
+				errManifestUnresolved, digest, pred.MerkleRoot, describeSidecarRejects(unread))
+		}
+		return nil, fmt.Errorf("%w: no sidecar next to the bundle hashes to %s and rebuilds root %s (missing, or a manifest for a different tree)",
 			errManifestUnresolved, digest, pred.MerkleRoot)
 	}
 	out := make([]bundleLeafRef, 0, len(side.Leaves))
@@ -538,7 +566,7 @@ func (s fileSink) add(path, digest string) {
 // product or material sink, taking them from the inline leaves when present and
 // from the detached manifest when they were published separately. An
 // attestation that is neither a product nor a material contributes nothing.
-func collectAttestationDigests(a bundleInnerAttestation, sidecars []sidecarSummary, products, materials fileSink, inventories func(string) ([]byte, bool)) error {
+func collectAttestationDigests(a bundleInnerAttestation, sidecars sidecarSet, products, materials fileSink, inventories func(string) ([]byte, bool)) error {
 	var sink fileSink
 	kind := ""
 	switch {
@@ -619,7 +647,7 @@ func collectInventoryDigests(a bundleInnerAttestation, kind string, sink fileSin
 	return nil
 }
 
-func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix string, sidecars []sidecarSummary, inventories func(string) ([]byte, bool)) (bundleSummary, error) {
+func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix string, sidecars sidecarSet, inventories func(string) ([]byte, bool)) (bundleSummary, error) {
 	var env struct {
 		Payload     string            `json:"payload"`
 		PayloadType string            `json:"payloadType"`
@@ -685,7 +713,7 @@ func summarizeEnvelopeBytes(stderr io.Writer, raw []byte, nameHint, stepPrefix s
 		signingKeyIDs:      keyids,
 		predicateTypes:     predicateTypes,
 		outerPredicateType: stmt.PredicateType,
-		sidecars:           sidecars,
+		sidecars:           sidecars.found,
 		certSigners:        certs,
 		productDigests:     products.digests,
 		productPaths:       products.paths,
@@ -845,14 +873,22 @@ func extractLeafConstraintFields(leafPEM []byte) (commonName string, emails, uri
 // Errors decoding a candidate file are silently skipped — finding the
 // main bundle should not fail because a corrupted neighbor exists.
 func discoverSidecars(mainPath string) ([]sidecarSummary, error) {
+	set, err := discoverSidecarSet(mainPath)
+	return set.found, err
+}
+
+// discoverSidecarSet is discoverSidecars keeping the candidates it could not
+// read, so a caller that needs one of them can say why it is missing.
+func discoverSidecarSet(mainPath string) (sidecarSet, error) {
 	dir := filepath.Dir(mainPath)
 	base := filepath.Base(mainPath)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("scan sidecar dir %s: %w", dir, err)
+		return sidecarSet{}, fmt.Errorf("scan sidecar dir %s: %w", dir, err)
 	}
 
 	out := make([]sidecarSummary, 0, 2)
+	var rejected []sidecarReject
 	prefix := base + "-" // e.g. "build.bundle.json-"
 	for _, e := range entries {
 		if e.IsDir() {
@@ -867,49 +903,33 @@ func discoverSidecars(mainPath string) ([]sidecarSummary, error) {
 		// match the `<base>-*.json` pattern (they use `.<kind>.json`),
 		// so the prefix check above already excludes them — but we'll
 		// also validate by attempting a DSSE decode below.
-		side, ok := readSidecar(filepath.Join(dir, name), strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".json"))
-		if !ok {
+		side, err := readSidecar(filepath.Join(dir, name), strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".json"))
+		if err != nil {
+			rejected = append(rejected, sidecarReject{path: filepath.Join(dir, name), reason: err})
 			continue
 		}
 		out = append(out, side)
 	}
-	return out, nil
+	return sidecarSet{found: out, rejected: rejected}, nil
 }
 
-// readSidecar attempts to parse a candidate file as a DSSE envelope
-// carrying a bare-predicate statement. Returns ok=false when the file
-// doesn't fit (not JSON, not DSSE, missing fields) — the caller skips
-// it without error.
-func readSidecar(path, exportName string) (sidecarSummary, bool) {
+// readSidecar parses a candidate file as a DSSE envelope carrying an in-toto
+// statement, through decodeSidecarEnvelope: the same decoder the manifest
+// index uses, so discovery and indexing cannot disagree about a file. The
+// error says why a candidate does not fit (not JSON, not DSSE, missing
+// fields); discovery records it and moves on.
+func readSidecar(path, exportName string) (sidecarSummary, error) {
 	// Companions are read through the size-bounded reader: a sidecar over
 	// inclusionproof.MaxManifestBytes is refused from its inode size before a
 	// byte of it is read, so an oversized file next to a bundle cannot exhaust
 	// memory during discovery.
 	raw, err := readCompanionFile(path)
 	if err != nil {
-		return sidecarSummary{}, false
+		return sidecarSummary{}, err
 	}
-	var env struct {
-		Payload    string `json:"payload"`
-		Signatures []struct {
-			KeyID string `json:"keyid"`
-		} `json:"signatures"`
-	}
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return sidecarSummary{}, false
-	}
-	if env.Payload == "" || len(env.Signatures) == 0 {
-		return sidecarSummary{}, false
-	}
-	payloadBytes, err := base64.StdEncoding.DecodeString(env.Payload)
+	env, predicateType, err := decodeSidecarEnvelope(raw)
 	if err != nil {
-		return sidecarSummary{}, false
-	}
-	var stmt struct {
-		PredicateType string `json:"predicateType"`
-	}
-	if err := json.Unmarshal(payloadBytes, &stmt); err != nil || stmt.PredicateType == "" {
-		return sidecarSummary{}, false
+		return sidecarSummary{}, err
 	}
 	keyids := make([]string, 0, len(env.Signatures))
 	seen := make(map[string]struct{}, len(env.Signatures))
@@ -927,8 +947,47 @@ func readSidecar(path, exportName string) (sidecarSummary, bool) {
 		path:          path,
 		name:          exportName,
 		signingKeyIDs: keyids,
-		predicateType: stmt.PredicateType,
-	}, true
+		predicateType: predicateType,
+		env:           env,
+	}, nil
+}
+
+// decodeSidecarEnvelope is the one decoder for a sidecar's bytes. It goes
+// through dsse.Envelope, which applies the DSSE parsing rules (required keys,
+// either base64 alphabet), and then requires a payload, at least one
+// signature, and an in-toto statement naming its predicate type.
+func decodeSidecarEnvelope(raw []byte) (dsse.Envelope, string, error) {
+	var env dsse.Envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return dsse.Envelope{}, "", fmt.Errorf("not a DSSE envelope: %w", err)
+	}
+	if len(env.Payload) == 0 {
+		return dsse.Envelope{}, "", errors.New("the envelope has an empty payload")
+	}
+	if len(env.Signatures) == 0 {
+		return dsse.Envelope{}, "", errors.New("the envelope has no signatures")
+	}
+	var stmt struct {
+		PredicateType string `json:"predicateType"`
+	}
+	if err := json.Unmarshal(env.Payload, &stmt); err != nil || stmt.PredicateType == "" {
+		return dsse.Envelope{}, "", errors.New("the payload is not an in-toto statement naming a predicate type")
+	}
+	return env, stmt.PredicateType, nil
+}
+
+// describeSidecarRejects lists the candidates that could not be read, each
+// with its reason, for a refusal.
+func describeSidecarRejects(rejects []sidecarReject) string {
+	parts := make([]string, 0, len(rejects))
+	for _, r := range rejects {
+		parts = append(parts, fmt.Sprintf("%s (%v)", r.path, r.reason))
+	}
+	noun := "sidecar"
+	if len(parts) != 1 {
+		noun = "sidecars"
+	}
+	return fmt.Sprintf("%d %s next to the bundle could not be read: %s", len(parts), noun, strings.Join(parts, "; "))
 }
 
 // extractPredicateTypes flattens a statement into the set of inner

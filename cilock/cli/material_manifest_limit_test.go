@@ -56,12 +56,22 @@ func TestReadCompanionFileRefusesBySizeBeforeReading(t *testing.T) {
 		t.Fatalf("the refusal must name the limit: %v", err)
 	}
 
-	// The discovery walk and the manifest index both go through the same
-	// reader: neither admits the oversized file.
-	if _, ok := readSidecar(path, "manifest"); ok {
-		t.Fatal("sidecar discovery accepted a companion over the limit")
+	// The manifest index reads only what discovery decoded, and discovery
+	// reads through the bounded reader: the oversized file is refused there,
+	// for the size, so nothing of it reaches the index.
+	if _, err := readSidecar(path, "manifest"); !errors.Is(err, errCompanionTooLarge) {
+		t.Fatalf("sidecar discovery must refuse a companion over the limit for its size, got %v", err)
 	}
-	ix := sidecarManifests([]sidecarSummary{{path: path, predicateType: material.ManifestType}})
+	// Discovery next to the bundle keeps it only as a named reject, so
+	// nothing of it reaches the index and a refusal can say why.
+	set, err := discoverSidecarSet(filepath.Join(filepath.Dir(path), "bundle.json"))
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+	if len(set.found) != 0 || len(set.rejected) != 1 || !errors.Is(set.rejected[0].reason, errCompanionTooLarge) {
+		t.Fatalf("discovery must reject the oversized companion for its size, got found=%d rejected=%+v", len(set.found), set.rejected)
+	}
+	ix, _ := sidecarManifests(set.found)
 	if len(ix) != 0 {
 		t.Fatalf("the manifest index read a companion over the limit: %d entries", len(ix))
 	}
@@ -210,10 +220,14 @@ func TestCompanionCeilingsAdmitEveryManifestTheProducerMayEmit(t *testing.T) {
 	if _, err := readCompanionFile(path); err != nil {
 		t.Fatalf("a companion carrying a predicate exactly at the producer's limit must be readable, got %v", err)
 	}
-	if _, ok := readSidecar(path, "manifest"); !ok {
-		t.Fatal("sidecar discovery refused a companion whose predicate is exactly at the producer's limit")
+	side, err := readSidecar(path, "manifest")
+	if err != nil {
+		t.Fatalf("sidecar discovery refused a companion whose predicate is exactly at the producer's limit: %v", err)
 	}
-	ix := sidecarManifests([]sidecarSummary{{path: path, predicateType: material.ManifestType}})
+	if side.predicateType != material.ManifestType {
+		t.Fatalf("discovery read predicate type %q, want %q", side.predicateType, material.ManifestType)
+	}
+	ix, _ := sidecarManifests([]sidecarSummary{side})
 	if len(ix) != 1 || ix[digest] == nil {
 		t.Fatalf("the manifest index dropped a companion at the producer's limit: %d entries", len(ix))
 	}

@@ -358,7 +358,7 @@ func derivePolicyFromCommit(ctx context.Context, stderr io.Writer, o policyFromC
 		// nameHint = gitoid: only a filename fallback if the predicate has no
 		// `name`. Collection envelopes from `cilock run -s <step>` always record
 		// the name, so the step name comes from the recorded collection name.
-		s, serr := summarizeEnvelopeBytes(stderr, raw, gitoid, o.stepPrefix, nil, inventories)
+		s, serr := summarizeEnvelopeBytes(stderr, raw, gitoid, o.stepPrefix, sidecarSet{}, inventories)
 		if serr != nil {
 			return nil, 0, fmt.Errorf("summarize attestation %s: %w", shortID(gitoid), serr)
 		}

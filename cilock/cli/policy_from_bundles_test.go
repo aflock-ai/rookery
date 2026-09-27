@@ -132,7 +132,7 @@ func synthBundle(t *testing.T, dir, name, keyid string, innerTypes []string, isC
 		"payloadType": "application/vnd.in-toto+json",
 		"payload":     base64.StdEncoding.EncodeToString(stmtBytes),
 		"signatures": []map[string]string{
-			{"keyid": keyid, "sig": "dummy"},
+			{"keyid": keyid, "sig": "ZHVtbXk="},
 		},
 	}
 	envBytes, err := json.Marshal(env)
@@ -176,7 +176,7 @@ func synthBundleWithFilename(t *testing.T, dir, filename, recordedName, keyid st
 		"payloadType": "application/vnd.in-toto+json",
 		"payload":     base64.StdEncoding.EncodeToString(stmtBytes),
 		"signatures": []map[string]string{
-			{"keyid": keyid, "sig": "dummy"},
+			{"keyid": keyid, "sig": "ZHVtbXk="},
 		},
 	}
 	envBytes, err := json.Marshal(env)
@@ -205,7 +205,7 @@ func writeBarePredicateSidecar(t *testing.T, path, keyid, predicateType string) 
 		"payloadType": "application/vnd.in-toto+json",
 		"payload":     base64.StdEncoding.EncodeToString(stmtBytes),
 		"signatures": []map[string]string{
-			{"keyid": keyid, "sig": "dummy"},
+			{"keyid": keyid, "sig": "ZHVtbXk="},
 		},
 	}
 	envBytes, err := json.Marshal(env)
@@ -588,7 +588,7 @@ func synthCertSignedBundle(t *testing.T, dir, name string, innerTypes []string, 
 		"signatures": []map[string]any{
 			{
 				"keyid":       keyID,
-				"sig":         "dummy",
+				"sig":         "ZHVtbXk=",
 				"certificate": base64.StdEncoding.EncodeToString(leafPEM),
 			},
 		},
