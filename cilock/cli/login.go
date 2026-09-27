@@ -256,6 +256,24 @@ func LogoutCmd() *cobra.Command {
 	return cmd
 }
 
+// whoamiNoSession reports a platform with no human session. An enrolled agent
+// read "run: cilock login" here, the human's login (onbsim, 2026-09-25), so a
+// stored agent is named instead. Either way it is an error: there is still no
+// human session.
+func whoamiNoSession(out io.Writer, url string) error {
+	if agent, pending := storedAgent(url); agent != nil {
+		state := "signs as"
+		if pending {
+			state = "has a not-yet-activated delivery for"
+		}
+		_, _ = fmt.Fprintf(out, "no human session on %s; this machine %s the enrolled agent %s in tenant %s (see `cilock agent status`)\n",
+			auth.NormalizeURL(url), state, agent.AgentID, agent.TenantID)
+		return fmt.Errorf("no human session: attestations sign as the enrolled agent, and policy sessions are a human's `cilock login`")
+	}
+	_, _ = fmt.Fprintf(out, "not logged in to %s (run: cilock login --platform-url %s)\n", auth.NormalizeURL(url), auth.NormalizeURL(url))
+	return fmt.Errorf("no active session")
+}
+
 // WhoamiCmd shows the current stored session for a platform.
 func WhoamiCmd() *cobra.Command {
 	var platformURL string
@@ -280,8 +298,7 @@ func WhoamiCmd() *cobra.Command {
 				return err
 			}
 			if resolved == nil {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "not logged in to %s (run: cilock login --platform-url %s)\n", auth.NormalizeURL(url), auth.NormalizeURL(url))
-				return fmt.Errorf("no active session")
+				return whoamiNoSession(cmd.OutOrStdout(), url)
 			}
 			cred := resolved.Credential
 			out := cmd.OutOrStdout()

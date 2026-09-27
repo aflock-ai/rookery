@@ -52,12 +52,39 @@ func resolvePolicySession(platformURLFlag string) (*policySession, error) {
 		return nil, fmt.Errorf("read session: %w", err)
 	}
 	if cred == nil || cred.Token == "" {
-		return nil, fmt.Errorf("not logged in to %s — run `cilock login` first", auth.NormalizeURL(platformURL))
+		// An enrolled agent was told to run `cilock login`, the human's login
+		// (onbsim, 2026-09-25). Say whose step this is instead.
+		if enrolledAgentPresent(platformURL) {
+			return nil, fmt.Errorf("this needs a human's `cilock login` session on %s, and the enrolled agent cannot open one: agents sign attestations, humans hold policy sessions. Hand this step to your human", auth.NormalizeURL(platformURL))
+		}
+		return nil, fmt.Errorf("not logged in to %s: run `cilock login` first", auth.NormalizeURL(platformURL))
 	}
 	if cred.TenantID == "" {
 		return nil, fmt.Errorf("no working tenant on this session — run `cilock login` (or `cilock use`) to select a tenant")
 	}
 	return &policySession{platformURL: platformURL, cred: cred}, nil
+}
+
+// enrolledAgentPresent reports whether an active or pending enrolled agent is
+// stored for this platform. A store that cannot be read counts as absent: this
+// only chooses the wording of an error that is returned either way.
+func enrolledAgentPresent(platformURL string) bool {
+	agent, _ := storedAgent(platformURL)
+	return agent != nil
+}
+
+// storedAgent is the active enrolled agent for this platform, else the pending
+// one (pending reports true: delivered, not yet redeemed, so it signs nothing
+// until a `cilock run` exchanges it), else nil. Only its non-secret
+// identifiers may be displayed.
+func storedAgent(platformURL string) (agent *auth.AgentCredential, pending bool) {
+	if active, err := auth.LookupAgent(platformURL); err == nil && active != nil {
+		return active, false
+	}
+	if p, err := auth.LookupPendingAgent(platformURL); err == nil && p != nil {
+		return p, true
+	}
+	return nil, false
 }
 
 // policyClient builds the GraphQL policy client for this session, resolving the

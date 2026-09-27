@@ -196,7 +196,10 @@ func requireTrustSession(platformURL string) (*auth.Credential, error) {
 		return nil, fmt.Errorf("read session: %w", err)
 	}
 	if cred == nil || cred.Token == "" {
-		return nil, fmt.Errorf("not logged in to %s — run `cilock login` first (trust needs an admin session)", auth.NormalizeURL(platformURL))
+		if enrolledAgentPresent(platformURL) {
+			return nil, fmt.Errorf("registering CI trust needs a human admin's `cilock login` session on %s, and the enrolled agent cannot open one. Hand this step to your human", auth.NormalizeURL(platformURL))
+		}
+		return nil, fmt.Errorf("not logged in to %s: run `cilock login` first (trust needs an admin session)", auth.NormalizeURL(platformURL))
 	}
 	if !auth.TokenAuthorizedForScope(cred.Token, trustScope) {
 		return nil, fmt.Errorf("this session can't register CI trust — it lacks the %q permission.\n"+

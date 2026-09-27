@@ -163,7 +163,12 @@ func runDoctorChecks(platformURL, archivistaServer string) *DoctorReport {
 		cred = resolvedCred.Credential
 		posture = resolvedCred.Posture()
 	}
-	checkLoggedIn(report, resolved, cred, posture, lookupErr)
+	archivistaTarget := archivistaServer
+	if archivistaTarget == "" {
+		archivistaTarget = pc.Archivista
+	}
+	agent, agentPending := storedAgent(resolved)
+	checkIdentity(report, resolved, cred, agent, agentPending, posture, lookupErr, archivistaTarget, pc.Archivista)
 
 	// 2. Platform reachable + discovery.
 	disc, discErr := platformconfig.Discover(resolved)
@@ -172,14 +177,45 @@ func runDoctorChecks(platformURL, archivistaServer string) *DoctorReport {
 	// 3. Destinations: derived URLs, cross-checked against discovery when present.
 	checkDestinations(report, pc, disc)
 
-	// 4. Upload authorization (same-origin login session vs Archivista origin).
-	archivistaTarget := archivistaServer
-	if archivistaTarget == "" {
-		archivistaTarget = pc.Archivista
-	}
-	checkUploadAuth(report, cred, archivistaTarget, pc.Archivista)
+	// 4. Upload authorization was reported with the identity checks above.
 
 	return report
+}
+
+// checkIdentity reports who this machine signs and uploads as. With no human
+// session but an enrolled agent, the agent IS the identity: doctor used to warn
+// "no stored session" and hint `cilock login` twice, steering an agent into the
+// human's login (onbsim, 2026-09-25). A human session, when present, is checked
+// as before and the agent changes nothing.
+//
+// A PENDING agent (delivered, never redeemed) signs nothing yet: it is a warn,
+// not a pass, because the next run's exchange can still refuse it.
+func checkIdentity(report *DoctorReport, platformURL string, cred *auth.Credential, agent *auth.AgentCredential, agentPending bool, posture string, err error, archivistaTarget, platformArchivista string) {
+	if cred == nil && err == nil && agent != nil {
+		if agentPending {
+			report.add(DoctorCheck{
+				Name:   checkNameLoggedIn,
+				Status: doctorWarn,
+				Detail: fmt.Sprintf("no human session; the enrolled agent %s in tenant %s is delivered but not yet activated, so it signs nothing until a `cilock run` redeems it", agent.AgentID, agent.TenantID),
+				Hint:   "run `cilock agent status`: it must name a principal and an expiry",
+			})
+		} else {
+			report.add(DoctorCheck{
+				Name:   checkNameLoggedIn,
+				Status: doctorPass,
+				Detail: fmt.Sprintf("no human session; attestations sign as the enrolled agent %s in tenant %s", agent.AgentID, agent.TenantID),
+			})
+		}
+		report.add(DoctorCheck{
+			Name:   checkNameUploadAuth,
+			Status: doctorWarn,
+			Detail: "the enrolled agent's upload token comes from its credential exchange at run time, which doctor does not perform",
+			Hint:   "run `cilock agent status`: it must name a principal and an expiry",
+		})
+		return
+	}
+	checkLoggedIn(report, platformURL, cred, posture, err)
+	checkUploadAuth(report, cred, archivistaTarget, platformArchivista)
 }
 
 func checkLoggedIn(report *DoctorReport, platformURL string, cred *auth.Credential, posture string, err error) {
