@@ -58,12 +58,27 @@
     {
       "gate": "pre",
       "kind": "file_exists",
+      "value": "uv.lock"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
       "value": "requirements.txt"
     },
     {
       "gate": "pre",
       "kind": "file_exists",
       "value": "composer.lock"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "Podfile.lock"
+    },
+    {
+      "gate": "pre",
+      "kind": "file_exists",
+      "value": "gradle.lockfile"
     }
   ],
   "emitsFormats": [],
@@ -88,7 +103,7 @@
     {
       "slug": "what-it-captures",
       "title": "What it captures",
-      "markdown": "## What it captures\n\nThe attestor records a list of `lockfiles`. Each entry has three fields:\n\n- `filename` — the path at which the lockfile was found.\n- `content` — the raw file contents as a string.\n- `digest` — a `DigestSet` containing the SHA-256 of the file bytes.\n\nEach lockfile is also emitted as an in-toto subject named `` `file:<path>` `` keyed by its digest.\n\nThe following lockfile filenames are matched exactly (no globbing of the basename):\n\n- `Gemfile.lock` — Ruby (Bundler)\n- `package-lock.json` — Node.js (npm)\n- `yarn.lock` — Node.js (Yarn)\n- `Cargo.lock` — Rust\n- `poetry.lock` — Python (Poetry)\n- `Pipfile.lock` — Python (Pipenv)\n- `requirements.txt` — Python (pip)\n- `composer.lock` — PHP\n- `go.sum` — Go\n- `Podfile.lock` — iOS/macOS (CocoaPods)\n- `gradle.lockfile` — Gradle\n- `pnpm-lock.yaml` — Node.js (pnpm)\n\nSearch behavior is controlled by the `WITNESS_LOCKFILES_SEARCH_PATHS` environment variable, read at attestor construction:\n\n- Unset / empty (default): searches the current directory only.\n- `recursive`: walks the entire tree, skipping `node_modules`, `vendor`, `.git`, `.svn`, `.hg`, `__pycache__`, `venv`, `.venv`, `target`, `build`, `dist`, and any directory whose name begins with `.`.\n- A list using the OS path-list separator (colon on Unix): searches each listed directory non-recursively."
+      "markdown": "## What it captures\n\nThe attestor records a list of `lockfiles`. Each entry has three fields:\n\n- `filename` — the path at which the lockfile was found.\n- `content` — the raw file contents as a string.\n- `digest` — a `DigestSet` containing the SHA-256 of the file bytes.\n\nEach lockfile is also emitted as an in-toto subject named `` `file:<path>` `` keyed by its digest.\n\nThe following lockfile filenames are matched exactly (no globbing of the basename):\n\n- `Gemfile.lock` — Ruby (Bundler)\n- `package-lock.json` — Node.js (npm)\n- `yarn.lock` — Node.js (Yarn)\n- `Cargo.lock` — Rust\n- `poetry.lock` — Python (Poetry)\n- `Pipfile.lock` — Python (Pipenv)\n- `uv.lock` — Python (uv)\n- `requirements.txt` — Python (pip)\n- `composer.lock` — PHP\n- `go.sum` — Go\n- `Podfile.lock` — iOS/macOS (CocoaPods)\n- `gradle.lockfile` — Gradle\n- `pnpm-lock.yaml` — Node.js (pnpm)\n\nSearch behavior is controlled by the `WITNESS_LOCKFILES_SEARCH_PATHS` environment variable, read at attestor construction:\n\n- Unset / empty (default): searches the current directory only.\n- `recursive`: walks the entire tree, skipping `node_modules`, `vendor`, `.git`, `.svn`, `.hg`, `__pycache__`, `venv`, `.venv`, `target`, `build`, `dist`, and any directory whose name begins with `.`.\n- A list using the OS path-list separator (colon on Unix): searches each listed directory non-recursively."
     },
     {
       "slug": "when-to-use",

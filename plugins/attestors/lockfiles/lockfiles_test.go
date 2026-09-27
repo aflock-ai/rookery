@@ -319,6 +319,24 @@ func TestAttestor_Attest_RequirementsTxt(t *testing.T) {
 	assert.Equal(t, "flask==2.0\nrequests", attestor.Lockfiles[0].Content)
 }
 
+// uv.lock is the committed lock of every uv project (pallets/click among
+// them). Unrecognized, a uv project's lockfiles attestation was empty: the
+// one file its dependency set hangs on went unrecorded.
+func TestAttestor_Attest_UvLock(t *testing.T) {
+	tempDir := chdirTemp(t)
+
+	lock := "version = 1\nrevision = 3\nrequires-python = \">=3.10\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "uv.lock"), []byte(lock), 0644))
+
+	attestor := &Attestor{}
+	require.NoError(t, attestor.Attest(&attestation.AttestationContext{}))
+	require.Len(t, attestor.Lockfiles, 1)
+	assert.Equal(t, "uv.lock", attestor.Lockfiles[0].Filename)
+	assert.Equal(t, lock, attestor.Lockfiles[0].Content)
+	_, ok := attestor.Subjects()["file:uv.lock"]
+	assert.True(t, ok, "uv.lock is a subject")
+}
+
 func TestAttestor_Subjects(t *testing.T) {
 	attestor := &Attestor{
 		Lockfiles: []LockfileInfo{
@@ -365,4 +383,5 @@ func TestLockfilePatterns(t *testing.T) {
 	assert.Contains(t, patterns, "go.sum")
 	assert.Contains(t, patterns, "package-lock.json")
 	assert.Contains(t, patterns, "pnpm-lock.yaml")
+	assert.Contains(t, patterns, "uv.lock")
 }

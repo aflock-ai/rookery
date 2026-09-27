@@ -53,6 +53,7 @@ type sbomSubjectExtractor struct {
 	// Spec: https://cyclonedx.org/docs/1.6/json/#metadata_component
 	Metadata struct {
 		Component struct {
+			Type    string `json:"type"`
 			Name    string `json:"name"`
 			Version string `json:"version"`
 			PURL    string `json:"purl"`
@@ -306,7 +307,11 @@ func backRefsFromExtraction(predicateType string, extracted sbomSubjectExtractor
 		name = extracted.SPDXDocumentName
 	case CycloneDxPredicateType:
 		name = extracted.Metadata.Component.Name
-		if digest := imageDigestFromPURL(extracted.Metadata.Component.PURL); digest != "" {
+		digest := imageDigestFromPURL(extracted.Metadata.Component.PURL)
+		if digest == "" {
+			digest = containerDigestFromVersion(extracted.Metadata.Component.Type, extracted.Metadata.Component.Version)
+		}
+		if digest != "" {
 			refs[fmt.Sprintf("imagedigest:%s", digest)] = cryptoutil.DigestSet{
 				cryptoutil.DigestValue{Hash: crypto.SHA256}: digest,
 			}
@@ -322,6 +327,27 @@ func backRefsFromExtraction(predicateType string, extracted sbomSubjectExtractor
 	}
 
 	return refs
+}
+
+// containerDigestFromVersion returns the bare hex of a container
+// component's version when it is exactly sha256:<64 lowercase hex>. syft
+// describes an image source this way (type "container", version = the
+// manifest digest) and emits no purl for it, so without this a syft image
+// SBOM never backrefs the image it inventories.
+func containerDigestFromVersion(componentType, version string) string {
+	if componentType != "container" {
+		return ""
+	}
+	hexDigest, ok := strings.CutPrefix(version, "sha256:")
+	if !ok || len(hexDigest) != 64 {
+		return ""
+	}
+	for _, c := range hexDigest {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+	return hexDigest
 }
 
 // imageDigestFromPURL extracts the bare sha256 digest from a package URL of

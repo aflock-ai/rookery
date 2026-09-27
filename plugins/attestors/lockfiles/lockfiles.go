@@ -99,6 +99,7 @@ func lockfilePatterns() []string {
 		"Cargo.lock",        // Rust
 		"poetry.lock",       // Python (Poetry)
 		"Pipfile.lock",      // Python (Pipenv)
+		"uv.lock",           // Python (uv)
 		"requirements.txt",  // Python (pip)
 		"composer.lock",     // PHP
 		"go.sum",            // Go

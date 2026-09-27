@@ -15,9 +15,13 @@
 package sbom
 
 import (
+	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,6 +60,80 @@ func TestBackRefsFromExtraction_UnencodedPurlSeparator(t *testing.T) {
 
 	refs := backRefsFromExtraction(CycloneDxPredicateType, extracted)
 	assert.Contains(t, refs, "imagedigest:"+sbomTestImageDigest)
+}
+
+// TestBackRefsFromExtraction_SyftContainerVersion: syft (1.5.0 in
+// boms/cyclonedx-json/alpine.cyclonedx.json, and 1.52.0 on an OCI archive)
+// emits NO purl for an image source. It puts the manifest digest in
+// metadata.component.version of a type "container" component. That is the
+// image digest and must backref as imagedigest:, or a syft image SBOM never
+// joins the docker attestor's imagedigest subject.
+func TestBackRefsFromExtraction_SyftContainerVersion(t *testing.T) {
+	var extracted sbomSubjectExtractor
+	extracted.Metadata.Component.Type = "container"
+	extracted.Metadata.Component.Name = "dist/hugo-image.tar"
+	extracted.Metadata.Component.Version = "sha256:" + sbomTestImageDigest
+
+	refs := backRefsFromExtraction(CycloneDxPredicateType, extracted)
+	assert.Equal(t, map[string]string{"imagedigest:" + sbomTestImageDigest: sbomTestImageDigest}, flatten(refs))
+}
+
+// The real syft 1.5.0 fixture takes the same path end to end.
+func TestBackRefsFromExtraction_SyftFixture(t *testing.T) {
+	bytes, err := os.ReadFile("boms/cyclonedx-json/alpine.cyclonedx.json")
+	require.NoError(t, err)
+	var extracted sbomSubjectExtractor
+	require.NoError(t, json.Unmarshal(bytes, &extracted))
+	refs := backRefsFromExtraction(CycloneDxPredicateType, extracted)
+	assert.Contains(t, refs, "imagedigest:1c3b93ed450e26eac89b471d6d140e2f99488f489739b8b8ea5e8202dd086f82")
+}
+
+// A digest-shaped version is an image digest only on a container component,
+// and only when it is exactly sha256:<64 hex>. A library whose version looks
+// like a digest, or a malformed one, falls back to the name.
+func TestBackRefsFromExtraction_ContainerVersionIsExact(t *testing.T) {
+	for name, component := range map[string][2]string{
+		"library type":    {"library", "sha256:" + sbomTestImageDigest},
+		"no type":         {"", "sha256:" + sbomTestImageDigest},
+		"short digest":    {"container", "sha256:abc"},
+		"uppercase":       {"container", "sha256:" + strings.Repeat("A", 64)},
+		"non-hex":         {"container", "sha256:" + strings.Repeat("g", 64)},
+		"other algorithm": {"container", "sha512:" + sbomTestImageDigest},
+		"trailing text":   {"container", "sha256:" + sbomTestImageDigest + " x"},
+		"tag":             {"container", "3.24"},
+	} {
+		var extracted sbomSubjectExtractor
+		extracted.Metadata.Component.Type = component[0]
+		extracted.Metadata.Component.Name = "img"
+		extracted.Metadata.Component.Version = component[1]
+		refs := backRefsFromExtraction(CycloneDxPredicateType, extracted)
+		assert.Equal(t, map[string]string{"name:img": ""}, keysOnly(refs), name)
+	}
+	// A purl digest wins over the version when both are present.
+	var extracted sbomSubjectExtractor
+	extracted.Metadata.Component.Type = "container"
+	extracted.Metadata.Component.Version = "sha256:" + strings.Repeat("7", 64)
+	extracted.Metadata.Component.PURL = "pkg:oci/app@sha256:" + sbomTestImageDigest
+	assert.Equal(t, map[string]string{"imagedigest:" + sbomTestImageDigest: sbomTestImageDigest},
+		flatten(backRefsFromExtraction(CycloneDxPredicateType, extracted)))
+}
+
+func flatten(refs map[string]cryptoutil.DigestSet) map[string]string {
+	out := map[string]string{}
+	for key, set := range refs {
+		for _, value := range set {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func keysOnly(refs map[string]cryptoutil.DigestSet) map[string]string {
+	out := map[string]string{}
+	for key := range refs {
+		out[key] = ""
+	}
+	return out
 }
 
 // TestBackRefsFromExtraction_NameFallback: without a digest-bearing purl,

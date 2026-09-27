@@ -25,6 +25,7 @@ The following lockfile filenames are matched exactly (no globbing of the basenam
 - `Cargo.lock` — Rust
 - `poetry.lock` — Python (Poetry)
 - `Pipfile.lock` — Python (Pipenv)
+- `uv.lock` — Python (uv)
 - `requirements.txt` — Python (pip)
 - `composer.lock` — PHP
 - `go.sum` — Go

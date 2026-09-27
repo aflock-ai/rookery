@@ -27,3 +27,13 @@ func TestDetectorYAMLParses(t *testing.T) {
 func TestDetectorPreGateFiresOnFile(t *testing.T) {
 	detectiontest.AssertPreGateFiresOnFile(t, Name, detectorYAML, "package-lock.json")
 }
+
+// The pre-gate must fire for every lockfile the attestor captures; a name
+// the attestor knows but detection does not is a lockfile never suggested.
+func TestDetectorPreGateFiresOnEveryCapturedLockfile(t *testing.T) {
+	for _, name := range lockfilePatterns() {
+		t.Run(name, func(t *testing.T) {
+			detectiontest.AssertPreGateFiresOnFile(t, Name, detectorYAML, name)
+		})
+	}
+}

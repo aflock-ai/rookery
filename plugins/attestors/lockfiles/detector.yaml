@@ -1,6 +1,6 @@
 apiVersion: cilock.detection/v0.1
 name: lockfiles
-description: "Captures dependency lockfile contents (npm/yarn/pnpm/go/Cargo/Python/Ruby) when present in the workspace."
+description: "Captures dependency lockfile contents (npm/yarn/pnpm/go/Cargo/Python/Ruby/PHP/CocoaPods/Gradle) when present in the workspace."
 
 category: [dependency-resolve]
 
@@ -15,8 +15,11 @@ pre:
       - file_exists: "Gemfile.lock"
       - file_exists: "poetry.lock"
       - file_exists: "Pipfile.lock"
+      - file_exists: "uv.lock"
       - file_exists: "requirements.txt"
       - file_exists: "composer.lock"
+      - file_exists: "Podfile.lock"
+      - file_exists: "gradle.lockfile"
 
 llm_hints:
   on_match: "Lockfile contents captured for downstream provenance and SBOM correlation."
@@ -31,7 +34,7 @@ contract:
     volatile_fields: []
   subjects:
     - prefix: "file:"
-      description: "each discovered lockfile, keyed file:<path> (e.g. Gemfile.lock, package-lock.json, yarn.lock, Cargo.lock, poetry.lock, Pipfile.lock, requirements.txt, composer.lock, go.sum, Podfile.lock, gradle.lockfile, pnpm-lock.yaml); path is relative to the search root and digested with SHA256"
+      description: "each discovered lockfile, keyed file:<path> (e.g. Gemfile.lock, package-lock.json, yarn.lock, Cargo.lock, poetry.lock, Pipfile.lock, uv.lock, requirements.txt, composer.lock, go.sum, Podfile.lock, gradle.lockfile, pnpm-lock.yaml); path is relative to the search root and digested with SHA256"
   schema_required: true
   credentials: []
   fixtures:
