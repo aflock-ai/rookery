@@ -1,0 +1,6 @@
+name = "semgrep-attestor"
+version = "0.1.0"
+defaultTargets = ["SemgrepAttestor"]
+
+[[lean_lib]]
+name = "SemgrepAttestor"
