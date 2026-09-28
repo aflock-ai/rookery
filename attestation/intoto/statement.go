@@ -24,9 +24,31 @@ import (
 )
 
 const (
+	// StatementTypeV1 is the in-toto Statement v1 _type, which slsa-verifier
+	// and gh attestation verify expect for SLSA v1 provenance. Nothing signs
+	// it yet: readers accept it first, then cilock moves its collections to
+	// NewStatementV1 (#9879).
+	StatementTypeV1 = "https://in-toto.io/Statement/v1"
+	// StatementType is the legacy v0.1 _type. NewStatement still emits it,
+	// because platform-signed records (push receipts, VSAs, entitlements)
+	// are checked for it byte-for-byte by deployed verifiers. Readers accept
+	// both through IsStatementType.
 	StatementType = "https://in-toto.io/Statement/v0.1"
 	PayloadType   = "application/vnd.in-toto+json"
 )
+
+// IsStatementType reports whether t is an in-toto Statement _type this
+// module reads: v1, or the legacy v0.1. The field layout is identical.
+func IsStatementType(t string) bool {
+	return t == StatementTypeV1 || t == StatementType
+}
+
+// NewStatementV1 is NewStatement with the in-toto Statement v1 _type.
+func NewStatementV1(predicateType string, predicate []byte, subjects map[string]cryptoutil.DigestSet) (Statement, error) {
+	statement, err := NewStatement(predicateType, predicate, subjects)
+	statement.Type = StatementTypeV1
+	return statement, err
+}
 
 type Subject struct {
 	Name   string            `json:"name"`

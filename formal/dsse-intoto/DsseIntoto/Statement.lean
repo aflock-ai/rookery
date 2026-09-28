@@ -123,7 +123,7 @@ def newStatement (predType : String) (pred : Option JKind)
   | some k => .ok ⟨statementV01, sortSubjects subs, predType, k⟩
 
 /-- `NewStatement` as it must be: refuse what the v1 body forbids. The type
-    string stays the caller's concern (#9827 moved cilock to v1 through
+    string stays the caller's concern (#9879 moves cilock to v1 through
     `NewStatementV1`; #9841 tracks the platform-signed emitters). -/
 def newStatementReq (ty predType : String) (pred : Option JKind)
     (subs : List (String × List (String × String))) : Except MkErr Statement :=
@@ -136,14 +136,14 @@ def newStatementReq (ty predType : String) (pred : Option JKind)
     else .ok ⟨ty, sortSubjects subs, predType, k⟩
 
 /-- `intoto.NewStatement` as built since #10058: the fixed constructor, with
-    `_type` still v0.1 (#9827 moved cilock's collections to v1 through
+    `_type` still v0.1 (#9879 moves cilock's collections to v1 through
     `NewStatementV1`; #9841 holds the platform-signed emitters on v0.1). It
     refuses in the order the code checks: invalid JSON, empty predicateType,
     non-object predicate, then the first subject, in sorted order, with no
     digest. -/
--- cite: attestation/intoto/statement.go:26-29 sha256:71f553ef51eef1ba
--- cite: attestation/intoto/statement.go:43-91 sha256:9ac6f8d5201234e9
--- cite: attestation/intoto/statement.go:93-105 sha256:cb7a2678df3b4656
+-- cite: attestation/intoto/statement.go:36-37 sha256:e3ef8d16d2891439
+-- cite: attestation/intoto/statement.go:65-113 sha256:9ac6f8d5201234e9
+-- cite: attestation/intoto/statement.go:115-127 sha256:cb7a2678df3b4656
 def newStatementBuilt (predType : String) (pred : Option JKind)
     (subs : List (String × List (String × String))) : Except MkErr Statement :=
   newStatementReq statementV01 predType pred subs
