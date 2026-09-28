@@ -139,6 +139,12 @@ function main() {
     ) + '\n',
   );
 
+  // The standards guidance catalog (SLSA Build / ALPS ceilings and next steps).
+  // Written beside catalog/, not in it: gen-pages treats every catalog/*.json
+  // as a tool. Rendered to docs/reference/standards-guidance.md by gen-pages.
+  const standards = JSON.parse(run(bin, ['tools', 'standards', '--format', 'json']));
+  writeFileSync(join(REPO, '_generated', 'standards.json'), JSON.stringify(standards, null, 2) + '\n');
+
   console.log(`[gen-catalog] wrote ${index.length} entries (${index.filter((e) => e.hasDoc).length} with doc) to ${OUT_DIR}`);
   console.log(`[gen-catalog] (${readdirSync(OUT_DIR).length} files)`);
 }

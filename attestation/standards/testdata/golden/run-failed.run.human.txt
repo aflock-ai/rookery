@@ -1,0 +1,4 @@
+  standards: observed ceilings, NOT verified levels (a ceiling is the most a verifier could grant)
+    SLSA Build: ceiling none (this run has no signed collection)
+    ALPS 0.1: ceiling unknown (no signed collection)
+      ALPS-3: requires cilockd (not yet available)

@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/detection"
+	"github.com/aflock-ai/rookery/attestation/standards"
 	"github.com/aflock-ai/rookery/cilock/internal/keyguard"
 )
 
@@ -211,6 +212,13 @@ type RunSummary struct {
 	// querying the evidence store months later. nil when no attestor in the run
 	// declared a capture expectation.
 	Capture *detection.CaptureReport `json:"capture,omitempty"`
+
+	// Standards is the observed SLSA Build and ALPS CEILING for this run, with
+	// the ordered next steps that would raise it. It is never a verified level:
+	// each standard carries `verified_level: null`. Versioned by its own
+	// `schema` field (standards.GuidanceSchema) so an agent can branch on it.
+	// nil when the embedded catalog failed to load.
+	Standards *standards.Guidance `json:"standards,omitempty"`
 }
 
 // PrincipalKindAgent is the RunSummary.PrincipalKind (and `cilock agent status`
@@ -406,6 +414,7 @@ func (s *RunSummary) WriteHuman(w io.Writer) { //nolint:gocyclo // straight-line
 	if s.ALPSVerdict != "" {
 		fmt.Fprintf(&b, "  %s\n", s.ALPSVerdict)
 	}
+	s.Standards.WriteHuman(&b, "  ")
 	if s.AssuranceLevel != "" {
 		fmt.Fprintf(&b, "  platform authentication: %s (AAL; not a SLSA or ALPS level)\n",
 			sanitizeForTerminal(s.AssuranceLevel))

@@ -1,0 +1,40 @@
+{
+  "schema": "cilock.standards-guidance/v1",
+  "scope": "run",
+  "audience": "human",
+  "notice": "A ceiling is the highest level this evidence could support. It is not a verified level: a SLSA Build level needs an assessment of the build platform, and an ALPS level needs an independent verifier.",
+  "slsa_build": {
+    "spec": "SLSA v1.2 Build track",
+    "ceiling": "none",
+    "basis": "this run has no signed collection",
+    "verified_level": null,
+    "observed": {
+      "hosted_runner": true,
+      "provenance": false,
+      "timestamped": true,
+      "trusted_builder": false,
+      "workflow_signer": true
+    }
+  },
+  "alps": {
+    "spec": "ALPS 0.1",
+    "ceiling": "unknown",
+    "basis": "no signed collection",
+    "verified_level": null,
+    "observed": {
+      "boundary_by_observer": false,
+      "isolated": false,
+      "principal_issued": false,
+      "signed": false,
+      "timestamped": true
+    },
+    "unavailable": [
+      {
+        "level": "ALPS-3",
+        "status": "future",
+        "requires": "requires cilockd (not yet available)"
+      }
+    ]
+  },
+  "next_steps": []
+}

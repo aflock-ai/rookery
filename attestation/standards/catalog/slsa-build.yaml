@@ -1,0 +1,158 @@
+# SLSA Build track guidance catalog.
+#
+# Data, not code: the requirements of each level, the fact cilock observes for
+# each, and the ordered actions that raise a run's ceiling. The decision of
+# WHICH level a set of observations supports lives in Go (standards.DeriveSLSA),
+# mirrors `deriveSlsa` in formal/ci-provenance/CiProvenance/Slsa.lean, and is
+# differential-tested against it. This file only says what to do next.
+#
+# `closes` names the observation a step supplies. Valid observations for this
+# standard: provenance, hosted_runner, workflow_signer, timestamped,
+# trusted_builder. A step whose status is `planned` is reported as "coming":
+# its snippet and command are withheld from run/verify output until it ships.
+schema: cilock.standards-catalog/v1
+standard: slsa_build
+title: SLSA Build
+spec: SLSA v1.2 Build track
+spec_url: https://slsa.dev/spec/v1.2/levels
+levels:
+  - level: L1
+    status: available
+    requires: Provenance exists for the build.
+    observed_by: The run selected the slsa attestor (`-a slsa`) and signed the collection.
+  - level: L2
+    status: available
+    requires: Provenance is generated and signed by a hosted build platform and timestamped.
+    observed_by: >-
+      The signing leaf is a keyless CI workload identity (GitHub Actions, gitlab.com, Buildkite,
+      CircleCI or a Kubernetes service account, recognized by its OIDC issuer) and its
+      runner-environment names a provider-hosted runner, and the envelope carries an RFC 3161
+      timestamp. On a self-hosted runner, CircleCI or Kubernetes the level depends on whether
+      you treat your runner operator as the build platform (formal/slsa-tracks interpretation
+      I2), so cilock reports those as not provider-hosted.
+  - level: L3
+    status: planned
+    requires: >-
+      Provenance is unforgeable by the tenant's build steps: it is signed under a builder
+      identity no build step can obtain, on an isolated, ephemeral runner.
+    observed_by: >-
+      The signing leaf's Build Signer URI names the isolated provenance workflow
+      (builder_identity on the slsa-provenance-workflow step), not the tenant workflow.
+      GitHub Actions only: other CI signer identities are pipeline-wide.
+steps:
+  - id: slsa-provenance-attestor
+    target_level: L1
+    status: available
+    closes: provenance
+    when: any
+    why: SLSA Build L1 needs provenance, and this run produced none.
+    action: Add the slsa attestor to the cilock run invocation.
+    agent_action: Add `-a slsa` to your `cilock run` command and re-run it.
+    command: cilock run --step build -a slsa -- <your build command>
+  - id: slsa-hosted-runner
+    target_level: L2
+    status: available
+    closes: hosted_runner
+    when: any
+    why: >-
+      SLSA Build L2 needs a hosted build platform. A laptop is never one. On a self-hosted
+      runner, CircleCI or Kubernetes it depends on whether you treat your runner operator as
+      the build platform; a provider-hosted runner (GitHub-hosted, gitlab.com SaaS, Buildkite
+      hosted) removes that question.
+    action: >-
+      Run the build on a provider-hosted runner (GitHub-hosted, gitlab.com SaaS, or Buildkite
+      hosted), or decide that your runner operator counts as the build platform and record why.
+    agent_action: >-
+      Move this build into a CI job on a provider-hosted runner, for example a GitHub Actions
+      job with `runs-on: ubuntu-latest`. On a self-hosted runner, tell your human that this level
+      depends on whether they treat the runner operator as the build platform.
+    snippet: |
+      jobs:
+        build:
+          runs-on: ubuntu-latest
+  - id: slsa-workflow-identity
+    target_level: L2
+    status: available
+    closes: workflow_signer
+    when: any
+    why: >-
+      SLSA Build L2 needs provenance signed by the platform's workload identity, not a key
+      or a person's session.
+    action: >-
+      Sign keyless with your CI's workload OIDC identity. GitHub Actions works with the
+      platform Fulcio or public Sigstore (grant `id-token: write` and use cilock-action).
+      gitlab.com, Buildkite hosted and CircleCI cloud work with the platform Fulcio from the
+      CI/lock release after 4.5.0, which fetches their job token itself (on gitlab.com declare
+      an `id_tokens` entry with audience `sigstore`); with CI/lock 4.5.0 or earlier, and on
+      Kubernetes, sign through public Sigstore Fulcio.
+    agent_action: >-
+      Sign with the CI job's OIDC identity instead of a key. On GitHub Actions add
+      `permissions: id-token: write` and run cilock through `aflock-ai/cilock-action`. On
+      gitlab.com, Buildkite or CircleCI with a CI/lock newer than 4.5.0, sign keyless against
+      the platform Fulcio (on gitlab.com add an `id_tokens` entry with audience `sigstore`);
+      with CI/lock 4.5.0 or earlier, or on Kubernetes, sign keyless against public Sigstore
+      Fulcio.
+    docs: https://cilock.dev/getting-started/quickstart-ci
+    snippet: |
+      permissions:
+        id-token: write
+        contents: read
+      steps:
+        - uses: aflock-ai/cilock-action@v1.0.4   # pin to a 40-character commit SHA
+          with:
+            step: build
+            command: "<your build command>"
+            attestations: environment git github slsa
+  - id: slsa-timestamp
+    target_level: L2
+    status: available
+    closes: timestamped
+    when: any
+    why: The envelope carries no trusted timestamp, so a short-lived keyless leaf cannot be verified later.
+    action: Sign with a timestamp authority.
+    agent_action: Add `--timestamp-servers <tsa-url>` to `cilock run`, or keep `--platform-url` set so the platform TSA is used.
+    command: cilock run --step build -a slsa --timestamp-servers <tsa-url> -- <your build command>
+  - id: slsa-provenance-workflow
+    target_level: L3
+    status: planned
+    closes: trusted_builder
+    when: any
+    # GitHub only (and a local run, whose path to L3 is moving to GitHub Actions).
+    # Other CIs get the limit below instead of this step.
+    ci: [github, none]
+    why: >-
+      Inline provenance is signed by the same workflow identity the build steps can mint,
+      so a build step can forge it (issue #9822). L3 needs a separate builder identity,
+      which only GitHub Actions' reusable-workflow identity provides.
+    action: >-
+      Coming: the isolated cilock provenance workflow. When it ships, add a `provenance`
+      job that needs the build job and signs the build's subjects under its own identity.
+    agent_action: >-
+      Coming, not yet published: the isolated provenance workflow
+      aflock-ai/cilock-action/.github/workflows/provenance.yml. Do not add it yet; re-run
+      cilock after it ships for the pinned snippet.
+    uses: aflock-ai/cilock-action/.github/workflows/provenance.yml
+    # Set to the 40-character commit SHA and flip status to `available` when the
+    # workflow ships. A test refuses an available step with an unpinned snippet.
+    pin: ""
+    builder_identity: https://github.com/aflock-ai/cilock-action/.github/workflows/provenance.yml@
+    snippet: |
+      provenance:
+        needs: build
+        permissions:
+          id-token: write
+        uses: aflock-ai/cilock-action/.github/workflows/provenance.yml@{{pin}}
+        with:
+          subjects: ${{ needs.build.outputs.subjects }}
+# Levels a CI platform cannot reach, from formal/slsa-tracks/matrix.json: Build
+# L3 is refuted on gitlab.com, Buildkite and CircleCI (the signer identity is
+# pipeline-wide, so a build step can mint it), and on Kubernetes it needs a
+# cilockd sidecar, which is not built. Reported only; never an action.
+limits:
+  - level: L3
+    ci: [gitlab, buildkite, circleci, kubernetes]
+    status: future
+    requires: >-
+      not reachable on this CI today: its signer identity is pipeline-wide, so a build step
+      can mint it. The only paths are the GitHub Actions provenance workflow (coming) and
+      cilockd on a runner you operate (not yet available).

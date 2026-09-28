@@ -1,0 +1,35 @@
+  standards: observed ceilings, NOT verified levels (a ceiling is the most a verifier could grant)
+    SLSA Build: ceiling none (this run carries no SLSA provenance)
+      to reach L1:
+        - Add the slsa attestor to the cilock run invocation.
+          $ cilock run --step build -a slsa -- <your build command>
+      to reach L2:
+        - Run the build on a provider-hosted runner (GitHub-hosted, gitlab.com SaaS, or Buildkite hosted), or decide that your runner operator counts as the build platform and record why.
+          | jobs:
+          |   build:
+          |     runs-on: ubuntu-latest
+        - Sign keyless with your CI's workload OIDC identity. GitHub Actions works with the platform Fulcio or public Sigstore (grant `id-token: write` and use cilock-action). gitlab.com, Buildkite hosted and CircleCI cloud work with the platform Fulcio from the CI/lock release after 4.5.0, which fetches their job token itself (on gitlab.com declare an `id_tokens` entry with audience `sigstore`); with CI/lock 4.5.0 or earlier, and on Kubernetes, sign through public Sigstore Fulcio.
+          | permissions:
+          |   id-token: write
+          |   contents: read
+          | steps:
+          |   - uses: aflock-ai/cilock-action@v1.0.4   # pin to a 40-character commit SHA
+          |     with:
+          |       step: build
+          |       command: "<your build command>"
+          |       attestations: environment git github slsa
+          docs: https://cilock.dev/getting-started/quickstart-ci
+        - Sign with a timestamp authority.
+          $ cilock run --step build -a slsa --timestamp-servers <tsa-url> -- <your build command>
+      to reach L3:
+        - Coming: the isolated cilock provenance workflow. When it ships, add a `provenance` job that needs the build job and signs the build's subjects under its own identity.
+    ALPS 0.1: ceiling ALPS-0 (signed by a signing key, not a platform-issued non-human principal)
+      to reach ALPS-1:
+        - Enroll an agent identity for this machine and approve it in the browser.
+          $ cilock enroll agent
+        - Sign with a timestamp authority.
+          $ cilock run --step <step> --timestamp-servers <tsa-url> -- <command>
+      to reach ALPS-2:
+        - Coming: boundary attestation in alps-evidence. Until it ships, run the agent inside the recommended sandbox so the run already has the boundary the attestation will record.
+          docs: https://pushgate.dev/docs/agent-sandbox
+      ALPS-3: requires cilockd (not yet available)

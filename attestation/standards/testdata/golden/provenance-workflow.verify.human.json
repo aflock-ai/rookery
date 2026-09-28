@@ -1,0 +1,50 @@
+{
+  "schema": "cilock.standards-guidance/v1",
+  "scope": "verify",
+  "audience": "human",
+  "notice": "A ceiling is the highest level this evidence could support. It is not a verified level: a SLSA Build level needs an assessment of the build platform, and an ALPS level needs an independent verifier.",
+  "slsa_build": {
+    "spec": "SLSA v1.2 Build track",
+    "ceiling": "L3",
+    "basis": "verified provenance is signed by the isolated provenance workflow on a GitHub-hosted runner",
+    "verified_level": null,
+    "observed": {
+      "hosted_runner": true,
+      "provenance": true,
+      "timestamped": true,
+      "trusted_builder": true,
+      "workflow_signer": true
+    }
+  },
+  "alps": {
+    "spec": "ALPS 0.1",
+    "ceiling": "ALPS-0",
+    "basis": "signed by a CI workflow identity; platform issuance is not assessed yet, so ALPS-1 is not reported",
+    "verified_level": null,
+    "observed": {
+      "boundary_by_observer": false,
+      "isolated": false,
+      "principal_issued": false,
+      "signed": true,
+      "timestamped": true
+    },
+    "unavailable": [
+      {
+        "level": "ALPS-3",
+        "status": "future",
+        "requires": "requires cilockd (not yet available)"
+      }
+    ]
+  },
+  "next_steps": [
+    {
+      "id": "alps-boundary-attestation",
+      "standard": "alps",
+      "target_level": "ALPS-2",
+      "status": "planned",
+      "why": "ALPS 2 needs an enforced sandbox and a non-agent observer that signs the boundary. cilock records no boundary today, so no run can present ALPS 2 evidence yet.",
+      "action": "Coming: boundary attestation in alps-evidence. Until it ships, run the agent inside the recommended sandbox so the run already has the boundary the attestation will record.",
+      "docs": "https://pushgate.dev/docs/agent-sandbox"
+    }
+  ]
+}

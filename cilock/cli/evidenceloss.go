@@ -108,7 +108,7 @@ func init() {
 // at read time, so a test that sets the variable with t.Setenv is observed
 // without re-binding.
 func inGitHubActions() bool {
-	return viper.GetString(gitHubActionsKey) == "true"
+	return viper.GetString(gitHubActionsKey) == envTrue
 }
 
 // reportEvidenceLoss writes the annotation. Takes its writer so a test can read

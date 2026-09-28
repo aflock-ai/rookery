@@ -863,6 +863,19 @@ cilock tools show sarif --section policy-gotcha
 cilock tools show sarif --format json
 ```
 
+### `cilock tools standards`
+
+Print the SLSA Build and ALPS guidance catalog: each level's requirement, how cilock observes it, and the ordered next steps that raise a run's ceiling. `cilock run` and `cilock verify` read this catalog to print an observed **ceiling** per standard, never a verified level (see [Standards guidance](./standards-guidance.md)). Steps marked `planned` are coming and carry no copyable snippet in run or verify output; levels marked `future` get no action.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--format <fmt>` | `text` | `text` or `json` (the catalog the docs page generates from). |
+
+```bash
+cilock tools standards
+cilock tools standards --format json
+```
+
 ### `cilock tools test-plan`
 
 Emit a structured test plan describing how to validate each detector (what triggers it, the expected fire decision, and a negative case). Pipe `--format=json` into a runner that exercises each scenario against `cilock plan`.

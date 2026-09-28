@@ -1,0 +1,28 @@
+  standards: observed ceilings, NOT verified levels (a ceiling is the most a verifier could grant)
+    SLSA Build: ceiling L1 (signed by a signing key, not a hosted build platform)
+      to reach L2:
+        - Move this build into a CI job on a provider-hosted runner, for example a GitHub Actions job with `runs-on: ubuntu-latest`. On a self-hosted runner, tell your human that this level depends on whether they treat the runner operator as the build platform.
+          | jobs:
+          |   build:
+          |     runs-on: ubuntu-latest
+        - Sign with the CI job's OIDC identity instead of a key. On GitHub Actions add `permissions: id-token: write` and run cilock through `aflock-ai/cilock-action`. On gitlab.com, Buildkite or CircleCI with a CI/lock newer than 4.5.0, sign keyless against the platform Fulcio (on gitlab.com add an `id_tokens` entry with audience `sigstore`); with CI/lock 4.5.0 or earlier, or on Kubernetes, sign keyless against public Sigstore Fulcio.
+          | permissions:
+          |   id-token: write
+          |   contents: read
+          | steps:
+          |   - uses: aflock-ai/cilock-action@v1.0.4   # pin to a 40-character commit SHA
+          |     with:
+          |       step: build
+          |       command: "<your build command>"
+          |       attestations: environment git github slsa
+          docs: https://cilock.dev/getting-started/quickstart-ci
+      to reach L3:
+        - Coming, not yet published: the isolated provenance workflow aflock-ai/cilock-action/.github/workflows/provenance.yml. Do not add it yet; re-run cilock after it ships for the pinned snippet.
+    ALPS 0.1: ceiling ALPS-0 (signed by a signing key, not a platform-issued non-human principal)
+      to reach ALPS-1:
+        - Ask your human to run `cilock enroll agent` and approve it in their browser (you cannot complete the approval yourself), then re-run cilock so it signs as the agent.
+          $ cilock enroll agent
+      to reach ALPS-2:
+        - Coming, not yet available: boundary attestation. You cannot sandbox yourself; ask your human to launch you inside the recommended sandbox (https://pushgate.dev/docs/agent-sandbox) so your runs already have the boundary the attestation will record.
+          docs: https://pushgate.dev/docs/agent-sandbox
+      ALPS-3: requires cilockd (not yet available)

@@ -1,0 +1,9 @@
+  standards: observed ceilings, NOT verified levels (a ceiling is the most a verifier could grant)
+    SLSA Build: ceiling L2 (verified provenance is inline in GitHub Actions: signed by the build job's own workflow identity on a provider-hosted runner)
+      to reach L3:
+        - Coming: the isolated cilock provenance workflow. When it ships, add a `provenance` job that needs the build job and signs the build's subjects under its own identity.
+    ALPS 0.1: ceiling ALPS-0 (signed by a CI workflow identity; platform issuance is not assessed yet, so ALPS-1 is not reported)
+      to reach ALPS-2:
+        - Coming: boundary attestation in alps-evidence. Until it ships, run the agent inside the recommended sandbox so the run already has the boundary the attestation will record.
+          docs: https://pushgate.dev/docs/agent-sandbox
+      ALPS-3: requires cilockd (not yet available)

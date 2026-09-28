@@ -1,0 +1,103 @@
+# ALPS 0.1 guidance catalog.
+#
+# Data, not code: the requirements of each level, the fact cilock observes for
+# each, and the ordered actions that raise a run's ceiling. The level a set of
+# observations supports is decided in Go (standards.DeriveALPS), which mirrors
+# `deriveAlps` in formal/ci-provenance/CiProvenance/Alps.lean and is
+# differential-tested against it.
+#
+# `closes` names the observation a step supplies. Valid observations for this
+# standard: signed, principal_issued, timestamped, boundary_by_observer,
+# isolated. ALPS 3 is `future`: it requires cilockd, which does not exist, so
+# no step closes `isolated` and run/verify output names the requirement
+# without offering an action.
+schema: cilock.standards-catalog/v1
+standard: alps
+title: ALPS
+spec: ALPS 0.1
+spec_url: https://pushgate.dev/docs/agent-sandbox
+levels:
+  - level: ALPS-0
+    status: available
+    requires: The statement is signed and bound to the commit.
+    observed_by: The run signed the collection.
+  - level: ALPS-1
+    status: available
+    requires: >-
+      The signing leaf chains to the platform root and names a non-human agent or workload
+      principal, and the envelope is timestamped.
+    observed_by: >-
+      Not reported by cilock yet. A leaf that names an agent or a CI workflow does not show
+      the platform issued it (the same name appears under public Sigstore or a BYO CA), and
+      authenticating the platform root is a separate design, so run and verify report
+      ALPS-0 at most. A verifier policy that pins the platform root can still require it.
+  - level: ALPS-2
+    status: planned
+    requires: >-
+      The run happened inside an enforced sandbox, and a non-agent observer signed the
+      boundary it ran in.
+    observed_by: >-
+      Nothing yet: the alps-evidence predicate has no boundary field. See
+      docs/design/alps-2-boundary-attestation.md.
+  - level: ALPS-3
+    status: future
+    requires: requires cilockd (not yet available)
+    observed_by: Nothing yet.
+steps:
+  - id: alps-agent-identity
+    target_level: ALPS-1
+    status: available
+    closes: principal_issued
+    when: local
+    why: >-
+      ALPS 1 needs a non-human principal the platform issued. This run signed with a local
+      key or a human session, so the evidence cannot say an agent signed it.
+    action: Enroll an agent identity for this machine and approve it in the browser.
+    agent_action: >-
+      Ask your human to run `cilock enroll agent` and approve it in their browser (you cannot
+      complete the approval yourself), then re-run cilock so it signs as the agent.
+    command: cilock enroll agent
+  - id: alps-workflow-identity
+    target_level: ALPS-1
+    status: available
+    closes: principal_issued
+    when: ci
+    why: >-
+      ALPS 1 needs a non-human principal the platform issued. In CI that is the job's
+      workload OIDC identity, which this job did not sign with.
+    action: >-
+      Sign with the job's workload identity against the platform Fulcio. On GitHub Actions
+      grant the job `id-token: write`. On gitlab.com, Buildkite or CircleCI use a CI/lock
+      newer than 4.5.0, which fetches the job token itself (on gitlab.com declare an
+      `id_tokens` entry with audience `sigstore`). Other CI has no platform-issued identity
+      yet.
+    agent_action: >-
+      On GitHub Actions add `permissions: id-token: write` to the job that runs cilock; on
+      gitlab.com add an `id_tokens` entry with audience `sigstore` (CI/lock newer than 4.5.0,
+      as on Buildkite and CircleCI). Then re-run it.
+  - id: alps-timestamp
+    target_level: ALPS-1
+    status: available
+    closes: timestamped
+    when: any
+    why: The envelope carries no trusted timestamp, so a short-lived identity cannot be verified later.
+    action: Sign with a timestamp authority.
+    agent_action: Keep `--platform-url` set so the platform TSA is used, or add `--timestamp-servers <tsa-url>` to `cilock run`.
+    command: cilock run --step <step> --timestamp-servers <tsa-url> -- <command>
+  - id: alps-boundary-attestation
+    target_level: ALPS-2
+    status: planned
+    closes: boundary_by_observer
+    when: any
+    why: >-
+      ALPS 2 needs an enforced sandbox and a non-agent observer that signs the boundary.
+      cilock records no boundary today, so no run can present ALPS 2 evidence yet.
+    action: >-
+      Coming: boundary attestation in alps-evidence. Until it ships, run the agent inside
+      the recommended sandbox so the run already has the boundary the attestation will record.
+    agent_action: >-
+      Coming, not yet available: boundary attestation. You cannot sandbox yourself; ask your
+      human to launch you inside the recommended sandbox (https://pushgate.dev/docs/agent-sandbox)
+      so your runs already have the boundary the attestation will record.
+    docs: https://pushgate.dev/docs/agent-sandbox
+    design: docs/design/alps-2-boundary-attestation.md

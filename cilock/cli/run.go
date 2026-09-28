@@ -40,6 +40,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
+	"github.com/aflock-ai/rookery/attestation/standards"
 	"github.com/aflock-ai/rookery/attestation/timestamp"
 	"github.com/aflock-ai/rookery/attestation/workflow"
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
@@ -1112,6 +1113,10 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	runFailed := storageErr != nil || classifyAttestorRunError(runErr) != nil ||
 		(summary.WrappedCommand != nil && summary.WrappedCommand.ExitCode != 0)
 	summary.ComputeStandardsAssessment(runFailed)
+	// The ceiling and next steps: what this run's observed shape could support
+	// at most, and what would raise it. Still not a level; see standards.Compute.
+	slsaObs, alpsObs := runObservations(summary, results, runFailed, viperEnv)
+	summary.Standards = standards.ComputeSplit(slsaObs, alpsObs, standards.ScopeRun, runAudience(summary, attestors))
 	summary.AssuranceLevel = ro.ResolvedAssuranceLevel()
 	// Carry the capture delta (already warned about above) into the structured
 	// summary so a CI job can consume it. nil when nothing declared an

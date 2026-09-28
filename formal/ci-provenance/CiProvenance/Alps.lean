@@ -9,7 +9,7 @@ The producer never assigns its own level; a verifier derives the highest level
 the signed evidence supports, and missing evidence is Unknown:
 -- see (monorepo, outside this tree): jade/factory/edge/git/docspage.js:341-341
 cilock keeps that discipline in code: the run summary never assesses a level.
--- cite: cilock/internal/options/runsummary.go:237-251 sha256:61e4b8402603721f70be01869c6baeeec82fccc55fb1ce15c14f902d0caa807b
+-- cite: cilock/internal/options/runsummary.go:245-259 sha256:61e4b8402603721f70be01869c6baeeec82fccc55fb1ce15c14f902d0caa807b
 No shipped verifier derives a level today, so `deriveAlps` below is a
 reference specification, not a model of existing Go code:
 -- see (monorepo, outside this tree): jade/factory/edge/git/docspage.js:351-351

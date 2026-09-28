@@ -29,6 +29,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/policy"
+	"github.com/aflock-ai/rookery/attestation/standards"
 )
 
 // The single-leaf root is a discovery hint, not permission to bypass a modern
@@ -94,6 +95,10 @@ type VerifyVerdict struct {
 	// ObservedSubjectName is the in-toto subject name in the passing
 	// collection that the supplied digest bound to.
 	ObservedSubjectName string `json:"observedSubjectName,omitempty"`
+	// Standards is the observed SLSA Build and ALPS ceiling of the evidence
+	// this verify accepted, with next steps. Never a verified level. Absent on
+	// a failed verify: nothing was accepted to reason about.
+	Standards *standards.Guidance `json:"standards,omitempty"`
 }
 
 // subjectBinding records one supplied-artifact → passing-step binding for the

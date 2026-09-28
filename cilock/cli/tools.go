@@ -85,6 +85,7 @@ func ToolsCmd() *cobra.Command {
 	}
 	cmd.AddCommand(toolsListCmd())
 	cmd.AddCommand(toolsShowCmd())
+	cmd.AddCommand(toolsStandardsCmd())
 	cmd.AddCommand(toolsTestPlanCmd())
 	return cmd
 }

@@ -1,0 +1,190 @@
+{
+  "schema": "cilock.standards-catalog/v1",
+  "guidance_schema": "cilock.standards-guidance/v1",
+  "notice": "A ceiling is the highest level this evidence could support. It is not a verified level: a SLSA Build level needs an assessment of the build platform, and an ALPS level needs an independent verifier.",
+  "standards": [
+    {
+      "schema": "cilock.standards-catalog/v1",
+      "standard": "slsa_build",
+      "title": "SLSA Build",
+      "spec": "SLSA v1.2 Build track",
+      "spec_url": "https://slsa.dev/spec/v1.2/levels",
+      "levels": [
+        {
+          "level": "L1",
+          "status": "available",
+          "requires": "Provenance exists for the build.",
+          "observed_by": "The run selected the slsa attestor (`-a slsa`) and signed the collection."
+        },
+        {
+          "level": "L2",
+          "status": "available",
+          "requires": "Provenance is generated and signed by a hosted build platform and timestamped.",
+          "observed_by": "The signing leaf is a keyless CI workload identity (GitHub Actions, gitlab.com, Buildkite, CircleCI or a Kubernetes service account, recognized by its OIDC issuer) and its runner-environment names a provider-hosted runner, and the envelope carries an RFC 3161 timestamp. On a self-hosted runner, CircleCI or Kubernetes the level depends on whether you treat your runner operator as the build platform (formal/slsa-tracks interpretation I2), so cilock reports those as not provider-hosted."
+        },
+        {
+          "level": "L3",
+          "status": "planned",
+          "requires": "Provenance is unforgeable by the tenant's build steps: it is signed under a builder identity no build step can obtain, on an isolated, ephemeral runner.",
+          "observed_by": "The signing leaf's Build Signer URI names the isolated provenance workflow (builder_identity on the slsa-provenance-workflow step), not the tenant workflow. GitHub Actions only: other CI signer identities are pipeline-wide."
+        }
+      ],
+      "steps": [
+        {
+          "id": "slsa-provenance-attestor",
+          "target_level": "L1",
+          "status": "available",
+          "closes": "provenance",
+          "when": "any",
+          "why": "SLSA Build L1 needs provenance, and this run produced none.",
+          "action": "Add the slsa attestor to the cilock run invocation.",
+          "agent_action": "Add `-a slsa` to your `cilock run` command and re-run it.",
+          "command": "cilock run --step build -a slsa -- <your build command>"
+        },
+        {
+          "id": "slsa-hosted-runner",
+          "target_level": "L2",
+          "status": "available",
+          "closes": "hosted_runner",
+          "when": "any",
+          "why": "SLSA Build L2 needs a hosted build platform. A laptop is never one. On a self-hosted runner, CircleCI or Kubernetes it depends on whether you treat your runner operator as the build platform; a provider-hosted runner (GitHub-hosted, gitlab.com SaaS, Buildkite hosted) removes that question.",
+          "action": "Run the build on a provider-hosted runner (GitHub-hosted, gitlab.com SaaS, or Buildkite hosted), or decide that your runner operator counts as the build platform and record why.",
+          "agent_action": "Move this build into a CI job on a provider-hosted runner, for example a GitHub Actions job with `runs-on: ubuntu-latest`. On a self-hosted runner, tell your human that this level depends on whether they treat the runner operator as the build platform.",
+          "snippet": "jobs:\n  build:\n    runs-on: ubuntu-latest\n"
+        },
+        {
+          "id": "slsa-workflow-identity",
+          "target_level": "L2",
+          "status": "available",
+          "closes": "workflow_signer",
+          "when": "any",
+          "why": "SLSA Build L2 needs provenance signed by the platform's workload identity, not a key or a person's session.",
+          "action": "Sign keyless with your CI's workload OIDC identity. GitHub Actions works with the platform Fulcio or public Sigstore (grant `id-token: write` and use cilock-action). gitlab.com, Buildkite hosted and CircleCI cloud work with the platform Fulcio from the CI/lock release after 4.5.0, which fetches their job token itself (on gitlab.com declare an `id_tokens` entry with audience `sigstore`); with CI/lock 4.5.0 or earlier, and on Kubernetes, sign through public Sigstore Fulcio.",
+          "agent_action": "Sign with the CI job's OIDC identity instead of a key. On GitHub Actions add `permissions: id-token: write` and run cilock through `aflock-ai/cilock-action`. On gitlab.com, Buildkite or CircleCI with a CI/lock newer than 4.5.0, sign keyless against the platform Fulcio (on gitlab.com add an `id_tokens` entry with audience `sigstore`); with CI/lock 4.5.0 or earlier, or on Kubernetes, sign keyless against public Sigstore Fulcio.",
+          "snippet": "permissions:\n  id-token: write\n  contents: read\nsteps:\n  - uses: aflock-ai/cilock-action@v1.0.4   # pin to a 40-character commit SHA\n    with:\n      step: build\n      command: \"<your build command>\"\n      attestations: environment git github slsa\n",
+          "docs": "https://cilock.dev/getting-started/quickstart-ci"
+        },
+        {
+          "id": "slsa-timestamp",
+          "target_level": "L2",
+          "status": "available",
+          "closes": "timestamped",
+          "when": "any",
+          "why": "The envelope carries no trusted timestamp, so a short-lived keyless leaf cannot be verified later.",
+          "action": "Sign with a timestamp authority.",
+          "agent_action": "Add `--timestamp-servers <tsa-url>` to `cilock run`, or keep `--platform-url` set so the platform TSA is used.",
+          "command": "cilock run --step build -a slsa --timestamp-servers <tsa-url> -- <your build command>"
+        },
+        {
+          "id": "slsa-provenance-workflow",
+          "target_level": "L3",
+          "status": "planned",
+          "closes": "trusted_builder",
+          "when": "any",
+          "ci": [
+            "github",
+            "none"
+          ],
+          "why": "Inline provenance is signed by the same workflow identity the build steps can mint, so a build step can forge it (issue #9822). L3 needs a separate builder identity, which only GitHub Actions' reusable-workflow identity provides.",
+          "action": "Coming: the isolated cilock provenance workflow. When it ships, add a `provenance` job that needs the build job and signs the build's subjects under its own identity.",
+          "agent_action": "Coming, not yet published: the isolated provenance workflow aflock-ai/cilock-action/.github/workflows/provenance.yml. Do not add it yet; re-run cilock after it ships for the pinned snippet.",
+          "snippet": "provenance:\n  needs: build\n  permissions:\n    id-token: write\n  uses: aflock-ai/cilock-action/.github/workflows/provenance.yml@{{pin}}\n  with:\n    subjects: ${{ needs.build.outputs.subjects }}\n",
+          "uses": "aflock-ai/cilock-action/.github/workflows/provenance.yml",
+          "builder_identity": "https://github.com/aflock-ai/cilock-action/.github/workflows/provenance.yml@"
+        }
+      ],
+      "limits": [
+        {
+          "level": "L3",
+          "ci": [
+            "gitlab",
+            "buildkite",
+            "circleci",
+            "kubernetes"
+          ],
+          "status": "future",
+          "requires": "not reachable on this CI today: its signer identity is pipeline-wide, so a build step can mint it. The only paths are the GitHub Actions provenance workflow (coming) and cilockd on a runner you operate (not yet available)."
+        }
+      ]
+    },
+    {
+      "schema": "cilock.standards-catalog/v1",
+      "standard": "alps",
+      "title": "ALPS",
+      "spec": "ALPS 0.1",
+      "spec_url": "https://pushgate.dev/docs/agent-sandbox",
+      "levels": [
+        {
+          "level": "ALPS-0",
+          "status": "available",
+          "requires": "The statement is signed and bound to the commit.",
+          "observed_by": "The run signed the collection."
+        },
+        {
+          "level": "ALPS-1",
+          "status": "available",
+          "requires": "The signing leaf chains to the platform root and names a non-human agent or workload principal, and the envelope is timestamped.",
+          "observed_by": "Not reported by cilock yet. A leaf that names an agent or a CI workflow does not show the platform issued it (the same name appears under public Sigstore or a BYO CA), and authenticating the platform root is a separate design, so run and verify report ALPS-0 at most. A verifier policy that pins the platform root can still require it."
+        },
+        {
+          "level": "ALPS-2",
+          "status": "planned",
+          "requires": "The run happened inside an enforced sandbox, and a non-agent observer signed the boundary it ran in.",
+          "observed_by": "Nothing yet: the alps-evidence predicate has no boundary field. See docs/design/alps-2-boundary-attestation.md."
+        },
+        {
+          "level": "ALPS-3",
+          "status": "future",
+          "requires": "requires cilockd (not yet available)",
+          "observed_by": "Nothing yet."
+        }
+      ],
+      "steps": [
+        {
+          "id": "alps-agent-identity",
+          "target_level": "ALPS-1",
+          "status": "available",
+          "closes": "principal_issued",
+          "when": "local",
+          "why": "ALPS 1 needs a non-human principal the platform issued. This run signed with a local key or a human session, so the evidence cannot say an agent signed it.",
+          "action": "Enroll an agent identity for this machine and approve it in the browser.",
+          "agent_action": "Ask your human to run `cilock enroll agent` and approve it in their browser (you cannot complete the approval yourself), then re-run cilock so it signs as the agent.",
+          "command": "cilock enroll agent"
+        },
+        {
+          "id": "alps-workflow-identity",
+          "target_level": "ALPS-1",
+          "status": "available",
+          "closes": "principal_issued",
+          "when": "ci",
+          "why": "ALPS 1 needs a non-human principal the platform issued. In CI that is the job's workload OIDC identity, which this job did not sign with.",
+          "action": "Sign with the job's workload identity against the platform Fulcio. On GitHub Actions grant the job `id-token: write`. On gitlab.com, Buildkite or CircleCI use a CI/lock newer than 4.5.0, which fetches the job token itself (on gitlab.com declare an `id_tokens` entry with audience `sigstore`). Other CI has no platform-issued identity yet.",
+          "agent_action": "On GitHub Actions add `permissions: id-token: write` to the job that runs cilock; on gitlab.com add an `id_tokens` entry with audience `sigstore` (CI/lock newer than 4.5.0, as on Buildkite and CircleCI). Then re-run it."
+        },
+        {
+          "id": "alps-timestamp",
+          "target_level": "ALPS-1",
+          "status": "available",
+          "closes": "timestamped",
+          "when": "any",
+          "why": "The envelope carries no trusted timestamp, so a short-lived identity cannot be verified later.",
+          "action": "Sign with a timestamp authority.",
+          "agent_action": "Keep `--platform-url` set so the platform TSA is used, or add `--timestamp-servers <tsa-url>` to `cilock run`.",
+          "command": "cilock run --step <step> --timestamp-servers <tsa-url> -- <command>"
+        },
+        {
+          "id": "alps-boundary-attestation",
+          "target_level": "ALPS-2",
+          "status": "planned",
+          "closes": "boundary_by_observer",
+          "when": "any",
+          "why": "ALPS 2 needs an enforced sandbox and a non-agent observer that signs the boundary. cilock records no boundary today, so no run can present ALPS 2 evidence yet.",
+          "action": "Coming: boundary attestation in alps-evidence. Until it ships, run the agent inside the recommended sandbox so the run already has the boundary the attestation will record.",
+          "agent_action": "Coming, not yet available: boundary attestation. You cannot sandbox yourself; ask your human to launch you inside the recommended sandbox (https://pushgate.dev/docs/agent-sandbox) so your runs already have the boundary the attestation will record.",
+          "docs": "https://pushgate.dev/docs/agent-sandbox",
+          "design": "docs/design/alps-2-boundary-attestation.md"
+        }
+      ]
+    }
+  ]
+}

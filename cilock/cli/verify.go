@@ -514,8 +514,14 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// decision was made above and does not depend on it.
 	verdictManifests := materialManifests
 	writeVerifyBindingLines(os.Stderr, suppliedDigests, verifiedEvidence.StepResults, verdictManifests)
+	// The ceiling of the evidence just accepted, and what would raise it. Read
+	// from the verified leaves and attestations only, never this machine.
+	guidance := verifyGuidance(verifiedEvidence.StepResults)
+	guidance.WriteHuman(os.Stderr, "")
 	if vo.OutputJSON() {
-		if werr := writeVerifyVerdictJSON(os.Stdout, buildVerifyVerdict(suppliedDigests, verifiedEvidence.StepResults, verdictManifests)); werr != nil {
+		verdict := buildVerifyVerdict(suppliedDigests, verifiedEvidence.StepResults, verdictManifests)
+		verdict.Standards = guidance
+		if werr := writeVerifyVerdictJSON(os.Stdout, verdict); werr != nil {
 			log.Errorf("failed to emit JSON verify verdict: %v", werr)
 		}
 	}
