@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="6"
+	failures="1"
+	disabled="1"
+	skipped="3"
+	hostname=""
+	time="0"
+	timestamp="2026-09-25T06:16:28"
+	>
+	<testcase name="passes" classname="passes" time="0.00286729" status="run">
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="fails" classname="fails" time="0.00231125" status="fail">
+		<failure message="Failed"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="disabled" classname="disabled" time="0" status="disabled">
+		<properties/>
+		<system-out>Disabled</system-out>
+	</testcase>
+	<testcase name="notrun" classname="notrun" time="0" status="notrun">
+		<skipped message="Unable to find executable"/>
+		<properties/>
+		<system-out>Unable to find executable: /nonexistent/binary</system-out>
+	</testcase>
+	<testcase name="skipcode" classname="skipcode" time="0.00330217" status="notrun">
+		<skipped message="SKIP_RETURN_CODE=77"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="required_missing" classname="required_missing" time="0" status="notrun">
+		<skipped message="Required Files Missing"/>
+		<properties/>
+		<system-out>Unable to find required file: /nonexistent/file</system-out>
+	</testcase>
+</testsuite>

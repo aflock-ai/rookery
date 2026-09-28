@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?><testsuites>
+  <testsuite name="tests/a.tftest.hcl" tests="2" skipped="0" failures="1" errors="0">
+    <testcase name="passes" classname="tests/a.tftest.hcl" time="0.043217" timestamp="2026-09-25T06:33:58Z"></testcase>
+    <testcase name="fails" classname="tests/a.tftest.hcl" time="0.002501" timestamp="2026-09-25T06:33:58Z">
+      <failure message="1 of 1 assertions failed: deliberate assertion failure"><![CDATA[
+Error: Test assertion failed
+
+  on tests/a.tftest.hcl line 18, in run "fails":
+  18:     condition     = terraform_data.x.input == "not-b"
+    ├────────────────
+    │ Diff:
+    │ --- actual
+    │ +++ expected
+    │ - "b"
+    │ + "not-b"
+
+
+deliberate assertion failure
+]]></failure>
+    </testcase>
+  </testsuite>
+  <testsuite name="tests/b.tftest.hcl" tests="2" skipped="1" failures="0" errors="1">
+    <testcase name="errors" classname="tests/b.tftest.hcl" time="0.000696" timestamp="2026-09-25T06:33:58Z">
+      <error message="Encountered an error"><![CDATA[
+Error: Invalid function argument
+
+  on tests/b.tftest.hcl line 4, in run "errors":
+   4:     name = file("does-not-exist.txt")
+    ├────────────────
+    │ while calling file(path)
+
+Invalid value for "path" parameter: no file exists at "does-not-exist.txt";
+this function works only with files that are distributed as part of the
+configuration source code, so if this file will be created by a resource in
+this configuration you must instead obtain this result from an attribute of
+that resource.
+]]></error>
+    </testcase>
+    <testcase name="after_error" classname="tests/b.tftest.hcl">
+      <skipped message="Testcase skipped due to a previous testcase error"><![CDATA[Previous testcase "errors" ended in error, which caused the remaining tests in the file to be skipped]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="tests/c.tftest.hcl" tests="1" skipped="0" failures="0" errors="1">
+    <testcase name="bad_reference" classname="tests/c.tftest.hcl" time="0.005218" timestamp="2026-09-25T06:33:58Z">
+      <error message="Encountered an error"><![CDATA[
+Error: Reference to undeclared resource
+
+  on tests/c.tftest.hcl line 7, in run "bad_reference":
+   7:     condition     = terraform_data.nope.input == "d"
+
+A managed resource "terraform_data" "nope" has not been declared in the root
+module.
+]]></error>
+    </testcase>
+  </testsuite>
+  <testsuite name="tests/d.tftest.hcl" tests="1" skipped="0" failures="0" errors="0">
+    <testcase name="uses_unknown_provider" classname="tests/d.tftest.hcl"></testcase>
+  </testsuite>
+</testsuites>

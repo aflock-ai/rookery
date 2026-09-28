@@ -10,7 +10,7 @@ A test runner writes a JUnit XML or CTRF JSON report. On its own that file prove
 
 ### What cilock adds
 
-**Signed counts.** `total`, `passed`, `failed`, `skipped`, `errors` are recomputed from the report's `<testcase>` entries (JUnit) or read from `results.summary` (CTRF), then signed by the CI identity. "Tests passed" becomes a defensible statement, not a green checkmark.
+**Signed counts.** `total`, `passed`, `failed`, `skipped`, `errors` are recomputed from the report's `<testcase>` entries at every nesting level, including cases directly under `<testsuites>` and inside nested `<testsuite>` elements (JUnit), or read from `results.summary` (CTRF), then signed by the CI identity. A case marked `status="notrun"` or `status="disabled"` never counts as passed. CTest writes a test it could not run (missing executable, missing `REQUIRED_FILES`, failed fixture setup) as `<skipped>` while itself reporting it FAILED; the attestor counts it as an error. Only CTest's deliberate skips (`SKIP_RETURN_CODE`, `SKIP_REGULAR_EXPRESSION`, `DISABLED`) count as skipped. A case with no outcome element passes only when nothing else in the report contradicts it: a `status` or `result` value the attestor does not recognize, or a lone Surefire `<rerunFailure>`/`<rerunError>`, is an error or failure. When a suite's or the root's `failures`/`errors` attributes claim more than its cases show, each shortfall stays in its own category: missing failures raise `summary.failed` and missing errors raise `summary.errors`, taken from `passed` first. A file with more than one root element is refused, and so is any declared count (JUnit `tests`/`failures`/`errors`/`skipped` at any level, or a CTRF `results.summary` field) that is negative or above 2147483647. "Tests passed" becomes a defensible statement, not a green checkmark.
 
 **Format-agnostic policy.** JUnit and CTRF both land in the same predicate shape, so one Rego module gates a Go, Python, JavaScript, or Java suite without caring which runner produced the file.
 
@@ -29,7 +29,7 @@ cilock run --step unit-test \
   -- gotestsum --junitfile junit.xml -- ./...
 ```
 
-`pytest --junitxml=junit.xml`, `jest --reporters=jest-junit`, Gradle, and Surefire all write a file the detector picks up (`junit*.xml`, `TEST-*.xml`, `ctrf-report.json`, `ctrf.json`). Note that most runners exit non-zero when a test fails; if you want the report signed even on a red run, wrap the command so the report is written before the exit code propagates, and let the policy, not the exit code, decide.
+`pytest --junitxml=junit.xml`, `jest --reporters=jest-junit`, Node's built-in runner (`node --test --test-reporter=junit --test-reporter-destination=junit.xml`), CTest (`ctest --test-dir build --output-junit junit.xml`, written inside the build directory), Gradle, Surefire and Terraform (`terraform test -junit-xml=junit.xml`, 1.11 or newer) all write a file the detector picks up (`junit*.xml`, `TEST-*.xml`, `ctrf-report.json`, `ctrf.json`). Terraform writes one `<testcase>` per `run` block. A run that never started because its test file failed first (for example a `mock_provider` whose provider is not installed) appears as a bare `<testcase>` with no outcome. Terraform reports it as neither passed nor failed and exits 1, so the attestor counts it under `errors`, not `passed`. Note that most runners exit non-zero when a test fails; if you want the report signed even on a red run, wrap the command so the report is written before the exit code propagates, and let the policy, not the exit code, decide.
 
 ## What gets captured
 
@@ -51,7 +51,7 @@ The `test-results/v0.1` predicate:
 | `summary.passed` | int | cases that ran and passed |
 | `summary.failed` | int | cases that ran and failed |
 | `summary.skipped` | int | cases skipped |
-| `summary.errors` | int | cases that errored before reaching a verdict; **omitted when zero** |
+| `summary.errors` | int | cases that errored before reaching a verdict, including a CTest test that could not run, a case with an unrecognized status, and failures the report's attributes claim but its cases do not show; **omitted when zero** |
 | `summary.durationSeconds` | float | wall-clock time reported by the runner |
 | `failedTests[]` | array | up to 50 `{name, suite, classname, message, duration}` entries; counts in `summary` stay exact past the cap |
 | `reportFile` | string | product path of the report |

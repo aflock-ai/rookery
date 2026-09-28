@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?><testsuites>
+  <testsuite name="tests/d.tftest.hcl" tests="1" skipped="0" failures="0" errors="0">
+    <testcase name="uses_unknown_provider" classname="tests/d.tftest.hcl"></testcase>
+    <system-err><![CDATA[
+Error: unknown provider registry.terraform.io/hashicorp/unknownthing
+
+]]></system-err>
+  </testsuite>
+</testsuites>

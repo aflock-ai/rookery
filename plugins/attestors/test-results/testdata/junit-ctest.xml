@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="11"
+	failures="4"
+	disabled="1"
+	skipped="5"
+	hostname=""
+	time="1"
+	timestamp="2026-09-25T06:20:27"
+	>
+	<testcase name="ok" classname="ok" time="0.00353296" status="run">
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="bad" classname="bad" time="0.00185771" status="fail">
+		<failure message="Failed"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="skipme" classname="skipme" time="0.00232867" status="notrun">
+		<skipped message="SKIP_RETURN_CODE=77"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="off" classname="off" time="0" status="disabled">
+		<properties/>
+		<system-out>Disabled</system-out>
+	</testcase>
+	<testcase name="needsfile" classname="needsfile" time="0" status="notrun">
+		<skipped message="Required Files Missing"/>
+		<properties/>
+		<system-out>Unable to find required file: /nonexistent/file</system-out>
+	</testcase>
+	<testcase name="missingexe" classname="missingexe" time="0" status="notrun">
+		<skipped message="Unable to find executable"/>
+		<properties/>
+		<system-out>Unable to find executable: ./no-such-binary</system-out>
+	</testcase>
+	<testcase name="skipregex" classname="skipregex" time="0.00269883" status="notrun">
+		<skipped message="SKIP_REGULAR_EXPRESSION_MATCHED"/>
+		<properties/>
+		<system-out>SKIPPING
+</system-out>
+	</testcase>
+	<testcase name="setupfail" classname="setupfail" time="0.00392492" status="fail">
+		<failure message="Failed"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="needsfixture" classname="needsfixture" time="0" status="notrun">
+		<skipped message="Fixture dependency failed"/>
+		<properties/>
+		<system-out>Failed test dependencies: setupfail</system-out>
+	</testcase>
+	<testcase name="timeout" classname="timeout" time="0.995192" status="fail">
+		<failure message="Timeout"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="willfail" classname="willfail" time="0.0021525" status="fail">
+		<failure message="Failed"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+</testsuite>

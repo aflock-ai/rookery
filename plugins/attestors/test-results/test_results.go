@@ -21,14 +21,17 @@
 package testresults
 
 import (
+	"bytes"
 	"crypto"
 	_ "embed"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -57,6 +60,15 @@ const (
 	// in Summary are always exact — the trim only affects the per-test
 	// detail snippets that downstream tooling renders.
 	maxFailedTests = 50
+
+	// maxClaimedCount bounds every count a report declares. The tally sums
+	// declared counts across suites, so an unbounded one wraps the int and
+	// erases a failure; a negative one cancels a sibling's. Below 2^31 per
+	// attribute, a sum overflows int64 only past 2^32 suites, which no
+	// report that fits in memory holds. int is 64-bit on every target cilock
+	// ships (.github/workflows/release.yml: amd64 and arm64); 32-bit builds
+	// are unsupported.
+	maxClaimedCount = 1<<31 - 1
 )
 
 // Compile-time interface checks. The attestor exposes a typed predicate
@@ -330,30 +342,134 @@ type junitTestsuites struct {
 	Skipped  int              `xml:"skipped,attr"`
 	Time     float64          `xml:"time,attr"`
 	Suites   []junitTestsuite `xml:"testsuite"`
+	// Cases directly under the root: Node's junit reporter writes every
+	// top-level test() here, outside any <testsuite>.
+	Cases []junitTestcase `xml:"testcase"`
 }
 
 // junitTestsuite handles both the nested case (under <testsuites>) and
 // the standalone case (a single <testsuite> root, which some emitters
 // produce). The decoder logic in parseJUnit handles both via a second
-// unmarshal attempt.
+// unmarshal attempt. Suites nest: Node's junit reporter writes a
+// describe() inside its parent's <testsuite>.
 type junitTestsuite struct {
-	XMLName  xml.Name        `xml:"testsuite"`
-	Name     string          `xml:"name,attr"`
-	Tests    int             `xml:"tests,attr"`
-	Failures int             `xml:"failures,attr"`
-	Errors   int             `xml:"errors,attr"`
-	Skipped  int             `xml:"skipped,attr"`
-	Time     float64         `xml:"time,attr"`
-	Cases    []junitTestcase `xml:"testcase"`
+	XMLName  xml.Name         `xml:"testsuite"`
+	Name     string           `xml:"name,attr"`
+	Tests    int              `xml:"tests,attr"`
+	Failures int              `xml:"failures,attr"`
+	Errors   int              `xml:"errors,attr"`
+	Skipped  int              `xml:"skipped,attr"`
+	Time     float64          `xml:"time,attr"`
+	Cases    []junitTestcase  `xml:"testcase"`
+	Suites   []junitTestsuite `xml:"testsuite"`
+	// SystemErr is where Terraform 1.16+ writes a test file's own
+	// diagnostics when the file fails before its runs start.
+	SystemErr string `xml:"system-err"`
 }
 
 type junitTestcase struct {
-	Name      string        `xml:"name,attr"`
-	Classname string        `xml:"classname,attr"`
-	Time      float64       `xml:"time,attr"`
-	Failure   *junitMessage `xml:"failure"`
-	Error     *junitMessage `xml:"error"`
-	Skipped   *junitMessage `xml:"skipped"`
+	Name      string  `xml:"name,attr"`
+	Classname string  `xml:"classname,attr"`
+	Time      float64 `xml:"time,attr"`
+	Timestamp string  `xml:"timestamp,attr"`
+	// Status is CTest's (and googletest's) run status: "run", "fail",
+	// "notrun" or "disabled". Most emitters leave it empty.
+	Status string `xml:"status,attr"`
+	// Result is googletest's: "completed", "skipped" or "suppressed".
+	Result  string        `xml:"result,attr"`
+	Failure *junitMessage `xml:"failure"`
+	Error   *junitMessage `xml:"error"`
+	Skipped *junitMessage `xml:"skipped"`
+	// Surefire's rerun records. A case whose every rerun failed also carries
+	// a <failure>; a lone rerun record is still a run that did not pass.
+	// <flakyFailure> (failed, then passed on rerun) is a pass.
+	RerunFailure []junitMessage `xml:"rerunFailure"`
+	RerunError   []junitMessage `xml:"rerunError"`
+}
+
+// CTest and googletest status attribute values.
+const (
+	statusRun      = "run"
+	statusFail     = "fail"
+	statusNotRun   = "notrun"
+	statusDisabled = "disabled"
+
+	resultSkipped    = "skipped"
+	resultSuppressed = "suppressed"
+)
+
+// knownStatuses and knownResults are every status/result value a supported
+// emitter writes. Any other value is an outcome this parser cannot read,
+// so it counts as an error rather than defaulting to a pass.
+var (
+	knownStatuses = map[string]bool{"": true, statusRun: true, statusFail: true, statusNotRun: true, statusDisabled: true}
+	knownResults  = map[string]bool{"": true, "completed": true, resultSkipped: true, resultSuppressed: true}
+)
+
+type caseOutcome int
+
+const (
+	outcomePassed caseOutcome = iota
+	outcomeFailed
+	outcomeError
+	outcomeSkipped
+)
+
+// classifyCase decides one <testcase>'s outcome and, for a failure or
+// error, its message. A case its runner did not run is never a pass.
+func classifyCase(suite, systemErr string, tc junitTestcase) (caseOutcome, string) {
+	notRun, couldNotRun := notRunError(tc)
+	switch {
+	case terraformRunNotStarted(suite, tc):
+		return outcomeError, terraformNotStartedMessage(systemErr)
+	case tc.Failure != nil:
+		return outcomeFailed, firstNonEmpty(tc.Failure.Message, tc.Failure.Body)
+	case tc.Error != nil:
+		return outcomeError, firstNonEmpty(tc.Error.Message, tc.Error.Body)
+	case len(tc.RerunFailure) > 0:
+		return outcomeFailed, firstNonEmpty(tc.RerunFailure[0].Message, tc.RerunFailure[0].Body)
+	case len(tc.RerunError) > 0:
+		return outcomeError, firstNonEmpty(tc.RerunError[0].Message, tc.RerunError[0].Body)
+	case couldNotRun:
+		return outcomeError, notRun
+	case tc.Status == statusFail:
+		// The status says it failed although no <failure> child says why,
+		// and a <skipped> child does not outrank it.
+		return outcomeFailed, "status=fail"
+	case !knownStatuses[tc.Status]:
+		return outcomeError, fmt.Sprintf("unrecognized status=%q", tc.Status)
+	case !knownResults[tc.Result]:
+		return outcomeError, fmt.Sprintf("unrecognized result=%q", tc.Result)
+	// A declared skip, as a child element, a status or a googletest result,
+	// is a skip even when no <skipped> child says why.
+	case tc.Skipped != nil, tc.Status == statusNotRun, tc.Status == statusDisabled,
+		tc.Result == resultSkipped, tc.Result == resultSuppressed:
+		return outcomeSkipped, ""
+	default:
+		return outcomePassed, ""
+	}
+}
+
+// notRunError reports whether a case marked status="notrun" is a test that
+// was required and could not run, and why. CTest writes every Not Run test
+// as <skipped message="<reason>"/> although it counts it FAILED and exits
+// non-zero: a missing executable (the build never produced it), missing
+// REQUIRED_FILES, a failed fixture setup. Only its two deliberate-skip
+// reasons are skips. Any other reason is an error, so a reason a future
+// CTest adds refuses rather than admits. A notrun case with no <skipped>
+// child (googletest's DISABLED_ tests) is a skip.
+func notRunError(tc junitTestcase) (string, bool) {
+	if tc.Status != statusNotRun || tc.Skipped == nil {
+		return "", false
+	}
+	reason := firstNonEmpty(tc.Skipped.Message, tc.Skipped.Body)
+	if strings.HasPrefix(reason, "SKIP_RETURN_CODE=") || reason == "SKIP_REGULAR_EXPRESSION_MATCHED" {
+		return "", false
+	}
+	if reason == "" {
+		reason = "not run"
+	}
+	return reason, true
 }
 
 type junitMessage struct {
@@ -362,10 +478,14 @@ type junitMessage struct {
 	Body    string `xml:",chardata"`
 }
 
-func parseJUnit(b []byte) (Predicate, []string, error) {
-	// Try the <testsuites> root first; fall back to a bare <testsuite>.
+// decodeJUnitRoot reads a <testsuites> root, falling back to a bare
+// <testsuite> root, which some emitters (CTest among them) produce.
+func decodeJUnitRoot(b []byte) (junitTestsuites, error) {
 	var root junitTestsuites
-	if err := xml.Unmarshal(b, &root); err != nil || len(root.Suites) == 0 {
+	if err := requireSingleRoot(b); err != nil {
+		return root, err
+	}
+	if err := xml.Unmarshal(b, &root); err != nil || (len(root.Suites) == 0 && len(root.Cases) == 0) {
 		var single junitTestsuite
 		if err2 := xml.Unmarshal(b, &single); err2 == nil && single.Name != "" {
 			root.Suites = []junitTestsuite{single}
@@ -375,82 +495,225 @@ func parseJUnit(b []byte) (Predicate, []string, error) {
 			root.Skipped = single.Skipped
 			root.Time = single.Time
 		} else if err != nil {
-			return Predicate{}, nil, fmt.Errorf("invalid JUnit XML: %w", err)
+			return root, fmt.Errorf("invalid JUnit XML: %w", err)
 		}
 	}
+	if len(root.Suites) == 0 && len(root.Cases) == 0 {
+		return root, fmt.Errorf("JUnit document contains no testsuite elements")
+	}
+	if err := checkCounts("testsuites", root.Tests, root.Failures, root.Errors, root.Skipped); err != nil {
+		return root, err
+	}
+	for _, ts := range root.Suites {
+		if err := checkSuiteCounts(ts); err != nil {
+			return root, err
+		}
+	}
+	return root, nil
+}
 
-	if len(root.Suites) == 0 {
-		return Predicate{}, nil, fmt.Errorf("JUnit document contains no testsuite elements")
+// checkSuiteCounts refuses a suite, at any depth, whose declared counts
+// fall outside [0, maxClaimedCount].
+func checkSuiteCounts(ts junitTestsuite) error {
+	if err := checkCounts("testsuite "+strconv.Quote(ts.Name), ts.Tests, ts.Failures, ts.Errors, ts.Skipped); err != nil {
+		return err
+	}
+	for _, n := range ts.Suites {
+		if err := checkSuiteCounts(n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkCounts refuses any count outside [0, maxClaimedCount].
+func checkCounts(where string, counts ...int) error {
+	for _, c := range counts {
+		if c < 0 || c > maxClaimedCount {
+			return fmt.Errorf("invalid test report: %s declares a count of %d, outside 0..%d", where, c, maxClaimedCount)
+		}
+	}
+	return nil
+}
+
+// requireSingleRoot refuses a document with more than one root element.
+// xml.Unmarshal reads the first root and ignores the rest, so a second
+// <testsuites> (two reports concatenated) would vanish from the counts.
+func requireSingleRoot(b []byte) error {
+	dec := xml.NewDecoder(bytes.NewReader(b))
+	depth, roots := 0, 0
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("invalid JUnit XML: %w", err)
+		}
+		switch tok.(type) {
+		case xml.StartElement:
+			if depth == 0 {
+				roots++
+				if roots > 1 {
+					return fmt.Errorf("invalid JUnit XML: more than one root element")
+				}
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+		}
+	}
+}
+
+// junitTally accumulates case outcomes across every nesting level.
+type junitTally struct {
+	summary Summary
+	failed  []FailedTest
+	// cases counts real <testcase> elements. summary.Total can also grow
+	// from reconcile's synthesized errors, so it cannot say whether the
+	// report had any cases.
+	cases int
+}
+
+// reconcile holds a suite (or the root) to its own failures/errors
+// attributes, each category against what its subtree shows since before. A
+// report claiming more failures (or errors) than its cases show recorded a run
+// that did not pass, so the shortfall is booked in that category, taken from
+// the passes first. Each category is kept apart: collapsing them would let a
+// claimed failure read as a pass or hide it from a policy on summary.failed.
+// A report that counts one outcome in both attributes is over-counted, never
+// under-counted; it already records a non-passing case.
+func (t *junitTally) reconcile(suite string, claimedFailures, claimedErrors int, before Summary) {
+	shownFailed := t.summary.Failed - before.Failed
+	shownErrors := t.summary.Errors - before.Errors
+	failedShort := max(claimedFailures-shownFailed, 0)
+	errorsShort := max(claimedErrors-shownErrors, 0)
+	excess := failedShort + errorsShort
+	if excess == 0 {
+		return
+	}
+	fromPassed := min(excess, t.summary.Passed-before.Passed)
+	t.summary.Passed -= fromPassed
+	t.summary.Total += excess - fromPassed
+	t.summary.Failed += failedShort
+	t.summary.Errors += errorsShort
+	t.failed = appendBounded(t.failed, FailedTest{
+		Suite: suite,
+		Message: fmt.Sprintf("report claims %d failures and %d errors, its cases show %d and %d",
+			claimedFailures, claimedErrors, shownFailed, shownErrors),
+	})
+}
+
+func (t *junitTally) count(suite, systemErr string, cases []junitTestcase) {
+	for _, tc := range cases {
+		t.cases++
+		t.summary.Total++
+		outcome, message := classifyCase(suite, systemErr, tc)
+		switch outcome {
+		case outcomeFailed:
+			t.summary.Failed++
+		case outcomeError:
+			t.summary.Errors++
+		case outcomeSkipped:
+			t.summary.Skipped++
+			continue
+		default:
+			t.summary.Passed++
+			continue
+		}
+		t.failed = appendBounded(t.failed, FailedTest{
+			Name:      tc.Name,
+			Suite:     suite,
+			Classname: tc.Classname,
+			Message:   message,
+			Duration:  tc.Time,
+		})
+	}
+}
+
+func (t *junitTally) walk(ts junitTestsuite) {
+	before := t.summary
+	t.count(ts.Name, ts.SystemErr, ts.Cases)
+	for _, nested := range ts.Suites {
+		t.walk(nested)
+	}
+	t.reconcile(ts.Name, ts.Failures, ts.Errors, before)
+}
+
+func parseJUnit(b []byte) (Predicate, []string, error) {
+	root, err := decodeJUnitRoot(b)
+	if err != nil {
+		return Predicate{}, nil, err
 	}
 
-	pred := Predicate{Format: FormatJUnitXML}
-	var suites []string
-	var failed []FailedTest
-
-	// JUnit attribute totals are advisory — many emitters get them wrong
+	// JUnit attribute totals are advisory; many emitters get them wrong
 	// (pytest counts errors as failures, go-junit-report drops zero
-	// values entirely). Recompute from the actual cases.
-	var total, passed, failures, errors, skipped int
-	var totalTime float64
+	// values entirely). Recompute from the actual cases, at every nesting
+	// level: a case the walk skips is a failure the predicate never shows.
+	var tally junitTally
+	var suites []string
+	// A parent suite's time already includes its nested suites, so only
+	// top-level suites and root-level cases add to the run's duration.
+	tally.count("", "", root.Cases)
+	for _, tc := range root.Cases {
+		tally.summary.DurationSeconds += tc.Time
+	}
 	for _, ts := range root.Suites {
 		suites = append(suites, ts.Name)
-		totalTime += ts.Time
-
-		for _, tc := range ts.Cases {
-			total++
-			switch {
-			case tc.Failure != nil:
-				failures++
-				failed = appendBounded(failed, FailedTest{
-					Name:      tc.Name,
-					Suite:     ts.Name,
-					Classname: tc.Classname,
-					Message:   firstNonEmpty(tc.Failure.Message, tc.Failure.Body),
-					Duration:  tc.Time,
-				})
-			case tc.Error != nil:
-				errors++
-				failed = appendBounded(failed, FailedTest{
-					Name:      tc.Name,
-					Suite:     ts.Name,
-					Classname: tc.Classname,
-					Message:   firstNonEmpty(tc.Error.Message, tc.Error.Body),
-					Duration:  tc.Time,
-				})
-			case tc.Skipped != nil:
-				skipped++
-			default:
-				passed++
-			}
-		}
+		tally.summary.DurationSeconds += suiteTime(ts)
+		tally.walk(ts)
 	}
 
-	// If the document only published totals at the root and emitted no
-	// individual <testcase> elements, fall back to the root attributes.
-	// This shouldn't happen for any conformant emitter but defends
-	// against minimal/summary-only reports.
-	if total == 0 && root.Tests > 0 {
-		total = root.Tests
-		failures = root.Failures
-		errors = root.Errors
-		skipped = root.Skipped
-		passed = total - failures - errors - skipped
-		if passed < 0 {
-			passed = 0
-		}
-		totalTime = root.Time
+	// A summary-only report (no <testcase> anywhere) is read from its
+	// attributes: the root's, or when the root carries none, the sum of the
+	// top-level suites'. It is decided on real cases, not on Total, which
+	// reconcile may have raised with synthesized errors. This shouldn't
+	// happen for a conformant emitter but defends minimal reports.
+	if tally.cases == 0 {
+		tally.summary = summaryFromAttributes(root, tally.summary.DurationSeconds)
+	} else {
+		tally.reconcile("", root.Failures, root.Errors, Summary{})
 	}
 
-	pred.Summary = Summary{
-		Total:           total,
-		Passed:          passed,
-		Failed:          failures,
-		Skipped:         skipped,
-		Errors:          errors,
-		DurationSeconds: totalTime,
+	return Predicate{Format: FormatJUnitXML, Summary: tally.summary, FailedTests: tally.failed}, suites, nil
+}
+
+// attrCounts is one level's failures/errors/tests/skipped attributes.
+type attrCounts struct{ tests, failures, errors, skipped int }
+
+func maxCounts(a, b attrCounts) attrCounts {
+	return attrCounts{max(a.tests, b.tests), max(a.failures, b.failures), max(a.errors, b.errors), max(a.skipped, b.skipped)}
+}
+
+// subtreeCounts is a suite's claim, field by field the larger of its own
+// attribute and the sum of its nested suites' claims, so a failure declared
+// at any depth survives.
+func subtreeCounts(ts junitTestsuite) attrCounts {
+	var kids attrCounts
+	for _, n := range ts.Suites {
+		c := subtreeCounts(n)
+		kids = attrCounts{kids.tests + c.tests, kids.failures + c.failures, kids.errors + c.errors, kids.skipped + c.skipped}
 	}
-	pred.FailedTests = failed
-	return pred, suites, nil
+	return maxCounts(attrCounts{ts.Tests, ts.Failures, ts.Errors, ts.Skipped}, kids)
+}
+
+// summaryFromAttributes reads a summary-only report: field by field, the
+// larger of the root's attributes and the sum of its suites' claims. Agreeing
+// attributes give the same counts; a failure claimed at any level is kept.
+func summaryFromAttributes(root junitTestsuites, suiteDuration float64) Summary {
+	var suites attrCounts
+	for _, ts := range root.Suites {
+		c := subtreeCounts(ts)
+		suites = attrCounts{suites.tests + c.tests, suites.failures + c.failures, suites.errors + c.errors, suites.skipped + c.skipped}
+	}
+	a := maxCounts(attrCounts{root.Tests, root.Failures, root.Errors, root.Skipped}, suites)
+	passed := max(a.tests-a.failures-a.errors-a.skipped, 0)
+	duration := suiteDuration
+	if root.Time > 0 {
+		duration = root.Time
+	}
+	return Summary{Total: a.tests, Passed: passed, Failed: a.failures,
+		Skipped: a.skipped, Errors: a.errors, DurationSeconds: duration}
 }
 
 // --- CTRF JSON ----------------------------------------------------------
@@ -503,6 +766,10 @@ func parseCTRF(b []byte) (Predicate, []string, error) {
 	var rep ctrfReport
 	if err := json.Unmarshal(b, &rep); err != nil {
 		return Predicate{}, nil, fmt.Errorf("invalid CTRF JSON: %w", err)
+	}
+	sum := rep.Results.Summary
+	if err := checkCounts("results.summary", sum.Tests, sum.Passed, sum.Failed, sum.Skipped, sum.Pending, sum.Other); err != nil {
+		return Predicate{}, nil, err
 	}
 	if rep.Results.Tool.Name == "" && len(rep.Results.Tests) == 0 && rep.Results.Summary.Tests == 0 {
 		// A document with none of the three CTRF anchor fields is not
@@ -605,6 +872,48 @@ func appendBounded(dst []FailedTest, item FailedTest) []FailedTest {
 		return dst
 	}
 	return append(dst, item)
+}
+
+// suiteTime is a suite's own time attribute, or, when the emitter times only
+// its cases (Terraform's writer omits the suite's), the sum of its cases and
+// nested suites.
+func suiteTime(ts junitTestsuite) float64 {
+	if ts.Time > 0 {
+		return ts.Time
+	}
+	var sum float64
+	for _, tc := range ts.Cases {
+		sum += tc.Time
+	}
+	for _, nested := range ts.Suites {
+		sum += suiteTime(nested)
+	}
+	return sum
+}
+
+// terraformRunNotStarted recognizes `terraform test -junit-xml`'s record of a
+// run block that never started because its test file failed first (an
+// unconfigurable provider, a file-level error). Terraform writes it as a bare
+// <testcase> with no outcome element and no time or timestamp, inside the
+// suite named for the .tftest.hcl/.tftest.json file, while its own summary
+// counts the run as neither passed nor failed and the command exits 1. Every
+// run Terraform executed carries a timestamp, and a skipped one a <skipped>
+// element. A bare case from any other emitter still counts as passed, per
+// JUnit convention.
+func terraformRunNotStarted(suite string, tc junitTestcase) bool {
+	if !strings.HasSuffix(suite, ".tftest.hcl") && !strings.HasSuffix(suite, ".tftest.json") {
+		return false
+	}
+	return tc.Classname == suite && tc.Failure == nil && tc.Error == nil && tc.Skipped == nil &&
+		tc.Timestamp == "" && tc.Time == 0
+}
+
+func terraformNotStartedMessage(systemErr string) string {
+	const reason = "terraform did not run this case: its test file failed before the run started"
+	if detail := strings.TrimSpace(systemErr); detail != "" {
+		return reason + ": " + detail
+	}
+	return reason
 }
 
 func firstNonEmpty(a, b string) string {

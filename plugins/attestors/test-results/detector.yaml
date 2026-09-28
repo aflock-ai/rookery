@@ -35,7 +35,9 @@ contract:
     notes: >-
       Given an IDENTICAL input report the predicate is byte-stable: no
       wall-clock timestamp is injected by the attestor itself, and ReportDigest
-      is the product digest. JUnit counts are recomputed from the actual
+      is the product digest. Terraform's bare <testcase> for a run that
+      never started (no outcome, no timestamp, in a .tftest.hcl suite) is
+      counted as an error. JUnit counts are recomputed from the actual
       <testcase> entries; CTRF trusts results.summary and only recomputes from
       tests[] when the summary block omits counts. FailedTests is capped at 50
       entries (maxFailedTests); failed counts in Summary remain exact. Across

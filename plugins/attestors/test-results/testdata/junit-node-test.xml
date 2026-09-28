@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+	<testcase name="top level passes" time="0.001200" classname="test" file="/w/sample.test.mjs"/>
+	<testsuite name="parser" time="0.004364" disabled="0" errors="0" tests="2" failures="1" skipped="1" timestamp="2026-09-25T05:00:16.824Z" hostname="fixture-host">
+		<testcase name="reads flags" time="0.000310" classname="parser" file="/w/sample.test.mjs"/>
+		<testsuite name="nested options" time="0.003495" disabled="0" errors="0" tests="2" failures="1" skipped="1" timestamp="2026-09-25T05:00:16.824Z" hostname="fixture-host">
+			<testcase name="rejects unknown option" time="0.001355" classname="parser.nested options" file="/w/sample.test.mjs" failure="1 == 2">
+				<failure type="testCodeFailure" message="1 == 2">
+Error [ERR_TEST_FAILURE]: 1 == 2
+    at new Promise (&lt;anonymous>)
+    at Array.map (&lt;anonymous>) {
+  code: 'ERR_TEST_FAILURE',
+  failureType: 'testCodeFailure',
+  cause: AssertionError [ERR_ASSERTION]: 1 == 2
+      at TestContext.&lt;anonymous> (file:///w/sample.test.mjs:7:51)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at node:internal/test_runner/test:1903:71
+      at node:internal/per_context/primordials:504:82
+      at new Promise (&lt;anonymous>)
+      at new SafePromise (node:internal/per_context/primordials:478:3)
+      at node:internal/per_context/primordials:504:9
+      at Array.map (&lt;anonymous>) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: '==',
+    diff: 'simple'
+  }
+}
+				</failure>
+			</testcase>
+			<testcase name="pending feature" time="0.001605" classname="parser.nested options" file="/w/sample.test.mjs">
+				<skipped type="skipped" message="not yet"/>
+			</testcase>
+		</testsuite>
+	</testsuite>
+	<!-- tests 4 -->
+	<!-- suites 2 -->
+	<!-- pass 2 -->
+	<!-- fail 1 -->
+	<!-- cancelled 0 -->
+	<!-- skipped 1 -->
+	<!-- todo 0 -->
+	<!-- duration_ms 156.092 -->
+</testsuites>

@@ -30,36 +30,11 @@ import (
 // docs/design/fix-security.md#test-results-verdict (Judge monorepo).
 const junitVectors = "../../../formal/test-results/vectors/junit.json"
 
-// knownDivergences are the vectors the parser on main summarizes differently
-// from the model: the holes the verdict fix closes. The test fails when the
-// parser disagrees on a vector not listed here (a regression), and when a
-// listed vector starts to agree (shrink the list). The fix empties it.
-var knownDivergences = map[string]bool{
-	"unrecognized status failed":                       true,
-	"unrecognized status timeout":                      true,
-	"unrecognized result failed":                       true,
-	"status fail with skipped":                         true,
-	"status fail alone":                                true,
-	"lone rerunFailure":                                true,
-	"lone rerunError":                                  true,
-	"suite claims a failure over bare cases":           true,
-	"suite claims failures and errors over bare cases": true,
-	"suite claims an error with no cases":              true,
-	"nested suite claims a failure":                    true,
-	"root claims a failure over bare cases":            true,
-	"root claims an error over bare cases":             true,
-	"summary only, one failure":                        true,
-	"summary only, suites without root attributes":     true,
-	"summary only, passing":                            true,
-	"summary only, nested failure":                     true,
-	"summary only, root claims none":                   true,
-	"declared skip without a child":                    true,
-	"ctest could not run":                              true,
-	"ctest disabled":                                   true,
-	"terraform run never started":                      true,
-	"nested passing suites":                            true,
-	"root-level cases with a failure":                  true,
-}
+// knownDivergences are the vectors the parser summarizes differently from the
+// model. The verdict fix closed every hole, so it is empty: the test fails when
+// the parser disagrees on any vector (a regression), and when a listed vector
+// starts to agree (shrink the list).
+var knownDivergences = map[string]bool{}
 
 func TestFormalDifferentialJUnit(t *testing.T) {
 	raw, err := os.ReadFile(junitVectors)
