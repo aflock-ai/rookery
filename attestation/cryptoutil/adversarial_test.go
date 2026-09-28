@@ -516,7 +516,7 @@ func TestAdversarial_RSAVerifier_PKCS1v15Fallback(t *testing.T) {
 
 	err = verifier.Verify(bytes.NewReader(data), pkcs1Sig)
 	assert.Error(t, err, "default verifier must reject PKCS1v15")
-	legacy := NewRSAVerifierWithOptions(&privKey.PublicKey, crypto.SHA256, WithPKCS1v15Fallback())
+	legacy := NewRSAVerifierWithOptions(&privKey.PublicKey, crypto.SHA256, WithPKCS1v15())
 	assert.NoError(t, legacy.Verify(bytes.NewReader(data), pkcs1Sig))
 }
 

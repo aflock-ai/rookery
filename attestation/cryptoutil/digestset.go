@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 
@@ -403,6 +404,114 @@ type SubjectMatchScope struct {
 	// signed, which is the mistake payloadMatchesSubjects documents for
 	// subjects themselves.
 	HardenedGitAttested bool
+
+	// CommitSubjectPrefix is a POLICY-DECLARED subject-name prefix that names
+	// a commit for one external attestation (ExternalAttestation.commitSubject,
+	// e.g. "https://pushgate.dev/v0.1/commithash:"). When non-empty, a sha1
+	// subject spelled exactly <prefix><40-hex> whose digest is that same value
+	// becomes matchable. IsDeclaredCommitSubject lists every condition.
+	//
+	// It is set ONLY by the external-attestation search, for a statement whose
+	// SIGNED predicateType is the external's own (never an attestation
+	// collection), and only from a policy the verifier already trusts. The
+	// producer cannot set it: the prefix comes from the policy, and the name
+	// and digest it is compared with come from the signed payload. Empty (the
+	// zero value) is the strict scope.
+	CommitSubjectPrefix string
+}
+
+// commitSubjectPrefixMaxLen bounds a declared commit-subject prefix. The
+// prefix is a URI the policy author writes by hand; nothing legitimate comes
+// near this, and a bound keeps a hostile policy from making every subject
+// comparison expensive.
+const commitSubjectPrefixMaxLen = 256
+
+// ValidateCommitSubjectPrefix enforces the one accepted shape of a declared
+// commit-subject prefix (ExternalAttestation.commitSubject). The rule is
+// deliberately strict. A prefix is compared byte-for-byte against signed
+// subject names, so anything a human could misread is refused up front:
+//
+//   - 1..256 bytes of printable ASCII (0x21-0x7E): no whitespace, no control
+//     bytes, no non-ASCII (no homoglyphs, no normalization questions);
+//   - ends with "/commithash:" exactly (case-exact), so the subject it admits
+//     reads as "<namespace>/commithash:<sha>", the same relation the git
+//     attestor's subjects use, under the producer's own namespace;
+//   - the namespace before "/commithash:" is an absolute URL with a lower-case
+//     scheme and a host, and no userinfo, query or fragment.
+//
+// The bare git form "commithash:" is refused: it is the git attestor's own
+// subject name, and its SHA-1 arm belongs to hardened git collections only.
+func ValidateCommitSubjectPrefix(prefix string) error {
+	if prefix == "" {
+		return fmt.Errorf("commitSubject must not be empty")
+	}
+	if len(prefix) > commitSubjectPrefixMaxLen {
+		return fmt.Errorf("commitSubject is %d bytes; the limit is %d", len(prefix), commitSubjectPrefixMaxLen)
+	}
+	for i := 0; i < len(prefix); i++ {
+		if c := prefix[i]; c < 0x21 || c > 0x7e {
+			return fmt.Errorf("commitSubject %q contains a byte outside printable ASCII at offset %d (whitespace, control and non-ASCII characters are refused)", prefix, i)
+		}
+	}
+	const sep = "/" + gitCommitSubjectInfix
+	if !strings.HasSuffix(prefix, sep) {
+		return fmt.Errorf("commitSubject %q must end with %q", prefix, sep)
+	}
+	return validateCommitSubjectNamespace(prefix, prefix[:len(prefix)-len(sep)])
+}
+
+// validateCommitSubjectNamespace checks the part of a commit-subject prefix
+// before "/commithash:": an absolute URL with a lower-case scheme and a host,
+// and no userinfo, query or fragment.
+func validateCommitSubjectNamespace(prefix, namespace string) error {
+	u, err := url.Parse(namespace)
+	if err != nil {
+		return fmt.Errorf("commitSubject %q: namespace is not a URL: %w", prefix, err)
+	}
+	if u.Scheme == "" || u.Scheme != strings.ToLower(u.Scheme) || !strings.HasPrefix(namespace, u.Scheme+"://") {
+		return fmt.Errorf("commitSubject %q: namespace must be an absolute URL with a lower-case scheme", prefix)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("commitSubject %q: namespace must name a host", prefix)
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(namespace, "?#") {
+		return fmt.Errorf("commitSubject %q: namespace must not carry userinfo, a query or a fragment", prefix)
+	}
+	return nil
+}
+
+// IsDeclaredCommitSubject reports whether (subjectName, algorithm, value) is a
+// commit reference under a POLICY-DECLARED prefix. All required:
+//
+//  1. the prefix itself passes ValidateCommitSubjectPrefix (a caller that
+//     skipped policy validation still gets nothing from a malformed prefix);
+//  2. the algorithm is exactly "sha1";
+//  3. the value is 40 hex characters and not the null object id;
+//  4. the subject name is exactly <prefix><value>: the prefix compared
+//     byte-for-byte (case-exact, no trimming), and only the trailing 40 hex
+//     digest characters compared case-folded, as isGitCommitSubject does.
+//
+// Binding the name to the value stops relabelling (a subject naming commit A
+// with the digest of commit B); binding the prefix exactly stops a producer
+// from minting a lookalike namespace.
+func IsDeclaredCommitSubject(prefix, subjectName, algorithm, value string) bool {
+	if ValidateCommitSubjectPrefix(prefix) != nil {
+		return false
+	}
+	if algorithm != digestNameSHA1 {
+		return false
+	}
+	if len(value) != sha1HexLen || !isHexString(value) {
+		return false
+	}
+	v := strings.ToLower(value)
+	if v == gitNullOID {
+		return false
+	}
+	if len(subjectName) != len(prefix)+sha1HexLen || subjectName[:len(prefix)] != prefix {
+		return false
+	}
+	return strings.ToLower(subjectName[len(prefix):]) == v
 }
 
 // isGitCommitSubject reports whether (name, algorithm, value) is a git COMMIT
@@ -555,7 +664,12 @@ func (s SubjectMatchScope) IsMatchableSubjectDigest(subjectName, algorithm, valu
 		// attestation (exact current type + verified-commit-hash marker),
 		// vouched for by its own subject name. Everything else — including
 		// legacy git evidence that predates the marker — is unmatchable.
-		return s.HardenedGitAttested && isGitCommitSubject(subjectName, algorithm, value)
+		if s.HardenedGitAttested && isGitCommitSubject(subjectName, algorithm, value) {
+			return true
+		}
+		// The policy-declared arm: a bare external whose policy names the
+		// exact subject-name prefix that spells its commit.
+		return s.CommitSubjectPrefix != "" && IsDeclaredCommitSubject(s.CommitSubjectPrefix, subjectName, algorithm, value)
 	}
 	if wantHexLen != 0 {
 		// Plain-hex algorithm: enforce exact length AND hex-ness.

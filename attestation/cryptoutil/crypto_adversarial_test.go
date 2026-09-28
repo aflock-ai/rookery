@@ -13,6 +13,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"os"
@@ -264,111 +265,110 @@ func TestAdversarial_ED25519_CrossKeyRejection(t *testing.T) {
 // X509 certificate verification edge cases
 // ==========================================================================
 
-func TestAdversarial_X509Verifier_ExpiredCert(t *testing.T) {
-	// Create a cert that expired 1 hour ago.
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+// advGenLeafUnderRoot mints a self-signed root valid from a week ago to a week
+// ahead, and a non-CA signing leaf under it valid over [notBefore, notAfter].
+// Since #9876 a CA certificate is refused as a signing leaf, so a test about
+// leaf validity must present a real leaf or it fails for the CA reason instead.
+func advGenLeafUnderRoot(t *testing.T, notBefore, notAfter time.Time) (leaf, root *x509.Certificate, leafPriv *rsa.PrivateKey) {
+	t.Helper()
+	rootPriv, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
-
 	now := time.Now()
-	template := &x509.Certificate{
+	rootTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Expired Cert"},
-		NotBefore:             now.Add(-48 * time.Hour),
-		NotAfter:              now.Add(-1 * time.Hour), // expired!
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		Subject:               pkix.Name{CommonName: "Adversarial Root"},
+		NotBefore:             now.Add(-7 * 24 * time.Hour),
+		NotAfter:              now.Add(7 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template,
-		&priv.PublicKey, priv)
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, &rootPriv.PublicKey, rootPriv)
+	require.NoError(t, err)
+	root, err = x509.ParseCertificate(rootDER)
 	require.NoError(t, err)
 
-	cert, err := x509.ParseCertificate(certDER)
+	leafPriv, err = rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
+	leafTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "Adversarial Leaf"},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, root, &leafPriv.PublicKey, rootPriv)
+	require.NoError(t, err)
+	leaf, err = x509.ParseCertificate(leafDER)
+	require.NoError(t, err)
+	return leaf, root, leafPriv
+}
+
+// requireExpiredErr asserts err is the chain builder's validity-window refusal
+// (Go reports both "expired" and "not yet valid" as x509.Expired), not some
+// earlier refusal that would make the test pass for the wrong reason.
+func requireExpiredErr(t *testing.T, err error) {
+	t.Helper()
+	var invalid x509.CertificateInvalidError
+	require.True(t, errors.As(err, &invalid), "want x509.CertificateInvalidError, got %v", err)
+	require.Equal(t, x509.Expired, invalid.Reason, "want a validity-window refusal, got %v", err)
+}
+
+func TestAdversarial_X509Verifier_ExpiredCert(t *testing.T) {
+	// A leaf that expired 1 hour ago.
+	now := time.Now()
+	leaf, root, priv := advGenLeafUnderRoot(t, now.Add(-48*time.Hour), now.Add(-1*time.Hour))
 
 	// Create X509Verifier with no trusted time (uses current time).
-	verifier, err := NewX509Verifier(cert, nil, []*x509.Certificate{cert}, time.Time{})
+	verifier, err := NewX509Verifier(leaf, nil, []*x509.Certificate{root}, time.Time{})
 	require.NoError(t, err)
 
 	data := []byte("signed by expired cert")
-	signer := NewRSASigner(priv, crypto.SHA256)
-	sig, err := signer.Sign(bytes.NewReader(data))
+	sig, err := NewRSASigner(priv, crypto.SHA256).Sign(bytes.NewReader(data))
 	require.NoError(t, err)
 
 	err = verifier.Verify(bytes.NewReader(data), sig)
-	require.Error(t, err,
-		"expired certificate should fail verification")
+	require.Error(t, err, "expired certificate should fail verification")
+	requireExpiredErr(t, err)
 }
 
 func TestAdversarial_X509Verifier_FutureCert(t *testing.T) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-
+	// A leaf that is not valid until tomorrow.
 	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Future Cert"},
-		NotBefore:             now.Add(24 * time.Hour), // not valid yet!
-		NotAfter:              now.Add(48 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-	}
+	leaf, root, priv := advGenLeafUnderRoot(t, now.Add(24*time.Hour), now.Add(48*time.Hour))
 
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template,
-		&priv.PublicKey, priv)
-	require.NoError(t, err)
-
-	cert, err := x509.ParseCertificate(certDER)
-	require.NoError(t, err)
-
-	verifier, err := NewX509Verifier(cert, nil, []*x509.Certificate{cert}, time.Time{})
+	verifier, err := NewX509Verifier(leaf, nil, []*x509.Certificate{root}, time.Time{})
 	require.NoError(t, err)
 
 	data := []byte("signed by future cert")
-	signer := NewRSASigner(priv, crypto.SHA256)
-	sig, err := signer.Sign(bytes.NewReader(data))
+	sig, err := NewRSASigner(priv, crypto.SHA256).Sign(bytes.NewReader(data))
 	require.NoError(t, err)
 
 	err = verifier.Verify(bytes.NewReader(data), sig)
-	require.Error(t, err,
-		"certificate not yet valid should fail verification")
+	require.Error(t, err, "certificate not yet valid should fail verification")
+	requireExpiredErr(t, err)
 }
 
 func TestAdversarial_X509Verifier_TrustedTimeOverride(t *testing.T) {
-	// Create a cert that is currently expired but was valid in the past.
+	// A leaf that is currently expired but was valid in the past.
 	// Using trustedTime should allow verification.
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-
 	pastStart := time.Now().Add(-72 * time.Hour)
 	pastEnd := time.Now().Add(-24 * time.Hour)
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Was Valid"},
-		NotBefore:             pastStart,
-		NotAfter:              pastEnd,
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-	}
+	leaf, root, priv := advGenLeafUnderRoot(t, pastStart, pastEnd)
 
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template,
-		&priv.PublicKey, priv)
+	data := []byte("signed during valid period")
+	sig, err := NewRSASigner(priv, crypto.SHA256).Sign(bytes.NewReader(data))
 	require.NoError(t, err)
 
-	cert, err := x509.ParseCertificate(certDER)
+	// Without a trusted time the leaf is judged at now, and is expired.
+	nowVerifier, err := NewX509Verifier(leaf, nil, []*x509.Certificate{root}, time.Time{})
 	require.NoError(t, err)
+	requireExpiredErr(t, nowVerifier.Verify(bytes.NewReader(data), sig))
 
 	// Set trustedTime to when the cert was valid.
 	trustedTime := pastStart.Add(1 * time.Hour)
-	verifier, err := NewX509Verifier(cert, nil, []*x509.Certificate{cert}, trustedTime)
-	require.NoError(t, err)
-
-	data := []byte("signed during valid period")
-	signer := NewRSASigner(priv, crypto.SHA256)
-	sig, err := signer.Sign(bytes.NewReader(data))
+	verifier, err := NewX509Verifier(leaf, nil, []*x509.Certificate{root}, trustedTime)
 	require.NoError(t, err)
 
 	err = verifier.Verify(bytes.NewReader(data), sig)
@@ -888,25 +888,35 @@ func TestAdversarial_ED25519_SignVerify_DataMutation(t *testing.T) {
 // ==========================================================================
 
 func TestAdversarial_X509Verifier_BelongsToRoot_WrongRoot(t *testing.T) {
-	// Create two separate self-signed certs (acting as roots).
-	cert1 := advGenSelfSignedCert(t)
-	cert2 := advGenSelfSignedCert(t)
+	// A leaf under one root must not be accepted as belonging to another.
+	now := time.Now()
+	leaf, root1, _ := advGenLeafUnderRoot(t, now.Add(-time.Hour), now.Add(24*time.Hour))
+	_, root2, _ := advGenLeafUnderRoot(t, now.Add(-time.Hour), now.Add(24*time.Hour))
 
-	verifier, err := NewX509Verifier(cert1, nil, []*x509.Certificate{cert1}, time.Time{})
+	verifier, err := NewX509Verifier(leaf, nil, []*x509.Certificate{root1}, time.Time{})
 	require.NoError(t, err)
 
-	err = verifier.BelongsToRoot(cert2)
-	require.Error(t, err, "cert should not belong to a different root")
+	err = verifier.BelongsToRoot(root2)
+	require.Error(t, err, "leaf should not belong to a different root")
+	var unknown x509.UnknownAuthorityError
+	require.True(t, errors.As(err, &unknown), "want x509.UnknownAuthorityError, got %v", err)
 }
 
 func TestAdversarial_X509Verifier_BelongsToRoot_CorrectRoot(t *testing.T) {
-	cert := advGenSelfSignedCert(t)
+	now := time.Now()
+	leaf, root, _ := advGenLeafUnderRoot(t, now.Add(-time.Hour), now.Add(24*time.Hour))
 
-	verifier, err := NewX509Verifier(cert, nil, []*x509.Certificate{cert}, time.Time{})
+	verifier, err := NewX509Verifier(leaf, nil, []*x509.Certificate{root}, time.Time{})
 	require.NoError(t, err)
 
-	err = verifier.BelongsToRoot(cert)
-	require.NoError(t, err, "self-signed cert should belong to itself as root")
+	err = verifier.BelongsToRoot(root)
+	require.NoError(t, err, "leaf should belong to the root that issued it")
+
+	// A self-signed CA presented as its own signing leaf is refused (#9876).
+	ca := advGenSelfSignedCert(t)
+	caVerifier, err := NewX509Verifier(ca, nil, []*x509.Certificate{ca}, time.Time{})
+	require.NoError(t, err)
+	require.ErrorIs(t, caVerifier.BelongsToRoot(ca), ErrCACertificateAsLeaf)
 }
 
 // ==========================================================================
