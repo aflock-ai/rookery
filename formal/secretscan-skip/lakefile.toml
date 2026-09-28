@@ -1,0 +1,10 @@
+name = "secretscan_skip"
+version = "0.1.0"
+defaultTargets = ["SecretscanSkip", "secretscan-skip-oracle"]
+
+[[lean_lib]]
+name = "SecretscanSkip"
+
+[[lean_exe]]
+name = "secretscan-skip-oracle"
+root = "OracleMain"
