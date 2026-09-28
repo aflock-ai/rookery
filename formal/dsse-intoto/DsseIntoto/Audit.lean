@@ -6,6 +6,7 @@
 -/
 import DsseIntoto.Counterexamples
 import DsseIntoto.Verify
+import DsseIntoto.Sidecar
 
 namespace DsseIntoto
 
@@ -25,6 +26,12 @@ namespace DsseIntoto
 #print axioms toCollectionReq_reads
 #print axioms externalReadReq_sameBytes
 #print axioms decodesReq_iff
+-- sidecar acceptance (#10165) and the base64 alphabets
+#print axioms sidecarAccepts_iff
+#print axioms sidecar_accepted_is_signed_statement
+#print axioms sidecar_url_safe_accepted
+#print axioms encodeUrl_eq
+#print axioms either_reads_url_as_std
 -- the code at the pin, refuted; still holds as built
 #print axioms ce_type_v01
 -- refuted at the pin, fixed since (each carries its original counterexample)

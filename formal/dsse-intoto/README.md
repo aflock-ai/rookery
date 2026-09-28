@@ -35,6 +35,9 @@ rookery-relative, because this directory syncs to aflock-ai/rookery.
 | `newStatementReq_conforms` | proved | the fixed constructor meets every v1 body clause |
 | `toCollectionReq_reads`, `externalReadReq_sameBytes` | proved | the fixed readers read in-toto only when it is typed so, from the verified bytes, of a requested type |
 | `decodesReq_iff` | proved | the fixed decoder accepts exactly the envelopes the parsing rules allow |
+| `sidecarAccepts_iff`, `sidecar_accepted_is_signed_statement` | proved | cilock's one sidecar decoder (#10165 `decodeSidecarEnvelope`) admits exactly an envelope meeting the DSSE parsing rules with a non-empty payload, at least one signature, and a payload that is a statement naming a non-empty `predicateType` |
+| `sidecar_url_safe_accepted` | proved | the payload's base64 alphabet never decides sidecar acceptance |
+| `encodeUrl_eq`, `either_reads_url_as_std` | proved | the URL-safe spelling of any byte string is the standard spelling with 62/63 swapped, and reading either through `decodeBase64Field`'s either-alphabet index gives the same sextets, so both decode to the same bytes |
 | `ce_type_v01` | refuted as built | `NewStatement` signs `_type` v0.1 (known: #9827, #9841) |
 | `empty_predicateType_refused`, `predicate_array_refused`, `subject_without_digest_refused` (formerly `ce_empty_predicateType`, `ce_predicate_array`, `ce_subject_without_digest`) | refuted as built; fixed by #10058; each also states the pre-fix counterexample | #10030 |
 | `foreign_payload_type_refused`, `external_source_decode_not_handed_on`, `external_unrequested_type_refused` (formerly `ce_foreign_payload_type`, `ce_external_not_from_verified_bytes`, `ce_external_unrequested_type`) | refuted as built; fixed by #10060; each also states the pre-fix counterexample | #10026 |
@@ -74,6 +77,8 @@ real code. They skip when the vectors are not on disk and FAIL instead when
 | `attestation/dsse/formal_dsse_differential_test.go` | pae | 96 | `preauthEncode` bytes, bodies up to 64 KiB, UTF-8 and space-bearing types |
 | | verify | 819 | `Envelope.Verify` verdict and distinct-key count, real P-256 keys, real X.509 leaves under trusted and untrusted roots, FakeTimestamper TSAs, fallback on and off |
 | | decode | 288 | `json.Unmarshal` into `Envelope`, per base64 alphabet and field presence |
+| | alphabet | 32 | `decodeBase64Field` on the model's standard and URL-safe spellings of each byte string: both decode to exactly those bytes |
+| `cilock/cli/formal_sidecar_differential_test.go` (lands with #10165) | sidecar | 504 | `decodeSidecarEnvelope` accept/refuse per field presence, alphabet and payload content |
 | `attestation/intoto/formal_statement_differential_test.go` | statement | 70 | `NewStatement` refusals and emitted `_type`, subjects, predicateType, predicate kind |
 | `attestation/source/formal_consume_differential_test.go` | consume | 91 | `EnvelopeToCollectionEnvelope` |
 | | external | 27 | `VerifiedSource.SearchByPredicateType` over a source that lies about its decode, searched for the claimed or the signed type |

@@ -17,6 +17,7 @@
 import DsseIntoto.Pae
 import DsseIntoto.Verify
 import DsseIntoto.Statement
+import DsseIntoto.Sidecar
 
 namespace DsseIntoto.Vectors
 open DsseIntoto
@@ -242,13 +243,47 @@ def decodeCases : List String :=
       ",\"sigs\":" ++ jarr (sigs.map (fun (p, b) => "{\"has\":" ++ jbool p ++ ",\"enc\":" ++ jstr (b64Str b) ++ "}")) ++
       ",\"asbuilt\":" ++ jbool (decodes j) ++ ",\"required\":" ++ jbool (decodesReq j) ++ "}")))))
 
+/-! ### Sidecar acceptance (#10165) and the base64 alphabets -/
+
+def payloadStr : SidecarPayload → String
+  | .empty => "empty" | .notJson => "notJson" | .noPredicateType => "noPredicateType"
+  | .emptyPredicateType => "emptyPredicateType" | .nonStringPredicateType => "nonStringPredicateType"
+  | .nullJson => "null" | .statement => "statement"
+
+def sidecarPayloads : List SidecarPayload :=
+  [.empty, .notJson, .noPredicateType, .emptyPredicateType, .nonStringPredicateType, .nullJson, .statement]
+
+def sidecarSigChoices : List (List (Bool × B64)) :=
+  [[], [(true, .both)], [(false, .both)], [(true, .invalid)], [(true, .urlOnly), (true, .stdOnly)]]
+
+def sidecarCases : List String :=
+  [true, false].flatMap (fun hp => [true, false].flatMap (fun ht => [true, false].flatMap (fun hs =>
+    [B64.stdOnly, .urlOnly, .invalid].flatMap (fun pb => (if hs then sidecarSigChoices else [[]]).flatMap (fun sigs =>
+      sidecarPayloads.map (fun pk =>
+        let s : SidecarJson := ⟨⟨hp, ht, hs, pb, sigs⟩, pk⟩
+        "{\"hasPayload\":" ++ jbool hp ++ ",\"hasPayloadType\":" ++ jbool ht ++ ",\"hasSignatures\":" ++ jbool hs ++
+        ",\"payloadEnc\":" ++ jstr (b64Str pb) ++ ",\"payload\":" ++ jstr (payloadStr pk) ++
+        ",\"sigs\":" ++ jarr (sigs.map (fun (p, b) => "{\"has\":" ++ jbool p ++ ",\"enc\":" ++ jstr (b64Str b) ++ "}")) ++
+        ",\"accept\":" ++ jbool (sidecarAccepts s) ++ "}"))))))
+
+def alphabetSamples : List (List Nat) :=
+  [[], [0xfb], [0xfb, 0xff], [0xfb, 0xff, 0xbf], [0xff, 0xff, 0xff, 0xff], [0x3e, 0x3f, 0xfe],
+   (bytesOf "hello"), (bytesOf "any carnal pleasure.")] ++
+  (List.range 24).map (fun i => (draws (i * 7919 + 1) 256 (i % 11)).1)
+
+def alphabetCases : List String :=
+  alphabetSamples.map (fun bs =>
+    "{\"hex\":" ++ jstr (hex bs) ++ ",\"std\":" ++ jstr (String.ofList (encodeStd bs)) ++
+    ",\"url\":" ++ jstr (String.ofList (encodeUrl bs)) ++ "}")
+
 def sec (name : String) (xs : List String) : String :=
   jstr name ++ ":[\n" ++ ",\n".intercalate xs ++ "\n]"
 
 def vectorsJson : String :=
   "{" ++ ",\n".intercalate
     [ sec "pae" paeCases, sec "verify" verifyCases, sec "statement" stmtCases,
-      sec "consume" consumeCases, sec "external" externalCases, sec "decode" decodeCases ] ++ "}\n"
+      sec "consume" consumeCases, sec "external" externalCases, sec "decode" decodeCases,
+      sec "sidecar" sidecarCases, sec "alphabet" alphabetCases ] ++ "}\n"
 
 /- Staleness gate: the committed vectors must be exactly this model's.
    Skipped only while regenerating (DSSE_INTOTO_VECTORS_REGEN=1). -/

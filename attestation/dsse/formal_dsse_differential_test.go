@@ -72,6 +72,11 @@ type formalVectors struct {
 		AsBuilt  bool `json:"asbuilt"`
 		Required bool `json:"required"`
 	} `json:"decode"`
+	Alphabet []struct {
+		Hex string `json:"hex"`
+		Std string `json:"std"`
+		URL string `json:"url"`
+	} `json:"alphabet"`
 }
 
 type formalCert struct {
@@ -120,6 +125,33 @@ func TestFormalDSSEDifferential(t *testing.T) {
 	t.Run("pae", func(t *testing.T) { formalPAE(t, v) })
 	t.Run("verify", func(t *testing.T) { formalVerify(t, v.Verify) })
 	t.Run("decode", func(t *testing.T) { formalDecode(t, v) })
+	t.Run("alphabet", func(t *testing.T) { formalAlphabet(t, v) })
+}
+
+// formalAlphabet replays the model's either_reads_url_as_std: the standard
+// and URL-safe spellings the model encodes for a byte string both decode, in
+// decodeBase64Field, to exactly those bytes.
+func formalAlphabet(t *testing.T, v formalVectors) {
+	if len(v.Alphabet) == 0 {
+		t.Fatal("vectors are missing the alphabet section")
+	}
+	for i, c := range v.Alphabet {
+		want, err := hex.DecodeString(c.Hex)
+		if err != nil {
+			t.Fatalf("alphabet case %d: bad hex %q: %v", i, c.Hex, err)
+		}
+		for _, spelling := range []string{c.Std, c.URL} {
+			raw, err := json.Marshal(spelling)
+			if err != nil {
+				t.Fatalf("alphabet case %d: %v", i, err)
+			}
+			got, err := decodeBase64Field(raw)
+			if err != nil || !bytes.Equal(got, want) {
+				t.Errorf("alphabet case %d: %q decoded to %x (%v), model bytes %s", i, spelling, got, err, c.Hex)
+			}
+		}
+	}
+	t.Logf("alphabet: %d byte strings decode identically from both spellings", len(v.Alphabet))
 }
 
 func formalPAE(t *testing.T, v formalVectors) {
