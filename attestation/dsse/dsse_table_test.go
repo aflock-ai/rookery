@@ -955,7 +955,10 @@ func TestTableX509Verification(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "self-signed cert works when used as its own root",
+			// Since #9876 a CA certificate is never a signing leaf, so a
+			// self-signed CA presented as its own root must NOT verify: that
+			// would let a CA key sign attestations directly.
+			name: "self-signed CA cert used as its own root is refused",
 			setup: func(t *testing.T) (Envelope, []VerificationOption) {
 				priv, err := rsa.GenerateKey(rand.Reader, 2048)
 				require.NoError(t, err)
@@ -989,7 +992,12 @@ func TestTableX509Verification(t *testing.T) {
 					VerifyWithCurrentTimeFallback(),
 				}
 			},
-			wantErr: false,
+			wantErr: true,
+			check: func(t *testing.T, _ []CheckedVerifier, err error) {
+				// Refused for the CA-as-leaf reason, not some other one. The
+				// aggregate error flattens per-key causes to text.
+				assert.ErrorContains(t, err, cryptoutil.ErrCACertificateAsLeaf.Error())
+			},
 		},
 		{
 			name: "wrong root CA rejects valid chain",

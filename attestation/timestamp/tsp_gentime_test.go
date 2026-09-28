@@ -199,6 +199,9 @@ func forgeTokenWithTimes(t *testing.T, leaf *x509.Certificate, leafKey *ecdsa.Pr
 	contentDigest := sha256.Sum256(tstDER)
 	types := []asn1.ObjectIdentifier{oidAttrContentType, oidAttrMessageDigest}
 	values := []interface{}{oidTSTInfo, contentDigest[:]}
+	essOID, essVal := essV2For(leaf)
+	types = append(types, essOID)
+	values = append(values, essVal)
 	if signingTime != nil {
 		types = append(types, oidAttrSigningTime)
 		values = append(values, signingTime.UTC().Truncate(time.Second))
