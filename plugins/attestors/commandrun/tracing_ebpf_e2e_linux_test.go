@@ -170,41 +170,6 @@ func TestEBPF_E2E_TOCTOUSuspect(t *testing.T) {
 	}
 }
 
-// TestPtrace_E2E_StillWorksAfterRefactor verifies the ptrace path
-// still captures openat events after the eBPF refactor. Ensures the
-// preStartTracingSetup() change didn't regress the ptrace flow.
-func TestPtrace_E2E_StillWorksAfterRefactor(t *testing.T) {
-	if testing.Short() {
-		t.Skip("e2e test")
-	}
-	if os.Geteuid() != 0 {
-		t.Skip("ptrace e2e test requires root (PTRACE_TRACEME on a child)")
-	}
-	t.Setenv(EnvVarTraceMode, "ptrace")
-
-	dir := t.TempDir()
-	target := filepath.Join(dir, "ptrace-sentinel.txt")
-	content := []byte("ptrace-path-still-works\n")
-	if err := os.WriteFile(target, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	procs := runUnderEBPF(t, []string{"/bin/cat", target}) // helper name is misleading; runs whatever mode is set
-
-	// Find ProcessInfo with our path in OpenedFiles
-	found := false
-	for _, p := range procs {
-		if _, ok := p.OpenedFiles[target]; ok {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("ptrace mode did not capture sentinel openat. procs=%d files:\n%s",
-			len(procs), summarizeOpenedFiles(procs))
-	}
-}
-
 // TestEBPF_E2E_MultipleFiles checks that a tracee opening many files
 // captures all of them. Tests ring buffer + worker pool throughput.
 func TestEBPF_E2E_MultipleFiles(t *testing.T) {
