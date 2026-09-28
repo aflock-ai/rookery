@@ -1,0 +1,16 @@
+name = "test-results"
+version = "0.1.0"
+defaultTargets = ["TestResults"]
+
+# The committed differential vectors are a build INPUT: editing the file
+# re-runs the staleness gate in TestResults/Vectors.lean, which fails when it no
+# longer equals what the model generates.
+[[input_file]]
+name = "junit_vectors"
+path = "vectors/junit.json"
+text = true
+
+[[lean_lib]]
+name = "TestResults"
+roots = ["TestResults", "TestResults.Vectors"]
+needs = ["junit_vectors"]
