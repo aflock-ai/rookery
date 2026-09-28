@@ -565,7 +565,7 @@ func createAndSignEnvelope(predicate interface{}, predType string, subjects map[
 		return dsse.Envelope{}, err
 	}
 
-	stmt, err := intoto.NewStatement(predType, data, subjects)
+	stmt, err := intoto.NewStatementV1(predType, data, subjects)
 	if err != nil {
 		return dsse.Envelope{}, err
 	}

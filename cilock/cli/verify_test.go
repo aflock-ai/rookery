@@ -133,7 +133,7 @@ func TestWriteVSAOutfile(t *testing.T) {
 		// MUST parse as an in-toto Statement with the VSA predicate type.
 		var stmt intoto.Statement
 		require.NoError(t, json.Unmarshal(data, &stmt), "output must be in-toto Statement JSON")
-		assert.Equal(t, intoto.StatementType, stmt.Type)
+		assert.Equal(t, "https://in-toto.io/Statement/v1", stmt.Type, "cilock VSAs are in-toto Statement v1 (#9827)")
 		assert.Equal(t, slsa.VerificationSummaryPredicate, stmt.PredicateType)
 		assert.NotEmpty(t, stmt.Predicate, "predicate must be populated")
 	})

@@ -621,7 +621,7 @@ func writeVSAOutfile(path string, evidence workflow.VerifyResult, signers []cryp
 
 	if len(signers) == 0 {
 		log.Warn("VSA written without a signer — downstream policies that require a functionary-signed VSA will reject this file. Pass --signer-* flags to produce a signed DSSE envelope.")
-		stmt, sErr := intoto.NewStatement(slsa.VerificationSummaryPredicate, predicateBytes, subjects)
+		stmt, sErr := intoto.NewStatementV1(slsa.VerificationSummaryPredicate, predicateBytes, subjects)
 		if sErr != nil {
 			return fmt.Errorf("failed to build unsigned VSA statement: %w", sErr)
 		}
@@ -640,7 +640,7 @@ func writeVSAOutfile(path string, evidence workflow.VerifyResult, signers []cryp
 		timestampers = append(timestampers, timestamp.NewTimestamper(timestamp.TimestampWithUrl(url)))
 	}
 
-	stmt, err := intoto.NewStatement(slsa.VerificationSummaryPredicate, predicateBytes, subjects)
+	stmt, err := intoto.NewStatementV1(slsa.VerificationSummaryPredicate, predicateBytes, subjects)
 	if err != nil {
 		return fmt.Errorf("failed to build VSA statement: %w", err)
 	}

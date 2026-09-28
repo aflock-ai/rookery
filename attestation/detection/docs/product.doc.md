@@ -92,7 +92,7 @@ Commitment fields in a v0.3 product statement (representation fields omitted fro
 
 ```json
 {
-  "_type":         "https://in-toto.io/Statement/v0.1",
+  "_type":         "https://in-toto.io/Statement/v1",
   "subject": [
     {
       "name":   "tree:products",

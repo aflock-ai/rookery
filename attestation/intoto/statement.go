@@ -25,8 +25,8 @@ import (
 
 const (
 	// StatementTypeV1 is the in-toto Statement v1 _type, which slsa-verifier
-	// and gh attestation verify expect for SLSA v1 provenance. Nothing signs
-	// it yet: readers accept it first, then cilock moves its collections to
+	// and gh attestation verify expect for SLSA v1 provenance. cilock signs its
+	// collections and the VSAs `cilock verify` builds with it, through
 	// NewStatementV1 (#9879).
 	StatementTypeV1 = "https://in-toto.io/Statement/v1"
 	// StatementType is the legacy v0.1 _type. NewStatement still emits it,

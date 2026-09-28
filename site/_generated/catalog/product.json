@@ -61,7 +61,7 @@
     {
       "slug": "output-shape",
       "title": "Output shape",
-      "markdown": "## Output shape\n\nCommitment fields in a v0.3 product statement (representation fields omitted from this illustration):\n\n```json\n{\n  \"_type\":         \"https://in-toto.io/Statement/v0.1\",\n  \"subject\": [\n    {\n      \"name\":   \"tree:products\",\n      \"digest\": { \"sha256\": \"9c6f...d3a1\" }\n    }\n  ],\n  \"predicateType\": \"https://aflock.ai/attestations/product/v0.3\",\n  \"predicate\": {\n    \"merkleRoot\":    \"9c6f...d3a1\",\n    \"treeSize\":      30142,\n    \"hashAlgorithm\": \"sha256\",\n    \"construction\":  \"RFC6962\"\n  }\n}\n```\n\nThe detached parent grows with its counters, not with its leaf list. Inline predicates grow with their leaves."
+      "markdown": "## Output shape\n\nCommitment fields in a v0.3 product statement (representation fields omitted from this illustration):\n\n```json\n{\n  \"_type\":         \"https://in-toto.io/Statement/v1\",\n  \"subject\": [\n    {\n      \"name\":   \"tree:products\",\n      \"digest\": { \"sha256\": \"9c6f...d3a1\" }\n    }\n  ],\n  \"predicateType\": \"https://aflock.ai/attestations/product/v0.3\",\n  \"predicate\": {\n    \"merkleRoot\":    \"9c6f...d3a1\",\n    \"treeSize\":      30142,\n    \"hashAlgorithm\": \"sha256\",\n    \"construction\":  \"RFC6962\"\n  }\n}\n```\n\nThe detached parent grows with its counters, not with its leaf list. Inline predicates grow with their leaves."
     },
     {
       "slug": "inline-leaves",

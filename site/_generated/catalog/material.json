@@ -61,7 +61,7 @@
     {
       "slug": "output-shape",
       "title": "Output shape",
-      "markdown": "## Output shape\n\nCommitment fields in a v0.3 material statement (representation fields omitted from this illustration):\n\n```json\n{\n  \"_type\":         \"https://in-toto.io/Statement/v0.1\",\n  \"subject\": [\n    {\n      \"name\":   \"tree:materials\",\n      \"digest\": { \"sha256\": \"4f1e...aa72\" }\n    }\n  ],\n  \"predicateType\": \"https://aflock.ai/attestations/material/v0.3\",\n  \"predicate\": {\n    \"merkleRoot\":    \"4f1e...aa72\",\n    \"treeSize\":      218,\n    \"hashAlgorithm\": \"sha256\",\n    \"construction\":  \"RFC6962\"\n  }\n}\n```\n\nThe compact parent grows with its counters, not with its leaf list. A retained inventory has a separate byte budget."
+      "markdown": "## Output shape\n\nCommitment fields in a v0.3 material statement (representation fields omitted from this illustration):\n\n```json\n{\n  \"_type\":         \"https://in-toto.io/Statement/v1\",\n  \"subject\": [\n    {\n      \"name\":   \"tree:materials\",\n      \"digest\": { \"sha256\": \"4f1e...aa72\" }\n    }\n  ],\n  \"predicateType\": \"https://aflock.ai/attestations/material/v0.3\",\n  \"predicate\": {\n    \"merkleRoot\":    \"4f1e...aa72\",\n    \"treeSize\":      218,\n    \"hashAlgorithm\": \"sha256\",\n    \"construction\":  \"RFC6962\"\n  }\n}\n```\n\nThe compact parent grows with its counters, not with its leaf list. A retained inventory has a separate byte budget."
     },
     {
       "slug": "inline-leaves",

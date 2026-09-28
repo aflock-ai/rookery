@@ -14,8 +14,8 @@ namespace DsseIntoto
 def objStmt : Statement := ⟨statementV01, [⟨"a", [("sha256", "ab")]⟩], "https://example.com/p/v1", .object⟩
 
 /-- `NewStatement` signs the v0.1 `_type`, as built now (after #10058) as
-    before. Known: #9827 (cilock collections move to v1 through
-    `NewStatementV1`, #9879) and #9841 (platform-signed receipts and VSAs,
+    before. cilock's collections no longer use it: #9879 moved them to v1
+    through `NewStatementV1` (#9827). Known: #9841 (platform-signed receipts and VSAs,
     held on v0.1 until every deployed verifier reads v1). -/
 theorem ce_type_v01 :
     newStatementBuilt "https://example.com/p/v1" (some .object) [("a", [("sha256", "ab")])] = .ok objStmt ∧
