@@ -113,13 +113,10 @@ func TestSearch_ValidSHA256SubjectStillMatches(t *testing.T) {
 // finding S1. A collection records a subject under sha256 with value V; an
 // attacker queries for the SAME string V but means it as a sha1 digest (a
 // crafted SHA-1 collision printed as 64 chars, or any value that coincides).
-// Because the recorded subject is a valid sha256 and the query value is equal,
-// it WILL match — this is expected: the value-keyed index can't tell the
-// query's intended algorithm apart. This test documents that the residual
-// cross-algorithm exposure is bounded to value-equality (no length/algo
-// confusion lets a 40-char sha1 stand in for a 64-char sha256), which is the
-// in-scope guarantee of this fix. A full algorithm:value keying requires a
-// coordinated Sourcer-caller change (tracked follow-up).
+// The index is now keyed algorithm:value (#9816), so an equal value under a
+// different algorithm never matches; see subject_algorithm_9816_test.go for
+// the full cross-algorithm matrix. This test keeps the length half: a 40-char
+// sha1-shaped value cannot stand in for a 64-char sha256 subject.
 func TestSearch_SHA1ValueDoesNotCrossMatchSHA256(t *testing.T) {
 	// Recorded subject: a real sha256 (64 hex).
 	recorded := strings.Repeat("c", 64)

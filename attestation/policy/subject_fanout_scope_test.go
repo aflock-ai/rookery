@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/source"
@@ -101,6 +102,20 @@ func fsEnvelope(t *testing.T, attTypes ...string) source.CollectionEnvelope {
 	}
 }
 
+// closureKey / keyedClosure build the algorithm:value closure keys the
+// production callers (newFanoutTracker, closureIntersections) build from the
+// seed list (#9816). A bare fixture value maps through the same explicit
+// NormalizeSubjectSeed table: 64 hex -> sha256, 40 hex -> sha1.
+func closureKey(seed string) string { return cryptoutil.NormalizeSubjectSeed(seed) }
+
+func keyedClosure(seeds ...string) map[string]struct{} {
+	m := make(map[string]struct{}, len(seeds))
+	for _, s := range seeds {
+		m[closureKey(s)] = struct{}{}
+	}
+	return m
+}
+
 // TestClosureIntersectOne_GitScope pins the THIRD call site of the subject
 // matcher against the other two.
 //
@@ -113,16 +128,16 @@ func fsEnvelope(t *testing.T, attTypes ...string) source.CollectionEnvelope {
 // other two sites do not believe exists, so an operator would see a candidate
 // hub-rejected over a digest that never anchored anything.
 func TestClosureIntersectOne_GitScope(t *testing.T) {
-	closure := map[string]struct{}{fsCommit: {}}
+	closure := keyedClosure(fsCommit)
 
 	gitAttested := closureIntersectOne(fsEnvelope(t, fsGitType), closure)
-	if _, ok := gitAttested[fsCommit]; !ok {
+	if _, ok := gitAttested[closureKey(fsCommit)]; !ok {
 		t.Errorf("a git-attested collection's commithash subject did not connect it to the closure "+
 			"(got %v) — real evidence would be hub-rejected as closure-disjoint", gitAttested)
 	}
 
 	notGitAttested := closureIntersectOne(fsEnvelope(t, fsSBOMTyp), closure)
-	if _, ok := notGitAttested[fsCommit]; ok {
+	if _, ok := notGitAttested[closureKey(fsCommit)]; ok {
 		t.Errorf("a minted commithash subject on a collection that attests no git connected it to "+
 			"the closure (got %v) — the fan-out guard still honours a label the index and the "+
 			"substitution guard both refuse", notGitAttested)
@@ -141,7 +156,7 @@ func TestClosureIntersectOne_GitScope(t *testing.T) {
 func TestClosureIntersectOne_ClassifiesFromSignedPayloadNotProjection(t *testing.T) {
 	realSHA := strings.Repeat("a", 64)  // the candidate's TRUE signed subject
 	decoySHA := strings.Repeat("b", 64) // a victim's digest the source projects
-	closure := map[string]struct{}{realSHA: {}, decoySHA: {}}
+	closure := keyedClosure(realSHA, decoySHA)
 
 	payload := signedCollectionPayload(t, []intoto.Subject{
 		{Name: "artifact", Digest: map[string]string{"sha256": realSHA}},
@@ -159,11 +174,11 @@ func TestClosureIntersectOne_ClassifiesFromSignedPayloadNotProjection(t *testing
 	}
 
 	ds := closureIntersectOne(ce, closure)
-	if _, ok := ds[realSHA]; !ok {
+	if _, ok := ds[closureKey(realSHA)]; !ok {
 		t.Error("closureIntersectOne ignored the SIGNED payload's subject — the candidate's real closure " +
 			"connection was lost")
 	}
-	if _, ok := ds[decoySHA]; ok {
+	if _, ok := ds[closureKey(decoySHA)]; ok {
 		t.Error("closureIntersectOne counted a source-PROJECTED decoy subject absent from the signed payload " +
 			"— a malicious source can inflate a victim digest's fan-out and demote genuine evidence")
 	}
@@ -177,7 +192,7 @@ func TestClosureIntersectOne_ClassifiesFromSignedPayloadNotProjection(t *testing
 		},
 	}
 	ds2 := closureIntersectOne(consistent, closure)
-	if _, ok := ds2[realSHA]; !ok || len(ds2) != 1 {
+	if _, ok := ds2[closureKey(realSHA)]; !ok || len(ds2) != 1 {
 		t.Errorf("positive control: consistent envelope should classify exactly {realSHA}, got %v", ds2)
 	}
 }
@@ -188,7 +203,7 @@ func TestClosureIntersectOne_ClassifiesFromSignedPayloadNotProjection(t *testing
 // signed a NON-git collection but projects a git-attested one into the envelope
 // must not thereby open the SHA-1 arm.
 func TestClosureIntersectOne_GitScopeFromSignedPayload(t *testing.T) {
-	closure := map[string]struct{}{fsCommit: {}}
+	closure := keyedClosure(fsCommit)
 
 	// SIGNED payload: sbom only (no git), carrying a git-namespaced commithash.
 	payload := signedCollectionPayload(t, []intoto.Subject{
@@ -212,8 +227,34 @@ func TestClosureIntersectOne_GitScopeFromSignedPayload(t *testing.T) {
 	}
 
 	ds := closureIntersectOne(ce, closure)
-	if _, ok := ds[fsCommit]; ok {
+	if _, ok := ds[closureKey(fsCommit)]; ok {
 		t.Error("closureIntersectOne granted the SHA-1 git arm from the source-PROJECTED git collection — " +
 			"the signed payload attests no git, so a sha1 commithash must stay unmatchable")
+	}
+}
+
+// TestClosureIntersectOne_AlgorithmAware (#9816): the fan-out guard connects a
+// candidate to the closure only on (algorithm, value). A gitoid:sha256 or
+// dirHash subject carrying the same string as a seed is not a connection.
+func TestClosureIntersectOne_AlgorithmAware(t *testing.T) {
+	hex64 := strings.Repeat("9e", 32)
+	hex40 := strings.Repeat("7c", 20)
+	closure := keyedClosure(hex64, hex40)
+	for _, tc := range []struct {
+		name   string
+		digest map[string]string
+		want   int
+	}{
+		{"gitoid:sha256 same string", map[string]string{"gitoid:sha256": hex64}, 0},
+		{"dirHash commit-shaped", map[string]string{"dirHash": hex40}, 0},
+		{"sha256 same algorithm", map[string]string{"sha256": hex64}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := signedCollectionPayload(t, []intoto.Subject{{Name: "artifact", Digest: tc.digest}})
+			ce := source.CollectionEnvelope{Envelope: dsse.Envelope{Payload: payload}}
+			if got := closureIntersectOne(ce, closure); len(got) != tc.want {
+				t.Errorf("closure intersection = %v, want %d key(s)", got, tc.want)
+			}
+		})
 	}
 }

@@ -107,23 +107,30 @@ func (a *Attestor) SetPolicyVerificationOptions(opts *policysig.VerifyPolicySign
 
 // SetSubjectDigests records the seed subjects PRESERVING each digest's
 // declared algorithm (the CLI stores a "sha1:<hex>" --subjects value under
-// SHA-1). The policy engine's value-based search consumes the flattened hex
-// values via seedDigestStrings; Subjects() re-emits each digest under its true
+// SHA-1). The policy engine's search consumes them as algorithm:value keys
+// via seedDigestStrings; Subjects() re-emits each digest under its true
 // algorithm instead of mislabeling everything sha256.
 func (a *Attestor) SetSubjectDigests(digests []cryptoutil.DigestSet) {
 	a.subjectDigestSets = append(a.subjectDigestSets, digests...)
 }
 
-// seedDigestStrings flattens the seed subject digests to the bare values the
-// policy engine's subject search expects.
-func (a *Attestor) seedDigestStrings() []string {
+// seedDigestStrings renders the seed subject digests as algorithm:value match
+// keys (cryptoutil.SubjectDigestKey). Flattening them to bare values let a
+// subject recorded under one algorithm match a seed computed under another
+// (#9816). A digest whose algorithm has no wire name is an error. Passing its
+// bare value on would let cryptoutil.NormalizeSubjectSeed re-bind it by shape
+// (a 64-hex SHA-512 prefix becomes sha256), which is the cross-algorithm match
+// this function exists to prevent.
+func (a *Attestor) seedDigestStrings() ([]string, error) {
 	var out []string
 	for _, set := range a.subjectDigestSets {
-		for _, digest := range set {
-			out = append(out, digest)
+		keys, err := cryptoutil.DigestSetSubjectKeys(set)
+		if err != nil {
+			return nil, fmt.Errorf("seed subject digest has no match algorithm: %w", err)
 		}
+		out = append(out, keys...)
 	}
-	return out
+	return out, nil
 }
 
 func (a *Attestor) SetCollectionSource(src source.Sourcer) {
@@ -285,8 +292,12 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 	if lookup == nil {
 		lookup = source.InventoryLookup(ctx.Context(), a.collectionSource)
 	}
+	seeds, err := a.seedDigestStrings()
+	if err != nil {
+		return err
+	}
 	verifyOpts := []policy.VerifyOption{
-		policy.WithSubjectDigests(a.seedDigestStrings()),
+		policy.WithSubjectDigests(seeds),
 		policy.WithInventoryLookup(lookup),
 	}
 	verifyOpts = append(verifyOpts, a.optionalVerifyOpts()...)

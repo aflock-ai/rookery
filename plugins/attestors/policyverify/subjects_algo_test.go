@@ -16,6 +16,8 @@ package policyverify
 
 import (
 	"crypto"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -57,17 +59,59 @@ func TestSubjects_PreservesDeclaredAlgorithm(t *testing.T) {
 	}
 }
 
-// TestSeedDigestStrings_FlattensValuesForSearch: the policy engine's
-// value-based subject search still receives the bare hex values regardless of
-// declared algorithm.
-func TestSeedDigestStrings_FlattensValuesForSearch(t *testing.T) {
+// TestSeedDigestStrings_CarryAlgorithm (#9816): the policy engine receives
+// algorithm:value keys, never bare values, so a seed computed under one
+// algorithm cannot match a subject recorded under another.
+func TestSeedDigestStrings_CarryAlgorithm(t *testing.T) {
 	const commit = "cf12d38eb1e8513c00f13313ca95bd2c7769f72a"
+	fileDigest := strings.Repeat("ab", 32)
+	gitoid := "gitoid:blob:sha256:" + fileDigest
 	a := New()
 	a.SetSubjectDigests([]cryptoutil.DigestSet{
 		{cryptoutil.DigestValue{Hash: crypto.SHA1, GitOID: false}: commit},
+		{
+			cryptoutil.DigestValue{Hash: crypto.SHA256}:               fileDigest,
+			cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: true}: gitoid,
+		},
 	})
-	got := a.seedDigestStrings()
-	if len(got) != 1 || got[0] != commit {
-		t.Fatalf("seedDigestStrings = %v, want [%s]", got, commit)
+	got, err := a.seedDigestStrings()
+	if err != nil {
+		t.Fatalf("seedDigestStrings: %v", err)
+	}
+	sort.Strings(got)
+	want := []string{"gitoid:sha256:" + gitoid, "sha1:" + commit, "sha256:" + fileDigest}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("seedDigestStrings = %v, want %v", got, want)
+	}
+}
+
+// TestSeedDigestStrings_RefusesUnnamedAlgorithm (#9816 review): a seed whose
+// declared algorithm has no wire name must NOT be forwarded as its bare value.
+// NormalizeSubjectSeed re-binds a 64-hex bare value to sha256, so the old
+// fallback let a SHA-512, SHA-384 or any other unnamed seed match a sha256
+// subject, which is the cross-algorithm match this change removes. Refusing is
+// the only answer that keeps the declared algorithm.
+func TestSeedDigestStrings_RefusesUnnamedAlgorithm(t *testing.T) {
+	sha256Shaped := strings.Repeat("ab", 32)
+	for _, dv := range []cryptoutil.DigestValue{
+		{Hash: crypto.SHA512},
+		{Hash: crypto.SHA384},
+		{Hash: crypto.SHA1, DirHash: true},
+		{Hash: crypto.SHA512, GitOID: true},
+	} {
+		a := New()
+		a.SetSubjectDigests([]cryptoutil.DigestSet{
+			{cryptoutil.DigestValue{Hash: crypto.SHA256}: strings.Repeat("cd", 32)},
+			{dv: sha256Shaped},
+		})
+		got, err := a.seedDigestStrings()
+		if err == nil {
+			t.Fatalf("%+v: seedDigestStrings = %v, want an error for an algorithm with no wire name", dv, got)
+		}
+		for _, k := range got {
+			if strings.Contains(k, sha256Shaped) {
+				t.Fatalf("%+v: the unnamed seed leaked as %q", dv, k)
+			}
+		}
 	}
 }

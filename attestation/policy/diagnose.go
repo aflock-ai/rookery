@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/source"
 )
@@ -286,12 +287,12 @@ func carriesAnySubject(cvr source.CollectionVerificationResult, suppliedDigests 
 	for _, subj := range cvr.Statement.Subject {
 		for algorithm, digest := range subj.Digest {
 			if scope.IsMatchableSubjectDigest(subj.Name, algorithm, digest) {
-				matchable[digest] = struct{}{}
+				matchable[cryptoutil.SubjectDigestKey(algorithm, digest)] = struct{}{}
 			}
 		}
 	}
 	for _, d := range suppliedDigests {
-		if _, ok := matchable[d]; ok {
+		if _, ok := matchable[cryptoutil.NormalizeSubjectSeed(d)]; ok {
 			return true
 		}
 	}

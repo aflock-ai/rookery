@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	intoto "github.com/aflock-ai/rookery/attestation/intoto"
 )
@@ -153,8 +154,9 @@ func TestLoadEnvelope(t *testing.T) {
 			}
 			// Verify if the subjects and attestations are present in the loaded envelope
 			for _, sub := range tt.intotoStatment.Subject {
-				for _, digest := range sub.Digest {
-					if _, ok := memorySource.subjectDigestsByReference[tt.reference][digest]; !ok != tt.wantMemorySourceErr {
+				for algorithm, digest := range sub.Digest {
+					// The index is keyed algorithm:value (#9816).
+					if _, ok := memorySource.subjectDigestsByReference[tt.reference][cryptoutil.SubjectDigestKey(algorithm, digest)]; !ok != tt.wantMemorySourceErr {
 						t.Fatalf("memorySource does not contain passed in digest = %v", digest)
 					}
 				}

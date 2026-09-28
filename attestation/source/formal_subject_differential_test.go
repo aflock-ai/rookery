@@ -27,8 +27,9 @@ package source
 //   - the MemorySource index pre-filter (SearchByPredicateTypeWithOptions),
 //   - the signed-payload guard (MatchExternalSubjects).
 //
-// formalSubjectModel names the model server the code is held to. Main is
-// `asbuilt` (value-only matching); #9863 flips it to `required`.
+// formalSubjectModel names the model server the code is held to: `required`
+// since #9863 (matching on algorithm and value). Before it, main was
+// `asbuilt`, and this test with `required` failed 14 of 20 seeds there.
 //
 // The vectors live in the Judge monorepo, so this test skips when rookery is
 // built on its own, unless JADE_FORMAL_DIFFERENTIAL=1.
@@ -48,7 +49,7 @@ import (
 
 const (
 	formalSubjectVectors   = "../../../../formal/security-backlog/vectors/subject.json"
-	formalSubjectModel     = "asbuilt"
+	formalSubjectModel     = "required"
 	formalSubjectPredicate = "https://example.com/security-backlog/subject/v1"
 	formalSubjectPrefix    = "https://example.com/security-backlog/commithash:"
 )

@@ -26,6 +26,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/archivista"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 	log "github.com/sirupsen/logrus"
@@ -222,7 +223,7 @@ func (s *ArchivistaSource) SearchStream(ctx context.Context, collectionName stri
 
 	gitoids, err := s.client.SearchGitoids(ctx, archivista.SearchGitoidVariables{
 		CollectionName: collectionName,
-		SubjectDigests: subjectDigests,
+		SubjectDigests: cryptoutil.SubjectDigestValues(subjectDigests),
 		Attestations:   attestations,
 		ExcludeGitoids: excludeGitoids,
 	})
@@ -378,7 +379,7 @@ func (s *ArchivistaSource) SearchByPredicateType(ctx context.Context, predicateT
 
 	gitoids, err := s.client.SearchGitoidsByPredicate(ctx, archivista.SearchGitoidByPredicateVariables{
 		PredicateTypes: predicateTypes,
-		SubjectDigests: subjectDigests,
+		SubjectDigests: cryptoutil.SubjectDigestValues(subjectDigests),
 		ExcludeGitoids: excludeGitoids,
 	})
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/source"
 )
 
@@ -105,7 +106,7 @@ func filterHubOnlyPassed(passed []PassedCollection, closure []string, maxFanout 
 func closureIntersections(passed []PassedCollection, closure []string) ([]map[string]struct{}, map[string]int) {
 	closureSet := make(map[string]struct{}, len(closure))
 	for _, d := range closure {
-		closureSet[d] = struct{}{}
+		closureSet[cryptoutil.NormalizeSubjectSeed(d)] = struct{}{}
 	}
 
 	admittingDigests := make([]map[string]struct{}, len(passed))
@@ -162,8 +163,11 @@ func closureIntersectOne(ce source.CollectionEnvelope, closureSet map[string]str
 			if !scope.IsMatchableSubjectDigest(sub.Name, algorithm, digest) {
 				continue
 			}
-			if _, ok := closureSet[digest]; ok {
-				ds[digest] = struct{}{}
+			// Keyed algorithm:value (#9816): a value under one algorithm never
+			// intersects a seed of another.
+			key := cryptoutil.SubjectDigestKey(algorithm, digest)
+			if _, ok := closureSet[key]; ok {
+				ds[key] = struct{}{}
 			}
 		}
 	}
@@ -191,8 +195,18 @@ type fanoutTracker struct {
 // binding, which is never classified as a hub (see filterHubOnlyPassed). The
 // binding is normalized lower-case hex; the comparison folds case the way the
 // binding check itself does.
+//
+// digest is a closure KEY (algorithm:value); only its value half is compared,
+// exactly as before keys existed. The exemption can only keep a candidate that
+// still has to pass the step gate and the commit-binding check itself.
 func isBoundCommitDigest(digest, boundCommit string) bool {
-	return boundCommit != "" && strings.EqualFold(digest, boundCommit)
+	if boundCommit == "" {
+		return false
+	}
+	if _, value, ok := cryptoutil.ParseSubjectDigestKey(digest); ok {
+		digest = value
+	}
+	return strings.EqualFold(digest, boundCommit)
 }
 
 // newFanoutTracker returns nil when the guard is disabled (non-positive
@@ -203,7 +217,7 @@ func newFanoutTracker(closure []string, maxFanout int, boundCommit string) *fano
 	}
 	set := make(map[string]struct{}, len(closure))
 	for _, d := range closure {
-		set[d] = struct{}{}
+		set[cryptoutil.NormalizeSubjectSeed(d)] = struct{}{}
 	}
 	return &fanoutTracker{maxFanout: maxFanout, boundCommit: boundCommit, closureSet: set, fanout: map[string]int{}}
 }

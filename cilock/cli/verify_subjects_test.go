@@ -381,7 +381,9 @@ func TestVerifyCmd_LoadedButFilteredEnvelopeIsNamed(t *testing.T) {
 		_, stderr, err := f.verify(t, needsCmdRun, "-a", evidencePath, "--subjects", "sha1:"+other)
 		require.Error(t, err)
 		assert.Contains(t, stderr, "pt.json is missing required attestation "+cmdRunType)
-		assert.Contains(t, stderr, "carries none of the supplied digest(s) ["+other+"]")
+		// Supplied digests are algorithm:value keys since #9816, which is the
+		// same form the "subjects present" list already prints.
+		assert.Contains(t, stderr, "carries none of the supplied digest(s) [sha1:"+other+"]")
 		assert.Contains(t, stderr, "subjects present: "+gitType+"/commithash:"+gitSHA1Hex+" (sha1:"+gitSHA1Hex+")")
 		assert.NotContains(t, stderr, "Likely causes")
 	})

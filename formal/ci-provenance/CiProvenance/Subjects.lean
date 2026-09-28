@@ -138,8 +138,14 @@ theorem second_producer_overwrites :
 
 /-! ## Matching a seed against a subject: algorithm-aware or not (issue #9816)
 
--- cite: plugins/attestors/policyverify/policyverify.go:117-127 sha256:44399944c3dddfd5615278ac67b6728b165a196bc210ec467e5ac891191e71d8
--- cite: attestation/source/memory.go:108-111 sha256:dc8379f5364d1ef68cd615b5842607c6ec11dec15911fb842b680abfa60fbc4d
+Since #9863 the code matches on (algorithm, value): policyverify turns each
+seed into an algorithm:value key and the memory index is keyed the same way.
+`matchByValue` is the pre-#9863 behaviour, kept as the counterexample; the
+refined model with the matchability filter and the legacy table is
+formal/security-backlog SecBacklog/Subject.lean.
+
+-- cite: plugins/attestors/policyverify/policyverify.go:124-134 sha256:b8d9bbe775e3698b
+-- cite: attestation/source/memory.go:111-113 sha256:7605160503b2bca1
 -/
 
 /-- Match on (algorithm, value). -/

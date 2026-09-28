@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 )
 
@@ -107,10 +108,9 @@ func (s *MemorySource) LoadEnvelope(reference string, env dsse.Envelope) error {
 	// nothing here is trusted; the same pairing is re-derived from the signed
 	// payload in VerifiedSource, which is the decision that counts.
 	//
-	// NOTE: the index is keyed by the raw value (not algorithm:value) because
-	// Search callers pass bare digest values. Keying by algorithm:value would
-	// require a coordinated change to every Sourcer caller (policy engine) and
-	// is tracked as a follow-up.
+	// The index is keyed by algorithm:value (cryptoutil.SubjectDigestKey), and
+	// queries are normalized the same way, so a value recorded under one
+	// algorithm can never answer a query for another (#9816).
 	scope := collEnv.SubjectMatchScope()
 	subDigestIndex := make(map[string]struct{})
 	for _, sub := range collEnv.Statement.Subject {
@@ -118,7 +118,7 @@ func (s *MemorySource) LoadEnvelope(reference string, env dsse.Envelope) error {
 			if !scope.IsMatchableSubjectDigest(sub.Name, algorithm, digest) {
 				continue
 			}
-			subDigestIndex[digest] = struct{}{}
+			subDigestIndex[cryptoutil.SubjectDigestKey(algorithm, digest)] = struct{}{}
 		}
 	}
 
@@ -184,7 +184,7 @@ func (s *MemorySource) matchesSubjects(ref string, subjectDigests []string) bool
 	}
 	indexSubjects := s.subjectDigestsByReference[ref]
 	for _, digest := range subjectDigests {
-		if _, ok := indexSubjects[digest]; ok {
+		if _, ok := indexSubjects[cryptoutil.NormalizeSubjectSeed(digest)]; ok {
 			return true
 		}
 	}

@@ -212,17 +212,21 @@ func subjectsMatchDigests(scope cryptoutil.SubjectMatchScope, subjects []intoto.
 	if len(subjectDigests) == 0 {
 		return true
 	}
+	// Match on (algorithm, value), never on the value alone (#9816): the
+	// subject side is keyed with cryptoutil.SubjectDigestKey and each request
+	// is normalized to the same form (bare legacy values through the explicit
+	// table in cryptoutil.NormalizeSubjectSeed).
 	have := make(map[string]struct{})
 	for _, sub := range subjects {
 		for algorithm, digest := range sub.Digest {
 			if !scope.IsMatchableSubjectDigest(sub.Name, algorithm, digest) {
 				continue
 			}
-			have[digest] = struct{}{}
+			have[cryptoutil.SubjectDigestKey(algorithm, digest)] = struct{}{}
 		}
 	}
 	for _, d := range subjectDigests {
-		if _, ok := have[d]; ok {
+		if _, ok := have[cryptoutil.NormalizeSubjectSeed(d)]; ok {
 			return true
 		}
 	}

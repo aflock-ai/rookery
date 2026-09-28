@@ -170,8 +170,9 @@ const (
 )
 
 // LabelSubjectDigest renders a requested subject digest as algorithm:value.
-// The engine carries requested digests as bare values, so the algorithm is
-// inferred from the value's shape: 40 hex is sha1, 64 hex sha256, 128 hex
+// The engine carries requested digests as algorithm:value keys (#9816), which
+// are returned as is; a legacy bare value has its algorithm inferred from its
+// shape: 40 hex is sha1, 64 hex sha256, 128 hex
 // sha512; a value that already names its scheme (gitoid:…) is returned as is.
 func LabelSubjectDigest(value string) string {
 	if strings.Contains(value, ":") {
@@ -255,8 +256,11 @@ func summarizeSubjects(subjects []intoto.Subject) ([]string, int) {
 // the policy field that would admit it and, when the name has the
 // <namespace>/commithash:<sha> shape, the exact prefix to declare.
 func explainSubjectMismatch(facts signedStatementFacts, subjectDigests []string, prefixes []string) string {
+	// Diagnostic only: compare VALUE halves on purpose, so a subject that
+	// carries the requested value under another algorithm is named and
+	// explained rather than silently skipped. The verdict never comes here.
 	requested := make(map[string]struct{}, len(subjectDigests))
-	for _, d := range subjectDigests {
+	for _, d := range cryptoutil.SubjectDigestValues(cryptoutil.NormalizeSubjectSeeds(subjectDigests)) {
 		requested[strings.ToLower(d)] = struct{}{}
 	}
 	var reasons []string
@@ -348,13 +352,16 @@ func declaredCommitSubjectPrefilter(stmt intoto.Statement, subjectDigests []stri
 	if len(prefixes) == 0 {
 		return false
 	}
+	// Keyed on (algorithm, value) like every other subject match (#9816): a
+	// value the caller asked for under sha256 must not pull in a subject that
+	// carries the same string under sha1.
 	requested := make(map[string]struct{}, len(subjectDigests))
 	for _, d := range subjectDigests {
-		requested[d] = struct{}{}
+		requested[cryptoutil.NormalizeSubjectSeed(d)] = struct{}{}
 	}
 	for _, sub := range stmt.Subject {
 		for alg, value := range sub.Digest {
-			if _, ok := requested[value]; !ok {
+			if _, ok := requested[cryptoutil.SubjectDigestKey(alg, value)]; !ok {
 				continue
 			}
 			for _, prefix := range prefixes {

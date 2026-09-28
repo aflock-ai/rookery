@@ -1,4 +1,4 @@
--- cite: plugins/attestors/policyverify/policyverify.go:222-412 sha256:bc1333b2f9e6a42ca7b441d0be6d3942b7799293790dc17e92d7106686a031e9
+-- cite: plugins/attestors/policyverify/policyverify.go:229-423 sha256:da4f17ffccbef061
 -- cite: attestation/workflow/verify.go:326-352 sha256:a33f012b394cf59baaf640fb52e376b443f142dd03229b4e5b1e897f5fcd0244
 -- cite: plugins/attestors/vsa/vsa.go:37-37 sha256:ea4b5f26d671802f212f2452002bcb25afa9797036154c0f16af56a2abc26f6f
 -- cite: plugins/attestors/vsa/vsa.go:106-118 sha256:7945715445a34d85a477d13ab7fd9f0380f93322dc1a8ca1a5c62feaf2bff81f

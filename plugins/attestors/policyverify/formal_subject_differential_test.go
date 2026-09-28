@@ -23,9 +23,9 @@ package policyverify
 // seedDigestStrings: each typed seed must become exactly the string the model
 // hands the engine, or be refused where the model refuses.
 //
-// formalSubjectModel names the model server the code is held to. Main is
-// `asbuilt` (every seed flattened to its bare value); #9863 flips it to
-// `required`.
+// formalSubjectModel names the model server the code is held to: `required`
+// since #9863. Before it, main was `asbuilt` (every seed flattened to its bare
+// value).
 //
 // The vectors live in the Judge monorepo, so this test skips when rookery is
 // built on its own, unless JADE_FORMAL_DIFFERENTIAL=1.
@@ -42,7 +42,7 @@ import (
 
 const (
 	formalSubjectVectors = "../../../../../formal/security-backlog/vectors/subject.json"
-	formalSubjectModel   = "asbuilt"
+	formalSubjectModel   = "required"
 )
 
 // formalSubjectDigestValues maps the model's typed-seed algorithms to the
@@ -89,10 +89,12 @@ func TestFormalSubjectSeedDifferential(t *testing.T) {
 
 			a := New()
 			a.SetSubjectDigests([]cryptoutil.DigestSet{{dv: value}})
-			got := a.seedDigestStrings()
+			got, err := a.seedDigestStrings()
 			if want == "refuse" {
-				t.Fatalf("the %s model refuses this seed; seedDigestStrings returned %v", formalSubjectModel, got)
+				require.Error(t, err, "the %s model refuses this seed; seedDigestStrings returned %v", formalSubjectModel, got)
+				return
 			}
+			require.NoError(t, err)
 			require.Equal(t, []string{want}, got)
 		})
 	}
