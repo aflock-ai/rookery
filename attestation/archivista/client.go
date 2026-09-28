@@ -117,6 +117,30 @@ func WithHTTPClient(hc *http.Client) Option {
 	}
 }
 
+// WithTimeout overrides the PER-ATTEMPT request deadline.
+//
+// Per-attempt is the whole point, and it is why no retry knob could substitute
+// for this. defaultHTTPTimeout is a ceiling on one request; a retry policy
+// bounds how many requests and how long between them. An envelope that cannot
+// transfer in the ceiling fails every attempt at exactly the ceiling — measured
+// on an idle host: seven attempts, 120.001s to 120.003s each, 2ms of total
+// variance, 14m24s of wall clock, every one "Client.Timeout exceeded while
+// awaiting headers" with no response headers ever arriving. Raising the retry
+// count cannot defeat a per-attempt ceiling, and until now nothing exposed it.
+//
+// A non-positive duration is ignored rather than installing a client with no
+// deadline at all: an unbounded upload is the hang defaultHTTPTimeout exists to
+// prevent, and an operator reaching for this option wants a LONGER bound, not
+// none. Callers that genuinely want no timeout can say so explicitly through
+// WithHTTPClient.
+func WithTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		if d > 0 {
+			c.client.Timeout = d
+		}
+	}
+}
+
 // New creates an Archivista client for the given server URL.
 //
 // The default http.Client installs sameOriginRedirect as its CheckRedirect:

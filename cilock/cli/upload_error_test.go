@@ -73,6 +73,8 @@ func TestUploadError_NonAuthNamesTheRecovery(t *testing.T) {
 	err := uploadError(testPlatform, storeStatus(http.StatusGatewayTimeout, "upstream timed out"))
 	require.ErrorContains(t, err, "re-run `cilock run`")
 	require.ErrorContains(t, err, "--archivista-upload-retries")
+	require.ErrorContains(t, err, "--archivista-upload-timeout",
+		"a per-attempt timeout is the failure retries cannot fix; the hint must name the flag that does")
 	require.NotContains(t, err.Error(), "cilock trust")
 }
 

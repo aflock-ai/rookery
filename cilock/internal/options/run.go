@@ -1419,6 +1419,38 @@ type ArchivistaOptions struct {
 	// handing back long Retry-After values nor one that simply stops answering
 	// can park a CI job. An attempt still in flight when it expires is cut off.
 	UploadRetryBudget time.Duration
+	// UploadTimeout bounds ONE attempt, which is the bound the two above
+	// cannot substitute for. An envelope too large to transfer inside the
+	// client's per-attempt deadline fails every attempt at exactly that
+	// deadline, so more attempts and a bigger budget only buy more identical
+	// timeouts. Zero keeps the client's own default.
+	UploadTimeout time.Duration
+
+	// uploadRetryBudgetFromDefault is true while UploadRetryBudget holds the
+	// flag's registered default, i.e. the operator never passed the flag. Only
+	// then may the budget grow to fit a raised UploadTimeout: comparing the
+	// value against the default cannot tell omission from an explicit
+	// --archivista-upload-retry-budget 4m. A struct built without AddFlags
+	// leaves it false, so a budget set in code is always explicit.
+	uploadRetryBudgetFromDefault bool
+}
+
+// retryBudgetFlag is the --archivista-upload-retry-budget value. It parses
+// exactly as a duration flag does and records that the operator supplied it.
+type retryBudgetFlag struct {
+	o *ArchivistaOptions
+}
+
+func (f retryBudgetFlag) String() string { return f.o.UploadRetryBudget.String() }
+func (f retryBudgetFlag) Type() string   { return "duration" }
+func (f retryBudgetFlag) Set(v string) error {
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return err
+	}
+	f.o.UploadRetryBudget = d
+	f.o.uploadRetryBudgetFromDefault = false
+	return nil
 }
 
 func (o *ArchivistaOptions) AddFlags(cmd *cobra.Command) {
@@ -1442,9 +1474,16 @@ func (o *ArchivistaOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().IntVar(&o.UploadRetries, "archivista-upload-retries", defaultRetry.MaxAttempts-1,
 		"Extra attempts for a retryable attestation upload failure (5xx, timeout, connection reset, 429). "+
 			"0 disables retry. Terminal failures (400/401/403/422) never retry.")
-	cmd.Flags().DurationVar(&o.UploadRetryBudget, "archivista-upload-retry-budget", defaultRetry.Budget,
+	o.UploadRetryBudget = defaultRetry.Budget
+	o.uploadRetryBudgetFromDefault = true
+	cmd.Flags().Var(retryBudgetFlag{o}, "archivista-upload-retry-budget",
 		"Total wall-clock time the attestation upload may take across all attempts, including the "+
 			"requests themselves, before giving up")
+	cmd.Flags().DurationVar(&o.UploadTimeout, "archivista-upload-timeout", 0,
+		"Deadline for ONE upload attempt (0 keeps the client default). Raise this when a large "+
+			"envelope times out identically on every attempt: retries and the retry budget bound how "+
+			"many requests and how long between them, neither can lengthen a single request. A retry "+
+			"budget left at its default grows to twice this; an explicit budget must exceed it.")
 	cmd.Flags().BoolVar(&o.OIDC, "archivista-oidc", os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "", "Use GitHub Actions OIDC token for Archivista auth (auto-enabled in GitHub Actions)")
 	cmd.Flags().StringVar(&o.Audience, "archivista-audience", "", "OIDC audience for Archivista token (defaults to archivista server URL)")
 }
@@ -1528,16 +1567,59 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 	// The retry is deliberately NOT enabled inside archivista.New — this client
 	// is shared with judge-api and the policy-publish path, which should keep
 	// their existing single-attempt semantics.
-	if o.UploadRetries > 0 {
-		policy := archivista.DefaultRetryPolicy()
-		policy.MaxAttempts = o.UploadRetries + 1
-		if o.UploadRetryBudget > 0 {
-			policy.Budget = o.UploadRetryBudget
-		}
+	policy, retry, err := o.uploadRetryPolicy()
+	if err != nil {
+		return nil, err
+	}
+	if retry {
 		opts = append(opts, archivista.WithRetry(policy))
 	}
 
+	// Applied AFTER any client-replacing option so the deadline lands on the
+	// client that actually issues the request. WithTimeout mutates whatever
+	// c.client is at the time it runs, and WithHTTPClient swaps that pointer.
+	if o.UploadTimeout > 0 {
+		opts = append(opts, archivista.WithTimeout(o.UploadTimeout))
+	}
+
 	return archivista.New(o.Url, opts...), nil
+}
+
+// uploadRetryPolicy is the retry policy Client installs, and whether it
+// installs one at all.
+//
+// The budget is wall-clock across attempts and cuts off an attempt still in
+// flight, so it must outlast the per-attempt deadline or a raised
+// --archivista-upload-timeout is silently capped by it: a 9m timeout under the
+// default 4m budget is cut at 4m, and the flag does nothing. The default budget
+// is two request timeouts (archivista.DefaultRetryPolicy), so when the operator
+// raises the timeout and does not pass the budget flag, the budget follows at
+// the same multiple. An explicit budget that cannot fit one full attempt is a
+// contradiction and is refused rather than resolved in either flag's favour.
+func (o *ArchivistaOptions) uploadRetryPolicy() (archivista.RetryPolicy, bool, error) {
+	if o.UploadRetries <= 0 {
+		return archivista.RetryPolicy{}, false, nil
+	}
+	policy := archivista.DefaultRetryPolicy()
+	defaultBudget := policy.Budget
+	policy.MaxAttempts = o.UploadRetries + 1
+	if o.UploadRetryBudget > 0 {
+		policy.Budget = o.UploadRetryBudget
+	}
+	if o.UploadTimeout <= 0 {
+		return policy, true, nil
+	}
+	if o.UploadRetryBudget <= 0 || o.uploadRetryBudgetFromDefault {
+		policy.Budget = max(defaultBudget, 2*o.UploadTimeout)
+		return policy, true, nil
+	}
+	if policy.Budget <= o.UploadTimeout {
+		return archivista.RetryPolicy{}, false, fmt.Errorf(
+			"--archivista-upload-retry-budget %v would cut off the first upload attempt before its "+
+				"--archivista-upload-timeout %v; raise the budget above the timeout, or leave it unset "+
+				"to use twice the timeout", policy.Budget, o.UploadTimeout)
+	}
+	return policy, true, nil
 }
 
 // githubOIDCRefreshAfter is how long a minted GitHub Actions OIDC token is

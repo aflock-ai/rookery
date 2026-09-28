@@ -1456,6 +1456,7 @@ func uploadError(platformURL string, err error) error {
 	// where an operator most needs the message to be accurate.
 	return fmt.Errorf("failed to store attestation on the platform: %w\n"+
 		"  the attestation was signed but not stored, so this run produced no platform evidence — re-run `cilock run` to regenerate it\n"+
+		"  if every attempt timed out, raise the per-attempt deadline with --archivista-upload-timeout (more retries cannot lengthen one attempt);\n"+
 		"  tune the retry with --archivista-upload-retries / --archivista-upload-retry-budget, or run with --log-level debug for per-attempt detail",
 		err)
 }
