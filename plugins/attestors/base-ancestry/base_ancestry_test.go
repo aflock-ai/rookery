@@ -519,14 +519,47 @@ func TestSanitizeRemoteURL(t *testing.T) {
 		{"query removed", "https://github.com/org/repo.git?access_token=tok", "https://github.com/org/repo.git", true},
 		{"fragment removed", "https://github.com/org/repo.git#tok", "https://github.com/org/repo.git", true},
 		{"ssh userinfo removed, port kept", "ssh://user:tok@github.com:22/org/repo.git", "ssh://github.com:22/org/repo.git", true},
-		{"scp-like keeps host and path, drops user", "git@github.com:org/repo.git", "github.com:org/repo.git", true},
-		{"scp-like with credential drops it", "user:tok@github.com:org/repo.git", "github.com:org/repo.git", true},
-		{"scp-like query is dropped too", "git@github.com:org/repo.git?tok=x", "github.com:org/repo.git", true},
+		// CHANGED by #9181, deliberately, to match the sibling git attestor
+		// after PR #9177. An scp remote has nothing in it to redact — the login
+		// lies wholly before the first colon and scp syntax has no password
+		// field — so it is recorded as typed. Rewriting it to host:path invented
+		// a spelling git never used, in a field whose own doc comment says it
+		// records "the same repository identity the git attestor records".
+		// See TestAnScpLoginIsNotACredential for the cost this accepts.
+		{"scp-like is recorded as typed, login included", "git@github.com:org/repo.git", "git@github.com:org/repo.git", true},
+		// CHANGED by #9181. This string reads two ways that DISAGREE about
+		// whether "tok" is secret: as scp syntax its host is "user"; as an
+		// authority that lost its scheme its host is github.com. The previous
+		// answer picked the second reading and recorded "github.com:org/repo.git"
+		// — the credential gone, but a host git would never use fabricated in
+		// its place inside signed evidence. See
+		// TestAnAmbiguousLoginLessRemoteIsRefused.
+		{"an ambiguous login-less scp-like remote is refused", "user:tok@github.com:org/repo.git", "", false},
+		{"scp-like query is dropped too", "git@github.com:org/repo.git?tok=x", "git@github.com:org/repo.git", true},
+		// #9181's three measured failures, at the function boundary. The first
+		// was returned UNCHANGED with the token intact; the other two were valid
+		// remotes DROPPED from signed evidence.
+		{"a scheme with one slash instead of two is refused", "https:/alice:ghs_TOKEN@github.com/acme/api.git", "", false},
+		{"a bracketed IPv6 scp host survives", "git@[2001:db8::1]:acme/api.git", "git@[2001:db8::1]:acme/api.git", true},
+		// #9181's third failure is now an ACCEPTED OVER-REFUSAL rather than a
+		// preserved remote. An at-sign past the authority makes the string
+		// readable a second way, and no rule can keep this spelling while
+		// refusing `git@example.com:ghs_TOKEN@release.git` — the two differ
+		// only in how their identifier spans are spelled. The URL branch of
+		// this same function already pays that cost for
+		// `https://github.com/acme/repo@release.git`.
+		{"an at-sign in the repository name is refused", "git@example.com:repo@release.git", "", false},
+		// The query cut runs at the single entry point, so it reaches the two
+		// branches that hand their input back unmodified.
+		{"a local path keeps its query dropped", "/srv/git/repo.git?token=x", "/srv/git/repo.git", true},
+		{"an scp-like remote keeps its fragment dropped", "git@github.com:org/repo.git#tok", "git@github.com:org/repo.git", true},
 		{"local absolute path", "/srv/git/repo.git", "/srv/git/repo.git", true},
 		{"local relative path", "../relative/repo.git", "../relative/repo.git", true},
 		{"file url", "file:///srv/git/repo.git", "file:///srv/git/repo.git", true},
 		{"ipv6 host and port", "http://[::1]:8080/repo.git", "http://[::1]:8080/repo.git", true},
-		{"unparseable is omitted", "https://exa mple.com/repo.git", "", false},
+		// Previously refused as a side effect of url.Parse returning an error.
+		// Now refused as a rule about the AUTHORITY: no host contains a space.
+		{"a url authority with whitespace is omitted", "https://exa mple.com/repo.git", "", false},
 		{"empty is omitted", "   ", "", false},
 		// Git remote helpers use `transport::address`. The address is opaque,
 		// arbitrary, and routinely carries credentials, so it is refused
@@ -547,9 +580,10 @@ func TestSanitizeRemoteURL(t *testing.T) {
 		// rule refuses it.
 		{"a host with url-unsafe characters is refused", "we<ird>host:path", "", false},
 		{"an empty host is refused", ":path", "", false},
-		// `github.com:` is NOT this case — it parses as a scheme with an empty
-		// opaque and never reaches the scp path. This one does.
+		// Both spellings reach the scp branch now that url.Parse is gone, and
+		// both name a host with no repository.
 		{"an empty scp path is refused", "git@github.com:", "", false},
+		{"an empty login-less scp path is refused", "github.com:", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
