@@ -46,8 +46,25 @@ const imdsURL = "http://169.254.169.254/latest/api/token"
 // gcpMetadataURL is the GCP metadata server's compute identity route.
 // Requires a "Metadata-Flavor: Google" header and is routed on the
 // link-local 169.254.169.254 address (same as AWS — they share the
-// reserved address). The header is what disambiguates clouds.
-const gcpMetadataURL = "http://metadata.google.internal/computeMetadata/v1/"
+// reserved address). The header is what disambiguates clouds. A var only so
+// tests can point it at a fake server.
+var gcpMetadataURL = "http://metadata.google.internal/computeMetadata/v1/"
+
+// metadataProbeClient is the client every cloud metadata probe uses. It never
+// goes through HTTP_PROXY: the metadata servers are link-local, and a proxy's
+// own reply counted as "reachable", so a plain `cilock run` behind a proxy
+// fired gcp-iit and failed (onbsim, 2026-09-25). It never follows a redirect.
+// Keep-alives are off because each probe builds its own transport and runs
+// once: a pooled idle connection would outlive the probe with no idle timeout.
+func metadataProbeClient() *http.Client {
+	return &http.Client{
+		Timeout:   DefaultProbeTimeout,
+		Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
 
 // azureMetadataURL is the Azure Instance Metadata Service endpoint.
 // Requires "Metadata: true" header and an api-version query param.
@@ -121,10 +138,7 @@ func probeIMDSReachable(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	client := &http.Client{
-		Timeout: DefaultProbeTimeout,
-	}
-	resp, err := client.Do(req)
+	resp, err := metadataProbeClient().Do(req)
 	if err != nil {
 		return false, err
 	}
@@ -133,9 +147,9 @@ func probeIMDSReachable(ctx context.Context) (bool, error) {
 }
 
 // probeGCPMetadataReachable performs a HEAD against the GCP metadata
-// server with the required "Metadata-Flavor: Google" header. Any
-// HTTP response within the timeout counts as reachable. Returns
-// false on network errors / timeout.
+// server with the required "Metadata-Flavor: Google" header. Only a
+// response that carries "Metadata-Flavor: Google" back counts as
+// reachable. Returns false on network errors / timeout.
 //
 // GCP uses metadata.google.internal which resolves to 169.254.169.254
 // (the same link-local address as AWS), but the required header
@@ -148,26 +162,27 @@ func probeGCPMetadataReachable(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	req.Header.Set("Metadata-Flavor", "Google")
-	client := &http.Client{Timeout: DefaultProbeTimeout}
-	resp, err := client.Do(req)
+	resp, err := metadataProbeClient().Do(req)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	return true, nil
+	// The GCP metadata server stamps every response with this header; a
+	// resolver or captive portal answering metadata.google.internal does not.
+	return resp.Header.Get("Metadata-Flavor") == "Google", nil
 }
 
 // probeAzureMetadataReachable performs a HEAD against the Azure IMDS
 // endpoint with the required "Metadata: true" header. Same shape as
-// the GCP probe — any response means reachable.
+// the IMDS probe: any response means reachable. The address is link-local
+// and metadataProbeClient never routes it through a proxy.
 func probeAzureMetadataReachable(ctx context.Context) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, azureMetadataURL, nil)
 	if err != nil {
 		return false, err
 	}
 	req.Header.Set("Metadata", "true")
-	client := &http.Client{Timeout: DefaultProbeTimeout}
-	resp, err := client.Do(req)
+	resp, err := metadataProbeClient().Do(req)
 	if err != nil {
 		return false, err
 	}
