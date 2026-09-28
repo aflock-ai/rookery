@@ -29,6 +29,11 @@
       "gate": "pre",
       "kind": "argv_prefix",
       "value": "go install"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_regex",
+      "value": "^(\\S*/)?go -C(=| )\\S+ (build|install)( |$)"
     }
   ],
   "emitsFormats": [],

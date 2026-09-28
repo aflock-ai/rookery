@@ -733,8 +733,15 @@ ENTRIES: list[tuple[str, dict]] = [
         upstream=dict(name="go test", source="https://pkg.go.dev/cmd/go",
                       license="BSD-3-Clause", vendor="Google / Go Authors"),
         emits_formats=["test-results"],
-        match=dict(argv_prefix=["go", "test"]),
-        on_match="go test invocation observed. With -json + a converter (e.g., gotestsum), JUnit XML captured by test-results."
+        # `go -C <dir> test` is how a monorepo runs one module's tests from
+        # the repository root; argv_prefix is positional, so it needs a
+        # form of its own. The regex is anchored at argv[0] and requires
+        # the subcommand right after the directory.
+        match=dict(any_of=[
+            dict(argv_prefix=["go", "test"]),
+            dict(argv_regex=r"^(\S*/)?go -C(=| )\S+ test( |$)"),
+        ]),
+        on_match="go test invocation observed. go test writes no JUnit: run it through gotestsum (--junitfile) so test-results captures the report."
     )),
     ("go-build", dict(
         desc="go build — Go compiler. Output binaries carry BuildInfo (module + VCS metadata) which the go-build attestor extracts and writes as a JSON sidecar so the evidence survives strip(1).",
@@ -747,6 +754,7 @@ ENTRIES: list[tuple[str, dict]] = [
         match=dict(any_of=[
             dict(argv_prefix=["go", "build"]),
             dict(argv_prefix=["go", "install"]),
+            dict(argv_regex=r"^(\S*/)?go -C(=| )\S+ (build|install)( |$)"),
         ]),
         recommended_trace="light",
         on_match="go build/install observed. The go-build attestor captures BuildInfo (module graph + vcs.revision + build settings) and persists a .gobuild.json sidecar next to each binary so the evidence survives strip(1)."
@@ -774,6 +782,33 @@ ENTRIES: list[tuple[str, dict]] = [
         emits_formats=["test-results"],
         match=dict(argv_prefix=["jest"]),
         on_match="Jest invocation observed. jest-junit reporter emits JUnit XML, captured by test-results."
+    )),
+    ("gotestsum", dict(
+        desc="gotestsum: runs go test -json and writes JUnit XML.",
+        categories=["unit-test"],
+        upstream=dict(name="gotestsum", source="https://github.com/gotestyourself/gotestsum",
+                      license="Apache-2.0", vendor="gotestyourself"),
+        emits_formats=["test-results"],
+        # Installed, as a go.mod tool, or run by module path. The module
+        # path must follow `run` directly and end at its version, so an
+        # unrelated `go run` never matches.
+        match=dict(any_of=[
+            dict(argv_prefix=["gotestsum"]),
+            dict(argv_prefix=["go", "tool", "gotestsum"]),
+            dict(argv_regex=r"^(\S*/)?go (-C(=| )\S+ )?run gotest\.tools/gotestsum(@\S+)?( |$)"),
+        ]),
+        on_match="gotestsum observed. --junitfile <path> writes JUnit XML (one testcase per test and subtest), captured by test-results."
+    )),
+    ("go-vet", dict(
+        desc="go vet: the Go toolchain's static checker.",
+        categories=["lint"],
+        upstream=dict(name="go vet", source="https://pkg.go.dev/cmd/vet",
+                      license="BSD-3-Clause", vendor="Google / Go Authors"),
+        match=dict(any_of=[
+            dict(argv_prefix=["go", "vet"]),
+            dict(argv_regex=r"^(\S*/)?go -C(=| )\S+ vet( |$)"),
+        ]),
+        on_match="go vet observed. It has no SARIF output; the command-run exit code is the evidence."
     )),
 
     # ===== SARIF-emitting scanners (documented; validated end-to-end via
@@ -858,6 +893,8 @@ def render_leaf(match: dict, indent: str) -> str:
     """Render a single leaf predicate at the given indent prefix."""
     if "argv_prefix" in match:
         return indent + "argv_prefix: " + render_value(match["argv_prefix"])
+    if "argv_regex" in match:
+        return indent + "argv_regex: " + render_value(match["argv_regex"])
     if "file_exists" in match:
         return indent + "file_exists: " + render_value(match["file_exists"])
     if "file_glob" in match:

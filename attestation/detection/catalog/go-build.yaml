@@ -22,6 +22,7 @@ pre:
     any_of:
       - argv_prefix: [go, build]
       - argv_prefix: [go, install]
+      - argv_regex: "^(\\S*/)?go -C(=| )\\S+ (build|install)( |$)"
 
 llm_hints:
   on_match: go build/install observed. The go-build attestor captures BuildInfo (module graph + vcs.revision + build settings) and persists a .gobuild.json sidecar next to each binary so the evidence survives strip(1).

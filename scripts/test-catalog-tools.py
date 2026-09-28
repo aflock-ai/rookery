@@ -223,6 +223,22 @@ def make_jest_pkg(fix: Path):
     )
 
 
+def make_go_pkg_dir(fix: Path):
+    # A module in a subdirectory, run from the root with `go -C pkg`, the way
+    # a monorepo runs one package. The test has a subtest and a skip so the
+    # JUnit report has more than one kind of case.
+    pkg = fix / "pkg"
+    pkg.mkdir(exist_ok=True)
+    (pkg / "go.mod").write_text("module example.com/cat\n\ngo 1.22\n")
+    (pkg / "sum.go").write_text("package cat\n\nfunc Sum(a, b int) int { return a + b }\n")
+    (pkg / "sum_test.go").write_text(
+        "package cat\n\nimport \"testing\"\n\n"
+        "func TestSum(t *testing.T) {\n"
+        "\tt.Run(\"small\", func(t *testing.T) { if Sum(1, 2) != 3 { t.Fatal(\"sum\") } })\n"
+        "}\n\n"
+        "func TestSkipped(t *testing.T) { t.Skip(\"not here\") }\n")
+
+
 def make_cargo(fix: Path):
     (fix / "Cargo.toml").write_text(
         '[package]\nname = "cat"\nversion = "0.0.1"\nedition = "2021"\n'
@@ -511,6 +527,14 @@ RECIPES: list[Recipe] = [
            fixture=make_go_mod, expect_uris=[URI_COMMANDRUN],
            allow_nonzero=True,
            invoke=args_only(["go", "test", "./..."])),
+    Recipe(name="gotestsum", need="go", category="artifact-scan",
+           fixture=make_go_pkg_dir, expect_uris=[URI_COMMANDRUN, URI_TEST],
+           attestors=["test-results"],
+           invoke=args_only(["go", "-C", "pkg", "run", "gotest.tools/gotestsum@v1.13.0",
+                             "--junitfile", "junit.xml", "--", "./..."])),
+    Recipe(name="go-vet", need="go", category="artifact-scan",
+           fixture=make_go_pkg_dir, expect_uris=[URI_COMMANDRUN],
+           invoke=args_only(["go", "-C", "pkg", "vet", "./..."])),
 
     # --- Cloud audit log queries ---
     # Real data-plane validation: hits the account behind the testifysec-demo profile.

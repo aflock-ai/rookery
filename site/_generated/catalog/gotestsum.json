@@ -1,0 +1,56 @@
+{
+  "name": "gotestsum",
+  "source": "catalog-only",
+  "description": "gotestsum: runs go test -json and writes JUnit XML.",
+  "title": "gotestsum",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "unit-test"
+  ],
+  "primaryCategory": "unit-test",
+  "upstream": {
+    "name": "gotestsum",
+    "source": "https://github.com/gotestyourself/gotestsum",
+    "license": "Apache-2.0",
+    "vendor": "gotestyourself"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "gotestsum"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "go tool gotestsum"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_regex",
+      "value": "^(\\S*/)?go (-C(=| )\\S+ )?run gotest\\.tools/gotestsum(@\\S+)?( |$)"
+    }
+  ],
+  "emitsFormats": [
+    "test-results"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "gotestsum observed. --junitfile <path> writes JUnit XML (one testcase per test and subtest), captured by test-results."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- gotestsum .",
+  "detectionCommand": "cilock plan --format=json -- gotestsum [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"gotestsum\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

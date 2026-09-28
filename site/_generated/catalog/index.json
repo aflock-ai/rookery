@@ -1,6 +1,6 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 137,
+  "count": 139,
   "withDoc": 61,
   "emittedBy": {
     "sbom": [
@@ -33,6 +33,7 @@
     ],
     "test-results": [
       "go-test",
+      "gotestsum",
       "jest",
       "pytest"
     ],
@@ -748,6 +749,19 @@
       "hasDoc": false
     },
     {
+      "name": "go-vet",
+      "source": "catalog-only",
+      "categories": [
+        "lint"
+      ],
+      "primaryCategory": "lint",
+      "description": "go vet: the Go toolchain's static checker.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
       "name": "gosec",
       "source": "catalog-only",
       "categories": [
@@ -761,6 +775,21 @@
       "predicateType": null,
       "runType": null,
       "hasDoc": true
+    },
+    {
+      "name": "gotestsum",
+      "source": "catalog-only",
+      "categories": [
+        "unit-test"
+      ],
+      "primaryCategory": "unit-test",
+      "description": "gotestsum: runs go test -json and writes JUnit XML.",
+      "emitsFormats": [
+        "test-results"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
     },
     {
       "name": "govulncheck",

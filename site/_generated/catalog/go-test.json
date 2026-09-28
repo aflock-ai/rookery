@@ -24,6 +24,11 @@
       "gate": "pre",
       "kind": "argv_prefix",
       "value": "go test"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_regex",
+      "value": "^(\\S*/)?go -C(=| )\\S+ test( |$)"
     }
   ],
   "emitsFormats": [
@@ -32,7 +37,7 @@
   "emittedBy": [],
   "warnings": [],
   "llmHints": {
-    "on_match": "go test invocation observed. With -json + a converter (e.g., gotestsum), JUnit XML captured by test-results."
+    "on_match": "go test invocation observed. go test writes no JUnit: run it through gotestsum (--junitfile) so test-results captures the report."
   },
   "predicateType": null,
   "runType": null,

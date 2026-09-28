@@ -19,7 +19,9 @@ emits_formats: [test-results]
 
 pre:
   match:
-    argv_prefix: [go, test]
+    any_of:
+      - argv_prefix: [go, test]
+      - argv_regex: "^(\\S*/)?go -C(=| )\\S+ test( |$)"
 
 llm_hints:
-  on_match: "go test invocation observed. With -json + a converter (e.g., gotestsum), JUnit XML captured by test-results."
+  on_match: "go test invocation observed. go test writes no JUnit: run it through gotestsum (--junitfile) so test-results captures the report."

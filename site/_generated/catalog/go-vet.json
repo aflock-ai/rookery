@@ -1,0 +1,49 @@
+{
+  "name": "go-vet",
+  "source": "catalog-only",
+  "description": "go vet: the Go toolchain's static checker.",
+  "title": "go-vet",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "lint"
+  ],
+  "primaryCategory": "lint",
+  "upstream": {
+    "name": "go vet",
+    "source": "https://pkg.go.dev/cmd/vet",
+    "license": "BSD-3-Clause",
+    "vendor": "Google / Go Authors"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "go vet"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_regex",
+      "value": "^(\\S*/)?go -C(=| )\\S+ vet( |$)"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "go vet observed. It has no SARIF output; the command-run exit code is the evidence."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- go vet .",
+  "detectionCommand": "cilock plan --format=json -- go vet [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"go vet\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

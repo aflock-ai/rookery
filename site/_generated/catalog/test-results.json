@@ -38,6 +38,7 @@
   "emitsFormats": [],
   "emittedBy": [
     "go-test",
+    "gotestsum",
     "jest",
     "pytest"
   ],
