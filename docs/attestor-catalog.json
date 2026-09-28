@@ -1,6 +1,6 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 138,
+  "attestor_count": 140,
   "attestors": [
     {
       "name": "alps-evidence",
@@ -1150,7 +1150,7 @@
       "registered": true,
       "has_contract": false,
       "applies_when": {
-        "pre": "any_of(argv_prefix:[go build], argv_prefix:[go install])"
+        "pre": "any_of(argv_prefix:[go build], argv_prefix:[go install], argv_regex:^(\\S*/)?go -C(=| )\\S+ (build|install)( |$))"
       },
       "detection": {
         "pre": {
@@ -1166,6 +1166,9 @@
                 "go",
                 "install"
               ]
+            },
+            {
+              "argv_regex": "^(\\S*/)?go -C(=| )\\S+ (build|install)( |$)"
             }
           ]
         }
@@ -3070,13 +3073,53 @@
       "registered": false,
       "has_contract": false,
       "applies_when": {
-        "pre": "argv_prefix:[go test]"
+        "pre": "any_of(argv_prefix:[go test], argv_regex:^(\\S*/)?go -C(=| )\\S+ test( |$))"
       },
       "detection": {
         "pre": {
-          "argv_prefix": [
-            "go",
-            "test"
+          "any_of": [
+            {
+              "argv_prefix": [
+                "go",
+                "test"
+              ]
+            },
+            {
+              "argv_regex": "^(\\S*/)?go -C(=| )\\S+ test( |$)"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "go-vet",
+      "category": [
+        "lint"
+      ],
+      "upstream": {
+        "name": "go vet",
+        "source": "https://pkg.go.dev/cmd/vet",
+        "license": "BSD-3-Clause",
+        "vendor": "Google / Go Authors"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[go vet], argv_regex:^(\\S*/)?go -C(=| )\\S+ vet( |$))"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "go",
+                "vet"
+              ]
+            },
+            {
+              "argv_regex": "^(\\S*/)?go -C(=| )\\S+ vet( |$)"
+            }
           ]
         }
       }
@@ -3105,6 +3148,48 @@
         "pre": {
           "argv_prefix": [
             "gosec"
+          ]
+        }
+      }
+    },
+    {
+      "name": "gotestsum",
+      "category": [
+        "unit-test"
+      ],
+      "upstream": {
+        "name": "gotestsum",
+        "source": "https://github.com/gotestyourself/gotestsum",
+        "license": "Apache-2.0",
+        "vendor": "gotestyourself"
+      },
+      "emits_formats": [
+        "test-results"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[go tool gotestsum], argv_prefix:[gotestsum], argv_regex:^(\\S*/)?go (-C(=| )\\S+ )?run gotest\\.tools/gotestsum(@\\S+)?( |$))"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "go",
+                "tool",
+                "gotestsum"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "gotestsum"
+              ]
+            },
+            {
+              "argv_regex": "^(\\S*/)?go (-C(=| )\\S+ )?run gotest\\.tools/gotestsum(@\\S+)?( |$)"
+            }
           ]
         }
       }
