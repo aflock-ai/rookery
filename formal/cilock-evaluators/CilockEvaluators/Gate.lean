@@ -1,4 +1,4 @@
--- cite: attestation/policy/step.go:894-1036 sha256:e84dcaedd493e49fda540b2b53e6db18b3ee96f3c6ba65e04db8177ec0bc5118
+-- cite: attestation/policy/step.go:900-1046 sha256:e4d08a4b43a4fc90595cff8e2f12d822928d5feb7b84e53278ef6481851a73d8
 -- cite: attestation/policy/policy.go:1801-1923 sha256:2222517c484f8a32f45267cd7e946ad5ee6975ad98675f97543fcd1471cab371
 -- cite: attestation/policy/policy.go:1930-1971 sha256:48e5293f2cc102e1f9594652dfb2ae9ecdea6e7fdbe38e652c6aebe2cdc85bf9
 -- cite: attestation/policy/step.go:536-541 sha256:351b4b76ec382062d9d27820da19248c21615a0b0b689b0a5cca2805348efffc
@@ -96,7 +96,7 @@ def anyRefused (ev : Evaluators) (c : Collection) (s : Step) : Bool :=
   s.expected.any (fun e => (attestorsOf c e.type).any
     (fun a => (attestorVerdicts ev a e).any (fun v => v == .refused)))
 
--- cite: attestation/policy/step.go:894-1036 sha256:e84dcaedd493e49fda540b2b53e6db18b3ee96f3c6ba65e04db8177ec0bc5118
+-- cite: attestation/policy/step.go:900-1046 sha256:e4d08a4b43a4fc90595cff8e2f12d822928d5feb7b84e53278ef6481851a73d8
 -- cite: attestation/policy/regorefusal.go:32-44 sha256:93d80ba472d31d6108b51b5208b745b9172ce7a943358feca21eed76028dd87f
 -- cite: attestation/policy/step.go:900-903 sha256:2e634f1aa948679a297ead28197c9e38d1f45a71bc5784800b0b355fde847122
 -- cite: attestation/policy/step.go:913-921 sha256:89df68265d5e72f6745d75a94e8a3cf7832c739989594eb18f5ca7b84f31c08d

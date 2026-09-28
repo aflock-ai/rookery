@@ -57,6 +57,7 @@ The default of `cilock sign --datatype` is the legacy witness type for backward 
 | `requiredArtifacts` | array&lt;string&gt; | Only valid with `artifactsFrom`. Glob patterns (gobwas/glob, `/` separator). Each must match a material path that an accepted `artifactsFrom` step also recorded, so its digest was compared. Without it, `artifactsFrom` is satisfied by any one shared path, such as a system library. Use it to pin the artifact the step exists to consume, e.g. `/tmp/build/cilock{,.exe}` for a signing step. Record that artifact under the upstream path with `--attestor-material-bind RECORDED_PATH=FILE`. An absent match fails closed. |
 | `attestationsFrom` | array&lt;string&gt; | Names of other steps whose collected attestations are lifted into this step's Rego evaluation context as `input.steps.<step>.<predicateType>`. Use when a step's Rego rule must reference data produced by a sibling step (e.g. a release-gate rule that reads the SBOM emitted in the `scan` step). |
 | `externalFrom` | array&lt;string&gt; | Names of bare-predicate envelopes declared in the top-level `externalAttestations` map. Each referenced predicate is lifted into the step's Rego context as `input.external.<name>`. Use when a policy must reference DSSE envelopes whose predicate is *not* wrapped in a CI/lock `Collection` — SLSA provenance, VSAs, cosign attestations, inclusion-proofs (the inclusion-proof attestor is a bare predicate and **must** be wired this way, not via `step.attestations`). |
+| `timestampConstraint` | object | Time requirement on the step's evidence, judged against the RFC 3161 TSA time verified on a signature that matched one of the step's functionaries, never a time the signer wrote into its payload. `notBefore` and `notAfter` (RFC 3339 instants) bound the earliest such time; `maxAge` (a Go duration such as `168h`) rejects evidence older than that at verification. A collection with no verified TSA time fails any constraint that is set. For a deadline *between* two steps (evidence B signed within N days of evidence A), compare `tsaTime` values in Rego instead; see "Verified signing times" below. |
 
 ## `functionary` object
 
@@ -169,7 +170,7 @@ deny[msg] {
 }
 ```
 
-As soon as a step lists anything in `attestationsFrom` or `externalFrom`, the verifier re-shapes `input` for every Rego policy on that step into three keys:
+As soon as a step lists anything in `attestationsFrom` or `externalFrom`, the verifier re-shapes `input` for every Rego policy on that step into these keys:
 
 | Key | Contents |
 |---|---|
@@ -177,6 +178,7 @@ As soon as a step lists anything in `attestationsFrom` or `externalFrom`, the ve
 | `input.steps.<step>.collections` | One entry per passed collection of each step in `attestationsFrom`: `{reference, name, attestations}` with `attestations` keyed by predicate type URI. Ordered by collection reference, so a rule sees every passed collection and its order does not depend on which source answered first. Read this. |
 | `input.steps.<step>.<predicateType>` | **Deprecated.** The attestor of that type from the first collection in `collections` order only. Kept so existing policies keep verifying; the verifier logs a deprecation warning per module that reads it. A rule that must hold for every run of a step cannot be written against this key. |
 | `input.external.<name>` | The predicate body of each envelope in `externalFrom` that passed. An external that was skipped or never supplied is absent, so `not input.external.<name>` fires. |
+| `input.collection.tsaTime` | The verified signing time of the collection being evaluated. See "Verified signing times" below. Absent when that collection has no verified TSA time. |
 
 The switch is keyed on the step *declaring* the lists, not on the referenced data being present: a dependency that has not verified yet still produces the wrapped shape, with an empty `input.steps`. A top-level path such as `input.exitcode` is undefined under the wrapped shape, so a module written for the plain shape stops matching the moment its step gains an `attestationsFrom` entry, and the verifier refuses the collection rather than let the silent deny pass it (see "Missing fields" below). Move its reads under `input.attestation`. The verifier logs a warning whenever the wrapped shape is active.
 
@@ -218,6 +220,42 @@ deny[msg] {
 Both modules above are extracted from this page and run through the real verifier by `attestation/policy/rego_input_shape_doc_test.go`, so they cannot drift from what `cilock verify` actually passes in.
 
 **What `input` is.** With no `attestationsFrom`/`externalFrom` on the step, `input` is the JSON of the registered attestor struct, the same bytes signed inside the collection. For most attestors that puts the predicate's fields at the top level: `input.exitcode` (command-run), `input.commithash` (git), `input.findings` (secretscan). Four attestors register a struct that wraps the predicate in a `predicate` field, so their fields are one level down: `test-results`, `steampipe`, `scubagoggles`, and `structured-data` are read as `input.predicate.<field>`, for example `input.predicate.summary.failed`, not `input.summary.failed`. Rego treats an undefined path in a `deny` body as "this rule does not fire", so the verifier refuses an admit that rests on such a read (see "Missing fields" below); a flat read against a wrapped attestor is refused, not passed. Check the shape with `cilock tools show <name>` (the attestor page states it under "Rego input shape") or by base64-decoding the attestation in a real collection; `cilock policy validate` warns when a module bound to `test-results/v0.1` reads a top-level predicate field.
+
+### Verified signing times
+
+Every time inside an attestation (`starttime`, `endtime`, a scanner's `endTimeUtc`) was written by the signer and proves nothing about when the evidence existed. The time the verifier does trust is the RFC 3161 timestamp on the envelope's signature. Rego sees it under the wrapped shape as `tsaTime`, in two places:
+
+| Path | Whose time |
+|---|---|
+| `input.collection.tsaTime` | The collection this policy is evaluating. |
+| `input.steps.<step>.collections[].tsaTime` | Each passed collection of a step in `attestationsFrom`. |
+
+The value is Unix nanoseconds, a number, so two of them subtract directly. It is the earliest timestamp that verified against the policy's timestamp authorities, taken only from signatures whose verifier matched a functionary of that collection's step: the same time `timestampConstraint` checks. Nothing in the payload can supply it, because the signer's attestor JSON sits under `input.attestation` and `collections[].attestations`, never beside `tsaTime`.
+
+When a collection has no such timestamp the key is absent. A `deny` that reads it is then refused under "Missing fields" below, so a missing time never reads as zero and never passes a deadline.
+
+The plain (unwrapped) shape has no `tsaTime`: there the whole `input` is the signer's JSON. A step that needs its own time without depending on another step uses `timestampConstraint`.
+
+This is how a deadline between two events is written. The example requires every evaluation to be signed within 7 days of each scan the `evaluate` step reads through `attestationsFrom: ["scan"]`:
+
+```rego
+package ver.evaluation_deadline
+
+import rego.v1
+
+seven_days_ns := ((7 * 24) * 3600) * 1000000000
+
+deny contains msg if {
+	some scan in input.steps.scan.collections
+	delay := input.collection.tsaTime - scan.tsaTime
+	delay > seven_days_ns
+	msg := sprintf("evaluation signed %v ns after scan %v, over the 7-day deadline", [delay, scan.reference])
+}
+```
+
+`attestation/policy/tsa_time_rego_test.go` runs this module through `Policy.Verify`: 6 days and exactly 7 days pass, 7 days plus one second fails, and a missing time on either side fails.
+
+A timestamp shows that the signature existed by that time; it does not show when the underlying event happened. A deadline checked on `tsaTime` holds for the real events only if signing follows the event within a known bound, so leave that bound as margin in the rule.
 
 ### Missing fields
 

@@ -84,15 +84,19 @@ func (m *gateMemo) forStep(step string, stepCtx map[string]interface{}) *stepGat
 
 // key identifies collection under this step and context. It binds the
 // collection's reference, its statement and verified signers
-// (passedCollectionKey), its signed envelope bytes, and any verification
-// errors, so two collections share a key only if the gate could not tell them
-// apart.
+// (passedCollectionKey), its signed envelope bytes, its verified TSA time, and
+// any verification errors, so two collections share a key only if the gate
+// could not tell them apart.
 func (g *stepGate) key(collection source.CollectionVerificationResult) string {
 	var buf bytes.Buffer
 	buf.Write(g.prefix)
 	writeFramed(&buf, []byte(collection.Reference))
 	writeFramed(&buf, []byte(passedCollectionKey(PassedCollection{Collection: collection})))
 	writeFramed(&buf, []byte(passedCollectionFallbackKey(collection)))
+	// The collection's verified TSA time reaches Rego as input.collection.tsaTime
+	// (#10528), so two collections that differ only in it must not share a verdict.
+	ts, _ := regoTSATime(collection)
+	writeFramed(&buf, []byte(ts))
 	for _, err := range collection.Errors {
 		writeFramed(&buf, []byte(err.Error()))
 	}

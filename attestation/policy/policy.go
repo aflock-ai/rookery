@@ -2144,20 +2144,7 @@ func (step Step) triageTrustedCollection(statement source.CollectionVerification
 		return reason
 	}
 
-	// Scope the timestamps to the signatures whose verifiers actually matched
-	// an allowed functionary. In a multi-signature envelope, a fresh TSA
-	// token on some OTHER (non-functionary) signature must not satisfy the
-	// constraint for the trusted signature.
-	functionaryTimestamps := make([]time.Time, 0)
-	for _, v := range statement.ValidFunctionaries {
-		if v == nil {
-			continue
-		}
-		if kid, err := v.KeyID(); err == nil {
-			functionaryTimestamps = append(functionaryTimestamps, statement.VerifiedTimestampsByKeyID[kid]...)
-		}
-	}
-	if err := step.TimestampConstraint.Check(functionaryTimestamps, time.Now()); err != nil {
+	if err := step.TimestampConstraint.Check(functionaryTimestamps(statement), time.Now()); err != nil {
 		return fmt.Errorf("timestamp constraint failed for step %s: %w", step.Name, err)
 	}
 

@@ -685,11 +685,17 @@ func buildStepContext(attestationsFrom []string, resultsByStep map[string]StepRe
 				}
 				stepData[att.Type] = data
 			}
-			collections = append(collections, map[string]interface{}{
+			entry := map[string]interface{}{
 				"reference":    pc.Collection.Reference,
 				"name":         coll.Name,
 				"attestations": attestors,
-			})
+			}
+			// The verified TSA time, never a payload field: attestor JSON lives
+			// under "attestations", so the signer cannot write this key (#10528).
+			if ts, ok := regoTSATime(pc.Collection); ok {
+				entry[regoTSATimeKey] = ts
+			}
+			collections = append(collections, entry)
 		}
 		// Backward compatibility: a dependency whose passed collections carry no decodable
 		// attestor has never appeared under input.steps, so `not input.steps.<step>` rules
@@ -901,6 +907,10 @@ func (s Step) gateOneContext(ctx context.Context, collection source.CollectionVe
 		log.Debugf("Skipping collection %s as it is not for step %s", collection.Collection.Name, s.Name)
 		return gateWrongName, PassedCollection{}, RejectedCollection{}
 	}
+
+	// input.collection.tsaTime: this collection's own verified signing time,
+	// lifted by buildRegoInput when the input is wrapped (#10528).
+	stepContext = withCurrentCollection(stepContext, collection)
 
 	found := make(map[string][]attestation.Attestor)
 	// []error, not []string: calling .Error() here is what severed every typed

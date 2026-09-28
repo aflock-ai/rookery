@@ -261,7 +261,7 @@ func buildRegoInput(attestorData interface{}, stepContext []map[string]interface
 	// wrap activates (warn-first; enforcement deferred) so the shape change is
 	// visible. Behavior is unchanged.
 	log.Warn("cross-step rego input shape active; legacy modules referencing top-level input fields (e.g. input.name) will silently not match (#6266)")
-	stepsData, externalData := splitStepAndExternalContext(stepContext[0])
+	stepsData, externalData, collectionData := splitStepAndExternalContext(stepContext[0])
 	wrapped := map[string]interface{}{
 		"attestation": attestorData,
 		"steps":       stepsData,
@@ -269,14 +269,26 @@ func buildRegoInput(attestorData interface{}, stepContext []map[string]interface
 	if externalData != nil {
 		wrapped["external"] = externalData
 	}
+	// input.collection holds only verifier-derived fields (the verified TSA
+	// time), absent when there are none (#10528).
+	if collectionData != nil {
+		wrapped["collection"] = collectionData
+	}
 	return wrapped
 }
 
 // splitStepAndExternalContext separates the cross-step entries from the
-// external-attestation entry (stored under externalAttestationsContextKey).
-func splitStepAndExternalContext(ctx map[string]interface{}) (stepsData, externalData map[string]interface{}) {
+// external-attestation entry (stored under externalAttestationsContextKey) and
+// the current collection's entry (under currentCollectionContextKey).
+func splitStepAndExternalContext(ctx map[string]interface{}) (stepsData, externalData, collectionData map[string]interface{}) {
 	stepsData = make(map[string]interface{}, len(ctx))
 	for k, v := range ctx {
+		if k == currentCollectionContextKey {
+			if cm, ok := v.(map[string]interface{}); ok {
+				collectionData = cm
+			}
+			continue
+		}
 		if k == externalAttestationsContextKey {
 			if em, ok := v.(map[string]interface{}); ok {
 				externalData = em
@@ -285,7 +297,7 @@ func splitStepAndExternalContext(ctx map[string]interface{}) (stepsData, externa
 		}
 		stepsData[k] = v
 	}
-	return stepsData, externalData
+	return stepsData, externalData, collectionData
 }
 
 // legacyStepsAccess matches input.steps.<step>.<something> and input.steps.<step>[...]. The
