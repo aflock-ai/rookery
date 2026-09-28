@@ -181,15 +181,49 @@ func TestGlobsRestrictWhichProductsAreScanned(t *testing.T) {
 	})
 }
 
+// testGitEnv is the environment every git the tests run gets: a fixed
+// identity, no user or system config, and no automatic maintenance. Since git
+// 2.45 a commit or merge spawns a detached `git maintenance run --auto` that
+// outlives the command. A child still writing into .git when the test returns
+// fails t.TempDir's cleanup with "directory not empty", which the local ring
+// hit on three TestDiffScope tests.
+func testGitEnv(extra ...string) []string {
+	env := append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=maintenance.auto", "GIT_CONFIG_VALUE_0=false",
+		"GIT_CONFIG_KEY_1=gc.auto", "GIT_CONFIG_VALUE_1=0")
+	return append(env, extra...)
+}
+
 func gitRun(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	cmd.Env = testGitEnv()
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v: %s", args, out)
 	return strings.TrimSpace(string(out))
+}
+
+// TestGitRunSpawnsNoMaintenance: no git the tests run may leave a detached
+// maintenance child behind to race t.TempDir's cleanup. GIT_TRACE names every
+// child a command starts.
+func TestGitRunSpawnsNoMaintenance(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	gitRun(t, dir, "init", "-q", "-b", "main", ".")
+	writeFiles(t, dir, map[string]string{"a.txt": "a\n"})
+	gitRun(t, dir, "add", "-A")
+	for _, args := range [][]string{{"commit", "-q", "-m", "base"}, {"commit", "-q", "--allow-empty", "-m", "again"}} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = testGitEnv("GIT_TRACE=1")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+		require.NotContains(t, string(out), "maintenance run", "git %v started automatic maintenance", args)
+	}
 }
 
 // TestDiffScopeScansOnlyWhatChangedSinceBase: the push-gate question is "did
@@ -1584,10 +1618,7 @@ func gitRunAt(t *testing.T, dir string, epoch int, args ...string) string {
 	// "@<epoch> +0000" is git's raw format; a bare number is not a date.
 	stamp := fmt.Sprintf("@%d +0000", epoch)
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
-		"GIT_AUTHOR_DATE="+stamp, "GIT_COMMITTER_DATE="+stamp)
+	cmd.Env = testGitEnv("GIT_AUTHOR_DATE="+stamp, "GIT_COMMITTER_DATE="+stamp)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v: %s", args, out)
 	return strings.TrimSpace(string(out))
