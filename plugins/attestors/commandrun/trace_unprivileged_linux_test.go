@@ -38,6 +38,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"golang.org/x/sys/unix"
@@ -68,9 +69,28 @@ func fileSHA256(t *testing.T, path string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// autoTracedDeadline bounds one traced command. A traced helper finishes in
+// seconds; without a bound, a tracee left in ptrace-stop after the tracer
+// returned held c.Wait() until the 30-minute go test timeout
+// (TestFailedExecveDoesNotNameTheNextExec/path, #10011's offload ring,
+// 2026-09-28). The command context kills the child when this expires, and
+// SIGKILL reaches a ptrace-stopped process.
+const autoTracedDeadline = 3 * time.Minute
+
 func runAutoTraced(t *testing.T, dir string, argv []string) (*CommandRun, error) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	rc, err, timedOut := runAutoTracedWithin(t, dir, argv, autoTracedDeadline)
+	if timedOut {
+		t.Fatalf("traced command %q did not finish within %s and was killed (a tracee left in ptrace-stop?): %v", argv, autoTracedDeadline, err)
+	}
+	return rc, err
+}
+
+// runAutoTracedWithin runs argv under auto tracing with a deadline and
+// reports whether the deadline killed it.
+func runAutoTracedWithin(t *testing.T, dir string, argv []string, d time.Duration) (*CommandRun, error, bool) { //nolint:revive // the timed-out flag reads last
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	actx, err := attestation.NewContext("unprivileged-trace",
 		[]attestation.Attestor{},
@@ -82,7 +102,28 @@ func runAutoTraced(t *testing.T, dir string, argv []string) (*CommandRun, error)
 		t.Fatalf("attestation ctx: %v", err)
 	}
 	rc := New(WithCommand(argv), WithTracing(true), WithSilent(true))
-	return rc, rc.Attest(actx)
+	err = rc.Attest(actx)
+	return rc, err, errors.Is(ctx.Err(), context.DeadlineExceeded)
+}
+
+// A command that never exits must come back as a timeout within the bound,
+// not hold the test binary to go test's 30-minute alarm.
+func TestAutoTracedDeadlineKillsAHungCommand(t *testing.T) {
+	forceEBPFUnavailable(t)
+	t.Setenv(EnvVarTraceMode, "")
+	t.Setenv(EnvVarFanotify, "off")
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	start := time.Now()
+	_, _, timedOut := runAutoTracedWithin(t, t.TempDir(), []string{sleep, "3600"}, 2*time.Second)
+	if !timedOut {
+		t.Fatal("a command that never exits was not reported as timed out")
+	}
+	if took := time.Since(start); took > 45*time.Second {
+		t.Fatalf("the deadline fired after %s; the kill did not unblock the wait", took)
+	}
 }
 
 func copyExecutable(t *testing.T, name, dstDir string) string {
