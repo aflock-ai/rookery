@@ -16,7 +16,11 @@
 
 package slsa
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
+)
 
 // A named CI builder.id is a claim that the build platform can reach the
 // level a verifier grants that builder. The formal support matrix
@@ -48,9 +52,40 @@ func TestBuilderIDClaimsOnlyWhatTheIssuerMappingSupports(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := builderIDFor(tc.attestor, tc.claims); got != tc.want {
+			var tok *jwt.Attestor
+			if tc.claims != nil {
+				tok = &jwt.Attestor{Claims: tc.claims, VerifiedBy: jwt.VerificationInfo{JWKSUrl: canonicalJWKS[tc.attestor]}}
+			}
+			if got := builderIDFor(tc.attestor, tok); got != tc.want {
 				t.Fatalf("builderIDFor(%q, %v) = %q, want %q", tc.attestor, tc.claims, got, tc.want)
 			}
 		})
+	}
+}
+
+// canonicalJWKS is the key set each platform publishes; a token verified
+// against it is the only kind whose iss claim names the builder.
+var canonicalJWKS = map[string]string{
+	"github": "https://token.actions.githubusercontent.com/.well-known/jwks",
+	"gitlab": "https://gitlab.com/oauth/discovery/keys",
+}
+
+// An earlier step of the CI job can point the github or gitlab attestor at a
+// key set it controls (WITNESS_GITHUB_JWKS_URL, WITNESS_GITLAB_JWKS_URL) and
+// mint a token carrying the platform's iss. Such a token names no builder.
+func TestBuilderIDRefusesAnIssuerVerifiedAgainstABuildChosenKeySet(t *testing.T) {
+	for attestorName, iss := range map[string]string{
+		"github": "https://token.actions.githubusercontent.com",
+		"gitlab": "https://gitlab.com",
+	} {
+		for _, jwks := range []string{"https://attacker.example/jwks", "", canonicalJWKS[attestorName] + "/"} {
+			tok := &jwt.Attestor{
+				Claims:     map[string]interface{}{"iss": iss},
+				VerifiedBy: jwt.VerificationInfo{JWKSUrl: jwks},
+			}
+			if got := builderIDFor(attestorName, tok); got != DefaultBuilderId {
+				t.Fatalf("%s with key set %q: builderIDFor = %q, want %q", attestorName, jwks, got, DefaultBuilderId)
+			}
+		}
 	}
 }

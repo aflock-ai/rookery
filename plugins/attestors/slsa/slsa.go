@@ -33,6 +33,7 @@ import (
 	"github.com/aflock-ai/rookery/plugins/attestors/github"
 	"github.com/aflock-ai/rookery/plugins/attestors/gitlab"
 	"github.com/aflock-ai/rookery/plugins/attestors/jenkins"
+	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/aflock-ai/rookery/plugins/attestors/material"
 	"github.com/aflock-ai/rookery/plugins/attestors/oci"
 	"github.com/aflock-ai/rookery/plugins/attestors/product"
@@ -58,30 +59,39 @@ const (
 
 // builderIssuers is the one OIDC issuer per CI attestor whose token a Fulcio
 // CA (public Sigstore and the TestifySec platform alike) maps to a build
-// identity. See builderIDFor.
+// identity, and the key set that platform publishes. See builderIDFor.
+//
+// The github and gitlab attestors take their JWKS URL from an environment
+// variable (WITNESS_GITHUB_JWKS_URL, WITNESS_GITLAB_JWKS_URL) that an earlier
+// step of the same CI job can set, and a token verified against a key set the
+// build chose can carry any iss it likes. So the issuer only counts when the
+// token verified against the platform's own keys.
 var builderIssuers = map[string]struct {
 	issuer    string
+	jwks      string
 	builderID string
 }{
-	github.Name: {"https://token.actions.githubusercontent.com", GHABuilderId},
-	gitlab.Name: {"https://gitlab.com", GLCBuilderId},
+	github.Name: {"https://token.actions.githubusercontent.com", "https://token.actions.githubusercontent.com/.well-known/jwks", GHABuilderId},
+	gitlab.Name: {"https://gitlab.com", "https://gitlab.com/oauth/discovery/keys", GLCBuilderId},
 }
 
 // builderIDFor returns the builder.id to stamp for a CI attestor whose
-// verified OIDC token carried claims (nil when it had none).
+// verified OIDC token is tok (nil when it had none).
 //
 // A named builder.id is a claim a verifier may grant a level on, so it is
 // only emitted where the formal support matrix (formal/slsa-tracks) shows the
 // platform can reach that level: the token's issuer must be the one a Fulcio
-// CA maps to a build identity. GitHub Enterprise Server, self-managed GitLab,
-// Jenkins and AWS CodeBuild all fall back to DefaultBuilderId, which claims
-// nothing. The attestor's run data (invocation ID, commit) is still recorded.
-func builderIDFor(attestorName string, claims map[string]interface{}) string {
+// CA maps to a build identity, and the token must have verified against that
+// platform's own key set. GitHub Enterprise Server, self-managed GitLab,
+// Jenkins, AWS CodeBuild and any token verified against another key set all
+// fall back to DefaultBuilderId, which claims nothing. The attestor's run
+// data (invocation ID, commit) is still recorded.
+func builderIDFor(attestorName string, tok *jwt.Attestor) string {
 	want, ok := builderIssuers[attestorName]
-	if !ok {
+	if !ok || tok == nil || tok.VerifiedBy.JWKSUrl != want.jwks {
 		return DefaultBuilderId
 	}
-	if iss, _ := claims["iss"].(string); iss != want.issuer {
+	if iss, _ := tok.Claims["iss"].(string); iss != want.issuer {
 		return DefaultBuilderId
 	}
 	return want.builderID
@@ -212,7 +222,7 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 				log.Warn("No JWT found in GitHub attestor")
 				continue
 			}
-			p.PbProvenance.RunDetails.Builder.ID = builderIDFor(github.Name, gh.Data().JWT.Claims)
+			p.PbProvenance.RunDetails.Builder.ID = builderIDFor(github.Name, gh.Data().JWT)
 
 			if sha, ok := gh.Data().JWT.Claims["sha"].(string); ok && sha != "" {
 				digest := make(map[string]string)
@@ -237,7 +247,7 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 				log.Warn("No JWT found in GitLab attestor")
 				continue
 			}
-			p.PbProvenance.RunDetails.Builder.ID = builderIDFor(gitlab.Name, gl.Data().JWT.Claims)
+			p.PbProvenance.RunDetails.Builder.ID = builderIDFor(gitlab.Name, gl.Data().JWT)
 
 			if sha, ok := gl.Data().JWT.Claims["sha"].(string); ok && sha != "" {
 				digest := make(map[string]string)

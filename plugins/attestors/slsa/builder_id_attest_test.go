@@ -46,11 +46,14 @@ type stubCodeBuild struct{ *awscodebuild.Attestor }
 
 func (*stubCodeBuild) Attest(*attestation.AttestationContext) error { return nil }
 
-func withIssuer(iss string) *jwt.Attestor {
+func withIssuer(iss, jwks string) *jwt.Attestor {
 	if iss == "" {
 		return nil
 	}
-	return &jwt.Attestor{Claims: map[string]interface{}{"iss": iss, "sha": "0123456789abcdef0123456789abcdef01234567"}}
+	return &jwt.Attestor{
+		Claims:     map[string]interface{}{"iss": iss, "sha": "0123456789abcdef0123456789abcdef01234567"},
+		VerifiedBy: jwt.VerificationInfo{JWKSUrl: jwks},
+	}
 }
 
 // attestWith runs the real slsa attestor after ci and returns the builder id
@@ -80,13 +83,13 @@ func TestAttestEmitsANamedBuilderOnlyForAMappedIssuer(t *testing.T) {
 	gh := func(iss string) attestation.Attestor {
 		a := github.New()
 		a.PipelineUrl = "https://github.com/acme/widget/actions/runs/1"
-		a.JWT = withIssuer(iss)
+		a.JWT = withIssuer(iss, canonicalJWKS["github"])
 		return &stubGitHub{a}
 	}
 	gl := func(iss string) attestation.Attestor {
 		a := gitlab.New()
 		a.PipelineUrl = "https://gitlab.example/acme/widget/-/pipelines/1"
-		a.JWT = withIssuer(iss)
+		a.JWT = withIssuer(iss, canonicalJWKS["gitlab"])
 		return &stubGitLab{a}
 	}
 	jk := jenkins.New()
