@@ -1,0 +1,89 @@
+# Training lessons: builds cilock from this tree and runs every lesson on
+# Linux, macOS and Windows. Each lesson script asserts its own outcomes and
+# exits non-zero on any mismatch.
+#
+# lesson-000 part 1: 1 PASS + 3 BLOCKED cases (swapped binary, skipped
+#   tests, failed tests), each checked by exit code and reason.
+# lesson-000 part 2: three policy rounds must end at 6/3, 6/4, 0/4
+#   (validate findings / verdicts correct).
+
+name: Training
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'training/**'
+      - 'cilock/**'
+      - 'attestation/**'
+      - 'plugins/**'
+      - 'go.work'
+      - 'go.work.sum'
+      - '.go-version'
+      - '.github/workflows/training.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'training/**'
+      - 'cilock/**'
+      - 'attestation/**'
+      - 'plugins/**'
+      - 'go.work'
+      - 'go.work.sum'
+      - '.go-version'
+      - '.github/workflows/training.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: training-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lesson-000:
+    name: lesson-000 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: training/lesson-000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: '.go-version'
+          cache: false
+
+      - name: Build cilock from this tree
+        run: ./build-cilock.sh
+
+      - name: "Part 1: receipts (expect 1 PASS, 3 BLOCKED)"
+        env:
+          DEMO_FAST: "1"
+        run: ./part1-receipts.sh
+
+      - name: "Part 2: policy loop (expect 6/3, 6/4, 0/4)"
+        run: |
+          echo "bash $BASH_VERSION"
+          ./part2-policy-loop.sh
+
+      - name: Upload evidence and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lesson-000-${{ matrix.os }}
+          path: |
+            training/lesson-000/part1-work/evidence/
+            training/lesson-000/part1-work/policy/
+            training/lesson-000/part1-work/logs/
+            training/lesson-000/part2-work/loop.jsonl
+            training/lesson-000/part2-work/rounds/
+          if-no-files-found: warn
