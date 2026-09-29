@@ -1,0 +1,46 @@
+{
+  "name": "npm-sbom",
+  "source": "catalog-only",
+  "description": "npm sbom: npm's built-in SBOM generator (CycloneDX or SPDX) for the installed dependency tree.",
+  "title": "npm-sbom",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "sbom-generate"
+  ],
+  "primaryCategory": "sbom-generate",
+  "upstream": {
+    "name": "npm sbom",
+    "source": "https://docs.npmjs.com/cli/commands/npm-sbom",
+    "license": "Artistic-2.0",
+    "vendor": "GitHub / npm"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "npm sbom"
+    }
+  ],
+  "emitsFormats": [
+    "sbom"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "npm sbom observed. It prints to stdout: redirect to sbom.cdx.json (or *.spdx.json) so the sbom attestor captures it."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- npm sbom .",
+  "detectionCommand": "cilock plan --format=json -- npm sbom [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"npm sbom\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

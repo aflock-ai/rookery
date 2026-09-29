@@ -40,6 +40,8 @@
     "go-test",
     "gotestsum",
     "jest",
+    "mocha",
+    "node-test",
     "pytest"
   ],
   "warnings": [],

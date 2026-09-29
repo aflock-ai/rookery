@@ -1,0 +1,46 @@
+{
+  "name": "node-test",
+  "source": "catalog-only",
+  "description": "node --test: the Node.js built-in test runner.",
+  "title": "node-test",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "unit-test"
+  ],
+  "primaryCategory": "unit-test",
+  "upstream": {
+    "name": "Node.js test runner",
+    "source": "https://nodejs.org/api/test.html",
+    "license": "MIT",
+    "vendor": "OpenJS Foundation / Node.js"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "node --test"
+    }
+  ],
+  "emitsFormats": [
+    "test-results"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Node test runner observed. --test-reporter=junit --test-reporter-destination=junit.xml writes nested JUnit XML, captured by test-results at every suite level."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- node --test .",
+  "detectionCommand": "cilock plan --format=json -- node --test [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"node --test\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

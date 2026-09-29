@@ -783,6 +783,24 @@ ENTRIES: list[tuple[str, dict]] = [
         match=dict(argv_prefix=["jest"]),
         on_match="Jest invocation observed. jest-junit reporter emits JUnit XML, captured by test-results."
     )),
+    ("node-test", dict(
+        desc="node --test: the Node.js built-in test runner.",
+        categories=["unit-test"],
+        upstream=dict(name="Node.js test runner", source="https://nodejs.org/api/test.html",
+                      license="MIT", vendor="OpenJS Foundation / Node.js"),
+        emits_formats=["test-results"],
+        match=dict(argv_prefix=["node", "--test"]),
+        on_match="Node test runner observed. --test-reporter=junit --test-reporter-destination=junit.xml writes nested JUnit XML, captured by test-results at every suite level."
+    )),
+    ("npm-sbom", dict(
+        desc="npm sbom: npm's built-in SBOM generator (CycloneDX or SPDX) for the installed dependency tree.",
+        categories=["sbom-generate"],
+        upstream=dict(name="npm sbom", source="https://docs.npmjs.com/cli/commands/npm-sbom",
+                      license="Artistic-2.0", vendor="GitHub / npm"),
+        emits_formats=["sbom"],
+        match=dict(argv_prefix=["npm", "sbom"]),
+        on_match="npm sbom observed. It prints to stdout: redirect to sbom.cdx.json (or *.spdx.json) so the sbom attestor captures it."
+    )),
     ("gotestsum", dict(
         desc="gotestsum: runs go test -json and writes JUnit XML.",
         categories=["unit-test"],
@@ -809,6 +827,41 @@ ENTRIES: list[tuple[str, dict]] = [
             dict(argv_regex=r"^(\S*/)?go -C(=| )\S+ vet( |$)"),
         ]),
         on_match="go vet observed. It has no SARIF output; the command-run exit code is the evidence."
+    )),
+    ("mocha", dict(
+        desc="Mocha: JavaScript test runner.",
+        categories=["unit-test"],
+        upstream=dict(name="Mocha", source="https://github.com/mochajs/mocha",
+                      license="MIT", vendor="OpenJS Foundation"),
+        emits_formats=["test-results"],
+        match=dict(any_of=[
+            dict(argv_prefix=["mocha"]),
+            dict(argv_prefix=["npx", "mocha"]),
+        ]),
+        on_match="Mocha observed. The built-in xunit reporter (--reporter xunit --reporter-option output=junit.xml) writes one JUnit testsuite, captured by test-results."
+    )),
+    ("biome", dict(
+        desc="Biome: formatter and linter for JavaScript, TypeScript, JSON and CSS.",
+        categories=["lint"],
+        upstream=dict(name="Biome", source="https://github.com/biomejs/biome",
+                      license="MIT OR Apache-2.0", vendor="Biome contributors"),
+        emits_formats=["sarif"],
+        match=dict(any_of=[
+            dict(argv_prefix=["biome"]),
+            dict(argv_prefix=["npx", "biome"]),
+        ]),
+        on_match="Biome observed. --reporter=sarif prints SARIF to stdout: redirect it to a *.sarif file so the sarif attestor captures it."
+    )),
+    ("tsc", dict(
+        desc="tsc: the TypeScript compiler.",
+        categories=["build"],
+        upstream=dict(name="TypeScript", source="https://github.com/microsoft/TypeScript",
+                      license="Apache-2.0", vendor="Microsoft"),
+        match=dict(any_of=[
+            dict(argv_prefix=["tsc"]),
+            dict(argv_prefix=["npx", "tsc"]),
+        ]),
+        on_match="tsc observed. The emitted JavaScript and declarations are recorded as products."
     )),
 
     # ===== SARIF-emitting scanners (documented; validated end-to-end via

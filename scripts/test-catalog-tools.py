@@ -223,6 +223,28 @@ def make_jest_pkg(fix: Path):
     )
 
 
+def make_node_test(fix: Path):
+    # Node's built-in runner writes a describe() suite inside its parent's
+    # <testsuite> and top-level test() cases directly under <testsuites>;
+    # the fixture has both, so a one-level JUnit reader undercounts it.
+    (fix / "sum.test.mjs").write_text(
+        "import {test, describe} from 'node:test';\n"
+        "import assert from 'node:assert';\n"
+        "test('top level', () => { assert.equal(1 + 1, 2); });\n"
+        "describe('outer', () => {\n"
+        "  test('direct', () => {});\n"
+        "  describe('inner', () => { test('nested', () => {}); });\n"
+        "});\n"
+    )
+
+
+def make_npm_empty_pkg(fix: Path):
+    # No dependencies: `npm install` writes a lockfile without the registry.
+    (fix / "package.json").write_text(json.dumps({
+        "name": "npm-sbom-cat", "version": "0.0.1"
+    }, indent=2))
+
+
 def make_go_pkg_dir(fix: Path):
     # A module in a subdirectory, run from the root with `go -C pkg`, the way
     # a monorepo runs one package. The test has a subtest and a skip so the
@@ -237,6 +259,44 @@ def make_go_pkg_dir(fix: Path):
         "\tt.Run(\"small\", func(t *testing.T) { if Sum(1, 2) != 3 { t.Fatal(\"sum\") } })\n"
         "}\n\n"
         "func TestSkipped(t *testing.T) { t.Skip(\"not here\") }\n")
+
+
+def npm_install(fix: Path, spec: str):
+    # Installed while preparing the fixture, outside the cilock run, so
+    # node_modules is neither a product of the attested command nor a
+    # candidate report.
+    subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--no-save", spec],
+                   cwd=str(fix), check=True, capture_output=True)
+
+
+def make_mocha_pkg(fix: Path):
+    (fix / "package.json").write_text(json.dumps({
+        "name": "mocha-cat", "version": "0.0.1", "type": "module"}, indent=2))
+    (fix / "test").mkdir(exist_ok=True)
+    (fix / "test" / "sum.test.mjs").write_text(
+        "import assert from 'node:assert';\n"
+        "describe('outer', () => {\n"
+        "  it('adds', () => { assert.equal(1 + 1, 2); });\n"
+        "  describe('inner', () => { it('nested', () => {}); });\n"
+        "  it.skip('pending', () => {});\n"
+        "});\n")
+    npm_install(fix, "mocha@11.8.0")
+
+
+def make_biome_pkg(fix: Path):
+    (fix / "package.json").write_text(json.dumps({"name": "biome-cat", "version": "0.0.1"}, indent=2))
+    (fix / "ok.js").write_text("const x = 1;\nconsole.log(x);\n")
+    npm_install(fix, "@biomejs/biome@2.5.7")
+
+
+def make_tsc_pkg(fix: Path):
+    (fix / "package.json").write_text(json.dumps({"name": "tsc-cat", "version": "0.0.1"}, indent=2))
+    (fix / "tsconfig.json").write_text(json.dumps({
+        "compilerOptions": {"rootDir": "src", "outDir": "dist", "strict": True, "declaration": True},
+        "include": ["src"]}, indent=2))
+    (fix / "src").mkdir(exist_ok=True)
+    (fix / "src" / "index.ts").write_text("export const sum = (a: number, b: number): number => a + b;\n")
+    npm_install(fix, "typescript@6.0.3")
 
 
 def make_cargo(fix: Path):
@@ -527,6 +587,24 @@ RECIPES: list[Recipe] = [
            fixture=make_go_mod, expect_uris=[URI_COMMANDRUN],
            allow_nonzero=True,
            invoke=args_only(["go", "test", "./..."])),
+    Recipe(name="node-test", need="node", category="artifact-scan",
+           fixture=make_node_test, expect_uris=[URI_COMMANDRUN, URI_TEST],
+           attestors=["test-results"],
+           invoke=args_only(["node", "--test", "--test-reporter=junit",
+                             "--test-reporter-destination=junit.xml"])),
+    # The plain form, no -a and no reporter: auto-detection attaches
+    # test-results, which finds no report. That must warn, not fail the
+    # run whose tests passed.
+    Recipe(name="node-test-no-reporter", need="node", category="artifact-scan",
+           fixture=make_node_test, expect_uris=[URI_COMMANDRUN],
+           invoke=args_only(["node", "--test"])),
+    Recipe(name="npm-sbom", need="npm", category="artifact-scan",
+           fixture=make_npm_empty_pkg,
+           expect_uris=[URI_COMMANDRUN, URI_SBOM_CYCLONEDX],
+           attestors=["sbom"],
+           invoke=args_only(["sh", "-c",
+                             "npm install --no-audit --no-fund >/dev/null && "
+                             "npm sbom --sbom-format cyclonedx > sbom.cdx.json"])),
     Recipe(name="gotestsum", need="go", category="artifact-scan",
            fixture=make_go_pkg_dir, expect_uris=[URI_COMMANDRUN, URI_TEST],
            attestors=["test-results"],
@@ -535,6 +613,19 @@ RECIPES: list[Recipe] = [
     Recipe(name="go-vet", need="go", category="artifact-scan",
            fixture=make_go_pkg_dir, expect_uris=[URI_COMMANDRUN],
            invoke=args_only(["go", "-C", "pkg", "vet", "./..."])),
+    Recipe(name="mocha", need="npm", category="artifact-scan",
+           fixture=make_mocha_pkg, expect_uris=[URI_COMMANDRUN, URI_TEST],
+           attestors=["test-results"],
+           invoke=args_only(["npx", "mocha", "--reporter", "xunit",
+                             "--reporter-option", "output=junit.xml"])),
+    Recipe(name="biome", need="npm", category="artifact-scan",
+           fixture=make_biome_pkg, expect_uris=[URI_COMMANDRUN, URI_SARIF],
+           attestors=["sarif"],
+           invoke=args_only(["sh", "-c",
+                             "npx biome check --reporter=sarif ok.js > biome.sarif"])),
+    Recipe(name="tsc", need="npm", category="build",
+           fixture=make_tsc_pkg, expect_uris=[URI_COMMANDRUN, URI_PRODUCT],
+           invoke=args_only(["npx", "tsc"])),
 
     # --- Cloud audit log queries ---
     # Real data-plane validation: hits the account behind the testifysec-demo profile.
@@ -964,6 +1055,21 @@ def run_recipe(r: Recipe) -> Result:
         except Exception as e:
             return Result(name=r.name, status=FAIL, duration_s=time.time() - start,
                           detail=f"fixture setup failed: {e}")
+
+    # With no -a list cilock records its defaults, git among them, and the
+    # git attestor refuses a directory that is not a repository root. Make
+    # the fixture its own repository so the recipe runs the way a user runs
+    # the tool: from the root of a checkout.
+    if not r.attestors and not (fix / ".git").exists():
+        git = ["git", "-c", "user.name=catalog", "-c", "user.email=catalog@example.invalid"]
+        try:
+            subprocess.run(["git", "init", "-q", str(fix)], check=True, capture_output=True)
+            subprocess.run(["git", "-C", str(fix), "add", "-A"], check=True, capture_output=True)
+            subprocess.run(git + ["-C", str(fix), "commit", "-q", "--allow-empty", "-m", "fixture"],
+                           check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            return Result(name=r.name, status=FAIL, duration_s=time.time() - start,
+                          detail=f"fixture git init failed: {e.stderr!r}")
 
     argv, env_overrides, cwd = r.invoke(fix)
     bundle = BUNDLES / f"{r.name}.bundle.json"

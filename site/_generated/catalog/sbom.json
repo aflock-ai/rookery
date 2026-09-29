@@ -64,6 +64,7 @@
     "bom",
     "cdxgen",
     "melange",
+    "npm-sbom",
     "syft"
   ],
   "warnings": [],

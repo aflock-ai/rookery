@@ -62,6 +62,12 @@ func TestMonorepoToolFormsAreDetected(t *testing.T) {
 		{[]string{"go", "run", "gotest.tools/gotestsum@v1.13.0", "--junitfile", "junit.xml"}, "gotestsum"},
 		{[]string{"go", "-C", "go", "run", "gotest.tools/gotestsum@v1.13.0", "--junitfile", "junit.xml", "--", "./..."}, "gotestsum"},
 		{[]string{"go", "tool", "gotestsum", "--junitfile", "junit.xml"}, "gotestsum"},
+		{[]string{"mocha", "--reporter", "xunit", "--reporter-option", "output=junit.xml"}, "mocha"},
+		{[]string{"npx", "mocha"}, "mocha"},
+		{[]string{"biome", "check", "--reporter=sarif"}, "biome"},
+		{[]string{"npx", "biome", "check"}, "biome"},
+		{[]string{"tsc", "--project", "tsconfig.build.json"}, "tsc"},
+		{[]string{"npx", "tsc"}, "tsc"},
 	}
 	for _, c := range cases {
 		if got := firedDetectors(t, c.argv); !contains(got, c.want) {
@@ -86,6 +92,8 @@ func TestMonorepoToolFormsDoNotOverMatch(t *testing.T) {
 		{[]string{"go", "run", "gotest.tools/gotestsum.evil@v1"}, "gotestsum"},
 		{[]string{"go", "run", "./cmd/x", "gotest.tools/gotestsum@v1.13.0"}, "gotestsum"},
 		{[]string{"echo", "go", "-C", "go", "test"}, "go-test"},
+		{[]string{"mochawesome"}, "mocha"},
+		{[]string{"tscx"}, "tsc"},
 	}
 	for _, c := range cases {
 		if got := firedDetectors(t, c.argv); contains(got, c.refuse) {

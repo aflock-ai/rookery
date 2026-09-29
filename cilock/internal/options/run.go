@@ -314,11 +314,14 @@ type RunOptions struct {
 	PlatformURL              string // TestifySec platform URL — derives archivista, fulcio, tsa URLs
 	WorkingDir               string
 	Attestations             []string
-	DirHashGlobs             []string
-	Hashes                   []string
-	OutFilePath              string
-	StepName                 string
-	Tracing                  bool
+	// AutoAddedAttestations are the names auto-detection appended to
+	// Attestations: not named with -a and not a default. Set by run, not a flag.
+	AutoAddedAttestations []string
+	DirHashGlobs          []string
+	Hashes                []string
+	OutFilePath           string
+	StepName              string
+	Tracing               bool
 	// ScriptCapture selects how much of an executed script or makefile is
 	// recorded: "identity" (default — path + digest), "content" (also embeds
 	// the body), or "off". Empty means identity.

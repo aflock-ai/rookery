@@ -1,0 +1,49 @@
+{
+  "name": "tsc",
+  "source": "catalog-only",
+  "description": "tsc: the TypeScript compiler.",
+  "title": "tsc",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "build"
+  ],
+  "primaryCategory": "build",
+  "upstream": {
+    "name": "TypeScript",
+    "source": "https://github.com/microsoft/TypeScript",
+    "license": "Apache-2.0",
+    "vendor": "Microsoft"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "tsc"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "npx tsc"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "tsc observed. The emitted JavaScript and declarations are recorded as products."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- tsc .",
+  "detectionCommand": "cilock plan --format=json -- tsc [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"tsc\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

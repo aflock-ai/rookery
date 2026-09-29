@@ -1,6 +1,6 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 139,
+  "count": 144,
   "withDoc": 61,
   "emittedBy": {
     "sbom": [
@@ -8,9 +8,11 @@
       "bom",
       "cdxgen",
       "melange",
+      "npm-sbom",
       "syft"
     ],
     "sarif": [
+      "biome",
       "checkov",
       "codeql",
       "conftest",
@@ -35,6 +37,8 @@
       "go-test",
       "gotestsum",
       "jest",
+      "mocha",
+      "node-test",
       "pytest"
     ],
     "vex": [
@@ -277,6 +281,21 @@
       "predicateType": "https://aflock.ai/attestations/base-ancestry/v0.1",
       "runType": "prematerial",
       "hasDoc": true
+    },
+    {
+      "name": "biome",
+      "source": "catalog-only",
+      "categories": [
+        "lint"
+      ],
+      "primaryCategory": "lint",
+      "description": "Biome: formatter and linter for JavaScript, TypeScript, JSON and CSS.",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
     },
     {
       "name": "bitbucket-pipelines",
@@ -1185,6 +1204,21 @@
       "hasDoc": false
     },
     {
+      "name": "mocha",
+      "source": "catalog-only",
+      "categories": [
+        "unit-test"
+      ],
+      "primaryCategory": "unit-test",
+      "description": "Mocha: JavaScript test runner.",
+      "emitsFormats": [
+        "test-results"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
       "name": "nancy",
       "source": "catalog-only",
       "categories": [
@@ -1193,6 +1227,21 @@
       "primaryCategory": "vulnerability-scan",
       "description": "Nancy — Sonatype's OSS Index vulnerability scanner for Go modules.",
       "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "node-test",
+      "source": "catalog-only",
+      "categories": [
+        "unit-test"
+      ],
+      "primaryCategory": "unit-test",
+      "description": "node --test: the Node.js built-in test runner.",
+      "emitsFormats": [
+        "test-results"
+      ],
       "predicateType": null,
       "runType": null,
       "hasDoc": false
@@ -1232,6 +1281,21 @@
       "primaryCategory": "dependency-resolve",
       "description": "npm install / npm ci — Node.js dependency resolution + install.",
       "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "npm-sbom",
+      "source": "catalog-only",
+      "categories": [
+        "sbom-generate"
+      ],
+      "primaryCategory": "sbom-generate",
+      "description": "npm sbom: npm's built-in SBOM generator (CycloneDX or SPDX) for the installed dependency tree.",
+      "emitsFormats": [
+        "sbom"
+      ],
       "predicateType": null,
       "runType": null,
       "hasDoc": false
@@ -1762,6 +1826,19 @@
       ],
       "primaryCategory": "secret-scan",
       "description": "TruffleHog — secret + credential scanner (Truffle Security).",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "tsc",
+      "source": "catalog-only",
+      "categories": [
+        "build"
+      ],
+      "primaryCategory": "build",
+      "description": "tsc: the TypeScript compiler.",
       "emitsFormats": [],
       "predicateType": null,
       "runType": null,

@@ -1,0 +1,51 @@
+{
+  "name": "biome",
+  "source": "catalog-only",
+  "description": "Biome: formatter and linter for JavaScript, TypeScript, JSON and CSS.",
+  "title": "biome",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "lint"
+  ],
+  "primaryCategory": "lint",
+  "upstream": {
+    "name": "Biome",
+    "source": "https://github.com/biomejs/biome",
+    "license": "MIT OR Apache-2.0",
+    "vendor": "Biome contributors"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "biome"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "npx biome"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Biome observed. --reporter=sarif prints SARIF to stdout: redirect it to a *.sarif file so the sarif attestor captures it."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- biome .",
+  "detectionCommand": "cilock plan --format=json -- biome [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"biome\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

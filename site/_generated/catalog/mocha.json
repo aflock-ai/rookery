@@ -1,0 +1,51 @@
+{
+  "name": "mocha",
+  "source": "catalog-only",
+  "description": "Mocha: JavaScript test runner.",
+  "title": "mocha",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "unit-test"
+  ],
+  "primaryCategory": "unit-test",
+  "upstream": {
+    "name": "Mocha",
+    "source": "https://github.com/mochajs/mocha",
+    "license": "MIT",
+    "vendor": "OpenJS Foundation"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "mocha"
+    },
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "npx mocha"
+    }
+  ],
+  "emitsFormats": [
+    "test-results"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Mocha observed. The built-in xunit reporter (--reporter xunit --reporter-option output=junit.xml) writes one JUnit testsuite, captured by test-results."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- mocha .",
+  "detectionCommand": "cilock plan --format=json -- mocha [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"mocha\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

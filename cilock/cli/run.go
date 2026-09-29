@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -629,6 +630,8 @@ Exit-code policy (finding #221):
     - sbom: no products to attest / no SBOM file found
     - go-build: no Go binaries among products
     - any attestor that ran successfully but had nothing to do
+    - any attestor auto-detection attached (not named with -a) that failed;
+      pass -a <name> to make its failure fatal
 
   CI should gate on cilock's exit code — only a fatal class produces
   a non-zero exit.
@@ -714,6 +717,7 @@ Exit-code policy (finding #221):
 				var merged []string
 				merged, detectedNames = mergeAttestorNames(o.Attestations, probed)
 				o.Attestations = merged
+				o.AutoAddedAttestations = detectedNames
 			}
 
 			// Infer --step from the wrapped command when the operator didn't
@@ -1033,6 +1037,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	}
 
 	results, runErr := workflow.RunWithExports(ro.StepName, runOpts...)
+	runErr = softenAutoAddedLegs(runErr, ro.AutoAddedAttestations)
 	// A statement over --max-attestation-bytes is the one error that must
 	// NOT fall through to the write-what-we-have path below: the refused
 	// statement was never signed, and any sibling envelope already signed in
@@ -2147,6 +2152,32 @@ func wrappedCommandOutcome(args []string, attestors []attestation.Attestor) *opt
 		}
 	}
 	return nil
+}
+
+// softenAutoAddedLegs demotes to a warning the failure of every attestor that
+// auto-detection attached: one the operator did not name with -a and that is
+// not a default. A detection-only catalog entry attaches the format attestor
+// its tool can emit (node --test → test-results), but the tool writes that
+// report only when asked to, so a passing run with no report used to exit 1
+// on evidence nobody requested. An attestor the operator named keeps its own
+// no-evidence contract (sarif and test-results fail), and the verifier still
+// refuses any policy that requires the evidence this run did not produce.
+//
+// The aggregate's legs are rewritten in place, so a wrapper around runErr
+// sees the same classification as the summary and the exit code.
+func softenAutoAddedLegs(runErr error, autoAdded []string) error {
+	var aggregate *workflow.AttestorRunErrors
+	if len(autoAdded) == 0 || !errors.As(runErr, &aggregate) || aggregate == nil {
+		return runErr
+	}
+	for i, leg := range aggregate.Legs {
+		if !slices.Contains(autoAdded, leg.Attestor) || attestation.IsSoftError(leg.Err) {
+			continue
+		}
+		aggregate.Legs[i].Err = attestation.NewSoftError(fmt.Sprintf(
+			"%v (attached by auto-detection; pass -a %s to require it)", leg.Err, leg.Attestor))
+	}
+	return runErr
 }
 
 // classifyAttestorRunError splits a workflow.Run error into the two classes
