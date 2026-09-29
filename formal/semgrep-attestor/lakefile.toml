@@ -1,6 +1,10 @@
 name = "semgrep-attestor"
 version = "0.1.0"
-defaultTargets = ["SemgrepAttestor"]
+defaultTargets = ["SemgrepAttestor", "semgrep-eval"]
 
 [[lean_lib]]
 name = "SemgrepAttestor"
+
+[[lean_exe]]
+name = "semgrep-eval"
+root = "Main"

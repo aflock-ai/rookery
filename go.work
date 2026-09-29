@@ -63,6 +63,7 @@ use (
 	./plugins/attestors/sbom
 	./plugins/attestors/scubagoggles
 	./plugins/attestors/secretscan
+	./plugins/attestors/semgrep
 	./plugins/attestors/sinkhole-flows
 	./plugins/attestors/slsa
 	./plugins/attestors/steampipe

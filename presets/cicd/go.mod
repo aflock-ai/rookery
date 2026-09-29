@@ -80,6 +80,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/sarif v0.0.0-20260226224745-dcff6ea0a95d
 	github.com/aflock-ai/rookery/plugins/attestors/sbom v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/secretscan v0.0.0-20260226224745-dcff6ea0a95d
+	github.com/aflock-ai/rookery/plugins/attestors/semgrep v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/slsa v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/system-packages v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/trivy v0.0.0-00010101000000-000000000000
@@ -259,3 +260,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/aflock-ai/rookery/plugins/attestors/semgrep => ../../plugins/attestors/semgrep

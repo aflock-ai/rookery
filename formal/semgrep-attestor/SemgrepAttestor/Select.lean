@@ -39,6 +39,9 @@ def goods (l : List Class) : Nat := l.countP (· == .good)
 /-- The number of broken reports in the step. -/
 def brokens (l : List Class) : Nat := l.countP (· == .broken)
 
+-- As built: Attest refuses on any refused product, then on two good ones,
+-- and is soft on none.
+-- cite: plugins/attestors/semgrep/semgrep.go:394-403 sha256:cbd743bea61eda7e3f0a493a69bf0b24cf501f9f5533aee4b14efaa9cd87bf65
 /-- The required selection rule: any broken report refuses; otherwise zero
     good reports is soft, one is attested, and two or more refuse. -/
 def select (l : List Class) : Outcome :=

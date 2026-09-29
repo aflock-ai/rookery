@@ -185,6 +185,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/sbom v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/scubagoggles v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/secretscan v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/semgrep v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/sinkhole-flows v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/slsa v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/steampipe v0.0.0-00010101000000-000000000000
@@ -479,3 +480,5 @@ require (
 )
 
 replace github.com/aflock-ai/rookery/plugins/attestors/go-build => ../../plugins/attestors/go-build
+
+replace github.com/aflock-ai/rookery/plugins/attestors/semgrep => ../../plugins/attestors/semgrep

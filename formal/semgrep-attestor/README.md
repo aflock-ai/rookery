@@ -6,11 +6,24 @@ sign. Design: [`docs/design/semgrep-attestor.md`](../../../../docs/design/semgre
 policy decides. What is security-relevant is that the signed evidence never
 overstates a scan, so that is what the model states.
 
-This model lands with the design, before the code (doc-first). It holds the
-**required** behaviour only. The Go does not exist on main yet, so nothing
-here carries a `-- cite:` line. The attestor's PR adds the as-built
-citations, the vectors, and the differential test that binds this model to
-`Attest` and `buildSummary`.
+This model landed with the design, before the code (doc-first). The
+attestor's PR binds it to the Go:
+
+- **Citations are hashed.** Each modeled function carries
+  `-- cite: plugins/attestors/semgrep/semgrep.go:<start>-<end> sha256:<hash>`
+  for the as-built code it models (`Attest`'s selection, `buildSummary`'s
+  roll-up, the severity buckets, `Subjects`). `jade check formal-citations`
+  re-hashes them and fails on drift.
+- **Differential tests.** `semgrep-eval` (`Main.lean`, `SemgrepAttestor/Eval.lean`)
+  evaluates `select` and the summary functions on JSON cases.
+  `TestSelectMatchesLeanModel` and `TestSummaryMatchesLeanModel`
+  (`plugins/attestors/semgrep/formal_differential_test.go`) run the same cases
+  through `Attest` and through `semgrep-eval` and fail on the first
+  disagreement. The select cases are every product list up to length three
+  plus random longer ones; a broken product rotates through a cut-off report,
+  an absent required member and a digest mismatch. Each test checks that it
+  exercised every outcome. They skip when `lake` is absent, and no CI job
+  provisions Lean, so they run in the local ring only.
 
 ## Results
 
@@ -40,5 +53,5 @@ stock decode of the verbatim report yields (design doc §3.5, step 3).
 
 ```bash
 cd subtrees/rookery/formal/semgrep-attestor
-lake build        # Lean 4.34.1 via elan; no Mathlib
+lake build        # Lean 4.34.1 via elan; no Mathlib; builds semgrep-eval too
 ```

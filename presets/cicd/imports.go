@@ -38,6 +38,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/sarif"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/sbom"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/secretscan"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/semgrep"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/slsa"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/system-packages"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/trivy"

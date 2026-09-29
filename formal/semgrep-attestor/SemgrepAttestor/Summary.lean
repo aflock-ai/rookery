@@ -32,6 +32,7 @@ structure Finding where
 
 def live (f : Finding) : Bool := !f.ignored
 
+-- cite: plugins/attestors/semgrep/semgrep.go:746 sha256:6a0e79b0248372ba97570e1cb8a4898314712edd16e655006027ee72cb831732
 /-- scanComplete: no errors[] entry at any level. -/
 def scanComplete (errors : List α) : Bool := errors.isEmpty
 
@@ -39,6 +40,9 @@ theorem scanComplete_iff (errors : List α) : scanComplete errors = true ↔ err
   unfold scanComplete
   cases errors <;> simp
 
+-- cite: plugins/attestors/semgrep/semgrep.go:753-761 sha256:233bd56218e2b0ebf1f011ee481357a70dab8d421c35d2cc4c818344cba0e397
+-- cite: plugins/attestors/semgrep/semgrep.go:865-880 sha256:1f0b23e04d03bcac9c7fb251325d2d1ac25f4a7d3911a33b445a2a61dfc6f241
+-- cite: plugins/attestors/semgrep/semgrep.go:904-919 sha256:dbff8cd2584d4f72d0a7d078c2febd3400d5ec1d656c130128fdc655aee2dacc
 /-- The count in one severity bucket: live findings of that severity. -/
 def bucket (fs : List Finding) (s : Sev) : Nat := fs.countP (fun f => live f && f.sev == s)
 
@@ -73,6 +77,7 @@ inductive Subject where
   | file (digest : Nat)
   deriving DecidableEq, Repr
 
+-- cite: plugins/attestors/semgrep/semgrep.go:1018-1029 sha256:b6b75e837a8baca3922a03ddc768ea5d9b9d91bd5b7ebe376cfaed33cd3f20eb
 /-- The subjects the attestor mints (rule subjects carry no evidence of their
     own and are omitted). -/
 def subjects (fs : List Finding) : List Subject :=

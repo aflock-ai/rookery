@@ -62,6 +62,7 @@ import (
 	_ "github.com/aflock-ai/rookery/plugins/attestors/sbom"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/scubagoggles"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/secretscan"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/semgrep"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/slsa"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/steampipe"
 	_ "github.com/aflock-ai/rookery/plugins/attestors/structured-data"
