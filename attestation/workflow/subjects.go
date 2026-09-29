@@ -39,10 +39,18 @@ import (
 // Duplicate names are rejected — collisions within the user's own flag set
 // almost always indicate a typo rather than intent.
 func ParseSubjectFlags(raw []string) (map[string]cryptoutil.DigestSet, error) {
+	_, out, err := ParseSubjectFlagsOrdered(raw)
+	return out, err
+}
+
+// ParseSubjectFlagsOrdered is ParseSubjectFlags that also returns the subject
+// names in the order they were given, for RunWithSubjectOrder.
+func ParseSubjectFlagsOrdered(raw []string) ([]string, map[string]cryptoutil.DigestSet, error) {
 	if len(raw) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
+	names := make([]string, 0, len(raw))
 	out := make(map[string]cryptoutil.DigestSet, len(raw))
 	for _, entry := range raw {
 		trimmed := strings.TrimSpace(entry)
@@ -52,16 +60,17 @@ func ParseSubjectFlags(raw []string) (map[string]cryptoutil.DigestSet, error) {
 
 		name, digest, err := parseSubjectEntry(trimmed)
 		if err != nil {
-			return nil, fmt.Errorf("subject %q: %w", entry, err)
+			return nil, nil, fmt.Errorf("subject %q: %w", entry, err)
 		}
 
 		if _, exists := out[name]; exists {
-			return nil, fmt.Errorf("subject %q: duplicate name %q", entry, name)
+			return nil, nil, fmt.Errorf("subject %q: duplicate name %q", entry, name)
 		}
+		names = append(names, name)
 		out[name] = digest
 	}
 
-	return out, nil
+	return names, out, nil
 }
 
 func parseSubjectEntry(entry string) (string, cryptoutil.DigestSet, error) {

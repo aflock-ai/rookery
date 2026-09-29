@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -36,6 +37,7 @@ type runOptions struct {
 	attestationOpts    []attestation.AttestationContextOption
 	timestampers       []timestamp.Timestamper
 	additionalSubjects map[string]cryptoutil.DigestSet
+	subjectOrder       []string
 	insecure           bool
 	ignoreErrors       bool
 	// maxStatementBytes refuses any statement JSON larger than this before it
@@ -94,8 +96,11 @@ func RunWithSigners(signers ...cryptoutil.Signer) RunOption {
 // RunWithAdditionalSubjects merges user-supplied subjects into the in-toto statement
 // generated for the attestation collection. These subjects are additive to whatever
 // attestors discover — if a key collides with an attestor-produced subject, the
-// user-supplied entry wins. Only the collection-level statement is augmented; per-
-// attestor exported statements are left untouched.
+// user-supplied entry wins. Exported sidecar statements that inherit the
+// collection's subject pool carry them too; companion statements do not.
+//
+// User-supplied subjects are listed before attestor subjects in every statement
+// that carries them: in RunWithSubjectOrder's order, then any others sorted.
 func RunWithAdditionalSubjects(subjects map[string]cryptoutil.DigestSet) RunOption {
 	return func(ro *runOptions) {
 		if len(subjects) == 0 {
@@ -108,6 +113,41 @@ func RunWithAdditionalSubjects(subjects map[string]cryptoutil.DigestSet) RunOpti
 			ro.additionalSubjects[name] = digest
 		}
 	}
+}
+
+// RunWithSubjectOrder sets the order in which user-supplied subjects (see
+// RunWithAdditionalSubjects) lead each statement, typically the order the
+// operator passed them on the command line. Names that are not user-supplied
+// subjects are ignored, so it can never promote an attestor's own subject.
+func RunWithSubjectOrder(names []string) RunOption {
+	return func(ro *runOptions) {
+		ro.subjectOrder = append(ro.subjectOrder, names...)
+	}
+}
+
+// leadingSubjects is the order user-supplied subjects take at the head of a
+// statement: RunWithSubjectOrder's names first, then the remaining
+// user-supplied names sorted.
+func (ro runOptions) leadingSubjects() []string {
+	if len(ro.additionalSubjects) == 0 {
+		return nil
+	}
+	leading := make([]string, 0, len(ro.additionalSubjects))
+	placed := make(map[string]bool, len(ro.additionalSubjects))
+	for _, name := range ro.subjectOrder {
+		if _, ok := ro.additionalSubjects[name]; ok && !placed[name] {
+			placed[name] = true
+			leading = append(leading, name)
+		}
+	}
+	rest := make([]string, 0, len(ro.additionalSubjects)-len(leading))
+	for name := range ro.additionalSubjects {
+		if !placed[name] {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	return append(leading, rest...)
 }
 
 // AttestorRunErrors is the structured aggregate returned by Run /
@@ -334,7 +374,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 						// manifest's inclusionproof.MaxManifestBytes) and its own upload
 						// consent. A 4 MiB ceiling here would refuse --material-manifest
 						// on any repository with a few thousand files.
-						envelope, err = createAndSignEnvelope(companion, companion.Type(), ownSubjects, 0, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						envelope, err = createAndSignEnvelope(companion, companion.Type(), ownSubjects, nil, 0, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 						if err != nil {
 							return result, fmt.Errorf("failed to sign companion envelope for %s/%s: %w", r.Attestor.Name(), companion.Name(), err)
 						}
@@ -366,7 +406,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 					}
 
 					if !ro.insecure {
-						envelope, err = createAndSignEnvelope(exportedAttestor, exportedAttestor.Type(), mergeCollectionSubjects(parentSubjects, ownSubjects), ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						envelope, err = createAndSignEnvelope(exportedAttestor, exportedAttestor.Type(), mergeCollectionSubjects(parentSubjects, ownSubjects), ro.leadingSubjects(), ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 						if err != nil {
 							return result, fmt.Errorf("failed to sign envelope for %s: %w", exportedAttestor.Name(), err)
 						}
@@ -385,7 +425,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 				if subjecter, ok := r.Attestor.(attestation.Subjecter); ok {
 					var envelope dsse.Envelope
 					if !ro.insecure {
-						envelope, err = createAndSignEnvelope(r.Attestor, r.Attestor.Type(), mergeCollectionSubjects(parentSubjects, subjecter.Subjects()), ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+						envelope, err = createAndSignEnvelope(r.Attestor, r.Attestor.Type(), mergeCollectionSubjects(parentSubjects, subjecter.Subjects()), ro.leadingSubjects(), ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 						if err != nil {
 							return result, fmt.Errorf("failed to sign envelope: %w", err)
 						}
@@ -440,7 +480,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	// CollectionSubjects see the same set the signed path would have used.
 	collectionResult.CollectionSubjects = mergeCollectionSubjects(collectionResult.Collection.Subjects(), ro.additionalSubjects)
 	if !ro.insecure {
-		collectionResult.SignedEnvelope, err = createAndSignEnvelope(collectionResult.Collection, attestation.CollectionType, collectionResult.CollectionSubjects, ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+		collectionResult.SignedEnvelope, err = createAndSignEnvelope(collectionResult.Collection, attestation.CollectionType, collectionResult.CollectionSubjects, ro.leadingSubjects(), ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 		if err != nil {
 			return result, fmt.Errorf("failed to sign collection: %w", err)
 		}
@@ -556,16 +596,17 @@ func validateRunOpts(ro runOptions) error {
 }
 
 // createAndSignEnvelope frames predicate in an in-toto statement and signs
-// it. maxStatementBytes is checked on the exact statement bytes handed to
+// it. The subjects named in leading come first in the statement (see
+// intoto.NewStatementV1WithLeadingSubjects). maxStatementBytes is checked on the exact statement bytes handed to
 // dsse.Sign, so an oversized statement is refused before any signature or
 // timestamp exists for it (zero disables the check).
-func createAndSignEnvelope(predicate interface{}, predType string, subjects map[string]cryptoutil.DigestSet, maxStatementBytes int, opts ...dsse.SignOption) (dsse.Envelope, error) {
+func createAndSignEnvelope(predicate interface{}, predType string, subjects map[string]cryptoutil.DigestSet, leading []string, maxStatementBytes int, opts ...dsse.SignOption) (dsse.Envelope, error) {
 	data, err := json.Marshal(&predicate)
 	if err != nil {
 		return dsse.Envelope{}, err
 	}
 
-	stmt, err := intoto.NewStatementV1(predType, data, subjects)
+	stmt, err := intoto.NewStatementV1WithLeadingSubjects(predType, data, subjects, leading)
 	if err != nil {
 		return dsse.Envelope{}, err
 	}

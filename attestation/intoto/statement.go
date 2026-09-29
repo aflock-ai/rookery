@@ -45,7 +45,21 @@ func IsStatementType(t string) bool {
 
 // NewStatementV1 is NewStatement with the in-toto Statement v1 _type.
 func NewStatementV1(predicateType string, predicate []byte, subjects map[string]cryptoutil.DigestSet) (Statement, error) {
-	statement, err := NewStatement(predicateType, predicate, subjects)
+	return NewStatementV1WithLeadingSubjects(predicateType, predicate, subjects, nil)
+}
+
+// NewStatementV1WithLeadingSubjects is NewStatementV1 with the subjects named
+// in leading emitted first, in that order; the rest follow sorted by name.
+// Names absent from subjects are skipped and repeats are emitted once, so the
+// same leading list can be passed for every envelope a run signs.
+//
+// Consumers that bind a statement to one artifact read subject[0]: JFrog
+// Evidence refuses an upload whose first subject is not the artifact
+// ("evidence subject digest (sha256) mismatch"). Sorting alone puts cilock's
+// https://aflock.ai/... tree roots ahead of a user's artifact. Verifiers that
+// match by digest set are unaffected by the order.
+func NewStatementV1WithLeadingSubjects(predicateType string, predicate []byte, subjects map[string]cryptoutil.DigestSet, leading []string) (Statement, error) {
+	statement, err := newStatement(predicateType, predicate, subjects, leading)
 	statement.Type = StatementTypeV1
 	return statement, err
 }
@@ -63,6 +77,10 @@ type Statement struct {
 }
 
 func NewStatement(predicateType string, predicate []byte, subjects map[string]cryptoutil.DigestSet) (Statement, error) {
+	return newStatement(predicateType, predicate, subjects, nil)
+}
+
+func newStatement(predicateType string, predicate []byte, subjects map[string]cryptoutil.DigestSet, leading []string) (Statement, error) {
 	if !json.Valid(predicate) {
 		return Statement{}, fmt.Errorf("predicate must be valid JSON")
 	}
@@ -86,14 +104,26 @@ func NewStatement(predicateType string, predicate []byte, subjects map[string]cr
 		Predicate:     predicate,
 	}
 
-	// Sort subject names for deterministic output. Go map iteration is
-	// non-deterministic, so without sorting, the same inputs would produce
-	// different JSON payloads and therefore different DSSE signatures.
+	// Leading names first in the caller's order, then the rest sorted, for
+	// deterministic output. Go map iteration is non-deterministic, so without
+	// a fixed order the same inputs would produce different JSON payloads and
+	// therefore different DSSE signatures.
 	names := make([]string, 0, len(subjects))
-	for name := range subjects {
-		names = append(names, name)
+	placed := make(map[string]bool, len(leading))
+	for _, name := range leading {
+		if _, ok := subjects[name]; ok && !placed[name] {
+			placed[name] = true
+			names = append(names, name)
+		}
 	}
-	sort.Strings(names)
+	rest := make([]string, 0, len(subjects)-len(names))
+	for name := range subjects {
+		if !placed[name] {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	names = append(names, rest...)
 
 	for _, name := range names {
 		ds := subjects[name]

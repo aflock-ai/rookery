@@ -140,10 +140,12 @@ def newStatementReq (ty predType : String) (pred : Option JKind)
     `NewStatementV1`; #9841 holds the platform-signed emitters on v0.1). It
     refuses in the order the code checks: invalid JSON, empty predicateType,
     non-object predicate, then the first subject, in sorted order, with no
-    digest. -/
+    digest. `NewStatement` passes no leading names to the shared body, so
+    subjects stay fully sorted here; `NewStatementV1WithLeadingSubjects`
+    (#10649) emits a permutation of the same subjects and is not modelled. -/
 -- cite: attestation/intoto/statement.go:36-37 sha256:e3ef8d16d2891439
--- cite: attestation/intoto/statement.go:65-113 sha256:9ac6f8d5201234e9
--- cite: attestation/intoto/statement.go:115-127 sha256:cb7a2678df3b4656
+-- cite: attestation/intoto/statement.go:79-143 sha256:9b9a95f4c5343506
+-- cite: attestation/intoto/statement.go:145-157 sha256:cb7a2678df3b4656
 def newStatementBuilt (predType : String) (pred : Option JKind)
     (subs : List (String × List (String × String))) : Except MkErr Statement :=
   newStatementReq statementV01 predType pred subs

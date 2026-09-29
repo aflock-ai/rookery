@@ -1020,7 +1020,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		attestationOpts = append(attestationOpts, attestation.WithEnvCaptureAllowlist(ro.EnvCaptureAllowlist))
 	}
 
-	additionalSubjects, err := parseSubjectFlags(ro.Subjects)
+	subjectOrder, additionalSubjects, err := parseSubjectFlagsOrdered(ro.Subjects)
 	if err != nil {
 		return fmt.Errorf("failed to parse --subjects: %w", err)
 	}
@@ -1033,7 +1033,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		workflow.RunWithMaxStatementBytes(int(ro.MaxAttestationBytes)),
 	}
 	if len(additionalSubjects) > 0 {
-		runOpts = append(runOpts, workflow.RunWithAdditionalSubjects(additionalSubjects))
+		runOpts = append(runOpts, workflow.RunWithAdditionalSubjects(additionalSubjects), workflow.RunWithSubjectOrder(subjectOrder))
 	}
 
 	results, runErr := workflow.RunWithExports(ro.StepName, runOpts...)

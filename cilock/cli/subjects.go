@@ -25,9 +25,16 @@ import (
 // prefixes the error with "--subjects" so that CLI users see which flag
 // produced the error. See workflow.ParseSubjectFlags for the full grammar.
 func parseSubjectFlags(raw []string) (map[string]cryptoutil.DigestSet, error) {
-	m, err := workflow.ParseSubjectFlags(raw)
+	_, m, err := parseSubjectFlagsOrdered(raw)
+	return m, err
+}
+
+// parseSubjectFlagsOrdered is parseSubjectFlags that also returns the names in
+// flag order, which is the order they lead the in-toto statement.
+func parseSubjectFlagsOrdered(raw []string) ([]string, map[string]cryptoutil.DigestSet, error) {
+	names, m, err := workflow.ParseSubjectFlagsOrdered(raw)
 	if err != nil {
-		return nil, fmt.Errorf("--subjects: %w", err)
+		return nil, nil, fmt.Errorf("--subjects: %w", err)
 	}
-	return m, nil
+	return names, m, nil
 }
