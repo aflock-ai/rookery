@@ -8,8 +8,8 @@ package policy
 // within 7 days of detection" (VER-TFR-EVU). Before this change rego could read
 // another step's collections through attestationsFrom but never the RFC 3161
 // time that proves when each was signed. The only times it could read were
-// ones the signer wrote into its own payload, which is exactly the clock the
-// witness contract does not trust (fedramp-lean FedRAMP/Witness.lean, W3/W4).
+// ones the signer wrote into its own payload, and a signer-written clock is
+// exactly the one a verifier cannot trust.
 //
 // These tests pin:
 //

@@ -419,7 +419,7 @@ theorem nested_closes_holes :
       = .result true false := by
   decide
 
-/-- The semantics as fedramp-lean patch 0012 shipped it: a candidate decides
+/-- The semantics as an earlier out-of-tree patch shipped it: a candidate decides
 at its earliest TSA time. -/
 def admissionByTsa (now : Timestamp) (x : External) (c : Candidate) : Admission :=
   if x.child.isSome && x.child != some c.policyDigest then .unbound

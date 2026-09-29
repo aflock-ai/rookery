@@ -11,7 +11,7 @@
      the evidence could not be read, an evaluator refused, or the external
      assignment walk stopped short. `cilock verify` exits 2 for those, 1 for a
      denial, 0 for a pass (`exitCode`, verify_verdict.go).
-  3. **Reading stepResults** (ported from fedramp-lean Cilock/Vsa.lean). A
+  3. **Reading stepResults**. A
      reader looks up one check's verdict in a step's rejections. A PASSED VSA
      reads every check its policy decides as passed; a check its policy does
      not decide reads as nothing, never as a pass.
