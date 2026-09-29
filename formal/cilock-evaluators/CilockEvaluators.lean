@@ -3,5 +3,6 @@ import CilockEvaluators.Rego
 import CilockEvaluators.Ai
 import CilockEvaluators.Gate
 import CilockEvaluators.Vsa
+import CilockEvaluators.Nested
 import CilockEvaluators.Holdout
 import CilockEvaluators.Audit

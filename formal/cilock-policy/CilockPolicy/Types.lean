@@ -101,7 +101,7 @@ deriving DecidableEq, Repr
 structure Collection where
   name           : String
   /-- predicateType is the collection type (`policy.go`).
-  -- cite: attestation/policy/policy.go:2206 sha256:40966cb8a742b836ec622532156befb4a32d4ed1debbb886daf32272a004bafe
+  -- cite: attestation/policy/policy.go:2223 sha256:40966cb8a742b836ec622532156befb4a32d4ed1debbb886daf32272a004bafe
   -/
   isCollection   : Bool
   predicateType  : String
@@ -116,7 +116,7 @@ structure Collection where
   /-- HasInlineMaterials: the empty material set is a signed commitment. -/
   inlineMaterials : Bool
   /-- Relationship edges (BackRefs). Recorded, never followed (`policy.go`).
-  -- cite: attestation/policy/policy.go:974-979 sha256:02729af599c32c78c149bc44223b5c85ab327eaf880015995a092724246ced22
+  -- cite: attestation/policy/policy.go:977-982 sha256:02729af599c32c78c149bc44223b5c85ab327eaf880015995a092724246ced22
   -/
   backRefs       : List Digest
 deriving DecidableEq, Repr

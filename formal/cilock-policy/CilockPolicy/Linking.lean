@@ -7,7 +7,7 @@
   artifactsFrom (products -> materials, by path and DigestSet.Equal) and
   attestationsFrom (Rego input). Both are proved here for the fixed semantics.
   -- cite: attestation/policy/policy.go:296-302 sha256:622ef1746c7cbd22794ce5b31a655ad8578aa11f15a245e63b8434b4c875e82a
-  -- cite: attestation/policy/policy.go:974-979 sha256:02729af599c32c78c149bc44223b5c85ab327eaf880015995a092724246ced22
+  -- cite: attestation/policy/policy.go:977-982 sha256:02729af599c32c78c149bc44223b5c85ab327eaf880015995a092724246ced22
 -/
 import CilockPolicy.TrustProofs
 

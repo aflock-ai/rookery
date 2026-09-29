@@ -656,12 +656,8 @@ func (s *VerifiedSource) SearchByPredicateTypeWithOptions(ctx context.Context, p
 			continue
 		}
 
-		passed := make([]cryptoutil.Verifier, 0, len(envelopeVerifiers))
-		for _, v := range envelopeVerifiers {
-			if v.Error == nil {
-				passed = append(passed, v.Verifier)
-			}
-		}
+		passed, stamps := passedVerifiersAndTimes(envelopeVerifiers)
+		toVerify.VerifiedTimestampsByKeyID = stamps
 
 		if len(passed) == 0 {
 			toVerify.Errors = append(toVerify.Errors, fmt.Errorf("no verifiers passed"))
@@ -672,6 +668,27 @@ func (s *VerifiedSource) SearchByPredicateTypeWithOptions(ctx context.Context, p
 		results = append(results, toVerify)
 	}
 	return results, nil
+}
+
+// passedVerifiersAndTimes returns the verifiers whose signature verified and
+// their TSA-verified times keyed by key ID, so an external's time constraint
+// judges the functionary-matched signature's own time.
+func passedVerifiersAndTimes(checked []dsse.CheckedVerifier) ([]cryptoutil.Verifier, map[string][]time.Time) {
+	passed := make([]cryptoutil.Verifier, 0, len(checked))
+	stamps := make(map[string][]time.Time)
+	for _, v := range checked {
+		if v.Error != nil {
+			continue
+		}
+		passed = append(passed, v.Verifier)
+		if len(v.VerifiedTimestamps) == 0 || v.Verifier == nil {
+			continue
+		}
+		if kid, err := v.Verifier.KeyID(); err == nil {
+			stamps[kid] = append(stamps[kid], v.VerifiedTimestamps...)
+		}
+	}
+	return passed, stamps
 }
 
 // adoptSignedExternal replaces a signature-verified candidate's statement with

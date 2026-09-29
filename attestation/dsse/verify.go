@@ -371,7 +371,13 @@ func (e Envelope) Verify(opts ...VerificationOption) ([]CheckedVerifier, error) 
 
 				if err := verifier.Verify(bytes.NewReader(pae), sig.Signature); err == nil {
 					verifiedKeyIDs[kid] = struct{}{}
-					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier})
+					// A raw key has no validity window to check against the TSA
+					// time, but the token's imprint covers this signature, so a
+					// verified token is still a trusted signing time for it. Without
+					// this, a timestampConstraint over a publickey functionary could
+					// never be met.
+					tsVerifiers, stamps := verifyRawKeyTimestamps(sig, options.timestampVerifiers)
+					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier, TimestampVerifiers: tsVerifiers, VerifiedTimestamps: stamps})
 				} else {
 					checkedVerifiers = append(checkedVerifiers, CheckedVerifier{Verifier: verifier, Error: err})
 				}
@@ -402,4 +408,23 @@ func verifyX509Time(cert *x509.Certificate, sigIntermediates, roots []*x509.Cert
 	err = verifier.Verify(bytes.NewReader(pae), sig)
 
 	return verifier, err
+}
+
+// verifyRawKeyTimestamps returns the RFC3161 times whose tokens verify over a
+// raw-key signature, with the TSA verifiers that verified them.
+func verifyRawKeyTimestamps(sig Signature, verifiers []timestamp.TimestampVerifier) ([]timestamp.TimestampVerifier, []time.Time) {
+	var passed []timestamp.TimestampVerifier
+	var stamps []time.Time
+	for _, tv := range verifiers {
+		for _, ts := range sig.Timestamps {
+			t, err := tv.Verify(context.TODO(), bytes.NewReader(ts.Data), bytes.NewReader(sig.Signature))
+			if err != nil {
+				log.Debugf("raw-key signature timestamp did not verify: %v", err)
+				continue
+			}
+			passed = append(passed, tv)
+			stamps = append(stamps, t)
+		}
+	}
+	return passed, stamps
 }

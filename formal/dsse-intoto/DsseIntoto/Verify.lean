@@ -107,7 +107,7 @@ def ins (k : Key) (acc : List Key) : List Key := if k ∈ acc then acc else acc 
 -- cite: attestation/dsse/verify.go:276-278 sha256:5046a86c8fe59934
 -- cite: attestation/dsse/verify.go:308-326 sha256:15cc852dff7d9627
 -- cite: attestation/dsse/verify.go:344-350 sha256:600eebabb9690009
--- cite: attestation/dsse/verify.go:396-405 sha256:b15fcde6aaa288b5
+-- cite: attestation/dsse/verify.go:402-411 sha256:b15fcde6aaa288b5
 -- cite: attestation/cryptoutil/x509.go:65-113 sha256:4b32c08e843dc66d
 def certPasses (o : Opts) (m : Bytes) (s : EnvSig) : Option Key :=
   match s.cert with
@@ -121,8 +121,10 @@ def certPasses (o : Opts) (m : Bytes) (s : EnvSig) : Option Key :=
           | some t => c.validAt t && sigVerifies c.key m s.sig
           | none => false)) then some c.key else none
 
-/-- The raw verifier loop, run for every signature whatever the cert path did. -/
--- cite: attestation/dsse/verify.go:367-379 sha256:d734c1f0bfba150e
+/-- The raw verifier loop, run for every signature whatever the cert path did.
+    It also verifies the signature's RFC3161 tokens (verifyRawKeyTimestamps);
+    the times it records do not change which keys verified, the set modelled. -/
+-- cite: attestation/dsse/verify.go:367-385 sha256:b0ad7fbb93586661e5104258c0a5de161455164383b8126c826d6c9a0b55f7cb
 def rawStep (o : Opts) (m : Bytes) (acc : List Key) (s : EnvSig) : List Key :=
   o.verifiers.foldl (fun acc k => if sigVerifies k m s.sig then ins k acc else acc) acc
 
@@ -145,7 +147,7 @@ inductive Verdict where
 deriving DecidableEq, Repr
 
 -- cite: attestation/dsse/verify.go:170-172 sha256:4bafdf7fb04492b9
--- cite: attestation/dsse/verify.go:382-393 sha256:9a4befc24a4f8d60
+-- cite: attestation/dsse/verify.go:388-399 sha256:9a4befc24a4f8d60
 def verify (o : Opts) (e : Envelope) : Verdict :=
   if o.threshold ≤ 0 then .invalidThreshold
   else if e.sigs = [] then .noSignatures

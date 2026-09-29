@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -125,6 +126,10 @@ type StatementEnvelope struct {
 	Verifiers []cryptoutil.Verifier
 	Reference string
 	Errors    []error
+	// VerifiedTimestampsByKeyID holds the TSA-verified times per passing verifier key,
+	// as CollectionVerificationResult does for collections, so an external's time
+	// constraint judges the functionary-matched signature's time.
+	VerifiedTimestampsByKeyID map[string][]time.Time
 }
 
 // Sourcer fetches DSSE envelopes from a backing store.

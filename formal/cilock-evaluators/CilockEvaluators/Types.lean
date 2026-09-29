@@ -15,7 +15,7 @@ structure Digest where
   val : String
   deriving DecidableEq, Repr
 
--- cite: plugins/attestors/policyverify/policyverify.go:390-390 sha256:02839719c4e110bd96207a38909ffa2888e7722a322a8371f623ce1e38378b65
+-- cite: plugins/attestors/policyverify/policyverify.go:401 sha256:02839719c4e110bd96207a38909ffa2888e7722a322a8371f623ce1e38378b65
 /-- The digest of the exact decoded policy DSSE payload bytes
 (`policyverify.go`, `cryptoutil.CalculateDigestSetFromBytes(policyEnvelope.Payload, …)`). -/
 abbrev PolicyDigest := Digest
@@ -36,7 +36,7 @@ structure VerifierIdentity where
 abbrev Timestamp := Nat
 
 -- cite: attestation/policy/ai_jev.go:35-45 sha256:fa89c682b1b70931f3ec4609129ace3190a81aaa4ca9640609dda9f266197b8a
--- cite: attestation/policy/policy.go:759-788 sha256:cfee072d06f1ff6ddf0165b79bb2d570d5a311aadd37c14c29a8bb7bfb4800cf
+-- cite: attestation/policy/policy.go:762-791 sha256:cfee072d06f1ff6ddf0165b79bb2d570d5a311aadd37c14c29a8bb7bfb4800cf
 -- cite: attestation/policy/regorefusal.go:19-44 sha256:51cefd7488b8b398e3a4d26166e15aa0eb3e9e548ff4e0cf5d65584b9f573a96
 /-- The outcome of one evaluator run.
 

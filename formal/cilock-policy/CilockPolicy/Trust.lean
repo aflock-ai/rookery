@@ -133,7 +133,7 @@ def ccCheck (h : Hardening) (policyRoots : List RootId) (cc : CertConstraint) (c
   cc.exts.all (extOk c) && cc.oids.all c.policyOids.contains
 
 /-- The x509 arm of Functionary.Validate (`step.go`).
-  -- cite: attestation/policy/step.go:583-596 sha256:66dbe257461a8ac127a3be30ead0ddef763fbaa1d1df4bf2d59f3e78004439a0
+  -- cite: attestation/policy/step.go:596-609 sha256:66dbe257461a8ac127a3be30ead0ddef763fbaa1d1df4bf2d59f3e78004439a0
 -/
 def certArm (h : Hardening) (policyRoots : List RootId) (f : Functionary) : Cred → Bool
   | .key _ => false
@@ -142,8 +142,8 @@ def certArm (h : Hardening) (policyRoots : List RootId) (f : Functionary) : Cred
 /-- Functionary.Validate (`step.go`). A key-id match short-circuits; the
     certificate constraint then runs only under EnforceCertConstraintOnKeyIDMatch
     (`step.go`). `type` is never read.
-    -- cite: attestation/policy/step.go:562-597 sha256:0be8c018de52408f0de33beca61fbfe26205cd40a30256af8907a9cef64a529c
-    -- cite: attestation/policy/step.go:568-580 sha256:81402839fa0c7643af7f7f9c1cd089da8bd0a86c993149f01c2d1b0e95c92cf3
+    -- cite: attestation/policy/step.go:575-610 sha256:0be8c018de52408f0de33beca61fbfe26205cd40a30256af8907a9cef64a529c
+    -- cite: attestation/policy/step.go:581-593 sha256:81402839fa0c7643af7f7f9c1cd089da8bd0a86c993149f01c2d1b0e95c92cf3
     -/
 def fValidate (h : Hardening) (policyRoots : List RootId) (f : Functionary) (cred : Cred) : Bool :=
   if f.keyId != "" && f.keyId == cred.keyId then
@@ -156,7 +156,7 @@ def fValidate (h : Hardening) (policyRoots : List RootId) (f : Functionary) (cre
   an SCT that verifies. That check is modelled, and differentially tested, in
   formal/signing-trust (`x509VerifyCT_iff`); here it is part of what
   `chainsTo` reports.
-  -- cite: attestation/dsse/verify.go:161-394 sha256:78f76b97af45c0e1f76b664130a5106a1dc090e562b886c47f1492e7ca0f1a6e
+  -- cite: attestation/dsse/verify.go:161-400 sha256:befeb8071affb2e53fe3e11ab58d1033509b124c75430f8f4707c3da65402c9f
 -/
 
 /-- A verifier that passed: the credential and its TSA-verified times. -/
@@ -174,25 +174,34 @@ def certTimes (p : Policy) (c : Cert) (s : Sig) : List Time :=
   (s.tokens.filter fun t => t.ok && p.tsas.contains t.tsa && decide (c.notBefore ≤ t.time) &&
     decide (t.time ≤ c.notAfter)).map (·.time)
 
-/-- One signature. Raw keys: checked against the policy's keys, no timestamp
+/-- The TSA-verified times of a raw-key signature: a token that verified
+    against a policy TSA (verifyRawKeyTimestamps, `verify.go`). A raw key has
+    no validity window; the token's imprint covers the signature bytes.
+    -- cite: attestation/dsse/verify.go:413-430 sha256:e147b4447c4b3e27edcc440127fe792317653638788135b8572824fb34b441ed
+    -/
+def keyTimes (p : Policy) (s : Sig) : List Time :=
+  (s.tokens.filter fun t => t.ok && p.tsas.contains t.tsa).map (·.time)
+
+/-- One signature. Raw keys: checked against the policy's keys; their times are
+    the tokens that verify against a policy TSA (`keyTimes`)
     (`verify.go`). Certificates: no TSA configured means rejected,
     since policyverify never enables the current-time fallback
     (`verify.go`); otherwise the chain must reach a policy root and
     some token must verify at a time the certificate was valid.
-    -- cite: attestation/dsse/verify.go:367-379 sha256:d734c1f0bfba150e66d4270a06e3881fc655c7eb7116af358ab1a4741c5fd22b
+    -- cite: attestation/dsse/verify.go:367-385 sha256:b0ad7fbb93586661e5104258c0a5de161455164383b8126c826d6c9a0b55f7cb
     -- cite: attestation/dsse/verify.go:250-275 sha256:42896d9716400dac32e61653dda6bb1b0ecdcd95d0f8625e574a3a5744229beb
     -/
 def sigVerifier (p : Policy) (s : Sig) : Option Verifier :=
   match s.cred with
-  | .key k => if s.ok && p.keys.contains k then some ⟨.key k, []⟩ else none
+  | .key k => if s.ok && p.keys.contains k then some ⟨.key k, keyTimes p s⟩ else none
   | .cert c =>
     if s.ok && !p.tsas.isEmpty && c.chainsTo.any p.roots.contains && !(certTimes p c s).isEmpty
     then some ⟨.cert c, certTimes p c s⟩ else none
 
 /-- The passing verifiers of an envelope (`verified.go`). Empty means the
     envelope failed (`verify.go`).
-    -- cite: attestation/source/verified.go:536-551 sha256:52b1160fd086e3743db92574b528d3dd59ea861a41e4c8e26c2a1ed27cfee04b
-    -- cite: attestation/dsse/verify.go:382-388 sha256:8b97154d98585f3d23fc71c6e1b36a164353eae2f587647b17e0bd5e90b9f5c0
+    -- cite: attestation/source/verified.go:540-555 sha256:52b1160fd086e3743db92574b528d3dd59ea861a41e4c8e26c2a1ed27cfee04b
+    -- cite: attestation/dsse/verify.go:388-394 sha256:8b97154d98585f3d23fc71c6e1b36a164353eae2f587647b17e0bd5e90b9f5c0
     -/
 def verifiers (p : Policy) (e : Envelope) : List Verifier := e.sigs.filterMap (sigVerifier p)
 
@@ -219,7 +228,7 @@ def tscOk (tsc : Option TsConstraint) (times : List Time) (now : Time) : Bool :=
       c.maxAge.all fun m => decide (e ≤ now + maxClockSkew) && decide (now - e ≤ m)
 
 /-! ## Functionary triage (`policy.go`)
-  -- cite: attestation/policy/policy.go:2138-2228 sha256:6ad551cd73674d984aedc1755a5fb4b29e5e835f5e5d6f10fef7e2147ea92f5d
+  -- cite: attestation/policy/policy.go:2168-2258 sha256:6ad551cd73674d984aedc1755a5fb4b29e5e835f5e5d6f10fef7e2147ea92f5d
   -- cite: attestation/policy/tsa_time.go:36-50 sha256:1fc88b3a0d1ac34db8a3f50cf1444e7b6d565790a3c3a2156bc805ac9c2dd9a5
 -/
 

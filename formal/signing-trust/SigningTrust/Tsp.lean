@@ -155,7 +155,7 @@ theorem tspVerifyReq_iff (A : List Nat) (tok : Token) (now : Time) :
     CT, #10124, which `verifyX509Time` passes the configured CT roots to) at
     the time the TSA verified. -/
 -- cite: attestation/dsse/verify.go:308-326 sha256:15cc852dff7d9627
--- cite: attestation/dsse/verify.go:396-405 sha256:b15fcde6aaa288b5
+-- cite: attestation/dsse/verify.go:402-411 sha256:b15fcde6aaa288b5
 def dsseCertOk (tsaAnchors : List Nat) (tok : Token) (signer : Path) (ct : Ct) (now : Time) : Bool :=
   match tspVerify tsaAnchors tok now with
   | none => false

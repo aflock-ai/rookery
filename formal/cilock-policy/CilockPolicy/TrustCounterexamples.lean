@@ -12,9 +12,9 @@ open CilockPolicy CilockPolicy.Fixtures
     (`validate.go`, `validate.go`): certConstraint.roots
     non-empty, each "*" or a defined root, commonname non-empty. Empty
     dns/emails/orgs and a "*" uri are WARNINGS (`validate.go`).
-    -- cite: cilock/internal/policy/validate.go:381-397 sha256:b8293de6b6b8a1fb8fb3058f13a99632b79379739cf375426c25535136e856ee
-    -- cite: cilock/internal/policy/validate.go:544-547 sha256:7d9a638a378c6623e04a81cb8c3ed7d7c5f8362ba1e020f0a62f470a7eb781d5
-    -- cite: cilock/internal/policy/validate.go:548-568 sha256:6737b4462419ec08a498ce5405e52a226235bd4d05183b4262786d2d711fabd7
+    -- cite: cilock/internal/policy/validate.go:386-402 sha256:b8293de6b6b8a1fb8fb3058f13a99632b79379739cf375426c25535136e856ee
+    -- cite: cilock/internal/policy/validate.go:549-552 sha256:7d9a638a378c6623e04a81cb8c3ed7d7c5f8362ba1e020f0a62f470a7eb781d5
+    -- cite: cilock/internal/policy/validate.go:553-573 sha256:6737b4462419ec08a498ce5405e52a226235bd4d05183b4262786d2d711fabd7
     -/
 def staticRootValid (definedRoots : List RootId) (f : Functionary) : Bool :=
   f.type == "root" && !f.cc.roots.isEmpty &&
@@ -62,7 +62,7 @@ theorem r3_181_static_valid : staticRootValid ["fulcio"] emptyLists = true := by
     AND a certificate identity: with the flag OFF the identity is ignored on
     a key-id match (`step.go`). The holder of `kx` can sign under any
     certificate identity.
-    -- cite: attestation/policy/step.go:568-580 sha256:81402839fa0c7643af7f7f9c1cd089da8bd0a86c993149f01c2d1b0e95c92cf3
+    -- cite: attestation/policy/step.go:581-593 sha256:81402839fa0c7643af7f7f9c1cd089da8bd0a86c993149f01c2d1b0e95c92cf3
     -/
 def pinned : Functionary := { type := "publickey", keyId := "kx", cc := starCC "build-bot" }
 def otherIdentity : Cert := { attackerCert with keyId := "kx", cn := "somebody-else" }
@@ -97,7 +97,7 @@ theorem v2_timestamp_counterexample :
 /-- The engine compares expiry with the VERIFY clock only (`policy.go`).
     A TSA time after `expires` is accepted while the clock is before it; the
     soundness theorem needs `TsaNotFuture` to rule this out.
-    -- cite: attestation/policy/policy.go:678-680 sha256:7759d749f16c04962d08059b1d7e97ad861c39ce2af3c99b30e54e280139a8a3
+    -- cite: attestation/policy/policy.go:681-683 sha256:7759d749f16c04962d08059b1d7e97ad861c39ce2af3c99b30e54e280139a8a3
     -/
 def lateCert : Cert := { certB with notAfter := 5000 }
 def latePol : Policy :=

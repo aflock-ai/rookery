@@ -13,9 +13,9 @@
   Reproduced against the Go engine on d023787f95, before the fix, with the
   same shape (lazy_fixtures_test.go helpers): control FAIL, with the rejected
   scan PASS, the scan recorded as "mismatched digests for app.bin".
-  -- cite: attestation/policy/policy.go:1006 sha256:3c4ad285bf16007f3ad8d88adef106e95609d49f88b1c8358a1d292a39b17cde
-  -- cite: attestation/policy/step.go:730-758 sha256:736a4b92255e9b790d8c3f61dd2a1bf887f81a1d160d0ea34e24cae1868ae0ad
-  -- cite: attestation/policy/policy.go:1148 sha256:c2e494e031a8e25b0662fe4d1a69e0567568aa36eaf18bff7f72ddc8fc8d88c0
+  -- cite: attestation/policy/policy.go:1009 sha256:3c4ad285bf16007f3ad8d88adef106e95609d49f88b1c8358a1d292a39b17cde
+  -- cite: attestation/policy/step.go:749-777 sha256:736a4b92255e9b790d8c3f61dd2a1bf887f81a1d160d0ea34e24cae1868ae0ad
+  -- cite: attestation/policy/policy.go:1151 sha256:c2e494e031a8e25b0662fe4d1a69e0567568aa36eaf18bff7f72ddc8fc8d88c0
 -/
 import CilockPolicy.Fixtures
 

@@ -81,9 +81,11 @@ structure Step where
   about            : String := ""
 deriving DecidableEq, Repr
 
-/-- ExternalAttestation (`step.go`). CommitSubject (#10067) is not modelled:
-  every external here has none, the strict default.
-  -- cite: attestation/policy/step.go:137-160 sha256:f428848ae63911b12cbee9b71352d633f391141c1170a036a688f718a95b8b08
+/-- ExternalAttestation (`step.go`). CommitSubject (#10067) is not modelled,
+  and neither are ChildPolicyDigest and TimestampConstraint (nested externals,
+  where the newest admitted VSA decides; modelled in formal/cilock-evaluators
+  Nested.lean). Every external here sets none of them: the stock semantics.
+  -- cite: attestation/policy/step.go:142-178 sha256:3a8647febb9c0925dd706a7ae9bfd091ae97c36926832dcbc55e391cb190c574
 -/
 structure External where
   name          : String

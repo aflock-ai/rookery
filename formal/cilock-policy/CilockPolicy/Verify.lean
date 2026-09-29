@@ -19,13 +19,13 @@
   * Rego and AI are one opaque predicate per required attestation (`Rego`).
   * The search is the whole evidence list; the source's own filtering can only
     drop candidates and is re-checked by VerifiedSource (`verified.go`).
-  -- cite: attestation/policy/policy.go:664-757 sha256:1c0fa9d05d664e9dccb0ac5453619a38fb9f5776e8809caad447fbd8e67fad27
-  -- cite: attestation/policy/policy.go:1006 sha256:3c4ad285bf16007f3ad8d88adef106e95609d49f88b1c8358a1d292a39b17cde
-  -- cite: attestation/policy/policy.go:1148 sha256:c2e494e031a8e25b0662fe4d1a69e0567568aa36eaf18bff7f72ddc8fc8d88c0
-  -- cite: attestation/policy/policy.go:603-659 sha256:d3d162656defee17a14273bb468cef2b2f65146073be5f3915fd09469454410e
-  -- cite: cilock/internal/policy/validate.go:349-352 sha256:16297b0f0b687d9a6ecf5d5b872937a20dd90d2d3c4077e1a1edfeaf55b0ac90
-  -- cite: attestation/policy/policy.go:496 sha256:5839f38abbb0838072bd486680ea33d28649db7abff272bc900592e4c49a76a6
-  -- cite: attestation/source/verified.go:504-596 sha256:a13a4227b6ca1db9e3e3cbafaf749d89a6ba8b18e465bb3fbdfc845f5e8c75b9
+  -- cite: attestation/policy/policy.go:667-760 sha256:1c0fa9d05d664e9dccb0ac5453619a38fb9f5776e8809caad447fbd8e67fad27
+  -- cite: attestation/policy/policy.go:1009 sha256:3c4ad285bf16007f3ad8d88adef106e95609d49f88b1c8358a1d292a39b17cde
+  -- cite: attestation/policy/policy.go:1151 sha256:c2e494e031a8e25b0662fe4d1a69e0567568aa36eaf18bff7f72ddc8fc8d88c0
+  -- cite: attestation/policy/policy.go:606-662 sha256:d3d162656defee17a14273bb468cef2b2f65146073be5f3915fd09469454410e
+  -- cite: cilock/internal/policy/validate.go:354-357 sha256:16297b0f0b687d9a6ecf5d5b872937a20dd90d2d3c4077e1a1edfeaf55b0ac90
+  -- cite: attestation/policy/policy.go:499 sha256:5839f38abbb0838072bd486680ea33d28649db7abff272bc900592e4c49a76a6
+  -- cite: attestation/source/verified.go:508-600 sha256:a13a4227b6ca1db9e3e3cbafaf749d89a6ba8b18e465bb3fbdfc845f5e8c75b9
 -/
 import CilockPolicy.Trust
 
@@ -125,7 +125,7 @@ def commitOk (o : Options) (c : Collection) : Bool :=
   | some k => !(gitHashes c).isEmpty && (gitHashes c).all fun h => lower h == lower k
 
 /-! ## Rego context and the gate (`step.go`)
-  -- cite: attestation/policy/step.go:632-1046 sha256:1e24723a70cd5447f3c80a0a0ebcd0d6995655dd22e04f1e8db63068fbac3642
+  -- cite: attestation/policy/step.go:645-1059 sha256:1e24723a70cd5447f3c80a0a0ebcd0d6995655dd22e04f1e8db63068fbac3642
 -/
 
 /-- What Rego sees besides the attestor: input.steps (dependency name ->
@@ -143,7 +143,7 @@ abbrev RegoExt := Nat → Collection → Bool
 /-- gateOneContext + gateBound: exact name, commit binding, a non-empty
     requirement list, every required type present, and EVERY attestor of that
     type passing its gate (no last-writer-wins, `step.go`).
-    -- cite: attestation/policy/step.go:930-1010 sha256:83406a52a45e22adeaaa6ce60fd75309d0e86922ec48c0cc22f105da13f86d32
+    -- cite: attestation/policy/step.go:953-1033 sha256:83406a52a45e22adeaaa6ce60fd75309d0e86922ec48c0cc22f105da13f86d32
     -/
 def gate (rego : Rego) (o : Options) (s : Step) (ctx : Ctx) (c : Collection) : Bool :=
   c.name == s.name && commitOk o c && !s.atts.isEmpty &&
@@ -154,8 +154,8 @@ def gate (rego : Rego) (o : Options) (s : Step) (ctx : Ctx) (c : Collection) : B
 /-- Everything a candidate must satisfy before the gate: the search's name
     filter (`policy.go`), DSSE + the signed-subject guard
     (`verified.go`) and functionary triage.
-    -- cite: attestation/policy/policy.go:1317 sha256:48fc7d8f69112af5d78747179bd96e7fba9d32bda32b7bf300bb8db09e22a94f
-    -- cite: attestation/source/verified.go:504-596 sha256:a13a4227b6ca1db9e3e3cbafaf749d89a6ba8b18e465bb3fbdfc845f5e8c75b9
+    -- cite: attestation/policy/policy.go:1320 sha256:48fc7d8f69112af5d78747179bd96e7fba9d32bda32b7bf300bb8db09e22a94f
+    -- cite: attestation/source/verified.go:508-600 sha256:a13a4227b6ca1db9e3e3cbafaf749d89a6ba8b18e465bb3fbdfc845f5e8c75b9
     -/
 def authorized (h : Hardening) (p : Policy) (o : Options) (s : Step) (e : Envelope) : Bool :=
   e.payload.name == s.name && anchored o.seeds e.payload && triage h p o s e
@@ -190,8 +190,8 @@ def State.get (st : State) (n : String) : List Envelope := (st.lookup n).getD []
 /-- buildStepRegoContext (`step.go`): if every dependency has a passed
     collection, each dependency's collections; otherwise an empty map (Rego
     still runs, `step.go`).
-    -- cite: attestation/policy/step.go:730-758 sha256:736a4b92255e9b790d8c3f61dd2a1bf887f81a1d160d0ea34e24cae1868ae0ad
-    -- cite: attestation/policy/step.go:738-745 sha256:fa97f4055ea2ac4963deae674ba78c917d80fe438481248c3e012bdfe9d44e53
+    -- cite: attestation/policy/step.go:749-777 sha256:736a4b92255e9b790d8c3f61dd2a1bf887f81a1d160d0ea34e24cae1868ae0ad
+    -- cite: attestation/policy/step.go:757-764 sha256:fa97f4055ea2ac4963deae674ba78c917d80fe438481248c3e012bdfe9d44e53
     -/
 def stepsCtx (s : Step) (st : State) : List (String × List Collection) :=
   if s.attestationsFrom.all fun d => !(st.get d).isEmpty then
@@ -209,7 +209,7 @@ def extCtx (s : Step) (α : Assign) : List (String × Collection) :=
     read from the results accumulated so far, i.e. BEFORE pruning. The step
     loop cited below is the one #9860 turned into the round loop: its first
     round is this phase (`fix9813Loop` with `prev = none`).
-    -- cite: attestation/policy/policy.go:991-1146 sha256:04751931704c5869e80821d7e6ac8f4e6c0e8cef260eba4bc93d5f4bbace5cfb
+    -- cite: attestation/policy/policy.go:994-1149 sha256:04751931704c5869e80821d7e6ac8f4e6c0e8cef260eba4bc93d5f4bbace5cfb
     -/
 def phaseAsBuilt (rego : Rego) (h : Hardening) (p : Policy) (o : Options) (E : List Envelope)
     (α : Assign) : State :=
@@ -222,7 +222,7 @@ def phaseFrom (rego : Rego) (h : Hardening) (p : Policy) (o : Options) (E : List
   p.steps.map fun s => (s.name, passedFor rego h p o E s ⟨stepsCtx s prev, extCtx s α⟩)
 
 /-! ## Artifact chain (`policy.go`)
-  -- cite: attestation/policy/policy.go:2250-2686 sha256:cb53e3f3292a17600d2bf486d315b0306880c13b44ce7de4e4681c75e47793c0
+  -- cite: attestation/policy/policy.go:2267-2703 sha256:cb53e3f3292a17600d2bf486d315b0306880c13b44ce7de4e4681c75e47793c0
 -/
 
 /-- Digest size in bytes for recognized algorithms (hashNames, `digestset.go`).
@@ -256,7 +256,7 @@ def artifacts (c : Collection) : List (String × DigestSet) := c.products ++ c.m
 /-- compareArtifacts (`policy.go`): shared paths must be Equal; a
     material path the upstream never produced is SKIPPED; a non-empty material
     set needs at least one shared path.
-    -- cite: attestation/policy/policy.go:2643-2686 sha256:8158138dbef9f186b5755cd96dd3b766480dac8752e26865c207a9f3c58029d0
+    -- cite: attestation/policy/policy.go:2660-2703 sha256:8158138dbef9f186b5755cd96dd3b766480dac8752e26865c207a9f3c58029d0
     -/
 def compareOk (mats arts : List (String × DigestSet)) : Bool :=
   let shared := mats.filter fun m => (arts.lookup m.1).isSome
@@ -264,7 +264,7 @@ def compareOk (mats arts : List (String × DigestSet)) : Bool :=
 
 /-- One artifactsFrom edge from downstream `c` to upstream `u`
     (verifyCollectionArtifacts, `policy.go`).
-    -- cite: attestation/policy/policy.go:2531-2638 sha256:d65fbdb53f7349c6755adf6504f172b536360aead7db4b3102821201d5b6fc67
+    -- cite: attestation/policy/policy.go:2548-2655 sha256:d65fbdb53f7349c6755adf6504f172b536360aead7db4b3102821201d5b6fc67
     -/
 def edgeOk (o : Options) (c u : Collection) : Bool :=
   c.leavesOk && u.leavesOk && (!c.materials.isEmpty || c.inlineMaterials) &&
@@ -443,7 +443,7 @@ def prunePass (p : Policy) (o : Options) (st : State) : State :=
 def size (st : State) : Nat := (st.map (·.2.length)).sum
 
 /-- convergeArtifactPruning (`policy.go`): fuel = total passed + 1.
-  -- cite: attestation/policy/policy.go:2340-2351 sha256:8f50b83a85041e230acea69e5bb2f10c068a469528ab0c58b97588a9b2fe2d7c
+  -- cite: attestation/policy/policy.go:2357-2368 sha256:8f50b83a85041e230acea69e5bb2f10c068a469528ab0c58b97588a9b2fe2d7c
 -/
 def pruneLoop (p : Policy) (o : Options) : Nat → State → State
   | 0, st => st
@@ -454,7 +454,7 @@ def pruneLoop (p : Policy) (o : Options) : Nat → State → State
 def prune (p : Policy) (o : Options) (st : State) : State := pruneLoop p o (size st + 1) st
 
 /-! ## Externals (`policy.go`)
-  -- cite: attestation/policy/policy.go:1766-1977 sha256:4e901ec5e89f4e6dc98a4bf73fafda2f56328f95c2749d07d380c80cf315b09f
+  -- cite: attestation/policy/policy.go:1769-2007 sha256:689668da2334dbd438eb524cbfc35526d896b48910dc6979bbfbb12a3923389e
 -/
 
 /-- An external candidate is bound when DSSE passes... the substitution guard
@@ -476,7 +476,7 @@ def extCandidates (p : Policy) (o : Options) (E : List Envelope) (x : External) 
 /-- Analyze plus the two error returns (`policy.go`): a required
     external needs a passed envelope; an optional one may be absent but not
     present-and-rejected.
-    -- cite: attestation/policy/policy.go:1930-1971 sha256:48e5293f2cc102e1f9594652dfb2ae9ecdea6e7fdbe38e652c6aebe2cdc85bf9
+    -- cite: attestation/policy/policy.go:1960-2001 sha256:48e5293f2cc102e1f9594652dfb2ae9ecdea6e7fdbe38e652c6aebe2cdc85bf9
     -/
 def externalOk (regoExt : RegoExt) (h : Hardening) (p : Policy) (o : Options) (E : List Envelope)
     (x : External) : Bool :=
@@ -504,8 +504,8 @@ def assignments (regoExt : RegoExt) (h : Hardening) (p : Policy) (o : Options) (
     self-reference" for a list given in topological order. Validate also
     refuses an artifactsFrom cycle now (#9860); that check is `unionAcyclic`,
     applied by `verifyShipped`, so `validate` alone is the pre-#9860 one.
-    -- cite: attestation/policy/policy.go:488-576 sha256:808f541fabf44796016402e509198be4ddbd61ef82d8131cc27ab9dfc638b46e
-    -- cite: attestation/policy/policy.go:949-955 sha256:255ab63a4966e38d992c6598f90df38f44e6ddd5c056271ba929d06bbf21c22a
+    -- cite: attestation/policy/policy.go:491-579 sha256:808f541fabf44796016402e509198be4ddbd61ef82d8131cc27ab9dfc638b46e
+    -- cite: attestation/policy/policy.go:952-958 sha256:255ab63a4966e38d992c6598f90df38f44e6ddd5c056271ba929d06bbf21c22a
     -- cite: attestation/policy/decode.go:152-173 sha256:b1bdf78ab77e9be7b918cf7657a02c7dd0cc6775385d65b517a3b176ca69daab
     -/
 def validSteps : List String → List Step → Bool
@@ -529,7 +529,7 @@ def validate (p : Policy) : Bool :=
 /-- The preconditions of VerifyWithExternals before evidence: not expired
     (`policy.go`; expired means now > expires + skew), options valid
     (seeds non-empty, `policy.go`), and validation.
-    -- cite: attestation/policy/policy.go:678-680 sha256:7759d749f16c04962d08059b1d7e97ad861c39ce2af3c99b30e54e280139a8a3
+    -- cite: attestation/policy/policy.go:681-683 sha256:7759d749f16c04962d08059b1d7e97ad861c39ce2af3c99b30e54e280139a8a3
     -- cite: attestation/policy/policy.go:368-373 sha256:92beb6ed459be28b5782a45c9587f7216676b6c4884e7f4e05555babd9e06e63
     -/
 def admissible (p : Policy) (o : Options) : Bool :=
@@ -537,7 +537,7 @@ def admissible (p : Policy) (o : Options) : Bool :=
 
 /-- Verdict over final step results (`policy.go`): every step has a
     surviving collection, every external passes, and SOMETHING was verified.
-    -- cite: attestation/policy/policy.go:737-756 sha256:693fa1ad33c7238fb5ebc6a4cd223d39c6f35f4fadab72b083a34c3a52778283
+    -- cite: attestation/policy/policy.go:740-759 sha256:693fa1ad33c7238fb5ebc6a4cd223d39c6f35f4fadab72b083a34c3a52778283
     -/
 def verdictOn (regoExt : RegoExt) (h : Hardening) (p : Policy) (o : Options) (E : List Envelope)
     (F : State) : Bool :=

@@ -33,6 +33,7 @@ package policy
 // formal:differential cilock-evaluators TestFormalDifferentialAI
 // formal:differential cilock-evaluators TestFormalDifferentialGate
 // formal:differential cilock-evaluators TestFormalDifferentialVSA
+// formal:differential cilock-evaluators TestFormalDifferentialNestedVSA
 
 import (
 	"bufio"
@@ -928,6 +929,8 @@ type vsaCandJSON struct {
 	VSA    vsaJSON `json:"vsa"`
 	Signer string  `json:"signer"`
 	SigOK  bool    `json:"sigOk"`
+	// Stamped: TSA-verified times of the signature (nested externals only).
+	Stamped []int64 `json:"stamped,omitempty"`
 }
 
 type vsaExtJSON struct {
@@ -935,6 +938,9 @@ type vsaExtJSON struct {
 	Consumer   string        `json:"consumer"`
 	Expected   string        `json:"expected"`
 	Candidates []vsaCandJSON `json:"candidates"`
+	// Child and MaxAge: childPolicyDigest and timestampConstraint.maxAge.
+	Child  *string `json:"child,omitempty"`
+	MaxAge *int64  `json:"maxAge,omitempty"`
 }
 
 type vsaCaseJSON struct {
@@ -1069,4 +1075,147 @@ func TestFormalDifferentialVSA(t *testing.T) {
 		}
 	}
 	reportMismatches(t, "vsa", ms, len(cases))
+}
+
+// TestFormalDifferentialNestedVSA: externals that set childPolicyDigest and/or
+// timestampConstraint.maxAge (external_latest.go) against Nested.externalLatest.
+// Candidates carry a signed timeVerified and TSA-verified times that agree,
+// are missing, are re-stamped later (the same signature with a fresh token),
+// or are earlier than the signed time (forward-dated). Every time is
+// minute-aligned plus 30 s from now, so no comparison against the clock sits on
+// a boundary the seconds between the Go run and the case's now could flip.
+//
+//nolint:gocyclo,funlen // builds one random nested-externals policy and its candidate VSAs
+func TestFormalDifferentialNestedVSA(t *testing.T) {
+	bin := diffOracle(t)
+	r := rand.New(rand.NewPCG(uint64(diffEnvInt("FORMAL_DIFF_SEED", 1)), 29))
+	n := diffEnvInt("FORMAL_DIFF_N", 600)
+	verA, keyA := newECDSAVerifier(t)
+	verB, keyB := newECDSAVerifier(t)
+	const window = int64(3600)
+	const requested = "art"
+	digests := []string{strings.Repeat("1", 64), strings.Repeat("2", 64)}
+	now := time.Now().Unix()
+	off := func(maxMinutes int) int64 { return int64(r.IntN(maxMinutes))*60 + 30 }
+
+	var cases []any
+	var goV, details []string
+	for i := 0; i < n; i++ {
+		c := vsaCaseJSON{Kind: "vsa", Requested: requested, Allowed: []string{"A"}, Now: now, Window: window}
+		var cands []vsaCandJSON
+		var envs []source.StatementEnvelope
+		for k := 0; k < r.IntN(5); k++ {
+			digest := digests[r.IntN(2)]
+			result := []string{"PASSED", "FAILED"}[r.IntN(2)]
+			tv := now - off(150) // up to 2.5h old: fresh and stale against 1h
+			if r.IntN(8) == 0 {
+				tv = now + off(10) // future, some within skew
+			}
+			var stamped []int64
+			switch r.IntN(6) {
+			case 0: // untimed
+			case 1: // re-stamped: the same signature with a later token
+				stamped = []int64{tv + off(120)}
+			case 2: // forward-dated: the token is earlier than the signed time
+				stamped = []int64{tv - off(20)}
+			case 3: // two tokens
+				stamped = []int64{tv, tv + off(60)}
+			default:
+				stamped = []int64{tv}
+			}
+			signer := []string{"A", "B"}[r.IntN(2)]
+			sigOK := r.IntN(12) != 0
+			cj := vsaCandJSON{VSA: vsaJSON{Subjects: []string{requested, digest}, PolicyURI: "https://aflock.ai/policy/v0.1", PolicyDigest: digest, TimeVerified: tv, Result: result},
+				Signer: signer, SigOK: sigOK, Stamped: stamped}
+			cands = append(cands, cj)
+
+			pred, _ := json.Marshal(map[string]any{
+				"verifier":           map[string]string{"id": "aflock"},
+				"timeVerified":       time.Unix(tv, 0).UTC().Format(time.RFC3339),
+				"policy":             map[string]any{"uri": cj.VSA.PolicyURI, "digest": map[string]string{"sha256": digest}},
+				"inputAttestations":  []any{},
+				"verificationResult": result,
+			})
+			subjects := []intoto.Subject{
+				{Name: requested, Digest: map[string]string{"sha256": requested}},
+				{Name: digest, Digest: map[string]string{"sha256": digest}},
+			}
+			stmt := intoto.Statement{Type: intoto.StatementType, PredicateType: vsaPredicateType, Subject: subjects, Predicate: pred}
+			payload, _ := json.Marshal(stmt)
+			env := source.StatementEnvelope{
+				Envelope:  dsse.Envelope{Payload: payload, PayloadType: intoto.PayloadType},
+				Statement: stmt,
+				Attestor:  attestation.NewRawAttestation(vsaPredicateType, pred),
+				Reference: fmt.Sprintf("nvsa-%d-%d", i, k),
+			}
+			if !sigOK {
+				env.Errors = []error{errors.New("signature did not verify")}
+			} else {
+				v, kid := verA, keyA
+				if signer == "B" {
+					v, kid = verB, keyB
+				}
+				env.Verifiers = []cryptoutil.Verifier{v}
+				if len(stamped) > 0 {
+					ts := make([]time.Time, 0, len(stamped))
+					for _, s := range stamped {
+						ts = append(ts, time.Unix(s, 0))
+					}
+					env.VerifiedTimestampsByKeyID = map[string][]time.Time{kid: ts}
+				}
+			}
+			envs = append(envs, env)
+		}
+		if cands == nil {
+			cands = []vsaCandJSON{}
+		}
+		p := Policy{Expires: futureExpiry(), ExternalAttestations: map[string]ExternalAttestation{}}
+		for e := 0; e < 1+r.IntN(2); e++ {
+			consumer := []string{"none", "resultOnly", "exact"}[r.IntN(3)]
+			expected := digests[r.IntN(2)]
+			required := r.IntN(4) > 0
+			name := fmt.Sprintf("e%d", e)
+			ext := ExternalAttestation{
+				Name: name, PredicateType: vsaPredicateType, Required: required,
+				Functionaries: []Functionary{{PublicKeyID: keyA}},
+				RegoPolicies:  consumerRego(consumer, expected, now, window),
+			}
+			xj := vsaExtJSON{Required: required, Consumer: consumer, Expected: expected, Candidates: cands}
+			maxAge := window
+			switch r.IntN(4) {
+			case 0: // child only
+				d := digests[r.IntN(2)]
+				ext.ChildPolicyDigest, xj.Child = d, &d
+			case 1: // maxAge only
+				ext.TimestampConstraint, xj.MaxAge = &TimestampConstraint{MaxAge: fmt.Sprintf("%ds", maxAge)}, &maxAge
+			case 2: // both
+				d := digests[r.IntN(2)]
+				ext.ChildPolicyDigest, xj.Child = d, &d
+				ext.TimestampConstraint, xj.MaxAge = &TimestampConstraint{MaxAge: fmt.Sprintf("%ds", maxAge)}, &maxAge
+			default: // stock, for contrast in the same policy
+			}
+			p.ExternalAttestations[name] = ext
+			c.Externals = append(c.Externals, xj)
+		}
+		src := &stepAwareVerifiedSource{byPredicate: map[string][]source.StatementEnvelope{vsaPredicateType: envs}}
+		pass, _, _, err := p.VerifyWithExternals(context.Background(), WithVerifiedSource(src), WithSubjectDigests([]string{"sha256:" + requested}))
+		var v string
+		if err != nil {
+			v = fmt.Sprintf("failed:%v", evaluationRefusal(err) != nil)
+		} else {
+			v = fmt.Sprintf("accepted:%v", pass)
+		}
+		goV = append(goV, v)
+		cases = append(cases, c)
+		cj, _ := json.Marshal(c)
+		details = append(details, fmt.Sprintf("err=%v case=%s", err, cj))
+	}
+	lean := runOracle(t, bin, cases)
+	var ms []diffMismatch
+	for i := range cases {
+		if goV[i] != lean[i] {
+			ms = append(ms, diffMismatch{"nested-vsa", goV[i], lean[i], details[i]})
+		}
+	}
+	reportMismatches(t, "nested-vsa", ms, len(cases))
 }

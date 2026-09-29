@@ -30,7 +30,7 @@ inductive Result where
   deriving DecidableEq, Repr
 
 -- cite: plugins/attestors/vsa/vsa.go:70-76 sha256:038d66464d69c9becc571e44b6db2068aab57824951a204e685fc9ab5e425a7f
--- cite: plugins/attestors/policyverify/policyverify.go:187-200 sha256:5f642ecb06bd65592bd29d065808ababc86bcc05b9f3d9ab6e50743ee805144c
+-- cite: plugins/attestors/policyverify/policyverify.go:194-207 sha256:5f642ecb06bd65592bd29d065808ababc86bcc05b9f3d9ab6e50743ee805144c
 /-- The predicate (attestation/slsa/verificationsummary.go; vsa.go) plus the
 statement subjects (policyverify.go). -/
 structure Vsa where
@@ -48,10 +48,10 @@ structure Run where
   /-- The exact decoded DSSE payload bytes of the policy. -/
   policyPayload : String
   policyUri : String
-  -- cite: plugins/attestors/policyverify/policyverify.go:223-225 sha256:c230b8950d74bf5783bd434f704317ee37284315367b906a68407c99177c937a
+  -- cite: plugins/attestors/policyverify/policyverify.go:230-232 sha256:c230b8950d74bf5783bd434f704317ee37284315367b906a68407c99177c937a
   /-- `policysig.VerifyPolicySignature` (policyverify.go). -/
   policySigOk : Bool
-  -- cite: plugins/attestors/policyverify/policyverify.go:231-235 sha256:a524815bd4f3ac2bc1929a3fee8fe8d5d1c2e45b12153d6b18fa6c4cd6e0b0ce
+  -- cite: plugins/attestors/policyverify/policyverify.go:238-242 sha256:a524815bd4f3ac2bc1929a3fee8fe8d5d1c2e45b12153d6b18fa6c4cd6e0b0ce
   /-- `policy.DecodePolicyEnvelope` (policyverify.go). -/
   decodeOk : Bool
   seeds : List Subject
@@ -61,13 +61,13 @@ structure Run where
   rejectedInputs : List Digest
   deriving DecidableEq, Repr
 
--- cite: plugins/attestors/policyverify/policyverify.go:223-235 sha256:abcc70a2863fac22524181ed79e94f76e7fff149c29fa316b2b55108f2911946
--- cite: plugins/attestors/policyverify/policyverify.go:299-308 sha256:bf3a0030348d8741f6be2781a75a0bead271fb58807c79f2e4956192bb0320a3
--- cite: plugins/attestors/policyverify/policyverify.go:395-398 sha256:6eb71cb8138ef3a45489c5b202f940a7db63391745ee1f3272531c5fb557a2db
--- cite: plugins/attestors/policyverify/policyverify.go:390-390 sha256:02839719c4e110bd96207a38909ffa2888e7722a322a8371f623ce1e38378b65
--- cite: plugins/attestors/policyverify/policyverify.go:401-403 sha256:f5d8b93d8f8bf66baf5b25836316dcd560aad5eb3ec940f8d4eb1f7802492c8b
--- cite: plugins/attestors/policyverify/policyverify.go:362-388 sha256:92a13498dd9b9d65b66f2f0af09ab4e837a490041d8ac95ef16a3c6fd9328f23
--- cite: plugins/attestors/policyverify/policyverify.go:187-200 sha256:5f642ecb06bd65592bd29d065808ababc86bcc05b9f3d9ab6e50743ee805144c
+-- cite: plugins/attestors/policyverify/policyverify.go:230-242 sha256:abcc70a2863fac22524181ed79e94f76e7fff149c29fa316b2b55108f2911946
+-- cite: plugins/attestors/policyverify/policyverify.go:310-319 sha256:bf3a0030348d8741f6be2781a75a0bead271fb58807c79f2e4956192bb0320a3
+-- cite: plugins/attestors/policyverify/policyverify.go:406-409 sha256:6eb71cb8138ef3a45489c5b202f940a7db63391745ee1f3272531c5fb557a2db
+-- cite: plugins/attestors/policyverify/policyverify.go:401 sha256:02839719c4e110bd96207a38909ffa2888e7722a322a8371f623ce1e38378b65
+-- cite: plugins/attestors/policyverify/policyverify.go:412-414 sha256:f5d8b93d8f8bf66baf5b25836316dcd560aad5eb3ec940f8d4eb1f7802492c8b
+-- cite: plugins/attestors/policyverify/policyverify.go:373-399 sha256:92a13498dd9b9d65b66f2f0af09ab4e837a490041d8ac95ef16a3c6fd9328f23
+-- cite: plugins/attestors/policyverify/policyverify.go:194-207 sha256:5f642ecb06bd65592bd29d065808ababc86bcc05b9f3d9ab6e50743ee805144c
 /-- `Attest` + `verificationSummaryFromResults`. `hash` is the digest function
 over exact bytes.
 * policy signature or decode failure: no VSA (policyverify.go);
@@ -122,7 +122,7 @@ theorem emit_sound (hash : String → Digest) (r : Run) (v : Vsa) (h : emit hash
 
 /-! ## Consumption -/
 
--- cite: attestation/policy/policy.go:1807-1807 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
+-- cite: attestation/policy/policy.go:1813 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
 /-- A candidate VSA envelope in a downstream verify. `sigOk`: its DSSE
 signature verified against the downstream policy's roots/keys, naming
 `signer` (source/verified.go; policy.go). -/
@@ -132,7 +132,7 @@ structure Candidate where
   sigOk : Bool
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/policy.go:1807-1818 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
+-- cite: attestation/policy/policy.go:1813-1824 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
 /-- The consumer's view of a candidate as a `Gate.Envelope`: signature errors
 and subject-unbound both surface as envelope errors (policy.go);
 no commit binding and no declared `commitSubject`, so `commitUnbound` is
@@ -246,7 +246,7 @@ theorem vsa_non_amplification (hash : String → Digest) (W : World)
       simp only [List.mem_append, List.mem_singleton] at hsub
       exact hsub
 
--- cite: plugins/attestors/policyverify/policyverify.go:198-198 sha256:807db86f672dff48c839b71ac0bcac20cfcf711c3c6be53f4fd014f58839b4d6
+-- cite: plugins/attestors/policyverify/policyverify.go:205 sha256:807db86f672dff48c839b71ac0bcac20cfcf711c3c6be53f4fd014f58839b4d6
 /-- The policy subject: every VSA of a policy names that policy's digest as a
 subject (policyverify.go), so a verify seeded with a POLICY digest binds
 to every VSA of that policy, whatever artifact it was about. -/

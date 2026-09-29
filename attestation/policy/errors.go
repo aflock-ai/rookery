@@ -403,7 +403,7 @@ func (e ErrMissingExternalAttestation) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "required external attestation %q (predicateType=%v) not found", e.Name, e.PredicateType)
 	if e.Unbound > 0 {
-		fmt.Fprintf(&b, " (%d candidate(s) not about the evaluated subject were ignored)", e.Unbound)
+		fmt.Fprintf(&b, " (%d candidate(s) not about the evaluated subject, commit or bound child policy were ignored)", e.Unbound)
 	}
 	writeExternalSearchDiagnostics(&b, e.RequestedSubjects, e.Candidates, e.Refused, e.RefusedOmitted)
 	return b.String()

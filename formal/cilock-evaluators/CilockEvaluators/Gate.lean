@@ -1,8 +1,8 @@
--- cite: attestation/policy/step.go:900-1046 sha256:e4d08a4b43a4fc90595cff8e2f12d822928d5feb7b84e53278ef6481851a73d8
--- cite: attestation/policy/policy.go:1801-1923 sha256:2222517c484f8a32f45267cd7e946ad5ee6975ad98675f97543fcd1471cab371
--- cite: attestation/policy/policy.go:1930-1971 sha256:48e5293f2cc102e1f9594652dfb2ae9ecdea6e7fdbe38e652c6aebe2cdc85bf9
--- cite: attestation/policy/step.go:536-541 sha256:351b4b76ec382062d9d27820da19248c21615a0b0b689b0a5cca2805348efffc
--- cite: attestation/policy/policy.go:664-788 sha256:6ccc053d2d2728df1af6732cf03ae543d5b447cae59fa992ebea02ddba01fbc9
+-- cite: attestation/policy/step.go:913-1059 sha256:e4d08a4b43a4fc90595cff8e2f12d822928d5feb7b84e53278ef6481851a73d8
+-- cite: attestation/policy/policy.go:1807-1949 sha256:d60b4764289538a29eaca28d4c231fa33cf18d1548ea14c46e6af4de5ccfc078
+-- cite: attestation/policy/policy.go:1960-2001 sha256:48e5293f2cc102e1f9594652dfb2ae9ecdea6e7fdbe38e652c6aebe2cdc85bf9
+-- cite: attestation/policy/step.go:549-554 sha256:351b4b76ec382062d9d27820da19248c21615a0b0b689b0a5cca2805348efffc
+-- cite: attestation/policy/policy.go:667-791 sha256:6ccc053d2d2728df1af6732cf03ae543d5b447cae59fa992ebea02ddba01fbc9
 /-
   CilockEvaluators.Gate: how evaluator verdicts combine.
 
@@ -24,7 +24,7 @@ namespace CilockEvaluators.Gate
 
 open CilockEvaluators
 
--- cite: attestation/policy/step.go:936-958 sha256:66913ac0d392989382e998f0ca3390faefb130f1601e42332f77822160e33316
+-- cite: attestation/policy/step.go:959-981 sha256:66913ac0d392989382e998f0ca3390faefb130f1601e42332f77822160e33316
 /-- One attestor inside a collection. `type` is its attestation type URI
 (the legacy-alias lookup of step.go is abstracted away: `type` is
 already the matched URI). -/
@@ -33,7 +33,7 @@ structure Attestor where
   type : String
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/step.go:923-928 sha256:324819cb96f168941ea7d83daabc3d4763e6ffef6233447119460c4a998a3b43
+-- cite: attestation/policy/step.go:946-951 sha256:324819cb96f168941ea7d83daabc3d4763e6ffef6233447119460c4a998a3b43
 /-- A functionary-authorised collection as the gate receives it. `errors` is
 `collection.Errors` non-empty (step.go). -/
 structure Collection where
@@ -42,7 +42,7 @@ structure Collection where
   attestors : List Attestor
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/step.go:283-287 sha256:e5a7ca0bacf2e8bc2d6cdb93e579d2eacd4b25db87bf0283aadde46f3de646ca
+-- cite: attestation/policy/step.go:296-300 sha256:e5a7ca0bacf2e8bc2d6cdb93e579d2eacd4b25db87bf0283aadde46f3de646ca
 /-- One required attestation of a step (`Attestation`, step.go). -/
 structure Expected where
   type : String
@@ -63,13 +63,13 @@ structure Evaluators where
   rego : Attestor → Expected → Verdict
   ai : Attestor → Expected → Verdict
 
--- cite: attestation/policy/step.go:930-942 sha256:82035c8327f1d340396c631341ff570b17f9286c99646996a9cc47ba625f1229
+-- cite: attestation/policy/step.go:953-965 sha256:82035c8327f1d340396c631341ff570b17f9286c99646996a9cc47ba625f1229
 /-- Every attestor of the expected type; ALL of them, not the last one
 (step.go, "G (#5747)"). -/
 def attestorsOf (c : Collection) (t : String) : List Attestor :=
   c.attestors.filter (fun a => a.type == t)
 
--- cite: attestation/policy/step.go:967-974 sha256:72f155f4a6c7cb2f3bc45a844f2e2ce37a2e98b79bb85bcc2c07d26d21f0fe3c
+-- cite: attestation/policy/step.go:990-997 sha256:72f155f4a6c7cb2f3bc45a844f2e2ce37a2e98b79bb85bcc2c07d26d21f0fe3c
 /-- Verdicts produced for one attestor. AI runs only when Rego passed: a
 deterministic rejection is not disclosed to a provider (step.go). -/
 def attestorVerdicts (ev : Evaluators) (a : Attestor) (e : Expected) : List Verdict :=
@@ -96,13 +96,13 @@ def anyRefused (ev : Evaluators) (c : Collection) (s : Step) : Bool :=
   s.expected.any (fun e => (attestorsOf c e.type).any
     (fun a => (attestorVerdicts ev a e).any (fun v => v == .refused)))
 
--- cite: attestation/policy/step.go:900-1046 sha256:e4d08a4b43a4fc90595cff8e2f12d822928d5feb7b84e53278ef6481851a73d8
+-- cite: attestation/policy/step.go:913-1059 sha256:e4d08a4b43a4fc90595cff8e2f12d822928d5feb7b84e53278ef6481851a73d8
 -- cite: attestation/policy/regorefusal.go:32-44 sha256:93d80ba472d31d6108b51b5208b745b9172ce7a943358feca21eed76028dd87f
--- cite: attestation/policy/step.go:900-903 sha256:2e634f1aa948679a297ead28197c9e38d1f45a71bc5784800b0b355fde847122
--- cite: attestation/policy/step.go:913-921 sha256:89df68265d5e72f6745d75a94e8a3cf7832c739989594eb18f5ca7b84f31c08d
--- cite: attestation/policy/step.go:923-928 sha256:324819cb96f168941ea7d83daabc3d4763e6ffef6233447119460c4a998a3b43
--- cite: attestation/policy/step.go:951-959 sha256:5b1c9fe372bf6b19bdc15ca4eec5bb76c8b202999b85531065ff93a166476120
--- cite: attestation/policy/step.go:943-1010 sha256:6690ab89e22425a46a274f5773f623ea0956548765d746036ec917830bc138a1
+-- cite: attestation/policy/step.go:919-922 sha256:2e634f1aa948679a297ead28197c9e38d1f45a71bc5784800b0b355fde847122
+-- cite: attestation/policy/step.go:936-944 sha256:89df68265d5e72f6745d75a94e8a3cf7832c739989594eb18f5ca7b84f31c08d
+-- cite: attestation/policy/step.go:946-951 sha256:324819cb96f168941ea7d83daabc3d4763e6ffef6233447119460c4a998a3b43
+-- cite: attestation/policy/step.go:974-982 sha256:5b1c9fe372bf6b19bdc15ca4eec5bb76c8b202999b85531065ff93a166476120
+-- cite: attestation/policy/step.go:966-1033 sha256:6690ab89e22425a46a274f5773f623ea0956548765d746036ec917830bc138a1
 /-- `gateOneContext` (step.go):
 * exact step-name match, else skipped (step.go);
 * no required attestations: rejected (F9, step.go);
@@ -167,8 +167,8 @@ theorem gate_fail_closed (ev : Evaluators) (s : Step) (c : Collection)
   · exact hb hr
   · exact hb hai
 
--- cite: attestation/policy/step.go:930-942 sha256:82035c8327f1d340396c631341ff570b17f9286c99646996a9cc47ba625f1229
--- cite: attestation/policy/step.go:962-966 sha256:918c758b7eaa53c475ca2177541850489a24e0dc6b33a6f7e8f1d59380f1dcda
+-- cite: attestation/policy/step.go:953-965 sha256:82035c8327f1d340396c631341ff570b17f9286c99646996a9cc47ba625f1229
+-- cite: attestation/policy/step.go:985-989 sha256:918c758b7eaa53c475ca2177541850489a24e0dc6b33a6f7e8f1d59380f1dcda
 /-- No last-writer-wins: a passing duplicate cannot shadow a failing attestor
 of the same type (step.go). -/
 theorem no_shadowing (ev : Evaluators) (s : Step) (c : Collection) (e : Expected)
@@ -178,19 +178,23 @@ theorem no_shadowing (ev : Evaluators) (s : Step) (c : Collection) (e : Expected
     gate ev s c ≠ .passed :=
   gate_fail_closed ev s c e he bad hbad (Or.inl hb)
 
--- cite: attestation/policy/policy.go:1766-1977 sha256:4e901ec5e89f4e6dc98a4bf73fafda2f56328f95c2749d07d380c80cf315b09f
-/-! ## External attestations (policy.go) -/
+-- cite: attestation/policy/policy.go:1769-2007 sha256:689668da2334dbd438eb524cbfc35526d896b48910dc6979bbfbb12a3923389e
+/-! ## External attestations (policy.go)
+
+The stock semantics. An external that sets childPolicyDigest or
+timestampConstraint is decided by `Nested.externalLatest` instead
+(external_latest.go), which reduces to `external` when neither is set. -/
 
 /-- One candidate envelope for an external, as the external gate sees it. -/
 structure Envelope where
-  -- cite: attestation/policy/policy.go:1807-1807 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
+  -- cite: attestation/policy/policy.go:1813 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
   /-- The source reported envelope errors and no verifier (policy.go). -/
   sigErrors : Bool
-  -- cite: attestation/policy/policy.go:1807-1818 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
+  -- cite: attestation/policy/policy.go:1813-1824 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
   /-- Those errors say the signed subjects do not name the requested
   subject (`ErrExternalSubjectNotRequested`, policy.go). -/
   subjectUnbound : Bool
-  -- cite: attestation/policy/policy.go:1820-1845 sha256:5d0c386d102568a6e4015a47a487a115b455350b07ac33251b0e060a3cbf0526
+  -- cite: attestation/policy/policy.go:1826-1851 sha256:5d0c386d102568a6e4015a47a487a115b455350b07ac33251b0e060a3cbf0526
   /-- The envelope is not about this external's commit: some external of its
   predicate type declares a `commitSubject` and the signed payload does not
   match THIS external's declaration (`MatchExternalSubjects`), or a commit
@@ -198,7 +202,7 @@ structure Envelope where
   that order, right after the signature check, and both make the candidate
   unbound (policy.go). -/
   commitUnbound : Bool
-  -- cite: attestation/policy/policy.go:1849-1871 sha256:3d7451637b78f22c6030209644d05f5fbc032ec6864f6d72a1fb2a1b58fdba14
+  -- cite: attestation/policy/policy.go:1855-1874 sha256:a46c3c23147ac4f2955d6b34fb5a93de938f8e3c84db8f5a40b5a44f8ac66b3a
   /-- Some verifier matched some functionary (policy.go). -/
   signerAllowed : Bool
   hasAttestor : Bool
@@ -241,8 +245,8 @@ theorem env_rego_deadline_refuses (e : Envelope) (hs : e.sigErrors = false)
     (hr : e.regoV = .refused) : envGate e = .rejected true := by
   simp [envGate, hs, hc, ha, hat, hr]
 
--- cite: attestation/policy/policy.go:1925-1971 sha256:1e6932d747251682ee2597d3e8eedbf3681482b57fab66b900550f42af858ab4
--- cite: attestation/policy/step.go:536-541 sha256:351b4b76ec382062d9d27820da19248c21615a0b0b689b0a5cca2805348efffc
+-- cite: attestation/policy/policy.go:1955-2001 sha256:1e6932d747251682ee2597d3e8eedbf3681482b57fab66b900550f42af858ab4
+-- cite: attestation/policy/step.go:549-554 sha256:351b4b76ec382062d9d27820da19248c21615a0b0b689b0a5cca2805348efffc
 /-- What one external yields (policy.go, step.go). -/
 inductive ExtOutcome where
   /-- required and nothing bound was found: `ErrMissingExternalAttestation`. -/
@@ -295,7 +299,7 @@ theorem external_pass_has_witness (required : Bool) (envs : List Envelope) (r : 
       rw [heo]
       cases o <;> simp_all [isPassed]
 
--- cite: attestation/policy/policy.go:664-788 sha256:6ccc053d2d2728df1af6732cf03ae543d5b447cae59fa992ebea02ddba01fbc9
+-- cite: attestation/policy/policy.go:667-791 sha256:6ccc053d2d2728df1af6732cf03ae543d5b447cae59fa992ebea02ddba01fbc9
 /-! ## Aggregation (`VerifyWithExternals`, policy.go) -/
 
 /-- A step's result as the aggregation reads it. `analyze` is
@@ -335,23 +339,23 @@ def extRefused : ExtOutcome → Bool
   | .result false true => true
   | _ => false
 
--- cite: attestation/policy/policy.go:665-697 sha256:27f001d6875f02cd73cb841431156637b283c92056cad3d25d59d510ea8650a3
+-- cite: attestation/policy/policy.go:668-700 sha256:27f001d6875f02cd73cb841431156637b283c92056cad3d25d59d510ea8650a3
 /-- `policyOk` covers everything before evaluation: options, expiry,
 `Validate`, `checkStepAbout`, trust bundles (policy.go). -/
 def verify (policyOk : Bool) (steps : List StepSummary) (exts : List ExtOutcome) : VerifyOutcome :=
   if !policyOk then .failed false
-  -- cite: attestation/policy/policy.go:707-713 sha256:7b1b49f34a123318a43cca7eb3be5635269f821434f706cafbf4c1ca7bc6113f
+  -- cite: attestation/policy/policy.go:710-716 sha256:7b1b49f34a123318a43cca7eb3be5635269f821434f706cafbf4c1ca7bc6113f
   else if exts.any isExtErr then .failed false                                   -- policy.go
   else if steps.any (fun s => !s.hasPassed && s.refusal) || exts.any extRefused
-    -- cite: attestation/policy/policy.go:726-728 sha256:933f639fffb9e3fe1432919165b72b194ac14b5f681f816c01cd4f471a7e76ed
-    -- cite: attestation/policy/policy.go:759-788 sha256:cfee072d06f1ff6ddf0165b79bb2d570d5a311aadd37c14c29a8bb7bfb4800cf
+    -- cite: attestation/policy/policy.go:729-731 sha256:933f639fffb9e3fe1432919165b72b194ac14b5f681f816c01cd4f471a7e76ed
+    -- cite: attestation/policy/policy.go:762-791 sha256:cfee072d06f1ff6ddf0165b79bb2d570d5a311aadd37c14c29a8bb7bfb4800cf
     -- cite: attestation/policy/regorefusal.go:32-44 sha256:93d80ba472d31d6108b51b5208b745b9172ce7a943358feca21eed76028dd87f
     then .failed true                                                            -- policy.go
   else .accepted (steps.all StepSummary.analyze && exts.all extAnalyze &&
-      -- cite: attestation/policy/policy.go:737-756 sha256:693fa1ad33c7238fb5ebc6a4cd223d39c6f35f4fadab72b083a34c3a52778283
+      -- cite: attestation/policy/policy.go:740-759 sha256:693fa1ad33c7238fb5ebc6a4cd223d39c6f35f4fadab72b083a34c3a52778283
       (!steps.isEmpty || exts.any extVerified))                                  -- policy.go
 
--- cite: attestation/policy/policy.go:737-756 sha256:693fa1ad33c7238fb5ebc6a4cd223d39c6f35f4fadab72b083a34c3a52778283
+-- cite: attestation/policy/policy.go:740-759 sha256:693fa1ad33c7238fb5ebc6a4cd223d39c6f35f4fadab72b083a34c3a52778283
 /-- A completed passing verdict needs every step to analyze true, every
 external to analyze true, and at least one real obligation (no vacuous pass,
 GHSA-rgp5-33mp-jhfm, policy.go). -/

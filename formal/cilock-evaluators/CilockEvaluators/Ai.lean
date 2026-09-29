@@ -1,6 +1,6 @@
--- cite: attestation/policy/step.go:975-1008 sha256:4a82bc8ba27e36910bf5d1f993c9c14cb617eef4f12bfa663965a4b21e53306a
+-- cite: attestation/policy/step.go:998-1031 sha256:4a82bc8ba27e36910bf5d1f993c9c14cb617eef4f12bfa663965a4b21e53306a
 -- cite: attestation/policy/ai.go:185-258 sha256:db02941e59cd22748f299c2103aa1dadbd3f00d4d1e85aa6c33086e3ca5c08e7
--- cite: attestation/policy/policy.go:1886-1919 sha256:141e115a6200a205ec3a9a4a7166a32bc1b17c1a61c5cfbbbbd81be63de056d3
+-- cite: attestation/policy/policy.go:1909-1945 sha256:34f1cd459bc6192db271f64b035288f0a8edfe137f5e74e9cfba60d86738c16e
 -- cite: attestation/policy/ai_validate.go:176-187 sha256:392afbf6e077d0574a273d2fbc2893ef290ea0e724e7c64ccf3def0e2c93b428
 -- cite: attestation/policy/ai_validate.go:164-167 sha256:447e8d7f26779c15fb53befd274c89c3cdd67ff177d6e7617dc4233c128cb16e
 -- cite: attestation/policy/ai_jev.go:381-383 sha256:45be6524a4eee9715468946f5aadc435d43515c91229543ecf23b2fcd24fd4b3
@@ -45,7 +45,7 @@ def ModelName.isPinned : ModelName → Bool
   | .pinned .. => true
   | .other _ => false
 
--- cite: attestation/policy/step.go:224-280 sha256:2d9a13e243a3d230b979ad187bf5b1280daea488c66073ccd1d0d9a504bfe27d
+-- cite: attestation/policy/step.go:237-293 sha256:2d9a13e243a3d230b979ad187bf5b1280daea488c66073ccd1d0d9a504bfe27d
 /-- The typed-decision body (step.go). Instructions and criteria are
 not modelled; their emptiness checks only add refusals. -/
 inductive Decision where
@@ -54,7 +54,7 @@ inductive Decision where
   | score (levels : Nat) (minS maxS : Option Num)
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/step.go:208-222 sha256:a12c36482dcf11d53827b9095ab7f45e7422abcee02011ae9b4c106d9891c803
+-- cite: attestation/policy/step.go:221-235 sha256:a12c36482dcf11d53827b9095ab7f45e7422abcee02011ae9b4c106d9891c803
 /-- `AiPolicy` (step.go). `prompt` and `decision` are both present in
 the Go struct; validation requires exactly one. -/
 structure AiPolicy where
@@ -176,13 +176,13 @@ def checked (pols : List AiPolicy) (out : Outcome) : Outcome :=
     else ⟨out.rs, firstErr (pols.zip out.rs)⟩
 
 -- cite: attestation/policy/ai.go:125-160 sha256:6e5f5e41abaff02ce2e2f43a270573f6880b835ec3f6bb2d73d2faa8670435b5
--- cite: attestation/policy/step.go:975-1008 sha256:4a82bc8ba27e36910bf5d1f993c9c14cb617eef4f12bfa663965a4b21e53306a
--- cite: attestation/policy/policy.go:1886-1919 sha256:141e115a6200a205ec3a9a4a7166a32bc1b17c1a61c5cfbbbbd81be63de056d3
+-- cite: attestation/policy/step.go:998-1031 sha256:4a82bc8ba27e36910bf5d1f993c9c14cb617eef4f12bfa663965a4b21e53306a
+-- cite: attestation/policy/policy.go:1909-1945 sha256:34f1cd459bc6192db271f64b035288f0a8edfe137f5e74e9cfba60d86738c16e
 -- cite: attestation/policy/ai.go:128-130 sha256:35238ce2c72621baa8719b56b25575d0ce1e52e3c423e1569961c83ebbde7bad
 -- cite: attestation/policy/ai.go:132-134 sha256:e66e602b851109d805e1aadba90ada8bcf3fef0c38a734f8adc02e8008e6503f
--- cite: attestation/policy/step.go:976-979 sha256:bcea2270ab37fdbeedce0db5603b97fa9ad9459a06f3cd622a638d24f54d7578
--- cite: attestation/policy/step.go:986-989 sha256:21db4e5d5f096d80bdfffbb1ac140aadfaf09d6ed1213f185ac3a45d45e7772f
--- cite: attestation/policy/policy.go:1898-1898 sha256:b5df317369278e4c97d65388cf629257780d657c6c30beb90869014422f1f73c
+-- cite: attestation/policy/step.go:999-1002 sha256:bcea2270ab37fdbeedce0db5603b97fa9ad9459a06f3cd622a638d24f54d7578
+-- cite: attestation/policy/step.go:1009-1012 sha256:21db4e5d5f096d80bdfffbb1ac140aadfaf09d6ed1213f185ac3a45d45e7772f
+-- cite: attestation/policy/policy.go:1922 sha256:b5df317369278e4c97d65388cf629257780d657c6c30beb90869014422f1f73c
 /-- The gate: `EvaluateAIPolicyWithProvider` (ai.go) over a provider's raw
 outcome `out`, as consumed by the step gate (step.go) and the external gate
 (policy.go).

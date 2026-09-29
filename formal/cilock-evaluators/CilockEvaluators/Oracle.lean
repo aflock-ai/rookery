@@ -16,7 +16,7 @@
   meant to do.
 -/
 import Lean.Data.Json
-import CilockEvaluators.Vsa
+import CilockEvaluators.Nested
 
 namespace CilockEvaluators.Oracle
 
@@ -236,8 +236,24 @@ def vsaCase (j : Json) : D String := do
   let exts ← (← arr j "externals").mapM (fun e => do
     let consumer := consumerOf (← str e "consumer") (← str e "expected") now window
     let cands ← (← arr e "candidates").mapM (fun c => do
-      return (⟨← decodeVsa (← field c "vsa"), ⟨← str c "signer"⟩, ← bool c "sigOk"⟩ : Vsa.Candidate))
-    return Gate.external (← bool e "required") (cands.map (Vsa.toEnvelope allowed requested consumer)))
+      let vc : Vsa.Candidate := ⟨← decodeVsa (← field c "vsa"), ⟨← str c "signer"⟩, ← bool c "sigOk"⟩
+      let stamped : List Nat ← match c.getObjVal? "stamped" with
+        | .error _ => pure []
+        | .ok v => do (← v.getArr?).toList.mapM (·.getNat?)
+      -- The nested view: the stock envelope plus what admission reads.
+      return (⟨Vsa.toEnvelope allowed requested consumer vc, vc.vsa.policyDigest,
+        some vc.vsa.timeVerified, stamped⟩ : Nested.Candidate))
+    let child : Option Digest ← match e.getObjVal? "child" with
+      | .error _ | .ok Json.null => pure none
+      | .ok v => do let s ← v.getStr?; pure (some (Digest.mk s))
+    let maxAge : Option Nat ← match e.getObjVal? "maxAge" with
+      | .error _ | .ok Json.null => pure none
+      | .ok v => do let n ← v.getNat?; pure (some n)
+    -- `externalLatest` is `Gate.external` over the envelopes when neither
+    -- nested field is set.
+    let required ← bool e "required"
+    let x : Nested.External := { required, child, maxAge }
+    return Nested.externalLatest now x cands)
   return verifyStr (Gate.verify true [] exts)
 
 def runCase (line : String) : String :=

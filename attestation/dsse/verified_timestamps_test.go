@@ -66,3 +66,30 @@ func TestVerifySurfacesVerifiedTimestamps(t *testing.T) {
 	}
 	assert.True(t, found, "a passing verifier should carry the TSA-verified timestamp")
 }
+
+// TestVerifyRawKeyCarriesVerifiedTimestamps: a raw-key signature's RFC3161
+// token is verified too, so a publickey functionary can meet a
+// timestampConstraint. A token that does not verify adds no time and does not
+// fail the signature.
+func TestVerifyRawKeyCarriesVerifiedTimestamps(t *testing.T) {
+	signer, verifier, err := createTestKey()
+	require.NoError(t, err)
+
+	tsTime := time.Now().Truncate(time.Second)
+	ts := timestamp.FakeTimestamper{T: tsTime}
+	env, err := Sign("test", bytes.NewReader([]byte("raw-key timestamped")),
+		SignWithSigners(signer), SignWithTimestampers(ts))
+	require.NoError(t, err)
+
+	checked, err := env.Verify(VerifyWithVerifiers(verifier), VerifyWithTimestampVerifiers(ts))
+	require.NoError(t, err)
+	require.Len(t, checked, 1)
+	require.NoError(t, checked[0].Error)
+	require.Len(t, checked[0].VerifiedTimestamps, 1)
+	assert.True(t, checked[0].VerifiedTimestamps[0].Equal(tsTime))
+
+	other := timestamp.FakeTimestamper{T: tsTime.Add(time.Hour)}
+	checked, err = env.Verify(VerifyWithVerifiers(verifier), VerifyWithTimestampVerifiers(other))
+	require.NoError(t, err, "an unverifiable token must not fail a valid raw-key signature")
+	require.Empty(t, checked[0].VerifiedTimestamps)
+}

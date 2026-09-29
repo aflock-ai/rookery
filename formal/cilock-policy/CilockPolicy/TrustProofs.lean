@@ -15,7 +15,7 @@ theorem mem_verifiers {p : Policy} {e : Envelope} {v : Verifier} (hv : v ∈ ver
 
 theorem sigVerifier_spec {p : Policy} {sig : Sig} {v : Verifier} (h : sigVerifier p sig = some v) :
     sig.ok = true ∧ v.cred = sig.cred ∧
-    (∀ k, sig.cred = .key k → p.keys.contains k = true ∧ v.times = []) ∧
+    (∀ k, sig.cred = .key k → p.keys.contains k = true ∧ v.times = keyTimes p sig) ∧
     (∀ c, sig.cred = .cert c → p.tsas ≠ [] ∧ c.chainsTo.any p.roots.contains = true ∧
       v.times = certTimes p c sig ∧ v.times ≠ []) := by
   unfold sigVerifier at h
@@ -50,19 +50,29 @@ theorem mem_certTimes {p : Policy} {c : Cert} {sig : Sig} {t : Time} (h : t ∈ 
   exact ⟨tok, hm, hok, hts, hnb, hna, rfl⟩
 
 /-- Only TSA-verified times ever reach a verdict: a verifier's times come from
-    tokens, never from a signer-claimed field (V7, second half). -/
+    tokens of its own signature that verified against a policy TSA, never from
+    a signer-claimed field (V7, second half). A certificate's are also inside
+    its validity window; a raw key has none to check. -/
 theorem verifier_times_tsa {p : Policy} {e : Envelope} {v : Verifier} (hv : v ∈ verifiers p e)
     {t : Time} (ht : t ∈ v.times) :
-    ∃ sig ∈ e.sigs, ∃ c, sig.cred = .cert c ∧ ∃ tok ∈ sig.tokens, tok.ok = true ∧
-      p.tsas.contains tok.tsa = true ∧ c.notBefore ≤ tok.time ∧ tok.time ≤ c.notAfter ∧ tok.time = t := by
+    ∃ sig ∈ e.sigs, ∃ tok ∈ sig.tokens, tok.ok = true ∧ p.tsas.contains tok.tsa = true ∧
+      tok.time = t ∧ ∀ c, sig.cred = .cert c → c.notBefore ≤ tok.time ∧ tok.time ≤ c.notAfter := by
   obtain ⟨sig, hsig, hsv⟩ := mem_verifiers hv
   obtain ⟨_, _, hk, hc⟩ := sigVerifier_spec hsv
   cases hcred : sig.cred with
-  | key k => rw [(hk k hcred).2] at ht; cases ht
+  | key k =>
+    rw [(hk k hcred).2] at ht
+    simp only [keyTimes, List.mem_map, List.mem_filter, Bool.and_eq_true] at ht
+    obtain ⟨tok, ⟨htm, hok, hts⟩, rfl⟩ := ht
+    exact ⟨sig, hsig, tok, htm, hok, hts, rfl, fun c hc' => by rw [hcred] at hc'; cases hc'⟩
   | cert c =>
     obtain ⟨_, _, htimes, _⟩ := hc c hcred
     rw [htimes] at ht
-    exact ⟨sig, hsig, c, hcred, mem_certTimes ht⟩
+    obtain ⟨tok, htok, hok, hts, hnb, hna, heq⟩ := mem_certTimes ht
+    refine ⟨sig, hsig, tok, htok, hok, hts, heq, fun c' hc' => ?_⟩
+    rw [hcred] at hc'
+    cases hc'
+    exact ⟨hnb, hna⟩
 
 /-! ## The signer behind a contributing collection -/
 

@@ -10,8 +10,8 @@
   (`step.go`); with two passed collections sharing one Reference the
   stable sort keeps arrival order, so the hypothesis also assumes References
   are unique (MemorySource refuses duplicates, `memory.go`).
-  -- cite: attestation/policy/step.go:644-648 sha256:cc962de5d14a0ed07d32878eba6935c50fce704017003ee62ffe4ecfd53a61c2
-  -- cite: attestation/source/memory.go:84-86 sha256:9c3f0ac460d94fbf85a0b217369e3809ac787a24c629bf6256c469a84042e57d
+  -- cite: attestation/policy/step.go:657-661 sha256:cc962de5d14a0ed07d32878eba6935c50fce704017003ee62ffe4ecfd53a61c2
+  -- cite: attestation/source/memory.go:85-87 sha256:9c3f0ac460d94fbf85a0b217369e3809ac787a24c629bf6256c469a84042e57d
 -/
 import CilockPolicy.LinkingOptions
 

@@ -68,8 +68,8 @@ def unionAcyclicAux (names : List String) : Nat → List String → List Step �
 /-- The validator #9860 shipped with the fix: the combined
     attestationsFrom ∪ artifactsFrom graph has no cycle, or the policy is
     refused before any evidence is read.
-    -- cite: attestation/policy/policy.go:517-576 sha256:ca5c15317a583acf447f40503769b9c42ea07629ba1b97dca184a43a5ff03f64
-    -- cite: attestation/policy/policy.go:587-598 sha256:60b550df0f0bca5541de37f0e8a89a5f3157aeb3585f982f41dc90a99d7e3cc5
+    -- cite: attestation/policy/policy.go:520-579 sha256:ca5c15317a583acf447f40503769b9c42ea07629ba1b97dca184a43a5ff03f64
+    -- cite: attestation/policy/policy.go:590-601 sha256:60b550df0f0bca5541de37f0e8a89a5f3157aeb3585f982f41dc90a99d7e3cc5
     -/
 def unionAcyclic (p : Policy) : Bool :=
   unionAcyclicAux (p.steps.map (·.name)) p.steps.length [] p.steps

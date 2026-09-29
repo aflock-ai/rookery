@@ -50,6 +50,7 @@ core axioms (`propext`, `Quot.sound`, `Classical.choice`). There is no
 | `Ai.lean` | AI policies, both providers, the response checks (`checked`), the gate, E1/E2/E4/E5 for AI. |
 | `Gate.lean` | Step gate, external gate, verify aggregation, **`evaluators_fail_closed`**. |
 | `Vsa.lean` | VSA emission and consumption, `Assumptions`, **`vsa_exact_policy_sound`**, `vsa_non_amplification`. |
+| `Nested.lean` | Nested externals (`childPolicyDigest`, `timestampConstraint`): the newest admitted child VSA decides, at its signed time. **`latest_sound`**, **`parent_sound`**, `admit_time_is_signed`; `tsa_ordering_restamp_passes` refutes ordering by TSA time. |
 | `Holdout.lean` | Predictions for four real test fixtures (below). |
 | `Oracle.lean`, `OracleMain.lean` | The model as an executable (`cilock-evaluators-oracle`) for differential testing. |
 | `Audit.lean` | `#print axioms` for every result. |

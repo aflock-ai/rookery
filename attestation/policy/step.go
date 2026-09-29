@@ -162,6 +162,19 @@ type ExternalAttestation struct {
 	// absolute URL namespace with a lower-case scheme and a host. Empty (the
 	// default) keeps the strict guard: SHA-1 subjects never match.
 	CommitSubject string `json:"commitSubject,omitempty" jsonschema:"title=Commit Subject,description=Exact subject-name prefix naming a commit for this external (e.g. https://pushgate.dev/v0.1/commithash:). Opts this external alone into matching a SHA-1 commit subject spelled <prefix><40-hex sha> and binds it under commit binding. Must end in /commithash: after an absolute URL; no whitespace."`
+
+	// ChildPolicyDigest binds a VSA external to one child policy: only envelopes whose
+	// predicate.policy.digest.sha256 equals it can decide the external. Without it,
+	// externals match on predicate type, so any child's passing VSA satisfies every
+	// external of that type. Modeled in formal/cilock-evaluators (Nested.lean).
+	ChildPolicyDigest string `json:"childPolicyDigest,omitempty" jsonschema:"title=Child Policy Digest,description=sha256 of the child policy payload; only VSAs produced by that policy can decide this external"`
+
+	// TimestampConstraint admits only envelopes whose functionary-matched signature
+	// carries an RFC3161 TSA-verified time inside the window (and not in the future).
+	// When it or ChildPolicyDigest is set, the latest admitted envelopes decide: the
+	// external passes only if every admitted envelope at the latest verified time
+	// passed, so an older passing VSA cannot mask a newer failing one.
+	TimestampConstraint *TimestampConstraint `json:"timestampConstraint,omitempty" jsonschema:"title=Timestamp Constraint,description=Time window on the TSA-verified signing time of the external envelope; the latest admitted envelope decides"`
 }
 
 // UnmarshalJSON applies the documented default for Required: when the "required"

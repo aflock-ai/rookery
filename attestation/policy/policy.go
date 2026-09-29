@@ -466,6 +466,9 @@ func (p Policy) validateExternalAiPolicies() error {
 		if err := external.ValidateCommitSubject(); err != nil {
 			return fmt.Errorf("external attestation %q: %w", name, err)
 		}
+		if err := external.ValidateNested(); err != nil {
+			return fmt.Errorf("external attestation %q: %w", name, err)
+		}
 	}
 	return nil
 }
@@ -1790,6 +1793,9 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 		ext := p.ExternalAttestations[name]
 		er := ExternalResult{Name: name}
 		declared := commitSubjects[ext.PredicateType]
+		// Nested semantics (external_latest.go): admitted candidates, latest decides.
+		var cands []latestCandidate
+		now := time.Now()
 
 		envelopes, ok := searched[ext.PredicateType]
 		if !ok {
@@ -1870,6 +1876,21 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 				continue
 			}
 
+			mark := func(bool) {}
+			if ext.latestDecides() {
+				at, unbound, err := admitExternal(ext, env, validFunctionaries, now)
+				if unbound {
+					er.Unbound = append(er.Unbound, RejectedExternal{Envelope: env, Reason: err})
+					continue
+				}
+				if err != nil {
+					er.Rejected = append(er.Rejected, RejectedExternal{Envelope: env, Reason: err})
+					continue
+				}
+				key := envelopeKey(env)
+				mark = func(passed bool) { cands = append(cands, latestCandidate{key: key, at: at, passed: passed}) }
+			}
+
 			// Policy evaluation. External attestations are standalone —
 			// their Rego input is the bare predicate (same shape as when a
 			// step has no AttestationsFrom/ExternalFrom). Pass nil stepCtx.
@@ -1878,11 +1899,13 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 					Envelope: env,
 					Reason:   fmt.Errorf("external attestation %q: envelope has no attestor", name),
 				})
+				mark(false)
 				continue
 			}
 
 			if err := EvaluateRegoPolicy(env.Attestor, ext.RegoPolicies, nil); err != nil {
 				er.Rejected = append(er.Rejected, RejectedExternal{Envelope: env, Reason: err})
+				mark(false)
 				continue
 			}
 
@@ -1893,6 +1916,7 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 					Reason:      err,
 					AiResponses: aiResponses,
 				})
+				mark(false)
 				continue
 			}
 
@@ -1916,13 +1940,19 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 				}
 			}
 			if aiFailed {
+				mark(false)
 				continue
 			}
+			mark(true)
 
 			er.Passed = append(er.Passed, PassedExternal{
 				Envelope:    env,
 				AiResponses: aiResponses,
 			})
+		}
+
+		if ext.latestDecides() {
+			decideLatest(&er, cands)
 		}
 
 		// Canonical order (external_assignments.go): the first passed
