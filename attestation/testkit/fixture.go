@@ -128,6 +128,20 @@ type expectSpec struct {
 	Golden          string           `yaml:"golden"` // relative golden predicate path; "" = assertion-only
 	Redact          []string         `yaml:"redact"` // dotted paths zeroed before golden compare
 	RecordedChanges []recordedChange `yaml:"recorded_changes"`
+	// RecordedAdditions declare fields the attestor emits now that the real
+	// recording predates. See recordedAddition.
+	RecordedAdditions []recordedAddition `yaml:"recorded_additions"`
+}
+
+// recordedAddition is a field added to an attestor's output after its fixture
+// was recorded from a real run. The path must be ABSENT from the recorded
+// predicate, and the replay's value there must equal Value (a JSON text,
+// compared exactly, arrays and objects allowed). Like recordedChange it edits
+// only the in-memory expectation; the signed recording is untouched.
+type recordedAddition struct {
+	Path   string `yaml:"path"`
+	Value  string `yaml:"value"`
+	Reason string `yaml:"reason"`
 }
 
 // recordedChange is an explicit historical-output migration, NOT a new real
@@ -188,6 +202,34 @@ func validateRecordedChanges(e expectSpec) error {
 		for _, redact := range e.Redact {
 			if overlaps(change.Path, redact) {
 				return fmt.Errorf("recorded_changes path %q overlaps redact %q", change.Path, redact)
+			}
+		}
+	}
+	for i, add := range e.RecordedAdditions {
+		if strings.TrimSpace(add.Reason) == "" {
+			return fmt.Errorf("recorded_additions[%d]: reason is required", i)
+		}
+		for _, part := range strings.Split(add.Path, ".") {
+			if strings.TrimSpace(part) == "" || strings.ContainsAny(part, "[]") {
+				return fmt.Errorf("recorded_additions[%d]: path must name an object member", i)
+			}
+		}
+		if _, err := decodeExactJSON(json.RawMessage(add.Value)); err != nil {
+			return fmt.Errorf("recorded_additions[%d]: value must be one JSON text: %w", i, err)
+		}
+		for _, change := range e.RecordedChanges {
+			if overlaps(add.Path, change.Path) {
+				return fmt.Errorf("recorded_additions path %q overlaps recorded_changes %q", add.Path, change.Path)
+			}
+		}
+		for _, prev := range e.RecordedAdditions[:i] {
+			if overlaps(add.Path, prev.Path) {
+				return fmt.Errorf("recorded_additions: overlapping paths %q and %q", add.Path, prev.Path)
+			}
+		}
+		for _, redact := range e.Redact {
+			if overlaps(add.Path, redact) {
+				return fmt.Errorf("recorded_additions path %q overlaps redact %q", add.Path, redact)
 			}
 		}
 	}

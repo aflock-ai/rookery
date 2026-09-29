@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -109,8 +110,41 @@ type Summary struct {
 	FailCount    int                       `json:"failCount"`
 	BySeverity   map[string]SeverityCounts `json:"bySeverity"`
 	FailedChecks []FailedCheck             `json:"failedChecks"`
-	ReportFile   string                    `json:"reportFile"`
-	ReportDigest cryptoutil.DigestSet      `json:"reportDigest"`
+	// ChecksRun lists every check the scan ran, by canonical check id (e.g.
+	// "config_recorder_all_regions_enabled"), with its pass and non-pass finding
+	// counts. Without it a policy cannot tell "passed" from "never ran": the
+	// failed list alone is silent about checks that were skipped.
+	ChecksRun    []CheckRun           `json:"checksRun"`
+	ReportFile   string               `json:"reportFile"`
+	ReportDigest cryptoutil.DigestSet `json:"reportDigest"`
+}
+
+// CheckRun is one check the scan executed and how its findings came out.
+type CheckRun struct {
+	Check string `json:"check"`
+	Pass  int    `json:"pass"`
+	Fail  int    `json:"fail"`
+}
+
+// canonicalCheck recovers the check id from an OCSF finding uid of the form
+// "prowler-<provider>-<check>-<account>-<region>-<resource>". Legacy JSON findings
+// already carry the bare check id and are returned unchanged.
+func canonicalCheck(f Finding) string {
+	id := f.CheckID
+	prefix := "prowler-" + strings.ToLower(f.Provider) + "-"
+	if !strings.HasPrefix(id, prefix) {
+		return id
+	}
+	id = strings.TrimPrefix(id, prefix)
+	if f.AccountId != "" {
+		if i := strings.Index(id, "-"+f.AccountId); i > 0 {
+			return id[:i]
+		}
+	}
+	if i := strings.Index(id, "-"); i > 0 {
+		return id[:i]
+	}
+	return id
 }
 
 // Attestor reads prowler JSON output and produces a signed summary attestation.
@@ -599,7 +633,10 @@ func buildSummary(findings []Finding) Summary {
 	s := Summary{
 		BySeverity:   make(map[string]SeverityCounts),
 		FailedChecks: []FailedCheck{},
+		ChecksRun:    []CheckRun{},
 	}
+	runs := map[string]*CheckRun{}
+	var order []string
 
 	for _, f := range findings {
 		// Capture top-level account and provider from first finding.
@@ -611,6 +648,13 @@ func buildSummary(findings []Finding) Summary {
 		}
 
 		s.TotalChecks++
+		cid := canonicalCheck(f)
+		run, ok := runs[cid]
+		if !ok {
+			run = &CheckRun{Check: cid}
+			runs[cid] = run
+			order = append(order, cid)
+		}
 
 		sev := strings.ToLower(f.Severity)
 		counts := s.BySeverity[sev]
@@ -618,10 +662,12 @@ func buildSummary(findings []Finding) Summary {
 		if status == "PASS" {
 			s.PassCount++
 			counts.Pass++
+			run.Pass++
 		} else {
 			// FAIL, MANUAL, NOT_AVAILABLE, MUTED all treated as non-pass.
 			s.FailCount++
 			counts.Fail++
+			run.Fail++
 			s.FailedChecks = append(s.FailedChecks, FailedCheck{
 				CheckID:        f.CheckID,
 				CheckTitle:     f.CheckTitle,
@@ -636,5 +682,9 @@ func buildSummary(findings []Finding) Summary {
 		s.BySeverity[sev] = counts
 	}
 
+	sort.Strings(order)
+	for _, cid := range order {
+		s.ChecksRun = append(s.ChecksRun, *runs[cid])
+	}
 	return s
 }

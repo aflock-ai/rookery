@@ -58,6 +58,15 @@ const purlScheme = "pkg:"
 var (
 	cvePattern  = regexp.MustCompile(`(?i)^CVE-[0-9]{4}-[0-9]{4,}$`)
 	ghsaPattern = regexp.MustCompile(`(?i)^GHSA(-[23456789cfghjmpqrvwx]{4}){3}$`)
+	// findingPattern admits a scanner finding id namespaced by its scanner,
+	// "<scanner>:<check>", e.g. "prowler:awslambda_function_no_secrets_in_variables"
+	// or "kubescape:c-0017". Misconfiguration findings have no CVE or GHSA id, and
+	// OpenVEX's vulnerability name is any identifier; the namespace keeps them
+	// from colliding with advisory ids.
+	// arnPattern: arn:<partition>:<service>:<region>:<account>:<resource>. No "*"
+	// or "?": those are IAM policy wildcards, and a product names one resource.
+	arnPattern     = regexp.MustCompile(`^arn:aws(-[a-z]+)*:[a-z0-9-]+:[a-z0-9-]*:([0-9]{12})?:[A-Za-z0-9_./:+=,@-]+$`)
+	findingPattern = regexp.MustCompile(`(?i)^[a-z][a-z0-9-]{1,31}:[a-z0-9][a-z0-9_.-]{0,127}$`)
 )
 
 // bareSHA256Pattern matches a bare 64-character hex sha256 digest.
@@ -256,8 +265,10 @@ func canonicalVulnID(raw string) (string, error) {
 		return strings.ToUpper(v), nil
 	case ghsaPattern.MatchString(v):
 		return "GHSA-" + strings.ToLower(v[len("GHSA-"):]), nil
+	case findingPattern.MatchString(v) && !strings.HasPrefix(strings.ToLower(v), "cve") && !strings.HasPrefix(strings.ToLower(v), "ghsa"):
+		return strings.ToLower(v), nil
 	default:
-		return "", fmt.Errorf("vex: %q is not a valid vulnerability ID (want CVE-YYYY-NNNN or GHSA-xxxx-xxxx-xxxx)", raw)
+		return "", fmt.Errorf("vex: %q is not a valid vulnerability ID (want CVE-YYYY-NNNN, GHSA-xxxx-xxxx-xxxx, or a scanner finding <scanner>:<check>)", raw)
 	}
 }
 
@@ -302,6 +313,15 @@ func parseProduct(raw string) (Product, string, error) {
 	ref := strings.TrimSpace(raw)
 	if ref == "" {
 		return Product{}, "", fmt.Errorf("vex: empty --product reference")
+	}
+
+	// AWS resource: identity is the ARN. Cloud resources have no content digest;
+	// the ARN is the stable name a scanner finding reports (Prowler's resource uid).
+	if strings.HasPrefix(ref, "arn:") {
+		if !arnPattern.MatchString(ref) {
+			return Product{}, "", fmt.Errorf("vex: --product %q is not a well-formed ARN", raw)
+		}
+		return Product{Component: Component{ID: ref}}, ref, nil
 	}
 
 	// purl: identity is the purl string itself; there is no digest. The

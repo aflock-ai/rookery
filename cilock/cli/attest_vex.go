@@ -55,10 +55,12 @@ func (vo *vexAuthorOptions) addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringArrayVar(&vo.Products, "product", nil,
 		"Product this statement is about. Repeat for multiple. Accepts an OCI reference with a digest "+
 			"('ghcr.io/org/img@sha256:<hex>'), a package URL ('pkg:golang/example.com/mod@v1.2.3'), or a bare "+
-			"sha256 digest. Digests are canonicalized to bare lowercase hex so they join to the digests judge "+
+			"sha256 digest, or an AWS resource ARN ('arn:aws:lambda:us-east-1:123456789012:function:name', no "+
+			"wildcards). Digests are canonicalized to bare lowercase hex so they join to the digests judge "+
 			"records at ingest.")
 	cmd.Flags().StringArrayVar(&vo.Vulns, "vuln", nil,
-		"Vulnerability this statement is about (CVE-YYYY-NNNN or GHSA-xxxx-xxxx-xxxx). Repeat for multiple; "+
+		"Vulnerability this statement is about (CVE-YYYY-NNNN, GHSA-xxxx-xxxx-xxxx, or a scanner finding "+
+			"<scanner>:<check> such as 'prowler:iam_root_mfa_enabled', stored lowercase). Repeat for multiple; "+
 			"each becomes its own OpenVEX statement carrying every --product.")
 	cmd.Flags().StringVar(&vo.Status, "status", "",
 		"Exploitability status: not_affected, affected, fixed, or under_investigation.")

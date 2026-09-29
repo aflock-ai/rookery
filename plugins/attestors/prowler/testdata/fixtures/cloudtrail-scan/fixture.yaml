@@ -30,6 +30,13 @@ expect:
   # the recorded-evidence cross-check compares the deterministic summary content.
   redact:
     - reportFile
+  # summary.checksRun postdates this recording. It is derived from the same
+  # signed report, and pinned here exactly rather than re-recorded against the
+  # live account.
+  recorded_additions:
+    - path: summary.checksRun
+      value: '[{"check":"cloudtrail_multi_region_enabled","fail":1,"pass":0},{"check":"cloudtrail_multi_region_enabled_logging_management_events","fail":1,"pass":0},{"check":"cloudtrail_s3_dataevents_read_enabled","fail":1,"pass":0},{"check":"cloudtrail_s3_dataevents_write_enabled","fail":1,"pass":0}]'
+      reason: "prowler records every check the scan ran (checksRun), added after this run was recorded"
   subjects:
     match: prefix
     keys:

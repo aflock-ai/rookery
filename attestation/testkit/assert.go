@@ -166,6 +166,12 @@ func compareRecordedPredicate(recorded, replay json.RawMessage, expect expectSpe
 	if err := validateRecordedChanges(expect); err != nil {
 		return err
 	}
+	if len(expect.RecordedAdditions) > 0 {
+		var err error
+		if recorded, err = applyRecordedAdditions(recorded, replay, expect.RecordedAdditions); err != nil {
+			return err
+		}
+	}
 	if len(expect.RecordedChanges) > 0 {
 		for side, raw := range []json.RawMessage{recorded, replay} {
 			label := "recorded"
@@ -484,4 +490,52 @@ func keysOf(subjects map[string]cryptoutil.DigestSet) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// applyRecordedAdditions checks each declared addition against both sides and
+// returns the recorded predicate with the additions inserted. A field an
+// attestor started emitting after the real run was recorded is absent from the
+// recording; the addition names it, requires it absent there, and requires the
+// replay's value to equal the declared value exactly. Nothing else moves.
+func applyRecordedAdditions(recorded, replay json.RawMessage, additions []recordedAddition) (json.RawMessage, error) {
+	recRoot, err := decodeExactJSON(recorded)
+	if err != nil {
+		return nil, fmt.Errorf("decode recorded predicate: %w", err)
+	}
+	repRoot, err := decodeExactJSON(replay)
+	if err != nil {
+		return nil, fmt.Errorf("decode replay predicate: %w", err)
+	}
+	parentOf := func(root any, path string) (map[string]any, string, bool) {
+		parts := strings.Split(path, ".")
+		node := root
+		for _, part := range parts[:len(parts)-1] {
+			object, ok := node.(map[string]any)
+			if !ok {
+				return nil, "", false
+			}
+			node = object[part]
+		}
+		object, ok := node.(map[string]any)
+		return object, parts[len(parts)-1], ok
+	}
+	for _, add := range additions {
+		want, _ := decodeExactJSON(json.RawMessage(add.Value)) // validated
+		wantJSON, _ := json.Marshal(want)
+		recParent, leaf, ok := parentOf(recRoot, add.Path)
+		if !ok {
+			return nil, fmt.Errorf("recorded_additions path %q has no object parent in recorded", add.Path)
+		}
+		if _, exists := recParent[leaf]; exists {
+			return nil, fmt.Errorf("recorded_additions %q: already present in recorded; use recorded_changes (reason: %s)", add.Path, add.Reason)
+		}
+		repParent, _, ok := parentOf(repRoot, add.Path)
+		got, exists := repParent[leaf]
+		gotJSON, err := json.Marshal(got)
+		if !ok || !exists || err != nil || !bytes.Equal(gotJSON, wantJSON) {
+			return nil, fmt.Errorf("recorded_additions %q: replay value does not equal the declared value (reason: %s)", add.Path, add.Reason)
+		}
+		recParent[leaf] = want
+	}
+	return json.Marshal(recRoot)
 }

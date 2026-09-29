@@ -137,3 +137,50 @@ func TestRecordedScalarPreservesNumericLiteral(t *testing.T) {
 		})
 	}
 }
+
+func TestRecordedAdditionsCompareExactNewField(t *testing.T) {
+	const recorded = `{"s":{"a":1}}`
+	const replay = `{"s":{"a":1,"runs":[{"check":"x","pass":1}]}}`
+	const add = `recorded_additions: [{path: s.runs, value: '[{"check":"x","pass":1}]', reason: 'attestor records the checks it ran'}]`
+	for _, tc := range []struct {
+		name, recorded, replay, expect, wantError string
+	}{
+		{"declared-addition", recorded, replay, add, ""},
+		{"undeclared-addition", recorded, replay, "{}", "replayed predicate !="},
+		{"wrong-value", recorded, strings.Replace(replay, `"pass":1`, `"pass":2`, 1), add, "does not equal the declared value"},
+		{"absent-in-replay", recorded, recorded, add, "does not equal the declared value"},
+		{"already-recorded", replay, replay, add, "already present in recorded"},
+		{"no-parent", `{}`, replay, add, "no object parent"},
+		{"other-drift", recorded, strings.Replace(replay, `"a":1`, `"a":2`, 1), add, "replayed predicate !="},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var expect expectSpec
+			if err := yaml.Unmarshal([]byte(tc.expect), &expect); err != nil {
+				t.Fatal(err)
+			}
+			err := compareRecordedPredicate(json.RawMessage(tc.recorded), json.RawMessage(tc.replay), expect)
+			if tc.wantError == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
+				t.Fatalf("error = %v, want %q", err, tc.wantError)
+			}
+		})
+	}
+	for name, bad := range map[string]string{
+		"no-reason":  `[{path: s.runs, value: '[]'}]`,
+		"bad-json":   `[{path: s.runs, value: '[', reason: r}]`,
+		"array-path": `[{path: 's.[].x', value: '1', reason: r}]`,
+		"overlap":    "[{path: s.runs, value: '[]', reason: r}]\nredact: [s]",
+	} {
+		t.Run("reject-"+name, func(t *testing.T) {
+			var expect expectSpec
+			if err := yaml.Unmarshal([]byte("recorded_additions: "+bad), &expect); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateRecordedChanges(expect); err == nil {
+				t.Fatal("invalid recorded_additions accepted")
+			}
+		})
+	}
+}

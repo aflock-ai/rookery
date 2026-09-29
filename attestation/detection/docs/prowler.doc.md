@@ -106,6 +106,7 @@ The `prowler` attestor is a `postproduct` lifecycle attestor with predicate type
 - `passCount` / `failCount` — pass vs. non-pass tallies. `FAIL`, `MANUAL`, `NOT_AVAILABLE`, and `MUTED` are all counted as non-pass.
 - `bySeverity` — map of lowercased severity → `{ pass, fail }` counts.
 - `failedChecks` — array of condensed non-pass entries with `checkId`, `checkTitle`, `severity`, `serviceName`, `region`, `resourceId`, `resourceArn`, `statusExtended`. The full Prowler finding is intentionally not embedded.
+- `checksRun` — every check the scan ran, sorted by canonical check id (`check`, e.g. `iam_root_mfa_enabled`, parsed from the OCSF finding uid `prowler-<provider>-<check>-<account>-…`), with its `pass` and `fail` finding counts. `failedChecks` alone cannot tell a check that passed from one that never ran; require the checks you depend on to appear here. A check with no findings at all (no resources in scope) is absent too.
 - `reportFile` — path of the JSON file that was consumed from products.
 - `reportDigest` — `cryptoutil.DigestSet` of that file, matching the product digest recorded by the attestation context.
 
@@ -144,6 +145,9 @@ The summary lets policy gate on failure counts or specific failed `checkId`s wit
         "resourceArn": "arn:aws:iam::123456789012:root",
         "statusExtended": "Root account does not have MFA enabled."
       }
+    ],
+    "checksRun": [
+      { "check": "iam_root_mfa_enabled", "pass": 0, "fail": 1 }
     ],
     "reportFile": "prowler-output.json",
     "reportDigest": { "sha256": "..." }

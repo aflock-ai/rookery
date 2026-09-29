@@ -609,8 +609,8 @@ Validation is fail-closed — a statement that suppresses a finding has to say w
 
 | Flag | Default | Description |
 |---|---|---|
-| `--product <ref>` | (required) | Product the statement is about. Repeatable. An OCI reference with a digest (`ghcr.io/org/img@sha256:<hex>`), a package URL (`pkg:…`), or a bare sha256 digest. |
-| `--vuln <id>` | (required) | Vulnerability the statement is about (`CVE-YYYY-NNNN` or `GHSA-xxxx-xxxx-xxxx`). Repeatable; each becomes its own statement carrying every `--product`. |
+| `--product <ref>` | (required) | Product the statement is about. Repeatable. An OCI reference with a digest (`ghcr.io/org/img@sha256:<hex>`), a package URL (`pkg:…`), a bare sha256 digest, or an AWS resource ARN (no wildcards). |
+| `--vuln <id>` | (required) | Vulnerability the statement is about (`CVE-YYYY-NNNN`, `GHSA-xxxx-xxxx-xxxx`, or a scanner finding `<scanner>:<check>` such as `prowler:iam_root_mfa_enabled`, stored lowercase). Repeatable; each becomes its own statement carrying every `--product`. |
 | `--status <status>` | (required) | `not_affected`, `affected`, `fixed`, or `under_investigation`. |
 | `--justification <j>` | (none) | Why the product is not affected. **Required** with `--status not_affected`, rejected otherwise. One of `component_not_present`, `vulnerable_code_not_present`, `vulnerable_code_not_in_execute_path`, `vulnerable_code_cannot_be_controlled_by_adversary`, `inline_mitigations_already_exist`. |
 | `--impact-statement <text>` | (none) | Free-text elaboration on the justification — where a human (or an agent) explains the reasoning a reviewer will read. |
