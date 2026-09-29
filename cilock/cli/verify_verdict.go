@@ -32,10 +32,20 @@ import (
 	"github.com/aflock-ai/rookery/attestation/standards"
 )
 
-// The single-leaf root is a discovery hint, not permission to bypass a modern
-// inventory requirement. A file-targeted verification needs an actual binding.
+// requireInventoryArtifactBinding refuses a verdict in which no passed step
+// binds the artifact the operator named, as a top-level subject or as a
+// root-verified product/material leaf. A policy that other evidence satisfies
+// says nothing about THIS artifact: before #10648 the unbound case exited 0
+// with a note, so a gate verifying "$ARTIFACT --subjects sha1:$COMMIT" passed
+// any file at all. The single-leaf root is a discovery hint, not a binding.
 func requireInventoryArtifactBinding(digest string, results map[string]policy.StepResult, manifests manifestIndex, lookup func(string) ([]byte, bool)) error {
-	supplied := []string{"sha256:" + digest}
+	return requireArtifactBinding("sha256:"+digest, results, manifests, lookup)
+}
+
+// requireArtifactBinding is requireInventoryArtifactBinding for an
+// algorithm-qualified digest ("sha256:<hex>", "dirHash:<h1>").
+func requireArtifactBinding(qualified string, results map[string]policy.StepResult, manifests manifestIndex, lookup func(string) ([]byte, bool)) error {
+	supplied := []string{qualified}
 	if len(matchedBindings(supplied, results, manifests)) > 0 {
 		return nil
 	}
@@ -49,10 +59,13 @@ func requireInventoryArtifactBinding(digest string, results map[string]policy.St
 			modern = loadCollectionInventories(coll, manifests, lookup) || modern
 		}
 	}
-	if modern && len(matchedBindings(supplied, results, manifests)) == 0 {
-		return fmt.Errorf("artifact inclusion requires a matching verified file inventory; details are omitted, unavailable, invalid, or do not contain the artifact")
+	if len(matchedBindings(supplied, results, manifests)) > 0 {
+		return nil
 	}
-	return nil
+	if modern {
+		return fmt.Errorf("artifact %s is not bound by any verified step: artifact inclusion requires a matching verified file inventory; details are omitted, unavailable, invalid, or do not contain the artifact", qualified)
+	}
+	return fmt.Errorf("artifact %s is not bound by any verified step: no passed collection names it as a subject or a root-verified product/material leaf, so the policy passed on evidence about something else", qualified)
 }
 
 func loadCollectionInventories(coll attestation.Collection, manifests manifestIndex, lookup func(string) ([]byte, bool)) bool {

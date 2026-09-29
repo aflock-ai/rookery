@@ -277,6 +277,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// step ... subject ..." binding line so a green run confirms the binding
 	// was to THEIR file, not just that the policy was satisfiable.
 	var suppliedDigests []string
+	var artifactDirDigest string
 	if len(vo.ArtifactDirectoryPath) > 0 {
 		artifactDigestSet, err := cryptoutil.CalculateDigestSetFromDir(vo.ArtifactDirectoryPath, []cryptoutil.DigestValue{{Hash: crypto.SHA256, GitOID: false}})
 		if err != nil {
@@ -285,8 +286,11 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 
 		log.Infof("subject: sha256:%s (computed from directory %s)", suppliedSHA256(artifactDigestSet), vo.ArtifactDirectoryPath)
 		subjects = append(subjects, artifactDigestSet)
-		if h := suppliedSHA256(artifactDigestSet); h != "" {
-			suppliedDigests = append(suppliedDigests, "sha256:"+h)
+		// A directory's digest is a dirhash ("dirHash" in the subject map),
+		// never a plain sha256, so it is bound under its own algorithm name.
+		if names, nerr := artifactDigestSet.ToNameMap(); nerr == nil && names["dirHash"] != "" {
+			artifactDirDigest = "dirHash:" + names["dirHash"]
+			suppliedDigests = append(suppliedDigests, artifactDirDigest)
 		}
 	}
 
@@ -417,8 +421,23 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		}
 	}
 	var artifactBindingErr error
-	if verifyErr == nil && artifactFileDigestHex != "" {
-		artifactBindingErr = requireInventoryArtifactBinding(artifactFileDigestHex, verifiedEvidence.StepResults, materialManifests, inventoryLookup)
+	if verifyErr == nil {
+		// Every artifact the operator pointed at (file or directory) must be
+		// bound by a passed step. --subjects digests are search seeds and keep
+		// their informational "did NOT match" note.
+		var artifacts []string
+		if artifactFileDigestHex != "" {
+			artifacts = append(artifacts, "sha256:"+artifactFileDigestHex)
+		}
+		if artifactDirDigest != "" {
+			artifacts = append(artifacts, artifactDirDigest)
+		}
+		for _, qualified := range artifacts {
+			if err := requireArtifactBinding(qualified, verifiedEvidence.StepResults, materialManifests, inventoryLookup); err != nil {
+				artifactBindingErr = err
+				break
+			}
+		}
 		verifyErr = artifactBindingErr
 	}
 
