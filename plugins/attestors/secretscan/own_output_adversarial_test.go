@@ -71,7 +71,7 @@ func TestUntrackedSymlinkToOwnStreamIsStillScanned(t *testing.T) {
 	scan.ownStreams = func() []*os.File { return []*os.File{openAppend(t, target)} }
 	ctx, err := attestation.NewContext("test", nil, attestation.WithWorkingDir(dir))
 	require.NoError(t, err)
-	require.False(t, scan.skipAsOwnOutput(ctx, rel, filepath.Join(dir, filepath.FromSlash(rel)), openedInfo(t, filepath.Join(dir, filepath.FromSlash(rel)))),
+	require.False(t, scan.skipAsOwnOutput(ctx, routeProduct, rel, filepath.Join(dir, filepath.FromSlash(rel)), nil, openedInfo(t, filepath.Join(dir, filepath.FromSlash(rel))), nil),
 		"a symlink to this process's stream is not the stream")
 }
 
@@ -93,9 +93,9 @@ func TestSymlinkedParentDirToTrackedStreamIsStillScanned(t *testing.T) {
 	scan.ownStreams = func() []*os.File { return []*os.File{openAppend(t, filepath.Join(dir, "tracked-dir", "report.log"))} }
 	ctx, err := attestation.NewContext("test", nil, attestation.WithWorkingDir(dir))
 	require.NoError(t, err)
-	require.False(t, scan.skipAsOwnOutput(ctx, "alias/report.log", filepath.Join(dir, "alias", "report.log"), openedInfo(t, filepath.Join(dir, "alias", "report.log"))),
+	require.False(t, scan.skipAsOwnOutput(ctx, routeProduct, "alias/report.log", filepath.Join(dir, "alias", "report.log"), nil, openedInfo(t, filepath.Join(dir, "alias", "report.log")), nil),
 		"a tracked file reached through a symlinked directory must not be skipped")
-	require.False(t, scan.skipAsOwnOutput(ctx, "tracked-dir/report.log", filepath.Join(dir, "tracked-dir", "report.log"), openedInfo(t, filepath.Join(dir, "tracked-dir", "report.log"))),
+	require.False(t, scan.skipAsOwnOutput(ctx, routeProduct, "tracked-dir/report.log", filepath.Join(dir, "tracked-dir", "report.log"), nil, openedInfo(t, filepath.Join(dir, "tracked-dir", "report.log")), nil),
 		"the tracked file under its own name is not skipped either")
 }
 

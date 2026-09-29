@@ -569,7 +569,7 @@ func (a *Attestor) scanProductBytes(ctx *attestation.AttestationContext, path, s
 	}
 	// cilock's own untracked output: see own_output.go. Skipped like a
 	// binary, so it is neither a subject nor a digest disagreement.
-	if a.skipAsOwnOutput(ctx, scopePath, absPath, readInfo) {
+	if a.skipAsOwnOutput(ctx, routeProduct, scopePath, absPath, content, readInfo, detector) {
 		return productScan{}, false, nil
 	}
 	if rep, rules, ok := classifyReport(path, content, product); ok {

@@ -1098,7 +1098,7 @@ func (a *Attestor) scanOneFile(ctx *attestation.AttestationContext, rel, absPath
 	}
 	// cilock's own untracked output: see own_output.go. Only bytes read off
 	// disk reach this; committed and staged blobs never do.
-	if a.skipAsOwnOutput(ctx, rel, absPath, readInfo) {
+	if a.skipAsOwnOutput(ctx, routeWorkingTree, rel, absPath, content, readInfo, detector) {
 		return nil
 	}
 	return a.scanContent(ctx, "file:"+rel, rel, absPath, content, detector)

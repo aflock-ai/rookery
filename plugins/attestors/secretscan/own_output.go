@@ -17,16 +17,27 @@ package secretscan
 // This file (own_output.go) decides which of cilock's OWN outputs a scan
 // skips, and states why none of them can be a file a push carries.
 //
-// The file this process writes its stdout or stderr to, identified by what it
-// IS (device and inode, os.SameFile), never by its name. `cilock run ... 2>
-// .pushgate/secrets.stderr` puts the step's own log in the working tree; it is
-// still being written while it is scanned, so it always "changed between
-// recording and scanning" and its content is cilock's own log lines.
+// Two kinds of file, each identified by what it IS, never by its name:
 //
-// It is skipped ONLY when git positively says the path is untracked: its real
-// path (no symlinked component) is in neither the index nor HEAD, is not at
-// or under a gitlink (a submodule keeps its own index), and is owned by this
-// same repository. That is the whole security argument. A push
+//   - The file this process writes its stdout or stderr to, matched by inode
+//     (os.SameFile), never followed through a symlink. `cilock run ... 2>
+//     .pushgate/secrets.stderr` puts the step's own log in the working tree;
+//     it is still being written while it is scanned, so it always "changed
+//     between recording and scanning" and its content is cilock's own log
+//     lines. Skipped by any route, a recorded product included.
+//   - A file whose bytes parse as a signed DSSE envelope over an attestation
+//     collection: the --outfile of another run, or its stdout saved with the
+//     summary in front. Its base64 payload is full of commit hashes and
+//     digests that secret rules match. Skipped ONLY when a diff scope's
+//     working-tree walk discovered it, never as a recorded product (what the
+//     step publishes) and never by the tree walk: its recognition is by shape,
+//     so it gets no route an operator did not already have to hide an
+//     untracked file from a diff scope (.git/info/exclude).
+//
+// Either one is skipped ONLY when git positively says the path is untracked:
+// its real path (no symlinked component) is in neither the index nor HEAD,
+// is not at or under a gitlink (a submodule keeps its own index), and is
+// owned by this same repository. That is the whole security argument. A push
 // carries commits, the index is what the next commit will carry, and both
 // are read from the object store by scanCommittedBlobs, which never consults
 // this filter. So a file skipped here is by construction one no commit in the
@@ -34,8 +45,18 @@ package secretscan
 // tracked and read again. Anything that cannot be proven untracked (not a git
 // work tree, an unborn HEAD, a path outside the work tree, any git failure)
 // is scanned.
+//
+// An envelope is recognised on a line of its own, so a saved stdout with the
+// summary in front still counts. The lines OUTSIDE the envelope are not
+// cilock's evidence, so before such a file is skipped they are scanned on
+// their own: any finding there, or any error scanning them, means the whole
+// file is scanned as usual. The skip is all-or-nothing so that a published
+// subject is always the digest of the complete bytes read.
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,7 +64,9 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/intoto"
 	"github.com/aflock-ai/rookery/attestation/log"
+	"github.com/zricethezav/gitleaks/v8/detect"
 )
 
 // ownOutputSkip records one file skipped as cilock's own output, for the log.
@@ -52,7 +75,10 @@ type ownOutputSkip struct {
 	Reason string
 }
 
-const reasonOwnStream = "it is the file this cilock process is writing its own stdout or stderr to"
+const (
+	reasonOwnStream = "it is the file this cilock process is writing its own stdout or stderr to"
+	reasonEvidence  = "it is a signed attestation envelope, cilock evidence from another run"
+)
 
 // ownStreamFiles is what this process writes its stdout and stderr to.
 func (a *Attestor) ownStreamFiles() []*os.File {
@@ -95,14 +121,39 @@ func (a *Attestor) isOwnStream(absPath string, read os.FileInfo) bool {
 	return false
 }
 
-// ownOutputReason says why the bytes read from absPath (read is the open
-// file's identity) are cilock's own output, or "" if they are not or if that
-// cannot be shown.
-func (a *Attestor) ownOutputReason(absPath string, read os.FileInfo) string {
+// skipRoute is how a file reached the scan: as a product the command
+// recorded, or through a scope's working-tree walk.
+type skipRoute int
+
+const (
+	routeProduct skipRoute = iota
+	routeWorkingTree
+)
+
+// ownOutputReason says why the bytes read from absPath are cilock's own
+// output, or "" if they are not or if that cannot be shown. content is what
+// was read and read is the identity of the open file it was read from, so
+// the decision is about the bytes that would otherwise be scanned. For evidence,
+// residual is every byte outside the envelope, which the caller must find
+// clean before it skips the file.
+//
+// The own stream is identity (the inode this process writes), so it counts by
+// any route. An envelope is recognised by SHAPE, so it counts only on the
+// route where skipping grants nothing new: a diff scope's working-tree walk,
+// which an operator could already narrow with .git/info/exclude. A recorded
+// product is what the step publishes, and a tree scope reads the working tree
+// on purpose; on both an envelope is scanned.
+func (a *Attestor) ownOutputReason(route skipRoute, absPath string, content []byte, read os.FileInfo) (reason string, residual []byte) {
 	if a.isOwnStream(absPath, read) {
-		return reasonOwnStream
+		return reasonOwnStream, nil
 	}
-	return ""
+	if route != routeWorkingTree || !strings.HasPrefix(a.scope, diffScopePrefix) {
+		return "", nil
+	}
+	if ok, rest := splitAttestationCollectionEnvelope(content); ok {
+		return reasonEvidence, rest
+	}
+	return "", nil
 }
 
 // skipAsOwnOutput decides whether to skip the bytes just read from rel
@@ -110,8 +161,8 @@ func (a *Attestor) ownOutputReason(absPath string, read os.FileInfo) string {
 // carries. read is the identity of the open file they were read from. It is
 // consulted only for bytes read off disk, never for a committed or staged
 // blob.
-func (a *Attestor) skipAsOwnOutput(ctx *attestation.AttestationContext, rel, absPath string, read os.FileInfo) bool {
-	reason := a.ownOutputReason(absPath, read)
+func (a *Attestor) skipAsOwnOutput(ctx *attestation.AttestationContext, route skipRoute, rel, absPath string, content []byte, read os.FileInfo, detector *detect.Detector) bool {
+	reason, residual := a.ownOutputReason(route, absPath, content, read)
 	if reason == "" {
 		return false
 	}
@@ -119,6 +170,15 @@ func (a *Attestor) skipAsOwnOutput(ctx *attestation.AttestationContext, rel, abs
 	if !untracked {
 		log.Debugf("(attestation/secretscan) scanning %s although %s: %s", rel, reason, why)
 		return false
+	}
+	// Text beside an envelope is not evidence. A finding in it, or a scan of
+	// it that fails, means the file is scanned whole.
+	if len(bytes.TrimSpace(residual)) > 0 {
+		found, err := a.scanBytes(residual, absPath, rel, detector, make(map[string]struct{}), 0)
+		if err != nil || len(found) > 0 {
+			log.Debugf("(attestation/secretscan) scanning %s although %s: the text outside the envelope is not evidence and holds a finding", rel, reason)
+			return false
+		}
 	}
 	a.ownOutputSkips = append(a.ownOutputSkips, ownOutputSkip{Path: rel, Reason: reason})
 	return true
@@ -294,6 +354,64 @@ func (a *Attestor) logOwnOutputSkips() {
 		logged[s.Path] = true
 		log.Infof("(attestation/secretscan) not scanning %s: %s, and git does not track it, so no commit in this push carries it", s.Path, s.Reason)
 	}
+}
+
+// isAttestationCollectionEnvelope reports whether content is, or contains on
+// a line of its own, a signed DSSE envelope whose in-toto payload is an
+// attestation collection. That is exactly what `cilock run --outfile` writes,
+// and what its stdout carries after the run summary.
+func isAttestationCollectionEnvelope(content []byte) bool {
+	ok, _ := splitAttestationCollectionEnvelope(content)
+	return ok
+}
+
+// splitAttestationCollectionEnvelope is isAttestationCollectionEnvelope that
+// also returns every line that is NOT an envelope, in order. A whole-content
+// envelope (bare or indented) leaves nothing.
+func splitAttestationCollectionEnvelope(content []byte) (bool, []byte) {
+	if isCollectionEnvelopeJSON(content) {
+		return true, nil
+	}
+	found := false
+	var rest bytes.Buffer
+	for _, raw := range bytes.Split(content, []byte("\n")) {
+		line := bytes.TrimSpace(raw)
+		if len(line) > 0 && line[0] == '{' && bytes.Contains(line, []byte(`"payloadType"`)) && isCollectionEnvelopeJSON(line) {
+			found = true
+			continue
+		}
+		rest.Write(raw)
+		rest.WriteByte('\n')
+	}
+	if !found {
+		return false, nil
+	}
+	return true, rest.Bytes()
+}
+
+func isCollectionEnvelopeJSON(b []byte) bool {
+	var env struct {
+		Payload     string            `json:"payload"`
+		PayloadType string            `json:"payloadType"`
+		Signatures  []json.RawMessage `json:"signatures"`
+	}
+	if err := json.Unmarshal(b, &env); err != nil {
+		return false
+	}
+	if env.PayloadType != intoto.PayloadType || env.Payload == "" || len(env.Signatures) == 0 {
+		return false
+	}
+	payload, err := base64.StdEncoding.DecodeString(env.Payload)
+	if err != nil {
+		return false
+	}
+	var stmt struct {
+		PredicateType string `json:"predicateType"`
+	}
+	if err := json.Unmarshal(payload, &stmt); err != nil {
+		return false
+	}
+	return stmt.PredicateType == attestation.CollectionType || stmt.PredicateType == attestation.LegacyCollectionType
 }
 
 // changedProductHint says why a product most likely changed between the
