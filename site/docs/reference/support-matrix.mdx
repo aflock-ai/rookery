@@ -1,0 +1,19 @@
+---
+title: Support matrix
+sidebar_position: 0
+description: Which SLSA Build, SLSA Source and ALPS levels CI/lock reaches in each build environment, with a setup guide for every supported result.
+---
+
+import SupportMatrix from '@site/src/components/SupportMatrix';
+
+# Support matrix
+
+Pick where you build to see which SLSA and ALPS levels CI/lock reaches there today, which are planned, and which cannot be reached. A Supported result links to [its setup guide](../guides/reach-a-supported-level). Every verdict is generated from a machine-checked model of SLSA v1.2 and ALPS, not written by hand, and [pushgate.dev](https://pushgate.dev/docs/support-matrix) shows the same matrix.
+
+<SupportMatrix />
+
+## How to read it
+
+- **Best available** shows, for each level, the best result across CI/lock's modes and names the mode. Pick a mode to see that mode alone.
+- **Inline** means CI/lock signs inside the build job or agent session it observes. Code in that job can use the same signing identity, which is enough for ALPS 1, and for SLSA Build L2 once cilock emits the SLSA v1 provenance type (it emits v1.0 today; that fix is tracked in the matrix above), and is why no inline result reaches Build L3 or ALPS 3. The separate-signer and cilockd modes move the signer out of the build's reach.
+- A level is a claim a verifier makes, not one CI/lock makes about itself. [What proves a level](../guides/reach-a-supported-level#what-proves-a-level) lists the policy that checks each one.
