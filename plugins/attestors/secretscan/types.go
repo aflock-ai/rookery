@@ -143,6 +143,24 @@ type Attestor struct {
 	// correlated against disagreed.
 	productDigestMismatches []ProductDigestMismatch
 
+	// ownStreams returns the files this process writes its stdout and stderr
+	// to; nil means os.Stdout and os.Stderr. A test substitutes its own. See
+	// own_output.go.
+	ownStreams func() []*os.File
+	// afterRead, when set, runs after a file's bytes are read off disk and
+	// before anything is decided about them. A test uses it to change the
+	// path under the scan; nil in production.
+	afterRead func(absPath string)
+	// ownOutputSkips are the files skipped as cilock's own untracked output
+	// this run, logged once at the end of Attest.
+	ownOutputSkips []ownOutputSkip
+	// tracked is what git has in the index or HEAD, relative to the working
+	// directory, loaded on first need. trackedErr, when set, means nothing
+	// can be proven untracked, so nothing is skipped.
+	tracked       *trackedIndex
+	trackedErr    error
+	trackedLoaded bool
+
 	// Context for the attestation
 	ctx *attestation.AttestationContext // Reference to attestation context
 }

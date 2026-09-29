@@ -1089,9 +1089,17 @@ func (a *Attestor) scanOneFile(ctx *attestation.AttestationContext, rel, absPath
 	if exceeds, err := a.exceedsMaxFileSize(absPath); err != nil || exceeds {
 		return err
 	}
-	content, err := a.readFileContent(absPath)
+	content, readInfo, err := a.readFileContentInfo(absPath)
 	if err != nil {
 		return err
+	}
+	if a.afterRead != nil {
+		a.afterRead(absPath)
+	}
+	// cilock's own untracked output: see own_output.go. Only bytes read off
+	// disk reach this; committed and staged blobs never do.
+	if a.skipAsOwnOutput(ctx, rel, absPath, readInfo) {
+		return nil
 	}
 	return a.scanContent(ctx, "file:"+rel, rel, absPath, content, detector)
 }

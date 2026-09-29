@@ -232,9 +232,18 @@ func (a *Attestor) exceedsMaxFileSize(filePath string) (bool, error) {
 
 // readFileContent reads file content with size limiting
 func (a *Attestor) readFileContent(filePath string) ([]byte, error) {
+	content, _, err := a.readFileContentInfo(filePath)
+	return content, err
+}
+
+// readFileContentInfo reads file content with size limiting and returns the
+// identity (Fstat) of the open file the bytes came from. A decision about the
+// bytes, such as whether they are this process's own stream, must be made on
+// this identity: a later Stat of the path may name a different file.
+func (a *Attestor) readFileContentInfo(filePath string) ([]byte, os.FileInfo, error) {
 	file, err := os.Open(filePath) //nolint:gosec // G304: file path from attestation context products
 	if err != nil {
-		return nil, fmt.Errorf("error opening file: %w", err)
+		return nil, nil, fmt.Errorf("error opening file: %w", err)
 	}
 	defer func() {
 		if err := file.Close(); err != nil {
@@ -251,12 +260,16 @@ func (a *Attestor) readFileContent(filePath string) ([]byte, error) {
 		reader = file
 	}
 
+	info, err := file.Stat()
+	if err != nil {
+		return nil, nil, fmt.Errorf("error getting file info: %w", err)
+	}
 	content, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("error reading file: %w", err)
+		return nil, nil, fmt.Errorf("error reading file: %w", err)
 	}
 
-	return content, nil
+	return content, info, nil
 }
 
 // scanAttestations examines all completed attestors for potential secrets.
@@ -464,7 +477,7 @@ func (a *Attestor) scanProducts(ctx *attestation.AttestationContext, _ string, d
 		// predicate rather than resolved silently in either direction.
 		a.subjects[fmt.Sprintf("product:%s", path)] = read.Digests
 		if !productDigestAgrees(product.Digest, read.Digests) {
-			log.Warnf("(attestation/secretscan) %s is not the bytes the product attestor recorded; publishing the scanned digest and recording the disagreement", path)
+			log.Warnf("(attestation/secretscan) %s is not the bytes the product attestor recorded; publishing the scanned digest and recording the disagreement. %s", path, changedProductHint(read.ownStream))
 			a.productDigestMismatches = append(a.productDigestMismatches, ProductDigestMismatch{
 				Path:     path,
 				Recorded: product.Digest,
@@ -538,9 +551,12 @@ func (a *Attestor) scanProductBytes(ctx *attestation.AttestationContext, path, s
 	if exceeds, err := a.exceedsMaxFileSize(absPath); err != nil || exceeds {
 		return productScan{}, false, err
 	}
-	content, err := a.readFileContent(absPath)
+	content, readInfo, err := a.readFileContentInfo(absPath)
 	if err != nil {
 		return productScan{}, false, err
+	}
+	if a.afterRead != nil {
+		a.afterRead(absPath)
 	}
 	// Binary-ness is decided from the BYTES THAT WERE READ. product.MimeType
 	// is another attestor's claim about this file, and trusting it cut both
@@ -549,6 +565,11 @@ func (a *Attestor) scanProductBytes(ctx *attestation.AttestationContext, path, s
 	// scanned subject it had no business being.
 	if isBinaryFile(http.DetectContentType(content)) {
 		log.Debugf("(attestation/secretscan) skipping binary product: %s", path)
+		return productScan{}, false, nil
+	}
+	// cilock's own untracked output: see own_output.go. Skipped like a
+	// binary, so it is neither a subject nor a digest disagreement.
+	if a.skipAsOwnOutput(ctx, scopePath, absPath, readInfo) {
 		return productScan{}, false, nil
 	}
 	if rep, rules, ok := classifyReport(path, content, product); ok {
@@ -573,7 +594,7 @@ func (a *Attestor) scanProductBytes(ctx *attestation.AttestationContext, path, s
 		return productScan{}, false, fmt.Errorf("digesting: %w", err)
 	}
 	a.recordScannedDigests(scopePath, digests)
-	return productScan{Findings: findings, Digests: digests}, true, nil
+	return productScan{Findings: findings, Digests: digests, ownStream: a.isOwnStream(absPath, readInfo)}, true, nil
 }
 
 // productScan is what reading one product produced: its findings, and the
@@ -581,6 +602,9 @@ func (a *Attestor) scanProductBytes(ctx *attestation.AttestationContext, path, s
 type productScan struct {
 	Findings []Finding
 	Digests  cryptoutil.DigestSet
+	// ownStream: the bytes came from this process's own stdout or stderr
+	// (decided on the open file, see isOwnStream), for the mismatch hint.
+	ownStream bool
 }
 
 // productDigestAgrees reports whether the product attestor's record and the
@@ -800,6 +824,8 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	a.scannedDigests = nil
 	a.productDigestMismatches = nil
 	a.Scope = nil
+	a.ownOutputSkips = nil
+	a.tracked, a.trackedErr, a.trackedLoaded = nil, nil, false
 
 	// Scan attestations first (non-critical). Skipped when the operator
 	// confined the scan to files: the material inventory and command-run
@@ -851,6 +877,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 	// After everything is scanned: a scanner report's own record of a
 	// secret found elsewhere is an echo, not a second leak.
 	a.dedupeReportEchoes()
+
+	// Say what was skipped as cilock's own output, and where the findings
+	// are, in terms the operator can act on.
+	a.logOwnOutputSkips()
+	a.logFindingLocations(ctx)
 
 	// COULD NOT OBSERVE. This is checked BEFORE findings and WITHOUT regard to
 	// failOnDetection, because the two are DIFFERENT AXES and collapsing them
