@@ -17,10 +17,15 @@
 package assurance
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"math/big"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,10 +76,44 @@ func TestFromLeafReadsTheForkExtension(t *testing.T) {
 		"after another extension":       {exts: []pkix.Extension{other, {Id: oid, Value: utf8(urn)}}, acr: urn, present: true},
 		"trailing bytes":                {exts: []pkix.Extension{{Id: oid, Value: append(utf8("aal2"), 0x00)}}, present: true, fails: true},
 		"not DER":                       {exts: []pkix.Extension{{Id: oid, Value: []byte{0xff, 0x01}}}, present: true, fails: true},
+		// A leaf that states the level twice states none a reader can rely on,
+		// whichever occurrence it would have read. crypto/x509 refuses such a
+		// certificate at parse time, so these reach FromLeaf only through a
+		// certificate built in memory or parsed by something else; judge's
+		// certverify.assuranceLevel refuses them the same way.
+		"twice, same value":            {exts: []pkix.Extension{{Id: oid, Value: utf8(urn)}, {Id: oid, Value: utf8(urn)}}, present: true, fails: true},
+		"twice, lower level first":     {exts: []pkix.Extension{{Id: oid, Value: utf8("aal1")}, {Id: oid, Value: utf8("aal3")}}, present: true, fails: true},
+		"twice, higher level first":    {exts: []pkix.Extension{{Id: oid, Value: utf8("aal3")}, {Id: oid, Value: utf8("aal1")}}, present: true, fails: true},
+		"twice, second one unreadable": {exts: []pkix.Extension{{Id: oid, Value: utf8(urn)}, {Id: oid, Value: []byte{0xff, 0x01}}}, present: true, fails: true},
 	} {
 		acr, present, err := FromLeaf(&x509.Certificate{Extensions: tc.exts})
 		assert.Equal(t, tc.fails, err != nil, "%s: %v", name, err)
 		assert.Equal(t, tc.present, present, "%s: an unreadable extension is not an absent one", name)
 		assert.Equal(t, tc.acr, acr, name)
 	}
+}
+
+// Refusing a repeated extension changes nothing for a certificate that
+// crypto/x509 parses: the parser refuses a certificate carrying any extension
+// twice. This pins that premise, so the refusal above stays defense in depth
+// for certificates built in memory, and a Go release that relaxed the parser
+// would fail here rather than silently widen what FromLeaf sees.
+func TestParserRefusesARepeatedAssuranceExtension(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	v, err := asn1.MarshalWithParams("aal2", "utf8")
+	require.NoError(t, err)
+	ext := pkix.Extension{Id: OIDLeafAssurance, Value: v}
+	tmpl := &x509.Certificate{
+		SerialNumber:    big.NewInt(1),
+		NotBefore:       time.Now().Add(-time.Hour),
+		NotAfter:        time.Now().Add(time.Hour),
+		ExtraExtensions: []pkix.Extension{ext, ext},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return // refused at creation: no such certificate reaches a parser
+	}
+	_, err = x509.ParseCertificate(der)
+	require.Error(t, err, "crypto/x509 parsed a certificate carrying the assurance extension twice")
 }

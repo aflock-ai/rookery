@@ -55,17 +55,24 @@ func ShortAAL(acr string) string {
 }
 
 // FromLeaf returns the acr value the leaf records and whether it records one.
-// An extension that is not one DER UTF8String is an error, never an absence.
+// An extension that is not one DER UTF8String is an error, never an absence,
+// and so is an extension that appears more than once: a leaf stating two
+// levels states none, whichever occurrence a reader happened to take.
 func FromLeaf(leaf *x509.Certificate) (acr string, present bool, err error) {
+	seen := 0
 	for _, e := range leaf.Extensions {
 		if !e.Id.Equal(OIDLeafAssurance) {
 			continue
+		}
+		seen++
+		if seen > 1 {
+			return "", true, errors.New("the certificate carries the assurance extension more than once")
 		}
 		var value string
 		if rest, uerr := asn1.UnmarshalWithParams(e.Value, &value, "utf8"); uerr != nil || len(rest) > 0 {
 			return "", true, errors.New("the certificate's assurance extension is not one DER UTF8String")
 		}
-		return value, true, nil
+		acr = value
 	}
-	return "", false, nil
+	return acr, seen == 1, nil
 }
