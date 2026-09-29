@@ -16,12 +16,35 @@ Top-level `CommandRun` fields (json tags from the struct):
 - `stderr` — the verbatim stderr, same mechanism.
 - `exitcode` — the child's exit status.
 - `processes` — populated only when `--trace` is on; one `ProcessInfo` entry per traced PID.
+- `program`: the program `argv[0]` started, recorded on **every** run, traced or not, on every platform. There is no flag to turn it off. See [The program record](#the-program-record).
 
 Each `ProcessInfo` carries: `program`, `processid`, `parentpid`, `programdigest`, `comm`, `cmdline`, `exedigest`, `exedigestSource` (what `exedigest` measures: `mapped-image` is SHA-256 of `/proc/<pid>/exe` read through a single descriptor, claimed only when the backend can PROVE both that the measured file is the image this exec mapped and that the image stayed write-protected across the whole measurement - today only the ptrace backend, which holds the tracee stopped at the execve return; `path-hash` means the value is a copy of `programdigest`, the bytes at the caller-named path when the tracer opened it, which is not proof of what executed; empty means unlabelled, never "mapped image"; a policy comparing `exedigest` against an image allowlist must require `mapped-image`), `exedigestDowngradeReason` (why a backend that would otherwise report the mapped image reported a path hash: `not-kernel-bound` - the exec event carries no kernel identity to bind the measurement to, which is the case for the eBPF backend because its execve event comes from a syscall-entry kprobe fired before the kernel resolves or maps anything, so that backend always downgrades; `unprotected-measurement` - write protection could not be GUARANTEED for the whole measurement, so the bytes hashed need never have executed. This covers the process no longer mapping the image (ETXTBSY lapses once the last executing reference goes away), running on Linux 6.11 or 6.12 where an in-place write to a mapped image is not ETXTBSY-denied, and being unable to determine the kernel version at all - an unknown answer downgrades exactly as a negative one does, because a producer that cannot tell whether writes were possible is in the position of one that knows they were. Empty means no downgrade. It exists so a verifier can tell "the producer declined to claim what it could not prove" from "this producer never populated the field"), `environ`, `specbypassisvuln`, `exitcode` (per-process exit status; for signal-terminated processes uses the shell convention `128 + signal_number`; absent/zero means "still running when trace ended"), `openedfiles` (a `map[path]DigestSet` populated from `openat` syscalls and re-resolved at trace end), plus three nested structures:
 
 - `network` (`NetworkActivity`): `sockets[]`, `connections[]` (each with `syscall`, `family`, `address`, `port`, `fd`, `timestamp`, and `hostname` for TLS SNI from ClientHello on port 443), `dnsLookups[]`.
 - `fileOps` (`FileActivity`): `writes[]` (path resolved via `/proc/pid/fd/N`), `renames[]`, `deletes[]`, `permChanges[]` (mode bits + `setExec`).
 - `syscallEvents[]` — notable syscalls: `memfd_create`, `ptrace`, `mount`, `clone` (with namespace flags), `dup2` (socket→stdio = reverse-shell pattern), `mprotect` (PROT_EXEC), `prctl` (PR_SET_NAME / PR_SET_DUMPABLE / PR_SET_NO_NEW_PRIVS), `setsid`, `setns`, `init_module`/`finit_module`.
+
+## The program record
+
+`cmd` is the text the caller typed, and `terraform` names whatever `PATH` found. `program` names the file:
+
+- `lookup`: `path-search` (a bare name searched on `PATH`), `workdir-relative` (a name with a separator, resolved against the working directory) or `absolute`.
+- `path`: the absolute path the exec's own lookup produced, not lexically cleaned (`./t` run in `/w` is `/w/./t`). On Windows it carries the `PATHEXT` extension `Start` would add (`.\tool` records `...\.\tool.exe`), and cilock hands `Start` that same resolved name, so the file hashed and the file started are one string. With no working directory cilock can name, a relative `path` stays relative, opened against the directory the exec uses.
+- `realPath`, `realPathSource`: the real path after every symlink, read back from the descriptor that was hashed (`proc-self-fd` on Linux, `f-getpath` on macOS), never from a second walk of the name. When the descriptor cannot answer, the name is resolved and kept only if it is the same file (`evalsymlinks-confirmed`); otherwise `realPath` is empty, `realPathSource` is `unresolved`, `realPathReason` says why, and the digest is kept. An unreadable program reports `name`, or on Linux `proc-self-fd` through an `O_PATH` descriptor.
+- `digest`, `sizeBytes`: sha256 (plus any `--hashes` algorithm) of the **whole** file, with no size limit, taken through the same settle-and-bracket read the tracers use.
+- `file`: device, inode, link count, `setId` (setuid, setgid, or a Linux file capability) and `fsType` of the same descriptor. `setId` is always emitted: `true` or `false` only when established, `null` with `setIdReason` when it is not. On Linux the capability is read through the hashed descriptor, and only "no such attribute" or "this file system carries none" establishes `false`; any other error leaves `null`. A rule that requires `setId == false` refuses `null`.
+- `format`: `elf`, `mach-o`, `mach-o-universal`, `pe`, `script` or `other`, from the first bytes the hash read; absent when those bytes could not be read.
+- `host` (`GOOS/GOARCH`) and `workdir`, the directory the child started in.
+- `checkout.relation`: always emitted, and `unknown` in this release with the reason "containment is not computed by this CI/lock build". A rule that requires `outside` refuses it.
+- `wrapper`: present when cilock itself started another program first: `sandbox-exec` under `--trace` on macOS, with its own path and digest.
+- `unresolved`: why there is no `digest`. The only expected cause is a program cilock cannot read (`permission denied: the program is executable but not readable`, for an execute-only file). The command still runs.
+- `executionBinding`: always emitted, in the `scripts[]` vocabulary. It is always `unverified` in this release: the digest is of the file the lookup named, read before the command started, and nothing proves those bytes are the ones the kernel then executed. `bindingReason` says so, or says "the exec target changed after the program was recorded" when anything other than a wrapper cilock names rewrote the exec target before it started. On Linux under `sudo` that includes the `setpriv` privilege drop, which searches `PATH` again as the invoking user.
+
+A pin on `program.digest.sha256` is a pin on `argv[0]` only. `env A=1 tool`, `sh -c "..."`, `timeout 600 tool` and `npx tool` record the launcher, and a shim (`pyenv`, `rustup`, the macOS xcrun `/usr/bin/git`) records the shim, not the tool it starts.
+
+**Absolute paths, including home directories.** `path`, `realPath` and `workdir` are absolute, so on a laptop they carry the login name (`/Users/<login>/.nvm/...`) into every signed attestation and to every place the attestation goes: Archivista, a platform that stores evidence, and the provider of any AI policy, which receives the whole command-run attestor as its input.
+
+Older verifiers ignore the field: it is additive, and the predicate type stays `command-run/v0.2`. A verifier built before it shows Rego no `program`, whatever the signed bytes carry.
 
 ## When to use
 
@@ -45,6 +68,21 @@ There are no `--attestor-commandrun-*` flags — `commandrun.init()` registers w
   "stdout": "...verbatim bytes the child wrote to stdout...",
   "stderr": "...verbatim bytes the child wrote to stderr...",
   "exitcode": 0,
+  "program": {
+    "lookup": "path-search",
+    "path": "/usr/local/go/bin/go",
+    "realPath": "/usr/local/go/bin/go",
+    "realPathSource": "proc-self-fd",
+    "digest": {"sha256": "..."},
+    "sizeBytes": 16100000,
+    "file": {"device": 2049, "inode": 1311234, "links": 1, "setId": false, "fsType": "ext4"},
+    "format": "elf",
+    "host": "linux/amd64",
+    "workdir": "/home/runner/work/app/app",
+    "checkout": {"relation": "unknown", "reason": "containment is not computed by this CI/lock build"},
+    "executionBinding": "unverified",
+    "bindingReason": "this CI/lock build does not bind the program to the exec: the digest is of the file the lookup named, read before the command started"
+  },
   "processes": [
     {
       "program": "/usr/local/go/bin/go",

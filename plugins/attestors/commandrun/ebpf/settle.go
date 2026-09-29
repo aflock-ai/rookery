@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Settling a file before a bracketed read, moved out of hasher.go (Linux-only)
-// so it builds on every platform, not only under the Linux tracers that first
-// needed it. The change-time source is per OS: settle_ctime_linux.go,
-// settle_ctime_darwin.go, settle_ctime_other.go.
+// Settling a file before a bracketed read. Portable, because the program
+// record (commandrun's program_record.go) hashes argv[0] on every platform, not
+// only under the Linux tracers that first needed it. The change-time source is
+// per OS: settle_ctime_linux.go, settle_ctime_darwin.go, settle_ctime_other.go.
 
 package ebpf
 

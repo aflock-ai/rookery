@@ -180,11 +180,12 @@ type ptraceContext struct {
 // than the measurement above, and recordEBPFOpenat already keeps the FIRST
 // digest and raises a SyscallEvent when a later read of a path disagrees.
 
-// digestOpenFile is bracketedDigest with this trace's hash set and its test
-// hook. The measurement itself lives in file_hashing.go, which builds on every
-// platform.
+// digestOpenFile is digestOpenFileStat with this trace's hash set and its
+// test hook. The measurement itself lives in file_hashing.go, where the program
+// record (program_record.go) uses the same bracket on every platform.
 func (p *ptraceContext) digestOpenFile(f *os.File) (cryptoutil.DigestSet, error) {
-	return bracketedDigest(f, p.hash, p.testDuringHashedRead)
+	d, _, err := digestOpenFileStat(f, p.hash, p.testDuringHashedRead)
+	return d, err
 }
 
 // digestForPath returns the digest set for `path`, hashing it on every call.

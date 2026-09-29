@@ -13,9 +13,9 @@
 // limitations under the License.
 
 // The open-once, settle, fstat, hash, fstat, compare bracket, moved out of
-// tracing_linux.go so it builds on every platform, not only under the Linux
-// tracers that first needed it. Only the identity source differs per OS:
-// file_identity_linux.go, _darwin.go, _other.go.
+// tracing_linux.go so the program record hashes argv[0] with the same proof on
+// every platform (docs/design/command-program-pinning.md section 3.4). Only the
+// identity source differs per OS: file_identity_linux.go, _darwin.go, _other.go.
 
 package commandrun
 
@@ -148,7 +148,7 @@ func openForHashing(path string) (*os.File, error) {
 // that file.
 var pathResolutions atomic.Int64
 
-// bracketedDigest hashes an already-open descriptor: settle, fstat, hash
+// digestOpenFileStat hashes an already-open descriptor: settle, fstat, hash
 // through f, fstat again, compare. Every failure is an error and NO digest.
 // The error is returned rather than folded into a weaker success, because
 // the caller cannot tell the two apart once a digest is in hand, and a
@@ -156,42 +156,44 @@ var pathResolutions atomic.Int64
 // bytes that were never a state of the file.
 //
 // The digest it returns is a fresh measurement every time; see the no-memo
-// note in tracing_linux.go for why there is nothing here to hit.
-func bracketedDigest(f *os.File, hashes []cryptoutil.DigestValue, duringRead func()) (cryptoutil.DigestSet, error) {
+// note in tracing_linux.go for why there is nothing here to hit. The FileInfo
+// it returns is the post-read fstat, which the bracket has just shown equal
+// to the pre-read one on every compared field, size included.
+func digestOpenFileStat(f *os.File, hashes []cryptoutil.DigestValue, duringRead func()) (cryptoutil.DigestSet, os.FileInfo, error) {
 	// Settle first: the bracket below can only show a write landing during
 	// the read if the file's ctime is already outside the coarse-clock
 	// window when the pre-read fstat is taken. See ebpf.SettleWindow.
 	before, err := ebpf.SettleForRead(f)
 	if err != nil {
 		if errors.Is(err, ebpf.ErrWillNotSettle) {
-			return nil, err
+			return nil, nil, err
 		}
-		return nil, fmt.Errorf("%w: pre-read fstat: %w", errUncomparableRead, err)
+		return nil, nil, fmt.Errorf("%w: pre-read fstat: %w", errUncomparableRead, err)
 	}
 	if !before.Mode().IsRegular() {
-		return nil, errNotRegularFile
+		return nil, nil, errNotRegularFile
 	}
-	// The only window in which a test can act on the file BETWEEN the
-	// pre-read fstat and the hash. It lives here, in the one function that
-	// turns a descriptor into a digest, rather than in a caller: a hook in a
-	// caller can only reach the outside of the bracket, which is the part
-	// that is not interesting.
+	// The only window BETWEEN the pre-read fstat and the hash. Tests act on
+	// the file here, and the program record reads the first bytes here so
+	// its format describes the state the bracket vouches for. It lives in
+	// the one function that turns a descriptor into a digest, because a hook
+	// in a caller can only reach the outside of the bracket.
 	if duringRead != nil {
 		duringRead()
 	}
 	d, err := cryptoutil.CalculateDigestSet(f, hashes)
 	if err != nil {
-		return nil, fmt.Errorf("hash: %w", err)
+		return nil, nil, fmt.Errorf("hash: %w", err)
 	}
 	after, err := f.Stat()
 	if err != nil {
 		// Nothing to compare the read against. Refuse: this is the
 		// fail-open shape the repo has a standing rule against, and the
 		// answer is not a digest with a weaker label.
-		return nil, fmt.Errorf("%w: post-read fstat: %w", errUncomparableRead, err)
+		return nil, nil, fmt.Errorf("%w: post-read fstat: %w", errUncomparableRead, err)
 	}
 	if err := observedUnchanged(before, after); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return d, nil
+	return d, after, nil
 }

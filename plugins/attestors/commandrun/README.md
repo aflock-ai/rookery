@@ -139,6 +139,21 @@ Every v0.1 attestation already in production keeps validating:
 | Two-pass byte-offset section index (`_meta.sections` with exact ranges) | AI-traversal quality feature, not a size feature |
 | `envDigests[]` interning | Same shape as `digests[]`; small win, follow-up |
 
+## The program record (every run)
+
+`program` names the file `argv[0]` started: the absolute path the exec's own
+lookup resolved, the real path read back from the descriptor that was hashed,
+the sha256 and size of the whole file, its identity and format, and an
+`executionBinding` that is always emitted and, in this release, always
+`unverified`. It is written on every run, traced or not, on every platform,
+with no flag. The only absence of a digest is a program cilock cannot read,
+and `unresolved` then says why. `checkout.relation` is `unknown` until the
+containment lane lands. Design: `docs/design/command-program-pinning.md`
+(lane P1a). Code: `program_record.go`, the per-OS readbacks in
+`program_platform_*.go`, and the settle-and-bracket read in `file_hashing.go`,
+shared with the Linux tracers. The field is additive: an older decoder ignores
+it, and the predicate type stays `command-run/v0.2`.
+
 ## Trace attestor improvements (all versions)
 
 Beyond the schema change, the trace attestor itself has gained
@@ -247,6 +262,9 @@ migration ladder. Tests pinning each weakness live in
 | `commandrun.go` | v0.1 producer + CommandRun struct |
 | `v2_marshal.go` | v0.2 wire-format emitter (this file's focus) |
 | `legacy.go` | v0.1 verify-only decoder |
+| `program_record.go` | the program record: lookup, real path, whole-file digest, the exec-target guard |
+| `program_platform_*.go` | per-OS descriptor path readback, identity facts, cilock's own wrappers |
+| `file_hashing.go` | open-once, settle, fstat, hash, fstat, compare; used by the program record and the tracers |
 | `tracing_linux.go` | trace-mode entry point (eBPF / ptrace selector) |
 | `tracing_ebpf_linux.go` | eBPF userspace dispatcher |
 | `tracing_linux_test.go` | ptrace path tests |

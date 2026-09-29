@@ -729,10 +729,13 @@ var implicitMakefiles = []string{"GNUmakefile", "makefile", "Makefile"}
 // deciding whether an arbitrary executable on PATH "really is bash" has no
 // bounded answer, and a heuristic (an expected path, a hash of the binary)
 // would replace an honest limitation with a false assurance. The material for
-// a verifier that cares is already in the signed predicate: argv[0] travels in
-// CommandRun.Cmd, so a policy can require an expected absolute interpreter
-// path, and where execution-time truth is needed ProcessInfo.OpenedFiles
-// reports the inodes the tracee actually opened.
+// a verifier that cares is in the signed predicate instead: argv[0] travels in
+// CommandRun.Cmd, and CommandRun.Program (program_record.go) records the file
+// the exec's lookup resolved argv[0] to, its real path and its sha256, so a
+// policy can pin the interpreter's bytes rather than its name. That record is
+// computed separately and does not change what this resolver reports: the
+// operand grammar here is still chosen by basename. Where execution-time truth
+// is needed ProcessInfo.OpenedFiles reports the inodes the tracee opened.
 //
 // Within that claim it is deliberately conservative: it reports a path only
 // when EVERY token before the operand was positively classified against the

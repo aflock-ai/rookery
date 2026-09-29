@@ -253,6 +253,12 @@ type V02Predicate struct {
 	// be evidence the attestor collected and then discarded.
 	Scripts []ScriptRef `json:"scripts,omitempty"`
 	Stderr  string      `json:"stderr,omitempty"`
+
+	// Program is the program argv[0] started (program_record.go), carried
+	// INLINE rather than interned, so a policy reads input.program.digest.sha256
+	// directly. Additive: an older decoder ignores the key, and an older
+	// producer's bytes decode to nil, which a pin rule must refuse.
+	Program *ProgramRef `json:"program,omitempty"`
 }
 
 // v02Interner holds the dedup tables shared by ToV02. Each intern* returns an
@@ -388,6 +394,7 @@ func (rc *CommandRun) ToV02() *V02Predicate {
 		Scripts:  rc.Scripts,
 		Stderr:   rc.Stderr,
 		Summary:  rc.Summary,
+		Program:  rc.Program,
 	}
 	if rc.Summary != nil {
 		v02.Meta.CaptureMode = rc.Summary.CaptureMode
@@ -542,6 +549,7 @@ func FromV02(p *V02Predicate) *CommandRun {
 	rc.ExitCode = p.ExitCode
 	rc.Stdout = p.Stdout
 	rc.Scripts = p.Scripts
+	rc.Program = p.Program
 	rc.Stderr = p.Stderr
 	rc.Summary = p.Summary
 	rc.keyGuard = p.Meta.KeyGuard
@@ -648,6 +656,7 @@ func MarshalV02WithSections(p *V02Predicate) ([]byte, *V02Predicate, error) {
 	specs := []sectionSpec{
 		{"summary", p.Summary, p.Summary != nil},
 		{"scripts", p.Scripts, len(p.Scripts) > 0},
+		{"program", p.Program, p.Program != nil},
 		{"digests", p.Digests, true},
 		{"paths", p.Paths, true},
 		{"comms", p.Comms, true},

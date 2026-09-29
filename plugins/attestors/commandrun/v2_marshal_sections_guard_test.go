@@ -83,6 +83,7 @@ func emittedSectionNames(t *testing.T) map[string]bool {
 		Stdout:    "out",
 		Stderr:    "err",
 		Scripts:   []ScriptRef{{Path: "/tmp/x.sh", Role: RoleInterpreterOperand}},
+		Program:   &ProgramRef{Path: "/usr/bin/bash", ExecutionBinding: ScriptBindingUnverified},
 	}
 
 	_, out, err := MarshalV02WithSections(p)
@@ -132,6 +133,19 @@ func TestEverySignedFieldSurvivesRoundTrip(t *testing.T) {
 			},
 			SizeBytes: 42,
 		}},
+		Program: &ProgramRef{
+			Lookup:         ProgramLookupPathSearch,
+			Path:           "/usr/bin/bash",
+			RealPath:       "/usr/bin/bash",
+			RealPathSource: RealPathFromProcFD,
+			Digest: cryptoutil.DigestSet{
+				cryptoutil.DigestValue{Hash: crypto.SHA256}: strings.Repeat("b", 64),
+			},
+			SizeBytes:        1234,
+			Checkout:         ProgramCheckout{Relation: CheckoutUnknown, Reason: checkoutReasonNotComputed},
+			ExecutionBinding: ScriptBindingUnverified,
+			BindingReason:    programReasonNotBound,
+		},
 	}
 
 	raw, err := json.Marshal(orig)

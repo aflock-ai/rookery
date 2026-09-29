@@ -1488,6 +1488,13 @@ type CommandRun struct {
 	// wrapper script once the step completes.
 	Scripts []ScriptRef `json:"scripts,omitempty"`
 
+	// Program is the program argv[0] started: the path the exec's own lookup
+	// resolved, the real path read back from the hashed descriptor, and the
+	// sha256 of its bytes. Written on every run, traced or not, on every
+	// platform (program_record.go). Nil only when no command started, and then
+	// there is no attestation to carry it.
+	Program *ProgramRef `json:"program,omitempty"`
+
 	// keyGuard is the signer's anti-tamper state read back at Attest time
 	// (see readHardening). It is copied into the v0.2 `_meta.keyGuard` block
 	// by ToV02 and restored by FromV02, so it travels INSIDE the signed
@@ -1735,10 +1742,11 @@ func (rc *CommandRun) Attest(ctx *attestation.AttestationContext) error {
 	// and a policy needing execution-bound bytes wants tracing, not this
 	// field.
 	//
-	// The other half of the same limit: the INTERPRETER is identified by the
-	// basename of argv[0] alone, never by inspecting the binary. See
-	// resolveScriptOperands for the full statement of what a ScriptRef does
-	// and does not assert.
+	// The other half of the same limit: the operand grammar is chosen by the
+	// basename of argv[0] alone. The program record (runCmd, recordProgram)
+	// hashes the file argv[0] resolved to, but does not change which operand
+	// is reported here. See resolveScriptOperands for the full statement of
+	// what a ScriptRef does and does not assert.
 	rc.Scripts = captureScriptRefs(ctx.Context(), rc.Cmd, rc.scriptWorkdir(ctx), rc.scriptCaptureMode())
 
 	if rc.scriptGuard != nil {
@@ -1817,6 +1825,7 @@ func (rc *CommandRun) UnmarshalJSON(data []byte) error {
 	rc.Summary = decoded.Summary
 	rc.Processes = decoded.Processes
 	rc.Scripts = decoded.Scripts
+	rc.Program = decoded.Program
 	rc.keyGuard = decoded.keyGuard
 	rc.childEnv = decoded.childEnv
 	return nil
@@ -2691,6 +2700,13 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	c.WaitDelay = commandWaitDelay
 	configureProcessReaping(c)
 
+	// Record the program argv[0] resolved to, on every run. Here, after c.Dir
+	// is set and BEFORE enableTracing or the privilege drop can rewrite c.Path,
+	// from the lookup exec.Command already made (program_record.go). The guard
+	// immediately before Start checks nothing rewrote the exec target since.
+	programHashSet := ctx.Hashes()
+	programSnap := r.recordProgram(c, programHashSet)
+
 	if r.enableTracing {
 		enableTracing(c, r.traceFileContent)
 		// For the eBPF mode we MUST attach kprobes before the child
@@ -2762,6 +2778,13 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	// errors are logged but don't abort the trace.
 	r.traceStartTime = time.Now()
 	r.prePaths = snapshotPrePaths(r.traceeWorkdir, r.prewalkSkipDirs, r.prewalkIncludeDirs)
+
+	// In the path of the action: nothing may exec a target other than the one
+	// recorded, unless cilock names it as its own wrapper and records it.
+	if testBeforeExecGuard != nil {
+		testBeforeExecGuard(c)
+	}
+	r.guardExecTarget(programSnap, c, programHashSet)
 
 	// Held from the fork until the trace is over (see pinTracerThread).
 	defer pinTracerThread(c)()

@@ -18,11 +18,19 @@ package commandrun
 
 import "os"
 
-// identityFromInfo on a platform where this package reads no kernel identity
-// from the stat result. With no identity a bracket cannot be compared, so
-// observedUnchanged refuses every read here: the answer the Linux and darwin
-// versions give for a stat that carries no *syscall.Stat_t. Nothing on these
-// platforms hashes through the bracket.
-func identityFromInfo(os.FileInfo) (fileIdentity, bool) {
-	return fileIdentity{}, false
+// identityFromInfo on a platform with no (device, inode) in its stat result.
+// The bracket then compares only size and modification time, which is weaker
+// than the change time and file id the other platforms compare: modification
+// time can be set by anyone who can write the file. Windows gets its volume
+// serial, FileId and ChangeTime through a handle in lane P1b
+// (docs/design/command-program-pinning.md section 4.3). Until then the digest
+// is still taken, because the only permitted absence of a program digest is a
+// program cilock cannot read.
+func identityFromInfo(st os.FileInfo) (fileIdentity, bool) {
+	mt := st.ModTime()
+	return fileIdentity{
+		ctimeSec:  mt.Unix(),
+		ctimeNsec: int64(mt.Nanosecond()),
+		size:      st.Size(),
+	}, true
 }

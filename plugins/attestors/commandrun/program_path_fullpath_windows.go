@@ -12,18 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !linux && !darwin
+//go:build windows
 
-package ebpf
+package commandrun
 
-import (
-	"os"
-	"time"
-)
+import "syscall"
 
-// changeTime has no portable source here. On Windows the change time comes
-// from FileBasicInfo through a handle (design lane P1b); until then there is
-// nothing to settle against and SettleForRead returns at once.
-func changeTime(os.FileInfo) (time.Time, bool) {
-	return time.Time{}, false
-}
+// windowsFullPath is GetFullPathName, as StartProcess resolves a path with.
+var windowsFullPath = syscall.FullPath
