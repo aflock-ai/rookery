@@ -762,9 +762,14 @@ type scriptPlan struct {
 }
 
 func resolveScriptPlan(argv []string, workdir string) scriptPlan {
+	environ := envPrefixEnviron(argv, os.Environ())
 	argv = stripEnvPrefix(argv)
 	if len(argv) == 0 {
 		return scriptPlan{}
+	}
+
+	if words, ok := shCommandWords(argv, environ); ok {
+		return resolveScriptPlan(words, workdir)
 	}
 
 	prog := programName(argv[0])
@@ -787,6 +792,94 @@ func resolveScriptPlan(argv []string, workdir string) scriptPlan {
 		return scriptPlan{refs: []ScriptRef{{Path: argv[0], Role: RoleExecutable}}}
 	}
 	return scriptPlan{}
+}
+
+// shSyntax holds every byte that makes sh do something other than split a
+// command on blanks and run the first word: operators (| & ; < > ( )),
+// expansion ($ ` ~ { } * ? [ ]), quoting (' " \), comments (#), and the
+// newline that separates commands.
+const shSyntax = "|&;<>()$`~{}*?[]'\"\\#\n"
+
+// isShBlank reports sh's default field separators within a line. sh splits a
+// command on these only; \v, \f, \r and Unicode spaces stay inside a word.
+func isShBlank(r rune) bool { return r == ' ' || r == '\t' }
+
+// shCommandWords returns the words of `sh -c <text>` when sh runs text as one
+// simple command whose argv is exactly those blank-separated words, and false
+// otherwise. `sh -c "bash scripts/build.sh"` is how a CI runner wraps a user's
+// command, and without this every script it names goes unrecorded, because -c
+// makes the shell's grammar abstain.
+//
+// Nothing is executed or looked up to decide this; it is a parse of the argv
+// the command runs with, so the claim stays bound to that argv. It admits:
+//
+//   - exactly [sh, -c, text]. Operands after the text become $0, $1... and a
+//     flag before -c changes the shell. bash, zsh and ksh are refused because
+//     they read startup files (BASH_ENV, .zshenv) that can define a function
+//     named like the program, and a POSIX sh read as `sh` reads none when
+//     non-interactive;
+//   - text with none of shSyntax, so no operator, expansion, quoting or
+//     second command changes the words;
+//   - a first word with no '=': a leading NAME=value is an assignment, and
+//     with a slash in the value it would otherwise pass for a path;
+//   - an environment, the one sh actually starts with (environ, see
+//     envPrefixEnviron), that defines no shell function and sets no IFS.
+//     bash imports functions from the environment even as sh, and
+//     `BASH_FUNC_bash%%` runs in place of bash; an IFS other than the default
+//     changes where the text splits into words.
+//
+// A builtin or reserved word as the first word needs no check here: the words
+// are resolved by resolveScriptPlan, which names a script only for an
+// interpreter or make (none of them a builtin, pinned by a test) or a path
+// with a slash (never looked up as one). The interpreter is still identified
+// by name, with the limit resolveScriptOperands states.
+func shCommandWords(argv, environ []string) ([]string, bool) {
+	if len(argv) != 3 || programName(argv[0]) != "sh" || argv[1] != "-c" {
+		return nil, false
+	}
+	text := argv[2]
+	if strings.ContainsAny(text, shSyntax) || environChangesTheShell(environ) {
+		return nil, false
+	}
+	words := strings.FieldsFunc(text, isShBlank)
+	if len(words) == 0 || strings.ContainsRune(words[0], '=') {
+		return nil, false
+	}
+	return words, true
+}
+
+// environChangesTheShell reports whether environ, the environment sh starts
+// with, carries a shell function definition (bash's `BASH_FUNC_<name>%%` or
+// `()` form, or the pre-2014 bare `name=() {` form) or any IFS.
+func environChangesTheShell(environ []string) bool {
+	for _, kv := range environ {
+		name, value, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "BASH_FUNC_") || strings.HasPrefix(value, "() {") || name == "IFS" {
+			return true
+		}
+	}
+	return false
+}
+
+// envPrefixEnviron is the environment the program after argv's `env` prefix
+// starts with: inherited (this process's; the child's is that minus the CI
+// OIDC variables, see childEnviron, so this is the superset), cleared by
+// `env -i`, plus every assignment the prefix makes. It walks the prefix
+// exactly as stripEnvPrefix does, so the two agree on where the prefix ends.
+func envPrefixEnviron(argv, inherited []string) []string {
+	environ := append([]string(nil), inherited...)
+	for len(argv) > 0 && programName(argv[0]) == "env" {
+		argv = argv[1:]
+		for len(argv) > 0 && (argv[0] == "-i" || argv[0] == "--ignore-environment") {
+			environ = nil
+			argv = argv[1:]
+		}
+		for len(argv) > 0 && isEnvAssignment(argv[0]) {
+			environ = append(environ, argv[0])
+			argv = argv[1:]
+		}
+	}
+	return environ
 }
 
 // stripEnvPrefix removes a leading `env` and any VAR=value assignments so that
