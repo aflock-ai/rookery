@@ -1,8 +1,10 @@
 /-
   CilockPolicy.Policy: the signed policy document and the verify options.
-  Field-for-field with `policy.go` and `step.go`.
-  -- cite: attestation/policy/policy.go:48-63 sha256:a7c4634d87181072abf2fa12e1bcdf4ca64769088a7d9259bfb8d51e283197a2
-  -- cite: attestation/policy/step.go:39-126 sha256:2280ff69e0479ac2e3c114ac8132a009492ff9138221c715e0fae6c12514d55e
+  Field-for-field with `policy.go` and `step.go`, except the plain-language
+  documentation fields (Policy.description, Step.title/description,
+  RegoPolicy.checks), which verification never reads.
+  -- cite: attestation/policy/policy.go:48-66 sha256:06c10496148ae4114e880433e54a5fb80ea4b77e0e4c79ef14eb2f56887fdc1c
+  -- cite: attestation/policy/step.go:39-131 sha256:31a9a038355fd2113a8dc0647700982901eb16d766ef1e4de62934e933ca26b0
 -/
 import CilockPolicy.Types
 
@@ -58,7 +60,7 @@ deriving DecidableEq, Repr
 /-- Step (`step.go`). The map key is taken to equal `name` (`validate.go`; the engine refuses a mismatch under EnforceStepNameCoherence, `policy.go`).
   RequiredArtifacts (#9946) is not modelled: every step here has none, which
   the engine treats as no requirement.
-  -- cite: attestation/policy/step.go:39-126 sha256:2280ff69e0479ac2e3c114ac8132a009492ff9138221c715e0fae6c12514d55e
+  -- cite: attestation/policy/step.go:39-131 sha256:31a9a038355fd2113a8dc0647700982901eb16d766ef1e4de62934e933ca26b0
   -- cite: cilock/internal/policy/validate.go:349-352 sha256:16297b0f0b687d9a6ecf5d5b872937a20dd90d2d3c4077e1a1edfeaf55b0ac90
   -- cite: attestation/policy/policy.go:496 sha256:5839f38abbb0838072bd486680ea33d28649db7abff272bc900592e4c49a76a6
 -/
@@ -93,7 +95,7 @@ deriving DecidableEq, Repr
 
 /-- Policy (`policy.go`). Steps are listed in the engine's topological
     order (`policy.go`); see `stepsOrdered`.
-    -- cite: attestation/policy/policy.go:48-63 sha256:a7c4634d87181072abf2fa12e1bcdf4ca64769088a7d9259bfb8d51e283197a2
+    -- cite: attestation/policy/policy.go:48-66 sha256:06c10496148ae4114e880433e54a5fb80ea4b77e0e4c79ef14eb2f56887fdc1c
     -- cite: attestation/policy/policy.go:603-659 sha256:d3d162656defee17a14273bb468cef2b2f65146073be5f3915fd09469454410e
     -/
 structure Policy where

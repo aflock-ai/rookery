@@ -37,7 +37,12 @@ import (
 
 // +kubebuilder:object:generate=true
 type Step struct {
-	Name             string        `json:"name" jsonschema:"title=Name,description=Unique name for this step in the policy"`
+	Name string `json:"name" jsonschema:"title=Name,description=Unique name for this step in the policy"`
+	// Title and Description say in plain language what this step's evidence is for. Documentation
+	// only: verification never reads them. The author's signature covers them with the rules, so a
+	// countersigner approves the words and the rules together.
+	Title            string        `json:"title,omitempty" jsonschema:"title=Title,description=Plain-language name of this step (documentation only)"`
+	Description      string        `json:"description,omitempty" jsonschema:"title=Description,description=Plain-language account of what this step's evidence is for (documentation only)"`
 	Functionaries    []Functionary `json:"functionaries" jsonschema:"title=Functionaries,description=Authorized signers whose attestations are accepted for this step"`
 	Attestations     []Attestation `json:"attestations" jsonschema:"title=Attestations,description=Required attestation types and their associated policies"`
 	ArtifactsFrom    []string      `json:"artifactsFrom,omitempty" jsonschema:"title=Artifacts From,description=Other step names whose products must match this step's materials"`
@@ -290,6 +295,9 @@ type Attestation struct {
 type RegoPolicy struct {
 	Module []byte `json:"module" jsonschema:"title=Module,description=Base64-encoded Rego policy module source code"`
 	Name   string `json:"name" jsonschema:"title=Name,description=Human-readable name for this Rego policy"`
+	// Checks maps each check this module can deny (its "check:<id>" deny messages) to a plain-language
+	// statement of what must be true for it to pass. Documentation only: verification never reads it.
+	Checks map[string]string `json:"checks,omitempty" jsonschema:"title=Checks,description=Check id to a plain-language statement of what must be true (documentation only)"`
 }
 
 // StepResult contains information about the verified collections for each step.

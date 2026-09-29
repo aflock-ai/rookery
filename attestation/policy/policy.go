@@ -46,6 +46,9 @@ const LegacyPolicyPredicate = "https://witness.testifysec.com/policy/v0.1"
 
 // +kubebuilder:object:generate=true
 type Policy struct {
+	// Description is the policy's plain-language preamble, including its author's statement that the
+	// plain-language descriptions in it match its rules. Documentation only.
+	Description          string                         `json:"description,omitempty" jsonschema:"title=Description,description=Plain-language preamble of the policy (documentation only)"`
 	Expires              metav1.Time                    `json:"expires" jsonschema:"title=Expires,description=Timestamp when this policy expires and should no longer be used for verification"`
 	Roots                map[string]Root                `json:"roots,omitempty" jsonschema:"title=Root Certificates,description=Trusted root certificates keyed by a unique identifier"`
 	TimestampAuthorities map[string]Root                `json:"timestampauthorities,omitempty" jsonschema:"title=Timestamp Authorities,description=Trusted timestamp authority certificates keyed by a unique identifier"`
