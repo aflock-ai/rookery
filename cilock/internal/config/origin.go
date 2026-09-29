@@ -19,7 +19,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
+
+	"github.com/aflock-ai/rookery/platformauth"
 )
 
 // SameOrigin reports whether two URLs share scheme+host (the security origin).
@@ -36,7 +37,7 @@ func SameOrigin(a, b string) bool {
 	if err != nil || ub.Host == "" {
 		return false
 	}
-	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+	return platformauth.SameSchemeHost(ua.Scheme, ua.Host, ub.Scheme, ub.Host)
 }
 
 // SameOriginRedirect is a net/http CheckRedirect that refuses any redirect to a
@@ -50,7 +51,7 @@ func SameOriginRedirect(req *http.Request, via []*http.Request) error {
 		return nil
 	}
 	orig := via[0].URL
-	if !strings.EqualFold(req.URL.Scheme, orig.Scheme) || !strings.EqualFold(req.URL.Host, orig.Host) {
+	if !platformauth.SameSchemeHost(req.URL.Scheme, req.URL.Host, orig.Scheme, orig.Host) {
 		return fmt.Errorf("refusing cross-origin redirect from %s://%s to %s://%s (bearer would leak)",
 			orig.Scheme, orig.Host, req.URL.Scheme, req.URL.Host)
 	}

@@ -336,7 +336,7 @@ func refuseCrossOriginRedirect(req *http.Request, via []*http.Request) error {
 		return nil
 	}
 	prev := via[len(via)-1]
-	if !strings.EqualFold(req.URL.Scheme, prev.URL.Scheme) || !strings.EqualFold(req.URL.Host, prev.URL.Host) {
+	if !SameSchemeHost(req.URL.Scheme, req.URL.Host, prev.URL.Scheme, prev.URL.Host) {
 		return fmt.Errorf("resolve-binding: refusing cross-origin redirect to %s://%s", req.URL.Scheme, req.URL.Host)
 	}
 	return nil

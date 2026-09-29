@@ -77,7 +77,7 @@ func sameOrigin(a, b string) bool {
 	if err != nil || ub.Host == "" {
 		return false
 	}
-	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+	return platformauth.SameSchemeHost(ua.Scheme, ua.Host, ub.Scheme, ub.Host)
 }
 
 // fulcioSignerNeedsToken reports whether the fulcio signer has no operator-chosen
@@ -703,8 +703,11 @@ func (ro *RunOptions) ResolvePlatformDefaults(cmd *cobra.Command) {
 		ro.ArchivistaOptions.Url = pc.Archivista
 	}
 
-	// OIDC audience: derive from platform if not set
-	if ro.ArchivistaOptions.Audience == "" {
+	// OIDC audience: the platform's, only when the Archivista IS the
+	// platform's. An --archivista-server elsewhere keeps its own URL as the
+	// audience (Client's default): a token for the platform must never be
+	// minted for another server.
+	if ro.ArchivistaOptions.Audience == "" && archivistaAudienceNamesDestination(pc.OIDCAudience, ro.ArchivistaOptions.Url) == nil {
 		ro.ArchivistaOptions.Audience = pc.OIDCAudience
 	}
 
@@ -1526,6 +1529,11 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 		audience := o.Audience
 		if audience == "" {
 			audience = o.Url
+		}
+		// Before anything is minted or sent: the token goes only to the server
+		// its audience names.
+		if err := archivistaAudienceNamesDestination(audience, o.Url); err != nil {
+			return nil, err
 		}
 		source := newGitHubOIDCTokenSource(audience, fetchGitHubOIDCToken)
 		if _, err := source(); err != nil {

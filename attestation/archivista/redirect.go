@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"strings"
 )
 
 // sameOriginRedirect is a net/http CheckRedirect that refuses any redirect to a
@@ -39,7 +38,7 @@ func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 		return nil
 	}
 	orig := via[0].URL
-	if !strings.EqualFold(req.URL.Scheme, orig.Scheme) || !strings.EqualFold(req.URL.Host, orig.Host) {
+	if !asciiEqualFold(req.URL.Scheme, orig.Scheme) || !asciiEqualFold(req.URL.Host, orig.Host) {
 		return fmt.Errorf("refusing cross-origin redirect from %s://%s to %s://%s (bearer would leak)",
 			orig.Scheme, orig.Host, req.URL.Scheme, req.URL.Host)
 	}
@@ -67,4 +66,31 @@ func isPublicRedirectHost(host string) bool {
 	}
 	return !(ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsUnspecified() || ip.IsMulticast())
+}
+
+// asciiEqualFold compares up to ASCII case only; a string with a non-ASCII
+// byte never matches. strings.EqualFold folds Unicode (the Kelvin sign equals
+// k), while the transport maps a non-ASCII host through IDNA to a different
+// punycode host, so a Unicode fold would follow a redirect off the origin.
+// Mirrors platformauth.SameSchemeHost (a separate Go module).
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if x >= 0x80 || y >= 0x80 {
+			return false
+		}
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }

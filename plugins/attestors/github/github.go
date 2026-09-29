@@ -284,7 +284,7 @@ func fetchToken(tokenURL string, bearer string, audience string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("error on parsing token url %w", err)
 	}
-	if u.Scheme != "https" || !strings.HasSuffix(strings.ToLower(u.Hostname()), ".actions.githubusercontent.com") || u.User != nil || (u.Port() != "" && u.Port() != "443") || u.Fragment != "" {
+	if u.Scheme != "https" || !isASCII(u.Hostname()) || !strings.HasSuffix(strings.ToLower(u.Hostname()), ".actions.githubusercontent.com") || u.User != nil || (u.Port() != "" && u.Port() != "443") || u.Fragment != "" {
 		return "", fmt.Errorf("invalid GitHub Actions token endpoint")
 	}
 
@@ -343,4 +343,17 @@ func readResponseBody(body io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("token response exceeds %d bytes", maxResponseBodySize)
 	}
 	return buf.Bytes(), nil
+}
+
+// isASCII reports whether s holds only ASCII bytes. The token endpoint's host
+// is checked with strings.ToLower, which folds Unicode (U+0130 becomes i),
+// while the transport sends the bearer, through IDNA, to a different punycode
+// host; only an ASCII host is compared.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }

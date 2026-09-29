@@ -23,6 +23,7 @@ import (
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
+	"github.com/aflock-ai/rookery/platformauth"
 	"github.com/spf13/cobra"
 )
 
@@ -329,7 +330,7 @@ func sameOriginDoctor(a, b string) bool {
 	if err != nil || ub.Host == "" {
 		return false
 	}
-	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+	return platformauth.SameSchemeHost(ua.Scheme, ua.Host, ub.Scheme, ub.Host)
 }
 
 func writeDoctorJSON(w io.Writer, report *DoctorReport) error {
